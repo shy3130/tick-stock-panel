@@ -8,6 +8,10 @@ from app.indicators.pipeline import filter_halt_days
 DAILY_COLS = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
 ADJ_FACTOR_COLS = ["symbol", "trade_date", "ex_factor"]
 INSTRUMENT_COLS = ["symbol", "name", "code", "exchange", "asset_type", "source"]
+REALTIME_COLS = [
+    "symbol", "name", "last_price", "prev_close", "open", "high", "low",
+    "volume", "amount", "timestamp", "source", "ext",
+]
 
 
 def to_polars(data) -> pl.DataFrame:
@@ -97,3 +101,54 @@ def normalize_instruments(rows: list[dict], asset_type: str, source: str = "tick
     if not out:
         return pl.DataFrame()
     return pl.DataFrame(out).select(INSTRUMENT_COLS).unique(subset=["symbol"], keep="last").sort("symbol")
+
+
+def normalize_realtime(data, source: str = "tickflow") -> pl.DataFrame:
+    """Normalize realtime quote rows to quote_service's provider contract."""
+    df = to_polars(data)
+    if df.is_empty():
+        return df
+
+    rename_map = {
+        "price": "last_price",
+        "close": "last_price",
+        "pre_close": "prev_close",
+        "last_close": "prev_close",
+        "datetime": "timestamp",
+    }
+    df = df.rename({k: v for k, v in rename_map.items() if k in df.columns and v not in df.columns})
+
+    if "symbol" not in df.columns:
+        return pl.DataFrame()
+    df = df.with_columns(pl.col("symbol").cast(pl.Utf8).str.to_uppercase())
+
+    for col in ("last_price", "prev_close", "open", "high", "low", "volume", "amount"):
+        if col in df.columns:
+            df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False))
+
+    if "source" not in df.columns:
+        df = df.with_columns(pl.lit(source).alias("source"))
+    if "timestamp" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Utf8).alias("timestamp"))
+    else:
+        df = df.with_columns(pl.col("timestamp").cast(pl.Utf8, strict=False))
+    if "name" not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Utf8).alias("name"))
+
+    if "ext" not in df.columns:
+        ext_fields = []
+        for col in ("change_pct", "change_amount", "amplitude", "turnover_rate"):
+            if col in df.columns:
+                ext_fields.append(pl.col(col).alias(col))
+            else:
+                ext_fields.append(pl.lit(None).alias(col))
+        ext_fields.extend([
+            pl.col("name").alias("name"),
+            pl.col("source").alias("source"),
+        ])
+        df = df.with_columns(pl.struct(ext_fields).alias("ext"))
+
+    for col in REALTIME_COLS:
+        if col not in df.columns:
+            df = df.with_columns(pl.lit(None).alias(col))
+    return df.select(REALTIME_COLS).drop_nulls(subset=["symbol", "last_price"])

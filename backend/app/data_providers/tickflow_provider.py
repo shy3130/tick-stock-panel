@@ -7,7 +7,12 @@ from datetime import datetime
 import polars as pl
 
 from app.data_providers.base import AssetType, ProviderCapabilities
-from app.data_providers.normalizer import normalize_adj_factors, normalize_daily, normalize_instruments
+from app.data_providers.normalizer import (
+    normalize_adj_factors,
+    normalize_daily,
+    normalize_instruments,
+    normalize_realtime,
+)
 from app.tickflow.client import get_client
 
 logger = logging.getLogger(__name__)
@@ -119,7 +124,7 @@ class TickFlowProvider:
             resp = tf.quotes.get(symbols=symbols)
         else:
             return pl.DataFrame()
-        return pl.DataFrame(resp or [])
+        return normalize_realtime(resp or [], source=self.name)
 
     # ------------------------------------------------------------------ #
     # get_by_universes — 阶段 3 #3.2 universes 索引标的能力

@@ -1,4 +1,4 @@
-"""FQuantProvider v2 — 直连 fstore PG + engine-data + moneyflow + 可选 tdx-api。
+"""FQuantProvider v2 — 直连 fstore PG + engine-data/TDX disk + moneyflow + realtime fallback。
 
 严格按 ``backend/docs/FQUANT_PROVIDER_DESIGN.md`` §4 模块设计 / §5 数据映射 /
 §6 配置 / §7 错误降级 / §8 测试方案 实现。
@@ -11,9 +11,12 @@
     │   ├── symbols.py           符号归一（split_symbol 等）
     │   ├── fstore_client.py     psycopg v3 PG 客户端
     │   ├── engine_data_client.py engine-data HTTP 客户端
+    │   ├── engine_data_disk.py  TDX 磁盘 CSV 客户端（fquant_local）
     │   ├── moneyflow_client.py  moneyflow HTTP 客户端
+    │   ├── sina_tencent_client.py realtime fallback 客户端
     │   ├── mapping.py           上游字段 → 内部 schema
     │   ├── adj_factor.py        xdxr → 累积 ex_factor
+    │   ├── raw_reconstruct.py   TDX 前复权序列 → raw OHLC 修复
     │   └── fallback.py          降级策略表
     └── fquant_provider.py       本文件（聚合 Provider）
 
@@ -28,7 +31,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 import httpx
 import polars as pl
@@ -57,6 +61,8 @@ from app.data_providers.fquant.mapping import (
     xdxr_rows_to_events,
 )
 from app.data_providers.fquant.moneyflow_client import MoneyflowClient
+from app.data_providers.fquant.raw_reconstruct import reconstruct_raw_rows
+from app.data_providers.fquant.sina_tencent_client import SinaTencentClient
 from app.data_providers.fquant.symbols import (
     code_and_market_to_symbol,
     code_to_symbol,
@@ -68,6 +74,7 @@ from app.data_providers.normalizer import (
     normalize_adj_factors,
     normalize_daily,
     normalize_instruments,
+    normalize_realtime,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +88,61 @@ _FINANCIAL_TABLE_MAP: dict[str, str] = {
     "quick":         "financial_report_quick",
     "forecast":      "financial_report_forecast",
 }
+
+
+def _minute_freq_step(freq: str) -> int:
+    s = (freq or "1m").strip().lower()
+    if not s.endswith("m"):
+        return 1
+    try:
+        return max(1, int(s[:-1]))
+    except ValueError:
+        return 1
+
+
+def _sum_present(values: list[float | int | None]) -> float | None:
+    present = [float(v) for v in values if v is not None]
+    return sum(present) if present else None
+
+
+def _aggregate_minute_df(df: pl.DataFrame, freq: str) -> pl.DataFrame:
+    step = _minute_freq_step(freq)
+    if step <= 1 or df.is_empty():
+        return df
+
+    rows: list[dict] = []
+    current_key: tuple[str, str] | None = None
+    bucket: list[dict] = []
+
+    def flush() -> None:
+        if not bucket:
+            return
+        highs = [r.get("high") for r in bucket if r.get("high") is not None]
+        lows = [r.get("low") for r in bucket if r.get("low") is not None]
+        rows.append({
+            "symbol": bucket[0].get("symbol"),
+            "asset_type": bucket[0].get("asset_type"),
+            "source": bucket[0].get("source"),
+            "datetime": bucket[-1].get("datetime"),
+            "open": bucket[0].get("open"),
+            "high": max(highs) if highs else None,
+            "low": min(lows) if lows else None,
+            "close": bucket[-1].get("close"),
+            "volume": _sum_present([r.get("volume") for r in bucket]),
+            "amount": _sum_present([r.get("amount") for r in bucket]),
+            "freq": freq,
+        })
+
+    for row in df.sort(["symbol", "datetime"]).to_dicts():
+        key = (str(row.get("symbol")), str(row.get("datetime"))[:10])
+        if current_key is not None and (key != current_key or len(bucket) >= step):
+            flush()
+            bucket = []
+        current_key = key
+        bucket.append(row)
+    flush()
+
+    return pl.DataFrame(rows) if rows else pl.DataFrame()
 
 
 # =========================================================================== #
@@ -109,9 +171,15 @@ class FQuantProvider:
         universes=True,   # 阶段 3 #3.2：fstore chengfen_gu 提供指数/板块/行业
     )
 
-    def __init__(self) -> None:
+    def __init__(self, engine_mode: str = "http") -> None:
         self._fstore = FStoreClient()
-        self._engine = EngineDataClient()
+        if engine_mode == "disk":
+            from app.data_providers.fquant.engine_data_disk import EngineDataDiskClient
+            self._engine = EngineDataDiskClient()
+            self.name = "fquant_local"
+        else:
+            self._engine = EngineDataClient()
+        self._engine_mode = engine_mode
         self._moneyflow = MoneyflowClient()
         self._tdx_api_base = (
             os.getenv("FQUANT_TDX_API_BASE")
@@ -119,10 +187,16 @@ class FQuantProvider:
             or os.getenv("TDX_API_BASE_URL")
             or ""
         ).strip().rstrip("/")
+        self._realtime_failures: dict[str, int] = {}
+        self._realtime_cooldown_until: dict[str, float] = {}
+        self._sina_tencent = SinaTencentClient()
         # instruments 缓存（§4.3 24h TTL）
         self._instruments_cache: dict[str, pl.DataFrame] = {}
         self._instruments_cache_ts: dict[str, datetime] = {}
         self._instruments_cache_ttl = 86400  # 秒
+
+    def _engine_key(self, symbol: str, code: str) -> str:
+        return symbol if getattr(self, "_engine_mode", "http") == "disk" else code
 
     # ------------------------------------------------------------------ #
     # get_instruments — §4.3 主源 fstore.base_infos
@@ -208,7 +282,7 @@ class FQuantProvider:
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
-            rows = self._get_daily_from_engine_wide(sym, code, start_time, end_time)
+            rows = self._get_daily_from_engine_wide(sym, code, start_time, end_time, asset_type)
             if not rows:
                 # L2 降级：engine-data 不可用 → fstore day_klines
                 rows = self._get_daily_from_fstore_klines(sym, code, start_time, end_time)
@@ -224,19 +298,67 @@ class FQuantProvider:
     def _get_daily_from_engine_wide(
         self, symbol: str, code: str,
         start_time: datetime | None, end_time: datetime | None,
+        asset_type: AssetType = "stock",
     ) -> list[dict]:
         """主源 engine-data ``wide``（§4.4 / §5.2）。"""
         if start_time and end_time:
             limit = max(250, (end_time - start_time).days + 10)
         else:
             limit = 250
-        rows = self._engine.get_wide(code, limit=limit)
+        engine_key = self._engine_key(symbol, code)
+        rows = self._engine.get_wide(engine_key, limit=limit)
         if rows:
             # engine 返回最新在前，反转成时间正序
             rows = list(reversed(rows))
+            if asset_type == "stock":
+                oracle_rows = self._get_raw_oracle_rows(code, rows)
+                events = self._engine.get_xdxr(engine_key)
+                rows = reconstruct_raw_rows(rows, events, oracle_rows)
             logger.debug("EngineData wide %s: %d 行", code, len(rows))
         # 映射到 normalizer 期望的字段名
-        return wide_rows_to_daily(rows, symbol, source=self.name)
+        return self._filter_daily_rows(wide_rows_to_daily(rows, symbol, source=self.name), start_time, end_time)
+
+    def _filter_daily_rows(
+        self,
+        rows: list[dict],
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> list[dict]:
+        if not rows or not (start_time or end_time):
+            return rows
+        start = start_time.date().isoformat() if start_time else None
+        end = end_time.date().isoformat() if end_time else None
+        out = []
+        for row in rows:
+            date_str = str(row.get("date") or "")
+            if start and date_str < start:
+                continue
+            if end and date_str > end:
+                continue
+            out.append(row)
+        return out
+
+    def _get_raw_oracle_rows(self, code: str, rows: list[dict]) -> list[dict]:
+        """Fetch fstore raw OHLC oracle for the date span of engine rows."""
+        dates = sorted(str(r.get("date")) for r in rows if r.get("date"))
+        if not dates:
+            return []
+        return self._fstore.query(
+            """
+            SELECT
+                tdate::text AS date,
+                open::float8 AS oracle_open,
+                high::float8 AS oracle_high,
+                low::float8 AS oracle_low,
+                close::float8 AS oracle_close,
+                cjl::float8 AS oracle_volume,
+                cje::float8 AS oracle_amount
+            FROM t_1_day_klines
+            WHERE code = %s AND ktype = 101 AND fq = 0 AND tdate BETWEEN %s AND %s
+            ORDER BY tdate ASC
+            """,
+            (code, dates[0], dates[-1]),
+        )
 
     def _get_daily_from_fstore_klines(
         self, symbol: str, code: str,
@@ -247,10 +369,11 @@ class FQuantProvider:
         实测 600519 该表最后数据 2025-10-31（§2.1 / §7.3 场景 A），
         仅作历史回填，不依赖。
         """
+        table = "t_1_day_klines"
         if start_time and end_time:
             sql = (
                 "SELECT tdate, open, close, high, low, cjl, cje, zf "
-                "FROM day_klines "
+                f"FROM {table} "
                 "WHERE code = %s AND ktype = 101 AND fq = 0 AND tdate BETWEEN %s AND %s "
                 "ORDER BY tdate ASC"
             )
@@ -258,12 +381,30 @@ class FQuantProvider:
         else:
             sql = (
                 "SELECT tdate, open, close, high, low, cjl, cje, zf "
-                "FROM day_klines "
+                f"FROM {table} "
                 "WHERE code = %s AND ktype = 101 AND fq = 0 "
                 "ORDER BY tdate DESC LIMIT 250"
             )
             params = (code,)
         rows = self._fstore.query(sql, params)
+        if not rows:
+            if start_time and end_time:
+                sql = (
+                    "SELECT tdate, open, close, high, low, cjl, cje, zf "
+                    "FROM day_klines "
+                    "WHERE code = %s AND ktype = 101 AND fq = 0 AND tdate BETWEEN %s AND %s "
+                    "ORDER BY tdate ASC"
+                )
+                params = (code, start_time.date(), end_time.date())
+            else:
+                sql = (
+                    "SELECT tdate, open, close, high, low, cjl, cje, zf "
+                    "FROM day_klines "
+                    "WHERE code = %s AND ktype = 101 AND fq = 0 "
+                    "ORDER BY tdate DESC LIMIT 250"
+                )
+                params = (code,)
+            rows = self._fstore.query(sql, params)
         if rows:
             logger.debug("FStoreDB day_klines %s: %d 行", code, len(rows))
         # 映射到 normalizer 期望的字段名
@@ -296,7 +437,7 @@ class FQuantProvider:
             code = symbol_to_code(sym)
 
             # 先取 daily close 序列（fenhong 除权除息计算需要 pre_close）
-            daily_close = self._build_daily_close_map(sym, code, start_time, end_time)
+            daily_close = self._build_daily_close_map(sym, code, start_time, end_time, asset_type)
 
             # 主源 xdxr
             events = self._get_adj_events_from_engine(sym, code)
@@ -327,7 +468,7 @@ class FQuantProvider:
 
     def _get_adj_events_from_engine(self, symbol: str, code: str) -> list[dict]:
         """主源 engine-data ``xdxr`` → 归一事件行（§5.3）。"""
-        rows = self._engine.get_xdxr(code)
+        rows = self._engine.get_xdxr(self._engine_key(symbol, code))
         if rows:
             logger.debug("EngineData xdxr %s: %d 行", code, len(rows))
         return xdxr_rows_to_events(rows, symbol) if rows else []
@@ -359,15 +500,17 @@ class FQuantProvider:
     def _build_daily_close_map(
         self, symbol: str, code: str,
         start_time: datetime | None, end_time: datetime | None,
+        asset_type: AssetType = "stock",
     ) -> dict[str, float]:
         """构建 ``{date_iso: close_price}`` 字典，供 adj_factor fenhong 计算用。
 
         复用 get_daily 的 engine wide + fstore klines 降级链。
         """
         try:
-            rows = self._get_daily_from_engine_wide(symbol, code, start_time, end_time)
+            close_start = start_time - timedelta(days=10) if start_time else None
+            rows = self._get_daily_from_engine_wide(symbol, code, close_start, end_time, asset_type)
             if not rows:
-                rows = self._get_daily_from_fstore_klines(symbol, code, start_time, end_time)
+                rows = self._get_daily_from_fstore_klines(symbol, code, close_start, end_time)
             if not rows:
                 return {}
             out: dict[str, float] = {}
@@ -398,16 +541,13 @@ class FQuantProvider:
         降级：API 不响应 → 空 df
 
         date 推断：优先 ``end_time``，其次 ``start_time``。
-        freq 仅支持 ``1m``（其它 freq 仅日志警告并返回 1m 结果，§4.6）。
+        ``freq`` 支持 1m/5m/15m/30m/60m 等分钟聚合；底层取 1m 后在本地聚合。
 
         输出列（MINUTE_COLUMNS）：symbol/asset_type/source/datetime/open/high/low/close/
                                  volume/amount/freq
         """
         if not symbols:
             return pl.DataFrame()
-
-        if freq != "1m":
-            logger.warning("get_minute: freq=%s 本期仅支持 1m，返回 1m 结果", freq)
 
         # 确定查询日期（§4.6 date 推断）
         ref_dt = end_time or start_time
@@ -418,7 +558,7 @@ class FQuantProvider:
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
-            ticks = self._engine.get_minutes(code, date_str)
+            ticks = self._engine.get_minutes(self._engine_key(sym, code), date_str)
             if not ticks:
                 logger.debug("EngineData minutes %s %s: 无数据", code, date_str)
                 continue
@@ -429,10 +569,11 @@ class FQuantProvider:
             if not minute_df.is_empty():
                 frames.append(minute_df)
 
-        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+        df = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+        return _aggregate_minute_df(df, freq)
 
     # ------------------------------------------------------------------ #
-    # get_realtime — tdx-api 实时 + fstore daily_markets 最新快照 fallback
+    # get_realtime — tdx-api + sina/tencent + fstore daily_markets fallback
     # ------------------------------------------------------------------ #
     def get_realtime(
         self,
@@ -444,7 +585,8 @@ class FQuantProvider:
         路径与 ``../fquant`` 的本地 provider 一致：
         1. 可选相邻 ``tdx-api``：``FQUANT_TDX_API_BASE`` / ``DSA_TDX_API_BASE_URL``
            / ``TDX_API_BASE_URL`` 指向 ``/api/quote``。
-        2. fstore ``daily_markets`` 最新快照 fallback。
+        2. sina/tencent 受控适配器（watchlist 偏 tencent，全市场偏 sina）。
+        3. fstore ``daily_markets`` 最新快照 fallback。
         """
         target_symbols = self._resolve_realtime_symbols(universes, symbols)
         if not target_symbols:
@@ -461,9 +603,17 @@ class FQuantProvider:
                 remaining = [s for s in remaining if s not in got]
 
         if remaining:
+            prefer = "sina" if universes else "tencent"
+            st_rows = self._sina_tencent.get_quotes(remaining, prefer=prefer)
+            if st_rows:
+                rows.extend(st_rows)
+                got = {r["symbol"] for r in st_rows if r.get("symbol")}
+                remaining = [s for s in remaining if s not in got]
+
+        if remaining:
             rows.extend(self._get_fstore_realtime(remaining))
 
-        return pl.DataFrame(rows) if rows else pl.DataFrame()
+        return normalize_realtime(rows, source=self.name) if rows else pl.DataFrame()
 
     def _resolve_realtime_symbols(
         self,
@@ -497,6 +647,8 @@ class FQuantProvider:
         return df["symbol"].cast(pl.Utf8).to_list()
 
     def _get_tdx_realtime(self, symbols: list[str]) -> list[dict]:
+        if not self._realtime_source_available("tdx-api"):
+            return []
         a_symbols = [s for s in symbols if symbol_to_market(s) and symbol_to_market(s)[0] == 1]
         if not a_symbols:
             return []
@@ -512,14 +664,36 @@ class FQuantProvider:
             payload = resp.json()
         except Exception as e:  # noqa: BLE001
             logger.warning("tdx-api realtime quote failed: %s", e)
+            self._record_realtime_failure("tdx-api")
             return []
         if int(payload.get("code", -1)) != 0:
             logger.warning("tdx-api realtime quote code=%s message=%s", payload.get("code"), payload.get("message"))
+            self._record_realtime_failure("tdx-api")
             return []
         data = payload.get("data") or []
         if not isinstance(data, list):
+            self._record_realtime_failure("tdx-api")
             return []
+        self._record_realtime_success("tdx-api")
         return [row for item in data if (row := self._tdx_quote_to_row(item))]
+
+    def _realtime_source_available(self, source: str) -> bool:
+        until = self._realtime_cooldown_until.get(source, 0)
+        if until > time.monotonic():
+            logger.debug("realtime source %s cooling down for %.1fs", source, until - time.monotonic())
+            return False
+        return True
+
+    def _record_realtime_success(self, source: str) -> None:
+        self._realtime_failures[source] = 0
+        self._realtime_cooldown_until.pop(source, None)
+
+    def _record_realtime_failure(self, source: str) -> None:
+        failures = self._realtime_failures.get(source, 0) + 1
+        self._realtime_failures[source] = failures
+        if failures >= 3:
+            self._realtime_cooldown_until[source] = time.monotonic() + 60
+            logger.warning("realtime source %s disabled for 60s after %d failures", source, failures)
 
     def _tdx_quote_to_row(self, item: dict) -> dict | None:
         code = str(item.get("Code") or item.get("code") or "")
@@ -535,7 +709,7 @@ class FQuantProvider:
         return self._quote_row(
             symbol=symbol,
             name=None,
-            source="fquant:tdx-api:/api/quote",
+            source=f"{self.name}:tdx-api:/api/quote",
             last_price=last_price,
             prev_close=prev_close,
             open_=self._tdx_price(k.get("Open")),
@@ -591,7 +765,7 @@ class FQuantProvider:
         return self._quote_row(
             symbol=symbol,
             name=item.get("name"),
-            source="fquant:fstore:daily_markets",
+            source=f"{self.name}:fstore:daily_markets",
             last_price=last_price,
             prev_close=self._float_or_none(item.get("zrspj")),
             open_=self._float_or_none(item.get("jrkpj")),
@@ -834,7 +1008,7 @@ class FQuantProvider:
             logger.debug("FStoreDB %s %s: 无数据", fstore_table, code)
             return pl.DataFrame()
 
-        return financial_rows_to_df(rows, symbol=symbol, table=table, source_tag="fquant:fstore")
+        return financial_rows_to_df(rows, symbol=symbol, table=table, source_tag=f"{self.name}:fstore")
 
     # ------------------------------------------------------------------ #
     # get_moneyflow_daily — §4.9 moneyflow /daily/stocks
@@ -856,7 +1030,16 @@ class FQuantProvider:
         codes = [symbol_to_code(s) for s in symbols]
         code_to_sym = {symbol_to_code(s): s for s in symbols}
 
-        data = self._moneyflow.get_daily(codes, date_iso)
+        disk_data: dict[str, dict] = {}
+        if hasattr(self._engine, "get_fund_daily"):
+            for sym, code in zip(symbols, codes, strict=False):
+                total = self._engine.get_fund_daily(self._engine_key(sym, code), date_iso)
+                if total:
+                    disk_data[code] = total
+
+        missing_codes = [code for code in codes if code not in disk_data]
+        http_data = self._moneyflow.get_daily(missing_codes, date_iso) if missing_codes else {}
+        data = {**http_data, **disk_data}
         if not data:
             return pl.DataFrame()
 
@@ -906,7 +1089,7 @@ class FQuantProvider:
         """
         code = symbol_to_code(symbol)
         date_str = date.strftime("%Y%m%d")
-        rows = self._engine.get_trans(code, date_str)
+        rows = self._engine.get_trans(self._engine_key(symbol, code), date_str)
         if not rows:
             return pl.DataFrame()
         return trans_rows_to_df(rows, symbol, date_str, source=self.name)

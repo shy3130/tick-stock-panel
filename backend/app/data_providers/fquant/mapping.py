@@ -364,6 +364,15 @@ def moneyflow_daily_to_df(
             "total_outflow": _to_float(total.get("total_outflow")),
             "volume": _to_float(total.get("volume")),
             "amount": _to_float(total.get("amount")),
+            "super_large_net": _to_float(total.get("super_large_net")),
+            "large_net": _to_float(total.get("large_net")),
+            "medium_net": _to_float(total.get("medium_net")),
+            "small_net": _to_float(total.get("small_net")),
+            "main_ratio": _to_float(total.get("main_ratio")),
+            "super_large_ratio": _to_float(total.get("super_large_ratio")),
+            "large_ratio": _to_float(total.get("large_ratio")),
+            "medium_ratio": _to_float(total.get("medium_ratio")),
+            "small_ratio": _to_float(total.get("small_ratio")),
         })
     return pl.DataFrame(out) if out else pl.DataFrame()
 
