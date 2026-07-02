@@ -18,9 +18,10 @@ import polars as pl
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.indicators.pipeline import run_pipeline
+from app.indicators.pipeline import run_pipeline, run_pipeline_local
 from app.config import settings
 from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
+from app.services.data_mode import is_local_daily_mode
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.repository import KlineRepository
 
@@ -143,12 +144,20 @@ def run_now(
     # 日K范围拉取的起点(分支3补缺口/分支4首次); 实时增量/跳过时为 None。
     # 供 Step 1.5 除权因子回溯范围对齐: 范围拉取→用日K范围, 非范围→最近N天兜底。
     daily_range_start: _date | None = None
+    local_daily_mode = is_local_daily_mode()
 
     # A 股日K拉取开关(默认开);关闭时跳过日K同步,保留已有数据
     pull_a_share = _prefs.get_pipeline_pull_a_share()
     if not pull_a_share:
         emit("sync_daily", 45, "已跳过 A 股日K同步(拉取内容未勾选)")
         logger.info("sync_daily: skipped (pipeline_pull_a_share=False)")
+    elif local_daily_mode:
+        # fquant_local 直接从 TDX/fstore 读日线并计算 enriched，不建立 raw kline_daily 镜像。
+        start_date = _latest_enriched_date(repo) or latest_daily or (today - _td(days=365))
+        daily_range_start = start_date
+        new_daily_days = max(1, (today - start_date).days)
+        emit("sync_daily", 45, f"本地磁盘日K模式,跳过 raw 写入 [{start_date} ~ {today}]")
+        logger.info("sync_daily: skipped raw mirror in local disk mode [%s ~ %s]", start_date, today)
     elif today_exists and capset.has(Cap.QUOTE_POOL):
         # 付费档:今天有数据(QuoteService 已落盘)→ 实时行情覆写,确保最新。
         # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
@@ -209,7 +218,7 @@ def run_now(
     #     (这两类分支不拉历史日K, 除权不能用日K范围, 只能兜底最近几日)
     written_adj = 0
     affected_symbols: list[str] = []
-    if capset.has(Cap.ADJ_FACTOR):
+    if capset.has(Cap.ADJ_FACTOR) and not local_daily_mode:
         from datetime import datetime, timedelta
         adj_end = datetime.now()
         if daily_range_start is not None:
@@ -239,6 +248,9 @@ def run_now(
             emit("sync_adj", 60, "除权因子完成,无新增")
             logger.info("sync_adj: [%s ~ %s] no new factors", adj_start_str, adj_end_str)
         _invalidate("adj_factor")
+    elif local_daily_mode:
+        skipped.append("sync_adj")
+        logger.info("sync_adj skipped: local disk mode uses provider factors during enriched compute")
     else:
         skipped.append("sync_adj")
         logger.info("sync_adj skipped: no ADJ_FACTOR capability")
@@ -280,7 +292,30 @@ def run_now(
         emit("compute_enriched", 65 + int(23 * cur / tot),
              f"计算指标 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
 
-    if not enriched_exists or backward_extension:
+    if local_daily_mode and pull_a_share:
+        emit("compute_enriched", 65, "本地磁盘计算 enriched…")
+        try:
+            from app.data_providers import get_provider
+            from app.data_providers.registry import get_active_provider_name
+
+            provider = get_provider(get_active_provider_name("daily"))
+            local_start = _dt.combine(daily_range_start or today - _td(days=365), _dt.min.time())
+            local_end = _dt.combine(today, _dt.min.time())
+            written_enriched = run_pipeline_local(
+                provider,
+                data_dir=repo.store.data_dir,
+                symbols=universe,
+                start_time=local_start,
+                end_time=local_end,
+                on_batch_done=_enriched_batch_progress,
+            )
+        except Exception:
+            logger.exception("compute_enriched local disk failed")
+            raise
+        new_enriched_days = len(list(enriched_dir.glob("date=*"))) if enriched_dir.exists() else 0
+        emit("compute_enriched", 88, f"enriched 完成,写入 {written_enriched} 行/覆盖 {new_enriched_days} 天")
+        logger.info("compute_enriched: local disk done, rows=%d days=%d", written_enriched, new_enriched_days)
+    elif not enriched_exists or backward_extension:
         # 首次 或 往前扩展 → 全量
         emit("compute_enriched", 65, "全量计算 enriched…")
         logger.info("compute_enriched: full rebuild (first=%s, backward=%s, daily=%d, enriched=%d)",
@@ -546,6 +581,22 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
 def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
     """分钟 K 同步标的 — 与日K共用同一标的池。"""
     return _resolve_universe(capset)
+
+
+def _latest_enriched_date(repo: KlineRepository):
+    """本地模式不写 stock raw，用 enriched 分区作为增量起点。"""
+    from datetime import date as _date
+
+    base = repo.store.data_dir / "kline_daily_enriched"
+    if not base.exists():
+        return None
+    dates = []
+    for path in base.glob("date=*"):
+        try:
+            dates.append(_date.fromisoformat(path.name[5:]))
+        except ValueError:
+            continue
+    return max(dates) if dates else None
 
 
 def _refresh_instruments_view(repo: KlineRepository) -> None:

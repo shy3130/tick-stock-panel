@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -764,6 +765,126 @@ def _select_storage_cols(df: pl.DataFrame) -> pl.DataFrame:
     """写入 parquet 前裁剪到存储列 (14 列)。"""
     cols = [c for c in ENRICHED_STORAGE_COLS if c in df.columns]
     return df.select(cols)
+
+
+def _write_enriched_partitions(
+    enriched_base: Path,
+    enriched: pl.DataFrame,
+    replace_symbols: list[str],
+) -> int:
+    """按日期 merge-upsert enriched，不触碰 raw kline_daily。"""
+    if enriched.is_empty():
+        return 0
+    sym_set = set(replace_symbols)
+    written = 0
+    for date_df in enriched.partition_by("date"):
+        dt = date_df["date"][0]
+        ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+        out = enriched_base / f"date={ds}" / "part.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        date_df_storage = _select_storage_cols(date_df)
+        if out.exists():
+            existing = pl.read_parquet(out)
+            if sym_set and "symbol" in existing.columns:
+                existing = existing.filter(~pl.col("symbol").is_in(list(sym_set)))
+            date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
+        date_df_storage.sort(["symbol"]).write_parquet(out)
+        written += date_df.height
+    return written
+
+
+def _load_pipeline_instruments(data_dir: Path) -> pl.DataFrame:
+    inst_glob = str(data_dir / "instruments" / "**" / "*.parquet")
+    try:
+        return pl.scan_parquet(inst_glob).collect()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("instruments 读取失败: %s", e)
+        return pl.DataFrame()
+
+
+def run_pipeline_local(
+    provider,
+    data_dir: Path | None = None,
+    symbols: list[str] | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    on_batch_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """本地磁盘模式 enriched 管道: provider 读 raw → 计算 → 只写 enriched。
+
+    与 ``run_pipeline`` 的关键差异是输入不来自 ``kline_daily`` raw parquet，
+    因此不会要求或生成 raw 镜像；这让 ``fquant_local`` 可以在 repository 层
+    禁写 raw 的前提下完成指标计算。
+    """
+    import gc
+    import time as _t
+
+    t0 = _t.perf_counter()
+    d = Path(data_dir or settings.data_dir)
+    enriched_base = d / "kline_daily_enriched"
+    instruments = _load_pipeline_instruments(d)
+
+    if symbols is None:
+        if instruments.is_empty() or "symbol" not in instruments.columns:
+            logger.info("local pipeline: 无 instruments 标的, 跳过")
+            return 0
+        symbols = instruments["symbol"].cast(pl.Utf8).unique().sort().to_list()
+    else:
+        symbols = sorted(dict.fromkeys(symbols))
+
+    if not symbols:
+        logger.info("local pipeline: 无标的, 跳过")
+        return 0
+
+    if start_time is None or end_time is None:
+        end_time = end_time or datetime.now()
+        start_time = start_time or (end_time - timedelta(days=365))
+
+    from app.services import preferences as prefs_mod
+    sym_batch = prefs_mod.get_enriched_batch_size()
+    total_batches = (len(symbols) + sym_batch - 1) // sym_batch
+    written = 0
+
+    logger.info(
+        "local pipeline: %d symbols, range=[%s ~ %s], batch=%d",
+        len(symbols), start_time.date(), end_time.date(), sym_batch,
+    )
+
+    for batch_start in range(0, len(symbols), sym_batch):
+        batch_syms = symbols[batch_start:batch_start + sym_batch]
+        raw = provider.get_daily(batch_syms, start_time, end_time, "stock")
+        if raw.is_empty():
+            if on_batch_done:
+                on_batch_done(batch_start // sym_batch + 1, total_batches)
+            continue
+
+        if "date" in raw.columns:
+            raw = raw.with_columns(pl.col("date").cast(pl.Date, strict=False))
+
+        try:
+            factors = provider.get_adj_factors(batch_syms, start_time, end_time, "stock")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("local pipeline: adj_factor failed for batch %s~%s: %s",
+                           batch_syms[0], batch_syms[-1], e)
+            factors = pl.DataFrame()
+
+        batch_inst = (
+            instruments.filter(pl.col("symbol").is_in(batch_syms))
+            if not instruments.is_empty() and "symbol" in instruments.columns else instruments
+        )
+        enriched = compute_enriched(raw, factors=factors, instruments=batch_inst)
+        written += _write_enriched_partitions(enriched_base, enriched, batch_syms)
+
+        del raw, factors, batch_inst, enriched
+        gc.collect()
+
+        batch_no = batch_start // sym_batch + 1
+        logger.info("local pipeline batch %d/%d done, written=%d", batch_no, total_batches, written)
+        if on_batch_done:
+            on_batch_done(batch_no, total_batches)
+
+    logger.info("local pipeline done: %.2fs, %d rows", _t.perf_counter() - t0, written)
+    return written
 
 
 def run_pipeline(data_dir: Path | None = None,

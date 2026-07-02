@@ -129,12 +129,24 @@ def _safe_aggregate_daily(repo, view: str = "kline_daily") -> dict | None:
     """
     daily_dir = repo.store.data_dir / "kline_daily"
     if not daily_dir.exists():
+        try:
+            from app.services.data_mode import is_local_daily_mode
+            if is_local_daily_mode():
+                return _safe_aggregate_local_daily(repo)
+        except Exception:  # noqa: BLE001
+            pass
         return None
     dates: list[str] = []
     for d in daily_dir.iterdir():
         if d.is_dir() and d.name.startswith("date="):
             dates.append(d.name[5:])
     if not dates:
+        try:
+            from app.services.data_mode import is_local_daily_mode
+            if is_local_daily_mode():
+                return _safe_aggregate_local_daily(repo)
+        except Exception:  # noqa: BLE001
+            pass
         return None
     dates.sort()
 
@@ -146,6 +158,28 @@ def _safe_aggregate_daily(repo, view: str = "kline_daily") -> dict | None:
         "latest_date": dates[-1],
         "symbols_covered": symbols,
         "trading_days": len(dates),
+    }
+
+
+def _safe_aggregate_local_daily(repo) -> dict | None:
+    """fquant_local 禁写 raw mirror 时，用 enriched 分区表示日线可用性。"""
+    enriched_dir = repo.store.data_dir / "kline_daily_enriched"
+    if not enriched_dir.exists():
+        return None
+    dates = sorted(
+        d.name[5:] for d in enriched_dir.iterdir()
+        if d.is_dir() and d.name.startswith("date=")
+    )
+    if not dates:
+        return None
+    return {
+        "rows": 0,
+        "earliest_date": dates[0],
+        "latest_date": dates[-1],
+        "symbols_covered": _count_instruments_symbols(repo),
+        "trading_days": len(dates),
+        "source": "fquant_local_enriched",
+        "raw_mirror_disabled": True,
     }
 
 

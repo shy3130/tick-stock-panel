@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -112,9 +112,35 @@ def get_daily(
         start = date.fromisoformat(start_date)
     else:
         start = end - timedelta(days=days)
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end, datetime.min.time())
 
     stock_info = _get_stock_info(repo, symbol)
     stock_name = stock_info.get("name")
+
+    from app.services.data_mode import is_local_daily_mode
+    if is_local_daily_mode():
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider = get_provider(get_active_provider_name("daily"))
+        raw = provider.get_daily([symbol], start_dt, end_dt, "stock")
+        if raw.is_empty():
+            return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
+        factors = pl.DataFrame()
+        try:
+            factors = provider.get_adj_factors([symbol], start_dt, end_dt, "stock")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("本地模式单股除权因子拉取失败 %s: %s", symbol, e)
+        enriched = compute_enriched(raw, factors=factors)
+        rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
+        resp = {
+            "symbol": symbol,
+            "name": stock_name,
+            "stock_info": stock_info,
+            "rows": rows,
+            "source": "local_disk",
+        }
+        return _attach_ext(resp, repo, symbol, ext_columns)
 
     # 从 enriched 表读取 (已含前复权 OHLCV + 技术指标 + 信号)
     df = repo.get_daily(symbol, start, end)
@@ -311,9 +337,23 @@ def get_daily_batch(request: Request, body: dict):
 
     end = date.today()
     start = end - timedelta(days=days * 2)  # 多取一些确保交易日够
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end, datetime.min.time())
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
-    df = repo.get_daily_batch(symbols, start, end, columns=cols)
+    from app.services.data_mode import is_local_daily_mode
+    if is_local_daily_mode():
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider = get_provider(get_active_provider_name("daily"))
+        raw = provider.get_daily(symbols, start_dt, end_dt, "stock")
+        if raw.is_empty():
+            return {"data": {}}
+        df = raw.select([c for c in cols if c in raw.columns])
+    else:
+        df = repo.get_daily_batch(symbols, start, end, columns=cols)
+        if df.is_empty():
+            return {"data": {}}
 
     if df.is_empty():
         return {"data": {}}

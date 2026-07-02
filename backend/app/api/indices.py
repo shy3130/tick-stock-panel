@@ -92,7 +92,7 @@ def get_index_daily(
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": [], "source": "none"}
 
     try:
-        raw = kline_sync.sync_daily_batch([symbol], count=days + 150)
+        raw = kline_sync.sync_daily_batch([symbol], count=days + 150, asset_type="index")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"数据源拉取失败: {e}") from e
     if raw.is_empty():
@@ -113,7 +113,7 @@ def get_index_minute(
     repo = request.app.state.repo
     info = _index_info(repo, symbol)
     day = trade_date or date.today()
-    df = kline_sync.fetch_minute_single(symbol, day)
+    df = kline_sync.fetch_minute_single(symbol, day, asset_type="index")
     return {
         "symbol": symbol,
         "name": info.get("name"),
