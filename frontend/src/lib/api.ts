@@ -631,7 +631,7 @@ export interface EndpointManifest {
 }
 
 export interface SettingsState {
-  mode: 'none' | 'free' | 'api_key'
+  mode: 'none' | 'free' | 'api_key' | 'fquant' | 'fquant_local'
   tickflow_api_key_masked: string
   has_tickflow_key: boolean
   tier_label: string
@@ -658,7 +658,7 @@ export interface SaveTickflowKeyResult {
   /** ok=false 且 key 无效时的原因标识,前端据此提示「Key 无效」 */
   reason?: 'invalid'
   error?: string
-  mode?: 'none' | 'free' | 'api_key'
+  mode?: 'none' | 'free' | 'api_key' | 'fquant' | 'fquant_local'
   tier_label?: string
   current_endpoint?: string
   tickflow_api_key_masked?: string
@@ -774,7 +774,7 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
-  updateDataProvider: (data_provider: 'tickflow' | 'fquant') =>
+  updateDataProvider: (data_provider: 'tickflow' | 'fquant' | 'fquant_local') =>
     request<{
       data_provider: string
       effective_data_provider: string

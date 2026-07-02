@@ -3,7 +3,7 @@
 > 主线任务：**把 tickflow-stock-panel service 层从 TickFlow SDK 解耦，改走 `data_providers` 抽象层直连 fquant 同款底层本地源（fstore PG / engine-data:8099 / moneyflow:8090 / 可选 tdx-api），逐步摆脱 TickFlow 付费依赖。**
 >
 > 最后更新：2026-07-02
-> 状态：阶段 1（Provider 架构）、阶段 2（service 层解耦）、阶段 3.1（realtime 本地源 fallback）、阶段 3.2（universes）、阶段 3.3（depth 当前缺口标注）已在工作区实现并完成针对性验证；阶段 4（提交/沉淀）未做 ⏳。
+> 状态：阶段 1（Provider 架构）、阶段 2（service 层解耦）、阶段 3.1（realtime 本地源 fallback）、阶段 3.2（universes）、阶段 3.3（depth 当前缺口标注）已在工作区实现并完成针对性验证；阶段 6（`fquant_local` 本地磁盘模式）已在工作区实现并完成只读真盘验证；阶段 4（提交/沉淀）未做 ⏳。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
 ---
@@ -12,11 +12,12 @@
 
 | 阶段 | 范围 | 状态 | 验证手段 |
 |------|------|------|---------|
-| 阶段 1 | **FQuantProvider v2 架构**（直连 fstore / engine-data / moneyflow / 可选 tdx-api，8 子模块，8 capability） | ✅ 完成 | `test_fquant_provider.py` 16 项全过 |
+| 阶段 1 | **FQuantProvider v2 架构**（直连 fstore / engine-data / moneyflow / 可选 tdx-api，8 子模块，8 capability） | ✅ 完成 | `test_fquant_provider.py` 无失败；真实源不可达项单列 skip |
 | 阶段 2 | **Service 层解耦**（7 个 service 文件按统一模式替换 SDK→provider） | ✅ 完成（7/7） | provider 切 `fquant` 端到端跑通 + tickflow 回归无变化 |
 | 阶段 3 | **补 FQuantProvider 缺口**（realtime / universes / depth） | ✅ realtime/universes 已实现；depth 标注当前缺口 | `test_fquant_provider.py` + live fstore 验证 |
 | 阶段 4 | **commit + 沉淀**（沉淀文档 / 配 env / 删 PoC） | ⏳ 未开始 | — |
 | 阶段 5 | **完全去掉 TickFlow SDK 依赖**（可选远期） | ⏳ 非当前目标；需先决定 depth 官方源保留策略 | — |
+| 阶段 6 | **`fquant_local` 本地磁盘数据源模式**（TDX disk daily + raw 重建 + stock raw mirror 禁写 + realtime fallback） | ✅ 工作区完成，未提交 | `pytest tests -q` 71 passed（含 raw_reconstruct volume/amount 合并 + 逆运算缩放 2 项新增用例）；coverage/raw/provider 真盘 smoke ✅ |
 
 整体结论：阶段 1 + 阶段 2 已**实测验证通过**，service 层确实可以脱离 TickFlow SDK 工作；阶段 3 是把"还能用 TickFlow 补的洞"也填上，让 v2 provider 能独立支撑全部数据面。
 
@@ -40,14 +41,17 @@ backend/app/data_providers/fquant/             ← 8 文件子模块
 ├── symbols.py           148  行   split_symbol / code_and_market_to_symbol 等
 ├── fstore_client.py     183  行   psycopg v3 PG 客户端（fallback psycopg2）
 ├── engine_data_client.py 120 行   engine-data HTTP 客户端
+├── engine_data_disk.py  140+ 行   TDX 磁盘 CSV 客户端（fquant_local）
 ├── moneyflow_client.py  135  行   moneyflow HTTP 客户端
+├── sina_tencent_client.py      realtime fallback 客户端
+├── raw_reconstruct.py          TDX 前复权 raw 修复
 ├── mapping.py           385  行   上游字段 → 内部 schema
 ├── adj_factor.py        123  行   xdxr 事件 → 累积 ex_factor
 └── fallback.py           57  行   本地源降级策略表
 
 backend/app/data_providers/fquant_provider.py  593 行   聚合 Provider（fstore/engine-data/moneyflow/tdx-api）
 backend/app/data_providers/registry.py          +2 行   注册 fquant
-backend/scripts/test_fquant_provider.py        382 行   16 项端到端测试
+backend/scripts/test_fquant_provider.py        420+ 行  16 项端到端测试（`DATA_PROVIDER=fquant|fquant_local`）
 ```
 
 #### 能力声明（`fquant_provider.py:98`）
@@ -67,7 +71,7 @@ capabilities = ProviderCapabilities(
 4. **adj_factor 主源选 engine-data `xdxr`**：fstore `chuquan_chuxi` 作为 fallback，`xdxr` 字段语义更直接（fenhong/fenshu 直接换算成 ex_factor）。
 5. **`chips` 端点不接入**：实测 8s 内未返回，引擎在 NAS 慢。本期不接。
 6. **财务报表不再缺口**：fstore 有完整 `financial_report_income_statement` / `balance_sheet` / `cash_flow` / `annual` / `quick` / `forecast` 六张表，**`get_financial` capability 升为 ✅**。
-7. **realtime 不走 fquant API**：优先可选相邻 `tdx-api` `/api/quote`，否则回退 fstore `daily_markets` 最新快照。
+7. **realtime 不走 fquant API**：优先可选相邻 `tdx-api` `/api/quote`，否则走 sina/tencent 受控适配器，再回退 fstore `daily_markets` 最新快照。
 
 ### 2.4 验证结果（`scripts/test_fquant_provider.py`）
 
@@ -78,7 +82,7 @@ capabilities = ProviderCapabilities(
 | 3 | get_daily(['600519.SH']) | 250 行左右 | 250 行 ✅ |
 | 4 | get_adj_factors(['600519.SH']) | 非空 | 45 行 ✅ |
 | 5 | get_financial('600519.SH', 'income') | 4 行 | 4 行 27 列 ✅ |
-| 6 | get_realtime(['600519.SH']) | tdx-api 或 fstore 快照 | 1 行 ✅ |
+| 6 | get_realtime(['600519.SH']) | tdx-api / sina/tencent / fstore 快照 | 1 行 ✅ |
 | 7 | get_minute | 0 行（上游暂时不可达） | 0 行 ✅ |
 | 8 | 符号归一（`split_symbol` / `code_and_market_to_symbol`） | 6 类全过 | ✅ |
 | 9 | 字段映射（`base_infos_rows_to_instruments`） | 必填列齐 | ✅ |
@@ -127,7 +131,7 @@ def sync_daily(...):
 | `quote_service.py` | +46 / -17 | 3 处 | tickflow 回归 + fquant 降级 | ✅ |
 | `financial_sync.py` | +87 / -34 | 6 处 | 财务报表走 fstore | 22101 行利润表 ✅ |
 | `index_sync.py` | +28 / -31 | 5 处 | universes 走 provider `get_by_universes()` | CN_Index/ETF/Sector live 验证 ✅ |
-| `watchlist.py` | +20 / -5 | 3 处 | realtime 走 provider | fstore 快照 fallback ✅ |
+| `watchlist.py` | +20 / -5 | 3 处 | realtime 走 provider | tdx-api / sina/tencent / fstore fallback ✅ |
 | `depth_service.py` | +20 / -0 | 0 处 | 能力检查模式：fquant 直接降级返回空，tickflow 保留 SDK | 降级逻辑验证 ✅ |
 | **合计** | **+341 / -219** | **24 处** | — | — |
 
@@ -141,7 +145,7 @@ def sync_daily(...):
 | `get_daily(['600519.SH'])` | 250 行 | 0.2s |
 | `get_adj_factors` | 45 行 | 0.2s |
 | `get_financial('600519.SH', 'income')` | 4 行 27 列 | 0.0s |
-| `get_realtime` | 1 行（fstore daily_markets fallback） | — |
+| `get_realtime` | 1 行（tdx-api / sina/tencent / fstore daily_markets fallback） | — |
 | `get_minute` | 0 行（上游暂时不可达） | — |
 
 ### 3.5 TickFlow 回归（DATA_PROVIDER=tickflow）
@@ -151,7 +155,7 @@ def sync_daily(...):
 ### 3.6 已知保留点
 
 - `depth_service.py` 不解耦 5 档盘口：当前 FQuantProvider 未暴露 depth capability，保留 TickFlow。
-- `realtime` 已接本地源：禁止 `../fquant` HTTP API，优先 tdx-api，回退 fstore `daily_markets` 最新快照。
+- `realtime` 已接本地源：禁止 `../fquant` HTTP API，优先 tdx-api，再走 sina/tencent，最后回退 fstore `daily_markets` 最新快照。
 
 ---
 
@@ -161,7 +165,7 @@ def sync_daily(...):
 
 | # | 缺口 | 方案 | 状态 |
 |---|------|------|------|
-| 3.1 | `get_realtime()` | 不允许调用 `../fquant` HTTP API；优先相邻 `tdx-api`，回退 fstore `daily_markets` 最新快照 | ✅ 已实现，live fstore 验证 1 行 |
+| 3.1 | `get_realtime()` | 不允许调用 `../fquant` HTTP API；优先相邻 `tdx-api`，再走 sina/tencent，回退 fstore `daily_markets` 最新快照 | ✅ 已实现，live 验证通过 |
 | 3.2 | `get_by_universes()`（指数/ETF/板块标的） | 接 fstore `chengfen_gu` + `base_infos`，TickFlowProvider 保留 SDK 兼容实现 | ✅ 已实现，live 验证：CN_Index=2256 / CN_ETF=1930 / CN_Sector=1021 |
 | 3.3 | `get_depth()` 5 档盘口 ❌ | 当前 FQuantProvider 未提供 depth capability，已在 `depth_service.py` 能力门控降级（阶段 2 已完成） | ✅ 标注完成 |
 
@@ -191,6 +195,53 @@ def sync_daily(...):
 
 ---
 
+## 6B. 阶段 6：`fquant_local` 本地磁盘模式（✅ 工作区完成，未提交）
+
+### 6B.1 范围
+
+- 新增 `fquant_local` provider：`FQuantProvider(engine_mode="disk")`，registry/preferences/settings/frontend 均可切换。
+- 日 K 主链：`TDX_DATA_DIR/wide` 优先，缺文件降级 `day`；`xdxr` 事件用于前复权逆运算。
+- 分钟/逐笔：`TDX_DATA_DIR/minutes/YYYY/YYYYMMDD/*.csv` 和 `trans/YYYY/YYYYMMDD/*.csv` 已接入 `EngineDataDiskClient`，复用现有 minute/trans mapping；5m/15m/30m/60m 等由 1m 本地聚合。
+- 日级资金流：`TDX_DATA_DIR/fund` 已接入 `get_moneyflow_daily()` 的本地优先路径，提供 Main/SuperLarge/Large/Medium/Small 净额和比例；单批次内缺日期/缺文件的 symbol 会继续走 moneyflow HTTP fallback。
+- raw 污染修复：`raw_reconstruct.py` 在 mapping 前还原 `open/high/low/close/last_close`；fstore `t_1_day_klines` 作为历史 raw oracle，2025-11 后缺口用 xdxr 逆运算补。
+- raw oracle 仅用于 stock：index/ETF 直接使用磁盘行情，避免 `000001.SH` 等指数被同 code 股票 oracle 污染。
+- 本地模式禁写 stock raw mirror：repository 层门控收口在 7 个写方法（`append_daily` / `append_index_daily` / `append_etf_daily` / `append_daily_asset` / `merge_live_daily_asset` / `flush_live_daily` / `flush_live_daily_asset`）统一调用 `_skip_raw_daily_write()`，实际仅拦截其中 stock 范围的写（`append_daily`、`append_daily_asset("stock")`、`merge_live_daily_asset("stock")`、`flush_live_daily`、`flush_live_daily_asset("stock")`）；`kline_daily_enriched` 仍作为计算缓存保留。index/ETF raw 暂留给现有页面、统计和 fallback 路径。
+- pipeline 新入口：`run_pipeline_local(provider, ...)` 直接 provider→enriched，不依赖 `data/kline_daily`；增量起点使用 `kline_daily_enriched` 最新分区，干净环境不会每天回退一年重算。
+- 单股 K fallback：本地模式缓存空时 provider 直读并计算返回，不落 raw。
+- realtime：tdx-api 优先，sina/tencent 受控适配器 fallback，最后 fstore `daily_markets`；所有输出统一 `normalize_realtime()`，外部源连续失败 3 次冷却 60 秒。
+- 数据状态：本地模式 stock raw mirror 缺失时，`/api/data/status` 的 daily 口径用 enriched 分区日期并标记 `raw_mirror_disabled=true`。
+
+### 6B.2 验证证据（2026-07-02）
+
+| 验证 | 结果 |
+|------|------|
+| 覆盖闸门 `spike_disk_day_coverage.py --limit 2` | instruments=5534；`tdx_day_exists=5315`；`missing_has_fstore_after_2025_11=219`；`true_gap_active_after_2025_11=0` |
+| raw 重建 spike | 600519 / 300059 / 600186 全 PASS；oracle=`t_1_day_klines`；纯逆运算对 close/high 有分级误差，混合 oracle 策略为准 |
+| provider 真盘 smoke | `fquant_local EngineDataDiskClient freshness=2026-07-02`；600519 2012-10-26 raw close=241.0；`DATA_PROVIDER=fquant_local ... scripts/test_fquant_provider.py` → 全部通过 0 skip |
+| minute/trans 真盘 smoke | `TDX_DATA_DIR=/Volumes/vol3/tdx` 下 600519 2026-07-01：1m=240 行，5m=48 行，trans=4552 行 |
+| fund 真盘 smoke | `TDX_DATA_DIR=/Volumes/vol3/tdx` 下 600519/300059 2026-07-01：`get_moneyflow_daily()` 返回 2 行，source=`fquant_local:moneyflow:daily` |
+| API 真盘 smoke | `DATA_PROVIDER=fquant_local` 下 `/health` mode=`fquant_local`；`/api/kline/daily-batch` 600519 最新 close=1168.63；`/api/kline/daily?symbol=600519.SH&start_date=2026-06-25` source=`local_disk`、close=1212.1，无 `.075769` 尾巴 |
+| 指数真盘 smoke | `get_daily(['000001.SH'], 2026-07-01..2026-07-02, asset_type='index')` → close=4112.45 / 4028.904，未被 `000001.SZ` 股票 oracle 覆盖 |
+| index_sync 真盘 smoke | 临时目录下 `sync_and_persist_index_daily(... symbols_override=['000001.SH'])` → 写入 `kline_index_daily` close=4112.45；指数详情 daily/minute fallback 显式 `asset_type=index` |
+| 后端测试 | `cd backend && uv run --with pytest pytest tests -q` → 71 passed（含新增 raw_reconstruct oracle volume/amount 合并 + 送转缩放 2 项用例），1 个 pytest 配置 warning；新增 minute/trans/freq/fund/fallback/realtime/源标记 针对性测试通过 |
+| 后端编译 | `uv run python -m py_compile ...` → 通过 |
+| 前端类型 | `cd frontend && pnpm tsc --noEmit` → 通过 |
+| 前端构建 | `cd frontend && pnpm build` → 通过；仅保留动态/静态重复 import 与 chunk size warning |
+
+### 6B.3 残留与边界
+
+- `fquant_local` 不提供 depth；盘口/封单仍按 capability 降级，且**无历史 depth 数据源**可回补（TDX 磁盘、fstore 均未见 5 档盘口历史表），非近期上线可修的缺口。
+- 任务 0 覆盖闸门实测缺口 219 只（`instruments=5534` − `tdx_day_exists=5315`），均落入 `missing_has_fstore_after_2025_11`、`true_gap_active_after_2025_11=0`；这 219 只只按 fstore tail 边界（2025-10-31 / 2025-11-01）粗分类为"可 fallback"，未逐只核实缺失原因（退市 / 新股未同步 / 曾用代码变更等），构成明细待人工抽查复核（原计划预估口径为 868，与全量分类实测 219 不一致，以本次实测为准）。
+- `minutes/` CSV 字段格式仅对 600519 2026-07-01 单日单标的做过真盘 smoke（1m=240 行、5m=48 行聚合一致）；历史久远日期、停牌日、半日交易等边界格式未做进一步 spike，`get_minutes()` 目前假设行序即连续分钟序列（无独立时间戳分组），跨边界场景行为未知。
+- `5min/` 等物理聚合分钟目录未接；当前通过 `minutes/` 的 1m 路径聚合生成。
+- `fund/` 只覆盖日级净额分类；完整 minute moneyflow（inflow/outflow、有效/无效笔数等）仍走 moneyflow HTTP 或降级空。
+- `holding` / `fhold` 是个人持仓数据源，不属于公共行情 provider 契约；如接入应走独立用户数据入口。
+- `refresh_polluted_daily.py` 是一次性迁移脚本，只用于旧 `fquant` HTTP 模式污染分区重刷；`fquant_local` 日常路径不写 raw。
+- sina/tencent 是 provider 内 realtime fallback，不是"本地磁盘"来源；设置页/排障文案必须避免误导。
+- 当前变更仍在工作区，未 commit；提交前需用户 review。
+
+---
+
 ## 7. 技术架构简述
 
 ### 7.1 本地源
@@ -200,7 +251,7 @@ def sync_daily(...):
 | **fstore PostgreSQL** | psycopg v3 | 标的列表 / 财务报表 / 复权事件 / 分钟级备份 | `FSTORE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`（默认 `pve.wf:5432/fstore`） |
 | **engine-data** | HTTP GET | 日 K 主源（wide）/ 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
 | **moneyflow** | HTTP GET | 资金流日 / 资金流分钟 | `http://pve.wf:8090`（上次测试 502，已自动降级） |
-| **tdx-api（可选）** | HTTP GET | realtime quote 主源；未配置时回退 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
+| **tdx-api（可选）** | HTTP GET | realtime quote 主源；未配置时回退 sina/tencent 与 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
 
 ### 7.2 调用链
 
@@ -232,7 +283,7 @@ PG / HTTP
 |---|------|------|
 | D1 | 直连上游源，不走 fquant HTTP 中转 | +可控性 / -复杂度 |
 | D2 | daily 主源选 engine-data `wide` 而非 fstore `day_klines` | +数据全 / -多一跳 HTTP |
-| D3 | `realtime` 不接 fquant HTTP 代理，直连 tdx-api / fstore fallback | +不绕聚合层 / -tdx-api 需单独启动 |
+| D3 | `realtime` 不接 fquant HTTP 代理，直连 tdx-api / sina/tencent / fstore fallback | +不绕聚合层 / -tdx-api 可选 |
 | D4 | `financial` capability 升级 ✅（fstore 报表表完整） | 原 PoC 是 ❌，现在打通 |
 | D5 | `chips` 端点不接入（8s 超时） | 阶段 3 路线 3 再议 |
 | D6 | service 层默认 `tickflow`，`DATA_PROVIDER` 可覆盖 settings 偏好 | +安全 / -运行时切换需刷新 provider 单例与能力缓存 |
@@ -272,13 +323,13 @@ PG / HTTP
 | **进度文档** | `backend/docs/FQUANT_INTEGRATION_PROGRESS.md` | **本文件** |
 | 设计稿 | `backend/docs/FQUANT_PROVIDER_DESIGN.md` | 846 行，三源实测 + 架构设计；部分内容已被 realtime/universes 实现更新 |
 | 旧 PoC 说明 | `backend/docs/FQUANT_PROVIDER.md` | 旧版 FQuantProvider（fquant HTTP 透传版） |
-| 测试脚本 | `backend/scripts/test_fquant_provider.py` | 16 项端到端测试 |
+| 测试脚本 | `backend/scripts/test_fquant_provider.py` | 16 项端到端测试，可用 `DATA_PROVIDER=fquant_local` 验证本地磁盘 provider |
 | 聚合 Provider | `backend/app/data_providers/fquant_provider.py` | v2 实现 |
-| 本地源子模块 | `backend/app/data_providers/fquant/{symbols,fstore_client,engine_data_client,moneyflow_client,mapping,adj_factor,fallback}.py` | 8 个文件 |
+| 本地源子模块 | `backend/app/data_providers/fquant/{symbols,fstore_client,engine_data_client,engine_data_disk,moneyflow_client,sina_tencent_client,mapping,adj_factor,raw_reconstruct,fallback}.py` | 10+ 个文件 |
 | Provider 注册 | `backend/app/data_providers/registry.py` | 注册 fquant + 统一 active provider 解析 |
 | Service 改动 | `backend/app/services/{kline_sync,instrument_sync,quote_service,financial_sync,index_sync,watchlist,depth_service}.py` | 7 个文件按统一模式解耦 |
 | Provider 契约 | `backend/app/data_providers/base.py` | 新增 depth/universes capability 和 universes 方法 |
-| 数据规范化 | `backend/app/data_providers/normalizer.py` | **未修改** |
+| 数据规范化 | `backend/app/data_providers/normalizer.py` | 新增显式 realtime 契约 `normalize_realtime()` |
 
 ---
 
@@ -286,8 +337,9 @@ PG / HTTP
 
 | 日期 | 阶段 | 变更 | 验证 |
 |------|------|------|------|
-| 2026-07-02 | 1 | 完成 FQuantProvider v2 架构（设计稿 + 9 文件 + 测试） | 15/15 ✅ |
+| 2026-07-02 | 1 | 完成 FQuantProvider v2 架构（设计稿 + 9 文件 + 测试） | 冒烟无失败；本机 2 skip |
 | 2026-07-02 | 2 | 完成 service 层 7/7 解耦 | 端到端 + tickflow 回归 ✅ |
+| 2026-07-02 | 6 | 完成 `fquant_local` 本地磁盘模式工作区实现 | 71 tests + 真盘 smoke ✅ |
 | 2026-07-02 | — | 撰写本进度文档 | — |
 
 ---

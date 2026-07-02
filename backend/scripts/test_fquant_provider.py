@@ -4,10 +4,10 @@
 1. import / registry / capabilities（§8.1）
 2. 符号归一工具函数（§8.1 / §5.1）
 3. 空 symbols 安全性（§8.1）
-4. get_daily 真实数据（DB 走 engine-data wide，§8.2）
+4. get_daily 真实数据（走 engine-data/TDX disk wide，§8.2）
 5. get_instruments 走 fstore.base_infos（§8.2）
-6. get_minute 走 engine-data minutes（§8.2）
-7. get_adj_factors 走 engine-data xdxr（§8.2）
+6. get_minute 走 engine-data/TDX disk minutes（§8.2）
+7. get_adj_factors 走 engine-data/TDX disk xdxr（§8.2）
 8. get_financial 走 fstore financial_report_*（§8.2）
 9. get_moneyflow_daily / get_moneyflow_minute（§8.2）
 10. 故障 mock：三源分别 mock，其他源不受影响（§8.4）
@@ -17,11 +17,13 @@
     cd backend
     uv run python scripts/test_fquant_provider.py
 
-三源任一不可达 → 该项 skip（warning），不算 fail。
+三源任一不可达 → 该项 skip（warning），不算 fail；报告会单独列 skip 数。
 """
 from __future__ import annotations
 
+import os
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -31,17 +33,24 @@ import polars as pl
 # --------------------------------------------------------------------------- #
 # 辅助
 # --------------------------------------------------------------------------- #
+SKIPS: list[str] = []
+
+
 def _report(failures: list[str]) -> int:
     print()
     if failures:
         print(f"❌ {len(failures)} 项失败: {failures}")
         return 1
-    print("✅ 全部通过")
+    if SKIPS:
+        print(f"✅ 无失败，跳过 {len(SKIPS)} 项: {SKIPS}")
+    else:
+        print("✅ 全部通过，0 skip")
     return 0
 
 
 def _skip(msg: str) -> None:
     """源不可达时 skip（不算 fail）。"""
+    SKIPS.append(msg)
     print(f"  ⚠ SKIP — {msg}")
 
 
@@ -56,8 +65,7 @@ def main() -> int:
     # ================================================================== #
     print("=== 1. import & registry 检查 ===")
     try:
-        from app.data_providers.fquant_provider import FQuantProvider
-        from app.data_providers.registry import get_provider
+        from app.data_providers.registry import get_provider, normalize_provider_name
 
         print("  ✓ fquant_provider import 成功")
     except Exception as e:
@@ -66,9 +74,11 @@ def main() -> int:
         return _report(failures)
 
     try:
-        provider = get_provider("fquant")
-        assert provider.name == "fquant"
-        print(f"  ✓ get_provider('fquant') → {type(provider).__name__}")
+        provider_name = normalize_provider_name(os.getenv("DATA_PROVIDER"), default="fquant")
+        assert provider_name in {"fquant", "fquant_local"}, "本脚本只验证 fquant/fquant_local"
+        provider = get_provider(provider_name)
+        assert provider.name == provider_name
+        print(f"  ✓ get_provider({provider_name!r}) → {type(provider).__name__}")
     except Exception as e:
         print(f"  ✗ registry 注册失败: {e}")
         failures.append("registry")
@@ -76,14 +86,14 @@ def main() -> int:
 
     # ------------------------------------------------------------------ #
     print("=== 2. capabilities 声明（§3.5）===")
-    p = FQuantProvider()
-    assert p.name == "fquant"
+    p = provider
+    assert p.name == provider_name
     caps = p.capabilities
     assert caps.instruments is True, "instruments 应为 True"
     assert caps.daily is True, "daily 应为 True"
     assert caps.adj_factor is True, "adj_factor 应为 True"
     assert caps.minute is True, "minute 应为 True"
-    assert caps.realtime is True, "realtime 应走 tdx-api / fstore local fallback"
+    assert caps.realtime is True, "realtime 应走 tdx-api / sina/tencent / fstore local fallback"
     assert caps.financial is True, "financial 应为 True（新增）"
     assert caps.depth is False, "depth 无本地源，应为 False"
     assert caps.universes is True, "universes 应走 fstore chengfen_gu"
@@ -156,10 +166,10 @@ def main() -> int:
     start = end - timedelta(days=30)
 
     # ------------------------------------------------------------------ #
-    print("=== 5. get_daily 真实数据（走 engine-data wide，§8.2）===")
+    print("=== 5. get_daily 真实数据（走 engine-data/TDX disk wide，§8.2）===")
     df = p.get_daily(["600519.SH"], start, end, "stock")
     if df.is_empty():
-        _skip("get_daily 返回空 DF（engine-data / fstore 可能离线）")
+        _skip("get_daily 返回空 DF（engine-data/TDX disk / fstore 可能离线）")
     else:
         print(f"  ✓ get_daily 返回 {df.height} 行, 列: {df.columns}")
         # 验证 DAILY_COLS 子集
@@ -182,10 +192,10 @@ def main() -> int:
         print(inst.head(3).to_pandas().to_string())
 
     # ------------------------------------------------------------------ #
-    print("=== 7. get_minute（走 engine-data minutes，§8.2）===")
+    print("=== 7. get_minute（走 engine-data/TDX disk minutes，§8.2）===")
     minute_df = p.get_minute(["600519.SH"], start, end, "stock")
     if minute_df.is_empty():
-        _skip("get_minute 返回空 DF（engine-data 可能离线或非交易日）")
+        _skip("get_minute 返回空 DF（engine-data/TDX disk 可能离线或非交易日）")
     else:
         print(f"  ✓ get_minute 返回 {minute_df.height} 行, 列: {minute_df.columns}")
         # 验证 MINUTE_COLUMNS
@@ -196,11 +206,11 @@ def main() -> int:
         print(minute_df.head(3).to_pandas().to_string())
 
     # ------------------------------------------------------------------ #
-    print("=== 8. get_adj_factors（走 engine-data xdxr，§8.2）===")
+    print("=== 8. get_adj_factors（走 engine-data/TDX disk xdxr，§8.2）===")
     adj_start = end - timedelta(days=365)
     adj_df = p.get_adj_factors(["600519.SH"], adj_start, end, "stock")
     if adj_df.is_empty():
-        _skip("get_adj_factors 返回空 DF（engine-data xdxr / fstore 可能离线）")
+        _skip("get_adj_factors 返回空 DF（engine-data/TDX disk xdxr / fstore 可能离线）")
     else:
         print(f"  ✓ get_adj_factors 返回 {adj_df.height} 行, 列: {adj_df.columns}")
         for col in ("symbol", "trade_date", "ex_factor"):
@@ -210,10 +220,7 @@ def main() -> int:
 
     # ------------------------------------------------------------------ #
     print("=== 9. get_financial（走 fstore financial_report_*，§8.2）===")
-    fin_df = p.get_financial("600519.SH", table="income_statement")
-    if fin_df.is_empty():
-        # 尝试 income 简称
-        fin_df = p.get_financial("600519.SH", table="income")
+    fin_df = p.get_financial("600519.SH", table="income")
     if fin_df.is_empty():
         _skip("get_financial 返回空 DF（fstore DB 可能离线）")
     else:
@@ -224,10 +231,10 @@ def main() -> int:
         print(fin_df.head(3).to_pandas().to_string())
 
     # ------------------------------------------------------------------ #
-    print("=== 10. get_moneyflow_daily（走 moneyflow API，§8.2）===")
+    print("=== 10. get_moneyflow_daily（走 TDX fund / moneyflow API，§8.2）===")
     mf_daily = p.get_moneyflow_daily(["600519.SH"], date=end)
     if mf_daily.is_empty():
-        _skip("get_moneyflow_daily 返回空 DF（moneyflow API 可能离线）")
+        _skip("get_moneyflow_daily 返回空 DF（TDX fund 缺数据且 moneyflow API 可能离线）")
     else:
         print(f"  ✓ get_moneyflow_daily 返回 {mf_daily.height} 行, 列: {mf_daily.columns}")
         print(mf_daily.to_pandas().to_string())
@@ -260,7 +267,7 @@ def main() -> int:
     chaos_failures = _test_chaos_all_down(p, start, end)
     failures.extend(chaos_failures)
 
-    print("=== 16. get_realtime 本地源路径（tdx-api / fstore daily_markets）===")
+    print("=== 16. get_realtime 本地源路径（tdx-api / sina/tencent / fstore daily_markets）===")
     mapped = p._tdx_quote_to_row({
         "Code": "SH600519",
         "ServerTime": "2026-07-02T15:00:00+08:00",
@@ -272,10 +279,10 @@ def main() -> int:
     assert mapped["symbol"] == "600519.SH"
     assert mapped["last_price"] == 1185.49
     assert mapped["prev_close"] == 1180.0
-    assert mapped["source"] == "fquant:tdx-api:/api/quote"
+    assert mapped["source"] == f"{p.name}:tdx-api:/api/quote"
     rt = p.get_realtime(symbols=["600519.SH"])
     if rt.is_empty():
-        print("  ⚠ SKIP — get_realtime 真实源返回空（tdx-api/fstore daily_markets 可能离线）")
+        print("  ⚠ SKIP — get_realtime 真实源返回空（tdx-api/sina/tencent/fstore 可能离线）")
     else:
         assert "symbol" in rt.columns and "last_price" in rt.columns
         print(f"  ✓ get_realtime 返回 {rt.height} 行, source={rt['source'][0] if 'source' in rt.columns else 'unknown'}")
@@ -311,7 +318,7 @@ def _test_chaos_fstore_down(p) -> list[str]:
             # （这里只验证不抛异常）
             try:
                 p.get_daily(["600519.SH"], None, None, "stock")
-                print("  ✓ fstore 挂 → get_daily 不抛异常（走 engine-data）")
+                print("  ✓ fstore 挂 → get_daily 不抛异常（走 engine-data/TDX disk）")
             except Exception as e:
                 failures.append(f"chaos_fstore: get_daily 抛异常 {e}")
     except AssertionError as e:
@@ -325,23 +332,24 @@ def _test_chaos_engine_down(p, start, end) -> list[str]:
     """engine-data 5xx → get_daily 退 fstore day_klines（§8.4）。"""
     failures: list[str] = []
     try:
-        # mock engine-data get_wide 返回空（模拟 5xx）
-        with patch.object(p._engine, "get_wide", return_value=[]):
+        # mock engine-data/TDX disk 返回空（模拟 5xx / 磁盘缺失）
+        with patch.object(p._engine, "get_wide", return_value=[]), \
+             patch.object(p._engine, "get_minutes", return_value=[]):
             # get_daily 应不抛，退 fstore day_klines（可能也为空，但不抛）
             df = p.get_daily(["600519.SH"], start, end, "stock")
             # 不断言非空（fstore day_klines 实测 600519 也可能无近期数据）
-            print(f"  ✓ engine-data 挂 → get_daily 不抛异常（返回 {df.height} 行，退 fstore）")
+            print(f"  ✓ engine-data/TDX disk 挂 → get_daily 不抛异常（返回 {df.height} 行，退 fstore）")
 
             # get_minute 应返回空（主源 engine-data）
             minute_df = p.get_minute(["600519.SH"], start, end, "stock")
-            assert minute_df.is_empty(), "engine-data 挂时 get_minute 应返回空 DF"
-            print("  ✓ engine-data 挂 → get_minute 返回空 DF")
+            assert minute_df.is_empty(), "engine-data/TDX disk 挂时 get_minute 应返回空 DF"
+            print("  ✓ engine-data/TDX disk 挂 → get_minute 返回空 DF")
 
             # fstore 方法不受影响（不依赖 engine-data）
             # get_financial 应正常工作
             try:
                 p.get_financial("600519.SH", table="income")
-                print("  ✓ engine-data 挂 → get_financial 不受影响（走 fstore）")
+                print("  ✓ engine-data/TDX disk 挂 → get_financial 不受影响（走 fstore）")
             except Exception as e:
                 failures.append(f"chaos_engine: get_financial 抛异常 {e}")
     except Exception as e:
@@ -355,7 +363,12 @@ def _test_chaos_moneyflow_down(p) -> list[str]:
     try:
         # mock moneyflow 返回 code=99（L3 envelope 异常）
         mock_resp = {"code": 99, "message": "internal error"}
-        with patch.object(p._moneyflow, "_get", return_value=mock_resp):
+        fund_patch = (
+            patch.object(p._engine, "get_fund_daily", return_value={})
+            if hasattr(p._engine, "get_fund_daily")
+            else nullcontext()
+        )
+        with fund_patch, patch.object(p._moneyflow, "_get", return_value=mock_resp):
             mfd = p.get_moneyflow_daily(["600519.SH"])
             assert mfd.is_empty(), "moneyflow code=99 时 get_moneyflow_daily 应返回空 DF"
             print("  ✓ moneyflow code=99 → get_moneyflow_daily 返回空 DF")
@@ -367,7 +380,7 @@ def _test_chaos_moneyflow_down(p) -> list[str]:
             # 其他源方法不受影响
             try:
                 p.get_daily(["600519.SH"], None, None, "stock")
-                print("  ✓ moneyflow 挂 → get_daily 不受影响（走 engine-data/fstore）")
+                print("  ✓ moneyflow 挂 → get_daily 不受影响（走 engine-data/TDX disk/fstore）")
             except Exception as e:
                 failures.append(f"chaos_moneyflow: get_daily 抛异常 {e}")
     except Exception as e:
@@ -382,7 +395,13 @@ def _test_chaos_all_down(p, start, end) -> list[str]:
     p._instruments_cache.clear()
     p._instruments_cache_ts.clear()
     try:
-        with patch.object(p._fstore, "_get_conn", return_value=None), \
+        fund_patch = (
+            patch.object(p._engine, "get_fund_daily", return_value={})
+            if hasattr(p._engine, "get_fund_daily")
+            else nullcontext()
+        )
+        with fund_patch, \
+             patch.object(p._fstore, "_get_conn", return_value=None), \
              patch.object(p._engine, "get_wide", return_value=[]), \
              patch.object(p._engine, "get_xdxr", return_value=[]), \
              patch.object(p._engine, "get_minutes", return_value=[]), \

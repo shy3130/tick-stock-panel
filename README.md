@@ -340,18 +340,21 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 | 上游源 | 协议 | 用途 | 配置 |
 |--------|------|------|------|
 | **fstore PostgreSQL** | psycopg v3 | 标的列表 / 财务报表 / 复权事件 / 分钟级备份 | `FSTORE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`（默认 `pve.wf:5432/fstore`） |
-| **engine-data** | HTTP GET | 日 K 主源（`wide`） / 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
+| **engine-data** | HTTP GET | `fquant` 日 K 主源（`wide`） / 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
+| **TDX 磁盘** | CSV | `fquant_local` 主源：`wide/day/xdxr/minutes/trans/fund` | `TDX_DATA_DIR=/Volumes/vol3/tdx` |
 | **moneyflow** | HTTP GET | 资金流日 / 资金流分钟 | `http://pve.wf:8090`（上次测试 502，已自动降级） |
-| **tdx-api（可选）** | HTTP GET | realtime quote 主源；未配置时回退 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
+| **tdx-api（可选）** | HTTP GET | realtime quote 优先源；未配置/失败时走 sina/tencent，再回退 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
+| **sina/tencent（provider 内适配器）** | HTTP GET | realtime fallback；连续失败退避 | provider 内部受控调用 |
 
 ### 🔁 Provider 切换
 
-通过 `DATA_PROVIDER` 环境变量或 `/api/settings/preferences/data-provider` 在两个 provider 之间切换；环境变量优先级最高。
+通过 `DATA_PROVIDER` 环境变量或 `/api/settings/preferences/data-provider` 在三个 provider 之间切换；环境变量优先级最高。
 
 | Provider | 数据来源 | capabilities | 默认 | 切换方式 |
 |----------|---------|--------------|------|----------|
 | `tickflow`（默认） | TickFlow SDK（付费） | 全部 7 项 | ✅ | 默认或 settings API |
 | `fquant` | fstore PG + engine-data + moneyflow + 可选 tdx-api | 日 K / 复权 / 分钟 / 财务 / realtime / universes；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant` 或 settings API |
+| `fquant_local` | TDX 磁盘 + fstore PG + tdx-api/sina/tencent/fstore realtime | 日 K / 分钟 / 复权 / 财务 / realtime / universes；扩展逐笔/日级资金流；**stock raw mirror 禁写**；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant_local` 或 settings API |
 
 ### ✅ Service 层解耦状态
 
@@ -361,7 +364,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 |---------|------|------|
 | `kline_sync.py` | 试点文件 | 250 行日 K ✅ |
 | `instrument_sync.py` | 标准解耦 | 5857 条标的 ✅ |
-| `quote_service.py` | tickflow 回归；fquant 走 tdx-api / fstore 快照 | ✅ |
+| `quote_service.py` | tickflow 回归；fquant 走 tdx-api / sina/tencent / fstore 快照 | ✅ |
 | `financial_sync.py` | 财务报表走 fstore | 22101 行利润表 ✅ |
 | `index_sync.py` | universes 走 provider `get_by_universes()` | fquant live 验证 ✅ |
 | `watchlist.py` | realtime 走 provider；fquant 走本地源 fallback | ✅ |
@@ -370,15 +373,16 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 ### ⚠️ 已知缺口
 
 - **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级，fquant 模式下返回空列表
-- **realtime 已接入**：不调用 `../fquant` HTTP API；优先可选 `tdx-api` `/api/quote`，否则回退 fstore `daily_markets` 最新快照
+- **realtime 已接入**：不调用 `../fquant` HTTP API；优先可选 `tdx-api` `/api/quote`，再走 sina/tencent，最后回退 fstore `daily_markets` 最新快照
 - **universes 已接入**：provider 协议已新增 `get_by_universes()`；fquant 走 fstore `chengfen_gu` + `base_infos`，TickFlow 走 SDK 兼容路径
 
-### 🚀 本地启动（DATA_PROVIDER=fquant）
+### 🚀 本地启动（DATA_PROVIDER=fquant_local）
 
 ```bash
 cd backend
 uv sync
-export DATA_PROVIDER=fquant
+export DATA_PROVIDER=fquant_local
+export TDX_DATA_DIR=/Volumes/vol3/tdx
 export FSTORE_DATABASE_PASSWORD=$(grep FSTORE_DATABASE_PASSWORD /Users/wf2311/Projects/wf2311/fm/fquant/.env | cut -d= -f2)
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```

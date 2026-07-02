@@ -49,7 +49,7 @@ export function SettingsSystemPanel() {
     }
   }, [qc])
 
-  const saveDataProvider = useCallback(async (provider: 'tickflow' | 'fquant') => {
+  const saveDataProvider = useCallback(async (provider: 'tickflow' | 'fquant' | 'fquant_local') => {
     setSaving(true)
     try {
       await api.updateDataProvider(provider)
@@ -93,11 +93,12 @@ export function SettingsSystemPanel() {
           <select
             value={currentProvider}
             disabled={saving || providerEnvOverride}
-            onChange={(e) => saveDataProvider(e.target.value as 'tickflow' | 'fquant')}
+            onChange={(e) => saveDataProvider(e.target.value as 'tickflow' | 'fquant' | 'fquant_local')}
             className="w-32 h-8 px-2 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
           >
             <option value="tickflow">TickFlow</option>
             <option value="fquant">FQuant 本地</option>
+            <option value="fquant_local">FQuant 磁盘</option>
           </select>
         </div>
       </section>
