@@ -3,6 +3,9 @@
 标的列表优先用免费的 exchanges.get_instruments(type=index/etf) 拉取
 (None/Free 档均可用,无需 quote.pool 权限);付费档可额外用
 quotes.get_by_universes 作为补充来源。日K统一走 klines.batch。
+
+数据获取通过 data_providers 抽象层,支持 provider 切换(环境变量 DATA_PROVIDER)。
+universes (付费档补充来源) provider 暂未覆盖,保留 SDK 直连(见 TODO)。
 """
 from __future__ import annotations
 
@@ -16,12 +19,14 @@ import polars as pl
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync, preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.client import get_client
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 
-# exchanges.get_instruments 查询的交易所(沪深京)
+# 复用 kline_sync 的 provider 工厂(通过 DATA_PROVIDER 环境变量切换,默认 tickflow)
+_get_data_provider = kline_sync._get_data_provider
+
+# exchanges.get_instruments 查询的交易所(沪深京) — 仅供 universes SDK 直连兜底使用
 _EXCHANGES = ["SH", "SZ", "BJ"]
 
 
@@ -74,41 +79,31 @@ def _quotes_to_index_instruments(resp) -> pl.DataFrame:
 
 
 def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> pl.DataFrame:
-    """用免费的 exchanges.get_instruments 拉取指定类型的标的列表。
+    """通过 data_providers 抽象层拉取指定类型的标的列表。
 
     None/Free 档均可使用(标的信息查询免费开放)。
-    instrument_type: 'index' / 'etf'
+    instrument_type: 'index' / 'etf'  (用作 provider.get_instruments 的 asset_type 参数)
     asset_type_label: 写入 instruments 表的 asset_type 标记('index' / 'etf')
     """
-    tf = get_client()
-    rows: list[dict] = []
-    for ex in _EXCHANGES:
-        try:
-            items = tf.exchanges.get_instruments(ex, instrument_type=instrument_type)
-            for it in items or []:
-                item = it if isinstance(it, dict) else {}
-                symbol = item.get("symbol")
-                if not symbol:
-                    continue
-                rows.append({
-                    "symbol": str(symbol),
-                    "name": item.get("name") or str(symbol),
-                })
-        except Exception as e:  # noqa: BLE001
-            logger.warning("get_instruments(%s, type=%s) failed: %s", ex, instrument_type, e)
-
-    if not rows:
+    provider = _get_data_provider()
+    try:
+        df = provider.get_instruments(instrument_type)  # type: ignore[arg-type]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("provider.get_instruments(%s) failed: %s", instrument_type, e)
         return pl.DataFrame()
 
-    return (
-        pl.DataFrame(rows)
-        .with_columns([
-            pl.col("symbol").str.split(".").list.first().alias("code"),
-            pl.lit(asset_type_label).alias("asset_type"),
-        ])
-        .unique(subset=["symbol"], keep="last")
-        .sort("symbol")
-    )
+    if df.is_empty() or "symbol" not in df.columns:
+        return pl.DataFrame()
+
+    # provider 返回 INSTRUMENT_COLS: symbol/name/code/exchange/asset_type/source
+    # 这里只取需要的列,并把 asset_type 覆盖为调用方指定的标记
+    out = df.select([
+        pl.col("symbol").cast(pl.Utf8),
+        pl.col("name").cast(pl.Utf8),
+        pl.col("code").cast(pl.Utf8),
+    ]).with_columns(pl.lit(asset_type_label).alias("asset_type"))
+
+    return out.unique(subset=["symbol"], keep="last").sort("symbol")
 
 
 def sync_index_instruments(
@@ -135,6 +130,7 @@ def sync_index_instruments(
             etf_parts.append(etf_df)
 
     # 2) 付费补充:Starter+ 用 get_by_universes 补指数(仅当开启指数拉取)
+    # TODO: provider 未覆盖 universes,暂保留 SDK 直连。待 provider 抽象层补齐 universes 能力后迁移。
     if pull_index:
         capset = None
         try:
@@ -143,6 +139,7 @@ def sync_index_instruments(
         except Exception:  # noqa: BLE001
             pass
         if capset is not None and capset.has(Cap.QUOTE_POOL):
+            from app.tickflow.client import get_client
             tf = get_client()
             for kwargs in (
                 {"universes": ["CN_Index"]},

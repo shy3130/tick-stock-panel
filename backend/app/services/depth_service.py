@@ -6,6 +6,12 @@
   - limit_ladder API 查询时 LEFT JOIN(同 ext_columns 机制)
   - signal_limit_up 永远是"价格涨停", sealed 是叠加的真假判定层
 
+数据源(provider 感知):
+  - 通过 _get_data_provider() 做能力检查
+  - FQuantProvider 永久不支持盘口(provider.capabilities.depth 缺失→False),
+    优雅降级: 所有函数直接返回空/0, 不调 SDK, 不报错
+  - TickFlowProvider 通过 SDK 调用(tf.depth.batch)提供盘口, 原逻辑保留
+
 数据流:
   盘中轮询线程(交易时段, 独立 sleep, 不绑行情轮询):
     读 enriched 内存缓存(线程安全) → 涨跌停名单 → tf.depth.batch
@@ -28,6 +34,8 @@ from datetime import date, datetime, time as dt_time
 from pathlib import Path
 
 import polars as pl
+
+from app.services.kline_sync import _get_data_provider
 
 logger = logging.getLogger(__name__)
 
@@ -564,6 +572,18 @@ class DepthService:
     # ================================================================
 
     def _has_capability(self) -> bool:
+        """能力检查: provider depth 能力 + TickFlow SDK 套餐双重门禁。
+
+        FQuantProvider 永久不支持盘口(engine-data/fstore/moneyflow 三上游均无盘口),
+        通过 provider.capabilities.depth 优雅降级, 不调 SDK。
+        """
+        # provider 能力检查: depth 字段缺失时视为 False(FQuantProvider 即如此)
+        provider = _get_data_provider()
+        if not getattr(provider.capabilities, "depth", False):
+            logger.info("depth_service: 当前 provider %s 不支持盘口, 降级返回空",
+                        provider.name)
+            return False
+        # TickFlow SDK 套餐检查(Pro+ 才有 DEPTH5_BATCH)
         capset = self._get_capset()
         from app.tickflow.capabilities import Cap
         return capset.has(Cap.DEPTH5_BATCH)

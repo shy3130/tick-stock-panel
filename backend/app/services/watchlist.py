@@ -12,9 +12,14 @@ import polars as pl
 
 from app.config import settings
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.client import get_client
 
 logger = logging.getLogger(__name__)
+
+
+def _get_data_provider():
+    """复用 kline_sync 的 provider 工厂(环境变量 DATA_PROVIDER 切换)。"""
+    from app.services.kline_sync import _get_data_provider as _factory
+    return _factory()
 
 
 def _path() -> Path:
@@ -92,7 +97,9 @@ def clear() -> int:
 def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8.0) -> list[dict]:
     """拉取实时行情。
 
-    优先用 quote.batch;否则降级为 quote.by_symbol 单股请求。
+    通过 data_providers 抽象层取数,支持 provider 切换(环境变量 DATA_PROVIDER)。
+    - tickflow provider: 走 SDK quotes.get, 有实时数据
+    - fquant provider: get_realtime 返回空(capabilities.realtime=False), 优雅降级
     timeout_s: 单批次请求超时(秒)，防止 API 卡死阻塞整个请求。
     """
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -100,7 +107,7 @@ def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8
     if not symbols:
         return []
 
-    tf = get_client()
+    provider = _get_data_provider()
     quotes: list[dict] = []
 
     # 走 batch
@@ -116,17 +123,25 @@ def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8
         # 提前返回空,避免发起注定失败的请求
         return []
 
+    # provider 不支持 realtime(fquant)时,直接降级返回空,不调 SDK
+    if not getattr(provider.capabilities, "realtime", False):
+        logger.info(
+            "watchlist: 当前 provider %s 不支持 realtime, 降级返回空",
+            provider.name,
+        )
+        return []
+
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
 
     # 用线程池为每个批次加超时保护
     pool = ThreadPoolExecutor(max_workers=1)
     for chunk in chunks:
         try:
-            future = pool.submit(tf.quotes.get, symbols=chunk, as_dataframe=True)
+            future = pool.submit(provider.get_realtime, symbols=chunk)
             raw = future.result(timeout=timeout_s)
             if raw is None or len(raw) == 0:
                 continue
-            df = pl.from_pandas(raw)
+            df = pl.from_pandas(raw) if hasattr(raw, "iteritems") else raw
             rename_map = {
                 "last_price": "price",
                 "ext.change_pct": "pct",

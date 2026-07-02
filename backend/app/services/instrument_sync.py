@@ -1,69 +1,64 @@
 """标的维表同步服务。
 
-盘前 9:10 调用 tf.exchanges.get_instruments("SH"/"SZ"/"BJ", type="stock")
-获取全量标的元数据，flatten ext 字段，写入 instruments.parquet。
+盘前 9:10 通过 data_providers 抽象层获取全量标的元数据，
+flatten / 规范后写入 instruments.parquet。
 
-Starter+ 盘后可用 quotes.get(universes) 顺便补充 name。
+数据获取通过 data_providers 抽象层，支持 provider 切换（环境变量 DATA_PROVIDER）。
 """
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date
 from pathlib import Path
 
 import polars as pl
 
-from app.tickflow.client import get_client
+from app.data_providers.registry import get_provider
 
 logger = logging.getLogger(__name__)
 
 _EXCHANGES = ["SH", "SZ", "BJ"]
 
 
-def _flatten_instruments(items: list[dict]) -> list[dict]:
-    """把 SDK 返回的 Instrument 列表 flatten 成扁平行。"""
-    rows = []
-    for item in items:
-        row = {
-            "symbol": item.get("symbol"),
-            "name": item.get("name"),
-            "code": item.get("code"),
-            "exchange": item.get("exchange"),
-            "region": item.get("region"),
-            "type": item.get("type"),
-        }
-        ext = item.get("ext") or {}
-        row["listing_date"] = ext.get("listing_date")
-        row["total_shares"] = ext.get("total_shares")
-        row["float_shares"] = ext.get("float_shares")
-        row["tick_size"] = ext.get("tick_size")
-        row["limit_up"] = ext.get("limit_up")
-        row["limit_down"] = ext.get("limit_down")
-        rows.append(row)
-    return rows
+# 数据源 provider 单例缓存（通过环境变量 DATA_PROVIDER 切换，默认 tickflow）
+_provider_instance = None
+
+
+def _get_data_provider():
+    """获取当前配置的数据源 provider。
+
+    通过环境变量 ``DATA_PROVIDER`` 选择，默认 ``tickflow``。
+    支持值: ``tickflow`` / ``fquant``。
+    """
+    global _provider_instance
+    if _provider_instance is None:
+        provider_name = os.environ.get("DATA_PROVIDER", "tickflow")
+        _provider_instance = get_provider(provider_name)
+        logger.info("data provider initialized: %s", provider_name)
+    return _provider_instance
 
 
 def sync_instruments(data_dir: Path) -> int:
     """全量同步标的维表 → data/instruments/instruments.parquet。
 
-    返回写入的行数。
+    通过 data_providers 抽象层获取归一化的 instruments DataFrame，
+    追加 ``as_of`` 列后写入 parquet。返回写入的行数。
+
+    provider.get_instruments() 返回归一化 schema:
+    symbol/name/code/exchange/asset_type/source。
     """
-    tf = get_client()
-    all_rows: list[dict] = []
-
-    for ex in _EXCHANGES:
-        try:
-            items = tf.exchanges.get_instruments(ex, instrument_type="stock")
-            if items:
-                all_rows.extend(_flatten_instruments(items))
-                logger.info("instruments %s: %d stocks", ex, len(items))
-        except Exception as e:
-            logger.warning("get_instruments(%s) failed: %s", ex, e)
-
-    if not all_rows:
+    provider = _get_data_provider()
+    try:
+        df = provider.get_instruments("stock")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("get_instruments(stock) failed: %s", e)
         return 0
 
-    df = pl.DataFrame(all_rows)
+    if df is None or df.is_empty():
+        logger.warning("get_instruments returned empty")
+        return 0
+
     df = df.with_columns(pl.lit(date.today()).alias("as_of"))
 
     out = data_dir / "instruments" / "instruments.parquet"

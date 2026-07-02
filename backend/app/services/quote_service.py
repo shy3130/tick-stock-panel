@@ -24,13 +24,37 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import date, datetime, time as dt_time
 
 import polars as pl
 
+from app.data_providers.registry import get_provider
+
 logger = logging.getLogger(__name__)
+
+
+# 数据源 provider 单例缓存(通过环境变量 DATA_PROVIDER 切换,默认 tickflow)
+_provider_instance = None
+
+
+def _get_data_provider():
+    """获取当前配置的数据源 provider。
+
+    通过环境变量 ``DATA_PROVIDER`` 选择,默认 ``tickflow``。
+    支持值: ``tickflow`` / ``fquant``。
+
+    注意: FQuantProvider 的 ``get_realtime()`` 返回空 DataFrame
+    (capabilities.realtime=False), 在 FQuantProvider 下实时行情会降级为空。
+    """
+    global _provider_instance
+    if _provider_instance is None:
+        provider_name = os.environ.get("DATA_PROVIDER", "tickflow")
+        _provider_instance = get_provider(provider_name)
+        logger.info("data provider initialized: %s", provider_name)
+    return _provider_instance
 
 
 class QuoteService:
@@ -352,13 +376,12 @@ class QuoteService:
         self._fetch_full_market_quotes()
 
     def _fetch_full_market_quotes(self) -> None:
-        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
-        from app.tickflow.client import get_paid_realtime_client
+        """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
 
-        tf = get_paid_realtime_client()
-        if tf is None:
-            logger.warning("实时行情拉取失败:未配置付费服务器 API Key")
-            return
+        通过 data_providers 抽象层取数,支持环境变量 ``DATA_PROVIDER`` 切换。
+        注意: FQuantProvider.get_realtime() 返回空, 会降级为空结果(已知限制)。
+        """
+        provider = _get_data_provider()
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
 
@@ -381,11 +404,16 @@ class QuoteService:
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "all":
                 universes.append("CN_Index")
 
-            resp = []
+            # 通过 provider 抽象层拉取 (替代 tf.quotes.get_by_universes / tf.quotes.get)
+            resp: list[dict] = []
             if universes:
-                resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
+                df_uni = provider.get_realtime(universes=universes)
+                if df_uni is not None and not df_uni.is_empty():
+                    resp.extend(df_uni.to_dicts())
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
-                resp.extend(tf.quotes.get(symbols=sorted(core_index_symbols)) or [])
+                df_idx = provider.get_realtime(symbols=sorted(core_index_symbols))
+                if df_idx is not None and not df_idx.is_empty():
+                    resp.extend(df_idx.to_dicts())
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败: %s", e)
             return
@@ -478,24 +506,25 @@ class QuoteService:
         self._evaluate_monitors(daily_df, quote_extra)
 
     def _fetch_watchlist_quotes(self) -> None:
-        """Free 档自选股实时: 只拉取最多 5 个 symbols。"""
+        """Free 档自选股实时: 只拉取最多 5 个 symbols。
+
+        通过 data_providers 抽象层取数,支持环境变量 ``DATA_PROVIDER`` 切换。
+        注意: FQuantProvider.get_realtime() 返回空, 会降级为空结果(已知限制)。
+        """
         from app.services import preferences
-        from app.tickflow.client import get_paid_realtime_client
 
         symbols = preferences.get_realtime_watchlist_symbols()
         if not symbols:
             logger.info("自选实时未配置标的, 跳过行情拉取")
             return
 
-        tf = get_paid_realtime_client()
-        if tf is None:
-            logger.warning("自选实时拉取失败:未配置付费服务器 API Key")
-            return
-
+        provider = _get_data_provider()
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
         try:
-            resp = tf.quotes.get(symbols=symbols) or []
+            # 通过 provider 抽象层拉取 (替代 tf.quotes.get)
+            df = provider.get_realtime(symbols=symbols)
+            resp: list[dict] = df.to_dicts() if df is not None and not df.is_empty() else []
         except Exception as e:  # noqa: BLE001
             logger.warning("自选实时拉取失败: %s", e)
             return

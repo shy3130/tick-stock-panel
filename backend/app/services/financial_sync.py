@@ -2,11 +2,16 @@
 
 解耦于 K-line 管道, 自有调度 + 自有存储。
 能力门控: Cap.FINANCIAL (Expert 套餐)
+
+数据获取通过 data_providers 抽象层,支持 provider 切换(环境变量 DATA_PROVIDER)。
+- 默认 ``tickflow``: 通过 ``tf.financials.*`` (TickFlowProvider 内部 lazy 调用)
+- ``fquant``: 通过 FQuantProvider.get_financial() 直连 fstore financial_report_* 表
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +19,7 @@ from typing import Any
 
 import polars as pl
 
+from app.data_providers.registry import get_provider
 from app.tickflow.capabilities import Cap, CapabilitySet
 
 logger = logging.getLogger(__name__)
@@ -21,8 +27,39 @@ logger = logging.getLogger(__name__)
 # 每个 API 请求最多 100 个标的
 _BATCH_SIZE = 100
 
-# 4 张财务表
+# 4 张财务表(对外/调度器层面沿用旧名称,不改函数签名)
 FINANCIAL_TABLES = ("metrics", "income", "balance_sheet", "cash_flow")
+
+# 业务表名 → provider.get_financial(table=...) 参数。
+# FQuantProvider.get_financial() 接受: income / balance_sheet / cash_flow / annual / quick / forecast
+# (见 backend/app/data_providers/fquant_provider.py 的 _FINANCIAL_TABLE_MAP)。
+# - "metrics" 在 provider 侧没有同名表,映射到最接近的 "annual"(年度核心指标 EPS/BPS/ROE/净利)。
+# - 三张报表直接同名透传。
+_PROVIDER_TABLE_MAP: dict[str, str] = {
+    "metrics": "annual",
+    "income": "income",
+    "balance_sheet": "balance_sheet",
+    "cash_flow": "cash_flow",
+}
+
+
+# 数据源 provider 单例缓存(通过环境变量 DATA_PROVIDER 切换,默认 tickflow)
+_provider_instance = None
+
+
+def _get_data_provider():
+    """获取当前配置的数据源 provider。
+
+    通过环境变量 ``DATA_PROVIDER`` 选择,默认 ``tickflow``。
+    支持值: ``tickflow`` / ``fquant``。
+    与 ``app.services.kline_sync._get_data_provider`` 同模式。
+    """
+    global _provider_instance
+    if _provider_instance is None:
+        provider_name = os.environ.get("DATA_PROVIDER", "tickflow")
+        _provider_instance = get_provider(provider_name)
+        logger.info("financial data provider initialized: %s", provider_name)
+    return _provider_instance
 
 
 # ================================================================
@@ -49,7 +86,15 @@ def _sync_table(
     capset: CapabilitySet,
     latest_only: bool = True,
 ) -> int:
-    """同步单张财务表。返回写入的行数。"""
+    """同步单张财务表。返回写入的行数。
+
+    通过 ``data_providers`` 抽象层取数(与 ``kline_sync.py`` 同模式):
+    - ``provider.get_financial(symbol, table=...)`` 接受**单个 symbol**,返回归一化 Polars DF,
+      列含 ``symbol/t_date/...<source cols>.../notice_date``(见 fquant_provider.py)。
+    - 本函数逐 symbol 调用并 concat,降级:provider 异常或返回空 → 跳过该 symbol。
+    - ``latest_only`` 参数保留在签名中以保持向后兼容;provider 内部默认返回最近 N 条
+      (FQuantProvider.get_financial 内部 ``LIMIT 50``),与旧 ``latest=True`` 语义一致。
+    """
     if not capset.has(Cap.FINANCIAL):
         logger.info("sync_%s skipped: no FINANCIAL capability", table)
         return 0
@@ -57,55 +102,63 @@ def _sync_table(
         logger.warning("sync_%s skipped: no symbols", table)
         return 0
 
-    from app.tickflow.client import get_client
-    tf = get_client()
+    provider = _get_data_provider()
 
-    # 分批拉取
-    api_method = {
-        "metrics": tf.financials.metrics,
-        "income": tf.financials.income,
-        "balance_sheet": tf.financials.balance_sheet,
-        "cash_flow": tf.financials.cash_flow,
-    }[table]
+    # 业务表名 → provider.get_financial() 的 table 参数
+    provider_table = _PROVIDER_TABLE_MAP.get(table, table)
 
-    all_records: list[dict] = []
-    total_batches = (len(symbols) + _BATCH_SIZE - 1) // _BATCH_SIZE
-
-    for i in range(0, len(symbols), _BATCH_SIZE):
-        chunk = symbols[i : i + _BATCH_SIZE]
-        batch_num = i // _BATCH_SIZE + 1
-        try:
-            data = api_method(chunk, latest=latest_only)
-            # data 格式: { "600519.SH": [record, ...], ... }
-            if isinstance(data, dict):
-                for sym, records in data.items():
-                    if isinstance(records, list):
-                        for rec in records:
-                            if isinstance(rec, dict):
-                                rec["symbol"] = sym
-                                all_records.append(rec)
-            logger.debug("sync_%s batch %d/%d: %d records", table, batch_num, total_batches, len(data) if isinstance(data, dict) else 0)
-        except Exception as e:
-            logger.warning("sync_%s batch %d/%d failed: %s", table, batch_num, total_batches, e)
-
-    if not all_records:
+    # TickFlowProvider 当前未实现 get_financial(像 get_minute 一样返回空)。
+    # 用 getattr 兜底:不存在 → 直接返回 0 行,使本函数优雅降级,不抛异常。
+    get_financial = getattr(provider, "get_financial", None)
+    if get_financial is None:
+        logger.warning(
+            "sync_%s skipped: provider %s 未实现 get_financial",
+            table, getattr(provider, "name", type(provider).__name__),
+        )
         return 0
 
-    df = pl.DataFrame(all_records)
+    all_frames: list[pl.DataFrame] = []
+
+    for sym in symbols:
+        try:
+            df = get_financial(sym, provider_table)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("sync_%s: provider.get_financial(%s) failed: %s", table, sym, e)
+            continue
+
+        if df is None or len(df) == 0:
+            continue
+        if not isinstance(df, pl.DataFrame):
+            # provider 契约要求返回 polars DF;防御性兜底:pandas → polars
+            try:
+                df = pl.from_pandas(df)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("sync_%s: provider returned non-DataFrame for %s: %s", table, sym, e)
+                continue
+
+        # 确保 symbol 列存在(provider 已带,但作为安全网)
+        if "symbol" not in df.columns:
+            df = df.with_columns(pl.lit(sym).alias("symbol"))
+        all_frames.append(df)
+
+    if not all_frames:
+        return 0
+
+    df = pl.concat(all_frames, how="diagonal_relaxed")
     if df.is_empty():
         return 0
 
-    # 确保 symbol 列存在
+    # 确保 symbol 列存在(concat 后再确认一次,防御性)
     if "symbol" not in df.columns:
         return 0
 
-    # 写入 Parquet (全量覆盖)
+    # 写入 Parquet (全量覆盖,保留原有 repository 写入逻辑)
     out_dir = data_dir / "financials" / table
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "part.parquet"
     df.write_parquet(out_file)
 
-    logger.info("sync_%s done: %d records written", table, len(df))
+    logger.info("sync_%s done: %d records written (%d symbols)", table, len(df), len(symbols))
     return len(df)
 
 

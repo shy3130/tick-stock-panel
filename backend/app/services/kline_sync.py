@@ -4,22 +4,43 @@
 策略:
   - 日 K 仅使用 `kline.daily.batch`
   - 除权因子仅使用 `adj_factor`
+
+数据获取通过 data_providers 抽象层,支持 provider 切换(环境变量 DATA_PROVIDER)。
 """
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import polars as pl
 
+from app.data_providers.registry import get_provider
 from app.indicators.pipeline import filter_halt_days
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.client import get_client
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
+
+
+# 数据源 provider 单例缓存(通过环境变量 DATA_PROVIDER 切换,默认 tickflow)
+_provider_instance = None
+
+
+def _get_data_provider():
+    """获取当前配置的数据源 provider。
+
+    通过环境变量 ``DATA_PROVIDER`` 选择,默认 ``tickflow``。
+    支持值: ``tickflow`` / ``fquant``。
+    """
+    global _provider_instance
+    if _provider_instance is None:
+        provider_name = os.environ.get("DATA_PROVIDER", "tickflow")
+        _provider_instance = get_provider(provider_name)
+        logger.info("data provider initialized: %s", provider_name)
+    return _provider_instance
 
 
 # 标准列(无论 SDK 返回什么形状,我们把它规范成这套)
@@ -29,7 +50,11 @@ CANONICAL_DAILY_COLS = [
 
 
 def _normalize_daily(df_in, default_symbol: str | None = None) -> pl.DataFrame:
-    """把 SDK 返回的 pandas/任意 DataFrame 规范成 canonical 列。"""
+    """把 SDK 返回的 pandas/任意 DataFrame 规范成 canonical 列。
+
+    注意: provider.get_daily() 返回的已经是 normalize 过的 Polars DataFrame,
+    传入此函数是幂等操作(二次 normalize 无副作用),作为安全网保留。
+    """
     if df_in is None or len(df_in) == 0:
         return pl.DataFrame()
 
@@ -77,12 +102,14 @@ def sync_daily_batch(symbols: list[str],
                      start_time: datetime | None = None,
                      end_time: datetime | None = None,
                      on_chunk_done: Callable[[int, int], None] | None = None) -> pl.DataFrame:
-    """批量拉取多股日 K。
+    """批量拉取多股日 K（通过 data_providers 抽象层）。
 
     优先使用 start_time / end_time 区间 + count=10000,确保覆盖完整时间段。
     仅传 count 时按条数回溯。
+
+    注意: count 参数保留在签名中以保持向后兼容,但 provider 内部自行决定拉取条数。
     """
-    tf = get_client()
+    provider = _get_data_provider()
     out: list[pl.DataFrame] = []
     interval = (60.0 / rpm) if rpm else 0
 
@@ -95,28 +122,16 @@ def sync_daily_batch(symbols: list[str],
         if i > 0 and interval > 0 and len(chunks) > rpm:
             time.sleep(interval)
         try:
-            if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1d", adjust="none",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=True, show_progress=False,
-                )
-            else:
-                raw = tf.klines.batch(chunk, period="1d", count=count or 250, adjust="none",
-                                      as_dataframe=True, show_progress=False)
+            # provider.get_daily 返回已 normalize 的 Polars DataFrame
+            # 再过一次 _normalize_daily 作为安全网(幂等)
+            raw = provider.get_daily(
+                chunk, start_time=start_time, end_time=end_time, asset_type="stock",
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("batch fetch failed for %d symbols: %s", len(chunk), e)
             continue
 
-        # 兼容两种形态:dict[sym → df] 和扁平 df
-        if isinstance(raw, dict):
-            for sym, sub in raw.items():
-                if sub is None or len(sub) == 0:
-                    continue
-                out.append(_normalize_daily(sub, default_symbol=sym))
-        elif raw is not None and len(raw) > 0:
+        if raw is not None and not raw.is_empty():
             out.append(_normalize_daily(raw))
 
         if on_chunk_done:
@@ -182,35 +197,29 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     """
     from datetime import date as _date
 
-    from app.tickflow.client import get_client
-
-    tf = get_client()
+    provider = _get_data_provider()
     try:
-        resp = tf.quotes.get_by_universes(universes=["CN_Equity_A"])
-    except Exception as e:
-        logger.warning("get_by_universes failed: %s", e)
+        df = provider.get_realtime(universes=["CN_Equity_A"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("get_realtime failed: %s", e)
         return 0
 
-    if not resp:
-        logger.warning("get_by_universes returned empty")
+    if df is None or df.is_empty():
+        logger.warning("get_realtime returned empty")
         return 0
 
-    records = []
-    for q in resp:
-        ext = q.get("ext") or {}
-        records.append({
-            "symbol": q.get("symbol"),
-            "open": q.get("open"),
-            "high": q.get("high"),
-            "low": q.get("low"),
-            "close": q.get("last_price"),
-            "volume": q.get("volume"),
-            "amount": q.get("amount"),
-        })
+    # 从实时行情字段映射到日 K canonical 列
+    # TickFlow quotes 返回 last_price; 映射为 close
+    if "last_price" in df.columns and "close" not in df.columns:
+        df = df.rename({"last_price": "close"})
 
-    df = pl.DataFrame(records)
-    if df.is_empty():
+    # 只保留需要的列
+    keep = ["symbol", "open", "high", "low", "close", "volume", "amount"]
+    available = [c for c in keep if c in df.columns]
+    if not available:
+        logger.warning("get_realtime: no usable OHLCV columns")
         return 0
+    df = df.select(available)
 
     today = _date.today()
     daily_df = df.with_columns(pl.lit(today).cast(pl.Date).alias("date"))
@@ -224,7 +233,11 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
 
 
 def _normalize_adj_factor(raw) -> pl.DataFrame:
-    """Normalize SDK ex_factors response to symbol/trade_date/ex_factor."""
+    """Normalize SDK/provider ex_factors response to symbol/trade_date/ex_factor.
+
+    注意: provider.get_adj_factors() 返回的已经是 normalize 过的 Polars DataFrame,
+    传入此函数是幂等操作(二次 normalize 无副作用),作为安全网保留。
+    """
     if raw is None or len(raw) == 0:
         return pl.DataFrame()
     if isinstance(raw, dict):
@@ -270,7 +283,9 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                     end_time: datetime | None = None,
                     on_chunk_done: Callable[[int, int], None] | None = None,
                     asset_type: str = "stock") -> tuple[int, list[str]]:
-    """同步除权因子(Starter+)。SDK 接口:`tf.klines.ex_factors(symbols=...)`。
+    """同步除权因子(Starter+)。
+
+    通过 data_providers 抽象层获取除权因子数据。
 
     支持增量: 传 start_time/end_time 只拉取该时间范围内的新除权事件。
     返回 (写入行数, 受影响的 symbol 列表) — 供 enriched 局部重算使用。
@@ -278,18 +293,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     if not capset.has(Cap.ADJ_FACTOR) or not symbols:
         return 0, []
 
-    tf = get_client()
+    provider = _get_data_provider()
     lim = capset.limits(Cap.ADJ_FACTOR)
     batch_size = lim.batch if lim and lim.batch else 50
     rpm = lim.rpm if lim else 30
     interval = 60.0 / rpm if rpm else 0
-
-    # 构建 SDK 参数
-    sdk_kwargs: dict = {"as_dataframe": True, "batch_size": batch_size, "show_progress": False}
-    if start_time:
-        sdk_kwargs["start_time"] = _datetime_to_ms(start_time)
-    if end_time:
-        sdk_kwargs["end_time"] = _datetime_to_ms(end_time)
 
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
     all_dfs: list[pl.DataFrame] = []
@@ -298,7 +306,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         if i > 0 and interval > 0 and len(chunks) > rpm:
             time.sleep(interval)
         try:
-            raw = tf.klines.ex_factors(chunk, **sdk_kwargs)
+            # provider.get_adj_factors 返回已 normalize 的 Polars DataFrame
+            # 再过一次 _normalize_adj_factor 作为安全网(幂等)
+            raw = provider.get_adj_factors(
+                chunk, start_time=start_time, end_time=end_time, asset_type=asset_type,
+            )
             normalized = _normalize_adj_factor(raw)
             if not normalized.is_empty():
                 all_dfs.append(normalized)
@@ -346,7 +358,12 @@ CANONICAL_MINUTE_COLS = [
 
 
 def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
-    """把 SDK 返回的分钟 K 数据规范成 canonical 列。"""
+    """把 SDK/provider 返回的分钟 K 数据规范成 canonical 列。
+
+    注意: provider.get_minute() 返回的已经是 normalize 过的 Polars DataFrame
+    (含 MINUTE_COLUMNS), 传入此函数会额外过滤掉 asset_type/source/freq 等列,
+    只保留 CANONICAL_MINUTE_COLS,是幂等安全操作。
+    """
     if df_in is None or len(df_in) == 0:
         return pl.DataFrame()
 
@@ -398,7 +415,10 @@ def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
 
 
 def _datetime_to_ms(dt: datetime) -> int:
-    """datetime → 毫秒时间戳 (供 SDK start_time / end_time 使用)。"""
+    """datetime → 毫秒时间戳 (供 SDK start_time / end_time 使用)。
+
+    保留此函数: TickFlowProvider 内部通过 lazy import 调用它。
+    """
     return int(dt.timestamp() * 1000)
 
 
@@ -411,13 +431,15 @@ def sync_minute_batch(
     rpm: int | None = None,
     on_chunk_done: Callable[[int, int], None] | None = None,
 ) -> pl.DataFrame:
-    """批量拉取多股分钟 K。
+    """批量拉取多股分钟 K（通过 data_providers 抽象层）。
 
     优先使用 start_time / end_time 区间, 确保所有标的覆盖同一时间段。
     count 仅作为 fallback 保留。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
+
+    注意: count 参数保留在签名中以保持向后兼容,但 provider 内部自行决定拉取条数。
     """
-    tf = get_client()
+    provider = _get_data_provider()
     out: list[pl.DataFrame] = []
     interval = (60.0 / rpm) if rpm else 0
 
@@ -430,27 +452,17 @@ def sync_minute_batch(
         if i > 0 and interval > 0 and len(chunks) > rpm:
             time.sleep(interval)
         try:
-            if start_time and end_time:
-                raw = tf.klines.batch(
-                    chunk, period="1m",
-                    start_time=_datetime_to_ms(start_time),
-                    end_time=_datetime_to_ms(end_time),
-                    count=10000,
-                    as_dataframe=True, show_progress=False,
-                )
-            else:
-                raw = tf.klines.batch(chunk, period="1m", count=count or 1200,
-                                      as_dataframe=True, show_progress=False)
+            # provider.get_minute 返回已 normalize 的 Polars DataFrame
+            # 再过一次 _normalize_minute 作为安全网(幂等)
+            raw = provider.get_minute(
+                chunk, start_time=start_time, end_time=end_time,
+                asset_type="stock", freq="1m",
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
             continue
 
-        if isinstance(raw, dict):
-            for sym, sub in raw.items():
-                if sub is None or len(sub) == 0:
-                    continue
-                out.append(_normalize_minute(sub, default_symbol=sym))
-        elif raw is not None and len(raw) > 0:
+        if raw is not None and not raw.is_empty():
             out.append(_normalize_minute(raw))
 
         if on_chunk_done:
@@ -462,40 +474,41 @@ def sync_minute_batch(
 
 
 def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股单日分钟 K（不写入本地）。"""
+    """从数据源实时拉取单股单日分钟 K（不写入本地）。
+
+    通过 data_providers 抽象层获取。
+    """
     from datetime import datetime
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
-    tf = get_client()
+    provider = _get_data_provider()
     try:
-        raw = tf.klines.batch(
-            [symbol], period="1m",
-            start_time=_datetime_to_ms(start_time),
-            end_time=_datetime_to_ms(end_time),
-            count=10000,
-            as_dataframe=True, show_progress=False,
+        raw = provider.get_minute(
+            [symbol], start_time=start_time, end_time=end_time,
+            asset_type="stock", freq="1m",
         )
     except Exception as e:
         logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
         return pl.DataFrame()
 
-    if isinstance(raw, dict):
-        sub = raw.get(symbol)
-        return _normalize_minute(sub) if sub is not None and len(sub) > 0 else pl.DataFrame()
-    if raw is not None and len(raw) > 0:
+    if raw is not None and not raw.is_empty():
         return _normalize_minute(raw)
     return pl.DataFrame()
 
 
 def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股除权因子(不写入本地), 用于单股 K 线即时前复权。
+    """从数据源实时拉取单股除权因子(不写入本地), 用于单股 K 线即时前复权。
+
+    通过 data_providers 抽象层获取。
 
     返回结构: symbol, trade_date, ex_factor (空 DataFrame 表示无除权事件或拉取失败)。
     与 _apply_adj_factor / compute_enriched 的 factors 参数格式一致。
     """
-    tf = get_client()
+    provider = _get_data_provider()
     try:
-        raw = tf.klines.ex_factors([symbol], as_dataframe=True, show_progress=False)
+        raw = provider.get_adj_factors(
+            [symbol], start_time=None, end_time=None, asset_type="stock",
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("fetch_adj_factor_single(%s) failed: %s", symbol, e)
         return pl.DataFrame()
