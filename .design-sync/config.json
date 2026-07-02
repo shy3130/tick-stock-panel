@@ -1,0 +1,24 @@
+{
+  "projectId": "5368e335-8f62-4efd-9b59-cdcac52e5a6e",
+  "shape": "package",
+  "pkg": "tickflow-stock-panel-frontend",
+  "globalName": "TickflowUI",
+  "entry": "frontend/.design-sync-entry.mjs",
+  "srcDir": "src/components",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": ".design-sync-styles.css",
+  "componentSrcMap": {
+    "DatePicker": "src/components/DatePicker.tsx",
+    "EmptyState": "src/components/EmptyState.tsx",
+    "Logo": "src/components/Logo.tsx",
+    "PageHeader": "src/components/PageHeader.tsx",
+    "WarmupBadge": "src/components/WarmupBadge.tsx",
+    "EChartsCandlestick": "src/components/EChartsCandlestick.tsx",
+    "ToastContainer": "src/components/Toast.tsx"
+  },
+  "overrides": {
+    "EChartsCandlestick": { "cardMode": "column" },
+    "ToastContainer": { "cardMode": "single", "viewport": "360x200" }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

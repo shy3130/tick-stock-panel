@@ -105,3 +105,12 @@ packaging/installed_run.log
 TickFlowStockPanel.app/
 TickFlowStockPanel-macos*.dmg
 TickFlowStockPanel-macos*.zip
+
+# ===== /design-sync (Claude Design) =====
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+frontend/.design-sync-entry.mjs
+frontend/.design-sync-styles.css
