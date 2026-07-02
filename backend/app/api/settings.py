@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from fastapi import APIRouter, HTTPException, Request
@@ -314,16 +315,34 @@ def _realtime_allowed() -> bool:
     return QuoteService.is_realtime_allowed()
 
 
+def _reset_data_provider_singletons() -> None:
+    """Clear service-level provider singletons after a runtime provider switch."""
+    from app.services import financial_sync, instrument_sync, kline_sync, quote_service
+    financial_sync._provider_instance = None
+    instrument_sync._provider_instance = None
+    kline_sync._provider_instance = None
+    quote_service._provider_instance = None
+
+
 class MinuteSyncPrefs(BaseModel):
     minute_sync_enabled: bool
     minute_sync_days: int = 5
 
 
+class DataProviderPrefs(BaseModel):
+    data_provider: str
+
+
 @router.get("/preferences")
 def get_preferences() -> dict:
     """返回用户偏好设置。"""
+    from app.data_providers.registry import get_active_provider_name
     from app.services import preferences
+    env_provider = os.environ.get("DATA_PROVIDER")
     return {
+        "data_provider": preferences.get_data_provider(),
+        "effective_data_provider": get_active_provider_name(),
+        "data_provider_env_override": bool(env_provider),
         "realtime_quotes_enabled": preferences.get_realtime_quotes_enabled(),
         "realtime_allowed": _realtime_allowed(),
         "indices_nav_pinned": preferences.get_indices_nav_pinned(),
@@ -361,6 +380,41 @@ def get_preferences() -> dict:
         "depth_finalize_time": preferences.get_depth_finalize_time(),
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
+    }
+
+
+@router.put("/preferences/data-provider")
+def update_data_provider(req: DataProviderPrefs, request: Request) -> dict:
+    """保存全局数据源偏好。
+
+    DATA_PROVIDER 环境变量优先级最高；存在时本接口仍保存偏好,但不会改变当前进程的有效 provider。
+    """
+    from app.data_providers.registry import get_active_provider_name
+    from app.services import preferences
+
+    try:
+        saved = preferences.set_data_provider(req.data_provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    env_provider = os.environ.get("DATA_PROVIDER")
+    if not env_provider:
+        _reset_data_provider_singletons()
+        capset = detect_capabilities(force=True)
+        request.app.state.capabilities = capset
+        _sync_financial_scheduler_caps(request.app.state, capset)
+
+        qs = getattr(request.app.state, "quote_service", None)
+        if qs and not qs.is_realtime_allowed():
+            qs.disable()
+
+    return {
+        "data_provider": saved,
+        "effective_data_provider": get_active_provider_name(),
+        "data_provider_env_override": bool(env_provider),
+        "mode": tf_client.current_mode(),
+        "tier_label": tier_label(),
+        "realtime_allowed": _realtime_allowed(),
     }
 
 
@@ -1080,4 +1134,3 @@ def update_review_push(req: ReviewPushIn) -> dict:
     from app.services import preferences
     saved = preferences.set_review_push_channels(req.channels)
     return {"review_push_channels": saved}
-

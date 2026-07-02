@@ -4,8 +4,9 @@
 (None/Free 档均可用,无需 quote.pool 权限);付费档可额外用
 quotes.get_by_universes 作为补充来源。日K统一走 klines.batch。
 
-数据获取通过 data_providers 抽象层,支持 provider 切换(环境变量 DATA_PROVIDER)。
-universes (付费档补充来源) provider 暂未覆盖,保留 SDK 直连(见 TODO)。
+数据获取通过 data_providers 抽象层,支持 provider 切换。
+universes 付费补充也走 provider 抽象层（阶段 3 #3.2：FQuantProvider 走
+fstore chengfen_gu；TickFlowProvider 走 tf.quotes.get_by_universes）。
 """
 from __future__ import annotations
 
@@ -23,10 +24,10 @@ from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 
-# 复用 kline_sync 的 provider 工厂(通过 DATA_PROVIDER 环境变量切换,默认 tickflow)
+# 复用 kline_sync 的 provider 工厂(默认 tickflow,可切到 fquant)
 _get_data_provider = kline_sync._get_data_provider
 
-# exchanges.get_instruments 查询的交易所(沪深京) — 仅供 universes SDK 直连兜底使用
+# exchanges.get_instruments 查询的交易所(沪深京)
 _EXCHANGES = ["SH", "SZ", "BJ"]
 
 
@@ -130,30 +131,22 @@ def sync_index_instruments(
             etf_parts.append(etf_df)
 
     # 2) 付费补充:Starter+ 用 get_by_universes 补指数(仅当开启指数拉取)
-    # TODO: provider 未覆盖 universes,暂保留 SDK 直连。待 provider 抽象层补齐 universes 能力后迁移。
+    # 阶段 3 #3.2:universes 能力已下沉到 provider 抽象层,FQuantProvider 走
+    # fstore chengfen_gu，TickFlowProvider 走 tf.quotes.get_by_universes。
     if pull_index:
-        capset = None
         try:
-            from app.tickflow import policy
-            capset = policy.detect_capabilities(force=False)
-        except Exception:  # noqa: BLE001
-            pass
-        if capset is not None and capset.has(Cap.QUOTE_POOL):
-            from app.tickflow.client import get_client
-            tf = get_client()
-            for kwargs in (
-                {"universes": ["CN_Index"]},
-                {"universes": ["CN_Index"], "as_dataframe": False},
-            ):
-                try:
-                    resp = tf.quotes.get_by_universes(**kwargs)
-                    if resp is not None and len(resp) > 0:
-                        sup = _quotes_to_index_instruments(resp)
-                        if not sup.is_empty():
-                            index_parts.append(sup)
-                        break
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("CN_Index universe supplement failed: %s", e)
+            provider = _get_data_provider()
+            # 顶层失败兜底（capabilities 检查 + provider 实现不可用都算）
+            if getattr(provider, "capabilities", None) is not None and not provider.capabilities.universes:
+                logger.debug("当前 provider 不支持 universes,跳过付费补充")
+            else:
+                sup = provider.get_by_universes(universes=["CN_Index"], asset_type="index")
+                if sup is not None and not sup.is_empty():
+                    index_parts.append(sup)
+                else:
+                    logger.debug("provider.get_by_universes(['CN_Index']) 返回空")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("provider.get_by_universes(['CN_Index']) 失败: %s", e)
 
     total = 0
     if index_parts:

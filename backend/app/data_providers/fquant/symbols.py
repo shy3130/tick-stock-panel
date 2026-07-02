@@ -72,7 +72,7 @@ def symbol_to_code(symbol: str) -> str:
 def symbol_to_market(symbol: str) -> tuple[int, str] | None:
     """对外符号 → ``(asset_type_num, market_key)``。
 
-    返回值用于 fquant HTTP 路由（PoC 已消费）。
+    返回值保留给底层本地源客户端使用。
     指数/ETF 当前未映射（返回 None）。
 
     >>> symbol_to_market("600519.SH")

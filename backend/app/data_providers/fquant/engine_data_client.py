@@ -62,7 +62,7 @@ class EngineDataClient:
         """
         url = f"{self.base}{path}"
         try:
-            resp = httpx.get(url, params=params, timeout=self.timeout)
+            resp = httpx.get(url, params=params, timeout=self.timeout, trust_env=False)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:  # noqa: BLE001

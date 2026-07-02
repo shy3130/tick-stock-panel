@@ -1,4 +1,4 @@
-"""三源降级策略表（§7.1）。
+"""本地源降级策略表（§7.1）。
 
 本模块不执行降级逻辑，只提供降级链描述（用于日志/调试/文档）。
 实际降级执行在 ``fquant_provider.py`` 各方法内实现。
@@ -11,7 +11,7 @@
 | get_daily           | engine-data wide         | fstore day_klines        | —                      | 空 df    |
 | get_adj_factors     | engine-data xdxr         | fstore chuquan_chuxi     | —                      | 空 df    |
 | get_minute          | engine-data minutes      | —                        | —                      | 空 df    |
-| get_realtime        | （本期不实现，返回空）     | —                        | —                      | 空 df    |
+| get_realtime        | tdx-api `/api/quote`      | fstore `daily_markets`   | —                      | 空 df    |
 | get_financial       | fstore *_report_*        | —                        | —                      | 空 df    |
 | get_moneyflow_daily | moneyflow /daily/stocks  | —                        | —                      | 空 df    |
 | get_moneyflow_minute| moneyflow /minute/stocks | —                        | —                      | 空 df    |
@@ -39,7 +39,7 @@ FALLBACK_CHAIN: dict[str, list[str]] = {
     "get_daily":            ["engine-data:wide", "fstore:day_klines"],
     "get_adj_factors":      ["engine-data:xdxr", "fstore:chuquan_chuxi"],
     "get_minute":           ["engine-data:minutes"],
-    "get_realtime":         [],
+    "get_realtime":         ["tdx-api:quote", "fstore:daily_markets"],
     "get_financial":        ["fstore:financial_report_*"],
     "get_moneyflow_daily":  ["moneyflow:daily"],
     "get_moneyflow_minute": ["moneyflow:minute"],

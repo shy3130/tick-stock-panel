@@ -94,31 +94,51 @@ def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
 
-# ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
+# ===== 数据源选择 (默认 TickFlow；支持切换到本地 fquant provider) =====
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow"}
+_ALLOWED_DATA_PROVIDERS = {"tickflow", "fquant"}
+
+
+def _clean_data_provider(provider: str | None, default: str = "tickflow") -> str:
+    provider = str(provider or default).strip().lower() or default
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+
+
+def get_data_provider() -> str:
+    return _clean_data_provider(load().get("data_provider"))
+
+
+def set_data_provider(provider: str) -> str:
+    provider = str(provider or "").strip().lower()
+    if provider not in _ALLOWED_DATA_PROVIDERS:
+        raise ValueError(f"unsupported data provider: {provider}")
+    save({
+        "data_provider": provider,
+        "daily_data_provider": provider,
+        "minute_data_provider": provider,
+        "realtime_data_provider": provider,
+        "adj_factor_provider": "same_as_daily",
+    })
+    return provider
 
 
 def get_daily_data_provider() -> str:
-    provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+    return _clean_data_provider(load().get("daily_data_provider", get_data_provider()))
 
 
 def get_adj_factor_provider() -> str:
     provider = str(load().get("adj_factor_provider", "same_as_daily") or "same_as_daily").lower()
     if provider == "same_as_daily":
         return provider
-    return provider if provider in _ALLOWED_DATA_PROVIDERS else "same_as_daily"
+    return _clean_data_provider(provider)
 
 
 def get_minute_data_provider() -> str:
-    provider = str(load().get("minute_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+    return _clean_data_provider(load().get("minute_data_provider", get_data_provider()))
 
 
 def get_realtime_data_provider() -> str:
-    # 盘中实时现阶段仅支持 TickFlow。
-    return "tickflow"
+    return _clean_data_provider(load().get("realtime_data_provider", get_data_provider()))
 
 
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====

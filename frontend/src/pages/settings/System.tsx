@@ -5,7 +5,7 @@
  */
 import { useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, Database } from 'lucide-react'
 import { usePreferences, useVersion } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -20,6 +20,8 @@ export function SettingsSystemPanel() {
   const [saving, setSaving] = useState(false)
 
   const screenerAutoRun = prefs?.screener_auto_run ?? true
+  const currentProvider = prefs?.effective_data_provider ?? prefs?.data_provider ?? 'tickflow'
+  const providerEnvOverride = prefs?.data_provider_env_override ?? false
   const [clearing, setClearing] = useState(false)
   const [toastEnabled, setToastEnabled] = useState(() => {
     try { return localStorage.getItem('alert_toast_enabled') !== '0' } catch { return true }
@@ -47,6 +49,16 @@ export function SettingsSystemPanel() {
     }
   }, [qc])
 
+  const saveDataProvider = useCallback(async (provider: 'tickflow' | 'fquant') => {
+    setSaving(true)
+    try {
+      await api.updateDataProvider(provider)
+      qc.invalidateQueries()
+    } finally {
+      setSaving(false)
+    }
+  }, [qc])
+
   // 刷新前端缓存: 清除 react-query 缓存 + 强制重载 (绕过浏览器缓存)
   // 不动 localStorage (用户列配置/策略池等偏好保留), 也不影响后端的本地股票数据
   const handleClearCache = useCallback(() => {
@@ -66,6 +78,31 @@ export function SettingsSystemPanel() {
       />
 
       <section className="rounded-card border border-border bg-surface p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Database className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">数据源</h3>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 py-2">
+          <div className="min-w-0">
+            <div className="text-sm text-foreground">行情数据源</div>
+            <div className="text-[11px] text-muted truncate">
+              {providerEnvOverride ? '当前由 DATA_PROVIDER 环境变量锁定' : '切换后重新检测能力并刷新缓存'}
+            </div>
+          </div>
+          <select
+            value={currentProvider}
+            disabled={saving || providerEnvOverride}
+            onChange={(e) => saveDataProvider(e.target.value as 'tickflow' | 'fquant')}
+            className="w-32 h-8 px-2 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
+          >
+            <option value="tickflow">TickFlow</option>
+            <option value="fquant">FQuant 本地</option>
+          </select>
+        </div>
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5 mt-6">
         <div className="flex items-center gap-2 mb-4">
           <Settings2 className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-medium text-foreground">策略页</h3>

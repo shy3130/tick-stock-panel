@@ -24,6 +24,8 @@ class TickFlowProvider:
         minute=True,
         realtime=True,
         financial=True,
+        depth=True,
+        universes=True,
     )
 
     def get_instruments(self, asset_type: AssetType) -> pl.DataFrame:
@@ -118,3 +120,70 @@ class TickFlowProvider:
         else:
             return pl.DataFrame()
         return pl.DataFrame(resp or [])
+
+    # ------------------------------------------------------------------ #
+    # get_by_universes — 阶段 3 #3.2 universes 索引标的能力
+    # ------------------------------------------------------------------ #
+    def get_by_universes(
+        self,
+        universes: list[str],
+        asset_type: AssetType = "index",  # noqa: ARG002
+    ) -> pl.DataFrame:
+        """TickFlow 端 ``get_by_universes`` —— 阶段 3 #3.2 行为对齐。
+
+        保留对 ``tf.quotes.get_by_universes`` 的直接调用；与 ``index_sync.py``
+        原本的"补充指数列表"语义一致（返回该 universe 下的标的列表）。
+
+        输出列：INSTRUMENT_COLS（symbol / name / code / exchange / asset_type /
+        source）。``asset_type`` 由调用方决定（``index`` 用于 index_sync）。
+
+        降级：SDK 调用失败 → 返回空 df，warning。
+        """
+        if not universes:
+            return pl.DataFrame()
+        try:
+            tf = get_client()
+            resp = tf.quotes.get_by_universes(universes=universes, as_dataframe=False)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("TickFlow get_by_universes(%s) failed: %s", universes, e)
+            return pl.DataFrame()
+        if not resp:
+            return pl.DataFrame()
+        # resp 是 list[dict] / pandas.DataFrame
+        if hasattr(resp, "reset_index") and not isinstance(resp, list):
+            try:
+                df = pl.from_pandas(resp.reset_index())
+            except Exception:  # noqa: BLE001
+                df = pl.DataFrame(list(resp) if resp else [])
+        elif isinstance(resp, pl.DataFrame):
+            df = resp
+        else:
+            rows: list[dict] = []
+            for q in resp:
+                item = q if isinstance(q, dict) else {}
+                ext = item.get("ext") or {}
+                symbol = item.get("symbol")
+                if not symbol:
+                    continue
+                rows.append({
+                    "symbol": str(symbol),
+                    "name": ext.get("name") or item.get("name") or str(symbol),
+                })
+            df = pl.DataFrame(rows) if rows else pl.DataFrame()
+
+        if df.is_empty() or "symbol" not in df.columns:
+            return pl.DataFrame()
+        # rename ts_code -> symbol 兼容
+        df = df.rename({k: v for k, v in {"ts_code": "symbol"}.items() if k in df.columns})
+        if "name" not in df.columns:
+            df = df.with_columns(pl.col("symbol").cast(pl.Utf8).alias("name"))
+        out = df.select([pl.col("symbol").cast(pl.Utf8), pl.col("name").cast(pl.Utf8)]).with_columns([
+            pl.col("symbol").str.split(".").list.first().alias("code"),
+            pl.lit(str(asset_type)).alias("asset_type"),
+        ])
+        # exchange 留空字符串（TickFlow 不暴露），source 标注
+        out = out.with_columns([
+            pl.lit("").alias("exchange"),
+            pl.lit(self.name).alias("source"),
+        ])
+        return out.unique(subset=["symbol"], keep="last").sort("symbol")

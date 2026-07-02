@@ -75,6 +75,8 @@ export function SettingsKeysPanel() {
         <div className="space-y-6">
           <Card icon={Key} title="TickFlow API Key">
             <p className="text-sm text-secondary leading-relaxed mb-4">
+              仅使用 TickFlow 官方数据源时需要配置。
+              {' '}
               在{' '}
               <a
                 href="https://tickflow.org/auth/register?ref=V3KDKGXPEA"

@@ -94,7 +94,7 @@ def get_index_daily(
     try:
         raw = kline_sync.sync_daily_batch([symbol], count=days + 150)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
+        raise HTTPException(status_code=502, detail=f"数据源拉取失败: {e}") from e
     if raw.is_empty():
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": [], "source": "none"}
 
@@ -141,7 +141,7 @@ def sync_index_daily(
     repo = request.app.state.repo
     capset = request.app.state.capabilities
     if not capset.has(Cap.KLINE_DAILY_BATCH):
-        raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch K-line)")
+        raise HTTPException(status_code=403, detail="当前数据源不支持批量日K")
     end = datetime.now()
     start = end - timedelta(days=days)
     count = index_sync.sync_index_instruments(repo)

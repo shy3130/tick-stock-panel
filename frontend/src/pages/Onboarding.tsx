@@ -227,7 +227,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
   )
 }
 
-// ===== Step 1: 输入 TickFlow Key =====
+// ===== Step 1: 输入 TickFlow Key（可选，官方源才需要） =====
 
 function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () => void; onBack: () => void }) {
   const qc = useQueryClient()
@@ -260,10 +260,10 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
         <div className="rounded-lg bg-accent/10 p-2">
           <ShieldCheck className="h-4 w-4 text-accent" />
         </div>
-        <h2 className="text-xl font-bold text-foreground">配置 TickFlow API Key</h2>
+        <h2 className="text-xl font-bold text-foreground">配置官方数据源 Key</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        本项目基于 TickFlow 这款稳定的数据源为基座进行开发,正在适配其他第三方数据源。
+        TickFlow 官方源需要 API Key；本地 FQuant 数据源可跳过此步，稍后在「系统设置」里切换。
         如果有任何建议或意见,欢迎发送邮件至{' '}
         <a
           href="mailto:415333856@qq.com"
@@ -330,7 +330,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
           </a>
           获取。
           <span className="block mt-1.5 text-foreground/70">
-            当前数据源基于 TickFlow 基座,其他第三方数据源正在开发适配中。
+            使用 TickFlow 官方源时需要 Key；使用本地 FQuant 源时可直接跳过。
           </span>
         </span>
       </div>

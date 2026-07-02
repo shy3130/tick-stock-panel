@@ -3,7 +3,7 @@
 解耦于 K-line 管道, 自有调度 + 自有存储。
 能力门控: Cap.FINANCIAL (Expert 套餐)
 
-数据获取通过 data_providers 抽象层,支持 provider 切换(环境变量 DATA_PROVIDER)。
+数据获取通过 data_providers 抽象层,支持 provider 切换。
 - 默认 ``tickflow``: 通过 ``tf.financials.*`` (TickFlowProvider 内部 lazy 调用)
 - ``fquant``: 通过 FQuantProvider.get_financial() 直连 fstore financial_report_* 表
 """
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +18,7 @@ from typing import Any
 
 import polars as pl
 
-from app.data_providers.registry import get_provider
+from app.data_providers.registry import get_active_provider_name, get_provider
 from app.tickflow.capabilities import Cap, CapabilitySet
 
 logger = logging.getLogger(__name__)
@@ -43,20 +42,20 @@ _PROVIDER_TABLE_MAP: dict[str, str] = {
 }
 
 
-# 数据源 provider 单例缓存(通过环境变量 DATA_PROVIDER 切换,默认 tickflow)
+# 数据源 provider 单例缓存(默认 tickflow,可切到 fquant)
 _provider_instance = None
 
 
 def _get_data_provider():
     """获取当前配置的数据源 provider。
 
-    通过环境变量 ``DATA_PROVIDER`` 选择,默认 ``tickflow``。
+    通过 registry 解析当前 provider,默认 ``tickflow``。
     支持值: ``tickflow`` / ``fquant``。
     与 ``app.services.kline_sync._get_data_provider`` 同模式。
     """
     global _provider_instance
     if _provider_instance is None:
-        provider_name = os.environ.get("DATA_PROVIDER", "tickflow")
+        provider_name = get_active_provider_name()
         _provider_instance = get_provider(provider_name)
         logger.info("financial data provider initialized: %s", provider_name)
     return _provider_instance

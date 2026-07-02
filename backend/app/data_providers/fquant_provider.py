@@ -1,4 +1,4 @@
-"""FQuantProvider v2 — 直连 fstore PG + engine-data + moneyflow 三上游源。
+"""FQuantProvider v2 — 直连 fstore PG + engine-data + moneyflow + 可选 tdx-api。
 
 严格按 ``backend/docs/FQUANT_PROVIDER_DESIGN.md`` §4 模块设计 / §5 数据映射 /
 §6 配置 / §7 错误降级 / §8 测试方案 实现。
@@ -20,15 +20,17 @@
 能力声明（§3.5 / §4.2）::
 
     instruments=True, daily=True, adj_factor=True,
-    minute=True, realtime=False, financial=True
+    minute=True, realtime=True, financial=True, depth=False, universes=True
 
 错误降级（§7）：任一源不可达 → 返回空 DF + warning，不抛异常。
 """
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 
+import httpx
 import polars as pl
 
 from app.data_providers.base import AssetType, ProviderCapabilities
@@ -41,6 +43,7 @@ from app.data_providers.fquant.engine_data_client import EngineDataClient
 from app.data_providers.fquant.fstore_client import FStoreClient
 from app.data_providers.fquant.mapping import (
     base_infos_rows_to_instruments,
+    chengfen_gu_rows_to_universes,
     chuquan_rows_to_events,
     day_rows_to_daily,
     financial_rows_to_df,
@@ -81,17 +84,17 @@ _FINANCIAL_TABLE_MAP: dict[str, str] = {
 
 
 # =========================================================================== #
-# FQuantProvider（对外接口，三子客户端聚合）
+# FQuantProvider（对外接口，本地源聚合）
 # =========================================================================== #
 class FQuantProvider:
-    """FQuant 数据源 Provider — 直连 fstore / engine-data / moneyflow。
+    """FQuant 数据源 Provider — 直连底层本地源。
 
-    实现 ``MarketDataProvider`` 接口（见 ``base.py``）。三子客户端独立工作，
+    实现 ``MarketDataProvider`` 接口（见 ``base.py``）。各本地源独立工作，
     任一故障不影响其余（§7）。
 
     能力声明（§3.5 / §4.2）：
-    - instruments / daily / adj_factor / minute / financial → True
-    - realtime → False（§4.7 本期不实现，留 §10 路线 1）
+    - instruments / daily / adj_factor / minute / realtime / financial / universes → True
+    - depth → False；当前 provider 不暴露 5 档盘口能力
     """
 
     name = "fquant"
@@ -100,14 +103,22 @@ class FQuantProvider:
         daily=True,
         adj_factor=True,
         minute=True,
-        realtime=False,
+        realtime=True,
         financial=True,
+        depth=False,
+        universes=True,   # 阶段 3 #3.2：fstore chengfen_gu 提供指数/板块/行业
     )
 
     def __init__(self) -> None:
         self._fstore = FStoreClient()
         self._engine = EngineDataClient()
         self._moneyflow = MoneyflowClient()
+        self._tdx_api_base = (
+            os.getenv("FQUANT_TDX_API_BASE")
+            or os.getenv("DSA_TDX_API_BASE_URL")
+            or os.getenv("TDX_API_BASE_URL")
+            or ""
+        ).strip().rstrip("/")
         # instruments 缓存（§4.3 24h TTL）
         self._instruments_cache: dict[str, pl.DataFrame] = {}
         self._instruments_cache_ts: dict[str, datetime] = {}
@@ -421,19 +432,379 @@ class FQuantProvider:
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
     # ------------------------------------------------------------------ #
-    # get_realtime — §4.7 本期不实现
+    # get_realtime — tdx-api 实时 + fstore daily_markets 最新快照 fallback
     # ------------------------------------------------------------------ #
     def get_realtime(
         self,
-        universes: list[str] | None = None,  # noqa: ARG002
-        symbols: list[str] | None = None,  # noqa: ARG002
+        universes: list[str] | None = None,
+        symbols: list[str] | None = None,
     ) -> pl.DataFrame:
-        """本期不实现 realtime（§4.7 / §10 路线 1）。
+        """Realtime 不能通过 ``../fquant`` HTTP API 中转。
 
-        engine-data ``trans`` 已能凑出主买主卖聚类作为 realtime 平替，
-        但构建 Standard RealtimeQuote 还需 tencent/tdex 兜底——留 §10 R1。
+        路径与 ``../fquant`` 的本地 provider 一致：
+        1. 可选相邻 ``tdx-api``：``FQUANT_TDX_API_BASE`` / ``DSA_TDX_API_BASE_URL``
+           / ``TDX_API_BASE_URL`` 指向 ``/api/quote``。
+        2. fstore ``daily_markets`` 最新快照 fallback。
         """
-        return pl.DataFrame()
+        target_symbols = self._resolve_realtime_symbols(universes, symbols)
+        if not target_symbols:
+            return pl.DataFrame()
+
+        rows: list[dict] = []
+        remaining = list(dict.fromkeys(target_symbols))
+
+        if self._tdx_api_base:
+            tdx_rows = self._get_tdx_realtime(remaining)
+            if tdx_rows:
+                rows.extend(tdx_rows)
+                got = {r["symbol"] for r in tdx_rows if r.get("symbol")}
+                remaining = [s for s in remaining if s not in got]
+
+        if remaining:
+            rows.extend(self._get_fstore_realtime(remaining))
+
+        return pl.DataFrame(rows) if rows else pl.DataFrame()
+
+    def _resolve_realtime_symbols(
+        self,
+        universes: list[str] | None,
+        symbols: list[str] | None,
+    ) -> list[str]:
+        if universes and symbols:
+            raise ValueError("FQuant realtime accepts either universes or symbols, not both")
+        if symbols:
+            return [str(s).strip().upper() for s in symbols if str(s).strip()]
+        if not universes:
+            return []
+
+        frames: list[pl.DataFrame] = []
+        upper = {u.upper() for u in universes}
+        if any(u.startswith("CN_EQUITY") for u in upper):
+            frames.append(self.get_instruments("stock"))
+        if any(u.startswith("CN_ETF") for u in upper):
+            frames.append(self.get_instruments("etf"))
+        if any(u.startswith("CN_INDEX") for u in upper):
+            frames.append(self.get_instruments("index"))
+
+        if not frames:
+            return []
+        non_empty = [f for f in frames if f is not None and not f.is_empty()]
+        if not non_empty:
+            return []
+        df = pl.concat(non_empty, how="diagonal_relaxed")
+        if df.is_empty() or "symbol" not in df.columns:
+            return []
+        return df["symbol"].cast(pl.Utf8).to_list()
+
+    def _get_tdx_realtime(self, symbols: list[str]) -> list[dict]:
+        a_symbols = [s for s in symbols if symbol_to_market(s) and symbol_to_market(s)[0] == 1]
+        if not a_symbols:
+            return []
+        codes = ",".join(symbol_to_code(s) for s in a_symbols)
+        try:
+            resp = httpx.get(
+                f"{self._tdx_api_base}/api/quote",
+                params={"code": codes},
+                timeout=3,
+                trust_env=False,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("tdx-api realtime quote failed: %s", e)
+            return []
+        if int(payload.get("code", -1)) != 0:
+            logger.warning("tdx-api realtime quote code=%s message=%s", payload.get("code"), payload.get("message"))
+            return []
+        data = payload.get("data") or []
+        if not isinstance(data, list):
+            return []
+        return [row for item in data if (row := self._tdx_quote_to_row(item))]
+
+    def _tdx_quote_to_row(self, item: dict) -> dict | None:
+        code = str(item.get("Code") or item.get("code") or "")
+        code_digits = "".join(ch for ch in code if ch.isdigit())
+        if len(code_digits) < 6:
+            return None
+        symbol = code_to_symbol(code_digits[-6:], 1)
+        k = item.get("K") or item.get("k") or {}
+        last_price = self._tdx_price(k.get("Close"))
+        prev_close = self._tdx_price(k.get("Last"))
+        if last_price is None:
+            return None
+        return self._quote_row(
+            symbol=symbol,
+            name=None,
+            source="fquant:tdx-api:/api/quote",
+            last_price=last_price,
+            prev_close=prev_close,
+            open_=self._tdx_price(k.get("Open")),
+            high=self._tdx_price(k.get("High")),
+            low=self._tdx_price(k.get("Low")),
+            volume=self._float_or_none(item.get("TotalHand")),
+            amount=self._float_or_none(item.get("Amount")),
+            timestamp=str(item.get("ServerTime") or ""),
+        )
+
+    def _get_fstore_realtime(self, symbols: list[str]) -> list[dict]:
+        grouped: dict[int, list[str]] = {}
+        for symbol in symbols:
+            asset_type = self._asset_type_num_for_symbol(symbol)
+            if asset_type is None:
+                continue
+            grouped.setdefault(asset_type, []).append(symbol_to_code(symbol))
+
+        out: list[dict] = []
+        for asset_type, codes in grouped.items():
+            table = f"t_{asset_type}_daily_markets"
+            placeholders = ",".join(["%s"] * len(codes))
+            sql = f"""
+                SELECT DISTINCT ON (code)
+                    code, name, tdate, price, zdfd, zded, cjl, cje,
+                    jrkpj, zgj, zdj, zrspj, hslv, zhfu
+                FROM {table}
+                WHERE code IN ({placeholders})
+                ORDER BY code, tdate DESC
+            """
+            rows = self._fstore.query(sql, codes)
+            out.extend(self._fstore_quote_to_row(r, asset_type) for r in rows)
+        return [r for r in out if r]
+
+    @staticmethod
+    def _asset_type_num_for_symbol(symbol: str) -> int | None:
+        _, suffix = split_symbol(symbol)
+        if suffix in {"SH", "SZ", "BJ"}:
+            return 1
+        if suffix == "HK":
+            return 3
+        if suffix == "INDEX":
+            return 10
+        if suffix == "ETF":
+            return 20
+        return None
+
+    def _fstore_quote_to_row(self, item: dict, asset_type: int) -> dict | None:
+        symbol = code_to_symbol(str(item.get("code") or ""), asset_type)
+        last_price = self._float_or_none(item.get("price"))
+        if not symbol or last_price is None:
+            return None
+        return self._quote_row(
+            symbol=symbol,
+            name=item.get("name"),
+            source="fquant:fstore:daily_markets",
+            last_price=last_price,
+            prev_close=self._float_or_none(item.get("zrspj")),
+            open_=self._float_or_none(item.get("jrkpj")),
+            high=self._float_or_none(item.get("zgj")),
+            low=self._float_or_none(item.get("zdj")),
+            volume=self._float_or_none(item.get("cjl")),
+            amount=self._float_or_none(item.get("cje")),
+            timestamp=str(item.get("tdate") or ""),
+            change_pct=self._float_or_none(item.get("zdfd")),
+            change_amount=self._float_or_none(item.get("zded")),
+            amplitude=self._float_or_none(item.get("zhfu")),
+            turnover_rate=self._float_or_none(item.get("hslv")),
+        )
+
+    def _quote_row(
+        self,
+        *,
+        symbol: str,
+        name: str | None,
+        source: str,
+        last_price: float,
+        prev_close: float | None,
+        open_: float | None,
+        high: float | None,
+        low: float | None,
+        volume: float | None,
+        amount: float | None,
+        timestamp: str,
+        change_pct: float | None = None,
+        change_amount: float | None = None,
+        amplitude: float | None = None,
+        turnover_rate: float | None = None,
+    ) -> dict:
+        if change_amount is None and prev_close not in (None, 0):
+            change_amount = last_price - float(prev_close)
+        if change_pct is None and prev_close not in (None, 0) and change_amount is not None:
+            change_pct = change_amount / float(prev_close) * 100
+        return {
+            "symbol": symbol,
+            "name": name,
+            "last_price": last_price,
+            "prev_close": prev_close,
+            "open": open_,
+            "high": high,
+            "low": low,
+            "volume": volume,
+            "amount": amount,
+            "timestamp": timestamp,
+            "source": source,
+            "ext": {
+                "name": name,
+                "source": source,
+                "change_pct": change_pct,
+                "change_amount": change_amount,
+                "amplitude": amplitude,
+                "turnover_rate": turnover_rate,
+            },
+        }
+
+    @staticmethod
+    def _tdx_price(value) -> float | None:
+        number = FQuantProvider._float_or_none(value)
+        if number is None or number <= 0:
+            return None
+        return number / 1000
+
+    @staticmethod
+    def _float_or_none(value) -> float | None:
+        try:
+            if value is None:
+                return None
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number
+
+    # ------------------------------------------------------------------ #
+    # get_by_universes — 阶段 3 #3.2 指数/板块/行业 universes
+    # ------------------------------------------------------------------ #
+    def get_by_universes(
+        self,
+        universes: list[str],
+        asset_type: AssetType = "index",
+    ) -> pl.DataFrame:
+        """按 universe 名取标的清单（阶段 3 #3.2）。
+
+        数据流：fstore ``chengfen_gu``（主源）+ ``base_infos``（指数/ETF 兜底）
+        输出列（INSTRUMENT_COLS）：symbol / name / code / exchange / asset_type / source
+
+        支持的 universe（按 name 匹配，§5.5b）：
+        - ``"CN_Index"`` / ``"CN_Index_*"`` → ``chengfen_gu`` 中 6 位数字 code
+          （覆盖中证/同花顺等行业指数；同时在 ``base_infos.asset_type=10``
+          中也保留记录以补全标准交易所指数）
+        - ``"CN_ETF"`` / ``"CN_ETF_*"`` → ``base_infos.asset_type=20``（ETF 清单）
+        - ``"CN_Sector"`` / ``"CN_Sector_*"`` → ``chengfen_gu`` 中 BK/801 开头
+          的板块/行业（asset_type=15/37/38/39/40/41/42 整体返回）
+
+        其它 universe 名：返回空 df（§7.1 优雅降级）。
+
+        降级：DB 不可达 → 返回空 df，warning（§7.1）。
+        """
+        if not universes:
+            return pl.DataFrame()
+
+        frames: list[pl.DataFrame] = []
+
+        # 1) 分类 universe → 数据源
+        want_index = any(u.upper().startswith("CN_INDEX") for u in universes)
+        want_etf = any(u.upper().startswith("CN_ETF") for u in universes)
+        want_sector = any(u.upper().startswith("CN_SECTOR") for u in universes)
+
+        # 2) chengfen_gu 主源（取最新 t_date 的快照，去重 code）
+        if want_index or want_sector:
+            sector_label = "sector" if want_sector else asset_type
+            frames.append(
+                self._get_universe_codes_from_chengfen_gu(
+                    want_index=want_index,
+                    want_sector=want_sector,
+                    sector_label=sector_label,
+                )
+            )
+
+        # 3) base_infos 兜底：标准交易所指数 / ETF
+        if want_index:
+            try:
+                df = self.get_instruments("index")
+                if not df.is_empty():
+                    frames.append(df)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("get_by_universes: base_infos index 兜底失败: %s", e)
+        if want_etf:
+            try:
+                df = self.get_instruments("etf")
+                if not df.is_empty():
+                    frames.append(df)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("get_by_universes: base_infos etf 兜底失败: %s", e)
+
+        if not frames:
+            return pl.DataFrame()
+
+        from app.data_providers.normalizer import INSTRUMENT_COLS
+        try:
+            merged = pl.concat(frames, how="diagonal_relaxed")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("get_by_universes: concat 失败: %s", e)
+            return pl.DataFrame()
+
+        # 去重 + 排序（symbol 唯一；asset_type 保留首个）
+        if "symbol" in merged.columns:
+            merged = merged.unique(subset=["symbol"], keep="first").sort("symbol")
+
+        # 只保留 INSTRUMENT_COLS
+        keep = [c for c in INSTRUMENT_COLS if c in merged.columns]
+        return merged.select(keep) if keep else pl.DataFrame()
+
+    def _get_universe_codes_from_chengfen_gu(
+        self,
+        *,
+        want_index: bool,
+        want_sector: bool,
+        sector_label: str = "sector",
+    ) -> pl.DataFrame:
+        """fstore ``chengfen_gu`` → 指数/板块 instrument df。
+
+        实现：取每 code 最新 t_date 的 cfg 非空行（说明有有效成分股数据），
+        拼接 base 记录。SQL 思路：取每 code 的 ``max(t_date)`` 子查询，再
+        过滤 ``cfg`` 非空（``jsonb_array_length(cfg::jsonb) > 0``）。
+
+        asset_type 数字 → 内部 asset_type：
+        - 6 位数字 code → ``"index"``
+        - BK/801/...  → ``sector_label``（默认 ``"sector"``）
+        """
+        if not (want_index or want_sector):
+            return pl.DataFrame()
+
+        # fstore PG: 取每 code 最新非空 cfg 行
+        # 使用 DISTINCT ON (code) 拿 max(t_date) 的行
+        sql = """
+            SELECT DISTINCT ON (code)
+                code, name, t_date, cfg, asset_type
+            FROM chengfen_gu
+            WHERE cfg IS NOT NULL
+              AND cfg::text != '[]'
+              AND cfg::text != 'null'
+            ORDER BY code, t_date DESC
+        """
+        rows = self._fstore.query(sql, None)
+        if not rows:
+            logger.debug("FStoreDB chengfen_gu: 无 universe 数据")
+            return pl.DataFrame()
+
+        # 客户端按 code 前缀过滤（6 位数字 → index；其他 → sector）
+        out: list[dict] = []
+        for r in rows:
+            code = str(r.get("code", ""))
+            if not code:
+                continue
+            is_index_like = code.isdigit() and len(code) == 6
+            if is_index_like and not want_index:
+                continue
+            if (not is_index_like) and not want_sector:
+                continue
+            out.append({
+                "code": code,
+                "name": r.get("name") or code,
+                "asset_type": sector_label,  # chengfen_gu_rows_to_universes 会重新归一
+            })
+        if not out:
+            return pl.DataFrame()
+        return pl.DataFrame(
+            chengfen_gu_rows_to_universes(out, asset_type=sector_label, source=self.name)
+        )
 
     # ================================================================== #
     # 扩展方法（§3.4，不在 base.py 契约内，仅 FQuantProvider 实例可用）
@@ -569,6 +940,75 @@ class FQuantProvider:
             return pl.DataFrame()
 
         return pl.DataFrame(events) if events else pl.DataFrame()
+
+    # ------------------------------------------------------------------ #
+    # get_universe_constituents — 阶段 3 #3.2 扩展方法
+    # ------------------------------------------------------------------ #
+    def get_universe_constituents(
+        self,
+        index_code: str,
+        as_of_date: datetime | None = None,
+    ) -> pl.DataFrame:
+        """拉取指数/板块/行业的成分股清单（阶段 3 #3.2 扩展方法）。
+
+        数据源：fstore ``chengfen_gu_items``（明细表，权重/入选日期齐全）。
+        ``chengfen_gu.cfg`` JSON 内嵌的成分股是同一份数据的另一份冗余存储；
+        优先用 ``chengfen_gu_items``（结构化字段 + 索引覆盖更全）。
+
+        :param index_code: 指数/板块 code（6 位数字 / BK / 801 等）
+        :param as_of_date: 截止日期；None 取最新 t_date
+        :return: df 列含 ``index_code / index_name / stock_code / stock_name /
+                              weight / join_date / t_date / asset_type / symbol``
+        降级（§7.1）：DB 不可达 → 空 df，warning。
+        """
+        if not index_code:
+            return pl.DataFrame()
+
+        # as_of_date 过滤：取 <= as_of_date 的最新 t_date
+        params: list = [str(index_code)]
+        date_filter = ""
+        if as_of_date is not None:
+            date_filter = " AND t_date <= %s"
+            params.append(as_of_date.date())
+
+        sql = f"""
+            SELECT DISTINCT ON (stock_code, t_date)
+                index_code, index_name, stock_code, stock_name,
+                weight, join_date, t_date, asset_type
+            FROM chengfen_gu_items
+            WHERE index_code = %s {date_filter}
+            ORDER BY stock_code, t_date DESC
+        """
+        rows = self._fstore.query(sql, tuple(params))
+        if not rows:
+            logger.debug("FStoreDB chengfen_gu_items %s: 无成分数据", index_code)
+            return pl.DataFrame()
+
+        # 客户端构造 symbol（沪深 A 股按 code 前缀归一）
+        out: list[dict] = []
+        for r in rows:
+            stock_code = str(r.get("stock_code", ""))
+            if not stock_code:
+                continue
+            symbol = code_to_symbol(stock_code, 1)  # 成分股总是 A 股
+            weight = r.get("weight")
+            try:
+                weight = float(weight) if weight is not None else None
+            except (TypeError, ValueError):
+                weight = None
+            out.append({
+                "index_code": str(r.get("index_code", "")),
+                "index_name": r.get("index_name", ""),
+                "stock_code": stock_code,
+                "stock_name": r.get("stock_name", ""),
+                "weight": weight,
+                "join_date": str(r.get("join_date", "")) if r.get("join_date") else None,
+                "t_date": str(r.get("t_date", "")) if r.get("t_date") else None,
+                "asset_type": "stock",
+                "symbol": symbol,
+                "source": f"{self.name}:fstore:chengfen_gu_items",
+            })
+        return pl.DataFrame(out) if out else pl.DataFrame()
 
     # ================================================================== #
     # 内部辅助

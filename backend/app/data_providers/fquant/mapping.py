@@ -267,6 +267,54 @@ def base_infos_rows_to_instruments(
 
 
 # --------------------------------------------------------------------------- #
+# §5.5b universes 字段映射（chengfen_gu → 指数/板块 instruments）
+# --------------------------------------------------------------------------- #
+# chengfen_gu.asset_type 数字分类（实测 fstore）：
+#   15 = 申万行业 / 同花顺概念 / 中证指数等
+#   37~42 = 各家板块分类（详见 fstore.AGENTS.md）
+# 当前 fquant 内部不细分 37~42 的语义，对外统一归一为 ``"sector"``。
+# 6 位数字 code（沪深京交易所发布）→ ``"index"``；其他（BK/801/...）→ ``"sector"``。
+def chengfen_gu_rows_to_universes(
+    rows: list[dict],
+    asset_type: str = "sector",
+    source: str = "fquant",
+) -> list[dict]:
+    """fstore ``chengfen_gu`` → INSTRUMENT_COLS（§5.5b / 阶段 3 #3.2）。
+
+    输入行字段（实测）：
+    - ``code``：6 位数字 → 指数 / ``BK``/``801`` 开头 → 板块/行业
+    - ``name``
+    - ``asset_type``：fstore 内部分类数字（15/37/38/39/40/41/42）
+
+    输出列：symbol / name / code / exchange / asset_type / source
+    """
+    out: list[dict] = []
+    for r in rows:
+        code = r.get("code")
+        name = r.get("name")
+        if not code or not name:
+            continue
+        code_str = str(code)
+        # 6 位数字 code 默认按指数归一（与 base_infos.asset_type=10 对齐）
+        is_index_like = code_str.isdigit() and len(code_str) == 6
+        resolved = "index" if is_index_like else asset_type
+        # 指数走 .INDEX 后缀；板块/行业（BK/801/...）不带市场后缀
+        if is_index_like:
+            symbol = code_to_symbol(code_str, 10)
+        else:
+            symbol = code_str
+        out.append({
+            "symbol": symbol,
+            "name": str(name),
+            "code": code_str,
+            "exchange": exchange_of(code_str) if is_index_like else "",
+            "asset_type": resolved,
+            "source": source,
+        })
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # §5.6 financial 字段映射
 # --------------------------------------------------------------------------- #
 def financial_rows_to_df(

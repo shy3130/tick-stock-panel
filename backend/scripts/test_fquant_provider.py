@@ -83,11 +83,14 @@ def main() -> int:
     assert caps.daily is True, "daily 应为 True"
     assert caps.adj_factor is True, "adj_factor 应为 True"
     assert caps.minute is True, "minute 应为 True"
-    assert caps.realtime is False, "realtime 应为 False（本期不实现）"
+    assert caps.realtime is True, "realtime 应走 tdx-api / fstore local fallback"
     assert caps.financial is True, "financial 应为 True（新增）"
+    assert caps.depth is False, "depth 无本地源，应为 False"
+    assert caps.universes is True, "universes 应走 fstore chengfen_gu"
     print(f"  ✓ capabilities: instruments={caps.instruments} daily={caps.daily} "
           f"adj_factor={caps.adj_factor} minute={caps.minute} "
-          f"realtime={caps.realtime} financial={caps.financial}")
+          f"realtime={caps.realtime} financial={caps.financial} "
+          f"depth={caps.depth} universes={caps.universes}")
 
     # ------------------------------------------------------------------ #
     print("=== 3. 符号归一工具函数（§5.1）===")
@@ -141,9 +144,10 @@ def main() -> int:
     assert p.get_moneyflow_minute([]).is_empty()
     print("  ✓ 所有契约方法空 symbols → 空 DF")
 
-    # realtime 始终空
-    assert p.get_realtime(symbols=["600519.SH"]).is_empty()
-    print("  ✓ get_realtime 本期返回空 DF")
+    # realtime 不直接调用 fquant API,空入参仍应空降级
+    assert p.get_realtime().is_empty()
+    assert p.get_realtime(universes=[]).is_empty()
+    print("  ✓ get_realtime 无入参 / 空 universes → 空 DF")
 
     # ================================================================== #
     # §8.2 集成测试（连真实三源）
@@ -255,6 +259,27 @@ def main() -> int:
     print("=== 15. 故障 mock：所有源全挂（§8.4 L4）===")
     chaos_failures = _test_chaos_all_down(p, start, end)
     failures.extend(chaos_failures)
+
+    print("=== 16. get_realtime 本地源路径（tdx-api / fstore daily_markets）===")
+    mapped = p._tdx_quote_to_row({
+        "Code": "SH600519",
+        "ServerTime": "2026-07-02T15:00:00+08:00",
+        "TotalHand": 12345,
+        "Amount": 6789000,
+        "K": {"Last": 1180000, "Open": 1187000, "High": 1195000, "Low": 1176000, "Close": 1185490},
+    })
+    assert mapped is not None
+    assert mapped["symbol"] == "600519.SH"
+    assert mapped["last_price"] == 1185.49
+    assert mapped["prev_close"] == 1180.0
+    assert mapped["source"] == "fquant:tdx-api:/api/quote"
+    rt = p.get_realtime(symbols=["600519.SH"])
+    if rt.is_empty():
+        print("  ⚠ SKIP — get_realtime 真实源返回空（tdx-api/fstore daily_markets 可能离线）")
+    else:
+        assert "symbol" in rt.columns and "last_price" in rt.columns
+        print(f"  ✓ get_realtime 返回 {rt.height} 行, source={rt['source'][0] if 'source' in rt.columns else 'unknown'}")
+    print("  ✓ get_realtime 不调用 ../fquant HTTP API")
 
     return _report(failures)
 

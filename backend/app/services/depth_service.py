@@ -8,7 +8,7 @@
 
 数据源(provider 感知):
   - 通过 _get_data_provider() 做能力检查
-  - FQuantProvider 永久不支持盘口(provider.capabilities.depth 缺失→False),
+  - FQuantProvider 当前不暴露盘口(provider.capabilities.depth=False),
     优雅降级: 所有函数直接返回空/0, 不调 SDK, 不报错
   - TickFlowProvider 通过 SDK 调用(tf.depth.batch)提供盘口, 原逻辑保留
 
@@ -574,8 +574,8 @@ class DepthService:
     def _has_capability(self) -> bool:
         """能力检查: provider depth 能力 + TickFlow SDK 套餐双重门禁。
 
-        FQuantProvider 永久不支持盘口(engine-data/fstore/moneyflow 三上游均无盘口),
-        通过 provider.capabilities.depth 优雅降级, 不调 SDK。
+        FQuantProvider 当前不暴露盘口能力，通过 provider.capabilities.depth
+        优雅降级, 不调 SDK。
         """
         # provider 能力检查: depth 字段缺失时视为 False(FQuantProvider 即如此)
         provider = _get_data_provider()

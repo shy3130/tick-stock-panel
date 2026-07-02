@@ -24,34 +24,32 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from datetime import date, datetime, time as dt_time
 
 import polars as pl
 
-from app.data_providers.registry import get_provider
+from app.data_providers.registry import get_active_provider_name, get_provider
 
 logger = logging.getLogger(__name__)
 
 
-# 数据源 provider 单例缓存(通过环境变量 DATA_PROVIDER 切换,默认 tickflow)
+# 数据源 provider 单例缓存(默认 tickflow,可切到 fquant)
 _provider_instance = None
 
 
 def _get_data_provider():
     """获取当前配置的数据源 provider。
 
-    通过环境变量 ``DATA_PROVIDER`` 选择,默认 ``tickflow``。
+    通过 registry 解析当前 provider,默认 ``tickflow``。
     支持值: ``tickflow`` / ``fquant``。
 
-    注意: FQuantProvider 的 ``get_realtime()`` 返回空 DataFrame
-    (capabilities.realtime=False), 在 FQuantProvider 下实时行情会降级为空。
+    FQuantProvider 走 tdx-api / fstore daily_markets，本地源不可用时降级为空。
     """
     global _provider_instance
     if _provider_instance is None:
-        provider_name = os.environ.get("DATA_PROVIDER", "tickflow")
+        provider_name = get_active_provider_name()
         _provider_instance = get_provider(provider_name)
         logger.info("data provider initialized: %s", provider_name)
     return _provider_instance
@@ -259,6 +257,12 @@ class QuoteService:
     @classmethod
     def realtime_mode(cls) -> str:
         """当前实时行情模式: none / watchlist / full_market。"""
+        try:
+            provider = _get_data_provider()
+            if not getattr(provider.capabilities, "realtime", False):
+                return "none"
+        except Exception:  # noqa: BLE001
+            return "none"
         tier = cls._current_tier()
         if tier == "none":
             return "none"
@@ -378,8 +382,8 @@ class QuoteService:
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
 
-        通过 data_providers 抽象层取数,支持环境变量 ``DATA_PROVIDER`` 切换。
-        注意: FQuantProvider.get_realtime() 返回空, 会降级为空结果(已知限制)。
+        通过 data_providers 抽象层取数,支持 provider 切换。
+        FQuantProvider 走 tdx-api / fstore daily_markets，本地源不可用时降级为空。
         """
         provider = _get_data_provider()
         t0 = time.perf_counter()
@@ -508,8 +512,8 @@ class QuoteService:
     def _fetch_watchlist_quotes(self) -> None:
         """Free 档自选股实时: 只拉取最多 5 个 symbols。
 
-        通过 data_providers 抽象层取数,支持环境变量 ``DATA_PROVIDER`` 切换。
-        注意: FQuantProvider.get_realtime() 返回空, 会降级为空结果(已知限制)。
+        通过 data_providers 抽象层取数,支持 provider 切换。
+        FQuantProvider 走 tdx-api / fstore daily_markets，本地源不可用时降级为空。
         """
         from app.services import preferences
 

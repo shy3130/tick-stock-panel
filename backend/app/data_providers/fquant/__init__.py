@@ -1,4 +1,4 @@
-"""FQuantProvider v2 — 直连 fstore PG + engine-data + moneyflow 三上游源。
+"""FQuantProvider v2 — 直连 fstore PG + engine-data + moneyflow + 可选 tdx-api。
 
 子模块（§4.1 文件结构）：
 - ``symbols``          符号归一
@@ -7,7 +7,7 @@
 - ``moneyflow_client`` moneyflow HTTP 客户端
 - ``mapping``          上游字段 → 内部 schema 转换
 - ``adj_factor``       xdxr 事件 → 累积 ex_factor 计算
-- ``fallback``         三源降级策略表
+- ``fallback``         本地源降级策略表
 
 对外由 ``app.data_providers.fquant_provider.FQuantProvider`` 聚合。
 """

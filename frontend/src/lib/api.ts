@@ -666,6 +666,9 @@ export interface SaveTickflowKeyResult {
 }
 
 export interface Preferences {
+  data_provider?: string
+  effective_data_provider?: string
+  data_provider_env_override?: boolean
   realtime_quotes_enabled: boolean
   indices_nav_pinned: boolean
   minute_sync_enabled: boolean
@@ -771,6 +774,18 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
+  updateDataProvider: (data_provider: 'tickflow' | 'fquant') =>
+    request<{
+      data_provider: string
+      effective_data_provider: string
+      data_provider_env_override: boolean
+      mode: string
+      tier_label: string
+      realtime_allowed: boolean
+    }>('/api/settings/preferences/data-provider', {
+      method: 'PUT',
+      body: JSON.stringify({ data_provider }),
+    }),
   updateMinuteSync: (enabled: boolean, days: number) =>
     request<Preferences>('/api/settings/preferences/minute-sync', {
       method: 'PUT',

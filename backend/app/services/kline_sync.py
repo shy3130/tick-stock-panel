@@ -5,19 +5,18 @@
   - 日 K 仅使用 `kline.daily.batch`
   - 除权因子仅使用 `adj_factor`
 
-数据获取通过 data_providers 抽象层,支持 provider 切换(环境变量 DATA_PROVIDER)。
+数据获取通过 data_providers 抽象层,支持 provider 切换。
 """
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
 import polars as pl
 
-from app.data_providers.registry import get_provider
+from app.data_providers.registry import get_active_provider_name, get_provider
 from app.indicators.pipeline import filter_halt_days
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.repository import KlineRepository
@@ -25,19 +24,19 @@ from app.tickflow.repository import KlineRepository
 logger = logging.getLogger(__name__)
 
 
-# 数据源 provider 单例缓存(通过环境变量 DATA_PROVIDER 切换,默认 tickflow)
+# 数据源 provider 单例缓存(默认 tickflow,可切到 fquant)
 _provider_instance = None
 
 
 def _get_data_provider():
     """获取当前配置的数据源 provider。
 
-    通过环境变量 ``DATA_PROVIDER`` 选择,默认 ``tickflow``。
+    通过 registry 解析当前 provider,默认 ``tickflow``。
     支持值: ``tickflow`` / ``fquant``。
     """
     global _provider_instance
     if _provider_instance is None:
-        provider_name = os.environ.get("DATA_PROVIDER", "tickflow")
+        provider_name = get_active_provider_name()
         _provider_instance = get_provider(provider_name)
         logger.info("data provider initialized: %s", provider_name)
     return _provider_instance

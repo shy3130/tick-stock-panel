@@ -32,10 +32,16 @@ _CAPSET_CACHE_FILE = "capabilities.json"
 # v2: 拆分 depth5 → depth5(单只) + depth5.batch(批量)
 # v3: 探测补全 quote.batch(此前 tiers.yaml 声明了但 _probe_real 漏探测)
 # v5: Free 档补充付费服务器 quote.by_symbol(10rpm/5标的),用于自选股实时监控。
-_CACHE_SCHEMA_VERSION = 5
+# v7: capability 缓存绑定 DATA_PROVIDER,避免 fquant/tickflow 切换误用旧缓存。
+_CACHE_SCHEMA_VERSION = 7
 
 # 探测用最小代价请求:挑流通性最好的 1 只标的试
 _PROBE_SYMBOL = "600000.SH"  # 浦发银行,长期不会退市
+
+
+def _active_provider_name() -> str:
+    from app.data_providers.registry import get_active_provider_name
+    return get_active_provider_name()
 
 
 def _load_tiers_yaml() -> dict[str, dict[str, dict[str, Any]]]:
@@ -246,17 +252,68 @@ def _probe_real(tiers: dict) -> tuple[CapabilitySet, list[str]]:
     return CapabilitySet(available), log
 
 
+def _provider_capset() -> CapabilitySet | None:
+    """Return capability gates for non-TickFlow providers.
+
+    The rest of the app still uses TickFlow-era ``Cap`` gates. When the active
+    provider is fquant, translate provider capabilities into those gates so
+    local data is not blocked by missing TickFlow credentials.
+    """
+    provider_name = _active_provider_name()
+    if provider_name in ("", "tickflow"):
+        return None
+
+    from app.data_providers import get_provider
+
+    provider = get_provider(provider_name)
+    caps = provider.capabilities
+    out: dict[Cap, CapabilityLimits] = {}
+    if caps.realtime:
+        out[Cap.QUOTE_BY_SYMBOL] = CapabilityLimits(batch=50)
+        out[Cap.QUOTE_BATCH] = CapabilityLimits(batch=50)
+        out[Cap.QUOTE_POOL] = CapabilityLimits(batch=5000)
+    if caps.daily:
+        out[Cap.KLINE_DAILY_BY_SYMBOL] = CapabilityLimits(batch=1)
+        out[Cap.KLINE_DAILY_BATCH] = CapabilityLimits(batch=500)
+    if caps.minute:
+        out[Cap.KLINE_MINUTE_BY_SYMBOL] = CapabilityLimits(batch=1)
+        out[Cap.KLINE_MINUTE_BATCH] = CapabilityLimits(batch=200)
+    if caps.financial:
+        out[Cap.FINANCIAL] = CapabilityLimits(batch=100)
+    if caps.adj_factor:
+        out[Cap.ADJ_FACTOR] = CapabilityLimits(batch=500)
+    # No local depth source is available; do not expose DEPTH5/DEPTH5_BATCH.
+    return CapabilitySet(out)
+
+
 def detect_capabilities(force: bool = False) -> CapabilitySet:
     """探测当前 API Key 的能力集。"""
+    provider_capset = _provider_capset()
+    if provider_capset is not None:
+        _persist(
+            provider_capset,
+            _active_provider_name().capitalize(),
+            log=["使用 DATA_PROVIDER 本地数据源能力,跳过 TickFlow API 探测"],
+            missing=[],
+            extras=[],
+        )
+        return provider_capset
+
     cache_path = settings.data_dir / _CAPSET_CACHE_FILE
     if not force and cache_path.exists():
         with cache_path.open(encoding="utf-8") as f:
             cached = json.load(f)
-        # schema 版本校验:旧缓存或缺版本号 → 过期,丢弃后重新探测
-        if cached.get("schema_version") == _CACHE_SCHEMA_VERSION:
+        # schema/provider 校验:旧缓存或切换数据源 → 过期,丢弃后重新探测
+        if (
+            cached.get("schema_version") == _CACHE_SCHEMA_VERSION
+            and cached.get("provider", "tickflow") == _active_provider_name()
+        ):
             return _capset_from_json(cached)
-        logger.info("capabilities 缓存 schema 版本过期(缓存=%s, 当前=%d), 重新探测",
-                    cached.get("schema_version"), _CACHE_SCHEMA_VERSION)
+        logger.info(
+            "capabilities 缓存过期(缓存版本=%s, 当前版本=%d, 缓存provider=%s, 当前provider=%s), 重新探测",
+            cached.get("schema_version"), _CACHE_SCHEMA_VERSION,
+            cached.get("provider", "tickflow"), _active_provider_name(),
+        )
 
     tiers = _load_tiers_yaml()
     if settings.use_free_mode:
@@ -469,6 +526,7 @@ def _persist(
     cache_path = settings.data_dir / _CAPSET_CACHE_FILE
     payload = {
         "schema_version": _CACHE_SCHEMA_VERSION,
+        "provider": _active_provider_name(),
         "label": label,
         "capabilities": capset.to_dict(),
         "probe_log": log or [],

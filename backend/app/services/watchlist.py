@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_data_provider():
-    """复用 kline_sync 的 provider 工厂(环境变量 DATA_PROVIDER 切换)。"""
+    """复用 kline_sync 的 provider 工厂。"""
     from app.services.kline_sync import _get_data_provider as _factory
     return _factory()
 
@@ -97,9 +97,9 @@ def clear() -> int:
 def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8.0) -> list[dict]:
     """拉取实时行情。
 
-    通过 data_providers 抽象层取数,支持 provider 切换(环境变量 DATA_PROVIDER)。
+    通过 data_providers 抽象层取数,支持 provider 切换。
     - tickflow provider: 走 SDK quotes.get, 有实时数据
-    - fquant provider: get_realtime 返回空(capabilities.realtime=False), 优雅降级
+    - fquant provider: 当前无 realtime capability，优雅降级为空
     timeout_s: 单批次请求超时(秒)，防止 API 卡死阻塞整个请求。
     """
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -123,7 +123,7 @@ def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8
         # 提前返回空,避免发起注定失败的请求
         return []
 
-    # provider 不支持 realtime(fquant)时,直接降级返回空,不调 SDK
+    # provider 不支持 realtime 时,直接降级返回空,不调 SDK
     if not getattr(provider.capabilities, "realtime", False):
         logger.info(
             "watchlist: 当前 provider %s 不支持 realtime, 降级返回空",
@@ -142,12 +142,6 @@ def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8
             if raw is None or len(raw) == 0:
                 continue
             df = pl.from_pandas(raw) if hasattr(raw, "iteritems") else raw
-            rename_map = {
-                "last_price": "price",
-                "ext.change_pct": "pct",
-                "ext.name": "name",
-            }
-            df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
             quotes.extend(df.to_dicts())
         except FuturesTimeout:
             logger.warning("quote fetch timeout (%.1fs) for %d symbols", timeout_s, len(chunk))

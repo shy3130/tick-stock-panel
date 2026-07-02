@@ -75,7 +75,7 @@ class MoneyflowClient:
         """GET 请求，失败返回 None（L1/L2）。"""
         url = f"{self.base}{path}"
         try:
-            resp = httpx.get(url, params=params, timeout=self.timeout)
+            resp = httpx.get(url, params=params, timeout=self.timeout, trust_env=False)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:  # noqa: BLE001

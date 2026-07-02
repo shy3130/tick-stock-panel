@@ -66,7 +66,7 @@ function MinuteProbePanel() {
         <h2 className="text-sm font-semibold text-foreground">分钟K数据探测</h2>
         <p className="mt-1 text-xs text-muted">
           逐日调用 <code className="px-1 rounded bg-elevated text-secondary">/api/kline/minute</code> 接口，
-          检测每只股票最近若干天的分钟K数据是否齐全。本地无数据时会自动走 TickFlow 实时拉取。
+          检测每只股票最近若干天的分钟K数据是否齐全。本地无数据时会走当前 provider 拉取。
         </p>
       </div>
 
@@ -172,7 +172,7 @@ function MinuteProbePanel() {
             缺失日期若为<span className="text-foreground">周末/节假日</span>属正常；
             若为<span className="text-foreground">停牌日</span>（成交量为 0）也属正常；
             若为<span className="text-foreground">正常交易日</span>（日K有成交量）却缺失分钟K，
-            则是 TickFlow 数据源未提供该日分钟数据。
+            则是当前数据源未提供该日分钟数据。
           </p>
         </div>
       )}

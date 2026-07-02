@@ -1,5 +1,9 @@
 # FQuantProvider
 
+> 历史 PoC 文档：本文描述的是旧版 `FQuantProvider` 透传本地 fquant HTTP API
+> 的方案。当前实现已改为直连底层本地源，禁止把 `../fquant` HTTP API 作为
+> provider 依赖；现状以 `FQUANT_INTEGRATION_PROGRESS.md` 和代码为准。
+
 > FQuant 数据源 Provider — 打通日 K 线链路作为多数据源 PoC。
 
 ## 概述

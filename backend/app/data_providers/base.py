@@ -23,6 +23,9 @@ class ProviderCapabilities:
     minute: bool = False
     realtime: bool = False
     financial: bool = False
+    depth: bool = False
+    # universes: 指数 / 板块 / 行业集合（按 universe 名返回标的清单）
+    universes: bool = False
 
 
 class MarketDataProvider(Protocol):
@@ -66,3 +69,21 @@ class MarketDataProvider(Protocol):
         symbols: list[str] | None = None,
     ) -> pl.DataFrame:
         """Return normalized realtime quotes. Implementations may return empty."""
+
+    def get_by_universes(
+        self,
+        universes: list[str],
+        asset_type: AssetType = "index",  # noqa: ARG003
+    ) -> pl.DataFrame:
+        """Return normalized instrument rows for given universes.
+
+        输出列（与 INSTRUMENT_COLS 对齐）：symbol / name / code / exchange /
+        asset_type / source。``asset_type`` 参数用于驱动不同 universe 的归一
+        映射（如 ``"index"`` / ``"etf"`` / ``"sector"``），provider 可按需扩展。
+
+        默认实现返回空 df；具体 provider 应重写以从自身数据源（fstore
+        ``chengfen_gu`` / TickFlow SDK ``quotes.get_by_universes`` 等）取数。
+        契约目的：让 service 层（典型为 ``index_sync.sync_index_instruments``
+        的"付费补充"逻辑）摆脱直接 SDK 调用。
+        """
+        return pl.DataFrame()

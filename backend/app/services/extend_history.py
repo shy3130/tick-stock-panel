@@ -19,13 +19,22 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
+import polars as pl
+
+from app.config import settings
 from app.services import kline_sync
 from app.services.pipeline_jobs import job_store
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
+
+_DEMO_SYMBOLS = (
+    "600000.SH", "600036.SH", "600519.SH", "601318.SH", "601398.SH",
+    "000001.SZ", "000333.SZ", "000651.SZ", "000858.SZ", "002594.SZ",
+)
 
 
 def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
@@ -40,20 +49,27 @@ def _invalidate(table: str | None = None) -> None:
 def _resolve_universe(capset: CapabilitySet) -> list[str]:
     """解析标的池 — 与 daily_pipeline 独立的副本。"""
     if capset.has(Cap.KLINE_DAILY_BATCH):
+        provider_name = "tickflow"
         try:
-            from app.tickflow.pools import get_pool
-            all_a = get_pool("CN_Equity_A", refresh=True)
-            if all_a:
-                return sorted(all_a)
+            provider = kline_sync._get_data_provider()
+            provider_name = provider.name
+            if provider.name != "tickflow" and provider.capabilities.instruments:
+                inst = provider.get_instruments("stock")
+                if not inst.is_empty() and "symbol" in inst.columns:
+                    return sorted(inst["symbol"].cast(pl.Utf8).to_list())
         except Exception as e:
-            logger.warning("CN_Equity_A pool unavailable: %s", e)
+            logger.warning("provider instruments pool unavailable: %s", e)
+        if provider_name == "tickflow":
+            try:
+                from app.tickflow.pools import get_pool
+                all_a = get_pool("CN_Equity_A", refresh=True)
+                if all_a:
+                    return sorted(all_a)
+            except Exception as e:
+                logger.warning("CN_Equity_A pool unavailable: %s", e)
 
-    from app.tickflow.pools import DEMO_SYMBOLS, get_pool as _get_pool
-    from app.config import settings
-    from pathlib import Path
-    import polars as pl
-    base: set[str] = set(DEMO_SYMBOLS)
-    base.update(_get_pool("watchlist"))
+    base: set[str] = set(_DEMO_SYMBOLS)
+    base.update(_load_watchlist_symbols())
     d = Path(settings.data_dir)
     inst_path = d / "instruments" / "instruments.parquet"
     if inst_path.exists():
@@ -63,6 +79,20 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
         except Exception as e:
             logger.warning("instruments supplement failed: %s", e)
     return sorted(base)
+
+
+def _load_watchlist_symbols() -> list[str]:
+    path = Path(settings.data_dir) / "user_data" / "watchlist.parquet"
+    if not path.exists():
+        return []
+    try:
+        df = pl.read_parquet(path, columns=["symbol"])
+    except Exception as e:
+        logger.warning("watchlist supplement failed: %s", e)
+        return []
+    if df.is_empty() or "symbol" not in df.columns:
+        return []
+    return df["symbol"].cast(pl.Utf8).to_list()
 
 
 def _refresh_single_view(repo: KlineRepository, name: str) -> None:

@@ -326,3 +326,92 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 ## 社区
 
 本开源项目已链接并认可 [LINUX DO 社区](https://linux.do)。
+
+---
+
+## 🧪 本地开发与数据源（开发团队附录）
+
+> 本节面向**接手开发者 / AI Agent**，描述项目当前的数据源架构、本地启动命令与局域网访问验证。普通用户请按上面的「🚀 快速开始」走 `dev.sh` / `docker compose` 即可，无需阅读本节。
+
+### 📡 数据源架构
+
+本项目原本**只依赖 TickFlow 付费 SDK**。从 2026-07-02 起，项目已实现 **`FQuantProvider v2`**，通过 `data_providers` 抽象层**直接连接底层本地数据源**，逐步摆脱对 TickFlow 付费接口的依赖：
+
+| 上游源 | 协议 | 用途 | 配置 |
+|--------|------|------|------|
+| **fstore PostgreSQL** | psycopg v3 | 标的列表 / 财务报表 / 复权事件 / 分钟级备份 | `FSTORE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`（默认 `pve.wf:5432/fstore`） |
+| **engine-data** | HTTP GET | 日 K 主源（`wide`） / 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
+| **moneyflow** | HTTP GET | 资金流日 / 资金流分钟 | `http://pve.wf:8090`（上次测试 502，已自动降级） |
+| **tdx-api（可选）** | HTTP GET | realtime quote 主源；未配置时回退 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
+
+### 🔁 Provider 切换
+
+通过 `DATA_PROVIDER` 环境变量或 `/api/settings/preferences/data-provider` 在两个 provider 之间切换；环境变量优先级最高。
+
+| Provider | 数据来源 | capabilities | 默认 | 切换方式 |
+|----------|---------|--------------|------|----------|
+| `tickflow`（默认） | TickFlow SDK（付费） | 全部 7 项 | ✅ | 默认或 settings API |
+| `fquant` | fstore PG + engine-data + moneyflow + 可选 tdx-api | 日 K / 复权 / 分钟 / 财务 / realtime / universes；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant` 或 settings API |
+
+### ✅ Service 层解耦状态
+
+**7 个 service 已切到 provider 抽象层**，按统一模式（`_get_data_provider()` 工厂 + `registry.get_active_provider_name()` + `registry.get_provider()`）替换 SDK 调用，业务公开 API 零修改：
+
+| Service | 改动 | 验证 |
+|---------|------|------|
+| `kline_sync.py` | 试点文件 | 250 行日 K ✅ |
+| `instrument_sync.py` | 标准解耦 | 5857 条标的 ✅ |
+| `quote_service.py` | tickflow 回归；fquant 走 tdx-api / fstore 快照 | ✅ |
+| `financial_sync.py` | 财务报表走 fstore | 22101 行利润表 ✅ |
+| `index_sync.py` | universes 走 provider `get_by_universes()` | fquant live 验证 ✅ |
+| `watchlist.py` | realtime 走 provider；fquant 走本地源 fallback | ✅ |
+| `depth_service.py` | 能力检查模式：fquant 直接降级返回空，tickflow 保留 SDK | ✅ |
+
+### ⚠️ 已知缺口
+
+- **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级，fquant 模式下返回空列表
+- **realtime 已接入**：不调用 `../fquant` HTTP API；优先可选 `tdx-api` `/api/quote`，否则回退 fstore `daily_markets` 最新快照
+- **universes 已接入**：provider 协议已新增 `get_by_universes()`；fquant 走 fstore `chengfen_gu` + `base_infos`，TickFlow 走 SDK 兼容路径
+
+### 🚀 本地启动（DATA_PROVIDER=fquant）
+
+```bash
+cd backend
+uv sync
+export DATA_PROVIDER=fquant
+export FSTORE_DATABASE_PASSWORD=$(grep FSTORE_DATABASE_PASSWORD /Users/wf2311/Projects/wf2311/fm/fquant/.env | cut -d= -f2)
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+启动后可访问：
+
+- 本机：`http://127.0.0.1:8000/health`
+- 局域网：`http://<本机 LAN IP>:8000/health`
+
+### 🌐 局域网访问
+
+backend 默认 `--host 0.0.0.0` 已支持所有网卡监听，**无需修改**。需在 macOS 防火墙放行 8000 端口：
+
+```bash
+# 如系统防火墙阻拦，自行添加：
+# 系统设置 → 网络 → 防火墙 → 允许以下应用接受传入连接
+# 或临时关闭防火墙测试（不推荐生产）
+```
+
+获取本机 LAN IP：
+
+```bash
+ipconfig getifaddr en0   # Wi-Fi
+# 或
+ipconfig getifaddr en1   # 有线/USB 网卡
+```
+
+### 📚 详细进度文档
+
+完整的 FQuant 接入进度、架构设计、风险与注意事项请阅：
+
+- **`backend/docs/FQUANT_INTEGRATION_PROGRESS.md`** — 团队状态文档（**权威进度源**）
+- `backend/docs/FQUANT_PROVIDER_DESIGN.md` — 846 行设计稿（三源实测 + 架构）
+- `backend/docs/FQUANT_PROVIDER.md` — 旧 PoC 说明（已被 v2 覆盖，仅供回溯）
+
+新增 service 文件 / 修改 provider 时**务必**先读 `FQUANT_INTEGRATION_PROGRESS.md` 第 8 节「关键决策」与第 9 节「风险与注意事项」，避免破坏已对齐的架构约束。
