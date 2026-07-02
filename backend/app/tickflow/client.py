@@ -99,10 +99,12 @@ def current_mode() -> str:
     - "none"    : 无 key / 无效 key(走 free-api,仅历史日K)
     - "free"    : 免费有效 key(走 free-api,仅历史日K)
     - "api_key" : 付费 key(starter+,走付费端点,有实时行情)
+    - provider 名: 非 tickflow 数据源（如 fquant / fquant_local）
     """
     from app.data_providers.registry import get_active_provider_name
-    if get_active_provider_name() == "fquant":
-        return "fquant"
+    provider_name = get_active_provider_name()
+    if provider_name != "tickflow":
+        return provider_name
     if not secrets_store.get_tickflow_key():
         return "none"
     from app.tickflow.policy import base_tier_name

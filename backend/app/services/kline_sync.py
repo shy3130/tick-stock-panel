@@ -32,11 +32,11 @@ def _get_data_provider():
     """获取当前配置的数据源 provider。
 
     通过 registry 解析当前 provider,默认 ``tickflow``。
-    支持值: ``tickflow`` / ``fquant``。
+    支持值: ``tickflow`` / ``fquant`` / ``fquant_local``。
     """
     global _provider_instance
     if _provider_instance is None:
-        provider_name = get_active_provider_name()
+        provider_name = get_active_provider_name("daily")
         _provider_instance = get_provider(provider_name)
         logger.info("data provider initialized: %s", provider_name)
     return _provider_instance
@@ -100,7 +100,8 @@ def sync_daily_batch(symbols: list[str],
                      rpm: int | None = None,
                      start_time: datetime | None = None,
                      end_time: datetime | None = None,
-                     on_chunk_done: Callable[[int, int], None] | None = None) -> pl.DataFrame:
+                     on_chunk_done: Callable[[int, int], None] | None = None,
+                     asset_type: str = "stock") -> pl.DataFrame:
     """批量拉取多股日 K（通过 data_providers 抽象层）。
 
     优先使用 start_time / end_time 区间 + count=10000,确保覆盖完整时间段。
@@ -124,7 +125,7 @@ def sync_daily_batch(symbols: list[str],
             # provider.get_daily 返回已 normalize 的 Polars DataFrame
             # 再过一次 _normalize_daily 作为安全网(幂等)
             raw = provider.get_daily(
-                chunk, start_time=start_time, end_time=end_time, asset_type="stock",
+                chunk, start_time=start_time, end_time=end_time, asset_type=asset_type,
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("batch fetch failed for %d symbols: %s", len(chunk), e)
@@ -429,6 +430,7 @@ def sync_minute_batch(
     batch_size: int | None = None,
     rpm: int | None = None,
     on_chunk_done: Callable[[int, int], None] | None = None,
+    asset_type: str = "stock",
 ) -> pl.DataFrame:
     """批量拉取多股分钟 K（通过 data_providers 抽象层）。
 
@@ -455,7 +457,7 @@ def sync_minute_batch(
             # 再过一次 _normalize_minute 作为安全网(幂等)
             raw = provider.get_minute(
                 chunk, start_time=start_time, end_time=end_time,
-                asset_type="stock", freq="1m",
+                asset_type=asset_type, freq="1m",
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
@@ -472,7 +474,7 @@ def sync_minute_batch(
     return pl.concat(out, how="diagonal_relaxed")
 
 
-def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
+def fetch_minute_single(symbol: str, trade_date: date, asset_type: str = "stock") -> pl.DataFrame:
     """从数据源实时拉取单股单日分钟 K（不写入本地）。
 
     通过 data_providers 抽象层获取。
@@ -484,7 +486,7 @@ def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
     try:
         raw = provider.get_minute(
             [symbol], start_time=start_time, end_time=end_time,
-            asset_type="stock", freq="1m",
+            asset_type=asset_type, freq="1m",
         )
     except Exception as e:
         logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)

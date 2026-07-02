@@ -232,6 +232,7 @@ def sync_and_persist_index_daily(
             batch_size=None,
             start_time=start_time,
             end_time=end_time,
+            asset_type="index",
         )
         if raw.is_empty():
             continue
@@ -331,6 +332,7 @@ def sync_and_persist_etf_daily(
             batch_size=None,
             start_time=start_time,
             end_time=end_time,
+            asset_type="etf",
         )
         if raw.is_empty():
             continue

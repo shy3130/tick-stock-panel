@@ -43,13 +43,13 @@ def _get_data_provider():
     """获取当前配置的数据源 provider。
 
     通过 registry 解析当前 provider,默认 ``tickflow``。
-    支持值: ``tickflow`` / ``fquant``。
+    支持值: ``tickflow`` / ``fquant`` / ``fquant_local``。
 
-    FQuantProvider 走 tdx-api / fstore daily_markets，本地源不可用时降级为空。
+    FQuantProvider 走 tdx-api / sina/tencent / fstore daily_markets，本地源不可用时降级为空。
     """
     global _provider_instance
     if _provider_instance is None:
-        provider_name = get_active_provider_name()
+        provider_name = get_active_provider_name("realtime")
         _provider_instance = get_provider(provider_name)
         logger.info("data provider initialized: %s", provider_name)
     return _provider_instance
@@ -383,7 +383,7 @@ class QuoteService:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
 
         通过 data_providers 抽象层取数,支持 provider 切换。
-        FQuantProvider 走 tdx-api / fstore daily_markets，本地源不可用时降级为空。
+        FQuantProvider 走 tdx-api / sina/tencent / fstore daily_markets，本地源不可用时降级为空。
         """
         provider = _get_data_provider()
         t0 = time.perf_counter()

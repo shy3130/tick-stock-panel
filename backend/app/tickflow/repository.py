@@ -1243,6 +1243,8 @@ class KlineRepository:
         """按日分区写入日K数据 (merge-upsert)。"""
         if df.is_empty():
             return
+        if self._skip_raw_daily_write("append_daily", df):
+            return
         self._write_daily_partition(df, "kline_daily")
 
     def append_enriched(self, df: pl.DataFrame) -> None:
@@ -1257,6 +1259,8 @@ class KlineRepository:
     def append_index_daily(self, df: pl.DataFrame) -> None:
         """按日分区写入指数日K数据 (merge-upsert)。"""
         if df.is_empty():
+            return
+        if self._skip_raw_daily_write("append_index_daily", df):
             return
         self._write_daily_partition(df, "kline_index_daily")
 
@@ -1273,6 +1277,8 @@ class KlineRepository:
         """按日分区写入 ETF 日K数据 (merge-upsert)。"""
         if df.is_empty():
             return
+        if self._skip_raw_daily_write("append_etf_daily", df):
+            return
         self._write_daily_partition(df, "kline_etf_daily")
 
     def append_etf_enriched(self, df: pl.DataFrame) -> None:
@@ -1286,6 +1292,10 @@ class KlineRepository:
 
     def append_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按资产类型写入日K；stock/index 保持旧目录兼容。"""
+        if df.is_empty():
+            return
+        if self._skip_raw_daily_write(f"append_daily_asset:{asset_type}", df):
+            return
         if asset_type == "stock":
             self.append_daily(df)
         elif asset_type == "index":
@@ -1371,6 +1381,8 @@ class KlineRepository:
         """按 symbol 合并当天指定资产日K分区。用于少量自选实时，不覆盖全市场。"""
         if df.is_empty() or "date" not in df.columns:
             return
+        if self._skip_raw_daily_write(f"merge_live_daily_asset:{asset_type}", df):
+            return
         table = {
             "stock": "kline_daily",
             "index": "kline_index_daily",
@@ -1439,11 +1451,15 @@ class KlineRepository:
         """覆写当天 kline_daily 分区 (实时行情落盘, 非merge)。"""
         if df.is_empty() or "date" not in df.columns:
             return
+        if self._skip_raw_daily_write("flush_live_daily", df):
+            return
         self.flush_live_daily_asset("stock", df)
 
     def flush_live_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """覆写当天指定资产日K分区 (实时行情落盘, 非merge)。"""
         if df.is_empty() or "date" not in df.columns:
+            return
+        if self._skip_raw_daily_write(f"flush_live_daily_asset:{asset_type}", df):
             return
         table = {
             "stock": "kline_daily",
@@ -1458,6 +1474,28 @@ class KlineRepository:
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         df.sort(["symbol", "date"]).write_parquet(out)
+
+    def _skip_raw_daily_write(self, op: str, df: pl.DataFrame) -> bool:
+        from app.services.data_mode import is_local_daily_mode
+
+        if not is_local_daily_mode():
+            return False
+        if not self._is_stock_raw_write_op(op):
+            return False
+        logger.debug("stock raw daily write skipped in fquant_local mode: op=%s rows=%d", op, df.height)
+        return True
+
+    @staticmethod
+    def _is_stock_raw_write_op(op: str) -> bool:
+        asset_ops = (
+            "append_daily_asset:",
+            "merge_live_daily_asset:",
+            "flush_live_daily_asset:",
+        )
+        for prefix in asset_ops:
+            if op.startswith(prefix):
+                return op.split(":", 1)[1] == "stock"
+        return op in {"append_daily", "flush_live_daily"}
 
     def flush_live_enriched(self, df: pl.DataFrame) -> None:
         """覆写当天 kline_daily_enriched 分区 (实时 enriched 落盘, 非merge)。
