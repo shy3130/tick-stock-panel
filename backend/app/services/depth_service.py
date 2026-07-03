@@ -29,7 +29,7 @@ import logging
 import math
 import threading
 import time
-from datetime import date, datetime, time as dt_time
+from datetime import date, datetime
 from pathlib import Path
 
 import polars as pl
@@ -583,8 +583,6 @@ class DepthService:
 
     @staticmethod
     def _is_trading_hours() -> bool:
-        now = datetime.now()
-        t = now.time()
-        morning = dt_time(9, 25) <= t <= dt_time(11, 35)
-        afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
-        return now.weekday() < 5 and (morning or afternoon)
+        from app.markets import any_market_open_at
+
+        return any_market_open_at(datetime.now())
