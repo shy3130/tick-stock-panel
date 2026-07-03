@@ -6,7 +6,7 @@
 
 **现状证据：**
 - provider/repository 已有 stock/index/etf/hk instruments。
-- ext_presets 已引入 `eastmoney_client.py`，应复用 host allowlist、`trust_env=False` 和节流。
+- ext_presets/C3 已引入 `eastmoney_client.py` host allowlist、`trust_env=False` 和节流；C12 需确认 suggest host 已在 `_ALLOWED_HOSTS`。
 - 外部 screener 与本地策略数据口径不一致，本计划不迁移。
 
 **范围：** 搜索增强 API；不改策略选股。
@@ -49,7 +49,7 @@
 ## 任务 3：Eastmoney suggest fallback
 
 - [ ] helper：`suggest_symbols(query, limit=10)`。
-- [ ] URL host 必须在 eastmoney allowlist。
+- [ ] URL host 必须在 eastmoney allowlist；若实测 suggest host 不在 `_ALLOWED_HOSTS`，先追加白名单和测试。
 - [ ] `trust_env=False`。
 - [ ] 返回项归一：
   - A 股 6 位：按代码规则 `.SH/.SZ/.BJ`
@@ -82,4 +82,3 @@ uv run --extra dev pytest tests/services/test_symbol_search.py tests/api/test_sy
 - 不用 suggest 结果覆盖本地 instruments。
 - 不新增复杂前端筛选器。
 - 不把搜索 fallback 当行情数据源。
-

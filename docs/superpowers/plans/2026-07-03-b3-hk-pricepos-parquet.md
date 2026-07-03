@@ -60,7 +60,7 @@
   - `--start 2015-01-01`
   - `--end YYYY-MM-DD`
 - [ ] 默认不做 `--symbols-from all`；全市场港股 universe 未确认，YAGNI。
-- [ ] provider：`FQuantProvider(engine_mode="disk").get_daily(... asset_type="hk")`
+- [ ] provider：先修港股 asset_type 口径再回填。首选把 `AssetType` 扩为 `stock/index/etf/hk`，`FQuantProvider.get_daily()` 将外部 `asset_type` 透传到 `_get_daily_from_engine_wide`，并让港股 symbol 统一传 `"hk"`；次选在 raw 重建门显式 `is_hk_symbol(symbol)` 跳过 A 股 xdxr 重建。底线：港股不能走 `asset_type=="stock"` 的 xdxr 重建分支。
 - [ ] enriched：只计算 `change_pct` 和 rolling 需要的 `close`；不跑 A 股 `compute_enriched()`。
 - [ ] 写入前按 `symbol/date` 去重。
 

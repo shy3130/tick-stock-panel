@@ -3,16 +3,31 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.data_providers.capability_gate import detect_capabilities
 from app.services.agent_tools import TOOLS, call_tool
+from app.services.screener import ScreenerService
 from app.storage.repository import DataStore, KlineRepository
+from app.strategy.engine import StrategyEngine
 
 
 def build_state():
     store = DataStore()
-    return SimpleNamespace(repo=KlineRepository(store), capabilities=detect_capabilities(), strategy_engine=None)
+    repo = KlineRepository(store)
+    repo.refresh_cache()
+    screener = ScreenerService(repo)
+    strategy_engine = StrategyEngine(
+        enriched_loader=screener._load_enriched_for_date,
+        enriched_history_loader=screener._load_enriched_history,
+        strategy_dirs=[
+            Path(__file__).resolve().parent / "strategy" / "builtin",
+            store.data_dir / "strategies" / "custom",
+            store.data_dir / "strategies" / "ai",
+        ],
+    )
+    return SimpleNamespace(repo=repo, capabilities=detect_capabilities(), strategy_engine=strategy_engine, quote_service=None, depth_service=None)
 
 
 def handle_message(msg: dict, state) -> dict:

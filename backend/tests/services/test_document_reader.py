@@ -47,6 +47,7 @@ def test_fetch_url_uses_trust_env_false(monkeypatch):
 
     class Resp:
         url = "https://example.com/a"
+        status_code = 200
         text = "<html><script>x</script><body>Hello <b>world</b></body></html>"
         headers = {"content-type": "text/html"}
 
@@ -71,5 +72,46 @@ def test_fetch_url_uses_trust_env_false(monkeypatch):
     out = dr.read_url("https://example.com/a")
 
     assert seen["trust_env"] is False
+    assert seen["follow_redirects"] is False
     assert "Hello" in out.text
     assert "x" not in out.text
+
+
+def test_redirect_to_private_url_rejected_before_second_request(monkeypatch):
+    calls = []
+
+    def fake_addr(host, *args):
+        ip = "127.0.0.1" if host == "127.0.0.1" else "93.184.216.34"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_addr)
+
+    class Resp:
+        url = "https://example.com/a"
+        status_code = 302
+        headers = {"location": "http://127.0.0.1/admin"}
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url):
+            calls.append(url)
+            return Resp()
+
+    monkeypatch.setattr(dr.httpx, "Client", Client)
+
+    with pytest.raises(ValueError):
+        dr.read_url("https://example.com/a")
+
+    assert calls == ["https://example.com/a"]

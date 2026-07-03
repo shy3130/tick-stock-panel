@@ -51,6 +51,7 @@
 ## 任务 3：stdio server
 
 - [ ] `python -m app.mcp_server`
+- [ ] headless 引导函数必须构造最小 app_state：`DataStore` + `KlineRepository.refresh_cache()` + `detect_capabilities()` + `StrategyEngine`。否则 `get_kline/run_screener/run_backtest/get_market_overview` 在 FastAPI lifespan 外运行会缺 `repo/strategy_engine`。
 - [ ] 支持 JSON lines：
   - `{"id":1,"method":"tools/list"}`
   - `{"id":2,"method":"tools/call","params":{"name":"get_capabilities","arguments":{}}}`
@@ -88,4 +89,3 @@ uv run python -m app.mcp_server --self-test
 - 不提供 shell/file edit 工具。
 - 不开放 TCP server。
 - 不绕过 provider/data access 层直连 DB。
-

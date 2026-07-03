@@ -65,8 +65,9 @@ class DocumentEnvelope(BaseModel):
   - scheme 只允许 `http/https`
   - hostname 解析到 IP 后拒绝 private/loopback/link-local/multicast
   - 拒绝无 hostname
-- [ ] 请求：`httpx.Client(trust_env=False, timeout=10, follow_redirects=True)`。
-- [ ] redirect 后再次校验最终 URL host。
+- [ ] 请求：`httpx.Client(trust_env=False, timeout=10, follow_redirects=False)`。
+- [ ] 手动逐跳处理 30x：每一跳请求前都校验 URL host/IP，限制最大跳数 5；禁止先请求内网跳转再事后检查最终 URL。
+- [ ] 残留风险：DNS rebind 无法用 httpx 高层 API 完全固定解析 IP；本功能仅面向本机可信环境，后续若开放给多用户需下沉到连接层固定 IP。
 - [ ] HTML 转文本：stdlib `html.parser` 或简单去 script/style，不加 heavy 依赖。
 
 ## 任务 5：API
@@ -95,4 +96,3 @@ uv run --extra dev pytest tests/services/test_document_reader.py tests/api/test_
 - 不抓内网/本机 URL。
 - 不保存原文。
 - 不做网页登录、JS 渲染或浏览器自动化。
-

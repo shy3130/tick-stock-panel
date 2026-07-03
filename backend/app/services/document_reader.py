@@ -6,7 +6,7 @@ import socket
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from io import BytesIO, StringIO
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import polars as pl
@@ -58,17 +58,29 @@ def read_document(filename: str, data: bytes) -> DocumentEnvelope:
 
 
 def read_url(url: str) -> DocumentEnvelope:
-    _validate_public_url(url)
-    with httpx.Client(timeout=10.0, follow_redirects=True, trust_env=False) as client:
-        resp = client.get(url)
+    resp = _fetch_public_url(url)
     resp.raise_for_status()
     final_url = str(resp.url)
-    _validate_public_url(final_url)
     content_type = resp.headers.get("content-type", "")
     text = _html_to_text(resp.text) if "html" in content_type.lower() else resp.text
     warnings: list[str] = []
     text, truncated = _truncate(text, warnings)
     return DocumentEnvelope(final_url, "html" if "html" in content_type.lower() else "text", final_url, text, len(text), truncated, warnings)
+
+
+def _fetch_public_url(url: str, max_redirects: int = 5):
+    current = url
+    with httpx.Client(timeout=10.0, follow_redirects=False, trust_env=False) as client:
+        for _ in range(max_redirects + 1):
+            _validate_public_url(current)
+            resp = client.get(current)
+            if resp.status_code not in {301, 302, 303, 307, 308}:
+                return resp
+            location = resp.headers.get("location")
+            if not location:
+                return resp
+            current = urljoin(current, location)
+        raise ValueError("too many redirects")
 
 
 def _truncate(text: str, warnings: list[str]) -> tuple[str, bool]:
