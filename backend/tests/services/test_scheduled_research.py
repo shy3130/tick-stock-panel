@@ -27,6 +27,24 @@ def test_disabled_schedule_not_registered(tmp_path):
     assert scheduler.jobs == []
 
 
+def test_register_jobs_removes_stale_research_jobs(tmp_path):
+    store = ScheduledResearchStore(tmp_path)
+    store.create("日报", "market_recap_daily", "0 18 * * 1-5", enabled=False)
+    removed = []
+    old_jobs = [SimpleNamespace(id="research:old"), SimpleNamespace(id="daily:pipeline")]
+    scheduler = SimpleNamespace(
+        jobs=[],
+        get_jobs=lambda: old_jobs,
+        remove_job=lambda job_id: removed.append(job_id),
+        add_job=lambda *args, **kwargs: scheduler.jobs.append(kwargs),
+    )
+
+    register_jobs(scheduler, store, SimpleNamespace())
+
+    assert removed == ["research:old"]
+    assert scheduler.jobs == []
+
+
 def test_run_schedule_failure_is_recorded(tmp_path):
     item = ScheduledResearchStore(tmp_path).create("日报", "market_recap_daily", "0 18 * * 1-5")
     result = run_schedule(item, SimpleNamespace())

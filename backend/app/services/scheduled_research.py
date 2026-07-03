@@ -87,7 +87,7 @@ def run_schedule(item: ScheduledResearch, app_state) -> dict:
         item.last_status = "success"
         item.last_error = None
         return result
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         item.last_status = "failed"
         item.last_error = str(e)
         return {"title": item.name, "summary": "", "artifacts": [], "warnings": [str(e)]}
@@ -98,6 +98,7 @@ def run_schedule(item: ScheduledResearch, app_state) -> dict:
 def register_jobs(scheduler, store: ScheduledResearchStore, app_state) -> None:
     if scheduler is None:
         return
+    _clear_research_jobs(scheduler)
     for item in store.list():
         if not item.enabled:
             continue
@@ -114,6 +115,17 @@ def register_jobs(scheduler, store: ScheduledResearchStore, app_state) -> None:
             day_of_week=day_of_week,
             args=[store, item.id, app_state],
         )
+
+
+def _clear_research_jobs(scheduler) -> None:
+    get_jobs = getattr(scheduler, "get_jobs", None)
+    remove_job = getattr(scheduler, "remove_job", None)
+    if not callable(get_jobs) or not callable(remove_job):
+        return
+    for job in get_jobs():
+        job_id = getattr(job, "id", "")
+        if str(job_id).startswith("research:"):
+            remove_job(job_id)
 
 
 def _run_job(store: ScheduledResearchStore, sid: str, app_state) -> None:

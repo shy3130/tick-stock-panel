@@ -38,7 +38,7 @@
 - [ ] 创建 schedule 后可 list/get。
 - [ ] 非法 template 抛 ValueError。
 - [ ] 非法 cron 抛 ValueError。
-- [ ] disabled schedule 不注册 APScheduler job。
+- [x] disabled schedule 不注册 APScheduler job。
 - [ ] executor 失败时写 `last_status=failed`，不抛到 scheduler 外层。
 
 ## 任务 3：执行器
@@ -61,7 +61,7 @@
 ## 任务 5：scheduler 接入
 
 - [ ] lifespan 中启动独立 scheduler 或复用现有 scheduler，避免重复实例。
-- [ ] schedule CRUD 后 reschedule。
+- [x] schedule CRUD 后 reschedule。
 - [ ] 应用退出时 shutdown。
 - [ ] job id 前缀：`research:{id}`。
 
@@ -78,4 +78,3 @@ uv run --extra dev pytest tests/services/test_scheduled_research.py tests/api/te
 - 不做通知通道。
 - 不做复杂前端日历。
 - 不让失败任务阻断数据同步 pipeline。
-
