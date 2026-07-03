@@ -25,6 +25,9 @@ export function TradeJournal() {
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [sheet, setSheet] = useState('')
   const [benchmark, setBenchmark] = useState('000300.SH')
+  const [accountId, setAccountId] = useState('default')
+  const [appendMode, setAppendMode] = useState(false)
+  const [narrative, setNarrative] = useState(false)
 
   const presets = useQuery({ queryKey: ['journal-presets'], queryFn: api.journalPresets })
   const ledger = useQuery<JournalLedger>({
@@ -42,7 +45,7 @@ export function TradeJournal() {
     },
   })
   const commitUpload = useMutation({
-    mutationFn: () => api.journalUpload(file!, true, mapping, sheet, benchmark),
+    mutationFn: () => api.journalUpload(file!, true, mapping, sheet, benchmark, accountId, appendMode, narrative),
     onSuccess: () => {
       setPreview(null)
       setFile(null)
@@ -92,6 +95,20 @@ export function TradeJournal() {
                   <select className="rounded-card border border-border bg-base px-3 py-2 text-sm" value={benchmark} onChange={(e) => setBenchmark(e.target.value)}>
                     {presets.data?.benchmarks.map((b) => <option key={b.symbol} value={b.symbol}>{b.name}</option>)}
                   </select>
+                  <input
+                    className="w-32 rounded-card border border-border bg-base px-3 py-2 text-sm"
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    placeholder="账户"
+                  />
+                  <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
+                    <input type="checkbox" checked={appendMode} onChange={(e) => setAppendMode(e.target.checked)} />
+                    追加去重
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
+                    <input type="checkbox" checked={narrative} onChange={(e) => setNarrative(e.target.checked)} />
+                    聚合摘要
+                  </label>
                   <button
                     className="rounded-card bg-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
                     disabled={!file || commitUpload.isPending}
@@ -160,6 +177,17 @@ function Report({ ledger }: { ledger: JournalLedger }) {
         <Metric label="胜率" value={pct(s.win_rate)} />
         <Metric label={`超额 vs ${ledger.benchmark.name}`} value={ledger.benchmark.account.excess == null ? '—' : pct(ledger.benchmark.account.excess)} tone={(ledger.benchmark.account.excess ?? 0) >= 0 ? 'bull' : 'bear'} />
       </section>
+      {(ledger.accounts?.length || ledger.import || ledger.narrative) && (
+        <section className="rounded-card border border-border bg-surface p-4 text-sm text-secondary">
+          {ledger.accounts?.length ? (
+            <div>账户：{ledger.accounts.map(a => `${a.id}(${a.fills})`).join('、')}</div>
+          ) : null}
+          {ledger.import ? (
+            <div className="mt-1">最近导入：{ledger.import.mode === 'append' ? '追加' : '替换'} · {ledger.import.account_id} · 新成交 {ledger.import.new_fills} · 去重 {ledger.import.deduped_fills}</div>
+          ) : null}
+          {ledger.narrative ? <div className="mt-2 text-foreground">{ledger.narrative}</div> : null}
+        </section>
+      )}
       <section className="rounded-card border border-border bg-surface p-5">
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
           <NotebookPen className="h-4 w-4" />行为诊断
@@ -177,14 +205,15 @@ function Report({ ledger }: { ledger: JournalLedger }) {
         <div className="mt-3 overflow-auto">
           <table className="min-w-full text-left text-xs">
             <thead className="text-muted">
-              <tr><th className="px-2 py-1">代码</th><th>建仓</th><th>清仓</th><th>数量</th><th>盈亏</th><th>收益率</th><th>基准</th><th>超额</th></tr>
+              <tr><th className="px-2 py-1">账户</th><th>代码</th><th>建仓</th><th>清仓</th><th>数量</th><th>盈亏</th><th>收益率</th><th>基准</th><th>超额</th></tr>
             </thead>
             <tbody>
               {ledger.trips.slice(0, 200).map((t, i) => {
-                const b = ledger.benchmark.per_trip.find((r) => r.symbol === t.symbol && r.open_date === t.open_date && r.close_date === t.close_date)
+                const b = ledger.benchmark.per_trip.find((r) => (r.account_id ?? 'default') === (t.account_id ?? 'default') && r.symbol === t.symbol && r.open_date === t.open_date && r.close_date === t.close_date)
                 return (
                 <tr key={`${t.symbol}-${t.open_date}-${i}`} className="border-t border-border">
-                  <td className="px-2 py-1 text-foreground">{t.symbol}</td>
+                  <td className="px-2 py-1 text-muted">{t.account_id ?? 'default'}</td>
+                  <td className="text-foreground">{t.symbol}</td>
                   <td>{t.open_date}</td>
                   <td>{t.close_date}</td>
                   <td>{num(t.qty)}</td>

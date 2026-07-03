@@ -63,6 +63,68 @@ async def test_upload_commit_writes_normalized_ledger(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_upload_append_deduplicates_same_account(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    kwargs = {
+        "commit": True,
+        "append": True,
+        "account_id": "银河",
+        "mapping": json.dumps(trade_journal.THS_PRESET["mapping"], ensure_ascii=False),
+    }
+
+    first = await trade_journal.upload_journal(request(), file=upload_file(CSV), **kwargs)
+    second = await trade_journal.upload_journal(request(), file=upload_file(CSV), **kwargs)
+
+    assert first["summary"]["total_trips"] == 1
+    assert second["summary"]["total_trips"] == 1
+    assert second["import"]["deduped_fills"] == 2
+    assert len(trade_journal.store.read_source(tmp_path)["fills"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_upload_append_keeps_accounts_separate(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    mapping = json.dumps(trade_journal.THS_PRESET["mapping"], ensure_ascii=False)
+    await trade_journal.upload_journal(
+        request(),
+        file=upload_file(CSV),
+        commit=True,
+        append=True,
+        account_id="A",
+        mapping=mapping,
+    )
+
+    resp = await trade_journal.upload_journal(
+        request(),
+        file=upload_file(CSV),
+        commit=True,
+        append=True,
+        account_id="B",
+        mapping=mapping,
+    )
+
+    assert resp["summary"]["total_trips"] == 2
+    assert {trip["account_id"] for trip in resp["trips"]} == {"A", "B"}
+    assert {row["account_id"] for row in resp["benchmark"]["per_trip"]} == {"A", "B"}
+
+
+@pytest.mark.asyncio
+async def test_upload_narrative_uses_aggregate_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    resp = await trade_journal.upload_journal(
+        request(),
+        file=upload_file(CSV),
+        commit=True,
+        narrative=True,
+        mapping=json.dumps(trade_journal.THS_PRESET["mapping"], ensure_ascii=False),
+    )
+
+    assert "narrative" in resp
+    assert "1 个完成回合" in resp["narrative"]
+    assert "14:53:08" not in resp["narrative"]
+
+
+@pytest.mark.asyncio
 async def test_upload_commit_falls_back_unknown_benchmark(tmp_path, monkeypatch):
     repo = FakeRepo()
     monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)

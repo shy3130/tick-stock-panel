@@ -17,6 +17,7 @@ class Fill:
     price: float
     amount: float
     fee: float
+    account_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class CashEvent:
     symbol: str
     kind: str
     amount: float
+    account_id: str = "default"
 
 
 @dataclass
@@ -39,6 +41,7 @@ class Roundtrip:
     fees: float
     dividend: float
     holding_days: int
+    account_id: str = "default"
 
     @property
     def pnl(self) -> float:

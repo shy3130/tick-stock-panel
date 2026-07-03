@@ -33,6 +33,7 @@ def per_trip_excess(trips: list[Roundtrip], index_closes: dict[str, float]) -> l
             excess = trip.pnl_pct - bench if bench is not None else None
         rows.append(
             {
+                "account_id": trip.account_id,
                 "symbol": trip.symbol,
                 "open_date": trip.open_date,
                 "close_date": trip.close_date,

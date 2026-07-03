@@ -704,6 +704,7 @@ export interface JournalPreview {
 }
 
 export interface JournalTrip {
+  account_id?: string
   symbol: string
   name: string
   open_date: string
@@ -723,6 +724,14 @@ export interface JournalTrip {
 
 export interface JournalLedger {
   imported_at: string
+  accounts?: { id: string; fills: number }[]
+  import?: {
+    mode: 'replace' | 'append'
+    account_id: string
+    new_fills: number
+    deduped_fills: number
+    deduped_events: number
+  }
   trips: JournalTrip[]
   summary: {
     total_trips: number
@@ -741,9 +750,10 @@ export interface JournalLedger {
     code: string
     name: string
     account: { account_return: number | null; benchmark_return: number | null; excess: number | null; window: string[] | null }
-    per_trip: (Pick<JournalTrip, 'symbol' | 'open_date' | 'close_date' | 'pnl_pct'> & { benchmark_pct: number | null; excess: number | null })[]
+    per_trip: (Pick<JournalTrip, 'account_id' | 'symbol' | 'open_date' | 'close_date' | 'pnl_pct'> & { benchmark_pct: number | null; excess: number | null })[]
     noise_note: string
   }
+  narrative?: string
   warnings: string[]
 }
 
@@ -780,12 +790,24 @@ export const api = {
   journalPresets: () => request<JournalPresets>('/api/journal/presets'),
   journalLedger: () => request<JournalLedger>('/api/journal/ledger'),
   journalDelete: () => request<{ deleted: boolean }>('/api/journal/ledger', { method: 'DELETE' }),
-  journalUpload: (file: File, commit: boolean, mapping?: Record<string, string>, sheet?: string, benchmark?: string) => {
+  journalUpload: (
+    file: File,
+    commit: boolean,
+    mapping?: Record<string, string>,
+    sheet?: string,
+    benchmark?: string,
+    accountId?: string,
+    append?: boolean,
+    narrative?: boolean,
+  ) => {
     const fd = new FormData()
     fd.append('file', file)
     if (mapping) fd.append('mapping', JSON.stringify(mapping))
     if (sheet) fd.append('sheet', sheet)
     if (benchmark) fd.append('benchmark', benchmark)
+    if (accountId) fd.append('account_id', accountId)
+    fd.append('append', String(!!append))
+    fd.append('narrative', String(!!narrative))
     return request<JournalPreview | JournalLedger>(`/api/journal/upload?commit=${commit}`, { method: 'POST', body: fd })
   },
 

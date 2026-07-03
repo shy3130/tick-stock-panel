@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
+from hashlib import sha256
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -13,7 +14,7 @@ from app.services.trade_journal import store
 from app.services.trade_journal.benchmark import account_excess, per_trip_excess
 from app.services.trade_journal.diagnose import diagnose
 from app.services.trade_journal.fifo import pair_roundtrips
-from app.services.trade_journal.models import LedgerSummary, Roundtrip
+from app.services.trade_journal.models import CashEvent, Fill, LedgerSummary, Roundtrip
 from app.services.trade_journal.parser import normalize_rows, read_upload
 from app.services.trade_journal.presets import PRESETS, THS_PRESET, guess_mapping
 from app.services.trade_journal.pricepos import build_price_lookup
@@ -38,9 +39,12 @@ async def upload_journal(
     request: Request,
     file: Annotated[UploadFile, File()],
     commit: bool = False,
+    append: Annotated[bool, Form()] = False,
     sheet: Annotated[str | None, Form()] = None,
     mapping: Annotated[str | None, Form()] = None,
     benchmark: Annotated[str, Form()] = "000300.SH",
+    account_id: Annotated[str, Form()] = "default",
+    narrative: Annotated[bool, Form()] = False,
 ):
     data = await file.read()
     if not data:
@@ -58,11 +62,23 @@ async def upload_journal(
             "warnings": [],
         }
 
+    account_id = _clean_account_id(account_id)
     picked_mapping = _parse_mapping(mapping) or guessed or THS_PRESET["mapping"]
-    fills, events, warnings = normalize_rows(df, picked_mapping)
-    if not fills:
+    new_fills, new_events, warnings = normalize_rows(df, picked_mapping, account_id=account_id)
+    if not new_fills:
         raise HTTPException(status_code=400, detail="没有解析到买入/卖出成交")
 
+    source, fills, events, deduped_fills, deduped_events = _merge_source(
+        new_fills,
+        new_events,
+        append=append,
+        import_meta={
+            "file_name": file.filename or "",
+            "account_id": account_id,
+            "imported_at": datetime.now(UTC).isoformat(),
+            "sha256": sha256(data).hexdigest(),
+        },
+    )
     benchmark = _normalize_benchmark(benchmark)
     start = min(f.date for f in fills)
     end = max(f.date for f in fills)
@@ -74,10 +90,19 @@ async def upload_journal(
     if uncovered_symbols:
         warnings.append(f"追涨诊断: {len(uncovered_symbols)} 只标的无本地日K或历史不足20日未覆盖")
 
+    summary = _summary(trips, open_positions)
     payload = {
         "imported_at": datetime.now(UTC).isoformat(),
+        "accounts": _accounts(fills),
+        "import": {
+            "mode": "append" if append else "replace",
+            "account_id": account_id,
+            "new_fills": len(new_fills),
+            "deduped_fills": deduped_fills,
+            "deduped_events": deduped_events,
+        },
         "trips": [asdict(t) | _roundtrip_metrics(t) for t in trips],
-        "summary": asdict(_summary(trips, open_positions)),
+        "summary": asdict(summary),
         "diagnosis": diagnose(trips, fills, price_lookup),
         "benchmark": {
             "code": benchmark,
@@ -88,6 +113,9 @@ async def upload_journal(
         },
         "warnings": warnings,
     }
+    if narrative:
+        payload["narrative"] = _narrative(summary, payload["diagnosis"], payload["benchmark"]["account"])
+    store.write_source(settings.data_dir, source)
     store.write_ledger(settings.data_dir, payload)
     return payload
 
@@ -115,6 +143,80 @@ def _parse_mapping(raw: str | None) -> dict[str, str] | None:
     if not isinstance(value, dict):
         raise HTTPException(status_code=400, detail="mapping 必须是对象")
     return {str(k): str(v) for k, v in value.items()}
+
+
+def _clean_account_id(raw: str) -> str:
+    value = str(raw or "").strip()
+    return value[:64] or "default"
+
+
+def _merge_source(
+    new_fills: list[Fill],
+    new_events: list[CashEvent],
+    append: bool,
+    import_meta: dict,
+) -> tuple[dict, list[Fill], list[CashEvent], int, int]:
+    old = store.read_source(settings.data_dir) if append else None
+    old_fills = [Fill(**row) for row in (old or {}).get("fills", [])]
+    old_events = [CashEvent(**row) for row in (old or {}).get("events", [])]
+    fills, deduped_fills = _dedupe(old_fills + new_fills, _fill_key)
+    events, deduped_events = _dedupe(old_events + new_events, _event_key)
+    source = {
+        "imports": [*((old or {}).get("imports", [])), import_meta],
+        "fills": [asdict(fill) for fill in fills],
+        "events": [asdict(event) for event in events],
+    }
+    return source, fills, events, deduped_fills, deduped_events
+
+
+def _dedupe(items: list, key_fn) -> tuple[list, int]:
+    seen = set()
+    out = []
+    dupes = 0
+    for item in items:
+        key = key_fn(item)
+        if key in seen:
+            dupes += 1
+            continue
+        seen.add(key)
+        out.append(item)
+    return out, dupes
+
+
+def _fill_key(fill: Fill) -> tuple:
+    return (
+        fill.account_id,
+        fill.date,
+        fill.time,
+        fill.symbol,
+        fill.side,
+        round(fill.qty, 8),
+        round(fill.price, 8),
+        round(fill.amount, 8),
+        round(fill.fee, 8),
+    )
+
+
+def _event_key(event: CashEvent) -> tuple:
+    return (event.account_id, event.date, event.symbol, event.kind, round(event.amount, 8))
+
+
+def _accounts(fills: list[Fill]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for fill in fills:
+        counts[fill.account_id] = counts.get(fill.account_id, 0) + 1
+    return [{"id": account_id, "fills": counts[account_id]} for account_id in sorted(counts)]
+
+
+def _narrative(summary: LedgerSummary, diagnosis: dict, benchmark: dict) -> str:
+    flags = [name for name, item in diagnosis.items() if isinstance(item, dict) and item.get("flag")]
+    excess = benchmark.get("excess")
+    excess_text = "暂无基准超额" if excess is None else f"基准超额 {excess:.1%}"
+    flag_text = ", 需重点复盘: " + "、".join(flags) if flags else ", 未触发主要行为风险标签"
+    return (
+        f"本次合并台账共 {summary.total_trips} 个完成回合, "
+        f"胜率 {summary.win_rate:.1%}, 总盈亏 {summary.total_pnl:.2f}, {excess_text}{flag_text}。"
+    )
 
 
 def _market_context(repo, benchmark: str, start: str, end: str) -> tuple[list[str] | None, dict[str, float]]:

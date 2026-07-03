@@ -56,6 +56,7 @@ def _f(v: object) -> float:
 def normalize_rows(
     df: pl.DataFrame,
     mapping: dict[str, str],
+    account_id: str = "default",
 ) -> tuple[list[Fill], list[CashEvent], list[str]]:
     fills: list[Fill] = []
     events: list[CashEvent] = []
@@ -88,6 +89,7 @@ def normalize_rows(
                     price=_f(col(row, "price")),
                     amount=amount,
                     fee=_f(col(row, "fee")),
+                    account_id=account_id,
                 )
             )
             continue
@@ -96,7 +98,7 @@ def normalize_rows(
         if kind is None:
             unknown_cats.add(cat)
             kind = "other"
-        events.append(CashEvent(date=date, symbol=symbol, kind=kind, amount=amount))
+        events.append(CashEvent(date=date, symbol=symbol, kind=kind, amount=amount, account_id=account_id))
 
     for cat in sorted(unknown_cats):
         warnings.append(f"未识别的交易类别「{cat}」已归为 other 现金事件, 不参与配对")

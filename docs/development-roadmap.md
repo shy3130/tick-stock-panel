@@ -50,7 +50,7 @@
 | ID | 功能 | 工作量 | 关键风险 | 依赖 |
 |---|---|---|---|---|
 | **B1** | **Shadow Account**（从盈利 roundtrip 抽 if-then 规则→回放成影子组合→delta-PnL 归因） | XL | Vibe 源 ~3654 行；**门槛**：先确认 Trade Journal 行为诊断"够好到值得回放"；两个软接缝（见 CONTEXT.md）：fills 需重新上传解析或加字段、shadow(价格pnl) vs actual(total_pnl含分红)需先定分红口径 | Trade Journal MVP（✅） |
-| **B2** | Trade Journal 增强：多账户合并 / 增量导入去重 / Hybrid LLM 叙事（聚合数字，opt-in） | M | 隐私红线：Hybrid 只送聚合、绝不送原始流水；多账户需持久化归一 fills（当前只存报告） | Trade Journal MVP（✅） |
+| **B2** | Trade Journal 增强：多账户合并 / 增量导入去重 / Hybrid 叙事（聚合数字，opt-in） | ✅ 已提交(本提交) | 多账户通过 `account_id` 隔离 FIFO；追加导入用归一化 fills/events source 去重；叙事为本地聚合摘要，不送原始流水给 LLM | Trade Journal MVP（✅） |
 | **B3** | 追涨港股覆盖：港股日线接入本地 parquet（`kline_hk_daily/enriched`）并让 Trade Journal 追涨扫描 HK | ✅ 已提交(15949e1) | 临时回填 `02577.HK` 已生成 parquet；全量样本回填仍按需执行 | P6（✅） |
 
 ### Track C — Vibe 迁移候选剩余（C2-C13，去重 P 系列）
@@ -144,7 +144,7 @@ C10/C11(交易桥接前置) ── 远期，独立立项
 ### Phase 4 — Trade Journal → Shadow Account（XL，有门槛）
 - **B3**（追涨港股覆盖，✅ 已提交 15949e1；样本全量回填按需执行）
 - **B1**（Shadow Account，XL）——**先做价值验证**：Trade Journal 上线后收集"行为诊断是否真的帮用户"，够好再启动；启动时按 CONTEXT 软接缝处理 fills/分红口径。
-- **B2**（Trade Journal 增强，M，按需）
+- **B2**（Trade Journal 增强，✅ 已提交；多账户/追加去重/本地聚合摘要已落地）
 
 ### Phase 5 — Agent / 集成（1-1.5 周）
 - **C8**（MCP Server，✅ 已提交）
