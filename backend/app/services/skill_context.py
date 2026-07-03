@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3] / "docs" / "skills"
+logger = logging.getLogger(__name__)
 
 
 def load_skill_context(scenario: str, max_chars: int = 12_000) -> str:
@@ -25,6 +27,16 @@ def load_skill_context(scenario: str, max_chars: int = 12_000) -> str:
     if not chunks:
         return ""
     return "以下为本地方法论，不是实时数据：\n\n" + "\n\n---\n\n".join(chunks)
+
+
+def load_skill_context_safe(scenario: str, max_chars: int = 12_000, warnings: list[str] | None = None) -> str:
+    try:
+        return load_skill_context(scenario, max_chars=max_chars)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("load skill context failed for %s: %s", scenario, exc)
+        if warnings is not None:
+            warnings.append(f"方法论库加载失败: {scenario}")
+        return ""
 
 
 def _load_index() -> list[dict]:

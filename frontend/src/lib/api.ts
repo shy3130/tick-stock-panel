@@ -519,6 +519,8 @@ export interface BacktestResult {
   equity_curve: { date: string; value: number }[]
   trades: any[]
   per_symbol_stats: { symbol: string; total_return: number }[]
+  methodology_context?: string
+  warnings?: string[]
 }
 
 // ===== Factor Backtest =====
@@ -555,6 +557,8 @@ export interface FactorBacktestResult {
   n_symbols: number
   n_dates: number
   error: string | null
+  methodology_context?: string
+  warnings?: string[]
 }
 
 // ===== Strategy Backtest =====
@@ -614,6 +618,8 @@ export interface StrategyBacktestResult {
   }
   elapsed_ms: number
   error: string | null
+  methodology_context?: string
+  warnings?: string[]
 }
 
 // ===== Settings =====
@@ -756,6 +762,7 @@ export interface JournalLedger {
     noise_note: string
   }
   narrative?: string
+  methodology_context?: string
   warnings: string[]
 }
 

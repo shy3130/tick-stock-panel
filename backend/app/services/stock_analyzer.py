@@ -306,9 +306,9 @@ async def analyze_stock_stream(
         from app.services.ai_provider import stream_ai_text
 
         kline_tail = _clean_rows(df, _KLINE_KEEP_COLS)
-        from app.services.skill_context import load_skill_context
+        from app.services.skill_context import load_skill_context_safe
 
-        skill_context = load_skill_context("stock_analysis")
+        skill_context = load_skill_context_safe("stock_analysis")
         patterns = _detect_pattern_summary(df)
         user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus, document_text, patterns)
         if skill_context:

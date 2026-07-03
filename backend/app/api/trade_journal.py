@@ -91,6 +91,9 @@ async def upload_journal(
         warnings.append(f"追涨诊断: {len(uncovered_symbols)} 只标的无本地日K或历史不足20日未覆盖")
 
     summary = _summary(trips, open_positions)
+    from app.services.skill_context import load_skill_context_safe
+
+    methodology_context = load_skill_context_safe("trade_journal", max_chars=4000, warnings=warnings)
     payload = {
         "imported_at": datetime.now(UTC).isoformat(),
         "accounts": _accounts(fills),
@@ -113,6 +116,8 @@ async def upload_journal(
         },
         "warnings": warnings,
     }
+    if methodology_context:
+        payload["methodology_context"] = methodology_context
     if narrative:
         payload["narrative"] = _narrative(summary, payload["diagnosis"], payload["benchmark"]["account"])
     store.write_source(settings.data_dir, source)

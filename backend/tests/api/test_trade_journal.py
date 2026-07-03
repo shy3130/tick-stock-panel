@@ -58,8 +58,30 @@ async def test_upload_commit_writes_normalized_ledger(tmp_path, monkeypatch):
     assert resp["summary"]["total_trips"] == 1
     assert abs(resp["trips"][0]["total_pnl"] - 1113.25) < 1e-9
     assert resp["warnings"] == ["追涨诊断: 1 只标的无本地日K或历史不足20日未覆盖"]
+    assert "交易流水复盘" in resp["methodology_context"]
     assert trade_journal.get_ledger()["summary"]["total_trips"] == 1
     assert trade_journal.delete_ledger() == {"deleted": True}
+
+
+@pytest.mark.asyncio
+async def test_upload_commit_skill_context_failure_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+
+    def fail_safe_loader(scenario, max_chars=12_000, warnings=None):
+        if warnings is not None:
+            warnings.append(f"方法论库加载失败: {scenario}")
+        return ""
+
+    monkeypatch.setattr("app.services.skill_context.load_skill_context_safe", fail_safe_loader)
+    resp = await trade_journal.upload_journal(
+        request(),
+        file=upload_file(CSV),
+        commit=True,
+        mapping=json.dumps(trade_journal.THS_PRESET["mapping"], ensure_ascii=False),
+    )
+
+    assert "methodology_context" not in resp
+    assert "方法论库加载失败: trade_journal" in resp["warnings"]
 
 
 @pytest.mark.asyncio

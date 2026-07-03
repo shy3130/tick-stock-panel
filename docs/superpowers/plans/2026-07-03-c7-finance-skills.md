@@ -90,9 +90,9 @@
 
 - [x] 个股分析：`technical-basic` + `risk-analysis`
 - [x] 大盘复盘：`market-recap` + `sector-rotation`
-- [ ] Trade Journal：`trade-journal`
-- [ ] 回测解释：`backtest-diagnose` + `factor-research`
-- [ ] 接入失败不得阻断主分析，只记录 warning。
+- [x] Trade Journal：`trade-journal`
+- [x] 回测解释：`backtest-diagnose` + `factor-research`
+- [x] 接入失败不得阻断主分析，只记录 warning。
 
 ## 验证
 
@@ -100,6 +100,11 @@
 cd backend
 uv run --extra dev pytest tests/services/test_skill_context.py -q
 ```
+
+## 落地状态
+
+- 已落地：Trade Journal commit payload 附加 `methodology_context`，回测同步接口返回附加 `methodology_context`，loader 失败时主结果继续返回并写入 warning。
+- 验证通过：`cd backend && uv run --extra dev pytest tests/services/test_skill_context.py tests/api/test_trade_journal.py tests/api/test_backtest_factors.py -q`（19 passed）；`cd frontend && pnpm tsc --noEmit`。
 
 ## 非目标
 

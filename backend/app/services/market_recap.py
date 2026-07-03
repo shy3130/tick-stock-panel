@@ -299,9 +299,9 @@ async def recap_market_stream(
     try:
         from app.services.ai_provider import stream_ai_text
 
-        from app.services.skill_context import load_skill_context
+        from app.services.skill_context import load_skill_context_safe
 
-        skill_context = load_skill_context("market_recap")
+        skill_context = load_skill_context_safe("market_recap")
         user_prompt = _build_user_prompt(overview, news or [], focus, document_text)
         if skill_context:
             user_prompt = skill_context + "\n\n---\n\n" + user_prompt

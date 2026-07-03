@@ -38,6 +38,17 @@ def test_unknown_scenario_empty():
     assert skill_context.load_skill_context("missing") == ""
 
 
+def test_safe_loader_warns_and_returns_empty(tmp_path, monkeypatch):
+    root = tmp_path / "skills"
+    root.mkdir()
+    (root / "index.json").write_text(json.dumps([{"path": "../x.md", "scenarios": ["x"]}]), encoding="utf-8")
+    monkeypatch.setattr(skill_context, "ROOT", root)
+    warnings = []
+
+    assert skill_context.load_skill_context_safe("x", warnings=warnings) == ""
+    assert warnings == ["方法论库加载失败: x"]
+
+
 def test_a_share_filtering_terms():
     text = skill_context.load_skill_context("trade_journal") + skill_context.load_skill_context("market_recap")
     banned = ["crypto", "DeFi", "options", "券商实盘连接"]

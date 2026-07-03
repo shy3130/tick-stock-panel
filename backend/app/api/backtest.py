@@ -63,6 +63,16 @@ def _guard_server_backtest_range(start: date, end: date):
         raise HTTPException(status_code=400, detail=BACKTEST_SERVER_GUARD_MESSAGE)
 
 
+def _attach_methodology(payload: dict, scenario: str = "backtest") -> dict:
+    warnings = payload.setdefault("warnings", [])
+    from app.services.skill_context import load_skill_context_safe
+
+    methodology_context = load_skill_context_safe(scenario, max_chars=4000, warnings=warnings)
+    if methodology_context:
+        payload["methodology_context"] = methodology_context
+    return payload
+
+
 # ================================================================
 # 状态
 # ================================================================
@@ -114,7 +124,7 @@ def run(req: BacktestRequest, request: Request):
         result = svc.run(cfg)
     except VectorbtUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return asdict(result)
+    return _attach_methodology(asdict(result), "backtest")
 
 
 # ================================================================
@@ -191,7 +201,7 @@ def factor_run(req: FactorBacktestRequest, request: Request):
         slippage_bps=req.slippage_bps,
     )
     result = svc.run(cfg)
-    return asdict(result)
+    return _attach_methodology(asdict(result), "backtest")
 
 
 @router.post("/factors/compare")
@@ -240,7 +250,7 @@ def factor_compare(req: FactorCompareRequest, request: Request):
                 else None
             )
         out.append(row)
-    return {"factors": out}
+    return _attach_methodology({"factors": out}, "backtest")
 
 
 def _save_strategy_run_card(request: Request, result) -> None:
@@ -342,7 +352,7 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     )
     result = svc.run(cfg)
     _save_strategy_run_card(request, result)
-    return asdict(result)
+    return _attach_methodology(asdict(result), "backtest")
 
 
 class RobustnessRequest(StrategyBacktestRequest):
@@ -422,7 +432,7 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
     except Exception as e:  # noqa: BLE001
         logger.warning("save robustness run_card failed: %s", e)
 
-    return {"run_id": full.run_id, "full_stats": full.stats, **robustness}
+    return _attach_methodology({"run_id": full.run_id, "full_stats": full.stats, **robustness}, "backtest")
 
 
 class _BacktestJob:
