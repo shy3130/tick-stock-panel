@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import polars as pl
+
 TEMPLATES = {"market_recap_daily", "watchlist_recap_daily", "strategy_pool_weekly"}
 
 
@@ -26,6 +28,14 @@ class ScheduledResearch:
     last_run_at: str | None = None
     last_status: str | None = None
     last_error: str | None = None
+
+
+@dataclass
+class ResearchRunResult:
+    title: str
+    summary: str
+    artifacts: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
 
 
 class ScheduledResearchStore:
@@ -86,13 +96,20 @@ def run_schedule(item: ScheduledResearch, app_state) -> dict:
             raise ValueError(f"invalid template: {item.template}")
         item.last_status = "success"
         item.last_error = None
-        return result
     except Exception as e:
         item.last_status = "failed"
         item.last_error = str(e)
-        return {"title": item.name, "summary": "", "artifacts": [], "warnings": [str(e)]}
+        result = asdict(ResearchRunResult(item.name, "", warnings=[str(e)]))
     finally:
         item.last_run_at = _now()
+    if item.last_status == "success":
+        try:
+            _persist_result(item, result, app_state)
+        except Exception as e:
+            item.last_status = "failed"
+            item.last_error = str(e)
+            result.setdefault("warnings", []).append(str(e))
+    return result
 
 
 def register_jobs(scheduler, store: ScheduledResearchStore, app_state) -> None:
@@ -138,18 +155,39 @@ def _market_recap(app_state) -> dict:
     from app.services.market_overview_builder import build_market_overview
 
     overview = build_market_overview(repo=app_state.repo, quote_service=getattr(app_state, "quote_service", None), depth_service=getattr(app_state, "depth_service", None))
-    return {"title": "大盘复盘", "summary": f"as_of={overview.get('as_of')}", "artifacts": [], "warnings": []}
+    return asdict(ResearchRunResult("大盘复盘", f"as_of={overview.get('as_of')}"))
 
 
 def _watchlist_recap(app_state) -> dict:
-    df = app_state.repo.get_instruments()
-    return {"title": "自选复盘", "summary": f"instruments={df.height if hasattr(df, 'height') else 0}", "artifacts": [], "warnings": []}
+    data_dir = app_state.repo.store.data_dir
+    path = data_dir / "user_data" / "watchlist.parquet"
+    symbols = pl.read_parquet(path)["symbol"].to_list() if path.exists() else []
+    latest, as_of = app_state.repo.get_enriched_latest()
+    covered = latest.filter(pl.col("symbol").is_in(symbols)).height if symbols and not latest.is_empty() else 0
+    quote_service = getattr(app_state, "quote_service", None)
+    quotes = quote_service.get_quotes_compat() if quote_service is not None else pl.DataFrame()
+    quote_count = quotes.filter(pl.col("symbol").is_in(symbols)).height if symbols and not quotes.is_empty() else 0
+    return asdict(ResearchRunResult("自选复盘", f"watchlist={len(symbols)}; quotes={quote_count}; enriched={covered}; as_of={as_of}"))
 
 
 def _strategy_pool(app_state) -> dict:
     engine = getattr(app_state, "strategy_engine", None)
     count = len(engine.list_strategies()) if engine else 0
-    return {"title": "策略池周报", "summary": f"strategies={count}", "artifacts": [], "warnings": []}
+    data_dir = app_state.repo.store.data_dir
+    run_cards = len(list((data_dir / "research" / "run_cards").glob("*.json")))
+    return asdict(ResearchRunResult("策略池周报", f"strategies={count}; run_cards={run_cards}"))
+
+
+def _persist_result(item: ScheduledResearch, result: dict, app_state) -> None:
+    from app.services.research_registry import ResearchStore
+
+    data_dir = app_state.repo.store.data_dir
+    store = ResearchStore(data_dir)
+    run_id = f"{item.id}-{item.last_run_at}"
+    card = store.save_run_card(run_id, "scheduled_research", {"schedule_id": item.id, "template": item.template, "params": item.params}, result)
+    hyp_id = item.params.get("hypothesis_id")
+    if hyp_id:
+        store.add_evidence(str(hyp_id), "observation", card.run_id, result.get("summary", ""))
 
 
 def _check_template(template: str) -> None:

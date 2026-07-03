@@ -23,47 +23,47 @@
 
 ## 任务 1：模型与 store
 
-- [ ] `ScheduledResearch` 字段：
+- [x] `ScheduledResearch` 字段：
   - `id/name/template/cron/enabled/params`
   - `created_at/updated_at/last_run_at/last_status/last_error`
-- [ ] template 枚举：
+- [x] template 枚举：
   - `market_recap_daily`
   - `watchlist_recap_daily`
   - `strategy_pool_weekly`
-- [ ] 存储：`data/research/schedules/{id}.json`
-- [ ] cron 校验：只支持 5 字段 cron；非法直接 400。
+- [x] 存储：`data/research/schedules/{id}.json`
+- [x] cron 校验：只支持 5 字段 cron；非法直接 400。
 
 ## 任务 2：失败测试
 
-- [ ] 创建 schedule 后可 list/get。
-- [ ] 非法 template 抛 ValueError。
-- [ ] 非法 cron 抛 ValueError。
+- [x] 创建 schedule 后可 list/get。
+- [x] 非法 template 抛 ValueError。
+- [x] 非法 cron 抛 ValueError。
 - [x] disabled schedule 不注册 APScheduler job。
-- [ ] executor 失败时写 `last_status=failed`，不抛到 scheduler 外层。
+- [x] executor 失败时写 `last_status=failed`，不抛到 scheduler 外层。
 
 ## 任务 3：执行器
 
-- [ ] `market_recap_daily`：调用现有 market recap 装配，保存摘要。
-- [ ] `watchlist_recap_daily`：读取 watchlist + quote/enriched 摘要。
-- [ ] `strategy_pool_weekly`：读取策略池 + 最近 run_cards。
-- [ ] 输出统一 `ResearchRunResult`：`title/summary/artifacts/warnings`。
-- [ ] 不绑定 hypothesis 时保存 report；绑定时追加 C2 evidence。
+- [x] `market_recap_daily`：调用现有 market recap 装配，保存摘要。
+- [x] `watchlist_recap_daily`：读取 watchlist + quote/enriched 摘要。
+- [x] `strategy_pool_weekly`：读取策略池 + 最近 run_cards。
+- [x] 输出统一 `ResearchRunResult`：`title/summary/artifacts/warnings`。
+- [x] 不绑定 hypothesis 时保存 report；绑定时追加 C2 evidence。
 
 ## 任务 4：API
 
-- [ ] `GET /api/research/schedules`
-- [ ] `POST /api/research/schedules`
-- [ ] `PATCH /api/research/schedules/{id}`
-- [ ] `DELETE /api/research/schedules/{id}`
-- [ ] `POST /api/research/schedules/{id}/run-now`
-- [ ] 所有 API 不接收自由 prompt。
+- [x] `GET /api/research/schedules`
+- [x] `POST /api/research/schedules`
+- [x] `PATCH /api/research/schedules/{id}`
+- [x] `DELETE /api/research/schedules/{id}`
+- [x] `POST /api/research/schedules/{id}/run-now`
+- [x] 所有 API 不接收自由 prompt。
 
 ## 任务 5：scheduler 接入
 
-- [ ] lifespan 中启动独立 scheduler 或复用现有 scheduler，避免重复实例。
+- [x] lifespan 中启动独立 scheduler 或复用现有 scheduler，避免重复实例。
 - [x] schedule CRUD 后 reschedule。
-- [ ] 应用退出时 shutdown。
-- [ ] job id 前缀：`research:{id}`。
+- [x] 应用退出时 shutdown。
+- [x] job id 前缀：`research:{id}`。
 
 ## 验证
 
