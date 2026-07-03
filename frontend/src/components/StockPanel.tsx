@@ -123,6 +123,7 @@ export function StockPanel({
         symbol={symbol}
         name={dailyResult?.name}
         stockInfo={stockInfo}
+        adjustment={dailyResult?.adjustment}
         rows={rawRows}
         fields={fields}
         onFieldsChange={handleFieldsChange}

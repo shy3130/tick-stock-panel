@@ -12,6 +12,7 @@ interface Props {
   symbol: string
   name?: string
   stockInfo?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
+  adjustment?: string
   rows: KlineRow[]
   /** 信息条字段配置（由 StockPanel 提升，受控） */
   fields: ColumnConfig[]
@@ -91,7 +92,7 @@ function renderExtInline(
   )
 }
 
-export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist }: Props) {
+export function StockInfoBar({ symbol, name, stockInfo, adjustment, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist }: Props) {
   // 弹窗开关：纯本地状态，与数据/配置无关，放早期 return 之前
   const [customizerOpen, setCustomizerOpen] = useState(false)
   // ext 标签展开状态：按 symbol::colId，切股/切字段时互不干扰
@@ -205,6 +206,11 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
       <div className="flex items-baseline gap-x-3 flex-wrap">
         <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>
         <span className="text-secondary font-medium">{displayName}</span>
+        {adjustment === 'none' && (
+          <span className="rounded border border-amber-400/40 px-1 py-0.5 text-[10px] leading-none text-amber-300 bg-amber-400/10">
+            未复权
+          </span>
+        )}
         <span style={{ color: clr }} className="text-lg font-bold tabular-nums">
           {fmtPrice(close)}
         </span>

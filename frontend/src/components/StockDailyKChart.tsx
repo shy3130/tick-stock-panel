@@ -22,6 +22,7 @@ export interface StockDailyKChartResult {
   rawRows: KlineRow[]
   stockInfo?: StockInfo
   name?: string
+  adjustment?: string
 }
 
 interface Props {
@@ -159,8 +160,8 @@ export function StockDailyKChart({
   const chartHeight = height + subExtraH
 
   useEffect(() => {
-    onDataChange?.({ rows, rawRows: kline.data?.rows ?? [], stockInfo, name: kline.data?.name })
-  }, [kline.data?.name, kline.data?.rows, onDataChange, rows, stockInfo])
+    onDataChange?.({ rows, rawRows: kline.data?.rows ?? [], stockInfo, name: kline.data?.name, adjustment: kline.data?.adjustment })
+  }, [kline.data?.adjustment, kline.data?.name, kline.data?.rows, onDataChange, rows, stockInfo])
 
   if (!symbol) return null
 
