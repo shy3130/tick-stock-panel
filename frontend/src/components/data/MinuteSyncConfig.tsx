@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { isExpertOrAbove } from '@/lib/capability-labels'
 
 export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: string; capabilities: Record<string, { rpm: number | null; batch: number | null; subscribe: number | null }> } | undefined; isRunning: boolean; onStart: () => void }) {
   const qc = useQueryClient()
@@ -18,6 +17,7 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
   })
 
   const hasMinuteCap = !!caps?.capabilities?.['kline.minute.batch']
+  const hasMinuteMonthCap = !!caps?.capabilities?.['kline.minute.month']
   const enabled = prefs.data?.minute_sync_enabled ?? false
   const days = prefs.data?.minute_sync_days ?? 5
   const [localDays, setLocalDays] = useState(days)
@@ -89,7 +89,7 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
 
       <div className="pt-2 border-t border-border space-y-2.5">
         <div className="text-[10px] text-secondary">向前扩展历史数据</div>
-        <MinuteExtendControls hasMinuteCap={hasMinuteCap} tierLabel={caps?.label ?? ''} isRunning={isRunning} onStart={onStart} />
+        <MinuteExtendControls hasMinuteCap={hasMinuteCap} hasMinuteMonthCap={hasMinuteMonthCap} isRunning={isRunning} onStart={onStart} />
       </div>
 
       <div className="text-[10px] text-muted">
@@ -99,10 +99,9 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
   )
 }
 
-function MinuteExtendControls({ hasMinuteCap, tierLabel, isRunning, onStart }: { hasMinuteCap: boolean; tierLabel: string; isRunning: boolean; onStart: () => void }) {
+function MinuteExtendControls({ hasMinuteCap, hasMinuteMonthCap, isRunning, onStart }: { hasMinuteCap: boolean; hasMinuteMonthCap: boolean; isRunning: boolean; onStart: () => void }) {
   const qc = useQueryClient()
-  // 月单位(按月扩展更长的分钟K历史)仅 Expert+ 开放;Pro 仅可用"天"(1~15 天)
-  const canUseMonth = isExpertOrAbove(tierLabel)
+  const canUseMonth = hasMinuteMonthCap
   const [unit, setUnit] = useState<'day' | 'month'>('day')
   const [value, setValue] = useState(5)
   const [confirmOpen, setConfirmOpen] = useState(false)

@@ -238,15 +238,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
-          当前数据源未提供实时行情能力。TickFlow None 档仅可使用 free-api 获取历史日K（当日数据需盘后1-2小时），不能调用付费服务器实时接口。
+          当前数据源未提供实时行情能力。切换到支持 realtime 的本地源或配置 TickFlow 后即可开启监控。
         </p>
         <a
-          href="/settings?tab=account"
+          href="/settings?tab=system"
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
                      bg-accent text-white text-sm font-medium
                      hover:bg-accent/90 transition-colors"
         >
-          配置 API Key 升级
+          切换数据源
         </a>
       </div>
     )

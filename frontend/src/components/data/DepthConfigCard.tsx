@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences, useCapabilities } from '@/lib/useSharedQueries'
-import { isExpertOrAbove } from '@/lib/capability-labels'
 
 /**
  * 五档盘口 sealed(真假涨停) 配置内容(纯内容, 无外框, 由父级 Card 包裹)。
@@ -19,8 +18,7 @@ export function DepthConfigContent({ disabled }: { disabled?: boolean }) {
   const caps = useCapabilities()
 
   const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
-  const tierLabel = caps.data?.label ?? ''
-  const range = isExpertOrAbove(tierLabel) ? { lo: 3, hi: 300 } : { lo: 10, hi: 120 }
+  const range = hasDepth ? { lo: 3, hi: 300 } : { lo: 10, hi: 120 }
 
   const interval = prefs.data?.depth_polling_interval ?? 20
   const finalizeTime = prefs.data?.depth_finalize_time ?? { hour: 15, minute: 2 }
