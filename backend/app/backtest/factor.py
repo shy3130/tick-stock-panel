@@ -15,6 +15,7 @@ import numpy as np
 import polars as pl
 
 from app.backtest.engine import BacktestEngine
+from app.backtest.factor_zoo import list_alphas
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,10 @@ FACTOR_COLUMNS: list[dict] = [
     {"id": "kdj_k",        "label": "KDJ-K",       "group": "趋势",     "desc": "KDJ指标K值"},
     {"id": "change_pct",   "label": "日涨跌幅",    "group": "基础",     "desc": "当日涨跌幅"},
     {"id": "amplitude",    "label": "日振幅",      "group": "基础",     "desc": "当日振幅 (最高-最低)/昨收"},
-    {"id": "alpha101_001", "label": "Alpha101 #1", "group": "Alpha101", "desc": "收益条件动量"},
+    *[
+        {"id": a.id, "label": a.name, "group": a.theme, "desc": a.notes or a.formula}
+        for a in list_alphas()
+    ],
 ]
 
 FACTOR_WARMUP_DAYS = 120

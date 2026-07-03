@@ -132,6 +132,14 @@ def factor_columns():
     return {"columns": FACTOR_COLUMNS}
 
 
+@router.get("/factors/manifest")
+def factor_manifest():
+    """返回 Alpha Zoo metadata；不触发行情读取或因子计算。"""
+    from app.backtest.factor_zoo import export_manifest
+
+    return {"factors": export_manifest()}
+
+
 class FactorBacktestRequest(BaseModel):
     factor_name: str
     symbols: list[str] | None = None
@@ -142,6 +150,15 @@ class FactorBacktestRequest(BaseModel):
     weight: Literal["equal", "factor_weight"] = "equal"
     fees_pct: float = 0.0002
     slippage_bps: float = 5.0
+
+
+class FactorCompareRequest(BaseModel):
+    factor_ids: list[str] = Field(..., min_length=1, max_length=20)
+    symbols: list[str] | None = None
+    start: date | None = None
+    end: date | None = None
+    universe: str | None = None
+    strict: bool = False
 
 
 @router.post("/factor/run")
@@ -175,6 +192,47 @@ def factor_run(req: FactorBacktestRequest, request: Request):
     )
     result = svc.run(cfg)
     return asdict(result)
+
+
+@router.post("/factors/compare")
+def factor_compare(req: FactorCompareRequest, request: Request):
+    """批量比较 Alpha Zoo 因子。复用现有因子回测服务，避免第二套 IC 计算。"""
+    from app.backtest.factor import FactorBacktestService, FactorConfig
+    from app.backtest.factor_zoo import ALPHAS
+
+    unknown = [x for x in req.factor_ids if x not in ALPHAS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown factor: {unknown[0]}")
+
+    engine = _get_engine(request)
+    svc = FactorBacktestService(engine)
+    end = req.end or date.today()
+    start = _resolve_start(req, end, STRATEGY_DEFAULT_DAYS)
+    _guard_server_backtest_range(start, end)
+    out = []
+    for factor_id in req.factor_ids:
+        result = svc.run(FactorConfig(
+            factor_name=factor_id,
+            symbols=req.symbols if req.symbols else None,
+            start=start,
+            end=end,
+        ))
+        row = {
+            "factor_id": factor_id,
+            "coverage": result.n_symbols,
+            "n_dates": result.n_dates,
+            "ic_mean": result.ic_mean,
+            "ic_ir": result.ir,
+            "rank_ic_mean": result.ic_mean,
+            "error": result.error,
+        }
+        if req.strict:
+            # ponytail: no random bench until the caller pays the compute cost; shape is reserved.
+            row["random_control_ic_mean"] = None
+            row["random_control_ic_std"] = None
+            row["delta_vs_random"] = None
+        out.append(row)
+    return {"factors": out}
 
 
 def _save_strategy_run_card(request: Request, result) -> None:
