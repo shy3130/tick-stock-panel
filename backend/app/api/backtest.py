@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
-import queue
 import threading
+import time
 from dataclasses import asdict
 from datetime import date, timedelta
 from typing import Literal
@@ -19,7 +20,6 @@ from app.services.backtest import (
     BacktestConfig,
     BacktestService,
     VectorbtUnavailable,
-    is_available,
 )
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
@@ -227,10 +227,18 @@ def factor_compare(req: FactorCompareRequest, request: Request):
             "error": result.error,
         }
         if req.strict:
-            # ponytail: no random bench until the caller pays the compute cost; shape is reserved.
-            row["random_control_ic_mean"] = None
-            row["random_control_ic_std"] = None
-            row["delta_vs_random"] = None
+            random_control = svc.random_control_ic(FactorConfig(
+                factor_name=factor_id,
+                symbols=req.symbols if req.symbols else None,
+                start=start,
+                end=end,
+            ))
+            row.update(random_control)
+            row["delta_vs_random"] = (
+                round(float(result.ic_mean - random_control["random_control_ic_mean"]), 4)
+                if result.ic_mean is not None and random_control["random_control_ic_mean"] is not None
+                else None
+            )
         out.append(row)
     return {"factors": out}
 
@@ -294,7 +302,7 @@ class StrategyBacktestRequest(BaseModel):
 @router.post("/strategy/run")
 def strategy_run(req: StrategyBacktestRequest, request: Request):
     """策略回测 — 复用 StrategyDef 体系做全周期回测。"""
-    from app.backtest.strategy import StrategyBacktestService, StrategyBacktestConfig
+    from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
 
     engine = _get_engine(request)
     strategy_engine = request.app.state.strategy_engine
@@ -408,12 +416,6 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
     return {"run_id": full.run_id, "full_stats": full.stats, **robustness}
 
 
-# ── SSE 流式回测 (实时进度 + 可取消 + 支持重连) ───────────────────
-
-import time
-import hashlib
-
-
 class _BacktestJob:
     """单个回测任务的状态, 存模块级供重连使用。"""
     __slots__ = ("key", "cancel_event", "progress", "result", "error", "done", "finish_ts")
@@ -486,7 +488,7 @@ async def strategy_stream(
       - done: {result} (完整回测结果)
       - error: {message}
     """
-    from app.backtest.strategy import StrategyBacktestService, StrategyBacktestConfig
+    from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
 
     engine = _get_engine(request)
     strategy_engine = request.app.state.strategy_engine

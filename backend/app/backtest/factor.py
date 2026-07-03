@@ -46,6 +46,26 @@ FACTOR_COLUMNS: list[dict] = [
 FACTOR_WARMUP_DAYS = 120
 
 
+def _rank_average(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=float)
+    sorted_values = values[order]
+    i = 0
+    while i < len(values):
+        j = i + 1
+        while j < len(values) and sorted_values[j] == sorted_values[i]:
+            j += 1
+        ranks[order[i:j]] = (i + 1 + j) / 2
+        i = j
+    return ranks
+
+
+def _corr(a: np.ndarray, b: np.ndarray) -> float:
+    if len(a) < 2 or np.std(a) <= 0 or np.std(b) <= 0:
+        return np.nan
+    return float(np.corrcoef(a, b)[0, 1])
+
+
 @dataclass
 class FactorConfig:
     factor_name: str
@@ -198,6 +218,57 @@ class FactorBacktestService:
             n_dates=n_dates,
         )
 
+    def random_control_ic(self, config: FactorConfig, n_runs: int = 20) -> dict:
+        panel = self._load_factor_panel(config)
+        if panel.is_empty():
+            return {"random_control_ic_mean": None, "random_control_ic_std": None}
+        rng = np.random.default_rng(42)
+        means = []
+        for _ in range(n_runs):
+            ics = []
+            for group in panel.partition_by("date", as_dict=False):
+                factor = group[config.factor_name].cast(pl.Float64).to_numpy()
+                returns = group["_next_return"].cast(pl.Float64).to_numpy()
+                mask = np.isfinite(factor) & np.isfinite(returns)
+                if mask.sum() < 3:
+                    continue
+                shuffled = rng.permutation(factor[mask])
+                ic = _corr(_rank_average(shuffled), _rank_average(returns[mask]))
+                if np.isfinite(ic):
+                    ics.append(ic)
+            if ics:
+                means.append(float(np.mean(ics)))
+        if not means:
+            return {"random_control_ic_mean": None, "random_control_ic_std": None}
+        return {
+            "random_control_ic_mean": round(float(np.mean(means)), 4),
+            "random_control_ic_std": round(float(np.std(means)), 4),
+        }
+
+    def _load_factor_panel(self, config: FactorConfig) -> pl.DataFrame:
+        panel_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "turnover_rate"]
+        if config.factor_name not in panel_columns:
+            panel_columns.append(config.factor_name)
+        load_start = config.start if config.factor_name in {"turnover_rate"} else config.start - timedelta(days=FACTOR_WARMUP_DAYS)
+        panel = self.engine.load_panel(config.symbols, load_start, config.end, columns=panel_columns)
+        if panel.is_empty():
+            return panel
+        factor_col = config.factor_name
+        if factor_col not in panel.columns:
+            panel = self._compute_missing_factor(panel, factor_col)
+        if factor_col not in panel.columns or "close" not in panel.columns:
+            return pl.DataFrame()
+        panel = (
+            panel.select(["symbol", "date", "close", factor_col])
+            .filter((pl.col("date") >= config.start) & (pl.col("date") <= config.end))
+            .filter(pl.col(factor_col).is_not_null() & pl.col("close").is_not_null() & (pl.col("close") > 0))
+        )
+        if panel.is_empty():
+            return panel
+        if config.rebalance == "daily":
+            return panel.with_columns((pl.col("close").shift(-1).over("symbol") / pl.col("close") - 1).alias("_next_return"))
+        return self._calc_period_return(panel, config.rebalance)
+
     @staticmethod
     def _compute_missing_factor(panel: pl.DataFrame, factor_col: str) -> pl.DataFrame:
         required = {"symbol", "date", "open", "high", "low", "close", "volume"}
@@ -246,7 +317,6 @@ class FactorBacktestService:
         import datetime as _dt
 
         all_dates = sorted(panel["date"].unique().to_list())
-        date_set = set(all_dates)
 
         if rebalance == "weekly":
             # 调仓日 = 每周一
@@ -296,14 +366,12 @@ class FactorBacktestService:
         next_returns = [None] * len(panel)
         for i in range(len(panel)):
             d = dates_col[i]
-            d_val = d if isinstance(d, _dt.date) else _dt.date.fromisoformat(str(d))
             if d not in rebalance_dates:
                 continue
             next_d = next_rebalance_map.get(d)
             if next_d is None:
                 continue
             next_d_str = str(next_d)[:10]
-            d_str = str(d)[:10]
             sym = symbol_col[i]
             next_close = price_map.get((next_d_str, sym))
             cur_close = close_col[i]

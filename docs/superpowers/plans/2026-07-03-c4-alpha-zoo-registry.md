@@ -29,7 +29,7 @@
 
 ## 任务 1：registry 先行，保持旧接口兼容
 
-- [ ] 定义 dataclass：
+- [x] 定义 dataclass：
 
 ```python
 @dataclass(frozen=True)
@@ -43,19 +43,19 @@ class AlphaMeta:
     notes: str = ""
 ```
 
-- [ ] 新增：
+- [x] 新增：
   - `ALPHAS: dict[str, tuple[AlphaMeta, Callable[[pl.DataFrame], pl.DataFrame]]]`
   - `list_alphas() -> list[AlphaMeta]`
   - `get_alpha(alpha_id) -> AlphaMeta`
   - `export_manifest() -> list[dict]`
-- [ ] 保留 `compute_factor(panel, factor_name)`，内部改为查 registry；未知 factor 仍按现状返回原 panel，避免破坏调用方。
-- [ ] `alpha101_001()` 输出列名保持 `alpha101_001`，旧测试不改。
+- [x] 保留 `compute_factor(panel, factor_name)`，内部改为查 registry；未知 factor 仍按现状返回原 panel，避免破坏现有调用方。
+- [x] `alpha101_001()` 输出列名保持 `alpha101_001`，旧测试不改。
 
 ## 任务 2：选择 10 个低风险 Alpha101
 
 选择标准：只依赖 `open/high/low/close/volume/vwap/amount` 中已有列；公式能用 rolling/rank/corr/delta 表达；不需要行业/市值中性化。
 
-- [ ] 候选：
+- [x] 候选：
   - `alpha101_001`（已存在）
   - `alpha101_002`（rank delta log volume vs return corr）
   - `alpha101_003`（rank open vs rank volume corr）
@@ -66,22 +66,22 @@ class AlphaMeta:
   - `alpha101_009`（delta close 条件）
   - `alpha101_010`（signed delta close rank）
   - `alpha101_012`（sign(volume delta) * close delta）
-- [ ] 若某个候选需要缺失列，先跳过并用下一个低依赖 alpha 替代，不临时造列。
+- [x] 若某个候选需要缺失列，先跳过并用下一个低依赖 alpha 替代，不临时造列。
 
 ## 任务 3：黄金对拍规则
 
-- [ ] 每个 alpha 添加 pandas reference，放在测试文件，业务代码不 import pandas。
-- [ ] fixture：3 个 symbol、60 个日期，构造 open/high/low/close/volume/amount/vwap，含少量 null。
-- [ ] 对拍逻辑：
+- [x] 每个 alpha 添加 pandas reference，放在测试文件，业务代码不 import pandas。
+- [x] fixture：3 个 symbol、60 个日期，构造 open/high/low/close/volume/amount/vwap，含少量 null。
+- [x] 对拍逻辑：
   - join `symbol/date`
   - drop 两边都 null 的 warmup 行
   - `np.allclose(..., atol=1e-9, equal_nan=True)`
-- [ ] 对 rank tie 明确 `method="average"`，Polars/pandas 保持一致。
+- [x] 对 rank tie 明确 `method="average"`，Polars/pandas 保持一致。
 
 ## 任务 4：manifest API
 
-- [ ] `GET /api/backtest/factors/manifest`
-- [ ] 返回：
+- [x] `GET /api/backtest/factors/manifest`
+- [x] 返回：
 
 ```json
 {
@@ -91,30 +91,30 @@ class AlphaMeta:
 }
 ```
 
-- [ ] 不触发任何计算。
+- [x] 不触发任何计算。
 
 ## 任务 5：compare API
 
-- [ ] `POST /api/backtest/factors/compare`
-- [ ] 输入：`factor_ids/start_date/end_date/universe/symbols`。
-- [ ] 输出每个 factor：
+- [x] `POST /api/backtest/factors/compare`
+- [x] 输入：`factor_ids/start_date/end_date/universe/symbols`。
+- [x] 输出每个 factor：
   - `coverage`
   - `null_rate`
   - `ic_mean`
   - `ic_ir`
   - `rank_ic_mean`
-- [ ] 复用现有 factor backtest 的收益对齐逻辑；不要复制一套收益计算。
-- [ ] compare 不写盘；需要研究资产时交给 C2 run_card。
+- [x] 复用现有 factor backtest 的收益对齐逻辑；不要复制一套收益计算。
+- [x] compare 不写盘；需要研究资产时交给 C2 run_card。
 
 ## 任务 6：strict random-control bench
 
-- [ ] 可选参数 `strict=true`。
-- [ ] 对每个交易日打乱 factor value，计算随机 IC 分布。
-- [ ] 输出：
+- [x] 可选参数 `strict=true`。
+- [x] 对每个交易日打乱 factor value，计算随机 IC 分布。
+- [x] 输出：
   - `random_control_ic_mean`
   - `random_control_ic_std`
   - `delta_vs_random`
-- [ ] 默认关闭，避免 UI 默认慢。
+- [x] 默认关闭，避免 UI 默认慢。
 
 ## 任务 7：验证
 

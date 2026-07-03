@@ -1,12 +1,13 @@
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 
+from app.backtest.factor import FactorBacktestService, FactorConfig
 from app.backtest.factor_zoo import ALPHAS, compute_factor, export_manifest
-
 
 ALPHA_IDS = list(ALPHAS)
 
@@ -23,6 +24,18 @@ def test_compute_factor_unknown_factor_keeps_legacy_behavior():
     panel = _panel()
 
     assert compute_factor(panel, "missing").equals(panel)
+
+
+def test_random_control_ic_returns_distribution():
+    panel = _panel()
+    engine = SimpleNamespace(load_panel=lambda symbols, start, end, columns: panel)
+    svc = FactorBacktestService(engine)
+    cfg = FactorConfig("alpha101_012", None, date(2026, 1, 10), date(2026, 3, 15), rebalance="daily")
+
+    out = svc.random_control_ic(cfg, n_runs=3)
+
+    assert out["random_control_ic_mean"] is not None
+    assert out["random_control_ic_std"] is not None
 
 
 @pytest.mark.parametrize("alpha_id", ALPHA_IDS)
@@ -54,6 +67,8 @@ def _panel() -> pl.DataFrame:
                 "low": close * 0.98,
                 "close": close,
                 "volume": 1000 + s_idx * 200 + i * (8 + s_idx) + volume_wave,
+                "amount": None if i == 37 and s_idx == 1 else close * (1000 + s_idx * 200 + i * (8 + s_idx) + volume_wave),
+                "vwap": None if i == 41 and s_idx == 2 else close,
             })
     return pl.DataFrame(rows)
 
