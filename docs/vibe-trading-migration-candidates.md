@@ -184,11 +184,11 @@ tickflow-stock-panel 已有能力:
   - 风险: 中。东方财富接口字段和限流会变; 需要 `trust_env=False`、host allowlist、退避。
 - 推荐迁移顺序:
   1. 解禁 `ext_lockup_em`: 对连板/短线风险最有用。
-  2. 股东户数 `ext_holder_count_em`: 个股筹码变化。
+  2. 股东户数 `ext_holder_em`: 个股筹码变化。
   3. 两融 `ext_margin_em`: 市场情绪和杠杆资金。
   4. ~~北向 `ext_northbound_em`~~: **剔除**——北向日度净流入 2024-08 起停止披露（见 R7），源已死。
-  5. 大宗交易 `ext_block_trade_em`: 个股异动解释。
-  6. 研报/EPS `ext_research_eps_em`: 四维分析。
+  5. 大宗交易 `ext_block_em`: 个股异动解释。
+  6. 研报/EPS `ext_research_em`: 四维分析。
   7. 新闻 `ext_news_em`: 仅做标题素材, 不做全文抓取。
 
 ### C4. Alpha Zoo Registry / Manifest / Compare / Strict Bench
