@@ -13,6 +13,15 @@ def test_daily_provider_uses_daily_preference(monkeypatch):
     assert registry.get_active_provider_name("daily") == "fquant_local"
 
 
+def test_financial_and_depth_use_capability_preferences(monkeypatch):
+    monkeypatch.delenv("DATA_PROVIDER", raising=False)
+    monkeypatch.setattr(preferences, "get_financial_data_provider", lambda: "fquant")
+    monkeypatch.setattr(preferences, "get_depth_data_provider", lambda: "tickflow")
+
+    assert registry.get_active_provider_name("financial") == "fquant"
+    assert registry.get_active_provider_name("depth") == "tickflow"
+
+
 def test_env_provider_overrides_capability_preference(monkeypatch):
     monkeypatch.setenv("DATA_PROVIDER", "tickflow")
     monkeypatch.setattr(preferences, "get_daily_data_provider", lambda: "fquant_local")

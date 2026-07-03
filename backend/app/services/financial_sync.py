@@ -55,7 +55,7 @@ def _get_data_provider():
     """
     global _provider_instance
     if _provider_instance is None:
-        provider_name = get_active_provider_name()
+        provider_name = get_active_provider_name("financial")
         _provider_instance = get_provider(provider_name)
         logger.info("financial data provider initialized: %s", provider_name)
     return _provider_instance

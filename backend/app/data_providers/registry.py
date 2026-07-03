@@ -38,6 +38,10 @@ def get_active_provider_name(capability: str | None = None) -> str:
             return normalize_provider_name(preferences.get_minute_data_provider())
         if capability == "realtime":
             return normalize_provider_name(preferences.get_realtime_data_provider())
+        if capability == "financial":
+            return normalize_provider_name(preferences.get_financial_data_provider())
+        if capability == "depth":
+            return normalize_provider_name(preferences.get_depth_data_provider())
         if capability == "adj_factor":
             provider = preferences.get_adj_factor_provider()
             if provider == "same_as_daily":

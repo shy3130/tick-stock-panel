@@ -34,8 +34,6 @@ from pathlib import Path
 
 import polars as pl
 
-from app.services.kline_sync import _get_data_provider
-
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +50,12 @@ RPM_MARGIN = 0.8
 # 间隔硬下限/上限(任何套餐)
 INTERVAL_HARD_MIN = 10.0
 INTERVAL_HARD_MAX = 300.0
+
+
+def _get_data_provider():
+    from app.data_providers.registry import get_active_provider_name, get_provider
+
+    return get_provider(get_active_provider_name("depth"))
 
 
 class DepthService:

@@ -117,6 +117,8 @@ def set_data_provider(provider: str) -> str:
         "daily_data_provider": provider,
         "minute_data_provider": provider,
         "realtime_data_provider": provider,
+        "financial_data_provider": provider,
+        "depth_data_provider": provider,
         "adj_factor_provider": "same_as_daily",
     })
     return provider
@@ -139,6 +141,14 @@ def get_minute_data_provider() -> str:
 
 def get_realtime_data_provider() -> str:
     return _clean_data_provider(load().get("realtime_data_provider", get_data_provider()))
+
+
+def get_financial_data_provider() -> str:
+    return _clean_data_provider(load().get("financial_data_provider", get_data_provider()))
+
+
+def get_depth_data_provider() -> str:
+    return _clean_data_provider(load().get("depth_data_provider", get_data_provider()))
 
 
 # ===== 盘后管道拉取内容开关 (A股 / ETF / 指数 独立控制) =====
