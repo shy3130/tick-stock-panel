@@ -4,7 +4,11 @@
   {"id":"trade-journal","title":"交易流水复盘","path":"trade-journal.md","scenarios":["trade_journal"],"tags":["journal"],"max_chars":5000},
   {"id":"shadow-account","title":"影子账户","path":"shadow-account.md","scenarios":["trade_journal","shadow_account"],"tags":["journal"],"max_chars":4000},
   {"id":"factor-research","title":"因子研究","path":"factor-research.md","scenarios":["factor_research","backtest"],"tags":["factor"],"max_chars":4000},
+  {"id":"alpha-zoo","title":"Alpha Zoo","path":"alpha-zoo.md","scenarios":["factor_research","backtest"],"tags":["factor"],"max_chars":3500},
   {"id":"risk-analysis","title":"风险诊断","path":"risk-analysis.md","scenarios":["stock_analysis","trade_journal"],"tags":["risk"],"max_chars":4000},
   {"id":"backtest-diagnose","title":"回测诊断","path":"backtest-diagnose.md","scenarios":["backtest"],"tags":["backtest"],"max_chars":4000},
-  {"id":"technical-basic","title":"技术形态基础","path":"technical-basic.md","scenarios":["stock_analysis","pattern"],"tags":["technical"],"max_chars":4000}
+  {"id":"technical-basic","title":"技术形态基础","path":"technical-basic.md","scenarios":["stock_analysis","pattern"],"tags":["technical"],"max_chars":4000},
+  {"id":"candlestick","title":"K线形态","path":"candlestick.md","scenarios":["stock_analysis","pattern"],"tags":["technical"],"max_chars":3500},
+  {"id":"multi-factor","title":"多因子组合","path":"multi-factor.md","scenarios":["factor_research","backtest"],"tags":["factor"],"max_chars":3500},
+  {"id":"market-microstructure","title":"市场微观结构","path":"market-microstructure.md","scenarios":["market_recap","stock_analysis"],"tags":["market"],"max_chars":3500}
 ]

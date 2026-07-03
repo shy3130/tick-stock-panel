@@ -43,3 +43,22 @@ def test_a_share_filtering_terms():
     banned = ["crypto", "DeFi", "options", "券商实盘连接"]
 
     assert not any(term in text for term in banned)
+
+
+def test_index_covers_planned_topics():
+    ids = {item["id"] for item in skill_context._load_index()}
+
+    assert {
+        "market-recap",
+        "sector-rotation",
+        "trade-journal",
+        "shadow-account",
+        "alpha-zoo",
+        "factor-research",
+        "risk-analysis",
+        "backtest-diagnose",
+        "technical-basic",
+        "candlestick",
+        "multi-factor",
+        "market-microstructure",
+    } <= ids

@@ -30,7 +30,7 @@
 
 ## 任务 1：筛选和改写 Markdown
 
-- [ ] 保留主题：
+- [x] 保留主题：
   - `market-recap`
   - `sector-rotation`
   - `trade-journal`
@@ -43,9 +43,9 @@
   - `candlestick`
   - `multi-factor`
   - `market-microstructure`
-- [ ] 剔除：美股、crypto、期权、DeFi、券商实盘连接、shell/file edit、swarm。
-- [ ] 每篇改成 panel 口径：A 股、本地数据源、Trade Journal 不送原始流水给 LLM。
-- [ ] 每篇结构固定：
+- [x] 剔除：美股、crypto、期权、DeFi、券商实盘连接、shell/file edit、swarm。
+- [x] 每篇改成 panel 口径：A 股、本地数据源、Trade Journal 不送原始流水给 LLM。
+- [x] 每篇结构固定：
   - `# title`
   - `适用场景`
   - `检查清单`
@@ -69,27 +69,27 @@
 ]
 ```
 
-- [ ] JSON 可被 stdlib 读取。
-- [ ] path 必须限制在 `docs/skills` 下，拒绝 `../`。
+- [x] JSON 可被 stdlib 读取。
+- [x] path 必须限制在 `docs/skills` 下，拒绝 `../`。
 
 ## 任务 3：loader
 
-- [ ] `load_skill_context(scenario: str, max_chars: int = 12000) -> str`
-- [ ] 按 index 中 scenarios 匹配。
-- [ ] 单篇按 `max_chars` 截断，总体再按参数截断。
-- [ ] 输出前加注释头：`以下为本地方法论，不是实时数据`。
+- [x] `load_skill_context(scenario: str, max_chars: int = 12000) -> str`
+- [x] 按 index 中 scenarios 匹配。
+- [x] 单篇按 `max_chars` 截断，总体再按参数截断。
+- [x] 输出前加注释头：`以下为本地方法论，不是实时数据`。
 
 ## 任务 4：测试
 
-- [ ] `test_load_by_scenario()`：trade_journal 能加载对应文档。
-- [ ] `test_reject_path_escape()`：index 里 `../x` 抛 ValueError。
-- [ ] `test_total_truncation()`：超长文档被截断。
-- [ ] `test_unknown_scenario_empty()`：未知场景返回空字符串。
+- [x] `test_load_by_scenario()`：trade_journal 能加载对应文档。
+- [x] `test_reject_path_escape()`：index 里 `../x` 抛 ValueError。
+- [x] `test_total_truncation()`：超长文档被截断。
+- [x] `test_unknown_scenario_empty()`：未知场景返回空字符串。
 
 ## 任务 5：AI 接入
 
-- [ ] 个股分析：`technical-basic` + `risk-analysis`
-- [ ] 大盘复盘：`market-recap` + `sector-rotation`
+- [x] 个股分析：`technical-basic` + `risk-analysis`
+- [x] 大盘复盘：`market-recap` + `sector-rotation`
 - [ ] Trade Journal：`trade-journal`
 - [ ] 回测解释：`backtest-diagnose` + `factor-research`
 - [ ] 接入失败不得阻断主分析，只记录 warning。
