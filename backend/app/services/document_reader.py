@@ -13,6 +13,7 @@ import polars as pl
 
 MAX_BYTES = 5 * 1024 * 1024
 MAX_CHARS = 20_000
+MAX_PROMPT_DOCUMENT_CHARS = 20_000
 TABLE_PREVIEW_ROWS = 50
 
 
@@ -66,6 +67,15 @@ def read_url(url: str) -> DocumentEnvelope:
     warnings: list[str] = []
     text, truncated = _truncate(text, warnings)
     return DocumentEnvelope(final_url, "html" if "html" in content_type.lower() else "text", final_url, text, len(text), truncated, warnings)
+
+
+def format_prompt_document(document_text: str = "") -> str:
+    text = document_text.strip()
+    if not text:
+        return ""
+    if len(text) > MAX_PROMPT_DOCUMENT_CHARS:
+        text = text[:MAX_PROMPT_DOCUMENT_CHARS]
+    return "## 用户附件摘要（非行情事实）\n" + text
 
 
 def _fetch_public_url(url: str, max_redirects: int = 5):

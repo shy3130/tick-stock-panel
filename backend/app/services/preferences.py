@@ -265,12 +265,12 @@ def get_limit_ladder_monitor_enabled() -> bool:
 
 
 def get_depth_polling_interval() -> float:
-    """depth 盘中轮询间隔(秒)。默认 20(Pro/Expert 都适用)。"""
+    """depth 盘中轮询间隔(秒)。默认 20。"""
     return float(load().get("depth_polling_interval", 20.0))
 
 
 def set_depth_polling_interval(interval: float) -> float:
-    """保存 depth 轮询间隔。套餐范围 clamp 由 depth_service 按档位做。"""
+    """保存 depth 轮询间隔。能力范围 clamp 由 depth_service 执行。"""
     interval = max(1.0, min(600.0, float(interval)))
     save({"depth_polling_interval": interval})
     return interval

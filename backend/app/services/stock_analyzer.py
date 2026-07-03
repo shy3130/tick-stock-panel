@@ -22,6 +22,7 @@ from typing import AsyncIterator
 import polars as pl
 
 from app.indicators.levels import compute_levels, summarize_levels
+from app.services.document_reader import format_prompt_document
 from app.services.financial_sync import get_financial_df
 
 logger = logging.getLogger(__name__)
@@ -143,8 +144,8 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线实战经验的资深�
 - 与技术面的**交叉验证**:好公司 + 技术面走坏 → 仍需谨慎;差公司 + 技术面强势 → 警惕炒作风险
 
 **当用户消息中标注了"该标的暂无财务数据"时**,本节请输出:
-> 📌 财务面分析能力正在接入中。当前版本(Free)未同步该标的的财务报表,基本面维度暂无法评估。
-> 技术面分析不依赖财务数据,以下结论依然有效;升级套餐或等待财务数据同步后可补充本维度。
+> 📌 财务面分析能力正在接入中。当前数据源未同步该标的的财务报表,基本面维度暂无法评估。
+> 技术面分析不依赖财务数据,以下结论依然有效;切换到支持财务能力的数据源或等待财务数据同步后可补充本维度。
 
 **绝对不要**在无数据时编造 ROE / 增速等数字。
 
@@ -188,6 +189,7 @@ def _build_user_prompt(
     close: float | None,
     symbol: str,
     focus: str,
+    document_text: str = "",
 ) -> str:
     """构建用户消息:标的 + 价位摘要 + 技术指标 JSON + 财务摘要 + 关注点。"""
     parts: list[str] = [
@@ -219,6 +221,9 @@ def _build_user_prompt(
 
     if focus.strip():
         parts.extend(["", f"本次分析请特别关注: {focus.strip()}"])
+    document_block = format_prompt_document(document_text)
+    if document_block:
+        parts.extend(["", document_block])
     return "\n".join(parts)
 
 
@@ -251,6 +256,7 @@ async def analyze_stock_stream(
     data_dir: Path,
     symbol: str,
     focus: str = "",
+    document_text: str = "",
 ) -> AsyncIterator[str]:
     """流式个股分析:yield 出每个 NDJSON 事件。
 
@@ -293,7 +299,7 @@ async def analyze_stock_stream(
         from app.services.skill_context import load_skill_context
 
         skill_context = load_skill_context("stock_analysis")
-        user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus)
+        user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus, document_text)
         if skill_context:
             user_prompt = skill_context + "\n\n---\n\n" + user_prompt
         async for delta in stream_ai_text(

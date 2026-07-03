@@ -75,7 +75,7 @@ export function Indices() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
 
-  // 分时数据需 Pro+ (kline.minute.batch) 能力
+  // 分时数据需 kline.minute.batch 能力
   const caps = useCapabilities()
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
 
@@ -315,8 +315,8 @@ export function Indices() {
                 {!hasMinuteCap ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                     <Lock className="h-5 w-5 text-muted" />
-                    <div className="text-xs text-secondary">分时数据权限需 Pro+</div>
-                    <div className="text-[10px] text-muted">升级套餐后可查看指数分时走势</div>
+                    <div className="text-xs text-secondary">当前数据源缺少批量分钟K能力</div>
+                    <div className="text-[10px] text-muted">切换到支持该能力的数据源后可查看指数分时走势</div>
                   </div>
                 ) : (
                   <>

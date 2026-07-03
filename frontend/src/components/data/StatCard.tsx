@@ -57,11 +57,9 @@ function CapBadge({ hasCap, isLocal, tierLabel, tierReq, capInfo, localSuffix }:
   }
 
   if (!hasCap && tierReq && tierReq !== 'Free') {
-    // 缺权限且非 Free 档(付费档位才提示升级);Free 档人人可用,
-    // 若显示"需 Free"会造成 Expert 等用户困惑(通常是探测瞬时失败丢能力)
     return (
       <span className="text-[10px] text-warning/90 bg-warning/8 rounded px-1.5 py-px font-medium">
-        需 {tierReq}
+        需数据源支持
       </span>
     )
   }

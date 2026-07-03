@@ -52,7 +52,7 @@ export function MinuteSyncConfig({ caps, isRunning, onStart }: { caps: { label: 
         </div>
         {!hasMinuteCap && (
           <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
-            需 Pro+
+            需数据源支持
           </span>
         )}
       </div>

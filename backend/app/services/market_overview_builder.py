@@ -434,7 +434,7 @@ def build_market_overview(
     limit_down = sum(1 for r in rows if bool(r.get("signal_limit_down")))
     max_boards = max([int(_finite(r.get("consecutive_limit_ups")) or 0) for r in rows], default=0)
 
-    # 五档 sealed 修正: 假涨停/假跌停不计入(需 Pro+ depth5.batch 能力)
+    # 五档 sealed 修正: 假涨停/假跌停不计入(需 depth5.batch 能力)
     sealed_ready = False
     fake_up = 0
     fake_down = 0

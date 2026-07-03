@@ -23,13 +23,13 @@
 
 ## 任务 1：工具 registry 契约
 
-- [ ] 每个工具结构：
+- [x] 每个工具结构：
   - `name`
   - `description`
   - `input_schema`
   - `handler`
   - `read_only=True`
-- [ ] 首批工具：
+- [x] 首批工具：
   - `get_capabilities`
   - `list_strategies`
   - `run_screener`
@@ -37,33 +37,33 @@
   - `get_market_overview`
   - `run_backtest`
   - `list_ext_data`
-- [ ] `run_backtest` 允许计算但不得保存/修改策略定义。
-- [ ] 所有工具输出做行数和字符数截断。
+- [x] `run_backtest` 允许计算但不得保存/修改策略定义。
+- [x] 所有工具输出做行数和字符数截断。
 
 ## 任务 2：失败测试
 
-- [ ] `test_all_tools_have_schema()`。
-- [ ] `test_unknown_tool_rejected()`。
-- [ ] `test_tool_result_truncated()`。
-- [ ] `test_no_write_tools_registered()`：registry 中没有文件写入/shell 工具。
-- [ ] `test_get_kline_rejects_bad_symbol()`。
+- [x] `test_all_tools_have_schema()`。
+- [x] `test_unknown_tool_rejected()`。
+- [x] `test_tool_result_truncated()`。
+- [x] `test_no_write_tools_registered()`：registry 中没有文件写入/shell 工具。
+- [x] `test_get_kline_rejects_bad_symbol()`。
 
 ## 任务 3：stdio server
 
-- [ ] `python -m app.mcp_server`
-- [ ] headless 引导函数必须构造最小 app_state：`DataStore` + `KlineRepository.refresh_cache()` + `detect_capabilities()` + `StrategyEngine`。否则 `get_kline/run_screener/run_backtest/get_market_overview` 在 FastAPI lifespan 外运行会缺 `repo/strategy_engine`。
-- [ ] 支持 JSON lines：
+- [x] `python -m app.mcp_server`
+- [x] headless 引导函数必须构造最小 app_state：`DataStore` + `KlineRepository.refresh_cache()` + `detect_capabilities()` + `StrategyEngine`。否则 `get_kline/run_screener/run_backtest/get_market_overview` 在 FastAPI lifespan 外运行会缺 `repo/strategy_engine`。
+- [x] 支持 JSON lines：
   - `{"id":1,"method":"tools/list"}`
   - `{"id":2,"method":"tools/call","params":{"name":"get_capabilities","arguments":{}}}`
-- [ ] 不加依赖；若后续决定接标准 MCP SDK，另开计划。
-- [ ] `--self-test`：列工具并调用 `get_capabilities`，退出码 0。
+- [x] 不加依赖；若后续决定接标准 MCP SDK，另开计划。
+- [x] `--self-test`：列工具并调用 `get_capabilities`，退出码 0。
 
 ## 任务 4：安全边界
 
-- [ ] 禁止任意文件路径参数。
-- [ ] 禁止 URL 抓取；C6 reader 单独处理。
-- [ ] 默认 stdio，不监听端口。
-- [ ] 复用 app auth 不适合 stdio；文档注明只在本机用户会话运行。
+- [x] 禁止任意文件路径参数。
+- [x] 禁止 URL 抓取；C6 reader 单独处理。
+- [x] 默认 stdio，不监听端口。
+- [x] 复用 app auth 不适合 stdio；文档注明只在本机用户会话运行。
 
 ## 任务 5：文档
 

@@ -41,7 +41,7 @@ DEFAULT_RANGE = (3.0, 300.0)
 
 # 限速余量: 只用 rpm 的 80%, 给系统其他 depth 调用留空间
 RPM_MARGIN = 0.8
-# 间隔硬下限/上限(任何套餐)
+# 间隔硬下限/上限(任何数据源)
 INTERVAL_HARD_MIN = 10.0
 INTERVAL_HARD_MAX = 300.0
 
@@ -480,7 +480,7 @@ class DepthService:
         返回 (actual_interval, taken_over, user_interval)
         - actual_interval: 实际使用的间隔(秒)
         - taken_over: 是否被系统接管(用户设置会超限)
-        - user_interval: 用户设置(经套餐 clamp 后)的间隔
+        - user_interval: 用户设置(经能力范围 clamp 后)的间隔
         """
         from app.services import preferences
         capset = self._get_capset()

@@ -108,8 +108,7 @@ export function Financials() {
           if (r.synced?.reason === 'already running') {
             toast('财务数据正在同步中,请稍候', 'success')
           } else if (r.synced?.reason === 'no FINANCIAL capability') {
-            // 能力未就绪:通常发生在升级/刷新 Key 后调度器状态未同步 —— 提示用户检查 Key
-            toast('财务数据能力未就绪,请检查 API Key 或刷新页面后重试', 'error')
+            toast('财务数据能力未就绪,请检查当前数据源或刷新页面后重试', 'error')
           } else {
             toast(`同步未能开始${r.synced?.reason ? `:${r.synced.reason}` : ''}`, 'error')
           }

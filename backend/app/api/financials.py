@@ -140,6 +140,7 @@ class AnalyzeRequest(BaseModel):
     """AI 财务分析请求。"""
     symbol: str
     focus: str = ""  # 可选:用户追加的分析关注点
+    document_text: str = ""
 
 
 @router.post("/analyze")
@@ -159,7 +160,7 @@ async def analyze_financials(request: Request, req: AnalyzeRequest):
     data_dir = request.app.state.repo.store.data_dir
 
     async def stream_gen():
-        async for chunk in analyze_financials_stream(data_dir, req.symbol, req.focus):
+        async for chunk in analyze_financials_stream(data_dir, req.symbol, req.focus, req.document_text):
             yield chunk + "\n"
 
     return StreamingResponse(

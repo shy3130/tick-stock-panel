@@ -20,6 +20,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from app.services.market_overview_builder import build_market_overview
+from app.services.document_reader import format_prompt_document
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ def _build_emotion_block(overview: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
+def _build_user_prompt(overview: dict, news: list[dict], focus: str, document_text: str = "") -> str:
     """构建用户消息:复盘日期 + 市场数据精简切片 + 新闻 + 关注点。"""
     as_of = overview.get("as_of") or "今日"
 
@@ -217,6 +218,9 @@ def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
 
     if focus.strip():
         parts.extend(["", f"本次复盘请特别关注: {focus.strip()}"])
+    document_block = format_prompt_document(document_text)
+    if document_block:
+        parts.extend(["", document_block])
 
     return "\n".join(parts)
 
@@ -257,6 +261,7 @@ async def recap_market_stream(
     as_of: date | None = None,
     focus: str = "",
     news: list[dict] | None = None,
+    document_text: str = "",
 ) -> AsyncIterator[str]:
     """流式大盘复盘:yield 出每个 NDJSON 事件。
 
@@ -266,6 +271,7 @@ async def recap_market_stream(
         as_of: 复盘日期,None 取最新有数据日。
         focus: 用户追加的复盘关注点。
         news: 预检索的新闻列表(P1 不传,留 None 走降级说明;P3 由 news_search 注入)。
+        document_text: 用户附件摘要,仅注入 prompt,不持久化。
     """
     # 1. 装配市场总览
     overview = build_market_overview(repo, quote_service, depth_service, as_of)
@@ -296,7 +302,7 @@ async def recap_market_stream(
         from app.services.skill_context import load_skill_context
 
         skill_context = load_skill_context("market_recap")
-        user_prompt = _build_user_prompt(overview, news or [], focus)
+        user_prompt = _build_user_prompt(overview, news or [], focus, document_text)
         if skill_context:
             user_prompt = skill_context + "\n\n---\n\n" + user_prompt
         async for delta in stream_ai_text(

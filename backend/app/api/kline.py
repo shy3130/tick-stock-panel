@@ -687,7 +687,7 @@ async def extend_minute_history(request: Request):
     """向前扩展分钟K历史数据 — 仅拉数据,不做任何后续处理。
 
     body: { "value": int, "unit": "day"|"month" }
-    - day 单位:1~15 天(所有有分钟K权限的套餐可用)
+    - day 单位:1~15 天(所有有分钟K能力的数据源可用)
     - month 单位:1~6 月(每月按 30 天计,即最多 180 天)—— 需数据源声明支持
     返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
     """

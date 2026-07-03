@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, is_dataclass
 from datetime import date, timedelta
 from typing import Any
 
 import polars as pl
 
+_SYMBOL_RE = re.compile(r"^[0-9A-Z]{1,8}\.(SH|SZ|BJ|HK|INDEX|ETF)$")
 
 TOOLS = [
     {
@@ -81,7 +83,7 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
     if name == "get_kline":
         repo = _require(app_state, "repo")
         symbol = str(args.get("symbol") or "").strip().upper()
-        if not symbol or len(symbol) > 16:
+        if not _SYMBOL_RE.fullmatch(symbol):
             raise ValueError("invalid symbol")
         limit = max(1, min(200, int(args.get("limit") or 60)))
         end = date.today()

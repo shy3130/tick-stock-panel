@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.warning("内置扩展表初始化失败 (不影响启动): %s", e)
 
-    # 财务数据 (需 Expert 套餐): 仅初始化调度器供 /api/financials/sync/* 手动同步,
+    # 财务数据 (需 FINANCIAL capability): 仅初始化调度器供 /api/financials/sync/* 手动同步,
     # 不启动自动调度——用户在「财务分析」页点「同步」手动拉取。
     from app.services.financial_sync import financial_scheduler
     financial_scheduler.start(store.data_dir, capset)

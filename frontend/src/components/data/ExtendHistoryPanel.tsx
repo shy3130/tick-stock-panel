@@ -90,7 +90,7 @@ export function ExtendHistoryPanel({ caps, isRunning, earliestDate, onStart }: {
 
       {!hasBatchCap && (
         <span className="text-[10px] text-warning/80 bg-warning/8 rounded px-1.5 py-px font-medium">
-          需 Pro+ 权限
+          需数据源支持
         </span>
       )}
     </div>

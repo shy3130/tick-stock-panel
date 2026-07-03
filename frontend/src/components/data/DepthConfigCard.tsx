@@ -43,7 +43,7 @@ export function DepthConfigContent({ disabled }: { disabled?: boolean }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
   })
 
-  // 无能力: 显示升级提示
+  // 无能力: 显示数据源降级提示
   if (!hasDepth) {
     return (
       <p className="text-xs text-muted leading-relaxed">

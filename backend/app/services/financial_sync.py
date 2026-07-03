@@ -1,7 +1,7 @@
 """财务数据独立同步服务。
 
 解耦于 K-line 管道, 自有调度 + 自有存储。
-能力门控: Cap.FINANCIAL (Expert 套餐)
+能力门控: Cap.FINANCIAL
 
 数据获取通过 data_providers 抽象层,支持 provider 切换。
 - ``fquant``/``fquant_local``: 通过 FQuantProvider.get_financial() 直连 fstore financial_report_* 表
@@ -257,7 +257,7 @@ class FinancialScheduler:
         auto_schedule=True: 额外启动每周一次的 metrics 自动同步 (启动后 60s 首跑)。
         """
         # 先记录 data_dir/capset, 即使当前无 FINANCIAL 也保留引用:
-        # 用户稍后在「设置」页升级到 Expert Key 时, update_capabilities() 会把新 capset
+        # 用户稍后在「设置」页刷新数据源能力时, update_capabilities() 会把新 capset
         # 推进来,trigger()/run_now() 才能用上 FINANCIAL。否则 _capset 永远是 None,
         # 即便 app.state.capabilities 已更新, 调度器仍报 "no FINANCIAL capability"。
         self._data_dir = data_dir

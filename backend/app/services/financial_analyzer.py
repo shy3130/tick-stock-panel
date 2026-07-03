@@ -14,6 +14,7 @@ from typing import AsyncIterator
 
 import polars as pl
 
+from app.services.document_reader import format_prompt_document
 from app.services.financial_sync import get_financial_df
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务�
 现在请基于下方数据进行分析。"""
 
 
-def _build_user_prompt(fins: dict[str, list[dict]], symbol: str, focus: str) -> str:
+def _build_user_prompt(fins: dict[str, list[dict]], symbol: str, focus: str, document_text: str = "") -> str:
     """构建用户消息:标的代码 + 数据 JSON + 可选关注点。"""
     data_json = json.dumps(fins, ensure_ascii=False, indent=2)
     lines = [
@@ -134,6 +135,9 @@ def _build_user_prompt(fins: dict[str, list[dict]], symbol: str, focus: str) -> 
             "",
             f"本次分析请特别关注: {focus.strip()}",
         ])
+    document_block = format_prompt_document(document_text)
+    if document_block:
+        lines.extend(["", document_block])
     return "\n".join(lines)
 
 
@@ -141,6 +145,7 @@ async def analyze_financials_stream(
     data_dir: Path,
     symbol: str,
     focus: str = "",
+    document_text: str = "",
 ) -> AsyncIterator[str]:
     """流式分析:yield 出每个文本 chunk。
 
@@ -168,7 +173,7 @@ async def analyze_financials_stream(
     try:
         from app.services.ai_provider import stream_ai_text
 
-        user_prompt = _build_user_prompt(fins, symbol, focus)
+        user_prompt = _build_user_prompt(fins, symbol, focus, document_text)
         async for delta in stream_ai_text(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
