@@ -2,7 +2,7 @@ from datetime import date
 
 import polars as pl
 
-from app.tickflow.repository import DataStore, KlineRepository
+from app.storage.repository import DataStore, KlineRepository
 
 
 DF = pl.DataFrame({

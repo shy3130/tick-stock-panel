@@ -18,7 +18,7 @@ from app.jobs import daily_pipeline
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
-from app.tickflow.repository import DataStore, KlineRepository
+from app.storage.repository import DataStore, KlineRepository
 
 logging.basicConfig(
     level=settings.log_level,

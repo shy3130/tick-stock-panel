@@ -20,7 +20,7 @@ import polars as pl
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync, preferences
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.repository import KlineRepository
+from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 

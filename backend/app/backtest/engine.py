@@ -19,7 +19,7 @@ import numpy as np
 import polars as pl
 
 from app.backtest.optimizers import portfolio_weights
-from app.tickflow.repository import KlineRepository
+from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 

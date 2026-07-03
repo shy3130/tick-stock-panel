@@ -19,7 +19,7 @@ from app.config import settings
 from app.indicators.pipeline import run_pipeline
 from app.services import kline_sync
 from app.tickflow.capabilities import detect_capabilities
-from app.tickflow.repository import KlineRepository
+from app.storage.repository import KlineRepository
 
 
 def _collect_symbols(daily_dir: Path, since: date) -> list[str]:

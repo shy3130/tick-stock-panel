@@ -12,7 +12,7 @@
   - kline_sync.sync_and_persist_daily_batch / sync_adj_factor
   - indicators.pipeline.run_pipeline
   - pipeline_jobs.JobStore
-  - tickflow.repository.KlineRepository
+  - storage.repository.KlineRepository
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from app.config import settings
 from app.services import kline_sync
 from app.services.pipeline_jobs import job_store
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.repository import KlineRepository
+from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 

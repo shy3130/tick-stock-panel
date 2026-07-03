@@ -19,7 +19,7 @@ import polars as pl
 from app.data_providers.registry import get_active_provider_name, get_provider
 from app.indicators.pipeline import filter_halt_days
 from app.tickflow.capabilities import Cap, CapabilitySet
-from app.tickflow.repository import KlineRepository
+from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 

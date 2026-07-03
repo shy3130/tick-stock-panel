@@ -14,7 +14,7 @@ from datetime import date, timedelta
 
 import polars as pl
 
-from app.tickflow.repository import KlineRepository
+from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 

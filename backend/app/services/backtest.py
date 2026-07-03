@@ -15,7 +15,7 @@ import pandas as pd
 import polars as pl
 
 from app.config import settings
-from app.tickflow.repository import KlineRepository
+from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 
