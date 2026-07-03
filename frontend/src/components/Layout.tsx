@@ -142,41 +142,33 @@ function SidebarIndexQuotes({ rows, items }: { rows: IndexQuote[] | undefined; i
 // ===== 数据源卡片 =====
 function TierBadge({ label, provider }: { label: string; provider?: string }) {
   const base = label.split(' ')[0].split('+')[0].toLowerCase()
-  const isNone = base === 'none'
-  const isTickflow = provider === 'tickflow'
 
   const tierConfig: Record<string, {
-    desc: string
     tagBg: React.CSSProperties
     dotStyle: React.CSSProperties
     labelTextStyle: React.CSSProperties
   }> = {
     none: {
-      desc: '本地数据源能力',
       tagBg: { background: 'rgba(113,113,122,0.15)' },
       dotStyle: { background: '#52525b' },
       labelTextStyle: { color: '#71717a' },
     },
     free: {
-      desc: '基础日K · 自选实时',
       tagBg: { background: 'rgba(113,113,122,0.3)' },
       dotStyle: { background: '#71717a' },
       labelTextStyle: { color: '#a1a1aa' },
     },
     starter: {
-      desc: '批量同步 · 行情池',
       tagBg: { background: 'rgba(59,130,246,0.2)' },
       dotStyle: { background: '#3b82f6' },
       labelTextStyle: { color: '#60a5fa' },
     },
     pro: {
-      desc: '分钟K · 实时行情 · 盘口',
       tagBg: { background: 'linear-gradient(135deg, rgba(168,85,247,0.2), rgba(124,58,237,0.15))' },
       dotStyle: { background: 'linear-gradient(135deg, #a855f7, #7c3aed)' },
       labelTextStyle: { background: 'linear-gradient(135deg, #c084fc, #a855f7)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
     },
     expert: {
-      desc: 'WebSocket · 财务数据',
       tagBg: { background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(168,85,247,0.2), rgba(245,158,11,0.2))' },
       dotStyle: { background: 'linear-gradient(135deg, #3b82f6, #a855f7, #f59e0b)' },
       labelTextStyle: { background: 'linear-gradient(135deg, #60a5fa, #c084fc, #fbbf24)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' },
@@ -184,7 +176,7 @@ function TierBadge({ label, provider }: { label: string; provider?: string }) {
   }
 
   const t = tierConfig[base] || tierConfig.none
-  const displayLabel = isTickflow && isNone ? 'None' : (provider || label || 'fquant_local')
+  const displayLabel = provider || label || 'fquant_local'
 
   return (
     <NavLink
@@ -200,14 +192,14 @@ function TierBadge({ label, provider }: { label: string; provider?: string }) {
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-foreground">{isTickflow ? 'TickFlow' : '数据源'}</span>
+              <span className="text-xs font-medium text-foreground">数据源</span>
               <span
                 className="h-1.5 w-1.5 rounded-full"
                 style={{ ...t.dotStyle, ...(base === 'expert' ? { animation: 'pulse 2s infinite' } : {}) }}
               />
             </div>
             <div className="mt-0.5 truncate text-[10px] leading-tight text-muted">
-              {isTickflow ? t.desc : '当前 provider capability'}
+              当前 provider capability
             </div>
           </div>
           <span
@@ -355,7 +347,7 @@ export function Layout() {
   const visibleNavItems = navItems.filter(n => !hiddenIds.has(n.to) && !hiddenIds.has(n.to.replace(/^\/analysis\//, '')))
 
   const handleToggle = async (enabled: boolean) => {
-    // 开启时重新校验后端实时行情模式，后端同时处理 TickFlow 档位和本地数据源能力。
+    // 开启时重新校验后端实时行情模式，后端处理数据源 capability。
     if (enabled) {
       const freshStatus = await qc.fetchQuery({
         queryKey: QK.quoteStatus,

@@ -98,7 +98,7 @@ def index_quotes(
     request: Request,
     symbols: str | None = Query(None, description="逗号分隔的指数 symbol 列表"),
 ):
-    """返回实时指数行情缓存，不触发 TickFlow 请求。"""
+    """返回实时指数行情缓存，不触发上游实时请求。"""
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
     qs = _get_quote_service(request)
     if not qs:
