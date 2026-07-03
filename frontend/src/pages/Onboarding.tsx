@@ -3,21 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Eye,
-  EyeOff,
   Loader2,
-  Save,
-  Check,
   CheckCircle2,
-  AlertCircle,
   ArrowRight,
   ArrowLeft,
-  ExternalLink,
   Sparkles,
   LineChart,
   ScanSearch,
   Flame,
-  Zap,
   Radar,
   ShieldCheck,
   BellRing,
@@ -227,202 +220,25 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
   )
 }
 
-// ===== Step 1: 输入 TickFlow Key（可选，官方源才需要） =====
+// ===== Step 1: 数据源确认 =====
 
-function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () => void; onBack: () => void }) {
-  const qc = useQueryClient()
+function KeyStep({ onNext, onBack }: { onNext: () => void; onSkip: () => void; onBack: () => void }) {
   const settings = useSettings()
-
-  const [keyInput, setKeyInput] = useState('')
-  const [revealing, setRevealing] = useState(false)
-  const [saved, setSaved] = useState(false)
-
-  const save = useMutation({
-    mutationFn: () => api.saveTickflowKey(keyInput.trim()),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: QK.settings })
-      qc.invalidateQueries({ queryKey: QK.capabilities })
-      if (data.ok) {
-        // 仅当 key 有效(被存储)时才进入下一步看探测结果
-        setSaved(true)
-        setTimeout(() => onNext(), 600)
-      }
-      // ok=false(key 无效):不进入下一步,错误提示由 save.error / save.data 渲染
-    },
-  })
-
-  const provider = settings.data?.data_provider ?? settings.data?.mode
-  const isLocalProvider = provider === 'fquant' || provider === 'fquant_local'
-  const alreadyHasKey = settings.data?.mode === 'free' || settings.data?.mode === 'api_key'
-
-  if (isLocalProvider) {
-    return (
-      <div>
-        <div className="flex items-center gap-2.5">
-          <div className="rounded-lg bg-accent/10 p-2">
-            <Database className="h-4 w-4 text-accent" />
-          </div>
-          <h2 className="text-xl font-bold text-foreground">本地数据源已启用</h2>
-        </div>
-        <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-          当前使用 {provider === 'fquant_local' ? 'fquant_local' : 'fquant'} 数据源,无需配置 TickFlow API Key。
-        </p>
-        <div className="mt-6 flex items-center justify-between">
-          <button
-            onClick={onBack}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            上一步
-          </button>
-          <button
-            onClick={onNext}
-            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
-          >
-            下一步
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-    )
-  }
+  const provider = settings.data?.data_provider ?? settings.data?.mode ?? 'fquant_local'
 
   return (
     <div>
       <div className="flex items-center gap-2.5">
         <div className="rounded-lg bg-accent/10 p-2">
-          <ShieldCheck className="h-4 w-4 text-accent" />
+          <Database className="h-4 w-4 text-accent" />
         </div>
-        <h2 className="text-xl font-bold text-foreground">配置官方数据源 Key</h2>
+        <h2 className="text-xl font-bold text-foreground">数据源已启用</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        TickFlow 官方源需要 API Key；本地 FQuant 数据源可跳过此步，稍后在「系统设置」里切换。
-        如果有任何建议或意见,欢迎发送邮件至{' '}
-        <a
-          href="mailto:415333856@qq.com"
-          className="text-accent hover:underline font-medium"
-        >
-          415333856@qq.com
-        </a>
-        。
+        当前使用 <span className="font-mono text-foreground">{provider}</span> 数据源。
+        继续查看已启用的能力。
       </p>
 
-      {/* 档位对比说明 —— None 档 vs Free 档 */}
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-        {/* None 档 —— 不配置时默认 */}
-        <div className="rounded-card border border-accent/20 bg-accent/[0.04] p-3">
-          <div className="flex items-center gap-1.5">
-            <span className="inline-flex h-[18px] items-center rounded px-1.5 text-[10px] font-bold font-mono bg-accent/15 text-accent/70">None</span>
-            <span className="text-xs font-medium text-foreground">不配置(默认)</span>
-          </div>
-          <ul className="mt-2 space-y-1 text-[11px] text-muted leading-relaxed">
-            <li>· 仅历史日K数据,无实时行情</li>
-            <li>· 数据有延迟,盘后约 1-2 小时更新当天</li>
-            <li>· 可用于策略回测、盘后分析</li>
-          </ul>
-        </div>
-        {/* Free 档 —— 免费注册即可获取 */}
-        <div className="rounded-card border border-accent/35 bg-accent/[0.08] p-3">
-          <div className="flex items-center gap-1.5">
-            <span className="inline-flex h-[18px] items-center rounded px-1.5 text-[10px] font-bold font-mono bg-accent/15 text-accent">Free</span>
-            <span className="text-xs font-medium text-foreground">注册免费获取</span>
-            <span className="inline-flex items-center rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-accent/30">推荐</span>
-          </div>
-          <ul className="mt-2 space-y-1 text-[11px] text-secondary leading-relaxed">
-            <li>· 无需付费,注册即享</li>
-            <li>· 历史日K + 限定范围内的实时数据</li>
-            <li>· 可指定个股进行实时监控</li>
-          </ul>
-        </div>
-      </div>
-
-      {/* Key 已配置提示 */}
-      {alreadyHasKey && !save.isPending && (
-        <div className="mt-4 flex items-start gap-2 rounded-btn border border-bear/30 bg-bear/10 px-3 py-2.5 text-xs text-bear">
-          <CheckCircle2 className="h-3.5 w-3.5 mt-px shrink-0" />
-          <span>
-            已检测到配置好的 Key(<span className="font-mono">{settings.data?.tickflow_api_key_masked}</span>)。
-            可直接下一步查看能力,或在下方粘贴新 Key 替换。
-          </span>
-        </div>
-      )}
-
-      {/* 获取 Key 的说明 —— 黄框卡片 */}
-      <div className="mt-4 flex items-start gap-2 rounded-card border border-warning/40 bg-warning/10 px-3 py-2.5 text-xs text-foreground leading-relaxed">
-        <AlertCircle className="h-4 w-4 shrink-0 text-warning mt-px" />
-        <span>
-          Key 可在{' '}
-          <a
-            href="https://tickflow.org/auth/register?ref=V3KDKGXPEA"
-            target="_blank"
-            rel="noreferrer"
-            className="text-warning hover:underline inline-flex items-baseline gap-0.5 font-medium"
-          >
-            tickflow.org
-            <ExternalLink className="h-3 w-3 self-center" />
-          </a>
-          获取。
-          <span className="block mt-1.5 text-foreground/70">
-            使用 TickFlow 官方源时需要 Key；使用本地 FQuant 源时可直接跳过。
-          </span>
-        </span>
-      </div>
-
-      {/* 输入 */}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (keyInput.trim()) save.mutate()
-        }}
-        className="mt-4 space-y-2"
-      >
-        <div className="relative">
-          <input
-            type={revealing ? 'text' : 'password'}
-            placeholder={alreadyHasKey ? '粘贴新 Key 替换当前' : '粘贴 TickFlow API Key'}
-            value={keyInput}
-            onChange={(e) => {
-              setKeyInput(e.target.value)
-              if (saved) setSaved(false)
-            }}
-            className="w-full px-3 py-2.5 pr-9 rounded-input bg-base border border-border text-sm font-mono focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-all"
-          />
-          <button
-            type="button"
-            onClick={() => setRevealing((v) => !v)}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-foreground transition-colors"
-            tabIndex={-1}
-            aria-label={revealing ? '隐藏' : '显示'}
-          >
-            {revealing ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </button>
-        </div>
-
-        {/* 保存中提示 */}
-        {save.isPending && (
-          <div className="flex items-start gap-1.5 rounded-btn border border-warning/30 bg-warning/10 px-3 py-2 text-[11px] leading-snug text-warning">
-            <AlertCircle className="h-3.5 w-3.5 mt-px shrink-0" />
-            <span>正在验证 Key 并探测能力,验证通过前请不要离开当前页面。</span>
-          </div>
-        )}
-
-        {save.isError && (
-          <div className="text-xs text-danger">保存失败:{String((save.error as any).message)}</div>
-        )}
-        {/* 无效 key —— 探测失败(key 无效/乱填)未存储,提示用户 */}
-        {save.data && !save.data.ok && (
-          <div className="flex items-start gap-1.5 rounded-btn border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-snug text-danger">
-            <AlertCircle className="h-3.5 w-3.5 mt-px shrink-0" />
-            <span>
-              {save.data.reason === 'invalid'
-                ? 'Key 无效或已过期,请检查后重试(未保存该 Key)。'
-                : save.data.error ?? '保存失败'}
-            </span>
-          </div>
-        )}
-      </form>
-
-      {/* 底部操作 */}
       <div className="mt-6 flex items-center justify-between">
         <button
           onClick={onBack}
@@ -431,29 +247,13 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
           <ArrowLeft className="h-4 w-4" />
           上一步
         </button>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onSkip}
-            disabled={save.isPending}
-            className="px-4 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors disabled:opacity-50"
-          >
-            {alreadyHasKey ? '下一步' : '暂不配置'}
-          </button>
-          <button
-            onClick={() => keyInput.trim() && save.mutate()}
-            disabled={save.isPending || !keyInput.trim()}
-            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-40 transition-all"
-          >
-            {save.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : saved ? (
-              <Check className="h-4 w-4" />
-            ) : (
-              <Save className="h-4 w-4" />
-            )}
-            {save.isPending ? '保存中...' : saved ? '已保存' : '保存并检测'}
-          </button>
-        </div>
+        <button
+          onClick={onNext}
+          className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
+        >
+          下一步
+          <ArrowRight className="h-4 w-4" />
+        </button>
       </div>
     </div>
   )
@@ -462,11 +262,7 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
 // ===== Step 2: 能力探测结果 =====
 
 function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const settings = useSettings()
   const caps = useCapabilities()
-
-  // 是否配置成功 —— 免费档(free)或付费档(api_key)都算;None 档算未配置
-  const hasKey = settings.data?.mode === 'free' || settings.data?.mode === 'api_key'
   const capList = caps.data ? Object.entries(caps.data.capabilities) : []
 
   return (
@@ -478,59 +274,42 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
         <h2 className="text-xl font-bold text-foreground">能力探测结果</h2>
       </div>
 
-      {hasKey ? (
-        <>
-          <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-            Key 已生效,以下是你当前可用的全部能力。后续可在
-            <span className="text-foreground font-medium"> 设置 → 账户 </span>
-            中重新检测或更换 Key。
-          </p>
+      <p className="mt-2.5 text-sm text-secondary leading-relaxed">
+        以下是当前数据源声明的可用能力。
+      </p>
 
-          <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-5">
-            <div className="flex items-baseline justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-muted">订阅档位</span>
-              <span className="font-mono text-2xl font-bold tracking-tight text-foreground">
-                {caps.data?.label ?? settings.data?.tier_label ?? '—'}
-              </span>
-            </div>
+      <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-5">
+        <div className="flex items-baseline justify-between">
+          <span className="text-[10px] uppercase tracking-widest text-muted">数据源能力</span>
+          <span className="font-mono text-2xl font-bold tracking-tight text-foreground">
+            {caps.data?.label ?? '—'}
+          </span>
+        </div>
 
-            {caps.isLoading ? (
-              <div className="mt-4 flex items-center gap-2 text-xs text-muted">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                正在探测能力…
-              </div>
-            ) : capList.length > 0 ? (
-              <div className="mt-4 grid grid-cols-1 gap-1.5">
-                {capList.slice(0, 8).map(([cap]) => {
-                  const meta = CAP_LABELS[cap]
-                  return (
-                    <div key={cap} className="flex items-center gap-2 text-xs">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-bear shrink-0" />
-                      <span className="text-foreground">{meta?.name ?? cap}</span>
-                    </div>
-                  )
-                })}
-                {capList.length > 8 && (
-                  <div className="text-[11px] text-muted pl-5">…等共 {capList.length} 项</div>
-                )}
-              </div>
-            ) : (
-              <div className="mt-4 text-xs text-muted">暂未探测到能力</div>
+        {caps.isLoading ? (
+          <div className="mt-4 flex items-center gap-2 text-xs text-muted">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            正在读取能力…
+          </div>
+        ) : capList.length > 0 ? (
+          <div className="mt-4 grid grid-cols-1 gap-1.5">
+            {capList.slice(0, 8).map(([cap]) => {
+              const meta = CAP_LABELS[cap]
+              return (
+                <div key={cap} className="flex items-center gap-2 text-xs">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-bear shrink-0" />
+                  <span className="text-foreground">{meta?.name ?? cap}</span>
+                </div>
+              )
+            })}
+            {capList.length > 8 && (
+              <div className="text-[11px] text-muted pl-5">…等共 {capList.length} 项</div>
             )}
           </div>
-        </>
-      ) : (
-        <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-6 text-center">
-          <div className="mx-auto w-fit rounded-xl bg-elevated p-3">
-            <Zap className="h-6 w-6 text-warning" />
-          </div>
-          <div className="mt-3 text-sm font-medium text-foreground">将以 None 档继续</div>
-          <p className="mt-2 text-xs text-muted leading-relaxed max-w-sm mx-auto">
-            当前未配置有效 Key,仍可使用看板、选股、回测等功能 —— 进入看板后可直接获取近 1 年历史日K数据。配置 Key 后可解锁实时行情监控等能力,随时在
-            <span className="text-foreground font-medium"> 设置 → 账户 </span>填写。
-          </p>
-        </div>
-      )}
+        ) : (
+          <div className="mt-4 text-xs text-muted">暂未读取到能力缓存</div>
+        )}
+      </div>
 
       {/* 底部操作 */}
       <div className="mt-6 flex items-center justify-between">
@@ -556,11 +335,6 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
 // ===== Step 3: 完成 =====
 
 function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: () => void; pending: boolean }) {
-  const settings = useSettings()
-  // 是否已配置 Key(free 或 api_key 都算,None 档算未配置)
-  const hasKey = settings.data?.mode === 'free' || settings.data?.mode === 'api_key'
-
-  // 首要行动:获取数据(不管配没配 Key, 新用户都需要先拉数据)
   // 快速上手入口(精简为核心功能)
   const tips = [
     { icon: TrendingUp, text: '「个股分析」:输入代码,AI 四维分析 + 关键价位' },
@@ -592,9 +366,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
 
       <h1 className="mt-6 text-2xl font-bold text-foreground">一切就绪!</h1>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed max-w-md mx-auto">
-        {hasKey
-          ? 'Key 已生效,进入面板后系统会自动引导你获取行情数据,完成后即可使用全部功能。'
-          : '当前为 None 档,进入面板后系统会自动引导你获取历史日K数据(无需 Key),即可开始体验。'}
+        进入面板后系统会自动引导你获取行情数据，完成后即可使用已启用功能。
       </p>
 
       {/* 首要行动:获取数据 */}

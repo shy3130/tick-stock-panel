@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app import __version__
-from app.tickflow.policy import detect_capabilities, tier_label
+from app.data_providers.capability_gate import detect_capabilities, tier_label
 from app.services.data_mode import current_data_mode
 
 router = APIRouter()

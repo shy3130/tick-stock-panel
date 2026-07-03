@@ -609,46 +609,9 @@ export interface StrategyBacktestResult {
 
 // ===== Settings =====
 
-/** 端点发现清单 —— 对应 tickflow.org/endpoints.json */
-export interface EndpointItem {
-  id: string
-  url: string
-  label: string
-  region?: string
-  description?: string
-  premium?: boolean
-}
-
-export interface EndpointManifest {
-  version?: number
-  description?: string
-  healthPath?: string
-  /** 每端点测试轮数,用于 /health 多轮探测取中位数 */
-  testRounds?: number
-  endpoints: EndpointItem[]
-  /** 数据来源:remote=远程拉取 / fallback=内置回退列表 */
-  source?: 'remote' | 'fallback'
-}
-
 export interface SettingsState {
   mode: 'none' | 'free' | 'api_key' | 'fquant' | 'fquant_local'
   data_provider: 'tickflow' | 'fquant' | 'fquant_local'
-  tickflow: {
-    api_key_masked: string
-    has_key: boolean
-    tier_label: string
-    current_endpoint: string
-    probe_log: string[]
-    missing_caps: string[]
-    extras_caps: string[]
-  }
-  tickflow_api_key_masked: string
-  has_tickflow_key: boolean
-  tier_label: string
-  current_endpoint: string
-  probe_log: string[]
-  missing_caps: string[]
-  extras_caps: string[]
   // 首次使用引导
   onboarding_completed: boolean
   // AI 配置
@@ -660,19 +623,6 @@ export interface SettingsState {
   ai_model: string
   ai_codex_command?: string
   ai_user_agent: string
-}
-
-/** 保存 TickFlow Key 的响应(先探后存) */
-export interface SaveTickflowKeyResult {
-  ok: boolean
-  /** ok=false 且 key 无效时的原因标识,前端据此提示「Key 无效」 */
-  reason?: 'invalid'
-  error?: string
-  mode?: 'none' | 'free' | 'api_key' | 'fquant' | 'fquant_local'
-  tier_label?: string
-  current_endpoint?: string
-  tickflow_api_key_masked?: string
-  capabilities_count?: number
 }
 
 export interface Preferences {
@@ -831,13 +781,6 @@ export const api = {
   },
 
   settings: () => request<SettingsState>('/api/settings'),
-  saveTickflowKey: (api_key: string) =>
-    request<SaveTickflowKeyResult>('/api/settings/tickflow-key', {
-      method: 'POST',
-      body: JSON.stringify({ api_key }),
-    }),
-  clearTickflowKey: () =>
-    request<any>('/api/settings/tickflow-key', { method: 'DELETE' }),
 
   /** 标记首次使用向导完成（持久化到后端 preferences） */
   completeOnboarding: () =>
@@ -1306,18 +1249,6 @@ export const api = {
       '/api/settings/test_endpoint', {
         method: 'POST',
         body: JSON.stringify({ url, rounds }),
-      },
-    ),
-
-  // 端点发现 —— 后端代理拉取 tickflow.org/endpoints.json(前端无法跨域直连)
-  listEndpoints: () =>
-    request<EndpointManifest>('/api/settings/endpoints'),
-
-  switchEndpoint: (url: string) =>
-    request<{ ok: boolean; current_endpoint: string; error?: string }>(
-      '/api/settings/switch_endpoint', {
-        method: 'POST',
-        body: JSON.stringify({ url }),
       },
     ),
 

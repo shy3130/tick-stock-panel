@@ -14,10 +14,10 @@ from app import __version__
 from app.api import agent, analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, research, rps, screener, settings as settings_api, signals, stock_analysis, strategy, trade_journal, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
+from app.data_providers.capability_gate import detect_capabilities
 from app.jobs import daily_pipeline
+from app.services.data_mode import current_data_mode
 from app.services.quote_service import QuoteService
-from app.tickflow import client as tf_client
-from app.tickflow.policy import detect_capabilities
 from app.storage.repository import DataStore, KlineRepository
 
 logging.basicConfig(
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info(
         "TickFlow Stock Panel v%s starting (mode=%s)",
-        __version__, tf_client.current_mode(),
+        __version__, current_data_mode(),
     )
 
     # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。

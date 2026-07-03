@@ -11,13 +11,11 @@ import {
   CheckSquare,
   Trash2,
   Plus,
-  Wifi,
   SlidersHorizontal,
   AlertTriangle,
   Info,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { EndpointTestDialog } from '@/components/EndpointTestDialog'
 import { api, type ExtDataConfig } from '@/lib/api'
 import {
   useCapabilities,
@@ -122,7 +120,6 @@ export function Data() {
   const [indexExtendValue, setIndexExtendValue] = useState(6)
   const [indexExtendUnit, setIndexExtendUnit] = useState<'month' | 'year'>('month')
   const [schemaTable, setSchemaTable] = useState<string | null>(null)
-  const [showEndpointTest, setShowEndpointTest] = useState(false)
   const [showCreateExt, setShowCreateExt] = useState(false)
   const [editingExt, setEditingExt] = useState<ExtDataConfig | null>(null)
   const [indexBatchInput, setIndexBatchInput] = useState('100')
@@ -522,13 +519,6 @@ export function Data() {
                 扩展数据
               </button>
               <button
-                onClick={() => setShowEndpointTest(true)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
-              >
-                <Wifi className="h-3.5 w-3.5" />
-                测试端点
-              </button>
-              <button
                 onClick={() => setOpenSettings('page-settings')}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
               >
@@ -845,15 +835,6 @@ export function Data() {
         table={schemaTable}
         onClose={() => setSchemaTable(null)}
       />
-
-      {showEndpointTest && (
-        <EndpointTestDialog
-          hasKey={settings.data?.mode === 'api_key'}
-          tierLabel={settings.data?.tier_label ?? ''}
-          currentEndpoint={settings.data?.current_endpoint ?? ''}
-          onClose={() => setShowEndpointTest(false)}
-        />
-      )}
 
       <AnimatePresence>
         {showCreateExt && (

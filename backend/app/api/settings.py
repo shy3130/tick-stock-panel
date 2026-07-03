@@ -12,12 +12,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app import secrets_store
-from app.tickflow import client as tf_client
-from app.tickflow.policy import (
+from app.data_providers.capability_gate import (
     detect_capabilities,
-    extras_caps,
-    missing_caps,
-    probe_log,
     tier_label,
 )
 from app.services.data_mode import current_data_mode
@@ -25,11 +21,6 @@ from app.services.data_mode import current_data_mode
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
-
-# 默认端点 —— endpoints.json 列表第一项,UI"当前使用"始终对齐此项。
-# 注意:Free 模式 SDK 实际走 free-api(免费数据通道),但 UI 显示统一用默认节点。
-DEFAULT_PAID_ENDPOINT = "https://api.tickflow.org"
-
 
 def _sync_financial_scheduler_caps(app_state, capset) -> None:
     """把重新探测出的能力同步给财务调度器。
@@ -46,10 +37,6 @@ def _sync_financial_scheduler_caps(app_state, capset) -> None:
         logging.getLogger(__name__).warning("update financial_scheduler capabilities failed: %s", e)
 
 
-class TickflowKeyIn(BaseModel):
-    api_key: str
-
-
 @router.get("")
 def get_settings() -> dict:
     """返回当前配置概况(Key 脱敏)。"""
@@ -58,28 +45,10 @@ def get_settings() -> dict:
     from app.services import preferences
     from app.services.ai_provider import ai_configured, current_ai_model, current_codex_command
 
-    key = secrets_store.get_tickflow_key()
     ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
-    tickflow_block = {
-        "api_key_masked": secrets_store.mask(key),
-        "has_key": bool(key),
-        "tier_label": tier_label(),
-        "current_endpoint": tf_client.current_endpoint(),
-        "probe_log": probe_log(),
-        "missing_caps": missing_caps(),
-        "extras_caps": extras_caps(),
-    }
     return {
         "mode": current_data_mode(),
         "data_provider": get_active_provider_name(),
-        "tickflow": tickflow_block,
-        "tickflow_api_key_masked": tickflow_block["api_key_masked"],
-        "has_tickflow_key": tickflow_block["has_key"],
-        "tier_label": tickflow_block["tier_label"],
-        "current_endpoint": tickflow_block["current_endpoint"],
-        "probe_log": tickflow_block["probe_log"],
-        "missing_caps": tickflow_block["missing_caps"],
-        "extras_caps": tickflow_block["extras_caps"],
         # 首次使用引导
         "onboarding_completed": preferences.get_onboarding_completed(),
         # AI 配置
@@ -91,142 +60,6 @@ def get_settings() -> dict:
         "ai_model": current_ai_model(),
         "ai_codex_command": current_codex_command(),
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
-    }
-
-
-class SwitchEndpointIn(BaseModel):
-    url: str
-
-
-@router.post("/switch_endpoint")
-def switch_endpoint(req: SwitchEndpointIn, request: Request) -> dict:
-    """切换 TickFlow 端点并立即生效。
-
-    端点切换仅对付费档(starter+,走 api.tickflow.org)有意义;
-    none/free 档运行在 free-api 服务器,无付费端点权限,禁止切换。
-    """
-    # none/free 档没有付费端点权限,禁止切换
-    if tf_client.current_mode() != "api_key":
-        return {"ok": False, "error": "当前档位无法切换端点,仅付费套餐(Starter+)支持"}
-
-    url = req.url.strip().rstrip("/")
-    if not url.startswith("https://"):
-        return {"ok": False, "error": "仅支持 HTTPS 端点"}
-
-    # 持久化到 secrets.json
-    secrets_store.save({"tickflow_base_url": url})
-    # 重置客户端，下次调用自动用新端点
-    tf_client.reset_clients()
-
-    return {
-        "ok": True,
-        "current_endpoint": tf_client.current_endpoint(),
-    }
-
-
-@router.post("/tickflow-key")
-def save_tickflow_key(req: TickflowKeyIn, request: Request) -> dict:
-    """保存 TickFlow API Key 并立即重新探测能力。
-
-    先探后存(关键改动,修复乱填 key 也会被持久化的问题):
-      1. 临时用新 key 探测(付费端点),判定档位
-      2. 判定为 none(连单只日K都拿不到)→ key 无效:不存,清除已存的,
-         返回 {ok: false, reason: "invalid"},前端提示「Key 无效」
-      3. 判定为 free(免费有效 key)→ 存 key,客户端切到 free-api 服务器
-      4. 判定为 starter+ → 存 key,切到付费端点(现有逻辑)
-
-    端点联动:从无 key 升级到付费 key 时,残留的 free-api 端点不可用,
-    故自动切到默认付费端点(api.tickflow.org);free 档则清除自定义端点。
-    """
-    from app.tickflow.policy import (
-        base_tier_name, is_invalid_key,
-    )
-
-    key = req.api_key.strip()
-    if not key:
-        return {"ok": False, "error": "key empty"}
-
-    # ===== 1) 临时存 key + 重置客户端,让探测走付费端点 =====
-    secrets_store.save({"tickflow_api_key": key})
-    tf_client.reset_clients()
-
-    # 立即重新探测(此时 client 已按档位判定,但首次探测必然走付费端点验证)
-    capset = detect_capabilities(force=True)
-    request.app.state.capabilities = capset
-    _sync_financial_scheduler_caps(request.app.state, capset)
-
-    # ===== 2) 判定为无效 key(连单只日K都拿不到)→ 不存,清除 =====
-    if is_invalid_key() or base_tier_name() == "none":
-        # 无效 key:清除刚存的,避免乱填被持久化;退回 none 档
-        secrets_store.clear("tickflow_api_key", "tickflow_base_url")
-        tf_client.reset_clients()
-        capset = detect_capabilities(force=True)
-        request.app.state.capabilities = capset
-        _sync_financial_scheduler_caps(request.app.state, capset)
-        return {
-            "ok": False,
-            "reason": "invalid",
-            "error": "Key 无效或已过期,请检查后重试",
-            "mode": "none",
-            "tier_label": tier_label(),
-            "current_endpoint": tf_client.current_endpoint(),
-            "probe_log": [],
-            "capabilities_count": len(capset.all()),
-        }
-
-    # ===== 3) free 档(免费有效 key)→ 存 key,切到 free-api 服务器 =====
-    if base_tier_name() == "free":
-        # 免费档运行时走 free-api 服务器,清除付费端点的自定义配置
-        secrets_store.clear("tickflow_base_url")
-        tf_client.reset_clients()
-        return {
-            "ok": True,
-            "tickflow_api_key_masked": secrets_store.mask(key),
-            "mode": "free",
-            "tier_label": tier_label(),
-            "current_endpoint": tf_client.current_endpoint(),
-            "probe_log": [],
-            "capabilities_count": len(capset.all()),
-        }
-
-    # ===== 4) starter+ 付费档 → 确保走付费端点(现有逻辑) =====
-    # 若之前是 none/free(无自定义付费端点),切到默认付费端点
-    base = secrets_store.load().get("tickflow_base_url")
-    if not base:
-        secrets_store.save({"tickflow_base_url": DEFAULT_PAID_ENDPOINT})
-    tf_client.reset_clients()
-
-    return {
-        "ok": True,
-        "tickflow_api_key_masked": secrets_store.mask(key),
-        "mode": "api_key",
-        "tier_label": tier_label(),
-        "current_endpoint": tf_client.current_endpoint(),
-        "probe_log": [],
-        "capabilities_count": len(capset.all()),
-    }
-
-
-@router.delete("/tickflow-key")
-def clear_tickflow_key(request: Request) -> dict:
-    """清除 Key,退回无档(none)。
-
-    同时清除 tickflow_base_url(测速切换的自定义端点),使客户端走 free-api
-    服务器取历史日K;档位标签为 None(无档)。
-    """
-    secrets_store.clear("tickflow_api_key", "tickflow_base_url")
-    tf_client.reset_clients()
-
-    capset = detect_capabilities(force=True)
-    request.app.state.capabilities = capset
-    _sync_financial_scheduler_caps(request.app.state, capset)
-
-    return {
-        "ok": True,
-        "mode": "none",
-        "tier_label": tier_label(),
-        "current_endpoint": tf_client.current_endpoint(),
-        "capabilities_count": len(capset.all()),
     }
 
 
@@ -426,7 +259,7 @@ def update_data_provider(req: DataProviderPrefs, request: Request) -> dict:
         "data_provider": saved,
         "effective_data_provider": get_active_provider_name(),
         "data_provider_env_override": bool(env_provider),
-        "mode": tf_client.current_mode(),
+        "mode": current_data_mode(),
         "tier_label": tier_label(),
         "realtime_allowed": _realtime_allowed(),
     }
