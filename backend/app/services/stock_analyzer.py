@@ -290,7 +290,12 @@ async def analyze_stock_stream(
         from app.services.ai_provider import stream_ai_text
 
         kline_tail = _clean_rows(df, _KLINE_KEEP_COLS)
+        from app.services.skill_context import load_skill_context
+
+        skill_context = load_skill_context("stock_analysis")
         user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus)
+        if skill_context:
+            user_prompt = skill_context + "\n\n---\n\n" + user_prompt
         async for delta in stream_ai_text(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
