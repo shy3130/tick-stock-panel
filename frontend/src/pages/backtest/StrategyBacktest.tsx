@@ -665,7 +665,7 @@ export function StrategyBacktest() {
   const [maxPositions, setMaxPositions] = useState(saved?.maxPositions ?? '10')
   const [maxExposure, setMaxExposure] = useState(saved?.maxExposure ?? '100')
   const [initialCapital, setInitialCapital] = useState(saved?.initialCapital ?? '1000000')
-  const [positionSizing, setPositionSizing] = useState<'equal' | 'score_weight'>(saved?.positionSizing ?? 'equal')
+  const [positionSizing, setPositionSizing] = useState<'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'>(saved?.positionSizing ?? 'equal')
   const [simMode, setSimMode] = useState<'position' | 'full'>(saved?.mode ?? 'position')
   const [holdingDays, setHoldingDays] = useState(saved?.holdingDays ?? '5')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -1283,6 +1283,10 @@ export function StrategyBacktest() {
             <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} className={INPUT_CLS}>
               <option value="equal">等权买入</option>
               <option value="score_weight">评分加权</option>
+              <option value="equal_vol">等波动率</option>
+              <option value="risk_parity">风险平价</option>
+              <option value="mean_variance">均值方差</option>
+              <option value="max_diversification">最大分散化</option>
             </select>
           </div>
           <div>

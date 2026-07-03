@@ -18,6 +18,7 @@ from typing import Literal
 import numpy as np
 import polars as pl
 
+from app.backtest.optimizers import portfolio_weights
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,9 @@ class MatcherConfig:
     score_min: float | None = None
     score_max: float | None = None
     initial_capital: float = 1_000_000.0
-    position_sizing: Literal["equal", "score_weight"] = "equal"
+    position_sizing: Literal[
+        "equal", "score_weight", "equal_vol", "risk_parity", "mean_variance", "max_diversification",
+    ] = "equal"
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -847,6 +850,18 @@ class BacktestEngine:
                 return False
             return v > 0 and np.isfinite(v)
 
+        def _candidate_returns(selected: list[tuple[int, str, float]], lookback: int = 20) -> np.ndarray:
+            cols: list[np.ndarray] = []
+            for idx, sym, _score in selected:
+                hist_idx = np.flatnonzero((panel_symbols[:idx] == sym) & np.isfinite(close_prices[:idx]))
+                prices = close_prices[hist_idx][-lookback - 1:]
+                if len(prices) < 2:
+                    cols.append(np.zeros(lookback, dtype=float))
+                    continue
+                ret = np.diff(prices) / prices[:-1]
+                cols.append(np.pad(ret[-lookback:], (lookback - min(lookback, len(ret)), 0)))
+            return np.column_stack(cols) if cols else np.empty((0, 0))
+
         def _market_value() -> float:
             value = 0.0
             for pos in positions.values():
@@ -1101,10 +1116,12 @@ class BacktestEngine:
                 return
 
             weights = np.repeat(1 / len(selected), len(selected))
-            if config.position_sizing == "score_weight":
-                raw = np.array([max(x[2], 0.0) for x in selected], dtype=float)
-                if raw.sum() > 0:
-                    weights = raw / raw.sum()
+            if config.position_sizing != "equal":
+                weights = portfolio_weights(
+                    _candidate_returns(selected),
+                    config.position_sizing,
+                    np.array([x[2] for x in selected], dtype=float),
+                )
             total_budget = min(cash, exposure_capacity, target_position_value * len(selected))
 
             for (idx, sym, _score), weight in zip(selected, weights):

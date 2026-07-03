@@ -126,6 +126,13 @@ class TickFlowProvider:
             return pl.DataFrame()
         return normalize_realtime(resp or [], source=self.name)
 
+    def get_depth(self, symbols: list[str]) -> dict:
+        if not symbols:
+            return {}
+        tf = get_client()
+        data = tf.depth.batch(symbols)
+        return data if isinstance(data, dict) else {}
+
     # ------------------------------------------------------------------ #
     # get_by_universes — 阶段 3 #3.2 universes 索引标的能力
     # ------------------------------------------------------------------ #

@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import logging
 import time
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,8 @@ _CARD_MAX_LEN = 28000
 
 # 飞书自定义机器人 Webhook 前缀 (用于 URL 合法性校验)
 FEISHU_HOOK_PREFIX = "https://open.feishu.cn/open-apis/bot/v2/hook/"
+DINGTALK_HOOK_PREFIX = "https://oapi.dingtalk.com/robot/send"
+WECOM_HOOK_PREFIX = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
 
 
 def _truncate(text: str) -> str:
@@ -41,6 +44,26 @@ def _truncate(text: str) -> str:
 def is_valid_feishu_url(url: str) -> bool:
     """校验是否为合法的飞书自定义机器人 Webhook 地址。"""
     return bool(url) and url.startswith(FEISHU_HOOK_PREFIX)
+
+
+def is_valid_dingtalk_url(url: str) -> bool:
+    parts = urlsplit(url or "")
+    return (
+        parts.scheme == "https"
+        and parts.netloc == "oapi.dingtalk.com"
+        and parts.path == "/robot/send"
+        and "access_token=" in parts.query
+    )
+
+
+def is_valid_wecom_url(url: str) -> bool:
+    parts = urlsplit(url or "")
+    return (
+        parts.scheme == "https"
+        and parts.netloc == "qyapi.weixin.qq.com"
+        and parts.path == "/cgi-bin/webhook/send"
+        and "key=" in parts.query
+    )
 
 
 def _gen_sign(timestamp: str, secret: str) -> str:
@@ -77,7 +100,7 @@ def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
             payload["timestamp"] = timestamp
             payload["sign"] = _gen_sign(timestamp, secret)
 
-        resp = httpx.post(webhook_url, json=payload, timeout=5.0)
+        resp = httpx.post(webhook_url, json=payload, timeout=5.0, trust_env=False)
         # 飞书成功响应: {"code":0,"msg":"success"} (或 StatusCode 200 + Extra)
         if resp.status_code == 200:
             try:
@@ -121,6 +144,93 @@ def send_feishu(webhook_url: str, title: str, body: str, secret: str = "") -> bo
 
     payload: dict = {"msg_type": "text", "content": {"text": text}}
     return _post_feishu(webhook_url, payload, secret)
+
+
+def _signed_dingtalk_url(webhook_url: str, secret: str) -> str:
+    if not secret:
+        return webhook_url
+    timestamp = str(int(time.time() * 1000))
+    string_to_sign = f"{timestamp}\n{secret}"
+    sign = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).digest()
+    ).decode("utf-8")
+    parts = urlsplit(webhook_url)
+    query = parts.query + ("&" if parts.query else "") + urlencode({"timestamp": timestamp, "sign": sign})
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+
+
+def send_dingtalk(webhook_url: str, title: str, body: str, secret: str = "") -> bool:
+    if not is_valid_dingtalk_url(webhook_url):
+        return False
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {"title": title, "text": f"### {title}\n\n{_truncate_card(body)}"},
+    }
+    try:
+        import httpx
+
+        resp = httpx.post(_signed_dingtalk_url(webhook_url, secret), json=payload, timeout=5.0, trust_env=False)
+        return resp.status_code == 200 and resp.json().get("errcode", 0) == 0
+    except Exception as e:  # noqa: BLE001
+        logger.debug("钉钉 Webhook 推送失败: %s", e)
+        return False
+
+
+def send_wecom(webhook_url: str, title: str, body: str, secret: str = "") -> bool:  # noqa: ARG001
+    if not is_valid_wecom_url(webhook_url):
+        return False
+    payload = {"msgtype": "markdown", "markdown": {"content": f"**{title}**\n\n{_truncate_card(body)}"}}
+    try:
+        import httpx
+
+        resp = httpx.post(webhook_url, json=payload, timeout=5.0, trust_env=False)
+        return resp.status_code == 200 and resp.json().get("errcode", 0) == 0
+    except Exception as e:  # noqa: BLE001
+        logger.debug("企微 Webhook 推送失败: %s", e)
+        return False
+
+
+def send_meow(nickname: str, title: str, body: str) -> bool:
+    nickname = (nickname or "").strip()
+    if not nickname:
+        return False
+    url = "https://api.chuckfang.com/{}/{}/{}".format(
+        quote(nickname, safe=""),
+        quote(title or "TickFlow", safe=""),
+        quote(_truncate_card(body), safe=""),
+    )
+    try:
+        import httpx
+
+        resp = httpx.post(url, timeout=5.0, trust_env=False)
+        return 200 <= resp.status_code < 300
+    except Exception as e:  # noqa: BLE001
+        logger.debug("MeoW 推送失败: %s", e)
+        return False
+
+
+def send_channel(channel: str, config: dict, title: str, body: str) -> bool:
+    channel = str(channel or "").lower()
+    if channel == "feishu":
+        return send_feishu(config.get("url", ""), title, body, config.get("secret", ""))
+    if channel == "dingtalk":
+        return send_dingtalk(config.get("url", ""), title, body, config.get("secret", ""))
+    if channel == "wecom":
+        return send_wecom(config.get("url", ""), title, body)
+    if channel == "meow":
+        return send_meow(config.get("nickname", ""), title, body)
+    return False
+
+
+def send_configured_channels(title: str, body: str) -> int:
+    """推送到所有已配置 webhook 通道，返回成功数量。"""
+    from app.services import preferences
+
+    sent = 0
+    for channel, config in preferences.get_configured_webhook_channels().items():
+        if send_channel(channel, config, title, body):
+            sent += 1
+    return sent
 
 
 def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, secret: str = "") -> bool:

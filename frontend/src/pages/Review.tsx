@@ -103,7 +103,13 @@ export function Review() {
   const [showSchedule, setShowSchedule] = useState(false)
   const prefs = usePreferences()
   const reviewSched = prefs.data?.review_schedule ?? { enabled: false, hour: 15, minute: 10 }
-  const feishuConfigured = !!(prefs.data?.feishu_webhook_url)
+  const webhookChannels = prefs.data?.webhook_channels ?? {}
+  const pushOptions = [
+    { id: 'feishu', name: '飞书', hint: '群机器人', configured: !!(webhookChannels.feishu?.url ?? prefs.data?.feishu_webhook_url) },
+    { id: 'dingtalk', name: '钉钉', hint: '群机器人', configured: !!webhookChannels.dingtalk?.url },
+    { id: 'wecom', name: '企微', hint: '群机器人', configured: !!webhookChannels.wecom?.url },
+    { id: 'meow', name: 'MeoW', hint: '个人推送', configured: !!webhookChannels.meow?.nickname },
+  ]
   // 推送渠道是独立的顶层偏好(多选), 与定时 / 实时行情无关, 常驻可单独设置
   // []=不推送, ['feishu']=飞书(微信开发中, 仅占位)
   const reviewPushChannels = prefs.data?.review_push_channels ?? []
@@ -422,38 +428,33 @@ export function Review() {
                   <span className="text-[10px] text-muted/70">{reviewPushChannels.length === 0 ? '未开启' : `${reviewPushChannels.length} 个渠道`}</span>
                 </div>
                 <div className="mt-2 space-y-1.5">
-                  {/* 飞书(可用, 多选) */}
-                  <button
-                    type="button"
-                    disabled={pushMut.isPending}
-                    onClick={() => togglePushChannel('feishu')}
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-btn border px-2.5 py-1.5 text-left transition-colors disabled:opacity-50',
-                      reviewPushChannels.includes('feishu')
-                        ? 'border-accent/40 bg-accent/10'
-                        : 'border-border/60 bg-base/40 hover:bg-base/60',
-                    )}
-                  >
-                    <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes('feishu') ? 'border-accent bg-accent text-white' : 'border-border')}>
-                      {reviewPushChannels.includes('feishu') && <Check className="h-2.5 w-2.5" />}
-                    </span>
-                    <span className="text-[11px] text-foreground">飞书</span>
-                    <span className="text-[9px] text-muted">群机器人</span>
-                    <span className={cn('ml-auto text-[9px]', feishuConfigured ? 'text-emerald-500' : 'text-warning')}>
-                      {feishuConfigured ? '已配置' : '未配置'}
-                    </span>
-                  </button>
-                  {/* 微信(开发中, 占位不可选) */}
-                  <div className="flex items-center gap-2 rounded-btn border border-border/40 bg-base/20 px-2.5 py-1.5 opacity-60">
-                    <span className="flex h-3 w-3 shrink-0 items-center justify-center rounded border border-border" />
-                    <span className="text-[11px] text-secondary">微信</span>
-                    <span className="text-[9px] text-muted">公众号/企业微信</span>
-                    <span className="ml-auto rounded bg-muted/10 px-1 py-px text-[9px] text-muted">开发中</span>
-                  </div>
+                  {pushOptions.map(ch => (
+                    <button
+                      key={ch.id}
+                      type="button"
+                      disabled={pushMut.isPending}
+                      onClick={() => togglePushChannel(ch.id)}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-btn border px-2.5 py-1.5 text-left transition-colors disabled:opacity-50',
+                        reviewPushChannels.includes(ch.id)
+                          ? 'border-accent/40 bg-accent/10'
+                          : 'border-border/60 bg-base/40 hover:bg-base/60',
+                      )}
+                    >
+                      <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes(ch.id) ? 'border-accent bg-accent text-white' : 'border-border')}>
+                        {reviewPushChannels.includes(ch.id) && <Check className="h-2.5 w-2.5" />}
+                      </span>
+                      <span className="text-[11px] text-foreground">{ch.name}</span>
+                      <span className="text-[9px] text-muted">{ch.hint}</span>
+                      <span className={cn('ml-auto text-[9px]', ch.configured ? 'text-emerald-500' : 'text-warning')}>
+                        {ch.configured ? '已配置' : '未配置'}
+                      </span>
+                    </button>
+                  ))}
                 </div>
                 <p className="mt-1.5 text-[10px] leading-relaxed text-muted/70">
-                  手动或定时生成的复盘都会以卡片消息推送完整报告。复用「设置 → 实时监控」的飞书 Webhook。
-                  {reviewPushChannels.includes('feishu') && !feishuConfigured && (
+                  手动或定时生成的复盘都会推送完整报告。复用「设置 → 实时监控」的 Webhook。
+                  {reviewPushChannels.some(ch => !pushOptions.find(opt => opt.id === ch)?.configured) && (
                     <Link to="/settings?tab=monitoring" className="ml-1 text-accent hover:underline" onClick={() => setShowSchedule(false)}>
                       前往配置 →
                     </Link>

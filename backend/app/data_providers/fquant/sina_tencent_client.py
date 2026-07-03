@@ -17,7 +17,7 @@ SINA_URL = "https://hq.sinajs.cn/list="
 TENCENT_BATCH = 60
 SINA_BATCH = 100
 
-_SUFFIX_TO_PREFIX = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
+_SUFFIX_TO_PREFIX = {"SH": "sh", "SZ": "sz", "BJ": "bj", "HK": "hk"}
 
 
 def _to_exch_code(symbol: str) -> str:
@@ -27,7 +27,7 @@ def _to_exch_code(symbol: str) -> str:
 
 def _to_symbol(exch_code: str) -> str:
     prefix = exch_code[:2].lower()
-    suffix = {"sh": "SH", "sz": "SZ", "bj": "BJ"}.get(prefix, prefix.upper())
+    suffix = {"sh": "SH", "sz": "SZ", "bj": "BJ", "hk": "HK"}.get(prefix, prefix.upper())
     return f"{exch_code[2:]}.{suffix}"
 
 
@@ -37,6 +37,13 @@ def _f(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _n(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_tencent(text: str) -> list[dict]:
@@ -69,6 +76,40 @@ def parse_tencent(text: str) -> list[dict]:
             amount_10k = _f(parts[37])
             row["amount"] = amount_10k * 10000 if amount_10k is not None else None
         rows.append(row)
+    return rows
+
+
+def parse_tencent_depth(text: str) -> dict:
+    rows: dict = {}
+    for line in text.strip().split(";"):
+        if "=" not in line:
+            continue
+        key, _, payload = line.partition("=")
+        exch_code = key.split("v_")[-1].strip()
+        parts = payload.strip().strip('"').split("~")
+        if len(parts) < 29:
+            continue
+
+        bid_prices: list[float | None] = []
+        bid_volumes: list[int | None] = []
+        ask_prices: list[float | None] = []
+        ask_volumes: list[int | None] = []
+        for i in range(5):
+            bid_prices.append(_n(parts[9 + i * 2]))
+            bid_vol = _n(parts[10 + i * 2])
+            bid_volumes.append(int(bid_vol) if bid_vol is not None else None)
+            ask_prices.append(_n(parts[19 + i * 2]))
+            ask_vol = _n(parts[20 + i * 2])
+            ask_volumes.append(int(ask_vol) if ask_vol is not None else None)
+
+        rows[_to_symbol(exch_code)] = {
+            "bid_prices": bid_prices,
+            "bid_volumes": bid_volumes,
+            "ask_prices": ask_prices,
+            "ask_volumes": ask_volumes,
+            "timestamp": None,
+            "source": "tencent",
+        }
     return rows
 
 
@@ -163,4 +204,17 @@ class SinaTencentClient:
             text = self._http_get(TENCENT_URL + ",".join(chunk), "tencent")
             if text:
                 rows.extend(parse_tencent(text))
+        return rows
+
+    def get_depth(self, symbols: list[str]) -> dict:
+        codes = [_to_exch_code(s) for s in symbols if str(s).strip()]
+        if not codes:
+            return {}
+
+        rows: dict = {}
+        for start in range(0, len(codes), TENCENT_BATCH):
+            chunk = codes[start:start + TENCENT_BATCH]
+            text = self._http_get(TENCENT_URL + ",".join(chunk), "tencent")
+            if text:
+                rows.update(parse_tencent_depth(text))
         return rows

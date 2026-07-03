@@ -285,9 +285,9 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
     return {"hour": h, "minute": m}
 
 
-# 复盘推送可选渠道白名单 (微信等暂未实现, 不在白名单内, 前端仅作占位)
+# 复盘推送可选渠道白名单。
 # 多选: 不推送 = 空数组, 而非 'none'
-REVIEW_PUSH_CHANNELS = {"feishu"}
+REVIEW_PUSH_CHANNELS = {"feishu", "dingtalk", "wecom", "meow"}
 
 
 def get_review_schedule() -> dict:
@@ -478,10 +478,53 @@ def set_feishu_webhook_secret(secret: str) -> str:
     return get_feishu_webhook_secret()
 
 
-def get_webhook_enabled_default() -> bool:
-    """新建监控规则时是否默认勾选「飞书推送」。
+def get_webhook_channels() -> dict:
+    """返回所有 webhook 通道配置；兼容旧 feishu 字段。"""
+    channels = load().get("webhook_channels", {})
+    if not isinstance(channels, dict):
+        channels = {}
+    out = {k: v for k, v in channels.items() if k in REVIEW_PUSH_CHANNELS and isinstance(v, dict)}
+    out["feishu"] = {
+        "url": get_feishu_webhook_url(),
+        "secret": get_feishu_webhook_secret(),
+    }
+    return out
 
-    数据模型当前只有一个 webhook_enabled 布尔 (即飞书), QMT/ptrade 待定。
+
+def get_configured_webhook_channels() -> dict:
+    channels = get_webhook_channels()
+    return {
+        k: v for k, v in channels.items()
+        if (v.get("url") or v.get("nickname") or "").strip()
+    }
+
+
+def set_webhook_channel(channel: str, config: dict) -> dict:
+    """保存单个 webhook 通道。feishu 仍写旧字段，其他写 webhook_channels。"""
+    channel = str(channel or "").strip().lower()
+    if channel not in REVIEW_PUSH_CHANNELS:
+        raise ValueError(f"unsupported webhook channel: {channel}")
+    cleaned = {
+        "url": str(config.get("url") or "").strip(),
+        "secret": str(config.get("secret") or "").strip(),
+        "nickname": str(config.get("nickname") or "").strip(),
+    }
+    if channel == "feishu":
+        set_feishu_webhook_url(cleaned["url"])
+        set_feishu_webhook_secret(cleaned["secret"])
+        return get_webhook_channels()["feishu"]
+    current = load().get("webhook_channels", {})
+    if not isinstance(current, dict):
+        current = {}
+    current[channel] = cleaned
+    save({"webhook_channels": current})
+    return get_webhook_channels()[channel]
+
+
+def get_webhook_enabled_default() -> bool:
+    """新建监控规则时是否默认勾选「Webhook 推送」。
+
+    数据模型当前只有一个 webhook_enabled 布尔；启用后推送到所有已配置通道。
     此默认值供规则编辑器新建规则时预填, 单条规则仍可独立修改。
     """
     return load().get("webhook_enabled_default", False)

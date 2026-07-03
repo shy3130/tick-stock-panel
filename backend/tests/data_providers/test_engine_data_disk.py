@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.data_providers.fquant.engine_data_disk import EngineDataDiskClient, _csv_path
+from app.data_providers.fquant.engine_data_disk import EngineDataDiskClient, _csv_path, _symbol_from_code
 
 
 DAY = """date,open,close,high,low,volume,amount,up,down,datetime,adjustment_count
@@ -44,6 +44,7 @@ def test_csv_path():
     root = Path("/tmp/tdx")
     assert _csv_path(root, "day", "600519.SH") == root / "day" / "sh600" / "sh600519.csv"
     assert _csv_path(root, "day", "300059.SZ") == root / "day" / "sz300" / "sz300059.csv"
+    assert _csv_path(root, "day", "00700.HK") == root / "day" / "hk00" / "hk00700.csv"
 
 
 def test_get_wide_prefers_wide(tmp_path, monkeypatch):
@@ -65,6 +66,22 @@ def test_get_wide_falls_back_to_day(tmp_path, monkeypatch):
 
     assert rows[0]["close"] == 1193.01
     assert "last_close" not in rows[0]
+
+
+def test_get_wide_reads_hk_path(tmp_path, monkeypatch):
+    (tmp_path / "wide" / "hk00").mkdir(parents=True)
+    (tmp_path / "wide" / "hk00" / "hk00700.csv").write_text(WIDE)
+    monkeypatch.setenv("TDX_DATA_DIR", str(tmp_path))
+
+    rows = EngineDataDiskClient().get_wide("00700", limit=10, asset_type="hk")
+
+    assert rows[0]["close"] == 1193.01
+
+
+def test_symbol_from_code_does_not_guess_hk_by_length():
+    assert _symbol_from_code("00700") == "00700.SZ"
+    assert _symbol_from_code("00700", asset_type="hk") == "00700.HK"
+    assert _symbol_from_code("510330") == "510330.SH"
 
 
 def test_get_xdxr(tmp_path, monkeypatch):

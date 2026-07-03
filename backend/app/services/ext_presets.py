@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from datetime import date
 
 from app.services.ext_data import (
     ExtConfig,
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 # 种子数据源 (作者维护, 改这里即对所有用户生效)
 _THS_BASE = "https://files.688798.xyz/ths"
+_EM_DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +94,38 @@ def _industry_preset() -> ExtConfig:
     )
 
 
+def _dragon_tiger_preset() -> ExtConfig:
+    return ExtConfig(
+        id="ext_lhb_em",
+        label="龙虎榜",
+        mode="snapshot",
+        fields=[
+            ExtField("symbol", "string", "标的代码"),
+            ExtField("code", "string", "代码"),
+            ExtField("trade_date", "string", "交易日期"),
+            ExtField("name", "string", "名称"),
+            ExtField("close", "float", "收盘价"),
+            ExtField("change_pct", "float", "涨跌幅%"),
+            ExtField("net_buy", "float", "龙虎榜净买额"),
+            ExtField("buy_amount", "float", "买入金额"),
+            ExtField("sell_amount", "float", "卖出金额"),
+            ExtField("turnover", "float", "成交额"),
+            ExtField("reason", "string", "上榜原因"),
+        ],
+        description="东方财富龙虎榜日榜 (手动获取当天数据)",
+        symbol_map={"type": "mapped", "col": "symbol"},
+        code_map={"type": "computed", "from": "symbol", "method": "strip_exchange"},
+        pull=PullConfig(
+            url=_EM_DATACENTER,
+            method="GET",
+            schedule_minutes=1440,
+            enabled=False,
+        ),
+    )
+
+
 def _presets() -> list[ExtConfig]:
-    return [_concept_preset(), _industry_preset()]
+    return [_concept_preset(), _industry_preset(), _dragon_tiger_preset()]
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +180,37 @@ def _flatten_industry_rows(raw_rows: list[dict]) -> list[dict]:
     return out
 
 
+def _a_symbol(code: str) -> str:
+    code = str(code or "").strip()
+    if code.startswith(("8", "4", "92")):
+        return f"{code}.BJ"
+    if code.startswith(("60", "68", "90", "11", "13")):
+        return f"{code}.SH"
+    return f"{code}.SZ"
+
+
+def _flatten_dragon_tiger_rows(raw_rows: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for r in raw_rows:
+        code = str(r.get("SECURITY_CODE") or "").strip()
+        if not code:
+            continue
+        out.append({
+            "symbol": _a_symbol(code),
+            "code": code,
+            "trade_date": str(r.get("TRADE_DATE") or "")[:10],
+            "name": r.get("SECURITY_NAME_ABBR") or "",
+            "close": r.get("CLOSE_PRICE"),
+            "change_pct": r.get("CHANGE_RATE"),
+            "net_buy": r.get("BILLBOARD_NET_AMT"),
+            "buy_amount": r.get("BILLBOARD_BUY_AMT"),
+            "sell_amount": r.get("BILLBOARD_SELL_AMT"),
+            "turnover": r.get("ACCUM_AMOUNT"),
+            "reason": r.get("EXPLANATION") or "",
+        })
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 拉取执行 (复用 httpx, 不依赖 fetch_and_ingest 的 PullConfig 路径)
 # ---------------------------------------------------------------------------
@@ -175,6 +238,29 @@ async def _seed_one(config: ExtConfig, flatten, data_dir: Path) -> int:
         raise ValueError(f"接口返回 0 行: {config.pull.url}")
     n = rows_to_parquet(rows, config, data_dir, snapshot_date=date.today())
     return n
+
+
+async def _seed_dragon_tiger(config: ExtConfig, data_dir: Path) -> int:
+    from app.services import eastmoney_client
+
+    today = date.today().isoformat()
+    payload = eastmoney_client.get_json(_EM_DATACENTER, params={
+        "reportName": "RPT_DAILYBILLBOARD_DETAILS",
+        "columns": "ALL",
+        "filter": f"(TRADE_DATE='{today}')",
+        "sortColumns": "BILLBOARD_NET_AMT",
+        "sortTypes": "-1",
+        "pageNumber": "1",
+        "pageSize": "500",
+        "source": "WEB",
+        "client": "WEB",
+    })
+    result = payload.get("result") if isinstance(payload, dict) else None
+    raw_rows = result.get("data") if isinstance(result, dict) else []
+    rows = _flatten_dragon_tiger_rows(raw_rows if isinstance(raw_rows, list) else [])
+    if not rows:
+        raise ValueError(f"东方财富龙虎榜 {today} 返回 0 行")
+    return rows_to_parquet(rows, config, data_dir, snapshot_date=date.today())
 
 
 # ---------------------------------------------------------------------------
@@ -224,13 +310,15 @@ async def fetch_preset(config_id: str, data_dir: Path) -> int:
     if config is None:
         raise ValueError(f"未知的内置预设: {config_id}")
 
-    flatten = _flatten_concept_rows if config_id == "ext_gn_ths" else _flatten_industry_rows
-
     # 确保 config.json 存在 (用户可能从未启动过 ensure_builtin_presets)
     store = ExtConfigStore(data_dir)
     if store.get(config_id) is None:
         store.upsert(config)
 
-    n = await _seed_one(config, flatten, data_dir)
+    if config_id == "ext_lhb_em":
+        n = await _seed_dragon_tiger(config, data_dir)
+    else:
+        flatten = _flatten_concept_rows if config_id == "ext_gn_ths" else _flatten_industry_rows
+        n = await _seed_one(config, flatten, data_dir)
     logger.info("内置扩展表 %s 手动拉取成功: %d 行", config_id, n)
     return n

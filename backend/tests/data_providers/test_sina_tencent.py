@@ -4,6 +4,8 @@ from app.data_providers.fquant.sina_tencent_client import (
     SinaTencentClient,
     parse_sina,
     parse_tencent,
+    parse_tencent_depth,
+    _to_exch_code,
 )
 
 
@@ -34,6 +36,24 @@ def test_parse_tencent():
     assert row["last_price"] == 1193.01
     assert row["prev_close"] == 1185.49
     assert row["volume"] == 42473 * 100
+
+
+def test_parse_tencent_depth_preserves_zero_queue():
+    parts = ["0"] * 49
+    parts[1] = "测试"
+    parts[2] = "600000"
+    parts[9] = "10.00"
+    parts[10] = "123"
+    parts[19] = "10.01"
+    parts[20] = "0"
+    text = 'v_sh600000="' + "~".join(parts) + '";'
+
+    row = parse_tencent_depth(text)["600000.SH"]
+
+    assert row["bid_prices"][0] == 10.0
+    assert row["bid_volumes"][0] == 123
+    assert row["ask_prices"][0] == 10.01
+    assert row["ask_volumes"][0] == 0
 
 
 def test_parse_sina():
@@ -70,3 +90,25 @@ def test_source_cooldown_after_three_failures():
 
     client._record_success("tencent")
     assert client._source_available("tencent")
+
+
+def test_depth_batch_chunking():
+    client = SinaTencentClient()
+    with patch.object(client, "_http_get", return_value=None) as get:
+        client.get_depth([f"{600000 + i}.SH" for i in range(130)])
+        assert get.call_count == 3
+
+
+def test_hk_symbol_uses_hk_prefix_for_depth():
+    assert _to_exch_code("00700.HK") == "hk00700"
+
+    parts = ["0"] * 49
+    parts[1] = "腾讯控股"
+    parts[2] = "00700"
+    parts[9] = "300.0"
+    parts[10] = "100"
+    parts[19] = "300.2"
+    parts[20] = "200"
+    text = 'v_hk00700="' + "~".join(parts) + '";'
+
+    assert "00700.HK" in parse_tencent_depth(text)

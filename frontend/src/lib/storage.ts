@@ -95,7 +95,7 @@ export const storage = {
     maxPositions: string
     maxExposure: string
     initialCapital: string
-    positionSizing: 'equal' | 'score_weight'
+    positionSizing: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
     mode: 'position' | 'full'
     holdingDays: string
     params?: Record<string, any>

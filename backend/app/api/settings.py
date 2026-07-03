@@ -310,7 +310,7 @@ def clear_ai_settings() -> dict:
 # ===== 偏好设置 =====
 
 def _realtime_allowed() -> bool:
-    """当前档位是否允许实时行情(none/free 不允许)。"""
+    """当前数据源/档位是否允许实时行情。"""
     from app.services.quote_service import QuoteService
     return QuoteService.is_realtime_allowed()
 
@@ -370,6 +370,7 @@ def get_preferences() -> dict:
         "system_notify_enabled": preferences.get_system_notify_enabled(),
         "feishu_webhook_url": preferences.get_feishu_webhook_url(),
         "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
+        "webhook_channels": preferences.get_webhook_channels(),
         "webhook_enabled_default": preferences.get_webhook_enabled_default(),
         "sidebar_index_symbols": preferences.get_sidebar_index_symbols(),
         "nav_order": preferences.get_nav_order(),
@@ -507,7 +508,8 @@ class RealtimeQuoteScopePrefs(BaseModel):
 def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
     """保存全局实时行情开关。
 
-    none 档无实时行情权限；free 档开启自选股实时；starter+ 开启全市场实时。
+    provider 无 realtime 能力时不可开启；tickflow free 档开启自选股实时；
+    tickflow starter+ 和本地实时 provider 开启全市场实时。
     前端据此把开关置灰 / 回弹。
     """
     from app.services import preferences
@@ -515,7 +517,7 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
 
     allowed = qs.is_realtime_allowed() if qs else True
     if req.realtime_quotes_enabled and not allowed:
-        # 当前档位不允许开启实时行情 — 强制关闭
+        # 当前数据源/档位不允许开启实时行情 — 强制关闭
         preferences.save({"realtime_quotes_enabled": False})
         if qs:
             qs.disable()
@@ -659,6 +661,13 @@ class FeishuWebhookPrefsIn(BaseModel):
     secret: str = ""
 
 
+class WebhookChannelPrefsIn(BaseModel):
+    channel: str
+    url: str = ""
+    secret: str = ""
+    nickname: str = ""
+
+
 @router.put("/preferences/feishu-webhook")
 def update_feishu_webhook(req: FeishuWebhookPrefsIn) -> dict:
     """飞书 Webhook 地址 + 签名密钥 — 全局一处配置, 所有启用推送的监控规则共用。
@@ -679,6 +688,29 @@ def update_feishu_webhook(req: FeishuWebhookPrefsIn) -> dict:
     saved_url = preferences.set_feishu_webhook_url(url)
     saved_secret = preferences.set_feishu_webhook_secret((req.secret or "").strip())
     return {"feishu_webhook_url": saved_url, "feishu_webhook_secret": saved_secret}
+
+
+@router.put("/preferences/webhook-channel")
+def update_webhook_channel(req: WebhookChannelPrefsIn) -> dict:
+    """保存一个 Webhook 通道配置。"""
+    from app.services import preferences
+    from app.services import webhook_adapter
+
+    channel = (req.channel or "").strip().lower()
+    url = (req.url or "").strip()
+    if channel == "feishu" and url and not webhook_adapter.is_valid_feishu_url(url):
+        raise HTTPException(status_code=400, detail="飞书 Webhook 地址非法")
+    if channel == "dingtalk" and url and not webhook_adapter.is_valid_dingtalk_url(url):
+        raise HTTPException(status_code=400, detail="钉钉 Webhook 地址非法")
+    if channel == "wecom" and url and not webhook_adapter.is_valid_wecom_url(url):
+        raise HTTPException(status_code=400, detail="企微 Webhook 地址非法")
+    if channel == "meow" and not (req.nickname or "").strip() and url:
+        raise HTTPException(status_code=400, detail="MeoW 需填写昵称")
+    try:
+        saved = preferences.set_webhook_channel(channel, req.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"channel": channel, "config": saved, "webhook_channels": preferences.get_webhook_channels()}
 
 
 class WebhookEnabledDefaultIn(BaseModel):

@@ -670,6 +670,7 @@ export interface Preferences {
   effective_data_provider?: string
   data_provider_env_override?: boolean
   realtime_quotes_enabled: boolean
+  realtime_allowed?: boolean
   indices_nav_pinned: boolean
   minute_sync_enabled: boolean
   minute_sync_days: number
@@ -702,6 +703,7 @@ export interface Preferences {
   system_notify_enabled: boolean
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
+  webhook_channels?: Record<string, { url?: string; secret?: string; nickname?: string }>
   webhook_enabled_default?: boolean
   sidebar_index_symbols: string[]
   nav_order: string[]
@@ -946,6 +948,11 @@ export const api = {
     request<{ feishu_webhook_url: string; feishu_webhook_secret: string }>('/api/settings/preferences/feishu-webhook', {
       method: 'PUT',
       body: JSON.stringify({ url, secret }),
+    }),
+  updateWebhookChannel: (channel: string, config: { url?: string; secret?: string; nickname?: string }) =>
+    request<{ webhook_channels: Preferences['webhook_channels'] }>('/api/settings/preferences/webhook-channel', {
+      method: 'PUT',
+      body: JSON.stringify({ channel, ...config }),
     }),
   updateWebhookDefault: (enabled: boolean) =>
     request<{ webhook_enabled_default: boolean }>('/api/settings/preferences/webhook-enabled-default', {
@@ -1253,7 +1260,7 @@ export const api = {
     slippage_bps?: number
     max_positions?: number
     initial_capital?: number
-    position_sizing?: 'equal' | 'score_weight'
+    position_sizing?: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
       method: 'POST',

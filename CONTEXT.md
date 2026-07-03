@@ -53,4 +53,5 @@ _避免_：把券商预配对产物当事实源。同花顺投资账本导出的
 
 **影子账户（Shadow Account）**
 从用户盈利 roundtrip 中抽取 if-then 个人规则，把规则**回放为一个假设组合**，与真实交易做 delta-PnL 归因。输入是「我的交易 + 抽取的规则集」，输出是「一个更自律版本的我会怎么做」的**反事实**。是 Trade Journal 之后**显式延后**的独立后续项（成本高：需规则抽取 + codegen + 第二回测引擎），是否启动取决于 Trade Journal 的行为诊断是否足够好到值得回放。
+软债接缝：① Trade Journal MVP 当前不持久化归一化 fills，Shadow Account 落地时可要求重新上传再解析，或届时给 ledger 增加 fills 字段；② 影子回放价格 PnL 默认不含分红，而真实台账头条 `total_pnl` 含分红，shadow-vs-actual 对比前必须先定分红口径，避免两把尺子混比。这两点不影响当前 MVP。
 _避免_：把它当作 Trade Journal 的"Phase 3"顺带交付——它是独立立项决策，不是同一 bullet 下的隐藏后续。

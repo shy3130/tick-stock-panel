@@ -1,7 +1,7 @@
 """符号归一工具（§5.1）。
 
 三源异构代码口径归一为内部统一带后缀的 symbol：
-- ``600519.SH`` / ``000001.SZ`` / ``00700.HK`` / ``000300.INDEX`` / ``510330.ETF``
+- ``600519.SH`` / ``000001.SZ`` / ``00700.HK`` / ``000300.INDEX`` / ``510330.SH``
 
 复用 PoC ``fquant_provider.py:71-114`` 的现成工具函数（符号归一零改动），
 按 §5.1 全部表内不发明实现。
@@ -40,7 +40,9 @@ def code_to_symbol(code: str, asset_type_num: int = 1) -> str:
     >>> code_to_symbol("000300", 10)
     '000300.INDEX'
     >>> code_to_symbol("510330", 20)
-    '510330.ETF'
+    '510330.SH'
+    >>> code_to_symbol("159915", 20)
+    '159915.SZ'
     """
     code = str(code)
     if asset_type_num == 1:  # A 股：6/9 开头上交所，0/3 开头深交所，其余北交所
@@ -54,6 +56,10 @@ def code_to_symbol(code: str, asset_type_num: int = 1) -> str:
     if asset_type_num == 10:
         return f"{code}.INDEX"
     if asset_type_num == 20:
+        if code.startswith("5"):
+            return f"{code}.SH"
+        if code.startswith("1"):
+            return f"{code}.SZ"
         return f"{code}.ETF"
     return code
 
@@ -73,7 +79,7 @@ def symbol_to_market(symbol: str) -> tuple[int, str] | None:
     """对外符号 → ``(asset_type_num, market_key)``。
 
     返回值保留给底层本地源客户端使用。
-    指数/ETF 当前未映射（返回 None）。
+    指数当前未映射（返回 None）。
 
     >>> symbol_to_market("600519.SH")
     (1, 'a')
@@ -81,10 +87,14 @@ def symbol_to_market(symbol: str) -> tuple[int, str] | None:
     (1, 'a')
     >>> symbol_to_market("00700.HK")
     (3, 'hk')
+    >>> symbol_to_market("513050.SH")
+    (20, 'etf')
     >>> symbol_to_market("000300.INDEX") is None
     True
     """
     _, suffix = split_symbol(symbol)
+    if is_etf_symbol(symbol):
+        return 20, "etf"
     if suffix in {"SH", "SZ", "BJ"}:
         return 1, "a"
     if suffix == "HK":
@@ -95,7 +105,13 @@ def symbol_to_market(symbol: str) -> tuple[int, str] | None:
 def is_a_stock(symbol: str) -> bool:
     """判断对外符号是否为 A 股。"""
     _, suffix = split_symbol(symbol)
-    return suffix in {"SH", "SZ", "BJ"}
+    return suffix in {"SH", "SZ", "BJ"} and not is_etf_symbol(symbol)
+
+
+def is_etf_symbol(symbol: str) -> bool:
+    """判断对外符号是否为 ETF。"""
+    code, suffix = split_symbol(symbol)
+    return suffix == "ETF" or (suffix == "SH" and code.startswith("5")) or (suffix == "SZ" and code.startswith(("15", "16")))
 
 
 def exchange_of(code: str) -> str:
@@ -141,7 +157,7 @@ def asset_type_str_to_nums(asset_type: str) -> list[int]:
     [20]
     """
     mapping = {
-        "stock": [1],       # 港股 asset_type=3 不在本期 instruments 暴露（§1.2-N2）
+        "stock": [1],
         "index": [10],
         "etf": [20],
     }

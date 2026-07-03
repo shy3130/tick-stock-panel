@@ -784,18 +784,19 @@ def _maybe_push_review(content: str, meta: dict) -> None:
         as_of = meta.get("as_of") or ""
         subtitle = as_of + (f" · 情绪 {emotion}" if emotion else "")
 
+        configs = preferences.get_configured_webhook_channels()
         for ch in channels:
+            cfg = configs.get(ch)
+            if not cfg:
+                logger.info("review push(%s) skipped: webhook not configured", ch)
+                continue
             if ch == "feishu":
-                url = preferences.get_feishu_webhook_url()
-                if not url:
-                    logger.info("review push(feishu) skipped: webhook not configured")
-                    continue
-                secret = preferences.get_feishu_webhook_secret()
                 ok = webhook_adapter.send_feishu_card(
-                    url, "TickFlow · 每日复盘", subtitle, content, secret
+                    cfg.get("url", ""), "TickFlow · 每日复盘", subtitle, content, cfg.get("secret", "")
                 )
-                logger.info("review push(feishu) %s", "sent" if ok else "failed")
-            # 未来更多渠道在此追加分支
+            else:
+                ok = webhook_adapter.send_channel(ch, cfg, "TickFlow · 每日复盘", f"{subtitle}\n\n{content}".strip())
+            logger.info("review push(%s) %s", ch, "sent" if ok else "failed")
     except Exception as e:  # noqa: BLE001
         logger.warning("review push error: %s", e)
 

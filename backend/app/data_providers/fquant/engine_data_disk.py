@@ -9,24 +9,33 @@ from pathlib import Path
 import polars as pl
 
 logger = logging.getLogger(__name__)
-_MARKET = {"SH": "sh", "SZ": "sz", "BJ": "bj"}
+_MARKET = {"SH": "sh", "SZ": "sz", "BJ": "bj", "HK": "hk"}
+
+
+def _tdx_name(symbol: str) -> tuple[str, str, int]:
+    code, _, exchange = symbol.partition(".")
+    market = _MARKET.get(exchange.upper(), exchange.lower() or "sh")
+    if market == "hk":
+        code = code.zfill(5)
+        return market, f"{market}{code}", 4
+    return market, f"{market}{code}", 5
 
 
 def _csv_path(base: Path, dataset: str, symbol: str) -> Path:
-    code, _, exchange = symbol.partition(".")
-    market = _MARKET.get(exchange.upper(), exchange.lower() or "sh")
-    return base / dataset / f"{market}{code[:3]}" / f"{market}{code}.csv"
+    _, name, group_len = _tdx_name(symbol)
+    return base / dataset / name[:group_len] / f"{name}.csv"
 
 
 def _dated_csv_path(base: Path, dataset: str, symbol: str, date_yyyymmdd: str) -> Path:
-    code, _, exchange = symbol.partition(".")
-    market = _MARKET.get(exchange.upper(), exchange.lower() or "sh")
-    return base / dataset / date_yyyymmdd[:4] / date_yyyymmdd / f"{market}{code}.csv"
+    _, name, _ = _tdx_name(symbol)
+    return base / dataset / date_yyyymmdd[:4] / date_yyyymmdd / f"{name}.csv"
 
 
-def _symbol_from_code(code: str) -> str:
+def _symbol_from_code(code: str, asset_type: str | None = None) -> str:
     if "." in code:
         return code
+    if asset_type == "hk":
+        return f"{code}.HK"
     if code.startswith(("6", "5", "9")):
         return f"{code}.SH"
     if code.startswith(("8", "4")):
@@ -38,8 +47,8 @@ class EngineDataDiskClient:
     def __init__(self) -> None:
         self.base = Path(os.environ.get("TDX_DATA_DIR", "/Volumes/vol3/tdx"))
 
-    def _read(self, dataset: str, symbol_or_code: str) -> pl.DataFrame:
-        path = _csv_path(self.base, dataset, _symbol_from_code(symbol_or_code))
+    def _read(self, dataset: str, symbol_or_code: str, asset_type: str | None = None) -> pl.DataFrame:
+        path = _csv_path(self.base, dataset, _symbol_from_code(symbol_or_code, asset_type))
         if not path.exists():
             logger.debug("TDX disk csv missing: %s", path)
             return pl.DataFrame()
@@ -49,23 +58,23 @@ class EngineDataDiskClient:
             logger.warning("TDX disk csv read failed %s: %s", path, exc)
             return pl.DataFrame()
 
-    def get_wide(self, code: str, limit: int = 250) -> list[dict]:
-        df = self._read("wide", code)
+    def get_wide(self, code: str, limit: int = 250, asset_type: str | None = None) -> list[dict]:
+        df = self._read("wide", code, asset_type)
         if df.is_empty():
             logger.debug("TDX disk wide missing for %s; falling back to day", code)
-            df = self._read("day", code)
+            df = self._read("day", code, asset_type)
         if df.is_empty():
             return []
         return df.tail(limit).reverse().with_columns(pl.col("date").cast(pl.Utf8)).to_dicts()
 
-    def get_day(self, code: str, limit: int = 250) -> list[dict]:
-        df = self._read("day", code)
+    def get_day(self, code: str, limit: int = 250, asset_type: str | None = None) -> list[dict]:
+        df = self._read("day", code, asset_type)
         if df.is_empty():
             return []
         return df.tail(limit).reverse().with_columns(pl.col("date").cast(pl.Utf8)).to_dicts()
 
-    def get_xdxr(self, code: str, limit: int = 100) -> list[dict]:
-        df = self._read("xdxr", code)
+    def get_xdxr(self, code: str, limit: int = 100, asset_type: str | None = None) -> list[dict]:
+        df = self._read("xdxr", code, asset_type)
         if df.is_empty():
             return []
         rows = []
@@ -82,8 +91,14 @@ class EngineDataDiskClient:
             })
         return rows
 
-    def _read_dated(self, dataset: str, symbol_or_code: str, date_yyyymmdd: str) -> pl.DataFrame:
-        path = _dated_csv_path(self.base, dataset, _symbol_from_code(symbol_or_code), date_yyyymmdd)
+    def _read_dated(
+        self,
+        dataset: str,
+        symbol_or_code: str,
+        date_yyyymmdd: str,
+        asset_type: str | None = None,
+    ) -> pl.DataFrame:
+        path = _dated_csv_path(self.base, dataset, _symbol_from_code(symbol_or_code, asset_type), date_yyyymmdd)
         if not path.exists():
             logger.debug("TDX disk dated csv missing: %s", path)
             return pl.DataFrame()
@@ -93,8 +108,14 @@ class EngineDataDiskClient:
             logger.warning("TDX disk dated csv read failed %s: %s", path, exc)
             return pl.DataFrame()
 
-    def get_minutes(self, code: str, date_yyyymmdd: str, limit: int = 5000) -> list[dict]:
-        df = self._read_dated("minutes", code, date_yyyymmdd)
+    def get_minutes(
+        self,
+        code: str,
+        date_yyyymmdd: str,
+        limit: int = 5000,
+        asset_type: str | None = None,
+    ) -> list[dict]:
+        df = self._read_dated("minutes", code, date_yyyymmdd, asset_type)
         if df.is_empty():
             return []
         return (
@@ -104,8 +125,14 @@ class EngineDataDiskClient:
             .to_dicts()
         )
 
-    def get_trans(self, code: str, date_yyyymmdd: str, limit: int = 5000) -> list[dict]:
-        df = self._read_dated("trans", code, date_yyyymmdd)
+    def get_trans(
+        self,
+        code: str,
+        date_yyyymmdd: str,
+        limit: int = 5000,
+        asset_type: str | None = None,
+    ) -> list[dict]:
+        df = self._read_dated("trans", code, date_yyyymmdd, asset_type)
         if df.is_empty():
             return []
         return (
@@ -115,8 +142,8 @@ class EngineDataDiskClient:
             .to_dicts()
         )
 
-    def get_fund_daily(self, code: str, date_iso: str) -> dict:
-        df = self._read("fund", code)
+    def get_fund_daily(self, code: str, date_iso: str, asset_type: str | None = None) -> dict:
+        df = self._read("fund", code, asset_type)
         if df.is_empty():
             return {}
         rows = df.filter(pl.col("Date").cast(pl.Utf8) == date_iso).to_dicts()

@@ -67,7 +67,7 @@ export function SealedBadge({ degraded, hasDepth, isHistorical, sealedReady, sea
 
   // 组装原因文案(仅降级时用)
   const reasons: string[] = []
-  if (!hasDepth) reasons.push('当前套餐无五档盘口能力(需 Pro+),涨停判定基于收盘价,可能含假涨停')
+  if (!hasDepth) reasons.push('当前数据源无五档盘口能力,涨停判定基于收盘价,可能含假涨停')
   if (isHistorical) reasons.push('历史日期的盘口快照不可获取,无法判定真假板')
   if (hasDepth && !isHistorical && !sealedReady) reasons.push('盘中 sealed 数据尚未就绪,收盘后自动恢复')
 
@@ -104,7 +104,7 @@ export function SealedBadge({ degraded, hasDepth, isHistorical, sealedReady, sea
                     </div>
                   ))}
                   <div className="mt-1.5 pt-1.5 border-t border-border text-muted">
-                    真假板判定依赖五档盘口实时快照(卖一/买一量)。Pro+ 套餐的当天数据在收盘后自动恢复。
+                    真假板判定依赖五档盘口实时快照(卖一/买一量)。当天数据在收盘后自动恢复。
                   </div>
                 </>
               ) : (

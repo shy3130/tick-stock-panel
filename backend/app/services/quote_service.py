@@ -130,11 +130,11 @@ class QuoteService:
     def enable(self) -> bool:
         """开启自动行情 (不立即启动线程，等下一个交易时段)。
 
-        none 档无实时行情权限,拒绝开启并返回 False;
-        free 档开启自选股实时,starter+ 开启全市场实时。返回值表示是否真正开启。
+        provider 不支持实时行情时拒绝开启并返回 False;
+        tickflow free 档开启自选股实时,starter+ 开启全市场实时。返回值表示是否真正开启。
         """
         if not self.is_realtime_allowed():
-            logger.warning("实时行情开启被拒:当前档位(none)无实时行情权限")
+            logger.warning("实时行情开启被拒:当前数据源无实时行情能力")
             return False
         self._enabled = True
         self._save_enabled(True)
@@ -154,14 +154,14 @@ class QuoteService:
     def boot_check(self) -> None:
         """启动时检查 preferences，若 enabled 则自动启动。
 
-        none 档无实时行情权限:即使 preferences 标记为 enabled,
+        provider 不支持实时行情时:即使 preferences 标记为 enabled,
         也不启动,并同步 preferences 为关闭(避免 UI 误显示已开启)。
         """
         from app.services import preferences
         if not self.is_realtime_allowed():
             if preferences.get_realtime_quotes_enabled():
                 self._save_enabled(False)
-            logger.info("实时行情未启动:当前档位(none)无实时行情权限")
+            logger.info("实时行情未启动:当前数据源无实时行情能力")
             return
         if preferences.get_realtime_quotes_enabled():
             self.start()
@@ -261,8 +261,11 @@ class QuoteService:
             provider = _get_data_provider()
             if not getattr(provider.capabilities, "realtime", False):
                 return "none"
+            provider_name = getattr(provider, "name", "") or get_active_provider_name("realtime")
         except Exception:  # noqa: BLE001
             return "none"
+        if provider_name != "tickflow":
+            return "full_market"
         tier = cls._current_tier()
         if tier == "none":
             return "none"
@@ -272,11 +275,18 @@ class QuoteService:
 
     @classmethod
     def is_realtime_allowed(cls) -> bool:
-        """当前档位是否允许使用实时行情。"""
+        """当前数据源/档位是否允许使用实时行情。"""
         return cls.realtime_mode() != "none"
 
     @classmethod
     def _tier_min_interval(cls) -> float:
+        try:
+            provider = _get_data_provider()
+            provider_name = getattr(provider, "name", "") or get_active_provider_name("realtime")
+        except Exception:  # noqa: BLE001
+            return cls.DEFAULT_INTERVAL
+        if provider_name != "tickflow":
+            return cls.DEFAULT_INTERVAL
         tier = cls._current_tier()
         return cls.TIER_MIN_INTERVAL.get(tier, cls.DEFAULT_INTERVAL)
 
@@ -788,10 +798,8 @@ class QuoteService:
             from app.services import preferences
             from app.services import webhook_adapter
 
-            url = preferences.get_feishu_webhook_url()
-            if not url:
+            if not preferences.get_configured_webhook_channels():
                 return
-            secret = preferences.get_feishu_webhook_secret()
 
             # 反查规则, 过滤出启用推送的事件
             source_labels = {
@@ -811,10 +819,9 @@ class QuoteService:
                 message = ev.get("message") or ""
                 title = f"TickFlow · {source_label}"
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
-                if webhook_adapter.send_feishu(url, title, body, secret):
-                    pushed += 1
+                pushed += webhook_adapter.send_configured_channels(title, body)
             if pushed:
-                logger.info("飞书 Webhook 推送: %d 条", pushed)
+                logger.info("Webhook 推送成功: %d 次", pushed)
         except Exception as e:  # noqa: BLE001
             logger.debug("Webhook 推送异常 (不影响告警主流程): %s", e)
 

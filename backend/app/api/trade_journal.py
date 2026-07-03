@@ -63,13 +63,16 @@ async def upload_journal(
     if not fills:
         raise HTTPException(status_code=400, detail="没有解析到买入/卖出成交")
 
+    benchmark = _normalize_benchmark(benchmark)
     start = min(f.date for f in fills)
     end = max(f.date for f in fills)
     repo = getattr(request.app.state, "repo", None)
     trading_days, index_closes = _market_context(repo, benchmark, start, end)
     trips, open_positions, pair_warnings = pair_roundtrips(fills, events, trading_days)
     warnings.extend(pair_warnings)
-    price_lookup = build_price_lookup(fills, settings.data_dir)
+    price_lookup, uncovered_symbols = build_price_lookup(fills, settings.data_dir)
+    if uncovered_symbols:
+        warnings.append(f"追涨诊断: {len(uncovered_symbols)} 只标的无本地日K或历史不足20日未覆盖")
 
     payload = {
         "imported_at": datetime.now(UTC).isoformat(),
@@ -158,3 +161,8 @@ def _benchmark_name(symbol: str) -> str:
         if item["symbol"] == symbol:
             return item["name"]
     return symbol
+
+
+def _normalize_benchmark(symbol: str) -> str:
+    allowed = {item["symbol"] for item in BENCHMARKS}
+    return symbol if symbol in allowed else "000300.SH"

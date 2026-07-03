@@ -23,7 +23,7 @@
 能力声明（§3.5 / §4.2）::
 
     instruments=True, daily=True, adj_factor=True,
-    minute=True, realtime=True, financial=True, depth=False, universes=True
+    minute=True, realtime=True, financial=True, depth=True, universes=True
 
 错误降级（§7）：任一源不可达 → 返回空 DF + warning，不抛异常。
 """
@@ -66,6 +66,7 @@ from app.data_providers.fquant.sina_tencent_client import SinaTencentClient
 from app.data_providers.fquant.symbols import (
     code_and_market_to_symbol,
     code_to_symbol,
+    is_etf_symbol,
     split_symbol,
     symbol_to_code,
     symbol_to_market,
@@ -156,7 +157,7 @@ class FQuantProvider:
 
     能力声明（§3.5 / §4.2）：
     - instruments / daily / adj_factor / minute / realtime / financial / universes → True
-    - depth → False；当前 provider 不暴露 5 档盘口能力
+    - depth → True；腾讯实时行情补充 5 档盘口
     """
 
     name = "fquant"
@@ -167,7 +168,7 @@ class FQuantProvider:
         minute=True,
         realtime=True,
         financial=True,
-        depth=False,
+        depth=True,
         universes=True,   # 阶段 3 #3.2：fstore chengfen_gu 提供指数/板块/行业
     )
 
@@ -285,7 +286,7 @@ class FQuantProvider:
             rows = self._get_daily_from_engine_wide(sym, code, start_time, end_time, asset_type)
             if not rows:
                 # L2 降级：engine-data 不可用 → fstore day_klines
-                rows = self._get_daily_from_fstore_klines(sym, code, start_time, end_time)
+                rows = self._get_daily_from_fstore_klines(sym, code, start_time, end_time, asset_type)
             if not rows:
                 logger.debug("get_daily %s: 两源均无数据", sym)
                 continue
@@ -363,13 +364,14 @@ class FQuantProvider:
     def _get_daily_from_fstore_klines(
         self, symbol: str, code: str,
         start_time: datetime | None, end_time: datetime | None,
+        asset_type: AssetType = "stock",
     ) -> list[dict]:
-        """备份 fstore ``day_klines``（fq=0 不复权, ktype=101 日线）。
+        """备份 fstore 日线（fq=0 不复权, ktype=101）。
 
         实测 600519 该表最后数据 2025-10-31（§2.1 / §7.3 场景 A），
         仅作历史回填，不依赖。
         """
-        table = "t_1_day_klines"
+        table = "t_20_day_klines" if asset_type == "etf" else "t_1_day_klines"
         if start_time and end_time:
             sql = (
                 "SELECT tdate, open, close, high, low, cjl, cje, zf "
@@ -387,7 +389,7 @@ class FQuantProvider:
             )
             params = (code,)
         rows = self._fstore.query(sql, params)
-        if not rows:
+        if not rows and asset_type != "etf":
             if start_time and end_time:
                 sql = (
                     "SELECT tdate, open, close, high, low, cjl, cje, zf "
@@ -406,7 +408,7 @@ class FQuantProvider:
                 params = (code,)
             rows = self._fstore.query(sql, params)
         if rows:
-            logger.debug("FStoreDB day_klines %s: %d 行", code, len(rows))
+            logger.debug("FStoreDB %s %s: %d 行", table, code, len(rows))
         # 映射到 normalizer 期望的字段名
         return klines_rows_to_daily(rows, symbol, source=self.name) if rows else []
 
@@ -510,7 +512,7 @@ class FQuantProvider:
             close_start = start_time - timedelta(days=10) if start_time else None
             rows = self._get_daily_from_engine_wide(symbol, code, close_start, end_time, asset_type)
             if not rows:
-                rows = self._get_daily_from_fstore_klines(symbol, code, close_start, end_time)
+                rows = self._get_daily_from_fstore_klines(symbol, code, close_start, end_time, asset_type)
             if not rows:
                 return {}
             out: dict[str, float] = {}
@@ -615,6 +617,12 @@ class FQuantProvider:
 
         return normalize_realtime(rows, source=self.name) if rows else pl.DataFrame()
 
+    def get_depth(self, symbols: list[str]) -> dict:
+        """Return Tencent five-level depth rows for sealed limit-up/down checks."""
+        if not symbols:
+            return {}
+        return self._sina_tencent.get_depth(symbols)
+
     def _resolve_realtime_symbols(
         self,
         universes: list[str] | None,
@@ -715,7 +723,7 @@ class FQuantProvider:
             open_=self._tdx_price(k.get("Open")),
             high=self._tdx_price(k.get("High")),
             low=self._tdx_price(k.get("Low")),
-            volume=self._float_or_none(item.get("TotalHand")),
+            volume=self._hands_to_shares(item.get("TotalHand")),
             amount=self._float_or_none(item.get("Amount")),
             timestamp=str(item.get("ServerTime") or ""),
         )
@@ -747,14 +755,14 @@ class FQuantProvider:
     @staticmethod
     def _asset_type_num_for_symbol(symbol: str) -> int | None:
         _, suffix = split_symbol(symbol)
-        if suffix in {"SH", "SZ", "BJ"}:
-            return 1
+        if is_etf_symbol(symbol):
+            return 20
         if suffix == "HK":
             return 3
         if suffix == "INDEX":
             return 10
-        if suffix == "ETF":
-            return 20
+        if suffix in {"SH", "SZ", "BJ"}:
+            return 1
         return None
 
     def _fstore_quote_to_row(self, item: dict, asset_type: int) -> dict | None:
@@ -831,6 +839,11 @@ class FQuantProvider:
         if number is None or number <= 0:
             return None
         return number / 1000
+
+    @staticmethod
+    def _hands_to_shares(value) -> float | None:
+        number = FQuantProvider._float_or_none(value)
+        return number * 100 if number is not None else None
 
     @staticmethod
     def _float_or_none(value) -> float | None:

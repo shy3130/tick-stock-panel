@@ -45,9 +45,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const options = useQuery({ queryKey: QK.monitorRuleOptions, queryFn: api.monitorRuleOptions })
   const strategies = useQuery({ queryKey: QK.screenerStrategies, queryFn: api.screenerStrategies })
   const { data: prefs } = usePreferences()
-  const feishuConfigured = !!(prefs?.feishu_webhook_url)
+  const channels = prefs?.webhook_channels ?? {}
+  const webhookConfigured = !!(
+    channels.feishu?.url || prefs?.feishu_webhook_url ||
+    channels.dingtalk?.url || channels.wecom?.url || channels.meow?.nickname
+  )
   const [editing] = useState(!!rule)
-  // 新建规则: 预填全局「默认推送渠道」(飞书), preset 显式指定时以 preset 为准。
+  // 新建规则: 预填全局「默认 Webhook 推送」, preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
   const [draft, setDraft] = useState<MonitorRule>(
     rule
@@ -376,16 +380,14 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </label>
       </div>
 
-      {/* Webhook 推送 — 飞书可用, QMT/ptrade 待定 */}
+      {/* Webhook 推送 */}
       <div className="rounded-btn border border-border/40 bg-base/40 p-3 space-y-2">
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-medium text-foreground">Webhook 推送</span>
           <span className="text-[9px] text-muted">触发时推送告警到外部</span>
         </div>
 
-        {/* 渠道列表 */}
         <div className="space-y-1.5">
-          {/* 飞书 (可用) */}
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -393,40 +395,25 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               onChange={e => setDraft(d => ({ ...d, webhook_enabled: e.target.checked }))}
               className="h-3 w-3 accent-accent cursor-pointer"
             />
-            <span className="text-[11px] text-foreground">飞书</span>
-            <span className="text-[9px] text-muted">群机器人</span>
+            <span className="text-[11px] text-foreground">Webhook</span>
+            <span className="text-[9px] text-muted">设置页已配置通道</span>
             {draft.webhook_enabled && (
-              <span className={`ml-auto text-[9px] ${feishuConfigured ? 'text-emerald-500' : 'text-warning'}`}>
-                {feishuConfigured ? '已配置' : '未配置'}
+              <span className={`ml-auto text-[9px] ${webhookConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {webhookConfigured ? '已配置' : '未配置'}
               </span>
             )}
           </label>
-
-          {/* QMT (待定) */}
-          <label className="flex items-center gap-2 cursor-not-allowed opacity-50">
-            <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-            <span className="text-[11px] text-secondary">QMT</span>
-            <span className="rounded bg-muted/10 px-1 py-px text-[9px] text-muted">待定</span>
-          </label>
-
-          {/* ptrade (待定) */}
-          <label className="flex items-center gap-2 cursor-not-allowed opacity-50">
-            <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-            <span className="text-[11px] text-secondary">ptrade</span>
-            <span className="rounded bg-muted/10 px-1 py-px text-[9px] text-muted">待定</span>
-          </label>
         </div>
 
-        {/* 飞书勾选但全局未配置 → 提示前往设置 */}
-        {draft.webhook_enabled && !feishuConfigured && (
+        {draft.webhook_enabled && !webhookConfigured && (
           <p className="text-[10px] leading-relaxed text-warning/80">
-            飞书 Webhook 地址尚未配置,
+            Webhook 通道尚未配置,
             <Link to="/settings?tab=monitoring" className="text-accent hover:text-accent/80">前往设置页配置 →</Link>
           </p>
         )}
-        {draft.webhook_enabled && feishuConfigured && (
+        {draft.webhook_enabled && webhookConfigured && (
           <p className="text-[10px] leading-relaxed text-muted">
-            命中本规则时,告警将推送到设置页配置的飞书群。
+            命中本规则时,告警将推送到设置页配置的 Webhook 通道。
           </p>
         )}
       </div>

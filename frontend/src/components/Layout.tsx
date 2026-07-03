@@ -20,7 +20,6 @@ import {
   useToggleRealtimeQuotes,
 } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
-import { tierRank } from '@/lib/capability-labels'
 import {
   Star,
   ScanSearch,
@@ -316,9 +315,10 @@ export function Layout() {
   const toggleQuote = useToggleRealtimeQuotes()
   const isRunning = quoteStatus?.running ?? false
   const isTrading = quoteStatus?.is_trading_hours ?? false
-  const tier = tierRank(caps?.label ?? '')
-  const isNoneTier = tier < 0
-  const isWatchlistMode = tier === 0
+  const quoteMode = quoteStatus?.mode ?? 'none'
+  const realtimeAllowed = quoteStatus?.realtime_allowed ?? quoteMode !== 'none'
+  const isNoneTier = !realtimeAllowed
+  const isWatchlistMode = quoteMode === 'watchlist'
   const realtimeModeLabel = isWatchlistMode ? '自选股' : '全市场'
 
   // 轮询触发记录总数 → 更新监控中心徽标 (每 15 秒)
@@ -358,15 +358,14 @@ export function Layout() {
   const visibleNavItems = navItems.filter(n => !hiddenIds.has(n.to) && !hiddenIds.has(n.to.replace(/^\/analysis\//, '')))
 
   const handleToggle = async (enabled: boolean) => {
-    // 开启时重新校验档位
+    // 开启时重新校验后端实时行情模式，后端同时处理 TickFlow 档位和本地数据源能力。
     if (enabled) {
-      const fresh = await qc.fetchQuery({
-        queryKey: QK.capabilities,
-        queryFn: api.capabilities,
+      const freshStatus = await qc.fetchQuery({
+        queryKey: QK.quoteStatus,
+        queryFn: api.quoteStatus,
       })
-      const freshTier = tierRank(fresh.label ?? '')
-      if (freshTier < 0) return
-      if (freshTier === 0 && (prefs?.realtime_watchlist_symbols?.length ?? 0) === 0) {
+      if (!freshStatus.realtime_allowed || freshStatus.mode === 'none') return
+      if (freshStatus.mode === 'watchlist' && (prefs?.realtime_watchlist_symbols?.length ?? 0) === 0) {
         navigate('/watchlist')
         return
       }

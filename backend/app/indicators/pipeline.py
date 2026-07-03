@@ -506,13 +506,10 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
 
     df = df.join(inst_subset, on="symbol", how="left", suffix="_inst")
 
-    # 计算换手率(%) = volume(手) * 10000 / float_shares(股)
+    # 计算换手率(%) = volume(股) / float_shares(股) * 100
     if "float_shares" in df.columns and "volume" in df.columns:
         df = df.with_columns(
-            pl.when(pl.col("float_shares") > 0)
-              .then(pl.col("volume") * 10000.0 / pl.col("float_shares"))
-              .otherwise(None)
-              .alias("turnover_rate")
+            _turnover_rate_expr().alias("turnover_rate")
         )
     elif "turnover_rate" not in df.columns:
         df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("turnover_rate"))
@@ -706,7 +703,7 @@ def compute_all(df: pl.DataFrame, instruments: pl.DataFrame | None = None) -> pl
 
 
 def filter_halt_days(df: pl.DataFrame) -> pl.DataFrame:
-    """过滤停牌日。
+    """过滤停牌日和无效价格行。
 
     停牌日的 open/high 必然为 0 (无集合竞价)。注意 close 可能被数据源
     填充为前收盘价而非 0, 因此不能用 "OHLC 全零" 判断, 否则会漏过这类
@@ -714,7 +711,18 @@ def filter_halt_days(df: pl.DataFrame) -> pl.DataFrame:
     """
     if df.is_empty() or "open" not in df.columns or "high" not in df.columns:
         return df
-    return df.filter(~((pl.col("open") == 0) & (pl.col("high") == 0)))
+    price_cols = [c for c in ("open", "high", "low", "close") if c in df.columns]
+    valid_prices = pl.all_horizontal([pl.col(c) > 0 for c in price_cols])
+    return df.filter(valid_prices)
+
+
+def _turnover_rate_expr() -> pl.Expr:
+    """换手率(%)。provider 契约: volume=股、float_shares=股。"""
+    return (
+        pl.when(pl.col("float_shares") > 0)
+        .then(pl.col("volume") / pl.col("float_shares") * 100.0)
+        .otherwise(None)
+    )
 
 
 # ================================================================
@@ -1519,10 +1527,7 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
     if "turnover_rate" not in df.columns:
         if "float_shares" in df.columns and "volume" in df.columns:
             df = df.with_columns(
-                pl.when(pl.col("float_shares") > 0)
-                  .then(pl.col("volume") * 10000.0 / pl.col("float_shares"))
-                  .otherwise(None)
-                  .alias("turnover_rate")
+                _turnover_rate_expr().alias("turnover_rate")
             )
 
     # 涨跌停 (用 raw_close / raw_high 和前一日原始收盘价)

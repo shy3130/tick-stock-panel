@@ -19,7 +19,6 @@ import {
 import { useUpdateQuoteInterval, useToggleRealtimeQuotes } from '@/lib/useSharedMutations'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { tierRank } from '@/lib/capability-labels'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
 
@@ -37,6 +36,12 @@ const SIDEBAR_INDEX_OPTIONS = [
   { symbol: '000680.SH', name: '科创综指' },
 ]
 
+const EXTRA_WEBHOOK_CHANNELS = [
+  { id: 'dingtalk', name: '钉钉', hint: '群机器人' },
+  { id: 'wecom', name: '企微', hint: '群机器人' },
+  { id: 'meow', name: 'MeoW', hint: '个人推送' },
+]
+
 // ===== 导出为 Panel 组件 (由 Settings.tsx 嵌入) =====
 
 export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = {}) {
@@ -47,9 +52,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const { data: intervalData } = useQuoteInterval()
   const updateInterval = useUpdateQuoteInterval()
   const toggleQuote = useToggleRealtimeQuotes()
-  const tier = tierRank(caps?.label ?? '')
-  const isNoneTier = tier < 0
-  const isFreeTier = tier === 0
+  const quoteMode = quoteStatus?.mode ?? 'none'
+  const realtimeAllowed = prefs?.realtime_allowed ?? quoteStatus?.realtime_allowed ?? quoteMode !== 'none'
+  const isNoneTier = !realtimeAllowed
+  const isFreeTier = quoteMode === 'watchlist'
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
@@ -69,12 +75,26 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [feishuDraft, setFeishuDraft] = useState(feishuWebhookUrl)
   const [feishuSecretDraft, setFeishuSecretDraft] = useState(feishuWebhookSecret)
   const [feishuError, setFeishuError] = useState('')
+  const [extraOpen, setExtraOpen] = useState('')
+  const [extraDrafts, setExtraDrafts] = useState<Record<string, { url: string; secret: string; nickname: string }>>({})
+  const [extraErrors, setExtraErrors] = useState<Record<string, string>>({})
   // 飞书渠道配置区展开态 (推送通知卡片内)
   const [channelOpen, setChannelOpen] = useState(false)
   useEffect(() => {
     setFeishuDraft(feishuWebhookUrl)
     setFeishuSecretDraft(feishuWebhookSecret)
   }, [feishuWebhookUrl, feishuWebhookSecret])
+  useEffect(() => {
+    const channels = prefs?.webhook_channels ?? {}
+    setExtraDrafts(Object.fromEntries(EXTRA_WEBHOOK_CHANNELS.map(ch => {
+      const cfg = channels[ch.id] ?? {}
+      return [ch.id, {
+        url: cfg.url ?? '',
+        secret: cfg.secret ?? '',
+        nickname: cfg.nickname ?? '',
+      }]
+    })))
+  }, [prefs?.webhook_channels])
   const watchlistSymbols = prefs?.realtime_watchlist_symbols ?? []
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -144,6 +164,34 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     saveFeishuWebhook.mutate({ url, secret })
   }, [feishuDraft, feishuSecretDraft, saveFeishuWebhook])
 
+  const saveWebhookChannel = useMutation({
+    mutationFn: ({ channel, config }: { channel: string; config: { url?: string; secret?: string; nickname?: string } }) =>
+      api.updateWebhookChannel(channel, config),
+    onSuccess: (_data, vars) => {
+      setExtraErrors(e => ({ ...e, [vars.channel]: '' }))
+      toast('Webhook 通道已保存', 'success')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (err: any, vars) => setExtraErrors(e => ({ ...e, [vars.channel]: String(err?.message ?? '保存失败') })),
+  })
+
+  const updateExtraDraft = useCallback((channel: string, patch: Partial<{ url: string; secret: string; nickname: string }>) => {
+    setExtraDrafts(d => ({ ...d, [channel]: { ...(d[channel] ?? { url: '', secret: '', nickname: '' }), ...patch } }))
+  }, [])
+
+  const submitExtra = useCallback((channel: string) => {
+    const draft = extraDrafts[channel] ?? { url: '', secret: '', nickname: '' }
+    if (channel === 'meow' && !draft.nickname.trim()) {
+      setExtraErrors(e => ({ ...e, [channel]: 'MeoW 需填写昵称' }))
+      return
+    }
+    if (channel !== 'meow' && draft.url.trim() && !draft.url.trim().startsWith('http')) {
+      setExtraErrors(e => ({ ...e, [channel]: 'Webhook 地址需以 http/https 开头' }))
+      return
+    }
+    saveWebhookChannel.mutate({ channel, config: draft })
+  }, [extraDrafts, saveWebhookChannel])
+
   const runFix = useMutation({
     mutationFn: () => api.runLimitLadderFix(),
     onSuccess: (data) => {
@@ -190,7 +238,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
-          实时行情需要 Free 及以上档位。None 档可使用 free-api 获取历史日K（当日数据需盘后1-2小时），但不能调用付费服务器实时接口。
+          当前数据源未提供实时行情能力。TickFlow None 档仅可使用 free-api 获取历史日K（当日数据需盘后1-2小时），不能调用付费服务器实时接口。
         </p>
         <a
           href="/settings?tab=account"
@@ -340,7 +388,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         <Card
           icon={Flame}
           title="连板梯队降级修正"
-          badge={!hasDepth ? '需 Pro+' : undefined}
+          badge={!hasDepth ? '无五档' : undefined}
           right={hasDepth ? (
             <button
               onClick={() => runFix.mutate()}
@@ -476,22 +524,81 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               )}
             </div>
 
-            {/* 占位渠道 — 不可点 */}
-            {[
-              { name: '微信', hint: '公众号/企业微信', status: '开发中' },
-              { name: 'QMT', hint: '量化交易终端', status: '待定' },
-              { name: 'ptrade', hint: '量化交易终端', status: '待定' },
-            ].map(ch => (
+            {EXTRA_WEBHOOK_CHANNELS.map(ch => {
+              const draft = extraDrafts[ch.id] ?? { url: '', secret: '', nickname: '' }
+              const configured = ch.id === 'meow' ? !!draft.nickname : !!draft.url
+              const opened = extraOpen === ch.id
+              const extraError = extraErrors[ch.id] ?? ''
+              return (
               <div
                 key={ch.name}
-                className="flex items-center gap-2 rounded-btn border border-border/40 bg-base/20 px-2.5 py-2 opacity-60"
+                className="rounded-btn border border-border/60 bg-base/40 overflow-hidden"
               >
-                <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-                <span className="text-[11px] text-secondary">{ch.name}</span>
-                <span className="text-[9px] text-muted">{ch.hint}</span>
-                <span className="ml-auto rounded bg-muted/10 px-1 py-px text-[9px] text-muted">{ch.status}</span>
+                <div
+                  onClick={() => setExtraOpen(opened ? '' : ch.id)}
+                  className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
+                >
+                  <input type="checkbox" checked={webhookDefault} readOnly className="h-3 w-3 accent-accent pointer-events-none" />
+                  <span className="text-[11px] font-medium text-foreground">{ch.name}</span>
+                  <span className="text-[9px] text-muted">{ch.hint}</span>
+                  <span className={`ml-auto text-[9px] ${configured ? 'text-emerald-500' : 'text-warning'}`}>
+                    {configured ? '已配置' : '未配置'}
+                  </span>
+                  <ChevronDown className={`h-3 w-3 text-muted transition-transform ${opened ? 'rotate-180' : ''}`} />
+                </div>
+                {opened && (
+                  <div className="border-t border-border/60 bg-base/30 p-3">
+                    {ch.id === 'meow' ? (
+                      <label className="block space-y-1.5">
+                        <span className="text-[11px] text-muted">昵称</span>
+                        <input
+                          value={draft.nickname}
+                          onChange={e => updateExtraDraft(ch.id, { nickname: e.target.value })}
+                          placeholder="MeoW 昵称"
+                          className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground focus:outline-none focus:border-accent/50"
+                        />
+                      </label>
+                    ) : (
+                      <>
+                        <label className="block space-y-1.5">
+                          <span className="text-[11px] text-muted">Webhook 地址</span>
+                          <input
+                            value={draft.url}
+                            onChange={e => updateExtraDraft(ch.id, { url: e.target.value })}
+                            placeholder="https://..."
+                            className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                          />
+                        </label>
+                        {ch.id === 'dingtalk' && (
+                          <label className="block mt-2 space-y-1.5">
+                            <span className="text-[11px] text-muted">签名密钥 (可选)</span>
+                            <input
+                              type="password"
+                              value={draft.secret}
+                              onChange={e => updateExtraDraft(ch.id, { secret: e.target.value })}
+                              placeholder="未启用签名则留空"
+                              className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                            />
+                          </label>
+                        )}
+                      </>
+                    )}
+                    {extraError && opened && (
+                      <div className="mt-2 text-[11px] text-danger">{extraError}</div>
+                    )}
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        onClick={() => submitExtra(ch.id)}
+                        disabled={saveWebhookChannel.isPending}
+                        className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+                      >
+                        {saveWebhookChannel.isPending ? '保存中…' : '保存'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            ))}
+            )})}
           </div>
         </Card>
       </div>

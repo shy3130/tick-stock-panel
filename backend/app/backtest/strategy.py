@@ -39,7 +39,9 @@ class StrategyBacktestConfig:
     max_positions: int = 10
     max_exposure_pct: float = 1.0
     initial_capital: float = 1_000_000.0
-    position_sizing: Literal["equal", "score_weight"] = "equal"
+    position_sizing: Literal[
+        "equal", "score_weight", "equal_vol", "risk_parity", "mean_variance", "max_diversification",
+    ] = "equal"
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
 

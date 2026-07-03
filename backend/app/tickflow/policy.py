@@ -282,7 +282,9 @@ def _provider_capset() -> CapabilitySet | None:
         out[Cap.FINANCIAL] = CapabilityLimits(batch=100)
     if caps.adj_factor:
         out[Cap.ADJ_FACTOR] = CapabilityLimits(batch=500)
-    # No local depth source is available; do not expose DEPTH5/DEPTH5_BATCH.
+    if caps.depth:
+        out[Cap.DEPTH5] = CapabilityLimits(rpm=30, batch=1)
+        out[Cap.DEPTH5_BATCH] = CapabilityLimits(rpm=30, batch=50)
     return CapabilitySet(out)
 
 

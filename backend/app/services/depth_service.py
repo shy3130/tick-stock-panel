@@ -8,9 +8,8 @@
 
 数据源(provider 感知):
   - 通过 _get_data_provider() 做能力检查
-  - FQuantProvider 当前不暴露盘口(provider.capabilities.depth=False),
-    优雅降级: 所有函数直接返回空/0, 不调 SDK, 不报错
-  - TickFlowProvider 通过 SDK 调用(tf.depth.batch)提供盘口, 原逻辑保留
+  - provider.capabilities.depth=False 时优雅降级
+  - provider.get_depth(symbols) 提供盘口；tickflow/provider 本地源共用同一入口
 
 数据流:
   盘中轮询线程(交易时段, 独立 sleep, 不绑行情轮询):
@@ -175,7 +174,7 @@ class DepthService:
         返回 {"ok": bool, "count": int, "msg": str}
         """
         if not self._has_capability():
-            return {"ok": False, "count": 0, "msg": "无五档盘口能力(需 Pro+)"}
+            return {"ok": False, "count": 0, "msg": "当前数据源无五档盘口能力"}
         try:
             self._fetch_and_seal(persist=True)  # 落盘, 刷新页面不丢
             with self._lock:
@@ -270,10 +269,8 @@ class DepthService:
             self._persist(enriched_date)
 
     def _call_depth_batch(self, symbols: list[str]) -> dict:
-        """调 tf.depth.batch, 按 capset 的 batch 切片 + 节流。返回 {symbol: MarketDepth}。"""
-        from app.tickflow.client import get_client
-        tf = get_client()
-
+        """调 provider.get_depth, 按 capset 的 batch 切片 + 节流。返回 {symbol: MarketDepth}。"""
+        provider = _get_data_provider()
         capset = self._get_capset()
         lim = capset.limits(__import__("app.tickflow.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
         batch_size = (lim.batch if lim and lim.batch else 100)
@@ -287,8 +284,7 @@ class DepthService:
             if i > 0:
                 time.sleep(inter_batch)
             try:
-                # SDK 的 batch 内部已按 batch_size 切, 这里再切一层防单请求过大
-                data = tf.depth.batch(chunk)
+                data = provider.get_depth(chunk)
                 if isinstance(data, dict):
                     result.update(data)
             except Exception as e:  # noqa: BLE001
@@ -489,15 +485,14 @@ class DepthService:
         - user_interval: 用户设置(经套餐 clamp 后)的间隔
         """
         from app.services import preferences
-        from app.tickflow.policy import tier_label
-
         capset = self._get_capset()
         lim = capset.limits(__import__("app.tickflow.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
         batch_size = (lim.batch if lim and lim.batch else 100)
         rpm = (lim.rpm if lim and lim.rpm else 30)
 
         # ① 套餐范围 clamp
-        tier = tier_label().split()[0].split("+")[0].strip().lower()
+        provider = _get_data_provider()
+        tier = "pro" if provider.name != "tickflow" else self._tickflow_tier()
         lo, hi = TIER_INTERVAL_RANGE.get(tier, DEFAULT_RANGE)
         raw_user = preferences.get_depth_polling_interval()
         user_interval = max(lo, min(hi, raw_user))
@@ -572,21 +567,24 @@ class DepthService:
     # ================================================================
 
     def _has_capability(self) -> bool:
-        """能力检查: provider depth 能力 + TickFlow SDK 套餐双重门禁。
-
-        FQuantProvider 当前不暴露盘口能力，通过 provider.capabilities.depth
-        优雅降级, 不调 SDK。
-        """
+        """能力检查: provider depth 能力；tickflow 仍追加套餐门禁。"""
         # provider 能力检查: depth 字段缺失时视为 False(FQuantProvider 即如此)
         provider = _get_data_provider()
         if not getattr(provider.capabilities, "depth", False):
             logger.info("depth_service: 当前 provider %s 不支持盘口, 降级返回空",
                         provider.name)
             return False
+        if provider.name != "tickflow":
+            return True
         # TickFlow SDK 套餐检查(Pro+ 才有 DEPTH5_BATCH)
         capset = self._get_capset()
         from app.tickflow.capabilities import Cap
         return capset.has(Cap.DEPTH5_BATCH)
+
+    @staticmethod
+    def _tickflow_tier() -> str:
+        from app.tickflow.policy import tier_label
+        return tier_label().split()[0].split("+")[0].strip().lower()
 
     def _get_capset(self):
         """获取当前 capset(优先 app.state, 回退 detect)。"""

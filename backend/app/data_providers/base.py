@@ -70,6 +70,10 @@ class MarketDataProvider(Protocol):
     ) -> pl.DataFrame:
         """Return normalized realtime quotes. Implementations may return empty."""
 
+    def get_depth(self, symbols: list[str]) -> dict:
+        """Return depth rows as {symbol: {bid/ask_prices, bid/ask_volumes, timestamp}}."""
+        return {}
+
     def get_by_universes(
         self,
         universes: list[str],

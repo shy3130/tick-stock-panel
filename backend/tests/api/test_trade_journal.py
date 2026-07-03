@@ -10,7 +10,11 @@ from app.api import trade_journal
 
 
 class FakeRepo:
+    def __init__(self):
+        self.symbols = []
+
     def get_index_daily(self, symbol, start, end, columns=None):
+        self.symbols.append(symbol)
         return pl.DataFrame(
             {
                 "date": ["2024-02-05", "2024-02-06"],
@@ -19,8 +23,8 @@ class FakeRepo:
         )
 
 
-def request():
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=FakeRepo())))
+def request(repo=None):
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo or FakeRepo())))
 
 
 def upload_file(text: str) -> UploadFile:
@@ -53,5 +57,21 @@ async def test_upload_commit_writes_normalized_ledger(tmp_path, monkeypatch):
     )
     assert resp["summary"]["total_trips"] == 1
     assert abs(resp["trips"][0]["total_pnl"] - 1113.25) < 1e-9
+    assert resp["warnings"] == ["追涨诊断: 1 只标的无本地日K或历史不足20日未覆盖"]
     assert trade_journal.get_ledger()["summary"]["total_trips"] == 1
     assert trade_journal.delete_ledger() == {"deleted": True}
+
+
+@pytest.mark.asyncio
+async def test_upload_commit_falls_back_unknown_benchmark(tmp_path, monkeypatch):
+    repo = FakeRepo()
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    resp = await trade_journal.upload_journal(
+        request(repo),
+        file=upload_file(CSV),
+        commit=True,
+        benchmark="BAD.INDEX",
+        mapping=json.dumps(trade_journal.THS_PRESET["mapping"], ensure_ascii=False),
+    )
+    assert resp["benchmark"]["code"] == "000300.SH"
+    assert repo.symbols == ["000300.SH"]

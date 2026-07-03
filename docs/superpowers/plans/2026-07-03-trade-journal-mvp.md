@@ -11,6 +11,12 @@
 - 已授权后执行：任务 0 真实宽基回填完成，`回填完成: +9950 行`，常驻指数为 `000300.SH,000688.SH,000905.SH,399006.SZ`，`000300.SH` 2024 年校验 `rows=242`。
 - 未执行：各任务拆分 commit 步骤；本次改为一个收口 commit。
 
+**现状证据：**
+- 真实样本 `~/Downloads/银河.xlsx` 已确认 3 个 sheet：持仓数据、已清仓、交易记录；事实源采用交易记录逐笔成交，已清仓只作 oracle 对拍。
+- FIFO/position-cycle 口径已用 oracle 验证：`trips=446 oracle=446 missing=0 extra=0 pnl_diff=0`，说明计划里的配对和同花顺已清仓 sheet 可逐笔对上。
+- 基准数据已通过本地 `kline_index_daily` 回填验证，四个宽基指数可供 benchmark lookup 使用。
+- Trade Journal 与 Shadow Account 已拆分：当前只持久化报告/台账 payload，不把影子回放规则抽取塞进 MVP。
+
 **目标：** 用户上传券商成交流水（同花顺投资账本 xlsx / 通用 CSV）→ FIFO 配对成 roundtrip 台账 → 纯统计行为诊断 + 基准超额报告。
 
 **架构：** 独立新模块 `backend/app/services/trade_journal/`（parser/presets/fifo/diagnose/benchmark/store 六个纯函数文件 + models），IO 只发生在 API 层；前端新增 `TradeJournal.tsx` 页面。**不碰** `backtest/engine.py`（那是延后的 Shadow Account 的事，见 CONTEXT.md「交易复盘领域」与迁移文档 R1-R6）。

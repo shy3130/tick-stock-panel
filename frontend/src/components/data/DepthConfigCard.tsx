@@ -49,8 +49,8 @@ export function DepthConfigContent({ disabled }: { disabled?: boolean }) {
   if (!hasDepth) {
     return (
       <p className="text-xs text-muted leading-relaxed">
-        真假涨停判定依赖五档盘口实时快照,需 <span className="text-accent">Pro 及以上套餐</span>。
-        升级后连板梯队将自动区分真封板(显示封单量)与假涨停(归入炸板)。
+        真假涨停判定依赖五档盘口实时快照。当前数据源无五档盘口能力时会降级为收盘价判定。
+        开启能力后连板梯队将自动区分真封板(显示封单量)与假涨停(归入炸板)。
       </p>
     )
   }

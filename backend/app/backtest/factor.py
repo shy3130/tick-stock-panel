@@ -36,6 +36,7 @@ FACTOR_COLUMNS: list[dict] = [
     {"id": "kdj_k",        "label": "KDJ-K",       "group": "趋势",     "desc": "KDJ指标K值"},
     {"id": "change_pct",   "label": "日涨跌幅",    "group": "基础",     "desc": "当日涨跌幅"},
     {"id": "amplitude",    "label": "日振幅",      "group": "基础",     "desc": "当日振幅 (最高-最低)/昨收"},
+    {"id": "alpha101_001", "label": "Alpha101 #1", "group": "Alpha101", "desc": "收益条件动量"},
 ]
 
 FACTOR_WARMUP_DAYS = 120
@@ -204,6 +205,9 @@ class FactorBacktestService:
         from app.indicators.pipeline import compute_indicators
 
         computed = compute_indicators(panel)
+        if factor_col not in computed.columns:
+            from app.backtest.factor_zoo import compute_factor
+            computed = compute_factor(panel, factor_col)
         if factor_col not in computed.columns:
             return panel
         return computed.select(["symbol", "date", "close", factor_col])

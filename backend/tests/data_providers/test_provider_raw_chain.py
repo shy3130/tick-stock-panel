@@ -50,6 +50,26 @@ class FakeFStore:
         }]
 
 
+class RecordingFStore:
+    def __init__(self):
+        self.sql = []
+
+    def query(self, sql, params=None):  # noqa: ARG002
+        self.sql.append(sql)
+        if "t_20_day_klines" not in sql:
+            return []
+        return [{
+            "tdate": "2026-07-02",
+            "open": 1.0,
+            "high": 1.02,
+            "low": 0.99,
+            "close": 1.01,
+            "cjl": 1000,
+            "cje": 1010,
+            "zf": 1.0,
+        }]
+
+
 class FakeIndexEngine:
     def get_wide(self, code, limit=250):  # noqa: ARG002
         return [{
@@ -130,3 +150,23 @@ def test_index_daily_does_not_use_stock_raw_oracle_for_same_code():
     rows = provider._get_daily_from_engine_wide("000001.SH", "000001", None, None, "index")
 
     assert rows[0]["close"] == 4112.45
+
+
+def test_etf_fstore_daily_uses_asset_type_20_table():
+    fstore = RecordingFStore()
+    provider = object.__new__(FQuantProvider)
+    provider._fstore = fstore
+    provider.name = "fquant"
+
+    rows = provider._get_daily_from_fstore_klines(
+        "513050.SH",
+        "513050",
+        datetime(2026, 7, 1),
+        datetime(2026, 7, 3),
+        "etf",
+    )
+
+    assert rows[0]["symbol"] == "513050.SH"
+    assert rows[0]["close"] == 1.01
+    assert "t_20_day_klines" in fstore.sql[0]
+    assert all("day_klines " not in sql for sql in fstore.sql[1:])
