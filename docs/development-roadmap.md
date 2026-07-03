@@ -59,7 +59,7 @@
 |---|---|---|---|---|
 | **C3** | A 股参考数据剩余源接 ext_presets：解禁→股东户数→两融→大宗→研报/EPS→新闻（**北向已剔除**，2024-08 停更，见 R7） | M（逐源 S） | 东财接口字段/限流会变；须 `trust_env=False` + host allowlist + 退避（抄 Vibe `HostThrottle`）；逐源黄金 fixture | P1（✅，同一 ext_presets 抽象） |
 | **C2** | 研究假设 registry + run_card：假设生命周期(exploring/testing/validated/rejected/monitoring) + 回测 artifact/config/strategy hash + 证据 ledger | M | 与现有 strategy_cache 区分（那是缓存非研究资产）；本地 JSON store MVP 即可 | 无 |
-| **C5** | 回测稳健性验证：walk-forward（默认）+ Bootstrap Sharpe CI + Monte-Carlo permutation（手动开）+ per-symbol/exit-reason + run_card | M | panel 回测已有 IC/IR/多空/Calmar（非从零），是"在较完整统计层加稳健性检验"；纯后处理低风险 | C2（run_card 复用） |
+| **C5** | 回测稳健性验证：walk-forward（默认）+ Bootstrap Sharpe CI + Monte-Carlo permutation（手动开）+ per-symbol/exit-reason + run_card | ✅ 已提交(866b802) | `/api/backtest/strategy/robustness` + `app/backtest/robustness.py` 已落地；相关测试 6 passed | C2（run_card 复用） |
 | **C4** | Alpha Zoo registry/manifest/compare/strict-bench + Alpha101 扩到 10 个 | L | pandas→Polars 翻译易错，**必须黄金对拍**（P2 已建方法论）；AST 只是元数据安全提取、非纯函数门禁，扩因子仍需自写副作用校验 | P2（✅） |
 | **C13** | 技术形态识别（port Vibe `pattern_tool.py`，纯 pandas/numpy 峰谷/形态）→ 回测/个股分析页 | M | pandas→Polars/numpy 重写；形态定义主观，需固定口径 | 无（低耦合） |
 | **C6** | Universal document/web reader：PDF/DOCX/XLSX/图片OCR + 网页→Markdown，喂 AI 分析 | M | **依赖较重**（`rapidocr_onnxruntime` ONNX，非 pytesseract）；SSRF（网页只允许公网 http/https）；原文不长期存储 | 无 |
@@ -129,7 +129,7 @@ C10/C11(交易桥接前置) ── 远期，独立立项
 - **A1**（分钟K阻断，S，独立先行）
 - **C3**（剩余 A 股数据源，逐源 S，按 解禁→股东户数→两融→大宗→研报EPS→新闻）
 - **C2**（假设 registry + run_card，M）
-- **C5**（回测稳健性验证，M，复用 C2）
+- **C5**（回测稳健性验证，✅ 已提交）
 - **P4**（TDX 磁盘数据质量核对，S，对本地直读做兜底加固）
 
 ### Phase 2 — 去 TickFlow 解耦（已完成）

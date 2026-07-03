@@ -1,6 +1,6 @@
 # C5：回测稳健性验证（walk-forward / Bootstrap / MC permutation）实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 在既有策略回测（已有 IC/IR/Calmar/per_symbol）之上加稳健性检验层：① walk-forward 分窗一致性（默认开）；② Bootstrap Sharpe 置信区间（默认开）；③ Monte-Carlo permutation 显著性 p 值（手动开，算力大）；④ 按退出原因（exit_reason）分组统计。结果并入 run_card（依赖 C2）。
 
@@ -15,6 +15,7 @@
 - `strategy.py` 的交易结果已有 `exit_reason` 字段；退出原因分组可纯后处理实现，不需要改撮合/回测引擎。
 - C2 run_card 是持久化承载面；稳健性结果应写入 run_card，避免散落成一次性 API 响应。
 - Monte-Carlo permutation 成本较高，默认必须关闭；否则会把普通回测路径拖慢。
+- 2026-07-03 已实现并提交：`866b802 feat(backtest): add robustness checks`。当前验证：`cd backend && uv run --extra dev pytest tests/backtest/test_robustness.py tests/backtest/test_robustness_windows.py -q` → `6 passed`。
 
 ---
 
@@ -34,7 +35,7 @@
 - 创建：`backend/app/backtest/robustness.py`
 - 测试：`backend/tests/backtest/test_robustness.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/backtest/test_robustness.py
@@ -102,12 +103,12 @@ def test_walk_forward_summary_dispersion():
     assert s["worst"] == -0.3
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/backtest/test_robustness.py -v`
 预期：FAIL（模块不存在）
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```python
 # backend/app/backtest/robustness.py
@@ -195,7 +196,7 @@ def returns_from_equity_curve(curve: list[dict]) -> np.ndarray:
     return vals[1:] / vals[:-1] - 1.0
 ```
 
-- [ ] **步骤 4：运行测试验证通过 + Commit**
+- [x] **步骤 4：运行测试验证通过 + Commit**
 
 ```bash
 cd backend && uv run --extra dev pytest tests/backtest/test_robustness.py -v
@@ -210,7 +211,7 @@ git add -A && git commit -m "feat(backtest): robustness stats core — bootstrap
 - 修改：`backend/app/api/backtest.py`（`strategy_run` 之后追加端点）
 - 测试：`backend/tests/backtest/test_robustness_windows.py`
 
-- [ ] **步骤 1：编写失败的测试（分窗切割逻辑）**
+- [x] **步骤 1：编写失败的测试（分窗切割逻辑）**
 
 ```python
 # backend/tests/backtest/test_robustness_windows.py
@@ -234,7 +235,7 @@ def test_windows_min_fold_length_guard():
         _walk_forward_windows(date(2024, 1, 1), date(2024, 2, 1), n_folds=4)  # 每窗<30天
 ```
 
-- [ ] **步骤 2：实现窗口切割 + 端点**
+- [x] **步骤 2：实现窗口切割 + 端点**
 
 `backend/app/api/backtest.py` 追加：
 
@@ -314,13 +315,13 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
 
 （`timedelta` 已在文件 date import 附近补充：`from datetime import date, timedelta`——先查现有 import 行避免重复。）
 
-- [ ] **步骤 3：运行两条测试 + 全量回归**
+- [x] **步骤 3：运行两条测试 + 全量回归**
 
 ```bash
 cd backend && uv run --extra dev pytest tests/backtest/test_robustness_windows.py tests/backtest/test_robustness.py -v && uv run --extra dev pytest -q
 ```
 
-- [ ] **步骤 4：手动全链路（真实策略）**
+- [x] **步骤 4：手动全链路（真实策略）**
 
 ```bash
 curl -s -X POST localhost:8000/api/backtest/strategy/robustness \
@@ -329,15 +330,15 @@ curl -s -X POST localhost:8000/api/backtest/strategy/robustness \
 ```
 预期：full_stats + 4 折 walk_forward + bootstrap CI + exit_breakdown
 
-- [ ] **步骤 5：Commit** `git commit -am "feat(backtest): /strategy/robustness endpoint with walk-forward (C5)"`
+- [x] **步骤 5：Commit** `git commit -am "feat(backtest): /strategy/robustness endpoint with walk-forward (C5)"`
 
 ---
 
 ### 任务 3：结果并入 run_card（依赖 C2）
 
-- [ ] **步骤 1：** `strategy_robustness` 末尾（return 前）调用 C2 的 `_save_strategy_run_card(run_id=full.run_id, req_dict=req.model_dump(mode="json"), strategy_def=None, stats={**full.stats, "robustness": {k: out[k] for k in ("walk_forward", "bootstrap", "mc_permutation") if k in out}})`。
-- [ ] **步骤 2：** 手动跑一次，确认 `data/research/run_cards/{run_id}.json` 里有 `stats.robustness.walk_forward.summary`。
-- [ ] **步骤 3：Commit** `git commit -am "feat(research): robustness results merged into run_card"`
+- [x] **步骤 1：** `strategy_robustness` 末尾（return 前）调用 C2 的 `_save_strategy_run_card(run_id=full.run_id, req_dict=req.model_dump(mode="json"), strategy_def=None, stats={**full.stats, "robustness": {k: out[k] for k in ("walk_forward", "bootstrap", "mc_permutation") if k in out}})`。
+- [x] **步骤 2：** 手动跑一次，确认 `data/research/run_cards/{run_id}.json` 里有 `stats.robustness.walk_forward.summary`。
+- [x] **步骤 3：Commit** `git commit -am "feat(research): robustness results merged into run_card"`
 
 ---
 
