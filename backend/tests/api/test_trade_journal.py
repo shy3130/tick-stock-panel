@@ -137,3 +137,14 @@ async def test_upload_commit_falls_back_unknown_benchmark(tmp_path, monkeypatch)
     )
     assert resp["benchmark"]["code"] == "000300.SH"
     assert repo.symbols == ["000300.SH"]
+
+
+def test_feedback_records_value_signal(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    trade_journal.store.write_ledger(tmp_path, {"imported_at": "2026-07-03T00:00:00Z"})
+
+    resp = trade_journal.save_feedback({"rating": "helpful"})
+
+    assert resp == {"ok": True}
+    assert trade_journal.store.read_feedback(tmp_path)[0]["rating"] == "helpful"
+    assert trade_journal.store.read_feedback(tmp_path)[0]["ledger_imported_at"] == "2026-07-03T00:00:00Z"

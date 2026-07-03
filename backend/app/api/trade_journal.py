@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 
 from app.config import settings
 from app.services.trade_journal import store
@@ -131,6 +131,23 @@ def get_ledger():
 @router.delete("/ledger")
 def delete_ledger():
     return {"deleted": store.delete_ledger(settings.data_dir)}
+
+
+@router.post("/feedback")
+def save_feedback(payload: Annotated[dict, Body()]):
+    rating = str(payload.get("rating") or "").strip()
+    if rating not in {"helpful", "not_helpful"}:
+        raise HTTPException(status_code=400, detail="rating 必须是 helpful 或 not_helpful")
+    ledger = store.read_ledger(settings.data_dir) or {}
+    store.append_feedback(
+        settings.data_dir,
+        {
+            "rating": rating,
+            "ledger_imported_at": ledger.get("imported_at"),
+            "created_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    return {"ok": True}
 
 
 def _parse_mapping(raw: str | None) -> dict[str, str] | None:

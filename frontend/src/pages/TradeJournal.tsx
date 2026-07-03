@@ -56,6 +56,7 @@ export function TradeJournal() {
     mutationFn: api.journalDelete,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['journal-ledger'] }),
   })
+  const feedback = useMutation({ mutationFn: api.journalFeedback })
 
   useEffect(() => {
     const first = presets.data?.benchmarks?.[0]?.symbol
@@ -159,14 +160,22 @@ export function TradeJournal() {
             </section>
           )}
 
-          {current && <Report ledger={current} />}
+          {current && <Report ledger={current} onFeedback={(rating) => feedback.mutate(rating)} feedbackPending={feedback.isPending} />}
         </div>
       </div>
     </div>
   )
 }
 
-function Report({ ledger }: { ledger: JournalLedger }) {
+function Report({
+  ledger,
+  onFeedback,
+  feedbackPending,
+}: {
+  ledger: JournalLedger
+  onFeedback: (rating: 'helpful' | 'not_helpful') => void
+  feedbackPending: boolean
+}) {
   const s = ledger.summary
   const d = ledger.diagnosis
   return (
@@ -188,6 +197,13 @@ function Report({ ledger }: { ledger: JournalLedger }) {
           {ledger.narrative ? <div className="mt-2 text-foreground">{ledger.narrative}</div> : null}
         </section>
       )}
+      <section className="rounded-card border border-border bg-surface p-4">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-secondary">
+          <span>这份诊断有帮助吗</span>
+          <button disabled={feedbackPending} onClick={() => onFeedback('helpful')} className="rounded border border-border px-2 py-1 text-xs hover:bg-elevated disabled:opacity-50">有帮助</button>
+          <button disabled={feedbackPending} onClick={() => onFeedback('not_helpful')} className="rounded border border-border px-2 py-1 text-xs hover:bg-elevated disabled:opacity-50">没帮助</button>
+        </div>
+      </section>
       <section className="rounded-card border border-border bg-surface p-5">
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
           <NotebookPen className="h-4 w-4" />行为诊断

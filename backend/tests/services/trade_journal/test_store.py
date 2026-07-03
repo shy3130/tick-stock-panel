@@ -12,3 +12,9 @@ def test_store_roundtrip(tmp_path):
     assert store.read_ledger(tmp_path) is None
     assert store.read_source(tmp_path) is None
     assert store.delete_ledger(tmp_path) is False
+
+
+def test_append_feedback(tmp_path):
+    entry = {"rating": "helpful", "ledger_imported_at": "2026-07-03T00:00:00Z"}
+    store.append_feedback(tmp_path, entry)
+    assert store.read_feedback(tmp_path) == [entry]

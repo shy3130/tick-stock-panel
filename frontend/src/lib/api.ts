@@ -790,6 +790,11 @@ export const api = {
   journalPresets: () => request<JournalPresets>('/api/journal/presets'),
   journalLedger: () => request<JournalLedger>('/api/journal/ledger'),
   journalDelete: () => request<{ deleted: boolean }>('/api/journal/ledger', { method: 'DELETE' }),
+  journalFeedback: (rating: 'helpful' | 'not_helpful') =>
+    request<{ ok: boolean }>('/api/journal/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ rating }),
+    }),
   journalUpload: (
     file: File,
     commit: boolean,
