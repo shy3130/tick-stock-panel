@@ -1,18 +1,30 @@
 """Eastmoney ext_data presets beyond the built-in THS seed files."""
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
+
+import polars as pl
 
 from app.data_providers.fquant.symbols import code_to_symbol
 from app.services.ext_data import ExtConfig, ExtField, PullConfig, rows_to_parquet
 
 _DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+_REPORT_LIST = "https://reportapi.eastmoney.com/report/list"
+_NEWS_SEARCH = "https://search-api-web.eastmoney.com/search/jsonp"
 
 
 def presets() -> list[ExtConfig]:
-    return [_lockup_preset(), _holder_preset(), _margin_preset(), _block_preset()]
+    return [
+        _lockup_preset(),
+        _holder_preset(),
+        _margin_preset(),
+        _block_preset(),
+        _research_preset(),
+        _news_preset(),
+    ]
 
 
 def fetcher(config_id: str):
@@ -21,6 +33,8 @@ def fetcher(config_id: str):
         "ext_holder_em": _seed_holder,
         "ext_margin_em": _seed_margin,
         "ext_block_em": _seed_block,
+        "ext_research_em": _seed_research,
+        "ext_news_em": _seed_news,
     }.get(config_id)
 
 
@@ -117,6 +131,40 @@ def _block_preset() -> ExtConfig:
     )
 
 
+def _research_preset() -> ExtConfig:
+    return _base_preset(
+        "ext_research_em",
+        "研报/EPS",
+        _common_fields([
+            ExtField("publish_date", "string", "发布日期"),
+            ExtField("title", "string", "标题"),
+            ExtField("brokerage", "string", "机构"),
+            ExtField("analyst", "string", "分析师"),
+            ExtField("rating", "string", "评级"),
+            ExtField("eps_this_year", "float", "本年EPS预测"),
+            ExtField("eps_next_year", "float", "次年EPS预测"),
+            ExtField("pe_this_year", "float", "本年PE预测"),
+            ExtField("pe_next_year", "float", "次年PE预测"),
+        ]),
+        "东方财富个股研报和 EPS/PE 预测，自选股范围逐股拉取。",
+    )
+
+
+def _news_preset() -> ExtConfig:
+    return _base_preset(
+        "ext_news_em",
+        "个股新闻",
+        _common_fields([
+            ExtField("published", "string", "发布时间"),
+            ExtField("title", "string", "标题"),
+            ExtField("url", "string", "链接"),
+            ExtField("source", "string", "来源"),
+            ExtField("snippet", "string", "摘要"),
+        ]),
+        "东方财富个股新闻，自选股范围逐股拉取。",
+    )
+
+
 async def _seed_lockup(config: ExtConfig, data_dir: Path) -> int:
     today = date.today()
     rows = _fetch_datacenter(
@@ -176,6 +224,24 @@ async def _seed_block(config: ExtConfig, data_dir: Path) -> int:
     return _write_by_date(rows, config, data_dir, "trade_date")
 
 
+async def _seed_research(config: ExtConfig, data_dir: Path) -> int:
+    rows: list[dict] = []
+    for symbol in _watchlist_symbols(data_dir):
+        rows.extend(_fetch_research_for_symbol(symbol))
+    if not rows:
+        raise ValueError("东方财富研报返回 0 行")
+    return _write_by_date(rows, config, data_dir, "publish_date")
+
+
+async def _seed_news(config: ExtConfig, data_dir: Path) -> int:
+    rows: list[dict] = []
+    for symbol in _watchlist_symbols(data_dir):
+        rows.extend(_fetch_news_for_symbol(symbol))
+    if not rows:
+        raise ValueError("东方财富新闻返回 0 行")
+    return _write_by_date(rows, config, data_dir, "published")
+
+
 def _fetch_datacenter(params: dict, flatten: Callable[[list[dict]], list[dict]], max_pages: int = 20) -> list[dict]:
     from app.services import eastmoney_client
 
@@ -188,6 +254,56 @@ def _fetch_datacenter(params: dict, flatten: Callable[[list[dict]], list[dict]],
     if not rows:
         raise ValueError(f"东方财富 {params.get('reportName')} 返回 0 行")
     return rows
+
+
+def _watchlist_symbols(data_dir: Path, limit: int = 50) -> list[str]:
+    path = data_dir / "user_data" / "watchlist.parquet"
+    if not path.exists():
+        raise ValueError("自选股为空，无法拉取逐股 Eastmoney 预设")
+    df = pl.read_parquet(path)
+    if df.is_empty() or "symbol" not in df.columns:
+        raise ValueError("自选股为空，无法拉取逐股 Eastmoney 预设")
+    return [str(s) for s in df["symbol"].to_list() if str(s).endswith((".SH", ".SZ", ".BJ"))][:limit]
+
+
+def _fetch_research_for_symbol(symbol: str, limit: int = 10) -> list[dict]:
+    from app.services import eastmoney_client
+
+    code = symbol.split(".", 1)[0]
+    payload = eastmoney_client.get_json(
+        _REPORT_LIST,
+        params={"code": code, "qType": "0", "pageSize": str(limit), "pageNo": "1"},
+    )
+    raw = payload.get("data") if isinstance(payload, dict) else []
+    return _flatten_research(raw if isinstance(raw, list) else [], symbol)
+
+
+def _fetch_news_for_symbol(symbol: str, limit: int = 10) -> list[dict]:
+    from app.services import eastmoney_client
+
+    code = symbol.split(".", 1)[0]
+    param = json.dumps(
+        {
+            "uid": "",
+            "keyword": code,
+            "type": ["cmsArticleWebOld"],
+            "client": "web",
+            "clientType": "web",
+            "param": {
+                "cmsArticleWebOld": {
+                    "searchScope": "default",
+                    "sort": "default",
+                    "pageIndex": 1,
+                    "pageSize": limit,
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+    payload = eastmoney_client.get_json(_NEWS_SEARCH, params={"cb": "", "param": param, "_": "0"})
+    result = payload.get("result") if isinstance(payload, dict) else None
+    raw = result.get("cmsArticleWebOld") if isinstance(result, dict) else []
+    return _flatten_news(raw if isinstance(raw, list) else [], symbol)
 
 
 def _write_by_date(rows: list[dict], config: ExtConfig, data_dir: Path, date_key: str) -> int:
@@ -258,6 +374,54 @@ def _flatten_block(raw_rows: list[dict]) -> list[dict]:
     } for r in raw_rows if r.get("SECURITY_CODE") and r.get("TRADE_DATE")]
 
 
+def _flatten_research(raw_rows: list[dict], symbol: str) -> list[dict]:
+    code = symbol.split(".", 1)[0]
+    out = []
+    for r in raw_rows:
+        publish_date = _date(r.get("publishDate"))
+        title = _text(r.get("title"))
+        if not publish_date and not title:
+            continue
+        out.append({
+            "uid": f"research:{code}:{r.get('infoCode') or title}:{publish_date}",
+            "stock_symbol": symbol,
+            "code": code,
+            "name": _text(r.get("stockName")),
+            "publish_date": publish_date,
+            "title": title,
+            "brokerage": _text(r.get("orgSName") or r.get("orgName")),
+            "analyst": _text(r.get("researcher")),
+            "rating": _text(r.get("emRatingName") or r.get("sRatingName")),
+            "eps_this_year": _num(r.get("predictThisYearEps")),
+            "eps_next_year": _num(r.get("predictNextYearEps")),
+            "pe_this_year": _num(r.get("predictThisYearPe")),
+            "pe_next_year": _num(r.get("predictNextYearPe")),
+        })
+    return out
+
+
+def _flatten_news(raw_rows: list[dict], symbol: str) -> list[dict]:
+    code = symbol.split(".", 1)[0]
+    out = []
+    for r in raw_rows:
+        title = _text(r.get("title"))
+        published = _date(r.get("date"))
+        if not title and not published:
+            continue
+        out.append({
+            "uid": f"news:{code}:{r.get('art_code') or r.get('url') or title}",
+            "stock_symbol": symbol,
+            "code": code,
+            "name": "",
+            "published": published,
+            "title": title,
+            "url": r.get("url") or "",
+            "source": _text(r.get("mediaName")),
+            "snippet": _text(r.get("content"))[:280],
+        })
+    return out
+
+
 def _base_row(r: dict, suffix, kind: str) -> dict:
     code = str(r.get("SECURITY_CODE") or "").strip()
     return {
@@ -277,3 +441,7 @@ def _num(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _text(value) -> str:
+    return " ".join(str(value or "").split())
