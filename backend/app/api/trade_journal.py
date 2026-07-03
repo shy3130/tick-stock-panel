@@ -121,7 +121,7 @@ async def upload_journal(
     if narrative:
         payload["narrative"] = _narrative(summary, payload["diagnosis"], payload["benchmark"]["account"])
     store.write_source(settings.data_dir, source)
-    store.write_ledger(settings.data_dir, payload)
+    store.write_ledger(settings.data_dir, {k: v for k, v in payload.items() if k != "methodology_context"})
     return payload
 
 
@@ -130,6 +130,11 @@ def get_ledger():
     ledger = store.read_ledger(settings.data_dir)
     if ledger is None:
         raise HTTPException(status_code=404, detail="尚未导入交易复盘台账")
+    from app.services.skill_context import load_skill_context_safe
+
+    methodology_context = load_skill_context_safe("trade_journal", max_chars=4000, warnings=ledger.setdefault("warnings", []))
+    if methodology_context:
+        ledger["methodology_context"] = methodology_context
     return ledger
 
 

@@ -124,7 +124,7 @@ def run(req: BacktestRequest, request: Request):
         result = svc.run(cfg)
     except VectorbtUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return _attach_methodology(asdict(result), "backtest")
+    return asdict(result)
 
 
 # ================================================================
@@ -201,7 +201,7 @@ def factor_run(req: FactorBacktestRequest, request: Request):
         slippage_bps=req.slippage_bps,
     )
     result = svc.run(cfg)
-    return _attach_methodology(asdict(result), "backtest")
+    return asdict(result)
 
 
 @router.post("/factors/compare")
@@ -250,7 +250,7 @@ def factor_compare(req: FactorCompareRequest, request: Request):
                 else None
             )
         out.append(row)
-    return _attach_methodology({"factors": out}, "backtest")
+    return {"factors": out}
 
 
 def _save_strategy_run_card(request: Request, result) -> None:

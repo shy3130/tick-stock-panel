@@ -29,6 +29,12 @@ def test_env_provider_overrides_capability_preference(monkeypatch):
     assert registry.get_active_provider_name("daily") == "fquant"
 
 
+def test_unknown_env_provider_falls_back_to_local(monkeypatch):
+    monkeypatch.setenv("DATA_PROVIDER", "tickflow")
+
+    assert registry.get_active_provider_name("daily") == "fquant_local"
+
+
 def test_fquant_local_uses_disk_engine():
     provider = registry.get_provider("fquant_local")
 

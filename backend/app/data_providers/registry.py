@@ -1,9 +1,12 @@
 """Provider registry."""
 from __future__ import annotations
 
+import logging
 import os
 
 from app.data_providers.fquant_provider import FQuantProvider
+
+logger = logging.getLogger(__name__)
 
 _PROVIDERS = {
     "fquant": FQuantProvider,
@@ -26,7 +29,11 @@ def get_active_provider_name(capability: str | None = None) -> str:
     """
     env_provider = os.environ.get("DATA_PROVIDER")
     if env_provider:
-        return normalize_provider_name(env_provider)
+        try:
+            return normalize_provider_name(env_provider)
+        except ValueError:
+            logger.warning("Unsupported DATA_PROVIDER=%s, falling back to fquant_local", env_provider)
+            return "fquant_local"
 
     try:
         from app.services import preferences

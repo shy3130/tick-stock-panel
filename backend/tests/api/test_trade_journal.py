@@ -59,7 +59,12 @@ async def test_upload_commit_writes_normalized_ledger(tmp_path, monkeypatch):
     assert abs(resp["trips"][0]["total_pnl"] - 1113.25) < 1e-9
     assert resp["warnings"] == ["追涨诊断: 1 只标的无本地日K或历史不足20日未覆盖"]
     assert "交易流水复盘" in resp["methodology_context"]
-    assert trade_journal.get_ledger()["summary"]["total_trips"] == 1
+    stored = trade_journal.store.read_ledger(tmp_path)
+    assert stored is not None
+    assert "methodology_context" not in stored
+    ledger = trade_journal.get_ledger()
+    assert ledger["summary"]["total_trips"] == 1
+    assert "交易流水复盘" in ledger["methodology_context"]
     assert trade_journal.delete_ledger() == {"deleted": True}
 
 

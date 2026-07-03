@@ -119,6 +119,41 @@
 
 ---
 
+## 第二轮审查（2026-07-03，针对 codex 收口提交 d25def8..cb9d0ad）
+
+对本次"按顺序执行所有计划并收口"的实测复核。结论：11 个计划落地实体全部真实存在、router 已接线、TickFlow provider 层移除彻底、F1/F6 确已修复；无"只勾文档未落地"项。以下 3 条已由 codex 调整。
+
+### G1 — C7：Trade Journal 不应把 methodology_context 持久化进 ledger（建议合入前处理）
+
+- [x] 已改：POST 响应仍带 `methodology_context`，`store.write_ledger()` 写盘前剔除该键；GET `/ledger` 读时现挂方法论上下文。
+
+**位置**：`backend/app/api/trade_journal.py:119-124`。
+
+**问题**：`methodology_context` 被加进 `payload`（`:120`），而 `store.write_ledger(settings.data_dir, payload)`（`:124`）把**整个 payload 落盘**——方法论文本进了 `ledger.json`。它是静态常量（scenario 固定 `trade_journal`，`docs/skills/*.md`，每次导入都一样），持久化的问题：① 把 4KB 文档正文塞进**事实台账**，违背 [[Roundtrip 台账]] "唯一事实源"定位（台账只装成交事实，不装方法论 prose）；② 文档以后更新则老 ledger 留旧副本，staleness；③ 存储层职责不清（非隐私问题，不外送）。
+
+**建议修法**：POST 构造响应时带 `methodology_context`，但传给 `write_ledger` 的 payload **不含**它（如 `ledger_payload = {k: v for k, v in payload.items() if k != "methodology_context"}` 再落盘，或先落盘后再往返回值加）；若前端在 GET `/ledger` 也要展示，在 `get_ledger`（`trade_journal.py:128`）读时用 `load_skill_context_safe` 现挂。回测端 `_attach_methodology` 已是 response-only（不落盘），保持即可。
+
+### G2 — C7：`_attach_methodology` 挂到纯 metadata 端点属轻度过度（低）
+
+- [x] 已改：`_attach_methodology` 不再挂到 signal/factor/factor compare；仅 strategy run / robustness 保留。
+
+**位置**：`backend/app/api/backtest.py:66`（`_attach_methodology` 用 `setdefault("warnings", [])`）+ 调用点 `:253`（factor manifest/compare 的 `{"factors": out}`）。
+
+**问题**：给**所有**回测响应注入 `warnings: []` 并附 methodology prose，包括 factor manifest/columns 这类纯 metadata 响应。属追加字段、向后兼容（frontend `tsc` 已过），不破坏契约，但语义冗余。
+
+**建议修法**：纯 metadata / 清单类端点不挂 methodology，只挂到真正供 AI/用户解读的结果端点（strategy run、robustness）。非阻断。
+
+### G3 — TickFlow 移除的两个低风险迁移备注（低，顺手清）
+
+- [x] 已改：`data/user_data/preferences.json` provider 字段归一为 `fquant_local`；`DATA_PROVIDER=tickflow` 等未知 env 值 fallback 到 `fquant_local` 并记录 warning。
+
+1. **stale preferences.json**：`data/user_data/preferences.json` 仍存 `data_provider/daily/minute/realtime = "tickflow"`。读取时 `_clean_data_provider` 兜成 `fquant_local`（**不崩**），下次 UI 切换会被 `set_data_provider` 洗掉。建议做一次性归一（启动时或迁移脚本）或至少知会，免得文件内容误导。
+2. **env 分支无兜底**：`backend/app/data_providers/registry.py` 的 `get_active_provider_name` 中 `if env_provider: return normalize_provider_name(env_provider)` 在 try/except **之外**；若显式设 `DATA_PROVIDER=tickflow`，`normalize_provider_name` 抛 `ValueError` 且不被兜底（从优雅降级变硬失败）。移除后拒绝未知 provider 本身合理，建议加一行兜底（未知 env → 落 `fquant_local` + warning）或在文档注明该行为变化。
+
+> **品牌名残留（非缺陷，记录）**：其余 `TickFlow` 命中均为产品身份（app 标题、webhook 标题 `TickFlow · 每日复盘`、临时目录前缀、`packaging/tickflow.iss`、桌面版名）。是否整体改名属独立 cosmetic 任务，不在本轮范围。
+
+---
+
 ## 审查通过（无需改动，记录以示已核）
 
 | 计划 | 结论 |
