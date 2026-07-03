@@ -678,14 +678,18 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
     return df
 
 
-def compute_all(df: pl.DataFrame, instruments: pl.DataFrame | None = None) -> pl.DataFrame:
+def compute_all(
+    df: pl.DataFrame,
+    instruments: pl.DataFrame | None = None,
+    asset_type: str = "stock",
+) -> pl.DataFrame:
     """从 OHLCV 计算全套指标 + 信号。一站式调用。
 
     输入: symbol, date, open, high, low, close, volume, amount, raw_close
     """
     df = compute_indicators(df)
     df = compute_signals(df)
-    if instruments is not None and not instruments.is_empty():
+    if asset_type == "stock" and instruments is not None and not instruments.is_empty():
         df = compute_limit_signals(df, instruments)
 
     # 清理 NaN / Inf
@@ -733,6 +737,7 @@ def compute_enriched(
     raw: pl.DataFrame,
     factors: pl.DataFrame | None = None,
     instruments: pl.DataFrame | None = None,
+    asset_type: str = "stock",
 ) -> pl.DataFrame:
     """对原始日 K 应用前复权 + 全量计算指标 + 信号, 产出完整 enriched (含全部指标列)。
 
@@ -764,7 +769,7 @@ def compute_enriched(
     df = raw.sort(["symbol", "date"])
 
     # 全量计算指标 + 信号
-    df = compute_all(df, instruments=instruments)
+    df = compute_all(df, instruments=instruments, asset_type=asset_type)
 
     return df
 
