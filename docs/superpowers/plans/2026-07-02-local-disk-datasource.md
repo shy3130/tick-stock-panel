@@ -1,12 +1,14 @@
 # 本地磁盘数据源模式 实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框语法来跟踪进度。
 
 **目标：** 为 panel 新增 `fquant_local` 数据源模式——engine-data 数据改直读 TDX 磁盘 CSV，新增 sina/tencent 实时源，本地模式下取消"抓取远程数据落 `data/kline_daily`"环节；同时修复已上线的 raw 前复权污染 bug（HTTP/磁盘两模式共享修复）。
 
 **架构：** 依据 `docs/superpowers/specs/2026-07-02-local-disk-datasource-design.md`（D-L1~D-L7，经三轮 review 修正）。raw 重建放 mapping 层（`normalize_daily` 之前，daily + adj_factor 双链）；`fquant_local` 以 registry 工厂注册（preferences 白名单/settings API/前端 union 同步），并先把 `daily/minute/realtime_data_provider` 真正接入 `registry.get_active_provider_name(capability)`；stock raw mirror 禁写收口在 repository 层；pipeline 新增"provider → enriched"输入分支；realtime 契约显式化后接 sina/tencent。
 
 **技术栈：** Python 3.11 + Polars + FastAPI + httpx + pytest（后端）；TypeScript + React（前端两处小改）。
+
+**落地状态（2026-07-03）：** 已完成并进入后续维护状态。`fquant_local` 已注册为默认本地数据源；TDX disk `wide/day/xdxr/minutes/trans/fund` 客户端、raw 前复权逆运算、stock raw mirror 禁写、provider→enriched 本地管道、单股 fallback、realtime normalizer + tdx-api/sina/tencent/fstore 链路均已落地。覆盖缺口和资金流/筹码等残留已转入 `docs/data-query-inventory-local-source.md` 与后续专项计划。收尾验证：`cd backend && uv run --extra dev pytest tests/data_providers/test_raw_reconstruct.py tests/data_providers/test_provider_raw_chain.py tests/data_providers/test_engine_data_disk.py tests/data_providers/test_engine_data_disk_quality.py tests/data_providers/test_provider_moneyflow_disk.py tests/data_providers/test_realtime_normalizer.py tests/services/test_raw_write_gate.py tests/indicators/test_pipeline_local.py tests/api/test_kline_local_fallback.py tests/jobs/test_daily_pipeline_local.py tests/services/test_quote_service_local_realtime.py -q` 为 `50 passed, 1 skipped`。
 
 **执行约束（本仓红线）：**
 - 每任务末尾的 commit 步骤**不自动视为授权**；只有用户明确要求提交时才执行 `git commit`；**禁止 push**；禁止 `git clean -fdx` / `reset --hard`。
@@ -47,7 +49,7 @@
 **文件：**
 - 创建：`backend/scripts/spike_disk_day_coverage.py`
 
-- [ ] **步骤 1：核对 868 只缺文件构成**
+- [x] **步骤 1：核对 868 只缺文件构成**
 
 脚本输入：当前 `data/instruments/instruments.parquet`、`TDX_DATA_DIR/day`、fstore `base_infos`、fstore `day_klines` 最大日期。
 
@@ -58,7 +60,7 @@
 - `missing_has_fstore_after_2025_11`：TDX 缺文件，但 fstore `t_1_day_klines/day_klines` 覆盖到 2025-11-01 之后，可作为 fallback。
 - `true_gap_active_after_2025_11`：在市/疑似在市，TDX 缺文件，且 fstore 无 2025-11 之后 day K。
 
-- [ ] **步骤 2：判定闸门**
+- [x] **步骤 2：判定闸门**
 
 `true_gap_active_after_2025_11 == 0` 才能宣称 `fquant_local.daily` 全市场可用；否则后续实现必须二选一：
 - 降级声明：`fquant_local.daily` 对这些 symbol 返回空并在设置页/数据状态页展示缺口清单。
@@ -87,7 +89,7 @@ git add backend/scripts/spike_disk_day_coverage.py
 ```
 逆运算按事件**从新到旧**依次应用（复权是旧→新逐层叠加，还原需逆序剥离）。**必须同时判定** volume/amount 语义：老行 volume 带小数（疑似按送转比例放大）、amount 出现负值（疑似 adjusted price × volume 重算）——spike 输出三者各自的重建规则。
 
-- [ ] **步骤 1：编写 spike 脚本**
+- [x] **步骤 1：编写 spike 脚本**
 
 ```python
 """Spike: 验证 TDX 前复权逆运算公式（任务 1 闸门）。
@@ -175,17 +177,17 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **步骤 2：运行 spike**
+- [x] **步骤 2：运行 spike**
 
 运行：`cd backend && set -a && source ../../fquant/.env && set +a && uv run python scripts/spike_raw_reconstruct.py`
 预期：3 只样本全 `PASS`。同时人工检查输出：确认 `category != 1` 事件是否需要参与（若 FAIL，优先排查 category=5/6 股本变化事件与 peigu 项）。
 
-- [ ] **步骤 3：判定闸门**
+- [x] **步骤 3：判定闸门**
 
 - 全 PASS → 记录 volume/amount 结论到脚本 docstring，进入任务 2。
 - FAIL → **停止执行**，把 diff 分布（按日期段）输出给用户，等待公式修订决策。
 
-- [ ] **步骤 4：授权后可选提交**
+- [x] **步骤 4：授权后可选提交**
 
 ```bash
 git add backend/scripts/spike_raw_reconstruct.py
@@ -200,7 +202,7 @@ git add backend/scripts/spike_raw_reconstruct.py
 - 创建：`backend/app/data_providers/fquant/raw_reconstruct.py`
 - 测试：`backend/tests/data_providers/test_raw_reconstruct.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 """raw_reconstruct 单测 — 用构造数据验证逆运算，不依赖磁盘/PG。"""
@@ -247,12 +249,12 @@ def test_multi_event_reverse_order():
     assert abs(out[0]["close"] - 100.0) < 1e-9
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`cd backend && uv run pytest tests/data_providers/test_raw_reconstruct.py -v`
 预期：FAIL，`ModuleNotFoundError: raw_reconstruct`
 
-- [ ] **步骤 3：实现模块**
+- [x] **步骤 3：实现模块**
 
 ```python
 """TDX 减法前复权逆运算 → 原始价重建（设计 D-L3）。
@@ -295,11 +297,11 @@ def reconstruct_raw_rows(rows: list[dict], events: list[dict]) -> list[dict]:
     return out
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`uv run pytest tests/data_providers/test_raw_reconstruct.py -v` → 4 PASS
 
-- [ ] **步骤 5：授权后可选提交**
+- [x] **步骤 5：授权后可选提交**
 
 ```bash
 git add backend/app/data_providers/fquant/raw_reconstruct.py backend/tests/data_providers/test_raw_reconstruct.py
@@ -314,7 +316,7 @@ git add backend/app/data_providers/fquant/raw_reconstruct.py backend/tests/data_
 
 **要点（codex review #2）：** 重建必须发生在 `normalize_daily` 之前（normalizer 只留 8 canonical 列会丢 `adjustment_count`）；`get_adj_factors` 的 `pre_close` 链同步换用重建后 close，否则 ex_factor 仍基于污染价。
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 """provider daily 链路应输出重建后的 raw 价格。mock EngineDataClient。"""
@@ -343,11 +345,11 @@ def test_get_daily_returns_raw(_mf, _fs, mock_engine):
     assert abs(pre["close"][0] - 110.0) < 1e-6   # 已还原 raw
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 `uv run pytest tests/data_providers/test_provider_raw_chain.py -v` → FAIL（close 仍为 109.0）
 
-- [ ] **步骤 3：实现接入**
+- [x] **步骤 3：实现接入**
 
 在 `fquant_provider.py` 的 `_get_daily_from_engine_wide` 末尾（`return wide_rows_to_daily(...)` 之前）插入重建；`xdxr_rows_to_events` 是 mapping 现有函数：
 
@@ -364,12 +366,12 @@ def test_get_daily_returns_raw(_mf, _fs, mock_engine):
 
 `_build_daily_close_map` 内部走 `_get_daily_from_engine_wide`（改后自动是 raw），确认无独立取数路径即可（有则同样包一层）。
 
-- [ ] **步骤 4：运行验证通过 + 回归**
+- [x] **步骤 4：运行验证通过 + 回归**
 
 `uv run pytest tests/data_providers/ -v` → 全 PASS
 `uv run python scripts/test_fquant_provider.py`（有 PG env 时）→ 16 项不回退
 
-- [ ] **步骤 5：授权后可选提交**
+- [x] **步骤 5：授权后可选提交**
 
 ```bash
 git add backend/app/data_providers/fquant_provider.py backend/tests/data_providers/test_provider_raw_chain.py
@@ -383,7 +385,7 @@ git add backend/app/data_providers/fquant_provider.py backend/tests/data_provide
 
 **边界：** 该脚本只用于迁移前/`DATA_PROVIDER=fquant` HTTP 模式已污染 `data/kline_daily` 的一次性修复；`fquant_local` 上线后的日常路径仍禁止写 stock raw mirror。
 
-- [ ] **步骤 1：编写脚本**
+- [x] **步骤 1：编写脚本**
 
 ```python
 """重刷 fquant 模式同步以来被前复权污染的 kline_daily 分区 + enriched 重算。
@@ -428,13 +430,13 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **步骤 2：运行（用户环境，需 PG env）**
+- [x] **步骤 2：运行（用户环境，需 PG env）**
 
 `cd backend && set -a && source ../../fquant/.env && set +a && DATA_PROVIDER=fquant uv run python scripts/refresh_polluted_daily.py --since <fquant 切换首日,查 git log 12d1c98 日期>`
 预期：重刷完成后抽查 `600519.SH` 除权日前分区 close 不再带 `.075769` 尾巴：
 `uv run python -c "import polars as pl; print(pl.read_parquet('../data/kline_daily/date=2026-06-25/part.parquet').filter(pl.col('symbol')=='600519.SH'))"` → close=1199.72 附近的整分值（以 spike oracle 为准）
 
-- [ ] **步骤 3：授权后可选提交**
+- [x] **步骤 3：授权后可选提交**
 
 ```bash
 git add backend/scripts/refresh_polluted_daily.py
@@ -452,7 +454,7 @@ git add backend/scripts/refresh_polluted_daily.py
 - 修改：`backend/app/data_providers/fquant_provider.py`（`__init__` 加 `engine_mode` 参数）
 - 测试：`backend/tests/data_providers/test_registry.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 from unittest.mock import patch
@@ -471,9 +473,9 @@ def test_fquant_local_uses_disk_engine(_mf, _fs, _en):
     assert isinstance(p._engine, EngineDataDiskClient)
 ```
 
-- [ ] **步骤 2：运行验证失败** → `Unsupported data provider: fquant_local`
+- [x] **步骤 2：运行验证失败** → `Unsupported data provider: fquant_local`
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 `registry.py` 的 `_PROVIDERS` 改工厂（值统一为无参 callable，`get_provider` 不变即可调用）：
 
@@ -502,7 +504,7 @@ _PROVIDERS = {
 
 （`name` 原为类属性 `"fquant"`，disk 模式实例覆盖为 `"fquant_local"`。任务 8 前先放一个最小 `EngineDataDiskClient` 占位类——只含与 `EngineDataClient` 相同的空方法签名，任务 8 用 TDD 填实。）
 
-- [ ] **步骤 4：运行验证通过；授权后可选提交**
+- [x] **步骤 4：运行验证通过；授权后可选提交**
 
 ```bash
 uv run pytest tests/data_providers/test_registry.py -v
@@ -516,7 +518,7 @@ git add -A backend/app/data_providers
 - 修改：`backend/app/services/preferences.py:99`（`_ALLOWED_DATA_PROVIDERS`）
 - 测试：`backend/tests/services/test_preferences_provider.py`
 
-- [ ] **步骤 1：测试**
+- [x] **步骤 1：测试**
 
 ```python
 from app.services import preferences
@@ -534,7 +536,7 @@ def test_unknown_still_rejected():
 
 （若 `_PREFS_PATH` 属性名不符，按 `preferences.py` 顶部实际存储路径常量调整 monkeypatch 目标——先 `grep -n "def load\|def save\|Path" app/services/preferences.py` 确认。）
 
-- [ ] **步骤 2：失败 → 实现**
+- [x] **步骤 2：失败 → 实现**
 
 ```python
 _ALLOWED_DATA_PROVIDERS = {"tickflow", "fquant", "fquant_local"}
@@ -542,7 +544,7 @@ _ALLOWED_DATA_PROVIDERS = {"tickflow", "fquant", "fquant_local"}
 
 settings API（`api/settings.py:386` `update_data_provider`）走 `preferences.set_data_provider` 校验，白名单放开后自动生效，无需改动；确认 `_reset_data_provider_singletons()`（settings.py:318）覆盖 kline_sync/quote_service 等 4 个单例即可。
 
-- [ ] **步骤 3：通过；授权后可选提交**
+- [x] **步骤 3：通过；授权后可选提交**
 
 ```bash
 uv run pytest tests/services/test_preferences_provider.py -v
@@ -557,7 +559,7 @@ git add -A backend/app/services backend/tests
 - 修改：`backend/app/services/kline_sync.py` / `quote_service.py` / `financial_sync.py` / `instrument_sync.py`（按 capability 取 provider）
 - 测试：`backend/tests/data_providers/test_registry.py`
 
-- [ ] **步骤 1：测试**
+- [x] **步骤 1：测试**
 
 ```python
 from app.data_providers import registry
@@ -574,7 +576,7 @@ def test_env_provider_overrides_capability_preference(monkeypatch):
     assert registry.get_active_provider_name("daily") == "tickflow"
 ```
 
-- [ ] **步骤 2：实现**
+- [x] **步骤 2：实现**
 
 扩展现有 `registry.get_active_provider_name()`，不要新增第二套 resolver：
 
@@ -599,7 +601,7 @@ def get_active_provider_name(capability: str | None = None) -> str:
 
 服务工厂按真实用途传 capability：`kline_sync` 用 `"daily"`，`quote_service` 用 `"realtime"`，财务/标的仍走全局 provider（除非已有独立偏好字段）。
 
-- [ ] **步骤 3：验证**
+- [x] **步骤 3：验证**
 
 ```bash
 uv run pytest tests/data_providers/test_registry.py -v
@@ -618,7 +620,7 @@ git add -A backend/app backend/tests
 **文件：**
 - 修改：`frontend/src/lib/api.ts:777`、`frontend/src/pages/settings/System.tsx:23,52,96-100`
 
-- [ ] **步骤 1：修改**
+- [x] **步骤 1：修改**
 
 api.ts：`updateDataProvider: (data_provider: 'tickflow' | 'fquant' | 'fquant_local') =>`
 System.tsx：`saveDataProvider` 回调与 `onChange` 断言同步改为三元 union；`<select>` 内加：
@@ -627,7 +629,7 @@ System.tsx：`saveDataProvider` 回调与 `onChange` 断言同步改为三元 un
             <option value="fquant_local">FQuant 本地磁盘</option>
 ```
 
-- [ ] **步骤 2：验证；授权后可选提交**
+- [x] **步骤 2：验证；授权后可选提交**
 
 运行：`cd frontend && pnpm tsc --noEmit`（或 `pnpm build`）→ 无类型错误
 
@@ -642,7 +644,7 @@ git add frontend/src/lib/api.ts frontend/src/pages/settings/System.tsx
 - 创建/填实：`backend/app/data_providers/fquant/engine_data_disk.py`
 - 测试：`backend/tests/data_providers/test_engine_data_disk.py`（用 tmp_path fixture 造 CSV，不碰真盘）
 
-- [ ] **步骤 1：测试**
+- [x] **步骤 1：测试**
 
 ```python
 import polars as pl
@@ -704,7 +706,7 @@ def test_freshness(tmp_path, monkeypatch):
     assert str(EngineDataDiskClient().freshness("600519.SH")) == "2026-07-02"
 ```
 
-- [ ] **步骤 2：失败 → 实现**
+- [x] **步骤 2：失败 → 实现**
 
 ```python
 """TDX 磁盘 CSV 客户端（D-L2）。接口对齐 EngineDataClient, 由 symbol 直构路径, 零目录扫描。
@@ -780,7 +782,7 @@ class EngineDataDiskClient:
         return date.fromisoformat(rows[-1]["date"]) if rows else None
 ```
 
-- [ ] **步骤 3：provider 侧适配调用参数**
+- [x] **步骤 3：provider 侧适配调用参数**
 
 任务 3 改过的 `_get_daily_from_engine_wide` / `get_xdxr` 调用在 disk 模式传 `sym` 而非 `code`：在 `fquant_provider.py` 加一行辅助后统一：
 
@@ -794,7 +796,7 @@ class EngineDataDiskClient:
 raw oracle / xdxr 逆运算只用于 `asset_type="stock"`；指数/ETF 直接使用磁盘行情，避免 `000001.SH` 等指数被同 code 股票 oracle 覆盖。
 调用侧也必须透传资产类型：`index_sync` 的指数/ETF 同步分别传 `asset_type="index"` / `"etf"`，`api/indices.py` 单指数 daily/minute fallback 传 `asset_type="index"`；股票路径保留默认 `"stock"`。
 
-- [ ] **步骤 4：全部测试通过；授权后可选提交**
+- [x] **步骤 4：全部测试通过；授权后可选提交**
 
 ```bash
 uv run pytest tests/data_providers/ -v
@@ -804,7 +806,7 @@ git add -A backend/app/data_providers backend/tests
 
 ### 任务 9：真盘冒烟（一次性验证，不进测试套件）
 
-- [ ] **步骤 1：运行**
+- [x] **步骤 1：运行**
 
 ```bash
 cd backend && set -a && source ../../fquant/.env && set +a
@@ -829,7 +831,7 @@ print('adj rows:', adj.height)"
 - 修改：`backend/app/tickflow/repository.py`（stock raw 写入口：`append_daily`、`append_daily_asset("stock")`、`merge_live_daily_asset("stock")`、`flush_live_daily`、`flush_live_daily_asset("stock")`；index/ETF raw 仍给现有页面和统计使用）
 - 测试：`backend/tests/services/test_raw_write_gate.py`
 
-- [ ] **步骤 1：测试**
+- [x] **步骤 1：测试**
 
 ```python
 import polars as pl
@@ -861,7 +863,7 @@ def test_enriched_never_gated(_m, tmp_path):
 
 （`KlineRepository` 构造签名先 `grep -n "def __init__" app/tickflow/repository.py` 确认；若不接受 data_dir 参数，用 monkeypatch settings.data_dir。）
 
-- [ ] **步骤 2：失败 → 实现**
+- [x] **步骤 2：失败 → 实现**
 
 `app/services/data_mode.py`：
 
@@ -890,11 +892,11 @@ def is_local_daily_mode() -> bool:
 
 **不加门控**：`append_enriched`、`append_index_enriched`、`append_etf_enriched`、index/ETF raw 及一切 enriched/user_data 写入。index/ETF raw 暂不禁写，因为现有指数/ETF页面、统计和 fallback 路径仍依赖 `kline_index_daily` / `kline_etf_daily`。
 
-- [ ] **步骤 3：验证用例清单（门控生效后逐条确认不落盘）**
+- [x] **步骤 3：验证用例清单（门控生效后逐条确认不落盘）**
 
 上游入口作为验证清单跑一遍（mock provider 数据或真盘）：`kline_sync.sync_and_persist_daily_batch`、`kline_sync.sync_daily_by_quotes`、`daily_pipeline` A股三分支、`extend_history`、`api/kline.py /sync`、`quote_service` 全市场/自选。每条执行后 `data/kline_daily` 无新增；index/ETF raw 允许更新。
 
-- [ ] **步骤 4：通过；授权后可选提交**
+- [x] **步骤 4：通过；授权后可选提交**
 
 ```bash
 uv run pytest tests/services/test_raw_write_gate.py -v
@@ -911,7 +913,7 @@ git add -A backend/app
 
 **背景：** 现有 `run_pipeline` 无 `kline_daily` parquet 直接返回 0（pipeline.py:800）。本地模式数据源是 provider（磁盘 CSV + raw 重建），需要独立输入分支；enriched 输出路径/分区格式与现有完全一致。
 
-- [ ] **步骤 1：测试**
+- [x] **步骤 1：测试**
 
 ```python
 import polars as pl
@@ -943,7 +945,7 @@ def test_never_writes_raw_mirror(tmp_path):
     assert not (tmp_path / "kline_daily").exists()
 ```
 
-- [ ] **步骤 2：失败 → 实现（追加到 pipeline.py 末尾）**
+- [x] **步骤 2：失败 → 实现（追加到 pipeline.py 末尾）**
 
 ```python
 def run_pipeline_local(provider, symbols: list[str],
@@ -992,7 +994,7 @@ def run_pipeline_local(provider, symbols: list[str],
     return written
 ```
 
-- [ ] **步骤 3：daily_pipeline 分流**
+- [x] **步骤 3：daily_pipeline 分流**
 
 `jobs/daily_pipeline.py` 在 A 股日 K 同步段（`pull_a_share` 判断后、`elif today_exists...` 之前）插入本地模式分支：
 
@@ -1019,7 +1021,7 @@ def run_pipeline_local(provider, symbols: list[str],
 
 （插入时通读 `daily_pipeline.py` 的 enriched 重算段，确保本地模式不重复跑 `run_pipeline`——用同一个 `is_local_daily_mode()` 判定跳过。）
 
-- [ ] **步骤 4：通过；授权后可选提交**
+- [x] **步骤 4：通过；授权后可选提交**
 
 ```bash
 uv run pytest tests/indicators/test_run_pipeline_local.py -v
@@ -1032,11 +1034,11 @@ git add -A backend/app backend/tests
 **文件：**
 - 修改：`backend/app/api/kline.py`（`/daily` 空数据 live-fetch 分支）
 
-- [ ] **步骤 1：定位分支**
+- [x] **步骤 1：定位分支**
 
 运行：`grep -n "live\|fetch\|compute_enriched_single" backend/app/api/kline.py | head` 找到空缓存时调 provider 的分支。
 
-- [ ] **步骤 2：实现**
+- [x] **步骤 2：实现**
 
 该分支在本地模式下改为"取数 → `compute_enriched_single` → 直接返回"，禁止触发任何 sync 写入（写入已被任务 10 门控兜底，此处显式短路以免无谓调用）：
 
@@ -1051,7 +1053,7 @@ git add -A backend/app backend/tests
             return _serialize_daily(compute_enriched_single(raw))  # 序列化沿用该端点现有函数
 ```
 
-- [ ] **步骤 3：手工验证；授权后可选提交**
+- [x] **步骤 3：手工验证；授权后可选提交**
 
 `DATA_PROVIDER=fquant_local uv run uvicorn app.main:app --port 8000 &`，`curl 'http://127.0.0.1:8000/api/kline/daily?symbol=600519.SH' | head -c 300` 有数据；`ls ../data/kline_daily 2>/dev/null` 无新建。
 
@@ -1070,11 +1072,11 @@ git add backend/app/api/kline.py
 - 修改：`backend/app/data_providers/normalizer.py`（**只追加**，不动既有）
 - 测试：`backend/tests/data_providers/test_normalize_realtime.py`
 
-- [ ] **步骤 1：先核对隐式契约**
+- [x] **步骤 1：先核对隐式契约**
 
 运行：`grep -n "_quote_row" -A 25 backend/app/data_providers/fquant_provider.py | head -40` 记录字段全集与单位（重点：`change_pct` 是百分数还是小数、volume 股/手——以 `quote_service.py:441/599` 消费方为准）。
 
-- [ ] **步骤 2：测试**
+- [x] **步骤 2：测试**
 
 ```python
 import polars as pl
@@ -1089,7 +1091,7 @@ def test_empty():
     assert normalize_realtime([], source="test").is_empty()
 ```
 
-- [ ] **步骤 3：实现（追加到 normalizer.py）**
+- [x] **步骤 3：实现（追加到 normalizer.py）**
 
 ```python
 # ── realtime 契约(显式化, 原为 fquant_provider._quote_row 隐式字段集) ──
@@ -1113,11 +1115,11 @@ def normalize_realtime(rows: list[dict], source: str) -> pl.DataFrame:
 
 （若步骤 1 核对发现单位与注释不符，**以消费方实际语义修正注释**——注释即契约。）
 
-- [ ] **步骤 3.5：接入 FQuantProvider**
+- [x] **步骤 3.5：接入 FQuantProvider**
 
 `FQuantProvider.get_realtime` 返回前统一调用 `normalize_realtime(rows, source=self.name)`；tdx-api、fstore snapshot、后续 sina/tencent client 都只产出 dict rows，最终 schema 由 normalizer 收口。新增测试用一个缺字段 row 通过 provider 路径，确认 `quote_service` 需要的 `last_price/volume/amount/source/ext` 列稳定存在。
 
-- [ ] **步骤 4：通过；授权后可选提交**
+- [x] **步骤 4：通过；授权后可选提交**
 
 ```bash
 uv run pytest tests/data_providers/test_normalize_realtime.py -v
@@ -1131,7 +1133,7 @@ git add -A backend/app/data_providers backend/tests
 - 创建：`backend/app/data_providers/fquant/sina_tencent_client.py`
 - 测试：`backend/tests/data_providers/test_sina_tencent.py`
 
-- [ ] **步骤 1：测试**
+- [x] **步骤 1：测试**
 
 ```python
 from unittest.mock import patch, MagicMock
@@ -1175,7 +1177,7 @@ def test_partial_failure_keeps_success_rows():
         assert any(r["symbol"] == "600519.SH" for r in rows)
 ```
 
-- [ ] **步骤 2：失败 → 实现**
+- [x] **步骤 2：失败 → 实现**
 
 ```python
 """sina/tencent 批量实时行情客户端(D-L4)。
@@ -1298,7 +1300,7 @@ class SinaTencentClient:
 **⚠️ 字段索引校准步骤（必做）：** fixture 是按公开口径写的；实现后跑一次真实请求核对索引再锁定 fixture：
 `uv run python -c "import httpx; print(httpx.get('https://qt.gtimg.cn/q=sh600519', trust_env=False).text[:400])"`（sina 同理带 Referer）。若索引与 fixture 不符，**同时修正 parse 函数与测试 fixture**（以真实响应为准），并把真实样本粘进测试文件注释。
 
-- [ ] **步骤 3：通过；授权后可选提交**
+- [x] **步骤 3：通过；授权后可选提交**
 
 ```bash
 uv run pytest tests/data_providers/test_sina_tencent.py -v
@@ -1311,7 +1313,7 @@ git add -A backend/app/data_providers backend/tests
 **文件：**
 - 修改：`backend/app/data_providers/fquant_provider.py`（`get_realtime`）
 
-- [ ] **步骤 1：修改 get_realtime 链**
+- [x] **步骤 1：修改 get_realtime 链**
 
 在 tdx-api 尝试之后、fstore 兜底之前插入（watchlist=symbols 小批量→tencent；universes 全市场→sina）：
 
@@ -1326,7 +1328,7 @@ git add -A backend/app/data_providers backend/tests
                 remaining = [s for s in remaining if s not in got]
 ```
 
-- [ ] **步骤 2：验证（真网络，人工）**
+- [x] **步骤 2：验证（真网络，人工）**
 
 ```bash
 DATA_PROVIDER=fquant_local uv run python -c "
@@ -1336,7 +1338,7 @@ print(df.select('symbol','last_price','volume','source'))"
 ```
 预期：两行报价，source=tdx-api 或 tencent；随后开 app 确认 QuoteService 盘中路径**未写** `data/kline_daily*`（任务 10 门控生效，`ls -la data/kline_daily/date=$(date +%F) 2>/dev/null` 为空）。
 
-- [ ] **步骤 3：授权后可选提交**
+- [x] **步骤 3：授权后可选提交**
 
 ```bash
 git add backend/app/data_providers/fquant_provider.py
@@ -1353,7 +1355,7 @@ git add backend/app/data_providers/fquant_provider.py
 - 修改：`AGENTS.md`（红线 #2 注记、数据源矩阵、常见排错）
 - 修改：`backend/docs/FQUANT_INTEGRATION_PROGRESS.md`（新增"阶段 6：本地磁盘模式"）
 
-- [ ] **步骤 1：端到端清单（全部通过才算完成）**
+- [x] **步骤 1：端到端清单（全部通过才算完成）**
 
 ```bash
 # 1. 切换: 设置页选 "FQuant 本地磁盘" 或 DATA_PROVIDER=fquant_local
@@ -1367,17 +1369,17 @@ git add backend/app/data_providers/fquant_provider.py
 # 7. 全量测试: cd backend && uv run pytest tests/ -v → 全绿
 ```
 
-- [ ] **步骤 2：AGENTS.md 修订**
+- [x] **步骤 2：AGENTS.md 修订**
 
 - 红线 #2 追加注记：`（修订 2026-07-XX：经 data_providers 抽象层受控适配器接入 sina/tencent 实时报价已获授权；禁止的是业务层绕过抽象层直连）`
 - 数据源矩阵加 `fquant_local` 行（daily=TDX disk wide/day + xdxr；realtime=tdx-api/sina/tencent/fstore snapshot；depth=false；`TDX_DATA_DIR` 配置；stock raw mirror 禁写说明）
 - 常见排错加两条：磁盘未挂载 → capability 降级 warning；freshness 落后 → 管道跳过当日。
 
-- [ ] **步骤 3：FQUANT_INTEGRATION_PROGRESS.md 新增阶段 6**
+- [x] **步骤 3：FQUANT_INTEGRATION_PROGRESS.md 新增阶段 6**
 
 按该文档既有表格风格记录：任务 0-16 完成状态、覆盖闸门结论、raw spike 结论（含 volume/amount 语义判定）、raw 污染修复与重刷范围、stock raw 门控、已知残留（物理 `5min/` 等聚合分钟目录未接，当前由 1m 聚合生成；depth 历史缺口）。
 
-- [ ] **步骤 4：授权后可选提交**
+- [x] **步骤 4：授权后可选提交**
 
 ```bash
 git add AGENTS.md backend/docs/FQUANT_INTEGRATION_PROGRESS.md
