@@ -21,6 +21,7 @@ from typing import AsyncIterator
 
 import polars as pl
 
+from app.backtest.patterns import detect_patterns
 from app.indicators.levels import compute_levels, summarize_levels
 from app.services.document_reader import format_prompt_document
 from app.services.financial_sync import get_financial_df
@@ -190,6 +191,7 @@ def _build_user_prompt(
     symbol: str,
     focus: str,
     document_text: str = "",
+    patterns: list[dict] | None = None,
 ) -> str:
     """构建用户消息:标的 + 价位摘要 + 技术指标 JSON + 财务摘要 + 关注点。"""
     parts: list[str] = [
@@ -202,6 +204,14 @@ def _build_user_prompt(
         json.dumps(kline_tail, ensure_ascii=False),
         "```",
     ]
+    if patterns:
+        parts.extend([
+            "",
+            "以下为轻量技术形态摘要(JSON,形态标签为启发式,不构成预测概率或买卖信号):",
+            "```json",
+            json.dumps(patterns, ensure_ascii=False),
+            "```",
+        ])
 
     has_fin = any(fins.values())
     if has_fin:
@@ -299,7 +309,8 @@ async def analyze_stock_stream(
         from app.services.skill_context import load_skill_context
 
         skill_context = load_skill_context("stock_analysis")
-        user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus, document_text)
+        patterns = _detect_pattern_summary(df)
+        user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus, document_text, patterns)
         if skill_context:
             user_prompt = skill_context + "\n\n---\n\n" + user_prompt
         async for delta in stream_ai_text(
@@ -318,3 +329,11 @@ async def analyze_stock_stream(
         return
 
     yield json.dumps({"type": "done"}, ensure_ascii=False)
+
+
+def _detect_pattern_summary(df: pl.DataFrame) -> list[dict]:
+    try:
+        return detect_patterns(df.select([c for c in ("date", "open", "high", "low", "close", "volume") if c in df.columns]))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pattern summary failed: %s", e)
+        return []

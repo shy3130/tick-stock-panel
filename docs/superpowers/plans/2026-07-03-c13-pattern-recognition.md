@@ -23,8 +23,8 @@
 
 ## 任务 1：数据契约
 
-- [ ] 输入 DataFrame 至少含：`date/open/high/low/close/volume`。
-- [ ] 输出：
+- [x] 输入 DataFrame 至少含：`date/open/high/low/close/volume`。
+- [x] 输出：
 
 ```json
 {
@@ -35,59 +35,59 @@
 }
 ```
 
-- [ ] confidence 是启发式，不当预测概率。
+- [x] confidence 是启发式，不当预测概率。
 
 ## 任务 2：失败测试 - pivots
 
-- [ ] 单调上涨序列无 pivot high/low。
-- [ ] 简单 `[1,3,1]` 有 high。
-- [ ] 含 null 时跳过对应窗口，不抛异常。
-- [ ] `window=5` 固定窗口，暂不暴露 UI。
+- [x] 单调上涨序列无 pivot high/low。
+- [x] 简单 `[1,3,1]` 有 high（测试显式用 `window=3`；默认仍为 5）。
+- [x] 含 null 时跳过对应窗口，不抛异常。
+- [x] `window=5` 固定窗口，暂不暴露 UI。
 
 ## 任务 3：实现 pivots
 
-- [ ] `find_pivots(df, window=5) -> list[dict]`
-- [ ] pivot high：中心 high 为窗口最大且唯一。
-- [ ] pivot low：中心 low 为窗口最小且唯一。
-- [ ] strength：中心点相对窗口均值偏离幅度。
+- [x] `find_pivots(df, window=5) -> list[dict]`
+- [x] pivot high：中心 high 为窗口最大且唯一。
+- [x] pivot low：中心 low 为窗口最小且唯一。
+- [x] strength：中心点相对窗口均值偏离幅度。
 
 ## 任务 4：突破与平台
 
-- [ ] `detect_breakout(df, lookback=60)`
+- [x] `detect_breakout(df, lookback=60)`
   - close 突破前 lookback high
   - volume ratio >= 1.2 加分，不强制
-- [ ] `detect_consolidation(df, lookback=20, max_range_pct=0.12)`
+- [x] `detect_consolidation(df, lookback=20, max_range_pct=0.12)`
   - `(max(high)-min(low))/last_close <= max_range_pct`
   - 输出 range_pct。
-- [ ] 测试固定序列，避免随机。
+- [x] 测试固定序列，避免随机。
 
 ## 任务 5：双底/双顶
 
-- [ ] 双底：
+- [x] 双底：
   - 两个 pivot low 间隔 >= 5 交易日
   - 两低点价差 <= 5%
   - 中间反弹 >= 8%
   - 第二低点后 close 突破 neckline 才 confidence 高
-- [ ] 双顶对称。
-- [ ] 阈值写常量，不做配置。
+- [x] 双顶对称。
+- [x] 阈值写常量，不做配置。
 
 ## 任务 6：API
 
-- [ ] `GET /api/patterns/{symbol}?lookback=120&asset_type=stock`
-- [ ] repository 读取 enriched/raw 日线。
-- [ ] 返回 `patterns` 列表 + `as_of`。
-- [ ] 找不到数据返回空列表，不 500。
+- [x] `GET /api/patterns/{symbol}?lookback=120&asset_type=stock`
+- [x] repository 读取 enriched/raw 日线。
+- [x] 返回 `patterns` 列表 + `as_of`。
+- [x] 找不到数据返回空列表，不 500。
 
 ## 任务 7：AI 接入
 
-- [ ] 个股分析只消费 pattern 摘要，不把完整 OHLCV 送 LLM。
-- [ ] prompt 明确“形态标签为启发式，不构成预测”。
+- [x] 个股分析只消费 pattern 摘要，不为形态识别额外送完整 OHLCV；原个股分析 K 线上下文保留。
+- [x] prompt 明确“形态标签为启发式，不构成预测”。
 
 ## 验证
 
 ```bash
 cd backend
-uv run --extra dev pytest tests/backtest/test_patterns.py tests/api/test_patterns.py -q
+uv run --extra dev pytest tests/backtest/test_patterns.py tests/api/test_patterns_api.py -q
 ```
 
 ## 非目标
@@ -95,4 +95,3 @@ uv run --extra dev pytest tests/backtest/test_patterns.py tests/api/test_pattern
 - 不做缠论、波浪、K线组合大全。
 - 不新增技术指标依赖。
 - 不承诺预测有效性。
-

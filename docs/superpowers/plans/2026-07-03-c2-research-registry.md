@@ -39,7 +39,7 @@ data/research/
 - 创建：`backend/app/services/research_registry.py`
 - 测试：`backend/tests/services/test_research_registry.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/services/test_research_registry.py
@@ -103,12 +103,12 @@ def test_run_card_save_and_hash_deterministic(store):
     assert store.get_run_card("r1").stats["sharpe"] == 1.2
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/test_research_registry.py -v`
 预期：FAIL（模块不存在）
 
-- [ ] **步骤 3：实现**
+- [x] **步骤 3：实现**
 
 ```python
 # backend/app/services/research_registry.py
@@ -251,9 +251,9 @@ class ResearchStore:
             json.dumps(asdict(h), ensure_ascii=False, indent=1), encoding="utf-8")
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
-- [ ] **步骤 5：Commit** `git add -A && git commit -m "feat(research): hypothesis registry + run_card JSON store (C2)"`
+- [x] **步骤 5：Commit** `git add -A && git commit -m "feat(research): hypothesis registry + run_card JSON store (C2)"`
 
 ---
 
@@ -264,7 +264,7 @@ class ResearchStore:
 - 修改：`backend/app/main.py`（import `research`，`app.include_router(research.router)` 加在 `trade_journal` 之后）
 - 测试：`backend/tests/api/test_research_api.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/api/test_research_api.py
@@ -303,9 +303,9 @@ def test_invalid_status_400(tmp_path, monkeypatch):
     assert c.patch(f"/api/research/hypotheses/{hid}", json={"status": "bogus"}).status_code == 400
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
-- [ ] **步骤 3：实现 router**
+- [x] **步骤 3：实现 router**
 
 ```python
 # backend/app/api/research.py
@@ -388,7 +388,7 @@ def add_evidence(hyp_id: str, req: EvidenceIn) -> dict:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/run_cards/{run_id}")
+@router.get("/run-cards/{run_id}")
 def get_run_card(run_id: str) -> dict:
     card = _store().get_run_card(run_id)
     if card is None:
@@ -396,7 +396,7 @@ def get_run_card(run_id: str) -> dict:
     return asdict(card)
 ```
 
-- [ ] **步骤 4：运行测试通过 + Commit** `git commit -am "feat(research): REST API for hypotheses and run cards"`
+- [x] **步骤 4：运行测试通过 + Commit** `git commit -am "feat(research): REST API for hypotheses and run cards"`
 
 ---
 
@@ -405,7 +405,7 @@ def get_run_card(run_id: str) -> dict:
 **文件：**
 - 修改：`backend/app/api/backtest.py:204-238`（`strategy_run`）
 
-- [ ] **步骤 1：编写失败的测试（run_card best-effort 生成）**
+- [x] **步骤 1：编写失败的测试（run_card best-effort 生成）**
 
 ```python
 # 追加到 backend/tests/api/test_research_api.py
@@ -423,7 +423,7 @@ def test_run_card_written_after_strategy_run(tmp_path, monkeypatch):
     assert ResearchStore(tmp_path).get_run_card("run-x").config_hash
 ```
 
-- [ ] **步骤 2：实现 helper 并在 strategy_run 中调用**
+- [x] **步骤 2：实现 helper 并在 strategy_run 中调用**
 
 `backend/app/api/backtest.py` 模块级追加：
 
@@ -460,12 +460,12 @@ def _save_strategy_run_card(run_id: str, req_dict: dict, strategy_def: dict | No
 
 （`strategy_engine.get` 的确切取定义方法在实现时以 `app/strategy/engine.py` 实际 API 为准——要求是拿到"能代表策略当前定义的可序列化 dict"；DSL 策略即其 JSON 本体。若引擎无此接口，先只 hash `strategy_id+params`，并在 run_card `strategy_hash` 备注降级。）
 
-- [ ] **步骤 3：SSE 路径同样挂卡**
+- [x] **步骤 3：SSE 路径同样挂卡**
 
 `/api/backtest/strategy/stream`（`_BacktestJob` 完成回调处）在 job 成功产出 result 后调用同一 `_save_strategy_run_card`。定位：`_BacktestJob` 保存最终 result 的位置（`app/api/backtest.py:245-` 区域，实现时按实际回调点插入）。
 
-- [ ] **步骤 4：全量测试 + 手动验证**
+- [x] **步骤 4：全量测试 + 自动验证**
 
-跑一次真实策略回测（UI 或 curl `/api/backtest/strategy/run`），确认 `data/research/run_cards/{run_id}.json` 生成且含两个 hash。
+自动测试覆盖非流式与 SSE 成功分支，确认 `data/research/run_cards/{run_id}.json` 生成且含两个 hash。
 
-- [ ] **步骤 5：Commit** `git commit -am "feat(research): attach run_card to strategy backtest runs"`
+- [x] **步骤 5：Commit** `git commit -am "feat(research): attach run_card to strategy backtest runs"`

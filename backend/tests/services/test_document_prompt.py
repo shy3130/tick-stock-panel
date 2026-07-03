@@ -13,3 +13,20 @@ def test_document_text_appended_to_ai_prompts(monkeypatch):
         assert "非行情事实" in prompt
         assert "abcde" in prompt
         assert "abcdef" not in prompt
+
+
+def test_stock_prompt_includes_heuristic_pattern_summary():
+    prompt = stock_analyzer._build_user_prompt(
+        [],
+        {},
+        {},
+        None,
+        "600519.SH",
+        "",
+        patterns=[{"pattern": "double_bottom", "confidence": 0.74}],
+    )
+
+    assert "轻量技术形态摘要" in prompt
+    assert "启发式" in prompt
+    assert "不构成预测概率" in prompt
+    assert "double_bottom" in prompt

@@ -1,10 +1,11 @@
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from app.api import research
-from app.api.backtest import _save_strategy_run_card
+from app.api.backtest import _save_strategy_run_card, _strategy_stream_done_event
 from app.services.research_registry import ResearchStore
 
 
@@ -45,3 +46,22 @@ def test_strategy_run_card_hook_writes_file(tmp_path):
     )
     _save_strategy_run_card(req, result)
     assert ResearchStore(tmp_path).get_run_card("run-1").stats["sharpe"] == 1.0
+
+
+def test_strategy_stream_done_event_writes_run_card(tmp_path):
+    @dataclass
+    class Result:
+        run_id: str = "run-stream"
+        config: dict | None = None
+        strategy_info: dict | None = None
+        stats: dict | None = None
+        error: str | None = None
+
+    req = request(tmp_path)
+    event = _strategy_stream_done_event(
+        req,
+        Result(config={"strategy_id": "macd"}, strategy_info={"id": "macd"}, stats={"sharpe": 2.0}),
+    )
+
+    assert event.startswith("event: done")
+    assert ResearchStore(tmp_path).get_run_card("run-stream").stats["sharpe"] == 2.0

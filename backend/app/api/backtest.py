@@ -259,6 +259,15 @@ def _save_strategy_run_card(request: Request, result) -> None:
         logger.warning("save strategy run_card failed: %s", e)
 
 
+def _strategy_stream_done_event(request: Request, result) -> str:
+    if hasattr(result, "error") and result.error == "cancelled":
+        return f"event: error\ndata: {json.dumps({'message': '回测已取消'}, ensure_ascii=False)}\n\n"
+    if hasattr(result, "error") and result.error:
+        return f"event: error\ndata: {json.dumps({'message': result.error}, ensure_ascii=False)}\n\n"
+    _save_strategy_run_card(request, result)
+    return f"event: done\ndata: {json.dumps(asdict(result), ensure_ascii=False, default=str)}\n\n"
+
+
 def _walk_forward_windows(start: date, end: date, n_folds: int) -> list[tuple[date, date]]:
     n_folds = max(1, min(12, int(n_folds)))
     total = (end - start).days + 1
@@ -582,13 +591,7 @@ async def strategy_stream(
                     if job.error:
                         yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
-                        r = job.result
-                        if hasattr(r, "error") and r.error == "cancelled":
-                            yield f"event: error\ndata: {json.dumps({'message': '回测已取消'}, ensure_ascii=False)}\n\n"
-                        elif hasattr(r, "error") and r.error:
-                            yield f"event: error\ndata: {json.dumps({'message': r.error}, ensure_ascii=False)}\n\n"
-                        else:
-                            yield f"event: done\ndata: {json.dumps(asdict(r), ensure_ascii=False, default=str)}\n\n"
+                        yield _strategy_stream_done_event(request, job.result)
                     return
 
                 # 断开检测: 每 4 轮检查一次 (降低 GIL 抢占频率)
