@@ -170,6 +170,7 @@ class FQuantProvider:
         financial=True,
         depth=True,
         universes=True,   # 阶段 3 #3.2：fstore chengfen_gu 提供指数/板块/行业
+        minute_month_extension=True,
     )
 
     def __init__(self, engine_mode: str = "http") -> None:

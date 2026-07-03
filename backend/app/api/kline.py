@@ -698,7 +698,7 @@ async def extend_minute_history(request: Request):
 
     body: { "value": int, "unit": "day"|"month" }
     - day 单位:1~15 天(所有有分钟K权限的套餐可用)
-    - month 单位:1~6 月(每月按 30 天计,即最多 180 天)—— 仅 Expert+ 可用
+    - month 单位:1~6 月(每月按 30 天计,即最多 180 天)—— 需数据源声明支持
     返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
     """
     import asyncio
@@ -719,14 +719,11 @@ async def extend_minute_history(request: Request):
         if not capset.has(Cap.KLINE_MINUTE_BATCH):
             raise HTTPException(status_code=403, detail="当前数据源不支持批量分钟K")
 
-        # month 单位的分钟K扩展成本较高，仅保留给最宽能力档
         if unit == "month":
-            from app.tickflow.policy import tier_label
-            base_tier = tier_label().split()[0].split("+")[0].strip().lower()
-            if base_tier != "expert":
+            if not capset.has(Cap.KLINE_MINUTE_MONTH):
                 raise HTTPException(
                     status_code=403,
-                    detail="当前能力档不支持按月扩展分钟K历史",
+                    detail="当前数据源不支持按月扩展分钟K历史",
                 )
 
         # 计算天数上限:day 最多 15 天;month 最多 6 月(180 天)

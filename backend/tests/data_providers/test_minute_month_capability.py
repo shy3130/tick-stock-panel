@@ -1,0 +1,28 @@
+from app.data_providers.base import ProviderCapabilities
+from app.tickflow import policy
+from app.tickflow.capabilities import Cap
+
+
+class _Provider:
+    def __init__(self, caps: ProviderCapabilities) -> None:
+        self.capabilities = caps
+
+
+def _capset(monkeypatch, caps: ProviderCapabilities):
+    monkeypatch.setattr(policy, "_active_provider_name", lambda: "fquant_local")
+    monkeypatch.setattr("app.data_providers.get_provider", lambda name: _Provider(caps))
+    return policy._provider_capset()
+
+
+def test_month_cap_granted_only_when_provider_declares_it(monkeypatch):
+    cs = _capset(monkeypatch, ProviderCapabilities(minute=True, minute_month_extension=True))
+    assert cs is not None
+    assert cs.has(Cap.KLINE_MINUTE_BATCH)
+    assert cs.has(Cap.KLINE_MINUTE_MONTH)
+
+
+def test_month_cap_absent_when_provider_only_has_minute(monkeypatch):
+    cs = _capset(monkeypatch, ProviderCapabilities(minute=True))
+    assert cs is not None
+    assert cs.has(Cap.KLINE_MINUTE_BATCH)
+    assert not cs.has(Cap.KLINE_MINUTE_MONTH)

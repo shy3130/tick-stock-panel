@@ -18,6 +18,7 @@ class Cap(StrEnum):
     KLINE_DAILY_BATCH      = "kline.daily.batch"
     KLINE_MINUTE_BY_SYMBOL = "kline.minute.by_symbol"
     KLINE_MINUTE_BATCH     = "kline.minute.batch"
+    KLINE_MINUTE_MONTH     = "kline.minute.month"
     INTRADAY               = "intraday"
     INTRADAY_BATCH         = "intraday.batch"
     DEPTH5                 = "depth5"

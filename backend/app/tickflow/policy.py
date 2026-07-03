@@ -278,6 +278,8 @@ def _provider_capset() -> CapabilitySet | None:
     if caps.minute:
         out[Cap.KLINE_MINUTE_BY_SYMBOL] = CapabilityLimits(batch=1)
         out[Cap.KLINE_MINUTE_BATCH] = CapabilityLimits(batch=200)
+        if caps.minute_month_extension:
+            out[Cap.KLINE_MINUTE_MONTH] = CapabilityLimits(batch=200)
     if caps.financial:
         out[Cap.FINANCIAL] = CapabilityLimits(batch=100)
     if caps.adj_factor:

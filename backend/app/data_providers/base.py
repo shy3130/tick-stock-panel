@@ -26,6 +26,8 @@ class ProviderCapabilities:
     depth: bool = False
     # universes: 指数 / 板块 / 行业集合（按 universe 名返回标的清单）
     universes: bool = False
+    # Whether provider explicitly allows multi-month minute-history extension.
+    minute_month_extension: bool = False
 
 
 class MarketDataProvider(Protocol):
