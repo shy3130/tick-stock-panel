@@ -68,7 +68,7 @@
 | **C9** | 定时研究：扩"定时复盘"为"定时研究模板"（大盘/自选/策略池周报），先模板化不做自由 prompt | M | AI 调用成本 + 重复任务限额；APScheduler 已在项目内 | C2（研究资产落库） |
 | **P4** | TDX 磁盘数据质量核对清单（Vibe `TDX_LOCAL_DATA_INTEGRATION.md`）：① volume=股/amount=元 量纲核对（对 `mapping.py` 与换手率单位假设）② 早期"对数复权负价"数据质量断言（panel 用 raw 重建优于直接丢弃）③ 港股 amount=0 边界 | S | 半天核对，纯断言加固；对刚上线的磁盘直读做数据质量兜底 | fquant_local（✅） |
 | **C12** | Symbol search 增强：借 Eastmoney suggest 做补全（不迁移外部 screener，本地策略引擎为准） | S | 外部 suggest 与本地 instruments 口径不一致 | 无 |
-| **C11** | 策略导出：只做 TDX/同花顺公式（不做 Pine/MT5），仅无状态日线信号 + 已有指标列 | M | 导出语义易与 panel 指标口径漂移；需限定 DSL 子集 | 无 |
+| **C11** | 策略导出：只做 TDX/同花顺公式（不做 Pine/MT5），仅显式 DSL 的无状态日线信号 + 已有指标列 | ✅ 待提交 | 不反解析 Python `filter()`；无 DSL 返回 unsupported | 无 |
 | **C10** | Mandate Gate / Kill Switch **设计（ADR）**：单笔/敞口/杠杆/日次数硬上限 + 文件哨兵熔断 + fail-closed | S（仅设计） | **只出设计不实现**；涉及实盘资金，实现属交易桥接立项 | 无 |
 
 ### Track D — 明确不做 / 远期（存档，非本路线图排期）
@@ -153,7 +153,7 @@ C10/C11(交易桥接前置) ── 远期，独立立项
 
 ### Phase 6 — 交易桥接前置（远期，独立立项）
 - **C10**（Mandate/Kill-Switch 设计 ADR，S）
-- **C11**（TDX/同花顺公式导出，M）
+- **C11**（TDX/同花顺公式导出，✅ 待提交）
 - 信号文件导出到 QMT/掘金（不直连下单）
 
 ---

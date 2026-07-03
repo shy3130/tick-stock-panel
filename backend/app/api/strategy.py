@@ -129,6 +129,12 @@ class MonitorStartRequest(BaseModel):
     strategy_id: str
 
 
+class ExportRequest(BaseModel):
+    target: str
+    expression: dict | None = None
+    conditions: list[dict] | None = None
+
+
 # ── 列表 / 详情 ─────────────────────────────────────────────────────
 
 
@@ -156,6 +162,26 @@ def get_strategy(strategy_id: str, request: Request):
         raise HTTPException(status_code=404, detail=str(e)) from e
     overrides = strategy_config.load_override(_data_dir(request), strategy_id)
     return _strategy_detail(s, overrides or None)
+
+
+@router.post("/{strategy_id}/export")
+def export_strategy(strategy_id: str, req: ExportRequest, request: Request):
+    engine = _get_engine(request)
+    try:
+        s = engine.get(strategy_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    if req.target not in {"tdx", "ths"}:
+        raise HTTPException(status_code=400, detail=f"不支持的导出目标: {req.target}")
+
+    from app.services.strategy_export import export_strategy_formula
+
+    return export_strategy_formula(
+        s,
+        req.target,
+        expression=req.expression,
+        conditions=req.conditions,
+    ).to_dict()
 
 
 # ── 执行选股 ─────────────────────────────────────────────────────────
