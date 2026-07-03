@@ -4,16 +4,14 @@ from __future__ import annotations
 import os
 
 from app.data_providers.fquant_provider import FQuantProvider
-from app.data_providers.tickflow_provider import TickFlowProvider
 
 _PROVIDERS = {
-    "tickflow": TickFlowProvider,
     "fquant": FQuantProvider,
     "fquant_local": lambda: FQuantProvider(engine_mode="disk"),
 }
 
 
-def normalize_provider_name(name: str | None, default: str = "tickflow") -> str:
+def normalize_provider_name(name: str | None, default: str = "fquant_local") -> str:
     provider_name = (name or default).strip().lower() or default
     if provider_name not in _PROVIDERS:
         raise ValueError(f"Unsupported data provider: {name}")
@@ -49,9 +47,9 @@ def get_active_provider_name(capability: str | None = None) -> str:
             return normalize_provider_name(provider)
         return normalize_provider_name(preferences.get_data_provider())
     except Exception:  # noqa: BLE001
-        return "tickflow"
+        return "fquant_local"
 
 
-def get_provider(name: str = "tickflow"):
+def get_provider(name: str = "fquant_local"):
     provider_factory = _PROVIDERS[normalize_provider_name(name)]
     return provider_factory()

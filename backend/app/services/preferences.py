@@ -94,14 +94,14 @@ def get_minute_sync_days() -> int:
     return max(1, min(30, load().get("minute_sync_days", 5)))
 
 
-# ===== 数据源选择 (默认 TickFlow；支持切换到本地 fquant provider) =====
+# ===== 数据源选择 =====
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow", "fquant", "fquant_local"}
+_ALLOWED_DATA_PROVIDERS = {"fquant", "fquant_local"}
 
 
-def _clean_data_provider(provider: str | None, default: str = "tickflow") -> str:
+def _clean_data_provider(provider: str | None, default: str = "fquant_local") -> str:
     provider = str(provider or default).strip().lower() or default
-    return provider if provider in _ALLOWED_DATA_PROVIDERS else "tickflow"
+    return provider if provider in _ALLOWED_DATA_PROVIDERS else "fquant_local"
 
 
 def get_data_provider() -> str:

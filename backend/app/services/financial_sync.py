@@ -4,8 +4,7 @@
 能力门控: Cap.FINANCIAL (Expert 套餐)
 
 数据获取通过 data_providers 抽象层,支持 provider 切换。
-- 默认 ``tickflow``: 通过 ``tf.financials.*`` (TickFlowProvider 内部 lazy 调用)
-- ``fquant``: 通过 FQuantProvider.get_financial() 直连 fstore financial_report_* 表
+- ``fquant``/``fquant_local``: 通过 FQuantProvider.get_financial() 直连 fstore financial_report_* 表
 """
 from __future__ import annotations
 
@@ -42,15 +41,14 @@ _PROVIDER_TABLE_MAP: dict[str, str] = {
 }
 
 
-# 数据源 provider 单例缓存(默认 tickflow,可切到 fquant)
+# 数据源 provider 单例缓存
 _provider_instance = None
 
 
 def _get_data_provider():
     """获取当前配置的数据源 provider。
 
-    通过 registry 解析当前 provider,默认 ``tickflow``。
-    支持值: ``tickflow`` / ``fquant``。
+    通过 registry 解析当前 provider。
     与 ``app.services.kline_sync._get_data_provider`` 同模式。
     """
     global _provider_instance
@@ -106,7 +104,6 @@ def _sync_table(
     # 业务表名 → provider.get_financial() 的 table 参数
     provider_table = _PROVIDER_TABLE_MAP.get(table, table)
 
-    # TickFlowProvider 当前未实现 get_financial(像 get_minute 一样返回空)。
     # 用 getattr 兜底:不存在 → 直接返回 0 行,使本函数优雅降级,不抛异常。
     get_financial = getattr(provider, "get_financial", None)
     if get_financial is None:

@@ -3,7 +3,7 @@
 集中管理全市场行情拉取 + enriched 缓存，供盘中选股、自选股等所有模块复用。
 
 架构:
-  - 后台线程轮询 TickFlow get_by_universes(["CN_Equity_A", "CN_Index"])
+  - 后台线程轮询当前 provider realtime 数据
   - 拉取行情 → 写 kline_daily (不复权) + 增量计算 enriched → 写盘 + 更新缓存
   - _enriched_cache 是唯一的盘中数据源 (OHLCV + 全套技术指标)
   - _live_agg_cache 是递推状态 (只加载一次, 盘中不变)
@@ -35,15 +35,14 @@ from app.data_providers.registry import get_active_provider_name, get_provider
 logger = logging.getLogger(__name__)
 
 
-# 数据源 provider 单例缓存(默认 tickflow,可切到 fquant)
+# 数据源 provider 单例缓存
 _provider_instance = None
 
 
 def _get_data_provider():
     """获取当前配置的数据源 provider。
 
-    通过 registry 解析当前 provider,默认 ``tickflow``。
-    支持值: ``tickflow`` / ``fquant`` / ``fquant_local``。
+    通过 registry 解析当前 provider。
 
     FQuantProvider 走 tdx-api / sina/tencent / fstore daily_markets，本地源不可用时降级为空。
     """
@@ -124,7 +123,7 @@ class QuoteService:
         """开启自动行情 (不立即启动线程，等下一个交易时段)。
 
         provider 不支持实时行情时拒绝开启并返回 False;
-        tickflow free 档开启自选股实时,starter+ 开启全市场实时。返回值表示是否真正开启。
+        provider 支持 realtime 时开启。返回值表示是否真正开启。
         """
         if not self.is_realtime_allowed():
             logger.warning("实时行情开启被拒:当前数据源无实时行情能力")
@@ -300,7 +299,7 @@ class QuoteService:
         return df
 
     def get_index_quotes(self, symbols: list[str] | None = None) -> pl.DataFrame:
-        """返回实时指数行情缓存。不会触发 TickFlow 请求。"""
+        """返回实时指数行情缓存。"""
         with self._lock:
             df = self._index_quotes_cache.clone() if self._index_quotes_cache is not None else pl.DataFrame()
         if df.is_empty():

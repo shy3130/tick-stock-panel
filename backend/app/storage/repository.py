@@ -201,56 +201,56 @@ class DataStore:
         if self._has_parquet("kline_daily"):
             daily_parts.append("""
                 SELECT symbol, date, open, high, low, close, volume, amount,
-                       'stock' AS asset_type, 'tickflow' AS source
+                       'stock' AS asset_type, 'legacy' AS source
                 FROM kline_daily
             """)
         if self._has_parquet("kline_index_daily"):
             daily_parts.append("""
                 SELECT symbol, date, open, high, low, close, volume, amount,
-                       'index' AS asset_type, 'tickflow' AS source
+                       'index' AS asset_type, 'legacy' AS source
                 FROM kline_index_daily
             """)
         if self._has_parquet("kline_etf_daily"):
             daily_parts.append("""
                 SELECT symbol, date, open, high, low, close, volume, amount,
-                       'etf' AS asset_type, 'tickflow' AS source
+                       'etf' AS asset_type, 'legacy' AS source
                 FROM kline_etf_daily
             """)
 
         if self._has_parquet("kline_daily_enriched"):
-            enriched_parts.append("SELECT *, 'stock' AS asset_type, 'tickflow' AS source FROM kline_enriched")
+            enriched_parts.append("SELECT *, 'stock' AS asset_type, 'legacy' AS source FROM kline_enriched")
         if self._has_parquet("kline_index_enriched"):
-            enriched_parts.append("SELECT *, 'index' AS asset_type, 'tickflow' AS source FROM kline_index_enriched")
+            enriched_parts.append("SELECT *, 'index' AS asset_type, 'legacy' AS source FROM kline_index_enriched")
         if self._has_parquet("kline_etf_enriched"):
-            enriched_parts.append("SELECT *, 'etf' AS asset_type, 'tickflow' AS source FROM kline_etf_enriched")
+            enriched_parts.append("SELECT *, 'etf' AS asset_type, 'legacy' AS source FROM kline_etf_enriched")
 
         if self._has_parquet("kline_minute"):
             minute_parts.append("""
                 SELECT symbol, datetime, open, high, low, close, volume, amount,
-                       'stock' AS asset_type, 'tickflow' AS source
+                       'stock' AS asset_type, 'legacy' AS source
                 FROM kline_minute
             """)
         if self._has_parquet("kline_etf_minute"):
             minute_parts.append("""
                 SELECT symbol, datetime, open, high, low, close, volume, amount,
-                       'etf' AS asset_type, 'tickflow' AS source
+                       'etf' AS asset_type, 'legacy' AS source
                 FROM kline_etf_minute
             """)
 
         if self._has_parquet("instruments"):
             inst_parts.append("""
-                SELECT symbol, name, code, exchange, 'stock' AS asset_type, 'tickflow' AS source
+                SELECT symbol, name, code, exchange, 'stock' AS asset_type, 'legacy' AS source
                 FROM instruments
             """)
         if self._has_parquet("instruments_index"):
             inst_parts.append("""
-                SELECT symbol, name, code, NULL AS exchange, 'index' AS asset_type, 'tickflow' AS source
+                SELECT symbol, name, code, NULL AS exchange, 'index' AS asset_type, 'legacy' AS source
                 FROM instruments_index
                 WHERE coalesce(asset_type, 'index') != 'etf'
             """)
         if self._has_parquet("instruments_etf"):
             inst_parts.append("""
-                SELECT symbol, name, code, NULL AS exchange, 'etf' AS asset_type, 'tickflow' AS source
+                SELECT symbol, name, code, NULL AS exchange, 'etf' AS asset_type, 'legacy' AS source
                 FROM instruments_etf
             """)
 

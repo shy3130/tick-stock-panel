@@ -35,7 +35,7 @@ def to_polars(data) -> pl.DataFrame:
         return pl.DataFrame()
 
 
-def normalize_daily(data, default_symbol: str | None = None, source: str = "tickflow") -> pl.DataFrame:  # noqa: ARG001
+def normalize_daily(data, default_symbol: str | None = None, source: str = "provider") -> pl.DataFrame:  # noqa: ARG001
     df = to_polars(data)
     if df.is_empty():
         return df
@@ -59,7 +59,7 @@ def normalize_daily(data, default_symbol: str | None = None, source: str = "tick
     return df.select(keep) if keep else pl.DataFrame()
 
 
-def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:  # noqa: ARG001
+def normalize_adj_factors(data, source: str = "provider") -> pl.DataFrame:  # noqa: ARG001
     df = to_polars(data)
     if df.is_empty():
         return df
@@ -82,7 +82,7 @@ def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:  # no
     return df.select(keep).drop_nulls() if len(keep) == len(ADJ_FACTOR_COLS) else pl.DataFrame()
 
 
-def normalize_instruments(rows: list[dict], asset_type: str, source: str = "tickflow") -> pl.DataFrame:
+def normalize_instruments(rows: list[dict], asset_type: str, source: str = "provider") -> pl.DataFrame:
     if not rows:
         return pl.DataFrame()
     out: list[dict] = []
@@ -103,7 +103,7 @@ def normalize_instruments(rows: list[dict], asset_type: str, source: str = "tick
     return pl.DataFrame(out).select(INSTRUMENT_COLS).unique(subset=["symbol"], keep="last").sort("symbol")
 
 
-def normalize_realtime(data, source: str = "tickflow") -> pl.DataFrame:
+def normalize_realtime(data, source: str = "provider") -> pl.DataFrame:
     """Normalize realtime quote rows to quote_service's provider contract."""
     df = to_polars(data)
     if df.is_empty():

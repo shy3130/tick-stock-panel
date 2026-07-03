@@ -238,7 +238,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
-          当前数据源未提供实时行情能力。切换到支持 realtime 的本地源或配置 TickFlow 后即可开启监控。
+          当前数据源未提供实时行情能力。切换到支持 realtime 的数据源后即可开启监控。
         </p>
         <a
           href="/settings?tab=system"

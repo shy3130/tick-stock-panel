@@ -16,7 +16,7 @@ BROAD = ["000300.SH", "000905.SH", "399006.SZ", "000688.SH"]
 
 def main() -> int:
     from app.services import index_sync, preferences
-    from app.tickflow.policy import detect_capabilities
+    from app.data_providers.capability_gate import detect_capabilities
     from app.storage.repository import DataStore, KlineRepository
 
     repo = KlineRepository(DataStore())

@@ -610,8 +610,8 @@ export interface StrategyBacktestResult {
 // ===== Settings =====
 
 export interface SettingsState {
-  mode: 'none' | 'free' | 'api_key' | 'fquant' | 'fquant_local'
-  data_provider: 'tickflow' | 'fquant' | 'fquant_local'
+  mode: 'fquant' | 'fquant_local'
+  data_provider: 'fquant' | 'fquant_local'
   // 首次使用引导
   onboarding_completed: boolean
   // AI 配置
@@ -800,7 +800,7 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
-  updateDataProvider: (data_provider: 'tickflow' | 'fquant' | 'fquant_local') =>
+  updateDataProvider: (data_provider: 'fquant' | 'fquant_local') =>
     request<{
       data_provider: string
       effective_data_provider: string

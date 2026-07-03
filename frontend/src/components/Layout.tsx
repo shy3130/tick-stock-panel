@@ -41,7 +41,6 @@ import {
   RadioTower,
   CheckCircle2,
   BookOpenCheck,
-  ExternalLink,
   NotebookPen,
 } from 'lucide-react'
 import { Logo } from './Logo'
@@ -51,7 +50,6 @@ import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitor
 
 // 品牌色 — 只用于 logo / brand 区域,不影响功能语义色
 const BRAND = '#8B5CF6'
-const TICKFLOW_REGISTER_URL = 'https://tickflow.org/auth/register?ref=V3KDKGXPEA'
 
 const CORE_INDEXES = [
   { symbol: '000001.SH', name: '上证指数' },
@@ -408,7 +406,7 @@ export function Layout() {
 
           <TierBadge
             label={caps?.label ?? ''}
-            hasKey={settingsState?.mode !== 'none'}
+            hasKey
           />
           <AIConfigBadge
             configured={settingsState?.ai_configured ?? settingsState?.has_ai_key}
@@ -466,17 +464,7 @@ export function Layout() {
                 </span>
               </div>
               <div className="mt-1.5 text-[10px] leading-snug text-muted">
-                免费注册
-                <a
-                  href={TICKFLOW_REGISTER_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mx-1 inline-flex items-baseline gap-0.5 text-accent/80 hover:text-accent hover:underline"
-                >
-                  TickFlow
-                  <ExternalLink className="h-2.5 w-2.5 self-center" />
-                </a>
-                开启个股监控
+                当前数据源未提供实时行情能力
               </div>
             </div>
           ) : (

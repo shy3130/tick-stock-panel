@@ -489,8 +489,7 @@ export function Dashboard() {
   const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
   const sealedReady = !!data?.limit?.sealed_ready
   const isSealedDegrade = !hasDepth || !sealedReady
-  // none 档(无 key / 无效 key): 不再阻断功能, 仅实时行情等扩展能力受限
-  const isNoKey = settings.data?.mode === 'none'
+  const isNoKey = false
   // 无本地数据(enriched/daily 都没有)→ 常驻引导卡片
   // 注: 后端 status 的 rows 为性能刻意返回 0, 用 trading_days 判断是否有数据
   const ds = dataStatus.data

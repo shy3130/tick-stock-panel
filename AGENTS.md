@@ -23,13 +23,12 @@
 
 ## 2. 数据源矩阵
 
-通过 `DATA_PROVIDER` 环境变量或 `/api/settings/preferences/data-provider` 在三个 provider 之间切换；环境变量优先级最高。
+通过 `DATA_PROVIDER` 环境变量或 `/api/settings/preferences/data-provider` 在两个 provider 之间切换；环境变量优先级最高。
 
 | Provider | 数据来源 | capabilities | 默认 | 切换方式 |
 |----------|---------|--------------|------|----------|
-| `tickflow` | TickFlow SDK（付费档） | 全部 7 项（instruments / daily / adj_factor / minute / realtime / financial / depth） | ✅ 默认 | `DATA_PROVIDER=tickflow` 或 settings API |
+| `fquant_local` | TDX 磁盘 `wide/day/xdxr/minutes/trans/fund` + fstore PG + tdx-api/sina/tencent/fstore realtime | 日 K / 分钟 / 复权 / 财务 / realtime / universes；扩展逐笔/日级资金流；**stock raw mirror 禁写**；**depth 缺口** | ✅ 默认 | `DATA_PROVIDER=fquant_local` 或 settings API |
 | `fquant` | fstore PG + engine-data HTTP + moneyflow HTTP + 可选 tdx-api | 日 K / 复权 / 分钟 / 财务 / realtime / universes；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant` 或 settings API |
-| `fquant_local` | TDX 磁盘 `wide/day/xdxr/minutes/trans/fund` + fstore PG + tdx-api/sina/tencent/fstore realtime | 日 K / 分钟 / 复权 / 财务 / realtime / universes；扩展逐笔/日级资金流；**stock raw mirror 禁写**；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant_local` 或 settings API |
 
 **fquant 本地源**：
 
@@ -46,7 +45,7 @@
 
 - **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级
 - **realtime 已接入**：不能直接调用 `../fquant` HTTP API；当前优先可选 `tdx-api` `/api/quote`，再走 sina/tencent 受控适配器，最后回退 fstore `daily_markets` 最新快照
-- **universes 已接入**：阶段 3.2 走 provider `get_by_universes()`；fquant 接 fstore `chengfen_gu` + `base_infos`，TickFlow 保留 SDK 兼容路径
+- **universes 已接入**：阶段 3.2 走 provider `get_by_universes()`；fquant 接 fstore `chengfen_gu` + `base_infos`
 
 ---
 
@@ -57,7 +56,6 @@
 | 文件 | 行数 | 作用 | 必读理由 |
 |------|------|------|---------|
 | `base.py` | 70+ | `MarketDataProvider` 协议 + `ProviderCapabilities` | **接口契约**，新增 capability 必须先改这里 |
-| `tickflow_provider.py` | 220+ | TickFlowProvider（v1，向后兼容路径） | 默认 provider，所有 capability 都通 |
 | `fquant_provider.py` | 600+ | FQuantProvider（v2，本地源聚合） | 直连 fstore / engine-data / TDX 磁盘 / moneyflow / tdx-api / sina / tencent |
 | `fquant/` | 10+ 文件 | fquant 子模块（symbols / fstore_client / engine_data_client / engine_data_disk / sina_tencent_client / moneyflow_client / mapping / adj_factor / raw_reconstruct / fallback） | 改 fquant 行为时从这里入手 |
 | `normalizer.py` | — | 字段规范化（Symbol / Instrument / KLine / Realtime 等） | 既有契约稳定；realtime 契约为追加 |
@@ -70,9 +68,9 @@
 |------|--------|------|
 | `services/kline_sync.py` | +105 / -92 | **解耦试点**，其他 service 照抄它的 `_get_data_provider()` 模式 |
 | `services/instrument_sync.py` | +35 / -40 | 标准解耦 |
-| `services/quote_service.py` | +46 / -17 | tickflow 回归；fquant 走 tdx-api / sina/tencent / fstore 快照 |
+| `services/quote_service.py` | +46 / -17 | realtime 走 provider；fquant 走 tdx-api / sina/tencent / fstore 快照 |
 | `services/financial_sync.py` | +87 / -34 | 财务报表走 fstore |
-| `services/index_sync.py` | +28 / -31 | universes 走 provider，TickFlow/FQuant 各自实现 |
+| `services/index_sync.py` | +28 / -31 | universes 走 provider，FQuant 走 fstore |
 | `services/watchlist.py` | +20 / -5 | realtime 走 provider；fquant 走本地源 fallback |
 | `services/depth_service.py` | +20 / -0 | 能力检查模式：fquant 直接降级返回空 |
 
@@ -112,10 +110,7 @@ def sync_daily(...):
     df = provider.get_daily(symbols, start, end, asset_type)
     ...
 
-# ❌ 错误：直接 import TickFlow SDK
-from app.tickflow.client import TickFlowClient
-client = TickFlowClient()
-client.get_daily(...)  # 破坏解耦，业务层耦合到具体 provider
+# ❌ 错误：新增任何绕过 data_providers 的 SDK/HTTP/DB 直连
 ```
 
 **进入业务入口前必须做 capabilities 检查**（fquant 的 depth 当前是缺口，realtime 依赖本地源可用性）：
@@ -213,13 +208,12 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 | fquant_local freshness 落后 | 检查 `TDX_DATA_DIR/wide` 是否挂载并更新；`EngineDataDiskClient.freshness()` 用基准股最后日期探测 |
 | engine-data 502 | 自动切 fstore `day_klines` fallback；查网络 |
 | moneyflow 502 | 自动降级 0 行 + warning，不阻断其它接口 |
-| `tickflow` 模式数据与改动前不一致 | 立即停止，回滚 `services/` 改动；详见 `FQUANT_INTEGRATION_PROGRESS.md` §3.5 |
 
 ---
 
 ## 6. 不要做的事（红线汇总）
 
-1. **❌ 不要直接 import TickFlow SDK**（除非在 `tickflow_provider.py` 或 `app.tickflow.*` 兼容层内部，且加注释说明为什么）
+1. **❌ 不要重新引入 TickFlow SDK 或 `app.tickflow.*` 兼容层**
 2. **❌ 不要在业务层直接连接外部行情接口**（Tencent / 新浪 / 第三方）——所有行情数据走 `data_providers` 抽象层；2026-07-02 起允许在 provider 内受控适配 sina/tencent realtime，禁止绕过 provider
 3. **❌ 不要改 `base.py` 接口契约**——除非同步新增 capability 字段并更新所有 provider
 4. **❌ 不要假设 `DATA_PROVIDER=fquant` 一定有 depth 数据**；realtime 也要能处理本地源暂时返回空

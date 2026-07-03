@@ -15,11 +15,6 @@ def current_data_mode() -> str:
     from app.data_providers.registry import get_active_provider_name
 
     try:
-        provider = get_active_provider_name()
+        return get_active_provider_name()
     except Exception:  # noqa: BLE001
-        provider = "tickflow"
-    if provider != "tickflow":
-        return provider
-
-    from app.tickflow import client as tf_client
-    return tf_client.current_mode()
+        return "fquant_local"

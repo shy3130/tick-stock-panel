@@ -61,11 +61,9 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
-# 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
+# 两个关键路径, 确保 static / data 都指向容器内正确位置。
 COPY backend/app ./app
-COPY tiers.yaml /app/tiers.yaml
 ENV STATIC_DIR=/app/static \
-    TIERS_YAML=/app/tiers.yaml \
     DATA_DIR=/app/data
 
 # Frontend 静态产物

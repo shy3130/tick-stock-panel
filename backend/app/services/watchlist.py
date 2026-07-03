@@ -98,7 +98,7 @@ def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8
     """拉取实时行情。
 
     通过 data_providers 抽象层取数,支持 provider 切换。
-    - tickflow provider: 走 SDK quotes.get, 有实时数据
+    - realtime provider: 走 provider.get_realtime, 有实时数据
     - fquant/fquant_local provider: 走本地 realtime fallback，不可用时优雅降级为空
     timeout_s: 单批次请求超时(秒)，防止 API 卡死阻塞整个请求。
     """

@@ -20,15 +20,14 @@ logger = logging.getLogger(__name__)
 _EXCHANGES = ["SH", "SZ", "BJ"]
 
 
-# 数据源 provider 单例缓存（默认 tickflow，可切到 fquant）
+# 数据源 provider 单例缓存
 _provider_instance = None
 
 
 def _get_data_provider():
     """获取当前配置的数据源 provider。
 
-    通过 registry 解析当前 provider，默认 ``tickflow``。
-    支持值: ``tickflow`` / ``fquant``。
+    通过 registry 解析当前 provider。
     """
     global _provider_instance
     if _provider_instance is None:

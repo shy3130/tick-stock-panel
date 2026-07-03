@@ -19,7 +19,7 @@ import { cn } from '@/lib/cn'
 // ===== Tab 定义 =====
 
 const TABS = [
-  { key: 'account',    label: 'TickFlow',   icon: Key,       panel: SettingsKeysPanel },
+  { key: 'account',    label: '数据源',     icon: Key,       panel: SettingsKeysPanel },
   { key: 'ai',         label: 'AI 设置',    icon: Sparkles,  panel: SettingsAIPanel },
   { key: 'monitoring', label: '实时监控',   icon: Radio,     panel: SettingsMonitoringPanel },
   { key: 'ext-pages',  label: '扩展页面',   icon: BarChart3, panel: SettingsExtPagesPanel },

@@ -1,12 +1,10 @@
 """指数 / ETF 数据同步服务。
 
-标的列表优先用免费的 exchanges.get_instruments(type=index/etf) 拉取
-(None/Free 档均可用,无需 quote.pool 权限);付费档可额外用
-quotes.get_by_universes 作为补充来源。日K统一走 klines.batch。
+标的列表优先用 provider.get_instruments(type=index/etf) 拉取；
+provider.get_by_universes 可作为补充来源。日K统一走 provider.get_daily。
 
 数据获取通过 data_providers 抽象层,支持 provider 切换。
-universes 付费补充也走 provider 抽象层（阶段 3 #3.2：FQuantProvider 走
-fstore chengfen_gu；TickFlowProvider 走 tf.quotes.get_by_universes）。
+universes 补充也走 provider 抽象层（FQuantProvider 走 fstore chengfen_gu）。
 """
 from __future__ import annotations
 
@@ -24,7 +22,7 @@ from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 
-# 复用 kline_sync 的 provider 工厂(默认 tickflow,可切到 fquant)
+# 复用 kline_sync 的 provider 工厂
 _get_data_provider = kline_sync._get_data_provider
 
 # exchanges.get_instruments 查询的交易所(沪深京)
@@ -32,9 +30,9 @@ _EXCHANGES = ["SH", "SZ", "BJ"]
 
 
 def _quotes_to_index_instruments(resp) -> pl.DataFrame:
-    """将 TickFlow quotes 响应(get_by_universes)规范为指数 instruments。
+    """将 provider universe 响应规范为指数 instruments。
 
-    付费档(Starter+)的补充来源,免费档用不到。
+    补充来源为空时返回空 DataFrame。
     """
     if resp is None:
         return pl.DataFrame()
@@ -130,9 +128,7 @@ def sync_index_instruments(
         if not etf_df.is_empty():
             etf_parts.append(etf_df)
 
-    # 2) 付费补充:Starter+ 用 get_by_universes 补指数(仅当开启指数拉取)
-    # 阶段 3 #3.2:universes 能力已下沉到 provider 抽象层,FQuantProvider 走
-    # fstore chengfen_gu，TickFlowProvider 走 tf.quotes.get_by_universes。
+    # 2) 用 get_by_universes 补指数(仅当开启指数拉取)
     if pull_index:
         try:
             provider = _get_data_provider()

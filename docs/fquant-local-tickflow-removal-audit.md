@@ -103,6 +103,8 @@
 
 ## 移除就绪度清单
 
+> 2026-07-03 更新：A1-A7 已按本清单执行；产品决策已落档为不再保留 `DATA_PROVIDER=tickflow`。`TickFlowProvider`、`app/tickflow/`、`tiers.yaml`、TickFlow key/endpoint UI 和 SDK 依赖已删除，默认 provider 改为 `fquant_local`。
+
 ### A. 本地模式下已死/可先清理
 
 - `backend/app/tickflow/scheduler.py`：未发现运行时引用。
@@ -123,9 +125,9 @@
 
 ## 建议顺序
 
-1. Quick-win：先去掉分钟K按月扩展的 `tier_label()==expert` 判断，改成 provider capability / 本地配置；这是本地模式下真实 403 阻断，改动独立且小。
-2. 把 `Cap/CapabilitySet/CapabilityDenied` 从 `app.tickflow` 迁到中性 capability 模块。
-3. 把 `app.tickflow.repository` 迁到中性包名，保留兼容导入一版；这是可并行的机械任务，不阻塞前两项。迁移清单为 8 处：`main.py`、`services/kline_sync.py`、`jobs/daily_pipeline.py`、`services/screener.py`、`backtest/engine.py`、`services/index_sync.py`、`services/extend_history.py`、`services/backtest.py`。
-4. 把 settings/health/capabilities 的 TickFlow key/tier/endpoint 展示拆成可选 TickFlow provider 设置。
-5. 删除 `tickflow.scheduler`、`tickflow.pools` guarded fallback、`tiers.yaml`。
-6. 最后删除 `TickFlowProvider` 和 `tickflow.client`。
+1. ✅ Quick-win：先去掉分钟K按月扩展的 `tier_label()==expert` 判断，改成 provider capability / 本地配置。
+2. ✅ 把 `Cap/CapabilitySet/CapabilityDenied` 从 `app.tickflow` 迁到中性 capability 模块。
+3. ✅ 把 `app.tickflow.repository` 迁到中性包名。
+4. ✅ 把 settings/health/capabilities 的 TickFlow key/tier/endpoint 展示拆除。
+5. ✅ 删除 `tickflow.scheduler`、`tickflow.pools` guarded fallback、`tiers.yaml`。
+6. ✅ 最后删除 `TickFlowProvider` 和 `tickflow.client`。

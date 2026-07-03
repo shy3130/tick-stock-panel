@@ -14,5 +14,4 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-      - ./tiers.yaml:/app/tiers.yaml:ro
     restart: unless-stopped

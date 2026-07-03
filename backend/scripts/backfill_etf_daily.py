@@ -17,7 +17,7 @@ os.environ.setdefault("DATA_PROVIDER", "fquant_local")
 
 def main() -> int:
     from app.services import index_sync
-    from app.tickflow.policy import detect_capabilities
+    from app.data_providers.capability_gate import detect_capabilities
     from app.storage.repository import DataStore, KlineRepository
 
     repo = KlineRepository(DataStore())

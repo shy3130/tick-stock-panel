@@ -39,9 +39,9 @@
 | **A1** | 分钟K month 扩展去 `tier_label()==expert` 门控 → 换 provider capability / 本地配置 | S | **裁决硬约束**：不得裸删，原"month 成本高"是成本考量，裸删=无条件放行（另一种 bug）；需替换成能表达"该 provider 能否负担月度分钟K"的门控 | 无（独立 quick-win） |
 | **A2** | capability 语义中性化：`Cap/CapabilitySet/CapabilityDenied` 迁到中性模块；文案从"套餐升级"改"数据源能力" | L | UI/API 多处依赖旧 Cap 语义（/api/capabilities、settings、health、main.py 异常处理）；改动面广易漏 | 无（与 A3 并行） |
 | **A3** | `app.tickflow.repository` rename 到中性包名（保留一版兼容导入） | M | **8 处导入方**（main / backtest.engine / daily_pipeline / screener / index_sync / extend_history / services.backtest / kline_sync）——审计原写 5 处，务必按 8 处改，别漏 | 无（纯机械，可并行） |
-| **A4** | settings/health/capabilities 去 TickFlow 展示：key/tier/endpoint/probe 拆成"可选 TickFlow provider"设置 | M | 前端展示联动；需保留 `DATA_PROVIDER=tickflow` 仍可用的退路 | A2 |
+| **A4** | settings/health/capabilities 去 TickFlow 展示：key/tier/endpoint/probe 拆成"可选 TickFlow provider"设置 | M | 前端展示联动 | A2 |
 | **A5** | 删 `tickflow.scheduler`（无引用）/ `tickflow.pools`（仅 tickflow fallback）/ `tiers.yaml` | S | scheduler 已确认零引用可直接删；pools/tiers 需先确认 tickflow provider fallback 不再需要 | A2/A4 |
-| **A6** | 删 `TickFlowProvider` + `tickflow.client`（叶子） | S | **产品决策**：是否彻底不保留 `DATA_PROVIDER=tickflow`；保留则不删 | A1-A5 全部 |
+| **A6** | 删 `TickFlowProvider` + `tickflow.client`（叶子） | S | **产品决策已落档（2026-07-03）**：不再保留 `DATA_PROVIDER=tickflow`，默认数据源改为 `fquant_local` | A1-A5 全部 |
 | **A7** | provider capability 路由补全（审计 High-3）：financial/depth/minute 独立按能力选 provider，不再搭 daily/global | M | 当前全局 `DATA_PROVIDER=fquant_local` 时无碍；仅 per-capability 混切才需要——**可能 YAGNI**，取决于是否真要混源 | 无 |
 
 ### Track B — Trade Journal 延伸
@@ -108,7 +108,7 @@ C10/C11(交易桥接前置) ── 远期，独立立项
 ```
 
 **关键依赖硬点**：
-- A6（删 TickFlowProvider）依赖 A1-A5 全绿 + 产品决策"彻底弃 tickflow provider"。
+- A6（删 TickFlowProvider）依赖 A1-A5 全绿；产品决策已落档：彻底弃 tickflow provider，默认 `fquant_local`。
 - B1（Shadow Account）依赖"诊断够好"的价值验证，不是技术依赖——**门槛是产品判断，不是代码就绪**。
 - C4/C13 依赖已建的黄金对拍方法论（P2），否则 pandas→Polars 翻译无保障。
 

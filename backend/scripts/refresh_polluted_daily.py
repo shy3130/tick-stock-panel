@@ -18,7 +18,7 @@ import polars as pl
 from app.config import settings
 from app.indicators.pipeline import run_pipeline
 from app.services import kline_sync
-from app.tickflow.policy import detect_capabilities
+from app.data_providers.capability_gate import detect_capabilities
 from app.storage.repository import KlineRepository
 
 

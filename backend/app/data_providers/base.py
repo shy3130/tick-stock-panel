@@ -1,9 +1,4 @@
-"""Provider contracts for external market data sources.
-
-The first implementation wraps TickFlow. Other providers (Tushare/AkShare/etc.)
-should return the same normalized Polars schemas so storage, indicators and
-backtests stay data-source agnostic.
-"""
+"""Provider contracts for external market data sources."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -87,8 +82,8 @@ class MarketDataProvider(Protocol):
         asset_type / source。``asset_type`` 参数用于驱动不同 universe 的归一
         映射（如 ``"index"`` / ``"etf"`` / ``"sector"``），provider 可按需扩展。
 
-        默认实现返回空 df；具体 provider 应重写以从自身数据源（fstore
-        ``chengfen_gu`` / TickFlow SDK ``quotes.get_by_universes`` 等）取数。
+        默认实现返回空 df；具体 provider 应重写以从自身数据源（如 fstore
+        ``chengfen_gu``）取数。
         契约目的：让 service 层（典型为 ``index_sync.sync_index_instruments``
         的"付费补充"逻辑）摆脱直接 SDK 调用。
         """

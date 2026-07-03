@@ -66,9 +66,9 @@ export function Financials() {
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-warning/10">
               <Lock className="h-6 w-6 text-warning" />
             </div>
-            <h3 className="mt-4 text-base font-semibold text-foreground">需要 Expert 套餐</h3>
+            <h3 className="mt-4 text-base font-semibold text-foreground">当前数据源未提供财务能力</h3>
             <p className="mt-2 text-xs leading-relaxed text-secondary">
-              财务数据接口仅 Expert 套餐可用。升级后此页自动显示财务数据面板。
+              切换到支持 financial capability 的数据源后，此页自动显示财务数据面板。
             </p>
             <div className="mt-5 rounded-btn border border-accent/25 bg-accent/[0.05] px-3.5 py-3 text-left">
               <div className="flex items-center gap-1.5 text-xs font-medium text-accent">
@@ -76,7 +76,7 @@ export function Financials() {
                 关于数据源
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-secondary">
-                TickFlow 官方源需要 Expert；切到本地 FQuant 源后，财务数据走 fstore。
+                FQuant 数据源的财务数据走 fstore。
               </p>
               <a
                 href="https://github.com/shy3130/tickflow-stock-panel/issues"

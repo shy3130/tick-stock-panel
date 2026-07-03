@@ -20,7 +20,7 @@ export function SettingsSystemPanel() {
   const [saving, setSaving] = useState(false)
 
   const screenerAutoRun = prefs?.screener_auto_run ?? true
-  const currentProvider = prefs?.effective_data_provider ?? prefs?.data_provider ?? 'tickflow'
+  const currentProvider = prefs?.effective_data_provider ?? prefs?.data_provider ?? 'fquant_local'
   const providerEnvOverride = prefs?.data_provider_env_override ?? false
   const [clearing, setClearing] = useState(false)
   const [toastEnabled, setToastEnabled] = useState(() => {
@@ -49,7 +49,7 @@ export function SettingsSystemPanel() {
     }
   }, [qc])
 
-  const saveDataProvider = useCallback(async (provider: 'tickflow' | 'fquant' | 'fquant_local') => {
+  const saveDataProvider = useCallback(async (provider: 'fquant' | 'fquant_local') => {
     setSaving(true)
     try {
       await api.updateDataProvider(provider)
@@ -93,10 +93,9 @@ export function SettingsSystemPanel() {
           <select
             value={currentProvider}
             disabled={saving || providerEnvOverride}
-            onChange={(e) => saveDataProvider(e.target.value as 'tickflow' | 'fquant' | 'fquant_local')}
+            onChange={(e) => saveDataProvider(e.target.value as 'fquant' | 'fquant_local')}
             className="w-32 h-8 px-2 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
           >
-            <option value="tickflow">TickFlow</option>
             <option value="fquant">FQuant 本地</option>
             <option value="fquant_local">FQuant 磁盘</option>
           </select>

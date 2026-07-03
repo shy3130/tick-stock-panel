@@ -19,7 +19,6 @@ import { Link } from 'react-router-dom'
 import { api, type ExtDataConfig } from '@/lib/api'
 import {
   useCapabilities,
-  useSettings,
   usePreferences,
   useQuoteStatus,
   useQuoteInterval,
@@ -55,7 +54,6 @@ export function Data() {
   const topRef = useRef<HTMLDivElement>(null)
 
   const caps = useCapabilities()
-  const settings = useSettings()
 
   const status = useDataStatus({
     refetchInterval: activeJobId ? 2_000 : 30_000,
@@ -236,8 +234,7 @@ export function Data() {
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
-  // none 档(无 key / 无效 key) → 禁用立即同步 (同步依赖付费档的批量端点)
-  const isNoKey = settings.data?.mode === 'none'
+  const isNoKey = false
   const indexOverviewStats = s ? {
     rows: 0,
     earliest_date: s.index_daily?.earliest_date ?? s.index_enriched?.earliest_date ?? null,
