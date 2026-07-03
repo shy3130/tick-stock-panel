@@ -21,7 +21,7 @@
 | **P2 Alpha101_001 因子** | ✅ 未提交 | 单因子 + pandas 黄金对拍 |
 | **P3 组合优化器** | ✅ 未提交 | risk_parity(CCD)/mean_variance/max_diversification/equal_vol |
 | **P5 告警多通道** | ✅ 未提交 | 飞书/钉钉/企微/MeoW，含 SSRF allowlist |
-| **P6 港股日 K** | ✅ 未提交 | 磁盘 hk 分桶接入 |
+| **P6 港股日 K** | ✅ 待提交 | 磁盘 hk 分桶接入；provider `asset_type="hk"` 口径已对齐 |
 | **P7 agent tools 骨架** | ✅ 未提交 | /api/agent tools + chat，2 个工具 |
 | **Track A 去 TickFlow** | ✅ 已提交(c2566a8) | A1-A7 已完成；`DATA_PROVIDER=tickflow` 退场，默认 `fquant_local`，`app/tickflow/`、`TickFlowProvider`、`tiers.yaml`、SDK 依赖已删除 |
 
@@ -51,7 +51,7 @@
 |---|---|---|---|---|
 | **B1** | **Shadow Account**（从盈利 roundtrip 抽 if-then 规则→回放成影子组合→delta-PnL 归因） | XL | Vibe 源 ~3654 行；**门槛**：先确认 Trade Journal 行为诊断"够好到值得回放"；两个软接缝（见 CONTEXT.md）：fills 需重新上传解析或加字段、shadow(价格pnl) vs actual(total_pnl含分红)需先定分红口径 | Trade Journal MVP（✅） |
 | **B2** | Trade Journal 增强：多账户合并 / 增量导入去重 / Hybrid LLM 叙事（聚合数字，opt-in） | M | 隐私红线：Hybrid 只送聚合、绝不送原始流水；多账户需持久化归一 fills（当前只存报告） | Trade Journal MVP（✅） |
-| **B3** | 追涨港股覆盖：港股日线接入本地 parquet（当前港股在 TDX 磁盘按需读、未落 parquet，追涨对港股全缺，样本 65 只港股 uncovered） | M | 港股日线数据源/落盘路径；与 P6 港股链路衔接 | P6（✅） |
+| **B3** | 追涨港股覆盖：港股日线接入本地 parquet（`kline_hk_daily/enriched`）并让 Trade Journal 追涨扫描 HK | ✅ 待提交 | 临时回填 `02577.HK` 已生成 parquet；全量样本回填仍按需执行 | P6（✅） |
 
 ### Track C — Vibe 迁移候选剩余（C2-C13，去重 P 系列）
 
@@ -142,7 +142,7 @@ C10/C11(交易桥接前置) ── 远期，独立立项
 - **C6**（doc/web reader，M，谨慎评估 OCR 依赖）
 
 ### Phase 4 — Trade Journal → Shadow Account（XL，有门槛）
-- **B3**（追涨港股覆盖，M，补齐诊断盲区）
+- **B3**（追涨港股覆盖，✅ 待提交；样本全量回填按需执行）
 - **B1**（Shadow Account，XL）——**先做价值验证**：Trade Journal 上线后收集"行为诊断是否真的帮用户"，够好再启动；启动时按 CONTEXT 软接缝处理 fills/分红口径。
 - **B2**（Trade Journal 增强，M，按需）
 

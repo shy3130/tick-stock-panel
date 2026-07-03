@@ -7,8 +7,8 @@ class FakeEngine:
     def __init__(self):
         self.keys = []
 
-    def get_wide(self, code, limit=250):
-        self.keys.append(("wide", code))
+    def get_wide(self, code, limit=250, asset_type=None):  # noqa: ARG002
+        self.keys.append(("wide", code, asset_type))
         return [{
             "date": "2012-10-26",
             "open": -105.170712,
@@ -21,19 +21,19 @@ class FakeEngine:
             "change_rate": -1.2,
         }]
 
-    def get_xdxr(self, code):
-        self.keys.append(("xdxr", code))
+    def get_xdxr(self, code, asset_type=None):  # noqa: ARG002
+        self.keys.append(("xdxr", code, asset_type))
         return [{"date": "2024-06-19", "category": 1, "fenhong": 30}]
 
 
 class FakeEngineWithPreClose:
-    def get_wide(self, code, limit=250):
+    def get_wide(self, code, limit=250, asset_type=None):  # noqa: ARG002
         return [
             {"date": "2024-06-19", "close": 90.0},
             {"date": "2024-06-18", "close": 100.0},
         ]
 
-    def get_xdxr(self, code):
+    def get_xdxr(self, code, asset_type=None):  # noqa: ARG002
         return []
 
 
@@ -71,7 +71,7 @@ class RecordingFStore:
 
 
 class FakeIndexEngine:
-    def get_wide(self, code, limit=250):  # noqa: ARG002
+    def get_wide(self, code, limit=250, asset_type=None):  # noqa: ARG002
         return [{
             "date": "2026-07-01",
             "open": 4090.76,
@@ -82,7 +82,7 @@ class FakeIndexEngine:
             "amount": 1_698_487_599_104,
         }]
 
-    def get_xdxr(self, code):  # noqa: ARG002
+    def get_xdxr(self, code, asset_type=None):  # noqa: ARG002
         raise AssertionError("index daily must not use stock xdxr/raw oracle")
 
 
@@ -137,7 +137,21 @@ def test_disk_engine_uses_symbol_key_to_preserve_exchange():
 
     provider._get_daily_from_engine_wide("000001.SH", "000001", None, None)
 
-    assert engine.keys == [("wide", "000001.SH"), ("xdxr", "000001.SH")]
+    assert engine.keys == [("wide", "000001.SH", "stock"), ("xdxr", "000001.SH", "stock")]
+
+
+def test_hk_daily_uses_symbol_key_and_skips_stock_raw_reconstruction():
+    engine = FakeEngine()
+    provider = object.__new__(FQuantProvider)
+    provider._engine = engine
+    provider._fstore = FakeFStore()
+    provider._engine_mode = "disk"
+    provider.name = "fquant_local"
+
+    rows = provider._get_daily_from_engine_wide("02577.HK", "02577", None, None, "hk")
+
+    assert rows[0]["symbol"] == "02577.HK"
+    assert engine.keys == [("wide", "02577.HK", "hk")]
 
 
 def test_index_daily_does_not_use_stock_raw_oracle_for_same_code():

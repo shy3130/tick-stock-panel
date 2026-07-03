@@ -135,7 +135,7 @@ def exchange_of(code: str) -> str:
 # fstore base_infos.asset_type 数字 → Provider 契约 AssetType 字符串
 ASSET_TYPE_NUM_TO_STR: dict[int, str] = {
     1: "stock",
-    3: "stock",   # 港股也归 stock（契约 Literal["stock","index","etf"] 无 hk）
+    3: "hk",
     10: "index",
     20: "etf",
 }
@@ -155,9 +155,12 @@ def asset_type_str_to_nums(asset_type: str) -> list[int]:
     [10]
     >>> asset_type_str_to_nums("etf")
     [20]
+    >>> asset_type_str_to_nums("hk")
+    [3]
     """
     mapping = {
         "stock": [1],
+        "hk": [3],
         "index": [10],
         "etf": [20],
     }

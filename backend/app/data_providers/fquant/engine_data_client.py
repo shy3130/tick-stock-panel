@@ -72,7 +72,7 @@ class EngineDataClient:
     # ------------------------------------------------------------------ #
     # 各 dataset 封装
     # ------------------------------------------------------------------ #
-    def get_wide(self, code: str, limit: int = 250) -> list[dict]:
+    def get_wide(self, code: str, limit: int = 250, asset_type: str | None = None) -> list[dict]:  # noqa: ARG002
         """``wide`` dataset — daily 增强字段（主源，§4.4）。
 
         每行含：date/datetime/open/high/low/close/volume/amount/last_close/
@@ -107,7 +107,7 @@ class EngineDataClient:
         data = self.get(f"/api/v1/trans/{quote(code)}", date=date_yyyymmdd, limit=limit)
         return (data or {}).get("rows") or []
 
-    def get_xdxr(self, code: str, limit: int = 100) -> list[dict]:
+    def get_xdxr(self, code: str, limit: int = 100, asset_type: str | None = None) -> list[dict]:  # noqa: ARG002
         """``xdxr`` dataset — 除权除息（§4.5 主源）。
 
         每行含：date/fenhong/fenshu/songzhuangu/peigu/peigujia/category/qianzongguben/

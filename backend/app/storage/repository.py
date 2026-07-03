@@ -46,6 +46,8 @@ class DataStore:
             "kline_etf_daily",
             "kline_etf_enriched",
             "kline_etf_minute",
+            "kline_hk_daily",
+            "kline_hk_enriched",
             "kline_minute",
             "adj_factor",
             "adj_factor_etf",
@@ -148,6 +150,10 @@ class DataStore:
                 SELECT * FROM read_parquet('{d}/kline_etf_enriched/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_etf_minute AS
                 SELECT * FROM read_parquet('{d}/kline_etf_minute/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_hk_daily AS
+                SELECT * FROM read_parquet('{d}/kline_hk_daily/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_hk_enriched AS
+                SELECT * FROM read_parquet('{d}/kline_hk_enriched/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_minute AS
                 SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW adj_factor AS
@@ -216,6 +222,12 @@ class DataStore:
                        'etf' AS asset_type, 'legacy' AS source
                 FROM kline_etf_daily
             """)
+        if self._has_parquet("kline_hk_daily"):
+            daily_parts.append("""
+                SELECT symbol, date, open, high, low, close, volume, amount,
+                       'hk' AS asset_type, 'legacy' AS source
+                FROM kline_hk_daily
+            """)
 
         if self._has_parquet("kline_daily_enriched"):
             enriched_parts.append("SELECT *, 'stock' AS asset_type, 'legacy' AS source FROM kline_enriched")
@@ -223,6 +235,8 @@ class DataStore:
             enriched_parts.append("SELECT *, 'index' AS asset_type, 'legacy' AS source FROM kline_index_enriched")
         if self._has_parquet("kline_etf_enriched"):
             enriched_parts.append("SELECT *, 'etf' AS asset_type, 'legacy' AS source FROM kline_etf_enriched")
+        if self._has_parquet("kline_hk_enriched"):
+            enriched_parts.append("SELECT *, 'hk' AS asset_type, 'legacy' AS source FROM kline_hk_enriched")
 
         if self._has_parquet("kline_minute"):
             minute_parts.append("""
@@ -298,6 +312,7 @@ class KlineRepository:
         self._enriched_glob = str(store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
         self._index_enriched_glob = str(store.data_dir / "kline_index_enriched" / "**" / "*.parquet")
         self._etf_enriched_glob = str(store.data_dir / "kline_etf_enriched" / "**" / "*.parquet")
+        self._hk_enriched_glob = str(store.data_dir / "kline_hk_enriched" / "**" / "*.parquet")
         self._minute_glob = str(store.data_dir / "kline_minute" / "**" / "*.parquet")
         self._etf_minute_glob = str(store.data_dir / "kline_etf_minute" / "**" / "*.parquet")
         self._inst_glob = str(store.data_dir / "instruments" / "**" / "*.parquet")
@@ -981,6 +996,16 @@ class KlineRepository:
             df = df.select(existing)
         return df
 
+    def get_hk_daily(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        columns: list[str] | None = None,
+    ) -> pl.DataFrame:
+        """港股日K查询 — 读取独立 HK enriched 窄表。"""
+        return self._scan_hk_daily_symbol(symbol, start, end, columns)
+
     def get_daily_asset(
         self,
         asset_type: str,
@@ -995,6 +1020,8 @@ class KlineRepository:
             return self.get_index_daily(symbol, start, end, columns)
         if asset_type == "etf":
             return self.get_etf_daily(symbol, start, end, columns)
+        if asset_type == "hk":
+            return self.get_hk_daily(symbol, start, end, columns)
         return pl.DataFrame()
 
     def get_minute(
@@ -1126,6 +1153,23 @@ class KlineRepository:
             return lf.collect()
         except Exception as e:  # noqa: BLE001
             logger.debug("ETF 日K查询跳过: %s", e)
+            return pl.DataFrame()
+
+    def _scan_hk_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
+        try:
+            lf = pl.scan_parquet(self._hk_enriched_glob,
+                                 cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
+                (pl.col("symbol") == symbol)
+                & (pl.col("date") >= start)
+                & (pl.col("date") <= end)
+            ).sort("date")
+            if columns:
+                schema_names = lf.collect_schema().names()
+                existing = [c for c in columns if c in schema_names]
+                lf = lf.select(existing)
+            return lf.collect()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("港股日K查询跳过: %s", e)
             return pl.DataFrame()
 
     def _merge_cached_and_scan(
@@ -1290,6 +1334,21 @@ class KlineRepository:
         df_storage = df.select(storage_cols)
         self._write_daily_partition(df_storage, "kline_etf_enriched")
 
+    def append_hk_daily(self, df: pl.DataFrame) -> None:
+        """按日分区写入港股日K数据 (merge-upsert)。"""
+        if df.is_empty():
+            return
+        self._write_daily_partition(df, "kline_hk_daily")
+
+    def append_hk_enriched(self, df: pl.DataFrame) -> None:
+        """按日分区写入港股 enriched 窄表。"""
+        if df.is_empty():
+            return
+        storage_cols = [c for c in ("symbol", "date", "close", "change_pct", "source") if c in df.columns]
+        if not storage_cols:
+            return
+        self._write_daily_partition(df.select(storage_cols), "kline_hk_enriched")
+
     def append_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按资产类型写入日K；stock/index 保持旧目录兼容。"""
         if df.is_empty():
@@ -1302,6 +1361,8 @@ class KlineRepository:
             self.append_index_daily(df)
         elif asset_type == "etf":
             self.append_etf_daily(df)
+        elif asset_type == "hk":
+            self.append_hk_daily(df)
 
     def append_enriched_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按资产类型写入 enriched；stock/index 保持旧目录兼容。"""
@@ -1311,6 +1372,8 @@ class KlineRepository:
             self.append_index_enriched(df)
         elif asset_type == "etf":
             self.append_etf_enriched(df)
+        elif asset_type == "hk":
+            self.append_hk_enriched(df)
 
     def save_index_instruments(self, df: pl.DataFrame) -> None:
         """保存指数标的维表。"""
@@ -1347,6 +1410,10 @@ class KlineRepository:
                 SELECT * FROM read_parquet('{d}/kline_etf_daily/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_etf_enriched AS
                 SELECT * FROM read_parquet('{d}/kline_etf_enriched/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_hk_daily AS
+                SELECT * FROM read_parquet('{d}/kline_hk_daily/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_hk_enriched AS
+                SELECT * FROM read_parquet('{d}/kline_hk_enriched/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW instruments_index AS
                 SELECT * FROM read_parquet('{d}/instruments_index/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW instruments_etf AS
@@ -1387,6 +1454,7 @@ class KlineRepository:
             "stock": "kline_daily",
             "index": "kline_index_daily",
             "etf": "kline_etf_daily",
+            "hk": "kline_hk_daily",
         }.get(asset_type)
         if not table:
             return
@@ -1416,6 +1484,9 @@ class KlineRepository:
             existing_cache = self._etf_enriched_cache if self._etf_enriched_cache_date == dt else pl.DataFrame()
         elif asset_type == "index":
             table = "kline_index_enriched"
+            existing_cache = pl.DataFrame()
+        elif asset_type == "hk":
+            table = "kline_hk_enriched"
             existing_cache = pl.DataFrame()
         else:
             return
@@ -1465,6 +1536,7 @@ class KlineRepository:
             "stock": "kline_daily",
             "index": "kline_index_daily",
             "etf": "kline_etf_daily",
+            "hk": "kline_hk_daily",
         }.get(asset_type)
         if not table:
             return
@@ -1519,6 +1591,8 @@ class KlineRepository:
             table = "kline_etf_enriched"
         elif asset_type == "index":
             table = "kline_index_enriched"
+        elif asset_type == "hk":
+            table = "kline_hk_enriched"
         else:
             return
 

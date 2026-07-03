@@ -10,7 +10,7 @@ from app.services.trade_journal.models import Fill
 
 def build_price_lookup(fills: list[Fill], data_dir: Path) -> tuple[dict[tuple[str, str], dict], list[str]]:
     buy_symbols = {f.symbol for f in fills if f.side == "buy"}
-    targets = {(f.symbol, f.date) for f in fills if f.side == "buy" and not f.symbol.endswith(".HK")}
+    targets = {(f.symbol, f.date) for f in fills if f.side == "buy"}
     if not targets:
         return {}, sorted(buy_symbols)
     symbols = sorted({s for s, _ in targets})
@@ -44,14 +44,20 @@ def build_price_lookup(fills: list[Fill], data_dir: Path) -> tuple[dict[tuple[st
             continue
         out[key] = {"pos_20d": (close - lo) / (hi - lo), "close": close}
     covered_symbols = {symbol for symbol, _ in out}
-    uncovered = {s for s in buy_symbols if s.endswith(".HK")}
-    uncovered.update(symbol for symbol in symbols if symbol not in covered_symbols)
+    uncovered = {symbol for symbol in symbols if symbol not in covered_symbols}
     return out, sorted(uncovered)
 
 
 def _daily_globs(data_dir: Path) -> list[str]:
     globs: list[str] = []
-    for name in ("kline_daily_enriched", "kline_etf_enriched", "kline_daily", "kline_etf_daily"):
+    for name in (
+        "kline_daily_enriched",
+        "kline_etf_enriched",
+        "kline_hk_enriched",
+        "kline_daily",
+        "kline_etf_daily",
+        "kline_hk_daily",
+    ):
         root = data_dir / name
         if root.exists() and next(root.glob("**/*.parquet"), None) is not None:
             globs.append(str(root / "**" / "*.parquet"))

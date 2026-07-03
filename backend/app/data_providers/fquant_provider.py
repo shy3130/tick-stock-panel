@@ -308,13 +308,13 @@ class FQuantProvider:
         else:
             limit = 250
         engine_key = self._engine_key(symbol, code)
-        rows = self._engine.get_wide(engine_key, limit=limit)
+        rows = self._engine.get_wide(engine_key, limit=limit, asset_type=asset_type)
         if rows:
             # engine 返回最新在前，反转成时间正序
             rows = list(reversed(rows))
             if asset_type == "stock":
                 oracle_rows = self._get_raw_oracle_rows(code, rows)
-                events = self._engine.get_xdxr(engine_key)
+                events = self._engine.get_xdxr(engine_key, asset_type=asset_type)
                 rows = reconstruct_raw_rows(rows, events, oracle_rows)
             logger.debug("EngineData wide %s: %d 行", code, len(rows))
         # 映射到 normalizer 期望的字段名

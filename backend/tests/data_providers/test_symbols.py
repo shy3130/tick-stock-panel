@@ -2,8 +2,9 @@ from app.data_providers.fquant.symbols import asset_type_str_to_nums, code_to_sy
 from app.data_providers.fquant_provider import FQuantProvider
 
 
-def test_stock_asset_type_includes_hk():
+def test_stock_asset_type_excludes_hk():
     assert asset_type_str_to_nums("stock") == [1]
+    assert asset_type_str_to_nums("hk") == [3]
     assert symbol_to_market("00700.HK") == (3, "hk")
 
 

@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 
 import polars as pl
 
-AssetType = Literal["stock", "index", "etf"]
+AssetType = Literal["stock", "index", "etf", "hk"]
 
 
 @dataclass(frozen=True)

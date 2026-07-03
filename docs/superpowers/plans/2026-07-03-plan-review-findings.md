@@ -11,7 +11,7 @@
 
 ### F1 — B3：`get_daily(..., asset_type="hk")` 语义错误，可能污染港股价格
 
-- [x] 已改：B3 计划已要求先修港股 asset_type 口径，禁止港股走 `asset_type=="stock"` 的 xdxr 重建分支。
+- [x] 已改：B3 代码已扩展 `AssetType` 为 `stock/index/etf/hk`，`FQuantProvider.get_daily()` 已透传 `asset_type`，`kline.py` 本地模式也按 symbol 分流 `stock/etf/index/hk`，港股不会走 `asset_type=="stock"` 的 xdxr 重建分支。
 
 **位置**：`docs/superpowers/plans/2026-07-03-b3-hk-pricepos-parquet.md` 任务 4（`provider: FQuantProvider(engine_mode="disk").get_daily(... asset_type="hk")`）。
 
@@ -72,7 +72,7 @@
 
 ### F5 — 跨层 asset_type 处理不一致（F1 根因，记录备查）
 
-- [x] 已改（计划层）：B3 已显式要求 provider 层和磁盘层 asset_type 对齐；代码修复随 B3 实施。
+- [x] 已改：provider 层已把 `asset_type` 透传到磁盘/HTTP engine client，B3 测试覆盖港股 `asset_type="hk"` 时只读 wide、不走 xdxr/raw 重建。
 
 磁盘层 `EngineDataDiskClient.get_wide(code, limit, asset_type)` 接受并使用 `asset_type`（`engine_data_disk.py:34-45`），而 provider 层 `get_daily` 丢弃它（F1）。P4 任务 3 用磁盘层调用（正确），B3 用 provider 层（踩坑）。修 F1 时一并让两层对 asset_type 的处理对齐。
 

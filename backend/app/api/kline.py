@@ -15,6 +15,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/kline", tags=["kline"])
 
 
+def _asset_type_for_symbol(symbol: str) -> str:
+    from app.data_providers.fquant.symbols import is_etf_symbol
+
+    upper = symbol.upper()
+    if upper.endswith(".HK"):
+        return "hk"
+    if upper.endswith(".INDEX"):
+        return "index"
+    if is_etf_symbol(upper):
+        return "etf"
+    return "stock"
+
+
 @router.get("/instruments/search")
 def search_instruments(
     request: Request,
@@ -95,14 +108,16 @@ def get_daily(
         from app.data_providers.registry import get_active_provider_name, get_provider
 
         provider = get_provider(get_active_provider_name("daily"))
-        raw = provider.get_daily([symbol], start_dt, end_dt, "stock")
+        asset_type = _asset_type_for_symbol(symbol)
+        raw = provider.get_daily([symbol], start_dt, end_dt, asset_type)
         if raw.is_empty():
             return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
         factors = pl.DataFrame()
-        try:
-            factors = provider.get_adj_factors([symbol], start_dt, end_dt, "stock")
-        except Exception as e:  # noqa: BLE001
-            logger.debug("本地模式单股除权因子拉取失败 %s: %s", symbol, e)
+        if asset_type == "stock":
+            try:
+                factors = provider.get_adj_factors([symbol], start_dt, end_dt, asset_type)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("本地模式单股除权因子拉取失败 %s: %s", symbol, e)
         enriched = compute_enriched(raw, factors=factors)
         rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
         resp = {
@@ -318,7 +333,15 @@ def get_daily_batch(request: Request, body: dict):
         from app.data_providers.registry import get_active_provider_name, get_provider
 
         provider = get_provider(get_active_provider_name("daily"))
-        raw = provider.get_daily(symbols, start_dt, end_dt, "stock")
+        frames = []
+        for asset_type in ("stock", "etf", "index", "hk"):
+            group = [sym for sym in symbols if _asset_type_for_symbol(sym) == asset_type]
+            if not group:
+                continue
+            part = provider.get_daily(group, start_dt, end_dt, asset_type)
+            if not part.is_empty():
+                frames.append(part)
+        raw = pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
         if raw.is_empty():
             return {"data": {}}
         df = raw.select([c for c in cols if c in raw.columns])

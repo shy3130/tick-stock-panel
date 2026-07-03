@@ -18,9 +18,16 @@ def test_build_price_lookup_reads_enriched_parquet(tmp_path):
     assert uncovered == []
 
 
-def test_build_price_lookup_skips_hk(tmp_path):
+def test_build_price_lookup_reads_hk_enriched(tmp_path):
+    root = tmp_path / "kline_hk_enriched" / "date=2024-01-30"
+    root.mkdir(parents=True)
+    pl.DataFrame(
+        [{"symbol": "02577.HK", "date": f"2024-01-{i:02d}", "close": float(i)} for i in range(1, 31)]
+    ).write_parquet(root / "part.parquet")
     fill = Fill("2024-01-30", "", "02577.HK", "H", "buy", 100, 30.0, -3000.0, 1.0)
-    assert build_price_lookup([fill], tmp_path) == ({}, ["02577.HK"])
+    lookup, uncovered = build_price_lookup([fill], tmp_path)
+    assert lookup[("02577.HK", "2024-01-30")]["pos_20d"] == 1.0
+    assert uncovered == []
 
 
 def test_build_price_lookup_marks_history_short_as_uncovered(tmp_path):
