@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.indicators.pipeline import compute_enriched, compute_enriched_single
+from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync
 
 logger = logging.getLogger(__name__)
@@ -682,6 +682,15 @@ import concurrent.futures as _cf
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
 
 
+def _ensure_minute_capable(capset, unit: str) -> None:
+    from app.capabilities import Cap
+
+    if not capset.has(Cap.KLINE_MINUTE_BATCH):
+        raise HTTPException(status_code=403, detail="当前数据源不支持批量分钟K")
+    if unit == "month" and not capset.has(Cap.KLINE_MINUTE_MONTH):
+        raise HTTPException(status_code=403, detail="当前数据源不支持按月扩展分钟K历史")
+
+
 @router.post("/extend_minute_history")
 async def extend_minute_history(request: Request):
     """向前扩展分钟K历史数据 — 仅拉数据,不做任何后续处理。
@@ -704,17 +713,7 @@ async def extend_minute_history(request: Request):
 
         repo = request.app.state.repo
         capset = request.app.state.capabilities
-
-        from app.capabilities import Cap
-        if not capset.has(Cap.KLINE_MINUTE_BATCH):
-            raise HTTPException(status_code=403, detail="当前数据源不支持批量分钟K")
-
-        if unit == "month":
-            if not capset.has(Cap.KLINE_MINUTE_MONTH):
-                raise HTTPException(
-                    status_code=403,
-                    detail="当前数据源不支持按月扩展分钟K历史",
-                )
+        _ensure_minute_capable(capset, unit)
 
         # 计算天数上限:day 最多 15 天;month 最多 6 月(180 天)
         from datetime import timedelta

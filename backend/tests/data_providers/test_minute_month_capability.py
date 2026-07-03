@@ -1,6 +1,6 @@
-from app.data_providers.base import ProviderCapabilities
-from app.data_providers import capability_gate
 from app.capabilities import Cap
+from app.data_providers import capability_gate
+from app.data_providers.base import ProviderCapabilities
 
 
 class _Provider:

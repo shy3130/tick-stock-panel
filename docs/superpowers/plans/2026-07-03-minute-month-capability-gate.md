@@ -22,12 +22,12 @@
 
 | 文件 | 职责 | 改动 |
 |---|---|---|
-| `backend/app/tickflow/capabilities.py` | Cap 枚举 | 新增 `KLINE_MINUTE_MONTH` 一行 |
+| `backend/app/capabilities.py` | Cap 枚举 | 新增 `KLINE_MINUTE_MONTH` 一行 |
 | `backend/app/data_providers/base.py` | ProviderCapabilities 契约 | 新增 `minute_month_extension: bool = False` |
 | `backend/app/data_providers/fquant_provider.py` | FQuant provider 能力声明 | capabilities 加 `minute_month_extension=True` |
-| `backend/app/tickflow/policy.py` | 非 TickFlow provider→Cap 映射 | `_provider_capset()` 增加 month 映射 |
+| `backend/app/data_providers/capability_gate.py` | provider→Cap 映射 | `_provider_capset()` 增加 month 映射 |
 | `backend/app/api/kline.py` | 分钟K扩展端点 | 抽出 `_ensure_minute_capable()` helper 并替换 tier 判断 |
-| `backend/tests/tickflow/test_provider_capset_minute_month.py` | 映射单测 | 新建 |
+| `backend/tests/data_providers/test_minute_month_capability.py` | 映射单测 | 新建 |
 | `backend/tests/api/test_minute_month_gate.py` | 门控 helper 单测 | 新建 |
 
 ---
@@ -44,11 +44,11 @@
 - 创建：`backend/tests/tickflow/__init__.py`（空文件；`tests/tickflow/` 目录尚不存在，项目约定测试包带 `__init__.py`）
 - 测试：`backend/tests/tickflow/test_provider_capset_minute_month.py`
 
-- [ ] **步骤 0：建测试包目录**
+- [x] **步骤 0：建测试包目录**
 
 运行：`cd backend && mkdir -p tests/tickflow && touch tests/tickflow/__init__.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/tickflow/test_provider_capset_minute_month.py
@@ -87,12 +87,12 @@ def test_month_cap_absent_when_no_minute(monkeypatch):
     assert not cs.has(Cap.KLINE_MINUTE_MONTH)  # 无分钟能力就不该有 month
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/tickflow/test_provider_capset_minute_month.py -v`
 预期：FAIL——`AttributeError: ... 'minute_month_extension'` 或 `Cap` 无 `KLINE_MINUTE_MONTH`。
 
-- [ ] **步骤 3：编写最少实现代码**
+- [x] **步骤 3：编写最少实现代码**
 
 `backend/app/tickflow/capabilities.py` —— 在 `Cap` 枚举 `ADJ_FACTOR` 行后加：
 
@@ -128,12 +128,12 @@ def test_month_cap_absent_when_no_minute(monkeypatch):
             out[Cap.KLINE_MINUTE_MONTH] = CapabilityLimits(batch=200)
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/tickflow/test_provider_capset_minute_month.py -v`
 预期：3 passed。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/tickflow/capabilities.py backend/app/data_providers/base.py backend/app/data_providers/fquant_provider.py backend/app/tickflow/policy.py backend/tests/tickflow/test_provider_capset_minute_month.py
@@ -169,7 +169,7 @@ git commit -m "feat(cap): 新增 KLINE_MINUTE_MONTH capability + provider 声明
                 )
 ```
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/api/test_minute_month_gate.py
@@ -210,12 +210,12 @@ def test_no_minute_batch_blocks_all():
     assert "批量分钟K" in exc.value.detail
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/api/test_minute_month_gate.py -v`
 预期：FAIL——`ImportError: cannot import name '_ensure_minute_capable'`。
 
-- [ ] **步骤 3：编写最少实现代码**
+- [x] **步骤 3：编写最少实现代码**
 
 `backend/app/api/kline.py` —— 在模块内（端点函数外，靠近文件顶部的 helper 区）新增 helper：
 
@@ -238,12 +238,12 @@ def _ensure_minute_capable(capset, unit: str) -> None:
 
 （即：删掉端点内对 `Cap` 的局部 import、`tier_label` 的局部 import 和两处 raise，全部收敛进 helper。）
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/api/test_minute_month_gate.py -v`
 预期：4 passed。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/api/kline.py backend/tests/api/test_minute_month_gate.py
@@ -256,17 +256,17 @@ git commit -m "feat(kline): 分钟K month 门控改 capability 判定, 去 tier_
 
 **文件：** 无（仅验证）
 
-- [ ] **步骤 1：全量后端测试**
+- [x] **步骤 1：全量后端测试**
 
 运行：`cd backend && uv run --extra dev pytest -q`
 预期：全部 passed（原 134 + 新增 7）。
 
-- [ ] **步骤 2：确认 tier_label 依赖已从该端点摘除**
+- [x] **步骤 2：确认 tier_label 依赖已从该端点摘除**
 
 运行：`cd backend && grep -n "tier_label" app/api/kline.py`
 预期：无输出（该文件不再引用 tier_label）。
 
-- [ ] **步骤 3：本地模式实测 month 扩展不再被门控挡**
+- [x] **步骤 3：本地模式实测 month 扩展不再被门控挡**
 
 运行（在 fquant_local 已生效的环境）：
 ```bash
@@ -280,7 +280,7 @@ print('KLINE_MINUTE_MONTH:', cs.has(Cap.KLINE_MINUTE_MONTH))
 ```
 预期：两者均为 `True`——证明 fquant_local 的 capset 现在带 month 能力，端点不会再对 month 请求返回 403。
 
-- [ ] **步骤 4：Commit（若步骤 1-3 促成任何微调）**
+- [x] **步骤 4：Commit（若步骤 1-3 促成任何微调）**
 
 ```bash
 git add -A
