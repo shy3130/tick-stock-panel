@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
 import {
   type ActiveTask, type HistoryReport,
   minimizeDialog, closeDialog, startAnalysis,
@@ -41,6 +42,7 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
   const focusInputRef = useRef<HTMLInputElement>(null)
   const [focus, setFocus] = useState('')
   const [copied, setCopied] = useState(false)
+  const [profileId, setProfileId] = useState<string>()
 
   const phase = getPhase(task)
   const content = getContent(task)
@@ -64,8 +66,8 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
   const handleStartNew = useCallback(async () => {
     if (!task) return
     const name = 'name' in task ? task.name : ''
-    await startAnalysis(task.symbol, name, focus.trim())
-  }, [task, focus])
+    await startAnalysis(task.symbol, name, focus.trim(), profileId)
+  }, [task, focus, profileId])
 
   const handleCopy = async () => {
     if (!content) return
@@ -203,6 +205,7 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
           {/* ===== 底部:自定义关注点输入 ===== */}
           <div className="border-t border-border/50 bg-surface/60 px-5 py-3">
             <div className="flex items-center gap-2">
+              <AiProviderSelector entry="financial_analysis" value={profileId} onChange={setProfileId} compact />
               <div className="flex items-center gap-1.5 text-[10px] text-muted shrink-0">
                 <Wand2 className="h-3 w-3" />
                 <span className="hidden sm:inline">关注重点</span>

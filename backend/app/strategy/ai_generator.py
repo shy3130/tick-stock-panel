@@ -50,7 +50,7 @@ class AIStrategyGenerator:
                 self._guide_cache = ""
         return self._guide_cache
 
-    async def generate(self, user_prompt: str) -> dict:
+    async def generate(self, user_prompt: str, profile_id: str | None = None) -> dict:
         """根据用户描述生成策略代码
 
         Returns: {"code": str, "meta": dict, "valid": bool, "error": str | None}
@@ -58,7 +58,7 @@ class AIStrategyGenerator:
         guide = self._get_guide()
 
         # 调用 LLM
-        code = await self._call_llm(user_prompt, guide)
+        code = await self._call_llm(user_prompt, guide, profile_id=profile_id)
 
         # 验证
         try:
@@ -74,7 +74,7 @@ class AIStrategyGenerator:
 
         return {"code": code, "meta": meta, "valid": True, "error": None}
 
-    async def _call_llm(self, user_prompt: str, guide: str) -> str:
+    async def _call_llm(self, user_prompt: str, guide: str, *, profile_id: str | None = None) -> str:
         """Call the configured AI provider and return generated strategy code."""
         from app.services.ai_provider import generate_ai_text
 
@@ -83,6 +83,7 @@ class AIStrategyGenerator:
                 {"role": "system", "content": _SYSTEM_PREFIX + guide},
                 {"role": "user", "content": user_prompt},
             ],
+            profile_id=profile_id,
             temperature=0.3,
             max_tokens=3000,
         )

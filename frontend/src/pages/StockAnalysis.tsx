@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { LastStockChip } from '@/components/LastStockChip'
@@ -11,6 +12,7 @@ import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
+import { resolveEntryProfile } from '@/lib/aiProfile'
 import {
   startAnalysis, findTodayReport, useHistoryReports,
   deleteReport, openHistoryReport,
@@ -31,7 +33,9 @@ export function StockAnalysis() {
   const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
+  const [profileId, setProfileId] = useState<string>()
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
 
   const onSelect = (sym: string, nm: string) => {
     setSymbol(sym)
@@ -60,7 +64,8 @@ export function StockAnalysis() {
   }
 
   const doAnalysis = async () => {
-    const r = await startAnalysis(symbol, name)
+    const resolvedProfileId = resolveEntryProfile('stock_analysis', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '')
+    const r = await startAnalysis(symbol, name, '', resolvedProfileId || profileId)
     if (r.error) toast(r.error, 'error')
   }
 
@@ -115,6 +120,7 @@ export function StockAnalysis() {
                 {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                 AI 个股分析
               </button>
+              <AiProviderSelector entry="stock_analysis" value={profileId} onChange={setProfileId} compact />
               <button
                 onClick={() => toast('点位提醒功能开发中,敬请期待', 'error')}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn border border-border/40 bg-elevated/40 text-muted text-xs font-medium hover:border-border/70 hover:text-secondary transition-all"

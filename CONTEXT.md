@@ -38,6 +38,20 @@ Provider 声明的能力开关（`daily`/`realtime`/`depth`/`universes`…）。
 **Manager 链式 fallback**
 每个 capability 一条有序上游源链，逐源尝试、首个非空即返回、异常降级下一个。编排策略对齐 `../fquant`(Go) 的 `Manager`。
 
+## AI 接入领域
+
+**AI 配置（AI Config / 内部 `profile`）**
+一条**具名、可切换**的 AI 接入配置：`name` + [[Provider 类型]] + `base_url`/`api_key`/`model`/`codex_command` 等。用户可配置**多条**，并在任何触发 AI 的入口选用其一。对用户叫「AI 配置」，代码内叫 `profile`（`ai_profiles` 列表 + `ai_default_profile_id` 默认指针）。
+_避免_：把它和 [[Provider 类型]] 混为一谈——一条 AI 配置**属于**某个 Provider 类型，但"配置多个"指的是多条 AI 配置实例，不是多种类型。
+
+**Provider 类型（Provider Kind）**
+AI 配置的一个字段，分三支：① **HTTP 类** `openai_compat`（OpenAI 兼容 HTTP API，靠 base_url/key/model 区分，含任何兼容网关）；② **ACP 类** `acp`（经 [[ACP 传输]] 驱动任何会说 Agent Client Protocol 的本机 agent，一个适配器通吃）；③ **codex 专属** `codex_cli`（codex 无原生 ACP，保留专属适配器）。**不是**可切换单元，只是某条 AI 配置的种类。
+_避免_：沿用旧代码 `current_ai_provider()` 的语义把 "provider" 当成可切换实例——那个函数返回的是**类型**，具名实例是 [[AI 配置]]。
+
+**ACP 传输（ACP Transport）**
+用 Agent Client Protocol（stdio JSON-RPC）驱动本机 agent 的**单一统一适配器**，[[Provider 类型]] `acp` 走它。AI 配置存 agent 的启动命令（如 `hermes acp`）。panel 把 agent 当**纯文本生成器**：ACP 权限模型下**拒绝一切 tool 权限请求**，agent 只回文本、不在 panel 目录做 agentic 动作——这是它取代"每个 CLI 写专属适配器"的关键优势。
+_避免_：把会说 ACP 的每个工具再写一遍专属 CLI 适配器——ACP 的意义就是一套接口通吃；只有不说 ACP 的（codex）才保留专属。
+
 ## 交易复盘领域（Vibe-Trading 迁移候选 C1）
 
 **交易流水复盘（Trade Journal）**

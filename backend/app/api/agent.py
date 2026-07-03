@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 class AgentChatIn(BaseModel):
     message: str
+    profile_id: str | None = None
 
 
 @router.get("/tools")
@@ -35,7 +36,7 @@ async def chat(req: AgentChatIn, request: Request) -> dict:
     first = await generate_ai_text([
         {"role": "system", "content": system},
         {"role": "user", "content": message},
-    ], temperature=0.2, max_tokens=1200)
+    ], profile_id=req.profile_id, temperature=0.2, max_tokens=1200)
 
     tool_req = _parse_tool_request(first)
     if tool_req is None:
@@ -51,7 +52,7 @@ async def chat(req: AgentChatIn, request: Request) -> dict:
         {"role": "user", "content": message},
         {"role": "assistant", "content": first},
         {"role": "user", "content": "Tool result:\n" + json.dumps(result, ensure_ascii=False)},
-    ], temperature=0.2, max_tokens=1600)
+    ], profile_id=req.profile_id, temperature=0.2, max_tokens=1600)
     return {"answer": answer, "tool": tool_req["tool"], "tool_result": result}
 
 

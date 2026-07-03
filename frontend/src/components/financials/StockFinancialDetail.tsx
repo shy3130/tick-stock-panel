@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CalendarDays, TrendingUp, FileText, Wallet, Activity, Sparkles, AlertTriangle, Loader2 } from 'lucide-react'
 import {
@@ -11,6 +12,9 @@ import { fmtPrice, fmtBigNum, fmtDate } from '@/lib/format'
 import { Skeleton } from '@/components/data/Skeleton'
 import { startAnalysis, findLatestHistoryReport, openHistoryReport } from '@/lib/aiReportStore'
 import { toast } from '@/components/Toast'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { api } from '@/lib/api'
+import { resolveEntryProfile } from '@/lib/aiProfile'
 
 interface Props {
   symbol: string
@@ -118,6 +122,8 @@ export function StockFinancialDetail({ symbol, name }: Props) {
   // AI 分析:点击时检查历史,若已有同标的报告则二次确认
   const [checking, setChecking] = useState(false)
   const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
+  const [profileId, setProfileId] = useState<string>()
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
 
   const handleAiClick = async () => {
     if (checking) return
@@ -140,7 +146,8 @@ export function StockFinancialDetail({ symbol, name }: Props) {
   }
 
   const doAnalysis = async () => {
-    const r = await startAnalysis(symbol, name)
+    const resolvedProfileId = resolveEntryProfile('financial_analysis', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '')
+    const r = await startAnalysis(symbol, name, '', resolvedProfileId || profileId)
     if (r.error) toast(r.error, 'error')
   }
 
@@ -185,6 +192,7 @@ export function StockFinancialDetail({ symbol, name }: Props) {
             {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
             AI 财务分析
           </button>
+          <AiProviderSelector entry="financial_analysis" value={profileId} onChange={setProfileId} compact />
           {latestPeriod && (
             <div className="flex items-center gap-1.5 text-xs text-secondary">
               <CalendarDays className="h-3.5 w-3.5" />

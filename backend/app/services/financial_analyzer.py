@@ -146,6 +146,7 @@ async def analyze_financials_stream(
     symbol: str,
     focus: str = "",
     document_text: str = "",
+    profile_id: str | None = None,
 ) -> AsyncIterator[str]:
     """流式分析:yield 出每个文本 chunk。
 
@@ -179,6 +180,7 @@ async def analyze_financials_stream(
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
+            profile_id=profile_id,
             temperature=0.4,
             max_tokens=4000,
         ):

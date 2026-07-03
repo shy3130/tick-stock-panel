@@ -177,7 +177,7 @@ export async function findLatestHistoryReport(symbol: string): Promise<HistoryRe
  * 启动一个新的 AI 分析任务。
  * @returns 任务 id;若超出上限或已有活跃任务,返回 { error }。
  */
-export async function startAnalysis(symbol: string, name: string, focus = ''): Promise<{ id?: string; error?: string }> {
+export async function startAnalysis(symbol: string, name: string, focus = '', profileId?: string): Promise<{ id?: string; error?: string }> {
   // 同 symbol 已有活跃任务 → 直接聚焦它
   const existing = activeTasks.find(t => t.symbol === symbol && (t.phase === 'loading' || t.phase === 'streaming'))
   if (existing) {
@@ -206,14 +206,14 @@ export async function startAnalysis(symbol: string, name: string, focus = ''): P
   emit()
 
   // 启动流式接收(后台运行,不阻塞)
-  runStream(id, symbol, focus)
+  runStream(id, symbol, focus, profileId)
   return { id }
 }
 
-async function runStream(id: string, symbol: string, focus: string) {
+async function runStream(id: string, symbol: string, focus: string, profileId?: string) {
   try {
     let firstDelta = true
-    for await (const chunk of api.financialAnalyzeStream(symbol, focus)) {
+    for await (const chunk of api.financialAnalyzeStream(symbol, focus, profileId)) {
       // 任务可能已被取消(不在列表里了)→ 终止
       const cur = activeTasks.find(t => t.id === id)
       if (!cur) return
@@ -333,4 +333,3 @@ export function openHistoryReport(reportId: string) {
   rebuildSnap()
   emit()
 }
-

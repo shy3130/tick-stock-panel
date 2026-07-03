@@ -20,6 +20,7 @@ import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { fmtBigNum } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { toast } from '@/components/Toast'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -28,6 +29,7 @@ import {
   startReviewGeneration, resetReview, isReviewGenerating,
   type ReviewPhase,
 } from '@/lib/reviewStore'
+import { resolveEntryProfile } from '@/lib/aiProfile'
 
 // ================================================================
 // 涨跌幅格式化(注意单位差异)
@@ -71,6 +73,7 @@ export function Review() {
   // 复盘日期:当前固定取最新交易日(后续如需日期选择可改回 useState)
   const asOf: string | undefined = undefined
   const [focus, setFocus] = useState('')
+  const [profileId, setProfileId] = useState<string>()
   // 生成状态走全局 store:切走页面流不中断,回来可恢复
   const { phase, content, error, meta } = useReviewState()
   const [viewing, setViewing] = useState<AiReviewReport | null>(null)  // 查看历史报告
@@ -89,6 +92,7 @@ export function Review() {
     queryKey: QK.reviewReports,
     queryFn: () => api.reviewReportsList(),
   })
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.reviewReportDelete(id),
@@ -182,10 +186,11 @@ export function Review() {
     if (isReviewGenerating()) return
     setViewing(null)
     resetReview()
+    const resolvedProfileId = resolveEntryProfile('market_recap', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '')
     startReviewGeneration(asOf, focus, (full, doneMeta) => {
       onGenerationDone(full, doneMeta).catch(() => { /* 静默 */ })
-    })
-  }, [asOf, focus, onGenerationDone])
+    }, resolvedProfileId || profileId)
+  }, [aiProfiles.data, asOf, focus, onGenerationDone, profileId])
 
   // 复制全文到剪贴板(viewing 优先,与主区域显示一致)
   const copyContent = useCallback(async () => {
@@ -234,6 +239,7 @@ export function Review() {
         subtitle={`${displayDate}${data?.emotion ? ` · 情绪 ${data.emotion.label}` : ''}`}
         right={
           <div className="flex items-center gap-1">
+            <AiProviderSelector entry="market_recap" value={profileId} onChange={setProfileId} compact />
             <button
               onClick={() => { marketQuery.refetch() }}
               disabled={marketQuery.isFetching}

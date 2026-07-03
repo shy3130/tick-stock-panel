@@ -84,6 +84,17 @@ class AiSettingsIn(BaseModel):
     user_agent: str = ""
 
 
+class AiProfileIn(BaseModel):
+    name: str | None = None
+    provider: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    codex_command: str | None = None
+    launch_command: str | None = None
+    user_agent: str | None = None
+
+
 @router.post("/ai")
 def save_ai_settings(req: AiSettingsIn) -> dict:
     """保存 AI 配置（全部持久化到 secrets.json）"""
@@ -151,6 +162,68 @@ def clear_ai_settings() -> dict:
     settings.ai_codex_command = "codex"
 
     return {"ok": True}
+
+
+@router.get("/ai/profiles")
+def list_ai_profiles() -> dict:
+    from app.services import ai_profiles
+    return {"profiles": ai_profiles.list_profiles_masked(), "default_id": ai_profiles.get_default_profile_id()}
+
+
+@router.post("/ai/profiles")
+def create_ai_profile(req: AiProfileIn) -> dict:
+    from app.services import ai_profiles
+    data = req.model_dump(exclude_unset=True)
+    if not (data.get("name") or "").strip():
+        raise HTTPException(status_code=400, detail="AI 配置名称不能为空")
+    profile = ai_profiles.create_profile(**data)
+    return {"id": profile["id"]}
+
+
+@router.put("/ai/profiles/{profile_id}")
+def update_ai_profile(profile_id: str, req: AiProfileIn) -> dict:
+    from app.services import ai_profiles
+    data = req.model_dump(exclude_unset=True)
+    if not data.get("api_key"):
+        data.pop("api_key", None)
+    try:
+        ai_profiles.update_profile(profile_id, **data)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="AI 配置不存在")
+    return {"ok": True}
+
+
+@router.delete("/ai/profiles/{profile_id}")
+def delete_ai_profile(profile_id: str) -> dict:
+    from app.services import ai_profiles
+    ai_profiles.delete_profile(profile_id)
+    return {"ok": True}
+
+
+@router.post("/ai/profiles/{profile_id}/default")
+def set_default_ai_profile(profile_id: str) -> dict:
+    from app.services import ai_profiles
+    try:
+        ai_profiles.set_default(profile_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="AI 配置不存在")
+    return {"ok": True}
+
+
+@router.post("/ai/profiles/{profile_id}/test")
+async def test_ai_profile(profile_id: str) -> dict:
+    from app.services.ai_provider import generate_ai_text
+    try:
+        text = await generate_ai_text(
+            [{"role": "user", "content": "Reply exactly: OK"}],
+            profile_id=profile_id,
+            temperature=0,
+            max_tokens=8,
+            timeout=15,
+        )
+        return {"ok": True, "response": text[:80]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
 
 
 # ===== 偏好设置 =====

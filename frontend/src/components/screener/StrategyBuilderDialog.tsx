@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Sparkles, Save, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Settings2, FileText, Copy, Check, Terminal } from 'lucide-react'
 import { api } from '@/lib/api'
 import { storage } from '@/lib/storage'
 import { cn } from '@/lib/cn'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { resolveEntryProfile } from '@/lib/aiProfile'
 
 // ===== 工具函数 =====
 
@@ -141,6 +144,11 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   const [aiStatus, setAiStatus] = useState<{ configured: boolean } | null>(null)
   const [checkedAi, setCheckedAi] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [profileId, setProfileId] = useState<string>()
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
+
+  const selectedProfileId = () =>
+    resolveEntryProfile('strategy_build', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '') || profileId
 
   // 打开时恢复草稿
   useEffect(() => {
@@ -186,7 +194,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     try {
       const id = strategyId || slugId()
       setStrategyId(id)
-      const res = await api.strategyBuild(1, { name: name.trim(), description: description.trim(), direction, rules: rules.trim(), strategy_id: id })
+      const res = await api.strategyBuild(1, { name: name.trim(), description: description.trim(), direction, rules: rules.trim(), strategy_id: id }, selectedProfileId())
       if (!res.valid) { setError(res.error ?? '生成失败'); return }
       setCode(res.code); setStep(2)
       const genDesc = parseMetaField(res.code, 'description')
@@ -206,7 +214,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     if (!instruction.trim() || !code) return
     setLoading(true); setError('')
     try {
-      const res = await api.strategyBuild(2, { current_code: code, instruction: instruction.trim() })
+      const res = await api.strategyBuild(2, { current_code: code, instruction: instruction.trim() }, selectedProfileId())
       if (!res.valid) { setError(res.error ?? '修改失败'); return }
       setCode(res.code); setInstruction('')
       const genDesc = parseMetaField(res.code, 'description')
@@ -294,6 +302,9 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
               <div className="flex items-center gap-2 text-[11px]">
                 <Sparkles className="h-3.5 w-3.5 text-amber-400 shrink-0" />
                 <span className="text-amber-400/80">步骤 1 描述策略规则 → 步骤 2 预览代码 → 保存</span>
+                <div className="ml-auto">
+                  <AiProviderSelector entry="strategy_build" value={profileId} onChange={setProfileId} compact />
+                </div>
               </div>
             ) : (
               <div className="flex items-center gap-2 text-[11px]">

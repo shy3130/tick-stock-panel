@@ -149,6 +149,7 @@ class AnalyzeRequest(BaseModel):
     symbol: str
     focus: str = ""  # 可选:用户追加的分析关注点
     document_text: str = ""
+    profile_id: str | None = None
 
 
 @router.post("/analyze")
@@ -165,7 +166,7 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
     data_dir = repo.store.data_dir
 
     async def stream_gen():
-        async for chunk in analyze_stock_stream(repo, data_dir, req.symbol, req.focus, req.document_text):
+        async for chunk in analyze_stock_stream(repo, data_dir, req.symbol, req.focus, req.document_text, req.profile_id):
             yield chunk + "\n"
 
     return StreamingResponse(

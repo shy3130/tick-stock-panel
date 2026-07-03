@@ -262,6 +262,7 @@ async def recap_market_stream(
     focus: str = "",
     news: list[dict] | None = None,
     document_text: str = "",
+    profile_id: str | None = None,
 ) -> AsyncIterator[str]:
     """流式大盘复盘:yield 出每个 NDJSON 事件。
 
@@ -310,6 +311,7 @@ async def recap_market_stream(
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
+            profile_id=profile_id,
             temperature=0.5,
             max_tokens=4500,
         ):

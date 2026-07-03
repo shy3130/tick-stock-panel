@@ -15,6 +15,7 @@ from app import secrets_store
 from app.config import settings
 
 OPENAI_COMPAT_PROVIDER = "openai_compat"
+ACP_PROVIDER = "acp"
 CODEX_CLI_PROVIDER = "codex_cli"
 CODEX_DEFAULT_COMMAND = "codex"
 CODEX_SERVICE_TIER_FALLBACK = "fast"
@@ -26,16 +27,29 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def current_ai_provider() -> str:
+    from app.services import ai_profiles
+    profile = ai_profiles.resolve_profile(None)
+    if profile:
+        return profile.get("provider") or OPENAI_COMPAT_PROVIDER
     return secrets_store.get_ai_config("ai_provider", settings.ai_provider) or OPENAI_COMPAT_PROVIDER
 
 
 def current_ai_model() -> str:
+    from app.services import ai_profiles
+    profile = ai_profiles.resolve_profile(None)
+    if profile:
+        model = profile.get("model") or ""
+        return normalize_codex_model(model) if profile.get("provider") == CODEX_CLI_PROVIDER else model
     if current_ai_provider() == CODEX_CLI_PROVIDER:
         return normalize_codex_model(str(secrets_store.load().get("ai_model") or ""))
     return secrets_store.get_ai_config("ai_model", settings.ai_model)
 
 
 def current_codex_command() -> str:
+    from app.services import ai_profiles
+    profile = ai_profiles.resolve_profile(None)
+    if profile and profile.get("provider") == CODEX_CLI_PROVIDER:
+        return normalize_codex_command(profile.get("codex_command") or CODEX_DEFAULT_COMMAND, strict=False)
     return normalize_codex_command(
         secrets_store.get_ai_config("ai_codex_command", settings.ai_codex_command),
         strict=False,
@@ -73,6 +87,15 @@ def codex_cli_available() -> bool:
 
 
 def ai_configured(provider: str | None = None) -> bool:
+    from app.services import ai_profiles
+    profile = ai_profiles.resolve_profile(None)
+    if profile:
+        provider = provider or profile.get("provider")
+        if provider == CODEX_CLI_PROVIDER:
+            return codex_cli_available()
+        if provider == ACP_PROVIDER:
+            return ai_profiles.is_available(profile)
+        return bool(profile.get("api_key"))
     provider = provider or current_ai_provider()
     if is_codex_cli_provider(provider):
         return codex_cli_available()
@@ -82,15 +105,21 @@ def ai_configured(provider: str | None = None) -> bool:
 async def generate_ai_text(
     messages: Sequence[Message],
     *,
+    profile_id: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 3000,
     timeout: float = 180.0,
 ) -> str:
     """Return a complete AI response from the currently configured provider."""
-    if is_codex_cli_provider():
-        return await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+    profile = _resolve_ai_profile(profile_id)
+    provider = profile.get("provider") if profile else current_ai_provider()
+    if provider == CODEX_CLI_PROVIDER:
+        return await _run_codex_cli(messages, profile=profile, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+    if provider == ACP_PROVIDER:
+        raise RuntimeError("ACP AI 配置尚未接入")
     return await _run_openai_once(
         messages,
+        profile=profile,
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
@@ -100,6 +129,7 @@ async def generate_ai_text(
 async def stream_ai_text(
     messages: Sequence[Message],
     *,
+    profile_id: str | None = None,
     temperature: float = 0.5,
     max_tokens: int = 4000,
     timeout: float = 180.0,
@@ -109,12 +139,18 @@ async def stream_ai_text(
     Codex CLI only exposes the final assistant message for this use case, so it
     yields one complete chunk after the command exits.
     """
-    if is_codex_cli_provider():
-        yield await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+    profile = _resolve_ai_profile(profile_id)
+    provider = profile.get("provider") if profile else current_ai_provider()
+    if provider == CODEX_CLI_PROVIDER:
+        yield await _run_codex_cli(messages, profile=profile, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+        return
+    if provider == ACP_PROVIDER:
+        yield await generate_ai_text(messages, profile_id=profile_id, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         return
 
     async for chunk in _stream_openai(
         messages,
+        profile=profile,
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
@@ -122,20 +158,26 @@ async def stream_ai_text(
         yield chunk
 
 
+def _resolve_ai_profile(profile_id: str | None) -> dict | None:
+    from app.services import ai_profiles
+    return ai_profiles.resolve_profile(profile_id)
+
+
 async def _run_openai_once(
     messages: Sequence[Message],
     *,
+    profile: dict | None = None,
     temperature: float,
     max_tokens: int,
     timeout: float,
 ) -> str:
-    ai_key = secrets_store.get_ai_key()
+    ai_key = (profile or {}).get("api_key") or secrets_store.get_ai_key()
     if not ai_key:
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
-    client = _openai_client(ai_key, timeout)
+    client = _openai_client(ai_key, timeout, profile=profile)
     resp = await client.chat.completions.create(
-        model=current_ai_model(),
+        model=(profile or {}).get("model") or current_ai_model(),
         messages=list(messages),
         temperature=temperature,
         max_tokens=max_tokens,
@@ -148,17 +190,18 @@ async def _run_openai_once(
 async def _stream_openai(
     messages: Sequence[Message],
     *,
+    profile: dict | None = None,
     temperature: float,
     max_tokens: int,
     timeout: float,
 ) -> AsyncIterator[str]:
-    ai_key = secrets_store.get_ai_key()
+    ai_key = (profile or {}).get("api_key") or secrets_store.get_ai_key()
     if not ai_key:
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
-    client = _openai_client(ai_key, timeout)
+    client = _openai_client(ai_key, timeout, profile=profile)
     stream = await client.chat.completions.create(
-        model=current_ai_model(),
+        model=(profile or {}).get("model") or current_ai_model(),
         messages=list(messages),
         temperature=temperature,
         max_tokens=max_tokens,
@@ -171,13 +214,13 @@ async def _stream_openai(
             yield delta.content
 
 
-def _openai_client(api_key: str, timeout: float):
+def _openai_client(api_key: str, timeout: float, *, profile: dict | None = None):
     from openai import AsyncOpenAI
 
-    user_agent = secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
+    user_agent = (profile or {}).get("user_agent") or secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
     return AsyncOpenAI(
         api_key=api_key,
-        base_url=secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
+        base_url=(profile or {}).get("base_url") or secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
         timeout=timeout,
         max_retries=2,
         default_headers={"User-Agent": user_agent},
@@ -187,6 +230,7 @@ def _openai_client(api_key: str, timeout: float):
 async def _run_codex_cli(
     messages: Sequence[Message],
     *,
+    profile: dict | None = None,
     max_tokens: int,
     timeout: float,
 ) -> str:
@@ -201,7 +245,7 @@ async def _run_codex_cli(
         _prepare_codex_home(codex_home_path)
 
         args = [
-            *_codex_base_command(),
+            *_codex_base_command(profile),
             "exec",
             "--ephemeral",
             "--sandbox",
@@ -212,7 +256,7 @@ async def _run_codex_cli(
             "--output-last-message",
             str(output_path),
         ]
-        model = current_ai_model().strip()
+        model = ((profile or {}).get("model") or current_ai_model()).strip()
         if model:
             args.extend(["--model", model])
         args.extend(["--cd", str(workspace_path), "-"])
@@ -266,8 +310,8 @@ def _codex_prompt(messages: Sequence[Message], *, max_tokens: int) -> str:
     return "\n".join(parts)
 
 
-def _codex_base_command() -> list[str]:
-    command = current_codex_command()
+def _codex_base_command(profile: dict | None = None) -> list[str]:
+    command = normalize_codex_command((profile or {}).get("codex_command") or current_codex_command(), strict=False)
     resolved = _resolve_command(command)
     if not resolved:
         raise RuntimeError(f"未找到 Codex CLI 命令: {command}")

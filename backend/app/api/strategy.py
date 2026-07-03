@@ -118,6 +118,7 @@ class SaveConfigRequest(BaseModel):
 
 class AIGenerateRequest(BaseModel):
     prompt: str
+    profile_id: str | None = None
 
 
 class AISaveRequest(BaseModel):
@@ -308,6 +309,7 @@ class BuildRequest(BaseModel):
     # step2 字段
     current_code: str = ""
     instruction: str = ""
+    profile_id: str | None = None
 
 
 @router.get("/ai/status")
@@ -379,7 +381,7 @@ async def build_strategy(req: BuildRequest, request: Request):
         raise HTTPException(status_code=400, detail=f"无效步骤: {req.step}")
 
     try:
-        result = await gen.generate(prompt)
+        result = await gen.generate(prompt, profile_id=req.profile_id)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return result
@@ -390,7 +392,7 @@ async def build_strategy(req: BuildRequest, request: Request):
 async def ai_generate(req: AIGenerateRequest, request: Request):
     try:
         gen = AIStrategyGenerator()
-        result = await gen.generate(req.prompt)
+        result = await gen.generate(req.prompt, profile_id=req.profile_id)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:

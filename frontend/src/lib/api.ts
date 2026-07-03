@@ -640,6 +640,34 @@ export interface SettingsState {
   ai_user_agent: string
 }
 
+export type AiProviderKind = 'openai_compat' | 'acp' | 'codex_cli'
+
+export interface AiProfileMasked {
+  id: string
+  name: string
+  provider: AiProviderKind | string
+  base_url?: string
+  model?: string
+  codex_command?: string
+  launch_command?: string
+  user_agent?: string
+  has_api_key: boolean
+  api_key_masked?: string
+  is_default: boolean
+  available?: boolean
+}
+
+export interface AiProfileInput {
+  name: string
+  provider: AiProviderKind | string
+  base_url?: string
+  api_key?: string
+  model?: string
+  codex_command?: string
+  launch_command?: string
+  user_agent?: string
+}
+
 export interface Preferences {
   data_provider?: string
   effective_data_provider?: string
@@ -843,6 +871,33 @@ export const api = {
   /** 一键清空 AI 配置(保留自定义 UA) */
   clearAiSettings: () =>
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
+
+  aiProfiles: () =>
+    request<{ profiles: AiProfileMasked[]; default_id: string }>('/api/settings/ai/profiles'),
+
+  createAiProfile: (profile: AiProfileInput) =>
+    request<{ id: string }>('/api/settings/ai/profiles', {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    }),
+
+  updateAiProfile: (id: string, profile: Partial<AiProfileInput>) =>
+    request<{ ok: boolean }>(`/api/settings/ai/profiles/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(profile),
+    }),
+
+  deleteAiProfile: (id: string) =>
+    request<{ ok: boolean }>(`/api/settings/ai/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  setDefaultAiProfile: (id: string) =>
+    request<{ ok: boolean }>(`/api/settings/ai/profiles/${encodeURIComponent(id)}/default`, { method: 'POST' }),
+
+  testAiProfile: (id: string) =>
+    request<{ ok: boolean; error?: string; model?: string; response?: string }>(
+      `/api/settings/ai/profiles/${encodeURIComponent(id)}/test`,
+      { method: 'POST' },
+    ),
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
   updateDataProvider: (data_provider: 'fquant' | 'fquant_local') =>
@@ -1465,7 +1520,7 @@ export const api = {
    *
    * 用 ReadableStream 解析(而非 SSE EventSource),支持 POST body 且更简单。
    */
-  async *financialAnalyzeStream(symbol: string, focus?: string): AsyncGenerator<{
+  async *financialAnalyzeStream(symbol: string, focus?: string, profileId?: string): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     symbol?: string
     summary?: string
@@ -1476,7 +1531,7 @@ export const api = {
     const res = await fetch('/api/financials/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '' }),
+      body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
     })
     if (!res.ok) {
       let detail = ''
@@ -1536,7 +1591,7 @@ export const api = {
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
    */
-  async *stockAnalyzeStream(symbol: string, focus?: string): AsyncGenerator<{
+  async *stockAnalyzeStream(symbol: string, focus?: string, profileId?: string): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     symbol?: string
     summary?: string
@@ -1548,7 +1603,7 @@ export const api = {
     const res = await fetch('/api/stock-analysis/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '' }),
+      body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
     })
     if (!res.ok) {
       let detail = ''
@@ -1598,7 +1653,7 @@ export const api = {
    * AI 大盘复盘 — 流式调用(NDJSON,与个股/财务分析同协议)。
    * meta 里带 as_of / emotion_score / emotion_label / summary,供前端先渲染信号灯。
    */
-  async *reviewStream(asOf?: string, focus?: string): AsyncGenerator<{
+  async *reviewStream(asOf?: string, focus?: string, profileId?: string): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     as_of?: string
     emotion_score?: number
@@ -1610,7 +1665,7 @@ export const api = {
     const res = await fetch('/api/market-recap/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
+      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
     })
     if (!res.ok) {
       let detail = ''
@@ -1747,10 +1802,10 @@ export const api = {
   /** 获取策略源文件内容 */
   strategyGetSource: (id: string) =>
     request<{ code: string; source: string }>(`/api/strategies/${id}/source`),
-  strategyBuild: (step: number, payload: Record<string, any>) =>
+  strategyBuild: (step: number, payload: Record<string, any>, profileId?: string) =>
     request<{ code: string; meta: Record<string, any>; valid: boolean; error: string | null }>(
       '/api/strategies/build',
-      { method: 'POST', body: JSON.stringify({ step, ...payload }) },
+      { method: 'POST', body: JSON.stringify({ step, ...payload, ...(profileId ? { profile_id: profileId } : {}) }) },
     ),
 
   /** 保存 AI 生成的策略文件 */
