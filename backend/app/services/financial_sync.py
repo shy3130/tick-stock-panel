@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,20 +25,31 @@ logger = logging.getLogger(__name__)
 # 每个 API 请求最多 100 个标的
 _BATCH_SIZE = 100
 
-# 4 张财务表(对外/调度器层面沿用旧名称,不改函数签名)
-FINANCIAL_TABLES = ("metrics", "income", "balance_sheet", "cash_flow")
+# 财务表(对外/调度器层面沿用旧名称,不改函数签名)
+FINANCIAL_TABLES = (
+    "metrics",
+    "income",
+    "balance_sheet",
+    "cash_flow",
+    "quick",
+    "forecast",
+)
 
 # 业务表名 → provider.get_financial(table=...) 参数。
 # FQuantProvider.get_financial() 接受: income / balance_sheet / cash_flow / annual / quick / forecast
 # (见 backend/app/data_providers/fquant_provider.py 的 _FINANCIAL_TABLE_MAP)。
 # - "metrics" 在 provider 侧没有同名表,映射到最接近的 "annual"(年度核心指标 EPS/BPS/ROE/净利)。
-# - 三张报表直接同名透传。
+# - 三张报表、快报、预告直接同名透传。
 _PROVIDER_TABLE_MAP: dict[str, str] = {
     "metrics": "annual",
     "income": "income",
     "balance_sheet": "balance_sheet",
     "cash_flow": "cash_flow",
+    "quick": "quick",
+    "forecast": "forecast",
 }
+
+_EASTMONEY_DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
 
 # 数据源 provider 单例缓存
@@ -182,6 +193,125 @@ def sync_cash_flow(data_dir: Path, capset: CapabilitySet) -> int:
     return _sync_table("cash_flow", symbols, data_dir, capset, latest_only=True)
 
 
+def sync_quick(data_dir: Path, capset: CapabilitySet) -> int:
+    """同步业绩快报。"""
+    symbols = _get_symbols(data_dir)
+    return _sync_table("quick", symbols, data_dir, capset, latest_only=True)
+
+
+def sync_forecast(data_dir: Path, capset: CapabilitySet) -> int:
+    """同步业绩预告。"""
+    if not capset.has(Cap.FINANCIAL):
+        logger.info("sync_forecast skipped: no FINANCIAL capability")
+        return 0
+    if _forecast_fstore_has_rows():
+        symbols = _get_symbols(data_dir)
+        rows = _sync_table("forecast", symbols, data_dir, capset, latest_only=True)
+        if rows:
+            return rows
+    return _sync_forecast_from_eastmoney(data_dir, capset)
+
+
+def _forecast_fstore_has_rows() -> bool:
+    try:
+        provider = _get_data_provider()
+        fstore = getattr(provider, "_fstore", None)
+        query = getattr(fstore, "query", None)
+        if query is None:
+            return False
+        return bool(query("SELECT 1 FROM financial_report_forecast LIMIT 1", ()))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("check financial_report_forecast failed: %s", e)
+        return False
+
+
+def _recent_report_dates(today: date | None = None) -> list[str]:
+    today = today or date.today()
+    quarters = [(3, 31), (6, 30), (9, 30), (12, 31)]
+    dates: list[date] = []
+    for year in (today.year, today.year - 1):
+        for month, day in quarters:
+            item = date(year, month, day)
+            if item <= today:
+                dates.append(item)
+    return [d.isoformat() for d in sorted(dates, reverse=True)]
+
+
+def _forecast_symbol(row: dict[str, Any]) -> str:
+    secucode = row.get("SECUCODE")
+    if secucode:
+        return str(secucode)
+    code = str(row.get("SECURITY_CODE") or "")
+    market = str(row.get("TRADE_MARKET_CODE") or "")
+    if market.startswith("069001002"):
+        return f"{code}.SZ"
+    if market.startswith("069001001"):
+        return f"{code}.SH"
+    return code
+
+
+def _normalize_forecast_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        report_date = str(row.get("REPORT_DATE") or "").split(" ")[0] or None
+        notice_date = str(row.get("NOTICE_DATE") or "").split(" ")[0] or None
+        out.append({
+            **row,
+            "symbol": _forecast_symbol(row),
+            "t_date": report_date,
+            "report_date": report_date,
+            "notice_date": notice_date,
+            "source": "eastmoney:forecast",
+            "predict_type": row.get("PREDICT_TYPE"),
+            "predict_content": row.get("PREDICT_CONTENT"),
+            "change_reason": row.get("CHANGE_REASON_EXPLAIN"),
+            "forecast_net_profit": row.get("FORECAST_JZ"),
+            "net_profit_lower": row.get("PREDICT_AMT_LOWER"),
+            "net_profit_upper": row.get("PREDICT_AMT_UPPER"),
+        })
+    return pl.DataFrame(out) if out else pl.DataFrame()
+
+
+def _sync_forecast_from_eastmoney(data_dir: Path, capset: CapabilitySet) -> int:
+    if not capset.has(Cap.FINANCIAL):
+        logger.info("sync_forecast eastmoney skipped: no FINANCIAL capability")
+        return 0
+
+    from app.services import eastmoney_client
+
+    for report_date in _recent_report_dates():
+        rows = eastmoney_client.get_datacenter_paged(
+            _EASTMONEY_DATACENTER,
+            {
+                "sortColumns": "NOTICE_DATE,SECURITY_CODE",
+                "sortTypes": "-1,-1",
+                "reportName": "RPT_PUBLIC_OP_NEWPREDICT",
+                "columns": "ALL",
+                "filter": (
+                    '(SECURITY_TYPE_CODE in ("058001001","058001008"))'
+                    '(TRADE_MARKET_CODE!="069001017")'
+                    f"(REPORT_DATE='{report_date}')"
+                ),
+                "source": "WEB",
+                "client": "WEB",
+            },
+            max_pages=20,
+        )
+        df = _normalize_forecast_rows(rows)
+        if df.is_empty():
+            continue
+        out_dir = data_dir / "financials" / "forecast"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(out_dir / "part.parquet")
+        logger.info(
+            "sync_forecast eastmoney done: %d records for %s",
+            len(df),
+            report_date,
+        )
+        return len(df)
+    return 0
+
+
 def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:
     """同步所有财务表。返回 {table: rows}。"""
     if not capset.has(Cap.FINANCIAL):
@@ -207,10 +337,8 @@ def _refresh_financials_views(data_dir: Path) -> None:
     """刷新财务表 DuckDB 视图 (在 DataStore.db 上注册)。"""
     d = data_dir.as_posix()
     views = {
-        "financials_metrics": f"{d}/financials/metrics/*.parquet",
-        "financials_income": f"{d}/financials/income/*.parquet",
-        "financials_balance_sheet": f"{d}/financials/balance_sheet/*.parquet",
-        "financials_cash_flow": f"{d}/financials/cash_flow/*.parquet",
+        f"financials_{table}": f"{d}/financials/{table}/*.parquet"
+        for table in FINANCIAL_TABLES
     }
     for name, path in views.items():
         out = data_dir / "financials" / name.replace("financials_", "") / "part.parquet"
@@ -362,7 +490,7 @@ class FinancialScheduler:
     def _run_body(self, table: str | None) -> dict[str, int]:
         """同步逻辑本体(不加锁,假设调用方已持有 _is_syncing)。
 
-        table=None 同步全部 4 张表;否则只同步指定表。
+        table=None 同步全部财务表;否则只同步指定表。
         每张表完成立即更新 last_sync,让前端轮询 /status 能看到进度递增。
         """
         if table:
@@ -371,6 +499,8 @@ class FinancialScheduler:
                 "income": sync_income,
                 "balance_sheet": sync_balance_sheet,
                 "cash_flow": sync_cash_flow,
+                "quick": sync_quick,
+                "forecast": sync_forecast,
             }.get(table)
             if not fn:
                 return {}
