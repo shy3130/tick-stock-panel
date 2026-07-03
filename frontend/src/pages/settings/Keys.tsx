@@ -67,14 +67,15 @@ export function SettingsKeysPanel() {
   const mode = settings.data?.mode
   const masked = settings.data?.tickflow_api_key_masked
   const capCount = caps.data ? Object.keys(caps.data.capabilities).length : 0
-  const isLocalProvider = mode === 'fquant' || mode === 'fquant_local'
+  const provider = settings.data?.data_provider ?? mode
+  const isLocalProvider = provider === 'fquant' || provider === 'fquant_local'
 
   if (isLocalProvider) {
     return (
       <div className="max-w-2xl">
         <Card icon={CheckCircle2} title="本地数据源">
           <p className="text-sm text-secondary leading-relaxed">
-            当前使用 {mode === 'fquant_local' ? 'fquant_local' : 'fquant'} 数据源,不需要配置 TickFlow API Key。
+            当前使用 {provider === 'fquant_local' ? 'fquant_local' : 'fquant'} 数据源,不需要配置 TickFlow API Key。
             功能可用性由当前数据源能力决定。
           </p>
           {caps.data && (

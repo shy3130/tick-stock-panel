@@ -251,8 +251,41 @@ function KeyStep({ onNext, onSkip, onBack }: { onNext: () => void; onSkip: () =>
     },
   })
 
-  // 已配置 key —— 免费档或付费档都算(只要不是 None 档)
-  const alreadyHasKey = settings.data?.mode !== 'none' && settings.data?.mode !== undefined
+  const provider = settings.data?.data_provider ?? settings.data?.mode
+  const isLocalProvider = provider === 'fquant' || provider === 'fquant_local'
+  const alreadyHasKey = settings.data?.mode === 'free' || settings.data?.mode === 'api_key'
+
+  if (isLocalProvider) {
+    return (
+      <div>
+        <div className="flex items-center gap-2.5">
+          <div className="rounded-lg bg-accent/10 p-2">
+            <Database className="h-4 w-4 text-accent" />
+          </div>
+          <h2 className="text-xl font-bold text-foreground">本地数据源已启用</h2>
+        </div>
+        <p className="mt-2.5 text-sm text-secondary leading-relaxed">
+          当前使用 {provider === 'fquant_local' ? 'fquant_local' : 'fquant'} 数据源,无需配置 TickFlow API Key。
+        </p>
+        <div className="mt-6 flex items-center justify-between">
+          <button
+            onClick={onBack}
+            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            上一步
+          </button>
+          <button
+            onClick={onNext}
+            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
+          >
+            下一步
+            <ArrowRight className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>

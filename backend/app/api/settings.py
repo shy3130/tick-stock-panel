@@ -20,6 +20,7 @@ from app.tickflow.policy import (
     probe_log,
     tier_label,
 )
+from app.services.data_mode import current_data_mode
 
 logger = logging.getLogger(__name__)
 
@@ -53,20 +54,32 @@ class TickflowKeyIn(BaseModel):
 def get_settings() -> dict:
     """返回当前配置概况(Key 脱敏)。"""
     from app.config import settings
+    from app.data_providers.registry import get_active_provider_name
     from app.services import preferences
     from app.services.ai_provider import ai_configured, current_ai_model, current_codex_command
 
     key = secrets_store.get_tickflow_key()
     ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
-    return {
-        "mode": tf_client.current_mode(),
-        "tickflow_api_key_masked": secrets_store.mask(key),
-        "has_tickflow_key": bool(key),
+    tickflow_block = {
+        "api_key_masked": secrets_store.mask(key),
+        "has_key": bool(key),
         "tier_label": tier_label(),
         "current_endpoint": tf_client.current_endpoint(),
         "probe_log": probe_log(),
         "missing_caps": missing_caps(),
         "extras_caps": extras_caps(),
+    }
+    return {
+        "mode": current_data_mode(),
+        "data_provider": get_active_provider_name(),
+        "tickflow": tickflow_block,
+        "tickflow_api_key_masked": tickflow_block["api_key_masked"],
+        "has_tickflow_key": tickflow_block["has_key"],
+        "tier_label": tickflow_block["tier_label"],
+        "current_endpoint": tickflow_block["current_endpoint"],
+        "probe_log": tickflow_block["probe_log"],
+        "missing_caps": tickflow_block["missing_caps"],
+        "extras_caps": tickflow_block["extras_caps"],
         # 首次使用引导
         "onboarding_completed": preferences.get_onboarding_completed(),
         # AI 配置

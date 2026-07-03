@@ -632,6 +632,16 @@ export interface EndpointManifest {
 
 export interface SettingsState {
   mode: 'none' | 'free' | 'api_key' | 'fquant' | 'fquant_local'
+  data_provider: 'tickflow' | 'fquant' | 'fquant_local'
+  tickflow: {
+    api_key_masked: string
+    has_key: boolean
+    tier_label: string
+    current_endpoint: string
+    probe_log: string[]
+    missing_caps: string[]
+    extras_caps: string[]
+  }
   tickflow_api_key_masked: string
   has_tickflow_key: boolean
   tier_label: string
