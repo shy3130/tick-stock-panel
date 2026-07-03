@@ -722,6 +722,65 @@ export interface StrategyAlertEvent {
   signals?: string[]
 }
 
+// ===== Trade Journal =====
+export interface JournalPreview {
+  sheets: string[]
+  columns: string[]
+  guessed_mapping: Record<string, string>
+  preview_rows: Record<string, any>[]
+  row_count: number
+  warnings: string[]
+}
+
+export interface JournalTrip {
+  symbol: string
+  name: string
+  open_date: string
+  close_date: string
+  qty: number
+  buy_avg: number
+  sell_avg: number
+  pnl: number
+  total_pnl: number
+  pnl_pct: number
+  fees: number
+  dividend: number
+  holding_days: number
+  benchmark_pct?: number | null
+  excess?: number | null
+}
+
+export interface JournalLedger {
+  imported_at: string
+  trips: JournalTrip[]
+  summary: {
+    total_trips: number
+    win_trips: number
+    total_pnl: number
+    total_dividend: number
+    total_fees: number
+    win_rate: number
+    avg_win: number
+    avg_loss: number
+    profit_factor: number
+    open_positions: Record<string, any>[]
+  }
+  diagnosis: Record<string, any>
+  benchmark: {
+    code: string
+    name: string
+    account: { account_return: number | null; benchmark_return: number | null; excess: number | null; window: string[] | null }
+    per_trip: (Pick<JournalTrip, 'symbol' | 'open_date' | 'close_date' | 'pnl_pct'> & { benchmark_pct: number | null; excess: number | null })[]
+    noise_note: string
+  }
+  warnings: string[]
+}
+
+export interface JournalPresets {
+  presets: { id: string; label: string; sheet: string; mapping: Record<string, string> }[]
+  benchmarks: { symbol: string; name: string }[]
+}
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
@@ -746,6 +805,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
     }),
+
+  journalPresets: () => request<JournalPresets>('/api/journal/presets'),
+  journalLedger: () => request<JournalLedger>('/api/journal/ledger'),
+  journalDelete: () => request<{ deleted: boolean }>('/api/journal/ledger', { method: 'DELETE' }),
+  journalUpload: (file: File, commit: boolean, mapping?: Record<string, string>, sheet?: string, benchmark?: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (mapping) fd.append('mapping', JSON.stringify(mapping))
+    if (sheet) fd.append('sheet', sheet)
+    if (benchmark) fd.append('benchmark', benchmark)
+    return request<JournalPreview | JournalLedger>(`/api/journal/upload?commit=${commit}`, { method: 'POST', body: fd })
+  },
 
   settings: () => request<SettingsState>('/api/settings'),
   saveTickflowKey: (api_key: string) =>

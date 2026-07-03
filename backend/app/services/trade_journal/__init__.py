@@ -1,0 +1,1 @@
+"""Trade Journal service package."""

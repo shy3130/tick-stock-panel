@@ -9,6 +9,7 @@ import { Auth } from './pages/Auth'
 import { Data } from './pages/Data'
 import { Monitor } from './pages/Monitor'
 import { Trading } from './pages/Trading'
+import { TradeJournal } from './pages/TradeJournal'
 import { Dashboard } from './pages/Dashboard'
 import { AnalysisDetail } from './pages/AnalysisDetail'
 import { ConceptAnalysis } from './pages/ConceptAnalysis'
@@ -77,6 +78,7 @@ export const router = createBrowserRouter([
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'trading', element: <Trading /> },
+      { path: 'journal', element: <TradeJournal /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },
       { path: 'branding', element: <Branding /> },
