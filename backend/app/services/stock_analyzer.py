@@ -49,8 +49,39 @@ def _load_kline(repo, symbol: str) -> pl.DataFrame:
     start = end - timedelta(days=_KLINE_WINDOW * 2)  # 多取一些保证交易日够
     df = repo.get_daily(symbol, start, end)
     if df.is_empty():
+        from app.services.data_mode import is_local_daily_mode
+
+        if is_local_daily_mode():
+            df = _load_kline_local_on_demand(symbol, start, end)
+    if df.is_empty():
         return df
     return df.tail(_KLINE_WINDOW)
+
+
+def _load_kline_local_on_demand(symbol: str, start, end) -> pl.DataFrame:
+    """Load daily bars from the active local provider and compute indicators."""
+    from datetime import datetime
+
+    from app.api.kline import _asset_type_for_symbol
+    from app.data_providers.registry import get_active_provider_name, get_provider
+    from app.indicators.pipeline import compute_enriched
+
+    provider = get_provider(get_active_provider_name("daily"))
+    asset_type = _asset_type_for_symbol(symbol)
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end, datetime.min.time())
+    raw = provider.get_daily([symbol], start_dt, end_dt, asset_type)
+    if raw.is_empty():
+        return pl.DataFrame()
+
+    factors = pl.DataFrame()
+    if asset_type == "stock":
+        try:
+            factors = provider.get_adj_factors([symbol], start_dt, end_dt, asset_type)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("single-stock analysis adj factors failed %s: %s", symbol, e)
+
+    return compute_enriched(raw, factors=factors, asset_type=asset_type)
 
 
 def _clean_rows(df: pl.DataFrame, keep_cols: list[str]) -> list[dict]:
