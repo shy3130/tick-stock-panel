@@ -10,6 +10,7 @@
 - 临时 HTTP E2E：使用 `DATA_DIR=/tmp/tickflow-journal-e2e` 上传真实 `银河.xlsx`，预览 `row_count=2209`，commit 后 `trips=446`、`open=5`、`benchmark=沪深300`、`benchmark_return=0.8473429951690821`、`excess=-0.8500780204822614`、`chasing_covered=8`、`warnings=0`，临时目录只生成 `ledger.json`。
 - 已授权后执行：任务 0 真实宽基回填完成，`回填完成: +9950 行`，常驻指数为 `000300.SH,000688.SH,000905.SH,399006.SZ`，`000300.SH` 2024 年校验 `rows=242`。
 - 未执行：各任务拆分 commit 步骤；本次改为一个收口 commit。
+- 当前复核（2026-07-03 Codex）：`tests/services/trade_journal tests/api/test_trade_journal.py` → 40 passed；`validate_trade_journal_oracle.py ~/Downloads/银河.xlsx` → `trips=446 oracle=446 missing=0 extra=0 pnl_diff=0 whitelisted=1`；四个宽基 2024 年均 `rows=242`；常驻指数列表仍为 `000300.SH,000688.SH,000905.SH,399006.SZ`。
 
 **现状证据：**
 - 真实样本 `~/Downloads/银河.xlsx` 已确认 3 个 sheet：持仓数据、已清仓、交易记录；事实源采用交易记录逐笔成交，已清仓只作 oracle 对拍。
@@ -73,7 +74,7 @@
 
 **目标：** 一次性把四个宽基 2015-01-01→今回填到 `kline_index_daily` + `kline_index_enriched`，并加入常驻 index instruments 让盘后 pipeline 自动保鲜。
 
-- [ ] **步骤 1：smoke-fetch 确认 provider 能取到宽基历史（de-risk）**
+- [x] **步骤 1：smoke-fetch 确认 provider 能取到宽基历史（de-risk）**
 
 运行：
 ```bash
@@ -86,7 +87,7 @@ print('rows=', df.height, 'range=', df['date'].min(), df['date'].max() if not df
 ```
 预期：`rows` 远大于 1（约 38 个交易日），range 覆盖 2024-01~03。**若 rows≤1 或空**：说明 provider 的 index 磁盘映射有问题（检查 `engine_data_disk._tdx_name` 对 `000300.SH→sh000300` 的桶路径、`fquant_provider` 的 index asset_type 分支），先修通再继续，不要盲目全量。
 
-- [ ] **步骤 2：编写回填脚本**
+- [x] **步骤 2：编写回填脚本**
 
 ```python
 # backend/scripts/backfill_broad_benchmarks.py
@@ -140,12 +141,12 @@ if __name__ == "__main__":
 
 **注意（实现者）：** `preferences.set_pipeline_index_symbols` / `get_pipeline_index_symbols` 的确切函数名以 `backend/app/services/preferences.py` 为准（前面 review 见过 `get_pipeline_index_symbols`），若命名不同按实际改；若常驻列表机制不同（例如走 index instruments 表），改为对应的 `sync_index_instruments` + 持久化方式。回填是一次性运维脚本，不进 pytest。
 
-- [ ] **步骤 3：执行回填并校验**
+- [x] **步骤 3：执行回填并校验**
 
 运行：`cd backend && uv run python scripts/backfill_broad_benchmarks.py`
 预期：`+N 行`（四符号 × ~2500 交易日 ≈ 1 万行量级），末行 `校验 000300.SH 2024 年: rows≈242`。
 
-- [ ] **步骤 4：Commit**
+- [x] **步骤 4：Commit**
 
 ```bash
 git add backend/scripts/backfill_broad_benchmarks.py
@@ -161,7 +162,7 @@ git commit -m "feat(journal): 宽基指数历史回填脚本 (基准超额前置
 - 创建：`backend/app/services/trade_journal/models.py`
 - 测试：`backend/tests/services/trade_journal/__init__.py`（空）、`backend/tests/services/trade_journal/test_models.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/services/trade_journal/test_models.py
@@ -201,12 +202,12 @@ def test_cash_event_kinds():
     assert ev.kind in {"dividend", "dividend_tax", "transfer_in", "transfer_out", "repo", "other"}
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_models.py -v`
 预期：FAIL，`ModuleNotFoundError: app.services.trade_journal`
 
-- [ ] **步骤 3：编写实现**
+- [x] **步骤 3：编写实现**
 
 ```python
 # backend/app/services/trade_journal/models.py
@@ -305,12 +306,12 @@ class LedgerSummary:
     open_positions: list[dict] = field(default_factory=list)  # 未平仓(不含在 trips 内)
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_models.py -v`
 预期：3 passed
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/ backend/tests/services/trade_journal/
@@ -325,7 +326,7 @@ git commit -m "feat(journal): Trade Journal 数据契约 models"
 - 创建：`backend/app/services/trade_journal/presets.py`
 - 测试：`backend/tests/services/trade_journal/test_presets.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/services/trade_journal/test_presets.py
@@ -359,12 +360,12 @@ def test_guess_mapping_generic_variants():
     assert m["成交量"] == "qty"
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_presets.py -v`
 预期：FAIL，`No module named 'app.services.trade_journal.presets'`
 
-- [ ] **步骤 3：编写实现**
+- [x] **步骤 3：编写实现**
 
 ```python
 # backend/app/services/trade_journal/presets.py
@@ -426,12 +427,12 @@ def guess_mapping(columns: list[str]) -> dict[str, str]:
     return out
 ```
 
-- [ ] **步骤 4：运行验证通过**
+- [x] **步骤 4：运行验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_presets.py -v`
 预期：3 passed
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/presets.py backend/tests/services/trade_journal/test_presets.py
@@ -447,11 +448,11 @@ git commit -m "feat(journal): 通用列映射 + 同花顺投资账本预设"
 - 测试：`backend/tests/services/trade_journal/test_parser.py`
 - 修改：`backend/pyproject.toml`（dev extra 加 `"xlsxwriter>=3.0"`，测试造 xlsx 用）
 
-- [ ] **步骤 1：dev 依赖**
+- [x] **步骤 1：dev 依赖**
 
 在 `backend/pyproject.toml` 的 `[project.optional-dependencies] dev` 列表加一行 `"xlsxwriter>=3.0",`，然后 `cd backend && uv sync --extra dev`。
 
-- [ ] **步骤 2：编写失败的测试**
+- [x] **步骤 2：编写失败的测试**
 
 ```python
 # backend/tests/services/trade_journal/test_parser.py
@@ -542,12 +543,12 @@ def test_read_upload_csv():
     assert df.height == 1
 ```
 
-- [ ] **步骤 3：运行验证失败**
+- [x] **步骤 3：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_parser.py -v`
 预期：FAIL，import error
 
-- [ ] **步骤 4：编写实现**
+- [x] **步骤 4：编写实现**
 
 ```python
 # backend/app/services/trade_journal/parser.py
@@ -659,13 +660,13 @@ def normalize_rows(
     return fills, events, warnings
 ```
 
-- [ ] **步骤 5：运行验证通过**
+- [x] **步骤 5：运行验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_parser.py -v`
 预期：5 passed
 （若 `pl.read_excel(sheet_id=0)` 返回类型与预期不符——旧版 polars 返回 dict、新版可能变化——按当前 polars 版本文档调整 `read_upload`，测试不变。）
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/parser.py backend/tests/services/trade_journal/test_parser.py backend/pyproject.toml uv.lock
@@ -682,7 +683,7 @@ git commit -m "feat(journal): xlsx/CSV 解析 + 交易类别分类 + A/HK 代码
 
 **算法说明（给实现者）：** **单层 position-cycle**（grilling Q1 决策：砍掉 lot 级，统一到周期口径）。同一 symbol 仓位从 0 → >0 → 归 0 为一个 `Roundtrip`（同花顺「已清仓」同口径，对拍用）。真实样本确认同花顺就是这么切的（赛力斯在「已清仓」里出现十几行，每次清零一行）。追涨/锚定诊断**不依赖 roundtrip 单位**，直接在 fills 流上算，所以不需要 lot 级 roundtrip。周期内的 `dividend`/`dividend_tax` 现金事件按日期归属到该周期。持仓天数 = 交易日历含两端；调用方传入排序好的交易日列表，不传则退化为自然日差+1。卖出数量超过持仓（数据缺失/融券）→ 该 symbol 标记 warning 并跳过多余部分。
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/services/trade_journal/test_fifo.py
@@ -794,12 +795,12 @@ def test_oversell_warns_and_skips_excess():
     assert len(warnings) == 1 and "600000.SH" in warnings[0]
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_fifo.py -v`
 预期：FAIL，import error
 
-- [ ] **步骤 3：编写实现**
+- [x] **步骤 3：编写实现**
 
 ```python
 # backend/app/services/trade_journal/fifo.py
@@ -904,12 +905,12 @@ def _close_cycle(
 
 **注意（实现者必读）：** 股息税(`股息个税征收`)常发生在清仓之后几天（银河样本：卖出后 T+N 补扣），本实现按日期窗口归属会漏掉这部分——**先按窗口实现并通过测试**，oracle 对拍脚本（任务 7）会量化这个偏差；若对拍显示同花顺把清仓后的税也算进该笔，再把归属规则改为「归属到该 symbol 最近一个已平仓周期」。
 
-- [ ] **步骤 4：运行验证通过**
+- [x] **步骤 4：运行验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_fifo.py -v`
 预期：7 passed
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/fifo.py backend/tests/services/trade_journal/test_fifo.py
@@ -930,7 +931,7 @@ git commit -m "feat(journal): FIFO position-cycle 配对 (同花顺已清仓同�
 3. **追涨**：买入日收盘价处于此前 20 个交易日 high-low 区间的分位 >0.9 的买入占比。需要外部行情，由调用方注入 `price_lookup: dict[(symbol, date), dict]`（内含 `pos_20d`: 0-1 分位，API 层预计算），缺数据的买入跳过。
 4. **锚定加仓**：在浮亏状态下加仓的买入笔数占全部加仓（非首笔）买入的比例。浮亏判定：加仓价 < 当前周期已持仓部分的均价。
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/services/trade_journal/test_diagnose.py
@@ -989,12 +990,12 @@ def test_anchoring_add_on_losers():
     assert abs(d["anchoring"]["ratio"] - 0.5) < 1e-9  # 2 次加仓, 1 次在浮亏
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_diagnose.py -v`
 预期：FAIL
 
-- [ ] **步骤 3：编写实现**
+- [x] **步骤 3：编写实现**
 
 ```python
 # backend/app/services/trade_journal/diagnose.py
@@ -1084,12 +1085,12 @@ def _anchoring(fills: list[Fill]) -> dict:
             "n_adds": adds, "flag": bool(ratio and ratio > 0.6)}
 ```
 
-- [ ] **步骤 4：运行验证通过**
+- [x] **步骤 4：运行验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_diagnose.py -v`
 预期：4 passed
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/diagnose.py backend/tests/services/trade_journal/test_diagnose.py
@@ -1106,7 +1107,7 @@ git commit -m "feat(journal): 四项行为偏差纯统计诊断"
 
 **目的：** 为「追涨」诊断提供 `price_lookup[(symbol, date)] = {"pos_20d": 0-1}`——买入日收盘价在此前 20 个交易日 high-low 区间的分位。经 `repo.get_daily`（读 `kline_daily_enriched`，项目主读法）取 A 股日K；**港股本地无 parquet → 显式跳过并列入 uncovered（Med 1）**。`build_price_lookup` 是唯一读盘处，纯函数 `compute_pos` 可单测，返回 `(lookup, uncovered)`。
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/services/trade_journal/test_pricepos.py
@@ -1139,12 +1140,12 @@ def test_compute_pos_insufficient_history_returns_none():
     assert compute_pos(15.0, [{"date": "2024-01-01", "high": 20.0, "low": 10.0}] * 3) is None
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_pricepos.py -v`
 预期：FAIL，import error
 
-- [ ] **步骤 3：编写实现**
+- [x] **步骤 3：编写实现**
 
 ```python
 # backend/app/services/trade_journal/pricepos.py
@@ -1230,12 +1231,12 @@ def pl_col_date():
 
 **注意（实现者）：** `repo.get_daily(symbol, start, end, columns)` 读 `kline_daily_enriched`（当前在 `backend/app/storage/repository.py`），与项目主读法一致，已含 warmup 预热，返回 date/high/low/close。测试只测 `compute_pos` 纯函数，不碰 repo，路径细节不影响测试通过。
 
-- [ ] **步骤 4：运行验证通过**
+- [x] **步骤 4：运行验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_pricepos.py -v`
 预期：4 passed
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/pricepos.py backend/tests/services/trade_journal/test_pricepos.py
@@ -1252,7 +1253,7 @@ git commit -m "feat(journal): 追涨诊断行情分位 price_lookup"
 
 **口径（R6）：** 主指标 = 账户-区间超额：台账窗口（首笔 open_date → 末笔 close_date）内，`总已实现收益 / 总投入买入净额` vs 同窗口基准涨幅。辅指标 = 逐笔超额（附表 + 噪声警示语）。港股回合 `benchmark_pct=None`。基准行情由调用方注入 `index_closes: dict[str, float]`（date→close，API 层从 `repo.get_index_daily("000300.SH", ...)` 取），纯函数无 IO。
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/services/trade_journal/test_benchmark.py
@@ -1302,12 +1303,12 @@ def test_missing_benchmark_dates_fall_back_to_nearest_prior():
     assert abs(rows[0]["benchmark_pct"] - 0.02) < 1e-9
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_benchmark.py -v`
 预期：FAIL
 
-- [ ] **步骤 3：编写实现**
+- [x] **步骤 3：编写实现**
 
 ```python
 # backend/app/services/trade_journal/benchmark.py
@@ -1372,12 +1373,12 @@ def per_trip_excess(trips: list[Roundtrip], index_closes: dict[str, float]) -> l
     return rows
 ```
 
-- [ ] **步骤 4：运行验证通过**
+- [x] **步骤 4：运行验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/test_benchmark.py -v`
 预期：4 passed
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/benchmark.py backend/tests/services/trade_journal/test_benchmark.py
@@ -1401,7 +1402,7 @@ git commit -m "feat(journal): 账户区间超额(主) + 逐笔超额(辅), HK �
 - `DELETE /api/journal/ledger` → 删除。
 - MVP 语义：**每次 commit 覆盖整本台账**（单账本）。多次导入合并去重是后续项，YAGNI。
 
-- [ ] **步骤 1：编写 store 失败测试**
+- [x] **步骤 1：编写 store 失败测试**
 
 ```python
 # backend/tests/services/trade_journal/test_store.py
@@ -1419,7 +1420,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     assert store.load_ledger() is None
 ```
 
-- [ ] **步骤 2：运行验证失败**，然后实现：
+- [x] **步骤 2：运行验证失败**，然后实现：
 
 ```python
 # backend/app/services/trade_journal/store.py
@@ -1471,7 +1472,7 @@ def delete_ledger() -> bool:
     return False
 ```
 
-- [ ] **步骤 3：编写 API 失败测试**
+- [x] **步骤 3：编写 API 失败测试**
 
 ```python
 # backend/tests/api/test_trade_journal.py
@@ -1528,7 +1529,7 @@ def test_upload_preview_then_commit(tmp_path, monkeypatch):
     assert client.get("/api/journal/ledger").status_code == 404
 ```
 
-- [ ] **步骤 4：运行验证失败**，然后实现 API：
+- [x] **步骤 4：运行验证失败**，然后实现 API：
 
 ```python
 # backend/app/api/trade_journal.py
@@ -1714,17 +1715,17 @@ app.include_router(trade_journal.router)  # app.include_router(rps.router) 之�
 
 **注意（实现者）：** repo 已按 High 4 修正从 `request.app.state.repo` 注入（对照 `backend/app/api/indices.py` 的 `get_index_daily` 端点式样）。测试里 `TestClient(app)` 会带真实 `app.state.repo`；若测试环境无指数数据，`_trading_days_and_closes` 走降级分支（closes 为空 → benchmark 为 None），断言不受影响。
 
-- [ ] **步骤 5：运行验证通过**
+- [x] **步骤 5：运行验证通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/trade_journal/ tests/api/test_trade_journal.py -v`
 预期：全部 passed
 
-- [ ] **步骤 6：跑全量测试**
+- [x] **步骤 6：跑全量测试**
 
 运行：`cd backend && uv run --extra dev pytest -q`
 预期：全部 passed（≥97 + 新增）
 
-- [ ] **步骤 7：Commit**
+- [x] **步骤 7：Commit**
 
 ```bash
 git add backend/app/services/trade_journal/store.py backend/app/api/trade_journal.py backend/app/main.py backend/tests/
@@ -1740,7 +1741,7 @@ git commit -m "feat(journal): 台账持久化 + upload/ledger API (原始文件�
 
 **目的（R4）：** 吃真实同花顺投资账本 xlsx，用「交易记录」跑我方 FIFO，逐笔对拍「已清仓」sheet（同花顺自己的配对结果）。**真实流水不进 repo**——这是脚本不是测试。
 
-- [ ] **步骤 1：编写脚本**
+- [x] **步骤 1：编写脚本**
 
 ```python
 # backend/scripts/validate_trade_journal_oracle.py
@@ -1831,7 +1832,7 @@ if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1]))
 ```
 
-- [ ] **步骤 2：本地跑真实文件**
+- [x] **步骤 2：本地跑真实文件**
 
 运行：`cd backend && uv run python scripts/validate_trade_journal_oracle.py ~/Downloads/银河.xlsx`
 预期：447 笔 oracle 大部分匹配。**逐类分析 DIFF**：
@@ -1840,7 +1841,7 @@ if __name__ == "__main__":
 - 融券/回购标的（204001 等）出现在 oracle → 属现金管理，确认已被归为 CashEvent 而非成交。
 - 把发现写进 commit message 与本计划文件的「对拍结论」附注。
 
-- [ ] **步骤 3：Commit**
+- [x] **步骤 3：Commit**
 
 ```bash
 git add backend/scripts/validate_trade_journal_oracle.py
@@ -1857,7 +1858,7 @@ git commit -m "feat(journal): 同花顺已清仓 oracle 对拍脚本 + 对拍结
 - 修改：`frontend/src/router.tsx`（import + `{ path: 'journal', element: <TradeJournal /> }`，放在 `trading` 路由旁；**不动** trading）
 - 修改：导航（看 `frontend/src/components/Layout.tsx` 中现有 nav 项定义处，加「交易复盘」入口，图标用 `NotebookPen`）
 
-- [ ] **步骤 1：api.ts 追加**
+- [x] **步骤 1：api.ts 追加**
 
 ```typescript
 // ===== Trade Journal =====
@@ -1904,7 +1905,7 @@ export const journalLedger = () => request<JournalLedger>('/api/journal/ledger')
 export const journalDelete = () => request<{ deleted: boolean }>('/api/journal/ledger', { method: 'DELETE' })
 ```
 
-- [ ] **步骤 2：TradeJournal.tsx**
+- [x] **步骤 2：TradeJournal.tsx**
 
 页面三个状态区（样式对齐现有页面：`PageHeader` + `rounded-card border border-border bg-surface` 卡片）：
 1. **空态**：上传框（`<input type="file" accept=".xlsx,.csv">`）→ 选中后调 `journalUpload(file,false)` 显示预览表 + 猜测映射（每列一个下拉选归一字段，默认取 `guessed_mapping`）+ **基准下拉**（沪深300/中证500/创业板指/科创50，默认沪深300，选项取自 `/api/journal/presets` 的 `benchmarks`）→「确认导入」按钮调 `journalUpload(file,true,mapping,sheet,benchmark)`。
@@ -1913,7 +1914,7 @@ export const journalDelete = () => request<{ deleted: boolean }>('/api/journal/l
 
 组件不引入新依赖，表格用现有页面的原生 table 模式（参考 `frontend/src/pages/Review.tsx` 的表格写法）。
 
-- [ ] **步骤 3：router.tsx + Layout nav 注册**
+- [x] **步骤 3：router.tsx + Layout nav 注册**
 
 ```typescript
 import { TradeJournal } from './pages/TradeJournal'
@@ -1923,12 +1924,12 @@ import { TradeJournal } from './pages/TradeJournal'
 
 Layout 导航数组加 `{ to: '/journal', label: '交易复盘', icon: NotebookPen }`（对照现有 nav 项的真实结构写）。
 
-- [ ] **步骤 4：类型检查 + 构建**
+- [x] **步骤 4：类型检查 + 构建**
 
 运行：`cd frontend && pnpm tsc --noEmit && pnpm build`
 预期：0 错误（Vite chunk 警告可忽略）
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add frontend/src/lib/api.ts frontend/src/pages/TradeJournal.tsx frontend/src/router.tsx frontend/src/components/Layout.tsx
@@ -1939,20 +1940,20 @@ git commit -m "feat(journal): 交易复盘页面 — 上传/列映射/台账/诊
 
 ### 任务 10：收尾验证
 
-- [ ] **步骤 1：后端全量测试**
+- [x] **步骤 1：后端全量测试**
 
 运行：`cd backend && uv run --extra dev pytest -q`
 预期：全部 passed
 
-- [ ] **步骤 2：oracle 对拍（任务 8）达标**
+- [x] **步骤 2：oracle 对拍（任务 8）达标**
 
 `uv run python scripts/validate_trade_journal_oracle.py ~/Downloads/银河.xlsx` → closed trips = 446、匹配 445、仅 601127 分红顺延那 1 行白名单（脚本返回 0）。
 
-- [ ] **步骤 3：真实文件端到端**
+- [x] **步骤 3：真实文件端到端**
 
 前提：任务 0 回填已跑（`get_index_daily("000300.SH", 2024…)` 有数）。启动 dev 服务，上传 `~/Downloads/银河.xlsx` → 映射自动命中 THS 预设 + 基准默认沪深300 → 确认导入 → 报告页：**446 笔 roundtrip、未平仓 ≈6 只、账户超额有真实数值（非 null）、四项诊断全绿（追涨对 A 股有覆盖、港股列 uncovered）**。抽查 3 笔 total_pnl 对上同花顺已清仓。
 
-- [ ] **步骤 4：红线自查**
+- [x] **步骤 4：红线自查**
 
 - `data/user_data/trade_journal/` 下只有 `ledger.json`，无任何 xlsx——R5 ✓
 - 代码 grep `ai_provider|generate_ai_text`,`trade_journal/` 目录零命中——R3 ✓
