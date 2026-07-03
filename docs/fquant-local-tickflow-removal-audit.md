@@ -99,7 +99,7 @@
 | health/mode | `backend/app/api/routes.py:13-20`、`backend/app/main.py:32-57` | 改成 provider mode |
 | CapabilityDenied handler | `backend/app/main.py:274-286` | 迁到中性 capability 模块 |
 | tickflow scheduler | `backend/app/tickflow/scheduler.py`；`rg` 未发现 app/tests 引用 | 可优先删除 |
-| tickflow repository | 多业务导入 `app.tickflow.repository` | 不是 SDK；先迁包名 |
+| tickflow repository | 已迁到 `app.storage.repository`，旧 `app.tickflow.repository` 仅保留兼容 shim | A3 已完成；A6 删除 shim |
 
 ## 移除就绪度清单
 
@@ -115,7 +115,7 @@
 
 - `TickFlowProvider`：如果还要保留 `DATA_PROVIDER=tickflow`，不能删；若产品决策彻底去 TickFlow，可整体移除。
 - `tickflow.pools`：当前仅 provider=TickFlow fallback 使用；删除 TickFlow provider 后同步删除 fallback。
-- `app.tickflow.repository`：本地仓储唯一实现，不能删；应迁到中性路径。
+- `app.tickflow.repository`：已迁到 `app.storage.repository`；旧路径仅为兼容 shim，A6 删除。
 
 ### C. 移除会改变语义
 

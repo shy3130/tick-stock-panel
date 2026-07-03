@@ -46,7 +46,7 @@
 - 创建：`backend/app/storage/__init__.py`
 - 重建：`backend/app/tickflow/repository.py`（shim）
 
-- [ ] **步骤 1：git mv 移动文件**
+- [x] **步骤 1：git mv 移动文件**
 
 ```bash
 cd backend
@@ -54,7 +54,7 @@ mkdir -p app/storage
 git mv app/tickflow/repository.py app/storage/repository.py
 ```
 
-- [ ] **步骤 2：创建包入口**
+- [x] **步骤 2：创建包入口**
 
 ```python
 # backend/app/storage/__init__.py
@@ -64,7 +64,7 @@ from app.storage.repository import DataStore, KlineRepository
 __all__ = ["DataStore", "KlineRepository"]
 ```
 
-- [ ] **步骤 3：重建旧路径为兼容 shim**
+- [x] **步骤 3：重建旧路径为兼容 shim**
 
 ```python
 # backend/app/tickflow/repository.py
@@ -72,12 +72,12 @@ __all__ = ["DataStore", "KlineRepository"]
 from app.storage.repository import DataStore, KlineRepository  # noqa: F401
 ```
 
-- [ ] **步骤 4：全量测试验证兼容层生效（所有旧导入仍应工作）**
+- [x] **步骤 4：全量测试验证兼容层生效（所有旧导入仍应工作）**
 
 运行：`cd backend && uv run --extra dev pytest -q`
 预期：与迁移前基线相同（全部通过；若基线本有失败项，逐条比对确认无新增失败）
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add app/storage app/tickflow/repository.py
@@ -88,10 +88,11 @@ git commit -m "refactor(storage): move DataStore/KlineRepository to app.storage,
 
 ### 任务 2：切换全部导入方到新路径
 
-**穷举清单（12 处代码 + 1 处 docstring），逐个把 `from app.tickflow.repository import ...` 改成 `from app.storage.repository import ...`，导入的符号名不变：**
+**穷举清单（14 处代码 + 1 处 docstring），逐个把 `from app.tickflow.repository import ...` 改成 `from app.storage.repository import ...`，导入的符号名不变：**
 
 **文件（修改）：**
 - `backend/app/main.py:21`（`DataStore, KlineRepository`）
+- `backend/app/mcp_server.py:12`（`DataStore, KlineRepository`）
 - `backend/app/backtest/engine.py:22`（`KlineRepository`）
 - `backend/app/jobs/daily_pipeline.py:26`（`KlineRepository`）
 - `backend/app/services/screener.py:17`（`KlineRepository`）
@@ -102,9 +103,10 @@ git commit -m "refactor(storage): move DataStore/KlineRepository to app.storage,
 - `backend/tests/services/test_raw_write_gate.py:5`（`DataStore, KlineRepository`）
 - `backend/scripts/backfill_etf_daily.py:21`（`DataStore, KlineRepository`）
 - `backend/scripts/backfill_broad_benchmarks.py:20`（`DataStore, KlineRepository`）
+- `backend/scripts/backfill_hk_daily.py:60`（`DataStore, KlineRepository`）
 - `backend/scripts/refresh_polluted_daily.py:22`（`KlineRepository`）
 
-- [ ] **步骤 1：批量替换（sed 后逐文件 diff 核对）**
+- [x] **步骤 1：批量替换（sed 后逐文件 diff 核对）**
 
 ```bash
 cd backend
@@ -115,24 +117,24 @@ sed -i '' 's/tickflow\.repository\.KlineRepository/storage.repository.KlineRepos
 git diff --stat   # 应恰好 13 个文件（12 代码 + extend_history docstring 同文件）→ 实际 12 个文件
 ```
 
-- [ ] **步骤 2：残留 grep 验证（除 shim 本身外必须为 0）**
+- [x] **步骤 2：残留 grep 验证（除 shim 本身外必须为 0）**
 
 ```bash
 grep -rn "tickflow.repository" app tests scripts | grep -v "app/tickflow/repository.py"
 ```
 预期：无输出
 
-- [ ] **步骤 3：全量测试**
+- [x] **步骤 3：全量测试**
 
 运行：`cd backend && uv run --extra dev pytest -q`
 预期：与基线相同
 
-- [ ] **步骤 4：应用启动冒烟（import 链验证）**
+- [x] **步骤 4：应用启动冒烟（import 链验证）**
 
 运行：`cd backend && uv run python -c "from app.main import app; print('ok')"`
 预期：输出 `ok`，无 ImportError
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 ```bash
 git add -A
@@ -143,7 +145,7 @@ git commit -m "refactor(storage): switch all 12 importers to app.storage.reposit
 
 ### 任务 3：回归收尾
 
-- [ ] **步骤 1：再跑一次穷举校验（防止步骤间有人新增导入）**
+- [x] **步骤 1：再跑一次穷举校验（防止步骤间有人新增导入）**
 
 ```bash
 cd backend
@@ -151,17 +153,17 @@ grep -rn "tickflow.repository" app tests scripts | grep -v "app/tickflow/reposit
 grep -c "from app.storage.repository import" app/main.py   # 预期 1
 ```
 
-- [ ] **步骤 2：全量测试 + 启动冒烟**
+- [x] **步骤 2：全量测试 + 启动冒烟**
 
 ```bash
 cd backend && uv run --extra dev pytest -q && uv run python -c "from app.main import app; print('ok')"
 ```
 
-- [ ] **步骤 3：在去 TickFlow 审计文档勾掉 A3**
+- [x] **步骤 3：在去 TickFlow 审计文档勾掉 A3**
 
 修改 `docs/fquant-local-tickflow-removal-audit.md`：把 repository rename 项标注「已完成（A3，兼容 shim 保留至 A6）」。
 
-- [ ] **步骤 4：Commit**
+- [x] **步骤 4：Commit**
 
 ```bash
 git add docs/fquant-local-tickflow-removal-audit.md
