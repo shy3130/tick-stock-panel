@@ -355,3 +355,13 @@ PY
 - 能取到但必须先修真实性或语义：TDX `day/wide/5min` 和项目 `kline_daily` 均存在前复权污染；`tdx-api` 可提供 realtime/五档但当前默认服务未运行，接入还需批量分片、单位和 depth 契约对拍；磁盘 `snapshot` 有实时/五档候选字段但采集完整性未验证；指数缓存 `kline_index_daily` 还存在 code 映射污染迹象；`fhold` 是个人持仓源，需隐私边界和独立功能入口。
 - 待复测：engine-data `chips` 同步 HTTP 路径当前会超时且含计算逻辑，但预计今晚换盘后性能瓶颈可能消失；先保留为可接入候选，复测失败再退到 `chips-summary` 预计算或异步缓存。项目 `adj_factor/kline_etf_daily/kline_minute/depth5` 当前未取到可用样本。
 - `../tdx-api` 项目具备 `/api/quote` HTTP realtime 能力；本机当前只确认默认端口未启动，不再把 realtime 归为“本地数据源获取不到”，而归为“可接入但需运行服务和契约对拍”。
+
+### 10.8 P4 TDX 磁盘质量护栏
+
+已新增只读质量回归：
+
+- 离线 fixture 覆盖 `wide` 缺失降级 `day`、日线 `close/volume/amount` 基本量纲、港股 `amount=0` 不补假成交额且不产生 NaN/inf、分钟/逐笔缺文件返回空 list。
+- 真盘 smoke 在 `TDX_DATA_DIR=/Volumes/vol3/tdx` 存在时验证 `600519.SH 2012-10-26 close≈241.0`，用于防止前复权污染回归；无挂载自动 skip。
+- `backend/scripts/spike_tdx_quality.py` 只读抽样 `600519.SH/000001.SZ/300059.SZ/688981.SH/513050.SH/02577.HK`，输出最新日线、`amount/volume`、当日 minutes/trans 行数 JSON；不写 `data/`。
+
+决策：港股 `amount=0` 保持原样，不构造假成交额；依赖 amount 的诊断必须降级或提示覆盖缺口。P4 不扫描全市场、不重建 parquet、不修改 provider 算法。
