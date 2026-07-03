@@ -16,7 +16,7 @@
 
 | 文件 | 动作 |
 |---|---|
-| `backend/app/tickflow/repository.py` | 增加 `append_hk_daily` / `append_hk_enriched` / 读路径工具；若 A3 已完成则在中性 repository |
+| `backend/app/storage/repository.py` | 增加 `append_hk_daily` / `append_hk_enriched` / 读路径工具 |
 | `backend/app/services/trade_journal/pricepos.py` | 纳入 `.HK` target，扫描 `kline_hk_enriched/kline_hk_daily` |
 | `backend/scripts/backfill_hk_daily.py` | 创建，只读 TDX/fquant_local，写 parquet |
 | `backend/tests/services/trade_journal/test_pricepos.py` | 补港股覆盖测试 |
@@ -83,4 +83,3 @@ uv run python scripts/backfill_hk_daily.py --symbols 02577.HK,06088.HK --start 2
 - 不做恒生指数基准。
 - 不做港股实时/盘口。
 - 不把上传原始流水长期落盘。
-

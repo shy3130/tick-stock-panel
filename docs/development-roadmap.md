@@ -23,6 +23,7 @@
 | **P5 告警多通道** | ✅ 未提交 | 飞书/钉钉/企微/MeoW，含 SSRF allowlist |
 | **P6 港股日 K** | ✅ 未提交 | 磁盘 hk 分桶接入 |
 | **P7 agent tools 骨架** | ✅ 未提交 | /api/agent tools + chat，2 个工具 |
+| **Track A 去 TickFlow** | ✅ 已提交(c2566a8) | A1-A7 已完成；`DATA_PROVIDER=tickflow` 退场，默认 `fquant_local`，`app/tickflow/`、`TickFlowProvider`、`tiers.yaml`、SDK 依赖已删除 |
 
 > **Phase 0 前置**：上述"未提交"项需先分块 commit（详见 §四 Phase 0）。
 
@@ -32,17 +33,17 @@
 
 按四条轨归类。每项标 **工作量 / 关键风险 / 依赖**。
 
-### Track A — 去 TickFlow（依据审计文档 + Q1 裁决：价值优先序）
+### Track A — 去 TickFlow（依据审计文档 + Q1 裁决：已完成）
 
 | ID | 功能 | 工作量 | 关键风险 | 依赖 |
 |---|---|---|---|---|
-| **A1** | 分钟K month 扩展去 `tier_label()==expert` 门控 → 换 provider capability / 本地配置 | S | **裁决硬约束**：不得裸删，原"month 成本高"是成本考量，裸删=无条件放行（另一种 bug）；需替换成能表达"该 provider 能否负担月度分钟K"的门控 | 无（独立 quick-win） |
-| **A2** | capability 语义中性化：`Cap/CapabilitySet/CapabilityDenied` 迁到中性模块；文案从"套餐升级"改"数据源能力" | L | UI/API 多处依赖旧 Cap 语义（/api/capabilities、settings、health、main.py 异常处理）；改动面广易漏 | 无（与 A3 并行） |
-| **A3** | `app.tickflow.repository` rename 到中性包名（保留一版兼容导入） | M | **8 处导入方**（main / backtest.engine / daily_pipeline / screener / index_sync / extend_history / services.backtest / kline_sync）——审计原写 5 处，务必按 8 处改，别漏 | 无（纯机械，可并行） |
-| **A4** | settings/health/capabilities 去 TickFlow 展示：key/tier/endpoint/probe 拆成"可选 TickFlow provider"设置 | M | 前端展示联动 | A2 |
-| **A5** | 删 `tickflow.scheduler`（无引用）/ `tickflow.pools`（仅 tickflow fallback）/ `tiers.yaml` | S | scheduler 已确认零引用可直接删；pools/tiers 需先确认 tickflow provider fallback 不再需要 | A2/A4 |
-| **A6** | 删 `TickFlowProvider` + `tickflow.client`（叶子） | S | **产品决策已落档（2026-07-03）**：不再保留 `DATA_PROVIDER=tickflow`，默认数据源改为 `fquant_local` | A1-A5 全部 |
-| **A7** | provider capability 路由补全（审计 High-3）：financial/depth/minute 独立按能力选 provider，不再搭 daily/global | M | 当前全局 `DATA_PROVIDER=fquant_local` 时无碍；仅 per-capability 混切才需要——**可能 YAGNI**，取决于是否真要混源 | 无 |
+| **A1** | 分钟K month 扩展去 `tier_label()==expert` 门控 → 换 provider capability / 本地配置 | ✅ 已提交 | 本地分钟数据不再被旧 VIP 语义 403 阻断 | 无 |
+| **A2** | capability 语义中性化 | ✅ 已提交 | `Cap/CapabilitySet/CapabilityDenied` 已迁到中性模块，文案改为数据源能力 | 无 |
+| **A3** | `app.tickflow.repository` rename 到 `app.storage.repository` | ✅ 已提交 | 8 处导入方已迁移；A6 后兼容 shim 已删除 | 无 |
+| **A4** | settings/health/capabilities 去 TickFlow 展示 | ✅ 已提交 | key/tier/endpoint/probe UI 已移除或改为 provider 能力展示 | A2 |
+| **A5** | 删 `tickflow.scheduler` / `tickflow.pools` / `tiers.yaml` | ✅ 已提交(c2566a8) | 旧 fallback 和套餐表已删除 | A2/A4 |
+| **A6** | 删 `TickFlowProvider` + `tickflow.client` | ✅ 已提交(c2566a8) | 不再保留 `DATA_PROVIDER=tickflow`，默认 `fquant_local` | A1-A5 |
+| **A7** | provider capability 路由补全（financial / depth） | ✅ 已提交 | financial/depth 已按 capability 独立解析 provider | 无 |
 
 ### Track B — Trade Journal 延伸
 
@@ -108,7 +109,7 @@ C10/C11(交易桥接前置) ── 远期，独立立项
 ```
 
 **关键依赖硬点**：
-- A6（删 TickFlowProvider）依赖 A1-A5 全绿；产品决策已落档：彻底弃 tickflow provider，默认 `fquant_local`。
+- Track A 已完成；后续计划不得重新引入 TickFlow SDK、`app/tickflow/` 或 `DATA_PROVIDER=tickflow`。
 - B1（Shadow Account）依赖"诊断够好"的价值验证，不是技术依赖——**门槛是产品判断，不是代码就绪**。
 - C4/C13 依赖已建的黄金对拍方法论（P2），否则 pandas→Polars 翻译无保障。
 
@@ -131,12 +132,9 @@ C10/C11(交易桥接前置) ── 远期，独立立项
 - **C5**（回测稳健性验证，M，复用 C2）
 - **P4**（TDX 磁盘数据质量核对，S，对本地直读做兜底加固）
 
-### Phase 2 — 去 TickFlow 解耦（1-1.5 周，可与 Phase 1 并行）
-- **A3**（repository rename，M，纯机械，随时可插）
-- **A2**（capability 中性化，L）
-- **A4→A5**（settings/health 去展示 + 删 scheduler/pools/tiers，M+S）
-- **A7**（路由补全，M，若确需混源；否则记 YAGNI）
-- **A6**（删 Provider/client，S，待产品决策）
+### Phase 2 — 去 TickFlow 解耦（已完成）
+- A1-A7 已提交完成；保留本节仅作历史路线说明。
+- 新计划若需要行情/能力判断，直接走 `data_providers` + `capability_gate`，不要恢复旧 TickFlow 分支。
 
 ### Phase 3 — 分析深度（1.5-2 周）
 - **C4**（Alpha Zoo registry + Alpha101×10 黄金对拍，L）

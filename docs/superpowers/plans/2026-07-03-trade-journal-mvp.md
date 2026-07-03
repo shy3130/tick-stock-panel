@@ -1228,7 +1228,7 @@ def pl_col_date():
     return pl.col("date").cast(pl.Utf8)
 ```
 
-**注意（实现者）：** `repo.get_daily(symbol, start, end, columns)` 读 `kline_daily_enriched`（`backend/app/tickflow/repository.py:887`），与项目主读法一致，已含 warmup 预热，返回 date/high/low/close。测试只测 `compute_pos` 纯函数，不碰 repo，路径细节不影响测试通过。
+**注意（实现者）：** `repo.get_daily(symbol, start, end, columns)` 读 `kline_daily_enriched`（当前在 `backend/app/storage/repository.py`），与项目主读法一致，已含 warmup 预热，返回 date/high/low/close。测试只测 `compute_pos` 纯函数，不碰 repo，路径细节不影响测试通过。
 
 - [ ] **步骤 4：运行验证通过**
 

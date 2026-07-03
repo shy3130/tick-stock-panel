@@ -126,7 +126,7 @@ result = provider.get_realtime(symbols)
 
 - `data_providers/base.py` 的接口契约（除非新增 capability 字段，并同步更新 `schemas.py` + 所有 provider）
 - `data_providers/normalizer.py` 的字段语义
-- `data_providers/registry.py` 已注册的 provider 名字（`tickflow` / `fquant`）
+- `data_providers/registry.py` 已注册的 provider 名字（`fquant_local` / `fquant`）
 
 **绝对不能**直接连接：
 
@@ -141,14 +141,11 @@ result = provider.get_realtime(symbols)
 
 ```bash
 # 必填：provider 切换
-export DATA_PROVIDER=fquant_local   # 或 fquant / tickflow（默认）
+export DATA_PROVIDER=fquant_local   # 或 fquant
 export TDX_DATA_DIR=/Volumes/vol3/tdx  # fquant_local 日 K CSV 根目录
 
 # 必填：fstore PG 密码（fquant 模式下必需）
 export FSTORE_DATABASE_PASSWORD=$(grep FSTORE_DATABASE_PASSWORD /Users/wf2311/Projects/wf2311/fm/fquant/.env | cut -d= -f2)
-
-# 可选：TickFlow API Key（tickflow 模式下）
-export TICKFLOW_API_KEY=xxx
 
 # 可选：AI
 export AI_PROVIDER=openai_compat
