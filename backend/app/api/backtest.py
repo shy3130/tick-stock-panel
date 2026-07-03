@@ -174,7 +174,6 @@ def factor_run(req: FactorBacktestRequest, request: Request):
         slippage_bps=req.slippage_bps,
     )
     result = svc.run(cfg)
-    _save_strategy_run_card(request, result)
     return asdict(result)
 
 
@@ -192,6 +191,21 @@ def _save_strategy_run_card(request: Request, result) -> None:
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("save strategy run_card failed: %s", e)
+
+
+def _walk_forward_windows(start: date, end: date, n_folds: int) -> list[tuple[date, date]]:
+    n_folds = max(1, min(12, int(n_folds)))
+    total = (end - start).days + 1
+    fold_len = total // n_folds
+    if fold_len < 30:
+        raise ValueError(f"窗口过短: {n_folds} 窗每窗仅 {fold_len} 天(<30)")
+    out = []
+    cur = start
+    for i in range(n_folds):
+        fold_end = end if i == n_folds - 1 else cur + timedelta(days=fold_len - 1)
+        out.append((cur, fold_end))
+        cur = fold_end + timedelta(days=1)
+    return out
 
 
 # ================================================================
@@ -252,7 +266,88 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         holding_days=req.holding_days,
     )
     result = svc.run(cfg)
+    _save_strategy_run_card(request, result)
     return asdict(result)
+
+
+class RobustnessRequest(StrategyBacktestRequest):
+    n_folds: int = 4
+    bootstrap: bool = True
+    mc_permutation: bool = False
+    n_boot: int = 1000
+    n_perm: int = 1000
+
+
+@router.post("/strategy/robustness")
+def strategy_robustness(req: RobustnessRequest, request: Request):
+    from app.backtest import robustness as rb
+    from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
+    from app.services.research_registry import ResearchStore
+
+    engine = _get_engine(request)
+    svc = StrategyBacktestService(engine, request.app.state.strategy_engine)
+    end = req.end or date.today()
+    start = _resolve_start(req, end, FACTOR_DEFAULT_DAYS)
+    _guard_server_backtest_range(start, end)
+    try:
+        windows = _walk_forward_windows(start, end, req.n_folds)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    def run_one(s: date, e: date):
+        return svc.run(StrategyBacktestConfig(
+            strategy_id=req.strategy_id,
+            symbols=req.symbols if req.symbols else None,
+            start=s,
+            end=e,
+            params=req.params,
+            overrides=req.overrides,
+            matching=req.matching,
+            entry_fill=req.entry_fill,
+            exit_fill=req.exit_fill,
+            fees_pct=req.fees_pct,
+            slippage_bps=req.slippage_bps,
+            max_positions=req.max_positions,
+            max_exposure_pct=req.max_exposure_pct,
+            initial_capital=req.initial_capital,
+            position_sizing=req.position_sizing,
+            mode=req.mode,
+            holding_days=req.holding_days,
+        ))
+
+    full = run_one(start, end)
+    if full.error:
+        raise HTTPException(status_code=400, detail=full.error)
+    folds = []
+    for s, e in windows:
+        r = run_one(s, e)
+        folds.append({"start": s.isoformat(), "end": e.isoformat(), "stats": r.stats, "error": r.error})
+
+    rets = rb.returns_from_equity_curve(full.equity_curve)
+    robustness = {
+        "walk_forward": {
+            "folds": folds,
+            "summary": rb.walk_forward_summary([f for f in folds if not f["error"]]),
+        },
+        "exit_breakdown": rb.exit_reason_breakdown(full.trades),
+    }
+    if req.bootstrap and len(rets) >= 2:
+        robustness["bootstrap"] = rb.bootstrap_sharpe_ci(rets, n_boot=req.n_boot)
+    if req.mc_permutation and len(rets) >= 2:
+        robustness["mc_permutation"] = rb.mc_permutation_pvalue(rets, n_perm=req.n_perm)
+
+    try:
+        ResearchStore(request.app.state.repo.store.data_dir).save_run_card(
+            run_id=full.run_id,
+            kind="strategy",
+            config=full.config,
+            strategy_def=full.strategy_info,
+            stats={**full.stats, "robustness": robustness},
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("save robustness run_card failed: %s", e)
+
+    return {"run_id": full.run_id, "full_stats": full.stats, **robustness}
 
 
 # ── SSE 流式回测 (实时进度 + 可取消 + 支持重连) ───────────────────
