@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -806,6 +807,17 @@ def _write_enriched_partitions(
     return written
 
 
+def _promote_staging_partitions(enriched_base: Path, staging_base: Path) -> None:
+    for staged in sorted(staging_base.glob("date=*")) if staging_base.exists() else []:
+        target = enriched_base / staged.name
+        if target.exists():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staged), str(target))
+    if staging_base.exists():
+        shutil.rmtree(staging_base)
+
+
 def _load_pipeline_instruments(data_dir: Path) -> pl.DataFrame:
     inst_glob = str(data_dir / "instruments" / "**" / "*.parquet")
     try:
@@ -835,6 +847,9 @@ def run_pipeline_local(
     t0 = _t.perf_counter()
     d = Path(data_dir or settings.data_dir)
     enriched_base = d / "kline_daily_enriched"
+    staging_base = d / "_staging_kline_daily_enriched"
+    if staging_base.exists():
+        shutil.rmtree(staging_base)
     instruments = _load_pipeline_instruments(d)
 
     if symbols is None:
@@ -886,7 +901,7 @@ def run_pipeline_local(
             if not instruments.is_empty() and "symbol" in instruments.columns else instruments
         )
         enriched = compute_enriched(raw, factors=factors, instruments=batch_inst)
-        written += _write_enriched_partitions(enriched_base, enriched, batch_syms)
+        written += _write_enriched_partitions(staging_base, enriched, batch_syms)
 
         del raw, factors, batch_inst, enriched
         gc.collect()
@@ -896,7 +911,116 @@ def run_pipeline_local(
         if on_batch_done:
             on_batch_done(batch_no, total_batches)
 
+    _promote_staging_partitions(enriched_base, staging_base)
     logger.info("local pipeline done: %.2fs, %d rows", _t.perf_counter() - t0, written)
+    return written
+
+
+def run_pipeline_local_incremental(
+    provider,
+    data_dir: Path | None = None,
+    symbols: list[str] | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    history_days: int = 260,
+    on_batch_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """本地磁盘模式缺失新日期补齐。
+
+    已有 enriched 分区是历史预热源；新日期从 provider 读取。这样启动补齐
+    不需要重建全市场复权因子，也不会只用一两天窗口计算 MA/MACD 等指标。
+    """
+    import gc
+    import time as _t
+
+    if start_time is None or end_time is None:
+        raise ValueError("start_time and end_time are required")
+
+    t0 = _t.perf_counter()
+    d = Path(data_dir or settings.data_dir)
+    enriched_base = d / "kline_daily_enriched"
+    staging_base = d / "_staging_kline_daily_enriched"
+    if staging_base.exists():
+        shutil.rmtree(staging_base)
+    instruments = _load_pipeline_instruments(d)
+
+    if symbols is None:
+        if instruments.is_empty() or "symbol" not in instruments.columns:
+            logger.info("local incremental pipeline: 无 instruments 标的, 跳过")
+            return 0
+        symbols = instruments["symbol"].cast(pl.Utf8).unique().sort().to_list()
+    else:
+        symbols = sorted(dict.fromkeys(symbols))
+
+    if not symbols:
+        logger.info("local incremental pipeline: 无标的, 跳过")
+        return 0
+
+    from app.services import preferences as prefs_mod
+    sym_batch = prefs_mod.get_enriched_batch_size()
+    total_batches = (len(symbols) + sym_batch - 1) // sym_batch
+    written = 0
+
+    logger.info(
+        "local incremental pipeline: %d symbols, range=[%s ~ %s], history=%d, batch=%d",
+        len(symbols), start_time.date(), end_time.date(), history_days, sym_batch,
+    )
+
+    for batch_start in range(0, len(symbols), sym_batch):
+        batch_syms = symbols[batch_start:batch_start + sym_batch]
+        raw_new = provider.get_daily(batch_syms, start_time, end_time, "stock")
+        if raw_new.is_empty():
+            if on_batch_done:
+                on_batch_done(batch_start // sym_batch + 1, total_batches)
+            continue
+
+        if "date" in raw_new.columns:
+            raw_new = raw_new.with_columns(pl.col("date").cast(pl.Date, strict=False))
+            raw_new = raw_new.filter(
+                (pl.col("date") >= start_time.date())
+                & (pl.col("date") <= end_time.date())
+            )
+        raw_new = filter_halt_days(raw_new)
+        if raw_new.is_empty():
+            if on_batch_done:
+                on_batch_done(batch_start // sym_batch + 1, total_batches)
+            continue
+
+        raw_new = raw_new.with_columns(
+            pl.col("close").alias("raw_close"),
+            pl.col("high").alias("raw_high"),
+            pl.col("low").alias("raw_low"),
+        )
+        hist = _load_recent_history(enriched_base, batch_syms, days=history_days)
+        if not hist.is_empty() and "date" in hist.columns:
+            hist = hist.with_columns(pl.col("date").cast(pl.Date, strict=False))
+            hist = hist.filter(pl.col("date") < start_time.date())
+        raw_full = (
+            pl.concat([hist, raw_new], how="diagonal_relaxed")
+            if not hist.is_empty() else raw_new
+        )
+
+        batch_inst = (
+            instruments.filter(pl.col("symbol").is_in(batch_syms))
+            if not instruments.is_empty() and "symbol" in instruments.columns else instruments
+        )
+        enriched = compute_all(raw_full.sort(["symbol", "date"]), instruments=batch_inst, asset_type="stock")
+        enriched = enriched.filter(
+            (pl.col("date") >= start_time.date())
+            & (pl.col("date") <= end_time.date())
+        )
+        written += _write_enriched_partitions(staging_base, enriched, batch_syms)
+
+        del raw_new, hist, raw_full, batch_inst, enriched
+        gc.collect()
+
+        batch_no = batch_start // sym_batch + 1
+        logger.info("local incremental pipeline batch %d/%d done, written=%d", batch_no, total_batches, written)
+        if on_batch_done:
+            on_batch_done(batch_no, total_batches)
+
+    _promote_staging_partitions(enriched_base, staging_base)
+    logger.info("local incremental pipeline done: %.2fs, %d rows", _t.perf_counter() - t0, written)
     return written
 
 
@@ -1191,10 +1315,11 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
     """
     from datetime import date, timedelta
     cutoff = date.today() - timedelta(days=days + 30)  # 多读 30 天余量
+    cast_options = pl.ScanCastOptions(integer_cast="allow-float")
 
     try:
         lf = (
-            pl.scan_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=_cast)
+            pl.scan_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=cast_options)
             .filter(
                 (pl.col("symbol").is_in(symbols))
                 & (pl.col("date") >= cutoff)

@@ -11,14 +11,17 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import threading
 from collections.abc import Callable
+from datetime import date as date_type
 from pathlib import Path
 
 import polars as pl
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.indicators.pipeline import run_pipeline, run_pipeline_local
+from app.indicators.pipeline import run_pipeline, run_pipeline_local, run_pipeline_local_incremental
 from app.config import settings
 from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
 from app.services.data_mode import is_local_daily_mode
@@ -33,6 +36,13 @@ _DEMO_SYMBOLS = (
     "600000.SH", "600036.SH", "600519.SH", "601318.SH", "601398.SH",
     "000001.SZ", "000333.SZ", "000651.SZ", "000858.SZ", "002594.SZ",
 )
+
+_BOOTSTRAP_SAMPLE_SYMBOLS = (
+    "600519.SH", "000001.SZ", "300750.SZ", "601318.SH", "000333.SZ",
+    "600036.SH", "002594.SZ", "600000.SH", "000651.SZ", "600030.SH",
+)
+_BOOTSTRAP_MIN_SAMPLE_COVERAGE = 0.8
+_BOOTSTRAP_MIN_PARTITION_COVERAGE = 0.9
 
 
 def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
@@ -575,18 +585,201 @@ def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
 
 def _latest_enriched_date(repo: KlineRepository):
     """本地模式不写 stock raw，用 enriched 分区作为增量起点。"""
+    dates = _enriched_partition_dates(repo)
+    return max(dates) if dates else None
+
+
+def _enriched_partition_dates(repo: KlineRepository) -> list[date_type]:
+    """List valid enriched partition dates."""
     from datetime import date as _date
 
     base = repo.store.data_dir / "kline_daily_enriched"
     if not base.exists():
-        return None
+        return []
     dates = []
     for path in base.glob("date=*"):
         try:
             dates.append(_date.fromisoformat(path.name[5:]))
         except ValueError:
             continue
-    return max(dates) if dates else None
+    return sorted(dates)
+
+
+def _previous_enriched_date(repo: KlineRepository, target: date_type) -> date_type | None:
+    dates = [d for d in _enriched_partition_dates(repo) if d < target]
+    return dates[-1] if dates else None
+
+
+def _remove_enriched_partition(repo: KlineRepository, target: date_type) -> None:
+    path = repo.store.data_dir / "kline_daily_enriched" / f"date={target.isoformat()}"
+    if path.exists():
+        shutil.rmtree(path)
+        logger.warning("removed incomplete local enriched partition: %s", path)
+
+
+def _provider_freshness_date() -> date_type | None:
+    try:
+        from app.data_providers import get_provider
+        from app.data_providers.registry import get_active_provider_name
+
+        provider = get_provider(get_active_provider_name("daily"))
+        client = getattr(provider, "_engine", None)
+        freshness = getattr(client, "freshness", None)
+        return freshness() if callable(freshness) else None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("local freshness check failed: %s", e)
+        return None
+
+
+def _local_daily_coverage_ok(
+    target: date_type,
+    sample_symbols: tuple[str, ...] = _BOOTSTRAP_SAMPLE_SYMBOLS,
+) -> bool:
+    """Check a new local daily date is probably complete before publishing it."""
+    try:
+        from datetime import datetime as _dt
+        from app.data_providers import get_provider
+        from app.data_providers.registry import get_active_provider_name
+
+        provider = get_provider(get_active_provider_name("daily"))
+        start = _dt.combine(target, _dt.min.time())
+        end = _dt.combine(target, _dt.min.time())
+        df = provider.get_daily(list(sample_symbols), start, end, "stock")
+        if df.is_empty() or "symbol" not in df.columns:
+            return False
+        if "date" in df.columns:
+            df = df.with_columns(pl.col("date").cast(pl.Date, strict=False))
+            df = df.filter(pl.col("date") == target)
+        covered = df["symbol"].cast(pl.Utf8).unique().len()
+        coverage = covered / max(1, len(sample_symbols))
+        if coverage < _BOOTSTRAP_MIN_SAMPLE_COVERAGE:
+            logger.warning("local daily completeness low for %s: %.0f%% (%d/%d)",
+                           target, coverage * 100, covered, len(sample_symbols))
+            return False
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("local daily completeness check failed for %s: %s", target, e)
+        return False
+
+
+def _partition_symbol_count(repo: KlineRepository, target: date_type | None) -> int:
+    if target is None:
+        return 0
+    path = repo.store.data_dir / "kline_daily_enriched" / f"date={target.isoformat()}" / "part.parquet"
+    if not path.exists():
+        return 0
+    try:
+        df = pl.read_parquet(path, columns=["symbol"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("read enriched partition failed %s: %s", path, e)
+        return 0
+    return df["symbol"].cast(pl.Utf8).unique().len() if "symbol" in df.columns else 0
+
+
+def _local_partition_coverage_ok(
+    repo: KlineRepository,
+    previous: date_type | None,
+    target: date_type,
+) -> bool:
+    """Verify the published target partition is not obviously partial."""
+    target_count = _partition_symbol_count(repo, target)
+    previous_count = _partition_symbol_count(repo, previous)
+    if previous_count <= 0:
+        return target_count > 0
+    coverage = target_count / previous_count
+    if coverage < _BOOTSTRAP_MIN_PARTITION_COVERAGE:
+        logger.warning("local enriched partition coverage low for %s: %.0f%% (%d/%d)",
+                       target, coverage * 100, target_count, previous_count)
+        return False
+    return True
+
+
+def bootstrap_local_enriched_if_stale(repo: KlineRepository, capset: CapabilitySet) -> dict:
+    """Catch up local enriched at startup when TDX disk is newer than parquet."""
+    if not is_local_daily_mode() or not _prefs.get_pipeline_pull_a_share():
+        return {"started": False, "reason": "not_local_or_disabled"}
+
+    latest_enriched = _latest_enriched_date(repo)
+    fresh = _provider_freshness_date()
+    if fresh is None:
+        return {"started": False, "reason": "no_freshness"}
+    if latest_enriched is not None and fresh <= latest_enriched:
+        if fresh == latest_enriched:
+            previous = _previous_enriched_date(repo, fresh)
+            if not _local_partition_coverage_ok(repo, previous, fresh):
+                _remove_enriched_partition(repo, fresh)
+                latest_enriched = previous
+                repo.refresh_cache()
+            else:
+                return {
+                    "started": False,
+                    "reason": "up_to_date",
+                    "freshness": str(fresh),
+                    "enriched": str(latest_enriched),
+                }
+        else:
+            return {
+                "started": False,
+                "reason": "up_to_date",
+                "freshness": str(fresh),
+                "enriched": str(latest_enriched),
+            }
+    if latest_enriched is not None and fresh <= latest_enriched:
+        return {"started": False, "reason": "up_to_date", "freshness": str(fresh), "enriched": str(latest_enriched)}
+    if not _local_daily_coverage_ok(fresh):
+        return {
+            "started": False,
+            "reason": "incomplete",
+            "freshness": str(fresh),
+            "enriched": str(latest_enriched) if latest_enriched else None,
+        }
+
+    logger.info("local enriched bootstrap: freshness=%s enriched=%s", fresh, latest_enriched)
+    from datetime import datetime as _dt, timedelta as _td
+    from app.data_providers import get_provider
+    from app.data_providers.registry import get_active_provider_name
+
+    provider = get_provider(get_active_provider_name("daily"))
+    start_date = (latest_enriched + _td(days=1)) if latest_enriched else (fresh - _td(days=365))
+    universe = _resolve_universe(capset)
+    written = run_pipeline_local_incremental(
+        provider,
+        data_dir=repo.store.data_dir,
+        symbols=universe,
+        start_time=_dt.combine(start_date, _dt.min.time()),
+        end_time=_dt.combine(fresh, _dt.min.time()),
+    )
+    if not _local_partition_coverage_ok(repo, latest_enriched, fresh):
+        _remove_enriched_partition(repo, fresh)
+        repo.refresh_cache()
+        return {
+            "started": False,
+            "reason": "partition_incomplete",
+            "freshness": str(fresh),
+            "enriched": str(latest_enriched) if latest_enriched else None,
+            "written": written,
+        }
+    repo.refresh_cache()
+    return {
+        "started": True,
+        "freshness": str(fresh),
+        "enriched": str(latest_enriched) if latest_enriched else None,
+        "written": written,
+    }
+
+
+def start_local_enriched_bootstrap(repo: KlineRepository, capset: CapabilitySet) -> None:
+    """Run local enriched catch-up in background so startup remains responsive."""
+    if not is_local_daily_mode():
+        return
+
+    def _run() -> None:
+        try:
+            bootstrap_local_enriched_if_stale(repo, capset)
+        except Exception:  # noqa: BLE001
+            logger.exception("local enriched bootstrap failed")
+
+    threading.Thread(target=_run, name="local-enriched-bootstrap", daemon=True).start()
 
 
 def _refresh_instruments_view(repo: KlineRepository) -> None:

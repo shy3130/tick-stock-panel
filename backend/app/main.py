@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI):
         daily_pipeline.set_app_state(app.state)  # 供 depth_finalize job 访问 depth_service
         scheduler = daily_pipeline.start_scheduler(repo, capset)
         app.state.scheduler = scheduler
+        daily_pipeline.start_local_enriched_bootstrap(repo, capset)
     except Exception as e:  # noqa: BLE001
         logger.warning("scheduler not started: %s", e)
         app.state.scheduler = None
