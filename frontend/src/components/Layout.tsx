@@ -26,7 +26,6 @@ import {
   History,
   FileText,
   Settings,
-  Key,
   Database,
   Loader2,
   LayoutDashboard,
@@ -140,10 +139,11 @@ function SidebarIndexQuotes({ rows, items }: { rows: IndexQuote[] | undefined; i
   )
 }
 
-// ===== 档位卡片 =====
-function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
+// ===== 数据源卡片 =====
+function TierBadge({ label, provider }: { label: string; provider?: string }) {
   const base = label.split(' ')[0].split('+')[0].toLowerCase()
   const isNone = base === 'none'
+  const isTickflow = provider === 'tickflow'
 
   const tierConfig: Record<string, {
     desc: string
@@ -152,7 +152,7 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
     labelTextStyle: React.CSSProperties
   }> = {
     none: {
-      desc: '未配置 Key · 仅历史日K',
+      desc: '本地数据源能力',
       tagBg: { background: 'rgba(113,113,122,0.15)' },
       dotStyle: { background: '#52525b' },
       labelTextStyle: { color: '#71717a' },
@@ -184,31 +184,30 @@ function TierBadge({ label, hasKey }: { label: string; hasKey?: boolean }) {
   }
 
   const t = tierConfig[base] || tierConfig.none
-  // none 档显示英文「None」,无 label 时也显示「None」
-  const displayLabel = isNone ? 'None' : (label || 'None')
+  const displayLabel = isTickflow && isNone ? 'None' : (provider || label || 'fquant_local')
 
   return (
     <NavLink
       to="/settings?tab=account"
       className="mt-2.5 group block -mx-2.5"
-      title="API 设置"
+      title="数据源设置"
     >
       <div className="relative overflow-hidden rounded-lg border border-blue-400/20 bg-gradient-to-br from-blue-500/[0.12] via-surface to-surface px-3 py-2 transition-all hover:border-blue-400/35 hover:from-blue-500/[0.16]">
         <div className="absolute -right-5 -top-6 h-14 w-14 rounded-full bg-blue-500/10 blur-2xl" />
         <div className="relative flex items-center gap-2">
           <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-400/10 text-blue-300 ring-1 ring-blue-400/20">
-            <Key className="h-3.5 w-3.5" />
+            <Database className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-foreground">TickFlow</span>
+              <span className="text-xs font-medium text-foreground">{isTickflow ? 'TickFlow' : '数据源'}</span>
               <span
                 className="h-1.5 w-1.5 rounded-full"
                 style={{ ...t.dotStyle, ...(base === 'expert' ? { animation: 'pulse 2s infinite' } : {}) }}
               />
             </div>
             <div className="mt-0.5 truncate text-[10px] leading-tight text-muted">
-              {isNone && !hasKey ? '配置 Key 解锁更多能力' : t.desc}
+              {isTickflow ? t.desc : '当前 provider capability'}
             </div>
           </div>
           <span
@@ -406,7 +405,7 @@ export function Layout() {
 
           <TierBadge
             label={caps?.label ?? ''}
-            hasKey
+            provider={settingsState?.data_provider}
           />
           <AIConfigBadge
             configured={settingsState?.ai_configured ?? settingsState?.has_ai_key}

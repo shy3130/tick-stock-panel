@@ -26,9 +26,9 @@ import { CAP_LABELS } from '@/lib/capability-labels'
 import { Logo } from '@/components/Logo'
 
 // ===== 引导页:4 步向导 =====
-// 0. 欢迎  1. 输入 Key(可跳过)  2. 能力探测结果  3. 完成 → 写标记 → 进面板
+// 0. 欢迎  1. 数据源确认  2. 能力探测结果  3. 完成 → 写标记 → 进面板
 
-const STEPS = ['欢迎', '配置 Key', '能力探测', '完成'] as const
+const STEPS = ['欢迎', '数据源', '能力探测', '完成'] as const
 
 const BRAND = '#8B5CF6'
 
