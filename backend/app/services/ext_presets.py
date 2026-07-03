@@ -125,7 +125,9 @@ def _dragon_tiger_preset() -> ExtConfig:
 
 
 def _presets() -> list[ExtConfig]:
-    return [_concept_preset(), _industry_preset(), _dragon_tiger_preset()]
+    from app.services import ext_presets_em
+
+    return [_concept_preset(), _industry_preset(), _dragon_tiger_preset(), *ext_presets_em.presets()]
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +317,12 @@ async def fetch_preset(config_id: str, data_dir: Path) -> int:
     if store.get(config_id) is None:
         store.upsert(config)
 
-    if config_id == "ext_lhb_em":
+    from app.services import ext_presets_em
+
+    em_fetcher = ext_presets_em.fetcher(config_id)
+    if em_fetcher is not None:
+        n = await em_fetcher(config, data_dir)
+    elif config_id == "ext_lhb_em":
         n = await _seed_dragon_tiger(config, data_dir)
     else:
         flatten = _flatten_concept_rows if config_id == "ext_gn_ths" else _flatten_industry_rows
