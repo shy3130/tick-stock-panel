@@ -10,6 +10,7 @@ import {
   type StrategyParamDef,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { instrumentSearchMeta } from '@/lib/instrumentSearch'
 import { tierRank } from '@/lib/capability-labels'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
@@ -584,6 +585,7 @@ function StockPoolPicker({ value, onChange }: { value: string; onChange: (value:
             <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-y-auto rounded-card border border-border bg-base shadow-xl">
               {results.map(r => {
                 const added = symbols.includes(r.symbol)
+                const meta = instrumentSearchMeta(r)
                 return (
                   <button
                     key={r.symbol}
@@ -594,6 +596,7 @@ function StockPoolPicker({ value, onChange }: { value: string; onChange: (value:
                   >
                     <span className="w-[78px] shrink-0 font-mono">{r.symbol}</span>
                     <span className="min-w-0 flex-1 truncate text-secondary">{r.name}</span>
+                    {meta && <span className="shrink-0 text-[10px] text-muted">{meta}</span>}
                     <Plus className={`h-3.5 w-3.5 ${added ? 'opacity-30' : 'text-accent'}`} />
                   </button>
                 )

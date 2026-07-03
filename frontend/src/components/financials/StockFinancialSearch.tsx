@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Loader2 } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, type InstrumentSearchResult } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { instrumentSearchMeta } from '@/lib/instrumentSearch'
 
 interface Props {
   onSelect: (symbol: string, name: string) => void
@@ -41,7 +42,7 @@ export function StockFinancialSearch({ onSelect }: Props) {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  function handleSelect(r: { symbol: string; name: string }) {
+  function handleSelect(r: InstrumentSearchResult) {
     onSelect(r.symbol, r.name)
     setQuery('')
     setOpen(false)
@@ -105,20 +106,24 @@ export function StockFinancialSearch({ onSelect }: Props) {
                 未找到匹配的股票
               </div>
             ) : (
-              results.map((r, i) => (
-                <button
-                  key={r.symbol}
-                  type="button"
-                  onClick={() => handleSelect(r)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors duration-100 ${
-                    i === activeIdx ? 'bg-accent/10 text-accent' : 'hover:bg-elevated text-foreground'
-                  }`}
-                >
-                  <span className="font-mono shrink-0 text-xs w-[88px]">{r.symbol}</span>
-                  <span className="truncate text-sm flex-1">{r.name}</span>
-                  {r.code && <span className="text-[10px] text-muted font-mono shrink-0">{r.code}</span>}
-                </button>
-              ))
+              results.map((r, i) => {
+                const meta = instrumentSearchMeta(r)
+                return (
+                  <button
+                    key={r.symbol}
+                    type="button"
+                    onClick={() => handleSelect(r)}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors duration-100 ${
+                      i === activeIdx ? 'bg-accent/10 text-accent' : 'hover:bg-elevated text-foreground'
+                    }`}
+                  >
+                    <span className="font-mono shrink-0 text-xs w-[88px]">{r.symbol}</span>
+                    <span className="truncate text-sm flex-1">{r.name}</span>
+                    {meta && <span className="text-[10px] text-muted shrink-0">{meta}</span>}
+                    {r.code && <span className="text-[10px] text-muted font-mono shrink-0">{r.code}</span>}
+                  </button>
+                )
+              })
             )}
           </motion.div>
         )}

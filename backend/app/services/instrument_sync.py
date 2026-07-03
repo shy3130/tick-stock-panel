@@ -1,9 +1,9 @@
-"""标的维表同步服务。
+"""Instrument dimension sync service.
 
-盘前 9:10 通过 data_providers 抽象层获取全量标的元数据，
-flatten / 规范后写入 instruments.parquet。
+Fetch normalized instrument metadata through the data_providers abstraction and
+persist it to instruments.parquet.
 
-数据获取通过 data_providers 抽象层，支持 provider 切换。
+Provider switching is resolved through the registry.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pathlib import Path
 import polars as pl
 
 from app.data_providers.registry import get_active_provider_name, get_provider
+from app.services.pinyin_index import add_pinyin_columns
 
 logger = logging.getLogger(__name__)
 
@@ -38,18 +39,18 @@ def _get_data_provider():
 
 
 def sync_instruments(data_dir: Path) -> int:
-    """全量同步标的维表 → data/instruments/instruments.parquet。
+    """Sync the full instrument dimension table to instruments.parquet.
 
-    通过 data_providers 抽象层获取归一化的 instruments DataFrame，
-    追加 ``as_of`` 列后写入 parquet。返回写入的行数。
+    The provider returns the normalized schema:
+    symbol/name/code/exchange/asset_type/source.
 
-    provider.get_instruments() 返回归一化 schema:
-    symbol/name/code/exchange/asset_type/source。
+    The persisted table also includes as_of and pinyin search columns. Returns
+    the number of rows written.
     """
     provider = _get_data_provider()
     try:
         df = provider.get_instruments("stock")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("get_instruments(stock) failed: %s", e)
         return 0
 
@@ -57,7 +58,7 @@ def sync_instruments(data_dir: Path) -> int:
         logger.warning("get_instruments returned empty")
         return 0
 
-    df = df.with_columns(pl.lit(date.today()).alias("as_of"))
+    df = add_pinyin_columns(df).with_columns(pl.lit(date.today()).alias("as_of"))
 
     out = data_dir / "instruments" / "instruments.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -71,10 +72,10 @@ def enrich_names_from_quotes(
     data_dir: Path,
     quotes_data: list[dict],
 ) -> int:
-    """从 quotes 响应中提取 name，更新 instruments 维表（兜底补充）。
+    """Fill missing instrument names from quote responses.
 
-    盘后 quotes.get(universes) 返回的数据中包含 ext.name，
-    用来补充 instruments 中可能缺失的 name。
+    quotes.get(universes) may include ext.name after the daily pipeline; use it
+    to fill missing names and refresh pinyin search columns.
     """
     if not quotes_data:
         return 0
@@ -109,6 +110,7 @@ def enrich_names_from_quotes(
         .otherwise(pl.col("name"))
         .alias("name"),
     ).drop("_new_name")
+    df = add_pinyin_columns(df)
 
     df.write_parquet(inst_path)
     logger.info("instruments name enriched from quotes: %d names", len(name_map))

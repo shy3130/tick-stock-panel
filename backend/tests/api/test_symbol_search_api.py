@@ -24,3 +24,13 @@ def test_search_instruments_keeps_results_shape(monkeypatch):
 
     assert out["results"][0]["symbol"] == "600519.SH"
     assert out["results"][0]["name"] == "贵州茅台"
+
+
+def test_search_instruments_supports_pinyin(monkeypatch):
+    monkeypatch.setattr("app.services.symbol_search.suggest_symbols", lambda q, limit: [])
+    req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=Repo())))
+
+    out = kline.search_instruments(req, q="gzmt", limit=10)
+
+    assert out["results"][0]["symbol"] == "600519.SH"
+    assert out["results"][0]["matched_by"] == "initials"

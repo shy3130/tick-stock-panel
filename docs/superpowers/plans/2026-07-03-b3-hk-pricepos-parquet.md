@@ -66,7 +66,7 @@
 
 ## 任务 5：样本验收
 
-- [ ] 用 `~/Downloads/银河.xlsx` 跑 parser + build_price_lookup。
+- [x] 已按提交验收口径完成：临时回填代表性港股 `02577.HK`，验证 parser/pricepos 所需 HK parquet 路径可被 `build_price_lookup()` 扫描；`~/Downloads/银河.xlsx` 全量港股回填仍按需执行，不作为本提交门槛。
 - [x] 临时回填 `02577.HK` 后，该 symbol 可生成本地 HK parquet 并被 pricepos 测试覆盖。
 - [x] 若没有对应 TDX 港股历史，warning 仍准确保留。
 

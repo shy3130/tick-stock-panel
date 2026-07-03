@@ -82,16 +82,22 @@
 
 ### F6 — C12：搜索需支持拼音 / 拼音首字母，但计划未落地
 
-- [ ] 待改
+- [x] 已改：新增 `pypinyin` 依赖；`instrument_sync` 写入 `name_pinyin/name_initials`；`symbol_search` 对旧 instruments 缺列兼容计算；服务/API 测试覆盖 `guizhoumaotai`、`gzmt`、`万 科Ａ -> wanke/wk`。
 
 **位置**：`docs/superpowers/plans/2026-07-03-c12-symbol-search.md` 目标 + 任务 1。
 
 **问题**：C12 目标写了“代码/名称/**拼音**模糊搜索”，但任务 1 的匹配字段只有 `symbol/code/name`——**拼音完全没实现**。用户明确要求：搜索标的时支持拼音（全拼，如 `guizhoumaotai`）和拼音首字母（简拼，如 `gzmt`）。
 
-**证据**：
+**原始证据**：
 - `data/instruments/instruments.parquet` 列为 `symbol/name/code/exchange/asset_type/source/as_of`（5535 行）——**无任何拼音列**。
-- `pyproject.toml` / `uv.lock` **无拼音库依赖**（无 `pypinyin`）。
+- `pyproject.toml` / `uv.lock` 当时**无拼音库依赖**（无 `pypinyin`）。
 - 名称含需归一的字符：如 `万 科Ａ` 带**全角空格 + 全角字母 Ａ**（实测样本）；转拼音前必须先归一。
+
+**落地证据**：
+- `backend/app/services/pinyin_index.py`：统一 NFKC 归一、全拼与首字母生成。
+- `backend/app/services/instrument_sync.py`：同步/补名后写入 `name_pinyin/name_initials`。
+- `backend/app/services/symbol_search.py`：排序扩展为 name 后接全拼前缀/全拼子串/首字母前缀；旧 parquet 缺列时兼容计算。
+- `backend/tests/services/test_symbol_search.py` + `backend/tests/api/test_symbol_search_api.py`：目标测试 `8 passed`。
 
 **建议落地设计（C12 补两个任务）**：
 

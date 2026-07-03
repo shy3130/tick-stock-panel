@@ -35,6 +35,15 @@ export interface CapabilitiesResponse {
   capabilities: Record<string, CapabilityLimits>
 }
 
+export interface InstrumentSearchResult {
+  symbol: string
+  name: string
+  code: string
+  asset_type?: 'stock' | 'index' | 'etf' | 'hk' | 'unknown' | string
+  source?: 'local' | 'eastmoney_suggest' | string
+  matched_by?: 'code' | 'symbol' | 'name' | 'pinyin' | 'initials' | 'suggest' | string
+}
+
 // ===== Financials =====
 export interface FinancialStatus {
   available: boolean
@@ -1014,7 +1023,7 @@ export const api = {
       body: JSON.stringify({ symbols, days }),
     }),
   instrumentSearch: (q: string, limit = 20) =>
-    request<{ results: { symbol: string; name: string; code: string }[] }>(
+    request<{ results: InstrumentSearchResult[] }>(
       `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
 

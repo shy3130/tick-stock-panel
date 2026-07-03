@@ -9,6 +9,7 @@
 - `get_wide()` 优先 `wide`，缺失降级 `day`：`engine_data_disk.py:61-68`
 - `get_minutes()` / `get_trans()` 已有磁盘方法：`engine_data_disk.py:111-143`
 - provider raw 重建样本此前已验证 `600519.SH 2012-10-26 close=241.0`
+- 已提交 `f4bb9a4 test(data): add tdx disk quality guards`；复核执行 `tests/data_providers/test_engine_data_disk.py tests/data_providers/test_engine_data_disk_quality.py tests/data_providers/test_provider_raw_chain.py -q`，结果 `21 passed, 1 skipped`。
 
 **范围：** 只加测试/抽样脚本/文档记录。不改 provider 算法，不写 `data/`，不重建 parquet。
 
@@ -24,23 +25,23 @@
 
 先写这些测试再实现 fixture/脚本，确保计划不是只做人工观察：
 
-- `test_disk_daily_units_and_wide_fallback`：当前没有离线 fixture 时应失败；实现后证明 wide 缺失会降级 day 且基本量纲合法。
-- `test_hk_zero_amount_does_not_crash`：当前若没有港股 fixture 覆盖，无法证明 `amount=0` 边界；实现后锁住“不补假成交额、不产生 NaN/inf”。
-- `test_missing_minutes_and_trans_return_empty`：当前缺少磁盘分钟/逐笔缺文件契约测试；实现后保证缺文件返回空 list。
-- `test_raw_reconstruct_maotai_20121026`：有真盘时验证 `600519.SH 2012-10-26 close≈241.0`，无挂载时 skip；这是污染修复的核心烟测。
+- `test_disk_daily_units_and_wide_fallback`：已实现，证明 wide 缺失会降级 day 且基本量纲合法。
+- `test_hk_zero_amount_does_not_crash`：已实现，锁住“不补假成交额、不产生 NaN/inf”。
+- `test_missing_minutes_and_trans_return_empty`：已实现，保证缺文件返回空 list。
+- `test_raw_reconstruct_maotai_20121026`：已实现，有真盘时验证 `600519.SH 2012-10-26 close≈241.0`，无挂载时 skip。
 
 ## 任务 1：离线 fixture 锁住路径和量纲
 
-- [ ] 创建临时 TDX 目录结构：
+- [x] 创建临时 TDX 目录结构：
   - `wide/sh600/sh600519.csv`
   - `day/sz000/sz000001.csv`
   - `wide/hk0257/hk02577.csv`
   - `minutes/2026/20260701/sh600519.csv`
   - `trans/2026/20260701/sh600519.csv`
-- [ ] 用 `monkeypatch.setenv("TDX_DATA_DIR", str(tmp_path))` 初始化 `EngineDataDiskClient()`。
-- [ ] 测试 `_tdx_name()` 港股 5 位补零路径：`02577.HK -> hk02577`。
-- [ ] 测试 `get_wide("600519")` 缺 wide 时会降级 day，返回 date 为字符串。
-- [ ] 测试日线数值：
+- [x] 用 `monkeypatch.setenv("TDX_DATA_DIR", str(tmp_path))` 初始化 `EngineDataDiskClient()`。
+- [x] 测试 `_tdx_name()` 港股 5 位补零路径：`02577.HK -> hk02577`。
+- [x] 测试 `get_wide("600519")` 缺 wide 时会降级 day，返回 date 为字符串。
+- [x] 测试日线数值：
   - `close > 0`
   - `volume >= 0`
   - `amount >= 0`
@@ -60,29 +61,29 @@ def test_disk_daily_units_and_wide_fallback(tmp_path, monkeypatch):
 
 ## 任务 2：raw 重建污染真盘 smoke
 
-- [ ] 新增 pytest 标记或环境跳过：`TDX_DATA_DIR` 不存在时 `pytest.skip`。
-- [ ] 用 `FQuantProvider(engine_mode="disk").get_daily(["600519.SH"], start=2012-10-26, end=2012-10-26, asset_type="stock")`。
-- [ ] 断言 close 接近 `241.0`，且不是 `*.075769` 这类前复权尾巴。
-- [ ] 再抽样 3-5 个有 xdxr 的 A 股，仅做“close 有限、>0、非异常小数尾巴”检查；样本固定在测试常量里，避免随机 flaky。
+- [x] 新增 pytest 环境跳过：`TDX_DATA_DIR` 不存在时 `pytest.skip`。
+- [x] 用 `FQuantProvider(engine_mode="disk").get_daily(["600519.SH"], start=2012-10-26, end=2012-10-26, asset_type="stock")`。
+- [x] 断言 close 接近 `241.0`，且不是 `*.075769` 这类前复权尾巴。
+- [x] 再抽样固定 A 股做“close 有限、>0、非异常小数尾巴”检查，避免随机 flaky。
 
 **不要做：** 不扫描全市场；这会慢且容易被数据挂载状态污染。
 
 ## 任务 3：港股 amount=0 边界
 
-- [ ] 用离线 fixture 写 `wide/hk0257/hk02577.csv`，`amount=0`。
-- [ ] `get_wide("02577", asset_type="hk")` 不抛异常。
-- [ ] 若走 provider `get_daily(["02577.HK"], asset_type="hk")`，断言返回空或合法 DataFrame，不出现 NaN/inf。
-- [ ] 文档记录：港股 amount=0 不补假成交额，依赖 amount 的诊断降级。
+- [x] 用离线 fixture 写 `wide/hk0257/hk02577.csv`，`amount=0`。
+- [x] `get_wide("02577", asset_type="hk")` 不抛异常。
+- [x] 若走 provider `get_daily(["02577.HK"], asset_type="hk")`，断言返回空或合法 DataFrame，不出现 NaN/inf。
+- [x] 文档记录：港股 amount=0 不补假成交额，依赖 amount 的诊断降级。
 
 ## 任务 4：分钟/逐笔基础完整性
 
-- [ ] `get_minutes("600519", "20260701")` fixture 返回字段只含 `price/volume`，价格 > 0。
-- [ ] `get_trans("600519", "20260701")` fixture 返回 `time/price/volume/amount/order_count/direction`。
-- [ ] 缺文件返回空 list，不抛异常。
+- [x] `get_minutes("600519", "20260701")` fixture 返回字段只含 `price/volume`，价格 > 0。
+- [x] `get_trans("600519", "20260701")` fixture 返回 `time/price/volume/amount/order_count/direction`。
+- [x] 缺文件返回空 list，不抛异常。
 
 ## 任务 5：人工抽样脚本
 
-`backend/scripts/spike_tdx_quality.py` 做只读输出：
+`backend/scripts/spike_tdx_quality.py` 已落地，做只读输出：
 
 - 固定 symbols：`600519.SH,000001.SZ,300059.SZ,688981.SH,513050.SH,02577.HK`
 - 输出每个 symbol：wide/day 命中、最新日期、close、volume、amount、amount/volume、minutes 行数、trans 行数。

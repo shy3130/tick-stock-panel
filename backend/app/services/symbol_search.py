@@ -5,6 +5,7 @@ from typing import Any
 import polars as pl
 
 from app.services import eastmoney_client
+from app.services.pinyin_index import add_pinyin_columns, pinyin_keys
 
 _SUGGEST_URL = "https://searchapi.eastmoney.com/api/suggest/get"
 
@@ -48,21 +49,32 @@ def _search_local(repo, query: str, limit: int) -> list[dict]:
         df = getattr(repo, getter)()
         if df.is_empty():
             continue
-        cols = [c for c in ("symbol", "code", "name") if c in df.columns]
+        cols = [c for c in ("symbol", "code", "name", "name_pinyin", "name_initials") if c in df.columns]
         if not {"symbol", "code"}.issubset(cols):
             continue
         if "name" not in cols:
             df = df.with_columns(pl.lit("").alias("name"))
-        frames.append(df.select("symbol", "code", "name").with_columns(pl.lit(asset_type).alias("asset_type")))
+        df = add_pinyin_columns(df)
+        frames.append(
+            df.select("symbol", "code", "name", "name_pinyin", "name_initials").with_columns(
+                pl.lit(asset_type).alias("asset_type"),
+            ),
+        )
     if not frames:
         return []
     df = pl.concat(frames, how="diagonal").unique(subset=["symbol"], keep="first")
     q = query.upper()
+    q_ascii = query.strip().lower()
+    q_is_ascii_alpha = q_ascii.isascii() and q_ascii.isalpha()
     rows = []
     for row in df.to_dicts():
         symbol = str(row["symbol"]).upper()
         code = str(row["code"]).upper()
         name = str(row.get("name") or "")
+        name_pinyin = str(row.get("name_pinyin") or "")
+        name_initials = str(row.get("name_initials") or "")
+        if (not name_pinyin or not name_initials) and name:
+            name_pinyin, name_initials = pinyin_keys(name)
         matched_by = ""
         score = 99
         if code == q:
@@ -75,6 +87,12 @@ def _search_local(repo, query: str, limit: int) -> list[dict]:
             matched_by, score = "code", 3
         elif query in name:
             matched_by, score = "name", 4
+        elif q_ascii and name_pinyin.startswith(q_ascii):
+            matched_by, score = "pinyin", 5
+        elif q_ascii and q_ascii in name_pinyin:
+            matched_by, score = "pinyin", 6
+        elif q_is_ascii_alpha and name_initials.startswith(q_ascii):
+            matched_by, score = "initials", 7
         if matched_by:
             rows.append({**row, "source": "local", "matched_by": matched_by, "_score": score})
     rows.sort(key=lambda r: (r["_score"], str(r["symbol"])))

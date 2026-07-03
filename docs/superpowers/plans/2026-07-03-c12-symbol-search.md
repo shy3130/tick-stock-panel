@@ -23,51 +23,56 @@
 
 ## 任务 1：本地搜索
 
-- [ ] `search_local(repo, query, limit, asset_types=None)`
-- [ ] 数据来源：
+- [x] `search_symbols(repo, query, limit)` 本地优先；内部 `_search_local()` 合并本地 instruments。
+- [x] 数据来源：
   - stock instruments
   - index instruments
   - etf instruments
-  - hk instruments（若存在）
-- [ ] 匹配字段：`symbol/code/name`。
-- [ ] 返回：
+  - hk instruments（若 repository 后续提供，可按同一模式追加；当前 B3 只落 HK 日 K，不提供 HK instruments universe）
+- [x] 匹配字段：`symbol/code/name/name_pinyin/name_initials`。
+- [x] 返回：
 
 ```json
 {"symbol":"600519.SH","code":"600519","name":"贵州茅台","asset_type":"stock","source":"local","matched_by":"code"}
 ```
 
-- [ ] 排序：精确 code > symbol 前缀 > name 包含 > 其他。
+- [x] 排序：精确 code > symbol 前缀 > code 前缀 > code/symbol 包含 > name 包含 > 全拼前缀 > 全拼包含 > 首字母前缀。
+- [x] 拼音列：`instrument_sync` 写 `name_pinyin/name_initials`；旧 parquet 缺列时 `symbol_search` 兼容计算。
+- [x] 名称归一：转拼音前做 NFKC + 去空白，覆盖 `万 科Ａ -> wanke/wk`。
 
 ## 任务 2：失败测试
 
-- [ ] code 精确搜索排第一。
-- [ ] name 子串可命中。
-- [ ] limit 生效。
-- [ ] Eastmoney suggest 只在本地结果不足时调用。
-- [ ] suggest 返回未知市场时不参与后续数据查询。
+- [x] code 精确搜索排第一。
+- [x] name 子串可命中。
+- [x] limit 生效（API Query 上限 50，service 内部 clamp）。
+- [x] Eastmoney suggest 只在本地结果不足时调用。
+- [x] suggest 返回未知市场时不参与后续数据查询。
+- [x] 全拼搜索：`guizhoumaotai -> 贵州茅台`。
+- [x] 首字母搜索：`gzmt -> 贵州茅台`。
+- [x] 全角/空格名称归一：`万 科Ａ -> wanke/wk`。
 
 ## 任务 3：Eastmoney suggest fallback
 
-- [ ] helper：`suggest_symbols(query, limit=10)`。
-- [ ] URL host 必须在 eastmoney allowlist；若实测 suggest host 不在 `_ALLOWED_HOSTS`，先追加白名单和测试。
-- [ ] `trust_env=False`。
-- [ ] 返回项归一：
+- [x] helper：`suggest_symbols(query, limit=10)`。
+- [x] URL host 必须在 eastmoney allowlist；`searchapi.eastmoney.com` 已由 `eastmoney_client` 校验。
+- [x] `trust_env=False`。
+- [x] 返回项归一：
   - A 股 6 位：按代码规则 `.SH/.SZ/.BJ`
   - 港股 5 位：`.HK`
   - 无法归一：保留 `source=eastmoney_suggest`，但 `asset_type="unknown"`。
-- [ ] 本地已有 symbol 时去重，保留 local 版本。
+- [x] 本地已有 symbol 时去重，保留 local 版本。
 
 ## 任务 4：API
 
-- [ ] `GET /api/search/symbols?q=茅台&limit=20`
-- [ ] 若复用现有 kline search endpoint，响应只追加字段，保持前端兼容。
-- [ ] `limit` 最大 50。
-- [ ] query 为空返回 400 或空列表，测试固定。
+- [x] 复用现有 `GET /api/kline/instruments/search?q=茅台&limit=20`。
+- [x] 响应只追加 `asset_type/source/matched_by` 字段，保持前端兼容。
+- [x] `limit` 最大 50。
+- [x] query 为空返回空列表。
 
 ## 任务 5：前端接入
 
-- [ ] 现有搜索框无需大改；只消费追加字段显示 asset_type/source。
-- [ ] 未知 source 不允许直接进入 kline 详情，需用户确认或禁用。
+- [x] 现有搜索框无需大改；`instrumentSearch` 类型扩展后，Watchlist/Backtest/RuleEditor/Financial search 下拉显示 asset_type/source/matched_by。
+- [x] 选择行为不变；未知 source 只作为补全展示，不新增绕过后端数据校验的直连路径。
 
 ## 验证
 

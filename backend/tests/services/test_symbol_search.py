@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 import polars as pl
 
 from app.services import symbol_search
@@ -43,6 +41,45 @@ def test_name_match_and_suggest_only_when_needed(monkeypatch):
 
     assert [r["symbol"] for r in rows] == ["600519.SH", "00700.HK"]
     assert calls == [("茅台", 1)]
+
+
+def test_search_by_pinyin_full(monkeypatch):
+    monkeypatch.setattr(symbol_search, "suggest_symbols", lambda q, limit: [])
+    repo = Repo(stock=pl.DataFrame([
+        {"symbol": "600519.SH", "code": "600519", "name": "贵州茅台"},
+    ]))
+
+    rows = symbol_search.search_symbols(repo, "guizhoumaotai", 10)
+
+    assert rows[0]["symbol"] == "600519.SH"
+    assert rows[0]["matched_by"] == "pinyin"
+
+
+def test_search_by_pinyin_initials(monkeypatch):
+    monkeypatch.setattr(symbol_search, "suggest_symbols", lambda q, limit: [])
+    repo = Repo(stock=pl.DataFrame([
+        {"symbol": "600519.SH", "code": "600519", "name": "贵州茅台"},
+    ]))
+
+    rows = symbol_search.search_symbols(repo, "gzmt", 10)
+
+    assert rows[0]["symbol"] == "600519.SH"
+    assert rows[0]["matched_by"] == "initials"
+
+
+def test_fullwidth_name_normalized_for_pinyin(monkeypatch):
+    monkeypatch.setattr(symbol_search, "suggest_symbols", lambda q, limit: [])
+    repo = Repo(stock=pl.DataFrame([
+        {"symbol": "000002.SZ", "code": "000002", "name": "万 科Ａ"},
+    ]))
+
+    by_full = symbol_search.search_symbols(repo, "wanke", 10)
+    by_initial = symbol_search.search_symbols(repo, "wk", 10)
+
+    assert by_full[0]["symbol"] == "000002.SZ"
+    assert by_full[0]["matched_by"] == "pinyin"
+    assert by_initial[0]["symbol"] == "000002.SZ"
+    assert by_initial[0]["matched_by"] == "initials"
 
 
 def test_suggest_normalizes_markets(monkeypatch):

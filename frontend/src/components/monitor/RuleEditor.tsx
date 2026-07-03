@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Save, X, Plus, Search } from 'lucide-react'
 import { api, genRuleId, type MonitorRule, type MonitorCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { instrumentSearchMeta } from '@/lib/instrumentSearch'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { usePreferences } from '@/lib/useSharedQueries'
 
@@ -259,6 +260,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                       <button key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated cursor-pointer">
                         <span className="font-mono text-foreground/80">{r.symbol}</span>
                         <span className="ml-1 text-muted">{r.name}</span>
+                        <span className="ml-1 text-[10px] text-muted/70">{instrumentSearchMeta(r)}</span>
                       </button>
                     ))}
                   </div>

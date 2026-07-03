@@ -2,8 +2,9 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp } from 'lucide-react'
-import { api, type KlineRow } from '@/lib/api'
+import { api, type InstrumentSearchResult, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { instrumentSearchMeta } from '@/lib/instrumentSearch'
 import { storage } from '@/lib/storage'
 import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
@@ -224,7 +225,7 @@ function StockSearchBox({
     }
   }
 
-  function handleSelect(r: { symbol: string; name: string }) {
+  function handleSelect(r: InstrumentSearchResult) {
     onPreview(r.symbol, r.name)
     setQuery('')
     setOpen(false)
@@ -258,6 +259,7 @@ function StockSearchBox({
           >
             {results.map((r, i) => {
               const inWatchlist = existingSymbols.includes(r.symbol)
+              const meta = instrumentSearchMeta(r)
               return (
                 <div
                   key={r.symbol}
@@ -272,6 +274,7 @@ function StockSearchBox({
                   >
                     <span className="font-mono shrink-0 w-[80px]">{r.symbol}</span>
                     <span className="truncate text-secondary flex-1">{r.name}</span>
+                    {meta && <span className="shrink-0 text-[10px] text-muted">{meta}</span>}
                   </button>
                   <button
                     type="button"
