@@ -131,6 +131,12 @@ async def lifespan(app: FastAPI):
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
 
+    try:
+        from app.services.scheduled_research import ScheduledResearchStore, register_jobs
+        register_jobs(app.state.scheduler, ScheduledResearchStore(store.data_dir), app.state)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("scheduled research registration failed: %s", e)
+
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
     from app.strategy.monitor import MonitorRuleEngine
     from app.strategy import monitor_rules as mr_store
