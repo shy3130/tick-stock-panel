@@ -496,20 +496,15 @@ async def sync_minute(request: Request):
         try:
             progress("sync_minute", 5, "解析标的池…")
             universe: list[str] = []
-            provider_name = "tickflow"
             try:
                 provider = kline_sync._get_data_provider()
-                provider_name = provider.name
-                if provider.name != "tickflow" and provider.capabilities.instruments:
+                if provider.capabilities.instruments:
                     import polars as pl
                     inst = provider.get_instruments("stock")
                     if not inst.is_empty() and "symbol" in inst.columns:
                         universe = sorted(inst["symbol"].cast(pl.Utf8).to_list())
             except Exception:  # noqa: BLE001
                 universe = []
-            if not universe and provider_name == "tickflow":
-                from app.tickflow.pools import get_pool
-                universe = sorted(set(get_pool("watchlist")) | set(get_pool("CN_Equity_A")))
             # 补充 instruments 全量标的，覆盖北交所、新股等
             inst_path = repo.store.data_dir / "instruments" / "instruments.parquet"
             if inst_path.exists():
@@ -862,23 +857,13 @@ def _resolve_minute_universe(capset, repo) -> list[str]:
     """分钟K标的池解析。"""
     from app.capabilities import Cap
     if capset.has(Cap.KLINE_MINUTE_BATCH):
-        provider_name = "tickflow"
         try:
             provider = kline_sync._get_data_provider()
-            provider_name = provider.name
-            if provider.name != "tickflow" and provider.capabilities.instruments:
+            if provider.capabilities.instruments:
                 import polars as pl
                 inst = provider.get_instruments("stock")
                 if not inst.is_empty() and "symbol" in inst.columns:
                     return sorted(inst["symbol"].cast(pl.Utf8).to_list())
         except Exception:
             pass
-        if provider_name == "tickflow":
-            try:
-                from app.tickflow.pools import get_pool
-                all_a = get_pool("CN_Equity_A", refresh=True)
-                if all_a:
-                    return sorted(all_a)
-            except Exception:
-                pass
     return []

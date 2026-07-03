@@ -60,13 +60,6 @@ class QuoteService:
 
     CORE_INDEX_SYMBOLS = ("000001.SH", "399001.SZ", "399006.SZ", "000680.SH")
 
-    # 档位 → 最小轮询间隔 (秒)
-    TIER_MIN_INTERVAL = {
-        "expert": 1.0,
-        "pro": 2.0,
-        "starter": 3.0,
-        "free": 6.0,
-    }
     DEFAULT_INTERVAL = 10.0
     MAX_INTERVAL = 60.0
 
@@ -245,14 +238,8 @@ class QuoteService:
             return events
 
     # ================================================================
-    # 档位感知间隔限制
+    # 间隔限制
     # ================================================================
-
-    @staticmethod
-    def _current_tier() -> str:
-        """获取当前档位名（小写）。"""
-        from app.tickflow.policy import tier_label
-        return tier_label().split()[0].split("+")[0].strip().lower()
 
     @classmethod
     def realtime_mode(cls) -> str:
@@ -261,16 +248,8 @@ class QuoteService:
             provider = _get_data_provider()
             if not getattr(provider.capabilities, "realtime", False):
                 return "none"
-            provider_name = getattr(provider, "name", "") or get_active_provider_name("realtime")
         except Exception:  # noqa: BLE001
             return "none"
-        if provider_name != "tickflow":
-            return "full_market"
-        tier = cls._current_tier()
-        if tier == "none":
-            return "none"
-        if tier == "free":
-            return "watchlist"
         return "full_market"
 
     @classmethod
@@ -280,15 +259,7 @@ class QuoteService:
 
     @classmethod
     def _tier_min_interval(cls) -> float:
-        try:
-            provider = _get_data_provider()
-            provider_name = getattr(provider, "name", "") or get_active_provider_name("realtime")
-        except Exception:  # noqa: BLE001
-            return cls.DEFAULT_INTERVAL
-        if provider_name != "tickflow":
-            return cls.DEFAULT_INTERVAL
-        tier = cls._current_tier()
-        return cls.TIER_MIN_INTERVAL.get(tier, cls.DEFAULT_INTERVAL)
+        return cls.DEFAULT_INTERVAL
 
     def _clamp_interval(self, interval: float) -> float:
         return max(self._tier_min_interval(), min(self.MAX_INTERVAL, interval))

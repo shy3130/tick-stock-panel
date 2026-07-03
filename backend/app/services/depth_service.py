@@ -9,7 +9,7 @@
 数据源(provider 感知):
   - 通过 _get_data_provider() 做能力检查
   - provider.capabilities.depth=False 时优雅降级
-  - provider.get_depth(symbols) 提供盘口；tickflow/provider 本地源共用同一入口
+  - provider.get_depth(symbols) 提供盘口
 
 数据流:
   盘中轮询线程(交易时段, 独立 sleep, 不绑行情轮询):
@@ -19,7 +19,7 @@
     最后拉一次 → 落盘 depth5 parquet(定版)
 
 三层防护节流("设过大设上限, 设过小设最小值"):
-  ① 套餐范围 clamp: Pro 10~120s, Expert 3~300s
+  ① 配置范围 clamp: 3~300s
   ② 限速安全 clamp: safe = 60/((rpm*0.8)/batches), 涨跌停多就自动放慢
   ③ 系统接管通知: 用户设置会超限时, 推 toast 告知已自动调整
 """
@@ -37,13 +37,7 @@ import polars as pl
 logger = logging.getLogger(__name__)
 
 
-# 套餐 → (轮询间隔下限s, 上限s)
-TIER_INTERVAL_RANGE: dict[str, tuple[float, float]] = {
-    "pro": (10.0, 120.0),
-    "expert": (3.0, 300.0),
-}
-# 兜底: 其他有 DEPTH5_BATCH 的套餐按 pro 范围
-DEFAULT_RANGE = (10.0, 120.0)
+DEFAULT_RANGE = (3.0, 300.0)
 
 # 限速余量: 只用 rpm 的 80%, 给系统其他 depth 调用留空间
 RPM_MARGIN = 0.8
@@ -494,10 +488,8 @@ class DepthService:
         batch_size = (lim.batch if lim and lim.batch else 100)
         rpm = (lim.rpm if lim and lim.rpm else 30)
 
-        # ① 套餐范围 clamp
-        provider = _get_data_provider()
-        tier = "pro" if provider.name != "tickflow" else self._tickflow_tier()
-        lo, hi = TIER_INTERVAL_RANGE.get(tier, DEFAULT_RANGE)
+        # ① 配置范围 clamp
+        lo, hi = DEFAULT_RANGE
         raw_user = preferences.get_depth_polling_interval()
         user_interval = max(lo, min(hi, raw_user))
 
@@ -571,24 +563,14 @@ class DepthService:
     # ================================================================
 
     def _has_capability(self) -> bool:
-        """能力检查: provider depth 能力；tickflow 仍追加套餐门禁。"""
+        """能力检查: provider depth 能力。"""
         # provider 能力检查: depth 字段缺失时视为 False(FQuantProvider 即如此)
         provider = _get_data_provider()
         if not getattr(provider.capabilities, "depth", False):
             logger.info("depth_service: 当前 provider %s 不支持盘口, 降级返回空",
                         provider.name)
             return False
-        if provider.name != "tickflow":
-            return True
-        # TickFlow SDK 套餐检查(Pro+ 才有 DEPTH5_BATCH)
-        capset = self._get_capset()
-        from app.capabilities import Cap
-        return capset.has(Cap.DEPTH5_BATCH)
-
-    @staticmethod
-    def _tickflow_tier() -> str:
-        from app.tickflow.policy import tier_label
-        return tier_label().split()[0].split("+")[0].strip().lower()
+        return True
 
     def _get_capset(self):
         """获取当前 capset(优先 app.state, 回退 detect)。"""
@@ -596,7 +578,7 @@ class DepthService:
             cs = getattr(self._app_state, "capabilities", None)
             if cs:
                 return cs
-        from app.tickflow.policy import detect_capabilities
+        from app.data_providers.capability_gate import detect_capabilities
         return detect_capabilities()
 
     @staticmethod

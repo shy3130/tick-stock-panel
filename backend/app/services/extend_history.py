@@ -49,24 +49,14 @@ def _invalidate(table: str | None = None) -> None:
 def _resolve_universe(capset: CapabilitySet) -> list[str]:
     """解析标的池 — 与 daily_pipeline 独立的副本。"""
     if capset.has(Cap.KLINE_DAILY_BATCH):
-        provider_name = "tickflow"
         try:
             provider = kline_sync._get_data_provider()
-            provider_name = provider.name
-            if provider.name != "tickflow" and provider.capabilities.instruments:
+            if provider.capabilities.instruments:
                 inst = provider.get_instruments("stock")
                 if not inst.is_empty() and "symbol" in inst.columns:
                     return sorted(inst["symbol"].cast(pl.Utf8).to_list())
         except Exception as e:
             logger.warning("provider instruments pool unavailable: %s", e)
-        if provider_name == "tickflow":
-            try:
-                from app.tickflow.pools import get_pool
-                all_a = get_pool("CN_Equity_A", refresh=True)
-                if all_a:
-                    return sorted(all_a)
-            except Exception as e:
-                logger.warning("CN_Equity_A pool unavailable: %s", e)
 
     base: set[str] = set(_DEMO_SYMBOLS)
     base.update(_load_watchlist_symbols())
