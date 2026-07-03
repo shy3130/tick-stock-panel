@@ -28,6 +28,12 @@ def _asset_type_for_symbol(symbol: str) -> str:
     return "stock"
 
 
+def _adjustment_label(symbol: str) -> str:
+    from app.markets import market_of
+
+    return market_of(symbol).adjustment
+
+
 @router.get("/instruments/search")
 def search_instruments(
     request: Request,
@@ -111,14 +117,20 @@ def get_daily(
         asset_type = _asset_type_for_symbol(symbol)
         raw = provider.get_daily([symbol], start_dt, end_dt, asset_type)
         if raw.is_empty():
-            return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
+            return {
+                "symbol": symbol,
+                "name": stock_name,
+                "stock_info": stock_info,
+                "rows": [],
+                "adjustment": _adjustment_label(symbol),
+            }
         factors = pl.DataFrame()
         if asset_type == "stock":
             try:
                 factors = provider.get_adj_factors([symbol], start_dt, end_dt, asset_type)
             except Exception as e:  # noqa: BLE001
                 logger.debug("本地模式单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors)
+        enriched = compute_enriched(raw, factors=factors, asset_type=asset_type)
         rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
         resp = {
             "symbol": symbol,
@@ -126,6 +138,7 @@ def get_daily(
             "stock_info": stock_info,
             "rows": rows,
             "source": "local_disk",
+            "adjustment": _adjustment_label(symbol),
         }
         return _attach_ext(resp, repo, symbol, ext_columns)
 
@@ -138,7 +151,13 @@ def get_daily(
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"数据源拉取失败: {e}") from e
         if raw.is_empty():
-            return {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": []}
+            return {
+                "symbol": symbol,
+                "name": stock_name,
+                "stock_info": stock_info,
+                "rows": [],
+                "adjustment": _adjustment_label(symbol),
+            }
         # 拉除权因子做前复权；无能力时空 df → compute_enriched 退回未复权
         factors = pl.DataFrame()
         capset = getattr(request.app.state, "capabilities", None)
@@ -148,11 +167,18 @@ def get_daily(
                 factors = kline_sync.fetch_adj_factor_single(symbol)
         except Exception as e:  # noqa: BLE001
             logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors)
+        enriched = compute_enriched(raw, factors=factors, asset_type=_asset_type_for_symbol(symbol))
         rows = enriched.tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
         rows = _maybe_inject_live_candle(request, symbol, rows)
-        resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
+        resp = {
+            "symbol": symbol,
+            "name": stock_name,
+            "stock_info": stock_info,
+            "rows": rows,
+            "source": "live",
+            "adjustment": _adjustment_label(symbol),
+        }
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
@@ -160,7 +186,14 @@ def get_daily(
     # 追加/覆盖今日实时蜡烛
     rows = _maybe_inject_live_candle(request, symbol, rows)
 
-    resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
+    resp = {
+        "symbol": symbol,
+        "name": stock_name,
+        "stock_info": stock_info,
+        "rows": rows,
+        "source": "enriched",
+        "adjustment": _adjustment_label(symbol),
+    }
     return _attach_ext(resp, repo, symbol, ext_columns)
 
 
