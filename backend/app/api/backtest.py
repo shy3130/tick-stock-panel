@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import queue
 import threading
 from dataclasses import asdict
@@ -22,6 +23,7 @@ from app.services.backtest import (
 )
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
+logger = logging.getLogger(__name__)
 
 FACTOR_DEFAULT_DAYS = 180
 STRATEGY_DEFAULT_DAYS = 365 * 3
@@ -172,7 +174,24 @@ def factor_run(req: FactorBacktestRequest, request: Request):
         slippage_bps=req.slippage_bps,
     )
     result = svc.run(cfg)
+    _save_strategy_run_card(request, result)
     return asdict(result)
+
+
+def _save_strategy_run_card(request: Request, result) -> None:
+    try:
+        from app.services.research_registry import ResearchStore
+
+        data_dir = request.app.state.repo.store.data_dir
+        ResearchStore(data_dir).save_run_card(
+            run_id=result.run_id,
+            kind="strategy",
+            config=result.config,
+            strategy_def=result.strategy_info,
+            stats=result.stats,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("save strategy run_card failed: %s", e)
 
 
 # ================================================================
@@ -471,4 +490,3 @@ async def strategy_cancel(request: Request):
         job.cancel_event.set()
         return {"ok": True}
     return {"ok": False, "message": "任务不存在或已完成"}
-
