@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from app.jobs import daily_pipeline
 from app.jobs.daily_pipeline import _latest_enriched_date
 from app.services import preferences
-from app.tickflow.capabilities import CapabilitySet
+from app.capabilities import CapabilitySet
 
 
 def test_latest_enriched_date_uses_partition_names(tmp_path):

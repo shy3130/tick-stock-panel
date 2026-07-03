@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import polars as pl
 
 from app.api import indices
-from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.capabilities import Cap, CapabilityLimits, CapabilitySet
 
 
 class FakeRepo:

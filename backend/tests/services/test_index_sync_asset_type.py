@@ -3,7 +3,7 @@ from datetime import datetime
 import polars as pl
 
 from app.services import index_sync
-from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.capabilities import Cap, CapabilityLimits, CapabilitySet
 
 
 class FakeProvider:

@@ -21,7 +21,7 @@ import yaml
 from app.config import settings
 from app import secrets_store
 
-from .capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.capabilities import Cap, CapabilityLimits, CapabilitySet
 
 logger = logging.getLogger(__name__)
 

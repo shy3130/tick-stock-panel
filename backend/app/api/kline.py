@@ -156,7 +156,7 @@ def get_daily(
         factors = pl.DataFrame()
         capset = getattr(request.app.state, "capabilities", None)
         try:
-            from app.tickflow.capabilities import Cap
+            from app.capabilities import Cap
             if capset and capset.has(Cap.ADJ_FACTOR):
                 factors = kline_sync.fetch_adj_factor_single(symbol)
         except Exception as e:  # noqa: BLE001
@@ -473,7 +473,7 @@ async def sync_minute(request: Request):
     from app.services.pipeline_jobs import job_store
     from app.api.data import invalidate_storage_cache
     from app.services.preferences import get_minute_sync_days
-    from app.tickflow.capabilities import Cap
+    from app.capabilities import Cap
 
     repo = request.app.state.repo
     capset = request.app.state.capabilities
@@ -564,7 +564,7 @@ async def extend_history(request: Request):
         repo = request.app.state.repo
         capset = request.app.state.capabilities
 
-        from app.tickflow.capabilities import Cap
+        from app.capabilities import Cap
         if not capset.has(Cap.KLINE_DAILY_BATCH):
             raise HTTPException(status_code=403, detail="当前数据源不支持批量日K")
 
@@ -715,7 +715,7 @@ async def extend_minute_history(request: Request):
         repo = request.app.state.repo
         capset = request.app.state.capabilities
 
-        from app.tickflow.capabilities import Cap
+        from app.capabilities import Cap
         if not capset.has(Cap.KLINE_MINUTE_BATCH):
             raise HTTPException(status_code=403, detail="当前数据源不支持批量分钟K")
 
@@ -776,7 +776,7 @@ async def extend_minute_history(request: Request):
                 universe = _resolve_minute_universe(capset, repo)
                 progress("extend_minute", 8, f"标的池: {len(universe)} 只")
 
-                from app.tickflow.capabilities import Cap
+                from app.capabilities import Cap
 
                 lim = capset.limits(Cap.KLINE_MINUTE_BATCH)
                 batch_size = lim.batch if lim and lim.batch else 100
@@ -860,7 +860,7 @@ async def extend_minute_history(request: Request):
 
 def _resolve_minute_universe(capset, repo) -> list[str]:
     """分钟K标的池解析。"""
-    from app.tickflow.capabilities import Cap
+    from app.capabilities import Cap
     if capset.has(Cap.KLINE_MINUTE_BATCH):
         provider_name = "tickflow"
         try:

@@ -22,7 +22,7 @@ from app.indicators.pipeline import run_pipeline, run_pipeline_local
 from app.config import settings
 from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
 from app.services.data_mode import is_local_daily_mode
-from app.tickflow.capabilities import Cap, CapabilitySet
+from app.capabilities import Cap, CapabilitySet
 from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)

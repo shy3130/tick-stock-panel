@@ -26,7 +26,7 @@ import polars as pl
 from app.config import settings
 from app.services import kline_sync
 from app.services.pipeline_jobs import job_store
-from app.tickflow.capabilities import Cap, CapabilitySet
+from app.capabilities import Cap, CapabilitySet
 from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)

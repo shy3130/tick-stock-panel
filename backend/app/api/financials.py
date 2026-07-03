@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.services.financial_sync import get_financial_df
 from app.services.financial_analyzer import analyze_financials_stream
 from app.services import ai_reports
-from app.tickflow.capabilities import Cap
+from app.capabilities import Cap
 
 logger = logging.getLogger(__name__)
 

@@ -277,7 +277,7 @@ app.include_router(trade_journal.router)
 # 若不注册 handler 会冒泡成 500 Internal Server Error,对前端不友好且语义错误。
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from app.tickflow.capabilities import CapabilityDenied
+from app.capabilities import CapabilityDenied
 
 
 @app.exception_handler(CapabilityDenied)

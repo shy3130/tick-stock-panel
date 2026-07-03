@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.kline import extend_minute_history
-from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.capabilities import Cap, CapabilityLimits, CapabilitySet
 
 
 class _Request:

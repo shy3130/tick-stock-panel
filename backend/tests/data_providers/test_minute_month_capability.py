@@ -1,6 +1,6 @@
 from app.data_providers.base import ProviderCapabilities
 from app.tickflow import policy
-from app.tickflow.capabilities import Cap
+from app.capabilities import Cap
 
 
 class _Provider:

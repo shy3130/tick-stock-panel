@@ -8,7 +8,7 @@ import asyncio
 import time
 from dataclasses import dataclass
 
-from .capabilities import Cap, CapabilitySet
+from app.capabilities import Cap, CapabilitySet
 
 
 @dataclass

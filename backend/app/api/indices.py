@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
 from app.services import index_sync, kline_sync
-from app.tickflow.capabilities import Cap
+from app.capabilities import Cap
 
 logger = logging.getLogger(__name__)
 

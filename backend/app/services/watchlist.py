@@ -11,7 +11,7 @@ from pathlib import Path
 import polars as pl
 
 from app.config import settings
-from app.tickflow.capabilities import Cap, CapabilitySet
+from app.capabilities import Cap, CapabilitySet
 
 logger = logging.getLogger(__name__)
 

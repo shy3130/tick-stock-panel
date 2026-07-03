@@ -19,7 +19,7 @@ from typing import Any
 import polars as pl
 
 from app.data_providers.registry import get_active_provider_name, get_provider
-from app.tickflow.capabilities import Cap, CapabilitySet
+from app.capabilities import Cap, CapabilitySet
 
 logger = logging.getLogger(__name__)
 

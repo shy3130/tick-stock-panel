@@ -272,7 +272,7 @@ class DepthService:
         """调 provider.get_depth, 按 capset 的 batch 切片 + 节流。返回 {symbol: MarketDepth}。"""
         provider = _get_data_provider()
         capset = self._get_capset()
-        lim = capset.limits(__import__("app.tickflow.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
+        lim = capset.limits(__import__("app.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
         batch_size = (lim.batch if lim and lim.batch else 100)
         rpm = (lim.rpm if lim and lim.rpm else 30)
         # 批间隔 = 60/rpm(匀速)
@@ -486,7 +486,7 @@ class DepthService:
         """
         from app.services import preferences
         capset = self._get_capset()
-        lim = capset.limits(__import__("app.tickflow.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
+        lim = capset.limits(__import__("app.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
         batch_size = (lim.batch if lim and lim.batch else 100)
         rpm = (lim.rpm if lim and lim.rpm else 30)
 
@@ -578,7 +578,7 @@ class DepthService:
             return True
         # TickFlow SDK 套餐检查(Pro+ 才有 DEPTH5_BATCH)
         capset = self._get_capset()
-        from app.tickflow.capabilities import Cap
+        from app.capabilities import Cap
         return capset.has(Cap.DEPTH5_BATCH)
 
     @staticmethod
