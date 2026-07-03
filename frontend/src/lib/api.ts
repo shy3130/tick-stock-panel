@@ -172,7 +172,7 @@ export interface AiStockReport {
 
 // ===== Kline =====
 export interface MinuteKlineRow {
-  datetime: string
+  datetime: string | null
   open: number
   high: number
   low: number

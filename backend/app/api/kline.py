@@ -419,7 +419,7 @@ def get_minute(
         df = kline_sync.fetch_minute_single(symbol, trade_date)
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-            "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
+            "date": str(trade_date), "rows": _minute_rows(df, trade_date), "source": "live",
         }
 
     df = repo.get_minute(symbol, trade_date)
@@ -447,16 +447,30 @@ def get_minute(
     if is_complete:
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-            "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
+            "date": str(trade_date), "rows": _minute_rows(df, trade_date), "source": "local",
         }
 
     # 本地不完整或无数据 → 从当前 provider 拉取
     live_df = kline_sync.fetch_minute_single(symbol, trade_date)
     return {
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-        "date": str(trade_date), "rows": live_df.to_dicts(),
+        "date": str(trade_date), "rows": _minute_rows(live_df, trade_date),
         "source": "live" if not live_df.is_empty() else "none",
     }
+
+
+def _minute_rows(df, trade_date: date) -> list[dict]:
+    """Serialize minute rows and repair missing timestamps from row order."""
+    if df is None or df.is_empty():
+        return []
+    from app.data_providers.fquant.mapping import generated_minute_time
+
+    rows = df.to_dicts()
+    date_str = trade_date.strftime("%Y%m%d")
+    for i, row in enumerate(rows):
+        if row.get("datetime") is None:
+            row["datetime"] = generated_minute_time(i, date_str)
+    return rows
 
 
 @router.post("/sync")

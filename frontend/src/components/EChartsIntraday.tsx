@@ -28,7 +28,8 @@ interface Props {
   showAvgLine?: boolean
 }
 
-function fmtTime(dt: string): string {
+function fmtTime(dt: string | null | undefined): string | null {
+  if (!dt) return null
   const match = dt.match(/(\d{2}):(\d{2})/)
   if (!match) return dt.slice(11, 16)
   const h = (parseInt(match[1]) + 8) % 24
@@ -120,6 +121,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   const volNeutral = 'rgba(161,161,170,0.5)'
   for (let i = 0; i < data.length; i++) {
     const timeKey = fmtTime(data[i].datetime)
+    if (!timeKey) continue
     const idx = timeIndexMap.get(timeKey)
     if (idx !== undefined) {
       closes[idx] = data[i].close
@@ -487,6 +489,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
       const mapping = new Map<number, number>()
       for (let i = 0; i < data.length; i++) {
         const timeKey = fmtTime(data[i].datetime)
+        if (!timeKey) continue
         const fullDayIdx = timeIndexMap.get(timeKey)
         if (fullDayIdx !== undefined) {
           mapping.set(fullDayIdx, i)
