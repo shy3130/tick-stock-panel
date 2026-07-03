@@ -21,38 +21,10 @@ def search_instruments(
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
 ):
-    """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。"""
-    repo = request.app.state.repo
-    df = repo.get_instruments()
-    if df.is_empty() or not q.strip():
-        return {"results": []}
+    """模糊搜索标的 (本地 instruments 优先, Eastmoney suggest 只补足缺口)。"""
+    from app.services.symbol_search import search_symbols
 
-    keyword = q.strip().upper()
-    import polars as pl
-
-    # code/symbol 前缀优先，再 name 包含匹配
-    prefix_mask = (
-        pl.col("code").str.starts_with(keyword)
-        | pl.col("symbol").str.to_uppercase().str.starts_with(keyword)
-    )
-    contains_mask = (
-        pl.col("code").str.contains(keyword, literal=True)
-        | pl.col("symbol").str.to_uppercase().str.contains(keyword, literal=True)
-        | pl.col("name").str.contains(keyword, literal=True)
-    )
-
-    # 前缀匹配优先，剩余名额用包含匹配补充
-    prefix_hits = df.filter(prefix_mask).head(limit)
-    if prefix_hits.height >= limit:
-        matched = prefix_hits
-    else:
-        remaining = limit - prefix_hits.height
-        # 排除已匹配的 symbol
-        prefix_symbols = set(prefix_hits["symbol"].to_list()) if not prefix_hits.is_empty() else set()
-        contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(prefix_symbols)).head(remaining)
-        matched = pl.concat([prefix_hits, contain_hits]) if not prefix_hits.is_empty() else contain_hits
-    rows = matched.select(["symbol", "name", "code"]).to_dicts()
-    return {"results": rows}
+    return {"results": search_symbols(request.app.state.repo, q, limit)}
 
 
 @router.post("/instruments/names")
