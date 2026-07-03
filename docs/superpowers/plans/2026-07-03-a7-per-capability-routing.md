@@ -1,6 +1,6 @@
 # A7：provider capability 路由补全（financial / depth）实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框语法来跟踪进度。
 
 **目标：** 补齐审计 High-3：`financial` 与 `depth` 两条能力目前跟随全局 provider（`get_active_provider_name()` 无参调用），无法像 daily/minute/realtime/adj_factor 那样独立切源。补全后 per-capability 混源配置完整。
 
@@ -8,7 +8,9 @@
 
 **技术栈：** Python 3.12。测试 `cd backend && uv run --extra dev pytest`。
 
-**现状证据：**
+**落地状态（2026-07-03）：** 已完成。`registry.get_active_provider_name()` 支持 `financial/depth` capability；`preferences.set_data_provider()` 级联写入 `financial_data_provider/depth_data_provider`；`financial_sync` 和 `depth_service` 分别按 `financial` / `depth` 解析 provider；`GET /api/settings/preferences` 与前端 `Preferences` 类型暴露这两个字段。
+
+**原始现状证据：**
 - `registry.get_active_provider_name(capability)` 已支持 `daily`、`minute`、`realtime`、`adj_factor`，但 `financial`、`depth` 仍缺 capability 分支。
 - `financial_sync._get_data_provider()` 当前无参解析 active provider，导致财务无法独立跟随 financial capability 偏好。
 - `depth_service` 目前借用 `kline_sync._get_data_provider`，实际按日线 capability/全局 provider 走；这会让 depth 的缺口和路由语义混在一起。
@@ -26,7 +28,7 @@
 | `backend/app/data_providers/registry.py:36-45` | capability→provider 解析 | 增 financial/depth 分支 |
 | `backend/app/services/financial_sync.py:58` | 财务 provider 单例 | 带 capability 参数 |
 | `backend/app/services/depth_service.py` | 盘口 provider | 独立解析（不再借 kline_sync 的） |
-| `backend/tests/data_providers/test_registry_financial_depth.py` | 路由单测 | 创建 |
+| `backend/tests/data_providers/test_registry.py` | 路由单测 | 扩展 |
 
 ---
 
@@ -37,7 +39,7 @@
 - 修改：`backend/app/data_providers/registry.py`
 - 测试：`backend/tests/data_providers/test_registry_financial_depth.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 ```python
 # backend/tests/data_providers/test_registry_financial_depth.py
@@ -65,12 +67,12 @@ def test_env_override_still_wins(monkeypatch):
     assert registry.get_active_provider_name("financial") == "fquant_local"
 ```
 
-- [ ] **步骤 2：运行验证失败**
+- [x] **步骤 2：运行验证失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/data_providers/test_registry_financial_depth.py -v`
 预期：FAIL，`AttributeError: ... no attribute 'get_financial_data_provider'`
 
-- [ ] **步骤 3：preferences 补 getter + 级联**
+- [x] **步骤 3：preferences 补 getter + 级联**
 
 `backend/app/services/preferences.py`，紧跟 `get_realtime_data_provider`（142 行后）：
 
@@ -90,7 +92,7 @@ def get_depth_data_provider() -> str:
         "depth_data_provider": provider,
 ```
 
-- [ ] **步骤 4：registry 补分支**
+- [x] **步骤 4：registry 补分支**
 
 `backend/app/data_providers/registry.py` `get_active_provider_name` 中，`realtime` 分支之后追加：
 
@@ -101,7 +103,7 @@ def get_depth_data_provider() -> str:
             return normalize_provider_name(preferences.get_depth_data_provider())
 ```
 
-- [ ] **步骤 5：运行测试验证通过 + Commit**
+- [x] **步骤 5：运行测试验证通过 + Commit**
 
 ```bash
 cd backend && uv run --extra dev pytest tests/data_providers/test_registry_financial_depth.py -v
@@ -115,7 +117,7 @@ git add -A && git commit -m "feat(provider): per-capability routing for financia
 **文件：**
 - 修改：`backend/app/services/financial_sync.py:58`
 
-- [ ] **步骤 1：改单例解析**
+- [x] **步骤 1：改单例解析**
 
 `_get_data_provider()` 内 `provider_name = get_active_provider_name()` 改为：
 
@@ -125,7 +127,7 @@ git add -A && git commit -m "feat(provider): per-capability routing for financia
 
 docstring 的"默认 tickflow"描述同步更新为"按 financial capability 偏好解析"。
 
-- [ ] **步骤 2：单例失效问题确认**
+- [x] **步骤 2：单例失效问题确认**
 
 `_provider_instance` 是模块级缓存；切换偏好后需重置。确认 `app/api/settings.py:318` `_reset_data_provider_singletons()` 是否覆盖 `financial_sync._provider_instance`——若没有，加上：
 
@@ -134,7 +136,7 @@ docstring 的"默认 tickflow"描述同步更新为"按 financial capability 偏
     financial_sync._provider_instance = None
 ```
 
-- [ ] **步骤 3：全量测试 + Commit** `git commit -am "feat(provider): financial_sync resolves provider by financial capability"`
+- [x] **步骤 3：全量测试 + Commit** `git commit -am "feat(provider): financial_sync resolves provider by financial capability"`
 
 ---
 
@@ -143,7 +145,7 @@ docstring 的"默认 tickflow"描述同步更新为"按 financial capability 偏
 **文件：**
 - 修改：`backend/app/services/depth_service.py:37,273`
 
-- [ ] **步骤 1：** 删 `from app.services.kline_sync import _get_data_provider`（37 行），改为本模块内：
+- [x] **步骤 1：** 删 `from app.services.kline_sync import _get_data_provider`（37 行），改为本模块内：
 
 ```python
 def _get_data_provider():
@@ -153,6 +155,6 @@ def _get_data_provider():
 
 （不做模块级缓存——depth 调用频度低，每次解析开销可忽略，还省掉单例失效问题。）
 
-- [ ] **步骤 2：** 全量测试 + 手动验证：`DATA_PROVIDER` 未设、preferences 里 depth 独立设为 fquant_local 时，`_has_capability()` 返回 False（fquant 无 depth）且日志打出 provider 名。
+- [x] **步骤 2：** 全量测试 + 手动验证：`DATA_PROVIDER` 未设、preferences 里 depth 独立设为 fquant_local 时，`_has_capability()` 返回 False（fquant 无 depth）且日志打出 provider 名。
 
-- [ ] **步骤 3：Commit** `git commit -am "feat(provider): depth_service resolves provider by depth capability"`
+- [x] **步骤 3：Commit** `git commit -am "feat(provider): depth_service resolves provider by depth capability"`

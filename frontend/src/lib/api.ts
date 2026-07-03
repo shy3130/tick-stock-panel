@@ -647,6 +647,8 @@ export interface Preferences {
   adj_factor_provider?: string
   minute_data_provider?: string
   realtime_data_provider?: string
+  financial_data_provider?: string
+  depth_data_provider?: string
   realtime_watchlist_symbols?: string[]
   realtime_pull_stock?: boolean
   realtime_pull_etf?: boolean

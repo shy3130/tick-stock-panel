@@ -198,6 +198,8 @@ def get_preferences() -> dict:
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),
+        "financial_data_provider": preferences.get_financial_data_provider(),
+        "depth_data_provider": preferences.get_depth_data_provider(),
         "realtime_watchlist_symbols": preferences.get_realtime_watchlist_symbols(),
         **preferences.get_realtime_quote_scope(),
         "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
