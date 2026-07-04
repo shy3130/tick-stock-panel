@@ -128,6 +128,73 @@ def run(req: BacktestRequest, request: Request):
 
 
 # ================================================================
+# 组合优化器 (P3)
+# ================================================================
+
+class OptimizeRequest(BaseModel):
+    symbols: list[str] = Field(..., min_length=1)
+    method: Literal[
+        "equal", "equal_vol", "risk_parity",
+        "mean_variance", "max_diversification", "score_weight",
+    ] = "risk_parity"
+    lookback_days: int = Field(120, ge=20, le=1000)
+
+
+@router.post("/optimize")
+def optimize(req: OptimizeRequest, request: Request):
+    """组合优化器：给一组标的算配置权重（支持 A股 + ETF）。"""
+    import numpy as np
+
+    from app.backtest.optimizers import portfolio_weights
+    from app.backtest.portfolio import load_price_matrix, momentum_from_prices, returns_from_prices
+
+    repo = request.app.state.repo
+    end = date.today()
+    start = end - timedelta(days=req.lookback_days)
+
+    prices, kept = load_price_matrix(repo, req.symbols, start, end)
+    if len(kept) < 2:
+        raise HTTPException(status_code=400, detail="有效标的不足 2 只（数据缺失、港股或标的过少）")
+    if prices.shape[0] < 2:
+        raise HTTPException(status_code=400, detail="标的间共同交易日不足，无法估计收益/协方差")
+
+    rets = returns_from_prices(prices)
+    scores = momentum_from_prices(prices) if req.method == "score_weight" else None
+    weights_arr = np.asarray(portfolio_weights(rets, req.method, scores), dtype=float)
+
+    stats = {"n": len(kept), "annualized_vol": None, "diversification_ratio": None}
+    clean = rets[np.isfinite(rets).all(axis=1)] if rets.size else rets
+    if clean.shape[0] >= 2:
+        cov = np.atleast_2d(np.cov(clean, rowvar=False))
+        port_vol = float(np.sqrt(max(float(weights_arr @ cov @ weights_arr), 0.0)))
+        vol = np.sqrt(np.maximum(np.diag(cov), 1e-12))
+        stats["annualized_vol"] = round(port_vol * float(np.sqrt(252)), 6)
+        if port_vol > 0:
+            stats["diversification_ratio"] = round(float(weights_arr @ vol) / port_vol, 4)
+
+    name_map: dict[str, str] = {}
+    try:
+        inst = repo.get_instruments()
+        if inst is not None and not inst.is_empty() and {"symbol", "name"} <= set(inst.columns):
+            name_map = dict(zip(inst["symbol"].to_list(), inst["name"].to_list()))
+    except Exception:  # noqa: BLE001
+        pass
+
+    dropped = [symbol for symbol in req.symbols if symbol not in kept]
+    weights = [
+        {"symbol": symbol, "name": name_map.get(symbol), "weight": round(float(weights_arr[i]), 6)}
+        for i, symbol in enumerate(kept)
+    ]
+    return {
+        "weights": weights,
+        "stats": stats,
+        "method": req.method,
+        "lookback_days": req.lookback_days,
+        "meta": {"kept": kept, "dropped": dropped},
+    }
+
+
+# ================================================================
 # 因子回测
 # ================================================================
 
