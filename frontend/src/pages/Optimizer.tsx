@@ -25,6 +25,7 @@ export function Optimizer() {
   const [lookback, setLookback] = useState(120)
   const [result, setResult] = useState<OptimizeResult | null>(null)
 
+  const strategies = useQuery({ queryKey: ['opt-strategies'], queryFn: api.screenerStrategies })
   const search = useQuery({
     queryKey: ['optimizer-search', query],
     queryFn: () => api.instrumentSearch(query, 10),
@@ -34,6 +35,18 @@ export function Optimizer() {
   const run = useMutation({
     mutationFn: () => api.optimize({ symbols: symbols.map(s => s.symbol), method, lookback_days: lookback }),
     onSuccess: setResult,
+  })
+  const importFromStrategy = useMutation({
+    mutationFn: (id: string) => api.screenerRunPreset(id),
+    onSuccess: (res) => {
+      const picked = (res.rows ?? [])
+        .map((row: any) => ({ symbol: row.symbol as string, name: row.name as string | undefined }))
+        .filter(row => row.symbol)
+      setSymbols(prev => {
+        const seen = new Set(prev.map(row => row.symbol))
+        return [...prev, ...picked.filter(row => !seen.has(row.symbol))].slice(0, 50)
+      })
+    },
   })
 
   const addSymbol = (symbol: string, name?: string) => {
@@ -82,6 +95,20 @@ export function Optimizer() {
               </button>
             </span>
           ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            disabled={importFromStrategy.isPending}
+            onChange={e => {
+              if (e.target.value) importFromStrategy.mutate(e.target.value)
+              e.target.value = ''
+            }}
+            className="h-7 px-2 rounded-input border border-border bg-elevated text-xs"
+          >
+            <option value="">从策略导入标的…</option>
+            {strategies.data?.presets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          {importFromStrategy.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />}
         </div>
         <div className="relative">
           <input
