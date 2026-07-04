@@ -23,8 +23,9 @@ export function Agent() {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (streaming) return
     saveAgentChat(msgs.map(m => ({ role: m.role, content: m.content })))
-  }, [msgs])
+  }, [msgs, streaming])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -34,10 +35,11 @@ export function Agent() {
     const text = input.trim()
     if (!text || streaming) return
 
-    const history: AgentMsg[] = [
+    const fullHistory: AgentMsg[] = [
       ...msgs.map(m => ({ role: m.role, content: m.content })),
       { role: 'user', content: text },
     ]
+    const history = fullHistory.slice(-50)
     setMsgs(prev => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', tools: [] }])
     setInput('')
     setStreaming(true)
@@ -45,20 +47,28 @@ export function Agent() {
     try {
       for await (const evt of api.agentStream(history, profileId)) {
         setMsgs(prev => {
-          const next = [...prev]
-          const last = next[next.length - 1]
+          const lastIdx = prev.length - 1
+          const last = prev[lastIdx]
           if (last?.role !== 'assistant') return prev
 
-          if (evt.type === 'delta') last.content += evt.content
-          else if (evt.type === 'tool_call') last.tools = [...(last.tools ?? []), { name: evt.name, args: evt.args }]
-          else if (evt.type === 'tool_result') {
-            const tools = [...(last.tools ?? [])]
-            const index = tools.map(t => t.name).lastIndexOf(evt.name)
-            if (index >= 0) tools[index] = { ...tools[index], result: evt.result }
-            last.tools = tools
+          const nextLast: ChatMsg = { ...last, tools: last.tools ? [...last.tools] : [] }
+          if (evt.type === 'delta') {
+            nextLast.content += evt.content
+          } else if (evt.type === 'tool_call') {
+            nextLast.tools = [...(nextLast.tools ?? []), { name: evt.name, args: evt.args }]
+          } else if (evt.type === 'tool_result') {
+            const tools = [...(nextLast.tools ?? [])]
+            let idx = -1
+            for (let k = tools.length - 1; k >= 0; k--) {
+              if (tools[k].name === evt.name && tools[k].result === undefined) { idx = k; break }
+            }
+            if (idx >= 0) tools[idx] = { ...tools[idx], result: evt.result }
+            nextLast.tools = tools
           } else if (evt.type === 'error') {
-            last.content += `\n[错误] ${evt.message}`
+            nextLast.content += `\n[错误] ${evt.message}`
           }
+          const next = [...prev]
+          next[lastIdx] = nextLast
           return next
         })
       }
@@ -123,9 +133,13 @@ export function Agent() {
                   ))}
                 </div>
               )}
-              {m.content || (m.role === 'assistant' && streaming && i === msgs.length - 1 ? (
+              {m.content ? (
+                m.content
+              ) : m.role === 'assistant' && streaming && i === msgs.length - 1 ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
-              ) : null)}
+              ) : m.role === 'assistant' ? (
+                <span className="text-muted">(无回复)</span>
+              ) : null}
             </div>
           </div>
         ))}
@@ -136,7 +150,7 @@ export function Agent() {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
               send()
             }
