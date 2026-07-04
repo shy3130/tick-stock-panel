@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services import agent_tools
+from app.services.agent_loop import run_agent_stream
 from app.services.ai_provider import generate_ai_text
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -13,6 +15,11 @@ router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 class AgentChatIn(BaseModel):
     message: str
+    profile_id: str | None = None
+
+
+class AgentStreamIn(BaseModel):
+    messages: list[dict]
     profile_id: str | None = None
 
 
@@ -54,6 +61,22 @@ async def chat(req: AgentChatIn, request: Request) -> dict:
         {"role": "user", "content": "Tool result:\n" + json.dumps(result, ensure_ascii=False)},
     ], profile_id=req.profile_id, temperature=0.2, max_tokens=1600)
     return {"answer": answer, "tool": tool_req["tool"], "tool_result": result}
+
+
+@router.post("/stream")
+async def chat_stream(req: AgentStreamIn, request: Request):
+    if not req.messages:
+        raise HTTPException(status_code=400, detail="messages empty")
+
+    async def gen():
+        async for line in run_agent_stream(req.messages, request.app.state, req.profile_id):
+            yield line + "\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _parse_tool_request(text: str) -> dict | None:
