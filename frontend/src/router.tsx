@@ -21,6 +21,7 @@ import { Branding } from './pages/Branding'
 import { Settings } from './pages/Settings'
 import { Indices } from './pages/Indices'
 import { Optimizer } from './pages/Optimizer'
+import { Agent } from './pages/Agent'
 import { Dev } from './pages/Dev'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
@@ -83,6 +84,7 @@ export const router = createBrowserRouter([
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },
       { path: 'optimizer', element: <Optimizer /> },
+      { path: 'agent', element: <Agent /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）

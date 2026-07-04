@@ -42,6 +42,7 @@ import {
   CheckCircle2,
   BookOpenCheck,
   NotebookPen,
+  Bot,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -73,6 +74,7 @@ const nav = [
   { to: '/financials', label: '财务分析', icon: FileText },
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
+  { to: '/agent', label: 'AI 助手', icon: Bot },
   { to: '/journal', label: '交易复盘', icon: NotebookPen },
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/trading', label: '交易', icon: Cable },
