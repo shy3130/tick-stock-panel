@@ -1,6 +1,6 @@
 # P7.5 Agent 量化工具组 — 设计文档
 
-> 状态：panel 3 已评审一轮（Request Changes，2026-07-04），本版已按其 2 条 High + 4 条 Medium 逐条verify后修正。
+> 状态：panel 3 二次复核 **Approve**（2026-07-04），可转 writing-plans。
 
 ## 背景
 
@@ -74,9 +74,11 @@ P7.5 不依赖 P7.1~P7.4 中任何一个（不需要 session、不需要附件�
 - `pool: list[str]`（**必填**，`1 <= len(pool) <= 300`；为空/省略直接 `ValueError`——已与用户确认 `pool` 在本代码库里只是普通 symbol 列表，不是命名预设，`None` 等于无限制全市场扫描，`compose_factor_score` 比 `run_screener` 单纯列筛选重得多，必须显式加上限）
 - `as_of: date`（打分日，默认今天）
 - `lookback_days: int = 120`（用于计算各因子历史 IC 的回看窗口，`start = as_of - lookback_days`）
-- `top_n: int = 50`（返回排序后的前 N 只）
+- `top_n: int = 50`（返回排序后的前 N 只；夹到 `1 <= top_n <= len(pool)`，超出直接钳到边界值而非报错——避免负数/超大值这类无意义入参，panel 3 提醒）
 
-**⚠️ 修正（panel 3 评审 Medium-3，已verify属实）**：`FactorBacktestService.run()` 不只算 IC——固定还会跑分层回测（`_add_groups`/`_calc_group_nav`/`_calc_group_stats`）和多空组合（`_calc_long_short`）（`backend/app/backtest/factor.py:194-207`），每个 `factor_id` 跑一次这个完整流程再丢弃分层/多空结果、只取 `ic_mean`/`ic_std`，对 `factor_ids<=20` 的 agent 工具偏重。**已决定：在 `FactorBacktestService` 里新增一个轻量 `compute_ic_only(config) -> {ic_mean, ic_std, ir, ic_win_rate, error}` 方法**，只跑到"1. IC 分析"这一步（复用 `_calc_ic`，跳过分层和多空），`compose_factor_score` 改为调用这个新方法而不是完整 `run()`。这是本 spec 除 `compose_factor_score` 主算法外唯一的第二处新增后端代码。
+**⚠️ 修正（panel 3 评审 Medium-3，已verify属实）**：`FactorBacktestService.run()` 不只算 IC——固定还会跑分层回测（`_add_groups`/`_calc_group_nav`/`_calc_group_stats`）和多空组合（`_calc_long_short`）（`backend/app/backtest/factor.py:194-207`），每个 `factor_id` 跑一次这个完整流程再丢弃分层/多空结果、只取 `ic_mean`/`ic_std`，对 `factor_ids<=20` 的 agent 工具偏重。**已决定：在 `FactorBacktestService` 里新增一个轻量 `compute_ic_only(config) -> {ic_mean, ic_std, ir, ic_win_rate, error}` 方法**，只跑到"1. IC 分析"这一步，跳过分层和多空。
+
+**实现要点（panel 3 二次确认，2026-07-04）**：IC 分析之前的准备步骤——加载 panel、补算缺失因子列、过滤有效行、计算 `_next_return`——已经被封装在私有方法 `_load_factor_panel()`（`backend/app/backtest/factor.py:248-270`）里，分层/多空是在这之后才发生（`:194-207`）。所以 `compute_ic_only()` 最省事的实现就是直接复用 `_load_factor_panel()` 拿到处理好的 panel，再调 `_calc_ic()`，不需要重复造轮子，也不存在"跳过分层步骤会漏掉某个隐藏前置依赖"的风险（分层/多空在数据管道上完全是 IC 之后的下游）。`compose_factor_score` 改为调用这个新方法而不是完整 `run()`。这是本 spec 除 `compose_factor_score` 主算法外唯一的第二处新增后端代码。
 
 **算法**：
 1. 对每个 `factor_id`，构造 `FactorConfig(factor_name=factor_id, symbols=pool, start=as_of-lookback_days, end=as_of, rebalance="daily")`，跑 `FactorBacktestService(engine).compute_ic_only(config)`（新方法，见上）得到 `{ic_mean, ic_std, ir, ic_win_rate, error}`。
@@ -107,7 +109,7 @@ P7.5 不依赖 P7.1~P7.4 中任何一个（不需要 session、不需要附件�
 
 ## 测试与验证
 
-- `FactorBacktestService.compute_ic_only()` 新方法单测：与 `run()` 对同一 `FactorConfig` 算出的 `ic_mean`/`ic_std`/`ir`/`ic_win_rate` 一致（数值对拍），但不产出 `group_stats`/`long_short_stats`；覆盖数据不足时 `error` 非空的路径。
+- `FactorBacktestService.compute_ic_only()` 新方法单测：与 `run()` 对同一 `FactorConfig` 算出的 `ic_mean`/`ic_std`/`ir`/`ic_win_rate` 一致（数值对拍），但不产出 `group_stats`/`long_short_stats`；覆盖数据不足时 `error` 非空的路径。**对拍 fixture 要避免因子值出现 ties**（`_calc_ic()` 底层用 `rank(method="random")`，`backend/app/backtest/factor.py:299-301`，有 ties 时不同调用可能得到不同排名，逐值精确对拍会脆——用无 ties 的构造数据，或对最终 `ic_mean`/`ic_std` 结果加合理容差，panel 3 提醒）。
 - 后端单测：4 个工具的 `call_tool()` 分支各自的正常路径 + 边界路径：
   - `run_backtest`：symbols 为空/超20/日期超365 各自拒绝。
   - `optimize_portfolio`：symbols 为空/超50 拒绝；复用 P3 现有测试模式验证权重和≈1。
