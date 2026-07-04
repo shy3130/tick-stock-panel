@@ -138,3 +138,110 @@ def test_optimize_portfolio_tool_weights_sum_to_one():
     assert len(out["weights"]) == 3
     assert abs(sum(w["weight"] for w in out["weights"]) - 1.0) < 1e-5
     assert out["meta"]["kept"] == symbols
+
+
+def _factor_panel(symbols, n_days, factor_name):
+    import numpy as np
+    from datetime import date as _date, timedelta as _timedelta
+
+    rng = np.random.default_rng(11)
+    rows = []
+    for i, sym in enumerate(symbols):
+        price = 10.0 + i
+        for d in range(n_days):
+            price *= 1 + rng.normal(0, 0.01)
+            rows.append({
+                "symbol": sym,
+                "date": _date(2024, 1, 1) + _timedelta(days=d),
+                "close": round(price, 4),
+                factor_name: float(i) + d * 0.01,
+            })
+    return pl.DataFrame(rows)
+
+
+class _FakeFactorRepo:
+    pass
+
+
+def test_analyze_factor_tool_requires_symbols():
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="symbols"):
+        call_tool("analyze_factor", state, {"factor_name": "momentum_20d", "symbols": []})
+
+
+def test_analyze_factor_tool_rejects_wide_date_range():
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="date range"):
+        call_tool(
+            "analyze_factor",
+            state,
+            {
+                "factor_name": "momentum_20d",
+                "symbols": ["A"],
+                "start": "2020-01-01",
+                "end": "2024-01-01",
+            },
+        )
+
+
+def test_compare_factors_tool_rejects_too_many_factor_ids():
+    from app.backtest.factor_zoo import ALPHAS
+
+    ids_pool = list(ALPHAS)
+    factor_ids = (ids_pool * ((21 // len(ids_pool)) + 1))[:21]
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="factor_ids"):
+        call_tool("compare_factors", state, {"factor_ids": factor_ids, "symbols": ["A"]})
+
+
+def test_analyze_factor_tool_returns_ic_fields(monkeypatch):
+    from app.backtest import engine as engine_mod
+
+    panel = _factor_panel(["A", "B", "C"], 10, "momentum_20d")
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", lambda self, *a, **kw: panel)
+
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    out = call_tool(
+        "analyze_factor",
+        state,
+        {
+            "factor_name": "momentum_20d",
+            "symbols": ["A", "B", "C"],
+            "start": "2024-01-01",
+            "end": "2024-01-10",
+            "rebalance": "daily",
+        },
+    )
+
+    assert out["error"] is None
+    assert "ic_mean" in out
+
+
+def test_compare_factors_tool_rejects_unknown_factor():
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="unknown factor"):
+        call_tool("compare_factors", state, {"factor_ids": ["momentum_20d"], "symbols": ["A"]})
+
+
+def test_compare_factors_tool_returns_rows(monkeypatch):
+    from app.backtest import engine as engine_mod
+    from app.backtest.factor_zoo import ALPHAS
+
+    any_alpha = next(iter(ALPHAS))
+    panel = _factor_panel(["A", "B", "C"], 10, any_alpha)
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", lambda self, *a, **kw: panel)
+
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    out = call_tool(
+        "compare_factors",
+        state,
+        {
+            "factor_ids": [any_alpha],
+            "symbols": ["A", "B", "C"],
+            "start": "2024-01-01",
+            "end": "2024-01-10",
+        },
+    )
+
+    assert len(out["factors"]) == 1
+    assert out["factors"][0]["factor_id"] == any_alpha

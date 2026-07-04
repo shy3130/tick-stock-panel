@@ -67,6 +67,20 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"symbols": {"type": "array"}, "method": {"type": "string"}, "lookback_days": {"type": "integer"}}},
         "read_only": True,
     },
+    {
+        "name": "analyze_factor",
+        "description": "Run single-factor IC/IR analysis and layered backtest for a set of symbols.",
+        "input_schema": {"type": "object", "properties": {"factor_name": {"type": "string"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}, "n_groups": {"type": "integer"}, "rebalance": {"type": "string"}, "weight": {"type": "string"}}},
+        "parameters": {"type": "object", "properties": {"factor_name": {"type": "string"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}, "n_groups": {"type": "integer"}, "rebalance": {"type": "string"}, "weight": {"type": "string"}}},
+        "read_only": True,
+    },
+    {
+        "name": "compare_factors",
+        "description": "Compare multiple Alpha Zoo factors' IC/IR side by side (factor ids must exist in the Alpha Zoo).",
+        "input_schema": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}}},
+        "parameters": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}}},
+        "read_only": True,
+    },
 ]
 
 
@@ -173,6 +187,60 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         dropped = [s for s in symbols if s not in kept]
         weights = [{"symbol": s, "weight": round(float(weights_arr[i]), 6)} for i, s in enumerate(kept)]
         return _truncate({"weights": weights, "method": method, "lookback_days": lookback_days, "meta": {"kept": kept, "dropped": dropped}})
+    if name == "analyze_factor":
+        repo = _require(app_state, "repo")
+        from app.backtest.engine import BacktestEngine
+        from app.backtest.factor import FactorBacktestService, FactorConfig
+
+        symbols = _require_list(args, "symbols", 50)
+        factor_name = str(args.get("factor_name") or "").strip()
+        if not factor_name:
+            raise ValueError("factor_name required")
+        end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
+        start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=180)
+        if (end - start).days > 186:
+            raise ValueError("date range too wide (max 186 days)")
+
+        svc = FactorBacktestService(BacktestEngine(repo))
+        result = svc.run(FactorConfig(
+            factor_name=factor_name,
+            symbols=symbols,
+            start=start,
+            end=end,
+            n_groups=int(args.get("n_groups") or 5),
+            rebalance=args.get("rebalance") or "monthly",
+            weight=args.get("weight") or "equal",
+        ))
+        return _truncate(_plain(result))
+    if name == "compare_factors":
+        repo = _require(app_state, "repo")
+        from app.backtest.engine import BacktestEngine
+        from app.backtest.factor import FactorBacktestService, FactorConfig
+        from app.backtest.factor_zoo import ALPHAS
+
+        symbols = _require_list(args, "symbols", 50)
+        factor_ids = _require_list(args, "factor_ids", 20)
+        unknown = [x for x in factor_ids if x not in ALPHAS]
+        if unknown:
+            raise ValueError(f"unknown factor: {unknown[0]}")
+
+        end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
+        start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=180)
+        if (end - start).days > 186:
+            raise ValueError("date range too wide (max 186 days)")
+        svc = FactorBacktestService(BacktestEngine(repo))
+        out = []
+        for factor_id in factor_ids:
+            result = svc.run(FactorConfig(factor_name=factor_id, symbols=symbols, start=start, end=end))
+            out.append({
+                "factor_id": factor_id,
+                "coverage": result.n_symbols,
+                "n_dates": result.n_dates,
+                "ic_mean": result.ic_mean,
+                "ic_ir": result.ir,
+                "error": result.error,
+            })
+        return _truncate({"factors": out})
     raise ValueError(f"unknown agent tool: {name}")
 
 
