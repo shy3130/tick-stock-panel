@@ -218,6 +218,33 @@ class FactorBacktestService:
             n_dates=n_dates,
         )
 
+    def compute_ic_only(self, config: FactorConfig) -> dict:
+        """轻量 IC-only 计算：跳过分层回测和多空组合，只算 IC/IR。"""
+        panel = self._load_factor_panel(config)
+        if panel.is_empty():
+            return {"ic_mean": None, "ic_std": None, "ir": None, "ic_win_rate": None, "error": "无数据或因子列不可用"}
+
+        ic_df = self._calc_ic(panel, config.factor_name)
+        ic_values = [
+            float(row["ic"])
+            for row in ic_df.iter_rows(named=True)
+            if row["ic"] is not None and not np.isnan(float(row["ic"]))
+        ]
+        if not ic_values:
+            return {"ic_mean": None, "ic_std": None, "ir": None, "ic_win_rate": None, "error": "过滤后无有效数据"}
+
+        ic_mean = float(np.mean(ic_values))
+        ic_std = float(np.std(ic_values))
+        ir = (ic_mean / ic_std) if ic_std > 1e-8 else None
+        ic_win_rate = sum(1 for v in ic_values if v > 0) / len(ic_values)
+        return {
+            "ic_mean": round(ic_mean, 4),
+            "ic_std": round(ic_std, 4),
+            "ir": round(ir, 4) if ir is not None else None,
+            "ic_win_rate": round(ic_win_rate, 4),
+            "error": None,
+        }
+
     def random_control_ic(self, config: FactorConfig, n_runs: int = 20) -> dict:
         panel = self._load_factor_panel(config)
         if panel.is_empty():
