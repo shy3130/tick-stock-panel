@@ -245,3 +245,170 @@ def test_compare_factors_tool_returns_rows(monkeypatch):
 
     assert len(out["factors"]) == 1
     assert out["factors"][0]["factor_id"] == any_alpha
+
+
+def test_compose_factor_score_requires_pool():
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="pool"):
+        call_tool("compose_factor_score", state, {"factor_ids": ["momentum_20d"], "pool": []})
+
+
+def test_compose_factor_score_rejects_pool_over_300():
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="pool"):
+        call_tool(
+            "compose_factor_score",
+            state,
+            {
+                "factor_ids": ["momentum_20d"],
+                "pool": [f"{i:06d}.SZ" for i in range(301)],
+            },
+        )
+
+
+def test_compose_factor_score_rejects_unknown_factor():
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="unknown factor"):
+        call_tool("compose_factor_score", state, {"factor_ids": ["not_a_real_factor"], "pool": ["A"]})
+
+
+def test_compose_factor_score_rejects_non_list_pool():
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    with pytest.raises(ValueError, match="pool"):
+        call_tool("compose_factor_score", state, {"factor_ids": ["momentum_20d"], "pool": "000001.SZ"})
+
+
+def test_compose_factor_score_all_factors_excluded_returns_error(monkeypatch):
+    from app.backtest import engine as engine_mod
+
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", lambda self, *a, **kw: pl.DataFrame())
+
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    out = call_tool("compose_factor_score", state, {"factor_ids": ["momentum_20d"], "pool": ["A", "B"]})
+
+    assert out["error"] == "所有因子均无法计算，无法合成"
+    assert out["meta"]["excluded_factors"][0]["factor_id"] == "momentum_20d"
+
+
+def _combined_factor_panel(symbols, n_days, factor_names):
+    import numpy as np
+    from datetime import date as _date, timedelta as _timedelta
+
+    rng = np.random.default_rng(11)
+    rows = []
+    for i, sym in enumerate(symbols):
+        price = 10.0 + i
+        for d in range(n_days):
+            price *= 1 + rng.normal(0, 0.01)
+            row = {"symbol": sym, "date": _date(2024, 1, 1) + _timedelta(days=d), "close": round(price, 4)}
+            for j, fname in enumerate(factor_names):
+                row[fname] = float(i) + d * 0.01 + j * 100.0
+            rows.append(row)
+    return pl.DataFrame(rows)
+
+
+def test_compose_factor_score_ranks_by_composite(monkeypatch):
+    from app.backtest import engine as engine_mod
+
+    symbols = ["A", "B", "C"]
+    panel = _combined_factor_panel(symbols, 15, ["momentum_20d", "rsi_14"])
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", lambda self, *a, **kw: panel)
+
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    out = call_tool(
+        "compose_factor_score",
+        state,
+        {
+            "factor_ids": ["momentum_20d", "rsi_14"],
+            "pool": symbols,
+            "as_of": "2024-01-15",
+            "lookback_days": 14,
+            "top_n": 3,
+        },
+    )
+
+    assert "error" not in out or out.get("error") is None
+    assert len(out["ranked"]) == 3
+    assert set(out["meta"]["used_factors"]) <= {"momentum_20d", "rsi_14"}
+    scores = [r["composite_score"] for r in out["ranked"]]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_compose_factor_score_excludes_symbols_with_partial_factor_coverage(monkeypatch):
+    from app.backtest import engine as engine_mod
+
+    symbols = ["A", "B", "C"]
+    panel = _combined_factor_panel(symbols, 15, ["momentum_20d", "rsi_14"])
+    last_date = panel["date"].max()
+    panel = panel.with_columns(
+        pl.when((pl.col("symbol") == "B") & (pl.col("date") == last_date))
+        .then(pl.lit(None, dtype=pl.Float64))
+        .otherwise(pl.col("rsi_14"))
+        .alias("rsi_14")
+    )
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", lambda self, *a, **kw: panel)
+
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    out = call_tool(
+        "compose_factor_score",
+        state,
+        {
+            "factor_ids": ["momentum_20d", "rsi_14"],
+            "pool": symbols,
+            "as_of": "2024-01-15",
+            "lookback_days": 14,
+        },
+    )
+
+    assert "error" not in out or out.get("error") is None
+    ranked_symbols = {r["symbol"] for r in out["ranked"]}
+    assert ranked_symbols == {"A", "C"}
+    assert "B" in out["meta"]["uncovered_symbols"]
+
+
+def test_compose_factor_score_as_of_falls_back_to_latest_trading_day(monkeypatch):
+    from app.backtest import engine as engine_mod
+
+    symbols = ["A", "B", "C"]
+    panel = _combined_factor_panel(symbols, 15, ["momentum_20d"])
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", lambda self, *a, **kw: panel)
+
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    out = call_tool(
+        "compose_factor_score",
+        state,
+        {
+            "factor_ids": ["momentum_20d"],
+            "pool": symbols,
+            "as_of": "2024-01-20",
+            "lookback_days": 25,
+        },
+    )
+
+    assert "error" not in out or out.get("error") is None
+    assert out["meta"]["scored_date"] == "2024-01-15"
+    assert out["meta"]["as_of"] == "2024-01-20"
+
+
+def test_compose_factor_score_top_n_clamped_to_pool_size(monkeypatch):
+    from app.backtest import engine as engine_mod
+
+    symbols = ["A", "B", "C"]
+    panel = _combined_factor_panel(symbols, 15, ["momentum_20d"])
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", lambda self, *a, **kw: panel)
+
+    state = SimpleNamespace(repo=_FakeFactorRepo())
+    out = call_tool(
+        "compose_factor_score",
+        state,
+        {
+            "factor_ids": ["momentum_20d"],
+            "pool": symbols,
+            "as_of": "2024-01-15",
+            "lookback_days": 14,
+            "top_n": 99999,
+        },
+    )
+
+    assert "error" not in out or out.get("error") is None
+    assert len(out["ranked"]) == len(symbols)

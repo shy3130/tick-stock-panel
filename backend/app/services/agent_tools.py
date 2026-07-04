@@ -81,6 +81,13 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}}},
         "read_only": True,
     },
+    {
+        "name": "compose_factor_score",
+        "description": "Combine multiple factors into one IC-weighted composite score across a symbol pool, ranked descending.",
+        "input_schema": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "pool": {"type": "array"}, "as_of": {"type": "string"}, "lookback_days": {"type": "integer"}, "top_n": {"type": "integer"}}},
+        "parameters": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "pool": {"type": "array"}, "as_of": {"type": "string"}, "lookback_days": {"type": "integer"}, "top_n": {"type": "integer"}}},
+        "read_only": True,
+    },
 ]
 
 
@@ -241,6 +248,129 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
                 "error": result.error,
             })
         return _truncate({"factors": out})
+    if name == "compose_factor_score":
+        repo = _require(app_state, "repo")
+        import numpy as np
+
+        from app.backtest.engine import BacktestEngine
+        from app.backtest.factor import FACTOR_COLUMNS, FactorBacktestService, FactorConfig, _rank_average
+        from app.backtest.factor_zoo import ALPHAS
+
+        pool = _require_list(args, "pool", 300)
+        factor_ids = _require_list(args, "factor_ids", 20)
+        known_ids = {c["id"] for c in FACTOR_COLUMNS} | set(ALPHAS)
+        unknown = [x for x in factor_ids if x not in known_ids]
+        if unknown:
+            raise ValueError(f"unknown factor: {unknown[0]}")
+
+        as_of = date.fromisoformat(args["as_of"]) if args.get("as_of") else date.today()
+        lookback_days = max(20, min(500, int(args.get("lookback_days") or 120)))
+        start = as_of - timedelta(days=lookback_days)
+        top_n = max(1, min(int(args.get("top_n") or 50), len(pool)))
+
+        engine = BacktestEngine(repo)
+        svc = FactorBacktestService(engine)
+        candidates: list[dict] = []
+        excluded: list[dict] = []
+        for factor_id in factor_ids:
+            ic = svc.compute_ic_only(FactorConfig(factor_name=factor_id, symbols=pool, start=start, end=as_of, rebalance="daily"))
+            if ic["error"] is not None or ic["ic_mean"] is None or not ic["ic_std"]:
+                excluded.append({"factor_id": factor_id, "reason": ic["error"] or "IC 不可用"})
+                continue
+            ir = ic["ic_mean"] / ic["ic_std"]
+            candidates.append({"factor_id": factor_id, "ic_mean": ic["ic_mean"], "ir": ir, "sign": 1 if ic["ic_mean"] >= 0 else -1})
+
+        if not candidates:
+            return {"error": "所有因子均无法计算，无法合成", "meta": {"excluded_factors": excluded}}
+
+        panel_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "turnover_rate"]
+        for candidate in candidates:
+            if candidate["factor_id"] not in panel_columns:
+                panel_columns.append(candidate["factor_id"])
+        panel = engine.load_panel(pool, start, as_of, columns=panel_columns)
+        if panel.is_empty():
+            return {"error": "所选股票池在该日期范围内无可用行情数据"}
+
+        available_dates = [d for d in panel["date"].unique().to_list() if d <= as_of]
+        if not available_dates:
+            return {"error": "所选股票池在该日期范围内无可用行情数据"}
+        scored_date = max(available_dates)
+
+        factor_day_values: dict[str, dict[str, float]] = {}
+        survivors: list[dict] = []
+        for candidate in candidates:
+            factor_id = candidate["factor_id"]
+            source = panel if factor_id in panel.columns else FactorBacktestService._compute_missing_factor(panel, factor_id)
+            if factor_id not in source.columns:
+                excluded.append({"factor_id": factor_id, "reason": "因子列不可用"})
+                continue
+            day_slice = (
+                source.filter(pl.col("date") == scored_date)
+                .select(["symbol", factor_id])
+                .filter(pl.col(factor_id).is_not_null() & pl.col(factor_id).is_finite())
+            )
+            if day_slice.is_empty():
+                excluded.append({"factor_id": factor_id, "reason": "打分日无该因子有效值"})
+                continue
+            factor_day_values[factor_id] = dict(zip(day_slice["symbol"].to_list(), day_slice[factor_id].cast(pl.Float64).to_list()))
+            survivors.append(candidate)
+
+        if not survivors:
+            return {"error": "所有因子均无法计算，无法合成", "meta": {"excluded_factors": excluded}}
+
+        common_symbols = set(pool)
+        for candidate in survivors:
+            common_symbols &= set(factor_day_values[candidate["factor_id"]].keys())
+        uncovered = [s for s in pool if s not in common_symbols]
+        if not common_symbols:
+            return {
+                "error": "所选股票池在打分日没有任何标的同时覆盖所有可用因子",
+                "meta": {"excluded_factors": excluded, "uncovered_symbols": uncovered},
+            }
+
+        raw_weight_sum = sum(abs(candidate["ir"]) for candidate in survivors)
+        note = None
+        if raw_weight_sum == 0:
+            for candidate in survivors:
+                candidate["weight"] = 1.0 / len(survivors)
+            note = "IC全为0，已退化为等权"
+        else:
+            for candidate in survivors:
+                candidate["weight"] = abs(candidate["ir"]) / raw_weight_sum
+
+        symbols_sorted = sorted(common_symbols)
+        composite: dict[str, float] = {s: 0.0 for s in symbols_sorted}
+        per_factor: dict[str, dict[str, dict]] = {s: {} for s in symbols_sorted}
+        n = len(symbols_sorted)
+        for candidate in survivors:
+            factor_id = candidate["factor_id"]
+            values_map = factor_day_values[factor_id]
+            values = np.array([values_map[s] for s in symbols_sorted]) * candidate["sign"]
+            normalized = np.array([0.5]) if n == 1 else (_rank_average(values) - 1) / (n - 1)
+            for sym, norm_v in zip(symbols_sorted, normalized):
+                composite[sym] += candidate["weight"] * float(norm_v)
+                per_factor[sym][factor_id] = {
+                    "weight": round(candidate["weight"], 4),
+                    "ic_mean": candidate["ic_mean"],
+                    "rank_normalized_value": round(float(norm_v), 4),
+                }
+
+        ranked = sorted(
+            ({"symbol": sym, "composite_score": round(score, 6), "per_factor": per_factor[sym]} for sym, score in composite.items()),
+            key=lambda row: row["composite_score"],
+            reverse=True,
+        )[:top_n]
+        meta = {
+            "used_factors": [candidate["factor_id"] for candidate in survivors],
+            "excluded_factors": excluded,
+            "pool_size": len(pool),
+            "as_of": str(as_of),
+            "scored_date": str(scored_date),
+            "uncovered_symbols": uncovered,
+        }
+        if note:
+            meta["note"] = note
+        return _truncate({"ranked": ranked, "meta": meta})
     raise ValueError(f"unknown agent tool: {name}")
 
 
