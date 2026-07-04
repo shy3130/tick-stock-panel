@@ -34,12 +34,18 @@ def test_parse_tool_request_accepts_json_only():
 
 
 def test_list_strategies_tool_limits_shape():
-    strategy = SimpleNamespace(id="s1", name="策略1", source="builtin", tags=["x"])
-    state = SimpleNamespace(strategy_engine=SimpleNamespace(list_strategies=lambda: [strategy]))
+    strategies = [
+        {"id": "s1", "name": "策略1", "source": "builtin", "tags": ["x"]},
+        {"id": "s2"},
+    ]
+    state = SimpleNamespace(strategy_engine=SimpleNamespace(list_strategies=lambda: strategies))
 
     out = call_tool("list_strategies", state)
 
-    assert out == {"strategies": [{"id": "s1", "name": "策略1", "source": "builtin", "tags": ["x"]}]}
+    assert out == {"strategies": [
+        {"id": "s1", "name": "策略1", "source": "builtin", "tags": ["x"]},
+        {"id": "s2", "name": "s2", "source": "unknown", "tags": []},
+    ]}
 
 
 def test_get_kline_rejects_bad_symbol():

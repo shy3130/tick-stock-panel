@@ -73,11 +73,12 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         rows = []
         if engine is not None:
             for item in engine.list_strategies():
+                strategy_id = str(item.get("id") or "")
                 rows.append({
-                    "id": item.id,
-                    "name": item.name,
-                    "source": item.source,
-                    "tags": item.tags,
+                    "id": strategy_id,
+                    "name": item.get("name") or strategy_id,
+                    "source": item.get("source") or "unknown",
+                    "tags": item.get("tags") or [],
                 })
         return {"strategies": rows[:200]}
     if name == "get_kline":
