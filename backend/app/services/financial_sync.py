@@ -279,6 +279,7 @@ def _sync_forecast_from_eastmoney(data_dir: Path, capset: CapabilitySet) -> int:
 
     from app.services import eastmoney_client
 
+    frames: list[pl.DataFrame] = []
     for report_date in _recent_report_dates():
         rows = eastmoney_client.get_datacenter_paged(
             _EASTMONEY_DATACENTER,
@@ -300,16 +301,20 @@ def _sync_forecast_from_eastmoney(data_dir: Path, capset: CapabilitySet) -> int:
         df = _normalize_forecast_rows(rows)
         if df.is_empty():
             continue
-        out_dir = data_dir / "financials" / "forecast"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        df.write_parquet(out_dir / "part.parquet")
-        logger.info(
-            "sync_forecast eastmoney done: %d records for %s",
-            len(df),
-            report_date,
-        )
-        return len(df)
-    return 0
+        frames.append(df)
+    if not frames:
+        return 0
+
+    df = pl.concat(frames, how="diagonal_relaxed")
+    out_dir = data_dir / "financials" / "forecast"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(out_dir / "part.parquet")
+    logger.info(
+        "sync_forecast eastmoney done: %d records across %d report dates",
+        len(df),
+        len(frames),
+    )
+    return len(df)
 
 
 def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:

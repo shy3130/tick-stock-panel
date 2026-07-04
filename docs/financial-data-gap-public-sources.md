@@ -116,7 +116,7 @@ AKShare HTTP 服务：
 2. **短期补源：复用现有 Eastmoney datacenter-web 客户端**
    - 目标：补 `forecast`。
    - 理由：项目已有 `eastmoney_client` 的域名 allowlist、翻页和节流能力，且 `datacenter-web.eastmoney.com` 已在 allowlist；不需要新增依赖或扩域名。
-   - 状态：`sync_forecast` 在 fstore 为空时回退 `RPT_PUBLIC_OP_NEWPREDICT`，落 `data/financials/forecast/`，待提交。
+   - 状态：`sync_forecast` 在 fstore 为空时回退 `RPT_PUBLIC_OP_NEWPREDICT`，按最近闭合季度列表合并写入 `data/financials/forecast/`，待提交。
    - 风险：非官方接口会变；需要缓存和失败降级。
 
 3. **后续独立适配：三大报表 / F10 / 港美股**
@@ -144,7 +144,7 @@ AKShare HTTP 服务：
 现有 `financial_sync` 主链路已把 `quick` / `forecast` 加入 `FINANCIAL_TABLES` 和 `_PROVIDER_TABLE_MAP`，本地 parquet 可以复用已有 fstore provider 源（待提交）。
 
 - `quick`：先从 fstore `financial_report_quick` 同步；覆盖不足再用 Eastmoney datacenter 补缺。
-- `forecast`：fstore `financial_report_forecast` 当前为空，已用 Eastmoney datacenter-web `RPT_PUBLIC_OP_NEWPREDICT` fallback 回填。
+- `forecast`：fstore `financial_report_forecast` 当前为空，已用 Eastmoney datacenter-web `RPT_PUBLIC_OP_NEWPREDICT` fallback 多报告期回填。
 - `metrics`：优先继续从 fstore `annual` 补；缺失标的再走公开源。
 
 三大报表暂不从公开网页重抓，除非确认 fstore 覆盖无法继续补齐。

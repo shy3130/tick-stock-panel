@@ -23,18 +23,18 @@ def test_sync_forecast_falls_back_to_eastmoney(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         financial_sync,
         "_recent_report_dates",
-        lambda today=None: ["2026-06-30"],
+        lambda today=None: ["2026-06-30", "2026-03-31"],
     )
 
     def fake_get_datacenter_paged(url, params, max_pages=20):
         assert url == financial_sync._EASTMONEY_DATACENTER
         assert params["reportName"] == "RPT_PUBLIC_OP_NEWPREDICT"
-        assert "REPORT_DATE='2026-06-30'" in params["filter"]
+        report_date = "2026-06-30" if "REPORT_DATE='2026-06-30'" in params["filter"] else "2026-03-31"
         return [{
             "SECUCODE": "603822.SH",
             "SECURITY_CODE": "603822",
             "NOTICE_DATE": "2026-07-04 00:00:00",
-            "REPORT_DATE": "2026-06-30 00:00:00",
+            "REPORT_DATE": f"{report_date} 00:00:00",
             "PREDICT_TYPE": "扭亏",
             "PREDICT_CONTENT": "预计盈利",
             "CHANGE_REASON_EXPLAIN": "主营改善",
@@ -48,10 +48,11 @@ def test_sync_forecast_falls_back_to_eastmoney(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(eastmoney_client, "get_datacenter_paged", fake_get_datacenter_paged)
 
     capset = CapabilitySet({Cap.FINANCIAL: CapabilityLimits()})
-    assert financial_sync.sync_forecast(tmp_path, capset) == 1
+    assert financial_sync.sync_forecast(tmp_path, capset) == 2
 
     df = pl.read_parquet(tmp_path / "financials" / "forecast" / "part.parquet")
-    row = df.to_dicts()[0]
+    assert set(df["t_date"].to_list()) == {"2026-06-30", "2026-03-31"}
+    row = df.filter(pl.col("t_date") == "2026-06-30").to_dicts()[0]
     assert row["symbol"] == "603822.SH"
     assert row["t_date"] == "2026-06-30"
     assert row["notice_date"] == "2026-07-04"
