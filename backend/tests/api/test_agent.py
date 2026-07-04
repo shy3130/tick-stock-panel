@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import polars as pl
 import pytest
 
 from app.api.agent import _parse_tool_request, list_tools
@@ -88,3 +89,52 @@ def test_run_backtest_rejects_wide_date_range():
                 "end": "2025-01-02",
             },
         )
+
+
+class _FakePortfolioRepo:
+    def __init__(self, symbols: list[str], n_days: int = 60) -> None:
+        self._symbols = symbols
+        self._n_days = n_days
+
+    def get_daily_asset(self, asset_type, symbol, start, end, columns=None):
+        import numpy as np
+        from datetime import date as _date, timedelta as _timedelta
+
+        if symbol not in self._symbols:
+            return pl.DataFrame()
+        rng = np.random.default_rng(sum(bytearray(symbol.encode())))
+        base = 10.0
+        rows = []
+        for offset in range(self._n_days, 0, -1):
+            base *= 1 + rng.normal(0, 0.01)
+            rows.append({"symbol": symbol, "date": _date.today() - _timedelta(days=offset), "close": round(base, 3)})
+        return pl.DataFrame(rows)
+
+
+def test_optimize_portfolio_tool_requires_symbols():
+    state = SimpleNamespace(repo=_FakePortfolioRepo(["000001.SZ"]))
+    with pytest.raises(ValueError, match="symbols"):
+        call_tool("optimize_portfolio", state, {"symbols": []})
+
+
+def test_optimize_portfolio_tool_rejects_too_many_symbols():
+    state = SimpleNamespace(repo=_FakePortfolioRepo(["000001.SZ"]))
+    with pytest.raises(ValueError, match="symbols"):
+        call_tool("optimize_portfolio", state, {"symbols": [f"{i:06d}.SZ" for i in range(51)]})
+
+
+def test_optimize_portfolio_tool_rejects_non_list_symbols():
+    state = SimpleNamespace(repo=_FakePortfolioRepo(["000001.SZ"]))
+    with pytest.raises(ValueError, match="symbols"):
+        call_tool("optimize_portfolio", state, {"symbols": "000001.SZ"})
+
+
+def test_optimize_portfolio_tool_weights_sum_to_one():
+    symbols = ["000001.SZ", "000002.SZ", "600000.SH"]
+    state = SimpleNamespace(repo=_FakePortfolioRepo(symbols))
+
+    out = call_tool("optimize_portfolio", state, {"symbols": symbols, "method": "risk_parity", "lookback_days": 80})
+
+    assert len(out["weights"]) == 3
+    assert abs(sum(w["weight"] for w in out["weights"]) - 1.0) < 1e-5
+    assert out["meta"]["kept"] == symbols

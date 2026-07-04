@@ -60,6 +60,13 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {}},
         "read_only": True,
     },
+    {
+        "name": "optimize_portfolio",
+        "description": "Compute portfolio weights for a set of symbols (equal/equal_vol/risk_parity/mean_variance/max_diversification/score_weight).",
+        "input_schema": {"type": "object", "properties": {"symbols": {"type": "array"}, "method": {"type": "string"}, "lookback_days": {"type": "integer"}}},
+        "parameters": {"type": "object", "properties": {"symbols": {"type": "array"}, "method": {"type": "string"}, "lookback_days": {"type": "integer"}}},
+        "read_only": True,
+    },
 ]
 
 
@@ -139,6 +146,33 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
 
         configs = ExtConfigStore(repo.store.data_dir).load_all()
         return {"datasets": [{"id": c.id, "label": c.label, "mode": c.mode, "fields": [f.name for f in c.fields]} for c in configs[:200]]}
+    if name == "optimize_portfolio":
+        repo = _require(app_state, "repo")
+        import numpy as np
+
+        from app.backtest.optimizers import portfolio_weights
+        from app.backtest.portfolio import load_price_matrix, momentum_from_prices, returns_from_prices
+
+        symbols = _require_list(args, "symbols", 50)
+        method = str(args.get("method") or "risk_parity")
+        if method not in {"equal", "equal_vol", "risk_parity", "mean_variance", "max_diversification", "score_weight"}:
+            raise ValueError(f"unknown optimize method: {method}")
+        lookback_days = max(20, min(1000, int(args.get("lookback_days") or 120)))
+        end = date.today()
+        start = end - timedelta(days=lookback_days)
+
+        prices, kept = load_price_matrix(repo, symbols, start, end)
+        if len(kept) < 2:
+            raise ValueError("有效标的不足 2 只（数据缺失、港股或标的过少）")
+        if prices.shape[0] < 2:
+            raise ValueError("标的间共同交易日不足，无法估计收益/协方差")
+
+        rets = returns_from_prices(prices)
+        scores = momentum_from_prices(prices) if method == "score_weight" else None
+        weights_arr = np.asarray(portfolio_weights(rets, method, scores), dtype=float)
+        dropped = [s for s in symbols if s not in kept]
+        weights = [{"symbol": s, "weight": round(float(weights_arr[i]), 6)} for i, s in enumerate(kept)]
+        return _truncate({"weights": weights, "method": method, "lookback_days": lookback_days, "meta": {"kept": kept, "dropped": dropped}})
     raise ValueError(f"unknown agent tool: {name}")
 
 
