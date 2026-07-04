@@ -284,7 +284,7 @@ def test_run_backtest_rejects_wide_date_range():
 - [ ] **Step 2: 跑测试确认失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/services/test_agent_loop.py tests/api/test_agent.py -v`
-预期：新增的 3 个 `test_run_backtest_*` FAIL（因为闸门还没实现，`run_backtest` 目前仍会先在 `strategy_id` 检查后走到 `StrategyBacktestService(...).run(...)`，因为 `_require` 校验的 `repo`/`strategy_engine` 用的是 `object()` 占位，实际调用会在更深处报别的错而不是我们要的 `symbols`/`date range` 消息）；`test_agent_loop_rejects_unknown_tool_then_done` 应该 PASS（不依赖 run_backtest 排除逻辑）；`test_agent_loop_allows_run_backtest_after_reopen` 应该 FAIL（因为此时 `run_backtest` 仍在 `_EXCLUDED_TOOLS` 里，`tool_result` 会是 `{"error": "tool not allowed: run_backtest"}` 而不是 sentinel）。
+预期（一共涉及 6 个测试，分布在两个文件）：`test_agent.py` 里新增的 4 个 `test_run_backtest_*`（`requires_symbols`/`rejects_too_many_symbols`/`rejects_non_list_symbols`/`rejects_wide_date_range`）全部 FAIL（因为闸门还没实现，`run_backtest` 目前仍会先在 `strategy_id` 检查后走到 `StrategyBacktestService(...).run(...)`，因为 `_require` 校验的 `repo`/`strategy_engine` 用的是 `object()` 占位，实际调用会在更深处报别的错而不是我们要的 `symbols`/`date range` 消息）；`test_agent_loop.py` 里 `test_agent_loop_rejects_unknown_tool_then_done` 应该 PASS（不依赖 run_backtest 排除逻辑，属于这一步顺带验证、不是新故障)；`test_agent_loop_allows_run_backtest_after_reopen` 应该 FAIL（因为此时 `run_backtest` 仍在 `_EXCLUDED_TOOLS` 里，`tool_result` 会是 `{"error": "tool not allowed: run_backtest"}` 而不是 sentinel）。
 
 - [ ] **Step 3: 实现闸门**
 
@@ -591,7 +591,7 @@ def test_compare_factors_tool_returns_rows(monkeypatch):
 - [ ] **Step 2: 跑测试确认失败**
 
 运行：`cd backend && uv run --extra dev pytest tests/api/test_agent.py -v -k "analyze_factor or compare_factors"`
-预期：7 个测试 FAIL，报 `ValueError: unknown agent tool: analyze_factor`（及 `compare_factors`）
+预期：6 个测试 FAIL，报 `ValueError: unknown agent tool: analyze_factor`（及 `compare_factors`）
 
 - [ ] **Step 3: 实现两个工具**
 
@@ -630,7 +630,6 @@ def test_compare_factors_tool_returns_rows(monkeypatch):
 
 在 `call_tool` 里紧跟 Task 3 新增的 `optimize_portfolio` 分支之后、`raise ValueError(f"unknown agent tool: {name}")` 之前新增：
 
-```python
 **⚠️ 修正（panel 3 评审 Medium-3/Medium-4/Medium-5，已verify属实）**：
 - `compare_factors` 原方案漏了 `factor_ids<=20` 上限（接口小节写了"复用现有 `max_length=20` 约束"，但伪代码没真的检查），已补。
 - `symbols`/`factor_ids` 改用 Task 2 的 `_require_list`，堵住字符串被当列表放行的问题。
@@ -696,7 +695,7 @@ def test_compare_factors_tool_returns_rows(monkeypatch):
 - [ ] **Step 4: 跑测试确认通过**
 
 运行：`cd backend && uv run --extra dev pytest tests/api/test_agent.py -v -k "analyze_factor or compare_factors"`
-预期：7 passed
+预期：6 passed
 
 - [ ] **Step 5: Commit**
 
@@ -714,7 +713,7 @@ git commit -m "feat(agent): add analyze_factor and compare_factors tools"
 - 测试：`backend/tests/api/test_agent.py`
 
 **接口：**
-- Consumes：Task 1 的 `FactorBacktestService.compute_ic_only(config) -> dict`；`app.backtest.factor.FactorConfig`/`FACTOR_COLUMNS`/`FactorBacktestService._compute_missing_factor(panel, factor_col)`（已有静态方法，用于当日面板里现算缺失的因子列）；`app.backtest.factor_zoo.ALPHAS`；`app.backtest.engine.BacktestEngine.load_panel`（已有）；`factor.py::_rank_average`（已有私有函数，本任务需要在 `agent_tools.py` 里导入使用，改为从 `app.backtest.factor` 显式 import，不复制实现）。
+- Consumes：Task 1 的 `FactorBacktestService.compute_ic_only(config) -> dict`；`app.backtest.factor.FactorConfig`/`FACTOR_COLUMNS`/`FactorBacktestService._compute_missing_factor(panel, factor_col)`（已有静态方法，**必须在完整历史面板上调用**——它依赖多日 OHLCV 才能算出滚动窗口类因子，不能传单日切片，详见下方 High-1 的修正说明）；`app.backtest.factor_zoo.ALPHAS`；`app.backtest.engine.BacktestEngine.load_panel`（已有）；`factor.py::_rank_average`（已有私有函数，本任务需要在 `agent_tools.py` 里导入使用，改为从 `app.backtest.factor` 显式 import，不复制实现）。
 - Produces：`compose_factor_score` 工具，返回 `{"ranked": [{"symbol","composite_score","per_factor":{...}}], "meta": {"used_factors","excluded_factors","pool_size","as_of","scored_date"}}` 或 `{"error": str}`。
 
 - [ ] **Step 1: 写失败的测试**
@@ -907,7 +906,6 @@ def test_compose_factor_score_top_n_clamped_to_pool_size(monkeypatch):
 
 在 `call_tool` 里紧跟 Task 4 新增的 `compare_factors` 分支之后、`raise ValueError(f"unknown agent tool: {name}")` 之前新增：
 
-```python
 **⚠️ 修正（panel 3 评审 High-1/High-2/High-3，已verify全部属实，这是 Task 5 里最重要的一处返工）：**
 
 - **High-1**：原方案 `day_panel_base = panel.filter(date == scored_date)` 先把面板切到单日，再对缺失因子调用 `_compute_missing_factor`——但滚动窗口类因子（`momentum_20d`/`rsi_14`/`macd_hist` 等）内部靠 `compute_indicators()` 在多日历史上做 `.over("symbol")` 滚动计算，单日切片没有历史，算不出这类因子。必须**先在完整多日 `panel` 上现算每个因子**，再筛到 `scored_date` 那一行。
@@ -1101,7 +1099,9 @@ curl -s -N -X POST http://localhost:8000/api/agent/stream \
 
 **4. 已知限制（继承自 spec）：** `MAX_TOOL_ROUNDS=5` 意味着"筛选→因子→优化→回测"全链路几乎耗尽单次请求的工具调用配额；不做跨请求调用计数。这些不是本计划要修的问题。
 
-**5. 自检时发现并修复的实现级 bug（不是 spec 层面的问题，是我写具体代码时才发现的）：** Task 5 最初版本在"当日面板"步骤里，循环对每个因子调用 `factor_zoo.compute_factor(day_panel, factor_id)` 并直接把结果赋回 `day_panel`；但真正该复用的是 `FactorBacktestService._compute_missing_factor`（它同时覆盖 `FACTOR_COLUMNS` 基础指标和 `ALPHAS`，`compute_factor` 只覆盖后者），而且它的返回值会把面板坍缩成只剩 `symbol/date/close/该因子列`（`factor.py:288`），如果直接覆盖 `day_panel` 循环处理下一个因子，会丢失 OHLCV，导致下一个需要现算的因子失败。已改为：保留一份不被覆盖的 `day_panel_base`（含 OHLCV），每个因子各自从这份稳定基准派生，不再链式覆盖。
+**5. 自检时发现并修复的实现级 bug（不是 spec 层面的问题，是我写具体代码时才发现的）：** Task 5 最初版本在"当日面板"步骤里，循环对每个因子调用 `factor_zoo.compute_factor(day_panel, factor_id)` 并直接把结果赋回 `day_panel`；但真正该复用的是 `FactorBacktestService._compute_missing_factor`（它同时覆盖 `FACTOR_COLUMNS` 基础指标和 `ALPHAS`，`compute_factor` 只覆盖后者），而且它的返回值会把面板坍缩成只剩 `symbol/date/close/该因子列`（`factor.py:288`），如果直接覆盖 `day_panel` 循环处理下一个因子，会丢失 OHLCV，导致下一个需要现算的因子失败。当时的修法是引入一份不被覆盖的 `day_panel_base`（含 OHLCV）。
+
+**（后续更新，panel 3 二次评审 High-1 之后已废弃 `day_panel_base` 这个中间方案）**：`day_panel_base` 只是把切片时机往前挪、并没有解决"滚动窗口因子需要多日历史"这个根本问题——它依然是单日切片，仍然算不出 `momentum_20d`/`rsi_14` 这类需要历史窗口的因子。最终方案（见下方"自检第6条"）改成完全不做单日切片：每个因子都在完整多日 `panel` 上现算，只在最后读取 `scored_date` 那一行的值，`day_panel_base` 这个变量名和思路已经不在最终实现里，不要按这条历史记录去写代码。
 
 **6. panel 3 对本计划的评审（第二轮，2026-07-04，结论"需改"）：3 条 High + 6 条 Medium + 2 条 Low，逐条 verify 后全部属实，无一误报，已全部修正：**
 - High-1：Task 5 在单日切片上现算滚动窗口因子算不出来 → 改为在完整多日 `panel` 上现算，再筛到 `scored_date`。
