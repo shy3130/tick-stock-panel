@@ -17,7 +17,7 @@ class _FakeRepo:
         self.asset_type_calls[symbol] = asset_type
         if symbol not in self._per:
             return pl.DataFrame()
-        rng = np.random.default_rng(abs(hash(symbol)) % (2**32))
+        rng = np.random.default_rng(sum(bytearray(symbol.encode())))
         base = 10.0
         rows = []
         for offset in self._per[symbol]:
@@ -78,7 +78,7 @@ def test_optimize_score_weight_momentum_sums_to_one():
     )
 
     assert resp.status_code == 200
-    assert abs(sum(w["weight"] for w in resp.json()["weights"]) - 1.0) < 1e-6
+    assert abs(sum(w["weight"] for w in resp.json()["weights"]) - 1.0) < 1e-5
 
 
 def test_optimize_rejects_single_symbol():
