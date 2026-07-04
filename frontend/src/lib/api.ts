@@ -523,6 +523,28 @@ export interface BacktestResult {
   warnings?: string[]
 }
 
+export type OptimizeMethod =
+  | 'equal'
+  | 'equal_vol'
+  | 'risk_parity'
+  | 'mean_variance'
+  | 'max_diversification'
+  | 'score_weight'
+
+export interface OptimizeWeight {
+  symbol: string
+  name?: string | null
+  weight: number
+}
+
+export interface OptimizeResult {
+  weights: OptimizeWeight[]
+  stats: { n: number; annualized_vol: number | null; diversification_ratio: number | null }
+  method: OptimizeMethod
+  lookback_days: number
+  meta: { kept: string[]; dropped: string[] }
+}
+
 // ===== Factor Backtest =====
 export interface FactorColumn {
   id: string
@@ -1279,6 +1301,12 @@ export const api = {
     request<BacktestResult>('/api/backtest/run', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+
+  optimize: (body: { symbols: string[]; method: OptimizeMethod; lookback_days?: number }) =>
+    request<OptimizeResult>('/api/backtest/optimize', {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
   factorColumns: () =>
