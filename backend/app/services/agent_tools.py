@@ -116,11 +116,14 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         strategy_id = str(args.get("strategy_id") or "").strip()
         if not strategy_id:
             raise ValueError("strategy_id required")
+        symbols = _require_list(args, "symbols", 20)
         end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
         start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=180)
+        if (end - start).days > 365:
+            raise ValueError("date range must be <= 365 days")
         result = StrategyBacktestService(BacktestEngine(repo), strategy_engine).run(StrategyBacktestConfig(
             strategy_id=strategy_id,
-            symbols=args.get("symbols"),
+            symbols=symbols,
             start=start,
             end=end,
         ))
@@ -143,6 +146,15 @@ def _require(app_state: Any, attr: str):
     value = getattr(app_state, attr, None)
     if value is None:
         raise ValueError(f"tool requires app_state.{attr}")
+    return value
+
+
+def _require_list(args: dict, key: str, max_len: int) -> list:
+    value = args.get(key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{key} must be a non-empty list")
+    if len(value) > max_len:
+        raise ValueError(f"{key} supports at most {max_len} items")
     return value
 
 

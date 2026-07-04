@@ -85,30 +85,61 @@ async def test_agent_loop_caps_at_five_rounds():
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_rejects_excluded_and_unknown_tools_then_done():
-    seq = iter([
-        '{"tool":"run_backtest","args":{"strategy_id":"x"}}',
-        '{"tool":"nope","args":{}}',
-    ])
+async def test_agent_loop_rejects_unknown_tool_then_done():
+    calls = {"n": 0}
 
     async def fake_generate(messages, **kw):
-        try:
-            return next(seq)
-        except StopIteration:
-            return "普通回答"
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return '{"tool":"nope","args":{}}'
+        return "普通回答"
 
     async def fake_stream(messages, **kw):
         yield "好"
 
     events = await _collect(
         run_agent_stream(
-            [{"role": "user", "content": "跑个全市场回测"}],
+            [{"role": "user", "content": "用一个不存在的工具"}],
             _FakeState(),
             generate=fake_generate,
             stream=fake_stream,
         )
     )
     results = [e for e in events if e["type"] == "tool_result"]
-    assert len(results) == 2
-    assert all("error" in r["result"] for r in results)
+    assert len(results) == 1
+    assert "error" in results[0]["result"]
     assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_allows_run_backtest_after_reopen(monkeypatch):
+    from app.services import agent_loop as agent_loop_mod
+
+    calls = {"n": 0}
+
+    async def fake_generate(messages, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return '{"tool":"run_backtest","args":{"strategy_id":"x","symbols":["000001.SZ"]}}'
+        return "普通回答"
+
+    async def fake_stream(messages, **kw):
+        yield "好"
+
+    monkeypatch.setattr(
+        agent_loop_mod.agent_tools,
+        "call_tool",
+        lambda name, app_state, args: {"sentinel": True} if name == "run_backtest" else {"error": "unexpected"},
+    )
+
+    events = await _collect(
+        run_agent_stream(
+            [{"role": "user", "content": "跑个回测"}],
+            _FakeState(),
+            generate=fake_generate,
+            stream=fake_stream,
+        )
+    )
+    results = [e for e in events if e["type"] == "tool_result"]
+    assert len(results) == 1
+    assert results[0]["result"] == {"sentinel": True}

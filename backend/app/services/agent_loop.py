@@ -9,7 +9,7 @@ from app.services.ai_provider import generate_ai_text, stream_ai_text
 
 MAX_TOOL_ROUNDS = 5
 
-_EXCLUDED_TOOLS = {"run_backtest"}
+_EXCLUDED_TOOLS: set[str] = set()
 ALLOWED_AGENT_TOOLS = [t for t in agent_tools.TOOLS if t["name"] not in _EXCLUDED_TOOLS]
 _ALLOWED_NAMES = {t["name"] for t in ALLOWED_AGENT_TOOLS}
 
