@@ -215,6 +215,7 @@ async def _stream_openai(
 
 
 def _openai_client(api_key: str, timeout: float, *, profile: dict | None = None):
+    import httpx
     from openai import AsyncOpenAI
 
     user_agent = (profile or {}).get("user_agent") or secrets_store.get_ai_config("ai_user_agent", "") or settings.ai_user_agent
@@ -224,6 +225,7 @@ def _openai_client(api_key: str, timeout: float, *, profile: dict | None = None)
         timeout=timeout,
         max_retries=2,
         default_headers={"User-Agent": user_agent},
+        http_client=httpx.AsyncClient(trust_env=False),
     )
 
 
