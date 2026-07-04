@@ -44,6 +44,24 @@ export interface InstrumentSearchResult {
   matched_by?: 'code' | 'symbol' | 'name' | 'pinyin' | 'initials' | 'suggest' | string
 }
 
+export interface AgentMsg {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface AgentTool {
+  name: string
+  description: string
+  read_only?: boolean
+}
+
+export type AgentEvent =
+  | { type: 'tool_call'; name: string; args: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; result: unknown }
+  | { type: 'delta'; content: string }
+  | { type: 'done' }
+  | { type: 'error'; message: string }
+
 // ===== Financials =====
 export interface FinancialStatus {
   available: boolean
@@ -920,6 +938,43 @@ export const api = {
       `/api/settings/ai/profiles/${encodeURIComponent(id)}/test`,
       { method: 'POST' },
     ),
+
+  agentTools: () => request<{ tools: AgentTool[] }>('/api/agent/tools'),
+
+  async *agentStream(messages: AgentMsg[], profileId?: string): AsyncGenerator<AgentEvent> {
+    const res = await fetch('/api/agent/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, ...(profileId ? { profile_id: profileId } : {}) }),
+    })
+    if (!res.ok) {
+      let detail = ''
+      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
+      const msg = detail || `${res.status} ${res.statusText}`
+      toast(msg, 'error')
+      throw new Error(msg)
+    }
+    if (!res.body) throw new Error('响应无 body')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        try { yield JSON.parse(s) as AgentEvent } catch { /* ignore */ }
+      }
+    }
+    if (buf.trim()) {
+      try { yield JSON.parse(buf.trim()) as AgentEvent } catch { /* ignore */ }
+    }
+  },
 
   preferences: () => request<Preferences>('/api/settings/preferences'),
   updateDataProvider: (data_provider: 'fquant' | 'fquant_local') =>
