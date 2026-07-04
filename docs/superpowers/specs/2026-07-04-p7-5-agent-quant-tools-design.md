@@ -13,6 +13,8 @@
 
 P7.5 不依赖 P7.1~P7.4 中任何一个（不需要 session、不需要附件、不需要新流式事件类型），可最先独立交付。
 
+**并行状态说明**：P7.1（WelcomeScreen/Markdown/导出/重试）、P7.2（session 持久化 `agent_sessions.py`）、P7.3（最小 attempt 取消闭环）目前正由另一条工作线直接推进实现，尚未经过本文档这一套 spec review 和独立验收流程。P7.5 的设计和范围裁剪不依赖其结果是否最终定型，但 `compose_factor_score`/`run_backtest` 等新工具落地时，应确认届时 `agent_loop.py`/`agent.py` 的接口形状（如 `session_id` 是否已成为必填参数）未发生本文档未预期的破坏性变化。
+
 ## 现状盘点
 
 | 能力 | 现状 | 证据 |
@@ -24,7 +26,7 @@ P7.5 不依赖 P7.1~P7.4 中任何一个（不需要 session、不需要附件�
 | 多因子 IC 加权合成打分 | **不存在**。截图"多因子 Alpha 模型…IC加权因子合成"对应的是一个新算法 | 全仓库搜索无 composite/combine 相关逻辑 |
 | Screener pool 参数 | `pool: list[str] \| None`，**不是命名预设**，`None` 即全市场扫描、无内建上限 | `backend/app/services/screener.py:390-482` |
 | Agent 工具循环 | `agent_loop.py` 已支持每次请求最多 `MAX_TOOL_ROUNDS=5` 轮工具调用（同步执行、无并发） | `backend/app/services/agent_loop.py:10, 38-85` |
-| Agent 会话状态 | 无状态，每次 `POST /api/agent/stream` 互相独立，无法做"跨请求累计次数"限制 | `backend/app/api/agent.py:66-79` |
+| Agent 会话状态 | `backend/app/services/agent_sessions.py`（panel 3 另一线并行交付，本文档撰写时才发现，尚未经我独立验收）已提供文件级 session 持久化（`sessions.json` 索引 + 按 session 存消息），`POST /api/agent/stream` 可选传 `session_id` 接入。但消息记录只有 `{role, content}`，**没有工具调用计数字段**，不能开箱即用地做"某工具本会话已调用几次" | `backend/app/services/agent_sessions.py:45-125` |
 
 ## 范围：4 个 agent tool
 
@@ -40,7 +42,7 @@ P7.5 不依赖 P7.1~P7.4 中任何一个（不需要 session、不需要附件�
   - `symbols` 必须非空列表（不再允许省略）。
   - `len(symbols) <= 20`。
   - `(end - start).days <= 365`（默认区间仍是 180 天不变）。
-- **不做跨请求调用次数限制**（已与用户确认：后端目前无 session 地基，无法可靠地做"每对话最多 N 次"；闸门只依赖单次请求内 `MAX_TOOL_ROUNDS=5` 的自然限流，以及上述 symbols/日期上限）。
+- **不做跨请求调用次数限制**（已与用户确认此为有意选择：即便 `agent_sessions.py` 已提供 session 持久化，其消息记录只有 `{role, content}`，没有工具调用计数字段，新增该计数是额外范围；为保持 P7.5 最小化，闸门只依赖单次请求内 `MAX_TOOL_ROUNDS=5` 的自然限流，以及上述 symbols/日期上限。若后续需要跨请求限流，应作为独立改动基于 `agent_sessions.py` 扩展，不在本次范围内）。
 
 ### 2. `optimize_portfolio`（新工具，零新后端逻辑）
 
@@ -104,6 +106,6 @@ P7.5 不依赖 P7.1~P7.4 中任何一个（不需要 session、不需要附件�
 ## 跨子项目约定（继承自 gap-assessment 文档）
 
 - 不新建 Swarm/pipeline 框架。
-- 不做跨请求的调用次数持久化计数（等 P7.2 session 地基后再评估是否需要）。
+- 不做跨请求的调用次数持久化计数（`agent_sessions.py` 已提供 session 持久化，但无计数字段；是否扩展留待独立评估，不在 P7.5 范围内）。
 - 所有新工具遵循 `agent_tools.py` 现有的 `_require(app_state, attr)` 模式获取 `repo`/`strategy_engine` 等依赖，不引入新的依赖获取方式。
 - commit 需用户授权；永不 push。
