@@ -74,6 +74,14 @@ def _load_kline_local_on_demand(symbol: str, start, end) -> pl.DataFrame:
     if raw.is_empty():
         return pl.DataFrame()
 
+    instruments = pl.DataFrame()
+    try:
+        inst = provider.get_instruments(asset_type)
+        if not inst.is_empty() and "symbol" in inst.columns:
+            instruments = inst.filter(pl.col("symbol") == symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("single-stock analysis instruments failed %s: %s", symbol, e)
+
     factors = pl.DataFrame()
     if asset_type == "stock":
         try:
@@ -81,7 +89,7 @@ def _load_kline_local_on_demand(symbol: str, start, end) -> pl.DataFrame:
         except Exception as e:  # noqa: BLE001
             logger.debug("single-stock analysis adj factors failed %s: %s", symbol, e)
 
-    return compute_enriched(raw, factors=factors, asset_type=asset_type)
+    return compute_enriched(raw, factors=factors, instruments=instruments, asset_type=asset_type)
 
 
 def _clean_rows(df: pl.DataFrame, keep_cols: list[str]) -> list[dict]:

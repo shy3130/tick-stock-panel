@@ -322,6 +322,42 @@ def _top_rows(rows: list[dict], key: str, descending: bool, limit: int = 8) -> l
     ]
 
 
+def _fill_market_supplements_from_provider(rows: list[dict], as_of: date | None) -> list[dict]:
+    if not rows:
+        return rows
+    symbols = [str(r.get("symbol") or "") for r in rows if r.get("symbol")]
+    if not symbols:
+        return rows
+    try:
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider = get_provider(get_active_provider_name("realtime"))
+        getter = getattr(provider, "get_latest_market_supplements", None)
+        if getter is None:
+            return rows
+        df = getter(symbols)
+    except Exception:  # noqa: BLE001
+        return rows
+    if df is None or df.is_empty():
+        return rows
+    supplements = {}
+    for item in df.to_dicts():
+        if as_of is not None and item.get("date") and str(item.get("date"))[:10] != as_of.isoformat():
+            continue
+        supplements[item.get("symbol")] = item
+    for row in rows:
+        item = supplements.get(row.get("symbol"))
+        if not item:
+            continue
+        turnover = _finite(item.get("turnover_rate"))
+        change_pct = _finite(item.get("change_pct"))
+        if turnover is not None:
+            row["turnover_rate"] = turnover
+        if change_pct is not None:
+            row["change_pct"] = change_pct
+    return rows
+
+
 def _pct_band_rows(values: list[float]) -> list[dict]:
     bands = [
         ("<-5%", None, -0.05),
@@ -410,6 +446,7 @@ def build_market_overview(
         rows = [r for r in rows
                 if (_finite(r.get("volume")) or 0) > 0
                 or (_finite(r.get("change_pct")) or 0) != 0]
+    rows = _fill_market_supplements_from_provider(rows, as_of)
 
     total = len(rows)
     up = sum(1 for r in rows if (_finite(r.get("change_pct")) or 0) > 0)

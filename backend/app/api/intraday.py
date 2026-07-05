@@ -83,6 +83,62 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
     return out
 
 
+def _to_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fallback_index_quotes_from_provider(symbols: list[str] | None = None) -> list[dict]:
+    """QuoteService 尚无指数缓存时，走当前 realtime provider 拉取最新指数行情。"""
+    symbol_list = symbols or ["000001.SH", "399001.SZ", "399006.SZ", "000680.SH"]
+    try:
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider = get_provider(get_active_provider_name("realtime"))
+        if not getattr(provider.capabilities, "realtime", False):
+            return []
+        df = provider.get_realtime(symbols=symbol_list)
+    except Exception:  # noqa: BLE001
+        return []
+
+    if df is None or df.is_empty():
+        return []
+
+    out: list[dict] = []
+    for row in df.to_dicts():
+        ext = row.get("ext") or {}
+        last_price = _to_float(row.get("last_price") if row.get("last_price") is not None else row.get("close"))
+        prev_close = _to_float(row.get("prev_close") if row.get("prev_close") is not None else ext.get("prev_close"))
+        change_amount = _to_float(
+            row.get("change_amount") if row.get("change_amount") is not None else ext.get("change_amount")
+        )
+        change_pct = _to_float(
+            row.get("change_pct") if row.get("change_pct") is not None else ext.get("change_pct")
+        )
+        if change_amount is None and last_price is not None and prev_close not in (None, 0):
+            change_amount = last_price - prev_close
+        if change_pct is None and change_amount is not None and prev_close not in (None, 0):
+            change_pct = change_amount / prev_close * 100
+
+        out.append({
+            "symbol": row.get("symbol"),
+            "name": row.get("name"),
+            "date": str(row.get("date")) if row.get("date") is not None else None,
+            "last_price": last_price,
+            "close": last_price,
+            "prev_close": prev_close,
+            "change_amount": change_amount,
+            "change_pct": change_pct,
+            "source": row.get("source") or "provider_realtime",
+            "timestamp": row.get("timestamp"),
+        })
+    return [row for row in out if row.get("symbol")]
+
+
 @router.get("/status")
 def status(request: Request):
     """行情状态 (来自全局 QuoteService)。"""
@@ -98,15 +154,21 @@ def index_quotes(
     request: Request,
     symbols: str | None = Query(None, description="逗号分隔的指数 symbol 列表"),
 ):
-    """返回实时指数行情缓存，不触发上游实时请求。"""
+    """返回指数行情：优先实时缓存，缓存为空时走 provider realtime，最后日线兜底。"""
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
     qs = _get_quote_service(request)
     if not qs:
+        rows = _fallback_index_quotes_from_provider(symbol_list)
+        if rows:
+            return {"rows": rows, "count": len(rows), "source": "provider_realtime"}
         rows = _fallback_index_quotes_from_daily(request, symbol_list)
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
     df = qs.get_index_quotes(symbol_list)
     rows = df.to_dicts() if not df.is_empty() else []
     if not rows:
+        rows = _fallback_index_quotes_from_provider(symbol_list)
+        if rows:
+            return {"rows": rows, "count": len(rows), "source": "provider_realtime"}
         rows = _fallback_index_quotes_from_daily(request, symbol_list)
         return {"rows": rows, "count": len(rows), "source": "index_daily"}
     return {"rows": rows, "count": len(rows), "source": "realtime"}

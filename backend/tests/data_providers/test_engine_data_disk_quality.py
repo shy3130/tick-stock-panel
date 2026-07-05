@@ -69,7 +69,7 @@ def test_minutes_and_trans_basic_fields(tmp_path, monkeypatch):
 
     client = EngineDataDiskClient()
 
-    assert client.get_minutes("600519", "20260701") == [{"price": 11.1, "volume": 100}]
+    assert client.get_minutes("600519", "20260701") == [{"price": 11.1, "volume": 10_000.0}]
     assert client.get_trans("600519", "20260701")[0] == {
         "time": "09:30",
         "price": 11.1,

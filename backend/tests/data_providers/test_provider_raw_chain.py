@@ -39,6 +39,8 @@ class FakeEngineWithPreClose:
 
 class FakeFStore:
     def query(self, sql, params=None):
+        if "t_1_daily_markets" in sql:
+            return []
         if "t_1_day_klines" not in sql:
             return []
         return [{
@@ -48,6 +50,29 @@ class FakeFStore:
             "oracle_low": 240.07,
             "oracle_close": 241.0,
         }]
+
+
+class FakeFStoreWithDailyMarkets:
+    def query(self, sql, params=None):  # noqa: ARG002
+        if "t_1_day_klines" in sql:
+            return [{
+                "date": "2026-07-01",
+                "oracle_open": 50.0,
+                "oracle_high": 55.0,
+                "oracle_low": 47.0,
+                "oracle_close": 53.09,
+            }]
+        if "t_1_daily_markets" in sql:
+            return [{
+                "date": "2026-07-01",
+                "oracle_open": 34.25,
+                "oracle_high": 39.74,
+                "oracle_low": 33.80,
+                "oracle_close": 37.85,
+                "oracle_volume": 12_300,
+                "oracle_amount": 456,
+            }]
+        return []
 
 
 class RecordingFStore:
@@ -109,6 +134,23 @@ def test_daily_close_map_uses_raw_close():
     closes = provider._build_daily_close_map("600519.SH", "600519", None, None)
 
     assert closes["2012-10-26"] == 241.0
+
+
+def test_raw_oracle_prefers_daily_markets_over_day_klines():
+    provider = object.__new__(FQuantProvider)
+    provider._fstore = FakeFStoreWithDailyMarkets()
+
+    rows = provider._get_raw_oracle_rows("300492", [{"date": "2026-07-01"}])
+
+    assert rows == [{
+        "date": "2026-07-01",
+        "oracle_open": 34.25,
+        "oracle_high": 39.74,
+        "oracle_low": 33.80,
+        "oracle_close": 37.85,
+        "oracle_volume": 12_300,
+        "oracle_amount": 456,
+    }]
 
 
 def test_daily_close_map_keeps_pre_close_before_requested_start():
@@ -182,5 +224,6 @@ def test_etf_fstore_daily_uses_asset_type_20_table():
 
     assert rows[0]["symbol"] == "513050.SH"
     assert rows[0]["close"] == 1.01
+    assert rows[0]["volume"] == 100_000
     assert "t_20_day_klines" in fstore.sql[0]
     assert all("day_klines " not in sql for sql in fstore.sql[1:])

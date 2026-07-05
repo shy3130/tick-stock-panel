@@ -13,6 +13,10 @@ def test_etf_symbols_use_exchange_suffixes():
     assert code_to_symbol("159915", 20) == "159915.SZ"
 
 
+def test_920_stock_symbols_use_bj_suffix():
+    assert code_to_symbol("920003", 1) == "920003.BJ"
+
+
 def test_exchange_suffixed_etf_reverse_mapping():
     assert FQuantProvider._asset_type_num_for_symbol("513050.SH") == 20
     assert FQuantProvider._asset_type_num_for_symbol("159915.SZ") == 20

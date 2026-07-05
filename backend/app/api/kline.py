@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+import httpx
+import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
@@ -79,6 +82,121 @@ def _get_stock_info(repo, symbol: str) -> dict:
     }
 
 
+def _instrument_for_symbol(inst: pl.DataFrame, symbol: str) -> pl.DataFrame:
+    if inst.is_empty() or "symbol" not in inst.columns:
+        return pl.DataFrame()
+    return inst.filter(pl.col("symbol") == symbol)
+
+
+def _merge_instrument_info(stock_info: dict, instruments: pl.DataFrame) -> dict:
+    if instruments.is_empty():
+        return stock_info
+    info = instruments.to_dicts()[0]
+    merged = dict(stock_info)
+    for key in ("name", "total_shares", "float_shares"):
+        if info.get(key) is not None:
+            merged[key] = info.get(key)
+    return merged
+
+
+def _provider_instrument_for_symbol(provider, symbol: str, asset_type: str) -> pl.DataFrame:
+    inst = provider.get_instruments(asset_type)
+    return _instrument_for_symbol(inst, symbol)
+
+
+def _repo_instrument_for_symbol(repo, symbol: str, asset_type: str) -> pl.DataFrame:
+    if hasattr(repo, "get_instruments_asset"):
+        inst = repo.get_instruments_asset(asset_type)
+    elif asset_type == "stock":
+        inst = repo.get_instruments()
+    else:
+        inst = pl.DataFrame()
+    return _instrument_for_symbol(inst, symbol)
+
+
+def _latest_daily_date(repo) -> date | None:
+    try:
+        return repo.latest_daily_date()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _is_intraday_live_date(
+    trade_date: date,
+    latest_date: date | None = None,
+    now: datetime | None = None,
+) -> bool:
+    now = now or datetime.now()
+    if trade_date != now.date():
+        return False
+    if latest_date is not None and trade_date < latest_date:
+        return False
+    h, m = now.hour, now.minute
+    return (h == 9 and m >= 30) or (10 <= h < 12) or (13 <= h < 15)
+
+
+def _fetch_tdx_api_minute(symbol: str, trade_date: date) -> pl.DataFrame:
+    base = (
+        os.getenv("FQUANT_TDX_API_BASE")
+        or os.getenv("DSA_TDX_API_BASE_URL")
+        or os.getenv("TDX_API_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+    if not base:
+        return pl.DataFrame()
+
+    from app.data_providers.fquant.symbols import symbol_to_code
+
+    date_str = trade_date.strftime("%Y%m%d")
+    try:
+        resp = httpx.get(
+            f"{base}/api/minute",
+            params={"code": symbol_to_code(symbol), "date": date_str},
+            timeout=3,
+            trust_env=False,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("tdx-api minute failed %s %s: %s", symbol, trade_date, e)
+        return pl.DataFrame()
+
+    if int(payload.get("code", -1)) != 0:
+        return pl.DataFrame()
+    data = payload.get("data") or {}
+    if str(data.get("date") or "") != date_str:
+        return pl.DataFrame()
+    rows = data.get("List") or []
+    out = []
+    for row in rows:
+        price_raw = row.get("Price")
+        volume_raw = row.get("Number")
+        if price_raw is None or volume_raw is None:
+            continue
+        price = float(price_raw) / 1000
+        volume = float(volume_raw) * 100
+        out.append({
+            "symbol": symbol,
+            "datetime": f"{trade_date.isoformat()} {row.get('Time')}:00",
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": volume,
+            "amount": price * volume,
+        })
+    return pl.DataFrame(out)
+
+
+def _fetch_local_disk_minute(symbol: str, trade_date: date) -> pl.DataFrame:
+    from app.data_providers.registry import get_provider
+
+    start = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25)
+    end = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5)
+    provider = get_provider("fquant_local")
+    return provider.get_minute([symbol], start, end, _asset_type_for_symbol(symbol), freq="1m")
+
+
 @router.get("/daily")
 def get_daily(
     request: Request,
@@ -115,6 +233,13 @@ def get_daily(
 
         provider = get_provider(get_active_provider_name("daily"))
         asset_type = _asset_type_for_symbol(symbol)
+        instruments = pl.DataFrame()
+        try:
+            instruments = _provider_instrument_for_symbol(provider, symbol, asset_type)
+            stock_info = _merge_instrument_info(stock_info, instruments)
+            stock_name = stock_info.get("name")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("本地模式单股 instruments 拉取失败 %s: %s", symbol, e)
         raw = provider.get_daily([symbol], start_dt, end_dt, asset_type)
         if raw.is_empty():
             return {
@@ -130,7 +255,7 @@ def get_daily(
                 factors = provider.get_adj_factors([symbol], start_dt, end_dt, asset_type)
             except Exception as e:  # noqa: BLE001
                 logger.debug("本地模式单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors, asset_type=asset_type)
+        enriched = compute_enriched(raw, factors=factors, instruments=instruments, asset_type=asset_type)
         rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
         resp = {
             "symbol": symbol,
@@ -167,7 +292,15 @@ def get_daily(
                 factors = kline_sync.fetch_adj_factor_single(symbol)
         except Exception as e:  # noqa: BLE001
             logger.debug("单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors, asset_type=_asset_type_for_symbol(symbol))
+        asset_type = _asset_type_for_symbol(symbol)
+        instruments = pl.DataFrame()
+        try:
+            instruments = _repo_instrument_for_symbol(repo, symbol, asset_type)
+            stock_info = _merge_instrument_info(stock_info, instruments)
+            stock_name = stock_info.get("name")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("单股 instruments 拉取失败 %s: %s", symbol, e)
+        enriched = compute_enriched(raw, factors=factors, instruments=instruments, asset_type=asset_type)
         rows = enriched.tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
         rows = _maybe_inject_live_candle(request, symbol, rows)
@@ -404,8 +537,9 @@ def get_minute(
 ):
     """读取某只股票某天的分钟 K 线。
 
-    - 本地有完整数据(240条) → 直接返回
-    - 本地无数据或不完整 → 从当前 provider 拉取返回（不写入）
+    - 本地 parquet 有完整数据 → 直接返回
+    - 最新交易日盘中 → tdx-api 即时分时优先
+    - 其它日期 → fquant_local/TDX 磁盘分钟文件
     """
     repo = request.app.state.repo
     stock_info = _get_stock_info(repo, symbol)
@@ -414,13 +548,7 @@ def get_minute(
     if trade_date is None:
         trade_date = repo.latest_minute_date(symbol)
     if trade_date is None:
-        # 本地无任何分钟K，尝试从当前 provider 拉取当天
         trade_date = date.today()
-        df = kline_sync.fetch_minute_single(symbol, trade_date)
-        return {
-            "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-            "date": str(trade_date), "rows": _minute_rows(df, trade_date), "source": "live",
-        }
 
     df = repo.get_minute(symbol, trade_date)
 
@@ -450,12 +578,20 @@ def get_minute(
             "date": str(trade_date), "rows": _minute_rows(df, trade_date), "source": "local",
         }
 
-    # 本地不完整或无数据 → 从当前 provider 拉取
-    live_df = kline_sync.fetch_minute_single(symbol, trade_date)
+    if _is_intraday_live_date(trade_date, _latest_daily_date(repo)):
+        live_df = _fetch_tdx_api_minute(symbol, trade_date)
+        if not live_df.is_empty():
+            return {
+                "symbol": symbol, "name": stock_name, "stock_info": stock_info,
+                "date": str(trade_date), "rows": _minute_rows(live_df, trade_date),
+                "source": "tdx_api",
+            }
+
+    local_df = _fetch_local_disk_minute(symbol, trade_date)
     return {
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-        "date": str(trade_date), "rows": _minute_rows(live_df, trade_date),
-        "source": "live" if not live_df.is_empty() else "none",
+        "date": str(trade_date), "rows": _minute_rows(local_df, trade_date),
+        "source": "local_disk" if not local_df.is_empty() else "none",
     }
 
 

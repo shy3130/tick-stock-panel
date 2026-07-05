@@ -117,7 +117,7 @@ def klines_rows_to_daily(rows: list[dict], symbol: str, source: str = "fquant") 
             "high": _to_float(r.get("high")),
             "low": _to_float(r.get("low")),
             "close": _to_float(r.get("close")),
-            "volume": _to_float(r.get("cjl")),
+            "volume": (vol * 100 if (vol := _to_float(r.get("cjl"))) is not None else None),
             "amount": _to_float(r.get("cje")),
             "pre_close": None,
             "change_pct": _to_float(r.get("zf")),
@@ -262,6 +262,8 @@ def base_infos_rows_to_instruments(
             "exchange": exchange_of(str(code)),
             "asset_type": asset_type,  # 契约字符串，不输出 num
             "source": source,
+            "total_shares": _to_float(item.get("zgb")),
+            "float_shares": _to_float(item.get("ltgb")),
         })
     return out
 

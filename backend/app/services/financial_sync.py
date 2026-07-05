@@ -195,8 +195,18 @@ def sync_cash_flow(data_dir: Path, capset: CapabilitySet) -> int:
 
 def sync_quick(data_dir: Path, capset: CapabilitySet) -> int:
     """同步业绩快报。"""
+    if not capset.has(Cap.FINANCIAL):
+        logger.info("sync_quick skipped: no FINANCIAL capability")
+        return 0
     symbols = _get_symbols(data_dir)
-    return _sync_table("quick", symbols, data_dir, capset, latest_only=True)
+    rows = _sync_table("quick", symbols, data_dir, capset, latest_only=True)
+    existing = get_financial_df(data_dir, "quick") if rows else pl.DataFrame()
+    try:
+        merged_rows = _sync_quick_from_eastmoney(data_dir, capset, existing=existing)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("sync_quick eastmoney fallback failed: %s", e)
+        return rows
+    return merged_rows or rows
 
 
 def sync_forecast(data_dir: Path, capset: CapabilitySet) -> int:
@@ -237,7 +247,7 @@ def _recent_report_dates(today: date | None = None) -> list[str]:
     return [d.isoformat() for d in sorted(dates, reverse=True)]
 
 
-def _forecast_symbol(row: dict[str, Any]) -> str:
+def _eastmoney_symbol(row: dict[str, Any]) -> str:
     secucode = row.get("SECUCODE")
     if secucode:
         return str(secucode)
@@ -250,6 +260,31 @@ def _forecast_symbol(row: dict[str, Any]) -> str:
     return code
 
 
+def _normalize_quick_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        report_date = str(row.get("REPORT_DATE") or "").split(" ")[0] or None
+        notice_date = str(row.get("UPDATE_DATE") or row.get("NOTICE_DATE") or "").split(" ")[0] or None
+        out.append({
+            **row,
+            "symbol": _eastmoney_symbol(row),
+            "t_date": report_date,
+            "report_date": report_date,
+            "notice_date": notice_date,
+            "source": "eastmoney:quick",
+            "basic_eps": row.get("BASIC_EPS"),
+            "total_income": row.get("TOTAL_OPERATE_INCOME"),
+            "net_profit": row.get("PARENT_NETPROFIT"),
+            "bps": row.get("PARENT_BVPS"),
+            "weight_avg_roe": row.get("WEIGHTAVG_ROE"),
+            "yoy_income": row.get("YSTZ"),
+            "yoy_profit": row.get("JLRTBZCL"),
+            "qoq_income": row.get("DJDYSHZ"),
+            "qoq_profit": row.get("DJDJLHZ"),
+        })
+    return pl.DataFrame(out) if out else pl.DataFrame()
+
+
 def _normalize_forecast_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -257,7 +292,7 @@ def _normalize_forecast_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
         notice_date = str(row.get("NOTICE_DATE") or "").split(" ")[0] or None
         out.append({
             **row,
-            "symbol": _forecast_symbol(row),
+            "symbol": _eastmoney_symbol(row),
             "t_date": report_date,
             "report_date": report_date,
             "notice_date": notice_date,
@@ -270,6 +305,62 @@ def _normalize_forecast_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
             "net_profit_upper": row.get("PREDICT_AMT_UPPER"),
         })
     return pl.DataFrame(out) if out else pl.DataFrame()
+
+
+def _sync_quick_from_eastmoney(
+    data_dir: Path,
+    capset: CapabilitySet,
+    *,
+    existing: pl.DataFrame | None = None,
+) -> int:
+    if not capset.has(Cap.FINANCIAL):
+        logger.info("sync_quick eastmoney skipped: no FINANCIAL capability")
+        return 0
+
+    from app.services import eastmoney_client
+
+    frames: list[pl.DataFrame] = []
+    for report_date in _recent_report_dates():
+        rows = eastmoney_client.get_datacenter_paged(
+            _EASTMONEY_DATACENTER,
+            {
+                "sortColumns": "UPDATE_DATE,SECURITY_CODE",
+                "sortTypes": "-1,-1",
+                "reportName": "RPT_FCI_PERFORMANCEE",
+                "columns": "ALL",
+                "filter": (
+                    '(SECURITY_TYPE_CODE in ("058001001","058001008"))'
+                    '(TRADE_MARKET_CODE!="069001017")'
+                    f"(REPORT_DATE='{report_date}')"
+                ),
+                "source": "WEB",
+                "client": "WEB",
+            },
+            max_pages=20,
+        )
+        df = _normalize_quick_rows(rows)
+        if df.is_empty():
+            continue
+        frames.append(df)
+
+    if existing is not None and not existing.is_empty():
+        frames.insert(0, existing)
+    if not frames:
+        return 0
+
+    df = pl.concat(frames, how="diagonal_relaxed")
+    if {"symbol", "t_date"}.issubset(df.columns):
+        df = df.unique(subset=["symbol", "t_date"], keep="first")
+
+    out_dir = data_dir / "financials" / "quick"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(out_dir / "part.parquet")
+    logger.info(
+        "sync_quick eastmoney merge done: %d records across %d source frames",
+        len(df),
+        len(frames),
+    )
+    return len(df)
 
 
 def _sync_forecast_from_eastmoney(data_dir: Path, capset: CapabilitySet) -> int:
@@ -323,15 +414,26 @@ def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:
         logger.info("sync_all financials skipped: no FINANCIAL capability")
         return {}
 
-    symbols = _get_symbols(data_dir)
     results: dict[str, int] = {}
+    sync_functions = _financial_sync_functions()
     for table in FINANCIAL_TABLES:
-        results[table] = _sync_table(table, symbols, data_dir, capset, latest_only=True)
+        results[table] = sync_functions[table](data_dir, capset)
 
     # 同步完成后注册 DuckDB 视图
     _refresh_financials_views(data_dir)
 
     return results
+
+
+def _financial_sync_functions():
+    return {
+        "metrics": sync_metrics,
+        "income": sync_income,
+        "balance_sheet": sync_balance_sheet,
+        "cash_flow": sync_cash_flow,
+        "quick": sync_quick,
+        "forecast": sync_forecast,
+    }
 
 
 # ================================================================
@@ -499,24 +601,17 @@ class FinancialScheduler:
         每张表完成立即更新 last_sync,让前端轮询 /status 能看到进度递增。
         """
         if table:
-            fn = {
-                "metrics": sync_metrics,
-                "income": sync_income,
-                "balance_sheet": sync_balance_sheet,
-                "cash_flow": sync_cash_flow,
-                "quick": sync_quick,
-                "forecast": sync_forecast,
-            }.get(table)
+            fn = _financial_sync_functions().get(table)
             if not fn:
                 return {}
             rows = fn(self._data_dir, self._capset)
             self._record_sync(table)
             return {table: rows}
         # 全部同步
-        symbols = _get_symbols(self._data_dir)
         result: dict[str, int] = {}
+        sync_functions = _financial_sync_functions()
         for t in FINANCIAL_TABLES:
-            result[t] = _sync_table(t, symbols, self._data_dir, self._capset, latest_only=True)
+            result[t] = sync_functions[t](self._data_dir, self._capset)
             self._record_sync(t)
         _refresh_financials_views(self._data_dir)
         return result

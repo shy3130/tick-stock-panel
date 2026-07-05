@@ -406,35 +406,7 @@ class QuoteService:
             logger.warning("行情数据为空")
             return
 
-        # ---- 解析 API 响应 (临时变量, 用完丢弃) ----
-        records = []
-        for q in resp:
-            ext = q.get("ext") or {}
-            last_price = q.get("last_price")
-            prev_close = q.get("prev_close")
-            change_amount = ext.get("change_amount")
-            change_pct = ext.get("change_pct")
-            if change_amount is None and last_price is not None and prev_close is not None:
-                change_amount = float(last_price) - float(prev_close)
-            if change_pct is None and change_amount is not None and prev_close not in (None, 0):
-                change_pct = float(change_amount) / float(prev_close) * 100
-            records.append({
-                "symbol": q.get("symbol"),
-                "name": q.get("name") or ext.get("name"),
-                "last_price": last_price,
-                "prev_close": prev_close,
-                "open": q.get("open"),
-                "high": q.get("high"),
-                "low": q.get("low"),
-                "volume": q.get("volume"),
-                "amount": q.get("amount"),
-                "change_pct": change_pct,
-                "change_amount": change_amount,
-                "amplitude": ext.get("amplitude"),
-                "turnover_rate": ext.get("turnover_rate"),
-                "timestamp": q.get("timestamp"),
-                "session": q.get("session"),
-            })
+        records = [self._record_from_quote(q) for q in resp]
 
         index_records = [r for r in records if r.get("symbol") in all_index_symbols]
         etf_records = [r for r in records if r.get("symbol") in all_etf_symbols]
@@ -517,34 +489,7 @@ class QuoteService:
             logger.warning("自选实时行情数据为空")
             return
 
-        records = []
-        for q in resp:
-            ext = q.get("ext") or {}
-            last_price = q.get("last_price")
-            prev_close = q.get("prev_close")
-            change_amount = ext.get("change_amount")
-            change_pct = ext.get("change_pct")
-            if change_amount is None and last_price is not None and prev_close is not None:
-                change_amount = float(last_price) - float(prev_close)
-            if change_pct is None and change_amount is not None and prev_close not in (None, 0):
-                change_pct = float(change_amount) / float(prev_close) * 100
-            records.append({
-                "symbol": q.get("symbol"),
-                "name": q.get("name") or ext.get("name"),
-                "last_price": last_price,
-                "prev_close": prev_close,
-                "open": q.get("open"),
-                "high": q.get("high"),
-                "low": q.get("low"),
-                "volume": q.get("volume"),
-                "amount": q.get("amount"),
-                "change_pct": change_pct,
-                "change_amount": change_amount,
-                "amplitude": ext.get("amplitude"),
-                "turnover_rate": ext.get("turnover_rate"),
-                "timestamp": q.get("timestamp"),
-                "session": q.get("session"),
-            })
+        records = [self._record_from_quote(q) for q in resp]
 
         fetch_ms = (time.perf_counter() - t0) * 1000
         fetched_at = time.time() * 1000
@@ -574,6 +519,54 @@ class QuoteService:
     # ================================================================
     # 工具
     # ================================================================
+
+    @staticmethod
+    def _to_float(value) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _ratio_from_points(cls, value) -> float | None:
+        number = cls._to_float(value)
+        return number / 100.0 if number is not None else None
+
+    @classmethod
+    def _record_from_quote(cls, q: dict) -> dict:
+        ext = q.get("ext") or {}
+        last_price = q.get("last_price")
+        prev_close = q.get("prev_close")
+        change_amount = ext.get("change_amount")
+        if change_amount is None and last_price is not None and prev_close is not None:
+            lp = cls._to_float(last_price)
+            pc = cls._to_float(prev_close)
+            if lp is not None and pc is not None:
+                change_amount = lp - pc
+
+        change_pct = cls._ratio_from_points(ext.get("change_pct"))
+        pc = cls._to_float(prev_close)
+        ca = cls._to_float(change_amount)
+        if change_pct is None and ca is not None and pc not in (None, 0):
+            change_pct = ca / pc
+
+        return {
+            "symbol": q.get("symbol"),
+            "name": q.get("name") or ext.get("name"),
+            "last_price": last_price,
+            "prev_close": prev_close,
+            "open": q.get("open"),
+            "high": q.get("high"),
+            "low": q.get("low"),
+            "volume": q.get("volume"),
+            "amount": q.get("amount"),
+            "change_pct": change_pct,
+            "change_amount": change_amount,
+            "amplitude": cls._ratio_from_points(ext.get("amplitude")),
+            "turnover_rate": ext.get("turnover_rate"),
+            "timestamp": q.get("timestamp"),
+            "session": q.get("session"),
+        }
 
     @staticmethod
     def _build_daily(records: list[dict]) -> pl.DataFrame:

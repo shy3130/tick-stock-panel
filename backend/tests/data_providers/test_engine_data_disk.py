@@ -107,7 +107,7 @@ def test_get_minutes_reads_date_partition(tmp_path, monkeypatch):
 
     rows = EngineDataDiskClient().get_minutes("600519", "20260701", limit=1)
 
-    assert rows == [{"price": 1184.88, "volume": 748}]
+    assert rows == [{"price": 1184.88, "volume": 74800.0}]
 
 
 def test_get_trans_reads_date_partition(tmp_path, monkeypatch):

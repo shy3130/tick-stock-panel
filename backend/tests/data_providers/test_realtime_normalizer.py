@@ -68,6 +68,25 @@ def test_fquant_realtime_symbols_use_tencent_and_normalizer():
     assert df["source"][0] == "tencent"
 
 
+def test_fquant_realtime_merges_fstore_turnover_supplement():
+    provider = object.__new__(FQuantProvider)
+    provider._tdx_api_base = ""
+    provider._sina_tencent = FakeSinaTencent()
+    provider._get_fstore_realtime = lambda symbols: [{
+        "symbol": symbols[0],
+        "prev_close": 9.8,
+        "source": "fquant_local:fstore:daily_markets",
+        "ext": {"turnover_rate": 2.5, "amplitude": 3.1},
+    }]
+
+    df = provider.get_realtime(symbols=["600519.SH"])
+
+    row = df.to_dicts()[0]
+    assert row["source"] == "tencent"
+    assert row["prev_close"] == 9.8
+    assert row["ext"]["turnover_rate"] == 2.5
+
+
 def test_tdx_quote_source_uses_provider_name():
     provider = object.__new__(FQuantProvider)
     provider.name = "fquant_local"
@@ -86,6 +105,22 @@ def test_fstore_quote_source_uses_provider_name():
     provider = object.__new__(FQuantProvider)
     provider.name = "fquant_local"
 
-    row = provider._fstore_quote_to_row({"code": "600519", "price": 1185.49}, 1)
+    row = provider._fstore_quote_to_row({"code": "600519", "price": 1185.49, "cjl": 34268}, 1)
 
     assert row["source"] == "fquant_local:fstore:daily_markets"
+    assert row["volume"] == 3_426_800
+
+
+def test_latest_market_supplements_returns_ratio_fields():
+    provider = object.__new__(FQuantProvider)
+    provider._get_fstore_realtime = lambda symbols: [{
+        "symbol": symbols[0],
+        "timestamp": "2026-07-03",
+        "ext": {"change_pct": 0.6, "amplitude": 5.67, "turnover_rate": 1.86},
+    }]
+
+    row = provider.get_latest_market_supplements(["300492.SZ"]).to_dicts()[0]
+
+    assert row["change_pct"] == 0.006
+    assert row["amplitude"] == 0.0567
+    assert row["turnover_rate"] == 1.86

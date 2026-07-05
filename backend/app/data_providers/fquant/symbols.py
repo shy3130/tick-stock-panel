@@ -45,7 +45,9 @@ def code_to_symbol(code: str, asset_type_num: int = 1) -> str:
     '159915.SZ'
     """
     code = str(code)
-    if asset_type_num == 1:  # A 股：6/9 开头上交所，0/3 开头深交所，其余北交所
+    if asset_type_num == 1:  # A 股：60/68/9(非92)上交所，0/3 深交所，8/4/92 北交所
+        if code.startswith("92"):
+            return f"{code}.BJ"
         if code.startswith(("60", "68", "9", "11", "13")):
             return f"{code}.SH"
         if code.startswith(("0", "30", "12")):
@@ -123,12 +125,12 @@ def exchange_of(code: str) -> str:
     - 其它保持空串
     """
     code = str(code)
+    if code.startswith(("8", "4", "92")):
+        return "BJ"
     if code.startswith(("60", "68", "9", "11", "13")):
         return "SH"
     if code.startswith(("0", "30", "12", "20")):
         return "SZ"
-    if code.startswith(("8", "4", "92")):
-        return "BJ"
     return ""
 
 

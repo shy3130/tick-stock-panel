@@ -257,7 +257,7 @@ class ScreenerService:
         enriched_dir = self.repo.store.data_dir / "kline_daily_enriched"
         start = target_date - timedelta(days=150)
         read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
-                     "amount", "raw_close", "raw_high", "raw_low"]
+                     "amount", "raw_close", "raw_high", "raw_low", "turnover_rate"]
 
         try:
             lf = (

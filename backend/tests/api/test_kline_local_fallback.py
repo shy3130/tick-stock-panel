@@ -47,6 +47,18 @@ class FakeProvider:
         self.adj_args = (symbols, start_time, end_time, asset_type)
         return pl.DataFrame()
 
+    def get_instruments(self, asset_type):
+        return pl.DataFrame({
+            "symbol": ["600519.SH"],
+            "name": ["贵州茅台"],
+            "code": ["600519"],
+            "exchange": ["SH"],
+            "asset_type": [asset_type],
+            "source": ["fake"],
+            "total_shares": [2_000.0],
+            "float_shares": [1_000.0],
+        })
+
 
 class CachedRepo(FakeRepo):
     def get_daily(self, symbol, start, end):
@@ -100,6 +112,8 @@ def test_daily_local_fallback_passes_datetime_to_provider(monkeypatch):
     assert isinstance(provider.adj_args[1], datetime)
     assert isinstance(provider.adj_args[2], datetime)
     assert provider.adj_args[3] == "stock"
+    assert resp["stock_info"]["float_shares"] == 1_000.0
+    assert resp["rows"][0]["turnover_rate"] == 10.0
 
 
 def test_daily_local_fallback_passes_hk_asset_type_and_skips_adj(monkeypatch):

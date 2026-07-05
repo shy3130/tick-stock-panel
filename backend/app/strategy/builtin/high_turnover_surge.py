@@ -26,7 +26,7 @@ ALERTS = []
 
 
 def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
-    min_to = params.get("min_turnover", 5.0) / 100.0
+    min_to = params.get("min_turnover", 5.0)
     min_chg = params.get("min_change", 3.0) / 100.0
     return (
         (pl.col("turnover_rate") > min_to)

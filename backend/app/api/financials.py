@@ -111,6 +111,20 @@ def get_cash_flow(request: Request, symbol: str | None = None):
     return {"data": df.to_dicts()}
 
 
+@router.get("/quick")
+def get_quick(request: Request, symbol: str | None = None):
+    """查询业绩快报。"""
+    capset = request.app.state.capabilities
+    capset.require(Cap.FINANCIAL)
+
+    df = get_financial_df(request.app.state.repo.store.data_dir, "quick")
+    if df.is_empty():
+        return {"data": []}
+    if symbol:
+        df = df.filter(pl.col("symbol") == symbol)
+    return {"data": df.to_dicts()}
+
+
 @router.get("/forecast")
 def get_forecast(request: Request, symbol: str | None = None):
     """查询业绩预告。"""

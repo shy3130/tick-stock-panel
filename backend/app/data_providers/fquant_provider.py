@@ -15,7 +15,7 @@
     │   ├── moneyflow_client.py  moneyflow HTTP 客户端
     │   ├── sina_tencent_client.py realtime fallback 客户端
     │   ├── mapping.py           上游字段 → 内部 schema
-    │   ├── adj_factor.py        xdxr → 累积 ex_factor
+    │   ├── adj_factor.py        xdxr → 单次事件 ex_factor
     │   ├── raw_reconstruct.py   TDX 前复权序列 → raw OHLC 修复
     │   └── fallback.py          降级策略表
     └── fquant_provider.py       本文件（聚合 Provider）
@@ -229,7 +229,7 @@ class FQuantProvider:
         # 动态构造 IN 子句（asset_type 可能有多个数字）
         placeholders = ",".join(["%s"] * len(nums))
         rows = self._fstore.query(
-            f"SELECT code, name, asset_type, ssdate, symbol "
+            f"SELECT code, name, asset_type, ssdate, symbol, zgb, ltgb "
             f"FROM base_infos "
             f"WHERE asset_type IN ({placeholders}) "
             f"ORDER BY code LIMIT 10000",
@@ -345,7 +345,7 @@ class FQuantProvider:
         dates = sorted(str(r.get("date")) for r in rows if r.get("date"))
         if not dates:
             return []
-        return self._fstore.query(
+        day_rows = self._fstore.query(
             """
             SELECT
                 tdate::text AS date,
@@ -353,7 +353,7 @@ class FQuantProvider:
                 high::float8 AS oracle_high,
                 low::float8 AS oracle_low,
                 close::float8 AS oracle_close,
-                cjl::float8 AS oracle_volume,
+                cjl::float8 * 100 AS oracle_volume,
                 cje::float8 AS oracle_amount
             FROM t_1_day_klines
             WHERE code = %s AND ktype = 101 AND fq = 0 AND tdate BETWEEN %s AND %s
@@ -361,6 +361,25 @@ class FQuantProvider:
             """,
             (code, dates[0], dates[-1]),
         )
+        market_rows = self._fstore.query(
+            """
+            SELECT
+                tdate::text AS date,
+                jrkpj::float8 AS oracle_open,
+                zgj::float8 AS oracle_high,
+                zdj::float8 AS oracle_low,
+                price::float8 AS oracle_close,
+                cjl::float8 * 100 AS oracle_volume,
+                cje::float8 AS oracle_amount
+            FROM t_1_daily_markets
+            WHERE code = %s AND tdate BETWEEN %s AND %s
+            ORDER BY tdate ASC
+            """,
+            (code, dates[0], dates[-1]),
+        )
+        by_date = {str(r.get("date")): r for r in day_rows}
+        by_date.update({str(r.get("date")): r for r in market_rows})
+        return [by_date[k] for k in sorted(by_date)]
 
     def _get_daily_from_fstore_klines(
         self, symbol: str, code: str,
@@ -426,8 +445,8 @@ class FQuantProvider:
         """复权除息因子（§4.5）。
 
         数据流（§7.1 降级链）：
-        1. 主源 engine-data ``xdxr``（fenhong/fenshu → 累积 ex_factor）
-        2. 备份 fstore ``chuquan_chuxi``（pxbl → 累积 ex_factor）
+        1. 主源 engine-data ``xdxr``（fenhong/fenshu → 单次事件 ex_factor）
+        2. 备份 fstore ``chuquan_chuxi``（pxbl → 单次事件 ex_factor）
         3. 空 df
 
         输出列（经 ``normalize_adj_factors``）：symbol/trade_date/ex_factor
@@ -616,6 +635,7 @@ class FQuantProvider:
         if remaining:
             rows.extend(self._get_fstore_realtime(remaining))
 
+        self._merge_fstore_quote_supplements(rows)
         return normalize_realtime(rows, source=self.name) if rows else pl.DataFrame()
 
     def get_depth(self, symbols: list[str]) -> dict:
@@ -623,6 +643,29 @@ class FQuantProvider:
         if not symbols:
             return {}
         return self._sina_tencent.get_depth(symbols)
+
+    def get_latest_market_supplements(self, symbols: list[str]) -> pl.DataFrame:
+        """Latest fstore daily_markets fields that realtime sources may omit."""
+        rows = self._get_fstore_realtime(symbols)
+        if not rows:
+            return pl.DataFrame()
+        out = []
+        for row in rows:
+            ext = row.get("ext") or {}
+            out.append({
+                "symbol": row.get("symbol"),
+                "date": row.get("timestamp"),
+                "change_pct": self._pct_points_to_ratio(ext.get("change_pct")),
+                "change_amount": ext.get("change_amount"),
+                "turnover_rate": ext.get("turnover_rate"),
+                "amplitude": self._pct_points_to_ratio(ext.get("amplitude")),
+            })
+        return pl.DataFrame(out).drop_nulls(subset=["symbol"])
+
+    @staticmethod
+    def _pct_points_to_ratio(value) -> float | None:
+        number = FQuantProvider._float_or_none(value)
+        return number / 100 if number is not None else None
 
     def _resolve_realtime_symbols(
         self,
@@ -753,6 +796,27 @@ class FQuantProvider:
             out.extend(self._fstore_quote_to_row(r, asset_type) for r in rows)
         return [r for r in out if r]
 
+    def _merge_fstore_quote_supplements(self, rows: list[dict]) -> None:
+        symbols = [str(r.get("symbol") or "") for r in rows if r.get("symbol")]
+        if not symbols:
+            return
+        supplements = self._get_fstore_realtime(list(dict.fromkeys(symbols)))
+        by_symbol = {r.get("symbol"): r for r in supplements if r.get("symbol")}
+        for row in rows:
+            extra = by_symbol.get(row.get("symbol"))
+            if not extra:
+                continue
+            row_ext = row.get("ext")
+            if not isinstance(row_ext, dict):
+                row_ext = {}
+                row["ext"] = row_ext
+            extra_ext = extra.get("ext") or {}
+            for key in ("turnover_rate", "amplitude"):
+                if row_ext.get(key) is None and extra_ext.get(key) is not None:
+                    row_ext[key] = extra_ext[key]
+            if row.get("prev_close") is None and extra.get("prev_close") is not None:
+                row["prev_close"] = extra["prev_close"]
+
     @staticmethod
     def _asset_type_num_for_symbol(symbol: str) -> int | None:
         _, suffix = split_symbol(symbol)
@@ -780,7 +844,7 @@ class FQuantProvider:
             open_=self._float_or_none(item.get("jrkpj")),
             high=self._float_or_none(item.get("zgj")),
             low=self._float_or_none(item.get("zdj")),
-            volume=self._float_or_none(item.get("cjl")),
+            volume=self._hands_to_shares(item.get("cjl")),
             amount=self._float_or_none(item.get("cje")),
             timestamp=str(item.get("tdate") or ""),
             change_pct=self._float_or_none(item.get("zdfd")),

@@ -6,7 +6,7 @@
 - ``engine_data_client`` engine-data HTTP 客户端
 - ``moneyflow_client`` moneyflow HTTP 客户端
 - ``mapping``          上游字段 → 内部 schema 转换
-- ``adj_factor``       xdxr 事件 → 累积 ex_factor 计算
+- ``adj_factor``       xdxr 事件 → 单次事件 ex_factor 计算
 - ``fallback``         本地源降级策略表
 
 对外由 ``app.data_providers.fquant_provider.FQuantProvider`` 聚合。

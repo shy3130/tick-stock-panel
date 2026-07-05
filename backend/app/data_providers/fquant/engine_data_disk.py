@@ -120,7 +120,8 @@ class EngineDataDiskClient:
             return []
         return (
             df.head(limit)
-            .rename({"Price": "price", "Vol": "volume"})
+            .rename({"Price": "price", "Vol": "_volume_hand"})
+            .with_columns((pl.col("_volume_hand").cast(pl.Float64, strict=False) * 100).alias("volume"))
             .select("price", "volume")
             .to_dicts()
         )

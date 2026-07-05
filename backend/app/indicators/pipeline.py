@@ -361,6 +361,26 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
         (3 * pl.col("kdj_k") - 2 * pl.col("kdj_d")).alias("kdj_j"),
     ])
 
+    raw_close = (
+        pl.when((pl.col("raw_close").is_not_null()) & (pl.col("raw_close") > 0))
+        .then(pl.col("raw_close"))
+        .otherwise(pl.col("close"))
+        if "raw_close" in df.columns else pl.col("close")
+    )
+    raw_high = (
+        pl.when((pl.col("raw_high").is_not_null()) & (pl.col("raw_high") > 0))
+        .then(pl.col("raw_high"))
+        .otherwise(pl.col("high"))
+        if "raw_high" in df.columns else pl.col("high")
+    )
+    raw_low = (
+        pl.when((pl.col("raw_low").is_not_null()) & (pl.col("raw_low") > 0))
+        .then(pl.col("raw_low"))
+        .otherwise(pl.col("low"))
+        if "raw_low" in df.columns else pl.col("low")
+    )
+    prev_raw_close = raw_close.shift(1).over("symbol")
+
     # Pass 4: ATR + 量比 + 动量 + 波动 + 涨跌幅 + 涨跌额 + 振幅
     df = df.with_columns(
         pl.col("_tr").ewm_mean(alpha=1.0 / 14, adjust=False).over("symbol").alias("atr_14"),
@@ -373,20 +393,20 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col("close") / pl.col("close").shift(20).over("symbol") - 1).alias("momentum_20d"),
         (pl.col("close") / pl.col("close").shift(30).over("symbol") - 1).alias("momentum_30d"),
         (pl.col("close") / pl.col("close").shift(60).over("symbol") - 1).alias("momentum_60d"),
-        # 日涨跌幅
-        (pl.col("close") / pl.col("close").shift(1).over("symbol") - 1).alias("change_pct"),
+        # 日涨跌幅: 用原始价格口径，避免前复权因子异常污染单日涨跌幅。
+        (raw_close / prev_raw_close - 1).alias("change_pct"),
     ]).with_columns(
         # 涨跌额
-        (pl.col("close") - pl.col("close").shift(1).over("symbol")).alias("change_amount"),
+        (raw_close - prev_raw_close).alias("change_amount"),
     ).with_columns(
         # 振幅 = (high - low) / prev_close
-        pl.when(pl.col("close").shift(1).over("symbol") > 0)
-          .then((pl.col("high") - pl.col("low")) / pl.col("close").shift(1).over("symbol"))
+        pl.when(prev_raw_close > 0)
+          .then((raw_high - raw_low) / prev_raw_close)
           .otherwise(None)
           .alias("amplitude"),
     ).with_columns(
         # 日涨跌幅 (用于波动率)
-        pl.col("close").pct_change().over("symbol").alias("_daily_pct"),
+        raw_close.pct_change().over("symbol").alias("_daily_pct"),
     ).with_columns(
         # 年化波动率
         (pl.col("_daily_pct").rolling_std(20).over("symbol") * (252 ** 0.5))
@@ -690,8 +710,11 @@ def compute_all(
     """
     df = compute_indicators(df)
     df = compute_signals(df)
-    if asset_type == "stock" and instruments is not None and not instruments.is_empty():
-        df = compute_limit_signals(df, instruments)
+    if instruments is not None and not instruments.is_empty():
+        if asset_type == "stock":
+            df = compute_limit_signals(df, instruments)
+        else:
+            df = _attach_turnover_rate(df, instruments)
 
     # 清理 NaN / Inf
     float_cols = [c for c in df.columns if df[c].dtype.is_float()]
@@ -728,6 +751,36 @@ def _turnover_rate_expr() -> pl.Expr:
         .then(pl.col("volume") / pl.col("float_shares") * 100.0)
         .otherwise(None)
     )
+
+
+def _attach_turnover_rate(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.DataFrame:
+    """Attach turnover_rate from asset instruments without A-share limit signals."""
+    if (
+        df.is_empty()
+        or instruments.is_empty()
+        or "symbol" not in instruments.columns
+        or "float_shares" not in instruments.columns
+        or "volume" not in df.columns
+    ):
+        return df
+
+    inst_subset = (
+        instruments
+        .select("symbol", pl.col("float_shares").alias("_turnover_float_shares"))
+        .unique(subset=["symbol"])
+    )
+    df = df.join(inst_subset, on="symbol", how="left")
+    computed_turnover = (
+        pl.when(pl.col("_turnover_float_shares") > 0)
+        .then(pl.col("volume") / pl.col("_turnover_float_shares") * 100.0)
+        .otherwise(None)
+    )
+    df = df.with_columns(
+        pl.coalesce([pl.col("turnover_rate"), computed_turnover]).alias("turnover_rate")
+        if "turnover_rate" in df.columns
+        else computed_turnover.alias("turnover_rate")
+    )
+    return df.drop("_turnover_float_shares")
 
 
 # ================================================================
@@ -1361,6 +1414,7 @@ def compute_enriched_today(
     prev_enriched: pl.DataFrame,
     today_ohlcv: pl.DataFrame,
     instruments: pl.DataFrame | None = None,
+    asset_type: str = "stock",
 ) -> pl.DataFrame:
     """用昨天的递推状态 + 今天的 OHLCV 增量计算今天的 enriched 数据。
 
@@ -1371,6 +1425,7 @@ def compute_enriched_today(
         prev_enriched:  repo.get_enriched_latest() — 昨天的完整 enriched (用于信号交叉判断)
         today_ohlcv:    今天的 OHLCV (symbol, date, open, high, low, close, volume, amount)
         instruments:    维表 (涨跌停/换手率需要)
+        asset_type:     资产类型；只有 stock 计算 A 股涨跌停信号
 
     返回:
         今天的 enriched DataFrame (~5500 行, 64 列)
@@ -1415,18 +1470,16 @@ def compute_enriched_today(
         # API 返回的 prev_close 是原始价, 乘复权因子对齐复权价 (用于 change_pct)
         df = df.with_columns((pl.col("prev_close") * pl.col("_adj_factor").fill_null(1.0)).alias("prev_close"))
 
-    # change_pct / change_amount / amplitude: 有则直接用, 无则计算
-    if "change_pct" not in df.columns:
-        df = df.with_columns((pl.col("close") / pl.col("prev_close") - 1).alias("change_pct"))
-    if "change_amount" not in df.columns:
-        df = df.with_columns((pl.col("close") - pl.col("prev_close")).alias("change_amount"))
-    if "amplitude" not in df.columns:
-        df = df.with_columns(
-            pl.when(pl.col("prev_close") > 0)
-              .then((pl.col("high") - pl.col("low")) / pl.col("prev_close"))
-              .otherwise(None)
-              .alias("amplitude"),
-        )
+    # change_pct / change_amount / amplitude 必须和当前复权后的 OHLC/prev_close 同口径。
+    # quote_extra 里的字段通常来自原始价，不能在复权路径里直接沿用。
+    df = df.with_columns([
+        (pl.col("close") / pl.col("prev_close") - 1).alias("change_pct"),
+        (pl.col("close") - pl.col("prev_close")).alias("change_amount"),
+        pl.when(pl.col("prev_close") > 0)
+          .then((pl.col("high") - pl.col("low")) / pl.col("prev_close"))
+          .otherwise(None)
+          .alias("amplitude"),
+    ])
 
     # ---- EMA (递推) ----
     df = df.with_columns([
@@ -1595,7 +1648,10 @@ def compute_enriched_today(
 
     # ---- 涨跌停 + 换手率 + 炸板 + 连板 ----
     if instruments is not None and not instruments.is_empty():
-        df = _compute_limit_signals_today(df, instruments)
+        if asset_type == "stock":
+            df = _compute_limit_signals_today(df, instruments)
+        else:
+            df = _attach_turnover_rate(df, instruments)
 
     # ---- 清理内部列 ----
     drop_cols = [
@@ -1653,12 +1709,14 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
 
     df = df.join(inst_subset, on="symbol", how="left", suffix="_inst")
 
-    # 换手率: API 有则直接用, 无则从 float_shares 计算
-    if "turnover_rate" not in df.columns:
-        if "float_shares" in df.columns and "volume" in df.columns:
-            df = df.with_columns(
-                _turnover_rate_expr().alias("turnover_rate")
-            )
+    # 换手率: API 有则直接用, 空值再从 float_shares 回算
+    if "float_shares" in df.columns and "volume" in df.columns:
+        computed_turnover = _turnover_rate_expr()
+        df = df.with_columns(
+            pl.coalesce([pl.col("turnover_rate"), computed_turnover]).alias("turnover_rate")
+            if "turnover_rate" in df.columns
+            else computed_turnover.alias("turnover_rate")
+        )
 
     # 涨跌停 (用 raw_close / raw_high 和前一日原始收盘价)
     # 优先用 API 原始前收盘价, 回退到 close_right, 最后回退到 raw_close

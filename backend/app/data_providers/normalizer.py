@@ -7,7 +7,7 @@ from app.indicators.pipeline import filter_halt_days
 
 DAILY_COLS = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
 ADJ_FACTOR_COLS = ["symbol", "trade_date", "ex_factor"]
-INSTRUMENT_COLS = ["symbol", "name", "code", "exchange", "asset_type", "source"]
+INSTRUMENT_COLS = ["symbol", "name", "code", "exchange", "asset_type", "source", "total_shares", "float_shares"]
 REALTIME_COLS = [
     "symbol", "name", "last_price", "prev_close", "open", "high", "low",
     "volume", "amount", "timestamp", "source", "ext",
@@ -97,6 +97,8 @@ def normalize_instruments(rows: list[dict], asset_type: str, source: str = "prov
             "exchange": item.get("exchange"),
             "asset_type": asset_type,
             "source": source,
+            "total_shares": item.get("total_shares"),
+            "float_shares": item.get("float_shares"),
         })
     if not out:
         return pl.DataFrame()
