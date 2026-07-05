@@ -12,6 +12,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',   // 允许局域网访问
     port: 3011,
+    // 允许通过局域网主机名访问 (如 m4max.wf / *.local)，否则 Vite 会 Blocked request
+    allowedHosts: ['m4max.wf', '.wf', '.local'],
     proxy: {
       // dev 时 /api 转发到 FastAPI
       '/api': {

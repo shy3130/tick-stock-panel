@@ -15,6 +15,7 @@ BACKEND_DIR="$ROOT/backend"
 FRONTEND_DIR="$ROOT/frontend"
 BACKEND_PORT="${BACKEND_PORT:-3018}"
 FRONTEND_PORT="${FRONTEND_PORT:-3011}"
+FQUANT_ENV="${FQUANT_ENV:-$ROOT/../fquant/.env}"
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -40,6 +41,11 @@ require_cmd() {
 
 require_cmd uv   "curl -LsSf https://astral.sh/uv/install.sh | sh"
 require_cmd pnpm "npm i -g pnpm   或   corepack enable && corepack prepare pnpm@9 --activate"
+
+if [ -z "${FSTORE_DATABASE_PASSWORD:-}" ] && [ -f "$FQUANT_ENV" ]; then
+  FSTORE_DATABASE_PASSWORD="$(grep -E '^FSTORE_DATABASE_PASSWORD=' "$FQUANT_ENV" | tail -1 | cut -d= -f2- || true)"
+  export FSTORE_DATABASE_PASSWORD
+fi
 
 # ===== 2. 端口占用检查 —— 占用就直接 kill =====
 free_port() {
@@ -120,7 +126,7 @@ echo
 
 (
   cd "$BACKEND_DIR"
-  uv run uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" 2>&1 \
+  uv run uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port "$BACKEND_PORT" 2>&1 \
     | prefix_awk "$(printf "${BLUE}[backend ]${NC} ")"
 ) &
 PIDS+=("$!")

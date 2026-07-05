@@ -32,7 +32,7 @@ start-local:
 	DATA_PROVIDER=fquant_local TDX_DATA_DIR="$(TDX_DATA_DIR)" BACKEND_PORT="$(BACKEND_PORT)" FRONTEND_PORT="$(FRONTEND_PORT)" ./dev.sh
 
 backend:
-	cd backend && DATA_PROVIDER="$(DATA_PROVIDER)" TDX_DATA_DIR="$(TDX_DATA_DIR)" uv run uvicorn app.main:app --reload --host 0.0.0.0 --port "$(BACKEND_PORT)"
+	cd backend && DATA_PROVIDER="$(DATA_PROVIDER)" TDX_DATA_DIR="$(TDX_DATA_DIR)" uv run uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port "$(BACKEND_PORT)"
 
 frontend:
 	cd frontend && pnpm dev --host 0.0.0.0 --port "$(FRONTEND_PORT)"
