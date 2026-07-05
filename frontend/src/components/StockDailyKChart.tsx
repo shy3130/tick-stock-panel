@@ -78,6 +78,7 @@ export function toOHLC(rows: KlineRow[]): OHLC[] {
       kdj_j: r.kdj_j != null ? Number(r.kdj_j) : null,
       boll_upper: r.boll_upper != null ? Number(r.boll_upper) : null,
       boll_lower: r.boll_lower != null ? Number(r.boll_lower) : null,
+      main_net_inflow: r.main_net_inflow != null ? Number(r.main_net_inflow) : null,
     }))
 }
 

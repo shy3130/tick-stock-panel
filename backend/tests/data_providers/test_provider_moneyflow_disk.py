@@ -71,3 +71,47 @@ def test_moneyflow_daily_falls_back_for_disk_misses_only():
     assert provider._moneyflow.calls == [(["300059"], "2026-07-01")]
     assert rows["600519.SH"]["main_net"] == 300.0
     assert rows["300059.SZ"]["main_net"] == 99.0
+
+
+class FakeFundRangeEngine:
+    def __init__(self, df):
+        self._df = df
+        self.calls = []
+
+    def get_fund_range(self, code, start_iso, end_iso, asset_type=None):
+        self.calls.append((code, start_iso, end_iso, asset_type))
+        return self._df
+
+
+class EngineWithoutFundRange:
+    """模拟 HTTP 模式的 engine —— 没有 get_fund_range 方法。"""
+
+
+def test_moneyflow_range_forwards_to_disk_engine():
+    import polars as pl
+
+    fake_df = pl.DataFrame({"date": ["2026-07-01"], "main_net_inflow": [300.0]})
+    engine = FakeFundRangeEngine(fake_df)
+    provider = object.__new__(FQuantProvider)
+    provider._engine = engine
+    provider._engine_mode = "disk"
+    provider.name = "fquant_local"
+
+    df = provider.get_moneyflow_range("600519.SH", datetime(2026, 6, 30), datetime(2026, 7, 1))
+
+    assert engine.calls == [("600519.SH", "2026-06-30", "2026-07-01", None)]
+    assert df.to_dicts() == [{"date": "2026-07-01", "main_net_inflow": 300.0}]
+
+
+def test_moneyflow_range_returns_empty_for_http_engine():
+    import polars as pl
+
+    provider = object.__new__(FQuantProvider)
+    provider._engine = EngineWithoutFundRange()
+    provider._engine_mode = "http"
+    provider.name = "fquant"
+
+    df = provider.get_moneyflow_range("600519.SH", datetime(2026, 6, 30), datetime(2026, 7, 1))
+
+    assert isinstance(df, pl.DataFrame)
+    assert df.is_empty()

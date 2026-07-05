@@ -1123,6 +1123,17 @@ class FQuantProvider:
 
         return moneyflow_daily_to_df(data, code_to_sym, date_iso, source=self.name)
 
+    def get_moneyflow_range(self, symbol: str, start: datetime, end: datetime) -> pl.DataFrame:
+        """区间资金流查询（三锁指标资金锁专用）。"""
+        if not hasattr(self._engine, "get_fund_range"):
+            return pl.DataFrame()
+        code = symbol_to_code(symbol)
+        return self._engine.get_fund_range(
+            self._engine_key(symbol, code),
+            start.strftime("%Y-%m-%d"),
+            end.strftime("%Y-%m-%d"),
+        )
+
     # ------------------------------------------------------------------ #
     # get_moneyflow_minute — §4.9 moneyflow /minute/stocks
     # ------------------------------------------------------------------ #

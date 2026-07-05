@@ -199,6 +199,108 @@ def test_daily_local_mode_ignores_cached_raw(monkeypatch):
     assert resp["rows"][0]["close"] == 1.0
 
 
+class FakeProviderWithMoneyflow(FakeProvider):
+    def __init__(self, moneyflow_df):
+        super().__init__()
+        self._moneyflow_df = moneyflow_df
+        self.moneyflow_args = None
+
+    def get_moneyflow_range(self, symbol, start, end):
+        self.moneyflow_args = (symbol, start, end)
+        return self._moneyflow_df
+
+
+def test_daily_local_mode_merges_main_net_inflow_for_stock(monkeypatch):
+    moneyflow_df = pl.DataFrame({
+        "date": ["2026-07-01"],
+        "main_net_inflow": [300.0],
+    })
+    provider = FakeProviderWithMoneyflow(moneyflow_df)
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: True)
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: provider)
+
+    resp = kline.get_daily(
+        request(),
+        "600519.SH",
+        days=120,
+        start_date="2026-07-01",
+        end_date="2026-07-01",
+        ext_columns=None,
+    )
+
+    assert provider.moneyflow_args is not None
+    assert provider.moneyflow_args[0] == "600519.SH"
+    assert resp["rows"][0]["main_net_inflow"] == 300.0
+
+
+def test_daily_local_mode_skips_moneyflow_for_non_stock(monkeypatch):
+    provider = FakeProviderWithMoneyflow(None)
+
+    def _fail_if_called(symbol, start, end):
+        raise AssertionError("get_moneyflow_range should not be called for non-stock asset types")
+
+    provider.get_moneyflow_range = _fail_if_called
+
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: True)
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: provider)
+
+    resp = kline.get_daily(
+        request(),
+        "02577.HK",
+        days=120,
+        start_date="2026-07-01",
+        end_date="2026-07-02",
+        ext_columns=None,
+    )
+
+    assert resp["rows"][0]["main_net_inflow"] is None
+
+
+def test_daily_local_mode_main_net_inflow_null_when_moneyflow_empty(monkeypatch):
+    provider = FakeProviderWithMoneyflow(pl.DataFrame())
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: True)
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: provider)
+
+    resp = kline.get_daily(
+        request(),
+        "600519.SH",
+        days=120,
+        start_date="2026-07-01",
+        end_date="2026-07-01",
+        ext_columns=None,
+    )
+
+    assert resp["rows"][0]["main_net_inflow"] is None
+
+
+def test_daily_local_mode_moneyflow_exception_does_not_500(monkeypatch):
+    provider = FakeProvider()
+
+    def _raise(symbol, start, end):
+        raise RuntimeError("disk read failed")
+
+    provider.get_moneyflow_range = _raise
+
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: True)
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: provider)
+
+    resp = kline.get_daily(
+        request(),
+        "600519.SH",
+        days=120,
+        start_date="2026-07-01",
+        end_date="2026-07-01",
+        ext_columns=None,
+    )
+
+    assert resp["rows"][0]["main_net_inflow"] is None
+    assert resp["rows"][0]["close"] == 1.0
+
+
 def test_daily_batch_local_mode_ignores_cached_raw(monkeypatch):
     provider = FakeProvider()
     repo = CachedRepo()

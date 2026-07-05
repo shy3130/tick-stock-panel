@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useMemo } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import { computeTdSequential } from '@/lib/tdSequential'
+import { buildAllSignals, type LockKey } from '@/lib/threeLocks'
 
 export interface OHLC {
   date: string
@@ -28,6 +29,7 @@ export interface OHLC {
   kdj_j?: number | null
   boll_upper?: number | null
   boll_lower?: number | null
+  main_net_inflow?: number | null
 }
 
 export interface ChartMarker {
@@ -521,51 +523,80 @@ function buildOption(
     }
   }
 
-  // 三锁 (30/60/90 均线粘合突破, 东方财富公开公式) — 全开信号 markPoint。
-  // MA30/60/90 三条线本身在下方 series 区块(BOLL 之后)绘制。
-  // 注: 年线(MA250)条件因数据窗口不足(默认日K仅加载约120根，不足250根)暂略，
-  // 本期只实现"均线粘合 + 放量突破"两项条件。
-  let ma30: (number | null)[] = []
-  let ma60Lock: (number | null)[] = []
-  let ma90: (number | null)[] = []
+  // 三锁 (趋势/资金/形态)，移植自 ../fquant threeLocks.ts，对齐"指南针" App。
+  // 逐锁独立追踪状态变化 + 综合3锁全开/破开信号。
   if (activeIndicators.includes('threelock')) {
-    const closes = data.map(d => d.close)
-    const smaN = (n: number): (number | null)[] => {
-      const out: (number | null)[] = []
-      for (let i = 0; i < closes.length; i++) {
-        if (i < n - 1) { out.push(null); continue }
-        let sum = 0
-        for (let j = i - n + 1; j <= i; j++) sum += closes[j]
-        out.push(sum / n)
-      }
-      return out
+    const lockRows = data.map(d => ({
+      date: d.date,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+      volume: d.volume,
+      main_net_inflow: d.main_net_inflow,
+    }))
+    const { combined, perLock } = buildAllSignals(lockRows)
+    const LOCK_COLOR: Record<LockKey, string> = {
+      trend: '#d23b3b',
+      capital: '#c46a7a',
+      pattern: '#d99930',
     }
-    ma30 = smaN(30)
-    ma60Lock = smaN(60)
-    ma90 = smaN(90)
-    for (let i = 0; i < data.length; i++) {
-      const m30 = ma30[i], m60 = ma60Lock[i], m90 = ma90[i]
-      if (m30 == null || m60 == null || m90 == null) continue
-      const maxV = Math.max(m30, m60, m90)
-      const minV = Math.min(m30, m60, m90)
-      const glued = minV > 0 && maxV / minV < 1.05
-      const e = (m30 + m60 + m90) / 3
-      const close = data[i].close
-      const pctChg = pctPoints(data[i], i > 0 ? data[i - 1] : null)
-      const breakout = close > e * 1.04 && pctChg != null && pctChg > 5
-      if (glued && breakout) {
+    const LOCK_LABEL: Record<LockKey, string> = {
+      trend: '趋',
+      capital: '资',
+      pattern: '形',
+    }
+    const LOCK_OFFSET_STEP: Record<LockKey, number> = {
+      trend: 0,
+      capital: 12,
+      pattern: 24,
+    }
+
+    for (const s of perLock) {
+      const bar = data[s.index]
+      if (!bar) continue
+      const color = LOCK_COLOR[s.lock]
+      const isOn = s.direction === 'on'
+      const coord: [string, number] = isOn ? [bar.date, bar.low] : [bar.date, bar.high]
+      const step = LOCK_OFFSET_STEP[s.lock]
+      const offsetY = isOn ? 10 + step : -18 - step
+      if (compact) {
         markPointData.push({
-          name: data[i].date,
-          coord: [data[i].date, data[i].high],
-          symbol: 'roundRect', symbolSize: [20, 20], symbolOffset: [0, -14],
-          itemStyle: { color: '#FACC15' },
+          name: bar.date, coord,
+          symbol: 'circle', symbolSize: 3, symbolOffset: [0, offsetY],
+          itemStyle: { color },
+          label: { show: false }, z: 100, zlevel: 10,
+        })
+      } else {
+        markPointData.push({
+          name: bar.date, coord,
+          symbol: 'roundRect', symbolSize: [12, 14], symbolOffset: [0, offsetY],
+          itemStyle: { color },
           label: {
-            show: true, formatter: '锁', color: '#422006', fontSize: 10, fontWeight: 'bold',
+            show: true, formatter: LOCK_LABEL[s.lock], color: '#fff', fontSize: 9, fontWeight: 'bold',
             fontFamily: 'JetBrains Mono, monospace',
           },
           z: 100, zlevel: 10,
         })
       }
+    }
+
+    for (const s of combined) {
+      const bar = data[s.index]
+      if (!bar) continue
+      const isBuy = s.kind === 'buy'
+      const coord: [string, number] = isBuy ? [bar.date, bar.low] : [bar.date, bar.high]
+      markPointData.push({
+        name: bar.date, coord,
+        symbol: isBuy ? 'roundRect' : 'circle',
+        symbolSize: isBuy ? [22, 22] : [18, 18],
+        symbolOffset: isBuy ? [0, 20] : [0, -26],
+        itemStyle: { color: isBuy ? '#F59E0B' : THEME.bear },
+        label: {
+          show: true, formatter: isBuy ? '锁' : '开', color: isBuy ? '#422006' : '#fff',
+          fontSize: 11, fontWeight: 'bold', fontFamily: 'JetBrains Mono, monospace',
+        },
+        z: 100, zlevel: 10,
+      })
     }
   }
 
@@ -726,20 +757,6 @@ function buildOption(
     })
     series.push(bollLine('boll_upper', '#E879F9', 'BOLL上'))
     series.push(bollLine('boll_lower', '#E879F9', 'BOLL下'))
-  }
-
-  // 三锁: MA30/60/90 三条均线本身即为"三把锁"的可视化，配色与 MA5/10/20/60 区分
-  if (activeIndicators.includes('threelock') && ma30.length > 0) {
-    const lockLine = (arr: (number | null)[], color: string, name: string) => ({
-      name, type: 'line',
-      data: arr.map(v => (v != null ? Number(v) : '-')),
-      smooth: true, symbol: 'none', animation: false,
-      silent: true, connectNulls: true,
-      lineStyle: { width: 1, color }, itemStyle: { color },
-    })
-    series.push(lockLine(ma30, '#22D3EE', 'MA30'))
-    series.push(lockLine(ma60Lock, '#F59E0B', 'MA60锁'))
-    series.push(lockLine(ma90, '#A78BFA', 'MA90'))
   }
 
   // ===== 子图区域 =====

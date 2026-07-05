@@ -256,6 +256,29 @@ def get_daily(
             except Exception as e:  # noqa: BLE001
                 logger.debug("本地模式单股除权因子拉取失败 %s: %s", symbol, e)
         enriched = compute_enriched(raw, factors=factors, instruments=instruments, asset_type=asset_type)
+        if asset_type == "stock":
+            try:
+                moneyflow = provider.get_moneyflow_range(symbol, start_dt, end_dt)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("本地模式资金流拉取失败 %s: %s", symbol, e)
+                moneyflow = pl.DataFrame()
+            if not moneyflow.is_empty():
+                enriched = (
+                    enriched
+                    .with_columns(
+                        pl.col("date").cast(pl.Date, strict=False).cast(pl.Utf8).alias("_date_key")
+                    )
+                    .join(
+                        moneyflow.rename({"date": "_date_key"}),
+                        on="_date_key",
+                        how="left",
+                    )
+                    .drop("_date_key")
+                )
+            else:
+                enriched = enriched.with_columns(pl.lit(None).cast(pl.Float64).alias("main_net_inflow"))
+        else:
+            enriched = enriched.with_columns(pl.lit(None).cast(pl.Float64).alias("main_net_inflow"))
         rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
         resp = {
             "symbol": symbol,
@@ -441,6 +464,7 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -
         "amount": q.get("amount"),
         "change_pct": q.get("change_pct"),
         "is_live": True,
+        "main_net_inflow": None,
     }
     # 补上 enriched 的技术指标字段
     for key in ("ma5", "ma10", "ma20", "ma30", "ma60",

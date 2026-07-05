@@ -168,6 +168,23 @@ class EngineDataDiskClient:
             "small_ratio": float(row.get("SmallRatio") or 0),
         }
 
+    def get_fund_range(self, code: str, start_iso: str, end_iso: str, asset_type: str | None = None) -> pl.DataFrame:
+        """区间资金流查询：一次性读取该标的历史 CSV，按日期过滤到闭区间。"""
+        df = self._read("fund", code, asset_type)
+        if df.is_empty() or "Date" not in df.columns or "Main" not in df.columns:
+            return pl.DataFrame()
+        return (
+            df.filter(
+                (pl.col("Date").cast(pl.Utf8) >= start_iso)
+                & (pl.col("Date").cast(pl.Utf8) <= end_iso)
+            )
+            .select(
+                pl.col("Date").cast(pl.Utf8).alias("date"),
+                pl.col("Main").cast(pl.Float64).alias("main_net_inflow"),
+            )
+            .sort("date")
+        )
+
     def freshness(self, code: str = "600519") -> date | None:
         rows = self.get_wide(code, limit=1)
         if not rows:

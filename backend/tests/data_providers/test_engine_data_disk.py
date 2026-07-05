@@ -23,6 +23,12 @@ TRANS = """time,price,vol,num,amount,buyorsell
 FUND = """Date,Code,Main,MainRatio,SuperLarge,SuperLargeRatio,Large,LargeRatio,Medium,MediumRatio,Small,SmallRatio
 2026-07-01,sh600519,300,3,100,1,200,2,-50,-0.5,-250,-2.5
 """
+FUND_RANGE = """Date,Code,Main,MainRatio,SuperLarge,SuperLargeRatio,Large,LargeRatio,Medium,MediumRatio,Small,SmallRatio
+2026-06-29,sh600519,100,1,50,0.5,50,0.5,-20,-0.2,-30,-0.3
+2026-06-30,sh600519,-50,-0.5,10,0.1,-30,-0.3,-10,-0.1,-20,-0.2
+2026-07-01,sh600519,300,3,100,1,200,2,-50,-0.5,-250,-2.5
+2026-07-02,sh600519,80,0.8,40,0.4,20,0.2,10,0.1,10,0.1
+"""
 
 
 def make_disk(root: Path):
@@ -38,6 +44,11 @@ def make_disk(root: Path):
     (root / "fund" / "sh600" / "sh600519.csv").write_text(FUND)
     (root / "minutes" / "2026" / "20260701" / "sh600519.csv").write_text(MINUTES)
     (root / "trans" / "2026" / "20260701" / "sh600519.csv").write_text(TRANS)
+
+
+def make_disk_fund_range(root: Path):
+    (root / "fund" / "sh600").mkdir(parents=True)
+    (root / "fund" / "sh600" / "sh600519.csv").write_text(FUND_RANGE)
 
 
 def test_csv_path():
@@ -137,3 +148,37 @@ def test_get_fund_daily_reads_net_amounts(tmp_path, monkeypatch):
     assert row["super_large_net"] == 100.0
     assert row["large_net"] == 200.0
     assert row["main_ratio"] == 3.0
+
+
+def test_get_fund_range_filters_to_window(tmp_path, monkeypatch):
+    make_disk_fund_range(tmp_path)
+    monkeypatch.setenv("TDX_DATA_DIR", str(tmp_path))
+
+    df = EngineDataDiskClient().get_fund_range("600519", "2026-06-30", "2026-07-01")
+
+    assert df.columns == ["date", "main_net_inflow"]
+    rows = df.to_dicts()
+    assert [str(r["date"]) for r in rows] == ["2026-06-30", "2026-07-01"]
+    assert rows[0]["main_net_inflow"] == -50.0
+    assert rows[1]["main_net_inflow"] == 300.0
+
+
+def test_get_fund_range_missing_symbol_returns_empty(tmp_path, monkeypatch):
+    make_disk_fund_range(tmp_path)
+    monkeypatch.setenv("TDX_DATA_DIR", str(tmp_path))
+
+    df = EngineDataDiskClient().get_fund_range("000001.SZ", "2026-06-30", "2026-07-01")
+
+    assert df.is_empty()
+
+
+def test_get_fund_range_full_window_beyond_available_dates(tmp_path, monkeypatch):
+    make_disk_fund_range(tmp_path)
+    monkeypatch.setenv("TDX_DATA_DIR", str(tmp_path))
+
+    df = EngineDataDiskClient().get_fund_range("600519", "2026-01-01", "2026-12-31")
+
+    assert df.height == 4
+    assert [str(d) for d in df["date"].to_list()] == [
+        "2026-06-29", "2026-06-30", "2026-07-01", "2026-07-02",
+    ]
