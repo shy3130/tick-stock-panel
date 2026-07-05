@@ -57,6 +57,8 @@ def create_session(data_dir: Path, title: str | None = None) -> dict[str, Any]:
         "created_at": ts,
         "updated_at": ts,
         "message_count": 0,
+        "last_attempt_id": None,
+        "last_attempt_status": None,
     }
     sessions = list_sessions(data_dir)
     sessions.insert(0, item)
@@ -123,3 +125,24 @@ def append_message(data_dir: Path, session_id: str, role: str, content: str) -> 
             break
     _write_json(_index_path(data_dir), sessions)
     return row
+
+
+def set_attempt(data_dir: Path, session_id: str, attempt_id: str, status: str) -> None:
+    sessions = list_sessions(data_dir)
+    for item in sessions:
+        if item.get("session_id") == session_id:
+            item["last_attempt_id"] = attempt_id
+            item["last_attempt_status"] = status
+            item["updated_at"] = _now()
+            _write_json(_index_path(data_dir), sessions)
+            return
+
+
+def set_attempt_status(data_dir: Path, session_id: str, status: str) -> None:
+    sessions = list_sessions(data_dir)
+    for item in sessions:
+        if item.get("session_id") == session_id:
+            item["last_attempt_status"] = status
+            item["updated_at"] = _now()
+            _write_json(_index_path(data_dir), sessions)
+            return
