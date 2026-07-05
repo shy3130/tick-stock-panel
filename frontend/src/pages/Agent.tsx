@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Send, Trash2, Wrench } from 'lucide-react'
+import { Bot, Loader2, Send, Trash2, Wrench } from 'lucide-react'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { PageHeader } from '@/components/PageHeader'
 import { api, type AgentMsg } from '@/lib/api'
@@ -13,6 +13,92 @@ interface ToolTrace {
 
 interface ChatMsg extends AgentMsg {
   tools?: ToolTrace[]
+}
+
+interface ExampleItem {
+  title: string
+  prompt: string
+}
+
+interface ExampleCategory {
+  label: string
+  items: ExampleItem[]
+}
+
+const CAPABILITY_CHIPS = ['策略筛选', '因子分析', '组合优化', '回测验证', '只读数据工具']
+
+const EXAMPLE_CATEGORIES: ExampleCategory[] = [
+  {
+    label: '策略与选股',
+    items: [
+      { title: '内置策略', prompt: '有哪些内置策略？分别适合什么行情？' },
+      { title: '选股筛选', prompt: '帮我筛选连续放量、涨幅超5%的股票。' },
+    ],
+  },
+  {
+    label: '行情与市场',
+    items: [
+      { title: '个股走势', prompt: '看下 600519 最近走势和关键风险。' },
+      { title: '市场概览', prompt: '总结今天市场概览，给出板块和情绪线索。' },
+    ],
+  },
+  {
+    label: '量化分析',
+    items: [
+      { title: '单因子分析', prompt: '分析一下 momentum_20d 这个因子最近半年的 IC 表现。' },
+      { title: '多因子对比', prompt: '帮我对比一下 rsi_14、macd_hist 和 momentum_60d 这几个因子的 IC 表现，哪个更强。' },
+      { title: '多因子合成', prompt: '把 rsi_14 和 macd_hist 按 IC 加权，给这些股票合成打分排名。' },
+    ],
+  },
+  {
+    label: '组合与回测',
+    items: [
+      { title: '组合优化', prompt: '用风险平价方法给这几只股票算组合权重。' },
+      { title: '策略回测', prompt: '帮我跑个回测验证这个策略最近表现。' },
+    ],
+  },
+]
+
+function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: (prompt: string) => void }) {
+  return (
+    <div className="flex min-h-[42vh] flex-col items-center justify-center gap-5 px-2 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/15 text-accent">
+        <Bot className="h-6 w-6" />
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-foreground">AI 助手</div>
+        <div className="mt-1 text-xs text-muted">询问策略、行情、因子、组合，必要时会调用面板只读工具。</div>
+      </div>
+      <div className="flex flex-wrap justify-center gap-1.5">
+        {CAPABILITY_CHIPS.map(label => (
+          <span
+            key={label}
+            className="rounded-full border border-border bg-elevated px-2.5 py-1 text-[11px] text-muted"
+          >
+            {label}
+          </span>
+        ))}
+      </div>
+      <div className="grid w-full max-w-2xl grid-cols-1 gap-3 text-left sm:grid-cols-2">
+        {EXAMPLE_CATEGORIES.map(cat => (
+          <div key={cat.label} className="space-y-1.5">
+            <div className="px-1 text-[11px] font-medium text-secondary">{cat.label}</div>
+            {cat.items.map(ex => (
+              <button
+                key={ex.title}
+                disabled={disabled}
+                onClick={() => onExample(ex.prompt)}
+                className="block w-full rounded-card border border-border bg-surface px-3 py-2 text-left hover:bg-elevated disabled:opacity-50"
+              >
+                <div className="text-xs font-medium text-foreground">{ex.title}</div>
+                <div className="mt-1 text-[11px] leading-relaxed text-muted">{ex.prompt}</div>
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export function Agent() {
@@ -31,8 +117,8 @@ export function Agent() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [msgs, streaming])
 
-  async function send() {
-    const text = input.trim()
+  async function sendPrompt(prompt: string) {
+    const text = prompt.trim()
     if (!text || streaming) return
 
     const fullHistory: AgentMsg[] = [
@@ -84,6 +170,10 @@ export function Agent() {
     }
   }
 
+  async function send() {
+    await sendPrompt(input)
+  }
+
   function clear() {
     clearAgentChat()
     setMsgs([])
@@ -107,9 +197,7 @@ export function Agent() {
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto py-3">
         {msgs.length === 0 && (
-          <div className="pt-10 text-center text-xs text-muted">
-            问点什么，比如"有哪些内置策略"或"看下 600519 最近走势"
-          </div>
+          <WelcomeScreen disabled={streaming} onExample={sendPrompt} />
         )}
         {msgs.map((m, i) => (
           <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
