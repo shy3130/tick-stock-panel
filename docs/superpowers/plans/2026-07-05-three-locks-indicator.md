@@ -98,7 +98,7 @@ def test_get_fund_range_full_window_beyond_available_dates(tmp_path, monkeypatch
         不需要按天循环调用 get_fund_daily。
         """
         df = self._read("fund", code, asset_type)
-        if df.is_empty():
+        if df.is_empty() or "Date" not in df.columns or "Main" not in df.columns:
             return pl.DataFrame()
         return (
             df.filter(
@@ -112,6 +112,8 @@ def test_get_fund_range_full_window_beyond_available_dates(tmp_path, monkeypatch
             .sort("date")
         )
 ```
+
+**⚠️ 修正（panel 3 评审 Low，已verify属实）**：加了 `"Date" not in df.columns or "Main" not in df.columns` 的列存在性检查——CSV 能读到但缺这两列时（理论上的 schema 异常场景）直接返回空 DataFrame，而不是让 `pl.col("Date")` 抛 `ColumnNotFoundError`。这和现有 `get_fund_daily`（`engine_data_disk.py:146-169`）的容错水平一致（该方法本身也不做列存在性检查），真实 TDX 数据 schema 稳定，这是低风险场景下的额外防御，不是必须项，但成本很低顺手加上。
 
 - [ ] **Step 4: 运行测试验证通过**
 
@@ -236,8 +238,8 @@ git commit -m "feat(data): add FQuantProvider.get_moneyflow_range forwarding to 
 - 测试：`backend/tests/api/test_kline_local_fallback.py`
 
 **接口：**
-- Consumes：Task 2 的 `provider.get_moneyflow_range(symbol, start_dt, end_dt) -> pl.DataFrame`（列 `date`/`main_net_inflow`）；本地模式分支既有变量 `provider`/`asset_type`/`start_dt`/`end_dt`/`enriched`（`kline.py:199-258`，见下方 Step 3 的确切上下文）。
-- Produces：`enriched` DataFrame（进而 `rows`/API 响应）新增 `main_net_inflow` 列，`asset_type != "stock"` 时该列恒为 `null`；供前端 Task 4 的 `threeLocks.ts` 消费。
+- Consumes：Task 2 的 `provider.get_moneyflow_range(symbol, start_dt, end_dt) -> pl.DataFrame`（列 `date`/`main_net_inflow`）；本地模式分支既有变量 `provider`/`asset_type`/`start_dt`/`end_dt`/`enriched`（`kline.py:199-258`，见下方 Step 3 的确切上下文）；既有函数 `_maybe_inject_live_candle(request, symbol, rows) -> list[dict]`（`kline.py:398-467`，构造的 `live_row` 字典不含技术指标之外的固定字段，见下方 Step 3 的第二处改动）。
+- Produces：`enriched` DataFrame（进而 `rows`/API 响应）新增 `main_net_inflow` 列，`asset_type != "stock"` 时该列恒为 `null`；供前端 Task 4 的 `threeLocks.ts` 消费。**每一行（含 `_maybe_inject_live_candle` 追加的实时蜡烛行）都保证有 `main_net_inflow` 这个 key**（值可以是 `null`，但 key 不能缺失），避免前端按 key 存在性判断时行为不一致。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -350,7 +352,7 @@ def test_daily_local_mode_moneyflow_exception_does_not_500(monkeypatch):
 
 - [ ] **Step 2: 运行测试验证失败**
 
-运行：`cd backend && uv run --extra dev pytest tests/api/test_kline_local_fallback.py -k main_net_inflow -v`
+运行：`cd backend && uv run --extra dev pytest tests/api/test_kline_local_fallback.py -k "moneyflow or main_net_inflow" -v`
 预期：4 个测试 FAIL（`main_net_inflow` 字段不存在于 `resp["rows"][0]`，报 `KeyError`）
 
 - [ ] **Step 3: 实现合并逻辑**
@@ -366,12 +368,16 @@ def test_daily_local_mode_moneyflow_exception_does_not_500(monkeypatch):
                 logger.debug("本地模式资金流拉取失败 %s: %s", symbol, e)
                 moneyflow = pl.DataFrame()
             if not moneyflow.is_empty():
-                # date 列用字符串做 join key: get_fund_range (Task 1) 返回的 date 是 pl.Utf8;
-                # enriched 的 date 列实际类型不确定 (可能是 pl.Date/pl.Datetime/pl.Utf8, 取决于
-                # compute_enriched 内部处理), 显式转字符串做 join key 就不需要关心它原本是什么类型。
+                # date 列用字符串做 join key。先统一 cast 到 pl.Date 再转 pl.Utf8——
+                # 直接对 pl.Datetime 做 .cast(pl.Utf8) 会得到 "YYYY-MM-DD HH:MM:SS.ffffff"
+                # 这种带时分秒的格式，跟 get_fund_range (Task 1) 返回的纯日期字符串
+                # "YYYY-MM-DD" 对不上、join 会全部落空。先转 pl.Date（对已经是
+                # Date/Utf8 的列是安全的 no-op 或直接可解析）能保证最终字符串格式一致。
                 enriched = (
                     enriched
-                    .with_columns(pl.col("date").cast(pl.Utf8).alias("_date_key"))
+                    .with_columns(
+                        pl.col("date").cast(pl.Date, strict=False).cast(pl.Utf8).alias("_date_key")
+                    )
                     .join(
                         moneyflow.rename({"date": "_date_key"}),
                         on="_date_key",
@@ -386,12 +392,37 @@ def test_daily_local_mode_moneyflow_exception_does_not_500(monkeypatch):
         rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
 ```
 
-`.cast(pl.Utf8)` 对 `pl.Date`/`pl.Datetime`/`pl.Utf8` 任意一种原始类型都能正常工作（转成 `YYYY-MM-DD` 或等价的可比较字符串），不需要提前确认 `enriched` 的 `date` 列具体是哪种类型——这就是用这个写法而不是"先查清楚类型再决定要不要转换"的原因。
+**⚠️ 修正（panel 3 评审 Medium，已verify属实）**：`.cast(pl.Utf8)` 直接用在 `pl.Datetime` 列上会产出带时分秒的字符串（如 `"2026-07-01 00:00:00.000000"`），跟 `get_fund_range` 的纯日期字符串对不上导致 join 全部落空。当前生产路径下 `enriched` 的 `date` 列经 `app/data_providers/normalizer.py::normalize_daily`（`if df.schema["date"] != pl.Date: df = df.with_columns(pl.col("date").cast(pl.Date, strict=False))`）保证是 `pl.Date`，本身没问题；但原计划"任意类型都能直接 `.cast(Utf8)`"的说法不准确，已改成先显式 `.cast(pl.Date, strict=False)` 再 `.cast(pl.Utf8)`，对当前唯一实际出现的 `pl.Date` 类型是无副作用的 no-op，同时也堵住了万一以后 `enriched` 变成 `pl.Datetime` 的潜在风险。
+
+**⚠️ 修正（panel 3 评审 High，已verify属实）**：`_maybe_inject_live_candle`（`kline.py:398-467`）构造的 `live_row` 字典（`:433-447`）不包含 `main_net_inflow` 这个 key。在"追加"分支（`rows.append(live_row)`，今天这一行还不在 `rows` 里时，`:466-467`）会导致新追加的这一行完全没有 `main_net_inflow` key（不是 `null`，是 key 缺失）。虽然前端 `threeLocks.ts` 的 `main_net_inflow: number | null | undefined` 类型和 `!= null` 判断能兼容 `undefined`，但为了避免行与行之间 key 集合不一致这个隐患，在 `live_row` 构造时显式补上这个 key。修改 `backend/app/api/kline.py:433-447` 的 `live_row` 字典字面量，在 `"is_live": True,` 之后新增一行：
+
+```python
+    live_row: dict = {
+        "date": today_str,
+        "symbol": symbol,
+        "open": raw_open if raw_open and raw_open > 0 else close_price,
+        "high": raw_high if raw_high and raw_high > 0 else close_price,
+        "low": raw_low if raw_low and raw_low > 0 else close_price,
+        "close": close_price,
+        "volume": q.get("volume"),
+        "amount": q.get("amount"),
+        "change_pct": q.get("change_pct"),
+        "change_amount": q.get("change_amount"),
+        "amplitude": q.get("amplitude"),
+        "turnover_rate": q.get("turnover_rate"),
+        "is_live": True,
+        "main_net_inflow": None,
+    }
+```
+
+（实时行情快照本身不含主力净流入数据，恒为 `None` 是正确行为，不是权宜之计——资金锁对当天实时蜡烛天然判"数据不足"，等下一次盘后管道跑完、`main_net_inflow` 真正落到历史数据里才会有值。）
 
 - [ ] **Step 4: 运行测试验证通过**
 
-运行：`cd backend && uv run --extra dev pytest tests/api/test_kline_local_fallback.py -v`
-预期：全部 PASS（含新增 4 个 + 原有测试）。
+运行：`cd backend && uv run --extra dev pytest tests/api/test_kline_local_fallback.py -k "moneyflow or main_net_inflow" -v`
+预期：全部 PASS（4 个新增测试）。
+
+**⚠️ 修正（panel 3 评审 Low，已verify属实）**：Step 2 原来用 `-k main_net_inflow` 过滤，但 `test_daily_local_mode_skips_moneyflow_for_non_stock` 这个测试名不含 `main_net_inflow` 子串，会被漏掉。改成 `-k "moneyflow or main_net_inflow"`（4 个新增测试名都包含其中一个子串）。Step 2 的预期文字同步改为"4 个测试 FAIL"。
 
 - [ ] **Step 5: Commit**
 
@@ -420,6 +451,7 @@ git commit -m "feat(api): merge main_net_inflow into local-mode kline response"
   - `interface ClusterSignal { date: string; index: number; states: LockStateSnapshot }`
   - `function sortKLinesByDateAsc<T extends { date: string }>(rows: T[]): T[]`
   - `function computeThreeLocks(rows: ThreeLocksKLinePoint[]): ThreeLocksResult`
+  - `function buildThreeLockSignals(rows: ThreeLocksKLinePoint[]): ThreeLockSignal[]`（panel 3 评审 Low 指出原列表遗漏，Task 5 的移植测试会 import 它，已补上）
   - `function buildAllSignals(rows: ThreeLocksKLinePoint[]): AllSignals`
   - `function buildClusterSignals(rows: ThreeLocksKLinePoint[]): ClusterSignal[]`
 
@@ -677,7 +709,7 @@ export function buildClusterSignals(rows: ThreeLocksKLinePoint[]): ClusterSignal
 - [ ] **Step 2: 类型检查**
 
 运行：`cd frontend && pnpm tsc --noEmit`
-预期：exit 0，无报错（这个文件此时还没被任何地方 import，纯新增不影响既有代码）
+预期：exit 0，无报错。**修正说明（panel 3 评审 Low，已verify属实）**：原文写"这个文件此时还没被任何地方 import，不影响既有代码"不够准确——`frontend/tsconfig.json` 的 `include` 覆盖整个 `src`，`tsc --noEmit` 会把这个新文件本身也纳入类型检查（这正是这一步要验证的对象），只是这个新文件不会影响*其它*文件的类型检查结果，不是"游离在检查范围之外"。
 
 - [ ] **Step 3: Commit**
 
@@ -962,6 +994,14 @@ git commit -m "test(charts): port three-locks 14 test cases from fquant"
       capital: '资',
       pattern: '形',
     }
+    // 每个锁独立的垂直偏移量 —— 不能只按 on/off 两档区分，否则同一天多个锁
+    // 同时触发(比如趋势锁和形态锁同一天都翻转)时，marker 会画在完全相同的
+    // 坐标上互相重叠、颜色分不清。按锁再错开一层(每层 12px)。
+    const LOCK_OFFSET_STEP: Record<LockKey, number> = {
+      trend: 0,
+      capital: 12,
+      pattern: 24,
+    }
 
     for (const s of perLock) {
       const bar = data[s.index]
@@ -969,7 +1009,8 @@ git commit -m "test(charts): port three-locks 14 test cases from fquant"
       const color = LOCK_COLOR[s.lock]
       const isOn = s.direction === 'on'
       const coord: [string, number] = isOn ? [bar.date, bar.low] : [bar.date, bar.high]
-      const offsetY = isOn ? 10 : -18
+      const step = LOCK_OFFSET_STEP[s.lock]
+      const offsetY = isOn ? 10 + step : -18 - step
       if (compact) {
         markPointData.push({
           name: bar.date, coord,
@@ -1018,6 +1059,8 @@ git commit -m "test(charts): port three-locks 14 test cases from fquant"
 import { buildAllSignals, type LockKey } from '@/lib/threeLocks'
 ```
 
+**⚠️ 修正（panel 3 评审 Medium，已verify属实）**：`buildAllSignals` 的 `perLock` 事件里，趋势/资金/形态三个锁的"首次有效状态"或"状态翻转"是可能在同一天同时发生的（比如某天股价放量突破，恰好同时让趋势锁和形态锁都翻转）——原方案的 `offsetY` 只按 `on`/`off` 两档区分，不区分是哪个锁，同一天多个锁触发时会画在完全相同的坐标上互相重叠，红/粉/橙三色叠在一起分不清。已加 `LOCK_OFFSET_STEP` 按锁再错开一层（每层 12px），保证同一天最多3个锁的标记也能垂直分开显示。
+
 - [ ] **Step 4: 类型检查**
 
 运行：`cd frontend && pnpm tsc --noEmit`
@@ -1031,8 +1074,8 @@ import { buildAllSignals, type LockKey } from '@/lib/threeLocks'
 - [ ] **Step 6: 手动视觉验证**
 
 启动前端 dev 服务(如未运行)：`cd frontend && pnpm dev`。打开任意个股日K图，点击"三锁"叠加指标开关，确认：
-- 不再出现旧版的黄色圆角方块"锁"标记(那是已删除的错误实现)。
-- 出现新的逐锁小图标(趋势红/资金粉/形态橙)，以及三锁全开(橙色"锁"字)/破开(绿色"开"字)的综合标记。
+- **不再出现"由 MA30/60/90 三条均线粘合度 + 单日放量突破触发的黄色圆角方块锁标记"**（那是已删除的错误实现——**注意新方案里同样会出现文字为"锁"的标记，区分方式不是"有没有锁图标"，而是触发逻辑和视觉规格完全不同**：新版的综合信号标记基于 fquant 移植的三锁全开/破开判定，且新增了三个颜色各异的逐锁小图标，旧版没有这些）。
+- 出现新的逐锁小图标(趋势红/资金粉/形态橙)，以及三锁全开(橙色"锁"字)/破开(绿色"开"字)的综合标记；若某一天多个锁同时触发，标记应垂直错开、不重叠。
 - 关闭"三锁"开关后，图上不再有任何三锁相关标记（`activeIndicators` 不含 `'threelock'` 时整段逻辑不执行）。
 - 缩小可见K线范围到超过 `COMPACT_THRESHOLD`(60根)，确认逐锁标记降级为小圆点(compact 模式)。
 
@@ -1075,3 +1118,13 @@ print('sample:', rows[-1].get('main_net_inflow'))
 **3. 类型一致性：** `ThreeLocksKLinePoint`（Task 4 定义）在 Task 6 的 `lockRows` 构造里字段名逐一对应（`date`/`high`/`low`/`close`/`volume`/`main_net_inflow`）；`main_net_inflow` 字段名在 Task 1（`get_fund_range` 返回列名）、Task 2（透传）、Task 3（`join` 后的列名）、Task 4（`ThreeLocksKLinePoint.main_net_inflow`）、Task 6（`OHLC.main_net_inflow`）五处保持一致，无命名漂移。`buildAllSignals`/`LockKey` 在 Task 6 里从 `@/lib/threeLocks` 显式 import，不重复定义。
 
 **4. 已知限制（继承自 spec）：** 本设计只解决本地磁盘模式（`is_local_daily_mode()` 为真）这一条路径；非本地模式的两条子路径（落盘表命中 / HTTP 回退现算）均不在本次范围内，资金锁在非本地模式下恒判"数据不足"。`buildAllSignals`/`buildClusterSignals` 是 O(n²) 实现（每个索引都重新计算一次全量三锁状态），对典型 120 根K线量级（120²=14400 次基础运算）性能可忽略，不做优化。
+
+**5. panel 3 对本计划的评审（2026-07-05，结论"需改"）：1 条 High + 2 条 Medium + 5 条 Low，逐条 verify 后全部属实，无一误报，已全部修正：**
+- High：`_maybe_inject_live_candle` 的 `live_row` 不含 `main_net_inflow` key，"追加"分支会让新行完全缺这个 key（不是 `null`，是缺失）→ 已在 `live_row` 字典里显式加 `"main_net_inflow": None`。
+- Medium-1：`.cast(pl.Utf8)` 直接用在 `pl.Datetime` 列上会产出带时分秒的字符串、跟 `get_fund_range` 的纯日期字符串对不上导致 join 落空（虽然当前生产路径的 `date` 列经 `normalizer.py::normalize_daily` 保证是 `pl.Date`，原计划"任意类型都行"的说法本身不准确）→ 已改成先 `.cast(pl.Date, strict=False)` 再 `.cast(pl.Utf8)`。
+- Medium-2：Task 6 的逐锁 marker 只按 on/off 两档定位，同一天多个锁同时触发（真实行情里可能发生）会画在同一坐标互相重叠 → 已加 `LOCK_OFFSET_STEP` 按锁再错开一层。
+- Low-1：Task 3 的 `-k main_net_inflow` 过滤漏掉 `test_daily_local_mode_skips_moneyflow_for_non_stock`（测试名不含该子串）→ 改成 `-k "moneyflow or main_net_inflow"`。
+- Low-2：Task 1 的 `get_fund_range` 对 CSV 缺 `Date`/`Main` 列没有防御，会抛 `ColumnNotFoundError` → 加了列存在性检查（虽然和现有 `get_fund_daily` 的容错水平一致、真实风险低，顺手补上）。
+- Low-3：Task 4 的 Produces 接口列表漏了 `buildThreeLockSignals`（Task 5 的移植测试要 import 它）→ 已补上。
+- Low-4：Task 4 "文件未被 import 所以不影响既有代码" 的说法不准确（`tsconfig.json` 的 `include: ["src"]` 会让 `tsc` 把这个新文件本身也纳入类型检查）→ 已修正措辞。
+- Low-5：Task 6 手测步骤"不再出现旧版黄色锁标记"的表述有歧义（新方案本身也有文字为"锁"的标记，容易让人以为"看到锁字就是没删干净"）→ 已改写，明确旧版是"MA30/60/90粘合+单日放量突破"触发、新版触发逻辑完全不同这一区分点。
