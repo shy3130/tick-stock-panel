@@ -145,10 +145,7 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         if not strategy_id:
             raise ValueError("strategy_id required")
         symbols = _require_list(args, "symbols", 20)
-        end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
-        start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=180)
-        if (end - start).days > 365:
-            raise ValueError("date range must be <= 365 days")
+        start, end = _resolve_date_range(args, 180, 365)
         result = StrategyBacktestService(BacktestEngine(repo), strategy_engine).run(StrategyBacktestConfig(
             strategy_id=strategy_id,
             symbols=symbols,
@@ -203,10 +200,7 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         factor_name = str(args.get("factor_name") or "").strip()
         if not factor_name:
             raise ValueError("factor_name required")
-        end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
-        start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=180)
-        if (end - start).days > 186:
-            raise ValueError("date range too wide (max 186 days)")
+        start, end = _resolve_date_range(args, 180, 186)
 
         svc = FactorBacktestService(BacktestEngine(repo))
         result = svc.run(FactorConfig(
@@ -231,10 +225,7 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         if unknown:
             raise ValueError(f"unknown factor: {unknown[0]}")
 
-        end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
-        start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=180)
-        if (end - start).days > 186:
-            raise ValueError("date range too wide (max 186 days)")
+        start, end = _resolve_date_range(args, 180, 186)
         svc = FactorBacktestService(BacktestEngine(repo))
         out = []
         for factor_id in factor_ids:
@@ -388,6 +379,14 @@ def _require_list(args: dict, key: str, max_len: int) -> list:
     if len(value) > max_len:
         raise ValueError(f"{key} supports at most {max_len} items")
     return value
+
+
+def _resolve_date_range(args: dict, default_days: int, max_days: int) -> tuple[date, date]:
+    end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
+    start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=default_days)
+    if (end - start).days > max_days:
+        raise ValueError(f"date range too wide (max {max_days} days)")
+    return start, end
 
 
 def _df_rows(df: pl.DataFrame) -> list[dict]:
