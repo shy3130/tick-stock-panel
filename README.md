@@ -1,15 +1,15 @@
 <div align="center">
 
-# 📈 A股智能量化工作台
+# 📈 本地量化工作台
 
-**自托管、零运维的 A 股「选股 + 监控 + 回测」量化工作台**
+**自托管、以本地数据源为主的「选股 + 监控 + 回测 + 复盘」量化工作台**
 
 **面向个人散户与量化爱好者而生**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-≥3.11-blue.svg)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
-[![Data: TickFlow](https://img.shields.io/badge/Data-TickFlow-00b386.svg)](https://tickflow.org/auth/register?ref=V3KDKGXPEA)
+[![Data: fquant_local](https://img.shields.io/badge/Data-fquant__local-00b386.svg)](./README.md#-本地开发与数据源开发团队附录)
 [![Deploy: Docker](https://img.shields.io/badge/Deploy-Docker-2496ed.svg)](./Dockerfile)
 [![GitHub stars](https://img.shields.io/github/stars/shy3130/tickflow-stock-panel?style=social)](https://github.com/shy3130/tickflow-stock-panel/stargazers)
 
@@ -21,18 +21,19 @@
 
 </div>
 
-- 🆓 **开箱即用** — 留空 Key 即进 None 模式,历史日 K 免费体验,**无需付费**
+- 🏠 **本地数据优先** — 默认 `DATA_PROVIDER=fquant_local`,走 TDX 磁盘 + fstore + 受控实时 fallback
 - 🏠 **自托管零运维** — Docker 单容器部署,数据完全掌握在自己手里
-- 🔍 **三位一体** — 选股(20 内置策略)+ 实时监控 + 向量化回测,Polars 毫秒级扫描全 A 股
-- 🤖 **AI 加持** — 一句话生成策略代码,任意 OpenAI 兼容接口均可接入(留空即关闭)
+- 🔍 **多工具工作台** — 选股(20 内置策略)+ 实时监控 + 向量化回测 + 组合优化 + 交易复盘
+- 🤖 **多 AI 配置** — 支持 OpenAI 兼容接口 / ACP / Codex CLI profile,可按功能选择
 - 🔌 **自由扩展** — 自有量化项目数据,与内置数据同台分析
-- 🇨🇳 **A 股专用** — 盘后自动AI复盘并推送至飞书等;连板梯队、涨停动量、内置ths 概念 / 行业
+- 🇨🇳 **A 股为主,港股 P1 已接入** — A 股全功能;港股支持单股行情/K线/分析的第一阶段能力
+- 📣 **多通道推送** — 飞书 / 钉钉 / 企微 / MeoW webhook,用于监控告警与复盘推送
 
 
 
- 基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源。**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
+项目通过 `data_providers` 抽象层接入本地与远端数据源。当前默认本地源为 `fquant_local`。**明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
 
-> ⚠️ 考虑到tickflow数据源没有人气/资金流向等个性化数据,我将开放自有的第三方数据以供大佬们研究使用,包括但不限于当前内置的ths概念/ths行业(后续更新在这里)
+> ⚠️ 项目仍保留历史上的 TickFlow 命名与部分兼容痕迹,但新开发默认面向 `fquant_local` / `fquant` provider。资金流、概念/行业、ETF、财务等能力以本地数据与 fstore 覆盖为准。
 
  
 > 有更多稳定免费数据源推荐,或者提交建议/意见的大佬可以邮件到 415333856@qq.com,q群 109338242
@@ -44,7 +45,7 @@
 
 ## 🎯 项目定位
 
-**面向个人散户与量化爱好者的 A 股分析工作台**,聚焦「**选股 + 监控 + 回测**」三大场景,LLM能力驱动进行市场分析，掌控市场节奏；让普通投资者也能拥有一套可自定义策略的量化工具。
+**面向个人散户与量化爱好者的分析工作台**,聚焦「**选股 + 监控 + 回测 + 交易复盘**」等场景。LLM 可辅助生成策略、复盘市场、分析个股和财务,但核心计算与数据链路尽量本地化、可审计。
 
 ---
 
@@ -99,14 +100,17 @@
 ### 方式 A:Dev 模式(二次开发推荐)
 
 ```bash
-cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
-./dev.sh                   # Windows: .\dev.ps1
+cp .env.example .env       # 按需补 DATA_PROVIDER / TDX_DATA_DIR / FSTORE 密码 / AI
+make start-local           # 默认 DATA_PROVIDER=fquant_local; 或直接 ./dev.sh
 ```
 
 自动检查 / 下载依赖、释放端口、同时起前后端,Ctrl-C 一并关闭。默认:
 
 - 后端 → <http://localhost:3018> · 前端 → <http://localhost:3011>
+- 局域网访问 → `http://<本机 LAN IP>:3011/`
 - 自定义端口:`BACKEND_PORT=8000 FRONTEND_PORT=5173 ./dev.sh`
+
+> `Makefile` 默认 `DATA_PROVIDER=fquant_local`、`TDX_DATA_DIR=/Volumes/vol3/tdx`。若不使用本地 TDX/fstore,可在 `.env` 或启动命令中切到其它 provider。
 
 ### 方式 B:Docker(部署最省心)
 
@@ -125,8 +129,8 @@ docker compose up --build
 
 ```bash
 # 后端
-cd backend && uv sync --extra backtest   # 含回测依赖
-uv run uvicorn app.main:app --reload --port 3018
+cd backend && uv sync --extra dev
+DATA_PROVIDER=fquant_local uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 3018
 
 # 前端
 cd frontend && pnpm install && pnpm dev   # http://localhost:3011
@@ -155,11 +159,12 @@ git pull
 
 ### 🧭 跑起来后的第一次使用
 
-1. **设置 → 凭据与能力** → 点 **重新检测**,确认档位标签
-2. **设置** → **立即跑盘后管道**:拉日 K + 计算 enriched 表(None / Free 走 free-api,当日数据盘后 1-2 小时可用)
+1. **设置 → 系统/数据源** → 确认当前 provider capability,默认应为 `fquant_local`
+2. **设置 → 数据** → 按需跑盘后管道 / enriched 重建;本地模式优先使用 TDX `wide/` 与 enriched 分区
 3. **自选**页加标的 → **选股**页点策略卡片扫描 / 配自定义信号
-4. **回测**页选策略 + 区间 → 看净值 / 夏普 / 交易明细(SSE 实时进度)
-5. **监控中心**配规则(策略 / 个股信号 / 价格 / 异动),盘中实时弹窗 + 持久化记录
+4. **回测**页选策略 + 区间,或进 **组合优化** 页为 A 股/ETF 计算配置权重
+5. **交易复盘**上传券商流水,生成 FIFO 台账、行为诊断与基准超额
+6. **监控中心**配规则(策略 / 个股信号 / 价格 / 异动),盘中实时弹窗 + 持久化记录 + webhook 推送
 
 ---
 
@@ -193,9 +198,16 @@ git pull
 - **原子信号**:MA / MACD 金叉死叉 · N 日新高新低 · 布林突破
 - **复权**:基于除权因子自动前复权,回测与指标口径一致
 
-### 🧪 回测引擎(Backtest)
+### 🧪 回测与组合优化(Backtest / Optimizer)
 
 基于 vectorbt:**三种模式**(个股 / 策略组合 / 自由信号组合),真实约束(T+1 · 手续费 · 滑点 · 止损 · 最大持仓天数),组合管理(最大持仓 · 敞口 · 等权 / 自定义仓位)。SSE 流式进度支持切页重连,输出净值曲线 · 夏普 · 最大回撤 · 胜率 · 交易明细。
+
+**组合优化器**(`/optimizer`) 已接入:
+
+- A 股 + ETF 日线收益矩阵,港股/无数据标的自动 dropped 提示
+- 6 种权重方法:等权 · 等波动 · 风险平价 · 均值方差 · 最大分散 · 动量加权
+- 权重表 + 环形图 + 年化波动 / 分散度统计
+- 可从策略池一键导入命中标的再做组合配置
 
 ### 📡 监控中心(Monitor)
 
@@ -205,7 +217,7 @@ git pull
 - 多入口配置:监控中心新建 / 个股详情页「加监控」/ 策略卡片一键开启
 - 命中后右下角弹窗(可配声效)+ 持久化到 `alerts.jsonl`,菜单未读徽标
 - **触发记录详情**:每条记录展示命中的具体条件(如 `RSI>80`)与当前价位,一眼看清为何触发
-- **飞书 Webhook 推送**:全局一处配置飞书群机器人地址,启用推送的规则命中即推送到飞书群(支持签名校验);可在设置页设「默认推送渠道」,新建规则自动预填
+- **多通道 Webhook 推送**:飞书 / 钉钉 / 企微 / MeoW;可配置默认推送,新建规则自动预填
 
 ### 📈 个股分析(Beta)
 
@@ -214,13 +226,28 @@ git pull
 - **专用日 K 图表**:主图 + 成交量 + 滑块,默认近 6 个月
 - **9 类关键价位**(纯函数实时计算,毫秒级):压力支撑 · 成交密集区 · 枢轴点 · 前高前低 · Keltner 通道 · ATR 止损 · 缺口位 · 斐波那契 · 整数关口
 - **AI 四维分析**:技术 / 基本面 / 财务 / 消息面流式生成,实战派交易员视角
+- **港股 P1**:单股 K 线、实时行情和分析链路已按市场类型区分;港股当前标注未复权,涨跌停类指标不参与
+
+### 🧾 交易复盘(Trade Journal)
+
+- 上传券商成交流水 / 同花顺投资账本导出,解析 A 股与港股代码
+- FIFO 配对生成 position-cycle 台账,支持已清仓与持仓中交易
+- 行为诊断:处置效应 · 过度交易 · 追涨买入 · 浮亏加仓
+- 基准超额与追涨位置诊断;本地无日 K 或港股覆盖不足会在 warning 中明确提示
+- 原始 fills 与报告分离存储,AI 方法论上下文只作为响应展示,不污染 ledger
+
+### 💰 财务与 AI 分析
+
+- fstore 财务表 + 东方财富 forecast fallback,覆盖利润表 / 资产负债表 / 现金流 / 指标 / 业绩预告
+- 个股、财务、复盘、策略生成等入口支持 AI 辅助
+- AI 配置支持多 profile:OpenAI 兼容接口、ACP(Hermes 等)、Codex CLI;可设置全局默认并按功能选择
 
 ### 🧰 数据与扩展
 
-- **TickFlow 多源数据**:日 K / 分钟 K / 指数 / 财务 / 实时行情
+- **本地/远端多源 provider**:`fquant_local` 默认,`fquant` 可选;日 K / ETF / 指数 / 分钟 / 财务 / 实时行情按 capability 降级
 - **🔌 第三方接入(重点)**:Tushare 等 HTTP 定时拉取 · CSV / Excel 上传 · JSON 写入,自动 schema 发现 + 符号归一,页面可视化配置,**可与自有量化项目数据并入 DuckDB 同台分析**
 - **盘后定时管道**:APScheduler 15:30 CST 自动拉日 K + 重算 enriched + 跑监控
-- **令牌桶限流**:适配各档位 rpm / batch,批量合并 + 增量拉取
+- **本地 enriched 管道**:本地模式下 raw mirror 禁写,以 enriched 分区作为查询和选股主表;ETF 独立日线分区可用于追涨/组合优化
 
 ---
 
@@ -228,34 +255,37 @@ git pull
 
 所有配置从根目录 `.env` 读取(复制 `.env.example` 开始),也可在面板 **设置** 页修改。
 
-### 数据源:TickFlow
+### 数据源
 
 ```ini
-TICKFLOW_API_KEY=              # 留空 = None 模式(历史日K免费);填 Key = 按订阅档位解锁
+DATA_PROVIDER=fquant_local     # 默认:fquant_local; 可选:fquant
+TDX_DATA_DIR=/Volumes/vol3/tdx # fquant_local 本地 TDX 数据根目录
+FSTORE_DATABASE_PASSWORD=      # 需要读取 fstore PG 时填写
 ```
 
-留空即 None 模式,通过 free-api 使用历史日 K(当日数据盘后 1-2 小时可用);免费注册 Key 后进 Free 模式,开启自选股实时监控。**实时行情按档位**:
+当前项目以 provider capability 判断功能可用性,不再以 TickFlow 订阅档位作为默认门槛。`fquant_local` 主路径:
 
-| 档位     | 实时能力                                 |
-| :------- | :--------------------------------------- |
-| Free     | 自选页前 5 个标的实时监控(最低 6 秒刷新) |
-| Starter+ | 全市场实时行情                           |
-| Pro      | 分钟 K + 盘口                            |
-| Expert   | WebSocket + 财务数据                     |
+- 日 K / ETF / 指数:TDX 磁盘 + 本地 Parquet/enriched
+- 标的 / 财务 / ETF 备份:fstore PostgreSQL
+- 实时行情:可选 `tdx-api`,失败后走 provider 内 sina/tencent,再回退 fstore 快照
+- 5 档盘口 depth:当前仍是缺口,相关功能会能力门控降级
 
-> 完整能力矩阵见 [tickflow.org/pricing](https://tickflow.org/pricing/),高等档位含较低档全部权益。
+`DATA_PROVIDER` 环境变量优先级最高;未设置时读取设置页偏好,未知值会回落到 `fquant_local`。
 
 ### AI(可选)
 
-用于自然语言生成策略。**所有配置留空即跳过**,不影响核心功能。支持任意 OpenAI 兼容接口:
+用于自然语言生成策略、个股/财务/市场复盘。**所有配置留空即跳过**,不影响核心功能。支持多 profile:
 
 ```ini
-AI_PROVIDER=openai_compat              # openai_compat | ollama
+AI_PROVIDER=openai_compat              # openai_compat | acp | codex_cli
 AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=                            # 留空 = 关闭 AI
 AI_MODEL=deepseek-chat
+AI_CODEX_COMMAND=codex                 # codex_cli provider 使用
 AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
 ```
+
+页面设置支持新增多条 AI 配置、设默认 profile,并在部分功能入口选择本次使用的 profile。
 
 ### 服务与数据
 
@@ -287,8 +317,8 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 | **后端**     | FastAPI · Pydantic v2 · APScheduler · sse-starlette                                               |
 | **数据**     | Polars(计算)· DuckDB(查询)· Parquet(存储)                                                         |
 | **回测**     | vectorbt(全项目唯一 pandas 边界)                                                                  |
-| **数据源**   | [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方 SDK 、其他数据源后续迭代实装   |
-| **AI**(可选) | OpenAI 兼容接口(DeepSeek / 通义 / Ollama 等)                                                      |
+| **数据源**   | `data_providers` 抽象层 · fquant_local(TDX 磁盘 + fstore) · fquant(engine-data/fstore)           |
+| **AI**(可选) | 多 profile · OpenAI 兼容接口 · ACP · Codex CLI                                                     |
 | **前端**     | React 18 · Vite · TypeScript · Tailwind · Tanstack Query · Lightweight Charts · ECharts · dnd-kit |
 | **部署**     | Docker 两阶段构建,前端 dist 拷进后端镜像,**单容器**                                               |
 
@@ -302,7 +332,8 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 | 2-3    | Polars enriched 流水线 · Screener · vectorbt 回测(T+1/手续费/止损) | ✅   |
 | 4-5    | 监控引擎 · 四类监控规则 · 实时 SSE 推送 · 持久化记录               | ✅   |
 | 6      | 个股分析(专用日 K + 9 类关键价位 + AI 四维分析)                    | ✅   |
-| **v2** | Webhook 推送(QMT/掘金下单)· 板块异动 · 早晚报 · 更多扩展           | 🚧   |
+| 7      | 本地 provider / 多 AI profile / 交易复盘 / 组合优化器 / 港股 P1     | ✅   |
+| **v2** | 港股批量 enrich · depth 能力补齐 · 影子账户 · 更多扩展              | 🚧   |
 
 ---
 
@@ -317,11 +348,11 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 
 ## ⚠️ 免责声明
 
-本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股有风险,入市需谨慎。数据准确性以数据源 TickFlow 官方为准。
+本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股 / 港股 / ETF 均有风险,入市需谨慎。数据准确性取决于当前启用的 provider 与本地数据新鲜度。
 
 ## 📄 License
 
-[MIT](./LICENSE) © tickflow-stock-panel contributors · 本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款。
+[MIT](./LICENSE) © tickflow-stock-panel contributors
 
 ## 社区
 
@@ -335,26 +366,25 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 
 ### 📡 数据源架构
 
-本项目原本**只依赖 TickFlow 付费 SDK**。从 2026-07-02 起，项目已实现 **`FQuantProvider v2`**，通过 `data_providers` 抽象层**直接连接底层本地数据源**，逐步摆脱对 TickFlow 付费接口的依赖：
+本项目原本只依赖 TickFlow SDK。当前主线已切到 **`FQuantProvider v2` + `fquant_local` 默认本地模式**,通过 `data_providers` 抽象层直接连接底层本地数据源：
 
 | 上游源 | 协议 | 用途 | 配置 |
 |--------|------|------|------|
 | **fstore PostgreSQL** | psycopg v3 | 标的列表 / 财务报表 / 复权事件 / 分钟级备份 | `FSTORE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`（默认 `pve.wf:5432/fstore`） |
 | **engine-data** | HTTP GET | `fquant` 日 K 主源（`wide`） / 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
-| **TDX 磁盘** | CSV | `fquant_local` 主源：`wide/day/xdxr/minutes/trans/fund` | `TDX_DATA_DIR=/Volumes/vol3/tdx` |
+| **TDX 磁盘** | CSV | `fquant_local` 主源：`wide/day/xdxr/minutes/trans/fund`;`wide/` 优先,`day/` fallback | `TDX_DATA_DIR=/Volumes/vol3/tdx` |
 | **moneyflow** | HTTP GET | 资金流日 / 资金流分钟 | `http://pve.wf:8090`（上次测试 502，已自动降级） |
 | **tdx-api（可选）** | HTTP GET | realtime quote 优先源；未配置/失败时走 sina/tencent，再回退 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
 | **sina/tencent（provider 内适配器）** | HTTP GET | realtime fallback；连续失败退避 | provider 内部受控调用 |
 
 ### 🔁 Provider 切换
 
-通过 `DATA_PROVIDER` 环境变量或 `/api/settings/preferences/data-provider` 在三个 provider 之间切换；环境变量优先级最高。
+通过 `DATA_PROVIDER` 环境变量或 `/api/settings/preferences/data-provider` 在 provider 之间切换；环境变量优先级最高。
 
 | Provider | 数据来源 | capabilities | 默认 | 切换方式 |
 |----------|---------|--------------|------|----------|
-| `tickflow`（默认） | TickFlow SDK（付费） | 全部 7 项 | ✅ | 默认或 settings API |
 | `fquant` | fstore PG + engine-data + moneyflow + 可选 tdx-api | 日 K / 复权 / 分钟 / 财务 / realtime / universes；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant` 或 settings API |
-| `fquant_local` | TDX 磁盘 + fstore PG + tdx-api/sina/tencent/fstore realtime | 日 K / 分钟 / 复权 / 财务 / realtime / universes；扩展逐笔/日级资金流；**stock raw mirror 禁写**；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant_local` 或 settings API |
+| `fquant_local` | TDX 磁盘 + fstore PG + tdx-api/sina/tencent/fstore realtime | 日 K / ETF / 指数 / 分钟 / 复权 / 财务 / realtime / universes；扩展逐笔/日级资金流；**stock raw mirror 禁写**；**depth 缺口** | ✅ | 默认、`DATA_PROVIDER=fquant_local` 或 settings API |
 
 ### ✅ Service 层解耦状态
 
@@ -364,37 +394,33 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 |---------|------|------|
 | `kline_sync.py` | 试点文件 | 250 行日 K ✅ |
 | `instrument_sync.py` | 标准解耦 | 5857 条标的 ✅ |
-| `quote_service.py` | tickflow 回归；fquant 走 tdx-api / sina/tencent / fstore 快照 | ✅ |
+| `quote_service.py` | realtime 走 provider；fquant_local 走 tdx-api / sina/tencent / fstore 快照 | ✅ |
 | `financial_sync.py` | 财务报表走 fstore | 22101 行利润表 ✅ |
 | `index_sync.py` | universes 走 provider `get_by_universes()` | fquant live 验证 ✅ |
 | `watchlist.py` | realtime 走 provider；fquant 走本地源 fallback | ✅ |
-| `depth_service.py` | 能力检查模式：fquant 直接降级返回空，tickflow 保留 SDK | ✅ |
+| `depth_service.py` | 能力检查模式：本地/fquant provider 无 depth 时降级返回空 | ✅ |
 
 ### ⚠️ 已知缺口
 
-- **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级，fquant 模式下返回空列表
+- **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级，本地/fquant 模式下返回空列表
 - **realtime 已接入**：不调用 `../fquant` HTTP API；优先可选 `tdx-api` `/api/quote`，再走 sina/tencent，最后回退 fstore `daily_markets` 最新快照
-- **universes 已接入**：provider 协议已新增 `get_by_universes()`；fquant 走 fstore `chengfen_gu` + `base_infos`，TickFlow 走 SDK 兼容路径
+- **universes 已接入**：provider 协议已新增 `get_by_universes()`；fquant/fquant_local 走 fstore `chengfen_gu` + `base_infos`
+- **港股 P1 限制**：单股路径可用;批量 enrich、回测/筛选全链路和复权口径仍按后续计划推进
 
 ### 🚀 本地启动（DATA_PROVIDER=fquant_local）
 
 ```bash
-cd backend
-uv sync
-export DATA_PROVIDER=fquant_local
-export TDX_DATA_DIR=/Volumes/vol3/tdx
-export FSTORE_DATABASE_PASSWORD=$(grep FSTORE_DATABASE_PASSWORD /Users/wf2311/Projects/wf2311/fm/fquant/.env | cut -d= -f2)
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+make start-local
 ```
 
 启动后可访问：
 
-- 本机：`http://127.0.0.1:8000/health`
-- 局域网：`http://<本机 LAN IP>:8000/health`
+- 本机：`http://127.0.0.1:3011/` / `http://127.0.0.1:3018/health`
+- 局域网：`http://<本机 LAN IP>:3011/`
 
 ### 🌐 局域网访问
 
-backend 默认 `--host 0.0.0.0` 已支持所有网卡监听，**无需修改**。需在 macOS 防火墙放行 8000 端口：
+`dev.sh` / `make start-local` 默认前后端都用 `--host 0.0.0.0`,已支持所有网卡监听。需在 macOS 防火墙放行 3011/3018 端口：
 
 ```bash
 # 如系统防火墙阻拦，自行添加：
@@ -417,5 +443,6 @@ ipconfig getifaddr en1   # 有线/USB 网卡
 - **`backend/docs/FQUANT_INTEGRATION_PROGRESS.md`** — 团队状态文档（**权威进度源**）
 - `backend/docs/FQUANT_PROVIDER_DESIGN.md` — 846 行设计稿（三源实测 + 架构）
 - `backend/docs/FQUANT_PROVIDER.md` — 旧 PoC 说明（已被 v2 覆盖，仅供回溯）
+- `docs/hk-us-stock-expansion-assessment.md` — 港股/美股扩展可行性与实测矩阵
 
 新增 service 文件 / 修改 provider 时**务必**先读 `FQUANT_INTEGRATION_PROGRESS.md` 第 8 节「关键决策」与第 9 节「风险与注意事项」，避免破坏已对齐的架构约束。

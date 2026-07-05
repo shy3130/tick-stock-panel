@@ -1,6 +1,6 @@
 # 财务数据缺口与公开补源记录
 
-最后更新：2026-07-03
+最后更新：2026-07-04
 
 ## 当前结论
 
@@ -17,7 +17,7 @@
 | `income` | 22,017 | 5,193 | 利润表可用，但非全市场覆盖 |
 | `balance_sheet` | 11,727 | 5,177 | 资产负债表可用，但非全市场覆盖 |
 | `cash_flow` | 16,820 | 5,177 | 现金流量表可用，但非全市场覆盖 |
-| `quick` | 同步侧曾漏列 | fstore 直查 902 | fstore `financial_report_quick` 直查 993 行；`600519` 为 0 行，不代表无数据源 |
+| `quick` | 已接 fstore + 公开补源 | fstore 直查 902，公开补源补 recent quarters | fstore `financial_report_quick` 直查 993 行；同步侧优先保留 fstore 行，再合并东财 `RPT_FCI_PERFORMANCEE` |
 | `forecast` | 已接公开补源 | fstore 直查 0 | fstore `financial_report_forecast` 当前 0 行；同步侧在 fstore 为空时回退东财 `RPT_PUBLIC_OP_NEWPREDICT` |
 
 ## 缺口
@@ -25,7 +25,7 @@
 | 缺口 | 影响 | 当前判断 |
 | --- | --- | --- |
 | 部分 A 股无三大报表缓存 | 财务页和财务 AI 分析对缺失标的返回空 | 需要补源或扩大 fstore 回填 |
-| `quick` 业绩快报本地缓存缺 | 不能展示快报口径 EPS、ROE、营收、净利等 | 先接入现有 fstore 表同步；覆盖不足再补公开源 |
+| `quick` 业绩快报覆盖不足 | 不能完整展示快报口径 EPS、ROE、营收、净利等 | 已接入现有 fstore 表同步，并用东财 datacenter-web 补最近报告期 |
 | `forecast` 业绩预告源表空 | 不能展示预告类型、预告净利区间、变动原因 | 已接东财 datacenter-web fallback |
 | 港股财务缺 | 港股个股分析缺基本面/财务上下文 | 需要 HKEXnews 或商业/聚合源，成本高 |
 | 美股财务缺 | 美股扩展不能做基本面分析 | SEC EDGAR 可作为官方主源 |
@@ -110,13 +110,13 @@ AKShare HTTP 服务：
 1. **短期同步修正：复用 fstore**
    - 目标：把 `quick` / `forecast` 纳入 `financial_sync` 同步表和 API 入口。
    - 理由：provider 已有 fstore 映射，`quick` 表实测有数据；这是低成本确定性修复。
-   - 状态：同步表枚举、provider 表映射和 `/api/financials/status`/`sync` 入口已补齐，待提交。
-   - 风险：`quick` 覆盖有限；`forecast` fstore 源表当前为空，依赖公开 fallback。
+   - 状态：同步表枚举、provider 表映射和 `/api/financials/status`/`sync` 入口已补齐。
+   - 风险：`quick` fstore 覆盖有限，已用公开 fallback 合并补 recent quarters；`forecast` fstore 源表当前为空，依赖公开 fallback。
 
 2. **短期补源：复用现有 Eastmoney datacenter-web 客户端**
-   - 目标：补 `forecast`。
+   - 目标：补 `quick` / `forecast`。
    - 理由：项目已有 `eastmoney_client` 的域名 allowlist、翻页和节流能力，且 `datacenter-web.eastmoney.com` 已在 allowlist；不需要新增依赖或扩域名。
-   - 状态：`sync_forecast` 在 fstore 为空时回退 `RPT_PUBLIC_OP_NEWPREDICT`，按最近闭合季度列表合并写入 `data/financials/forecast/`，待提交。
+   - 状态：`sync_quick` 先写 fstore，再合并 `RPT_FCI_PERFORMANCEE`；`sync_forecast` 在 fstore 为空时回退 `RPT_PUBLIC_OP_NEWPREDICT`。两者都按最近闭合季度列表写入 `data/financials/{quick,forecast}/`。
    - 风险：非官方接口会变；需要缓存和失败降级。
 
 3. **后续独立适配：三大报表 / F10 / 港美股**
@@ -141,9 +141,9 @@ AKShare HTTP 服务：
 
 ## 最小实现建议
 
-现有 `financial_sync` 主链路已把 `quick` / `forecast` 加入 `FINANCIAL_TABLES` 和 `_PROVIDER_TABLE_MAP`，本地 parquet 可以复用已有 fstore provider 源（待提交）。
+现有 `financial_sync` 主链路已把 `quick` / `forecast` 加入 `FINANCIAL_TABLES` 和 `_PROVIDER_TABLE_MAP`，本地 parquet 可以复用已有 fstore provider 源。
 
-- `quick`：先从 fstore `financial_report_quick` 同步；覆盖不足再用 Eastmoney datacenter 补缺。
+- `quick`：先从 fstore `financial_report_quick` 同步；再用 Eastmoney datacenter `RPT_FCI_PERFORMANCEE` 补最近报告期，同一 `symbol/t_date` 保留 fstore 行。
 - `forecast`：fstore `financial_report_forecast` 当前为空，已用 Eastmoney datacenter-web `RPT_PUBLIC_OP_NEWPREDICT` fallback 多报告期回填。
 - `metrics`：优先继续从 fstore `annual` 补；缺失标的再走公开源。
 
