@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { LastStockChip } from '@/components/LastStockChip'
 import { AnalysisKChart, type PriceLevel, type LevelType } from '@/components/stock-analysis/AnalysisKChart'
 import { api } from '@/lib/api'
@@ -98,7 +99,7 @@ export function StockAnalysis() {
       <div className="px-8 py-6 space-y-6 max-w-7xl">
         {/* 搜索栏 */}
         <div className="flex items-center gap-3">
-          <div className="w-72">
+          <div className="w-[36rem] max-w-full shrink-0">
             <StockFinancialSearch onSelect={onSelect} />
           </div>
           {symbol && (
@@ -173,6 +174,7 @@ export function StockAnalysis() {
 
 // ===== 分析看板:日 K + 关键价位 =====
 function StockAnalysisBoard({ symbol }: { symbol: string }) {
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const kline = useQuery({
     queryKey: ['kline', symbol, ''],
     queryFn: () => api.klineDaily(symbol, 250),
@@ -187,11 +189,14 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
     staleTime: 60_000,
   })
 
+  useEffect(() => { setSelectedDate(null) }, [symbol])
+
   if (kline.isLoading) {
     return <div className="flex items-center justify-center py-20"><Loader2 className="h-5 w-5 animate-spin text-muted" /></div>
   }
 
   const rows = kline.data?.rows ?? []
+
   if (rows.length === 0) {
     return <EmptyState icon={LineChart} title="暂无日 K 数据" hint="该标的尚未同步日 K,请先在数据页或自选页同步。" />
   }
@@ -203,6 +208,8 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
   const prev = rows[rows.length - 2]
   const curClose = levelsQ.data?.close
   const isUp = prev ? (last.close >= prev.close) : (last.close >= last.open)
+  const selectedIdx = selectedDate ? rows.findIndex(r => r.date === selectedDate) : -1
+  const prevClose = selectedIdx > 0 ? rows[selectedIdx - 1].close : undefined
 
   return (
     <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
@@ -223,6 +230,20 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
         </div>
       </div>
       <div className="p-3">
+        {selectedDate && (
+          <div className="mb-3 rounded-lg border border-border/50 bg-base/30 p-2">
+            <div className="mb-1 flex items-center justify-between px-1">
+              <span className="text-[11px] font-mono text-muted">分时</span>
+              <span className="text-[11px] font-mono text-secondary">{selectedDate}</span>
+            </div>
+            <StockIntradayChart
+              symbol={symbol}
+              date={selectedDate}
+              height={260}
+              prevClose={prevClose}
+            />
+          </div>
+        )}
         <AnalysisKChart
           rows={rows}
           levels={levels}
@@ -230,6 +251,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
           seriesDates={levelsQ.data?.dates}
           defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
           height={480}
+          onDateClick={setSelectedDate}
         />
       </div>
     </div>

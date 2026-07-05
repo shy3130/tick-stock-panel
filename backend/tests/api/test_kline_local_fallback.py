@@ -48,15 +48,24 @@ class FakeProvider:
         return pl.DataFrame()
 
     def get_instruments(self, asset_type):
+        rows = {
+            "stock": ("600519.SH", "贵州茅台", "600519", "SH", 2_000.0, 1_000.0),
+            "hk": ("02577.HK", "英诺赛科", "02577", "HK", 2_000.0, 1_000.0),
+            "etf": ("513050.SH", "中概互联", "513050", "SH", 2_000.0, 1_000.0),
+        }
+        symbol, name, code, exchange, total_shares, float_shares = rows.get(
+            asset_type,
+            ("000001.INDEX", "指数", "000001", "INDEX", None, None),
+        )
         return pl.DataFrame({
-            "symbol": ["600519.SH"],
-            "name": ["贵州茅台"],
-            "code": ["600519"],
-            "exchange": ["SH"],
+            "symbol": [symbol],
+            "name": [name],
+            "code": [code],
+            "exchange": [exchange],
             "asset_type": [asset_type],
             "source": ["fake"],
-            "total_shares": [2_000.0],
-            "float_shares": [1_000.0],
+            "total_shares": [total_shares],
+            "float_shares": [float_shares],
         })
 
 
@@ -135,6 +144,8 @@ def test_daily_local_fallback_passes_hk_asset_type_and_skips_adj(monkeypatch):
     assert provider.daily_args[0] == ["02577.HK"]
     assert provider.daily_args[3] == "hk"
     assert provider.adj_args is None
+    assert resp["stock_info"]["float_shares"] == 1_000.0
+    assert resp["rows"][0]["turnover_rate"] == 10.0
 
 
 def test_daily_batch_local_fallback_passes_datetime_to_provider(monkeypatch):

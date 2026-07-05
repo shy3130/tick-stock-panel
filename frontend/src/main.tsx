@@ -2,8 +2,13 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
+import { Agentation } from 'agentation'
 import { router } from './router'
 import './index.css'
+
+const agentationEndpoint = import.meta.env.DEV
+  ? `${window.location.protocol}//${window.location.hostname}:4747`
+  : undefined
 
 // 全局认证拦截: 任何 query/mutation 收到 401 (未登录/会话过期) → 跳登录页。
 // api.ts 的 request() 已对 401 静默 (不弹 toast), 这里统一负责跳转。
@@ -46,6 +51,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
+      {agentationEndpoint && <Agentation endpoint={agentationEndpoint} />}
     </QueryClientProvider>
   </React.StrictMode>
 )

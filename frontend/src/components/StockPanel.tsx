@@ -3,6 +3,7 @@ import { type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import { StockInfoBar } from '@/components/StockInfoBar'
 import { StockDailyKChart, getDefaultRange, type StockDailyKChartResult } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
+import { DatePicker } from '@/components/DatePicker'
 import { useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
@@ -85,6 +86,8 @@ export function StockPanel({
   const rows = dailyResult?.rows ?? []
   const stockInfo = dailyResult?.stockInfo
   const rawRows: KlineRow[] = dailyResult?.rawRows ?? []
+  // 日K 已加载的交易日集合：约束分时日期选择器只能选到有日K数据覆盖的交易日
+  const tradingDateSet = useMemo(() => new Set(rows.map(r => r.date)), [rows])
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
   // 注意：必须跳过首次挂载——重开弹窗时 kline 命中 react-query 缓存，
@@ -151,15 +154,32 @@ export function StockPanel({
           extColumns={extColumns}
         />
 
-        {showIntraday && selectedDate && (
-          <StockIntradayChart
-            symbol={symbol}
-            date={selectedDate}
-            height={height}
-            prevClose={prevClose}
-            onPriceHover={setLinkedPrice}
-            className="flex-1 min-w-0 border-l border-border pl-3"
-          />
+        {showIntraday && (
+          <div className="flex-1 min-w-0 border-l border-border pl-3">
+            <div className="flex items-center justify-between px-1 pb-1" style={{ height: 24 }}>
+              <span className="text-[11px] font-mono text-muted">分时</span>
+              {rows.length > 0 && (
+                <DatePicker
+                  value={selectedDate ?? ''}
+                  onChange={handleDateClick}
+                  min={rows[0]?.date}
+                  max={rows[rows.length - 1]?.date}
+                  isDisabledDate={(d) => !tradingDateSet.has(d)}
+                  buttonClassName="h-6 px-2 text-[11px]"
+                  align="right"
+                />
+              )}
+            </div>
+            {selectedDate && (
+              <StockIntradayChart
+                symbol={symbol}
+                date={selectedDate}
+                height={height - 24}
+                prevClose={prevClose}
+                onPriceHover={setLinkedPrice}
+              />
+            )}
+          </div>
         )}
       </div>
     </div>

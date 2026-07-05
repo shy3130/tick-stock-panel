@@ -5,8 +5,8 @@
  * symbol、strategies、score、signals、candle 等需要页面上下文（加自选按钮、失效行、
  * kline 数据、信号提取）的列由各页面的 renderCell 自行处理。
  *
- * 口径与原 ScreenerTable 对齐（已和自选页校准过）：amplitude 用 *100、annual_vol/
- * 财务率类用 fmtPct、kdj 用 toFixed(1)、vol_ma 用 fmtBigNum 等。
+ * 口径与原 ScreenerTable 对齐（已和自选页校准过）：amplitude 用 *100、annual_vol
+ * 用 fmtPct、财务率类为百分点直接加 %、kdj 用 toFixed(1)、vol_ma 用 fmtBigNum 等。
  */
 import type { ReactNode } from 'react'
 import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
@@ -38,6 +38,10 @@ export function RSIBadge({ value }: { value: number | null | undefined }) {
 
 function fmtMaybePrice(value: any) {
   return value != null && !Number.isNaN(value) ? fmtPrice(value) : '—'
+}
+
+function fmtPctPoint(value: any) {
+  return value != null && !Number.isNaN(value) ? `${Number(value).toFixed(2)}%` : '—'
 }
 
 /**
@@ -142,14 +146,14 @@ export function renderBuiltinDataCell(r: any, col: ColumnConfig): ReactNode | nu
     // 财务指标（后端 enriched 未返回时显示 —）
     case 'eps':           return <td key={col.id} className={numCls}>{r.eps != null ? fmtPrice(r.eps) : '—'}</td>
     case 'bps':           return <td key={col.id} className={numCls}>{r.bps != null ? fmtPrice(r.bps) : '—'}</td>
-    case 'roe':           return <td key={col.id} className={numCls}>{r.roe != null ? fmtPct(r.roe) : '—'}</td>
+    case 'roe':           return <td key={col.id} className={numCls}>{fmtPctPoint(r.roe)}</td>
     case 'pe_ttm':        return <td key={col.id} className={numCls}>{r.pe_ttm != null ? fmtPrice(r.pe_ttm) : '—'}</td>
     case 'pb':            return <td key={col.id} className={numCls}>{r.pb != null ? fmtPrice(r.pb) : '—'}</td>
-    case 'gross_margin':  return <td key={col.id} className={numCls}>{r.gross_margin != null ? fmtPct(r.gross_margin) : '—'}</td>
-    case 'net_margin':    return <td key={col.id} className={numCls}>{r.net_margin != null ? fmtPct(r.net_margin) : '—'}</td>
-    case 'revenue_yoy':   return <td key={col.id} className={numCls}>{r.revenue_yoy != null ? fmtPct(r.revenue_yoy) : '—'}</td>
-    case 'net_income_yoy':return <td key={col.id} className={numCls}>{r.net_income_yoy != null ? fmtPct(r.net_income_yoy) : '—'}</td>
-    case 'debt_ratio':    return <td key={col.id} className={numCls}>{r.debt_ratio != null ? fmtPct(r.debt_ratio) : '—'}</td>
+    case 'gross_margin':  return <td key={col.id} className={numCls}>{fmtPctPoint(r.gross_margin)}</td>
+    case 'net_margin':    return <td key={col.id} className={numCls}>{fmtPctPoint(r.net_margin)}</td>
+    case 'revenue_yoy':   return <td key={col.id} className={numCls}>{fmtPctPoint(r.revenue_yoy)}</td>
+    case 'net_income_yoy':return <td key={col.id} className={numCls}>{fmtPctPoint(r.net_income_yoy)}</td>
+    case 'debt_ratio':    return <td key={col.id} className={numCls}>{fmtPctPoint(r.debt_ratio)}</td>
     default:
       return <td key={col.id} className={`${alignTdClass(col.align)} text-muted`}>—</td>
   }

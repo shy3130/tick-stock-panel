@@ -11,6 +11,8 @@ interface DatePickerProps {
   className?: string
   buttonClassName?: string
   align?: 'left' | 'right'
+  /** 额外的禁用判定 (如：仅允许交易日)，与 min/max 叠加 */
+  isDisabledDate?: (dateStr: string) => boolean
 }
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
@@ -40,6 +42,7 @@ export function DatePicker({
   className = '',
   buttonClassName = '',
   align = 'right',
+  isDisabledDate,
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [showYearPicker, setShowYearPicker] = useState(false)
@@ -89,12 +92,12 @@ export function DatePicker({
     const m = viewMonth === 0 ? 11 : viewMonth - 1
     const y = viewMonth === 0 ? viewYear - 1 : viewYear
     const ds = toDateStr(y, m, d)
-    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max || (isDisabledDate?.(ds) ?? false) })
   }
   // 当月
   for (let d = 1; d <= daysInMonth; d++) {
     const ds = toDateStr(viewYear, viewMonth, d)
-    cells.push({ day: d, cur: true, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    cells.push({ day: d, cur: true, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max || (isDisabledDate?.(ds) ?? false) })
   }
   // 下月头部 — 补齐到 6 行 × 7 = 42
   const remain = 42 - cells.length
@@ -102,7 +105,7 @@ export function DatePicker({
     const m = viewMonth === 11 ? 0 : viewMonth + 1
     const y = viewMonth === 11 ? viewYear + 1 : viewYear
     const ds = toDateStr(y, m, d)
-    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max || (isDisabledDate?.(ds) ?? false) })
   }
 
   const displayLabel = value || placeholder

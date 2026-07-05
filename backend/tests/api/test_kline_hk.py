@@ -29,6 +29,15 @@ class _Provider:
     def get_adj_factors(self, symbols, start_time, end_time, asset_type):
         raise AssertionError("HK should not request adjustment factors")
 
+    def get_instruments(self, asset_type):
+        assert asset_type == "hk"
+        return pl.DataFrame({
+            "symbol": ["00700.HK"],
+            "name": ["腾讯控股"],
+            "total_shares": [10_000.0],
+            "float_shares": [1_000.0],
+        })
+
 
 def _request():
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=_Repo(), quote_service=None)))
@@ -64,3 +73,5 @@ def test_local_kline_passes_asset_type_and_marks_adjustment(monkeypatch):
     assert captured["asset_type"] == "hk"
     assert resp["adjustment"] == "none"
     assert resp["source"] == "local_disk"
+    assert resp["stock_info"]["float_shares"] == 1_000.0
+    assert resp["rows"][0]["turnover_rate"] == 100.0

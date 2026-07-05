@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
+import { computeTdSequential } from '@/lib/tdSequential'
 
 export interface OHLC {
   date: string
@@ -9,6 +10,9 @@ export interface OHLC {
   low: number
   close: number
   volume?: number
+  change_pct?: number | null
+  change_amount?: number | null
+  amplitude?: number | null
   ma5?: number | null
   ma10?: number | null
   ma20?: number | null
@@ -90,6 +94,11 @@ function fmtVol(v: number | null | undefined): string {
   if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
   if (v >= 1e4) return (v / 1e4).toFixed(0) + '万'
   return v.toFixed(0)
+}
+
+function pctPoints(d: OHLC, prev?: OHLC | null): number | null {
+  if (d.change_pct != null && Number.isFinite(d.change_pct)) return d.change_pct * 100
+  return prev?.close ? ((d.close - prev.close) / prev.close) * 100 : null
 }
 
 export const SUB_CHARTS: SubChartDef[] = [
@@ -271,6 +280,8 @@ export const INDICATORS = SUB_CHARTS.filter(s => s.key !== 'vol')
 /** 主图叠加指标 (画在 K 线上方, 不占副图空间) */
 export const OVERLAY_INDICATORS: { key: string; label: string }[] = [
   { key: 'boll', label: 'BOLL' },
+  { key: 'td9', label: '九转' },
+  { key: 'threelock', label: '三锁' },
 ]
 
 interface Props {
@@ -469,6 +480,95 @@ function buildOption(
     }
   }
 
+  // 九转 (TD Sequential Setup) — 主图叠加数字/徽标标记
+  // 必须在下方 candlestick series.push(...) 之前完成，因为该 series 对象的
+  // markPoint.data 直接引用 markPointData 数组，但 markPoint 字段本身在构造时
+  // 就已按 markPointData.length 决定是否为 undefined —— 之后再 push 不会生效。
+  if (activeIndicators.includes('td9')) {
+    const closes = data.map(d => d.close)
+    const td = computeTdSequential(closes)
+    for (const m of td.markers) {
+      if (compact && m.count !== 9) continue
+      const bar = data[m.i]
+      if (!bar) continue
+      const isTop = m.kind === 'top'
+      const color = isTop ? THEME.bear : THEME.bull
+      const coord: [string, number] = isTop ? [bar.date, bar.high] : [bar.date, bar.low]
+      const offsetY = isTop ? -12 : 12
+      if (m.count === 9) {
+        markPointData.push({
+          name: bar.date, coord,
+          symbol: 'roundRect', symbolSize: [16, 18], symbolOffset: [0, offsetY],
+          itemStyle: { color },
+          label: {
+            show: true, formatter: '9', color: '#fff', fontSize: 11, fontWeight: 'bold',
+            fontFamily: 'JetBrains Mono, monospace',
+          },
+          z: 100, zlevel: 10,
+        })
+      } else {
+        markPointData.push({
+          name: bar.date, coord,
+          symbol: 'circle', symbolSize: 1, symbolOffset: [0, offsetY],
+          itemStyle: { color: 'transparent' },
+          label: {
+            show: true, formatter: String(m.count), color, fontSize: 10,
+            fontFamily: 'JetBrains Mono, monospace',
+          },
+          z: 100, zlevel: 10,
+        })
+      }
+    }
+  }
+
+  // 三锁 (30/60/90 均线粘合突破, 东方财富公开公式) — 全开信号 markPoint。
+  // MA30/60/90 三条线本身在下方 series 区块(BOLL 之后)绘制。
+  // 注: 年线(MA250)条件因数据窗口不足(默认日K仅加载约120根，不足250根)暂略，
+  // 本期只实现"均线粘合 + 放量突破"两项条件。
+  let ma30: (number | null)[] = []
+  let ma60Lock: (number | null)[] = []
+  let ma90: (number | null)[] = []
+  if (activeIndicators.includes('threelock')) {
+    const closes = data.map(d => d.close)
+    const smaN = (n: number): (number | null)[] => {
+      const out: (number | null)[] = []
+      for (let i = 0; i < closes.length; i++) {
+        if (i < n - 1) { out.push(null); continue }
+        let sum = 0
+        for (let j = i - n + 1; j <= i; j++) sum += closes[j]
+        out.push(sum / n)
+      }
+      return out
+    }
+    ma30 = smaN(30)
+    ma60Lock = smaN(60)
+    ma90 = smaN(90)
+    for (let i = 0; i < data.length; i++) {
+      const m30 = ma30[i], m60 = ma60Lock[i], m90 = ma90[i]
+      if (m30 == null || m60 == null || m90 == null) continue
+      const maxV = Math.max(m30, m60, m90)
+      const minV = Math.min(m30, m60, m90)
+      const glued = minV > 0 && maxV / minV < 1.05
+      const e = (m30 + m60 + m90) / 3
+      const close = data[i].close
+      const pctChg = pctPoints(data[i], i > 0 ? data[i - 1] : null)
+      const breakout = close > e * 1.04 && pctChg != null && pctChg > 5
+      if (glued && breakout) {
+        markPointData.push({
+          name: data[i].date,
+          coord: [data[i].date, data[i].high],
+          symbol: 'roundRect', symbolSize: [20, 20], symbolOffset: [0, -14],
+          itemStyle: { color: '#FACC15' },
+          label: {
+            show: true, formatter: '锁', color: '#422006', fontSize: 10, fontWeight: 'bold',
+            fontFamily: 'JetBrains Mono, monospace',
+          },
+          z: 100, zlevel: 10,
+        })
+      }
+    }
+  }
+
   // ====== 布局计算 ======
   const left = 60
   const right = 20
@@ -626,6 +726,20 @@ function buildOption(
     })
     series.push(bollLine('boll_upper', '#E879F9', 'BOLL上'))
     series.push(bollLine('boll_lower', '#E879F9', 'BOLL下'))
+  }
+
+  // 三锁: MA30/60/90 三条均线本身即为"三把锁"的可视化，配色与 MA5/10/20/60 区分
+  if (activeIndicators.includes('threelock') && ma30.length > 0) {
+    const lockLine = (arr: (number | null)[], color: string, name: string) => ({
+      name, type: 'line',
+      data: arr.map(v => (v != null ? Number(v) : '-')),
+      smooth: true, symbol: 'none', animation: false,
+      silent: true, connectNulls: true,
+      lineStyle: { width: 1, color }, itemStyle: { color },
+    })
+    series.push(lockLine(ma30, '#22D3EE', 'MA30'))
+    series.push(lockLine(ma60Lock, '#F59E0B', 'MA60锁'))
+    series.push(lockLine(ma90, '#A78BFA', 'MA90'))
   }
 
   // ===== 子图区域 =====
@@ -813,10 +927,11 @@ export function EChartsCandlestick({
     if (!d) return ''
     const prev = idx > 0 ? data[idx - 1] : null
     const chg = prev ? d.close - prev.close : 0
-    const isUp = chg >= 0
+    const pct = pctPoints(d, prev)
+    const isUp = pct != null ? pct >= 0 : chg >= 0
     const clr = isUp ? THEME.bull : THEME.bear
     const floatShares = stockInfo?.float_shares
-    const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
+    const turnoverRate = floatShares && d.volume ? (d.volume / floatShares * 100) : null
 
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;height:20px;flex-wrap:wrap">`
     html += `<span style="color:${THEME.text}">${d.date}</span>`
@@ -830,8 +945,10 @@ export function EChartsCandlestick({
     html += `<span style="color:${clr};font-weight:600">${d.close.toFixed(2)}</span>`
     // 涨跌幅 (收盘后, 换手前; 和收间隔一些距离)
     if (prev) {
-      const chgPct = (chg / prev.close * 100)
-      html += `<span style="color:${clr};margin-left:8px">${isUp ? '+' : ''}${chgPct.toFixed(2)}%</span>`
+      const chgPct = pctPoints(d, prev)
+      if (chgPct != null) {
+        html += `<span style="color:${clr};margin-left:8px">${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(2)}%</span>`
+      }
     }
     if (turnoverRate != null) {
       html += `<span style="color:${THEME.text}">换手</span>`
@@ -1046,7 +1163,7 @@ export function EChartsCandlestick({
     const d = idx >= 0 && idx < data.length ? data[idx] : null
     if (!d) return ''
     const floatShares = stockInfo?.float_shares
-    const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
+    const turnoverRate = floatShares && d.volume ? (d.volume / floatShares * 100) : null
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;height:20px;flex-wrap:wrap">`
     html += `<span style="color:${THEME.text}">${d.date}</span>`
     html += `<span style="color:${THEME.text}">开</span>`
@@ -1057,11 +1174,12 @@ export function EChartsCandlestick({
     html += `<span style="color:${THEME.bear}">${d.low.toFixed(2)}</span>`
     html += `<span style="color:${THEME.text}">收</span>`
     const prevClose0 = data[idx-1]?.close ?? d.close
-    const clr0 = d.close >= prevClose0 ? THEME.bull : THEME.bear
+    const pct0 = pctPoints(d, data[idx - 1])
+    const clr0 = (pct0 ?? (d.close - prevClose0)) >= 0 ? THEME.bull : THEME.bear
     html += `<span style="color:${clr0};font-weight:600">${d.close.toFixed(2)}</span>`
     // 涨跌幅 (收盘后, 换手前; 和收间隔一些距离)
     if (idx > 0) {
-      const chgPct0 = ((d.close - prevClose0) / prevClose0 * 100)
+      const chgPct0 = pct0 ?? ((d.close - prevClose0) / prevClose0 * 100)
       html += `<span style="color:${clr0};margin-left:8px">${chgPct0 >= 0 ? '+' : ''}${chgPct0.toFixed(2)}%</span>`
     }
     if (turnoverRate != null) {

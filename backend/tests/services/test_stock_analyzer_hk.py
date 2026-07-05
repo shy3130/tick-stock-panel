@@ -77,3 +77,38 @@ def test_a_share_local_on_demand_uses_provider_float_shares(monkeypatch):
     out = sa._load_kline_local_on_demand("600519.SH", date(2026, 7, 1), date(2026, 7, 1))
 
     assert out["turnover_rate"].item() == 10.0
+
+
+def test_hk_local_on_demand_uses_provider_float_shares_without_limit_signals(monkeypatch):
+    class _Provider:
+        def get_daily(self, symbols, start, end, asset_type):
+            assert asset_type == "hk"
+            return pl.DataFrame({
+                "symbol": [symbols[0]],
+                "date": [date(2026, 7, 1)],
+                "open": [10.0],
+                "high": [10.0],
+                "low": [10.0],
+                "close": [10.0],
+                "volume": [100.0],
+                "amount": [1000.0],
+            })
+
+        def get_instruments(self, asset_type):
+            assert asset_type == "hk"
+            return pl.DataFrame({
+                "symbol": ["00700.HK"],
+                "name": ["腾讯控股"],
+                "float_shares": [1_000.0],
+            })
+
+        def get_adj_factors(self, symbols, start, end, asset_type):
+            raise AssertionError("HK should not request adjustment factors")
+
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: _Provider())
+
+    out = sa._load_kline_local_on_demand("00700.HK", date(2026, 7, 1), date(2026, 7, 1))
+
+    assert out["turnover_rate"].item() == 10.0
+    assert "signal_limit_up" not in out.columns

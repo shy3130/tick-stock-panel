@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import type { MinuteKlineRow } from '@/lib/api'
+import { computeTdSequential, type TdState } from '@/lib/tdSequential'
 
 type YMode = 'adaptive' | 'limit'
 
@@ -17,6 +18,11 @@ const THEME = {
   border: '#27272A',
 }
 
+// 神奇九转 (TD Sequential Setup) 信号色: 顶部信号(卖出提示)=绿色, 底部信号(买入提示)=红色
+// 与同花顺一致, 不按"红涨绿跌"直觉配色
+const TD_TOP_COLOR = '#2D9B65'
+const TD_BOTTOM_COLOR = '#C74040'
+
 interface Props {
   data: MinuteKlineRow[]
   height?: number
@@ -30,20 +36,26 @@ interface Props {
 
 function fmtTime(dt: string | null | undefined): string | null {
   if (!dt) return null
+  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(dt)) {
+    const parsed = new Date(dt)
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${String(parsed.getHours()).padStart(2, '0')}:${String(parsed.getMinutes()).padStart(2, '0')}`
+    }
+  }
   const match = dt.match(/(\d{2}):(\d{2})/)
   if (!match) return dt.slice(11, 16)
-  const h = (parseInt(match[1]) + 8) % 24
-  return `${String(h).padStart(2, '0')}:${match[2]}`
+  return `${match[1]}:${match[2]}`
 }
 
 function computeAvgPrice(data: MinuteKlineRow[]): number[] {
-  // 分时均线 = 累计成交额 / 累计成交量(手→股)
+  // 分时均线 = 累计成交额 / 累计成交量。MinuteKlineRow.volume 已是"股"为单位
+  // (mapping.py: amount=price*volume)，不能再 ×100，否则均价缩水 100 倍。
   const result: number[] = []
   let sumAmt = 0
   let sumVol = 0
   for (const d of data) {
     sumAmt += d.amount
-    sumVol += d.volume * 100
+    sumVol += d.volume
     result.push(sumVol > 0 ? sumAmt / sumVol : d.close)
   }
   return result
@@ -118,6 +130,20 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   const avgData = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
   const volumes = new Array(FULL_DAY_TIMES.length).fill(null) as (any | null)[]
 
+  // 神奇九转: 复用 lib/tdSequential 的通用算法算出全量 states/markers(count 1~9)，
+  // 再按分时图原有规则过滤: 只保留"计满9"和"最后一根未完成计数(1~8)"两类 marker，
+  // 行为与抽取前完全一致 — 抽取前分时图本就只在这两种情况下打点标注。
+  const tdFull = computeTdSequential(data.map(d => d.close))
+  const lastDataIdx = data.length - 1
+  const td = {
+    states: tdFull.states,
+    markers: tdFull.markers
+      .filter(m => m.count === 9 || (m.i === lastDataIdx && m.count >= 1 && m.count <= 8))
+      .map(m => ({ i: m.i, label: String(m.count), kind: m.kind })),
+  }
+  const fullState = new Array(FULL_DAY_TIMES.length).fill(null) as (TdState | null)[]
+  const dataIdxToFullIdx = new Array(data.length).fill(null) as (number | null)[]
+
   const volNeutral = 'rgba(161,161,170,0.5)'
   for (let i = 0; i < data.length; i++) {
     const timeKey = fmtTime(data[i].datetime)
@@ -128,14 +154,58 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       highs[idx] = data[i].high
       lows[idx] = data[i].low
       avgData[idx] = avgPrices[i]
+      fullState[idx] = td.states[i]
+      dataIdxToFullIdx[i] = idx
+      // 每分钟 open=high=low=close(单一成交价桶)，同一分钟内涨跌永远相等；
+      // 量柱涨跌色需比较本分钟收盘价 vs 上一分钟收盘价(首分钟对比昨收)。
+      const refPrice = i > 0 ? data[i - 1].close : prevClose
+      const vColor = refPrice == null
+        ? volNeutral
+        : data[i].close > refPrice ? THEME.volUp : data[i].close < refPrice ? THEME.volDown : volNeutral
       volumes[idx] = {
         value: data[i].volume,
-        itemStyle: {
-          color: data[i].close > data[i].open ? THEME.volUp : data[i].close < data[i].open ? THEME.volDown : volNeutral,
-        },
+        itemStyle: { color: vColor },
       }
     }
   }
+
+  // 按状态把 closes 拆成 3 条等长(242)价格线, 用于分段变色 (不用 visualMap, 避免和多 y 轴/markLine 混在一起)
+  const neutralLine = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
+  const topLine = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
+  const bottomLine = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
+  const getLineArrByState = (state: TdState | null) => (state === 'up' ? topLine : state === 'down' ? bottomLine : neutralLine)
+
+  for (let idx = 0; idx < FULL_DAY_TIMES.length; idx++) {
+    const v = closes[idx]
+    if (v == null) continue
+    getLineArrByState(fullState[idx])[idx] = v
+  }
+  // 缝合边界: 状态切换处让新状态的数组多出一个"上一点"的重叠值, 使两段颜色的线视觉上无缝相接
+  for (let idx = 1; idx < FULL_DAY_TIMES.length; idx++) {
+    if (closes[idx] == null || closes[idx - 1] == null) continue
+    if (fullState[idx] !== fullState[idx - 1]) {
+      getLineArrByState(fullState[idx])[idx - 1] = closes[idx - 1]
+    }
+  }
+
+  // 数字徽标: "9"计数完成点 + 当天最后一根 bar 若处于未完成计数(1~8)中的当前进度点
+  const markPointData = td.markers
+    .map(m => {
+      const fullIdx = dataIdxToFullIdx[m.i]
+      if (fullIdx == null) return null
+      const v = closes[fullIdx]
+      if (v == null) return null
+      return {
+        name: m.label,
+        coord: [fullIdx, v],
+        symbol: 'roundRect',
+        symbolSize: [18, 20] as [number, number],
+        symbolOffset: (m.kind === 'top' ? [0, -14] : [0, 14]) as [number, number],
+        itemStyle: { color: m.kind === 'top' ? TD_TOP_COLOR : TD_BOTTOM_COLOR },
+        label: { show: true, formatter: m.label, color: '#fff', fontSize: 11, fontWeight: 'bold' as const },
+      }
+    })
+    .filter((v): v is NonNullable<typeof v> => v != null)
 
   const areaStyle: any = {
     color: {
@@ -377,14 +447,37 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       {
         name: '价格',
         type: 'line',
-        data: closes,
+        data: neutralLine,
         smooth: false,
         symbol: 'none',
         cursor: 'crosshair',
         lineStyle: { width: 1.2, color: lineColor },
         areaStyle,
-        connectNulls: true,
+        connectNulls: false,
         markLine: markLineData.length > 0 ? { symbol: 'none', data: markLineData, animation: false, silent: true } : undefined,
+        markPoint: markPointData.length > 0 ? { symbol: 'roundRect', data: markPointData, animation: false, silent: true } : undefined,
+      },
+      {
+        name: '神奇九转-顶部',
+        type: 'line',
+        data: topLine,
+        smooth: false,
+        symbol: 'none',
+        cursor: 'crosshair',
+        lineStyle: { width: 1.2, color: TD_TOP_COLOR },
+        connectNulls: false,
+        tooltip: { show: false },
+      },
+      {
+        name: '神奇九转-底部',
+        type: 'line',
+        data: bottomLine,
+        smooth: false,
+        symbol: 'none',
+        cursor: 'crosshair',
+        lineStyle: { width: 1.2, color: TD_BOTTOM_COLOR },
+        connectNulls: false,
+        tooltip: { show: false },
       },
       ...(showAvgLine ? [{
         name: '均价',

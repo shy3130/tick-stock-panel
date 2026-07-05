@@ -112,9 +112,9 @@ export function StockInfoBar({ symbol, name, stockInfo, adjustment, rows, fields
   const latest = rows[rows.length - 1]
   const prev = rows.length >= 2 ? rows[rows.length - 2] : null
   const close = Number(latest.close)
-  const chg = prev ? close - Number(prev.close) : 0
-  const chgPct = prev ? chg / Number(prev.close) * 100 : 0
-  const isUp = chg >= 0
+  const chg = latest.change_amount != null ? Number(latest.change_amount) : (prev ? close - Number(prev.close) : 0)
+  const chgPct = latest.change_pct != null ? Number(latest.change_pct) * 100 : (prev ? chg / Number(prev.close) * 100 : 0)
+  const isUp = chgPct >= 0
   const clr = isUp ? BULL : BEAR
 
   const totalShares = stockInfo?.total_shares
@@ -122,7 +122,7 @@ export function StockInfoBar({ symbol, name, stockInfo, adjustment, rows, fields
   const marketCap = totalShares ? close * totalShares : null
   const floatMarketCap = floatShares ? close * floatShares : null
   const turnoverRate = floatShares && latest.volume
-    ? (Number(latest.volume) * 100 / floatShares * 100)
+    ? (Number(latest.volume) / floatShares * 100)
     : null
 
   const displayName = stockInfo?.name ?? name ?? ''
@@ -137,6 +137,7 @@ export function StockInfoBar({ symbol, name, stockInfo, adjustment, rows, fields
       case 'turnover':         return turnoverRate != null ? `${turnoverRate.toFixed(2)}%` : null
       case 'volume':           return latest.volume != null ? fmtVolume(Number(latest.volume)) : null
       case 'amplitude': {
+        if (latest.amplitude != null) return `${(Number(latest.amplitude) * 100).toFixed(2)}%`
         const prevClose = prev ? Number(prev.close) : null
         if (prevClose == null || prevClose === 0) return null
         const hi = Number(latest.high)
