@@ -71,6 +71,8 @@ export interface AgentSession {
   created_at: string
   updated_at: string
   message_count: number
+  last_attempt_id?: string | null
+  last_attempt_status?: 'running' | 'done' | 'cancelled' | 'error' | null
 }
 
 export interface AgentStoredMessage extends AgentMsg {
@@ -986,22 +988,20 @@ export const api = {
     return request<DocumentEnvelope>('/api/documents/read', { method: 'POST', body: fd })
   },
 
-  async *agentStream(
-    messages: AgentMsg[],
-    profileId?: string,
-    sessionId?: string,
-    signal?: AbortSignal,
-  ): AsyncGenerator<AgentEvent> {
-    const res = await fetch('/api/agent/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        messages,
-        ...(profileId ? { profile_id: profileId } : {}),
-        ...(sessionId ? { session_id: sessionId } : {}),
-      }),
-    })
+  agentSend: (sessionId: string, messages: AgentMsg[], profileId?: string) =>
+    request<{ attempt_id: string; session_id: string }>(
+      `/api/agent/sessions/${encodeURIComponent(sessionId)}/messages`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          messages,
+          ...(profileId ? { profile_id: profileId } : {}),
+        }),
+      },
+    ),
+
+  async *agentWatch(sessionId: string, signal?: AbortSignal): AsyncGenerator<AgentEvent> {
+    const res = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/stream`, { signal })
     if (!res.ok) {
       let detail = ''
       try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
