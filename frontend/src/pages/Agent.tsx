@@ -4,7 +4,7 @@ import { Bot, Download, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Squar
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { PageHeader } from '@/components/PageHeader'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
-import { api, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
+import { api, type AgentEvent, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
 import { clearAgentChat, loadAgentChat, saveAgentChat } from '@/lib/agentChatStore'
 
 interface ToolTrace {
@@ -178,6 +178,36 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
   )
 }
 
+function applyAgentEvent(prev: ChatMsg[], evt: AgentEvent, attemptIdRef: { current: string | null }): ChatMsg[] {
+  const lastIdx = prev.length - 1
+  const last = prev[lastIdx]
+  if (last?.role !== 'assistant') return prev
+
+  const nextLast: ChatMsg = { ...last, tools: last.tools ? [...last.tools] : [] }
+  if (evt.type === 'attempt_start') {
+    attemptIdRef.current = evt.attempt_id
+  } else if (evt.type === 'delta') {
+    nextLast.content += evt.content
+  } else if (evt.type === 'tool_call') {
+    nextLast.tools = [...(nextLast.tools ?? []), { name: evt.name, args: evt.args }]
+  } else if (evt.type === 'tool_result') {
+    const tools = [...(nextLast.tools ?? [])]
+    let idx = -1
+    for (let k = tools.length - 1; k >= 0; k--) {
+      if (tools[k].name === evt.name && tools[k].result === undefined) { idx = k; break }
+    }
+    if (idx >= 0) tools[idx] = { ...tools[idx], result: evt.result }
+    nextLast.tools = tools
+  } else if (evt.type === 'error') {
+    nextLast.content += `\n[错误] ${evt.message}`
+  } else if (evt.type === 'cancelled') {
+    nextLast.content += nextLast.content ? '\n[已停止]' : '[已停止]'
+  }
+  const next = [...prev]
+  next[lastIdx] = nextLast
+  return next
+}
+
 export function Agent() {
   const [msgs, setMsgs] = useState<ChatMsg[]>(() => loadAgentChat())
   const [sessions, setSessions] = useState<AgentSession[]>([])
@@ -191,7 +221,9 @@ export function Agent() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const silentAbortRef = useRef<AbortController | null>(null)
   const attemptIdRef = useRef<string | null>(null)
+  const watchSessionRef = useRef<string | null>(null)
   const urlSessionId = searchParams.get('session') || undefined
 
   useEffect(() => {
@@ -207,21 +239,25 @@ export function Agent() {
     api.agentSessions()
       .then(({ sessions: rows }) => {
         setSessions(rows)
-        if (urlSessionId && rows.some(s => s.session_id === urlSessionId)) {
-          void loadSession(urlSessionId, true)
-        } else if (urlSessionId) {
+        if (!urlSessionId) return
+        const match = rows.find(s => s.session_id === urlSessionId)
+        if (!match) {
           setSearchParams({}, { replace: true })
+        } else if (match.last_attempt_status === 'running') {
+          void reconnect(urlSessionId)
+        } else {
+          void loadSession(urlSessionId, true)
         }
       })
       .catch(() => setSessions([]))
-    // 初次进入时恢复 URL session；之后由显式切换动作维护。
+    // 初次进入时恢复 URL session（含在跑 attempt 的重连）；之后由显式切换动作维护。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (!urlSessionId || urlSessionId === sessionId) return
     if (!sessions.some(s => s.session_id === urlSessionId)) return
-    void loadSession(urlSessionId, true)
+    openSession(urlSessionId, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlSessionId, sessions, sessionId])
 
@@ -238,14 +274,75 @@ export function Agent() {
     }
   }
 
+  function abortLocalWatch(silent = true) {
+    const ctrl = abortRef.current
+    if (!ctrl) return
+    if (silent) silentAbortRef.current = ctrl
+    ctrl.abort()
+  }
+
   async function loadSession(id: string, replaceUrl = false) {
+    abortLocalWatch(true)
     const { messages } = await api.agentSessionMessages(id)
     setSessionId(id)
     setSessionInUrl(id, replaceUrl)
     setMsgs(messages.map(m => ({ role: m.role, content: m.content })))
   }
 
+  async function reconnect(id: string) {
+    abortLocalWatch(true)
+    const { messages } = await api.agentSessionMessages(id)
+    setSessionId(id)
+    setSessionInUrl(id, true)
+    setMsgs(messages.map(m => ({ role: m.role, content: m.content })))
+    setStreaming(true)
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    watchSessionRef.current = id
+    let bubbleAdded = false
+    try {
+      for await (const evt of api.agentWatch(id, ctrl.signal)) {
+        if (watchSessionRef.current !== id) continue
+        if (!bubbleAdded) {
+          bubbleAdded = true
+          setMsgs(prev => [...prev, { role: 'assistant', content: '', tools: [] }])
+        }
+        setMsgs(prev => applyAgentEvent(prev, evt, attemptIdRef))
+      }
+      void refreshSessions(id)
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return
+      if (bubbleAdded) {
+        setMsgs(prev => {
+          const next = [...prev]
+          const last = next[next.length - 1]
+          if (last?.role === 'assistant') last.content += `\n[请求失败] ${(e as Error).message}`
+          return next
+        })
+      }
+    } finally {
+      const isCurrentWatch = abortRef.current === ctrl && watchSessionRef.current === id
+      if (abortRef.current === ctrl) abortRef.current = null
+      if (silentAbortRef.current === ctrl) silentAbortRef.current = null
+      if (isCurrentWatch) {
+        watchSessionRef.current = null
+        attemptIdRef.current = null
+        setStreaming(false)
+      }
+    }
+  }
+
+  function openSession(id: string, replaceUrl = false) {
+    const match = sessions.find(s => s.session_id === id)
+    if (match?.last_attempt_status === 'running') {
+      void reconnect(id)
+    } else {
+      void loadSession(id, replaceUrl)
+    }
+  }
+
   async function newSession() {
+    abortLocalWatch(true)
     const s = await api.createAgentSession('新对话')
     setMsgs([])
     await refreshSessions(s.session_id)
@@ -265,6 +362,7 @@ export function Agent() {
       setSessionInUrl(activeSessionId)
       setSessions(prev => [s, ...prev])
     }
+    const currentSessionId = activeSessionId
 
     const fullHistory: AgentMsg[] = [
       ...msgs.map(m => ({ role: m.role, content: m.content })),
@@ -277,42 +375,19 @@ export function Agent() {
     setStreaming(true)
     const ctrl = new AbortController()
     abortRef.current = ctrl
+    watchSessionRef.current = currentSessionId
 
     try {
-      for await (const evt of api.agentStream(history, profileId, activeSessionId, ctrl.signal)) {
-        setMsgs(prev => {
-          const lastIdx = prev.length - 1
-          const last = prev[lastIdx]
-          if (last?.role !== 'assistant') return prev
-
-          const nextLast: ChatMsg = { ...last, tools: last.tools ? [...last.tools] : [] }
-          if (evt.type === 'attempt_start') {
-            attemptIdRef.current = evt.attempt_id
-          } else if (evt.type === 'delta') {
-            nextLast.content += evt.content
-          } else if (evt.type === 'tool_call') {
-            nextLast.tools = [...(nextLast.tools ?? []), { name: evt.name, args: evt.args }]
-          } else if (evt.type === 'tool_result') {
-            const tools = [...(nextLast.tools ?? [])]
-            let idx = -1
-            for (let k = tools.length - 1; k >= 0; k--) {
-              if (tools[k].name === evt.name && tools[k].result === undefined) { idx = k; break }
-            }
-            if (idx >= 0) tools[idx] = { ...tools[idx], result: evt.result }
-            nextLast.tools = tools
-          } else if (evt.type === 'error') {
-            nextLast.content += `\n[错误] ${evt.message}`
-          } else if (evt.type === 'cancelled') {
-            nextLast.content += nextLast.content ? '\n[已停止]' : '[已停止]'
-          }
-          const next = [...prev]
-          next[lastIdx] = nextLast
-          return next
-        })
+      const { attempt_id } = await api.agentSend(currentSessionId, history, profileId)
+      attemptIdRef.current = attempt_id
+      for await (const evt of api.agentWatch(currentSessionId, ctrl.signal)) {
+        if (watchSessionRef.current !== currentSessionId) continue
+        setMsgs(prev => applyAgentEvent(prev, evt, attemptIdRef))
       }
-      void refreshSessions(activeSessionId)
+      void refreshSessions(currentSessionId)
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
+        if (silentAbortRef.current === ctrl) return
         setMsgs(prev => {
           const next = [...prev]
           const last = next[next.length - 1]
@@ -328,9 +403,14 @@ export function Agent() {
         return next
       })
     } finally {
+      const isCurrentWatch = abortRef.current === ctrl && watchSessionRef.current === currentSessionId
       if (abortRef.current === ctrl) abortRef.current = null
-      attemptIdRef.current = null
-      setStreaming(false)
+      if (silentAbortRef.current === ctrl) silentAbortRef.current = null
+      if (isCurrentWatch) {
+        watchSessionRef.current = null
+        attemptIdRef.current = null
+        setStreaming(false)
+      }
     }
   }
 
@@ -339,7 +419,7 @@ export function Agent() {
   }
 
   function clear() {
-    abortRef.current?.abort()
+    abortLocalWatch(true)
     clearAgentChat()
     setMsgs([])
     setSessionId(undefined)
@@ -349,7 +429,7 @@ export function Agent() {
   function cancelStream() {
     const attemptId = attemptIdRef.current
     if (attemptId) void api.cancelAgentAttempt(attemptId).catch(() => undefined)
-    abortRef.current?.abort()
+    abortLocalWatch(false)
   }
 
   async function attachFile(file: File) {
@@ -373,6 +453,7 @@ export function Agent() {
 
   async function deleteCurrentSession() {
     if (!sessionId || !window.confirm('删除当前会话？')) return
+    abortLocalWatch(true)
     await api.deleteAgentSession(sessionId)
     setSessionId(undefined)
     setMsgs([])
@@ -414,12 +495,12 @@ export function Agent() {
       <div className="flex items-center justify-between gap-3">
         <PageHeader title="AI 助手" subtitle="多轮对话 · 可调用面板数据工具" />
         <div className="flex items-center gap-2">
-          <select
-            value={sessionId ?? ''}
-            onChange={e => {
-              if (e.target.value) void loadSession(e.target.value)
-              else clear()
-            }}
+            <select
+              value={sessionId ?? ''}
+              onChange={e => {
+                if (e.target.value) openSession(e.target.value)
+                else clear()
+              }}
             className="h-8 max-w-40 rounded-input border border-border bg-elevated px-2 text-xs text-foreground md:hidden"
           >
             <option value="">本地草稿</option>
@@ -475,9 +556,9 @@ export function Agent() {
           </button>
           <div className="space-y-1 overflow-auto">
             {sessions.map(s => (
-              <button
-                key={s.session_id}
-                onClick={() => void loadSession(s.session_id)}
+                <button
+                  key={s.session_id}
+                  onClick={() => openSession(s.session_id)}
                 className={`w-full rounded-btn px-2 py-2 text-left ${
                   s.session_id === sessionId
                     ? 'bg-accent/15 text-foreground'
