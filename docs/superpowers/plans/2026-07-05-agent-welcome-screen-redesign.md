@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** REQUIRED SUB-SKILL: 使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 把 `/agent` 页面的空态从 4 条扁平示例，改成按面板真实 11 个 agent 工具分类的"能力标签 + 4 分类 × 2 示例"欢迎屏，让用户一眼看到 AI 助手实际能做什么（含刚上线的 P7.5 量化工具），而不是照搬 Vibe-Trading 那种面板不支持的期权/连接器/Swarm 类别。
+**目标：** 把 `/agent` 页面的空态从 4 条扁平示例，改成按面板真实 11 个 agent 工具分类的"能力标签 + 4 分类 × 2~3 示例（共 9 条）"欢迎屏，让用户一眼看到 AI 助手实际能做什么（含刚上线的 P7.5 量化工具），而不是照搬 Vibe-Trading 那种面板不支持的期权/连接器/Swarm 类别。
 
 **架构：** 纯前端改动，只涉及 `frontend/src/pages/Agent.tsx` 里的 `EXAMPLES` 常量和 `WelcomeScreen` 组件。不新增依赖、不改后端、不改其它组件。
 
@@ -104,6 +104,7 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     label: '量化分析',
     items: [
       { title: '单因子分析', prompt: '分析一下 momentum_20d 这个因子最近半年的 IC 表现。' },
+      { title: '多因子对比', prompt: '帮我对比一下 rsi_14、macd_hist 和 momentum_60d 这几个因子的 IC 表现，哪个更强。' },
       { title: '多因子合成', prompt: '把 rsi_14 和 macd_hist 按 IC 加权，给这些股票合成打分排名。' },
     ],
   },
@@ -179,7 +180,7 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
 
 启动前端 dev 服务（如尚未运行）：`cd frontend && pnpm dev`，浏览器打开 `/agent`，确认：
 - 空态显示 5 个能力标签（策略筛选/因子分析/组合优化/回测验证/只读数据工具）横向排列在标题下方。
-- 下方是 2×2 网格，4 个分类（策略与选股/行情与市场/量化分析/组合与回测），每类下面 2 个可点击的示例卡片。
+- 下方是 2×2 网格，4 个分类（策略与选股/行情与市场/量化分析/组合与回测），"量化分析"下面 3 个可点击的示例卡片（单因子分析/多因子对比/多因子合成），其余 3 个分类各 2 个。
 - 点击任意示例卡片，输入框应该被填充/直接发送该 prompt（沿用现有 `onExample={sendPrompt}` 行为，点击即发送，不是先填充等用户手动点发送——这是现有 `sendPrompt` 的既定行为，不用改）。
 - 发送一条消息后，空态应该消失，只剩对话内容（现有逻辑 `{msgs.length === 0 && <WelcomeScreen .../>}` 保证这一点，不用改）。
 
@@ -194,7 +195,7 @@ git commit -m "feat(ui): redesign agent WelcomeScreen with categorized examples 
 
 ## 自检
 
-**1. 规格覆盖度：** 4 分类（策略与选股/行情与市场/量化分析/组合与回测）覆盖面板全部 11 个 agent 工具中除 `get_capabilities`/`list_ext_data`（这两个是元信息类工具，不适合做成"示例 prompt"，用户不会主动问"告诉我你的能力标签"）之外的 9 个；能力标签用简短概括覆盖工具边界。不含期权/连接器/Swarm/多市场/交易复盘相关内容，符合 Global Constraints。
+**1. 规格覆盖度：** 4 分类共 9 条示例（策略与选股 2 条、行情与市场 2 条、量化分析 3 条、组合与回测 2 条），逐一对应面板全部 11 个 agent 工具中除 `get_capabilities`/`list_ext_data`（这两个是元信息类工具，不适合做成"示例 prompt"，用户不会主动问"告诉我你的能力标签"）之外的 9 个：`list_strategies`/`run_screener`/`get_kline`/`get_market_overview`/`analyze_factor`/`compare_factors`/`compose_factor_score`/`optimize_portfolio`/`run_backtest`。**（panel 3 评审 Medium，已verify属实并修正：最初版本漏了 `compare_factors` 专属示例，"多因子合成"只对应 `compose_factor_score`，两者是不同工具——`compare_factors` 逐个列出多个因子的 IC/IR 不合成，`compose_factor_score` 按 IC 加权合成一个综合打分。已在"量化分析"类目下补第 3 条"多因子对比"专门对应 `compare_factors`。）** 能力标签用简短概括覆盖工具边界。不含期权/连接器/Swarm/多市场/交易复盘相关内容，符合 Global Constraints。
 
 **2. 占位符扫描：** 无 TBD/TODO，Step 1/2 均为完整可直接替换的代码。
 
