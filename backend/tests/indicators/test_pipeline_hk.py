@@ -37,6 +37,7 @@ def test_hk_has_no_limit_signals():
         assert col not in out.columns, f"HK should not produce {col}"
     assert "ma5" in out.columns
     assert "macd_dif" in out.columns
+    assert out["turnover_rate"].to_list() == [0.1, 0.1]
 
 
 def test_a_share_still_computes_limit_signals():

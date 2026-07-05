@@ -870,6 +870,7 @@ class QuoteService:
                     prev_enriched=prev_enriched,
                     today_ohlcv=today_ohlcv,
                     instruments=instruments,
+                    asset_type=asset_type,
                 )
                 if enriched_today.is_empty():
                     logger.warning("增量计算结果为空, 回退到全量计算")
@@ -884,7 +885,12 @@ class QuoteService:
                             "ok" if not live_agg.is_empty() else "空", prev_date)
 
                 cutoff = today - timedelta(days=90)
-                table = "kline_etf_daily" if asset_type == "etf" else "kline_daily"
+                table = {
+                    "stock": "kline_daily",
+                    "index": "kline_index_daily",
+                    "etf": "kline_etf_daily",
+                    "hk": "kline_hk_daily",
+                }.get(asset_type, "kline_daily")
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
                 hist_df = (
@@ -910,9 +916,28 @@ class QuoteService:
                         factors = pl.read_parquet(factor_path)
                     except Exception:
                         pass
-                instruments = self._repo.get_instruments() if asset_type == "stock" else None
+                if hasattr(self._repo, "get_instruments_asset"):
+                    instruments = self._repo.get_instruments_asset(asset_type)
+                elif asset_type == "stock":
+                    instruments = self._repo.get_instruments()
+                else:
+                    instruments = pl.DataFrame()
+                if instruments.is_empty():
+                    try:
+                        provider = _get_data_provider()
+                        if getattr(provider.capabilities, "instruments", False):
+                            instruments = provider.get_instruments(asset_type)
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug("live enriched instruments fallback failed asset_type=%s: %s", asset_type, e)
+                if not instruments.is_empty() and "symbol" in instruments.columns and "symbol" in full_df.columns:
+                    instruments = instruments.filter(pl.col("symbol").is_in(full_df["symbol"].unique()))
 
-                enriched_full = compute_enriched(full_df, factors=factors, instruments=instruments)
+                enriched_full = compute_enriched(
+                    full_df,
+                    factors=factors,
+                    instruments=instruments,
+                    asset_type=asset_type,
+                )
                 enriched_today = enriched_full.filter(pl.col("date") == today)
 
             if enriched_today.is_empty():
