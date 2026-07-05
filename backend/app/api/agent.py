@@ -143,7 +143,7 @@ async def send_message(session_id: str, req: AgentSendIn, request: Request) -> d
     if session.get("last_attempt_status") == "running" and running_attempt_id:
         running_task = _TASKS.get(running_attempt_id)
         if running_task is not None and not running_task.done():
-            raise HTTPException(status_code=409, detail="an attempt is already running for this session")
+            raise HTTPException(status_code=409, detail="上一轮回复仍在运行，请稍后重试")
 
     stored = last.get("display_content")
     agent_sessions.append_message(

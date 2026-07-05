@@ -399,7 +399,9 @@ export function Agent() {
       setMsgs(prev => {
         const next = [...prev]
         const last = next[next.length - 1]
-        if (last?.role === 'assistant') last.content += `\n[请求失败] ${(e as Error).message}`
+        const message = (e as Error).message
+        const busy = message.includes('仍在运行') || message.includes('already running')
+        if (last?.role === 'assistant') last.content += `\n[请求失败] ${busy ? '上一轮回复仍在运行，请稍后重试' : message}`
         return next
       })
     } finally {

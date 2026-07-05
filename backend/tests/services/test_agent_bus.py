@@ -62,5 +62,29 @@ async def test_subscribe_unknown_session_returns_immediately():
     assert await _drain(bus, "missing") == []
 
 
+async def test_closed_channel_can_be_dropped_to_release_replay_buffer():
+    bus = AgentBus(closed_retain_seconds=0)
+    bus.begin("s1")
+    bus.publish("s1", {"type": "delta", "content": "x"})
+    bus.close("s1")
+
+    assert await _drain(bus, "s1") == []
+    assert bus._channels == {}
+
+
+async def test_cleanup_callback_does_not_drop_new_attempt_for_same_session():
+    bus = AgentBus()
+    bus.begin("s1")
+    old = bus._channels["s1"]
+    bus.close("s1")
+    bus.begin("s1")
+
+    bus._drop_if_same("s1", old)
+
+    bus.publish("s1", {"type": "delta", "content": "new"})
+    bus.close("s1")
+    assert await _drain(bus, "s1") == [{"type": "delta", "content": "new"}]
+
+
 async def test_get_bus_is_singleton():
     assert get_bus() is get_bus()

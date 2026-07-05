@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 _MAX_BUFFER = 500
+_CLOSED_RETAIN_SECONDS = 60.0
 
 
 class _SessionChannel:
@@ -22,8 +23,9 @@ class _SessionChannel:
 class AgentBus:
     """In-process per-session event fan-out with bounded replay."""
 
-    def __init__(self) -> None:
+    def __init__(self, closed_retain_seconds: float = _CLOSED_RETAIN_SECONDS) -> None:
         self._channels: dict[str, _SessionChannel] = {}
+        self._closed_retain_seconds = closed_retain_seconds
 
     def begin(self, session_id: str) -> None:
         prior = self._channels.get(session_id)
@@ -50,6 +52,15 @@ class AgentBus:
         for queue in list(channel.subscribers):
             queue.put_nowait(None)
         channel.subscribers.clear()
+        if self._closed_retain_seconds <= 0:
+            self._channels.pop(session_id, None)
+            return
+        loop = asyncio.get_running_loop()
+        loop.call_later(self._closed_retain_seconds, self._drop_if_same, session_id, channel)
+
+    def _drop_if_same(self, session_id: str, channel: _SessionChannel) -> None:
+        if self._channels.get(session_id) is channel:
+            self._channels.pop(session_id, None)
 
     async def subscribe(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
         channel = self._channels.get(session_id)
