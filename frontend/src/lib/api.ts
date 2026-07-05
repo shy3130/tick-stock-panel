@@ -47,6 +47,7 @@ export interface InstrumentSearchResult {
 export interface AgentMsg {
   role: 'user' | 'assistant'
   content: string
+  display_content?: string
 }
 
 export interface AgentTool {
@@ -56,11 +57,36 @@ export interface AgentTool {
 }
 
 export type AgentEvent =
+  | { type: 'attempt_start'; attempt_id: string; session_id?: string }
   | { type: 'tool_call'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; result: unknown }
   | { type: 'delta'; content: string }
+  | { type: 'cancelled'; attempt_id: string }
   | { type: 'done' }
   | { type: 'error'; message: string }
+
+export interface AgentSession {
+  session_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+}
+
+export interface AgentStoredMessage extends AgentMsg {
+  message_id: string
+  created_at: string
+}
+
+export interface DocumentEnvelope {
+  source: string
+  kind: string
+  title: string
+  text: string
+  char_count: number
+  truncated: boolean
+  warnings: string[]
+}
 
 // ===== Financials =====
 export interface FinancialStatus {
@@ -940,12 +966,41 @@ export const api = {
     ),
 
   agentTools: () => request<{ tools: AgentTool[] }>('/api/agent/tools'),
+  agentSessions: () => request<{ sessions: AgentSession[] }>('/api/agent/sessions'),
+  createAgentSession: (title?: string) =>
+    request<AgentSession>('/api/agent/sessions', { method: 'POST', body: JSON.stringify({ title: title ?? '' }) }),
+  renameAgentSession: (sessionId: string, title: string) =>
+    request<AgentSession>(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  deleteAgentSession: (sessionId: string) =>
+    request<{ deleted: boolean }>(`/api/agent/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
+  agentSessionMessages: (sessionId: string) =>
+    request<{ messages: AgentStoredMessage[] }>(`/api/agent/sessions/${encodeURIComponent(sessionId)}/messages`),
+  cancelAgentAttempt: (attemptId: string) =>
+    request<{ cancelled: boolean }>(`/api/agent/attempts/${encodeURIComponent(attemptId)}/cancel`, { method: 'POST' }),
+  readDocument: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<DocumentEnvelope>('/api/documents/read', { method: 'POST', body: fd })
+  },
 
-  async *agentStream(messages: AgentMsg[], profileId?: string): AsyncGenerator<AgentEvent> {
+  async *agentStream(
+    messages: AgentMsg[],
+    profileId?: string,
+    sessionId?: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
     const res = await fetch('/api/agent/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, ...(profileId ? { profile_id: profileId } : {}) }),
+      signal,
+      body: JSON.stringify({
+        messages,
+        ...(profileId ? { profile_id: profileId } : {}),
+        ...(sessionId ? { session_id: sessionId } : {}),
+      }),
     })
     if (!res.ok) {
       let detail = ''
@@ -1209,7 +1264,7 @@ export const api = {
       stock_info?: { name?: string; total_shares?: number; float_shares?: number }
       date: string | null
       rows: MinuteKlineRow[]
-      source?: 'local' | 'live' | 'none'
+      source?: 'local' | 'local_disk' | 'tdx_api' | 'live' | 'none'
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
     ),

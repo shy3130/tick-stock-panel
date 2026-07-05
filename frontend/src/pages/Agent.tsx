@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Loader2, Send, Trash2, Wrench } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Bot, Download, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Square, Trash2, X, Wrench } from 'lucide-react'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { PageHeader } from '@/components/PageHeader'
-import { api, type AgentMsg } from '@/lib/api'
+import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
+import { api, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
 import { clearAgentChat, loadAgentChat, saveAgentChat } from '@/lib/agentChatStore'
 
 interface ToolTrace {
@@ -59,6 +61,81 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
   },
 ]
 
+function AgentAvatar() {
+  return (
+    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
+      <Bot className="h-3.5 w-3.5" />
+    </div>
+  )
+}
+
+function ToolTraceList({ tools }: { tools?: ToolTrace[] }) {
+  if (!tools?.length) return null
+  return (
+    <div className="mb-2 space-y-1">
+      {tools.map((t, j) => (
+        <details key={`${t.name}-${j}`} className="rounded bg-elevated/60 px-2 py-1">
+          <summary className="flex cursor-pointer items-center gap-1 text-[11px] text-muted">
+            <Wrench className="h-3 w-3" />
+            {t.name}
+          </summary>
+          <pre className="mt-1 max-h-40 overflow-auto text-[10px] text-muted">
+            {JSON.stringify(t.result ?? t.args, null, 2)}
+          </pre>
+        </details>
+      ))}
+    </div>
+  )
+}
+
+function MessageBubble({
+  msg,
+  streaming,
+  isLatest,
+  onRetry,
+}: {
+  msg: ChatMsg
+  streaming: boolean
+  isLatest: boolean
+  onRetry: () => void
+}) {
+  if (msg.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[80%] rounded-card bg-accent/20 px-3 py-2 text-xs text-foreground whitespace-pre-wrap">
+          {msg.content}
+        </div>
+      </div>
+    )
+  }
+
+  const failed = msg.content.includes('[错误]') || msg.content.includes('[请求失败]')
+  return (
+    <div className="flex justify-start gap-2">
+      <AgentAvatar />
+      <div className="max-w-[80%] rounded-card border border-border bg-surface px-3 py-2 text-xs text-foreground">
+        <ToolTraceList tools={msg.tools} />
+        {msg.content ? (
+          <MarkdownRenderer content={msg.content} />
+        ) : streaming && isLatest ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+        ) : (
+          <span className="text-muted">(无回复)</span>
+        )}
+        {failed && !streaming && (
+          <button
+            onClick={onRetry}
+            className="mt-2 inline-flex items-center gap-1 rounded-btn bg-elevated px-2 py-1 text-[11px] text-muted hover:text-secondary"
+          >
+            <RotateCcw className="h-3 w-3" />
+            重试
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: (prompt: string) => void }) {
   return (
     <div className="flex min-h-[42vh] flex-col items-center justify-center gap-5 px-2 text-center">
@@ -103,42 +180,115 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
 
 export function Agent() {
   const [msgs, setMsgs] = useState<ChatMsg[]>(() => loadAgentChat())
+  const [sessions, setSessions] = useState<AgentSession[]>([])
+  const [sessionId, setSessionId] = useState<string>()
   const [input, setInput] = useState('')
   const [profileId, setProfileId] = useState<string>()
   const [streaming, setStreaming] = useState(false)
+  const [attachment, setAttachment] = useState<DocumentEnvelope | null>(null)
+  const [readingFile, setReadingFile] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const attemptIdRef = useRef<string | null>(null)
+  const urlSessionId = searchParams.get('session') || undefined
 
   useEffect(() => {
-    if (streaming) return
+    if (streaming || sessionId) return
     saveAgentChat(msgs.map(m => ({ role: m.role, content: m.content })))
-  }, [msgs, streaming])
+  }, [msgs, sessionId, streaming])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [msgs, streaming])
 
+  useEffect(() => {
+    api.agentSessions()
+      .then(({ sessions: rows }) => {
+        setSessions(rows)
+        if (urlSessionId && rows.some(s => s.session_id === urlSessionId)) {
+          void loadSession(urlSessionId, true)
+        } else if (urlSessionId) {
+          setSearchParams({}, { replace: true })
+        }
+      })
+      .catch(() => setSessions([]))
+    // 初次进入时恢复 URL session；之后由显式切换动作维护。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!urlSessionId || urlSessionId === sessionId) return
+    if (!sessions.some(s => s.session_id === urlSessionId)) return
+    void loadSession(urlSessionId, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSessionId, sessions, sessionId])
+
+  function setSessionInUrl(id?: string, replace = false) {
+    setSearchParams(id ? { session: id } : {}, { replace })
+  }
+
+  async function refreshSessions(selectId?: string) {
+    const { sessions: rows } = await api.agentSessions()
+    setSessions(rows)
+    if (selectId) {
+      setSessionId(selectId)
+      setSessionInUrl(selectId)
+    }
+  }
+
+  async function loadSession(id: string, replaceUrl = false) {
+    const { messages } = await api.agentSessionMessages(id)
+    setSessionId(id)
+    setSessionInUrl(id, replaceUrl)
+    setMsgs(messages.map(m => ({ role: m.role, content: m.content })))
+  }
+
+  async function newSession() {
+    const s = await api.createAgentSession('新对话')
+    setMsgs([])
+    await refreshSessions(s.session_id)
+  }
+
   async function sendPrompt(prompt: string) {
     const text = prompt.trim()
     if (!text || streaming) return
+    const content = attachment
+      ? `${text}\n\n## 用户附件（只读上下文）\n文件: ${attachment.title}\n类型: ${attachment.kind}\n\n${attachment.text}`
+      : text
+    let activeSessionId = sessionId
+    if (!activeSessionId) {
+      const s = await api.createAgentSession(text.slice(0, 50))
+      activeSessionId = s.session_id
+      setSessionId(activeSessionId)
+      setSessionInUrl(activeSessionId)
+      setSessions(prev => [s, ...prev])
+    }
 
     const fullHistory: AgentMsg[] = [
       ...msgs.map(m => ({ role: m.role, content: m.content })),
-      { role: 'user', content: text },
+      { role: 'user', content, display_content: text },
     ]
     const history = fullHistory.slice(-50)
     setMsgs(prev => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', tools: [] }])
     setInput('')
+    setAttachment(null)
     setStreaming(true)
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
 
     try {
-      for await (const evt of api.agentStream(history, profileId)) {
+      for await (const evt of api.agentStream(history, profileId, activeSessionId, ctrl.signal)) {
         setMsgs(prev => {
           const lastIdx = prev.length - 1
           const last = prev[lastIdx]
           if (last?.role !== 'assistant') return prev
 
           const nextLast: ChatMsg = { ...last, tools: last.tools ? [...last.tools] : [] }
-          if (evt.type === 'delta') {
+          if (evt.type === 'attempt_start') {
+            attemptIdRef.current = evt.attempt_id
+          } else if (evt.type === 'delta') {
             nextLast.content += evt.content
           } else if (evt.type === 'tool_call') {
             nextLast.tools = [...(nextLast.tools ?? []), { name: evt.name, args: evt.args }]
@@ -152,13 +302,25 @@ export function Agent() {
             nextLast.tools = tools
           } else if (evt.type === 'error') {
             nextLast.content += `\n[错误] ${evt.message}`
+          } else if (evt.type === 'cancelled') {
+            nextLast.content += nextLast.content ? '\n[已停止]' : '[已停止]'
           }
           const next = [...prev]
           next[lastIdx] = nextLast
           return next
         })
       }
+      void refreshSessions(activeSessionId)
     } catch (e) {
+      if ((e as Error).name === 'AbortError') {
+        setMsgs(prev => {
+          const next = [...prev]
+          const last = next[next.length - 1]
+          if (last?.role === 'assistant') last.content += last.content ? '\n[已停止]' : '[已停止]'
+          return next
+        })
+        return
+      }
       setMsgs(prev => {
         const next = [...prev]
         const last = next[next.length - 1]
@@ -166,6 +328,8 @@ export function Agent() {
         return next
       })
     } finally {
+      if (abortRef.current === ctrl) abortRef.current = null
+      attemptIdRef.current = null
       setStreaming(false)
     }
   }
@@ -175,8 +339,74 @@ export function Agent() {
   }
 
   function clear() {
+    abortRef.current?.abort()
     clearAgentChat()
     setMsgs([])
+    setSessionId(undefined)
+    setSessionInUrl(undefined)
+  }
+
+  function cancelStream() {
+    const attemptId = attemptIdRef.current
+    if (attemptId) void api.cancelAgentAttempt(attemptId).catch(() => undefined)
+    abortRef.current?.abort()
+  }
+
+  async function attachFile(file: File) {
+    setReadingFile(true)
+    try {
+      setAttachment(await api.readDocument(file))
+    } finally {
+      setReadingFile(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  async function renameCurrentSession() {
+    if (!sessionId) return
+    const current = sessions.find(s => s.session_id === sessionId)
+    const title = window.prompt('会话名称', current?.title ?? '')
+    if (!title?.trim()) return
+    const updated = await api.renameAgentSession(sessionId, title.trim())
+    setSessions(prev => prev.map(s => (s.session_id === updated.session_id ? updated : s)))
+  }
+
+  async function deleteCurrentSession() {
+    if (!sessionId || !window.confirm('删除当前会话？')) return
+    await api.deleteAgentSession(sessionId)
+    setSessionId(undefined)
+    setMsgs([])
+    setSessionInUrl(undefined)
+    await refreshSessions()
+  }
+
+  function retryAt(index: number) {
+    for (let i = index - 1; i >= 0; i--) {
+      if (msgs[i]?.role === 'user') {
+        void sendPrompt(msgs[i].content)
+        return
+      }
+    }
+  }
+
+  function exportMarkdown() {
+    if (!msgs.length) return
+    const lines = [`# AI 助手对话`, '', `导出时间：${new Date().toLocaleString()}`, '']
+    for (const msg of msgs) {
+      lines.push(`## ${msg.role === 'user' ? '用户' : '助手'}`, '', msg.content || '(无回复)', '')
+      if (msg.tools?.length) {
+        lines.push('<details><summary>工具调用</summary>', '', '```json')
+        lines.push(JSON.stringify(msg.tools, null, 2))
+        lines.push('```', '', '</details>', '')
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `agent-chat-${new Date().toISOString().slice(0, 10)}.md`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -184,76 +414,155 @@ export function Agent() {
       <div className="flex items-center justify-between gap-3">
         <PageHeader title="AI 助手" subtitle="多轮对话 · 可调用面板数据工具" />
         <div className="flex items-center gap-2">
+          <select
+            value={sessionId ?? ''}
+            onChange={e => {
+              if (e.target.value) void loadSession(e.target.value)
+              else clear()
+            }}
+            className="h-8 max-w-40 rounded-input border border-border bg-elevated px-2 text-xs text-foreground md:hidden"
+          >
+            <option value="">本地草稿</option>
+            {sessions.map(s => (
+              <option key={s.session_id} value={s.session_id}>{s.title || s.session_id}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => void newSession()}
+            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            新建
+          </button>
+          <button
+            onClick={() => void renameCurrentSession()}
+            disabled={!sessionId}
+            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary disabled:opacity-40"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            改名
+          </button>
           <AiProviderSelector entry="agent" value={profileId} onChange={setProfileId} />
           <button
-            onClick={clear}
+            onClick={exportMarkdown}
+            disabled={msgs.length === 0}
+            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary disabled:opacity-40"
+          >
+            <Download className="h-3.5 w-3.5" />
+            导出
+          </button>
+          <button
+            onClick={sessionId ? () => void deleteCurrentSession() : clear}
+            disabled={!sessionId && msgs.length === 0}
             className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary"
           >
             <Trash2 className="h-3.5 w-3.5" />
-            清空
+            {sessionId ? '删除' : '清空'}
           </button>
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto py-3">
-        {msgs.length === 0 && (
-          <WelcomeScreen disabled={streaming} onExample={sendPrompt} />
-        )}
-        {msgs.map((m, i) => (
-          <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-            <div
-              className={`max-w-[80%] rounded-card px-3 py-2 text-xs text-foreground whitespace-pre-wrap ${
-                m.role === 'user' ? 'bg-accent/20' : 'border border-border bg-surface'
-              }`}
-            >
-              {m.tools && m.tools.length > 0 && (
-                <div className="mb-1.5 space-y-1">
-                  {m.tools.map((t, j) => (
-                    <details key={j} className="rounded bg-elevated/60 px-2 py-1">
-                      <summary className="flex cursor-pointer items-center gap-1 text-[11px] text-muted">
-                        <Wrench className="h-3 w-3" />
-                        {t.name}
-                      </summary>
-                      <pre className="mt-1 max-h-40 overflow-auto text-[10px] text-muted">
-                        {JSON.stringify(t.result ?? t.args, null, 2)}
-                      </pre>
-                    </details>
-                  ))}
+      <div className="mt-3 flex min-h-0 flex-1 overflow-hidden border-t border-border">
+        <aside className="hidden w-56 shrink-0 border-r border-border py-3 pr-3 md:block">
+          <button
+            onClick={clear}
+            className={`mb-2 flex w-full items-center justify-between rounded-btn px-2 py-2 text-left text-xs ${
+              !sessionId ? 'bg-accent/15 text-foreground' : 'text-muted hover:bg-elevated hover:text-secondary'
+            }`}
+          >
+            <span>本地草稿</span>
+            {!sessionId && msgs.length > 0 && <span className="text-[10px] text-muted">{msgs.length}</span>}
+          </button>
+          <div className="space-y-1 overflow-auto">
+            {sessions.map(s => (
+              <button
+                key={s.session_id}
+                onClick={() => void loadSession(s.session_id)}
+                className={`w-full rounded-btn px-2 py-2 text-left ${
+                  s.session_id === sessionId
+                    ? 'bg-accent/15 text-foreground'
+                    : 'text-muted hover:bg-elevated hover:text-secondary'
+                }`}
+              >
+                <div className="truncate text-xs font-medium">{s.title || s.session_id}</div>
+                <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted">
+                  <span className="truncate">{new Date(s.updated_at).toLocaleString()}</span>
+                  <span className="shrink-0">{s.message_count}</span>
                 </div>
-              )}
-              {m.content ? (
-                m.content
-              ) : m.role === 'assistant' && streaming && i === msgs.length - 1 ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
-              ) : m.role === 'assistant' ? (
-                <span className="text-muted">(无回复)</span>
-              ) : null}
-            </div>
+              </button>
+            ))}
           </div>
-        ))}
+        </aside>
+
+        <div ref={scrollRef} className="min-w-0 flex-1 space-y-3 overflow-auto py-3 md:pl-3">
+          {msgs.length === 0 && (
+            <WelcomeScreen disabled={streaming} onExample={sendPrompt} />
+          )}
+          {msgs.map((m, i) => (
+            <MessageBubble
+              key={i}
+              msg={m}
+              streaming={streaming}
+              isLatest={i === msgs.length - 1}
+              onRetry={() => retryAt(i)}
+            />
+          ))}
+        </div>
       </div>
 
       <div className="flex items-end gap-2 border-t border-border pt-3">
-        <textarea
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              send()
-            }
+        <div className="min-w-0 flex-1">
+          {attachment && (
+            <div className="mb-2 flex max-w-full items-center gap-2 rounded-btn border border-border bg-elevated px-2 py-1 text-xs text-muted">
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{attachment.title}</span>
+              <span className="shrink-0 text-[10px]">{attachment.char_count} 字</span>
+              <button onClick={() => setAttachment(null)} className="ml-auto shrink-0 hover:text-secondary">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          <textarea
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                send()
+              }
+            }}
+            rows={2}
+            placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
+            className="w-full resize-none rounded-input border border-border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-accent/60"
+          />
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          accept=".txt,.md,.csv,.xlsx,.xls,.pdf"
+          onChange={e => {
+            const file = e.target.files?.[0]
+            if (file) void attachFile(file)
           }}
-          rows={2}
-          placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
-          className="flex-1 resize-none rounded-input border border-border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-accent/60"
         />
         <button
-          disabled={streaming || !input.trim()}
-          onClick={send}
-          className="flex h-9 items-center gap-1.5 rounded-btn bg-accent/90 px-4 text-xs font-medium text-base hover:bg-accent disabled:opacity-40"
+          disabled={streaming || readingFile}
+          onClick={() => fileRef.current?.click()}
+          className="flex h-9 items-center gap-1.5 rounded-btn bg-elevated px-3 text-xs text-muted hover:text-secondary disabled:opacity-40"
         >
-          {streaming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-          发送
+          {readingFile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+          附件
+        </button>
+        <button
+          disabled={!streaming && !input.trim()}
+          onClick={streaming ? cancelStream : send}
+          className={`flex h-9 items-center gap-1.5 rounded-btn px-4 text-xs font-medium disabled:opacity-40 ${
+            streaming ? 'bg-danger/15 text-danger hover:bg-danger/20' : 'bg-accent/90 text-base hover:bg-accent'
+          }`}
+        >
+          {streaming ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+          {streaming ? '停止' : '发送'}
         </button>
       </div>
     </div>
