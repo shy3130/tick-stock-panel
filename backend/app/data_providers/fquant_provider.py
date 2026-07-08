@@ -45,6 +45,7 @@ from app.data_providers.fquant.adj_factor import (
 )
 from app.data_providers.fquant.engine_data_client import EngineDataClient
 from app.data_providers.fquant.fstore_client import FStoreClient
+from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
 from app.data_providers.fquant.mapping import (
     base_infos_rows_to_instruments,
     chengfen_gu_rows_to_universes,
@@ -159,7 +160,6 @@ def _build_fstore_client():
     """
     mode = os.getenv("FQUANT_FSTORE_MODE", "postgres").strip().lower()
     if mode == "duckdb":
-        from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
         return FStoreDuckDBClient()
     return FStoreClient()
 
@@ -517,20 +517,43 @@ class FQuantProvider:
         self, symbol: str, code: str,
         start_time: datetime | None, end_time: datetime | None,
     ) -> list[dict]:
-        """备份 fstore ``chuquan_chuxi`` → 归一事件行（§5.3）。"""
+        """备份 fstore ``chuquan_chuxi`` → 归一事件行（§5.3）。
+
+        DuckDB 模式下 ``t_date`` 是 ``TIMESTAMPTZ``，DuckDB 的 Python 驱动
+        需要 ``pytz`` 才能把它物化成 Python 对象，而 ``pytz`` 不是本仓库的
+        核心依赖。这里把 SELECT 里的 ``t_date`` cast 成 ``DATE``，绕开
+        TIMESTAMPTZ 物化，从而不需要新增依赖。PostgreSQL 模式的 SQL 保持
+        不变（``chuquan_chuxi.t_date`` 在 PG 里是另一种类型，现有 SQL 已
+        经能正常工作）。
+        """
+        is_duckdb = isinstance(self._fstore, FStoreDuckDBClient)
         if start_time and end_time:
-            sql = (
-                "SELECT t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
-                "FROM chuquan_chuxi WHERE code = %s AND t_date BETWEEN %s AND %s "
-                "ORDER BY t_date ASC"
-            )
+            if is_duckdb:
+                sql = (
+                    "SELECT CAST(t_date AS DATE) AS t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
+                    "FROM chuquan_chuxi WHERE code = %s AND t_date BETWEEN %s AND %s "
+                    "ORDER BY t_date ASC"
+                )
+            else:
+                sql = (
+                    "SELECT t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
+                    "FROM chuquan_chuxi WHERE code = %s AND t_date BETWEEN %s AND %s "
+                    "ORDER BY t_date ASC"
+                )
             params: tuple = (code, start_time, end_time)
         else:
-            sql = (
-                "SELECT t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
-                "FROM chuquan_chuxi WHERE code = %s "
-                "ORDER BY t_date DESC LIMIT 100"
-            )
+            if is_duckdb:
+                sql = (
+                    "SELECT CAST(t_date AS DATE) AS t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
+                    "FROM chuquan_chuxi WHERE code = %s "
+                    "ORDER BY t_date DESC LIMIT 100"
+                )
+            else:
+                sql = (
+                    "SELECT t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
+                    "FROM chuquan_chuxi WHERE code = %s "
+                    "ORDER BY t_date DESC LIMIT 100"
+                )
             params = (code,)
         rows = self._fstore.query(sql, params)
         if rows:

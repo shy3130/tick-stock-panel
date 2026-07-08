@@ -49,6 +49,22 @@ def test_get_adj_events_from_fstore(provider):
     assert isinstance(rows, list)
 
 
+def test_get_adj_events_from_fstore_with_date_range(provider):
+    """回归测试：t_date 是 TIMESTAMPTZ，DuckDB 物化它需要 pytz（本仓库未装），
+
+    之前 date-range 分支的 SQL 没有 CAST t_date AS DATE，导致
+    FStoreDuckDBClient.query() 内部抛 InvalidInputException 被吞掉，
+    静默返回 []。这里显式传 start_time/end_time 触发 BETWEEN 分支，
+    验证真实除权除息事件能查到、且 trade_date 不是 None。
+    """
+    rows = provider._get_adj_events_from_fstore(
+        symbol="600519.SH", code="600519",
+        start_time=datetime(2020, 1, 1), end_time=datetime(2026, 1, 1),
+    )
+    assert len(rows) > 0
+    assert all(row.get("trade_date") is not None for row in rows)
+
+
 def test_get_financial_income(provider):
     df = provider.get_financial("600519.SH", "income")
     assert df.height > 0
