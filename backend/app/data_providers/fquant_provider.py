@@ -823,19 +823,53 @@ class FQuantProvider:
 
         out: list[dict] = []
         for asset_type, codes in grouped.items():
-            table = f"t_{asset_type}_daily_markets"
-            placeholders = ",".join(["%s"] * len(codes))
-            sql = f"""
-                SELECT DISTINCT ON (code)
-                    code, name, tdate, price, zdfd, zded, cjl, cje,
-                    jrkpj, zgj, zdj, zrspj, hslv, zhfu
-                FROM {table}
-                WHERE code IN ({placeholders})
-                ORDER BY code, tdate DESC
-            """
-            rows = self._fstore.query(sql, codes)
+            rows = self._query_fstore_realtime_rows(asset_type, codes)
             out.extend(self._fstore_quote_to_row(r, asset_type) for r in rows)
         return [r for r in out if r]
+
+    def _query_fstore_realtime_rows(self, asset_type: int, codes: list[str]) -> list[dict]:
+        """按当前 fstore 客户端类型选择表结构。
+
+        PostgreSQL：按 asset_type 物理分表 t_{asset_type}_daily_markets，
+        字段是具名列。DuckDB：统一长表 daily_markets，asset_type 是
+        过滤列，其余字段打包在 payload_json（驼峰 key）里，用
+        ``->>`` 抽取后转型别名，对齐 PostgreSQL 分支的输出列名，
+        这样调用方 ``_fstore_quote_to_row`` 不需要区分数据源。
+        """
+        placeholders = ",".join(["%s"] * len(codes))
+        if isinstance(self._fstore, FStoreDuckDBClient):
+            sql = f"""
+                SELECT DISTINCT ON (code)
+                    code,
+                    COALESCE(payload_json->>'Name', '') AS name,
+                    trade_date AS tdate,
+                    price,
+                    CAST(NULLIF(payload_json->>'Zdfd', '') AS DOUBLE) AS zdfd,
+                    CAST(NULLIF(payload_json->>'Zded', '') AS DOUBLE) AS zded,
+                    CAST(NULLIF(payload_json->>'Cjl', '') AS BIGINT) AS cjl,
+                    CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS cje,
+                    CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS jrkpj,
+                    CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS zgj,
+                    CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS zdj,
+                    CAST(NULLIF(payload_json->>'Zrspj', '') AS DOUBLE) AS zrspj,
+                    CAST(NULLIF(payload_json->>'Hslv', '') AS DOUBLE) AS hslv,
+                    CAST(NULLIF(payload_json->>'Zhfu', '') AS DOUBLE) AS zhfu
+                FROM daily_markets
+                WHERE asset_type = %s AND code IN ({placeholders})
+                ORDER BY code, trade_date DESC
+            """
+            return self._fstore.query(sql, (asset_type, *codes))
+
+        table = f"t_{asset_type}_daily_markets"
+        sql = f"""
+            SELECT DISTINCT ON (code)
+                code, name, tdate, price, zdfd, zded, cjl, cje,
+                jrkpj, zgj, zdj, zrspj, hslv, zhfu
+            FROM {table}
+            WHERE code IN ({placeholders})
+            ORDER BY code, tdate DESC
+        """
+        return self._fstore.query(sql, codes)
 
     def _merge_fstore_quote_supplements(self, rows: list[dict]) -> None:
         symbols = [str(r.get("symbol") or "") for r in rows if r.get("symbol")]
