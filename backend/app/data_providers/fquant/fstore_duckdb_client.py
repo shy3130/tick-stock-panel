@@ -67,17 +67,38 @@ class FStoreDuckDBClient:
         return self._get_conn() is not None
 
     def query(self, sql: str, params: tuple | list | None = None) -> list[dict]:
-        """执行 SELECT，返回 ``[{col: val, ...}, ...]``。失败返回空列表。"""
+        """执行 SELECT，返回 ``[{col: val, ...}, ...]``。失败返回空列表。
+
+        对 Python date/datetime 对象自动转换为 ISO 格式字符串，以兼容 DuckDB VARCHAR 列。
+        """
         conn = self._get_conn()
         if conn is None:
             return []
         duck_sql = sql.replace("%s", "?")
+        # 转换 date/datetime 对象为 ISO 格式字符串（DuckDB 的 VARCHAR 列需要）
+        converted_params = self._convert_params(params)
         try:
             with self._lock:
-                cursor = conn.execute(duck_sql, list(params) if params else [])
+                cursor = conn.execute(duck_sql, converted_params)
                 columns = [d[0] for d in cursor.description]
                 rows = cursor.fetchall()
         except Exception as e:  # noqa: BLE001
             logger.warning("FStoreDuckDBClient: 查询失败 — %s | SQL: %s", e, duck_sql[:200])
             return []
         return [dict(zip(columns, row)) for row in rows]
+
+    @staticmethod
+    def _convert_params(params: tuple | list | None) -> list:
+        """将 Python date/datetime 对象转换为 ISO 格式字符串。"""
+        if not params:
+            return []
+        from datetime import date, datetime
+        converted = []
+        for param in params:
+            if isinstance(param, datetime):
+                converted.append(param.isoformat())
+            elif isinstance(param, date):
+                converted.append(param.isoformat())
+            else:
+                converted.append(param)
+        return converted
