@@ -106,6 +106,9 @@ TickFlowStockPanel.app/
 TickFlowStockPanel-macos*.dmg
 TickFlowStockPanel-macos*.zip
 
+# ===== superpowers subagent-driven-development scratch workspace =====
+.superpowers/
+
 # ===== /design-sync (Claude Design) =====
 .ds-sync/
 ds-bundle/
