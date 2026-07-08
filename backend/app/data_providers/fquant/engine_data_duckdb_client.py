@@ -118,6 +118,11 @@ class EngineDataDuckDBClient:
 
         market_wide_kline 没有 datetime/adjustment_count 两列（market_day_kline 有），
         这里固定填 None/0——调用方的字段归一函数需要能容忍这两个字段缺失。
+
+        已确认 market_wide_kline 相对 market_day_kline 和 HTTP 路径存在约 2 个交易日
+        的稳定滞后（表级导入延迟，非单个代码的问题），因此 get_wide 的结果可能缺少
+        近期交易日的数据，即使这些数据在 get_day 或 HTTP 路径中已存在——这是 engine
+        仓库数据导入流水线的上游问题，本客户端无法修复。
         """
         _ = asset_type
         conn = self._tdx.get()
