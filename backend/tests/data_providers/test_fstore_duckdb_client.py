@@ -1,4 +1,8 @@
-"""FStoreDuckDBClient 测试 —— 需要本机挂载 /Volumes/WD1，否则自动 skip。"""
+"""FStoreDuckDBClient 测试。
+
+某些测试（query 功能）需要本机挂载 /Volumes/WD1，否则自动 skip。
+但安全网测试（fail-soft 行为）在任何环境都运行。
+"""
 from __future__ import annotations
 
 import os
@@ -9,12 +13,11 @@ from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
 
 DUCKDB_PATH = "/Volumes/WD1/fstore.duckdb"
 
-pytestmark = pytest.mark.skipif(
+
+@pytest.mark.skipif(
     not os.path.exists(DUCKDB_PATH),
     reason=f"本机没有挂载 {DUCKDB_PATH}",
 )
-
-
 def test_query_returns_list_of_dict():
     client = FStoreDuckDBClient()
     rows = client.query(
@@ -26,6 +29,10 @@ def test_query_returns_list_of_dict():
     assert isinstance(rows[0], dict)
 
 
+@pytest.mark.skipif(
+    not os.path.exists(DUCKDB_PATH),
+    reason=f"本机没有挂载 {DUCKDB_PATH}",
+)
 def test_query_with_in_clause_placeholders():
     client = FStoreDuckDBClient()
     rows = client.query(
