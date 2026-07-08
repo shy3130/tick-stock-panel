@@ -26,6 +26,8 @@ DuckDB 的 Python 驱动对 VARCHAR 列的类型绑定较严格：Python `date`/
 
 **修复方案**（`fquant_provider.py` 第 519-564 行）：在 `_get_adj_events_from_fstore` 中增加 DuckDB 分支，对该列做 `CAST(t_date AS DATE)` 转换，绕开 TIMESTAMPTZ 物化。PostgreSQL 分支保持原样（现有 SQL 已正常工作）。这是逻辑分支，不会对调用方或返回数据格式有影响。
 
+**关键注意**：若无此修复，缺少 `pytz` 依赖时，该方法会抛异常但被 `FStoreDuckDBClient.query()` 的全局 `except Exception: return []` 捕获并静默吞掉，导致出现"找不到调整事件"的现象而非明确的错误，这种静默失败模式对后续调试回归时较难追踪根因。
+
 ---
 
 ## engine（`FQUANT_ENGINE_DATA_SOURCE=duckdb`，默认 http，与 `engine_mode` 完全独立）
@@ -52,7 +54,7 @@ DuckDB 的 Python 驱动对 VARCHAR 列的类型绑定较严格：Python `date`/
 
 - 字段对齐 HTTP EngineDataClient。`order_count` 列不存在，实现中固定填 `None`。
 - `direction` 直接透传 `side` 列值，无映射转换。
-- **已确认 `side` 取值范围**：`{0, 1, 2, 3, 5, 8}`（之前报告为 `{0, 1, 2, 5, 8}`，但实测发现极少量 `3` 值存在，约 2,069 行，占总 ~9.5B 行中的微小比例）。两个值都直接透传，无特殊处理。
+- **已确认 `side` 取值范围**：`{0, 1, 2, 3, 5, 8}`（之前报告为 `{0, 1, 2, 5, 8}`，但实测发现极少量 `3` 值存在，占总 926,909,252 行（约 9.27 亿）中的微小比例）。两个值都直接透传，无特殊处理。
 - **已知语义冲突**（不在本计划范围内解决）：`../fm-cli` 的 `internal/cli/stock/engine_data.go` 里 `directionLabel` 把 `direction=1` 标成卖出、`2` 标成买入；如果 tickflow-stock-panel 其它地方（前端展示、`trans_rows_to_df` 下游消费者）理解为相反映射，需找权威定义统一。本次改造只做如实透传。
 
 #### `get_xdxr`（`market_xdxr`）
