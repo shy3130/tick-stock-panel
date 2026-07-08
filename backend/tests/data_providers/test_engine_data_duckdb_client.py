@@ -64,3 +64,38 @@ def test_get_trans_returns_rows_with_expected_shape():
     assert len(rows) > 0
     for key in ("time", "price", "volume", "amount", "order_count", "direction"):
         assert key in rows[0]
+
+
+@pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
+def test_get_fund_daily_returns_dict_with_expected_keys():
+    """get_fund_daily 契约：返回含 main_net/total_net/... 的 dict，对齐 EngineDataDiskClient。"""
+    client = EngineDataDuckDBClient()
+    result = client.get_fund_daily("600519", "2026-07-02")
+    # 如果当天没有数据（市场休市或数据覆盖不含该日），返回 {} 也可以
+    assert isinstance(result, dict)
+    if result:
+        for key in ("main_net", "total_net", "super_large_net", "large_net", "medium_net", "small_net"):
+            assert key in result, f"缺少字段 {key}"
+
+
+@pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
+def test_get_fund_range_returns_dataframe_with_date_and_main_net_inflow():
+    """get_fund_range 契约：返回含 ['date', 'main_net_inflow'] 两列的 DataFrame，
+    对齐 EngineDataDiskClient.get_fund_range 的最小契约。
+    """
+    import polars as pl
+
+    client = EngineDataDuckDBClient()
+    df = client.get_fund_range("600519", "2026-06-01", "2026-07-02")
+    assert isinstance(df, pl.DataFrame)
+    if df.height > 0:
+        assert "date" in df.columns
+        assert "main_net_inflow" in df.columns
+
+
+@pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
+def test_get_fund_daily_missing_code_returns_empty_dict():
+    """不存在的代码（或当天无数据）应返回 {}，不应抛异常。"""
+    client = EngineDataDuckDBClient()
+    result = client.get_fund_daily("999999", "2026-07-02")
+    assert result == {}

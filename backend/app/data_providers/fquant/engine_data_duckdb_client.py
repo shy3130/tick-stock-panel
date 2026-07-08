@@ -259,3 +259,84 @@ class EngineDataDuckDBClient:
             }
             for r in rows
         ]
+
+    def get_fund_daily(self, code: str, date_iso: str) -> dict:
+        """读 market_fund_flow 单日资金流数据，字段契约对齐 EngineDataDiskClient.get_fund_daily。
+
+        :param code: 裸代码（如 ``600519``），内部会加交易所前缀
+        :param date_iso: ``YYYY-MM-DD`` 格式日期字符串
+        :return: 含 main_net/total_net/super_large_net/... 的 dict；
+                 文件不可达或无数据时返回 {}（与 EngineDataDiskClient 一致）
+        """
+        conn = self._tdx.get()
+        if conn is None:
+            return {}
+        try:
+            cursor = conn.execute(
+                """
+                SELECT main, super_large, large, medium, small,
+                       main_ratio, super_large_ratio, large_ratio, medium_ratio, small_ratio
+                FROM market_fund_flow
+                WHERE code = ? AND trade_date = ?
+                """,
+                [_prefixed_code(code), date_iso],
+            )
+            row = cursor.fetchone()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("EngineDataDuckDBClient: get_fund_daily 查询失败 — %s", e)
+            return {}
+        if row is None:
+            return {}
+        main = float(row[0] or 0)
+        super_large = float(row[1] or 0)
+        large = float(row[2] or 0)
+        medium = float(row[3] or 0)
+        small = float(row[4] or 0)
+        return {
+            "main_net": main,
+            "total_net": main + medium + small,
+            "super_large_net": super_large,
+            "large_net": large,
+            "medium_net": medium,
+            "small_net": small,
+            "main_ratio": float(row[5] or 0),
+            "super_large_ratio": float(row[6] or 0),
+            "large_ratio": float(row[7] or 0),
+            "medium_ratio": float(row[8] or 0),
+            "small_ratio": float(row[9] or 0),
+        }
+
+    def get_fund_range(self, code: str, start_iso: str, end_iso: str):
+        """读 market_fund_flow 区间资金流，返回 polars DataFrame。
+
+        契约对齐 EngineDataDiskClient.get_fund_range：只返回 ["date", "main_net_inflow"] 两列。
+
+        :param code: 裸代码（如 ``600519``），内部会加交易所前缀
+        :param start_iso: ``YYYY-MM-DD`` 格式起始日期（含）
+        :param end_iso: ``YYYY-MM-DD`` 格式结束日期（含）
+        :return: polars DataFrame，列为 date/main_net_inflow；
+                 文件不可达或无数据时返回空 DataFrame
+        """
+        import polars as pl
+
+        conn = self._tdx.get()
+        if conn is None:
+            return pl.DataFrame()
+        try:
+            cursor = conn.execute(
+                """
+                SELECT trade_date::TEXT AS date, main AS main_net_inflow
+                FROM market_fund_flow
+                WHERE code = ? AND trade_date BETWEEN ? AND ?
+                ORDER BY trade_date
+                """,
+                [_prefixed_code(code), start_iso, end_iso],
+            )
+            rows = cursor.fetchall()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("EngineDataDuckDBClient: get_fund_range 查询失败 — %s", e)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+        return pl.DataFrame({"date": [r[0] for r in rows], "main_net_inflow": [r[1] for r in rows]})
+
