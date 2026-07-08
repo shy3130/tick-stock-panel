@@ -199,6 +199,9 @@ class FQuantProvider:
             self.name = "fquant_local"
         else:
             self._engine = EngineDataClient()
+        if os.getenv("FQUANT_ENGINE_DATA_SOURCE", "").strip().lower() == "duckdb":
+            from app.data_providers.fquant.engine_data_duckdb_client import EngineDataDuckDBClient
+            self._engine = EngineDataDuckDBClient()
         self._engine_mode = engine_mode
         self._moneyflow = MoneyflowClient()
         self._tdx_api_base = (
