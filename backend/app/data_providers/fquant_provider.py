@@ -146,6 +146,24 @@ def _aggregate_minute_df(df: pl.DataFrame, freq: str) -> pl.DataFrame:
     return pl.DataFrame(rows) if rows else pl.DataFrame()
 
 
+def _build_fstore_client():
+    """按 ``FQUANT_FSTORE_MODE`` 选择 fstore 客户端实现。
+
+    - ``postgres``（默认）：直连 fstore PostgreSQL（现状，安全回退）。
+    - ``duckdb``：只读打开 /Volumes/WD1/fstore.duckdb。
+
+    这是一个独立于 ``DATA_PROVIDER``/provider 白名单的内部开关——切换
+    fstore 后端不改变 provider 的名字（仍然是 fquant/fquant_local），
+    因为对上层调用方而言这只是同一份数据换了个更快的读取路径，不是
+    换了一个新的数据 provider。
+    """
+    mode = os.getenv("FQUANT_FSTORE_MODE", "postgres").strip().lower()
+    if mode == "duckdb":
+        from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
+        return FStoreDuckDBClient()
+    return FStoreClient()
+
+
 # =========================================================================== #
 # FQuantProvider（对外接口，本地源聚合）
 # =========================================================================== #
@@ -174,7 +192,7 @@ class FQuantProvider:
     )
 
     def __init__(self, engine_mode: str = "http") -> None:
-        self._fstore = FStoreClient()
+        self._fstore = _build_fstore_client()
         if engine_mode == "disk":
             from app.data_providers.fquant.engine_data_disk import EngineDataDiskClient
             self._engine = EngineDataDiskClient()
