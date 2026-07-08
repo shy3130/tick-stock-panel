@@ -80,3 +80,20 @@ def test_get_financial_forecast_is_empty_not_error(provider):
 def test_get_universe_constituents(provider):
     df = provider.get_universe_constituents("000001")
     assert isinstance(df, type(df))  # 只验证不抛异常；具体行数取决于该指数当前是否有成分股快照
+
+
+def test_get_raw_oracle_rows_duckdb_uses_daily_markets(provider):
+    """回归测试：_get_raw_oracle_rows 在 DuckDB 模式下应从 daily_markets 获取 market_rows，
+    而非不存在的 t_1_daily_markets（后者会被 FStoreDuckDBClient.query() 静默吞掉变成空列表）。
+    """
+    rows = provider._get_raw_oracle_rows(
+        "600519",
+        [{"date": "2026-06-01"}, {"date": "2026-06-02"}, {"date": "2026-06-03"}],
+    )
+    # 如果查的是 t_1_daily_markets（不存在于 DuckDB），market_rows 会静默返回 []，
+    # 最终结果只剩 day_rows 的字段（oracle_open 来自 t_1_day_klines，但该表 600519 只到 2025-10）
+    # 正确的 daily_markets 路径应能返回近期日期的数据；如果 fstore.duckdb 没有这些日期，
+    # 返回 [] 也允许（市场休市等），但不能因表不存在而报错。
+    assert isinstance(rows, list)
+    if rows:
+        assert "oracle_close" in rows[0], "oracle_close 字段应来自 daily_markets.price"

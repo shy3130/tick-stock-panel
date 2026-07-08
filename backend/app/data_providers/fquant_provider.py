@@ -362,7 +362,12 @@ class FQuantProvider:
         return out
 
     def _get_raw_oracle_rows(self, code: str, rows: list[dict]) -> list[dict]:
-        """Fetch fstore raw OHLC oracle for the date span of engine rows."""
+        """Fetch fstore raw OHLC oracle for the date span of engine rows.
+
+        DuckDB 模式：t_1_daily_markets 不存在，改用无前缀的 daily_markets 长表，
+        字段从 payload_json 抽取（模式与 _query_fstore_realtime_rows 一致）。
+        t_1_day_klines 两种模式下均可用（DuckDB 原生支持 ::text/::float8 cast）。
+        """
         dates = sorted(str(r.get("date")) for r in rows if r.get("date"))
         if not dates:
             return []
@@ -382,22 +387,40 @@ class FQuantProvider:
             """,
             (code, dates[0], dates[-1]),
         )
-        market_rows = self._fstore.query(
-            """
-            SELECT
-                tdate::text AS date,
-                jrkpj::float8 AS oracle_open,
-                zgj::float8 AS oracle_high,
-                zdj::float8 AS oracle_low,
-                price::float8 AS oracle_close,
-                cjl::float8 * 100 AS oracle_volume,
-                cje::float8 AS oracle_amount
-            FROM t_1_daily_markets
-            WHERE code = %s AND tdate BETWEEN %s AND %s
-            ORDER BY tdate ASC
-            """,
-            (code, dates[0], dates[-1]),
-        )
+        if isinstance(self._fstore, FStoreDuckDBClient):
+            market_rows = self._fstore.query(
+                """
+                SELECT
+                    trade_date::text AS date,
+                    CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS oracle_open,
+                    CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS oracle_high,
+                    CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS oracle_low,
+                    price AS oracle_close,
+                    CAST(NULLIF(payload_json->>'Cjl', '') AS DOUBLE) * 100 AS oracle_volume,
+                    CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS oracle_amount
+                FROM daily_markets
+                WHERE asset_type = 1 AND code = %s AND trade_date BETWEEN %s AND %s
+                ORDER BY trade_date ASC
+                """,
+                (code, dates[0], dates[-1]),
+            )
+        else:
+            market_rows = self._fstore.query(
+                """
+                SELECT
+                    tdate::text AS date,
+                    jrkpj::float8 AS oracle_open,
+                    zgj::float8 AS oracle_high,
+                    zdj::float8 AS oracle_low,
+                    price::float8 AS oracle_close,
+                    cjl::float8 * 100 AS oracle_volume,
+                    cje::float8 AS oracle_amount
+                FROM t_1_daily_markets
+                WHERE code = %s AND tdate BETWEEN %s AND %s
+                ORDER BY tdate ASC
+                """,
+                (code, dates[0], dates[-1]),
+            )
         by_date = {str(r.get("date")): r for r in day_rows}
         by_date.update({str(r.get("date")): r for r in market_rows})
         return [by_date[k] for k in sorted(by_date)]
