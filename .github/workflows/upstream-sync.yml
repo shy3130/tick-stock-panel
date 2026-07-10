@@ -81,6 +81,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch --detach "${{ steps.detect.outputs.base_sha }}"
           if ! git merge --no-ff --no-commit "${{ steps.detect.outputs.upstream_sha }}"; then
             {
@@ -90,7 +92,7 @@ jobs:
               git diff --name-only --diff-filter=U
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            git merge --abort
+            git merge --abort 2>/dev/null || true
             exit 1
           fi
 
@@ -189,9 +191,11 @@ jobs:
             exit 1
           fi
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch --detach "$BASE_SHA"
           if ! git merge --no-ff --no-commit "$UPSTREAM_SHA"; then
-            git merge --abort
+            git merge --abort 2>/dev/null || true
             echo "The merge result changed between validation and publication." >&2
             exit 1
           fi
@@ -266,8 +270,6 @@ jobs:
               exit 1
             fi
 
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -m "merge: integrate upstream ${SYNC_LABEL} into Sycee"
 
             merge_parents=$(git show -s --format='%P' HEAD)
