@@ -1,0 +1,310 @@
+name: Sync upstream into Sycee
+
+on:
+  schedule:
+    # Four checks per day. GitHub schedules use UTC.
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: shy3130/tickflow-stock-panel
+  UPSTREAM_BRANCH: main
+  BASE_BRANCH: main
+
+jobs:
+  prepare-test:
+    if: github.repository == 'g35756666/tickflow-stock-panel'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      needed: ${{ steps.detect.outputs.needed }}
+      base_sha: ${{ steps.detect.outputs.base_sha }}
+      upstream_sha: ${{ steps.detect.outputs.upstream_sha }}
+      branch: ${{ steps.detect.outputs.branch }}
+      label: ${{ steps.detect.outputs.label }}
+      tested_tree: ${{ steps.record-tree.outputs.tested_tree }}
+
+    steps:
+      - name: Check out the fork without write credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect new upstream commits
+        id: detect
+        run: |
+          set -euo pipefail
+
+          git remote add upstream-sync "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch origin "${BASE_BRANCH}"
+          git fetch --no-tags upstream-sync \
+            "${UPSTREAM_BRANCH}" \
+            '+refs/tags/*:refs/tags/upstream/*'
+
+          base_sha=$(git rev-parse "origin/${BASE_BRANCH}")
+          upstream_sha=$(git rev-parse "upstream-sync/${UPSTREAM_BRANCH}")
+
+          if git merge-base --is-ancestor "$upstream_sha" "$base_sha"; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Upstream is already contained in ${BASE_BRANCH}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          short_sha=${upstream_sha:0:12}
+          base_short=${base_sha:0:12}
+          label=$(git for-each-ref \
+            --points-at "$upstream_sha" \
+            --format='%(refname:strip=3)' \
+            refs/tags/upstream | sort -V | tail -n 1)
+          label=${label:-$short_sha}
+
+          {
+            echo "needed=true"
+            echo "base_sha=$base_sha"
+            echo "upstream_sha=$upstream_sha"
+            echo "branch=codex/sync-upstream-${short_sha}-onto-${base_short}"
+            echo "label=$label"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare the merge tree
+        if: steps.detect.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+
+          git switch --detach "${{ steps.detect.outputs.base_sha }}"
+          if ! git merge --no-ff --no-commit "${{ steps.detect.outputs.upstream_sha }}"; then
+            {
+              echo "### Upstream merge needs manual conflict resolution"
+              echo
+              echo '```text'
+              git diff --name-only --diff-filter=U
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Test the macOS launcher contract
+        if: steps.detect.outputs.needed == 'true'
+        run: bash tests/start-command-auto-open-test.sh
+
+      - name: Set up uv
+        if: steps.detect.outputs.needed == 'true'
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Run backend tests
+        if: steps.detect.outputs.needed == 'true'
+        working-directory: backend
+        run: |
+          uv python install 3.11
+          uv run --frozen --extra dev pytest -q
+
+      - name: Set up pnpm
+        if: steps.detect.outputs.needed == 'true'
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.10.0
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.needed == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Validate the frontend
+        if: steps.detect.outputs.needed == 'true'
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          node --test src/lib/publicEntry.test.ts src/lib/navRegistry.test.ts
+          pnpm lint
+          pnpm build
+
+      - name: Record the tested Git tree
+        if: steps.detect.outputs.needed == 'true'
+        id: record-tree
+        run: |
+          set -euo pipefail
+
+          if ! git diff --quiet; then
+            echo "Tests changed tracked files; refusing to publish an untested tree." >&2
+            git diff --stat
+            exit 1
+          fi
+          echo "tested_tree=$(git write-tree)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: prepare-test
+    if: needs.prepare-test.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check out the exact tested base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare-test.outputs.base_sha }}
+          fetch-depth: 0
+
+      - name: Reproduce and publish the tested merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.prepare-test.outputs.base_sha }}
+          UPSTREAM_SHA: ${{ needs.prepare-test.outputs.upstream_sha }}
+          SYNC_BRANCH: ${{ needs.prepare-test.outputs.branch }}
+          SYNC_LABEL: ${{ needs.prepare-test.outputs.label }}
+          TESTED_TREE: ${{ needs.prepare-test.outputs.tested_tree }}
+        run: |
+          set -euo pipefail
+
+          git remote add upstream-sync "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch origin "${BASE_BRANCH}"
+          git fetch --no-tags upstream-sync "${UPSTREAM_BRANCH}"
+
+          current_base=$(git rev-parse "origin/${BASE_BRANCH}")
+          current_upstream=$(git rev-parse "upstream-sync/${UPSTREAM_BRANCH}")
+          if [ "$current_base" != "$BASE_SHA" ]; then
+            echo "${BASE_BRANCH} changed during validation; rerun the workflow." >&2
+            exit 1
+          fi
+          if [ "$current_upstream" != "$UPSTREAM_SHA" ]; then
+            echo "Upstream changed during validation; rerun the workflow." >&2
+            exit 1
+          fi
+
+          git switch --detach "$BASE_SHA"
+          if ! git merge --no-ff --no-commit "$UPSTREAM_SHA"; then
+            git merge --abort
+            echo "The merge result changed between validation and publication." >&2
+            exit 1
+          fi
+
+          publish_tree=$(git write-tree)
+          if [ "$publish_tree" != "$TESTED_TREE" ]; then
+            git merge --abort
+            echo "Published tree ${publish_tree} does not match tested tree ${TESTED_TREE}." >&2
+            exit 1
+          fi
+
+          stale_sync_pr=$(gh api --paginate --slurp --method GET \
+            "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f state=open \
+            -f base="$BASE_BRANCH" | jq -r \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg branch "$SYNC_BRANCH" \
+            'first(.[][] | select(
+              .head.repo.full_name == $repo
+              and (.head.ref | startswith("codex/sync-upstream-"))
+              and .head.ref != $branch
+            )) as $pr
+            | if $pr == null then empty else [$pr.html_url, $pr.head.ref] | @tsv end')
+          if [ -n "$stale_sync_pr" ]; then
+            git merge --abort
+            echo "Another upstream sync PR is still open: ${stale_sync_pr}. Resolve it before creating a new one." >&2
+            exit 1
+          fi
+
+          existing_pr=$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f state=all \
+            -f base="$BASE_BRANCH" \
+            -f head="${GITHUB_REPOSITORY_OWNER}:${SYNC_BRANCH}" \
+            --jq 'if length == 0 then empty else .[0] | [.state, .html_url, .head.sha] | @tsv end')
+          existing_state=""
+          existing_url=""
+          existing_head_sha=""
+          if [ -n "$existing_pr" ]; then
+            IFS=$'\t' read -r existing_state existing_url existing_head_sha <<< "$existing_pr"
+          fi
+
+          remote_branch_sha=$(git ls-remote --heads origin "refs/heads/${SYNC_BRANCH}" | awk '{print $1}')
+          if [ -n "$remote_branch_sha" ]; then
+            git fetch origin "refs/heads/${SYNC_BRANCH}:refs/remotes/origin/${SYNC_BRANCH}"
+            remote_tree=$(git rev-parse "refs/remotes/origin/${SYNC_BRANCH}^{tree}")
+            remote_parents=$(git show -s --format='%P' "refs/remotes/origin/${SYNC_BRANCH}")
+            expected_parents="${BASE_SHA} ${UPSTREAM_SHA}"
+            git merge --abort
+
+            if [ "$remote_tree" != "$TESTED_TREE" ] || [ "$remote_parents" != "$expected_parents" ]; then
+              echo "Remote branch ${SYNC_BRANCH} exists with unexpected history; refusing to overwrite it." >&2
+              exit 1
+            fi
+
+            if [ "$existing_state" = "open" ]; then
+              if [ "$existing_head_sha" != "$remote_branch_sha" ]; then
+                echo "Existing PR head does not match remote branch ${SYNC_BRANCH}." >&2
+                exit 1
+              fi
+              echo "Validated existing sync PR: ${existing_url}" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [ -n "$existing_state" ]; then
+              echo "Existing sync PR ${existing_url} is ${existing_state}; manual review is required." >&2
+              exit 1
+            fi
+          else
+            if [ -n "$existing_state" ]; then
+              git merge --abort
+              echo "Sync PR ${existing_url} exists but its branch is missing; manual review is required." >&2
+              exit 1
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "merge: integrate upstream ${SYNC_LABEL} into Sycee"
+
+            merge_parents=$(git show -s --format='%P' HEAD)
+            expected_parents="${BASE_SHA} ${UPSTREAM_SHA}"
+            if [ "$merge_parents" != "$expected_parents" ]; then
+              echo "Unexpected merge parents: ${merge_parents}" >&2
+              exit 1
+            fi
+
+            git push origin "HEAD:refs/heads/${SYNC_BRANCH}"
+          fi
+
+          body_file="$RUNNER_TEMP/upstream-sync-pr.md"
+          cat > "$body_file" <<'EOF'
+          This PR was created automatically from the upstream repository.
+
+          - Upstream: `shy3130/tickflow-stock-panel@${{ needs.prepare-test.outputs.upstream_sha }}`
+          - Upstream label: `${{ needs.prepare-test.outputs.label }}`
+          - Fork base: `${{ needs.prepare-test.outputs.base_sha }}`
+          - Validation run: `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+
+          The read-only validation job completed:
+
+          - macOS launcher contract test
+          - backend pytest suite
+          - frontend behavior tests
+          - frontend lint
+          - frontend production build
+
+          Merge this PR with **Create a merge commit**. Do not squash or rebase; the merge commit preserves upstream ancestry for the next synchronization.
+          EOF
+
+          pr_url=$(gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base "$BASE_BRANCH" \
+            --head "$SYNC_BRANCH" \
+            --title "Merge upstream ${SYNC_LABEL} into Sycee" \
+            --body-file "$body_file")
+
+          echo "Created ${pr_url}" >> "$GITHUB_STEP_SUMMARY"
