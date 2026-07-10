@@ -17,6 +17,7 @@ import { Eye, EyeOff, Loader2, Lock, ShieldCheck, ShieldAlert, Sparkles } from '
 import { api } from '@/lib/api'
 import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/cn'
+import { BRAND_NAME } from '@/lib/brand'
 
 export function Auth() {
   const navigate = useNavigate()
@@ -89,7 +90,7 @@ export function Auth() {
         {/* Logo */}
         <div className="mb-6 flex flex-col items-center gap-2">
           <Logo className="h-10 w-10" />
-          <h1 className="text-lg font-semibold text-foreground">TickFlow Stock Panel</h1>
+          <h1 className="text-lg font-semibold text-foreground">{BRAND_NAME}</h1>
         </div>
 
         <div className="rounded-card border border-border bg-surface/90 p-6 shadow-2xl backdrop-blur">
@@ -171,15 +172,7 @@ export function Auth() {
                 出于安全考虑, 首次设置密码需在服务器本机或内网访问时操作。公网环境下仅可登录。
               </p>
               <p>
-                详细配置说明见{' '}
-                <a
-                  href="https://github.com/shy3130/tickflow-stock-panel/blob/main/docs/deploy-password.md"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-accent underline-offset-2 hover:underline"
-                >
-                  访问密码部署文档
-                </a>
+                公网环境建议通过环境变量预置访问密码, 或使用 SSH 端口转发后再初始化。
               </p>
             </div>
           )}

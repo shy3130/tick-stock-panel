@@ -16,9 +16,10 @@ import { cn } from '@/lib/cn'
 import { useUnreadAlerts } from '@/lib/monitorBadge'
 import { NAV_GROUP_ORDER, useNavItems, type NavBadge, type NavItem } from '@/lib/navRegistry'
 import { SidebarGroup } from './SidebarGroup'
+import { BRAND_NAME, BRAND_COLOR } from '@/lib/brand'
 
 // 品牌色 — 只用于 logo / brand 区域,不影响功能语义色
-const BRAND = '#8B5CF6'
+const BRAND = BRAND_COLOR
 const TICKFLOW_REGISTER_URL = 'https://tickflow.org/auth/register?ref=V3KDKGXPEA'
 
 export const CORE_INDEXES = [
@@ -316,8 +317,8 @@ export function Sidebar(props: SidebarProps) {
               className="font-mono font-bold text-[13px] tracking-[0.06em] text-foreground leading-tight"
               style={{ textShadow: `0 0 10px ${BRAND}44` }}
             >
-              <div>TickFlow</div>
-              <div>Stock Panel</div>
+              <div>{BRAND_NAME}</div>
+              <div>workbench</div>
             </div>
           )}
         </div>
