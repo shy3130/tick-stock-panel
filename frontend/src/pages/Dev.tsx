@@ -5,6 +5,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { resetBadge } from '@/lib/monitorBadge'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 // ── 分钟K探测 (迁移自 MinuteDataProbe) ─────────────────
 interface ProbeResult {
@@ -320,6 +321,7 @@ function LadderTestPanel() {
   const [result, setResult] = useState<Awaited<ReturnType<typeof api.monitorRuleTestLadder>> | null>(null)
   const [error, setError] = useState('')
   const [pushMsg, setPushMsg] = useState('')
+  const [showTriggerConfirm, setShowTriggerConfirm] = useState(false)
 
   const testMut = useMutation({
     mutationFn: () => api.monitorRuleTestLadder(),
@@ -364,11 +366,7 @@ function LadderTestPanel() {
           模拟触发
         </button>
         <button
-          onClick={() => {
-            if (confirm('将真实推送飞书 + 写入监控中心 + 触发 SSE 通知。确认?')) {
-              triggerMut.mutate()
-            }
-          }}
+          onClick={() => setShowTriggerConfirm(true)}
           disabled={triggerMut.isPending}
           className="flex items-center gap-1.5 rounded-btn border border-amber-400/40 bg-amber-400/10 px-4 py-1.5 text-sm font-medium text-amber-400 hover:bg-amber-400/20 disabled:opacity-50 cursor-pointer"
         >
@@ -390,6 +388,19 @@ function LadderTestPanel() {
       {pushMsg && (
         <div className="rounded-btn border border-accent/40 bg-accent/10 p-3 text-sm text-accent">{pushMsg}</div>
       )}
+
+      <ConfirmDialog
+        open={showTriggerConfirm}
+        title="确认真实触发预警?"
+        message="该操作会真实推送飞书、写入监控中心并触发 SSE 通知。"
+        confirmText="确认触发"
+        pending={triggerMut.isPending}
+        onCancel={() => setShowTriggerConfirm(false)}
+        onConfirm={() => {
+          setShowTriggerConfirm(false)
+          triggerMut.mutate()
+        }}
+      />
 
       {error && (
         <div className="flex items-center gap-2 rounded-btn border border-danger/40 bg-danger/10 p-3 text-sm text-danger">

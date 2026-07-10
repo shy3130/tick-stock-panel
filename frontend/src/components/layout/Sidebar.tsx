@@ -344,7 +344,7 @@ export function Sidebar(props: SidebarProps) {
           collapsed ? (
             <div className="pb-1">
               {pinnedItems.map(({ to, label, icon: Icon }) => (
-                <NavLink key={to} to={to} title={label} className="flex h-11 items-center justify-center">
+                <NavLink key={to} to={to} title={label} aria-label={label} className="flex h-11 items-center justify-center">
                   {({ isActive }) => (
                     <span
                       className="flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-150 ease-smooth"
@@ -484,6 +484,7 @@ export function Sidebar(props: SidebarProps) {
                     onClick={() => navigate('/settings?tab=monitoring')}
                     className="text-secondary hover:text-foreground transition-colors shrink-0"
                     title="实时监控设置"
+                    aria-label="实时监控设置"
                   >
                     <Settings className="h-3 w-3" />
                   </button>
@@ -491,6 +492,7 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   onClick={() => onToggleRealtime(!realtimeEnabled)}
                   disabled={toggleRealtimePending}
+                  aria-label={realtimeEnabled ? '关闭实时行情' : '开启实时行情'}
                   className={`relative inline-flex h-4 w-7 items-center rounded-full shrink-0 transition-colors duration-200 ${
                     realtimeEnabled
                       ? 'bg-accent shadow-[0_0_6px_rgba(59,130,246,0.3)]'
@@ -514,6 +516,7 @@ export function Sidebar(props: SidebarProps) {
                       onClick={onDismissFreeHint}
                       className="text-amber-400/50 hover:text-amber-400 shrink-0 transition-colors"
                       title="关闭提示"
+                      aria-label="关闭提示"
                     >
                       <X className="h-2.5 w-2.5" />
                     </button>
@@ -537,6 +540,7 @@ export function Sidebar(props: SidebarProps) {
         <NavLink
           to="/settings"
           title="设置"
+          aria-label={collapsed ? '设置' : undefined}
           className={({ isActive }) =>
             cn(
               'flex items-center rounded-btn text-sm transition-colors duration-150 ease-smooth',

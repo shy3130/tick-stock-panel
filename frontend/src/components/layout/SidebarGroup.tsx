@@ -29,7 +29,7 @@ export function SidebarGroup({ group, items, collapsed, renderBadge }: Props) {
     return (
       <div className="py-1">
         {items.map(({ to, label, icon: Icon }) => (
-          <NavLink key={to} to={to} title={label} className="flex h-11 items-center justify-center">
+          <NavLink key={to} to={to} title={label} aria-label={label} className="flex h-11 items-center justify-center">
             {({ isActive }) => (
               <span
                 className={cn(

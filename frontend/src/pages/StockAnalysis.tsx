@@ -11,6 +11,7 @@ import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { getNavIconMeta } from '@/lib/navRegistry'
 import {
   startAnalysis, findTodayReport, useHistoryReports,
@@ -239,6 +240,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
 // ===== 左侧常驻:历史报告侧栏(所有股票,按时间倒序平铺) =====
 function HistorySidebar() {
   const { reports, loaded } = useHistoryReports()
+  const [confirmDeleteReport, setConfirmDeleteReport] = useState<{ id: string; label: string } | null>(null)
 
   return (
     <aside className="self-start sticky top-0">
@@ -286,7 +288,7 @@ function HistorySidebar() {
                     )}
                   </button>
                   <button
-                    onClick={() => { deleteReport(r.id); toast('已删除', 'success') }}
+                    onClick={() => setConfirmDeleteReport({ id: r.id, label: r.name || r.symbol })}
                     className="shrink-0 text-[10px] text-muted/60 hover:text-danger transition-colors px-1 py-0.5 opacity-0 group-hover:opacity-100"
                     title="删除"
                   >
@@ -298,6 +300,20 @@ function HistorySidebar() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={!!confirmDeleteReport}
+        title={`确认删除 ${confirmDeleteReport?.label ?? '历史报告'}?`}
+        message="该个股分析历史报告会被永久删除，此操作不可撤销。"
+        confirmText="确认删除"
+        danger
+        onCancel={() => setConfirmDeleteReport(null)}
+        onConfirm={() => {
+          if (!confirmDeleteReport) return
+          void deleteReport(confirmDeleteReport.id)
+          setConfirmDeleteReport(null)
+          toast('已删除', 'success')
+        }}
+      />
     </aside>
   )
 }

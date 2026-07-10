@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import { api, type AnalysisColumn, type AnalysisMenu, type ExtDataConfig, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 function dtypeToColumnType(dtype: string): AnalysisColumn['type'] {
   return dtype === 'int' || dtype === 'float' ? 'number' : 'string'
@@ -47,6 +48,7 @@ export function SettingsExtPagesPanel() {
   const [rankField, setRankField] = useState('')
   const [selectedColumns, setSelectedColumns] = useState<string[]>([])
   const [error, setError] = useState('')
+  const [confirmDeleteMenu, setConfirmDeleteMenu] = useState<AnalysisMenu | null>(null)
 
   const activeConfig = configs.find(c => c.id === dataSource) ?? configs[0]
   const fields = activeConfig?.fields ?? []
@@ -124,7 +126,10 @@ export function SettingsExtPagesPanel() {
 
   const del = useMutation({
     mutationFn: api.analysisMenuDelete,
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.analysisMenus }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.analysisMenus })
+      setConfirmDeleteMenu(null)
+    },
   })
 
   return (
@@ -264,7 +269,7 @@ export function SettingsExtPagesPanel() {
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
                 {!menu.builtin && (
-                  <button onClick={() => del.mutate(menu.id)} disabled={del.isPending} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10" title="删除">
+                  <button onClick={() => setConfirmDeleteMenu(menu)} disabled={del.isPending} className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10" title="删除">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}
@@ -286,6 +291,17 @@ export function SettingsExtPagesPanel() {
           <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-sm text-muted md:col-span-2 xl:col-span-3">暂无扩展页面，点击右上角新建。</div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={!!confirmDeleteMenu}
+        title={`确认删除 ${confirmDeleteMenu?.label ?? '扩展页面'}?`}
+        message="该扩展页面会从左侧分析菜单中移除，已保存的菜单配置不可恢复。"
+        confirmText="确认删除"
+        danger
+        pending={del.isPending}
+        onCancel={() => setConfirmDeleteMenu(null)}
+        onConfirm={() => { if (confirmDeleteMenu) del.mutate(confirmDeleteMenu.id) }}
+      />
     </div>
   )
 }

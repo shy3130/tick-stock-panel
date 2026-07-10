@@ -23,6 +23,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { getNavIconMeta } from '@/lib/navRegistry'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { toast } from '@/components/Toast'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { useReviewState } from '@/lib/useReviewStore'
 import {
@@ -75,6 +76,7 @@ export function Review() {
   // 生成状态走全局 store:切走页面流不中断,回来可恢复
   const { phase, content, error, meta } = useReviewState()
   const [viewing, setViewing] = useState<AiReviewReport | null>(null)  // 查看历史报告
+  const [confirmDeleteReport, setConfirmDeleteReport] = useState<AiReviewReport | null>(null)
   const reportEndRef = useRef<HTMLDivElement>(null)
 
   // 看板数据(与总览页同源)
@@ -94,6 +96,7 @@ export function Review() {
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.reviewReportDelete(id),
     onSuccess: () => {
+      setConfirmDeleteReport(null)
       qc.invalidateQueries({ queryKey: QK.reviewReports })
       toast('已删除', 'success')
     },
@@ -339,7 +342,7 @@ export function Review() {
                   generating={isGenerating}
                   onView={viewReport}
                   onBackToGenerating={() => setViewing(null)}
-                  onDelete={(id) => deleteMut.mutate(id)}
+                  onDelete={setConfirmDeleteReport}
                 />
               </div>
             </>
@@ -504,6 +507,17 @@ export function Review() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ConfirmDialog
+        open={!!confirmDeleteReport}
+        title={`确认删除 ${confirmDeleteReport?.as_of ?? ''} 复盘?`}
+        message="该历史复盘报告会被永久删除，此操作不可撤销。"
+        confirmText="确认删除"
+        danger
+        pending={deleteMut.isPending}
+        onCancel={() => setConfirmDeleteReport(null)}
+        onConfirm={() => { if (confirmDeleteReport) deleteMut.mutate(confirmDeleteReport.id) }}
+      />
     </>
   )
 }
@@ -745,7 +759,7 @@ function HistoryPanel({
   generating: boolean
   onView: (r: AiReviewReport) => void
   onBackToGenerating: () => void
-  onDelete: (id: string) => void
+  onDelete: (report: AiReviewReport) => void
 }) {
   const empty = !generating && reports.length === 0
   return (
@@ -827,7 +841,7 @@ function HistoryPanel({
                     )}
                   </div>
                   <button
-                    onClick={(e) => { e.stopPropagation(); onDelete(r.id) }}
+                    onClick={(e) => { e.stopPropagation(); onDelete(r) }}
                     className="shrink-0 p-1 text-muted opacity-0 transition-all hover:text-bear group-hover:opacity-100"
                     title="删除"
                   >

@@ -28,6 +28,7 @@ export function TopBar({ collapsed, forcedByViewport = false, onToggleCollapsed 
             : 'hover:bg-elevated hover:text-foreground cursor-pointer'
         }`}
         title={forcedByViewport ? '屏幕宽度不足，侧栏保持收起状态' : collapsed ? '展开侧栏' : '收起侧栏'}
+        aria-label={forcedByViewport ? '屏幕宽度不足，侧栏保持收起状态' : collapsed ? '展开侧栏' : '收起侧栏'}
       >
         {collapsed ? <ChevronsRight className="h-4 w-4 shrink-0" /> : <ChevronsLeft className="h-4 w-4 shrink-0" />}
       </button>
@@ -36,6 +37,7 @@ export function TopBar({ collapsed, forcedByViewport = false, onToggleCollapsed 
         onClick={() => toggleTheme()}
         className="flex items-center justify-center rounded-btn p-2 text-foreground/80 transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground cursor-pointer"
         title={dark ? '切换到亮色模式' : '切换到暗色模式'}
+        aria-label={dark ? '切换到亮色模式' : '切换到暗色模式'}
       >
         {dark ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
       </button>
