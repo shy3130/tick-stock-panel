@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { useGroupOpen } from '@/lib/sidebarState'
@@ -60,40 +61,51 @@ export function SidebarGroup({ group, items, collapsed, renderBadge }: Props) {
         <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-150 ease-smooth', !open && '-rotate-90')} />
         <span className="flex-1 text-left">{NAV_GROUP_LABEL[group]}</span>
       </button>
-      {open && (
-        <div className="space-y-0.5" style={{ '--g': groupColor } as CSSProperties}>
-          {items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn(
-                  'group flex items-center gap-2.5 rounded-btn py-1.5 pl-[10px] pr-3 text-sm border-l-2 transition-colors duration-150 ease-smooth',
-                  isActive
-                    ? 'border-[var(--g)] bg-elevated/60 text-foreground font-medium'
-                    : 'border-transparent text-foreground/80 hover:bg-elevated hover:text-foreground',
-                )
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <span
-                    className={cn(
-                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-150 ease-smooth',
-                      isActive ? 'text-[var(--g)]' : 'bg-elevated text-foreground/70 group-hover:text-foreground',
-                    )}
-                    style={{ backgroundColor: isActive ? 'color-mix(in srgb, var(--g) 15%, transparent)' : undefined }}
-                  >
-                    <item.icon className="h-4 w-4" />
-                  </span>
-                  <span className="flex-1">{item.label}</span>
-                  {renderBadge(item, isActive)}
-                </>
-              )}
-            </NavLink>
-          ))}
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="sidebar-group-items"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0, transition: { duration: 0.15, ease: 'easeOut' } }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="space-y-0.5" style={{ '--g': groupColor } as CSSProperties}>
+              {items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    cn(
+                      'group flex items-center gap-2.5 rounded-btn py-1.5 pl-[10px] pr-3 text-sm border-l-2 transition-colors duration-150 ease-smooth',
+                      isActive
+                        ? 'border-[var(--g)] bg-elevated/60 text-foreground font-medium'
+                        : 'border-transparent text-foreground/80 hover:bg-elevated hover:text-foreground',
+                    )
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      <span
+                        className={cn(
+                          'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-150 ease-smooth',
+                          isActive ? 'text-[var(--g)]' : 'bg-elevated text-foreground/70 group-hover:text-foreground',
+                        )}
+                        style={{ backgroundColor: isActive ? 'color-mix(in srgb, var(--g) 15%, transparent)' : undefined }}
+                      >
+                        <item.icon className="h-4 w-4" />
+                      </span>
+                      <span className="flex-1">{item.label}</span>
+                      {renderBadge(item, isActive)}
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
