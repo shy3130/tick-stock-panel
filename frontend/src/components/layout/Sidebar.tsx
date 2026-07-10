@@ -344,46 +344,60 @@ export function Sidebar(props: SidebarProps) {
         {pinnedItems.length > 0 && (
           collapsed ? (
             <div className="pb-1">
-              {pinnedItems.map(({ to, label, icon: Icon }) => (
-                <NavLink key={to} to={to} title={label} aria-label={label} className="flex h-11 items-center justify-center">
-                  {({ isActive }) => (
-                    <span
-                      className="flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-150 ease-smooth"
-                      style={{
-                        color: 'hsl(var(--g-core))',
-                        backgroundColor: isActive ? 'color-mix(in srgb, hsl(var(--g-core)) 22%, transparent)' : 'color-mix(in srgb, hsl(var(--g-core)) 10%, transparent)',
-                      }}
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                    </span>
-                  )}
-                </NavLink>
-              ))}
+              {pinnedItems.map((item) => {
+                const Icon = item.icon
+                return (
+                  <NavLink key={item.to} to={item.to} title={item.label} aria-label={item.label} className="flex h-11 items-center justify-center">
+                    {({ isActive }) => (
+                      <span
+                        className="relative flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-150 ease-smooth"
+                        style={{
+                          color: 'hsl(var(--g-core))',
+                          backgroundColor: isActive ? 'color-mix(in srgb, hsl(var(--g-core)) 22%, transparent)' : 'color-mix(in srgb, hsl(var(--g-core)) 10%, transparent)',
+                        }}
+                      >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        <span className="absolute -right-1 -top-1 scale-75 origin-top-right">
+                          {renderBadge(item, isActive)}
+                        </span>
+                      </span>
+                    )}
+                  </NavLink>
+                )
+              })}
               <div className="mx-2 my-1 h-px bg-border" />
             </div>
           ) : (
             <div className="pb-1">
               <div className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">常用</div>
-              {pinnedItems.map(({ to, label, icon: Icon }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  className={({ isActive }) =>
-                    cn(
-                      'mx-0 mb-1 flex items-center gap-2.5 rounded-btn border-l-2 px-2.5 py-1.5 text-sm transition-colors duration-150 ease-smooth',
-                      isActive ? 'border-[hsl(var(--g-core))] bg-elevated-2 font-medium text-foreground' : 'border-transparent text-foreground/80 hover:bg-elevated',
-                    )
-                  }
-                >
-                  <span
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
-                    style={{ backgroundColor: 'color-mix(in srgb, hsl(var(--g-core)) 18%, transparent)', color: 'hsl(var(--g-core))' }}
+              {pinnedItems.map((item) => {
+                const Icon = item.icon
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className={({ isActive }) =>
+                      cn(
+                        'mx-0 mb-1 flex items-center gap-2.5 rounded-btn border-l-2 px-2.5 py-1.5 text-sm transition-colors duration-150 ease-smooth',
+                        isActive ? 'border-[hsl(var(--g-core))] bg-elevated-2 font-medium text-foreground' : 'border-transparent text-foreground/80 hover:bg-elevated',
+                      )
+                    }
                   >
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <span className="flex-1">{label}</span>
-                </NavLink>
-              ))}
+                    {({ isActive }) => (
+                      <>
+                        <span
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+                          style={{ backgroundColor: 'color-mix(in srgb, hsl(var(--g-core)) 18%, transparent)', color: 'hsl(var(--g-core))' }}
+                        >
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="flex-1">{item.label}</span>
+                        {renderBadge(item, isActive)}
+                      </>
+                    )}
+                  </NavLink>
+                )
+              })}
               <div className="mx-2 my-1.5 h-px bg-border" />
             </div>
           )
