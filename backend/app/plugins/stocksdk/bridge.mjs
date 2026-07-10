@@ -25,7 +25,7 @@
  * realtime/instruments 是全市场枚举，由 code + marketId 反推后缀。
  */
 import { createRequire } from 'node:module'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { execSync } from 'node:child_process'
 import path from 'node:path'
 
@@ -36,7 +36,7 @@ import path from 'node:path'
  */
 async function loadSDK() {
   const require = createRequire(import.meta.url)
-  const scriptDir = path.dirname(new URL(import.meta.url).pathname)
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url))
   // 候选 node_modules 目录（按优先级）
   const nmDirs = [path.join(scriptDir, 'node_modules')]
   for (const p of (process.env.NODE_PATH || '').split(path.delimiter).filter(Boolean)) nmDirs.push(p)

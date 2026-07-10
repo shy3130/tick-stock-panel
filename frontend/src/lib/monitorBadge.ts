@@ -48,17 +48,16 @@ function subscribe(fn: () => void) {
 }
 
 function getSnapshot() {
-  return Math.max(0, currentTotal - lastSeenTotal)
+  return Math.max(0, currentTotal - Math.max(0, lastSeenTotal))
 }
 
 /** 轮询更新最新总数 (Layout 层调用)。 */
 export function setCurrentTotal(total: number): void {
-  // total=0 视为未初始化, 不更新 (避免渲染期 data=undefined 传 0 重置 lastSeen)
-  if (total <= 0) return
+  if (total < 0) return
 
-  // 首次初始化: lastSeen <= 0 (从未设置 -1, 或历史为 0) → 把已读基线设为当前总数
+  // 首次初始化: lastSeen < 0 (从未设置) → 把已读基线设为当前总数
   // 否则 lastSeen=0 + total=1 会被误算成"1条未读" (首次进入就显示徽标的 bug)
-  if (lastSeenTotal <= 0) {
+  if (lastSeenTotal < 0) {
     lastSeenTotal = total
     writeSeen(total)
   }

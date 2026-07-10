@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { useQuoteStream } from '@/lib/useQuoteStream'
+import { Loader2 } from 'lucide-react'
+import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
 import { ToastContainer } from '@/components/Toast'
 import { AlertToastContainer } from '@/components/AlertToast'
 import { AiAnalysisHost } from '@/components/financials/AiAnalysisHost'
@@ -93,10 +94,12 @@ export function Layout() {
 
   // SSE: 行情更新时自动刷新相关 queries + 告警通知
   useQuoteStream(realtimeEnabled, prefs?.sse_refresh_pages)
+  const streamStatus = useQuoteStreamStatus()
 
   const toggleQuote = useToggleRealtimeQuotes()
   const isRunning = quoteStatus?.running ?? false
   const isTrading = quoteStatus?.is_trading_hours ?? false
+  const isPaused = quoteStatus?.paused ?? false
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
   const isWatchlistMode = tier === 0
@@ -173,6 +176,7 @@ export function Layout() {
         realtimeEnabled={realtimeEnabled}
         isRunning={isRunning}
         isTrading={isTrading}
+        isPaused={isPaused}
         realtimeModeLabel={realtimeModeLabel}
         realtimeProviderName={realtimeProviderName}
         dismissFreeHint={dismissFreeHint}
@@ -191,6 +195,7 @@ export function Layout() {
         <TopBar
           collapsed={effectiveCollapsed}
           forcedByViewport={isNarrow}
+          reconnecting={streamStatus === 'reconnecting'}
           onToggleCollapsed={() => setCollapsed(!collapsed)}
         />
         <motion.main
@@ -199,7 +204,15 @@ export function Layout() {
           transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
           className="flex-1 min-h-0 overflow-auto scrollbar-gutter-stable"
         >
-          <Outlet />
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center py-24">
+                <Loader2 className="h-5 w-5 animate-spin text-muted" />
+              </div>
+            }
+          >
+            <Outlet />
+          </Suspense>
         </motion.main>
       </div>
 

@@ -20,13 +20,21 @@ interface Props {
   result: FactorBacktestResult
 }
 
+function groupSortKey(group: string): number {
+  return group.startsWith('Q') ? Number(group.slice(1)) || 0 : 0
+}
+
+function getGroupCols(row: Record<string, any>): string[] {
+  return Object.keys(row).filter(k => k !== 'date').sort((a, b) => groupSortKey(a) - groupSortKey(b))
+}
+
 export function FactorGroupNavChart({ result }: Props) {
   const ct = useChartTheme()
   const option = useMemo(() => {
     if (!result.group_nav.length) return null
 
     const dates = result.group_nav.map(r => (r.date as string).slice(0, 10))
-    const groupCols = Object.keys(result.group_nav[0]).filter(k => k !== 'date').sort()
+    const groupCols = getGroupCols(result.group_nav[0])
 
     // 多空净值
     const lsNav = result.long_short_nav
@@ -101,7 +109,7 @@ export function FactorGroupNavChart({ result }: Props) {
 
   // 图例
   const groupCols = result.group_nav.length > 0
-    ? Object.keys(result.group_nav[0]).filter(k => k !== 'date').sort()
+    ? getGroupCols(result.group_nav[0])
     : []
 
   return (

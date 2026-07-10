@@ -43,6 +43,7 @@ class StrategyBacktestConfig:
     initial_capital: float = 1_000_000.0
     position_sizing: Literal["equal", "score_weight"] = "equal"
     mode: Literal["position", "full"] = "position"
+    asset_type: str = "stock"
     holding_days: int = 5
 
     def __post_init__(self) -> None:
@@ -149,7 +150,7 @@ class StrategyBacktestService:
             load_end = config.end + timedelta(days=fwd_buffer * 2)  # 日历日放宽, 确保覆盖 N 个交易日
 
         t_load = time.perf_counter()
-        panel = self.engine.load_panel(config.symbols, load_start, load_end)
+        panel = self.engine.load_panel(config.symbols, load_start, load_end, asset_type=config.asset_type)
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
         if panel.is_empty():
             return _err("无数据，请检查日期范围或先运行盘后管道")

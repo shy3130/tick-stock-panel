@@ -4,6 +4,7 @@ import { Loader2, Search, AlertTriangle, CheckCircle2, XCircle, FlaskConical, Ac
 import { PageHeader } from '@/components/PageHeader'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { QK } from '@/lib/queryKeys'
 import { resetBadge } from '@/lib/monitorBadge'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
@@ -217,7 +218,7 @@ function SeedPanel() {
     mutationFn: () => api.monitorRuleSeed(),
     onSuccess: (data) => {
       setMsg(`已生成 ${data.generated} 条监控规则`)
-      qc.invalidateQueries({ queryKey: ['monitor-rules'] })
+      qc.invalidateQueries({ queryKey: QK.monitorRules })
       setTimeout(() => setMsg(''), 4000)
     },
     onError: () => {

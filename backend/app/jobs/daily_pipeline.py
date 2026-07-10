@@ -17,6 +17,7 @@ from pathlib import Path
 import polars as pl
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.indicators.pipeline import run_pipeline
 from app.config import settings
@@ -28,6 +29,19 @@ from app.tickflow.repository import KlineRepository
 logger = logging.getLogger(__name__)
 
 ProgressCb = Callable[..., None]
+
+
+class PipelineStageError(RuntimeError):
+    """管道有阶段软失败(数据可能陈旧)时抛出, 让上层 job_store 把任务标记为 failed。
+
+    这些阶段单独 try/except 吞掉异常以不中断整条管道, 但一旦失败即代表对应数据陈旧。
+    抛出前进度协议已走完(done/100), 故前端进度条正常收尾, 仅终态如实反映为 failed ——
+    不再"部分失败却报成功"。
+    """
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        super().__init__("盘后管道部分阶段失败: " + "; ".join(errors))
 
 
 def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
@@ -88,14 +102,21 @@ def run_now(
     repo: KlineRepository,
     capset: CapabilitySet,
     on_progress: ProgressCb | None = None,
+    override_start_date: _date | None = None,
 ) -> dict:
     """立即执行一次盘后管道,支持进度回调。
 
     跳过的 stage **不 emit**,避免前端把"无 capability"的卡片错误标记为 active/done。
     result 里带 skipped_stages 列表供前端展示。
+
+    override_start_date: 传入时强制走 batch 拉取分支,用该日期作为日K/除权/指数的
+        拉取起点(到今天),用于「数据修正/补数据」场景。None 时走原有自动判定逻辑。
     """
     emit = on_progress or _noop
     skipped: list[str] = []
+    # 阶段软失败累积: 下列阶段 try/except 吞异常以不中断管道, 但失败即代表数据可能陈旧。
+    # 管道末尾若非空则抛 PipelineStageError, 让任务终态如实标记为 failed(而非误报成功)。
+    stage_errors: list[str] = []
 
     # Step 0: 先同步个股维表, 再解析标的池 — 确保标的池基于最新 instruments
     emit("sync_instruments", 2, "同步个股维表…")
@@ -110,6 +131,7 @@ def run_now(
     emit("resolve_universe", 10, f"标的池规模:{len(universe)} 只")
 
     # Step 1: 日 K 同步
+    #   override_start_date 传入 → 强制 batch 拉取 [override_start_date ~ today] (数据修正)
     #   付费档 + 今天有数据 → 实时行情接口拉一次覆写（1请求全市场）
     #   有历史数据 → batch K-line API 补齐缺口
     #   无任何数据 → batch K-line API 拉首次 1 年
@@ -118,15 +140,36 @@ def run_now(
     today = _date.today()
     today_exists = latest_daily and latest_daily >= today
     new_daily_days = 0
-    # 日K范围拉取的起点(分支3补缺口/分支4首次); 实时增量/跳过时为 None。
+    # 日K范围拉取的起点(分支3补缺口/分支4首次/数据修正); 实时增量/跳过时为 None。
     # 供 Step 1.5 除权因子回溯范围对齐: 范围拉取→用日K范围, 非范围→最近N天兜底。
     daily_range_start: _date | None = None
 
-    # A 股日K拉取开关(默认开);关闭时跳过日K同步,保留已有数据
+    # A 股日K拉取开关(默认开);关闭时跳过日K同步,保留已有数据。
+    # 数据修正(override_start_date)时即使关闭开关也强制拉取 — 修正就是来补数据的。
     pull_a_share = _prefs.get_pipeline_pull_a_share()
-    if not pull_a_share:
+    if not pull_a_share and not override_start_date:
         emit("sync_daily", 45, "已跳过 A 股日K同步(拉取内容未勾选)")
         logger.info("sync_daily: skipped (pipeline_pull_a_share=False)")
+    elif override_start_date:
+        # 数据修正: 强制用传入日期作起点 batch 拉取, 忽略实时行情覆写分支。
+        start_date = override_start_date
+        daily_range_start = start_date
+        emit("sync_daily", 12, f"获取日K [{start_date} ~ {today}]…")
+        logger.info("sync_daily: [%s ~ %s] repair/override", start_date, today)
+
+        def _daily_chunk_progress(cur: int, tot: int) -> None:
+            emit("sync_daily", 12 + int(33 * cur / tot),
+                 f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+        written_daily = kline_sync.sync_and_persist_daily_batch(
+            universe, repo, capset,
+            start_date=_dt.combine(start_date, _dt.min.time()),
+            end_date=_dt.combine(today, _dt.min.time()),
+            on_chunk_done=_daily_chunk_progress,
+        )
+        gap_days = (today - start_date).days
+        new_daily_days = gap_days
+        emit("sync_daily", 45, f"日K 完成,覆盖 {gap_days} 天")
+        logger.info("sync_daily: [%s ~ %s] done, %d days", start_date, today, gap_days)
     elif today_exists and capset.has(Cap.QUOTE_POOL) and _prefs.get_daily_data_provider() == "tickflow":
         # 付费档:今天有数据(QuoteService 已落盘)→ 实时行情覆写,确保最新。
         # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
@@ -179,6 +222,21 @@ def run_now(
         emit("sync_daily", 45, "日K 完成")
         logger.info("sync_daily: [%s ~ %s] done", start_date, today)
     _invalidate("daily")
+
+    # 单标的新鲜度: 全局 max(date) 会被任一有今日数据的标的"拉高", 掩盖停牌/复牌/
+    # 一直拉失败而掉队的个股缺口(全局判据只刷"今天", 永不回补掉队标的的历史缺口)。
+    # 这里检测并**可见化**(WARNING + 计入结果), 让掉队标的不再隐形。
+    # (自动回补暂不做 —— 需带退市判定, 否则对已退市标的每轮空拉浪费 API 额度。)
+    lagging_symbols: list[str] = []
+    if pull_a_share and latest_daily:
+        try:
+            lagging_symbols = repo.symbols_lagging(today, min_gap_days=3)
+            if lagging_symbols:
+                logger.warning("日K新鲜度: %d 只标的落后 >3 日 (停牌/退市/拉取失败; 样例: %s)",
+                               len(lagging_symbols), lagging_symbols[:10])
+        except Exception as e:  # noqa: BLE001
+            logger.warning("laggard detection failed: %s", e)
+            stage_errors.append(f"laggard detection: {e}")
 
     # Step 1.5: 同步除权因子 — 范围与日K拉取方式对齐
     #   日K范围拉取(补缺口/首次) → 除权用日K范围 [daily_range_start, now]
@@ -326,7 +384,11 @@ def run_now(
                     d.name[5:] for d in index_dir.glob("date=*")
                     if d.is_dir() and d.name.startswith("date=")
                 ) if index_dir.exists() else []
-                index_start = _date.fromisoformat(index_dates[-1]) if index_dates else today - _td(days=365)
+                # 数据修正模式下用传入起点; 否则用本地指数最新日期补到今天
+                if override_start_date:
+                    index_start = override_start_date
+                else:
+                    index_start = _date.fromisoformat(index_dates[-1]) if index_dates else today - _td(days=365)
 
                 def _index_chunk(cur: int, tot: int) -> None:
                     emit("sync_index", 88, f"指数日K批次 {cur}/{tot}",
@@ -380,6 +442,7 @@ def run_now(
                         emit("sync_index", 88, f"ETF 除权因子完成,{etf_adj_symbols} 只")
                     except Exception as e:  # noqa: BLE001
                         logger.warning("ETF adj_factor skipped: %s", e)
+                        stage_errors.append(f"ETF adj_factor: {e}")
                 etf_dir = repo.store.data_dir / "kline_etf_enriched"
                 etf_dates = sorted(
                     d.name[5:] for d in etf_dir.glob("date=*")
@@ -412,6 +475,7 @@ def run_now(
         except Exception as e:  # noqa: BLE001
             logger.warning("sync_index/etf failed: %s", e)
             emit("sync_index", 89, f"指数/ETF同步失败:{e}")
+            stage_errors.append(f"index/etf sync: {e}")
     else:
         skipped.append("sync_index")
 
@@ -451,7 +515,7 @@ def run_now(
     emit("done", 100, "完成")
     _invalidate(None)  # 兜底:全清
 
-    return {
+    result = {
         "universe_size": len(universe),
         "daily_days": new_daily_days,
         "adj_factor_symbols": len(affected_symbols),
@@ -462,37 +526,22 @@ def run_now(
         "etf_daily_rows": written_etf_daily,
         "etf_adj_factor_symbols": etf_adj_symbols,
         "minute_rows": written_minute,
+        "lagging_symbols": len(lagging_symbols),
         "skipped_stages": skipped,
+        "stage_errors": stage_errors,
     }
+
+    # 有阶段软失败: 进度协议已走完(done/100, 前端进度条正常收尾), 但数据可能陈旧,
+    # 抛出让上层 job_store 把终态标记为 failed —— 不再"部分失败却报成功"。
+    if stage_errors:
+        raise PipelineStageError(stage_errors)
+
+    return result
 
 
 def _refresh_views(repo: KlineRepository) -> None:
-    """刷新所有 DuckDB 视图。"""
-    d = repo.store.data_dir.as_posix()
-    views = {
-        "kline_daily": f"{d}/kline_daily/**/*.parquet",
-        "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
-        "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
-        "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
-        "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
-        "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
-        "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
-        "kline_minute": f"{d}/kline_minute/**/*.parquet",
-        "adj_factor": f"{d}/adj_factor/**/*.parquet",
-        "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
-        "instruments": f"{d}/instruments/**/*.parquet",
-        "instruments_index": f"{d}/instruments_index/**/*.parquet",
-        "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
-    }
-    for name, path in views.items():
-        try:
-            repo.db.execute(
-                f"CREATE OR REPLACE VIEW {name} AS "
-                f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("refresh view %s failed: %s", name, e)
-    repo.store._register_unified_views()
+    """刷新所有 DuckDB 视图 —— 委托给 repository 的唯一权威实现 rebuild_views()。"""
+    repo.rebuild_views()
 
 
 def _refresh_single_view(repo: KlineRepository, name: str) -> None:
@@ -543,23 +592,36 @@ def _refresh_instruments_view(repo: KlineRepository) -> None:
 
 
 def _run_tracked(fn, job_label: str) -> None:
-    """调度触发时包装 JobStore 跟踪，确保同步历史有记录。"""
-    from app.services.pipeline_jobs import job_store
+    """调度触发时包装 JobStore 跟踪，确保同步历史有记录。
 
-    job_id = job_store.create()
-    job_store.start(job_id)
+    单飞: 若已有活跃(pending∨running)任务(手动同步中), 本次调度直接跳过, 不并发。
+    重任务执行槽: 再挡一层僵尸并发(reap 后线程仍活时不得并行写 parquet)。
+    """
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+
+    job_id, is_new = job_store.create()
+    if not is_new:
+        logger.info("scheduled %s 跳过: 已有活跃任务在运行 (job_id=%s)", job_label, job_id)
+        return
+    if not try_acquire_run_slot():
+        logger.warning("scheduled %s 跳过: 重任务执行槽被占用(疑似上次任务卡死)", job_label)
+        job_store.fail(job_id, f"scheduled {job_label} skipped: 已有数据任务在运行")
+        return
 
     def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
                  skip_log: bool = False) -> None:
         job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
     try:
+        job_store.start(job_id)
         result = fn(on_progress=progress)
         job_store.succeed(job_id, result)
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
     except Exception:
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
         job_store.fail(job_id, f"scheduled {job_label} failed")
+    finally:
+        release_run_slot()
 
 
 # ================================================================
@@ -799,8 +861,23 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         # 与手动触发 (/api/pipeline/run) 对齐: 管道落盘后重建 Polars 内存缓存,
         # 否则 live_agg 的昨日连板数等基准列会停留在旧交易日, 次日开盘连板梯队
         # 整体少算一档 (仅手动触发或重启才会刷缓存, cron 调度路径此前漏了这步)。
-        result = run_now(repo, capset, on_progress=on_progress)
-        repo.refresh_cache()
+        # 用 app.state 上的**实时** capset(周期重探会热更新它), 而非启动时捕获的
+        # 旧 capset —— 否则 Key 中途过期/续费后, 调度管道仍按旧档位打端点。
+        app_state = _get_app_state()
+        capset_live = getattr(app_state, "capabilities", None) or capset
+        # 管道运行期间暂停实时行情取数, 防止覆写同一批 parquet 竞态
+        qs = getattr(app_state, "quote_service", None)
+        try:
+            if qs:
+                with qs.paused():
+                    result = run_now(repo, capset_live, on_progress=on_progress)
+            else:
+                result = run_now(repo, capset_live, on_progress=on_progress)
+        finally:
+            # 即便有阶段软失败(run_now 末尾抛 PipelineStageError), 已落盘的日K/enriched
+            # 仍需刷进内存缓存, 否则 live_agg 基准列停留在旧交易日。放 finally 保证部分
+            # 成功也生效; 随后异常继续上抛, 由 _run_tracked 标记任务 failed。
+            repo.refresh_cache()
         return result
 
     scheduler.add_job(
@@ -828,6 +905,36 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                             timezone="Asia/Shanghai"),
         id="depth_finalize",
         misfire_grace_time=3600,
+        replace_existing=True,
+    )
+
+    # 周期性能力重探: 付费 Key 中途过期/续费无需重启即可被发现。
+    # 只热更新 app.state.capabilities(API 端点、盘后管道 _pipeline_then_refresh 均读它);
+    # 档位变化记 WARNING, 让「Key 失效」在日志/前端可见, 不再静默按旧档位打 403 端点。
+    def _reprobe_capabilities():
+        from app.tickflow.policy import detect_capabilities, tier_label
+        app_state = _get_app_state()
+        if app_state is None:
+            return
+        try:
+            old = getattr(app_state, "capabilities", None)
+            old_n = len(old.all()) if old else -1
+            new_capset = detect_capabilities(force=True)
+            app_state.capabilities = new_capset
+            new_n = len(new_capset.all())
+            if old_n != new_n:
+                logger.warning(
+                    "能力集变化: %d → %d capabilities (档位=%s)。Key 过期/续费或端点波动, "
+                    "已热更新 app.state.capabilities。", old_n, new_n, tier_label(),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("周期能力重探失败(保留现有能力集): %s", e)
+
+    scheduler.add_job(
+        _reprobe_capabilities,
+        trigger=IntervalTrigger(minutes=60),
+        id="reprobe_capabilities",
+        misfire_grace_time=600,
         replace_existing=True,
     )
 

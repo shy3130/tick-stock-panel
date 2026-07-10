@@ -14,12 +14,13 @@ from datetime import date, timedelta
 
 import polars as pl
 
+from app.parquet import scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
 
 # ── 进程级历史数据缓存 (避免 run_all 每次重新扫描 parquet + 计算指标) ──
-_history_cache: dict[tuple[date, int], tuple[float, pl.DataFrame]] = {}
+_history_cache: dict[tuple[str, date, int], tuple[float, pl.DataFrame]] = {}
 _HISTORY_CACHE_TTL = 120.0  # 秒
 
 
@@ -36,6 +37,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "momentum_60d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "ma_golden_cross": {
         "name": "MA 金叉",
@@ -48,6 +50,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "momentum_20d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "macd_golden": {
         "name": "MACD 金叉放量",
@@ -59,6 +62,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "momentum_60d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "volume_price_surge": {
         "name": "量价齐升",
@@ -71,6 +75,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "vol_ratio_5d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "low_volatility_leader": {
         "name": "低波动龙头",
@@ -83,6 +88,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "momentum_60d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "broken_board_recovery": {
         "name": "断板反包",
@@ -95,6 +101,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "change_pct",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock"],
     },
     "oversold_bounce": {
         "name": "超跌反弹",
@@ -107,6 +114,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "rsi_14",
         "descending": False,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "boll_breakout": {
         "name": "布林突破",
@@ -118,6 +126,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "vol_ratio_5d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "bullish_alignment": {
         "name": "均线多头",
@@ -131,6 +140,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "momentum_60d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "consecutive_limit_ups": {
         "name": "连板股",
@@ -142,6 +152,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "consecutive_limit_ups",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock"],
     },
     "pullback_to_support": {
         "name": "缩量回踩",
@@ -156,6 +167,7 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "momentum_60d",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
     "n_day_low_reversal": {
         "name": "新低反转",
@@ -168,8 +180,14 @@ PRESET_STRATEGIES: dict[str, dict] = {
         "order_by": "change_pct",
         "descending": True,
         "limit": 100,
+        "asset_types": ["stock", "etf"],
     },
 }
+
+
+def strategy_supports_asset(strat: dict, asset_type: str) -> bool:
+    """策略是否支持该资产类型。默认仅 stock（未标注 asset_types 的自定义/AI 策略保守视为股票专用）。"""
+    return asset_type in strat.get("asset_types", ["stock"])
 
 
 @dataclass
@@ -182,8 +200,11 @@ class ScreenerResult:
 
 
 class ScreenerService:
-    def __init__(self, repo: KlineRepository) -> None:
+    def __init__(self, repo: KlineRepository, asset_type: str = "stock") -> None:
         self.repo = repo
+        self.asset_type = asset_type
+        from app.tickflow.repository import enriched_dirname
+        self._enriched_dirname = enriched_dirname(asset_type)
 
     @staticmethod
     def clear_history_cache() -> None:
@@ -200,33 +221,34 @@ class ScreenerService:
         对于最新日, 优先使用内存缓存 (已包含完整指标)。
         """
         # 优先使用 repo 最新日缓存
-        cache, cache_date = self.repo.get_enriched_latest()
+        cache, cache_date = self.repo.get_enriched_latest_asset(self.asset_type)
         if cache is not None and not cache.is_empty() and cache_date == target_date:
             df = cache
             # JOIN instruments
-            df_i = self.repo.get_instruments()
+            df_i = self.repo.get_instruments_asset(self.asset_type)
             if not df_i.is_empty():
                 inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
                 if "name" not in df.columns:
                     df = df.join(df_i.select(inst_cols), on="symbol", how="left")
             return df
 
-        # 尝试从 repo 级预计算历史缓存中提取目标日期
-        cached_hist = self.repo.get_enriched_history(target_date, 1)
-        if cached_hist is not None and not cached_hist.is_empty() and "date" in cached_hist.columns:
-            df = cached_hist.filter(pl.col("date") == target_date)
-            if not df.is_empty():
-                logger.debug("_load_enriched_for_date: repo history cache for %s", target_date)
-                # JOIN instruments
-                df_i = self.repo.get_instruments()
-                if not df_i.is_empty():
-                    inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
-                    if "name" not in df.columns:
-                        df = df.join(df_i.select(inst_cols), on="symbol", how="left")
-                return df
+        # 尝试从 repo 级预计算历史缓存中提取目标日期 (仅 stock: 该缓存为股票专用)
+        if self.asset_type == "stock":
+            cached_hist = self.repo.get_enriched_history(target_date, 1)
+            if cached_hist is not None and not cached_hist.is_empty() and "date" in cached_hist.columns:
+                df = cached_hist.filter(pl.col("date") == target_date)
+                if not df.is_empty():
+                    logger.debug("_load_enriched_for_date: repo history cache for %s", target_date)
+                    # JOIN instruments
+                    df_i = self.repo.get_instruments_asset(self.asset_type)
+                    if not df_i.is_empty():
+                        inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
+                        if "name" not in df.columns:
+                            df = df.join(df_i.select(inst_cols), on="symbol", how="left")
+                    return df
 
         # 历史日期: 从 parquet 读取 14 列, 即时计算指标 (慢路径)
-        enriched_dir = self.repo.store.data_dir / "kline_daily_enriched"
+        enriched_dir = self.repo.store.data_dir / self._enriched_dirname
         ds = target_date.isoformat()
         target_parquet = enriched_dir / f"date={ds}" / "part.parquet"
 
@@ -246,6 +268,44 @@ class ScreenerService:
         df_full = self._compute_enriched_full(df, target_date)
         return df_full
 
+    def load_prior_consecutive(self, as_of: date, consec_col: str) -> pl.DataFrame:
+        """窄读: 仅取前一交易日的 [symbol, consec_col] 两列 (谓词下推到单日 parquet)。
+
+        consecutive_limit_ups / consecutive_limit_downs 是 enriched 的存储列,
+        可直接从 parquet 读取, 无需 _load_enriched_for_date 的全量指标重算
+        (历史日期该慢路径最坏会触发 9 次全市场 compute_enriched_full)。
+
+        选取逻辑与旧循环等价: 在 as_of 前 1~9 天内找到第一个存在的日分区
+        (即前一交易日), 读取其 symbol + consec_col。存储列的值与重算值逐位一致
+        (连板计数为 run-length, 150 天 warmup 完全覆盖 A 股最长连板, 二者相等)。
+
+        返回列: symbol, prev_consec。找不到前一交易日时返回空 DataFrame。
+        """
+        enriched_dir = self.repo.store.data_dir / self._enriched_dirname
+        for delta in range(1, 10):
+            candidate = as_of - timedelta(days=delta)
+            target_parquet = enriched_dir / f"date={candidate.isoformat()}" / "part.parquet"
+            if not target_parquet.exists():
+                continue
+            try:
+                lf = pl.scan_parquet(target_parquet)
+                cols = lf.collect_schema().names()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("load_prior_consecutive scan failed for %s: %s", candidate, e)
+                return pl.DataFrame()
+            # 存储列理论上必含 consec_col; 若该分区缺列则继续向前找 (与旧循环一致)
+            if "symbol" not in cols or consec_col not in cols:
+                continue
+            try:
+                return lf.select(
+                    "symbol",
+                    pl.col(consec_col).alias("prev_consec"),
+                ).collect()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("load_prior_consecutive read failed for %s: %s", candidate, e)
+                return pl.DataFrame()
+        return pl.DataFrame()
+
     def _compute_enriched_full(self, df_target: pl.DataFrame, target_date: date) -> pl.DataFrame:
         """从 14 列基础数据即时计算完整 enriched (含全部指标和信号)。
 
@@ -254,14 +314,14 @@ class ScreenerService:
         from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals
 
         # 加载 warmup 历史 (目标日期前 ~120 天)
-        enriched_dir = self.repo.store.data_dir / "kline_daily_enriched"
+        enriched_dir = self.repo.store.data_dir / self._enriched_dirname
         start = target_date - timedelta(days=150)
         read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
                      "amount", "raw_close", "raw_high", "raw_low"]
 
         try:
             lf = (
-                pl.scan_parquet(str(enriched_dir / "**" / "*.parquet"))
+                scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet"))
                 .filter(
                     (pl.col("date") >= start)
                     & (pl.col("date") <= target_date)
@@ -281,9 +341,9 @@ class ScreenerService:
         df_full = compute_indicators(df_hist)
         df_full = compute_signals(df_full)
 
-        # 计算涨跌停信号 (需要 instruments)
-        instruments = self.repo.get_instruments()
-        if instruments is not None and not instruments.is_empty():
+        # 计算涨跌停信号 (需要 instruments; 涨停为股票专有, ETF 跳过)
+        instruments = self.repo.get_instruments_asset(self.asset_type)
+        if self.asset_type == "stock" and instruments is not None and not instruments.is_empty():
             df_full = compute_limit_signals(df_full, instruments)
 
         # 只保留目标日期
@@ -303,23 +363,24 @@ class ScreenerService:
         优先从 repo 内存缓存获取 (启动时已预计算), 命中时 0ms。
         缓存 miss 时走 scan_parquet + compute_indicators 慢路径。
         """
-        # 优先级 1: repo 级预计算缓存 (启动时 _refresh_enriched 已计算完整历史)
+        # 优先级 1: repo 级预计算缓存 (启动时 _refresh_enriched 已计算完整历史; 仅 stock)
         t0 = time.perf_counter()
-        cached = self.repo.get_enriched_history(target_date, lookback_days)
-        if cached is not None and not cached.is_empty():
-            # JOIN instruments (repo 缓存不含 name 等列)
-            instruments = self.repo.get_instruments()
-            if instruments is not None and not instruments.is_empty() and "name" not in cached.columns:
-                inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"]
-                             if c in instruments.columns]
-                cached = cached.join(instruments.select(inst_cols), on="symbol", how="left")
-            elapsed = (time.perf_counter() - t0) * 1000
-            logger.info("_load_enriched_history(%s, %d): repo cache hit, %.1fms, %d rows",
-                        target_date, lookback_days, elapsed, len(cached))
-            return cached
+        if self.asset_type == "stock":
+            cached = self.repo.get_enriched_history(target_date, lookback_days)
+            if cached is not None and not cached.is_empty():
+                # JOIN instruments (repo 缓存不含 name 等列)
+                instruments = self.repo.get_instruments_asset(self.asset_type)
+                if instruments is not None and not instruments.is_empty() and "name" not in cached.columns:
+                    inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"]
+                                 if c in instruments.columns]
+                    cached = cached.join(instruments.select(inst_cols), on="symbol", how="left")
+                elapsed = (time.perf_counter() - t0) * 1000
+                logger.info("_load_enriched_history(%s, %d): repo cache hit, %.1fms, %d rows",
+                            target_date, lookback_days, elapsed, len(cached))
+                return cached
 
         # 优先级 2: 进程级 history_cache (之前的 TTL 缓存)
-        cache_key = (target_date, lookback_days)
+        cache_key = (self.asset_type, target_date, lookback_days)
         now = time.monotonic()
         ttl_cached = _history_cache.get(cache_key)
         if ttl_cached is not None:
@@ -337,13 +398,13 @@ class ScreenerService:
         warmup = 60
         start = target_date - timedelta(days=min((lookback_days + warmup) * 2, 180))
 
-        enriched_dir = self.repo.store.data_dir / "kline_daily_enriched"
+        enriched_dir = self.repo.store.data_dir / self._enriched_dirname
         read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
                      "amount", "raw_close", "raw_high", "raw_low"]
 
         try:
             lf = (
-                pl.scan_parquet(str(enriched_dir / "**" / "*.parquet"))
+                scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet"))
                 .filter((pl.col("date") >= start) & (pl.col("date") <= target_date))
                 .sort(["symbol", "date"])
             )
@@ -359,8 +420,8 @@ class ScreenerService:
         df_full = compute_indicators(df_hist)
         df_full = compute_signals(df_full)
 
-        instruments = self.repo.get_instruments()
-        if instruments is not None and not instruments.is_empty():
+        instruments = self.repo.get_instruments_asset(self.asset_type)
+        if self.asset_type == "stock" and instruments is not None and not instruments.is_empty():
             df_full = compute_limit_signals(df_full, instruments)
 
         if instruments is not None and not instruments.is_empty():
@@ -368,9 +429,15 @@ class ScreenerService:
             if "name" not in df_full.columns:
                 df_full = df_full.join(instruments.select(inst_cols), on="symbol", how="left")
 
-        # 裁剪掉 warmup 部分, 只保留 lookback 范围 (减少 group_by 开销)
-        lookback_start = target_date - timedelta(days=lookback_days)
+        # 裁剪掉 warmup 部分, 只保留 lookback 范围 (减少 group_by 开销)。
+        # 按交易日计数: 从数据里实际存在的交易日序列取最后 lookback_days 个交易日,
+        # 不能用 timedelta(days=N) (自然日), 否则周末/节假日会让窗口偏少, 与回测不一致。
         if "date" in df_full.columns:
+            trading_dates = df_full["date"].unique().sort()
+            if len(trading_dates) > lookback_days:
+                lookback_start = trading_dates[-(lookback_days + 1)]
+            else:
+                lookback_start = trading_dates[0]
             df_full = df_full.filter(pl.col("date") >= lookback_start)
 
         df_full = df_full.sort(["symbol", "date"])
@@ -415,6 +482,10 @@ class ScreenerService:
             df = df.filter(pl.col("symbol").is_in(pool))
 
         # 用 DuckDB 做 SQL 过滤 (注册临时视图)
+        # 用独立的 :memory: 连接 (而非复用 repo 共享连接的 cursor): conditions 是用户
+        # 传入的 SQL 片段, 隔离连接下注入至多能碰 read_csv/read_parquet 文件; 若复用共享
+        # 连接则会把 app 已注册的真实业务表也暴露给注入, 扩大攻击面。隔离连接创建开销极低。
+        con = None
         try:
             import duckdb
             con = duckdb.connect(database=":memory:")
@@ -426,10 +497,15 @@ class ScreenerService:
             if limit:
                 sql += f" LIMIT {limit}"
             df_result = con.execute(sql).pl()
-            con.close()
         except Exception as e:  # noqa: BLE001
             logger.warning("screener SQL query failed: %s", e)
             df_result = pl.DataFrame()
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
         rows = df_result.to_dicts() if not df_result.is_empty() else []
         elapsed = (time.perf_counter() - t0) * 1000
@@ -462,6 +538,10 @@ class ScreenerService:
         strat = PRESET_STRATEGIES.get(strategy_id)
         if not strat:
             raise ValueError(f"unknown strategy: {strategy_id}")
+
+        # 资产兼容拦截: 该策略不支持当前资产类型时直接返回空 (避免命中 ETF 不存在的列)
+        if not strategy_supports_asset(strat, self.asset_type):
+            return ScreenerResult(as_of=as_of, strategy=strategy_id)
 
         if precomputed is not None and not precomputed.is_empty():
             df = precomputed
@@ -577,6 +657,9 @@ class ScreenerService:
         return df
 
     def latest_date(self) -> date | None:
+        if self.asset_type != "stock":
+            _, d = self.repo.get_enriched_latest_asset(self.asset_type)
+            return d
         d = self.repo.enriched_latest_date()
         if d:
             return d

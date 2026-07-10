@@ -25,18 +25,12 @@ DIRECTION_CN = {"long": "做多", "short": "做空", "monitor": "监控"}
 def build_step1(name: str, description: str, direction: str, rules: str, strategy_id: str = "") -> str:
     """步骤1：规则 → 完整策略代码（参数 + 信号 + 评分 + 告警）
 
-    注意: strategy-guide.md 已在 ai_generator.py 的 system prompt 中加载，
-    此处不再重复加载以节省 token。
+    注意: 生成规范已在 ai_generator.py 的 system prompt 中加载，
+    此处只拼用户输入以降低网关超时概率。
     """
-    guide = _load_doc("strategy-builder-step1.md")
-
     id_line = f"\n策略ID（必须使用此ID）：{strategy_id}" if strategy_id else ""
 
-    return f"""{guide}
-
----
-
-请根据以下用户输入生成完整策略代码：
+    return f"""请根据以下用户输入生成完整策略代码：
 
 策略名称：{name}{id_line}
 策略描述：{description}
@@ -44,7 +38,11 @@ def build_step1(name: str, description: str, direction: str, rules: str, strateg
 策略规则：
 {rules}
 
-只输出 Python 代码。"""
+输出要求：
+1. 严格遵循系统提示中的策略文件结构和安全限制。
+2. 根据规则自行判断使用 filter() 或 filter_history()。
+3. 生成完整 META、ENTRY_SIGNALS、EXIT_SIGNALS、STOP_LOSS、MAX_HOLD_DAYS、ALERTS、RULES 和筛选函数。
+4. 只输出 Python 代码。"""
 
 
 def build_step2(current_code: str, instruction: str) -> str:

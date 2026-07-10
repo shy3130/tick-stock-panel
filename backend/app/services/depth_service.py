@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 import time
 from datetime import date, time as dt_time
@@ -57,6 +58,10 @@ class DepthService:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # 拉取+定版串行锁 (镜像 quote_service._fetch_lock): _fetch_and_seal 可能同时被
+        # 请求线程 (run_once persist=True)、轮询线程、盘后 finalize 触发, 都写同一 parquet,
+        # 无锁会交叉写坏文件。_lock 只护内存缓存, 此锁护整段 fetch+seal。
+        self._fetch_lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
         self._repo = None              # 延迟注入(KlineRepository)
@@ -138,14 +143,16 @@ class DepthService:
 
     def start_polling(self) -> None:
         """启动盘中轮询线程(连板梯队监控开启 + 有能力 + 交易时段)。"""
-        if self._running:
-            return
         if not self._has_capability():
             return
         from app.services import preferences
         if not preferences.get_limit_ladder_monitor_enabled():
             return
-        self._running = True
+        # check-then-act 加锁: 两个线程同时 start_polling 不会各起一个轮询线程
+        with self._lock:
+            if self._running:
+                return
+            self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
         logger.info("depth sealed 盘中轮询已启动")
@@ -191,7 +198,14 @@ class DepthService:
 
         persist=True: 盘后定版, 写 depth5 parquet
         persist=False: 盘中轮询, 只更新内存缓存
+
+        全程持 _fetch_lock: 请求线程 (run_once)、轮询线程、finalize 不会交叉写 parquet。
         """
+        with self._fetch_lock:
+            self._fetch_and_seal_locked(persist)
+
+    def _fetch_and_seal_locked(self, persist: bool = False) -> None:
+        """_fetch_and_seal 的实际逻辑, 须在持有 _fetch_lock 时调用。"""
         if not self._repo:
             return
 
@@ -331,7 +345,10 @@ class DepthService:
         ds = today.isoformat()
         out = self._repo.store.data_dir / "depth5" / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.write_parquet(out)
+        # 原子写: 先写临时文件再 os.replace, 避免读侧 (get_sealed_map) 读到半写 parquet
+        tmp = out.with_name(out.name + ".tmp")
+        df.write_parquet(tmp)
+        os.replace(tmp, out)
         self._persisted_date = today
         logger.info("depth sealed 落盘: %d 行 → %s", df.height, out)
 
@@ -429,10 +446,10 @@ class DepthService:
         """盘中轮询: 按 capset 自适应间隔拉 depth, 更新内存缓存。"""
         while self._running:
             try:
-                if self._is_trading_hours():
+                if self._is_continuous_trading():
                     self._poll_once()
                 else:
-                    logger.debug("depth sealed: 非交易时段, 跳过")
+                    logger.debug("depth sealed: 非连续竞价时段, 跳过(避免集合竞价盘口覆盖 11:30 定格值)")
             except Exception as e:  # noqa: BLE001
                 logger.warning("depth sealed 轮询异常: %s", e)
 
@@ -582,4 +599,21 @@ class DepthService:
         t = now.time()
         morning = dt_time(9, 25) <= t <= dt_time(11, 35)
         afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
+        return now.weekday() < 5 and (morning or afternoon)
+
+    @staticmethod
+    def _is_continuous_trading() -> bool:
+        """A股连续竞价时段(北京时间): 9:30-11:30 / 13:00-15:00, 仅工作日。
+
+        比 _is_trading_hours 严格: 排除午间休市前后(11:30-13:00)。
+        depth sealed 轮询用此窗口而非宽窗口, 关键原因:
+        12:55-13:00 午后集合竞价准备期, ask1/bid1 盘口语义与连续竞价不同,
+        「涨停价上卖一==0」的真封判定在此期间失效, 会用竞价盘口覆盖 11:30
+        已定格的正确 sealed 值, 导致涨停股误判为 sealed=False(假涨停)被错误扣减。
+        与 quote_service._is_continuous_trading 窗口定义保持一致。
+        """
+        now = cn_now()
+        t = now.time()
+        morning = dt_time(9, 30) <= t <= dt_time(11, 30)
+        afternoon = dt_time(13, 0) <= t <= dt_time(15, 0)
         return now.weekday() < 5 and (morning or afternoon)

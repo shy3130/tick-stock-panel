@@ -24,8 +24,14 @@ import duckdb
 import polars as pl
 
 from app.config import settings
+from app.parquet import scan_enriched_parquet
 
 logger = logging.getLogger(__name__)
+
+
+def enriched_dirname(asset_type: str) -> str:
+    """asset_type → enriched parquet 目录名。ETF 走独立目录, 其余(stock)用日K enriched。"""
+    return "kline_etf_enriched" if asset_type == "etf" else "kline_daily_enriched"
 
 
 class DataStore:
@@ -499,7 +505,7 @@ class KlineRepository:
                                          "volume", "amount", "raw_close", "raw_high", "raw_low"]
                              if c in df_latest.columns]
                 lf = (
-                    pl.scan_parquet(self._enriched_glob)
+                    scan_enriched_parquet(self._enriched_glob)
                     .filter(pl.col("date") >= start_full)
                     .sort(["symbol", "date"])
                 )
@@ -702,7 +708,7 @@ class KlineRepository:
         # 昨日连板数: 从 enriched parquet 取 (用于增量计算同向 +1)
         step = time.perf_counter()
         logger.info("live agg step start: consecutive state")
-        lf = pl.scan_parquet(self._enriched_glob).filter(pl.col("date") == latest)
+        lf = scan_enriched_parquet(self._enriched_glob).filter(pl.col("date") == latest)
         consec_cols = [c for c in ["symbol", "consecutive_limit_ups", "consecutive_limit_downs"]
                        if c in lf.collect_schema().names()]
         if len(consec_cols) == 3:
@@ -743,6 +749,8 @@ class KlineRepository:
 
                 pl.col("volume").tail(4).sum().alias("_vol_ma5_partial_sum"),
                 pl.col("volume").tail(9).sum().alias("_vol_ma10_partial_sum"),
+                # 标准量比分母: 前5日成交量之和(不含当天), 用于 vol_ratio_5d
+                pl.col("volume").tail(5).sum().alias("_vol_ma5_prev_sum"),
 
                 pl.col("low").tail(8).min().alias("_kdj_8d_low"),
                 pl.col("high").tail(8).max().alias("_kdj_8d_high"),
@@ -777,7 +785,7 @@ class KlineRepository:
         from app.indicators.pipeline import compute_indicators
 
         lf = (
-            pl.scan_parquet(self._enriched_glob)
+            scan_enriched_parquet(self._enriched_glob)
             .filter(pl.col("date") >= start_60d)
             .filter(pl.col("date") <= latest)
             .sort(["symbol", "date"])
@@ -832,7 +840,7 @@ class KlineRepository:
                                      "volume", "amount", "raw_close", "raw_high", "raw_low"]
                          if c in df_latest.columns]
             df_hist = (
-                pl.scan_parquet(self._etf_enriched_glob,
+                scan_enriched_parquet(self._etf_enriched_glob,
                                 cast_options=pl.ScanCastOptions(integer_cast="allow-float"))
                 .filter(pl.col("date") >= start_full)
                 .select(read_cols)
@@ -906,12 +914,17 @@ class KlineRepository:
             return pl.DataFrame(), self._enriched_cache_date
         return self._enriched_cache, self._enriched_cache_date
 
-    def get_enriched_latest_asset(self, asset_type: str) -> tuple[pl.DataFrame, date | None]:
-        """按资产类型返回最新 enriched 缓存。stock 保持旧缓存语义。"""
+    def get_enriched_latest_asset(self, asset_type: str, refresh: bool = True) -> tuple[pl.DataFrame, date | None]:
+        """按资产类型返回最新 enriched 缓存。stock 保持旧缓存语义。
+
+        refresh=False: 缓存冷时不触发同步 _refresh_etf_enriched(300 天 scan+compute)。
+        供行情轮询线程使用 —— 避免在热路径上做重活阻塞股票行情/告警;缓存由 ETF 实时
+        flush 焐热, 未焐热(无 ETF 实时数据)时返回空表, 本轮跳过 ETF 评估即可。
+        """
         if asset_type == "stock":
             return self.get_enriched_latest()
         if asset_type == "etf":
-            if self._etf_enriched_cache is None:
+            if self._etf_enriched_cache is None and refresh:
                 self._refresh_etf_enriched()
             if self._etf_enriched_cache is None:
                 return pl.DataFrame(), self._etf_enriched_cache_date
@@ -932,12 +945,19 @@ class KlineRepository:
         cache_max = cache["date"].max()
         cache_min = cache["date"].min()
         from datetime import timedelta
-        # 验证缓存覆盖完整范围 (含 warmup)
+        # 验证缓存覆盖完整范围 (含 warmup)。lookback_days 是交易日语义, 用 ×2 日历日
+        # 放宽确保覆盖 (节假日/周末), 与 warmup 60 一起留足余量。
         warmup_start = target_date - timedelta(days=(lookback_days + 60) * 2)
         if cache_min > warmup_start or cache_max < target_date:
             return None
-        # 只返回 lookback 范围 (日历天数 ≈ 2/3 交易日, 足够覆盖)
-        lookback_start = target_date - timedelta(days=lookback_days)
+        # 按交易日计数裁剪: 从数据里实际存在的交易日序列取最后 lookback_days 个交易日。
+        # 不能用 timedelta(days=N) (自然日), 否则周末/节假日会让窗口只有 ~N×5/7 个交易日,
+        # 导致 filter_history 策略的滚动窗口/行号差(_gap)漏算, 与回测结果不一致。
+        trading_dates = cache["date"].unique().sort()
+        if len(trading_dates) > lookback_days:
+            lookback_start = trading_dates[-(lookback_days + 1)]
+        else:
+            lookback_start = trading_dates[0]
         return cache.filter((pl.col("date") >= lookback_start) & (pl.col("date") <= target_date))
 
     def get_enriched_range(
@@ -1305,7 +1325,7 @@ class KlineRepository:
 
     def _scan_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = pl.scan_parquet(self._enriched_glob,
+            lf = scan_enriched_parquet(self._enriched_glob,
                                  cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
                 (pl.col("symbol") == symbol)
                 & (pl.col("date") >= start)
@@ -1322,7 +1342,7 @@ class KlineRepository:
 
     def _scan_daily_batch(self, symbols: list[str], start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = pl.scan_parquet(self._enriched_glob,
+            lf = scan_enriched_parquet(self._enriched_glob,
                                  cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
                 (pl.col("symbol").is_in(symbols))
                 & (pl.col("date") >= start)
@@ -1339,7 +1359,7 @@ class KlineRepository:
 
     def _scan_index_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = pl.scan_parquet(self._index_enriched_glob,
+            lf = scan_enriched_parquet(self._index_enriched_glob,
                                  cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
                 (pl.col("symbol") == symbol)
                 & (pl.col("date") >= start)
@@ -1356,7 +1376,7 @@ class KlineRepository:
 
     def _scan_etf_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
         try:
-            lf = pl.scan_parquet(self._etf_enriched_glob,
+            lf = scan_enriched_parquet(self._etf_enriched_glob,
                                  cast_options=pl.ScanCastOptions(integer_cast="allow-float")).filter(
                 (pl.col("symbol") == symbol)
                 & (pl.col("date") >= start)
@@ -1477,6 +1497,25 @@ class KlineRepository:
         except Exception:
             return None
         return None
+
+    def symbols_lagging(self, reference_date: date, min_gap_days: int = 3) -> list[str]:
+        """返回日K覆盖落后的标的: 其最新 bar 早于 reference_date - min_gap_days。
+
+        全局 max(date) 只要有一只票有今日数据就成立, 会掩盖停牌/复牌/一直拉失败而
+        掉队的个股缺口。此方法按 symbol 聚合最新日期, 找出掉队者。只读, 不改数据。
+        """
+        from datetime import timedelta
+        try:
+            cutoff = reference_date - timedelta(days=min_gap_days)
+            with self._lock:
+                rows = self.db.execute(
+                    "SELECT symbol, max(date) AS mx FROM kline_daily "
+                    "GROUP BY symbol HAVING max(date) < ? ORDER BY mx",
+                    [cutoff],
+                ).fetchall()
+            return [r[0] for r in rows if r and r[0]]
+        except Exception:
+            return []
 
     def _latest_enriched_date_duckdb(self) -> date | None:
         try:
@@ -1604,6 +1643,41 @@ class KlineRepository:
                     self.db.execute(sql)
             except Exception as e:  # noqa: BLE001
                 logger.debug("index/etf view refresh skipped: %s", e)
+        with self._lock:
+            self.store._register_unified_views()
+
+    def rebuild_views(self) -> None:
+        """重建全部 13 张 parquet 视图并重挂 unified 视图 —— 唯一权威实现。
+
+        原先 daily_pipeline._refresh_views(盘后管道) 与 /api/data/clear(清库) 各自
+        内联了同一份视图重建 SQL, 清库那份还漏了几张视图导致漂移。此处收敛为单一入口:
+        覆盖全部 13 张视图 (二者的超集), 空目录 (清库后) 也能安全重挂。
+        """
+        d = self.store.data_dir.as_posix()
+        views = {
+            "kline_daily": f"{d}/kline_daily/**/*.parquet",
+            "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
+            "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
+            "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
+            "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
+            "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
+            "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
+            "kline_minute": f"{d}/kline_minute/**/*.parquet",
+            "adj_factor": f"{d}/adj_factor/**/*.parquet",
+            "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
+            "instruments": f"{d}/instruments/**/*.parquet",
+            "instruments_index": f"{d}/instruments_index/**/*.parquet",
+            "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+        }
+        for name, path in views.items():
+            try:
+                with self._lock:
+                    self.db.execute(
+                        f"CREATE OR REPLACE VIEW {name} AS "
+                        f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("rebuild view %s failed: %s", name, e)
         with self._lock:
             self.store._register_unified_views()
 

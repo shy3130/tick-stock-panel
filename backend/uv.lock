@@ -2491,7 +2491,7 @@ all = [
 
 [[package]]
 name = "tickflow-stock-panel-backend"
-version = "0.1.81"
+version = "0.1.83"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },

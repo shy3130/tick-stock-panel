@@ -53,8 +53,9 @@ class _EngineStub:
         self.sim_panel: pl.DataFrame | None = None
         self.sim_entries: pl.Series | None = None
 
-    def load_panel(self, symbols, start: date, end: date) -> pl.DataFrame:
+    def load_panel(self, symbols, start: date, end: date, columns=None, asset_type: str = "stock") -> pl.DataFrame:
         self.load_args = (symbols, start, end)
+        self.load_asset_type = asset_type
         return self.panel
 
     def simulate_portfolio(self, panel, entries, exits, config, progress_cb=None, cancel_event=None) -> SimResult:
@@ -135,7 +136,7 @@ def test_full_mode_executes_every_candidate_with_strategy_rules():
     ]).sort(["symbol", "date"])
 
     engine = BacktestEngine(repo=None)  # type: ignore[arg-type]
-    engine.load_panel = lambda symbols, s, e: panel  # type: ignore[method-assign]
+    engine.load_panel = lambda symbols, s, e, columns=None, asset_type="stock": panel  # type: ignore[method-assign]
     strategy = _strategy(
         filter_fn=lambda df, params: pl.col("date") == start,
         max_hold_days=1,

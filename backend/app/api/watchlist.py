@@ -130,14 +130,27 @@ def watchlist_enriched(
     if stock_symbols and df_e.is_empty():
         return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
-    df = df_e.filter(pl.col("symbol").is_in(stock_symbols)) if stock_symbols else pl.DataFrame()
+    # 以自选列表为主表 LEFT JOIN enriched, 保证自选的每一只都返回一行;
+    # 不在 enriched 缓存里的标的 (新股/冷门股/新用户未同步) 指标为 null, 前端渲染为 "—".
+    # 旧实现是 df_e.filter(is_in(stock_symbols)), 方向反了 (以 enriched 为主),
+    # 会把不在缓存 universe 里的自选股静默丢弃.
+    if stock_symbols:
+        watchlist_df = pl.DataFrame({"symbol": stock_symbols})
+        if df_e.is_empty():
+            df = watchlist_df
+        else:
+            df = watchlist_df.join(df_e, on="symbol", how="left")
+    else:
+        df = pl.DataFrame()
 
     # ETF 行合并; 缺失列 (换手率/涨跌停信号等) 为 null
     etf_date = None
     if etf_symbols:
         df_etf_all, etf_date = repo.get_enriched_latest_asset("etf")
         if not df_etf_all.is_empty():
-            df_etf = df_etf_all.filter(pl.col("symbol").is_in(etf_symbols))
+            # ETF 同样以自选为主表 LEFT JOIN, 缺失标的指标为 null
+            etf_watchlist_df = pl.DataFrame({"symbol": etf_symbols})
+            df_etf = etf_watchlist_df.join(df_etf_all, on="symbol", how="left")
             if not df_etf.is_empty():
                 df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
 

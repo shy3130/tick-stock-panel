@@ -10,11 +10,17 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from tickflow import AsyncTickFlow, TickFlow
 
 from app import secrets_store
+
+logger = logging.getLogger(__name__)
+
+# SDK 默认超时配置 (见 tickflow/_base_client.py): timeout=30s, max_retries=3。
+# 单次请求最坏 4×30s + 退避 ≈ 127s。日志中标注此值, 便于在卡死时对照耗时。
 
 _sync_client: TickFlow | None = None
 _async_client: AsyncTickFlow | None = None
@@ -55,8 +61,10 @@ def get_client() -> TickFlow:
         if _should_use_free_server():
             # none/free 档:走 free-api 服务器(无 key 或免费 key 被 SDK 忽略)
             _sync_client = TickFlow.free()
+            logger.info("创建同步 SDK 客户端 (free-api, SDK超时=30s×重试3)")
         else:
             _sync_client = TickFlow(api_key=key, base_url=_base_url())
+            logger.info("创建同步 SDK 客户端 (付费端点=%s, SDK超时=30s×重试3)", current_endpoint())
     return _sync_client
 
 
@@ -67,8 +75,10 @@ def get_async_client() -> AsyncTickFlow:
         key = secrets_store.get_tickflow_key()
         if _should_use_free_server():
             _async_client = AsyncTickFlow.free()
+            logger.info("创建异步 SDK 客户端 (free-api, SDK超时=30s×重试3)")
         else:
             _async_client = AsyncTickFlow(api_key=key, base_url=_base_url())
+            logger.info("创建异步 SDK 客户端 (付费端点=%s, SDK超时=30s×重试3)", current_endpoint())
     return _async_client
 
 
@@ -84,6 +94,7 @@ def get_paid_realtime_client() -> TickFlow | None:
         return None
     if _paid_realtime_client is None:
         _paid_realtime_client = TickFlow(api_key=key, base_url=_base_url())
+        logger.info("创建实时行情 SDK 客户端 (付费端点=%s, SDK超时=30s×重试3)", current_endpoint())
     return _paid_realtime_client
 
 

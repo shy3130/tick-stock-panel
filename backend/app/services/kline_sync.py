@@ -23,6 +23,20 @@ from app.tickflow.repository import KlineRepository
 logger = logging.getLogger(__name__)
 
 
+def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
+    """先写临时文件再原子替换, 避免进程中断留下损坏的 parquet。
+
+    与 repository._atomic_write_parquet 同语义。adj_factor 的 all.parquet 是全市场
+    单文件、每次「读→concat→原地写」, 直接 write_parquet(out) 在进程被 kill
+    (dev.sh 清端口用 kill -9)、reap 超时或断电时会留下半截文件, 之后复权视图
+    scan_parquet 整条链路报错、enriched 全市场重算不出。临时文件后缀 .tmp 不匹配
+    *.parquet glob, 不会被扫描误读。
+    """
+    tmp = out.with_name(out.name + ".tmp")
+    df.write_parquet(tmp)
+    tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+
+
 # 标准列(无论 SDK 返回什么形状,我们把它规范成这套)
 CANONICAL_DAILY_COLS = [
     "symbol", "date", "open", "high", "low", "close", "volume", "amount",
@@ -77,15 +91,20 @@ def sync_daily_batch(symbols: list[str],
                      rpm: int | None = None,
                      start_time: datetime | None = None,
                      end_time: datetime | None = None,
-                     on_chunk_done: Callable[[int, int], None] | None = None) -> pl.DataFrame:
+                     on_chunk_done: Callable[[int, int], None] | None = None,
+                     failed_out: list[str] | None = None) -> pl.DataFrame:
     """批量拉取多股日 K。
 
     优先使用 start_time / end_time 区间 + count=10000,确保覆盖完整时间段。
     仅传 count 时按条数回溯。
+
+    failed_out: 可选出参。拉取失败的分块标的会追加进该 list, 供上层判定「部分失败」
+                而非静默当成功(某分块断网 → 这些标的本轮未更新, 保持旧数据)。
     """
     tf = get_client()
     out: list[pl.DataFrame] = []
     chunks = chunked(symbols, batch_size)
+    failed_syms: list[str] = []
 
     for i, chunk in enumerate(chunks):
         sleep_between_batches(i, rpm)
@@ -102,7 +121,9 @@ def sync_daily_batch(symbols: list[str],
                 raw = tf.klines.batch(chunk, period="1d", count=count or 250, adjust="none",
                                       as_dataframe=True, show_progress=False)
         except Exception as e:  # noqa: BLE001
-            logger.warning("batch fetch failed for %d symbols: %s", len(chunk), e)
+            logger.warning("batch fetch failed for %d symbols (chunk %d/%d): %s",
+                           len(chunk), i + 1, len(chunks), e)
+            failed_syms.extend(chunk)
             continue
 
         # 兼容两种形态:dict[sym → df] 和扁平 df
@@ -116,6 +137,13 @@ def sync_daily_batch(symbols: list[str],
 
         if on_chunk_done:
             on_chunk_done(i + 1, len(chunks))
+
+    # 部分失败可见化: 聚合一条 WARNING(而非只有逐块 debug/warning), 并回传出参。
+    if failed_syms:
+        logger.warning("日K批量同步部分失败: %d/%d 标的未获取, 本轮保持旧数据 (样例: %s)",
+                       len(failed_syms), len(symbols), failed_syms[:10])
+        if failed_out is not None:
+            failed_out.extend(failed_syms)
 
     if not out:
         return pl.DataFrame()
@@ -328,9 +356,9 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 merged = pl.concat([existing, new_data]).unique(
                     subset=["symbol", "trade_date"], keep="last",
                 ).sort(["symbol", "trade_date"])
-                merged.write_parquet(out)
+                _atomic_write_parquet(merged, out)
                 return merged.height - before, affected
-            new_data.sort(["symbol", "trade_date"]).write_parquet(out)
+            _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
             return new_data.height, affected
         # 自定义源未配置 adj_factor → 回退 TickFlow
 
@@ -355,6 +383,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
 
     chunks = chunked(symbols, limit.batch)
     all_dfs: list[pl.DataFrame] = []
+    failed_syms: list[str] = []
 
     for i, chunk in enumerate(chunks):
         sleep_between_batches(i, limit.rpm)
@@ -365,10 +394,17 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 all_dfs.append(normalized)
             logger.debug("adj_factor chunk %d/%d: %d symbols", i + 1, len(chunks), len(chunk))
         except Exception as e:  # noqa: BLE001
-            logger.warning("adj_factor chunk %d failed: %s", i + 1, e)
+            logger.warning("adj_factor chunk %d/%d failed: %s", i + 1, len(chunks), e)
+            failed_syms.extend(chunk)
 
         if on_chunk_done:
             on_chunk_done(i + 1, len(chunks))
+
+    # 部分失败可见化: 失败分块的标的不在 affected 里 → enriched 不会重算它们,
+    # 它们会保持**旧的前复权价**直到下次成功同步。聚合一条 WARNING 让其可见。
+    if failed_syms:
+        logger.warning("adj_factor 同步部分失败: %d/%d 标的未获取复权因子, 将保持旧复权价 (样例: %s)",
+                       len(failed_syms), len(symbols), failed_syms[:10])
 
     if not all_dfs:
         return 0, []
@@ -388,13 +424,13 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         merged = pl.concat([existing, new_data]).unique(
             subset=["symbol", "trade_date"], keep="last",
         ).sort(["symbol", "trade_date"])
-        merged.write_parquet(out)
+        _atomic_write_parquet(merged, out)
         added = merged.height - before
         logger.info("adj_factor merged: %d total (+%d new), %d/%d symbols",
                      merged.height, added, new_data.height, len(symbols))
         return added, affected
     else:
-        new_data.sort(["symbol", "trade_date"]).write_parquet(out)
+        _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
         logger.info("adj_factor synced: %d rows (%d symbols)", new_data.height, len(symbols))
         return new_data.height, affected
 
@@ -646,7 +682,7 @@ def _migrate_symbol_to_date_partition(repo: KlineRepository) -> None:
         out = minute_dir / f"date={trade_date}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         day_df = day_df.drop("_trade_date").sort("symbol", "datetime")
-        day_df.write_parquet(out)
+        _atomic_write_parquet(day_df, out)
 
     # 删旧目录
     for d in old_dirs:
@@ -734,7 +770,7 @@ def sync_and_persist_minute(
         else:
             day_df = day_df.drop("_trade_date")
         day_df = day_df.sort("symbol", "datetime")
-        day_df.write_parquet(out)
+        _atomic_write_parquet(day_df, out)
         written += day_df.height
 
     # 刷新视图

@@ -1,9 +1,10 @@
-import { ChevronsLeft, ChevronsRight, Moon, Sun } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, Moon, Sun, WifiOff } from 'lucide-react'
 import { toggleTheme, useTheme } from '@/lib/theme'
 
 interface Props {
   collapsed: boolean
   forcedByViewport?: boolean
+  reconnecting?: boolean
   onToggleCollapsed: () => void
 }
 
@@ -13,7 +14,7 @@ interface Props {
  * 搜索框占位(半成品 UI 体验差) —— 等真正设计好"搜到股票后跳去哪个页面"这个
  * 产品问题, 再实现进来。
  */
-export function TopBar({ collapsed, forcedByViewport = false, onToggleCollapsed }: Props) {
+export function TopBar({ collapsed, forcedByViewport = false, reconnecting = false, onToggleCollapsed }: Props) {
   const theme = useTheme()
   const dark = theme === 'dark'
 
@@ -33,14 +34,27 @@ export function TopBar({ collapsed, forcedByViewport = false, onToggleCollapsed 
         {collapsed ? <ChevronsRight className="h-4 w-4 shrink-0" /> : <ChevronsLeft className="h-4 w-4 shrink-0" />}
       </button>
 
-      <button
-        onClick={() => toggleTheme()}
-        className="flex items-center justify-center rounded-btn p-2 text-foreground/80 transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground cursor-pointer"
-        title={dark ? '切换到亮色模式' : '切换到暗色模式'}
-        aria-label={dark ? '切换到亮色模式' : '切换到暗色模式'}
-      >
-        {dark ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
-      </button>
+      <div className="flex min-w-0 items-center gap-2">
+        {reconnecting && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex min-w-0 items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-1 text-[11px] font-medium text-warning"
+          >
+            <WifiOff className="h-3 w-3 shrink-0 animate-pulse" />
+            <span className="hidden truncate sm:inline">实时连接断开 · 重连中</span>
+            <span className="truncate sm:hidden">重连中</span>
+          </div>
+        )}
+        <button
+          onClick={() => toggleTheme()}
+          className="flex items-center justify-center rounded-btn p-2 text-foreground/80 transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground cursor-pointer"
+          title={dark ? '切换到亮色模式' : '切换到暗色模式'}
+          aria-label={dark ? '切换到亮色模式' : '切换到暗色模式'}
+        >
+          {dark ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
+        </button>
+      </div>
     </header>
   )
 }

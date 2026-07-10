@@ -5,6 +5,7 @@ import { ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import { api, type AnalysisColumn, type AnalysisMenu, type ExtDataConfig, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { Skeleton } from '@/components/data/Skeleton'
 
 function dtypeToColumnType(dtype: string): AnalysisColumn['type'] {
   return dtype === 'int' || dtype === 'float' ? 'number' : 'string'
@@ -287,7 +288,15 @@ export function SettingsExtPagesPanel() {
             </Link>
           </div>
         ))}
-        {menuItems.length === 0 && (
+        {menus.isLoading &&
+          Array.from({ length: 3 }).map((_, i) => (
+            <div key={`sk-${i}`} className="rounded-card border border-border bg-surface p-4 space-y-3">
+              <Skeleton w="w-1/2" h="h-4" />
+              <Skeleton w="w-1/3" h="h-3" />
+              <Skeleton h="h-8" rounded="rounded-btn" />
+            </div>
+          ))}
+        {!menus.isLoading && menuItems.length === 0 && (
           <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-sm text-muted md:col-span-2 xl:col-span-3">暂无扩展页面，点击右上角新建。</div>
         )}
       </section>

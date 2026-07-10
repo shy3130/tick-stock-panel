@@ -34,6 +34,7 @@ import {
 } from '@/lib/screener-columns'
 
 export function Screener() {
+  const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
@@ -107,8 +108,8 @@ export function Screener() {
   const screenerAutoRun = prefs?.screener_auto_run ?? true
 
   const strategies = useQuery({
-    queryKey: QK.screenerStrategies,
-    queryFn: api.screenerStrategies,
+    queryKey: QK.screenerStrategies(assetType),
+    queryFn: () => api.screenerStrategies(assetType),
   })
 
   // 策略结果缓存 — 文件读取，SSE invalidation 自动刷新
@@ -342,6 +343,8 @@ export function Screener() {
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
   // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
   useEffect(() => {
+    // ETF 模式无股票盘后缓存/ runAll, 单策略走实时单跑, 不触发 runAll
+    if (assetType !== 'stock') return
     if (!asOf || !strategies.data?.presets?.length || runAll.isPending || visiblePool.length === 0) return
     const runKey = `${asOf}|${visiblePool.join(',')}|${extColumnsParam}`
     if (runAllDateRef.current === runKey) return
@@ -364,7 +367,7 @@ export function Screener() {
 
   const run = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string }) =>
-      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined),
+      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType),
     onSuccess: (data, vars) => {
       setResult(data)
       // 同步更新卡片上的命中数
@@ -380,6 +383,12 @@ export function Screener() {
     handleStrategySwitch(s.id)
     setActiveStrategy(s.id)
     setShowAll(false)
+    // ETF 模式: 无股票盘后缓存, 始终实时单跑。
+    // 传空日期让后端用 ETF 自己的最新交易日 (asOf 跟随的是股票 enriched, 两者可能不同日)。
+    if (assetType !== 'stock') {
+      run.mutate({ id: s.id, date: '' })
+      return
+    }
     // 优先从 effectiveResults (缓存 + runAll) 取数据
     const r = effectiveResults?.[s.id]
     if (r && r.as_of === asOf) {
@@ -442,7 +451,7 @@ export function Screener() {
   const reloadStrategies = useMutation({
     mutationFn: api.strategyReload,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: QK.screenerStrategies })
+      qc.invalidateQueries({ queryKey: ['screener-strategies'] })
       if (asOf) runAll.mutate({ date: asOf })
     },
   })
@@ -511,6 +520,22 @@ export function Screener() {
         subtitle="基于本地 enriched 表 · 毫秒级 SQL"
         right={
           <div className="flex items-center gap-2">
+            {/* 资产类型切换: 股票 / ETF */}
+            <div className="flex items-center h-7 rounded-btn border border-border overflow-hidden">
+              {(['stock', 'etf'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false) }}
+                  className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer
+                    ${assetType === t
+                      ? 'bg-accent/10 text-accent'
+                      : 'text-muted hover:text-secondary hover:bg-elevated'
+                    }`}
+                >
+                  {t === 'stock' ? '股票' : 'ETF'}
+                </button>
+              ))}
+            </div>
             {/* 重新运行策略：重载策略文件并重跑全部策略，更新命中个股 */}
             <button
               onClick={() => reloadStrategies.mutate()}
@@ -840,7 +865,7 @@ export function Screener() {
               description: detail.description ?? '',
               direction: 'long',
               rules: storage.strategyRules.get({})[settingsStrategyId] ?? '',
-              code: src.code, step: 2, strategyId: settingsStrategyId,
+              code: src.code, step: 2, strategyId: settingsStrategyId, source: src.source as any,
             })
             setSettingsStrategyId(null)
             setBuilderMode('modify')
@@ -853,7 +878,7 @@ export function Screener() {
             const rules = storage.strategyRules.get({})
             delete rules[settingsStrategyId]; storage.strategyRules.set(rules)
             setStrategyLimits(prev => { const next = {...prev}; delete next[settingsStrategyId]; return next })
-            qc.invalidateQueries({ queryKey: QK.screenerStrategies })
+            qc.invalidateQueries({ queryKey: ['screener-strategies'] })
           }
         }}
       />
@@ -876,7 +901,7 @@ export function Screener() {
         onClose={() => setShowBuilder(false)}
         mode={builderMode}
         onSavedId={async id => {
-          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies, queryFn: api.screenerStrategies })
+          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('stock'), queryFn: () => api.screenerStrategies('stock') })
           if (!data.presets.some(s => s.id === id)) {
             throw new Error(`策略 ${id} 已保存但未加载，请检查策略代码`)
           }

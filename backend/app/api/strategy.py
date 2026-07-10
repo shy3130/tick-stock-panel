@@ -4,21 +4,24 @@
 """
 from __future__ import annotations
 
+import ast
+import json
 import math
 import re
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.strategy import config as strategy_config
-from app.strategy.engine import StrategyEngine, StrategyDef
 from app.strategy.ai_generator import AIStrategyGenerator
+from app.strategy.engine import StrategyDef, StrategyEngine
+from app.strategy.monitor import StrategyMonitorService
 from app.strategy.prompt_builder import build_step1, build_step2
-from app.strategy.monitor import StrategyMonitorService, StrategyAlert
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
@@ -82,8 +85,8 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
         "params": s.meta.get("params", []),
         "params_defaults": params_defaults,
         "scoring": scoring,
-        "entry_signals": s.entry_signals,
-        "exit_signals": s.exit_signals,
+        "entry_signals": overrides.get("entry_signals", s.entry_signals) if overrides else s.entry_signals,
+        "exit_signals": overrides.get("exit_signals", s.exit_signals) if overrides else s.exit_signals,
         "stop_loss": overrides.get("stop_loss", s.stop_loss) if overrides else s.stop_loss,
         "take_profit": getattr(s, "take_profit", None),
         "trailing_stop": getattr(s, "trailing_stop", None),
@@ -124,6 +127,26 @@ class AIGenerateRequest(BaseModel):
 class AISaveRequest(BaseModel):
     code: str
     strategy_id: str
+    name: str = ""
+    description: str = ""
+
+
+class StrategyCodeValidateRequest(BaseModel):
+    code: str
+    strategy_id: str = ""
+    name: str = ""
+    description: str = ""
+    strict: bool = True
+
+
+class StrategyCodeSaveRequest(BaseModel):
+    code: str
+    strategy_id: str
+    target_source: Literal["ai", "custom"] = "custom"
+    mode: Literal["create", "update"] = "create"
+    name: str = ""
+    description: str = ""
+    strict: bool = True
 
 
 class MonitorStartRequest(BaseModel):
@@ -285,6 +308,234 @@ class BuildRequest(BaseModel):
     instruction: str = ""
 
 
+def _py_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _find_meta_dict(code: str) -> ast.Dict:
+    tree = ast.parse(code)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "META":
+                    if not isinstance(node.value, ast.Dict):
+                        raise ValueError("META 必须是字面量字典")
+                    return node.value
+    raise ValueError("找不到 META 字典")
+
+
+def _set_meta_string_field(block: str, field: str, value: str) -> str:
+    pattern = re.compile(
+        rf"((?:\{{|,)\s*[\"']{re.escape(field)}[\"']\s*:\s*)([\"'])(?:\\.|[^\\])*?\2"
+    )
+    next_block, count = pattern.subn(
+        lambda m: f"{m.group(1)}{_py_string(value)}",
+        block,
+        count=1,
+    )
+    if count:
+        return next_block
+
+    if "\n" not in block:
+        closing = block.rfind("}")
+        if closing < 0:
+            raise ValueError("META 字典缺少结束括号")
+        before = block[:closing].rstrip()
+        separator = " " if before.endswith(("{", ",")) else ", "
+        return f'{before}{separator}"{field}": {_py_string(value)}{block[closing:]}'
+
+    lines = block.splitlines(keepends=True)
+    key_indent = None
+    for line in lines:
+        m = re.match(r"^(\s*)[\"'][^\"']+[\"']\s*:", line)
+        if m:
+            key_indent = m.group(1)
+            break
+    if key_indent is None:
+        first_indent = re.match(r"^(\s*)", lines[0] if lines else "")
+        key_indent = (first_indent.group(1) if first_indent else "") + "    "
+
+    insert_at = len(lines)
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].lstrip().startswith("}"):
+            insert_at = i
+            break
+    for i in range(insert_at - 1, -1, -1):
+        if not lines[i].strip():
+            continue
+        body = lines[i].rstrip("\r\n")
+        if body.rstrip() and not body.rstrip().endswith((",", "{")):
+            newline = lines[i][len(body):]
+            lines[i] = body.rstrip() + "," + newline
+        break
+    lines.insert(insert_at, f'{key_indent}"{field}": {_py_string(value)},\n')
+    return "".join(lines)
+
+
+def _normalize_strategy_meta(code: str, strategy_id: str,
+                             name: str | None = None,
+                             description: str | None = None) -> str:
+    """Force persisted strategy identity to match the caller-owned identity."""
+    meta_node = _find_meta_dict(code)
+    lines = code.splitlines(keepends=True)
+
+    def _char_column(line: str, byte_column: int) -> int:
+        return len(line.encode("utf-8")[:byte_column].decode("utf-8"))
+
+    start_line = meta_node.lineno - 1
+    end_line = (meta_node.end_lineno or meta_node.lineno) - 1
+    start = sum(len(line) for line in lines[:start_line]) + _char_column(
+        lines[start_line], meta_node.col_offset
+    )
+    end = sum(len(line) for line in lines[:end_line]) + _char_column(
+        lines[end_line], meta_node.end_col_offset or 0
+    )
+    block = code[start:end]
+
+    fields = {"id": strategy_id}
+    if name:
+        fields["name"] = name
+    if description:
+        fields["description"] = description
+    for field, value in fields.items():
+        block = _set_meta_string_field(block, field, value)
+
+    return f"{code[:start]}{block}{code[end:]}"
+
+
+def _normalize_build_result(result: dict, strategy_id: str, name: str = "",
+                            description: str = "") -> dict:
+    if not result.get("valid") or not strategy_id:
+        return result
+    try:
+        code = _normalize_strategy_meta(
+            result.get("code", ""),
+            strategy_id,
+            name.strip() or None,
+            description.strip() or None,
+        )
+        return {**result, "code": code, "meta": AIStrategyGenerator._extract_meta(code)}
+    except Exception as e:
+        return {**result, "valid": False, "error": f"规范化 META 失败: {e}"}
+
+
+def _validate_strategy_id(strategy_id: str) -> str:
+    sid = (strategy_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
+        raise ValueError("strategy_id 仅允许字母、数字、下划线、短横线")
+    return sid
+
+
+def _target_dir(data_dir: Path, source: str) -> Path:
+    if source not in {"ai", "custom"}:
+        raise ValueError("target_source 必须是 ai 或 custom")
+    return data_dir / "strategies" / source
+
+
+def _prepare_strategy_code(req: StrategyCodeValidateRequest | StrategyCodeSaveRequest) -> dict:
+    sid = _validate_strategy_id(req.strategy_id) if req.strategy_id else ""
+    code = req.code
+    if sid:
+        current_meta = AIStrategyGenerator._extract_meta(code)
+        needs_normalize = (
+            current_meta.get("id") != sid
+            or bool(req.name.strip())
+            or bool(req.description.strip())
+        )
+        if needs_normalize:
+            code = _normalize_strategy_meta(
+                code,
+                sid,
+                req.name.strip() or None,
+                req.description.strip() or None,
+            )
+    if req.strict:
+        meta = AIStrategyGenerator.validate_code_or_raise(
+            code,
+            expected_strategy_id=sid or None,
+        )
+    else:
+        meta = AIStrategyGenerator._extract_meta(code)
+    return {"code": code, "meta": meta}
+
+
+def _restore_strategy_file(path: Path, previous_code: str | None) -> None:
+    if previous_code is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(previous_code, encoding="utf-8")
+
+
+def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legacy_ai_path: bool = False) -> dict:
+    sid = _validate_strategy_id(req.strategy_id)
+    if legacy_ai_path:
+        if not (sid.startswith("ai_") or sid.startswith("custom_")):
+            raise ValueError("策略 ID 必须以 ai_ 或 custom_ 开头")
+
+    engine = _get_engine(request)
+    data_dir = _data_dir(request)
+    existing: StrategyDef | None = None
+    try:
+        existing = engine.get(sid)
+    except ValueError:
+        existing = None
+
+    if not legacy_ai_path and req.mode == "create":
+        if req.target_source == "ai" and not sid.startswith("ai_"):
+            raise ValueError("AI 策略 ID 必须以 ai_ 开头")
+        if req.target_source == "custom" and not sid.startswith("custom_"):
+            raise ValueError("自定义策略 ID 必须以 custom_ 开头")
+
+    if legacy_ai_path:
+        out_dir = _target_dir(data_dir, "ai")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{sid}.py"
+        expected_source = "ai"
+    elif req.mode == "update":
+        if existing is None:
+            raise ValueError(f"策略 {sid} 不存在")
+        if existing.source == "builtin":
+            raise ValueError("内置策略不可覆盖，请另存为自定义策略")
+        path = existing.file_path
+        expected_source = existing.source
+    else:
+        if existing is not None:
+            raise ValueError(f"策略 {sid} 已存在，请改用修改模式或换一个策略 ID")
+        source_dir = "ai" if legacy_ai_path else req.target_source
+        out_dir = _target_dir(data_dir, source_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{sid}.py"
+        expected_source = "ai" if legacy_ai_path else req.target_source
+
+    if path is None:
+        raise ValueError("策略源文件不存在")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    prepared = _prepare_strategy_code(req)
+    previous_code = path.read_text(encoding="utf-8") if path.exists() else None
+    path.write_text(prepared["code"], encoding="utf-8")
+
+    try:
+        engine.reload()
+        loaded = engine.get(sid)
+        if loaded.file_path is None or loaded.file_path.resolve() != path.resolve():
+            raise ValueError("策略加载到了非预期文件，请检查是否存在重复 strategy_id")
+        if loaded.source != expected_source:
+            raise ValueError(f"策略来源异常: 期望 {expected_source}, 实际 {loaded.source}")
+    except Exception as e:
+        _restore_strategy_file(path, previous_code)
+        engine.reload()
+        raise ValueError(f"策略保存失败: {e}") from e
+
+    return {
+        "ok": True,
+        "strategy_id": sid,
+        "source": expected_source,
+        "path": str(path),
+        "meta": prepared["meta"],
+    }
+
+
 @router.get("/ai/status")
 def ai_status(request: Request):
     """Check whether the selected AI provider is configured."""
@@ -305,7 +556,6 @@ def ai_status(request: Request):
 @router.get("/{strategy_id}/source")
 def get_strategy_source(strategy_id: str, request: Request):
     """获取策略源文件内容（用于 AI 修改）"""
-    from pathlib import Path
 
     # 先查 StrategyEngine 获取文件路径
     engine = _get_engine(request)
@@ -338,6 +588,14 @@ async def ai_test(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+def _build_prompt(req: BuildRequest) -> str:
+    if req.step == 1:
+        return build_step1(req.name, req.description, req.direction, req.rules, req.strategy_id)
+    if req.step == 2:
+        return build_step2(req.current_code, req.instruction)
+    raise ValueError(f"无效步骤: {req.step}")
+
+
 @router.post("/build")
 async def build_strategy(req: BuildRequest, request: Request):
     """两步策略构建。
@@ -346,18 +604,47 @@ async def build_strategy(req: BuildRequest, request: Request):
     """
     gen = AIStrategyGenerator()
 
-    if req.step == 1:
-        prompt = build_step1(req.name, req.description, req.direction, req.rules, req.strategy_id)
-    elif req.step == 2:
-        prompt = build_step2(req.current_code, req.instruction)
-    else:
-        raise HTTPException(status_code=400, detail=f"无效步骤: {req.step}")
-
     try:
+        prompt = _build_prompt(req)
         result = await gen.generate(prompt)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if req.step == 1:
+        result = _normalize_build_result(result, req.strategy_id, req.name, req.description)
+    elif req.strategy_id:
+        result = _normalize_build_result(result, req.strategy_id)
     return result
+
+
+@router.post("/build/stream")
+async def build_strategy_stream(req: BuildRequest, request: Request):
+    try:
+        prompt = _build_prompt(req)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    async def event_generator():
+        gen = AIStrategyGenerator()
+        chunks: list[str] = []
+        yield json.dumps({"type": "meta", "strategy_id": req.strategy_id, "step": req.step}, ensure_ascii=False) + "\n"
+        try:
+            async for chunk in gen.stream(prompt):
+                chunks.append(chunk)
+                yield json.dumps({"type": "delta", "content": chunk}, ensure_ascii=False) + "\n"
+            result = gen.validate_code("".join(chunks))
+            if req.step == 1:
+                result = _normalize_build_result(result, req.strategy_id, req.name, req.description)
+            elif req.strategy_id:
+                result = _normalize_build_result(result, req.strategy_id)
+            yield json.dumps({"type": "result", **result}, ensure_ascii=False) + "\n"
+        except RuntimeError as e:
+            yield json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "error", "message": f"AI生成失败: {e}"}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 
@@ -373,48 +660,44 @@ async def ai_generate(req: AIGenerateRequest, request: Request):
     return result
 
 
+@router.post("/code/validate")
+def validate_strategy_code(req: StrategyCodeValidateRequest, request: Request):
+    try:
+        prepared = _prepare_strategy_code(req)
+        return {"valid": True, "error": None, **prepared}
+    except Exception as e:
+        return {"valid": False, "error": str(e), "code": req.code, "meta": {}}
+
+
+@router.post("/code/save")
+def save_strategy_code(req: StrategyCodeSaveRequest, request: Request):
+    try:
+        return _save_strategy_code(req, request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.post("/ai/save")
 async def ai_save(req: AISaveRequest, request: Request):
-    data_dir = _data_dir(request)
-    out_dir = data_dir / "strategies" / "ai"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # 防 path traversal：strategy_id 仅允许字母/数字/下划线/短横线。
-    # 安全性由字符白名单保证(杜绝 / \ .. 等路径分隔/穿越符),文件落点已被
-    # out_dir 锁死在 data/strategies/ai/。前缀只影响 source 标记,允许
-    # ai_ 与 custom_,以兼容「AI 修改 custom 策略」流程(Screener.tsx onAiModify)。
-    sid = req.strategy_id or ""
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
-        raise HTTPException(status_code=400, detail="strategy_id 仅允许字母、数字、下划线、短横线")
-    if not (sid.startswith("ai_") or sid.startswith("custom_")):
-        raise HTTPException(status_code=400, detail="策略 ID 必须以 ai_ 或 custom_ 开头")
     try:
-        AIStrategyGenerator.validate_code(req.code, expected_strategy_id=sid)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    path = out_dir / f"{sid}.py"
-    previous_code = path.read_text(encoding="utf-8") if path.exists() else None
-    path.write_text(req.code, encoding="utf-8")
-
-    # 热重载，并确认保存的策略真的被引擎加载。
-    engine = _get_engine(request)
-    engine.reload()
-    if not engine.has(req.strategy_id):
-        if previous_code is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_text(previous_code, encoding="utf-8")
-        engine.reload()
-        raise HTTPException(
-            status_code=400,
-            detail=f"策略保存成功但加载失败: {req.strategy_id}，请检查代码语法和 META.id 是否一致",
+        save_req = StrategyCodeSaveRequest(
+            code=req.code,
+            strategy_id=req.strategy_id,
+            target_source="ai",
+            mode="create",
+            name=req.name,
+            description=req.description,
+            strict=True,
         )
-    return {"ok": True, "path": str(path)}
+        result = _save_strategy_code(save_req, request, legacy_ai_path=True)
+        return {"ok": True, "path": result["path"]}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.delete("/{strategy_id}")
 def delete_strategy(strategy_id: str, request: Request):
     """删除自定义策略 — 清除 .py 文件 + overrides + 热重载。内置策略不可删除。"""
-    from pathlib import Path
 
     engine = _get_engine(request)
     try:

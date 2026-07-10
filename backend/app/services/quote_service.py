@@ -26,13 +26,22 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date, time as dt_time
 
 import polars as pl
 
 from app.market_time import cn_now, cn_today
+from app.parquet import scan_daily_parquet
 
 logger = logging.getLogger(__name__)
+
+# Webhook(飞书等)投递专用线程池 —— 与行情轮询线程隔离。
+# send_feishu 内置重试(最坏 ~3×5s 超时 + 退避), 若在 _poll_loop 上同步投递,
+# webhook 慢/宕机会逐条累加, 拖垮整条实时行情+告警轮询。这里 fire-and-forget,
+# 失败由 webhook_adapter 记 WARNING(可见), 但绝不阻塞热路径。
+_WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="feishu-webhook")
 
 
 class QuoteSubscriber:
@@ -129,6 +138,10 @@ class QuoteService:
         self._fetch_lock = threading.Lock()
         self._running = False
         self._enabled = False      # 全局开关 (持久化到 preferences)
+        # 暂停态: 盘后管道/数据修正运行期间临时暂停取数, 防止与管道写同一批 parquet 竞态。
+        # 与 _enabled 不同 — pause 不改 preferences、不 stop 线程, 仅让轮询循环跳过取数;
+        # 进程重启后 _paused 归零, 从 preferences 恢复真实开关态, 无"假关闭"副作用。
+        self._paused = False
         self._interval = self.DEFAULT_INTERVAL
         self._thread: threading.Thread | None = None
         self._repo = None          # 延迟注入, 避免循环导入
@@ -145,6 +158,9 @@ class QuoteService:
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
         self._index_quotes_cache: pl.DataFrame | None = None
+        # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
+        self._final_sync_done: set[tuple[date, str]] = set()
+        self._final_sync_failed: dict[tuple[date, str], str] = {}
 
     # ================================================================
     # 生命周期
@@ -199,6 +215,44 @@ class QuoteService:
         """关闭自动行情。"""
         self.stop()
         logger.info("行情服务已关闭")
+
+    # ================================================================
+    # 临时暂停 (盘后管道/数据修正期间, 防止写盘竞态)
+    # ================================================================
+
+    def pause(self) -> None:
+        """临时暂停行情轮询取数 (不关闭线程、不改 preferences)。
+
+        用于盘后管道/数据修正运行期间, 防止实时行情覆写管道正在写的 parquet。
+        与 stop() 的区别: 线程继续存活但跳过 _fetch_quotes; preferences 开关态不变,
+        管道结束调用 resume() 即恢复。线程级检查, 即时生效, 无 join 等待。
+        """
+        self._paused = True
+        logger.info("行情轮询已临时暂停 (管道/修正运行中)")
+
+    def resume(self) -> None:
+        """恢复暂停的行情轮询取数 (对应 pause)。"""
+        self._paused = False
+        logger.info("行情轮询已恢复")
+
+    def is_paused(self) -> bool:
+        """是否处于临时暂停态 (管道运行期间)。"""
+        return self._paused
+
+    @contextmanager
+    def paused(self):
+        """上下文管理器: 进入时暂停轮询取数, 退出时(含异常)自动恢复。
+
+        供盘后管道/数据修正复用:
+            with quote_service.paused():
+                run_pipeline(...)
+        无论正常结束还是异常/crash, finally 都会 resume (除非进程直接被 kill)。
+        """
+        self.pause()
+        try:
+            yield
+        finally:
+            self.resume()
 
     def boot_check(self) -> None:
         """启动时检查 preferences，若 enabled 则自动启动。
@@ -257,6 +311,13 @@ class QuoteService:
             return list(self._subscribers)
 
     def _broadcast_quote_updated(self) -> None:
+        # 实时行情刷新后清空总览聚合缓存, 使看板 (overview-market) 在 SSE 触发的
+        # 重取中拿到最新指数/聚合值。与 _broadcast 同时进行, 与侧栏 /intraday/indices
+        # (无缓存, 直读实时缓存) 行为对齐, 避免看板落后于侧栏。
+        # 延迟导入规避 services <-> api 层循环依赖。
+        from app.api.overview import invalidate_overview_cache
+
+        invalidate_overview_cache()
         for sub in self._snapshot_subscribers():
             sub.notify_quote()
 
@@ -374,9 +435,14 @@ class QuoteService:
         from app.services import preferences
         age = (time.perf_counter() - self._fetch_time) * 1000 if self._fetch_time else -1
         mode = self.realtime_mode()
+        phase = self._market_phase()
+        final_key = self._final_sync_key(phase)
+        final_done = bool(final_key and final_key in self._final_sync_done)
+        final_failed = self._final_sync_failed.get(final_key) if final_key else None
         return {
             "enabled": self._enabled,
             "running": self._running,
+            "paused": self._paused,
             "mode": mode,
             "realtime_allowed": mode != "none",
             "watchlist_symbol_count": len(preferences.get_realtime_watchlist_symbols()),
@@ -385,7 +451,12 @@ class QuoteService:
             "index_symbol_count": self._index_symbol_count,
             "etf_symbol_count": self._etf_symbol_count,
             "quote_age_ms": round(age, 0) if age >= 0 else None,
-            "is_trading_hours": self._is_trading_hours(),
+            # 交易时段 = 连续竞价; polling_window 另行返回,避免午休/收盘缓冲误显示为交易中。
+            "is_trading_hours": self._is_continuous_trading(),
+            "is_polling_window": self._should_poll_for_phase(phase),
+            "market_phase": phase,
+            "final_sync_done": final_done,
+            "final_sync_failed": final_failed,
             "last_fetch_ms": round(self._fetched_at, 0) if self._fetched_at else None,
         }
 
@@ -401,10 +472,24 @@ class QuoteService:
     def _poll_loop(self) -> None:
         while self._running and self._enabled:
             try:
-                if self._is_trading_hours():
-                    self._fetch_quotes()
-                else:
-                    logger.debug("非交易时段, 跳过行情轮询")
+                # 管道/数据修正运行期间临时暂停取数, 防止与管道写同一批 parquet 竞态。
+                # 线程继续存活 + 分片 sleep, resume() 后即时恢复, 无需重启线程。
+                if not self._paused:
+                    phase = self._market_phase()
+                    if self._should_fetch_for_phase(phase):
+                        is_final = phase in {"morning_final", "close_final"}
+                        ok = self._fetch_quotes(final=is_final)
+                        if is_final:
+                            key = self._final_sync_key(phase)
+                            if key and ok:
+                                self._final_sync_done.add(key)
+                                self._final_sync_failed.pop(key, None)
+                                logger.info("%s 最终行情同步完成, 进入休盘态", "午休" if phase == "morning_final" else "收盘")
+                            elif key:
+                                self._final_sync_failed[key] = "fetch_failed"
+                                logger.warning("%s 最终行情同步失败, 将继续重试", "午休" if phase == "morning_final" else "收盘")
+                    else:
+                        logger.debug("非轮询阶段(%s), 跳过行情轮询", phase)
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
 
@@ -413,13 +498,17 @@ class QuoteService:
                 time.sleep(0.5)
                 waited += 0.5
 
-    def _fetch_quotes(self) -> None:
-        """按当前档位拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。"""
+    def _fetch_quotes(self, *, final: bool = False) -> bool:
+        """按当前档位拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。返回本轮是否成功更新。"""
         with self._fetch_lock:
+            before = self._fetched_at
+            if final:
+                logger.info("最终行情同步开始")
             if self.realtime_mode() == "watchlist":
                 self._fetch_watchlist_quotes()
-                return
-            self._fetch_full_market_quotes()
+            else:
+                self._fetch_full_market_quotes()
+            return self._fetched_at > before
 
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。"""
@@ -470,11 +559,17 @@ class QuoteService:
 
             resp = []
             if universes:
+                _u0 = time.perf_counter()
+                logger.info("拉取全市场行情 (universes=%s, SDK超时=30s×重试3)", universes)
                 resp.extend(tf.quotes.get_by_universes(universes=universes) or [])
+                logger.info("全市场行情拉取完成: %d 条 (%.2fs)", len(resp), time.perf_counter() - _u0)
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
-                resp.extend(tf.quotes.get(symbols=sorted(core_index_symbols)) or [])
+                _i0 = time.perf_counter()
+                _core_syms = sorted(core_index_symbols)
+                resp.extend(tf.quotes.get(symbols=_core_syms) or [])
+                logger.info("核心指数行情拉取完成: %d 只 (%.2fs)", len(_core_syms), time.perf_counter() - _i0)
         except Exception as e:  # noqa: BLE001
-            logger.warning("行情拉取失败: %s", e)
+            logger.warning("行情拉取失败 (%.2fs): %s", time.perf_counter() - t0, e)
             return
 
         if not resp:
@@ -672,7 +767,7 @@ class QuoteService:
 
     @staticmethod
     def _build_daily(records: list[dict]) -> pl.DataFrame:
-        """将 API records 转为日K格式 DataFrame (只有 OHLCV, 写 kline_daily 用)。"""
+        """将 API records 转为日K格式 DataFrame (OHLCV + quote_ts, 写 kline_daily 用)。"""
         if not records:
             return pl.DataFrame()
         df = pl.DataFrame(records)
@@ -684,11 +779,13 @@ class QuoteService:
             "low": "low",
             "volume": "volume",
             "amount": "amount",
+            "timestamp": "quote_ts",
         }
         select_exprs = []
         for src, dst in cols_map.items():
             if src in df.columns:
-                select_exprs.append(pl.col(src).alias(dst))
+                select_exprs.append(pl.col(src).cast(pl.Int64, strict=False).alias(dst)
+                                     if dst == "quote_ts" else pl.col(src).alias(dst))
         if not select_exprs:
             return pl.DataFrame()
         result = df.select(select_exprs).with_columns(
@@ -721,7 +818,12 @@ class QuoteService:
         ] if c in df.columns]
         if not keep or "symbol" not in keep:
             return pl.DataFrame()
-        return df.select(keep)
+        out = df.select(keep)
+        # 实时 API 的 turnover_rate 入口契约为小数制(0.05 = 5%).
+        # enriched 内部统一存百分数值(5 = 5%), 后续页面/筛选直接展示和比较。
+        if "turnover_rate" in out.columns:
+            out = out.with_columns((pl.col("turnover_rate").cast(pl.Float64, strict=False) * 100).alias("turnover_rate"))
+        return out
 
     @staticmethod
     def _build_index_quotes(records: list[dict]) -> pl.DataFrame:
@@ -750,12 +852,63 @@ class QuoteService:
         return df
 
     @staticmethod
-    def _is_trading_hours() -> bool:
-        # 显式北京时间: 容器/服务器本地时区可能是 UTC, 用 naive now() 会整体错开轮询窗口
+    def _market_phase() -> str:
+        """A股行情轮询阶段(北京时间)。
+
+        final 阶段用于午休/收盘定版: 需要至少成功拉取一版边界后的行情, 才算进入休盘。
+        """
+        now = cn_now()
+        if now.weekday() >= 5:
+            return "closed"
+        t = now.time()
+        if dt_time(9, 15) <= t < dt_time(9, 30):
+            return "preopen"
+        if dt_time(9, 30) <= t < dt_time(11, 30):
+            return "morning"
+        if dt_time(11, 30) <= t < dt_time(12, 55):
+            return "morning_final"
+        if dt_time(12, 55) <= t < dt_time(13, 0):
+            return "pre_afternoon"
+        if dt_time(13, 0) <= t < dt_time(15, 0):
+            return "afternoon"
+        if t >= dt_time(15, 0):
+            return "close_final"
+        return "closed"
+
+    @staticmethod
+    def _final_sync_key(phase: str) -> tuple[date, str] | None:
+        if phase == "morning_final":
+            return (cn_today(), "morning")
+        if phase == "close_final":
+            return (cn_today(), "close")
+        return None
+
+    def _should_poll_for_phase(self, phase: str) -> bool:
+        """是否处于会主动拉行情的阶段。final 阶段成功后即停止。"""
+        if phase in {"preopen", "morning", "pre_afternoon", "afternoon"}:
+            return True
+        key = self._final_sync_key(phase)
+        return bool(key and key not in self._final_sync_done)
+
+    def _should_fetch_for_phase(self, phase: str) -> bool:
+        return self._should_poll_for_phase(phase)
+
+    def _is_trading_hours(self) -> bool:
+        """行情轮询窗口(兼容旧调用): 包含盘前预热和未完成的午休/收盘定版。"""
+        return self._should_poll_for_phase(self._market_phase())
+
+    @staticmethod
+    def _is_continuous_trading() -> bool:
+        """A股连续竞价时段(北京时间): 9:30-11:30 / 13:00-15:00, 仅工作日。
+
+        比 _is_trading_hours 严格: 排除 9:15-9:30 集合竞价(指示价, 非成交价)、
+        午间与 15:00 后收盘缓冲。监控评估只在此窗口进行, 不对竞价/收盘后的陈旧价告警。
+        (节假日由 _evaluate_monitors 里的「快照日期=当日」新鲜度判据兜底, 无需交易日历。)
+        """
         now = cn_now()
         t = now.time()
-        morning = dt_time(9, 15) <= t <= dt_time(11, 35)
-        afternoon = dt_time(12, 55) <= t <= dt_time(15, 5)
+        morning = dt_time(9, 30) <= t <= dt_time(11, 30)
+        afternoon = dt_time(13, 0) <= t <= dt_time(15, 0)
         return now.weekday() < 5 and (morning or afternoon)
 
     @staticmethod
@@ -770,9 +923,20 @@ class QuoteService:
     def _evaluate_monitors(self, daily_df: pl.DataFrame, quote_extra: pl.DataFrame | None) -> None:
         """行情更新后评估统一监控规则引擎,并刷新策略结果缓存。"""
         try:
+            # 仅在「交易日 + 连续竞价时段」评估监控 —— 避开集合竞价指示价、盘前/收盘后
+            # 缓冲。轮询窗口(_is_trading_hours)更宽是为盘前预热/收盘捕捉, 但告警不应
+            # 基于这些非连续竞价价格。
+            if not self._is_continuous_trading():
+                return
             # 获取 enriched 数据 (刚算好的)
             enriched_today, enriched_date = self.get_enriched_today()
             if enriched_today.is_empty():
+                return
+            # 快照日期必须是北京当日: 节假日或数据未刷新时 enriched_date 会落后于当日,
+            # 说明市场未在交易 → 跳过。无需维护 A股交易日历即可挡住节假日与陈旧价告警。
+            if enriched_date != cn_today():
+                logger.debug("监控评估跳过: enriched 快照日期 %s 非当日 %s (节假日/数据未刷新)",
+                             enriched_date, cn_today())
                 return
 
             all_alerts: list[dict] = []
@@ -783,22 +947,44 @@ class QuoteService:
             if self._app_state:
                 engine = getattr(self._app_state, "monitor_engine", None)
                 if engine and engine.rule_count > 0:
-                    # 预构建 symbol → name 映射 (enriched 已 drop name 列, 引擎触发时回填用)
+                    # 预构建 symbol → name 映射 (enriched 已 drop name 列, 引擎触发时回填用)。
+                    # 含股票 + ETF 维表, 保证 ETF 监控告警也能回填名称。
                     try:
+                        name_map: dict[str, str] = {}
                         inst_df = self._app_state.repo.get_instruments()
                         if not inst_df.is_empty() and "symbol" in inst_df.columns and "name" in inst_df.columns:
-                            engine.set_name_map({
-                                row["symbol"]: row["name"]
-                                for row in inst_df.select(["symbol", "name"]).iter_rows(named=True)
-                                if row.get("name")
-                            })
+                            for row in inst_df.select(["symbol", "name"]).iter_rows(named=True):
+                                if row.get("name"):
+                                    name_map[row["symbol"]] = row["name"]
+                        # 仅当存在 ETF 规则时补 ETF 维表 (股票名优先, setdefault 不覆盖股票)
+                        if engine.has_asset_rules("etf"):
+                            etf_inst = self._app_state.repo.get_etf_instruments()
+                            if not etf_inst.is_empty() and "symbol" in etf_inst.columns and "name" in etf_inst.columns:
+                                for row in etf_inst.select(["symbol", "name"]).iter_rows(named=True):
+                                    if row.get("name"):
+                                        name_map.setdefault(row["symbol"], row["name"])
+                        if name_map:
+                            engine.set_name_map(name_map)
                     except Exception as e:  # noqa: BLE001
                         logger.debug("name_map 构建失败 (不影响监控): %s", e)
                     # 连板梯队封单监控: 有 ladder 规则时, 从 depth_service 注入封单量到 enriched
                     eval_df = enriched_today
                     if engine.has_rule_type("ladder"):
                         eval_df = self._inject_sealed_vol(enriched_today, enriched_date)
-                    rule_events = engine.evaluate(eval_df)
+                    rule_events = engine.evaluate(eval_df, asset_type="stock")
+                    # ETF 规则轮: 股票快照不含 ETF, 用 ETF enriched 快照单独评估。
+                    # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
+                    # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时
+                    # flush 焐热; 未焐热说明无 ETF 实时数据, 跳过本轮 ETF 评估)。
+                    if engine.has_asset_rules("etf") and self._repo is not None:
+                        try:
+                            etf_enriched, _ = self._repo.get_enriched_latest_asset("etf", refresh=False)
+                            if not etf_enriched.is_empty():
+                                rule_events = rule_events + engine.evaluate(
+                                    etf_enriched, asset_type="etf", reset_strategy_results=False,
+                                )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("ETF 监控评估失败 (不影响股票告警): %s", e)
                     if rule_events:
                         # 落盘到 alerts.jsonl
                         try:
@@ -839,7 +1025,7 @@ class QuoteService:
                 # cooldown 去重已在 MonitorRuleEngine 做过, 这里只负责转发。
                 self._maybe_send_system_notifications(all_alerts)
 
-            # Webhook 推送 (飞书等外部 IM, 由规则 webhook_enabled 开关控制)。
+            # Webhook 推送 (飞书等外部 IM, 由规则 webhook_channels 指定渠道)。
             # 紧随系统通知, 同样静默降级不阻断主流程。
             if rule_events:
                 self._maybe_send_webhook(rule_events, engine)
@@ -884,10 +1070,10 @@ class QuoteService:
             return enriched_today
 
     def _maybe_send_webhook(self, rule_events: list[dict], engine) -> None:
-        """把告警通过 Webhook 推送到外部 IM (由规则 webhook_enabled 开关控制)。
+        """把告警通过 Webhook 推送到外部 IM (由规则 webhook_channels 指定渠道)。
 
         - 飞书 / 企业微信任一已配置即生效 (两个都没配才跳过)
-        - 仅推送 webhook_enabled=True 的规则触发的告警
+        - 仅推送 webhook_channels 非空的规则触发的告警, 且只投递被勾选的渠道
         - 失败静默, 不阻断主流程
         - 去重: 复用 MonitorRuleEngine 的 cooldown, 此处不重复去重
 
@@ -911,11 +1097,13 @@ class QuoteService:
                 "price": "价格", "market": "异动",
             }
             rules = engine.rules if engine is not None else {}
-            pushed_feishu = 0
-            pushed_wecom = 0
+            enqueued = 0
             for ev in rule_events:
                 rule = rules.get(ev.get("rule_id"))
-                if not rule or not rule.get("webhook_enabled"):
+                # webhook_channels 指定命中的渠道 (['feishu'] / ['wecom'] / ['feishu','wecom'] / []).
+                # 空列表 = 该规则不推送。仅推送「渠道已选 + 对应地址已配置」的组合。
+                channels = rule.get("webhook_channels") if rule else None
+                if not channels:
                     continue
                 source = ev.get("source", "")
                 source_label = source_labels.get(source, source or "通知")
@@ -924,16 +1112,20 @@ class QuoteService:
                 message = ev.get("message") or ""
                 title = f"TickFlow · {source_label}"
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
-                if feishu_url and webhook_adapter.send_feishu(feishu_url, title, body, feishu_secret):
-                    pushed_feishu += 1
-                if wecom_url and webhook_adapter.send_wecom(wecom_url, title, body):
-                    pushed_wecom += 1
-            if pushed_feishu:
-                logger.info("飞书 Webhook 推送: %d 条", pushed_feishu)
-            if pushed_wecom:
-                logger.info("企业微信 Webhook 推送: %d 条", pushed_wecom)
+                # 提交到独立线程池, 不阻塞行情轮询线程 (webhook 慢/重试不拖累实时行情+告警)。
+                # 按渠道独立投递: 飞书 / 企业微信谁被勾选且已配置就推谁。
+                # 应用内 alerts.jsonl 记录与 SSE 已在前面完成, 不依赖 webhook 成败,
+                # 失败由 webhook_adapter 记 WARNING(可见)。
+                if feishu_url and "feishu" in channels:
+                    _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_feishu, feishu_url, title, body, feishu_secret)
+                    enqueued += 1
+                if wecom_url and "wecom" in channels:
+                    _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_wecom, wecom_url, title, body)
+                    enqueued += 1
+            if enqueued:
+                logger.info("Webhook 已提交 %d 条 (异步投递, 按渠道独立投递, 失败记 WARNING)", enqueued)
         except Exception as e:  # noqa: BLE001
-            logger.debug("Webhook 推送异常 (不影响告警主流程): %s", e)
+            logger.warning("Webhook 提交异常 (不影响告警主流程): %s", e)
 
     def _maybe_send_system_notifications(self, all_alerts: list[dict]) -> None:
         """把告警转发到操作系统通知中心 (由 preferences 开关控制)。
@@ -1009,16 +1201,26 @@ class QuoteService:
 
             if use_incremental:
                 from app.indicators.pipeline import compute_enriched_today
+                from app.market_time import trading_minutes_elapsed_from_ts, trading_minutes_elapsed
                 instruments = self._repo.get_instruments()
                 # 将 API 直接提供的补充字段 JOIN 到 daily_df
                 today_ohlcv = daily_df
                 if quote_extra is not None and not quote_extra.is_empty():
                     today_ohlcv = daily_df.join(quote_extra, on="symbol", how="left")
+                # 量比时间折算: 优先用行情 quote_ts (真实成交时间), 缺失则兜底服务端时间
+                elapsed_minutes: float | None = None
+                if "quote_ts" in daily_df.columns and not daily_df.is_empty():
+                    valid_ts = daily_df["quote_ts"].drop_nulls()
+                    if not valid_ts.is_empty():
+                        elapsed_minutes = trading_minutes_elapsed_from_ts(valid_ts.median())
+                if elapsed_minutes is None:
+                    elapsed_minutes = trading_minutes_elapsed()
                 enriched_today = compute_enriched_today(
                     live_agg=live_agg,
                     prev_enriched=prev_enriched,
                     today_ohlcv=today_ohlcv,
                     instruments=instruments,
+                    elapsed_minutes=elapsed_minutes,
                 )
                 if enriched_today.is_empty():
                     logger.warning("增量计算结果为空, 回退到全量计算")
@@ -1035,9 +1237,9 @@ class QuoteService:
                 cutoff = today - timedelta(days=90)
                 table = "kline_etf_daily" if asset_type == "etf" else "kline_daily"
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
-                ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
+                ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
                 hist_df = (
-                    pl.scan_parquet(daily_glob)
+                    scan_daily_parquet(daily_glob)
                     .filter(pl.col("date") >= cutoff)
                     .sort(["symbol", "date"])
                     .collect()

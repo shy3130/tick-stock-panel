@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -47,19 +48,27 @@ def run_job(job: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
         raise StockSDKBridgeError(f"桥接脚本缺失: {_BRIDGE_MJS}")
 
     payload = json.dumps(job, ensure_ascii=False)
+    op = job.get("op")
+    _t0 = time.perf_counter()
+    logger.info("stock-sdk 桥接开始 (op=%s, timeout=%ss)", op, timeout)
     try:
         proc = subprocess.run(
             [node, str(_BRIDGE_MJS)],
             input=payload,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=str(_HERE),
         )
     except subprocess.TimeoutExpired as e:
-        raise StockSDKBridgeError(f"stock-sdk 桥接超时(op={job.get('op')}, {timeout}s)") from e
+        logger.warning("stock-sdk 桥接超时 (op=%s, %ss)", op, timeout)
+        raise StockSDKBridgeError(f"stock-sdk 桥接超时(op={op}, {timeout}s)") from e
     except OSError as e:
+        logger.warning("stock-sdk 启动 node 失败 (op=%s): %s", op, e)
         raise StockSDKBridgeError(f"启动 node 失败: {e}") from e
+    logger.info("stock-sdk 桥接完成 (op=%s, %.2fs)", op, time.perf_counter() - _t0)
 
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-800:]

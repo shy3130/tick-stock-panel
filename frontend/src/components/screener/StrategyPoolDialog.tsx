@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
-import { X, Plus, GripVertical } from 'lucide-react'
+import { X, Plus, GripVertical, Upload, Loader2 } from 'lucide-react'
 import { api, type StrategyDetail } from '@/lib/api'
 
 interface Props {
@@ -32,19 +32,41 @@ const TABS: { id: SourceTab; label: string }[] = [
   { id: 'ai', label: 'AI' },
 ]
 
+function parseMetaId(code: string): string {
+  const m = code.match(/["']id["']\s*:\s*["']([A-Za-z0-9_-]+)["']/)
+  return m ? m[1] : ''
+}
+
+function fileStem(name: string): string {
+  return name.replace(/\.py$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^_+|_+$/g, '')
+}
+
 export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
   // 草稿状态: 打开时从 pool 复制, 操作只改草稿, 点确定才提交
   const [draftPool, setDraftPool] = useState<string[]>(() => [...pool])
   const [allStrategies, setAllStrategies] = useState<StrategyDetail[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<SourceTab>('all')
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  const [importMsg, setImportMsg] = useState('')
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  const loadStrategies = useCallback(async () => {
+    setLoading(true)
+    try {
+      const d = await api.strategyList()
+      setAllStrategies(d.strategies)
+    } catch {
+      setAllStrategies([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    api.strategyList()
-      .then(d => setAllStrategies(d.strategies))
-      .catch(() => setAllStrategies([]))
-      .finally(() => setLoading(false))
-  }, [])
+    loadStrategies()
+  }, [loadStrategies])
 
   const stratMap = useMemo(() => {
     const m = new Map<string, StrategyDetail>()
@@ -81,6 +103,35 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
     setDraftPool(newOrder)
   }, [])
 
+  const handleImportFile = useCallback(async (file: File) => {
+    setImporting(true); setImportError(''); setImportMsg('')
+    try {
+      if (!file.name.toLowerCase().endsWith('.py')) throw new Error('只能导入 .py 策略文件')
+      const code = await file.text()
+      const rawId = parseMetaId(code) || fileStem(file.name)
+      if (!rawId) throw new Error('无法识别策略 ID，请检查 META.id 或文件名')
+      const target: 'ai' | 'custom' = rawId.startsWith('ai_') ? 'ai' : 'custom'
+      const strategyId = target === 'ai'
+        ? rawId
+        : (rawId.startsWith('custom_') ? rawId : `custom_${rawId}`)
+      const result = await api.strategySaveCodeV2({
+        strategy_id: strategyId,
+        code,
+        target_source: target,
+        mode: 'create',
+        strict: true,
+      })
+      await loadStrategies()
+      setActiveTab(result.source)
+      setImportMsg(`已导入到${result.source === 'ai' ? 'AI' : '自定义'}策略: ${result.strategy_id}`)
+    } catch (e: any) {
+      setImportError(String(e?.message ?? '导入失败'))
+    } finally {
+      setImporting(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }, [loadStrategies])
+
   return (
     <AnimatePresence>
       <motion.div
@@ -103,10 +154,36 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
               策略池 <span className="text-muted font-normal text-xs">{validDraft.length} / {allStrategies.length}</span>
               {invalidPoolCount > 0 && <span className="ml-2 text-[10px] text-danger">{invalidPoolCount} 个失效</span>}
             </span>
-            <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
-              <X className="h-4 w-4 text-muted" />
-            </button>
+            <div className="flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".py,text/x-python,text/plain"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (file) void handleImportFile(file)
+                }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importing}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn border border-accent/30 bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                导入策略
+              </button>
+              <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
+                <X className="h-4 w-4 text-muted" />
+              </button>
+            </div>
           </div>
+
+          {(importError || importMsg) && (
+            <div className={`mx-4 mt-2 px-3 py-2 rounded-btn border text-[11px] shrink-0 ${importError ? 'border-danger/20 bg-danger/10 text-danger' : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-400'}`}>
+              {importError || importMsg}
+            </div>
+          )}
 
           {loading ? (
             <div className="flex items-center justify-center py-16">
@@ -150,7 +227,9 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
                         hover:bg-accent/8 transition-colors cursor-pointer group text-left"
                     >
                       <span className="flex-1 min-w-0">
-                        <span className="text-[12px] text-foreground group-hover:text-accent transition-colors block truncate">{s.name}</span>
+                        <span className="text-[12px] text-foreground group-hover:text-accent transition-colors block truncate">
+                          {s.name} <span className="text-[10px] text-muted font-mono">{s.id}</span>
+                        </span>
                         <span className="text-[10px] text-muted truncate block">{s.description}</span>
                       </span>
                       <span className={`text-[8px] px-1 py-px rounded border leading-tight shrink-0 ${SOURCE_CLS[s.source] ?? SOURCE_CLS.builtin}`}>
@@ -194,7 +273,9 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
                             whileDrag={{ scale: 1.02, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}
                           >
                             <GripVertical className="h-3.5 w-3.5 text-accent/40 group-hover:text-accent/70 shrink-0" />
-                            <span className="flex-1 min-w-0 text-[12px] text-foreground truncate">{s?.name ?? id}</span>
+                            <span className="flex-1 min-w-0 text-[12px] text-foreground truncate">
+                              {s?.name ?? id} <span className="text-[10px] text-muted font-mono">{id}</span>
+                            </span>
                             <span className={`text-[8px] px-1 py-px rounded border leading-tight shrink-0 ${SOURCE_CLS[src] ?? SOURCE_CLS.builtin}`}>
                               {SOURCE_LABEL[src] ?? '内置'}
                             </span>

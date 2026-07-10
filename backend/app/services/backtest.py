@@ -15,6 +15,7 @@ import pandas as pd
 import polars as pl
 
 from app.config import settings
+from app.parquet import scan_enriched_parquet
 from app.tickflow.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,7 @@ class BacktestConfig:
     matching: Literal["close_t", "open_t+1"] = "close_t"
     rsi_oversold_threshold: float = 30
     rsi_overbought_threshold: float = 70
+    asset_type: str = "stock"
 
 
 @dataclass
@@ -125,15 +127,18 @@ class BacktestService:
         symbols: list[str],
         start: date,
         end: date,
+        asset_type: str = "stock",
     ) -> pd.DataFrame:
         """加载 [date × symbol] 价格面板 — Polars scan_parquet + 即时计算指标。
 
         **全项目唯一从 Polars 转 pandas 的边界**(§7.4 / ADR-19)。
+        asset_type='etf' 时读 ETF enriched。
         """
         try:
-            enriched_glob = str(self.repo.store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
+            from app.tickflow.repository import enriched_dirname
+            enriched_glob = str(self.repo.store.data_dir / enriched_dirname(asset_type) / "**" / "*.parquet")
             df = (
-                pl.scan_parquet(enriched_glob)
+                scan_enriched_parquet(enriched_glob)
                 .filter(
                     (pl.col("symbol").is_in(symbols))
                     & (pl.col("date") >= start)
@@ -203,7 +208,7 @@ class BacktestService:
         vbt = _get_vbt()
         run_id = uuid.uuid4().hex[:10]
 
-        panel = self._load_panel(config.symbols, config.start, config.end)
+        panel = self._load_panel(config.symbols, config.start, config.end, config.asset_type)
         if panel.empty:
             return BacktestResult(
                 run_id=run_id,

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, ChevronDown, ChevronUp, Plus, Save, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { Skeleton } from '@/components/data/Skeleton'
 import { api, type AnalysisColumn, type ExtDataConfig, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
@@ -281,7 +282,15 @@ export function Analysis() {
               </Link>
             </div>
           ))}
-          {menuItems.length === 0 && (
+          {menus.isLoading &&
+            Array.from({ length: 3 }).map((_, i) => (
+              <div key={`sk-${i}`} className="rounded-card border border-border bg-surface p-4 space-y-3">
+                <Skeleton w="w-1/2" h="h-4" />
+                <Skeleton w="w-1/3" h="h-3" />
+                <Skeleton h="h-8" rounded="rounded-btn" />
+              </div>
+            ))}
+          {!menus.isLoading && menuItems.length === 0 && (
             <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-sm text-muted md:col-span-2 xl:col-span-3">暂无分析菜单，点击右上角新建。</div>
           )}
         </section>

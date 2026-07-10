@@ -65,6 +65,7 @@ backend/user_prompts/
 
 # ===== AI IDE =====
 .trae/
+.zcode/
 
 # ===== TypeScript build cache =====
 frontend/tsconfig*.tsbuildinfo

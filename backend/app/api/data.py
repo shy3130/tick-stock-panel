@@ -680,30 +680,9 @@ def clear_data(request: Request):
     from app.api.overview import invalidate_overview_cache
     invalidate_overview_cache()
 
-    # 刷新 DuckDB 视图（空 parquet 目录也需要重新挂载）
-    d = data_dir.as_posix()
-    for name, path in {
-        "kline_daily": f"{d}/kline_daily/**/*.parquet",
-        "kline_enriched": f"{d}/kline_daily_enriched/**/*.parquet",
-        "kline_index_daily": f"{d}/kline_index_daily/**/*.parquet",
-        "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
-        "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
-        "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
-        "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
-        "kline_minute": f"{d}/kline_minute/**/*.parquet",
-        "adj_factor": f"{d}/adj_factor/**/*.parquet",
-        "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
-        "instruments": f"{d}/instruments/**/*.parquet",
-        "instruments_index": f"{d}/instruments_index/**/*.parquet",
-        "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
-    }.items():
-        try:
-            repo.db.execute(
-                f"CREATE OR REPLACE VIEW {name} AS "
-                f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
-            )
-        except Exception:
-            pass
+    # 刷新 DuckDB 视图（空 parquet 目录也需要重新挂载）——
+    # 委托给 repository 的唯一权威实现, 覆盖全部视图 (此前这里内联的副本漏了几张)。
+    repo.rebuild_views()
 
     logger.info("数据已清除: 删除 %d 个 parquet 文件", deleted)
     invalidate_data_cache(None)

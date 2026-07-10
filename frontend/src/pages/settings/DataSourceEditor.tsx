@@ -45,7 +45,7 @@ const FIELD_LABELS: Record<string, string> = {
   change_pct: '涨跌幅 (小数 0.0366=3.66%)',
   change_amount: '涨跌额',
   amplitude: '振幅 (小数)',
-  turnover_rate: '换手率 (小数)',
+  turnover_rate: '换手率 (小数 0.05=5%)',
   timestamp: '时间戳',
   session: '交易时段',
 }

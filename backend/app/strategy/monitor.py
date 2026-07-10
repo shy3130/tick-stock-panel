@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -88,6 +89,10 @@ class StrategyMonitorService:
         self._alert_handler = alert_handler
         # strategy_id → 监控配置
         self._watching: dict[str, dict] = {}
+        # _watching 跨线程锁: on_quote_update 跑在行情轮询线程迭代 _watching,
+        # API 线程同时 start/stop 增删会抛 "dict changed size during iteration"。
+        # 增删与迭代前的快照都持此锁 (镜像 MonitorRuleEngine.evaluate 的 list 快照)。
+        self._watching_lock = threading.Lock()
 
     def start(self, strategy_id: str, config: dict) -> None:
         """开始监控一个策略
@@ -98,19 +103,23 @@ class StrategyMonitorService:
             "alerts": [{"field": "rsi_14", "op": ">", "value": 80, "message": "..."}],
         }
         """
-        self._watching[strategy_id] = config
+        with self._watching_lock:
+            self._watching[strategy_id] = config
         logger.info("strategy monitor started: %s", strategy_id)
 
     def stop(self, strategy_id: str) -> None:
-        self._watching.pop(strategy_id, None)
+        with self._watching_lock:
+            self._watching.pop(strategy_id, None)
         logger.info("strategy monitor stopped: %s", strategy_id)
 
     def stop_all(self) -> None:
-        self._watching.clear()
+        with self._watching_lock:
+            self._watching.clear()
 
     @property
     def watching(self) -> dict[str, dict]:
-        return dict(self._watching)
+        with self._watching_lock:
+            return dict(self._watching)
 
     def on_quote_update(self, df: pl.DataFrame) -> list[StrategyAlert]:
         """行情更新后调用。向量化检查所有监控策略。
@@ -125,7 +134,11 @@ class StrategyMonitorService:
 
         all_alerts: list[StrategyAlert] = []
 
-        for strategy_id, cfg in self._watching.items():
+        # 迭代前持锁快照, 避免行情线程迭代时 API 线程 start/stop 改变字典大小
+        with self._watching_lock:
+            watching_items = list(self._watching.items())
+
+        for strategy_id, cfg in watching_items:
             # 买入信号
             entry_sigs = cfg.get("entry_signals", [])
             if entry_sigs:
@@ -319,6 +332,8 @@ class MonitorRuleEngine:
         # 用于声明 filter_history 的策略 (如反包), 实时监控时拼历史窗口 + 今日行情跑选股。
         # 为 None 时, filter_history 策略仍会被跳过 (保持旧行为, 不破坏无历史场景)。
         self._history_loader: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
+        # ETF 版历史窗口加载器 (asset_type=etf 的规则用)。为 None 时 ETF filter_history 策略跳过。
+        self._history_loader_etf: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
         # 本轮 evaluate() 产出的策略选股结果: strategy_id → {rows, total, as_of}
         # 供策略页实时回显复用 (/api/screener/cached 端点直接读取此内存结果), 避免重跑
         self._latest_strategy_results: dict[str, dict] = {}
@@ -339,6 +354,20 @@ class MonitorRuleEngine:
         为 None 时 filter_history 策略退回到跳过逻辑 (不破坏无历史场景)。
         """
         self._history_loader = fn
+
+    def set_history_loader_etf(self, fn) -> None:
+        """注入 ETF 版历史窗口加载器 (asset_type=etf 的 strategy 型规则用)。
+
+        签名同 set_history_loader; 复用 ScreenerService(asset_type='etf')._load_enriched_history。
+        为 None 时 ETF filter_history 策略退回到跳过逻辑。
+        """
+        self._history_loader_etf = fn
+
+    def _history_loader_for(self, rule: dict):
+        """按规则的 asset_type 选历史加载器。etf → ETF 加载器, 否则股票加载器。"""
+        if rule.get("asset_type") == "etf":
+            return self._history_loader_etf
+        return self._history_loader
 
     def set_name_map(self, name_map: dict[str, str]) -> None:
         """注入 symbol → 股票名 映射, 用于在告警事件里回填 name 字段。
@@ -404,11 +433,27 @@ class MonitorRuleEngine:
         )
 
     # ── 评估 ───────────────────────────────────────────
-    def evaluate(self, df: pl.DataFrame) -> list[dict]:
-        """行情更新后评估所有规则。
+    def has_asset_rules(self, asset_type: str) -> bool:
+        """是否存在指定资产类型的 (已启用) 规则。供 quote_service 判断是否需要 ETF 评估轮。"""
+        if not self._rules:
+            return False
+        return any(
+            r.get("enabled", True) and r.get("asset_type", "stock") == asset_type
+            for r in list(self._rules.values())
+        )
+
+    def evaluate(self, df: pl.DataFrame, asset_type: str = "stock",
+                 reset_strategy_results: bool = True) -> list[dict]:
+        """行情更新后评估规则。
+
+        按 asset_type 只评估匹配资产类型的规则; ETF 规则应传 ETF enriched 快照。
+        股票/ETF 分两轮评估时, 仅股票轮重置 _latest_strategy_results (它供股票策略页
+        /cached 回显; ETF 策略页走实时单跑, 不依赖它)。
 
         Args:
-            df: 实时 enriched 数据 (~5500行, 含 signal_/csg_/指标列)
+            df: 实时 enriched 数据 (含 signal_/csg_/指标列)
+            asset_type: 只评估该资产类型的规则 (默认 stock, 向后兼容)
+            reset_strategy_results: 是否重置策略结果缓存 (多轮评估时仅首轮 True)
         Returns:
             触发的 AlertEvent dict 列表 (含 ts/rule_id/source/type/symbol/...)
         """
@@ -418,11 +463,14 @@ class MonitorRuleEngine:
         now = time.time()
         events: list[dict] = []
         # 每轮重置: 只保留本次 evaluate 产出的策略结果
-        self._latest_strategy_results = {}
+        if reset_strategy_results:
+            self._latest_strategy_results = {}
 
         # list() 快照: 本方法跑在行情轮询线程, API 线程同时 add/remove 规则
         # 会触发 "dictionary changed size during iteration", 整轮告警丢失
         for rule_id, rule in list(self._rules.items()):
+            if rule.get("asset_type", "stock") != asset_type:
+                continue
             try:
                 events.extend(self._evaluate_rule(df, rule, now))
             except Exception as e:
@@ -525,9 +573,13 @@ class MonitorRuleEngine:
                 return df.head(0)
             return df.filter(pl.col("symbol").is_in(syms))
         if scope == "sector":
-            # sector 过滤: 需 df 含板块列 (后续接入 ext_data JOIN)
-            # 当前先返回全量, sector 精确过滤第二步完善
-            return df
+            # sector 过滤需 df 含板块列 (后续接入 ext_data JOIN)。在 JOIN 落地前
+            # fail-closed 返回空 —— 绝不退化为「全市场」误触发 (旧行为 return df 会让
+            # 一条板块规则对全市场每只命中都告警)。新建 sector 规则已在 validate 拦截,
+            # 此处兜底任何历史遗留的 sector 规则。
+            logger.warning("scope=sector 规则 %s 暂不支持(板块 JOIN 未实现), 本轮跳过",
+                           rule.get("id"))
+            return df.head(0)
         return df
 
     def _match_strategy(
@@ -544,6 +596,8 @@ class MonitorRuleEngine:
         sid = rule.get("strategy_id")
         if not sid:
             return []
+        at = rule.get("asset_type", "stock")
+        pool_key = (sid, at)
         try:
             s = self._strategy_engine.get(sid)
         except Exception:
@@ -568,13 +622,15 @@ class MonitorRuleEngine:
             "overrides": overrides,
         }
         if s.filter_history_fn:
-            if self._history_loader is None:
-                logger.debug("策略 %s 需要历史数据但未注入 history_loader, 跳过实时监控", sid)
+            history_loader = self._history_loader_for(rule)
+            if history_loader is None:
+                logger.debug("策略 %s 需要历史数据但未注入 history_loader (asset_type=%s), 跳过实时监控",
+                             sid, rule.get("asset_type", "stock"))
                 return []
             try:
                 today = cn_today()
                 lookback = max(1, getattr(s, "lookback_days", 30))
-                hist_df = self._history_loader(today, lookback)
+                hist_df = history_loader(today, lookback)
                 if hist_df is None or hist_df.is_empty():
                     logger.debug("策略 %s 历史数据为空, 跳过本轮实时监控", sid)
                     return []
@@ -602,26 +658,28 @@ class MonitorRuleEngine:
 
         # 记录本轮完整选股结果 (供策略页实时回显: /cached 端点直接读取, 不落盘)。
         # 与下面的 diff 事件无关 — 无论是否产生 new_entry/dropped, 结果都该可用于回显。
-        try:
-            import math
-            self._latest_strategy_results[sid] = {
-                "total": result.total,
-                "as_of": str(cn_today()),
-                "rows": [
-                    {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
-                     for k, v in row.items()}
-                    for row in result.rows
-                ],
-            }
-        except Exception:  # noqa: BLE001
-            pass
+        # 策略结果缓存仅用于股票策略页 /cached 回显; ETF 策略页走实时单跑, 不写入。
+        if at == "stock":
+            try:
+                import math
+                self._latest_strategy_results[sid] = {
+                    "total": result.total,
+                    "as_of": str(cn_today()),
+                    "rows": [
+                        {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
+                         for k, v in row.items()}
+                        for row in result.rows
+                    ],
+                }
+            except Exception:  # noqa: BLE001
+                pass
 
         current_pool: set[str] = {r["symbol"] for r in result.rows}
-        prev_pool = self._strategy_pools.get(sid)
+        prev_pool = self._strategy_pools.get(pool_key)
 
         # 首次运行: 仅记录当前选股池, 不产生事件
         if prev_pool is None:
-            self._strategy_pools[sid] = current_pool
+            self._strategy_pools[pool_key] = current_pool
             return []
 
         new_entries = current_pool - prev_pool
@@ -632,7 +690,7 @@ class MonitorRuleEngine:
             return []
 
         # 更新存储
-        self._strategy_pools[sid] = current_pool
+        self._strategy_pools[pool_key] = current_pool
 
         sname = s.meta.get("name", "") or s.meta.get("id", sid)
 

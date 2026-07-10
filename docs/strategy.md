@@ -33,7 +33,7 @@
 
 ### 🤖 方式二:AI 生成
 
-一句话描述思路,LLM 读 `strategy-guide.md` 生成完整策略文件:
+一句话描述思路,LLM 读取精简运行时指南生成完整策略文件:
 
 1. **配置 AI 接口**(留空即关闭,见 [configuration.md → AI](./configuration.md#ai可选)):
    ```ini
@@ -43,21 +43,21 @@
    AI_MODEL=deepseek-chat
    ```
 2. 在选股页打开「AI 策略生成器」,用自然语言描述你的策略思路
-3. LLM 生成完整策略代码,经 `ast` 安全校验(禁止 import os/sys/subprocess 等危险模块)后
-4. 落入 `data/strategies/ai/`,文件名/ID 用 `ai_` 前缀
+3. 前端流式接收生成代码,后端经 `ast` 安全校验(禁止 import os/sys/subprocess 等危险模块)后返回结果
+4. 保存后落入 `data/strategies/ai/`,文件名/ID 用 `ai_` 前缀
 
-生成的策略会读取 `backend/app/strategy/prompts/` 下的提示词文档:
+生成策略相关提示词位于 `backend/app/strategy/prompts/`:
 
-- `strategy-guide.md` — 完整策略开发规范(作为 LLM system prompt)
-- `strategy-builder-step1.md` — 步骤 1 提示词模板(规则 → 完整代码)
+- `strategy-guide-compact.md` — AI 运行时精简指南(用于降低长请求超时概率)
+- `strategy-guide.md` — 完整策略开发规范(供人工开发和详细参考)
 - `strategy-builder-step2.md` — 步骤 2 提示词模板(修改已有策略)
 - `strategy-example.md` — 从零创建强势反包策略的三步演示
 
 > 💡 **文件与范围铁律**:AI 生成的策略只生成一个 `.py` 文件,只 `import polars as pl`,绝不修改 `backend/`、`docs/`、`frontend/` 等现有文件。
 
-### 📝 方式三:代码迁移
+### 📝 方式三:自定义编写 / 代码迁移
 
-参照开发指南把已有策略改写为 Polars 文件,放入 `data/strategies/custom/`,引擎自动发现。
+可以在选股页「自定义编写」中直接编辑策略代码并保存,新建自定义策略会落入 `data/strategies/custom/`,文件名/ID 用 `custom_` 前缀。也可以手动把已有策略改写为 Polars 文件后放入该目录,引擎会自动发现。
 
 手写策略需遵循 [`strategy-guide.md`](../backend/app/strategy/prompts/strategy-guide.md) 的文件结构(META / basic_filter / scoring / ENTRY_SIGNALS / filter 等),完整规范见该文档。
 

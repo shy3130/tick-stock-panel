@@ -33,5 +33,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // 把重型图表库拆到独立 chunk, 避免打进主包 + 让页面按需加载。
+        // 用函数形式按 node_modules 路径匹配, 比对象形式更可靠。
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('echarts')) return 'echarts'
+            if (id.includes('lightweight-charts')) return 'lightweight-charts'
+          }
+        },
+      },
+    },
   },
 })

@@ -6,9 +6,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import shutil
+import subprocess
 
 import polars as pl
 
+from app.plugins.stocksdk import bridge
 from app.plugins.stocksdk import provider as sp
 from app.plugins.stocksdk.provider import StockSDKProvider
 
@@ -16,7 +20,7 @@ from app.plugins.stocksdk.provider import StockSDKProvider
 def _patch_run_job(monkeypatch, mapping):
     """mapping: op -> payload dict(将作为 run_job 返回值)。"""
 
-    def fake(job, timeout=None):  # noqa: ARG001
+    def fake(job, timeout=None):
         return mapping[job["op"]]
 
     monkeypatch.setattr(sp.bridge, "run_job", fake)
@@ -106,13 +110,67 @@ def test_empty_symbols_returns_empty():
 
 
 def test_bridge_error_degrades_to_empty(monkeypatch):
-    def boom(job, timeout=None):  # noqa: ARG001
+    def boom(job, timeout=None):
         raise sp.bridge.StockSDKBridgeError("node missing")
 
     monkeypatch.setattr(sp.bridge, "run_job", boom)
     assert StockSDKProvider().get_daily(["600519.SH"], None, None).is_empty()
     assert StockSDKProvider().get_realtime() == []
     assert StockSDKProvider().get_instruments("stock") == []
+
+
+def test_bridge_uses_utf8_error_tolerant_subprocess(monkeypatch):
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "op": "ping"})
+        stderr = ""
+
+    monkeypatch.setattr(bridge, "_node_bin", lambda: "node")
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert bridge.run_job({"op": "ping"})["ok"] is True
+    kwargs = calls[0][1]
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+
+
+def test_bridge_mjs_resolves_local_stock_sdk_on_windows_path(tmp_path):
+    if shutil.which("node") is None:
+        raise AssertionError("node is required for stock-sdk bridge path regression test")
+
+    bridge_path = tmp_path / "bridge.mjs"
+    shutil.copyfile(bridge._BRIDGE_MJS, bridge_path)
+
+    pkg_dir = tmp_path / "node_modules" / "stock-sdk"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "package.json").write_text(
+        json.dumps({"name": "stock-sdk", "type": "module", "main": "index.js"}),
+        encoding="utf-8",
+    )
+    (pkg_dir / "index.js").write_text(
+        "export class StockSDK { static version = 'fake-local' }\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["node", str(bridge_path)],
+        input=json.dumps({"op": "ping"}),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=20,
+    )
+
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"ok": True, "op": "ping", "version": "fake-local"}
 
 
 def test_plugin_discovered_in_loader():
@@ -133,12 +191,12 @@ def test_plugin_discovered_in_loader():
 def test_plugin_registered_when_available(monkeypatch):
     """依赖可用时, 插件注册进 _PROVIDERS 并可路由。"""
     from app.data_providers import custom as cs
-    from app.data_providers.custom import loader as L
+    from app.data_providers.custom import loader
 
     # mock availability 返回 (True, "ok")
-    monkeypatch.setattr(L, "_call_check", lambda ref: (True, "ok"))
-    monkeypatch.setattr(L, "_load_entry", _load_stocksdk_entry)
-    L._load_builtin_plugins()
+    monkeypatch.setattr(loader, "_call_check", lambda ref: (True, "ok"))
+    monkeypatch.setattr(loader, "_load_entry", _load_stocksdk_entry)
+    loader._load_builtin_plugins()
 
     assert "stocksdk" in cs.names()
     assert cs.is_custom_provider("stocksdk")

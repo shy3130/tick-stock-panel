@@ -219,7 +219,8 @@ def test_trailing_take_profit_exits_after_activation():
     assert len(result.trades) == 1
     trade = result.trades[0]
     assert trade.exit_reason == "trailing_take_profit"
-    assert trade.exit_price == 11.7
+    # 纯峰值口径 (跟随 upstream): 触发线 = 峰值价 × (1 - 回撤%) = 12 × 0.97 = 11.64
+    assert trade.exit_price == 11.64
 
 
 def test_score_filter_uses_signal_day_score_range():

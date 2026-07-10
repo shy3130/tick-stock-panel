@@ -1,11 +1,12 @@
 ﻿import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles } from 'lucide-react'
+import { X, Settings2, RotateCcw, Save, ChevronDown, Filter, Star, TrendingUp, Sparkles, Download } from 'lucide-react'
 import { api, type StrategyDetail, type StrategyParamDef } from '@/lib/api'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { color } from '@/lib/colors'
 import { SignalPicker } from './SignalPicker'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
+import { Modal } from '@/components/Modal'
 
 // 内置列名 → 中文标签
 const FIELD_LABEL: Record<string, string> = {}
@@ -316,34 +317,52 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
     } finally { setDeleting(false) }
   }
 
+  const handleDownload = async () => {
+    if (!strategyId || !detail || (detail.source !== 'ai' && detail.source !== 'custom')) return
+    const src = await api.strategyGetSource(strategyId)
+    const blob = new Blob([src.code], { type: 'text/x-python;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${strategyId}.py`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
   if (!strategyId) return null
 
   return (
     <>
-      <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-        onClick={e => { if (e.target === e.currentTarget) onClose() }}
-      >
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-          transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="w-[980px] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        >
+    <Modal
+      onClose={onClose}
+      labelledBy="strategy-settings-title"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      panelClassName="w-[980px] max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+    >
           {/* 标题 */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
             <div className="flex items-center gap-2.5">
               <Settings2 className="h-4 w-4 text-accent" />
-              <span className="text-sm font-semibold text-foreground">{detail?.name ?? strategyId}</span>
+              <span id="strategy-settings-title" className="text-sm font-semibold text-foreground">{detail?.name ?? strategyId}</span>
               {detail && <span className="text-[10px] px-1.5 py-0.5 rounded bg-elevated text-muted">{{ builtin: '内置', custom: '自定义', ai: 'AI' }[detail.source] ?? detail.source}</span>}
               <span className="text-[10px] text-muted/40 font-mono">{strategyId}</span>
             </div>
-            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-elevated transition-colors cursor-pointer"><X className="h-4 w-4 text-muted" /></button>
+            <div className="flex items-center gap-2">
+              {detail && (detail.source === 'ai' || detail.source === 'custom') && (
+                <button
+                  aria-label="下载策略"
+                  title="下载策略"
+                  onClick={handleDownload}
+                  className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-border/60 bg-surface text-xs text-secondary hover:text-accent hover:border-accent/30 transition-colors cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  下载策略
+                </button>
+              )}
+              <button aria-label="关闭" onClick={onClose} className="p-1.5 rounded-lg hover:bg-elevated transition-colors cursor-pointer"><X className="h-4 w-4 text-muted" /></button>
+            </div>
           </div>
 
           {/* 内容 */}
@@ -568,11 +587,10 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
               </button>
             </div>
           </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+    </Modal>
 
-    {/* 删除确认弹窗 */}
+    {/* 删除确认弹窗 — 必须放 Modal 外: Modal 面板有 backdrop-blur (为 fixed 后代建立定位上下文)
+        + overflow-hidden, 放里面会导致本应全屏居中的确认框相对面板定位并被裁剪/错位。 */}
     {showDeleteConfirm && (
       <AnimatePresence>
         <motion.div
@@ -615,5 +633,6 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
       </AnimatePresence>
     )}
     </>
+
   )
 }

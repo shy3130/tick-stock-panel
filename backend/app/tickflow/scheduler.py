@@ -58,9 +58,11 @@ class Scheduler:
         if bucket is None:
             return
         lock = self._locks[cap]
-        async with lock:
-            while True:
+        # 只把令牌账目放锁内; sleep 放锁外, 否则一个协程在 sleep 期间独占锁,
+        # 会把同 capability 下其他有令牌可用的请求也串行阻塞。
+        while True:
+            async with lock:
                 wait = bucket.consume(n)
-                if wait == 0:
-                    return
-                await asyncio.sleep(wait)
+            if wait == 0:
+                return
+            await asyncio.sleep(wait)

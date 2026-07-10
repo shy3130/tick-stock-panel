@@ -477,7 +477,7 @@ def set_feishu_webhook_secret(secret: str) -> str:
 
 
 def get_wecom_webhook_url() -> str:
-    """企业微信群机器人 Webhook 地址 — 与飞书并列的第二推送通道。
+    """企业微信群推送 Webhook 地址 — 与飞书并列的第二推送通道。
 
     存储完整 URL (https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx);
     用户也可只填 key, 由 webhook_adapter.normalize_wecom_url 自动补全。
@@ -495,19 +495,89 @@ def set_wecom_webhook_url(url: str) -> str:
     return get_wecom_webhook_url()
 
 
-def get_webhook_enabled_default() -> bool:
-    """新建监控规则时是否默认勾选「飞书推送」。
+# ===== 企业微信智能机器人 (API 模式 / 长连接) =====
 
-    数据模型当前只有一个 webhook_enabled 布尔 (即飞书), QMT/ptrade 待定。
-    此默认值供规则编辑器新建规则时预填, 单条规则仍可独立修改。
+
+def get_wecom_bot_id() -> str:
+    """企业微信智能机器人 BotID — 机器人的唯一标识。"""
+    return load().get("wecom_bot_id", "")
+
+
+def set_wecom_bot_id(bot_id: str) -> str:
+    """保存智能机器人 BotID。传入空串表示清空。"""
+    save({"wecom_bot_id": (bot_id or "").strip()})
+    return get_wecom_bot_id()
+
+
+def get_wecom_bot_secret() -> str:
+    """企业微信智能机器人 Secret — 长连接专用密钥。"""
+    return load().get("wecom_bot_secret", "")
+
+
+def set_wecom_bot_secret(secret: str) -> str:
+    """保存智能机器人 Secret。传入空串表示清空。"""
+    save({"wecom_bot_secret": (secret or "").strip()})
+    return get_wecom_bot_secret()
+
+
+def get_wecom_bot_enabled() -> bool:
+    """智能机器人长连接是否启用。默认 False(需用户配置凭证后手动开启)。"""
+    return load().get("wecom_bot_enabled", False)
+
+
+def set_wecom_bot_enabled(enabled: bool) -> bool:
+    """保存智能机器人启用状态。"""
+    save({"wecom_bot_enabled": bool(enabled)})
+    return get_wecom_bot_enabled()
+
+
+
+def get_webhook_enabled_default() -> bool:
+    """新建监控规则时是否默认勾选推送 (老布尔, 已由 webhook_default_channels 取代)。
+
+    保留向后兼容: 读取 webhook_default_channels 非空时返回 True。
     """
-    return load().get("webhook_enabled_default", False)
+    return bool(get_webhook_default_channels())
 
 
 def set_webhook_enabled_default(enabled: bool) -> bool:
-    """保存飞书推送默认勾选态。"""
-    save({"webhook_enabled_default": bool(enabled)})
+    """保存推送默认勾选态 (老布尔兼容入口)。
+
+    新数据模型为渠道数组; 此处把老布尔转译: True→['feishu','wecom'], False→[]。
+    """
+    set_webhook_default_channels(["feishu", "wecom"] if enabled else [])
     return get_webhook_enabled_default()
+
+
+def get_webhook_default_channels() -> list[str]:
+    """新建监控规则时默认勾选的推送渠道 (多选)。
+
+    空列表 = 新建规则默认不推送; ['feishu'] = 默认推飞书。
+    此默认值供规则编辑器新建规则时预填, 单条规则仍可独立修改。
+
+    向后兼容: 老版本只有布尔 webhook_enabled_default (勾选即飞书+企业微信双推),
+    这里把 True 迁移为 ['feishu','wecom'], 还原当时的实际行为。
+    """
+    d = load()
+    raw = d.get("webhook_default_channels")
+    if isinstance(raw, list):
+        return [c for c in raw if c in REVIEW_PUSH_CHANNELS]
+    # 兼容老布尔开关 (勾选即双推)
+    if d.get("webhook_enabled_default") is True:
+        return ["feishu", "wecom"]
+    return []
+
+
+def set_webhook_default_channels(channels: list[str]) -> list[str]:
+    """保存新建规则默认推送渠道 (多选)。过滤白名单外、去重、保序。空列表 = 不推送。"""
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for c in channels or []:
+        if c in REVIEW_PUSH_CHANNELS and c not in seen:
+            seen.add(c)
+            cleaned.append(c)
+    save({"webhook_default_channels": cleaned})
+    return cleaned
 
 
 def get_screener_auto_run() -> bool:

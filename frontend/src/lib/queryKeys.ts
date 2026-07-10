@@ -33,7 +33,7 @@ export const QK = {
 
   // Screener
   screener:             ['screener'] as const,
-  screenerStrategies:   ['screener-strategies'] as const,
+  screenerStrategies:   (assetType: string = 'stock') => ['screener-strategies', assetType] as const,
   screenerCached:       (ext?: string) => ['screener-cached', ext] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   marketSnapshot:       ['market-snapshot'] as const,
@@ -41,6 +41,7 @@ export const QK = {
 
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
+  strategyDetail:       (id: string) => ['strategy-detail', id] as const,
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,

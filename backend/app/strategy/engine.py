@@ -35,6 +35,64 @@ DEFAULT_BASIC_FILTER: dict = {
 }
 
 
+def _normalize_param_defs(params: Any) -> list[dict]:
+    """把 META["params"] 归一化为标准 list[dict] (每项含 id/label/type/default).
+
+    支持的输入格式:
+    - list[dict] (标准): 保持, 补齐缺失的 id/label/type/default 字段
+    - dict ({"lookback": 20} 或 {"lookback": {"default": 20, "type": "int"}}):
+      按 key 作参数 id 转换
+    - list[str] (["lookback", "threshold"]): 每项作 id, default=None
+    - 其他类型 / 不可识别项: 丢弃并 warning 记录; 整体异常则返回空 list (降级而非崩溃)
+
+    保证下游 {p["id"]: p["default"] for p in params} 永远不会因格式问题抛 TypeError.
+    """
+    if params is None:
+        return []
+
+    # dict 格式: {"lookback": 20} 或 {"lookback": {"default": 20, "type": "int"}}
+    if isinstance(params, dict):
+        items: list[dict] = []
+        for key, val in params.items():
+            if not isinstance(key, str) or not key:
+                continue
+            if isinstance(val, dict):
+                item = {"id": key, **val}
+            else:
+                item = {"id": key, "default": val}
+            items.append(item)
+        return [_normalize_param_item(item) for item in items]
+
+    # 期望是 list/tuple, 其他类型直接降级
+    if not isinstance(params, (list, tuple)):
+        logger.warning("strategy params 非标准格式 (%s), 已降级为空 list", type(params).__name__)
+        return []
+
+    result: list[dict] = []
+    for i, p in enumerate(params):
+        if isinstance(p, str):
+            result.append({"id": p, "default": None})
+        elif isinstance(p, dict):
+            item = _normalize_param_item(p)
+            if item:  # 缺 id 等异常项 _normalize_param_item 返回空 dict, 丢弃
+                result.append(item)
+        else:
+            logger.warning("strategy params[%d] 不可识别 (%s), 已丢弃", i, type(p).__name__)
+    return result
+
+
+def _normalize_param_item(item: dict) -> dict:
+    """补齐单个参数定义的默认字段, 保证 id/label/type/default 都存在."""
+    norm = dict(item)
+    if "id" not in norm or not norm["id"]:
+        logger.warning("strategy param 定义缺少 id, 已丢弃: %s", item)
+        return {}
+    norm.setdefault("label", str(norm["id"]))
+    norm.setdefault("type", "float")
+    norm.setdefault("default", None)
+    return norm
+
+
 @dataclass
 class StrategyDef:
     """加载后的策略定义（只读数据 + filter 函数引用）"""
@@ -129,6 +187,12 @@ class StrategyEngine:
         meta.setdefault("order_by", "score")
         meta.setdefault("descending", True)
         meta.setdefault("limit", 100)
+
+        # 归一化 params 为标准 list[dict]: custom/AI 策略的 META["params"] 可能是
+        # dict / list[str] 等非标准格式 (LLM 偶发漂移 / 用户手改), 不归一化的话会在
+        # _strategy_detail() 的 {p["id"]: p["default"] for p in params} 处抛 TypeError,
+        # 导致整个 /api/strategies 列表 500. 降级为空 list 而非崩溃, 策略仍可见可用.
+        meta["params"] = _normalize_param_defs(meta.get("params"))
 
         # 合并默认基础过滤
         bf = {**DEFAULT_BASIC_FILTER}

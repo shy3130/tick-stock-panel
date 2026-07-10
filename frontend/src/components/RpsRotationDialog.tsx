@@ -7,6 +7,7 @@ import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { fmtPct } from '@/lib/format'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
+import { Modal } from '@/components/Modal'
 
 interface Props {
   onClose: () => void
@@ -128,12 +129,6 @@ export function RpsRotationDialog({ onClose }: Props) {
     handleScroll()
   }, [handleScroll, rowCount])
 
-  // ESC 关闭
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   // 选中概念的追踪行: 找出它在每个日期列的(排名, 涨幅)。
   // 每列已按涨幅降序排好, 故排名 = 该概念在数组里的索引 + 1。
@@ -204,31 +199,22 @@ export function RpsRotationDialog({ onClose }: Props) {
   }, [visibleRange, getRowIndex, dates, columns, selected])
 
   return (
-    <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        onClick={e => { if (e.target === e.currentTarget) onClose() }}
-      >
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-          transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-          className="w-[92vw] max-w-[1100px] h-[88vh] bg-surface border border-border rounded-card shadow-xl flex flex-col"
-        >
+    <Modal
+      onClose={onClose}
+      labelledBy="rps-rotation-title"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      panelClassName="w-[92vw] max-w-[1100px] h-[88vh] bg-surface border border-border rounded-card shadow-xl flex flex-col"
+    >
           {/* 标题栏 */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
             <div className="flex items-center gap-2">
               <Repeat className="h-4 w-4 text-accent" />
-              <span className="text-sm font-medium text-foreground">概念涨幅轮动</span>
+              <span id="rps-rotation-title" className="text-sm font-medium text-foreground">概念涨幅轮动</span>
               <span className="text-[11px] text-muted">
                 {conceptCount > 0 ? `${dates.length} 天 · ${conceptCount} 个概念` : '暂无数据'}
               </span>
             </div>
-            <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
+            <button aria-label="关闭" onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
               <X className="h-4 w-4 text-muted" />
             </button>
           </div>
@@ -438,8 +424,6 @@ export function RpsRotationDialog({ onClose }: Props) {
               每列各自按当日涨幅排序 · 点击单元格追踪概念在各日的排名变化
             </span>
           </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+    </Modal>
   )
 }

@@ -7,14 +7,12 @@ from __future__ import annotations
 
 import ast
 import logging
-import re
-import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# 策略开发文档路径（随 backend/app 打包进 Docker，避免 .dockerignore 排除 docs/ 导致运行时缺失）
-GUIDE_PATH = Path(__file__).resolve().parent / "prompts" / "strategy-guide.md"
+# 策略开发精简指南路径 (随 backend/app 打包进 Docker, 避免 .dockerignore 排除 docs/ 导致运行时缺失)
+GUIDE_PATH = Path(__file__).resolve().parent / "prompts" / "strategy-guide-compact.md"
 
 _SYSTEM_PREFIX = """你是A股量化策略设计专家。根据用户描述的需求，参考下方的《策略开发指南》生成一个完整的策略Python文件。
 
@@ -48,7 +46,7 @@ class AIStrategyGenerator:
             if GUIDE_PATH.exists():
                 self._guide_cache = GUIDE_PATH.read_text(encoding="utf-8")
             else:
-                logger.warning("strategy-guide.md not found at %s", GUIDE_PATH)
+                logger.warning("strategy guide not found at %s", GUIDE_PATH)
                 self._guide_cache = ""
         return self._guide_cache
 
@@ -61,11 +59,30 @@ class AIStrategyGenerator:
 
         # 调用 LLM
         code = await self._call_llm(user_prompt, guide)
+        return self.validate_code(code)
+
+    async def stream(self, user_prompt: str):
+        """Yield generated strategy code deltas from the configured AI provider."""
+        from app.services.ai_provider import stream_ai_text
+
+        guide = self._get_guide()
+        async for chunk in stream_ai_text(
+            [
+                {"role": "system", "content": _SYSTEM_PREFIX + guide},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=3000,
+        ):
+            yield chunk
+
+    def validate_code(self, code: str) -> dict:
+        code = self._extract_code_block(code)
 
         # 验证
         try:
-            meta = self.validate_code(code)
-        except ValueError as e:
+            meta = self.validate_code_or_raise(code)
+        except (SyntaxError, ValueError) as e:
             return {"code": code, "meta": {}, "valid": False, "error": str(e)}
 
         return {"code": code, "meta": meta, "valid": True, "error": None}
@@ -82,19 +99,23 @@ class AIStrategyGenerator:
             temperature=0.3,
             max_tokens=3000,
         )
+        return self._extract_code_block(content)
+
+    @staticmethod
+    def _extract_code_block(content: str) -> str:
         # Extract fenced code if the model wrapped the answer in Markdown.
         if "```python" in content:
-            content = content.split("```python", 1)[1].split("```", 1)[0].strip()
-        elif "```" in content:
-            content = content.split("```", 1)[1].split("```", 1)[0].strip()
-        return content
+            return content.split("```python", 1)[1].split("```", 1)[0].strip()
+        if "```" in content:
+            return content.split("```", 1)[1].split("```", 1)[0].strip()
+        return content.strip()
 
     # import 白名单: 策略文件只允许 polars (见 strategy-guide.md「只 import polars」)。
     # 白名单而非黑名单 — 黑名单挡不住 ctypes/importlib/builtins/pickle 等未列出的危险模块。
     _ALLOWED_IMPORT_MODULES = frozenset({"polars", "__future__"})
 
     @classmethod
-    def validate_code(cls, code: str, expected_strategy_id: str | None = None) -> dict:
+    def validate_code_or_raise(cls, code: str, expected_strategy_id: str | None = None) -> dict:
         """Validate generated/saved strategy code without executing it."""
         cls._validate_safety(code)
         try:

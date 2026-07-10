@@ -96,10 +96,21 @@ class JobStore:
 
     # ===== lifecycle =====
 
-    def create(self) -> str:
+    def create(self) -> tuple[str, bool]:
+        """单飞创建任务。返回 (job_id, is_new)。
+
+        去重条件为 **pending ∨ running**(而非仅 running):`/run` 先 create() 再在
+        后台任务里 start() 置 running,两者之间存在 pending 窗口。旧实现只在 running 时
+        复用,两次快速点击时首个 job 仍是 pending → 第二次绕过去重、另起并发任务、覆盖
+        _active_id,导致两条全市场拉取同时读改写同一 parquet。纳入 pending 后该窗口关闭。
+
+        is_new=False 表示复用了已有活跃任务,调用方**不得**再调度新的后台任务。
+        """
         with self._lock:
-            if self._active_id and self._active_jobs.get(self._active_id, {}).get("status") == "running":
-                return self._active_id
+            if self._active_id:
+                active = self._active_jobs.get(self._active_id)
+                if active and active.get("status") in ("pending", "running"):
+                    return self._active_id, False
 
             job_id = uuid.uuid4().hex[:10]
             self._active_jobs[job_id] = {
@@ -116,7 +127,7 @@ class JobStore:
                 "error": None,
             }
             self._active_id = job_id
-            return job_id
+            return job_id, True
 
     def start(self, job_id: str) -> None:
         with self._lock:
@@ -283,3 +294,32 @@ def _duration_s(j: dict[str, Any]) -> float | None:
 
 # 进程内单例
 job_store = JobStore()
+
+
+# ================================================================
+# 重任务互斥锁 — 防「僵尸并发」
+# ================================================================
+# create() 的单飞去重能挡住 pending/running 窗口内的重复点击, 但挡不住
+# reap_stale 把卡死 job 标记 failed、清掉 _active_id 之后 —— 此时 executor
+# 线程仍在跑(线程无法被中断), 下一次 /run 会视作无活跃任务而另起一条,
+# 与僵尸线程并发读改写同一 parquet。
+#
+# 该锁绑定「实际执行体(协程/线程)」的生命周期而非 job 状态: 每个重任务在真正
+# 开跑前 try_acquire_run_slot(), 结束(含异常)在 finally 里 release_run_slot()。
+# 僵尸任务因卡在 executor await 中始终未 release, 新任务 try_acquire 失败 → 快速
+# 失败而非并发执行。代价: 真卡死时需重启进程才能再次跑重任务(优先保证数据不损坏)。
+_heavy_run_lock = threading.Lock()
+
+
+def try_acquire_run_slot() -> bool:
+    """尝试占用重任务执行槽(非阻塞)。成功返回 True。"""
+    return _heavy_run_lock.acquire(blocking=False)
+
+
+def release_run_slot() -> None:
+    """释放重任务执行槽(允许跨线程释放)。"""
+    try:
+        _heavy_run_lock.release()
+    except RuntimeError:
+        # 未持有(重复释放)—— 幂等忽略
+        pass

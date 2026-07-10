@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -324,7 +324,10 @@ function RealtimeDot({ title = '实时监控中' }: { title?: string }) {
 
 // ===== 卡片组件 =====
 
-function StockCard({
+// 共享的空 K 线数组常量 — 避免每次渲染传入新的 [] 破坏 StockCard 的 memo
+const EMPTY_KLINE: KlineRow[] = []
+
+const StockCard = React.memo(function StockCard({
   r,
   candleRows,
   showCandle,
@@ -332,7 +335,7 @@ function StockCard({
   onConfirmRemove,
   onCancelRemove,
   onRequestRemove,
-  confirmRemove,
+  isConfirming,
   extCols,
   expandedCells,
   onToggleExpand,
@@ -345,7 +348,7 @@ function StockCard({
   onConfirmRemove: (symbol: string) => void
   onCancelRemove: () => void
   onRequestRemove: (symbol: string) => void
-  confirmRemove: string | null
+  isConfirming: boolean
   extCols: ColumnConfig[]
   expandedCells: Set<string>
   onToggleExpand: (key: string) => void
@@ -380,7 +383,7 @@ function StockCard({
 
       {/* 删除按钮 / 确认区 */}
       <div className="absolute top-1.5 right-1.5 z-10">
-        {confirmRemove === r.symbol ? (
+        {isConfirming ? (
           <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
             <button
               onClick={() => onConfirmRemove(r.symbol)}
@@ -489,7 +492,7 @@ function StockCard({
       )}
     </div>
   )
-}
+})
 
 // ===== 主页面 =====
 
@@ -657,7 +660,7 @@ export function Watchlist() {
       // 2. 清除 list 缓存，触发后台 refetch
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-      qc.invalidateQueries({ queryKey: QK.watchlistKlineBatch('') })
+      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
     },
   })
 
@@ -681,13 +684,23 @@ export function Watchlist() {
       qc.setQueryData(['watchlist-enriched', extColumnsParam], { rows: [], as_of: null, elapsed_ms: 0 })
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
-      qc.invalidateQueries({ queryKey: QK.watchlistKlineBatch('') })
+      qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
     },
   })
 
   // 二次确认状态
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+
+  // 稳定的 per-symbol 回调 (供 memo 化的 StockCard 使用, 避免每次渲染都传新引用)
+  const handleCardPreview = useCallback((sym: string, name: string) => {
+    setPreviewSymbol(sym); setPreviewName(name)
+  }, [])
+  const handleCardConfirmRemove = useCallback((sym: string) => {
+    remove.mutate(sym); setConfirmRemove(null)
+  }, [remove])
+  const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
+  const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
 
   const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
   const rows = enriched.data?.rows ?? []
@@ -811,8 +824,17 @@ export function Watchlist() {
     [visibleColumns]
   )
 
-  // 被过滤掉的个股数 (筛选/板块过滤导致的隐藏)
-  const hiddenCount = Math.max(0, allSymbols.length - sortedRows.length)
+  // "数据未就绪" 的个股数: 后端 LEFT JOIN 保证返回所有自选行,
+  // 指标全为 null 的行属于 enriched 缓存未覆盖 (新股/冷门/新用户未同步), 非筛选导致.
+  // 用 close 是否为 null/undefined 判断 "整行指标缺失" (close 是 enriched 最基础字段).
+  const pendingCount = useMemo(
+    () => sortedRows.filter((r: any) => r.close == null).length,
+    [sortedRows],
+  )
+
+  // "被筛选条件隐藏" 的个股数: 后端返回的行数 vs 经过前端筛选后的行数.
+  // rows.length 是后端实际返回 (含 pending 行), 减去 sortedRows (筛选后) 才是真正的筛选隐藏.
+  const hiddenCount = Math.max(0, rows.length - sortedRows.length)
 
   return (
     <div className="flex flex-col h-full">
@@ -828,7 +850,17 @@ export function Watchlist() {
               <span className="font-mono text-muted tabular-nums">{allSymbols.length}</span>
               <span className="text-muted/60 ml-0.5">只</span>
             </span>
-            {/* 过滤提示: 仅在有隐藏时出现, 柔和橙色融入整体 */}
+            {/* 数据未就绪提示: 自选了但 enriched 缓存未覆盖 (新股/冷门/新用户未同步), 指标全为 null */}
+            {pendingCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-muted/15 text-muted border border-border/50 whitespace-nowrap"
+                title={`当前有 ${pendingCount} 只指标暂未就绪 (新股/冷门股或数据尚未同步), 等待每日数据更新后自动补全`}
+              >
+                <Clock className="h-2.5 w-2.5" />
+                待数据 {pendingCount}
+              </span>
+            )}
+            {/* 过滤提示: 仅在有筛选隐藏时出现, 柔和橙色融入整体 */}
             {hiddenCount > 0 && (
               <span
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-warning/12 text-warning/90 border border-warning/25 whitespace-nowrap"
@@ -1189,13 +1221,13 @@ export function Watchlist() {
                 <StockCard
                   key={r.symbol}
                   r={r}
-                  candleRows={klineData[r.symbol] ?? []}
+                  candleRows={klineData[r.symbol] ?? EMPTY_KLINE}
                   showCandle={dailyKVisible}
-                  onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
-                  onConfirmRemove={(sym) => { remove.mutate(sym); setConfirmRemove(null) }}
-                  onCancelRemove={() => setConfirmRemove(null)}
-                  onRequestRemove={(sym) => setConfirmRemove(sym)}
-                  confirmRemove={confirmRemove}
+                  onPreview={handleCardPreview}
+                  onConfirmRemove={handleCardConfirmRemove}
+                  onCancelRemove={handleCardCancelRemove}
+                  onRequestRemove={handleCardRequestRemove}
+                  isConfirming={confirmRemove === r.symbol}
                   extCols={visibleExtCols}
                   expandedCells={expandedCells}
                   onToggleExpand={handleToggleExpand}

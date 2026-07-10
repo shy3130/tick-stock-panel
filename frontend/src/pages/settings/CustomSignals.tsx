@@ -5,6 +5,7 @@ import { api, type CustomSignal } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { BUILTIN_SIGNAL_DEFINITIONS, type SignalKind } from '@/lib/signals'
 import { CustomSignalDialog } from '@/components/signals/CustomSignalDialog'
+import { Skeleton } from '@/components/data/Skeleton'
 
 type SignalSection = 'builtin' | 'custom'
 
@@ -242,7 +243,15 @@ export function SettingsCustomSignalsPanel() {
                 </div>
               </div>
             ))}
-            {signals.length === 0 && (
+            {list.isLoading &&
+              Array.from({ length: 2 }).map((_, i) => (
+                <div key={`sk-${i}`} className="rounded-card border border-border bg-base p-4 space-y-3">
+                  <Skeleton w="w-1/2" h="h-4" />
+                  <Skeleton w="w-1/3" h="h-3" />
+                  <Skeleton h="h-4" />
+                </div>
+              ))}
+            {!list.isLoading && signals.length === 0 && (
               <div className="rounded-card border border-border bg-base px-5 py-10 text-center text-sm text-muted md:col-span-2">
                 暂无自定义信号，点击右上角「新建自定义信号」。
               </div>

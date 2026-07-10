@@ -367,9 +367,12 @@ def build_market_overview(
         as_of: 指定日期,None 则取最新有数据日。
     """
     svc = ScreenerService(repo)
+    # 调用方未指定日期时视为"最新"请求: 指数行情走实时缓存 (quote_service),
+    # 其余装配仍以解析出的真实日期为准。显式指定日期(历史复盘)时才回退数据库。
+    explicit_as_of = as_of is not None
     as_of = as_of or svc.latest_date()
     status = _quote_status(quote_service)
-    indices = _index_quotes(repo, quote_service, as_of)
+    indices = _index_quotes(repo, quote_service, None if not explicit_as_of else as_of)
 
     if not as_of:
         return {

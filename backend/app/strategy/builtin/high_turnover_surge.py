@@ -30,7 +30,7 @@ ALERTS = []
 
 
 def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
-    min_to = params.get("min_turnover", 5.0) / 100.0
+    min_to = params.get("min_turnover", 5.0)
     min_chg = params.get("min_change", 3.0) / 100.0
     expr = pl.col("symbol").is_not_null() | pl.col("symbol").is_null()
     if params.get("use_turnover_filter", True):

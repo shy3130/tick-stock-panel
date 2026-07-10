@@ -17,11 +17,11 @@ export function PageHeader({ title, subtitle, titleExtra, right, className, icon
   return (
     <header
       className={cn(
-        'px-5 pt-3 pb-2 border-b border-border flex items-center justify-between gap-4',
+        'flex flex-col items-stretch justify-between gap-2 border-b border-border px-3 pb-2 pt-3 lg:flex-row lg:items-center lg:gap-4 lg:px-5',
         className,
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         {Icon && groupColor && (
           <span
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
@@ -30,11 +30,11 @@ export function PageHeader({ title, subtitle, titleExtra, right, className, icon
             <Icon className="h-4 w-4" />
           </span>
         )}
-        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+        <h1 className="shrink-0 whitespace-nowrap text-lg font-semibold tracking-tight">{title}</h1>
         {titleExtra}
-        {subtitle && <span className="text-xs text-muted">{subtitle}</span>}
+        {subtitle && <span className="min-w-0 basis-full text-xs text-muted xl:basis-auto">{subtitle}</span>}
       </div>
-      {right}
+      {right && <div className="w-full min-w-0 overflow-x-auto lg:w-auto lg:shrink-0">{right}</div>}
     </header>
   )
 }

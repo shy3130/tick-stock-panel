@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -33,6 +35,11 @@ def _json_default(obj: Any) -> Any:
 logger = logging.getLogger(__name__)
 
 _CACHE_FILENAME = "strategy_cache.json"
+
+# 读写同一 JSON 文件的进程内锁: write_cache 的 read-modify-write 与并发 read_cache
+# 无锁会丢更新/读到半写文件。read_cache 与 write_cache 共用此锁; write 内部复用
+# _read_cache_unlocked 避免自死锁。写入用临时文件 + os.replace 做到原子替换。
+_file_lock = threading.Lock()
 
 
 def _cache_path(data_dir: Path) -> Path:
@@ -62,6 +69,12 @@ def read_cache(data_dir: Path) -> dict | None:
     保护价值有限。故移除: 盘后缓存总能读出, 实时新鲜度由 /api/screener/cached
     端点叠加监控引擎的内存实时结果 (latest_strategy_results) 来保证。
     """
+    with _file_lock:
+        return _read_cache_unlocked(data_dir)
+
+
+def _read_cache_unlocked(data_dir: Path) -> dict | None:
+    """实际读取逻辑 (不持锁)。供 read_cache 与 write_cache 复用, 避免重入死锁。"""
     path = _cache_path(data_dir)
     if not path.exists():
         return None
@@ -100,8 +113,20 @@ def write_cache(
     path = _cache_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 读取旧缓存
-    old = read_cache(data_dir)
+    # 整个 read-modify-write 持锁: 避免并发 write 丢更新, 也避免与 read_cache 撕裂
+    with _file_lock:
+        _write_cache_locked(path, data_dir, as_of, results)
+
+
+def _write_cache_locked(
+    path: Path,
+    data_dir: Path,
+    as_of: str,
+    results: dict[str, Any],
+) -> None:
+    """持 _file_lock 后的实际写入逻辑 (read-merge-write + 原子替换)。"""
+    # 读取旧缓存 (已持锁, 走不重入的 _read_cache_unlocked)
+    old = _read_cache_unlocked(data_dir)
     old_as_of = old.get("as_of") if old else None
     old_ever_rows: dict[str, dict[str, dict]] = old.get("today_ever_rows", {}) if old else {}
 
@@ -141,7 +166,10 @@ def write_cache(
         "updated_at": int(time.time() * 1000),
     }
     try:
-        path.write_text(json.dumps(payload, ensure_ascii=False, default=_json_default), encoding="utf-8")
+        # 原子写: 先写临时文件再 os.replace, 避免读侧读到半写的 JSON
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, default=_json_default), encoding="utf-8")
+        os.replace(tmp, path)
         total_rows = sum(len(r.get("rows", [])) for r in results.values())
         total_ever = sum(len(v) for v in today_ever_matched.values())
         logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(results), total_rows, total_ever)

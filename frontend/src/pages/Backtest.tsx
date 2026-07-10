@@ -3,9 +3,10 @@ import { PageHeader } from '@/components/PageHeader'
 import { getNavIconMeta } from '@/lib/navRegistry'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
-import { BarChart3, FlaskConical } from 'lucide-react'
+import { StrategyOptimizer } from './backtest/StrategyOptimizer'
+import { BarChart3, FlaskConical, SlidersHorizontal } from 'lucide-react'
 
-type Tab = 'factor' | 'strategy'
+type Tab = 'factor' | 'strategy' | 'optimizer'
 
 const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   factor: {
@@ -18,21 +19,32 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
     subtitle: '验证完整选股和交易规则',
     hint: '看净值曲线、回撤、胜率和交易明细，适合判断策略是否可执行。',
   },
+  optimizer: {
+    title: '参数优化',
+    subtitle: '网格搜索最优参数组合',
+    hint: '并行回测所有参数组合，按夏普/索提诺等目标排序，找到最优参数。',
+  },
+}
+
+const TAB_ICONS: Record<Tab, typeof BarChart3> = {
+  factor: BarChart3,
+  strategy: FlaskConical,
+  optimizer: SlidersHorizontal,
 }
 
 export function Backtest() {
   const [activeTab, setActiveTab] = useState<Tab>('strategy')
 
   const modeSwitch = (
-    <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
-      {(['factor', 'strategy'] as const).map(tab => {
-        const Icon = tab === 'factor' ? BarChart3 : FlaskConical
+    <div className="inline-flex min-w-max rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
+      {(['factor', 'strategy', 'optimizer'] as const).map(tab => {
+        const Icon = TAB_ICONS[tab]
         const active = activeTab === tab
         return (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
               active
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-secondary hover:bg-elevated hover:text-foreground'
@@ -40,6 +52,13 @@ export function Backtest() {
           >
             <Icon className="h-3.5 w-3.5" />
             {MODES[tab].title}
+            {tab === 'optimizer' && (
+              <span className={`rounded border px-1 py-px text-[8px] font-semibold uppercase ${
+                active ? 'border-white/40 bg-white/15 text-white' : 'border-amber-400/30 bg-amber-400/10 text-amber-400'
+              }`}>
+                Beta
+              </span>
+            )}
           </button>
         )
       })}
@@ -59,6 +78,7 @@ export function Backtest() {
       <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
         {activeTab === 'factor' && <FactorBacktest />}
         {activeTab === 'strategy' && <StrategyBacktest />}
+        {activeTab === 'optimizer' && <StrategyOptimizer />}
       </main>
     </div>
   )

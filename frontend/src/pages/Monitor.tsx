@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { Skeleton } from '@/components/data/Skeleton'
 import { api, type MonitorRule, type AlertEvent, type MonitorCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { getNavIconMeta } from '@/lib/navRegistry'
@@ -241,7 +242,13 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
 
   return (
     <div className="space-y-3">
-      {events.length === 0 ? (
+      {alertsQuery.isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} h="h-14" rounded="rounded-card" />
+          ))}
+        </div>
+      ) : events.length === 0 ? (
         <EmptyState
           icon={Bell}
           title="暂无触发记录"
@@ -515,7 +522,13 @@ function RulesList({ rulesQuery, onEdit }: {
 
   return (
     <div className="space-y-2.5">
-      {rules.length === 0 ? (
+      {rulesQuery.isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} h="h-16" rounded="rounded-card" />
+          ))}
+        </div>
+      ) : rules.length === 0 ? (
         <EmptyState
           icon={RadioTower}
           title="暂无监控规则"

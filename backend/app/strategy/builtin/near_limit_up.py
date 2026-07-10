@@ -4,19 +4,20 @@ import polars as pl
 
 def _limit_pct() -> pl.Expr:
     """根据板块和 ST 动态计算涨跌幅限制 (小数)。
-    创业板(300/301)/科创板(688): 20%
+    创业板(300/301)/科创板(688): 20% (含其 ST)
     北交所(.BJ): 30%
-    ST: 5%
-    主板: 10%
+    主板 ST: 5%  ← ST 5% 仅主板生效, 创业板/科创板 ST 仍是 20%
+    主板普通: 10%
     """
     is_st = pl.col("name").str.contains("(?i)ST").fill_null(False)
     is_cyb = pl.col("symbol").str.starts_with("300") | pl.col("symbol").str.starts_with("301")
     is_kcb = pl.col("symbol").str.starts_with("688")
     is_bj = pl.col("symbol").str.contains(r"\.BJ$")
     return (
-        pl.when(is_st).then(0.05)
-        .when(is_cyb | is_kcb).then(0.20)
+        # 板块判定优先于 ST: 创业板/科创板 ST 保留 20%, 北交所 30%; ST 5% 只剩主板
+        pl.when(is_cyb | is_kcb).then(0.20)
         .when(is_bj).then(0.30)
+        .when(is_st).then(0.05)
         .otherwise(0.10)
     )
 

@@ -83,6 +83,7 @@ function LoadingPanel({ symbolsText }: { symbolsText: string }) {
 export function FactorBacktest() {
   const [factorName, setFactorName] = useState('momentum_20d')
   const [symbols, setSymbols] = useState('')
+  const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
   const [start, setStart] = useState(THREE_MONTHS_AGO)
   const [end, setEnd] = useState(TODAY)
   const [nGroups, setNGroups] = useState(5)
@@ -114,6 +115,7 @@ export function FactorBacktest() {
     mutationFn: () =>
       api.factorRun({
         factor_name: factorName,
+        asset_type: assetType,
         symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
         start: start || null,
         end: end || undefined,
@@ -194,8 +196,22 @@ export function FactorBacktest() {
         </div>
 
         <div>
+          <label className="text-xs font-medium text-secondary block mb-1.5">资产类型</label>
+          <div className="inline-flex h-8 rounded-btn border border-border overflow-hidden mb-2">
+            {(['stock', 'etf'] as const).map(t => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => { setAssetType(t); setSymbols('') }}
+                className={`h-full px-3 text-xs font-medium transition-colors cursor-pointer
+                  ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
+              >
+                {t === 'stock' ? '股票' : 'ETF'}
+              </button>
+            ))}
+          </div>
           <label className="text-xs font-medium text-secondary block mb-1.5">
-            标的(逗号分隔，留空=全市场)
+            标的(逗号分隔，留空=全市场{assetType === 'etf' ? ' ETF' : ''})
           </label>
           <input
             type="text"

@@ -415,8 +415,7 @@ function StockList({ title, rows, mode, onStockClick }: {
                 </>
               ) : mode === 'active' ? (
                 <>
-                  {/* overview 的 turnover_rate 为小数制, 需 ×100 转百分数显示 */}
-                  <div className="font-mono text-[11px] text-accent">{fmtPrice(r.turnover_rate != null ? r.turnover_rate * 100 : null, 1)}%</div>
+                  <div className="font-mono text-[11px] text-accent">{fmtPrice(r.turnover_rate, 1)}%</div>
                   <div className={`font-mono text-[9px] ${pctClass(r.change_pct)}`}>{fmtStockPct(r.change_pct)}</div>
                 </>
               ) : (

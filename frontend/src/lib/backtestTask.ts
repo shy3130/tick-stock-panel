@@ -25,7 +25,12 @@ export interface BacktestTask {
   result: StrategyBacktestResult | null
   progress: BacktestProgress | null
   error: string | null
+  /** 连接中断、正在有界重连中 (UI 显示"连接中断，重试中") */
+  reconnecting: boolean
 }
+
+// 连接断开后最多自动重连次数, 超过则放弃并进入可重试的错误态
+const MAX_RECONNECT_ATTEMPTS = 5
 
 let current: BacktestTask | null = null
 const listeners = new Set<() => void>()
@@ -73,11 +78,28 @@ function connectSSE(url: string): void {
   const es = new EventSource(url)
   eventSource = es
 
+  // 本次连接的重连计数 (EventSource 断开会自动重连并再次触发 onerror)
+  let reconnectAttempts = 0
+
+  const clearReconnecting = () => {
+    if (current?.id === id && current.reconnecting) {
+      current = { ...current, reconnecting: false }
+      emit()
+    }
+    reconnectAttempts = 0
+  }
+
+  es.onopen = () => {
+    clearReconnecting()
+  }
+
   es.addEventListener('progress', (e: MessageEvent) => {
     if (current?.id !== id) return
+    // 收到数据说明连接恢复正常
+    reconnectAttempts = 0
     try {
       const prog = JSON.parse(e.data) as BacktestProgress
-      current = { ...current, progress: prog }
+      current = { ...current, progress: prog, reconnecting: false }
       emit()
     } catch { /* ignore */ }
   })
@@ -86,10 +108,10 @@ function connectSSE(url: string): void {
     if (current?.id !== id) return
     try {
       const result = JSON.parse(e.data) as StrategyBacktestResult
-      current = { ...current, isPending: false, result, error: null }
+      current = { ...current, isPending: false, result, error: null, reconnecting: false }
       emit()
     } catch {
-      current = { ...current, isPending: false, error: '结果解析失败' }
+      current = { ...current, isPending: false, error: '结果解析失败', reconnecting: false }
       emit()
     }
     es.close()
@@ -103,17 +125,36 @@ function connectSSE(url: string): void {
     if (e.data) {
       try {
         const msg = JSON.parse(e.data)?.message ?? '回测出错'
-        current = { ...current, isPending: false, error: msg }
+        current = { ...current, isPending: false, error: msg, reconnecting: false }
         emit()
       } catch {
-        current = { ...current, isPending: false, error: '回测出错' }
+        current = { ...current, isPending: false, error: '回测出错', reconnecting: false }
         emit()
       }
       es.close()
       eventSource = null
       localStorage.removeItem(RECONNECT_KEY)
+      return
     }
-    // 无 data: 连接异常断开, EventSource 会自动重连, 不改变状态
+    // 无 data: 连接异常断开。EventSource 会自动重连, 但需给出可见状态并有界放弃,
+    // 避免进度条永久冻结、isPending 永远 true。
+    reconnectAttempts += 1
+    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+      // 放弃: 停止自动重连, 进入可重试的错误态 (用户可重新发起回测)
+      es.close()
+      eventSource = null
+      current = {
+        ...current,
+        isPending: false,
+        reconnecting: false,
+        error: '连接中断，请重试',
+      }
+      emit()
+      return
+    }
+    // 仍在重试窗口内: 标记 reconnecting, 让 UI 显示"连接中断，重试中"
+    current = { ...current, reconnecting: true }
+    emit()
   })
 }
 
@@ -138,6 +179,7 @@ export function startBacktest(params: {
   overrides?: Record<string, any> | null
   mode?: 'position' | 'full'
   holding_days?: number
+  asset_type?: 'stock' | 'etf'
 }): void {
   // 取消之前的任务状态
   if (eventSource) {
@@ -146,7 +188,7 @@ export function startBacktest(params: {
   }
 
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null }
+  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
   emit()
 
   const qs = buildQuery({
@@ -169,6 +211,7 @@ export function startBacktest(params: {
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     mode: params.mode,
     holding_days: params.holding_days,
+    asset_type: params.asset_type,
   })
 
   // 存 reconnect 信息 (刷新后用)
@@ -201,7 +244,7 @@ export async function stopBacktest(): Promise<void> {
     eventSource = null
   }
   if (current?.isPending) {
-    current = { ...current, isPending: false, error: '已取消' }
+    current = { ...current, isPending: false, error: '已取消', reconnecting: false }
     emit()
   }
   localStorage.removeItem(RECONNECT_KEY)
@@ -219,7 +262,7 @@ export function tryReconnect(): boolean {
   if (!qs) return false
   // 有未完成的任务, 重连
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null }
+  current = { id, isPending: true, result: null, progress: null, error: null, reconnecting: false }
   emit()
   connectSSE(`/api/backtest/strategy/stream?${qs}`)
   return true

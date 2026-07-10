@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { SSE_INVALIDATE_PREFIXES, QK } from './queryKeys'
 import { getQueryConfig } from './useQueryConfig'
@@ -6,6 +6,45 @@ import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
 import { feedReviewEvent } from './reviewStore'
 import type { StrategyAlertEvent } from './api'
+
+// ===== 全局 SSE 连接状态 (模块级 store, 仿 AlertToast.tsx 模式) =====
+// 实时行情 SSE 断开时 UI 无感知 → 会漏掉策略告警。这里暴露连接状态,
+// 供 Layout 顶部渲染徽标、连续失败 N 次后弹一次 toast。
+export type QuoteStreamStatus = 'connected' | 'reconnecting' | 'disconnected'
+
+let _streamStatus: QuoteStreamStatus = 'disconnected'
+const _statusListeners = new Set<() => void>()
+
+// 连续失败到达该阈值后弹一次 toast (只弹一次, 恢复后重置)
+const FAILS_BEFORE_TOAST = 3
+// 指数退避上限
+const BACKOFF_CAP_MS = 60_000
+
+function _emitStatus() {
+  _statusListeners.forEach((fn) => fn())
+}
+
+function _setStatus(s: QuoteStreamStatus) {
+  if (_streamStatus === s) return
+  _streamStatus = s
+  _emitStatus()
+}
+
+function _subscribeStatus(fn: () => void) {
+  _statusListeners.add(fn)
+  return () => {
+    _statusListeners.delete(fn)
+  }
+}
+
+function _getStatus() {
+  return _streamStatus
+}
+
+/** React hook: 读取全局实时行情 SSE 连接状态 (供 Layout 徽标使用) */
+export function useQuoteStreamStatus(): QuoteStreamStatus {
+  return useSyncExternalStore(_subscribeStatus, _getStatus, () => 'disconnected' as const)
+}
 
 /**
  * 全局 SSE hook: 监听后端行情更新推送 + 策略监控通知。
@@ -54,9 +93,21 @@ export function useQuoteStream(
     // SSE 始终连接 — 监控告警不依赖实时行情开关
     // (quotes_updated 行情刷新受 enabled 控制, strategy_alert 始终处理)
 
+    // 连续失败计数 (用于指数退避 + 到阈值弹一次 toast)
+    let failCount = 0
+    let toastFired = false
+
     const connect = () => {
+      _setStatus(failCount > 0 ? 'reconnecting' : _streamStatus)
       const es = new EventSource('/api/intraday/stream')
       esRef.current = es
+
+      es.onopen = () => {
+        // 连接成功: 重置退避与 toast 标记
+        failCount = 0
+        toastFired = false
+        _setStatus('connected')
+      }
 
       // sse-starlette ping 心跳走 SSE comment，不会到达这里
 
@@ -129,7 +180,16 @@ export function useQuoteStream(
       es.onerror = () => {
         es.close()
         esRef.current = null
-        const delay = getQueryConfig().sse.reconnectDelay
+        failCount += 1
+        _setStatus('reconnecting')
+        // 连续失败到阈值 → 弹一次 toast (漏行情=可能漏策略告警, 需明确告知)
+        if (failCount >= FAILS_BEFORE_TOAST && !toastFired) {
+          toastFired = true
+          toast('实时连接已断开，正在重连…', 'error')
+        }
+        // 指数退避 (base * 2^(n-1), 上限 60s), 替代原来固定 5s
+        const base = getQueryConfig().sse.reconnectDelay
+        const delay = Math.min(base * 2 ** (failCount - 1), BACKOFF_CAP_MS)
         retryRef.current = setTimeout(connect, delay)
       }
     }
@@ -142,6 +202,7 @@ export function useQuoteStream(
         esRef.current.close()
         esRef.current = null
       }
+      _setStatus('disconnected')
     }
   }, [qc, handleAlerts])
 }

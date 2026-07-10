@@ -154,6 +154,11 @@ def validate(rule: dict) -> None:
         syms = rule.get("symbols")
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
+    # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,
+    # 一条本意针对某板块的规则会对全市场每只命中都触发(告警风暴)。在板块 JOIN
+    # 落地前, 拒绝创建 sector 规则(fail-closed), 避免用户建出会刷屏的规则。
+    if rule.get("scope") == "sector":
+        raise ValueError("scope=sector 暂未支持(板块 JOIN 未实现),请改用 scope=symbols 指定标的或 scope=all")
 
     # 其余枚举
     if rule.get("severity", "info") not in SEVERITIES:
@@ -167,6 +172,7 @@ def normalize(rule: dict) -> dict:
     """补全默认字段,返回规范化后的规则 (不校验)。"""
     r = dict(rule)
     r.setdefault("enabled", True)
+    r.setdefault("asset_type", "stock")
     r.setdefault("scope", "symbols")
     r.setdefault("symbols", [])
     r.setdefault("sector", None)
@@ -183,6 +189,15 @@ def normalize(rule: dict) -> dict:
     r.setdefault("message", "")
     r.setdefault("webhook_url", "")
     r.setdefault("webhook_enabled", False)
+    # webhook_channels: 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')。
+    # 向后兼容: 老规则只有 webhook_enabled 布尔 (当时勾选即飞书+企业微信双推),
+    # 这里把 webhook_enabled=True 但未带 webhook_channels 的老规则迁移为 ['feishu','wecom'],
+    # 还原其当时的实际行为, 用户无感知。
+    if r.get("webhook_channels") is None:
+        r["webhook_channels"] = ["feishu", "wecom"] if r.get("webhook_enabled") else []
+    else:
+        # 防御性过滤, 只保留合法渠道
+        r["webhook_channels"] = [c for c in r["webhook_channels"] if c in ("feishu", "wecom")]
     r.setdefault("created_at", datetime.now(timezone.utc).isoformat())
     return r
 

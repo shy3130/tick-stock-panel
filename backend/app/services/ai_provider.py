@@ -144,12 +144,17 @@ async def _run_openai_once(
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
     client = _openai_client(ai_key, timeout)
-    resp = await client.chat.completions.create(
-        model=current_ai_model(),
-        messages=list(messages),
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    try:
+        resp = await client.chat.completions.create(
+            model=current_ai_model(),
+            messages=list(messages),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as exc:
+        if _is_openai_transport_error(exc):
+            raise RuntimeError(_format_openai_error(exc)) from exc
+        raise
     if not resp.choices:
         return ""
     return (resp.choices[0].message.content or "").strip()
@@ -167,18 +172,23 @@ async def _stream_openai(
         raise RuntimeError("AI API Key 未配置, 请在设置页配置")
 
     client = _openai_client(ai_key, timeout)
-    stream = await client.chat.completions.create(
-        model=current_ai_model(),
-        messages=list(messages),
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=True,
-    )
+    try:
+        stream = await client.chat.completions.create(
+            model=current_ai_model(),
+            messages=list(messages),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
 
-    async for chunk in stream:
-        delta = chunk.choices[0].delta if chunk.choices else None
-        if delta and delta.content:
-            yield delta.content
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+    except Exception as exc:
+        if _is_openai_transport_error(exc):
+            raise RuntimeError(_format_openai_error(exc)) from exc
+        raise
 
 
 def _openai_client(api_key: str, timeout: float):
@@ -189,9 +199,97 @@ def _openai_client(api_key: str, timeout: float):
         api_key=api_key,
         base_url=normalize_openai_base_url(secrets_store.get_ai_config("ai_base_url", settings.ai_base_url)),
         timeout=timeout,
-        max_retries=2,
+        max_retries=0,
         default_headers={"User-Agent": user_agent},
     )
+
+
+def _is_openai_transport_error(exc: Exception) -> bool:
+    try:
+        import openai
+    except ImportError:
+        openai = None
+
+    if openai is not None and isinstance(exc, openai.APIError):
+        return True
+
+    try:
+        import httpx
+    except ImportError:
+        return False
+
+    return isinstance(exc, httpx.HTTPError)
+
+
+def _format_openai_error(exc: Exception) -> str:
+    status = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status is None and response is not None:
+        status = getattr(response, "status_code", None)
+
+    class_name = exc.__class__.__name__
+    if "Timeout" in class_name:
+        return "AI 服务请求超时, 请稍后重试或检查 AI Base URL / 网络"
+    if "Connection" in class_name:
+        return "AI 服务连接失败, 请检查 AI Base URL / 网络"
+
+    detail = _openai_error_detail(exc)
+    status_messages = {
+        400: "请求参数无效, 请检查模型名称和上下文长度",
+        401: "API Key 无效或无权限, 请检查设置页配置",
+        403: "AI 服务拒绝访问, 请检查账号权限或网关配置",
+        404: "模型或接口地址不存在, 请检查 AI Base URL 和模型名称",
+        408: "AI 服务请求超时, 请稍后重试",
+        429: "AI 服务限流或额度不足, 请稍后重试或检查额度",
+        500: "AI 服务内部错误, 请稍后重试",
+        502: "AI 网关返回错误, 请稍后重试或检查 AI Base URL",
+        503: "AI 服务暂时不可用, 请稍后重试",
+        504: "AI 上游服务超时, 请稍后重试或检查 AI Base URL / 网络",
+    }
+    message = status_messages.get(status) or detail or "请稍后重试或检查 AI 服务配置"
+    if status:
+        return f"AI 服务请求失败({status}): {message}"
+    return f"AI 服务请求失败: {message}"
+
+
+def _openai_error_detail(exc: Exception) -> str:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            text = error.get("message") or error.get("code") or error.get("type")
+            return _compact_error_text(str(text or ""))
+        if isinstance(error, str):
+            return _compact_error_text(error)
+
+    response = getattr(exc, "response", None)
+    content_type = ""
+    text = ""
+    if response is not None:
+        content_type = response.headers.get("content-type", "").lower()
+        try:
+            text = response.text
+        except Exception:
+            text = ""
+    if not text and isinstance(body, str):
+        text = body
+    if not text:
+        text = str(exc)
+    if _looks_like_html(text, content_type):
+        return ""
+    return _compact_error_text(text)
+
+
+def _looks_like_html(text: str, content_type: str) -> bool:
+    sample = text.lstrip()[:200].lower()
+    return "html" in content_type or sample.startswith("<!doctype html") or sample.startswith("<html")
+
+
+def _compact_error_text(text: str) -> str:
+    text = _ANSI_RE.sub("", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:500]
 
 
 async def _run_codex_cli(

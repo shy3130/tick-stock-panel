@@ -36,6 +36,10 @@ _lock = threading.Lock()
 # 内存中的有效会话: { token: expire_ts }。进程重启后从磁盘恢复。
 _sessions: dict[str, float] = {}
 
+# 「是否已设密码」缓存: 每个 /api/ 请求都要判定, auth_middleware 原先每次 read_text
+# 磁盘 (阻塞事件循环)。此处懒加载缓存, set_password 后失效重算 (仍返回最新真值)。
+_configured_cache: bool | None = None
+
 
 def _path() -> Path:
     from app.config import settings
@@ -87,13 +91,21 @@ def _verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
 # ================================================================
 
 def is_configured() -> bool:
-    """是否已设置访问密码。"""
-    d = _load()
-    return bool(d.get("password_hash"))
+    """是否已设置访问密码 (带缓存)。
+
+    热路径 (auth_middleware 每请求调用): 命中缓存则不碰磁盘, 不阻塞事件循环。
+    首次或 set_password 失效后, 懒加载重读一次 auth.json, 保证返回最新真值。
+    """
+    global _configured_cache
+    if _configured_cache is None:
+        d = _load()
+        _configured_cache = bool(d.get("password_hash"))
+    return _configured_cache
 
 
 def set_password(password: str) -> None:
     """设置/修改访问密码。清空所有现有会话(强制重新登录)。"""
+    global _configured_cache
     if len(password) < 6:
         raise ValueError("密码至少 6 位")
     salt_hex, hash_hex = _hash_password(password)
@@ -105,6 +117,7 @@ def set_password(password: str) -> None:
             "updated_at": int(time.time()),
             "sessions": {},  # 清空持久化会话
         })
+    _configured_cache = None  # 失效缓存, 下次 is_configured 重读最新真值
     logger.info("access password set")
 
 

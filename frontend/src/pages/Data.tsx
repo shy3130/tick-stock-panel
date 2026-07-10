@@ -15,6 +15,7 @@ import {
   SlidersHorizontal,
   AlertTriangle,
   Info,
+  WandSparkles,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { EndpointTestDialog } from '@/components/EndpointTestDialog'
@@ -40,6 +41,7 @@ import { SectionTitle, HistoryRow } from '@/components/data/SectionTitle'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { ScheduleEditor } from '@/components/data/ScheduleEditor'
 import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
+import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
@@ -97,6 +99,8 @@ export function Data() {
   const clearData = useMutation({
     mutationFn: api.dataClear,
     onSuccess: () => {
+      // 清库删除全部 parquet + alerts, 各页 (看板/自选/选股/指数/财务/个股/连板/监控) 缓存
+      // 数据均已失效, 故广域失效所有 query 令其重取 —— 数据已清空, 全量刷新是正确行为而非误伤。
       qc.invalidateQueries()
       setShowClearConfirm(false)
     },
@@ -130,6 +134,7 @@ export function Data() {
   const [schemaTable, setSchemaTable] = useState<string | null>(null)
   const [showEndpointTest, setShowEndpointTest] = useState(false)
   const [showCreateExt, setShowCreateExt] = useState(false)
+  const [showRepair, setShowRepair] = useState(false)
   const [editingExt, setEditingExt] = useState<ExtDataConfig | null>(null)
   const [indexBatchInput, setIndexBatchInput] = useState('100')
 
@@ -557,6 +562,14 @@ export function Data() {
               <CheckSquare className="h-3.5 w-3.5" />
               数据范围
             </button>
+            <button
+              onClick={() => setShowRepair(true)}
+              disabled={!hasData || isRunning}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <WandSparkles className="h-3.5 w-3.5" />
+              修正数据
+            </button>
             <div className="w-px h-4 bg-border" />
             <div className="flex items-center gap-1.5">
               <button
@@ -926,6 +939,19 @@ export function Data() {
               isRunning={!!activeJobId}
               earliestDate={s?.daily?.earliest_date ?? null}
               onStart={() => setOpenSettings(null)}
+            />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showRepair && (
+          <SettingsModal title="日 K · 修正 / 补数据" onClose={() => setShowRepair(false)}>
+            <RepairDailyPanel
+              caps={caps.data}
+              isRunning={!!activeJobId}
+              latestDate={s?.daily?.latest_date ?? null}
+              onStart={() => setShowRepair(false)}
             />
           </SettingsModal>
         )}

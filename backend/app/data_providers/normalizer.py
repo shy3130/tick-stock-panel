@@ -5,7 +5,7 @@ import polars as pl
 
 from app.indicators.pipeline import filter_halt_days
 
-DAILY_COLS = ["symbol", "date", "open", "high", "low", "close", "volume", "amount"]
+DAILY_COLS = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
 ADJ_FACTOR_COLS = ["symbol", "trade_date", "ex_factor"]
 INSTRUMENT_COLS = ["symbol", "name", "code", "exchange", "asset_type", "source"]
 
@@ -41,12 +41,16 @@ def normalize_daily(data, default_symbol: str | None = None, source: str = "tick
         "datetime": "date",
         "vol": "volume",
         "amt": "amount",
+        "timestamp": "quote_ts",
     }
     df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
     if "symbol" not in df.columns and default_symbol:
         df = df.with_columns(pl.lit(default_symbol).alias("symbol"))
     if "date" in df.columns and df.schema["date"] != pl.Date:
         df = df.with_columns(pl.col("date").cast(pl.Date, strict=False))
+    # quote_ts: 毫秒级行情时间戳, 用于盘后校验/量比折算。保留为 Int64, 缺失则置 null。
+    if "quote_ts" in df.columns:
+        df = df.with_columns(pl.col("quote_ts").cast(pl.Int64, strict=False))
     for col in ("open", "high", "low", "close", "volume", "amount"):
         if col in df.columns:
             df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False))

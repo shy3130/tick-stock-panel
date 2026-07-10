@@ -112,7 +112,7 @@ function SidebarIndexQuotes({ rows, items }: { rows: IndexQuote[] | undefined; i
               <span className="text-[10px] text-secondary">{item.name}</span>
               <span className={`text-[10px] font-mono ${indexPctClass(pct)}`}>{fmtIndexPct(pct)}</span>
             </div>
-            <div className="mt-0.5 truncate font-mono text-[10px] text-foreground/80">
+            <div className={`mt-0.5 truncate font-mono text-[10px] ${indexPctClass(pct)}`}>
               {fmtIndexValue(value)}
             </div>
           </NavLink>
@@ -252,6 +252,7 @@ export interface SidebarProps {
   realtimeEnabled: boolean
   isRunning: boolean
   isTrading: boolean
+  isPaused: boolean
   realtimeModeLabel: string
   realtimeProviderName: string | null
   dismissFreeHint: boolean
@@ -272,7 +273,7 @@ export function Sidebar(props: SidebarProps) {
   const {
     collapsed, navigate, version, tierLabel, hasApiKey, aiConfigured, aiModel,
     isDataSyncing, dataSyncJustDone,
-    isNoneTier, isWatchlistMode, realtimeEnabled, isRunning, isTrading,
+    isNoneTier, isWatchlistMode, realtimeEnabled, isRunning, isTrading, isPaused,
     realtimeModeLabel, realtimeProviderName, dismissFreeHint, onDismissFreeHint,
     onToggleRealtime, toggleRealtimePending,
     activeProviderName, activeProviderDatasets, isCustomActive,
@@ -506,13 +507,14 @@ export function Sidebar(props: SidebarProps) {
                 </div>
                 <button
                   onClick={() => onToggleRealtime(!realtimeEnabled)}
-                  disabled={toggleRealtimePending}
+                  disabled={toggleRealtimePending || isPaused}
+                  title={isPaused ? '数据同步运行中，实时行情已临时暂停' : undefined}
                   aria-label={realtimeEnabled ? '关闭实时行情' : '开启实时行情'}
                   className={`relative inline-flex h-4 w-7 items-center rounded-full shrink-0 transition-colors duration-200 ${
                     realtimeEnabled
                       ? 'bg-accent shadow-[0_0_6px_rgba(59,130,246,0.3)]'
                       : 'bg-elevated'
-                  } ${toggleRealtimePending ? 'opacity-50' : 'cursor-pointer'}`}
+                  } ${toggleRealtimePending || isPaused ? 'opacity-50' : 'cursor-pointer'}`}
                 >
                   <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
                     realtimeEnabled ? 'translate-x-[14px]' : 'translate-x-0.5'
@@ -537,7 +539,9 @@ export function Sidebar(props: SidebarProps) {
                     </button>
                   </div>
                 )}
-                {isRunning && isTrading ? (
+                {isPaused ? (
+                  <div className="text-warning/80">数据同步运行中，实时行情已临时暂停</div>
+                ) : isRunning && isTrading ? (
                   <div className="text-accent">行情运行中</div>
                 ) : realtimeEnabled && !isTrading ? (
                   <div className="text-warning/70">非交易时段，将在交易时间自动开启</div>

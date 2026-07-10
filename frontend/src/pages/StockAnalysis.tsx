@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell } from 'lucide-react'
+import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell, AlertTriangle } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
@@ -190,6 +190,16 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
 
   if (kline.isLoading) {
     return <div className="flex items-center justify-center py-20"><Loader2 className="h-5 w-5 animate-spin text-muted" /></div>
+  }
+
+  if (kline.isError) {
+    return (
+      <EmptyState
+        icon={AlertTriangle}
+        title="日 K 数据加载失败"
+        hint="请检查网络或数据源配置后重试。"
+      />
+    )
   }
 
   const rows = kline.data?.rows ?? []
