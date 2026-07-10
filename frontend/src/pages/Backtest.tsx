@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { PageHeader } from '@/components/PageHeader'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
 import { BarChart3, FlaskConical } from 'lucide-react'
@@ -49,6 +50,7 @@ export function Backtest() {
     <div className="min-h-full bg-base flex flex-col">
       <PageHeader
         title="回测工作台"
+        {...getNavIconMeta('/backtest')}
         subtitle={`${MODES[activeTab].title} · ${MODES[activeTab].hint}`}
         right={modeSwitch}
         className="shrink-0 bg-base/95"

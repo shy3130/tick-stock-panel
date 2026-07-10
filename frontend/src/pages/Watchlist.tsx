@@ -17,6 +17,7 @@ import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
 import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import {
   type ColumnConfig,
@@ -817,6 +818,7 @@ export function Watchlist() {
     <div className="flex flex-col h-full">
       <PageHeader
         title="自选股"
+        {...getNavIconMeta('/watchlist')}
         titleExtra={
           <span className="inline-flex items-center gap-1.5">
             {/* 计数胶囊: 显示数/总数, mono 字体突出数字 */}

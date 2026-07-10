@@ -30,6 +30,7 @@ import {
 import { useToggleRealtimeQuotes, useUpdateQuoteInterval } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { PageHeader } from '@/components/PageHeader'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { formatScheduleDatePart, formatScheduleTimePart, isToday } from '@/lib/format'
 
 // 拆分出的子组件
@@ -530,6 +531,7 @@ export function Data() {
       <div ref={topRef} />
       <PageHeader
         title="数据"
+        {...getNavIconMeta('/data')}
         subtitle="本地数据画像 · 同步状态 · 历史记录"
         right={
           <div className="flex items-center gap-3">

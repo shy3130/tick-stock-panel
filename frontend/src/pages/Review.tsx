@@ -20,6 +20,7 @@ import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { fmtBigNum } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { toast } from '@/components/Toast'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -225,6 +226,7 @@ export function Review() {
     <>
       <PageHeader
         title="AI 复盘"
+        {...getNavIconMeta('/review')}
         titleExtra={<Sparkles className="h-4 w-4 text-accent" />}
         subtitle={`${displayDate}${data?.emotion ? ` · 情绪 ${data.emotion.label}` : ''}`}
         right={
@@ -705,7 +707,7 @@ function ReportPanel({
           </div>
         )}
       </div>
-      <div className="max-h-[calc(100vh-22rem)] overflow-y-auto px-5 py-4">
+      <div className="max-h-[calc(100vh-25rem)] overflow-y-auto px-5 py-4">
         {isLoading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <div className="relative">
@@ -753,7 +755,7 @@ function HistoryPanel({
         <span className="text-xs font-medium text-foreground">历史复盘</span>
         <span className="font-mono text-[10px] text-muted">({reports.length})</span>
       </div>
-      <div className="max-h-[calc(100vh-26rem)] overflow-y-auto p-2">
+      <div className="max-h-[calc(100vh-29rem)] overflow-y-auto p-2">
         {loading ? (
           <div className="grid h-20 place-items-center"><RefreshCw className="h-4 w-4 animate-spin text-muted" /></div>
         ) : empty ? (

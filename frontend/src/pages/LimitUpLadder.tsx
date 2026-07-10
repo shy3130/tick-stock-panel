@@ -9,6 +9,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { EmptyState } from '@/components/EmptyState'
 import { useTheme } from '@/lib/theme'
 import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
@@ -1482,7 +1483,7 @@ export function LimitUpLadder() {
   if (!data || rawTiers.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        <PageHeader title={direction === 'down' ? '连跌梯队' : '连板梯队'} />
+        <PageHeader title={direction === 'down' ? '连跌梯队' : '连板梯队'} {...getNavIconMeta('/limit-ladder')} />
         <EmptyState icon={Flame} title={direction === 'down' ? '暂无连跌数据' : '暂无连板数据'} hint={direction === 'down' ? '该日期无跌停股或 enriched 数据未就绪' : '该日期无涨停股或 enriched 数据未就绪'} />
       </div>
     )
@@ -1492,6 +1493,7 @@ export function LimitUpLadder() {
     <div className="flex flex-col h-full">
       <PageHeader
         title={direction === 'down' ? '连跌梯队' : '连板梯队'}
+        {...getNavIconMeta('/limit-ladder')}
         titleExtra={
           <div className="flex items-center gap-2">
             <SealedBadge

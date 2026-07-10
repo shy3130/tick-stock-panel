@@ -1,5 +1,6 @@
 import { Cable } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { EmptyState } from '@/components/EmptyState'
 
 // 后续实现计划(本轮为占位):
@@ -51,7 +52,7 @@ const PLAN: { title: string; desc: string }[] = [
 export function Trading() {
   return (
     <div className="flex flex-col h-full">
-      <PageHeader title="交易" subtitle="信号自动下单桥接 · 开发中" />
+      <PageHeader title="交易" {...getNavIconMeta('/trading')} subtitle="信号自动下单桥接 · 开发中" />
 
       <div className="flex-1 overflow-auto px-5 py-6">
         <div className="max-w-3xl mx-auto">

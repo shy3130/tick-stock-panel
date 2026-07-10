@@ -11,30 +11,42 @@
   --base: 0 0% 98%;          /* #FAFAFA */
   --surface: 0 0% 100%;      /* #FFFFFF */
   --elevated: 240 5% 96%;    /* #F4F4F5 */
+  --elevated-2: 240 6% 92%;
   --border: 240 6% 90%;      /* #E4E4E7 */
   --fg-primary: 240 6% 10%;  /* #18181B */
   --fg-secondary: 240 4% 35%;/* #52525B */
   --fg-muted: 240 5% 65%;    /* #A1A1AA */
   --accent: 217 91% 60%;     /* #3B82F6 电光蓝 */
+  --brand: 258 90% 66%;
   --bull: 4 87% 60%;         /* #F04438 红涨 */
   --bear: 152 67% 45%;       /* #12B76A 绿跌 */
   --warning: 32 95% 50%;     /* #F79009 */
   --danger: 4 87% 60%;       /* #F04438 */
+  --g-core: var(--accent);
+  --g-strategy: var(--brand);
+  --g-research: 187 85% 40%;
+  --g-system: 214 15% 45%;
 }
 
 html.dark {
-  --base: 240 5% 5%;         /* #0A0A0B */
-  --surface: 240 7% 10%;     /* #18181B 略亮一点,与 base 对比清晰 */
-  --elevated: 240 9% 14%;    /* #212126 */
-  --border: 240 5% 22%;      /* #353539 边框加亮,易识别 */
-  --fg-primary: 0 0% 98%;    /* #FAFAFA */
-  --fg-secondary: 240 5% 78%;/* #C4C4CB 大幅提亮 — 子标题/导航非激活态 */
-  --fg-muted: 240 5% 58%;    /* #8E8E96 muted 提亮 — 辅助提示 */
+  --base: 33 25% 6%;         /* #14110C 暖棕黑 */
+  --surface: 35 25% 9%;      /* #1E1912 */
+  --elevated: 32 22% 13%;    /* #29221A */
+  --elevated-2: 31 25% 17%;  /* #352B20 */
+  --border: 34 25% 23%;      /* #4A3D2C */
+  --fg-primary: 40 30% 97%;  /* #FAF7F2 */
+  --fg-secondary: 38 22% 76%;/* #CFC5B4 */
+  --fg-muted: 36 14% 55%;    /* #9C8F7B */
   --accent: 217 91% 60%;
+  --brand: 258 90% 66%;      /* #8B5CF6 */
   --bull: 4 87% 60%;
   --bear: 152 67% 45%;
   --warning: 32 95% 50%;
   --danger: 4 87% 60%;
+  --g-core: var(--accent);
+  --g-strategy: var(--brand);
+  --g-research: 188 86% 53%; /* #22D3EE */
+  --g-system: 214 15% 55%;
 }
 
 /* 价格 / 数字一律等宽 */

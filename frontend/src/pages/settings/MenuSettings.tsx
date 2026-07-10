@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext,
   closestCenter,
@@ -21,37 +21,17 @@ import { Eye, EyeOff, ExternalLink, GripVertical, Settings, Bell } from 'lucide-
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { usePreferences } from '@/lib/useSharedQueries'
+import { useNavItems, type NavItem } from '@/lib/navRegistry'
 
-interface NavEntry {
-  id: string
-  label: string
-  type: 'builtin' | 'analysis'
-  visible: boolean
-}
-
-const BUILTIN_PAGES: NavEntry[] = [
-  { id: '/', label: '看板', type: 'builtin', visible: true },
-  { id: '/watchlist', label: '自选', type: 'builtin', visible: true },
-  { id: '/screener', label: '策略', type: 'builtin', visible: true },
-  { id: '/backtest', label: '回测', type: 'builtin', visible: true },
-  { id: '/limit-ladder', label: '连板梯队', type: 'builtin', visible: true },
-  { id: '/concept-analysis', label: '概念分析', type: 'builtin', visible: true },
-  { id: '/industry-analysis', label: '行业分析', type: 'builtin', visible: true },
-  { id: '/stock-analysis', label: '个股分析', type: 'builtin', visible: true },
-  { id: '/review', label: '复盘', type: 'builtin', visible: true },
-  { id: '/financials', label: '财务分析', type: 'builtin', visible: true },
-  { id: '/indices', label: '指数', type: 'builtin', visible: true },
-  { id: '/trading', label: '交易', type: 'builtin', visible: true },
-  { id: '/monitor', label: '监控中心', type: 'builtin', visible: true },
-  { id: '/data', label: '数据', type: 'builtin', visible: true },
-]
+// 菜单条目类型 —— 直接复用 navRegistry 的 NavItem, 附带此页专属的 hidden 状态。
+// 内置/扩展的合并、排序、隐藏逻辑统一在 lib/navRegistry.ts#useNavItems 里维护,
+// 这里只负责渲染与拖拽交互, 不再自己维护一份 BUILTIN_PAGES / 合并算法。
+type SettingsNavEntry = NavItem & { hidden: boolean }
 
 // ── Sortable row ──
 
-function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBadge }: {
-  entry: NavEntry
-  hidden: boolean
+function SortableItem({ entry, onToggleHidden, badgeEnabled, onToggleBadge }: {
+  entry: SettingsNavEntry
   onToggleHidden: (id: string) => void
   badgeEnabled?: boolean
   onToggleBadge?: (id: string) => void
@@ -71,6 +51,8 @@ function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBad
     opacity: isDragging ? 0.6 : 1,
     zIndex: isDragging ? 10 : undefined,
   }
+
+  const hidden = entry.hidden
 
   return (
     <div
@@ -98,9 +80,9 @@ function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBad
       </div>
       <div>
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] ${
-          entry.type === 'analysis' ? 'bg-accent/10 text-accent' : 'bg-elevated text-muted'
+          entry.extension ? 'bg-accent/10 text-accent' : 'bg-elevated text-muted'
         }`}>
-          {entry.type === 'builtin' ? '内置' : '扩展'}
+          {entry.extension ? '扩展' : '内置'}
         </span>
       </div>
       <div className="flex justify-center">
@@ -117,9 +99,9 @@ function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBad
         </button>
       </div>
       <div className="flex justify-center">
-        {entry.type === 'builtin' ? (
+        {!entry.extension ? (
           <Link
-            to={entry.id}
+            to={entry.to}
             className="rounded p-1 text-muted hover:text-accent hover:bg-accent/10 transition-colors"
             title="打开页面"
           >
@@ -159,58 +141,24 @@ function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBad
 
 export function SettingsMenuSettingsPanel() {
   const qc = useQueryClient()
-  const { data: prefs } = usePreferences()
-  const menus = useQuery({ queryKey: QK.analysisMenus, queryFn: api.analysisMenus })
-
-  const analysisEntries: NavEntry[] = (menus.data?.items ?? []).map(m => ({
-    id: m.id,
-    label: m.label,
-    type: 'analysis' as const,
-    visible: m.visible,
-  }))
-
-  const allEntries = useMemo(() => {
-    const saved = prefs?.nav_order ?? []
-    const entryMap = new Map<string, NavEntry>()
-    for (const e of BUILTIN_PAGES) entryMap.set(e.id, e)
-    for (const e of analysisEntries) entryMap.set(e.id, e)
-
-    if (saved.length === 0) return [...BUILTIN_PAGES, ...analysisEntries]
-
-    const ordered: NavEntry[] = []
-    const seen = new Set<string>()
-    for (const id of saved) {
-      const entry = entryMap.get(id)
-      if (entry) {
-        ordered.push(entry)
-        seen.add(id)
-      }
-    }
-    for (const e of [...BUILTIN_PAGES, ...analysisEntries]) {
-      if (!seen.has(e.id)) ordered.push(e)
-    }
-    return ordered
-  }, [prefs?.nav_order, analysisEntries])
-
-  const hiddenSet = useMemo(() => new Set(prefs?.nav_hidden ?? []), [prefs?.nav_hidden])
+  const { allItemsForSettings, isLoading } = useNavItems()
 
   // Local order state for optimistic drag updates
   const [localOrder, setLocalOrder] = useState<string[] | null>(null)
   const orderedEntries = useMemo(() => {
-    const order = localOrder ?? prefs?.nav_order ?? []
-    if (!order.length) return allEntries
-    const byId = new Map(allEntries.map(e => [e.id, e]))
-    const result: NavEntry[] = []
+    if (!localOrder) return allItemsForSettings
+    const byId = new Map(allItemsForSettings.map(e => [e.id, e]))
+    const result: SettingsNavEntry[] = []
     const seen = new Set<string>()
-    for (const id of order) {
+    for (const id of localOrder) {
       const e = byId.get(id)
       if (e) { result.push(e); seen.add(id) }
     }
-    for (const e of allEntries) {
+    for (const e of allItemsForSettings) {
       if (!seen.has(e.id)) result.push(e)
     }
     return result
-  }, [localOrder, prefs?.nav_order, allEntries])
+  }, [localOrder, allItemsForSettings])
 
   const saveNavOrder = useMutation({
     mutationFn: (order: string[]) => api.saveNavOrder(order),
@@ -243,7 +191,7 @@ export function SettingsMenuSettingsPanel() {
   }
 
   const toggleHidden = (id: string) => {
-    const next = new Set(hiddenSet)
+    const next = new Set(allItemsForSettings.filter(e => e.hidden).map(e => e.id))
     if (next.has(id)) next.delete(id)
     else next.add(id)
     saveNavHidden.mutate([...next])
@@ -293,7 +241,6 @@ export function SettingsMenuSettingsPanel() {
               <SortableItem
                 key={entry.id}
                 entry={entry}
-                hidden={hiddenSet.has(entry.id)}
                 onToggleHidden={toggleHidden}
                 badgeEnabled={entry.id === '/monitor' ? badgeEnabled : undefined}
                 onToggleBadge={entry.id === '/monitor' ? toggleBadge : undefined}
@@ -302,7 +249,7 @@ export function SettingsMenuSettingsPanel() {
           </SortableContext>
         </DndContext>
 
-        {menus.isLoading && (
+        {isLoading && (
           <div className="px-5 py-10 text-center text-sm text-muted">正在加载菜单...</div>
         )}
       </section>

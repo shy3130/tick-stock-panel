@@ -1,15 +1,19 @@
+import type { ReactNode } from 'react'
 import { cn } from '@/lib/cn'
+import { NAV_GROUP_COLOR, type NavGroup, type NavIconComponent } from '@/lib/navRegistry'
 
 interface Props {
   title: string
   subtitle?: string
-  /** 标题右侧、subtitle 之前的额外节点(如状态徽标) */
-  titleExtra?: React.ReactNode
-  right?: React.ReactNode
+  titleExtra?: ReactNode
+  right?: ReactNode
   className?: string
+  icon?: NavIconComponent
+  group?: NavGroup
 }
 
-export function PageHeader({ title, subtitle, titleExtra, right, className }: Props) {
+export function PageHeader({ title, subtitle, titleExtra, right, className, icon: Icon, group }: Props) {
+  const groupColor = group ? NAV_GROUP_COLOR[group] : undefined
   return (
     <header
       className={cn(
@@ -18,6 +22,14 @@ export function PageHeader({ title, subtitle, titleExtra, right, className }: Pr
       )}
     >
       <div className="flex items-center gap-2">
+        {Icon && groupColor && (
+          <span
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+            style={{ backgroundColor: `color-mix(in srgb, ${groupColor} 15%, transparent)`, color: groupColor }}
+          >
+            <Icon className="h-4 w-4" />
+          </span>
+        )}
         <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
         {titleExtra}
         {subtitle && <span className="text-xs text-muted">{subtitle}</span>}

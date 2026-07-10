@@ -244,7 +244,7 @@ export function Indices() {
           <div className="mb-3 space-y-1 border-b border-border/60 pb-3">
             {topRows.map(renderIndexItem)}
           </div>
-          <div className="max-h-[calc(100vh-24rem)] space-y-1 overflow-auto pr-1">
+          <div className="max-h-[calc(100vh-27rem)] space-y-1 overflow-auto pr-1">
             {(list.isLoading || search.isLoading) && <div className="py-4 text-center text-xs text-muted">加载中…</div>}
             {!list.isLoading && listRows.length === 0 && (
               <div className="rounded-btn bg-elevated p-3 text-xs text-muted">

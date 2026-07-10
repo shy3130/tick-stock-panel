@@ -11,6 +11,7 @@ import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import {
   startAnalysis, findTodayReport, useHistoryReports,
   deleteReport, openHistoryReport, loadHistory,
@@ -78,6 +79,7 @@ export function StockAnalysis() {
     <>
       <PageHeader
         title="个股分析"
+        {...getNavIconMeta('/stock-analysis')}
         titleExtra={
           <span className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400">
             Beta
@@ -259,7 +261,7 @@ function HistorySidebar() {
             <p className="text-[10px] text-muted/60 mt-1">选一只股票,点「AI 个股分析」生成</p>
           </div>
         ) : (
-          <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-2 space-y-1.5">
+          <div className="max-h-[calc(100vh-268px)] overflow-y-auto p-2 space-y-1.5">
             {reports.map(r => (
               <div
                 key={r.id}
