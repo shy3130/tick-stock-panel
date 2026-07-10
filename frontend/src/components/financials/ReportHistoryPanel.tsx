@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { History, Trash2, FileText, Clock, Sparkles, Loader2 } from 'lucide-react'
 import { useHistoryReports, openHistoryReport, deleteReport, loadHistory } from '@/lib/aiReportStore'
 import { useActiveTasks } from '@/lib/aiReportStore'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 /**
  * AI 财务分析历史报告面板 —— 显示在财务页底部。
@@ -14,6 +15,7 @@ import { useActiveTasks } from '@/lib/aiReportStore'
 export function ReportHistoryPanel() {
   const { reports, loaded } = useHistoryReports()
   const activeTasks = useActiveTasks()
+  const [confirmDeleteReport, setConfirmDeleteReport] = useState<{ id: string; label: string } | null>(null)
 
   // 首次挂载拉取一次
   useEffect(() => { loadHistory() }, [])
@@ -97,7 +99,10 @@ export function ReportHistoryPanel() {
 
               {/* 删除按钮 */}
               <button
-                onClick={e => { e.stopPropagation(); deleteReport(r.id) }}
+                onClick={e => {
+                  e.stopPropagation()
+                  setConfirmDeleteReport({ id: r.id, label: r.name || r.symbol })
+                }}
                 className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-danger/10 text-muted hover:text-danger transition-all shrink-0"
                 title="删除"
               >
@@ -107,6 +112,19 @@ export function ReportHistoryPanel() {
           )
         })}
       </div>
+      <ConfirmDialog
+        open={!!confirmDeleteReport}
+        title={`确认删除 ${confirmDeleteReport?.label ?? '历史报告'}?`}
+        message="该财务分析历史报告会被永久删除，此操作不可撤销。"
+        confirmText="确认删除"
+        danger
+        onCancel={() => setConfirmDeleteReport(null)}
+        onConfirm={() => {
+          if (!confirmDeleteReport) return
+          void deleteReport(confirmDeleteReport.id)
+          setConfirmDeleteReport(null)
+        }}
+      />
     </div>
   )
 }

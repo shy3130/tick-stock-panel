@@ -22,6 +22,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
 
 const KEYWORDS = ['concept', '概念', 'theme', '题材', '板块']
@@ -333,6 +334,7 @@ export function ConceptAnalysis() {
         <div className="flex h-full flex-col">
           <PageHeader
             title="概念分析"
+            {...getNavIconMeta('/concept-analysis')}
             right={
               <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
                 <Settings2 className="h-4 w-4" />
@@ -358,6 +360,7 @@ export function ConceptAnalysis() {
     <>
       <PageHeader
         title="概念分析"
+        {...getNavIconMeta('/concept-analysis')}
         subtitle={`${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
         right={
           <div className="flex items-center gap-1">

@@ -326,7 +326,7 @@ def _find_meta_dict(code: str) -> ast.Dict:
 
 def _set_meta_string_field(block: str, field: str, value: str) -> str:
     pattern = re.compile(
-        rf"(?m)^(\s*[\"']{re.escape(field)}[\"']\s*:\s*)([\"'])(?:\\.|[^\n\\])*?\2"
+        rf"((?:\{{|,)\s*[\"']{re.escape(field)}[\"']\s*:\s*)([\"'])(?:\\.|[^\\])*?\2"
     )
     next_block, count = pattern.subn(
         lambda m: f"{m.group(1)}{_py_string(value)}",
@@ -335,6 +335,14 @@ def _set_meta_string_field(block: str, field: str, value: str) -> str:
     )
     if count:
         return next_block
+
+    if "\n" not in block:
+        closing = block.rfind("}")
+        if closing < 0:
+            raise ValueError("META 字典缺少结束括号")
+        before = block[:closing].rstrip()
+        separator = " " if before.endswith(("{", ",")) else ", "
+        return f'{before}{separator}"{field}": {_py_string(value)}{block[closing:]}'
 
     lines = block.splitlines(keepends=True)
     key_indent = None
@@ -370,9 +378,19 @@ def _normalize_strategy_meta(code: str, strategy_id: str,
     """Force persisted strategy identity to match the caller-owned identity."""
     meta_node = _find_meta_dict(code)
     lines = code.splitlines(keepends=True)
-    start = meta_node.lineno - 1
-    end = meta_node.end_lineno or meta_node.lineno
-    block = "".join(lines[start:end])
+
+    def _char_column(line: str, byte_column: int) -> int:
+        return len(line.encode("utf-8")[:byte_column].decode("utf-8"))
+
+    start_line = meta_node.lineno - 1
+    end_line = (meta_node.end_lineno or meta_node.lineno) - 1
+    start = sum(len(line) for line in lines[:start_line]) + _char_column(
+        lines[start_line], meta_node.col_offset
+    )
+    end = sum(len(line) for line in lines[:end_line]) + _char_column(
+        lines[end_line], meta_node.end_col_offset or 0
+    )
+    block = code[start:end]
 
     fields = {"id": strategy_id}
     if name:
@@ -382,8 +400,7 @@ def _normalize_strategy_meta(code: str, strategy_id: str,
     for field, value in fields.items():
         block = _set_meta_string_field(block, field, value)
 
-    lines[start:end] = block.splitlines(keepends=True)
-    return "".join(lines)
+    return f"{code[:start]}{block}{code[end:]}"
 
 
 def _normalize_build_result(result: dict, strategy_id: str, name: str = "",
@@ -433,8 +450,12 @@ def _prepare_strategy_code(req: StrategyCodeValidateRequest | StrategyCodeSaveRe
                 req.description.strip() or None,
             )
     if req.strict:
-        AIStrategyGenerator._validate_safety(code)
-    meta = AIStrategyGenerator._extract_meta(code)
+        meta = AIStrategyGenerator.validate_code_or_raise(
+            code,
+            expected_strategy_id=sid or None,
+        )
+    else:
+        meta = AIStrategyGenerator._extract_meta(code)
     return {"code": code, "meta": meta}
 
 

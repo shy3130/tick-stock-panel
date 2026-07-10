@@ -11,6 +11,8 @@ import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import {
   startAnalysis, findTodayReport, useHistoryReports,
   deleteReport, openHistoryReport, loadHistory,
@@ -78,6 +80,7 @@ export function StockAnalysis() {
     <>
       <PageHeader
         title="个股分析"
+        {...getNavIconMeta('/stock-analysis')}
         titleExtra={
           <span className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400">
             Beta
@@ -247,6 +250,7 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
 // ===== 左侧常驻:历史报告侧栏(所有股票,按时间倒序平铺) =====
 function HistorySidebar() {
   const { reports, loaded } = useHistoryReports()
+  const [confirmDeleteReport, setConfirmDeleteReport] = useState<{ id: string; label: string } | null>(null)
 
   return (
     <aside className="self-start sticky top-0">
@@ -269,7 +273,7 @@ function HistorySidebar() {
             <p className="text-[10px] text-muted/60 mt-1">选一只股票,点「AI 个股分析」生成</p>
           </div>
         ) : (
-          <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-2 space-y-1.5">
+          <div className="max-h-[calc(100vh-268px)] overflow-y-auto p-2 space-y-1.5">
             {reports.map(r => (
               <div
                 key={r.id}
@@ -294,7 +298,7 @@ function HistorySidebar() {
                     )}
                   </button>
                   <button
-                    onClick={() => { deleteReport(r.id); toast('已删除', 'success') }}
+                    onClick={() => setConfirmDeleteReport({ id: r.id, label: r.name || r.symbol })}
                     className="shrink-0 text-[10px] text-muted/60 hover:text-danger transition-colors px-1 py-0.5 opacity-0 group-hover:opacity-100"
                     title="删除"
                   >
@@ -306,6 +310,20 @@ function HistorySidebar() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={!!confirmDeleteReport}
+        title={`确认删除 ${confirmDeleteReport?.label ?? '历史报告'}?`}
+        message="该个股分析历史报告会被永久删除，此操作不可撤销。"
+        confirmText="确认删除"
+        danger
+        onCancel={() => setConfirmDeleteReport(null)}
+        onConfirm={() => {
+          if (!confirmDeleteReport) return
+          void deleteReport(confirmDeleteReport.id)
+          setConfirmDeleteReport(null)
+          toast('已删除', 'success')
+        }}
+      />
     </aside>
   )
 }

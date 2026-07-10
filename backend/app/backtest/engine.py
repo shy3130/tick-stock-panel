@@ -592,7 +592,7 @@ class BacktestEngine:
             if activate_pct is not None and drawdown_pct is not None and peak_price > entry_price:
                 peak_profit = peak_price / entry_price - 1
                 if peak_profit >= abs(float(activate_pct)):
-                    # 回撤止盈触发线: 相对峰值价回撤 drawdown 个点 (纯峰值口径)
+                    # 回撤止盈触发线: 相对峰值价回撤 drawdown 个点。
                     risk_lines.append((peak_price * (1 - abs(float(drawdown_pct))), "trailing_take_profit"))
 
             risk_lines = [(line, reason) for line, reason in risk_lines if _valid_price(line)]
@@ -1056,8 +1056,7 @@ class BacktestEngine:
                 if activate_pct is not None and drawdown_pct is not None and peak_price > entry_price:
                     peak_profit = peak_price / entry_price - 1
                     if peak_profit >= abs(float(activate_pct)):
-                        # 回撤止盈触发线: 相对峰值价回撤 drawdown 个点 (纯峰值口径)
-                        # 启动门槛用成本基准的浮盈率, 触发线用峰值基准, 与 trailing_stop 同口径
+                        # 回撤止盈触发线: 相对峰值价回撤 drawdown 个点。
                         take_profit_line = peak_price * (1 - abs(float(drawdown_pct)))
                         risk_lines.append((take_profit_line, "trailing_take_profit"))
 

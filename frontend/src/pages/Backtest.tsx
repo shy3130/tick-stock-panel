@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { PageHeader } from '@/components/PageHeader'
+import { getNavIconMeta } from '@/lib/navRegistry'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
 import { StrategyOptimizer } from './backtest/StrategyOptimizer'
@@ -35,7 +36,7 @@ export function Backtest() {
   const [activeTab, setActiveTab] = useState<Tab>('strategy')
 
   const modeSwitch = (
-    <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
+    <div className="inline-flex min-w-max rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
       {(['factor', 'strategy', 'optimizer'] as const).map(tab => {
         const Icon = TAB_ICONS[tab]
         const active = activeTab === tab
@@ -43,7 +44,7 @@ export function Backtest() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
               active
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-secondary hover:bg-elevated hover:text-foreground'
@@ -68,6 +69,7 @@ export function Backtest() {
     <div className="min-h-full bg-base flex flex-col">
       <PageHeader
         title="回测工作台"
+        {...getNavIconMeta('/backtest')}
         subtitle={`${MODES[activeTab].title} · ${MODES[activeTab].hint}`}
         right={modeSwitch}
         className="shrink-0 bg-base/95"

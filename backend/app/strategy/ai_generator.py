@@ -81,15 +81,9 @@ class AIStrategyGenerator:
 
         # 验证
         try:
-            self._validate_safety(code)
-        except ValueError as e:
+            meta = self.validate_code_or_raise(code)
+        except (SyntaxError, ValueError) as e:
             return {"code": code, "meta": {}, "valid": False, "error": str(e)}
-
-        # 试加载获取 META
-        try:
-            meta = self._extract_meta(code)
-        except Exception as e:
-            return {"code": code, "meta": {}, "valid": False, "error": f"解析META失败: {e}"}
 
         return {"code": code, "meta": meta, "valid": True, "error": None}
 
@@ -121,13 +115,36 @@ class AIStrategyGenerator:
     _ALLOWED_IMPORT_MODULES = frozenset({"polars", "__future__"})
 
     @classmethod
+    def validate_code_or_raise(cls, code: str, expected_strategy_id: str | None = None) -> dict:
+        """Validate generated/saved strategy code without executing it."""
+        cls._validate_safety(code)
+        try:
+            meta = cls._extract_meta(code)
+        except Exception as e:
+            raise ValueError(f"解析META失败: {e}") from e
+        if not isinstance(meta, dict):
+            raise ValueError("META 必须是字典")
+        strategy_id = meta.get("id")
+        if expected_strategy_id is not None and strategy_id != expected_strategy_id:
+            raise ValueError("META.id 必须与 strategy_id 一致")
+        return meta
+
+    @classmethod
     def _validate_safety(cls, code: str) -> None:
         """AST 级安全检查: import 白名单 + 危险内建调用拦截。"""
         tree = ast.parse(code)
+        cls._validate_top_level(tree)
 
         forbidden_calls = {"open", "exec", "eval", "compile", "__import__",
                            "globals", "locals", "vars", "dir", "getattr",
-                           "setattr", "delattr", "type", "input"}
+                           "setattr", "delattr", "type", "input", "breakpoint",
+                           "exit", "quit"}
+        forbidden_names = {"__builtins__", "builtins"}
+        forbidden_attr_calls = {
+            "read_csv", "read_parquet", "read_database", "read_delta", "read_excel",
+            "read_ipc", "read_ndjson", "scan_csv", "scan_parquet", "scan_delta",
+            "scan_ipc", "scan_ndjson", "sql",
+        }
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -138,9 +155,44 @@ class AIStrategyGenerator:
                 mod = (node.module or "").split(".")[0]
                 if mod not in cls._ALLOWED_IMPORT_MODULES:
                     raise ValueError(f"禁止 from {node.module} import (策略只允许 import polars)")
+            if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
+                raise ValueError(f"禁止访问特殊属性 {node.attr}")
+            if isinstance(node, ast.Name) and node.id in forbidden_names:
+                raise ValueError(f"禁止访问 {node.id}")
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name) and node.func.id in forbidden_calls:
                     raise ValueError(f"禁止调用 {node.func.id}()")
+                if isinstance(node.func, ast.Attribute) and node.func.attr in forbidden_attr_calls:
+                    raise ValueError(f"禁止调用 {node.func.attr}()")
+
+    @staticmethod
+    def _validate_top_level(tree: ast.Module) -> None:
+        """Reject import-time side effects; strategy files may only define data and functions."""
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+                continue
+            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                continue
+            if isinstance(stmt, ast.FunctionDef):
+                if stmt.decorator_list:
+                    raise ValueError("禁止使用函数装饰器")
+                continue
+            if isinstance(stmt, ast.Assign):
+                AIStrategyGenerator._require_literal_assignment(stmt.value)
+                continue
+            if isinstance(stmt, ast.AnnAssign):
+                AIStrategyGenerator._require_literal_assignment(stmt.value)
+                continue
+            raise ValueError(f"禁止顶层执行语句: {stmt.__class__.__name__}")
+
+    @staticmethod
+    def _require_literal_assignment(value: ast.AST | None) -> None:
+        if value is None:
+            return
+        try:
+            ast.literal_eval(value)
+        except (ValueError, SyntaxError) as e:
+            raise ValueError("顶层赋值仅允许纯字面量") from e
 
     @staticmethod
     def _extract_meta(code: str) -> dict:

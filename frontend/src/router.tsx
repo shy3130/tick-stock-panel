@@ -1,14 +1,17 @@
 import { lazy } from 'react'
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Layout } from './components/Layout'
 import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
+import { Landing } from './pages/Landing'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
+import { api } from './lib/api'
+import { resolvePublicEntry } from './lib/publicEntry'
+import { BRAND_NAME } from './lib/brand'
 
-// 代码分割: 页面全部 lazy 加载, 避免首屏打包所有页面 (ECharts / lightweight-charts /
-// framer-motion 等重库) → 大幅减小首屏 bundle。命名导出用 .then 映射为 default。
-// Layout / Onboarding / Auth 为应用外壳与入口, 保持同步加载。
+// Keep public entry components eager; authenticated application pages load on demand.
 const Watchlist = lazy(() => import('./pages/Watchlist').then(m => ({ default: m.Watchlist })))
 const Screener = lazy(() => import('./pages/Screener').then(m => ({ default: m.Screener })))
 const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
@@ -56,16 +59,51 @@ function OnboardingGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function RootGate() {
+  const location = useLocation()
+  const authStatus = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: api.authStatus,
+    retry: false,
+    staleTime: 5_000,
+  })
+
+  const status = authStatus.data
+    ? { authenticated: authStatus.data.authenticated }
+    : authStatus.isError
+      ? { authenticated: false }
+      : null
+
+  const target = resolvePublicEntry(status, location.pathname + location.search)
+
+  if (target === 'loading') {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#151410] text-[#b9a46a]">
+        <div className="font-mono text-xs tracking-[0.28em]">{BRAND_NAME}</div>
+      </div>
+    )
+  }
+
+  if (target === 'landing') return <Landing />
+
+  if (target === 'login') {
+    const redirect = encodeURIComponent(location.pathname + location.search)
+    return <Navigate to={`/login?redirect=${redirect}`} replace />
+  }
+
+  return (
+    <OnboardingGuard>
+      <Layout />
+    </OnboardingGuard>
+  )
+}
+
 export const router = createBrowserRouter([
   { path: '/onboarding', element: <Onboarding /> },
   { path: '/login', element: <Auth /> },
   {
     path: '/',
-    element: (
-      <OnboardingGuard>
-        <Layout />
-      </OnboardingGuard>
-    ),
+    element: <RootGate />,
     children: [
       { index: true, element: <Dashboard /> },
       { path: 'overview', element: <Navigate to="/" replace /> },

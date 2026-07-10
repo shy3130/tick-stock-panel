@@ -81,17 +81,33 @@ export function StockDataTable({
               const isSorted = sort?.key === col.id
               const dir = isSorted ? sort!.dir : null
               const contentOverride = renderHeaderContent?.(col)
+              const headerContent = contentOverride !== undefined ? contentOverride : col.label
+              const ariaSort = sortable
+                ? isSorted
+                  ? dir === 'asc' ? 'ascending' : 'descending'
+                  : 'none'
+                : undefined
+              const sortLabel = isSorted ? (dir === 'asc' ? '升序' : '降序') : '未排序'
               return (
                 <th
                   key={col.id}
-                  className={`${alignThClass(col.align)} ${sortable ? 'cursor-pointer select-none group' : ''}`}
-                  onClick={sortable ? () => onSortToggle!(col.id) : undefined}
+                  aria-sort={ariaSort}
+                  className={`${alignThClass(col.align)} ${sortable ? 'select-none group' : ''}`}
                 >
-                  {contentOverride !== undefined ? contentOverride : col.label}
-                  {sortable && (
-                    <span className="inline-block ml-1 text-[10px] opacity-30 group-hover:opacity-60 transition-opacity">
-                      {isSorted ? (dir === 'asc' ? '↑' : '↓') : '↕'}
-                    </span>
+                  {sortable ? (
+                    <button
+                      type="button"
+                      onClick={() => onSortToggle!(col.id)}
+                      aria-label={`按${col.label}排序,当前${sortLabel}`}
+                      className="inline-flex cursor-pointer items-center rounded-sm bg-transparent p-0 text-inherit transition-colors focus:outline-none focus:ring-1 focus:ring-accent/40"
+                    >
+                      {headerContent}
+                      <span className="inline-block ml-1 text-[10px] opacity-30 group-hover:opacity-60 transition-opacity">
+                        {isSorted ? (dir === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </button>
+                  ) : (
+                    headerContent
                   )}
                 </th>
               )

@@ -31,13 +31,14 @@ import { useCapabilities, useSettings } from '@/lib/useSharedQueries'
 import { QK } from '@/lib/queryKeys'
 import { CAP_LABELS } from '@/lib/capability-labels'
 import { Logo } from '@/components/Logo'
+import { BRAND_NAME, BRAND_COLOR } from '@/lib/brand'
 
 // ===== 引导页:5 步向导 =====
 // 0. 声明  1. 欢迎  2. 输入 Key(可跳过)  3. 能力探测结果  4. 完成 → 写标记 → 进面板
 
 const STEPS = ['声明', '欢迎', '配置 Key', '能力探测', '完成'] as const
 
-const BRAND = '#8B5CF6'
+const BRAND = BRAND_COLOR
 
 const HIGHLIGHTS = [
   { icon: LineChart,   title: '看板与自选', desc: '市场全景看板、涨跌分布、情绪雷达,自定义自选列表', tint: 'text-accent' },
@@ -108,7 +109,7 @@ export function Onboarding() {
             className="shrink-0"
             style={{ color: BRAND, filter: `drop-shadow(0 0 8px ${BRAND}55)` }}
           />
-          <span className="text-sm font-semibold tracking-tight">TickFlow Stock Panel</span>
+          <span className="text-sm font-semibold tracking-tight">{BRAND_NAME}</span>
         </div>
         {/* 步骤进度条 —— 胶囊式 */}
         <div className="flex items-center gap-1.5">
@@ -237,7 +238,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       </motion.div>
 
       <h1 className="mt-6 text-3xl font-bold text-foreground tracking-tight">
-        欢迎使用 TickFlow Stock Panel
+        欢迎使用 {BRAND_NAME}
       </h1>
       <p className="mt-3 text-sm text-secondary leading-relaxed max-w-md mx-auto">
         一个本地化的 A 股量化分析面板 —— 行情、选股、回测、监控、财务一体化。

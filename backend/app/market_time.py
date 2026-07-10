@@ -76,4 +76,3 @@ def trading_minutes_elapsed_from_ts(ts_ms: int | float | None) -> float:
     except (ValueError, TypeError, OSError):
         return float(_TRADING_TOTAL_MINUTES)
     return trading_minutes_elapsed_from_dt(dt)
-
