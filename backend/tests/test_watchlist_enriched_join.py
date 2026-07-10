@@ -93,17 +93,19 @@ def test_watchlist_symbol_not_in_enriched_still_returned(monkeypatch):
 
 
 def test_all_watchlist_missing_from_enriched(monkeypatch):
-    """极端情况: 自选全是 enriched 没覆盖的 (新用户冷启动场景)."""
+    """股票 enriched 缓存未就绪时, 自选仍返回占位行."""
+    syms = ["000001", "000002"]
     monkeypatch.setattr(wl_api.watchlist, "list_symbols",
-                        lambda: [{"symbol": "000001"}, {"symbol": "000002"}])
+                        lambda: [{"symbol": s} for s in syms])
     repo = _FakeRepo(
-        enriched_df=pl.DataFrame(schema={"symbol": pl.Utf8}),  # 空 schema, 模拟未就绪
+        enriched_df=pl.DataFrame(schema={"symbol": pl.Utf8}),
         enriched_date=None,
     )
 
-    # 注: 原契约 stock_symbols 非空且 enriched 空 → 返回未就绪. 这是设计, 不变.
     res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
-    assert res["rows"] == []
+
+    assert [r["symbol"] for r in res["rows"]] == syms
+    assert all(r.get("close") is None for r in res["rows"])
     assert res["as_of"] is None
 
 
@@ -147,3 +149,66 @@ def test_etf_not_in_enriched_still_returned(monkeypatch):
 
     row_missing = next(r for r in res["rows"] if r["symbol"] == "599999")
     assert row_missing["close"] is None
+
+
+def test_all_etf_watchlist_missing_from_enriched(monkeypatch):
+    """ETF enriched 缓存未就绪时, 自选仍返回占位行."""
+    syms = ["510300", "599999"]
+    monkeypatch.setattr(wl_api.watchlist, "list_symbols",
+                        lambda: [{"symbol": s} for s in syms])
+    repo = _FakeRepo(
+        enriched_df=pl.DataFrame(schema={"symbol": pl.Utf8}),
+        enriched_date=None,
+        etf_df=pl.DataFrame(schema={"symbol": pl.Utf8}),
+        etf_date=None,
+        etf_set=set(syms),
+    )
+
+    res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
+
+    assert [r["symbol"] for r in res["rows"]] == syms
+    assert all(r.get("close") is None for r in res["rows"])
+    assert res["as_of"] is None
+
+
+def test_mixed_watchlist_keeps_pending_stock_rows(monkeypatch):
+    """股票缓存未就绪不应影响 ETF 行, 且保持自选原始顺序."""
+    syms = ["510300", "000001", "510500"]
+    monkeypatch.setattr(wl_api.watchlist, "list_symbols",
+                        lambda: [{"symbol": s} for s in syms])
+    repo = _FakeRepo(
+        enriched_df=pl.DataFrame(schema={"symbol": pl.Utf8}),
+        enriched_date=None,
+        etf_df=_enriched_df([("510300", 4.0, 0.5, 1e8), ("510500", 6.0, -0.2, 2e8)]),
+        etf_date="2026-07-08",
+        etf_set={"510300", "510500"},
+    )
+
+    res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
+
+    assert [r["symbol"] for r in res["rows"]] == syms
+    assert next(r for r in res["rows"] if r["symbol"] == "000001").get("close") is None
+    assert next(r for r in res["rows"] if r["symbol"] == "510300")["close"] == 4.0
+    assert res["as_of"] == "2026-07-08"
+
+
+def test_mixed_watchlist_keeps_pending_etf_rows(monkeypatch):
+    """ETF 缓存未就绪不应影响股票行, 且保持自选原始顺序."""
+    syms = ["510300", "000001", "510500"]
+    monkeypatch.setattr(wl_api.watchlist, "list_symbols",
+                        lambda: [{"symbol": s} for s in syms])
+    repo = _FakeRepo(
+        enriched_df=_enriched_df([("000001", 15.0, 0.3, 2e9)]),
+        enriched_date="2026-07-08",
+        etf_df=pl.DataFrame(schema={"symbol": pl.Utf8}),
+        etf_date=None,
+        etf_set={"510300", "510500"},
+    )
+
+    res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
+
+    assert [r["symbol"] for r in res["rows"]] == syms
+    assert next(r for r in res["rows"] if r["symbol"] == "000001")["close"] == 15.0
+    assert all(next(r for r in res["rows"] if r["symbol"] == symbol).get("close") is None
+               for symbol in ("510300", "510500"))
+    assert res["as_of"] == "2026-07-08"
