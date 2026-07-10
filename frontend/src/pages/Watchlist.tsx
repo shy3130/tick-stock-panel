@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -755,7 +755,10 @@ export function Watchlist() {
     })
   }, [])
 
-  const clearFilters = useCallback(() => setFilters({}), [])
+  const resetAllFilters = useCallback(() => {
+    setFilters({})
+    persistBoardFilter(new Set(BOARDS))
+  }, [persistBoardFilter])
 
   // 可筛选的内置列
   const filterableBuiltinCols = useMemo(
@@ -809,6 +812,8 @@ export function Watchlist() {
   }, [rows, filters, columns, boardFilter])
 
   const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
+  const hasBoardFilter = boardFilter.size > 0 && boardFilter.size < BOARDS.length
+  const hasActiveFilters = activeFilterCount > 0 || hasBoardFilter
 
   // 排序（复用共享三态排序 hook）
   const { sort, toggle: handleSortToggle, sortRows } = useTableSort()
@@ -874,11 +879,11 @@ export function Watchlist() {
         }
         right={
           <div className="flex items-center gap-2">
-            {/* 筛选 / 搜索 */}
+            {/* 筛选 / 重置 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}
               className={`inline-flex items-center justify-center h-8 w-8 rounded-btn transition-colors duration-150 ease-smooth ${
-                filterOpen || activeFilterCount > 0
+                filterOpen || hasActiveFilters
                   ? 'bg-accent/15 text-accent hover:bg-accent/25'
                   : 'bg-elevated text-secondary hover:bg-elevated/80'
               }`}
@@ -886,6 +891,16 @@ export function Watchlist() {
             >
               <Filter className="h-4 w-4" />
             </button>
+            {hasActiveFilters && (
+              <button
+                onClick={resetAllFilters}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated text-secondary hover:bg-danger/10 hover:text-danger transition-colors duration-150 ease-smooth"
+                title="重置全部筛选"
+                aria-label="重置全部筛选"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+            )}
             <StockSearchBox
               onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
               existingSymbols={allSymbols as string[]}
@@ -997,9 +1012,9 @@ export function Watchlist() {
               </div>
             )
           })}
-          {activeFilterCount > 0 && (
-            <button onClick={clearFilters} className="mt-1 text-[10px] text-danger hover:text-danger/80 transition-colors">
-              清除全部筛选
+          {hasActiveFilters && (
+            <button onClick={resetAllFilters} className="mt-1 text-[10px] text-danger hover:text-danger/80 transition-colors">
+              重置全部筛选
             </button>
           )}
         </div>
@@ -1217,7 +1232,7 @@ export function Watchlist() {
             />
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-              {rows.map((r: any) => (
+              {sortedRows.map((r: any) => (
                 <StockCard
                   key={r.symbol}
                   r={r}

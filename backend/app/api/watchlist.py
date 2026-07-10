@@ -126,9 +126,6 @@ def watchlist_enriched(
     etf_symbols = [s for s in symbols if s in etf_set]
 
     df_e, cache_date = repo.get_enriched_latest()
-    # 保持原契约: 自选含股票但股票 enriched 未就绪 (预热中) → 返回"未就绪"而非部分结果
-    if stock_symbols and df_e.is_empty():
-        return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
     # 以自选列表为主表 LEFT JOIN enriched, 保证自选的每一只都返回一行;
     # 不在 enriched 缓存里的标的 (新股/冷门股/新用户未同步) 指标为 null, 前端渲染为 "—".
@@ -147,12 +144,13 @@ def watchlist_enriched(
     etf_date = None
     if etf_symbols:
         df_etf_all, etf_date = repo.get_enriched_latest_asset("etf")
+        etf_watchlist_df = pl.DataFrame({"symbol": etf_symbols})
         if not df_etf_all.is_empty():
             # ETF 同样以自选为主表 LEFT JOIN, 缺失标的指标为 null
-            etf_watchlist_df = pl.DataFrame({"symbol": etf_symbols})
             df_etf = etf_watchlist_df.join(df_etf_all, on="symbol", how="left")
-            if not df_etf.is_empty():
-                df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
+        else:
+            df_etf = etf_watchlist_df
+        df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
 
     # as_of 取两类缓存中较旧者, 避免把旧的 ETF 行标成股票缓存日期
     dates = [d for d in (cache_date if stock_symbols else None, etf_date) if d is not None]
