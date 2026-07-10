@@ -387,6 +387,10 @@ async def ai_save(req: AISaveRequest, request: Request):
         raise HTTPException(status_code=400, detail="strategy_id 仅允许字母、数字、下划线、短横线")
     if not (sid.startswith("ai_") or sid.startswith("custom_")):
         raise HTTPException(status_code=400, detail="策略 ID 必须以 ai_ 或 custom_ 开头")
+    try:
+        AIStrategyGenerator.validate_code(req.code, expected_strategy_id=sid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     path = out_dir / f"{sid}.py"
     previous_code = path.read_text(encoding="utf-8") if path.exists() else None
     path.write_text(req.code, encoding="utf-8")
