@@ -576,8 +576,8 @@ class BacktestEngine:
             if activate_pct is not None and drawdown_pct is not None and peak_price > entry_price:
                 peak_profit = peak_price / entry_price - 1
                 if peak_profit >= abs(float(activate_pct)):
-                    # 回撤止盈触发线: 相对峰值价回撤 drawdown 个点 (纯峰值口径)
-                    risk_lines.append((peak_price * (1 - abs(float(drawdown_pct))), "trailing_take_profit"))
+                    # 回撤止盈触发线: 峰值价回撤成本价的 drawdown 个点。
+                    risk_lines.append((peak_price - entry_price * abs(float(drawdown_pct)), "trailing_take_profit"))
 
             risk_lines = [(line, reason) for line, reason in risk_lines if _valid_price(line)]
             # 止损/移损/回撤止盈: 价格跌破风控线触发 (取最高优先级线)
@@ -1040,9 +1040,8 @@ class BacktestEngine:
                 if activate_pct is not None and drawdown_pct is not None and peak_price > entry_price:
                     peak_profit = peak_price / entry_price - 1
                     if peak_profit >= abs(float(activate_pct)):
-                        # 回撤止盈触发线: 相对峰值价回撤 drawdown 个点 (纯峰值口径)
-                        # 启动门槛用成本基准的浮盈率, 触发线用峰值基准, 与 trailing_stop 同口径
-                        take_profit_line = peak_price * (1 - abs(float(drawdown_pct)))
+                        # 回撤止盈触发线: 峰值价回撤成本价的 drawdown 个点。
+                        take_profit_line = peak_price - entry_price * abs(float(drawdown_pct))
                         risk_lines.append((take_profit_line, "trailing_take_profit"))
 
                 # 止损/移损/回撤止盈: 价格跌破风控线触发

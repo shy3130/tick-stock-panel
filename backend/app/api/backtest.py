@@ -68,7 +68,12 @@ def _guard_server_backtest_range(start: date, end: date):
 @router.get("/status")
 def status():
     """前端可用此接口判断回测页是否要灰显。"""
-    return {"available": True}
+    return {
+        "available": True,
+        "strategy_available": True,
+        "factor_available": True,
+        "signal_available": is_available(),
+    }
 
 
 # ================================================================
@@ -487,4 +492,3 @@ async def strategy_cancel(request: Request):
         job.cancel_event.set()
         return {"ok": True}
     return {"ok": False, "message": "任务不存在或已完成"}
-
