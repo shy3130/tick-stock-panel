@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import tempfile
 import threading
 from datetime import date
 from pathlib import Path
@@ -24,6 +26,31 @@ import polars as pl
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_write_parquet(df: pl.DataFrame, out: Path) -> None:
+    """Write ``df`` to ``out`` atomically via a same-directory temp file + rename.
+
+    ``df.write_parquet(out)`` straight to the final path leaves a truncated,
+    corrupt file if the process dies mid-write (crash, kill -9, disk full) —
+    and a single corrupt file under a glob-scanned directory breaks every
+    DuckDB view over it (``read_parquet`` raises ``InvalidInputException``,
+    not ``duckdb.IOException``, on a truncated file — see the startup view
+    registration guard in ``DataStore._register_views``). A crash here
+    instead leaves only an orphaned ``.tmp`` file, ignored by the
+    ``*.parquet`` glob pattern; ``out`` stays whichever generation (old or
+    new) fully completed.
+    """
+    out = Path(out)
+    fd, tmp_name = tempfile.mkstemp(dir=out.parent, prefix=f".{out.name}.", suffix=".tmp")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        df.write_parquet(tmp_path)
+        os.replace(tmp_path, out)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 class DataStore:
@@ -186,8 +213,14 @@ class DataStore:
         for sql in statements:
             try:
                 self.db.execute(sql)
-            except duckdb.IOException:
-                logger.debug("view registration skipped (no parquet yet): %s", sql[:60])
+            except duckdb.Error as e:
+                # Catches more than "no parquet yet" (duckdb.IOException): a
+                # truncated/corrupt part.parquet (e.g. from a crash mid-write,
+                # see _atomic_write_parquet) raises InvalidInputException, not
+                # IOException. Narrowly catching IOException here meant any
+                # single corrupt file would crash the whole app at startup
+                # instead of just leaving that one view unavailable.
+                logger.warning("view registration skipped for %s: %s", sql[:60], e)
         self._register_unified_views()
 
     def _has_parquet(self, subdir: str) -> bool:
@@ -1383,7 +1416,7 @@ class KlineRepository:
             return
         out = self.store.data_dir / "instruments_index" / "instruments_index.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.unique(subset=["symbol"], keep="last").sort("symbol").write_parquet(out)
+        _atomic_write_parquet(df.unique(subset=["symbol"], keep="last").sort("symbol"), out)
         self._index_instruments_cache = None
         self._etf_instruments_cache = None
         self._refresh_index_instruments()
@@ -1396,7 +1429,7 @@ class KlineRepository:
             df = df.with_columns(pl.lit("etf").alias("asset_type"))
         out = self.store.data_dir / "instruments_etf" / "instruments_etf.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.unique(subset=["symbol"], keep="last").sort("symbol").write_parquet(out)
+        _atomic_write_parquet(df.unique(subset=["symbol"], keep="last").sort("symbol"), out)
         self._etf_instruments_cache = None
         self._refresh_etf_instruments()
 
@@ -1444,7 +1477,7 @@ class KlineRepository:
                     subset=["symbol", "date"], keep="last"
                 )
             date_df = date_df.sort(["symbol", "date"])
-            date_df.write_parquet(out)
+            _atomic_write_parquet(date_df, out)
 
     def merge_live_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按 symbol 合并当天指定资产日K分区。用于少量自选实时，不覆盖全市场。"""
@@ -1471,7 +1504,7 @@ class KlineRepository:
             date_df = pl.concat([existing, date_df], how="diagonal_relaxed").unique(
                 subset=["symbol", "date"], keep="last"
             )
-        date_df.sort(["symbol", "date"]).write_parquet(out)
+        _atomic_write_parquet(date_df.sort(["symbol", "date"]), out)
 
     def merge_live_enriched_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按 symbol 合并当天 enriched 分区和内存缓存。用于少量自选实时。"""
@@ -1518,7 +1551,7 @@ class KlineRepository:
             df_storage = pl.concat([existing, df_storage], how="diagonal_relaxed").unique(
                 subset=["symbol", "date"], keep="last"
             )
-        df_storage.sort(["symbol"]).write_parquet(out)
+        _atomic_write_parquet(df_storage.sort(["symbol"]), out)
 
     def flush_live_daily(self, df: pl.DataFrame) -> None:
         """覆写当天 kline_daily 分区 (实时行情落盘, 非merge)。"""
@@ -1547,7 +1580,7 @@ class KlineRepository:
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.sort(["symbol", "date"]).write_parquet(out)
+        _atomic_write_parquet(df.sort(["symbol", "date"]), out)
 
     def _skip_raw_daily_write(self, op: str, df: pl.DataFrame) -> bool:
         from app.services.data_mode import is_local_daily_mode
@@ -1605,4 +1638,4 @@ class KlineRepository:
         ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df_storage.write_parquet(out)
+        _atomic_write_parquet(df_storage, out)
