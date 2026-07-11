@@ -20,11 +20,24 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 # Canonical per-domain snapshot roots (must match engine pkg/snapshot).
 ROOT_FSTORE = "/Volumes/WD1/snapshots/fstore"
 ROOT_ENGINE_A = "/Volumes/WD1/snapshots/engine-a"
 ROOT_ENGINE_HK = "/Volumes/WD1/snapshots/engine-hk"
+
+# resolve() is called on every EngineDataDuckDBClient query (see
+# engine_data_duckdb_client.py's _LeasedSource._resolve, which re-resolves the
+# generation per query so a live snapshot swap is picked up without a
+# restart). Each call does two file opens + JSON parses; measured ~28us on a
+# warm page cache, which is negligible for a single query but adds up under
+# tight loops (e.g. a screener/backtest issuing many sequential per-symbol
+# queries). A short TTL cache removes that repeated I/O while keeping the
+# generation-swap detection window well under anything operationally
+# meaningful (snapshots publish at most every few minutes).
+_CACHE_TTL_SECONDS = 1.5
+_cache: dict[tuple[str, str], tuple[float, str | None]] = {}
 
 # Raw production path -> (root, logical). Mirrors engine pkg/snapshot.rawTargets.
 # Note: the panel's default ``-web`` paths are intentionally absent; they fall
@@ -51,7 +64,20 @@ def resolve(root: str, logical: str) -> str | None:
     """Return the current-generation file for ``logical`` under ``root``.
 
     Returns ``None`` on any error so callers can fall back to a raw path.
+    Cached for ``_CACHE_TTL_SECONDS`` per (root, logical) — see module
+    docstring note above ``_cache`` for why.
     """
+    key = (root, logical)
+    cached = _cache.get(key)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+        return cached[1]
+    result = _resolve_uncached(root, logical)
+    _cache[key] = (now, result)
+    return result
+
+
+def _resolve_uncached(root: str, logical: str) -> str | None:
     try:
         with open(os.path.join(root, "current.json"), encoding="utf-8") as fh:
             generation = json.load(fh).get("generation", "")
