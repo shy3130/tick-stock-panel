@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import Any
 
 import polars as pl
 
@@ -21,6 +23,23 @@ logger = logging.getLogger(__name__)
 # ── 进程级历史数据缓存 (避免 run_all 每次重新扫描 parquet + 计算指标) ──
 _history_cache: dict[tuple[date, int], tuple[float, pl.DataFrame]] = {}
 _HISTORY_CACHE_TTL = 120.0  # 秒
+
+# ── 进程级复用的 DuckDB 连接,专供 ScreenerService.run() 的自定义 SQL 过滤用 ──
+# 实测 duckdb.connect(":memory:") 每次新建约 78ms(主要是引擎初始化 + register
+# 5500 行 arrow table),复用同一个连接后降到 ~0.5ms。ScreenerService 本身是
+# 每次请求现建的(见 app/api/screener.py 的 ScreenerService(repo)),所以连接
+# 必须放在模块级才能跨请求复用；用锁保证 register+query 这一对操作不会被并发
+# 请求交错(两个请求都注册名为 "enriched" 的视图会互相覆盖)。
+_screener_sql_conn: Any = None
+_screener_sql_lock = threading.Lock()
+
+
+def _get_screener_sql_conn():
+    global _screener_sql_conn
+    if _screener_sql_conn is None:
+        import duckdb
+        _screener_sql_conn = duckdb.connect(database=":memory:")
+    return _screener_sql_conn
 
 
 # 内置预设策略 — Polars 表达式方式
@@ -414,19 +433,18 @@ class ScreenerService:
         if pool:
             df = df.filter(pl.col("symbol").is_in(pool))
 
-        # 用 DuckDB 做 SQL 过滤 (注册临时视图)
+        # 用 DuckDB 做 SQL 过滤 (注册临时视图, 复用进程级连接见 _get_screener_sql_conn)
         try:
-            import duckdb
-            con = duckdb.connect(database=":memory:")
-            con.register("enriched", df.to_arrow())
             where = " AND ".join(f"({c})" for c in conditions)
             sql = f"SELECT * FROM enriched WHERE {where}"
             if order_by:
                 sql += f" ORDER BY {order_by}"
             if limit:
                 sql += f" LIMIT {limit}"
-            df_result = con.execute(sql).pl()
-            con.close()
+            with _screener_sql_lock:
+                con = _get_screener_sql_conn()
+                con.register("enriched", df.to_arrow())
+                df_result = con.execute(sql).pl()
         except Exception as e:  # noqa: BLE001
             logger.warning("screener SQL query failed: %s", e)
             df_result = pl.DataFrame()
