@@ -15,8 +15,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_fstore_realtime_duckdb_matches_postgres_shape(monkeypatch):
-    monkeypatch.setenv("FQUANT_FSTORE_MODE", "duckdb")
+def test_fstore_realtime_duckdb_matches_postgres_shape():
     duckdb_provider = FQuantProvider()
     duckdb_rows = duckdb_provider._get_fstore_realtime(["600519.SH"])
     assert len(duckdb_rows) == 1

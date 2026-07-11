@@ -2,24 +2,12 @@ from app.data_providers.fquant_provider import FQuantProvider
 from app.data_providers.normalizer import REALTIME_COLS, normalize_realtime
 
 
-class FakeSinaTencent:
-    def __init__(self):
-        self.calls = []
-
-    def get_quotes(self, symbols, prefer="tencent"):
-        self.calls.append((list(symbols), prefer))
-        return [{
-            "symbol": symbols[0],
-            "last_price": 10.0,
-            "volume": 100.0,
-            "source": prefer,
-            "ext": {},
-        }]
-
-
 class FakeFStore:
-    def query(self, sql, params=None):
-        return []
+    def __init__(self, rows=None):
+        self.rows = rows or []
+
+    def query(self, sql, params=None):  # noqa: ARG002
+        return self.rows
 
 
 def test_normalize_realtime_preserves_quote_service_contract():
@@ -39,66 +27,22 @@ def test_normalize_realtime_preserves_quote_service_contract():
     assert row["ext"]["change_pct"] == 0.7
 
 
-def test_realtime_source_cools_down_after_three_failures():
-    provider = object.__new__(FQuantProvider)
-    provider._realtime_failures = {}
-    provider._realtime_cooldown_until = {}
-
-    provider._record_realtime_failure("tdx-api")
-    provider._record_realtime_failure("tdx-api")
-    assert provider._realtime_source_available("tdx-api")
-
-    provider._record_realtime_failure("tdx-api")
-    assert not provider._realtime_source_available("tdx-api")
-
-    provider._record_realtime_success("tdx-api")
-    assert provider._realtime_source_available("tdx-api")
-
-
-def test_fquant_realtime_symbols_use_tencent_and_normalizer():
-    provider = object.__new__(FQuantProvider)
-    provider._tdx_api_base = ""
-    provider._sina_tencent = FakeSinaTencent()
-    provider._fstore = FakeFStore()
-
-    df = provider.get_realtime(symbols=["600519.SH"])
-
-    assert provider._sina_tencent.calls == [(["600519.SH"], "tencent")]
-    assert df.columns == REALTIME_COLS
-    assert df["source"][0] == "tencent"
-
-
-def test_fquant_realtime_merges_fstore_turnover_supplement():
-    provider = object.__new__(FQuantProvider)
-    provider._tdx_api_base = ""
-    provider._sina_tencent = FakeSinaTencent()
-    provider._get_fstore_realtime = lambda symbols: [{
-        "symbol": symbols[0],
-        "prev_close": 9.8,
-        "source": "fquant_local:fstore:daily_markets",
-        "ext": {"turnover_rate": 2.5, "amplitude": 3.1},
-    }]
-
-    df = provider.get_realtime(symbols=["600519.SH"])
-
-    row = df.to_dicts()[0]
-    assert row["source"] == "tencent"
-    assert row["prev_close"] == 9.8
-    assert row["ext"]["turnover_rate"] == 2.5
-
-
-def test_tdx_quote_source_uses_provider_name():
+def test_fquant_realtime_symbols_use_duckdb_snapshot_and_normalizer():
     provider = object.__new__(FQuantProvider)
     provider.name = "fquant_local"
+    provider._fstore = FakeFStore([{
+        "code": "600519",
+        "name": "贵州茅台",
+        "tdate": "2026-07-03",
+        "price": 1185.49,
+        "zrspj": 1180.0,
+        "cjl": 34268,
+    }])
 
-    row = provider._tdx_quote_to_row({
-        "Code": "SH600519",
-        "TotalHand": 1,
-        "Amount": 2,
-        "K": {"Last": 1180000, "Close": 1185490},
-    })
+    df = provider.get_realtime(symbols=["600519.SH"])
 
-    assert row["source"] == "fquant_local:tdx-api:/api/quote"
+    assert df.columns == REALTIME_COLS
+    assert df["source"][0] == "fquant_local:fstore:daily_markets"
 
 
 def test_fstore_quote_source_uses_provider_name():

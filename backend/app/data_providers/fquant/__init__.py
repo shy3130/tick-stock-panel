@@ -1,10 +1,9 @@
-"""FQuantProvider v2 — 直连 fstore PG + engine-data + moneyflow + 可选 tdx-api。
+"""FQuantProvider v2 — 直连本地 DuckDB 数据源。
 
 子模块（§4.1 文件结构）：
 - ``symbols``          符号归一
-- ``fstore_client``    fstore PostgreSQL 直连（psycopg v3，fallback psycopg2）
-- ``engine_data_client`` engine-data HTTP 客户端
-- ``moneyflow_client`` moneyflow HTTP 客户端
+- ``fstore_duckdb_client`` fstore web 快照只读客户端
+- ``engine_data_duckdb_client`` tdx.duckdb / minutes / trans 只读客户端
 - ``mapping``          上游字段 → 内部 schema 转换
 - ``adj_factor``       xdxr 事件 → 单次事件 ex_factor 计算
 - ``fallback``         本地源降级策略表

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Info } from 'lucide-react'
 import { api, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import {
@@ -155,6 +156,23 @@ export function StockDailyKChart({
     setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
   }, [])
 
+  const renderIndicatorButton = (ind: { key: string; label: string; description?: string }) => (
+    <button
+      key={ind.key}
+      type="button"
+      title={ind.description}
+      onClick={() => toggleIndicator(ind.key)}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+        activeIndicators.includes(ind.key)
+          ? 'bg-accent/20 text-accent'
+          : 'bg-elevated text-muted hover:text-secondary'
+      }`}
+    >
+      <span>{ind.label}</span>
+      {ind.description && <Info className="h-3 w-3 opacity-70" strokeWidth={1.5} />}
+    </button>
+  )
+
   const activeSubDefs = activeIndicators
     .map(key => SUB_CHARTS.find(s => s.key === key))
     .filter((d): d is typeof SUB_CHARTS[number] => !!d)
@@ -173,32 +191,8 @@ export function StockDailyKChart({
     <div className={className} style={{ minHeight: chartHeight }}>
       {showIndicatorControls && rows.length > 0 && (
         <div className="flex items-center gap-1.5 px-1 pb-0.5">
-          {SUB_CHARTS.map(ind => (
-            <button
-              key={ind.key}
-              onClick={() => toggleIndicator(ind.key)}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                activeIndicators.includes(ind.key)
-                  ? 'bg-accent/20 text-accent'
-                  : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-            >
-              {ind.label}
-            </button>
-          ))}
-          {OVERLAY_INDICATORS.map(ind => (
-            <button
-              key={ind.key}
-              onClick={() => toggleIndicator(ind.key)}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                activeIndicators.includes(ind.key)
-                  ? 'bg-accent/20 text-accent'
-                  : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-            >
-              {ind.label}
-            </button>
-          ))}
+          {SUB_CHARTS.map(renderIndicatorButton)}
+          {OVERLAY_INDICATORS.map(renderIndicatorButton)}
           {showMarkerToggle && showLimitMarkers && (
             <button
               onClick={() => setShowMarkers(v => !v)}

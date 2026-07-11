@@ -62,7 +62,7 @@ class FakeFStoreWithDailyMarkets:
                 "oracle_low": 47.0,
                 "oracle_close": 53.09,
             }]
-        if "t_1_daily_markets" in sql:
+        if "daily_markets" in sql:
             return [{
                 "date": "2026-07-01",
                 "oracle_open": 34.25,
@@ -169,39 +169,36 @@ def test_daily_close_map_keeps_pre_close_before_requested_start():
     assert closes["2024-06-18"] == 100.0
 
 
-def test_disk_engine_uses_symbol_key_to_preserve_exchange():
+def test_disk_engine_uses_code_key():
     engine = FakeEngine()
     provider = object.__new__(FQuantProvider)
     provider._engine = engine
     provider._fstore = FakeFStore()
-    provider._engine_mode = "disk"
-    provider.name = "fquant_local"
+    provider.name = "fquant"
 
     provider._get_daily_from_engine_wide("000001.SH", "000001", None, None)
 
-    assert engine.keys == [("wide", "000001.SH", "stock"), ("xdxr", "000001.SH", "stock")]
+    assert engine.keys == [("wide", "000001", "stock"), ("xdxr", "000001", "stock")]
 
 
-def test_hk_daily_uses_symbol_key_and_skips_stock_raw_reconstruction():
+def test_hk_daily_uses_code_key_and_skips_stock_raw_reconstruction():
     engine = FakeEngine()
     provider = object.__new__(FQuantProvider)
     provider._engine = engine
     provider._fstore = FakeFStore()
-    provider._engine_mode = "disk"
-    provider.name = "fquant_local"
+    provider.name = "fquant"
 
     rows = provider._get_daily_from_engine_wide("02577.HK", "02577", None, None, "hk")
 
     assert rows[0]["symbol"] == "02577.HK"
-    assert engine.keys == [("wide", "02577.HK", "hk")]
+    assert engine.keys == [("wide", "02577", "hk")]
 
 
 def test_index_daily_does_not_use_stock_raw_oracle_for_same_code():
     provider = object.__new__(FQuantProvider)
     provider._engine = FakeIndexEngine()
     provider._fstore = FakeFStore()
-    provider._engine_mode = "disk"
-    provider.name = "fquant_local"
+    provider.name = "fquant"
 
     rows = provider._get_daily_from_engine_wide("000001.SH", "000001", None, None, "index")
 

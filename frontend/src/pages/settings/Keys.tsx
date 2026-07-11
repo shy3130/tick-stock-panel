@@ -6,6 +6,7 @@ export function SettingsKeysPanel() {
   const settings = useSettings()
   const caps = useCapabilities()
   const provider = settings.data?.data_provider ?? settings.data?.mode ?? 'fquant_local'
+  const providerLabel = provider === 'fquant_local' ? 'duckdb' : provider
   const capEntries = Object.entries(caps.data?.capabilities ?? {})
 
   return (
@@ -16,7 +17,7 @@ export function SettingsKeysPanel() {
           <h2 className="text-sm font-medium text-foreground">数据源</h2>
         </div>
         <p className="mt-3 text-sm text-secondary leading-relaxed">
-          当前使用 <span className="font-mono text-foreground">{provider}</span> 数据源。
+          当前使用 <span className="font-mono text-foreground">{providerLabel}</span> 数据源。
           功能可用性由当前 provider capability 决定。
         </p>
         {caps.data && (

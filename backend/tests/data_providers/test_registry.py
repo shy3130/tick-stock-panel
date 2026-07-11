@@ -35,8 +35,8 @@ def test_unknown_env_provider_falls_back_to_local(monkeypatch):
     assert registry.get_active_provider_name("daily") == "fquant_local"
 
 
-def test_fquant_local_uses_disk_engine():
+def test_fquant_local_uses_duckdb_engine():
     provider = registry.get_provider("fquant_local")
 
     assert provider.name == "fquant_local"
-    assert provider._engine.__class__.__name__ == "EngineDataDiskClient"
+    assert provider._engine.__class__.__name__ == "EngineDataDuckDBClient"

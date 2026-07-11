@@ -225,6 +225,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
 function KeyStep({ onNext, onBack }: { onNext: () => void; onSkip: () => void; onBack: () => void }) {
   const settings = useSettings()
   const provider = settings.data?.data_provider ?? settings.data?.mode ?? 'fquant_local'
+  const providerLabel = provider === 'fquant_local' ? 'duckdb' : provider
 
   return (
     <div>
@@ -235,7 +236,7 @@ function KeyStep({ onNext, onBack }: { onNext: () => void; onSkip: () => void; o
         <h2 className="text-xl font-bold text-foreground">数据源已启用</h2>
       </div>
       <p className="mt-2.5 text-sm text-secondary leading-relaxed">
-        当前使用 <span className="font-mono text-foreground">{provider}</span> 数据源。
+        当前使用 <span className="font-mono text-foreground">{providerLabel}</span> 数据源。
         继续查看已启用的能力。
       </p>
 

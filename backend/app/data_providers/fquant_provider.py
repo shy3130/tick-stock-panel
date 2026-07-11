@@ -1,4 +1,4 @@
-"""FQuantProvider v2 — 直连 fstore PG + engine-data/TDX disk + moneyflow + realtime fallback。
+"""FQuantProvider v2 — 直连本地 DuckDB 数据源。
 
 严格按 ``backend/docs/FQUANT_PROVIDER_DESIGN.md`` §4 模块设计 / §5 数据映射 /
 §6 配置 / §7 错误降级 / §8 测试方案 实现。
@@ -9,10 +9,8 @@
     ├── fquant/
     │   ├── __init__.py          符号归一重导出
     │   ├── symbols.py           符号归一（split_symbol 等）
-    │   ├── fstore_client.py     psycopg v3 PG 客户端
-    │   ├── engine_data_client.py engine-data HTTP 客户端
-    │   ├── engine_data_disk.py  TDX 磁盘 CSV 客户端（fquant_local）
-    │   ├── moneyflow_client.py  moneyflow HTTP 客户端
+    │   ├── fstore_duckdb_client.py fstore.duckdb 只读客户端
+    │   ├── engine_data_duckdb_client.py tdx.duckdb / minutes / trans 只读客户端
     │   ├── sina_tencent_client.py realtime fallback 客户端
     │   ├── mapping.py           上游字段 → 内部 schema
     │   ├── adj_factor.py        xdxr → 单次事件 ex_factor
@@ -23,54 +21,42 @@
 能力声明（§3.5 / §4.2）::
 
     instruments=True, daily=True, adj_factor=True,
-    minute=True, realtime=True, financial=True, depth=True, universes=True
+    minute=True, realtime=True, financial=True, depth=False, universes=True
 
 错误降级（§7）：任一源不可达 → 返回空 DF + warning，不抛异常。
 """
 from __future__ import annotations
 
 import logging
-import os
-import time
 from datetime import datetime, timedelta
 
-import httpx
 import polars as pl
 
 from app.data_providers.base import AssetType, ProviderCapabilities
 from app.data_providers.fquant.adj_factor import (
     build_ex_factor_df,
-    compute_ex_factor_from_chuquan,
     compute_ex_factor_from_xdxr,
 )
-from app.data_providers.fquant.engine_data_client import EngineDataClient
-from app.data_providers.fquant.fstore_client import FStoreClient
+from app.data_providers.fquant.engine_data_duckdb_client import EngineDataDuckDBClient
 from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
 from app.data_providers.fquant.mapping import (
     base_infos_rows_to_instruments,
     chengfen_gu_rows_to_universes,
     chuquan_rows_to_events,
-    day_rows_to_daily,
     financial_rows_to_df,
-    generated_minute_time,
     klines_rows_to_daily,
     minutes_rows_to_minute_df,
     moneyflow_daily_to_df,
-    moneyflow_minute_to_df,
     trans_rows_to_df,
     wide_rows_to_daily,
     xdxr_rows_to_events,
 )
-from app.data_providers.fquant.moneyflow_client import MoneyflowClient
 from app.data_providers.fquant.raw_reconstruct import reconstruct_raw_rows
-from app.data_providers.fquant.sina_tencent_client import SinaTencentClient
 from app.data_providers.fquant.symbols import (
-    code_and_market_to_symbol,
     code_to_symbol,
     is_etf_symbol,
     split_symbol,
     symbol_to_code,
-    symbol_to_market,
 )
 from app.data_providers.normalizer import (
     normalize_adj_factors,
@@ -147,23 +133,6 @@ def _aggregate_minute_df(df: pl.DataFrame, freq: str) -> pl.DataFrame:
     return pl.DataFrame(rows) if rows else pl.DataFrame()
 
 
-def _build_fstore_client():
-    """按 ``FQUANT_FSTORE_MODE`` 选择 fstore 客户端实现。
-
-    - ``postgres``（默认）：直连 fstore PostgreSQL（现状，安全回退）。
-    - ``duckdb``：只读打开 /Volumes/WD1/fstore.duckdb。
-
-    这是一个独立于 ``DATA_PROVIDER``/provider 白名单的内部开关——切换
-    fstore 后端不改变 provider 的名字（仍然是 fquant/fquant_local），
-    因为对上层调用方而言这只是同一份数据换了个更快的读取路径，不是
-    换了一个新的数据 provider。
-    """
-    mode = os.getenv("FQUANT_FSTORE_MODE", "postgres").strip().lower()
-    if mode == "duckdb":
-        return FStoreDuckDBClient()
-    return FStoreClient()
-
-
 # =========================================================================== #
 # FQuantProvider（对外接口，本地源聚合）
 # =========================================================================== #
@@ -175,7 +144,7 @@ class FQuantProvider:
 
     能力声明（§3.5 / §4.2）：
     - instruments / daily / adj_factor / minute / realtime / financial / universes → True
-    - depth → True；腾讯实时行情补充 5 档盘口
+    - depth → False；本地 DuckDB 当前无 5 档盘口
     """
 
     name = "fquant"
@@ -186,40 +155,19 @@ class FQuantProvider:
         minute=True,
         realtime=True,
         financial=True,
-        depth=True,
+        depth=False,
         universes=True,   # 阶段 3 #3.2：fstore chengfen_gu 提供指数/板块/行业
         minute_month_extension=True,
     )
 
-    def __init__(self, engine_mode: str = "http") -> None:
-        self._fstore = _build_fstore_client()
-        if engine_mode == "disk":
-            from app.data_providers.fquant.engine_data_disk import EngineDataDiskClient
-            self._engine = EngineDataDiskClient()
-            self.name = "fquant_local"
-        else:
-            self._engine = EngineDataClient()
-        if os.getenv("FQUANT_ENGINE_DATA_SOURCE", "").strip().lower() == "duckdb":
-            from app.data_providers.fquant.engine_data_duckdb_client import EngineDataDuckDBClient
-            self._engine = EngineDataDuckDBClient()
-        self._engine_mode = engine_mode
-        self._moneyflow = MoneyflowClient()
-        self._tdx_api_base = (
-            os.getenv("FQUANT_TDX_API_BASE")
-            or os.getenv("DSA_TDX_API_BASE_URL")
-            or os.getenv("TDX_API_BASE_URL")
-            or ""
-        ).strip().rstrip("/")
-        self._realtime_failures: dict[str, int] = {}
-        self._realtime_cooldown_until: dict[str, float] = {}
-        self._sina_tencent = SinaTencentClient()
+    def __init__(self, name: str = "fquant") -> None:
+        self.name = name
+        self._fstore = FStoreDuckDBClient()
+        self._engine = EngineDataDuckDBClient()
         # instruments 缓存（§4.3 24h TTL）
         self._instruments_cache: dict[str, pl.DataFrame] = {}
         self._instruments_cache_ts: dict[str, datetime] = {}
         self._instruments_cache_ttl = 86400  # 秒
-
-    def _engine_key(self, symbol: str, code: str) -> str:
-        return symbol if getattr(self, "_engine_mode", "http") == "disk" else code
 
     # ------------------------------------------------------------------ #
     # get_instruments — §4.3 主源 fstore.base_infos
@@ -328,14 +276,13 @@ class FQuantProvider:
             limit = max(250, (end_time - start_time).days + 10)
         else:
             limit = 250
-        engine_key = self._engine_key(symbol, code)
-        rows = self._engine.get_wide(engine_key, limit=limit, asset_type=asset_type)
+        rows = self._engine.get_wide(code, limit=limit, asset_type=asset_type)
         if rows:
             # engine 返回最新在前，反转成时间正序
             rows = list(reversed(rows))
             if asset_type == "stock":
                 oracle_rows = self._get_raw_oracle_rows(code, rows)
-                events = self._engine.get_xdxr(engine_key, asset_type=asset_type)
+                events = self._engine.get_xdxr(code, asset_type=asset_type)
                 rows = reconstruct_raw_rows(rows, events, oracle_rows)
             logger.debug("EngineData wide %s: %d 行", code, len(rows))
         # 映射到 normalizer 期望的字段名
@@ -364,8 +311,8 @@ class FQuantProvider:
     def _get_raw_oracle_rows(self, code: str, rows: list[dict]) -> list[dict]:
         """Fetch fstore raw OHLC oracle for the date span of engine rows.
 
-        DuckDB 模式：t_1_daily_markets 不存在，改用无前缀的 daily_markets 长表，
-        字段从 payload_json 抽取（模式与 _query_fstore_realtime_rows 一致）。
+        t_1_daily_markets 不存在，改用无前缀的 daily_markets 长表，
+        字段从 payload_json 抽取。
         t_1_day_klines 两种模式下均可用（DuckDB 原生支持 ::text/::float8 cast）。
         """
         dates = sorted(str(r.get("date")) for r in rows if r.get("date"))
@@ -387,40 +334,22 @@ class FQuantProvider:
             """,
             (code, dates[0], dates[-1]),
         )
-        if isinstance(self._fstore, FStoreDuckDBClient):
-            market_rows = self._fstore.query(
-                """
-                SELECT
-                    trade_date::text AS date,
-                    CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS oracle_open,
-                    CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS oracle_high,
-                    CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS oracle_low,
-                    price AS oracle_close,
-                    CAST(NULLIF(payload_json->>'Cjl', '') AS DOUBLE) * 100 AS oracle_volume,
-                    CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS oracle_amount
-                FROM daily_markets
-                WHERE asset_type = 1 AND code = %s AND trade_date BETWEEN %s AND %s
-                ORDER BY trade_date ASC
-                """,
-                (code, dates[0], dates[-1]),
-            )
-        else:
-            market_rows = self._fstore.query(
-                """
-                SELECT
-                    tdate::text AS date,
-                    jrkpj::float8 AS oracle_open,
-                    zgj::float8 AS oracle_high,
-                    zdj::float8 AS oracle_low,
-                    price::float8 AS oracle_close,
-                    cjl::float8 * 100 AS oracle_volume,
-                    cje::float8 AS oracle_amount
-                FROM t_1_daily_markets
-                WHERE code = %s AND tdate BETWEEN %s AND %s
-                ORDER BY tdate ASC
-                """,
-                (code, dates[0], dates[-1]),
-            )
+        market_rows = self._fstore.query(
+            """
+            SELECT
+                trade_date::text AS date,
+                CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS oracle_open,
+                CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS oracle_high,
+                CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS oracle_low,
+                price AS oracle_close,
+                CAST(NULLIF(payload_json->>'Cjl', '') AS DOUBLE) * 100 AS oracle_volume,
+                CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS oracle_amount
+            FROM daily_markets
+            WHERE asset_type = 1 AND code = %s AND trade_date BETWEEN %s AND %s
+            ORDER BY trade_date ASC
+            """,
+            (code, dates[0], dates[-1]),
+        )
         by_date = {str(r.get("date")): r for r in day_rows}
         by_date.update({str(r.get("date")): r for r in market_rows})
         return [by_date[k] for k in sorted(by_date)]
@@ -534,7 +463,7 @@ class FQuantProvider:
 
     def _get_adj_events_from_engine(self, symbol: str, code: str) -> list[dict]:
         """主源 engine-data ``xdxr`` → 归一事件行（§5.3）。"""
-        rows = self._engine.get_xdxr(self._engine_key(symbol, code))
+        rows = self._engine.get_xdxr(code)
         if rows:
             logger.debug("EngineData xdxr %s: %d 行", code, len(rows))
         return xdxr_rows_to_events(rows, symbol) if rows else []
@@ -545,46 +474,27 @@ class FQuantProvider:
     ) -> list[dict]:
         """备份 fstore ``chuquan_chuxi`` → 归一事件行（§5.3）。
 
-        DuckDB 模式下 ``t_date`` 是 ``TIMESTAMPTZ``，DuckDB 的 Python 驱动
-        需要 ``pytz`` 才能把它物化成 Python 对象，而 ``pytz`` 不是本仓库的
-        核心依赖。这里把 SELECT 里的 ``t_date`` cast 成 ``DATE``，绕开
-        TIMESTAMPTZ 物化，从而不需要新增依赖。PostgreSQL 模式的 SQL 保持
-        不变（``chuquan_chuxi.t_date`` 在 PG 里是另一种类型，现有 SQL 已
-        经能正常工作）。
+        把 SELECT 里的 ``t_date`` cast 成 ``DATE``，绕开 TIMESTAMPTZ 物化。
         """
-        is_duckdb = isinstance(self._fstore, FStoreDuckDBClient)
         if start_time and end_time:
-            if is_duckdb:
-                sql = (
-                    "SELECT CAST(t_date AS DATE) AS t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
-                    "FROM chuquan_chuxi WHERE code = %s AND t_date BETWEEN %s AND %s "
-                    "ORDER BY t_date ASC"
-                )
-            else:
-                sql = (
-                    "SELECT t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
-                    "FROM chuquan_chuxi WHERE code = %s AND t_date BETWEEN %s AND %s "
-                    "ORDER BY t_date ASC"
-                )
+            sql = (
+                "SELECT CAST(t_date AS DATE) AS t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
+                "FROM chuquan_chuxi WHERE code = %s AND t_date BETWEEN %s AND %s "
+                "ORDER BY t_date ASC"
+            )
             params: tuple = (code, start_time, end_time)
         else:
-            if is_duckdb:
-                sql = (
-                    "SELECT CAST(t_date AS DATE) AS t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
-                    "FROM chuquan_chuxi WHERE code = %s "
-                    "ORDER BY t_date DESC LIMIT 100"
-                )
-            else:
-                sql = (
-                    "SELECT t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
-                    "FROM chuquan_chuxi WHERE code = %s "
-                    "ORDER BY t_date DESC LIMIT 100"
-                )
+            sql = (
+                "SELECT CAST(t_date AS DATE) AS t_date, pgbl, pgjg, pxbl, sgbl, cqcxtype "
+                "FROM chuquan_chuxi WHERE code = %s "
+                "ORDER BY t_date DESC LIMIT 100"
+            )
             params = (code,)
         rows = self._fstore.query(sql, params)
         if rows:
             logger.debug("FStoreDB chuquan_chuxi %s: %d 行", code, len(rows))
         return chuquan_rows_to_events(rows, symbol) if rows else []
+
 
     def _build_daily_close_map(
         self, symbol: str, code: str,
@@ -647,7 +557,7 @@ class FQuantProvider:
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
-            ticks = self._engine.get_minutes(self._engine_key(sym, code), date_str)
+            ticks = self._engine.get_minutes(code, date_str, asset_type=asset_type)
             if not ticks:
                 logger.debug("EngineData minutes %s %s: 无数据", code, date_str)
                 continue
@@ -662,54 +572,24 @@ class FQuantProvider:
         return _aggregate_minute_df(df, freq)
 
     # ------------------------------------------------------------------ #
-    # get_realtime — tdx-api + sina/tencent + fstore daily_markets fallback
+    # get_realtime — fstore daily_markets DuckDB snapshot
     # ------------------------------------------------------------------ #
     def get_realtime(
         self,
         universes: list[str] | None = None,
         symbols: list[str] | None = None,
     ) -> pl.DataFrame:
-        """Realtime 不能通过 ``../fquant`` HTTP API 中转。
-
-        路径与 ``../fquant`` 的本地 provider 一致：
-        1. 可选相邻 ``tdx-api``：``FQUANT_TDX_API_BASE`` / ``DSA_TDX_API_BASE_URL``
-           / ``TDX_API_BASE_URL`` 指向 ``/api/quote``。
-        2. sina/tencent 受控适配器（watchlist 偏 tencent，全市场偏 sina）。
-        3. fstore ``daily_markets`` 最新快照 fallback。
-        """
+        """从本地 DuckDB ``daily_markets`` 最新快照返回 realtime 形状。"""
         target_symbols = self._resolve_realtime_symbols(universes, symbols)
         if not target_symbols:
             return pl.DataFrame()
 
-        rows: list[dict] = []
-        remaining = list(dict.fromkeys(target_symbols))
-
-        if self._tdx_api_base:
-            tdx_rows = self._get_tdx_realtime(remaining)
-            if tdx_rows:
-                rows.extend(tdx_rows)
-                got = {r["symbol"] for r in tdx_rows if r.get("symbol")}
-                remaining = [s for s in remaining if s not in got]
-
-        if remaining:
-            prefer = "sina" if universes else "tencent"
-            st_rows = self._sina_tencent.get_quotes(remaining, prefer=prefer)
-            if st_rows:
-                rows.extend(st_rows)
-                got = {r["symbol"] for r in st_rows if r.get("symbol")}
-                remaining = [s for s in remaining if s not in got]
-
-        if remaining:
-            rows.extend(self._get_fstore_realtime(remaining))
-
-        self._merge_fstore_quote_supplements(rows)
+        rows = self._get_fstore_realtime(list(dict.fromkeys(target_symbols)))
         return normalize_realtime(rows, source=self.name) if rows else pl.DataFrame()
 
     def get_depth(self, symbols: list[str]) -> dict:
-        """Return Tencent five-level depth rows for sealed limit-up/down checks."""
-        if not symbols:
-            return {}
-        return self._sina_tencent.get_depth(symbols)
+        """本地 DuckDB 当前无五档盘口。"""
+        return {}
 
     def get_latest_market_supplements(self, symbols: list[str]) -> pl.DataFrame:
         """Latest fstore daily_markets fields that realtime sources may omit."""
@@ -765,80 +645,6 @@ class FQuantProvider:
             return []
         return df["symbol"].cast(pl.Utf8).to_list()
 
-    def _get_tdx_realtime(self, symbols: list[str]) -> list[dict]:
-        if not self._realtime_source_available("tdx-api"):
-            return []
-        a_symbols = [s for s in symbols if symbol_to_market(s) and symbol_to_market(s)[0] == 1]
-        if not a_symbols:
-            return []
-        codes = ",".join(symbol_to_code(s) for s in a_symbols)
-        try:
-            resp = httpx.get(
-                f"{self._tdx_api_base}/api/quote",
-                params={"code": codes},
-                timeout=3,
-                trust_env=False,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-        except Exception as e:  # noqa: BLE001
-            logger.warning("tdx-api realtime quote failed: %s", e)
-            self._record_realtime_failure("tdx-api")
-            return []
-        if int(payload.get("code", -1)) != 0:
-            logger.warning("tdx-api realtime quote code=%s message=%s", payload.get("code"), payload.get("message"))
-            self._record_realtime_failure("tdx-api")
-            return []
-        data = payload.get("data") or []
-        if not isinstance(data, list):
-            self._record_realtime_failure("tdx-api")
-            return []
-        self._record_realtime_success("tdx-api")
-        return [row for item in data if (row := self._tdx_quote_to_row(item))]
-
-    def _realtime_source_available(self, source: str) -> bool:
-        until = self._realtime_cooldown_until.get(source, 0)
-        if until > time.monotonic():
-            logger.debug("realtime source %s cooling down for %.1fs", source, until - time.monotonic())
-            return False
-        return True
-
-    def _record_realtime_success(self, source: str) -> None:
-        self._realtime_failures[source] = 0
-        self._realtime_cooldown_until.pop(source, None)
-
-    def _record_realtime_failure(self, source: str) -> None:
-        failures = self._realtime_failures.get(source, 0) + 1
-        self._realtime_failures[source] = failures
-        if failures >= 3:
-            self._realtime_cooldown_until[source] = time.monotonic() + 60
-            logger.warning("realtime source %s disabled for 60s after %d failures", source, failures)
-
-    def _tdx_quote_to_row(self, item: dict) -> dict | None:
-        code = str(item.get("Code") or item.get("code") or "")
-        code_digits = "".join(ch for ch in code if ch.isdigit())
-        if len(code_digits) < 6:
-            return None
-        symbol = code_to_symbol(code_digits[-6:], 1)
-        k = item.get("K") or item.get("k") or {}
-        last_price = self._tdx_price(k.get("Close"))
-        prev_close = self._tdx_price(k.get("Last"))
-        if last_price is None:
-            return None
-        return self._quote_row(
-            symbol=symbol,
-            name=None,
-            source=f"{self.name}:tdx-api:/api/quote",
-            last_price=last_price,
-            prev_close=prev_close,
-            open_=self._tdx_price(k.get("Open")),
-            high=self._tdx_price(k.get("High")),
-            low=self._tdx_price(k.get("Low")),
-            volume=self._hands_to_shares(item.get("TotalHand")),
-            amount=self._float_or_none(item.get("Amount")),
-            timestamp=str(item.get("ServerTime") or ""),
-        )
-
     def _get_fstore_realtime(self, symbols: list[str]) -> list[dict]:
         grouped: dict[int, list[str]] = {}
         for symbol in symbols:
@@ -854,69 +660,31 @@ class FQuantProvider:
         return [r for r in out if r]
 
     def _query_fstore_realtime_rows(self, asset_type: int, codes: list[str]) -> list[dict]:
-        """按当前 fstore 客户端类型选择表结构。
-
-        PostgreSQL：按 asset_type 物理分表 t_{asset_type}_daily_markets，
-        字段是具名列。DuckDB：统一长表 daily_markets，asset_type 是
-        过滤列，其余字段打包在 payload_json（驼峰 key）里，用
-        ``->>`` 抽取后转型别名，对齐 PostgreSQL 分支的输出列名，
-        这样调用方 ``_fstore_quote_to_row`` 不需要区分数据源。
+        """从 daily_markets 长表中查询，其余字段打包在 payload_json（驼峰 key）里，用
+        ``->>`` 抽取后转型别名。
         """
         placeholders = ",".join(["%s"] * len(codes))
-        if isinstance(self._fstore, FStoreDuckDBClient):
-            sql = f"""
-                SELECT DISTINCT ON (code)
-                    code,
-                    COALESCE(payload_json->>'Name', '') AS name,
-                    trade_date AS tdate,
-                    price,
-                    CAST(NULLIF(payload_json->>'Zdfd', '') AS DOUBLE) AS zdfd,
-                    CAST(NULLIF(payload_json->>'Zded', '') AS DOUBLE) AS zded,
-                    CAST(NULLIF(payload_json->>'Cjl', '') AS BIGINT) AS cjl,
-                    CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS cje,
-                    CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS jrkpj,
-                    CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS zgj,
-                    CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS zdj,
-                    CAST(NULLIF(payload_json->>'Zrspj', '') AS DOUBLE) AS zrspj,
-                    CAST(NULLIF(payload_json->>'Hslv', '') AS DOUBLE) AS hslv,
-                    CAST(NULLIF(payload_json->>'Zhfu', '') AS DOUBLE) AS zhfu
-                FROM daily_markets
-                WHERE asset_type = %s AND code IN ({placeholders})
-                ORDER BY code, trade_date DESC
-            """
-            return self._fstore.query(sql, (asset_type, *codes))
-
-        table = f"t_{asset_type}_daily_markets"
         sql = f"""
             SELECT DISTINCT ON (code)
-                code, name, tdate, price, zdfd, zded, cjl, cje,
-                jrkpj, zgj, zdj, zrspj, hslv, zhfu
-            FROM {table}
-            WHERE code IN ({placeholders})
-            ORDER BY code, tdate DESC
+                code,
+                COALESCE(payload_json->>'Name', '') AS name,
+                trade_date AS tdate,
+                price,
+                CAST(NULLIF(payload_json->>'Zdfd', '') AS DOUBLE) AS zdfd,
+                CAST(NULLIF(payload_json->>'Zded', '') AS DOUBLE) AS zded,
+                CAST(NULLIF(payload_json->>'Cjl', '') AS BIGINT) AS cjl,
+                CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS cje,
+                CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS jrkpj,
+                CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS zgj,
+                CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS zdj,
+                CAST(NULLIF(payload_json->>'Zrspj', '') AS DOUBLE) AS zrspj,
+                CAST(NULLIF(payload_json->>'Hslv', '') AS DOUBLE) AS hslv,
+                CAST(NULLIF(payload_json->>'Zhfu', '') AS DOUBLE) AS zhfu
+            FROM daily_markets
+            WHERE asset_type = %s AND code IN ({placeholders})
+            ORDER BY code, trade_date DESC
         """
-        return self._fstore.query(sql, codes)
-
-    def _merge_fstore_quote_supplements(self, rows: list[dict]) -> None:
-        symbols = [str(r.get("symbol") or "") for r in rows if r.get("symbol")]
-        if not symbols:
-            return
-        supplements = self._get_fstore_realtime(list(dict.fromkeys(symbols)))
-        by_symbol = {r.get("symbol"): r for r in supplements if r.get("symbol")}
-        for row in rows:
-            extra = by_symbol.get(row.get("symbol"))
-            if not extra:
-                continue
-            row_ext = row.get("ext")
-            if not isinstance(row_ext, dict):
-                row_ext = {}
-                row["ext"] = row_ext
-            extra_ext = extra.get("ext") or {}
-            for key in ("turnover_rate", "amplitude"):
-                if row_ext.get(key) is None and extra_ext.get(key) is not None:
-                    row_ext[key] = extra_ext[key]
-            if row.get("prev_close") is None and extra.get("prev_close") is not None:
-                row["prev_close"] = extra["prev_close"]
+        return self._fstore.query(sql, (asset_type, *codes))
 
     @staticmethod
     def _asset_type_num_for_symbol(symbol: str) -> int | None:
@@ -998,13 +766,6 @@ class FQuantProvider:
                 "turnover_rate": turnover_rate,
             },
         }
-
-    @staticmethod
-    def _tdx_price(value) -> float | None:
-        number = FQuantProvider._float_or_none(value)
-        if number is None or number <= 0:
-            return None
-        return number / 1000
 
     @staticmethod
     def _hands_to_shares(value) -> float | None:
@@ -1121,7 +882,7 @@ class FQuantProvider:
         if not (want_index or want_sector):
             return pl.DataFrame()
 
-        # fstore PG: 取每 code 最新非空 cfg 行
+        # fstore DuckDB: 取每 code 最新非空 cfg 行
         # 使用 DISTINCT ON (code) 拿 max(t_date) 的行
         sql = """
             SELECT DISTINCT ON (code)
@@ -1190,7 +951,7 @@ class FQuantProvider:
         return financial_rows_to_df(rows, symbol=symbol, table=table, source_tag=f"{self.name}:fstore")
 
     # ------------------------------------------------------------------ #
-    # get_moneyflow_daily — §4.9 moneyflow /daily/stocks
+    # get_moneyflow_daily — §4.9 DuckDB market_fund_flow
     # ------------------------------------------------------------------ #
     def get_moneyflow_daily(
         self, symbols: list[str], date: datetime | None = None,
@@ -1200,7 +961,6 @@ class FQuantProvider:
         :param symbols: 带后缀符号列表
         :param date: 查询日期；None 取当天
         :return: df 列含 symbol/date/source/main_net/total_net/...
-        降级（§7.1）：API 不可达 → 空 df
         """
         if not symbols:
             return pl.DataFrame()
@@ -1210,64 +970,31 @@ class FQuantProvider:
         code_to_sym = {symbol_to_code(s): s for s in symbols}
 
         disk_data: dict[str, dict] = {}
-        if hasattr(self._engine, "get_fund_daily"):
-            for sym, code in zip(symbols, codes, strict=False):
-                total = self._engine.get_fund_daily(self._engine_key(sym, code), date_iso)
-                if total:
-                    disk_data[code] = total
+        for code in codes:
+            total = self._engine.get_fund_daily(code, date_iso)
+            if total:
+                disk_data[code] = total
 
-        missing_codes = [code for code in codes if code not in disk_data]
-        http_data = self._moneyflow.get_daily(missing_codes, date_iso) if missing_codes else {}
-        data = {**http_data, **disk_data}
-        if not data:
+        if not disk_data:
             return pl.DataFrame()
 
-        return moneyflow_daily_to_df(data, code_to_sym, date_iso, source=self.name)
+        return moneyflow_daily_to_df(disk_data, code_to_sym, date_iso, source=self.name)
 
     def get_moneyflow_range(self, symbol: str, start: datetime, end: datetime) -> pl.DataFrame:
         """区间资金流查询（三锁指标资金锁专用）。"""
-        if not hasattr(self._engine, "get_fund_range"):
-            return pl.DataFrame()
         code = symbol_to_code(symbol)
         return self._engine.get_fund_range(
-            self._engine_key(symbol, code),
+            code,
             start.strftime("%Y-%m-%d"),
             end.strftime("%Y-%m-%d"),
         )
 
-    # ------------------------------------------------------------------ #
-    # get_moneyflow_minute — §4.9 moneyflow /minute/stocks
-    # ------------------------------------------------------------------ #
     def get_moneyflow_minute(
         self, symbols: list[str], date: datetime | None = None,
     ) -> pl.DataFrame:
-        """分钟级资金流（§4.9 / §5.7 扩展方法）。
+        """分钟级资金流（已下线，恒返回空 DataFrame）。"""
+        return pl.DataFrame()
 
-        :param symbols: 带后缀符号列表
-        :param date: 查询日期；None 取当天
-        :return: df 列含 symbol/trade_date/bucket_time/net_amount/main_traditional_net/...
-        注意（§7.4）：09:25 桶 NetAmount=0 是集合竞价假阳性，上层需自行跳过。
-        降级（§7.1）：API 不可达 → 空 df
-        """
-        if not symbols:
-            return pl.DataFrame()
-
-        date_iso = (date or datetime.now()).strftime("%Y-%m-%d")
-        frames: list[pl.DataFrame] = []
-        for sym in symbols:
-            code = symbol_to_code(sym)
-            records = self._moneyflow.get_minute(code, date_iso)
-            if not records:
-                continue
-            df = moneyflow_minute_to_df(records, sym, date_iso, source=self.name)
-            if not df.is_empty():
-                frames.append(df)
-
-        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
-
-    # ------------------------------------------------------------------ #
-    # get_transactions — §3.4 扩展方法 engine-data trans
-    # ------------------------------------------------------------------ #
     def get_transactions(self, symbol: str, date: datetime) -> pl.DataFrame:
         """逐笔成交（§3.4 扩展方法 / §2.2 trans）。
 
@@ -1279,7 +1006,8 @@ class FQuantProvider:
         """
         code = symbol_to_code(symbol)
         date_str = date.strftime("%Y%m%d")
-        rows = self._engine.get_trans(self._engine_key(symbol, code), date_str)
+        _, suffix = split_symbol(symbol)
+        rows = self._engine.get_trans(code, date_str, asset_type="hk" if suffix == "HK" else None)
         if not rows:
             return pl.DataFrame()
         return trans_rows_to_df(rows, symbol, date_str, source=self.name)

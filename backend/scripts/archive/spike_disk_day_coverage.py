@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.data_providers.fquant.fstore_client import FStoreClient  # noqa: E402
+from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient  # noqa: E402
 
 TDX = Path(os.environ.get("TDX_DATA_DIR", "/Volumes/vol3/tdx"))
 INSTRUMENTS = ROOT.parent / "data" / "instruments" / "instruments.parquet"
@@ -53,7 +53,7 @@ def load_instruments() -> list[dict[str, str]]:
     return df.select("symbol", "code", "name", "exchange").to_dicts()
 
 
-def load_base_infos(client: FStoreClient, codes: list[str]) -> dict[str, list[dict[str, Any]]]:
+def load_base_infos(client: FStoreDuckDBClient, codes: list[str]) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for chunk in _chunks(codes):
         rows = client.query(
@@ -69,7 +69,7 @@ def load_base_infos(client: FStoreClient, codes: list[str]) -> dict[str, list[di
     return out
 
 
-def _load_day_max_table(client: FStoreClient, table: str, codes: list[str]) -> dict[str, str]:
+def _load_day_max_table(client: FStoreDuckDBClient, table: str, codes: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for chunk in _chunks(codes):
         rows = client.query(
@@ -87,7 +87,7 @@ def _load_day_max_table(client: FStoreClient, table: str, codes: list[str]) -> d
     return out
 
 
-def load_day_max(client: FStoreClient, codes: list[str]) -> dict[str, str]:
+def load_day_max(client: FStoreDuckDBClient, codes: list[str]) -> dict[str, str]:
     out = _load_day_max_table(client, "day_klines", codes)
     partitioned = _load_day_max_table(client, "t_1_day_klines", codes)
     for code, max_date in partitioned.items():
@@ -99,7 +99,7 @@ def load_day_max(client: FStoreClient, codes: list[str]) -> dict[str, str]:
 def classify(limit: int) -> dict[str, Any]:
     instruments = load_instruments()
     codes = sorted({str(r["code"]).zfill(6) for r in instruments})
-    client = FStoreClient()
+    client = FStoreDuckDBClient()
     base_infos = load_base_infos(client, codes)
     day_max = load_day_max(client, codes)
 

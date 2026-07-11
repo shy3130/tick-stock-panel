@@ -322,6 +322,19 @@ def _top_rows(rows: list[dict], key: str, descending: bool, limit: int = 8) -> l
     ]
 
 
+def _plausible_daily_change_pct(symbol: str | None, value: float | None) -> bool:
+    if value is None:
+        return False
+    symbol = str(symbol or "").upper()
+    if symbol.endswith(".BJ"):
+        limit = 0.31
+    elif symbol.startswith(("300", "301", "688", "689")):
+        limit = 0.21
+    else:
+        limit = 0.11
+    return abs(value) <= limit
+
+
 def _fill_market_supplements_from_provider(rows: list[dict], as_of: date | None) -> list[dict]:
     if not rows:
         return rows
@@ -353,8 +366,11 @@ def _fill_market_supplements_from_provider(rows: list[dict], as_of: date | None)
         change_pct = _finite(item.get("change_pct"))
         if turnover is not None:
             row["turnover_rate"] = turnover
-        if change_pct is not None:
+        symbol = str(row.get("symbol") or "")
+        if _plausible_daily_change_pct(symbol, change_pct):
             row["change_pct"] = change_pct
+        elif not _plausible_daily_change_pct(symbol, _finite(row.get("change_pct"))):
+            row["change_pct"] = None
     return rows
 
 

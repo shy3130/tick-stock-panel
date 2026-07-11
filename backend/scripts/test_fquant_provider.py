@@ -4,10 +4,10 @@
 1. import / registry / capabilities（§8.1）
 2. 符号归一工具函数（§8.1 / §5.1）
 3. 空 symbols 安全性（§8.1）
-4. get_daily 真实数据（走 engine-data/TDX disk wide，§8.2）
+4. get_daily 真实数据（走 DuckDB market_wide_kline，§8.2）
 5. get_instruments 走 fstore.base_infos（§8.2）
-6. get_minute 走 engine-data/TDX disk minutes（§8.2）
-7. get_adj_factors 走 engine-data/TDX disk xdxr（§8.2）
+6. get_minute 走 DuckDB market_minutes（§8.2）
+7. get_adj_factors 走 DuckDB market_xdxr（§8.2）
 8. get_financial 走 fstore financial_report_*（§8.2）
 9. get_moneyflow_daily / get_moneyflow_minute（§8.2）
 10. 故障 mock：三源分别 mock，其他源不受影响（§8.4）
@@ -25,9 +25,7 @@ import os
 import sys
 from contextlib import nullcontext
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
-
-import polars as pl
+from unittest.mock import patch
 
 
 # --------------------------------------------------------------------------- #
@@ -93,7 +91,7 @@ def main() -> int:
     assert caps.daily is True, "daily 应为 True"
     assert caps.adj_factor is True, "adj_factor 应为 True"
     assert caps.minute is True, "minute 应为 True"
-    assert caps.realtime is True, "realtime 应走 tdx-api / sina/tencent / fstore local fallback"
+    assert caps.realtime is True, "realtime 应走 DuckDB daily_markets 快照"
     assert caps.financial is True, "financial 应为 True（新增）"
     assert caps.depth is False, "depth 无本地源，应为 False"
     assert caps.universes is True, "universes 应走 fstore chengfen_gu"
@@ -104,7 +102,7 @@ def main() -> int:
 
     # ------------------------------------------------------------------ #
     print("=== 3. 符号归一工具函数（§5.1）===")
-    from app.data_providers.fquant_provider import (
+    from app.data_providers.fquant import (
         code_and_market_to_symbol,
         split_symbol,
         symbol_to_market,
@@ -137,7 +135,7 @@ def main() -> int:
         ("000001", 1, "000001.SZ"),
         ("00700", 3, "00700.HK"),
         ("000300", 10, "000300.INDEX"),
-        ("510330", 20, "510330.ETF"),
+        ("510330", 20, "510330.SH"),
     ]
     for code, at, expected in cm_cases:
         got = code_and_market_to_symbol(code, at)
@@ -166,10 +164,10 @@ def main() -> int:
     start = end - timedelta(days=30)
 
     # ------------------------------------------------------------------ #
-    print("=== 5. get_daily 真实数据（走 engine-data/TDX disk wide，§8.2）===")
+    print("=== 5. get_daily 真实数据（走 DuckDB market_wide_kline，§8.2）===")
     df = p.get_daily(["600519.SH"], start, end, "stock")
     if df.is_empty():
-        _skip("get_daily 返回空 DF（engine-data/TDX disk / fstore 可能离线）")
+        _skip("get_daily 返回空 DF（DuckDB 可能不可达或缺数据）")
     else:
         print(f"  ✓ get_daily 返回 {df.height} 行, 列: {df.columns}")
         # 验证 DAILY_COLS 子集
@@ -192,10 +190,10 @@ def main() -> int:
         print(inst.head(3).to_pandas().to_string())
 
     # ------------------------------------------------------------------ #
-    print("=== 7. get_minute（走 engine-data/TDX disk minutes，§8.2）===")
+    print("=== 7. get_minute（走 DuckDB market_minutes，§8.2）===")
     minute_df = p.get_minute(["600519.SH"], start, end, "stock")
     if minute_df.is_empty():
-        _skip("get_minute 返回空 DF（engine-data/TDX disk 可能离线或非交易日）")
+        _skip("get_minute 返回空 DF（DuckDB 可能不可达或非交易日）")
     else:
         print(f"  ✓ get_minute 返回 {minute_df.height} 行, 列: {minute_df.columns}")
         # 验证 MINUTE_COLUMNS
@@ -206,11 +204,11 @@ def main() -> int:
         print(minute_df.head(3).to_pandas().to_string())
 
     # ------------------------------------------------------------------ #
-    print("=== 8. get_adj_factors（走 engine-data/TDX disk xdxr，§8.2）===")
+    print("=== 8. get_adj_factors（走 DuckDB market_xdxr，§8.2）===")
     adj_start = end - timedelta(days=365)
     adj_df = p.get_adj_factors(["600519.SH"], adj_start, end, "stock")
     if adj_df.is_empty():
-        _skip("get_adj_factors 返回空 DF（engine-data/TDX disk xdxr / fstore 可能离线）")
+        _skip("get_adj_factors 返回空 DF（DuckDB xdxr/fstore 可能缺数据）")
     else:
         print(f"  ✓ get_adj_factors 返回 {adj_df.height} 行, 列: {adj_df.columns}")
         for col in ("symbol", "trade_date", "ex_factor"):
@@ -231,19 +229,19 @@ def main() -> int:
         print(fin_df.head(3).to_pandas().to_string())
 
     # ------------------------------------------------------------------ #
-    print("=== 10. get_moneyflow_daily（走 TDX fund / moneyflow API，§8.2）===")
+    print("=== 10. get_moneyflow_daily（走 DuckDB market_fund_flow，§8.2）===")
     mf_daily = p.get_moneyflow_daily(["600519.SH"], date=end)
     if mf_daily.is_empty():
-        _skip("get_moneyflow_daily 返回空 DF（TDX fund 缺数据且 moneyflow API 可能离线）")
+        _skip("get_moneyflow_daily 返回空 DF（DuckDB market_fund_flow 可能缺数据）")
     else:
         print(f"  ✓ get_moneyflow_daily 返回 {mf_daily.height} 行, 列: {mf_daily.columns}")
         print(mf_daily.to_pandas().to_string())
 
     # ------------------------------------------------------------------ #
-    print("=== 11. get_moneyflow_minute（走 moneyflow API，§8.2）===")
+    print("=== 11. get_moneyflow_minute（已下线，§8.2）===")
     mf_minute = p.get_moneyflow_minute(["600519.SH"], date=end)
     if mf_minute.is_empty():
-        _skip("get_moneyflow_minute 返回空 DF（moneyflow API 可能离线）")
+        _skip("get_moneyflow_minute 返回空 DF（预期：分钟资金流已下线）")
     else:
         print(f"  ✓ get_moneyflow_minute 返回 {mf_minute.height} 行, 列: {mf_minute.columns}")
         print(mf_minute.head(3).to_pandas().to_string())
@@ -259,30 +257,32 @@ def main() -> int:
     chaos_failures = _test_chaos_engine_down(p, start, end)
     failures.extend(chaos_failures)
 
-    print("=== 14. 故障 mock：moneyflow envelope code=99（§8.4）===")
-    chaos_failures = _test_chaos_moneyflow_down(p)
+    print("=== 14. 故障 mock：分钟资金流下线（§8.4）===")
+    chaos_failures = _test_moneyflow_minute_disabled(p)
     failures.extend(chaos_failures)
 
     print("=== 15. 故障 mock：所有源全挂（§8.4 L4）===")
     chaos_failures = _test_chaos_all_down(p, start, end)
     failures.extend(chaos_failures)
 
-    print("=== 16. get_realtime 本地源路径（tdx-api / sina/tencent / fstore daily_markets）===")
-    mapped = p._tdx_quote_to_row({
-        "Code": "SH600519",
-        "ServerTime": "2026-07-02T15:00:00+08:00",
-        "TotalHand": 12345,
-        "Amount": 6789000,
-        "K": {"Last": 1180000, "Open": 1187000, "High": 1195000, "Low": 1176000, "Close": 1185490},
-    })
+    print("=== 16. get_realtime 本地 DuckDB daily_markets 路径 ===")
+    mapped = p._fstore_quote_to_row({
+        "code": "600519",
+        "name": "贵州茅台",
+        "tdate": "2026-07-02",
+        "price": 1185.49,
+        "zrspj": 1180.0,
+        "cjl": 12345,
+        "cje": 6789000,
+    }, 1)
     assert mapped is not None
     assert mapped["symbol"] == "600519.SH"
     assert mapped["last_price"] == 1185.49
     assert mapped["prev_close"] == 1180.0
-    assert mapped["source"] == f"{p.name}:tdx-api:/api/quote"
+    assert mapped["source"] == f"{p.name}:fstore:daily_markets"
     rt = p.get_realtime(symbols=["600519.SH"])
     if rt.is_empty():
-        print("  ⚠ SKIP — get_realtime 真实源返回空（tdx-api/sina/tencent/fstore 可能离线）")
+        print("  ⚠ SKIP — get_realtime 真实源返回空（daily_markets 可能无快照）")
     else:
         assert "symbol" in rt.columns and "last_price" in rt.columns
         print(f"  ✓ get_realtime 返回 {rt.height} 行, source={rt['source'][0] if 'source' in rt.columns else 'unknown'}")
@@ -318,7 +318,7 @@ def _test_chaos_fstore_down(p) -> list[str]:
             # （这里只验证不抛异常）
             try:
                 p.get_daily(["600519.SH"], None, None, "stock")
-                print("  ✓ fstore 挂 → get_daily 不抛异常（走 engine-data/TDX disk）")
+                print("  ✓ fstore 挂 → get_daily 不抛异常（走 DuckDB engine）")
             except Exception as e:
                 failures.append(f"chaos_fstore: get_daily 抛异常 {e}")
     except AssertionError as e:
@@ -332,24 +332,24 @@ def _test_chaos_engine_down(p, start, end) -> list[str]:
     """engine-data 5xx → get_daily 退 fstore day_klines（§8.4）。"""
     failures: list[str] = []
     try:
-        # mock engine-data/TDX disk 返回空（模拟 5xx / 磁盘缺失）
+        # mock DuckDB engine 返回空（模拟文件缺失/查询失败）
         with patch.object(p._engine, "get_wide", return_value=[]), \
              patch.object(p._engine, "get_minutes", return_value=[]):
             # get_daily 应不抛，退 fstore day_klines（可能也为空，但不抛）
             df = p.get_daily(["600519.SH"], start, end, "stock")
             # 不断言非空（fstore day_klines 实测 600519 也可能无近期数据）
-            print(f"  ✓ engine-data/TDX disk 挂 → get_daily 不抛异常（返回 {df.height} 行，退 fstore）")
+            print(f"  ✓ DuckDB engine 挂 → get_daily 不抛异常（返回 {df.height} 行，退 fstore）")
 
             # get_minute 应返回空（主源 engine-data）
             minute_df = p.get_minute(["600519.SH"], start, end, "stock")
-            assert minute_df.is_empty(), "engine-data/TDX disk 挂时 get_minute 应返回空 DF"
-            print("  ✓ engine-data/TDX disk 挂 → get_minute 返回空 DF")
+            assert minute_df.is_empty(), "DuckDB engine 挂时 get_minute 应返回空 DF"
+            print("  ✓ DuckDB engine 挂 → get_minute 返回空 DF")
 
             # fstore 方法不受影响（不依赖 engine-data）
             # get_financial 应正常工作
             try:
                 p.get_financial("600519.SH", table="income")
-                print("  ✓ engine-data/TDX disk 挂 → get_financial 不受影响（走 fstore）")
+                print("  ✓ DuckDB engine 挂 → get_financial 不受影响（走 fstore DuckDB）")
             except Exception as e:
                 failures.append(f"chaos_engine: get_financial 抛异常 {e}")
     except Exception as e:
@@ -357,34 +357,15 @@ def _test_chaos_engine_down(p, start, end) -> list[str]:
     return failures
 
 
-def _test_chaos_moneyflow_down(p) -> list[str]:
-    """moneyflow envelope code=99 → 资金流方法返回空 df（§8.4）。"""
+def _test_moneyflow_minute_disabled(p) -> list[str]:
+    """分钟资金流已下线 → 恒返回空 df。"""
     failures: list[str] = []
     try:
-        # mock moneyflow 返回 code=99（L3 envelope 异常）
-        mock_resp = {"code": 99, "message": "internal error"}
-        fund_patch = (
-            patch.object(p._engine, "get_fund_daily", return_value={})
-            if hasattr(p._engine, "get_fund_daily")
-            else nullcontext()
-        )
-        with fund_patch, patch.object(p._moneyflow, "_get", return_value=mock_resp):
-            mfd = p.get_moneyflow_daily(["600519.SH"])
-            assert mfd.is_empty(), "moneyflow code=99 时 get_moneyflow_daily 应返回空 DF"
-            print("  ✓ moneyflow code=99 → get_moneyflow_daily 返回空 DF")
-
-            mfm = p.get_moneyflow_minute(["600519.SH"])
-            assert mfm.is_empty(), "moneyflow code=99 时 get_moneyflow_minute 应返回空 DF"
-            print("  ✓ moneyflow code=99 → get_moneyflow_minute 返回空 DF")
-
-            # 其他源方法不受影响
-            try:
-                p.get_daily(["600519.SH"], None, None, "stock")
-                print("  ✓ moneyflow 挂 → get_daily 不受影响（走 engine-data/TDX disk/fstore）")
-            except Exception as e:
-                failures.append(f"chaos_moneyflow: get_daily 抛异常 {e}")
+        mfm = p.get_moneyflow_minute(["600519.SH"])
+        assert mfm.is_empty(), "get_moneyflow_minute 应返回空 DF"
+        print("  ✓ get_moneyflow_minute 返回空 DF")
     except Exception as e:
-        failures.append(f"chaos_moneyflow: 意外异常 {e}")
+        failures.append(f"moneyflow_minute_disabled: 意外异常 {e}")
     return failures
 
 
@@ -404,8 +385,7 @@ def _test_chaos_all_down(p, start, end) -> list[str]:
              patch.object(p._fstore, "_get_conn", return_value=None), \
              patch.object(p._engine, "get_wide", return_value=[]), \
              patch.object(p._engine, "get_xdxr", return_value=[]), \
-             patch.object(p._engine, "get_minutes", return_value=[]), \
-             patch.object(p._moneyflow, "_get", return_value=None):
+             patch.object(p._engine, "get_minutes", return_value=[]):
             # 所有方法应返回空 DF，不抛
             assert p.get_daily(["600519.SH"], start, end, "stock").is_empty()
             assert p.get_adj_factors(["600519.SH"], start, end, "stock").is_empty()

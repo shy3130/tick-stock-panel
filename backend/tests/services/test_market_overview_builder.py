@@ -1,5 +1,6 @@
-import polars as pl
 from datetime import date
+
+import polars as pl
 
 from app.services import market_overview_builder as builder
 
@@ -70,3 +71,21 @@ def test_fill_market_supplements_replaces_implausible_change_pct(monkeypatch):
 
     assert out[0]["turnover_rate"] == 0.44
     assert out[0]["change_pct"] == 0.0268
+
+
+def test_fill_market_supplements_drops_implausible_supplement_change_pct(monkeypatch):
+    class BadProvider:
+        def get_latest_market_supplements(self, _symbols):
+            return pl.DataFrame([
+                {"symbol": "920189.BJ", "date": "2026-07-03", "turnover_rate": 39.94, "change_pct": 4.0061},
+            ])
+
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: BadProvider())
+
+    rows = [{"symbol": "920189.BJ", "turnover_rate": None, "change_pct": 0.6051}]
+
+    out = builder._fill_market_supplements_from_provider(rows, date(2026, 7, 3))
+
+    assert out[0]["turnover_rate"] == 39.94
+    assert out[0]["change_pct"] is None

@@ -22,4 +22,4 @@ def test_detect_translates_provider_caps(monkeypatch, tmp_path):
     assert capset.has(Cap.KLINE_MINUTE_BATCH)
     assert capset.has(Cap.QUOTE_BATCH)
     assert not capset.has(Cap.DEPTH5_BATCH)
-    assert capability_gate.tier_label() == "Fquant_local"
+    assert capability_gate.tier_label() == "duckdb"

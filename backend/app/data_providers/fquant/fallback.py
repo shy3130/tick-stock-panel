@@ -10,19 +10,19 @@
 | get_instruments     | fstore base_infos        | —                        | —                      | 空 df    |
 | get_daily           | engine-data wide         | fstore day_klines        | —                      | 空 df    |
 | get_adj_factors     | engine-data xdxr         | fstore chuquan_chuxi     | —                      | 空 df    |
-| get_minute          | engine-data/TDX minutes  | local 1m aggregation     | —                      | 空 df    |
-| get_realtime        | tdx-api `/api/quote`      | sina/tencent             | fstore `daily_markets` | 空 df    |
+| get_minute          | DuckDB market_minutes     | local 1m aggregation     | —                      | 空 df    |
+| get_realtime        | DuckDB daily_markets      | —                        | —                      | 空 df    |
 | get_financial       | fstore *_report_*        | —                        | —                      | 空 df    |
-| get_moneyflow_daily | TDX fund (disk mode)     | moneyflow /daily/stocks  | —                      | 空 df    |
-| get_moneyflow_minute| moneyflow /minute/stocks | —                        | —                      | 空 df    |
-| get_transactions    | engine-data/TDX trans    | —                        | —                      | 空 df    |
+| get_moneyflow_daily | DuckDB market_fund_flow  | —                        | —                      | 空 df    |
+| get_moneyflow_minute| —                        | —                        | —                      | 空 df    |
+| get_transactions    | DuckDB market_transactions | —                      | —                      | 空 df    |
 | get_corp_action     | fstore chuquan_chuxi     | engine-data xdxr         | —                      | 空 df    |
 
 各级失败行为（§7.2）：
 - L0：正常 → 直接归一返回
 - L1：单 symbol 缺数 → 跳过，warning，继续
 - L2：源连接失败 → warning，切换备份源，重试最多 1 次
-- L3：envelope 异常（moneyflow code≠0）→ warning，跳过该方法所有 symbols
+- L3：DuckDB 查询异常 → warning，返回空结果
 - L4：所有源失败 → 空 df，error 日志
 - L5：致命（启动时 DB password 缺失 / import 失败）→ capabilities 降级，不抛
 """
@@ -38,12 +38,12 @@ FALLBACK_CHAIN: dict[str, list[str]] = {
     "get_instruments":      ["fstore:base_infos"],
     "get_daily":            ["engine-data:wide", "fstore:day_klines"],
     "get_adj_factors":      ["engine-data:xdxr", "fstore:chuquan_chuxi"],
-    "get_minute":           ["engine-data-or-tdx-disk:minutes", "provider:aggregate-1m"],
-    "get_realtime":         ["tdx-api:quote", "sina/tencent:quote", "fstore:daily_markets"],
+    "get_minute":           ["duckdb:market_minutes", "provider:aggregate-1m"],
+    "get_realtime":         ["duckdb:daily_markets"],
     "get_financial":        ["fstore:financial_report_*"],
-    "get_moneyflow_daily":  ["tdx-disk:fund", "moneyflow:daily"],
-    "get_moneyflow_minute": ["moneyflow:minute"],
-    "get_transactions":     ["engine-data-or-tdx-disk:trans"],
+    "get_moneyflow_daily":  ["duckdb:market_fund_flow"],
+    "get_moneyflow_minute": [],
+    "get_transactions":     ["duckdb:market_transactions"],
     "get_corp_action":      ["fstore:chuquan_chuxi", "engine-data:xdxr"],
 }
 

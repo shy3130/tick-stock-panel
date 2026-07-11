@@ -47,10 +47,11 @@ def _provider_capset() -> CapabilitySet:
 
 def detect_capabilities(force: bool = False) -> CapabilitySet:  # noqa: ARG001
     """Build gates from the active provider declaration."""
+    provider_name = _active_provider_name()
     capset = _provider_capset()
     _persist(
         capset,
-        _active_provider_name().capitalize(),
+        provider_display_name(provider_name),
         log=["使用 DATA_PROVIDER 数据源能力声明"],
         missing=[],
         extras=[],
@@ -100,6 +101,10 @@ def _capset_from_json(data: dict[str, Any]) -> CapabilitySet:
             subscribe=lim.get("subscribe"),
         )
     return CapabilitySet(caps)
+
+
+def provider_display_name(provider_name: str | None) -> str:
+    return "duckdb" if provider_name == "fquant_local" else (provider_name or "Unknown").capitalize()
 
 
 def tier_label() -> str:

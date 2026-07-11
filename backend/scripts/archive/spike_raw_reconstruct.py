@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.data_providers.fquant.fstore_client import FStoreClient  # noqa: E402
+from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient  # noqa: E402
 from app.data_providers.fquant.raw_reconstruct import reconstruct_raw_rows  # noqa: E402
 
 TDX = Path(os.environ.get("TDX_DATA_DIR", "/Volumes/vol3/tdx"))
@@ -106,7 +106,7 @@ def invert(day: pl.DataFrame, events: list[dict[str, Any]]) -> pl.DataFrame:
     return out
 
 
-def _read_fstore_table(client: FStoreClient, table: str, code: str) -> pl.DataFrame:
+def _read_fstore_table(client: FStoreDuckDBClient, table: str, code: str) -> pl.DataFrame:
     rows = client.query(
         """
         SELECT
@@ -126,7 +126,7 @@ def _read_fstore_table(client: FStoreClient, table: str, code: str) -> pl.DataFr
     return pl.DataFrame(rows) if rows else pl.DataFrame()
 
 
-def read_fstore(client: FStoreClient, code: str) -> tuple[str, pl.DataFrame]:
+def read_fstore(client: FStoreDuckDBClient, code: str) -> tuple[str, pl.DataFrame]:
     day_klines = _read_fstore_table(client, "day_klines", code)
     if len(day_klines) >= FSTORE_MIN_ROWS:
         return "day_klines", day_klines
@@ -143,7 +143,7 @@ def max_abs(expr: pl.Expr, name: str) -> pl.Expr:
     return expr.abs().max().fill_null(0.0).alias(name)
 
 
-def check_symbol(client: FStoreClient, code: str, market: str) -> bool:
+def check_symbol(client: FStoreDuckDBClient, code: str, market: str) -> bool:
     day = read_day(code, market)
     events = read_xdxr(code, market)
     inverse_only = invert(day, events)
@@ -220,7 +220,7 @@ def check_symbol(client: FStoreClient, code: str, market: str) -> bool:
 
 
 def main() -> None:
-    client = FStoreClient()
+    client = FStoreDuckDBClient()
     all_pass = True
     for code, market in SAMPLES:
         try:

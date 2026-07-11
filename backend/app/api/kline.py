@@ -463,6 +463,9 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -
         "volume": q.get("volume"),
         "amount": q.get("amount"),
         "change_pct": q.get("change_pct"),
+        "change_amount": q.get("change_amount"),
+        "amplitude": q.get("amplitude"),
+        "turnover_rate": q.get("turnover_rate"),
         "is_live": True,
         "main_net_inflow": None,
     }

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import polars as pl
@@ -197,6 +197,47 @@ def test_daily_local_mode_ignores_cached_raw(monkeypatch):
     assert repo.daily_calls == 0
     assert resp["source"] == "local_disk"
     assert resp["rows"][0]["close"] == 1.0
+
+
+def test_live_candle_overwrites_derived_change_fields():
+    class _QuoteService:
+        def get_enriched_today(self):
+            return (
+                pl.DataFrame({
+                    "symbol": ["600519.SH"],
+                    "date": [date.today()],
+                    "open": [11.0],
+                    "high": [12.0],
+                    "low": [10.5],
+                    "close": [11.5],
+                    "volume": [123.0],
+                    "amount": [1400.0],
+                    "change_pct": [0.15],
+                    "change_amount": [1.5],
+                    "amplitude": [0.15],
+                    "turnover_rate": [2.3],
+                }),
+                date.today(),
+            )
+
+    req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(quote_service=_QuoteService())))
+    rows = [{
+        "date": str(date.today()),
+        "symbol": "600519.SH",
+        "close": 10.0,
+        "change_pct": 0.01,
+        "change_amount": 0.1,
+        "amplitude": 0.04,
+        "turnover_rate": 1.0,
+    }]
+
+    out = kline._maybe_inject_live_candle(req, "600519.SH", rows)
+
+    assert out[0]["close"] == 11.5
+    assert out[0]["change_pct"] == 0.15
+    assert out[0]["change_amount"] == 1.5
+    assert out[0]["amplitude"] == 0.15
+    assert out[0]["turnover_rate"] == 2.3
 
 
 class FakeProviderWithMoneyflow(FakeProvider):

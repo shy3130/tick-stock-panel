@@ -1,7 +1,7 @@
 """fstore DuckDB 直连客户端 —— FStoreClient 的只读替代实现。
 
 背景：fstore 已经把分析结果表迁移到本机
-``/Volumes/WD1/fstore.duckdb``，并为每张迁移过的 PostgreSQL 表提供了
+``/Volumes/WD1/fstore-web.duckdb``，并为每张迁移过的 PostgreSQL 表提供了
 同名无前缀兼容 view（物理镜像表带 pg_/fd_ 前缀，兼容 view 不带）。
 
 本客户端对外暴露和 ``FStoreClient`` 完全相同的
@@ -13,7 +13,10 @@
 fquant_provider.py 里所有直连 fstore 的 SQL 都不满足这个反例。
 
 配置：
-- ``FQUANT_FSTORE_DUCKDB_PATH``（默认 ``/Volumes/WD1/fstore.duckdb``）
+- ``FQUANT_FSTORE_DUCKDB_PATH``（默认 ``/Volumes/WD1/fstore-web.duckdb``）
+- ``FQUANT_FSTORE_MARKETS_DUCKDB_PATH``（默认 ``/Volumes/WD1/fstore-markets-web.duckdb``）
+- ``FQUANT_FSTORE_KLINES_DUCKDB_PATH``（默认 ``/Volumes/WD1/fstore-klines-web.duckdb``）
+- ``FQUANT_FSTORE_MINUTES_DUCKDB_PATH``（默认 ``/Volumes/WD1/fstore-minutes-web.duckdb``）
 """
 from __future__ import annotations
 
@@ -22,9 +25,14 @@ import os
 import threading
 from typing import Any
 
+from app.data_providers.fquant.snapshot_resolver import snapshot_or_raw
+
 logger = logging.getLogger(__name__)
 
-FSTORE_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_DUCKDB_PATH", "/Volumes/WD1/fstore.duckdb")
+FSTORE_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_DUCKDB_PATH", "/Volumes/WD1/fstore-web.duckdb")
+FSTORE_MARKETS_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_MARKETS_DUCKDB_PATH", "/Volumes/WD1/fstore-markets-web.duckdb")
+FSTORE_KLINES_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_KLINES_DUCKDB_PATH", "/Volumes/WD1/fstore-klines-web.duckdb")
+FSTORE_MINUTES_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_MINUTES_DUCKDB_PATH", "/Volumes/WD1/fstore-minutes-web.duckdb")
 
 
 class FStoreDuckDBClient:
@@ -47,20 +55,52 @@ class FStoreDuckDBClient:
             logger.warning("FStoreDuckDBClient: duckdb 未安装")
             self._available = False
             return None
-        if not os.path.exists(self._path):
-            logger.warning("FStoreDuckDBClient: 文件不存在 %s", self._path)
+        # Prefer the published snapshot; ``-web``/unknown paths and
+        # not-yet-published roots fall back to the raw path unchanged.
+        main_path = snapshot_or_raw(self._path)
+        if not os.path.exists(main_path):
+            logger.warning("FStoreDuckDBClient: 文件不存在 %s", main_path)
             self._available = False
             return None
         try:
-            conn = duckdb.connect(self._path, read_only=True)
+            conn = duckdb.connect(main_path, read_only=True)
+            self._attach(conn, "fstore_markets", FSTORE_MARKETS_DUCKDB_PATH, main_path)
+            self._attach(conn, "fstore_klines", FSTORE_KLINES_DUCKDB_PATH, main_path)
+            self._attach(conn, "fstore_minutes", FSTORE_MINUTES_DUCKDB_PATH, main_path)
+            self._create_temp_views(conn)
         except Exception as e:  # noqa: BLE001
-            logger.warning("FStoreDuckDBClient: 打开失败 %s — %s", self._path, e)
+            logger.warning("FStoreDuckDBClient: 打开失败 %s — %s", main_path, e)
             self._available = False
             return None
         self._conn = conn
         self._available = True
-        logger.info("FStoreDuckDBClient: 已打开 %s（只读）", self._path)
+        logger.info("FStoreDuckDBClient: 已打开 %s（只读）", main_path)
         return conn
+
+    def _attach(self, conn: Any, alias: str, path: str, main_path: str) -> None:
+        path = snapshot_or_raw(path)
+        if not path or os.path.abspath(path) == os.path.abspath(main_path) or not os.path.exists(path):
+            return
+        escaped = path.replace("'", "''")
+        conn.execute(f"ATTACH '{escaped}' AS {alias} (READ_ONLY)")
+
+    def _create_temp_views(self, conn: Any) -> None:
+        # ponytail: connection-local aliases keep old SQL working after split files.
+        self._create_split_alias(conn, "daily_markets", "fstore_markets.daily_markets")
+        self._create_split_alias(conn, "day_klines", "fstore_klines.day_klines")
+        self._create_split_alias(conn, "minute_kline", "fstore_minutes.minute_kline")
+        for asset_type in (1, 2, 3, 4, 5, 6, 7, 10, 15, 20, 30, 37, 38, 39, 40, 41, 42, 47, 48, 49):
+            conn.execute(
+                f"CREATE TEMP VIEW IF NOT EXISTS t_{asset_type}_day_klines "
+                f"AS SELECT * FROM day_klines WHERE asset_type = {asset_type}"
+            )
+
+    @staticmethod
+    def _create_split_alias(conn: Any, view_name: str, source: str) -> None:
+        try:
+            conn.execute(f"CREATE OR REPLACE TEMP VIEW {view_name} AS SELECT * FROM {source}")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("FStoreDuckDBClient: 跳过拆分库别名 %s -> %s: %s", view_name, source, e)
 
     @property
     def available(self) -> bool:

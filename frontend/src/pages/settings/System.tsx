@@ -97,7 +97,7 @@ export function SettingsSystemPanel() {
             className="w-32 h-8 px-2 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
           >
             <option value="fquant">FQuant 本地</option>
-            <option value="fquant_local">FQuant 磁盘</option>
+            <option value="fquant_local">duckdb</option>
           </select>
         </div>
       </section>

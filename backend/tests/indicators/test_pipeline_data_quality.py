@@ -42,7 +42,7 @@ def test_filter_halt_days_drops_non_positive_ohlc():
     assert out["symbol"].to_list() == ["A"]
 
 
-def test_daily_change_uses_raw_prices_when_adjusted_close_spikes():
+def test_daily_change_uses_raw_prices_to_avoid_ex_rights_spikes():
     df = pl.DataFrame({
         "symbol": ["000425.SZ"] * 3,
         "date": [date(2026, 7, 1), date(2026, 7, 2), date(2026, 7, 3)],
@@ -61,7 +61,7 @@ def test_daily_change_uses_raw_prices_when_adjusted_close_spikes():
     row = out.filter(pl.col("date") == date(2026, 7, 2)).to_dicts()[0]
 
     assert abs(row["change_pct"] - (8.40 / 8.13 - 1)) < 1e-12
-    assert abs(row["change_amount"] - 0.27) < 1e-12
+    assert abs(row["change_amount"] - (8.40 - 8.13)) < 1e-12
     assert abs(row["amplitude"] - ((8.49 - 8.02) / 8.13)) < 1e-12
 
 
@@ -134,22 +134,10 @@ def test_enriched_today_recomputes_quote_change_after_adjustment():
     assert row["close"] == 22.0
     assert row["prev_close"] == 20.0
     assert abs(row["change_pct"] - 0.1) < 1e-12
-    assert row["change_amount"] == 2.0
+    assert row["change_amount"] == 1.0
     assert row["amplitude"] == 0.3
     assert row["turnover_rate"] == 10.0
 
 
-def test_tdx_quote_total_hand_maps_to_shares():
-    provider = FQuantProvider.__new__(FQuantProvider)
-    provider.name = "fquant_local"
-
-    row = provider._tdx_quote_to_row({
-        "Code": "600519",
-        "K": {"Close": 10000, "Last": 9900, "Open": 9950, "High": 10100, "Low": 9900},
-        "TotalHand": 123,
-        "Amount": 456000,
-        "ServerTime": "2026-07-01 10:00:00",
-    })
-
-    assert row is not None
-    assert row["volume"] == 12_300
+def test_market_snapshot_lot_volume_maps_to_shares():
+    assert FQuantProvider._hands_to_shares(123) == 12_300

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 _PROVIDERS = {
     "fquant": FQuantProvider,
-    "fquant_local": lambda: FQuantProvider(engine_mode="disk"),
+    "fquant_local": lambda: FQuantProvider(name="fquant_local"),
 }
 
 

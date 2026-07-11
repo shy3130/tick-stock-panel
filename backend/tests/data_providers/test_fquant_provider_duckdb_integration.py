@@ -1,9 +1,4 @@
-"""FQuantProvider 在 FQUANT_FSTORE_MODE=duckdb 下的集成回归测试。
-
-覆盖那些"迁移时不需要改代码，只是换了底层客户端"的方法——如果以后
-有人往这些方法里加了 PostgreSQL-only 语法（比如新的 ::type cast 或
-系统目录查询），这里的测试会先坏，而不是等到生产环境切换才发现。
-"""
+"""FQuantProvider 下的 DuckDB 集成回归测试。"""
 from __future__ import annotations
 
 import os
@@ -22,8 +17,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def provider(monkeypatch):
-    monkeypatch.setenv("FQUANT_FSTORE_MODE", "duckdb")
+def provider():
     return FQuantProvider()
 
 

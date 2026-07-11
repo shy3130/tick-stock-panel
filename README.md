@@ -21,7 +21,7 @@
 
 </div>
 
-- 🏠 **本地数据优先** — 默认 `DATA_PROVIDER=fquant_local`,走 TDX 磁盘 + fstore + 受控实时 fallback
+- 🏠 **本地数据优先** — 默认 `DATA_PROVIDER=fquant_local`,走本地 DuckDB (`fstore*.duckdb` + `tdx*.duckdb`,含港股拆分库)
 - 🏠 **自托管零运维** — Docker 单容器部署,数据完全掌握在自己手里
 - 🔍 **多工具工作台** — 选股(20 内置策略)+ 实时监控 + 向量化回测 + 组合优化 + 交易复盘
 - 🤖 **多 AI 配置** — 支持 OpenAI 兼容接口 / ACP / Codex CLI profile,可按功能选择
@@ -100,7 +100,7 @@
 ### 方式 A:Dev 模式(二次开发推荐)
 
 ```bash
-cp .env.example .env       # 按需补 DATA_PROVIDER / TDX_DATA_DIR / FSTORE 密码 / AI
+cp .env.example .env       # 按需补 DATA_PROVIDER / DuckDB 路径 / AI
 make start-local           # 默认 DATA_PROVIDER=fquant_local; 或直接 ./dev.sh
 ```
 
@@ -110,7 +110,7 @@ make start-local           # 默认 DATA_PROVIDER=fquant_local; 或直接 ./dev.
 - 局域网访问 → `http://<本机 LAN IP>:3011/`
 - 自定义端口:`BACKEND_PORT=8000 FRONTEND_PORT=5173 ./dev.sh`
 
-> `Makefile` 默认 `DATA_PROVIDER=fquant_local`、`TDX_DATA_DIR=/Volumes/vol3/tdx`。若不使用本地 TDX/fstore,可在 `.env` 或启动命令中切到其它 provider。
+> `Makefile` 默认 `DATA_PROVIDER=fquant_local`。DuckDB 路径不填时使用 `/Volumes/WD1/*.duckdb` 默认挂载。
 
 ### 方式 B:Docker(部署最省心)
 
@@ -259,15 +259,23 @@ git pull
 
 ```ini
 DATA_PROVIDER=fquant_local     # 默认:fquant_local; 可选:fquant
-TDX_DATA_DIR=/Volumes/vol3/tdx # fquant_local 本地 TDX 数据根目录
-FSTORE_DATABASE_PASSWORD=      # 需要读取 fstore PG 时填写
+FQUANT_FSTORE_DUCKDB_PATH=/Volumes/WD1/fstore-web.duckdb
+FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/fstore-markets-web.duckdb
+FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/fstore-klines-web.duckdb
+FQUANT_FSTORE_MINUTES_DUCKDB_PATH=/Volumes/WD1/fstore-minutes-web.duckdb
+FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/tdx.duckdb
+FQUANT_TDX_MINUTES_DUCKDB_PATH=/Volumes/WD1/tdx-minutes.duckdb
+FQUANT_TDX_TRANS_DUCKDB_PATH=/Volumes/WD1/tdx-trans.duckdb
+FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/tdx-hk-web.duckdb
+FQUANT_TDX_HK_MINUTES_DUCKDB_PATH=/Volumes/WD1/tdx-hkminutes-web.duckdb
+FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/tdx-hktrans-web.duckdb
 ```
 
 当前项目以 provider capability 判断功能可用性,不再以 TickFlow 订阅档位作为默认门槛。`fquant_local` 主路径:
 
-- 日 K / ETF / 指数:TDX 磁盘 + 本地 Parquet/enriched
-- 标的 / 财务 / ETF 备份:fstore PostgreSQL
-- 实时行情:可选 `tdx-api`,失败后走 provider 内 sina/tencent,再回退 fstore 快照
+- 日 K / ETF / 指数:TDX DuckDB + 本地 Parquet/enriched
+- 标的 / 财务 / ETF 备份:fstore DuckDB
+- 实时行情:fstore markets DuckDB `daily_markets` 最新快照
 - 5 档盘口 depth:当前仍是缺口,相关功能会能力门控降级
 
 `DATA_PROVIDER` 环境变量优先级最高;未设置时读取设置页偏好,未知值会回落到 `fquant_local`。
@@ -317,7 +325,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 | **后端**     | FastAPI · Pydantic v2 · APScheduler · sse-starlette                                               |
 | **数据**     | Polars(计算)· DuckDB(查询)· Parquet(存储)                                                         |
 | **回测**     | vectorbt(全项目唯一 pandas 边界)                                                                  |
-| **数据源**   | `data_providers` 抽象层 · fquant_local(TDX 磁盘 + fstore) · fquant(engine-data/fstore)           |
+| **数据源**   | `data_providers` 抽象层 · fquant_local/fquant(本地 DuckDB)                                      |
 | **AI**(可选) | 多 profile · OpenAI 兼容接口 · ACP · Codex CLI                                                     |
 | **前端**     | React 18 · Vite · TypeScript · Tailwind · Tanstack Query · Lightweight Charts · ECharts · dnd-kit |
 | **部署**     | Docker 两阶段构建,前端 dist 拷进后端镜像,**单容器**                                               |
@@ -366,16 +374,20 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 
 ### 📡 数据源架构
 
-本项目原本只依赖 TickFlow SDK。当前主线已切到 **`FQuantProvider v2` + `fquant_local` 默认本地模式**,通过 `data_providers` 抽象层直接连接底层本地数据源：
+本项目原本只依赖 TickFlow SDK。当前主线已切到 **`FQuantProvider v2` + `fquant_local` 默认本地模式**,通过 `data_providers` 抽象层只读本地 DuckDB：
 
 | 上游源 | 协议 | 用途 | 配置 |
 |--------|------|------|------|
-| **fstore PostgreSQL** | psycopg v3 | 标的列表 / 财务报表 / 复权事件 / 分钟级备份 | `FSTORE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`（默认 `pve.wf:5432/fstore`） |
-| **engine-data** | HTTP GET | `fquant` 日 K 主源（`wide`） / 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
-| **TDX 磁盘** | CSV | `fquant_local` 主源：`wide/day/xdxr/minutes/trans/fund`;`wide/` 优先,`day/` fallback | `TDX_DATA_DIR=/Volumes/vol3/tdx` |
-| **moneyflow** | HTTP GET | 资金流日 / 资金流分钟 | `http://pve.wf:8090`（上次测试 502，已自动降级） |
-| **tdx-api（可选）** | HTTP GET | realtime quote 优先源；未配置/失败时走 sina/tencent，再回退 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
-| **sina/tencent（provider 内适配器）** | HTTP GET | realtime fallback；连续失败退避 | provider 内部受控调用 |
+| **fstore DuckDB** | DuckDB read-only | 标的列表 / 财务报表 / 复权事件 / universes / 小表 | `FQUANT_FSTORE_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-web.duckdb`） |
+| **fstore markets DuckDB** | DuckDB read-only | realtime 快照 / 每日行情 | `FQUANT_FSTORE_MARKETS_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-markets-web.duckdb`） |
+| **fstore klines DuckDB** | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-klines-web.duckdb`） |
+| **fstore minutes DuckDB** | DuckDB read-only | fstore 分钟 K 线 | `FQUANT_FSTORE_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-minutes-web.duckdb`） |
+| **TDX DuckDB** | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx.duckdb`） |
+| **TDX minutes DuckDB** | DuckDB read-only | 分钟 K | `FQUANT_TDX_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-minutes.duckdb`） |
+| **TDX trans DuckDB** | DuckDB read-only | 逐笔成交 | `FQUANT_TDX_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-trans.duckdb`） |
+| **TDX HK DuckDB** | DuckDB read-only | 港股日 K / 多周期 K | `FQUANT_TDX_HK_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hk-web.duckdb`） |
+| **TDX HK minutes DuckDB** | DuckDB read-only | 港股分钟 K | `FQUANT_TDX_HK_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hkminutes-web.duckdb`） |
+| **TDX HK trans DuckDB** | DuckDB read-only | 港股逐笔成交 | `FQUANT_TDX_HK_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hktrans-web.duckdb`） |
 
 ### 🔁 Provider 切换
 
@@ -383,8 +395,8 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 
 | Provider | 数据来源 | capabilities | 默认 | 切换方式 |
 |----------|---------|--------------|------|----------|
-| `fquant` | fstore PG + engine-data + moneyflow + 可选 tdx-api | 日 K / 复权 / 分钟 / 财务 / realtime / universes；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant` 或 settings API |
-| `fquant_local` | TDX 磁盘 + fstore PG + tdx-api/sina/tencent/fstore realtime | 日 K / ETF / 指数 / 分钟 / 复权 / 财务 / realtime / universes；扩展逐笔/日级资金流；**stock raw mirror 禁写**；**depth 缺口** | ✅ | 默认、`DATA_PROVIDER=fquant_local` 或 settings API |
+| `fquant` | 本地 DuckDB，保留 provider 名称兼容 | 日 K / 复权 / 分钟 / 财务 / realtime / universes；**depth 缺口** | ❌ | `DATA_PROVIDER=fquant` 或 settings API |
+| `fquant_local` | 本地 DuckDB，source tag 保留 `fquant_local` | 日 K / ETF / 指数 / 分钟 / 复权 / 财务 / realtime / universes；扩展逐笔/日级资金流；**stock raw mirror 禁写**；**depth 缺口** | ✅ | 默认、`DATA_PROVIDER=fquant_local` 或 settings API |
 
 ### ✅ Service 层解耦状态
 
@@ -394,7 +406,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 |---------|------|------|
 | `kline_sync.py` | 试点文件 | 250 行日 K ✅ |
 | `instrument_sync.py` | 标准解耦 | 5857 条标的 ✅ |
-| `quote_service.py` | realtime 走 provider；fquant_local 走 tdx-api / sina/tencent / fstore 快照 | ✅ |
+| `quote_service.py` | realtime 走 provider；fquant_local 走 `fstore-markets-web.duckdb.daily_markets` 快照 | ✅ |
 | `financial_sync.py` | 财务报表走 fstore | 22101 行利润表 ✅ |
 | `index_sync.py` | universes 走 provider `get_by_universes()` | fquant live 验证 ✅ |
 | `watchlist.py` | realtime 走 provider；fquant 走本地源 fallback | ✅ |
@@ -403,7 +415,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 ### ⚠️ 已知缺口
 
 - **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级，本地/fquant 模式下返回空列表
-- **realtime 已接入**：不调用 `../fquant` HTTP API；优先可选 `tdx-api` `/api/quote`，再走 sina/tencent，最后回退 fstore `daily_markets` 最新快照
+- **realtime 已接入**：不调用 `../fquant` HTTP API / tdx-api / sina / tencent；只读 `fstore-markets-web.duckdb.daily_markets` 最新快照
 - **universes 已接入**：provider 协议已新增 `get_by_universes()`；fquant/fquant_local 走 fstore `chengfen_gu` + `base_infos`
 - **港股 P1 限制**：单股路径可用;批量 enrich、回测/筛选全链路和复权口径仍按后续计划推进
 

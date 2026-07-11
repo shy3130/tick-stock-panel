@@ -298,6 +298,25 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
     df = df.sort(["symbol", "date"])
 
     # Pass 1: 均线 + EMA + MACD 基础 + BOLL 基础 + KDJ 基础 + ATR 基础 + 量价 + 极值
+    raw_close = (
+        pl.when((pl.col("raw_close").is_not_null()) & (pl.col("raw_close") > 0))
+        .then(pl.col("raw_close"))
+        .otherwise(pl.col("close"))
+        if "raw_close" in df.columns else pl.col("close")
+    )
+    raw_high = (
+        pl.when((pl.col("raw_high").is_not_null()) & (pl.col("raw_high") > 0))
+        .then(pl.col("raw_high"))
+        .otherwise(pl.col("high"))
+        if "raw_high" in df.columns else pl.col("high")
+    )
+    raw_low = (
+        pl.when((pl.col("raw_low").is_not_null()) & (pl.col("raw_low") > 0))
+        .then(pl.col("raw_low"))
+        .otherwise(pl.col("low"))
+        if "raw_low" in df.columns else pl.col("low")
+    )
+    prev_raw_close = raw_close.shift(1).over("symbol")
     prev_close = pl.col("close").shift(1).over("symbol")
     df = df.with_columns([
         # 前收盘价
@@ -361,25 +380,7 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
         (3 * pl.col("kdj_k") - 2 * pl.col("kdj_d")).alias("kdj_j"),
     ])
 
-    raw_close = (
-        pl.when((pl.col("raw_close").is_not_null()) & (pl.col("raw_close") > 0))
-        .then(pl.col("raw_close"))
-        .otherwise(pl.col("close"))
-        if "raw_close" in df.columns else pl.col("close")
-    )
-    raw_high = (
-        pl.when((pl.col("raw_high").is_not_null()) & (pl.col("raw_high") > 0))
-        .then(pl.col("raw_high"))
-        .otherwise(pl.col("high"))
-        if "raw_high" in df.columns else pl.col("high")
-    )
-    raw_low = (
-        pl.when((pl.col("raw_low").is_not_null()) & (pl.col("raw_low") > 0))
-        .then(pl.col("raw_low"))
-        .otherwise(pl.col("low"))
-        if "raw_low" in df.columns else pl.col("low")
-    )
-    prev_raw_close = raw_close.shift(1).over("symbol")
+    prev_close = pl.col("close").shift(1).over("symbol")
 
     # Pass 4: ATR + 量比 + 动量 + 波动 + 涨跌幅 + 涨跌额 + 振幅
     df = df.with_columns(
@@ -1460,23 +1461,26 @@ def compute_enriched_today(
     df = df.with_columns(pl.lit(False).alias("ex_rights"))
 
     # ---- 基础涨跌 ----
-    # prev_close: 有则直接用 (来自 API quote_extra, raw), 需要乘 adj_factor 对齐复权价
+    # prev_close: 有则直接用 (来自 API quote_extra, raw), 再乘 adj_factor 对齐复权价给技术指标用。
+    # change_pct/change_amount/amplitude 走原始价口径，避免除权/复权缺口污染榜单。
     if "prev_close" not in df.columns:
         prev_close = pl.col("close_right") if "close_right" in df.columns else pl.col("close")
-        df = df.with_columns(prev_close.alias("prev_close"))
+        prev_raw_close = pl.col("raw_close_right") if "raw_close_right" in df.columns else prev_close
+        df = df.with_columns([
+            prev_close.alias("prev_close"),
+            prev_raw_close.alias("_prev_close_raw"),
+        ])
     elif "_adj_factor" in df.columns:
-        # 保存 API 原始前收盘价 (用于涨跌停价计算)
         df = df.with_columns(pl.col("prev_close").alias("_prev_close_raw"))
-        # API 返回的 prev_close 是原始价, 乘复权因子对齐复权价 (用于 change_pct)
         df = df.with_columns((pl.col("prev_close") * pl.col("_adj_factor").fill_null(1.0)).alias("prev_close"))
+    else:
+        df = df.with_columns(pl.col("prev_close").alias("_prev_close_raw"))
 
-    # change_pct / change_amount / amplitude 必须和当前复权后的 OHLC/prev_close 同口径。
-    # quote_extra 里的字段通常来自原始价，不能在复权路径里直接沿用。
     df = df.with_columns([
-        (pl.col("close") / pl.col("prev_close") - 1).alias("change_pct"),
-        (pl.col("close") - pl.col("prev_close")).alias("change_amount"),
-        pl.when(pl.col("prev_close") > 0)
-          .then((pl.col("high") - pl.col("low")) / pl.col("prev_close"))
+        (pl.col("raw_close") / pl.col("_prev_close_raw") - 1).alias("change_pct"),
+        (pl.col("raw_close") - pl.col("_prev_close_raw")).alias("change_amount"),
+        pl.when(pl.col("_prev_close_raw") > 0)
+          .then((pl.col("raw_high") - pl.col("raw_low")) / pl.col("_prev_close_raw"))
           .otherwise(None)
           .alias("amplitude"),
     ])
@@ -1584,7 +1588,7 @@ def compute_enriched_today(
 
     # ---- 年化波动率 20d (递推) ----
     # 用 Welford 简化: sum + sum_sq of 19 historical returns + today's return
-    today_ret = pl.col("close") / pl.col("prev_close") - 1
+    today_ret = pl.col("change_pct")
     total_sum = pl.col("_vol_19d_pct_sum").fill_null(0.0) + today_ret
     total_sq_sum = pl.col("_vol_19d_pct_sq_sum").fill_null(0.0) + today_ret ** 2
     vol_mean = total_sum / 20

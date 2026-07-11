@@ -7,7 +7,7 @@ class FakeMinuteEngine:
     def __init__(self):
         self.calls = []
 
-    def get_minutes(self, code, date_yyyymmdd):  # noqa: ARG002
+    def get_minutes(self, code, date_yyyymmdd, limit=5000, asset_type=None):  # noqa: ARG002
         self.calls.append(code)
         return [
             {"price": 10.0, "volume": 1},
@@ -23,8 +23,7 @@ def test_get_minute_aggregates_requested_freq():
     engine = FakeMinuteEngine()
     provider = object.__new__(FQuantProvider)
     provider._engine = engine
-    provider._engine_mode = "disk"
-    provider.name = "fquant_local"
+    provider.name = "fquant"
 
     df = provider.get_minute(
         ["600519.SH"],
@@ -35,7 +34,7 @@ def test_get_minute_aggregates_requested_freq():
     )
 
     rows = df.to_dicts()
-    assert engine.calls == ["600519.SH"]
+    assert engine.calls == ["600519"]
     assert len(rows) == 2
     assert rows[0]["datetime"] == "2026-07-01 09:35:00"
     assert rows[0]["open"] == 10.0

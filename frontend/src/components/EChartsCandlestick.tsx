@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useMemo } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import { computeTdSequential } from '@/lib/tdSequential'
-import { buildAllSignals, type LockKey } from '@/lib/threeLocks'
+import { buildClusterSignals, type LockKey } from '@/lib/threeLocks'
 
 export interface OHLC {
   date: string
@@ -69,6 +69,7 @@ export interface StockInfo {
 export interface SubChartDef {
   key: string
   label: string
+  description?: string
   /** 子图固定高度 px */
   height: number
   /** 构建 series 数组 */
@@ -107,6 +108,7 @@ export const SUB_CHARTS: SubChartDef[] = [
   {
     key: 'vol',
     label: '成交量',
+    description: '成交量柱状图,附带 VOL5 / VOL10 均量线。',
     height: 84,
     yAxisConfig: { min: 0 },
     buildSeries: (data) => {
@@ -153,6 +155,7 @@ export const SUB_CHARTS: SubChartDef[] = [
   {
     key: 'macd',
     label: 'MACD',
+    description: 'DIF / DEA 趋势线和 MACD 柱,用于观察趋势动能变化。',
     height: 72,
     buildSeries: (data) => [
       {
@@ -198,6 +201,7 @@ export const SUB_CHARTS: SubChartDef[] = [
   {
     key: 'rsi',
     label: 'RSI',
+    description: 'RSI6 / RSI14 / RSI24 相对强弱指标,用于观察超买超卖和强弱切换。',
     height: 72,
     yAxisConfig: { min: 0, max: 100 },
     buildSeries: (data) => [
@@ -238,6 +242,7 @@ export const SUB_CHARTS: SubChartDef[] = [
   {
     key: 'kdj',
     label: 'KDJ',
+    description: 'K / D / J 随机指标,用于观察短线拐点和钝化状态。',
     height: 72,
     buildSeries: (data) => [
       {
@@ -280,10 +285,14 @@ export const SUB_CHARTS: SubChartDef[] = [
 export const INDICATORS = SUB_CHARTS.filter(s => s.key !== 'vol')
 
 /** 主图叠加指标 (画在 K 线上方, 不占副图空间) */
-export const OVERLAY_INDICATORS: { key: string; label: string }[] = [
-  { key: 'boll', label: 'BOLL' },
-  { key: 'td9', label: '九转' },
-  { key: 'threelock', label: '三锁' },
+export const OVERLAY_INDICATORS: { key: string; label: string; description?: string }[] = [
+  { key: 'boll', label: 'BOLL', description: '布林带上轨/下轨,用于观察价格通道和波动边界。' },
+  { key: 'td9', label: '九转', description: 'TD Sequential 九转计数,用于提示连续上涨/下跌后的潜在转折点。' },
+  {
+    key: 'threelock',
+    label: '三锁',
+    description: '红色顶点=趋势锁,粉色左下=资金锁,金色右下=形态锁;实心=满足,空心=不满足;三把实心=三锁全开,绿色开锁=三锁刚破开。',
+  },
 ]
 
 interface Props {
@@ -320,6 +329,30 @@ const THEME = {
   border: '#27272A',
   bg: 'transparent',
 }
+
+const CLOSED_LOCK_SYMBOL =
+  'path://M256 448L256 352C256 192 368 96 512 96C656 96 768 192 768 352L768 448L672 448L672 352C672 248 608 192 512 192C416 192 352 248 352 352L352 448ZM224 448H800C835 448 864 477 864 512V864C864 899 835 928 800 928H224C189 928 160 899 160 864V512C160 477 189 448 224 448Z'
+
+const OPEN_LOCK_SYMBOL =
+  'path://M224 448H800C835 448 864 477 864 512V864C864 899 835 928 800 928H224C189 928 160 899 160 864V512C160 477 189 448 224 448ZM256 448L256 360C256 200 368 104 512 104C612 104 696 154 744 232L656 288C624 232 576 200 512 200C416 200 352 256 352 360L352 448ZM680 126L776 74C854 212 832 340 716 422L650 346C724 294 734 224 680 126Z'
+
+const LOCK_COLOR: Record<LockKey, string> = {
+  trend: '#d23b3b',
+  capital: '#c46a7a',
+  pattern: '#d99930',
+}
+
+const LOCK_WEAK_FILL: Record<LockKey, string> = {
+  trend: 'rgba(210,59,59,0.16)',
+  capital: 'rgba(196,106,122,0.18)',
+  pattern: 'rgba(217,153,48,0.16)',
+}
+
+const LOCK_POSITIONS: Array<{ key: LockKey; offset: [number, number] }> = [
+  { key: 'trend', offset: [0, 0] },
+  { key: 'capital', offset: [-6, 9] },
+  { key: 'pattern', offset: [6, 9] },
+]
 
 /** 可见蜡烛超过此数量时，涨停/炸板标签切换为小圆点。 */
 const COMPACT_THRESHOLD = 60
@@ -414,25 +447,15 @@ function buildSubInfoGraphics(
   return graphics
 }
 
-function buildOption(
+function buildMarkPointData(
   data: OHLC[],
-  dates: string[],
   dateIndexMap: Map<string, number>,
   markers: ChartMarker[] | undefined,
-  ranges: ChartRange[] | undefined,
-  priceLines: ChartPriceLine[] | undefined,
-  showMA: boolean,
   compact: boolean,
   activeIndicators: string[],
-  containerHeight: number,
-  infoIdx: number,
-  linkedPrice: number | null | undefined,
-): EChartsOption {
-  const candleData = data.map(d => [d.open, d.close, d.low, d.high])
-
-  const hasMA = showMA && data.some(d => d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null)
-
+): any[] {
   const markPointData: any[] = []
+
   if (markers && markers.length > 0) {
     for (const m of markers) {
       const idx = dateIndexMap.get(m.date)
@@ -465,7 +488,7 @@ function buildOption(
         }
       } else {
         markPointData.push({
-          name: m.label ?? '',
+          name: m.date,
           coord: [m.date, isBuy ? d.low : d.high],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
@@ -482,10 +505,6 @@ function buildOption(
     }
   }
 
-  // 九转 (TD Sequential Setup) — 主图叠加数字/徽标标记
-  // 必须在下方 candlestick series.push(...) 之前完成，因为该 series 对象的
-  // markPoint.data 直接引用 markPointData 数组，但 markPoint 字段本身在构造时
-  // 就已按 markPointData.length 决定是否为 undefined —— 之后再 push 不会生效。
   if (activeIndicators.includes('td9')) {
     const closes = data.map(d => d.close)
     const td = computeTdSequential(closes)
@@ -523,8 +542,6 @@ function buildOption(
     }
   }
 
-  // 三锁 (趋势/资金/形态)，移植自 ../fquant threeLocks.ts，对齐"指南针" App。
-  // 逐锁独立追踪状态变化 + 综合3锁全开/破开信号。
   if (activeIndicators.includes('threelock')) {
     const lockRows = data.map(d => ({
       date: d.date,
@@ -534,71 +551,92 @@ function buildOption(
       volume: d.volume,
       main_net_inflow: d.main_net_inflow,
     }))
-    const { combined, perLock } = buildAllSignals(lockRows)
-    const LOCK_COLOR: Record<LockKey, string> = {
-      trend: '#d23b3b',
-      capital: '#c46a7a',
-      pattern: '#d99930',
-    }
-    const LOCK_LABEL: Record<LockKey, string> = {
-      trend: '趋',
-      capital: '资',
-      pattern: '形',
-    }
-    const LOCK_OFFSET_STEP: Record<LockKey, number> = {
-      trend: 0,
-      capital: 12,
-      pattern: 24,
-    }
-
-    for (const s of perLock) {
-      const bar = data[s.index]
+    let prevAllOpen = false
+    for (const signal of buildClusterSignals(lockRows)) {
+      const bar = data[signal.index]
       if (!bar) continue
-      const color = LOCK_COLOR[s.lock]
-      const isOn = s.direction === 'on'
-      const coord: [string, number] = isOn ? [bar.date, bar.low] : [bar.date, bar.high]
-      const step = LOCK_OFFSET_STEP[s.lock]
-      const offsetY = isOn ? 10 + step : -18 - step
+      const allOpen = signal.states.trend && signal.states.capital && signal.states.pattern
+      const justOpened = !prevAllOpen && allOpen
+      const justBroken = prevAllOpen && !allOpen
+      prevAllOpen = allOpen
+
+      const coord: [string, number] = justOpened ? [bar.date, bar.low] : [bar.date, bar.high]
+      const direction = justOpened ? 1 : -1
+      const highlightColor = justOpened ? THEME.bull : justBroken ? THEME.bear : undefined
+
       if (compact) {
         markPointData.push({
-          name: bar.date, coord,
-          symbol: 'circle', symbolSize: 3, symbolOffset: [0, offsetY],
-          itemStyle: { color },
-          label: { show: false }, z: 100, zlevel: 10,
-        })
-      } else {
-        markPointData.push({
-          name: bar.date, coord,
-          symbol: 'roundRect', symbolSize: [12, 14], symbolOffset: [0, offsetY],
-          itemStyle: { color },
-          label: {
-            show: true, formatter: LOCK_LABEL[s.lock], color: '#fff', fontSize: 9, fontWeight: 'bold',
-            fontFamily: 'JetBrains Mono, monospace',
+          name: bar.date,
+          coord,
+          symbol: 'circle',
+          symbolSize: highlightColor ? 6 : 4,
+          symbolOffset: [0, direction > 0 ? 14 : -14],
+          itemStyle: {
+            color: highlightColor ?? THEME.text,
+            borderColor: highlightColor,
+            borderWidth: highlightColor ? 1 : 0,
           },
+          label: { show: false },
+          z: 100, zlevel: 10,
+        })
+        continue
+      }
+
+      if (justBroken) {
+        markPointData.push({
+          name: bar.date,
+          coord,
+          symbol: OPEN_LOCK_SYMBOL,
+          symbolSize: [16, 16],
+          symbolOffset: [0, -24],
+          itemStyle: { color: THEME.bear },
+          label: { show: false },
+          z: 100, zlevel: 10,
+        })
+        continue
+      }
+
+      for (const { key, offset } of LOCK_POSITIONS) {
+        const locked = signal.states[key]
+        const color = LOCK_COLOR[key]
+        markPointData.push({
+          name: bar.date,
+          coord,
+          symbol: CLOSED_LOCK_SYMBOL,
+          symbolSize: [7, 7],
+          symbolOffset: [offset[0], direction > 0 ? offset[1] + 8 : offset[1] - 23],
+          itemStyle: locked
+            ? { color }
+            : { color: LOCK_WEAK_FILL[key], borderColor: color, borderWidth: 1.4 },
+          label: { show: false },
           z: 100, zlevel: 10,
         })
       }
     }
-
-    for (const s of combined) {
-      const bar = data[s.index]
-      if (!bar) continue
-      const isBuy = s.kind === 'buy'
-      const coord: [string, number] = isBuy ? [bar.date, bar.low] : [bar.date, bar.high]
-      markPointData.push({
-        name: bar.date, coord,
-        symbol: isBuy ? 'roundRect' : 'circle',
-        symbolSize: isBuy ? [22, 22] : [18, 18],
-        symbolOffset: isBuy ? [0, 20] : [0, -26],
-        itemStyle: { color: isBuy ? '#F59E0B' : THEME.bear },
-        label: {
-          show: true, formatter: isBuy ? '锁' : '开', color: isBuy ? '#422006' : '#fff',
-          fontSize: 11, fontWeight: 'bold', fontFamily: 'JetBrains Mono, monospace',
-        },
-        z: 100, zlevel: 10,
-      })
-    }
   }
+
+  return markPointData
+}
+
+function buildOption(
+  data: OHLC[],
+  dates: string[],
+  dateIndexMap: Map<string, number>,
+  markers: ChartMarker[] | undefined,
+  ranges: ChartRange[] | undefined,
+  priceLines: ChartPriceLine[] | undefined,
+  showMA: boolean,
+  compact: boolean,
+  activeIndicators: string[],
+  containerHeight: number,
+  infoIdx: number,
+  linkedPrice: number | null | undefined,
+): EChartsOption {
+  const candleData = data.map(d => [d.open, d.close, d.low, d.high])
+
+  const hasMA = showMA && data.some(d => d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null)
+
+  const markPointData = buildMarkPointData(data, dateIndexMap, markers, compact, activeIndicators)
 
   // ====== 布局计算 ======
   const left = 60
@@ -726,7 +764,7 @@ function buildOption(
       borderColor: THEME.bull, borderColor0: THEME.bear,
       cursor: 'pointer',
     },
-    markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
+    markPoint: markPointData.length > 0 ? { data: markPointData, animation: false, symbolKeepAspect: true } : undefined,
     markArea: markAreaData.length > 0 ? { silent: true, data: markAreaData } : undefined,
     markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
   })
@@ -882,6 +920,10 @@ export function EChartsCandlestick({
   // 需要在闭包中访问最新值的变量 — 先声明占位，后面赋值
   const activeIndicatorsRef = useRef(activeIndicators)
   activeIndicatorsRef.current = activeIndicators
+  const markersRef = useRef(markers)
+  markersRef.current = markers
+  const showMarkersRef = useRef(showMarkersProp)
+  showMarkersRef.current = showMarkersProp
   const chartHeightRef = useRef(300)
   const subTotalHRef = useRef(0)
   const getInfoBarHTMLRef = useRef<() => string>(() => '')
@@ -1084,59 +1126,19 @@ export function EChartsCandlestick({
   function updateMarkPoints() {
     const chart = chartRef.current
     if (!chart) return
-    const mkrs = showMarkersProp ? markers : undefined
-    if (!mkrs || mkrs.length === 0) return
-    const compact = compactRef.current
-    const markPointData: any[] = []
-    for (const m of mkrs) {
-      const idx = dateIndexMap.get(m.date)
-      if (idx == null) continue
-      const d = data[idx]
-      const isBuy = m.kind === 'buy'
-      const isSell = m.kind === 'sell'
-      if (m.above) {
-        const dotColor = m.color ?? (isBuy ? '#FACC15' : THEME.text)
-        if (compact) {
-          markPointData.push({
-            name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10],
-            itemStyle: { color: dotColor, cursor: 'pointer' },
-            label: { show: false }, z: 100, zlevel: 10,
-          })
-        } else {
-          markPointData.push({
-            name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2],
-            itemStyle: { color: 'transparent' },
-            label: {
-              show: true, formatter: m.label ?? '', position: 'top', distance: 0,
-              color: dotColor, fontSize: 10, fontWeight: 'normal',
-              fontFamily: 'JetBrains Mono, monospace',
-            },
-            z: 100, zlevel: 10,
-          })
-        }
-      } else {
-        markPointData.push({
-          name: m.label ?? '',
-          coord: [m.date, isBuy ? d.low : d.high],
-          symbol: 'arrow', symbolSize: 12,
-          symbolRotate: isBuy ? 0 : 180,
-          symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : THEME.text },
-          label: {
-            show: !!m.label, formatter: m.label ?? '',
-            position: isBuy ? 'bottom' : 'top', distance: 8,
-            color: THEME.text, fontSize: 10,
-            fontFamily: 'JetBrains Mono, monospace',
-          },
-        })
-      }
-    }
+    const curData = dataRef.current
+    const curDateIndexMap = new Map(curData.map((d, i) => [d.date, i]))
+    const markPointData = buildMarkPointData(
+      curData,
+      curDateIndexMap,
+      showMarkersRef.current ? markersRef.current : undefined,
+      compactRef.current,
+      activeIndicatorsRef.current,
+    )
     chart.setOption({
       series: [{
         name: 'K',
-        markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
+        markPoint: markPointData.length > 0 ? { data: markPointData, animation: false, symbolKeepAspect: true } : undefined,
       }]
     })
   }
