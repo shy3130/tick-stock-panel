@@ -29,6 +29,12 @@ _MORNING_START = datetime(2000, 1, 1, 9, 31)
 _AFTERNOON_START = datetime(2000, 1, 1, 13, 1)
 _MORNING_END = datetime(2000, 1, 1, 11, 30)
 
+# 港股交易时段：上午 09:31-12:00（150 分钟）/ 下午 13:01-16:00（180 分钟），
+# 与 A 股的 120/120 分段不同——已在 engine 仓库 tdx-kline 用真实
+# tdx-hkminutes.duckdb 数据验证过（tdx_kline_bucket.go tdxMinuteSessions）。
+_HK_MORNING_LEN = 150
+_HK_AFTERNOON_START = datetime(2000, 1, 1, 13, 1)
+
 
 def _to_float(val) -> float | None:
     """安全转 float，None/异常返回 None。"""
@@ -191,16 +197,22 @@ def chuquan_rows_to_events(rows: list[dict], symbol: str) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # §5.4 minute 字段映射
 # --------------------------------------------------------------------------- #
-def generated_minute_time(index: int, date_str: str) -> str:
+def generated_minute_time(index: int, date_str: str, asset_type: str = "stock") -> str:
     """客户端重建分钟时间戳（§4.6 / engine_stock_data.go:201）。
 
     engine ``minutes`` 返回 ``[{price, volume}, ...]`` 无时间字段。
     按固定交易时段重建：
-    - index 0..119 → 09:31..11:30（上午 120 分钟）
-    - index 120..239 → 13:01..15:00（下午 120 分钟）
+    - A股/stock（默认）：index 0..119 → 09:31..11:30（上午 120 分钟），
+      index 120..239 → 13:01..15:00（下午 120 分钟）
+    - 港股/hk：index 0..149 → 09:31..12:00（上午 150 分钟），
+      index 150..329 → 13:01..16:00（下午 180 分钟）——分段点和总分钟数
+      都和 A 股不同，不能共用 120/120 的判断，否则港股下午盘的分钟会被
+      错误地往前挪（用 A 股分段会把港股 index 120..149 这段本该是上午的
+      数据当成下午处理）。
 
     :param index: 0-based 桶序号
     :param date_str: ``YYYYMMDD`` 或 ``YYYY-MM-DD``
+    :param asset_type: 资产类型，``"hk"`` 使用港股分段，其余按 A 股分段
     :return: ``YYYY-MM-DD HH:MM:SS``
     """
     # 统一日期格式为 YYYY-MM-DD
@@ -209,7 +221,12 @@ def generated_minute_time(index: int, date_str: str) -> str:
     else:
         date_iso = date_str
 
-    if index < 120:
+    if asset_type == "hk":
+        if index < _HK_MORNING_LEN:
+            t = _MORNING_START + timedelta(minutes=index)
+        else:
+            t = _HK_AFTERNOON_START + timedelta(minutes=index - _HK_MORNING_LEN)
+    elif index < 120:
         t = _MORNING_START + timedelta(minutes=index)
     else:
         t = _AFTERNOON_START + timedelta(minutes=index - 120)
@@ -235,7 +252,7 @@ def minutes_rows_to_minute_df(
             "symbol": symbol,
             "asset_type": asset_type,
             "source": source,
-            "datetime": generated_minute_time(i, date_str),
+            "datetime": generated_minute_time(i, date_str, asset_type=asset_type),
             "open": price,
             "high": price,
             "low": price,
