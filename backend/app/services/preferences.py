@@ -163,20 +163,27 @@ def get_pipeline_pull_etf() -> bool:
     return load().get("pipeline_pull_etf", False)
 
 
+def get_pipeline_pull_hk() -> bool:
+    """是否拉取港股日K。默认 False —— 港股是可选能力,且本地无除权数据源
+    (仅不复权),用户需明确知情后再开启。"""
+    return load().get("pipeline_pull_hk", False)
+
+
 def get_pipeline_pull_index() -> bool:
     """是否拉取指数日K。默认 True。"""
     return load().get("pipeline_pull_index", True)
 
 
-_PIPELINE_PULL_KEYS = ("pipeline_pull_etf", "pipeline_pull_index")
+_PIPELINE_PULL_KEYS = ("pipeline_pull_etf", "pipeline_pull_index", "pipeline_pull_hk")
 
 
 def get_pipeline_pull_types() -> dict:
-    """返回三个拉取开关的当前值。"""
+    """返回四个拉取开关的当前值。"""
     return {
         "pipeline_pull_a_share": get_pipeline_pull_a_share(),
         "pipeline_pull_etf": get_pipeline_pull_etf(),
         "pipeline_pull_index": get_pipeline_pull_index(),
+        "pipeline_pull_hk": get_pipeline_pull_hk(),
     }
 
 

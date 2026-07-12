@@ -916,6 +916,7 @@ export interface Preferences {
   pipeline_pull_a_share: boolean
   pipeline_pull_etf: boolean
   pipeline_pull_index: boolean
+  pipeline_pull_hk: boolean
   pipeline_index_symbols: string
   pipeline_schedule: { hour: number; minute: number }
   instruments_schedule: { hour: number; minute: number }
@@ -1205,11 +1206,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ minute_sync_enabled: enabled, minute_sync_days: days }),
     }),
-  updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index'>>) =>
+  updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index' | 'pipeline_pull_hk'>>) =>
     request<{
       pipeline_pull_a_share: boolean
       pipeline_pull_etf: boolean
       pipeline_pull_index: boolean
+      pipeline_pull_hk: boolean
     }>('/api/settings/preferences/pipeline-pull-types', {
       method: 'PUT',
       body: JSON.stringify(cfg),

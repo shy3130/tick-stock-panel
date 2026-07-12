@@ -77,12 +77,20 @@ def _quotes_to_index_instruments(resp) -> pl.DataFrame:
     return result.unique(subset=["symbol"], keep="last").sort("symbol")
 
 
-def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> pl.DataFrame:
+def _fetch_instruments_by_type(
+    instrument_type: str,
+    asset_type_label: str,
+    extra_cols: tuple[str, ...] = (),
+) -> pl.DataFrame:
     """通过 data_providers 抽象层拉取指定类型的标的列表。
 
     None/Free 档均可使用(标的信息查询免费开放)。
-    instrument_type: 'index' / 'etf'  (用作 provider.get_instruments 的 asset_type 参数)
-    asset_type_label: 写入 instruments 表的 asset_type 标记('index' / 'etf')
+    instrument_type: 'index' / 'etf' / 'hk'  (用作 provider.get_instruments 的 asset_type 参数)
+    asset_type_label: 写入 instruments 表的 asset_type 标记('index' / 'etf' / 'hk')
+    extra_cols: 除 symbol/name/code 外额外保留的列。index/ETF 默认不需要 ——
+        它们的 enriched 计算不依赖 instruments 算派生指标。港股需要
+        total_shares/float_shares 来算换手率(_attach_turnover_rate),
+        原来这里全部裁掉是港股换手率一直算不出来的根因。
     """
     provider = _get_data_provider()
     try:
@@ -94,13 +102,17 @@ def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> p
     if df.is_empty() or "symbol" not in df.columns:
         return pl.DataFrame()
 
-    # provider 返回 INSTRUMENT_COLS: symbol/name/code/exchange/asset_type/source
+    # provider 返回 INSTRUMENT_COLS: symbol/name/code/exchange/asset_type/source(+可选股本列)
     # 这里只取需要的列,并把 asset_type 覆盖为调用方指定的标记
-    out = df.select([
+    cols = [
         pl.col("symbol").cast(pl.Utf8),
         pl.col("name").cast(pl.Utf8),
         pl.col("code").cast(pl.Utf8),
-    ]).with_columns(pl.lit(asset_type_label).alias("asset_type"))
+    ]
+    for c in extra_cols:
+        if c in df.columns:
+            cols.append(pl.col(c))
+    out = df.select(cols).with_columns(pl.lit(asset_type_label).alias("asset_type"))
 
     return out.unique(subset=["symbol"], keep="last").sort("symbol")
 
@@ -172,6 +184,97 @@ def sync_etf_instruments(repo: KlineRepository) -> int:
     repo.save_etf_instruments(etf_df)
     repo.refresh_index_views()
     return etf_df.height
+
+
+def sync_hk_instruments(repo: KlineRepository) -> int:
+    """单独同步港股标的维表(返回港股数量)。
+
+    带 total_shares/float_shares(extra_cols)—— enriched 计算换手率要用,
+    与 index/ETF 的默认窄投影不同,见 _fetch_instruments_by_type 的参数说明。
+    """
+    hk_df = _fetch_instruments_by_type("hk", "hk", extra_cols=("total_shares", "float_shares"))
+    if hk_df.is_empty():
+        return 0
+    repo.save_hk_instruments(hk_df)
+    repo.refresh_index_views()
+    return hk_df.height
+
+
+def sync_and_persist_hk_daily(
+    repo: KlineRepository,
+    capset: CapabilitySet,
+    count: int | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    symbols_override: list[str] | None = None,
+    on_chunk_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """同步港股日K到独立 kline_hk_* parquet,并计算港股 enriched。
+
+    与 ETF 的关键差别:
+      - factors=None(不复权)—— 本地无港股除权数据源(chuquan_chuxi 只有 6 位 A 股
+        代码,tdx-hk 无 xdxr 表,已实测确认)。raw_close 因此等于 close。
+      - instruments=hk_instruments, asset_type="hk"(而非 ETF 那样传 None)——
+        港股 instruments 带 float_shares,要让 compute_all 算出换手率;
+        asset_type="hk" 保证 compute_all 走 `else` 分支只挂换手率、不套 A 股
+        涨跌停/连板逻辑(该逻辑只在 asset_type=="stock" 时触发)。
+    """
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        return 0
+
+    if symbols_override:
+        symbols = sorted(set(s for s in symbols_override if s))
+        instruments = repo.get_hk_instruments()
+    else:
+        instruments = repo.get_hk_instruments()
+        if instruments.is_empty():
+            sync_hk_instruments(repo)
+            instruments = repo.get_hk_instruments()
+        if instruments.is_empty() or "symbol" not in instruments.columns:
+            return 0
+        symbols = sorted(set(instruments["symbol"].to_list()))
+    if not symbols:
+        return 0
+
+    lim = capset.limits(Cap.KLINE_DAILY_BATCH)
+    batch_size = preferences.get_index_daily_batch_size()
+    if lim and lim.batch:
+        batch_size = min(batch_size, lim.batch)
+    rpm = lim.rpm if lim else None
+
+    end_time = end_date or datetime.now()
+    start_time = start_date or (end_time - timedelta(days=365))
+
+    total_rows = 0
+    interval = (60.0 / rpm) if rpm else 0
+    chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+    for i, chunk in enumerate(chunks):
+        if i > 0 and interval > 0 and len(chunks) > rpm:
+            import time
+            time.sleep(interval)
+        raw = kline_sync.sync_daily_batch(
+            chunk,
+            count=count,
+            batch_size=None,
+            start_time=start_time,
+            end_time=end_time,
+            asset_type="hk",
+        )
+        if raw.is_empty():
+            continue
+
+        repo.append_hk_daily(raw)
+        chunk_instruments = instruments.filter(pl.col("symbol").is_in(chunk)) if not instruments.is_empty() else instruments
+        enriched = compute_enriched(raw, factors=None, instruments=chunk_instruments, asset_type="hk")
+        repo.append_hk_enriched(enriched)
+        total_rows += raw.height
+        logger.info("hk daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
+        if on_chunk_done:
+            on_chunk_done(i + 1, len(chunks))
+        del raw, enriched
+        gc.collect()
+    repo.refresh_index_views()
+    return total_rows
 
 
 def sync_and_persist_index_daily(

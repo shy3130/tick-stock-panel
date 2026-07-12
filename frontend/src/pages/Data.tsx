@@ -188,12 +188,14 @@ export function Data() {
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
   const indexAuto = prefs.data?.pipeline_pull_index ?? true
   const etfAuto = prefs.data?.pipeline_pull_etf ?? false
+  const hkAuto = prefs.data?.pipeline_pull_hk ?? false
   const pipelineSteps = [
     '日K',
     ...(hasAdjCap ? ['复权'] : []),
     '指标',
     ...(indexAuto ? ['指数'] : []),
     ...(etfAuto ? ['ETF'] : []),
+    ...(hkAuto ? ['港股'] : []),
     ...((hasMinuteCap && minuteAuto) ? ['分钟K'] : []),
   ]
 

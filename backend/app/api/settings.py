@@ -278,6 +278,7 @@ def get_preferences() -> dict:
         "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
         "pipeline_pull_etf": preferences.get_pipeline_pull_etf(),
         "pipeline_pull_index": preferences.get_pipeline_pull_index(),
+        "pipeline_pull_hk": preferences.get_pipeline_pull_hk(),
         "pipeline_index_symbols": preferences.get_pipeline_index_symbols(),
         "pipeline_schedule": preferences.get_pipeline_schedule(),
         "instruments_schedule": preferences.get_instruments_schedule(),
@@ -529,10 +530,11 @@ def update_realtime_monitor_config(req: RealtimeMonitorConfigIn, request: Reques
 
 
 class PipelinePullTypesIn(BaseModel):
-    """盘后管道拉取内容开关(A股 / ETF / 指数 独立控制)。"""
+    """盘后管道拉取内容开关(A股 / ETF / 指数 / 港股 独立控制)。"""
     pipeline_pull_a_share: bool | None = None
     pipeline_pull_etf: bool | None = None
     pipeline_pull_index: bool | None = None
+    pipeline_pull_hk: bool | None = None
 
 
 @router.put("/preferences/pipeline-pull-types")

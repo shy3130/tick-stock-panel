@@ -41,6 +41,9 @@ _table_cache: dict[str, dict | None] = {
     "etf_daily": None,
     "etf_enriched": None,
     "etf_instruments": None,
+    "hk_daily": None,
+    "hk_enriched": None,
+    "hk_instruments": None,
     "minute": None,
     "adj_factor": None,
     "instruments": None,
@@ -378,6 +381,67 @@ def _safe_aggregate_etf_daily(repo) -> dict | None:
     return None
 
 
+def _safe_aggregate_hk_instruments(repo) -> dict | None:
+    """港股 instruments 统计 — 独立 instruments_hk,无旧版兼容路径。"""
+    try:
+        row = repo.execute_one(
+            """SELECT count(*) AS rows,
+                      count(DISTINCT symbol) AS symbols,
+                      count_if(name IS NOT NULL AND name != '') AS named
+               FROM instruments_hk"""
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("aggregate hk instruments failed: %s", e)
+        return None
+    if not row or not row[0]:
+        return None
+    return {
+        "rows": int(row[0]),
+        "symbols_covered": int(row[1] or 0),
+        "latest_as_of": None,
+        "named": int(row[2] or 0),
+    }
+
+
+def _safe_aggregate_hk_enriched(repo) -> dict | None:
+    """港股 enriched 统计 — 独立 kline_hk_enriched。不复权,故无 adj_factor 覆盖率。"""
+    fields = 0
+    try:
+        cols = repo.execute_all("DESCRIBE kline_hk_enriched")
+        fields = len(cols)
+    except Exception:  # noqa: BLE001
+        pass
+    stats = _safe_aggregate(repo, "kline_hk_enriched")
+    if not stats:
+        return None
+    return {**stats, "fields": fields}
+
+
+def _safe_aggregate_hk_daily(repo) -> dict | None:
+    """港股日K统计 — 独立 kline_hk_daily。"""
+    try:
+        row = repo.execute_one(
+            """SELECT count(*) AS rows,
+                      min(date) AS earliest,
+                      max(date) AS latest,
+                      count(DISTINCT symbol) AS symbols,
+                      count(DISTINCT date) AS trading_days
+               FROM kline_hk_daily"""
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("aggregate hk daily failed: %s", e)
+        return None
+    if not row or not row[0]:
+        return None
+    return {
+        "rows": int(row[0]),
+        "earliest_date": str(row[1]) if row[1] else None,
+        "latest_date": str(row[2]) if row[2] else None,
+        "symbols_covered": int(row[3] or 0),
+        "trading_days": int(row[4] or 0),
+    }
+
+
 def _safe_aggregate_adj_factor(repo) -> dict | None:
     """adj_factor 视图统计,日期范围对齐日 K 覆盖区间。"""
     try:
@@ -633,6 +697,9 @@ def status(request: Request) -> dict:
     "etf_daily":         _get_table_stats("etf_daily",         lambda: _safe_aggregate_etf_daily(repo)),
     "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo)),
     "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo)),
+    "hk_daily":          _get_table_stats("hk_daily",          lambda: _safe_aggregate_hk_daily(repo)),
+    "hk_enriched":       _get_table_stats("hk_enriched",       lambda: _safe_aggregate_hk_enriched(repo)),
+    "hk_instruments":    _get_table_stats("hk_instruments",    lambda: _safe_aggregate_hk_instruments(repo)),
     "minute":      _get_table_stats("minute",      lambda: _safe_aggregate_minute(repo)),
         "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo)),
         "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),

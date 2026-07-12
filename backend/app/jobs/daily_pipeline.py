@@ -352,21 +352,27 @@ def run_now(
     _refresh_single_view(repo, "kline_enriched")
     _invalidate("enriched")
 
-    # Step 2.3: 指数 / ETF 同步 — 物理分开存储；ETF 可复权，指数不复权。
+    # Step 2.3: 指数 / ETF / 港股同步 — 物理分开存储；ETF 可复权，指数与港股不复权
+    # (港股不是"选择不复权"，是本地无除权数据源，见 sync_and_persist_hk_daily 注释)。
     written_index_daily = 0
     written_etf_daily = 0
+    written_hk_daily = 0
     index_count = 0
     etf_count = 0
     etf_adj_symbols = 0
+    hk_count = 0
     pull_index = _prefs.get_pipeline_pull_index()
     pull_etf = _prefs.get_pipeline_pull_etf()
+    pull_hk = _prefs.get_pipeline_pull_hk()
 
-    if capset.has(Cap.KLINE_DAILY_BATCH) and (pull_index or pull_etf):
+    if capset.has(Cap.KLINE_DAILY_BATCH) and (pull_index or pull_etf or pull_hk):
         _types = []
         if pull_index:
             _types.append("指数")
         if pull_etf:
             _types.append("ETF")
+        if pull_hk:
+            _types.append("港股")
         emit("sync_index", 88, f"同步{'+'.join(_types)}日K…")
         # 子阶段进度分配: 88.0(开始) → 89.0(完成), 指数占前半, ETF 占后半
         try:
@@ -455,16 +461,45 @@ def run_now(
                 _invalidate("etf_instruments")
                 _invalidate("etf_daily")
 
+            if pull_hk:
+                emit("sync_index", 88, "同步港股维表…")
+                hk_count = index_sync.sync_hk_instruments(repo)
+                emit("sync_index", 88, f"港股维表完成,{hk_count} 只")
+                hk_dir = repo.store.data_dir / "kline_hk_enriched"
+                hk_dates = sorted(
+                    d.name[5:] for d in hk_dir.glob("date=*")
+                    if d.is_dir() and d.name.startswith("date=")
+                ) if hk_dir.exists() else []
+                # 首次回补对齐 A 股 enriched 面板起点(2024-10-09),而非任意 365 天。
+                hk_start = _date.fromisoformat(hk_dates[-1]) if hk_dates else _date(2024, 10, 9)
+
+                def _hk_chunk(cur: int, tot: int) -> None:
+                    emit("sync_index", 88, f"港股日K批次 {cur}/{tot}",
+                         stage_pct=int(100 * cur / tot) if tot else 100, skip_log=cur < tot)
+
+                written_hk_daily = index_sync.sync_and_persist_hk_daily(
+                    repo,
+                    capset,
+                    start_date=_dt.combine(hk_start, _dt.min.time()),
+                    end_date=_dt.combine(today, _dt.min.time()),
+                    on_chunk_done=_hk_chunk,
+                )
+                emit("sync_index", 88, f"港股日K完成,{written_hk_daily} 行(不复权)")
+                _invalidate("hk_daily")
+                _invalidate("hk_enriched")
+                _invalidate("hk_instruments")
+
             repo.refresh_index_views()
             emit(
                 "sync_index",
                 89,
                 f"同步完成,指数 {index_count} 只/{written_index_daily} 行, ETF {etf_count} 只/{written_etf_daily} 行"
-                + (f", ETF复权 {etf_adj_symbols} 只" if etf_adj_symbols else ""),
+                + (f", ETF复权 {etf_adj_symbols} 只" if etf_adj_symbols else "")
+                + (f", 港股 {hk_count} 只/{written_hk_daily} 行" if pull_hk else ""),
             )
         except Exception as e:  # noqa: BLE001
-            logger.warning("sync_index/etf failed: %s", e)
-            emit("sync_index", 89, f"指数/ETF同步失败:{e}")
+            logger.warning("sync_index/etf/hk failed: %s", e)
+            emit("sync_index", 89, f"指数/ETF/港股同步失败:{e}")
     else:
         skipped.append("sync_index")
 
@@ -514,6 +549,8 @@ def run_now(
         "etf_count": etf_count,
         "etf_daily_rows": written_etf_daily,
         "etf_adj_factor_symbols": etf_adj_symbols,
+        "hk_count": hk_count,
+        "hk_daily_rows": written_hk_daily,
         "minute_rows": written_minute,
         "skipped_stages": skipped,
     }

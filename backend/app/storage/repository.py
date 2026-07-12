@@ -314,6 +314,10 @@ class KlineRepository:
         self._etf_live_agg_cache: pl.DataFrame | None = None
         self._etf_live_agg_cache_date: date | None = None
         self._etf_instruments_cache: pl.DataFrame | None = None
+        self._hk_enriched_cache: pl.DataFrame | None = None
+        self._hk_enriched_cache_date: date | None = None
+        self._hk_enriched_history_cache: pl.DataFrame | None = None
+        self._hk_instruments_cache: pl.DataFrame | None = None
 
         # parquet glob 路径
         self._enriched_glob = str(store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
@@ -325,6 +329,7 @@ class KlineRepository:
         self._inst_glob = str(store.data_dir / "instruments" / "**" / "*.parquet")
         self._index_inst_glob = str(store.data_dir / "instruments_index" / "**" / "*.parquet")
         self._etf_inst_glob = str(store.data_dir / "instruments_etf" / "**" / "*.parquet")
+        self._hk_inst_glob = str(store.data_dir / "instruments_hk" / "**" / "*.parquet")
 
     def execute_all(self, sql: str, params: list | None = None) -> list[tuple]:
         """线程安全的 SELECT → fetchall。DuckDB 单 connection 非线程安全，所有读路径须走此方法。"""
@@ -345,6 +350,7 @@ class KlineRepository:
         self._refresh_instruments()
         self._refresh_index_instruments()
         self._refresh_etf_instruments()
+        self._refresh_hk_instruments()
         self._refresh_enriched()
 
     def clear_cache(self) -> None:
@@ -368,6 +374,10 @@ class KlineRepository:
         self._etf_live_agg_cache = None
         self._etf_live_agg_cache_date = None
         self._etf_instruments_cache = None
+        self._hk_enriched_cache = None
+        self._hk_enriched_cache_date = None
+        self._hk_enriched_history_cache = None
+        self._hk_instruments_cache = None
 
     def _refresh_enriched(self) -> None:
         """从 parquet 加载 enriched 最新日到内存 + 构建聚合表。
@@ -706,6 +716,81 @@ class KlineRepository:
         except Exception as e:  # noqa: BLE001
             logger.debug("ETF enriched 缓存刷新跳过: %s", e)
 
+    def _refresh_hk_enriched(self) -> None:
+        """从港股 enriched parquet 加载最新日 + 近 300 日历史到内存缓存。
+
+        与 ETF 的差别:除最新日外还留一份完整历史 (df_full 反正已经算出来了,
+        丢掉只会让后续筛选/复盘重算一遍)。与 A 股的 _enriched_history_cache 同义。
+
+        不算涨跌停信号 —— 港股无该制度,compute_signals 之外不再调 compute_limit_signals。
+        换手率已在管道落盘时算好 (compute_all 的 asset_type != stock 分支),这里直接读。
+        """
+        try:
+            enriched_dir = self.store.data_dir / "kline_hk_enriched"
+            dates = sorted(
+                p.name[5:] for p in enriched_dir.glob("date=*")
+                if p.is_dir() and p.name.startswith("date=")
+            ) if enriched_dir.exists() else []
+            if not dates:
+                self._hk_enriched_cache = None
+                self._hk_enriched_cache_date = None
+                self._hk_enriched_history_cache = None
+                return
+            latest = date.fromisoformat(dates[-1])
+            target_parquet = enriched_dir / f"date={dates[-1]}" / "part.parquet"
+            df_latest = pl.read_parquet(target_parquet)
+            if df_latest.is_empty():
+                return
+
+            from datetime import timedelta
+            from app.indicators.pipeline import compute_indicators, compute_signals
+            start_full = latest - timedelta(days=300)
+            read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
+                                     "volume", "amount", "raw_close", "raw_high", "raw_low",
+                                     "turnover_rate"]
+                         if c in df_latest.columns]
+            df_hist = (
+                pl.scan_parquet(self._hk_enriched_glob,
+                                cast_options=pl.ScanCastOptions(integer_cast="allow-float"))
+                .filter(pl.col("date") >= start_full)
+                .select(read_cols)
+                .sort(["symbol", "date"])
+                .collect()
+            )
+            if df_hist.is_empty():
+                self._hk_enriched_cache = df_latest.sort(["symbol"])
+                self._hk_enriched_history_cache = None
+            else:
+                df_full = compute_signals(compute_indicators(df_hist))
+                # JOIN 名称等维表列 (港股 instruments 有 name/float_shares)
+                inst = self.get_hk_instruments()
+                if not inst.is_empty():
+                    inst_cols = [c for c in ["name", "total_shares", "float_shares"]
+                                 if c in inst.columns and c not in df_full.columns]
+                    if inst_cols:
+                        df_full = df_full.join(
+                            inst.select(["symbol", *inst_cols]).unique(subset=["symbol"]),
+                            on="symbol", how="left",
+                        )
+                self._hk_enriched_history_cache = df_full
+                self._hk_enriched_cache = df_full.filter(pl.col("date") == latest).sort(["symbol"])
+            self._hk_enriched_cache_date = latest
+            logger.info("港股 enriched 缓存已加载: %d 只, 日期 %s",
+                        len(self._hk_enriched_cache), latest)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("港股 enriched 缓存刷新跳过: %s", e)
+
+    def get_hk_enriched_history(self, target_date: date, lookback_days: int) -> pl.DataFrame | None:
+        """返回港股 enriched 历史窗口。缓存未覆盖时返回 None,调用方自行降级。"""
+        cache = self._hk_enriched_history_cache
+        if cache is None or cache.is_empty() or "date" not in cache.columns:
+            return None
+        from datetime import timedelta
+        if cache["date"].max() < target_date:
+            return None
+        lookback_start = target_date - timedelta(days=lookback_days)
+        return cache.filter((pl.col("date") >= lookback_start) & (pl.col("date") <= target_date))
+
     def _refresh_instruments(self) -> None:
         """加载 instruments 到内存。"""
         try:
@@ -748,6 +833,29 @@ class KlineRepository:
             self._etf_instruments_cache = df_all
             logger.info("ETF instruments 缓存已加载: %d 只", len(df_all))
 
+    def _refresh_hk_instruments(self) -> None:
+        """加载港股 instruments 到内存。
+
+        与 ETF 不同,港股没有"旧版 instruments_index 里混着"的历史包袱,只读自己的目录。
+        """
+        try:
+            df = pl.scan_parquet(self._hk_inst_glob).collect()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("hk instruments 缓存刷新跳过: %s", e)
+            return
+        if df.is_empty():
+            return
+        self._hk_instruments_cache = df.unique(subset=["symbol"], keep="last").sort("symbol")
+        logger.info("港股 instruments 缓存已加载: %d 只", len(self._hk_instruments_cache))
+
+    def get_hk_instruments(self) -> pl.DataFrame:
+        """返回缓存的港股 instruments。含 float_shares,供 enriched 计算换手率。"""
+        if self._hk_instruments_cache is None:
+            self._refresh_hk_instruments()
+        if self._hk_instruments_cache is None:
+            return pl.DataFrame()
+        return self._hk_instruments_cache
+
     def get_enriched_latest(self) -> tuple[pl.DataFrame, date | None]:
         """返回缓存的 enriched 最新日 DataFrame + 日期。如无缓存则懒加载。"""
         if self._enriched_cache is None:
@@ -766,6 +874,12 @@ class KlineRepository:
             if self._etf_enriched_cache is None:
                 return pl.DataFrame(), self._etf_enriched_cache_date
             return self._etf_enriched_cache, self._etf_enriched_cache_date
+        if asset_type == "hk":
+            if self._hk_enriched_cache is None:
+                self._refresh_hk_enriched()
+            if self._hk_enriched_cache is None:
+                return pl.DataFrame(), self._hk_enriched_cache_date
+            return self._hk_enriched_cache, self._hk_enriched_cache_date
         return pl.DataFrame(), None
 
     def get_enriched_history(self, target_date: date, lookback_days: int) -> pl.DataFrame | None:
@@ -891,6 +1005,8 @@ class KlineRepository:
             return df
         if asset_type == "etf":
             return self.get_etf_instruments()
+        if asset_type == "hk":
+            return self.get_hk_instruments()
         return pl.DataFrame()
 
     def get_index_symbol_set(self) -> set[str]:
@@ -1350,13 +1466,31 @@ class KlineRepository:
         self._write_daily_partition(df, "kline_hk_daily")
 
     def append_hk_enriched(self, df: pl.DataFrame) -> None:
-        """按日分区写入港股 enriched 窄表。"""
+        """按日分区写入港股 enriched。存储列与 A 股/ETF 同为 ENRICHED_STORAGE_COLS。
+
+        原先只存 symbol/date/close/change_pct 四列 —— 那样的面板算不出任何指标,
+        筛选/复盘都用不了。现按同一套存储列落盘,港股天然没有的列
+        (consecutive_limit_ups 等涨跌停派生列) 由 `in df.columns` 过滤自动跳过。
+        """
         if df.is_empty():
             return
-        storage_cols = [c for c in ("symbol", "date", "close", "change_pct", "source") if c in df.columns]
+        from app.indicators.pipeline import ENRICHED_STORAGE_COLS
+        storage_cols = [c for c in ENRICHED_STORAGE_COLS if c in df.columns]
         if not storage_cols:
             return
         self._write_daily_partition(df.select(storage_cols), "kline_hk_enriched")
+
+    def save_hk_instruments(self, df: pl.DataFrame) -> None:
+        """保存港股标的维表到独立目录。含 float_shares,enriched 算换手率要用。"""
+        if df.is_empty() or "symbol" not in df.columns:
+            return
+        if "asset_type" not in df.columns:
+            df = df.with_columns(pl.lit("hk").alias("asset_type"))
+        out = self.store.data_dir / "instruments_hk" / "instruments_hk.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_parquet(df.unique(subset=["symbol"], keep="last").sort("symbol"), out)
+        self._hk_instruments_cache = None
+        self._refresh_hk_instruments()
 
     def append_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按资产类型写入日K；stock/index 保持旧目录兼容。"""

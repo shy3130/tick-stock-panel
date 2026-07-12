@@ -75,20 +75,25 @@ def test_index_etf_and_hk_raw_write_allowed_in_local_stock_mode(tmp_path, monkey
 
 
 def test_hk_enriched_write_and_read(tmp_path):
+    """append_hk_enriched 现落 ENRICHED_STORAGE_COLS 全量(与 A 股/ETF 同一套契约),
+    不再是旧版硬编码的 5 列窄表。change_pct 与 A 股/ETF 一致 —— 是即时派生列,
+    不落盘,所以这里不再断言它能从存储里读回。见 tests/storage/test_repository_hk.py
+    的落盘列回归测试。
+    """
     r = repo(tmp_path)
 
     r.append_hk_enriched(
         DF.with_columns(
             pl.lit("02577.HK").alias("symbol"),
-            pl.lit(1.2).alias("change_pct"),
             pl.lit("fquant_local").alias("source"),
         )
     )
 
-    df = r.get_hk_daily("02577.HK", date(2026, 7, 1), date(2026, 7, 1), ["symbol", "date", "close", "change_pct"])
+    df = r.get_hk_daily("02577.HK", date(2026, 7, 1), date(2026, 7, 1), ["symbol", "date", "close", "volume", "amount"])
     assert df.to_dicts() == [{
         "symbol": "02577.HK",
         "date": date(2026, 7, 1),
         "close": 1.0,
-        "change_pct": 1.2,
+        "volume": 100.0,
+        "amount": 100.0,
     }]
