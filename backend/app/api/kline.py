@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync
+from app.storage.atomic_write import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -1017,7 +1018,7 @@ async def extend_minute_history(request: Request):
                             else:
                                 day_df = day_df.drop("_trade_date")
                             day_df = day_df.sort("symbol", "datetime")
-                            day_df.write_parquet(out)
+                            atomic_write_parquet(day_df, out)
                             written += day_df.height
                             day_count += 1
 

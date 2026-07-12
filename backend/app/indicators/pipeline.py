@@ -24,6 +24,7 @@ from pathlib import Path
 import polars as pl
 
 from app.config import settings
+from app.storage.atomic_write import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -856,7 +857,7 @@ def _write_enriched_partitions(
             if sym_set and "symbol" in existing.columns:
                 existing = existing.filter(~pl.col("symbol").is_in(list(sym_set)))
             date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
-        date_df_storage.sort(["symbol"]).write_parquet(out)
+        atomic_write_parquet(date_df_storage.sort(["symbol"]), out)
         written += date_df.height
     return written
 
@@ -1187,7 +1188,7 @@ def run_pipeline(data_dir: Path | None = None,
                     out = enriched_base / f"date={ds}" / "part.parquet"
                     out.parent.mkdir(parents=True, exist_ok=True)
                     date_df = _select_storage_cols(date_df).sort(["symbol"])
-                    date_df.write_parquet(out)
+                    atomic_write_parquet(date_df, out)
                     written += date_df.height
                 t_write_new = _t.perf_counter()
                 logger.info("增量写入: %.2fs, %d 行", t_write_new - t_new, written)
@@ -1213,7 +1214,7 @@ def run_pipeline(data_dir: Path | None = None,
                         existing = existing.filter(~pl.col("symbol").is_in(list(sym_set)))
                         date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
                     date_df_storage = date_df_storage.sort(["symbol"])
-                    date_df_storage.write_parquet(out)
+                    atomic_write_parquet(date_df_storage, out)
                     written += date_df.height
                 logger.info("除权重算: %d 只, 共写入 %d 行", len(sym_set), written)
 
@@ -1306,7 +1307,7 @@ def run_pipeline(data_dir: Path | None = None,
                         existing = existing.filter(~pl.col("symbol").is_in(batch_syms))
                         date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
                     date_df_storage = date_df_storage.sort(["symbol"])
-                    date_df_storage.write_parquet(out)
+                    atomic_write_parquet(date_df_storage, out)
                     written += date_df_storage.height
             else:
                 # 全量模式: 缓冲到 date_buffers, 最后一次性写入
@@ -1339,7 +1340,7 @@ def run_pipeline(data_dir: Path | None = None,
             out = base / f"date={ds}" / "part.parquet"
             out.parent.mkdir(parents=True, exist_ok=True)
             merged = pl.concat(dfs, how="diagonal_relaxed").sort(["symbol"])
-            merged.write_parquet(out)
+            atomic_write_parquet(merged, out)
 
         date_buffers.clear()
         gc.collect()

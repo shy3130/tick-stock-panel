@@ -15,6 +15,7 @@ import pandas as pd
 import polars as pl
 
 from app.config import settings
+from app.storage.atomic_write import atomic_write_parquet
 from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -359,7 +360,7 @@ class BacktestService:
             "stats_json": [str(result.stats)],
             "n_trades": [len(result.trades)],
         })
-        summary.write_parquet(out_dir / f"run_id={result.run_id}.parquet")
+        atomic_write_parquet(summary, out_dir / f"run_id={result.run_id}.parquet")
 
     def get_result(self, run_id: str) -> BacktestResult | None:
         # Phase 1:只保留近似落盘,完整结果保存在内存的近期 cache 中

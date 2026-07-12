@@ -12,6 +12,7 @@ import polars as pl
 
 from app.config import settings
 from app.capabilities import Cap, CapabilitySet
+from app.storage.atomic_write import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def add(symbol: str, note: str = "") -> list[dict]:
         "note": [note],
     })
     out = pl.concat([new_row, df], how="diagonal_relaxed")
-    out.write_parquet(p)
+    atomic_write_parquet(out, p)
     return out.to_dicts()
 
 
@@ -64,7 +65,7 @@ def remove(symbol: str) -> list[dict]:
         return []
     df = pl.read_parquet(p)
     df = df.filter(pl.col("symbol") != symbol)
-    df.write_parquet(p)
+    atomic_write_parquet(df, p)
     return df.to_dicts()
 
 
@@ -78,7 +79,7 @@ def move_to_top(symbol: str) -> list[dict]:
     target = df.filter(pl.col("symbol") == symbol)
     rest = df.filter(pl.col("symbol") != symbol)
     out = pl.concat([target, rest], how="diagonal_relaxed")
-    out.write_parquet(p)
+    atomic_write_parquet(out, p)
     return out.to_dicts()
 
 
@@ -90,7 +91,7 @@ def clear() -> int:
     df = pl.read_parquet(p)
     count = df.height
     if count > 0:
-        pl.DataFrame(schema={"symbol": pl.Utf8, "added_at": pl.Utf8, "note": pl.Utf8}).write_parquet(p)
+        atomic_write_parquet(pl.DataFrame(schema={"symbol": pl.Utf8, "added_at": pl.Utf8, "note": pl.Utf8}), p)
     return count
 
 

@@ -19,6 +19,7 @@ import polars as pl
 
 from app.data_providers.registry import get_active_provider_name, get_provider
 from app.capabilities import Cap, CapabilitySet
+from app.storage.atomic_write import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +164,7 @@ def _sync_table(
     out_dir = data_dir / "financials" / table
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "part.parquet"
-    df.write_parquet(out_file)
+    atomic_write_parquet(df, out_file)
 
     logger.info("sync_%s done: %d records written (%d symbols)", table, len(df), len(symbols))
     return len(df)
@@ -354,7 +355,7 @@ def _sync_quick_from_eastmoney(
 
     out_dir = data_dir / "financials" / "quick"
     out_dir.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out_dir / "part.parquet")
+    atomic_write_parquet(df, out_dir / "part.parquet")
     logger.info(
         "sync_quick eastmoney merge done: %d records across %d source frames",
         len(df),
@@ -399,7 +400,7 @@ def _sync_forecast_from_eastmoney(data_dir: Path, capset: CapabilitySet) -> int:
     df = pl.concat(frames, how="diagonal_relaxed")
     out_dir = data_dir / "financials" / "forecast"
     out_dir.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out_dir / "part.parquet")
+    atomic_write_parquet(df, out_dir / "part.parquet")
     logger.info(
         "sync_forecast eastmoney done: %d records across %d report dates",
         len(df),

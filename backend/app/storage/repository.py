@@ -13,9 +13,7 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
-import tempfile
 import threading
 from datetime import date
 from pathlib import Path
@@ -24,33 +22,9 @@ import duckdb
 import polars as pl
 
 from app.config import settings
+from app.storage.atomic_write import atomic_write_parquet as _atomic_write_parquet
 
 logger = logging.getLogger(__name__)
-
-
-def _atomic_write_parquet(df: pl.DataFrame, out: Path) -> None:
-    """Write ``df`` to ``out`` atomically via a same-directory temp file + rename.
-
-    ``df.write_parquet(out)`` straight to the final path leaves a truncated,
-    corrupt file if the process dies mid-write (crash, kill -9, disk full) —
-    and a single corrupt file under a glob-scanned directory breaks every
-    DuckDB view over it (``read_parquet`` raises ``InvalidInputException``,
-    not ``duckdb.IOException``, on a truncated file — see the startup view
-    registration guard in ``DataStore._register_views``). A crash here
-    instead leaves only an orphaned ``.tmp`` file, ignored by the
-    ``*.parquet`` glob pattern; ``out`` stays whichever generation (old or
-    new) fully completed.
-    """
-    out = Path(out)
-    fd, tmp_name = tempfile.mkstemp(dir=out.parent, prefix=f".{out.name}.", suffix=".tmp")
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        df.write_parquet(tmp_path)
-        os.replace(tmp_path, out)
-    except BaseException:
-        tmp_path.unlink(missing_ok=True)
-        raise
 
 
 class DataStore:

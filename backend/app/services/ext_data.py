@@ -9,6 +9,8 @@ from typing import Literal
 
 import polars as pl
 
+from app.storage.atomic_write import atomic_write_parquet
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -425,7 +427,7 @@ def write_ext_parquet(
                 pass
 
     df = cast_df_to_schema(df, config.fields)
-    df.write_parquet(out_path)
+    atomic_write_parquet(df, out_path)
     logger.info("扩展表写入: %s → %s (%d 行)", config.id, out_path, len(df))
     return len(df)
 
@@ -488,7 +490,7 @@ def fix_symbol_format(config: ExtConfig, data_dir: Path) -> int:
             df = df.with_columns(normalize_symbol(df["symbol"], lookup))
             new = df["symbol"].to_list()
             if old != new:
-                df.write_parquet(parquet_path)
+                atomic_write_parquet(df, parquet_path)
                 fixed += 1
                 logger.info("代码格式修复: %s/%s (%d 行)", config.id, parquet_path.parent.name, len(df))
         except Exception as e:

@@ -15,6 +15,7 @@ import polars as pl
 
 from app.data_providers.registry import get_active_provider_name, get_provider
 from app.services.pinyin_index import add_pinyin_columns
+from app.storage.atomic_write import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def sync_instruments(data_dir: Path) -> int:
 
     out = data_dir / "instruments" / "instruments.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out)
+    atomic_write_parquet(df, out)
 
     logger.info("instruments synced: %d rows → %s", df.height, out)
     return df.height
@@ -112,6 +113,6 @@ def enrich_names_from_quotes(
     ).drop("_new_name")
     df = add_pinyin_columns(df)
 
-    df.write_parquet(inst_path)
+    atomic_write_parquet(df, inst_path)
     logger.info("instruments name enriched from quotes: %d names", len(name_map))
     return len(name_map)

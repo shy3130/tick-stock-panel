@@ -34,6 +34,8 @@ from pathlib import Path
 
 import polars as pl
 
+from app.storage.atomic_write import atomic_write_parquet
+
 logger = logging.getLogger(__name__)
 
 
@@ -333,7 +335,7 @@ class DepthService:
         ds = today.isoformat()
         out = self._repo.store.data_dir / "depth5" / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
-        df.write_parquet(out)
+        atomic_write_parquet(df, out)
         self._persisted_date = today
         logger.info("depth sealed 落盘: %d 行 → %s", df.height, out)
 

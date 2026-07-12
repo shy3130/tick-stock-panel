@@ -19,6 +19,7 @@ import polars as pl
 from app.data_providers.registry import get_active_provider_name, get_provider
 from app.indicators.pipeline import filter_halt_days
 from app.capabilities import Cap, CapabilitySet
+from app.storage.atomic_write import atomic_write_parquet
 from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -338,13 +339,13 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         merged = pl.concat([existing, new_data]).unique(
             subset=["symbol", "trade_date"], keep="last",
         ).sort(["symbol", "trade_date"])
-        merged.write_parquet(out)
+        atomic_write_parquet(merged, out)
         added = merged.height - before
         logger.info("adj_factor merged: %d total (+%d new), %d/%d symbols",
                      merged.height, added, new_data.height, len(symbols))
         return added, affected
     else:
-        new_data.sort(["symbol", "trade_date"]).write_parquet(out)
+        atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
         logger.info("adj_factor synced: %d rows (%d symbols)", new_data.height, len(symbols))
         return new_data.height, affected
 
@@ -590,7 +591,7 @@ def _migrate_symbol_to_date_partition(repo: KlineRepository) -> None:
         out = minute_dir / f"date={trade_date}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         day_df = day_df.drop("_trade_date").sort("symbol", "datetime")
-        day_df.write_parquet(out)
+        atomic_write_parquet(day_df, out)
 
     # 删旧目录
     for d in old_dirs:
@@ -667,7 +668,7 @@ def sync_and_persist_minute(
         else:
             day_df = day_df.drop("_trade_date")
         day_df = day_df.sort("symbol", "datetime")
-        day_df.write_parquet(out)
+        atomic_write_parquet(day_df, out)
         written += day_df.height
 
     # 刷新视图

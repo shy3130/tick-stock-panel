@@ -13,7 +13,8 @@ import duckdb
 import polars as pl
 import pytest
 
-from app.storage.repository import DataStore, _atomic_write_parquet
+from app.storage.atomic_write import atomic_write_parquet as _atomic_write_parquet
+from app.storage.repository import DataStore
 
 
 def test_atomic_write_produces_readable_file(tmp_path):
