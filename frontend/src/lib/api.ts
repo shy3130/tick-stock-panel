@@ -394,6 +394,162 @@ export interface AiReviewReport {
   created_at: string
 }
 
+// ===== 复盘数据分区(/api/review/*) =====
+// 单位约定(后端 services/review_series 已统一):
+//   *_rate / *_change / change_pct 均为【百分数】(5.0 = 5%),直接 toFixed,不要再 *100。
+//   amount 为元,用 fmtBigNum 格式化。
+
+/** 情绪周期 / 连板天梯共用的逐日读数 */
+export interface ReviewDailyPoint {
+  trade_date: string
+  total_amount: number | null
+  amount_change_rate: number | null
+  up_count: number
+  down_count: number
+  flat_count: number
+  down_more_than_7_count: number
+  limit_up_count: number
+  limit_down_count: number
+  break_count: number
+  seal_rate: number | null
+  max_board_count: number
+  connected_board_count: number
+  avg_change: number | null
+  board_1: number
+  board_2: number
+  board_3: number
+  board_4: number
+  board_5: number
+  high_board: number
+  // 仅 /ladder 返回(晋级率由板层分布跨日派生)
+  promotion_rate?: number | null
+  first_to_second_rate?: number | null
+  second_to_third_rate?: number | null
+  third_to_fourth_rate?: number | null
+  fourth_to_fifth_rate?: number | null
+  fifth_to_high_rate?: number | null
+}
+
+export interface ReviewEmotion {
+  as_of: string | null
+  days: number
+  trade_dates?: string[]
+  series: ReviewDailyPoint[]
+}
+
+export interface ReviewLadder {
+  as_of: string | null
+  days: number
+  high_board_from?: number
+  series: ReviewDailyPoint[]
+}
+
+export interface ReviewRotationCell {
+  trade_date: string
+  name: string
+  limit_up_count: number
+  max_board_count: number
+  amount: number | null
+  avg_change: number | null
+  leaders: { symbol: string; name: string | null; boards: number }[]
+}
+
+export interface ReviewRotation {
+  as_of: string | null
+  days: number
+  available: boolean
+  /** no_data = 无行情; no_concept_ext = 未配置概念扩展数据 */
+  reason?: 'no_data' | 'no_concept_ext'
+  themes: string[]
+  trade_dates: string[]
+  cells: ReviewRotationCell[]
+}
+
+export interface ReviewClueStock {
+  symbol: string
+  name: string | null
+  close: number | null
+  change_pct: number | null
+  amount: number | null
+  turnover_rate: number | null
+  boards: number
+  industry: string
+  concepts: string[]
+  /** 冲高回落专有 */
+  high_pct?: number | null
+  fade_pct?: number | null
+  /** 反包专有 */
+  prev_change_pct?: number | null
+}
+
+export interface ReviewClues {
+  as_of: string | null
+  trade_date?: string
+  prev_date?: string | null
+  broken: ReviewClueStock[]
+  limit_down: ReviewClueStock[]
+  surge_and_fade: ReviewClueStock[]
+  top_amount: ReviewClueStock[]
+  rebound: ReviewClueStock[]
+}
+
+// ===== 港股复盘分区(/api/review/hk/*) =====
+// 港股无涨跌停制度,且 fstore 里港股只有 price/change_pct/volume/amount 四列有值
+// (换手/高开低收/概念全为空)。所以港股是独立的、更薄的两个分区,不复用 A 股那四个。
+// 单位同样是百分数。
+
+export interface HkBreadthPoint {
+  trade_date: string
+  total: number
+  total_amount: number | null
+  amount_change_rate: number | null
+  up_count: number
+  down_count: number
+  flat_count: number
+  up_pct: number | null
+  /** 涨/跌超 strong_pct(默认 5%) 的家数 —— 港股无涨跌停,用它替代"涨停/跌停"读数 */
+  strong_up: number
+  strong_down: number
+  avg_change: number | null
+  median_change: number | null
+}
+
+export interface HkBreadth {
+  as_of: string | null
+  days: number
+  strong_pct?: number
+  series: HkBreadthPoint[]
+}
+
+export interface HkMoverStock {
+  symbol: string
+  name: string | null
+  board: string
+  close: number | null
+  change_pct: number | null
+  amount: number | null
+}
+
+export interface HkBoardStat {
+  board: string
+  count: number
+  up: number
+  down: number
+  up_pct: number | null
+  amount: number | null
+  avg_change: number | null
+}
+
+export interface HkMovers {
+  as_of: string | null
+  trade_date: string | null
+  top_gainers: HkMoverStock[]
+  top_losers: HkMoverStock[]
+  top_amount: HkMoverStock[]
+  boards: HkBoardStat[]
+  distribution: { label: string; count: number; pct: number }[]
+}
+
 // ===== Strategy Engine =====
 export interface StrategyParamDef {
   id: string
@@ -1771,6 +1927,25 @@ export const api = {
       try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
     }
   },
+
+  // ===== 复盘数据分区(DuckDB enriched 面板聚合,按 Tab 懒加载) =====
+  reviewEmotion: (asOf?: string, days = 30) =>
+    request<ReviewEmotion>(`/api/review/emotion?days=${days}${asOf ? `&as_of=${asOf}` : ''}`),
+
+  reviewLadder: (asOf?: string, days = 20) =>
+    request<ReviewLadder>(`/api/review/ladder?days=${days}${asOf ? `&as_of=${asOf}` : ''}`),
+
+  reviewRotation: (asOf?: string, days = 10, top = 8) =>
+    request<ReviewRotation>(`/api/review/rotation?days=${days}&top=${top}${asOf ? `&as_of=${asOf}` : ''}`),
+
+  reviewClues: (asOf?: string, limit = 20) =>
+    request<ReviewClues>(`/api/review/clues?limit=${limit}${asOf ? `&as_of=${asOf}` : ''}`),
+
+  reviewHkBreadth: (asOf?: string, days = 30) =>
+    request<HkBreadth>(`/api/review/hk/breadth?days=${days}${asOf ? `&as_of=${asOf}` : ''}`),
+
+  reviewHkMovers: (asOf?: string, limit = 20) =>
+    request<HkMovers>(`/api/review/hk/movers?limit=${limit}${asOf ? `&as_of=${asOf}` : ''}`),
 
   // ===== 大盘复盘 =====
   reviewReportsList: () =>

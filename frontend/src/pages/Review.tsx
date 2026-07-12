@@ -1,10 +1,13 @@
 /**
- * AI 大盘复盘页 —— 以流式 LLM 复盘报告为主体的盘后复盘工作台。
+ * 大盘复盘页 —— 盘后复盘工作台:数据分区 + AI 报告。
  *
- * 设计定位:极简专注型。不复刻 Dashboard 的看板(KPI/雷达/板块排名),
- * 仅保留一行「市场摘要条」作为报告上下文参照;AI 报告 + 历史归档是页面主体。
- *  - 摘要数据:GET /api/overview/market
- *  - 报告流式:POST /api/market-recap/analyze
+ * 分区语义对齐 ../fquant 的复盘模块,数据源换成本地 DuckDB enriched 面板:
+ *  - 摘要数据:GET /api/overview/market(常驻摘要条,所有 Tab 共享上下文)
+ *  - 数据分区:GET /api/review/{emotion,ladder,rotation,clues}(按 Tab 懒加载)
+ *  - AI 报告: POST /api/market-recap/analyze(流式) + /reports(归档)
+ *
+ * Dashboard 是盘中/当下语义的看板,这里是盘后/多日语义的复盘 —— 刻意不复刻其
+ * 雷达图与板块排名,只放"复盘才需要看的"跨日结构。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -12,8 +15,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BookOpenCheck, RefreshCw, Sparkles, Trash2, History, ChevronRight, AlertTriangle,
-  Database, Wand2, Copy, Download, Clock, X, Check,
+  Database, Wand2, Copy, Download, Clock, X, Check, Activity, Layers, Shuffle, TrendingUp,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 import { api, type OverviewMarket, type AiReviewReport } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -30,6 +34,41 @@ import {
   type ReviewPhase,
 } from '@/lib/reviewStore'
 import { resolveEntryProfile } from '@/lib/aiProfile'
+import { EmotionCyclePanel } from '@/components/review/EmotionCyclePanel'
+import { LadderPromotionPanel } from '@/components/review/LadderPromotionPanel'
+import { ThemeRotationPanel } from '@/components/review/ThemeRotationPanel'
+import { ReviewCluesPanel } from '@/components/review/ReviewCluesPanel'
+import { HkBreadthPanel } from '@/components/review/HkBreadthPanel'
+import { HkMoversPanel } from '@/components/review/HkMoversPanel'
+
+// ================================================================
+// 市场与分区 Tab
+//
+// A 股与港股的分区**刻意不一样**:港股无涨跌停制度,涨停/连板/封板率语义不存在;
+// 且 fstore 里港股没有概念 tags、没有换手/高开低收。硬复用 A 股那四个分区,
+// 结果是一屏恒为 0 的指标 —— 用户会以为数据坏了,而不是"这个制度不存在"。
+// 所以港股走自己更薄的两个分区。详见 backend services/review_hk 模块头。
+// ================================================================
+type Market = 'a' | 'hk'
+type ReviewTab = 'report' | 'emotion' | 'ladder' | 'rotation' | 'clues' | 'hk-breadth' | 'hk-movers'
+
+const A_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
+  { key: 'report', label: 'AI 报告', icon: Sparkles },
+  { key: 'emotion', label: '情绪周期', icon: Activity },
+  { key: 'ladder', label: '连板天梯', icon: Layers },
+  { key: 'rotation', label: '题材轮动', icon: Shuffle },
+  { key: 'clues', label: '风险线索', icon: AlertTriangle },
+]
+
+const HK_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
+  { key: 'hk-breadth', label: '市场宽度', icon: Activity },
+  { key: 'hk-movers', label: '涨跌榜', icon: TrendingUp },
+]
+
+const MARKETS: { key: Market; label: string }[] = [
+  { key: 'a', label: 'A 股' },
+  { key: 'hk', label: '港股' },
+]
 
 // ================================================================
 // 涨跌幅格式化(注意单位差异)
@@ -74,6 +113,21 @@ export function Review() {
   const asOf: string | undefined = undefined
   const [focus, setFocus] = useState('')
   const [profileId, setProfileId] = useState<string>()
+  // 市场 + 分区 Tab + 各分区的回看窗口(切走再切回保留选择)
+  const [market, setMarket] = useState<Market>('a')
+  const [tab, setTab] = useState<ReviewTab>('report')
+  const [emotionDays, setEmotionDays] = useState(30)
+  const [ladderDays, setLadderDays] = useState(20)
+  const [rotationDays, setRotationDays] = useState(10)
+  const [hkDays, setHkDays] = useState(30)
+
+  // 切换市场时把 Tab 落到该市场的第一个分区(两边分区集不相交,不能沿用旧 tab)
+  const switchMarket = useCallback((next: Market) => {
+    setMarket(next)
+    setTab(next === 'a' ? 'report' : 'hk-breadth')
+  }, [])
+
+  const tabs = market === 'a' ? A_TABS : HK_TABS
   // 生成状态走全局 store:切走页面流不中断,回来可恢复
   const { phase, content, error, meta } = useReviewState()
   const [viewing, setViewing] = useState<AiReviewReport | null>(null)  // 查看历史报告
@@ -234,11 +288,19 @@ export function Review() {
   return (
     <>
       <PageHeader
-        title="AI 复盘"
-        titleExtra={<Sparkles className="h-4 w-4 text-accent" />}
-        subtitle={`${displayDate}${data?.emotion ? ` · 情绪 ${data.emotion.label}` : ''}`}
+        title="大盘复盘"
+        titleExtra={<BookOpenCheck className="h-4 w-4 text-accent" />}
+        subtitle={
+          market === 'hk'
+            ? '港股 · 无涨跌停制度'
+            : `${displayDate}${data?.emotion ? ` · 情绪 ${data.emotion.label}` : ''}`
+        }
         right={
           <div className="flex items-center gap-1">
+            {/* AI 复盘只喂 A 股盘面(market_recap 走 A 股 overview)。港股模式下隐藏这组按钮,
+                否则会生成一份内容全是 A 股、标题却写着港股的报告。 */}
+            {market === 'a' && (
+              <>
             <AiProviderSelector entry="market_recap" value={profileId} onChange={setProfileId} compact />
             <button
               onClick={() => { marketQuery.refetch() }}
@@ -276,6 +338,8 @@ export function Review() {
                 <><Sparkles className="h-3.5 w-3.5" />生成复盘</>
               )}
             </button>
+              </>
+            )}
           </div>
         }
       />
@@ -283,7 +347,59 @@ export function Review() {
       <div className="min-h-full bg-[radial-gradient(circle_at_15%_-5%,rgba(59,130,246,0.10),transparent_30%),radial-gradient(circle_at_85%_5%,rgba(139,92,246,0.08),transparent_30%)] px-4 py-4 sm:px-6">
         <div className="mx-auto max-w-[1280px] space-y-3">
 
-          {marketQuery.isLoading && !data ? (
+          {/* ===== 市场 + 分区切换(常驻:A 股无数据时也要能切到港股)===== */}
+          <div className="flex flex-wrap items-center gap-1 rounded-card border border-border bg-surface/80 px-2 py-1.5">
+            {/* 市场段控件 */}
+            <div className="flex items-center gap-0.5 rounded-btn bg-elevated/60 p-0.5">
+              {MARKETS.map(m => (
+                <button
+                  key={m.key}
+                  onClick={() => switchMarket(m.key)}
+                  className={cn(
+                    'rounded px-2.5 py-1 text-[11px] font-medium transition-colors',
+                    market === m.key ? 'bg-accent text-white' : 'text-secondary hover:text-foreground',
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mx-1 h-5 w-px bg-border" />
+
+            {tabs.map(t => {
+              const Icon = t.icon
+              const on = tab === t.key
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => setTab(t.key)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-btn border px-3 py-1.5 text-xs transition-colors',
+                    on
+                      ? 'border-accent/40 bg-accent/10 font-medium text-accent'
+                      : 'border-transparent text-secondary hover:bg-elevated/60 hover:text-foreground',
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {t.label}
+                  {/* AI 报告在后台生成时,即使切到别的分区也给出提示 */}
+                  {t.key === 'report' && isGenerating && !on && (
+                    <RefreshCw className="h-3 w-3 animate-spin text-accent" />
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* ===== 港股分区(自成一套,不走 A 股的 overview 守卫)===== */}
+          {market === 'hk' && (
+            tab === 'hk-movers'
+              ? <HkMoversPanel asOf={asOf} />
+              : <HkBreadthPanel asOf={asOf} days={hkDays} onDaysChange={setHkDays} />
+          )}
+
+          {market === 'a' && (marketQuery.isLoading && !data ? (
             <div className="flex h-40 items-center justify-center">
               <div className="flex items-center gap-2 text-sm text-muted">
                 <RefreshCw className="h-4 w-4 animate-spin" /> 加载市场数据…
@@ -297,7 +413,7 @@ export function Review() {
                 </div>
               </div>
               <div className="text-center">
-                <div className="text-sm font-medium text-foreground">暂无市场数据</div>
+                <div className="text-sm font-medium text-foreground">暂无 A 股市场数据</div>
                 <p className="mt-1 text-xs text-muted">复盘需要日 K 与指数,请先前往「数据」页同步</p>
               </div>
               <Link
@@ -310,49 +426,66 @@ export function Review() {
             </div>
           ) : (
             <>
-              {/* ===== 市场摘要条(轻量上下文,非重复看板)===== */}
+              {/* ===== 市场摘要条(A 股上下文,港股无对应口径故不显示)===== */}
               <MarketSummaryBar data={data} />
 
-              {/* ===== 关注点输入 ===== */}
-              <div className="flex items-center gap-2 rounded-card border border-border bg-surface/80 px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
-                <Wand2 className="h-3.5 w-3.5 shrink-0 text-accent" />
-                <input
-                  value={focus}
-                  onChange={(e) => setFocus(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !isGenerating) generate() }}
-                  placeholder="可选:补充复盘关注点,如「明日是否加仓半导体」「量能是否持续」"
-                  className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted/60"
-                />
-                {focus && (
-                  <button onClick={() => setFocus('')} className="text-xs text-muted transition-colors hover:text-foreground">清除</button>
-                )}
-              </div>
+              {tab === 'report' && (
+                <>
+                  {/* ===== 关注点输入 ===== */}
+                  <div className="flex items-center gap-2 rounded-card border border-border bg-surface/80 px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
+                    <Wand2 className="h-3.5 w-3.5 shrink-0 text-accent" />
+                    <input
+                      value={focus}
+                      onChange={(e) => setFocus(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !isGenerating) generate() }}
+                      placeholder="可选:补充复盘关注点,如「明日是否加仓半导体」「量能是否持续」"
+                      className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted/60"
+                    />
+                    {focus && (
+                      <button onClick={() => setFocus('')} className="text-xs text-muted transition-colors hover:text-foreground">清除</button>
+                    )}
+                  </div>
 
-              {/* ===== 报告 + 历史 双栏(报告为主体)===== */}
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_18rem]">
-                <ReportPanel
-                  phase={phase}
-                  content={displayContent}
-                  error={error}
-                  isGenerating={isGenerating}
-                  viewing={viewing}
-                  onCopy={copyContent}
-                  onDownload={downloadContent}
-                  onRegenerate={generate}
-                  reportEndRef={reportEndRef}
-                />
-                <HistoryPanel
-                  reports={historyQuery.data?.reports ?? []}
-                  loading={historyQuery.isLoading}
-                  viewingId={viewing?.id ?? null}
-                  generating={isGenerating}
-                  onView={viewReport}
-                  onBackToGenerating={() => setViewing(null)}
-                  onDelete={(id) => deleteMut.mutate(id)}
-                />
-              </div>
+                  {/* ===== 报告 + 历史 双栏(报告为主体)===== */}
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_18rem]">
+                    <ReportPanel
+                      phase={phase}
+                      content={displayContent}
+                      error={error}
+                      isGenerating={isGenerating}
+                      viewing={viewing}
+                      onCopy={copyContent}
+                      onDownload={downloadContent}
+                      onRegenerate={generate}
+                      reportEndRef={reportEndRef}
+                    />
+                    <HistoryPanel
+                      reports={historyQuery.data?.reports ?? []}
+                      loading={historyQuery.isLoading}
+                      viewingId={viewing?.id ?? null}
+                      generating={isGenerating}
+                      onView={viewReport}
+                      onBackToGenerating={() => setViewing(null)}
+                      onDelete={(id) => deleteMut.mutate(id)}
+                    />
+                  </div>
+                </>
+              )}
+
+              {tab === 'emotion' && (
+                <EmotionCyclePanel asOf={asOf} days={emotionDays} onDaysChange={setEmotionDays} />
+              )}
+              {tab === 'ladder' && (
+                <LadderPromotionPanel asOf={asOf} days={ladderDays} onDaysChange={setLadderDays} />
+              )}
+              {tab === 'rotation' && (
+                <ThemeRotationPanel asOf={asOf} days={rotationDays} onDaysChange={setRotationDays} />
+              )}
+              {tab === 'clues' && (
+                <ReviewCluesPanel asOf={asOf} />
+              )}
             </>
-          )}
+          ))}
         </div>
       </div>
 

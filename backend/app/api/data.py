@@ -713,6 +713,10 @@ def clear_data(request: Request):
     from app.api.overview import invalidate_overview_cache
     invalidate_overview_cache()
 
+    # 清除复盘分区聚合缓存 (5min TTL) —— 否则清数据后复盘页仍显示旧的情绪/天梯序列
+    from app.services.review_series import invalidate_review_cache
+    invalidate_review_cache()
+
     # 刷新 DuckDB 视图（空 parquet 目录也需要重新挂载）
     d = data_dir.as_posix()
     for name, path in {

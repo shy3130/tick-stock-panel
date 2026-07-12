@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
@@ -620,6 +620,52 @@ class FQuantProvider:
                 "amplitude": self._pct_points_to_ratio(ext.get("amplitude")),
             })
         return pl.DataFrame(out).drop_nulls(subset=["symbol"])
+
+    # 港股资产类型编码（fstore base_infos/daily_markets 的 asset_type：1=A股 3=港股）
+    HK_ASSET_TYPE = 3
+
+    def get_hk_market_panel(self, start: date, end: date) -> pl.DataFrame:
+        """港股全市场日行情横截面（[start, end] 闭区间），供盘后复盘按日聚合。
+
+        源：fstore ``daily_markets``(asset_type=3) 左连 ``base_infos`` 取名称/板块。
+        两张表在同一 DuckDB 连接内（markets 库已 ATTACH），可直接 join。
+
+        ⚠️ 港股行**只有** price/change_percent/volume/amount 四个行情列有值；
+        daily_markets 的 hslv(换手)/zgj(最高)/zdj(最低)/jrkpj(开盘)/zrspj(昨收)/
+        资金流等列对港股**全是 NULL**（已实测）。所以复盘的港股分区只能做
+        涨跌家数/成交额/涨跌分布/涨跌幅榜，做不了换手榜与冲高回落。
+
+        change_percent 是百分数（-1.88 = -1.88%），此处**不做**单位换算，
+        由调用方按各自口径处理；A 股 enriched 那条链路的 change_pct 是小数，别混。
+
+        返回列：date/symbol/code/name/board/close/change_pct/volume/amount
+        provider 不可用或无数据时返回空 DataFrame。
+        """
+        rows = self._fstore.query(
+            """
+            SELECT dm.trade_date AS date,
+                   dm.code       AS code,
+                   bi.name       AS name,
+                   bi.bk         AS board,
+                   dm.price      AS close,
+                   dm.change_percent AS change_pct,
+                   dm.volume     AS volume,
+                   dm.amount     AS amount
+            FROM daily_markets dm
+            LEFT JOIN base_infos bi
+                   ON bi.code = dm.code AND bi.asset_type = ?
+            WHERE dm.asset_type = ?
+              AND dm.trade_date >= ? AND dm.trade_date <= ?
+            """,
+            [self.HK_ASSET_TYPE, self.HK_ASSET_TYPE, start, end],
+        )
+        if not rows:
+            return pl.DataFrame()
+        df = pl.DataFrame(rows)
+        # code(00700) → 对外符号(00700.HK)，与本项目 .HK 后缀约定一致
+        return df.with_columns(
+            (pl.col("code").cast(pl.Utf8) + pl.lit(".HK")).alias("symbol")
+        )
 
     @staticmethod
     def _pct_points_to_ratio(value) -> float | None:

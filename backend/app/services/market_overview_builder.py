@@ -240,6 +240,40 @@ def _symbol_keys(row: dict, config: ExtConfig) -> list[str]:
     return keys
 
 
+def _split_level(value: str, level: int | None) -> str:
+    """行业多级名 "银行-银行-股份制银行" 按 level 取级(越界取末级)。"""
+    if level is None or "-" not in value:
+        return value
+    parts = value.split("-")
+    return parts[level - 1] if level <= len(parts) else parts[-1]
+
+
+def symbol_dimension_map(repo, kind: str, level: int | None = None) -> dict[str, list[str]]:
+    """symbol → 维度值列表(概念可多值,行业按 level 取级)。
+
+    与 `_dimension_rank` 共用 ext_data 解析,但只产出映射、不做行情聚合,
+    供复盘题材轮动等按日回扫的场景复用(避免每天重扫一遍 ext parquet)。
+    键同时包含带后缀与不带后缀两种写法(600000.SH / 600000),调用方任取其一。
+    未配置任何概念/行业 ext 数据时返回 {}。
+    """
+    store = ExtConfigStore(repo.store.data_dir)
+    out: dict[str, list[str]] = {}
+    for config in store.load_all():
+        field = _dimension_field(config, kind)
+        if not field:
+            continue
+        for ext_row in _read_ext_rows(repo.store.data_dir, config, field):
+            values = [_split_level(v, level) for v in _dimension_values(ext_row.get(field))]
+            if not values:
+                continue
+            for key in _symbol_keys(ext_row, config):
+                bucket = out.setdefault(key, [])
+                for value in values:
+                    if value not in bucket:
+                        bucket.append(value)
+    return out
+
+
 def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: int | None = None) -> dict:
     if not rows:
         return {"leading": [], "lagging": []}

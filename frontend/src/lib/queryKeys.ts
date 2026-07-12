@@ -74,6 +74,16 @@ export const QK = {
   // AI 大盘复盘
   reviewReports:        ['review-reports'] as const,
 
+  // 复盘数据分区(情绪周期 / 连板天梯 / 题材轮动 / 风险线索)
+  reviewEmotion:        (asOf: string | undefined, days: number) => ['review-emotion', asOf ?? 'latest', days] as const,
+  reviewLadder:         (asOf: string | undefined, days: number) => ['review-ladder', asOf ?? 'latest', days] as const,
+  reviewRotation:       (asOf: string | undefined, days: number, top: number) => ['review-rotation', asOf ?? 'latest', days, top] as const,
+  reviewClues:          (asOf: string | undefined, limit: number) => ['review-clues', asOf ?? 'latest', limit] as const,
+
+  // 港股复盘分区(市场宽度 / 涨跌榜)
+  reviewHkBreadth:      (asOf: string | undefined, days: number) => ['review-hk-breadth', asOf ?? 'latest', days] as const,
+  reviewHkMovers:       (asOf: string | undefined, limit: number) => ['review-hk-movers', asOf ?? 'latest', limit] as const,
+
   // 概念涨幅轮动矩阵
   rpsRotation:          (days: number) => ['rps-rotation', days] as const,
 } as const
