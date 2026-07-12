@@ -225,6 +225,17 @@ class EngineDataDuckDBClient:
             for r in rows
         ]
 
+    # tdx-hk.duckdb 的 market_day_kline.volume 存的是「手」，不是「股」——和 A股
+    # 同名列（market_wide_kline.volume，存股数）单位不一致。实测 hk00700
+    # 2025-10-20：该列 = 1,496，而 amount/close 推出的真实股数 = 14,947,219，
+    # 比值 9,991.5。本项目对外的 volume 口径统一是股数（A股路径拿到的就是股数），
+    # 所以港股这一列必须 ×10000 补回去，否则港股日线成交量会比真实值小 1 万倍，
+    # 且与 A股口径不一致（下游 enriched 指标里的量比、换手率等会全部算错）。
+    #
+    # 判据用 amount/价格（成交额÷价格＝股数），不依赖任何 volume 列——这一列本身
+    # 就是不可信的那个。详见 fm-cli/engine tdx-kline 设计文档同一坑的记录。
+    _HK_DAY_VOLUME_TO_SHARES = 10000
+
     def _get_hk_day(self, code: str, limit: int) -> list[dict]:
         rows = self._hk.query(
             """
@@ -242,7 +253,8 @@ class EngineDataDuckDBClient:
             {
                 "date": r[0].strftime("%Y-%m-%d") if r[0] else None,
                 "datetime": r[1], "open": r[2], "close": r[3], "high": r[4], "low": r[5],
-                "volume": r[6], "amount": r[7], "up": r[8], "down": r[9], "adjustment_count": r[10],
+                "volume": (r[6] * self._HK_DAY_VOLUME_TO_SHARES) if r[6] is not None else None,
+                "amount": r[7], "up": r[8], "down": r[9], "adjustment_count": r[10],
             }
             for r in rows
         ]

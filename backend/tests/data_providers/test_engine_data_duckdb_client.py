@@ -99,3 +99,45 @@ def test_get_fund_daily_missing_code_returns_empty_dict():
     client = EngineDataDuckDBClient()
     result = client.get_fund_daily("999999", "2026-07-02")
     assert result == {}
+
+
+TDX_HK_PATH = "/Volumes/WD1/tdx-hk-web.duckdb"
+
+
+@pytest.mark.skipif(not os.path.exists(TDX_HK_PATH), reason=f"本机没有 {TDX_HK_PATH}")
+@pytest.mark.parametrize(
+    ("code", "asset_type"),
+    [("600519", None), ("00700", "hk")],
+)
+def test_get_wide_volume_is_in_shares_for_both_markets(code, asset_type):
+    """volume 的对外口径统一是股数，A股和港股必须一致。
+
+    港股走 _get_hk_day -> market_day_kline.volume，而那一列存的是「手」
+    (hk00700 2025-10-20 = 1,496，真实股数 ≈ 1,494 万)，A股走
+    market_wide_kline.volume 存的是股数。港股必须 ×10000 补回来，否则港股
+    成交量比真实值小 1 万倍，且与 A股口径不一致(下游 enriched 的量比/换手率
+    等全部算错)。
+
+    判据用 amount/[high, low] 这个数学上严格成立的区间(VWAP 必落在当日最高
+    最低价之间)，不依赖任何 volume 列——那一列本身就是不可信的那个。
+    """
+    client = EngineDataDuckDBClient()
+    rows = client.get_wide(code, limit=30, asset_type=asset_type)
+    if not rows:
+        pytest.skip(f"{code} 无日线数据")
+
+    checked = 0
+    for r in rows:
+        amount, high, low, volume = r.get("amount"), r.get("high"), r.get("low"), r.get("volume")
+        if not all(isinstance(x, (int, float)) and x for x in (amount, high, low, volume)):
+            continue
+        min_shares = amount / high   # 全按最高价成交 -> 股数下界
+        max_shares = amount / low    # 全按最低价成交 -> 股数上界
+        assert min_shares <= volume <= max_shares, (
+            f"{code} {r.get('date')}: volume={volume:,.0f} 超出 amount/[high,low] "
+            f"推出的股数区间 [{min_shares:,.0f}, {max_shares:,.0f}] —— volume 单位错了"
+        )
+        checked += 1
+
+    if checked == 0:
+        pytest.skip(f"{code} 无可校验的完整行")
