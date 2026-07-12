@@ -167,6 +167,8 @@ class DataStore:
                 SELECT * FROM read_parquet('{d}/instruments_index/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW instruments_etf AS
                 SELECT * FROM read_parquet('{d}/instruments_etf/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW instruments_hk AS
+                SELECT * FROM read_parquet('{d}/instruments_hk/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW instruments_ext AS
                 SELECT * FROM read_parquet('{d}/instruments_ext/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_ext AS
@@ -1561,13 +1563,15 @@ class KlineRepository:
                 SELECT * FROM read_parquet('{d}/instruments_index/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW instruments_etf AS
                 SELECT * FROM read_parquet('{d}/instruments_etf/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW instruments_hk AS
+                SELECT * FROM read_parquet('{d}/instruments_hk/**/*.parquet', union_by_name=true)""",
         ]
         for sql in statements:
             try:
                 with self._lock:
                     self.db.execute(sql)
             except Exception as e:  # noqa: BLE001
-                logger.debug("index/etf view refresh skipped: %s", e)
+                logger.debug("index/etf/hk view refresh skipped: %s", e)
         with self._lock:
             self.store._register_unified_views()
 
