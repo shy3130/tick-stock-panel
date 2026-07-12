@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from app.data_providers.fquant_provider import FQuantProvider
 
 
@@ -224,3 +226,49 @@ def test_etf_fstore_daily_uses_asset_type_20_table():
     assert rows[0]["volume"] == 100_000
     assert "t_20_day_klines" in fstore.sql[0]
     assert all("day_klines " not in sql for sql in fstore.sql[1:])
+
+
+class RecordingFStoreHK:
+    """cjl=14_963_400 / real volume=1_496.0 是 hk00700 2025-10-20 的真实核对值
+    (与 tdx-hk.duckdb market_day_kline.volume 逐日比对, 比值稳定在 ~10000)。"""
+
+    def __init__(self):
+        self.sql = []
+
+    def query(self, sql, params=None):  # noqa: ARG002
+        self.sql.append(sql)
+        if "t_3_day_klines" not in sql:
+            return []
+        return [{
+            "tdate": "2025-10-20",
+            "open": 625.0,
+            "high": 630.0,
+            "low": 620.0,
+            "close": 627.5,
+            "cjl": 14_963_400,
+            "cje": 9_384_000_000,
+            "zf": 1.0,
+        }]
+
+
+def test_hk_fstore_daily_uses_asset_type_3_table_and_correct_volume_multiplier():
+    """回归测试: klines_rows_to_daily 之前对所有市场统一用 cjl*100, 港股正确
+    倍数是 cjl/10000 (少了 100万倍); 表选择之前对非 etf 一律查 t_1_day_klines
+    (A股表), 港股永远查不到数据。"""
+    fstore = RecordingFStoreHK()
+    provider = object.__new__(FQuantProvider)
+    provider._fstore = fstore
+    provider.name = "fquant"
+
+    rows = provider._get_daily_from_fstore_klines(
+        "00700.HK",
+        "00700",
+        datetime(2025, 10, 20),
+        datetime(2025, 10, 20),
+        "hk",
+    )
+
+    assert "t_3_day_klines" in fstore.sql[0]
+    assert rows[0]["symbol"] == "00700.HK"
+    assert rows[0]["close"] == 627.5
+    assert rows[0]["volume"] == pytest.approx(1_496.34, rel=1e-4)

@@ -103,11 +103,22 @@ def day_rows_to_daily(rows: list[dict], symbol: str, source: str = "fquant") -> 
     return out
 
 
-def klines_rows_to_daily(rows: list[dict], symbol: str, source: str = "fquant") -> list[dict]:
+def klines_rows_to_daily(
+    rows: list[dict], symbol: str, source: str = "fquant", asset_type: str = "stock",
+) -> list[dict]:
     """fstore ``day_klines`` → daily 归一行（§5.2 兜底）。
 
     fstore 字段名：tdate/open/close/high/low/cjl/cje/zf（涨跌幅）。
+
+    ``cjl`` 是原始成交量列，换算到真实成交量（股数）的倍数因市场而异——
+    用同代码同交易日的 ``market_day_kline.volume``（engine 侧已验证正确的
+    日线成交量）逐日核对过：A股/stock 是 ``cjl × 100``；港股/hk 实测比值
+    稳定在 10000 左右（如 hk00700 2025-10-20：cjl=14,963,400 对应真实
+    volume=1,496.0，比值 10002.3），换算是 ``cjl ÷ 10000``（即 ×0.0001），
+    不是 ×100。此前对所有市场统一用 ×100，会让港股 volume 被高估约 100
+    万倍。见 engine 仓库 tdx-kline 设计文档同一现象的独立验证。
     """
+    multiplier = 0.0001 if asset_type == "hk" else 100
     out: list[dict] = []
     for r in rows:
         out.append({
@@ -117,7 +128,7 @@ def klines_rows_to_daily(rows: list[dict], symbol: str, source: str = "fquant") 
             "high": _to_float(r.get("high")),
             "low": _to_float(r.get("low")),
             "close": _to_float(r.get("close")),
-            "volume": (vol * 100 if (vol := _to_float(r.get("cjl"))) is not None else None),
+            "volume": (vol * multiplier if (vol := _to_float(r.get("cjl"))) is not None else None),
             "amount": _to_float(r.get("cje")),
             "pre_close": None,
             "change_pct": _to_float(r.get("zf")),

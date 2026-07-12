@@ -53,6 +53,7 @@ from app.data_providers.fquant.mapping import (
 )
 from app.data_providers.fquant.raw_reconstruct import reconstruct_raw_rows
 from app.data_providers.fquant.symbols import (
+    asset_type_str_to_nums,
     code_to_symbol,
     is_etf_symbol,
     split_symbol,
@@ -363,8 +364,14 @@ class FQuantProvider:
 
         实测 600519 该表最后数据 2025-10-31（§2.1 / §7.3 场景 A），
         仅作历史回填，不依赖。
+
+        表选择按 asset_type 映射到 fstore 对应的 ``t_{num}_day_klines``
+        (如 hk -> t_3_day_klines)，而不是把非 etf 一律当 A 股查
+        t_1_day_klines —— 之前这样写会导致港股在这张表上永远查不到数据，
+        直接落到下面 unbounded 的 day_klines 兜底查询。
         """
-        table = "t_20_day_klines" if asset_type == "etf" else "t_1_day_klines"
+        type_num = asset_type_str_to_nums(asset_type)[0]
+        table = f"t_{type_num}_day_klines"
         if start_time and end_time:
             sql = (
                 "SELECT tdate, open, close, high, low, cjl, cje, zf "
@@ -383,27 +390,32 @@ class FQuantProvider:
             params = (code,)
         rows = self._fstore.query(sql, params)
         if not rows and asset_type != "etf":
+            # day_klines 是全市场统一表；显式按 asset_type 过滤，避免不同市场
+            # 的 code 恰好相同时把别的市场的行当成这个 symbol 的数据返回
+            # （下游 klines_rows_to_daily 的 volume 换算倍数按 asset_type 区分，
+            # 混进错误市场的行会产出错误的成交量）。
             if start_time and end_time:
                 sql = (
                     "SELECT tdate, open, close, high, low, cjl, cje, zf "
                     "FROM day_klines "
-                    "WHERE code = %s AND ktype = 101 AND fq = 0 AND tdate BETWEEN %s AND %s "
+                    "WHERE code = %s AND asset_type = %s AND ktype = 101 AND fq = 0 "
+                    "AND tdate BETWEEN %s AND %s "
                     "ORDER BY tdate ASC"
                 )
-                params = (code, start_time.date(), end_time.date())
+                params = (code, type_num, start_time.date(), end_time.date())
             else:
                 sql = (
                     "SELECT tdate, open, close, high, low, cjl, cje, zf "
                     "FROM day_klines "
-                    "WHERE code = %s AND ktype = 101 AND fq = 0 "
+                    "WHERE code = %s AND asset_type = %s AND ktype = 101 AND fq = 0 "
                     "ORDER BY tdate DESC LIMIT 250"
                 )
-                params = (code,)
+                params = (code, type_num)
             rows = self._fstore.query(sql, params)
         if rows:
             logger.debug("FStoreDB %s %s: %d 行", table, code, len(rows))
         # 映射到 normalizer 期望的字段名
-        return klines_rows_to_daily(rows, symbol, source=self.name) if rows else []
+        return klines_rows_to_daily(rows, symbol, source=self.name, asset_type=asset_type) if rows else []
 
     # ------------------------------------------------------------------ #
     # get_adj_factors — §4.5 主源 engine-data xdxr + 备份 fstore chuquan_chuxi
