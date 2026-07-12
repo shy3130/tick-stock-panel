@@ -38,16 +38,37 @@ def test_generated_minute_time_hk_index_120_still_morning():
 
 
 def test_klines_rows_to_daily_stock_multiplier_unchanged():
-    rows = [{"tdate": "2026-07-01", "open": 10, "high": 11, "low": 9, "close": 10.5,
-              "cjl": 5000, "cje": 52500, "zf": 1.0}]
-    out = klines_rows_to_daily(rows, "600519.SH", asset_type="stock")
-    assert out[0]["volume"] == 500_000  # 5000 * 100
+    """Real 000001 2025-10-20 fstore row: cje/close = 94,731,175 implied
+    shares vs cjl=952,641 -> ratio 99.44, confirming the x100 multiplier."""
+    rows = [{"tdate": "2025-10-20", "open": 12.0, "high": 12.5, "low": 11.8,
+              "close": 12.34, "cjl": 952_641, "cje": 1_168_982_700.0, "zf": 1.0}]
+    out = klines_rows_to_daily(rows, "000001.SZ", asset_type="stock")
+    volume = out[0]["volume"]
+
+    assert volume == 95_264_100  # 952,641 * 100
+
+    # Same physical invariant as the HK case: volume must be ~ amount/close.
+    implied_shares = out[0]["amount"] / out[0]["close"]
+    assert volume == pytest.approx(implied_shares, rel=0.01)
 
 
-def test_klines_rows_to_daily_hk_uses_divide_by_10000():
-    """Real hk00700 2025-10-20 values: cjl=14,963,400 vs verified real
-    volume=1,496.0 (cross-checked against tdx-hk.duckdb market_day_kline)."""
+def test_klines_rows_to_daily_hk_cjl_is_already_shares():
+    """Real 00700 2025-10-20 fstore row. The physical constraint
+    cje/close = shares gives 9,379,380,224 / 627.5 = 14,947,219 shares,
+    which matches cjl (14,963,400) at ratio 0.9989 -> cjl is ALREADY shares
+    for HK, multiplier is x1.
+
+    Guards against both historical bugs: the original blanket x100 (100x
+    overstatement) and the later "align to tdx-hk market_day_kline.volume"
+    /10000 attempt (which yields *lots*, not shares -- 10000x understatement).
+    """
     rows = [{"tdate": "2025-10-20", "open": 625.0, "high": 630.0, "low": 620.0,
-              "close": 627.5, "cjl": 14_963_400, "cje": 9_384_000_000, "zf": 1.0}]
+              "close": 627.5, "cjl": 14_963_400, "cje": 9_379_380_224.0, "zf": 1.0}]
     out = klines_rows_to_daily(rows, "00700.HK", asset_type="hk")
-    assert out[0]["volume"] == pytest.approx(1_496.34, rel=1e-4)
+    volume = out[0]["volume"]
+
+    assert volume == 14_963_400  # x1, unchanged
+
+    # The invariant that actually pins this down, independent of any volume column:
+    implied_shares = out[0]["amount"] / out[0]["close"]
+    assert volume == pytest.approx(implied_shares, rel=0.01)

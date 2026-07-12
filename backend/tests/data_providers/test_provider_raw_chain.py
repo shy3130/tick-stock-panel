@@ -229,8 +229,9 @@ def test_etf_fstore_daily_uses_asset_type_20_table():
 
 
 class RecordingFStoreHK:
-    """cjl=14_963_400 / real volume=1_496.0 是 hk00700 2025-10-20 的真实核对值
-    (与 tdx-hk.duckdb market_day_kline.volume 逐日比对, 比值稳定在 ~10000)。"""
+    """00700 2025-10-20 的真实 fstore 行。物理约束 cje/close = 股数：
+    9,379,380,224 / 627.5 = 14,947,219 ≈ cjl(14,963,400)，即港股 cjl 本身
+    就是股数，倍数 ×1。"""
 
     def __init__(self):
         self.sql = []
@@ -246,15 +247,20 @@ class RecordingFStoreHK:
             "low": 620.0,
             "close": 627.5,
             "cjl": 14_963_400,
-            "cje": 9_384_000_000,
+            "cje": 9_379_380_224.0,
             "zf": 1.0,
         }]
 
 
 def test_hk_fstore_daily_uses_asset_type_3_table_and_correct_volume_multiplier():
-    """回归测试: klines_rows_to_daily 之前对所有市场统一用 cjl*100, 港股正确
-    倍数是 cjl/10000 (少了 100万倍); 表选择之前对非 etf 一律查 t_1_day_klines
-    (A股表), 港股永远查不到数据。"""
+    """回归测试，钉住两件事：
+
+    1. 表选择：之前对非 etf 一律查 t_1_day_klines(A股表)，港股永远查不到数据。
+    2. volume 倍数：港股 cjl 已经是股数(×1)。之前统一 ×100 会高估 100 倍；
+       若改成 ÷10000 去对齐 tdx-hk 的 market_day_kline.volume 列，那一列是
+       "手"不是"股"，会低估 1 万倍——两种都错。用 amount/close 这个不依赖
+       任何 volume 列的物理约束来校验。
+    """
     fstore = RecordingFStoreHK()
     provider = object.__new__(FQuantProvider)
     provider._fstore = fstore
@@ -271,4 +277,7 @@ def test_hk_fstore_daily_uses_asset_type_3_table_and_correct_volume_multiplier()
     assert "t_3_day_klines" in fstore.sql[0]
     assert rows[0]["symbol"] == "00700.HK"
     assert rows[0]["close"] == 627.5
-    assert rows[0]["volume"] == pytest.approx(1_496.34, rel=1e-4)
+    assert rows[0]["volume"] == 14_963_400
+
+    implied_shares = rows[0]["amount"] / rows[0]["close"]
+    assert rows[0]["volume"] == pytest.approx(implied_shares, rel=0.01)

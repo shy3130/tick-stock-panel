@@ -116,15 +116,23 @@ def klines_rows_to_daily(
 
     fstore 字段名：tdate/open/close/high/low/cjl/cje/zf（涨跌幅）。
 
-    ``cjl`` 是原始成交量列，换算到真实成交量（股数）的倍数因市场而异——
-    用同代码同交易日的 ``market_day_kline.volume``（engine 侧已验证正确的
-    日线成交量）逐日核对过：A股/stock 是 ``cjl × 100``；港股/hk 实测比值
-    稳定在 10000 左右（如 hk00700 2025-10-20：cjl=14,963,400 对应真实
-    volume=1,496.0，比值 10002.3），换算是 ``cjl ÷ 10000``（即 ×0.0001），
-    不是 ×100。此前对所有市场统一用 ×100，会让港股 volume 被高估约 100
-    万倍。见 engine 仓库 tdx-kline 设计文档同一现象的独立验证。
+    输出 ``volume`` 的语义是**股数**。``cjl`` 到股数的倍数因市场而异，用
+    ``cje / close`` 这个不依赖任何 volume 列的物理约束（成交额÷价格＝股数）
+    跨 5 只港股 + 多个交易日核对：
+
+    - A股/stock：``cje/close ÷ cjl ≈ 100``（如 000001 2025-10-20：
+      implied=94,731,175 / cjl=952,641 = 99.44）→ 倍数 **×100**
+    - 港股/hk：``cje/close ÷ cjl ≈ 1.00``（如 00700 2025-10-20：
+      implied=14,947,219 / cjl=14,963,400 = 0.9989；00005 多日同样 ≈1.00）
+      → **cjl 本身就已经是股数，倍数 ×1，不需要任何换算**
+
+    注意港股不要拿 ``tdx-hk.duckdb`` 的 ``market_day_kline.volume`` 当参照：
+    那一列是**手**（00700 同日 = 1,496，≈ 股数/10000），单位和这里要输出的
+    股数不同。此前对所有市场统一 ×100 会让港股高估 100 倍；而按 ÷10000 去
+    对齐 tdx-hk 的 volume 列则会输出"手"，与 A 股的"股"语义不一致、低估 1
+    万倍——两种都是错的。
     """
-    multiplier = 0.0001 if asset_type == "hk" else 100
+    multiplier = 1 if asset_type == "hk" else 100
     out: list[dict] = []
     for r in rows:
         out.append({
