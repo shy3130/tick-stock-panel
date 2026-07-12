@@ -39,4 +39,4 @@ def test_fquant_local_uses_duckdb_engine():
     provider = registry.get_provider("fquant_local")
 
     assert provider.name == "fquant_local"
-    assert provider._engine.__class__.__name__ == "EngineDataDuckDBClient"
+    assert provider._engine.__class__.__name__ == "TdxDuckDBClient"

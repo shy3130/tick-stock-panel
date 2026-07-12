@@ -10,7 +10,7 @@
     │   ├── __init__.py          符号归一重导出
     │   ├── symbols.py           符号归一（split_symbol 等）
     │   ├── fstore_duckdb_client.py fstore.duckdb 只读客户端
-    │   ├── engine_data_duckdb_client.py tdx.duckdb / minutes / trans 只读客户端
+    │   ├── tdx_duckdb_client.py tdx.duckdb / minutes / trans 只读客户端
     │   ├── sina_tencent_client.py realtime fallback 客户端
     │   ├── mapping.py           上游字段 → 内部 schema
     │   ├── adj_factor.py        xdxr → 单次事件 ex_factor
@@ -37,7 +37,7 @@ from app.data_providers.fquant.adj_factor import (
     build_ex_factor_df,
     compute_ex_factor_from_xdxr,
 )
-from app.data_providers.fquant.engine_data_duckdb_client import EngineDataDuckDBClient
+from app.data_providers.fquant.tdx_duckdb_client import TdxDuckDBClient
 from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
 from app.data_providers.fquant.mapping import (
     base_infos_rows_to_instruments,
@@ -164,7 +164,7 @@ class FQuantProvider:
     def __init__(self, name: str = "fquant") -> None:
         self.name = name
         self._fstore = FStoreDuckDBClient()
-        self._engine = EngineDataDuckDBClient()
+        self._engine = TdxDuckDBClient()
         # instruments 缓存（§4.3 24h TTL）
         self._instruments_cache: dict[str, pl.DataFrame] = {}
         self._instruments_cache_ts: dict[str, datetime] = {}
@@ -285,7 +285,7 @@ class FQuantProvider:
                 oracle_rows = self._get_raw_oracle_rows(code, rows)
                 events = self._engine.get_xdxr(code, asset_type=asset_type)
                 rows = reconstruct_raw_rows(rows, events, oracle_rows)
-            logger.debug("EngineData wide %s: %d 行", code, len(rows))
+            logger.debug("tdx wide %s: %d 行", code, len(rows))
         # 映射到 normalizer 期望的字段名
         return self._filter_daily_rows(wide_rows_to_daily(rows, symbol, source=self.name), start_time, end_time)
 
@@ -477,7 +477,7 @@ class FQuantProvider:
         """主源 engine-data ``xdxr`` → 归一事件行（§5.3）。"""
         rows = self._engine.get_xdxr(code)
         if rows:
-            logger.debug("EngineData xdxr %s: %d 行", code, len(rows))
+            logger.debug("tdx xdxr %s: %d 行", code, len(rows))
         return xdxr_rows_to_events(rows, symbol) if rows else []
 
     def _get_adj_events_from_fstore(
@@ -571,7 +571,7 @@ class FQuantProvider:
             code = symbol_to_code(sym)
             ticks = self._engine.get_minutes(code, date_str, asset_type=asset_type)
             if not ticks:
-                logger.debug("EngineData minutes %s %s: 无数据", code, date_str)
+                logger.debug("tdx minutes %s %s: 无数据", code, date_str)
                 continue
             minute_df = minutes_rows_to_minute_df(
                 ticks, sym, asset_type, date_str,

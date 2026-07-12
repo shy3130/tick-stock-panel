@@ -27,8 +27,8 @@ ROOT_FSTORE = "/Volumes/WD1/snapshots/fstore"
 ROOT_ENGINE_A = "/Volumes/WD1/snapshots/engine-a"
 ROOT_ENGINE_HK = "/Volumes/WD1/snapshots/engine-hk"
 
-# resolve() is called on every EngineDataDuckDBClient query (see
-# engine_data_duckdb_client.py's _LeasedSource._resolve, which re-resolves the
+# resolve() is called on every TdxDuckDBClient query (see
+# tdx_duckdb_client.py's _LeasedSource._resolve, which re-resolves the
 # generation per query so a live snapshot swap is picked up without a
 # restart). Each call does two file opens + JSON parses; measured ~28us on a
 # warm page cache, which is negligible for a single query but adds up under

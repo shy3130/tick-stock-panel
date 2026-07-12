@@ -1,4 +1,18 @@
-"""engine 侧 TDX 数据只读客户端 —— 完整覆盖 get_day/get_wide/get_minutes/get_trans/get_xdxr。
+"""TDX 行情 DuckDB 只读客户端 —— 覆盖 get_day/get_wide/get_minutes/get_trans/get_xdxr。
+
+## 命名（重要，别被 "engine-data" 误导）
+
+这个上游**早就不是 HTTP 服务了**：它读的是本地磁盘上的 tdx*.duckdb 文件，没有任何
+网络调用。历史上它叫 `engine-data`（一个 HTTP 日 K 主源），迁到 DuckDB 后类名/文件名
+已改成 `TdxDuckDBClient` / `tdx_duckdb_client.py`。
+
+但 `engine-data` 这个名字在两个地方**故意保留**，因为它们是数据值而不是代码符号：
+  1. `fallback.py` 的降级链标识（`"engine-data:wide"` 等）——链路契约；
+  2. 归一化输出的 `source` 字段，**会落进 parquet**。改名会让同一列历史/新数据
+     出现两种取值，读侧要额外做等价映射,不值当。
+方法 docstring 里"沿用 xxx 数据集契约"指的就是这套历史字段形状。
+
+## 数据文件
 
 分别打开 A 股与港股拆分后的独立文件（不做跨库 ATTACH，因为没有跨表 join 需求）：
 - /Volumes/WD1/tdx.duckdb          -> market_day_kline / market_wide_kline / market_xdxr
@@ -101,14 +115,14 @@ class _LeasedSource:
             return
         path = self._resolve()
         if path is None:
-            logger.warning("EngineDataDuckDBClient: 文件不存在 logical=%s raw=%s", self._logical, self._raw_path)
+            logger.warning("TdxDuckDBClient: 文件不存在 logical=%s raw=%s", self._logical, self._raw_path)
             yield None
             return
         try:
             cm = cs.lease(path)
             conn = cm.__enter__()
         except Exception as e:  # noqa: BLE001
-            logger.warning("EngineDataDuckDBClient: 打开失败 %s — %s", path, e)
+            logger.warning("TdxDuckDBClient: 打开失败 %s — %s", path, e)
             yield None
             return
         try:
@@ -131,7 +145,7 @@ class _LeasedSource:
             try:
                 return conn.cursor().execute(sql, params).fetchall()
             except Exception as e:  # noqa: BLE001
-                logger.warning("EngineDataDuckDBClient: %s 查询失败 — %s", label, e)
+                logger.warning("TdxDuckDBClient: %s 查询失败 — %s", label, e)
                 return []
 
     def close(self) -> None:
@@ -139,7 +153,7 @@ class _LeasedSource:
             self._set.close()
 
 
-class EngineDataDuckDBClient:
+class TdxDuckDBClient:
     """只读打开 tdx.duckdb/tdx-minutes.duckdb/tdx-trans.duckdb，完整实现五个数据集。"""
 
     def __init__(
@@ -163,7 +177,7 @@ class EngineDataDuckDBClient:
             src.close()
 
     def get_day(self, code: str, limit: int = 250) -> list[dict]:
-        """读 market_day_kline（dataset='day'），字段对齐 EngineDataClient 的 day 数据集。"""
+        """读 market_day_kline（dataset='day'），字段沿用 day 数据集契约（命名见模块头）。"""
         rows = self._tdx.query(
             """
             SELECT trade_date, datetime, open, close, high, low, volume, amount,
@@ -186,7 +200,7 @@ class EngineDataDuckDBClient:
         ]
 
     def get_wide(self, code: str, limit: int = 250, asset_type: str | None = None) -> list[dict]:
-        """读 market_wide_kline，字段对齐 EngineDataClient 的 wide 数据集。
+        """读 market_wide_kline，字段沿用 wide 数据集契约（命名见模块头）。
 
         market_wide_kline 没有 datetime/adjustment_count 两列（market_day_kline 有），
         这里固定填 None/0——调用方的字段归一函数需要能容忍这两个字段缺失。
@@ -260,7 +274,7 @@ class EngineDataDuckDBClient:
         ]
 
     def get_minutes(self, code: str, date_yyyymmdd: str, limit: int = 5000, asset_type: str | None = None) -> list[dict]:
-        """读 market_minutes，字段对齐 EngineDataClient 的 minutes 数据集（price/volume）。
+        """读 market_minutes，字段沿用 minutes 数据集契约（命名见模块头）（price/volume）。
 
         market_minutes 的 time/amount 两列全表 34 亿+行全是 NULL（已实测确认），
         只有 price/volume/minute_index 有真实数据，这也是为什么只选 price/volume
@@ -283,7 +297,7 @@ class EngineDataDuckDBClient:
         return [{"price": r[0], "volume": r[1]} for r in rows]
 
     def get_trans(self, code: str, date_yyyymmdd: str, limit: int = 5000, asset_type: str | None = None) -> list[dict]:
-        """读 market_transactions，字段对齐 EngineDataClient 的 trans 数据集。
+        """读 market_transactions，字段沿用 trans 数据集契约（命名见模块头）。
 
         market_transactions 没有 order_count 列，这里固定填 None——
         调用方 trans_rows_to_df 需要能容忍这一列缺失/为空。
@@ -311,7 +325,7 @@ class EngineDataDuckDBClient:
         ]
 
     def get_xdxr(self, code: str, limit: int = 100, asset_type: str | None = None) -> list[dict]:
-        """读 market_xdxr，字段对齐 EngineDataClient 的 xdxr 数据集。
+        """读 market_xdxr，字段沿用 xdxr 数据集契约（命名见模块头）。
 
         表里的列名是 xingquanjiya（比 HTTP 契约的 xingquanjia 多一个 ya），这里
         用 AS xingquanjia 对齐字段名——但这只是对齐命名，不是修复数据：这一列
@@ -344,12 +358,12 @@ class EngineDataDuckDBClient:
         ]
 
     def get_fund_daily(self, code: str, date_iso: str) -> dict:
-        """读 market_fund_flow 单日资金流数据，字段契约对齐 EngineDataDiskClient.get_fund_daily。
+        """读 market_fund_flow 单日资金流数据，字段沿用 fund_daily 契约（见模块头「命名」）。
 
         :param code: 裸代码（如 ``600519``），内部会加交易所前缀
         :param date_iso: ``YYYY-MM-DD`` 格式日期字符串
         :return: 含 main_net/total_net/super_large_net/... 的 dict；
-                 文件不可达或无数据时返回 {}（与 EngineDataDiskClient 一致）
+                 文件不可达或无数据时返回 {}（与历史 engine-data 契约一致）
         """
         rows = self._tdx.query(
             """
@@ -386,7 +400,7 @@ class EngineDataDuckDBClient:
     def get_fund_range(self, code: str, start_iso: str, end_iso: str):
         """读 market_fund_flow 区间资金流，返回 polars DataFrame。
 
-        契约对齐 EngineDataDiskClient.get_fund_range：只返回 ["date", "main_net_inflow"] 两列。
+        契约沿用 fund_range：只返回 ["date", "main_net_inflow"] 两列。
 
         :param code: 裸代码（如 ``600519``），内部会加交易所前缀
         :param start_iso: ``YYYY-MM-DD`` 格式起始日期（含）

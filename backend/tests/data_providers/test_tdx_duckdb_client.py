@@ -1,11 +1,11 @@
-"""EngineDataDuckDBClient 完整契约测试。"""
+"""TdxDuckDBClient 完整契约测试。"""
 from __future__ import annotations
 
 import os
 
 import pytest
 
-from app.data_providers.fquant.engine_data_duckdb_client import EngineDataDuckDBClient, _prefixed_code
+from app.data_providers.fquant.tdx_duckdb_client import TdxDuckDBClient, _prefixed_code
 
 TDX_PATH = "/Volumes/WD1/tdx.duckdb"
 TDX_MINUTES_PATH = "/Volumes/WD1/tdx-minutes.duckdb"
@@ -21,7 +21,7 @@ def test_prefixed_code():
 
 @pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
 def test_get_day_returns_rows():
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     rows = client.get_day("600519", limit=5)
     assert len(rows) > 0
     for key in ("date", "open", "close", "high", "low", "volume", "amount"):
@@ -30,7 +30,7 @@ def test_get_day_returns_rows():
 
 @pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
 def test_get_wide_returns_rows():
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     rows = client.get_wide("600519", limit=5)
     assert len(rows) > 0
     for key in ("open", "last_close", "change_rate", "inner_volume", "outer_volume"):
@@ -39,7 +39,7 @@ def test_get_wide_returns_rows():
 
 @pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
 def test_get_xdxr_returns_rows_with_aliased_column():
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     rows = client.get_xdxr("600519", limit=5)
     assert len(rows) > 0
     assert "xingquanjia" in rows[0]  # 键名是 xingquanjia 不是 xingquanjiya
@@ -51,7 +51,7 @@ def test_get_xdxr_returns_rows_with_aliased_column():
 
 @pytest.mark.skipif(not os.path.exists(TDX_MINUTES_PATH), reason=f"本机没有 {TDX_MINUTES_PATH}")
 def test_get_minutes_returns_price_volume_shape():
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     rows = client.get_minutes("600519", "20260706", limit=5)
     assert len(rows) > 0
     assert set(rows[0].keys()) == {"price", "volume"}
@@ -59,7 +59,7 @@ def test_get_minutes_returns_price_volume_shape():
 
 @pytest.mark.skipif(not os.path.exists(TDX_TRANS_PATH), reason=f"本机没有 {TDX_TRANS_PATH}")
 def test_get_trans_returns_rows_with_expected_shape():
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     rows = client.get_trans("600519", "20260706", limit=10)
     assert len(rows) > 0
     for key in ("time", "price", "volume", "amount", "order_count", "direction"):
@@ -69,7 +69,7 @@ def test_get_trans_returns_rows_with_expected_shape():
 @pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
 def test_get_fund_daily_returns_dict_with_expected_keys():
     """get_fund_daily 契约：返回含 main_net/total_net/... 的 dict，对齐 EngineDataDiskClient。"""
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     result = client.get_fund_daily("600519", "2026-07-02")
     # 如果当天没有数据（市场休市或数据覆盖不含该日），返回 {} 也可以
     assert isinstance(result, dict)
@@ -85,7 +85,7 @@ def test_get_fund_range_returns_dataframe_with_date_and_main_net_inflow():
     """
     import polars as pl
 
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     df = client.get_fund_range("600519", "2026-06-01", "2026-07-02")
     assert isinstance(df, pl.DataFrame)
     if df.height > 0:
@@ -96,7 +96,7 @@ def test_get_fund_range_returns_dataframe_with_date_and_main_net_inflow():
 @pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
 def test_get_fund_daily_missing_code_returns_empty_dict():
     """不存在的代码（或当天无数据）应返回 {}，不应抛异常。"""
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     result = client.get_fund_daily("999999", "2026-07-02")
     assert result == {}
 
@@ -121,7 +121,7 @@ def test_get_wide_volume_is_in_shares_for_both_markets(code, asset_type):
     判据用 amount/[high, low] 这个数学上严格成立的区间(VWAP 必落在当日最高
     最低价之间)，不依赖任何 volume 列——那一列本身就是不可信的那个。
     """
-    client = EngineDataDuckDBClient()
+    client = TdxDuckDBClient()
     rows = client.get_wide(code, limit=30, asset_type=asset_type)
     if not rows:
         pytest.skip(f"{code} 无日线数据")
