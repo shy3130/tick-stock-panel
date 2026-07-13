@@ -1,0 +1,18 @@
+services:
+  quant:
+    image: ghcr.io/g35756666/tickflow-stock-panel:latest
+    container_name: sycee-quant
+    pull_policy: always
+    ports:
+      - "127.0.0.1:3018:3018"
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
