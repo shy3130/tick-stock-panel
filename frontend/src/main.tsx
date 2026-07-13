@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
 import { router } from './router'
+import { ApiRequestError } from './lib/api'
 import './index.css'
 
 // 全局认证拦截: 任何 query/mutation 收到 401 (未登录/会话过期) → 跳登录页。
@@ -14,6 +15,14 @@ const _redirectToLogin = (() => {
     if (redirecting) return
     if (!(err instanceof Error)) return
     const msg = err.message || ''
+    const code = err instanceof ApiRequestError ? err.code : undefined
+    if (code === 'INVITE_REQUIRED') {
+      if (window.location.pathname === '/invite') return
+      redirecting = true
+      const redirect = encodeURIComponent(window.location.pathname + window.location.search)
+      window.location.href = `/invite?redirect=${redirect}`
+      return
+    }
     // 401 (未登录/会话过期) → 跳登录页
     // 403 未初始化 (面板未设密码, 公网访问) → 也跳登录页(显示设密码提示)
     const is401 = msg.includes('未登录') || msg.includes('会话已过期') || msg.includes('401')

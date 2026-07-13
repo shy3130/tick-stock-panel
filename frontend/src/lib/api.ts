@@ -7,6 +7,18 @@ import { toast } from '@/components/Toast'
 
 const BASE = ''
 
+export class ApiRequestError extends Error {
+  status: number
+  code?: string
+
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = status
+    this.code = code
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
@@ -16,8 +28,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     let detail = ''
+    let code: string | undefined
     try {
       const j = JSON.parse(await res.text())
+      if (typeof j.code === 'string') code = j.code
       const raw = j.detail ?? j.message ?? ''
       if (Array.isArray(raw)) {
         // FastAPI 422 校验错误: [{type, loc, msg, input}, ...] → 取 msg 拼接
@@ -30,8 +44,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
-    if (res.status !== 401) toast(msg, 'error')
-    throw new Error(msg)
+    if (res.status !== 401 && code !== 'INVITE_REQUIRED') toast(msg, 'error')
+    throw new ApiRequestError(msg, res.status, code)
   }
   return res.json() as Promise<T>
 }
@@ -866,7 +880,14 @@ export const api = {
 
   // ===== Auth (访问认证) =====
   authStatus: () =>
-    request<{ configured: boolean; authenticated: boolean }>('/api/auth/status'),
+    request<{ configured: boolean; authenticated: boolean; access_mode?: 'password' | 'invite' }>('/api/auth/status'),
+  inviteStatus: () =>
+    request<{ enabled: boolean; authorized: boolean; capacity: number }>('/api/invite/status'),
+  redeemInvite: (code: string) =>
+    request<{ ok: boolean; authorized: boolean }>('/api/invite/redeem', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
   authSetup: (password: string) =>
     request<{ ok: boolean }>('/api/auth/setup', {
       method: 'POST',

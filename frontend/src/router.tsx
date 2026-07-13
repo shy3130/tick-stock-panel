@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Layout } from './components/Layout'
 import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
+import { InviteAccess } from './pages/InviteAccess'
 import { Landing } from './pages/Landing'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
@@ -98,6 +99,7 @@ function RootGate() {
 }
 
 export const router = createBrowserRouter([
+  { path: '/invite', element: <InviteAccess /> },
   { path: '/onboarding', element: <Onboarding /> },
   { path: '/login', element: <Auth /> },
   {

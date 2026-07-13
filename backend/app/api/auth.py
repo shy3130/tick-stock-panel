@@ -136,10 +136,22 @@ class ChangePasswordIn(BaseModel):
 @router.get("/status")
 def auth_status(request: Request) -> dict:
     """认证状态: 是否已设密码 + 当前请求是否已登录。"""
+    from app.services import invites
+
+    invite_store = invites.get_store()
+    if invite_store.enabled:
+        invite_token = request.cookies.get(invites.COOKIE_NAME)
+        return {
+            "configured": True,
+            "authenticated": invite_store.is_valid_session(invite_token),
+            "access_mode": "invite",
+        }
+
     token = request.cookies.get(COOKIE_NAME)
     return {
         "configured": auth.is_configured(),
         "authenticated": bool(token and auth.is_valid_session(token)),
+        "access_mode": "password",
     }
 
 

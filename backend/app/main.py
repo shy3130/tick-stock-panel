@@ -4,19 +4,44 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import (
+    alerts,
+    analysis,
+    auth as auth_api,
+    backtest,
+    data,
+    ext_data,
+    financials,
+    indices,
+    intraday,
+    invites as invites_api,
+    kline,
+    market_recap,
+    monitor_rules,
+    overview,
+    pipeline,
+    rps,
+    screener,
+    settings as settings_api,
+    signals,
+    stock_analysis,
+    strategy,
+    watchlist,
+)
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
+from app.tickflow.capabilities import CapabilityDenied
 from app.tickflow.policy import detect_capabilities
 from app.tickflow.repository import DataStore, KlineRepository
 
@@ -41,6 +66,11 @@ async def lifespan(app: FastAPI):
         auth_service.bootstrap_from_env()
     except Exception as e:  # noqa: BLE001
         logger.warning("auth bootstrap failed: %s", e)
+
+    from app.services import invites as invite_service
+    invite_store = invite_service.get_store()
+    if invite_store.enabled:
+        logger.info("private beta invite access enabled (%d slots)", invite_store.capacity)
 
     # 数据层
     store = DataStore()
@@ -238,11 +268,40 @@ app.add_middleware(
 # 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
+_INVITE_PUBLIC_PREFIX = ("/api/invite/", "/assets/")
+_INVITE_PUBLIC_EXACT = ("/invite", "/favicon.svg", "/health", "/api/health")
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
+    from app.services import invites as invite_service
+
+    invite_store = invite_service.get_store()
+    if invite_store.enabled:
+        is_public = path in _INVITE_PUBLIC_EXACT or path.startswith(_INVITE_PUBLIC_PREFIX)
+        if is_public or request.method == "OPTIONS":
+            return await call_next(request)
+
+        invite_token = request.cookies.get(invite_service.COOKIE_NAME)
+        if invite_store.is_valid_session(invite_token):
+            # 邀请码模式直接替代原访问密码; API 与页面统一由邀请码会话保护。
+            return await call_next(request)
+
+        if path.startswith("/api/"):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "请先完成邀请码验证", "code": "INVITE_REQUIRED"},
+            )
+
+        target = path
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
+        return RedirectResponse(
+            url=f"/invite?{urlencode({'redirect': target})}",
+            status_code=307,
+        )
+
     # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
     if not path.startswith("/api/"):
         return await call_next(request)
@@ -275,6 +334,7 @@ async def auth_middleware(request: Request, call_next):
 
 # 路由
 app.include_router(core_router)
+app.include_router(invites_api.router)
 app.include_router(auth_api.router)
 app.include_router(kline.router)
 app.include_router(watchlist.router)
@@ -301,11 +361,6 @@ app.include_router(rps.router)
 # 能力门控异常 → 403(而非默认 500)
 # 业务代码用 capset.require(Cap.X) 断言能力,缺失时抛 CapabilityDenied;
 # 若不注册 handler 会冒泡成 500 Internal Server Error,对前端不友好且语义错误。
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from app.tickflow.capabilities import CapabilityDenied
-
-
 @app.exception_handler(CapabilityDenied)
 async def capability_denied_handler(request: Request, exc: CapabilityDenied) -> JSONResponse:
     return JSONResponse(

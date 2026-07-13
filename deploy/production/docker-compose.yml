@@ -7,6 +7,7 @@ services:
       - "127.0.0.1:3018:3018"
     environment:
       DATA_DIR: /app/data
+      INVITE_CODES: ${INVITE_CODES:-}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
