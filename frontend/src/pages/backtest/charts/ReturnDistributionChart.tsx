@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useECharts } from './useECharts'
 import type { EChartsOption } from 'echarts'
 import { useChartTheme } from '@/lib/theme'
+import { useIsNarrowViewport } from '@/lib/sidebarState'
 
 interface DistBin {
   range: string
@@ -15,6 +16,7 @@ interface DistBin {
  */
 export function ReturnDistributionChart({ distribution }: { distribution: DistBin[] }) {
   const ct = useChartTheme()
+  const compact = useIsNarrowViewport(640)
   const option = useMemo<EChartsOption>(() => {
     const cats = distribution.map(d => d.range)
     const vals = distribution.map(d => d.count)
@@ -27,9 +29,10 @@ export function ReturnDistributionChart({ distribution }: { distribution: DistBi
     })
 
     return {
-      grid: { left: 48, right: 16, top: 24, bottom: 56 },
+      grid: { left: compact ? 36 : 48, right: compact ? 6 : 16, top: 24, bottom: compact ? 50 : 56 },
       tooltip: {
         trigger: 'axis',
+        confine: true,
         axisPointer: { type: 'shadow' },
         formatter: (params: any) => {
           const p = Array.isArray(params) ? params[0] : params
@@ -41,7 +44,15 @@ export function ReturnDistributionChart({ distribution }: { distribution: DistBi
       xAxis: {
         type: 'category',
         data: cats,
-        axisLabel: { color: ct.text, fontSize: 10, rotate: 45, interval: 1 },
+        axisLabel: {
+          color: ct.text,
+          fontSize: compact ? 9 : 10,
+          rotate: compact ? 55 : 45,
+          interval: Math.max(0, Math.ceil(cats.length / (compact ? 5 : 10)) - 1),
+          formatter: compact
+            ? ((value: string) => `${value.split('~')[0].replace('%', '')}%`)
+            : undefined,
+        },
         axisLine: { lineStyle: { color: ct.border } },
       },
       yAxis: {
@@ -57,9 +68,9 @@ export function ReturnDistributionChart({ distribution }: { distribution: DistBi
         },
       ],
     }
-  }, [distribution, ct])
+  }, [distribution, ct, compact])
 
-  const chartRef = useECharts(option, [distribution, ct])
+  const chartRef = useECharts(option, [distribution, ct, compact])
 
-  return <div ref={chartRef} className="h-48 w-full" />
+  return <div ref={chartRef} className="h-56 w-full sm:h-48" />
 }

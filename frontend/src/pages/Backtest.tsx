@@ -42,7 +42,7 @@ export function Backtest() {
   const [activeTab, setActiveTab] = useState<Tab>('strategy')
 
   const modeSwitch = (
-    <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
+    <div className="grid w-full grid-cols-2 gap-1 rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm sm:inline-flex sm:w-auto">
       {(['factor', 'strategy', 'optimizer', 'walkforward'] as const).map(tab => {
         const Icon = TAB_ICONS[tab]
         const active = activeTab === tab
@@ -50,7 +50,7 @@ export function Backtest() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+            className={`inline-flex min-h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] px-2 py-1.5 text-xs font-medium transition-colors cursor-pointer sm:min-h-0 sm:px-3 ${
               active
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-secondary hover:bg-elevated hover:text-foreground'

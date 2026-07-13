@@ -128,7 +128,7 @@ export function Layout() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-          className="flex-1 min-h-0 overflow-auto scrollbar-gutter-stable"
+          className="flex-1 min-h-0 min-w-0 max-w-full overflow-x-hidden overflow-y-auto scrollbar-gutter-stable"
         >
           <Suspense
             fallback={

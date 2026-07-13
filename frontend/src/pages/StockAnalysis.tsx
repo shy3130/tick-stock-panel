@@ -13,6 +13,7 @@ import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { getNavIconMeta } from '@/lib/navRegistry'
+import { useIsNarrowViewport } from '@/lib/sidebarState'
 import {
   startAnalysis, findTodayReport, useHistoryReports,
   deleteReport, openHistoryReport, loadHistory,
@@ -94,20 +95,20 @@ export function StockAnalysis() {
         }
       />
 
-      <div className="w-full px-8 py-6 space-y-6">
+      <div className="w-full min-w-0 max-w-full space-y-4 px-3 py-4 sm:px-5 sm:py-5 xl:space-y-6 xl:px-8 xl:py-6">
         {/* 搜索栏 */}
-        <div className="flex items-center gap-3">
-          <div className="w-72">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="w-full min-w-0 sm:w-72">
             <StockFinancialSearch onSelect={onSelect} />
           </div>
           {symbol && (
-            <>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <button
                 onClick={() => setPreviewSymbol(symbol)}
                 title="查看个股日 K 详情"
-                className="group flex items-center gap-2 text-sm rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-elevated transition-colors"
+                className="group flex min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 py-0.5 text-sm transition-colors hover:bg-elevated"
               >
-                <span className="text-foreground font-medium group-hover:text-sky-300 transition-colors">{name || symbol}</span>
+                <span className="truncate text-foreground font-medium transition-colors group-hover:text-sky-300">{name || symbol}</span>
                 <span className="text-[10px] font-mono text-muted">{symbol}</span>
                 <ExternalLink className="h-3 w-3 text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
               </button>
@@ -130,12 +131,12 @@ export function StockAnalysis() {
                   开发中
                 </span>
               </button>
-            </>
+            </div>
           )}
         </div>
 
         {/* 主体:左侧当前个股看板 + 右侧常驻历史报告 */}
-        <div className="grid grid-cols-[1fr_288px] gap-6 items-start">
+        <div className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_288px] xl:gap-6">
           <div className="min-w-0">
             {!symbol ? (
               <EmptyState
@@ -174,6 +175,7 @@ export function StockAnalysis() {
 
 // ===== 分析看板:日 K + 关键价位 =====
 function StockAnalysisBoard({ symbol }: { symbol: string }) {
+  const isMobile = useIsNarrowViewport(640)
   const kline = useQuery({
     queryKey: ['kline', symbol, ''],
     queryFn: () => api.klineDaily(symbol, 250),
@@ -217,13 +219,13 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
 
   return (
     <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
-      <div className="px-4 py-3 border-b border-border/40">
-        <div className="flex items-center justify-between gap-2">
+      <div className="border-b border-border/40 px-3 py-3 sm:px-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2 min-w-0">
             <LineChart className="h-4 w-4 text-sky-400 shrink-0" />
             <span className="text-sm font-medium text-foreground">关键价位分析</span>
           </div>
-          <div className="flex items-baseline gap-2 shrink-0">
+          <div className="flex flex-wrap items-baseline gap-2 sm:shrink-0">
             <span className="text-[10px] text-muted">{rows.length} 个交易日</span>
             <span className="text-[10px] text-muted/60">·</span>
             <span className="text-[10px] text-muted">当前价</span>
@@ -233,14 +235,14 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
           </div>
         </div>
       </div>
-      <div className="p-3">
+      <div className="p-2 sm:p-3">
         <AnalysisKChart
           rows={rows}
           levels={levels}
           series={levelsQ.data?.series}
           seriesDates={levelsQ.data?.dates}
           defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
-          height={480}
+          height={isMobile ? 360 : 480}
         />
       </div>
     </div>
@@ -253,7 +255,7 @@ function HistorySidebar() {
   const [confirmDeleteReport, setConfirmDeleteReport] = useState<{ id: string; label: string } | null>(null)
 
   return (
-    <aside className="self-start sticky top-0">
+    <aside className="w-full min-w-0 self-start xl:sticky xl:top-0">
       <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
         <div className="px-3 py-2.5 border-b border-border/40 flex items-center gap-2">
           <HistoryIcon className="h-3.5 w-3.5 text-sky-400 shrink-0" />
@@ -273,7 +275,7 @@ function HistorySidebar() {
             <p className="text-[10px] text-muted/60 mt-1">选一只股票,点「AI 个股分析」生成</p>
           </div>
         ) : (
-          <div className="max-h-[calc(100vh-268px)] overflow-y-auto p-2 space-y-1.5">
+          <div className="max-h-72 space-y-1.5 overflow-y-auto p-2 xl:max-h-[calc(100vh-268px)]">
             {reports.map(r => (
               <div
                 key={r.id}
@@ -299,7 +301,7 @@ function HistorySidebar() {
                   </button>
                   <button
                     onClick={() => setConfirmDeleteReport({ id: r.id, label: r.name || r.symbol })}
-                    className="shrink-0 text-[10px] text-muted/60 hover:text-danger transition-colors px-1 py-0.5 opacity-0 group-hover:opacity-100"
+                    className="shrink-0 px-1 py-0.5 text-[10px] text-muted/60 opacity-100 transition-colors hover:text-danger sm:opacity-0 sm:group-hover:opacity-100"
                     title="删除"
                   >
                     删除

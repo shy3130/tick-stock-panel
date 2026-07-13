@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useECharts } from './useECharts'
 import type { StrategyBacktestResult } from '@/lib/api'
 import { useChartTheme } from '@/lib/theme'
+import { useIsNarrowViewport } from '@/lib/sidebarState'
 
 interface Props {
   result: StrategyBacktestResult
@@ -9,6 +10,7 @@ interface Props {
 
 export function StrategyNavChart({ result }: Props) {
   const ct = useChartTheme()
+  const compact = useIsNarrowViewport(640)
   const option = useMemo(() => {
     if (!result.equity_curve.length) return null
 
@@ -25,6 +27,7 @@ export function StrategyNavChart({ result }: Props) {
     const benchmarkValues = dates.map(d => benchmarkByDate.get(d) ?? null)
     const hasBenchmark = benchmarkValues.some(v => v != null)
     const ddValues = result.drawdown_curve.map(r => r.value * 100)
+    const xLabelInterval = Math.max(0, Math.ceil(dates.length / (compact ? 3 : 6)) - 1)
 
     return {
       animation: false,
@@ -33,8 +36,8 @@ export function StrategyNavChart({ result }: Props) {
         label: { backgroundColor: ct.crosshairLabelBg },
       },
       grid: [
-        { left: 64, right: hasBenchmark ? 64 : 16, top: 14, bottom: '40%' },
-        { left: 64, right: hasBenchmark ? 64 : 16, top: '68%', bottom: 46 },
+        { left: compact ? 42 : 64, right: hasBenchmark ? (compact ? 42 : 64) : (compact ? 8 : 16), top: 14, bottom: '40%' },
+        { left: compact ? 42 : 64, right: hasBenchmark ? (compact ? 42 : 64) : (compact ? 8 : 16), top: '68%', bottom: compact ? 20 : 46 },
       ],
       xAxis: [
         {
@@ -45,7 +48,13 @@ export function StrategyNavChart({ result }: Props) {
         },
         {
           type: 'category', data: dates, gridIndex: 1,
-          axisLabel: { color: ct.text, fontSize: 10, interval: Math.floor(dates.length / 6) },
+          axisLabel: {
+            color: ct.text,
+            fontSize: compact ? 9 : 10,
+            interval: xLabelInterval,
+            hideOverlap: true,
+            formatter: compact ? ((value: string) => value.slice(5)) : undefined,
+          },
           axisTick: { show: false },
           axisPointer: { show: true, type: 'line' },
           axisLine: { lineStyle: { color: ct.border } },
@@ -55,7 +64,7 @@ export function StrategyNavChart({ result }: Props) {
         {
           type: 'value', gridIndex: 0,
           scale: true,
-          name: hasBenchmark ? '上证点位' : '策略资金',
+          name: compact ? '' : hasBenchmark ? '上证点位' : '策略资金',
           nameTextStyle: { color: hasBenchmark ? ct.text : ct.text, fontSize: 10, padding: [0, 0, 4, 0] },
           axisLabel: {
             color: hasBenchmark ? ct.text : ct.text,
@@ -69,7 +78,7 @@ export function StrategyNavChart({ result }: Props) {
           type: 'value', gridIndex: 0,
           position: 'right',
           scale: true,
-          name: hasBenchmark ? '策略资金' : '',
+          name: compact ? '' : hasBenchmark ? '策略资金' : '',
           nameTextStyle: { color: ct.text, fontSize: 10, padding: [0, 0, 4, 0] },
           axisLabel: {
             show: hasBenchmark,
@@ -103,6 +112,7 @@ export function StrategyNavChart({ result }: Props) {
         },
         {
           type: 'slider',
+          show: !compact,
           xAxisIndex: [0, 1],
           filterMode: 'filter',
           height: 16,
@@ -117,6 +127,7 @@ export function StrategyNavChart({ result }: Props) {
       ],
       tooltip: {
         trigger: 'axis',
+        confine: true,
         backgroundColor: ct.tooltipBg,
         borderColor: ct.tooltipBorder,
         textStyle: { color: ct.tooltipText, fontSize: 12 },
@@ -182,13 +193,13 @@ export function StrategyNavChart({ result }: Props) {
         },
       ],
     } as any
-  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id, ct])
+  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id, ct, compact])
 
-  const chartRef = useECharts(option, [result.run_id, ct])
+  const chartRef = useECharts(option, [result.run_id, ct, compact])
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-4 px-4 pb-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 pb-2 sm:gap-x-4 sm:px-4">
         <span className="flex items-center gap-1.5 text-[10px] text-secondary">
           <span className="w-3 h-0.5 rounded bg-accent" />
           策略净值
@@ -203,9 +214,9 @@ export function StrategyNavChart({ result }: Props) {
             同期上证指数
           </span>
         )}
-        <span className="ml-auto text-[10px] text-muted">滚轮缩放 · 拖动平移</span>
+        <span className="ml-auto hidden text-[10px] text-muted sm:inline">滚轮缩放 · 拖动平移</span>
       </div>
-      <div ref={chartRef} className="h-[282px]" />
+      <div ref={chartRef} className="h-[248px] sm:h-[282px]" />
     </div>
   )
 }

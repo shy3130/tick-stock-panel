@@ -1108,7 +1108,7 @@ export function StrategyBacktest() {
     .filter(item => item.value > 0)
 
   return (
-    <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)]">
+    <div className="grid min-h-0 grid-cols-1 rounded-card border border-border bg-surface/80 xl:h-full xl:grid-cols-[18rem_minmax(0,1fr)] xl:overflow-hidden">
       {/* 配置面板 */}
       <section className="space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto">
         <div>
@@ -1435,7 +1435,7 @@ export function StrategyBacktest() {
       {/* 结果面板 */}
       <section className="min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto">
         {/* 模式切换: 仓位模拟 / 全量模拟 */}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
             {([['position', '仓位模拟'], ['full', '全量模拟']] as const).map(([val, label]) => (
               <button
@@ -1600,7 +1600,7 @@ export function StrategyBacktest() {
             {/* 收益分布直方图 */}
             {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && (
               <div className="rounded-card border border-border p-3">
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2 flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-xs font-medium text-secondary">候选标的收益分布(持有 {result.config?.holding_days ?? 5} 天)</span>
                   <span className="text-[10px] text-muted">红=正收益 · 绿=负收益</span>
                 </div>
@@ -1694,10 +1694,10 @@ export function StrategyBacktest() {
             </div>
 
             {executionSummary.length > 0 && (
-              <div className="rounded-card border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-[11px] leading-5 text-secondary">
-                <span className="font-medium text-amber-300">成交约束：</span>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-[11px] leading-5 text-secondary">
+                <span className="font-medium text-amber-300">成交约束</span>
                 {executionSummary.map((item, index) => (
-                  <span key={item.key} className="ml-2">
+                  <span key={item.key}>
                     {index > 0 ? '· ' : ''}{item.label} <span className="font-mono text-foreground">{item.value}</span> 次
                   </span>
                 ))}
@@ -1713,7 +1713,7 @@ export function StrategyBacktest() {
 
             {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && (
               <div className="rounded-card border border-border p-3">
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2 flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-xs font-medium text-secondary">独立候选交易收益分布</span>
                   <span className="text-[10px] text-muted">红=正收益 · 绿=负收益</span>
                 </div>
@@ -1724,22 +1724,23 @@ export function StrategyBacktest() {
             {/* Tab: 按日期 / 交易明细 / 选股分析 */}
             {(result.trades.length > 0 || result.per_symbol_stats.length > 0) && (
               <div className="rounded-card border border-border overflow-hidden">
-                <div className="flex items-center gap-1 border-b border-border px-4 pt-2">
+                <div className="grid grid-cols-3 border-b border-border px-2 pt-2 sm:flex sm:items-center sm:gap-1 sm:px-4">
                   {(['daily', 'trades', 'picks'] as const).map(t => (
                     <button
                       key={t}
                       onClick={() => setResultTab(t)}
-                      className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
+                      className={`min-w-0 border-b-2 px-1 py-1.5 text-center text-[11px] font-medium leading-4 transition-colors cursor-pointer sm:px-3 sm:text-xs ${
                         resultTab === t
                           ? 'border-accent text-accent'
                           : 'border-transparent text-secondary hover:text-foreground'
                       }`}
                     >
-                      {t === 'daily'
-                        ? `每日交易 (${dailyTradeRows.length})`
-                        : t === 'trades'
-                          ? `交易明细 (${sortedTrades.length})`
-                          : `选股分析 (${result.per_symbol_stats.length})`}
+                      <span className="block sm:inline">
+                        {t === 'daily' ? '每日交易' : t === 'trades' ? '交易明细' : '选股分析'}
+                      </span>{' '}
+                      <span className="font-mono text-[10px] opacity-75">
+                        ({t === 'daily' ? dailyTradeRows.length : t === 'trades' ? sortedTrades.length : result.per_symbol_stats.length})
+                      </span>
                     </button>
                   ))}
                 </div>

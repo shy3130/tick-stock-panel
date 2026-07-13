@@ -158,7 +158,7 @@ export function Sidebar(props: SidebarProps) {
     <aside
       className={cn(
         'border-r border-border bg-surface flex flex-col h-full min-h-0 overflow-hidden shrink-0 transition-[width] duration-200 ease-smooth',
-        collapsed ? 'w-16' : 'w-56',
+        collapsed ? 'w-14 sm:w-16' : 'w-56',
       )}
     >
       <div className={cn('shrink-0 border-b border-border', collapsed ? 'px-2 py-3' : 'px-4 py-4')}>

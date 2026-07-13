@@ -7,6 +7,7 @@ import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { useIsNarrowViewport } from '@/lib/sidebarState'
 
 function defaultRange() {
   const now = new Date()
@@ -67,6 +68,7 @@ function pinnedRank(item: IndexInstrument) {
 
 export function Indices() {
   const qc = useQueryClient()
+  const isMobile = useIsNarrowViewport(640)
   const [searchParams, setSearchParams] = useSearchParams()
   const [keyword, setKeyword] = useState('')
   const symbolParam = searchParams.get('symbol') ?? ''
@@ -74,6 +76,7 @@ export function Indices() {
   const [range, setRange] = useState(defaultRange)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
+  const chartHeight = isMobile ? 420 : 620
 
   // 分时数据需 Pro+ (kline.minute.batch) 能力
   const caps = useCapabilities()
@@ -202,19 +205,19 @@ export function Indices() {
   }
 
   return (
-    <div className="h-full overflow-auto bg-base p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
+    <div className="h-full min-w-0 max-w-full overflow-auto bg-base p-3 sm:p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-lg font-semibold text-foreground">指数</h1>
           <p className="mt-1 text-xs text-muted">
             指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           <button
             onClick={() => syncInstruments.mutate()}
             disabled={syncInstruments.isPending}
-            className="inline-flex items-center gap-1.5 rounded-btn bg-elevated px-3 py-1.5 text-xs text-secondary hover:text-foreground disabled:opacity-50"
+            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-elevated px-2 py-2 text-xs text-secondary hover:text-foreground disabled:opacity-50 sm:px-3 sm:py-1.5"
           >
             {syncInstruments.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             同步指数列表
@@ -222,7 +225,7 @@ export function Indices() {
           <button
             onClick={() => syncDaily.mutate()}
             disabled={syncDaily.isPending}
-            className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-50"
+            className="inline-flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-btn bg-accent px-2 py-2 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-50 sm:px-3 sm:py-1.5"
           >
             {syncDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             同步指数日K
@@ -230,8 +233,8 @@ export function Indices() {
         </div>
       </div>
 
-      <div className="grid grid-cols-[15rem_1fr] gap-4">
-        <aside className="rounded-card border border-border bg-surface p-3">
+      <div className="grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-[15rem_minmax(0,1fr)] xl:gap-4">
+        <aside className="min-w-0 rounded-card border border-border bg-surface p-2.5 sm:p-3">
           <div className="relative mb-3">
             <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted" />
             <input
@@ -241,10 +244,10 @@ export function Indices() {
               className="w-full rounded-btn border border-border bg-base py-1.5 pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
             />
           </div>
-          <div className="mb-3 space-y-1 border-b border-border/60 pb-3">
+          <div className="mb-3 grid grid-cols-2 gap-1 border-b border-border/60 pb-3 xl:block xl:space-y-1">
             {topRows.map(renderIndexItem)}
           </div>
-          <div className="max-h-[calc(100vh-27rem)] space-y-1 overflow-auto pr-1">
+          <div className="max-h-44 space-y-1 overflow-auto pr-1 sm:max-h-56 xl:max-h-[calc(100vh-27rem)]">
             {(list.isLoading || search.isLoading) && <div className="py-4 text-center text-xs text-muted">加载中…</div>}
             {!list.isLoading && listRows.length === 0 && (
               <div className="rounded-btn bg-elevated p-3 text-xs text-muted">
@@ -255,10 +258,10 @@ export function Indices() {
           </div>
         </aside>
 
-        <main className="min-w-0 rounded-card border border-border bg-surface p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        <main className="min-w-0 max-w-full overflow-hidden rounded-card border border-border bg-surface p-2.5 sm:p-3">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                 <Activity className="h-4 w-4 text-accent" />
                 <h2 className="truncate text-sm font-semibold text-foreground">
                   {selectedInfo?.name || selectedSymbol || '未选择指数'}
@@ -271,19 +274,19 @@ export function Indices() {
                 实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
               </div>
             </div>
-            <div className="flex items-center gap-2 text-xs">
+            <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs sm:w-auto">
               <input
                 type="date"
                 value={range.start}
                 onChange={e => setRange(r => ({ ...r, start: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 w-full rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
               />
               <span className="text-muted">至</span>
               <input
                 type="date"
                 value={range.end}
                 onChange={e => setRange(r => ({ ...r, end: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 w-full rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
               />
             </div>
           </div>
@@ -296,11 +299,11 @@ export function Indices() {
             </div>
           )}
           {chartRows.length > 0 && (
-            <div className="flex items-start gap-3">
+            <div className="grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-2">
               <div className="min-w-0 flex-1">
                 <EChartsCandlestick
                   data={chartRows}
-                  height={620}
+                  height={chartHeight}
                   showMA={true}
                   showInfoBar={true}
                   showMarkers={false}
@@ -311,7 +314,7 @@ export function Indices() {
                   activeIndicators={['vol', 'macd']}
                 />
               </div>
-              <div className="min-w-0 flex-1 border-l border-border pl-3" style={{ height: 620 }}>
+              <div className="min-w-0 border-t border-border pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0" style={{ height: chartHeight }}>
                 {!hasMinuteCap ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                     <Lock className="h-5 w-5 text-muted" />
@@ -329,7 +332,7 @@ export function Indices() {
                     {minuteRows.length > 0 && (
                       <EChartsIntraday
                         data={minuteRows}
-                        height={620}
+                        height={chartHeight}
                         prevClose={prevClose}
                         date={selectedDate ?? undefined}
                         symbol={selectedSymbol}
