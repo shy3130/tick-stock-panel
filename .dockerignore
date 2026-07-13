@@ -33,9 +33,8 @@ backend/app/static
 .DS_Store
 **/*.swp
 
-# ===== 文档 / 截图(镜像不需要; README.md 除外, Dockerfile 显式 COPY 了它) =====
+# ===== 文档(镜像不需要; README.md 除外, Dockerfile 显式 COPY 了它) =====
 docs
-screenshots
 
 # ===== 桌面客户端打包(PyInstaller 专用, 与 Docker 部署无关) =====
 packaging

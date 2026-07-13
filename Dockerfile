@@ -25,6 +25,8 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY frontend/ ./
+# Landing.tsx 从仓库根目录引用看板预览图；保持容器内相同的相对路径。
+COPY screenshots/dashboard.png /screenshots/dashboard.png
 RUN pnpm build
 
 # === Stage 1b: stock-sdk 插件依赖(可选,默认跳过) ===
