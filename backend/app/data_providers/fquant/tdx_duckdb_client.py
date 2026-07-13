@@ -16,8 +16,8 @@
 
 分别打开 A 股与港股拆分后的独立文件（不做跨库 ATTACH，因为没有跨表 join 需求）：
 - /Volumes/WD1/tdx.duckdb          -> market_day_kline / market_wide_kline / market_xdxr
-- /Volumes/WD1/tdx-minutes.duckdb  -> market_minutes
-- /Volumes/WD1/tdx-trans.duckdb    -> market_transactions
+- engine catalog tdx_minutes/a     -> market_minutes（按日期路由快照）
+- engine catalog tdx_trans/a       -> market_transactions（按年份路由快照）
 - /Volumes/WD1/tdx-hk-web.duckdb        -> market_day_kline(dataset='hkday')
 - /Volumes/WD1/tdx-hkminutes-web.duckdb -> market_minutes(dataset='hkminutes')
 - /Volumes/WD1/tdx-hktrans-web.duckdb   -> market_transactions(dataset='hktrans')
@@ -27,16 +27,15 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any
+from datetime import datetime
 
-from app.data_providers.fquant import generation
+from app.data_providers.fquant import catalog_resolver, generation
 from app.data_providers.fquant.lease import ConnectionSet
 
 logger = logging.getLogger(__name__)
 
 TDX_PATH = os.getenv("FQUANT_TDX_DUCKDB_PATH", "/Volumes/WD1/tdx.duckdb")
 TDX_MINUTES_PATH = os.getenv("FQUANT_TDX_MINUTES_DUCKDB_PATH", "/Volumes/WD1/tdx-minutes.duckdb")
-TDX_TRANS_PATH = os.getenv("FQUANT_TDX_TRANS_DUCKDB_PATH", "/Volumes/WD1/tdx-trans.duckdb")
 TDX_HK_PATH = os.getenv("FQUANT_TDX_HK_DUCKDB_PATH", "/Volumes/WD1/tdx-hk-web.duckdb")
 TDX_HK_MINUTES_PATH = os.getenv("FQUANT_TDX_HK_MINUTES_DUCKDB_PATH", "/Volumes/WD1/tdx-hkminutes-web.duckdb")
 TDX_HK_TRANS_PATH = os.getenv("FQUANT_TDX_HK_TRANS_DUCKDB_PATH", "/Volumes/WD1/tdx-hktrans-web.duckdb")
@@ -153,6 +152,64 @@ class _LeasedSource:
             self._set.close()
 
 
+class _CatalogSource:
+    """Date-routed source backed by path-keyed read-only connections."""
+
+    def __init__(self, route_key: str, market: str) -> None:
+        self._route_key = route_key
+        self._market = market
+        self._set: ConnectionSet | None = None
+        self._duckdb_missing = False
+
+    def _ensure_set(self) -> ConnectionSet | None:
+        if self._duckdb_missing:
+            return None
+        if self._set is None:
+            try:
+                import duckdb
+            except ImportError:
+                self._duckdb_missing = True
+                return None
+            self._set = ConnectionSet(lambda path: duckdb.connect(path, read_only=True))
+        return self._set
+
+    def query(self, sql: str, params: list, date_yyyymmdd: str) -> list:
+        """Resolve the date on every query and never fall back to a raw file."""
+        try:
+            trade_date = datetime.strptime(date_yyyymmdd, "%Y%m%d").date()
+        except ValueError as exc:
+            logger.warning(
+                "TdxDuckDBClient: invalid trade date %r — %s", date_yyyymmdd, exc
+            )
+            return []
+        connection_set = self._ensure_set()
+        if connection_set is None:
+            return []
+        try:
+            path = catalog_resolver.resolve_route(
+                self._route_key, self._market, trade_date
+            )
+        except catalog_resolver.CatalogError as exc:
+            logger.warning(
+                "TdxDuckDBClient: catalog resolve failed %s/%s %s — %s",
+                self._route_key,
+                self._market,
+                date_yyyymmdd,
+                exc,
+            )
+            return []
+        try:
+            with connection_set.lease(path) as connection:
+                return connection.cursor().execute(sql, params).fetchall()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TdxDuckDBClient: catalog query failed %s — %s", path, exc)
+            return []
+
+    def close(self) -> None:
+        if self._set is not None:
+            self._set.close()
+
+
 class TdxDuckDBClient:
     """只读打开 tdx.duckdb/tdx-minutes.duckdb/tdx-trans.duckdb，完整实现五个数据集。"""
 
@@ -167,14 +224,29 @@ class TdxDuckDBClient:
     ) -> None:
         self._tdx = _LeasedSource("tdx", tdx_path or TDX_PATH)
         self._minutes = _LeasedSource("tdx_minutes", minutes_path or TDX_MINUTES_PATH)
-        self._trans = _LeasedSource("tdx_trans", trans_path or TDX_TRANS_PATH)
+        self._a_catalog_minutes = _CatalogSource("tdx_minutes", "a")
+        self._a_catalog_trans = _CatalogSource("tdx_trans", "a")
         self._hk = _LeasedSource("tdx_hk", hk_path or TDX_HK_PATH)
         self._hk_minutes = _LeasedSource("tdx_hk_minutes", hk_minutes_path or TDX_HK_MINUTES_PATH)
         self._hk_trans = _LeasedSource("tdx_hk_trans", hk_trans_path or TDX_HK_TRANS_PATH)
 
     def close(self) -> None:
-        for src in (self._tdx, self._minutes, self._trans, self._hk, self._hk_minutes, self._hk_trans):
+        for src in (
+            self._a_catalog_minutes,
+            self._a_catalog_trans,
+            self._tdx,
+            self._minutes,
+            self._hk,
+            self._hk_minutes,
+            self._hk_trans,
+        ):
             src.close()
+
+    def _a_minutes_source(self, date_yyyymmdd: str) -> _CatalogSource:
+        return self._a_catalog_minutes
+
+    def _a_trans_source(self, date_yyyymmdd: str) -> _CatalogSource:
+        return self._a_catalog_trans
 
     def get_day(self, code: str, limit: int = 250) -> list[dict]:
         """读 market_day_kline（dataset='day'），字段沿用 day 数据集契约（命名见模块头）。"""
@@ -281,18 +353,26 @@ class TdxDuckDBClient:
         两列、靠 minute_index 排序——不要改成查 time 列，查了也是 None。
         """
         hk = _is_hk(asset_type)
-        src = self._hk_minutes if hk else self._minutes
         trade_date = f"{date_yyyymmdd[0:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:8]}"
-        rows = src.query(
-            """
+        sql = """
             SELECT price, volume
             FROM market_minutes
             WHERE code = ? AND trade_date = ? AND dataset = ?
             ORDER BY minute_index
             LIMIT ?
-            """,
-            [_hk_code(code) if hk else _prefixed_code(code), trade_date, "hkminutes" if hk else "minutes", limit],
-            "get_minutes",
+            """
+        params = [
+            _hk_code(code) if hk else _prefixed_code(code),
+            trade_date,
+            "hkminutes" if hk else "minutes",
+            limit,
+        ]
+        rows = (
+            self._hk_minutes.query(sql, params, "get_minutes")
+            if hk
+            else self._a_minutes_source(date_yyyymmdd).query(
+                sql, params, date_yyyymmdd
+            )
         )
         return [{"price": r[0], "volume": r[1]} for r in rows]
 
@@ -303,18 +383,26 @@ class TdxDuckDBClient:
         调用方 trans_rows_to_df 需要能容忍这一列缺失/为空。
         """
         hk = _is_hk(asset_type)
-        src = self._hk_trans if hk else self._trans
         trade_date = f"{date_yyyymmdd[0:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:8]}"
-        rows = src.query(
-            """
+        sql = """
             SELECT time, price, volume, amount, side
             FROM market_transactions
             WHERE code = ? AND trade_date = ? AND dataset = ?
             ORDER BY time
             LIMIT ?
-            """,
-            [_hk_code(code) if hk else _prefixed_code(code), trade_date, "hktrans" if hk else "trans", limit],
-            "get_trans",
+            """
+        params = [
+            _hk_code(code) if hk else _prefixed_code(code),
+            trade_date,
+            "hktrans" if hk else "trans",
+            limit,
+        ]
+        rows = (
+            self._hk_trans.query(sql, params, "get_trans")
+            if hk
+            else self._a_trans_source(date_yyyymmdd).query(
+                sql, params, date_yyyymmdd
+            )
         )
         return [
             {

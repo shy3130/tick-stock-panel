@@ -39,8 +39,8 @@
 | fstore klines DuckDB | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-klines-web.duckdb`） |
 | fstore minutes DuckDB | DuckDB read-only | fstore 分钟 K 线 | `FQUANT_FSTORE_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-minutes-web.duckdb`） |
 | TDX DuckDB | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx.duckdb`） |
-| TDX minutes DuckDB | DuckDB read-only | 分钟 K | `FQUANT_TDX_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-minutes.duckdb`） |
-| TDX trans DuckDB | DuckDB read-only | 逐笔成交 | `FQUANT_TDX_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-trans.duckdb`） |
+| TDX A 股 minutes 路由 | 发布 catalog + DuckDB read-only | 按交易日定位 2023 年前归档或当前 minutes 快照 | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_MINUTES_ARCHIVE}` |
+| TDX A 股 trans 路由 | 发布 catalog + DuckDB read-only | 按交易日定位逐年 trans 快照 | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_TRANS_ARCHIVE}` |
 | TDX HK DuckDB | DuckDB read-only | 港股日 K / 多周期 K | `FQUANT_TDX_HK_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hk-web.duckdb`） |
 | TDX HK minutes DuckDB | DuckDB read-only | 港股分钟 K | `FQUANT_TDX_HK_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hkminutes-web.duckdb`） |
 | TDX HK trans DuckDB | DuckDB read-only | 港股逐笔成交 | `FQUANT_TDX_HK_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hktrans-web.duckdb`） |
@@ -153,11 +153,15 @@ export FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/fstore-markets-web.duckdb
 export FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/fstore-klines-web.duckdb
 export FQUANT_FSTORE_MINUTES_DUCKDB_PATH=/Volumes/WD1/fstore-minutes-web.duckdb
 export FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/tdx.duckdb
-export FQUANT_TDX_MINUTES_DUCKDB_PATH=/Volumes/WD1/tdx-minutes.duckdb
-export FQUANT_TDX_TRANS_DUCKDB_PATH=/Volumes/WD1/tdx-trans.duckdb
 export FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/tdx-hk-web.duckdb
 export FQUANT_TDX_HK_MINUTES_DUCKDB_PATH=/Volumes/WD1/tdx-hkminutes-web.duckdb
 export FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/tdx-hktrans-web.duckdb
+
+# A 股 minutes/trans 按日期从 engine 发布的 catalog 解析；测试和 staging 可重定向各 root
+export FQUANT_SNAPSHOT_ROOT_CATALOG=/Volumes/WD1/snapshots/catalog
+export FQUANT_SNAPSHOT_ROOT_ENGINE_A=/Volumes/WD1/snapshots/engine-a
+export FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE=/Volumes/WD1/snapshots/engine-a-minutes-archive
+export FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE=/Volumes/WD1/snapshots/engine-a-trans-archive
 
 # 可选：AI
 export AI_PROVIDER=openai_compat
@@ -214,7 +218,8 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 | fquant/fquant_local 模式下 realtime 接口返回空 | 检查 `fstore-markets-web.duckdb` 的 `daily_markets` 覆盖 |
 | fquant 模式下 depth 接口返回空 | 正常降级（当前 provider 不暴露 depth capability） |
 | fquant_local 盘后管道不生成 `kline_daily` | 正常：stock raw mirror 被 repository 层禁写；只生成/更新 `kline_daily_enriched` |
-| fquant_local freshness 落后 | 检查 `/Volumes/WD1/fstore*.duckdb`、`/Volumes/WD1/tdx*.duckdb` 是否更新 |
+| A 股 minutes/trans 返回空并出现 catalog warning | 检查 catalog 的 `current.json`、目标 root 的 generation，以及 `require_current` 路由是否与目标 root 当前 generation 一致；该路径刻意不降级 raw |
+| fquant_local 其它数据 freshness 落后 | 检查 `/Volumes/WD1/fstore*.duckdb`、`/Volumes/WD1/tdx*.duckdb` 是否更新 |
 
 ---
 
@@ -243,6 +248,6 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ---
 
-**最后更新**：2026-07-02（与 README 同步首版）
+**最后更新**：2026-07-13（补充 engine 发布 route catalog 的 A 股 minutes/trans 读路径）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

@@ -28,6 +28,12 @@ def test_root_for_unknown_logical_is_none():
     assert gen.root_for("nope") is None
 
 
+def test_date_sharded_logicals_are_resolved_only_by_catalog():
+    assert gen.root_for("tdx_minutes_before_2023") is None
+    assert gen.root_for("tdx_minutes_from_2023") is None
+    assert gen.root_for("tdx_trans_2026") is None
+
+
 def test_root_for_honours_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(tmp_path))
     assert gen.root_for("tdx") == str(tmp_path)

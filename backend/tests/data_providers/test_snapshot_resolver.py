@@ -62,9 +62,11 @@ def test_snapshot_or_raw_unknown_path_is_raw():
     assert sr.snapshot_or_raw(raw) == raw
 
 
-def test_snapshot_or_raw_known_path_without_snapshot_is_raw():
-    # Known production path but no snapshot published on disk -> raw fallback.
+def test_snapshot_or_raw_known_path_without_snapshot_is_raw(tmp_path, monkeypatch):
+    # Isolate the test from a real snapshot that may be published on this host.
     raw = "/Volumes/WD1/tdx.duckdb"
+    missing_root = str(tmp_path / "unpublished-engine-a")
+    monkeypatch.setitem(sr._RAW_TARGETS, raw, (missing_root, "tdx"))
     assert sr.snapshot_or_raw(raw) == raw
 
 

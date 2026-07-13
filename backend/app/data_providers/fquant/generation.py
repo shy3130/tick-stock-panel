@@ -28,7 +28,6 @@ LOGICAL_OWNERS = {
     "minutes": "fstore",
     "tdx": "engine_a",
     "tdx_minutes": "engine_a",
-    "tdx_trans": "engine_a",
     "tdx_chip": "engine_a",
     "tdx_moneyflow_minute": "engine_a",
     "tdx_hk": "engine_hk",

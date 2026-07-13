@@ -5,11 +5,20 @@ import os
 
 import pytest
 
-from app.data_providers.fquant.tdx_duckdb_client import TdxDuckDBClient, _prefixed_code
+from app.data_providers.fquant import catalog_resolver
+from app.data_providers.fquant.lease import ConnectionSet
+from app.data_providers.fquant.tdx_duckdb_client import (
+    TdxDuckDBClient,
+    _CatalogSource,
+    _prefixed_code,
+)
 
 TDX_PATH = "/Volumes/WD1/tdx.duckdb"
 TDX_MINUTES_PATH = "/Volumes/WD1/tdx-minutes.duckdb"
-TDX_TRANS_PATH = "/Volumes/WD1/tdx-trans.duckdb"
+CATALOG_CURRENT = os.path.join(
+    os.getenv("FQUANT_SNAPSHOT_ROOT_CATALOG", "/Volumes/WD1/snapshots/catalog"),
+    "current.json",
+)
 
 
 def test_prefixed_code():
@@ -17,6 +26,87 @@ def test_prefixed_code():
     assert _prefixed_code("000001") == "sz000001"
     assert _prefixed_code("300059") == "sz300059"
     assert _prefixed_code("830799") == "bj830799"
+
+
+class _FakeConnection:
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.closed = False
+
+    def cursor(self) -> _FakeConnection:
+        return self
+
+    def execute(self, _sql: str, _params: list[object]) -> _FakeConnection:
+        return self
+
+    def fetchall(self) -> list[tuple[str]]:
+        return [(self.path,)]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_catalog_source_routes_each_date_and_closes_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    paths = {
+        "20190710": "/snapshots/archive/2019/tdx-trans.duckdb",
+        "20260710": "/snapshots/current/2026/tdx-trans.duckdb",
+    }
+
+    def resolve_route(route_key: str, market: str, trade_date) -> str:
+        assert (route_key, market) == ("tdx_trans", "a")
+        return paths[trade_date.strftime("%Y%m%d")]
+
+    monkeypatch.setattr(catalog_resolver, "resolve_route", resolve_route)
+    opened: list[_FakeConnection] = []
+    source = _CatalogSource("tdx_trans", "a")
+    source._set = ConnectionSet(
+        lambda path: opened.append(_FakeConnection(path)) or opened[-1]
+    )
+
+    assert source.query("SELECT 1", [], "20190710") == [(paths["20190710"],)]
+    assert source.query("SELECT 1", [], "20260710") == [(paths["20260710"],)]
+    assert [connection.path for connection in opened] == list(paths.values())
+    assert opened[0].closed is True
+    assert opened[1].closed is False
+
+    source.close()
+    assert opened[1].closed is True
+
+
+def test_catalog_source_fails_closed_on_catalog_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_args: object) -> str:
+        raise catalog_resolver.StaleCatalogError("stale")
+
+    monkeypatch.setattr(catalog_resolver, "resolve_route", fail)
+    source = _CatalogSource("tdx_minutes", "a")
+    source._set = ConnectionSet(lambda _path: pytest.fail("must not open a raw database"))
+
+    assert source.query("SELECT 1", [], "20260710") == []
+
+
+@pytest.mark.parametrize("date_yyyymmdd", ["bad", "20260230", "20260706junk"])
+def test_catalog_source_rejects_invalid_date_before_resolve_or_open(
+    monkeypatch: pytest.MonkeyPatch, date_yyyymmdd: str
+) -> None:
+    source = _CatalogSource("tdx_minutes", "a")
+    monkeypatch.setattr(
+        source,
+        "_ensure_set",
+        lambda: pytest.fail("invalid date must not initialize connections"),
+    )
+    monkeypatch.setattr(
+        catalog_resolver,
+        "resolve_route",
+        lambda *_args: pytest.fail("invalid date must not resolve a route"),
+    )
+
+    assert source.query("SELECT 1", [], date_yyyymmdd) == []
+
+
+def test_a_share_minutes_and_trans_use_catalog_sources() -> None:
+    client = TdxDuckDBClient()
+    assert client._a_minutes_source("20221231") is client._a_minutes_source("20260710")
+    assert client._a_trans_source("20190710") is client._a_trans_source("20260710")
 
 
 @pytest.mark.skipif(not os.path.exists(TDX_PATH), reason=f"本机没有 {TDX_PATH}")
@@ -49,7 +139,7 @@ def test_get_xdxr_returns_rows_with_aliased_column():
     assert rows[0]["xingquanjia"] is None
 
 
-@pytest.mark.skipif(not os.path.exists(TDX_MINUTES_PATH), reason=f"本机没有 {TDX_MINUTES_PATH}")
+@pytest.mark.skipif(not os.path.exists(CATALOG_CURRENT), reason="本机没有已发布 route catalog")
 def test_get_minutes_returns_price_volume_shape():
     client = TdxDuckDBClient()
     rows = client.get_minutes("600519", "20260706", limit=5)
@@ -57,7 +147,7 @@ def test_get_minutes_returns_price_volume_shape():
     assert set(rows[0].keys()) == {"price", "volume"}
 
 
-@pytest.mark.skipif(not os.path.exists(TDX_TRANS_PATH), reason=f"本机没有 {TDX_TRANS_PATH}")
+@pytest.mark.skipif(not os.path.exists(CATALOG_CURRENT), reason="本机没有已发布 route catalog")
 def test_get_trans_returns_rows_with_expected_shape():
     client = TdxDuckDBClient()
     rows = client.get_trans("600519", "20260706", limit=10)
