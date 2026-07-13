@@ -129,7 +129,7 @@ export function StrategyCard({
             {description && (
               <span className="text-[10px] text-muted leading-tight mt-0.5 line-clamp-1">{description}</span>
             )}
-            {count != null && (
+            {count != null && !loading && (
               <div className="mt-1.5 flex items-center gap-2">
                 <div className="flex items-center gap-1">
                   <span className={`text-sm font-mono font-bold tabular-nums ${countCls}`}>{count}</span>
@@ -164,7 +164,7 @@ export function StrategyCard({
             <div className="flex items-center gap-1.5 min-w-0">
               <span className={`text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 ${badgeCls}`}>{srcLabel}</span>
               <span className="text-xs font-medium truncate text-foreground">{name}</span>
-              {count != null && (
+              {count != null && !loading && (
                 <span className={`text-xs font-mono font-bold tabular-nums shrink-0 ${countCls}`}>{count}</span>
               )}
               {loading && <span className="w-5 h-3 rounded bg-elevated animate-pulse shrink-0" />}
@@ -197,7 +197,7 @@ export function StrategyCard({
             className="flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-wait">
             <span className="text-[8px] px-0.5 rounded bg-secondary/10 text-muted border border-border font-medium leading-tight">{srcLabel}</span>
             <span className="text-[10px] font-medium whitespace-nowrap text-foreground">{name}</span>
-            {count != null && (
+            {count != null && !loading && (
               <span className={`text-xs font-mono font-bold tabular-nums ${countCls}`}>{count}</span>
             )}
             {hasExpired && (

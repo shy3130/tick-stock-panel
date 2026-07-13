@@ -52,7 +52,7 @@ export const LEVEL_GROUPS: { key: LevelType; label: string; color: string }[] = 
   { key: 'keltner_s',label: 'Keltner短期',  color: '#06B6D4' },   // 青(MA20±2ATR 曲线)
   { key: 'keltner_m',label: 'Keltner中期',  color: '#22D3EE' },   // 浅青(MA60±2.5ATR 曲线)
   { key: 'keltner_l',label: 'Keltner长期',  color: '#67E8F9' },   // 更浅青(MA120±3ATR 曲线)
-  { key: 'atr_stop', label: 'ATR止损',  color: '#EF4444' },   // 红(警示)
+  { key: 'atr_stop', label: 'ATR波动通道',  color: '#EF4444' },   // 红(警示)
   { key: 'gap',      label: '缺口位',    color: '#EC4899' },   // 粉
   { key: 'fib',      label: '斐波那契',  color: '#F59E0B' },   // 金
   { key: 'round',    label: '整数关口',  color: '#71717A' },   // 灰(心理位,弱视觉)
@@ -72,8 +72,8 @@ const CURVE_DEFS: { alignedKey: string; group: LevelType; endLabel: string; colo
   { alignedKey: 'keltner_m_lower',group: 'keltner_m', endLabel: 'Keltner中下', color: '#22D3EE', dashed: true },
   { alignedKey: 'keltner_l_upper',group: 'keltner_l', endLabel: 'Keltner长上', color: '#67E8F9', dashed: true },
   { alignedKey: 'keltner_l_lower',group: 'keltner_l', endLabel: 'Keltner长下', color: '#67E8F9', dashed: true },
-  { alignedKey: 'atr_stop',       group: 'atr_stop',  endLabel: 'ATR止损', color: '#EF4444', dashed: true },
-  { alignedKey: 'atr_tp',         group: 'atr_stop',  endLabel: 'ATR止盈', color: '#F87171', dashed: true },
+  { alignedKey: 'atr_stop',       group: 'atr_stop',  endLabel: 'ATR下轨', color: '#EF4444', dashed: true },
+  { alignedKey: 'atr_tp',         group: 'atr_stop',  endLabel: 'ATR上轨', color: '#F87171', dashed: true },
 ]
 
 // ===== 预留:标记 / 区间(后续新闻面、事件区间用) =====
@@ -272,7 +272,7 @@ export function AnalysisKChart({
       })
     }
 
-    // 带状曲线指标(布林带 / Keltner通道 / ATR止损) —— 跟随行情漂移的曲线
+    // 带状曲线指标(布林带 / Keltner通道 / ATR波动通道) —— 跟随行情漂移的曲线
     // 单一数据源 CURVE_DEFS 驱动:每条曲线带 endLabel(右侧端点标签),显示最新数值
     for (const def of CURVE_DEFS) {
       if (!activeTypes.has(def.group)) continue

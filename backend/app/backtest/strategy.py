@@ -45,6 +45,8 @@ class StrategyBacktestConfig:
     mode: Literal["position", "full"] = "position"
     asset_type: str = "stock"
     holding_days: int = 5
+    # 分钟K精确成交: 开启后用当日分钟K确定穿越价/VWAP (需 Pro+ 分钟K能力)
+    minute_fill: bool = False
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
@@ -216,6 +218,7 @@ class StrategyBacktestService:
             score_max=score_max,
             initial_capital=config.initial_capital,
             position_sizing=config.position_sizing,
+            minute_fill=config.minute_fill,
         )
         # 撮合 — full 为全候选独立执行；position 为账户级仓位模拟。
         if config.mode == "full":
@@ -226,9 +229,15 @@ class StrategyBacktestService:
                 matcher_config,
                 progress_cb,
                 cancel_event,
+                entry_signal_ids=entry_signals,
+                exit_signal_ids=exit_signals,
             )
         else:
-            result = self.engine.simulate_portfolio(sim_panel, sim_entry_mask, sim_exit_mask, matcher_config, progress_cb, cancel_event)
+            result = self.engine.simulate_portfolio(
+                sim_panel, sim_entry_mask, sim_exit_mask, matcher_config,
+                progress_cb, cancel_event,
+                entry_signal_ids=entry_signals, exit_signal_ids=exit_signals,
+            )
         timing_ms["simulate"] = round((time.perf_counter() - t_sim) * 1000, 1)
 
         # 检查是否被取消
@@ -637,6 +646,8 @@ class StrategyBacktestService:
             "entry_signal_date": str(t.entry_signal_date) if getattr(t, "entry_signal_date", None) is not None else None,
             "exit_signal_date": str(t.exit_signal_date) if getattr(t, "exit_signal_date", None) is not None else None,
             "blocked_exit_days": getattr(t, "blocked_exit_days", 0),
+            "entry_signal_id": getattr(t, "entry_signal_id", None),
+            "exit_signal_id": getattr(t, "exit_signal_id", None),
         }
 
     @staticmethod

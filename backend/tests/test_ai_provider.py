@@ -3,7 +3,12 @@ from __future__ import annotations
 import httpx
 import openai
 
-from app.services.ai_provider import _format_openai_error, normalize_openai_base_url
+from app.services import ai_provider
+from app.services.ai_provider import (
+    _format_openai_error,
+    _is_temperature_rejected,
+    normalize_openai_base_url,
+)
 
 
 def test_normalize_openai_base_url_adds_v1_for_root_gateway():
@@ -22,6 +27,25 @@ def test_normalize_openai_base_url_strips_chat_completions_path():
     assert normalize_openai_base_url("http://ai.zedbox.cn:8080/v1/chat/completions") == "http://ai.zedbox.cn:8080/v1"
 
 
+def test_normalize_openai_base_url_preserves_glm_v4():
+    """智谱 GLM 用 /api/paas/v4, 不能强制补成 /v4/v1 (会 404)。"""
+    assert normalize_openai_base_url("https://open.bigmodel.cn/api/paas/v4") == "https://open.bigmodel.cn/api/paas/v4"
+
+
+def test_normalize_openai_base_url_strips_chat_completions_from_glm_v4():
+    """用户填完整 /v4/chat/completions 时, 去掉后缀归一化为 /v4。"""
+    assert normalize_openai_base_url("https://open.bigmodel.cn/api/paas/v4/chat/completions") == "https://open.bigmodel.cn/api/paas/v4"
+
+
+def test_normalize_openai_base_url_preserves_other_version_segments():
+    """其它非 v1 版本号 (/v2 等) 也应保持原样。"""
+    assert normalize_openai_base_url("https://example.com/api/v2") == "https://example.com/api/v2"
+
+
+def test_normalize_openai_base_url_strips_trailing_slash():
+    assert normalize_openai_base_url("https://open.bigmodel.cn/api/paas/v4/") == "https://open.bigmodel.cn/api/paas/v4"
+
+
 def test_format_openai_error_hides_html_gateway_body():
     response = httpx.Response(
         504,
@@ -38,7 +62,8 @@ def test_format_openai_error_hides_html_gateway_body():
     assert "Gateway Timeout" not in message
 
 
-def test_format_openai_error_uses_status_message_when_available():
+def test_format_openai_error_prefers_upstream_detail_when_available():
+    """有可读的上游 detail 时优先透出, 而不是用 400 通用文案吞掉。"""
     response = httpx.Response(
         400,
         json={"error": {"message": "model context length exceeded"}},
@@ -52,4 +77,91 @@ def test_format_openai_error_uses_status_message_when_available():
 
     message = _format_openai_error(exc)
 
+    assert message == "AI 服务请求失败(400): model context length exceeded"
+
+
+def test_format_openai_error_falls_back_to_status_message_without_detail():
+    """上游无可读 detail (如 HTML 网关页) 时, 才回落到 400 通用文案。"""
+    response = httpx.Response(
+        400,
+        headers={"content-type": "text/html; charset=utf-8"},
+        text="<!DOCTYPE html><html></html>",
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    exc = openai.BadRequestError("bad request", response=response, body=None)
+
+    message = _format_openai_error(exc)
+
     assert message == "AI 服务请求失败(400): 请求参数无效, 请检查模型名称和上下文长度"
+
+
+def test_is_temperature_rejected_matches_moonshot_message():
+    """Moonshot 对 reasoning 模型报 'only 1 is allowed for this model'。"""
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "invalid temperature: only 1 is allowed for this model"}},
+        request=httpx.Request("POST", "https://api.moonshot.cn/v1/chat/completions"),
+    )
+    exc = openai.BadRequestError(
+        "bad request",
+        response=response,
+        body={"error": {"message": "invalid temperature: only 1 is allowed for this model"}},
+    )
+    assert _is_temperature_rejected(exc) is True
+
+
+def test_is_temperature_rejected_matches_generic_temperature_hint():
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "unsupported parameter: temperature"}},
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    exc = openai.BadRequestError(
+        "bad request", response=response,
+        body={"error": {"message": "unsupported parameter: temperature"}},
+    )
+    assert _is_temperature_rejected(exc) is True
+
+
+def test_is_temperature_rejected_false_for_other_400():
+    """非 temperature 相关的 400 (如 model not found) 不应触发去 temperature 重试。"""
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "model not found"}},
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    exc = openai.BadRequestError(
+        "bad request", response=response,
+        body={"error": {"message": "model not found"}},
+    )
+    assert _is_temperature_rejected(exc) is False
+
+
+def test_is_temperature_rejected_false_for_non_400():
+    response = httpx.Response(
+        401,
+        json={"error": {"message": "invalid api key"}},
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    exc = openai.AuthenticationError("unauthorized", response=response, body=None)
+    assert _is_temperature_rejected(exc) is False
+
+
+def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", "test-path")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example")
+    monkeypatch.setenv("TICKFLOW_API_KEY", "tickflow-secret")
+    monkeypatch.setenv("AI_API_KEY", "ai-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setenv("AUTH_PASSWORD", "password-secret")
+
+    env = ai_provider._codex_process_env(tmp_path / "codex-home")
+
+    assert env["PATH"] == "test-path"
+    assert env["HTTPS_PROXY"] == "http://proxy.example"
+    assert env["NO_COLOR"] == "1"
+    assert env["CODEX_HOME"] == str(tmp_path / "codex-home")
+    assert "TICKFLOW_API_KEY" not in env
+    assert "AI_API_KEY" not in env
+    assert "OPENAI_API_KEY" not in env
+    assert "AUTH_PASSWORD" not in env

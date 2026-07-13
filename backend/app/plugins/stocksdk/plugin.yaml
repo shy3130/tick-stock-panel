@@ -1,13 +1,14 @@
 # stock-sdk 内置可选数据源插件
-# 基于 stock-sdk (Node.js) 的免费 A 股行情, 无需 API Key。
-# Docker 部署已内置 Node 运行时与本插件依赖, 开箱即用;
-# 开发模式下需手动安装依赖: cd backend/app/plugins/stocksdk && npm install
+# ⚠️ 合规提示: 本插件通过 stock-sdk 抓取第三方财经网站(如东方财富)的行情接口,
+#    未经对方授权,可能违反其服务条款并涉及交易所行情版权问题。
+#    Docker 默认不打包(INCLUDE_STOCKSDK=0);启用即视为使用者知悉并自行承担合规责任。
+#    开发模式下需手动安装依赖: cd backend/app/plugins/stocksdk && npm install
 
 name: stocksdk
-display_name: "stock-sdk（免费行情）"
+display_name: "stock-sdk（第三方行情·合规风险自负）"
 runtime: node
 entry: app.plugins.stocksdk.provider:StockSDKProvider
 check: app.plugins.stocksdk.bridge:availability
 datasets: [daily, adj_factor, minute, realtime]
-description: "基于 stock-sdk 的免费 A 股行情, 无需 API Key。日K/除权/分钟/实时全市场。需运行环境含 Node.js 18+。"
-install_hint: "cd backend/app/plugins/stocksdk && npm install(开发模式;Docker 部署已内置)"
+description: "抓取第三方财经网站行情接口(存在版权与反爬风险,使用需自行评估合规责任)。日K/除权/分钟/实时全市场。需运行环境含 Node.js 18+。Docker 默认不打包。"
+install_hint: "Docker 需 --build-arg INCLUDE_STOCKSDK=1 才打包;开发模式: cd backend/app/plugins/stocksdk && npm install"

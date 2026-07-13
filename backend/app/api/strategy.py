@@ -313,14 +313,24 @@ def _py_string(value: str) -> str:
 
 
 def _find_meta_dict(code: str) -> ast.Dict:
+    # 兼容两种 LLM 常见写法:
+    #   META = {...}        → ast.Assign
+    #   META: dict = {...}  → ast.AnnAssign (类型注解, 合法但旧逻辑漏匹配)
     tree = ast.parse(code)
     for node in ast.walk(tree):
+        value = None
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "META":
-                    if not isinstance(node.value, ast.Dict):
-                        raise ValueError("META 必须是字面量字典")
-                    return node.value
+                    value = node.value
+                    break
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
+                and node.target.id == "META":
+            value = node.value
+        if value is not None:
+            if not isinstance(value, ast.Dict):
+                raise ValueError("META 必须是字面量字典")
+            return value
     raise ValueError("找不到 META 字典")
 
 
@@ -585,7 +595,11 @@ async def ai_test(request: Request):
         )
         return {"ok": True, "model": current_ai_model() or current_ai_provider(), "response": text[:80]}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {
+            "ok": False,
+            "error": str(e) or repr(e),
+            "error_type": type(e).__name__,
+        }
 
 
 def _build_prompt(req: BuildRequest) -> str:

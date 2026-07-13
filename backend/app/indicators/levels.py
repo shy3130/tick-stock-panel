@@ -48,7 +48,7 @@ LEVEL_TYPES = {
     "keltner_s": "Keltner短期",  # MA20 ± 2×ATR
     "keltner_m": "Keltner中期",  # MA60 ± 2.5×ATR
     "keltner_l": "Keltner长期",  # MA120 ± 3×ATR(牛熊趋势边界)
-    "atr_stop": "ATR止损",    # close±nATR 动态止盈止损
+    "atr_stop": "ATR波动通道",    # close±nATR 动态波动带(中性命名,非操作指令)
     "gap": "缺口位",          # 未回补跳空缺口
     "fib": "斐波那契",        # 回撤位 0.236~0.786
     "round": "整数关口",      # 心理整数位
@@ -369,16 +369,17 @@ def _keltner_long(df: pl.DataFrame) -> list[dict]:
 
 
 # ================================================================
-# 5. ATR 止损位 —— close ± n × ATR,动态止盈止损
+# 5. ATR 波动通道 —— close ± n × ATR,动态波动带
 # ================================================================
 
 def _atr_stops(df: pl.DataFrame) -> list[dict]:
-    """基于 ATR 的动态止损/止盈位。
+    """基于 ATR 的动态波动通道(close ± n×ATR)。
 
-    ATR 衡量平均真实波幅,close ± n×ATR 是交易者最常用的止损位算法:
-      - 止损位:close - 2×ATR  (跌破即趋势破坏)
-      - 止盈位:close + 2×ATR  (突破即顺势扩展)
-      - 近端波动带:close ± 1.5×ATR (中短期风控参考)
+    ATR 衡量平均真实波幅,close ± n×ATR 刻画围绕现价的波动带边界:
+      - 上轨:close + 2×ATR  (波动上沿)
+      - 下轨:close - 2×ATR  (波动下沿)
+      - 近端波动带:close ± 1.5×ATR (中短期波动参考)
+    命名采用中性"轨道"措辞,客观描述波动范围,不含操作指令。
     """
     if df.is_empty() or "atr_14" not in df.columns:
         return []
@@ -393,10 +394,10 @@ def _atr_stops(df: pl.DataFrame) -> list[dict]:
                 "side": side, "strength": strength}
 
     return [
-        lv(close + 2 * atr, "ATR 止盈(+2)", "resistance", "medium"),
+        lv(close + 2 * atr, "ATR 上轨(+2)", "resistance", "medium"),
         lv(close + 1.5 * atr, "ATR 上轨(+1.5)", "resistance", "weak"),
         lv(close - 1.5 * atr, "ATR 下轨(-1.5)", "support", "weak"),
-        lv(close - 2 * atr, "ATR 止损(-2)", "support", "medium"),
+        lv(close - 2 * atr, "ATR 下轨(-2)", "support", "medium"),
     ]
 
 

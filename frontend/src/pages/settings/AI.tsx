@@ -23,14 +23,39 @@ const INPUT_CLS = `${settingsControlClass} font-mono`
 
 const CODEX_PROVIDER = 'codex_cli'
 const OPENAI_PROVIDER = 'openai_compat'
-const CUSTOM_CODEX_MODEL = '__custom__'
 const CODEX_COMMAND = 'codex'
+const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
+const DEFAULT_CODEX_REASONING_EFFORT = 'xhigh'
+const SAVED_CODEX_OPTION_VALUE = '__saved_codex_config__'
 
-const CODEX_MODEL_OPTIONS = [
-  { label: 'Codex 默认（推荐）', value: '', hint: '使用当前 Codex CLI 支持的默认模型' },
-  { label: 'gpt-5.5', value: 'gpt-5.5', hint: '高能力模型' },
-  { label: 'gpt-5', value: 'gpt-5', hint: '通用模型' },
+const CODEX_REASONING_LABELS: Record<string, string> = {
+  high: '高',
+  xhigh: '极高',
+}
+
+type CodexModelOption = {
+  label: string
+  value: string
+  model: string
+  effort: string
+  hint: string
+}
+
+const CODEX_MODEL_OPTIONS: CodexModelOption[] = [
+  { label: 'GPT-5.6 Sol · 极高（推荐）', value: 'gpt-5.6-sol:xhigh', model: 'gpt-5.6-sol', effort: 'xhigh', hint: '旗舰档，适合复杂金融分析与专业任务' },
+  { label: 'GPT-5.6 Terra · 极高', value: 'gpt-5.6-terra:xhigh', model: 'gpt-5.6-terra', effort: 'xhigh', hint: '平衡智能、速度与使用成本' },
+  { label: 'GPT-5.6 Luna · 极高', value: 'gpt-5.6-luna:xhigh', model: 'gpt-5.6-luna', effort: 'xhigh', hint: '适合成本敏感与高频分析任务' },
+  { label: 'gpt-5.5 · 高', value: 'gpt-5.5:high', model: 'gpt-5.5', effort: 'high', hint: '使用 gpt-5.5 + high 推理档' },
+  { label: 'gpt-5.5 · 极高', value: 'gpt-5.5:xhigh', model: 'gpt-5.5', effort: 'xhigh', hint: '使用 gpt-5.5 + xhigh 推理档' },
+  { label: '跟随本机 Codex 默认', value: '', model: '', effort: '', hint: '使用本机 Codex CLI 配置的默认模型与推理强度' },
 ]
+
+const codexModelLabel = (model?: string, effort?: string) => {
+  if (!model && !effort) return '默认模型'
+  const modelLabel = model || '默认模型'
+  const effortLabel = effort ? CODEX_REASONING_LABELS[effort] ?? effort : ''
+  return effortLabel ? `${modelLabel} · ${effortLabel}` : modelLabel
+}
 
 type AiPreset = {
   label: string
@@ -55,7 +80,7 @@ const CODEX_PRESET: AiPreset = {
   label: 'Codex CLI',
   provider: CODEX_PROVIDER,
   url: '',
-  model: '',
+  model: DEFAULT_CODEX_MODEL,
   codexCommand: CODEX_COMMAND,
   website: 'https://developers.openai.com/codex/noninteractive',
   websiteLabel: 'codex exec',
@@ -71,7 +96,7 @@ export function SettingsAIPanel() {
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
-  const [codexCustomModel, setCodexCustomModel] = useState(false)
+  const [codexReasoningEffort, setCodexReasoningEffort] = useState('')
   const [codexCommand, setCodexCommand] = useState(CODEX_COMMAND)
   const [customUa, setCustomUa] = useState(false)
   const [userAgent, setUserAgent] = useState('')
@@ -87,7 +112,28 @@ export function SettingsAIPanel() {
   const selectedPreset = !isCodexProvider
     ? PRESETS.find(p => p.url === baseUrl && p.model === model)
     : undefined
-  const codexModelSelectValue = codexCustomModel ? CUSTOM_CODEX_MODEL : model
+  const savedCodexModel = savedCodexProvider ? (s?.ai_model ?? '') : ''
+  const savedCodexEffort = savedCodexProvider ? (s?.ai_codex_reasoning_effort ?? '') : ''
+  const savedCodexOptionKnown = CODEX_MODEL_OPTIONS.some(option =>
+    option.model === savedCodexModel && option.effort === savedCodexEffort,
+  )
+  const savedCodexOption: CodexModelOption | null =
+    (savedCodexModel || savedCodexEffort) && !savedCodexOptionKnown
+      ? {
+          label: `${codexModelLabel(savedCodexModel, savedCodexEffort)}（当前配置）`,
+          value: SAVED_CODEX_OPTION_VALUE,
+          model: savedCodexModel,
+          effort: savedCodexEffort,
+          hint: '保留项目中已保存的模型与推理档；此兼容项不可编辑',
+        }
+      : null
+  const codexModelOptions = savedCodexOption
+    ? [savedCodexOption, ...CODEX_MODEL_OPTIONS]
+    : CODEX_MODEL_OPTIONS
+  const selectedCodexModelOption = codexModelOptions.find(option =>
+    option.model === model && option.effort === codexReasoningEffort,
+  ) ?? CODEX_MODEL_OPTIONS[0]
+  const codexModelSelectValue = selectedCodexModelOption.value
   const requiresNewApiKey = !isCodexProvider
     && !!s?.has_ai_key
     && baseUrl.trim().replace(/\/+$/, '') !== (s?.ai_base_url ?? '').trim().replace(/\/+$/, '')
@@ -97,10 +143,11 @@ export function SettingsAIPanel() {
 
   useEffect(() => {
     if (!s) return
+    const unconfigured = !s.has_ai_key && !s.ai_configured
     setProvider(s.ai_provider ?? OPENAI_PROVIDER)
-    setBaseUrl(s.ai_base_url ?? '')
-    setModel(s.ai_model ?? '')
-    setCodexCustomModel(!!s.ai_model && !CODEX_MODEL_OPTIONS.some(o => o.value === s.ai_model))
+    setBaseUrl(unconfigured ? '' : (s.ai_base_url ?? ''))
+    setModel(unconfigured ? '' : (s.ai_model ?? ''))
+    setCodexReasoningEffort(unconfigured ? '' : (s.ai_codex_reasoning_effort ?? ''))
     setCodexCommand(s.ai_codex_command ?? CODEX_COMMAND)
     const ua = s.ai_user_agent ?? ''
     setCustomUa(!!ua)
@@ -113,6 +160,7 @@ export function SettingsAIPanel() {
     api_key: apiKey || undefined,
     model,
     codex_command: isCodexProvider ? CODEX_COMMAND : codexCommand,
+    codex_reasoning_effort: isCodexProvider ? codexReasoningEffort : '',
     user_agent: customUa ? userAgent : '',
   })
 
@@ -127,6 +175,7 @@ export function SettingsAIPanel() {
         ai_base_url: baseUrl,
         ai_model: result.ai_model ?? model,
         ai_codex_command: result.ai_codex_command ?? (isCodexProvider ? CODEX_COMMAND : codexCommand),
+        ai_codex_reasoning_effort: result.ai_codex_reasoning_effort ?? (isCodexProvider ? codexReasoningEffort : ''),
         ai_configured: result.ai_configured ?? (isCodexProvider ? true : (apiKey ? true : prev.ai_configured)),
         ...(apiKey ? {
           has_ai_key: true,
@@ -146,7 +195,7 @@ export function SettingsAIPanel() {
       setBaseUrl('')
       setApiKey('')
       setModel('')
-      setCodexCustomModel(false)
+      setCodexReasoningEffort('')
       setCodexCommand(CODEX_COMMAND)
       setTestResult(null)
       qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
@@ -155,6 +204,7 @@ export function SettingsAIPanel() {
         ai_base_url: '',
         ai_model: '',
         ai_codex_command: CODEX_COMMAND,
+        ai_codex_reasoning_effort: '',
         has_ai_key: false,
         ai_configured: false,
         ai_api_key_masked: '',
@@ -178,7 +228,7 @@ export function SettingsAIPanel() {
     setProvider(p.provider ?? OPENAI_PROVIDER)
     setBaseUrl(p.url)
     setModel(p.model)
-    setCodexCustomModel(false)
+    setCodexReasoningEffort(p.provider === CODEX_PROVIDER ? DEFAULT_CODEX_REASONING_EFFORT : '')
     setTestResult(null)
     if (p.codexCommand) setCodexCommand(CODEX_COMMAND)
   }
@@ -222,7 +272,7 @@ export function SettingsAIPanel() {
             <div className="text-xs text-muted mt-0.5 truncate">
               {configured
                 ? (savedCodexProvider
-                  ? `${s?.ai_codex_command ?? CODEX_COMMAND} · ${s?.ai_model || '默认模型'}`
+                  ? `${s?.ai_codex_command ?? CODEX_COMMAND} · ${codexModelLabel(s?.ai_model, s?.ai_codex_reasoning_effort)}`
                   : `${s?.ai_model} · ${s?.ai_api_key_masked}`)
                 : (isCodexProvider ? '使用本机 codex exec, 此处无需填写 API Key。' : '配置 API Key 后即可使用 AI 功能。')}
             </div>
@@ -284,39 +334,23 @@ export function SettingsAIPanel() {
                 </div>
               </Field>
               <Field
-                label="模型（可选）"
-                hint={codexCustomModel
-                  ? '留空则使用 Codex 默认模型'
-                  : CODEX_MODEL_OPTIONS.find(o => o.value === model)?.hint}
+                label="模型 / 推理档"
+                hint={selectedCodexModelOption.hint}
               >
                 <select
                   value={codexModelSelectValue}
                   onChange={e => {
                     const value = e.target.value
-                    if (value === CUSTOM_CODEX_MODEL) {
-                      setCodexCustomModel(true)
-                      if (CODEX_MODEL_OPTIONS.some(o => o.value === model)) setModel('')
-                    } else {
-                      setCodexCustomModel(false)
-                      setModel(value)
-                    }
+                    const option = codexModelOptions.find(item => item.value === value) ?? CODEX_MODEL_OPTIONS[0]
+                    setModel(option.model)
+                    setCodexReasoningEffort(option.effort)
                   }}
                   className={INPUT_CLS}
                 >
-                  {CODEX_MODEL_OPTIONS.map(option => (
-                    <option key={option.label} value={option.value}>{option.label}</option>
+                  {codexModelOptions.map(option => (
+                    <option key={option.value || 'codex-local-default'} value={option.value}>{option.label}</option>
                   ))}
-                  <option value={CUSTOM_CODEX_MODEL}>自定义模型</option>
                 </select>
-                {codexCustomModel && (
-                  <input
-                    type="text"
-                    value={model}
-                    onChange={e => setModel(e.target.value)}
-                    placeholder="例如 gpt-5.5"
-                    className={`${INPUT_CLS} mt-2`}
-                  />
-                )}
               </Field>
             </div>
           ) : (

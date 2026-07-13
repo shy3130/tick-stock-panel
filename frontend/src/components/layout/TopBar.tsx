@@ -42,7 +42,7 @@ export function TopBar({ collapsed, forcedByViewport = false, reconnecting = fal
             className="flex min-w-0 items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-2.5 py-1 text-[11px] font-medium text-warning"
           >
             <WifiOff className="h-3 w-3 shrink-0 animate-pulse" />
-            <span className="hidden truncate sm:inline">实时连接断开 · 重连中</span>
+            <span className="hidden truncate sm:inline">与服务连接已断开 · 正在重连</span>
             <span className="truncate sm:hidden">重连中</span>
           </div>
         )}

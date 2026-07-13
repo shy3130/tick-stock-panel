@@ -188,7 +188,7 @@ function DisclaimerStep({ onNext }: { onNext: () => void }) {
             <p>
               本项目为<strong className="text-warning">个人开源项目</strong>,<span className="text-warning">非</span>
               <a
-                href="https://tickflow.org/auth/register?ref=V3KDKGXPEA"
+                href="https://tickflow.org"
                 target="_blank"
                 rel="noreferrer"
                 className="text-accent hover:underline font-medium inline-flex items-baseline gap-0.5"
@@ -196,13 +196,13 @@ function DisclaimerStep({ onNext }: { onNext: () => void }) {
                 TickFlow
                 <ExternalLink className="h-3 w-3 self-center" />
               </a>
-              <span className="text-warning">官方项目</span>,与 TickFlow 官方无任何隶属或合作关系。
+              <span className="text-warning">官方项目</span>。本项目独立维护，当前支持 TickFlow 数据服务。
             </p>
             <p>
               仅供学习研究使用,不构成任何投资建议。股市有风险,使用本项目产生的任何盈亏由使用者自行承担。
             </p>
             <p>
-              本项目面向个人学习与研究,不建议用于<strong className="text-warning">商业用途</strong>。如确有商用需求,请自行评估相关风险与合规要求。
+              本项目基于 MIT 协议开源。使用本项目时,请遵守数据源(TickFlow 等)的服务条款;stock-sdk 等第三方接口插件存在版权与反爬风险,使用需自行评估合规责任。
             </p>
           </div>
         </div>

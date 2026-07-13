@@ -18,7 +18,6 @@ const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.B
 const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
-const Trading = lazy(() => import('./pages/Trading').then(m => ({ default: m.Trading })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
 const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
 const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
@@ -119,7 +118,6 @@ export const router = createBrowserRouter([
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
-      { path: 'trading', element: <Trading /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },
       { path: 'branding', element: <Branding /> },

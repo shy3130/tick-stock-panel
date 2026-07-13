@@ -489,9 +489,10 @@ def run_now(
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
         minute_symbols = _resolve_minute_symbols(capset)
-        def _minute_chunk_progress(cur: int, tot: int) -> None:
+        def _minute_chunk_progress(cur: int, tot: int, seg_label: str = "") -> None:
             emit("sync_minute", 90 + int(3 * cur / tot),
-                 f"分钟K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+                 f"分钟K 批次 {cur}/{tot}" + (f" [{seg_label}]" if seg_label else ""),
+                 stage_pct=int(100 * cur / tot), skip_log=True)
         written_minute = kline_sync.sync_and_persist_minute(
             minute_symbols, repo, capset, days=minute_days,
             on_chunk_done=_minute_chunk_progress,

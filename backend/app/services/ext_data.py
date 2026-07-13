@@ -451,10 +451,23 @@ def parse_upload_file(file_path: Path, symbol_col: str = "symbol", data_dir: Pat
 
 
 def cast_df_to_schema(df: pl.DataFrame, fields: list[ExtField]) -> pl.DataFrame:
-    """按配置的字段类型转换 DataFrame 列类型。"""
+    """按配置的字段类型转换 DataFrame 列类型。
+
+    List → string 的处理: 上游接口常返回数组字段 (如 concepts: ["AI", "芯片"]),
+    若声明为 string, 直接 cast 会抛 `cannot cast List type`。
+    这里把列表元素先转字符串再以分号拼接, 与 _flatten_concept_rows 保持一致。
+    """
+    schema = df.schema
     for f in fields:
-        if f.name in df.columns:
-            target = _POLARS_DTYPE_MAP.get(f.dtype, pl.Utf8)
+        if f.name not in df.columns:
+            continue
+        target = _POLARS_DTYPE_MAP.get(f.dtype, pl.Utf8)
+        src = schema[f.name]
+        if isinstance(src, pl.List) and target == pl.Utf8:
+            df = df.with_columns(
+                pl.col(f.name).cast(pl.List(pl.Utf8)).list.join(";").cast(target)
+            )
+        else:
             df = df.with_columns(pl.col(f.name).cast(target))
     return df
 

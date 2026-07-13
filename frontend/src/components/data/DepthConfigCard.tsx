@@ -8,7 +8,7 @@ import { isExpertOrAbove } from '@/lib/capability-labels'
 /**
  * 五档盘口 sealed(真假涨停) 配置内容(纯内容, 无外框, 由父级 Card 包裹)。
  *
- * - 轮询间隔: Pro 10~120s / Expert 3~300s
+ * - 轮询间隔: Pro 10~120s / Expert 3~120s
  * - 盘后定版时间: 15:01~18:00, 默认 15:02
  * - disabled 时(监控关闭)输入框禁用
  */
@@ -20,9 +20,9 @@ export function DepthConfigContent({ disabled }: { disabled?: boolean }) {
 
   const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
   const tierLabel = caps.data?.label ?? ''
-  const range = isExpertOrAbove(tierLabel) ? { lo: 3, hi: 300 } : { lo: 10, hi: 120 }
+  const range = isExpertOrAbove(tierLabel) ? { lo: 3, hi: 120 } : { lo: 10, hi: 120 }
 
-  const interval = prefs.data?.depth_polling_interval ?? 20
+  const interval = prefs.data?.depth_polling_interval ?? 10
   const finalizeTime = prefs.data?.depth_finalize_time ?? { hour: 15, minute: 2 }
 
   const [intervalInput, setIntervalInput] = useState(String(Math.round(interval)))

@@ -144,6 +144,10 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "signal_macd_dead":        "MACD死叉 (DIF下穿DEA)",
     "signal_ma20_breakout":    "收盘突破MA20上方",
     "signal_ma20_breakdown":   "收盘跌破MA20下方",
+    "signal_ma5_breakout":     "收盘突破MA5上方",
+    "signal_ma5_breakdown":    "收盘跌破MA5下方",
+    "signal_ma10_breakout":    "收盘突破MA10上方",
+    "signal_ma10_breakdown":   "收盘跌破MA10下方",
     "signal_n_day_high":       "创60日新高",
     "signal_n_day_low":        "创60日新低",
     "signal_boll_breakout_upper": "突破布林上轨",
@@ -567,6 +571,18 @@ def compute_signals(df: pl.DataFrame) -> pl.DataFrame:
         ((pl.col("close") < pl.col("ma20")) &
          (pl.col("close").shift(1).over("symbol") >= pl.col("ma20").shift(1).over("symbol")))
             .alias("signal_ma20_breakdown"),
+        ((pl.col("close") > pl.col("ma5")) &
+         (pl.col("close").shift(1).over("symbol") <= pl.col("ma5").shift(1).over("symbol")))
+            .alias("signal_ma5_breakout"),
+        ((pl.col("close") < pl.col("ma5")) &
+         (pl.col("close").shift(1).over("symbol") >= pl.col("ma5").shift(1).over("symbol")))
+            .alias("signal_ma5_breakdown"),
+        ((pl.col("close") > pl.col("ma10")) &
+         (pl.col("close").shift(1).over("symbol") <= pl.col("ma10").shift(1).over("symbol")))
+            .alias("signal_ma10_breakout"),
+        ((pl.col("close") < pl.col("ma10")) &
+         (pl.col("close").shift(1).over("symbol") >= pl.col("ma10").shift(1).over("symbol")))
+            .alias("signal_ma10_breakdown"),
         (pl.col("close") >= pl.col("high_60d")).alias("signal_n_day_high"),
         (pl.col("close") <= pl.col("low_60d")).alias("signal_n_day_low"),
         (pl.col("close") > pl.col("boll_upper")).alias("signal_boll_breakout_upper"),
@@ -1432,6 +1448,7 @@ def compute_enriched_today(
         sig_prev = prev_enriched.select(
             "symbol",
             pl.col("ma5").alias("_prev_ma5"),
+            pl.col("ma10").alias("_prev_ma10"),
             pl.col("ma20").alias("_prev_ma20"),
             pl.col("ma60").alias("_prev_ma60"),
             pl.col("macd_dif").alias("_prev_dif"),
@@ -1460,6 +1477,16 @@ def compute_enriched_today(
                 .alias("signal_ma20_breakout"),
             ((pl.col("close") < pl.col("ma20")) & (pl.col("_prev_close_enriched") >= pl.col("_prev_ma20")))
                 .alias("signal_ma20_breakdown"),
+            # MA5 突破/跌破
+            ((pl.col("close") > pl.col("ma5")) & (pl.col("_prev_close_enriched") <= pl.col("_prev_ma5")))
+                .alias("signal_ma5_breakout"),
+            ((pl.col("close") < pl.col("ma5")) & (pl.col("_prev_close_enriched") >= pl.col("_prev_ma5")))
+                .alias("signal_ma5_breakdown"),
+            # MA10 突破/跌破
+            ((pl.col("close") > pl.col("ma10")) & (pl.col("_prev_close_enriched") <= pl.col("_prev_ma10")))
+                .alias("signal_ma10_breakout"),
+            ((pl.col("close") < pl.col("ma10")) & (pl.col("_prev_close_enriched") >= pl.col("_prev_ma10")))
+                .alias("signal_ma10_breakdown"),
             # BOLL 突破
             (pl.col("close") >= pl.col("boll_upper")).alias("signal_boll_breakout_upper"),
             (pl.col("close") <= pl.col("boll_lower")).alias("signal_boll_breakdown_lower"),
@@ -1503,9 +1530,15 @@ def compute_enriched_today(
     ]
     df = df.drop([c for c in drop_cols if c in df.columns])
 
-    # 自定义信号（日级实时路径同样注入）
+    # 自定义信号（日级实时路径同样注入, 但不支持日期偏移条件 → allow_shift=False）
     from app.strategy import custom_signals
-    df = custom_signals.inject(df, _get_custom_signal_exprs())
+    try:
+        sigs = custom_signals.load_all(settings.data_dir)
+        today_exprs = custom_signals.build_expressions(sigs, allow_shift=False)
+    except Exception as e:
+        logger.warning("custom signals load failed (today): %s", e)
+        today_exprs = {}
+    df = custom_signals.inject(df, today_exprs)
 
     # 清理 NaN / Inf
     float_cols = [c for c in df.columns if df[c].dtype.is_float()]

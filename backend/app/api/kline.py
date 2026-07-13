@@ -579,10 +579,13 @@ def refresh_views(request: Request):
 
 @router.post("/sync_minute")
 async def sync_minute(request: Request):
-    """手动触发分钟 K 同步(全市场)。返回 pipeline job_id 可轮询进度。"""
+    """手动触发分钟 K 同步(全市场)。返回 pipeline job_id 可轮询进度。
+
+    body 可选: { "days": int } — 指定拉取天数 (不传则用偏好设置)。
+    """
     import asyncio
 
-    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
+    from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot, LONG_JOB_TIMEOUT_S
     from app.api.data import invalidate_storage_cache
     from app.services.preferences import get_minute_sync_days
     from app.tickflow.capabilities import Cap
@@ -594,7 +597,18 @@ async def sync_minute(request: Request):
     if not _minute_allowed(capset):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
 
-    job_id, is_new = job_store.create()
+    # 可选 body: { "days": int, "extend": bool }
+    # days: 拉取天数; extend: 向前扩展模式 (从最早数据往前补)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        pass
+    override_days = body.get("days")
+    extend_flag = body.get("extend")
+
+    # 分钟K全市场同步是长任务(数据量是日K的 ~240 倍),用更宽松的卡死阈值
+    job_id, is_new = job_store.create(timeout_s=LONG_JOB_TIMEOUT_S)
     if not is_new:
         return {"status": "reused", "job_id": job_id}
 
@@ -622,10 +636,21 @@ async def sync_minute(request: Request):
                     pass
             progress("sync_minute", 10, f"标的池 {len(universe)} 只")
 
-            days = get_minute_sync_days()
+            days = override_days if override_days else get_minute_sync_days()
+            # extend=1 → 向前扩展; days>=365 也自动向前扩展
+            extend_backward = bool(extend_flag) or days >= 365
+
+            def _on_chunk(done: int, total: int, seg_label: str) -> None:
+                # 进度映射: 10% (标的池解析完) → 95%, 留 5% 给写入+刷新
+                pct = 10 + int((done / max(total, 1)) * 85)
+                progress("sync_minute", pct, f"拉取分钟K… {done}/{total} 批 [{seg_label}]")
 
             def _run():
-                return kline_sync.sync_and_persist_minute(universe, repo, capset, days=days)
+                return kline_sync.sync_and_persist_minute(
+                    universe, repo, capset, days=days,
+                    extend_backward=extend_backward,
+                    on_chunk_done=_on_chunk,
+                )
 
             written = await loop.run_in_executor(_long_task_executor, _run)
 
@@ -644,6 +669,79 @@ async def sync_minute(request: Request):
 
     asyncio.create_task(task())
     return {"status": "started", "job_id": job_id}
+
+
+@router.post("/sync_minute_single")
+async def sync_minute_single(request: Request, body: dict):
+    """手动拉取单只股票的分钟K并落库 (前复权)。
+
+    body: { "symbol": "000001.SZ" }
+    用于个股分时图"获取数据"按钮: 本地无数据时单独拉取并持久化。
+    """
+    from app.services.preferences import get_minute_sync_days
+    from app.tickflow.capabilities import Cap
+
+    symbol = body.get("symbol", "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol 不能为空")
+
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+
+    if not _minute_allowed(capset):
+        raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
+
+    days = get_minute_sync_days()
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        return kline_sync.sync_and_persist_minute([symbol], repo, capset, days=days)
+
+    written = await loop.run_in_executor(_long_task_executor, _run)
+
+    # 刷新视图
+    from app.jobs.daily_pipeline import _refresh_single_view
+    _refresh_single_view(repo, "kline_minute")
+
+    return {"status": "ok", "symbol": symbol, "rows": written}
+
+
+@router.post("/clear_minute")
+async def clear_minute(request: Request):
+    """清空全部分钟K数据 (仅 kline_minute, 不影响其他数据)。
+
+    删除 data/kline_minute/ 下所有分区 parquet, 刷新视图。
+    需二次确认: body { "confirm": true }。
+    """
+    import shutil
+
+    body = await request.json() if request.method == "POST" else {}
+    if not body.get("confirm"):
+        raise HTTPException(status_code=400, detail="需传 confirm: true 以确认清空")
+
+    repo = request.app.state.repo
+    minute_dir = repo.store.data_dir / "kline_minute"
+
+    # 统计待删除行数 (用于返回)
+    removed = 0
+    if minute_dir.exists():
+        try:
+            result = repo.db.execute("SELECT COUNT(*) AS cnt FROM kline_minute").fetchone()
+            removed = result[0] if result else 0
+        except Exception:  # noqa: BLE001
+            pass
+        # 仅删 kline_minute 目录, 绝不触碰其他目录
+        shutil.rmtree(minute_dir, ignore_errors=True)
+
+    # 刷新视图 (重建空视图)
+    from app.jobs.daily_pipeline import _refresh_single_view
+    _refresh_single_view(repo, "kline_minute")
+
+    from app.api.data import invalidate_storage_cache
+    invalidate_storage_cache()
+
+    logger.info("minute K cleared: %d rows removed", removed)
+    return {"status": "ok", "removed": removed}
 
 
 @router.post("/extend_history")
@@ -885,196 +983,3 @@ async def rebuild_enriched(request: Request):
 # 长时间任务专用线程池（隔离于 FastAPI 默认线程池，防止阻塞请求处理）
 import concurrent.futures as _cf
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
-
-
-@router.post("/extend_minute_history")
-async def extend_minute_history(request: Request):
-    """向前扩展分钟K历史数据 — 仅拉数据,不做任何后续处理。
-
-    body: { "value": int, "unit": "day"|"month" }
-    - day 单位:1~15 天(所有有分钟K权限的套餐可用)
-    - month 单位:1~6 月(每月按 30 天计,即最多 180 天)—— 仅 Expert+ 可用
-    返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
-    """
-    import asyncio
-    import traceback as _tb
-    try:
-        body = await request.json()
-        value = body.get("value")
-        unit = body.get("unit", "day")
-        if not value or value <= 0:
-            raise HTTPException(status_code=400, detail="value 必须为正整数")
-        if unit not in ("day", "month"):
-            raise HTTPException(status_code=400, detail="unit 只支持 day/month")
-
-        repo = request.app.state.repo
-        capset = request.app.state.capabilities
-
-        from app.tickflow.capabilities import Cap
-        if not _minute_allowed(capset):
-            raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (batch minute K-line)")
-
-        # month 单位(按月扩展更长的分钟K历史)仅 Expert+ 开放;Pro 仅可用 day
-        if unit == "month":
-            from app.tickflow.policy import tier_label
-            base_tier = tier_label().split()[0].split("+")[0].strip().lower()
-            if base_tier != "expert":
-                raise HTTPException(
-                    status_code=403,
-                    detail="按月扩展分钟K历史需要 Expert 及以上套餐",
-                )
-
-        # 计算天数上限:day 最多 15 天;month 最多 6 月(180 天)
-        from datetime import timedelta
-        if unit == "month":
-            total_days = min(value * 30, 180)
-        else:
-            total_days = min(value, 15)
-
-        if total_days <= 0:
-            raise HTTPException(status_code=400, detail="扩展范围无效")
-
-        from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
-        from app.api.data import invalidate_storage_cache
-
-        job_id, is_new = job_store.create()
-        if not is_new:
-            return {"status": "reused", "job_id": job_id}
-
-        async def task() -> None:
-            if not try_acquire_run_slot():
-                job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
-                return
-            loop = asyncio.get_event_loop()
-
-            def progress(stage: str, pct: int, msg: str,
-                         stage_pct: int | None = None, skip_log: bool = False) -> None:
-                job_store.progress(job_id, stage, pct, msg,
-                                   stage_pct=stage_pct, skip_log=skip_log)
-
-            try:
-                job_store.start(job_id)
-                # 获取当前最早日期
-                earliest = repo.earliest_minute_date()
-                if not earliest:
-                    # 本地无分钟K数据 → 以今天为基准往前获取
-                    from datetime import date as _date
-                    latest = _date.today()
-                else:
-                    latest = earliest
-
-                new_start = latest - timedelta(days=total_days)
-                if new_start >= latest:
-                    job_store.fail(job_id, "扩展范围无效")
-                    invalidate_storage_cache()
-                    return
-
-                start_str = new_start.strftime("%Y-%m-%d")
-                end_str = latest.strftime("%Y-%m-%d")
-
-                progress("extend_minute", 5, "解析标的池…")
-                universe = _resolve_minute_universe(capset, repo)
-                progress("extend_minute", 8, f"标的池: {len(universe)} 只")
-
-                from app.tickflow.capabilities import Cap
-                from app.tickflow.rate_limits import resolve_limit
-
-                limit = resolve_limit(
-                    capset,
-                    Cap.KLINE_MINUTE_BATCH,
-                    default_batch=100,
-                    default_rpm=30,
-                    default_rpm_when_unset=False,
-                )
-
-                def _run():
-                    """全部在 executor 线程里完成,避免阻塞事件循环。"""
-                    from app.services.kline_sync import sync_minute_batch
-                    from datetime import datetime as _dt
-
-                    def _chunk(cur: int, tot: int) -> None:
-                        progress("extend_minute", 8 + int(85 * cur / tot),
-                                 f"分钟K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
-
-                    df = sync_minute_batch(
-                        universe,
-                        start_time=_dt.combine(new_start, _dt.min.time()),
-                        end_time=_dt.combine(latest, _dt.min.time()),
-                        batch_size=limit.batch, rpm=limit.rpm,
-                        on_chunk_done=_chunk,
-                    )
-
-                    written = 0
-                    day_count = 0
-                    if not df.is_empty():
-                        import polars as pl
-                        df = df.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
-                        for day_df in df.partition_by("_trade_date"):
-                            trade_date = day_df["_trade_date"][0]
-                            out = repo.store.data_dir / "kline_minute" / f"date={trade_date}" / "part.parquet"
-                            out.parent.mkdir(parents=True, exist_ok=True)
-                            if out.exists():
-                                existing_df = pl.read_parquet(out)
-                                if "datetime" in existing_df.columns:
-                                    existing_df = existing_df.filter(pl.col("datetime").is_not_null())
-                                day_df = pl.concat([existing_df, day_df.drop("_trade_date")]).unique(
-                                    subset=["symbol", "datetime"], keep="last",
-                                )
-                            else:
-                                day_df = day_df.drop("_trade_date")
-                            day_df = day_df.sort("symbol", "datetime")
-                            from app.services.kline_sync import _atomic_write_parquet
-                            _atomic_write_parquet(day_df, out)
-                            written += day_df.height
-                            day_count += 1
-
-                        # 刷新视图
-                        d = repo.store.data_dir.as_posix()
-                        try:
-                            repo.db.execute(
-                                f"CREATE OR REPLACE VIEW kline_minute AS "
-                                f"SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)"
-                            )
-                        except Exception:
-                            pass
-                    return written, day_count
-
-                progress("extend_minute", 10, f"获取分钟K [{start_str} ~ {end_str}]…")
-                written, day_count = await loop.run_in_executor(_long_task_executor, _run)
-
-                progress("extend_minute", 95, f"分钟K 完成,{day_count} 天")
-                job_store.succeed(job_id, {
-                    "minute_days": day_count,
-                    "universe_size": len(universe),
-                    "earliest_before": (earliest or latest).isoformat(),
-                    "earliest_after": new_start.isoformat(),
-                })
-                invalidate_storage_cache()
-            except Exception as e:
-                logger.exception("extend_minute_history failed: job_id=%s", job_id)
-                job_store.fail(job_id, str(e))
-                invalidate_storage_cache()
-            finally:
-                release_run_slot()
-
-        asyncio.create_task(task())
-        return {"status": "started", "job_id": job_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("extend_minute_history error: %s\n%s", e, _tb.format_exc())
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-def _resolve_minute_universe(capset, repo) -> list[str]:
-    """分钟K标的池解析。"""
-    from app.tickflow.capabilities import Cap
-    if capset.has(Cap.KLINE_MINUTE_BATCH):
-        try:
-            from app.tickflow.pools import get_pool
-            all_a = get_pool("CN_Equity_A", refresh=True)
-            if all_a:
-                return sorted(all_a)
-        except Exception:
-            pass
-    return []

@@ -13,6 +13,7 @@
   pyinstaller packaging/tickflow.spec           # 产物在 dist/TickFlowStockPanel/
 """
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
@@ -48,20 +49,17 @@ for pkg in ("polars", "pyarrow", "duckdb", "fastexcel"):
     binaries += b
     hiddenimports += h
 
-# polars-runtime-32 (rtcompat 兼容内核): release.yml 用 --extra legacy-cpu 安装。
-# 它是独立的伴侣二进制包 (含 .pyd/.so), 与 polars 主包分开发布,
-# collect_all("polars") 抓不到它的目录 —— 必须显式收集, 否则老 CPU 用户
-# 运行时 rtcompat 加载器找不到兼容库仍会崩 (Illegal instruction)。
-# 不存在时 (未装 legacy-cpu) collect_all 返回空, 不影响普通构建。
-try:
-    rt_d, rt_b, rt_h = collect_all("polars_runtime_32")
-    datas += rt_d
-    binaries += rt_b
-    hiddenimports += rt_h
-except Exception:
-    pass
+# Polars 的发行包名为 polars-runtime-32 / polars-runtime-compat, 但实际
+# Python 导入包带前导下划线。release.yml 安装 legacy-cpu 后必须收集二者，
+# 否则 onedir 产物无法在没有 AVX2/FMA 的旧 CPU 上加载兼容内核。
+for pkg in ("_polars_runtime_32", "_polars_runtime_compat"):
+    if find_spec(pkg) is not None:
+        rt_d, rt_b, rt_h = collect_all(pkg)
+        datas += rt_d
+        binaries += rt_b
+        hiddenimports += rt_h
 
-# polars 新 ABI 运行时目录 (_polars_runtime_32) 需显式收集子模块
+# Polars 新 ABI 运行时由加载器选择，需显式收集子模块。
 hiddenimports += collect_submodules("polars")
 
 # ── pywebview 平台后端 (动态导入, PyInstaller 默认抓不到) ────────────

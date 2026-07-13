@@ -447,15 +447,26 @@ function LadderMini({ limit }: { limit: OverviewMarket['limit'] }) {
       </div>
       {tiers.length === 0 && <div className="py-7 text-center text-xs text-muted">暂无 2 板以上</div>}
       <div className="divide-y divide-border/60">
-        {tiers.map(t => (
-          <div key={t.boards} className="grid grid-cols-[42px_1fr_auto] items-center gap-3 py-2">
-            <span className={`font-mono text-sm font-bold ${t.boards >= 5 ? 'text-bull' : t.boards >= 3 ? 'text-accent' : 'text-secondary'}`}>{t.boards}板</span>
-            <div className="h-1.5 overflow-hidden rounded-full bg-elevated">
-              <div className="h-full rounded-full bg-bull/70" style={{ width: `${Math.min(100, t.count * 12)}%` }} />
+        {tiers.map(t => {
+          const stocks = t.stocks ?? []
+          const showStocks = stocks.length > 0 && stocks.length <= 3
+          return (
+            <div key={t.boards} className="py-2">
+              <div className="grid grid-cols-[42px_1fr_auto] items-center gap-3">
+                <span className={`font-mono text-sm font-bold ${t.boards >= 5 ? 'text-bull' : t.boards >= 3 ? 'text-accent' : 'text-secondary'}`}>{t.boards}板</span>
+                <div className="h-1.5 overflow-hidden rounded-full bg-elevated">
+                  <div className="h-full rounded-full bg-bull/70" style={{ width: `${Math.min(100, t.count * 12)}%` }} />
+                </div>
+                <span className="font-mono text-xs font-semibold text-foreground tabular-nums">{t.count}</span>
+              </div>
+              {showStocks && (
+                <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 pl-[54px] text-[10px] text-secondary">
+                  {stocks.map(stock => <span key={stock.symbol}>{stock.name || stock.symbol}</span>)}
+                </div>
+              )}
             </div>
-            <span className="font-mono text-xs font-semibold text-foreground tabular-nums">{t.count}</span>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
@@ -491,7 +502,17 @@ function StockList({ title, rows, mode, onStockClick }: {
           >
             <span className="text-center font-mono text-[10px] text-muted">{idx + 1}</span>
             <div className="min-w-0">
-              <div className="truncate text-xs font-medium text-foreground">{r.name || r.symbol}</div>
+              <div className="flex min-w-0 items-center gap-1">
+                <span className="truncate text-xs font-medium text-foreground">{r.name || r.symbol}</span>
+                {(() => {
+                  const board = boardTag(r.symbol)
+                  return board ? (
+                    <span className={`inline-flex h-3 shrink-0 items-center rounded border px-1 text-[8px] font-bold leading-none ${board.color}`}>
+                      {board.label}
+                    </span>
+                  ) : null
+                })()}
+              </div>
               <div className="font-mono text-[10px] text-muted">{r.symbol}</div>
             </div>
             <div className="text-right">
@@ -533,16 +554,25 @@ function RankColumn({ title, rows, tone, onStockClick }: {
             <span className="text-center font-mono text-[10px] text-muted">{idx + 1}</span>
             <div className="min-w-0">
               <div className="truncate text-xs font-medium text-foreground" title={r.name}>{r.name}</div>
-              <div className="truncate text-[10px] text-muted">
-                {r.count}只 · {r.leader?.symbol ? (
+              <div className="flex min-w-0 items-center gap-1 text-[10px] text-muted">
+                <span className="shrink-0">{r.count}只 ·</span>
+                {r.leader?.symbol ? (
                   <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onStockClick?.(r.leader!.symbol!, r.leader!.name ?? undefined) }}
-                    className="cursor-pointer rounded-sm hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="truncate rounded-sm hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     title={r.leader?.symbol ?? undefined}
                     aria-label={`查看${title}股 ${r.leader?.name ?? r.leader.symbol}`}
                   >{r.leader?.name ?? '—'}</button>
-                ) : r.leader?.name ?? '—'}
+                ) : <span className="truncate">{r.leader?.name ?? '—'}</span>}
+                {r.leader?.symbol && (() => {
+                  const board = boardTag(r.leader.symbol)
+                  return board ? (
+                    <span className={`inline-flex h-3 shrink-0 items-center rounded border px-1 text-[8px] font-bold leading-none ${board.color}`}>
+                      {board.label}
+                    </span>
+                  ) : null
+                })()}
               </div>
             </div>
             <div className={`font-mono text-xs font-semibold tabular-nums ${pctClass(r.avg_pct)}`}>{fmtStockPct(r.avg_pct)}</div>
@@ -968,7 +998,13 @@ export function Dashboard() {
               <KpiCell label="个股涨 / 平 / 跌" value={<><span className="text-bull">{data.breadth.up}</span><span className="text-muted">/</span><span className="text-muted">{data.breadth.flat}</span><span className="text-muted">/</span><span className="text-bear">{data.breadth.down}</span></>} sub={`上涨率 ${data.breadth.up_pct.toFixed(1)}%`} />
               <KpiCell label="强势 / 弱势" value={<><span className="text-bull">{strongUp}</span><span className="text-muted">/</span><span className="text-bear">{strongDown}</span></>} sub="涨跌 ≥3%" />
               <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={isHistorical} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
-              <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={`梯队 ${data.limit.tiers.length}`} tone="accent" />
+              <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
+                const top = data.limit.tiers.find(tier => tier.boards === data.limit.max_boards)
+                const stocks = top?.stocks ?? []
+                return stocks.length > 0 && stocks.length <= 3
+                  ? stocks.map(stock => stock.name || stock.symbol).join(' · ')
+                  : `梯队 ${data.limit.tiers.length}`
+              })()} tone="accent" />
               <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
               <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
             </div>

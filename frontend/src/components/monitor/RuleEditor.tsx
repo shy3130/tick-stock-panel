@@ -392,7 +392,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             </label>
           </div>
           <p className="text-[10px] leading-4 text-muted/70">
-            策略监控自动评估策略的买卖信号。entry=买入信号,exit=卖出信号,both=两者都报。作用范围建议用「全市场」。
+            策略监控自动评估策略的出入场信号。entry=入场信号,exit=出场信号,both=两者都报。作用范围建议用「全市场」。
           </p>
         </div>
       )}
@@ -415,7 +415,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </label>
       </div>
 
-      {/* Webhook 推送 — 飞书 / 企业微信 可用, QMT/ptrade 待定 */}
+      {/* Webhook 推送 — 飞书 / 企业微信 */}
       <div className="rounded-btn border border-border/40 bg-base/40 p-3 space-y-2">
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-medium text-foreground">Webhook 推送</span>
@@ -458,19 +458,6 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             )}
           </label>
 
-          {/* QMT (待定) */}
-          <label className="flex items-center gap-2 cursor-not-allowed opacity-50">
-            <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-            <span className="text-[11px] text-secondary">QMT</span>
-            <span className="rounded bg-muted/10 px-1 py-px text-[9px] text-muted">待定</span>
-          </label>
-
-          {/* ptrade (待定) */}
-          <label className="flex items-center gap-2 cursor-not-allowed opacity-50">
-            <input type="checkbox" disabled className="h-3 w-3 accent-accent" />
-            <span className="text-[11px] text-secondary">ptrade</span>
-            <span className="rounded bg-muted/10 px-1 py-px text-[9px] text-muted">待定</span>
-          </label>
         </div>
 
         {/* 勾选了某渠道但该渠道地址未配置 → 提示前往设置 */}

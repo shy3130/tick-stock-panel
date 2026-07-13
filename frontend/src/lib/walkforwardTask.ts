@@ -1,78 +1,83 @@
 import { useSyncExternalStore } from 'react'
 
-/**
- * 参数优化任务管理 (SSE 模式 + 重连)。镜像 backtestTask, 结果为排名 dict。
- */
+/** Walk-forward 任务管理 (SSE + job_key 回吐 + 重连)。镜像 optimizerTask。 */
 
-export interface OptimizeProgress {
+export interface WFProgress {
   type: string
   done: number
   total: number
-  best_score: number | null
+  fold: number
 }
 
-export interface OptimizeResultRow {
-  params: Record<string, any>
-  objective_raw: number | null
-  stats?: Record<string, any>
-  rank: number
-  error?: string
+export interface WFFold {
+  index: number
+  train_start: string
+  train_end: string
+  test_start: string
+  test_end: string
+  best_params: Record<string, any> | null
+  is_score: number | null
+  oos_objective: number | null
+  oos_degraded: boolean | null
+  oos_stats: Record<string, any>
 }
 
-export interface OptimizeResult {
+export interface WFSummary {
+  n_folds: number
+  compounded_oos_return: number
+  avg_is_objective: number | null
+  avg_oos_objective: number | null
+  degradation: number | null
+  consistency: number
+  oos_equity_curve: { fold: number; date: string; value: number }[]
+}
+
+export interface WalkForwardResult {
   objective: string
   direction: string
-  n_combinations: number
-  n_completed: number
-  best_params: Record<string, any> | null
-  best_score: number | null
-  results: OptimizeResultRow[]
+  n_folds: number
+  n_skipped: number
+  n_planned_folds: number
+  folds: WFFold[]
+  skipped: { index: number; test_start: string; test_end: string; reason: string }[]
+  summary: WFSummary
   elapsed_ms: number
 }
 
-export interface OptimizerTask {
+export interface WalkForwardTask {
   id: number
   isPending: boolean
-  result: OptimizeResult | null
-  progress: OptimizeProgress | null
+  result: WalkForwardResult | null
+  progress: WFProgress | null
   error: string | null
 }
 
-export interface StartOptimizeParams {
+export interface StartWalkForwardParams {
   strategy_id: string
   param_grid: Record<string, any>
   objective: string
-  direction?: string
-  max_workers?: number
+  train_days: number
+  test_days: number
+  step_days: number
   params?: Record<string, any> | null       // 未扫描参数固定为用户当前值
   overrides?: Record<string, any> | null     // 策略当前的 basic_filter/信号/风控覆盖
   symbols?: string[] | null
   start?: string | null
   end?: string | null
-  matching?: string
-  fees_pct?: number
-  commission_pct?: number
-  stamp_tax_pct?: number
-  slippage_bps?: number
-  max_positions?: number
-  max_exposure_pct?: number
-  initial_capital?: number
-  position_sizing?: string
   mode?: 'position' | 'full'
-  holding_days?: number
 }
 
-let current: OptimizerTask | null = null
+let current: WalkForwardTask | null = null
 const listeners = new Set<() => void>()
 let taskSeq = 0
 let eventSource: EventSource | null = null
 let currentJobKey: string | null = null
-let cancelRequested = false      // stop 在拿到 job_key 前被点 -> 收到 job 事件立即补发 cancel
-let reconnectAttempts = 0        // 无 data 断线的连续重连计数, 超上限放弃
+let cancelRequested = false
+let reconnectAttempts = 0
 const MAX_RECONNECT = 5
 
-const RECONNECT_KEY = 'optimizer_reconnect'
-const JOB_KEY_KEY = 'optimizer_job_key'
+const RECONNECT_KEY = 'walkforward_reconnect'
+const JOB_KEY_KEY = 'walkforward_job_key'
 
 function emit() {
   listeners.forEach(fn => fn())
@@ -102,7 +107,6 @@ function connectSSE(url: string): void {
   const es = new EventSource(url)
   eventSource = es
 
-  // 首事件: 后端回吐 job_key, 存下供 cancel 直接引用 (无需前端重算)
   es.addEventListener('job', (e: MessageEvent) => {
     reconnectAttempts = 0
     try {
@@ -110,7 +114,7 @@ function connectSSE(url: string): void {
       if (key) {
         currentJobKey = key
         localStorage.setItem(JOB_KEY_KEY, key)
-        // 竞态修复: stop 在拿到 key 前被点过 -> 现在补发 cancel 真正停后端任务, 再收尾关闭。
+        // 竞态: stop 在拿到 key 前被点过 -> 补发 cancel 真正停后端任务, 再收尾关闭。
         if (cancelRequested) {
           postCancel(key)
           es.close()
@@ -127,7 +131,7 @@ function connectSSE(url: string): void {
     if (current?.id !== id) return
     reconnectAttempts = 0
     try {
-      const prog = JSON.parse(e.data) as OptimizeProgress
+      const prog = JSON.parse(e.data) as WFProgress
       current = { ...current, progress: prog }
       emit()
     } catch { /* ignore */ }
@@ -136,7 +140,7 @@ function connectSSE(url: string): void {
   es.addEventListener('done', (e: MessageEvent) => {
     if (current?.id !== id) return
     try {
-      const result = JSON.parse(e.data) as OptimizeResult
+      const result = JSON.parse(e.data) as WalkForwardResult
       current = { ...current, isPending: false, result, error: null }
       emit()
     } catch {
@@ -154,11 +158,11 @@ function connectSSE(url: string): void {
     if (current?.id !== id) return
     if (e.data) {
       try {
-        const msg = JSON.parse(e.data)?.message ?? '优化出错'
+        const msg = JSON.parse(e.data)?.message ?? 'walk-forward 出错'
         current = { ...current, isPending: false, error: msg }
         emit()
       } catch {
-        current = { ...current, isPending: false, error: '优化出错' }
+        current = { ...current, isPending: false, error: 'walk-forward 出错' }
         emit()
       }
       es.close()
@@ -168,7 +172,7 @@ function connectSSE(url: string): void {
       localStorage.removeItem(JOB_KEY_KEY)
       return
     }
-    // 无 data: 连接异常断开。EventSource 会自动重连, 但设上限避免网络长断时无限 pending。
+    // 无 data: 连接异常断开。EventSource 自动重连, 设上限避免网络长断时无限 pending。
     if (current?.id === id) {
       reconnectAttempts += 1
       if (reconnectAttempts > MAX_RECONNECT) {
@@ -186,14 +190,14 @@ function connectSSE(url: string): void {
 
 /** 调后端 cancel (按回吐的 job_key)。 */
 function postCancel(jobKey: string): void {
-  fetch('/api/backtest/optimize/cancel', {
+  fetch('/api/backtest/walkforward/cancel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ job_key: jobKey }),
   }).catch(() => {})
 }
 
-export function startOptimize(params: StartOptimizeParams): void {
+export function startWalkForward(params: StartWalkForwardParams): void {
   if (eventSource) {
     eventSource.close()
     eventSource = null
@@ -210,34 +214,23 @@ export function startOptimize(params: StartOptimizeParams): void {
     strategy_id: params.strategy_id,
     param_grid: JSON.stringify(params.param_grid),
     objective: params.objective,
-    direction: params.direction,
-    max_workers: params.max_workers,
+    train_days: params.train_days,
+    test_days: params.test_days,
+    step_days: params.step_days,
     params: params.params ? JSON.stringify(params.params) : undefined,
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     symbols: params.symbols?.join(','),
     start: params.start ?? undefined,
     end: params.end ?? undefined,
-    matching: params.matching,
-    fees_pct: params.fees_pct,
-    commission_pct: params.commission_pct,
-    stamp_tax_pct: params.stamp_tax_pct,
-    slippage_bps: params.slippage_bps,
-    max_positions: params.max_positions,
-    max_exposure_pct: params.max_exposure_pct,
-    initial_capital: params.initial_capital,
-    position_sizing: params.position_sizing,
     mode: params.mode,
-    holding_days: params.holding_days,
   })
 
   localStorage.setItem(RECONNECT_KEY, qs)
-  connectSSE(`/api/backtest/optimize/stream?${qs}`)
+  connectSSE(`/api/backtest/walkforward/stream?${qs}`)
 }
 
-export function stopOptimize(): void {
-  // 竞态: 若刚点开始还没收到 job 事件, job_key 尚未到手。标记 cancelRequested ——
-  // 有 key 则立即取消并关闭; 无 key 则保持 SSE 打开, 等 job 事件到达时补发 cancel 再关
-  // (关闭 SSE 不会停后端 daemon 线程, 必须真正 POST cancel)。5s 兜底防 job 事件永不来。
+export function stopWalkForward(): void {
+  // 竞态: job_key 未到手时保持 SSE 打开, 等 job 事件补发 cancel (关 SSE 不停后端 daemon 线程)。
   cancelRequested = true
   const jobKey = currentJobKey ?? localStorage.getItem(JOB_KEY_KEY)
   if (jobKey) {
@@ -247,9 +240,9 @@ export function stopOptimize(): void {
     localStorage.removeItem(RECONNECT_KEY)
     localStorage.removeItem(JOB_KEY_KEY)
   } else if (eventSource) {
-    // 保持连接等 job 事件; 兜底: 5s 后仍没 key 就强关并清 localStorage,
-    // 避免刷新重连到未取消任务。(若期间 job 到达, handler 已清并置 null, 下面条件不成立跳过)
     const es = eventSource
+    // job_key 始终没到手(job 事件未达): 5 秒后放弃并清 localStorage, 避免刷新重连到未取消任务。
+    // (若期间 job 到达, job handler 已 postCancel+清storage 并置 eventSource=null, 下面条件不成立跳过)
     setTimeout(() => {
       if (es === eventSource) {
         es.close(); eventSource = null
@@ -264,21 +257,21 @@ export function stopOptimize(): void {
   }
 }
 
-export function clearOptimize(): void {
+export function clearWalkForward(): void {
   current = null
   emit()
 }
 
-export function tryReconnectOptimize(): boolean {
+export function tryReconnectWalkForward(): boolean {
   const qs = localStorage.getItem(RECONNECT_KEY)
   if (!qs) return false
   const id = ++taskSeq
   current = { id, isPending: true, result: null, progress: null, error: null }
   emit()
-  connectSSE(`/api/backtest/optimize/stream?${qs}`)
+  connectSSE(`/api/backtest/walkforward/stream?${qs}`)
   return true
 }
 
-export function useOptimizerTask(): OptimizerTask | null {
+export function useWalkForwardTask(): WalkForwardTask | null {
   return useSyncExternalStore(subscribe, () => current, () => null)
 }

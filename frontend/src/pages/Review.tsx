@@ -314,7 +314,7 @@ export function Review() {
                   value={focus}
                   onChange={(e) => setFocus(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !isGenerating) generate() }}
-                  placeholder="可选:补充复盘关注点,如「明日是否加仓半导体」「量能是否持续」"
+                  placeholder="可选:补充复盘关注点,如「半导体板块持续性如何」「量能是否持续」"
                   className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted/60"
                 />
                 {focus && (

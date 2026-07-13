@@ -108,11 +108,37 @@ function Free-Port($name, $port) {
 Free-Port 'backend'  $BackendPort
 Free-Port 'frontend' $FrontendPort
 
-# ===== 3. First-time dependency install =====
-if (-not (Test-Path (Join-Path $BackendDir '.venv'))) {
-    Log-Info 'first run - installing Python deps (1-2 min)...'
+# ===== 3. Dependency install =====
+# Match Docker's whitespace-separated BACKEND_EXTRAS behavior so old CPUs can
+# select Polars' rtcompat runtime before the backend starts.
+$BackendExtras = $env:BACKEND_EXTRAS
+if (-not (Test-Path Env:BACKEND_EXTRAS)) {
+    $envFile = Join-Path $Root '.env'
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile) {
+            if ($line -match '^\s*BACKEND_EXTRAS\s*=\s*(.*?)\s*$') {
+                $BackendExtras = $Matches[1]
+                break
+            }
+        }
+    }
+}
+
+$BackendExtraArgs = @()
+if (-not [string]::IsNullOrWhiteSpace($BackendExtras)) {
+    foreach ($extra in ($BackendExtras -split '\s+' | Where-Object { $_ })) {
+        $BackendExtraArgs += '--extra', $extra
+    }
+}
+
+if (-not (Test-Path (Join-Path $BackendDir '.venv')) -or $BackendExtraArgs.Count) {
+    if ($BackendExtraArgs.Count) {
+        Log-Info "syncing Python deps with extras: $BackendExtras"
+    } else {
+        Log-Info 'first run - installing Python deps (1-2 min)...'
+    }
     Push-Location $BackendDir
-    try { & uv sync } finally { Pop-Location }
+    try { & uv sync @BackendExtraArgs } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { Log-Err 'uv sync failed'; exit 1 }
     Log-Ok 'backend deps installed'
 }
@@ -145,6 +171,11 @@ $frontendPidFile = [System.IO.Path]::GetTempFileName()
 
 $backendJob = Start-Job -Name 'backend' -ScriptBlock {
     param($pidFile, $dir, $port)
+    # Start-Job 开的是全新 powershell.exe 子进程, 不继承主进程的 UTF-8 设置,
+    # 默认用系统 ANSI (中文 Windows = GBK/cp936) 解码后端 UTF-8 输出 → 中文乱码。
+    # 这里强制子进程用 UTF-8, 与 app/__init__.py 的 stdout/stderr 编码对齐。
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+    $OutputEncoding           = New-Object System.Text.UTF8Encoding $false
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
     $env:PYTHONUNBUFFERED = '1'
     Set-Location $dir
@@ -153,6 +184,9 @@ $backendJob = Start-Job -Name 'backend' -ScriptBlock {
 
 $frontendJob = Start-Job -Name 'frontend' -ScriptBlock {
     param($pidFile, $dir, $port)
+    # 同上: job 子进程默认 GBK, pnpm/前端工具链也是 UTF-8 输出, 需对齐。
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+    $OutputEncoding           = New-Object System.Text.UTF8Encoding $false
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
     Set-Location $dir
     & pnpm dev --host 0.0.0.0 --port $port 2>&1

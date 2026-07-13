@@ -76,3 +76,65 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
     assert '"id": "ai_inserted"' in code
     assert '"name": "中文名"' in code
     assert '"description": "描述"' in code
+
+
+# --- 回归: LLM 偏移写法 -------------------------------------------------
+# 模型常给 META 加类型注解 (META: dict = {...}, ast.AnnAssign 节点)。
+# 旧版匹配器只遍历 ast.Assign, 漏掉注解形式 → 报「找不到 META 字典」。
+
+ANNOTATED_CODE = '''"""模型返回的策略 (带类型注解的 META — LLM 常见偏移)"""
+import polars as pl
+
+META: dict = {
+    "id": "annotated_wrong_id",
+    "name": "Placeholder",
+    "description": "model desc",
+    "tags": ["AI"],
+    "params": [],
+    "scoring": {},
+}
+
+def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
+    return pl.lit(True)
+'''
+
+
+def test_find_meta_dict_accepts_type_annotated_form():
+    """META: dict = {...} 必须能被识别 (旧版会抛「找不到 META 字典」)。"""
+    from app.api.strategy import _find_meta_dict
+
+    node = _find_meta_dict(ANNOTATED_CODE)
+    assert node is not None  # 能找到就说明没抛异常
+
+
+def test_extract_meta_accepts_type_annotated_form():
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    meta = AIStrategyGenerator._extract_meta(ANNOTATED_CODE)
+    assert meta["id"] == "annotated_wrong_id"
+    assert meta["name"] == "Placeholder"
+
+
+def test_normalize_strategy_meta_works_on_annotated_form():
+    """端到端: AI 生成注解形式 META 时, 规范化不再报「规范化 META 失败」。"""
+    code = _normalize_strategy_meta(
+        ANNOTATED_CODE,
+        "ai_annotated_ok",
+        name="断板反包",
+        description="中文描述",
+    )
+    assert '"id": "ai_annotated_ok"' in code
+    assert '"name": "断板反包"' in code
+    assert '"description": "中文描述"' in code
+    assert "annotated_wrong_id" not in code
+
+
+def test_normalize_build_result_succeeds_on_annotated_form():
+    """模拟前端 /build/stream 的完整结果路径 (之前报错的入口)。"""
+    result = {"code": ANNOTATED_CODE, "meta": {}, "valid": True, "error": None}
+
+    normalized = _normalize_build_result(result, "ai_build_ok")
+
+    assert normalized["valid"] is True
+    assert normalized["error"] is None
+    assert normalized["meta"]["id"] == "ai_build_ok"

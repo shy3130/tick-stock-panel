@@ -22,7 +22,7 @@
 data/data_sources/*.yaml
 ```
 
-在桌面版中,`data/` 位于程序目录旁;在开发环境中,通常是项目根目录的 `data/`。
+Dev 模式下，默认位置是项目根目录的 `data/`；Docker 部署中，项目的 `data/` 会挂载为容器内的 `/app/data`。可通过 `DATA_DIR` 覆盖。
 
 修改 YAML 后可在「设置 -> 数据源」点击「重新加载」,或调用:
 

@@ -653,8 +653,8 @@ export function Data() {
             running={quoteStatus.data?.running ?? false}
             isTrading={quoteStatus.data?.is_trading_hours ?? false}
             lastFetchMs={quoteStatus.data?.last_fetch_ms ?? null}
-            intervalS={quoteInterval.data?.interval ?? quoteStatus.data?.interval_s ?? 10}
-            intervalMin={quoteInterval.data?.min_interval ?? 5}
+            intervalS={quoteInterval.data?.interval ?? quoteStatus.data?.interval_s ?? 6}
+            intervalMin={quoteInterval.data?.min_interval ?? 6}
             intervalMax={quoteInterval.data?.max_interval ?? 60}
             loading={quoteStatus.isLoading}
             onToggle={(v) => toggleQuote.mutate(v)}
@@ -1087,7 +1087,7 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'minute' && (
           <SettingsModal title="分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
-            <MinuteSyncConfig caps={caps.data} isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <MinuteSyncConfig caps={caps.data} onJobStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }} />
           </SettingsModal>
         )}
       </AnimatePresence>

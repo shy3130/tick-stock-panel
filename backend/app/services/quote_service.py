@@ -59,6 +59,7 @@ class QuoteSubscriber:
         self._max_alerts = max_alerts
         self._max_reviews = max_reviews
         self._quote_updated = False
+        self._strategy_results_updated = False
         self._depth_updated = False
         self._alerts: list[dict] = []
         self._reviews: list[str] = []
@@ -73,11 +74,13 @@ class QuoteSubscriber:
         with self._lock:
             out = {
                 "quote_updated": self._quote_updated,
+                "strategy_results_updated": self._strategy_results_updated,
                 "depth_updated": self._depth_updated,
                 "alerts": self._alerts,
                 "reviews": self._reviews,
             }
             self._quote_updated = False
+            self._strategy_results_updated = False
             self._depth_updated = False
             self._alerts = []
             self._reviews = []
@@ -102,12 +105,22 @@ class QuoteSubscriber:
     def clear_alerts(self) -> None:
         with self._lock:
             self._alerts = []
-            if not self._quote_updated and not self._depth_updated and not self._reviews:
+            if (
+                not self._quote_updated
+                and not self._strategy_results_updated
+                and not self._depth_updated
+                and not self._reviews
+            ):
                 self._event.clear()
 
     def notify_quote(self) -> None:
         with self._lock:
             self._quote_updated = True
+            self._event.set()
+
+    def notify_strategy_results(self) -> None:
+        with self._lock:
+            self._strategy_results_updated = True
             self._event.set()
 
     def notify_depth(self) -> None:
@@ -124,11 +137,11 @@ class QuoteService:
     # 档位 → 最小轮询间隔 (秒)
     TIER_MIN_INTERVAL = {
         "expert": 1.0,
-        "pro": 2.0,
-        "starter": 3.0,
+        "pro": 3.0,
+        "starter": 6.0,
         "free": 6.0,
     }
-    DEFAULT_INTERVAL = 10.0
+    DEFAULT_INTERVAL = 6.0
     MAX_INTERVAL = 60.0
 
     def __init__(self) -> None:
@@ -320,6 +333,11 @@ class QuoteService:
         invalidate_overview_cache()
         for sub in self._snapshot_subscribers():
             sub.notify_quote()
+
+    def notify_strategy_results_updated(self) -> None:
+        """策略监控完成实时结果更新后调用，仅刷新策略页结果缓存。"""
+        for sub in self._snapshot_subscribers():
+            sub.notify_strategy_results()
 
     def notify_depth_updated(self) -> None:
         """五档盘口修正完成后调用: 通知 SSE 推送 depth_updated, 触发连板梯队刷新。
@@ -972,6 +990,8 @@ class QuoteService:
                     if engine.has_rule_type("ladder"):
                         eval_df = self._inject_sealed_vol(enriched_today, enriched_date)
                     rule_events = engine.evaluate(eval_df, asset_type="stock")
+                    if engine.consume_strategy_result_updates():
+                        self.notify_strategy_results_updated()
                     # ETF 规则轮: 股票快照不含 ETF, 用 ETF enriched 快照单独评估。
                     # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
                     # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时

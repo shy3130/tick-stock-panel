@@ -196,14 +196,25 @@ class AIStrategyGenerator:
 
     @staticmethod
     def _extract_meta(code: str) -> dict:
-        """从代码字符串中提取 META 字典（不执行代码, 仅接受字面量）"""
+        """从代码字符串中提取 META 字典（不执行代码, 仅接受字面量）
+
+        兼容两种声明: META = {...} (Assign) 和 META: dict = {...} (AnnAssign)。
+        与 api.strategy._find_meta_dict 保持同一套匹配逻辑。
+        """
         tree = ast.parse(code)
         for node in ast.walk(tree):
+            value = None
             if isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name) and target.id == "META":
-                        try:
-                            return ast.literal_eval(node.value)
-                        except (ValueError, SyntaxError) as e:
-                            raise ValueError(f"META 必须是纯字面量字典: {e}") from e
+                        value = node.value
+                        break
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
+                    and node.target.id == "META":
+                value = node.value
+            if value is not None:
+                try:
+                    return ast.literal_eval(value)
+                except (ValueError, SyntaxError) as e:
+                    raise ValueError(f"META 必须是纯字面量字典: {e}") from e
         return {}

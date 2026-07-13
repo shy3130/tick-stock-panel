@@ -1275,6 +1275,79 @@ class KlineRepository:
             logger.warning("批量分钟K查询失败: %s", e)
             return pl.DataFrame()
 
+    def get_minute_range(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+        asset_type: str = "stock",
+    ) -> pl.DataFrame:
+        """多 symbol × 日期范围的分钟K查询 (分钟K精确回测用)。
+
+        一次 scan_parquet + predicate pushdown 读多只股票在 [start, end] 内的所有分钟K。
+        返回列: symbol, datetime, open, high, low, close, volume, amount。
+        """
+        if not symbols:
+            return pl.DataFrame()
+        try:
+            lf = pl.scan_parquet(self._minute_glob_for(asset_type))
+            available = set(lf.collect_schema().names())
+            select_cols = [c for c in ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"] if c in available]
+            return (
+                lf.select(select_cols)
+                .filter(
+                    pl.col("symbol").is_in(symbols)
+                    & (pl.col("datetime").dt.date() >= start)
+                    & (pl.col("datetime").dt.date() <= end)
+                )
+                .sort(["symbol", "datetime"])
+                .collect(streaming=True)
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("分钟K范围查询失败: %s", e)
+            return pl.DataFrame()
+
+    def get_minute_by_dates(
+        self,
+        symbols: list[str],
+        dates: list[date],
+        asset_type: str = "stock",
+    ) -> pl.DataFrame:
+        """按日期列表精确读取分钟K分区文件 (分钟K精确回测用)。
+
+        与 get_minute_range 的区别: 后者扫描 [start, end] 区间全部日期的 parquet
+        (触发日稀疏时会读大量无关日期 → 爆内存); 本方法只读 dates 里列出的日期
+        对应的分区文件 (date=YYYY-MM-DD/part.parquet), 内存与回测区间长度解耦,
+        只随触发日数量增长。
+
+        缺失的日期分区直接跳过 (该日无分钟K数据)。
+        返回列: symbol, datetime, open, high, low, close, volume, amount。
+        """
+        if not symbols or not dates:
+            return pl.DataFrame()
+        base = self._etf_minute_glob.rsplit("/", 2)[0] if asset_type == "etf" else self._minute_glob.rsplit("/", 2)[0]
+        # 收集存在的分区文件路径, 避免对不存在的文件 scan 报错
+        parts: list[str] = []
+        for d in dates:
+            p = f"{base}/date={d.isoformat()}/part.parquet"
+            if Path(p).exists():
+                parts.append(p)
+        if not parts:
+            return pl.DataFrame()
+        try:
+            lf = pl.scan_parquet(parts)
+            available = set(lf.collect_schema().names())
+            select_cols = [c for c in ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"] if c in available]
+            return (
+                lf.select(select_cols)
+                .filter(pl.col("symbol").is_in(symbols))
+                .sort(["symbol", "datetime"])
+                .collect(streaming=True)
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("分钟K按日期查询失败: %s", e)
+            return pl.DataFrame()
+
     # ================================================================
     # Polars 查询内部方法
     # ================================================================

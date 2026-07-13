@@ -48,6 +48,9 @@ export const storage = {
   /** 策略结果列表日K蜡烛图显示状态 */
   screenerCandle:       kv<boolean>('screener_showCandle'),
 
+  /** 策略结果列表分时图显示状态 */
+  screenerIntraday:     kv<boolean>('screener_showIntraday'),
+
   /** 自选列表板块筛选 */
   watchlistBoardFilter: kv<string[]>('watchlist_boardFilter'),
 

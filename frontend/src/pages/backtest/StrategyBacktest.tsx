@@ -10,11 +10,11 @@ import {
   type StrategyParamDef,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { tierRank } from '@/lib/capability-labels'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
+import { cnSignal } from '@/lib/signals'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
 import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
@@ -179,8 +179,8 @@ const STRATEGY_GROUPS: { id: StrategyGroup; label: string }[] = [
 const ADVANCED_TABS: { id: AdvancedSettingsTab; label: string }[] = [
   { id: 'params', label: '策略参数' },
   { id: 'filter', label: '基础过滤' },
-  { id: 'entry', label: '买入触发器' },
-  { id: 'exit', label: '卖出触发器' },
+  { id: 'entry', label: '入场触发器' },
+  { id: 'exit', label: '出场触发器' },
   { id: 'scoring', label: '评分权重' },
   { id: 'risk', label: '风控' },
   { id: 'range', label: '回测范围' },
@@ -246,7 +246,17 @@ const statValueColor = (v: number | null | undefined) => {
   return v > 0 ? '#f87171' : '#34d399'
 }
 
-function ExitReasonBadge({ reason }: { reason: string }) {
+/** 信号 ID → 可读名称映射 (内置 + 自定义), 供交易记录显示具体触发信号。 */
+function useSignalNames(): Record<string, string> {
+  const customQ = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList })
+  return useMemo(() => {
+    const names: Record<string, string> = {}
+    for (const cs of customQ.data?.signals ?? []) names[`csg_${cs.id}`] = cs.name
+    return names
+  }, [customQ.data])
+}
+
+function ExitReasonBadge({ reason, signalId, signalNames }: { reason: string; signalId?: string | null; signalNames?: Record<string, string> }) {
   const config: Record<string, { label: string; cls: string }> = {
     signal: { label: '信号', cls: 'bg-accent/10 text-accent border-accent/30' },
     stop_loss: { label: '止损', cls: 'bg-red-500/10 text-red-400 border-red-500/30' },
@@ -258,8 +268,12 @@ function ExitReasonBadge({ reason }: { reason: string }) {
     end: { label: '期末', cls: 'bg-secondary/10 text-secondary border-border' },
   }
   const c = config[reason] ?? { label: reason, cls: 'bg-elevated text-muted border-border' }
+  // 信号类退出且能解析出具体信号名时, 显示具体信号而非笼统的"信号"
+  const specific = reason === 'signal' && signalId ? cnSignal(signalId, signalNames) : null
   return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${c.cls}`}>{c.label}</span>
+    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${c.cls} ${specific ? 'max-w-[7rem] truncate' : ''}`} title={specific ?? c.label}>
+      {specific ?? c.label}
+    </span>
   )
 }
 
@@ -283,7 +297,7 @@ function fmtScore(v: number | null | undefined): string {
   return Number(v).toFixed(1)
 }
 
-function DailyTradeChip({ trade, side, strategyName, onClick }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; strategyName?: string; onClick?: () => void }) {
+function DailyTradeChip({ trade, side, strategyName, onClick, signalNames }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; strategyName?: string; onClick?: () => void; signalNames?: Record<string, string> }) {
   const isBuy = side === 'buy'
   const tag = boardTag(trade.symbol)
   const price = isBuy ? trade.entry_price : trade.exit_price
@@ -318,7 +332,7 @@ function DailyTradeChip({ trade, side, strategyName, onClick }: { trade: Strateg
         ) : (
           <span className="flex shrink-0 items-center gap-1.5">
             <span className="num text-secondary">{fmtPrice(price)}</span>
-            <ExitReasonBadge reason={trade.exit_reason} />
+            <ExitReasonBadge reason={trade.exit_reason} signalId={trade.exit_signal_id} signalNames={signalNames} />
           </span>
         )}
       </span>
@@ -355,12 +369,14 @@ function DailyTradeChip({ trade, side, strategyName, onClick }: { trade: Strateg
   )
 }
 
-function TradeLegCell({ trade, side }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell' }) {
+function TradeLegCell({ trade, side, signalNames }: { trade: StrategyBacktestTrade; side: 'buy' | 'sell'; signalNames?: Record<string, string> }) {
   const isBuy = side === 'buy'
   const date = String(isBuy ? trade.entry_date : trade.exit_date).slice(0, 10)
   const signalDate = String(isBuy ? trade.entry_signal_date ?? '' : trade.exit_signal_date ?? '').slice(0, 10)
   const price = isBuy ? trade.entry_price : trade.exit_price
   const amount = isBuy ? trade.entry_value : trade.exit_value
+  const signalId = isBuy ? trade.entry_signal_id : trade.exit_signal_id
+  const signalLabel = signalId ? cnSignal(signalId, signalNames) : null
 
   return (
     <div className="min-w-[8.25rem] rounded-btn border border-border/60 bg-base/35 px-2 py-1 text-xs leading-4">
@@ -376,7 +392,10 @@ function TradeLegCell({ trade, side }: { trade: StrategyBacktestTrade; side: 'bu
         <span className="num text-foreground">{fmtPrice(price)}</span>
         <span className="num font-medium text-foreground">{fmtMoney(amount)}</span>
       </div>
-      {signalDate && signalDate !== date && (
+      {signalLabel && (
+        <div className="mt-0.5 text-[10px] text-accent/80 truncate" title={signalLabel}>{signalLabel}</div>
+      )}
+      {!signalLabel && signalDate && signalDate !== date && (
         <div className="mt-0.5 text-[10px] text-muted">信号 {signalDate}</div>
       )}
     </div>
@@ -707,6 +726,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
 }
 
 export function StrategyBacktest() {
+  const signalNames = useSignalNames()
   const [saved] = useState(() => storage.strategyBacktestLast.get(null))
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
   const [strategyGroup, setStrategyGroup] = useState<StrategyGroup>('all')
@@ -728,10 +748,10 @@ export function StrategyBacktest() {
   const [simMode, setSimMode] = useState<'position' | 'full'>(saved?.mode ?? 'position')
   const [holdingDays, setHoldingDays] = useState(saved?.holdingDays ?? '5')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 高颗粒回测（分钟K精确回测）— 开发中，Starter+ 功能
+  // 分钟K精确回测: 用当日分钟K确定精确成交价 (穿越价/VWAP), 需 Pro+ 分钟K能力
   const [highGranularity, setHighGranularity] = useState(false)
   const { data: caps } = useCapabilities()
-  const isFreeTier = tierRank(caps?.label ?? '') < 1
+  const hasMinuteBatch = !!caps?.capabilities?.['kline.minute.batch']
   const [rangeSettingsOpen, setRangeSettingsOpen] = useState(false)
   const [quickRanges, setQuickRanges] = useState(loadQuickRanges)
   const [settingsTab, setSettingsTab] = useState<AdvancedSettingsTab>('params')
@@ -864,6 +884,7 @@ export function StrategyBacktest() {
       overrides,
       mode: simMode,
       holding_days: Number(holdingDays) || 5,
+      minute_fill: highGranularity,
     })
   }
 
@@ -1093,22 +1114,18 @@ export function StrategyBacktest() {
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-medium text-secondary">选择策略</label>
-            {/* 高颗粒回测（分钟K）— 开发中占位 */}
+            {/* 分钟K精确回测 */}
             <div className="flex items-center gap-1">
               <Gauge className={`h-3 w-3 ${highGranularity ? 'text-amber-400' : 'text-muted/50'}`} />
               <button
-                onClick={() => {
-                  if (isFreeTier) return
-                  // 功能开发中，暂不实际启用
-                  setHighGranularity(v => !v)
-                }}
-                disabled={isFreeTier}
-                title={isFreeTier
-                  ? '高颗粒回测（分钟K精确回测）：需 Starter+ 档位'
-                  : '高颗粒回测（分钟K精确回测）：切换后结合每日分钟K更精确回测。⚠️ 开发中，且会显著影响性能、回测很慢。'
+                onClick={() => { if (!hasMinuteBatch) return; setHighGranularity(v => !v) }}
+                disabled={!hasMinuteBatch}
+                title={!hasMinuteBatch
+                  ? '分钟K精确回测：需 Pro+ 权限 (分钟K批量)'
+                  : '分钟K精确回测：用当日分钟K确定精确成交价（穿越价/VWAP），比收盘价更真实。⚠️ 回测速度会变慢。'
                 }
                 className={`group relative inline-flex h-3.5 w-6 items-center rounded-full shrink-0 transition-colors duration-200 ${
-                  isFreeTier ? 'bg-elevated opacity-50 cursor-not-allowed'
+                  !hasMinuteBatch ? 'bg-elevated opacity-50 cursor-not-allowed'
                   : highGranularity ? 'bg-amber-500 cursor-pointer'
                   : 'bg-elevated cursor-pointer'
                 }`}
@@ -1118,19 +1135,18 @@ export function StrategyBacktest() {
                 }`} />
               </button>
               <span className={`text-[9px] font-medium ${highGranularity ? 'text-amber-400' : 'text-muted/50'}`}>分钟K</span>
-              {isFreeTier && (
-                <span className="text-[8px] text-accent/70 font-medium bg-accent/10 px-1 py-px rounded">Starter+</span>
+              {!hasMinuteBatch && (
+                <span className="text-[8px] text-accent/70 font-medium bg-accent/10 px-1 py-px rounded">Pro+</span>
               )}
             </div>
           </div>
-          {/* 高颗粒开启时的警告条 */}
-          {highGranularity && !isFreeTier && (
+          {/* 分钟K开启时的提示条 */}
+          {highGranularity && hasMinuteBatch && (
             <div className="mb-2 flex items-start gap-1.5 rounded-btn border border-amber-400/30 bg-amber-400/5 px-2 py-1.5">
               <Zap className="h-3 w-3 text-amber-400 shrink-0 mt-px" />
               <div className="text-[10px] leading-snug text-amber-400/90">
-                <span className="font-medium">高颗粒回测（开发中）</span>
-                ：将结合每日分钟K进行更精确的回测。
-                <span className="text-amber-400/70"> ⚠️ 此功能尚未完成，且开启后会显著拖慢回测速度、占用大量资源。</span>
+                <span className="font-medium">分钟K精确回测</span>
+                ：信号触发日用当日分钟K确定成交价（均线类信号按穿越价, 其他按 VWAP 均价）。需本地有足够的分钟K历史, 回测速度会变慢。
               </div>
             </div>
           )}
@@ -1756,7 +1772,7 @@ export function StrategyBacktest() {
                               ) : (
                                 <div className="flex flex-wrap gap-1.5">
                                   {row.buys.map((t, i) => (
-                                    <DailyTradeChip key={`buy-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="buy" strategyName={result?.strategy_info?.name ?? selectedStrategyName} onClick={() => setSelectedTrade(t)} />
+                                    <DailyTradeChip key={`buy-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="buy" strategyName={result?.strategy_info?.name ?? selectedStrategyName} onClick={() => setSelectedTrade(t)} signalNames={signalNames} />
                                   ))}
                                 </div>
                               )}
@@ -1767,7 +1783,7 @@ export function StrategyBacktest() {
                               ) : (
                                 <div className="flex flex-wrap gap-1.5">
                                   {row.sells.map((t, i) => (
-                                    <DailyTradeChip key={`sell-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="sell" onClick={() => setSelectedTrade(t)} />
+                                    <DailyTradeChip key={`sell-${t.symbol}-${t.entry_date}-${t.exit_date}-${i}`} trade={t} side="sell" onClick={() => setSelectedTrade(t)} signalNames={signalNames} />
                                   ))}
                                 </div>
                               )}
@@ -1838,10 +1854,10 @@ export function StrategyBacktest() {
                               <div className="mt-0.5 font-mono text-[11px] text-muted">{t.symbol}</div>
                             </td>
                             <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="buy" />
+                              <TradeLegCell trade={t} side="buy" signalNames={signalNames} />
                             </td>
                             <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="sell" />
+                              <TradeLegCell trade={t} side="sell" signalNames={signalNames} />
                             </td>
                             <td className="px-4 py-2.5 text-right">
                               <div className="num text-foreground">{fmtPct(t.position_pct, 2)}</div>
@@ -1858,7 +1874,7 @@ export function StrategyBacktest() {
                               <div>{t.duration} 天</div>
                               {!!t.blocked_exit_days && <div className="mt-0.5 text-[11px] text-amber-400">阻塞 {t.blocked_exit_days} 天</div>}
                             </td>
-                            <td className="px-4 py-2.5"><ExitReasonBadge reason={t.exit_reason} /></td>
+                            <td className="px-4 py-2.5"><ExitReasonBadge reason={t.exit_reason} signalId={t.exit_signal_id} signalNames={signalNames} /></td>
                           </tr>
                         ))}
                       </tbody>
@@ -2119,8 +2135,8 @@ export function StrategyBacktest() {
 
               {settingsTab === 'entry' && (
                 <ConfigSection
-                  title="买入触发器"
-                  hint="任一买点满足即可进入候选"
+                  title="入场触发器"
+                  hint="任一入场点满足即可进入候选"
                   actions={<SignalTriggerActions kind="entry" signals={entrySignals} onChange={next => updateOverride('entry_signals', next)} />}
                 >
                   <SignalPicker
@@ -2133,8 +2149,8 @@ export function StrategyBacktest() {
 
               {settingsTab === 'exit' && (
                 <ConfigSection
-                  title="卖出触发器"
-                  hint="任一卖点满足即触发卖出"
+                  title="出场触发器"
+                  hint="任一出场点满足即触发出场"
                   actions={<SignalTriggerActions kind="exit" signals={exitSignals} onChange={next => updateOverride('exit_signals', next)} />}
                 >
                   <SignalPicker

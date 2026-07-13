@@ -6,6 +6,13 @@ import type { AlertEvent } from '@/lib/api'
 import { fmtPct, fmtPrice } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { playNotificationSound } from '@/lib/notificationSound'
+import { speakAlerts } from '@/lib/voiceBroadcast'
+
+/** 通知渠道分发 — 所有副作用渠道在此汇合, 新增渠道只改这里 */
+function dispatchSideEffects(alerts: AlertEvent[]) {
+  playNotificationSound()        // 提示音 (Web Audio 合成)
+  speakAlerts(alerts)            // 语音播报 (speechSynthesis, 各自独立开关)
+}
 
 // ===== 全局状态 (模块级, 仿 Toast.tsx 模式) =====
 type Item = { id: number; alert: AlertEvent }
@@ -60,7 +67,7 @@ export function pushAlertToasts(alerts: AlertEvent[]) {
   for (const item of newItems) {
     setTimeout(() => dismiss(item.id), AUTO_DISMISS)
   }
-  playNotificationSound()                     // 整批只响一声
+  dispatchSideEffects(alerts)                  // 副作用分发: 提示音 + 语音 (整批各一次)
 }
 
 /** 手动关闭 */

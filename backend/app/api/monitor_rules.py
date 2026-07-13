@@ -113,9 +113,9 @@ def get_options(request: Request):
             {"key": "critical", "label": "重要"},
         ],
         "directions": [
-            {"key": "entry", "label": "买入"},
-            {"key": "exit", "label": "卖出"},
-            {"key": "both", "label": "买卖都报"},
+            {"key": "entry", "label": "入场"},
+            {"key": "exit", "label": "出场"},
+            {"key": "both", "label": "出入都报"},
         ],
     }
 

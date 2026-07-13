@@ -29,7 +29,6 @@ import {
   MonitorIcon,
   StockAnalysisIcon,
   StrategyIcon,
-  TradingIcon,
   WatchlistIcon,
 } from '@/components/icons/customNavIcons'
 import { api, type AnalysisMenu } from './api'
@@ -94,7 +93,6 @@ export const BUILTIN_NAV: NavItem[] = [
   { id: '/industry-analysis', to: '/industry-analysis', label: '行业分析', icon: Landmark,        group: 'research', extension: false },
   { id: '/stock-analysis',    to: '/stock-analysis',    label: '个股分析', icon: StockAnalysisIcon, group: 'research', extension: false, badge: 'beta' },
   { id: '/financials',        to: '/financials',        label: '财务分析', icon: FileText,        group: 'research', extension: false },
-  { id: '/trading',           to: '/trading',           label: '交易',     icon: TradingIcon,       group: 'system',   extension: false },
   { id: '/data',              to: '/data',              label: '数据',     icon: DataIcon,          group: 'system',   extension: false, badge: 'data-sync' },
 ]
 

@@ -15,10 +15,20 @@ BACKEND_DIR="$ROOT/backend"
 FRONTEND_DIR="$ROOT/frontend"
 BACKEND_PORT="${BACKEND_PORT:-3018}"
 FRONTEND_PORT="${FRONTEND_PORT:-3011}"
-BIND_HOST="${BIND_HOST:-0.0.0.0}"
-LOCAL_UV="$ROOT/.uvvenv/bin/uv"
-UV_CACHE_DIR="${UV_CACHE_DIR:-$ROOT/.cache/uv}"
-VITE_BIN="$FRONTEND_DIR/node_modules/.bin/vite"
+
+# Match Docker's BACKEND_EXTRAS behavior so old CPUs can select Polars'
+# rtcompat runtime before the backend starts. An exported value wins over .env.
+if [[ -z "${BACKEND_EXTRAS+x}" && -f "$ROOT/.env" ]]; then
+  BACKEND_EXTRAS="$(awk '/^[[:space:]]*BACKEND_EXTRAS[[:space:]]*=/ {sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "$ROOT/.env")"
+fi
+BACKEND_EXTRAS="${BACKEND_EXTRAS:-}"
+BACKEND_EXTRA_ARGS=()
+if [[ -n "$BACKEND_EXTRAS" ]]; then
+  read -r -a backend_extras <<< "$BACKEND_EXTRAS"
+  for extra in "${backend_extras[@]}"; do
+    BACKEND_EXTRA_ARGS+=(--extra "$extra")
+  done
+fi
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -42,28 +52,8 @@ require_cmd() {
   fi
 }
 
-if command -v uv >/dev/null 2>&1; then
-  UV_CMD="$(command -v uv)"
-elif [ -x "$LOCAL_UV" ]; then
-  UV_CMD="$LOCAL_UV"
-else
-  err "uv 未安装"
-  echo "       安装方式:curl -LsSf https://astral.sh/uv/install.sh | sh"
-  echo "       或在项目目录执行: python3.11 -m venv .uvvenv && ./.uvvenv/bin/pip install uv"
-  exit 1
-fi
-
-mkdir -p "$UV_CACHE_DIR"
-
-if command -v pnpm >/dev/null 2>&1; then
-  PNPM_CMD=(pnpm)
-elif command -v corepack >/dev/null 2>&1; then
-  PNPM_CMD=(corepack pnpm)
-elif command -v npm >/dev/null 2>&1; then
-  PNPM_CMD=(npm exec --yes --package pnpm@9.10.0 -- pnpm)
-else
-  PNPM_CMD=()
-fi
+require_cmd uv   "curl -LsSf https://astral.sh/uv/install.sh | sh"
+require_cmd pnpm "npm i -g pnpm   或   corepack enable && corepack prepare pnpm@9 --activate"
 
 # ===== 2. 端口占用检查 —— 占用就直接 kill =====
 free_port() {
@@ -95,27 +85,21 @@ free_port() {
 free_port backend  "$BACKEND_PORT"
 free_port frontend "$FRONTEND_PORT"
 
-# ===== 3. 首次依赖安装 =====
-if [ ! -d "$BACKEND_DIR/.venv" ]; then
-  info "后端首次启动 — 安装 Python 依赖(约 1-2 分钟)..."
-  ( cd "$BACKEND_DIR" && UV_CACHE_DIR="$UV_CACHE_DIR" "$UV_CMD" sync )
+# ===== 3. 依赖安装 =====
+if [ ! -d "$BACKEND_DIR/.venv" ] || [ "${#BACKEND_EXTRA_ARGS[@]}" -gt 0 ]; then
+  if [ "${#BACKEND_EXTRA_ARGS[@]}" -gt 0 ]; then
+    info "同步后端 Python 依赖，extras: $BACKEND_EXTRAS"
+  else
+    info "后端首次启动 — 安装 Python 依赖(约 1-2 分钟)..."
+  fi
+  ( cd "$BACKEND_DIR" && uv sync "${BACKEND_EXTRA_ARGS[@]}" )
   ok "后端依赖装好了"
 fi
 
 if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-  if [ "${#PNPM_CMD[@]}" -eq 0 ]; then
-    err "pnpm 未安装"
-    echo "       安装方式:npm i -g pnpm   或   corepack enable && corepack prepare pnpm@9 --activate"
-    exit 1
-  fi
   info "前端首次启动 — 安装 Node 依赖..."
-  ( cd "$FRONTEND_DIR" && CI=true "${PNPM_CMD[@]}" install )
+  ( cd "$FRONTEND_DIR" && pnpm install )
   ok "前端依赖装好了"
-fi
-
-if [ ! -x "$VITE_BIN" ]; then
-  err "前端 vite 可执行文件不存在,请先执行 pnpm install"
-  exit 1
 fi
 
 # ===== 4. 启动 + 日志前缀 =====
@@ -145,8 +129,8 @@ echo
 echo -e "${BLUE}╭──────────────────────────────────────────────╮${NC}"
 echo -e "${BLUE}│${NC}  ${GREEN}tickflow-stock-panel${NC}                        ${BLUE}│${NC}"
 echo -e "${BLUE}│${NC}                                              ${BLUE}│${NC}"
-echo -e "${BLUE}│${NC}  backend   ${YELLOW}http://$BIND_HOST:$BACKEND_PORT${NC}         ${BLUE}│${NC}"
-echo -e "${BLUE}│${NC}  frontend  ${YELLOW}http://$BIND_HOST:$FRONTEND_PORT${NC}         ${BLUE}│${NC}"
+echo -e "${BLUE}│${NC}  backend   ${YELLOW}http://localhost:$BACKEND_PORT${NC}          ${BLUE}│${NC}"
+echo -e "${BLUE}│${NC}  frontend  ${YELLOW}http://localhost:$FRONTEND_PORT${NC}          ${BLUE}│${NC}"
 echo -e "${BLUE}│${NC}                                              ${BLUE}│${NC}"
 echo -e "${BLUE}│${NC}  Ctrl-C 同时关闭两端                          ${BLUE}│${NC}"
 echo -e "${BLUE}╰──────────────────────────────────────────────╯${NC}"
@@ -154,14 +138,14 @@ echo
 
 (
   cd "$BACKEND_DIR"
-  UV_CACHE_DIR="$UV_CACHE_DIR" "$UV_CMD" run uvicorn app.main:app --reload --host "$BIND_HOST" --port "$BACKEND_PORT" 2>&1 \
+  uv run uvicorn app.main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" 2>&1 \
     | prefix_awk "$(printf "${BLUE}[backend ]${NC} ")"
 ) &
 PIDS+=("$!")
 
 (
   cd "$FRONTEND_DIR"
-  "$VITE_BIN" --host "$BIND_HOST" --port "$FRONTEND_PORT" 2>&1 \
+  pnpm dev --host 0.0.0.0 --port "$FRONTEND_PORT" 2>&1 \
     | prefix_awk "$(printf "${GREEN}[frontend]${NC} ")"
 ) &
 PIDS+=("$!")

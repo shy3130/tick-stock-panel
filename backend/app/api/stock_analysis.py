@@ -155,7 +155,7 @@ class AnalyzeRequest(BaseModel):
 async def analyze_stock(request: Request, req: AnalyzeRequest):
     """AI 个股四维分析 — NDJSON 流式返回。
 
-    组合 K 线(技术指标)+ 财务表 + 关键价位 → 实战派提示词 →
+    组合 K 线(技术指标)+ 财务表 + 关键价位 → 客观技术分析提示词 →
     流式调用 LLM → 逐 chunk 以 NDJSON 推给前端(每行一个 JSON)。
     """
     if not req.symbol:

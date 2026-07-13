@@ -58,7 +58,7 @@ class _EngineStub:
         self.load_asset_type = asset_type
         return self.panel
 
-    def simulate_portfolio(self, panel, entries, exits, config, progress_cb=None, cancel_event=None) -> SimResult:
+    def simulate_portfolio(self, panel, entries, exits, config, progress_cb=None, cancel_event=None, entry_signal_ids=None, exit_signal_ids=None) -> SimResult:
         self.sim_panel = panel
         self.sim_entries = entries
         return SimResult(

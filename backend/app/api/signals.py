@@ -28,6 +28,8 @@ class ConditionModel(BaseModel):
     left: str        # 字段名（须在白名单）
     op: str          # > >= < <= == !=
     right: str       # "field:xxx" 或数字字符串
+    leftDays: int = 0    # 左字段取几日前 (0=当日, 默认)
+    rightDays: int = 0   # 右字段取几日前 (仅 right 为字段时有意义)
 
 
 class SignalModel(BaseModel):
@@ -45,19 +47,41 @@ class SignalModel(BaseModel):
 def get_options():
     """返回可选字段与运算符，供前端下拉框使用。"""
     # 字段带中文标签（取自 ENRICHED_COLUMNS，回退为字段名本身）
-    from app.indicators.pipeline import ENRICHED_COLUMNS
+    from app.indicators.pipeline import ENRICHED_COLUMNS, ENRICHED_COLUMNS_BY_CATEGORY
 
+    allowed = custom_signals.ALLOWED_FIELDS
     fields = [
         {"key": f, "label": ENRICHED_COLUMNS.get(f, f)}
-        for f in sorted(custom_signals.ALLOWED_FIELDS)
+        for f in sorted(allowed)
     ]
+    # 字段分组 (只包含白名单内的字段, 供前端 optoptgroup 渲染)
+    _GROUP_LABELS = {
+        "basic": "基础", "ma": "均线 MA", "ema": "指数均线 EMA",
+        "macd": "MACD", "boll": "布林带 BOLL", "kdj": "KDJ",
+        "atr": "ATR", "volume": "量价", "extremes": "极值",
+        "momentum": "动量", "volatility": "波动率", "rsi": "RSI",
+    }
+    # 行情类字段不在 ENRICHED_COLUMNS_BY_CATEGORY 里, 单独归一组
+    quote_fields = {"open", "high", "low", "close", "volume", "amount",
+                    "turnover_rate", "consecutive_limit_ups", "consecutive_limit_downs"}
+    groups = [{"key": "quote", "label": "行情",
+               "fields": [{"key": f, "label": ENRICHED_COLUMNS.get(f, f)}
+                          for f in sorted(allowed & quote_fields)]}]
+    for cat, label in _GROUP_LABELS.items():
+        cat_fields = [f for f in ENRICHED_COLUMNS_BY_CATEGORY.get(cat, []) if f in allowed]
+        if cat_fields:
+            groups.append({"key": cat, "label": label,
+                           "fields": [{"key": f, "label": ENRICHED_COLUMNS.get(f, f)} for f in cat_fields]})
+
     return {
         "fields": fields,
+        "groups": groups,
+        "maxDays": custom_signals.MAX_DAYS,
         "operators": [">", ">=", "<", "<=", "==", "!="],
         "kinds": [
-            {"key": "entry", "label": "买入"},
-            {"key": "exit", "label": "卖出"},
-            {"key": "both", "label": "买卖通用"},
+            {"key": "entry", "label": "入场"},
+            {"key": "exit", "label": "出场"},
+            {"key": "both", "label": "出入通用"},
         ],
     }
 

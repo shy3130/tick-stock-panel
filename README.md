@@ -33,7 +33,7 @@
 
 
 
-**本项目个人开源，基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源，非 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方项目。仅供学习研究使用，与 TickFlow 官方无任何隶属或合作关系。** 
+**本项目个人开源，基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源，非 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方项目。仅供学习研究使用，严禁商业用途。**
 
 
 
@@ -53,7 +53,7 @@
 | 🔍 **选股引擎**   | 18 个内置策略 + 自定义信号 + AI 生成 + 代码迁移,Polars 毫秒级扫全 A 股 | [strategy.md](./docs/strategy.md) |
 | 📊 **指标流水线** | MA/EMA/MACD/RSI/KDJ/布林/量比等,一次扫表落盘 enriched Parquet          | [features.md](./docs/features.md) |
 | 🧪 **回测引擎**   | 三种模式(个股/策略组合/自由信号),T+1/手续费/滑点/止损,SSE 流式进度     | [features.md](./docs/features.md) |
-| 📡 **监控中心**   | 四类监控(策略/个股信号/价格/异动),多条件 AND/OR + 飞书推送             | [features.md](./docs/features.md) |
+| 📡 **监控中心**   | 四类监控(策略/个股信号/价格/异动),多条件 AND/OR + 语音播报 + 飞书推送  | [features.md](./docs/features.md) |
 | 📈 **个股分析**   | 9 类关键价位 + AI 四维分析(技术/基本面/财务/消息面)                    | [features.md](./docs/features.md) |
 | 🏆 **连板梯队**   | 连板层级统计 + 概念涨幅轮动 + 盘后 AI 复盘 + 炸板/翘板预警             | [features.md](./docs/features.md) |
 | 🧰 **数据扩展**   | TickFlow 多源 + 第三方接入(接口/推送/CSV/JSON)同台分析                   | [features.md](./docs/features.md) |
@@ -84,7 +84,7 @@
 - **连板梯队** Limit Up Ladder — 连板层级统计 + 概念/行业分布 + 封单监控(可切换连跌梯队)
 
 **🔔 监控与复盘**
-- **监控中心** Monitor — 策略/个股信号/价格/异动四类规则,盘中实时弹窗 + 触发记录持久化
+- **监控中心** Monitor — 策略/个股信号/价格/异动四类规则,盘中实时弹窗 + 语音播报(播报个股名称与信号) + 触发记录持久化
 - **复盘** Review (Beta) — 盘后 AI 自动生成市场复盘,可定时执行、推送飞书、下载 Markdown
 
 **🗄️ 数据与扩展**

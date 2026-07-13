@@ -53,7 +53,12 @@ def get_settings() -> dict:
     """返回当前配置概况(Key 脱敏)。"""
     from app.config import settings
     from app.services import preferences
-    from app.services.ai_provider import ai_configured, current_ai_model, current_codex_command
+    from app.services.ai_provider import (
+        ai_configured,
+        current_ai_model,
+        current_codex_command,
+        current_codex_reasoning_effort,
+    )
 
     key = secrets_store.get_tickflow_key()
     ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
@@ -76,6 +81,7 @@ def get_settings() -> dict:
         "ai_configured": ai_configured(ai_provider),
         "ai_model": current_ai_model(),
         "ai_codex_command": current_codex_command(),
+        "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
     }
 
@@ -234,6 +240,7 @@ class AiSettingsIn(BaseModel):
     api_key: str | None = None
     model: str = ""
     codex_command: str = ""
+    codex_reasoning_effort: str = ""
     user_agent: str = ""
 
 
@@ -241,7 +248,15 @@ class AiSettingsIn(BaseModel):
 def save_ai_settings(req: AiSettingsIn) -> dict:
     """保存 AI 配置（全部持久化到 secrets.json）"""
     from app.config import settings
-    from app.services.ai_provider import ai_configured, current_ai_model, current_ai_provider, current_codex_command, normalize_codex_command
+    from app.services.ai_provider import (
+        ai_configured,
+        current_ai_model,
+        current_ai_provider,
+        current_codex_command,
+        current_codex_reasoning_effort,
+        normalize_codex_command,
+        normalize_codex_reasoning_effort,
+    )
 
     updates: dict = {}
     if req.provider:
@@ -268,8 +283,11 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
             codex_command = normalize_codex_command(req.codex_command)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        codex_reasoning_effort = normalize_codex_reasoning_effort(req.codex_reasoning_effort)
         updates["ai_codex_command"] = codex_command
+        updates["ai_codex_reasoning_effort"] = codex_reasoning_effort
         settings.ai_codex_command = codex_command
+        settings.ai_codex_reasoning_effort = codex_reasoning_effort
     # user_agent 允许清空(回到默认浏览器 UA),故无条件持久化
     updates["ai_user_agent"] = req.user_agent
     settings.ai_user_agent = req.user_agent
@@ -283,6 +301,7 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         "ai_provider": provider,
         "ai_model": current_ai_model(),
         "ai_codex_command": current_codex_command(),
+        "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
         "ai_configured": ai_configured(provider),
     }
 
@@ -295,13 +314,14 @@ def clear_ai_settings() -> dict:
     """
     from app.config import settings
 
-    secrets_store.clear("ai_provider", "ai_base_url", "ai_api_key", "ai_model", "ai_codex_command")
+    secrets_store.clear("ai_provider", "ai_base_url", "ai_api_key", "ai_model", "ai_codex_command", "ai_codex_reasoning_effort")
     # 同步重置运行时内存(provider 回默认值,其余置空)
     settings.ai_provider = "openai_compat"
     settings.ai_base_url = ""
     settings.ai_api_key = ""
     settings.ai_model = ""
     settings.ai_codex_command = "codex"
+    settings.ai_codex_reasoning_effort = ""
 
     return {"ok": True}
 
@@ -317,6 +337,8 @@ def _realtime_allowed() -> bool:
 class MinuteSyncPrefs(BaseModel):
     minute_sync_enabled: bool
     minute_sync_days: int = 5
+    # 单段大小(交易日),None 表示不修改现有值。范围 [5, 30],默认 20。
+    minute_sync_segment_days: int | None = None
 
 
 class DataProvidersIn(BaseModel):
@@ -375,6 +397,7 @@ def get_preferences() -> dict:
         "indices_nav_pinned": preferences.get_indices_nav_pinned(),
         "minute_sync_enabled": preferences.get_minute_sync_enabled(),
         "minute_sync_days": preferences.get_minute_sync_days(),
+        "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
         "daily_data_provider": preferences.get_daily_data_provider(),
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
@@ -623,16 +646,24 @@ def update_screener_result_columns(req: dict) -> dict:
 
 @router.put("/preferences/minute-sync")
 def update_minute_sync(req: MinuteSyncPrefs) -> dict:
-    """保存分钟 K 同步偏好。"""
+    """保存分钟 K 同步偏好。
+
+    minute_sync_segment_days 为可选:未传(None)时不覆盖现有值,便于开关/天数
+    与段大小各自独立更新。
+    """
     from app.services import preferences
     days = max(1, min(30, req.minute_sync_days))
-    preferences.save({
+    updates: dict = {
         "minute_sync_enabled": req.minute_sync_enabled,
         "minute_sync_days": days,
-    })
+    }
+    if req.minute_sync_segment_days is not None:
+        updates["minute_sync_segment_days"] = max(5, min(30, req.minute_sync_segment_days))
+    preferences.save(updates)
     return {
         "minute_sync_enabled": req.minute_sync_enabled,
         "minute_sync_days": days,
+        "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
     }
 
 
@@ -970,7 +1001,7 @@ def get_quote_interval(request: Request) -> dict:
     """获取当前行情轮询间隔和档位限制。"""
     qs = getattr(request.app.state, "quote_service", None)
     if not qs:
-        return {"interval": 10.0, "min_interval": 5.0, "max_interval": 60.0}
+        return {"interval": 6.0, "min_interval": 6.0, "max_interval": 60.0}
     return {
         "interval": qs._interval,
         "min_interval": qs.get_min_interval(),

@@ -436,7 +436,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                             <div className="text-[10px] text-muted/50 uppercase tracking-wider">交易信号</div>
                             {entrySignals.length > 0 && (
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] text-emerald-400 w-10 shrink-0">买入</span>
+                                <span className="text-[10px] text-emerald-400 w-10 shrink-0">入场</span>
                                 <div className="flex flex-wrap gap-0.5">
                                   {entrySignals.map((s: string) => <span key={s} className="px-1.5 py-0.5 rounded bg-emerald-400/10 text-emerald-400 text-[10px] font-mono">{s}</span>)}
                                 </div>
@@ -444,7 +444,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                             )}
                             {exitSignals.length > 0 && (
                               <div className="flex items-center gap-2">
-                                <span className="text-[10px] text-danger w-10 shrink-0">卖出</span>
+                                <span className="text-[10px] text-danger w-10 shrink-0">出场</span>
                                 <div className="flex flex-wrap gap-0.5">
                                   {exitSignals.map((s: string) => <span key={s} className="px-1.5 py-0.5 rounded bg-danger/10 text-danger text-[10px] font-mono">{s}</span>)}
                                 </div>

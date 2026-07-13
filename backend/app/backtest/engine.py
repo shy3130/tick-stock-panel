@@ -54,6 +54,9 @@ class MatcherConfig:
     score_max: float | None = None
     initial_capital: float = 1_000_000.0
     position_sizing: Literal["equal", "score_weight"] = "equal"
+    # 分钟K精确成交: 开启后, 信号触发日的成交价用当日分钟K优化
+    # (有参考线→穿越价, 无参考线→VWAP)。数据缺失时降级为日K口径。
+    minute_fill: bool = False
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -98,6 +101,10 @@ class TradeRecord:
     entry_signal_date: date | str | None = None
     exit_signal_date: date | str | None = None
     blocked_exit_days: int = 0
+    # 触发买入/卖出的具体信号列名 (如 signal_ma_golden_5_20 / csg_xxx);
+    # 仅当该腿由信号触发时填充, 止损/止盈/到期等非信号退出时 exit_signal_id 为 None。
+    entry_signal_id: str | None = None
+    exit_signal_id: str | None = None
 
 
 @dataclass
@@ -107,6 +114,26 @@ class SimResult:
     trades: list[TradeRecord]
     per_symbol_stats: list[dict]
     stats: dict
+
+
+def _resolve_signal_id(panel: pl.DataFrame, idx: int, signal_ids: list[str] | None) -> str | None:
+    """在触发行 idx 上, 从候选信号里找出 panel 列为 True 的那个, 返回其列名。
+
+    多个信号同时为 True 时返回第一个匹配的 (信号 OR 关系, 回测只记录其一即可)。
+    signal_ids 元素可能带 signal_/csg_ 前缀, 也可能是裸名 (如 "ma_golden_5_20")。
+    """
+    if not signal_ids:
+        return None
+    for sid in signal_ids:
+        col = sid if (sid.startswith("signal_") or sid.startswith("csg_")) else f"signal_{sid}"
+        if col not in panel.columns:
+            continue
+        try:
+            if bool(panel[col][idx]):
+                return col
+        except (IndexError, TypeError):
+            continue
+    return None
 
 
 # ================================================================
@@ -121,6 +148,17 @@ class _CacheEntry:
         self.ts = ts
 
 
+class _InFlight:
+    """同 key 正在计算的占位: leader 算完通过 done 唤醒所有跟随者复用结果。"""
+
+    __slots__ = ("done", "df", "error")
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.df: pl.DataFrame | None = None
+        self.error: BaseException | None = None
+
+
 class PanelCache:
     """LRU + TTL 数据面板缓存。"""
 
@@ -132,6 +170,15 @@ class PanelCache:
         # 无锁的 move_to_end/del/popitem check-then-act 会抛 "OrderedDict mutated"。
         # 用实例锁守护所有 OrderedDict 变更; compute_fn (重扫盘) 放锁外避免串行化。
         self._lock = threading.Lock()
+        # single-flight: 同 key 只让一个线程 compute, 其余等其结果复用。
+        # 否则优化器/walk-forward 的 max_workers 个线程冷启动同时 miss, 会并行加载 N 份同一面板。
+        self._inflight: dict[str, _InFlight] = {}
+        # 轻量遥测: 累加真实扫盘耗时与命中/复用次数, 用于量化 IO 占比 (是否值得进一步优化)。
+        # compute_seconds 只计 leader 的实际 compute_fn 耗时, follower 复用不计 —— 反映真实 IO。
+        self._compute_seconds = 0.0
+        self._compute_count = 0   # 实际扫盘次数
+        self._hit_count = 0       # 缓存命中 (未扫盘) 次数
+        self._reuse_count = 0     # single-flight 跟随者复用次数
 
     def get_or_compute(
         self,
@@ -146,20 +193,62 @@ class PanelCache:
         now = time.monotonic()
 
         with self._lock:
-            if key in self._cache:
-                entry = self._cache[key]
+            entry = self._cache.get(key)
+            if entry is not None:
                 if now - entry.ts < self._ttl:
                     self._cache.move_to_end(key)
+                    self._hit_count += 1
                     return entry.df
-                del self._cache[key]
+                del self._cache[key]  # 过期, 丢弃后重算
+            # single-flight: 同 key 若已有线程在算, 登记为跟随者; 否则本线程当 leader。
+            flight = self._inflight.get(key)
+            leader = flight is None
+            if leader:
+                flight = _InFlight()
+                self._inflight[key] = flight
 
-        # 计算在锁外 (可能重扫 parquet, 耗时); 并发相同 key 至多重复算一次, 不会崩
-        df = compute_fn(symbols, start, end, columns, asset_type)
+        if not leader:
+            # 跟随者: 等 leader 算完直接复用, 不重复 compute (消除缓存踩踏)。
+            flight.done.wait()
+            with self._lock:
+                self._reuse_count += 1
+            if flight.error is not None:
+                raise flight.error
+            return flight.df
+
+        # leader: compute 放锁外 (不同 key 仍可并发, 保留原设计优点)。
+        t_compute = time.perf_counter()
+        try:
+            df = compute_fn(symbols, start, end, columns, asset_type)
+        except BaseException as e:
+            # 失败不缓存: 摘除 inflight 让后续线程重试, 并把异常透传给已在等的跟随者。
+            with self._lock:
+                self._compute_seconds += time.perf_counter() - t_compute  # 失败也花了 IO, 计入
+                self._compute_count += 1
+                self._inflight.pop(key, None)
+            flight.error = e
+            flight.done.set()
+            raise
         with self._lock:
+            self._compute_seconds += time.perf_counter() - t_compute
+            self._compute_count += 1
             self._cache[key] = _CacheEntry(df=df, ts=now)
             if len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
+            self._inflight.pop(key, None)
+        flight.df = df
+        flight.done.set()
         return df
+
+    def stats(self) -> dict:
+        """遥测快照: 累计扫盘耗时/次数与命中/复用次数。首尾快照取差即区间内 IO 开销。"""
+        with self._lock:
+            return {
+                "compute_seconds": round(self._compute_seconds, 4),
+                "compute_count": self._compute_count,
+                "hit_count": self._hit_count,
+                "reuse_count": self._reuse_count,
+            }
 
     def invalidate(self) -> None:
         with self._lock:
@@ -198,6 +287,10 @@ class BacktestEngine:
     ) -> pl.DataFrame:
         """加载 enriched 数据面板，带缓存。asset_type='etf' 时读 ETF enriched。"""
         return self._cache.get_or_compute(symbols, start, end, columns, self._load_panel_inner, asset_type=asset_type)
+
+    def cache_stats(self) -> dict:
+        """暴露 PanelCache 遥测快照 (扫盘耗时/次数/命中/复用), 供上层量化 IO 占比。"""
+        return self._cache.stats()
 
     def _load_panel_inner(
         self,
@@ -281,6 +374,8 @@ class BacktestEngine:
         entries: pl.Series | None,
         exits: pl.Series | None,
         config: MatcherConfig,
+        entry_signal_ids: list[str] | None = None,
+        exit_signal_ids: list[str] | None = None,
     ) -> SimResult:
         """纯 NumPy 撮合模拟 — 逐 symbol 状态机。"""
         if panel.is_empty():
@@ -418,6 +513,8 @@ class BacktestEngine:
         config: MatcherConfig,
         progress_cb: "Callable[[dict], None] | None" = None,
         cancel_event: "threading.Event | None" = None,
+        entry_signal_ids: list[str] | None = None,
+        exit_signal_ids: list[str] | None = None,
     ) -> SimResult:
         """全量候选独立执行：每个买入信号都是独立样本, 不受资金/仓位限制。"""
         if panel.is_empty():
@@ -470,6 +567,45 @@ class BacktestEngine:
         # 撮合价: 建仓/清仓各自独立选列。
         entry_prices = open_prices if config.entry_fill == "open_t+1" else close_prices
         exit_prices = open_prices if config.exit_fill == "open_t+1" else close_prices
+
+        # ── 分钟K精确成交预加载 (同 simulate_portfolio) ──
+        minute_cache: dict = {}
+        if config.minute_fill:
+            _trigger_dates: set[str] = set()
+            _trigger_symbols: set[str] = set()
+            for _idx in range(n):
+                if ent[_idx] or ext[_idx]:
+                    _trigger_dates.add(self._date_str(panel_dates[_idx]))
+                    _trigger_symbols.add(str(panel_symbols[_idx]))
+            if _trigger_dates and _trigger_symbols:
+                _loaded = self._load_minute_for_fills(
+                    self.repo, list(_trigger_symbols), _trigger_dates, "stock",
+                )
+                for _key, _marr in _loaded.items():
+                    if _marr is not None and len(_marr) > 0:
+                        minute_cache[_key] = _marr
+
+        def _refill_price(idx: int, side: str, daily_price: float) -> float:
+            if not config.minute_fill or not minute_cache:
+                return daily_price
+            _sym = str(panel_symbols[idx])
+            _d = self._date_str(panel_dates[idx])
+            _marr = minute_cache.get((_sym, _d))
+            if _marr is None:
+                return daily_price
+            _ref = None
+            for _col in ("ma5", "ma10", "ma20"):
+                if _col in panel.columns:
+                    try:
+                        _fv = float(panel[_col][idx])
+                        if _fv > 0 and np.isfinite(_fv):
+                            _ref = _fv
+                            break
+                    except (TypeError, ValueError):
+                        pass
+            _precise = self._resolve_minute_fill(_marr, _ref, side)
+            return _precise if _precise is not None else daily_price
+
         has_volume = "volume" in panel.columns
         volumes = panel["volume"].fill_null(0).to_numpy() if has_volume else np.ones(n, dtype=float)
         names = panel["name"].fill_null("").to_numpy() if "name" in panel.columns else np.array([""] * n)
@@ -627,7 +763,10 @@ class BacktestEngine:
                 _count(block_reason)
                 return False
 
-            exit_price = float(exit_price_override) if exit_price_override is not None else float(exit_prices[idx])
+            if exit_price_override is not None:
+                exit_price = float(exit_price_override)
+            else:
+                exit_price = _refill_price(idx, "sell", float(exit_prices[idx]))
             shares = 100.0
             entry_value = shares * float(pos["entry_price"]) * (1 + buy_cost_pct)
             exit_value = shares * exit_price * (1 - sell_cost_pct)
@@ -653,6 +792,8 @@ class BacktestEngine:
                 entry_signal_date=pos.get("entry_signal_date"),
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
+                entry_signal_id=pos.get("entry_signal_id"),
+                exit_signal_id=_resolve_signal_id(panel, idx, exit_signal_ids) if reason == "signal" else None,
             ))
             return True
 
@@ -691,13 +832,14 @@ class BacktestEngine:
                 _count("sell_no_future")
                 continue
 
-            entry_price = float(entry_prices[entry_idx])
+            entry_price = _refill_price(entry_idx, "buy", float(entry_prices[entry_idx]))
             pos = {
                 "symbol": sym,
                 "name": str(names[entry_idx] or ""),
                 "entry_idx": entry_idx,
                 "entry_date": self._date_str(panel_dates[entry_idx]),
                 "entry_signal_date": entry_signal_dates[entry_idx] or self._date_str(panel_dates[entry_idx]),
+                "entry_signal_id": _resolve_signal_id(panel, entry_idx, entry_signal_ids),
                 "entry_price": entry_price,
                 "entry_score": score,
                 "hold_days": 0,
@@ -752,6 +894,118 @@ class BacktestEngine:
 
         return self._calc_independent_candidate_result(trades, n_candidates, execution_stats)
 
+    # ── 分钟K精确成交 ──────────────────────────────────
+
+    @staticmethod
+    def _resolve_minute_fill(
+        minute_arr: np.ndarray,
+        ref_price: float | None,
+        side: str,
+    ) -> float | None:
+        """用当日分钟K确定精确成交价。
+
+        Args:
+            minute_arr: float64 2D 数组, 列顺序 = _MINUTE_NUMERIC_COLS
+                        [open(0), high(1), low(2), close(3), volume(4), amount(5)]
+                        (缺失的尾部列直接不存在, 用 shape 判断)
+            ref_price: 信号参考线价格 (如 MA5 值); None 表示无参考线
+            side: "buy" 或 "sell", 决定穿越方向
+
+        Returns:
+            精确成交价, 或 None (降级到日K口径)
+        """
+        if minute_arr is None or len(minute_arr) == 0:
+            return None
+
+        ncols = minute_arr.shape[1] if minute_arr.ndim == 2 else 1
+        opens = minute_arr[:, 0]
+        highs = minute_arr[:, 1] if ncols > 1 else opens
+        lows = minute_arr[:, 2] if ncols > 2 else opens
+        closes = minute_arr[:, 3] if ncols > 3 else opens
+        volumes = minute_arr[:, 4] if ncols > 4 else None
+        amounts = minute_arr[:, 5] if ncols > 5 else None
+
+        # 有参考线 → 穿越价成交 (逻辑同止损: 找价格穿越参考线的时刻)
+        if ref_price is not None and ref_price > 0 and np.isfinite(ref_price):
+            if side == "sell":
+                # 卖出: 价格跌破参考线 → 开盘已低于则按开盘; 否则按参考线 (低点触及)
+                if np.isfinite(opens[0]) and opens[0] <= ref_price:
+                    return float(opens[0])
+                if np.any(np.isfinite(lows) & (lows <= ref_price)):
+                    return float(ref_price)
+            else:
+                # 买入: 价格涨破参考线 → 开盘已高于则按开盘; 否则按参考线 (高点触及)
+                if np.isfinite(opens[0]) and opens[0] >= ref_price:
+                    return float(opens[0])
+                if np.any(np.isfinite(highs) & (highs >= ref_price)):
+                    return float(ref_price)
+            # 参考线存在但当日分钟K未穿越 → 用收盘 (信号确认)
+            return float(closes[-1]) if np.isfinite(closes[-1]) else None
+
+        # 无参考线 → VWAP (成交额/成交量), 退化到收盘价
+        if volumes is not None and amounts is not None:
+            total_vol = float(np.nansum(volumes))
+            total_amt = float(np.nansum(amounts))
+            if total_vol > 0 and total_amt > 0:
+                return total_amt / total_vol
+
+        return float(closes[-1]) if np.isfinite(closes[-1]) else None
+
+    # 分钟K cache 存储的数值列及固定顺序 (_resolve_minute_fill 按此顺序整数索引)。
+    _MINUTE_NUMERIC_COLS = ["open", "high", "low", "close", "volume", "amount"]
+
+    @staticmethod
+    def _load_minute_for_fills(
+        repo,
+        symbols: list[str],
+        dates_needed: set,
+        asset_type: str,
+    ) -> dict:
+        """按触发日加载分钟K, 返回 {(symbol, date_str): float64 2D ndarray}。
+
+        dates_needed: 需要分钟数据的日期集合 (set of date strings "YYYY-MM-DD")
+
+        按触发日分批读取对应分区文件 (get_minute_by_dates), 而非扫描整个区间
+        (get_minute_range)。内存与回测区间长度解耦, 只随触发日数量增长 ——
+        触发日稀疏时避免读取区间内大量无关日期导致爆内存。
+
+        cache 值为 float64 紧凑 2D 数组 (列顺序见 _MINUTE_NUMERIC_COLS), 而非
+        完整 DataFrame, 避免每条记录携带 polars 元数据开销导致内存膨胀。
+        """
+        if not symbols or not dates_needed:
+            return {}
+        from datetime import date as _date
+        sorted_date_strs = sorted(dates_needed)
+        date_objs = [_date.fromisoformat(s) for s in sorted_date_strs]
+
+        cache: dict = {}
+        # 分批读取: 每批 50 个交易日, 处理完拼进 cache, 避免单批过大。
+        BATCH = 50
+        numeric_cols = BacktestEngine._MINUTE_NUMERIC_COLS
+        for i in range(0, len(date_objs), BATCH):
+            batch = date_objs[i:i + BATCH]
+            try:
+                df = repo.get_minute_by_dates(symbols, batch, asset_type=asset_type)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("minute fill data load failed (batch %d-%d): %s", i, i + len(batch), e)
+                continue
+            if df.is_empty():
+                continue
+            # 按 (symbol, 日期) 分组, 每组转紧凑 float64 数组存入 cache
+            df = df.with_columns(
+                pl.col("datetime").dt.strftime("%Y-%m-%d").alias("_d_str")
+            )
+            for sub in df.partition_by(["symbol", "_d_str"], as_dict=False):
+                if sub.is_empty():
+                    continue
+                sym = sub["symbol"][0]
+                d_str = sub["_d_str"][0]
+                cols = [c for c in numeric_cols if c in sub.columns]
+                cache[(sym, d_str)] = sub.select(
+                    [pl.col(c).cast(pl.Float64) for c in cols]
+                ).to_numpy()
+        return cache
+
     def simulate_portfolio(
         self,
         panel: pl.DataFrame,
@@ -760,6 +1014,8 @@ class BacktestEngine:
         config: MatcherConfig,
         progress_cb: "Callable[[dict], None] | None" = None,
         cancel_event: "threading.Event | None" = None,
+        entry_signal_ids: list[str] | None = None,
+        exit_signal_ids: list[str] | None = None,
     ) -> SimResult:
         """账户级组合回测：日线信号 → 成交约束 → 仓位/现金撮合。"""
         if panel.is_empty():
@@ -853,6 +1109,52 @@ class BacktestEngine:
         positions: dict[str, dict] = {}
         last_close: dict[str, float] = {}
         trades: list[TradeRecord] = []
+
+        # ── 分钟K精确成交预加载 ──
+        # 信号触发日加载分钟K, 成交时用穿越价/VWAP替代收盘价
+        minute_cache: dict = {}  # {(symbol, date_str): structured ndarray}
+        if config.minute_fill:
+            trigger_dates: set[str] = set()
+            trigger_symbols: set[str] = set()
+            for idx in range(n):
+                if ent[idx] or ext[idx]:
+                    trigger_dates.add(self._date_str(panel_dates[idx]))
+                    trigger_symbols.add(str(panel_symbols[idx]))
+            if trigger_dates and trigger_symbols:
+                asset_type = "etf" if all(
+                    str(s).endswith(".SH") and str(s).startswith("5") for s in list(trigger_symbols)[:5]
+                ) else "stock"
+                loaded = self._load_minute_for_fills(
+                    self.repo, list(trigger_symbols), trigger_dates, asset_type,
+                )
+                for key, marr in loaded.items():
+                    if marr is not None and len(marr) > 0:
+                        minute_cache[key] = marr
+
+        def _refill_price(idx: int, side: str, daily_price: float) -> float:
+            """分钟K精确成交价; 无数据则降级为 daily_price。"""
+            if not config.minute_fill or not minute_cache:
+                return daily_price
+            sym = str(panel_symbols[idx])
+            d_str = self._date_str(panel_dates[idx])
+            marr = minute_cache.get((sym, d_str))
+            if marr is None:
+                return daily_price
+            # 参考线: 从 panel 取 ma5/ma10/ma20 作为近似 (均线类信号)
+            ref = None
+            for col in ("ma5", "ma10", "ma20"):
+                if col in panel.columns:
+                    val = panel[col][idx]
+                    try:
+                        fv = float(val)
+                        if fv > 0 and np.isfinite(fv):
+                            ref = fv
+                            break
+                    except (TypeError, ValueError):
+                        pass
+            precise = self._resolve_minute_fill(marr, ref, side)
+            return precise if precise is not None else daily_price
+
         equity_curve: list[dict] = []
         drawdown_curve: list[dict] = []
         execution_stats: dict[str, int] = {
@@ -953,7 +1255,10 @@ class BacktestEngine:
         ) -> None:
             nonlocal cash
             pos = positions.pop(sym)
-            exit_price = float(exit_price_override) if exit_price_override is not None else float(exit_prices[idx])
+            if exit_price_override is not None:
+                exit_price = float(exit_price_override)
+            else:
+                exit_price = _refill_price(idx, "sell", float(exit_prices[idx]))
             exit_value = pos["shares"] * exit_price * (1 - sell_cost_pct)
             cash += exit_value
             pnl_amount = exit_value - pos["entry_value"]
@@ -979,6 +1284,8 @@ class BacktestEngine:
                 entry_signal_date=pos.get("entry_signal_date"),
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
+                entry_signal_id=pos.get("entry_signal_id"),
+                exit_signal_id=_resolve_signal_id(panel, idx, exit_signal_ids) if reason == "signal" else None,
             ))
 
         def _try_sell(
@@ -1153,7 +1460,7 @@ class BacktestEngine:
                 if allocation <= 0:
                     _count("buy_exposure")
                     continue
-                entry_price = float(entry_prices[idx])
+                entry_price = _refill_price(idx, "buy", float(entry_prices[idx]))
                 shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / 100) * 100
                 entry_value = shares * entry_price * (1 + buy_cost_pct)
                 if shares <= 0:
@@ -1171,6 +1478,7 @@ class BacktestEngine:
                     "name": str(names[idx] or ""),
                     "entry_date": self._date_str(panel_dates[idx]),
                     "entry_signal_date": entry_signal_dates[idx] or self._date_str(panel_dates[idx]),
+                    "entry_signal_id": _resolve_signal_id(panel, idx, entry_signal_ids),
                     "entry_price": entry_price,
                     "entry_value": entry_value,
                     "shares": shares,

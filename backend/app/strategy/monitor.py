@@ -33,7 +33,9 @@ _SIGNAL_CN: dict[str, str] = {
     "signal_ma_golden_5_20": "MA5上穿MA20", "signal_ma_dead_5_20": "MA5下穿MA20",
     "signal_ma_golden_20_60": "MA20上穿MA60", "signal_macd_golden": "MACD金叉",
     "signal_macd_dead": "MACD死叉", "signal_ma20_breakout": "突破MA20",
-    "signal_ma20_breakdown": "跌破MA20", "signal_n_day_high": "60日新高",
+    "signal_ma20_breakdown": "跌破MA20", "signal_ma5_breakout": "突破MA5",
+    "signal_ma5_breakdown": "跌破MA5", "signal_ma10_breakout": "突破MA10",
+    "signal_ma10_breakdown": "跌破MA10", "signal_n_day_high": "60日新高",
     "signal_n_day_low": "60日新低", "signal_boll_breakout_upper": "突破布林上轨",
     "signal_boll_breakdown_lower": "跌破布林下轨", "signal_volume_surge": "放量",
     "signal_limit_up": "涨停", "signal_limit_down": "跌停",
@@ -148,7 +150,7 @@ class StrategyMonitorService:
                         strategy_id=strategy_id,
                         symbol=sym,
                         name=name,
-                        message=f"买入信号触发",
+                        message=f"入场信号触发",
                         price=price,
                         change_pct=pct,
                         signals=hit_sigs,
@@ -165,7 +167,7 @@ class StrategyMonitorService:
                         strategy_id=strategy_id,
                         symbol=sym,
                         name=name,
-                        message=f"卖出信号触发",
+                        message=f"出场信号触发",
                         price=price,
                         change_pct=pct,
                         signals=hit_sigs,
@@ -335,8 +337,15 @@ class MonitorRuleEngine:
         # ETF 版历史窗口加载器 (asset_type=etf 的规则用)。为 None 时 ETF filter_history 策略跳过。
         self._history_loader_etf: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
         # 本轮 evaluate() 产出的策略选股结果: strategy_id → {rows, total, as_of}
-        # 供策略页实时回显复用 (/api/screener/cached 端点直接读取此内存结果), 避免重跑
+        # 供策略页实时回显复用 (/api/screener/cached 端点直接读取, 避免重跑)。
+        # 注意: 始终是「完整」的 dict —— evaluate 重算时先写到 _building_strategy_results,
+        # 算完后整体替换此属性, 保证 /cached 并发读取永远拿到完整结果, 不会读到空中间态。
         self._latest_strategy_results: dict[str, dict] = {}
+        # 本轮重算的临时容器 (_match_strategy 写入它); reset 轮开始时初始化为空 dict,
+        # evaluate 结束后一次性替换 _latest_strategy_results。
+        self._building_strategy_results: dict[str, dict] = {}
+        # 本轮成功写入股票策略实时结果的策略 ID, 供 QuoteService 在计算完成后精确通知策略页。
+        self._latest_strategy_result_ids: set[str] = set()
 
     def set_strategy_engine(self, engine) -> None:
         """注入 StrategyEngine, type=strategy 规则据此跑选股。"""
@@ -422,6 +431,12 @@ class MonitorRuleEngine:
         """
         return self._latest_strategy_results
 
+    def consume_strategy_result_updates(self) -> bool:
+        """返回并清除本轮成功写入的股票策略实时结果标记。"""
+        updated = bool(self._latest_strategy_result_ids)
+        self._latest_strategy_result_ids.clear()
+        return updated
+
     def has_rule_type(self, rtype: str) -> bool:
         """是否存在指定类型的 (已启用) 规则。供 quote_service 判断是否需要注入特殊数据。"""
         if not self._rules:
@@ -462,9 +477,13 @@ class MonitorRuleEngine:
 
         now = time.time()
         events: list[dict] = []
-        # 每轮重置: 只保留本次 evaluate 产出的策略结果
+        # 原子化: reset 轮 (股票轮) 时先把本轮结果写到临时容器, 算完后一次性替换
+        # _latest_strategy_results。这样 /cached 并发读取永远拿到完整结果,
+        # 不会在「清空 → 逐个回填」窗口里读到空中间态 (曾导致策略页闪烁)。
+        # 非 reset 轮 (ETF 轮) 继续往同一临时容器追加 (_match_strategy 仅写 stock, 实际不追加)。
         if reset_strategy_results:
-            self._latest_strategy_results = {}
+            self._building_strategy_results = {}
+            self._latest_strategy_result_ids.clear()
 
         # list() 快照: 本方法跑在行情轮询线程, API 线程同时 add/remove 规则
         # 会触发 "dictionary changed size during iteration", 整轮告警丢失
@@ -475,6 +494,10 @@ class MonitorRuleEngine:
                 events.extend(self._evaluate_rule(df, rule, now))
             except Exception as e:
                 logger.warning("规则评估失败 %s: %s", rule_id, e)
+
+        # 一次性提交本轮结果 (原子替换): /cached 读方要么拿到上一轮完整结果,
+        # 要么拿到本轮完整结果, 不会读到空中间态。
+        self._latest_strategy_results = self._building_strategy_results
 
         return events
 
@@ -659,10 +682,12 @@ class MonitorRuleEngine:
         # 记录本轮完整选股结果 (供策略页实时回显: /cached 端点直接读取, 不落盘)。
         # 与下面的 diff 事件无关 — 无论是否产生 new_entry/dropped, 结果都该可用于回显。
         # 策略结果缓存仅用于股票策略页 /cached 回显; ETF 策略页走实时单跑, 不写入。
+        # 写到 evaluate 提供的临时容器 (_building_strategy_results), 算完后整体替换,
+        # 避免并发读到半填充状态。
         if at == "stock":
             try:
                 import math
-                self._latest_strategy_results[sid] = {
+                self._building_strategy_results[sid] = {
                     "total": result.total,
                     "as_of": str(cn_today()),
                     "rows": [
@@ -671,6 +696,7 @@ class MonitorRuleEngine:
                         for row in result.rows
                     ],
                 }
+                self._latest_strategy_result_ids.add(sid)
             except Exception:  # noqa: BLE001
                 pass
 

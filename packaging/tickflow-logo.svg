@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="512" height="512" fill="none" role="img" aria-label="TickFlow Stock Panel">
+  <!-- 左方括号 -->
+  <path d="M10 4 L4 4 L4 28 L10 28" stroke="#8B5CF6" stroke-width="2" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <!-- 右方括号 -->
+  <path d="M22 4 L28 4 L28 28 L22 28" stroke="#8B5CF6" stroke-width="2" stroke-linejoin="miter" stroke-linecap="butt"/>
+  <!-- K 线 wick(上下影线,半透明) -->
+  <line x1="16" y1="7" x2="16" y2="25" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" stroke-opacity="0.6"/>
+  <!-- K 线 body — 偏上,上影短/下影长, bullish 站稳感 -->
+  <rect x="13" y="9" width="6" height="10" fill="#8B5CF6" rx="0.5"/>
+</svg>

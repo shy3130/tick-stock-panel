@@ -6,14 +6,15 @@
  * score、signals、candle、ext 列。其余纯数据列（价格/指标/财务…）交给共享原语。
  */
 import { useState, type CSSProperties, type ReactNode } from 'react'
-import { Check, Plus, Eye, EyeOff } from 'lucide-react'
-import type { KlineRow } from '@/lib/api'
+import { Check, Plus, Eye, EyeOff, RefreshCw } from 'lucide-react'
+import type { KlineRow, MinuteKlineRow } from '@/lib/api'
 import { fmtPrice } from '@/lib/format'
 import type { ColumnConfig } from '@/lib/screener-columns'
 import { getSignals, signalCls } from '@/lib/stock-table'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
-import { resolveCandleConfig } from '@/lib/list-columns'
+import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
+import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
 import { StockDataTable, type SortState } from '@/components/stock-table/StockDataTable'
 
 interface ScreenerTableProps {
@@ -31,6 +32,17 @@ interface ScreenerTableProps {
   /** 日k蜡烛图是否显示（表头眼睛开关） */
   dailyKChartVisible?: boolean
   onToggleDailyKChart?: () => void
+  /** symbol → 分时数据，仅当启用分时列时传入 */
+  minuteData?: Record<string, MinuteKlineRow[]>
+  /** 分时图是否显示（表头眼睛开关） */
+  intradayChartVisible?: boolean
+  onToggleIntradayChart?: () => void
+  /** 分时是否正在自动轮询 (true 时隐藏手动刷新按钮, 避免重复请求) */
+  intradayAutoRefresh?: boolean
+  /** 手动刷新分时数据 */
+  onRefreshIntraday?: () => void
+  /** 分时数据正在刷新中 (按钮 loading 态) */
+  intradayRefreshing?: boolean
   /** 表头排序（受控，由 Screener.tsx 传入） */
   sort?: SortState | null
   onSortToggle?: (colId: string) => void
@@ -116,6 +128,8 @@ export function ScreenerTable({
   rows, columns, strategyIdToName, symbolStrategyMap, activeStrategy,
   watchlistSet, onPreview, onToggleWatchlist, watchlistPending, klineData = {},
   dailyKChartVisible = true, onToggleDailyKChart,
+  minuteData = {}, intradayChartVisible = true, onToggleIntradayChart,
+  intradayAutoRefresh = false, onRefreshIntraday, intradayRefreshing = false,
   sort, onSortToggle,
 }: ScreenerTableProps) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
@@ -126,6 +140,13 @@ export function ScreenerTable({
   const candleSize = dailyKChartVisible
     ? { width: candleResolved.enabledWidth, height: candleResolved.enabledHeight }
     : { width: candleResolved.disabledWidth, height: candleResolved.disabledHeight }
+
+  // 分时列渲染尺寸（开启用配置宽高，收起用 40×40 占位，与自选页一致）
+  const intradayCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday' && c.visible)
+  const intradayResolved = resolveIntradayConfig(intradayCol?.intradayConfig)
+  const intradaySize = intradayChartVisible
+    ? { width: intradayResolved.width, height: intradayResolved.height }
+    : { width: 40, height: 40 }
 
   const toggleExpand = (key: string) => {
     setExpandedCells(prev => {
@@ -262,13 +283,33 @@ export function ScreenerTable({
       case 'candle': {
         const candleRows = klineData[r.symbol] ?? []
         // 锁定列宽与行高：minWidth=maxWidth 防止 kline 加载前后整列宽度跳动（闪烁）
+        // padding/宽度与自选页一致（width+4 留内边距余量）
         return (
           <td
             key={col.id}
-            className="px-3 py-2"
-            style={{ width: candleSize.width, minWidth: candleSize.width, maxWidth: candleSize.width, height: candleSize.height }}
+            className="pl-2 pr-3 py-1.5"
+            style={{ width: candleSize.width + 4, minWidth: candleSize.width + 4, maxWidth: candleSize.width + 4, height: candleSize.height }}
           >
             <MiniCandlestick rows={candleRows} width={candleSize.width} height={candleSize.height} />
+          </td>
+        )
+      }
+      case 'intraday': {
+        const rows: MinuteKlineRow[] = minuteData[r.symbol] ?? []
+        const iw = intradaySize.width
+        const ih = intradaySize.height
+        // border-l 与自选页一致：当日k/分时相邻时提供视觉分隔
+        return (
+          <td
+            key={col.id}
+            className="pl-3 pr-2 py-1.5 border-l border-border/30"
+            style={{ width: iw + 4, minWidth: iw + 4, maxWidth: iw + 4, height: ih }}
+          >
+            <div className="flex items-center justify-center">
+              {intradayChartVisible
+                ? <MiniIntraday rows={rows} prevClose={r.prev_close} changePct={r.change_pct} width={iw - 4} height={ih} />
+                : <span className="text-[10px] text-muted">分时</span>}
+            </div>
           </td>
         )
       }
@@ -291,9 +332,12 @@ export function ScreenerTable({
         ? 'border-border/50 opacity-40'
         : 'border-border hover:bg-elevated/50'
       }
-      // 日k列表头：标签 + 显示/隐藏蜡烛图眼睛按钮（与自选页一致）
-      renderHeaderContent={onToggleDailyKChart ? (col) => {
-        if (col.source.type === 'builtin' && col.source.key === 'candle') {
+      // 日k / 分时列表头：标签 + 显示/隐藏的眼睛按钮（与自选页一致）
+      renderHeaderContent={(col) => {
+        if (col.source.type !== 'builtin') return undefined
+        const key = col.source.key
+        // 日k 蜡烛图开关
+        if (key === 'candle' && onToggleDailyKChart) {
           return (
             <span className="inline-flex items-center justify-center gap-1.5">
               <span>{col.label}</span>
@@ -313,8 +357,46 @@ export function ScreenerTable({
             </span>
           )
         }
+        // 分时图开关 + 手动刷新按钮 (自动轮询开启时不显示, 避免重复请求)
+        if (key === 'intraday' && onToggleIntradayChart) {
+          return (
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <span>{col.label}</span>
+              <button
+                type="button"
+                onClick={(event) => { event.stopPropagation(); onToggleIntradayChart() }}
+                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                  intradayChartVisible
+                    ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                    : 'text-muted hover:text-foreground hover:bg-elevated'
+                }`}
+                title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+              >
+                {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              </button>
+              {/* 分时图显示 且 未开自动轮询时, 提供手动刷新按钮 */}
+              {intradayChartVisible && !intradayAutoRefresh && onRefreshIntraday && (
+                <button
+                  type="button"
+                  onClick={(event) => { event.stopPropagation(); onRefreshIntraday() }}
+                  disabled={intradayRefreshing}
+                  className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                  title="刷新分时数据"
+                  aria-label="刷新分时数据"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${intradayRefreshing ? 'animate-spin' : ''}`} />
+                </button>
+              )}
+              {/* 自动轮询中: 显示旋转图标提示正在实时刷新 */}
+              {intradayChartVisible && intradayAutoRefresh && (
+                <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+              )}
+            </span>
+          )
+        }
         return undefined
-      } : undefined}
+      }}
     />
   )
 }

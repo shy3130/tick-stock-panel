@@ -1,8 +1,9 @@
 """行情状态 / SSE 推送 API。
 
 盘中选股相关端点已迁移至策略页面，此处仅保留全局行情基础设施。
-SSE 推送三种事件 (使用标准 SSE event 字段):
+SSE 推送四种事件 (使用标准 SSE event 字段):
   - quotes_updated: 行情数据刷新，前端 invalidate 对应 query
+  - strategy_results_updated: 策略监控已写入最新结果，前端刷新策略个股列表
   - strategy_alert: 策略监控/告警触发，前端弹通知
   - depth_updated: 五档盘口修正完成，前端刷新连板梯队/看板封单数据
 """
@@ -168,6 +169,13 @@ async def quote_stream(request: Request):
                             "ts": int(time.time() * 1000),
                             "symbol_count": qs._symbol_count,
                         }),
+                    }
+
+                # 策略监控完成后, 结果已写入内存缓存; 独立通知只刷新策略个股列表。
+                if data["strategy_results_updated"]:
+                    yield {
+                        "event": "strategy_results_updated",
+                        "data": json.dumps({"ts": int(time.time() * 1000)}),
                     }
 
                 # 五档修正完成 — 前端刷新连板梯队封单数据

@@ -127,13 +127,29 @@ jobs:
           uv run python ../packaging/generate_icon.py
 
       - name: 打包 (PyInstaller)
-        # 在 backend 目录跑 (用该目录的 venv: pywebview/polars 等)。
+        # 在 backend 目录跑 (用该目录的 venv: pywebview/polars 等依赖)。
         # 产物输出到 backend/dist/ (PyInstaller 默认路径), 与 packaging/tickflow.iss
         # 第 78 行的 Source 路径 (..\backend\dist\TickFlowStockPanel\*) 保持一致。
         # SPECPATH 由 spec 文件位置决定 (packaging/tickflow.spec → 项目根),
         # 与 cwd 无关, 故 frontend/dist、tiers.yaml 等相对路径仍正确。
         working-directory: backend
         run: uv run pyinstaller ../packaging/tickflow.spec --noconfirm
+
+      - name: 检查 Polars 兼容内核 (仅 Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $runtimeRoot = 'backend/dist/TickFlowStockPanel/_internal'
+          $required = @(
+            '_polars_runtime_32/_polars_runtime.pyd',
+            '_polars_runtime_compat/_polars_runtime.pyd'
+          )
+          $missing = $required | Where-Object {
+            -not (Test-Path (Join-Path $runtimeRoot $_))
+          }
+          if ($missing) {
+            throw "PyInstaller output is missing Polars runtime(s): $($missing -join ', ')"
+          }
 
       - name: 安装 Inno Setup (仅 Windows)
         if: matrix.platform == 'windows'

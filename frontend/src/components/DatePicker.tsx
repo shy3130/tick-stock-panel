@@ -1,6 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
+
+/** 弹层固定宽度(px) — 与下方 w-[260px] 保持一致,用于水平边界裁剪计算 */
+const POPUP_WIDTH = 260
+/** 弹层预估高度(px) — 用于判断是否需要向上翻转 */
+const POPUP_HEIGHT = 320
+/** 弹层与触发按钮的间距(px) */
+const POPUP_GAP = 6
 
 interface DatePickerProps {
   value: string          // YYYY-MM-DD
@@ -43,8 +51,13 @@ export function DatePicker({
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [showYearPicker, setShowYearPicker] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
   const reduceMotion = useReducedMotion()
+  // 触发按钮 ref (外部点击检测 + 计算弹层坐标)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  // 弹层 portal ref (外部点击检测)
+  const popRef = useRef<HTMLDivElement>(null)
+  // 弹层视口坐标 + 展开方向(open 时计算一次,避免滚动时漂移)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
 
   // 当前显示的月份
   const [viewYear, setViewYear] = useState(() => viewDate(value, min, max).year)
@@ -57,11 +70,32 @@ export function DatePicker({
     setViewMonth(next.month)
   }, [value, min, max])
 
-  // 点击外部关闭
+  // 打开弹层: 按钮的视口坐标计算 + 智能方向翻转 + 水平边界裁剪
+  const handleOpen = () => {
+    if (open) { setOpen(false); return }
+    if (!btnRef.current) { setOpen(true); return }
+    const r = btnRef.current.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - r.bottom
+    // 下方空间不足 → 向上展开
+    const dropUp = spaceBelow < POPUP_HEIGHT + POPUP_GAP && r.top > POPUP_HEIGHT + POPUP_GAP
+    const top = dropUp
+      ? Math.max(8, r.top - POPUP_HEIGHT - POPUP_GAP)
+      : r.bottom + POPUP_GAP
+    // 水平: 默认按 align 贴齐按钮左/右边缘, 再做右侧溢出裁剪
+    const rawLeft = align === 'left' ? r.left : r.right - POPUP_WIDTH
+    const left = Math.max(8, Math.min(rawLeft, window.innerWidth - POPUP_WIDTH - 8))
+    setPos({ top, left })
+    setOpen(true)
+  }
+
+  // 点击外部关闭 (Portal 下弹层不在 ref 树内, 分别判断按钮与弹层)
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (btnRef.current?.contains(t)) return
+      if (popRef.current?.contains(t)) return
+      setOpen(false)
     }
     const closeOnEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -74,6 +108,19 @@ export function DatePicker({
     return () => {
       document.removeEventListener('mousedown', handler)
       document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  // 滚动 / resize 时关闭弹层 (fixed 定位不跟随滚动,关闭比重算更可靠)
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    // capture: true → 捕获到任意祖先滚动容器的 scroll
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
     }
   }, [open])
 
@@ -120,11 +167,12 @@ export function DatePicker({
   const today = todayStr()
 
   return (
-    <div ref={ref} className={`relative inline-flex ${className}`}>
+    <div className={`relative inline-flex ${className}`}>
       {/* 触发按钮 */}
       <button
+        ref={btnRef}
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={handleOpen}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={value ? `选择日期，当前 ${value}` : placeholder}
@@ -136,19 +184,22 @@ export function DatePicker({
         <span className={value ? undefined : 'text-muted'}>{displayLabel}</span>
       </button>
 
-      {/* 弹出日历 */}
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={reduceMotion ? false : { opacity: 0, y: -4, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={reduceMotion ? undefined : { opacity: 0, y: -4, scale: 0.97 }}
-            transition={reduceMotion ? { duration: 0 } : { duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} top-full mt-1.5 z-50 w-[260px] rounded-card border border-border
-              bg-surface shadow-[0_8px_30px_rgba(0,0,0,0.4)] p-3`}
-            role="dialog"
-            aria-label="选择日期"
-          >
+      {/* 弹出日历 — Portal 到 body, 逃逸祖先 overflow 裁剪与 framer-motion transform 包含块 */}
+      {createPortal(
+        <AnimatePresence>
+          {open && pos && (
+            <motion.div
+              ref={popRef}
+              initial={reduceMotion ? false : { opacity: 0, y: -4, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: -4, scale: 0.97 }}
+              transition={reduceMotion ? { duration: 0 } : { duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+              style={{ position: 'fixed', top: pos.top, left: pos.left }}
+              className="z-[9999] w-[260px] rounded-card border border-border
+                bg-surface shadow-[0_8px_30px_rgba(0,0,0,0.4)] p-3"
+              role="dialog"
+              aria-label="选择日期"
+            >
             {/* 月份导航 */}
             <div className="flex items-center justify-between mb-2">
               <button
@@ -251,6 +302,7 @@ export function DatePicker({
           </motion.div>
         )}
       </AnimatePresence>
+      , document.body)}
     </div>
   )
 }

@@ -140,6 +140,11 @@ export function useQuoteStream(
         }
       })
 
+      es.addEventListener('strategy_results_updated', () => {
+        // 策略监控完成后只刷新策略结果缓存，不扩散到其他行情页面。
+        qc.invalidateQueries({ queryKey: ['screener-cached'] })
+      })
+
       es.addEventListener('depth_updated', () => {
         // 五档修正完成: 刷新连板梯队 + 看板封单数据。
         // 不受实时行情开关限制 — 修正轮询独立于行情轮询, 用户开了修正就想看实时封单。

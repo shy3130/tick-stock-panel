@@ -102,6 +102,22 @@ def delete_one(data_dir: Path, signal_id: str) -> bool:
 
 
 # ── 校验 ────────────────────────────────────────────────
+
+MAX_DAYS = 60  # 偏移天数上限 (前N日的 N)
+
+
+def _parse_days(c: dict, key: str, i: int) -> int:
+    """解析并校验条件的天数偏移 (leftDays / rightDays)。返回 0..MAX_DAYS。"""
+    raw = c.get(key, 0)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"第 {i+1} 个条件: {key} 必须是整数: {raw!r}")
+    if n < 0 or n > MAX_DAYS:
+        raise ValueError(f"第 {i+1} 个条件: {key} 必须在 0..{MAX_DAYS} 之间: {n}")
+    return n
+
+
 def _parse_right(right: str) -> tuple[str, object]:
     """解析右值。返回 ('field', colname) 或 ('const', float)。"""
     if isinstance(right, (int, float)):
@@ -143,6 +159,8 @@ def validate(sig: dict) -> None:
         if c.get("op") not in OPS:
             raise ValueError(f"第 {i+1} 个条件: 运算符 {c.get('op')!r} 非法")
         _parse_right(c.get("right"))   # 会校验右值字段/数字
+        _parse_days(c, "leftDays", i)   # 左字段偏移
+        _parse_days(c, "rightDays", i)  # 右字段偏移
 
 
 # ── 编译为 Polars 表达式 ─────────────────────────────────
@@ -151,11 +169,21 @@ def column_name(signal_id: str) -> str:
     return f"{PREFIX}{signal_id}"
 
 
-def build_expressions(signals: list[dict]) -> dict[str, pl.Expr]:
+def _col(name: str, days: int = 0) -> pl.Expr:
+    """构造列表达式; days>0 时取 N 个交易日前的值 (按 symbol 分组 shift)。"""
+    expr = pl.col(name)
+    if days > 0:
+        expr = expr.shift(days).over("symbol")
+    return expr
+
+
+def build_expressions(signals: list[dict], allow_shift: bool = True) -> dict[str, pl.Expr]:
     """把多个自定义信号编译成 {column_name: pl.Expr}。
 
     - 只处理 enabled != False 的信号。
     - 单个信号内多条件用 ``&`` 串联（AND）。
+    - allow_shift=False 时, 跳过带日期偏移 (leftDays/rightDays>0) 的信号
+      (盘中单日快照上 .shift 跨 symbol 语义不正确, 优雅降级)。
     - 编译失败的信号被跳过并告警（不影响其它信号）。
     """
     out: dict[str, pl.Expr] = {}
@@ -167,11 +195,16 @@ def build_expressions(signals: list[dict]) -> dict[str, pl.Expr]:
             col_name = column_name(sig["id"])
             parts: list[pl.Expr] = []
             for c in conds:
+                left_days = int(c.get("leftDays", 0) or 0)
+                right_days = int(c.get("rightDays", 0) or 0)
+                # 盘中路径不支持偏移 → 跳过整个信号
+                if not allow_shift and (left_days > 0 or right_days > 0):
+                    raise ValueError("盘中实时路径不支持日期偏移条件, 已跳过")
                 left = c["left"]
                 op = c["op"]
                 kind, val = _parse_right(c["right"])
-                right_expr = pl.col(val) if kind == "field" else val
-                parts.append(_OP_BUILDERS[op](pl.col(left), right_expr))
+                right_expr = _col(val, right_days) if kind == "field" else val
+                parts.append(_OP_BUILDERS[op](_col(left, left_days), right_expr))
             combined = parts[0]
             for p in parts[1:]:
                 combined = combined & p

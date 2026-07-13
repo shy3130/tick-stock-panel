@@ -14,7 +14,7 @@
     最后拉一次 → 落盘 depth5 parquet(定版)
 
 三层防护节流("设过大设上限, 设过小设最小值"):
-  ① 套餐范围 clamp: Pro 10~120s, Expert 3~300s
+  ① 套餐范围 clamp: Pro 10~120s, Expert 3~120s
   ② 限速安全 clamp: safe = 60/((rpm*0.8)/batches), 涨跌停多就自动放慢
   ③ 系统接管通知: 用户设置会超限时, 推 toast 告知已自动调整
 """
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # 套餐 → (轮询间隔下限s, 上限s)
 TIER_INTERVAL_RANGE: dict[str, tuple[float, float]] = {
     "pro": (10.0, 120.0),
-    "expert": (3.0, 300.0),
+    "expert": (3.0, 120.0),
 }
 # 兜底: 其他有 DEPTH5_BATCH 的套餐按 pro 范围
 DEFAULT_RANGE = (10.0, 120.0)

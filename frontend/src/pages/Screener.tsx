@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { toast } from '@/components/Toast'
-import { useDataStatus, usePreferences } from '@/lib/useSharedQueries'
+import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
+import { isExpertOrAbove } from '@/lib/capability-labels'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
@@ -58,6 +59,17 @@ export function Screener() {
       return next
     })
   }, [])
+  // 分时图显示开关（仅当 intraday 列可见时才有意义；持久化）
+  const [intradayChartVisible, setIntradayChartVisible] = useState<boolean>(() => storage.screenerIntraday.get(true))
+  const toggleIntradayChart = useCallback(() => {
+    setIntradayChartVisible(v => {
+      const next = !v
+      storage.screenerIntraday.set(next)
+      return next
+    })
+  }, [])
+  // 截断提示可关闭 (仅本次会话, 不持久化)
+  const [intradayCapDismissed, setIntradayCapDismissed] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const [showFilter, setShowFilter] = useState(false)
   const [filter, setFilter] = useState<ScreenerFilterType>(defaultFilter)
@@ -339,6 +351,50 @@ export function Screener() {
     staleTime: 5 * 60_000,
   })
   const klineData = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
+
+  // 分时列是否启用 → 决定是否加载批量分时数据 (需 kline.minute.batch 能力)
+  const intradayColumn = useMemo(() =>
+    columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday' && c.visible),
+    [columns],
+  )
+  // 分时图需 Pro+ (kline.minute.batch), 低档用户开了列也不拉数据
+  const caps = useCapabilities()
+  const hasMinuteBatch = !!caps.data?.capabilities?.['kline.minute.batch']
+  const intradayVisible = !!intradayColumn && hasMinuteBatch && intradayChartVisible
+
+  // 分时数据加载策略 (与自选页一致, 简洁优先):
+  //  - 全量加载当前列表 symbol, 但按套餐 batch 上限截断 (Pro=100 / Expert=200),
+  //    超出时只取前 batch 只并提示用户, 避免一次性发太多请求打爆 rpm 配额
+  //  - 刷新: minute_intraday_refresh 偏好开启时盘中 15s 轮询; 否则仅首次加载,
+  //    用户可点表头刷新按钮手动更新
+  const minuteBatchCap = caps.data?.capabilities?.['kline.minute.batch']?.batch ?? 100
+  const quoteStatus = useQuoteStatus()
+  const realtimeRunning = quoteStatus.data?.running ?? false
+  const intradayRefreshEnabled = prefs?.minute_intraday_refresh ?? false
+
+  const allIntradaySymbols = useMemo(
+    () => displayRows.map((r: any) => r.symbol),
+    [displayRows],
+  )
+  const intradayTruncated = intradayVisible && allIntradaySymbols.length > minuteBatchCap
+  // 是否已是最高档 (Expert+): 最高档时截断提示不再建议"升级套餐"
+  const isMaxTier = isExpertOrAbove(caps.data?.label ?? '')
+  // 截断到 batch 上限 (Pro=100 / Expert=200), 一次请求 = 一次 TickFlow 调用
+  const intradaySymbols = useMemo(
+    () => intradayTruncated ? allIntradaySymbols.slice(0, minuteBatchCap) : allIntradaySymbols,
+    [allIntradaySymbols, intradayTruncated, minuteBatchCap],
+  )
+  const intradaySymbolsKey = intradaySymbols.join(',')
+
+  const minuteBatch = useQuery({
+    queryKey: QK.minuteBatch(intradaySymbolsKey),
+    queryFn: () => api.klineMinuteBatch(intradaySymbols),
+    enabled: intradayVisible && intradaySymbols.length > 0,
+    staleTime: 10_000,
+    // 仅当开启分时刷新偏好 且 盘中实时行情运行时 才轮询 (省 rpm)
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? 15_000 : false,
+  })
+  const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
   // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
@@ -645,7 +701,7 @@ export function Screener() {
                   active={activeStrategy === s.id}
                   count={hitCounts[id]}
                   expiredCount={expiredCounts[id]}
-                  loading={runAll.isPending && hitCounts[id] == null}
+                  loading={runAll.isPending}
                   cardSize={cardSize}
                   onRun={() => handleRun(s)}
                   disabled={run.isPending && activeStrategy === s.id}
@@ -766,6 +822,21 @@ export function Screener() {
                       <span className="num">{result.elapsed_ms.toFixed(1)} ms</span>
                     </div>
                   )}
+                  {/* 分时截断提示: 超套餐上限时在工具栏内联显示, 可关闭 */}
+                  {intradayTruncated && !intradayCapDismissed && (
+                    <span className="inline-flex items-center gap-1 text-xs text-warning/90">
+                      分时仅前 {minuteBatchCap}/{allIntradaySymbols.length}
+                      {!isMaxTier && ', 可升级'}
+                      <button
+                        type="button"
+                        onClick={() => setIntradayCapDismissed(true)}
+                        className="text-warning/50 hover:text-warning transition-colors"
+                        title="关闭提示"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -805,6 +876,12 @@ export function Screener() {
                     klineData={klineData}
                     dailyKChartVisible={dailyKChartVisible}
                     onToggleDailyKChart={toggleDailyKChart}
+                    minuteData={minuteData}
+                    intradayChartVisible={intradayChartVisible}
+                    onToggleIntradayChart={toggleIntradayChart}
+                    intradayAutoRefresh={intradayRefreshEnabled && realtimeRunning}
+                    onRefreshIntraday={() => minuteBatch.refetch()}
+                    intradayRefreshing={minuteBatch.isFetching}
                     sort={sort}
                     onSortToggle={toggle}
                   />
