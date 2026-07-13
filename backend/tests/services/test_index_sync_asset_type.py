@@ -29,15 +29,20 @@ class FakeProvider:
 
 
 class FakeRepo:
-    def __init__(self, hk_instruments: pl.DataFrame | None = None):
+    def __init__(self, hk_instruments: pl.DataFrame | None = None, etf_instruments: pl.DataFrame | None = None):
         self.index_daily = []
         self.etf_daily = []
+        self.etf_enriched = []
         self.hk_daily = []
         self.hk_enriched = []
         self._hk_instruments = hk_instruments if hk_instruments is not None else pl.DataFrame()
+        self._etf_instruments = etf_instruments if etf_instruments is not None else pl.DataFrame()
 
     def get_hk_instruments(self):
         return self._hk_instruments
+
+    def get_etf_instruments(self):
+        return self._etf_instruments
 
     def append_index_daily(self, df):
         self.index_daily.append(df)
@@ -49,7 +54,7 @@ class FakeRepo:
         self.etf_daily.append(df)
 
     def append_etf_enriched(self, df):
-        pass
+        self.etf_enriched.append(df)
 
     def append_hk_daily(self, df):
         self.hk_daily.append(df)
@@ -100,6 +105,66 @@ def test_etf_daily_sync_passes_etf_asset_type(monkeypatch):
 
     assert rows == 1
     assert provider.calls == [(("510300.ETF",), "etf")]
+
+
+def test_etf_instruments_sync_keeps_float_shares(monkeypatch):
+    """回归测试:与港股同一个 bug —— _fetch_instruments_by_type 原先无条件裁到
+    symbol/name/code 三列,ETF instruments 落盘后丢失 float_shares,导致
+    换手率永远算不出来。sync_etf_instruments 必须显式要 extra_cols。
+    """
+    provider = FakeProvider(instruments=pl.DataFrame({
+        "symbol": ["510300.SH"],
+        "name": ["沪深300ETF"],
+        "code": ["510300"],
+        "total_shares": [5_000_000_000.0],
+        "float_shares": [5_000_000_000.0],
+    }))
+    monkeypatch.setattr("app.services.index_sync._get_data_provider", lambda: provider)
+
+    saved: dict[str, pl.DataFrame] = {}
+
+    class SavingRepo:
+        def save_etf_instruments(self, df):
+            saved["result"] = df
+
+        def refresh_index_views(self):
+            pass
+
+    count = index_sync.sync_etf_instruments(SavingRepo())
+
+    assert count == 1
+    assert "float_shares" in saved["result"].columns
+    assert saved["result"]["float_shares"].to_list() == [5_000_000_000.0]
+
+
+def test_etf_daily_sync_computes_turnover_rate_when_instruments_present(monkeypatch):
+    """端到端(不打桩 compute_enriched):ETF instruments 带 float_shares 时,
+    enriched 必须真的算出 turnover_rate,且不产涨跌停信号(asset_type="etf"
+    不是 "stock",compute_all 不会走 compute_limit_signals 分支)。
+    """
+    provider = FakeProvider()
+    monkeypatch.setattr("app.services.kline_sync._get_data_provider", lambda: provider)
+    monkeypatch.setattr("app.services.index_sync._load_etf_factors", lambda repo: pl.DataFrame())
+
+    etf_instruments = pl.DataFrame({
+        "symbol": ["510300.ETF"],
+        "float_shares": [10_000.0],  # volume=1000(FakeProvider 固定值) / 10000 * 100 = 10%
+    })
+    repo = FakeRepo(etf_instruments=etf_instruments)
+
+    index_sync.sync_and_persist_etf_daily(
+        repo,
+        capset(),
+        start_date=datetime(2026, 7, 1),
+        end_date=datetime(2026, 7, 1),
+        symbols_override=["510300.ETF"],
+    )
+
+    enriched = repo.etf_enriched[0]
+    assert "turnover_rate" in enriched.columns
+    assert enriched["turnover_rate"].to_list() == [10.0]
+    assert "signal_limit_up" not in enriched.columns
+    assert "consecutive_limit_ups" not in enriched.columns
 
 
 def test_hk_daily_sync_passes_hk_asset_type(monkeypatch):

@@ -177,8 +177,13 @@ def sync_index_instruments(
 
 
 def sync_etf_instruments(repo: KlineRepository) -> int:
-    """单独同步 ETF 标的维表(返回 ETF 数量)。"""
-    etf_df = _fetch_instruments_by_type("etf", "etf")
+    """单独同步 ETF 标的维表(返回 ETF 数量)。
+
+    带 total_shares/float_shares(extra_cols)—— enriched 计算换手率要用,
+    与港股同一个修复(原先 _fetch_instruments_by_type 默认裁剪掉这两列,
+    导致 ETF 换手率一直算不出来)。
+    """
+    etf_df = _fetch_instruments_by_type("etf", "etf", extra_cols=("total_shares", "float_shares"))
     if etf_df.is_empty():
         return 0
     repo.save_etf_instruments(etf_df)
@@ -397,6 +402,7 @@ def sync_and_persist_etf_daily(
 
     if symbols_override:
         symbols = sorted(set(s for s in symbols_override if s))
+        instruments = repo.get_etf_instruments()
     else:
         instruments = repo.get_etf_instruments()
         if instruments.is_empty():
@@ -438,8 +444,13 @@ def sync_and_persist_etf_daily(
 
         repo.append_etf_daily(raw)
         batch_factors = factors.filter(pl.col("symbol").is_in(chunk)) if not factors.is_empty() else factors
-        # ETF 使用复权和通用技术指标；不传 instruments，避免套用 A股涨跌停/连板逻辑。
-        enriched = compute_enriched(raw, factors=batch_factors, instruments=None)
+        # ETF 使用复权和通用技术指标；instruments+asset_type="etf" 只触发换手率
+        # 计算(_attach_turnover_rate),不会套用 A 股涨跌停/连板逻辑 —— 那只在
+        # asset_type=="stock" 时才触发(compute_all 的分支判断)。
+        # 换手率原先算不出来是因为这里传 instruments=None 整个跳过了该分支,
+        # 与港股同一个根因,修法也相同(见 sync_and_persist_hk_daily)。
+        chunk_instruments = instruments.filter(pl.col("symbol").is_in(chunk)) if not instruments.is_empty() else instruments
+        enriched = compute_enriched(raw, factors=batch_factors, instruments=chunk_instruments, asset_type="etf")
         repo.append_etf_enriched(enriched)
         total_rows += raw.height
         logger.info("etf daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
