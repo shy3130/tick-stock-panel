@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface DatePickerProps {
@@ -44,6 +44,7 @@ export function DatePicker({
   const [open, setOpen] = useState(false)
   const [showYearPicker, setShowYearPicker] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const reduceMotion = useReducedMotion()
 
   // 当前显示的月份
   const [viewYear, setViewYear] = useState(() => viewDate(value, min, max).year)
@@ -62,8 +63,18 @@ export function DatePicker({
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
+    const closeOnEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false)
+        setShowYearPicker(false)
+      }
+    }
     document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
   }, [open])
 
   const prevMonth = () => {
@@ -114,7 +125,10 @@ export function DatePicker({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-input border border-border
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={value ? `选择日期，当前 ${value}` : placeholder}
+        className={`inline-flex h-7 items-center gap-1.5 whitespace-nowrap px-2.5 rounded-input border border-border
           bg-elevated hover:border-accent/50 text-xs text-foreground num
           focus:outline-none focus:border-accent/60 transition-colors duration-150 cursor-pointer ${buttonClassName}`}
       >
@@ -126,18 +140,21 @@ export function DatePicker({
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.97 }}
+            initial={reduceMotion ? false : { opacity: 0, y: -4, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.97 }}
-            transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+            exit={reduceMotion ? undefined : { opacity: 0, y: -4, scale: 0.97 }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
             className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} top-full mt-1.5 z-50 w-[260px] rounded-card border border-border
               bg-surface shadow-[0_8px_30px_rgba(0,0,0,0.4)] p-3`}
+            role="dialog"
+            aria-label="选择日期"
           >
             {/* 月份导航 */}
             <div className="flex items-center justify-between mb-2">
               <button
                 type="button"
                 onClick={showYearPicker ? () => setViewYear(viewYear - 12) : prevMonth}
+                aria-label={showYearPicker ? '前 12 年' : '上个月'}
                 className="p-1 rounded-btn hover:bg-elevated text-secondary hover:text-foreground transition-colors"
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -145,6 +162,7 @@ export function DatePicker({
               <button
                 type="button"
                 onClick={() => setShowYearPicker(v => !v)}
+                aria-label={showYearPicker ? '返回月份选择' : '选择年份'}
                 className="text-sm font-medium text-foreground num hover:text-accent transition-colors cursor-pointer"
               >
                 {showYearPicker
@@ -155,6 +173,7 @@ export function DatePicker({
               <button
                 type="button"
                 onClick={showYearPicker ? () => setViewYear(viewYear + 12) : nextMonth}
+                aria-label={showYearPicker ? '后 12 年' : '下个月'}
                 className="p-1 rounded-btn hover:bg-elevated text-secondary hover:text-foreground transition-colors"
               >
                 <ChevronRight className="h-4 w-4" />
@@ -176,7 +195,7 @@ export function DatePicker({
                         setShowYearPicker(false)
                       }}
                       className={`h-8 text-xs rounded-btn transition-colors duration-100
-                        ${isSelected ? 'bg-accent text-white font-bold' : ''}
+                        ${isSelected ? 'bg-accent text-white font-bold dark:text-[hsl(var(--base))]' : ''}
                         ${isThisYear && !isSelected ? 'border border-accent/40' : ''}
                         ${!isSelected ? 'hover:bg-elevated cursor-pointer text-foreground' : ''}
                       `}
@@ -205,6 +224,8 @@ export function DatePicker({
                         key={i}
                     type="button"
                     disabled={c.disabled}
+                    aria-label={c.dateStr}
+                    aria-pressed={isSelected}
                     onClick={() => {
                       if (!c.disabled) {
                         onChange(c.dateStr)
@@ -214,7 +235,7 @@ export function DatePicker({
                     className={`
                       h-7 w-full text-xs rounded-btn transition-colors duration-100
                       ${c.cur ? 'text-foreground' : 'text-muted/40'}
-                      ${isSelected ? 'bg-accent text-white font-bold' : ''}
+                      ${isSelected ? 'bg-accent text-white font-bold dark:text-[hsl(var(--base))]' : ''}
                       ${isToday && !isSelected ? 'border border-accent/40' : ''}
                       ${!isSelected && !c.disabled ? 'hover:bg-elevated' : ''}
                       ${c.disabled ? 'opacity-20 cursor-not-allowed' : 'cursor-pointer'}

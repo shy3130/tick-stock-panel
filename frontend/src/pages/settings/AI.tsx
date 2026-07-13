@@ -3,15 +3,23 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Save, Loader2, Check, Wifi, WifiOff, Eye, EyeOff, Shield,
   Shuffle, Plug, Zap, Settings2, ExternalLink, Trash2,
-  Terminal,
+  Terminal, Sparkles,
 } from 'lucide-react'
 import { useSettings } from '@/lib/useSharedQueries'
 import { api, type SettingsState } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { cn } from '@/lib/cn'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import {
+  SettingsPanel,
+  SettingsSection,
+  SettingsToggleRow,
+  settingsControlClass,
+  settingsPrimaryButtonClass,
+  settingsSecondaryButtonClass,
+} from './SettingsPrimitives'
 
-// 统一的输入框样式(与项目其他设置页一致)
-const INPUT_CLS =
-  'w-full h-9 px-2.5 rounded-lg bg-base border-0 ring-1 ring-border/30 text-xs font-mono text-foreground placeholder:text-muted/30 focus:outline-none focus:ring-2 focus:ring-accent/30 transition-shadow'
+const INPUT_CLS = `${settingsControlClass} font-mono`
 
 const CODEX_PROVIDER = 'codex_cli'
 const OPENAI_PROVIDER = 'openai_compat'
@@ -24,14 +32,35 @@ const CODEX_MODEL_OPTIONS = [
   { label: 'gpt-5', value: 'gpt-5', hint: '通用模型' },
 ]
 
-const PRESETS: { label: string; provider?: string; url: string; model: string; codexCommand?: string; website: string; websiteLabel: string; description: string; partner?: boolean; promo?: string }[] = [
-  { label: 'DeepSeek', url: 'https://api.deepseek.com', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
-  { label: '通义千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope 兼容模式接口。' },
-  { label: '智谱 GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
+type AiPreset = {
+  label: string
+  provider?: string
+  url: string
+  model: string
+  codexCommand?: string
+  website: string
+  websiteLabel: string
+  description: string
+}
+
+const PRESETS: AiPreset[] = [
+  { label: 'DeepSeek', url: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro', website: 'https://www.deepseek.com/', websiteLabel: 'deepseek.com', description: 'DeepSeek 官方 OpenAI 兼容接口。' },
+  { label: 'GLM', url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn', description: '智谱 AI 官方 OpenAI 兼容接口。' },
   { label: 'Kimi', url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.6', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口，支持超长上下文。' },
-  { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: '', codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。' },
-  { label: '炸鸡中转站', url: 'https://api.zhaji.dev/v1', model: 'gpt-5.5', website: 'https://api.zhaji.dev', websiteLabel: 'api.zhaji.dev', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。', partner: true, promo: '通过链接邀请注册赠送免费额度 · 国际模型最低0.02倍率' },
+  { label: 'Qwen', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3.7-plus', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com', description: '阿里云 DashScope OpenAI 兼容接口。' },
+  { label: 'MiMo', url: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-pro', website: 'https://platform.xiaomimimo.com/', websiteLabel: 'platform.xiaomimimo.com', description: 'Xiaomi MiMo 官方 OpenAI 兼容接口。' },
 ]
+
+const CODEX_PRESET: AiPreset = {
+  label: 'Codex CLI',
+  provider: CODEX_PROVIDER,
+  url: '',
+  model: '',
+  codexCommand: CODEX_COMMAND,
+  website: 'https://developers.openai.com/codex/noninteractive',
+  websiteLabel: 'codex exec',
+  description: '调用本机 Codex CLI 的 codex exec。',
+}
 
 export function SettingsAIPanel() {
   const qc = useQueryClient()
@@ -55,9 +84,16 @@ export function SettingsAIPanel() {
   const isCodexProvider = provider === CODEX_PROVIDER
   const savedCodexProvider = s?.ai_provider === CODEX_PROVIDER
   const configured = s?.ai_configured ?? (savedCodexProvider ? !!(s?.ai_codex_command ?? CODEX_COMMAND) : s?.has_ai_key)
-  const selectedPreset = PRESETS.find(p => (p.provider ?? OPENAI_PROVIDER) === provider && (isCodexProvider ? p.codexCommand === codexCommand : p.url === baseUrl))
+  const selectedPreset = !isCodexProvider
+    ? PRESETS.find(p => p.url === baseUrl && p.model === model)
+    : undefined
   const codexModelSelectValue = codexCustomModel ? CUSTOM_CODEX_MODEL : model
-  const canSave = isCodexProvider ? true : !!baseUrl.trim() && !!model.trim()
+  const requiresNewApiKey = !isCodexProvider
+    && !!s?.has_ai_key
+    && baseUrl.trim().replace(/\/+$/, '') !== (s?.ai_base_url ?? '').trim().replace(/\/+$/, '')
+  const canSave = isCodexProvider
+    ? true
+    : !!baseUrl.trim() && !!model.trim() && (!requiresNewApiKey || !!apiKey.trim())
 
   useEffect(() => {
     if (!s) return
@@ -138,11 +174,12 @@ export function SettingsAIPanel() {
     setUserAgent(`Mozilla/5.0 (${pf}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`)
   }
 
-  const handlePreset = (p: typeof PRESETS[number]) => {
+  const handlePreset = (p: AiPreset) => {
     setProvider(p.provider ?? OPENAI_PROVIDER)
     setBaseUrl(p.url)
     setModel(p.model)
     setCodexCustomModel(false)
+    setTestResult(null)
     if (p.codexCommand) setCodexCommand(CODEX_COMMAND)
   }
 
@@ -161,8 +198,13 @@ export function SettingsAIPanel() {
   }
 
   return (
-    <div className="space-y-5 max-w-2xl">
-      <Card icon={Plug} title="连接状态" right={
+    <SettingsPanel
+      icon={Sparkles}
+      title="AI 设置"
+      description="连接模型服务，为策略分析、财务解读与复盘提供智能能力。"
+      width="narrow"
+    >
+      <SettingsSection icon={Plug} title="连接状态" action={
         configured && (
           <button onClick={handleTest} disabled={testing}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn bg-elevated hover:bg-elevated/80 text-xs text-secondary transition-colors duration-150 ease-smooth disabled:opacity-50">
@@ -192,17 +234,15 @@ export function SettingsAIPanel() {
             {testResult.msg}
           </div>
         )}
-      </Card>
+      </SettingsSection>
 
-      <Card icon={Zap} title="快速预设">
+      <SettingsSection icon={Zap} title="快速预设">
         <div className="flex flex-wrap items-start gap-2">
           {PRESETS.map(p => (
-            <button key={p.label} onClick={() => handlePreset(p)}
+            <button type="button" key={p.label} onClick={() => handlePreset(p)}
               className={`rounded-lg border px-3 py-2 text-left transition-all ${selectedPreset?.label === p.label ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border bg-base text-secondary hover:border-accent/30'}`}>
               <div className="flex items-center gap-1.5 text-xs font-medium">
                 <span>{p.label}</span>
-                {p.provider === CODEX_PROVIDER && <Terminal className="h-3 w-3" />}
-                {p.partner && <span className="rounded-full border border-orange-400/30 bg-orange-400/10 px-1.5 py-px text-[9px] text-orange-400">赞助</span>}
               </div>
             </button>
           ))}
@@ -211,7 +251,6 @@ export function SettingsAIPanel() {
           <div className="mt-3 rounded-btn border border-border/30 bg-base/30 px-3 py-2 text-[11px] leading-relaxed">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="text-secondary">{selectedPreset.description}</span>
-              {selectedPreset.promo && <span className="text-amber-400">{selectedPreset.promo}</span>}
             </div>
             <a href={selectedPreset.website} target="_blank" rel="noreferrer"
               className="mt-1 inline-flex items-center gap-1 text-muted hover:text-accent transition-colors">
@@ -220,21 +259,25 @@ export function SettingsAIPanel() {
             </a>
           </div>
         )}
-      </Card>
+      </SettingsSection>
 
-      <Card
+      <SettingsSection
         icon={Settings2}
         title="自定义配置"
-        right={
-          <span className="inline-flex items-center gap-1.5 text-[10px] text-muted/60" title={isCodexProvider ? 'Use local Codex CLI via codex exec' : 'Use OpenAI-compatible Chat Completions API'}>
-            <span className="rounded-full border border-border/40 bg-base/50 px-1.5 py-px font-mono">{isCodexProvider ? 'codex exec' : 'Chat Completions'}</span>
-            {isCodexProvider ? 'CLI' : '接口'}
-          </span>
+        action={
+          <button
+            type="button"
+            onClick={() => handlePreset(isCodexProvider ? PRESETS[0] : CODEX_PRESET)}
+            className={cn(settingsSecondaryButtonClass, 'h-8 px-2.5')}
+          >
+            {isCodexProvider ? <Plug className="h-3.5 w-3.5" /> : <Terminal className="h-3.5 w-3.5" />}
+            {isCodexProvider ? 'API 模式' : 'Codex CLI'}
+          </button>
         }
       >
         <div className="space-y-4">
           {isCodexProvider ? (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="CLI 命令" hint="固定使用默认 codex 命令, 由后端自动解析本机 Codex Desktop/CLI, 不支持自定义可执行路径。">
                 <div className={`${INPUT_CLS} flex items-center text-muted/80 select-none`} aria-label="Codex CLI command">
                   {CODEX_COMMAND}
@@ -278,19 +321,28 @@ export function SettingsAIPanel() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="API 地址">
-                  <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.zhaji.dev/v1" className={INPUT_CLS} />
+                  <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" className={INPUT_CLS} />
                 </Field>
                 <Field label="模型">
                   <input type="text" value={model} onChange={e => setModel(e.target.value)} placeholder="gpt-5.5" className={INPUT_CLS} />
                 </Field>
               </div>
 
-              <Field label="API Key">
+              <Field
+                label="API Key"
+                hint={requiresNewApiKey ? '已切换模型服务，请输入该服务对应的新 API Key。' : undefined}
+              >
                 <div className="flex gap-2">
                   <div className="flex-1 relative">
-                    <input type={showKey ? 'text' : 'password'} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={configured ? `${s?.ai_api_key_masked} · 留空不修改` : 'sk-...'} className={`${INPUT_CLS} pr-9`} />
+                    <input
+                      type={showKey ? 'text' : 'password'}
+                      value={apiKey}
+                      onChange={e => setApiKey(e.target.value)}
+                      placeholder={requiresNewApiKey ? '请输入新服务的 API Key' : configured ? `${s?.ai_api_key_masked} · 留空不修改` : 'sk-...'}
+                      className={`${INPUT_CLS} pr-9`}
+                    />
                     <button onClick={() => setShowKey(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted/40 hover:text-muted" tabIndex={-1} aria-label={showKey ? '隐藏' : '显示'}>
                       {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                     </button>
@@ -305,11 +357,12 @@ export function SettingsAIPanel() {
               <div className="border-t border-border/20" />
 
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Field label="自定义 User-Agent" inline>
-                    <Toggle checked={customUa} onChange={() => setCustomUa(v => !v)} />
-                  </Field>
-                </div>
+                <SettingsToggleRow
+                  label="自定义 User-Agent"
+                  description="为模型请求设置自定义 User-Agent。"
+                  checked={customUa}
+                  onCheckedChange={setCustomUa}
+                />
                 {customUa && (
                   <div className="flex gap-2">
                     <input type="text" value={userAgent} onChange={e => setUserAgent(e.target.value)} placeholder="粘贴浏览器 User-Agent" className={`${INPUT_CLS} flex-1`} />
@@ -322,7 +375,7 @@ export function SettingsAIPanel() {
             </>
           )}
         </div>
-      </Card>
+      </SettingsSection>
 
       <div className="rounded-card border border-amber-400/20 bg-amber-400/[0.04] px-4 py-3 flex items-start gap-3">
         <Shield className="h-4 w-4 text-amber-400/70 mt-0.5 shrink-0" />
@@ -334,104 +387,44 @@ export function SettingsAIPanel() {
       </div>
 
       <div className="flex gap-2">
-        <button onClick={() => save.mutate()} disabled={save.isPending || !canSave} className="flex-1 h-10 rounded-xl bg-accent text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent/90 disabled:opacity-40 transition-all">
+        <button type="button" onClick={() => save.mutate()} disabled={save.isPending || !canSave} className={cn(settingsPrimaryButtonClass, 'flex-1')}>
           {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
           {save.isPending ? '保存中...' : saved ? '已保存' : '保存配置'}
         </button>
         {configured && (
-          <button onClick={() => setConfirmClear(true)} disabled={clear.isPending} className="h-10 px-4 rounded-xl bg-elevated text-secondary hover:text-danger text-sm flex items-center justify-center gap-1.5 hover:bg-elevated/80 disabled:opacity-50 transition-all shrink-0" title="Clear AI provider configuration">
+          <button type="button" onClick={() => setConfirmClear(true)} disabled={clear.isPending} className={cn(settingsSecondaryButtonClass, 'shrink-0 hover:text-danger')} title="Clear AI provider configuration">
             <Trash2 className="h-4 w-4" />
             清空
           </button>
         )}
       </div>
 
-      {confirmClear && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmClear(false)} />
-          <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
-            <h3 className="text-sm font-medium text-foreground mb-2">清空 AI 配置</h3>
-            <p className="text-xs text-secondary mb-5 leading-relaxed">
-              这会清空已保存的 provider、API Key、API 地址、模型和 Codex CLI 命令。之后可以重新配置。
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <button onClick={() => setConfirmClear(false)} className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors">
-                取消
-              </button>
-              <button onClick={() => clear.mutate()} disabled={clear.isPending} className="px-3 py-1.5 rounded-btn bg-danger/15 text-danger hover:bg-danger/25 text-sm font-medium transition-colors disabled:opacity-50">
-                {clear.isPending ? '清空中...' : '确认'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ===== 通用卡片(与 Keys 页风格统一) =====
-
-interface CardProps {
-  icon: React.ComponentType<{ className?: string }>
-  title: string
-  right?: React.ReactNode
-  children: React.ReactNode
-}
-
-function Card({ icon: Icon, title, right, children }: CardProps) {
-  return (
-    <section className="rounded-card border border-border bg-surface p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2.5">
-          <Icon className="h-4 w-4 text-secondary" />
-          <h2 className="text-sm font-medium text-foreground">{title}</h2>
-        </div>
-        {right}
-      </div>
-      {children}
-    </section>
+      <ConfirmDialog
+        open={confirmClear}
+        title="清空 AI 配置"
+        message="这会清空已保存的 provider、API Key、API 地址、模型和 Codex CLI 命令。之后可以重新配置。"
+        confirmText="确认清空"
+        danger
+        pending={clear.isPending}
+        onCancel={() => setConfirmClear(false)}
+        onConfirm={() => clear.mutate()}
+      />
+    </SettingsPanel>
   )
 }
 
 // ===== 表单字段(统一 label + 输入框样式) =====
 
-function Field({ label, hint, inline, children }: {
+function Field({ label, hint, children }: {
   label: string
   hint?: string
-  inline?: boolean
   children: React.ReactNode
 }) {
-  if (inline) {
-    return (
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[10px] text-muted/50 uppercase tracking-wider">{label}</div>
-          {hint && <div className="text-[10px] text-muted mt-0.5">{hint}</div>}
-        </div>
-        {children}
-      </div>
-    )
-  }
   return (
     <div className="space-y-1.5">
-      <div className="text-[10px] text-muted/50 uppercase tracking-wider">{label}</div>
+      <div className="text-[11px] font-medium text-secondary">{label}</div>
       {children}
       {hint && <div className="text-[10px] text-muted">{hint}</div>}
     </div>
-  )
-}
-
-// ===== 开关 =====
-
-function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onChange}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full shrink-0 transition-colors duration-200 ${checked ? 'bg-accent' : 'bg-elevated'}`}
-      aria-pressed={checked}
-    >
-      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${checked ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
-    </button>
   )
 }

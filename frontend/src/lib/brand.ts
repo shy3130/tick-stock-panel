@@ -16,8 +16,11 @@
 
 export const BRAND_NAME = 'Sycee'
 
+/** 应用外壳使用的产品副标题 */
+export const BRAND_PRODUCT = 'Quant Workbench'
+
 /** 品牌强调色(logo 发光/描边等,不影响功能语义色如 accent/bull/bear) */
-export const BRAND_COLOR = '#8B5CF6'
+export const BRAND_COLOR = '#5B7CFA'
 
 /** Auth/Onboarding/router loading 态等处使用的简短标语 */
 export const BRAND_TAGLINE = '服务器部署 A 股量化工作台'

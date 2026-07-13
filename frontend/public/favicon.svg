@@ -1,12 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <!-- 中间透明(无底色, 显示页面/浏览器背景) -->
-  <!-- 线条加粗: 浏览器 tab 尺寸很小, 需要更粗才能看清 -->
-  <!-- 左方括号 -->
-  <path d="M10 4 L4 4 L4 28 L10 28" stroke="#5B21B6" stroke-width="3" stroke-linejoin="miter"/>
-  <!-- 右方括号 -->
-  <path d="M22 4 L28 4 L28 28 L22 28" stroke="#5B21B6" stroke-width="3" stroke-linejoin="miter"/>
-  <!-- K 线 wick(上下影) -->
-  <line x1="16" y1="7" x2="16" y2="25" stroke="#5B21B6" stroke-width="2.5" stroke-linecap="round" stroke-opacity="0.7"/>
-  <!-- K 线 body -->
-  <rect x="12.5" y="9" width="7" height="10" fill="#5B21B6" rx="0.5"/>
+  <path d="M4.75 10.25 10 6.25c2.2 1.9 9.8 1.9 12 0l5.25 4c-1.15 6.65-2.65 12.15-6.05 14.25-2.8 1.7-7.6 1.7-10.4 0-3.4-2.1-4.9-7.6-6.05-14.25Z" fill="#5B7CFA"/>
+  <path d="m9.25 21.75 4.15-4.05 3.35 2.35 6.5-7.05" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

@@ -22,6 +22,11 @@ import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
+import {
+  SettingsPanel,
+  SettingsSection,
+  SettingsToggleRow,
+} from './SettingsPrimitives'
 
 // 页面 → 显示名
 const PAGE_LABELS: Record<string, string> = {
@@ -262,43 +267,53 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
   if (isNoneTier) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
-                        bg-gradient-to-br from-purple-500/20 to-blue-500/20 mb-5">
-          <Activity className="h-7 w-7 text-purple-400" />
+      <SettingsPanel
+        icon={Activity}
+        title="实时监控"
+        description="配置行情轮询、页面刷新和监控告警的外部推送。"
+        width="default"
+      >
+        <div className="flex flex-col items-center justify-center rounded-card border border-border bg-surface px-5 py-16 text-center">
+          <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-xl border border-accent/15 bg-accent/10 text-accent">
+            <Activity className="h-7 w-7" />
+          </div>
+          <h3 className="mb-2 text-base font-medium text-foreground">当前档位暂不支持实时监控</h3>
+          <p className="mb-6 max-w-md text-sm leading-6 text-secondary">
+            实时行情需要 Free 及以上档位。None 档可使用 free-api 获取历史日K（当日数据需盘后1-2小时），但不能调用付费服务器实时接口。
+          </p>
+          <a
+            href="/settings?tab=account"
+            className="inline-flex items-center gap-2 rounded-btn bg-accent px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent/90"
+          >
+            配置 API Key 升级
+          </a>
         </div>
-        <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
-        <p className="text-sm text-secondary max-w-md mb-6">
-          实时行情需要 Free 及以上档位。None 档可使用 free-api 获取历史日K（当日数据需盘后1-2小时），但不能调用付费服务器实时接口。
-        </p>
-        <a
-          href="/settings?tab=account"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
-                     bg-accent text-white text-sm font-medium
-                     hover:bg-accent/90 transition-colors"
-        >
-          配置 API Key 升级
-        </a>
-      </div>
+      </SettingsPanel>
     )
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-6 max-w-5xl">
+    <SettingsPanel
+      icon={Activity}
+      title="实时监控"
+      description="配置行情轮询、页面刷新和监控告警的外部推送。"
+      width="default"
+    >
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_1fr]">
       {/* ========== 左列 ========== */}
-      <div className="space-y-6">
+      <div className="space-y-5">
         {/* 行情状态 — 开关 + 间隔 */}
-        <Card icon={Activity} title="行情轮询">
-          <ToggleRow
+        <SettingsSection icon={Activity} title="行情轮询">
+          <SettingsToggleRow
             label="实时行情"
-            desc={
+            description={
               isPaused ? '数据同步运行中，已临时暂停'
               : isRunning && isTrading ? '运行中'
               : isRunning ? '运行中 (非交易时段)'
               : '已关闭'
             }
             checked={realtimeEnabled}
-            onChange={handleToggleQuote}
+            onCheckedChange={handleToggleQuote}
             disabled={isPaused}
           />
 
@@ -329,10 +344,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               </span>
             </div>
           </div>
-        </Card>
+        </SettingsSection>
 
         {isFreeTier && (
-        <Card icon={Activity} title="自选股实时">
+        <SettingsSection icon={Activity} title="自选股实时">
           <div className="mb-3 rounded-btn border border-accent/25 bg-accent/10 px-3 py-2 text-xs font-medium leading-snug text-accent">
             Free 档开启实时行情时自动监控「自选」页面前 5 个标的，最低 6 秒刷新。
           </div>
@@ -365,78 +380,78 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               管理自选
             </Link>
           </div>
-        </Card>
+        </SettingsSection>
         )}
         {!isFreeTier && (
-        <Card icon={Wifi} title="页面实时刷新">
+        <SettingsSection icon={Wifi} title="页面实时刷新">
           <p className="text-xs text-secondary mb-4">
             选择哪些页面跟随 SSE 实时刷新数据。关闭的页面不会被推送，
             但行情轮询和策略监控不受影响。
           </p>
           <div className="space-y-2">
             {Object.entries(PAGE_LABELS).map(([key, label]) => (
-              <ToggleRow
+              <SettingsToggleRow
                 key={key}
                 label={label}
-                desc={`SSE 推送时刷新 ${label} 数据`}
+                description={`SSE 推送时刷新 ${label} 数据`}
                 checked={refreshPages[key] !== false}
-                onChange={(v) => save({ sse_refresh_pages: { ...refreshPages, [key]: v } })}
+                onCheckedChange={(v) => save({ sse_refresh_pages: { ...refreshPages, [key]: v } })}
               />
             ))}
           </div>
-        </Card>
+        </SettingsSection>
         )}
 
         {/* 自选列表分时图实时刷新 (默认关闭, 开启后盘中 15s 轮询刷新分时数据) */}
-        <Card icon={Activity} title="分时图刷新">
-          <ToggleRow
+        <SettingsSection icon={Activity} title="分时图刷新">
+          <SettingsToggleRow
             label="自选分时图实时刷新"
-            desc="开启后自选列表的分时图盘中每 15 秒自动刷新（需 Pro+ 权限）。关闭时仅打开页面时拉取一次。"
+            description="开启后自选列表的分时图盘中每 15 秒自动刷新（需 Pro+ 权限）。关闭时仅打开页面时拉取一次。"
             checked={prefs?.minute_intraday_refresh ?? false}
-            onChange={(v) => save({ minute_intraday_refresh: v })}
+            onCheckedChange={(v) => save({ minute_intraday_refresh: v })}
           />
-        </Card>
+        </SettingsSection>
 
         {!isFreeTier && (
-        <Card icon={BarChart3} title="左侧菜单指数">
+        <SettingsSection icon={BarChart3} title="左侧菜单指数">
           <p className="text-xs text-secondary mb-4">
             选择实时行情开启时，左侧菜单底部显示哪些指数点位和涨跌幅。
           </p>
           <div className="space-y-2">
             {SIDEBAR_INDEX_OPTIONS.map(item => (
-              <ToggleRow
+              <SettingsToggleRow
                 key={item.symbol}
                 label={item.name}
-                desc={item.symbol}
+                description={item.symbol}
                 checked={sidebarIndexSymbols.includes(item.symbol)}
-                onChange={(v) => toggleSidebarIndex(item.symbol, v)}
+                onCheckedChange={(v) => toggleSidebarIndex(item.symbol, v)}
               />
             ))}
           </div>
           <div className="mt-3 pt-3 border-t border-border">
-            <ToggleRow
+            <SettingsToggleRow
               label="固定显示"
-              desc={indicesPinned ? '指数卡片常驻显示（即使实时行情关闭）' : '跟随实时行情开关（仅实时开时显示）'}
+              description={indicesPinned ? '指数卡片常驻显示（即使实时行情关闭）' : '跟随实时行情开关（仅实时开时显示）'}
               checked={indicesPinned}
-              onChange={toggleIndicesPin}
+              onCheckedChange={toggleIndicesPin}
             />
           </div>
-        </Card>
+        </SettingsSection>
         )}
       </div>
 
       {/* ========== 右列 ========== */}
-      <div className="space-y-6">
+      <div className="space-y-5">
         {/* 连板梯队降级修正 (移至右列顶部) */}
         <div
           id="depth-fix"
           className={`rounded-card transition-all duration-500 ${flash ? 'ring-2 ring-accent/60 ring-offset-2 ring-offset-base scale-[1.01]' : 'ring-0 ring-transparent'}`}
         >
-        <Card
+        <SettingsSection
           icon={Flame}
           title="连板梯队降级修正"
           badge={!hasDepth ? '需 Pro+' : undefined}
-          right={hasDepth ? (
+          action={hasDepth ? (
             <button
               onClick={() => runFix.mutate()}
               disabled={runFix.isPending}
@@ -455,11 +470,11 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                 通过五档盘口实时修正真假涨停/跌停。真封板显示封单量,假涨停(收盘价=涨停价但卖一有量)归入炸板。
                 盘中按设定间隔轮询,收盘后自动定版。
               </p>
-              <ToggleRow
+              <SettingsToggleRow
                 label="启用真假板修正"
-                desc="开启后盘中自动拉取五档盘口修正真假板"
+                description="开启后盘中自动拉取五档盘口修正真假板"
                 checked={limitLadderMonitor}
-                onChange={toggleLimitLadderMonitor}
+                onCheckedChange={toggleLimitLadderMonitor}
               />
               <div className="mt-4 pt-3 border-t border-border">
                 <div className="text-[10px] uppercase tracking-widest text-muted mb-3">
@@ -471,13 +486,13 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           ) : (
             <DepthConfigContent disabled />
           )}
-        </Card>
+        </SettingsSection>
         </div>
 
         {/* 推送通知 — 监控告警的外部推送渠道 (全局配置)。
             飞书 / 企业微信已实现; QMT/ptrade 待定。
             每个渠道合并成一行: 勾选=新建规则默认推送, 点行展开地址配置。 */}
-        <Card icon={Webhook} title="推送通知">
+        <SettingsSection icon={Webhook} title="推送通知">
           <p className="text-xs text-secondary mb-3">
             监控规则命中后,可把告警推送到外部。勾选渠道作为<b className="text-foreground/80">新建规则的默认推送</b>,
             单条规则仍可在编辑页独立修改。
@@ -755,83 +770,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               </div>
             ))}
           </div>
-        </Card>
+        </SettingsSection>
       </div>
-    </div>
-  )
-}
-
-
-// ===== ToggleRow =====
-
-function ToggleRow({
-  label,
-  desc,
-  checked,
-  onChange,
-  icon: Icon,
-  disabled,
-}: {
-  label: string
-  desc: string
-  checked: boolean
-  onChange: (v: boolean) => void
-  icon?: React.ComponentType<{ className?: string }>
-  disabled?: boolean
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 py-2">
-      <div className="min-w-0 flex items-start gap-2">
-        {Icon && <Icon className="h-3.5 w-3.5 text-secondary shrink-0 mt-0.5" />}
-        <div className="min-w-0">
-          <div className="text-sm text-foreground">{label}</div>
-          <div className="text-[11px] text-muted truncate">{desc}</div>
-        </div>
       </div>
-      <button
-        onClick={() => !disabled && onChange(!checked)}
-        disabled={disabled}
-        className={`relative inline-flex h-5 w-9 items-center rounded-full shrink-0 transition-colors duration-200 ${
-          checked ? 'bg-accent' : 'bg-elevated'
-        } ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
-      >
-        <span
-          className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-            checked ? 'translate-x-[18px]' : 'translate-x-[3px]'
-          }`}
-        />
-      </button>
-    </div>
-  )
-}
-
-
-// ===== 通用卡片 =====
-
-interface CardProps {
-  icon: React.ComponentType<{ className?: string }>
-  title: string
-  badge?: string
-  right?: React.ReactNode
-  children: React.ReactNode
-}
-
-function Card({ icon: Icon, title, badge, right, children }: CardProps) {
-  return (
-    <section className="rounded-card border border-border bg-surface p-5">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2.5">
-          <Icon className="h-4 w-4 text-secondary" />
-          <h2 className="text-sm font-medium text-foreground">{title}</h2>
-          {badge && (
-            <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-elevated text-muted">
-              {badge}
-            </span>
-          )}
-        </div>
-        {right}
-      </div>
-      {children}
-    </section>
+    </SettingsPanel>
   )
 }

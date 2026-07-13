@@ -49,6 +49,35 @@ html.dark {
   --g-system: 214 15% 55%;
 }
 
+/* 看板包含大量 10-12px 数据标签，局部使用更高对比的语义色，避免改动全站主题。 */
+.dashboard-theme {
+  --fg-muted: 240 4% 46%;
+  --accent: 221 83% 53%;
+  --bull: 4 74% 49%;
+  --bear: 158 88% 27%;
+  --warning: 23 92% 37%;
+  --danger: 4 74% 49%;
+  --emotion-hot: var(--bull);
+  --emotion-warm: 25 84% 38%;
+  --emotion-neutral: 40 88% 32%;
+  --emotion-cool: 82 68% 30%;
+  --emotion-cold: var(--bear);
+}
+
+html.dark .dashboard-theme {
+  --fg-muted: 36 14% 55%;
+  --accent: 217 91% 60%;
+  --bull: 4 87% 60%;
+  --bear: 152 67% 45%;
+  --warning: 32 95% 50%;
+  --danger: 4 87% 60%;
+  --emotion-hot: var(--bull);
+  --emotion-warm: 25 95% 60%;
+  --emotion-neutral: 40 96% 55%;
+  --emotion-cool: 82 65% 52%;
+  --emotion-cold: var(--bear);
+}
+
 /* 价格 / 数字一律等宽 */
 .scrollbar-gutter-stable { scrollbar-gutter: stable; }
 

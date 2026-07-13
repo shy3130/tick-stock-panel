@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { HelpCircle } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from '@/components/Toast'
@@ -19,18 +20,21 @@ function SealedDirBlock({ title, color, counts, rawTotal }: {
   const pending = Math.max(0, (rawTotal ?? 0) - real - fake)
   const original = rawTotal ?? (real + fake + pending)
   const fixed = real + pending
+  const tone = color === 'bull'
+    ? { bg: 'bg-bull/5', text: 'text-bull', dot: 'bg-bull' }
+    : { bg: 'bg-bear/5', text: 'text-bear', dot: 'bg-bear' }
   return (
     <div className="mb-2 last:mb-0">
-      <div className={`flex items-center justify-between px-1 py-0.5 rounded bg-${color}/5 mb-1`}>
-        <span className={`text-[10px] font-medium text-${color}`}>{title}</span>
+      <div className={`mb-1 flex items-center justify-between rounded px-1 py-0.5 ${tone.bg}`}>
+        <span className={`text-[10px] font-medium ${tone.text}`}>{title}</span>
         <span className="tabular-nums text-[10px]">
           <span className="text-muted line-through">{original}</span>
           <span className="text-muted/50 mx-1">→</span>
-          <span className={`font-bold text-${color}`}>{fixed}</span>
+          <span className={`font-bold ${tone.text}`}>{fixed}</span>
         </span>
       </div>
       <div className="flex gap-3 px-1 text-[10px]">
-        <span className={`flex items-center gap-0.5 text-${color}`}><span className={`h-1 w-1 rounded-full bg-${color}`} />真封 {real}</span>
+        <span className={`flex items-center gap-0.5 ${tone.text}`}><span className={`h-1 w-1 rounded-full ${tone.dot}`} />真封 {real}</span>
         <span className="flex items-center gap-0.5 text-yellow-500"><span className="h-1 w-1 rounded-full bg-yellow-500" />假 {fake}</span>
         {pending > 0 && (
           <span className="flex items-center gap-0.5 text-muted"><span className="h-1 w-1 rounded-full bg-muted" />待 {pending}</span>
@@ -54,6 +58,9 @@ export function SealedBadge({ degraded, hasDepth, isHistorical, sealedReady, sea
   invalidateKeys?: string[]
 }) {
   const [showHint, setShowHint] = useState(false)
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const [popupPosition, setPopupPosition] = useState({ top: 0, left: 0 })
+  const reduceMotion = useReducedMotion()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const runFix = useMutation({
@@ -73,27 +80,57 @@ export function SealedBadge({ degraded, hasDepth, isHistorical, sealedReady, sea
 
   const label = degraded ? '降级' : '修正'
 
+  useLayoutEffect(() => {
+    if (!showHint || !anchorRef.current) return
+    const rect = anchorRef.current.getBoundingClientRect()
+    const popupWidth = 256
+    const viewportGap = 8
+    const left = Math.min(
+      Math.max(viewportGap, rect.left),
+      window.innerWidth - popupWidth - viewportGap,
+    )
+    setPopupPosition({ top: rect.bottom + 6, left })
+  }, [showHint])
+
+  useEffect(() => {
+    if (!showHint) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowHint(false)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [showHint])
+
   return (
-    <div className="relative inline-flex items-center">
+    <div className="inline-flex items-center">
       <button
+        ref={anchorRef}
+        type="button"
         onClick={() => setShowHint(v => !v)}
+        aria-expanded={showHint}
+        aria-haspopup="dialog"
         className="group inline-flex items-center gap-1 h-5 px-2 rounded-full bg-yellow-500/10 border border-yellow-500/30 cursor-help transition-all hover:bg-yellow-500/20 hover:border-yellow-500/50"
       >
         <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
         <span className="text-[10px] font-medium text-yellow-600 dark:text-yellow-500 leading-none">{label}</span>
         <HelpCircle className="h-3 w-3 text-yellow-500/70 group-hover:text-yellow-500 transition-colors" />
       </button>
-      <AnimatePresence>
-        {showHint && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setShowHint(false)} />
-            <motion.div
-              initial={{ opacity: 0, y: -4, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -4, scale: 0.95 }}
-              className="absolute top-full left-0 mt-1 z-50 w-64 bg-surface border border-border rounded-md shadow-xl p-3 text-[11px] text-secondary leading-relaxed"
-              onClick={e => e.stopPropagation()}
-            >
+      {createPortal(
+        <AnimatePresence>
+          {showHint && (
+            <>
+              <div className="fixed inset-0 z-[60]" onClick={() => setShowHint(false)} />
+              <motion.div
+                initial={reduceMotion ? false : { opacity: 0, y: -4, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={reduceMotion ? undefined : { opacity: 0, y: -4, scale: 0.95 }}
+                transition={{ duration: reduceMotion ? 0 : 0.15 }}
+                style={{ position: 'fixed', top: popupPosition.top, left: popupPosition.left, width: 256 }}
+                className="z-[70] rounded-md border border-border bg-surface p-3 text-[11px] leading-relaxed text-secondary shadow-xl"
+                role="dialog"
+                aria-label={`${label}说明`}
+                onClick={e => e.stopPropagation()}
+              >
               {degraded ? (
                 <>
                   <div className="font-medium text-foreground mb-1.5">真假涨停判定降级</div>
@@ -134,10 +171,12 @@ export function SealedBadge({ degraded, hasDepth, isHistorical, sealedReady, sea
                   去设置 →
                 </button>
               </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
     </div>
   )
 }

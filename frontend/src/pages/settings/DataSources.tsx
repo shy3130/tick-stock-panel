@@ -6,7 +6,13 @@ import { api, type DataSourceItem, type PluginDataSourceItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { toast } from '@/components/Toast'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { DataSourceEditor } from './DataSourceEditor'
+import {
+  SettingsPanel,
+  SettingsSection,
+  settingsSecondaryButtonClass,
+} from './SettingsPrimitives'
 
 const DATASET_LABEL: Record<string, string> = {
   daily: '日K',
@@ -129,29 +135,33 @@ export function SettingsDataSourcesPanel() {
   const selectedCustom = customList.find(s => s.name === selected)
 
   return (
-    <div className="space-y-5 max-w-5xl">
+    <SettingsPanel
+      icon={Database}
+      title="数据源"
+      description="选择行情数据源并管理本地配置，未覆盖的数据集会自动回退到 TickFlow。"
+      action={(
+        <button
+          type="button"
+          onClick={() => reload.mutate()}
+          disabled={reload.isPending}
+          className={settingsSecondaryButtonClass}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${reload.isPending ? 'animate-spin' : ''}`} />
+          重新加载
+        </button>
+      )}
+    >
       {/* ===== 顶部: 当前数据源 + 数据源选择 (一个大卡片) ===== */}
-      <section className="rounded-card border border-border bg-surface p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2.5">
-            <Database className="h-4 w-4 text-secondary" />
-            <h2 className="text-sm font-medium text-foreground">数据源</h2>
-            <span
-              className="text-[10px] text-muted/40 font-mono truncate hidden lg:inline max-w-[480px]"
-              title={sources.data?.config_dir}
-            >
-              {sources.data?.config_dir}
-            </span>
+      <SettingsSection
+        title="可用数据源"
+        description="选择要查看、编辑或启用的数据源。"
+        unframed
+      >
+        {sources.data?.config_dir && (
+          <div className="mb-3 hidden truncate font-mono text-[10px] text-muted/50 lg:block" title={sources.data.config_dir}>
+            {sources.data.config_dir}
           </div>
-          <button
-            onClick={() => reload.mutate()}
-            disabled={reload.isPending}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn text-xs text-muted hover:text-foreground hover:bg-elevated transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3 w-3 ${reload.isPending ? 'animate-spin' : ''}`} />
-            重新加载
-          </button>
-        </div>
+        )}
 
         {/* 当前数据源状态 */}
         <div className="flex items-center gap-2 mb-4 px-3 py-2.5 rounded-lg bg-elevated/30">
@@ -171,38 +181,43 @@ export function SettingsDataSourcesPanel() {
             const pluginUnavailable = plugin && !plugin.available
             const installing = installMut.isPending && installMut.variables === item.name
             const uninstalling = uninstallMut.isPending && uninstallMut.variables === item.name
+            const selectItem = () => {
+              if (pluginUnavailable) return
+              setSelected(item.name)
+              if (customList.some(c => c.name === item.name)) editExisting.mutate(item.name)
+            }
             return (
               <div
                 key={item.name}
-                onClick={() => {
-                  if (pluginUnavailable) return  // 未安装的插件不可选中
-                  setSelected(item.name)
-                  // 只有用户自定义源 (YAML) 才进编辑器; tickflow 和插件不可编辑
-                  if (customList.some(c => c.name === item.name)) {
-                    editExisting.mutate(item.name)
-                  }
-                }}
                 className={`relative text-left rounded-lg border px-3.5 py-3 transition-all ${
                   pluginUnavailable
                     ? 'border-border/40 bg-elevated/10 opacity-70'
                     : isSelected
-                      ? 'border-accent/50 bg-accent/5 ring-1 ring-accent/20 cursor-pointer'
-                      : 'border-border/60 bg-elevated/20 hover:bg-elevated/40 cursor-pointer'
+                      ? 'border-accent/50 bg-accent/5 ring-1 ring-accent/20'
+                      : 'border-border/60 bg-elevated/20 hover:bg-elevated/40'
                 }`}
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                    pluginUnavailable ? 'bg-muted/30' : isActive ? 'bg-accent' : 'bg-transparent border border-muted/40'
-                  }`} />
-                  <span className={`text-sm truncate flex-1 ${isActive ? 'font-medium text-foreground' : 'text-secondary'}`}>
-                    {item.display_name}
-                  </span>
-                  {item.name === 'tickflow' && (
-                    <span className="text-[9px] text-muted/50 uppercase tracking-wider shrink-0">内置</span>
-                  )}
-                  {pluginNames.has(item.name) && (
-                    <span className="text-[9px] text-muted/50 uppercase tracking-wider shrink-0">插件</span>
-                  )}
+                <div className="mb-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <button
+                    type="button"
+                    onClick={selectItem}
+                    disabled={!!pluginUnavailable}
+                    aria-pressed={isSelected}
+                    className="flex min-w-24 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-not-allowed"
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                      pluginUnavailable ? 'bg-muted/30' : isActive ? 'bg-accent' : 'bg-transparent border border-muted/40'
+                    }`} />
+                    <span className={`min-w-0 flex-1 truncate text-sm ${isActive ? 'font-medium text-foreground' : 'text-secondary'}`}>
+                      {item.display_name}
+                    </span>
+                    {item.name === 'tickflow' && (
+                      <span className="shrink-0 text-[9px] text-muted/50">内置</span>
+                    )}
+                    {pluginNames.has(item.name) && (
+                      <span className="shrink-0 text-[9px] text-muted/50">插件</span>
+                    )}
+                  </button>
                   {/* 右侧操作区: 插件未安装→安装按钮; 已激活→使用中; 否则→使用/卸载 */}
                   {pluginUnavailable ? (
                     installing ? (
@@ -303,14 +318,14 @@ export function SettingsDataSourcesPanel() {
           </div>
         )}
 
-        <div className="mt-3 flex items-center gap-3 text-[10px] text-muted/50">
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted/50">
           <span>单击编辑</span>
           <span className="text-muted/30">·</span>
           <span>点「使用」切换为当前数据源</span>
           <span className="text-muted/30">·</span>
           <span>未启用的数据集自动回退 TickFlow</span>
         </div>
-      </section>
+      </SettingsSection>
 
       {/* ===== 下方: 编辑区 ===== */}
       <AnimatePresence mode="wait">
@@ -356,37 +371,17 @@ export function SettingsDataSourcesPanel() {
         </motion.div>
       </AnimatePresence>
 
-      {/* 删除确认弹窗 */}
-      {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setConfirmDelete(null)}
-          />
-          <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
-            <h3 className="text-sm font-medium text-foreground mb-2">删除数据源</h3>
-            <p className="text-xs text-secondary mb-5">
-              确认删除「{customList.find(s => s.name === confirmDelete)?.display_name || confirmDelete}」? 该数据源的配置文件将被移除,此操作不可撤销。
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => setConfirmDelete(null)}
-                className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => remove.mutate(confirmDelete)}
-                disabled={remove.isPending}
-                className="px-3 py-1.5 rounded-btn bg-danger/15 text-danger hover:bg-danger/25 text-sm font-medium transition-colors disabled:opacity-50"
-              >
-                {remove.isPending ? '删除中...' : '确认删除'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="删除数据源"
+        message={`确认删除「${customList.find(s => s.name === confirmDelete)?.display_name || confirmDelete || ''}」? 该数据源的配置文件将被移除,此操作不可撤销。`}
+        confirmText="确认删除"
+        danger
+        pending={remove.isPending}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => { if (confirmDelete) remove.mutate(confirmDelete) }}
+      />
+    </SettingsPanel>
   )
 }
 

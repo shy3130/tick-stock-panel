@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import { QK } from './queryKeys'
 
-/** 切换实时行情 — Layout / Data 共用 */
+/** 切换实时行情 — Watchlist / Data 共用 */
 export function useToggleRealtimeQuotes() {
   const qc = useQueryClient()
   return useMutation({

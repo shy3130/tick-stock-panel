@@ -304,6 +304,7 @@ export interface OverviewMarket {
   quote_status: {
     enabled?: boolean
     running?: boolean
+    paused?: boolean
     quote_age_ms?: number | null
     is_trading_hours?: boolean
     [key: string]: any

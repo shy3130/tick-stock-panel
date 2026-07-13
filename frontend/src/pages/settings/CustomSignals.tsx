@@ -6,6 +6,14 @@ import { QK } from '@/lib/queryKeys'
 import { BUILTIN_SIGNAL_DEFINITIONS, type SignalKind } from '@/lib/signals'
 import { CustomSignalDialog } from '@/components/signals/CustomSignalDialog'
 import { Skeleton } from '@/components/data/Skeleton'
+import { cn } from '@/lib/cn'
+import {
+  SettingsPanel,
+  SettingsSection,
+  settingsIconButtonClass,
+  settingsPrimaryButtonClass,
+  settingsSecondaryButtonClass,
+} from './SettingsPrimitives'
 
 type SignalSection = 'builtin' | 'custom'
 
@@ -86,33 +94,33 @@ export function SettingsCustomSignalsPanel() {
   }
 
   return (
-    <div className="max-w-6xl space-y-6">
-      <section className="rounded-2xl border border-border bg-surface p-6 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.12),transparent_38%)]">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.2em] text-amber-400/80">信号库</div>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">统一查看策略、回测与监控可用信号</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
-              内置信号由系统预计算，作为只读信号库展示；自定义信号可用「字段 + 运算符 + 值」组合条件创建，保存后可在策略、回测与监控中选择使用。
-            </p>
-          </div>
-          <button
-            onClick={openNew}
-            className="inline-flex items-center justify-center gap-1.5 rounded-btn bg-amber-500/90 px-3 py-1.5 text-xs font-medium text-base hover:bg-amber-500 transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            新建自定义信号
-          </button>
-        </div>
-
-        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+    <>
+      <SettingsPanel
+      icon={Zap}
+      title="信号库"
+      description="统一查看策略、回测与监控可用信号；内置信号只读，自定义信号保存后可在各功能中选择使用。"
+      width="wide"
+      action={
+        <button type="button" onClick={openNew} className={settingsPrimaryButtonClass}>
+          <Plus className="h-3.5 w-3.5" />
+          新建自定义信号
+        </button>
+      }
+    >
+      <SettingsSection
+        title="信号概览"
+        description="查看信号数量，并在内置信号和自定义信号之间切换。"
+        badge={`${BUILTIN_SIGNAL_DEFINITIONS.length + signals.length} 项`}
+        contentClassName="space-y-4"
+      >
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
           <StatCard label="内置信号" value={BUILTIN_SIGNAL_DEFINITIONS.length} hint="系统提供，只读" />
           <StatCard label="自定义信号" value={signals.length} hint="用户创建，可编辑" />
           <StatCard label="已启用自定义" value={enabledCustomSignals} hint="会注入 csg_* 列" />
         </div>
 
-        <div className="mt-5 rounded-card border border-border bg-base/60 p-1.5">
-          <div className="grid grid-cols-1 gap-1.5 md:grid-cols-2">
+        <div className="rounded-btn bg-base/60 p-1">
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
             {tabs.map(tab => {
               const active = activeSection === tab.key
               return (
@@ -120,11 +128,21 @@ export function SettingsCustomSignalsPanel() {
                   key={tab.key}
                   type="button"
                   onClick={() => setActiveSection(tab.key)}
-                  className={`rounded-btn px-4 py-3 text-left transition-colors ${active ? 'bg-amber-500/15 text-amber-300 shadow-sm' : 'text-secondary hover:bg-elevated hover:text-foreground'}`}
+                  className={cn(
+                    'rounded-btn border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
+                    active
+                      ? 'border-accent/25 bg-accent/10 text-foreground'
+                      : 'border-transparent text-secondary hover:bg-elevated hover:text-foreground',
+                  )}
                 >
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-sm font-medium">{tab.label}</span>
-                    <span className={`rounded px-2 py-0.5 text-[11px] ${active ? 'bg-amber-400/15 text-amber-300' : 'bg-elevated text-muted'}`}>{tab.count}</span>
+                    <span className={cn(
+                      'rounded px-2 py-0.5 text-[11px]',
+                      active ? 'bg-accent/15 text-accent' : 'bg-elevated text-muted',
+                    )}>
+                      {tab.count}
+                    </span>
                   </div>
                   <div className="mt-1 text-[11px] text-muted">{tab.hint}</div>
                 </button>
@@ -132,21 +150,21 @@ export function SettingsCustomSignalsPanel() {
             })}
           </div>
         </div>
-      </section>
+      </SettingsSection>
 
       {activeSection === 'builtin' && (
-        <section className="rounded-card border border-border bg-surface p-5 space-y-4">
-          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <Lock className="h-3.5 w-3.5 text-muted" />
-                <h3 className="text-sm font-medium text-foreground">内置信号</h3>
-                <span className="rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">只读</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">这些信号由系统在 enriched 数据中预计算，策略选择器会直接展示。</p>
+        <SettingsSection
+          icon={Lock}
+          title="内置信号"
+          description="这些信号由系统在 enriched 数据中预计算，策略选择器会直接展示。"
+          badge="只读"
+          unframed
+          action={
+            <div className="hidden text-[11px] text-muted sm:block">
+              ID 前缀：<span className="font-mono text-foreground/70">signal_</span>
             </div>
-            <div className="text-[11px] text-muted">ID 前缀：<span className="font-mono text-foreground/70">signal_</span></div>
-          </div>
+          }
+        >
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {BUILTIN_SIGNAL_DEFINITIONS.map(sig => (
               <div key={sig.id} className="rounded-card border border-border bg-base p-4">
@@ -166,36 +184,35 @@ export function SettingsCustomSignalsPanel() {
               </div>
             ))}
           </div>
-        </section>
+        </SettingsSection>
       )}
 
       {activeSection === 'custom' && (
-        <section className="rounded-card border border-border bg-surface p-5 space-y-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <Zap className="h-3.5 w-3.5 text-amber-400" />
-                <h3 className="text-sm font-medium text-foreground">自定义信号</h3>
-                <span className="rounded bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-400">可配置</span>
-              </div>
-              <p className="mt-1 text-xs text-muted">这些信号由你定义，可启用/停用，并在策略、回测与监控中作为 csg_* 信号使用。</p>
-            </div>
+        <SettingsSection
+          icon={Zap}
+          title="自定义信号"
+          description="由你定义，可启用或停用，并在策略、回测与监控中作为 csg_* 信号使用。"
+          badge="可配置"
+          unframed
+          action={
             <button
+              type="button"
               onClick={openNew}
-              className="inline-flex items-center justify-center gap-1.5 rounded-btn border border-amber-400/30 bg-amber-400/5 px-3 py-1.5 text-xs font-medium text-amber-400 hover:bg-amber-400/10 transition-colors"
+              className={cn(settingsSecondaryButtonClass, 'h-11 px-2 sm:h-8 sm:px-3')}
             >
               <Plus className="h-3.5 w-3.5" />
-              新建自定义信号
+              <span className="hidden sm:inline">新建自定义信号</span>
+              <span className="sm:hidden">新建</span>
             </button>
-          </div>
-
+          }
+        >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {signals.map(sig => (
               <div key={sig.id} className="rounded-card border border-border bg-base p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-medium text-foreground truncate">{sig.name}</h3>
+                      <h4 className="text-sm font-medium text-foreground truncate">{sig.name}</h4>
                       <span className={`rounded px-1.5 py-0.5 text-[10px] ${KIND_CLASS[sig.kind]}`}>
                         {KIND_LABEL[sig.kind]}
                       </span>
@@ -204,26 +221,33 @@ export function SettingsCustomSignalsPanel() {
                     <p className="mt-1 text-[11px] text-muted font-mono truncate">csg_{sig.id}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => toggleEnabled(sig)} title={sig.enabled ? '停用' : '启用'} className={`p-1 rounded cursor-pointer ${sig.enabled ? 'text-emerald-400 hover:bg-emerald-400/10' : 'text-muted hover:bg-elevated'}`}>
+                    <button
+                      type="button"
+                      onClick={() => toggleEnabled(sig)}
+                      title={sig.enabled ? '停用' : '启用'}
+                      className={cn(settingsIconButtonClass, sig.enabled && 'text-emerald-400 hover:bg-emerald-400/10')}
+                    >
                       <Zap className="h-3.5 w-3.5" />
                     </button>
-                    <button onClick={() => openEdit(sig)} className="p-1 rounded text-muted hover:text-accent hover:bg-accent/10 cursor-pointer" title="编辑">
+                    <button type="button" onClick={() => openEdit(sig)} className={settingsIconButtonClass} title="编辑">
                       <Settings2 className="h-3.5 w-3.5" />
                     </button>
                     {confirmingDeleteId === sig.id ? (
                       <button
+                        type="button"
                         onClick={() => handleDeleteClick(sig)}
                         disabled={del.isPending}
                         title="再次点击确认删除"
-                        className="inline-flex items-center gap-1 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-medium text-danger border border-danger/30 animate-pulse cursor-pointer disabled:opacity-50"
+                        className="inline-flex h-11 items-center gap-1 rounded-btn border border-danger/30 bg-danger/15 px-2 text-[10px] font-medium text-danger animate-pulse disabled:opacity-50 sm:h-8"
                       >
                         <Trash2 className="h-2.5 w-2.5" />确认
                       </button>
                     ) : (
                       <button
+                        type="button"
                         onClick={() => handleDeleteClick(sig)}
                         disabled={del.isPending}
-                        className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 cursor-pointer disabled:opacity-50"
+                        className={cn(settingsIconButtonClass, 'hover:bg-danger/10 hover:text-danger')}
                         title="删除"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -257,19 +281,19 @@ export function SettingsCustomSignalsPanel() {
               </div>
             )}
           </div>
-        </section>
+        </SettingsSection>
       )}
-
+      </SettingsPanel>
       <CustomSignalDialog open={showForm} signal={editing} onClose={closeForm} />
-    </div>
+    </>
   )
 }
 
 function StatCard({ label, value, hint }: { label: string; value: number; hint: string }) {
   return (
-    <div className="rounded-card border border-border/80 bg-base/70 px-4 py-3">
+    <div className="rounded-btn bg-base/70 px-3 py-2.5">
       <div className="text-[11px] text-muted">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-foreground">{value}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">{value}</div>
       <div className="mt-0.5 text-[11px] text-muted">{hint}</div>
     </div>
   )

@@ -17,9 +17,19 @@ import {
   HelpCircle,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useCapabilities, useSettings } from '@/lib/useSharedQueries'
 import { QK } from '@/lib/queryKeys'
 import { CAP_LABELS, tierTextStyle, tierStyle, tierBaseName, ALL_TIERS, TierTag } from '@/lib/capability-labels'
+import { cn } from '@/lib/cn'
+import {
+  SettingsPanel,
+  SettingsSection,
+  settingsControlClass,
+  settingsIconButtonClass,
+  settingsPrimaryButtonClass,
+  settingsSecondaryButtonClass,
+} from './SettingsPrimitives'
 
 // ===== 导出为 Panel 组件 (由 Settings.tsx 嵌入) =====
 
@@ -51,6 +61,7 @@ export function SettingsKeysPanel() {
   const clear = useMutation({
     mutationFn: () => api.clearTickflowKey(),
     onSuccess: () => {
+      setConfirmClear(false)
       qc.invalidateQueries({ queryKey: QK.settings })
       qc.invalidateQueries({ queryKey: QK.capabilities })
     },
@@ -70,10 +81,16 @@ export function SettingsKeysPanel() {
 
   return (
     <>
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.3fr] gap-6 max-w-5xl">
-        {/* ========== 左列: Key 配置 ========== */}
-        <div className="space-y-6">
-          <Card icon={Key} title="TickFlow API Key">
+      <SettingsPanel
+        icon={Key}
+        title="API 与订阅"
+        description="管理数据服务密钥、当前订阅档位和系统已检测到的可用能力。"
+        width="default"
+      >
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_1.3fr]">
+          {/* ========== 左列: Key 配置 ========== */}
+          <div className="space-y-5">
+            <SettingsSection icon={Key} title="TickFlow API Key">
             <p className="text-sm text-secondary leading-relaxed mb-4">
               在{' '}
               <a
@@ -115,9 +132,10 @@ export function SettingsKeysPanel() {
               </div>
               {(mode === 'api_key' || mode === 'free') && (
                 <button
+                  type="button"
                   onClick={() => setConfirmClear(true)}
                   disabled={clear.isPending}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn bg-elevated text-secondary hover:text-danger text-xs transition-colors duration-150 ease-smooth disabled:opacity-50 shrink-0"
+                  className={cn(settingsSecondaryButtonClass, 'h-11 shrink-0 border-transparent bg-elevated px-2.5 hover:text-danger sm:h-8')}
                 >
                   <Trash2 className="h-3 w-3" />
                   清除
@@ -139,12 +157,12 @@ export function SettingsKeysPanel() {
                   placeholder={mode === 'none' ? '粘贴 TickFlow API Key' : '粘贴新 Key 替换当前'}
                   value={keyInput}
                   onChange={(e) => { setKeyInput(e.target.value); if (saved) setSaved(false) }}
-                  className="w-full px-3 py-2 pr-9 rounded-input bg-base border border-border text-sm font-mono focus:outline-none focus:border-accent transition-colors duration-150 ease-smooth"
+                  className={cn(settingsControlClass, 'pr-10 font-mono')}
                 />
                 <button
                   type="button"
                   onClick={() => setRevealing((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-foreground transition-colors duration-150 ease-smooth"
+                  className={cn(settingsIconButtonClass, 'absolute right-0.5 top-1/2 -translate-y-1/2')}
                   tabIndex={-1}
                   aria-label={revealing ? '隐藏' : '显示'}
                 >
@@ -154,7 +172,7 @@ export function SettingsKeysPanel() {
               <button
                 type="submit"
                 disabled={save.isPending || (!keyInput.trim() && !saved)}
-                className="w-full h-10 rounded-xl bg-accent text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent/90 disabled:opacity-40 transition-all"
+                className={cn(settingsPrimaryButtonClass, 'w-full')}
               >
                 {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
                 {save.isPending ? '保存中...' : saved ? '已保存' : '保存并检测'}
@@ -200,25 +218,27 @@ export function SettingsKeysPanel() {
                 {save.data.mode === 'free' && '(免费档 · 历史日K + 自选实时监控)'}
               </div>
             )}
-          </Card>
-        </div>
+            </SettingsSection>
+          </div>
 
-        {/* ========== 右列: 档位 + 能力 ========== */}
-        <div className="space-y-6">
-          <Card
-            icon={Activity}
-            title="订阅档位"
-            right={
-              <button
-                onClick={() => redetect.mutate()}
-                disabled={redetect.isPending}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn bg-elevated hover:bg-elevated/80 text-xs text-secondary transition-colors duration-150 ease-smooth disabled:opacity-50"
-              >
-                <RefreshCw className={`h-3 w-3 ${redetect.isPending ? 'animate-spin' : ''}`} />
-                重新检测
-              </button>
-            }
-          >
+          {/* ========== 右列: 档位 + 能力 ========== */}
+          <div className="space-y-5">
+            <SettingsSection
+              icon={Activity}
+              title="订阅档位"
+              className="overflow-visible"
+              action={
+                <button
+                  type="button"
+                  onClick={() => redetect.mutate()}
+                  disabled={redetect.isPending}
+                  className={cn(settingsSecondaryButtonClass, 'h-11 px-2.5 sm:h-8')}
+                >
+                  <RefreshCw className={`h-3 w-3 ${redetect.isPending ? 'animate-spin' : ''}`} />
+                  重新检测
+                </button>
+              }
+            >
             {caps.data ? (
               <>
                 <div className="flex items-center gap-1.5">
@@ -249,15 +269,15 @@ export function SettingsKeysPanel() {
             ) : (
               <div className="text-sm text-muted">加载中…</div>
             )}
-          </Card>
+            </SettingsSection>
 
-          <Card icon={CheckCircle2} title="可用功能" badge={`${capCount} 项`}>
+            <SettingsSection icon={CheckCircle2} title="可用功能" badge={`${capCount} 项`}>
             {caps.data && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-                className="-mx-5 -mb-5"
+                className="-mx-4 -mb-4"
               >
                 <div className="border-t border-border">
                   {Object.entries(caps.data.capabilities).map(([cap, lim]) => {
@@ -265,7 +285,7 @@ export function SettingsKeysPanel() {
                     return (
                       <div
                         key={cap}
-                        className="px-5 py-3 border-b border-border last:border-b-0 flex items-baseline justify-between gap-4"
+                        className="flex items-baseline justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
                       >
                         <div className="min-w-0">
                           <div className="text-sm text-foreground truncate">
@@ -293,56 +313,35 @@ export function SettingsKeysPanel() {
             )}
 
             {settings.data?.probe_log && settings.data.probe_log.length > 0 && (
-              <details className="mt-4 -mx-5 -mb-5 border-t border-border">
-                <summary className="cursor-pointer px-5 py-3 text-xs text-muted hover:text-secondary transition-colors duration-150 ease-smooth select-none">
+              <details className="-mx-4 -mb-4 mt-4 border-t border-border">
+                <summary className="cursor-pointer select-none px-4 py-3 text-xs text-muted transition-colors duration-150 ease-smooth hover:text-secondary">
                   查看检测日志
                 </summary>
-                <div className="px-5 pb-4 font-mono text-[11px] space-y-0.5 text-secondary">
+                <div className="space-y-0.5 px-4 pb-4 font-mono text-[11px] text-secondary">
                   {settings.data.probe_log.map((line, i) => (
                     <div key={i}>{line}</div>
                   ))}
                 </div>
               </details>
             )}
-          </Card>
-        </div>
-      </div>
-
-      {/* 确认清除 Key 弹窗 */}
-      {confirmClear && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setConfirmClear(false)}
-          />
-          <div className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6">
-            <h3 className="text-sm font-medium text-foreground mb-2">清除 API Key</h3>
-            <p className="text-xs text-secondary mb-5">
-              清除后将退回 None 档(仅历史日K),需要重新输入 Key 才能恢复。
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => setConfirmClear(false)}
-                className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => { setConfirmClear(false); clear.mutate() }}
-                disabled={clear.isPending}
-                className="px-3 py-1.5 rounded-btn bg-danger/15 text-danger hover:bg-danger/25 text-sm font-medium transition-colors disabled:opacity-50"
-              >
-                {clear.isPending ? '清除中...' : '确认清除'}
-              </button>
-            </div>
+            </SettingsSection>
           </div>
         </div>
-      )}
+      </SettingsPanel>
+
+      <ConfirmDialog
+        open={confirmClear}
+        title="清除 API Key"
+        message="清除后将退回 None 档(仅历史日K),需要重新输入 Key 才能恢复。"
+        confirmText="确认清除"
+        danger
+        pending={clear.isPending}
+        onCancel={() => setConfirmClear(false)}
+        onConfirm={() => clear.mutate()}
+      />
     </>
   )
 }
-
-// ===== 通用卡片 =====
 
 // ===== 档位说明弹窗 =====
 
@@ -406,34 +405,5 @@ function TierHelpPopover({ currentLabel }: { currentLabel: string }) {
         )}
       </AnimatePresence>
     </div>
-  )
-}
-
-
-interface CardProps {
-  icon: React.ComponentType<{ className?: string }>
-  title: string
-  badge?: string
-  right?: React.ReactNode
-  children: React.ReactNode
-}
-
-function Card({ icon: Icon, title, badge, right, children }: CardProps) {
-  return (
-    <section className="rounded-card border border-border bg-surface p-5">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2.5">
-          <Icon className="h-4 w-4 text-secondary" />
-          <h2 className="text-sm font-medium text-foreground">{title}</h2>
-          {badge && (
-            <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-elevated text-muted">
-              {badge}
-            </span>
-          )}
-        </div>
-        {right}
-      </div>
-      {children}
-    </section>
   )
 }

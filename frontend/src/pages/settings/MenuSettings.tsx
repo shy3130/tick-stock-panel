@@ -17,11 +17,12 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Eye, EyeOff, ExternalLink, GripVertical, Settings, Bell } from 'lucide-react'
+import { Eye, EyeOff, ExternalLink, GripVertical, Settings, Bell, SlidersHorizontal } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useNavItems, type NavItem } from '@/lib/navRegistry'
+import { SettingsPanel, SettingsSection } from './SettingsPrimitives'
 
 // 菜单条目类型 —— 直接复用 navRegistry 的 NavItem, 附带此页专属的 hidden 状态。
 // 内置/扩展的合并、排序、隐藏逻辑统一在 lib/navRegistry.ts#useNavItems 里维护,
@@ -58,7 +59,7 @@ function SortableItem({ entry, onToggleHidden, badgeEnabled, onToggleBadge }: {
     <div
       ref={setNodeRef}
       style={style}
-      className={`grid grid-cols-[2.5rem_1fr_4.5rem_3rem_3rem_3rem] items-center border-b border-border/70 px-4 py-3 last:border-b-0 ${
+      className={`grid min-w-[34rem] grid-cols-[2.5rem_1fr_4.5rem_3rem_3rem_3rem] items-center border-b border-border/70 px-4 py-3 last:border-b-0 ${
         isDragging ? 'bg-elevated rounded-lg shadow-lg' : ''
       } ${hidden ? 'opacity-50' : ''}`}
     >
@@ -209,17 +210,20 @@ export function SettingsMenuSettingsPanel() {
   }
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <section className="rounded-2xl border border-border bg-surface p-6 bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.12),transparent_38%)]">
-        <div className="text-[11px] uppercase tracking-[0.2em] text-accent/80">菜单设置</div>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">调整左侧菜单顺序</h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
-          拖动左侧手柄调整菜单排列顺序，点击眼睛图标控制菜单在侧边栏中的显示或隐藏。
-        </p>
-      </section>
-
-      <section className="rounded-card border border-border bg-surface overflow-hidden">
-        <div className="grid grid-cols-[2.5rem_1fr_4.5rem_3rem_3rem_3rem] items-center border-b border-border px-4 py-2 text-[11px] text-muted">
+    <SettingsPanel
+      icon={SlidersHorizontal}
+      title="菜单设置"
+      description="拖动左侧手柄调整菜单排列顺序，点击眼睛图标控制菜单在侧边栏中的显示或隐藏。"
+      width="default"
+    >
+      <SettingsSection
+        title="侧边栏菜单"
+        description="排序、显示状态和数字提示会同步应用到主导航。"
+        badge={`${orderedEntries.length} 项`}
+        flush
+        contentClassName="overflow-x-auto"
+      >
+        <div className="grid min-w-[34rem] grid-cols-[2.5rem_1fr_4.5rem_3rem_3rem_3rem] items-center border-b border-border px-4 py-2 text-[11px] text-muted">
           <div />
           <div>菜单</div>
           <div>类型</div>
@@ -250,9 +254,9 @@ export function SettingsMenuSettingsPanel() {
         </DndContext>
 
         {isLoading && (
-          <div className="px-5 py-10 text-center text-sm text-muted">正在加载菜单...</div>
+          <div className="min-w-[34rem] px-5 py-10 text-center text-sm text-muted">正在加载菜单...</div>
         )}
-      </section>
-    </div>
+      </SettingsSection>
+    </SettingsPanel>
   )
 }

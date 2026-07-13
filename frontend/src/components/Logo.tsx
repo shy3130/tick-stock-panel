@@ -1,11 +1,5 @@
-// 原创 logo:方括号 [ ] 包裹一根带 wick 的 K 线
-//
-// 概念:
-//   - 外层 brackets:终端 / 代码 / 引用边界 — 赛博 + quant 气质
-//   - 中央 wick+body:一根标准 K 线 — 直接的金融指代
-//   - body 偏上 + 下影长:bullish 站稳感 (上影短 / 下影长)
-//
-// 用 currentColor,继承父级 color 设定,方便切换品牌色。
+// Sycee 品牌标志: 银锭轮廓 + 上升行情折线。
+// 轮廓对应品牌名的本义，折线表达量化研究；单色结构可在 24-40px 保持清晰。
 interface LogoProps {
   className?: string
   size?: number
@@ -24,36 +18,32 @@ export function Logo({ className, size = 32, style }: LogoProps) {
       role="img"
       aria-label="Sycee"
     >
-      {/* 左方括号 */}
+      {/* 银锭主体 */}
       <path
-        d="M10 4 L4 4 L4 28 L10 28"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="miter"
-        strokeLinecap="butt"
-      />
-      {/* 右方括号 */}
-      <path
-        d="M22 4 L28 4 L28 28 L22 28"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="miter"
-        strokeLinecap="butt"
-      />
-      {/* K 线 wick(上下影线,半透明) */}
-      <line
-        x1="16" y1="7" x2="16" y2="25"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeOpacity="0.6"
-      />
-      {/* K 线 body — 偏上,上影短/下影长, bullish 站稳感 */}
-      <rect
-        x="13" y="9" width="6" height="10"
+        d="M4.75 10.25 10 6.25c2.2 1.9 9.8 1.9 12 0l5.25 4c-1.15 6.65-2.65 12.15-6.05 14.25-2.8 1.7-7.6 1.7-10.4 0-3.4-2.1-4.9-7.6-6.05-14.25Z"
         fill="currentColor"
-        rx="0.5"
+        fillOpacity="0.1"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
       />
+      {/* 锭口内沿，形成向内收束的银锭结构 */}
+      <path
+        d="M10.3 10.5c2.2 1.6 9.2 1.6 11.4 0"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeOpacity="0.42"
+      />
+      {/* 行情折线 */}
+      <path
+        d="m9.25 22 4.15-4.05 3.35 2.35 6.5-7.05"
+        stroke="currentColor"
+        strokeWidth="2.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="23.25" cy="13.25" r="1.65" fill="currentColor" />
     </svg>
   )
 }

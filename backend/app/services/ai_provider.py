@@ -10,6 +10,7 @@ import tempfile
 import tomllib
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app import secrets_store
 from app.config import settings
@@ -69,7 +70,9 @@ def normalize_openai_base_url(url: str) -> str:
     base = (url or "").strip().rstrip("/")
     if base.endswith("/chat/completions"):
         base = base[: -len("/chat/completions")].rstrip("/")
-    if not base.endswith("/v1"):
+    # Root gateways commonly omit /v1. Provider-specific versioned paths such
+    # as GLM's /api/paas/v4 are already complete and must be preserved.
+    if not urlsplit(base).path:
         base = f"{base}/v1"
     return base
 

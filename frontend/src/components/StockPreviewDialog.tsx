@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock } from 'lucide-react'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
+import { X, RefreshCw, Clock, Zap } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnSignal } from '@/lib/signals'
 import { StockPanel, getDefaultRange } from '@/components/StockPanel'
 import { DatePicker } from '@/components/DatePicker'
+import { Modal } from '@/components/Modal'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 
 interface Props {
@@ -38,10 +39,35 @@ function boardTag(symbol: string): { label: string; color: string } | null {
   return null
 }
 
+function PreviewHeaderActions({ onRefresh, onClose }: { onRefresh: () => void; onClose: () => void }) {
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        onClick={onRefresh}
+        className="flex h-8 w-8 items-center justify-center rounded-btn text-secondary transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        title="刷新"
+        aria-label="刷新行情"
+      >
+        <RefreshCw className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        className="flex h-8 w-8 items-center justify-center rounded-btn text-secondary transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        aria-label="关闭个股预览"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  )
+}
+
 export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
+  const reduceMotion = useReducedMotion()
   const qc = useQueryClient()
 
   const watchlist = useQuery({
@@ -59,16 +85,6 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
     },
   })
 
-  // ESC 关闭
-  useEffect(() => {
-    if (!symbol) return
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [symbol, onClose])
-
   const handleRefresh = () => {
     if (!symbol) return
     qc.invalidateQueries({ queryKey: ['kline', symbol!] })
@@ -80,28 +96,23 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   return (
     <AnimatePresence>
       {symbol && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* 遮罩 */}
+        <Modal
+          onClose={onClose}
+          labelledBy="stock-preview-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          panelClassName="w-[92vw] max-w-[1100px]"
+        >
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={onClose}
-          />
-
-          {/* 弹窗主体 */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 12 }}
+            initial={reduceMotion ? false : { opacity: 0, scale: 0.95, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97, y: 8 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="relative w-[92vw] max-w-[1100px] max-h-[95vh] rounded-card border border-border bg-base shadow-2xl overflow-hidden flex flex-col"
+            exit={reduceMotion ? undefined : { opacity: 0, scale: 0.97, y: 8 }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="relative flex max-h-[95vh] w-full flex-col overflow-hidden rounded-card border border-border bg-base shadow-2xl"
           >
             {/* 顶栏 */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
-              <div className="flex items-center gap-2">
+            <div className="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2 md:flex-row md:items-center md:justify-between md:gap-3 md:px-5 md:py-3">
+              <div className="flex min-w-0 items-center justify-between gap-2 md:contents">
+              <h2 id="stock-preview-title" className="flex min-w-0 items-center gap-2">
                 {(() => {
                   const board = symbol ? boardTag(symbol) : null
                   return board ? (
@@ -110,11 +121,16 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                     </span>
                   ) : null
                 })()}
-                <span className="font-mono text-sm font-medium text-foreground">{symbol}</span>
-                {name && <span className="text-xs text-muted">{name}</span>}
+                <span className="shrink-0 font-mono text-sm font-medium text-foreground">{symbol}</span>
+                {name && <span className="truncate text-xs text-muted">{name}</span>}
+              </h2>
+                <div className="md:hidden">
+                  <PreviewHeaderActions onRefresh={handleRefresh} onClose={onClose} />
+                </div>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 md:flex-none md:overflow-visible md:pb-0">
                 {/* 日期范围快捷 */}
                 {PRESETS.map(p => {
                   const now = new Date()
@@ -124,6 +140,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                   const isActive = dateRange.start === expected
                   return (
                     <button
+                      type="button"
                       key={p.label}
                       onClick={() => {
                         const end = new Date().toISOString().slice(0, 10)
@@ -131,7 +148,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                         ns.setMonth(ns.getMonth() - p.months)
                         setDateRange({ start: ns.toISOString().slice(0, 10), end })
                       }}
-                      className={`h-6 px-1.5 rounded text-[11px] transition-colors cursor-pointer
+                      className={`h-7 shrink-0 whitespace-nowrap rounded px-1.5 text-[11px] transition-colors cursor-pointer
                         ${isActive
                           ? 'bg-accent/20 text-accent font-medium border border-accent/30'
                           : 'text-muted hover:text-foreground hover:bg-elevated border border-transparent'
@@ -145,20 +162,23 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                   value={dateRange.start}
                   onChange={(v) => setDateRange(prev => ({ ...prev, start: v }))}
                   max={dateRange.end}
+                  className="shrink-0"
                 />
-                <span className="text-muted/40 text-[10px]">~</span>
+                <span className="shrink-0 text-[10px] text-muted/40">~</span>
                 <DatePicker
                   value={dateRange.end}
                   onChange={(v) => setDateRange(prev => ({ ...prev, end: v }))}
                   min={dateRange.start}
+                  className="shrink-0"
                 />
 
-                <span className="text-muted/20 mx-0.5">|</span>
+                <span className="mx-0.5 shrink-0 text-muted/20">|</span>
 
                 {/* 分时开关 */}
                 <button
+                  type="button"
                   onClick={() => setShowIntraday((v) => !v)}
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
+                  className={`inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 text-xs transition-colors ${
                     showIntraday
                       ? 'bg-accent/15 text-accent border border-accent/30'
                       : 'bg-elevated text-secondary border border-border hover:border-accent/30'
@@ -167,25 +187,10 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                   <Clock className="h-3 w-3" />
                   分时
                 </button>
-
-                <span className="text-muted/20 mx-0.5">|</span>
-
-                {/* 刷新 */}
-                <button
-                  onClick={handleRefresh}
-                  className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
-                  title="刷新"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                </button>
-
-                {/* 关闭 */}
-                <button
-                  onClick={onClose}
-                  className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                </div>
+                <div className="hidden md:block">
+                  <PreviewHeaderActions onRefresh={handleRefresh} onClose={onClose} />
+                </div>
               </div>
             </div>
 
@@ -194,7 +199,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
               <div className="flex items-center gap-4 border-b border-amber-400/20 bg-amber-400/[0.06] px-5 py-2 shrink-0">
                 {/* 左: 触发标记 + 时间 */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[10px] font-semibold text-amber-400">⚡ 触发</span>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400"><Zap className="h-3 w-3" />触发</span>
                   {triggerInfo.ts && (
                     <span className="text-[11px] text-secondary font-mono">
                       {new Date(triggerInfo.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -248,9 +253,10 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
             <AnimatePresence>
               {showMonitorEditor && symbol && (
                 <motion.div
-                  initial={{ opacity: 0 }}
+                  initial={reduceMotion ? false : { opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+                  exit={reduceMotion ? undefined : { opacity: 0 }}
+                  transition={{ duration: reduceMotion ? 0 : 0.15 }}
                   className="absolute inset-0 z-20 flex items-start justify-center overflow-auto bg-black/40 p-4"
                   onClick={() => setShowMonitorEditor(false)}
                 >
@@ -272,7 +278,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
               )}
             </AnimatePresence>
           </motion.div>
-        </div>
+        </Modal>
       )}
     </AnimatePresence>
   )

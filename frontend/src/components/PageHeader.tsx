@@ -7,12 +7,13 @@ interface Props {
   subtitle?: string
   titleExtra?: ReactNode
   right?: ReactNode
+  rightClassName?: string
   className?: string
   icon?: NavIconComponent
   group?: NavGroup
 }
 
-export function PageHeader({ title, subtitle, titleExtra, right, className, icon: Icon, group }: Props) {
+export function PageHeader({ title, subtitle, titleExtra, right, rightClassName, className, icon: Icon, group }: Props) {
   const groupColor = group ? NAV_GROUP_COLOR[group] : undefined
   return (
     <header
@@ -34,7 +35,7 @@ export function PageHeader({ title, subtitle, titleExtra, right, className, icon
         {titleExtra}
         {subtitle && <span className="min-w-0 basis-full text-xs text-muted xl:basis-auto">{subtitle}</span>}
       </div>
-      {right && <div className="w-full min-w-0 overflow-x-auto lg:w-auto lg:shrink-0">{right}</div>}
+      {right && <div className={cn('w-full min-w-0 overflow-x-auto lg:w-auto lg:shrink-0', rightClassName)}>{right}</div>}
     </header>
   )
 }

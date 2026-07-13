@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useRef, useState } from 'react'
-import { Outlet, useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Outlet } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Loader2 } from 'lucide-react'
 import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
@@ -12,14 +12,10 @@ import { StockAnalysisHost } from '@/components/stock-analysis/StockAnalysisHost
 import { StockAnalysisBubble } from '@/components/stock-analysis/StockAnalysisBubble'
 import {
   useCapabilities,
-  useSettings,
   usePreferences,
   useQuoteStatus,
   useVersion,
 } from '@/lib/useSharedQueries'
-import {
-  useToggleRealtimeQuotes,
-} from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
 import { api } from '@/lib/api'
@@ -38,17 +34,10 @@ import { TopBar } from '@/components/layout/TopBar'
 export function Layout() {
   // ===== 共享 hooks (替代内联 useQuery) =====
   const { data: caps } = useCapabilities()
-  const { data: settingsState } = useSettings()
   const { data: versionData } = useVersion()
   const { data: prefs } = usePreferences()
-  // 数据源列表 (用于实时行情状态显示当前数据源名称)
-  const { data: dataSources } = useQuery({
-    queryKey: QK.dataSources,
-    queryFn: api.dataSources,
-    staleTime: 60_000,
-  })
   // poll=true: 全局唯一开启条件轮询 (非交易时段 60s 兜底, 交易时段靠 SSE)
-  const { data: quoteStatus } = useQuoteStatus({ poll: true })
+  useQuoteStatus({ poll: true })
 
   // 数据同步状态轮询: 有活跃 job 时「数据」菜单项显示转圈
   const { data: pipelineJobs } = useQuery({
@@ -74,12 +63,8 @@ export function Layout() {
     prevSyncingRef.current = isDataSyncing
   }, [isDataSyncing])
 
-  const qc = useQueryClient()
-  const navigate = useNavigate()
   const version = versionData?.version
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
-  // Free 档监控限制提示: 可手动关闭, 不持久化 (刷新后恢复显示)
-  const [dismissFreeHint, setDismissFreeHint] = useState(false)
   const indicesPinned = prefs?.indices_nav_pinned ?? true
   const sidebarIndexSymbols = prefs?.sidebar_index_symbols ?? CORE_INDEXES.map(p => p.symbol)
   const sidebarIndexes = CORE_INDEXES.filter(item => sidebarIndexSymbols.includes(item.symbol))
@@ -96,29 +81,9 @@ export function Layout() {
   useQuoteStream(realtimeEnabled, prefs?.sse_refresh_pages)
   const streamStatus = useQuoteStreamStatus()
 
-  const toggleQuote = useToggleRealtimeQuotes()
-  const isRunning = quoteStatus?.running ?? false
-  const isTrading = quoteStatus?.is_trading_hours ?? false
-  const isPaused = quoteStatus?.paused ?? false
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
   const isWatchlistMode = tier === 0
-  const realtimeModeLabel = isWatchlistMode ? '自选股' : '全市场'
-  // 当前实时行情数据源名称 (custom 时显示源名, tickflow 时不显示)
-  const realtimeProvider = prefs?.realtime_data_provider
-  const realtimeProviderName = realtimeProvider && realtimeProvider !== 'tickflow'
-    ? (dataSources?.custom?.find(s => s.name === realtimeProvider)?.display_name || realtimeProvider)
-    : null
-
-  // 当前主数据源 (用于菜单底部状态条)
-  const activeProvider = prefs?.daily_data_provider || 'tickflow'
-  const activeProviderName = activeProvider === 'tickflow'
-    ? 'TickFlow'
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.display_name || activeProvider)
-  const activeProviderDatasets = activeProvider === 'tickflow'
-    ? ['daily', 'adj_factor', 'realtime', 'minute']
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.datasets || [])
-  const isCustomActive = activeProvider !== 'tickflow'
 
   // 轮询触发记录总数 → 更新监控中心徽标 (每 15 秒)
   const alertsTotalQuery = useQuery({
@@ -138,54 +103,15 @@ export function Layout() {
   const isNarrow = useIsNarrowViewport()
   const effectiveCollapsed = collapsed || isNarrow
 
-  const handleToggle = async (enabled: boolean) => {
-    // 开启时重新校验档位
-    if (enabled) {
-      const fresh = await qc.fetchQuery({
-        queryKey: QK.capabilities,
-        queryFn: api.capabilities,
-      })
-      const freshTier = tierRank(fresh.label ?? '')
-      if (freshTier < 0) return
-      if (freshTier === 0 && (prefs?.realtime_watchlist_symbols?.length ?? 0) === 0) {
-        navigate('/watchlist')
-        return
-      }
-    }
-    await toggleQuote.mutateAsync(enabled)
-    // 仅在交易时段立即获取一次行情
-    if (enabled && isTrading) {
-      api.intradayRefresh().catch(() => {})
-    }
-  }
-
   return (
     <div className="h-screen flex bg-base text-foreground overflow-hidden">
       <Sidebar
         collapsed={effectiveCollapsed}
-        navigate={navigate}
         version={version}
-        tierLabel={caps?.label ?? ''}
-        hasApiKey={settingsState?.mode !== 'none'}
-        aiConfigured={settingsState?.ai_configured ?? settingsState?.has_ai_key}
-        aiModel={settingsState?.ai_model}
         isDataSyncing={isDataSyncing}
         dataSyncJustDone={dataSyncJustDone}
         isNoneTier={isNoneTier}
         isWatchlistMode={isWatchlistMode}
-        realtimeEnabled={realtimeEnabled}
-        isRunning={isRunning}
-        isTrading={isTrading}
-        isPaused={isPaused}
-        realtimeModeLabel={realtimeModeLabel}
-        realtimeProviderName={realtimeProviderName}
-        dismissFreeHint={dismissFreeHint}
-        onDismissFreeHint={() => setDismissFreeHint(true)}
-        onToggleRealtime={handleToggle}
-        toggleRealtimePending={toggleQuote.isPending}
-        activeProviderName={activeProviderName}
-        activeProviderDatasets={activeProviderDatasets}
-        isCustomActive={isCustomActive}
         showSidebarQuotes={showSidebarQuotes}
         sidebarIndexQuotesRows={sidebarIndexQuotes?.rows}
         sidebarIndexes={sidebarIndexes}

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, Radio } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -19,6 +19,7 @@ import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stoc
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { getNavIconMeta } from '@/lib/navRegistry'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
+import { useToggleRealtimeQuotes } from '@/lib/useSharedMutations'
 import {
   type ColumnConfig,
   BUILTIN_COLUMNS,
@@ -629,6 +630,7 @@ export function Watchlist() {
   // 刷新策略: 实时行情运行中自动按 15s 轮询 (不接 SSE 高频, 避免每秒拉 TickFlow 触限流);
   // 用户也可在实时监控设置里单独开启 minute_intraday_refresh 强制刷新 (即使未开实时行情)
   const { data: prefsData } = usePreferences()
+  const toggleRealtime = useToggleRealtimeQuotes()
   const intradayRefreshEnabled = prefsData?.minute_intraday_refresh ?? false
   const minuteBatch = useQuery({
     queryKey: QK.minuteBatch(symbolsKey),
@@ -646,6 +648,8 @@ export function Watchlist() {
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
       qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: QK.quoteStatus })
     },
   })
 
@@ -661,6 +665,8 @@ export function Watchlist() {
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
       qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: QK.quoteStatus })
     },
   })
 
@@ -685,6 +691,8 @@ export function Watchlist() {
       qc.invalidateQueries({ queryKey: QK.watchlist })
       qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
       qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: QK.quoteStatus })
     },
   })
 
@@ -705,12 +713,52 @@ export function Watchlist() {
   const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
   const rows = enriched.data?.rows ?? []
 
+  const realtimeEnabled = prefsData?.realtime_quotes_enabled ?? false
+  const realtimeAllowed = quoteStatus.data?.realtime_allowed ?? false
+  const realtimePaused = quoteStatus.data?.paused ?? false
+  const isTrading = quoteStatus.data?.is_trading_hours ?? false
+
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
   // 后端 Free 档实际只监控自选页前 N 个 (N = watchlist_symbol_count), 顺序与 allSymbols 一致。
   const realtimeMode = quoteStatus.data?.mode
   const watchlistMonitoredCount = quoteStatus.data?.watchlist_symbol_count ?? 0
   const showRealtimeDot = realtimeRunning && realtimeMode === 'watchlist'
+  const watchlistRealtimeEmpty = realtimeMode === 'watchlist' && allSymbols.length === 0
+  const realtimeToggleDisabled = toggleRealtime.isPending
+    || quoteStatus.isLoading
+    || prefsData == null
+    || realtimePaused
+    || (!realtimeEnabled && (!realtimeAllowed || watchlistRealtimeEmpty))
+  const realtimeScopeLabel = !realtimeAllowed && !realtimeEnabled
+    ? 'Free+'
+    : realtimeMode === 'full_market' ? '全市场' : '自选'
+  const realtimeToggleTitle = toggleRealtime.isPending
+    ? '正在切换实时行情'
+    : realtimePaused
+      ? '数据同步运行中，实时行情已临时暂停'
+      : !realtimeEnabled && !realtimeAllowed
+        ? '需要 Free 或已配置实时数据源'
+      : !realtimeEnabled && watchlistRealtimeEmpty
+        ? '请先添加自选股'
+          : toggleRealtime.isError
+            ? '切换失败，请重试'
+            : realtimeEnabled && !isTrading
+              ? '已开启，将在交易时间自动运行'
+              : realtimeEnabled ? '关闭实时行情' : '开启实时行情'
+
+  const handleToggleRealtime = async () => {
+    const nextEnabled = !realtimeEnabled
+    try {
+      const result = await toggleRealtime.mutateAsync(nextEnabled)
+      if (nextEnabled && result.realtime_quotes_enabled && isTrading) {
+        api.intradayRefresh().catch(() => {})
+      }
+    } catch {
+      return
+    }
+  }
+
   // 真正被监控的标的集合 (自选列表前 watchlistMonitoredCount 个)
   const monitoredSymbols = useMemo(
     () => showRealtimeDot ? new Set(allSymbols.slice(0, watchlistMonitoredCount)) : new Set<string>(),
@@ -879,6 +927,35 @@ export function Watchlist() {
         }
         right={
           <div className="flex items-center gap-2">
+            <div className="flex h-8 shrink-0 items-center gap-2 rounded-btn border border-border/60 bg-elevated/60 px-2.5">
+              <Radio className={`h-3.5 w-3.5 ${
+                realtimeEnabled && realtimeRunning && isTrading
+                  ? 'text-accent animate-pulse'
+                  : realtimeEnabled ? 'text-warning' : 'text-muted'
+              }`} />
+              <span className="text-xs font-medium text-secondary">实时行情</span>
+              <span className="text-[10px] text-muted">{realtimeScopeLabel}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={realtimeEnabled}
+                aria-label={realtimeEnabled ? '关闭实时行情' : '开启实时行情'}
+                aria-busy={toggleRealtime.isPending}
+                title={realtimeToggleTitle}
+                disabled={realtimeToggleDisabled}
+                onClick={() => { void handleToggleRealtime() }}
+                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200 ${
+                  realtimeEnabled
+                    ? 'bg-accent shadow-[0_0_8px_rgba(59,130,246,0.28)]'
+                    : 'bg-base ring-1 ring-border'
+                } ${realtimeToggleDisabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}
+              >
+                <span className={`h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                  realtimeEnabled ? 'translate-x-[18px]' : 'translate-x-1'
+                }`} />
+              </button>
+            </div>
+            <div className="w-px h-5 bg-border" />
             {/* 筛选 / 重置 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}
