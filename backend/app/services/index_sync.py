@@ -253,31 +253,43 @@ def sync_and_persist_hk_daily(
     total_rows = 0
     interval = (60.0 / rpm) if rpm else 0
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+    failed_symbols: list[str] = []
     for i, chunk in enumerate(chunks):
         if i > 0 and interval > 0 and len(chunks) > rpm:
             import time
             time.sleep(interval)
-        raw = kline_sync.sync_daily_batch(
-            chunk,
-            count=count,
-            batch_size=None,
-            start_time=start_time,
-            end_time=end_time,
-            asset_type="hk",
-        )
-        if raw.is_empty():
-            continue
+        try:
+            raw = kline_sync.sync_daily_batch(
+                chunk,
+                count=count,
+                batch_size=None,
+                start_time=start_time,
+                end_time=end_time,
+                asset_type="hk",
+            )
+            if raw.is_empty():
+                continue
 
-        repo.append_hk_daily(raw)
-        chunk_instruments = instruments.filter(pl.col("symbol").is_in(chunk)) if not instruments.is_empty() else instruments
-        enriched = compute_enriched(raw, factors=None, instruments=chunk_instruments, asset_type="hk")
-        repo.append_hk_enriched(enriched)
-        total_rows += raw.height
-        logger.info("hk daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
-        if on_chunk_done:
-            on_chunk_done(i + 1, len(chunks))
-        del raw, enriched
-        gc.collect()
+            repo.append_hk_daily(raw)
+            chunk_instruments = instruments.filter(pl.col("symbol").is_in(chunk)) if not instruments.is_empty() else instruments
+            enriched = compute_enriched(raw, factors=None, instruments=chunk_instruments, asset_type="hk")
+            repo.append_hk_enriched(enriched)
+            total_rows += raw.height
+            logger.info("hk daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
+        except Exception:
+            failed_symbols.extend(chunk)
+            logger.exception(
+                "hk daily sync failed for chunk %d/%d (%d symbols, e.g. %s) — "
+                "raw 可能已落盘但 enriched 未写入,跳过该批继续处理剩余标的",
+                i + 1, len(chunks), len(chunk), chunk[:5],
+            )
+            continue
+        finally:
+            if on_chunk_done:
+                on_chunk_done(i + 1, len(chunks))
+            gc.collect()
+    if failed_symbols:
+        logger.warning("hk daily sync: %d symbols failed, %s", len(failed_symbols), failed_symbols[:20])
     repo.refresh_index_views()
     return total_rows
 
@@ -326,30 +338,42 @@ def sync_and_persist_index_daily(
     total_rows = 0
     interval = (60.0 / rpm) if rpm else 0
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+    failed_symbols: list[str] = []
     for i, chunk in enumerate(chunks):
         if i > 0 and interval > 0 and len(chunks) > rpm:
             import time
             time.sleep(interval)
-        raw = kline_sync.sync_daily_batch(
-            chunk,
-            count=count,
-            batch_size=None,
-            start_time=start_time,
-            end_time=end_time,
-            asset_type="index",
-        )
-        if raw.is_empty():
-            continue
+        try:
+            raw = kline_sync.sync_daily_batch(
+                chunk,
+                count=count,
+                batch_size=None,
+                start_time=start_time,
+                end_time=end_time,
+                asset_type="index",
+            )
+            if raw.is_empty():
+                continue
 
-        repo.append_index_daily(raw)
-        enriched = compute_enriched(raw, factors=None, instruments=None)
-        repo.append_index_enriched(enriched)
-        total_rows += raw.height
-        logger.info("index/etf daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
-        if on_chunk_done:
-            on_chunk_done(i + 1, len(chunks))
-        del raw, enriched
-        gc.collect()
+            repo.append_index_daily(raw)
+            enriched = compute_enriched(raw, factors=None, instruments=None)
+            repo.append_index_enriched(enriched)
+            total_rows += raw.height
+            logger.info("index/etf daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
+        except Exception:
+            failed_symbols.extend(chunk)
+            logger.exception(
+                "index/etf daily sync failed for chunk %d/%d (%d symbols, e.g. %s) — "
+                "raw 可能已落盘但 enriched 未写入,跳过该批继续处理剩余标的",
+                i + 1, len(chunks), len(chunk), chunk[:5],
+            )
+            continue
+        finally:
+            if on_chunk_done:
+                on_chunk_done(i + 1, len(chunks))
+            gc.collect()
+    if failed_symbols:
+        logger.warning("index/etf daily sync: %d symbols failed, %s", len(failed_symbols), failed_symbols[:20])
     repo.refresh_index_views()
     return total_rows
 
@@ -427,36 +451,48 @@ def sync_and_persist_etf_daily(
     interval = (60.0 / rpm) if rpm else 0
     chunks = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
     factors = _load_etf_factors(repo)
+    failed_symbols: list[str] = []
     for i, chunk in enumerate(chunks):
         if i > 0 and interval > 0 and len(chunks) > rpm:
             import time
             time.sleep(interval)
-        raw = kline_sync.sync_daily_batch(
-            chunk,
-            count=count,
-            batch_size=None,
-            start_time=start_time,
-            end_time=end_time,
-            asset_type="etf",
-        )
-        if raw.is_empty():
-            continue
+        try:
+            raw = kline_sync.sync_daily_batch(
+                chunk,
+                count=count,
+                batch_size=None,
+                start_time=start_time,
+                end_time=end_time,
+                asset_type="etf",
+            )
+            if raw.is_empty():
+                continue
 
-        repo.append_etf_daily(raw)
-        batch_factors = factors.filter(pl.col("symbol").is_in(chunk)) if not factors.is_empty() else factors
-        # ETF 使用复权和通用技术指标；instruments+asset_type="etf" 只触发换手率
-        # 计算(_attach_turnover_rate),不会套用 A 股涨跌停/连板逻辑 —— 那只在
-        # asset_type=="stock" 时才触发(compute_all 的分支判断)。
-        # 换手率原先算不出来是因为这里传 instruments=None 整个跳过了该分支,
-        # 与港股同一个根因,修法也相同(见 sync_and_persist_hk_daily)。
-        chunk_instruments = instruments.filter(pl.col("symbol").is_in(chunk)) if not instruments.is_empty() else instruments
-        enriched = compute_enriched(raw, factors=batch_factors, instruments=chunk_instruments, asset_type="etf")
-        repo.append_etf_enriched(enriched)
-        total_rows += raw.height
-        logger.info("etf daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
-        if on_chunk_done:
-            on_chunk_done(i + 1, len(chunks))
-        del raw, enriched
-        gc.collect()
+            repo.append_etf_daily(raw)
+            batch_factors = factors.filter(pl.col("symbol").is_in(chunk)) if not factors.is_empty() else factors
+            # ETF 使用复权和通用技术指标；instruments+asset_type="etf" 只触发换手率
+            # 计算(_attach_turnover_rate),不会套用 A 股涨跌停/连板逻辑 —— 那只在
+            # asset_type=="stock" 时才触发(compute_all 的分支判断)。
+            # 换手率原先算不出来是因为这里传 instruments=None 整个跳过了该分支,
+            # 与港股同一个根因,修法也相同(见 sync_and_persist_hk_daily)。
+            chunk_instruments = instruments.filter(pl.col("symbol").is_in(chunk)) if not instruments.is_empty() else instruments
+            enriched = compute_enriched(raw, factors=batch_factors, instruments=chunk_instruments, asset_type="etf")
+            repo.append_etf_enriched(enriched)
+            total_rows += raw.height
+            logger.info("etf daily synced: %d/%d chunks, +%d rows", i + 1, len(chunks), raw.height)
+        except Exception:
+            failed_symbols.extend(chunk)
+            logger.exception(
+                "etf daily sync failed for chunk %d/%d (%d symbols, e.g. %s) — "
+                "raw 可能已落盘但 enriched 未写入,跳过该批继续处理剩余标的",
+                i + 1, len(chunks), len(chunk), chunk[:5],
+            )
+            continue
+        finally:
+            if on_chunk_done:
+                on_chunk_done(i + 1, len(chunks))
+            gc.collect()
+    if failed_symbols:
+        logger.warning("etf daily sync: %d symbols failed, %s", len(failed_symbols), failed_symbols[:20])
     repo.refresh_index_views()
     return total_rows

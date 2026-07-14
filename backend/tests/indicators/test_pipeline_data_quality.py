@@ -3,7 +3,14 @@ from datetime import date
 import polars as pl
 
 from app.data_providers.fquant_provider import FQuantProvider
-from app.indicators.pipeline import compute_enriched, compute_enriched_today, compute_indicators, filter_halt_days
+from app.indicators import pipeline as pipeline_mod
+from app.indicators.pipeline import (
+    clean_nan_inf,
+    compute_enriched,
+    compute_enriched_today,
+    compute_indicators,
+    filter_halt_days,
+)
 
 
 def test_turnover_rate_uses_share_volume_contract():
@@ -141,3 +148,74 @@ def test_enriched_today_recomputes_quote_change_after_adjustment():
 
 def test_market_snapshot_lot_volume_maps_to_shares():
     assert FQuantProvider._hands_to_shares(123) == 12_300
+
+
+def test_clean_nan_inf_masks_zero_division_artifacts():
+    """极端低流动性标的产生的真实 0/0(NaN)、x/0(Inf)必须被清成 null,不能
+    直接透出到 API 响应 —— fill_null 拦不住真实的 0,只拦得住 null。
+    """
+    df = pl.DataFrame({
+        "symbol": ["A", "B", "C"],
+        "kdj_k": [1.0, float("nan"), 3.0],
+        "vol_ratio_5d": [float("inf"), 2.0, float("-inf")],
+        "signal_limit_up": [True, False, True],  # 非浮点列不应受影响
+    })
+
+    out = clean_nan_inf(df)
+
+    assert out["kdj_k"].to_list() == [1.0, None, 3.0]
+    assert out["vol_ratio_5d"].to_list() == [None, 2.0, None]
+    assert out["signal_limit_up"].to_list() == [True, False, True]
+
+
+def test_compute_all_applies_clean_nan_inf():
+    """compute_all() 本身要复用 clean_nan_inf,而不是各自维护一份清理逻辑。"""
+    raw = pl.DataFrame({
+        "symbol": ["000001.SZ"] * 10,
+        "date": [date(2026, 5, 1 + i) for i in range(10)],
+        "open": [10.0] * 10,
+        "high": [10.0] * 10,
+        "low": [10.0] * 10,
+        "close": [10.0] * 10,
+        "raw_close": [10.0] * 10,
+        "raw_high": [10.0] * 10,
+        "raw_low": [10.0] * 10,
+        "volume": [0.0] * 10,
+        "amount": [0.0] * 10,
+    })
+
+    out = pipeline_mod.compute_all(raw)
+
+    assert out["kdj_k"].is_nan().sum() == 0
+    assert out["vol_ratio_5d"].is_infinite().sum() == 0
+
+
+def test_run_pipeline_forward_incremental_uses_wide_warmup_window(tmp_path, monkeypatch):
+    """回归测试:run_pipeline(new_dates_only=True) 是 daily_pipeline.py 里
+    "今天有新日K"的每日常规同步路径。ewm_mean(adjust=False) 是纯递归公式,
+    热身窗口太短会让起点权重残留过高、产生系统性数值偏差(不是随机噪声)——
+    之前只读最近 60 天,EMA60/RSI24 这类慢速指标残留权重能到 20%+。
+    这里只验证调用 _load_recent_history 时的 days 参数改宽了,不验证具体数值
+    收敛(需要构造几百天数据,收益不高,数学推导见 pipeline.py 里的注释)。
+    """
+    daily_dir = tmp_path / "kline_daily" / "date=2026-07-02"
+    daily_dir.mkdir(parents=True)
+    pl.DataFrame({
+        "symbol": ["600519.SH"],
+        "date": [date(2026, 7, 2)],
+        "open": [10.0], "high": [10.0], "low": [10.0], "close": [10.0],
+        "volume": [1000.0], "amount": [10000.0],
+    }).write_parquet(daily_dir / "part.parquet")
+
+    captured: dict = {}
+    real_load = pipeline_mod._load_recent_history
+
+    def spy_load_recent_history(enriched_base, symbols, days):
+        captured["days"] = days
+        return real_load(enriched_base, symbols, days)
+
+    monkeypatch.setattr(pipeline_mod, "_load_recent_history", spy_load_recent_history)
+
+    pipeline_mod.run_pipeline(data_dir=tmp_path, new_dates_only=True)
+
+    assert captured.get("days") == 300

@@ -413,7 +413,7 @@ class KlineRepository:
             # 300 日历天 ≈ 210 交易日, 覆盖 filter_history 最大 lookback(90) + warmup(60)
             try:
                 from datetime import timedelta
-                from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals
+                from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals, clean_nan_inf
                 start_full = latest - timedelta(days=300)
                 read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
                                          "volume", "amount", "raw_close", "raw_high", "raw_low",
@@ -431,6 +431,7 @@ class KlineRepository:
                     df_full = compute_signals(df_full)
                     if instruments is not None and not instruments.is_empty():
                         df_full = compute_limit_signals(df_full, instruments)
+                    df_full = clean_nan_inf(df_full)
 
                     # JOIN instruments 到完整历史 (filter_history/basic_filter 需要 name/股本等列)
                     if instruments is not None and not instruments.is_empty():
@@ -477,7 +478,7 @@ class KlineRepository:
         优化: 优先使用 _enriched_history_cache (启动时已计算), 避免重复 compute_indicators。
         """
         from datetime import timedelta
-        from app.indicators.pipeline import _ema_alpha
+        from app.indicators.pipeline import _ema_alpha, clean_nan_inf
 
         start_60d = latest - timedelta(days=90)  # 日历90天 ≈ 60个交易日
 
@@ -553,10 +554,19 @@ class KlineRepository:
         agg_a = agg_a.join(df_rsi, on="symbol", how="inner")
 
         # 前复权因子: adj_factor = close(复权) / raw_close(原始)
+        # raw_close 理论上不该是 0(filter_halt_days 只保证 open/high>0,不直接
+        # 校验 close),数据源异常/脏数据仍可能让它真的是 0 → 除出 Inf,这里显式
+        # 兜底成 1.0(不复权),而不是依赖末尾 clean_nan_inf 才发现。
         if "raw_close" in df_hist.columns:
             adj_factor_df = (
                 df_hist.filter(pl.col("date") == latest)
-                .select("symbol", (pl.col("close") / pl.col("raw_close")).alias("_adj_factor"))
+                .select(
+                    "symbol",
+                    pl.when(pl.col("raw_close") != 0)
+                      .then(pl.col("close") / pl.col("raw_close"))
+                      .otherwise(1.0)
+                      .alias("_adj_factor"),
+                )
             )
             agg_a = agg_a.join(adj_factor_df, on="symbol", how="left")
             if "_adj_factor" in agg_a.columns:
@@ -622,7 +632,7 @@ class KlineRepository:
             ])
         )
 
-        self._live_agg_cache = agg_a.join(agg_b, on="symbol", how="inner")
+        self._live_agg_cache = clean_nan_inf(agg_a.join(agg_b, on="symbol", how="inner"))
         self._live_agg_cache_date = latest
 
     def _live_agg_baseline_date(self, latest: date) -> date:
@@ -643,7 +653,7 @@ class KlineRepository:
 
     def _build_live_agg_from_parquet(self, latest: date, start_60d: date) -> tuple[pl.DataFrame, pl.DataFrame]:
         """降级路径: 从 parquet 读取数据并计算指标 (当 _enriched_history_cache 不可用时)。"""
-        from app.indicators.pipeline import compute_indicators
+        from app.indicators.pipeline import compute_indicators, clean_nan_inf
 
         lf = (
             pl.scan_parquet(self._enriched_glob)
@@ -660,7 +670,7 @@ class KlineRepository:
         if df_hist.is_empty():
             return df_hist, pl.DataFrame()
 
-        df_with_indicators = compute_indicators(df_hist)
+        df_with_indicators = clean_nan_inf(compute_indicators(df_hist))
 
         state_cols = [
             "symbol",
@@ -695,7 +705,7 @@ class KlineRepository:
                 return
 
             from datetime import timedelta
-            from app.indicators.pipeline import compute_indicators, compute_signals
+            from app.indicators.pipeline import compute_indicators, compute_signals, clean_nan_inf
             start_full = latest - timedelta(days=300)
             read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
                                      "volume", "amount", "raw_close", "raw_high", "raw_low",
@@ -712,7 +722,7 @@ class KlineRepository:
             if df_hist.is_empty():
                 self._etf_enriched_cache = df_latest.sort(["symbol"])
             else:
-                df_full = compute_signals(compute_indicators(df_hist))
+                df_full = clean_nan_inf(compute_signals(compute_indicators(df_hist)))
                 self._etf_enriched_cache = df_full.filter(pl.col("date") == latest).sort(["symbol"])
             self._etf_enriched_cache_date = latest
         except Exception as e:  # noqa: BLE001
@@ -745,7 +755,7 @@ class KlineRepository:
                 return
 
             from datetime import timedelta
-            from app.indicators.pipeline import compute_indicators, compute_signals
+            from app.indicators.pipeline import compute_indicators, compute_signals, clean_nan_inf
             start_full = latest - timedelta(days=300)
             read_cols = [c for c in ["symbol", "date", "open", "high", "low", "close",
                                      "volume", "amount", "raw_close", "raw_high", "raw_low",
@@ -763,7 +773,7 @@ class KlineRepository:
                 self._hk_enriched_cache = df_latest.sort(["symbol"])
                 self._hk_enriched_history_cache = None
             else:
-                df_full = compute_signals(compute_indicators(df_hist))
+                df_full = clean_nan_inf(compute_signals(compute_indicators(df_hist)))
                 # JOIN 名称等维表列 (港股 instruments 有 name/float_shares)
                 inst = self.get_hk_instruments()
                 if not inst.is_empty():
@@ -1172,7 +1182,7 @@ class KlineRepository:
 
     def _compute_enriched_range(self, df: pl.DataFrame) -> pl.DataFrame:
         """对14列enriched数据即时计算完整指标+信号。输入应含足够预热行数。"""
-        from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals, filter_halt_days
+        from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals, filter_halt_days, clean_nan_inf
         if df.is_empty() or df.height < 2:
             return df
         # 兜底过滤历史脏数据中的停牌日 (close 可能被填充为前收盘价)
@@ -1184,18 +1194,20 @@ class KlineRepository:
             df = compute_signals(df)
             instruments = self.get_instruments()
             df = compute_limit_signals(df, instruments)
+            df = clean_nan_inf(df)
         except Exception as e:  # noqa: BLE001
             logger.warning("on-demand compute failed: %s", e)
         return df
 
     def _compute_index_enriched_range(self, df: pl.DataFrame) -> pl.DataFrame:
         """指数只计算通用技术指标和通用信号，跳过涨跌停/股本/市值逻辑。"""
-        from app.indicators.pipeline import compute_indicators, compute_signals
+        from app.indicators.pipeline import compute_indicators, compute_signals, clean_nan_inf
         if df.is_empty() or df.height < 2:
             return df
         try:
             df = compute_indicators(df)
             df = compute_signals(df)
+            df = clean_nan_inf(df)
         except Exception as e:  # noqa: BLE001
             logger.warning("index on-demand compute failed: %s", e)
         return df

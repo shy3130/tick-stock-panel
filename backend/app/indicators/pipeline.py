@@ -205,7 +205,10 @@ def _limit_price(prev: pl.Expr, limit_pct: pl.Expr, up: bool) -> pl.Expr:
     """
     sign = 1 if up else -1
     # limit_pct ∈ {0.05, 0.10, 0.20, 0.30} → 系数分子 105/95、110/90、120/80、130/70
-    num = ((1 + sign * limit_pct) * 100).cast(pl.Int64)  # 105, 110, 120, 130 等
+    # cast(Int64) 是截断而非四舍五入,(1+sign*limit_pct)*100 的浮点误差理论上可能
+    # 落在略低于整数的一侧被截断成错误的低一档系数,故与 cents 同样加 0.5 再 floor
+    # 兜底,不依赖当前几个具体常量的浮点表示方向恰好安全这一事实。
+    num = ((1 + sign * limit_pct) * 100 + 0.5).floor().cast(pl.Int64)  # 105, 110, 120, 130 等
     cents = (prev * 100 + 0.5).floor().cast(pl.Int64)     # 价格转「分」(四舍五入到分)
     # cents × num / 100, 四舍五入到分(加 50)
     return (((cents * num + 50) // 100) / 100)
@@ -718,18 +721,29 @@ def compute_all(
         else:
             df = _attach_turnover_rate(df, instruments)
 
-    # 清理 NaN / Inf
-    float_cols = [c for c in df.columns if df[c].dtype.is_float()]
-    if float_cols:
-        df = df.with_columns([
-            pl.when(pl.col(c).is_nan() | pl.col(c).is_infinite())
-              .then(None)
-              .otherwise(pl.col(c))
-              .alias(c)
-            for c in float_cols
-        ])
+    return clean_nan_inf(df)
 
-    return df
+
+def clean_nan_inf(df: pl.DataFrame) -> pl.DataFrame:
+    """将浮点列中的 NaN / Inf 清理为 null。
+
+    极端低流动性标的(连续多日 0 成交量、9 日最高价=最低价等)会让 vol_ratio_5d/
+    KDJ RSV 等公式产生真实的 0/0 或 x/0,不是 null,fill_null 拦不住。所有手动
+    重新拼接 compute_indicators/compute_signals(/compute_limit_signals) 的调用方
+    (repository.py 的现算与缓存重建路径)都必须调用本函数,否则会与
+    compute_all() 落盘产出的"干净"数据不一致,且 EWM 的递归特性会让脏值沿时间轴
+    持续污染后续所有交易日。
+    """
+    float_cols = [c for c in df.columns if df[c].dtype.is_float()]
+    if not float_cols:
+        return df
+    return df.with_columns([
+        pl.when(pl.col(c).is_nan() | pl.col(c).is_infinite())
+          .then(None)
+          .otherwise(pl.col(c))
+          .alias(c)
+        for c in float_cols
+    ])
 
 
 def filter_halt_days(df: pl.DataFrame) -> pl.DataFrame:
@@ -1152,9 +1166,15 @@ def run_pipeline(data_dir: Path | None = None,
             raw_new = raw_new.sort(["symbol", "date"]).collect(streaming=True)
 
             # 增量模式: 只算新日期, 但指标需要历史窗口
-            # 读已有 enriched 最近 60 天作为历史前缀
+            # 读已有 enriched 最近 300 天作为历史前缀(与 repository.py 的
+            # _enriched_history_cache 同口径)。EMA/RSI 是纯递归公式(ewm_mean
+            # adjust=False),热身窗口太短会让起点权重残留过高、产生系统性偏差
+            # 而非随机噪声——例如 EMA60(alpha≈0.0328)只给 60 天(~40 交易日)
+            # 热身时,起点残留权重仍有 ~26%;300 天(~210 交易日)可把 EMA60/
+            # RSI24 的残留权重压到 <0.1%。这条路径是"往后新增日期"的每日常规
+            # 同步路径,几乎所有交易日的 ema60/rsi_24/macd_dea 都经它产出。
             sym_list = raw_new["symbol"].unique().to_list()
-            hist_df = _load_recent_history(enriched_base, sym_list, days=60)
+            hist_df = _load_recent_history(enriched_base, sym_list, days=300)
 
             # 合并历史 + 新数据
             if not hist_df.is_empty():
@@ -1684,18 +1704,7 @@ def compute_enriched_today(
     from app.strategy import custom_signals
     df = custom_signals.inject(df, _get_custom_signal_exprs())
 
-    # 清理 NaN / Inf
-    float_cols = [c for c in df.columns if df[c].dtype.is_float()]
-    if float_cols:
-        df = df.with_columns([
-            pl.when(pl.col(c).is_nan() | pl.col(c).is_infinite())
-              .then(None)
-              .otherwise(pl.col(c))
-              .alias(c)
-            for c in float_cols
-        ])
-
-    return df
+    return clean_nan_inf(df)
 
 
 def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.DataFrame:

@@ -218,6 +218,73 @@ def test_hk_instruments_sync_keeps_float_shares(monkeypatch):
     assert saved["result"]["float_shares"].to_list() == [9_000_000_000.0]
 
 
+def test_hk_daily_sync_survives_chunk_failure(monkeypatch):
+    """回归测试:某个 chunk 算 enriched 时抛异常,之前 chunk 循环体内没有
+    try/except,异常会直接向上传播 —— 不仅该 chunk 的 raw/enriched 落盘不一致,
+    排在它后面的所有 chunk(所有其余 symbol)当天也完全不会被处理。
+    hk/etf/index 三处同构,这里测 hk 作为代表。
+    """
+    provider = FakeProvider()
+    monkeypatch.setattr("app.services.kline_sync._get_data_provider", lambda: provider)
+    monkeypatch.setattr("app.services.preferences.get_index_daily_batch_size", lambda: 1)
+
+    calls = {"n": 0}
+
+    def flaky_compute_enriched(raw, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("boom")
+        return raw
+
+    monkeypatch.setattr("app.services.index_sync.compute_enriched", flaky_compute_enriched)
+
+    repo = FakeRepo()
+    rows = index_sync.sync_and_persist_hk_daily(
+        repo,
+        capset(),
+        start_date=datetime(2026, 7, 1),
+        end_date=datetime(2026, 7, 1),
+        symbols_override=["00700.HK", "00981.HK", "00005.HK"],
+    )
+
+    # 第一个 chunk 失败,不能拖累后面两个 chunk 继续处理
+    assert rows == 2
+    assert len(repo.hk_daily) == 3  # 三个 chunk 的 raw 都已落盘(包括失败那批)
+    assert len(repo.hk_enriched) == 2  # 只有成功的两批写了 enriched
+
+
+def test_index_daily_sync_survives_chunk_failure(monkeypatch):
+    """同上,覆盖 sync_and_persist_index_daily(不含 instruments join 的分支)。"""
+    provider = FakeProvider()
+    monkeypatch.setattr("app.services.kline_sync._get_data_provider", lambda: provider)
+    monkeypatch.setattr("app.services.preferences.get_index_daily_batch_size", lambda: 1)
+
+    calls = {"n": 0}
+
+    def flaky_compute_enriched(raw, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("boom")
+        return raw
+
+    monkeypatch.setattr("app.services.index_sync.compute_enriched", flaky_compute_enriched)
+
+    repo = FakeRepo()
+    rows = index_sync.sync_and_persist_index_daily(
+        repo,
+        capset(),
+        start_date=datetime(2026, 7, 1),
+        end_date=datetime(2026, 7, 1),
+        symbols_override=["000001.SH", "000300.SH", "399001.SZ"],
+    )
+
+    assert rows == 2
+    assert len(repo.index_daily) == 3
+    # append_index_enriched 是空实现(FakeRepo 不记录),这里只能验证循环没有
+    # 因为第 2 个 chunk 失败而提前中止 —— 第 3 个 chunk 必须仍被处理到。
+    assert provider.calls[-1][0] == ("399001.SZ",)
+
+
 def test_hk_daily_sync_computes_turnover_rate_when_instruments_present(monkeypatch):
     """端到端(不打桩 compute_enriched):instruments 带 float_shares 时,
     港股 enriched 必须真的算出 turnover_rate,而不是悄悄跳过。
