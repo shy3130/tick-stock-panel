@@ -189,15 +189,22 @@ class _CatalogSource:
             path = catalog_resolver.resolve_route(
                 self._route_key, self._market, trade_date
             )
-        except catalog_resolver.CatalogError as exc:
+        except catalog_resolver.RouteNotFoundError as exc:
+            # 目录未覆盖这个日期/路由 —— 这才是真正的"没有数据",返回空是对的。
             logger.warning(
-                "TdxDuckDBClient: catalog resolve failed %s/%s %s — %s",
+                "TdxDuckDBClient: no catalog route %s/%s %s — %s",
                 self._route_key,
                 self._market,
                 date_yyyymmdd,
                 exc,
             )
             return []
+        except catalog_resolver.CatalogError:
+            # 目录陈旧(StaleCatalogError)或损坏(manifest/pinned 文件异常)必须抛出去。
+            # 吞成空列表会让"数据还没发布出来"和"这天休市/这只票没成交"长得一模一样:
+            # 每天 publish.engine.a 完成到 publish.catalog 完成之间都会短暂命中这个状态,
+            # publish.catalog 失败时更是无限期命中,而前端只会看到一张空图,没人会发现。
+            raise
         try:
             with connection_set.lease(path) as connection:
                 return connection.cursor().execute(sql, params).fetchall()

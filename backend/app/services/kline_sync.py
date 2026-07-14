@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 
 import polars as pl
 
+from app.data_providers.fquant.catalog_resolver import CatalogError, RouteNotFoundError
 from app.data_providers.registry import get_active_provider_name, get_provider
 from app.indicators.pipeline import filter_halt_days
 from app.capabilities import Cap, CapabilitySet
@@ -456,6 +457,14 @@ def sync_minute_batch(
                 chunk, start_time=start_time, end_time=end_time,
                 asset_type=asset_type, freq="1m",
             )
+        except RouteNotFoundError as e:
+            # 目录没覆盖这个日期 = 真的没有数据,保持 fail-soft。
+            logger.warning("minute batch: no catalog route for %d symbols: %s", len(chunk), e)
+            continue
+        except CatalogError:
+            # 目录陈旧/损坏不能 fail-soft:continue 会把它变成"这批票没数据",
+            # 整个 job 照常 success + 0 行,没人知道读到的是一个还没发布的快照。
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)
             continue
@@ -485,6 +494,12 @@ def fetch_minute_single(symbol: str, trade_date: date, asset_type: str = "stock"
             [symbol], start_time=start_time, end_time=end_time,
             asset_type=asset_type, freq="1m",
         )
+    except RouteNotFoundError as e:
+        logger.warning("fetch_minute_single(%s, %s): no catalog route: %s", symbol, trade_date, e)
+        return pl.DataFrame()
+    except CatalogError:
+        # 见 sync_minute_batch:目录陈旧/损坏必须可见,不能伪装成空 DataFrame。
+        raise
     except Exception as e:
         logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
         return pl.DataFrame()

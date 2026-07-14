@@ -73,9 +73,29 @@ def test_catalog_source_routes_each_date_and_closes_connections(monkeypatch: pyt
     assert opened[1].closed is True
 
 
-def test_catalog_source_fails_closed_on_catalog_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_catalog_source_raises_on_stale_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """陈旧目录必须抛出去,不能吞成空结果。
+
+    吞成 [] 的话,"快照还没发布出来" 和 "这天休市/这只票没成交" 在前端完全无法区分——
+    而每天 publish.engine.a 到 publish.catalog 之间都会短暂命中这个状态。
+    """
     def fail(*_args: object) -> str:
         raise catalog_resolver.StaleCatalogError("stale")
+
+    monkeypatch.setattr(catalog_resolver, "resolve_route", fail)
+    source = _CatalogSource("tdx_minutes", "a")
+    source._set = ConnectionSet(lambda _path: pytest.fail("must not open a raw database"))
+
+    with pytest.raises(catalog_resolver.StaleCatalogError):
+        source.query("SELECT 1", [], "20260710")
+
+
+def test_catalog_source_returns_empty_when_route_not_covered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目录没覆盖这个日期 = 真的没有数据,返回空是对的(和陈旧要区分开)。"""
+    def fail(*_args: object) -> str:
+        raise catalog_resolver.RouteNotFoundError("no route")
 
     monkeypatch.setattr(catalog_resolver, "resolve_route", fail)
     source = _CatalogSource("tdx_minutes", "a")

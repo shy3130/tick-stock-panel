@@ -288,6 +288,7 @@ app.include_router(trade_journal.router)
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from app.capabilities import CapabilityDenied
+from app.data_providers.fquant.catalog_resolver import CatalogError, StaleCatalogError
 
 
 @app.exception_handler(CapabilityDenied)
@@ -295,6 +296,30 @@ async def capability_denied_handler(request: Request, exc: CapabilityDenied) -> 
     return JSONResponse(
         status_code=403,
         content={"detail": str(exc), "suggestion": exc.suggestion},
+    )
+
+
+# DuckDB 目录异常 → 503(而非默认 500,也绝不是"空数据")
+# engine 每天发布数据快照后会重新发布路由目录;在两者之间、以及目录发布失败时,
+# 目录仍钉着旧 generation,读取会 fail closed 抛 StaleCatalogError。这是暂时性的、
+# 可恢复的状态,所以是 503 + Retry-After,不是 500。
+# 关键是它必须可见:若吞成空结果,前端看到的空图和"这天休市"无法区分。
+@app.exception_handler(CatalogError)
+async def catalog_error_handler(request: Request, exc: CatalogError) -> JSONResponse:
+    stale = isinstance(exc, StaleCatalogError)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "code": "catalog_stale" if stale else "catalog_unavailable",
+            "suggestion": (
+                "数据快照目录尚未刷新到最新 generation(engine 的 publish.catalog 可能还没跑完或失败了)。"
+                "稍后重试;若持续出现,检查 engine 调度的 publish.catalog 节点。"
+                if stale
+                else "数据快照目录不可读或已损坏,请检查 engine 发布的 catalog 快照。"
+            ),
+        },
+        headers={"Retry-After": "60"} if stale else None,
     )
 
 # 生产期静态文件(前端 dist)
