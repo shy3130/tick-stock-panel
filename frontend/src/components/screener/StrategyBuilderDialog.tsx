@@ -12,7 +12,13 @@ function parsePyValue(v: string): any {
   if (s === 'True') return true
   if (s === 'False') return false
   if (s === 'None') return null
-  return JSON.parse(s)
+  // get() 已对字符串去外层引号, 纯文本值(如 2024-01-01 / anchor_date)
+  // 不是合法 JSON, JSON.parse 会抛错 → 兜底返回原始字符串
+  try {
+    return JSON.parse(s)
+  } catch {
+    return s
+  }
 }
 
 function slugId(prefix: 'ai' | 'custom' = 'ai'): string {
@@ -254,7 +260,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     try {
       const id = strategyId || resolveStrategyId(tab === 'custom' ? 'custom' : 'ai')
       setStrategyId(id)
-      const res = await api.strategyValidateCode({ code: draftCode, strategy_id: id, name: name.trim(), description: description.trim(), strict: true })
+      const res = await api.strategyValidateCode({ code: draftCode, strategy_id: id, name: name.trim(), description: description.trim() })
       if (!res.valid) { setValidated(false); setError(res.error ?? '代码校验失败'); return }
       setCode(res.code); setValidated(true)
       const genDesc = parseMetaField(res.code, 'description')
@@ -281,7 +287,6 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         mode: mode === 'modify' ? 'update' : 'create',
         name: name.trim(),
         description: description.trim(),
-        strict: true,
       })
       const genRules = parseRules(draftCode)
       const finalRules = (genRules || rules).trim()
@@ -347,11 +352,21 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
               <div className="flex items-center gap-2 text-[11px]">
                 <Sparkles className="h-3.5 w-3.5 text-amber-400 shrink-0" />
                 <span className="text-amber-400/80">步骤 1 描述策略规则 → 步骤 2 预览代码 → 保存</span>
+                <a href="https://github.com/shy3130/tickflow-stock-panel/blob/main/backend/app/strategy/prompts/strategy-guide.md"
+                   target="_blank" rel="noopener noreferrer"
+                   className="inline-flex items-center gap-1 text-accent/70 hover:text-accent transition-colors">
+                  <FileText className="h-3 w-3" />策略开发指南
+                </a>
               </div>
             ) : (
               <div className="flex items-center gap-2 text-[11px]">
                 <Terminal className="h-3.5 w-3.5 text-accent shrink-0" />
                 <span className="text-muted">适合有 Python 基础的开发者，手动编写策略文件进行深度定制和二次开发</span>
+                <a href="https://github.com/shy3130/tickflow-stock-panel/blob/main/backend/app/strategy/prompts/strategy-guide.md"
+                   target="_blank" rel="noopener noreferrer"
+                   className="inline-flex items-center gap-1 text-accent/70 hover:text-accent transition-colors">
+                  <FileText className="h-3 w-3" />策略开发指南
+                </a>
               </div>
             )}
           </div>

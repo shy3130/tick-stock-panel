@@ -38,11 +38,13 @@
 
 
 
-> ⚠️ **明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
+> ⚠️ 小白请绕路，本开源项目谨作为本地量化提供解决思路Demo，不作为投资软件或者看盘软件。
+>
+> **明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
 
-有更多想法,想提交建议/意见的道友可以邮件到 415333856@qq.com,或加qq交流群 109338242（二维码在结尾），群内会不定时维护一些个性化数据。
+有问题可以邮件415333856@qq.com,交流群二维码在文末。
 
-觉得有用可以点个 Star,蟹蟹 🌹
+觉得有用可以点个 Star
 
 ---
 
@@ -159,6 +161,20 @@ docker compose up --build
 # 打开 http://localhost:3018
 ```
 
+Docker 镜像内置固定版本的 **Codex CLI**，Compose 会将主机 `${HOME}/.codex` 只读挂载到容器，因此主机需先完成 Codex 登录。若主机 Codex 使用 loopback local-access provider，容器会保留实际端口并自动将主机名映射为 `host.docker.internal`。需要覆盖镜像内版本时可设置构建参数：
+
+```bash
+CODEX_CLI_VERSION=0.144.3 docker compose up --build
+```
+
+> **Windows 用户注意**：纯 PowerShell / CMD 下 `HOME` 环境变量通常未设置，会导致挂载路径解析失败、容器读不到 Codex 登录态。请在 `.env` 中显式指定主机 Codex 目录：
+> ```bash
+> # PowerShell 示例(实际路径以本机为准)
+> echo "CODEX_HOME_HOST=C:\Users\你的用户名\.codex" >> .env
+> ```
+
+> Codex CLI 模式允许 TickFlow 容器读取本机 Codex 登录凭据，仅应在受信任的本机环境启用。凭据目录以只读方式挂载，不会写入镜像。
+
 镜像已内置 **stock-sdk** 数据源插件(Node 运行时 + 依赖),开箱即用。
 
 > 📖 Docker 进阶、GitHub Actions 自构建、老 CPU 兼容、访问密码设置等见 [docs/deployment.md](./docs/deployment.md)。
@@ -209,7 +225,7 @@ PORT=3018                      # 服务端口
 | 2-3    | Polars enriched 流水线 · Screener · vectorbt 回测(T+1/手续费/止损) | ✅    |
 | 4-5    | 监控引擎 · 四类监控规则 · 实时 SSE 推送 · 持久化记录               | ✅    |
 | 6      | 个股分析(专用日 K + 9 类关键价位 + AI 四维分析)                    | ✅    |
-| **v2** | Webhook 推送(QMT/掘金下单)· 板块异动 · 早晚报 · 更多扩展           | 🚧    |
+| **v2** | Webhook 推送· 板块异动 · 早晚报 · 更多扩展           | 🚧    |
 
 ---
 
@@ -230,7 +246,7 @@ fork同时请点个star哦,欢迎 Issue 和 PR。
 
 ## 💬 交流群
 
-欢迎加入交流群,讨论使用问题、功能建议或量化策略。
+欢迎加入交流群,讨论交流。
 
 <img src="./community-qr-code.jpg" alt="交流群二维码" width="240" />
 

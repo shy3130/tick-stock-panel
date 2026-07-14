@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tomllib
+
 import httpx
 import openai
 
@@ -165,3 +167,66 @@ def test_codex_process_env_excludes_application_secrets(monkeypatch, tmp_path):
     assert "AI_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
     assert "AUTH_PASSWORD" not in env
+
+
+def test_codex_config_adapts_local_access_provider_for_docker(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_DOCKER_HOST", "host.docker.internal")
+    monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "")
+    monkeypatch.setattr(ai_provider, "current_codex_reasoning_effort", lambda: "")
+    monkeypatch.setattr(
+        ai_provider,
+        "_read_codex_config",
+        lambda: {
+            "model_provider": "codex_local_access",
+            "model": "gpt-5.6-sol",
+            "model_providers": {
+                "codex_local_access": {
+                    "name": "Codex API Service",
+                    "base_url": "http://localhost:62678/v1",
+                    "wire_api": "responses",
+                    "requires_openai_auth": True,
+                    "supports_websockets": False,
+                    "experimental_bearer_token": "local-secret",
+                }
+            },
+        },
+    )
+    path = tmp_path / "config.toml"
+
+    ai_provider._write_compatible_codex_config(path)
+
+    with path.open("rb") as f:
+        config = tomllib.load(f)
+    assert config["model_provider"] == "codex_local_access"
+    provider = config["model_providers"]["codex_local_access"]
+    assert provider["base_url"] == "http://host.docker.internal:62678/v1"
+    assert provider["experimental_bearer_token"] == "local-secret"
+    assert provider["requires_openai_auth"] is True
+    assert provider["supports_websockets"] is False
+
+
+def test_codex_config_does_not_copy_provider_without_docker_opt_in(monkeypatch, tmp_path):
+    monkeypatch.delenv("CODEX_DOCKER_HOST", raising=False)
+    monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "")
+    monkeypatch.setattr(ai_provider, "current_codex_reasoning_effort", lambda: "")
+    monkeypatch.setattr(
+        ai_provider,
+        "_read_codex_config",
+        lambda: {
+            "model_provider": "codex_local_access",
+            "model_providers": {
+                "codex_local_access": {
+                    "base_url": "http://localhost:62678/v1",
+                    "experimental_bearer_token": "must-not-leak",
+                }
+            },
+        },
+    )
+    path = tmp_path / "config.toml"
+
+    ai_provider._write_compatible_codex_config(path)
+
+    text = path.read_text(encoding="utf-8")
+    assert "model_provider" not in text
+    assert "model_providers" not in text
+    assert "must-not-leak" not in text

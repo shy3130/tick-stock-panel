@@ -56,6 +56,12 @@ class CapabilitySet:
     def all(self) -> dict[Cap, CapabilityLimits]:
         return dict(self._caps)
 
+    def grant(self, cap: Cap, limits: CapabilityLimits | None = None) -> None:
+        """补授一个能力 (不覆盖已有)。用于自定义数据源: 用户配了自定义分钟源时,
+        即使无 TickFlow Pro+ 也补上 KLINE_MINUTE_BATCH, 使所有 capset.has() 检查通过。"""
+        if cap not in self._caps:
+            self._caps[cap] = limits or CapabilityLimits()
+
     def to_dict(self) -> dict[str, dict]:
         return {
             str(cap): {

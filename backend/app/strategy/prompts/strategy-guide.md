@@ -35,7 +35,8 @@ META = {
     },
 
     # 策略参数 (只把用户可能调节的阈值放这里，公式常数不必参数化)
-    # 每个参数含 id/label/type/default/min/max/step；select 类型用 options
+    # type 支持: float / int / bool / select(带 options) / date(格式 "YYYY-MM-DD")
+    # float/int 可带 min/max/step；select 带 options: [{label, value}]；date 的 default 是字符串
     "params": [
     ],
 
@@ -143,6 +144,14 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 - 只有遇到表达式难以描述的复杂状态机时，才使用 `partition_by("symbol")` + `to_dicts()` 逐股票分析
 - **返回所有匹配行，不要过滤 `latest`**；选股引擎会自动取最新日，回测引擎需要全区间命中
 - 未声明 `filter_history()` 的策略走普通 `filter()` 路径，不受影响
+- **date 类型参数必须先转换再与 `date` 列比较**：params 里的 `"type": "date"` 参数从 JSON 传来是字符串（如 `"2024-01-01"`），而数据中 `date` 列是 Polars Date 类型，**不能直接比较**，否则报错。必须先转换：
+
+```python
+from datetime import date as _date
+anchor_raw = params.get("anchor_date", "2024-01-01")
+anchor_date = _date.fromisoformat(anchor_raw) if isinstance(anchor_raw, str) else anchor_raw
+# 之后才能: pl.col("date") == anchor_date  或  pl.col("date") > anchor_date
+```
 
 ## 3. 常用指标列（参考，可直接使用）
 
@@ -266,7 +275,7 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 3. 用户可能调节的数值阈值通过 `params` 暴露；公式常数、固定窗口边界、一次性内部变量不必强行参数化
 4. `scoring` 权重总和必须为 1.0
 5. 遵循 A 股 T+1 规则 (当日买入次日才能卖出)
-6. 只允许 `import polars as pl`，禁止 import 其他模块
+6. 只允许 `import polars as pl` 和 `from datetime import date/datetime`（date 类型参数比较需要），禁止 import 其他模块
 7. 禁止使用 `open()`, `exec()`, `eval()`, `os`, `sys`, `subprocess`
 8. **贴合用户需求优先**：第3/4节的指标列和信号列仅供参考，能用则用；如果用户需求需要自定义计算（如"前高""上次涨停价""N日内某个事件后X天"），直接在 `filter_history()` 中自行设计和计算，不需要局限于已有列
 9. `filter_history()` 中优先用 Polars 向量化语法；仅在复杂状态机无法清晰表达时，才用 `partition_by("symbol")` 逐股票分析

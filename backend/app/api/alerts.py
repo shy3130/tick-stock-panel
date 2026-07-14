@@ -23,11 +23,25 @@ def list_alerts(
     limit: int = 5000,
     source: str | None = None,
     type: str | None = None,
+    ext_columns: str | None = None,
 ):
-    """查询触发记录 (时间倒序)。"""
+    """查询触发记录 (时间倒序)。
+
+    ext_columns: 逗号分隔的 "configId.fieldName", 传入后按 symbol 富化行业/概念等 ext 字段,
+    每条记录附带 {configId}__{fieldName} 键 (与 watchlist/screener 一致)。
+    """
     events = alert_store.list_recent(
         _data_dir(request), days=days, limit=limit, source=source, type=type,
     )
+    if ext_columns and events:
+        try:
+            from app.api.screener import _load_ext_value_maps, _rows_with_ext
+            repo = request.app.state.repo
+            value_maps = _load_ext_value_maps(repo, ext_columns)
+            if value_maps:
+                events = _rows_with_ext(events, value_maps)
+        except Exception:  # noqa: BLE001
+            pass
     total = alert_store.count(_data_dir(request))
     return {"alerts": events, "total": total}
 

@@ -56,6 +56,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const isNoneTier = tier < 0
   const isFreeTier = tier === 0
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
+  // 分时图实时刷新间隔 (秒), 与后端 [3,60] clamp 对齐; 默认 6
+  const intradayInterval = prefs?.minute_intraday_refresh_interval ?? 6
+  // 滑块本地草稿: 拖动时即时反馈, 停顿 2s 后落库 (与行情轮询滑块一致)
+  const [intradayIntervalDraft, setIntradayIntervalDraft] = useState(intradayInterval)
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
   const hasDepth = !!caps?.capabilities?.['depth5.batch']
@@ -250,6 +254,20 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     return () => window.clearTimeout(t)
   }, [intervalDraft, interval, updateInterval])
 
+  // 分时刷新间隔: 服务端值变化时同步本地草稿
+  useEffect(() => {
+    setIntradayIntervalDraft(intradayInterval)
+  }, [intradayInterval])
+
+  // 分时刷新间隔: 草稿与已保存值不同时, 2s 防抖落库
+  useEffect(() => {
+    if (intradayIntervalDraft === intradayInterval) return
+    const t = window.setTimeout(() => {
+      save({ minute_intraday_refresh_interval: intradayIntervalDraft })
+    }, 2000)
+    return () => window.clearTimeout(t)
+  }, [intradayIntervalDraft, intradayInterval, save])
+
   // highlight=depth-fix 时闪烁高亮连板梯队修正卡片
   const [flash, setFlash] = useState(false)
   const flashedRef = useRef(false)
@@ -402,14 +420,41 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </SettingsSection>
         )}
 
-        {/* 自选列表分时图实时刷新 (默认关闭, 开启后盘中 15s 轮询刷新分时数据) */}
+        {/* 自选列表分时图实时刷新 (默认关闭, 开启后盘中按设定间隔轮询刷新分时数据) */}
         <SettingsSection icon={Activity} title="分时图刷新">
           <SettingsToggleRow
             label="自选/策略分时图实时刷新"
-            description="开启后自选与策略列表的分时图盘中每 15 秒自动刷新（需 Pro+ 权限 + 实时行情运行）。关闭时仅打开页面时拉取一次，可点表头刷新按钮手动更新。"
+            description={`开启后自选与策略列表的分时图盘中每 ${intradayInterval} 秒自动刷新（需 Pro+ 权限 + 实时行情运行）。关闭时仅打开页面时拉取一次，可点表头刷新按钮手动更新。`}
             checked={prefs?.minute_intraday_refresh ?? false}
             onCheckedChange={(v) => save({ minute_intraday_refresh: v })}
           />
+          <div className="mt-3 pt-3 border-t border-border">
+            <div className="flex items-center justify-between gap-4 py-1">
+              <div className="min-w-0">
+                <div className="text-sm text-foreground">刷新间隔</div>
+                <div className="text-[11px] text-muted">
+                  间隔越短更新越及时, 但越耗数据源配额 (rpm)
+                </div>
+              </div>
+              <span className="text-[11px] font-mono text-foreground shrink-0 tabular-nums">
+                {intradayIntervalDraft}s
+              </span>
+            </div>
+            <div className="flex items-center gap-3 mt-2">
+              <input
+                type="range"
+                min={3}
+                max={60}
+                step={1}
+                value={intradayIntervalDraft}
+                onChange={(e) => setIntradayIntervalDraft(parseInt(e.target.value, 10))}
+                className="flex-1 h-1 accent-accent cursor-pointer"
+              />
+              <span className="text-[10px] text-muted shrink-0">
+                {intradayIntervalDraft !== intradayInterval ? '2秒后保存' : '3s — 60s'}
+              </span>
+            </div>
+          </div>
         </SettingsSection>
 
         {!isFreeTier && (

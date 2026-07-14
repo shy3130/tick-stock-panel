@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
+from app.market_time import cn_now, cn_today
 from app.services import kline_sync
 
 logger = logging.getLogger(__name__)
@@ -405,17 +406,30 @@ def get_minute_batch(request: Request, body: dict):
     if not capset.has(Cap.KLINE_MINUTE_BATCH):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限 (kline.minute.batch)")
 
-    trade_date = date.fromisoformat(trade_date_str) if trade_date_str else date.today()
+    trade_date = date.fromisoformat(trade_date_str) if trade_date_str else cn_today()
 
-    # 非交易日(周末/节假日)回退到最近有数据的交易日, 否则前端显示空白。
-    # 优先用本地分钟K最近日期; 本地从未同步过分钟K时, 回退到日K最近交易日
-    # (enriched 最新日一定有, 作为兜底), 确保 TickFlow 能拉到有效数据。
-    if trade_date == date.today():
-        recent_date = repo.latest_minute_date_global()
-        if recent_date is None:
-            recent_date = repo.latest_daily_date()
-        if recent_date is not None:
-            trade_date = recent_date
+    # 非交易日(周末/节假日)才回退到最近有数据的交易日; 否则盘中会显示昨天而非今天。
+    # 注意: 不能用 latest_minute_date_global() 判断盘中是否为交易日 —— 批量实时补拉
+    # 不落库 (见下方 sync_minute_batch 无 on_segment), 盘中它恒返回上次全量同步日,
+    # 用它做判据会导致 trade_date 永久回退到昨天, 再因 expected=240 判定昨日"完整"
+    # 而不再补拉今天, 形成永远显示昨日的死循环。
+    # 判据改为: 周末必回退; 工作日收盘后(>=15:30)仍无今日日K → 节假日, 回退。
+    if not trade_date_str:
+        today = cn_today()
+        need_fallback = today.weekday() >= 5  # 周六/周日必非交易日
+        if not need_fallback:
+            now_cn = cn_now()
+            after_close = now_cn.hour > 15 or (now_cn.hour == 15 and now_cn.minute >= 30)
+            if after_close:
+                latest_daily = repo.latest_daily_date()
+                if latest_daily is None or latest_daily < today:
+                    need_fallback = True
+        if need_fallback:
+            recent_date = repo.latest_minute_date_global()
+            if recent_date is None:
+                recent_date = repo.latest_daily_date()
+            if recent_date is not None:
+                trade_date = recent_date
 
     # Step 1: 本地优先 — 一次 scan 读全部 symbol 当日分钟K (股票 / ETF 分钟数据分开存储)
     etf_set = repo.get_etf_symbol_set()
@@ -430,9 +444,9 @@ def get_minute_batch(request: Request, body: dict):
             df_local = pl.concat([df_local, df_etf], how="diagonal_relaxed")
 
     # 期望条数 (盘中按当前时刻估算, 盘后 240)
-    now = datetime.now()
+    now = cn_now()
     h, m = now.hour, now.minute
-    if trade_date != date.today():
+    if trade_date != cn_today():
         expected = 240
     elif h < 9 or (h == 9 and m < 30):
         expected = 0
@@ -496,10 +510,27 @@ def get_minute(
     stock_name = stock_info.get("name")
 
     if trade_date is None:
-        trade_date = repo.latest_minute_date(symbol, asset_type=asset_type)
+        # 默认看今天, 而不是本地落盘的最近日 (盘中后者是昨天)。
+        # 非交易日(周末/节假日)才回退到本地最近有数据的交易日。
+        today = cn_today()
+        need_fallback = today.weekday() >= 5  # 周六/周日必非交易日
+        if not need_fallback:
+            now_cn = cn_now()
+            after_close = now_cn.hour > 15 or (now_cn.hour == 15 and now_cn.minute >= 30)
+            if after_close:
+                latest_daily = repo.latest_daily_date()
+                if latest_daily is None or latest_daily < today:
+                    need_fallback = True
+        if need_fallback:
+            recent = repo.latest_minute_date(symbol, asset_type=asset_type)
+            if recent is None:
+                recent = repo.latest_daily_date()
+            trade_date = recent if recent is not None else today
+        else:
+            trade_date = today
     if trade_date is None:
         # 本地无任何分钟K，尝试从 TickFlow 拉取当天
-        trade_date = date.today()
+        trade_date = cn_today()
         df = kline_sync.fetch_minute_single(symbol, trade_date)
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
@@ -510,10 +541,9 @@ def get_minute(
 
     # 完整交易日应有 240 条分钟K；如果是今天(盘中)，期望条数按已交易分钟估算
     expected = 240
-    today = date.today()
+    today = cn_today()
     if trade_date == today:
-        from datetime import datetime as _dt
-        now = _dt.now()
+        now = cn_now()
         h, m = now.hour, now.minute
         if h < 9 or (h == 9 and m < 30):
             expected = 0  # 还没开盘

@@ -4,7 +4,7 @@
 
 ## 必须遵守
 
-1. 只 `import polars as pl`，禁止 import 其他模块。
+1. 只允许 `import polars as pl` 和 `from datetime import date/datetime`（date 类型参数比较需要），禁止 import 其他模块。
 2. AI 策略只属于 `data/strategies/ai/`，`META.id` 使用用户给定的 `ai_` ID。
 3. 不要读写文件，不要使用 `open/exec/eval/compile/__import__/globals/locals/vars/dir/getattr/setattr/delattr/type/input`。
 4. `META.params` 只放用户可能调整的阈值；公式常数和固定窗口边界不必参数化。
@@ -32,7 +32,7 @@ META = {
         "exclude_st": True,
         "exclude_new_days": 30,
     },
-    "params": [],
+    "params": [],  # type: float/int/bool/select/date；float/int 带 min/max/step
     "scoring": {},
     "order_by": "score",
     "descending": True,
@@ -79,6 +79,15 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 ```
 
 `filter_history()` 必须返回所有匹配行，不要只过滤最新日期；回测需要全区间命中。
+
+**date 类型参数必须先转换再与 `date` 列比较**：params 里 `"type": "date"` 的参数从 JSON 传来是字符串（如 `"2024-01-01"`），而数据中 `date` 列是 Polars Date 类型，**不能直接比较**（报 InvalidOperationError）。必须先转换：
+
+```python
+from datetime import date as _date
+anchor_raw = params.get("anchor_date", "2024-01-01")
+anchor_date = _date.fromisoformat(anchor_raw) if isinstance(anchor_raw, str) else anchor_raw
+# 之后才能: pl.col("date") == anchor_date  或  pl.col("date") > anchor_date
+```
 
 ## 常用字段
 

@@ -32,6 +32,8 @@ interface Props {
   /** 加自选 (传入后信息条显示 Star 图标) */
   inWatchlist?: boolean
   onToggleWatchlist?: () => void
+  /** 分时图自动刷新间隔(ms)。undefined = 不轮询。个股对话框盘中实时刷新时传入。 */
+  refetchIntervalMs?: number
 }
 
 export { getDefaultRange }
@@ -51,6 +53,7 @@ export function StockPanel({
   onMonitor,
   inWatchlist,
   onToggleWatchlist,
+  refetchIntervalMs,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
@@ -158,6 +161,7 @@ export function StockPanel({
             prevClose={prevClose}
             onPriceHover={setLinkedPrice}
             className="flex-1 min-w-0 border-l border-border pl-3"
+            refetchIntervalMs={refetchIntervalMs}
           />
         )}
       </div>

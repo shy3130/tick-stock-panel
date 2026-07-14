@@ -129,6 +129,18 @@ class QuoteSubscriber:
             self._event.set()
 
 
+def _persist_last_fetch(fetched_at_ms: float) -> None:
+    """把"最后获取"时间戳持久化到 preferences, 使进程重启后仍可显示。
+
+    放在锁外调用 (IO); 失败不影响主流程 (内存值已更新, 下次 fetch 再写)。
+    """
+    try:
+        from app.services import preferences
+        preferences.save({"last_fetch_ms": round(fetched_at_ms, 0)})
+    except Exception as e:  # noqa: BLE001
+        logger.debug("last_fetch_ms 持久化失败 (不影响行情): %s", e)
+
+
 class QuoteService:
     """全局实时行情服务 — 单例。"""
 
@@ -166,7 +178,13 @@ class QuoteService:
         # 拉取元信息 (给 SSE / status 用)
         self._fetch_time: float = 0.0       # perf_counter (用于计算 quote_age_ms)
         self._fetch_ms: float = 0.0         # 拉取耗时 (毫秒)
-        self._fetched_at: float = 0.0       # 拉取完成的 Unix 时间戳 (毫秒)
+        # _fetched_at 持久化到 preferences: 进程重启后仍能显示"最后获取"时间,
+        # 不因关闭开关/重启而归零 (数据页卡片常驻显示, 方便判断上次拉取时刻)。
+        try:
+            from app.services import preferences as _prefs
+            self._fetched_at: float = float(_prefs.load().get("last_fetch_ms", 0.0))
+        except Exception:  # noqa: BLE001
+            self._fetched_at = 0.0      # 拉取完成的 Unix 时间戳 (毫秒)
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
@@ -664,6 +682,7 @@ class QuoteService:
             self._etf_symbol_count = len(etf_records)
             self._index_quotes_cache = self._build_index_quotes(index_records)
 
+        _persist_last_fetch(fetched_at)
         logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
 
         # ---- 写 kline_daily (不复权原始价格, 只有 OHLCV) ----
@@ -765,6 +784,7 @@ class QuoteService:
             self._etf_symbol_count = 0
             self._index_quotes_cache = None
 
+        _persist_last_fetch(fetched_at)
         logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
 
         daily_df = self._build_daily(records)
@@ -1038,6 +1058,8 @@ class QuoteService:
 
             # 广播到所有 SSE 订阅者 (背压保护在订阅者队列内做)
             if all_alerts:
+                # 按 symbol 富化行业/概念 ext 字段, 使 toast + 触发记录统一展示板块标签。
+                self._enrich_alerts_ext(all_alerts)
                 self._broadcast_alerts(all_alerts)
                 logger.info("监控评估完成: %d 条通知", len(all_alerts))
 
@@ -1052,6 +1074,42 @@ class QuoteService:
 
         except Exception as e:  # noqa: BLE001
             logger.warning("监控评估失败: %s", e)
+
+    def _enrich_alerts_ext(self, alerts: list[dict]) -> None:
+        """就地给告警事件按 symbol 追加行业/概念 ext 字段。
+
+        读 preferences.get_monitor_ext_fields() 取字段配置, 用 screener._load_ext_value_maps
+        (带 parquet mtime 缓存) 富化。富化失败静默降级 (告警照常推送, 只是没标签)。
+        每条事件新增 {configId}__{fieldName} 键 (与 watchlist/screener 输出约定一致)。
+        """
+        if not alerts or not self._app_state or self._repo is None:
+            return
+        try:
+            from app.services import preferences
+            fields = preferences.get_monitor_ext_fields()
+            # 新结构 {field, maxTags, hiddenIndices}, 后端只需 .field
+            parts = []
+            for key in ("concept", "industry"):
+                item = fields.get(key)
+                if isinstance(item, dict) and item.get("field"):
+                    parts.append(item["field"])
+                elif isinstance(item, str) and item:
+                    parts.append(item)  # 兼容旧格式
+            if not parts:
+                return
+            ext_columns = ",".join(parts)
+            from app.api.screener import _load_ext_value_maps
+            value_maps = _load_ext_value_maps(self._repo, ext_columns)
+            if not value_maps:
+                return
+            for ev in alerts:
+                sym = ev.get("symbol")
+                if not sym:
+                    continue
+                for out_col, vmap in value_maps.items():
+                    ev[out_col] = vmap.get(str(sym))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("告警 ext 富化失败 (不影响推送): %s", e)
 
     def _inject_sealed_vol(self, enriched_today: pl.DataFrame, enriched_date) -> pl.DataFrame:
         """从 depth_service 取封单量, 作为临时列 _sealed_vol 注入 enriched 副本。

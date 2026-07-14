@@ -285,7 +285,34 @@ def _load_cached_capset(cache_path: Path) -> CapabilitySet | None:
 
 
 def detect_capabilities(force: bool = False) -> CapabilitySet:
-    """探测当前 API Key 的能力集。"""
+    """探测当前可用的能力集 (TickFlow API Key 档位 + 自定义数据源)。
+
+    自定义数据源补能力: 用户配了自定义分钟数据源时, 即使无 TickFlow Pro+
+    也补上 KLINE_MINUTE_BATCH, 使分时图/自动同步/回测等功能不再被权限门拦。
+    取数函数内部会按 preferences.get_minute_data_provider() 分流到自定义源,
+    不会错误调用 TickFlow。
+    """
+    capset = _detect_tickflow_caps(force)
+    _augment_custom_sources(capset)
+    return capset
+
+
+def _augment_custom_sources(capset: CapabilitySet) -> None:
+    """根据用户配置的自定义数据源, 补充对应能力 (不覆盖 TickFlow 已有的)。"""
+    try:
+        from app.services import preferences
+        provider = preferences.get_minute_data_provider()
+        if provider != "tickflow":
+            from app.data_providers import custom as custom_sources
+            if custom_sources.provider_has_dataset(provider, "minute"):
+                capset.grant(Cap.KLINE_MINUTE_BATCH)
+                logger.info("custom minute source '%s' detected: granted KLINE_MINUTE_BATCH", provider)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("custom source augment skipped: %s", e)
+
+
+def _detect_tickflow_caps(force: bool = False) -> CapabilitySet:
+    """探测 TickFlow API Key 的能力集 (不含自定义数据源补能力)。"""
     cache_path = settings.data_dir / _CAPSET_CACHE_FILE
     if not force and cache_path.exists():
         with cache_path.open(encoding="utf-8") as f:

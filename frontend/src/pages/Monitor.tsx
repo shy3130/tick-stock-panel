@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame } from 'lucide-react'
+import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Tags } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
-import { api, type MonitorRule, type AlertEvent, type MonitorCondition } from '@/lib/api'
+import { api, type MonitorRule, type AlertEvent, type MonitorCondition, type MonitorExtFieldItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { getNavIconMeta } from '@/lib/navRegistry'
 import { fmtPrice, fmtPct } from '@/lib/format'
@@ -15,6 +15,7 @@ import { boardTag } from '@/components/stock-table/primitives'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { usePreferences } from '@/lib/useSharedQueries'
 
 const TYPE_LABEL: Record<string, string> = {
   signal: '个股信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控',
@@ -54,6 +55,44 @@ function renderMessage(source: string, message: string) {
   )
 }
 
+/**
+ * 从事件行中取出 ext 字段标签 (行业/概念), 按 item 配置裁剪 (maxTags/hiddenIndices)。
+ */
+function getExtTags(ev: Record<string, unknown>, item: MonitorExtFieldItem | null): string[] {
+  if (!item?.field) return []
+  const key = item.field.replace('.', '__')
+  const v = ev[key]
+  if (v == null) return []
+  const str = String(v)
+  if (!str) return []
+  let tags = str.split(/[、,，;；\-]/).map(s => s.trim()).filter(Boolean)
+  const maxTags = item.maxTags ?? 0
+  if (maxTags > 0) tags = tags.slice(0, maxTags)
+  const hidden = item.hiddenIndices
+  if (hidden?.length) tags = tags.filter((_, i) => !hidden.includes(i))
+  return tags
+}
+
+/** 个股通知的 ext 标签行 (行业/概念), 无数据返回 null */
+function AlertExtTags({ ev, fields }: {
+  ev: Record<string, unknown>
+  fields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
+}) {
+  const conceptTags = getExtTags(ev, fields.concept)
+  const industryTags = getExtTags(ev, fields.industry)
+  if (conceptTags.length === 0 && industryTags.length === 0) return null
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1 pl-0.5">
+      {industryTags.map((t, i) => (
+        <span key={`i${i}`} className="rounded bg-sky-500/10 px-1 py-px text-[9px] text-sky-400 leading-tight">{t}</span>
+      ))}
+      {conceptTags.map((t, i) => (
+        <span key={`c${i}`} className="rounded bg-orange-500/10 px-1 py-px text-[9px] text-orange-400 leading-tight">{t}</span>
+      ))}
+    </div>
+  )
+}
+
 export function Monitor() {
   const qc = useQueryClient()
   const [editorOpen, setEditorOpen] = useState(false)
@@ -63,9 +102,22 @@ export function Monitor() {
   const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market'>('all')
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmClearRules, setConfirmClearRules] = useState(false)
+
+  // 全局 ext 字段配置 (监控中心个股通知带行业/概念标签)
+  const { data: prefs } = usePreferences()
+  const monitorExtFields = prefs?.monitor_ext_fields ?? {
+    concept: { field: 'ext_gn_ths.所属概念' },
+    industry: { field: 'ext_hy_ths.所属同花顺行业' },
+  }
+  const [extConfigOpen, setExtConfigOpen] = useState(false)
+  const extColumnsParam = useMemo(() => {
+    const parts = [monitorExtFields.concept?.field, monitorExtFields.industry?.field].filter(Boolean) as string[]
+    return parts.length > 0 ? parts.join(',') : undefined
+  }, [monitorExtFields])
+
   const alertsQuery = useQuery({
-    queryKey: QK.alerts(filter === 'all' ? undefined : filter),
-    queryFn: () => api.alertsList({ days: 7, limit: 500, source: filter === 'all' ? undefined : filter }),
+    queryKey: [...QK.alerts(filter === 'all' ? undefined : filter), extColumnsParam ?? ''],
+    queryFn: () => api.alertsList({ days: 7, limit: 500, source: filter === 'all' ? undefined : filter, extColumns: extColumnsParam }),
     refetchInterval: 10000,
     refetchIntervalInBackground: true,
   })
@@ -121,8 +173,18 @@ export function Monitor() {
                   </button>
                 ))}
               </div>
-              {/* 数量 + 清空 */}
+              {/* 数量 + 清空 + 字段配置 */}
               <div className="ml-auto flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setExtConfigOpen(true)}
+                  title="配置行业/概念标签"
+                  className={cn(
+                    'inline-flex h-6 w-6 items-center justify-center rounded-lg border transition-all cursor-pointer',
+                    extConfigOpen ? 'border-accent/40 text-accent' : 'border-border/60 bg-surface text-muted hover:border-accent/40 hover:text-accent',
+                  )}
+                >
+                  <Tags className="h-3.5 w-3.5" />
+                </button>
                 <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{total}</span>
                 {total > 0 && (
                   <button
@@ -135,7 +197,7 @@ export function Monitor() {
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3.5">
-              <AlertsList alertsQuery={alertsQuery} confirmClear={confirmClear} setConfirmClear={setConfirmClear} total={total} enterTs={enterTsRef.current} />
+              <AlertsList alertsQuery={alertsQuery} confirmClear={confirmClear} setConfirmClear={setConfirmClear} total={total} enterTs={enterTsRef.current} monitorExtFields={monitorExtFields} />
             </div>
           </section>
 
@@ -188,6 +250,12 @@ export function Monitor() {
         onConfirm={() => clearRulesMut.mutate()}
         pending={clearRulesMut.isPending}
       />
+
+      <MonitorExtConfigDialog
+        open={extConfigOpen}
+        fields={monitorExtFields}
+        onClose={() => setExtConfigOpen(false)}
+      />
     </div>
   )
 }
@@ -202,12 +270,13 @@ function SectionHeader({ icon: Icon, title }: { icon: any; title: string }) {
 }
 
 // ── 触发记录列表 ──────────────────────────────────────
-function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs }: {
+function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs, monitorExtFields }: {
   alertsQuery: ReturnType<typeof useQuery>
   confirmClear: boolean
   setConfirmClear: (v: boolean) => void
   total: number
   enterTs: number
+  monitorExtFields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
 }) {
   const qc = useQueryClient()
   const [confirmTs, setConfirmTs] = useState<number | null>(null)
@@ -411,6 +480,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                       )}
                     </>
                   )}
+                  <AlertExtTags ev={ev} fields={monitorExtFields} />
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <span className="text-[10px] text-muted/60 font-mono">
@@ -732,5 +802,154 @@ function ConfirmDialog({ open, title, message, confirmText, danger, pending, onC
         </motion.div>
       )}
     </AnimatePresence>
+  )
+}
+
+/** 监控中心 ext 字段配置弹窗: 选概念/行业字段, 保存到 preferences.monitor_ext_fields */
+function MonitorExtConfigDialog({ open, fields, onClose }: {
+  open: boolean
+  fields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const [concept, setConcept] = useState<MonitorExtFieldItem | null>(fields.concept)
+  const [industry, setIndustry] = useState<MonitorExtFieldItem | null>(fields.industry)
+  useEffect(() => { setConcept(fields.concept); setIndustry(fields.industry) }, [fields.concept, fields.industry])
+
+  const schema = useQuery({
+    queryKey: QK.extDataSchemaAll,
+    queryFn: api.extDataSchemaAll,
+    enabled: open,
+    staleTime: 60_000,
+  })
+  // 下拉选项: 按扩展表分组 → [{ group: 表名, options: [{value, label}] }]
+  const groups = useMemo(() => {
+    return (schema.data?.items ?? []).map(tbl => ({
+      group: tbl.label || tbl.id,
+      options: tbl.columns.map(col => ({
+        value: `${tbl.id}.${col.name}`,
+        label: col.label || col.name,
+      })),
+    }))
+  }, [schema.data])
+
+  const handleSave = async () => {
+    await api.updateRealtimeMonitorConfig({ monitor_ext_fields: { concept, industry } })
+    qc.invalidateQueries({ queryKey: QK.preferences })
+    onClose()
+  }
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.15 }}
+            className="w-full max-w-md rounded-2xl border border-border bg-surface p-5 shadow-2xl max-h-[85vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-4">
+              <Tags className="h-4 w-4 text-accent" />
+              <h3 className="text-sm font-medium text-foreground">个股通知标签配置</h3>
+            </div>
+            <p className="text-[11px] text-muted mb-4">选择在触发记录和推送通知中显示的行业/概念字段,留空则不显示。</p>
+            <div className="space-y-4">
+              <ExtFieldSection label="行业字段" value={industry} onChange={setIndustry} groups={groups} loading={schema.isLoading} />
+              <ExtFieldSection label="概念字段" value={concept} onChange={setConcept} groups={groups} loading={schema.isLoading} />
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={onClose} className="px-3 py-1.5 rounded-btn text-xs text-secondary hover:text-foreground transition-colors cursor-pointer">取消</button>
+              <button onClick={handleSave} className="px-3 py-1.5 rounded-btn text-xs font-medium bg-accent text-base cursor-pointer">保存</button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+}
+
+/** 单个 ext 字段配置区: 字段下拉 + 显示前N个 + 隐藏指定位置 */
+function ExtFieldSection({ label, value, onChange, groups, loading }: {
+  label: string
+  value: MonitorExtFieldItem | null
+  onChange: (v: MonitorExtFieldItem | null) => void
+  groups: { group: string; options: { value: string; label: string }[] }[]
+  loading: boolean
+}) {
+  const field = value?.field ?? ''
+  const maxTags = value?.maxTags ?? 0
+  const hidden = value?.hiddenIndices ?? []
+
+  // 选/换字段时, 保留已有 maxTags/hiddenIndices 配置
+  const pickField = (f: string | null) => {
+    onChange(f ? { field: f, maxTags: value?.maxTags, hiddenIndices: value?.hiddenIndices } : null)
+  }
+  const setMaxTags = (n: number) => {
+    onChange({ field, maxTags: n, hiddenIndices: n > 0 ? hidden.filter(i => i < n) : undefined })
+  }
+  const toggleHidden = (i: number) => {
+    const next = hidden.includes(i) ? hidden.filter(x => x !== i) : [...hidden, i]
+    onChange({ field, maxTags, hiddenIndices: next.length ? next : undefined })
+  }
+
+  return (
+    <div className="space-y-2">
+      <label className="text-xs text-secondary block">{label}</label>
+      <div className="flex items-center gap-2">
+        <select
+          value={field}
+          onChange={e => pickField(e.target.value || null)}
+          disabled={loading}
+          className="flex-1 min-w-0 h-8 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+        >
+          <option value="">不显示</option>
+          {groups.map(g => (
+            <optgroup key={g.group} label={g.group}>
+              {g.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </optgroup>
+          ))}
+        </select>
+        {field && (
+          <button onClick={() => onChange(null)} title="清除" className="shrink-0 p-1 rounded text-muted hover:text-danger transition-colors cursor-pointer">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {field && (
+        <div className="flex items-center gap-2 pl-0.5">
+          <span className="text-[10px] text-muted shrink-0">显示前N个</span>
+          <input
+            type="number" min={0} max={20}
+            value={maxTags || ''}
+            onChange={e => setMaxTags(e.target.value ? Number(e.target.value) : 0)}
+            placeholder="不限"
+            className="w-14 h-6 bg-elevated border border-border rounded text-[11px] text-foreground px-1.5 focus:outline-none focus:border-accent/50"
+          />
+          <span className="text-[10px] text-muted/60">留空=全部</span>
+        </div>
+      )}
+      {field && maxTags > 0 && (
+        <div className="flex items-center gap-2 pl-0.5">
+          <span className="text-[10px] text-muted shrink-0">隐藏位置</span>
+          <div className="flex flex-wrap gap-1">
+            {Array.from({ length: maxTags }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => toggleHidden(i)}
+                className={`w-5 h-5 rounded text-[10px] font-medium transition-colors cursor-pointer ${
+                  hidden.includes(i) ? 'bg-elevated text-muted line-through' : 'bg-accent/15 text-accent'
+                }`}
+              >{i + 1}</button>
+            ))}
+          </div>
+          <span className="text-[10px] text-muted/60">点数字划掉=隐藏该位置</span>
+        </div>
+      )}
+    </div>
   )
 }

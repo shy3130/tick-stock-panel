@@ -365,12 +365,13 @@ export function Screener() {
   // 分时数据加载策略 (与自选页一致, 简洁优先):
   //  - 全量加载当前列表 symbol, 但按套餐 batch 上限截断 (Pro=100 / Expert=200),
   //    超出时只取前 batch 只并提示用户, 避免一次性发太多请求打爆 rpm 配额
-  //  - 刷新: minute_intraday_refresh 偏好开启时盘中 15s 轮询; 否则仅首次加载,
+  //  - 刷新: minute_intraday_refresh 偏好开启时按用户设定间隔轮询; 否则仅首次加载,
   //    用户可点表头刷新按钮手动更新
   const minuteBatchCap = caps.data?.capabilities?.['kline.minute.batch']?.batch ?? 100
   const quoteStatus = useQuoteStatus()
   const realtimeRunning = quoteStatus.data?.running ?? false
   const intradayRefreshEnabled = prefs?.minute_intraday_refresh ?? false
+  const intradayRefreshInterval = prefs?.minute_intraday_refresh_interval ?? 6
 
   const allIntradaySymbols = useMemo(
     () => displayRows.map((r: any) => r.symbol),
@@ -392,7 +393,7 @@ export function Screener() {
     enabled: intradayVisible && intradaySymbols.length > 0,
     staleTime: 10_000,
     // 仅当开启分时刷新偏好 且 盘中实时行情运行时 才轮询 (省 rpm)
-    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? 15_000 : false,
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? intradayRefreshInterval * 1000 : false,
   })
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 

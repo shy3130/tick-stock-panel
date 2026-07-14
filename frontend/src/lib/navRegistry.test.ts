@@ -24,5 +24,5 @@ test('BUILTIN_NAV uses the approved module-section sidebar order', () => {
   assert.deepEqual(pinned, ['看板', '自选', '监控中心'])
   assert.deepEqual(strategy, ['策略', '回测', '复盘'])
   assert.deepEqual(research, ['指数', '连板梯队', '概念分析', '行业分析', '个股分析', '财务分析'])
-  assert.deepEqual(system, ['交易', '数据'])
+  assert.deepEqual(system, ['数据'])
 })

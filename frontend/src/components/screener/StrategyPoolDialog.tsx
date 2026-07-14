@@ -119,7 +119,6 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
         code,
         target_source: target,
         mode: 'create',
-        strict: true,
       })
       await loadStrategies()
       setActiveTab(result.source)

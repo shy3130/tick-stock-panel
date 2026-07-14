@@ -110,9 +110,9 @@ class AIStrategyGenerator:
             return content.split("```", 1)[1].split("```", 1)[0].strip()
         return content.strip()
 
-    # import 白名单: 策略文件只允许 polars (见 strategy-guide.md「只 import polars」)。
+    # import 白名单: 策略文件只允许 polars + datetime (纯日期运算, 无文件/网络/进程能力)。
     # 白名单而非黑名单 — 黑名单挡不住 ctypes/importlib/builtins/pickle 等未列出的危险模块。
-    _ALLOWED_IMPORT_MODULES = frozenset({"polars", "__future__"})
+    _ALLOWED_IMPORT_MODULES = frozenset({"polars", "__future__", "datetime"})
 
     @classmethod
     def validate_code_or_raise(cls, code: str, expected_strategy_id: str | None = None) -> dict:
@@ -131,7 +131,13 @@ class AIStrategyGenerator:
 
     @classmethod
     def _validate_safety(cls, code: str) -> None:
-        """AST 级安全检查: import 白名单 + 危险内建调用拦截。"""
+        """AST 级安全检查: import 白名单 + 危险内建调用拦截 + dunder 遍历拦截。
+
+        注意: AST 名单不是真正的沙箱, 只能拦截常见攻击模式。真正的隔离需要
+        在受限子进程里执行策略 (后续 P0)。此处拦截已知的逃逸技巧:
+        - __globals__ / __builtins__ / __class__ / __subclasses__ / __mro__ 等属性访问
+        - ["__import__"] / ["__builtins__"] 等字符串下标访问
+        """
         tree = ast.parse(code)
         cls._validate_top_level(tree)
 
@@ -144,6 +150,10 @@ class AIStrategyGenerator:
             "read_csv", "read_parquet", "read_database", "read_delta", "read_excel",
             "read_ipc", "read_ndjson", "scan_csv", "scan_parquet", "scan_delta",
             "scan_ipc", "scan_ndjson", "sql",
+        }
+        # 字符串下标访问的危险名: x["__builtins__"] / x["__import__"]
+        forbidden_subscript_strs = {
+            "__builtins__", "__import__", "__globals__",
         }
 
         for node in ast.walk(tree):
@@ -164,6 +174,14 @@ class AIStrategyGenerator:
                     raise ValueError(f"禁止调用 {node.func.id}()")
                 if isinstance(node.func, ast.Attribute) and node.func.attr in forbidden_attr_calls:
                     raise ValueError(f"禁止调用 {node.func.attr}()")
+            if isinstance(node, ast.Subscript):
+                sl = node.slice
+                if (
+                    isinstance(sl, ast.Constant)
+                    and isinstance(sl.value, str)
+                    and sl.value in forbidden_subscript_strs
+                ):
+                    raise ValueError(f"禁止下标访问 {sl.value} (策略不允许 dunder 遍历逃逸)")
 
     @staticmethod
     def _validate_top_level(tree: ast.Module) -> None:

@@ -95,10 +95,12 @@ export function getCurrentVoiceURI(): string {
 
 const MAX_SPEAK = 3  // 单批最多逐条念 3 只, 超出汇总成数量
 
-/** 涨跌幅用中文习惯念: 5.2% → 涨5.2%, -3.1% → 跌3.1% */
+/** 涨跌幅用中文习惯念: 0.052 → 涨5.2%, -0.031 → 跌3.1%。
+ *  入参是小数制 (后端 change_pct, 0.0366 = 3.66%), 需 ×100 再念, 与 format.ts 的 fmtPct 一致。 */
 function fmtPctText(pct: number): string {
-  if (pct >= 0) return `涨${pct.toFixed(1)}%`
-  return `跌${Math.abs(pct).toFixed(1)}%`
+  const p = pct * 100
+  if (p >= 0) return `涨${p.toFixed(1)}%`
+  return `跌${Math.abs(p).toFixed(1)}%`
 }
 
 /**

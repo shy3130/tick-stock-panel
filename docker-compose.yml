@@ -7,9 +7,12 @@ services:
       dockerfile: Dockerfile
       args:
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.3}
     container_name: TickFlow_Stock_Panel
     ports:
       - "${PORT:-3018}:3018"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:
@@ -18,7 +21,12 @@ services:
       # 导致每次 up --build 重建容器都丢数据。environment 优先级高于 env_file,
       # 无论 .env 怎么写这里都以容器路径为准。
       - DATA_DIR=/app/data
+      # 将主机 Codex Desktop 的 loopback local-access 端点映射到 Docker host gateway。
+      - CODEX_DOCKER_HOST=host.docker.internal
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro
+      # 复用主机 Codex 登录态；后端只读后复制到单次请求的临时 CODEX_HOME。
+      # Windows PowerShell/CMD 下 HOME 常未设置, 可通过 .env 里 CODEX_HOME_HOST 覆盖。
+      - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
     restart: unless-stopped

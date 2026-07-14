@@ -46,6 +46,22 @@ export function useQuoteStreamStatus(): QuoteStreamStatus {
   return useSyncExternalStore(_subscribeStatus, _getStatus, () => 'disconnected' as const)
 }
 
+// ===== 焦点股票注册表 (个股对话框用) =====
+// 个股对话框打开时注册当前 symbol, SSE quotes_updated 推送时精准 invalidate
+// 该 symbol 的日K查询 (['kline', symbol]), 让日K最后一根蜡烛随实时价变化。
+// 不加进 SSE_INVALIDATE_PREFIXES 全局列表 —— 避免回测弹窗等也每秒重拉。
+let _focusSymbol: string | null = null
+
+/** 注册当前焦点股票 (个股对话框打开时调用)。 */
+export function setFocusSymbol(symbol: string): void {
+  _focusSymbol = symbol
+}
+
+/** 清除焦点股票 (个股对话框关闭时调用)。 */
+export function clearFocusSymbol(): void {
+  _focusSymbol = null
+}
+
 /**
  * 全局 SSE hook: 监听后端行情更新推送 + 策略监控通知。
  *
@@ -137,6 +153,11 @@ export function useQuoteStream(
                 (prefix) => String(query.queryKey[0]).startsWith(prefix),
               ),
           })
+        }
+        // 焦点股票日K精准刷新: 个股对话框打开时, 日K最后一根蜡烛随实时价变化。
+        // 后端 _maybe_inject_live_candle 只读内存缓存, 不调 TickFlow, 秒级重拉零额外成本。
+        if (_focusSymbol) {
+          qc.invalidateQueries({ queryKey: ['kline', _focusSymbol] })
         }
       })
 

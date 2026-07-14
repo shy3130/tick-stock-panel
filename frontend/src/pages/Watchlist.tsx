@@ -627,17 +627,18 @@ export function Watchlist() {
   const klineData = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
 
   // 批量分时数据 (Pro+ 用户, 列可见时才拉)
-  // 刷新策略: 实时行情运行中自动按 15s 轮询 (不接 SSE 高频, 避免每秒拉 TickFlow 触限流);
-  // 用户也可在实时监控设置里单独开启 minute_intraday_refresh 强制刷新 (即使未开实时行情)
+  // 刷新策略: 仅当实时行情运行 且 用户在实时监控设置里开启 minute_intraday_refresh 时
+  // 按用户设定的间隔轮询 (不接 SSE 高频, 避免每秒拉 TickFlow 触限流); 与 Screener / 设置卡片描述一致。
   const { data: prefsData } = usePreferences()
   const toggleRealtime = useToggleRealtimeQuotes()
   const intradayRefreshEnabled = prefsData?.minute_intraday_refresh ?? false
+  const intradayRefreshInterval = prefsData?.minute_intraday_refresh_interval ?? 6
   const minuteBatch = useQuery({
     queryKey: QK.minuteBatch(symbolsKey),
     queryFn: () => api.klineMinuteBatch(symbols),
     enabled: intradayVisible && symbols.length > 0,
     staleTime: 10_000,
-    refetchInterval: (realtimeRunning || intradayRefreshEnabled) ? 15_000 : false,
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? intradayRefreshInterval * 1000 : false,
   })
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
@@ -1142,6 +1143,7 @@ export function Watchlist() {
                   )
                 }
                 if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+                  const intradayAutoRefresh = intradayRefreshEnabled && realtimeRunning
                   return (
                     <span className="inline-flex items-center justify-center gap-1.5">
                       <span>{col.label}</span>
@@ -1158,6 +1160,23 @@ export function Watchlist() {
                       >
                         {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                       </button>
+                      {/* 分时图显示 且 未开自动轮询时, 提供手动刷新按钮 */}
+                      {intradayChartVisible && !intradayAutoRefresh && (
+                        <button
+                          type="button"
+                          onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
+                          disabled={minuteBatch.isFetching}
+                          className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                          title="刷新分时数据"
+                          aria-label="刷新分时数据"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
+                        </button>
+                      )}
+                      {/* 自动轮询中: 显示旋转图标提示正在实时刷新 */}
+                      {intradayChartVisible && intradayAutoRefresh && (
+                        <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+                      )}
                     </span>
                   )
                 }

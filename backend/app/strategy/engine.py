@@ -171,6 +171,18 @@ class StrategyEngine:
     @staticmethod
     def _load_file(path: Path) -> StrategyDef:
         """从 Python 文件加载策略定义"""
+        # 纵深防御: 执行前再跑一次 AST 安全校验, 防止策略文件被直接篡改
+        # 绕过 API 校验后, 在 exec_module 时执行恶意代码。
+        try:
+            code = path.read_text(encoding="utf-8")
+            from app.strategy.ai_generator import AIStrategyGenerator
+            AIStrategyGenerator._validate_safety(code)
+        except ValueError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            # 文件读不到/语法错等: 不阻断, 让下方 exec_module 抛原样错误
+            pass
+
         spec = importlib.util.spec_from_file_location(path.stem, path)
         if spec is None or spec.loader is None:
             raise ValueError(f"cannot load module from {path}")

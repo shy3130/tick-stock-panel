@@ -14,6 +14,7 @@ import tomllib
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from types import TracebackType
+from urllib.parse import urlsplit, urlunsplit
 
 from app import secrets_store
 from app.config import settings
@@ -699,6 +700,10 @@ def _codex_home() -> Path:
 def _write_compatible_codex_config(path: Path) -> None:
     config = _read_codex_config()
     lines: list[str] = []
+    local_provider = _docker_codex_local_provider(config)
+
+    if local_provider:
+        lines.append(_toml_string("model_provider", "codex_local_access"))
 
     model = current_ai_model() or normalize_codex_model(str(config.get("model") or ""))
     if model:
@@ -713,7 +718,41 @@ def _write_compatible_codex_config(path: Path) -> None:
     lines.append(_toml_string("approval_policy", "never"))
     lines.append(_toml_string("sandbox_mode", "read-only"))
 
+    if local_provider:
+        lines.append("")
+        lines.append("[model_providers.codex_local_access]")
+        for key in ("name", "base_url", "wire_api", "experimental_bearer_token"):
+            value = local_provider.get(key)
+            if isinstance(value, str) and value:
+                lines.append(_toml_string(key, value))
+        for key in ("requires_openai_auth", "supports_websockets"):
+            value = local_provider.get(key)
+            if isinstance(value, bool):
+                lines.append(f"{key} = {'true' if value else 'false'}")
+
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _docker_codex_local_provider(config: dict) -> dict | None:
+    """Return the local-access provider adapted to Docker's host gateway."""
+    docker_host = os.environ.get("CODEX_DOCKER_HOST", "").strip()
+    if not docker_host or config.get("model_provider") != "codex_local_access":
+        return None
+
+    providers = config.get("model_providers")
+    if not isinstance(providers, dict):
+        return None
+    source = providers.get("codex_local_access")
+    if not isinstance(source, dict):
+        return None
+
+    provider = dict(source)
+    base_url = str(provider.get("base_url") or "").strip()
+    parsed = urlsplit(base_url)
+    if parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+        port = f":{parsed.port}" if parsed.port else ""
+        provider["base_url"] = urlunsplit(parsed._replace(netloc=f"{docker_host}{port}"))
+    return provider
 
 
 def _read_codex_config() -> dict:
