@@ -284,16 +284,16 @@ class StrategyEngine:
             strategy_id:        策略 ID
             as_of:              选股日期
             pool:               限定股票池
-            params:             策略参数 (用户在设置面板调的值)
-            overrides:          用户覆盖配置 (basic_filter/scoring/stop_loss 等)
+            params:             本次执行显式传入的策略参数
+            overrides:          用户覆盖配置 (params/basic_filter/scoring/stop_loss 等)
             precomputed:        已加载的 enriched 数据 (run_all 场景复用)
             precomputed_history: 已加载的历史窗口数据 (run_all 场景复用)
         """
         t0 = time.perf_counter()
 
         s = self.get(strategy_id)
-        params = params or {}
         overrides = overrides or {}
+        params = {**(overrides.get("params") or {}), **(params or {})}
 
         # 加载数据。普通策略只读目标日期；声明 filter_history 的策略读取历史窗口。
         if s.filter_history_fn:

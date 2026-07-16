@@ -1097,8 +1097,7 @@ def run_pipeline(data_dir: Path | None = None,
     SYM_BATCH = prefs_mod.get_enriched_batch_size()  # 每批 N 只 × ~244 天, 可在设置中调整
     total_batches = (total_syms + SYM_BATCH - 1) // SYM_BATCH
 
-    # 全量模式: 先清理旧 enriched 目录, 最后一次性按日期写入
-    # 收集所有批次结果, 按日期分区写入
+    # 全量模式: 收集所有批次结果, 最后按日期分区覆盖写入
     from collections import defaultdict
     date_buffers: dict[str, list[pl.DataFrame]] = defaultdict(list)
 
@@ -1165,9 +1164,17 @@ def run_pipeline(data_dir: Path | None = None,
 
     # 全量模式: 按日期分区写入
     if not symbols and date_buffers:
-        if base.exists():
-            import shutil
-            shutil.rmtree(base)
+        existing_dates = {
+            p.name.removeprefix("date=")
+            for p in base.glob("date=*")
+            if p.is_dir()
+        }
+        rebuilt_dates = set(date_buffers)
+        missing_dates = existing_dates - rebuilt_dates
+        if missing_dates:
+            sample = ", ".join(sorted(missing_dates)[:5])
+            raise RuntimeError(f"全量重建结果缺少已有日期分区,拒绝覆盖: {sample}")
+
         base.mkdir(parents=True, exist_ok=True)
 
         for ds, dfs in date_buffers.items():

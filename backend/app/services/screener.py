@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -525,6 +526,8 @@ class ScreenerService:
         pool: list[str] | None = None,
         precomputed: pl.DataFrame | None = None,
         basic_filter: dict | None = None,
+        filter_fn: Callable[[pl.DataFrame, dict], pl.Expr] | None = None,
+        strategy_params: dict | None = None,
         display_limit: int | None = None,
     ) -> ScreenerResult:
         """预设策略选股 — 从 enriched 读取预计算好的指标列后过滤。
@@ -532,6 +535,7 @@ class ScreenerService:
         - precomputed 不为空: 直接复用（run_all 场景）
         - precomputed 为空: 从 enriched 读目标日期
         - basic_filter: 用户保存的基础参数过滤（boards、价格等）
+        - filter_fn/strategy_params: 内置策略文件的参数化过滤；未传时兼容旧预设表达式
         """
         t0 = time.perf_counter()
 
@@ -555,7 +559,8 @@ class ScreenerService:
             df = self._apply_basic_filter(df, basic_filter)
 
         # 应用策略过滤
-        df = df.filter(strat["filter"])
+        filter_expr = filter_fn(df, strategy_params or {}) if filter_fn else strat["filter"]
+        df = df.filter(filter_expr)
 
         # 应用 pool
         if pool:

@@ -29,14 +29,16 @@ export function useUpdateQuoteInterval() {
   })
 }
 
-/** 批量添加自选 — Screener / Intraday 共用 */
+/** 批量添加自选 — Screener / Intraday / 截图导入 共用 */
 export function useWatchlistBatchAdd() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (symbols: string[]) => api.watchlistBatchAdd(symbols),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK.watchlist })
-      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+      // 前缀匹配: 实际 key 为 ['watchlist-enriched', extColumnsParam],
+      // 不能用 QK.watchlistEnriched()(= undefined) 精确匹配, 否则列表不刷新。
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
     },
   })
 }

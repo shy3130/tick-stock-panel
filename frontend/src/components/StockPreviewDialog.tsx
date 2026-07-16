@@ -83,7 +83,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
     mutationFn: () => inWatchlist ? api.watchlistRemove(symbol!) : api.watchlistAdd(symbol!),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK.watchlist })
-      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
     },
   })
 

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, Radio } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, Radio, ImagePlus } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -9,6 +9,7 @@ import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { WatchlistImportDialog } from '@/components/WatchlistImportDialog'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { useTableSort } from '@/components/stock-table/useTableSort'
@@ -512,6 +513,7 @@ export function Watchlist() {
   // 列配置 — 从后端/localStorage 异步加载
   const [columns, setColumns] = useState<ColumnConfig[]>([...BUILTIN_COLUMNS])
   const [customizerOpen, setCustomizerOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const columnsLoaded = useRef(false)
 
   useEffect(() => {
@@ -664,7 +666,7 @@ export function Watchlist() {
       })
       // 2. 清除 list 缓存，触发后台 refetch
       qc.invalidateQueries({ queryKey: QK.watchlist })
-      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
       qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
       qc.invalidateQueries({ queryKey: QK.preferences })
       qc.invalidateQueries({ queryKey: QK.quoteStatus })
@@ -690,7 +692,7 @@ export function Watchlist() {
       // 立即清空 enriched 缓存
       qc.setQueryData(['watchlist-enriched', extColumnsParam], { rows: [], as_of: null, elapsed_ms: 0 })
       qc.invalidateQueries({ queryKey: QK.watchlist })
-      qc.invalidateQueries({ queryKey: QK.watchlistEnriched() })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
       qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
       qc.invalidateQueries({ queryKey: QK.preferences })
       qc.invalidateQueries({ queryKey: QK.quoteStatus })
@@ -984,6 +986,13 @@ export function Watchlist() {
               existingSymbols={allSymbols as string[]}
               onAdd={(sym) => addMutation.mutate(sym)}
             />
+            <button
+              onClick={() => setImportOpen(true)}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
+              title="从截图导入自选"
+            >
+              <ImagePlus className="h-4 w-4" />
+            </button>
             <div className="w-px h-5 bg-border" />
             {/* 视图 */}
             <button
@@ -1109,7 +1118,7 @@ export function Watchlist() {
             <EmptyState
               icon={Star}
               title="自选股为空"
-              hint="点击右上角搜索按钮查找并预览标的，进入个股详情后可添加到自选。"
+              hint="点击右上角搜索添加标的，或点击图片图标从券商自选截图批量导入。"
             />
           ) : viewMode === 'table' ? (
             <StockDataTable
@@ -1406,6 +1415,8 @@ export function Watchlist() {
         name={previewName}
         onClose={closePreview}
       />
+
+      <WatchlistImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   )
 }

@@ -181,6 +181,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   useEffect(() => { if (loaded) persist() }, [loaded, persist])
 
   const clearDraft = () => {
+    draftStore.set(null)
     setName(''); setDescription(''); setDirection('long')
     setRules(''); setCode(''); setStep(1); setError(''); setInstruction('')
     setStrategyId(''); setSource('ai'); setValidated(false)
@@ -288,11 +289,11 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         name: name.trim(),
         description: description.trim(),
       })
+      clearDraft()
       const genRules = parseRules(draftCode)
       const finalRules = (genRules || rules).trim()
       if (finalRules) { const saved = storage.strategyRules.get({}); saved[id] = finalRules; storage.strategyRules.set(saved) }
       await onSavedId?.(id)
-      clearDraft()
       setTimeout(() => onClose(), 1000)
     } catch (e: any) { setError(String(e?.message ?? '保存失败')) }
     setSaving(false)

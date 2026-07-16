@@ -283,10 +283,23 @@ def run_preset(req: PresetRequest, request: Request):
     if dl is None and overrides and "display_limit" in overrides:
         dl = 0
 
+    engine = getattr(request.app.state, "strategy_engine", None)
+
     # 内置策略
     if req.strategy_id in PRESET_STRATEGIES:
+        filter_fn = None
+        if req.asset_type == "stock" and engine and engine.has(req.strategy_id):
+            filter_fn = engine.get(req.strategy_id).filter_fn
         try:
-            result = svc.run_preset(req.strategy_id, as_of=as_of, pool=req.pool, basic_filter=bf, display_limit=dl)
+            result = svc.run_preset(
+                req.strategy_id,
+                as_of=as_of,
+                pool=req.pool,
+                basic_filter=bf,
+                filter_fn=filter_fn,
+                strategy_params=overrides.get("params") if overrides else None,
+                display_limit=dl,
+            )
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         safe_data = _safe(asdict(result))
@@ -294,7 +307,6 @@ def run_preset(req: PresetRequest, request: Request):
         return _result_with_ext(safe_data, ext_values)
 
     # 自定义/AI 策略 — 通过 StrategyEngine 执行
-    engine = getattr(request.app.state, "strategy_engine", None)
     if not engine:
         raise HTTPException(status_code=404, detail=f"策略引擎未初始化或策略 {req.strategy_id} 不存在")
 
@@ -468,7 +480,16 @@ def run_all(request: Request, body: Optional[dict] = None):
                 dl = 0
 
             if sid in PRESET_STRATEGIES:
-                r = svc.run_preset(sid, as_of=as_of, precomputed=precomputed, basic_filter=bf, display_limit=dl)
+                filter_fn = engine.get(sid).filter_fn if engine and engine.has(sid) else None
+                r = svc.run_preset(
+                    sid,
+                    as_of=as_of,
+                    precomputed=precomputed,
+                    basic_filter=bf,
+                    filter_fn=filter_fn,
+                    strategy_params=overrides.get("params") if overrides else None,
+                    display_limit=dl,
+                )
             else:
                 r = engine.run(
                     sid, as_of, overrides=overrides or None,
