@@ -3,7 +3,7 @@
 给定策略 + 参数网格, 遍历所有参数组合各跑一次回测, 按目标指标排序, 返回最优参数。
 
 - 参数网格校验对齐 StrategyDef.meta["params"] (类型/范围/选项)。
-- 多线程并行执行, 复用 PanelCache: 同一 symbols/日期的面板只加载一次, 其余组合命中缓存。
+- 单个优化任务在一个 worker 内串行执行; matrix_native 策略共享一份 MarketDataMatrix。
 - 支持进度回调 (第 i/N 组完成) 与取消。
 """
 from __future__ import annotations
@@ -12,9 +12,9 @@ import itertools
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -190,10 +190,19 @@ class OptimizeConfig:
     base_params: dict = field(default_factory=dict)   # 不扫的固定策略参数
     overrides: dict | None = None
     backtest_kwargs: dict = field(default_factory=dict)  # matching/fees/mode/initial_capital 等
+    matrix_cache_max_mb: int = 512
+
+
+class PhaseRssSampler(Protocol):
+    """Resource probe supplied by the outer worker process."""
+
+    def reset_phase(self) -> None: ...
+
+    def phase_peak_rss_bytes(self) -> int: ...
 
 
 class StrategyOptimizer:
-    """遍历参数组合并行回测, 按目标排序。"""
+    """在单 worker 内遍历参数组合, 并按目标排序。"""
 
     def __init__(self, service, strategy_engine) -> None:
         self.service = service
@@ -204,14 +213,19 @@ class StrategyOptimizer:
         cfg: OptimizeConfig,
         progress_cb=None,
         cancel_event: threading.Event | None = None,
+        *,
+        rss_sampler: PhaseRssSampler | None = None,
+        prepared_market_data=None,
     ) -> dict:
-        from app.backtest.strategy import StrategyBacktestConfig
+        from app.backtest.strategy import BacktestResultPolicy, StrategyBacktestConfig
 
         t0 = time.perf_counter()
         if cfg.objective not in VALID_OBJECTIVES:
             raise ValueError(f"不支持的优化目标 '{cfg.objective}', 可选: {sorted(VALID_OBJECTIVES)}")
         direction = cfg.direction or default_direction(cfg.objective)
         _validate_backtest_kwargs(cfg.backtest_kwargs)
+        if int(cfg.matrix_cache_max_mb) <= 0:
+            raise ValueError("matrix_cache_max_mb 必须为正整数")
 
         s = self.strategy_engine.get(cfg.strategy_id)  # 可能抛 ValueError
         params_meta = s.meta.get("params", [])
@@ -219,36 +233,69 @@ class StrategyOptimizer:
         n_total = len(combos)
 
         results: list[dict] = []
-        done = 0
-        lock = threading.Lock()
+        backtest_configs = [
+            StrategyBacktestConfig(
+                strategy_id=cfg.strategy_id,
+                symbols=cfg.symbols,
+                start=cfg.start,
+                end=cfg.end,
+                params={**cfg.base_params, **combo},
+                overrides=cfg.overrides,
+                **cfg.backtest_kwargs,
+            )
+            for combo in combos
+        ]
 
-        def _run_one(idx: int, combo: dict) -> dict | None:
+        prepared = None
+        prepare_ms = 0.0
+        trials_ms = 0.0
+        final_backtest_ms = 0.0
+        trial_peak_rss_bytes = None
+        final_backtest_peak_rss_bytes = None
+        cache_summary = None
+        output: dict = {}
+        trial_policy = BacktestResultPolicy.optimizer_trial(cfg.objective)
+
+        def _run_one(combo: dict, bt_cfg: StrategyBacktestConfig) -> dict | None:
             if cancel_event is not None and cancel_event.is_set():
                 return None
-            # 单组异常必须隔离: 加了并行后, 一组抛异常若冒泡会拖垮整批 (丢弃全部已完成结果)。
+            # 单组异常必须隔离: 一组失败不能丢弃全部已完成结果。
             try:
-                merged = {**cfg.base_params, **combo}
-                bt_cfg = StrategyBacktestConfig(
-                    strategy_id=cfg.strategy_id,
-                    symbols=cfg.symbols,
-                    start=cfg.start,
-                    end=cfg.end,
-                    params=merged,
-                    overrides=cfg.overrides,
-                    **cfg.backtest_kwargs,
-                )
-                res = self.service.run(bt_cfg, cancel_event=cancel_event)
+                if prepared is None:
+                    res = self.service.run(
+                        bt_cfg,
+                        cancel_event=cancel_event,
+                        result_policy=trial_policy,
+                    )
+                else:
+                    res = self.service.run(
+                        bt_cfg,
+                        cancel_event=cancel_event,
+                        prepared=prepared,
+                        result_policy=trial_policy,
+                    )
             except Exception as e:  # 隔离单组失败, 记录后继续, 不拖垮整批
                 logger.warning("参数组 %s 回测异常: %r", combo, e)
                 return {"params": combo, "error": repr(e), "objective_raw": None, "_sort": float("-inf")}
             if res.error:
                 return {"params": combo, "error": res.error, "objective_raw": None, "_sort": float("-inf")}
+            if cfg.objective not in res.stats:
+                return {
+                    "params": combo,
+                    "error": f"回测结果缺少优化目标字段 '{cfg.objective}'",
+                    "objective_raw": None,
+                    "_sort": float("-inf"),
+                }
             # _sort: 内部排序键 (统一"越大越好"); objective_raw: 原始展示值 (不受方向取负污染)。
+            objective_started = time.perf_counter()
+            sort_value = objective_value(res.stats, cfg.objective, direction)
+            objective_ms = round((time.perf_counter() - objective_started) * 1000, 3)
             return {
                 "params": combo,
                 "objective_raw": res.stats.get(cfg.objective),
-                "_sort": objective_value(res.stats, cfg.objective, direction),
+                "_sort": sort_value,
                 "stats": res.stats,
+                "objective_evaluation_ms": objective_ms,
             }
 
         def _best_raw() -> float | None:
@@ -257,39 +304,138 @@ class StrategyOptimizer:
             top = max(results, key=lambda x: x["_sort"])
             return None if top["_sort"] == float("-inf") else top.get("objective_raw")
 
-        max_workers = max(1, min(int(cfg.max_workers), n_total))
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_run_one, i, c): i for i, c in enumerate(combos)}
-            for fut in as_completed(futures):
-                r = fut.result()  # _run_one 内部已兜底, 不会 re-raise 业务异常
-                with lock:
-                    done += 1
-                    if r is not None:
-                        results.append(r)
-                    if progress_cb is not None:
-                        br = _best_raw()
-                        progress_cb({
-                            "type": "optimizer_progress",
-                            "done": done,
-                            "total": n_total,
-                            "best_score": round(br, 4) if br is not None else None,
-                        })
+        try:
+            cancelled_before_prepare = cancel_event is not None and cancel_event.is_set()
+            if (
+                getattr(s, "execution_backend", "polars_expr") == "matrix_native"
+                and not cancelled_before_prepare
+            ):
+                prepare_started = time.perf_counter()
+                prepare_kwargs = {
+                    "matrix_cache_max_bytes": int(cfg.matrix_cache_max_mb) * 1024 * 1024,
+                }
+                if prepared_market_data is not None:
+                    prepare_kwargs["market_data_override"] = prepared_market_data
+                prepared = self.service.prepare_matrix_optimization(
+                    backtest_configs,
+                    **prepare_kwargs,
+                )
+                prepare_ms = round((time.perf_counter() - prepare_started) * 1000, 1)
+                if progress_cb is not None:
+                    progress_cb({
+                        "type": "optimizer_prepare",
+                        "done": 0,
+                        "total": n_total,
+                        "best_score": None,
+                        "shared_matrix_bytes": prepared.market_data.nbytes,
+                        "elapsed_ms": prepare_ms,
+                    })
 
-        # 排序: 内部 _sort 降序 (越大越好); -inf (失败/无效) 沉底。展示层用 objective_raw。
-        ranked = sorted(results, key=lambda x: x["_sort"], reverse=True)
-        for i, r in enumerate(ranked):
-            r["rank"] = i + 1
-            r.pop("_sort", None)  # 不外露内部排序键, 避免展示层误用取负值
+            trials_started = time.perf_counter()
+            if rss_sampler is not None:
+                rss_sampler.reset_phase()
+            for done, (combo, bt_cfg) in enumerate(
+                zip(combos, backtest_configs, strict=True),
+                start=1,
+            ):
+                r = _run_one(combo, bt_cfg)
+                if r is not None:
+                    results.append(r)
+                if progress_cb is not None:
+                    br = _best_raw()
+                    progress_cb({
+                        "type": "optimizer_progress",
+                        "done": done,
+                        "total": n_total,
+                        "best_score": round(br, 4) if br is not None else None,
+                    })
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+            trials_ms = round((time.perf_counter() - trials_started) * 1000, 1)
+            if rss_sampler is not None:
+                trial_peak_rss_bytes = rss_sampler.phase_peak_rss_bytes()
 
-        best = ranked[0] if ranked and ranked[0].get("objective_raw") is not None else None
-        best_raw = best["objective_raw"] if best else None
-        return {
-            "objective": cfg.objective,
-            "direction": direction,
-            "n_combinations": n_total,
-            "n_completed": len(results),
-            "best_params": best["params"] if best else None,
-            "best_score": round(best_raw, 4) if best_raw is not None else None,
-            "results": ranked,
-            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
-        }
+            ranked = sorted(results, key=lambda x: x["_sort"], reverse=True)
+            for i, result_row in enumerate(ranked):
+                result_row["rank"] = i + 1
+                result_row.pop("_sort", None)
+
+            best = ranked[0] if ranked and ranked[0].get("objective_raw") is not None else None
+            best_raw = best["objective_raw"] if best else None
+            best_backtest = None
+            if best is not None and not (cancel_event is not None and cancel_event.is_set()):
+                if progress_cb is not None:
+                    progress_cb({
+                        "type": "optimizer_finalize",
+                        "done": len(results),
+                        "total": n_total,
+                        "best_score": round(best_raw, 4) if best_raw is not None else None,
+                    })
+                best_config = StrategyBacktestConfig(
+                    strategy_id=cfg.strategy_id,
+                    symbols=cfg.symbols,
+                    start=cfg.start,
+                    end=cfg.end,
+                    params={**cfg.base_params, **best["params"]},
+                    overrides=cfg.overrides,
+                    **cfg.backtest_kwargs,
+                )
+                final_started = time.perf_counter()
+                if rss_sampler is not None:
+                    rss_sampler.reset_phase()
+                final_result = self.service.run(
+                    best_config,
+                    cancel_event=cancel_event,
+                    prepared=prepared,
+                )
+                final_backtest_ms = round((time.perf_counter() - final_started) * 1000, 1)
+                if rss_sampler is not None:
+                    final_backtest_peak_rss_bytes = rss_sampler.phase_peak_rss_bytes()
+                best_backtest = asdict(final_result) if is_dataclass(final_result) else dict(final_result)
+
+            trials_per_second = (
+                round(len(results) / (trials_ms / 1000.0), 4)
+                if trials_ms > 0
+                else 0.0
+            )
+            output = {
+                "objective": cfg.objective,
+                "direction": direction,
+                "n_combinations": n_total,
+                "n_completed": len(results),
+                "best_params": best["params"] if best else None,
+                "best_score": round(best_raw, 4) if best_raw is not None else None,
+                "best_backtest": best_backtest,
+                "results": ranked,
+                "requested_max_workers": int(cfg.max_workers),
+                "effective_workers": 1,
+                "shared_market_data": prepared is not None,
+                "shared_market_data_bytes": prepared.market_data.nbytes if prepared is not None else 0,
+                "prepare_ms": prepare_ms,
+                "timing_ms": {
+                    "prepare": prepare_ms,
+                    "trials": trials_ms,
+                    "best_backtest": final_backtest_ms,
+                },
+                "performance": {
+                    "mode": "serial",
+                    "trials_per_second": trials_per_second,
+                    "trial_peak_rss_bytes": trial_peak_rss_bytes,
+                    "best_backtest_peak_rss_bytes": final_backtest_peak_rss_bytes,
+                    "parallel_evaluated": False,
+                },
+            }
+        finally:
+            if prepared is not None:
+                try:
+                    cache_summary = prepared.compute_cache.snapshot()
+                finally:
+                    prepared.compute_cache.close()
+
+        if cache_summary is not None:
+            cache_summary["released"] = True
+            cache_summary["current_bytes_after_close"] = 0
+            output["matrix_compute_cache"] = cache_summary
+        output["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        output["timing_ms"]["total"] = output["elapsed_ms"]
+        return output

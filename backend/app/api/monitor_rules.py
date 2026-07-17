@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -143,6 +144,24 @@ def save_rule(req: RuleModel, request: Request):
                 status_code=403,
                 detail="封单监控需要 Pro+ 套餐 (批量五档能力),请升级后在「设置」页配置",
             )
+    if rule.get("type") == "strategy":
+        from app.strategy.engine import StrategyDataContext
+
+        strategy_engine = getattr(request.app.state, "strategy_engine", None)
+        if strategy_engine is None:
+            raise HTTPException(status_code=503, detail="策略引擎未初始化")
+        try:
+            strategy = strategy_engine.get(str(rule.get("strategy_id")))
+            strategy_engine.validate_context(
+                strategy,
+                StrategyDataContext(
+                    asset_type=str(rule.get("asset_type") or "stock"),
+                    timeframe="1d",
+                    as_of=date.today(),
+                ),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
     # 编辑现有规则时, 保留原 created_at (避免按时间排序时位置跳动)
     existing = monitor_rules.load_one(_data_dir(request), rule["id"])
     if existing and existing.get("created_at"):
@@ -150,7 +169,7 @@ def save_rule(req: RuleModel, request: Request):
     try:
         monitor_rules.validate(rule)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     monitor_rules.save_one(_data_dir(request), rule)
     _sync_engine(request)
     return {"ok": True, "rule": rule}

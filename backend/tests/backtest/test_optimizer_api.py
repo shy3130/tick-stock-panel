@@ -22,6 +22,10 @@ def test_job_key_distinguishes_grid_and_objective():
     base = _make_opt_job_key("s", None, None, None, '{"p":[1,2]}', "sortino", None, sig)
     assert base != _make_opt_job_key("s", None, None, None, '{"p":[1,3]}', "sortino", None, sig)  # grid 不同
     assert base != _make_opt_job_key("s", None, None, None, '{"p":[1,2]}', "sharpe", None, sig)   # objective 不同
+    assert base != _make_opt_job_key(
+        "s", None, None, None, '{"p":[1,2]}', "sortino", None, sig,
+        matrix_cache_max_mb=256,
+    )
 
 
 def test_cancel_looks_up_job_by_echoed_key():
@@ -58,3 +62,27 @@ def test_cancel_looks_up_job_by_echoed_key():
         assert res3["ok"] is False
     finally:
         _running_jobs.pop(key, None)
+
+
+def test_finished_job_is_proactively_removed_after_ttl(monkeypatch):
+    from app.api import backtest as api
+
+    class _ImmediateTimer:
+        daemon = False
+
+        def __init__(self, interval, callback):
+            self.interval = interval
+            self.callback = callback
+
+        def start(self):
+            self.callback()
+
+    monkeypatch.setattr(api.threading, "Timer", _ImmediateTimer)
+    job = api._BacktestJob("finished-job")
+    api._running_jobs[job.key] = job
+
+    api._finish_job(job, result={"ok": True})
+
+    assert job.done is True
+    assert job.result == {"ok": True}
+    assert job.key not in api._running_jobs

@@ -4,7 +4,7 @@
 
 ## 必须遵守
 
-1. 只允许 `import polars as pl` 和 `from datetime import date/datetime`（date 类型参数比较需要），禁止 import 其他模块。
+1. Polars/历史策略允许 `polars`、`datetime`；矩阵策略允许 `numpy`、`app.backtest.matrix`。
 2. AI 策略只属于 `data/strategies/ai/`，`META.id` 使用用户给定的 `ai_` ID。
 3. 不要读写文件，不要使用 `open/exec/eval/compile/__import__/globals/locals/vars/dir/getattr/setattr/delattr/type/input`。
 4. `META.params` 只放用户可能调整的阈值；公式常数和固定窗口边界不必参数化。
@@ -24,6 +24,8 @@ META = {
     "name": "策略中文名",
     "description": "一句话说明策略逻辑",
     "tags": ["标签"],
+    "asset_types": ["stock"],
+    "timeframes": ["1d"],
     "basic_filter": {
         "price_min": 3,
         "price_max": 200,
@@ -39,6 +41,7 @@ META = {
     "limit": 100,
 }
 
+EXECUTION_BACKEND = "polars_expr"
 ENTRY_SIGNALS = []
 EXIT_SIGNALS = []
 STOP_LOSS = -0.05
@@ -68,6 +71,7 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
 
 ```python
 LOOKBACK_DAYS = 8
+EXECUTION_BACKEND = "python_history_legacy"
 
 def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
     if df.is_empty() or "date" not in df.columns:
@@ -78,9 +82,56 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
     return hist.filter(pl.col("close") > pl.col("_prev_close"))
 ```
 
+使用 `filter_history()` 时必须同时声明其读取的最终公开字段，例如：
+
+```python
+REQUIRED_FEATURES = {"ma20", "momentum_20d"}
+```
+
 `filter_history()` 必须返回所有匹配行，不要只过滤最新日期；回测需要全区间命中。
 
-**date 类型参数必须先转换再与 `date` 列比较**：params 里 `"type": "date"` 的参数从 JSON 传来是字符串（如 `"2024-01-01"`），而数据中 `date` 列是 Polars Date 类型，**不能直接比较**（报 InvalidOperationError）。必须先转换：
+## matrix_native 文件结构
+
+当请求明确指定 `matrix_native` 时，不得生成 `filter()` 或 `filter_history()`：
+
+```python
+import numpy as np
+from app.backtest.matrix import (
+    MarketDataMatrix,
+    SignalMatrix,
+    make_signal_matrix,
+    matrix_feature,
+)
+
+META = {
+    "id": "custom_matrix_example",
+    "name": "矩阵示例",
+    "description": "...",
+    "asset_types": ["stock"],
+    "timeframes": ["1d"],
+    "params": [],
+    "scoring": {},
+    "order_by": "score",
+    "descending": True,
+    "limit": 100,
+}
+EXECUTION_BACKEND = "matrix_native"
+
+class ExampleMatrixStrategy:
+    def required_fields(self) -> frozenset[str]:
+        return frozenset({"close", "ma20"})
+
+    def required_warmup_bars(self, params: dict) -> int:
+        return 60
+
+    def compute_signals(self, market: MarketDataMatrix, params: dict) -> SignalMatrix:
+        entry = market.close > matrix_feature(market, "ma20")
+        return make_signal_matrix(market.shape, entry=entry.astype(np.uint8))
+
+MATRIX_STRATEGY = ExampleMatrixStrategy()
+```
+
+**date 参数先转换再与 Polars Date 列比较**（JSON 值是字符串）：
 
 ```python
 from datetime import date as _date

@@ -28,7 +28,7 @@ const ONE_YEAR_AGO = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 1
 
 export function StrategyOptimizer() {
   const task = useOptimizerTask()
-  const { data: stratData } = useQuery({ queryKey: ['strategies'], queryFn: api.strategyList })
+  const { data: stratData } = useQuery({ queryKey: ['strategies'], queryFn: () => api.strategyList() })
   const strategies: StrategyDetail[] = stratData?.strategies ?? []
 
   // 切策略: 有任务在跑时先真正取消 (关 SSE + 后端 cancel + 清 localStorage), 不能静默丢
@@ -138,7 +138,7 @@ export function StrategyOptimizer() {
         )}
 
         {!result && !task?.isPending && (
-          <EmptyState title="参数优化" hint="选择策略、勾选要扫描的参数与优化目标，网格搜索会并行回测所有组合并按目标排序。" />
+          <EmptyState title="参数优化" hint="选择策略、勾选要扫描的参数与优化目标；任务会在独立 worker 中复用基础数据并串行执行组合。" />
         )}
 
         {result && (

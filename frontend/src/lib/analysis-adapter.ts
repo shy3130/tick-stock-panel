@@ -56,6 +56,19 @@ const DIMENSION_NAME_KEYS = [
   'name', '概念名称', '概念', '行业名称', '行业', '板块名称', '板块',
   'concept', 'industry', 'sector', 'theme', 'title', 'label',
 ]
+const INVALID_DIMENSION_VALUES = new Set(['nan', 'none', 'null'])
+
+function dimensionValue(raw: unknown): string {
+  const text = String(raw ?? '').trim()
+  return INVALID_DIMENSION_VALUES.has(text.toLowerCase()) ? '' : text
+}
+
+function dimensionValues(raw: unknown): string[] {
+  if (raw == null) return []
+  return String(raw).split(SEPARATORS)
+    .map(dimensionValue)
+    .filter(Boolean)
+}
 
 /** 检测行是否是"板块维度"结构（含成分股列表字段） */
 function detectConstituentField(fields: ExtDataField[]): string | null {
@@ -105,13 +118,9 @@ function parsePerStock(
   const map = new Map<string, StockRow[]>()
 
   for (const row of rows) {
-    const raw = row[dimensionField]
-    if (raw == null) continue
-    const text = String(raw).trim()
-    if (!text) continue
-
     // 支持多值分隔（如 "人工智能,芯片,5G"）
-    const values = text.split(SEPARATORS).map(s => s.trim()).filter(Boolean)
+    const values = dimensionValues(row[dimensionField])
+    if (!values.length) continue
     const stock: StockRow = { ...row, symbol: row.symbol ?? row.code ?? '' }
 
     for (const v of values) {
@@ -142,7 +151,7 @@ function parsePerDimension(
   const allStocks: StockRow[] = []
 
   const groups = rows.map(row => {
-    const key = String(row[nameField] ?? row[constituentField] ?? '').trim()
+    const key = dimensionValue(row[nameField] ?? row[constituentField])
     if (!key) return null
 
     // 成分股可能是字符串数组、对象数组、逗号分隔字符串

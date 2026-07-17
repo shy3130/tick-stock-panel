@@ -14,7 +14,6 @@ from app.strategy.engine import StrategyEngine
 
 def _request(tmp_path):
     engine = StrategyEngine(
-        enriched_loader=lambda _date: pl.DataFrame(),
         strategy_dirs=[
             tmp_path / "strategies" / "custom",
             tmp_path / "strategies" / "ai",
@@ -101,4 +100,37 @@ def filter(df, params):
 '''
 
     with pytest.raises(ValueError):
+        AIStrategyGenerator._validate_safety(code)
+
+
+def test_ai_strategy_safety_allows_static_matrix_method():
+    code = '''META = {"id": "ai_matrix", "name": "Matrix Strategy"}
+
+
+class MatrixStrategy:
+    @staticmethod
+    def compute_signals(market, params):
+        return None
+
+
+MATRIX_STRATEGY = MatrixStrategy()
+'''
+
+    AIStrategyGenerator._validate_safety(code)
+
+
+def test_ai_strategy_safety_rejects_other_matrix_method_decorators():
+    code = '''META = {"id": "ai_matrix", "name": "Matrix Strategy"}
+
+
+class MatrixStrategy:
+    @classmethod
+    def compute_signals(cls, market, params):
+        return None
+
+
+MATRIX_STRATEGY = MatrixStrategy()
+'''
+
+    with pytest.raises(ValueError, match="禁止使用函数装饰器"):
         AIStrategyGenerator._validate_safety(code)

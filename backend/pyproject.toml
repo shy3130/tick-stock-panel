@@ -18,6 +18,9 @@ dependencies = [
     "duckdb>=1.0",
     "pyarrow>=16.0",
     "pandas>=2.2",                # 仅在 BacktestService 边界使用,见 §7.4 / ADR-19
+    "psutil>=5.9",                # 独立回测 worker 的峰值 RSS 与退出后内存指标
+    # llvmlite 不再提供 macOS Intel wheel；该平台使用 Matrix 纯 Python fallback。
+    "numba>=0.65.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "fastexcel>=0.10",            # Polars 读取 xlsx/xls
     # TickFlow 官方 SDK
     "tickflow[all]>=0.1.23",
@@ -45,8 +48,8 @@ legacy-cpu = [
     "polars[rtcompat]>=1.0",
 ]
 
-# 回测依赖 vectorbt → numba → llvmlite,体积大且 macOS/Intel 上无预构建 wheel 时
-# 需要 brew install cmake 现场编译。挪到可选 extras,主依赖瘦身。
+# vectorbt 还会引入绘图、交互组件等完整分析栈，仍保持为可选 extras。
+# Matrix 引擎只直接依赖上面的 numba/llvmlite 编译内核。
 # 启用:`uv sync --extra backtest`
 backtest = [
     "vectorbt>=0.26",

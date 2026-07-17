@@ -9,6 +9,8 @@ export interface OptimizeProgress {
   done: number
   total: number
   best_score: number | null
+  shared_matrix_bytes?: number
+  elapsed_ms?: number
 }
 
 export interface OptimizeResultRow {
@@ -27,6 +29,16 @@ export interface OptimizeResult {
   best_params: Record<string, any> | null
   best_score: number | null
   results: OptimizeResultRow[]
+  requested_max_workers: number
+  effective_workers: number
+  shared_market_data: boolean
+  shared_market_data_bytes: number
+  prepare_ms: number
+  best_backtest?: Record<string, any> | null
+  matrix_compute_cache?: Record<string, any>
+  timing_ms?: Record<string, number>
+  performance?: Record<string, any>
+  worker?: Record<string, any>
   elapsed_ms: number
 }
 
@@ -44,6 +56,7 @@ export interface StartOptimizeParams {
   objective: string
   direction?: string
   max_workers?: number
+  matrix_cache_max_mb?: number
   params?: Record<string, any> | null       // 未扫描参数固定为用户当前值
   overrides?: Record<string, any> | null     // 策略当前的 basic_filter/信号/风控覆盖
   symbols?: string[] | null
@@ -212,6 +225,7 @@ export function startOptimize(params: StartOptimizeParams): void {
     objective: params.objective,
     direction: params.direction,
     max_workers: params.max_workers,
+    matrix_cache_max_mb: params.matrix_cache_max_mb,
     params: params.params ? JSON.stringify(params.params) : undefined,
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     symbols: params.symbols?.join(','),

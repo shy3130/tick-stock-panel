@@ -25,7 +25,7 @@
 - 修改止损/持有 → 更新 STOP_LOSS / MAX_HOLD_DAYS
 - 增减告警 → 更新 ALERTS
 - 调整评分 → 更新 META["scoring"]，权重总和保持 100
-- 修改筛选逻辑 → 更新 filter()；如果新增/删除了历史回溯逻辑，同步改为或移除 filter_history() 与 LOOKBACK_DAYS
+- 修改筛选逻辑 → 更新唯一公式；新增历史回溯时切换为 `python_history_legacy` + `filter_history()`，移除回溯时切回 `polars_expr` + `filter()`，不得同时保留两套公式
 
 ## 规则
 

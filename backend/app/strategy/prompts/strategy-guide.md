@@ -98,6 +98,8 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
 
 **不需要** `filter_history()` 的场景：只用当日指标列做比较（如 close > ma60、rsi_14 < 30）。
 
+策略必须显式声明唯一执行后端：普通表达式使用 `EXECUTION_BACKEND = "polars_expr"`，历史窗口使用 `EXECUTION_BACKEND = "python_history_legacy"`；不要同时定义 `filter()` 和 `filter_history()`。`META` 同时声明 `asset_types` 与 `timeframes`。
+
 ```python
 LOOKBACK_DAYS = 8  # 回看交易日数，根据策略需要设置
 
@@ -155,7 +157,13 @@ anchor_date = _date.fromisoformat(anchor_raw) if isinstance(anchor_raw, str) els
 
 ## 3. 常用指标列（参考，可直接使用）
 
-以下列在数据中已预计算，可直接引用。**但如果这些列无法满足策略需求，可以不用，自行在 `filter_history()` 中基于 enriched 表的数据（已复权，含所有指标列和信号列）计算任何需要的字段。**
+以下列可直接引用。使用 `filter_history()` 或其他无法静态解析的 Python 逻辑时，必须声明最终依赖的公开字段，基础 OHLCV 和指标中间列不需要声明：
+
+```python
+REQUIRED_FEATURES = {"ma20", "momentum_20d", "vol_ratio_5d"}
+```
+
+未声明时回测会明确告警并暂时回退到全量特征计算。
 
 ### 通用列
 
@@ -275,7 +283,7 @@ anchor_date = _date.fromisoformat(anchor_raw) if isinstance(anchor_raw, str) els
 3. 用户可能调节的数值阈值通过 `params` 暴露；公式常数、固定窗口边界、一次性内部变量不必强行参数化
 4. `scoring` 权重总和必须为 1.0
 5. 遵循 A 股 T+1 规则 (当日买入次日才能卖出)
-6. 只允许 `import polars as pl` 和 `from datetime import date/datetime`（date 类型参数比较需要），禁止 import 其他模块
+6. Polars 策略允许 `import polars as pl` 和 `from datetime import date/datetime`；矩阵策略只允许 NumPy 和 `app.backtest.matrix` 协议/算子
 7. 禁止使用 `open()`, `exec()`, `eval()`, `os`, `sys`, `subprocess`
 8. **贴合用户需求优先**：第3/4节的指标列和信号列仅供参考，能用则用；如果用户需求需要自定义计算（如"前高""上次涨停价""N日内某个事件后X天"），直接在 `filter_history()` 中自行设计和计算，不需要局限于已有列
 9. `filter_history()` 中优先用 Polars 向量化语法；仅在复杂状态机无法清晰表达时，才用 `partition_by("symbol")` 逐股票分析

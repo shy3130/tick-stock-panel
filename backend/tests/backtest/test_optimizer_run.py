@@ -14,11 +14,15 @@ from app.backtest.optimizer import OptimizeConfig, StrategyOptimizer
 @dataclass
 class _FakeDef:
     meta: dict
+    execution_backend: str = "polars_expr"
 
 
 class _FakeEngine:
-    def __init__(self, params_meta):
-        self._def = _FakeDef(meta={"params": params_meta})
+    def __init__(self, params_meta, execution_backend="polars_expr"):
+        self._def = _FakeDef(
+            meta={"params": params_meta},
+            execution_backend=execution_backend,
+        )
 
     def get(self, strategy_id):
         return self._def
@@ -30,17 +34,50 @@ class _FakeResult:
     error: str | None = None
 
 
+class _FakeCache:
+    def __init__(self):
+        self.closed = False
+
+    def snapshot(self):
+        return {"current_bytes": 64, "hits": 2}
+
+    def close(self):
+        self.closed = True
+
+
 class _FakeService:
     """run() 依据 params 返回受控 stats: sortino = ma_proximity 的映射, 便于校验排序。"""
 
     def __init__(self, score_fn):
         self.score_fn = score_fn
         self.calls = []
+        self.prepared_calls = []
+        self.prepared_values = []
+        self.result_policies = []
+        self.matrix_cache_max_bytes = None
+        self.cache = _FakeCache()
         self._lock = threading.Lock()
 
-    def run(self, config, progress_cb=None, cancel_event=None):
+    def prepare_matrix_optimization(self, configs, *, matrix_cache_max_bytes):
+        self.prepared_calls.append(configs)
+        self.matrix_cache_max_bytes = matrix_cache_max_bytes
+        return type("Prepared", (), {
+            "market_data": type("Market", (), {"nbytes": 1234})(),
+            "compute_cache": self.cache,
+        })()
+
+    def run(
+        self,
+        config,
+        progress_cb=None,
+        cancel_event=None,
+        prepared=None,
+        result_policy=None,
+    ):
         with self._lock:
             self.calls.append(dict(config.params or {}))
+            self.prepared_values.append(prepared)
+            self.result_policies.append(result_policy)
         return self.score_fn(config.params or {})
 
 
@@ -49,8 +86,11 @@ PARAMS_META = [
 ]
 
 
-def _optimizer(score_fn):
-    return StrategyOptimizer(_FakeService(score_fn), _FakeEngine(PARAMS_META))
+def _optimizer(score_fn, execution_backend="polars_expr"):
+    return StrategyOptimizer(
+        _FakeService(score_fn),
+        _FakeEngine(PARAMS_META, execution_backend=execution_backend),
+    )
 
 
 def _cfg(**kw):
@@ -82,8 +122,13 @@ def test_all_combos_executed_once():
     out = opt.optimize(_cfg(param_grid={"ma_proximity": [0.01, 0.02, 0.03, 0.04, 0.05]}))
     assert out["n_combinations"] == 5
     # 每组恰跑一次
-    ran = sorted(c["ma_proximity"] for c in opt.service.calls)
+    ran = sorted(
+        call["ma_proximity"]
+        for call, policy in zip(opt.service.calls, opt.service.result_policies, strict=True)
+        if policy is not None
+    )
     assert ran == [0.01, 0.02, 0.03, 0.04, 0.05]
+    assert opt.service.result_policies.count(None) == 1
 
 
 def test_min_direction_objective_restores_display_sign():
@@ -144,7 +189,9 @@ def test_base_params_merged_and_overridden_by_sweep():
     opt = _optimizer(score)
     opt.optimize(_cfg(base_params={"ma_proximity": 0.99, "other": 7}))
     # 每次 run 收到的 params: ma_proximity 被 combo 覆盖, other 保留
-    for call in opt.service.calls:
+    for call, policy in zip(opt.service.calls, opt.service.result_policies, strict=True):
+        if policy is None:
+            continue
         assert call["other"] == 7
         assert call["ma_proximity"] in (0.01, 0.02, 0.03)
 
@@ -187,9 +234,124 @@ def test_progress_callback_reports_done_total():
     def cb(msg):
         seen.append(msg)
     _optimizer(score).optimize(_cfg(), progress_cb=cb)
-    assert len(seen) == 3
+    assert len(seen) == 4
+    assert seen[-1]["type"] == "optimizer_finalize"
     assert seen[-1]["done"] == 3
     assert all(m["total"] == 3 for m in seen)
+
+
+def test_matrix_optimizer_prepares_once_and_reuses_same_market_data():
+    def score(p):
+        return _FakeResult(stats={"sortino": p["ma_proximity"]})
+
+    opt = _optimizer(score, execution_backend="matrix_native")
+    out = opt.optimize(_cfg(max_workers=8))
+
+    assert len(opt.service.prepared_calls) == 1
+    assert len(opt.service.prepared_calls[0]) == 3
+    assert len({id(value) for value in opt.service.prepared_values}) == 1
+    assert opt.service.prepared_values[0] is not None
+    assert out["requested_max_workers"] == 8
+    assert out["effective_workers"] == 1
+    assert out["shared_market_data"] is True
+    assert out["shared_market_data_bytes"] == 1234
+    assert out["best_backtest"] is not None
+    assert out["matrix_compute_cache"]["released"] is True
+    assert opt.service.cache.closed is True
+    assert opt.service.matrix_cache_max_bytes == 512 * 1024 * 1024
+
+
+def test_optimizer_trial_policy_skips_mc_but_best_backtest_is_full():
+    def score(p):
+        return _FakeResult(stats={"sortino": p["ma_proximity"]})
+
+    opt = _optimizer(score)
+    opt.optimize(_cfg())
+
+    trial_policies = [policy for policy in opt.service.result_policies if policy is not None]
+    assert trial_policies
+    assert all(policy.include_monte_carlo is False for policy in trial_policies)
+    assert opt.service.result_policies[-1] is None
+
+
+def test_mc_objective_trial_policy_keeps_monte_carlo():
+    def score(p):
+        return _FakeResult(stats={"mc_maxdd_p95": -p["ma_proximity"]})
+
+    opt = _optimizer(score)
+    opt.optimize(_cfg(objective="mc_maxdd_p95"))
+    trial_policies = [policy for policy in opt.service.result_policies if policy is not None]
+    assert all(policy.include_monte_carlo is True for policy in trial_policies)
+
+
+def test_missing_objective_is_an_explicit_trial_error():
+    def score(p):
+        return _FakeResult(stats={"sharpe": 1.0})
+
+    out = _optimizer(score).optimize(_cfg())
+    assert out["best_params"] is None
+    assert all("缺少优化目标字段" in row["error"] for row in out["results"])
+
+
+def test_matrix_cache_closes_when_progress_callback_raises_after_prepare():
+    def score(p):
+        return _FakeResult(stats={"sortino": 1.0})
+
+    opt = _optimizer(score, execution_backend="matrix_native")
+
+    def fail_on_prepare(message):
+        if message["type"] == "optimizer_prepare":
+            raise RuntimeError("progress failed")
+
+    with pytest.raises(RuntimeError, match="progress failed"):
+        opt.optimize(_cfg(), progress_cb=fail_on_prepare)
+    assert opt.service.cache.closed is True
+
+
+def test_matrix_cache_closes_when_cancelled_after_first_trial():
+    event = threading.Event()
+
+    def score(p):
+        event.set()
+        return _FakeResult(stats={"sortino": 1.0})
+
+    opt = _optimizer(score, execution_backend="matrix_native")
+    out = opt.optimize(_cfg(), cancel_event=event)
+
+    assert out["n_completed"] == 1
+    assert out["best_backtest"] is None
+    assert opt.service.cache.closed is True
+
+
+def test_matrix_cache_closes_when_best_backtest_raises():
+    call_count = 0
+
+    def score(p):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 4:
+            raise RuntimeError("final failed")
+        return _FakeResult(stats={"sortino": p["ma_proximity"]})
+
+    opt = _optimizer(score, execution_backend="matrix_native")
+    with pytest.raises(RuntimeError, match="final failed"):
+        opt.optimize(_cfg())
+    assert opt.service.cache.closed is True
+
+
+def test_cancelled_matrix_optimizer_skips_expensive_preparation():
+    event = threading.Event()
+    event.set()
+
+    def score(p):
+        return _FakeResult(stats={"sortino": 1.0})
+
+    opt = _optimizer(score, execution_backend="matrix_native")
+    out = opt.optimize(_cfg(), cancel_event=event)
+
+    assert opt.service.prepared_calls == []
+    assert opt.service.calls == []
+    assert out["n_completed"] == 0
 
 
 def test_invalid_objective_rejected():

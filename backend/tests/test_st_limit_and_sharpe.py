@@ -10,23 +10,32 @@ from __future__ import annotations
 from datetime import date
 
 import polars as pl
+import pytest
 
 from app.backtest.factor import FactorBacktestService
+from app.backtest.matrix import build_market_data_matrix
 from app.indicators.pipeline import compute_limit_signals
-from app.strategy.builtin.near_limit_up import _limit_pct
+from app.strategy.builtin.near_limit_up import MATRIX_STRATEGY
 
 
 def test_near_limit_pct_st_only_on_main_board():
     df = pl.DataFrame({
         "symbol": ["300001", "688001", "600001", "000001", "830001.BJ"],
         "name": ["*ST创业", "科创ST", "*ST主板", "平安银行", "北交ST"],
+        "date": [date(2024, 1, 2)] * 5,
+        "open": [10.0] * 5,
+        "high": [10.0] * 5,
+        "low": [10.0] * 5,
+        "close": [10.0] * 5,
+        "volume": [1000.0] * 5,
     })
-    lp = df.with_columns(_limit_pct().alias("lp"))["lp"].to_list()
-    assert lp[0] == 0.20  # 创业板 ST → 20% (不再是 5%)
-    assert lp[1] == 0.20  # 科创板 ST → 20%
-    assert lp[2] == 0.05  # 主板 ST → 5%
-    assert lp[3] == 0.10  # 主板普通 → 10%
-    assert lp[4] == 0.30  # 北交所 → 30%
+    market = build_market_data_matrix(df)
+    limit_by_symbol = dict(zip(market.symbols, MATRIX_STRATEGY._limit_pct(market), strict=True))
+    assert limit_by_symbol["300001"] == pytest.approx(0.20)  # 创业板 ST → 20%
+    assert limit_by_symbol["688001"] == pytest.approx(0.20)  # 科创板 ST → 20%
+    assert limit_by_symbol["600001"] == pytest.approx(0.05)  # 主板 ST → 5%
+    assert limit_by_symbol["000001"] == pytest.approx(0.10)  # 主板普通 → 10%
+    assert limit_by_symbol["830001.BJ"] == pytest.approx(0.30)  # 北交所 → 30%
 
 
 def _two_day(symbol: str, prev_close: float, today_close: float) -> pl.DataFrame:

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -23,172 +22,6 @@ logger = logging.getLogger(__name__)
 # ── 进程级历史数据缓存 (避免 run_all 每次重新扫描 parquet + 计算指标) ──
 _history_cache: dict[tuple[str, date, int], tuple[float, pl.DataFrame]] = {}
 _HISTORY_CACHE_TTL = 120.0  # 秒
-
-
-# 内置预设策略 — Polars 表达式方式
-PRESET_STRATEGIES: dict[str, dict] = {
-    "trend_breakout": {
-        "name": "趋势突破",
-        "description": "MA60 上方 + 60 日新高 + 量能 ≥ 2 倍均量",
-        "filter": (
-            (pl.col("close") > pl.col("ma60"))
-            & pl.col("signal_n_day_high").fill_null(False)
-            & (pl.col("vol_ratio_5d") >= 2.0)
-        ),
-        "order_by": "momentum_60d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "ma_golden_cross": {
-        "name": "MA 金叉",
-        "description": "MA5 上穿 MA20 当日触发,量能配合",
-        "filter": (
-            pl.col("signal_ma_golden_5_20").fill_null(False)
-            & (pl.col("vol_ratio_5d") >= 1.2)
-            & (pl.col("close") > pl.col("ma60"))
-        ),
-        "order_by": "momentum_20d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "macd_golden": {
-        "name": "MACD 金叉放量",
-        "description": "MACD 金叉当日 + 量能放大",
-        "filter": (
-            pl.col("signal_macd_golden").fill_null(False)
-            & (pl.col("vol_ratio_5d") >= 1.5)
-        ),
-        "order_by": "momentum_60d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "volume_price_surge": {
-        "name": "量价齐升",
-        "description": "突破 MA20 + 放量 + 收阳",
-        "filter": (
-            pl.col("signal_ma20_breakout").fill_null(False)
-            & (pl.col("vol_ratio_5d") >= 2.0)
-            & (pl.col("close") > pl.col("open"))
-        ),
-        "order_by": "vol_ratio_5d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "low_volatility_leader": {
-        "name": "低波动龙头",
-        "description": "20 日动量为正 + 年化波动 < 30% + MA20 上方",
-        "filter": (
-            (pl.col("momentum_20d") > 0)
-            & (pl.col("annual_vol_20d") < 0.30)
-            & (pl.col("close") > pl.col("ma20"))
-        ),
-        "order_by": "momentum_60d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "broken_board_recovery": {
-        "name": "断板反包",
-        "description": "连板 ≥2 后断板 1-2 天，出现放量反包信号",
-        "filter": (
-            pl.col("signal_limit_up").fill_null(False)
-            & (pl.col("vol_ratio_5d") >= 1.5)
-            & (pl.col("change_pct") > 0.03)
-        ),
-        "order_by": "change_pct",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock"],
-    },
-    "oversold_bounce": {
-        "name": "超跌反弹",
-        "description": "RSI14 < 30 超卖区 + 当日收阳 + 放量，抄底信号",
-        "filter": (
-            (pl.col("rsi_14") < 30)
-            & (pl.col("close") > pl.col("open"))
-            & (pl.col("vol_ratio_5d") >= 1.2)
-        ),
-        "order_by": "rsi_14",
-        "descending": False,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "boll_breakout": {
-        "name": "布林突破",
-        "description": "突破布林上轨 + 放量，强势加速信号",
-        "filter": (
-            pl.col("signal_boll_breakout_upper").fill_null(False)
-            & (pl.col("vol_ratio_5d") >= 1.5)
-        ),
-        "order_by": "vol_ratio_5d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "bullish_alignment": {
-        "name": "均线多头",
-        "description": "MA5 > MA10 > MA20 > MA60 多头排列 + 短期动量为正",
-        "filter": (
-            (pl.col("ma5") > pl.col("ma10"))
-            & (pl.col("ma10") > pl.col("ma20"))
-            & (pl.col("ma20") > pl.col("ma60"))
-            & (pl.col("momentum_20d") > 0)
-        ),
-        "order_by": "momentum_60d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "consecutive_limit_ups": {
-        "name": "连板股",
-        "description": "当日涨停且连续涨停 ≥ 2 天，强势追涨",
-        "filter": (
-            pl.col("signal_limit_up").fill_null(False)
-            & (pl.col("consecutive_limit_ups") >= 2)
-        ),
-        "order_by": "consecutive_limit_ups",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock"],
-    },
-    "pullback_to_support": {
-        "name": "缩量回踩",
-        "description": "回踩 MA20 附近 + 缩量 + 中期趋势向上",
-        "filter": (
-            (pl.col("close") > pl.col("ma20") * 0.98)
-            & (pl.col("close") < pl.col("ma20") * 1.02)
-            & (pl.col("vol_ratio_5d") < 0.8)
-            & (pl.col("close") > pl.col("ma60"))
-            & (pl.col("momentum_20d") > 0)
-        ),
-        "order_by": "momentum_60d",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-    "n_day_low_reversal": {
-        "name": "新低反转",
-        "description": "触及 60 日新低后当日收阳放量，反转信号",
-        "filter": (
-            pl.col("signal_n_day_low").fill_null(False)
-            & (pl.col("close") > pl.col("open"))
-            & (pl.col("vol_ratio_5d") >= 1.5)
-        ),
-        "order_by": "change_pct",
-        "descending": True,
-        "limit": 100,
-        "asset_types": ["stock", "etf"],
-    },
-}
-
-
-def strategy_supports_asset(strat: dict, asset_type: str) -> bool:
-    """策略是否支持该资产类型。默认仅 stock（未标注 asset_types 的自定义/AI 策略保守视为股票专用）。"""
-    return asset_type in strat.get("asset_types", ["stock"])
 
 
 @dataclass
@@ -312,7 +145,11 @@ class ScreenerService:
 
         读取历史数据作为指标计算的 warmup, 计算完成后只返回目标日期的行。
         """
-        from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals
+        from app.indicators.pipeline import (
+            compute_indicators,
+            compute_limit_signals,
+            compute_signals,
+        )
 
         # 加载 warmup 历史 (目标日期前 ~120 天)
         enriched_dir = self.repo.store.data_dir / self._enriched_dirname
@@ -394,7 +231,11 @@ class ScreenerService:
         # 优先级 3: scan_parquet + compute_indicators (慢路径, ~5s)
         logger.warning("_load_enriched_history cache miss, computing indicators (%s, %d)...",
                        target_date, lookback_days)
-        from app.indicators.pipeline import compute_indicators, compute_signals, compute_limit_signals
+        from app.indicators.pipeline import (
+            compute_indicators,
+            compute_limit_signals,
+            compute_signals,
+        )
 
         warmup = 60
         start = target_date - timedelta(days=min((lookback_days + warmup) * 2, 180))
@@ -519,147 +360,41 @@ class ScreenerService:
             elapsed_ms=elapsed,
         )
 
-    def run_preset(
+    def build_strategy_context(
         self,
-        strategy_id: str,
+        engine,
         as_of: date,
-        pool: list[str] | None = None,
-        precomputed: pl.DataFrame | None = None,
-        basic_filter: dict | None = None,
-        filter_fn: Callable[[pl.DataFrame, dict], pl.Expr] | None = None,
-        strategy_params: dict | None = None,
-        display_limit: int | None = None,
-    ) -> ScreenerResult:
-        """预设策略选股 — 从 enriched 读取预计算好的指标列后过滤。
+        strategy_ids: list[str],
+        *,
+        timeframe: str = "1d",
+        params_map: dict[str, dict] | None = None,
+        overrides_map: dict[str, dict] | None = None,
+        current: pl.DataFrame | None = None,
+        market=None,
+        cache_key: str | None = None,
+    ):
+        """按调用方要求装配标准策略数据上下文，不解释策略公式。"""
+        from app.strategy.engine import StrategyDataContext
 
-        - precomputed 不为空: 直接复用（run_all 场景）
-        - precomputed 为空: 从 enriched 读目标日期
-        - basic_filter: 用户保存的基础参数过滤（boards、价格等）
-        - filter_fn/strategy_params: 内置策略文件的参数化过滤；未传时兼容旧预设表达式
-        """
-        t0 = time.perf_counter()
-
-        strat = PRESET_STRATEGIES.get(strategy_id)
-        if not strat:
-            raise ValueError(f"unknown strategy: {strategy_id}")
-
-        # 资产兼容拦截: 该策略不支持当前资产类型时直接返回空 (避免命中 ETF 不存在的列)
-        if not strategy_supports_asset(strat, self.asset_type):
-            return ScreenerResult(as_of=as_of, strategy=strategy_id)
-
-        if precomputed is not None and not precomputed.is_empty():
-            df = precomputed
-        else:
-            df = self._load_enriched_for_date(as_of)
-            if df.is_empty():
-                return ScreenerResult(as_of=as_of, strategy=strategy_id)
-
-        # 应用用户基础参数过滤（boards、价格区间等）
-        if basic_filter and basic_filter.get("enabled", True):
-            df = self._apply_basic_filter(df, basic_filter)
-
-        # 应用策略过滤
-        filter_expr = filter_fn(df, strategy_params or {}) if filter_fn else strat["filter"]
-        df = df.filter(filter_expr)
-
-        # 应用 pool
-        if pool:
-            df = df.filter(pl.col("symbol").is_in(pool))
-
-        # 排序 + 限制
-        order_col = strat["order_by"]
-        if order_col in df.columns:
-            df = df.sort(order_col, descending=strat.get("descending", True))
-
-        # display_limit: None=不限制, 0=全部, N=前N个
-        if display_limit == 0:
-            limit = None  # 不限制
-        elif display_limit is not None:
-            limit = display_limit
-        else:
-            limit = None  # 未配置时默认不限制
-        if limit is not None and limit > 0:
-            df = df.head(limit)
-
-        # 基于排序列生成 0-100 评分 (与 StrategyEngine 统一)
-        if order_col in df.columns and not df.is_empty():
-            col_vals = df[order_col].cast(pl.Float64)
-            col_min = col_vals.min()
-            col_max = col_vals.max()
-            col_range = col_max - col_min
-            if col_range and col_range > 0:
-                normalized = (col_vals - col_min) / col_range
-            else:
-                normalized = pl.Series("norm", [0.5] * len(df))
-            if not strat.get("descending", True):
-                normalized = 1.0 - normalized
-            df = df.with_columns((normalized * 100).alias("score"))
-
-        rows = df.to_dicts()
-        elapsed = (time.perf_counter() - t0) * 1000
-
-        # sanitize
-        for r in rows:
-            for k, v in list(r.items()):
-                if isinstance(v, float) and (v != v or abs(v) == float("inf")):
-                    r[k] = None
-
-        return ScreenerResult(
-            as_of=as_of,
-            strategy=strategy_id,
-            rows=rows,
-            total=len(rows),
-            elapsed_ms=elapsed,
+        if current is None:
+            current = self._load_enriched_for_date(as_of)
+        history_bars = engine.required_history_bars(
+            strategy_ids,
+            params_map=params_map,
+            overrides_map=overrides_map,
         )
-
-    @staticmethod
-    def _apply_basic_filter(df: pl.DataFrame, bf: dict) -> pl.DataFrame:
-        """应用用户基础参数过滤（boards、价格区间、市值等）"""
-        exprs: list[pl.Expr] = []
-        if bf.get("price_min") is not None:
-            exprs.append(pl.col("close") >= bf["price_min"])
-        if bf.get("price_max") is not None:
-            exprs.append(pl.col("close") <= bf["price_max"])
-        if bf.get("float_cap_min") is not None and "float_shares" in df.columns:
-            exprs.append(pl.col("close") * pl.col("float_shares") >= bf["float_cap_min"])
-        if bf.get("float_cap_max") is not None and "float_shares" in df.columns:
-            exprs.append(pl.col("close") * pl.col("float_shares") <= bf["float_cap_max"])
-        if bf.get("amount_min") is not None:
-            exprs.append(pl.col("amount") >= bf["amount_min"])
-        if bf.get("amount_max") is not None:
-            exprs.append(pl.col("amount") <= bf["amount_max"])
-        if bf.get("turnover_min") is not None and "turnover_rate" in df.columns:
-            exprs.append(pl.col("turnover_rate") >= bf["turnover_min"])
-        if bf.get("turnover_max") is not None and "turnover_rate" in df.columns:
-            exprs.append(pl.col("turnover_rate") <= bf["turnover_max"])
-        if bf.get("exclude_st") and "name" in df.columns:
-            exprs.append(~pl.col("name").str.contains("(?i)ST|\\*ST|退"))
-        # 板块过滤
-        boards = bf.get("boards")
-        if boards and isinstance(boards, list) and len(boards) > 0:
-            board_exprs: list[pl.Expr] = []
-            for b in boards:
-                if b == "沪主板":
-                    board_exprs.append(pl.col("symbol").str.starts_with("60"))
-                elif b == "深主板":
-                    board_exprs.append(
-                        pl.col("symbol").str.starts_with("00")
-                        | pl.col("symbol").str.starts_with("001")
-                    )
-                elif b == "创业板":
-                    board_exprs.append(
-                        pl.col("symbol").str.starts_with("300")
-                        | pl.col("symbol").str.starts_with("301")
-                    )
-                elif b == "科创板":
-                    board_exprs.append(pl.col("symbol").str.starts_with("688"))
-                elif b == "北交所":
-                    board_exprs.append(pl.col("symbol").str.contains(r"\.BJ$"))
-            if board_exprs:
-                exprs.append(pl.any_horizontal(board_exprs))
-        if exprs:
-            return df.filter(pl.all_horizontal(exprs))
-        return df
+        history = None
+        if history_bars > 1:
+            history = self._load_enriched_history(as_of, history_bars)
+        return StrategyDataContext(
+            asset_type=self.asset_type,
+            timeframe=timeframe,
+            as_of=as_of,
+            current=current,
+            history=history,
+            market=market,
+            cache_key=cache_key,
+        )
 
     def latest_date(self) -> date | None:
         if self.asset_type != "stock":

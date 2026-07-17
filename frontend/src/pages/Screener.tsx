@@ -182,7 +182,12 @@ export function Screener() {
   // 进入页面自动跑策略池中的策略，获取命中数
   const runAll = useMutation({
     mutationFn: ({ date, strategyIds }: { date?: string; strategyIds?: string[] } = {}) =>
-      api.screenerRunAll(date, strategyIds ?? visiblePool, extColumnsParam || undefined),
+      api.screenerRunAll(
+        date,
+        strategyIds ?? visiblePool,
+        extColumnsParam || undefined,
+        assetType,
+      ),
     onSuccess: (data) => {
       if (data.as_of) setAsOf(data.as_of)
     },

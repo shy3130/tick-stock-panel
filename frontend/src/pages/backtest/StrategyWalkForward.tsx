@@ -70,7 +70,7 @@ function OosEquityChart({ curve }: { curve: { fold: number; date: string; value:
 
 export function StrategyWalkForward() {
   const task = useWalkForwardTask()
-  const { data: stratData } = useQuery({ queryKey: ['strategies'], queryFn: api.strategyList })
+  const { data: stratData } = useQuery({ queryKey: ['strategies'], queryFn: () => api.strategyList() })
   const strategies: StrategyDetail[] = stratData?.strategies ?? []
 
   // 切策略: 有任务在跑时先真正取消 (关 SSE + 后端 cancel + 清 localStorage), 不能静默丢

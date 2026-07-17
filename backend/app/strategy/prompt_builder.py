@@ -22,7 +22,14 @@ def _load_doc(name: str) -> str:
 DIRECTION_CN = {"long": "做多", "short": "做空", "monitor": "监控"}
 
 
-def build_step1(name: str, description: str, direction: str, rules: str, strategy_id: str = "") -> str:
+def build_step1(
+    name: str,
+    description: str,
+    direction: str,
+    rules: str,
+    strategy_id: str = "",
+    execution_backend: str = "polars_expr",
+) -> str:
     """步骤1：规则 → 完整策略代码（参数 + 信号 + 评分 + 告警）
 
     注意: 生成规范已在 ai_generator.py 的 system prompt 中加载，
@@ -35,13 +42,14 @@ def build_step1(name: str, description: str, direction: str, rules: str, strateg
 策略名称：{name}{id_line}
 策略描述：{description}
 选股方向：{DIRECTION_CN.get(direction, direction)}
+执行后端：{execution_backend}
 策略规则：
 {rules}
 
 输出要求：
 1. 严格遵循系统提示中的策略文件结构和安全限制。
-2. 根据规则自行判断使用 filter() 或 filter_history()。
-3. 生成完整 META、ENTRY_SIGNALS、EXIT_SIGNALS、STOP_LOSS、MAX_HOLD_DAYS、ALERTS、RULES 和筛选函数。
+2. 严格使用指定执行后端；matrix_native 只定义 MATRIX_STRATEGY，polars_expr 只定义 filter()。若 polars 规则确需历史窗口，改用 python_history_legacy + filter_history()。
+3. META 必须声明 asset_types 和 timeframes，并生成完整执行与交易元数据。
 4. 只输出 Python 代码。"""
 
 

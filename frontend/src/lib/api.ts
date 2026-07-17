@@ -406,6 +406,9 @@ export interface StrategyDetail {
   description: string
   tags: string[]
   source: 'builtin' | 'custom' | 'ai'
+  execution_backend: 'polars_expr' | 'matrix_native' | 'python_history_legacy'
+  asset_types: string[]
+  timeframes: string[]
   version: string
   basic_filter: Record<string, any>
   params: StrategyParamDef[]
@@ -1373,8 +1376,12 @@ export const api = {
         : '/api/watchlist/enriched',
     ),
 
-  screenerStrategies: (assetType: 'stock' | 'etf' = 'stock') =>
-    request<{ presets: ScreenerStrategy[]; load_errors?: StrategyLoadError[] }>(`/api/screener/strategies?asset_type=${assetType}`),
+  screenerStrategies: async (assetType: 'stock' | 'etf' = 'stock') => {
+    const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
+      `/api/strategies?asset_type=${assetType}&timeframe=1d`,
+    )
+    return { presets: data.strategies, load_errors: data.load_errors }
+  },
   screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
@@ -1385,9 +1392,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null, asset_type: assetType }),
     }),
-  screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string) =>
+  screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
-      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null }) },
+      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null, asset_type: assetType, timeframe: '1d' }) },
     ),
   screenerCached: (extColumns?: string) =>
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }>; today_ever_matched: Record<string, string[]> | null; today_ever_rows: Record<string, Record<string, any>> | null; updated_at: number | null }>(
@@ -1913,8 +1920,15 @@ export const api = {
   },
 
   // ===== Strategy Engine =====
-  strategyList: () =>
-    request<{ strategies: StrategyDetail[] }>('/api/strategies'),
+  strategyList: (assetType?: 'stock' | 'etf', timeframe = '1d') => {
+    const params = new URLSearchParams()
+    if (assetType) params.set('asset_type', assetType)
+    if (timeframe) params.set('timeframe', timeframe)
+    const qs = params.toString()
+    return request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
+      `/api/strategies${qs ? `?${qs}` : ''}`,
+    )
+  },
 
   strategyGet: (id: string) =>
     request<StrategyDetail>(`/api/strategies/${id}`),

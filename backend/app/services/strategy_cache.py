@@ -73,6 +73,14 @@ def read_cache(data_dir: Path) -> dict | None:
         return _read_cache_unlocked(data_dir)
 
 
+def clear_cache(data_dir: Path) -> None:
+    """删除策略结果缓存；策略代码 reload 后避免继续展示旧公式结果。"""
+    path = _cache_path(data_dir)
+    with _file_lock:
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".tmp").unlink(missing_ok=True)
+
+
 def _read_cache_unlocked(data_dir: Path) -> dict | None:
     """实际读取逻辑 (不持锁)。供 read_cache 与 write_cache 复用, 避免重入死锁。"""
     path = _cache_path(data_dir)

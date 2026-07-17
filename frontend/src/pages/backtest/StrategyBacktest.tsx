@@ -204,7 +204,17 @@ const mergeStrategyParams = (detail: StrategyDetail, values?: Record<string, any
   ...strategyDefaultParams(detail),
   ...(values ?? {}),
 })
-const buildDefaultOverrides = (detail: StrategyDetail) => ({
+const normalizeStrategyOverrides = (detail: StrategyDetail, values?: Record<string, any> | null) => {
+  const next = { ...(values ?? {}) }
+  if (detail.execution_backend === 'matrix_native') {
+    // MatrixStrategy.compute_signals() owns entry/exit formulas. Remove both
+    // current and legacy persisted column overrides before any request.
+    delete next.entry_signals
+    delete next.exit_signals
+  }
+  return next
+}
+const buildDefaultOverrides = (detail: StrategyDetail) => normalizeStrategyOverrides(detail, {
   basic_filter: { ...detail.basic_filter },
   entry_signals: detail.entry_signals.map(toSignalId),
   exit_signals: detail.exit_signals.map(toSignalId),
@@ -823,7 +833,7 @@ export function StrategyBacktest() {
     loadedStrategyRef.current = detail.id
     if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
       setStrategyParams(mergeStrategyParams(detail, saved.params))
-      setOverrides(saved.overrides ?? buildDefaultOverrides(detail))
+      setOverrides(normalizeStrategyOverrides(detail, saved.overrides ?? buildDefaultOverrides(detail)))
       return
     }
     resetConfigFromDetail(detail)
@@ -864,6 +874,9 @@ export function StrategyBacktest() {
 
   const handleRun = () => {
     if (!selectedStrategy) return
+    const requestOverrides = detail
+      ? normalizeStrategyOverrides(detail, overrides)
+      : overrides
     startBacktest({
       strategy_id: selectedStrategy,
       asset_type: assetType,
@@ -881,7 +894,7 @@ export function StrategyBacktest() {
       initial_capital: Number(initialCapital),
       position_sizing: positionSizing,
       params: strategyParams,
-      overrides,
+      overrides: requestOverrides,
       mode: simMode,
       holding_days: Number(holdingDays) || 5,
       minute_fill: highGranularity,
@@ -1028,6 +1041,13 @@ export function StrategyBacktest() {
   }, [result?.trades])
 
   const detail = strategyDetail.data
+  const matrixStrategy = detail?.execution_backend === 'matrix_native'
+  const visibleAdvancedTabs = useMemo(
+    () => matrixStrategy
+      ? ADVANCED_TABS.filter(tab => tab.id !== 'entry' && tab.id !== 'exit')
+      : ADVANCED_TABS,
+    [matrixStrategy],
+  )
   const basicFilter = (overrides.basic_filter ?? {}) as Record<string, any>
   const entrySignals = (overrides.entry_signals ?? []) as string[]
   const exitSignals = (overrides.exit_signals ?? []) as string[]
@@ -1046,6 +1066,12 @@ export function StrategyBacktest() {
   useEffect(() => {
     if (!editingScoring) setScoringDraft(scoringToPct(scoring))
   }, [scoring, editingScoring])
+
+  useEffect(() => {
+    if (matrixStrategy && (settingsTab === 'entry' || settingsTab === 'exit')) {
+      setSettingsTab('params')
+    }
+  }, [matrixStrategy, settingsTab])
 
   const updateOverride = (key: string, value: any) => {
     setOverrides(prev => ({ ...prev, [key]: value }))
@@ -2007,7 +2033,7 @@ export function StrategyBacktest() {
                 </button>
               </div>
               <div className="mt-3 flex gap-1 overflow-x-auto">
-                {ADVANCED_TABS.map(tab => (
+                {visibleAdvancedTabs.map(tab => (
                   <button
                     key={tab.id}
                     type="button"
@@ -2030,6 +2056,7 @@ export function StrategyBacktest() {
                 <div>成交口径可分别设置建仓/清仓：默认建仓次日开盘（避免未来函数）、清仓当日收盘（持仓中可盘中/收盘卖）。</div>
                 <div>退出优先级：止损/移动止损 &gt; 卖点信号 &gt; 到期平仓；到期只作兜底，不抢占卖点或风控。</div>
                 <div>最大持仓数控制同时持股数量，最大总仓位控制资金投入比例；剩余现金不等于可新增持仓名额。</div>
+                {matrixStrategy && <div className="text-accent">当前为 Matrix 策略，进出场信号由策略公式生成，不能用列信号覆盖。</div>}
               </div>
 
               {settingsTab === 'range' && (

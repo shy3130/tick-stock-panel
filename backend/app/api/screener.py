@@ -14,8 +14,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.services.screener import PRESET_STRATEGIES, ScreenerService, strategy_supports_asset
 from app.services import strategy_cache
+from app.services.screener import ScreenerService
 from app.strategy import config as strategy_config
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ class PresetRequest(BaseModel):
     as_of: Optional[date] = None
     ext_columns: Optional[str] = None
     asset_type: str = "stock"
+    timeframe: str = "1d"
 
 
 def _safe(result_dict: dict) -> dict:
@@ -100,6 +101,7 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
         return {}
 
     import polars as pl
+
     from app.api.ext_data import _read_ext_dataframe
     from app.services.ext_data import ExtConfigStore
 
@@ -211,39 +213,31 @@ def _update_cache_strategy(data_dir, as_of: str, strategy_id: str, safe_data: di
 
 
 @router.get("/strategies")
-def strategies(request: Request, asset_type: str = Query("stock")):
-    """策略清单（内置 + 自定义 + AI）。按 asset_type 过滤：ETF 仅返回技术类内置策略。"""
+def strategies(
+    request: Request,
+    asset_type: str = Query("stock"),
+    timeframe: str = Query("1d"),
+):
+    """兼容策略清单端点；唯一数据源为 StrategyEngine。"""
     data_dir = request.app.state.repo.store.data_dir
-    presets = []
-    seen_ids: set[str] = set()
-
-    # 内置策略
-    for k, v in PRESET_STRATEGIES.items():
-        if not strategy_supports_asset(v, asset_type):
-            continue
-        overrides = strategy_config.load_override(data_dir, k)
-        name = (overrides.get("name") or v["name"]) if overrides else v["name"]
-        desc = (overrides.get("description") or v["description"]) if overrides else v["description"]
-        presets.append({"id": k, "name": name, "description": desc, "source": "builtin"})
-        seen_ids.add(k)
-
-    # 自定义/AI 策略（不在 PRESET_STRATEGIES 中的）; 未标注资产类型, 保守仅 stock 返回
     engine = getattr(request.app.state, "strategy_engine", None)
-    if engine and asset_type == "stock":
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in seen_ids:
-                overrides = strategy_config.load_override(data_dir, sid)
-                name = (overrides.get("name") or meta["name"]) if overrides else meta["name"]
-                desc = (overrides.get("description") or meta.get("description", "")) if overrides else meta.get("description", "")
-                presets.append({"id": sid, "name": name, "description": desc, "source": meta.get("source", "custom")})
-                seen_ids.add(sid)
-        # 暴露加载失败的策略,让前端可见(避免"策略静默消失"误判为正常)
-        load_errors = engine.load_errors() if engine else []
-    else:
-        load_errors = []
+    if engine is None:
+        raise HTTPException(status_code=503, detail="策略引擎未初始化")
+    presets = []
+    for meta in engine.list_strategies():
+        if asset_type not in meta.get("asset_types", ["stock"]):
+            continue
+        if timeframe not in meta.get("timeframes", ["1d"]):
+            continue
+        sid = meta["id"]
+        overrides = strategy_config.load_override(data_dir, sid)
+        presets.append({
+            **meta,
+            "name": overrides.get("name") or meta["name"],
+            "description": overrides.get("description") or meta.get("description", ""),
+        })
 
-    return {"presets": presets, "load_errors": load_errors}
+    return {"presets": presets, "load_errors": engine.load_errors()}
 
 
 @router.post("/run")
@@ -278,51 +272,34 @@ def run_preset(req: PresetRequest, request: Request):
     data_dir = request.app.state.repo.store.data_dir
     ext_values = _load_ext_value_maps(repo, req.ext_columns)
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
-    bf = overrides.get("basic_filter") if overrides else None
-    dl = overrides.get("display_limit") if overrides else None
-    if dl is None and overrides and "display_limit" in overrides:
-        dl = 0
-
     engine = getattr(request.app.state, "strategy_engine", None)
-
-    # 内置策略
-    if req.strategy_id in PRESET_STRATEGIES:
-        filter_fn = None
-        if req.asset_type == "stock" and engine and engine.has(req.strategy_id):
-            filter_fn = engine.get(req.strategy_id).filter_fn
-        try:
-            result = svc.run_preset(
-                req.strategy_id,
-                as_of=as_of,
-                pool=req.pool,
-                basic_filter=bf,
-                filter_fn=filter_fn,
-                strategy_params=overrides.get("params") if overrides else None,
-                display_limit=dl,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        safe_data = _safe(asdict(result))
-        _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
-        return _result_with_ext(safe_data, ext_values)
-
-    # 自定义/AI 策略 — 通过 StrategyEngine 执行
     if not engine:
         raise HTTPException(status_code=404, detail=f"策略引擎未初始化或策略 {req.strategy_id} 不存在")
 
     try:
-        result = engine.run(req.strategy_id, as_of, pool=req.pool, overrides=overrides or None)
+        if not engine.has(req.strategy_id):
+            raise ValueError(f"unknown strategy: {req.strategy_id}")
+        params = dict(overrides.get("params") or {})
+        context = svc.build_strategy_context(
+            engine,
+            as_of,
+            [req.strategy_id],
+            timeframe=req.timeframe,
+            params_map={req.strategy_id: params},
+            overrides_map={req.strategy_id: overrides or {}},
+        )
+        result = engine.run(
+            req.strategy_id,
+            context,
+            pool=req.pool,
+            params=params,
+            overrides=overrides or None,
+        )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        status_code = 404 if "unknown strategy" in str(e) else 400
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
 
-    data = asdict(result)
-
-    if dl is not None and dl > 0:
-        data["rows"] = data["rows"][:dl]
-        data["total"] = min(data["total"], dl)
-
-    # 单跑后更新缓存中该策略的结果（保持缓存最新）
-    safe_data = _safe(data)
+    safe_data = _safe(asdict(result))
     _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
 
     return _result_with_ext(safe_data, ext_values)
@@ -403,18 +380,19 @@ def market_snapshot(request: Request):
 
 @router.post("/run_all")
 def run_all(request: Request, body: Optional[dict] = None):
-    """批量运行指定策略,只返回每个策略的命中数。
-
-    优化: 从 enriched 读取一次目标日期数据, 所有策略共享。
-    body.strategy_ids: 只跑指定的策略 ID 列表, 为空则跑全部。
-    """
+    """批量运行指定策略；注册、路由和执行均由 StrategyEngine 负责。"""
     from datetime import date as date_type
 
     t_total = time.perf_counter()
 
     body = body or {}
     repo = request.app.state.repo
-    svc = ScreenerService(repo)
+    asset_type = str(body.get("asset_type") or "stock")
+    timeframe = str(body.get("timeframe") or "1d")
+    svc = ScreenerService(repo, asset_type=asset_type)
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="策略引擎未初始化")
 
     # 解析日期
     raw_date = body.get("as_of")
@@ -425,27 +403,21 @@ def run_all(request: Request, body: Optional[dict] = None):
     if not as_of:
         return {"as_of": None, "results": {}}
 
-    # 一次读取目标日期的全部数据
-    t0 = time.perf_counter()
-    precomputed = svc._load_enriched_for_date(as_of)
-    logger.info("run_all: _load_enriched_for_date took %.1fms", (time.perf_counter() - t0) * 1000)
-
-    results: dict[str, dict] = {}
     data_dir = request.app.state.repo.store.data_dir
 
-    # 收集需要运行的策略 ID (如果指定了 strategy_ids 则只跑这些)
     requested_ids = body.get("strategy_ids")
-    all_ids = list(PRESET_STRATEGIES.keys())
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in PRESET_STRATEGIES:
-                all_ids.append(sid)
-
     if requested_ids and isinstance(requested_ids, list):
-        id_set = set(requested_ids)
-        all_ids = [sid for sid in all_ids if sid in id_set]
+        all_ids = [str(sid) for sid in requested_ids]
+        unknown = [sid for sid in all_ids if not engine.has(sid)]
+        if unknown:
+            raise HTTPException(status_code=404, detail=f"unknown strategies: {unknown}")
+    else:
+        all_ids = [
+            meta["id"]
+            for meta in engine.list_strategies()
+            if asset_type in meta.get("asset_types", ["stock"])
+            and timeframe in meta.get("timeframes", ["1d"])
+        ]
 
     if not all_ids:
         return {"as_of": str(as_of), "results": {}}
@@ -455,54 +427,37 @@ def run_all(request: Request, body: Optional[dict] = None):
     all_overrides = strategy_config.list_overrides(data_dir)
     logger.info("run_all: list_overrides took %.1fms (%d overrides)", (time.perf_counter() - t0) * 1000, len(all_overrides))
 
-    # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)
-    t0 = time.perf_counter()
-    shared_history = None
-    id_set = set(all_ids)
-    if engine:
-        history_strats = [
-            (sid, s) for sid, s in engine._strategies.items()
-            if s.filter_history_fn and sid in id_set
-        ]
-        if history_strats:
-            max_lb = min(max(s.lookback_days for _, s in history_strats), 30)
-            shared_history = svc._load_enriched_history(as_of, max(1, max_lb))
-    else:
-        history_strats = []
-    logger.info("run_all: _load_enriched_history took %.1fms (history_strats=%d)", (time.perf_counter() - t0) * 1000, len(history_strats))
+    params_map = {
+        sid: dict((all_overrides.get(sid) or {}).get("params") or {})
+        for sid in all_ids
+    }
+    overrides_map = {sid: all_overrides.get(sid, {}) for sid in all_ids}
+    try:
+        context = svc.build_strategy_context(
+            engine,
+            as_of,
+            all_ids,
+            timeframe=timeframe,
+            params_map=params_map,
+            overrides_map=overrides_map,
+        )
+        engine_results = engine.run_all(
+            context,
+            params_map=params_map,
+            overrides_map=overrides_map,
+            strategy_ids=all_ids,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    for sid in all_ids:
-        try:
-            overrides = all_overrides.get(sid, {})
-            bf = overrides.get("basic_filter") if overrides else None
-            dl = overrides.get("display_limit") if overrides else None
-            if dl is None and overrides and "display_limit" in overrides:
-                dl = 0
-
-            if sid in PRESET_STRATEGIES:
-                filter_fn = engine.get(sid).filter_fn if engine and engine.has(sid) else None
-                r = svc.run_preset(
-                    sid,
-                    as_of=as_of,
-                    precomputed=precomputed,
-                    basic_filter=bf,
-                    filter_fn=filter_fn,
-                    strategy_params=overrides.get("params") if overrides else None,
-                    display_limit=dl,
-                )
-            else:
-                r = engine.run(
-                    sid, as_of, overrides=overrides or None,
-                    precomputed=precomputed, precomputed_history=shared_history,
-                )
-                if dl is not None and dl > 0:
-                    r.rows = r.rows[:dl]
-                    r.total = min(r.total, dl)
-
-            safe_rows = _safe(asdict(r)).get("rows", [])
-            results[sid] = {"total": r.total, "as_of": str(as_of), "rows": safe_rows}
-        except (ValueError, Exception):
-            continue
+    results: dict[str, dict] = {}
+    for sid, result in engine_results.items():
+        safe_rows = _safe(asdict(result)).get("rows", [])
+        results[sid] = {
+            "total": result.total,
+            "as_of": str(as_of),
+            "rows": safe_rows,
+        }
 
     elapsed = (time.perf_counter() - t_total) * 1000
     logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))

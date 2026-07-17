@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode
@@ -77,6 +78,9 @@ async def lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+    # 在接受回测请求前固定 managed generation，避免首批并发 worker 各自创建版本。
+    if settings.backtest_matrix_disk_cache_enabled:
+        repo.get_matrix_data_generation("stock")
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
     app.state.indicators_ready = False
     repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001
@@ -178,12 +182,60 @@ async def lifespan(app: FastAPI):
         store.data_dir / "strategies" / "ai",
     ]
     strategy_engine = StrategyEngine(
-        enriched_loader=_screener_svc._load_enriched_for_date,
-        enriched_history_loader=_screener_svc._load_enriched_history,
         strategy_dirs=strategy_dirs,
     )
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
+
+    matrix_prewarm_lock = threading.Lock()
+    matrix_prewarm_running = False
+
+    def _schedule_matrix_cache_prewarm() -> None:
+        nonlocal matrix_prewarm_running
+        if (
+            not settings.backtest_matrix_disk_cache_enabled
+            or not settings.backtest_matrix_cache_prewarm
+        ):
+            return
+        with matrix_prewarm_lock:
+            if matrix_prewarm_running:
+                logger.info("matrix cache prewarm already in progress, skip")
+                return
+            matrix_prewarm_running = True
+
+        def _prewarm() -> None:
+            nonlocal matrix_prewarm_running
+            try:
+                latest = repo.latest_enriched_date("stock")
+                if latest is None:
+                    logger.info("matrix cache prewarm skipped: no stock enriched data")
+                    return
+                from app.backtest.engine import BacktestEngine
+                from app.backtest.strategy import prewarm_matrix_cache
+
+                result = prewarm_matrix_cache(
+                    BacktestEngine(repo),
+                    strategy_engine,
+                    asset_type="stock",
+                    latest_date=latest,
+                    years=settings.backtest_matrix_cache_prewarm_years,
+                )
+                logger.info("matrix cache prewarm done: %s", result)
+            except Exception:  # noqa: BLE001
+                logger.exception("matrix cache prewarm failed")
+            finally:
+                with matrix_prewarm_lock:
+                    matrix_prewarm_running = False
+
+        threading.Thread(
+            target=_prewarm,
+            name="matrix-cache-prewarm",
+            daemon=True,
+        ).start()
+
+    repo._on_refresh_done = _schedule_matrix_cache_prewarm  # noqa: SLF001
+    if repo.enriched_ready:
+        _schedule_matrix_cache_prewarm()
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
     from app.strategy.monitor import MonitorRuleEngine
@@ -203,7 +255,7 @@ async def lifespan(app: FastAPI):
         if preferences.get_strategy_monitor_enabled():
             ids = preferences.get_strategy_monitor_ids()
             if ids:
-                names = {s.id: s.name for s in strategy_engine.list_strategies()}
+                names = {s["id"]: s["name"] for s in strategy_engine.list_strategies()}
                 mr_store.migrate_strategy_monitors(store.data_dir, ids, names)
                 logger.info("strategy monitor migrated: %d strategies", len(ids))
     except Exception as e:  # noqa: BLE001

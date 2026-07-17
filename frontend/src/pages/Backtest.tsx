@@ -22,7 +22,7 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   optimizer: {
     title: '参数优化',
     subtitle: '网格搜索最优参数组合',
-    hint: '并行回测所有参数组合，按夏普/索提诺等目标排序，找到最优参数。',
+    hint: '在独立 worker 中复用基础数据并串行回测参数组合，按夏普/索提诺等目标排序。',
   },
   walkforward: {
     title: 'Walk-forward',

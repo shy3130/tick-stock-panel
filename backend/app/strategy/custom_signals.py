@@ -214,17 +214,39 @@ def build_expressions(signals: list[dict], allow_shift: bool = True) -> dict[str
     return out
 
 
-def inject(df: pl.DataFrame, exprs: dict[str, pl.Expr]) -> pl.DataFrame:
-    """把编译好的信号表达式作为列加入 df。仅添加 df 已含其依赖列的信号。"""
+def expression_dependencies(exprs: dict[str, pl.Expr] | None = None) -> dict[str, frozenset[str]]:
+    """返回自定义信号列到根字段的依赖映射。"""
+    source = exprs if exprs is not None else {}
+    return {name: frozenset(_expr_root_columns(expr)) for name, expr in source.items()}
+
+
+def inject(
+    df: pl.DataFrame,
+    exprs: dict[str, pl.Expr],
+    needed: set[str] | None = None,
+) -> pl.DataFrame:
+    """把编译好的信号表达式作为列加入 df。
+
+    ``needed=None`` 保持历史全量语义；传入集合时只注入被请求的自定义信号。
+    缺失依赖会明确告警，避免回测静默丢失信号。
+    """
     if df.is_empty() or not exprs:
         return df
     cols = set(df.columns)
     add: dict[str, pl.Expr] = {}
     for name, expr in exprs.items():
+        if needed is not None and name not in needed:
+            continue
         # 提取该表达式引用的所有字段列，缺失则跳过（避免运行时报错）
-        needed = _expr_root_columns(expr)
-        if needed.issubset(cols):
+        required = _expr_root_columns(expr)
+        if required.issubset(cols):
             add[name] = expr
+        else:
+            logger.warning(
+                "custom signal %s missing dependencies: %s",
+                name,
+                sorted(required - cols),
+            )
     if add:
         df = df.with_columns([e.alias(n) for n, e in add.items()])
     return df

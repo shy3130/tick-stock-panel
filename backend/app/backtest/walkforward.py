@@ -136,6 +136,7 @@ class WalkForwardConfig:
     base_params: dict = field(default_factory=dict)
     overrides: dict | None = None
     backtest_kwargs: dict = field(default_factory=dict)
+    matrix_cache_max_mb: int = 512
 
 
 class WalkForwardService:
@@ -145,6 +146,37 @@ class WalkForwardService:
         self.optimizer = optimizer
         self.service = service
         self.strategy_engine = strategy_engine
+
+    def _prepare_shared_matrix(self, cfg: WalkForwardConfig, folds: list[Fold]):
+        """Build one immutable superset matrix for every matrix-native fold."""
+        if self.strategy_engine is None or not folds:
+            return None
+        strategy = self.strategy_engine.get(cfg.strategy_id)
+        if strategy.execution_backend != "matrix_native":
+            return None
+
+        from app.backtest.optimizer import expand_param_grid
+        from app.backtest.strategy import StrategyBacktestConfig
+
+        combos = expand_param_grid(strategy.meta.get("params", []), cfg.param_grid)
+        shared_start = min(fold.train_start for fold in folds)
+        shared_end = max(fold.test_end for fold in folds)
+        configs = [
+            StrategyBacktestConfig(
+                strategy_id=cfg.strategy_id,
+                symbols=cfg.symbols,
+                start=shared_start,
+                end=shared_end,
+                params={**cfg.base_params, **combo},
+                overrides=cfg.overrides,
+                **cfg.backtest_kwargs,
+            )
+            for combo in combos
+        ]
+        return self.service.prepare_matrix_optimization(
+            configs,
+            matrix_cache_max_bytes=int(cfg.matrix_cache_max_mb) * 1024 * 1024,
+        )
 
     def run(
         self,
@@ -159,6 +191,11 @@ class WalkForwardService:
         direction = cfg.direction or default_direction(cfg.objective)
         folds = generate_folds(cfg.start, cfg.end, cfg.train_days, cfg.test_days, cfg.step_days)
         n_total = len(folds)
+
+        shared_prepared = self._prepare_shared_matrix(cfg, folds)
+        shared_market_data = (
+            shared_prepared.market_data if shared_prepared is not None else None
+        )
 
         # 遥测: 首尾快照 PanelCache, 量化跨折重叠区间重复扫盘的 IO 占比 (是否值得进一步优化)。
         cache_before = self.service.engine.cache_stats()
@@ -190,7 +227,14 @@ class WalkForwardService:
                 overrides=cfg.overrides,
                 backtest_kwargs=is_backtest_kwargs,  # IS 强制 position, 堵前视泄漏
             )
-            opt_res = self.optimizer.optimize(opt_cfg, cancel_event=cancel_event)
+            if shared_market_data is None:
+                opt_res = self.optimizer.optimize(opt_cfg, cancel_event=cancel_event)
+            else:
+                opt_res = self.optimizer.optimize(
+                    opt_cfg,
+                    cancel_event=cancel_event,
+                    prepared_market_data=shared_market_data,
+                )
             best_params = opt_res.get("best_params")
             is_score = opt_res.get("best_score")
             done += 1
@@ -221,7 +265,28 @@ class WalkForwardService:
                 overrides=cfg.overrides,
                 **cfg.backtest_kwargs,
             )
-            oos_res = self.service.run(oos_cfg, cancel_event=cancel_event)
+            oos_prepared = None
+            try:
+                if shared_market_data is not None:
+                    oos_prepared = self.service.prepare_matrix_optimization(
+                        [oos_cfg],
+                        matrix_cache_max_bytes=int(cfg.matrix_cache_max_mb) * 1024 * 1024,
+                        market_data_override=shared_market_data,
+                    )
+                if oos_prepared is None:
+                    oos_res = self.service.run(
+                        oos_cfg,
+                        cancel_event=cancel_event,
+                    )
+                else:
+                    oos_res = self.service.run(
+                        oos_cfg,
+                        cancel_event=cancel_event,
+                        prepared=oos_prepared,
+                    )
+            finally:
+                if oos_prepared is not None:
+                    oos_prepared.compute_cache.close()
 
             # OOS 失败 (含 cancelled) -> 跳过, 不把空/0 收益混入复利曲线
             if oos_res.error:
@@ -249,6 +314,15 @@ class WalkForwardService:
                 progress_cb({"type": "walkforward_progress", "done": done, "total": n_total, "fold": f.index})
 
         summary = aggregate_oos(valid_records, cfg.objective, direction)
+
+        shared_matrix_bytes = (
+            shared_prepared.market_data.nbytes if shared_prepared is not None else 0
+        )
+        shared_matrix_status = (
+            shared_prepared.market_data.cache_status if shared_prepared is not None else "none"
+        )
+        if shared_prepared is not None:
+            shared_prepared.compute_cache.close()
 
         # 遥测收尾: 本次 WF 累计扫盘耗时 / 命中 / 复用, 与总耗时对比得出 load_panel 占比。
         cache_after = self.service.engine.cache_stats()
@@ -278,5 +352,8 @@ class WalkForwardService:
             "skipped": skipped,
             "summary": summary,
             "cache_telemetry": cache_telemetry,
+            "shared_market_data": shared_prepared is not None,
+            "shared_market_data_bytes": shared_matrix_bytes,
+            "shared_market_data_status": shared_matrix_status,
             "elapsed_ms": elapsed_ms,
         }

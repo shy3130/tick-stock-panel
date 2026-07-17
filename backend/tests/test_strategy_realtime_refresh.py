@@ -1,13 +1,17 @@
 """策略页实时结果刷新 SSE 回归测试。"""
 from __future__ import annotations
 
+from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import polars as pl
 
+from app.market_time import cn_today
 from app.services import quote_service
 from app.services.quote_service import QuoteService, QuoteSubscriber
+from app.strategy.engine import StrategyEngine
 from app.strategy.monitor import MonitorRuleEngine
 
 
@@ -60,16 +64,16 @@ def test_strategy_result_notification_fans_out_to_all_subscribers():
 class _EmptyResultStrategyEngine:
     def get(self, strategy_id: str):
         assert strategy_id == "strategy_1"
-        return SimpleNamespace(filter_history_fn=None)
+        return SimpleNamespace(filter_history_fn=None, execution_backend="polars_expr")
 
-    def run(self, strategy_id: str, **kwargs):
+    def run(self, strategy_id: str, context, **kwargs):
         assert strategy_id == "strategy_1"
-        assert kwargs["precomputed"].height == 1
+        assert context.current.height == 1
         return SimpleNamespace(total=0, rows=[])
 
 
 class _FailingStrategyEngine(_EmptyResultStrategyEngine):
-    def run(self, strategy_id: str, **kwargs):
+    def run(self, strategy_id: str, context, **kwargs):
         raise RuntimeError("strategy failed")
 
 
@@ -100,6 +104,72 @@ def test_failed_or_skipped_strategy_does_not_mark_result_refresh():
     assert skipped.evaluate(pl.DataFrame({"symbol": ["000001.SZ"]})) == []
     assert skipped.latest_strategy_results() == {}
     assert skipped.consume_strategy_result_updates() is False
+
+
+def test_matrix_strategy_monitor_reuses_live_matrix_and_updates_last_row():
+    target = cn_today()
+    start = target - timedelta(days=61)
+    rows = []
+    for offset in range(62):
+        for symbol, base in (("000001.SZ", 10.0), ("600000.SH", 20.0)):
+            close = base + offset * 0.05
+            rows.append({
+                "symbol": symbol,
+                "name": symbol,
+                "date": start + timedelta(days=offset),
+                "open": close,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "volume": 1_000_000.0,
+                "amount": 100_000_000.0,
+                "total_shares": 1_000_000_000.0,
+                "float_shares": 800_000_000.0,
+            })
+    panel = pl.DataFrame(rows)
+    history = panel.filter(pl.col("date") < target)
+    current = panel.filter(pl.col("date") == target)
+    load_calls = []
+
+    def load_history(as_of, lookback):
+        load_calls.append((as_of, lookback))
+        return history
+
+    strategy_engine = StrategyEngine(
+        strategy_dirs=[Path(__file__).resolve().parents[1] / "app" / "strategy" / "builtin"],
+    )
+    overrides = {
+        "params": {"require_macd_golden": False, "use_volume_filter": False},
+        "basic_filter": {"enabled": False},
+    }
+    monitor = MonitorRuleEngine()
+    monitor.set_strategy_engine(strategy_engine)
+    monitor.set_data_dir(Path("test-data"))
+    monitor.set_history_loader(load_history)
+    monitor.set_rules([{
+        "id": "matrix_macd",
+        "name": "MACD",
+        "type": "strategy",
+        "asset_type": "stock",
+        "strategy_id": "macd_golden",
+        "scope": "all",
+        "symbols": [],
+        "cooldown_seconds": 0,
+    }])
+
+    with patch("app.strategy.monitor._strategy_config.load_override", return_value=overrides):
+        assert monitor.evaluate(current) == []
+        assert monitor.latest_strategy_results()["macd_golden"]["total"] == 2
+        first_stats = strategy_engine.realtime_matrix_stats("monitor:stock")
+        assert first_stats["build_count"] == 1
+        assert len(load_calls) == 1
+
+        updated = current.with_columns((pl.col("close") + 1.0).alias("close"))
+        assert monitor.evaluate(updated) == []
+        second_stats = strategy_engine.realtime_matrix_stats("monitor:stock")
+        assert second_stats["build_count"] == 1
+        assert second_stats["update_count"] == 1
+        assert len(load_calls) == 1
 
 
 class _MonitorWithUpdate:

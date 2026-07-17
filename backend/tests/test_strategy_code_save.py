@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import polars as pl
 import pytest
 
 from app.api.strategy import (
@@ -47,10 +46,7 @@ def filter(df: pl.DataFrame, params: dict) -> pl.Expr:
 def _request(tmp_path):
     ai_dir = tmp_path / "strategies" / "ai"
     custom_dir = tmp_path / "strategies" / "custom"
-    engine = StrategyEngine(
-        enriched_loader=lambda _date: pl.DataFrame(),
-        strategy_dirs=[custom_dir, ai_dir],
-    )
+    engine = StrategyEngine(strategy_dirs=[custom_dir, ai_dir])
     repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo, strategy_engine=engine)))
 

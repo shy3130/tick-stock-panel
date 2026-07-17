@@ -12,7 +12,7 @@ from datetime import date
 
 import numpy as np
 
-from app.backtest.engine import BacktestEngine, TradeRecord
+from app.backtest.engine import BacktestEngine, SimulationOptions, TradeRecord
 
 # ---------------------------------------------------------------
 # Sortino
@@ -165,6 +165,33 @@ def test_independent_candidate_stats_emits_sortino_and_mc():
         assert k in result.stats, f"independent 分支缺字段 {k}"
     # mc 应为有效数值 (n=5>=3)
     assert result.stats["mc_maxdd_p50"] is not None
+
+
+def test_lightweight_candidate_stats_do_not_call_monte_carlo(monkeypatch):
+    trades = _trades([0.10, -0.05, 0.08, -0.06, 0.03], [2, 1, 3, 2, 4])
+
+    def unexpected(_pnls):
+        raise AssertionError("Monte Carlo should not run")
+
+    monkeypatch.setattr(BacktestEngine, "_mc_drawdown_percentiles", unexpected)
+    result = BacktestEngine._calc_independent_candidate_result(
+        trades,
+        n_candidates=5,
+        execution_stats={},
+        options=SimulationOptions(
+            include_monte_carlo=False,
+            include_curves=False,
+            include_trades=False,
+            include_per_symbol_stats=False,
+            include_return_distribution=False,
+        ),
+    )
+
+    assert "mc_maxdd_p50" not in result.stats
+    assert result.equity_curve == []
+    assert result.drawdown_curve == []
+    assert result.trades == []
+    assert result.per_symbol_stats == []
 
 
 def test_calc_stats_all_wins_reports_sortino_none():

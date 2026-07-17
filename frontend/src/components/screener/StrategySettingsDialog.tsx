@@ -571,7 +571,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
               </button>
               {(detail?.source === 'ai' || detail?.source === 'custom') && (
                 <button onClick={() => { setDeleteError(''); setShowDeleteConfirm(true) }}
-                  className="text-[10px] text-muted/40 hover:text-danger transition-colors">删除策略</button>
+                  className="text-[10px] text-danger hover:text-danger/80 transition-colors">删除策略</button>
               )}
             </div>
             <div className="flex items-center gap-2">

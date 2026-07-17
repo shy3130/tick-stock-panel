@@ -7,7 +7,7 @@
 1. **只创建这一个策略文件**：只生成一个 `.py` 文件，绝不创建多文件、不拆分模块、不跨文件 import
 2. **绝不触碰项目源码**：不要写任何会修改 `backend/`、`docs/`、`frontend/` 等现有文件的代码；不要 `import os/sys/pathlib` 等文件系统模块
 3. **不得放入内置策略目录**：AI 生成的策略只属于 `data/strategies/ai/`，文件名/ID 用 `ai_` 前缀；内置目录 `backend/app/strategy/builtin/` 由项目维护，AI 不得染指
-4. 只 `import polars as pl`，不 import 其他模块
+4. Polars 策略只 `import polars as pl`；矩阵策略只 import NumPy 和 `app.backtest.matrix` 协议/算子
 5. 贴合用户需求优先：不要为了套模板而歪曲策略含义
 
 ## 选择策略模式
@@ -37,7 +37,7 @@
 3. **STOP_LOSS / MAX_HOLD_DAYS**：根据策略类型合理设定，做多止损一般为 -5%~-8%，短线持有 5~20 天
 4. **ALERTS**：列出需要监控提醒的条件
 5. **RULES**：中文逐条列出核心筛选逻辑（至少 3 条），准确完整
-6. **filter() 或 filter_history()**：核心筛选逻辑
+6. **EXECUTION_BACKEND + filter() 或 filter_history()**：只选择一个后端和一份核心筛选逻辑
 
 ## 性能原则
 

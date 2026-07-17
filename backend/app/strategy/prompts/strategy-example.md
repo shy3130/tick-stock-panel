@@ -26,6 +26,8 @@ META = {
     "name": "强势反包",
     "description": "筛选前日阴线下跌、今日放量阳线反包的短线强势股",
     "tags": ["反包", "短线", "放量"],
+    "asset_types": ["stock"],
+    "timeframes": ["1d"],
     "basic_filter": {
         "price_min": 3,
         "price_max": 200,
@@ -73,6 +75,7 @@ META = {
     "limit": 100,
 }
 
+EXECUTION_BACKEND = "python_history_legacy"
 LOOKBACK_DAYS = 2
 
 ENTRY_SIGNALS = ["signal_broken_board_recovery"]

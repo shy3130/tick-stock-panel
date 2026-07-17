@@ -216,7 +216,11 @@ def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[di
 def _dimension_values(raw: Any) -> list[str]:
     if raw is None:
         return []
-    values = [v.strip() for v in _DIMENSION_SEP.split(str(raw).strip()) if v.strip()]
+    values = [
+        v.strip()
+        for v in _DIMENSION_SEP.split(str(raw).strip())
+        if v.strip() and v.strip().casefold() not in {"nan", "none", "null"}
+    ]
     return values
 
 

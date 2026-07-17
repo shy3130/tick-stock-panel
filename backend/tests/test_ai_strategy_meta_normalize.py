@@ -1,6 +1,8 @@
 """AI 策略 META 规范化回归测试。"""
 from __future__ import annotations
 
+import pytest
+
 from app.api.strategy import _normalize_build_result, _normalize_strategy_meta
 
 RAW_CODE = '''"""模型返回的策略"""
@@ -138,3 +140,99 @@ def test_normalize_build_result_succeeds_on_annotated_form():
     assert normalized["valid"] is True
     assert normalized["error"] is None
     assert normalized["meta"]["id"] == "ai_build_ok"
+
+
+@pytest.mark.parametrize("alias", ["STRATEGY_META", "meta"])
+def test_normalize_strategy_meta_accepts_common_aliases(alias):
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    raw = RAW_CODE.replace("META =", f"{alias} =", 1)
+
+    code = _normalize_strategy_meta(raw, "ai_alias_ok", name="别名策略")
+
+    compile(code, "<strategy>", "exec")
+    assert "META =" in code
+    assert f"{alias} =" not in code
+    assert AIStrategyGenerator._extract_meta(code)["id"] == "ai_alias_ok"
+
+
+def test_validate_code_rejects_missing_meta():
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    code = """import polars as pl
+
+def filter(df, params):
+    return pl.lit(True)
+"""
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert "找不到 META 字典" in result["error"]
+
+
+def test_validate_code_ignores_meta_inside_function():
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    code = """import polars as pl
+
+def filter(df, params):
+    META = {"id": "nested"}
+    return pl.lit(True)
+"""
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert "找不到 META 字典" in result["error"]
+
+
+def test_validate_code_rejects_missing_strategy_entrypoint():
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    result = AIStrategyGenerator().validate_code('META = {"id": "no_filter"}')
+
+    assert result["valid"] is False
+    assert result["error"] == "找不到策略入口函数 filter() 或 filter_history()"
+
+
+def test_validate_code_accepts_matrix_strategy_entrypoint():
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    code = '''META = {"id": "matrix", "execution_backend": "matrix_native"}
+EXECUTION_BACKEND = "matrix_native"
+MATRIX_STRATEGY = object()
+'''
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is True
+    assert result["error"] is None
+
+
+def test_validate_code_rejects_missing_matrix_strategy_entrypoint():
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    code = '''META = {"id": "matrix", "execution_backend": "matrix_native"}
+EXECUTION_BACKEND = "matrix_native"
+'''
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert result["error"] == "找不到 Matrix 策略入口 MATRIX_STRATEGY"
+
+
+def test_extract_code_block_prefers_complete_strategy():
+    from app.strategy.ai_generator import AIStrategyGenerator
+
+    content = f"""```python
+print("draft")
+```
+
+```python
+{RAW_CODE}
+```
+"""
+
+    assert AIStrategyGenerator._extract_code_block(content) == RAW_CODE.strip()

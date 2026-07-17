@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
 from app.services.ext_data import (
@@ -108,6 +109,13 @@ def _symbol_to_code(symbol: str) -> str:
     return symbol.split(".", 1)[0] if "." in symbol else symbol
 
 
+def _dimension_label(value: object) -> str:
+    if value is None or (isinstance(value, float) and not math.isfinite(value)):
+        return ""
+    text = str(value).strip()
+    return "" if text.casefold() in {"nan", "none", "null"} else text
+
+
 def _flatten_concept_rows(raw_rows: list[dict]) -> list[dict]:
     """概念: concepts 数组 → 分号拼接成「所属概念」字符串。
 
@@ -120,10 +128,11 @@ def _flatten_concept_rows(raw_rows: list[dict]) -> list[dict]:
         if not sym:
             continue
         concepts = r.get("concepts") or []
+        labels = [label for c in concepts if (label := _dimension_label(c))]
         out.append({
             "股票代码": sym,
             "股票简称": r.get("name") or "",
-            "所属概念": ";".join(str(c) for c in concepts if c),
+            "所属概念": ";".join(labels),
             "symbol": sym,
             "code": _symbol_to_code(sym),
         })
@@ -141,10 +150,11 @@ def _flatten_industry_rows(raw_rows: list[dict]) -> list[dict]:
         if not sym:
             continue
         inds = r.get("industries") or []
+        labels = [label for i in inds if (label := _dimension_label(i))]
         out.append({
             "股票代码": sym,
             "股票简称": r.get("name") or "",
-            "所属同花顺行业": "-".join(str(i) for i in inds if i),
+            "所属同花顺行业": "-".join(labels),
             "symbol": sym,
             "code": _symbol_to_code(sym),
         })

@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import queue
 import threading
 from dataclasses import asdict
 from datetime import date, timedelta
@@ -218,11 +217,8 @@ class StrategyBacktestRequest(BaseModel):
 @router.post("/strategy/run")
 def strategy_run(req: StrategyBacktestRequest, request: Request):
     """策略回测 — 复用 StrategyDef 体系做全周期回测。"""
-    from app.backtest.strategy import StrategyBacktestService, StrategyBacktestConfig
-
-    engine = _get_engine(request)
-    strategy_engine = request.app.state.strategy_engine
-    svc = StrategyBacktestService(engine, strategy_engine)
+    from app.backtest.strategy import StrategyBacktestConfig
+    from app.backtest.worker import make_worker_task, run_worker_task
 
     end = req.end or date.today()
     start = _resolve_start(req, end, FACTOR_DEFAULT_DAYS)
@@ -250,8 +246,8 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         holding_days=req.holding_days,
         asset_type=req.asset_type,
     )
-    result = svc.run(cfg)
-    return asdict(result)
+    task = make_worker_task("backtest", settings.data_dir, cfg)
+    return run_worker_task(task)
 
 
 # ── SSE 流式回测 (实时进度 + 可取消 + 支持重连) ───────────────────
@@ -291,6 +287,26 @@ def _cleanup_stale_jobs():
         stale = [k for k, j in _running_jobs.items() if j.done and now - j.finish_ts > _JOB_TTL]
         for k in stale:
             _running_jobs.pop(k, None)
+
+
+def _finish_job(job: _BacktestJob, *, result=None, error: str | None = None) -> None:
+    """Publish the terminal state and proactively drop the reconnect entry after TTL."""
+    finished_at = time.time()
+    with _jobs_lock:
+        job.result = result
+        job.error = error
+        job.done = True
+        job.finish_ts = finished_at
+
+    def _expire() -> None:
+        with _jobs_lock:
+            current = _running_jobs.get(job.key)
+            if current is job and current.done and current.finish_ts == finished_at:
+                _running_jobs.pop(job.key, None)
+
+    timer = threading.Timer(_JOB_TTL, _expire)
+    timer.daemon = True
+    timer.start()
 
 
 def _make_job_key(
@@ -344,11 +360,8 @@ async def strategy_stream(
       - done: {result} (完整回测结果)
       - error: {message}
     """
-    from app.backtest.strategy import StrategyBacktestService, StrategyBacktestConfig
-
-    engine = _get_engine(request)
-    strategy_engine = request.app.state.strategy_engine
-    svc = StrategyBacktestService(engine, strategy_engine)
+    from app.backtest.strategy import StrategyBacktestConfig
+    from app.backtest.worker import make_worker_task, run_worker_task
 
     end_date = date.fromisoformat(end) if end else date.today()
     if start:
@@ -441,14 +454,15 @@ async def strategy_stream(
                 # 仍可置位, svc.run 会据此提前返回 cancelled)。持槽跑完在 finally 释放。
                 _backtest_semaphore.acquire()
                 try:
-                    result = svc.run(cfg, lambda d: job.progress.append(d), job.cancel_event)
-                    job.result = result
-                    job.done = True
-                    job.finish_ts = time.time()
+                    task = make_worker_task("backtest", settings.data_dir, cfg)
+                    result = run_worker_task(
+                        task,
+                        lambda d: job.progress.append(d),
+                        job.cancel_event,
+                    )
+                    _finish_job(job, result=result)
                 except Exception as e:
-                    job.error = str(e)
-                    job.done = True
-                    job.finish_ts = time.time()
+                    _finish_job(job, error=str(e))
                 finally:
                     _backtest_semaphore.release()
 
@@ -467,12 +481,14 @@ async def strategy_stream(
                         yield f"event: error\ndata: {json.dumps({'message': job.error}, ensure_ascii=False)}\n\n"
                     elif job.result is not None:
                         r = job.result
-                        if hasattr(r, "error") and r.error == "cancelled":
+                        error = r.get("error") if isinstance(r, dict) else getattr(r, "error", None)
+                        if error == "cancelled":
                             yield f"event: error\ndata: {json.dumps({'message': '回测已取消'}, ensure_ascii=False)}\n\n"
-                        elif hasattr(r, "error") and r.error:
-                            yield f"event: error\ndata: {json.dumps({'message': r.error}, ensure_ascii=False)}\n\n"
+                        elif error:
+                            yield f"event: error\ndata: {json.dumps({'message': error}, ensure_ascii=False)}\n\n"
                         else:
-                            yield f"event: done\ndata: {json.dumps(asdict(r), ensure_ascii=False, default=str)}\n\n"
+                            payload = r if isinstance(r, dict) else asdict(r)
+                            yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
                     return
 
                 # 断开检测: 每 4 轮检查一次 (降低 GIL 抢占频率)
@@ -565,8 +581,23 @@ _OPT_BT_FIELDS = [
 ]
 
 
-def _make_opt_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, bt_sig, params=None, overrides=None) -> str:
-    raw = f"OPT|{strategy_id}|{symbols}|{start}|{end}|{param_grid}|{objective}|{direction}|{bt_sig}|{params}|{overrides}"
+def _make_opt_job_key(
+    strategy_id,
+    symbols,
+    start,
+    end,
+    param_grid,
+    objective,
+    direction,
+    bt_sig,
+    params=None,
+    overrides=None,
+    matrix_cache_max_mb=512,
+) -> str:
+    raw = (
+        f"OPT|{strategy_id}|{symbols}|{start}|{end}|{param_grid}|{objective}|"
+        f"{direction}|{bt_sig}|{params}|{overrides}|cache={matrix_cache_max_mb}"
+    )
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -597,6 +628,7 @@ async def optimize_stream(
     objective: str = "sortino",
     direction: str | None = None,
     max_workers: int = 4,
+    matrix_cache_max_mb: int = 512,
     params: str | None = None,       # JSON: 未扫描参数固定为用户当前值 (base_params)
     overrides: str | None = None,    # JSON: 策略当前的 basic_filter/signals/风控等覆盖
     symbols: str | None = None,
@@ -621,12 +653,8 @@ async def optimize_stream(
       - done: {result} (含 best_params / results 排名)
       - error: {message}
     """
-    from app.backtest.optimizer import OptimizeConfig, StrategyOptimizer
-    from app.backtest.strategy import StrategyBacktestService
-
-    engine = _get_engine(request)
-    strategy_engine = request.app.state.strategy_engine
-    svc = StrategyBacktestService(engine, strategy_engine)
+    from app.backtest.optimizer import OptimizeConfig
+    from app.backtest.worker import make_worker_task, run_worker_task
 
     end_date = date.fromisoformat(end) if end else date.today()
     if start:
@@ -646,7 +674,19 @@ async def optimize_stream(
         max_positions, max_exposure_pct, initial_capital, position_sizing, mode, holding_days,
     )
     bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
-    job_key = _make_opt_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, bt_sig, params, overrides)
+    job_key = _make_opt_job_key(
+        strategy_id,
+        symbols,
+        start,
+        end,
+        param_grid,
+        objective,
+        direction,
+        bt_sig,
+        params,
+        overrides,
+        matrix_cache_max_mb,
+    )
 
     _cleanup_stale_jobs()
     with _jobs_lock:
@@ -674,9 +714,7 @@ async def optimize_stream(
             # grid 必须是非空 dict; null/[]/"" 等合法 JSON 但结构错误也在此拦下,
             # 否则会跳过线程启动却不置 done -> event_generator 永久空转、job 挂死。
             if not isinstance(grid, dict) or not grid:
-                job.error = "param_grid 必须是非空的参数网格对象"
-                job.done = True
-                job.finish_ts = time.time()
+                _finish_job(job, error="param_grid 必须是非空的参数网格对象")
                 grid = None
 
             if grid is not None:
@@ -702,6 +740,7 @@ async def optimize_stream(
                     objective=objective,
                     direction=direction,
                     max_workers=int(max_workers),
+                    matrix_cache_max_mb=int(matrix_cache_max_mb),
                     base_params=base_params if isinstance(base_params, dict) else {},
                     overrides=ov if isinstance(ov, dict) else None,
                     backtest_kwargs=bt_kwargs,
@@ -709,14 +748,15 @@ async def optimize_stream(
 
                 def _run_opt():
                     try:
-                        opt = StrategyOptimizer(svc, strategy_engine)
-                        job.result = opt.optimize(ocfg, lambda d: job.progress.append(d), job.cancel_event)
-                        job.done = True
-                        job.finish_ts = time.time()
+                        task = make_worker_task("optimize", settings.data_dir, ocfg)
+                        result = run_worker_task(
+                            task,
+                            lambda d: job.progress.append(d),
+                            job.cancel_event,
+                        )
+                        _finish_job(job, result=result)
                     except Exception as e:
-                        job.error = str(e)
-                        job.done = True
-                        job.finish_ts = time.time()
+                        _finish_job(job, error=str(e))
 
                 threading.Thread(target=_run_opt, daemon=True).start()
 
@@ -768,8 +808,24 @@ async def optimize_cancel(request: Request):
 # Walk-forward 优化 — 每折训练区间优化 + 测试区间 OOS 验证 (复用优化器 + job_key 回吐)
 # ══════════════════════════════════════════════════════════════
 
-def _make_wf_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, windows, bt_sig, params=None, overrides=None) -> str:
-    raw = f"WF|{strategy_id}|{symbols}|{start}|{end}|{param_grid}|{objective}|{direction}|{windows}|{bt_sig}|{params}|{overrides}"
+def _make_wf_job_key(
+    strategy_id,
+    symbols,
+    start,
+    end,
+    param_grid,
+    objective,
+    direction,
+    windows,
+    bt_sig,
+    params=None,
+    overrides=None,
+    matrix_cache_max_mb=512,
+) -> str:
+    raw = (
+        f"WF|{strategy_id}|{symbols}|{start}|{end}|{param_grid}|{objective}|"
+        f"{direction}|{windows}|{bt_sig}|{params}|{overrides}|cache={matrix_cache_max_mb}"
+    )
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -784,6 +840,7 @@ async def walkforward_stream(
     test_days: int = 63,
     step_days: int = 63,
     max_workers: int = 4,
+    matrix_cache_max_mb: int = 512,
     params: str | None = None,       # JSON: 未扫描参数固定为用户当前值 (base_params)
     overrides: str | None = None,    # JSON: 策略当前的 basic_filter/signals/风控等覆盖
     symbols: str | None = None,
@@ -805,15 +862,10 @@ async def walkforward_stream(
 
     事件: job {key} / progress {type:walkforward_progress,done,total,fold} / done {result} / error {message}
     """
-    from app.backtest.optimizer import StrategyOptimizer
-    from app.backtest.strategy import StrategyBacktestService
-    from app.backtest.walkforward import WalkForwardConfig, WalkForwardService
+    from app.backtest.walkforward import WalkForwardConfig
+    from app.backtest.worker import make_worker_task, run_worker_task
 
     direction = direction or None
-    engine = _get_engine(request)
-    strategy_engine = request.app.state.strategy_engine
-    svc = StrategyBacktestService(engine, strategy_engine)
-    optimizer = StrategyOptimizer(svc, strategy_engine)
 
     end_date = date.fromisoformat(end) if end else date.today()
     if start:
@@ -828,7 +880,20 @@ async def walkforward_stream(
     )
     bt_sig = "|".join(f"{k}={bt_kwargs[k]}" for k in _OPT_BT_FIELDS)
     windows = f"{train_days}/{test_days}/{step_days}"
-    job_key = _make_wf_job_key(strategy_id, symbols, start, end, param_grid, objective, direction, windows, bt_sig, params, overrides)
+    job_key = _make_wf_job_key(
+        strategy_id,
+        symbols,
+        start,
+        end,
+        param_grid,
+        objective,
+        direction,
+        windows,
+        bt_sig,
+        params,
+        overrides,
+        matrix_cache_max_mb,
+    )
 
     # guard 作用于单折窗口 (每折训练/测试各是一次回测), 而非总区间 —— WF 总区间可长达数年,
     # 按总区间拦会误杀; 真正的 OOM 风险在单折窗口过大。
@@ -893,18 +958,20 @@ async def walkforward_stream(
                     base_params=base_params if isinstance(base_params, dict) else {},
                     overrides=ov if isinstance(ov, dict) else None,
                     backtest_kwargs=bt_kwargs,
+                    matrix_cache_max_mb=int(matrix_cache_max_mb),
                 )
 
                 def _run_wf():
                     try:
-                        wf = WalkForwardService(optimizer, svc, strategy_engine)
-                        job.result = wf.run(wf_cfg, lambda d: job.progress.append(d), job.cancel_event)
-                        job.done = True
-                        job.finish_ts = time.time()
+                        task = make_worker_task("walkforward", settings.data_dir, wf_cfg)
+                        result = run_worker_task(
+                            task,
+                            lambda d: job.progress.append(d),
+                            job.cancel_event,
+                        )
+                        _finish_job(job, result=result)
                     except Exception as e:
-                        job.error = str(e)
-                        job.done = True
-                        job.finish_ts = time.time()
+                        _finish_job(job, error=str(e))
 
                 threading.Thread(target=_run_wf, daemon=True).start()
 

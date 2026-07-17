@@ -1,46 +1,20 @@
-from app.services.screener import (
-    PRESET_STRATEGIES,
-    strategy_supports_asset,
-)
-
-
-def test_all_presets_have_asset_types():
-    for sid, strat in PRESET_STRATEGIES.items():
-        assert "asset_types" in strat, f"{sid} 缺 asset_types"
-        assert "stock" in strat["asset_types"], f"{sid} 必须支持 stock"
-
-
-def test_limit_up_strategies_are_stock_only():
-    for sid in ("broken_board_recovery", "consecutive_limit_ups"):
-        assert PRESET_STRATEGIES[sid]["asset_types"] == ["stock"]
-
-
-def test_pure_technical_strategies_support_etf():
-    for sid in (
-        "trend_breakout", "ma_golden_cross", "macd_golden",
-        "volume_price_surge", "low_volatility_leader", "oversold_bounce",
-        "boll_breakout", "bullish_alignment", "pullback_to_support",
-        "n_day_low_reversal",
-    ):
-        assert "etf" in PRESET_STRATEGIES[sid]["asset_types"], sid
-
-
-def test_strategy_supports_asset_defaults_to_stock():
-    assert strategy_supports_asset({}, "stock") is True
-    assert strategy_supports_asset({}, "etf") is False
-    assert strategy_supports_asset({"asset_types": ["stock", "etf"]}, "etf") is True
-
+from __future__ import annotations
 
 import types
-from datetime import date
+from datetime import date, timedelta
+from pathlib import Path
 
 import polars as pl
+import pytest
 
 from app.services.screener import ScreenerService
+from app.strategy.engine import StrategyDataContext, StrategyEngine
+
+BUILTIN_DIR = Path(__file__).resolve().parents[1] / "app" / "strategy" / "builtin"
 
 
 class _FakeRepo:
-    """最小 repo 桩：只实现 screener 用到的 _asset 取数接口。"""
+    """最小 repo 桩: 只实现 screener 数据上下文需要的资产取数接口。"""
 
     def __init__(self, data_dir, enriched=None, instruments=None, latest=None):
         self.store = types.SimpleNamespace(data_dir=data_dir)
@@ -55,7 +29,93 @@ class _FakeRepo:
         return self._instruments
 
     def get_enriched_history(self, target_date, lookback_days):
-        return None  # stock 缓存；ETF 分支不应调用它
+        return None
+
+
+def _engine() -> StrategyEngine:
+    return StrategyEngine(strategy_dirs=[BUILTIN_DIR])
+
+
+def test_all_builtin_strategies_declare_asset_types_and_timeframes():
+    engine = _engine()
+    assert engine.load_errors() == []
+    for meta in engine.list_strategies():
+        assert meta["asset_types"]
+        assert meta["timeframes"] == ["1d"]
+
+
+def test_all_builtin_strategies_use_matrix_backend_only():
+    engine = _engine()
+    assert engine.load_errors() == []
+    strategies = [engine.get(meta["id"]) for meta in engine.list_strategies()]
+    assert len(strategies) == 18
+    assert all(strategy.execution_backend == "matrix_native" for strategy in strategies)
+    assert all(strategy.matrix_strategy is not None for strategy in strategies)
+    assert all(strategy.filter_fn is None for strategy in strategies)
+    assert all(strategy.filter_history_fn is None for strategy in strategies)
+
+
+def test_all_builtin_matrix_formulas_accept_base_market_matrix():
+    rows = []
+    start = date(2024, 1, 1)
+    for offset in range(80):
+        close = 10.0 + offset * 0.04
+        rows.append({
+            "symbol": "000001.SZ",
+            "name": "测试股票",
+            "date": start + timedelta(days=offset),
+            "open": close - 0.05,
+            "high": close + 0.15,
+            "low": close - 0.15,
+            "close": close,
+            "volume": 1000.0 + offset * 5.0,
+            "amount": 100000.0,
+            "raw_close": close,
+            "turnover_rate": 5.0,
+            "consecutive_limit_ups": 0,
+        })
+    panel = pl.DataFrame(rows)
+    engine = _engine()
+    from app.backtest.matrix import build_market_data_matrix
+
+    fields = set()
+    for strategy in (engine.get(meta["id"]) for meta in engine.list_strategies()):
+        fields.update(engine._matrix_field_columns(strategy))
+    market = build_market_data_matrix(panel, field_columns=fields)
+    for meta in engine.list_strategies():
+        strategy = engine.get(meta["id"])
+        signals = strategy.matrix_strategy.compute_signals(market, {})
+        assert signals.shape == market.shape, meta["id"]
+
+
+def test_limit_up_strategies_are_stock_only():
+    engine = _engine()
+    for sid in ("broken_board_recovery", "consecutive_limit_ups"):
+        assert engine.get(sid).meta["asset_types"] == ["stock"]
+
+
+def test_pure_technical_strategies_support_etf():
+    engine = _engine()
+    for sid in (
+        "trend_breakout", "ma_golden_cross", "macd_golden",
+        "volume_price_surge", "low_volatility_leader", "oversold_bounce",
+        "boll_breakout", "bullish_alignment", "pullback_to_support",
+        "n_day_low_reversal",
+    ):
+        assert "etf" in engine.get(sid).meta["asset_types"], sid
+
+
+def test_custom_strategy_defaults_to_stock_and_daily(tmp_path):
+    path = tmp_path / "custom_default.py"
+    path.write_text(
+        'import polars as pl\n'
+        'META = {"id": "custom_default", "name": "x"}\n'
+        'def filter(df, params):\n    return pl.lit(True)\n',
+        encoding="utf-8",
+    )
+    strategy = StrategyEngine._load_file(path)
+    assert strategy.meta["asset_types"] == ["stock"]
+    assert strategy.meta["timeframes"] == ["1d"]
 
 
 def test_service_defaults_to_stock_dir(tmp_path):
@@ -70,50 +130,54 @@ def test_service_etf_uses_etf_dir(tmp_path):
     assert svc._enriched_dirname == "kline_etf_enriched"
 
 
-def test_etf_run_preset_empty_data_degrades(tmp_path):
-    """ETF enriched 为空时，run_preset 返回空结果而非抛错。"""
-    svc = ScreenerService(_FakeRepo(tmp_path), asset_type="etf")
-    result = svc.run_preset("trend_breakout", as_of=date(2026, 1, 2))
-    assert result.total == 0
-    assert result.rows == []
-
-
-def test_etf_run_preset_filters_rows(tmp_path):
-    """给一份含技术列的 ETF enriched，趋势突破策略能选出命中行。"""
-    enriched = pl.DataFrame({
-        "symbol": ["510300", "159915"],
-        "name": ["沪深300ETF", "创业板ETF"],
-        "date": [date(2026, 1, 2), date(2026, 1, 2)],
-        "close": [4.0, 2.0],
-        "open": [3.9, 2.1],
-        "ma60": [3.5, 2.5],
-        "signal_n_day_high": [True, False],
-        "vol_ratio_5d": [2.5, 0.5],
-        "momentum_60d": [0.2, -0.1],
-    })
-    repo = _FakeRepo(tmp_path, enriched=enriched, latest=date(2026, 1, 2))
-    svc = ScreenerService(repo, asset_type="etf")
-    result = svc.run_preset("trend_breakout", as_of=date(2026, 1, 2))
+def test_etf_strategy_runs_through_engine_context(tmp_path):
+    rows = []
+    for offset in range(61):
+        trade_date = date(2025, 11, 3) + timedelta(days=offset)
+        leader_close = 3.0 + offset / 60.0
+        weak_close = 3.0 - offset / 60.0
+        rows.extend([
+            {
+                "symbol": "510300", "name": "沪深300ETF", "date": trade_date,
+                "open": leader_close - 0.01, "high": leader_close + 0.01,
+                "low": leader_close - 0.02, "close": leader_close,
+                "volume": 300.0 if offset == 60 else 100.0,
+            },
+            {
+                "symbol": "159915", "name": "创业板ETF", "date": trade_date,
+                "open": weak_close + 0.01, "high": weak_close + 0.02,
+                "low": weak_close - 0.01, "close": weak_close,
+                "volume": 50.0 if offset == 60 else 100.0,
+            },
+        ])
+    history = pl.DataFrame(rows)
+    target_date = history["date"].max()
+    current = history.filter(pl.col("date") == target_date)
+    engine = _engine()
+    result = engine.run(
+        "trend_breakout",
+        StrategyDataContext(
+            asset_type="etf",
+            timeframe="1d",
+            as_of=target_date,
+            current=current,
+            history=history,
+        ),
+        overrides={"basic_filter": {"enabled": False}},
+    )
     assert result.total == 1
     assert result.rows[0]["symbol"] == "510300"
 
 
-def test_strategies_filtered_for_etf():
-    etf_ids = [sid for sid, s in PRESET_STRATEGIES.items()
-               if strategy_supports_asset(s, "etf")]
-    assert "trend_breakout" in etf_ids
-    assert "consecutive_limit_ups" not in etf_ids
-    assert len(etf_ids) == 10
-
-
-def test_run_preset_stock_only_strategy_on_etf_returns_empty(tmp_path):
-    """对 ETF 跑股票专有策略（连板）应返回空结果，而非误命中或抛错。"""
-    enriched = pl.DataFrame({
-        "symbol": ["510300"],
-        "date": [date(2026, 1, 2)],
-        "close": [4.0],
-    })
-    repo = _FakeRepo(tmp_path, enriched=enriched, latest=date(2026, 1, 2))
-    svc = ScreenerService(repo, asset_type="etf")
-    result = svc.run_preset("consecutive_limit_ups", as_of=date(2026, 1, 2))
-    assert result.total == 0
+def test_stock_only_strategy_on_etf_fails_explicitly():
+    engine = _engine()
+    with pytest.raises(ValueError, match="does not support asset_type"):
+        engine.run(
+            "consecutive_limit_ups",
+            StrategyDataContext(
+                asset_type="etf",
+                timeframe="1d",
+                as_of=date(2026, 1, 2),
+                current=pl.DataFrame({"symbol": ["510300"], "close": [4.0]}),
+            ),
+        )
