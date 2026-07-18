@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+import httpx
 import polars as pl
 
 from app.data_providers.base import ProviderCapabilities
@@ -16,8 +20,10 @@ from app.market_rules import market_rule_for_symbol, round_lot_size
 from app.plugins.clickhouse import bridge
 
 QueryFn = Callable[[str], list[dict]]
+MinuteFallbackFn = Callable[[str], list[dict]]
 _MINUTE_COLUMNS = ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"]
 _DAILY_SYMBOL_BATCH_SIZE = 500
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,6 +66,35 @@ def _minute_local_time(value: object, symbol: str) -> datetime:
     return parsed.astimezone(ZoneInfo(market_rule_for_symbol(symbol).timezone)).replace(tzinfo=None)
 
 
+def _longbridge_minute_local_time(value: object, symbol: str) -> datetime:
+    """Longbridge API emits naive timestamps in Asia/Shanghai wall-clock time."""
+    return (
+        _as_shanghai_time(value)
+        .astimezone(ZoneInfo(market_rule_for_symbol(symbol).timezone))
+        .replace(tzinfo=None)
+    )
+
+
+def _fetch_longbridge_intraday(symbol: str) -> list[dict]:
+    endpoint = os.getenv("LONGBRIDGE_API_URL", "").strip().rstrip("/")
+    if not endpoint:
+        return []
+    timeout = float(os.getenv("LONGBRIDGE_API_TIMEOUT_SECONDS", "20"))
+    try:
+        response = httpx.get(
+            f"{endpoint}/api/stocks/{quote(symbol, safe='')}/klines",
+            params={"period": "1m", "limit": 1200},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        logger.warning("Longbridge minute fallback failed for %s: %s", symbol, exc)
+        return []
+    bars = payload.get("bars") if isinstance(payload, dict) else None
+    return bars if isinstance(bars, list) else []
+
+
 class ClickHouseProvider:
     name = "clickhouse"
     builtin = True
@@ -70,9 +105,14 @@ class ClickHouseProvider:
         realtime=True,
     )
 
-    def __init__(self, query_fn: QueryFn | None = None) -> None:
+    def __init__(
+        self,
+        query_fn: QueryFn | None = None,
+        minute_fallback_fn: MinuteFallbackFn | None = None,
+    ) -> None:
         self.config = _ClickHouseConfig()
         self._query_fn = query_fn or bridge.query_json_each_row
+        self._minute_fallback_fn = minute_fallback_fn or _fetch_longbridge_intraday
         self.last_sql = ""
 
     def close(self) -> None:
@@ -137,15 +177,27 @@ class ClickHouseProvider:
         query_start = start_time - timedelta(days=1) if start_time is not None else None
         query_end = end_time + timedelta(days=1) if end_time is not None else None
         sql = f"""
-            SELECT symbol, market, bar_time_utc, open, high, low, close, volume, amount
-            FROM {self._table("lb_minute_bars")}
-            WHERE frequency = {_sql_string(freq)}
-              AND symbol IN {_symbols_sql(symbols)}
-              {_date_filter("trade_date_local", query_start, query_end)}
+            SELECT symbol, market, bar_time_utc, open, high, low, close, volume, amount,
+                   source_priority
+            FROM (
+                SELECT symbol, market, bar_time_utc, open, high, low, close, volume, amount,
+                       2 AS source_priority
+                FROM {self._table("lb_minute_bars")}
+                WHERE frequency = {_sql_string(freq)}
+                  AND symbol IN {_symbols_sql(symbols)}
+                  {_date_filter("trade_date_local", query_start, query_end)}
+                UNION ALL
+                SELECT symbol, market, toTimeZone(line_time, 'UTC') AS bar_time_utc,
+                       price AS open, price AS high, price AS low, price AS close,
+                       volume, turnover AS amount, 1 AS source_priority
+                FROM {self._table("lb_intraday_lines")}
+                WHERE symbol IN {_symbols_sql(symbols)}
+                  {_date_filter("line_time", query_start, query_end)}
+            )
             ORDER BY symbol, bar_time_utc
         """
         rows = self._query(sql)
-        mapped: list[dict[str, Any]] = []
+        mapped_by_key: dict[tuple[str, datetime], dict[str, Any]] = {}
         for row in rows:
             symbol = str(row.get("symbol") or "").upper()
             if not symbol or row.get("bar_time_utc") is None:
@@ -158,13 +210,49 @@ class ClickHouseProvider:
             if end_time is not None and local_time.date() > end_time.date():
                 continue
             item["datetime"] = local_time
-            mapped.append(item)
+            key = (symbol, local_time)
+            previous = mapped_by_key.get(key)
+            current_priority = int(item.get("source_priority") or 0)
+            previous_priority = int(previous.get("source_priority") or 0) if previous else -1
+            if current_priority >= previous_priority:
+                mapped_by_key[key] = item
+
+        covered = {symbol for symbol, _ in mapped_by_key}
+        missing_symbols = [
+            str(value).upper() for value in symbols if str(value).upper() not in covered
+        ]
+        for symbol in missing_symbols:
+            for row in self._minute_fallback_fn(symbol):
+                timestamp = row.get("time") or row.get("date") or row.get("timestamp")
+                if timestamp is None:
+                    continue
+                local_time = _longbridge_minute_local_time(timestamp, symbol)
+                if start_time is not None and local_time.date() < start_time.date():
+                    continue
+                if end_time is not None and local_time.date() > end_time.date():
+                    continue
+                close = row.get("close", row.get("price"))
+                item = {
+                    "symbol": symbol,
+                    "datetime": local_time,
+                    "open": row.get("open", close),
+                    "high": row.get("high", close),
+                    "low": row.get("low", close),
+                    "close": close,
+                    "volume": row.get("volume"),
+                    "amount": row.get("amount", row.get("turnover")),
+                    "source_priority": 0,
+                }
+                mapped_by_key[(symbol, local_time)] = item
+
+        mapped = list(mapped_by_key.values())
         frame = pl.DataFrame(mapped) if mapped else pl.DataFrame()
         if not frame.is_empty():
             for column in ("open", "high", "low", "close", "volume", "amount"):
                 if column in frame.columns:
                     frame = frame.with_columns(pl.col(column).cast(pl.Float64, strict=False))
-            frame = frame.select([column for column in _MINUTE_COLUMNS if column in frame.columns])
+            selected_columns = [column for column in _MINUTE_COLUMNS if column in frame.columns]
+            frame = frame.select(selected_columns).sort(["symbol", "datetime"])
         if on_chunk_done:
             on_chunk_done(1, 1)
         return frame

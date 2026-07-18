@@ -143,6 +143,78 @@ def test_minute_bars_filter_by_market_local_trade_date() -> None:
     assert "trade_date_local <= toDate('2026-07-18')" in sql
 
 
+def test_minute_bars_fall_back_for_every_missing_symbol() -> None:
+    query = QueryRecorder([])
+    requested: list[str] = []
+
+    def fetch_missing(symbol: str) -> list[dict]:
+        requested.append(symbol)
+        if symbol == "ORCL.US":
+            return [{
+                "time": "2026-07-17T21:30:00",
+                "open": 250,
+                "high": 250,
+                "low": 250,
+                "close": 250,
+                "volume": 100,
+                "turnover": 25000,
+            }]
+        return [{
+            "time": "2026-07-17T09:30:00",
+            "open": 12,
+            "high": 12,
+            "low": 12,
+            "close": 12,
+            "volume": 200,
+            "turnover": 2400,
+        }]
+
+    provider = ClickHouseProvider(query_fn=query, minute_fallback_fn=fetch_missing)
+
+    frame = provider.get_minute(
+        ["ORCL.US", "000001.SZ"],
+        datetime(2026, 7, 17, 0, 0),
+        datetime(2026, 7, 17, 23, 59),
+        freq="1m",
+    ).sort("symbol")
+
+    assert requested == ["ORCL.US", "000001.SZ"]
+    assert frame["symbol"].to_list() == ["000001.SZ", "ORCL.US"]
+    assert frame["datetime"].to_list() == [
+        datetime(2026, 7, 17, 9, 30),
+        datetime(2026, 7, 17, 9, 30),
+    ]
+
+
+def test_minute_bars_do_not_fall_back_for_covered_symbol() -> None:
+    query = QueryRecorder([{
+        "symbol": "AAPL.US",
+        "market": "us",
+        "bar_time_utc": "2026-07-17 13:30:00",
+        "open": 210,
+        "high": 211,
+        "low": 209,
+        "close": 210.5,
+        "volume": 100,
+        "amount": 21050,
+    }])
+    requested: list[str] = []
+    provider = ClickHouseProvider(
+        query_fn=query,
+        minute_fallback_fn=lambda symbol: requested.append(symbol) or [],
+    )
+
+    frame = provider.get_minute(
+        ["AAPL.US"],
+        datetime(2026, 7, 17, 0, 0),
+        datetime(2026, 7, 17, 23, 59),
+        freq="1m",
+    )
+
+    assert frame.height == 1
+    assert requested == []
+
+
 def test_instruments_cover_all_three_markets() -> None:
     query = QueryRecorder([
         {"symbol": "000001.SZ", "market": "cn", "name": "Ping An Bank", "currency": "CNY", "lot_size": 100},

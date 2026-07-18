@@ -30,6 +30,9 @@ services:
       - CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://host.docker.internal:8123}
       - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-longbridge}
       - CLICKHOUSE_READ_TIMEOUT_SECONDS=${CLICKHOUSE_READ_TIMEOUT_SECONDS:-30}
+      # ClickHouse 尚未覆盖的单股分时由 Longbridge API 按需补拉；结果会回写实时行情库。
+      - LONGBRIDGE_API_URL=${LONGBRIDGE_API_URL:-http://host.docker.internal:19912}
+      - LONGBRIDGE_API_TIMEOUT_SECONDS=${LONGBRIDGE_API_TIMEOUT_SECONDS:-20}
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro
