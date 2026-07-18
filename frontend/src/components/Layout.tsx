@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, Suspense } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
@@ -52,6 +52,8 @@ import { api, type IndexQuote } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { toggleTheme, useTheme } from '@/lib/theme'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
+import { MarketFilterTabs } from '@/components/MarketFilterTabs'
+import { marketFilterFromSearch, marketWatchlistHref } from '@/lib/market-display'
 
 // 品牌色 — 只用于 logo / brand 区域,不影响功能语义色
 const BRAND = '#8B5CF6'
@@ -318,6 +320,10 @@ export function Layout() {
 
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const location = useLocation()
+  const globalMarket = location.pathname === '/watchlist'
+    ? marketFilterFromSearch(location.search)
+    : 'all'
   const version = versionData?.version
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   // Free 档监控限制提示: 可手动关闭, 不持久化 (刷新后恢复显示)
@@ -457,6 +463,21 @@ export function Layout() {
           <AIConfigBadge
             configured={settingsState?.ai_configured ?? settingsState?.has_ai_key}
             model={settingsState?.ai_model}
+          />
+        </div>
+
+        <div className="shrink-0 border-b border-border px-3 py-2.5">
+          <div className="mb-1.5 flex items-center justify-between px-0.5">
+            <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted">三市场入口</span>
+            <span className="text-[9px] text-muted/60">CN · HK · US</span>
+          </div>
+          <MarketFilterTabs
+            value={globalMarket}
+            includeAll={false}
+            className="w-full justify-center"
+            onChange={(market) => {
+              if (market !== 'all') navigate(marketWatchlistHref(market))
+            }}
           />
         </div>
 

@@ -5,7 +5,9 @@ import {
   currencyLabel,
   MARKET_FILTER_OPTIONS,
   marketFromSymbol,
+  marketFilterFromSearch,
   marketLabel,
+  marketWatchlistHref,
   matchesMarketFilter,
 } from './market-display'
 
@@ -41,5 +43,13 @@ describe('market display', () => {
     expect(matchesMarketFilter('A.US', 'us')).toBe(true)
     expect(matchesMarketFilter('A.US', 'cn')).toBe(false)
     expect(matchesMarketFilter('A.US', 'all')).toBe(true)
+  })
+
+  it('keeps the selected market in a shareable watchlist URL', () => {
+    expect(marketWatchlistHref('cn')).toBe('/watchlist?market=cn')
+    expect(marketWatchlistHref('hk')).toBe('/watchlist?market=hk')
+    expect(marketWatchlistHref('us')).toBe('/watchlist?market=us')
+    expect(marketFilterFromSearch('?market=hk')).toBe('hk')
+    expect(marketFilterFromSearch('?market=invalid')).toBe('all')
   })
 })
