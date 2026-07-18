@@ -1,0 +1,24 @@
+{
+  "title": "TickFlow 财务数据增量同步到 ClickHouse",
+  "enabled": 1,
+  "timezone": "Asia/Shanghai",
+  "timing": {
+    "hours": [
+      6
+    ],
+    "minutes": [
+      40
+    ]
+  },
+  "timeout": 1800,
+  "plugin": "shellplug",
+  "category": "general",
+  "target": "maingrp",
+  "max_children": 1,
+  "catch_up": 0,
+  "queue": 0,
+  "retries": 1,
+  "retry_delay": 300,
+  "notes": "每天把 PostgreSQL lb_financial_report 的新增或更新记录增量迁移到 ClickHouse longbridge.lb_financial_report，并刷新 TickFlow 四张财务 Parquet；使用 5 分钟重叠窗口和 ReplacingMergeTree 幂等去重。",
+  "script": "#!/usr/bin/env bash\nset -euo pipefail\nTICKFLOW_ROOT=/home/alwin/apps/tickflow-stock-panel\nMIGRATION_PYTHON=/home/alwin/apps/longbridge-stock/.venv/bin/python\nexport POSTGRES_FINANCIAL_DSN='dbname=longbridge_stock user=alwin host=/var/run/postgresql'\nexport CLICKHOUSE_URL='http://127.0.0.1:8123'\nexport CLICKHOUSE_DATABASE='longbridge'\nexport FINANCIAL_MIGRATION_CHECKPOINT=\"$TICKFLOW_ROOT/data/sync_state/financial_clickhouse.json\"\n\"$MIGRATION_PYTHON\" \"$TICKFLOW_ROOT/backend/scripts/sync_financials_pg_to_clickhouse.py\" --batch-size 20000\ndocker exec -i TickFlow_Stock_Panel /app/.venv/bin/python - <<'PY'\nfrom pathlib import Path\nfrom app.services.financial_sync import sync_all\nfrom app.tickflow.capabilities import CapabilitySet\nprint(sync_all(Path('/app/data'), CapabilitySet()))\nPY\n"
+}
