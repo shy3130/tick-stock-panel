@@ -364,12 +364,17 @@ def market_snapshot(request: Request, market: str = "cn"):
     """最新全市场轻量行情快照，供板块/概念聚合分析使用。"""
     import polars as pl
 
-    from app.services.market_scope import filter_frame_by_market, market_currency, normalize_market
+    from app.services.market_scope import (
+        filter_frame_by_market,
+        market_currency,
+        market_latest_date,
+        normalize_market,
+    )
 
     market = normalize_market(market)
     repo = request.app.state.repo
     svc = ScreenerService(repo)
-    as_of = svc.latest_date()
+    as_of = market_latest_date(repo, market)
     if not as_of:
         return {"as_of": None, "market": market, "currency": market_currency(market), "rows": []}
 

@@ -125,3 +125,19 @@ def test_provider_honors_configured_database(monkeypatch) -> None:
     provider.get_realtime(symbols=["A.US"])
 
     assert "FROM market_data.lb_realtime_quotes" in query.queries[-1]
+
+
+def test_daily_chunks_large_three_market_universe() -> None:
+    query = QueryRecorder([])
+    progress: list[tuple[int, int]] = []
+    provider = ClickHouseProvider(query_fn=query)
+
+    provider.get_daily(
+        [f"SYM{i}.US" for i in range(501)],
+        None,
+        None,
+        on_chunk_done=lambda current, total: progress.append((current, total)),
+    )
+
+    assert len(query.queries) == 2
+    assert progress == [(1, 2), (2, 2)]

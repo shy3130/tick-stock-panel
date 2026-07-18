@@ -55,11 +55,22 @@ def _invalidate(table: str | None = None) -> None:
 
 
 def _resolve_universe(capset: CapabilitySet) -> list[str]:
-    """解析标的池 — 以 CN_Equity_A (沪深京A股 ~5522只) 为主。
+    """解析标的池。
 
-    有 batch 能力 → 直接拉 CN_Equity_A universe
+    自定义日K源 → 使用该数据源同步出的 instruments 全市场维表
+    TickFlow 有 batch 能力 → 直接拉 CN_Equity_A universe
     其他用户 → 用 instruments parquet + watchlist 兜底
     """
+    d = Path(settings.data_dir)
+    inst_path = d / "instruments" / "instruments.parquet"
+    if _prefs.get_daily_data_provider() != "tickflow" and inst_path.exists():
+        try:
+            symbols = pl.read_parquet(inst_path, columns=["symbol"])["symbol"].drop_nulls().to_list()
+            if symbols:
+                return sorted(set(symbols))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("custom provider instruments unavailable, fallback: %s", e)
+
     if capset.has(Cap.KLINE_DAILY_BATCH):
         try:
             all_a = get_pool("CN_Equity_A", refresh=True)
@@ -71,8 +82,6 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
     # Free 用户兜底: instruments parquet + watchlist + demo
     base: set[str] = set(DEMO_SYMBOLS)
     base.update(get_pool("watchlist"))
-    d = Path(settings.data_dir)
-    inst_path = d / "instruments" / "instruments.parquet"
     if inst_path.exists():
         try:
             inst = pl.read_parquet(inst_path, columns=["symbol"])

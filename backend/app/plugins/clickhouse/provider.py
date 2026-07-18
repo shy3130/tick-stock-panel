@@ -17,6 +17,7 @@ from app.plugins.clickhouse import bridge
 
 QueryFn = Callable[[str], list[dict]]
 _MINUTE_COLUMNS = ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"]
+_DAILY_SYMBOL_BATCH_SIZE = 500
 
 
 @dataclass
@@ -95,21 +96,29 @@ class ClickHouseProvider:
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
-        sql = f"""
-            SELECT symbol, market, trade_date, open, high, low, close,
-                   volume, turnover AS amount
-            FROM {self._table("lb_daily_bars")}
-            WHERE adjusted = 1
-              AND symbol IN {_symbols_sql(symbols)}
-              {_date_filter("trade_date", start_time, end_time)}
-            ORDER BY symbol, trade_date
-        """
-        rows = self._query(sql)
-        normalized_rows = [dict(row, amount=row.get("amount", row.get("turnover"))) for row in rows]
-        frame = normalize_daily(normalized_rows, source=self.name)
-        if on_chunk_done:
-            on_chunk_done(1, 1)
-        return frame
+        symbol_chunks = [
+            symbols[offset:offset + _DAILY_SYMBOL_BATCH_SIZE]
+            for offset in range(0, len(symbols), _DAILY_SYMBOL_BATCH_SIZE)
+        ]
+        frames: list[pl.DataFrame] = []
+        for index, symbol_chunk in enumerate(symbol_chunks, start=1):
+            sql = f"""
+                SELECT symbol, market, trade_date, open, high, low, close,
+                       volume, turnover AS amount
+                FROM {self._table("lb_daily_bars")}
+                WHERE adjusted = 1
+                  AND symbol IN {_symbols_sql(symbol_chunk)}
+                  {_date_filter("trade_date", start_time, end_time)}
+                ORDER BY symbol, trade_date
+            """
+            rows = self._query(sql)
+            normalized_rows = [dict(row, amount=row.get("amount", row.get("turnover"))) for row in rows]
+            frame = normalize_daily(normalized_rows, source=self.name)
+            if not frame.is_empty():
+                frames.append(frame)
+            if on_chunk_done:
+                on_chunk_done(index, len(symbol_chunks))
+        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
     def get_minute(
         self,

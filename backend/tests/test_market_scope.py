@@ -8,6 +8,7 @@ from app.services.market_scope import (
     filter_frame_by_market,
     market_cache_key,
     market_currency,
+    market_latest_date,
     normalize_market,
 )
 
@@ -48,3 +49,19 @@ def test_market_cache_key_isolates_same_date_between_markets() -> None:
     assert market_cache_key("cn", target) == "cn:2026-07-17"
     assert market_cache_key("hk", target) == "hk:2026-07-17"
     assert market_cache_key("us", None) == "us:latest"
+
+
+def test_market_latest_date_uses_market_specific_symbols() -> None:
+    class Repo:
+        def __init__(self) -> None:
+            self.sql = ""
+
+        def execute_one(self, sql: str):
+            self.sql = sql
+            return (date(2026, 7, 17),)
+
+    repo = Repo()
+
+    assert market_latest_date(repo, "hk") == date(2026, 7, 17)
+    assert "%.HK" in repo.sql
+    assert ".SH" not in repo.sql

@@ -32,6 +32,24 @@ def market_cache_key(value: str | None, as_of: date | None = None) -> str:
     return f"{market}:{date_key}"
 
 
+def market_latest_date(repo, value: str | None, view: str = "kline_enriched") -> date | None:
+    market = normalize_market(value)
+    if market == "hk":
+        predicate = "symbol LIKE '%.HK'"
+    elif market == "us":
+        predicate = "symbol LIKE '%.US'"
+    else:
+        predicate = "(symbol LIKE '%.SH' OR symbol LIKE '%.SZ' OR symbol LIKE '%.BJ')"
+    try:
+        result = repo.execute_one(f"SELECT max(date) FROM {view} WHERE {predicate}")
+    except Exception:  # noqa: BLE001
+        return None
+    if not result or not result[0]:
+        return None
+    latest = result[0]
+    return latest if isinstance(latest, date) else date.fromisoformat(str(latest))
+
+
 def filter_frame_by_market(frame: pl.DataFrame, value: str | None) -> pl.DataFrame:
     """按标准证券后缀过滤，未知或缺少 symbol 时返回空集以避免跨市场泄漏。"""
     if frame.is_empty():
