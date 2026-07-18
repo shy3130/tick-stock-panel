@@ -92,6 +92,10 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线研究经验的市场�
 
 现在请基于下方数据进行复盘。"""
 
+_GLOBAL_SYSTEM_PROMPT = """你是一位资深全球市场分析师。请仅依据提供的当前市场数据，用中文生成客观、中立、不包含买卖建议的盘后复盘。
+使用 Markdown，依次包含：一句话定调、市场广度、涨跌分布、趋势强度、成交与活跃度、领涨领跌个股、后续观察、风险提示。
+数据中没有指数、行业或涨跌停规则时必须明确写“数据暂未接入/该市场不适用”，严禁用 A 股指数、连板、涨跌停或两市成交额补全，严禁编造新闻和数值。结尾注明内容不构成投资建议。"""
+
 
 # ================================================================
 # 用户消息构建(精简切片,控制 token)
@@ -264,6 +268,7 @@ async def recap_market_stream(
     as_of: date | None = None,
     focus: str = "",
     news: list[dict] | None = None,
+    market: str = "cn",
 ) -> AsyncIterator[str]:
     """流式大盘复盘:yield 出每个 NDJSON 事件。
 
@@ -275,7 +280,9 @@ async def recap_market_stream(
         news: 预检索的新闻列表(P1 不传,留 None 走降级说明;P3 由 news_search 注入)。
     """
     # 1. 装配市场总览
-    overview = build_market_overview(repo, quote_service, depth_service, as_of)
+    from app.services.market_scope import normalize_market
+    market = normalize_market(market)
+    overview = build_market_overview(repo, quote_service, depth_service, as_of, market=market)
     as_of_str = overview.get("as_of")
 
     if not as_of_str:
@@ -294,6 +301,7 @@ async def recap_market_stream(
         "emotion_score": emo.get("score", 50),
         "emotion_label": emo.get("label", "—"),
         "summary": _recap_summary(overview),
+        "market": market,
     }, ensure_ascii=False)
 
     # 3+4. 构建 prompt + 流式调用 LLM(整体 try-except,任何异常 yield error,避免前端卡死)
@@ -303,7 +311,7 @@ async def recap_market_stream(
         user_prompt = _build_user_prompt(overview, news or [], focus)
         async for delta in stream_ai_text(
             [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": _SYSTEM_PROMPT if market == "cn" else _GLOBAL_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.5,

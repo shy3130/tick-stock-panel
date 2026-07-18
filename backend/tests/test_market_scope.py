@@ -9,6 +9,7 @@ from app.services.market_scope import (
     market_cache_key,
     market_currency,
     market_latest_date,
+    symbols_for_market,
     normalize_market,
 )
 
@@ -65,3 +66,12 @@ def test_market_latest_date_uses_market_specific_symbols() -> None:
     assert market_latest_date(repo, "hk") == date(2026, 7, 17)
     assert "%.HK" in repo.sql
     assert ".SH" not in repo.sql
+
+
+def test_symbols_for_market_reads_instrument_universe() -> None:
+    class Repo:
+        def get_instruments_asset(self, asset_type: str):
+            assert asset_type == "stock"
+            return _mixed_market_frame()
+
+    assert symbols_for_market(Repo(), "us") == ["AAPL.US"]

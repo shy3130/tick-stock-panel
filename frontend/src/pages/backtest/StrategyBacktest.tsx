@@ -22,12 +22,12 @@ import {
   marketFromSymbol,
   marketLabel,
   type MarketCode,
-  type MarketFilter,
 } from '@/lib/market-display'
 import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
 import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
+import { useMarketScope } from '@/lib/market-scope'
 import { EmptyState } from '@/components/EmptyState'
 import { WarmupBadge } from '@/components/WarmupBadge'
 import { DatePicker } from '@/components/DatePicker'
@@ -611,10 +611,10 @@ function StrategyParamInput({ param, value, onChange }: {
 }
 
 function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: string; onChange: (value: string) => void; assetType?: 'stock' | 'etf' }) {
+  const { market: marketFilter, setMarket } = useMarketScope()
   const symbols = useMemo(() => value.split(',').map(s => s.trim()).filter(Boolean), [value])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
-  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all')
   const [symbolNames, setSymbolNames] = useState<Record<string, string>>({})
   const ref = useRef<HTMLDivElement>(null)
   const searchAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
@@ -675,7 +675,12 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
   return (
     <div className="space-y-2" ref={ref}>
       {assetType === 'stock' && (
-        <MarketFilterTabs value={marketFilter} onChange={setMarketFilter} className="w-fit" />
+        <MarketFilterTabs
+          value={marketFilter}
+          includeAll={false}
+          onChange={(nextMarket) => { if (nextMarket !== 'all') setMarket(nextMarket) }}
+          className="w-fit"
+        />
       )}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
@@ -759,6 +764,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
 }
 
 export function StrategyBacktest() {
+  const { market } = useMarketScope()
   const signalNames = useSignalNames()
   const [saved] = useState(() => storage.strategyBacktestLast.get(null))
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
@@ -802,6 +808,15 @@ export function StrategyBacktest() {
   const [tradePageSize, setTradePageSize] = useState(10)
   const [selectedTrade, setSelectedTrade] = useState<StrategyBacktestTrade | null>(null)
   const loadedStrategyRef = useRef<string | null>(null)
+  const previousMarketRef = useRef(market)
+
+  useEffect(() => {
+    if (previousMarketRef.current === market) return
+    previousMarketRef.current = market
+    setSymbols('')
+    setResult(null)
+    setSelectedTrade(null)
+  }, [market])
 
   const strategies = useQuery({
     queryKey: QK.screenerStrategies(assetType),
@@ -866,6 +881,7 @@ export function StrategyBacktest() {
   // 当全局回测任务完成时, 把结果写入组件 (切页回来也能恢复)
   useEffect(() => {
     if (backtestTask && !backtestTask.isPending && backtestTask.result) {
+      if (backtestTask.result.config?.market && backtestTask.result.config.market !== market) return
       setResult(backtestTask.result)
       setResultTab('daily')
       setDailyPage(0)
@@ -893,7 +909,7 @@ export function StrategyBacktest() {
         result: backtestTask.result,
       })
     }
-  }, [backtestTask])
+  }, [backtestTask, market])
 
   const handleRun = () => {
     if (!selectedStrategy) return
@@ -903,6 +919,7 @@ export function StrategyBacktest() {
     startBacktest({
       strategy_id: selectedStrategy,
       asset_type: assetType,
+      market,
       symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
       start: start || null,
       end: end || undefined,

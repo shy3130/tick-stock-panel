@@ -11,6 +11,7 @@
  *  - 订阅者列表(notify 机制),Review mount 时订阅、unmount 时退订
  */
 import { api } from '@/lib/api'
+import type { MarketCode } from '@/lib/market-display'
 
 export type ReviewPhase = 'idle' | 'loading' | 'streaming' | 'done' | 'error'
 
@@ -75,6 +76,7 @@ export function isReviewGenerating(): boolean {
 export async function startReviewGeneration(
   asOf: string | undefined,
   focus: string,
+  market: MarketCode,
   onDone?: (fullContent: string, meta: ReviewMeta | null) => void,
 ): Promise<void> {
   // 已在生成中,不重复启动
@@ -90,7 +92,7 @@ export async function startReviewGeneration(
   let doneMeta: ReviewMeta | null = null
 
   try {
-    for await (const evt of api.reviewStream(asOf, focus)) {
+    for await (const evt of api.reviewStream(asOf, focus, market)) {
       if (abortCtrl.signal.aborted) break
       if (evt.type === 'meta') {
         doneMeta = evt

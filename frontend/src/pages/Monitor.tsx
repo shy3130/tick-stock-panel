@@ -16,6 +16,8 @@ import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { usePreferences } from '@/lib/useSharedQueries'
+import { useMarketScope } from '@/lib/market-scope'
+import { matchesMarketFilter } from '@/lib/market-display'
 
 const TYPE_LABEL: Record<string, string> = {
   signal: '个股信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控',
@@ -108,6 +110,7 @@ function AlertExtTags({ ev, fields, onTagClick }: {
 
 export function Monitor() {
   const qc = useQueryClient()
+  const { market } = useMarketScope()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)
 
@@ -129,8 +132,14 @@ export function Monitor() {
   }, [monitorExtFields])
 
   const alertsQuery = useQuery({
-    queryKey: [...QK.alerts(filter === 'all' ? undefined : filter), extColumnsParam ?? ''],
+    queryKey: [...QK.alerts(filter === 'all' ? undefined : filter), extColumnsParam ?? '', market],
     queryFn: () => api.alertsList({ days: 7, limit: 500, source: filter === 'all' ? undefined : filter, extColumns: extColumnsParam }),
+    select: (data) => {
+      const alerts = (data.alerts ?? []).filter((event: AlertEvent) => (
+        event.symbol ? matchesMarketFilter(event.symbol, market) : market === 'cn'
+      ))
+      return { ...data, alerts, total: alerts.length }
+    },
     refetchInterval: 10000,
     refetchIntervalInBackground: true,
   })

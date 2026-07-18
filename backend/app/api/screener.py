@@ -31,6 +31,7 @@ class CustomRequest(BaseModel):
     as_of: Optional[date] = None
     ext_columns: Optional[str] = None
     asset_type: str = "stock"
+    market: str = "cn"
 
 
 class PresetRequest(BaseModel):
@@ -40,6 +41,16 @@ class PresetRequest(BaseModel):
     ext_columns: Optional[str] = None
     asset_type: str = "stock"
     timeframe: str = "1d"
+    market: str = "cn"
+
+
+def _market_screener(repo, asset_type: str, market: str) -> ScreenerService:
+    """构造市场作用域服务；保留两参数构造兼容已有插件/测试替身。"""
+    from app.services.market_scope import normalize_market
+
+    service = ScreenerService(repo, asset_type=asset_type)
+    service.market = normalize_market(market)
+    return service
 
 
 def _safe(result_dict: dict) -> dict:
@@ -259,7 +270,7 @@ def strategies(
 @router.post("/run")
 def run_custom(req: CustomRequest, request: Request):
     repo = request.app.state.repo
-    svc = ScreenerService(repo, asset_type=req.asset_type)
+    svc = _market_screener(repo, req.asset_type, req.market)
     as_of = req.as_of or svc.latest_date()
     if not as_of:
         raise HTTPException(status_code=400,
@@ -279,7 +290,7 @@ def run_custom(req: CustomRequest, request: Request):
 @router.post("/run_preset")
 def run_preset(req: PresetRequest, request: Request):
     repo = request.app.state.repo
-    svc = ScreenerService(repo, asset_type=req.asset_type)
+    svc = _market_screener(repo, req.asset_type, req.market)
     as_of = req.as_of or svc.latest_date()
     if not as_of:
         raise HTTPException(status_code=400, detail="无可用数据日期")
@@ -316,7 +327,8 @@ def run_preset(req: PresetRequest, request: Request):
         raise HTTPException(status_code=status_code, detail=str(e)) from e
 
     safe_data = _safe(asdict(result))
-    _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
+    if svc.market == "cn":
+        _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
 
     return _result_with_ext(safe_data, ext_values)
 
@@ -325,6 +337,7 @@ def run_preset(req: PresetRequest, request: Request):
 def get_cached(
     request: Request,
     ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+    market: str = "cn",
 ):
     """读取策略结果缓存, 并叠加监控引擎本轮实时算出的结果。
 
@@ -333,6 +346,11 @@ def get_cached(
       不落盘 (避免与 read_cache 的 mtime 校验冲突), 在此直接叠加覆盖盘后结果。
       被监控的策略拿到新鲜数据, 非监控策略仍用盘后缓存。
     """
+    from app.services.market_scope import normalize_market
+
+    market = normalize_market(market)
+    if market != "cn":
+        return {"as_of": None, "market": market, "results": {}, "updated_at": None}
     data_dir = request.app.state.repo.store.data_dir
     cached = strategy_cache.read_cache(data_dir)
     if cached is None:
@@ -413,7 +431,8 @@ def run_all(request: Request, body: Optional[dict] = None):
     repo = request.app.state.repo
     asset_type = str(body.get("asset_type") or "stock")
     timeframe = str(body.get("timeframe") or "1d")
-    svc = ScreenerService(repo, asset_type=asset_type)
+    market = str(body.get("market") or "cn")
+    svc = _market_screener(repo, asset_type, market)
     engine = getattr(request.app.state, "strategy_engine", None)
     if engine is None:
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
@@ -425,7 +444,7 @@ def run_all(request: Request, body: Optional[dict] = None):
     else:
         as_of = svc.latest_date()
     if not as_of:
-        return {"as_of": None, "results": {}}
+        return {"as_of": None, "market": svc.market, "results": {}}
 
     data_dir = request.app.state.repo.store.data_dir
 
@@ -444,7 +463,7 @@ def run_all(request: Request, body: Optional[dict] = None):
         ]
 
     if not all_ids:
-        return {"as_of": str(as_of), "results": {}}
+        return {"as_of": str(as_of), "market": svc.market, "results": {}}
 
     # 批量预加载所有 override 配置
     t0 = time.perf_counter()
@@ -487,14 +506,14 @@ def run_all(request: Request, body: Optional[dict] = None):
     logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))
 
     # 写入策略缓存 (供页面秒加载)
-    if results:
+    if results and svc.market == "cn":
         try:
             strategy_cache.write_cache(data_dir, str(as_of), results)
         except Exception:  # noqa: BLE001
             pass
 
     ext_values = _load_ext_value_maps(repo, body.get("ext_columns"))
-    return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values)}
+    return {"as_of": str(as_of), "market": svc.market, "results": _results_with_ext(results, ext_values)}
 
 
 @router.get("/limit-ladder")

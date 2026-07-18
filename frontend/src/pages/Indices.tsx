@@ -7,6 +7,10 @@ import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { PageHeader } from '@/components/PageHeader'
+import { EmptyState } from '@/components/EmptyState'
+import { useMarketScope } from '@/lib/market-scope'
+import { marketLabel } from '@/lib/market-display'
 
 function defaultRange() {
   const now = new Date()
@@ -66,6 +70,19 @@ function pinnedRank(item: IndexInstrument) {
 }
 
 export function Indices() {
+  const { market } = useMarketScope()
+  if (market !== 'cn') {
+    return (
+      <div className="h-full flex flex-col">
+        <PageHeader title="指数行情" subtitle={`当前市场：${marketLabel(market)}`} />
+        <EmptyState icon={Activity} title={`${marketLabel(market)}指数数据尚未接入`} hint="当前不会回退显示 A 股指数；后续可接入恒生指数、标普 500 等对应市场基准。" />
+      </div>
+    )
+  }
+  return <IndicesCn />
+}
+
+function IndicesCn() {
   const qc = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [keyword, setKeyword] = useState('')

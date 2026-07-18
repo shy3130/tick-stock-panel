@@ -468,6 +468,7 @@ class StrategyBacktestConfig:
     position_sizing: Literal["equal", "score_weight"] = "equal"
     mode: Literal["position", "full"] = "position"
     asset_type: str = "stock"
+    market: str = "cn"
     holding_days: int = 5
     # 分钟K精确成交: 开启后用当日分钟K确定穿越价/VWAP (需 Pro+ 分钟K能力)
     minute_fill: bool = False
@@ -590,6 +591,7 @@ class StrategyBacktestService:
             config.end,
             config.mode,
             config.asset_type,
+            config.market,
             config.holding_days,
             config.minute_fill,
             json.dumps(config.overrides or {}, sort_keys=True, ensure_ascii=False, default=str),

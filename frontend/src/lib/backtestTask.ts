@@ -180,6 +180,7 @@ export function startBacktest(params: {
   mode?: 'position' | 'full'
   holding_days?: number
   asset_type?: 'stock' | 'etf'
+  market?: 'cn' | 'hk' | 'us'
   minute_fill?: boolean
 }): void {
   // 取消之前的任务状态
@@ -213,6 +214,7 @@ export function startBacktest(params: {
     mode: params.mode,
     holding_days: params.holding_days,
     asset_type: params.asset_type,
+    market: params.market,
     minute_fill: params.minute_fill,
   })
 

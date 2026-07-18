@@ -320,6 +320,7 @@ export interface OverviewMarket {
   as_of: string | null
   market: MarketCode
   currency: string
+  features?: { limit_ladder: boolean; cn_market_rules: boolean }
   quote_status: {
     enabled?: boolean
     running?: boolean
@@ -366,6 +367,7 @@ export interface RpsRotationData {
 
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
+  market?: MarketCode
   id: string
   as_of: string
   focus?: string
@@ -1374,25 +1376,23 @@ export const api = {
     )
     return { presets: data.strategies, load_errors: data.load_errors }
   },
-  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
+  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock', market: MarketCode = 'cn') =>
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
-      body: JSON.stringify({ strategy_id, pool, as_of: asOf ?? null, ext_columns: extColumns || null, asset_type: assetType }),
+      body: JSON.stringify({ strategy_id, pool, as_of: asOf ?? null, ext_columns: extColumns || null, asset_type: assetType, market }),
     }),
   screenerRunCustom: (conditions: string[], orderBy?: string, limit = 30, pool?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
     request<ScreenerResult>('/api/screener/run', {
       method: 'POST',
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null, asset_type: assetType }),
     }),
-  screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
-    request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
-      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null, asset_type: assetType, timeframe: '1d' }) },
+  screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock', market: MarketCode = 'cn') =>
+    request<{ as_of: string | null; market: MarketCode; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
+      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null, asset_type: assetType, timeframe: '1d', market }) },
     ),
-  screenerCached: (extColumns?: string) =>
+  screenerCached: (market: MarketCode = 'cn', extColumns?: string) =>
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }>; today_ever_matched: Record<string, string[]> | null; today_ever_rows: Record<string, Record<string, any>> | null; updated_at: number | null }>(
-      extColumns
-        ? `/api/screener/cached?ext_columns=${encodeURIComponent(extColumns)}`
-        : '/api/screener/cached',
+      `/api/screener/cached?market=${market}${extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : ''}`,
     ),
   marketSnapshot: (market: MarketCode = 'cn') =>
     request<{ as_of: string | null; market: MarketCode; currency: string; rows: MarketSnapshotRow[] }>(
@@ -1431,6 +1431,7 @@ export const api = {
     max_hold_days?: number
     matching?: 'close_t' | 'open_t+1'
     asset_type?: 'stock' | 'etf'
+    market?: MarketCode
   }) =>
     request<BacktestResult>('/api/backtest/run', {
       method: 'POST',
@@ -1821,12 +1822,12 @@ export const api = {
   },
 
   // ===== 大盘复盘 =====
-  reviewReportsList: () =>
-    request<{ reports: AiReviewReport[] }>('/api/market-recap/reports'),
+  reviewReportsList: (market: MarketCode = 'cn') =>
+    request<{ reports: AiReviewReport[] }>(`/api/market-recap/reports?market=${market}`),
 
   reviewReportSave: (r: {
     as_of: string; focus?: string; content: string
-    summary?: string; emotion_score?: number | null; emotion_label?: string
+    summary?: string; emotion_score?: number | null; emotion_label?: string; market?: MarketCode
   }) =>
     request<{ ok: boolean; report: AiReviewReport }>('/api/market-recap/reports', {
       method: 'POST', body: JSON.stringify(r),
@@ -1839,7 +1840,7 @@ export const api = {
    * AI 大盘复盘 — 流式调用(NDJSON,与个股/财务分析同协议)。
    * meta 里带 as_of / emotion_score / emotion_label / summary,供前端先渲染信号灯。
    */
-  async *reviewStream(asOf?: string, focus?: string): AsyncGenerator<{
+  async *reviewStream(asOf?: string, focus?: string, market: MarketCode = 'cn'): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     as_of?: string
     emotion_score?: number
@@ -1851,7 +1852,7 @@ export const api = {
     const res = await fetch('/api/market-recap/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '' }),
+      body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '', market }),
     })
     if (!res.ok) {
       let detail = ''

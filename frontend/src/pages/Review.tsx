@@ -27,6 +27,7 @@ import { useReviewState } from '@/lib/useReviewStore'
 import { useMarketScope } from '@/lib/market-scope'
 import {
   startReviewGeneration, resetReview, isReviewGenerating,
+  abortReviewGeneration,
   type ReviewPhase,
 } from '@/lib/reviewStore'
 
@@ -78,6 +79,12 @@ export function Review() {
   const [viewing, setViewing] = useState<AiReviewReport | null>(null)  // 查看历史报告
   const reportEndRef = useRef<HTMLDivElement>(null)
 
+  useEffect(() => {
+    abortReviewGeneration()
+    resetReview()
+    setViewing(null)
+  }, [market])
+
   // 看板数据(与总览页同源)
   const marketQuery = useQuery<OverviewMarket>({
     queryKey: QK.overviewMarket(market, asOf),
@@ -88,8 +95,8 @@ export function Review() {
 
   // 历史报告
   const historyQuery = useQuery<{ reports: AiReviewReport[] }>({
-    queryKey: QK.reviewReports,
-    queryFn: () => api.reviewReportsList(),
+    queryKey: [...QK.reviewReports, market],
+    queryFn: () => api.reviewReportsList(market),
   })
 
   const deleteMut = useMutation({
@@ -169,20 +176,21 @@ export function Review() {
         summary: doneMeta?.summary,
         emotion_score: doneMeta?.emotion_score ?? null,
         emotion_label: doneMeta?.emotion_label ?? '',
+        market,
       })
       qc.invalidateQueries({ queryKey: QK.reviewReports })
     } catch { /* 静默 */ }
-  }, [focus, asOf, marketQuery.data, qc])
+  }, [focus, asOf, market, marketQuery.data, qc])
 
   // 主流程:生成复盘(委托给全局 store,流在后台独立运行)
   const generate = useCallback(() => {
     if (isReviewGenerating()) return
     setViewing(null)
     resetReview()
-    startReviewGeneration(asOf, focus, (full, doneMeta) => {
+    startReviewGeneration(asOf, focus, market, (full, doneMeta) => {
       onGenerationDone(full, doneMeta).catch(() => { /* 静默 */ })
     })
-  }, [asOf, focus, onGenerationDone])
+  }, [asOf, focus, market, onGenerationDone])
 
   // 复制全文到剪贴板(viewing 优先,与主区域显示一致)
   const copyContent = useCallback(async () => {

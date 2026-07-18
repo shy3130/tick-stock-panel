@@ -25,7 +25,8 @@ import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
-import { matchesMarketFilter, type MarketFilter } from '@/lib/market-display'
+import { matchesMarketFilter } from '@/lib/market-display'
+import { useMarketScope } from '@/lib/market-scope'
 import {
   SCREENER_BUILTIN_COLUMNS,
   SCREENER_COLUMN_GROUPS,
@@ -36,8 +37,8 @@ import {
 } from '@/lib/screener-columns'
 
 export function Screener() {
+  const { market: marketFilter, setMarket } = useMarketScope()
   const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
-  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
@@ -128,17 +129,33 @@ export function Screener() {
 
   // 策略结果缓存 — 文件读取，SSE invalidation 自动刷新
   const cachedQuery = useQuery({
-    queryKey: QK.screenerCached(extColumnsParam),
-    queryFn: () => api.screenerCached(extColumnsParam || undefined),
+    queryKey: QK.screenerCached(marketFilter, extColumnsParam),
+    queryFn: () => api.screenerCached(marketFilter, extColumnsParam || undefined),
+    enabled: assetType === 'stock' && marketFilter === 'cn',
+  })
+
+  const marketOverview = useQuery({
+    queryKey: QK.overviewMarket(marketFilter),
+    queryFn: () => api.overviewMarket(marketFilter),
+    enabled: assetType === 'stock',
+    staleTime: 5_000,
   })
 
   const dataStatus = useDataStatus({ staleTime: 0 })
 
   // 默认日期 = enriched 最新日期（始终跟随最新）
   useEffect(() => {
-    const latest = dataStatus.data?.enriched?.latest_date
+    const latest = assetType === 'stock'
+      ? marketOverview.data?.as_of
+      : dataStatus.data?.enriched?.latest_date
     if (latest) setAsOf(latest)
-  }, [dataStatus.data?.enriched?.latest_date])
+  }, [assetType, dataStatus.data?.enriched?.latest_date, marketOverview.data?.as_of])
+
+  useEffect(() => {
+    setResult(null)
+    setActiveStrategy(null)
+    runAllDateRef.current = null
+  }, [marketFilter])
 
   // 策略 ID → 名称映射
   const strategyIdToName = useMemo(() => {
@@ -189,6 +206,7 @@ export function Screener() {
         strategyIds ?? visiblePool,
         extColumnsParam || undefined,
         assetType,
+        marketFilter,
       ),
     onSuccess: (data) => {
       if (data.as_of) setAsOf(data.as_of)
@@ -434,7 +452,7 @@ export function Screener() {
 
   const run = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string }) =>
-      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType),
+      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, marketFilter),
     onSuccess: (data, vars) => {
       setResult(data)
       // 同步更新卡片上的命中数
@@ -587,14 +605,18 @@ export function Screener() {
         right={
           <div className="flex items-center gap-2">
             {assetType === 'stock' && (
-              <MarketFilterTabs value={marketFilter} onChange={setMarketFilter} />
+              <MarketFilterTabs
+                value={marketFilter}
+                includeAll={false}
+                onChange={(nextMarket) => { if (nextMarket !== 'all') setMarket(nextMarket) }}
+              />
             )}
             {/* 资产类型切换: 股票 / ETF */}
             <div className="flex items-center h-7 rounded-btn border border-border overflow-hidden">
               {(['stock', 'etf'] as const).map(t => (
                 <button
                   key={t}
-                  onClick={() => { setAssetType(t); setMarketFilter('all'); setActiveStrategy(null); setResult(null); setShowAll(false) }}
+                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false) }}
                   className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer
                     ${assetType === t
                       ? 'bg-accent/10 text-accent'

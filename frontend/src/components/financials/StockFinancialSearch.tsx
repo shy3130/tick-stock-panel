@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useMarketScope } from '@/lib/market-scope'
 
 interface Props {
   onSelect: (symbol: string, name: string) => void
@@ -15,6 +16,7 @@ interface Props {
  * 模式对齐 Watchlist.StockSearchBox:useQuery + 外部点击关闭 + 键盘导航。
  */
 export function StockFinancialSearch({ onSelect }: Props) {
+  const { market } = useMarketScope()
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(-1)
@@ -22,8 +24,8 @@ export function StockFinancialSearch({ onSelect }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query),
-    queryFn: () => api.instrumentSearch(query),
+    queryKey: QK.instrumentSearch(query, 'stock', market),
+    queryFn: () => api.instrumentSearch(query, 20, 'stock', market),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })

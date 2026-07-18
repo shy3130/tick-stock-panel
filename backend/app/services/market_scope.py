@@ -70,3 +70,11 @@ def filter_frame_by_market(frame: pl.DataFrame, value: str | None) -> pl.DataFra
             | symbol.str.ends_with(".BJ")
         )
     return frame.filter(predicate)
+
+
+def symbols_for_market(repo, value: str | None, asset_type: str = "stock") -> list[str]:
+    instruments = repo.get_instruments_asset(asset_type)
+    scoped = filter_frame_by_market(instruments, value)
+    if scoped.is_empty() or "symbol" not in scoped.columns:
+        return []
+    return sorted(set(scoped.get_column("symbol").drop_nulls().cast(pl.Utf8).to_list()))

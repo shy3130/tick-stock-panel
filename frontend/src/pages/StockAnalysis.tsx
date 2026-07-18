@@ -15,6 +15,8 @@ import {
   startAnalysis, findTodayReport, useHistoryReports,
   deleteReport, openHistoryReport, loadHistory,
 } from '@/lib/stockAnalysisStore'
+import { useMarketScope } from '@/lib/market-scope'
+import { matchesMarketFilter } from '@/lib/market-display'
 
 /**
  * 个股分析页 —— 日 K + 关键价位(压力/支撑/密集区/枢轴/前高前低)+ AI 四维分析。
@@ -25,24 +27,34 @@ import {
  *  - 报告胶囊用蓝色系,与财务分析(紫色)并存
  */
 export function StockAnalysis() {
+  const { market } = useMarketScope()
   const [symbol, setSymbol] = useState<string>('')
   const [name, setName] = useState<string>('')
   const [checking, setChecking] = useState(false)
   const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
+  const marketLastStock = lastStock && matchesMarketFilter(lastStock.symbol, market) ? lastStock : null
 
   // 进入页面立即加载历史报告(供右侧常驻列表)。store 内部有 historyLoaded 去重, 重复调用安全。
   useEffect(() => { loadHistory() }, [])
 
   // 自动恢复上次选中的股票(切走再回来不丢)。useLastStock 的 last 来自 localStorage, 同步可用。
   useEffect(() => {
-    if (!symbol && lastStock) {
-      setSymbol(lastStock.symbol)
-      setName(lastStock.name)
+    if (!symbol && marketLastStock) {
+      setSymbol(marketLastStock.symbol)
+      setName(marketLastStock.name)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (symbol && !matchesMarketFilter(symbol, market)) {
+      setSymbol('')
+      setName('')
+      setConfirmReport(null)
+    }
+  }, [market, symbol])
 
   const onSelect = (sym: string, nm: string) => {
     setSymbol(sym)
@@ -86,7 +98,7 @@ export function StockAnalysis() {
         subtitle="日 K · 关键价位 · AI 四维分析(技术 / 基本面 / 财务 / 消息面)"
         right={
           <div className="flex items-center gap-2">
-            <LastStockChip stock={lastStock} onSelect={onSelect} />
+            <LastStockChip stock={marketLastStock} onSelect={onSelect} />
           </div>
         }
       />

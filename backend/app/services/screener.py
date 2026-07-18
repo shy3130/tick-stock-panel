@@ -34,9 +34,11 @@ class ScreenerResult:
 
 
 class ScreenerService:
-    def __init__(self, repo: KlineRepository, asset_type: str = "stock") -> None:
+    def __init__(self, repo: KlineRepository, asset_type: str = "stock", market: str = "cn") -> None:
         self.repo = repo
         self.asset_type = asset_type
+        from app.services.market_scope import normalize_market
+        self.market = normalize_market(market)
         from app.tickflow.repository import enriched_dirname
         self._enriched_dirname = enriched_dirname(asset_type)
 
@@ -49,6 +51,12 @@ class ScreenerService:
         _history_cache.clear()
 
     def _load_enriched_for_date(self, target_date: date) -> pl.DataFrame:
+        from app.services.market_scope import filter_frame_by_market
+
+        frame = self._load_enriched_for_date_unscoped(target_date)
+        return filter_frame_by_market(frame, self.market) if self.asset_type == "stock" else frame
+
+    def _load_enriched_for_date_unscoped(self, target_date: date) -> pl.DataFrame:
         """从 enriched parquet 读取指定日期的基础数据并即时计算完整指标+信号。
 
         enriched parquet 仅存 14 列。读取后需要即时计算 ma/ema/macd/kdj/rsi/boll/momentum/signal 等列。
@@ -196,6 +204,12 @@ class ScreenerService:
         return df_result
 
     def _load_enriched_history(self, target_date: date, lookback_days: int) -> pl.DataFrame:
+        from app.services.market_scope import filter_frame_by_market
+
+        frame = self._load_enriched_history_unscoped(target_date, lookback_days)
+        return filter_frame_by_market(frame, self.market) if self.asset_type == "stock" else frame
+
+    def _load_enriched_history_unscoped(self, target_date: date, lookback_days: int) -> pl.DataFrame:
         """读取目标日期之前的基础行情数据, 供历史窗口策略使用。
 
         优先从 repo 内存缓存获取 (启动时已预计算), 命中时 0ms。
@@ -392,11 +406,14 @@ class ScreenerService:
             as_of=as_of,
             current=current,
             history=history,
-            market=market,
+            market=market or self.market,
             cache_key=cache_key,
         )
 
     def latest_date(self) -> date | None:
+        if self.asset_type == "stock":
+            from app.services.market_scope import market_latest_date
+            return market_latest_date(self.repo, self.market)
         if self.asset_type != "stock":
             _, d = self.repo.get_enriched_latest_asset(self.asset_type)
             return d
