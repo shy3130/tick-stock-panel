@@ -47,6 +47,8 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    from app.data_providers import custom as custom_sources
+    custom_sources.load_all()
     provider_name = preferences.get_daily_data_provider()
     if provider_name != "clickhouse":
         raise RuntimeError(f"当前日线数据源是 {provider_name!r}，请先切换为 clickhouse")
