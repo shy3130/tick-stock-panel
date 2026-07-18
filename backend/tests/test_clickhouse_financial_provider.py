@@ -93,3 +93,5 @@ def test_clickhouse_provider_maps_latest_fields_to_all_financial_tables() -> Non
     assert len(query.queries) == 1
     assert "lb_financial_report" in query.queries[0]
     assert "LIMIT 1 BY symbol, field" in query.queries[0]
+    assert "'GrossMgn'" in query.queries[0]
+    assert "'GROSSMGN'" not in query.queries[0]

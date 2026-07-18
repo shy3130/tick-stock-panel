@@ -48,8 +48,12 @@ def _sql_string(value: object) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def _values_sql(values: list[str] | tuple[str, ...]) -> str:
+    return "(" + ", ".join(_sql_string(value) for value in values) + ")"
+
+
 def _symbols_sql(symbols: list[str]) -> str:
-    return "(" + ", ".join(_sql_string(symbol.upper()) for symbol in symbols) + ")"
+    return _values_sql([symbol.upper() for symbol in symbols])
 
 
 def _date_filter(column: str, start: datetime | None, end: datetime | None) -> str:
@@ -146,7 +150,7 @@ class ClickHouseProvider:
         now = time.monotonic()
         if key != self._financial_cache_key or now - self._financial_cache_time > 300:
             rows: list[dict[str, Any]] = []
-            fields_sql = _symbols_sql(list(FINANCIAL_FIELDS))
+            fields_sql = _values_sql(FINANCIAL_FIELDS)
             for offset in range(0, len(key), _FINANCIAL_SYMBOL_BATCH_SIZE):
                 symbol_chunk = list(key[offset : offset + _FINANCIAL_SYMBOL_BATCH_SIZE])
                 sql = f"""
