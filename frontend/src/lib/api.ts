@@ -243,6 +243,7 @@ export interface IndexInstrument {
   symbol: string
   name?: string | null
   code?: string | null
+  market?: 'cn' | 'hk' | 'us' | null
   asset_type?: 'index'
   [key: string]: any
 }
@@ -1286,10 +1287,12 @@ export const api = {
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
     ),
-  indexList: () => request<{ results: IndexInstrument[]; count: number }>('/api/index/list'),
-  indexSearch: (q: string, limit = 20) =>
+  indexList: (market?: 'cn' | 'hk' | 'us') => request<{ results: IndexInstrument[]; count: number }>(
+    `/api/index/list${market ? `?market=${market}` : ''}`,
+  ),
+  indexSearch: (q: string, limit = 20, market?: 'cn' | 'hk' | 'us') =>
     request<{ results: IndexInstrument[] }>(
-      `/api/index/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      `/api/index/search?q=${encodeURIComponent(q)}&limit=${limit}${market ? `&market=${market}` : ''}`,
     ),
   indexDaily: (symbol: string, days = 120, dateRange?: { start: string; end: string }) =>
     request<{

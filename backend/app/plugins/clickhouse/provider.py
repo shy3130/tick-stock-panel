@@ -27,6 +27,7 @@ from app.plugins.clickhouse.financial import (
 
 QueryFn = Callable[[str], list[dict]]
 MinuteFallbackFn = Callable[[str], list[dict]]
+DailyFallbackFn = Callable[[str], list[dict]]
 _MINUTE_COLUMNS = ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"]
 _DAILY_SYMBOL_BATCH_SIZE = 500
 _FINANCIAL_SYMBOL_BATCH_SIZE = 1000
@@ -108,6 +109,26 @@ def _fetch_longbridge_intraday(symbol: str) -> list[dict]:
     return bars if isinstance(bars, list) else []
 
 
+def _fetch_longbridge_daily(symbol: str) -> list[dict]:
+    endpoint = os.getenv("LONGBRIDGE_API_URL", "").strip().rstrip("/")
+    if not endpoint:
+        return []
+    timeout = float(os.getenv("LONGBRIDGE_API_TIMEOUT_SECONDS", "20"))
+    try:
+        response = httpx.get(
+            f"{endpoint}/api/stocks/{quote(symbol, safe='')}/klines",
+            params={"period": "day", "limit": 1200},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        logger.warning("Longbridge daily fallback failed for %s: %s", symbol, exc)
+        return []
+    bars = payload.get("bars") if isinstance(payload, dict) else None
+    return bars if isinstance(bars, list) else []
+
+
 class ClickHouseProvider:
     name = "clickhouse"
     builtin = True
@@ -123,10 +144,12 @@ class ClickHouseProvider:
         self,
         query_fn: QueryFn | None = None,
         minute_fallback_fn: MinuteFallbackFn | None = None,
+        daily_fallback_fn: DailyFallbackFn | None = None,
     ) -> None:
         self.config = _ClickHouseConfig()
         self._query_fn = query_fn or bridge.query_json_each_row
         self._minute_fallback_fn = minute_fallback_fn or _fetch_longbridge_intraday
+        self._daily_fallback_fn = daily_fallback_fn or _fetch_longbridge_daily
         self.last_sql = ""
         self._financial_cache_key: tuple[str, ...] | None = None
         self._financial_cache_time = 0.0
@@ -207,6 +230,34 @@ class ClickHouseProvider:
                 frames.append(frame)
             if on_chunk_done:
                 on_chunk_done(index, len(symbol_chunks))
+        if asset_type == "index":
+            returned_symbols = {
+                str(symbol).upper()
+                for frame in frames
+                for symbol in frame.get_column("symbol").to_list()
+            }
+            for symbol in symbols:
+                normalized_symbol = str(symbol).upper()
+                if normalized_symbol in returned_symbols:
+                    continue
+                fallback_rows = self._daily_fallback_fn(normalized_symbol)
+                if not fallback_rows:
+                    continue
+                normalized_fallback_rows = [
+                    dict(
+                        row,
+                        symbol=normalized_symbol,
+                        amount=row.get("amount", row.get("turnover")),
+                    )
+                    for row in fallback_rows
+                ]
+                fallback_frame = normalize_daily(normalized_fallback_rows, source="longbridge_api")
+                if start_time is not None and not fallback_frame.is_empty():
+                    fallback_frame = fallback_frame.filter(pl.col("date") >= start_time.date())
+                if end_time is not None and not fallback_frame.is_empty():
+                    fallback_frame = fallback_frame.filter(pl.col("date") <= end_time.date())
+                if not fallback_frame.is_empty():
+                    frames.append(fallback_frame)
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
     def get_minute(

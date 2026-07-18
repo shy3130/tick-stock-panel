@@ -37,6 +37,30 @@ def test_daily_maps_turnover_to_amount_and_filters_adjusted() -> None:
     assert "'1.HK'" in query.queries[-1]
 
 
+def test_daily_uses_longbridge_fallback_for_symbols_missing_from_clickhouse() -> None:
+    provider = ClickHouseProvider(query_fn=QueryRecorder([]))
+    requested: list[str] = []
+
+    def fallback(symbol: str) -> list[dict]:
+        requested.append(symbol)
+        return [{
+            "date": "2026-07-17",
+            "open": 6300,
+            "high": 6350,
+            "low": 6250,
+            "close": 6320,
+            "volume": 100,
+            "turnover": 632000,
+        }]
+
+    provider._daily_fallback_fn = fallback
+
+    frame = provider.get_daily([".SPX.US"], None, None, asset_type="index")
+
+    assert requested == [".SPX.US"]
+    assert frame.select("symbol", "close").to_dicts() == [{"symbol": ".SPX.US", "close": 6320.0}]
+
+
 def test_realtime_normalizes_percentage_and_timestamp() -> None:
     query = QueryRecorder([
         {

@@ -6,8 +6,8 @@ quotes.get_by_universes 作为补充来源。日K统一走 klines.batch。
 """
 from __future__ import annotations
 
-import logging
 import gc
+import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -24,6 +24,47 @@ logger = logging.getLogger(__name__)
 
 # exchanges.get_instruments 查询的交易所(沪深京)
 _EXCHANGES = ["SH", "SZ", "BJ"]
+
+CORE_INDEX_CATALOG = (
+    {"symbol": "000001.SH", "name": "上证指数", "market": "cn"},
+    {"symbol": "399001.SZ", "name": "深证成指", "market": "cn"},
+    {"symbol": "399006.SZ", "name": "创业板指", "market": "cn"},
+    {"symbol": "000680.SH", "name": "科创综指", "market": "cn"},
+    {"symbol": "HSI.HK", "name": "恒生指数", "market": "hk"},
+    {"symbol": "HSTECH.HK", "name": "恒生科技指数", "market": "hk"},
+    {"symbol": "HSCEI.HK", "name": "恒生中国企业指数", "market": "hk"},
+    {"symbol": ".SPX.US", "name": "标普500指数", "market": "us"},
+    {"symbol": ".IXIC.US", "name": "纳斯达克综合指数", "market": "us"},
+    {"symbol": ".DJI.US", "name": "道琼斯工业平均指数", "market": "us"},
+    {"symbol": ".VIX.US", "name": "标普500波动率指数", "market": "us"},
+)
+
+
+def _market_from_symbol(symbol: str) -> str:
+    upper = str(symbol).upper()
+    if upper.endswith(".HK"):
+        return "hk"
+    if upper.endswith(".US"):
+        return "us"
+    return "cn"
+
+
+def _with_index_metadata(frame: pl.DataFrame) -> pl.DataFrame:
+    if frame.is_empty() or "symbol" not in frame.columns:
+        return frame
+    return frame.with_columns([
+        pl.col("symbol").cast(pl.Utf8),
+        pl.col("symbol").cast(pl.Utf8).str.replace(r"\.[^.]+$", "").alias("code"),
+        pl.col("symbol")
+        .cast(pl.Utf8)
+        .map_elements(_market_from_symbol, return_dtype=pl.Utf8)
+        .alias("market"),
+        pl.lit("index").alias("asset_type"),
+    ])
+
+
+def _core_index_frame() -> pl.DataFrame:
+    return _with_index_metadata(pl.DataFrame(CORE_INDEX_CATALOG))
 
 
 def _quotes_to_index_instruments(resp) -> pl.DataFrame:
@@ -67,10 +108,8 @@ def _quotes_to_index_instruments(resp) -> pl.DataFrame:
     result = df.select([
         pl.col("symbol").cast(pl.Utf8),
         pl.col("name").cast(pl.Utf8),
-    ]).with_columns([
-        pl.col("symbol").str.split(".").list.first().alias("code"),
-        pl.lit("index").alias("asset_type"),
     ])
+    result = _with_index_metadata(result)
     return result.unique(subset=["symbol"], keep="last").sort("symbol")
 
 
@@ -101,15 +140,11 @@ def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> p
     if not rows:
         return pl.DataFrame()
 
-    return (
+    return _with_index_metadata(
         pl.DataFrame(rows)
-        .with_columns([
-            pl.col("symbol").str.split(".").list.first().alias("code"),
-            pl.lit(asset_type_label).alias("asset_type"),
-        ])
         .unique(subset=["symbol"], keep="last")
         .sort("symbol")
-    )
+    ).with_columns(pl.lit(asset_type_label).alias("asset_type"))
 
 
 def sync_index_instruments(
@@ -127,6 +162,7 @@ def sync_index_instruments(
 
     # 1) 免费通道:按开关分别拉 index / etf
     if pull_index:
+        index_parts.append(_core_index_frame())
         index_df = _fetch_instruments_by_type("index", "index")
         if not index_df.is_empty():
             index_parts.append(index_df)
@@ -161,7 +197,11 @@ def sync_index_instruments(
 
     total = 0
     if index_parts:
-        index_inst = pl.concat(index_parts, how="diagonal_relaxed").unique(subset=["symbol"], keep="last").sort("symbol")
+        index_inst = (
+            pl.concat(index_parts, how="diagonal_relaxed")
+            .unique(subset=["symbol"], keep="last")
+            .sort("symbol")
+        )
         if not index_inst.is_empty():
             repo.save_index_instruments(index_inst)
             total += index_inst.height
@@ -204,9 +244,6 @@ def sync_and_persist_index_daily(
     否则取 index_instruments 表全量(指数+ETF 合并存储)。
     on_chunk_done(current, total) 每个批次完成后回调。
     """
-    if not capset.has(Cap.KLINE_DAILY_BATCH):
-        return 0
-
     if symbols_override:
         symbols = sorted(set(s for s in symbols_override if s))
         if not symbols:
@@ -221,23 +258,43 @@ def sync_and_persist_index_daily(
         if instruments.is_empty() or "symbol" not in instruments.columns:
             return 0
         symbols = sorted(set(instruments["symbol"].to_list()))
-    limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
-    batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
-
     end_time = end_date or datetime.now()
     start_time = start_date or (end_time - timedelta(days=365))
 
     total_rows = 0
-    chunks = chunked(symbols, batch_size)
+    provider_name = preferences.get_daily_data_provider()
+    custom_provider = None
+    if provider_name != "tickflow":
+        from app.data_providers import custom as custom_sources
+        if custom_sources.provider_has_dataset(provider_name, "daily"):
+            custom_provider = custom_sources.get_provider(provider_name)
+    if custom_provider is None and not capset.has(Cap.KLINE_DAILY_BATCH):
+        return 0
+
+    if custom_provider is not None:
+        chunks = [symbols]
+        limit = None
+    else:
+        limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH)
+        batch_size = min_batch(preferences.get_index_daily_batch_size(), limit)
+        chunks = chunked(symbols, batch_size)
     for i, chunk in enumerate(chunks):
-        sleep_between_batches(i, limit.rpm)
-        raw = kline_sync.sync_daily_batch(
-            chunk,
-            count=count,
-            batch_size=None,
-            start_time=start_time,
-            end_time=end_time,
-        )
+        if custom_provider is not None:
+            raw = custom_provider.get_daily(
+                chunk,
+                start_time=start_time,
+                end_time=end_time,
+                asset_type="index",
+            )
+        else:
+            sleep_between_batches(i, limit.rpm)
+            raw = kline_sync.sync_daily_batch(
+                chunk,
+                count=count,
+                batch_size=None,
+                start_time=start_time,
+                end_time=end_time,
+            )
         if raw.is_empty():
             continue
 

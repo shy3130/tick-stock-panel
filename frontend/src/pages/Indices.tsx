@@ -7,10 +7,10 @@ import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
-import { PageHeader } from '@/components/PageHeader'
-import { EmptyState } from '@/components/EmptyState'
 import { useMarketScope } from '@/lib/market-scope'
 import { marketLabel } from '@/lib/market-display'
+import { indexMatchesMarket, pinnedIndexesForMarket, type CoreIndex } from '@/lib/market-indices'
+import type { MarketCode } from '@/lib/market-display'
 
 function defaultRange() {
   const now = new Date()
@@ -58,31 +58,16 @@ function fmtNum(v: number | null | undefined, digits = 2) {
   return Number(v).toFixed(digits)
 }
 
-const PINNED_INDEXES = [
-  { symbol: '000001.SH', name: '上证指数' },
-  { symbol: '399001.SZ', name: '深证成指' },
-  { symbol: '399006.SZ', name: '创业板指' },
-  { symbol: '000680.SH', name: '科创综指' },
-]
-
-function pinnedRank(item: IndexInstrument) {
-  return PINNED_INDEXES.findIndex(p => item.symbol === p.symbol || item.name === p.name)
+function pinnedRank(item: IndexInstrument, pinnedIndexes: readonly CoreIndex[]) {
+  return pinnedIndexes.findIndex(p => item.symbol === p.symbol || item.name === p.name)
 }
 
 export function Indices() {
   const { market } = useMarketScope()
-  if (market !== 'cn') {
-    return (
-      <div className="h-full flex flex-col">
-        <PageHeader title="指数行情" subtitle={`当前市场：${marketLabel(market)}`} />
-        <EmptyState icon={Activity} title={`${marketLabel(market)}指数数据尚未接入`} hint="当前不会回退显示 A 股指数；后续可接入恒生指数、标普 500 等对应市场基准。" />
-      </div>
-    )
-  }
-  return <IndicesCn />
+  return <IndicesMarket market={market} />
 }
 
-function IndicesCn() {
+function IndicesMarket({ market }: { market: MarketCode }) {
   const qc = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [keyword, setKeyword] = useState('')
@@ -91,19 +76,20 @@ function IndicesCn() {
   const [range, setRange] = useState(defaultRange)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
+  const pinnedIndexes = pinnedIndexesForMarket(market)
 
   // 分时数据需 Pro+ (kline.minute.batch) 能力
   const caps = useCapabilities()
   const hasMinuteCap = !!caps.data?.capabilities?.['kline.minute.batch']
 
   const list = useQuery({
-    queryKey: QK.indexList,
-    queryFn: api.indexList,
+    queryKey: [...QK.indexList, market],
+    queryFn: () => api.indexList(market),
   })
 
   const search = useQuery({
-    queryKey: ['index-search', keyword],
-    queryFn: () => api.indexSearch(keyword, 50),
+    queryKey: ['index-search', market, keyword],
+    queryFn: () => api.indexSearch(keyword, 50, market),
     enabled: keyword.trim().length > 0,
   })
 
@@ -112,26 +98,33 @@ function IndicesCn() {
     : (list.data?.results ?? [])
   const topRows = useMemo(() => {
     const all = list.data?.results ?? []
-    return PINNED_INDEXES.map(p => (
+    return pinnedIndexes.map(p => (
       all.find(item => item.symbol === p.symbol || item.name === p.name) ?? { symbol: p.symbol, name: p.name, asset_type: 'index' as const }
     ))
-  }, [list.data?.results])
-  const listRows = useMemo(() => rows.filter(item => pinnedRank(item) < 0), [rows])
+  }, [list.data?.results, pinnedIndexes])
+  const listRows = useMemo(() => rows.filter(item => pinnedRank(item, pinnedIndexes) < 0), [pinnedIndexes, rows])
 
-  const selectedSymbol = selected || topRows[0]?.symbol || listRows[0]?.symbol || ''
+  const selectedSymbol = (indexMatchesMarket(selected, market) ? selected : '') || topRows[0]?.symbol || listRows[0]?.symbol || ''
 
   useEffect(() => {
-    if (symbolParam && symbolParam !== selected) setSelected(symbolParam)
-  }, [selected, symbolParam])
+    const next = symbolParam && indexMatchesMarket(symbolParam, market) ? symbolParam : ''
+    setSelected(current => current === next ? current : next)
+  }, [market, symbolParam])
 
   const selectIndex = (symbol: string) => {
     setSelected(symbol)
-    setSearchParams({ symbol })
+    setSearchParams({ symbol, market })
   }
 
+  const quoteSymbols = useMemo(
+    () => [...new Set([...topRows, ...listRows].map(item => item.symbol))],
+    [listRows, topRows],
+  )
+
   const quotes = useQuery({
-    queryKey: QK.indexQuotes,
-    queryFn: () => api.indexQuotes(),
+    queryKey: [...QK.indexQuotes, market, quoteSymbols.join(',')],
+    queryFn: () => api.indexQuotes(quoteSymbols),
+    enabled: quoteSymbols.length > 0,
     placeholderData: (prev) => prev,
   })
 
@@ -222,9 +215,9 @@ function IndicesCn() {
     <div className="h-full overflow-auto bg-base p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-foreground">指数</h1>
+          <h1 className="text-lg font-semibold text-foreground">{marketLabel(market)}指数</h1>
           <p className="mt-1 text-xs text-muted">
-            指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
+            当前市场：{marketLabel(market)} · 指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
           </p>
         </div>
         <div className="flex items-center gap-2">
