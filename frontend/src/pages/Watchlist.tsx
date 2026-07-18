@@ -2,7 +2,6 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useSearchParams } from 'react-router-dom'
 import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, ImagePlus } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -26,7 +25,8 @@ import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
 import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
 import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
-import { marketFilterFromSearch, marketLabel, matchesMarketFilter, type MarketFilter } from '@/lib/market-display'
+import { marketLabel, matchesMarketFilter, type MarketFilter } from '@/lib/market-display'
+import { useMarketScope } from '@/lib/market-scope'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import {
@@ -564,16 +564,10 @@ const StockCard = React.memo(function StockCard({
 
 export function Watchlist() {
   const qc = useQueryClient()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const marketFilter = marketFilterFromSearch(searchParams.toString())
+  const { market: marketFilter, setMarket } = useMarketScope()
   const setMarketFilter = useCallback((market: MarketFilter) => {
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      if (market === 'all') next.delete('market')
-      else next.set('market', market)
-      return next
-    }, { replace: true })
-  }, [setSearchParams])
+    if (market !== 'all') setMarket(market)
+  }, [setMarket])
   const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
     return (storage.watchlistView.get('table') as 'table' | 'card')
   })
@@ -995,7 +989,7 @@ export function Watchlist() {
         }
         right={
           <div className="flex items-center gap-2">
-            <MarketFilterTabs value={marketFilter} onChange={setMarketFilter} />
+            <MarketFilterTabs value={marketFilter} includeAll={false} onChange={setMarketFilter} />
             {/* 筛选 / 重置 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}

@@ -24,6 +24,7 @@ import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { toast } from '@/components/Toast'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { useReviewState } from '@/lib/useReviewStore'
+import { useMarketScope } from '@/lib/market-scope'
 import {
   startReviewGeneration, resetReview, isReviewGenerating,
   type ReviewPhase,
@@ -68,6 +69,7 @@ function fmtArchivedAt(iso: string): string {
 
 export function Review() {
   const qc = useQueryClient()
+  const { market } = useMarketScope()
   // 复盘日期:当前固定取最新交易日(后续如需日期选择可改回 useState)
   const asOf: string | undefined = undefined
   const [focus, setFocus] = useState('')
@@ -78,8 +80,8 @@ export function Review() {
 
   // 看板数据(与总览页同源)
   const marketQuery = useQuery<OverviewMarket>({
-    queryKey: QK.overviewMarket(asOf),
-    queryFn: () => api.overviewMarket(asOf),
+    queryKey: QK.overviewMarket(market, asOf),
+    queryFn: () => api.overviewMarket(market, asOf),
     staleTime: 5_000,
     placeholderData: (prev) => prev,
   })

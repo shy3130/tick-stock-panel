@@ -21,6 +21,7 @@ import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
+import { useMarketScope } from '@/lib/market-scope'
 
 const KEYWORDS = ['industry', '行业', 'sector', '申万', '中信']
 const CANDIDATE_FIELDS = ['industry', '行业', 'sector', '申万', '中信', '行业名称', 'industry_name', 'sector_name']
@@ -267,6 +268,7 @@ function groupByIndustryLevel(groups: DimensionGroup[], level: IndustryLevel): D
 // ===== 主页面 =====
 
 export function IndustryAnalysis() {
+  const { market } = useMarketScope()
   const [fieldConfig, setFieldConfig] = useState<AnalysisFieldConfig>(loadConfig)
   const [showConfig, setShowConfig] = useState(false)
   const [search, setSearch] = useState('')
@@ -306,8 +308,8 @@ export function IndustryAnalysis() {
     !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
 
   const marketQuery = useQuery({
-    queryKey: QK.marketSnapshot,
-    queryFn: api.marketSnapshot,
+    queryKey: QK.marketSnapshot(market),
+    queryFn: () => api.marketSnapshot(market),
     staleTime: 60_000,
   })
 

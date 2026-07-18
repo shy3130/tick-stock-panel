@@ -15,6 +15,7 @@ import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { boardTag } from '@/components/stock-table/primitives'
+import { useMarketScope } from '@/lib/market-scope'
 
 function n(v: number | null | undefined) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -531,6 +532,7 @@ function HotRankCard({ title, rank, configUrl, onStockClick }: {
 
 export function Dashboard() {
   const qc = useQueryClient()
+  const { market } = useMarketScope()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
   const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string} | null>(null)
@@ -538,8 +540,8 @@ export function Dashboard() {
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
   const overview = useQuery({
-    queryKey: QK.overviewMarket(selectedDate),
-    queryFn: () => api.overviewMarket(selectedDate),
+    queryKey: QK.overviewMarket(market, selectedDate),
+    queryFn: () => api.overviewMarket(market, selectedDate),
     staleTime: 5_000,
     placeholderData: (prev) => prev,
   })
@@ -592,9 +594,9 @@ export function Dashboard() {
   useEffect(() => {
     if (fetchSucceeded) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
-      qc.invalidateQueries({ queryKey: QK.overviewMarket(undefined) })
+      qc.invalidateQueries({ queryKey: QK.overviewMarket(market, undefined) })
     }
-  }, [fetchSucceeded, qc])
+  }, [fetchSucceeded, market, qc])
 
   // 组件重新挂载时(从其他页面切回)恢复正在运行的同步任务进度。
   // 原因: fetchJobId 是组件内状态, 切走页面时组件卸载、状态丢失, 切回后进度卡片消失。

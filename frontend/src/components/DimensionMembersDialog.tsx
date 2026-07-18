@@ -7,6 +7,7 @@ import { boardTag } from '@/components/stock-table/primitives'
 import { api, type MarketSnapshotRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { fmtBigNum, fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
+import { useMarketScope } from '@/lib/market-scope'
 
 export type DimensionKind = 'concept' | 'industry'
 
@@ -79,6 +80,7 @@ export function DimensionMembersDialog({ target, onClose, onStockClick }: Props)
 }
 
 function DimensionMembersDialogContent({ target, onClose, onStockClick }: Omit<Props, 'target'> & { target: DimensionMembersTarget }) {
+  const { market } = useMarketScope()
   const source = useMemo(() => resolveSource(target.sourceField), [target.sourceField])
   const [search, setSearch] = useState('')
   const [sortMode, setSortMode] = useState<SortMode>('change_desc')
@@ -97,8 +99,8 @@ function DimensionMembersDialogContent({ target, onClose, onStockClick }: Omit<P
   })
 
   const marketQuery = useQuery({
-    queryKey: QK.marketSnapshot,
-    queryFn: api.marketSnapshot,
+    queryKey: QK.marketSnapshot(market),
+    queryFn: () => api.marketSnapshot(market),
     enabled: (membersQuery.data?.rows.length ?? 0) > 0,
     staleTime: 60_000,
   })

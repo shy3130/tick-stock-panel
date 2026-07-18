@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeMarketCode, withMarketParam } from './market-scope'
+import { QK } from './queryKeys'
 
 describe('global market scope', () => {
   it('keeps the current path and existing query parameters', () => {
@@ -13,5 +14,10 @@ describe('global market scope', () => {
     expect(normalizeMarketCode('HK')).toBe('hk')
     expect(normalizeMarketCode('invalid')).toBe('cn')
     expect(normalizeMarketCode(null)).toBe('cn')
+  })
+
+  it('isolates query caches between markets', () => {
+    expect(QK.overviewMarket('cn', '2026-07-17')).not.toEqual(QK.overviewMarket('hk', '2026-07-17'))
+    expect(QK.marketSnapshot('hk')).toEqual(['market-snapshot', 'hk'])
   })
 })

@@ -31,13 +31,6 @@ export const marketFromSymbol = (symbol: string): MarketCode | '' => {
 export const matchesMarketFilter = (symbol: string, market: MarketFilter) =>
   market === 'all' || marketFromSymbol(symbol) === market
 
-export const marketFilterFromSearch = (search: string): MarketFilter => {
-  const market = new URLSearchParams(search).get('market')?.toLowerCase()
-  return market === 'cn' || market === 'hk' || market === 'us' ? market : 'all'
-}
-
-export const marketWatchlistHref = (market: MarketCode) => `/watchlist?market=${market}`
-
 export const currencyForMarket = (market: string | null | undefined) => {
   const value = String(market ?? '').trim().toLowerCase()
   if (value === 'cn') return 'CNY'

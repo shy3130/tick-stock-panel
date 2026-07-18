@@ -23,6 +23,7 @@ import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
+import { useMarketScope } from '@/lib/market-scope'
 
 const KEYWORDS = ['concept', '概念', 'theme', '题材', '板块']
 const CANDIDATE_FIELDS = ['concept', '概念', 'theme', '题材', '板块', 'concept_name', '概念名称']
@@ -234,6 +235,7 @@ function statSort(mode: SortMode) {
 }
 
 export function ConceptAnalysis() {
+  const { market } = useMarketScope()
   const [fieldConfig, setFieldConfig] = useState<AnalysisFieldConfig>(loadConfig)
   const [showConfig, setShowConfig] = useState(false)
   const [search, setSearch] = useState('')
@@ -274,8 +276,8 @@ export function ConceptAnalysis() {
     !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
 
   const marketQuery = useQuery({
-    queryKey: QK.marketSnapshot,
-    queryFn: api.marketSnapshot,
+    queryKey: QK.marketSnapshot(market),
+    queryFn: () => api.marketSnapshot(market),
     staleTime: 60_000,
   })
 

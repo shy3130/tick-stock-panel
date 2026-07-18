@@ -17,7 +17,7 @@ export const QK = {
   dataSources:    ['data-sources'] as const,
   quoteStatus:    ['quote-status'] as const,
   quoteInterval:  ['quote-interval'] as const,
-  overviewMarket: (asOf?: string) => ['overview-market', asOf ?? 'latest'] as const,
+  overviewMarket: (market: string = 'cn', asOf?: string) => ['overview-market', market, asOf ?? 'latest'] as const,
   indexQuotes:    ['index-quotes'] as const,
   indexList:      ['index-list'] as const,
 
@@ -36,7 +36,7 @@ export const QK = {
   screenerStrategies:   (assetType: string = 'stock') => ['screener-strategies', assetType] as const,
   screenerCached:       (ext?: string) => ['screener-cached', ext] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
-  marketSnapshot:       ['market-snapshot'] as const,
+  marketSnapshot:       (market: string = 'cn') => ['market-snapshot', market] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
 
   // Backtest
