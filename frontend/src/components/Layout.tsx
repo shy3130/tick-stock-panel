@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, Suspense } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
@@ -53,7 +53,7 @@ import { cn } from '@/lib/cn'
 import { toggleTheme, useTheme } from '@/lib/theme'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
 import { MarketFilterTabs } from '@/components/MarketFilterTabs'
-import { marketFilterFromSearch, marketWatchlistHref } from '@/lib/market-display'
+import { useMarketScope } from '@/lib/market-scope'
 
 // 品牌色 — 只用于 logo / brand 区域,不影响功能语义色
 const BRAND = '#8B5CF6'
@@ -320,10 +320,7 @@ export function Layout() {
 
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const location = useLocation()
-  const globalMarket = location.pathname === '/watchlist'
-    ? marketFilterFromSearch(location.search)
-    : 'all'
+  const { market, setMarket } = useMarketScope()
   const version = versionData?.version
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   // Free 档监控限制提示: 可手动关闭, 不持久化 (刷新后恢复显示)
@@ -472,11 +469,11 @@ export function Layout() {
             <span className="text-[9px] text-muted/60">CN · HK · US</span>
           </div>
           <MarketFilterTabs
-            value={globalMarket}
+            value={market}
             includeAll={false}
             className="w-full justify-center"
-            onChange={(market) => {
-              if (market !== 'all') navigate(marketWatchlistHref(market))
+            onChange={(nextMarket) => {
+              if (nextMarket !== 'all') setMarket(nextMarket)
             }}
           />
         </div>

@@ -5,6 +5,7 @@ import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
 import { useSettings } from './lib/useSharedQueries'
 import { Logo } from './components/Logo'
+import { MarketScopeProvider } from './lib/market-scope'
 
 // 代码分割: 页面全部 lazy 加载, 避免首屏打包所有页面 (ECharts / lightweight-charts /
 // framer-motion 等重库) → 大幅减小首屏 bundle。命名导出用 .then 映射为 default。
@@ -61,9 +62,11 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: (
-      <OnboardingGuard>
-        <Layout />
-      </OnboardingGuard>
+      <MarketScopeProvider>
+        <OnboardingGuard>
+          <Layout />
+        </OnboardingGuard>
+      </MarketScopeProvider>
     ),
     children: [
       { index: true, element: <Dashboard /> },
