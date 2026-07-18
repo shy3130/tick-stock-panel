@@ -14,9 +14,8 @@ import polars as pl
 
 from app.config import settings
 from app.indicators.pipeline import run_pipeline
-from app.services import instrument_sync, kline_sync, preferences
+from app.plugins.clickhouse.provider import ClickHouseProvider
 from app.services.market_scope import filter_frame_by_market, normalize_market
-from app.tickflow.capabilities import CapabilitySet
 from app.tickflow.repository import DataStore, KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -47,18 +46,25 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    from app.data_providers import custom as custom_sources
-    custom_sources.load_all()
-    provider_name = preferences.get_daily_data_provider()
-    if provider_name != "clickhouse":
-        raise RuntimeError(f"当前日线数据源是 {provider_name!r}，请先切换为 clickhouse")
-
     store = DataStore(Path(settings.data_dir))
     repo = KlineRepository(store)
-    instrument_rows = instrument_sync.sync_instruments(store.data_dir)
-    logger.info("标的维表已同步：%d 行", instrument_rows)
-
+    provider = ClickHouseProvider()
+    instrument_items = provider.get_instruments("stock")
+    if not instrument_items:
+        raise RuntimeError("ClickHouse 未返回标的维表")
     instrument_path = store.data_dir / "instruments" / "instruments.parquet"
+    provider_instruments = pl.DataFrame(instrument_items).with_columns(pl.lit(date.today()).alias("as_of"))
+    if instrument_path.exists():
+        existing_instruments = pl.read_parquet(instrument_path)
+        known = set(existing_instruments.get_column("symbol").drop_nulls().to_list())
+        missing = provider_instruments.filter(~pl.col("symbol").is_in(list(known)))
+        instruments_full = pl.concat([existing_instruments, missing], how="diagonal_relaxed")
+    else:
+        instruments_full = provider_instruments
+    instrument_path.parent.mkdir(parents=True, exist_ok=True)
+    instruments_full.write_parquet(instrument_path)
+    logger.info("ClickHouse 标的维表已同步：%d 行", instruments_full.height)
+
     instruments = pl.read_parquet(instrument_path, columns=["symbol"])
     symbols = select_market_symbols(instruments, set(args.markets))
     if not symbols:
@@ -69,16 +75,16 @@ def main() -> int:
     def daily_progress(current: int, total: int) -> None:
         logger.info("ClickHouse 日线批次 %d/%d", current, total)
 
-    daily_rows = kline_sync.sync_and_persist_daily_batch(
+    daily_frame = provider.get_daily(
         symbols,
-        repo,
-        CapabilitySet(),
-        start_date=datetime.combine(args.start, time.min),
-        end_date=datetime.combine(args.end, time.max),
+        start_time=datetime.combine(args.start, time.min),
+        end_time=datetime.combine(args.end, time.max),
         on_chunk_done=daily_progress,
     )
-    if daily_rows == 0:
+    if daily_frame.is_empty():
         raise RuntimeError("ClickHouse 未返回日线数据，已停止 enriched 重算")
+    repo.append_daily(daily_frame)
+    daily_rows = daily_frame.height
 
     def enriched_progress(current: int, total: int) -> None:
         logger.info("enriched 指标批次 %d/%d", current, total)
