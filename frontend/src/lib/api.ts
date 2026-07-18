@@ -306,12 +306,14 @@ export interface MarketIndustryRowsResult {
   market: MarketCode
   as_of: string | null
   source: string | null
+  leader_source?: string | null
   rows: {
     symbol: string
     name?: string | null
     main_sector: string
     sub_industry: string
     industry: string
+    is_leader?: boolean
   }[]
 }
 

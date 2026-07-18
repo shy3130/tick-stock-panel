@@ -143,21 +143,21 @@ def test_daily_chunks_large_three_market_universe() -> None:
     assert progress == [(1, 2), (2, 2)]
 
 
-def test_hk_market_industries_use_latest_company_background_snapshot() -> None:
+def test_hk_market_industries_use_full_f10_classification_with_leader_marker() -> None:
     query = QueryRecorder([
         {
-            "as_of": "2026-07-14",
+            "as_of": "2026-06-25 02:54:33.613",
             "symbol": "700.HK",
             "name": "TENCENT",
-            "main_sector": "TMT",
-            "sub_industry": "互联网",
+            "industry": "软件服务",
+            "is_leader": 1,
         },
         {
-            "as_of": "2026-07-14",
+            "as_of": "2026-06-25 02:54:33.613",
             "symbol": "AAPL.US",
             "name": "APPLE",
-            "main_sector": "TMT",
-            "sub_industry": "消费电子",
+            "industry": "消费电子",
+            "is_leader": 0,
         },
     ])
     provider = ClickHouseProvider(query_fn=query)
@@ -165,27 +165,30 @@ def test_hk_market_industries_use_latest_company_background_snapshot() -> None:
     result = provider.get_market_industries("hk")
 
     assert result["market"] == "hk"
-    assert result["as_of"] == "2026-07-14"
-    assert result["source"] == "lb_company_background_industry_leaders"
+    assert result["as_of"] == "2026-06-25 02:54:33.613"
+    assert result["source"] == "lb_eastmoney_f10_profiles"
+    assert result["leader_source"] == "lb_company_background_industry_leaders"
     assert result["rows"] == [{
         "symbol": "700.HK",
         "name": "TENCENT",
-        "main_sector": "TMT",
-        "sub_industry": "互联网",
-        "industry": "TMT-互联网",
+        "main_sector": "",
+        "sub_industry": "软件服务",
+        "industry": "软件服务",
+        "is_leader": True,
     }]
+    assert "lb_eastmoney_f10_profiles" in query.queries[-1]
     assert "lb_company_background_industry_leaders" in query.queries[-1]
     assert "max(snapshot_date)" in query.queries[-1]
 
 
-def test_us_market_industries_use_latest_sector_leader_snapshot() -> None:
+def test_us_market_industries_use_full_f10_classification_with_leader_marker() -> None:
     query = QueryRecorder([
         {
-            "as_of": "2026-07-16",
+            "as_of": "2026-06-25 02:54:33.613",
             "symbol": "AAPL.US",
             "name": "APPLE",
-            "main_sector": "TMT",
-            "sub_industry": "消费电子",
+            "industry": "消费电子",
+            "is_leader": 1,
         }
     ])
     provider = ClickHouseProvider(query_fn=query)
@@ -193,7 +196,10 @@ def test_us_market_industries_use_latest_sector_leader_snapshot() -> None:
     result = provider.get_market_industries("us")
 
     assert result["market"] == "us"
-    assert result["source"] == "lb_sector_leader_snapshots"
-    assert result["rows"][0]["industry"] == "TMT-消费电子"
+    assert result["source"] == "lb_eastmoney_f10_profiles"
+    assert result["leader_source"] == "lb_sector_leader_snapshots"
+    assert result["rows"][0]["industry"] == "消费电子"
+    assert result["rows"][0]["is_leader"] is True
+    assert "lb_eastmoney_f10_profiles" in query.queries[-1]
     assert "lb_sector_leader_snapshots" in query.queries[-1]
     assert "max(trade_date)" in query.queries[-1]

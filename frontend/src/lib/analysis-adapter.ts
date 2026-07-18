@@ -33,11 +33,12 @@ export function marketIndustryDimensionData(
     { name: 'main_sector', dtype: 'string', label: '一级行业' },
     { name: 'sub_industry', dtype: 'string', label: '二级行业' },
     { name: 'industry', dtype: 'string', label: '行业路径' },
+    { name: 'is_leader', dtype: 'bool', label: '行业代表股' },
   ]
   return {
     data: {
       id,
-      label: 'ClickHouse 行业代表快照',
+      label: 'ClickHouse 全量行业分类',
       mode: 'snapshot',
       date: response.as_of,
       total: rows.length,
@@ -47,14 +48,14 @@ export function marketIndustryDimensionData(
     },
     config: {
       id,
-      label: 'ClickHouse 行业代表快照',
+      label: 'ClickHouse 全量行业分类',
       mode: 'snapshot',
       fields,
-      description: '来自现有 ClickHouse 行业龙头/代表标的快照',
+      description: '来自 ClickHouse F10 全量行业分类，附带行业代表股标记',
       created_at: response.as_of ?? '',
       updated_at: response.as_of ?? '',
     },
-    sourceLabel: 'ClickHouse 行业代表快照',
+    sourceLabel: 'ClickHouse 全量行业分类',
   }
 }
 

@@ -482,7 +482,7 @@ export function IndustryAnalysis() {
           ) : dimensionLoading ? (
             <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算行业强度...</div>
           ) : market !== 'cn' && marketIndustriesQuery.isError ? (
-            <EmptyState icon={Layers3} title="行业分类数据暂不可用" hint="ClickHouse 行业代表快照读取失败，请稍后刷新" />
+            <EmptyState icon={Layers3} title="行业分类数据暂不可用" hint="ClickHouse 全量行业分类读取失败，请稍后刷新" />
           ) : needsIndustryFetch ? (
             <PresetFetchState
               title="未获取行业数据"
@@ -492,7 +492,7 @@ export function IndustryAnalysis() {
               onFetch={() => fetchMutation.mutate()}
             />
           ) : (
-            <EmptyState icon={Layers3} title="未匹配到行业数据" hint={market === 'cn' ? (resolved.hint || '请检查扩展数据是否包含行业/板块相关字段') : '当前 ClickHouse 行业代表快照暂无可用标的'} />
+            <EmptyState icon={Layers3} title="未匹配到行业数据" hint={market === 'cn' ? (resolved.hint || '请检查扩展数据是否包含行业/板块相关字段') : '当前 ClickHouse 全量行业分类暂无可用标的'} />
           )}
         </div>
       </div>
