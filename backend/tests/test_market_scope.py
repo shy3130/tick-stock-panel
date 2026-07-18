@@ -75,3 +75,24 @@ def test_symbols_for_market_reads_instrument_universe() -> None:
             return _mixed_market_frame()
 
     assert symbols_for_market(Repo(), "us") == ["AAPL.US"]
+
+
+def test_market_overview_passes_market_into_screener(monkeypatch) -> None:
+    from app.services import market_overview_builder as builder
+
+    captured: dict[str, str] = {}
+
+    class Screener:
+        def __init__(self, repo, asset_type: str = "stock", market: str = "cn") -> None:
+            captured["market"] = market
+
+        def _load_enriched_for_date(self, target_date: date) -> pl.DataFrame:
+            return pl.DataFrame()
+
+    monkeypatch.setattr(builder, "ScreenerService", Screener)
+    monkeypatch.setattr(builder, "market_latest_date", lambda repo, market: date(2026, 7, 17))
+
+    result = builder.build_market_overview(object(), market="hk")
+
+    assert captured["market"] == "hk"
+    assert result["market"] == "hk"
