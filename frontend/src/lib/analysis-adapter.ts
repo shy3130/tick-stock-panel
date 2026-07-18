@@ -17,6 +17,54 @@ export interface MarketIndustryResponse {
   rows: Record<string, any>[]
 }
 
+export interface MarketConceptResponse {
+  market: string
+  as_of: string | null
+  source: string | null
+  window_days: number
+  rows: Record<string, any>[]
+}
+
+export function marketConceptDimensionData(
+  market: string,
+  response: MarketConceptResponse | null | undefined,
+): { data: ExtDataRowsResult; config: ExtDataConfig; sourceLabel: string } | null {
+  const normalized = market.trim().toLowerCase()
+  if (normalized === 'cn' || !response) return null
+
+  const suffix = `.${normalized.toUpperCase()}`
+  const rows = response.rows.filter(row => String(row.symbol ?? '').toUpperCase().endsWith(suffix))
+  const id = `clickhouse-concepts-${normalized}`
+  const label = 'ClickHouse 动态事件主题'
+  const fields: ExtDataField[] = [
+    { name: 'symbol', dtype: 'string', label: '标的代码' },
+    { name: 'name', dtype: 'string', label: '标的名称' },
+    { name: 'concept', dtype: 'string', label: '概念主题' },
+  ]
+  return {
+    data: {
+      id,
+      label,
+      mode: 'snapshot',
+      date: response.as_of,
+      total: rows.length,
+      limit: rows.length,
+      fields,
+      rows,
+    },
+    config: {
+      id,
+      label,
+      mode: 'snapshot',
+      fields,
+      description: `来自 ClickHouse 最近 ${response.window_days} 天舆情事件的市场影响主题`,
+      created_at: response.as_of ?? '',
+      updated_at: response.as_of ?? '',
+    },
+    sourceLabel: label,
+  }
+}
+
 export function marketIndustryDimensionData(
   market: string,
   response: MarketIndustryResponse | null | undefined,

@@ -345,6 +345,109 @@ class ClickHouseProvider:
             "rows": items,
         }
 
+    def get_market_concepts(self, market: str) -> dict[str, Any]:
+        """Return recent event-derived themes for active HK/US symbols."""
+        normalized = str(market or "").strip().lower()
+        window_days = 30
+        if normalized not in {"hk", "us"}:
+            return {
+                "market": normalized or "cn",
+                "as_of": None,
+                "source": None,
+                "window_days": window_days,
+                "rows": [],
+            }
+
+        if normalized == "hk":
+            symbol_filter = "match(raw_symbol, '^[0-9]{1,5}(\\.HK)?$')"
+            symbol_normalizer = (
+                "concat(toString(toUInt32OrZero(splitByChar('.', raw_symbol)[1])), '.HK')"
+            )
+        else:
+            symbol_filter = "match(raw_symbol, '^[A-Z][A-Z0-9.+-]*(\\.US)?$')"
+            symbol_normalizer = (
+                "concat(replaceAll(if(endsWith(raw_symbol, '.US'), "
+                "substring(raw_symbol, 1, length(raw_symbol) - 3), raw_symbol), '.', '-'), '.US')"
+            )
+
+        event_table = self._table("lb_sentiment_impact_events")
+        rows = self._query(f"""
+            WITH event_pairs AS (
+                SELECT analysis_date,
+                       upper(trimBoth(arrayJoin(affected_symbols))) AS raw_symbol,
+                       trimBoth(arrayJoin(affected_sectors)) AS concept
+                FROM {event_table}
+                WHERE source_market = {_sql_string(normalized)}
+                  AND analysis_date >= (SELECT max(analysis_date) - 29 FROM {event_table}
+                                        WHERE source_market = {_sql_string(normalized)})
+            ),
+            normalized_pairs AS (
+                SELECT analysis_date,
+                       {symbol_normalizer} AS normalized_symbol,
+                       concept
+                FROM event_pairs
+                WHERE concept != '' AND {symbol_filter}
+            ),
+            latest_trade_date AS (
+                SELECT max(trade_date) AS trade_date
+                FROM {self._table("lb_daily_bars")}
+                WHERE market = {_sql_string(normalized)}
+            ),
+            active_symbols AS (
+                SELECT DISTINCT symbol AS active_symbol
+                FROM {self._table("lb_daily_bars")}
+                WHERE market = {_sql_string(normalized)}
+                  AND trade_date = (SELECT trade_date FROM latest_trade_date)
+            ),
+            symbol_metadata AS (
+                SELECT symbol AS metadata_symbol, argMax(name, updated_at) AS metadata_name
+                FROM {self._table("lb_symbols")}
+                WHERE market = {_sql_string(normalized)}
+                GROUP BY symbol
+            )
+            SELECT toString(max(pairs.analysis_date)) AS as_of,
+                   pairs.normalized_symbol AS symbol,
+                   coalesce(nullIf(metadata.metadata_name, ''), pairs.normalized_symbol) AS name,
+                   pairs.concept AS concept
+            FROM normalized_pairs AS pairs
+            INNER JOIN active_symbols AS active
+                    ON active.active_symbol = pairs.normalized_symbol
+            LEFT JOIN symbol_metadata AS metadata
+                   ON metadata.metadata_symbol = pairs.normalized_symbol
+            GROUP BY pairs.normalized_symbol, metadata.metadata_name, pairs.concept
+            ORDER BY concept, symbol
+        """)
+
+        suffix = f".{normalized.upper()}"
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        as_of: str | None = None
+        for row in rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            concept = str(row.get("concept") or "").strip()
+            if not symbol.endswith(suffix) or not concept:
+                continue
+            key = (symbol, concept)
+            if key in seen:
+                continue
+            seen.add(key)
+            row_as_of = str(row.get("as_of")) if row.get("as_of") else None
+            if row_as_of and (as_of is None or row_as_of > as_of):
+                as_of = row_as_of
+            items.append({
+                "symbol": symbol,
+                "name": row.get("name") or symbol,
+                "concept": concept,
+            })
+
+        return {
+            "market": normalized,
+            "as_of": as_of,
+            "source": "lb_sentiment_impact_events",
+            "window_days": window_days,
+            "rows": items,
+        }
+
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
         sample_symbols = symbols or ["000001.SZ"]
         if dataset == "daily":

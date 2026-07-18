@@ -38,6 +38,7 @@ export const QK = {
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   marketSnapshot:       (market: string = 'cn') => ['market-snapshot', market] as const,
   marketIndustries:     (market: string) => ['market-industries', market] as const,
+  marketConcepts:       (market: string) => ['market-concepts', market] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
 
   // Backtest

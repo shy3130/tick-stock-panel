@@ -436,6 +436,27 @@ def market_industries(market: str = "cn"):
         raise HTTPException(status_code=503, detail="行业分类数据暂不可用") from exc
 
 
+@router.get("/market-concepts")
+def market_concepts(market: str = "cn"):
+    """Return market-scoped concept themes for HK/US analysis."""
+    from app.services.market_scope import normalize_market
+
+    normalized = normalize_market(market)
+    if normalized == "cn":
+        return {
+            "market": "cn",
+            "as_of": None,
+            "source": "ext_gn_ths",
+            "window_days": 30,
+            "rows": [],
+        }
+    try:
+        return ClickHouseProvider().get_market_concepts(normalized)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market concepts load failed for %s: %s", normalized, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="概念主题数据暂不可用") from exc
+
+
 @router.post("/run_all")
 def run_all(request: Request, body: Optional[dict] = None):
     """批量运行指定策略；注册、路由和执行均由 StrategyEngine 负责。"""

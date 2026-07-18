@@ -203,3 +203,86 @@ def test_us_market_industries_use_full_f10_classification_with_leader_marker() -
     assert "lb_eastmoney_f10_profiles" in query.queries[-1]
     assert "lb_sector_leader_snapshots" in query.queries[-1]
     assert "max(trade_date)" in query.queries[-1]
+
+
+def test_hk_market_concepts_use_recent_event_themes_and_normalized_symbols() -> None:
+    query = QueryRecorder([
+        {
+            "as_of": "2026-07-17",
+            "symbol": "700.HK",
+            "name": "TENCENT",
+            "concept": "云计算",
+        },
+        {
+            "as_of": "2026-07-17",
+            "symbol": "AAPL.US",
+            "name": "APPLE",
+            "concept": "消费电子",
+        },
+    ])
+    provider = ClickHouseProvider(query_fn=query)
+
+    result = provider.get_market_concepts("hk")
+
+    assert result["market"] == "hk"
+    assert result["as_of"] == "2026-07-17"
+    assert result["source"] == "lb_sentiment_impact_events"
+    assert result["window_days"] == 30
+    assert result["rows"] == [{
+        "symbol": "700.HK",
+        "name": "TENCENT",
+        "concept": "云计算",
+    }]
+    sql = query.queries[-1]
+    assert "lb_sentiment_impact_events" in sql
+    assert "arrayJoin(affected_symbols)" in sql
+    assert "arrayJoin(affected_sectors)" in sql
+    assert "toUInt32OrZero" in sql
+    assert "max(analysis_date) - 29" in sql
+    assert "lb_daily_bars" in sql
+
+
+def test_us_market_concepts_normalize_tickers_and_reject_other_market_rows() -> None:
+    query = QueryRecorder([
+        {
+            "as_of": "2026-07-18",
+            "symbol": "BRK-B.US",
+            "name": "BERKSHIRE",
+            "concept": "保险",
+        },
+        {
+            "as_of": "2026-07-18",
+            "symbol": "700.HK",
+            "name": "TENCENT",
+            "concept": "互联网平台",
+        },
+    ])
+    provider = ClickHouseProvider(query_fn=query)
+
+    result = provider.get_market_concepts("us")
+
+    assert result["market"] == "us"
+    assert result["rows"] == [{
+        "symbol": "BRK-B.US",
+        "name": "BERKSHIRE",
+        "concept": "保险",
+    }]
+    sql = query.queries[-1]
+    assert "replaceAll" in sql
+    assert "'.US'" in sql
+
+
+def test_cn_market_concepts_keep_using_configured_extension_data() -> None:
+    query = QueryRecorder([])
+    provider = ClickHouseProvider(query_fn=query)
+
+    result = provider.get_market_concepts("cn")
+
+    assert result == {
+        "market": "cn",
+        "as_of": None,
+        "source": None,
+        "window_days": 30,
+        "rows": [],
+    }
+    assert query.queries == []

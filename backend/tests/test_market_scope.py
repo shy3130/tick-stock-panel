@@ -113,6 +113,26 @@ def test_market_industries_endpoint_delegates_selected_market(monkeypatch) -> No
     assert result["market"] == "us"
 
 
+def test_market_concepts_endpoint_delegates_selected_market(monkeypatch) -> None:
+    from app.api import screener
+
+    class Provider:
+        def get_market_concepts(self, market: str):
+            return {
+                "market": market,
+                "as_of": "2026-07-17",
+                "source": "test",
+                "window_days": 30,
+                "rows": [],
+            }
+
+    monkeypatch.setattr(screener, "ClickHouseProvider", Provider, raising=False)
+
+    result = screener.market_concepts("HK")
+
+    assert result["market"] == "hk"
+
+
 def test_market_snapshot_loads_selected_market_before_filtering(monkeypatch) -> None:
     from app.api import screener
 

@@ -22,7 +22,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
-import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
+import { marketConceptDimensionData, resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
 import { useMarketScope } from '@/lib/market-scope'
 
 const KEYWORDS = ['concept', '概念', 'theme', '题材', '板块']
@@ -257,8 +257,19 @@ export function ConceptAnalysis() {
   const rowsQuery = useQuery({
     queryKey: QK.extDataRows(activeConfigId, undefined, PAGE_LIMIT),
     queryFn: () => api.extDataRows(activeConfigId, { limit: PAGE_LIMIT }),
-    enabled: !!activeConfigId,
+    enabled: market === 'cn' && !!activeConfigId,
   })
+
+  const marketConceptsQuery = useQuery({
+    queryKey: QK.marketConcepts(market),
+    queryFn: () => api.marketConcepts(market),
+    enabled: market !== 'cn',
+    staleTime: 5 * 60_000,
+  })
+  const marketConceptInput = useMemo(
+    () => marketConceptDimensionData(market, marketConceptsQuery.data),
+    [market, marketConceptsQuery.data],
+  )
 
   // 内置概念预设 (ext_gn_ths) 手动获取数据
   const PRESET_CONCEPT_ID = 'ext_gn_ths'
@@ -272,7 +283,7 @@ export function ConceptAnalysis() {
   })
   // 是否处于「内置概念预设存在但无数据」状态 → 显示获取按钮
   const needsConceptFetch =
-    !!activeConfig && activeConfig.id === PRESET_CONCEPT_ID &&
+    market === 'cn' && !!activeConfig && activeConfig.id === PRESET_CONCEPT_ID &&
     !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
 
   const marketQuery = useQuery({
@@ -282,10 +293,14 @@ export function ConceptAnalysis() {
   })
 
   const marketMap = useMemo(() => buildMarketMap(marketQuery.data?.rows ?? []), [marketQuery.data?.rows])
+  const dimensionData = market === 'cn' ? rowsQuery.data : marketConceptInput?.data
+  const dimensionConfig = market === 'cn' ? activeConfig : marketConceptInput?.config
   const resolved = useMemo(
-    () => resolveDimension(rowsQuery.data, activeConfig, fieldConfig.dimensionField ? [fieldConfig.dimensionField, ...CANDIDATE_FIELDS] : CANDIDATE_FIELDS),
-    [rowsQuery.data, activeConfig, fieldConfig.dimensionField],
+    () => resolveDimension(dimensionData, dimensionConfig, market === 'cn' && fieldConfig.dimensionField ? [fieldConfig.dimensionField, ...CANDIDATE_FIELDS] : CANDIDATE_FIELDS),
+    [dimensionData, dimensionConfig, market, fieldConfig.dimensionField],
   )
+  const dimensionLoading = market === 'cn' ? rowsQuery.isLoading : marketConceptsQuery.isLoading
+  const dimensionFetching = market === 'cn' ? rowsQuery.isFetching : marketConceptsQuery.isFetching
 
   const stats = useMemo(() => {
     return resolved.groups
@@ -324,11 +339,11 @@ export function ConceptAnalysis() {
     setSelectedKey(null)
   }
 
-  if (configsQuery.isLoading) {
+  if (market === 'cn' && configsQuery.isLoading) {
     return <div className="flex h-full items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-muted" /></div>
   }
 
-  if (!activeConfig) {
+  if (market === 'cn' && !activeConfig) {
     // 极端情况: 无任何概念配置。仍提供一键获取内置概念数据入口
     return (
       <>
@@ -360,28 +375,32 @@ export function ConceptAnalysis() {
     <>
       <PageHeader
         title="概念分析"
-        subtitle={`${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
+        subtitle={`${marketQuery.data?.as_of ?? dimensionData?.date ?? '最新'} · ${stats.length} 个概念 · ${totalSymbols} 只标的${marketConceptInput ? ` · ${marketConceptInput.sourceLabel}` : ''}`}
         right={
           <div className="flex items-center gap-1">
             {/* RPS 轮动: 打开涨幅轮动矩阵对话框 */}
+            {market === 'cn' && (
+              <button
+                onClick={() => setShowRps(true)}
+                className="inline-flex items-center gap-1 rounded-btn border border-amber-400/40 bg-amber-400/15 px-2.5 py-1.5 text-[11px] text-amber-400 font-medium transition-colors hover:bg-amber-400/25 hover:border-amber-400/60"
+                title="概念涨幅轮动矩阵"
+              >
+                <Repeat className="h-3.5 w-3.5" />涨幅RPS轮动分析
+              </button>
+            )}
             <button
-              onClick={() => setShowRps(true)}
-              className="inline-flex items-center gap-1 rounded-btn border border-amber-400/40 bg-amber-400/15 px-2.5 py-1.5 text-[11px] text-amber-400 font-medium transition-colors hover:bg-amber-400/25 hover:border-amber-400/60"
-              title="概念涨幅轮动矩阵"
-            >
-              <Repeat className="h-3.5 w-3.5" />涨幅RPS轮动分析
-            </button>
-            <button
-              onClick={() => { rowsQuery.refetch(); marketQuery.refetch() }}
-              disabled={rowsQuery.isFetching || marketQuery.isFetching}
+              onClick={() => { market === 'cn' ? rowsQuery.refetch() : marketConceptsQuery.refetch(); marketQuery.refetch() }}
+              disabled={dimensionFetching || marketQuery.isFetching}
               className="p-1.5 text-muted hover:bg-surface disabled:opacity-50"
               title="刷新"
             >
-              <RefreshCw className={cn('h-4 w-4', (rowsQuery.isFetching || marketQuery.isFetching) && 'animate-spin')} />
+              <RefreshCw className={cn('h-4 w-4', (dimensionFetching || marketQuery.isFetching) && 'animate-spin')} />
             </button>
-            <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
-              <Settings2 className="h-4 w-4" />
-            </button>
+            {market === 'cn' && (
+              <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
+                <Settings2 className="h-4 w-4" />
+              </button>
+            )}
           </div>
         }
       />
@@ -411,8 +430,10 @@ export function ConceptAnalysis() {
               />
               <ConceptFocus stat={selected} onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }} />
             </div>
-          ) : rowsQuery.isLoading ? (
+          ) : dimensionLoading ? (
             <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算概念强度...</div>
+          ) : market !== 'cn' && marketConceptsQuery.isError ? (
+            <EmptyState icon={Layers3} title="概念主题数据暂不可用" hint="ClickHouse 动态事件主题读取失败，请稍后刷新" />
           ) : needsConceptFetch ? (
             <PresetFetchState
               title="未获取概念数据"
@@ -422,13 +443,13 @@ export function ConceptAnalysis() {
               onFetch={() => fetchMutation.mutate()}
             />
           ) : (
-            <EmptyState icon={Layers3} title="未匹配到概念数据" hint={resolved.hint || '请检查扩展数据是否包含概念/题材相关字段'} />
+            <EmptyState icon={Layers3} title="未匹配到概念数据" hint={market === 'cn' ? (resolved.hint || '请检查扩展数据是否包含概念/题材相关字段') : '最近 30 天动态事件中暂无可关联到当前市场行情的概念主题'} />
           )}
         </div>
       </div>
 
       <AnimatePresence>
-        {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} />}
+        {market === 'cn' && showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} />}
       </AnimatePresence>
 
       {previewSymbol && (
@@ -440,7 +461,7 @@ export function ConceptAnalysis() {
       )}
 
       <AnimatePresence>
-        {showRps && <RpsRotationDialog onClose={() => setShowRps(false)} />}
+        {market === 'cn' && showRps && <RpsRotationDialog onClose={() => setShowRps(false)} />}
       </AnimatePresence>
     </>
   )
