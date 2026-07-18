@@ -112,6 +112,11 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     done; \
     uv sync --frozen "$@" || uv sync "$@"
 
+# 固定版本的共享策略核心。只安装 wheel 本身，运行所需 NumPy 已由后端依赖提供。
+COPY backend/vendor/longbridge_stock-0.1.0-py3-none-any.whl /tmp/vendor/
+RUN uv pip install --python /app/.venv/bin/python --no-cache --no-deps \
+    /tmp/vendor/longbridge_stock-0.1.0-py3-none-any.whl
+
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
