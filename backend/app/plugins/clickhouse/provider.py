@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -18,11 +19,17 @@ from app.data_providers.base import ProviderCapabilities
 from app.data_providers.normalizer import normalize_daily
 from app.market_rules import market_rule_for_symbol, round_lot_size
 from app.plugins.clickhouse import bridge
+from app.plugins.clickhouse.financial import (
+    FINANCIAL_FIELDS,
+    FINANCIAL_TABLES,
+    build_financial_frames,
+)
 
 QueryFn = Callable[[str], list[dict]]
 MinuteFallbackFn = Callable[[str], list[dict]]
 _MINUTE_COLUMNS = ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"]
 _DAILY_SYMBOL_BATCH_SIZE = 500
+_FINANCIAL_SYMBOL_BATCH_SIZE = 1000
 logger = logging.getLogger(__name__)
 
 
@@ -30,7 +37,9 @@ logger = logging.getLogger(__name__)
 class _ClickHouseConfig:
     name: str = "clickhouse"
     display_name: str = "Longbridge ClickHouse - 三市场"
-    datasets: dict = field(default_factory=lambda: dict.fromkeys(("daily", "minute", "realtime")))
+    datasets: dict = field(
+        default_factory=lambda: dict.fromkeys(("daily", "minute", "realtime", "financial"))
+    )
     path: None = None
     builtin: bool = True
 
@@ -103,6 +112,7 @@ class ClickHouseProvider:
         daily=True,
         minute=True,
         realtime=True,
+        financial=True,
     )
 
     def __init__(
@@ -114,9 +124,44 @@ class ClickHouseProvider:
         self._query_fn = query_fn or bridge.query_json_each_row
         self._minute_fallback_fn = minute_fallback_fn or _fetch_longbridge_intraday
         self.last_sql = ""
+        self._financial_cache_key: tuple[str, ...] | None = None
+        self._financial_cache_time = 0.0
+        self._financial_frames: dict[str, pl.DataFrame] = {}
 
     def close(self) -> None:
-        return None
+        self._financial_cache_key = None
+        self._financial_frames = {}
+
+    def get_financials(
+        self,
+        table: str,
+        symbols: list[str],
+        latest_only: bool = True,
+    ) -> pl.DataFrame:
+        if table not in FINANCIAL_TABLES:
+            raise ValueError(f"unsupported financial table: {table}")
+        key = tuple(sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()}))
+        if not key:
+            return pl.DataFrame()
+        now = time.monotonic()
+        if key != self._financial_cache_key or now - self._financial_cache_time > 300:
+            rows: list[dict[str, Any]] = []
+            fields_sql = _symbols_sql(list(FINANCIAL_FIELDS))
+            for offset in range(0, len(key), _FINANCIAL_SYMBOL_BATCH_SIZE):
+                symbol_chunk = list(key[offset : offset + _FINANCIAL_SYMBOL_BATCH_SIZE])
+                sql = f"""
+                    SELECT symbol, report_period, fp_end, field, value, yoy, currency
+                    FROM {self._table("lb_financial_report")} FINAL
+                    WHERE symbol IN {_symbols_sql(symbol_chunk)}
+                      AND field IN {fields_sql}
+                    ORDER BY symbol, field, fp_end DESC, updated_at DESC
+                    LIMIT 1 BY symbol, field
+                """
+                rows.extend(self._query(sql))
+            self._financial_frames = build_financial_frames(rows)
+            self._financial_cache_key = key
+            self._financial_cache_time = now
+        return self._financial_frames[table].clone()
 
     def _query(self, sql: str) -> list[dict]:
         self.last_sql = sql

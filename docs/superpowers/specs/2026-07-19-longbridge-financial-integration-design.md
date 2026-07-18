@@ -70,7 +70,7 @@ ORDER BY (symbol, report_type, field, fiscal_year, report_period);
 
 ## 迁移与增量同步
 
-新增独立脚本 `scripts/sync_financials_pg_to_clickhouse.py`：
+新增独立脚本 `backend/scripts/sync_financials_pg_to_clickhouse.py`：
 
 1. 校验 ClickHouse 表，不存在则创建。
 2. 读取 ClickHouse 目标表的最大 `updated_at`。
@@ -150,7 +150,7 @@ Provider 按股票批量查询字段最新记录，一次生成四类 DataFrame�
 - `clickhouse` 插件清单增加 `financial` 数据集。
 - 选择 ClickHouse 财务源时，运行时授予 `financial` 能力，不依赖 TickFlow Expert Key。
 - 复用现有手动“全部同步”和单表同步，继续输出小体积 Parquet 给现有 API。
-- PostgreSQL → ClickHouse 增量任务每天运行一次；TickFlow ClickHouse → Parquet 同步在迁移任务完成后触发。
+- PostgreSQL → ClickHouse 增量任务每天由 10.28 的 Chronicle 统一调度；TickFlow ClickHouse → Parquet 同步在迁移任务完成后触发。
 - 两级任务都可重复执行，失败不删除上一版可用数据。
 
 ## 安全与错误处理
@@ -170,4 +170,3 @@ Provider 按股票批量查询字段最新记录，一次生成四类 DataFrame�
 - 10.28 验收核对 PostgreSQL 与 ClickHouse 行数、股票数、最大更新时间和抽样字段。
 - 页面验收至少检查 `700.HK`、`9988.HK`、`AAPL.US`、`NBIS.US`、`600519.SH`。
 - 记录 ClickHouse 实际压缩后磁盘占用，与 PostgreSQL 11 GB 源表对比。
-

@@ -160,7 +160,7 @@ def sync_cash_flow(data_dir: Path, capset: CapabilitySet) -> int:
 
 def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:
     """同步所有财务表。返回 {table: rows}。"""
-    if not capset.has(Cap.FINANCIAL):
+    if not capset.has(Cap.FINANCIAL) and not _financial_is_custom():
         logger.info("sync_all financials skipped: no FINANCIAL capability")
         return {}
 
@@ -238,7 +238,7 @@ class FinancialScheduler:
         # 即便 app.state.capabilities 已更新, 调度器仍报 "no FINANCIAL capability"。
         self._data_dir = data_dir
         self._capset = capset
-        if not capset.has(Cap.FINANCIAL):
+        if not capset.has(Cap.FINANCIAL) and not _financial_is_custom():
             logger.info("FinancialScheduler skipped: no FINANCIAL capability")
             return
         # 从持久化恢复上次同步时间: 重启后前端仍能显示真实最后同步时间,而非"尚未同步"

@@ -300,13 +300,28 @@ def detect_capabilities(force: bool = False) -> CapabilitySet:
 def _augment_custom_sources(capset: CapabilitySet) -> None:
     """根据用户配置的自定义数据源, 补充对应能力 (不覆盖 TickFlow 已有的)。"""
     try:
+        from app.data_providers import custom as custom_sources
         from app.services import preferences
-        provider = preferences.get_minute_data_provider()
-        if provider != "tickflow":
-            from app.data_providers import custom as custom_sources
-            if custom_sources.provider_has_dataset(provider, "minute"):
-                capset.grant(Cap.KLINE_MINUTE_BATCH)
-                logger.info("custom minute source '%s' detected: granted KLINE_MINUTE_BATCH", provider)
+
+        minute_provider = preferences.get_minute_data_provider()
+        if minute_provider != "tickflow" and custom_sources.provider_has_dataset(
+            minute_provider, "minute"
+        ):
+            capset.grant(Cap.KLINE_MINUTE_BATCH)
+            logger.info(
+                "custom minute source '%s' detected: granted KLINE_MINUTE_BATCH",
+                minute_provider,
+            )
+
+        financial_provider = preferences.get_financial_provider()
+        if financial_provider != "tickflow" and custom_sources.provider_has_dataset(
+            financial_provider, "financial"
+        ):
+            capset.grant(Cap.FINANCIAL)
+            logger.info(
+                "custom financial source '%s' detected: granted FINANCIAL",
+                financial_provider,
+            )
     except Exception as e:  # noqa: BLE001
         logger.debug("custom source augment skipped: %s", e)
 

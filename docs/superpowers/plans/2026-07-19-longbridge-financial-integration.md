@@ -42,7 +42,7 @@
 ### Task 2: ClickHouse 财务表和流式迁移器
 
 **Files:**
-- Create: `scripts/sync_financials_pg_to_clickhouse.py`
+- Create: `backend/scripts/sync_financials_pg_to_clickhouse.py`
 - Create: `backend/tests/test_financial_clickhouse_migration.py`
 
 **Interfaces:**
@@ -163,7 +163,7 @@ Commit: `fix: enable clickhouse financial capability`
 
 - [ ] Run: `backend/.venv/Scripts/python -m pytest backend/tests/test_financial_clickhouse_migration.py backend/tests/test_clickhouse_financial_provider.py backend/tests/test_financial_custom_source.py -q`
 - [ ] Run: `backend/.venv/Scripts/python -m pytest backend/tests -q`
-- [ ] Run: `backend/.venv/Scripts/python -m ruff check backend/app backend/tests scripts/sync_financials_pg_to_clickhouse.py`
+- [ ] Run: `backend/.venv/Scripts/python -m ruff check backend/app backend/tests backend/scripts/sync_financials_pg_to_clickhouse.py`
 - [ ] Run: `npm --prefix frontend run build`
 - [ ] Run: `git diff --check`
 
@@ -182,9 +182,8 @@ Expected: 全部 exit 0。
 - [ ] 先迁移一个股票并对比 PostgreSQL/ClickHouse 字段。
 - [ ] 执行 497 万行全量迁移，监控批次、内存、查询耗时和 ClickHouse 磁盘占用。
 - [ ] 核对总行数、股票数、最大 `updated_at`、A/H/美股抽样数据。
-- [ ] 配置每天增量任务，使用 5 分钟重叠窗口。
+- [ ] 在 10.28 Chronicle 中配置每天增量任务，使用 5 分钟重叠窗口。
 - [ ] 构建并部署 TickFlow 镜像，财务数据源切换为 `clickhouse`。
 - [ ] 触发 `/api/financials/sync/all`，轮询完成。
 - [ ] 验证 `700.HK`、`9988.HK`、`AAPL.US`、`NBIS.US`、`600519.SH` 四类接口和页面。
 - [ ] 记录 ClickHouse 压缩后占用，并确认日志没有凭据和持续慢查询。
-

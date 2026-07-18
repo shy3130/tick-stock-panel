@@ -3,6 +3,6 @@ display_name: "Longbridge ClickHouse（三市场）"
 runtime: none
 entry: app.plugins.clickhouse.provider:ClickHouseProvider
 check: app.plugins.clickhouse.bridge:availability
-datasets: [daily, minute, realtime]
+datasets: [daily, minute, realtime, financial]
 description: "读取 longbridge ClickHouse 中的 A股、港股和美股历史、分钟与实时行情。"
 install_hint: "请配置 CLICKHOUSE_URL 和只读账户环境变量。"
