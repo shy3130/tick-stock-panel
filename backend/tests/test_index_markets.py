@@ -59,3 +59,28 @@ def test_sync_index_instruments_keeps_cross_market_core_catalog(monkeypatch) -> 
     assert {"HSI.HK", "HSTECH.HK", ".SPX.US", ".IXIC.US", ".DJI.US", ".VIX.US"} <= symbols
     assert count == repo.saved.height
     assert repo.refreshed is True
+
+
+def test_index_daily_serializes_non_finite_indicator_values_as_null() -> None:
+    class DailyRepo(InstrumentRepo):
+        def get_index_daily(self, *_args) -> pl.DataFrame:
+            return pl.DataFrame({
+                "symbol": [".SPX.US"],
+                "date": ["2026-07-17"],
+                "close": [6320.0],
+                "macd_dif": [float("nan")],
+                "boll_upper": [float("inf")],
+            })
+
+    app = FastAPI()
+    app.include_router(indices.router)
+    app.state.repo = DailyRepo(pl.DataFrame([
+        {"symbol": ".SPX.US", "name": "标普500", "market": "us"},
+    ]))
+
+    response = TestClient(app).get("/api/index/daily?symbol=.SPX.US&days=30")
+
+    assert response.status_code == 200
+    row = response.json()["rows"][0]
+    assert row["macd_dif"] is None
+    assert row["boll_upper"] is None

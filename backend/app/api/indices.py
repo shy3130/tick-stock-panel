@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime, timedelta
 
 import polars as pl
@@ -14,6 +15,15 @@ from app.tickflow.capabilities import Cap
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/index", tags=["index"])
+
+
+def _rows_for_json(df: pl.DataFrame) -> list[dict]:
+    rows = df.to_dicts()
+    for row in rows:
+        for key, value in row.items():
+            if isinstance(value, float) and not math.isfinite(value):
+                row[key] = None
+    return rows
 
 
 def _index_info(repo, symbol: str) -> dict:
@@ -103,7 +113,13 @@ def get_index_daily(
 
     df = repo.get_index_daily(symbol, start, end)
     if not df.is_empty():
-        return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": df.to_dicts(), "source": "index_enriched"}
+        return {
+            "symbol": symbol,
+            "name": info.get("name"),
+            "index_info": info,
+            "rows": _rows_for_json(df),
+            "source": "index_enriched",
+        }
 
     capset = request.app.state.capabilities
     try:
@@ -131,7 +147,9 @@ def get_index_daily(
     repo.append_index_daily(raw)
     repo.append_index_enriched(enriched)
     repo.refresh_index_views()
-    rows = enriched.filter((pl.col("date") >= start) & (pl.col("date") <= end)).to_dicts()
+    rows = _rows_for_json(
+        enriched.filter((pl.col("date") >= start) & (pl.col("date") <= end))
+    )
     return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": rows, "source": "live"}
 
 
