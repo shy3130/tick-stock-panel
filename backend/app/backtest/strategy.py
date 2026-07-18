@@ -49,7 +49,7 @@ _EXECUTION_COLUMNS = frozenset({
     "name", "score", "signal_limit_up", "signal_limit_down",
 })
 _LIMIT_BASE_COLUMNS = frozenset({"raw_close", "raw_high"})
-_INSTRUMENT_COLUMNS = frozenset({"name", "total_shares", "float_shares"})
+_INSTRUMENT_COLUMNS = frozenset({"name", "total_shares", "float_shares", "lot_size"})
 
 
 @dataclass(frozen=True)
@@ -174,8 +174,8 @@ class StrategyDependencyResolver:
             base_columns = frozenset(set(base_columns) | set(_LIMIT_BASE_COLUMNS))
 
         instrument_columns = frozenset(required_features & set(_INSTRUMENT_COLUMNS))
-        instrument_columns = frozenset(set(instrument_columns) | {"name"})
-        matrix_columns = set(_EXECUTION_COLUMNS) | required_signals
+        instrument_columns = frozenset(set(instrument_columns) | {"name", "lot_size"})
+        matrix_columns = set(_EXECUTION_COLUMNS) | set(instrument_columns) | required_signals
         if minute_fill:
             indicator_columns = frozenset(set(indicator_columns) | {"ma5", "ma10", "ma20"})
             matrix_columns.update({"ma5", "ma10", "ma20"})
@@ -225,7 +225,7 @@ class StrategyDependencyResolver:
         base_columns = _resolve_base_columns(required_features | set(_EXECUTION_COLUMNS))
         base_columns = frozenset(set(base_columns) | set(_LIMIT_BASE_COLUMNS))
         instrument_columns = frozenset(required_features & set(_INSTRUMENT_COLUMNS))
-        instrument_columns = frozenset(set(instrument_columns) | {"name"})
+        instrument_columns = frozenset(set(instrument_columns) | {"name", "lot_size"})
         warmup_bars = max(60, int(strategy.matrix_strategy.required_warmup_bars(params)))
         matrix_columns = set(base_columns) | set(instrument_columns) | {
             "signal_limit_up",

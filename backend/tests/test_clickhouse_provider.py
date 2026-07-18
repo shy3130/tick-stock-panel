@@ -101,6 +101,7 @@ def test_instruments_cover_all_three_markets() -> None:
 
     assert [row["exchange"] for row in rows] == ["SZ", "HK", "US"]
     assert [row["market"] for row in rows] == ["cn", "hk", "us"]
+    assert [row["lot_size"] for row in rows] == [100, 1, 1]
 
 
 def test_symbol_values_are_sql_escaped() -> None:

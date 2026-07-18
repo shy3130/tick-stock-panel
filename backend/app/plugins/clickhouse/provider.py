@@ -12,7 +12,7 @@ import polars as pl
 
 from app.data_providers.base import ProviderCapabilities
 from app.data_providers.normalizer import normalize_daily
-from app.market_rules import market_rule_for_symbol
+from app.market_rules import market_rule_for_symbol, round_lot_size
 from app.plugins.clickhouse import bridge
 
 QueryFn = Callable[[str], list[dict]]
@@ -209,6 +209,7 @@ class ClickHouseProvider:
                 "code": symbol.rsplit(".", 1)[0],
                 "exchange": symbol.rsplit(".", 1)[1],
                 "market": str(row.get("market") or "").lower(),
+                "lot_size": round_lot_size(symbol),
                 "asset_type": "stock",
                 "source": self.name,
             })
