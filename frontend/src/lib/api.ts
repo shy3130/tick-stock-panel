@@ -636,6 +636,8 @@ export interface FactorBacktestResult {
 export interface StrategyBacktestTrade {
   symbol: string
   name?: string
+  market?: 'cn' | 'hk' | 'us' | string
+  currency?: 'CNY' | 'HKD' | 'USD' | string
   entry_date: string
   exit_date: string
   entry_price: number
