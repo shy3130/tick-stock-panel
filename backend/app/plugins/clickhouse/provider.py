@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -131,12 +131,17 @@ class ClickHouseProvider:
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
+        # trade_date_local in the collector is the Asia/Shanghai calendar date.
+        # US sessions cross that boundary, so query a guard day on both sides and
+        # apply the requested date after converting each bar to its market time.
+        query_start = start_time - timedelta(days=1) if start_time is not None else None
+        query_end = end_time + timedelta(days=1) if end_time is not None else None
         sql = f"""
             SELECT symbol, market, bar_time_utc, open, high, low, close, volume, amount
             FROM {self._table("lb_minute_bars")}
             WHERE frequency = {_sql_string(freq)}
               AND symbol IN {_symbols_sql(symbols)}
-              {_date_filter("trade_date_local", start_time, end_time)}
+              {_date_filter("trade_date_local", query_start, query_end)}
             ORDER BY symbol, bar_time_utc
         """
         rows = self._query(sql)
@@ -147,7 +152,12 @@ class ClickHouseProvider:
                 continue
             item = dict(row)
             item["symbol"] = symbol
-            item["datetime"] = _minute_local_time(row["bar_time_utc"], symbol)
+            local_time = _minute_local_time(row["bar_time_utc"], symbol)
+            if start_time is not None and local_time.date() < start_time.date():
+                continue
+            if end_time is not None and local_time.date() > end_time.date():
+                continue
+            item["datetime"] = local_time
             mapped.append(item)
         frame = pl.DataFrame(mapped) if mapped else pl.DataFrame()
         if not frame.is_empty():

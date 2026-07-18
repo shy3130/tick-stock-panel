@@ -738,30 +738,11 @@ def fetch_intraday_monitor_batch(
 
 
 def fetch_minute_single(symbol: str, trade_date: date) -> pl.DataFrame:
-    """从 TickFlow 实时拉取单股单日分钟 K（不写入本地）。"""
+    """通过已配置的分钟数据源拉取单股单日分钟 K（不写入本地）。"""
     from datetime import datetime
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
-    tf = get_client()
-    try:
-        raw = tf.klines.batch(
-            [symbol], period="1m",
-            start_time=_datetime_to_ms(start_time),
-            end_time=_datetime_to_ms(end_time),
-            count=10000,
-            adjust="forward",
-            as_dataframe=True, show_progress=False,
-        )
-    except Exception as e:
-        logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
-        return pl.DataFrame()
-
-    if isinstance(raw, dict):
-        sub = raw.get(symbol)
-        return _normalize_minute(sub) if sub is not None and len(sub) > 0 else pl.DataFrame()
-    if raw is not None and len(raw) > 0:
-        return _normalize_minute(raw)
-    return pl.DataFrame()
+    return sync_minute_batch([symbol], start_time=start_time, end_time=end_time)
 
 
 def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:

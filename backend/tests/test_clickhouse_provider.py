@@ -89,6 +89,60 @@ def test_minute_bars_are_returned_in_market_local_time() -> None:
     assert "frequency = '1m'" in query.queries[-1].lower()
 
 
+def test_minute_bars_filter_by_market_local_trade_date() -> None:
+    query = QueryRecorder([
+        {
+            "symbol": "NBIS.US",
+            "market": "us",
+            "bar_time_utc": "2026-07-16 19:59:00",
+            "open": 170,
+            "high": 171,
+            "low": 169,
+            "close": 170.5,
+            "volume": 100,
+            "amount": 17050,
+        },
+        {
+            "symbol": "NBIS.US",
+            "market": "us",
+            "bar_time_utc": "2026-07-17 13:30:00",
+            "open": 172,
+            "high": 173,
+            "low": 171,
+            "close": 172.5,
+            "volume": 200,
+            "amount": 34500,
+        },
+        {
+            "symbol": "NBIS.US",
+            "market": "us",
+            "bar_time_utc": "2026-07-17 19:59:00",
+            "open": 177,
+            "high": 178,
+            "low": 176,
+            "close": 177.5,
+            "volume": 300,
+            "amount": 53250,
+        },
+    ])
+    provider = ClickHouseProvider(query_fn=query)
+
+    frame = provider.get_minute(
+        ["NBIS.US"],
+        datetime(2026, 7, 17, 9, 25),
+        datetime(2026, 7, 17, 15, 5),
+        freq="1m",
+    )
+
+    assert frame["datetime"].to_list() == [
+        datetime(2026, 7, 17, 9, 30),
+        datetime(2026, 7, 17, 15, 59),
+    ]
+    sql = query.queries[-1]
+    assert "trade_date_local >= toDate('2026-07-16')" in sql
+    assert "trade_date_local <= toDate('2026-07-18')" in sql
+
+
 def test_instruments_cover_all_three_markets() -> None:
     query = QueryRecorder([
         {"symbol": "000001.SZ", "market": "cn", "name": "Ping An Bank", "currency": "CNY", "lot_size": 100},
