@@ -238,6 +238,8 @@ class ClickHouseProvider:
             }
             for symbol in symbols:
                 normalized_symbol = str(symbol).upper()
+                if not normalized_symbol.endswith((".HK", ".US")):
+                    continue
                 if normalized_symbol in returned_symbols:
                     continue
                 fallback_rows = self._daily_fallback_fn(normalized_symbol)

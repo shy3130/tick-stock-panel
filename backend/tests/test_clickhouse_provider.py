@@ -61,6 +61,17 @@ def test_daily_uses_longbridge_fallback_for_symbols_missing_from_clickhouse() ->
     assert frame.select("symbol", "close").to_dicts() == [{"symbol": ".SPX.US", "close": 6320.0}]
 
 
+def test_daily_does_not_fallback_each_missing_cn_index_to_longbridge() -> None:
+    provider = ClickHouseProvider(query_fn=QueryRecorder([]))
+    requested: list[str] = []
+    provider._daily_fallback_fn = lambda symbol: requested.append(symbol) or []
+
+    frame = provider.get_daily(["000004.SH"], None, None, asset_type="index")
+
+    assert frame.is_empty()
+    assert requested == []
+
+
 def test_realtime_normalizes_percentage_and_timestamp() -> None:
     query = QueryRecorder([
         {
