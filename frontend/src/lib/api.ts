@@ -302,6 +302,19 @@ export interface MarketSnapshotRow {
   [key: string]: any
 }
 
+export interface MarketIndustryRowsResult {
+  market: MarketCode
+  as_of: string | null
+  source: string | null
+  rows: {
+    symbol: string
+    name?: string | null
+    main_sector: string
+    sub_industry: string
+    industry: string
+  }[]
+}
+
 export interface OverviewDimensionRankItem {
   name: string
   count: number
@@ -1398,6 +1411,8 @@ export const api = {
     request<{ as_of: string | null; market: MarketCode; currency: string; rows: MarketSnapshotRow[] }>(
       `/api/screener/market-snapshot?market=${market}`,
     ),
+  marketIndustries: (market: MarketCode) =>
+    request<MarketIndustryRowsResult>(`/api/screener/market-industries?market=${market}`),
   overviewMarket: (market: MarketCode = 'cn', asOf?: string) => {
     const params = new URLSearchParams({ market })
     if (asOf) params.set('as_of', asOf)

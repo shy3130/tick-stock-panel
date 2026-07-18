@@ -37,6 +37,7 @@ export const QK = {
   screenerCached:       (market: string = 'cn', ext?: string) => ['screener-cached', market, ext] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   marketSnapshot:       (market: string = 'cn') => ['market-snapshot', market] as const,
+  marketIndustries:     (market: string) => ['market-industries', market] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
 
   // Backtest

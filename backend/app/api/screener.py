@@ -14,6 +14,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.plugins.clickhouse.provider import ClickHouseProvider
 from app.services import strategy_cache
 from app.services.screener import ScreenerService
 from app.strategy import config as strategy_config
@@ -391,7 +392,7 @@ def market_snapshot(request: Request, market: str = "cn"):
 
     market = normalize_market(market)
     repo = request.app.state.repo
-    svc = ScreenerService(repo)
+    svc = _market_screener(repo, "stock", market)
     as_of = market_latest_date(repo, market)
     if not as_of:
         return {"as_of": None, "market": market, "currency": market_currency(market), "rows": []}
@@ -418,6 +419,21 @@ def market_snapshot(request: Request, market: str = "cn"):
                 r[k] = None
 
     return {"as_of": str(as_of), "market": market, "currency": market_currency(market), "rows": rows}
+
+
+@router.get("/market-industries")
+def market_industries(market: str = "cn"):
+    """返回港股/美股在 ClickHouse 中最新的行业代表快照。"""
+    from app.services.market_scope import normalize_market
+
+    normalized = normalize_market(market)
+    if normalized == "cn":
+        return {"market": "cn", "as_of": None, "source": "ext_hy_ths", "rows": []}
+    try:
+        return ClickHouseProvider().get_market_industries(normalized)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("market industries load failed for %s: %s", normalized, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="行业分类数据暂不可用") from exc
 
 
 @router.post("/run_all")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 import polars as pl
 
@@ -96,3 +97,40 @@ def test_market_overview_passes_market_into_screener(monkeypatch) -> None:
 
     assert captured["market"] == "hk"
     assert result["market"] == "hk"
+
+
+def test_market_industries_endpoint_delegates_selected_market(monkeypatch) -> None:
+    from app.api import screener
+
+    class Provider:
+        def get_market_industries(self, market: str):
+            return {"market": market, "as_of": "2026-07-16", "source": "test", "rows": []}
+
+    monkeypatch.setattr(screener, "ClickHouseProvider", Provider, raising=False)
+
+    result = screener.market_industries("US")
+
+    assert result["market"] == "us"
+
+
+def test_market_snapshot_loads_selected_market_before_filtering(monkeypatch) -> None:
+    from app.api import screener
+
+    class Repo:
+        def execute_one(self, sql: str):
+            return (date(2026, 7, 17),)
+
+    class Service:
+        def __init__(self, repo, asset_type: str = "stock") -> None:
+            self.market = "cn"
+
+        def _load_enriched_for_date(self, target_date: date) -> pl.DataFrame:
+            symbol = "700.HK" if self.market == "hk" else "600000.SH"
+            return pl.DataFrame({"symbol": [symbol], "name": [symbol], "close": [1.0]})
+
+    monkeypatch.setattr(screener, "ScreenerService", Service)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=Repo())))
+
+    result = screener.market_snapshot(request, "hk")
+
+    assert [row["symbol"] for row in result["rows"]] == ["700.HK"]

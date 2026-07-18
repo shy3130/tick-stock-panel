@@ -239,6 +239,59 @@ class ClickHouseProvider:
             })
         return instruments
 
+    def get_market_industries(self, market: str) -> dict[str, Any]:
+        """读取港股/美股最新行业代表快照，供行业分析页面使用。"""
+        normalized = str(market or "").strip().lower()
+        if normalized == "hk":
+            table = "lb_company_background_industry_leaders"
+            date_column = "snapshot_date"
+        elif normalized == "us":
+            table = "lb_sector_leader_snapshots"
+            date_column = "trade_date"
+        else:
+            return {"market": normalized or "cn", "as_of": None, "source": None, "rows": []}
+
+        qualified_table = self._table(table)
+        rows = self._query(f"""
+            SELECT toString({date_column}) AS as_of,
+                   symbol, name, main_sector, sub_industry
+            FROM {qualified_table}
+            WHERE market = {_sql_string(normalized)}
+              AND {date_column} = (
+                  SELECT max({date_column})
+                  FROM {qualified_table}
+                  WHERE market = {_sql_string(normalized)}
+              )
+            ORDER BY main_sector, sub_industry, symbol
+        """)
+
+        suffix = f".{normalized.upper()}"
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        as_of: str | None = None
+        for row in rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol.endswith(suffix):
+                continue
+            main_sector = str(row.get("main_sector") or "").strip()
+            sub_industry = str(row.get("sub_industry") or "").strip()
+            path = "-".join(part for part in (main_sector, sub_industry) if part)
+            if not path:
+                continue
+            key = (symbol, path)
+            if key in seen:
+                continue
+            seen.add(key)
+            as_of = as_of or (str(row.get("as_of")) if row.get("as_of") else None)
+            items.append({
+                "symbol": symbol,
+                "name": row.get("name") or symbol,
+                "main_sector": main_sector,
+                "sub_industry": sub_industry,
+                "industry": path,
+            })
+        return {"market": normalized, "as_of": as_of, "source": table, "rows": items}
+
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
         sample_symbols = symbols or ["000001.SZ"]
         if dataset == "daily":

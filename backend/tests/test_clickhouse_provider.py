@@ -141,3 +141,59 @@ def test_daily_chunks_large_three_market_universe() -> None:
 
     assert len(query.queries) == 2
     assert progress == [(1, 2), (2, 2)]
+
+
+def test_hk_market_industries_use_latest_company_background_snapshot() -> None:
+    query = QueryRecorder([
+        {
+            "as_of": "2026-07-14",
+            "symbol": "700.HK",
+            "name": "TENCENT",
+            "main_sector": "TMT",
+            "sub_industry": "互联网",
+        },
+        {
+            "as_of": "2026-07-14",
+            "symbol": "AAPL.US",
+            "name": "APPLE",
+            "main_sector": "TMT",
+            "sub_industry": "消费电子",
+        },
+    ])
+    provider = ClickHouseProvider(query_fn=query)
+
+    result = provider.get_market_industries("hk")
+
+    assert result["market"] == "hk"
+    assert result["as_of"] == "2026-07-14"
+    assert result["source"] == "lb_company_background_industry_leaders"
+    assert result["rows"] == [{
+        "symbol": "700.HK",
+        "name": "TENCENT",
+        "main_sector": "TMT",
+        "sub_industry": "互联网",
+        "industry": "TMT-互联网",
+    }]
+    assert "lb_company_background_industry_leaders" in query.queries[-1]
+    assert "max(snapshot_date)" in query.queries[-1]
+
+
+def test_us_market_industries_use_latest_sector_leader_snapshot() -> None:
+    query = QueryRecorder([
+        {
+            "as_of": "2026-07-16",
+            "symbol": "AAPL.US",
+            "name": "APPLE",
+            "main_sector": "TMT",
+            "sub_industry": "消费电子",
+        }
+    ])
+    provider = ClickHouseProvider(query_fn=query)
+
+    result = provider.get_market_industries("us")
+
+    assert result["market"] == "us"
+    assert result["source"] == "lb_sector_leader_snapshots"
+    assert result["rows"][0]["industry"] == "TMT-消费电子"
+    assert "lb_sector_leader_snapshots" in query.queries[-1]
+    assert "max(trade_date)" in query.queries[-1]

@@ -20,7 +20,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { cn } from '@/lib/cn'
-import { resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
+import { marketIndustryDimensionData, resolveDimension, type DimensionGroup, type StockRow } from '@/lib/analysis-adapter'
 import { useMarketScope } from '@/lib/market-scope'
 
 const KEYWORDS = ['industry', '行业', 'sector', '申万', '中信']
@@ -289,8 +289,19 @@ export function IndustryAnalysis() {
   const rowsQuery = useQuery({
     queryKey: QK.extDataRows(activeConfigId, undefined, PAGE_LIMIT),
     queryFn: () => api.extDataRows(activeConfigId, { limit: PAGE_LIMIT }),
-    enabled: !!activeConfigId,
+    enabled: market === 'cn' && !!activeConfigId,
   })
+
+  const marketIndustriesQuery = useQuery({
+    queryKey: QK.marketIndustries(market),
+    queryFn: () => api.marketIndustries(market),
+    enabled: market !== 'cn',
+    staleTime: 5 * 60_000,
+  })
+  const marketIndustryInput = useMemo(
+    () => marketIndustryDimensionData(market, marketIndustriesQuery.data),
+    [market, marketIndustriesQuery.data],
+  )
 
   // 内置行业预设 (ext_hy_ths) 手动获取数据
   const PRESET_INDUSTRY_ID = 'ext_hy_ths'
@@ -304,7 +315,7 @@ export function IndustryAnalysis() {
   })
   // 是否处于「内置行业预设存在但无数据」状态 → 显示获取按钮
   const needsIndustryFetch =
-    !!activeConfig && activeConfig.id === PRESET_INDUSTRY_ID &&
+    market === 'cn' && !!activeConfig && activeConfig.id === PRESET_INDUSTRY_ID &&
     !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
 
   const marketQuery = useQuery({
@@ -314,10 +325,14 @@ export function IndustryAnalysis() {
   })
 
   const marketMap = useMemo(() => buildMarketMap(marketQuery.data?.rows ?? []), [marketQuery.data?.rows])
+  const dimensionData = market === 'cn' ? rowsQuery.data : marketIndustryInput?.data
+  const dimensionConfig = market === 'cn' ? activeConfig : marketIndustryInput?.config
   const resolved = useMemo(
-    () => resolveDimension(rowsQuery.data, activeConfig, fieldConfig.dimensionField ? [fieldConfig.dimensionField, ...CANDIDATE_FIELDS] : CANDIDATE_FIELDS),
-    [rowsQuery.data, activeConfig, fieldConfig.dimensionField],
+    () => resolveDimension(dimensionData, dimensionConfig, market === 'cn' && fieldConfig.dimensionField ? [fieldConfig.dimensionField, ...CANDIDATE_FIELDS] : CANDIDATE_FIELDS),
+    [dimensionData, dimensionConfig, market, fieldConfig.dimensionField],
   )
+  const dimensionLoading = market === 'cn' ? rowsQuery.isLoading : marketIndustriesQuery.isLoading
+  const dimensionFetching = market === 'cn' ? rowsQuery.isFetching : marketIndustriesQuery.isFetching
 
   const industryLevel = fieldConfig.hierarchyLevel ?? 2
   const groups = useMemo(() => groupByIndustryLevel(resolved.groups, industryLevel), [resolved.groups, industryLevel])
@@ -372,11 +387,11 @@ export function IndustryAnalysis() {
     setSelectedKey(null)
   }
 
-  if (configsQuery.isLoading) {
+  if (market === 'cn' && configsQuery.isLoading) {
     return <div className="flex h-full items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-muted" /></div>
   }
 
-  if (!activeConfig) {
+  if (market === 'cn' && !activeConfig) {
     // 极端情况: 无任何行业配置。仍提供一键获取内置行业数据入口
     return (
       <>
@@ -410,16 +425,16 @@ export function IndustryAnalysis() {
     <>
       <PageHeader
         title="行业分析"
-        subtitle={`${industryLevelLabel} · ${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个行业 · ${totalSymbols} 只标的`}
+        subtitle={`${industryLevelLabel} · ${marketQuery.data?.as_of ?? dimensionData?.date ?? '最新'} · ${stats.length} 个行业 · ${totalSymbols} 只标的${marketIndustryInput ? ` · ${marketIndustryInput.sourceLabel}` : ''}`}
         right={
           <div className="flex items-center gap-1">
             <button
-              onClick={() => { rowsQuery.refetch(); marketQuery.refetch() }}
-              disabled={rowsQuery.isFetching || marketQuery.isFetching}
+              onClick={() => { market === 'cn' ? rowsQuery.refetch() : marketIndustriesQuery.refetch(); marketQuery.refetch() }}
+              disabled={dimensionFetching || marketQuery.isFetching}
               className="p-1.5 text-muted hover:bg-surface disabled:opacity-50"
               title="刷新"
             >
-              <RefreshCw className={cn('h-4 w-4', (rowsQuery.isFetching || marketQuery.isFetching) && 'animate-spin')} />
+              <RefreshCw className={cn('h-4 w-4', (dimensionFetching || marketQuery.isFetching) && 'animate-spin')} />
             </button>
             <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
               <Settings2 className="h-4 w-4" />
@@ -464,8 +479,10 @@ export function IndustryAnalysis() {
               />
               <IndustryFocus stat={selected} onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }} />
             </div>
-          ) : rowsQuery.isLoading ? (
+          ) : dimensionLoading ? (
             <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算行业强度...</div>
+          ) : market !== 'cn' && marketIndustriesQuery.isError ? (
+            <EmptyState icon={Layers3} title="行业分类数据暂不可用" hint="ClickHouse 行业代表快照读取失败，请稍后刷新" />
           ) : needsIndustryFetch ? (
             <PresetFetchState
               title="未获取行业数据"
@@ -475,7 +492,7 @@ export function IndustryAnalysis() {
               onFetch={() => fetchMutation.mutate()}
             />
           ) : (
-            <EmptyState icon={Layers3} title="未匹配到行业数据" hint={resolved.hint || '请检查扩展数据是否包含行业/板块相关字段'} />
+            <EmptyState icon={Layers3} title="未匹配到行业数据" hint={market === 'cn' ? (resolved.hint || '请检查扩展数据是否包含行业/板块相关字段') : '当前 ClickHouse 行业代表快照暂无可用标的'} />
           )}
         </div>
       </div>
