@@ -360,19 +360,22 @@ def get_cached(
 
 
 @router.get("/market-snapshot")
-def market_snapshot(request: Request):
+def market_snapshot(request: Request, market: str = "cn"):
     """最新全市场轻量行情快照，供板块/概念聚合分析使用。"""
     import polars as pl
 
+    from app.services.market_scope import filter_frame_by_market, market_currency, normalize_market
+
+    market = normalize_market(market)
     repo = request.app.state.repo
     svc = ScreenerService(repo)
     as_of = svc.latest_date()
     if not as_of:
-        return {"as_of": None, "rows": []}
+        return {"as_of": None, "market": market, "currency": market_currency(market), "rows": []}
 
-    df = svc._load_enriched_for_date(as_of)
+    df = filter_frame_by_market(svc._load_enriched_for_date(as_of), market)
     if df.is_empty():
-        return {"as_of": str(as_of), "rows": []}
+        return {"as_of": str(as_of), "market": market, "currency": market_currency(market), "rows": []}
 
     if "close" in df.columns and "total_shares" in df.columns and "market_cap" not in df.columns:
         df = df.with_columns((pl.col("close") * pl.col("total_shares")).alias("market_cap"))
@@ -391,7 +394,7 @@ def market_snapshot(request: Request):
             if isinstance(v, float) and not math.isfinite(v):
                 r[k] = None
 
-    return {"as_of": str(as_of), "rows": rows}
+    return {"as_of": str(as_of), "market": market, "currency": market_currency(market), "rows": rows}
 
 
 @router.post("/run_all")

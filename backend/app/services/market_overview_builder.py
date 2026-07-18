@@ -19,6 +19,7 @@ from typing import Any
 import polars as pl
 
 from app.services.ext_data import ExtConfig, ExtConfigStore
+from app.services.market_scope import filter_frame_by_market, market_currency, normalize_market
 from app.services.screener import ScreenerService
 
 # ================================================================
@@ -361,6 +362,7 @@ def build_market_overview(
     quote_service=None,
     depth_service=None,
     as_of: date | None = None,
+    market: str = "cn",
 ) -> dict:
     """装配市场总览(与原 overview._build_overview 行为一致)。
 
@@ -370,6 +372,7 @@ def build_market_overview(
         depth_service: DepthService(可选;五档封板修正)。
         as_of: 指定日期,None 则取最新有数据日。
     """
+    market = normalize_market(market)
     svc = ScreenerService(repo)
     # 调用方未指定日期时视为"最新"请求: 指数行情走实时缓存 (quote_service),
     # 其余装配仍以解析出的真实日期为准。显式指定日期(历史复盘)时才回退数据库。
@@ -381,6 +384,8 @@ def build_market_overview(
     if not as_of:
         return {
             "as_of": None,
+            "market": market,
+            "currency": market_currency(market),
             "quote_status": status,
             "indices": indices,
             "breadth": {"total": 0, "up": 0, "down": 0, "flat": 0, "up_pct": 0, "down_pct": 0},
@@ -400,7 +405,7 @@ def build_market_overview(
             "industry_rank": {"leading": [], "lagging": []},
         }
 
-    df = svc._load_enriched_for_date(as_of)
+    df = filter_frame_by_market(svc._load_enriched_for_date(as_of), market)
     if df.is_empty():
         rows: list[dict] = []
     else:
@@ -553,6 +558,8 @@ def build_market_overview(
 
     return _json_safe({
         "as_of": str(as_of),
+        "market": market,
+        "currency": market_currency(market),
         "quote_status": status,
         "indices": indices,
         "breadth": {

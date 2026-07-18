@@ -12,6 +12,7 @@ import polars as pl
 from fastapi import APIRouter, Request
 
 from app.services.ext_data import ExtConfig, ExtConfigStore
+from app.services.market_scope import market_cache_key, normalize_market
 from app.services.screener import ScreenerService
 
 router = APIRouter(prefix="/api/overview", tags=["overview"])
@@ -347,7 +348,7 @@ def _pct_band_rows(values: list[float]) -> list[dict]:
     return out
 
 
-def _build_overview(request: Request, as_of: date | None = None) -> dict:
+def _build_overview(request: Request, as_of: date | None = None, market: str = "cn") -> dict:
     """装配市场总览(委托给 services.market_overview_builder,保持行为一致)。
 
     逻辑已抽离至 build_market_overview,以解耦对 Request 的依赖,
@@ -359,21 +360,23 @@ def _build_overview(request: Request, as_of: date | None = None) -> dict:
         quote_service=getattr(request.app.state, "quote_service", None),
         depth_service=getattr(request.app.state, "depth_service", None),
         as_of=as_of,
+        market=market,
     )
 
 
 @router.get("/market")
-def market_overview(request: Request, as_of: date | None = None):
+def market_overview(request: Request, as_of: date | None = None, market: str = "cn"):
     """总览页单次请求聚合数据，避免前端拉全市场明细后再计算。"""
     global _cache, _cache_key, _cache_ts
     now = time.time()
-    cache_key = as_of.isoformat() if as_of else "latest"
+    market = normalize_market(market)
+    cache_key = market_cache_key(market, as_of)
     # 读缓存持锁, 避免与 invalidate 的 clear 竞态读到撕裂状态
     with _cache_lock:
         if _cache is not None and _cache_key == cache_key and (now - _cache_ts) < _CACHE_TTL:
             return _cache
     # 装配在锁外进行 (耗时), 允许并发未命中时各自构建, 不长时间持锁串行化请求
-    data = _build_overview(request, as_of)
+    data = _build_overview(request, as_of, market)
     with _cache_lock:
         _cache = data
         _cache_key = cache_key
