@@ -226,12 +226,20 @@ class StrategyEngine:
             if candidate != path
         ]
         dependency_names = frozenset(candidate.stem for candidate in dependency_paths)
+        builtin_dir = Path(__file__).resolve().parent / "builtin"
+        builtin_shared_modules = (
+            frozenset({"app.strategy.shared_structure_breakout"})
+            if path.resolve().parent == builtin_dir
+            else frozenset()
+        )
         try:
             code = path.read_text(encoding="utf-8")
             from app.strategy.ai_generator import AIStrategyGenerator
             AIStrategyGenerator._validate_safety(
                 code,
-                extra_allowed_import_modules=dependency_names,
+                extra_allowed_import_modules=(
+                    dependency_names | builtin_shared_modules
+                ),
             )
             for dependency_path in dependency_paths:
                 AIStrategyGenerator._validate_safety(

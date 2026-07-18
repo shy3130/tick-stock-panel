@@ -48,7 +48,7 @@ def test_all_builtin_strategies_use_matrix_backend_only():
     engine = _engine()
     assert engine.load_errors() == []
     strategies = [engine.get(meta["id"]) for meta in engine.list_strategies()]
-    assert len(strategies) == 18
+    assert len(strategies) == 19
     assert all(strategy.execution_backend == "matrix_native" for strategy in strategies)
     assert all(strategy.matrix_strategy is not None for strategy in strategies)
     assert all(strategy.filter_fn is None for strategy in strategies)
