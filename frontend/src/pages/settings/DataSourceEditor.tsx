@@ -318,7 +318,7 @@ function DatasetDetail({
   onToggle: (v: boolean) => void
 }) {
   const enabled = !!cfg
-  const [testSymbols, setTestSymbols] = useState('000001.SZ,600000.SH')
+  const [testSymbols, setTestSymbols] = useState('000001.SZ,1.HK,A.US')
   const test = useMutation({
     mutationFn: () => api.testDataSource(
       providerName,

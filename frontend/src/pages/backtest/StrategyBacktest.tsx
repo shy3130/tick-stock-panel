@@ -18,10 +18,13 @@ import { cnSignal } from '@/lib/signals'
 import {
   currencyForMarket,
   currencyLabel,
+  matchesMarketFilter,
   marketFromSymbol,
   marketLabel,
   type MarketCode,
+  type MarketFilter,
 } from '@/lib/market-display'
+import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
 import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
@@ -611,12 +614,13 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
   const symbols = useMemo(() => value.split(',').map(s => s.trim()).filter(Boolean), [value])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all')
   const [symbolNames, setSymbolNames] = useState<Record<string, string>>({})
   const ref = useRef<HTMLDivElement>(null)
   const searchAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, searchAssetTypes),
-    queryFn: () => api.instrumentSearch(query, 20, searchAssetTypes),
+    queryKey: QK.instrumentSearch(query, searchAssetTypes, marketFilter),
+    queryFn: () => api.instrumentSearch(query, 20, searchAssetTypes, marketFilter),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -664,12 +668,15 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
       entries.forEach(e => { if (e.name) next[e.symbol] = e.name })
       return next
     })
-    setSymbols([...symbols, ...entries.map(e => e.symbol)])
+    setSymbols([...symbols, ...entries.map(e => e.symbol).filter(symbol => matchesMarketFilter(symbol, marketFilter))])
   }
   const watchlistCount = watchlist.data?.symbols?.length ?? 0
 
   return (
     <div className="space-y-2" ref={ref}>
+      {assetType === 'stock' && (
+        <MarketFilterTabs value={marketFilter} onChange={setMarketFilter} className="w-fit" />
+      )}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
@@ -695,6 +702,7 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
                   >
                     <span className="w-[78px] shrink-0 font-mono">{r.symbol}</span>
                     <span className="min-w-0 flex-1 truncate text-secondary">{r.name}</span>
+                    <span className="shrink-0 text-[9px] text-muted">{marketLabel(r.market)}</span>
                     <Plus className={`h-3.5 w-3.5 ${added ? 'opacity-30' : 'text-accent'}`} />
                   </button>
                 )

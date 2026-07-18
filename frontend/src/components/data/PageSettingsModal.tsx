@@ -35,7 +35,7 @@ interface CardDef {
 
 /** 数据画像卡片定义 —— 默认顺序即此数组顺序 */
 export const DATA_CARD_DEFS: CardDef[] = [
-  { key: 'instruments', label: '个股维表', desc: 'A 股股票元数据', defaultHiddenIfNoCap: false },
+  { key: 'instruments', label: '个股维表', desc: 'A股、港股、美股股票元数据', defaultHiddenIfNoCap: false },
   { key: 'daily',       label: '日 K',     desc: 'A 股日K线数据',          defaultHiddenIfNoCap: false },
   { key: 'adj_factor',  label: '除权因子', desc: '复权计算因子',           defaultHiddenIfNoCap: true },
   { key: 'enriched',    label: 'Enriched', desc: '技术指标计算结果',       defaultHiddenIfNoCap: false },

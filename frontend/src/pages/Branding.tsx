@@ -31,7 +31,7 @@ const VARIANTS: Variant[] = [
   {
     id: 'pulsar',
     name: 'TickFlow Stock Panel',
-    tagline: 'A-SHARE · SIGNAL TERMINAL',
+    tagline: 'CN · HK · US · SIGNAL TERMINAL',
     hint: '脉冲星、雷达波纹 — 青绿强调色,字重黑体,中等字距',
     icon: RadioTower,
     iconAccent: 'text-[#3DD68C]',
@@ -61,7 +61,7 @@ const VARIANTS: Variant[] = [
   {
     id: 'aurora',
     name: 'TickFlow Stock Panel',
-    tagline: 'A-SHARE · DASHBOARD',
+    tagline: 'CN · HK · US · DASHBOARD',
     hint: '极光 — 青色强调,细字优雅,适中字距,与涨跌语义色不冲突',
     icon: Sparkles,
     iconAccent: 'text-[#22D3EE]',

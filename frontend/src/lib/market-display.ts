@@ -11,6 +11,14 @@ const CURRENCY_LABELS: Record<string, string> = {
 }
 
 export type MarketCode = 'cn' | 'hk' | 'us'
+export type MarketFilter = 'all' | MarketCode
+
+export const MARKET_FILTER_OPTIONS: ReadonlyArray<{ value: MarketFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'cn', label: 'A股' },
+  { value: 'hk', label: '港股' },
+  { value: 'us', label: '美股' },
+]
 
 export const marketFromSymbol = (symbol: string): MarketCode | '' => {
   const value = String(symbol ?? '').trim().toUpperCase()
@@ -19,6 +27,9 @@ export const marketFromSymbol = (symbol: string): MarketCode | '' => {
   if (value.endsWith('.US')) return 'us'
   return ''
 }
+
+export const matchesMarketFilter = (symbol: string, market: MarketFilter) =>
+  market === 'all' || marketFromSymbol(symbol) === market
 
 export const currencyForMarket = (market: string | null | undefined) => {
   const value = String(market ?? '').trim().toLowerCase()

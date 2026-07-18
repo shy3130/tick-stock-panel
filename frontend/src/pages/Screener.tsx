@@ -10,6 +10,7 @@ import { isExpertOrAbove } from '@/lib/capability-labels'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
+import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
@@ -24,6 +25,7 @@ import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
+import { matchesMarketFilter, type MarketFilter } from '@/lib/market-display'
 import {
   SCREENER_BUILTIN_COLUMNS,
   SCREENER_COLUMN_GROUPS,
@@ -35,6 +37,7 @@ import {
 
 export function Screener() {
   const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
@@ -316,6 +319,9 @@ export function Screener() {
     let rows = showAll
       ? applyFilter(allRows, filter)
       : filteredRows
+    if (assetType === 'stock') {
+      rows = rows.filter(row => matchesMarketFilter(row.symbol, marketFilter))
+    }
     // 排序：用户点了表头则按该列，否则默认评分降序
     rows = sort
       ? sortRows(rows, columns)
@@ -333,7 +339,7 @@ export function Screener() {
       }
     }
     return mainRows
-  }, [showAll, allRows, filteredRows, filter, activeStrategy, strategyLimits, expiredRowsMap, sort, sortRows, columns])
+  }, [showAll, allRows, filteredRows, filter, activeStrategy, strategyLimits, expiredRowsMap, sort, sortRows, columns, assetType, marketFilter])
 
   // 日k列是否启用 → 决定是否加载批量 kline 数据
   const candleColumn = useMemo(() =>
@@ -580,12 +586,15 @@ export function Screener() {
         subtitle="基于本地 enriched 表 · 毫秒级 SQL"
         right={
           <div className="flex items-center gap-2">
+            {assetType === 'stock' && (
+              <MarketFilterTabs value={marketFilter} onChange={setMarketFilter} />
+            )}
             {/* 资产类型切换: 股票 / ETF */}
             <div className="flex items-center h-7 rounded-btn border border-border overflow-hidden">
               {(['stock', 'etf'] as const).map(t => (
                 <button
                   key={t}
-                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false) }}
+                  onClick={() => { setAssetType(t); setMarketFilter('all'); setActiveStrategy(null); setResult(null); setShowAll(false) }}
                   className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer
                     ${assetType === t
                       ? 'bg-accent/10 text-accent'

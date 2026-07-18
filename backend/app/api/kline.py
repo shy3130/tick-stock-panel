@@ -35,6 +35,7 @@ def search_instruments(
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
     asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf"),
+    markets: str = Query("", description="逗号分隔的市场: cn,hk,us; 留空表示全部"),
 ):
     """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。
 
@@ -54,15 +55,33 @@ def search_instruments(
         if df_t.is_empty() or "symbol" not in df_t.columns:
             continue
         # dtype 全部归一到 Utf8: 股票/ETF 两份缓存来源不同 (ETF 含 legacy 合并), 防 concat SchemaError
+        market_expr = (
+            pl.col("market").cast(pl.Utf8).str.to_lowercase()
+            if "market" in df_t.columns
+            else pl.when(pl.col("symbol").str.to_uppercase().str.ends_with(".HK"))
+            .then(pl.lit("hk"))
+            .when(pl.col("symbol").str.to_uppercase().str.ends_with(".US"))
+            .then(pl.lit("us"))
+            .otherwise(pl.lit("cn"))
+        )
         parts.append(df_t.with_columns([
             pl.col("symbol").cast(pl.Utf8).alias("symbol"),
             (pl.col("name").cast(pl.Utf8) if "name" in df_t.columns else pl.lit("")).alias("name"),
             (pl.col("code").cast(pl.Utf8) if "code" in df_t.columns else pl.lit("")).alias("code"),
+            market_expr.alias("market"),
             pl.lit(t).alias("asset_type"),
-        ]).select(["symbol", "name", "code", "asset_type"]))
+        ]).select(["symbol", "name", "code", "market", "asset_type"]))
     if not parts:
         return {"results": []}
     df = pl.concat(parts, how="vertical")
+
+    requested_markets = {
+        market.strip().lower()
+        for market in markets.split(",")
+        if market.strip().lower() in {"cn", "hk", "us"}
+    }
+    if requested_markets:
+        df = df.filter(pl.col("market").is_in(requested_markets))
 
     keyword = q.strip().upper()
 
@@ -87,7 +106,7 @@ def search_instruments(
         prefix_symbols = set(prefix_hits["symbol"].to_list()) if not prefix_hits.is_empty() else set()
         contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(prefix_symbols)).head(remaining)
         matched = pl.concat([prefix_hits, contain_hits]) if not prefix_hits.is_empty() else contain_hits
-    rows = matched.select(["symbol", "name", "code", "asset_type"]).to_dicts()
+    rows = matched.select(["symbol", "name", "code", "market", "asset_type"]).to_dicts()
     return {"results": rows}
 
 

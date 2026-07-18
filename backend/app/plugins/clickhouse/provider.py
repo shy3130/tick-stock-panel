@@ -192,11 +192,25 @@ class ClickHouseProvider:
     def get_instruments(self, asset_type: str = "stock") -> list[dict]:
         if asset_type != "stock":
             return []
-        rows = self._query("""
-            SELECT symbol, any(market) AS market
-            FROM {self._table("lb_daily_bars")}
-            GROUP BY symbol
-            ORDER BY symbol
+        rows = self._query(f"""
+            WITH daily_symbols AS (
+                SELECT symbol, any(market) AS market
+                FROM {self._table("lb_daily_bars")}
+                GROUP BY symbol
+            ),
+            symbol_metadata AS (
+                SELECT symbol,
+                       argMax(name, updated_at) AS name,
+                       argMax(currency, updated_at) AS currency,
+                       argMax(lot_size, updated_at) AS lot_size
+                FROM {self._table("lb_symbols")}
+                GROUP BY symbol
+            )
+            SELECT daily.symbol, daily.market,
+                   metadata.name, metadata.currency, metadata.lot_size
+            FROM daily_symbols AS daily
+            LEFT JOIN symbol_metadata AS metadata ON metadata.symbol = daily.symbol
+            ORDER BY daily.symbol
         """)
         instruments: list[dict] = []
         for row in rows:
@@ -205,11 +219,12 @@ class ClickHouseProvider:
                 continue
             instruments.append({
                 "symbol": symbol,
-                "name": symbol,
+                "name": row.get("name") or symbol,
                 "code": symbol.rsplit(".", 1)[0],
                 "exchange": symbol.rsplit(".", 1)[1],
                 "market": str(row.get("market") or "").lower(),
-                "lot_size": round_lot_size(symbol),
+                "lot_size": row.get("lot_size") or round_lot_size(symbol),
+                "currency": row.get("currency") or market_rule_for_symbol(symbol).currency,
                 "asset_type": "stock",
                 "source": self.name,
             })

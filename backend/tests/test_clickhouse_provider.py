@@ -91,9 +91,9 @@ def test_minute_bars_are_returned_in_market_local_time() -> None:
 
 def test_instruments_cover_all_three_markets() -> None:
     query = QueryRecorder([
-        {"symbol": "000001.SZ", "market": "cn"},
-        {"symbol": "1.HK", "market": "hk"},
-        {"symbol": "A.US", "market": "us"},
+        {"symbol": "000001.SZ", "market": "cn", "name": "Ping An Bank", "currency": "CNY", "lot_size": 100},
+        {"symbol": "1.HK", "market": "hk", "name": "CKH HOLDINGS", "currency": "HKD", "lot_size": 500},
+        {"symbol": "A.US", "market": "us", "name": "AGILENT", "currency": "USD", "lot_size": 1},
     ])
     provider = ClickHouseProvider(query_fn=query)
 
@@ -101,7 +101,11 @@ def test_instruments_cover_all_three_markets() -> None:
 
     assert [row["exchange"] for row in rows] == ["SZ", "HK", "US"]
     assert [row["market"] for row in rows] == ["cn", "hk", "us"]
-    assert [row["lot_size"] for row in rows] == [100, 1, 1]
+    assert [row["name"] for row in rows] == ["Ping An Bank", "CKH HOLDINGS", "AGILENT"]
+    assert [row["currency"] for row in rows] == ["CNY", "HKD", "USD"]
+    assert [row["lot_size"] for row in rows] == [100, 500, 1]
+    assert "FROM longbridge.lb_daily_bars" in query.queries[-1]
+    assert "FROM longbridge.lb_symbols" in query.queries[-1]
 
 
 def test_symbol_values_are_sql_escaped() -> None:

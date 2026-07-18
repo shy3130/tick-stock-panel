@@ -8,6 +8,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
+import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import {
@@ -24,6 +25,7 @@ import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
 import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
 import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
+import { marketLabel, matchesMarketFilter, type MarketFilter } from '@/lib/market-display'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import {
@@ -207,10 +209,12 @@ function StockSearchBox({
   onPreview,
   existingSymbols,
   onAdd,
+  marketFilter,
 }: {
   onPreview: (symbol: string, name: string) => void
   existingSymbols: string[]
   onAdd: (symbol: string) => void
+  marketFilter: MarketFilter
 }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -219,8 +223,8 @@ function StockSearchBox({
   const [activeIdx, setActiveIdx] = useState(-1)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, 'stock,etf'),
-    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf'),
+    queryKey: QK.instrumentSearch(query, 'stock,etf', marketFilter),
+    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf', marketFilter),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -301,6 +305,9 @@ function StockSearchBox({
                   >
                     <span className="font-mono shrink-0 w-[80px]">{r.symbol}</span>
                     <span className="truncate text-secondary flex-1">{r.name}</span>
+                    <span className="shrink-0 rounded border border-border px-1 py-0.5 text-[9px] text-muted">
+                      {marketLabel(r.market)}
+                    </span>
                     {r.asset_type === 'etf' && (
                       <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
                     )}
@@ -556,6 +563,7 @@ const StockCard = React.memo(function StockCard({
 
 export function Watchlist() {
   const qc = useQueryClient()
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all')
   const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
     return (storage.watchlistView.get('table') as 'table' | 'card')
   })
@@ -842,10 +850,11 @@ export function Watchlist() {
 
   // 筛选 + 排序
   const filteredRows = useMemo(() => {
-    // 板块筛选（全选时跳过）
-    let result = rows
+    let result = rows.filter(r => matchesMarketFilter(r.symbol, marketFilter))
+    // 板块筛选只约束 A 股；港美股没有创/科/北板块语义。
     if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
+        if (!matchesMarketFilter(r.symbol, 'cn')) return true
         const board = getBoardType(r.symbol)
         return board != null && boardFilter.has(board)
       })
@@ -870,7 +879,7 @@ export function Watchlist() {
       })
     }
     return result
-  }, [rows, filters, columns, boardFilter])
+  }, [rows, filters, columns, boardFilter, marketFilter])
 
   const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
   const hasBoardFilter = boardFilter.size > 0 && boardFilter.size < BOARDS.length
@@ -976,6 +985,7 @@ export function Watchlist() {
         }
         right={
           <div className="flex items-center gap-2">
+            <MarketFilterTabs value={marketFilter} onChange={setMarketFilter} />
             {/* 筛选 / 重置 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}
@@ -1002,6 +1012,7 @@ export function Watchlist() {
               onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
               existingSymbols={allSymbols as string[]}
               onAdd={(sym) => addMutation.mutate(sym)}
+              marketFilter={marketFilter}
             />
             <button
               onClick={() => setImportOpen(true)}

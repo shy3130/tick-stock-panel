@@ -1232,9 +1232,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, date }),
     }),
-  instrumentSearch: (q: string, limit = 20, assetTypes?: string) =>
-    request<{ results: { symbol: string; name: string; code: string; asset_type?: string }[] }>(
-      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}${assetTypes ? `&asset_types=${encodeURIComponent(assetTypes)}` : ''}`,
+  instrumentSearch: (q: string, limit = 20, assetTypes?: string, market = 'all') =>
+    request<{ results: { symbol: string; name: string; code: string; market: 'cn' | 'hk' | 'us'; asset_type?: string }[] }>(
+      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}${assetTypes ? `&asset_types=${encodeURIComponent(assetTypes)}` : ''}${market !== 'all' ? `&markets=${encodeURIComponent(market)}` : ''}`,
     ),
 
   /** 批量查股票名称 (传入 symbol 列表, 返回 {symbol: name}) */

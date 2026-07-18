@@ -30,7 +30,10 @@ def _flatten_instruments(items: list[dict]) -> list[dict]:
             "code": item.get("code"),
             "exchange": item.get("exchange"),
             "region": item.get("region"),
-            "type": item.get("type"),
+            "type": item.get("type") or item.get("asset_type"),
+            "market": item.get("market"),
+            "currency": item.get("currency"),
+            "lot_size": item.get("lot_size"),
         }
         ext = item.get("ext") or {}
         row["listing_date"] = ext.get("listing_date")
@@ -71,6 +74,30 @@ def _fetch_instruments_via_provider() -> list[dict] | None:
     return rows
 
 
+def _preserve_existing_names(df: pl.DataFrame, path: Path) -> pl.DataFrame:
+    """Keep curated names already stored locally while expanding the universe."""
+    if not path.exists() or not {"symbol", "name"}.issubset(df.columns):
+        return df
+    existing = pl.read_parquet(path)
+    if not {"symbol", "name"}.issubset(existing.columns):
+        return df
+    existing_names = (
+        existing.select([
+            pl.col("symbol").cast(pl.Utf8),
+            pl.col("name").cast(pl.Utf8).alias("_existing_name"),
+        ])
+        .filter(pl.col("_existing_name").is_not_null() & (pl.col("_existing_name") != ""))
+        .unique(subset=["symbol"], keep="first")
+    )
+    return (
+        df.join(existing_names, on="symbol", how="left")
+        .with_columns(
+            pl.coalesce([pl.col("_existing_name"), pl.col("name")]).alias("name"),
+        )
+        .drop("_existing_name")
+    )
+
+
 def sync_instruments(data_dir: Path) -> int:
     """全量同步标的维表 → data/instruments/instruments.parquet。
 
@@ -93,10 +120,10 @@ def sync_instruments(data_dir: Path) -> int:
     if not all_rows:
         return 0
 
-    df = pl.DataFrame(all_rows)
+    out = data_dir / "instruments" / "instruments.parquet"
+    df = _preserve_existing_names(pl.DataFrame(all_rows), out)
     df = df.with_columns(pl.lit(date.today()).alias("as_of"))
 
-    out = data_dir / "instruments" / "instruments.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(out)
 
