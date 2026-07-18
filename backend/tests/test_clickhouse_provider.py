@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from app.plugins.clickhouse import provider as provider_module
 from app.plugins.clickhouse.provider import ClickHouseProvider
 
 
@@ -11,6 +12,28 @@ class QueryRecorder:
     def __call__(self, sql: str) -> list[dict]:
         self.queries.append(sql)
         return self.rows
+
+
+def test_longbridge_daily_fallback_stays_within_sdk_kline_limit(monkeypatch) -> None:
+    captured: dict = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"bars": []}
+
+    def fake_get(_url: str, *, params: dict, timeout: float):
+        captured.update(params=params, timeout=timeout)
+        return Response()
+
+    monkeypatch.setenv("LONGBRIDGE_API_URL", "http://longbridge")
+    monkeypatch.setattr(provider_module.httpx, "get", fake_get)
+
+    provider_module._fetch_longbridge_daily(".SPX.US")
+
+    assert captured["params"]["limit"] == 1000
 
 
 def test_daily_maps_turnover_to_amount_and_filters_adjusted() -> None:

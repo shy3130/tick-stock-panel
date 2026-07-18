@@ -117,7 +117,7 @@ def _fetch_longbridge_daily(symbol: str) -> list[dict]:
     try:
         response = httpx.get(
             f"{endpoint}/api/stocks/{quote(symbol, safe='')}/klines",
-            params={"period": "day", "limit": 1200},
+            params={"period": "day", "limit": 1000},
             timeout=timeout,
         )
         response.raise_for_status()
