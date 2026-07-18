@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { marketConceptDimensionData } from './analysis-adapter'
+import { marketConceptDimensionData, resolveDimension } from './analysis-adapter'
 
 describe('market concept dimension data', () => {
   it('turns HK ClickHouse event themes into concept input without A-share ext data', () => {
@@ -13,7 +13,7 @@ describe('market concept dimension data', () => {
     })
 
     expect(result?.data.id).toBe('clickhouse-concepts-hk')
-    expect(result?.data.rows[0]).toMatchObject({ symbol: '700.HK', concept: '云计算' })
+    expect(result?.data.rows[0]).toMatchObject({ symbol: '700.HK', concept: ['云计算'] })
     expect(result?.config.fields.map(field => field.name)).toContain('concept')
     expect(result?.sourceLabel).toBe('ClickHouse 动态事件主题')
   })
@@ -36,5 +36,19 @@ describe('market concept dimension data', () => {
 
   it('does not replace the configured A-share concept source', () => {
     expect(marketConceptDimensionData('cn', null)).toBeNull()
+  })
+
+  it('preserves a slash-delimited event theme as one exact classification', () => {
+    const input = marketConceptDimensionData('us', {
+      market: 'us',
+      as_of: '2026-07-18',
+      source: 'lb_sentiment_impact_events',
+      window_days: 30,
+      rows: [{ symbol: 'NBIS.US', name: 'Nebius', concept: '数据中心/算力服务' }],
+    })
+
+    const resolved = resolveDimension(input?.data, input?.config, ['concept'])
+
+    expect(resolved.groups.map(group => group.key)).toEqual(['数据中心/算力服务'])
   })
 })

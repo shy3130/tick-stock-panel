@@ -369,6 +369,11 @@ class ClickHouseProvider:
                 "concat(replaceAll(if(endsWith(raw_symbol, '.US'), "
                 "substring(raw_symbol, 1, length(raw_symbol) - 3), raw_symbol), '.', '-'), '.US')"
             )
+        concept_quality_filter = (
+            "positionCaseInsensitiveUTF8(concept, '中概') = 0"
+            if normalized == "us"
+            else "1"
+        )
 
         event_table = self._table("lb_sentiment_impact_events")
         rows = self._query(f"""
@@ -388,6 +393,24 @@ class ClickHouseProvider:
                 FROM event_pairs
                 WHERE concept != '' AND {symbol_filter}
             ),
+            supported_pairs AS (
+                SELECT normalized_symbol,
+                       concept,
+                       max(analysis_date) AS last_analysis_date,
+                       count() AS support_count,
+                       uniqExact(analysis_date) AS support_days
+                FROM normalized_pairs
+                WHERE {concept_quality_filter}
+                GROUP BY normalized_symbol, concept
+            ),
+            ranked_pairs AS (
+                SELECT *,
+                       row_number() OVER (
+                           PARTITION BY normalized_symbol
+                           ORDER BY support_count DESC, support_days DESC, concept
+                       ) AS theme_rank
+                FROM supported_pairs
+            ),
             latest_trade_date AS (
                 SELECT max(trade_date) AS trade_date
                 FROM {self._table("lb_daily_bars")}
@@ -405,15 +428,16 @@ class ClickHouseProvider:
                 WHERE market = {_sql_string(normalized)}
                 GROUP BY symbol
             )
-            SELECT toString(max(pairs.analysis_date)) AS as_of,
+            SELECT toString(max(pairs.last_analysis_date)) AS as_of,
                    pairs.normalized_symbol AS symbol,
                    coalesce(nullIf(metadata.metadata_name, ''), pairs.normalized_symbol) AS name,
                    pairs.concept AS concept
-            FROM normalized_pairs AS pairs
+            FROM ranked_pairs AS pairs
             INNER JOIN active_symbols AS active
                     ON active.active_symbol = pairs.normalized_symbol
             LEFT JOIN symbol_metadata AS metadata
                    ON metadata.metadata_symbol = pairs.normalized_symbol
+            WHERE pairs.theme_rank <= 20
             GROUP BY pairs.normalized_symbol, metadata.metadata_name, pairs.concept
             ORDER BY concept, symbol
         """)
@@ -426,6 +450,8 @@ class ClickHouseProvider:
             symbol = str(row.get("symbol") or "").strip().upper()
             concept = str(row.get("concept") or "").strip()
             if not symbol.endswith(suffix) or not concept:
+                continue
+            if normalized == "us" and "中概" in concept:
                 continue
             key = (symbol, concept)
             if key in seen:

@@ -256,6 +256,12 @@ def test_us_market_concepts_normalize_tickers_and_reject_other_market_rows() -> 
             "name": "TENCENT",
             "concept": "互联网平台",
         },
+        {
+            "as_of": "2026-07-18",
+            "symbol": "NBIS.US",
+            "name": "Nebius",
+            "concept": "美股中概/欧洲科技股",
+        },
     ])
     provider = ClickHouseProvider(query_fn=query)
 
@@ -270,6 +276,12 @@ def test_us_market_concepts_normalize_tickers_and_reject_other_market_rows() -> 
     sql = query.queries[-1]
     assert "replaceAll" in sql
     assert "'.US'" in sql
+    assert "count() AS support_count" in sql
+    assert "row_number() OVER" in sql
+    assert "theme_rank <= 20" in sql
+    assert "positionCaseInsensitiveUTF8(concept, '中概') = 0" in sql
+    assert "AS last_analysis_date" in sql
+    assert "max(pairs.last_analysis_date)" in sql
 
 
 def test_cn_market_concepts_keep_using_configured_extension_data() -> None:

@@ -33,7 +33,9 @@ export function marketConceptDimensionData(
   if (normalized === 'cn' || !response) return null
 
   const suffix = `.${normalized.toUpperCase()}`
-  const rows = response.rows.filter(row => String(row.symbol ?? '').toUpperCase().endsWith(suffix))
+  const rows = response.rows
+    .filter(row => String(row.symbol ?? '').toUpperCase().endsWith(suffix))
+    .map(row => ({ ...row, concept: [String(row.concept ?? '').trim()].filter(Boolean) }))
   const id = `clickhouse-concepts-${normalized}`
   const label = 'ClickHouse 动态事件主题'
   const fields: ExtDataField[] = [
@@ -162,6 +164,9 @@ function dimensionValue(raw: unknown): string {
 
 function dimensionValues(raw: unknown): string[] {
   if (raw == null) return []
+  if (Array.isArray(raw)) {
+    return raw.map(dimensionValue).filter(Boolean)
+  }
   return String(raw).split(SEPARATORS)
     .map(dimensionValue)
     .filter(Boolean)
