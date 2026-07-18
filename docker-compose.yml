@@ -8,6 +8,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        BASE_IMAGE_PREFIX: ${BASE_IMAGE_PREFIX:-}
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.3}
     container_name: TickFlow_Stock_Panel

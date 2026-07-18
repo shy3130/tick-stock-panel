@@ -73,6 +73,8 @@ docker compose build
 docker compose up -d
 ```
 
+若服务器无法稳定访问 Docker Hub，可在 `.env` 中设置 `BASE_IMAGE_PREFIX=dockerproxy.net/library/`，无需维护另一份 Dockerfile。
+
 如需回滚，将 `TICKFLOW_IMAGE` 改回上一标签后再次执行 `docker compose up -d`；`./data` 是宿主机挂载目录，不随镜像切换而丢失。
 
 > ⚠️ **stock-sdk 插件默认不打包(合规考虑)**

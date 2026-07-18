@@ -10,9 +10,10 @@ ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG CODEX_CLI_VERSION=0.144.3
+ARG BASE_IMAGE_PREFIX=
 
 # === Stage 1: 前端构建 ===
-FROM node:20-alpine AS frontend-builder
+FROM ${BASE_IMAGE_PREFIX}node:20-alpine AS frontend-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /build
@@ -33,7 +34,7 @@ RUN pnpm build
 #    未经对方授权,可能违反其服务条款并涉及交易所行情版权。默认不打包(INCLUDE_STOCKSDK=0)。
 #    如确需启用,构建时传 --build-arg INCLUDE_STOCKSDK=1,即视为使用者知悉并自行承担合规责任。
 # INCLUDE_STOCKSDK=0 时,本 stage 仅产出空 node_modules 目录,保证后续 COPY 不报错。
-FROM node:20-bookworm-slim AS stocksdk-builder
+FROM ${BASE_IMAGE_PREFIX}node:20-bookworm-slim AS stocksdk-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG INCLUDE_STOCKSDK=0
@@ -49,7 +50,7 @@ RUN if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
 
 # === Stage 1c: Codex CLI ===
 # 固定版本保证镜像可复现；只复制安装产物到运行镜像，不保留 npm。
-FROM node:20-bookworm-slim AS codex-builder
+FROM ${BASE_IMAGE_PREFIX}node:20-bookworm-slim AS codex-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 # 版本由顶层 ARG CODEX_CLI_VERSION 提供, 这里仅声明以继承, 不再重复默认值。
@@ -63,7 +64,7 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY";
     && /opt/codex-native --version
 
 # === Stage 2: Python 运行时 ===
-FROM python:3.11-slim AS runtime
+FROM ${BASE_IMAGE_PREFIX}python:3.11-slim AS runtime
 ARG USE_CN_MIRROR=1
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
