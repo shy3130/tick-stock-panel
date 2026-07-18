@@ -2,6 +2,8 @@
 # 见 ADR-17 / §8.1。
 services:
   app:
+    # 通过 TICKFLOW_IMAGE 固定每次部署的镜像标签，便于保留上一版本并快速回滚。
+    image: ${TICKFLOW_IMAGE:-tickflow-stock-panel-app:latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -23,6 +25,10 @@ services:
       - DATA_DIR=/app/data
       # 将主机 Codex Desktop 的 loopback local-access 端点映射到 Docker host gateway。
       - CODEX_DOCKER_HOST=host.docker.internal
+      # ClickHouse 默认运行在 Docker 主机；三类 Provider 可在设置页分别选择。
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://host.docker.internal:8123}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-longbridge}
+      - CLICKHOUSE_READ_TIMEOUT_SECONDS=${CLICKHOUSE_READ_TIMEOUT_SECONDS:-30}
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro

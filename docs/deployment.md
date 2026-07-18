@@ -47,6 +47,34 @@ docker compose up --build
 
 Docker 采用两阶段构建,前端 dist 拷进后端镜像,**单容器**运行,数据完全在自己手里。
 
+### 接入 Longbridge ClickHouse（三市场）
+
+本分支内置 `clickhouse` Provider，可同时读取 A股、港股和美股的日K、分钟K与实时快照。它只读取现有 Longbridge ClickHouse，不会启动第二套行情订阅。
+
+在 `.env` 中配置：
+
+```ini
+CLICKHOUSE_URL=http://host.docker.internal:8123
+CLICKHOUSE_DATABASE=longbridge
+CLICKHOUSE_USER=只读账户
+CLICKHOUSE_PASSWORD=只读密码
+CLICKHOUSE_READ_TIMEOUT_SECONDS=30
+```
+
+Compose 已把 `host.docker.internal` 映射到 Docker 主机；若 ClickHouse 位于其他服务器，将 URL 改为对应内网地址。启动后进入“设置 → 数据源”，将日K、分钟K、实时行情三个选项分别切换到“Longbridge ClickHouse（三市场）”。
+
+首次部署还需在 Longbridge 仓库执行 `infra/realtime/clickhouse/init/003_tickflow_integration_schema.sql`。该脚本只新增 `lb_minute_bars`、`lb_strategy_runs`、`lb_strategy_signals` 三张表，不删除或修改已有表。
+
+建议每次部署使用唯一镜像标签，并保留上一版本作为回滚点：
+
+```bash
+export TICKFLOW_IMAGE=tickflow-stock-panel:three-market-20260718
+docker compose build
+docker compose up -d
+```
+
+如需回滚，将 `TICKFLOW_IMAGE` 改回上一标签后再次执行 `docker compose up -d`；`./data` 是宿主机挂载目录，不随镜像切换而丢失。
+
 > ⚠️ **stock-sdk 插件默认不打包(合规考虑)**
 >
 > stock-sdk 数据源本质是抓取第三方财经网站(如东方财富)的行情接口,未经对方授权,可能违反其服务条款并涉及交易所行情版权问题。**出于合规考虑,Docker 默认构建不再内置 stock-sdk 插件依赖**。
