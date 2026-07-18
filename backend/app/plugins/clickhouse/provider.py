@@ -444,6 +444,7 @@ class ClickHouseProvider:
 
         suffix = f".{normalized.upper()}"
         items: list[dict[str, Any]] = []
+        concept_members: dict[str, set[str]] = {}
         seen: set[tuple[str, str]] = set()
         as_of: str | None = None
         for row in rows:
@@ -453,10 +454,13 @@ class ClickHouseProvider:
                 continue
             if normalized == "us" and "中概" in concept:
                 continue
+            if normalized == "us" and concept.startswith("美股"):
+                concept = concept[2:].strip() or concept
             key = (symbol, concept)
             if key in seen:
                 continue
             seen.add(key)
+            concept_members.setdefault(concept, set()).add(symbol)
             row_as_of = str(row.get("as_of")) if row.get("as_of") else None
             if row_as_of and (as_of is None or row_as_of > as_of):
                 as_of = row_as_of
@@ -465,6 +469,12 @@ class ClickHouseProvider:
                 "name": row.get("name") or symbol,
                 "concept": concept,
             })
+
+        if normalized == "us":
+            items = [
+                item for item in items
+                if len(concept_members[item["concept"]]) >= 2
+            ]
 
         return {
             "market": normalized,

@@ -252,6 +252,12 @@ def test_us_market_concepts_normalize_tickers_and_reject_other_market_rows() -> 
         },
         {
             "as_of": "2026-07-18",
+            "symbol": "AIG.US",
+            "name": "AIG",
+            "concept": "保险",
+        },
+        {
+            "as_of": "2026-07-18",
             "symbol": "700.HK",
             "name": "TENCENT",
             "concept": "互联网平台",
@@ -268,11 +274,18 @@ def test_us_market_concepts_normalize_tickers_and_reject_other_market_rows() -> 
     result = provider.get_market_concepts("us")
 
     assert result["market"] == "us"
-    assert result["rows"] == [{
-        "symbol": "BRK-B.US",
-        "name": "BERKSHIRE",
-        "concept": "保险",
-    }]
+    assert result["rows"] == [
+        {
+            "symbol": "BRK-B.US",
+            "name": "BERKSHIRE",
+            "concept": "保险",
+        },
+        {
+            "symbol": "AIG.US",
+            "name": "AIG",
+            "concept": "保险",
+        },
+    ]
     sql = query.queries[-1]
     assert "replaceAll" in sql
     assert "'.US'" in sql
@@ -282,6 +295,45 @@ def test_us_market_concepts_normalize_tickers_and_reject_other_market_rows() -> 
     assert "positionCaseInsensitiveUTF8(concept, '中概') = 0" in sql
     assert "AS last_analysis_date" in sql
     assert "max(pairs.last_analysis_date)" in sql
+
+
+def test_us_market_concepts_merge_market_prefixes_and_drop_singletons() -> None:
+    query = QueryRecorder([
+        {
+            "as_of": "2026-07-18",
+            "symbol": "CRWV.US",
+            "name": "CoreWeave",
+            "concept": "AI基础设施",
+        },
+        {
+            "as_of": "2026-07-18",
+            "symbol": "NBIS.US",
+            "name": "Nebius",
+            "concept": "美股AI基础设施",
+        },
+        {
+            "as_of": "2026-07-18",
+            "symbol": "NBIS.US",
+            "name": "Nebius",
+            "concept": "内部人交易概念",
+        },
+    ])
+    provider = ClickHouseProvider(query_fn=query)
+
+    result = provider.get_market_concepts("us")
+
+    assert result["rows"] == [
+        {
+            "symbol": "CRWV.US",
+            "name": "CoreWeave",
+            "concept": "AI基础设施",
+        },
+        {
+            "symbol": "NBIS.US",
+            "name": "Nebius",
+            "concept": "AI基础设施",
+        },
+    ]
 
 
 def test_cn_market_concepts_keep_using_configured_extension_data() -> None:
