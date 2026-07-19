@@ -10,16 +10,17 @@
  *   - 登录失败由后端限流(5次锁5分钟), 429 时前端显示等待提示。
  */
 import { useEffect, useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Eye, EyeOff, Loader2, Lock, ShieldCheck, ShieldAlert, Sparkles } from 'lucide-react'
+import { CheckCircle2, Eye, EyeOff, Loader2, Lock, ShieldCheck, ShieldAlert, Sparkles } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/cn'
 
 export function Auth() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')  // 仅设密码时用
   const [showPwd, setShowPwd] = useState(false)
@@ -36,6 +37,9 @@ export function Auth() {
   }, [navigate])
 
   const isSetup = !status?.configured  // configured=false → 设密码模式
+  const passwordChanged = Boolean(
+    (location.state as { passwordChanged?: boolean } | null)?.passwordChanged,
+  )
 
   // 登录 / 设密码 共用一个 mutation(按 isSetup 调不同接口)
   const submitMut = useMutation({
@@ -110,6 +114,13 @@ export function Auth() {
               </div>
             </div>
           </div>
+
+          {passwordChanged && !isSetup && (
+            <div className="mb-3 flex items-start gap-1.5 rounded-btn bg-bull/10 px-3 py-2 text-[11px] text-bull">
+              <CheckCircle2 className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span>密码已修改，请使用新密码重新登录</span>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-3">
             {/* 密码输入 */}
