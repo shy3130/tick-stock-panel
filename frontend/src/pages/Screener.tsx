@@ -250,9 +250,9 @@ export function Screener() {
   const effectiveResults = useMemo(() => {
     if (fullCachedQuery.data?.as_of !== asOf) return null
     const entries = Object.entries(fullCachedQuery.data.results)
-      .filter(([, item]) => item.as_of === asOf)
+      .filter(([id, item]) => visiblePool.includes(id) && item.as_of === asOf)
     return Object.fromEntries(entries)
-  }, [fullCachedQuery.data, asOf])
+  }, [fullCachedQuery.data, asOf, visiblePool])
 
   // symbol → 所属策略列表。单策略接口同时返回轻量归属映射，保留策略列原有展示。
   const symbolStrategyMap = useMemo(() => {

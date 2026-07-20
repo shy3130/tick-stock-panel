@@ -459,13 +459,16 @@ def get_cached_result(
 
 
 @router.get("/market-snapshot")
-def market_snapshot(request: Request):
-    """最新全市场轻量行情快照，供板块/概念聚合分析使用。"""
+def market_snapshot(
+    request: Request,
+    as_of: date | None = None,
+):
+    """全市场轻量行情快照, 默认返回最新交易日。"""
     import polars as pl
 
     repo = request.app.state.repo
     svc = ScreenerService(repo)
-    as_of = svc.latest_date()
+    as_of = as_of or svc.latest_date()
     if not as_of:
         return {"as_of": None, "rows": []}
 

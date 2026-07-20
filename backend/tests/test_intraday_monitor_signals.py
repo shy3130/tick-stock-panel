@@ -48,6 +48,26 @@ def test_intraday_crosses_are_edge_triggered_and_not_replayed():
     assert down[0]["signal_intraday_zero_cross_down"] is True
 
 
+def test_intraday_crosses_survive_a_skipped_poll():
+    evaluator = IntradaySignalEvaluator()
+    kwargs = {
+        "symbols": {"600000.SH"},
+        "prev_close": {"600000.SH": 10.0},
+        "asset_type": "stock",
+    }
+
+    evaluator.evaluate(_minute_rows([9.0]), now=datetime(2026, 7, 17, 9, 31), **kwargs)
+    signals = evaluator.evaluate(
+        _minute_rows([9.0, 11.0, 11.0]),
+        now=datetime(2026, 7, 17, 9, 33),
+        **kwargs,
+    )
+
+    assert len(signals) == 1
+    assert signals[0]["signal_intraday_avg_cross_up"] is True
+    assert signals[0]["signal_intraday_zero_cross_up"] is True
+
+
 def test_intraday_signals_flow_through_monitor_engine():
     evaluator = IntradaySignalEvaluator()
     kwargs = {

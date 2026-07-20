@@ -109,12 +109,17 @@ class IntradaySignalEvaluator:
             if len(points) < 2:
                 continue
 
-            previous = points[-2]
             baseline = _finite(prev_close.get(symbol))
-            avg_up = previous[2] is not None and current[2] is not None and previous[1] <= previous[2] and current[1] > current[2]
-            avg_down = previous[2] is not None and current[2] is not None and previous[1] >= previous[2] and current[1] < current[2]
-            zero_up = baseline is not None and baseline > 0 and previous[1] <= baseline and current[1] > baseline
-            zero_down = baseline is not None and baseline > 0 and previous[1] >= baseline and current[1] < baseline
+            avg_up = avg_down = zero_up = zero_down = False
+            for index in range(1, len(points)):
+                previous = points[index - 1]
+                current = points[index]
+                if current[0] <= last_bar:
+                    continue
+                avg_up |= previous[2] is not None and current[2] is not None and previous[1] <= previous[2] and current[1] > current[2]
+                avg_down |= previous[2] is not None and current[2] is not None and previous[1] >= previous[2] and current[1] < current[2]
+                zero_up |= baseline is not None and baseline > 0 and previous[1] <= baseline and current[1] > baseline
+                zero_down |= baseline is not None and baseline > 0 and previous[1] >= baseline and current[1] < baseline
             if avg_up or avg_down or zero_up or zero_down:
                 results.append({
                     "symbol": symbol,

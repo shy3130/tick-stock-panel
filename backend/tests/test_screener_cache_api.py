@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
+
+import polars as pl
 
 from app.api import screener as screener_api
 
@@ -93,3 +96,31 @@ def test_cached_result_returns_only_requested_rows_with_ext_and_strategy_members
     assert payload["result"]["rows"] == [{"symbol": "000001.SZ", "concept.concept": "银行"}]
     assert payload["today_ever_rows"]["000002.SZ"]["concept.concept"] == "科技"
     assert payload["strategy_ids_by_symbol"] == {"000001.SZ": ["strategy_a", "strategy_b"]}
+
+
+def test_market_snapshot_uses_requested_date(monkeypatch, tmp_path):
+    requested = date(2025, 1, 6)
+
+    class _ScreenerService:
+        def __init__(self, _repo):
+            pass
+
+        def latest_date(self):
+            raise AssertionError("historical snapshot must not resolve the latest date")
+
+        def _load_enriched_for_date(self, as_of):
+            assert as_of == requested
+            return pl.DataFrame({
+                "symbol": ["600000.SH"],
+                "close": [10.0],
+                "change_pct": [1.5],
+            })
+
+    monkeypatch.setattr(screener_api, "ScreenerService", _ScreenerService)
+
+    payload = screener_api.market_snapshot(_request(tmp_path), as_of=requested)
+
+    assert payload == {
+        "as_of": "2025-01-06",
+        "rows": [{"symbol": "600000.SH", "close": 10.0, "change_pct": 1.5}],
+    }

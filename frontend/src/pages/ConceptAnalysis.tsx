@@ -275,8 +275,8 @@ export function ConceptAnalysis() {
     !rowsQuery.isLoading && (rowsQuery.data?.total ?? 0) === 0
 
   const marketQuery = useQuery({
-    queryKey: QK.marketSnapshot,
-    queryFn: api.marketSnapshot,
+    queryKey: QK.marketSnapshot(),
+    queryFn: () => api.marketSnapshot(),
     staleTime: 60_000,
   })
 
