@@ -5,6 +5,7 @@ import { RefreshCw, ChevronDown, Flame, Settings2, X, Bell, BellOff, AlertCircle
 import { DatePicker } from '@/components/DatePicker'
 import { api, type LimitLadderTier, type LimitLadderStock, type MonitorRule } from '@/lib/api'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPct, priceColorClass } from '@/lib/format'
@@ -219,7 +220,7 @@ function useSealedDegrade(asOf: string, latestDate: string | undefined, sealedRe
 
 // ===== 单只股票卡片 =====
 
-const StockCard = React.memo(function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRule, onMonitorChange, hasDepth, onClick }: {
+const StockCard = React.memo(function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRule, onMonitorChange, hasDepth, onClick, onDimensionClick }: {
   stock: LimitLadderStock
   extFields: ExtFieldConfig
   direction: Direction
@@ -229,6 +230,7 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
   onMonitorChange: () => void
   hasDepth: boolean
   onClick: (symbol: string, name?: string) => void
+  onDimensionClick: (kind: DimensionKind, value: string, sourceField?: string) => void
 }) {
   const [showMonitorMenu, setShowMonitorMenu] = useState(false)
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null)
@@ -250,9 +252,9 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
   const badgeText = typeof style.badgeText === 'function' ? style.badgeText(direction) : style.badgeText
 
   const tagCls = 'text-[9px] leading-none px-1 py-px rounded-sm'
-  const conceptCls = 'text-[10px] leading-none px-1.5 py-0.5 rounded-sm text-orange-200/60 bg-orange-400/[0.05]'
-  const industryCls = 'text-[10px] leading-none px-1.5 py-0.5 rounded-sm text-sky-300/90 bg-sky-400/10'
-  const textCls = `${tagCls} text-secondary/60 bg-elevated/60`
+  const conceptCls = 'text-[10px] leading-none px-1.5 py-0.5 rounded-sm text-orange-800 bg-orange-100/80 dark:text-orange-200/60 dark:bg-orange-400/[0.05]'
+  const industryCls = 'text-[10px] leading-none px-1.5 py-0.5 rounded-sm text-sky-800 bg-sky-100/80 dark:text-sky-300/90 dark:bg-sky-400/10'
+  const textCls = `${tagCls} text-secondary bg-elevated/60 dark:text-secondary/60`
 
   const hasTags = conceptTags.length > 0 || industryTags.length > 0
 
@@ -287,8 +289,15 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
           onChanged={onMonitorChange}
         />
       )}
-      <button
+      <div
+      role="button"
+      tabIndex={0}
       onClick={() => onClick(stock.symbol, stock.name ?? undefined)}
+      onKeyDown={event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        onClick(stock.symbol, stock.name ?? undefined)
+      }}
       className={`w-full flex flex-col items-start gap-1 px-2.5 py-2 rounded-md transition-all duration-200 cursor-pointer hover:opacity-100 ${style.bg} ${style.bar} ${monitored ? 'ring-1 ring-amber-400/50 ring-inset' : ''}`}
       style={style.cardStyle ? { ...style.cardStyle } : undefined}
       onMouseEnter={e => {
@@ -303,6 +312,13 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
       {/* 名称行 */}
       <div className="flex items-center gap-1.5 w-full min-w-0 pr-4">
         <span className={`${style.nameCls} font-medium truncate`}>{stock.name}</span>
+        {stock.is_one_word && (
+          <span className={`shrink-0 rounded-sm border px-1 py-px text-[9px] font-medium leading-none ${
+            direction === 'down'
+              ? 'border-bear/25 bg-bear/10 text-bear'
+              : 'border-bull/25 bg-bull/10 text-bull'
+          }`}>一字</span>
+        )}
         {tag && (
           <span className={`shrink-0 text-[9px] px-1 py-px rounded-full border leading-none ${tag.cls}`}>{tag.label}</span>
         )}
@@ -342,20 +358,34 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
           {conceptTags.length > 0 && (
             <div className={`flex gap-0.5 ${conceptLayout === 'vertical' ? 'flex-col items-start' : 'flex-wrap'}`}>
               {conceptTags.map((t, i) => (
-                <span key={i} className={isTextConcept ? textCls : conceptCls}>{t}</span>
+                <button
+                  key={i}
+                  type="button"
+                  onClick={event => { event.stopPropagation(); onDimensionClick('concept', t, extFields.concept?.field) }}
+                  className={`${isTextConcept ? textCls : conceptCls} hover:brightness-95`}
+                >
+                  {t}
+                </button>
               ))}
             </div>
           )}
           {industryTags.length > 0 && (
             <div className={`flex gap-0.5 ${industryLayout === 'vertical' ? 'flex-col items-start' : 'flex-wrap'}`}>
               {industryTags.map((t, i) => (
-                <span key={i} className={isTextIndustry ? textCls : industryCls}>{t}</span>
+                <button
+                  key={i}
+                  type="button"
+                  onClick={event => { event.stopPropagation(); onDimensionClick('industry', t, extFields.industry?.field) }}
+                  className={`${isTextIndustry ? textCls : industryCls} hover:brightness-95`}
+                >
+                  {t}
+                </button>
               ))}
             </div>
           )}
         </div>
       )}
-    </button>
+    </div>
     </div>
   )
 })
@@ -790,7 +820,7 @@ function OverviewBar({ tiers, dateValue, onDateChange, filterKeys, bf, direction
 
 // ===== 标签统计面板 =====
 
-function TagStats({ title, tiers, extFields, fieldKey, color, selectedTag, onSelect, direction }: {
+function TagStats({ title, tiers, extFields, fieldKey, color, selectedTag, onSelect, onDimensionClick, direction }: {
   title: string
   tiers: LimitLadderTier[]
   extFields: ExtFieldConfig
@@ -799,6 +829,7 @@ function TagStats({ title, tiers, extFields, fieldKey, color, selectedTag, onSel
   color: { text: [number, number, number]; textLight: [number, number, number]; bg: [number, number, number] }
   selectedTag: { fieldKey: 'concept' | 'industry'; tag: string } | null
   onSelect: (sel: { fieldKey: 'concept' | 'industry'; tag: string } | null) => void
+  onDimensionClick: (kind: DimensionKind, value: string, sourceField?: string) => void
   direction: Direction
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -855,7 +886,10 @@ function TagStats({ title, tiers, extFields, fieldKey, color, selectedTag, onSel
             return (
               <button
                 key={name}
-                onClick={() => onSelect(isSelected ? null : { fieldKey, tag: name })}
+                onClick={() => {
+                  onSelect(isSelected ? null : { fieldKey, tag: name })
+                  onDimensionClick(fieldKey, name, extFields[fieldKey]?.field)
+                }}
                 className="text-[11px] px-2 py-1 rounded-sm whitespace-nowrap cursor-pointer hover:brightness-110 transition-all"
                 style={{
                   // 亮色: 深色阶文字 + 更淡的底; 选中态不用白字 (黄底白字在亮色下不可读)
@@ -889,7 +923,7 @@ function TagStats({ title, tiers, extFields, fieldKey, color, selectedTag, onSel
 
 // ===== 梯队分组 =====
 
-function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick, selectedTag, onSelectTag, direction, sealMode, monitoredSymbols, ladderRules, onMonitorChange, hasDepth }: {
+function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick, selectedTag, onSelectTag, onDimensionClick, direction, sealMode, monitoredSymbols, ladderRules, onMonitorChange, hasDepth }: {
   tier: LimitLadderTier
   defaultOpen: boolean
   extFields: ExtFieldConfig
@@ -898,6 +932,7 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
   onStockClick: (symbol: string, name?: string) => void
   selectedTag: { fieldKey: 'concept' | 'industry'; tag: string } | null
   onSelectTag: (sel: { fieldKey: 'concept' | 'industry'; tag: string } | null) => void
+  onDimensionClick: (kind: DimensionKind, value: string, sourceField?: string) => void
   direction: Direction
   sealMode: 'vol' | 'amount'
   monitoredSymbols: Set<string>
@@ -992,7 +1027,10 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
                       return (
                         <button
                           key={name}
-                          onClick={() => onSelectTag(isSelected ? null : { fieldKey: 'concept', tag: name })}
+                          onClick={() => {
+                            onSelectTag(isSelected ? null : { fieldKey: 'concept', tag: name })
+                            onDimensionClick('concept', name, extFields.concept?.field)
+                          }}
                           className="text-[10px] px-1.5 py-0.5 rounded-sm whitespace-nowrap cursor-pointer hover:brightness-110 transition-all"
                           style={{
                             color: isSelected
@@ -1019,7 +1057,10 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
                       return (
                         <button
                           key={name}
-                          onClick={() => onSelectTag(isSelected ? null : { fieldKey: 'industry', tag: name })}
+                          onClick={() => {
+                            onSelectTag(isSelected ? null : { fieldKey: 'industry', tag: name })
+                            onDimensionClick('industry', name, extFields.industry?.field)
+                          }}
                           className="text-[10px] px-1.5 py-0.5 rounded-sm whitespace-nowrap cursor-pointer hover:brightness-110 transition-all"
                           style={{
                             color: isSelected
@@ -1086,6 +1127,7 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
                   onMonitorChange={onMonitorChange}
                   hasDepth={hasDepth}
                   onClick={onStockClick}
+                  onDimensionClick={onDimensionClick}
                 />
               ))}
             </div>
@@ -1445,6 +1487,7 @@ export function LimitUpLadder() {
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState('')
   const [selectedTag, setSelectedTag] = useState<{ fieldKey: 'concept' | 'industry'; tag: string } | null>(null)
+  const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
   const handleSelectTag = useCallback((sel: { fieldKey: 'concept' | 'industry'; tag: string } | null) => {
     setSelectedTag(prev => prev?.fieldKey === sel?.fieldKey && prev?.tag === sel?.tag ? null : sel)
   }, [])
@@ -1476,6 +1519,10 @@ export function LimitUpLadder() {
     queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction),
     staleTime: 5 * 60_000,
   })
+  const handleOpenDimension = useCallback((kind: DimensionKind, value: string, sourceField?: string) => {
+    if (!sourceField) return
+    setDimensionTarget({ kind, value, sourceField, date: (data?.as_of ?? asOf) || undefined })
+  }, [asOf, data?.as_of])
 
   const rawTiers = data?.tiers ?? []
   const tiers = filterTiers(rawTiers, filterKeys, extFields.bf)
@@ -1662,6 +1709,7 @@ export function LimitUpLadder() {
           color={{ text: [250, 204, 21], textLight: [161, 98, 7], bg: [234, 179, 8] }}
           selectedTag={selectedTag}
           onSelect={handleSelectTag}
+          onDimensionClick={handleOpenDimension}
           direction={direction}
         />
       )}
@@ -1675,6 +1723,7 @@ export function LimitUpLadder() {
           color={{ text: [96, 165, 250], textLight: [29, 78, 216], bg: [59, 130, 246] }}
           selectedTag={selectedTag}
           onSelect={handleSelectTag}
+          onDimensionClick={handleOpenDimension}
           direction={direction}
         />
       )}
@@ -1692,6 +1741,7 @@ export function LimitUpLadder() {
             onStockClick={handleStockClick}
             selectedTag={selectedTag}
             onSelectTag={handleSelectTag}
+            onDimensionClick={handleOpenDimension}
             direction={direction}
             sealMode={sealMode}
             monitoredSymbols={monitoredSymbols}
@@ -1701,6 +1751,15 @@ export function LimitUpLadder() {
           />
         ))}
       </div>
+
+      <DimensionMembersDialog
+        target={dimensionTarget}
+        onClose={() => setDimensionTarget(null)}
+        onStockClick={(symbol, name) => {
+          setDimensionTarget(null)
+          handleStockClick(symbol, name)
+        }}
+      />
 
       {/* 个股K线弹窗 */}
       <StockPreviewDialog

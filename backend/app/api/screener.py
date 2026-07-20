@@ -52,6 +52,22 @@ def _safe(result_dict: dict) -> dict:
     return result_dict
 
 
+def _one_word_limit_expr(status_main: str, columns: list[str]) -> Any:
+    required = {"open", "high", "low", "close", "status"}
+    if not required.issubset(columns):
+        import polars as pl
+        return pl.lit(False)
+
+    import polars as pl
+    return (
+        (pl.col("status") == status_main)
+        & (pl.col("close") > 0)
+        & (pl.col("open") == pl.col("high"))
+        & (pl.col("high") == pl.col("low"))
+        & (pl.col("low") == pl.col("close"))
+    ).fill_null(False)
+
+
 _EXT_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -305,18 +321,8 @@ def run_preset(req: PresetRequest, request: Request):
     return _result_with_ext(safe_data, ext_values)
 
 
-@router.get("/cached")
-def get_cached(
-    request: Request,
-    ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
-):
-    """读取策略结果缓存, 并叠加监控引擎本轮实时算出的结果。
-
-    - 盘后缓存 (strategy_cache.json): 非监控策略 / 页面秒加载用, run_all 写入。
-    - 监控引擎内存结果 (latest_strategy_results): 实时行情每轮对「加入监控的策略」算出,
-      不落盘 (避免与 read_cache 的 mtime 校验冲突), 在此直接叠加覆盖盘后结果。
-      被监控的策略拿到新鲜数据, 非监控策略仍用盘后缓存。
-    """
+def _cached_with_realtime(request: Request) -> dict:
+    """读取盘后缓存，并用监控引擎的实时结果覆盖同策略。"""
     data_dir = request.app.state.repo.store.data_dir
     cached = strategy_cache.read_cache(data_dir)
     if cached is None:
@@ -335,12 +341,121 @@ def get_cached(
             import time as _time
             cached["updated_at"] = int(_time.time() * 1000)
 
+    return cached
+
+
+@router.get("/cached")
+def get_cached(
+    request: Request,
+    ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+):
+    """读取策略结果缓存, 并叠加监控引擎本轮实时算出的结果。
+
+    - 盘后缓存 (strategy_cache.json): 非监控策略 / 页面秒加载用, run_all 写入。
+    - 监控引擎内存结果 (latest_strategy_results): 实时行情每轮对「加入监控的策略」算出,
+      不落盘 (避免与 read_cache 的 mtime 校验冲突), 在此直接叠加覆盖盘后结果。
+      被监控的策略拿到新鲜数据, 非监控策略仍用盘后缓存。
+    """
+    cached = _cached_with_realtime(request)
+
     # 无任何数据 (盘后缓存空 + 无实时结果) → 返回空标记, 前端据此提示
     if not cached.get("results") and cached.get("as_of") is None:
         return {"as_of": None, "results": {}, "updated_at": None}
 
     ext_values = _load_ext_value_maps(request.app.state.repo, ext_columns)
     return _cache_payload_with_ext(cached, ext_values)
+
+
+@router.get("/cached-summary")
+def get_cached_summary(request: Request):
+    """返回策略卡片所需的轻量摘要，不序列化股票明细。"""
+    cached = _cached_with_realtime(request)
+    results = cached.get("results") or {}
+    summary = {
+        sid: {
+            "total": int(result.get("total") or 0),
+            "as_of": result.get("as_of"),
+        }
+        for sid, result in results.items()
+        if isinstance(result, dict)
+    }
+
+    cached_as_of = cached.get("as_of")
+    ever_rows = cached.get("today_ever_rows") or {}
+    ever_counts = {}
+    for sid, result in results.items():
+        if not isinstance(result, dict) or result.get("as_of") != cached_as_of:
+            continue
+        current_symbols = {
+            str(row["symbol"])
+            for row in result.get("rows") or []
+            if isinstance(row, dict) and row.get("symbol")
+        }
+        ever_counts[sid] = len(set((ever_rows.get(sid) or {}).keys()) | current_symbols)
+    return {
+        "as_of": cached_as_of,
+        "results": summary,
+        "today_ever_counts": ever_counts,
+        "updated_at": cached.get("updated_at"),
+    }
+
+
+@router.get("/cached-result/{strategy_id}")
+def get_cached_result(
+    strategy_id: str,
+    request: Request,
+    ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+):
+    """按需返回单个策略的完整明细及其今日失效行。"""
+    cached = _cached_with_realtime(request)
+    raw_result = (cached.get("results") or {}).get(strategy_id)
+    if not isinstance(raw_result, dict):
+        return {
+            "result": None,
+            "today_ever_rows": None,
+            "strategy_ids_by_symbol": {},
+            "updated_at": cached.get("updated_at"),
+        }
+
+    ext_values = _load_ext_value_maps(request.app.state.repo, ext_columns)
+    result = {
+        "as_of": raw_result.get("as_of"),
+        "strategy": strategy_id,
+        "rows": _rows_with_ext(raw_result.get("rows") or [], ext_values),
+        "total": int(raw_result.get("total") or 0),
+        "elapsed_ms": 0.0,
+    }
+
+    ever_rows = None
+    if cached.get("as_of") == result["as_of"]:
+        strategy_ever_rows = (cached.get("today_ever_rows") or {}).get(strategy_id)
+        if isinstance(strategy_ever_rows, dict):
+            ever_rows = {
+                symbol: _row_with_ext(row, ext_values, symbol=symbol)
+                for symbol, row in strategy_ever_rows.items()
+                if isinstance(row, dict)
+            }
+
+    selected_symbols = {
+        str(row["symbol"])
+        for row in raw_result.get("rows") or []
+        if isinstance(row, dict) and row.get("symbol")
+    }
+    strategy_ids_by_symbol: dict[str, list[str]] = {symbol: [] for symbol in selected_symbols}
+    for sid, cached_result in (cached.get("results") or {}).items():
+        if not isinstance(cached_result, dict) or cached_result.get("as_of") != result["as_of"]:
+            continue
+        for row in cached_result.get("rows") or []:
+            symbol = str(row.get("symbol")) if isinstance(row, dict) and row.get("symbol") else None
+            if symbol in strategy_ids_by_symbol:
+                strategy_ids_by_symbol[symbol].append(sid)
+
+    return {
+        "result": result,
+        "today_ever_rows": ever_rows,
+        "strategy_ids_by_symbol": strategy_ids_by_symbol,
+        "updated_at": cached.get("updated_at"),
+    }
 
 
 @router.get("/market-snapshot")
@@ -468,6 +583,15 @@ def run_all(request: Request, body: Optional[dict] = None):
             strategy_cache.write_cache(data_dir, str(as_of), results)
         except Exception:  # noqa: BLE001
             pass
+
+    if body.get("summary_only"):
+        return {
+            "as_of": str(as_of),
+            "results": {
+                sid: {"total": result["total"], "as_of": result["as_of"]}
+                for sid, result in results.items()
+            },
+        }
 
     ext_values = _load_ext_value_maps(repo, body.get("ext_columns"))
     return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values)}
@@ -643,6 +767,8 @@ def limit_ladder(
             pl.lit(None).alias("sealed_vol"),
         )
 
+    df = df.with_columns(_one_word_limit_expr(status_main, df.columns).alias("is_one_word"))
+
     # 动态 JOIN 扩展数据
     ext_specs = _parse_ext_columns(ext_columns) if ext_columns else []
     ext_col_names: list[str] = []
@@ -680,7 +806,7 @@ def limit_ladder(
                         pass
 
     # 选择输出列
-    cols = ["symbol", "name", "close", "change_pct", "boards", "status", consec_col, "sealed_status", "sealed_vol"] + ext_col_names
+    cols = ["symbol", "name", "close", "change_pct", "boards", "status", consec_col, "sealed_status", "sealed_vol", "is_one_word"] + ext_col_names
     df = df.select([c for c in cols if c in df.columns])
     # 排序: boards 降序, status 按主状态→炸/翘→断/止
     status_order = pl.when(pl.col("status") == status_main).then(0)

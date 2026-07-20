@@ -33,6 +33,9 @@ export const storage = {
   /** 个股日K信息条指标配置 */
   stockInfoBarFields:   kv<unknown[]>('stock_info_bar_fields'),
 
+  /** 个股日K成交量对比设置 */
+  stockVolumeCompare:   kv<{ enabled: boolean; days: number }>('stock_volume_compare'),
+
   /** 策略结果列表列配置 */
   screenerResultColumns: kv<unknown[]>('screener_result_columns'),
 
@@ -96,7 +99,7 @@ export const storage = {
     end: string
     matching: 'close_t' | 'open_t+1'
     entryFill: 'close_t' | 'open_t+1'
-    exitFill: 'close_t' | 'open_t+1'
+    exitFill: 'close_t' | 'open_t+1' | 'signal_next_minute'
     fees: string
     stampTax?: string
     slippage: string
@@ -106,6 +109,7 @@ export const storage = {
     positionSizing: 'equal' | 'score_weight'
     mode: 'position' | 'full'
     holdingDays: string
+    minuteFill?: boolean
     params?: Record<string, any>
     overrides?: Record<string, any>
     result: any

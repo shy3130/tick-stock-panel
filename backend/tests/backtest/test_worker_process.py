@@ -186,3 +186,37 @@ def test_spawn_walkforward_reuses_shared_matrix_across_folds(tmp_path):
     assert result["shared_market_data_bytes"] > 0
     assert all(fold["oos_stats"]["shared_market_data"] for fold in result["folds"])
     assert result["worker"]["worker_exitcode"] == 0
+
+
+def test_spawn_walkforward_skips_folds_before_available_matrix_data(tmp_path):
+    configured_start = date(2024, 1, 1)
+    market_start = configured_start + timedelta(days=4)
+    data_dir = tmp_path / "data"
+    _write_worker_strategy(data_dir)
+    _write_market_data(data_dir, market_start, days=8)
+    config = WalkForwardConfig(
+        strategy_id="worker_always_entry",
+        symbols=["600000.SH"],
+        start=configured_start,
+        end=configured_start + timedelta(days=11),
+        param_grid={"gate": [1, 2]},
+        objective="total_return",
+        train_days=2,
+        test_days=1,
+        step_days=2,
+        overrides={"basic_filter": {"enabled": False}},
+        backtest_kwargs={
+            "matching": "close_t",
+            "fees_pct": 0,
+            "slippage_bps": 0,
+            "max_positions": 1,
+        },
+    )
+
+    result = run_worker_task(make_worker_task("walkforward", data_dir, config))
+
+    assert result["n_planned_folds"] == 4
+    assert result["n_skipped"] == 1
+    assert result["skipped"][0]["reason"] == "训练区间无可用行情数据"
+    assert result["n_folds"] == 3
+    assert result["worker"]["worker_exitcode"] == 0

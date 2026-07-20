@@ -154,6 +154,56 @@ def test_basic_filter_only_limits_entries_not_panel_rows():
     assert engine.sim_matrix.entry[:, 0].tolist() == [1, 0, 1]
     assert engine.load_args is not None
     assert engine.load_args[1] < start  # warmup 只用于计算, 不参与正式交易
+    assert result.stats["selection"] == {
+        "strategy_matches": 2,
+        "entry_candidates": 2,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": False,
+    }
+
+
+def test_selection_stats_explain_entry_trigger_filtering():
+    start = date(2024, 1, 1)
+    panel = pl.DataFrame([
+        {
+            "symbol": symbol,
+            "name": symbol,
+            "date": start,
+            "open": 10.0,
+            "high": 10.0,
+            "low": 10.0,
+            "close": 10.0,
+            "volume": 1000.0,
+            "amount": 1000.0,
+            "signal_limit_up": symbol == "A",
+            "signal_limit_down": False,
+        }
+        for symbol in ("A", "B")
+    ]).sort(["symbol", "date"])
+    engine = _EngineStub(panel)
+    service = StrategyBacktestService(
+        engine=engine,
+        strategy_engine=_StrategyEngineStub(
+            _strategy(entry_signals=["signal_limit_up"]),
+        ),
+    )
+
+    result = service.run(StrategyBacktestConfig(
+        strategy_id="test",
+        symbols=None,
+        start=start,
+        end=start,
+        matching="close_t",
+        mode="position",
+    ))
+
+    assert result.error is None
+    assert result.stats["selection"] == {
+        "strategy_matches": 2,
+        "entry_candidates": 1,
+        "entry_trigger_filtered": 1,
+        "entry_trigger_enabled": True,
+    }
 
 
 def test_score_normalizes_inside_strategy_candidate_universe():
@@ -254,6 +304,12 @@ def test_matrix_native_strategy_uses_shared_orchestrator_path():
     assert engine.sim_matrix is not None
     assert engine.sim_matrix.entry[:, 0].tolist() == [1, 1]
     assert result.stats["execution_backend"] == "matrix_native"
+    assert result.stats["selection"] == {
+        "strategy_matches": 2,
+        "entry_candidates": 2,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": False,
+    }
 
 
 def test_matrix_native_accepts_legacy_default_signal_overrides_but_rejects_replacements():

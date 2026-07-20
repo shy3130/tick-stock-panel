@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.strategy.custom_signals import ALLOWED_FIELDS
+from app.strategy.intraday_signals import uses_intraday_signals
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,8 @@ def validate(rule: dict) -> None:
         syms = rule.get("symbols")
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
+    if uses_intraday_signals(rule) and rule.get("scope") != "symbols":
+        raise ValueError("分时穿越信号仅支持指定股票")
     # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,
     # 一条本意针对某板块的规则会对全市场每只命中都触发(告警风暴)。在板块 JOIN
     # 落地前, 拒绝创建 sector 规则(fail-closed), 避免用户建出会刷屏的规则。

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Modal } from '@/components/Modal'
 import { X, Sparkles, Save, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Settings2, FileText, Copy, Check, Terminal } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -166,9 +166,15 @@ class CustomMatrixStrategy:
 MATRIX_STRATEGY = CustomMatrixStrategy()
 `
 
-interface Props { open: boolean; onClose: () => void; onSavedId?: (id: string) => void | Promise<void>; mode?: 'create' | 'modify' }
+interface Props {
+  open: boolean
+  onClose: () => void
+  onSavedId?: (id: string) => void | Promise<void>
+  mode?: 'create' | 'modify'
+  existingStrategyIds?: ReadonlySet<string>
+}
 
-export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create' }: Props) {
+export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create', existingStrategyIds }: Props) {
   // 根据 mode 选择存储 key
   const draftStore = mode === 'modify' ? storage.strategyModify : storage.strategyDraft
   const [step, setStep] = useState(1)
@@ -192,6 +198,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   const [aiStatus, setAiStatus] = useState<{ configured: boolean } | null>(null)
   const [checkedAi, setCheckedAi] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const suppressPersistRef = useRef(false)
 
   const resetDraftState = useCallback(() => {
     setStep(1); setTab('ai'); setName(''); setDescription(''); setDirection('long')
@@ -203,25 +210,31 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   useEffect(() => {
     if (!open) { setLoaded(false); return }
     const d = draftStore.get(null)
-    if (d) {
+    const draftCodeId = d ? parseMetaField(d.code ?? '', 'id') : ''
+    const completedDraft = mode === 'create' && !!d && (
+      (!!d.strategyId && existingStrategyIds?.has(d.strategyId))
+      || (!!draftCodeId && existingStrategyIds?.has(draftCodeId))
+    )
+    if (completedDraft) {
+      draftStore.set(null)
+      resetDraftState()
+    } else if (d) {
       const restoredSource = d.source ?? (d.strategyId?.startsWith('custom_') ? 'custom' : 'ai')
-      const restoredId = mode === 'create' && d.strategyId
-        ? slugId(restoredSource)
-        : (d.strategyId ?? '')
       setStep(d.step ?? 1); setName(d.name ?? ''); setDescription(d.description ?? '')
       setDirection(d.direction ?? 'long')
       setExecutionBackend(
         (d as any).executionBackend
         ?? (String(d.code ?? '').includes('matrix_native') ? 'matrix_native' : 'polars_expr'),
       )
-      setRules(d.rules ?? ''); setCode(d.code ?? ''); setStrategyId(restoredId)
+      setRules(d.rules ?? ''); setCode(d.code ?? ''); setStrategyId(d.strategyId ?? '')
       setSource(restoredSource)
       setTab(mode === 'modify' || restoredSource === 'custom' ? 'custom' : 'ai')
     } else {
       resetDraftState()
     }
+    suppressPersistRef.current = false
     setLoaded(true)
-  }, [open, mode, draftStore, resetDraftState])
+  }, [open, mode, draftStore, existingStrategyIds, resetDraftState])
 
   // 打开时检查 AI 状态
   useEffect(() => {
@@ -236,15 +249,20 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
     } else {
       draftStore.set({ name, description, direction, executionBackend, rules, code, step, strategyId, source } as any)
     }
-  }, [name, description, direction, executionBackend, rules, code, step, strategyId, source])
-  useEffect(() => { if (loaded) persist() }, [loaded, persist])
+  }, [draftStore, name, description, direction, executionBackend, rules, code, step, strategyId, source])
+  useEffect(() => {
+    if (loaded && !suppressPersistRef.current) persist()
+  }, [loaded, persist])
 
   const clearDraft = () => {
     draftStore.set(null)
     resetDraftState()
   }
 
-  const handleClose = () => { if (name || rules || code) persist(); onClose() }
+  const handleClose = () => {
+    if (!suppressPersistRef.current && (name || rules || code)) persist()
+    onClose()
+  }
 
   const resolveStrategyId = (target: 'ai' | 'custom' = source) => {
     if (mode === 'modify' && strategyId) return strategyId
@@ -353,6 +371,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
         name: name.trim(),
         description: description.trim(),
       })
+      suppressPersistRef.current = true
       clearDraft()
       const genRules = parseRules(draftCode)
       const finalRules = (genRules || rules).trim()
@@ -396,7 +415,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
             </div>
             {/* 中间：标题 */}
             <span id="strategy-builder-title" className="text-sm font-semibold text-foreground">
-              {strategyId ? '修改策略' : '创建策略'}
+              {mode === 'modify' ? '修改策略' : '创建策略'}
             </span>
             {/* 右侧：步骤 + 关闭 */}
             <div className="flex items-center justify-end gap-2">

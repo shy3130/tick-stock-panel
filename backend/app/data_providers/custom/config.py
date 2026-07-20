@@ -33,6 +33,8 @@ class DatasetConfig:
     symbols_param: str = "symbols"
     start_param: str = "start_time"
     end_param: str = "end_time"
+    asset_type_param: str | None = None
+    freq_param: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,8 @@ def _dataset_from_dict(raw: dict[str, Any]) -> DatasetConfig:
         symbols_param=str(raw.get("symbols_param", "symbols") or "symbols"),
         start_param=str(raw.get("start_param", "start_time") or "start_time"),
         end_param=str(raw.get("end_param", "end_time") or "end_time"),
+        asset_type_param=str(raw.get("asset_type_param")) if raw.get("asset_type_param") else None,
+        freq_param=str(raw.get("freq_param")) if raw.get("freq_param") else None,
     )
 
 

@@ -25,7 +25,7 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
     hint: '在独立 worker 中复用基础数据并串行回测参数组合，按夏普/索提诺等目标排序。',
   },
   walkforward: {
-    title: 'Walk-forward',
+    title: '步进优化',
     subtitle: '滚动窗口样本外验证',
     hint: '每折训练区间优化、测试区间验证，看样本外是否退化以识别过拟合。',
   },
@@ -58,7 +58,7 @@ export function Backtest() {
           >
             <Icon className="h-3.5 w-3.5" />
             {MODES[tab].title}
-            {tab === 'optimizer' && (
+            {(tab === 'optimizer' || tab === 'walkforward') && (
               <span className={`rounded border px-1 py-px text-[8px] font-semibold uppercase ${
                 active ? 'border-white/40 bg-white/15 text-white' : 'border-amber-400/30 bg-amber-400/10 text-amber-400'
               }`}>

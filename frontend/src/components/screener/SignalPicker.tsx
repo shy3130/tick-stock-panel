@@ -13,6 +13,9 @@ interface Props {
   kind: 'entry' | 'exit'
   /** 渲染尺寸: dialog = 选股弹窗紧凑样式; panel = 回测页设置抽屉样式 */
   variant?: 'dialog' | 'panel'
+  builtinSignals?: { key: string; label: string }[]
+  disabledSignals?: string[]
+  disabledSignalHint?: string
 }
 
 /**
@@ -22,7 +25,7 @@ interface Props {
  * - 自定义信号 (csg_*): 按 kind 过滤 (entry / exit / both)
  * - entry 蓝色主题, exit 橙色主题
  */
-export function SignalPicker({ signals, onChange, kind, variant = 'panel' }: Props) {
+export function SignalPicker({ signals, onChange, kind, variant = 'panel', builtinSignals, disabledSignals = [], disabledSignalHint }: Props) {
   const customSignalsQuery = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList })
 
   const customOptions = useMemo(() => {
@@ -54,19 +57,25 @@ export function SignalPicker({ signals, onChange, kind, variant = 'panel' }: Pro
   const btnCls = variant === 'dialog'
     ? 'rounded px-1.5 py-0.5 text-[10px] font-medium border transition-colors cursor-pointer'
     : 'rounded-btn border px-2.5 py-1.5 text-[11px] transition-colors cursor-pointer'
+  const builtinOptions = builtinSignals ?? SIGNAL_OPTIONS.map(key => ({ key, label: cnSignal(key) }))
 
   return (
     <div className="flex flex-wrap gap-1.5">
-      {SIGNAL_OPTIONS.map(sig => (
-        <button
-          key={sig}
-          type="button"
-          onClick={() => toggle(sig)}
-          className={`${btnCls} ${signals.includes(sig) ? active : idle}`}
-        >
-          {cnSignal(sig)}
-        </button>
-      ))}
+      {builtinOptions.map(option => {
+        const disabled = disabledSignals.includes(option.key) && !signals.includes(option.key)
+        return (
+          <button
+            key={option.key}
+            type="button"
+            disabled={disabled}
+            title={disabled ? disabledSignalHint : undefined}
+            onClick={() => toggle(option.key)}
+            className={`${btnCls} ${signals.includes(option.key) ? active : idle} disabled:cursor-not-allowed disabled:opacity-40`}
+          >
+            {option.label}
+          </button>
+        )
+      })}
       {customOptions.list.map(cs => {
         const id = `csg_${cs.id}`
         return (

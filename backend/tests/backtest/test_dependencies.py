@@ -44,6 +44,27 @@ def test_resolver_merges_signals_scoring_filter_and_execution_columns():
     assert plan.full_feature_fallback is False
 
 
+def test_resolver_expands_virtual_scoring_dependencies():
+    strategy = _strategy(meta={
+        "id": "deps",
+        "scoring": {"ma20_bias": 0.6, "vol_ratio_5d": 0.4},
+        "order_by": "score",
+    })
+
+    plan = StrategyDependencyResolver().resolve(
+        strategy,
+        params={"rsi_max": 30},
+        basic_filter={"enabled": False},
+        entry_signals=[],
+        exit_signals=[],
+    )
+
+    assert {"ma20", "vol_ratio_5d"} <= set(plan.indicator_columns)
+    assert "close" in plan.base_columns
+    assert "ma20_bias" not in plan.base_columns
+    assert "ma20_bias" not in plan.indicator_columns
+
+
 def test_history_strategy_without_required_features_falls_back_to_full(caplog):
     strategy = _strategy(
         filter_fn=None,

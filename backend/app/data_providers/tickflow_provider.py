@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
 
 import polars as pl
@@ -97,8 +98,9 @@ class TickFlowProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: AssetType,  # noqa: ARG002
+        asset_type: AssetType = "stock",  # noqa: ARG002
         freq: str = "1m",  # noqa: ARG002
+        on_chunk_done: Callable[[int, int], None] | None = None,  # noqa: ARG002
     ) -> pl.DataFrame:
         # Existing minute sync remains in app.services.kline_sync for now.
         return pl.DataFrame()

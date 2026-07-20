@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.strategy.ai_generator import GUIDE_PATH, AIStrategyGenerator
-from app.strategy.prompt_builder import build_step1
+from app.strategy.prompt_builder import build_step1, build_step2
 
 
 def test_ai_strategy_generator_uses_compact_guide():
@@ -29,6 +29,16 @@ def test_build_step1_keeps_user_prompt_compact():
     assert "模式 A 框架" not in prompt
     assert "策略ID（必须使用此ID）：ai_test" in prompt
     assert len(prompt) < 1000
+
+
+def test_build_step2_uses_runtime_meta_constraints():
+    prompt = build_step2("META = {}", "调整参数和评分")
+
+    assert "权重总和保持 1.0" in prompt
+    assert "权重总和保持 100" not in prompt
+    assert "filter()`、`filter_history()` 或 `MATRIX_STRATEGY" in prompt
+    assert "没有匹配信号时允许为空" in prompt
+    assert "模块顶层字面量字典" in prompt
 
 
 def test_matrix_backend_prompt_and_imports_are_supported():

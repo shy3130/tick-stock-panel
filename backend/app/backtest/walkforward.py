@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -196,6 +197,15 @@ class WalkForwardService:
         shared_market_data = (
             shared_prepared.market_data if shared_prepared is not None else None
         )
+        shared_date_labels = (
+            tuple(label[:10] for label in shared_market_data.timestamp_labels)
+            if shared_market_data is not None
+            else ()
+        )
+
+        def _shared_window_has_data(window_start: date, window_end: date) -> bool:
+            index = bisect_left(shared_date_labels, window_start.isoformat())
+            return index < len(shared_date_labels) and shared_date_labels[index] <= window_end.isoformat()
 
         # 遥测: 首尾快照 PanelCache, 量化跨折重叠区间重复扫盘的 IO 占比 (是否值得进一步优化)。
         cache_before = self.service.engine.cache_stats()
@@ -212,6 +222,26 @@ class WalkForwardService:
         for f in folds:
             if cancel_event is not None and cancel_event.is_set():
                 break
+
+            base = {
+                "index": f.index,
+                "train_start": str(f.train_start),
+                "train_end": str(f.train_end),
+                "test_start": str(f.test_start),
+                "test_end": str(f.test_end),
+            }
+            missing_window = None
+            if shared_market_data is not None:
+                if not _shared_window_has_data(f.train_start, f.train_end):
+                    missing_window = "训练区间无可用行情数据"
+                elif not _shared_window_has_data(f.test_start, f.test_end):
+                    missing_window = "测试区间无可用行情数据"
+            if missing_window is not None:
+                skipped.append({**base, "reason": missing_window})
+                done += 1
+                if progress_cb is not None:
+                    progress_cb({"type": "walkforward_progress", "done": done, "total": n_total, "fold": f.index})
+                continue
 
             # 训练区间: 网格优化选最优参数
             opt_cfg = OptimizeConfig(
@@ -238,14 +268,6 @@ class WalkForwardService:
             best_params = opt_res.get("best_params")
             is_score = opt_res.get("best_score")
             done += 1
-
-            base = {
-                "index": f.index,
-                "train_start": str(f.train_start),
-                "train_end": str(f.train_end),
-                "test_start": str(f.test_start),
-                "test_end": str(f.test_end),
-            }
 
             # 训练区间没优化出参数 (全组失败/取消) -> 跳过, 不用默认参数硬跑 OOS 伪装成有效折
             if best_params is None:

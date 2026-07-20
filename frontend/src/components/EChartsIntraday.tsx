@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
-import type { MinuteKlineRow } from '@/lib/api'
+import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
 import { useChartTheme, type ChartTheme } from '@/lib/theme'
 
 type YMode = 'adaptive' | 'limit'
@@ -20,7 +20,7 @@ interface Props {
   height?: number
   prevClose?: number
   date?: string
-  symbol?: string
+  priceLimit?: PriceLimitInfo
   onPriceHover?: (price: number | null) => void
   showLimitLines?: boolean
   showAvgLine?: boolean
@@ -79,34 +79,29 @@ function generateFullDayTimes(): string[] {
 
 const FULL_DAY_TIMES = generateFullDayTimes()
 
-/** 根据 symbol 判断涨跌停幅度 (创业板/科创板 ±20%, 北交所 ±30%, 其余 ±10%) */
-function getLimitPct(symbol?: string): number {
-  if (!symbol) return 0.10
-  if (symbol.endsWith('.BJ')) return 0.30                                  // 北交所
-  if (symbol.startsWith('300') || symbol.startsWith('301')) return 0.20  // 创业板
-  if (symbol.startsWith('688') || symbol.startsWith('689')) return 0.20  // 科创板
-  return 0.10
-}
-
 /** 计算实际涨跌停价 (四舍五入到2位小数) 和实际涨跌停幅度 */
-function getLimitPrices(prevClose: number, symbol?: string): {
+function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   limitUp: number      // 涨停价 (四舍五入)
   limitDown: number    // 跌停价 (四舍五入)
   upPct: number        // 实际涨停幅度 (如 9.97)
   downPct: number      // 实际跌停幅度 (如 -9.97)
 } {
-  const pct = getLimitPct(symbol)
+  const pct = priceLimit && Number.isFinite(priceLimit.rate) ? priceLimit.rate : 0.10
   const rawUp = prevClose * (1 + pct)
   const rawDown = prevClose * (1 - pct)
   // A股涨跌停价四舍五入到分 (2位小数)
-  const limitUp = Math.round(rawUp * 100) / 100
-  const limitDown = Math.round(rawDown * 100) / 100
+  const limitUp = isValidPrice(priceLimit?.limit_up)
+    ? priceLimit.limit_up
+    : Math.round(rawUp * 100) / 100
+  const limitDown = isValidPrice(priceLimit?.limit_down)
+    ? priceLimit.limit_down
+    : Math.round(rawDown * 100) / 100
   const upPct = (limitUp - prevClose) / prevClose * 100
   const downPct = (limitDown - prevClose) / prevClose * 100
   return { limitUp, limitDown, upPct, downPct }
 }
 
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, symbol?: string, showLimitLines = true, showAvgLine = true): EChartsOption {
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true): EChartsOption {
   // 将数据映射到全天时间轴上的正确位置
   const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
   const closes = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
@@ -168,7 +163,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     }
 
     if (showLimitLines && yMode === 'limit') {
-      const { limitUp, limitDown } = getLimitPrices(prevClose, symbol)
+      const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
       const limitDiffUp = limitUp - prevClose
       const limitDiffDown = prevClose - limitDown
       const limitDiff = Math.max(limitDiffUp, limitDiffDown)
@@ -194,7 +189,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
     } else {
       // 自适应模式: Y 轴按实际涨跌幅对称, 但不超出实际涨跌停范围
       if (showLimitLines) {
-        const { limitUp, limitDown } = getLimitPrices(prevClose, symbol)
+        const { limitUp, limitDown } = getLimitPrices(prevClose, priceLimit)
         const limitDiff = Math.max(limitUp - prevClose, prevClose - limitDown)
         maxDiff = Math.min(maxDiff, limitDiff)
       }
@@ -404,7 +399,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   }
 }
 
-export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, onPriceHover, showLimitLines = true, showAvgLine = true }: Props) {
+export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimit, onPriceHover, showLimitLines = true, showAvgLine = true }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -493,11 +488,11 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, symbol, o
       }
       fullDayToDataIdx.current = mapping
 
-      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, symbol, showLimitLines, showAvgLine), true)
+      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine), true)
     } else {
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, symbol, showLimitLines, showAvgLine])
+  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine])
 
   useEffect(() => {
     return () => {

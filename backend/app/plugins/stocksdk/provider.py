@@ -10,11 +10,13 @@ Original implementation by @forrany (PR #57), migrated to plugin architecture.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
 import polars as pl
 
+from app.data_providers.base import AssetType
 from app.data_providers.normalizer import normalize_adj_factors, normalize_daily
 from app.plugins.stocksdk import bridge
 from app.tickflow.rate_limits import chunked
@@ -135,13 +137,13 @@ class StockSDKProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: str = "stock",  # noqa: ARG002
-        on_chunk_done=None,
-        freq: str = "5m",
+        asset_type: AssetType = "stock",  # noqa: ARG002
+        freq: str = "1m",
+        on_chunk_done: Callable[[int, int], None] | None = None,
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
-        period = "".join(ch for ch in str(freq) if ch.isdigit()) or "5"
+        period = "".join(ch for ch in str(freq) if ch.isdigit()) or "1"
         logger.info("stock-sdk minute 拉取开始(%d symbols, period=%s)", len(symbols), period)
         frames: list[pl.DataFrame] = []
         chunks = chunked(symbols, _BATCH)

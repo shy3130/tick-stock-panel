@@ -22,7 +22,14 @@ from pathlib import Path
 import polars as pl
 
 from app.config import settings
+from app.market_time import cn_today
 from app.parquet import scan_daily_parquet, scan_enriched_parquet, scan_parquet_compat
+from app.price_limits import (
+    polars_is_risk_warning_name,
+    polars_limit_price,
+    polars_price_limit_pct,
+)
+from app.share_capital import apply_historical_float_shares, load_share_history
 
 logger = logging.getLogger(__name__)
 
@@ -195,23 +202,6 @@ def _math_half_up(expr: pl.Expr, decimals: int = 2) -> pl.Expr:
     """
     factor = 10 ** decimals
     return (expr * factor + 0.5).floor() / factor
-
-
-def _limit_price(prev: pl.Expr, limit_pct: pl.Expr, up: bool) -> pl.Expr:
-    """用「分」为单位的整数算术计算涨跌停价，规避浮点精度问题。
-
-    交易所涨跌停价 = round(prev × (1 ± limit), 2)，标准四舍五入。
-    若直接用浮点 prev × (1 ± limit) 会丢精度：
-      18.90 × 0.95 = 17.955，浮点存储为 17.954999..., 四舍五入后得 17.95（错）。
-    本函数先把 prev 转成整数「分」(round 到分避免输入含厘误差)，
-    再用整数系数 105/95、110/90、120/80、130/70 相乘后四舍五入回元，全程不丢精度。
-    """
-    sign = 1 if up else -1
-    # limit_pct ∈ {0.05, 0.10, 0.20, 0.30} → 系数分子 105/95、110/90、120/80、130/70
-    num = ((1 + sign * limit_pct) * 100).cast(pl.Int64)  # 105, 110, 120, 130 等
-    cents = (prev * 100 + 0.5).floor().cast(pl.Int64)     # 价格转「分」(四舍五入到分)
-    # cents × num / 100, 四舍五入到分(加 50)
-    return (((cents * num + 50) // 100) / 100)
 
 
 def _apply_adj_factor(raw: pl.DataFrame, factors: pl.DataFrame) -> pl.DataFrame:
@@ -647,6 +637,7 @@ def compute_limit_signals(
     df: pl.DataFrame,
     instruments: pl.DataFrame,
     needed: set[str] | None = None,
+    historical_shares: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """计算涨跌停相关信号。
 
@@ -686,17 +677,27 @@ def compute_limit_signals(
             continue
         if c in instruments.columns:
             inst_cols.append(c)
+    if need_price_limits and "as_of" in instruments.columns:
+        inst_cols.append(
+            pl.col("as_of").cast(pl.Date, strict=False).alias("_instrument_as_of")
+        )
     inst_subset = instruments.select(inst_cols).unique(subset=["symbol"])
 
     if need_price_limits and "name" in instruments.columns:
         st_flag = (
             instruments
-            .select("symbol", pl.col("name").str.contains("ST").alias("_is_st"))
+            .select(
+                "symbol",
+                polars_is_risk_warning_name(pl.col("name")).alias("_is_st"),
+            )
             .unique(subset=["symbol"])
         )
         inst_subset = inst_subset.join(st_flag, on="symbol", how="left")
 
     df = df.join(inst_subset, on="symbol", how="left", suffix="_inst")
+
+    if "turnover_rate" in want:
+        df = apply_historical_float_shares(df, historical_shares, today=cn_today())
 
     # 计算换手率(%) = volume(手) * 10000 / float_shares(股)
     if "turnover_rate" in want and "float_shares" in df.columns and "volume" in df.columns:
@@ -726,56 +727,46 @@ def compute_limit_signals(
         .alias("_prev_raw_close")
     )
 
-    # 板块涨跌停比例
-    is_chinext = pl.col("symbol").str.starts_with("300") | pl.col("symbol").str.starts_with("301")
-    is_star = pl.col("symbol").str.starts_with("688") | pl.col("symbol").str.starts_with("689")
-    is_bj = pl.col("symbol").str.ends_with(".BJ")
-
+    is_risk_warning = pl.col("_is_st") if "_is_st" in df.columns else pl.lit(False)
     df = df.with_columns(
-        pl.when(is_chinext).then(0.20)
-        .when(is_star).then(0.20)
-        .when(is_bj).then(0.30)
-        .otherwise(0.10)
-        .alias("_board_pct")
+        polars_price_limit_pct(pl.col("symbol"), pl.col("date"), is_risk_warning)
+        .alias("_limit_pct")
     )
-
-    # ST → 5%, 但仅限主板风险警示股; 创业板/科创板/北交所 ST 保留各自板块限幅
-    # (注册制改革后 创业板 300/301、科创板 688/689 的 ST 仍执行 20%, 北交所 30%)。
-    if "_is_st" in df.columns:
-        df = df.with_columns(
-            pl.when(pl.col("_is_st").fill_null(False) & ~(is_chinext | is_star | is_bj))
-            .then(0.05)
-            .otherwise(pl.col("_board_pct"))
-            .alias("_limit_pct")
-        )
-    else:
-        df = df.with_columns(pl.col("_board_pct").alias("_limit_pct"))
 
     # 理论涨停价 = prev_close × (1 + limit_pct)  整数算术，避免浮点误差
     df = df.with_columns(
-        _limit_price(pl.col("_prev_raw_close"), pl.col("_limit_pct"), up=True)
+        polars_limit_price(pl.col("_prev_raw_close"), pl.col("_limit_pct"), up=True)
         .alias("_theoretical_limit_up")
     )
 
     # 理论跌停价 = prev_close × (1 - limit_pct)
     df = df.with_columns(
-        _limit_price(pl.col("_prev_raw_close"), pl.col("_limit_pct"), up=False)
+        polars_limit_price(pl.col("_prev_raw_close"), pl.col("_limit_pct"), up=False)
         .alias("_theoretical_limit_down")
     )
 
-    # 生效涨跌停价: 最新日优先使用维表权威值; 历史日期继续使用理论价。
-    # instruments 只有最新快照, 不能用于历史日期; >=10000 视为新股无涨跌停限制哨兵值。
+    # 生效涨跌停价: 维表日期与行情日期一致时使用权威值, 否则使用理论价。
+    # 旧版维表没有 as_of, 保持仅在最新行情日使用权威值的兼容行为。
     _SENTINEL = 10000.0
-    is_latest_date = pl.col("date") == pl.col("date").max()
+    if "_instrument_as_of" in df.columns:
+        authoritative_date = (
+            pl.col("_instrument_as_of") == pl.col("date").cast(pl.Date, strict=False)
+        )
+    else:
+        authoritative_date = pl.col("date") == pl.col("date").max()
     if "limit_up" in df.columns:
         effective_limit_up = pl.when(
-            is_latest_date & pl.col("limit_up").is_not_null() & (pl.col("limit_up") < _SENTINEL)
+            authoritative_date
+            & pl.col("limit_up").is_not_null()
+            & (pl.col("limit_up") < _SENTINEL)
         ).then(pl.col("limit_up")).otherwise(pl.col("_theoretical_limit_up"))
     else:
         effective_limit_up = pl.col("_theoretical_limit_up")
     if "limit_down" in df.columns:
         effective_limit_down = pl.when(
-            is_latest_date & pl.col("limit_down").is_not_null() & (pl.col("limit_down") < _SENTINEL)
+            authoritative_date
+            & pl.col("limit_down").is_not_null()
+            & (pl.col("limit_down") < _SENTINEL)
         ).then(pl.col("limit_down")).otherwise(pl.col("_theoretical_limit_down"))
     else:
         effective_limit_down = pl.col("_theoretical_limit_down")
@@ -889,10 +880,10 @@ def compute_limit_signals(
         )
 
     # 清理临时列 + JOIN 引入的 instruments 列 (不存入 enriched)
-    cleanup = ["_prev_raw_close", "_board_pct", "_limit_pct",
+    cleanup = ["_prev_raw_close", "_limit_pct",
                "_theoretical_limit_up", "_theoretical_limit_down",
                "_effective_limit_up", "_effective_limit_down",
-               "_grp_up", "_grp_down"]
+               "_grp_up", "_grp_down", "_instrument_as_of"]
     if "_is_st" in df.columns:
         cleanup.append("_is_st")
     # 清理 join 产生的重复列
@@ -910,7 +901,11 @@ def compute_limit_signals(
     return df
 
 
-def compute_all(df: pl.DataFrame, instruments: pl.DataFrame | None = None) -> pl.DataFrame:
+def compute_all(
+    df: pl.DataFrame,
+    instruments: pl.DataFrame | None = None,
+    historical_shares: pl.DataFrame | None = None,
+) -> pl.DataFrame:
     """从 OHLCV 计算全套指标 + 信号。一站式调用。
 
     输入: symbol, date, open, high, low, close, volume, amount, raw_close
@@ -918,7 +913,7 @@ def compute_all(df: pl.DataFrame, instruments: pl.DataFrame | None = None) -> pl
     df = compute_indicators(df)
     df = compute_signals(df)
     if instruments is not None and not instruments.is_empty():
-        df = compute_limit_signals(df, instruments)
+        df = compute_limit_signals(df, instruments, historical_shares=historical_shares)
 
     # 清理 NaN / Inf
     float_cols = [c for c in df.columns if df[c].dtype.is_float()]
@@ -954,6 +949,7 @@ def compute_enriched(
     raw: pl.DataFrame,
     factors: pl.DataFrame | None = None,
     instruments: pl.DataFrame | None = None,
+    historical_shares: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """对原始日 K 应用前复权 + 全量计算指标 + 信号, 产出完整 enriched (含全部指标列)。
 
@@ -985,7 +981,11 @@ def compute_enriched(
     df = raw.sort(["symbol", "date"])
 
     # 全量计算指标 + 信号
-    df = compute_all(df, instruments=instruments)
+    df = compute_all(
+        df,
+        instruments=instruments,
+        historical_shares=historical_shares,
+    )
 
     return df
 
@@ -1041,6 +1041,7 @@ def run_pipeline(data_dir: Path | None = None,
         instruments = scan_parquet_compat(inst_glob, cast_options=_cast).collect()
     except Exception as e:  # noqa: BLE001
         logger.warning("instruments 读取失败: %s", e)
+    historical_shares = load_share_history(d)
 
     if new_dates_only:
         # ── 向后增量模式 ──
@@ -1083,7 +1084,12 @@ def run_pipeline(data_dir: Path | None = None,
             else:
                 raw_full = raw_new
 
-            enriched_new = compute_enriched(raw_full, factors=factors, instruments=instruments)
+            enriched_new = compute_enriched(
+                raw_full,
+                factors=factors,
+                instruments=instruments,
+                historical_shares=historical_shares,
+            )
 
             # 只保留新日期的行
             new_date_set = set()
@@ -1119,7 +1125,13 @@ def run_pipeline(data_dir: Path | None = None,
             if not raw_sym.is_empty():
                 factors_sym = factors.filter(pl.col("symbol").is_in(list(sym_set))) if not factors.is_empty() else factors
                 inst_sym = instruments.filter(pl.col("symbol").is_in(list(sym_set))) if not instruments.is_empty() else instruments
-                enriched_sym = compute_enriched(raw_sym, factors=factors_sym, instruments=inst_sym)
+                shares_sym = historical_shares.filter(pl.col("symbol").is_in(list(sym_set))) if not historical_shares.is_empty() else historical_shares
+                enriched_sym = compute_enriched(
+                    raw_sym,
+                    factors=factors_sym,
+                    instruments=inst_sym,
+                    historical_shares=shares_sym,
+                )
                 for date_df in enriched_sym.partition_by("date"):
                     dt = date_df["date"][0]
                     ds = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
@@ -1205,9 +1217,18 @@ def run_pipeline(data_dir: Path | None = None,
             inst_use.filter(pl.col("symbol").is_in(batch_syms))
             if not inst_use.is_empty() else inst_use
         )
+        batch_shares = (
+            historical_shares.filter(pl.col("symbol").is_in(batch_syms))
+            if not historical_shares.is_empty() else historical_shares
+        )
 
         # 计算
-        enriched = compute_enriched(raw, factors=batch_factors, instruments=batch_inst)
+        enriched = compute_enriched(
+            raw,
+            factors=batch_factors,
+            instruments=batch_inst,
+            historical_shares=batch_shares,
+        )
 
         if not enriched.is_empty():
             if symbols:
@@ -1233,7 +1254,7 @@ def run_pipeline(data_dir: Path | None = None,
                     date_buffers[ds].append(_select_storage_cols(date_df).sort(["symbol"]))
                     written += date_df.height
 
-        del raw, enriched, batch_factors, batch_inst
+        del raw, enriched, batch_factors, batch_inst, batch_shares
         gc.collect()
 
         logger.info("symbol 批次 %d/%d (%s ~ %s), 已处理 %d 行",
@@ -1650,11 +1671,18 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
     for c in ["float_shares", "limit_up", "limit_down"]:
         if c in instruments.columns:
             inst_cols.append(c)
+    if "as_of" in instruments.columns:
+        inst_cols.append(
+            pl.col("as_of").cast(pl.Date, strict=False).alias("_instrument_as_of")
+        )
     inst_subset = instruments.select(inst_cols).unique(subset=["symbol"])
     if "name" in instruments.columns:
         st_flag = (
             instruments
-            .select("symbol", pl.col("name").str.contains("ST").alias("_is_st"))
+            .select(
+                "symbol",
+                polars_is_risk_warning_name(pl.col("name")).alias("_is_st"),
+            )
             .unique(subset=["symbol"])
         )
         inst_subset = inst_subset.join(st_flag, on="symbol", how="left")
@@ -1682,38 +1710,39 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
         prev_raw = pl.col("close_right")
     else:
         prev_raw = pl.col("raw_close")
-    is_chinext = pl.col("symbol").str.starts_with("300") | pl.col("symbol").str.starts_with("301")
-    is_star = pl.col("symbol").str.starts_with("688") | pl.col("symbol").str.starts_with("689")
-    is_bj = pl.col("symbol").str.ends_with(".BJ")
-    limit_pct = (
-        pl.when(is_chinext).then(0.20)
-        .when(is_star).then(0.20)
-        .when(is_bj).then(0.30)
-        .otherwise(0.10)
-    )
-    if "_is_st" in df.columns:
-        # ST 5% 仅主板生效; 创业板/科创板/北交所 ST 保留板块限幅 (同 compute_limit_signals)
-        limit_pct = pl.when(
-            pl.col("_is_st").fill_null(False) & ~(is_chinext | is_star | is_bj)
-        ).then(0.05).otherwise(limit_pct)
-    limit_pct = limit_pct.alias("_limit_pct")
+    is_risk_warning = pl.col("_is_st") if "_is_st" in df.columns else pl.lit(False)
+    trade_date = pl.col("date") if "date" in df.columns else pl.lit(cn_today())
+    limit_pct = polars_price_limit_pct(
+        pl.col("symbol"),
+        trade_date,
+        is_risk_warning,
+    ).alias("_limit_pct")
 
-    limit_up_price = _limit_price(prev_raw, limit_pct, up=True)
-    limit_down_price = _limit_price(prev_raw, limit_pct, up=False)
+    limit_up_price = polars_limit_price(prev_raw, limit_pct, up=True)
+    limit_down_price = polars_limit_price(prev_raw, limit_pct, up=False)
 
-    # 生效涨跌停价: 优先用维表权威值 (instruments.limit_up/down, 交易所级别精确价),
-    # 维表缺失 (新股上市前 5 日: limit_up 为 null 或哨兵 100000) 回退自算理论价。
+    # 生效涨跌停价: 维表日期与行情日期一致时优先使用交易所权威值;
+    # 维表过期、价格缺失或新股哨兵值均回退自算理论价。旧版无 as_of 维表保持兼容。
     # 哨兵阈值 10000 用于识别 "新股无涨跌停限制" 的占位值 (实际涨停价不可能上万)。
     _SENTINEL = 10000.0
+    authoritative_date = (
+        pl.col("_instrument_as_of") == trade_date.cast(pl.Date, strict=False)
+        if "_instrument_as_of" in df.columns
+        else pl.lit(True)
+    )
     if "limit_up" in df.columns:
         effective_limit_up = pl.when(
-            pl.col("limit_up").is_not_null() & (pl.col("limit_up") < _SENTINEL)
+            authoritative_date
+            & pl.col("limit_up").is_not_null()
+            & (pl.col("limit_up") < _SENTINEL)
         ).then(pl.col("limit_up")).otherwise(limit_up_price)
     else:
         effective_limit_up = limit_up_price
     if "limit_down" in df.columns:
         effective_limit_down = pl.when(
-            pl.col("limit_down").is_not_null() & (pl.col("limit_down") < _SENTINEL)
+            authoritative_date
+            & pl.col("limit_down").is_not_null()
+            & (pl.col("limit_down") < _SENTINEL)
         ).then(pl.col("limit_down")).otherwise(limit_down_price)
     else:
         effective_limit_down = limit_down_price
@@ -1769,7 +1798,7 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
     ])
 
     # 清理
-    cleanup = ["_limit_pct", "_is_st", "limit_up", "limit_down"]
+    cleanup = ["_limit_pct", "_is_st", "limit_up", "limit_down", "_instrument_as_of"]
     for c in df.columns:
         if c.endswith("_inst"):
             cleanup.append(c)

@@ -371,6 +371,8 @@ class DatasetConfigIn(BaseModel):
     symbols_param: str = "symbols"
     start_param: str = "start_time"
     end_param: str = "end_time"
+    asset_type_param: str | None = None
+    freq_param: str | None = None
 
 
 class AuthConfigIn(BaseModel):
@@ -1429,4 +1431,3 @@ def update_review_push(req: ReviewPushIn) -> dict:
     from app.services import preferences
     saved = preferences.set_review_push_channels(req.channels)
     return {"review_push_channels": saved}
-

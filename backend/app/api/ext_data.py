@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import shutil
 import tempfile
 from datetime import date, datetime
@@ -125,6 +126,25 @@ def _clean_col_names(df: pl.DataFrame) -> pl.DataFrame:
             seen[new] = 0
             final[old] = new
     return df.rename(final)
+
+
+_DIMENSION_SEPARATOR_CLASS = r"、,，;；|/\s-"
+
+
+def _filter_dimension_member_rows(df: pl.DataFrame, field: str, value: str) -> pl.DataFrame:
+    """按分隔后的完整标签匹配成员，避免“人工智能”误命中“人工智能体”。"""
+    if field not in df.columns:
+        raise HTTPException(400, f"字段 '{field}' 不存在")
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(400, "标签值不能为空")
+    pattern = rf"(^|[{_DIMENSION_SEPARATOR_CLASS}]){re.escape(normalized)}($|[{_DIMENSION_SEPARATOR_CLASS}])"
+    return df.filter(
+        pl.col(field)
+        .cast(pl.String, strict=False)
+        .fill_null("")
+        .str.contains(pattern)
+    )
 
 
 def _ext_data_dir(config: ExtConfig, data_dir: Path) -> Path:
@@ -403,6 +423,62 @@ def list_rows(
         "total": total,
         "limit": limit,
         "fields": [f.to_dict() for f in config.fields],
+        "rows": rows,
+    }
+
+
+@router.get("/{config_id}/dimension-members")
+def dimension_members(
+    request: Request,
+    config_id: str,
+    field: str = Query(..., min_length=1),
+    value: str = Query(..., min_length=1),
+    snapshot_date: str | None = Query(None, alias="date"),
+    limit: int = Query(1000, ge=1, le=10000),
+):
+    """按扩展字段的完整标签值返回成分股，不绑定具体概念/行业数据源。"""
+    config = _store(request).get(config_id)
+    if not config:
+        raise HTTPException(404, f"配置 '{config_id}' 不存在")
+
+    data_dir = _data_dir(request)
+    df, active_date = _read_ext_dataframe(config, data_dir, snapshot_date)
+    df = _with_instrument_name(df, data_dir)
+    matched = _filter_dimension_member_rows(df, field, value)
+    total = len(matched)
+
+    columns = ["symbol", "code", "name", "股票代码", "股票简称", field]
+    for mapping in (config.symbol_map, config.code_map):
+        if isinstance(mapping, dict) and mapping.get("type") == "mapped" and mapping.get("col"):
+            columns.append(str(mapping["col"]))
+    selected = [column for column in dict.fromkeys(columns) if column in matched.columns]
+    if selected:
+        matched = matched.select(selected)
+    if total > limit:
+        matched = matched.head(limit)
+
+    symbol_columns = ["symbol", "code", "股票代码", "代码"]
+    name_columns = ["name", "股票简称", "名称"]
+    for mapping in (config.symbol_map, config.code_map):
+        if isinstance(mapping, dict) and mapping.get("type") == "mapped" and mapping.get("col"):
+            symbol_columns.append(str(mapping["col"]))
+
+    rows = []
+    for raw in matched.to_dicts():
+        row = {key: _safe_json_value(item) for key, item in raw.items()}
+        if not row.get("symbol"):
+            row["symbol"] = next((str(row[column]) for column in symbol_columns if row.get(column)), "")
+        if not row.get("name"):
+            row["name"] = next((str(row[column]) for column in name_columns if row.get(column)), "")
+        rows.append(row)
+    return {
+        "id": config.id,
+        "label": config.label,
+        "date": active_date,
+        "field": field,
+        "value": value.strip(),
+        "total": total,
+        "limit": limit,
         "rows": rows,
     }
 

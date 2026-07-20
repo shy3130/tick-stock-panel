@@ -19,6 +19,8 @@ from typing import Any, Callable
 import numpy as np
 import polars as pl
 
+from app.strategy.scoring import scoring_dependencies, scoring_value_expr
+
 logger = logging.getLogger(__name__)
 
 # 引擎级默认基础过滤 — 策略未定义 BASIC_FILTER 时兜底
@@ -792,7 +794,7 @@ class StrategyEngine:
                 fields.add(field_name)
         scoring = dict(strategy.meta.get("scoring", {}) or {})
         scoring.update((overrides or {}).get("scoring") or {})
-        fields.update(scoring)
+        fields.update(scoring_dependencies(scoring))
         order_by = strategy.meta.get("order_by")
         if order_by and order_by != "score":
             fields.add(str(order_by))
@@ -1003,19 +1005,23 @@ class StrategyEngine:
         """通用评分: min-max 归一化 → 加权求和 → 0~100 分"""
         if not weights:
             return df
-        total_weight = sum(weights.values())
+
+        executable = [
+            (value, weight)
+            for col, weight in weights.items()
+            if weight and (value := scoring_value_expr(df.columns, str(col))) is not None
+        ]
+        total_weight = sum(weight for _, weight in executable)
         if total_weight <= 0:
             return df
 
         score_parts: list[pl.Expr] = []
-        for col, weight in weights.items():
-            if col not in df.columns:
-                continue
+        for value, weight in executable:
             w = weight / total_weight
-            col_min = pl.col(col).min()
-            col_range = pl.col(col).max() - col_min
+            col_min = value.min()
+            col_range = value.max() - col_min
             normalized = pl.when(col_range > 0).then(
-                (pl.col(col) - col_min) / col_range
+                (value - col_min) / col_range
             ).otherwise(pl.lit(0.5))
             score_parts.append(normalized * w)
 

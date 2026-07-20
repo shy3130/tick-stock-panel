@@ -7,11 +7,12 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from app.services import pipeline_jobs
+from app.jobs import daily_pipeline
+from app.services import pipeline_jobs, quote_service
 from app.services.pipeline_jobs import JobStore
+from app.services.quote_service import QuoteService
 from app.strategy import monitor_rules
 from app.strategy.monitor import MonitorRuleEngine
-
 
 # ── JobStore 单飞 ────────────────────────────────────────────────────────
 
@@ -97,3 +98,55 @@ def test_apply_scope_sector_fails_closed():
         df, {"scope": "symbols", "symbols": ["600000.SH"]}
     )
     assert picked.height == 1
+
+
+def test_ladder_webhook_uses_chinese_title_without_brand(monkeypatch):
+    calls = []
+
+    class CaptureExecutor:
+        def submit(self, fn, *args):
+            calls.append((fn, args))
+
+    monkeypatch.setattr(quote_service, "_WEBHOOK_EXECUTOR", CaptureExecutor())
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "https://open.feishu.cn/open-apis/bot/v2/hook/test")
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_secret", lambda: "secret")
+    monkeypatch.setattr("app.services.preferences.get_wecom_webhook_url", lambda: "wecom-key")
+
+    engine = type("Engine", (), {
+        "rules": {"r_ladder": {"webhook_channels": ["feishu", "wecom"]}},
+    })()
+    QuoteService._maybe_send_webhook(
+        object.__new__(QuoteService),
+        [{
+            "rule_id": "r_ladder",
+            "source": "ladder",
+            "symbol": "600000.SH",
+            "name": "浦发银行",
+            "message": "炸板预警",
+        }],
+        engine,
+    )
+
+    assert [args[1] for _, args in calls] == ["连板梯队", "连板梯队"]
+    assert all("TickFlow" not in args[1] for _, args in calls)
+
+
+def test_review_webhooks_use_title_without_brand(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.services.preferences.get_review_push_channels", lambda: ["feishu", "wecom"])
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "feishu-url")
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_secret", lambda: "secret")
+    monkeypatch.setattr("app.services.preferences.get_wecom_webhook_url", lambda: "wecom-url")
+    monkeypatch.setattr(
+        "app.services.webhook_adapter.send_feishu_card",
+        lambda *args: calls.append(("feishu", args)) or True,
+    )
+    monkeypatch.setattr(
+        "app.services.webhook_adapter.send_wecom_markdown",
+        lambda *args: calls.append(("wecom", args)) or True,
+    )
+
+    daily_pipeline._maybe_push_review("复盘正文", {"as_of": "2026-07-18"})
+
+    assert [args[1] for _, args in calls] == ["每日复盘", "每日复盘"]
+    assert all("TickFlow" not in args[1] for _, args in calls)

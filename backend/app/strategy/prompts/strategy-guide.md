@@ -220,6 +220,12 @@ REQUIRED_FEATURES = {"ma20", "momentum_20d", "vol_ratio_5d"}
 | annual_vol_20d | 20日年化波动率 |
 | high_60d, low_60d | 60日最高/最低价 |
 
+### 受控虚拟评分字段
+
+| 列名 | 说明 |
+|------|------|
+| ma20_bias | `close / ma20 - 1`，仅在内存中计算，不写入数据表 |
+
 ### 涨跌停
 
 | 列名 | 说明 |
@@ -281,7 +287,7 @@ REQUIRED_FEATURES = {"ma20", "momentum_20d", "vol_ratio_5d"}
 1. `filter()` 必须返回 `pl.Expr` (用 `&` `|` 组合布尔表达式)；`filter_history()` 返回筛选后的 `DataFrame`
 2. 信号列使用 `.fill_null(False)` 处理空值
 3. 用户可能调节的数值阈值通过 `params` 暴露；公式常数、固定窗口边界、一次性内部变量不必强行参数化
-4. `scoring` 权重总和必须为 1.0
+4. `scoring` 只能使用上述真实数值字段或受控虚拟字段 `ma20_bias`，权重总和必须为 1.0；不要使用条件名称或信号列作为评分字段
 5. 遵循 A 股 T+1 规则 (当日买入次日才能卖出)
 6. Polars 策略允许 `import polars as pl` 和 `from datetime import date/datetime`；矩阵策略只允许 NumPy 和 `app.backtest.matrix` 协议/算子
 7. 禁止使用 `open()`, `exec()`, `eval()`, `os`, `sys`, `subprocess`

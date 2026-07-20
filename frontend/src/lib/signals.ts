@@ -159,11 +159,20 @@ export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
   },
 ]
 
+export const MONITOR_INTRADAY_SIGNAL_LABELS: Record<string, string> = {
+  signal_intraday_avg_cross_up: '分时价格上穿均价',
+  signal_intraday_avg_cross_down: '分时价格下穿均价',
+  signal_intraday_zero_cross_up: '分时价格上穿0轴',
+  signal_intraday_zero_cross_down: '分时价格下穿0轴',
+}
+
+export const MONITOR_INTRADAY_SIGNAL_OPTIONS = Object.keys(MONITOR_INTRADAY_SIGNAL_LABELS)
+
 /** 内置原子信号 → 中文标签 */
 export const SIGNAL_LABELS: Record<string, string> = BUILTIN_SIGNAL_DEFINITIONS.reduce<Record<string, string>>((acc, sig) => {
   acc[sig.id] = sig.name
   return acc
-}, {})
+}, { ...MONITOR_INTRADAY_SIGNAL_LABELS })
 
 /** 内置信号 ID 列表 */
 export const SIGNAL_OPTIONS = BUILTIN_SIGNAL_DEFINITIONS.map(sig => sig.id)

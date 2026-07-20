@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Tags } from 'lucide-react'
+import { AlertTriangle, RadioTower, Plus, Trash2, Settings2, Zap, Bell, ListChecks, BellRing, TrendingUp, TrendingDown, Flame, Tags } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { Skeleton } from '@/components/data/Skeleton'
@@ -15,6 +15,7 @@ import { boardTag } from '@/components/stock-table/primitives'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { usePreferences } from '@/lib/useSharedQueries'
 
 const TYPE_LABEL: Record<string, string> = {
@@ -74,9 +75,10 @@ function getExtTags(ev: Record<string, unknown>, item: MonitorExtFieldItem | nul
 }
 
 /** 个股通知的 ext 标签行 (行业/概念), 无数据返回 null */
-function AlertExtTags({ ev, fields }: {
+function AlertExtTags({ ev, fields, onTagClick }: {
   ev: Record<string, unknown>
   fields: { concept: MonitorExtFieldItem | null; industry: MonitorExtFieldItem | null }
+  onTagClick: (kind: DimensionKind, value: string, sourceField?: string) => void
 }) {
   const conceptTags = getExtTags(ev, fields.concept)
   const industryTags = getExtTags(ev, fields.industry)
@@ -84,10 +86,22 @@ function AlertExtTags({ ev, fields }: {
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1 pl-0.5">
       {industryTags.map((t, i) => (
-        <span key={`i${i}`} className="rounded bg-sky-500/10 px-1 py-px text-[9px] text-sky-400 leading-tight">{t}</span>
+        <button
+          key={`i${i}`}
+          onClick={event => { event.stopPropagation(); onTagClick('industry', t, fields.industry?.field) }}
+          className="rounded bg-sky-500/10 px-1 py-px text-[9px] leading-tight text-sky-700 hover:brightness-95 dark:text-sky-400"
+        >
+          {t}
+        </button>
       ))}
       {conceptTags.map((t, i) => (
-        <span key={`c${i}`} className="rounded bg-orange-500/10 px-1 py-px text-[9px] text-orange-400 leading-tight">{t}</span>
+        <button
+          key={`c${i}`}
+          onClick={event => { event.stopPropagation(); onTagClick('concept', t, fields.concept?.field) }}
+          className="rounded bg-orange-500/10 px-1 py-px text-[9px] leading-tight text-orange-700 hover:brightness-95 dark:text-orange-400"
+        >
+          {t}
+        </button>
       ))}
     </div>
   )
@@ -282,6 +296,8 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
   const [confirmTs, setConfirmTs] = useState<number | null>(null)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [previewEv, setPreviewEv] = useState<AlertEvent | null>(null)
+  const [memberPreview, setMemberPreview] = useState<{ symbol: string; name?: string } | null>(null)
+  const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
 
   const clearMut = useMutation({
     mutationFn: api.alertsClear,
@@ -480,7 +496,13 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                       )}
                     </>
                   )}
-                  <AlertExtTags ev={ev} fields={monitorExtFields} />
+                  <AlertExtTags
+                    ev={ev}
+                    fields={monitorExtFields}
+                    onTagClick={(kind, value, sourceField) => {
+                      if (sourceField) setDimensionTarget({ kind, value, sourceField })
+                    }}
+                  />
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <span className="text-[10px] text-muted/60 font-mono">
@@ -524,8 +546,8 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
       />
 
       <StockPreviewDialog
-        symbol={previewEv?.symbol ?? null}
-        name={previewEv?.name ?? undefined}
+        symbol={memberPreview?.symbol ?? previewEv?.symbol ?? null}
+        name={memberPreview?.name ?? previewEv?.name ?? undefined}
         triggerInfo={previewEv ? {
           price: previewEv.price ?? null,
           changePct: previewEv.change_pct ?? null,
@@ -533,7 +555,16 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
           signals: previewEv.signals,
           message: previewEv.message,
         } : null}
-        onClose={() => setPreviewEv(null)}
+        onClose={() => { setPreviewEv(null); setMemberPreview(null) }}
+      />
+
+      <DimensionMembersDialog
+        target={dimensionTarget}
+        onClose={() => setDimensionTarget(null)}
+        onStockClick={(symbol, name) => {
+          setDimensionTarget(null)
+          setMemberPreview({ symbol, name })
+        }}
       />
     </div>
   )
@@ -572,7 +603,8 @@ function RulesList({ rulesQuery, onEdit }: {
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.monitorRules }),
   })
   const toggleEnabled = (rule: MonitorRule) => {
-    api.monitorRuleSave({ ...rule, enabled: !rule.enabled }).then(() =>
+    const { runtime_warning: _runtimeWarning, ...persistedRule } = rule
+    api.monitorRuleSave({ ...persistedRule, enabled: !rule.enabled }).then(() =>
       qc.invalidateQueries({ queryKey: QK.monitorRules }),
     )
   }
@@ -685,6 +717,13 @@ function RulesList({ rulesQuery, onEdit }: {
                 </div>
               </div>
 
+              {r.runtime_warning && (
+                <div className="mt-1 flex items-center gap-1 text-[9px] text-warning">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  <span className="truncate" title={r.runtime_warning}>{r.runtime_warning}</span>
+                </div>
+              )}
+
               {/* 第二行: 策略类型显示选股池变更监控 */}
               {r.type === 'strategy' && r.strategy_id ? (
                 <div className="mt-0.5 flex items-center gap-2 pl-0.5">
@@ -739,7 +778,7 @@ function RuleEditorDialog({ open, rule, onClose }: { open: boolean; rule: Monito
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
             transition={{ duration: 0.15 }}
-            className="mt-12 w-full max-w-2xl"
+            className="mt-4 w-full max-w-3xl"
             onClick={e => e.stopPropagation()}
           >
             <RuleEditor

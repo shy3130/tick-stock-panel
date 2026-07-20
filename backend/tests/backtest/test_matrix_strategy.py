@@ -66,6 +66,19 @@ def test_common_matrix_features_match_polars_indicator_pipeline():
         actual = matrix_feature(market, name)[:, 0]
         np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5, equal_nan=True)
 
+    expected_bias = (
+        enriched.sort(["date", "symbol"])["close"].to_numpy()
+        / enriched.sort(["date", "symbol"])["ma20"].to_numpy()
+        - 1.0
+    )
+    np.testing.assert_allclose(
+        matrix_feature(market, "ma20_bias")[:, 0],
+        expected_bias,
+        rtol=2e-5,
+        atol=2e-5,
+        equal_nan=True,
+    )
+
 
 def _panel_with_missing_asset_bar() -> pl.DataFrame:
     rows = []
@@ -584,7 +597,7 @@ def test_matrix_cache_prunes_by_bytes_and_leaves_no_staging_directory(tmp_path):
     del first
     gc.collect()
     assert second.close[0, 0] == pytest.approx(11.0)
-    assert len(list(cache_root.glob("v3-*"))) == 1
+    assert len(list(cache_root.glob("v4-*"))) == 1
     assert list(cache_root.glob(".*.tmp")) == []
     assert len(list(cache_root.glob(".axes-v1-*.json"))) == 1
 
@@ -637,7 +650,7 @@ def test_managed_source_generation_skips_file_walk_and_invalidates_explicitly(tm
     assert changed.cache_path != first.cache_path
     del first, repeated
     gc.collect()
-    assert len(list(cache_root.glob("v3-*"))) == 1
+    assert len(list(cache_root.glob("v4-*"))) == 1
 
 
 def test_registered_builtin_matrix_strategies_share_one_cache_profile():

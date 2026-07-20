@@ -16,6 +16,11 @@ import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
 import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
 import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
 import { StockDataTable, type SortState } from '@/components/stock-table/StockDataTable'
+import {
+  DimensionMembersDialog,
+  dimensionKindForSourceField,
+  type DimensionMembersTarget,
+} from '@/components/DimensionMembersDialog'
 
 interface ScreenerTableProps {
   rows: any[]
@@ -55,6 +60,7 @@ function renderTagList(
   expanded: boolean,
   onToggle: () => void,
   tagClassName: string,
+  onTagClick?: (tag: string) => void,
 ): ReactNode {
   if (tags.length === 0) return <span className="text-muted">—</span>
 
@@ -71,7 +77,16 @@ function renderTagList(
 
   return (
     <div className={isVertical ? 'flex flex-col items-start gap-0.5' : 'flex flex-wrap gap-0.5'}>
-      {visibleTags.map((tag, i) => (
+      {visibleTags.map((tag, i) => onTagClick ? (
+        <button
+          key={i}
+          type="button"
+          onClick={event => { event.stopPropagation(); onTagClick(tag) }}
+          className={`${tagClassName} hover:brightness-95`}
+        >
+          {tag}
+        </button>
+      ) : (
         <span key={i} className={tagClassName}>{tag}</span>
       ))}
       {!showAll && hiddenCount > 0 && (
@@ -102,6 +117,7 @@ function renderExtValue(
   col: ColumnConfig,
   expanded: boolean,
   onToggle: () => void,
+  onTagClick?: (tag: string) => void,
 ): ReactNode {
   if (val == null || Number.isNaN(val)) return <span className="text-muted">—</span>
   if (typeof val === 'number') {
@@ -121,7 +137,7 @@ function renderExtValue(
     ? str.split(separator).map(s => s.trim()).filter(Boolean)
     : str.split(/[、,，;；\-]/).map(s => s.trim()).filter(Boolean)
 
-  return renderTagList(tags, col, expanded, onToggle, EXT_TAG_CLS)
+  return renderTagList(tags, col, expanded, onToggle, EXT_TAG_CLS, onTagClick)
 }
 
 export function ScreenerTable({
@@ -133,6 +149,7 @@ export function ScreenerTable({
   sort, onSortToggle,
 }: ScreenerTableProps) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
+  const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
 
   // 日k列渲染尺寸（按眼睛开关取开启/收起尺寸）
   const candleCol = columns.find(c => c.source.type === 'builtin' && c.source.key === 'candle' && c.visible)
@@ -164,6 +181,8 @@ export function ScreenerTable({
       const val = r[`${configId}__${fieldName}`]
       const cellKey = `${r.symbol}::${col.id}`
       const expanded = expandedCells.has(cellKey)
+      const sourceField = `${configId}.${fieldName}`
+      const dimensionKind = dimensionKindForSourceField(sourceField)
       const tdClass = val == null || Number.isNaN(val)
         ? 'px-3 py-2 text-center text-muted'
         : typeof val === 'number'
@@ -173,7 +192,13 @@ export function ScreenerTable({
       if (col.extDisplay?.maxWidth) style.maxWidth = col.extDisplay.maxWidth
       return (
         <td key={col.id} className={tdClass} style={style}>
-          {renderExtValue(val, col, expanded, () => toggleExpand(cellKey))}
+          {renderExtValue(
+            val,
+            col,
+            expanded,
+            () => toggleExpand(cellKey),
+            dimensionKind ? value => setDimensionTarget({ kind: dimensionKind, value, sourceField }) : undefined,
+          )}
         </td>
       )
     }
@@ -320,20 +345,21 @@ export function ScreenerTable({
   }
 
   return (
-    <StockDataTable
-      columns={columns}
-      rows={rows}
-      renderCell={renderCell}
-      sort={sort}
-      onSortToggle={onSortToggle}
-      minWidth={Math.max(900, columns.filter(c => c.visible).length * 110)}
-      rowKey={(r: any) => `${r.symbol}${r._expired ? '-expired' : ''}`}
-      rowClassName={(r: any) => r._expired
-        ? 'border-border/50 opacity-40'
-        : 'border-border hover:bg-elevated/50'
-      }
-      // 日k / 分时列表头：标签 + 显示/隐藏的眼睛按钮（与自选页一致）
-      renderHeaderContent={(col) => {
+    <>
+      <StockDataTable
+        columns={columns}
+        rows={rows}
+        renderCell={renderCell}
+        sort={sort}
+        onSortToggle={onSortToggle}
+        minWidth={Math.max(900, columns.filter(c => c.visible).length * 110)}
+        rowKey={(r: any) => `${r.symbol}${r._expired ? '-expired' : ''}`}
+        rowClassName={(r: any) => r._expired
+          ? 'border-border/50 opacity-40'
+          : 'border-border hover:bg-elevated/50'
+        }
+        // 日k / 分时列表头：标签 + 显示/隐藏的眼睛按钮（与自选页一致）
+        renderHeaderContent={(col) => {
         if (col.source.type !== 'builtin') return undefined
         const key = col.source.key
         // 日k 蜡烛图开关
@@ -396,7 +422,16 @@ export function ScreenerTable({
           )
         }
         return undefined
-      }}
-    />
+        }}
+      />
+      <DimensionMembersDialog
+        target={dimensionTarget}
+        onClose={() => setDimensionTarget(null)}
+        onStockClick={(symbol, name) => {
+          setDimensionTarget(null)
+          onPreview(symbol, name ?? '')
+        }}
+      />
+    </>
   )
 }

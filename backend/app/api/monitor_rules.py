@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.strategy import monitor_rules
+from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
 
 router = APIRouter(prefix="/api/monitor-rules", tags=["monitor-rules"])
 
@@ -63,6 +64,7 @@ class RuleModel(BaseModel):
 def get_options(request: Request):
     """返回可选字段、信号列、运算符、枚举,供前端表单使用。"""
     from app.indicators.pipeline import ENRICHED_COLUMNS
+    from app.services.kline_sync import intraday_monitor_support
     from app.strategy.custom_signals import ALLOWED_FIELDS, load_all as load_csg
 
     # 阈值字段 (带中文标签)
@@ -76,6 +78,10 @@ def get_options(request: Request):
         for k, v in ENRICHED_COLUMNS.items()
         if k.startswith("signal_")
     ]
+    builtin_signals.extend(
+        {"key": key, "label": label}
+        for key, label in INTRADAY_SIGNAL_LABELS.items()
+    )
     # 自定义信号列 (csg_)
     custom_sigs = []
     try:
@@ -118,6 +124,9 @@ def get_options(request: Request):
             {"key": "exit", "label": "出场"},
             {"key": "both", "label": "出入都报"},
         ],
+        "intraday_signal_support": intraday_monitor_support(
+            getattr(request.app.state, "capabilities", None),
+        ),
     }
 
 
@@ -125,6 +134,29 @@ def get_options(request: Request):
 @router.get("")
 def list_rules(request: Request):
     rules = monitor_rules.load_all(_data_dir(request))
+    from app.services.kline_sync import intraday_monitor_support
+
+    support = intraday_monitor_support(getattr(request.app.state, "capabilities", None))
+    intraday_rules = [
+        rule for rule in rules
+        if rule.get("enabled", True) and uses_intraday_signals(rule)
+    ]
+    pooled_symbols = {
+        str(symbol)
+        for rule in intraday_rules
+        for symbol in rule.get("symbols", [])
+        if symbol
+    }
+    runtime_warning = ""
+    if intraday_rules and not support["available"]:
+        runtime_warning = str(support["reason"])
+    elif len(pooled_symbols) > int(support["max_symbols"]):
+        runtime_warning = (
+            f"分时监听标的池已超限: {len(pooled_symbols)}/{support['max_symbols']}"
+        )
+    if runtime_warning:
+        for rule in intraday_rules:
+            rule["runtime_warning"] = runtime_warning
     # 按 created_at 倒序
     rules.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     return {"rules": rules}
@@ -170,6 +202,26 @@ def save_rule(req: RuleModel, request: Request):
         monitor_rules.validate(rule)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    if rule.get("enabled", True) and uses_intraday_signals(rule):
+        from app.services.kline_sync import intraday_monitor_support
+
+        support = intraday_monitor_support(getattr(request.app.state, "capabilities", None))
+        if not support["available"]:
+            raise HTTPException(status_code=403, detail=str(support["reason"]))
+        symbols = set(str(symbol) for symbol in rule.get("symbols", []) if symbol)
+        for saved in monitor_rules.load_all(_data_dir(request)):
+            if (
+                saved.get("id") != rule.get("id")
+                and saved.get("enabled", True)
+                and uses_intraday_signals(saved)
+            ):
+                symbols.update(str(symbol) for symbol in saved.get("symbols", []) if symbol)
+        max_symbols = int(support["max_symbols"])
+        if len(symbols) > max_symbols:
+            raise HTTPException(
+                status_code=400,
+                detail=f"当前分时数据能力最多监听 {max_symbols} 只标的,当前规则合计 {len(symbols)} 只",
+            )
     monitor_rules.save_one(_data_dir(request), rule)
     _sync_engine(request)
     return {"ok": True, "rule": rule}

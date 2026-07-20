@@ -32,6 +32,7 @@ from app.backtest.matrix import (
     slice_market_data_matrix,
     slice_signal_matrix,
 )
+from app.backtest.minute_trigger import unsupported_minute_exit_signals
 from app.config import settings
 from app.indicators.pipeline import (
     ENRICHED_STORAGE_COLS,
@@ -40,6 +41,7 @@ from app.indicators.pipeline import (
     get_signal_dependencies,
 )
 from app.strategy.engine import StrategyDataContext, StrategyDef, StrategyEngine
+from app.strategy.scoring import scoring_dependencies, scoring_value_expr
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +135,7 @@ class StrategyDependencyResolver:
 
         scoring = dict(strategy.meta.get("scoring", {}) or {})
         scoring.update(overrides.get("scoring") or {})
-        required_features.update(str(column) for column, weight in scoring.items() if weight)
+        required_features.update(scoring_dependencies(scoring))
         order_by = strategy.meta.get("order_by")
         if order_by and order_by != "score":
             required_features.add(str(order_by))
@@ -217,7 +219,7 @@ class StrategyDependencyResolver:
         required_features.update(_basic_filter_dependencies(basic_filter))
         scoring = dict(strategy.meta.get("scoring", {}) or {})
         scoring.update(overrides.get("scoring") or {})
-        required_features.update(str(name) for name, weight in scoring.items() if weight)
+        required_features.update(scoring_dependencies(scoring))
         order_by = strategy.meta.get("order_by")
         if order_by and order_by != "score":
             required_features.add(str(order_by))
@@ -457,7 +459,7 @@ class StrategyBacktestConfig:
     # matching 为向后兼容入口; 显式传 entry_fill/exit_fill 时以二者为准。
     matching: Literal["close_t", "open_t+1"] = "open_t+1"
     entry_fill: Literal["close_t", "open_t+1"] | None = None
-    exit_fill: Literal["close_t", "open_t+1"] | None = None
+    exit_fill: Literal["close_t", "open_t+1", "signal_next_minute"] | None = None
     fees_pct: float = 0.0002
     commission_pct: float | None = None
     stamp_tax_pct: float | None = None
@@ -536,6 +538,7 @@ class BacktestResultPolicy:
             "error",
             "timing_ms",
             "execution",
+            "selection",
             "execution_backend",
             "shared_market_data",
             "shared_market_data_bytes",
@@ -798,6 +801,14 @@ class StrategyBacktestService:
         basic_filter = self._effective_basic_filter(s, overrides)
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
+        if config.exit_fill == "signal_next_minute":
+            if not config.minute_fill:
+                return _err("触发后下一分钟成交需要先开启分钟成交")
+            if not exit_signals:
+                return _err("当前策略没有卖出信号，无法使用触发后下一分钟成交")
+            unsupported = unsupported_minute_exit_signals(exit_signals)
+            if unsupported:
+                return _err(f"以下卖出信号暂不支持分钟触发回放: {', '.join(unsupported)}")
         stop_loss = self._override_value(overrides, "stop_loss", s.stop_loss)
         take_profit = self._normalize_pct(
             self._override_value(overrides, "take_profit", getattr(s, "take_profit", None)),
@@ -972,6 +983,7 @@ class StrategyBacktestService:
             minute_fill=config.minute_fill,
         )
         t_signal = time.perf_counter()
+        selection_stats: dict[str, int | bool]
 
         if s.execution_backend == "matrix_native":
             if s.matrix_strategy is None:
@@ -1061,6 +1073,12 @@ class StrategyBacktestService:
                 return _err("在指定区间内未产生买入信号")
 
             raw_candidates = int(sim_signal_matrix.entry.sum())
+            selection_stats = {
+                "strategy_matches": raw_candidates,
+                "entry_candidates": raw_candidates,
+                "entry_trigger_filtered": 0,
+                "entry_trigger_enabled": False,
+            }
             del market_data, signal_matrix
 
             t_matrix = time.perf_counter()
@@ -1070,6 +1088,7 @@ class StrategyBacktestService:
                 entry_delay_bars=1 if matcher_config.entry_fill == "open_t+1" else 0,
                 exit_delay_bars=1 if matcher_config.exit_fill == "open_t+1" else 0,
                 reference_price=reference_price,
+                minute_exit_trigger=matcher_config.exit_fill == "signal_next_minute",
             )
             timing_ms["matrix_build"] = round((time.perf_counter() - t_matrix) * 1000, 1)
             del sim_market_data, sim_signal_matrix
@@ -1090,6 +1109,7 @@ class StrategyBacktestService:
             candidate_filter_mask = self._build_candidate_filter_mask(panel, s, params)
             candidate_mask = basic_mask & candidate_filter_mask
             panel = self._apply_score(panel, s, overrides, universe_mask=candidate_mask)
+            formal_candidate_mask = candidate_mask & formal_range
             entry_mask = self._build_entry_mask_from_candidate(panel, candidate_mask, s, entry_signals)
             entry_mask = entry_mask & formal_range
             raw_exit_mask = self._build_signal_mask(panel, exit_signals, "_exit")
@@ -1109,6 +1129,13 @@ class StrategyBacktestService:
             panel_rows = int(sim_panel.height)
             panel_columns = int(sim_panel.width)
             raw_candidates = int(sim_entry_mask.sum())
+            strategy_matches = int(formal_candidate_mask.sum())
+            selection_stats = {
+                "strategy_matches": strategy_matches,
+                "entry_candidates": raw_candidates,
+                "entry_trigger_filtered": max(strategy_matches - raw_candidates, 0),
+                "entry_trigger_enabled": bool(entry_signals),
+            }
 
             t_matrix = time.perf_counter()
             market_matrix = build_market_matrix(
@@ -1119,6 +1146,7 @@ class StrategyBacktestService:
                 exit_delay_bars=1 if matcher_config.exit_fill == "open_t+1" else 0,
                 entry_signal_ids=entry_signals,
                 exit_signal_ids=exit_signals,
+                minute_exit_trigger=matcher_config.exit_fill == "signal_next_minute",
             )
             timing_ms["matrix_build"] = round((time.perf_counter() - t_matrix) * 1000, 1)
             del panel, sim_panel, sim_entry_mask, sim_exit_mask
@@ -1165,6 +1193,7 @@ class StrategyBacktestService:
         result.stats["feature_columns"] = feature_width
         result.stats["full_feature_fallback"] = feature_plan.full_feature_fallback
         result.stats["execution_backend"] = s.execution_backend
+        result.stats["selection"] = selection_stats
         result.stats["shared_market_data"] = prepared is not None
         result.stats["matrix_data_cache_hit"] = matrix_data_cache_hit
         result.stats["matrix_data_cache_status"] = matrix_data_cache_status
@@ -1631,6 +1660,11 @@ class StrategyBacktestService:
             "matching": c.matching,
             "entry_fill": c.entry_fill,
             "exit_fill": c.exit_fill,
+            "timing_mode": (
+                "strict"
+                if c.entry_fill == "open_t+1" and c.exit_fill == "open_t+1"
+                else "custom"
+            ),
             "fees_pct": c.fees_pct,
             "commission_pct": c.commission_pct,
             "stamp_tax_pct": c.stamp_tax_pct,
@@ -1641,6 +1675,7 @@ class StrategyBacktestService:
             "position_sizing": c.position_sizing,
             "mode": c.mode,
             "holding_days": c.holding_days,
+            "minute_fill": c.minute_fill,
         }
 
     @staticmethod
@@ -1660,28 +1695,31 @@ class StrategyBacktestService:
         if has_universe:
             work = work.with_columns(universe_mask.rename("_score_universe"))
 
-        def _value_in_universe(col: str) -> pl.Expr:
+        def _value_in_universe(value: pl.Expr) -> pl.Expr:
             if has_universe:
-                return pl.when(pl.col("_score_universe")).then(pl.col(col)).otherwise(None)
-            return pl.col(col)
+                return pl.when(pl.col("_score_universe")).then(value).otherwise(None)
+            return value
 
         def _finish(df: pl.DataFrame) -> pl.DataFrame:
             return df.drop("_score_universe") if "_score_universe" in df.columns else df
 
         if scoring:
-            total_weight = sum(scoring.values())
+            executable = [
+                (value, weight)
+                for col, weight in scoring.items()
+                if weight and (value := scoring_value_expr(work.columns, str(col))) is not None
+            ]
+            total_weight = sum(weight for _, weight in executable)
             if total_weight > 0:
                 score_parts: list[pl.Expr] = []
-                for col, weight in scoring.items():
-                    if col not in work.columns:
-                        continue
+                for score_value, weight in executable:
                     w = weight / total_weight
-                    value = _value_in_universe(col)
+                    value = _value_in_universe(score_value)
                     col_min = value.min().over("date")
                     col_max = value.max().over("date")
                     col_range = col_max - col_min
                     normalized = pl.when(col_range > 0).then(
-                        (pl.col(col) - col_min) / col_range
+                        (score_value - col_min) / col_range
                     ).otherwise(pl.lit(0.5))
                     if has_universe:
                         normalized = pl.when(pl.col("_score_universe")).then(normalized).otherwise(0.0)

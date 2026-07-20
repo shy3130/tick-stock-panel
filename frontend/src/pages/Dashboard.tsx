@@ -123,8 +123,7 @@ const _SEVERITY_BAR: Record<string, string> = {
   info: 'bg-accent/40', warn: 'bg-warning', critical: 'bg-danger',
 }
 
-function MonitorWidget() {
-  const [previewEv, setPreviewEv] = useState<AlertEvent | null>(null)
+function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => void }) {
   const reduceMotion = useReducedMotion()
   const alerts = useQuery({
     queryKey: ['alerts', ''],
@@ -197,7 +196,7 @@ function MonitorWidget() {
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => ev.symbol && setPreviewEv(ev)}
+                  onClick={() => ev.symbol && onStockClick(ev)}
                   title={ev.symbol ? `查看 ${ev.symbol} 日K` : undefined}
                   disabled={!ev.symbol}
                   aria-label={ev.symbol ? `查看 ${ev.name || ev.symbol} 日K` : undefined}
@@ -263,19 +262,6 @@ function MonitorWidget() {
           )
         })}
       </div>
-
-      <StockPreviewDialog
-        symbol={previewEv?.symbol ?? null}
-        name={previewEv?.name ?? undefined}
-        triggerInfo={previewEv ? {
-          price: previewEv.price ?? null,
-          changePct: previewEv.change_pct ?? null,
-          ts: previewEv.ts,
-          signals: previewEv.signals,
-          message: previewEv.message,
-        } : null}
-        onClose={() => setPreviewEv(null)}
-      />
     </>
   )
 }
@@ -685,7 +671,7 @@ export function Dashboard() {
   const qc = useQueryClient()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
-  const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string} | null>(null)
+  const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string; alert?: AlertEvent} | null>(null)
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -1088,7 +1074,11 @@ export function Dashboard() {
                   }
                   bodyClassName="px-3 py-1"
                 >
-                  <MonitorWidget />
+                  <MonitorWidget onStockClick={(event) => {
+                    if (event.symbol) {
+                      setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event })
+                    }
+                  }} />
                 </DashboardPanel>
               </aside>
             </div>
@@ -1098,6 +1088,13 @@ export function Dashboard() {
         <StockPreviewDialog
           symbol={previewStock?.symbol ?? null}
           name={previewStock?.name}
+          triggerInfo={previewStock?.alert ? {
+            price: previewStock.alert.price ?? null,
+            changePct: previewStock.alert.change_pct ?? null,
+            ts: previewStock.alert.ts,
+            signals: previewStock.alert.signals,
+            message: previewStock.alert.message,
+          } : null}
           onClose={() => setPreviewStock(null)}
         />
       </div>

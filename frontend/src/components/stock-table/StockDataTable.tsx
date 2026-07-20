@@ -5,9 +5,11 @@
  * 不内置任何业务逻辑：单元格内容（含 symbol 列交互、操作列、ext 列）由调用方通过
  * renderCell / renderExtraCol 注入。这样两个页面的特有交互得以保留，同时表头能力一致。
  */
-import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { cloneElement, isValidElement, useRef, type ReactElement, type ReactNode } from 'react'
+import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual'
 import type { ColumnConfig } from '@/lib/list-columns'
 import { UNSORTABLE_KEYS } from '@/lib/stock-table'
+import { VIRTUAL_LIST_THRESHOLD, useParentScroll } from '@/components/virtual-list/useParentScroll'
 import type { SortState } from './useTableSort'
 
 export type { SortState }
@@ -57,8 +59,28 @@ export function StockDataTable({
   renderHeaderContent,
   className = 'rounded-card border border-border overflow-x-auto',
 }: StockDataTableProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
   const visibleColumns = columns.filter(c => c.visible)
   const computedMinWidth = minWidth ?? Math.max(900, visibleColumns.length * 110)
+  const virtualized = rows.length > VIRTUAL_LIST_THRESHOLD
+  const { getScrollElement, scrollMargin } = useParentScroll(containerRef, virtualized)
+  const rowVirtualizer = useVirtualizer({
+    count: virtualized ? rows.length : 0,
+    getScrollElement,
+    estimateSize: () => 56,
+    getItemKey: index => rowKey(rows[index]),
+    overscan: 10,
+    scrollMargin,
+  })
+  const virtualRows = virtualized ? rowVirtualizer.getVirtualItems() : []
+  const totalSize = virtualized ? rowVirtualizer.getTotalSize() : 0
+  const firstVirtualRow = virtualRows[0]
+  const lastVirtualRow = virtualRows[virtualRows.length - 1]
+  const topPadding = firstVirtualRow ? firstVirtualRow.start - scrollMargin : 0
+  const bottomPadding = lastVirtualRow
+    ? totalSize - (lastVirtualRow.end - scrollMargin)
+    : totalSize
+  const columnCount = visibleColumns.length + (renderExtraCol || extraHeader ? 1 : 0)
 
   const isColSortable = (col: ColumnConfig): boolean => {
     // 排序能力由调用方是否提供 onSortToggle 决定；sort 是否为 null 只影响当前指示器
@@ -71,8 +93,26 @@ export function StockDataTable({
     ? 'sticky top-0 z-10 bg-surface after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border'
     : 'bg-elevated'
 
+  const renderRow = (r: any, virtualRow?: VirtualItem) => (
+    <tr
+      key={rowKey(r)}
+      ref={virtualRow ? rowVirtualizer.measureElement : undefined}
+      data-index={virtualRow?.index}
+      className={`transition-colors duration-150 ease-smooth group ${rowClassName(r)}`}
+    >
+      {visibleColumns.map(col => {
+        // renderCell 返回的 <td> 无 key, 这里补上避免 React key 警告
+        const cell = renderCell(r, col)
+        return isValidElement(cell)
+          ? cloneElement(cell as ReactElement, { key: col.id })
+          : cell
+      })}
+      {renderExtraCol && renderExtraCol(r)}
+    </tr>
+  )
+
   return (
-    <div className={className}>
+    <div ref={containerRef} className={className}>
       <table className="w-full text-sm" style={{ minWidth: computedMinWidth }}>
         <thead className={theadClass}>
           <tr className="text-left text-secondary">
@@ -118,23 +158,19 @@ export function StockDataTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r: any) => {
-            return (
-              <tr
-                key={rowKey(r)}
-                className={`transition-colors duration-150 ease-smooth group ${rowClassName(r)}`}
-              >
-                {visibleColumns.map(col => {
-                  // renderCell 返回的 <td> 无 key, 这里补上避免 React key 警告
-                  const cell = renderCell(r, col)
-                  return isValidElement(cell)
-                    ? cloneElement(cell as ReactElement, { key: col.id })
-                    : cell
-                })}
-                {renderExtraCol && renderExtraCol(r)}
-              </tr>
-            )
-          })}
+          {virtualized && topPadding > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={columnCount} className="p-0 border-0" style={{ height: topPadding }} />
+            </tr>
+          )}
+          {virtualized
+            ? virtualRows.map(virtualRow => renderRow(rows[virtualRow.index], virtualRow))
+            : rows.map((r: any) => renderRow(r))}
+          {virtualized && bottomPadding > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={columnCount} className="p-0 border-0" style={{ height: bottomPadding }} />
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

@@ -395,6 +395,27 @@ function DatasetDetail({
               </Field>
             </div>
 
+            {datasetKey === 'minute' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Field label="资产类型参数">
+                  <input
+                    value={cfg.asset_type_param ?? ''}
+                    onChange={e => onUpdate({ asset_type_param: e.target.value || null })}
+                    placeholder="asset_type"
+                    className={`${INPUT_CLS} w-full`}
+                  />
+                </Field>
+                <Field label="周期参数">
+                  <input
+                    value={cfg.freq_param ?? ''}
+                    onChange={e => onUpdate({ freq_param: e.target.value || null })}
+                    placeholder="period"
+                    className={`${INPUT_CLS} w-full`}
+                  />
+                </Field>
+              </div>
+            )}
+
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div className="text-[10px] uppercase tracking-widest text-muted">字段映射</div>

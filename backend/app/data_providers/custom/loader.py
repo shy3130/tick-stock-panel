@@ -296,6 +296,8 @@ def _config_to_dict(config: CustomSourceConfig) -> dict:
             "symbols_param": ds.symbols_param,
             "start_param": ds.start_param,
             "end_param": ds.end_param,
+            **({"asset_type_param": ds.asset_type_param} if ds.asset_type_param else {}),
+            **({"freq_param": ds.freq_param} if ds.freq_param else {}),
         }
     return out
 
@@ -401,6 +403,10 @@ def _sanitize_dataset(ds_cfg: dict) -> dict:
         out["start_param"] = str(ds_cfg["start_param"])
     if ds_cfg.get("end_param"):
         out["end_param"] = str(ds_cfg["end_param"])
+    if ds_cfg.get("asset_type_param"):
+        out["asset_type_param"] = str(ds_cfg["asset_type_param"])
+    if ds_cfg.get("freq_param"):
+        out["freq_param"] = str(ds_cfg["freq_param"])
     return out
 
 
@@ -496,4 +502,3 @@ def _load_entry(entry_ref: str):
 
 # 模块导入时即扫描一次, 保证 names()/_allowed_data_providers() 在 startup 前可用。
 _load_builtin_plugins()
-

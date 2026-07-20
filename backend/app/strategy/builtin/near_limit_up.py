@@ -62,23 +62,11 @@ ALERTS = []
 
 class NearLimitUpMatrixStrategy:
     def required_fields(self) -> frozenset[str]:
-        return frozenset({"close"})
+        return frozenset({"close", "price_limit_pct"})
 
     def required_warmup_bars(self, params: dict) -> int:
         del params
         return 60
-
-    @staticmethod
-    def _limit_pct(market: MarketDataMatrix) -> np.ndarray:
-        values = np.full(len(market.symbols), 0.10, dtype=np.float32)
-        for asset_id, (symbol, name) in enumerate(zip(market.symbols, market.names, strict=True)):
-            if symbol.startswith(("300", "301", "688")):
-                values[asset_id] = 0.20
-            elif symbol.endswith(".BJ"):
-                values[asset_id] = 0.30
-            elif "ST" in name.upper():
-                values[asset_id] = 0.05
-        return values
 
     def compute_signals(self, market: MarketDataMatrix, params: dict) -> SignalMatrix:
         change = matrix_feature(market, "change_pct")
@@ -86,9 +74,10 @@ class NearLimitUpMatrixStrategy:
         if params.get("use_change_filter", True):
             entry &= change > float(params.get("min_change", 7.0)) / 100.0
         if params.get("use_limit_gap_filter", True):
+            limit_pct = matrix_feature(market, "price_limit_pct")
             entry &= (
                 change
-                < self._limit_pct(market)[None, :] - float(params.get("limit_gap", 3.0)) / 100.0
+                >= limit_pct - float(params.get("limit_gap", 3.0)) / 100.0
             )
         ma20 = matrix_feature(market, "ma20")
         exit_ = (market.close < ma20) & (shift(market.close, 1) >= shift(ma20, 1))

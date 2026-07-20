@@ -34,6 +34,7 @@ import polars as pl
 
 from app.market_time import cn_now, cn_today
 from app.parquet import scan_daily_parquet
+from app.strategy.intraday_signals import IntradaySignalEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,8 @@ class QuoteService:
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
         self._index_quotes_cache: pl.DataFrame | None = None
+        self._intraday_signal_evaluator = IntradaySignalEvaluator()
+        self._intraday_signal_bucket: dict[str, str] = {}
         # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
         self._final_sync_done: set[tuple[date, str]] = set()
         self._final_sync_failed: dict[tuple[date, str], str] = {}
@@ -1009,6 +1012,7 @@ class QuoteService:
                     eval_df = enriched_today
                     if engine.has_rule_type("ladder"):
                         eval_df = self._inject_sealed_vol(enriched_today, enriched_date)
+                    eval_df = self._inject_intraday_signals(eval_df, engine, "stock")
                     rule_events = engine.evaluate(eval_df, asset_type="stock")
                     if engine.consume_strategy_result_updates():
                         self.notify_strategy_results_updated()
@@ -1020,6 +1024,7 @@ class QuoteService:
                         try:
                             etf_enriched, _ = self._repo.get_enriched_latest_asset("etf", refresh=False)
                             if not etf_enriched.is_empty():
+                                etf_enriched = self._inject_intraday_signals(etf_enriched, engine, "etf")
                                 rule_events = rule_events + engine.evaluate(
                                     etf_enriched, asset_type="etf", reset_strategy_results=False,
                                 )
@@ -1111,6 +1116,54 @@ class QuoteService:
         except Exception as e:  # noqa: BLE001
             logger.debug("告警 ext 富化失败 (不影响推送): %s", e)
 
+    def _inject_intraday_signals(self, enriched: pl.DataFrame, engine, asset_type: str) -> pl.DataFrame:
+        """每分钟为分时信号规则批量获取一次数据并注入临时布尔列。"""
+        get_symbols = getattr(engine, "intraday_signal_symbols", None)
+        if not callable(get_symbols):
+            return enriched
+        symbols = get_symbols(asset_type)
+        if not symbols:
+            return enriched
+
+        now = cn_now()
+        bucket = now.strftime("%Y%m%d%H%M")
+        if self._intraday_signal_bucket.get(asset_type) == bucket:
+            return self._intraday_signal_evaluator.inject(enriched, [])
+        self._intraday_signal_bucket[asset_type] = bucket
+
+        from app.services.kline_sync import (
+            fetch_intraday_monitor_batch,
+            intraday_monitor_support,
+        )
+
+        capset = getattr(self._app_state, "capabilities", None)
+        support = intraday_monitor_support(capset)
+        if not support["available"] or len(symbols) > int(support["max_symbols"]):
+            return self._intraday_signal_evaluator.inject(enriched, [])
+
+        minute_df = fetch_intraday_monitor_batch(sorted(symbols), capset, now=now)
+        prev_close: dict[str, float] = {}
+        available_cols = set(enriched.columns)
+        for row in enriched.filter(pl.col("symbol").is_in(sorted(symbols))).iter_rows(named=True):
+            symbol = str(row.get("symbol") or "")
+            reference = row.get("prev_close") if "prev_close" in available_cols else None
+            if reference is None and "close" in available_cols and "change_pct" in available_cols:
+                close = row.get("close")
+                change_pct = row.get("change_pct")
+                if close is not None and change_pct is not None and float(change_pct) > -1:
+                    reference = float(close) / (1.0 + float(change_pct))
+            if symbol and reference is not None:
+                prev_close[symbol] = float(reference)
+
+        signals = self._intraday_signal_evaluator.evaluate(
+            minute_df,
+            symbols=symbols,
+            prev_close=prev_close,
+            asset_type=asset_type,
+            now=now,
+        )
+        return self._intraday_signal_evaluator.inject(enriched, signals)
+
     def _inject_sealed_vol(self, enriched_today: pl.DataFrame, enriched_date) -> pl.DataFrame:
         """从 depth_service 取封单量, 作为临时列 _sealed_vol 注入 enriched 副本。
 
@@ -1172,7 +1225,7 @@ class QuoteService:
             # 反查规则, 过滤出启用推送的事件
             source_labels = {
                 "strategy": "策略", "signal": "信号",
-                "price": "价格", "market": "异动",
+                "price": "价格", "market": "异动", "ladder": "连板梯队",
             }
             rules = engine.rules if engine is not None else {}
             enqueued = 0
@@ -1188,7 +1241,7 @@ class QuoteService:
                 symbol = ev.get("symbol") or ""
                 name = ev.get("name") or ""
                 message = ev.get("message") or ""
-                title = f"TickFlow · {source_label}"
+                title = source_label
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
                 # 提交到独立线程池, 不阻塞行情轮询线程 (webhook 慢/重试不拖累实时行情+告警)。
                 # 按渠道独立投递: 飞书 / 企业微信谁被勾选且已配置就推谁。
@@ -1341,7 +1394,16 @@ class QuoteService:
                         pass
                 instruments = self._repo.get_instruments() if asset_type == "stock" else None
 
-                enriched_full = compute_enriched(full_df, factors=factors, instruments=instruments)
+                enriched_full = compute_enriched(
+                    full_df,
+                    factors=factors,
+                    instruments=instruments,
+                    historical_shares=(
+                        self._repo.get_historical_shares()
+                        if asset_type == "stock"
+                        else None
+                    ),
+                )
                 enriched_today = enriched_full.filter(pl.col("date") == today)
 
             if enriched_today.is_empty():

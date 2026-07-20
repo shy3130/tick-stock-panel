@@ -122,6 +122,7 @@ export interface SidebarProps {
   dataSyncJustDone: boolean
   isNoneTier: boolean
   isWatchlistMode: boolean
+  hasCustomRealtimeProvider: boolean
   // 大盘指数卡片
   showSidebarQuotes: boolean
   sidebarIndexQuotesRows: IndexQuote[] | undefined
@@ -133,6 +134,7 @@ export function Sidebar(props: SidebarProps) {
     collapsed, version,
     isDataSyncing, dataSyncJustDone,
     isNoneTier, isWatchlistMode,
+    hasCustomRealtimeProvider,
     showSidebarQuotes, sidebarIndexQuotesRows, sidebarIndexes,
   } = props
 
@@ -267,7 +269,7 @@ export function Sidebar(props: SidebarProps) {
         ))}
       </nav>
 
-      {!collapsed && showSidebarQuotes && !isWatchlistMode && !isNoneTier && (
+      {!collapsed && showSidebarQuotes && !isWatchlistMode && (!isNoneTier || hasCustomRealtimeProvider) && (
         <div className="border-t border-border px-3 py-2.5 shrink-0">
           <SidebarIndexQuotes rows={sidebarIndexQuotesRows} items={sidebarIndexes} />
         </div>

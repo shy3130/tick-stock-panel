@@ -23,6 +23,7 @@ import polars as pl
 from app.market_time import cn_today
 from app.strategy import config as _strategy_config
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
+from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ _SIGNAL_CN: dict[str, str] = {
     "signal_boll_breakdown_lower": "跌破布林下轨", "signal_volume_surge": "放量",
     "signal_limit_up": "涨停", "signal_limit_down": "跌停",
     "signal_limit_down_recovery": "跌停翘板", "signal_broken_limit_up": "炸板",
+    **INTRADAY_SIGNAL_LABELS,
     # 行情字段
     "close": "收盘价", "open": "开盘价", "high": "最高价", "low": "最低价",
     "change_pct": "涨跌幅", "change_amount": "涨跌额", "amplitude": "振幅",
@@ -455,6 +457,19 @@ class MonitorRuleEngine:
             r.get("enabled", True) and r.get("type") == rtype
             for r in list(self._rules.values())
         )
+
+    def intraday_signal_symbols(self, asset_type: str) -> set[str]:
+        """返回启用的分时信号规则所需标的并集。"""
+        symbols: set[str] = set()
+        for rule in list(self._rules.values()):
+            if (
+                rule.get("enabled", True)
+                and rule.get("asset_type", "stock") == asset_type
+                and rule.get("scope") == "symbols"
+                and uses_intraday_signals(rule)
+            ):
+                symbols.update(str(symbol) for symbol in rule.get("symbols", []) if symbol)
+        return symbols
 
     # ── 评估 ───────────────────────────────────────────
     def has_asset_rules(self, asset_type: str) -> bool:

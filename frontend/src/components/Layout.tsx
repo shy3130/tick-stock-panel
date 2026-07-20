@@ -65,6 +65,8 @@ export function Layout() {
 
   const version = versionData?.version
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
+  const hasCustomRealtimeProvider = !!prefs?.realtime_data_provider
+    && prefs.realtime_data_provider !== 'tickflow'
   const indicesPinned = prefs?.indices_nav_pinned ?? true
   const sidebarIndexSymbols = prefs?.sidebar_index_symbols ?? CORE_INDEXES.map(p => p.symbol)
   const sidebarIndexes = CORE_INDEXES.filter(item => sidebarIndexSymbols.includes(item.symbol))
@@ -112,6 +114,7 @@ export function Layout() {
         dataSyncJustDone={dataSyncJustDone}
         isNoneTier={isNoneTier}
         isWatchlistMode={isWatchlistMode}
+        hasCustomRealtimeProvider={hasCustomRealtimeProvider}
         showSidebarQuotes={showSidebarQuotes}
         sidebarIndexQuotesRows={sidebarIndexQuotes?.rows}
         sidebarIndexes={sidebarIndexes}
