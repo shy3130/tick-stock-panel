@@ -23,6 +23,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/screener", tags=["screener"])
 
 
+def _user_runtime(request: Request):
+    from app.services.user_runtime import runtime_for_request
+    return runtime_for_request(request)
+
+
+def _strategy_engine(request: Request):
+    runtime = _user_runtime(request)
+    return runtime.strategy_engine if runtime else getattr(request.app.state, "strategy_engine", None)
+
+
+def _monitor_engine(request: Request):
+    runtime = _user_runtime(request)
+    return runtime.monitor_engine if runtime else getattr(request.app.state, "monitor_engine", None)
+
+
 class CustomRequest(BaseModel):
     conditions: list[str]
     order_by: Optional[str] = None
@@ -236,7 +251,7 @@ def strategies(
 ):
     """兼容策略清单端点；唯一数据源为 StrategyEngine。"""
     data_dir = request.app.state.repo.store.data_dir
-    engine = getattr(request.app.state, "strategy_engine", None)
+    engine = _strategy_engine(request)
     if engine is None:
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
     presets = []
@@ -288,7 +303,7 @@ def run_preset(req: PresetRequest, request: Request):
     data_dir = request.app.state.repo.store.data_dir
     ext_values = _load_ext_value_maps(repo, req.ext_columns)
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
-    engine = getattr(request.app.state, "strategy_engine", None)
+    engine = _strategy_engine(request)
     if not engine:
         raise HTTPException(status_code=404, detail=f"策略引擎未初始化或策略 {req.strategy_id} 不存在")
 
@@ -329,7 +344,7 @@ def _cached_with_realtime(request: Request) -> dict:
         cached = {"as_of": None, "results": {}, "updated_at": None}
 
     # 叠加监控引擎内存里的实时结果 (若有), 用新鲜数据覆盖同策略的盘后结果
-    monitor_engine = getattr(request.app.state, "monitor_engine", None)
+    monitor_engine = _monitor_engine(request)
     if monitor_engine is not None:
         realtime_results = monitor_engine.latest_strategy_results()
         if realtime_results:
@@ -508,7 +523,7 @@ def run_all(request: Request, body: Optional[dict] = None):
     asset_type = str(body.get("asset_type") or "stock")
     timeframe = str(body.get("timeframe") or "1d")
     svc = ScreenerService(repo, asset_type=asset_type)
-    engine = getattr(request.app.state, "strategy_engine", None)
+    engine = _strategy_engine(request)
     if engine is None:
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
 

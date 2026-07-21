@@ -1,4 +1,5 @@
 """Spawn-isolated strategy backtest and optimizer task runner."""
+
 from __future__ import annotations
 
 import json
@@ -76,12 +77,13 @@ def _rss_bytes() -> int:
     return int(psutil.Process(os.getpid()).memory_info().rss)
 
 
-def _strategy_dirs(data_dir: Path) -> list[Path]:
+def _strategy_dirs(data_dir: Path, user_id: str | None = None) -> list[Path]:
     app_dir = Path(__file__).resolve().parents[1]
+    user_root = data_dir / "users" / user_id if user_id else data_dir
     return [
         app_dir / "strategy" / "builtin",
-        data_dir / "strategies" / "custom",
-        data_dir / "strategies" / "ai",
+        user_root / "strategies" / "custom",
+        user_root / "strategies" / "ai",
     ]
 
 
@@ -126,7 +128,15 @@ def encode_optimize_config(config) -> dict[str, Any]:
     return payload
 
 
-def make_worker_task(kind: str, data_dir: Path, config) -> dict[str, Any]:
+def make_worker_task(
+    kind: str,
+    data_dir: Path,
+    config,
+    *,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    from app.services.user_context import get_current_user
+
     if kind == "backtest":
         encoded = encode_backtest_config(config)
     elif kind == "optimize":
@@ -140,6 +150,7 @@ def make_worker_task(kind: str, data_dir: Path, config) -> dict[str, Any]:
     return {
         "kind": kind,
         "data_dir": str(data_dir.resolve()),
+        "user_id": user_id or (get_current_user().id if get_current_user() else None),
         "config": encoded,
     }
 
@@ -170,7 +181,11 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
         data_dir = Path(task["data_dir"])
         store = DataStore(data_dir)
         repo = KlineRepository(store)
-        strategy_engine = StrategyEngine(strategy_dirs=_strategy_dirs(data_dir))
+        user_id = task.get("user_id")
+        from app.services.user_context import UserIdentity, set_current_user
+
+        context_token = set_current_user(UserIdentity(user_id, user_id) if user_id else None)
+        strategy_engine = StrategyEngine(strategy_dirs=_strategy_dirs(data_dir, user_id))
         service = StrategyBacktestService(BacktestEngine(repo), strategy_engine)
 
         def _progress(message: dict) -> None:
@@ -200,9 +215,7 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
             raise ValueError(f"unsupported worker task kind: {kind}")
 
         serialization_started = time.perf_counter()
-        serialized_bytes = len(
-            json.dumps(result, ensure_ascii=False, default=str).encode("utf-8")
-        )
+        serialized_bytes = len(json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"))
         serialization_ms = round(
             (time.perf_counter() - serialization_started) * 1000,
             1,
@@ -221,12 +234,18 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
     except BaseException as exc:
         with suppress(Exception):
             sampler.stop()
-        event_queue.put({
-            "type": "error",
-            "message": str(exc),
-            "traceback": traceback.format_exc(),
-        })
+        event_queue.put(
+            {
+                "type": "error",
+                "message": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+        )
     finally:
+        if "context_token" in locals():
+            from app.services.user_context import reset
+
+            reset(context_token)
         if store is not None:
             with suppress(Exception):
                 store.db.close()

@@ -69,7 +69,7 @@ function RootGate() {
   })
 
   const status = authStatus.data
-    ? { authenticated: authStatus.data.authenticated }
+    ? { authenticated: authStatus.data.authenticated, invite_enabled: authStatus.data.invite_enabled }
     : authStatus.isError
       ? { authenticated: false }
       : null
@@ -85,6 +85,8 @@ function RootGate() {
   }
 
   if (target === 'landing') return <Landing />
+
+  if (target === 'invite') return <Navigate to={`/invite?redirect=${encodeURIComponent(location.pathname + location.search)}`} replace />
 
   if (target === 'login') {
     const redirect = encodeURIComponent(location.pathname + location.search)

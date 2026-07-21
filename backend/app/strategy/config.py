@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 def _overrides_dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "strategy_overrides"
+    from app.services.user_storage import current_user_dir
+    d = current_user_dir(data_dir) / "strategy_overrides"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

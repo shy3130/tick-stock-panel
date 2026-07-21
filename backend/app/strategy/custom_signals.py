@@ -66,7 +66,8 @@ _OP_BUILDERS = {
 
 # ── 持久化（镜像 strategy/config.py 的写法）──────────────
 def _dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "custom_signals"
+    from app.services.user_storage import current_user_dir
+    d = current_user_dir(data_dir) / "custom_signals"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

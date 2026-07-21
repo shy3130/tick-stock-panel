@@ -5,11 +5,10 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
@@ -35,6 +34,7 @@ from app.api import (
     signals,
     stock_analysis,
     strategy,
+    users as users_api,
     watchlist,
 )
 from app.api.routes import router as core_router
@@ -60,13 +60,18 @@ async def lifespan(app: FastAPI):
         __version__, tf_client.current_mode(),
     )
 
-    # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
-    # 公网部署免 SSH 端口转发; 已设过密码则不覆盖 (改密码走 UI)。
+    # 首次启动: 将旧单用户密码迁移为 admin, 或使用 AUTH_PASSWORD 创建管理员。
+    admin = None
     try:
-        from app.services import auth as auth_service
-        auth_service.bootstrap_from_env()
+        from app.services import users
+        admin = users.ensure_bootstrap(settings.data_dir, settings.auth_password)
+        if admin:
+            copied = users.migrate_legacy_admin_data(settings.data_dir)
+            if copied:
+                logger.info("legacy admin data migrated: %s", ", ".join(copied))
+        users.sync_env_invites(settings.data_dir, settings.invite_codes)
     except Exception as e:  # noqa: BLE001
-        logger.warning("auth bootstrap failed: %s", e)
+        logger.warning("account bootstrap failed: %s", e)
 
     from app.services import invites as invite_service
     invite_store = invite_service.get_store()
@@ -176,10 +181,12 @@ async def lifespan(app: FastAPI):
 
     _screener_svc = ScreenerService(repo)
     _etf_screener_svc = ScreenerService(repo, asset_type="etf")
+    from app.services.user_storage import user_dir
+    admin_root = user_dir(store.data_dir, "admin")
     strategy_dirs = [
         Path(__file__).resolve().parent / "strategy" / "builtin",
-        store.data_dir / "strategies" / "custom",
-        store.data_dir / "strategies" / "ai",
+        admin_root / "strategies" / "custom",
+        admin_root / "strategies" / "ai",
     ]
     strategy_engine = StrategyEngine(
         strategy_dirs=strategy_dirs,
@@ -250,24 +257,49 @@ async def lifespan(app: FastAPI):
     # ETF 版历史加载器: asset_type=etf 的 strategy 型规则用 (读 kline_etf_enriched)。
     monitor_engine.set_history_loader_etf(_etf_screener_svc._load_enriched_history)
 
-    # 自动迁移: 把旧 strategy_monitor_ids 同步为 type=strategy 规则 (统一到监控页)
-    try:
-        if preferences.get_strategy_monitor_enabled():
-            ids = preferences.get_strategy_monitor_ids()
-            if ids:
-                names = {s["id"]: s["name"] for s in strategy_engine.list_strategies()}
-                mr_store.migrate_strategy_monitors(store.data_dir, ids, names)
-                logger.info("strategy monitor migrated: %d strategies", len(ids))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("strategy monitor migration failed: %s", e)
+    from app.services import user_context, users
+    from app.services.user_runtime import UserRuntime, UserRuntimeRegistry
 
-    try:
-        rules = mr_store.load_all(store.data_dir)
-        monitor_engine.set_rules(rules)
-        logger.info("monitor engine loaded: %d rules", monitor_engine.rule_count)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("monitor engine load failed: %s", e)
+    def _load_monitor_rules(identity, engine, strategies) -> None:
+        with user_context.as_user(identity):
+            try:
+                if preferences.get_strategy_monitor_enabled():
+                    ids = preferences.get_strategy_monitor_ids()
+                    if ids:
+                        names = {s["id"]: s["name"] for s in strategies.list_strategies()}
+                        mr_store.migrate_strategy_monitors(store.data_dir, ids, names)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("strategy monitor migration failed for %s: %s", identity.username, exc)
+            engine.set_rules(mr_store.load_all(store.data_dir))
+
+    admin = admin or users.get_user(store.data_dir, "admin")
+    if admin:
+        _load_monitor_rules(admin, monitor_engine, strategy_engine)
     app.state.monitor_engine = monitor_engine
+
+    def _build_user_runtime(identity):
+        root = user_dir(store.data_dir, identity.id)
+        per_user_strategy_engine = StrategyEngine(strategy_dirs=[
+            Path(__file__).resolve().parent / "strategy" / "builtin",
+            root / "strategies" / "custom",
+            root / "strategies" / "ai",
+        ])
+        per_user_monitor_engine = MonitorRuleEngine()
+        per_user_monitor_engine.set_strategy_engine(per_user_strategy_engine)
+        per_user_monitor_engine.set_data_dir(store.data_dir)
+        per_user_monitor_engine.set_history_loader(_screener_svc._load_enriched_history)
+        per_user_monitor_engine.set_history_loader_etf(_etf_screener_svc._load_enriched_history)
+        _load_monitor_rules(identity, per_user_monitor_engine, per_user_strategy_engine)
+        return UserRuntime(identity, per_user_strategy_engine, per_user_monitor_engine)
+
+    runtime_registry = UserRuntimeRegistry(_build_user_runtime)
+    if admin:
+        runtime_registry.register(UserRuntime(admin, strategy_engine, monitor_engine))
+    for row in users.list_users(store.data_dir):
+        identity = users.get_user(store.data_dir, row["id"])
+        if identity and (not admin or identity.id != admin.id):
+            runtime_registry.get(identity)
+    app.state.user_runtime_registry = runtime_registry
 
     yield
 
@@ -318,76 +350,98 @@ app.add_middleware(
 #   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
 # 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
-_AUTH_WHITELIST_PREFIX = ("/api/auth/",)
+_AUTH_WHITELIST_PREFIX = ("/api/auth/", "/api/invite/")
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 _INVITE_PUBLIC_PREFIX = ("/api/invite/", "/assets/")
 _INVITE_PUBLIC_EXACT = ("/invite", "/favicon.svg", "/health", "/api/health")
+
+_ADMIN_PREFIXES = (
+    "/api/admin/",
+    "/api/settings/data-sources",
+    "/api/settings/plugins/",
+    "/api/settings/tickflow-key",
+    "/api/settings/switch_endpoint",
+    "/api/settings/test_endpoint",
+)
+_ADMIN_MUTATION_PREFIXES = (
+    "/api/pipeline",
+    "/api/ext-data",
+    "/api/indices/sync",
+    "/api/financials/sync",
+    "/api/data/clear",
+    "/api/data/refresh-cache",
+    "/api/settings/ai",
+    "/api/settings/preferences/data-providers",
+    "/api/settings/preferences/minute-sync",
+    "/api/settings/preferences/realtime-quotes",
+    "/api/settings/preferences/realtime-quote-scope",
+    "/api/settings/preferences/quote-interval",
+    "/api/settings/preferences/pipeline-",
+    "/api/settings/preferences/instruments-schedule",
+    "/api/settings/preferences/enriched-batch-size",
+    "/api/settings/preferences/index-daily-batch-size",
+    "/api/settings/preferences/limit-ladder-monitor",
+    "/api/settings/preferences/depth-",
+    "/api/settings/preferences/review-schedule",
+)
+
+
+def _admin_required(path: str, method: str) -> bool:
+    if path.startswith(_ADMIN_PREFIXES):
+        return True
+    return method not in {"GET", "HEAD", "OPTIONS"} and path.startswith(_ADMIN_MUTATION_PREFIXES)
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    from app.services import invites as invite_service
-
-    invite_store = invite_service.get_store()
-    if invite_store.enabled:
-        is_public = path in _INVITE_PUBLIC_EXACT or path.startswith(_INVITE_PUBLIC_PREFIX)
-        if is_public or request.method == "OPTIONS":
-            return await call_next(request)
-
-        invite_token = request.cookies.get(invite_service.COOKIE_NAME)
-        if invite_store.is_valid_session(invite_token):
-            # 邀请码模式直接替代原访问密码; API 与页面统一由邀请码会话保护。
-            return await call_next(request)
-
-        if path.startswith("/api/"):
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "请先完成邀请码验证", "code": "INVITE_REQUIRED"},
-            )
-
-        target = path
-        if request.url.query:
-            target = f"{target}?{request.url.query}"
-        return RedirectResponse(
-            url=f"/invite?{urlencode({'redirect': target})}",
-            status_code=307,
-        )
-
-    # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转。
     if not path.startswith("/api/"):
         return await call_next(request)
-    # 白名单放行(设密码/登录/探活本身不拦)
+    # 账户、邀请码注册和探活本身不拦。
     if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
         return await call_next(request)
 
-    from app.services import auth as auth_service
-    # 情况 1+2: 未设密码
-    if not auth_service.is_configured():
-        # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
-        if auth_api._is_local_network(auth_api._client_ip(request)):
-            return await call_next(request)
-        # 公网 → 拒绝。不裸奔, 也不给公网设密码的机会(防抢占)
+    from app.services import user_context, users
+    user = users.user_for_session(settings.data_dir, request.cookies.get(auth_api.COOKIE_NAME))
+    if user is None:
+        if users.has_available_invites(settings.data_dir):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "请先完成邀请码注册", "code": "INVITE_REQUIRED"},
+            )
+        if not users.is_configured(settings.data_dir):
+            if auth_api._is_local_network(auth_api._client_ip(request)):
+                return await call_next(request)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "面板尚未初始化管理员账户,请通过本机或内网访问", "code": "NOT_INITIALIZED"},
+            )
         return JSONResponse(
-            status_code=403,
-            content={
-                "detail": "面板尚未初始化访问密码,请通过 SSH/本机浏览器访问以设置密码",
-                "code": "NOT_INITIALIZED",
-            },
+            status_code=401,
+            content={"detail": "未登录或会话已过期,请重新登录", "code": "AUTH_REQUIRED"},
         )
 
-    # 情况 3: 已设密码, 检查会话
-    token = request.cookies.get(auth_api.COOKIE_NAME)
-    if token and auth_service.is_valid_session(token):
+    token = user_context.set_current_user(user)
+    request.state.user = user
+    try:
+        if _admin_required(path, request.method) and not user.is_admin:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "仅管理员可执行此操作", "code": "ADMIN_REQUIRED"},
+            )
         return await call_next(request)
-    # 未登录: 401(前端跳登录页)
-    return JSONResponse(status_code=401, content={"detail": "未登录或会话已过期"})
+    finally:
+        user_context.reset(token)
 
 
 # 路由
 app.include_router(core_router)
 app.include_router(invites_api.router)
 app.include_router(auth_api.router)
+app.include_router(users_api.router)
 app.include_router(kline.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)

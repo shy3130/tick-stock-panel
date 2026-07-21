@@ -11,6 +11,10 @@ test('shows the workspace when the user is authenticated', () => {
   assert.equal(resolvePublicEntry({ authenticated: true }, '/screener'), 'workspace')
 })
 
+test('shows invite registration when unused invites are available', () => {
+  assert.equal(resolvePublicEntry({ authenticated: false, invite_enabled: true }, '/watchlist'), 'invite')
+})
+
 test('shows the public landing page for unauthenticated root visits', () => {
   assert.equal(resolvePublicEntry({ authenticated: false }, '/'), 'landing')
 })

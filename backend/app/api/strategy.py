@@ -30,7 +30,9 @@ router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 
 def _get_engine(request: Request) -> StrategyEngine:
-    engine = getattr(request.app.state, "strategy_engine", None)
+    from app.services.user_runtime import runtime_for_request
+    runtime = runtime_for_request(request)
+    engine = runtime.strategy_engine if runtime else getattr(request.app.state, "strategy_engine", None)
     if not engine:
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
     return engine
@@ -51,7 +53,9 @@ def _invalidate_strategy_runtime(request: Request) -> None:
     from app.services import strategy_cache
 
     strategy_cache.clear_cache(_data_dir(request))
-    monitor_engine = getattr(request.app.state, "monitor_engine", None)
+    from app.services.user_runtime import runtime_for_request
+    runtime = runtime_for_request(request)
+    monitor_engine = runtime.monitor_engine if runtime else getattr(request.app.state, "monitor_engine", None)
     if monitor_engine is not None:
         monitor_engine.invalidate_strategy_state()
 
@@ -500,7 +504,11 @@ def _validate_strategy_id(strategy_id: str) -> str:
 def _target_dir(data_dir: Path, source: str) -> Path:
     if source not in {"ai", "custom"}:
         raise ValueError("target_source 必须是 ai 或 custom")
-    return data_dir / "strategies" / source
+    from app.services.user_context import get_current_user
+    if get_current_user() is None:
+        return data_dir / "strategies" / source
+    from app.services.user_storage import current_user_dir
+    return current_user_dir(data_dir) / "strategies" / source
 
 
 def _prepare_strategy_code(req: StrategyCodeValidateRequest | StrategyCodeSaveRequest) -> dict:
@@ -804,7 +812,8 @@ def delete_strategy(strategy_id: str, request: Request):
             engine.reload()
         raise HTTPException(status_code=400, detail=f"策略删除失败: {e}") from e
 
-    override_path = data_dir / "user_data" / "strategy_overrides" / f"{strategy_id}.json"
+    from app.services.user_storage import current_user_dir
+    override_path = current_user_dir(data_dir) / "strategy_overrides" / f"{strategy_id}.json"
     override_path.unlink(missing_ok=True)
     _invalidate_strategy_runtime(request)
     return {"ok": True}

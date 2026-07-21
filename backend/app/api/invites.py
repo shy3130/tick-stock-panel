@@ -1,4 +1,5 @@
-"""Reusable invite-code access for the Sycee private beta."""
+"""Invite-code registration for multi-user accounts."""
+
 from __future__ import annotations
 
 import logging
@@ -9,11 +10,12 @@ from threading import Lock
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app.api.auth import _client_ip
-from app.services import invites
+from app.api.auth import COOKIE_NAME, _client_ip, _request_is_https
+from app.config import settings
+from app.services import invites as legacy_invites
+from app.services import users
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/invite", tags=["invite"])
 
 _fail_counter: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
@@ -22,78 +24,88 @@ _MAX_FAILS = 8
 _LOCK_SECONDS = 10 * 60
 
 
-class InviteCodeIn(BaseModel):
+class RegisterIn(BaseModel):
     code: str = Field(min_length=1, max_length=128)
-
-
-def _request_is_https(request: Request) -> bool:
-    forwarded = request.headers.get("x-forwarded-proto", "")
-    return request.url.scheme == "https" or forwarded.split(",")[0].strip() == "https"
+    username: str | None = Field(default=None, min_length=2, max_length=64)
+    password: str | None = Field(default=None, min_length=6, max_length=128)
 
 
 def _check_rate_limit(ip: str) -> None:
     with _fail_lock:
-        _, locked_until = _fail_counter.get(ip, (0, 0.0))
-        now = time.time()
-        if locked_until > now:
-            raise HTTPException(
-                status_code=429,
-                detail=f"尝试次数过多,请 {int(locked_until - now)} 秒后重试",
-            )
-        if locked_until and locked_until <= now:
+        _, until = _fail_counter.get(ip, (0, 0.0))
+        if until > time.time():
+            raise HTTPException(429, f"尝试次数过多,请 {int(until - time.time())} 秒后重试")
+        if until:
             _fail_counter.pop(ip, None)
 
 
 def _record_failure(ip: str) -> None:
     with _fail_lock:
-        if len(_fail_counter) > 1000:
-            now = time.time()
-            for stale in [key for key, (_, until) in _fail_counter.items() if until <= now]:
-                _fail_counter.pop(stale, None)
         count, _ = _fail_counter.get(ip, (0, 0.0))
         count += 1
-        locked_until = time.time() + _LOCK_SECONDS if count >= _MAX_FAILS else 0.0
-        _fail_counter[ip] = (count, locked_until)
-
-
-def _clear_failures(ip: str) -> None:
-    with _fail_lock:
-        _fail_counter.pop(ip, None)
+        _fail_counter[ip] = (count, time.time() + _LOCK_SECONDS if count >= _MAX_FAILS else 0.0)
 
 
 @router.get("/status")
 def invite_status(request: Request) -> dict:
-    store = invites.get_store()
-    token = request.cookies.get(invites.COOKIE_NAME)
+    users.sync_env_invites(settings.data_dir, settings.invite_codes)
+    current = users.user_for_session(settings.data_dir, request.cookies.get(COOKIE_NAME))
+    invites = users.list_invites(settings.data_dir)
+    legacy = legacy_invites.get_store()
+    if not settings.invite_codes.strip() and legacy.enabled and not invites:
+        return {
+            "enabled": True,
+            "authorized": legacy.is_valid_session(request.cookies.get(legacy_invites.COOKIE_NAME)),
+            "capacity": legacy.capacity,
+        }
     return {
-        "enabled": store.enabled,
-        "authorized": not store.enabled or store.is_valid_session(token),
-        "capacity": store.capacity,
+        "enabled": users.has_invites(settings.data_dir),
+        "authorized": current is not None,
+        "capacity": len(invites),
+        "available": sum(1 for item in invites if not item["redeemed_by"]),
     }
 
 
 @router.post("/redeem")
-def redeem_invite(req: InviteCodeIn, request: Request, response: Response) -> dict:
-    store = invites.get_store()
-    if not store.enabled:
-        return {"ok": True, "authorized": True}
-
+def register(req: RegisterIn, request: Request, response: Response) -> dict:
+    if not req.username or not req.password:
+        legacy = legacy_invites.get_store()
+        if not settings.invite_codes.strip() and legacy.enabled:
+            session = legacy.redeem(req.code)
+            if session is None:
+                raise HTTPException(401, "邀请码无效,请检查后重试")
+            response.set_cookie(
+                key=legacy_invites.COOKIE_NAME,
+                value=session.token,
+                max_age=legacy_invites.COOKIE_MAX_AGE,
+                httponly=True,
+                secure=_request_is_https(request),
+                samesite="lax",
+                path="/",
+            )
+            return {"ok": True, "authorized": True}
+        raise HTTPException(422, "请填写用户名和密码")
+    users.sync_env_invites(settings.data_dir, settings.invite_codes)
     ip = _client_ip(request)
     _check_rate_limit(ip)
-    session = store.redeem(req.code)
-    if session is None:
+    try:
+        user = users.register_with_invite(settings.data_dir, req.code, req.username, req.password)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if user is None:
         _record_failure(ip)
-        raise HTTPException(status_code=401, detail="邀请码无效,请检查后重试")
-
-    _clear_failures(ip)
+        raise HTTPException(401, "邀请码无效或已使用")
+    token = users.create_session(settings.data_dir, user)
     response.set_cookie(
-        key=invites.COOKIE_NAME,
-        value=session.token,
-        max_age=invites.COOKIE_MAX_AGE,
+        key=COOKIE_NAME,
+        value=token,
+        max_age=users.SESSION_TTL,
         httponly=True,
         secure=_request_is_https(request),
         samesite="lax",
         path="/",
     )
-    logger.info("private beta invite accepted from %s", ip)
-    return {"ok": True, "authorized": True}
+    with _fail_lock:
+        _fail_counter.pop(ip, None)
+    logger.info("user %s registered from %s", user.username, ip)
+    return {"ok": True, "authorized": True, "user": user.__dict__}

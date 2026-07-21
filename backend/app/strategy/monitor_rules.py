@@ -44,7 +44,8 @@ _SIGNAL_PREFIXES = ("signal_", "csg_")
 
 # ── 持久化 (镜像 custom_signals.py) ─────────────────────
 def _dir(data_dir: Path) -> Path:
-    d = data_dir / "user_data" / "monitor_rules"
+    from app.services.user_storage import current_user_dir
+    d = current_user_dir(data_dir) / "monitor_rules"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -43,7 +43,8 @@ class JsonReportStore:
 
     def _path(self) -> Path:
         from app.config import settings
-        p = settings.data_dir / "user_data" / self.filename
+        from app.services.user_storage import path_for
+        p = path_for(settings.data_dir, self.filename)
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 

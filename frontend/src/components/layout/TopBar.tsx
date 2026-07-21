@@ -1,5 +1,7 @@
-import { ChevronsLeft, ChevronsRight, Moon, Sun, WifiOff } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, LogOut, Moon, Sun, UserRound, WifiOff } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { toggleTheme, useTheme } from '@/lib/theme'
+import { api } from '@/lib/api'
 
 interface Props {
   collapsed: boolean
@@ -17,6 +19,12 @@ interface Props {
 export function TopBar({ collapsed, forcedByViewport = false, reconnecting = false, onToggleCollapsed }: Props) {
   const theme = useTheme()
   const dark = theme === 'dark'
+  const authStatus = useQuery({ queryKey: ['auth-status'], queryFn: api.authStatus, staleTime: 30_000 })
+
+  const logout = async () => {
+    await api.authLogout()
+    window.location.href = '/login'
+  }
 
   return (
     <header className="h-12 shrink-0 border-b border-border bg-surface flex items-center justify-between px-3">
@@ -46,6 +54,12 @@ export function TopBar({ collapsed, forcedByViewport = false, reconnecting = fal
             <span className="truncate sm:hidden">重连中</span>
           </div>
         )}
+        {authStatus.data?.user && (
+          <div className="hidden items-center gap-1.5 text-[11px] text-secondary sm:flex" title={authStatus.data.user.role === 'admin' ? '管理员' : '成员'}>
+            <UserRound className="h-3.5 w-3.5" />
+            <span className="max-w-28 truncate">{authStatus.data.user.username}</span>
+          </div>
+        )}
         <button
           onClick={() => toggleTheme()}
           className="flex items-center justify-center rounded-btn p-2 text-foreground/80 transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground cursor-pointer"
@@ -53,6 +67,9 @@ export function TopBar({ collapsed, forcedByViewport = false, reconnecting = fal
           aria-label={dark ? '切换到亮色模式' : '切换到暗色模式'}
         >
           {dark ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
+        </button>
+        <button onClick={() => void logout()} className="flex items-center justify-center rounded-btn p-2 text-foreground/80 transition-colors duration-150 ease-smooth hover:bg-elevated hover:text-foreground" title="退出登录" aria-label="退出登录">
+          <LogOut className="h-4 w-4 shrink-0" />
         </button>
       </div>
     </header>

@@ -21,6 +21,7 @@ import { BRAND_NAME } from '@/lib/brand'
 
 export function Auth() {
   const navigate = useNavigate()
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')  // 仅设密码时用
   const [showPwd, setShowPwd] = useState(false)
@@ -44,7 +45,7 @@ export function Auth() {
       if (isSetup) {
         return api.authSetup(password)
       }
-      return api.authLogin(password)
+        return api.authLogin(username.trim(), password)
     },
     onSuccess: () => {
       // 成功: 跳回原页面(或首页)
@@ -61,6 +62,7 @@ export function Auth() {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     setLocalError('')
+    if (!isSetup && username.trim().length < 2) { setLocalError('请输入用户名'); return }
     if (isSetup) {
       if (password.length < 6) { setLocalError('密码至少 6 位'); return }
       if (password !== confirmPassword) { setLocalError('两次密码不一致'); return }
@@ -95,7 +97,7 @@ export function Auth() {
 
         <div className="rounded-card border border-border bg-surface/90 p-6 shadow-2xl backdrop-blur">
           {/* 标题区: 图标 + 文案随模式切换 */}
-          <div className="mb-5 flex items-center gap-2.5">
+            <div className="mb-5 flex items-center gap-2.5">
             <div className={cn(
               'grid h-9 w-9 place-items-center rounded-lg',
               isSetup ? 'bg-accent/15 text-accent' : 'bg-purple-500/15 text-purple-400',
@@ -104,15 +106,26 @@ export function Auth() {
             </div>
             <div>
               <div className="text-sm font-medium text-foreground">
-                {isSetup ? '设置访问密码' : '登录访问'}
+                {isSetup ? '设置管理员账户' : '登录工作台'}
               </div>
               <div className="text-[11px] text-muted">
-                {isSetup ? '首次使用, 请为面板设置访问密码' : '请输入访问密码以继续'}
+                {isSetup ? '首次使用时创建管理员账户' : '使用你的账号继续'}
               </div>
             </div>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
+            {!isSetup && (
+              <input
+                type="text"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                placeholder="用户名"
+                autoComplete="username"
+                autoFocus
+                className="h-10 w-full rounded-btn border border-border bg-base px-3 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+              />
+            )}
             {/* 密码输入 */}
             <div className="relative">
               <input
@@ -120,7 +133,8 @@ export function Auth() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 placeholder="访问密码"
-                autoFocus
+                autoFocus={isSetup}
+                autoComplete={isSetup ? 'new-password' : 'current-password'}
                 className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
               />
               <button
@@ -154,7 +168,7 @@ export function Auth() {
 
             <button
               type="submit"
-              disabled={submitMut.isPending || !password}
+              disabled={submitMut.isPending || !password || (!isSetup && !username.trim())}
               className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-btn bg-accent text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
             >
               {submitMut.isPending ? (

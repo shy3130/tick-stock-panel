@@ -22,7 +22,9 @@ def _data_dir(request: Request) -> Path:
 
 def _sync_engine(request: Request) -> None:
     """保存/删除后,把最新规则集 reload 到引擎内存态。"""
-    engine = getattr(request.app.state, "monitor_engine", None)
+    from app.services.user_runtime import runtime_for_request
+    runtime = runtime_for_request(request)
+    engine = runtime.monitor_engine if runtime else getattr(request.app.state, "monitor_engine", None)
     if engine is not None:
         rules = monitor_rules.load_all(_data_dir(request))
         engine.set_rules(rules)
@@ -179,7 +181,9 @@ def save_rule(req: RuleModel, request: Request):
     if rule.get("type") == "strategy":
         from app.strategy.engine import StrategyDataContext
 
-        strategy_engine = getattr(request.app.state, "strategy_engine", None)
+        from app.services.user_runtime import runtime_for_request
+        runtime = runtime_for_request(request)
+        strategy_engine = runtime.strategy_engine if runtime else getattr(request.app.state, "strategy_engine", None)
         if strategy_engine is None:
             raise HTTPException(status_code=503, detail="策略引擎未初始化")
         try:
@@ -333,7 +337,9 @@ def test_ladder(request: Request):
 
     repo = request.app.state.repo
     depth_svc = getattr(request.app.state, "depth_service", None)
-    engine = getattr(request.app.state, "monitor_engine", None)
+    from app.services.user_runtime import runtime_for_request
+    runtime = runtime_for_request(request)
+    engine = runtime.monitor_engine if runtime else getattr(request.app.state, "monitor_engine", None)
 
     if not depth_svc:
         raise HTTPException(status_code=503, detail="depth 服务未初始化")
@@ -448,7 +454,9 @@ def trigger_ladder(request: Request):
 
     repo = request.app.state.repo
     depth_svc = getattr(request.app.state, "depth_service", None)
-    engine = getattr(request.app.state, "monitor_engine", None)
+    from app.services.user_runtime import runtime_for_request
+    runtime = runtime_for_request(request)
+    engine = runtime.monitor_engine if runtime else getattr(request.app.state, "monitor_engine", None)
     quote_svc = getattr(request.app.state, "quote_service", None)
 
     if not depth_svc:

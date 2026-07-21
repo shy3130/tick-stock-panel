@@ -37,27 +37,36 @@ logger = logging.getLogger(__name__)
 # ── 自定义信号缓存 ─────────────────────────────────────
 # 从 data/user_data/custom_signals/*.json 加载并编译为 Polars 表达式。
 # 模块级缓存：首次调用时加载，invalidate_custom_signals() 后下次重载。
-_custom_signal_exprs: dict[str, pl.Expr] | None = None
+_custom_signal_exprs: dict[str, dict[str, pl.Expr]] = {}
+
+
+def _custom_signal_cache_key() -> str:
+    from app.services.user_context import get_current_user
+    user = get_current_user()
+    return user.id if user else "__background__"
 
 
 def _get_custom_signal_exprs() -> dict[str, pl.Expr]:
     """懒加载自定义信号表达式（带模块级缓存）。"""
-    global _custom_signal_exprs
-    if _custom_signal_exprs is None:
+    key = _custom_signal_cache_key()
+    cached = _custom_signal_exprs.get(key)
+    if cached is not None:
+        return cached
+    if cached is None:
         from app.strategy import custom_signals
         try:
             sigs = custom_signals.load_all(settings.data_dir)
-            _custom_signal_exprs = custom_signals.build_expressions(sigs)
+            cached = custom_signals.build_expressions(sigs)
         except Exception as e:
             logger.warning("custom signals load failed: %s", e)
-            _custom_signal_exprs = {}
-    return _custom_signal_exprs
+            cached = {}
+        _custom_signal_exprs[key] = cached
+    return cached
 
 
 def invalidate_custom_signals() -> None:
     """失效自定义信号缓存（保存/删除信号后调用，下次计算重新加载）。"""
-    global _custom_signal_exprs
-    _custom_signal_exprs = None
+    _custom_signal_exprs.clear()
 
 
 # enriched parquet 仅存储的列 (14 列)

@@ -134,7 +134,8 @@ async def quote_stream(request: Request):
             while True:
                 await asyncio.sleep(30)
 
-        sub = qs.subscribe()
+        user = getattr(request.state, "user", None)
+        sub = qs.subscribe(user.id if user else None)
         try:
             while True:
                 # 等待任一通道有新信号 (5s 超时保持循环, 便于断线时尽快退出)

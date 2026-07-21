@@ -54,7 +54,8 @@ class QuoteSubscriber:
     改为每连接独立订阅者后, 事件对所有客户端广播。
     """
 
-    def __init__(self, max_alerts: int = 1000, max_reviews: int = 200) -> None:
+    def __init__(self, user_id: str | None = None, max_alerts: int = 1000, max_reviews: int = 200) -> None:
+        self.user_id = user_id
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._max_alerts = max_alerts
@@ -328,9 +329,9 @@ class QuoteService:
     # SSE 订阅管理 — 每个 /stream 连接一个订阅者, 事件广播
     # ================================================================
 
-    def subscribe(self) -> QuoteSubscriber:
+    def subscribe(self, user_id: str | None = None) -> QuoteSubscriber:
         """注册一个 SSE 订阅者 (连接建立时调用)。"""
-        sub = QuoteSubscriber()
+        sub = QuoteSubscriber(user_id=user_id)
         with self._lock:
             self._subscribers.add(sub)
         return sub
@@ -355,10 +356,11 @@ class QuoteService:
         for sub in self._snapshot_subscribers():
             sub.notify_quote()
 
-    def notify_strategy_results_updated(self) -> None:
+    def notify_strategy_results_updated(self, user_id: str | None = None) -> None:
         """策略监控完成实时结果更新后调用，仅刷新策略页结果缓存。"""
         for sub in self._snapshot_subscribers():
-            sub.notify_strategy_results()
+            if user_id is None or sub.user_id == user_id:
+                sub.notify_strategy_results()
 
     def notify_depth_updated(self) -> None:
         """五档盘口修正完成后调用: 通知 SSE 推送 depth_updated, 触发连板梯队刷新。
@@ -368,16 +370,22 @@ class QuoteService:
         for sub in self._snapshot_subscribers():
             sub.notify_depth()
 
-    def _broadcast_alerts(self, alerts: list[dict]) -> None:
+    def _broadcast_alerts(self, alerts: list[dict], user_id: str | None = None) -> None:
         for sub in self._snapshot_subscribers():
-            sub.push_alerts(alerts)
+            if user_id is None or sub.user_id == user_id:
+                sub.push_alerts(alerts)
 
     def push_alerts(self, alerts: list[dict]) -> None:
-        self._broadcast_alerts(alerts)
+        from app.services.user_context import get_current_user
+        user = get_current_user()
+        self._broadcast_alerts(alerts, user.id if user else None)
 
     def clear_pending_alerts(self) -> None:
+        from app.services.user_context import get_current_user
+        user = get_current_user()
         for sub in self._snapshot_subscribers():
-            sub.clear_alerts()
+            if user is None or sub.user_id == user.id:
+                sub.clear_alerts()
 
     def push_review_event(self, event_json: str) -> None:
         """广播一条复盘进度事件(JSON 字符串), 唤醒所有 SSE generator。
@@ -980,105 +988,84 @@ class QuoteService:
                              enriched_date, cn_today())
                 return
 
-            all_alerts: list[dict] = []
-            rule_events: list[dict] = []
-            engine = None
-
-            # 通用监控规则评估 (统一引擎: signal/price/market/strategy)
+            runtimes = []
             if self._app_state:
-                engine = getattr(self._app_state, "monitor_engine", None)
-                if engine and engine.rule_count > 0:
-                    # 预构建 symbol → name 映射 (enriched 已 drop name 列, 引擎触发时回填用)。
-                    # 含股票 + ETF 维表, 保证 ETF 监控告警也能回填名称。
-                    try:
-                        name_map: dict[str, str] = {}
-                        inst_df = self._app_state.repo.get_instruments()
-                        if not inst_df.is_empty() and "symbol" in inst_df.columns and "name" in inst_df.columns:
-                            for row in inst_df.select(["symbol", "name"]).iter_rows(named=True):
-                                if row.get("name"):
-                                    name_map[row["symbol"]] = row["name"]
-                        # 仅当存在 ETF 规则时补 ETF 维表 (股票名优先, setdefault 不覆盖股票)
-                        if engine.has_asset_rules("etf"):
-                            etf_inst = self._app_state.repo.get_etf_instruments()
-                            if not etf_inst.is_empty() and "symbol" in etf_inst.columns and "name" in etf_inst.columns:
-                                for row in etf_inst.select(["symbol", "name"]).iter_rows(named=True):
-                                    if row.get("name"):
-                                        name_map.setdefault(row["symbol"], row["name"])
-                        if name_map:
-                            engine.set_name_map(name_map)
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug("name_map 构建失败 (不影响监控): %s", e)
-                    # 连板梯队封单监控: 有 ladder 规则时, 从 depth_service 注入封单量到 enriched
-                    eval_df = enriched_today
-                    if engine.has_rule_type("ladder"):
-                        eval_df = self._inject_sealed_vol(enriched_today, enriched_date)
-                    eval_df = self._inject_intraday_signals(eval_df, engine, "stock")
-                    rule_events = engine.evaluate(eval_df, asset_type="stock")
-                    if engine.consume_strategy_result_updates():
-                        self.notify_strategy_results_updated()
-                    # ETF 规则轮: 股票快照不含 ETF, 用 ETF enriched 快照单独评估。
-                    # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
-                    # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时
-                    # flush 焐热; 未焐热说明无 ETF 实时数据, 跳过本轮 ETF 评估)。
-                    if engine.has_asset_rules("etf") and self._repo is not None:
-                        try:
-                            etf_enriched, _ = self._repo.get_enriched_latest_asset("etf", refresh=False)
-                            if not etf_enriched.is_empty():
-                                etf_enriched = self._inject_intraday_signals(etf_enriched, engine, "etf")
-                                rule_events = rule_events + engine.evaluate(
-                                    etf_enriched, asset_type="etf", reset_strategy_results=False,
-                                )
-                        except Exception as e:  # noqa: BLE001
-                            logger.warning("ETF 监控评估失败 (不影响股票告警): %s", e)
-                    if rule_events:
-                        # 落盘到 alerts.jsonl
-                        try:
-                            from app.services import alert_store
-                            alert_store.append_many(
-                                self._app_state.repo.store.data_dir, rule_events,
-                            )
-                        except Exception as e:  # noqa: BLE001
-                            logger.warning("告警落盘失败: %s", e)
-                        # 转为 SSE 推送格式 (兼容旧 alert schema)
-                        for ev in rule_events:
-                            all_alerts.append({
-                                "source": ev["source"],
-                                "type": ev["type"],
-                                "rule_id": ev.get("rule_id"),
-                                "strategy_id": ev.get("rule_id") if ev["source"] == "strategy" else None,
-                                "symbol": ev["symbol"],
-                                "name": ev["name"],
-                                "message": ev["message"],
-                                "price": ev["price"],
-                                "change_pct": ev["change_pct"],
-                                "signals": ev["signals"],
-                                "severity": ev.get("severity", "info"),
-                                "conditions": ev.get("conditions") or [],
-                                "logic": ev.get("logic") or "and",
-                            })
-
-            # 策略页实时回显: 不写文件 (实时行情每轮更新 enriched, 写文件会被 read_cache
-            # 的 mtime 校验判过期, 反复读不到)。监控引擎本轮已算出的结果存在内存
-            # (latest_strategy_results), 由 /api/screener/cached 端点直接叠加读取。
-
-            # 广播到所有 SSE 订阅者 (背压保护在订阅者队列内做)
-            if all_alerts:
-                # 按 symbol 富化行业/概念 ext 字段, 使 toast + 触发记录统一展示板块标签。
-                self._enrich_alerts_ext(all_alerts)
-                self._broadcast_alerts(all_alerts)
-                logger.info("监控评估完成: %d 条通知", len(all_alerts))
-
-                # 系统通知 (可选通道, 由 preferences 开关控制)。
-                # cooldown 去重已在 MonitorRuleEngine 做过, 这里只负责转发。
-                self._maybe_send_system_notifications(all_alerts)
-
-            # Webhook 推送 (飞书等外部 IM, 由规则 webhook_channels 指定渠道)。
-            # 紧随系统通知, 同样静默降级不阻断主流程。
-            if rule_events:
-                self._maybe_send_webhook(rule_events, engine)
+                registry = getattr(self._app_state, "user_runtime_registry", None)
+                if registry:
+                    runtimes = registry.all()
+                if not runtimes:
+                    runtimes = [None]
+            for runtime in runtimes:
+                from app.services.user_context import as_user
+                identity = runtime.user if runtime else None
+                with as_user(identity):
+                    self._evaluate_user_monitors(enriched_today, enriched_date, runtime)
 
         except Exception as e:  # noqa: BLE001
             logger.warning("监控评估失败: %s", e)
+
+    def _evaluate_user_monitors(self, enriched_today: pl.DataFrame, enriched_date, runtime) -> None:
+        """Evaluate one user's rules while its storage context is active."""
+        if runtime is not None:
+            engine = runtime.monitor_engine
+            user_id = runtime.user.id
+        else:
+            engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+            user_id = None
+        if not engine or engine.rule_count <= 0:
+            return
+        try:
+            name_map: dict[str, str] = {}
+            inst_df = self._app_state.repo.get_instruments()
+            if not inst_df.is_empty() and "symbol" in inst_df.columns and "name" in inst_df.columns:
+                name_map = {
+                    row["symbol"]: row["name"]
+                    for row in inst_df.select(["symbol", "name"]).iter_rows(named=True)
+                    if row.get("name")
+                }
+            if engine.has_asset_rules("etf"):
+                etf_inst = self._app_state.repo.get_etf_instruments()
+                if not etf_inst.is_empty() and "symbol" in etf_inst.columns and "name" in etf_inst.columns:
+                    for row in etf_inst.select(["symbol", "name"]).iter_rows(named=True):
+                        if row.get("name"):
+                            name_map.setdefault(row["symbol"], row["name"])
+            engine.set_name_map(name_map)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("name_map 构建失败 (不影响监控): %s", exc)
+
+        eval_df = self._inject_sealed_vol(enriched_today, enriched_date) if engine.has_rule_type("ladder") else enriched_today
+        eval_df = self._inject_intraday_signals(eval_df, engine, "stock")
+        rule_events = engine.evaluate(eval_df, asset_type="stock")
+        if engine.consume_strategy_result_updates():
+            self.notify_strategy_results_updated(user_id)
+        if engine.has_asset_rules("etf") and self._repo is not None:
+            try:
+                etf_enriched, _ = self._repo.get_enriched_latest_asset("etf", refresh=False)
+                if not etf_enriched.is_empty():
+                    etf_enriched = self._inject_intraday_signals(etf_enriched, engine, "etf")
+                    rule_events.extend(engine.evaluate(etf_enriched, asset_type="etf", reset_strategy_results=False))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("ETF 监控评估失败 (不影响股票告警): %s", exc)
+        if not rule_events:
+            return
+        try:
+            from app.services import alert_store
+            alert_store.append_many(self._app_state.repo.store.data_dir, rule_events)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("告警落盘失败: %s", exc)
+        all_alerts = [{
+            "source": ev["source"], "type": ev["type"], "rule_id": ev.get("rule_id"),
+            "strategy_id": ev.get("rule_id") if ev["source"] == "strategy" else None,
+            "symbol": ev["symbol"], "name": ev["name"], "message": ev["message"],
+            "price": ev["price"], "change_pct": ev["change_pct"], "signals": ev["signals"],
+            "severity": ev.get("severity", "info"), "conditions": ev.get("conditions") or [],
+            "logic": ev.get("logic") or "and",
+        } for ev in rule_events]
+        self._enrich_alerts_ext(all_alerts)
+        self._broadcast_alerts(all_alerts, user_id)
+        self._maybe_send_system_notifications(all_alerts)
+        self._maybe_send_webhook(rule_events, engine)
+        logger.info("监控评估完成 user=%s: %d 条通知", user_id or "legacy", len(all_alerts))
 
     def _enrich_alerts_ext(self, alerts: list[dict]) -> None:
         """就地给告警事件按 symbol 追加行业/概念 ext 字段。

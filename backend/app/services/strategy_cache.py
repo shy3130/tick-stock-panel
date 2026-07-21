@@ -43,7 +43,8 @@ _file_lock = threading.Lock()
 
 
 def _cache_path(data_dir: Path) -> Path:
-    return data_dir / "user_data" / _CACHE_FILENAME
+    from app.services.user_storage import path_for
+    return path_for(data_dir, _CACHE_FILENAME)
 
 
 def _enriched_parquet_path(data_dir: Path, as_of: str) -> Path:

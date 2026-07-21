@@ -5,7 +5,8 @@
  */
 import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { BarChart3, Database, Radio, SlidersHorizontal, Sparkles, Settings2, Zap } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { BarChart3, Database, Radio, SlidersHorizontal, Sparkles, Settings2, UserCog, Zap } from 'lucide-react'
 import { SettingsKeysPanel } from './settings/Keys'
 import { SettingsAIPanel } from './settings/AI'
 import { SettingsMonitoringPanel } from './settings/Monitoring'
@@ -14,6 +15,8 @@ import { SettingsMenuSettingsPanel } from './settings/MenuSettings'
 import { SettingsSystemPanel } from './settings/System'
 import { SettingsCustomSignalsPanel } from './settings/CustomSignals'
 import { SettingsDataSourcesPanel } from './settings/DataSources'
+import { SettingsAccountPanel } from './settings/Account'
+import { api } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
 import { cn } from '@/lib/cn'
 
@@ -46,14 +49,18 @@ const TABS: readonly TabDef[] = [
   { key: 'signals',      label: '信号库',   group: 'workspace', icon: Zap, panel: SettingsCustomSignalsPanel },
   { key: 'menus',        label: '菜单设置', group: 'workspace', icon: SlidersHorizontal, panel: SettingsMenuSettingsPanel },
   { key: 'system',       label: '系统设置', group: 'system', icon: Settings2, panel: SettingsSystemPanel },
+  { key: 'account',      label: '账户管理', group: 'system', icon: UserCog, panel: SettingsAccountPanel },
 ]
 
 type TabKey = (typeof TABS)[number]['key']
 
 export function Settings() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const authStatus = useQuery({ queryKey: ['auth-status'], queryFn: api.authStatus, staleTime: 30_000 })
+  const isAdmin = authStatus.data?.user?.role === 'admin'
+  const visibleTabs = isAdmin ? TABS : TABS.filter((tab) => tab.key !== 'account' && tab.key !== 'data-sources')
   const tabParam = searchParams.get('tab') as TabKey | null
-  const activeTab = TABS.find((t) => t.key === tabParam) ?? TABS[0]
+  const activeTab = visibleTabs.find((t) => t.key === tabParam) ?? visibleTabs[0]
   // Key 配置仍可从数据页的上下文入口访问，但不再占用设置主导航。
   const showingAccountPanel = tabParam === 'account'
   const highlight = searchParams.get('highlight') ?? ''
@@ -77,7 +84,7 @@ export function Settings() {
                       {group.label}
                     </div>
                     <div className="contents lg:block lg:space-y-1">
-                      {TABS.filter((tab) => tab.group === group.key).map(({ key, label, icon: Icon, badge }) => {
+                      {visibleTabs.filter((tab) => tab.group === group.key).map(({ key, label, icon: Icon, badge }) => {
                         const isActive = !showingAccountPanel && activeTab.key === key
                         return (
                           <button

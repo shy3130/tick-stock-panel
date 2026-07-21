@@ -772,15 +772,17 @@ def update_realtime_monitor_config(req: RealtimeMonitorConfigIn, request: Reques
 
     # 策略监控开关/池变化 → 同步迁移为 type=strategy 规则 + reload 引擎
     if req.strategy_monitor_ids is not None or req.strategy_monitor_enabled is not None:
-        monitor_engine = getattr(request.app.state, "monitor_engine", None)
-        strategy_engine = getattr(request.app.state, "strategy_engine", None)
+        from app.services.user_runtime import runtime_for_request
+        runtime = runtime_for_request(request)
+        monitor_engine = runtime.monitor_engine if runtime else getattr(request.app.state, "monitor_engine", None)
+        strategy_engine = runtime.strategy_engine if runtime else getattr(request.app.state, "strategy_engine", None)
         data_dir = request.app.state.repo.store.data_dir
         if monitor_engine is not None and strategy_engine is not None:
             from app.strategy import monitor_rules as mr_store
             try:
                 if preferences.get_strategy_monitor_enabled():
                     ids = preferences.get_strategy_monitor_ids()
-                    names = {s.id: s.name for s in strategy_engine.list_strategies()}
+                    names = {s["id"]: s["name"] for s in strategy_engine.list_strategies()}
                     mr_store.migrate_strategy_monitors(data_dir, ids, names)
                 else:
                     # 关闭策略监控: 停用所有策略规则

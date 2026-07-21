@@ -13,6 +13,9 @@ function redirectTarget(): string {
 
 export function InviteAccess() {
   const [code, setCode] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [checking, setChecking] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -32,11 +35,13 @@ export function InviteAccess() {
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const inviteCode = code.trim()
-    if (!inviteCode || submitting) return
+    if (!inviteCode || !username.trim() || submitting) return
+    if (password.length < 6) { setError('密码至少 6 位'); return }
+    if (password !== confirmPassword) { setError('两次密码不一致'); return }
     setError('')
     setSubmitting(true)
     try {
-      await api.redeemInvite(inviteCode)
+      await api.redeemInvite(inviteCode, username.trim(), password)
       window.location.replace(redirectTarget())
     } catch (err) {
       setError(err instanceof Error ? err.message : '验证失败，请稍后重试')
@@ -102,7 +107,7 @@ export function InviteAccess() {
         <div className="mb-6">
           <div className="mb-2 font-mono text-[9px] uppercase text-[#a99359]">Invitation required</div>
           <h1 id="invite-title" className="text-xl font-semibold text-[#f7f2e8]">内测访问</h1>
-          <p className="mt-2 text-sm leading-6 text-[#aaa08c]">使用分配给你的专属邀请码进入量化工作台。</p>
+          <p className="mt-2 text-sm leading-6 text-[#aaa08c]">邀请码仅使用一次，注册后你的自选、策略和报告独立保存。</p>
         </div>
 
         <form onSubmit={submit} className="space-y-3">
@@ -124,6 +129,42 @@ export function InviteAccess() {
             </div>
           </label>
 
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-medium text-[#c9c0ae]">用户名</span>
+            <input
+              type="text"
+              value={username}
+              onChange={event => setUsername(event.target.value)}
+              placeholder="设置登录用户名"
+              autoComplete="username"
+              className="h-11 w-full rounded-md border border-[#554a32] bg-[#100f0c] px-3 text-sm text-[#f7f2e8] outline-none transition-colors placeholder:text-[#706858] focus:border-[#bda35f]"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-medium text-[#c9c0ae]">登录密码</span>
+            <input
+              type="password"
+              value={password}
+              onChange={event => setPassword(event.target.value)}
+              placeholder="至少 6 位"
+              autoComplete="new-password"
+              className="h-11 w-full rounded-md border border-[#554a32] bg-[#100f0c] px-3 text-sm text-[#f7f2e8] outline-none transition-colors placeholder:text-[#706858] focus:border-[#bda35f]"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-[11px] font-medium text-[#c9c0ae]">确认密码</span>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={event => setConfirmPassword(event.target.value)}
+              placeholder="再次输入密码"
+              autoComplete="new-password"
+              className="h-11 w-full rounded-md border border-[#554a32] bg-[#100f0c] px-3 text-sm text-[#f7f2e8] outline-none transition-colors placeholder:text-[#706858] focus:border-[#bda35f]"
+            />
+          </label>
+
           <div className="min-h-9" aria-live="polite">
             {error && (
               <div className="flex min-h-9 items-center gap-2 rounded-md border border-[#7e3f35]/60 bg-[#3a1e1a]/60 px-3 text-[11px] text-[#f1a69a]">
@@ -135,17 +176,17 @@ export function InviteAccess() {
 
           <button
             type="submit"
-            disabled={!code.trim() || submitting}
+            disabled={!code.trim() || !username.trim() || !password || submitting}
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#c7ad68] text-sm font-semibold text-[#17140d] transition-colors hover:bg-[#d3bc7b] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#d3bc7b] focus-visible:ring-offset-2 focus-visible:ring-offset-[#191711] disabled:cursor-not-allowed disabled:opacity-45"
           >
             {submitting ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                正在验证
+                正在创建账户
               </>
             ) : (
               <>
-                进入工作台
+                创建并进入
                 <ArrowRight className="h-4 w-4" />
               </>
             )}
@@ -154,7 +195,7 @@ export function InviteAccess() {
 
         <div className="mt-6 flex items-center justify-between border-t border-[#403823] pt-4 font-mono text-[9px] uppercase text-[#756c5a]">
           <span>Sycee access control</span>
-          <span>Encrypted session</span>
+          <a href={`/login?redirect=${encodeURIComponent(redirectTarget())}`} className="text-[#c7ad68] transition-colors hover:text-[#f5f0e5]">已有账号登录</a>
         </div>
       </motion.section>
 

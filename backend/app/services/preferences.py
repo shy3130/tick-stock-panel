@@ -12,31 +12,71 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def _path() -> Path:
+_GLOBAL_KEYS = {
+    "daily_data_provider", "adj_factor_provider", "minute_data_provider",
+    "realtime_data_provider", "financial_data_provider",
+    "minute_sync_enabled", "minute_sync_days", "minute_sync_segment_days",
+    "realtime_quotes_enabled", "realtime_quote_interval",
+    "realtime_pull_stock", "realtime_pull_etf", "realtime_pull_index",
+    "realtime_index_mode", "realtime_index_symbols",
+    "pipeline_pull_etf", "pipeline_pull_index", "pipeline_index_symbols",
+    "pipeline_schedule", "instruments_schedule", "financial_sync_times",
+    "enriched_batch_size", "index_daily_batch_size",
+    "limit_ladder_monitor_enabled", "depth_polling_interval", "depth_finalize_time",
+    "review_schedule",
+}
+
+
+def _global_path() -> Path:
     from app.config import settings
     p = settings.data_dir / "user_data" / "preferences.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
 
-def load() -> dict:
-    p = _path()
-    if p.exists():
+def _path() -> Path:
+    from app.config import settings
+    from app.services.user_storage import path_for
+    p = path_for(settings.data_dir, "preferences.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _read(path: Path) -> dict:
+    if path.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
         except Exception as e:  # noqa: BLE001
             logger.warning("preferences.json malformed: %s", e)
     return {}
 
 
+def load() -> dict:
+    global_data = _read(_global_path())
+    user_data = {k: v for k, v in _read(_path()).items() if k not in _GLOBAL_KEYS}
+    return {**global_data, **user_data}
+
+
 def save(updates: dict) -> dict:
     """合并写入。返回新内容。"""
-    current = load()
-    current.update(updates)
-    _path().write_text(
-        json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8",
-    )
-    return current
+    from app.services.user_context import get_current_user
+    user = get_current_user()
+    global_updates = updates if user is None else {k: v for k, v in updates.items() if k in _GLOBAL_KEYS}
+    user_updates = {} if user is None else {k: v for k, v in updates.items() if k not in _GLOBAL_KEYS}
+    if global_updates:
+        current_global = _read(_global_path())
+        current_global.update(global_updates)
+        _global_path().write_text(
+            json.dumps(current_global, indent=2, ensure_ascii=False), encoding="utf-8",
+        )
+    if user_updates:
+        current_user = _read(_path())
+        current_user.update(user_updates)
+        _path().write_text(
+            json.dumps(current_user, indent=2, ensure_ascii=False), encoding="utf-8",
+        )
+    return load()
 
 
 def get_realtime_quotes_enabled() -> bool:
@@ -78,11 +118,7 @@ def set_realtime_watchlist_symbols(symbols: list[str]) -> list[str]:  # noqa: AR
 
 def set_realtime_quote_interval(interval: float) -> float:
     """保存行情轮询间隔（不在此做 min/max 校验，由调用方按档位限制）。"""
-    current = load()
-    current["realtime_quote_interval"] = interval
-    _path().write_text(
-        json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8",
-    )
+    save({"realtime_quote_interval": interval})
     return interval
 
 

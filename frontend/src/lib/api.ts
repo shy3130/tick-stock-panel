@@ -962,23 +962,29 @@ export const api = {
 
   // ===== Auth (访问认证) =====
   authStatus: () =>
-    request<{ configured: boolean; authenticated: boolean; access_mode?: 'password' | 'invite' }>('/api/auth/status'),
+    request<{
+      configured: boolean
+      authenticated: boolean
+      access_mode?: 'accounts' | 'password' | 'invite'
+      invite_enabled?: boolean
+      user?: { id: string; username: string; role: 'admin' | 'user' } | null
+    }>('/api/auth/status'),
   inviteStatus: () =>
-    request<{ enabled: boolean; authorized: boolean; capacity: number }>('/api/invite/status'),
-  redeemInvite: (code: string) =>
-    request<{ ok: boolean; authorized: boolean }>('/api/invite/redeem', {
+    request<{ enabled: boolean; authorized: boolean; capacity: number; available?: number }>('/api/invite/status'),
+  redeemInvite: (code: string, username: string, password: string) =>
+    request<{ ok: boolean; authorized: boolean; user?: { id: string; username: string; role: 'user' } }>('/api/invite/redeem', {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, username, password }),
     }),
   authSetup: (password: string) =>
-    request<{ ok: boolean }>('/api/auth/setup', {
+    request<{ ok: boolean; user?: { id: string; username: string; role: 'admin' } }>('/api/auth/setup', {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
-  authLogin: (password: string) =>
-    request<{ ok: boolean }>('/api/auth/login', {
+  authLogin: (username: string, password: string) =>
+    request<{ ok: boolean; user?: { id: string; username: string; role: 'admin' | 'user' } }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }),
   authLogout: () =>
     request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
@@ -987,6 +993,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
     }),
+  adminUsers: () => request<{ users: Array<{ id: string; username: string; role: 'admin' | 'user'; disabled: number; created_at: number }> }>('/api/admin/users'),
+  adminDisableUser: (userId: string, disabled: boolean) =>
+    request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(userId)}/disabled`, {
+      method: 'PUT', body: JSON.stringify({ disabled }),
+    }),
+  adminInvites: () => request<{ invites: Array<{ digest: string; label: string; redeemed_by?: string | null; redeemed_at?: number | null; created_at: number }> }>('/api/admin/invites'),
+  adminCreateInvite: (label: string) => request<{ ok: boolean; code: string }>('/api/admin/invites', {
+    method: 'POST', body: JSON.stringify({ label }),
+  }),
 
   settings: () => request<SettingsState>('/api/settings'),
   saveTickflowKey: (api_key: string) =>
