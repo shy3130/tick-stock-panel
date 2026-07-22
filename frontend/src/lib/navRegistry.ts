@@ -31,6 +31,7 @@ import {
   StrategyIcon,
   WatchlistIcon,
 } from '@/components/icons/customNavIcons'
+import { SYCEE_NAV_ITEMS } from '@/features/sycee/registry'
 import { api, type AnalysisMenu } from './api'
 import { QK } from './queryKeys'
 import { usePreferences } from './useSharedQueries'
@@ -87,6 +88,7 @@ export const BUILTIN_NAV: NavItem[] = [
   { id: '/screener',          to: '/screener',          label: '策略',     icon: StrategyIcon,      group: 'strategy', extension: false },
   { id: '/backtest',          to: '/backtest',          label: '回测',     icon: BacktestIcon,      group: 'strategy', extension: false },
   { id: '/review',            to: '/review',            label: '复盘',     icon: BookOpenCheck,     group: 'strategy', extension: false },
+  ...SYCEE_NAV_ITEMS,
   { id: '/indices',           to: '/indices',           label: '指数',     icon: IndicesIcon,       group: 'research', extension: false },
   { id: '/limit-ladder',      to: '/limit-ladder',      label: '连板梯队', icon: LimitLadderIcon,   group: 'research', extension: false },
   { id: '/concept-analysis',  to: '/concept-analysis',  label: '概念分析', icon: Layers3,         group: 'research', extension: false },

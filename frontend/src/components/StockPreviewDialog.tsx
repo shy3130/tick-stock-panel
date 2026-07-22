@@ -11,6 +11,7 @@ import { Modal } from '@/components/Modal'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
+import { ResearchCaptureButton } from '@/features/sycee/research-ledger/ResearchCaptureButton'
 
 interface Props {
   symbol: string | null
@@ -208,6 +209,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                   分时
                 </button>
                 </div>
+                <ResearchCaptureButton symbol={symbol} name={name} triggerInfo={triggerInfo} />
                 <div className="hidden md:block">
                   <PreviewHeaderActions onRefresh={handleRefresh} onClose={onClose} />
                 </div>

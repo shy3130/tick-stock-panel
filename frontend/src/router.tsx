@@ -11,6 +11,7 @@ import { Logo } from './components/Logo'
 import { api } from './lib/api'
 import { resolvePublicEntry } from './lib/publicEntry'
 import { BRAND_NAME } from './lib/brand'
+import { SYCEE_ROUTES } from './features/sycee/registry'
 
 // Keep public entry components eager; authenticated application pages load on demand.
 const Watchlist = lazy(() => import('./pages/Watchlist').then(m => ({ default: m.Watchlist })))
@@ -116,6 +117,7 @@ export const router = createBrowserRouter([
       { path: 'industry-analysis', element: <IndustryAnalysis /> },
       { path: 'stock-analysis', element: <StockAnalysis /> },
       { path: 'review', element: <Review /> },
+      ...SYCEE_ROUTES,
       { path: 'watchlist', element: <Watchlist /> },
       { path: 'screener', element: <Screener /> },
       { path: 'backtest', element: <Backtest /> },

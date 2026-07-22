@@ -41,6 +41,7 @@ from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.quote_service import QuoteService
+from app.sycee.router import router as sycee_router
 from app.tickflow import client as tf_client
 from app.tickflow.capabilities import CapabilityDenied
 from app.tickflow.policy import detect_capabilities
@@ -462,6 +463,7 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+app.include_router(sycee_router)
 
 
 # 能力门控异常 → 403(而非默认 500)
