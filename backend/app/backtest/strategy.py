@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Literal
@@ -473,6 +474,12 @@ class StrategyBacktestConfig:
     holding_days: int = 5
     # 分钟K精确成交: 开启后用当日分钟K确定穿越价/VWAP (需 Pro+ 分钟K能力)
     minute_fill: bool = False
+    # Regime 过滤(引擎级): 熊市日禁止开新仓。传 dict 或 str:
+    #   regime_filter={"type":"leader_index"}  -> 用 data/.regime_cache/leader_index.parquet
+    #     (level>ma60 判牛；缺日期默认允许，避免误杀暖机期)
+    #   regime_filter={"parquet":"<绝对路径>"}  -> 自定义缓存(须含 date/level/ma60 列)
+    # 仅对矩阵策略(MatrixStrategy)生效；不影响 exit 逻辑。None=不启用。
+    regime_filter: dict | str | None = None
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
@@ -1068,6 +1075,38 @@ class StrategyBacktestService:
                 entry_time_mask[start_id:stop_id],
                 exit_time_mask[start_id:stop_id],
             )
+            if config.regime_filter:
+                _allow = StrategyBacktestService._regime_allow_array(
+                    market_data.timestamp_labels[start_id:stop_id], config.regime_filter)
+                _rf = config.regime_filter
+                _mode = _rf.get("mode", "hard") if isinstance(_rf, dict) else "hard"
+                if _mode == "soft":
+                    # 软叠加: 不清零 entry, 仅把牛/熊标记传给引擎缩放当日敞口
+                    matcher_config.regime_allow = [bool(x) for x in _allow.tolist()]
+                    matcher_config.regime_bear_weight = float(
+                        _rf.get("bear_weight", 0.3) if isinstance(_rf, dict) else 0.3)
+                    logger.info(
+                        "[regime] 软叠加生效: 熊市日 exposure ×%.2f (熊市 %d/%d 天)",
+                        matcher_config.regime_bear_weight, int((~_allow).sum()), len(_allow),
+                    )
+                else:
+                    # 硬门控(默认): 熊市日清零开仓信号
+                    entry = np.array(sim_signal_matrix.entry, copy=True)  # 可写副本(frozen dataclass)
+                    entry[~_allow] = 0
+                    entry.setflags(write=False)  # 下游校验要求 read-only
+                    sim_signal_matrix = type(sim_signal_matrix)(
+                        entry=entry,
+                        exit=sim_signal_matrix.exit,
+                        score=sim_signal_matrix.score,
+                        entry_signal_code=sim_signal_matrix.entry_signal_code,
+                        exit_signal_code=sim_signal_matrix.exit_signal_code,
+                        entry_signal_ids=sim_signal_matrix.entry_signal_ids,
+                        exit_signal_ids=sim_signal_matrix.exit_signal_ids,
+                    )
+                    logger.info(
+                        "[regime] 引擎级门控生效: 熊市日清零 %d/%d 个交易日的开仓信号",
+                        int((~_allow).sum()), len(_allow),
+                    )
             timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
             if not sim_signal_matrix.entry.any():
                 return _err("在指定区间内未产生买入信号")
@@ -1124,6 +1163,34 @@ class StrategyBacktestService:
             sim_panel = panel.filter(sim_range).select(sorted(sim_columns))
             sim_entry_mask = entry_mask.filter(sim_range)
             sim_exit_mask = exit_mask.filter(sim_range)
+            if config.regime_filter:
+                try:
+                    _rf_leg = config.regime_filter
+                    _mode_leg = _rf_leg.get("mode", "hard") if isinstance(_rf_leg, dict) else "hard"
+                    if _mode_leg == "soft":
+                        logger.warning("[regime] legacy 路径暂仅支持 hard 门控, soft 已降级为 hard")
+                    _sim_dates = panel.filter(sim_range).select("date")["date"].to_list()
+                    _bull = StrategyBacktestService._regime_bull_map(config.regime_filter)
+
+                    def _nd(x):
+                        if isinstance(x, date):
+                            return x
+                        if isinstance(x, str):
+                            return date.fromisoformat(x[:10])
+                        if hasattr(x, "date"):  # datetime
+                            return x.date()
+                        return date.fromisoformat(str(x)[:10])
+
+                    _allow = pl.Series(
+                        "_regime_allow",
+                        [_bull.get(_nd(d), True) for d in _sim_dates],
+                        dtype=pl.Boolean,
+                    )
+                    sim_entry_mask = sim_entry_mask & _allow
+                    logger.info("[regime] legacy 路径门控生效: 允许 %d/%d 行开仓",
+                                int(_allow.sum()), len(_allow))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[regime] legacy 路径门控失败，已跳过: %s", e)
             if sim_panel.is_empty():
                 return _err("正式回测区间内无数据")
             panel_rows = int(sim_panel.height)
@@ -1394,6 +1461,86 @@ class StrategyBacktestService:
             dtype=bool,
             count=len(timestamp_labels),
         )
+
+    @staticmethod
+    def _regime_cache_path(regime_filter) -> Path:
+        """解析 leader_index.parquet 的绝对路径。支持 regime_filter={"parquet":...} 或字符串路径,
+        否则默认 data/.regime_cache/leader_index.parquet（优先 settings.data_dir，回退到项目 data）。"""
+        pq = None
+        if isinstance(regime_filter, dict):
+            pq = regime_filter.get("parquet")
+        elif isinstance(regime_filter, str):
+            pq = regime_filter
+        if pq:
+            p = Path(pq)
+            if p.exists():
+                return p
+        candidates = [
+            Path(settings.data_dir) / ".regime_cache" / "leader_index.parquet",
+            Path(__file__).resolve().parents[3] / "data" / ".regime_cache" / "leader_index.parquet",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return candidates[0]
+
+    @staticmethod
+    def _regime_bull_map(regime_filter) -> dict[date, bool]:
+        """返回 date->bool 牛市查表（龙头指数 level 站上自身 MA(ma_win) 判牛）。
+
+        - ma_win 可经 regime_filter={"ma": N} 配置（默认 60）；窗口越小信号越快、越不滞后。
+        - 采用 1 日滞后判定（date[d] 用 d-1 的 level/ma 决策），与回测层一致、杜绝前视偏差。
+        - 暖机期（MA 尚未就绪）默认判牛(允许开仓)，避免误杀早期信号。
+        - 缺日期视为允许开仓（由 _regime_allow_array 兜底默认 True）。
+        """
+        ma_win = 60
+        if isinstance(regime_filter, dict):
+            ma_win = int(regime_filter.get("ma", ma_win))
+        pq = StrategyBacktestService._regime_cache_path(regime_filter)
+        df = pl.read_parquet(pq)
+        level = df["level"].to_list()
+        dates = df["date"].to_list()
+        # 从 level 现场计算任意窗口的 MA（不依赖缓存里写死的 ma60）
+        ma = pl.Series(level).rolling_mean(ma_win).to_list()
+
+        def _norm(x):
+            if isinstance(x, date):
+                return x
+            if isinstance(x, str):
+                return date.fromisoformat(x[:10])
+            return date.fromisoformat(str(x)[:10])
+
+        bull: dict[date, bool] = {}
+        for i, d in enumerate(dates):
+            if i == 0 or ma[i - 1] is None:
+                bull[_norm(d)] = True  # 暖机期默认允许
+            else:
+                lv_prev, mv_prev = level[i - 1], ma[i - 1]
+                if lv_prev is None or mv_prev is None:
+                    bull[_norm(d)] = True
+                else:
+                    bull[_norm(d)] = bool(lv_prev > mv_prev)
+        return bull
+
+    @staticmethod
+    def _regime_allow_array(timestamp_labels: tuple[str, ...], regime_filter) -> np.ndarray:
+        """返回与 timestamp_labels 等长的 bool 数组：True=允许开仓(牛市或缺失), False=熊市禁止开仓。
+        regime 信号来自 leader_index.parquet（level > ma60 判牛）。缺日期默认允许，避免误杀暖机期。"""
+        bull = StrategyBacktestService._regime_bull_map(regime_filter)
+
+        def _norm(x):
+            if isinstance(x, date):
+                return x
+            if isinstance(x, str):
+                return date.fromisoformat(x[:10])
+            return date.fromisoformat(str(x)[:10])
+
+        allow = np.ones(len(timestamp_labels), dtype=bool)
+        for i, lab in enumerate(timestamp_labels):
+            key = _norm(lab)
+            if key in bull:
+                allow[i] = bull[key]  # True=牛=允许; False=熊=禁止
+        return allow
 
     def _build_candidate_filter_mask(
         self,

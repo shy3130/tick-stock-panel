@@ -1,4 +1,4 @@
-# Phase 0 单 service:FastAPI 启动后既跑 API 又托管前端 dist。
+# 单 service:FastAPI 后端 API 服务 (前端已移除, 不再托管 dist)。
 # 见 ADR-17 / §8.1。
 services:
   app:

@@ -1,0 +1,272 @@
+[
+  {
+    "phase": "0-锚点",
+    "label": "bullish_alignment 默认(mp=10, equal)",
+    "change": "以已知最优基线 +58.6% 作锚点",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": null,
+    "max_positions": 10,
+    "position_sizing": "equal",
+    "summary": {
+      "n_trades": 95,
+      "win_rate": 0.2632,
+      "total_return": 0.5857,
+      "final_return": 0.5857450200000001,
+      "max_drawdown": -0.0987,
+      "sharpe": 4.1,
+      "sortino": 7.49,
+      "profit_factor": 5.48,
+      "final_equity": 1585745.02
+    },
+    "error": null
+  },
+  {
+    "phase": "1-集中",
+    "label": "bullish mp=5 score_weight",
+    "change": "仓位由10降到5，按动量打分加权(集中到前5强)",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": null,
+    "max_positions": 5,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 50,
+      "win_rate": 0.22,
+      "total_return": 0.6032,
+      "final_return": 0.60324025,
+      "max_drawdown": -0.1696,
+      "sharpe": 3.54,
+      "sortino": 6.2,
+      "profit_factor": 6.49,
+      "final_equity": 1603240.25
+    },
+    "error": null
+  },
+  {
+    "phase": "1-集中",
+    "label": "bullish mp=3 score_weight",
+    "change": "仓位降到3，进一步集中到动量前3",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": null,
+    "max_positions": 3,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 30,
+      "win_rate": 0.1667,
+      "total_return": 0.0498,
+      "final_return": 0.04978433000000004,
+      "max_drawdown": -0.2283,
+      "sharpe": 0.64,
+      "sortino": 0.96,
+      "profit_factor": 6.38,
+      "final_equity": 1049784.33
+    },
+    "error": null
+  },
+  {
+    "phase": "1-集中",
+    "label": "bullish mp=2 score_weight",
+    "change": "仓位降到2，集中到动量前2",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": null,
+    "max_positions": 2,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 32,
+      "win_rate": 0.0938,
+      "total_return": -0.4878,
+      "final_return": -0.48783263,
+      "max_drawdown": -0.5791,
+      "sharpe": -3.03,
+      "sortino": -3.69,
+      "profit_factor": 3.46,
+      "final_equity": 512167.37
+    },
+    "error": null
+  },
+  {
+    "phase": "1-集中",
+    "label": "bullish mp=1 score_weight",
+    "change": "仓位降到1，全部压到动量最强单只",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": null,
+    "max_positions": 1,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 11,
+      "win_rate": 0.0909,
+      "total_return": -0.3505,
+      "final_return": -0.35045686,
+      "max_drawdown": -0.5584,
+      "sharpe": -1.24,
+      "sortino": -1.68,
+      "profit_factor": 4.49,
+      "final_equity": 649543.14
+    },
+    "error": null
+  },
+  {
+    "phase": "1-集中",
+    "label": "bullish mp=1 score_weight hold=20",
+    "change": "单只集中 + 持仓上限20天(让龙头主升充分展开)",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": {
+      "max_hold_days": 20
+    },
+    "max_positions": 1,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 11,
+      "win_rate": 0.0909,
+      "total_return": -0.3505,
+      "final_return": -0.35045686,
+      "max_drawdown": -0.5584,
+      "sharpe": -1.24,
+      "sortino": -1.68,
+      "profit_factor": 4.49,
+      "final_equity": 649543.14
+    },
+    "error": null
+  },
+  {
+    "phase": "1-集中",
+    "label": "bullish mp=1 score_weight hold=30",
+    "change": "单只集中 + 持仓上限30天(极端让赢家奔跑)",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": {
+      "max_hold_days": 30
+    },
+    "max_positions": 1,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 11,
+      "win_rate": 0.0909,
+      "total_return": -0.3505,
+      "final_return": -0.35045686,
+      "max_drawdown": -0.5584,
+      "sharpe": -1.24,
+      "sortino": -1.68,
+      "profit_factor": 4.49,
+      "final_equity": 649543.14
+    },
+    "error": null
+  },
+  {
+    "phase": "2-集中",
+    "label": "pullback mp=5 score_weight",
+    "change": "缩量回踩同样按动量打分加权，仓位5",
+    "sid": "pullback_to_support",
+    "params": null,
+    "overrides": null,
+    "max_positions": 5,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 75,
+      "win_rate": 0.36,
+      "total_return": 0.4268,
+      "final_return": 0.4267740900000001,
+      "max_drawdown": -0.0994,
+      "sharpe": 3.31,
+      "sortino": 6.32,
+      "profit_factor": 3.57,
+      "final_equity": 1426774.09
+    },
+    "error": null
+  },
+  {
+    "phase": "2-集中",
+    "label": "pullback mp=3 score_weight",
+    "change": "缩量回踩仓位降到3",
+    "sid": "pullback_to_support",
+    "params": null,
+    "overrides": null,
+    "max_positions": 3,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 44,
+      "win_rate": 0.3636,
+      "total_return": 0.1124,
+      "final_return": 0.11237520999999995,
+      "max_drawdown": -0.2042,
+      "sharpe": 1.05,
+      "sortino": 1.65,
+      "profit_factor": 2.28,
+      "final_equity": 1112375.21
+    },
+    "error": null
+  },
+  {
+    "phase": "2-集中",
+    "label": "pullback mp=1 score_weight",
+    "change": "缩量回踩单只集中",
+    "sid": "pullback_to_support",
+    "params": null,
+    "overrides": null,
+    "max_positions": 1,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 9,
+      "win_rate": 0.6667,
+      "total_return": 1.0874,
+      "final_return": 1.08737502,
+      "max_drawdown": -0.2711,
+      "sharpe": 3.85,
+      "sortino": 8.45,
+      "profit_factor": 3.53,
+      "final_equity": 2087375.02
+    },
+    "error": null
+  },
+  {
+    "phase": "2-集中",
+    "label": "pullback mp=1 score_weight hold=20",
+    "change": "缩量回踩单只 + 持仓20天",
+    "sid": "pullback_to_support",
+    "params": null,
+    "overrides": {
+      "max_hold_days": 20
+    },
+    "max_positions": 1,
+    "position_sizing": "score_weight",
+    "summary": {
+      "n_trades": 9,
+      "win_rate": 0.6667,
+      "total_return": 1.0874,
+      "final_return": 1.08737502,
+      "max_drawdown": -0.2711,
+      "sharpe": 3.85,
+      "sortino": 8.45,
+      "profit_factor": 3.53,
+      "final_equity": 2087375.02
+    },
+    "error": null
+  },
+  {
+    "phase": "3-组合",
+    "label": "bullish+pullback 合并 mp=2 score_weight",
+    "change": "两趋势策略信号取并集，每期最多持2只、按动量打分加权(分散+集中)",
+    "sid": "bullish_alignment",
+    "params": null,
+    "overrides": null,
+    "max_positions": 2,
+    "position_sizing": "score_weight",
+    "ensemble_with": "pullback_to_support",
+    "summary": {
+      "n_trades": 56,
+      "win_rate": 0.19642857142857142,
+      "total_return": -0.09866010000000003,
+      "max_drawdown": -0.29549401404882536,
+      "sharpe": -0.40527199525156327,
+      "sortino": -0.7519087360949838,
+      "profit_factor": null,
+      "final_equity": 901339.9
+    },
+    "error": null
+  }
+]

@@ -3661,6 +3661,14 @@ def build_matrix_score(
 def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
     if name in {"open", "high", "low", "close", "volume"} or name in market.fields:
         return market.field(name)
+    if name == "price_limit_pct":
+        # 回测矩阵从 parquet 缓存加载时不会预先算 price_limit_pct（它是计算字段），
+        # 这里按需用与内存构建一致的 helper 即时算出并广播到 (time, symbol)。
+        if "price_limit_pct" in market.fields:
+            return market.field("price_limit_pct")
+        legacy_pct, current_pct = numpy_limit_pct_vectors(market.symbols, market.names)
+        limit_pct = np.where(current_pct > 0, current_pct, legacy_pct).astype(np.float32)
+        return np.broadcast_to(limit_pct[None, :], market.shape)
     close_feature = (
         name in {
             "prev_close",

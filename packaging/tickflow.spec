@@ -8,9 +8,8 @@
 
 入口: backend/app/desktop.py (桌面版入口, 含 uvicorn + pywebview)
 
-构建 (在项目根目录):
-  cd frontend && pnpm build                     # 先构建前端到 frontend/dist
-  pyinstaller packaging/tickflow.spec           # 产物在 dist/TickFlowStockPanel/
+构建 (在项目根目录, 仅后端;前端已移除):
+  uv run pyinstaller packaging/tickflow.spec    # 产物在 backend/dist/TickFlowStockPanel/
 """
 import sys
 from importlib.util import find_spec
@@ -29,6 +28,8 @@ block_cipher = None
 
 # ── 资源路径基准: 项目根 (spec 文件在 packaging/ 下) ──────────────────
 ROOT = Path(SPECPATH).parent
+# 前端已移除:frontend/dist 不再存在,仅在该目录存在时才打包进 static,
+# 否则静态托管由后端静默跳过 (config.py static_dir 缺失时不挂载)。
 FRONTEND_DIST = str(ROOT / "frontend" / "dist")
 TIERS_YAML = str(ROOT / "tiers.yaml")
 BUILTIN_STRATEGIES = str(ROOT / "backend" / "app" / "strategy" / "builtin")
@@ -110,7 +111,12 @@ for pkg in (
 
 # ── 随包资源 (只读, 放进 _MEIPASS) ────────────────────────────────────
 # 前端 dist → static/ (config.py frozen 模式读 _MEIPASS/static)
-datas += [(FRONTEND_DIST, "static")]
+# 前端已移除:仅当 frontend/dist 存在时才打包,否则跳过 (后端 API 不受影响)。
+if Path(FRONTEND_DIST).is_dir():
+    datas += [(FRONTEND_DIST, "static")]
+else:
+    # 前端已移除, 不打包静态产物
+    pass
 # tiers.yaml → 包根 (config.py frozen 模式读 _MEIPASS/tiers.yaml)
 datas += [(TIERS_YAML, ".")]
 # 内置策略 → app/strategy/builtin/ (importlib 动态加载, 不能进 PYZ)
@@ -194,9 +200,10 @@ coll = COLLECT(
 if _IS_MACOS:
     import json
 
-    # 版本号从 frontend/package.json 读, 与 Release tag 对齐
-    _pkg_json = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
-    APP_VERSION = _pkg_json["version"]
+    # 版本号从根目录 VERSION 文件读 (前端已移除, 不再从 frontend/package.json 取),
+    # 与 Release tag 对齐。VERSION 形如 "v0.1.86", 去掉前缀 v。
+    _ver_raw = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    APP_VERSION = _ver_raw.lstrip("v") or "0.0.0"
 
     app = BUNDLE(
         coll,

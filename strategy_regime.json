@@ -1,0 +1,83 @@
+[
+  {
+    "window": "2025-03-24~2025-06-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.051742534742010404,
+    "gated": -0.012288534207730684,
+    "dropped": 41,
+    "used": 46,
+    "benchmark": 0.03259607423552158
+  },
+  {
+    "window": "2025-05-24~2025-08-24",
+    "config": "pullback_mp5",
+    "unfiltered": 0.2608159987562113,
+    "gated": 0.22637941007760443,
+    "dropped": 3,
+    "used": 70,
+    "benchmark": 0.2354190493512207
+  },
+  {
+    "window": "2025-07-24~2025-10-24",
+    "config": "pullback_mp5",
+    "unfiltered": 0.31678378352174086,
+    "gated": 0.31678378352174086,
+    "dropped": 0,
+    "used": 70,
+    "benchmark": 0.10697248925392389
+  },
+  {
+    "window": "2025-09-24~2025-12-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.27544964729394283,
+    "gated": -0.11712843698591202,
+    "dropped": 31,
+    "used": 69,
+    "benchmark": 0.03505025870393452
+  },
+  {
+    "window": "2025-11-24~2026-02-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.05930264471536062,
+    "gated": -0.07247143887432028,
+    "dropped": 32,
+    "used": 55,
+    "benchmark": 0.15803328406177242
+  },
+  {
+    "window": "2026-01-24~2026-04-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.3304673918153833,
+    "gated": -0.23899276226289534,
+    "dropped": 40,
+    "used": 57,
+    "benchmark": -0.044353860287901004
+  },
+  {
+    "window": "2026-03-24~2026-06-24",
+    "config": "pullback_mp5",
+    "unfiltered": 0.6150541669024563,
+    "gated": -0.020682018739312635,
+    "dropped": 72,
+    "used": 3,
+    "benchmark": 0.04511071231782604
+  },
+  {
+    "window": "2026-05-24~2026-07-20",
+    "config": "pullback_mp5",
+    "unfiltered": -0.3895724752744075,
+    "gated": 0.0,
+    "dropped": 67,
+    "used": 0,
+    "benchmark": -0.19217394556811473
+  },
+  {
+    "window": "2026-03-24~2026-06-24",
+    "config": "pullback_mp1",
+    "unfiltered": 1.6837474824421372,
+    "gated": 0.0,
+    "dropped": 9,
+    "used": 0,
+    "benchmark": 0.04511071231782604
+  }
+]

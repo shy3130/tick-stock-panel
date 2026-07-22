@@ -1,0 +1,418 @@
+[
+  {
+    "window": "2025-03-24~2025-06-24",
+    "start": "2025-03-24",
+    "end": "2025-06-24",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 18,
+          "win_rate": 0.2222,
+          "total_return": 0.0124,
+          "final_return": 0.012448840000000017,
+          "max_drawdown": -0.3162,
+          "sharpe": 0.6,
+          "sortino": 1.14,
+          "profit_factor": 4.38,
+          "final_equity": 1012448.84
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 87,
+          "win_rate": 0.2644,
+          "total_return": -0.1195,
+          "final_return": -0.11954918000000003,
+          "max_drawdown": -0.2361,
+          "sharpe": -0.59,
+          "sortino": -0.81,
+          "profit_factor": 2.46,
+          "final_equity": 880450.82
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 145,
+          "win_rate": 0.1448,
+          "total_return": -0.4105,
+          "final_return": -0.41046547999999994,
+          "max_drawdown": -0.4245,
+          "sharpe": -3.35,
+          "sortino": -4.04,
+          "profit_factor": 2.97,
+          "final_equity": 589534.52
+        }
+      }
+    }
+  },
+  {
+    "window": "2025-05-24~2025-08-24",
+    "start": "2025-05-24",
+    "end": "2025-08-24",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 15,
+          "win_rate": 0.2667,
+          "total_return": 0.7836,
+          "final_return": 0.78363654,
+          "max_drawdown": -0.2756,
+          "sharpe": 2.9,
+          "sortino": 5.68,
+          "profit_factor": 10.57,
+          "final_equity": 1783636.54
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 73,
+          "win_rate": 0.3288,
+          "total_return": 0.1772,
+          "final_return": 0.17716653000000004,
+          "max_drawdown": -0.1199,
+          "sharpe": 1.71,
+          "sortino": 2.91,
+          "profit_factor": 3.14,
+          "final_equity": 1177166.53
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 119,
+          "win_rate": 0.2017,
+          "total_return": -0.0314,
+          "final_return": -0.03144403000000007,
+          "max_drawdown": -0.264,
+          "sharpe": -0.04,
+          "sortino": -0.06,
+          "profit_factor": 4.05,
+          "final_equity": 968555.97
+        }
+      }
+    }
+  },
+  {
+    "window": "2025-07-24~2025-10-24",
+    "start": "2025-07-24",
+    "end": "2025-10-24",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 12,
+          "win_rate": 0.3333,
+          "total_return": 0.8795,
+          "final_return": 0.87953309,
+          "max_drawdown": -0.3742,
+          "sharpe": 3.16,
+          "sortino": 5.79,
+          "profit_factor": 8.68,
+          "final_equity": 1879533.09
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 70,
+          "win_rate": 0.3714,
+          "total_return": 0.2884,
+          "final_return": 0.28844183,
+          "max_drawdown": -0.2124,
+          "sharpe": 2.22,
+          "sortino": 3.46,
+          "profit_factor": 3.26,
+          "final_equity": 1288441.83
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 115,
+          "win_rate": 0.1652,
+          "total_return": -0.1791,
+          "final_return": -0.17910021999999992,
+          "max_drawdown": -0.2956,
+          "sharpe": -1.87,
+          "sortino": -2.35,
+          "profit_factor": 3.53,
+          "final_equity": 820899.78
+        }
+      }
+    }
+  },
+  {
+    "window": "2025-09-24~2025-12-24",
+    "start": "2025-09-24",
+    "end": "2025-12-24",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 20,
+          "win_rate": 0.2,
+          "total_return": -0.2496,
+          "final_return": -0.2496298,
+          "max_drawdown": -0.4487,
+          "sharpe": -0.83,
+          "sortino": -1.21,
+          "profit_factor": 3.16,
+          "final_equity": 750370.2
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 100,
+          "win_rate": 0.22,
+          "total_return": -0.2693,
+          "final_return": -0.26928966,
+          "max_drawdown": -0.2693,
+          "sharpe": -3.31,
+          "sortino": -3.92,
+          "profit_factor": 1.97,
+          "final_equity": 730710.34
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 90,
+          "win_rate": 0.3111,
+          "total_return": 0.2299,
+          "final_return": 0.2298870100000001,
+          "max_drawdown": -0.1588,
+          "sharpe": 2.1,
+          "sortino": 3.01,
+          "profit_factor": 3.38,
+          "final_equity": 1229887.01
+        }
+      }
+    }
+  },
+  {
+    "window": "2025-11-24~2026-02-24",
+    "start": "2025-11-24",
+    "end": "2026-02-24",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 16,
+          "win_rate": 0.375,
+          "total_return": 0.1964,
+          "final_return": 0.19640522999999988,
+          "max_drawdown": -0.4367,
+          "sharpe": 1.35,
+          "sortino": 1.96,
+          "profit_factor": 2.77,
+          "final_equity": 1196405.23
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 85,
+          "win_rate": 0.2941,
+          "total_return": -0.0388,
+          "final_return": -0.03882719999999995,
+          "max_drawdown": -0.1266,
+          "sharpe": -0.28,
+          "sortino": -0.4,
+          "profit_factor": 2.57,
+          "final_equity": 961172.8
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 103,
+          "win_rate": 0.2524,
+          "total_return": 0.0994,
+          "final_return": 0.09942887999999983,
+          "max_drawdown": -0.2646,
+          "sharpe": 1.07,
+          "sortino": 1.64,
+          "profit_factor": 3.64,
+          "final_equity": 1099428.88
+        }
+      }
+    }
+  },
+  {
+    "window": "2026-01-24~2026-04-24",
+    "start": "2026-01-24",
+    "end": "2026-04-24",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 17,
+          "win_rate": 0.2941,
+          "total_return": -0.2385,
+          "final_return": -0.2385444499999999,
+          "max_drawdown": -0.4022,
+          "sharpe": -1.25,
+          "sortino": -1.7,
+          "profit_factor": 1.22,
+          "final_equity": 761455.55
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 97,
+          "win_rate": 0.2371,
+          "total_return": -0.3132,
+          "final_return": -0.3131919000000001,
+          "max_drawdown": -0.358,
+          "sharpe": -3.53,
+          "sortino": -4.36,
+          "profit_factor": 1.34,
+          "final_equity": 686808.1
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 119,
+          "win_rate": 0.1765,
+          "total_return": -0.222,
+          "final_return": -0.22195796,
+          "max_drawdown": -0.3556,
+          "sharpe": -2.49,
+          "sortino": -3.13,
+          "profit_factor": 3.04,
+          "final_equity": 778042.04
+        }
+      }
+    }
+  },
+  {
+    "window": "2026-03-24~2026-06-24",
+    "start": "2026-03-24",
+    "end": "2026-06-24",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 9,
+          "win_rate": 0.6667,
+          "total_return": 1.0874,
+          "final_return": 1.08737502,
+          "max_drawdown": -0.2711,
+          "sharpe": 3.85,
+          "sortino": 8.45,
+          "profit_factor": 3.53,
+          "final_equity": 2087375.02
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 75,
+          "win_rate": 0.36,
+          "total_return": 0.4268,
+          "final_return": 0.4267740900000001,
+          "max_drawdown": -0.0994,
+          "sharpe": 3.31,
+          "sortino": 6.32,
+          "profit_factor": 3.57,
+          "final_equity": 1426774.09
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 95,
+          "win_rate": 0.2632,
+          "total_return": 0.5857,
+          "final_return": 0.5857450200000001,
+          "max_drawdown": -0.0987,
+          "sharpe": 4.1,
+          "sortino": 7.49,
+          "profit_factor": 5.48,
+          "final_equity": 1585745.02
+        }
+      }
+    }
+  },
+  {
+    "window": "2026-05-24~2026-07-20",
+    "start": "2026-05-24",
+    "end": "2026-07-20",
+    "configs": {
+      "pullback_mp1_sw": {
+        "desc": "单只集中(待验证)",
+        "error": null,
+        "summary": {
+          "n_trades": 6,
+          "win_rate": 0.3333,
+          "total_return": 0.0964,
+          "final_return": 0.09635088999999986,
+          "max_drawdown": -0.3023,
+          "sharpe": 1.09,
+          "sortino": 1.7,
+          "profit_factor": 3.21,
+          "final_equity": 1096350.89
+        }
+      },
+      "pullback_mp5_sw": {
+        "desc": "稳健增强",
+        "error": null,
+        "summary": {
+          "n_trades": 67,
+          "win_rate": 0.194,
+          "total_return": -0.3268,
+          "final_return": -0.32675367,
+          "max_drawdown": -0.3647,
+          "sharpe": -3.58,
+          "sortino": -4.29,
+          "profit_factor": 1.16,
+          "final_equity": 673246.33
+        }
+      },
+      "bullish_mp10_eq": {
+        "desc": "稳健基准",
+        "error": null,
+        "summary": {
+          "n_trades": 101,
+          "win_rate": 0.1485,
+          "total_return": -0.2199,
+          "final_return": -0.21994946999999998,
+          "max_drawdown": -0.386,
+          "sharpe": -1.95,
+          "sortino": -2.47,
+          "profit_factor": 4.03,
+          "final_equity": 780050.53
+        }
+      }
+    }
+  }
+]

@@ -142,7 +142,9 @@
 
 ## 🚀 快速开始
 
-> 前置依赖:Python ≥ 3.11 · Node ≥ 20 · [`uv`](https://docs.astral.sh/uv/) · `pnpm`(`npm i -g pnpm`)
+> 前置依赖:Python ≥ 3.11 · [`uv`](https://docs.astral.sh/uv/)
+>
+> 注:前端(React)已移除 (2026-07-22 决策),显示层由 AI 对话直接承担;本地开发只需 Python + uv,无需 Node / pnpm。
 
 ### 方式 A:Dev 模式(二次开发推荐)
 
@@ -151,7 +153,7 @@ cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 ./dev.sh                   # Windows: .\dev.ps1
 ```
 
-自动检查 / 下载依赖、释放端口、同时起前后端。后端 → <http://localhost:3018> · 前端 → <http://localhost:3011>。
+自动检查 / 下载依赖、释放端口、启动后端。后端 API → <http://localhost:3018>。回测 / 报告产物通过 AI 助手呈现。
 
 ### 方式 B:Docker(部署最省心)
 

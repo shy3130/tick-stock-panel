@@ -1,0 +1,23 @@
+{
+  "symbol": "688308.SH",
+  "name": "欧科亿",
+  "entry_date": "2026-04-27",
+  "exit_date": "2026-05-28",
+  "entry_price": 89.5,
+  "exit_price": 145.0,
+  "pnl_pct": 0.617845,
+  "duration": 20,
+  "exit_reason": "max_hold",
+  "shares": 2200.0,
+  "lots": 22.0,
+  "position_pct": 0.195346,
+  "entry_value": 197037.83,
+  "exit_value": 318776.7,
+  "pnl_amount": 121738.87,
+  "entry_score": 68.29,
+  "entry_signal_date": "2026-04-24",
+  "exit_signal_date": "2026-05-28",
+  "blocked_exit_days": 0,
+  "entry_signal_id": "signal_ma_golden_5_20",
+  "exit_signal_id": null
+}

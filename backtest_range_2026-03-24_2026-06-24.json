@@ -1,0 +1,1657 @@
+{
+  "pullback_to_support": {
+    "error": null,
+    "stats": {
+      "total_return": 0.3962,
+      "annual_return": 2.8833,
+      "max_drawdown": -0.1004,
+      "sharpe": 3.59,
+      "sortino": 6.58,
+      "calmar": 28.71,
+      "win_rate": 0.3379,
+      "profit_factor": 3.74,
+      "n_trades": 145,
+      "avg_pnl": 0.027,
+      "avg_win": 0.168,
+      "avg_loss": 0.045,
+      "best": 1.2285,
+      "worst": -0.1095,
+      "median_pnl": -0.0271,
+      "avg_holding_days": 4.1,
+      "final_equity": 1396243.94,
+      "initial_capital": 1000000.0,
+      "avg_exposure": 0.95,
+      "max_exposure": 1.0,
+      "mc_maxdd_p50": -0.5918,
+      "mc_maxdd_p95": -0.8238,
+      "execution": {
+        "buy_invalid_price": 0,
+        "buy_suspended": 0,
+        "buy_limit_up": 2,
+        "buy_no_slot": 575,
+        "buy_cash": 0,
+        "buy_lot_size": 0,
+        "buy_same_day_reentry": 23,
+        "buy_exposure": 0,
+        "buy_score_filter": 0,
+        "sell_invalid_price": 0,
+        "sell_suspended": 0,
+        "sell_limit_down": 0,
+        "pending_exit": 0
+      },
+      "pending_exit_positions": 0,
+      "market_matrix_shape": [
+        62,
+        5578
+      ],
+      "market_matrix_bytes": 15563364,
+      "timing_ms": {
+        "load_panel": 554.0,
+        "market_data_matrix_build": 0.0,
+        "market_data_direct_load": 554.0,
+        "strategy_signals": 1133.5,
+        "filter_score": 155.3,
+        "signals_score": 1360.2,
+        "matrix_build": 395.3,
+        "simulate": 214.2,
+        "statistics": 14.1,
+        "total": 2527.9
+      },
+      "panel_rows": 340804,
+      "panel_columns": 15,
+      "feature_columns": 15,
+      "full_feature_fallback": false,
+      "execution_backend": "matrix_native",
+      "selection": {
+        "strategy_matches": 4687,
+        "entry_candidates": 4687,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": false
+      },
+      "shared_market_data": false,
+      "matrix_data_cache_hit": true,
+      "matrix_data_cache_status": "covering",
+      "matrix_data_cache_timing_ms": {
+        "axes": 6742.6,
+        "layout": 458.9,
+        "scan": 14288.9,
+        "derived": 2423.4,
+        "flush_close": 67.7,
+        "total_before_publish": 23984.1
+      },
+      "worker": {
+        "pid": 18080,
+        "peak_rss_bytes": 274038784,
+        "final_rss_bytes": 240025600,
+        "serialization_ms": 4.0,
+        "serialized_result_bytes": 104753,
+        "task_elapsed_ms": 4347.7,
+        "worker_exitcode": 0,
+        "ipc_elapsed_ms": 4363.6,
+        "in_process": true
+      }
+    },
+    "config": {
+      "strategy_id": "pullback_to_support",
+      "symbols": null,
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "params": null,
+      "overrides": null,
+      "score_min": null,
+      "score_max": null,
+      "matching": "open_t+1",
+      "entry_fill": "open_t+1",
+      "exit_fill": "open_t+1",
+      "timing_mode": "strict",
+      "fees_pct": 0.0002,
+      "commission_pct": null,
+      "stamp_tax_pct": null,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "minute_fill": false
+    },
+    "strategy_info": {
+      "id": "pullback_to_support",
+      "name": "缩量回踩",
+      "description": "回踩MA20附近 + 缩量 + 中期趋势向上",
+      "entry_signals": [
+        "signal_ma_golden_5_20"
+      ],
+      "exit_signals": [
+        "signal_ma20_breakdown"
+      ],
+      "stop_loss": -0.05,
+      "take_profit": null,
+      "trailing_stop": null,
+      "trailing_take_profit_activate": null,
+      "trailing_take_profit_drawdown": null,
+      "max_hold_days": 20,
+      "full_horizon_days": 20,
+      "score_min": null,
+      "score_max": null,
+      "source": "builtin",
+      "execution_backend": "matrix_native"
+    },
+    "elapsed_ms": 2551.9,
+    "summary": {
+      "n_trades": 145,
+      "final_equity": 1396243.94,
+      "benchmark_return": null,
+      "win_rate": 0.3379,
+      "total_return": 0.3962,
+      "final_return_pct": 0.39624393999999996,
+      "max_drawdown": -0.1004,
+      "sharpe": 3.59,
+      "sortino": 6.58,
+      "profit_factor": 3.74,
+      "equity_points": 62,
+      "per_symbol_count": 138
+    },
+    "top_trades": [
+      {
+        "symbol": "603773.SH",
+        "name": "沃格光电",
+        "entry_date": "2026-05-19",
+        "exit_date": "2026-06-16",
+        "pnl_pct": 1.228512,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "002636.SZ",
+        "name": "金安国纪",
+        "entry_date": "2026-05-19",
+        "exit_date": "2026-06-16",
+        "pnl_pct": 1.208511,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688308.SH",
+        "name": "欧科亿",
+        "entry_date": "2026-04-27",
+        "exit_date": "2026-05-28",
+        "pnl_pct": 0.617845,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "600522.SH",
+        "name": "中天科技",
+        "entry_date": "2026-04-16",
+        "exit_date": "2026-05-19",
+        "pnl_pct": 0.544043,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688150.SH",
+        "name": "莱特光电",
+        "entry_date": "2026-03-25",
+        "exit_date": "2026-04-23",
+        "pnl_pct": 0.532575,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300936.SZ",
+        "name": "中英科技",
+        "entry_date": "2026-04-30",
+        "exit_date": "2026-06-02",
+        "pnl_pct": 0.452964,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688249.SH",
+        "name": "晶合集成",
+        "entry_date": "2026-06-08",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.408685,
+        "exit_reason": "end"
+      },
+      {
+        "symbol": "300936.SZ",
+        "name": "中英科技",
+        "entry_date": "2026-03-27",
+        "exit_date": "2026-04-27",
+        "pnl_pct": 0.393056,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "600487.SH",
+        "name": "亨通光电",
+        "entry_date": "2026-04-16",
+        "exit_date": "2026-05-19",
+        "pnl_pct": 0.35691,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300868.SZ",
+        "name": "杰美特",
+        "entry_date": "2026-06-12",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.353856,
+        "exit_reason": "end"
+      }
+    ]
+  },
+  "bullish_alignment": {
+    "error": null,
+    "stats": {
+      "total_return": 0.5857,
+      "annual_return": 5.5141,
+      "max_drawdown": -0.0987,
+      "sharpe": 4.1,
+      "sortino": 7.49,
+      "calmar": 55.86,
+      "win_rate": 0.2632,
+      "profit_factor": 5.48,
+      "n_trades": 95,
+      "avg_pnl": 0.0481,
+      "avg_win": 0.3734,
+      "avg_loss": 0.0681,
+      "best": 1.0489,
+      "worst": -0.1325,
+      "median_pnl": -0.0613,
+      "avg_holding_days": 6.2,
+      "final_equity": 1585745.02,
+      "initial_capital": 1000000.0,
+      "avg_exposure": 0.9568,
+      "max_exposure": 0.9998,
+      "mc_maxdd_p50": -0.6237,
+      "mc_maxdd_p95": -0.8401,
+      "execution": {
+        "buy_invalid_price": 0,
+        "buy_suspended": 0,
+        "buy_limit_up": 66,
+        "buy_no_slot": 12237,
+        "buy_cash": 0,
+        "buy_lot_size": 0,
+        "buy_same_day_reentry": 73,
+        "buy_exposure": 0,
+        "buy_score_filter": 0,
+        "sell_invalid_price": 0,
+        "sell_suspended": 1,
+        "sell_limit_down": 0,
+        "pending_exit": 1
+      },
+      "pending_exit_positions": 1,
+      "market_matrix_shape": [
+        62,
+        5578
+      ],
+      "market_matrix_bytes": 15563364,
+      "timing_ms": {
+        "load_panel": 399.1,
+        "market_data_matrix_build": 0.0,
+        "market_data_direct_load": 399.1,
+        "strategy_signals": 160.1,
+        "filter_score": 164.8,
+        "signals_score": 395.0,
+        "matrix_build": 403.5,
+        "simulate": 1100.4,
+        "statistics": 6.7,
+        "total": 2301.8
+      },
+      "panel_rows": 340804,
+      "panel_columns": 15,
+      "feature_columns": 15,
+      "full_feature_fallback": false,
+      "execution_backend": "matrix_native",
+      "selection": {
+        "strategy_matches": 40069,
+        "entry_candidates": 40069,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": false
+      },
+      "shared_market_data": false,
+      "matrix_data_cache_hit": true,
+      "matrix_data_cache_status": "covering",
+      "matrix_data_cache_timing_ms": {
+        "axes": 6742.6,
+        "layout": 458.9,
+        "scan": 14288.9,
+        "derived": 2423.4,
+        "flush_close": 67.7,
+        "total_before_publish": 23984.1
+      },
+      "worker": {
+        "pid": 18080,
+        "peak_rss_bytes": 281452544,
+        "final_rss_bytes": 245899264,
+        "serialization_ms": 5.5,
+        "serialized_result_bytes": 68705,
+        "task_elapsed_ms": 3671.9,
+        "worker_exitcode": 0,
+        "ipc_elapsed_ms": 3690.1,
+        "in_process": true
+      }
+    },
+    "config": {
+      "strategy_id": "bullish_alignment",
+      "symbols": null,
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "params": null,
+      "overrides": null,
+      "score_min": null,
+      "score_max": null,
+      "matching": "open_t+1",
+      "entry_fill": "open_t+1",
+      "exit_fill": "open_t+1",
+      "timing_mode": "strict",
+      "fees_pct": 0.0002,
+      "commission_pct": null,
+      "stamp_tax_pct": null,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "minute_fill": false
+    },
+    "strategy_info": {
+      "id": "bullish_alignment",
+      "name": "均线多头",
+      "description": "MA5>MA10>MA20>MA60多头排列 + 短期动量为正",
+      "entry_signals": [
+        "signal_ma_golden_5_20",
+        "signal_ma_golden_20_60"
+      ],
+      "exit_signals": [
+        "signal_ma_dead_5_20",
+        "signal_ma20_breakdown"
+      ],
+      "stop_loss": -0.06,
+      "take_profit": null,
+      "trailing_stop": null,
+      "trailing_take_profit_activate": null,
+      "trailing_take_profit_drawdown": null,
+      "max_hold_days": 20,
+      "full_horizon_days": 20,
+      "score_min": null,
+      "score_max": null,
+      "source": "builtin",
+      "execution_backend": "matrix_native"
+    },
+    "elapsed_ms": 2305.7,
+    "summary": {
+      "n_trades": 95,
+      "final_equity": 1585745.02,
+      "benchmark_return": null,
+      "win_rate": 0.2632,
+      "total_return": 0.5857,
+      "final_return_pct": 0.5857450200000001,
+      "max_drawdown": -0.0987,
+      "sharpe": 4.1,
+      "sortino": 7.49,
+      "profit_factor": 5.48,
+      "equity_points": 62,
+      "per_symbol_count": 60
+    },
+    "top_trades": [
+      {
+        "symbol": "301396.SZ",
+        "name": "宏景科技",
+        "entry_date": "2026-03-25",
+        "exit_date": "2026-04-23",
+        "pnl_pct": 1.048875,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "603629.SH",
+        "name": "利通电子",
+        "entry_date": "2026-04-17",
+        "exit_date": "2026-05-20",
+        "pnl_pct": 0.788096,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "603538.SH",
+        "name": "美诺华",
+        "entry_date": "2026-04-03",
+        "exit_date": "2026-05-07",
+        "pnl_pct": 0.714017,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "301319.SZ",
+        "name": "唯特偶",
+        "entry_date": "2026-06-02",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.695832,
+        "exit_reason": "end"
+      },
+      {
+        "symbol": "002491.SZ",
+        "name": "通鼎互联",
+        "entry_date": "2026-04-14",
+        "exit_date": "2026-05-15",
+        "pnl_pct": 0.654255,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "002980.SZ",
+        "name": "华盛昌",
+        "entry_date": "2026-04-14",
+        "exit_date": "2026-05-15",
+        "pnl_pct": 0.608485,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "003036.SZ",
+        "name": "泰坦股份",
+        "entry_date": "2026-05-27",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.47981,
+        "exit_reason": "end"
+      },
+      {
+        "symbol": "301217.SZ",
+        "name": "铜冠铜箔",
+        "entry_date": "2026-04-30",
+        "exit_date": "2026-06-02",
+        "pnl_pct": 0.449849,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300489.SZ",
+        "name": "光智科技",
+        "entry_date": "2026-06-15",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.414685,
+        "exit_reason": "end"
+      },
+      {
+        "symbol": "688677.SH",
+        "name": "海泰新光",
+        "entry_date": "2026-04-23",
+        "exit_date": "2026-05-26",
+        "pnl_pct": 0.405378,
+        "exit_reason": "max_hold"
+      }
+    ]
+  },
+  "volume_price_surge": {
+    "error": null,
+    "stats": {
+      "total_return": -0.1181,
+      "annual_return": -0.4001,
+      "max_drawdown": -0.217,
+      "sharpe": -1.38,
+      "sortino": -1.73,
+      "calmar": -1.84,
+      "win_rate": 0.2381,
+      "profit_factor": 2.33,
+      "n_trades": 105,
+      "avg_pnl": -0.0126,
+      "avg_win": 0.1424,
+      "avg_loss": 0.0611,
+      "best": 0.6246,
+      "worst": -0.1819,
+      "median_pnl": -0.0613,
+      "avg_holding_days": 5.7,
+      "final_equity": 881866.47,
+      "initial_capital": 1000000.0,
+      "avg_exposure": 0.9623,
+      "max_exposure": 1.0,
+      "mc_maxdd_p50": -0.905,
+      "mc_maxdd_p95": -0.9776,
+      "execution": {
+        "buy_invalid_price": 0,
+        "buy_suspended": 0,
+        "buy_limit_up": 4,
+        "buy_no_slot": 732,
+        "buy_cash": 0,
+        "buy_lot_size": 0,
+        "buy_same_day_reentry": 0,
+        "buy_exposure": 0,
+        "buy_score_filter": 0,
+        "sell_invalid_price": 0,
+        "sell_suspended": 0,
+        "sell_limit_down": 0,
+        "pending_exit": 0
+      },
+      "pending_exit_positions": 0,
+      "market_matrix_shape": [
+        62,
+        5578
+      ],
+      "market_matrix_bytes": 15563364,
+      "timing_ms": {
+        "load_panel": 403.0,
+        "market_data_matrix_build": 0.0,
+        "market_data_direct_load": 403.0,
+        "strategy_signals": 106.8,
+        "filter_score": 145.5,
+        "signals_score": 322.5,
+        "matrix_build": 402.9,
+        "simulate": 157.3,
+        "statistics": 7.1,
+        "total": 1289.5
+      },
+      "panel_rows": 340804,
+      "panel_columns": 14,
+      "feature_columns": 14,
+      "full_feature_fallback": false,
+      "execution_backend": "matrix_native",
+      "selection": {
+        "strategy_matches": 3112,
+        "entry_candidates": 3112,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": false
+      },
+      "shared_market_data": false,
+      "matrix_data_cache_hit": true,
+      "matrix_data_cache_status": "covering",
+      "matrix_data_cache_timing_ms": {
+        "axes": 6742.6,
+        "layout": 458.9,
+        "scan": 14288.9,
+        "derived": 2423.4,
+        "flush_close": 67.7,
+        "total_before_publish": 23984.1
+      },
+      "worker": {
+        "pid": 18080,
+        "peak_rss_bytes": 292990976,
+        "final_rss_bytes": 247345152,
+        "serialization_ms": 3.3,
+        "serialized_result_bytes": 78902,
+        "task_elapsed_ms": 2661.2,
+        "worker_exitcode": 0,
+        "ipc_elapsed_ms": 2679.6,
+        "in_process": true
+      }
+    },
+    "config": {
+      "strategy_id": "volume_price_surge",
+      "symbols": null,
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "params": null,
+      "overrides": null,
+      "score_min": null,
+      "score_max": null,
+      "matching": "open_t+1",
+      "entry_fill": "open_t+1",
+      "exit_fill": "open_t+1",
+      "timing_mode": "strict",
+      "fees_pct": 0.0002,
+      "commission_pct": null,
+      "stamp_tax_pct": null,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "minute_fill": false
+    },
+    "strategy_info": {
+      "id": "volume_price_surge",
+      "name": "量价齐升",
+      "description": "突破MA20 + 放量 + 收阳",
+      "entry_signals": [
+        "signal_ma20_breakout"
+      ],
+      "exit_signals": [
+        "signal_ma20_breakdown"
+      ],
+      "stop_loss": -0.06,
+      "take_profit": null,
+      "trailing_stop": null,
+      "trailing_take_profit_activate": null,
+      "trailing_take_profit_drawdown": null,
+      "max_hold_days": 15,
+      "full_horizon_days": 15,
+      "score_min": null,
+      "score_max": null,
+      "source": "builtin",
+      "execution_backend": "matrix_native"
+    },
+    "elapsed_ms": 1293.6,
+    "summary": {
+      "n_trades": 105,
+      "final_equity": 881866.47,
+      "benchmark_return": null,
+      "win_rate": 0.2381,
+      "total_return": -0.1181,
+      "final_return_pct": -0.11813353000000004,
+      "max_drawdown": -0.217,
+      "sharpe": -1.38,
+      "sortino": -1.73,
+      "profit_factor": 2.33,
+      "equity_points": 62,
+      "per_symbol_count": 104
+    },
+    "top_trades": [
+      {
+        "symbol": "688056.SH",
+        "name": "莱伯泰科",
+        "entry_date": "2026-06-05",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.624601,
+        "exit_reason": "end"
+      },
+      {
+        "symbol": "688146.SH",
+        "name": "中船特气",
+        "entry_date": "2026-04-07",
+        "exit_date": "2026-04-28",
+        "pnl_pct": 0.381289,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300106.SZ",
+        "name": "西部牧业",
+        "entry_date": "2026-04-24",
+        "exit_date": "2026-05-20",
+        "pnl_pct": 0.317664,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300858.SZ",
+        "name": "科拓生物",
+        "entry_date": "2026-03-30",
+        "exit_date": "2026-04-21",
+        "pnl_pct": 0.29965,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "301310.SZ",
+        "name": "鑫宏业",
+        "entry_date": "2026-06-17",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.280174,
+        "exit_reason": "end"
+      },
+      {
+        "symbol": "688272.SH",
+        "name": "富吉瑞",
+        "entry_date": "2026-03-25",
+        "exit_date": "2026-04-16",
+        "pnl_pct": 0.247999,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300174.SZ",
+        "name": "元力股份",
+        "entry_date": "2026-05-21",
+        "exit_date": "2026-06-11",
+        "pnl_pct": 0.231261,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "002705.SZ",
+        "name": "新宝股份",
+        "entry_date": "2026-03-27",
+        "exit_date": "2026-04-20",
+        "pnl_pct": 0.213228,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "920249.BJ",
+        "name": "利尔达",
+        "entry_date": "2026-04-17",
+        "exit_date": "2026-05-13",
+        "pnl_pct": 0.193979,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688226.SH",
+        "name": "威腾电气",
+        "entry_date": "2026-04-07",
+        "exit_date": "2026-04-28",
+        "pnl_pct": 0.163319,
+        "exit_reason": "max_hold"
+      }
+    ]
+  },
+  "limit_up_momentum": {
+    "error": null,
+    "stats": {
+      "total_return": -0.0861,
+      "annual_return": -0.3064,
+      "max_drawdown": -0.1199,
+      "sharpe": -0.71,
+      "sortino": -0.98,
+      "calmar": -2.56,
+      "win_rate": 0.3122,
+      "profit_factor": 2.04,
+      "n_trades": 221,
+      "avg_pnl": -0.0034,
+      "avg_win": 0.1381,
+      "avg_loss": 0.0676,
+      "best": 0.8986,
+      "worst": -0.2149,
+      "median_pnl": -0.0513,
+      "avg_holding_days": 2.7,
+      "final_equity": 913917.49,
+      "initial_capital": 1000000.0,
+      "avg_exposure": 0.9539,
+      "max_exposure": 0.9995,
+      "mc_maxdd_p50": -0.9556,
+      "mc_maxdd_p95": -0.9955,
+      "execution": {
+        "buy_invalid_price": 0,
+        "buy_suspended": 0,
+        "buy_limit_up": 97,
+        "buy_no_slot": 158,
+        "buy_cash": 0,
+        "buy_lot_size": 0,
+        "buy_same_day_reentry": 9,
+        "buy_exposure": 0,
+        "buy_score_filter": 0,
+        "sell_invalid_price": 0,
+        "sell_suspended": 0,
+        "sell_limit_down": 0,
+        "pending_exit": 0
+      },
+      "pending_exit_positions": 0,
+      "market_matrix_shape": [
+        62,
+        5578
+      ],
+      "market_matrix_bytes": 15563364,
+      "timing_ms": {
+        "load_panel": 400.0,
+        "market_data_matrix_build": 0.0,
+        "market_data_direct_load": 400.0,
+        "strategy_signals": 36.3,
+        "filter_score": 111.8,
+        "signals_score": 215.9,
+        "matrix_build": 276.1,
+        "simulate": 198.6,
+        "statistics": 11.2,
+        "total": 1094.7
+      },
+      "panel_rows": 340804,
+      "panel_columns": 15,
+      "feature_columns": 15,
+      "full_feature_fallback": false,
+      "execution_backend": "matrix_native",
+      "selection": {
+        "strategy_matches": 4583,
+        "entry_candidates": 4583,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": false
+      },
+      "shared_market_data": false,
+      "matrix_data_cache_hit": true,
+      "matrix_data_cache_status": "covering",
+      "matrix_data_cache_timing_ms": {
+        "axes": 6742.6,
+        "layout": 458.9,
+        "scan": 14288.9,
+        "derived": 2423.4,
+        "flush_close": 67.7,
+        "total_before_publish": 23984.1
+      },
+      "worker": {
+        "pid": 18080,
+        "peak_rss_bytes": 286420992,
+        "final_rss_bytes": 254443520,
+        "serialization_ms": 5.3,
+        "serialized_result_bytes": 149766,
+        "task_elapsed_ms": 2463.1,
+        "worker_exitcode": 0,
+        "ipc_elapsed_ms": 2480.1,
+        "in_process": true
+      }
+    },
+    "config": {
+      "strategy_id": "limit_up_momentum",
+      "symbols": null,
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "params": null,
+      "overrides": null,
+      "score_min": null,
+      "score_max": null,
+      "matching": "open_t+1",
+      "entry_fill": "open_t+1",
+      "exit_fill": "open_t+1",
+      "timing_mode": "strict",
+      "fees_pct": 0.0002,
+      "commission_pct": null,
+      "stamp_tax_pct": null,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "minute_fill": false
+    },
+    "strategy_info": {
+      "id": "limit_up_momentum",
+      "name": "连板接力",
+      "description": "连板股 + 今日涨幅 > 5%, 连板接力追踪",
+      "entry_signals": [
+        "signal_limit_up"
+      ],
+      "exit_signals": [],
+      "stop_loss": -0.05,
+      "take_profit": null,
+      "trailing_stop": null,
+      "trailing_take_profit_activate": null,
+      "trailing_take_profit_drawdown": null,
+      "max_hold_days": 5,
+      "full_horizon_days": 5,
+      "score_min": null,
+      "score_max": null,
+      "source": "builtin",
+      "execution_backend": "matrix_native"
+    },
+    "elapsed_ms": 1098.6,
+    "summary": {
+      "n_trades": 221,
+      "final_equity": 913917.49,
+      "benchmark_return": null,
+      "win_rate": 0.3122,
+      "total_return": -0.0861,
+      "final_return_pct": -0.08608251,
+      "max_drawdown": -0.1199,
+      "sharpe": -0.71,
+      "sortino": -0.98,
+      "profit_factor": 2.04,
+      "equity_points": 62,
+      "per_symbol_count": 202
+    },
+    "top_trades": [
+      {
+        "symbol": "920125.BJ",
+        "name": "鸿仕达",
+        "entry_date": "2026-04-30",
+        "exit_date": "2026-05-12",
+        "pnl_pct": 0.898589,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300975.SZ",
+        "name": "商络电子",
+        "entry_date": "2026-05-26",
+        "exit_date": "2026-06-02",
+        "pnl_pct": 0.38729,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300179.SZ",
+        "name": "四方达",
+        "entry_date": "2026-05-25",
+        "exit_date": "2026-06-01",
+        "pnl_pct": 0.375924,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688549.SH",
+        "name": "中巨芯",
+        "entry_date": "2026-06-09",
+        "exit_date": "2026-06-16",
+        "pnl_pct": 0.353848,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "301013.SZ",
+        "name": "利和兴",
+        "entry_date": "2026-05-21",
+        "exit_date": "2026-05-28",
+        "pnl_pct": 0.325724,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "002580.SZ",
+        "name": "圣阳股份",
+        "entry_date": "2026-04-14",
+        "exit_date": "2026-04-21",
+        "pnl_pct": 0.310143,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "600367.SH",
+        "name": "红星发展",
+        "entry_date": "2026-06-04",
+        "exit_date": "2026-06-11",
+        "pnl_pct": 0.302331,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688056.SH",
+        "name": "莱伯泰科",
+        "entry_date": "2026-06-08",
+        "exit_date": "2026-06-15",
+        "pnl_pct": 0.299177,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "601869.SH",
+        "name": "长飞光纤",
+        "entry_date": "2026-03-25",
+        "exit_date": "2026-04-01",
+        "pnl_pct": 0.298993,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "603065.SH",
+        "name": "宿迁联盛",
+        "entry_date": "2026-06-15",
+        "exit_date": "2026-06-23",
+        "pnl_pct": 0.288029,
+        "exit_reason": "max_hold"
+      }
+    ]
+  },
+  "consecutive_limit_ups": {
+    "error": null,
+    "stats": {
+      "total_return": -0.1403,
+      "annual_return": -0.459,
+      "max_drawdown": -0.1956,
+      "sharpe": -1.44,
+      "sortino": -1.9,
+      "calmar": -2.35,
+      "win_rate": 0.2996,
+      "profit_factor": 2.11,
+      "n_trades": 227,
+      "avg_pnl": -0.0049,
+      "avg_win": 0.1506,
+      "avg_loss": 0.0714,
+      "best": 0.4351,
+      "worst": -0.2149,
+      "median_pnl": -0.0513,
+      "avg_holding_days": 2.6,
+      "final_equity": 859705.07,
+      "initial_capital": 1000000.0,
+      "avg_exposure": 0.9339,
+      "max_exposure": 0.9996,
+      "mc_maxdd_p50": -0.968,
+      "mc_maxdd_p95": -0.9969,
+      "execution": {
+        "buy_invalid_price": 0,
+        "buy_suspended": 0,
+        "buy_limit_up": 42,
+        "buy_no_slot": 22,
+        "buy_cash": 0,
+        "buy_lot_size": 0,
+        "buy_same_day_reentry": 16,
+        "buy_exposure": 0,
+        "buy_score_filter": 0,
+        "sell_invalid_price": 0,
+        "sell_suspended": 0,
+        "sell_limit_down": 0,
+        "pending_exit": 0
+      },
+      "pending_exit_positions": 0,
+      "market_matrix_shape": [
+        62,
+        5578
+      ],
+      "market_matrix_bytes": 15563364,
+      "timing_ms": {
+        "load_panel": 400.6,
+        "market_data_matrix_build": 0.0,
+        "market_data_direct_load": 400.6,
+        "strategy_signals": 15.5,
+        "filter_score": 84.1,
+        "signals_score": 167.9,
+        "matrix_build": 248.9,
+        "simulate": 89.6,
+        "statistics": 11.4,
+        "total": 910.9
+      },
+      "panel_rows": 340804,
+      "panel_columns": 15,
+      "feature_columns": 15,
+      "full_feature_fallback": false,
+      "execution_backend": "matrix_native",
+      "selection": {
+        "strategy_matches": 743,
+        "entry_candidates": 743,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": false
+      },
+      "shared_market_data": false,
+      "matrix_data_cache_hit": true,
+      "matrix_data_cache_status": "covering",
+      "matrix_data_cache_timing_ms": {
+        "axes": 6742.6,
+        "layout": 458.9,
+        "scan": 14288.9,
+        "derived": 2423.4,
+        "flush_close": 67.7,
+        "total_before_publish": 23984.1
+      },
+      "worker": {
+        "pid": 18080,
+        "peak_rss_bytes": 293695488,
+        "final_rss_bytes": 258592768,
+        "serialization_ms": 4.8,
+        "serialized_result_bytes": 152585,
+        "task_elapsed_ms": 2262.7,
+        "worker_exitcode": 0,
+        "ipc_elapsed_ms": 2280.1,
+        "in_process": true
+      }
+    },
+    "config": {
+      "strategy_id": "consecutive_limit_ups",
+      "symbols": null,
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "params": null,
+      "overrides": null,
+      "score_min": null,
+      "score_max": null,
+      "matching": "open_t+1",
+      "entry_fill": "open_t+1",
+      "exit_fill": "open_t+1",
+      "timing_mode": "strict",
+      "fees_pct": 0.0002,
+      "commission_pct": null,
+      "stamp_tax_pct": null,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "minute_fill": false
+    },
+    "strategy_info": {
+      "id": "consecutive_limit_ups",
+      "name": "连板股",
+      "description": "当日涨停且连续涨停≥2天, 强势追涨",
+      "entry_signals": [
+        "signal_limit_up"
+      ],
+      "exit_signals": [],
+      "stop_loss": -0.05,
+      "take_profit": null,
+      "trailing_stop": null,
+      "trailing_take_profit_activate": null,
+      "trailing_take_profit_drawdown": null,
+      "max_hold_days": 5,
+      "full_horizon_days": 5,
+      "score_min": null,
+      "score_max": null,
+      "source": "builtin",
+      "execution_backend": "matrix_native"
+    },
+    "elapsed_ms": 914.9,
+    "summary": {
+      "n_trades": 227,
+      "final_equity": 859705.07,
+      "benchmark_return": null,
+      "win_rate": 0.2996,
+      "total_return": -0.1403,
+      "final_return_pct": -0.14029493000000004,
+      "max_drawdown": -0.1956,
+      "sharpe": -1.44,
+      "sortino": -1.9,
+      "profit_factor": 2.11,
+      "equity_points": 62,
+      "per_symbol_count": 200
+    },
+    "top_trades": [
+      {
+        "symbol": "002081.SZ",
+        "name": "金螳螂",
+        "entry_date": "2026-04-30",
+        "exit_date": "2026-05-12",
+        "pnl_pct": 0.435127,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "603186.SH",
+        "name": "华正新材",
+        "entry_date": "2026-06-10",
+        "exit_date": "2026-06-17",
+        "pnl_pct": 0.407864,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "920125.BJ",
+        "name": "鸿仕达",
+        "entry_date": "2026-05-06",
+        "exit_date": "2026-05-13",
+        "pnl_pct": 0.377689,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "603011.SH",
+        "name": "合锻智能",
+        "entry_date": "2026-05-29",
+        "exit_date": "2026-06-05",
+        "pnl_pct": 0.340139,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "002580.SZ",
+        "name": "圣阳股份",
+        "entry_date": "2026-04-14",
+        "exit_date": "2026-04-21",
+        "pnl_pct": 0.310143,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "600367.SH",
+        "name": "红星发展",
+        "entry_date": "2026-06-04",
+        "exit_date": "2026-06-11",
+        "pnl_pct": 0.302331,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "000032.SZ",
+        "name": "深桑达A",
+        "entry_date": "2026-06-15",
+        "exit_date": "2026-06-23",
+        "pnl_pct": 0.28986,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "603065.SH",
+        "name": "宿迁联盛",
+        "entry_date": "2026-06-15",
+        "exit_date": "2026-06-23",
+        "pnl_pct": 0.288029,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "001696.SZ",
+        "name": "宗申动力",
+        "entry_date": "2026-06-10",
+        "exit_date": "2026-06-17",
+        "pnl_pct": 0.287566,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "601991.SH",
+        "name": "大唐发电",
+        "entry_date": "2026-05-11",
+        "exit_date": "2026-05-18",
+        "pnl_pct": 0.278209,
+        "exit_reason": "max_hold"
+      }
+    ]
+  },
+  "near_limit_up": {
+    "error": null,
+    "stats": {
+      "total_return": 0.031,
+      "annual_return": 0.1322,
+      "max_drawdown": -0.0897,
+      "sharpe": 0.5,
+      "sortino": 0.76,
+      "calmar": 1.47,
+      "win_rate": 0.3348,
+      "profit_factor": 2.08,
+      "n_trades": 224,
+      "avg_pnl": 0.0022,
+      "avg_win": 0.1446,
+      "avg_loss": 0.0695,
+      "best": 0.772,
+      "worst": -0.1943,
+      "median_pnl": -0.0513,
+      "avg_holding_days": 2.7,
+      "final_equity": 1031020.44,
+      "initial_capital": 1000000.0,
+      "avg_exposure": 0.9468,
+      "max_exposure": 0.9997,
+      "mc_maxdd_p50": -0.9214,
+      "mc_maxdd_p95": -0.9914,
+      "execution": {
+        "buy_invalid_price": 0,
+        "buy_suspended": 0,
+        "buy_limit_up": 99,
+        "buy_no_slot": 0,
+        "buy_cash": 0,
+        "buy_lot_size": 0,
+        "buy_same_day_reentry": 2,
+        "buy_exposure": 0,
+        "buy_score_filter": 0,
+        "sell_invalid_price": 0,
+        "sell_suspended": 0,
+        "sell_limit_down": 0,
+        "pending_exit": 0
+      },
+      "pending_exit_positions": 0,
+      "market_matrix_shape": [
+        62,
+        5578
+      ],
+      "market_matrix_bytes": 15563364,
+      "timing_ms": {
+        "load_panel": 422.7,
+        "market_data_matrix_build": 0.0,
+        "market_data_direct_load": 422.7,
+        "strategy_signals": 83.9,
+        "filter_score": 131.6,
+        "signals_score": 285.4,
+        "matrix_build": 417.9,
+        "simulate": 248.3,
+        "statistics": 11.7,
+        "total": 1377.8
+      },
+      "panel_rows": 340804,
+      "panel_columns": 14,
+      "feature_columns": 14,
+      "full_feature_fallback": false,
+      "execution_backend": "matrix_native",
+      "selection": {
+        "strategy_matches": 6414,
+        "entry_candidates": 6414,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": false
+      },
+      "shared_market_data": false,
+      "matrix_data_cache_hit": true,
+      "matrix_data_cache_status": "covering",
+      "matrix_data_cache_timing_ms": {
+        "axes": 6742.6,
+        "layout": 458.9,
+        "scan": 14288.9,
+        "derived": 2423.4,
+        "flush_close": 67.7,
+        "total_before_publish": 23984.1
+      },
+      "worker": {
+        "pid": 18080,
+        "peak_rss_bytes": 284798976,
+        "final_rss_bytes": 259031040,
+        "serialization_ms": 5.1,
+        "serialized_result_bytes": 148440,
+        "task_elapsed_ms": 2750.6,
+        "worker_exitcode": 0,
+        "ipc_elapsed_ms": 2767.9,
+        "in_process": true
+      }
+    },
+    "config": {
+      "strategy_id": "near_limit_up",
+      "symbols": null,
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "params": null,
+      "overrides": null,
+      "score_min": null,
+      "score_max": null,
+      "matching": "open_t+1",
+      "entry_fill": "open_t+1",
+      "exit_fill": "open_t+1",
+      "timing_mode": "strict",
+      "fees_pct": 0.0002,
+      "commission_pct": null,
+      "stamp_tax_pct": null,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "minute_fill": false
+    },
+    "strategy_info": {
+      "id": "near_limit_up",
+      "name": "逼近涨停",
+      "description": "涨幅 > 7% 且距涨停 < 3%, 追涨信号",
+      "entry_signals": [],
+      "exit_signals": [
+        "signal_ma20_breakdown"
+      ],
+      "stop_loss": -0.05,
+      "take_profit": null,
+      "trailing_stop": null,
+      "trailing_take_profit_activate": null,
+      "trailing_take_profit_drawdown": null,
+      "max_hold_days": 5,
+      "full_horizon_days": 5,
+      "score_min": null,
+      "score_max": null,
+      "source": "builtin",
+      "execution_backend": "matrix_native"
+    },
+    "elapsed_ms": 1381.9,
+    "summary": {
+      "n_trades": 224,
+      "final_equity": 1031020.44,
+      "benchmark_return": null,
+      "win_rate": 0.3348,
+      "total_return": 0.031,
+      "final_return_pct": 0.031020440000000038,
+      "max_drawdown": -0.0897,
+      "sharpe": 0.5,
+      "sortino": 0.76,
+      "profit_factor": 2.08,
+      "equity_points": 62,
+      "per_symbol_count": 202
+    },
+    "top_trades": [
+      {
+        "symbol": "920725.BJ",
+        "name": "惠丰钻石",
+        "entry_date": "2026-05-29",
+        "exit_date": "2026-06-05",
+        "pnl_pct": 0.772027,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300334.SZ",
+        "name": "津膜科技",
+        "entry_date": "2026-06-08",
+        "exit_date": "2026-06-15",
+        "pnl_pct": 0.435148,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688146.SH",
+        "name": "中船特气",
+        "entry_date": "2026-06-05",
+        "exit_date": "2026-06-12",
+        "pnl_pct": 0.42595,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300209.SZ",
+        "name": "行云科技",
+        "entry_date": "2026-04-30",
+        "exit_date": "2026-05-12",
+        "pnl_pct": 0.423742,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688662.SH",
+        "name": "富信科技",
+        "entry_date": "2026-06-11",
+        "exit_date": "2026-06-18",
+        "pnl_pct": 0.406527,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688143.SH",
+        "name": "长盈通",
+        "entry_date": "2026-05-15",
+        "exit_date": "2026-05-22",
+        "pnl_pct": 0.402291,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688677.SH",
+        "name": "海泰新光",
+        "entry_date": "2026-03-31",
+        "exit_date": "2026-04-08",
+        "pnl_pct": 0.365156,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688549.SH",
+        "name": "中巨芯",
+        "entry_date": "2026-06-09",
+        "exit_date": "2026-06-16",
+        "pnl_pct": 0.353848,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688456.SH",
+        "name": "有研粉材",
+        "entry_date": "2026-06-11",
+        "exit_date": "2026-06-18",
+        "pnl_pct": 0.343333,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "301013.SZ",
+        "name": "利和兴",
+        "entry_date": "2026-05-21",
+        "exit_date": "2026-05-28",
+        "pnl_pct": 0.325724,
+        "exit_reason": "max_hold"
+      }
+    ]
+  },
+  "broken_board_recovery": {
+    "error": null,
+    "stats": {
+      "total_return": 0.0099,
+      "annual_return": 0.0409,
+      "max_drawdown": -0.165,
+      "sharpe": 0.3,
+      "sortino": 0.44,
+      "calmar": 0.25,
+      "win_rate": 0.3282,
+      "profit_factor": 2.17,
+      "n_trades": 131,
+      "avg_pnl": 0.0033,
+      "avg_win": 0.1708,
+      "avg_loss": 0.0786,
+      "best": 0.7898,
+      "worst": -0.1843,
+      "median_pnl": -0.0613,
+      "avg_holding_days": 4.6,
+      "final_equity": 1009915.03,
+      "initial_capital": 1000000.0,
+      "avg_exposure": 0.9532,
+      "max_exposure": 0.9995,
+      "mc_maxdd_p50": -0.8925,
+      "mc_maxdd_p95": -0.9834,
+      "execution": {
+        "buy_invalid_price": 0,
+        "buy_suspended": 0,
+        "buy_limit_up": 23,
+        "buy_no_slot": 296,
+        "buy_cash": 0,
+        "buy_lot_size": 0,
+        "buy_same_day_reentry": 1,
+        "buy_exposure": 0,
+        "buy_score_filter": 0,
+        "sell_invalid_price": 0,
+        "sell_suspended": 0,
+        "sell_limit_down": 0,
+        "pending_exit": 0
+      },
+      "pending_exit_positions": 0,
+      "market_matrix_shape": [
+        62,
+        5578
+      ],
+      "market_matrix_bytes": 15563364,
+      "timing_ms": {
+        "load_panel": 410.4,
+        "market_data_matrix_build": 0.0,
+        "market_data_direct_load": 410.4,
+        "strategy_signals": 93.5,
+        "filter_score": 142.4,
+        "signals_score": 307.7,
+        "matrix_build": 388.3,
+        "simulate": 137.3,
+        "statistics": 8.9,
+        "total": 1247.5
+      },
+      "panel_rows": 340804,
+      "panel_columns": 14,
+      "feature_columns": 14,
+      "full_feature_fallback": false,
+      "execution_backend": "matrix_native",
+      "selection": {
+        "strategy_matches": 2110,
+        "entry_candidates": 2110,
+        "entry_trigger_filtered": 0,
+        "entry_trigger_enabled": false
+      },
+      "shared_market_data": false,
+      "matrix_data_cache_hit": true,
+      "matrix_data_cache_status": "covering",
+      "matrix_data_cache_timing_ms": {
+        "axes": 6742.6,
+        "layout": 458.9,
+        "scan": 14288.9,
+        "derived": 2423.4,
+        "flush_close": 67.7,
+        "total_before_publish": 23984.1
+      },
+      "worker": {
+        "pid": 18080,
+        "peak_rss_bytes": 296382464,
+        "final_rss_bytes": 262144000,
+        "serialization_ms": 3.1,
+        "serialized_result_bytes": 94825,
+        "task_elapsed_ms": 2606.9,
+        "worker_exitcode": 0,
+        "ipc_elapsed_ms": 2625.0,
+        "in_process": true
+      }
+    },
+    "config": {
+      "strategy_id": "broken_board_recovery",
+      "symbols": null,
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "params": null,
+      "overrides": null,
+      "score_min": null,
+      "score_max": null,
+      "matching": "open_t+1",
+      "entry_fill": "open_t+1",
+      "exit_fill": "open_t+1",
+      "timing_mode": "strict",
+      "fees_pct": 0.0002,
+      "commission_pct": null,
+      "stamp_tax_pct": null,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "minute_fill": false
+    },
+    "strategy_info": {
+      "id": "broken_board_recovery",
+      "name": "断板反包",
+      "description": "连板≥2后断板1-2天, 出现放量反包信号",
+      "entry_signals": [
+        "signal_limit_up"
+      ],
+      "exit_signals": [
+        "signal_ma20_breakdown"
+      ],
+      "stop_loss": -0.06,
+      "take_profit": null,
+      "trailing_stop": null,
+      "trailing_take_profit_activate": null,
+      "trailing_take_profit_drawdown": null,
+      "max_hold_days": 10,
+      "full_horizon_days": 10,
+      "score_min": null,
+      "score_max": null,
+      "source": "builtin",
+      "execution_backend": "matrix_native"
+    },
+    "elapsed_ms": 1251.8,
+    "summary": {
+      "n_trades": 131,
+      "final_equity": 1009915.03,
+      "benchmark_return": null,
+      "win_rate": 0.3282,
+      "total_return": 0.0099,
+      "final_return_pct": 0.009915029999999936,
+      "max_drawdown": -0.165,
+      "sharpe": 0.3,
+      "sortino": 0.44,
+      "profit_factor": 2.17,
+      "equity_points": 62,
+      "per_symbol_count": 130
+    },
+    "top_trades": [
+      {
+        "symbol": "603065.SH",
+        "name": "宿迁联盛",
+        "entry_date": "2026-06-04",
+        "exit_date": "2026-06-18",
+        "pnl_pct": 0.789808,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688056.SH",
+        "name": "莱伯泰科",
+        "entry_date": "2026-06-08",
+        "exit_date": "2026-06-23",
+        "pnl_pct": 0.682702,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "301013.SZ",
+        "name": "利和兴",
+        "entry_date": "2026-05-21",
+        "exit_date": "2026-06-04",
+        "pnl_pct": 0.629773,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300209.SZ",
+        "name": "行云科技",
+        "entry_date": "2026-04-30",
+        "exit_date": "2026-05-19",
+        "pnl_pct": 0.606288,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300959.SZ",
+        "name": "线上线下",
+        "entry_date": "2026-05-14",
+        "exit_date": "2026-05-28",
+        "pnl_pct": 0.436452,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688677.SH",
+        "name": "海泰新光",
+        "entry_date": "2026-03-31",
+        "exit_date": "2026-04-15",
+        "pnl_pct": 0.41288,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "300334.SZ",
+        "name": "津膜科技",
+        "entry_date": "2026-06-08",
+        "exit_date": "2026-06-23",
+        "pnl_pct": 0.347839,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "301603.SZ",
+        "name": "乔锋智能",
+        "entry_date": "2026-04-17",
+        "exit_date": "2026-05-06",
+        "pnl_pct": 0.231608,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688143.SH",
+        "name": "长盈通",
+        "entry_date": "2026-05-19",
+        "exit_date": "2026-06-02",
+        "pnl_pct": 0.225927,
+        "exit_reason": "max_hold"
+      },
+      {
+        "symbol": "688456.SH",
+        "name": "有研粉材",
+        "entry_date": "2026-06-11",
+        "exit_date": "2026-06-24",
+        "pnl_pct": 0.211652,
+        "exit_reason": "end"
+      }
+    ]
+  }
+}

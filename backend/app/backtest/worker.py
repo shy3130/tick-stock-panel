@@ -237,6 +237,27 @@ def run_worker_task(
     progress_cb: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
+    """Run one complete task and wait for the result.
+
+    Mode is controlled by ``TICKFLOW_BACKTEST_MODE``:
+      * ``spawn``     — isolate the task in a spawned child process (default; matches
+                        the upstream design and preserves memory metrics).
+      * ``inprocess`` — run the worker directly in the calling thread. This avoids
+                        Windows multiprocessing pitfalls when the parent is a long
+                        running server (uvicorn) and is the recommended mode for the
+                        self-hosted 策略+回测 deployment where datasets are modest.
+    """
+    mode = (os.environ.get("TICKFLOW_BACKTEST_MODE", "spawn") or "spawn").lower()
+    if mode == "inprocess":
+        return _run_in_process(task, progress_cb, cancel_event)
+    return _run_spawned(task, progress_cb, cancel_event)
+
+
+def _run_spawned(
+    task: dict[str, Any],
+    progress_cb: Callable[[dict], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     """Run one complete task in a spawned process and wait for deterministic exit."""
     context = mp.get_context("spawn")
     events = context.Queue()
@@ -277,11 +298,13 @@ def run_worker_task(
             elif message_type == "error":
                 failure = message
 
-        process.join(timeout=10.0)
+        # A real backtest (cold import + matrix build + simulation) routinely
+        # exceeds 10s, so give the child a generous window before terminating.
+        process.join(timeout=600.0)
         if process.is_alive():
             process.terminate()
             process.join(timeout=5.0)
-            raise BacktestWorkerError("backtest worker returned but did not exit within 10 seconds")
+            raise BacktestWorkerError("backtest worker returned but did not exit within 600 seconds")
         if failure is not None:
             raise BacktestWorkerError(
                 f"{failure.get('message', 'worker failed')}\n{failure.get('traceback', '')}".rstrip()
@@ -309,3 +332,58 @@ def run_worker_task(
             process.join(timeout=5.0)
         events.close()
         events.join_thread()
+
+
+def _run_in_process(
+    task: dict[str, Any],
+    progress_cb: Callable[[dict], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
+    """Run the worker entry directly in the calling thread (no multiprocessing).
+
+    Used when ``TICKFLOW_BACKTEST_MODE=inprocess``. Reliable under Windows servers
+    where ``spawn`` re-exec crashes before the task body executes. The result object
+    is identical to the spawned path.
+    """
+    events: queue.Queue = queue.Queue()
+    local_cancel = threading.Event()
+    started = time.perf_counter()
+    try:
+        _worker_entry(task, events, local_cancel)
+    finally:
+        if cancel_event is not None and cancel_event.is_set():
+            local_cancel.set()
+
+    result: dict[str, Any] | None = None
+    failure: dict[str, Any] | None = None
+    while True:
+        try:
+            message = events.get_nowait()
+        except queue.Empty:
+            break
+        message_type = message.get("type")
+        if message_type == "progress":
+            if progress_cb is not None:
+                progress_cb(message["payload"])
+        elif message_type == "result":
+            result = message["payload"]
+        elif message_type == "error":
+            failure = message
+
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+    if failure is not None:
+        raise BacktestWorkerError(
+            f"{failure.get('message', 'worker failed')}\n{failure.get('traceback', '')}".rstrip()
+        )
+    if result is None:
+        raise BacktestWorkerError("backtest worker returned without result (in-process)")
+    kind = task["kind"]
+    if kind == "backtest":
+        result.setdefault("stats", {}).setdefault("worker", {}).update(
+            {"worker_exitcode": 0, "ipc_elapsed_ms": elapsed_ms, "in_process": True}
+        )
+    else:
+        result.setdefault("worker", {}).update(
+            {"worker_exitcode": 0, "ipc_elapsed_ms": elapsed_ms, "in_process": True}
+        )
+    return result

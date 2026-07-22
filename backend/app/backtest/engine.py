@@ -71,6 +71,10 @@ class MatcherConfig:
     # 分钟K精确成交: 开启后, 信号触发日的成交价用当日分钟K优化
     # (有参考线→穿越价, 无参考线→VWAP)。数据缺失时降级为日K口径。
     minute_fill: bool = False
+    # regime 软叠加: 与矩阵 time 轴对齐的牛市标记 (True=牛/满仓, False=熊/缩放)。
+    # 非 None 时, 熊市日 max_exposure_pct 乘以 regime_bear_weight (软减仓而非禁止开仓)。
+    regime_allow: list[bool] | None = None
+    regime_bear_weight: float = 0.3
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -1922,6 +1926,11 @@ class BacktestEngine:
                     _try_sell(time_id, asset_id, reason, signal_date, sold_today)
 
             if time_id < time_count - 1 and max_positions > 0:
+                # regime 软叠加: 熊市日缩放当日可分配敞口 (硬门控则已在上游清零 entry, 此处不缩放)
+                _day_exposure = max_exposure_pct
+                if config.regime_allow is not None and time_id < len(config.regime_allow):
+                    if not config.regime_allow[time_id]:
+                        _day_exposure = max_exposure_pct * config.regime_bear_weight
                 candidates: list[tuple[int, float]] = []
                 for asset_id in np.flatnonzero(matrix.entry[time_id]):
                     asset = int(asset_id)
@@ -1950,9 +1959,9 @@ class BacktestEngine:
                     selected = candidates[:slots]
                     market_value_before = _market_value()
                     equity_before = cash + market_value_before
-                    target_value = equity_before * max_exposure_pct / max_positions
-                    exposure_capacity = equity_before * max_exposure_pct - market_value_before
-                    if equity_before <= 0 or exposure_capacity <= 0 or max_exposure_pct <= 0:
+                    target_value = equity_before * _day_exposure / max_positions
+                    exposure_capacity = equity_before * _day_exposure - market_value_before
+                    if equity_before <= 0 or exposure_capacity <= 0 or _day_exposure <= 0:
                         execution_stats["buy_exposure"] += len(selected)
                     else:
                         weights = np.repeat(1 / len(selected), len(selected))
@@ -1967,7 +1976,7 @@ class BacktestEngine:
                                 break
                             market_value = _market_value()
                             equity = cash + market_value
-                            capacity = equity * max_exposure_pct - market_value
+                            capacity = equity * _day_exposure - market_value
                             allocation = min(total_budget * float(weight), target_value, cash, capacity)
                             if allocation <= 0:
                                 _count("buy_exposure")

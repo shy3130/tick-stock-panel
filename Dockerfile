@@ -1,4 +1,4 @@
-# 两阶段构建:前端 dist 拷进后端镜像,单容器运行
+# 后端单镜像构建 (FastAPI API 服务;前端已移除,不再打包 dist)
 # 可选:构建网络无法直连官方源时,传入 --build-arg USE_CN_MIRROR=1 启用国内镜像
 # 可选:stock-sdk 插件默认不打包(它抓取第三方财经网站接口,存在版权与反爬风险)。
 #       如确需启用,传入 --build-arg INCLUDE_STOCKSDK=1 显式开启,使用风险自负。
@@ -11,22 +11,10 @@ ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG CODEX_CLI_VERSION=0.144.3
 
-# === Stage 1: 前端构建 ===
-FROM node:20-alpine AS frontend-builder
-ARG USE_CN_MIRROR=1
-ARG NPM_REGISTRY=https://registry.npmmirror.com
-WORKDIR /build
-# 关键:corepack 不读 npm 的 registry 配置,且跨 RUN 不保留环境变量,
-# 因此国内网络下最稳的做法是直接用 npm 安装 pnpm(npm 会读取 .npmrc 镜像源),
-# 彻底绕开 corepack 再次联网下载 pnpm 的问题。
-RUN if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY"; fi && \
-    npm install -g pnpm@9
-# 让 pnpm 走镜像源安装依赖
-RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"; fi
-COPY frontend/package.json frontend/pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile || pnpm install
-COPY frontend/ ./
-RUN pnpm build
+# === Stage 1: 前端构建 (已移除) ===
+# 前端目录已删除 (2026-07-22 决策:显示层由 AI 对话直接承担,不再维护 React 前端)。
+# 原 frontend-builder 阶段在此构建 React 产物并 COPY 到 ./static;
+# 现后端 static_dir 在 frontend/dist 缺失时静默跳过挂载,仅需后端 API。
 
 # === Stage 1b: stock-sdk 插件依赖(可选,默认跳过) ===
 # ⚠️ 合规提示: stock-sdk 通过 node bridge.mjs 抓取第三方财经网站(如东方财富)的行情接口,
@@ -127,8 +115,8 @@ ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
     DATA_DIR=/app/data
 
-# Frontend 静态产物
-COPY --from=frontend-builder /build/dist ./static
+# 前端静态产物 (已移除):前端目录删除后不再 COPY dist;
+# config.py 的 static_dir 在目标不存在时静默跳过挂载,后端仅提供 API。
 
 # Codex CLI 使用官方 npm 包携带的当前平台原生二进制，无需运行时 Node.js。
 COPY --from=codex-builder /opt/codex-native /usr/local/bin/codex
