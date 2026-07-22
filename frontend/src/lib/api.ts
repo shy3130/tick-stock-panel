@@ -1439,9 +1439,9 @@ export const api = {
         : '/api/watchlist/enriched',
     ),
 
-  screenerStrategies: async (assetType: 'stock' | 'etf' = 'stock') => {
+  screenerStrategies: async (assetType?: 'stock' | 'etf') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
-      `/api/strategies?asset_type=${assetType}&timeframe=1d`,
+      `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}timeframe=1d`,
     )
     return { presets: data.strategies, load_errors: data.load_errors }
   },

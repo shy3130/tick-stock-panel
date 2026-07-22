@@ -419,6 +419,17 @@ class StrategyEngine:
     def has(self, strategy_id: str) -> bool:
         return strategy_id in self._strategies
 
+    def unregister(self, strategy_id: str) -> bool:
+        """从运行时注册表移除单个策略, 不重新加载其他策略文件。"""
+        if strategy_id not in self._strategies:
+            return False
+        strategies = dict(self._strategies)
+        strategies.pop(strategy_id)
+        self._strategies = strategies
+        with self._realtime_matrix_lock:
+            self._realtime_matrices.clear()
+        return True
+
     @staticmethod
     def validate_context(strategy: StrategyDef, context: StrategyDataContext) -> None:
         asset_types = strategy.meta.get("asset_types", ["stock"])

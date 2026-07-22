@@ -5,6 +5,8 @@ import {
   Database, Settings2, Send, Wand2, Minimize2, History,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { copyText } from '@/lib/clipboard'
+import { toast } from '@/components/Toast'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import {
   type ActiveTask, type HistoryReport,
@@ -69,11 +71,14 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
 
   const handleCopy = async () => {
     if (!content) return
-    try {
-      await navigator.clipboard.writeText(content)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch { /* ignore */ }
+    const success = await copyText(content)
+    if (!success) {
+      toast('复制失败,请手动选择文本', 'error')
+      return
+    }
+    setCopied(true)
+    toast('已复制到剪贴板', 'success')
+    setTimeout(() => setCopied(false), 2000)
   }
 
   if (!open) return null

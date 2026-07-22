@@ -60,7 +60,8 @@ def test_live_enriched_cache_keeps_instrument_metadata_without_persisting_it(tmp
     assert "float_shares" not in persisted.columns
 
 
-def test_history_strategy_monitor_keeps_live_row_with_exclude_st_enabled(tmp_path):
+def test_history_strategy_monitor_keeps_live_row_with_exclude_st_enabled(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.strategy.monitor.cn_today", lambda: date(2026, 7, 20))
     strategy_dir = tmp_path / "strategies"
     strategy_dir.mkdir()
     (strategy_dir / "history_strategy.py").write_text(

@@ -921,7 +921,12 @@ export function StrategyBacktest() {
   const isPending = backtestTask?.isPending ?? false
 
   const dataStatus = useDataStatus()
-  const earliestDate = dataStatus.data?.daily?.earliest_date ?? null
+  const backtestDataStatus = assetType === 'etf'
+    ? dataStatus.data?.etf_enriched
+    : dataStatus.data?.enriched
+  const earliestDate = backtestDataStatus?.earliest_date ?? null
+  const backtestDataUnavailable = dataStatus.isSuccess && !earliestDate
+  const backtestDataLabel = assetType === 'etf' ? 'ETF 指标数据' : '股票指标数据'
 
   const resetConfigFromDetail = (detail: StrategyDetail) => {
     setStrategyParams(strategyDefaultParams(detail))
@@ -981,7 +986,7 @@ export function StrategyBacktest() {
   }, [backtestTask])
 
   const handleRun = () => {
-    if (!selectedStrategy) return
+    if (!selectedStrategy || backtestDataUnavailable) return
     const requestOverrides = detail
       ? normalizeStrategyOverrides(detail, overrides)
       : overrides
@@ -1587,6 +1592,13 @@ export function StrategyBacktest() {
         </div>
         )}
 
+        {backtestDataUnavailable && (
+          <div className="flex items-start gap-1.5 rounded-btn border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-4 text-danger">
+            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>缺少{backtestDataLabel}，请先在数据页面同步日K并完成指标计算。</span>
+          </div>
+        )}
+
         {isPending ? (
           <button
             onClick={stopBacktest}
@@ -1600,7 +1612,7 @@ export function StrategyBacktest() {
         ) : (
           <button
             onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading}
+            disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
             className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
               bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
               transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
@@ -1671,7 +1683,10 @@ export function StrategyBacktest() {
 
         {backtestTask?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-            {backtestTask.error}
+            <div>{backtestTask.error}</div>
+            {result && (
+              <div className="mt-1 text-xs text-secondary">本次回测未生成新结果，下方仍展示上一次成功结果。</div>
+            )}
           </div>
         )}
 

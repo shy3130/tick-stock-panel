@@ -686,7 +686,7 @@ def load_market_data_matrix_from_parquet(
         raise ValueError(f"matrix parquet root does not exist: {root}")
     available_start, available_end = _partition_date_bounds(root)
     if available_start is None or available_end is None:
-        raise ValueError("matrix parquet root contains no dated partitions")
+        raise ValueError("本地指标数据为空，请先在数据页面同步日K并完成指标计算")
     effective_start = max(start, available_start)
     effective_end = min(end, available_end)
     if effective_start > effective_end:
