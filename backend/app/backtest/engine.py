@@ -75,6 +75,9 @@ class MatcherConfig:
     # 非 None 时, 熊市日 max_exposure_pct 乘以 regime_bear_weight (软减仓而非禁止开仓)。
     regime_allow: list[bool] | None = None
     regime_bear_weight: float = 0.3
+    # regime 软叠加(scale_existing): 熊市日不只缩放新开仓预算,
+    # 而是把整本书(含已有持仓)也减持到 regime 目标暴露, 真正降低回撤。
+    regime_scale_existing: bool = False
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -1924,6 +1927,27 @@ class BacktestEngine:
                     reason = "end"
                 if reason:
                     _try_sell(time_id, asset_id, reason, signal_date, sold_today)
+
+            # regime 软叠加(scale_existing): 熊市日对整本书做暴露缩放。
+            # 不只挡新开仓, 而是把已有持仓也减持到 regime 目标暴露, 真正降低回撤。
+            if (
+                config.regime_scale_existing
+                and config.regime_allow is not None
+                and time_id < time_count - 1
+                and time_id < len(config.regime_allow)
+                and not config.regime_allow[time_id]
+            ):
+                _bear_exp = max_exposure_pct * config.regime_bear_weight
+                _equity = cash + _market_value()
+                _target_mv = _equity * _bear_exp
+                if _market_value() > _target_mv + 1e-6 and positions:
+                    # 弱信号(低 entry_score)先出, 直到暴露降到 regime 目标
+                    _open = [(a, positions[a]) for a in positions if a not in sold_today]
+                    _open.sort(key=lambda kv: float(kv[1].get("entry_score", 0.0)))
+                    for _a, _p in _open:
+                        if _market_value() <= _target_mv + 1e-6:
+                            break
+                        _try_sell(time_id, _a, "regime_de-risk", date_text, sold_today)
 
             if time_id < time_count - 1 and max_positions > 0:
                 # regime 软叠加: 熊市日缩放当日可分配敞口 (硬门控则已在上游清零 entry, 此处不缩放)

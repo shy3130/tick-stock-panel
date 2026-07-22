@@ -474,10 +474,16 @@ class StrategyBacktestConfig:
     holding_days: int = 5
     # 分钟K精确成交: 开启后用当日分钟K确定穿越价/VWAP (需 Pro+ 分钟K能力)
     minute_fill: bool = False
-    # Regime 过滤(引擎级): 熊市日禁止开新仓。传 dict 或 str:
+    # Regime 过滤(引擎级): 熊市日降低暴露。传 dict 或 str:
     #   regime_filter={"type":"leader_index"}  -> 用 data/.regime_cache/leader_index.parquet
     #     (level>ma60 判牛；缺日期默认允许，避免误杀暖机期)
     #   regime_filter={"parquet":"<绝对路径>"}  -> 自定义缓存(须含 date/level/ma60 列)
+    # 可选键:
+    #   mode="hard"(默认)  -> 熊市日清零开仓信号(最强制回撤保护, 但牺牲上行)
+    #   mode="soft"        -> 不清零, 仅把熊市日 max_exposure_pct × bear_weight
+    #   bear_weight=0.3    -> soft 模式熊市日暴露缩放系数(默认 0.3)
+    #   scale_existing=True-> soft 模式连已有持仓一并减持到 regime 目标暴露(真·减亏);
+    #                         默认 False 时仅缩放新开仓预算, 已有持仓不动
     # 仅对矩阵策略(MatrixStrategy)生效；不影响 exit 逻辑。None=不启用。
     regime_filter: dict | str | None = None
 
@@ -1085,6 +1091,9 @@ class StrategyBacktestService:
                     matcher_config.regime_allow = [bool(x) for x in _allow.tolist()]
                     matcher_config.regime_bear_weight = float(
                         _rf.get("bear_weight", 0.3) if isinstance(_rf, dict) else 0.3)
+                    # scale_existing: 熊市日连已有持仓一并减持到 regime 目标暴露
+                    matcher_config.regime_scale_existing = bool(
+                        _rf.get("scale_existing", False) if isinstance(_rf, dict) else False)
                     logger.info(
                         "[regime] 软叠加生效: 熊市日 exposure ×%.2f (熊市 %d/%d 天)",
                         matcher_config.regime_bear_weight, int((~_allow).sum()), len(_allow),
