@@ -31,6 +31,16 @@ const hooks = vi.hoisted(() => ({
   toggleState: {} as Record<string, unknown>,
 }))
 
+const apiMocks = vi.hoisted(() => ({
+  instrumentSearch: vi.fn(),
+}))
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    instrumentSearch: apiMocks.instrumentSearch,
+  },
+}))
+
 const chartMocks = vi.hoisted(() => ({
   disconnect: vi.fn(),
   dispose: vi.fn(),
@@ -267,6 +277,8 @@ function deferred<T = unknown>() {
 }
 
 beforeEach(() => {
+  apiMocks.instrumentSearch.mockReset()
+  apiMocks.instrumentSearch.mockResolvedValue({ results: [] })
   hooks.add.mockReset()
   hooks.markRead.mockReset()
   hooks.remove.mockReset()
@@ -492,6 +504,41 @@ describe('Dow monitor page', () => {
 
     await user.click(screen.getByRole('button', { name: '移除 INTC.US' }))
     expect(hooks.remove).toHaveBeenCalledWith('INTC.US')
+  })
+
+  it('shows stock suggestions and fills the canonical symbol before explicit add', async () => {
+    apiMocks.instrumentSearch.mockResolvedValue({
+      results: [
+        {
+          symbol: '0700.HK',
+          name: '腾讯控股',
+          code: '00700',
+          market: 'hk',
+          asset_type: 'stock',
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    render(<DowMonitor />)
+
+    const input = screen.getByRole('textbox', { name: '股票代码' })
+    await user.type(input, '腾讯')
+
+    const option = await screen.findByRole('option', { name: /0700\.HK.*腾讯控股/ })
+    const listbox = screen.getByRole('listbox', { name: '股票候选' })
+    expect(input).toHaveClass('w-52')
+    expect(listbox).toHaveClass('right-0', 'w-80')
+    expect(listbox).not.toHaveClass('left-0')
+    expect(apiMocks.instrumentSearch).toHaveBeenCalledWith('腾讯', 8, 'stock', 'all')
+    await user.click(option)
+
+    expect(input).toHaveValue('0700.HK')
+    expect(hooks.add).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '添加' }))
+    expect(hooks.add).toHaveBeenCalledWith(
+      { symbol: '0700.HK', enabled: true },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    )
   })
 
   it('shows all five timeframe badges and changes only the selected card mini chart', async () => {

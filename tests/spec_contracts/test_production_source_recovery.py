@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "docs" / "recovery" / "production-1435-backend.json"
+MANIFEST = ROOT / "docs" / "recovery" / "production-1502-backend.json"
 
 
 def _sha256(path: Path) -> str:
@@ -16,7 +16,7 @@ def _sha256(path: Path) -> str:
 def test_recovered_backend_matches_authoritative_image_manifest() -> None:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert payload["imageId"] == (
-        "sha256:214529b2aae4356c1b22c872d111aa1b425fc9b9184d7b8349b4e9590471b0b6"
+        "sha256:de3adcadb363856453df72227ff92b69ada818f331c8ccfc4e3001b48f41a721"
     )
     mismatches = {
         relative: (_sha256(ROOT / relative), expected)

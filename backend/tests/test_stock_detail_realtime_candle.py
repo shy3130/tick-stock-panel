@@ -13,6 +13,20 @@ def test_us_stock_detail_uses_realtime_ohlc_and_previous_daily_close(monkeypatch
     from app.data_providers import custom as custom_sources
     from app.services import preferences
 
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            fixed = datetime(
+                2026,
+                7,
+                20,
+                12,
+                15,
+                tzinfo=ZoneInfo("America/New_York"),
+            )
+            return fixed.astimezone(tz) if tz is not None else fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(kline, "datetime", FixedDateTime)
     timestamp = int(
         datetime(2026, 7, 20, 12, 15, tzinfo=ZoneInfo("America/New_York")).timestamp() * 1000
     )

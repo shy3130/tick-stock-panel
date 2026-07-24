@@ -1,6 +1,6 @@
 {
-  "image": "tickflow-stock-panel-app:dow-screener-restored-20260724-1435",
-  "imageId": "sha256:214529b2aae4356c1b22c872d111aa1b425fc9b9184d7b8349b4e9590471b0b6",
+  "image": "tickflow-stock-panel-app:dow-monitor-search-visible-20260724-1502",
+  "imageId": "sha256:de3adcadb363856453df72227ff92b69ada818f331c8ccfc4e3001b48f41a721",
   "files": {
     "backend/app/__init__.py": "e01ea03009e1a82cf01800c55e7d70cfb4ffc2a94a2e3be559005988726101fe",
     "backend/app/api/__init__.py": "7d35c167976f621016de4d5dcd3e4c19b7510ebe89ce15e3c59c58c0819a22d6",

@@ -5,9 +5,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-UV = Path("/home/alwin/apps/tickflow-recovery-artifacts/20260724-1435/uv")
+UV = Path("/home/alwin/apps/tickflow-recovery-artifacts/20260724-1502/uv")
 PNPM = Path(
-    "/home/alwin/apps/tickflow-recovery-artifacts/20260724-1435/"
+    "/home/alwin/apps/tickflow-recovery-artifacts/20260724-1502/"
     "pnpm-runtime/node_modules/pnpm/bin/pnpm.cjs"
 )
 
@@ -48,6 +48,7 @@ def test_recovered_frontend_characterization() -> None:
             "src/components/dow-monitor/DowMonitorDetailDialog.test.tsx",
             "src/pages/Screener.dow-strategy.test.tsx",
             "src/components/screener/DowStrategyCard.test.tsx",
+            "src/components/data/EnrichedRebuildPanel.test.tsx",
         ],
         cwd=ROOT,
         check=True,

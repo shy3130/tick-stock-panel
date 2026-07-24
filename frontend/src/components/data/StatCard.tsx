@@ -230,6 +230,7 @@ export function StatCard({
               className={`p-0.5 rounded hover:bg-elevated transition-colors ${
                 settingsOpen ? 'text-accent' : 'text-secondary'
               }`}
+              title="设置"
             >
               <Settings className="h-3.5 w-3.5" />
             </button>

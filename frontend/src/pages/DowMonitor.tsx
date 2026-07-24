@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { PageHeader } from '@/components/PageHeader'
@@ -20,9 +20,16 @@ import {
   useRemoveDowMonitorSymbol,
   useSetDowMonitorEnabled,
 } from '@/components/dow-monitor/useDowMonitor'
+import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 
 type SignalFilter = 'all' | 'active' | 'buy' | 'sell'
+type InstrumentSuggestion = {
+  symbol: string
+  name: string
+  code: string
+  market: 'cn' | 'hk' | 'us'
+}
 
 const SIGNAL_FILTERS: Array<{ value: SignalFilter; label: string }> = [
   { value: 'all', label: '全部' },
@@ -72,6 +79,9 @@ export function DowMonitor({
   const [market, setMarket] = useState<DowMonitorMarket>('all')
   const [signal, setSignal] = useState<SignalFilter>('all')
   const [symbolInput, setSymbolInput] = useState('')
+  const [suggestions, setSuggestions] = useState<InstrumentSuggestion[]>([])
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [pendingToggles, setPendingToggles] = useState<Set<string>>(() => new Set())
   const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(() => new Set())
   const [pendingReads, setPendingReads] = useState<Set<string>>(() => new Set())
@@ -79,6 +89,7 @@ export function DowMonitor({
   const [removeErrors, setRemoveErrors] = useState<Set<string>>(() => new Set())
   const [readErrors, setReadErrors] = useState<Map<string, string>>(() => new Map())
   const [detail, setDetail] = useState<{ symbol: string; timeframe: DowTimeframe } | null>(null)
+  const symbolFormRef = useRef<HTMLFormElement>(null)
   const detailScrollPosition = useRef(0)
   const overview = useDowMonitorOverview(market)
   const notificationQuery = useDowNotifications(market)
@@ -87,6 +98,43 @@ export function DowMonitor({
   const removeSymbol = useRemoveDowMonitorSymbol()
   const setEnabled = useSetDowMonitorEnabled()
   const markRead = useMarkDowNotificationRead()
+
+  useEffect(() => {
+    const query = symbolInput.trim()
+    if (!query) {
+      setSuggestions([])
+      setSuggestionsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      setSuggestionsLoading(true)
+      try {
+        const response = await api.instrumentSearch(query, 8, 'stock', market)
+        if (!cancelled) setSuggestions(response.results ?? [])
+      } catch {
+        if (!cancelled) setSuggestions([])
+      } finally {
+        if (!cancelled) setSuggestionsLoading(false)
+      }
+    }, 150)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [market, symbolInput])
+
+  useEffect(() => {
+    const closeSuggestions = (event: MouseEvent) => {
+      if (!symbolFormRef.current?.contains(event.target as Node)) {
+        setSuggestionsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', closeSuggestions)
+    return () => document.removeEventListener('mousedown', closeSuggestions)
+  }, [])
 
   const symbols = overview.data?.symbols ?? []
   const notifications = notificationQuery.data?.notifications ?? []
@@ -136,9 +184,15 @@ export function DowMonitor({
   const submitSymbol = () => {
     const symbol = symbolInput.trim().toUpperCase()
     if (!symbol) return
+    setSuggestionsOpen(false)
     addSymbol.mutate(
       { symbol, enabled: true },
-      { onSuccess: () => setSymbolInput('') },
+      {
+        onSuccess: () => {
+          setSymbolInput('')
+          setSuggestions([])
+        },
+      },
     )
   }
 
@@ -240,7 +294,8 @@ export function DowMonitor({
         subtitle={`${symbols.length} 只 · ${statusLabel}`}
         right={(
           <form
-            className="flex items-center gap-2"
+            ref={symbolFormRef}
+            className="relative flex items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault()
               submitSymbol()
@@ -248,10 +303,22 @@ export function DowMonitor({
           >
             <input
               value={symbolInput}
-              onChange={event => setSymbolInput(event.target.value)}
+              onChange={(event) => {
+                setSymbolInput(event.target.value)
+                setSuggestionsOpen(true)
+              }}
+              onFocus={() => {
+                if (symbolInput.trim()) setSuggestionsOpen(true)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setSuggestionsOpen(false)
+              }}
               aria-label="股票代码"
-              placeholder="股票代码"
-              className="h-8 w-36 rounded-btn border border-border bg-elevated px-2.5 font-mono text-xs uppercase outline-none transition-colors placeholder:font-sans placeholder:normal-case focus:border-accent/50"
+              aria-autocomplete="list"
+              aria-controls="dow-monitor-symbol-suggestions"
+              aria-expanded={suggestionsOpen && Boolean(symbolInput.trim())}
+              placeholder="代码或名称"
+              className="h-8 w-52 rounded-btn border border-border bg-elevated px-2.5 text-xs outline-none transition-colors placeholder:font-sans focus:border-accent/50"
             />
             <button
               type="submit"
@@ -261,6 +328,44 @@ export function DowMonitor({
             >
               {addSymbol.isPending ? '添加中' : '添加'}
             </button>
+            {suggestionsOpen && symbolInput.trim() && (
+              <div
+                id="dow-monitor-symbol-suggestions"
+                role="listbox"
+                aria-label="股票候选"
+                className="absolute right-0 top-full z-50 mt-1 max-h-72 w-80 overflow-y-auto rounded-btn border border-border bg-base shadow-xl"
+              >
+                {suggestionsLoading ? (
+                  <div className="px-3 py-3 text-xs text-muted">搜索中…</div>
+                ) : suggestions.length === 0 ? (
+                  <div className="px-3 py-3 text-xs text-muted">未找到匹配的股票</div>
+                ) : suggestions.map(suggestion => (
+                  <button
+                    key={suggestion.symbol}
+                    type="button"
+                    role="option"
+                    aria-selected={symbolInput.trim().toUpperCase() === suggestion.symbol}
+                    onClick={() => {
+                      setSymbolInput(suggestion.symbol)
+                      setSuggestionsOpen(false)
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-elevated"
+                  >
+                    <span className="w-24 shrink-0 font-mono text-foreground">
+                      {suggestion.symbol}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-secondary">
+                      {suggestion.name}
+                    </span>
+                    {suggestion.code && (
+                      <span className="shrink-0 font-mono text-[10px] text-muted">
+                        {suggestion.code}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
           </form>
         )}
       />

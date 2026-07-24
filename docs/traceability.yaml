@@ -8,6 +8,7 @@ requirements:
       - frontend/src/pages/DowMonitor.tsx
       - frontend/src/pages/Screener.tsx
       - frontend/src/components/screener/DowStrategyCard.tsx
+      - frontend/src/components/data/EnrichedRebuildPanel.tsx
       - frontend/src/components/StockPreviewDialog.tsx
     tests:
       - {path: tests/spec_contracts/test_production_source_recovery.py, type: executable-test}
