@@ -5,9 +5,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-UV = Path("/home/alwin/apps/tickflow-recovery-artifacts/20260724-1502/uv")
+UV = Path("/home/alwin/apps/tickflow-recovery-artifacts/20260724-1542/uv")
 PNPM = Path(
-    "/home/alwin/apps/tickflow-recovery-artifacts/20260724-1502/"
+    "/home/alwin/apps/tickflow-recovery-artifacts/20260724-1542/"
     "pnpm-runtime/node_modules/pnpm/bin/pnpm.cjs"
 )
 
@@ -26,6 +26,7 @@ def test_recovered_backend_characterization() -> None:
             "backend/tests/test_stock_detail_realtime_candle.py",
             "backend/tests/test_strategy_realtime_refresh.py",
             "backend/tests/test_dow_strategy_proxy.py",
+            "backend/tests/test_dow_monitor_api.py",
             "-q",
         ],
         cwd=ROOT,

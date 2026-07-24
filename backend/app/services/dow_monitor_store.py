@@ -10,6 +10,15 @@ from typing import Literal
 from app.services.dow_monitor_models import DowNotification, DowTimeframeState, MonitoredSymbol
 
 
+def _monitor_symbol_identity(symbol: str) -> str:
+    normalized = str(symbol).strip().upper()
+    if normalized.endswith(".HK"):
+        code = normalized[:-3]
+        if code.isdigit():
+            return f"{int(code)}.HK"
+    return normalized
+
+
 class DowMonitorStore:
     """File-backed monitored symbols, timeframe states, and immutable notifications."""
 
@@ -38,7 +47,7 @@ class DowMonitorStore:
             symbols = self._load_models(self._symbols_path, MonitoredSymbol)
             now = datetime.now(UTC)
             for index, existing in enumerate(symbols):
-                if existing.symbol == symbol:
+                if _monitor_symbol_identity(existing.symbol) == _monitor_symbol_identity(symbol):
                     updated = existing.model_copy(
                         update={"market": market, "enabled": enabled, "updated_at": now}
                     )
