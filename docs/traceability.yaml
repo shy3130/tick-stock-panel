@@ -1,0 +1,13 @@
+version: 1
+requirements:
+  - id: REQ-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
+    specification: SPEC-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
+    implementation:
+      - backend/app/main.py
+      - frontend/src/components/StockPreviewDialog.tsx
+    tests:
+      - {path: tests/spec_contracts/test_production_source_recovery.py, type: executable-test}
+      - {path: tests/spec_contracts/test_production_source_semantics.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/production-source-recovery.md, type: semantic-acceptance}
+      - {path: docs/reviews/production-source-recovery.md, type: independent-review}

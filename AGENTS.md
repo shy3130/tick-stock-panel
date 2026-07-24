@@ -1,3 +1,9 @@
+# Specification guard
+
+Before changing production code, read `docs/spec-index.yaml` and resolve the authority for the task. Stop before implementation when applicable specifications conflict or authority is unresolved. Record each active requirement with a stable ID in `docs/traceability.yaml`, including implementation, executable test, and acceptance evidence. Validate lower-layer semantic acceptance before building or evaluating higher layers. Downstream signals, metrics, or tests cannot substitute for lower-layer acceptance. A golden or snapshot alone is not semantic proof. Complete an independent requirements-to-evidence review before declaring the task complete.
+
+## Existing TickFlow repository guidance
+
 # AGENTS.md
 
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.

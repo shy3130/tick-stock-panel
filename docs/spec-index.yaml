@@ -1,0 +1,9 @@
+version: 1
+project_status: configured
+specifications:
+  - id: SPEC-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
+    path: docs/specs/production-source-recovery.md
+    status: authoritative
+    requirements: [REQ-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001]
+conflicts: []
+exceptions: []
