@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 import app.api.dow_monitor as dow_monitor
 import app.api.dow_strategy as dow_strategy
+import app.api.realtime as realtime
 from app import __version__
 from app.api import (
     alerts,
@@ -47,6 +48,7 @@ from app.services.dow_monitor_data import WebStockMonitorGateway
 from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
 from app.services.quote_service import QuoteService
+from app.services.realtime_market_data import RealtimeHub
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
 from app.tickflow.repository import DataStore, KlineRepository
@@ -128,6 +130,15 @@ async def lifespan(app: FastAPI):
         logger.info("custom data sources loaded: %d", len(custom_sources.list_sources()))
     except Exception as e:  # noqa: BLE001
         logger.warning("custom data sources init failed: %s", e)
+
+    realtime_hub = RealtimeHub(
+        settings.realtime_redis_url,
+        channel=settings.realtime_redis_channel,
+        heartbeat_seconds=settings.realtime_ws_heartbeat_seconds,
+        allowed_origins=settings.realtime_allowed_origins,
+    )
+    app.state.realtime_hub = realtime_hub
+    await realtime_hub.start()
 
     # Dow monitoring is deliberately bound to the registered ClickHouse WebStock
     # provider. It never falls back to another live source.
@@ -309,6 +320,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await realtime_hub.stop()
     await _stop_dow_monitor(app)
     if app.state.scheduler:
         app.state.scheduler.shutdown(wait=False)
@@ -445,6 +457,7 @@ app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(dow_strategy.router)
 app.include_router(dow_monitor.router)
+app.include_router(realtime.router)
 
 
 # 能力门控异常 → 403(而非默认 500)

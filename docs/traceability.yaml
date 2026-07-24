@@ -19,8 +19,10 @@ requirements:
   - id: REQ-REALTIME-UI-GATEWAY-001
     specification: SPEC-REALTIME-UI-GATEWAY-001
     implementation:
+      - backend/app/api/realtime.py
+      - backend/app/services/realtime_market_data.py
       - backend/app/main.py
-    tests: {path: tests/spec_contracts/test_production_source_semantics.py, type: executable-test}
+    tests: {path: tests/spec_contracts/test_realtime_gateway_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/realtime-ui-fast-path.md, type: semantic-acceptance}
       - {path: docs/reviews/realtime-ui-fast-path.md, type: independent-review}

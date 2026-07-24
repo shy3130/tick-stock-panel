@@ -33,6 +33,10 @@ services:
       # ClickHouse 尚未覆盖的单股分时由 Longbridge API 按需补拉；结果会回写实时行情库。
       - LONGBRIDGE_API_URL=${LONGBRIDGE_API_URL:-http://host.docker.internal:19912}
       - LONGBRIDGE_API_TIMEOUT_SECONDS=${LONGBRIDGE_API_TIMEOUT_SECONDS:-20}
+      - REALTIME_REDIS_URL=${REALTIME_REDIS_URL:-redis://host.docker.internal:6379/0}
+      - REALTIME_REDIS_CHANNEL=${REALTIME_REDIS_CHANNEL:-lb:ui:v1:updates}
+      - REALTIME_WS_HEARTBEAT_SECONDS=${REALTIME_WS_HEARTBEAT_SECONDS:-15}
+      - REALTIME_WS_ALLOWED_ORIGINS=${REALTIME_WS_ALLOWED_ORIGINS:-http://192.168.10.28:3018,http://127.0.0.1:5173,http://localhost:5173}
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro

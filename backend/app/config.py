@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     backtest_matrix_cache_max_mb: int = 512
     backtest_matrix_cache_prewarm: bool = True
     backtest_matrix_cache_prewarm_years: int = 5
+    realtime_redis_url: str = "redis://127.0.0.1:6379/0"
+    realtime_redis_channel: str = "lb:ui:v1:updates"
+    realtime_ws_heartbeat_seconds: float = 15.0
+    realtime_ws_allowed_origins: str = (
+        "http://192.168.10.28:3018,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:5173"
+    )
 
     # Auth — 首次启动时预置访问密码(明文, 仅用于初始化, 详见 services/auth.bootstrap_from_env)
     # 公网服务器部署时免去 SSH 端口转发设密码的麻烦。写入 auth.json(哈希)后即不再读取。
@@ -124,7 +132,17 @@ class Settings(BaseSettings):
             raise ValueError("backtest_matrix_cache_max_mb must be positive")
         if self.backtest_matrix_cache_prewarm_years <= 0:
             raise ValueError("backtest_matrix_cache_prewarm_years must be positive")
+        if self.realtime_ws_heartbeat_seconds <= 0:
+            raise ValueError("realtime_ws_heartbeat_seconds must be positive")
         return self
+
+    @property
+    def realtime_allowed_origins(self) -> set[str]:
+        return {
+            origin.strip().rstrip("/")
+            for origin in self.realtime_ws_allowed_origins.split(",")
+            if origin.strip()
+        }
 
     @property
     def use_free_mode(self) -> bool:
