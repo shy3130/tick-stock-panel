@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import ast
 import logging
+import math
 import re
 from pathlib import Path
+
+from app.indicators.pipeline import ENRICHED_COLUMNS
+from app.strategy.scoring import VIRTUAL_SCORING_DEPENDENCIES
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +28,10 @@ _SYSTEM_PREFIX = """你是A股量化策略设计专家。根据用户描述的�
 4. polars 策略只 import polars 和 datetime；matrix_native 策略只允许 import numpy 以及 from app.backtest.matrix import 所需矩阵协议和算子
 
 要求:
-1. 用户可能调整的策略阈值通过 META["params"] 暴露；公式常数、固定窗口边界、布尔开关不必强行参数化
+1. 用户可能调整的策略阈值通过 META["params"] 暴露，每项使用 id/label/type/default/min/max/step；公式常数、固定窗口边界、布尔开关不必强行参数化
 2. 遵循指南中的文件结构，但优先贴合用户规则，不要为了套模板歪曲策略含义
 3. ENTRY_SIGNALS/EXIT_SIGNALS 根据策略逻辑自行选择匹配的信号列，不要照搬示例
-4. scoring 权重根据策略核心逻辑定制，总和 = 1.0
+4. scoring 权重根据策略核心逻辑定制，总和 = 1.0；键只能使用指南中的真实数值字段或受控虚拟评分字段 ma20_bias，不得创造条件名称作为评分列
 5. 优先使用 Polars 表达式、窗口函数、聚合和 with_columns/filter 实现，避免逐行/逐股 Python 循环；只有表达式难以描述的复杂状态机才使用 partition_by/to_dicts
 6. 直接输出Python代码，不要输出其他内容
 7. 元数据必须使用模块顶层的 META = {...} 或 META: dict = {...}，不得省略或改名；并且必须定义所选执行后端要求的策略入口
@@ -43,6 +47,21 @@ _FENCED_CODE_RE = re.compile(
 )
 _POLARS_ENTRYPOINT_ERROR = "找不到策略入口函数 filter() 或 filter_history()"
 _MATRIX_ENTRYPOINT_ERROR = "找不到 Matrix 策略入口 MATRIX_STRATEGY"
+
+_POLARS_SCORING_FIELDS = frozenset(
+    name
+    for name in ENRICHED_COLUMNS
+    if name not in {"symbol", "date", "name"} and not name.startswith("signal_")
+) | frozenset(VIRTUAL_SCORING_DEPENDENCIES)
+_MATRIX_SCORING_FIELDS = frozenset({
+    "open", "high", "low", "close", "volume", "amount", "turnover_rate",
+    "total_shares", "float_shares", "consecutive_limit_ups",
+    "consecutive_limit_downs", "prev_close", "change_pct", "change_amount",
+    "amplitude", "ma5", "ma10", "ma20", "ma30", "ma60", "boll_upper",
+    "boll_lower", "high_60d", "low_60d", "momentum_5d", "momentum_10d",
+    "momentum_20d", "momentum_30d", "momentum_60d", "annual_vol_20d",
+    "rsi_6", "rsi_14", "rsi_24", "vol_ratio_5d", "ma20_bias",
+})
 
 
 def _top_level_assignment(
@@ -195,6 +214,16 @@ class AIStrategyGenerator:
                 "error": entrypoint_error,
             }
 
+        try:
+            self._validate_meta_semantics(code, meta)
+        except ValueError as e:
+            return {
+                "code": code,
+                "meta": meta,
+                "valid": False,
+                "error": str(e),
+            }
+
         return {
             "code": code,
             "meta": meta,
@@ -208,7 +237,42 @@ class AIStrategyGenerator:
         return error.startswith("解析META失败:") or error in {
             _POLARS_ENTRYPOINT_ERROR,
             _MATRIX_ENTRYPOINT_ERROR,
-        }
+        } or error.startswith(("META.params", "META.scoring"))
+
+    @staticmethod
+    def _validate_meta_semantics(code: str, meta: dict) -> None:
+        params = meta.get("params", [])
+        if isinstance(params, (list, tuple)):
+            for index, item in enumerate(params):
+                if isinstance(item, dict) and not str(item.get("id") or "").strip():
+                    raise ValueError(f"META.params[{index}] 缺少非空 id")
+
+        scoring = meta.get("scoring", {})
+        if not isinstance(scoring, dict):
+            raise ValueError("META.scoring 必须是字典")
+        if not scoring:
+            return
+
+        for name, weight in scoring.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("META.scoring 字段名必须是非空字符串")
+            if isinstance(weight, bool) or not isinstance(weight, (int, float)) \
+                    or not math.isfinite(float(weight)) or weight < 0:
+                raise ValueError(f"META.scoring[{name!r}] 权重必须是非负有限数值")
+        total_weight = sum(float(weight) for weight in scoring.values())
+        if not math.isclose(total_weight, 1.0, rel_tol=0.0, abs_tol=1e-6):
+            raise ValueError("META.scoring 权重总和必须为 1.0")
+
+        backend = _strategy_execution_backend(ast.parse(code), meta)
+        if backend == "python_history_legacy":
+            return
+        allowed = _MATRIX_SCORING_FIELDS if backend == "matrix_native" else _POLARS_SCORING_FIELDS
+        unknown = sorted(set(scoring) - set(allowed))
+        if unknown:
+            raise ValueError(
+                f"META.scoring 引用了不可用字段: {unknown}; "
+                "请使用真实数值字段或受控虚拟字段 ma20_bias"
+            )
 
     async def repair_code(self, code: str, error: str) -> dict:
         """Ask the model once for a complete replacement after a structural error."""

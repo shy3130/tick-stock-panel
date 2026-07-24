@@ -69,7 +69,7 @@ META = {
         # 只把用户可能调节的阈值放这里；每个参数含 id/label/type/default/min/max/step
     ],
     "scoring": {
-        # 根据策略核心逻辑定制权重，总和 = 1.0
+        # 只使用真实数值字段或 ma20_bias，总和 = 1.0
     },
     "order_by": "score",
     "descending": True,
@@ -199,7 +199,7 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
 1. 用户可能调节的阈值才放 `params`；公式常数、固定窗口边界不必参数化
 2. 信号列使用 `.fill_null(False)` 处理空值
 3. `filter()` 只返回 `pl.Expr`，`filter_history()` 返回筛选后的 `DataFrame`
-4. scoring 权重总和 = 1.0
+4. scoring 权重总和 = 1.0，键只能使用可用数值列或临时评分字段 `ma20_bias`，不要使用 `close_above_ma20` 等条件名称
 5. **必须生成 RULES**：用中文逐条列出核心逻辑（至少 3 条），准确完整
 6. **贴合用户需求**：不为了用已有字段而改变用户本意。用户说"前高"就自己算前高
 7. **输出前自我检查**：确认 RULES 完整、语法正确、括号匹配、引号闭合

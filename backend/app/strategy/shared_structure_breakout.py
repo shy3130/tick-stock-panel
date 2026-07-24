@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from typing import Literal
 
 import numpy as np
 from longbridge_stock.structure_breakout_scanner import (
@@ -77,8 +78,26 @@ def candidates_to_signal_matrix(
     )
 
 
-def _detectors_for_params(params: dict) -> tuple[object, ...]:
+FixedPattern = Literal["right_triangle", "symmetric_triangle"]
+
+
+def _detectors_for_params(
+    params: dict,
+    fixed_pattern: FixedPattern | None = None,
+) -> tuple[object, ...]:
     min_volume = float(params.get("min_breakout_volume_ratio", 1.5))
+    if fixed_pattern == "right_triangle":
+        return (
+            RightTriangleDetector(
+                RightTriangleConfig(min_breakout_volume_ratio=min_volume)
+            ),
+        )
+    if fixed_pattern == "symmetric_triangle":
+        return (
+            SymmetricTriangleDetector(
+                SymmetricTriangleConfig(min_breakout_volume_ratio=min_volume)
+            ),
+        )
     detectors: list[object] = []
     if params.get("include_long_box", True):
         detectors.append(LongBoxDetector(LongBoxConfig(min_breakout_volume_ratio=min_volume)))
@@ -96,8 +115,15 @@ def _detectors_for_params(params: dict) -> tuple[object, ...]:
 
 
 class SharedStructureBreakoutMatrixStrategy:
-    def __init__(self, scan_fn: ScanFn = scan_history) -> None:
+    def __init__(
+        self,
+        scan_fn: ScanFn = scan_history,
+        fixed_pattern: FixedPattern | None = None,
+    ) -> None:
+        if fixed_pattern not in {None, "right_triangle", "symmetric_triangle"}:
+            raise ValueError(f"unsupported fixed structure pattern: {fixed_pattern}")
         self._scan_fn = scan_fn
+        self._fixed_pattern = fixed_pattern
 
     def required_fields(self) -> frozenset[str]:
         return frozenset({"open", "high", "low", "close", "volume", "amount"})
@@ -107,7 +133,7 @@ class SharedStructureBreakoutMatrixStrategy:
         return 520
 
     def compute_signals(self, market: MarketDataMatrix, params: dict) -> SignalMatrix:
-        detectors = _detectors_for_params(params)
+        detectors = _detectors_for_params(params, self._fixed_pattern)
         candidates_by_symbol: dict[str, tuple[StructureCandidate, ...]] = {}
         time_indexes_by_symbol: dict[str, tuple[int, ...]] = {}
         amount = market.fields.get("amount")

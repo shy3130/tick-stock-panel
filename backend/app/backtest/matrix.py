@@ -11,7 +11,7 @@ import time
 import uuid
 import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -25,6 +25,14 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pads
+
+from app.backtest.minute_trigger import build_minute_exit_reference
+from app.price_limits import (
+    MAIN_BOARD_ST_LIMIT_CHANGE_DATE,
+    numpy_limit_pct_vectors,
+    numpy_limit_price,
+    write_numpy_price_limit_matrix,
+)
 
 try:
     from numba import njit, prange
@@ -41,7 +49,7 @@ except ImportError:
     prange = range
 
 _MATRIX_CACHE_VERSION = 1
-_DIRECT_MATRIX_LOADER_VERSION = 3
+_DIRECT_MATRIX_LOADER_VERSION = 4
 _MATRIX_AXIS_INDEX_VERSION = 1
 _ARROW_BATCH_SIZE = 131_072
 _SCORE_ASSET_CHUNK_SIZE = 256
@@ -588,6 +596,8 @@ def build_market_data_matrix(
     wanted_fields = set(field_columns or ()) - core_columns
     fields: dict[str, np.ndarray] = {}
     for column in sorted(wanted_fields):
+        if column == "price_limit_pct":
+            continue
         if column in panel.columns and panel[column].dtype.is_numeric():
             fields[column] = float_matrix(column)
         elif column == "raw_close":
@@ -602,6 +612,16 @@ def build_market_data_matrix(
         for row, aid in enumerate(asset_id):
             if not names[int(aid)] and row_names[row]:
                 names[int(aid)] = str(row_names[row])
+
+    if "price_limit_pct" in wanted_fields:
+        trading_dates = unique_timestamps.cast(pl.Date).to_list()
+        fields["price_limit_pct"] = write_numpy_price_limit_matrix(
+            np.empty(shape, dtype=np.float32),
+            trading_dates,
+            symbol_values,
+            names,
+            valid=np.isfinite(close),
+        )
 
     timestamp_labels = tuple(str(value)[:19] for value in unique_timestamps.to_numpy())
     timestamps = _timestamp_int64(unique_timestamps)
@@ -856,7 +876,9 @@ def _resolve_matrix_storage_fields(
     parquet_fields = sorted(
         name
         for name in wanted_fields
-        if name in available and _arrow_numeric(dataset.schema.field(name).type)
+        if name != "price_limit_pct"
+        and name in available
+        and _arrow_numeric(dataset.schema.field(name).type)
     )
     instrument_columns = set(instruments.columns) if instruments is not None else set()
     matrix_fields = set(parquet_fields)
@@ -873,6 +895,8 @@ def _resolve_matrix_storage_fields(
         matrix_fields.add("turnover_rate")
         if "turnover_rate" not in parquet_fields and "float_shares" in instrument_columns:
             vector_fields.add("float_shares")
+    if "price_limit_pct" in wanted_fields:
+        matrix_fields.add("price_limit_pct")
     resolved = matrix_fields | vector_fields
     unresolved = wanted_fields - resolved - {"lot_size"}
     if unresolved:
@@ -939,6 +963,14 @@ def _build_market_data_matrix_from_dataset(
         parquet_fields=parquet_fields,
         vector_fields=vector_fields,
     )
+    if "price_limit_pct" in fields:
+        write_numpy_price_limit_matrix(
+            fields["price_limit_pct"],
+            actual_dates,
+            actual_symbols,
+            names,
+            valid=seen,
+        )
     for name in vector_fields:
         fields[name] = np.where(seen, fields[name], np.nan).astype(np.float32, copy=False)
     tradable = _tradable_matrix(
@@ -953,6 +985,7 @@ def _build_market_data_matrix_from_dataset(
         arrays["close"],
         raw_close,
         seen,
+        actual_dates,
         actual_symbols,
         names,
         latest_limits,
@@ -1084,6 +1117,14 @@ def _build_market_data_matrix_cache_from_dataset(
             vector_fields=vector_fields,
         )
         _mask_unseen_staging_fields(fields, seen)
+        if "price_limit_pct" in fields:
+            write_numpy_price_limit_matrix(
+                fields["price_limit_pct"],
+                actual_dates,
+                actual_symbols,
+                names,
+                valid=seen,
+            )
         _write_tradable_matrix(
             arrays["tradable"],
             arrays["open"],
@@ -1096,6 +1137,7 @@ def _build_market_data_matrix_cache_from_dataset(
             arrays["close"],
             fields.get("raw_close", arrays["close"]),
             seen,
+            actual_dates,
             actual_symbols,
             names,
             latest_limits,
@@ -2068,6 +2110,7 @@ def _limit_lock_matrices(
     close: np.ndarray,
     raw_close: np.ndarray,
     seen: np.ndarray,
+    trading_dates: Sequence[date],
     symbols: list[str],
     names: list[str],
     latest_limits: Mapping[str, np.ndarray],
@@ -2081,21 +2124,21 @@ def _limit_lock_matrices(
     down_locked = out_down if out_down is not None else np.zeros(shape, dtype=np.uint8)
     if up_locked.shape != shape or down_locked.shape != shape:
         raise ValueError("limit lock output shape mismatch")
+    if len(trading_dates) != shape[0]:
+        raise ValueError("price-limit date axis mismatch")
     up_locked.fill(0)
     down_locked.fill(0)
-    board_pct = np.full(shape[1], 0.10, dtype=np.float64)
-    for asset_id, symbol in enumerate(symbols):
-        if symbol.startswith(("300", "301", "688", "689")):
-            board_pct[asset_id] = 0.20
-        elif symbol.endswith(".BJ"):
-            board_pct[asset_id] = 0.30
-        elif "ST" in names[asset_id]:
-            board_pct[asset_id] = 0.05
+    legacy_pct, current_pct = numpy_limit_pct_vectors(symbols, names)
 
     previous_close = np.full(shape[1], np.nan, dtype=np.float64)
     previous_raw = np.full(shape[1], np.nan, dtype=np.float64)
     previous_adjustment = np.full(shape[1], np.nan, dtype=np.float64)
     for time_id in range(shape[0]):
+        limit_pct = (
+            legacy_pct
+            if trading_dates[time_id] < MAIN_BOARD_ST_LIMIT_CHANGE_DATE
+            else current_pct
+        )
         present = seen[time_id]
         current_close = close[time_id].astype(np.float64, copy=False)
         current_raw = raw_close[time_id].astype(np.float64, copy=False)
@@ -2120,8 +2163,8 @@ def _limit_lock_matrices(
             & (current_raw > 0)
         )
         if valid.any():
-            up_price = _numpy_limit_price(reference, board_pct, up=True)
-            down_price = _numpy_limit_price(reference, board_pct, up=False)
+            up_price = numpy_limit_price(reference, limit_pct, up=True)
+            down_price = numpy_limit_price(reference, limit_pct, up=False)
             if apply_latest_limits and time_id == shape[0] - 1:
                 latest_up = latest_limits["limit_up"]
                 latest_down = latest_limits["limit_down"]
@@ -2140,23 +2183,6 @@ def _limit_lock_matrices(
         previous_raw[present] = current_raw[present]
         previous_adjustment[present] = current_adjustment[present]
     return up_locked, down_locked
-
-
-def _numpy_limit_price(
-    previous: np.ndarray,
-    limit_pct: np.ndarray,
-    *,
-    up: bool,
-) -> np.ndarray:
-    sign = 1 if up else -1
-    numerator = np.rint((1.0 + sign * limit_pct) * 100.0).astype(np.int64)
-    result = np.full(previous.shape, np.nan, dtype=np.float64)
-    finite = np.isfinite(previous)
-    cents = np.floor(previous[finite] * 100.0 + 0.5).astype(np.int64)
-    result[finite] = (
-        ((cents * numerator[finite] + 50) // 100).astype(np.float64) / 100.0
-    )
-    return result
 
 
 def make_signal_matrix(
@@ -2243,6 +2269,7 @@ def build_market_matrix_from_signals(
     entry_delay_bars: int = 0,
     exit_delay_bars: int = 0,
     reference_price: np.ndarray | None = None,
+    minute_exit_trigger: bool = False,
 ) -> MarketMatrix:
     """Combine base data and strategy signals into the matcher input matrix."""
     if entry_delay_bars not in (0, 1) or exit_delay_bars not in (0, 1):
@@ -2275,6 +2302,16 @@ def build_market_matrix_from_signals(
                 continue
             use = ~np.isfinite(resolved_reference_price) & np.isfinite(values) & (values > 0)
             resolved_reference_price[use] = values[use]
+
+    if minute_exit_trigger:
+        trigger_reference = build_minute_exit_reference(
+            market.close,
+            market.fields,
+            signals.exit_signal_code,
+            signals.exit_signal_ids,
+        )
+        trigger_mask = signals.exit != 0
+        resolved_reference_price[trigger_mask] = trigger_reference[trigger_mask]
 
     _make_read_only(
         entry,
@@ -2333,6 +2370,7 @@ def build_market_matrix(
     exit_delay_bars: int = 0,
     entry_signal_ids: list[str] | None = None,
     exit_signal_ids: list[str] | None = None,
+    minute_exit_trigger: bool = False,
 ) -> MarketMatrix:
     """Backward-compatible long-panel boundary used by legacy/Polars strategies."""
     if panel.is_empty():
@@ -2376,6 +2414,7 @@ def build_market_matrix(
         signals,
         entry_delay_bars=entry_delay_bars,
         exit_delay_bars=exit_delay_bars,
+        minute_exit_trigger=minute_exit_trigger,
     )
 
 
@@ -3479,6 +3518,8 @@ def _estimate_pipeline_cache_bytes(
             continue
         if name == "vol_ratio_5d":
             estimated += 2 * float_bytes
+        elif name == "ma20_bias":
+            estimated += 2 * float_bytes
         elif name == "change_pct" or (
             name.startswith("momentum_") and name.endswith("d")
         ):
@@ -3652,6 +3693,7 @@ def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             "high_60d",
             "low_60d",
             "annual_vol_20d",
+            "ma20_bias",
         }
         or (name.startswith("ma") and name[2:].isdigit())
         or (name.startswith("rsi_") and name[4:].isdigit())
@@ -3716,6 +3758,17 @@ def _compute_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             out=out,
             where=volume_valid & np.isfinite(previous_mean) & (previous_mean != 0),
         )
+        return out
+    if name == "ma20_bias":
+        ma20 = valid_rolling_mean(market.close, close_valid, 20)
+        out = np.full(market.shape, np.nan, dtype=np.float32)
+        np.divide(
+            market.close,
+            ma20,
+            out=out,
+            where=close_valid & np.isfinite(ma20) & (ma20 != 0),
+        )
+        out -= np.float32(1.0)
         return out
     if name.startswith("ma") and name[2:].isdigit():
         return valid_rolling_mean(market.close, close_valid, int(name[2:]))

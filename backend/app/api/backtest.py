@@ -194,7 +194,7 @@ class StrategyBacktestRequest(BaseModel):
     # matching 向后兼容; 显式传 entry_fill/exit_fill 时以二者为准。
     matching: Literal["close_t", "open_t+1"] = "open_t+1"
     entry_fill: Literal["close_t", "open_t+1"] | None = None
-    exit_fill: Literal["close_t", "open_t+1"] | None = None
+    exit_fill: Literal["close_t", "open_t+1", "signal_next_minute"] | None = None
     fees_pct: float = 0.0002
     commission_pct: float | None = None
     stamp_tax_pct: float | None = None
@@ -206,6 +206,7 @@ class StrategyBacktestRequest(BaseModel):
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
     asset_type: str = "stock"
+    minute_fill: bool = False
     market: str = "cn"
 
 
@@ -249,6 +250,7 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         mode=req.mode,
         holding_days=req.holding_days,
         asset_type=req.asset_type,
+        minute_fill=req.minute_fill,
         market=market,
     )
     task = make_worker_task("backtest", settings.data_dir, cfg)
@@ -1030,4 +1032,3 @@ async def walkforward_cancel(request: Request):
         job.cancel_event.set()
         return {"ok": True}
     return {"ok": False, "message": "任务不存在或已完成"}
-

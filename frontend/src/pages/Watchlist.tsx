@@ -988,7 +988,7 @@ export function Watchlist() {
           </span>
         }
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-max items-center gap-2 md:min-w-0">
             <MarketFilterTabs value={marketFilter} includeAll={false} onChange={setMarketFilter} />
             {/* 筛选 / 重置 / 搜索 */}
             <button
@@ -1069,7 +1069,7 @@ export function Watchlist() {
 
       {/* 筛选栏 */}
       {filterOpen && (
-        <div className="px-5 py-2 border-b border-border bg-surface/50 max-h-[184px] overflow-y-auto">
+        <div className="max-h-[184px] overflow-y-auto border-b border-border bg-surface/50 px-3 py-2 sm:px-5">
           {/* 板块筛选 */}
           <div className="mb-2">
             <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">板块</div>
@@ -1141,7 +1141,7 @@ export function Watchlist() {
 
       {/* 可滚动列表区 — 占满剩余高度，内部独立滚动，表头 sticky 固定 */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="px-5 py-3">
+        <div className="px-2 py-2 sm:px-5 sm:py-3">
           {/* 列表 */}
           {list.isLoading && <div className="text-sm text-muted">加载中…</div>}
           {list.isError && <div className="text-sm text-danger">读取自选失败</div>}
@@ -1365,10 +1365,10 @@ export function Watchlist() {
                 // 其余纯数据列 → 共享原语
                 return renderBuiltinDataCell(r, col)
               }}
-              className="rounded-card overflow-x-auto"
+              className="max-w-full rounded-card overflow-x-auto"
             />
           ) : !virtualizeCards ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
               {sortedRows.map(renderStockCard)}
             </div>
           ) : (
@@ -1385,7 +1385,7 @@ export function Watchlist() {
                     key={virtualRow.key}
                     ref={cardRowVirtualizer.measureElement}
                     data-index={virtualRow.index}
-                    className="absolute left-0 top-0 w-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3"
+                    className="absolute left-0 top-0 grid w-full grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
                     style={{ transform: `translateY(${virtualRow.start - cardScrollMargin}px)` }}
                   >
                     {row.map(renderStockCard)}

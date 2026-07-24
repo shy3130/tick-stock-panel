@@ -77,7 +77,7 @@ class MatcherConfig:
     # 显式传入 entry_fill/exit_fill 时以二者为准 (允许建仓/清仓口径不同)。
     matching: Literal["close_t", "open_t+1"] = "close_t"
     entry_fill: Literal["close_t", "open_t+1"] | None = None
-    exit_fill: Literal["close_t", "open_t+1"] | None = None
+    exit_fill: Literal["close_t", "open_t+1", "signal_next_minute"] | None = None
     # 成本模型: 优先使用拆分口径 (佣金双边 + 印花税仅卖出 + 滑点双边)。
     # 未设 commission_pct 时回退到 fees_pct 作为双边佣金 (向后兼容, 无印花税)。
     fees_pct: float = 0.0002
@@ -384,6 +384,11 @@ class BacktestEngine:
                 needed={"signal_limit_up", "signal_limit_down"}
                 if matrix_native
                 else set(feature_plan.signal_columns),
+                historical_shares=(
+                    self.repo.get_historical_shares()
+                    if asset_type == "stock" and self.repo is not None
+                    else None
+                ),
             )
             join_cols = ["symbol"] if "symbol" in instruments.columns else []
             join_cols.extend(
@@ -726,6 +731,7 @@ class BacktestEngine:
             exit_delay_bars=1 if config.exit_fill == "open_t+1" else 0,
             entry_signal_ids=entry_signal_ids,
             exit_signal_ids=exit_signal_ids,
+            minute_exit_trigger=config.exit_fill == "signal_next_minute",
         )
         return self._simulate_independent_matrix(
             matrix, raw_candidates, config, progress_cb, cancel_event,
@@ -798,6 +804,18 @@ class BacktestEngine:
                 rows, reference if _valid_price(reference) else None, side,
             )
             return precise if precise is not None else daily_price
+
+        def _minute_trigger_price(time_id: int, asset_id: int) -> float | None:
+            if not config.minute_fill or not minute_cache:
+                return None
+            rows = minute_cache.get((matrix.symbols[asset_id], matrix.timestamp_labels[time_id][:10]))
+            if rows is None:
+                return None
+            reference = float(matrix.reference_price[time_id, asset_id])
+            return self._resolve_minute_exit_trigger(
+                rows,
+                reference if _valid_price(reference) else None,
+            )
 
         def _one_price_limit(time_id: int, asset_id: int, direction: str) -> bool:
             if not _price_limit_applies(matrix.symbols[asset_id]):
@@ -874,22 +892,47 @@ class BacktestEngine:
             signal_date: str,
             override: float | None = None,
         ) -> bool:
+            signal_id = (
+                _signal_id(int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids)
+                if reason == "signal" else None
+            )
             symbol = matrix.symbols[asset_id]
             exit_date = matrix.timestamp_labels[time_id][:10]
             if pos["entry_date"] == exit_date and not _same_day_sell_allowed(symbol):
                 if not pos.get("pending_exit_reason"):
                     pos["pending_exit_reason"] = reason
                     pos["pending_exit_signal_date"] = signal_date
+                    pos["pending_exit_signal_id"] = signal_id
                     _count("pending_exit")
                 pos["blocked_exit_days"] += 1
                 _count("sell_same_day_restricted")
                 return False
+            minute_trigger = config.exit_fill == "signal_next_minute" and reason == "signal"
+            if minute_trigger and override is None:
+                if pos.get("pending_exit_next_open"):
+                    open_price = float(matrix.open[time_id, asset_id])
+                    override = open_price if _valid_price(open_price) else None
+                else:
+                    override = _minute_trigger_price(time_id, asset_id)
+                    if override is None:
+                        if not pos.get("pending_exit_reason"):
+                            pos["pending_exit_reason"] = reason
+                            pos["pending_exit_signal_date"] = signal_date
+                            pos["pending_exit_signal_id"] = signal_id
+                            pos["pending_exit_next_open"] = True
+                            _count("pending_exit")
+                        pos["blocked_exit_days"] += 1
+                        _count("sell_minute_trigger_fallback")
+                        return False
             ok, blocked = _can_sell(time_id, asset_id, override)
             if not ok:
                 if not pos.get("pending_exit_reason"):
                     pos["pending_exit_reason"] = reason
                     pos["pending_exit_signal_date"] = signal_date
+                    pos["pending_exit_signal_id"] = signal_id
                     _count("pending_exit")
+                if minute_trigger:
+                    pos["pending_exit_next_open"] = True
                 pos["blocked_exit_days"] += 1
                 _count(blocked)
                 return False
@@ -920,9 +963,7 @@ class BacktestEngine:
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos["blocked_exit_days"]),
                 entry_signal_id=pos["entry_signal_id"],
-                exit_signal_id=_signal_id(
-                    int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids
-                ) if reason == "signal" else None,
+                exit_signal_id=(pos.get("pending_exit_signal_id") or signal_id) if reason == "signal" else None,
                 market=_market_rule_for_execution(symbol).market,
                 currency=_market_rule_for_execution(symbol).currency,
             ))
@@ -980,6 +1021,8 @@ class BacktestEngine:
                 "max_high": max(entry_price, float(matrix.high[time_id, asset_id])),
                 "pending_exit_reason": None,
                 "pending_exit_signal_date": None,
+                "pending_exit_signal_id": None,
+                "pending_exit_next_open": False,
                 "blocked_exit_days": 0,
             }
             closed = False
@@ -1505,6 +1548,34 @@ class BacktestEngine:
 
         return float(closes[-1]) if np.isfinite(closes[-1]) else None
 
+    @staticmethod
+    def _resolve_minute_exit_trigger(
+        minute_arr: np.ndarray,
+        ref_price: float | None,
+    ) -> float | None:
+        """分钟收盘确认向下穿越后，返回下一分钟开盘价。"""
+        if minute_arr is None or len(minute_arr) < 2:
+            return None
+        if ref_price is None or not np.isfinite(ref_price) or ref_price <= 0:
+            return None
+
+        ncols = minute_arr.shape[1] if minute_arr.ndim == 2 else 1
+        if ncols < 4:
+            return None
+        opens = minute_arr[:, 0]
+        closes = minute_arr[:, 3]
+        below = np.isfinite(closes) & (closes < ref_price)
+        previous_above = np.empty(len(closes), dtype=bool)
+        previous_above[0] = True
+        previous_above[1:] = np.isfinite(closes[:-1]) & (closes[:-1] >= ref_price)
+        crossings = np.flatnonzero(below & previous_above)
+        if crossings.size == 0:
+            return None
+        next_idx = int(crossings[0]) + 1
+        if next_idx >= len(opens) or not np.isfinite(opens[next_idx]) or opens[next_idx] <= 0:
+            return None
+        return float(opens[next_idx])
+
     # 分钟K cache 存储的数值列及固定顺序 (_resolve_minute_fill 按此顺序整数索引)。
     _MINUTE_NUMERIC_COLS = ["open", "high", "low", "close", "volume", "amount"]
 
@@ -1546,7 +1617,7 @@ class BacktestEngine:
             if df.is_empty():
                 continue
             # 按 (symbol, 日期) 分组, 每组转紧凑 float64 数组存入 cache
-            df = df.with_columns(
+            df = df.sort(["symbol", "datetime"]).with_columns(
                 pl.col("datetime").dt.strftime("%Y-%m-%d").alias("_d_str")
             )
             for sub in df.partition_by(["symbol", "_d_str"], as_dict=False):
@@ -1583,6 +1654,7 @@ class BacktestEngine:
             exit_delay_bars=1 if config.exit_fill == "open_t+1" else 0,
             entry_signal_ids=entry_signal_ids,
             exit_signal_ids=exit_signal_ids,
+            minute_exit_trigger=config.exit_fill == "signal_next_minute",
         )
         if not matrix.entry.any():
             return self._empty_result()
@@ -1694,6 +1766,19 @@ class BacktestEngine:
             )
             return precise if precise is not None else daily_price
 
+        def _minute_trigger_price(time_id: int, asset_id: int) -> float | None:
+            if not config.minute_fill or not minute_cache:
+                return None
+            key = (matrix.symbols[asset_id], matrix.timestamp_labels[time_id][:10])
+            minute_rows = minute_cache.get(key)
+            if minute_rows is None:
+                return None
+            reference = float(matrix.reference_price[time_id, asset_id])
+            return self._resolve_minute_exit_trigger(
+                minute_rows,
+                reference if _valid_price(reference) else None,
+            )
+
         def _one_price_limit(time_id: int, asset_id: int, direction: str) -> bool:
             if not _price_limit_applies(matrix.symbols[asset_id]):
                 return False
@@ -1730,12 +1815,21 @@ class BacktestEngine:
                 return False, "sell_limit_down"
             return True, ""
 
-        def _mark_pending(asset_id: int, reason: str, signal_date: str) -> None:
+        def _mark_pending(
+            asset_id: int,
+            reason: str,
+            signal_date: str,
+            signal_id: str | None = None,
+            next_open: bool = False,
+        ) -> None:
             pos = positions[asset_id]
             if not pos.get("pending_exit_reason"):
                 pos["pending_exit_reason"] = reason
                 pos["pending_exit_signal_date"] = signal_date
+                pos["pending_exit_signal_id"] = signal_id
                 _count("pending_exit")
+            if next_open:
+                pos["pending_exit_next_open"] = True
             pos["blocked_exit_days"] += 1
 
         def _sell(
@@ -1778,8 +1872,9 @@ class BacktestEngine:
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos["blocked_exit_days"]),
                 entry_signal_id=pos["entry_signal_id"],
-                exit_signal_id=_signal_id(
-                    int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids
+                exit_signal_id=(
+                    pos.get("pending_exit_signal_id")
+                    or _signal_id(int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids)
                 ) if reason == "signal" else None,
                 market=_market_rule_for_execution(symbol).market,
                 currency=_market_rule_for_execution(symbol).currency,
@@ -1793,18 +1888,45 @@ class BacktestEngine:
             sold_today: set[int],
             override: float | None = None,
         ) -> bool:
+            signal_id = (
+                _signal_id(int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids)
+                if reason == "signal" else None
+            )
+            minute_trigger = config.exit_fill == "signal_next_minute" and reason == "signal"
             symbol = matrix.symbols[asset_id]
             exit_date = matrix.timestamp_labels[time_id][:10]
             if (
                 positions[asset_id]["entry_date"] == exit_date
                 and not _same_day_sell_allowed(symbol)
             ):
-                _mark_pending(asset_id, reason, signal_date)
+                _mark_pending(
+                    asset_id,
+                    reason,
+                    signal_date,
+                    signal_id,
+                    next_open=minute_trigger,
+                )
                 _count("sell_same_day_restricted")
                 return False
+            if minute_trigger and override is None:
+                pos = positions[asset_id]
+                if pos.get("pending_exit_next_open"):
+                    override = float(matrix.open[time_id, asset_id])
+                else:
+                    override = _minute_trigger_price(time_id, asset_id)
+                    if override is None:
+                        _mark_pending(asset_id, reason, signal_date, signal_id, next_open=True)
+                        _count("sell_minute_trigger_fallback")
+                        return False
             ok, blocked = _can_sell(time_id, asset_id, override)
             if not ok:
-                _mark_pending(asset_id, reason, signal_date)
+                _mark_pending(
+                    asset_id,
+                    reason,
+                    signal_date,
+                    signal_id,
+                    next_open=minute_trigger,
+                )
                 _count(blocked)
                 return False
             _sell(time_id, asset_id, reason, signal_date, sold_today, override)
@@ -1988,6 +2110,8 @@ class BacktestEngine:
                                 "hold_days": 0,
                                 "pending_exit_reason": None,
                                 "pending_exit_signal_date": None,
+                                "pending_exit_signal_id": None,
+                                "pending_exit_next_open": False,
                                 "blocked_exit_days": 0,
                             }
 

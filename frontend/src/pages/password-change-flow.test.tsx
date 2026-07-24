@@ -38,7 +38,7 @@ describe('password change settings flow', () => {
       </MemoryRouter>,
     )
 
-    await user.click(screen.getByRole('button', { name: '账户安全' }))
+    await user.click(screen.getByRole('tab', { name: '账户安全' }))
 
     expect(screen.getByRole('heading', { name: '修改访问密码' })).toBeInTheDocument()
   })

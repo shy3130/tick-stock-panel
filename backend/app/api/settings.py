@@ -371,6 +371,8 @@ class DatasetConfigIn(BaseModel):
     symbols_param: str = "symbols"
     start_param: str = "start_time"
     end_param: str = "end_time"
+    asset_type_param: str | None = None
+    freq_param: str | None = None
 
 
 class AuthConfigIn(BaseModel):
@@ -440,6 +442,14 @@ def get_preferences() -> dict:
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
     }
+
+
+@router.get("/longbridge-websocket")
+def get_longbridge_websocket() -> dict:
+    """返回长桥 WebSocket 订阅器的真实配置和最近写入覆盖。"""
+    from app.services.longbridge_websocket_status import get_longbridge_websocket_status
+
+    return get_longbridge_websocket_status()
 
 
 @router.get("/data-sources")
@@ -1429,4 +1439,3 @@ def update_review_push(req: ReviewPushIn) -> dict:
     from app.services import preferences
     saved = preferences.set_review_push_channels(req.channels)
     return {"review_push_channels": saved}
-

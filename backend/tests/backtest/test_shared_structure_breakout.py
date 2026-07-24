@@ -5,7 +5,11 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from longbridge_stock.structure_breakout_scanner import StructureCandidate
+from longbridge_stock.structure_breakout_scanner import (
+    RightTriangleDetector,
+    StructureCandidate,
+    SymmetricTriangleDetector,
+)
 
 from app.backtest.matrix import build_market_data_matrix
 from app.strategy.engine import StrategyEngine
@@ -148,6 +152,50 @@ def test_matrix_strategy_respects_pattern_switches() -> None:
     )
 
     assert [type(item).__name__ for item in captured["detectors"]] == ["RightTriangleDetector"]
+
+
+@pytest.mark.parametrize(
+    ("fixed_pattern", "detector_type"),
+    [
+        ("symmetric_triangle", SymmetricTriangleDetector),
+        ("right_triangle", RightTriangleDetector),
+    ],
+)
+def test_fixed_triangle_uses_only_selected_detector(
+    fixed_pattern: str,
+    detector_type: type,
+) -> None:
+    captured: dict = {}
+
+    def scan_fn(symbol, market, rows, *, detectors):
+        captured["detectors"] = detectors
+        return ()
+
+    panel = pl.DataFrame({
+        "symbol": ["A.US"],
+        "date": [date(2026, 7, 17)],
+        "open": [10.0],
+        "high": [11.0],
+        "low": [9.0],
+        "close": [10.5],
+        "volume": [1000.0],
+    })
+    strategy = SharedStructureBreakoutMatrixStrategy(
+        scan_fn=scan_fn,
+        fixed_pattern=fixed_pattern,
+    )
+
+    strategy.compute_signals(
+        build_market_data_matrix(panel),
+        {
+            "include_long_box": True,
+            "include_right_triangle": False,
+            "include_symmetric_triangle": False,
+        },
+    )
+
+    assert len(captured["detectors"]) == 1
+    assert isinstance(captured["detectors"][0], detector_type)
 
 
 def test_custom_strategy_cannot_import_builtin_shared_adapter(tmp_path: Path) -> None:

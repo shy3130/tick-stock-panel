@@ -61,6 +61,19 @@ def test_prepare_strategy_code_rejects_forbidden_import():
         _prepare_strategy_code(req)
 
 
+def test_prepare_strategy_code_rejects_unknown_scoring_field():
+    req = StrategyCodeValidateRequest(
+        strategy_id="custom_bad_score",
+        code=_code("custom_bad_score").replace(
+            '"scoring": {},',
+            '"scoring": {"volume_surge": 1.0},',
+        ),
+    )
+
+    with pytest.raises(ValueError, match="volume_surge"):
+        _prepare_strategy_code(req)
+
+
 def test_save_strategy_code_creates_ai_strategy_in_ai_dir(tmp_path):
     request = _request(tmp_path)
     req = StrategyCodeSaveRequest(

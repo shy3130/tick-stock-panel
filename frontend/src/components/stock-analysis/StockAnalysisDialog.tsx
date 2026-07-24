@@ -5,6 +5,7 @@ import {
   Settings2, Send, Wand2, Minimize2, History, LineChart,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { copyText } from '@/lib/copyText'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import {
   type ActiveTask, type HistoryReport,
@@ -23,6 +24,7 @@ interface Props {
 }
 
 type Phase = 'loading' | 'streaming' | 'done' | 'error'
+type CopyStatus = 'idle' | 'success' | 'error'
 
 function getPhase(task: ActiveTask | HistoryReport | null): Phase {
   if (!task) return 'loading'
@@ -40,8 +42,9 @@ function getMeta(task: ActiveTask | HistoryReport | null) {
 
 export function StockAnalysisDialog({ task, mode, minimized }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [focus, setFocus] = useState('')
-  const [copied, setCopied] = useState(false)
+  const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle')
 
   const phase = getPhase(task)
   const content = getContent(task)
@@ -58,7 +61,12 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
 
   useEffect(() => {
     setFocus(task && 'focus' in task ? task.focus : '')
+    setCopyStatus('idle')
   }, [task])
+
+  useEffect(() => () => {
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current)
+  }, [])
 
   const handleStartNew = useCallback(async () => {
     if (!task) return
@@ -68,11 +76,10 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
 
   const handleCopy = async () => {
     if (!content) return
-    try {
-      await navigator.clipboard.writeText(content)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch { /* ignore */ }
+    const copied = await copyText(content)
+    setCopyStatus(copied ? 'success' : 'error')
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current)
+    copyResetTimerRef.current = setTimeout(() => setCopyStatus('idle'), 2000)
   }
 
   if (!open) return null
@@ -92,7 +99,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
           className="w-full max-w-3xl max-h-[88vh] bg-surface/95 backdrop-blur-xl border border-border/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
         >
           {/* 头部 —— 蓝色主题 */}
-          <div className="relative px-5 py-3.5 border-b border-border/50 bg-gradient-to-r from-sky-500/[0.06] via-blue-500/[0.04] to-transparent">
+          <div className="relative px-3 sm:px-5 py-3.5 border-b border-border/50 bg-gradient-to-r from-sky-500/[0.06] via-blue-500/[0.04] to-transparent">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500/20 to-blue-500/15 border border-sky-400/30 shrink-0">
                 {isHistory
@@ -126,9 +133,25 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {content && !isWorking && (
-                  <button onClick={handleCopy} title="复制全文"
-                    className="p-1.5 rounded-lg hover:bg-elevated text-muted hover:text-foreground transition-colors">
-                    {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                  <button
+                    onClick={handleCopy}
+                    aria-label={copyStatus === 'success' ? '已复制' : copyStatus === 'error' ? '复制失败' : '复制报告'}
+                    title={copyStatus === 'success' ? '报告已复制' : copyStatus === 'error' ? '复制失败，请重试' : '复制报告全文'}
+                    className={cn(
+                      'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors',
+                      copyStatus === 'success'
+                        ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-400'
+                        : copyStatus === 'error'
+                          ? 'border-danger/30 bg-danger/10 text-danger'
+                          : 'border-border/50 bg-elevated/50 text-secondary hover:bg-elevated hover:text-foreground',
+                    )}
+                  >
+                    {copyStatus === 'success'
+                      ? <Check className="h-3.5 w-3.5" />
+                      : <Copy className="h-3.5 w-3.5" />}
+                    <span aria-live="polite">
+                      {copyStatus === 'success' ? '已复制' : copyStatus === 'error' ? '复制失败' : '复制报告'}
+                    </span>
                   </button>
                 )}
                 {!isHistory && isWorking && (
@@ -158,7 +181,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                   <Loader2 className="absolute -inset-1 h-12 w-12 text-sky-400/40 animate-spin" style={{ animationDuration: '3s' }} />
                 </div>
                 <div className="text-xs text-secondary">AI 正在分析行情与关键价位…</div>
-                <div className="text-[10px] text-muted">读取日 K / 技术指标 / 压力支撑 / 财务,生成四维分析</div>
+                <div className="text-[10px] text-muted">读取日 K / 成交额 / 技术指标 / 压力支撑 / 财务,生成五维分析</div>
               </div>
             )}
 

@@ -138,6 +138,11 @@ def _write_cache_locked(
     old_as_of = old.get("as_of") if old else None
     old_ever_rows: dict[str, dict[str, dict]] = old.get("today_ever_rows", {}) if old else {}
 
+    if old_as_of == as_of:
+        merged_results = {**(old.get("results") or {}), **results}
+    else:
+        merged_results = results
+
     # 当前命中的行数据 → symbol 映射
     current_row_maps: dict[str, dict[str, dict]] = {}
     for sid, r in results.items():
@@ -167,7 +172,7 @@ def _write_cache_locked(
 
     payload = {
         "as_of": as_of,
-        "results": results,
+        "results": merged_results,
         "today_ever_matched": today_ever_matched,
         "today_ever_rows": today_ever_rows,
         "enriched_mtime": enriched_mtime,
@@ -178,8 +183,8 @@ def _write_cache_locked(
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, default=_json_default), encoding="utf-8")
         os.replace(tmp, path)
-        total_rows = sum(len(r.get("rows", [])) for r in results.values())
+        total_rows = sum(len(r.get("rows", [])) for r in merged_results.values())
         total_ever = sum(len(v) for v in today_ever_matched.values())
-        logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(results), total_rows, total_ever)
+        logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(merged_results), total_rows, total_ever)
     except Exception as e:  # noqa: BLE001
         logger.warning("写入策略缓存失败: %s", e)

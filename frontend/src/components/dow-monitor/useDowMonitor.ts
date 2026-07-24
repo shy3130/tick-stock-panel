@@ -1,0 +1,91 @@
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
+import { api } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
+
+import type { DowMonitorMarket, DowTimeframe } from './types'
+
+const POLL_INTERVAL_MS = 15_000
+const DOW_MONITOR_OVERVIEW_KEY = ['dow-monitor', 'overview'] as const
+const DOW_MONITOR_NOTIFICATIONS_KEY = ['dow-monitor', 'notifications'] as const
+
+export function useDowMonitorOverview(market: DowMonitorMarket) {
+  return useQuery({
+    queryKey: QK.dowMonitorOverview(market),
+    queryFn: () => api.dowMonitorOverview(market),
+    refetchInterval: POLL_INTERVAL_MS,
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useDowNotifications(market: DowMonitorMarket) {
+  return useQuery({
+    queryKey: QK.dowMonitorNotifications(market),
+    queryFn: () => api.dowMonitorNotifications(market),
+    refetchInterval: POLL_INTERVAL_MS,
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useDowMonitorStatus() {
+  return useQuery({
+    queryKey: QK.dowMonitorStatus,
+    queryFn: () => api.dowMonitorStatus(),
+    refetchInterval: POLL_INTERVAL_MS,
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useDowMonitorDetail(
+  symbol: string,
+  timeframe: DowTimeframe,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: QK.dowMonitorDetail(symbol, timeframe),
+    queryFn: () => api.dowMonitorDetail(symbol, timeframe),
+    enabled: enabled && !!symbol,
+    refetchInterval: POLL_INTERVAL_MS,
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useAddDowMonitorSymbol() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ symbol, enabled = true }: { symbol: string; enabled?: boolean }) =>
+      api.addDowMonitorSymbol(symbol, enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY }),
+  })
+}
+
+export function useRemoveDowMonitorSymbol() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (symbol: string) => api.removeDowMonitorSymbol(symbol),
+    onSuccess: (_, symbol) => {
+      queryClient.removeQueries({ queryKey: ['dow-monitor', 'detail', symbol] })
+      return queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY })
+    },
+  })
+}
+
+export function useSetDowMonitorEnabled() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ symbol, enabled }: { symbol: string; enabled: boolean }) =>
+      api.setDowMonitorEnabled(symbol, enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY }),
+  })
+}
+
+export function useMarkDowNotificationRead() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (notificationId: string) => api.markDowNotificationRead(notificationId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: DOW_MONITOR_NOTIFICATIONS_KEY })
+      return queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY })
+    },
+  })
+}

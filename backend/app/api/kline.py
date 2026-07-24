@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+import math
+from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched, compute_enriched_single
 from app.market_time import cn_now, cn_today
+from app.market_rules import market_rule_for_symbol
+from app.price_limits import is_risk_warning_name, price_limit_pct
 from app.services import kline_sync
 
 logger = logging.getLogger(__name__)
@@ -23,10 +27,10 @@ def _minute_allowed(capset) -> bool:
         return True
     from app.services import preferences
     provider = preferences.get_minute_data_provider()
-    if provider == "tickflow":
-        return False
-    from app.data_providers import custom as custom_sources
-    return custom_sources.provider_has_dataset(provider, "minute")
+    _, fallback, error = kline_sync._resolve_minute_provider(provider)
+    if error is not None:
+        logger.warning("minute provider resolution failed while checking access: %s", error)
+    return not fallback
 
 
 @router.get("/instruments/search")
@@ -152,6 +156,67 @@ def _get_asset_info(repo, symbol: str, asset_type: str) -> dict:
         return {}
 
 
+def _get_price_limit_info(
+    repo,
+    symbol: str,
+    trade_date: date,
+    asset_type: str,
+    instrument_name: str | None,
+) -> dict | None:
+    """Return the date-aware limit rule and today's authoritative prices."""
+    if asset_type == "index":
+        return None
+
+    info = {
+        "rate": price_limit_pct(
+            symbol,
+            trade_date,
+            is_risk_warning=(
+                asset_type == "stock" and is_risk_warning_name(instrument_name)
+            ),
+        ),
+        "limit_up": None,
+        "limit_down": None,
+        "source": "rule",
+    }
+    if trade_date != cn_today():
+        return info
+
+    try:
+        import polars as pl
+
+        instruments = repo.get_instruments_asset(asset_type)
+        available = [
+            column
+            for column in ("symbol", "limit_up", "limit_down")
+            if column in instruments.columns
+        ]
+        if "symbol" not in available or len(available) == 1:
+            return info
+        hit = instruments.filter(pl.col("symbol") == symbol).select(available).head(1)
+        row = hit.to_dicts()[0] if not hit.is_empty() else None
+    except Exception:
+        return info
+    if row is None:
+        return info
+
+    has_authoritative_price = False
+    for field in ("limit_up", "limit_down"):
+        value = row.get(field)
+        if value is None:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric) and 0 < numeric < 10_000:
+            info[field] = numeric
+            has_authoritative_price = True
+    if has_authoritative_price:
+        info["source"] = "instrument"
+    return info
+
+
 @router.get("/daily")
 def get_daily(
     request: Request,
@@ -203,14 +268,14 @@ def get_daily(
         enriched = compute_enriched(raw, factors=factors)
         rows = enriched.tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
-        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
+        rows = _maybe_inject_live_candle(request, symbol, rows, asset_type, end_date=end)
         resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "live"}
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
 
     # 追加/覆盖今日实时蜡烛
-    rows = _maybe_inject_live_candle(request, symbol, rows, asset_type)
+    rows = _maybe_inject_live_candle(request, symbol, rows, asset_type, end_date=end)
 
     resp = {"symbol": symbol, "name": stock_name, "stock_info": stock_info, "rows": rows, "source": "enriched"}
     return _attach_ext(resp, repo, symbol, ext_columns)
@@ -281,36 +346,91 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
     return resp
 
 
-def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict], asset_type: str = "stock") -> list[dict]:
+def _maybe_inject_live_candle(
+    request: Request,
+    symbol: str,
+    rows: list[dict],
+    asset_type: str = "stock",
+    end_date: date | None = None,
+) -> list[dict]:
     """如果有当日实时 enriched 数据, 用实时数据生成今日蜡烛并追加/覆盖。
 
-    stock 走 QuoteService 的股票实时缓存; etf 走 ETF enriched 缓存 (开启实时 ETF
-    拉取时为盘中数据, 否则为磁盘最新日, 由下方"非今日不注入"守卫自然跳过)。
+    stock 优先走当前配置的实时行情源，QuoteService 缓存作为回退；etf 走 ETF enriched 缓存。
     """
     if asset_type == "stock":
-        qs = getattr(request.app.state, "quote_service", None)
-        if not qs:
+        market_tz = ZoneInfo(market_rule_for_symbol(symbol).timezone)
+        market_today = datetime.now(market_tz).date()
+        if end_date is not None and end_date < market_today:
             return rows
-        df_today, enriched_date = qs.get_enriched_today()
+
+        q = None
+        enriched_date = None
+        try:
+            from app.data_providers import custom as custom_sources
+            from app.services import preferences
+
+            provider_name = preferences.get_realtime_data_provider()
+            if (
+                provider_name != "tickflow"
+                and custom_sources.provider_has_dataset(provider_name, "realtime")
+            ):
+                quotes = custom_sources.get_provider(provider_name).get_realtime(symbols=[symbol]) or []
+                q = next((item for item in quotes if item.get("symbol") == symbol), None)
+                if q:
+                    timestamp = q.get("timestamp")
+                    enriched_date = (
+                        datetime.fromtimestamp(float(timestamp) / 1000.0, tz=market_tz).date()
+                        if timestamp
+                        else market_today
+                    )
+                    q = {**q, "close": q.get("last_price")}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stock detail realtime provider unavailable for %s: %s", symbol, type(exc).__name__)
+
+        if q is None:
+            from app.plugins.clickhouse.provider import _fetch_longbridge_quote
+
+            q = _fetch_longbridge_quote(symbol) or None
+            if q:
+                timestamp = q.get("timestamp")
+                enriched_date = (
+                    datetime.fromtimestamp(float(timestamp) / 1000.0, tz=market_tz).date()
+                    if timestamp
+                    else market_today
+                )
+                q = {**q, "close": q.get("last_price")}
+
+        if q is None:
+            qs = getattr(request.app.state, "quote_service", None)
+            if not qs:
+                return rows
+            df_today, enriched_date = qs.get_enriched_today()
+            if df_today.is_empty():
+                return rows
+            import polars as pl
+            try:
+                matches = df_today.filter(pl.col("symbol") == symbol).to_dicts()
+                if not matches:
+                    return rows
+                q = matches[0]
+            except Exception:  # noqa: BLE001
+                return rows
     elif asset_type == "etf":
         df_today, enriched_date = request.app.state.repo.get_enriched_latest_asset("etf")
+        if df_today.is_empty():
+            return rows
+        import polars as pl
+        try:
+            matches = df_today.filter(pl.col("symbol") == symbol).to_dicts()
+            if not matches:
+                return rows
+            q = matches[0]
+        except Exception:  # noqa: BLE001
+            return rows
     else:
         return rows
-    if df_today.is_empty():
-        return rows
 
-    # 非交易日（周末/假日）缓存的行情日期 != 今天，跳过注入避免产生重复蜡烛
-    if not enriched_date or enriched_date != date.today():
-        return rows
-
-    # 查找该 symbol 的实时 enriched 行
-    import polars as pl
-    try:
-        q = df_today.filter(pl.col("symbol") == symbol).to_dicts()
-        if not q:
-            return rows
-        q = q[0]
-    except Exception:  # noqa: BLE001
+    if not enriched_date or (end_date is not None and enriched_date > end_date):
         return rows
 
     close_price = q.get("close")
@@ -335,7 +455,13 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict], a
         "amount": q.get("amount"),
         "change_pct": q.get("change_pct"),
         "is_live": True,
+        "quote_timestamp": q.get("timestamp"),
     }
+    prev_close = q.get("prev_close")
+    if not prev_close and rows:
+        prev_close = rows[-1].get("close")
+    if live_row["change_pct"] is None and prev_close:
+        live_row["change_pct"] = (close_price - prev_close) / prev_close
     # 补上 enriched 的技术指标字段
     for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
                 "macd_dif", "macd_dea", "macd_hist",
@@ -496,14 +622,38 @@ def get_minute_batch(request: Request, body: dict):
         start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
         end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
         lim = capset.limits(Cap.KLINE_MINUTE_BATCH)
-        live_df = kline_sync.sync_minute_batch(
-            incomplete,
-            start_time=start_time,
-            end_time=end_time,
-            batch_size=lim.batch if lim else None,
-            rpm=lim.rpm if lim else None,
-        )
-        if not live_df.is_empty():
+        # etf_set 已在上方获取, 直接复用 — 按 asset_type 拆分调用 sync_minute_batch
+        # (自定义源 / TickFlow 路由均依赖 asset_type 正确传递)
+        # 契约: 本端点只接受 stock/ETF (指数分钟K走 /api/index/minute 独立路径),
+        # 故两分支已覆盖全部 incomplete。若未来放开指数支持, 需额外加 index 分支
+        # 以避免被误路由为 stock。
+        stock_incomplete = [s for s in incomplete if s not in etf_set]
+        etf_incomplete = [s for s in incomplete if s in etf_set]
+        live_parts: list[pl.DataFrame] = []
+        if stock_incomplete:
+            df_s = kline_sync.sync_minute_batch(
+                stock_incomplete,
+                start_time=start_time,
+                end_time=end_time,
+                batch_size=lim.batch if lim else None,
+                rpm=lim.rpm if lim else None,
+                asset_type="stock",
+            )
+            if not df_s.is_empty():
+                live_parts.append(df_s)
+        if etf_incomplete:
+            df_e = kline_sync.sync_minute_batch(
+                etf_incomplete,
+                start_time=start_time,
+                end_time=end_time,
+                batch_size=lim.batch if lim else None,
+                rpm=lim.rpm if lim else None,
+                asset_type="etf",
+            )
+            if not df_e.is_empty():
+                live_parts.append(df_e)
+        if live_parts:
+            live_df = pl.concat(live_parts, how="diagonal_relaxed")
             for sym in incomplete:
                 sub = live_df.filter(pl.col("symbol") == sym).sort("datetime")
                 if not sub.is_empty():
@@ -550,12 +700,19 @@ def get_minute(
     if trade_date is None:
         # 本地无任何分钟K，尝试从 TickFlow 拉取当天
         trade_date = cn_today()
-        df = kline_sync.fetch_minute_single(symbol, trade_date)
+        df = kline_sync.fetch_minute_single(symbol, trade_date, asset_type=asset_type)
+        price_limit = _get_price_limit_info(
+            repo, symbol, trade_date, asset_type, stock_name,
+        )
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
+            "price_limit": price_limit,
         }
 
+    price_limit = _get_price_limit_info(
+        repo, symbol, trade_date, asset_type, stock_name,
+    )
     df = repo.get_minute(symbol, trade_date, asset_type=asset_type)
 
     # 完整交易日应有 240 条分钟K；如果是今天(盘中)，期望条数按已交易分钟估算
@@ -581,14 +738,16 @@ def get_minute(
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
+            "price_limit": price_limit,
         }
 
     # 本地不完整或无数据 → 从 TickFlow 实时拉取
-    live_df = kline_sync.fetch_minute_single(symbol, trade_date)
+    live_df = kline_sync.fetch_minute_single(symbol, trade_date, asset_type=asset_type)
     return {
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,
         "date": str(trade_date), "rows": live_df.to_dicts(),
         "source": "live" if not live_df.is_empty() else "none",
+        "price_limit": price_limit,
     }
 
 
@@ -1032,4 +1191,3 @@ async def rebuild_enriched(request: Request):
 # 长时间任务专用线程池（隔离于 FastAPI 默认线程池，防止阻塞请求处理）
 import concurrent.futures as _cf
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
-

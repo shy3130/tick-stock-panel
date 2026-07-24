@@ -19,6 +19,7 @@ import numpy as np
 import polars as pl
 
 from app.backtest.engine import BacktestEngine
+from app.backtest.minute_trigger import build_minute_exit_reference
 
 NUMERIC_COLS = BacktestEngine._MINUTE_NUMERIC_COLS  # open/high/low/close/volume/amount
 
@@ -84,6 +85,40 @@ def test_resolve_minute_fill_empty_returns_none():
     """空数组 → None (降级到日K口径)。"""
     assert BacktestEngine._resolve_minute_fill(np.array([]).reshape(0, 6), None, "buy") is None
     assert BacktestEngine._resolve_minute_fill(None, None, "buy") is None
+
+
+def test_resolve_minute_exit_trigger_uses_next_minute_open():
+    arr = np.array([
+        [10.2, 10.3, 10.1, 10.2, 100, 1020],
+        [10.1, 10.2, 9.8, 9.9, 100, 990],
+        [9.7, 9.8, 9.6, 9.7, 100, 970],
+    ], dtype=np.float64)
+
+    assert BacktestEngine._resolve_minute_exit_trigger(arr, 10.0) == 9.7
+
+
+def test_resolve_minute_exit_trigger_without_next_bar_returns_none():
+    arr = np.array([
+        [10.2, 10.3, 10.1, 10.2, 100, 1020],
+        [10.1, 10.2, 9.8, 9.9, 100, 990],
+    ], dtype=np.float64)
+
+    assert BacktestEngine._resolve_minute_exit_trigger(arr, 10.0) is None
+
+
+def test_minute_exit_reference_removes_current_close_from_ma20():
+    close = np.array([[9.0]], dtype=np.float32)
+    fields = {"ma20": np.array([[9.95]], dtype=np.float32)}
+    codes = np.array([[0]], dtype=np.int16)
+
+    result = build_minute_exit_reference(
+        close,
+        fields,
+        codes,
+        ("signal_ma20_breakdown",),
+    )
+
+    assert result[0, 0] == 10.0
 
 
 class _FakeRepo:

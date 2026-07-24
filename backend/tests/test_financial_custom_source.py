@@ -41,6 +41,7 @@ def test_sync_all_allows_custom_financial_source_without_tickflow_capability(
         "income": 1,
         "balance_sheet": 1,
         "cash_flow": 1,
+        "shares": 1,
     }
     assert synced == list(financial_sync.FINANCIAL_TABLES)
 

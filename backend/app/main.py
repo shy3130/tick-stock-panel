@@ -1,7 +1,9 @@
 """FastAPI 入口。"""
 from __future__ import annotations
 
+from ipaddress import ip_address
 import logging
+import os
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,11 +13,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+import app.api.dow_monitor as dow_monitor
+import app.api.dow_strategy as dow_strategy
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import (
+    alerts,
+    analysis,
+    backtest,
+    data,
+    ext_data,
+    financials,
+    indices,
+    intraday,
+    kline,
+    market_recap,
+    monitor_rules,
+    overview,
+    pipeline,
+    rps,
+    screener,
+    signals,
+    stock_analysis,
+    strategy,
+    watchlist,
+)
+from app.api import auth as auth_api
+from app.api import settings as settings_api
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
+from app.services.dow_monitor_client import LongbridgeDowClient
+from app.services.dow_monitor_data import WebStockMonitorGateway
+from app.services.dow_monitor_service import DowMonitorService
+from app.services.dow_monitor_store import DowMonitorStore
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
@@ -26,6 +56,33 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+async def _start_dow_monitor(app: FastAPI, data_dir: Path, provider, endpoint: str) -> None:
+    def _load_dow_daily(symbol, now):
+        return provider.get_daily([symbol], None, now)
+
+    store = DowMonitorStore(data_dir)
+    gateway = WebStockMonitorGateway(provider)
+    dow_client = LongbridgeDowClient(endpoint)
+    service = DowMonitorService(
+        store,
+        gateway,
+        dow_client,
+        _load_dow_daily,
+    )
+    app.state.dow_monitor_service = service
+    app.state.dow_monitor_client = dow_client
+    await service.start()
+
+
+async def _stop_dow_monitor(app: FastAPI) -> None:
+    service = getattr(app.state, "dow_monitor_service", None)
+    if service:
+        await service.stop()
+    client = getattr(app.state, "dow_monitor_client", None)
+    if client:
+        client.close()
 
 
 @asynccontextmanager
@@ -71,6 +128,17 @@ async def lifespan(app: FastAPI):
         logger.info("custom data sources loaded: %d", len(custom_sources.list_sources()))
     except Exception as e:  # noqa: BLE001
         logger.warning("custom data sources init failed: %s", e)
+
+    # Dow monitoring is deliberately bound to the registered ClickHouse WebStock
+    # provider. It never falls back to another live source.
+    try:
+        from app.data_providers import custom as custom_sources
+
+        clickhouse_provider = custom_sources.get_provider("clickhouse")
+        endpoint = os.getenv("LONGBRIDGE_API_URL", "http://127.0.0.1:19912")
+        await _start_dow_monitor(app, store.data_dir, clickhouse_provider, endpoint)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("dow monitor not started: %s", e)
 
     # 全局行情服务
     qs = QuoteService()
@@ -140,9 +208,9 @@ async def lifespan(app: FastAPI):
     app.state.financial_scheduler = financial_scheduler
 
     # 策略引擎
+    from app.services.screener import ScreenerService
     from app.strategy.engine import StrategyEngine
     from app.strategy.monitor import StrategyMonitorService
-    from app.services.screener import ScreenerService
 
     _screener_svc = ScreenerService(repo)
     _etf_screener_svc = ScreenerService(repo, asset_type="etf")
@@ -208,9 +276,9 @@ async def lifespan(app: FastAPI):
         _schedule_matrix_cache_prewarm()
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
-    from app.strategy.monitor import MonitorRuleEngine
-    from app.strategy import monitor_rules as mr_store
     from app.services import preferences
+    from app.strategy import monitor_rules as mr_store
+    from app.strategy.monitor import MonitorRuleEngine
     monitor_engine = MonitorRuleEngine()
     monitor_engine.set_strategy_engine(strategy_engine)
     monitor_engine.set_data_dir(store.data_dir)
@@ -241,6 +309,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await _stop_dow_monitor(app)
     if app.state.scheduler:
         app.state.scheduler.shutdown(wait=False)
     ps = getattr(app.state, "pull_scheduler", None)
@@ -289,7 +358,27 @@ app.add_middleware(
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
 # 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
 _AUTH_WHITELIST_PREFIX = ("/api/auth/",)
-_AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
+_AUTH_WHITELIST_EXACT = (
+    "/health",
+    "/api/health",
+    "/openapi.json",
+    "/docs",
+    "/redoc",
+)
+_DOW_MONITOR_LOOPBACK_GET_PATHS = frozenset(
+    {
+        "/api/dow-monitor/status",
+        "/api/dow-monitor/symbols",
+    }
+)
+
+
+def _is_loopback_peer(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @app.middleware("http")
@@ -297,6 +386,12 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     # 仅 /api/ 走认证; 静态资源(前端页面/assets)放行, 由前端处理跳转
     if not path.startswith("/api/"):
+        return await call_next(request)
+    if (
+        request.method == "GET"
+        and path in _DOW_MONITOR_LOOPBACK_GET_PATHS
+        and _is_loopback_peer(request)
+    ):
         return await call_next(request)
     # 白名单放行(设密码/登录/探活本身不拦)
     if path.startswith(_AUTH_WHITELIST_PREFIX) or path in _AUTH_WHITELIST_EXACT:
@@ -348,6 +443,8 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+app.include_router(dow_strategy.router)
+app.include_router(dow_monitor.router)
 
 
 # 能力门控异常 → 403(而非默认 500)
@@ -355,6 +452,7 @@ app.include_router(rps.router)
 # 若不注册 handler 会冒泡成 500 Internal Server Error,对前端不友好且语义错误。
 from fastapi import Request
 from fastapi.responses import JSONResponse
+
 from app.tickflow.capabilities import CapabilityDenied
 
 

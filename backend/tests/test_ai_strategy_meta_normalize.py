@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app.api.strategy import _normalize_build_result, _normalize_strategy_meta
+from app.strategy.ai_generator import AIStrategyGenerator
 
 RAW_CODE = '''"""模型返回的策略"""
 import polars as pl
@@ -208,6 +209,41 @@ MATRIX_STRATEGY = object()
 
     assert result["valid"] is True
     assert result["error"] is None
+
+
+def test_validate_code_accepts_controlled_virtual_scoring_field():
+    code = RAW_CODE.replace(
+        '"scoring": {},',
+        '"scoring": {"ma20_bias": 0.6, "vol_ratio_5d": 0.4},',
+    )
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is True
+
+
+def test_validate_code_rejects_unknown_scoring_field():
+    code = RAW_CODE.replace(
+        '"scoring": {},',
+        '"scoring": {"close_above_ma20": 1.0},',
+    )
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert "close_above_ma20" in result["error"]
+
+
+def test_validate_code_rejects_param_without_id():
+    code = RAW_CODE.replace(
+        '"params": [],',
+        '"params": [{"name": "volume_ratio", "default": 1.5}],',
+    )
+
+    result = AIStrategyGenerator().validate_code(code)
+
+    assert result["valid"] is False
+    assert result["error"] == "META.params[0] 缺少非空 id"
 
 
 def test_validate_code_rejects_missing_matrix_strategy_entrypoint():

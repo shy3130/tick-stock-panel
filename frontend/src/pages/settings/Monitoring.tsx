@@ -20,6 +20,11 @@ import { useUpdateQuoteInterval, useToggleRealtimeQuotes } from '@/lib/useShared
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
+import {
+  isLongbridgeWebsocketProvider,
+  longbridgePriorityLabels,
+  longbridgeSubscriptionTypeLabels,
+} from '@/lib/longbridgeWebsocket'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
 
@@ -49,8 +54,18 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const toggleQuote = useToggleRealtimeQuotes()
   const tier = tierRank(caps?.label ?? '')
   const isNoneTier = tier < 0
+  // None 档但配了自定义实时源时, 后端 is_realtime_allowed 仍返回 True (realtime_mode=full_market)
+  // 此时不应拦截实时监控页 — 用 quoteStatus.realtime_allowed 作为最终判据
+  const realtimeAllowed = quoteStatus?.realtime_allowed ?? !isNoneTier
   const isFreeTier = tier === 0
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
+  const isLongbridgeWebsocket = isLongbridgeWebsocketProvider(prefs?.realtime_data_provider)
+  const longbridgeWebsocket = useQuery({
+    queryKey: QK.longbridgeWebsocket,
+    queryFn: () => api.longbridgeWebsocketStatus(),
+    enabled: isLongbridgeWebsocket,
+    refetchInterval: 300_000,
+  })
   // 分时图实时刷新间隔 (秒), 与后端 [3,60] clamp 对齐; 默认 6
   const intradayInterval = prefs?.minute_intraday_refresh_interval ?? 6
   // 滑块本地草稿: 拖动时即时反馈, 停顿 2s 后落库 (与行情轮询滑块一致)
@@ -278,7 +293,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
   }, [highlight])
 
-  if (isNoneTier) {
+  if (isNoneTier && !realtimeAllowed && !isLongbridgeWebsocket) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
@@ -305,7 +320,91 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 max-w-5xl">
       {/* ========== 左列 ========== */}
       <div className="space-y-6">
-        {/* 行情状态 — 开关 + 间隔 */}
+        {/* 长桥源展示真实 WebSocket 订阅；TickFlow 源保留原轮询配置。 */}
+        {isLongbridgeWebsocket ? (
+        <Card
+          icon={Wifi}
+          title="长桥 WebSocket 实时订阅"
+          badge={
+            longbridgeWebsocket.data?.running && longbridgeWebsocket.data?.healthy ? '运行中'
+            : longbridgeWebsocket.data?.configured ? '状态异常'
+            : longbridgeWebsocket.isError ? '读取失败'
+            : '读取中'
+          }
+        >
+          {longbridgeWebsocket.data?.configured ? (
+            <div className="space-y-4">
+              <div className={`rounded-btn border px-3 py-2 text-xs ${
+                longbridgeWebsocket.data.running && longbridgeWebsocket.data.healthy
+                  ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-500'
+                  : 'border-warning/25 bg-warning/10 text-warning'
+              }`}>
+                {longbridgeWebsocket.data.running && longbridgeWebsocket.data.healthy
+                  ? '长桥订阅器心跳正常，当前配置来自采集器运行快照。'
+                  : (longbridgeWebsocket.data.error ?? `订阅器状态：${longbridgeWebsocket.data.status}`)}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <StatusMetric label="最近覆盖" value={`${longbridgeWebsocket.data.activity.symbol_count} 只`} />
+                <StatusMetric label="订阅上限" value={`${longbridgeWebsocket.data.subscription.limit} 只`} />
+                <StatusMetric label="动态重载" value={`${longbridgeWebsocket.data.subscription.reload_seconds / 60} 分钟`} />
+                <StatusMetric label="落库" value={longbridgeWebsocket.data.subscription.sinks.join(' + ')} />
+              </div>
+
+              <div>
+                <div className="text-[10px] uppercase tracking-widest text-muted mb-2">三市场最近推送覆盖</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <StatusMetric label="A股" value={`${longbridgeWebsocket.data.activity.markets.cn ?? 0} 只`} />
+                  <StatusMetric label="港股" value={`${longbridgeWebsocket.data.activity.markets.hk ?? 0} 只`} />
+                  <StatusMetric label="美股" value={`${longbridgeWebsocket.data.activity.markets.us ?? 0} 只`} />
+                </div>
+              </div>
+
+              <StatusTags
+                title="订阅优先级"
+                values={longbridgePriorityLabels(longbridgeWebsocket.data.subscription.priority)}
+              />
+              <StatusTags
+                title="WebSocket 完整数据"
+                values={longbridgeSubscriptionTypeLabels(longbridgeWebsocket.data.subscription.data_types)}
+              />
+
+              <div className="rounded-btn border border-border bg-base/40 px-3 py-2 text-[11px] leading-relaxed text-secondary">
+                IO 缓冲 {longbridgeWebsocket.data.subscription.buffer_capacity.toLocaleString()} 条，
+                每批最多 {longbridgeWebsocket.data.subscription.flush_batch_size.toLocaleString()} 条，
+                最长 {longbridgeWebsocket.data.subscription.flush_interval_ms}ms 刷盘。
+                {longbridgeWebsocket.data.activity.last_event_at && (
+                  <span className="block mt-1 text-muted">
+                    最近收到推送：{longbridgeWebsocket.data.activity.last_event_at.replace('T', ' ')}
+                  </span>
+                )}
+                {!longbridgeWebsocket.data.activity.available && (
+                  <span className="block mt-1 text-warning">{longbridgeWebsocket.data.activity.error}</span>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-border">
+                <ToggleRow
+                  label="看板实时读取"
+                  desc={realtimeEnabled ? 'TickFlow 正在读取长桥写入 ClickHouse 的最新行情' : 'WebSocket 仍由长桥服务常驻运行；当前只停止看板实时读取'}
+                  checked={realtimeEnabled}
+                  onChange={handleToggleQuote}
+                  disabled={isPaused}
+                />
+              </div>
+            </div>
+          ) : longbridgeWebsocket.isError ? (
+            <div className="rounded-btn border border-danger/25 bg-danger/10 px-3 py-3 text-xs text-danger">
+              长桥 WebSocket 状态接口读取失败，请稍后重试。
+            </div>
+          ) : longbridgeWebsocket.data ? (
+            <div className="rounded-btn border border-warning/25 bg-warning/10 px-3 py-3 text-xs text-warning">
+              {longbridgeWebsocket.data.error ?? '尚未读取到长桥 WebSocket 运行快照。'}
+            </div>
+          ) : (
+            <div className="text-xs text-muted">正在读取长桥订阅状态…</div>
+          )}
+        </Card>
+        ) : (
         <Card icon={Activity} title="行情轮询">
           <ToggleRow
             label="实时行情"
@@ -348,8 +447,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             </div>
           </div>
         </Card>
+        )}
 
-        {isFreeTier && (
+        {isFreeTier && !isLongbridgeWebsocket && (
         <Card icon={Activity} title="自选股实时">
           <div className="mb-3 rounded-btn border border-accent/25 bg-accent/10 px-3 py-2 text-xs font-medium leading-snug text-accent">
             Free 档开启实时行情时自动监控「自选」页面前 5 个标的，最低 6 秒刷新。
@@ -385,11 +485,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           </div>
         </Card>
         )}
-        {!isFreeTier && (
+        {(!isFreeTier || isLongbridgeWebsocket) && (
         <Card icon={Wifi} title="页面实时刷新">
           <p className="text-xs text-secondary mb-4">
-            选择哪些页面跟随 SSE 实时刷新数据。关闭的页面不会被推送，
-            但行情轮询和策略监控不受影响。
+            {isLongbridgeWebsocket
+              ? '选择哪些页面跟随 SSE 实时刷新。关闭页面只停止前端刷新，长桥 WebSocket 订阅和策略监控不受影响。'
+              : '选择哪些页面跟随 SSE 实时刷新数据。关闭的页面不会被推送，但行情轮询和策略监控不受影响。'}
           </p>
           <div className="space-y-2">
             {Object.entries(PAGE_LABELS).map(([key, label]) => (
@@ -409,7 +510,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         <Card icon={Activity} title="分时图刷新">
           <ToggleRow
             label="自选/策略分时图实时刷新"
-            desc={`开启后自选与策略列表的分时图盘中每 ${intradayInterval} 秒自动刷新（需 Pro+ 权限 + 实时行情运行）。关闭时仅打开页面时拉取一次, 可点表头刷新按钮手动更新。`}
+            desc={isLongbridgeWebsocket
+              ? `开启后自选与策略列表的分时图盘中每 ${intradayInterval} 秒从 ClickHouse 刷新，不会新增长桥订阅。关闭时仅打开页面时读取一次。`
+              : `开启后自选与策略列表的分时图盘中每 ${intradayInterval} 秒自动刷新（需 Pro+ 权限 + 实时行情运行）。关闭时仅打开页面时拉取一次, 可点表头刷新按钮手动更新。`}
             checked={prefs?.minute_intraday_refresh ?? false}
             onChange={(v) => save({ minute_intraday_refresh: v })}
           />
@@ -418,7 +521,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               <div className="min-w-0">
                 <div className="text-sm text-foreground">刷新间隔</div>
                 <div className="text-[11px] text-muted">
-                  间隔越短更新越及时, 但越耗数据源配额 (rpm)
+                  {isLongbridgeWebsocket
+                    ? '间隔越短越频繁读取 ClickHouse，不会重复建立长桥订阅'
+                    : '间隔越短更新越及时, 但越耗数据源配额 (rpm)'}
                 </div>
               </div>
               <span className="text-[11px] font-mono text-foreground shrink-0 tabular-nums">
@@ -442,7 +547,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           </div>
         </Card>
 
-        {!isFreeTier && (
+        {(!isFreeTier || isLongbridgeWebsocket) && (
         <Card icon={BarChart3} title="左侧菜单指数">
           <p className="text-xs text-secondary mb-4">
             选择实时行情开启时，左侧菜单底部显示哪些指数点位和涨跌幅。
@@ -786,6 +891,32 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
           </div>
         </Card>
+      </div>
+    </div>
+  )
+}
+
+
+function StatusMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-btn border border-border bg-base/40 px-2.5 py-2">
+      <div className="text-[10px] text-muted">{label}</div>
+      <div className="mt-0.5 text-xs font-medium text-foreground tabular-nums">{value}</div>
+    </div>
+  )
+}
+
+
+function StatusTags({ title, values }: { title: string; values: string[] }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-widest text-muted mb-2">{title}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {values.map(value => (
+          <span key={value} className="rounded bg-accent/10 px-2 py-1 text-[10px] text-accent">
+            {value}
+          </span>
+        ))}
       </div>
     </div>
   )

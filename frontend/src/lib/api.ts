@@ -4,6 +4,18 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import type {
+  DowMonitorDetailResponse,
+  DowMonitorMarket,
+  DowMonitorNotification,
+  DowMonitorNotificationsResponse,
+  DowMonitorOverviewResponse,
+  DowMonitorRemoveSymbolResponse,
+  DowMonitorStatusResponse,
+  DowMonitorSymbol,
+  DowMonitorSymbolsResponse,
+  DowTimeframe,
+} from '@/components/dow-monitor/types'
 import type { MarketCode } from '@/lib/market-display'
 
 const BASE = ''
@@ -119,6 +131,15 @@ export interface FinancialCashFlowRecord {
   [key: string]: any
 }
 
+export interface FinancialSharesRecord {
+  symbol?: string
+  period_end: string
+  announce_date?: string | null
+  total_shares?: number | null
+  float_shares?: number | null
+  [key: string]: any
+}
+
 /** AI 财务分析历史报告 */
 export interface AiFinancialReport {
   id: string
@@ -184,6 +205,13 @@ export interface MinuteKlineRow {
   close: number
   volume: number
   amount: number
+}
+
+export interface PriceLimitInfo {
+  rate: number
+  limit_up: number | null
+  limit_down: number | null
+  source: 'rule' | 'instrument'
 }
 
 export interface KlineRow {
@@ -271,6 +299,7 @@ export interface ScreenerStrategy {
   name: string
   description: string
   source?: string
+  strategy_role?: 'buy' | 'early_buy' | 'risk'
 }
 
 export interface StrategyLoadError {
@@ -284,6 +313,27 @@ export interface ScreenerResult {
   rows: any[]
   total: number
   elapsed_ms: number
+}
+
+export interface ScreenerResultSummary {
+  total: number
+  as_of: string
+}
+
+export interface ScreenerCachedSummary {
+  as_of: string | null
+  market?: MarketCode
+  results: Record<string, ScreenerResultSummary>
+  today_ever_counts: Record<string, number>
+  updated_at: number | null
+}
+
+export interface ScreenerCachedResult {
+  market?: MarketCode
+  result: ScreenerResult | null
+  today_ever_rows: Record<string, any> | null
+  strategy_ids_by_symbol: Record<string, string[]>
+  updated_at: number | null
 }
 
 export interface MarketSnapshotRow {
@@ -346,6 +396,7 @@ export interface OverviewDimensionRankItem {
 
 export interface OverviewMarket {
   as_of: string | null
+  realtime_as_of?: string | null
   market: MarketCode
   currency: string
   features?: { limit_ladder: boolean; cn_market_rules: boolean }
@@ -424,6 +475,7 @@ export interface StrategyDetail {
   description: string
   tags: string[]
   source: 'builtin' | 'custom' | 'ai'
+  strategy_role: 'buy' | 'early_buy' | 'risk'
   execution_backend: 'polars_expr' | 'matrix_native' | 'python_history_legacy'
   asset_types: string[]
   timeframes: string[]
@@ -434,6 +486,7 @@ export interface StrategyDetail {
   scoring: Record<string, number>
   entry_signals: string[]
   exit_signals: string[]
+  minute_exit_trigger_supported_signals: string[]
   stop_loss: number | null
   take_profit: number | null
   trailing_stop: number | null
@@ -839,6 +892,8 @@ export interface DatasetConfig {
   symbols_param?: string
   start_param?: string
   end_param?: string
+  asset_type_param?: string | null
+  freq_param?: string | null
 }
 
 export interface AuthConfig {
@@ -862,6 +917,36 @@ export interface WecomBotStatus {
   bot_id_configured: boolean
   secret_configured: boolean
   last_error: string
+}
+
+export interface LongbridgeWebsocketStatus {
+  provider: 'longbridge'
+  transport: 'websocket'
+  configured: boolean
+  running: boolean
+  healthy: boolean
+  status: string
+  heartbeat_at: string | null
+  error?: string
+  subscription: {
+    source: string
+    limit: number
+    markets: string[]
+    reload_seconds: number
+    data_types: string[]
+    priority: string[]
+    sinks: string[]
+    buffer_capacity: number
+    flush_batch_size: number
+    flush_interval_ms: number
+  }
+  activity: {
+    available: boolean
+    symbol_count: number
+    markets: Record<string, number>
+    last_event_at: string | null
+    error?: string
+  }
 }
 
 export interface Preferences {
@@ -1269,6 +1354,8 @@ export const api = {
     request<{ results: { symbol: string; name: string; code: string; market: 'cn' | 'hk' | 'us'; asset_type?: string }[] }>(
       `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}${assetTypes ? `&asset_types=${encodeURIComponent(assetTypes)}` : ''}${market !== 'all' ? `&markets=${encodeURIComponent(market)}` : ''}`,
     ),
+  longbridgeWebsocketStatus: () =>
+    request<LongbridgeWebsocketStatus>('/api/settings/longbridge-websocket'),
 
   /** 批量查股票名称 (传入 symbol 列表, 返回 {symbol: name}) */
   instrumentNames: (symbols: string[]) =>
@@ -1284,6 +1371,7 @@ export const api = {
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'live' | 'none'
+      price_limit?: PriceLimitInfo | null
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
     ),
@@ -1400,6 +1488,37 @@ export const api = {
         : '/api/watchlist/enriched',
     ),
 
+  // ===== Dow monitor =====
+  dowMonitorSymbols: () => request<DowMonitorSymbolsResponse>('/api/dow-monitor/symbols'),
+  addDowMonitorSymbol: (symbol: string, enabled = true) =>
+    request<DowMonitorSymbol>('/api/dow-monitor/symbols', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, enabled }),
+    }),
+  removeDowMonitorSymbol: (symbol: string) =>
+    request<DowMonitorRemoveSymbolResponse>(`/api/dow-monitor/symbols/${encodeURIComponent(symbol)}`, {
+      method: 'DELETE',
+    }),
+  setDowMonitorEnabled: (symbol: string, enabled: boolean) =>
+    request<DowMonitorSymbol>(`/api/dow-monitor/symbols/${encodeURIComponent(symbol)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+  dowMonitorOverview: (market: DowMonitorMarket) =>
+    request<DowMonitorOverviewResponse>(`/api/dow-monitor/overview?market=${market}`),
+  dowMonitorNotifications: (market: DowMonitorMarket) =>
+    request<DowMonitorNotificationsResponse>(`/api/dow-monitor/notifications?market=${market}`),
+  markDowNotificationRead: (notificationId: string) =>
+    request<DowMonitorNotification>(
+      `/api/dow-monitor/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: 'PATCH' },
+    ),
+  dowMonitorDetail: (symbol: string, timeframe: DowTimeframe) =>
+    request<DowMonitorDetailResponse>(
+      `/api/dow-monitor/${encodeURIComponent(symbol)}?timeframe=${timeframe}`,
+    ),
+  dowMonitorStatus: () => request<DowMonitorStatusResponse>('/api/dow-monitor/status'),
+
   screenerStrategies: async (assetType: 'stock' | 'etf' = 'stock') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
       `/api/strategies?asset_type=${assetType}&timeframe=1d`,
@@ -1416,10 +1535,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null, asset_type: assetType }),
     }),
-  screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock', market: MarketCode = 'cn') =>
-    request<{ as_of: string | null; market: MarketCode; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
-      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null, asset_type: assetType, timeframe: '1d', market }) },
+  screenerRunAll: (asOf?: string, strategyIds?: string[], assetType: 'stock' | 'etf' = 'stock', market: MarketCode = 'cn') =>
+    request<{ as_of: string | null; market: MarketCode; results: Record<string, ScreenerResultSummary> }>(
+      '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, asset_type: assetType, timeframe: '1d', summary_only: true, market }) },
     ),
+  screenerCachedSummary: (market: MarketCode = 'cn') =>
+    request<ScreenerCachedSummary>(`/api/screener/cached-summary?market=${market}`),
+  screenerCachedResult: (strategyId: string, market: MarketCode = 'cn', extColumns?: string) => {
+    const params = new URLSearchParams({ market })
+    if (extColumns) params.set('ext_columns', extColumns)
+    return request<ScreenerCachedResult>(
+      `/api/screener/cached-result/${encodeURIComponent(strategyId)}?${params.toString()}`,
+    )
+  },
   screenerCached: (market: MarketCode = 'cn', extColumns?: string) =>
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }>; today_ever_matched: Record<string, string[]> | null; today_ever_rows: Record<string, Record<string, any>> | null; updated_at: number | null }>(
       `/api/screener/cached?market=${market}${extColumns ? `&ext_columns=${encodeURIComponent(extColumns)}` : ''}`,
@@ -1501,7 +1629,7 @@ export const api = {
     overrides?: Record<string, any> | null
     matching?: 'close_t' | 'open_t+1'
     entry_fill?: 'close_t' | 'open_t+1' | null
-    exit_fill?: 'close_t' | 'open_t+1' | null
+    exit_fill?: 'close_t' | 'open_t+1' | 'signal_next_minute' | null
     fees_pct?: number
     commission_pct?: number
     stamp_tax_pct?: number
@@ -1510,6 +1638,7 @@ export const api = {
     initial_capital?: number
     position_sizing?: 'equal' | 'score_weight'
     asset_type?: 'stock' | 'etf'
+    minute_fill?: boolean
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
       method: 'POST',
@@ -1709,6 +1838,11 @@ export const api = {
       `/api/financials/cash-flow${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
     ),
 
+  financialShares: (symbol?: string) =>
+    request<{ data: FinancialSharesRecord[] }>(
+      `/api/financials/shares${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+    ),
+
   /** 触发财务数据同步(后台异步执行,接口立即返回 started 状态) */
   financialSync: (table: string) =>
     request<{ status: string; synced: { started: boolean; reason?: string } }>(
@@ -1809,10 +1943,10 @@ export const api = {
     request<{ ok: boolean }>(`/api/stock-analysis/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' }),
 
   /**
-   * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
+   * AI 个股五维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
    */
-  async *stockAnalyzeStream(symbol: string, focus?: string): AsyncGenerator<{
+  async *stockAnalyzeStream(symbol: string, focus?: string, market?: 'cn' | 'hk' | 'us'): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     symbol?: string
     summary?: string
@@ -1824,7 +1958,7 @@ export const api = {
     const res = await fetch('/api/stock-analysis/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, focus: focus ?? '' }),
+      body: JSON.stringify({ symbol, focus: focus ?? '', market }),
     })
     if (!res.ok) {
       let detail = ''

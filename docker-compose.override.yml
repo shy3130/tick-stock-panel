@@ -1,0 +1,6 @@
+services:
+  app:
+    build:
+      dockerfile: Dockerfile
+    network_mode: host
+    ports: !reset []

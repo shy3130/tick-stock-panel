@@ -512,19 +512,24 @@ export function Data() {
             settingsOpen={openSettings === 'minute'}
           />
         )
-      case 'financials':
+      case 'financials': {
+        const historicalShareRows = s?.financials?.tables?.shares?.rows ?? 0
         return (
           <StatCard
             title="财务数据"
-            hint="利润表 / 资负表 / 现金流 / 指标"
+            hint="财报 / 指标 / 历史股本"
             stats={s?.financials ? { rows: s.financials.rows } : null}
             loading={isLoading}
             tierKey="financials"
             capLimits={caps.data?.capabilities}
             tierLabel={caps.data?.label}
             customProvider={getCustomProviderName('financials')}
+            subLabel={`历史股本 · ${historicalShareRows.toLocaleString()} 条`}
+            onSettings={hasData ? () => setOpenSettings(v => v === 'financials' ? null : 'financials') : undefined}
+            settingsOpen={openSettings === 'financials'}
           />
         )
+      }
       default:
         return null
     }
@@ -958,7 +963,23 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'enriched' && (
           <SettingsModal title="Enriched · 计算设置" onClose={() => setOpenSettings(null)}>
-            <EnrichedRebuildPanel isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <EnrichedRebuildPanel
+              isRunning={!!activeJobId}
+              onStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }}
+            />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'financials' && (
+          <SettingsModal title="财务数据 · 换手率重算" onClose={() => setOpenSettings(null)}>
+            <EnrichedRebuildPanel
+              isRunning={!!activeJobId}
+              purpose="turnover"
+              historicalShareRows={s?.financials?.tables?.shares?.rows ?? 0}
+              onStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }}
+            />
           </SettingsModal>
         )}
       </AnimatePresence>

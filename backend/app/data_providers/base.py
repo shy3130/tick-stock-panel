@@ -6,6 +6,7 @@ backtests stay data-source agnostic.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
@@ -57,8 +58,14 @@ class MarketDataProvider(Protocol):
         end_time: datetime | None,
         asset_type: AssetType,
         freq: str = "1m",
+        on_chunk_done: Callable[[int, int], None] | None = None,
     ) -> pl.DataFrame:
-        """Return normalized minute K rows. Implementations may return empty."""
+        """Return normalized minute K rows. Implementations may return empty.
+
+        on_chunk_done 契约: provider 实现内部以 2 参 (cur, total) 调用;
+        3 参 seg_label 适配由 kline_sync._try_custom_minute 包装层负责,
+        不应泄漏到 provider 契约层。
+        """
 
     def get_realtime(
         self,

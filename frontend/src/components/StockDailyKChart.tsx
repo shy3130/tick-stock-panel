@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import {
   EChartsCandlestick,
-  OVERLAY_INDICATORS,
   SUB_CHARTS,
   type ChartMarker,
   type ChartPriceLine,
@@ -12,11 +11,15 @@ import {
   type OHLC,
   type StockInfo,
 } from '@/components/EChartsCandlestick'
+import {
+  KChartIndicatorControls,
+  type KChartIndicatorState,
+  useKChartIndicatorControls,
+} from '@/components/KChartIndicatorControls'
 
 const SUB_INFO_H = 16
 const SUB_GAP = 4
 const MAX_DAYS = 2000
-
 export interface StockDailyKChartResult {
   rows: OHLC[]
   rawRows: KlineRow[]
@@ -43,6 +46,12 @@ interface Props {
   onDataChange?: (result: StockDailyKChartResult) => void
   /** 扩展数据列参数（逗号分隔 config_id.field_name），透传给 klineDaily 接口 */
   extColumns?: string
+  /** 已由上层详情接口取得的数据；传入后不再请求通用日 K 接口。 */
+  chartData?: OHLC[]
+  chartDataLoading?: boolean
+  chartDataError?: boolean
+  /** 复用上层的一套指标控件状态。 */
+  indicatorState?: KChartIndicatorState
 }
 
 function isValidRow(r: any): boolean {
@@ -124,9 +133,15 @@ export function StockDailyKChart({
   onDateClick,
   onDataChange,
   extColumns,
+  chartData,
+  chartDataLoading = false,
+  chartDataError = false,
+  indicatorState,
 }: Props) {
-  const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
   const [showMarkers, setShowMarkers] = useState(true)
+  const ownIndicatorState = useKChartIndicatorControls()
+  const controls = indicatorState ?? ownIndicatorState
+  const { activeIndicators, volumeCompare } = controls
   const dateRange = externalDateRange ?? getDefaultRange()
   const days = useMemo(() => rangeDays(dateRange), [dateRange])
 
@@ -134,21 +149,20 @@ export function StockDailyKChart({
   const kline = useQuery({
     queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns),
     queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns),
-    enabled: !!symbol,
+    enabled: !!symbol && chartData == null,
     placeholderData: (prev) => prev,
   })
 
-  const rows = useMemo(() => toOHLC(kline.data?.rows ?? []), [kline.data?.rows])
+  const rows = useMemo(
+    () => chartData ?? toOHLC(kline.data?.rows ?? []),
+    [chartData, kline.data?.rows],
+  )
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitUpMarkers(kline.data?.rows ?? []), [kline.data?.rows])
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
     ...(showLimitMarkers ? limitMarkers : []),
   ], [limitMarkers, markers, showLimitMarkers])
-
-  const toggleIndicator = useCallback((key: string) => {
-    setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
-  }, [])
 
   const activeSubDefs = activeIndicators
     .map(key => SUB_CHARTS.find(s => s.key === key))
@@ -167,37 +181,12 @@ export function StockDailyKChart({
   return (
     <div className={className} style={{ minHeight: chartHeight }}>
       {showIndicatorControls && rows.length > 0 && (
-        <div className="flex items-center gap-1.5 px-1 pb-0.5">
-          {SUB_CHARTS.map(ind => (
-            <button
-              key={ind.key}
-              onClick={() => toggleIndicator(ind.key)}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                activeIndicators.includes(ind.key)
-                  ? 'bg-accent/20 text-accent'
-                  : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-            >
-              {ind.label}
-            </button>
-          ))}
-          {OVERLAY_INDICATORS.map(ind => (
-            <button
-              key={ind.key}
-              onClick={() => toggleIndicator(ind.key)}
-              className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
-                activeIndicators.includes(ind.key)
-                  ? 'bg-accent/20 text-accent'
-                  : 'bg-elevated text-muted hover:text-secondary'
-              }`}
-            >
-              {ind.label}
-            </button>
-          ))}
+        <KChartIndicatorControls state={controls}>
           {showMarkerToggle && showLimitMarkers && (
             <button
+              type="button"
               onClick={() => setShowMarkers(v => !v)}
-              className={`ml-auto px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors ${
+              className={`ml-auto cursor-pointer rounded px-2 py-0.5 font-mono text-[10px] transition-colors ${
                 showMarkers
                   ? 'text-[#FACC15] bg-[#FACC15]/10'
                   : 'bg-elevated text-muted hover:text-secondary'
@@ -206,11 +195,15 @@ export function StockDailyKChart({
               异动
             </button>
           )}
-        </div>
+        </KChartIndicatorControls>
       )}
-      {kline.isLoading && <div className="text-sm text-muted py-4">加载中…</div>}
-      {kline.isError && <div className="text-sm text-danger py-2">日K加载失败</div>}
-      {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (
+      {(chartData == null ? kline.isLoading : chartDataLoading) && (
+        <div className="py-4 text-sm text-muted">加载中…</div>
+      )}
+      {(chartData == null ? kline.isError : chartDataError) && (
+        <div className="py-2 text-sm text-danger">日K加载失败</div>
+      )}
+      {chartData == null && !kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>
       )}
       {rows.length > 0 && (
@@ -229,6 +222,7 @@ export function StockDailyKChart({
           onDateClick={onDateClick}
           visibleBars={visibleBars}
           activeIndicators={activeIndicators}
+          volumeCompare={volumeCompare}
         />
       )}
     </div>

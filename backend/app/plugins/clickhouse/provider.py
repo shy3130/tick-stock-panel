@@ -57,6 +57,21 @@ def _symbols_sql(symbols: list[str]) -> str:
     return _values_sql([symbol.upper() for symbol in symbols])
 
 
+def _storage_symbol_aliases(symbols: list[str]) -> dict[str, str]:
+    """Map WebStock storage aliases back to requested canonical symbols."""
+    aliases: dict[str, str] = {}
+    for value in symbols:
+        requested = str(value).strip().upper()
+        if not requested:
+            continue
+        aliases.setdefault(requested, requested)
+        if requested.endswith(".HK"):
+            code = requested[:-3]
+            if code.isdigit():
+                aliases.setdefault(f"{int(code)}.HK", requested)
+    return aliases
+
+
 def _date_filter(column: str, start: datetime | None, end: datetime | None) -> str:
     parts: list[str] = []
     if start is not None:
@@ -214,17 +229,26 @@ class ClickHouseProvider:
         ]
         frames: list[pl.DataFrame] = []
         for index, symbol_chunk in enumerate(symbol_chunks, start=1):
+            symbol_aliases = _storage_symbol_aliases(symbol_chunk)
             sql = f"""
                 SELECT symbol, market, trade_date, open, high, low, close,
                        volume, turnover AS amount
                 FROM {self._table("lb_daily_bars")}
                 WHERE adjusted = 1
-                  AND symbol IN {_symbols_sql(symbol_chunk)}
+                  AND symbol IN {_symbols_sql(list(symbol_aliases))}
                   {_date_filter("trade_date", start_time, end_time)}
                 ORDER BY symbol, trade_date
             """
             rows = self._query(sql)
-            normalized_rows = [dict(row, amount=row.get("amount", row.get("turnover"))) for row in rows]
+            normalized_rows = [
+                dict(
+                    row,
+                    symbol=symbol_aliases.get(str(row.get("symbol") or "").upper()),
+                    amount=row.get("amount", row.get("turnover")),
+                )
+                for row in rows
+                if str(row.get("symbol") or "").upper() in symbol_aliases
+            ]
             frame = normalize_daily(normalized_rows, source=self.name)
             if not frame.is_empty():
                 frames.append(frame)
@@ -262,46 +286,74 @@ class ClickHouseProvider:
                     frames.append(fallback_frame)
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
-    def get_minute(
+    def _query_minute_rows(
         self,
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: str = "stock",
-        on_chunk_done=None,
-        freq: str = "1m",
-    ) -> pl.DataFrame:
+        freq: str,
+    ) -> list[dict]:
         if not symbols:
-            return pl.DataFrame()
+            return []
         # trade_date_local in the collector is the Asia/Shanghai calendar date.
         # US sessions cross that boundary, so query a guard day on both sides and
         # apply the requested date after converting each bar to its market time.
         query_start = start_time - timedelta(days=1) if start_time is not None else None
         query_end = end_time + timedelta(days=1) if end_time is not None else None
+        symbol_aliases = _storage_symbol_aliases(symbols)
         sql = f"""
             SELECT symbol, market, bar_time_utc, open, high, low, close, volume, amount,
                    source_priority
             FROM (
+                SELECT symbol, market, toTimeZone(bar_time, 'UTC') AS bar_time_utc,
+                       open, high, low, close, volume, turnover AS amount,
+                       3 AS source_priority
+                FROM {self._table("lb_realtime_candlesticks")} FINAL
+                WHERE period = 'min_1'
+                  AND symbol IN {_symbols_sql(list(symbol_aliases))}
+                  {_date_filter("bar_time", query_start, query_end)}
+                UNION ALL
                 SELECT symbol, market, bar_time_utc, open, high, low, close, volume, amount,
                        2 AS source_priority
                 FROM {self._table("lb_minute_bars")}
                 WHERE frequency = {_sql_string(freq)}
-                  AND symbol IN {_symbols_sql(symbols)}
+                  AND symbol IN {_symbols_sql(list(symbol_aliases))}
                   {_date_filter("trade_date_local", query_start, query_end)}
                 UNION ALL
                 SELECT symbol, market, toTimeZone(line_time, 'UTC') AS bar_time_utc,
                        price AS open, price AS high, price AS low, price AS close,
                        volume, turnover AS amount, 1 AS source_priority
                 FROM {self._table("lb_intraday_lines")}
-                WHERE symbol IN {_symbols_sql(symbols)}
+                WHERE symbol IN {_symbols_sql(list(symbol_aliases))}
                   {_date_filter("line_time", query_start, query_end)}
             )
             ORDER BY symbol, bar_time_utc
         """
-        rows = self._query(sql)
+        return self._query(sql)
+
+    @staticmethod
+    def _minute_frame(rows: list[dict[str, Any]]) -> pl.DataFrame:
+        frame = pl.DataFrame(rows) if rows else pl.DataFrame()
+        if frame.is_empty():
+            return frame
+        for column in ("open", "high", "low", "close", "volume", "amount"):
+            if column in frame.columns:
+                frame = frame.with_columns(pl.col(column).cast(pl.Float64, strict=False))
+        selected_columns = [column for column in _MINUTE_COLUMNS if column in frame.columns]
+        return frame.select(selected_columns).sort(["symbol", "datetime"])
+
+    def _normalize_minute_query_rows(
+        self,
+        rows: list[dict],
+        symbols: list[str],
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> pl.DataFrame:
         mapped_by_key: dict[tuple[str, datetime], dict[str, Any]] = {}
+        symbol_aliases = _storage_symbol_aliases(symbols)
         for row in rows:
-            symbol = str(row.get("symbol") or "").upper()
+            stored_symbol = str(row.get("symbol") or "").upper()
+            symbol = symbol_aliases.get(stored_symbol)
             if not symbol or row.get("bar_time_utc") is None:
                 continue
             item = dict(row)
@@ -318,6 +370,38 @@ class ClickHouseProvider:
             previous_priority = int(previous.get("source_priority") or 0) if previous else -1
             if current_priority >= previous_priority:
                 mapped_by_key[key] = item
+        return self._minute_frame(list(mapped_by_key.values()))
+
+    def get_minute_strict(
+        self,
+        symbols: list[str],
+        start_time: datetime | None,
+        end_time: datetime | None,
+        asset_type: str = "stock",
+        freq: str = "1m",
+    ) -> pl.DataFrame:
+        rows = self._query_minute_rows(symbols, start_time, end_time, freq)
+        frame = self._normalize_minute_query_rows(rows, symbols, start_time, end_time)
+        if frame.is_empty():
+            return frame.with_columns(pl.Series("source", [], dtype=pl.String))
+        return frame.with_columns(pl.lit("webstock").alias("source"))
+
+    def get_minute(
+        self,
+        symbols: list[str],
+        start_time: datetime | None,
+        end_time: datetime | None,
+        asset_type: str = "stock",
+        on_chunk_done=None,
+        freq: str = "1m",
+    ) -> pl.DataFrame:
+        if not symbols:
+            return pl.DataFrame()
+        rows = self._query_minute_rows(symbols, start_time, end_time, freq)
+        frame = self._normalize_minute_query_rows(rows, symbols, start_time, end_time)
+        mapped_by_key = {
+            (str(row["symbol"]), row["datetime"]): row for row in frame.to_dicts()
+        }
 
         covered = {symbol for symbol, _ in mapped_by_key}
         missing_symbols = [
@@ -347,56 +431,144 @@ class ClickHouseProvider:
                 }
                 mapped_by_key[(symbol, local_time)] = item
 
-        mapped = list(mapped_by_key.values())
-        frame = pl.DataFrame(mapped) if mapped else pl.DataFrame()
-        if not frame.is_empty():
-            for column in ("open", "high", "low", "close", "volume", "amount"):
-                if column in frame.columns:
-                    frame = frame.with_columns(pl.col(column).cast(pl.Float64, strict=False))
-            selected_columns = [column for column in _MINUTE_COLUMNS if column in frame.columns]
-            frame = frame.select(selected_columns).sort(["symbol", "datetime"])
+        frame = self._minute_frame(list(mapped_by_key.values()))
         if on_chunk_done:
             on_chunk_done(1, 1)
         return frame
+
+    def _query_realtime_rows(self, symbols: list[str] | None) -> list[dict]:
+        filters = [
+            "snapshot_minute >= toStartOfDay(now('Asia/Shanghai'))",
+            "snapshot_minute < toStartOfDay(now('Asia/Shanghai')) + INTERVAL 1 DAY",
+        ]
+        if symbols:
+            filters.append(f"symbol IN {_symbols_sql(symbols)}")
+        where_clause = "WHERE " + "\n              AND ".join(filters)
+        sql = f"""
+            SELECT symbol, market, snapshot_minute, last_done, prev_close,
+                   open, high, low, change_value, change_percentage, volume, turnover
+            FROM {self._table("lb_realtime_quotes")}
+            {where_clause}
+            ORDER BY symbol, snapshot_minute DESC, inserted_at DESC
+            LIMIT 1 BY symbol
+        """
+        return self._query(sql)
+
+    def _query_realtime_rows_strict(self, symbols: list[str]) -> list[dict]:
+        symbol_aliases = _storage_symbol_aliases(symbols)
+        sql = f"""
+            WITH latest_quotes AS (
+                SELECT symbol, market, snapshot_minute, last_done, prev_close,
+                       open, high, low, change_value, change_percentage, volume, turnover
+                FROM {self._table("lb_realtime_quotes")}
+                WHERE symbol IN {_symbols_sql(list(symbol_aliases))}
+                  AND snapshot_minute >= now('Asia/Shanghai') - INTERVAL 1 DAY
+                  AND snapshot_minute <= now('Asia/Shanghai')
+                ORDER BY symbol, snapshot_minute DESC, inserted_at DESC
+                LIMIT 1 BY symbol
+            ),
+            session_baselines AS (
+                SELECT source.symbol,
+                       argMaxIf(
+                           source.prev_close,
+                           tuple(source.snapshot_minute, source.inserted_at),
+                           source.prev_close IS NOT NULL
+                       ) AS prev_close
+                FROM {self._table("lb_realtime_quotes")} AS source
+                INNER JOIN latest_quotes AS quote ON quote.symbol = source.symbol
+                WHERE toDate(source.snapshot_minute) = toDate(quote.snapshot_minute)
+                  AND source.snapshot_minute <= quote.snapshot_minute
+                GROUP BY source.symbol
+            ),
+            symbol_metadata AS (
+                SELECT symbol, argMax(name, updated_at) AS name
+                FROM {self._table("lb_symbols")}
+                WHERE symbol IN {_symbols_sql(list(symbol_aliases))}
+                GROUP BY symbol
+            )
+            SELECT quote.symbol AS symbol, quote.market, quote.snapshot_minute, quote.last_done,
+                   coalesce(quote.prev_close, baseline.prev_close) AS prev_close,
+                   quote.open, quote.high, quote.low,
+                   quote.change_value, quote.change_percentage, quote.volume,
+                   quote.turnover, metadata.name
+            FROM latest_quotes AS quote
+            LEFT JOIN session_baselines AS baseline ON baseline.symbol = quote.symbol
+            LEFT JOIN symbol_metadata AS metadata ON metadata.symbol = quote.symbol
+        """
+        return self._query(sql)
+
+    @staticmethod
+    def _normalize_realtime_query_rows(
+        rows: list[dict],
+        symbol_aliases: dict[str, str] | None = None,
+        recompute_change: bool = False,
+    ) -> list[dict]:
+        records: list[dict] = []
+        for row in rows:
+            stored_symbol = str(row.get("symbol") or "").upper()
+            symbol = (
+                symbol_aliases.get(stored_symbol)
+                if symbol_aliases is not None
+                else stored_symbol
+            )
+            if not symbol:
+                continue
+            timestamp = None
+            if row.get("snapshot_minute") is not None:
+                timestamp = int(_as_shanghai_time(row["snapshot_minute"]).timestamp() * 1000)
+            last_price = row.get("last_done")
+            prev_close = row.get("prev_close")
+            change_amount = row.get("change_value")
+            if (
+                recompute_change
+                and last_price is not None
+                and prev_close is not None
+            ):
+                change_amount = float(last_price) - float(prev_close)
+            change_pct = row.get("change_percentage")
+            if (
+                recompute_change
+                and last_price is not None
+                and prev_close is not None
+                and float(prev_close) != 0
+            ):
+                change_pct = (
+                    (float(last_price) - float(prev_close))
+                    / float(prev_close)
+                    * 100.0
+                )
+            records.append({
+                "symbol": symbol,
+                "name": row.get("name"),
+                "market": row.get("market"),
+                "last_price": last_price,
+                "prev_close": prev_close,
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "volume": row.get("volume"),
+                "amount": row.get("turnover"),
+                "change_amount": change_amount,
+                "change_pct": float(change_pct) / 100.0 if change_pct is not None else None,
+                "timestamp": timestamp,
+            })
+        return records
+
+    def get_realtime_strict(self, symbols: list[str]) -> list[dict]:
+        if not symbols:
+            return []
+        return self._normalize_realtime_query_rows(
+            self._query_realtime_rows_strict(symbols),
+            _storage_symbol_aliases(symbols),
+            recompute_change=True,
+        )
 
     def get_realtime(
         self,
         universes: list[str] | None = None,
         symbols: list[str] | None = None,
     ) -> list[dict]:
-        symbol_filter = f"WHERE symbol IN {_symbols_sql(symbols)}" if symbols else ""
-        sql = f"""
-            SELECT symbol, market, snapshot_minute, last_done, prev_close,
-                   open, high, low, change_value, change_percentage, volume, turnover
-            FROM {self._table("lb_realtime_quotes")}
-            {symbol_filter}
-            ORDER BY symbol, snapshot_minute DESC, inserted_at DESC
-            LIMIT 1 BY symbol
-        """
-        records: list[dict] = []
-        for row in self._query(sql):
-            symbol = str(row.get("symbol") or "").upper()
-            if not symbol:
-                continue
-            timestamp = None
-            if row.get("snapshot_minute") is not None:
-                timestamp = int(_as_shanghai_time(row["snapshot_minute"]).timestamp() * 1000)
-            change_pct = row.get("change_percentage")
-            records.append({
-                "symbol": symbol,
-                "market": row.get("market"),
-                "last_price": row.get("last_done"),
-                "prev_close": row.get("prev_close"),
-                "open": row.get("open"),
-                "high": row.get("high"),
-                "low": row.get("low"),
-                "volume": row.get("volume"),
-                "amount": row.get("turnover"),
-                "change_amount": row.get("change_value"),
-                "change_pct": float(change_pct) / 100.0 if change_pct is not None else None,
-                "timestamp": timestamp,
-            })
-        return records
+        return self._normalize_realtime_query_rows(self._query_realtime_rows(symbols))
 
     def get_instruments(self, asset_type: str = "stock") -> list[dict]:
         if asset_type != "stock":

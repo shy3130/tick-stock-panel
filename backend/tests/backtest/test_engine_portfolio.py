@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
@@ -421,3 +421,100 @@ def test_default_fill_is_buy_open_sell_close():
     assert trade.entry_price == 10.0   # 次日开盘
     assert trade.exit_price == 10.8    # 到期日收盘
     assert trade.exit_reason == "max_hold"
+
+
+class _MinuteRepo:
+    def __init__(self, rows: pl.DataFrame) -> None:
+        self.rows = rows
+
+    def get_minute_by_dates(self, symbols, dates, asset_type="stock"):
+        return self.rows.filter(pl.col("symbol").is_in(symbols))
+
+
+def _minute_trigger_panel() -> tuple[pl.DataFrame, pl.Series, pl.Series]:
+    panel = _panel(
+        ["A"],
+        days=4,
+        overrides={
+            ("A", 2): {"open": 10.1, "high": 10.3, "low": 8.9, "close": 9.0},
+            ("A", 3): {"open": 8.8, "high": 9.0, "low": 8.7, "close": 8.9},
+        },
+    ).with_columns([
+        pl.Series("ma20", [10.0, 10.0, 9.95, 9.9]),
+        pl.Series("signal_ma20_breakdown", [False, False, True, False]),
+    ])
+    return panel, _mask(panel, {("A", 0)}), _mask(panel, {("A", 2)})
+
+
+def test_minute_signal_exit_fills_at_next_minute_open():
+    panel, entries, exits = _minute_trigger_panel()
+    minute = pl.DataFrame({
+        "symbol": ["A", "A", "A"],
+        "datetime": [
+            datetime(2024, 1, 3, 9, 31),
+            datetime(2024, 1, 3, 9, 32),
+            datetime(2024, 1, 3, 9, 33),
+        ],
+        "open": [10.2, 10.1, 9.7],
+        "high": [10.3, 10.2, 9.8],
+        "low": [10.1, 9.8, 9.6],
+        "close": [10.2, 9.9, 9.7],
+        "volume": [100.0, 100.0, 100.0],
+        "amount": [1020.0, 990.0, 970.0],
+    })
+
+    result = BacktestEngine(repo=_MinuteRepo(minute)).simulate_portfolio(
+        panel,
+        entries,
+        exits,
+        MatcherConfig(
+            entry_fill="open_t+1",
+            exit_fill="signal_next_minute",
+            minute_fill=True,
+            fees_pct=0,
+            slippage_bps=0,
+            max_positions=1,
+            initial_capital=100_000,
+        ),
+        exit_signal_ids=["signal_ma20_breakdown"],
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].exit_date == "2024-01-03"
+    assert result.trades[0].exit_price == 9.7
+    assert result.trades[0].exit_signal_id == "signal_ma20_breakdown"
+
+
+def test_minute_signal_exit_without_next_bar_falls_back_to_next_open():
+    panel, entries, exits = _minute_trigger_panel()
+    minute = pl.DataFrame({
+        "symbol": ["A"],
+        "datetime": [datetime(2024, 1, 3, 15, 0)],
+        "open": [9.9],
+        "high": [10.0],
+        "low": [8.9],
+        "close": [9.0],
+        "volume": [100.0],
+        "amount": [900.0],
+    })
+
+    result = BacktestEngine(repo=_MinuteRepo(minute)).simulate_portfolio(
+        panel,
+        entries,
+        exits,
+        MatcherConfig(
+            entry_fill="open_t+1",
+            exit_fill="signal_next_minute",
+            minute_fill=True,
+            fees_pct=0,
+            slippage_bps=0,
+            max_positions=1,
+            initial_capital=100_000,
+        ),
+        exit_signal_ids=["signal_ma20_breakdown"],
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].exit_date == "2024-01-04"
+    assert result.trades[0].exit_price == 8.8
+    assert result.stats["execution"]["sell_minute_trigger_fallback"] == 1

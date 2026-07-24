@@ -1225,7 +1225,7 @@ class QuoteService:
             # 反查规则, 过滤出启用推送的事件
             source_labels = {
                 "strategy": "策略", "signal": "信号",
-                "price": "价格", "market": "异动",
+                "price": "价格", "market": "异动", "ladder": "连板梯队",
             }
             rules = engine.rules if engine is not None else {}
             enqueued = 0
@@ -1241,7 +1241,7 @@ class QuoteService:
                 symbol = ev.get("symbol") or ""
                 name = ev.get("name") or ""
                 message = ev.get("message") or ""
-                title = f"TickFlow · {source_label}"
+                title = source_label
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
                 # 提交到独立线程池, 不阻塞行情轮询线程 (webhook 慢/重试不拖累实时行情+告警)。
                 # 按渠道独立投递: 飞书 / 企业微信谁被勾选且已配置就推谁。
@@ -1394,7 +1394,16 @@ class QuoteService:
                         pass
                 instruments = self._repo.get_instruments() if asset_type == "stock" else None
 
-                enriched_full = compute_enriched(full_df, factors=factors, instruments=instruments)
+                enriched_full = compute_enriched(
+                    full_df,
+                    factors=factors,
+                    instruments=instruments,
+                    historical_shares=(
+                        self._repo.get_historical_shares()
+                        if asset_type == "stock"
+                        else None
+                    ),
+                )
                 enriched_today = enriched_full.filter(pl.col("date") == today)
 
             if enriched_today.is_empty():

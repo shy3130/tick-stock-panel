@@ -1,6 +1,6 @@
 """AI 财务分析服务 — 读取个股财务数据 → 构建专业提示词 → 流式调用 LLM。
 
-职责: 拉取单只标的的 4 张财务表 → 转成紧凑 JSON → 拼装 CFA 分析师级系统提示词
+职责: 拉取单只标的的财务报表与股本表 → 转成紧凑 JSON → 拼装 CFA 分析师级系统提示词
        → 流式调用 OpenAI 兼容 API → 逐 chunk 吐给前端。
 
 不知道: HTTP、前端、配置持久化。
@@ -14,7 +14,7 @@ from typing import AsyncIterator
 
 import polars as pl
 
-from app.services.financial_sync import get_financial_df
+from app.services.financial_sync import FINANCIAL_TABLES, get_financial_df
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,12 @@ _MAX_PERIODS = 4
 
 
 def _load_stock_financials(data_dir: Path, symbol: str) -> dict[str, list[dict]]:
-    """读取该标的的 4 张财务表,返回 {table: [records...]}(按 period_end 降序,截取最新 N 期)。
+    """读取该标的财务数据,返回 {table: [records...]}(按 period_end 降序,截取最新 N 期)。
 
     数值统一做 NaN/Inf → null 清洗,保证 JSON 序列化不报错。
     """
     result: dict[str, list[dict]] = {}
-    for table in ("metrics", "income", "balance_sheet", "cash_flow"):
+    for table in FINANCIAL_TABLES:
         df = get_financial_df(data_dir, table)
         if df.is_empty():
             result[table] = []
@@ -60,7 +60,7 @@ def _load_stock_financials(data_dir: Path, symbol: str) -> dict[str, list[dict]]
 def _summarize(fins: dict[str, list[dict]]) -> str:
     """生成一行业务摘要,便于 LLM 快速把握数据全貌(行数/期数)。"""
     parts = []
-    for table in ("metrics", "income", "balance_sheet", "cash_flow"):
+    for table in FINANCIAL_TABLES:
         rows = fins.get(table, [])
         if rows:
             periods = [r.get("period_end") for r in rows if r.get("period_end")]

@@ -5,6 +5,8 @@
  * - SSE invalidation 基于 SSE_INVALIDATE_PREFIXES 列表，新增 key 无需改 useQuoteStream。
  */
 
+import type { DowMonitorMarket, DowTimeframe } from '@/components/dow-monitor/types'
+
 // ===== Query Key 工厂 =====
 
 export const QK = {
@@ -17,6 +19,7 @@ export const QK = {
   dataSources:    ['data-sources'] as const,
   quoteStatus:    ['quote-status'] as const,
   quoteInterval:  ['quote-interval'] as const,
+  longbridgeWebsocket: ['longbridge-websocket'] as const,
   overviewMarket: (market: string = 'cn', asOf?: string) => ['overview-market', market, asOf ?? 'latest'] as const,
   indexQuotes:    ['index-quotes'] as const,
   indexList:      ['index-list'] as const,
@@ -34,7 +37,9 @@ export const QK = {
   // Screener
   screener:             ['screener'] as const,
   screenerStrategies:   (assetType: string = 'stock') => ['screener-strategies', assetType] as const,
-  screenerCached:       (market: string = 'cn', ext?: string) => ['screener-cached', market, ext] as const,
+  screenerCachedSummary: (market: string = 'cn') => ['screener-cached', market, 'summary'] as const,
+  screenerCachedResult: (market: string, strategyId: string, asOf?: string, ext?: string) => ['screener-cached', market, 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
+  screenerCached:       (market: string = 'cn', asOf?: string, ext?: string) => ['screener-cached', market, 'all', asOf ?? '', ext ?? ''] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   marketSnapshot:       (market: string = 'cn') => ['market-snapshot', market] as const,
   marketIndustries:     (market: string) => ['market-industries', market] as const,
@@ -78,6 +83,15 @@ export const QK = {
   monitorRules:         ['monitor-rules'] as const,
   monitorRuleOptions:   ['monitor-rule-options'] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
+
+  // Dow monitor
+  dowMonitorOverview: (market: DowMonitorMarket) =>
+                           ['dow-monitor', 'overview', market] as const,
+  dowMonitorNotifications: (market: DowMonitorMarket) =>
+                               ['dow-monitor', 'notifications', market] as const,
+  dowMonitorStatus: ['dow-monitor', 'status'] as const,
+  dowMonitorDetail: (symbol: string, timeframe: DowTimeframe) =>
+                       ['dow-monitor', 'detail', symbol, timeframe] as const,
 
   // AI 大盘复盘
   reviewReports:        ['review-reports'] as const,

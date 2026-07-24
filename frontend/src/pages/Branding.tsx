@@ -88,7 +88,7 @@ export function Branding() {
         subtitle="名字保持 TickFlow Stock Panel,4 种赛博朋克 + 高级感的视觉处理 — 字重、字距、配色、图标各不同。挑你最喜欢的告诉我。"
       />
 
-      <div className="px-8 py-6">
+      <div className="px-3 py-4 sm:px-5 lg:px-8 lg:py-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {VARIANTS.map((v) => (
             <Sample key={v.id} v={v} />
@@ -110,14 +110,15 @@ function Sample({ v }: { v: Variant }) {
   const Icon = v.icon
 
   return (
-    <motion.div
+    <motion.article
+      aria-label={`${v.id} 视觉预览`}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-      className="rounded-card border border-border overflow-hidden bg-base flex"
+      className="flex min-w-0 flex-col overflow-hidden rounded-card border border-border bg-base xl:flex-row"
     >
       {/* 模拟侧边栏 */}
-      <div className="w-56 bg-surface border-r border-border flex flex-col">
+      <div className="flex w-full shrink-0 flex-col border-b border-border bg-surface xl:w-56 xl:border-b-0 xl:border-r">
         {/* Logo 区 */}
         <div className="px-5 py-5 border-b border-border">
           <div className="flex items-center gap-2.5">
@@ -167,7 +168,7 @@ function Sample({ v }: { v: Variant }) {
       </div>
 
       {/* 右侧说明 + 大字预览 */}
-      <div className="flex-1 p-5 flex flex-col">
+      <div className="flex min-w-0 flex-1 flex-col p-5">
         <div className="flex-1">
           <div className="text-xs font-medium text-muted uppercase tracking-widest">{v.id}</div>
           <div className="mt-2 leading-relaxed text-sm text-secondary">
@@ -198,6 +199,6 @@ function Sample({ v }: { v: Variant }) {
           </span>
         </div>
       </div>
-    </motion.div>
+    </motion.article>
   )
 }

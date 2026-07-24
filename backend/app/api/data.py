@@ -411,7 +411,7 @@ def _safe_aggregate_financials(repo) -> dict | None:
     tables_info: dict[str, dict] = {}
     total_rows = 0
 
-    for table in ("metrics", "income", "balance_sheet", "cash_flow"):
+    for table in ("metrics", "income", "balance_sheet", "cash_flow", "shares"):
         path = data_dir / "financials" / table / "part.parquet"
         if path.exists():
             try:

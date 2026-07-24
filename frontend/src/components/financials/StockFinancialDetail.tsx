@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { CalendarDays, TrendingUp, FileText, Wallet, Activity, Sparkles, AlertTriangle, Loader2 } from 'lucide-react'
+import { CalendarDays, TrendingUp, FileText, Wallet, Activity, Sparkles, AlertTriangle, Loader2, ChartPie } from 'lucide-react'
 import {
   useFinancialMetrics,
   useFinancialIncome,
   useFinancialBalanceSheet,
   useFinancialCashFlow,
+  useFinancialShares,
 } from '@/lib/useFinancials'
 import { fmtPrice, fmtBigNum, fmtDate } from '@/lib/format'
 import { Skeleton } from '@/components/data/Skeleton'
@@ -17,13 +18,14 @@ interface Props {
   name: string
 }
 
-type TabKey = 'metrics' | 'income' | 'balance_sheet' | 'cash_flow'
+type TabKey = 'metrics' | 'income' | 'balance_sheet' | 'cash_flow' | 'shares'
 
 const TABS: { key: TabKey; label: string; icon: typeof TrendingUp }[] = [
   { key: 'metrics', label: '核心指标', icon: TrendingUp },
   { key: 'income', label: '利润表', icon: FileText },
   { key: 'balance_sheet', label: '资产负债表', icon: Wallet },
   { key: 'cash_flow', label: '现金流量表', icon: Activity },
+  { key: 'shares', label: '股本', icon: ChartPie },
 ]
 
 // 字段定义:键 → (中文名, 格式化类型)
@@ -94,6 +96,10 @@ const FIELD_DEFS: Record<TabKey, FieldDef[]> = {
     { label: '固定资产/无形资产投资', fmt: 'amount', key: 'capex' } as any,
     { label: '现金及等价物净增加额', fmt: 'amount', key: 'net_cash_change' } as any,
   ],
+  shares: [
+    { label: '总股本', fmt: 'amount', key: 'total_shares' } as any,
+    { label: '流通股本', fmt: 'amount', key: 'float_shares' } as any,
+  ],
 }
 
 function formatValue(v: number | null | undefined, fmt: FmtType): string {
@@ -148,12 +154,14 @@ export function StockFinancialDetail({ symbol, name }: Props) {
   const income = useFinancialIncome(symbol)
   const balance = useFinancialBalanceSheet(symbol)
   const cashFlow = useFinancialCashFlow(symbol)
+  const shares = useFinancialShares(symbol)
 
   const queryMap = {
     metrics: metrics,
     income: income,
     balance_sheet: balance,
     cash_flow: cashFlow,
+    shares: shares,
   } as const
 
   const current = queryMap[tab]
@@ -198,7 +206,7 @@ export function StockFinancialDetail({ symbol, name }: Props) {
       </div>
 
       {/* 标签页 */}
-      <div className="flex items-center gap-1 px-3 pt-2 border-b border-border/60">
+      <div className="flex items-center gap-1 px-3 pt-2 border-b border-border/60 overflow-x-auto">
         {TABS.map(t => {
           const Icon = t.icon
           const isActive = tab === t.key

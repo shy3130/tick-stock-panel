@@ -22,6 +22,7 @@ import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDi
 import { StrategyPoolDialog } from '@/components/screener/StrategyPoolDialog'
 import { StrategyBuilderDialog } from '@/components/screener/StrategyBuilderDialog'
 import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
+import { DowStrategyCard } from '@/components/screener/DowStrategyCard'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
@@ -78,6 +79,7 @@ export function Screener() {
   const [filter, setFilter] = useState<ScreenerFilterType>(defaultFilter)
   const filterMap = useRef<Map<string, ScreenerFilterType>>(new Map())
   const runAllDateRef = useRef<string | null>(null)
+  const qc = useQueryClient()
 
   // 结果列配置 — 默认内置列，异步合并后端/localStorage 偏好
   const [columns, setColumns] = useState<ColumnConfig[]>([...SCREENER_BUILTIN_COLUMNS])
@@ -127,11 +129,27 @@ export function Screener() {
     queryFn: () => api.screenerStrategies(assetType),
   })
 
-  // 策略结果缓存 — 文件读取，SSE invalidation 自动刷新
-  const cachedQuery = useQuery({
-    queryKey: QK.screenerCached(marketFilter, extColumnsParam),
-    queryFn: () => api.screenerCached(marketFilter, extColumnsParam || undefined),
+  // 卡片首屏只读取轻量摘要；明细在点击策略或“全部”时按需加载。
+  const summaryQuery = useQuery({
+    queryKey: QK.screenerCachedSummary(marketFilter),
+    queryFn: () => api.screenerCachedSummary(marketFilter),
     enabled: assetType === 'stock' && marketFilter === 'cn',
+  })
+
+  const fullCachedQuery = useQuery({
+    queryKey: QK.screenerCached(marketFilter, asOf, extColumnsParam),
+    queryFn: () => api.screenerCached(marketFilter, extColumnsParam || undefined),
+    enabled: assetType === 'stock' && marketFilter === 'cn' && showAll,
+  })
+
+  const singleCachedQuery = useQuery({
+    queryKey: QK.screenerCachedResult(marketFilter, activeStrategy ?? '', asOf, extColumnsParam),
+    queryFn: () => api.screenerCachedResult(activeStrategy!, marketFilter, extColumnsParam || undefined),
+    enabled: assetType === 'stock'
+      && marketFilter === 'cn'
+      && !showAll
+      && !!activeStrategy
+      && summaryQuery.data?.results[activeStrategy]?.as_of === asOf,
   })
 
   const marketOverview = useQuery({
@@ -204,97 +222,82 @@ export function Screener() {
       api.screenerRunAll(
         date,
         strategyIds ?? visiblePool,
-        extColumnsParam || undefined,
         assetType,
         marketFilter,
       ),
     onSuccess: (data) => {
       if (data.as_of) setAsOf(data.as_of)
+      const counts: Record<string, number> = {}
+      for (const [id, item] of Object.entries(data.results)) {
+        counts[id] = item.total
+      }
+      setHitCounts(prev => ({ ...prev, ...counts }))
+      qc.invalidateQueries({ queryKey: ['screener-cached'] })
     },
   })
 
-  const applyRunAllResult = useCallback((strategyId: string, date: string, data = runAll.data) => {
-    const cached = data?.results?.[strategyId]
-    if (!cached || cached.as_of !== date) return false
+  const missingStrategyIds = useMemo(
+    () => visiblePool.filter(id => summaryQuery.data?.results[id]?.as_of !== asOf),
+    [visiblePool, summaryQuery.data, asOf],
+  )
+  const cacheCoversPool = visiblePool.length > 0 && missingStrategyIds.length === 0
 
-    setResult({
-      as_of: cached.as_of,
-      strategy: strategyId,
-      rows: cached.rows,
-      total: cached.total,
-      elapsed_ms: 0,
-    })
-    setHitCounts(prev => ({ ...prev, [strategyId]: cached.total }))
-    return true
-  }, [runAll.data])
-
-  // 缓存是否覆盖当前策略池
-  const cacheCoversPool = useMemo(() => {
-    if (!cachedQuery.data?.as_of || cachedQuery.data.as_of !== asOf) return false
-    if (!cachedQuery.data.results) return false
-    return visiblePool.length > 0 && visiblePool.every(id => id in cachedQuery.data!.results)
-  }, [cachedQuery.data, asOf, visiblePool])
-
-  // 统一数据源: 缓存优先，runAll fallback
-  const effectiveResults = useMemo(() => {
-    if (cacheCoversPool) return cachedQuery.data!.results
-    return runAll.data?.results ?? null
-  }, [cacheCoversPool, cachedQuery.data, runAll.data])
-
-  // 从 effectiveResults 同步 hitCounts + expiredCounts
+  // 摘要只同步当前日期的卡片数量，避免旧日期缓存短暂显示成当前结果。
   useEffect(() => {
-    if (!effectiveResults) return
+    if (!summaryQuery.data || !asOf) return
     const counts: Record<string, number> = {}
-    for (const [id, r] of Object.entries(effectiveResults)) {
+    const expired: Record<string, number> = {}
+    for (const [id, r] of Object.entries(summaryQuery.data.results)) {
+      if (r.as_of !== asOf) continue
       counts[id] = r.total
+      const everCount = summaryQuery.data.today_ever_counts[id] ?? r.total
+      const expiredCount = Math.max(everCount - r.total, 0)
+      if (expiredCount > 0) expired[id] = expiredCount
     }
     setHitCounts(counts)
+    setExpiredCounts(expired)
+  }, [summaryQuery.data, asOf])
 
-    // 从缓存数据计算失效数 (ever_matched - current)
-    const everMatched = cachedQuery.data?.today_ever_matched
-    if (everMatched) {
-      const expired: Record<string, number> = {}
-      for (const [id, symbols] of Object.entries(everMatched) as [string, string[]][]) {
-        const currentRows = effectiveResults[id]?.rows ?? []
-        const currentSet = new Set(currentRows.map((r: any) => r.symbol))
-        const expiredCount = symbols.filter((s: string) => !currentSet.has(s)).length
-        if (expiredCount > 0) expired[id] = expiredCount
-      }
-      setExpiredCounts(expired)
+  // 当前单策略缓存更新后同步明细；参数保存的强制重算结果仍由 run 直接覆盖。
+  useEffect(() => {
+    const cached = singleCachedQuery.data?.result
+    if (!cached || showAll || cached.strategy !== activeStrategy || cached.as_of !== asOf) return
+    setResult(cached)
+    if (activeStrategy) {
+      setHitCounts(prev => ({ ...prev, [activeStrategy]: cached.total }))
     }
+  }, [singleCachedQuery.data, showAll, activeStrategy, asOf])
 
-    // 如果有激活策略，同步当前 result（扩展列变化时也会刷新行数据）
-    if (activeStrategy && effectiveResults[activeStrategy]) {
-      const r = effectiveResults[activeStrategy]
-      setResult(prev => {
-        if (prev?.strategy === activeStrategy && prev.as_of === r.as_of && prev.rows === r.rows && prev.total === r.total) return prev
-        return {
-          as_of: r.as_of,
-          strategy: activeStrategy,
-          rows: r.rows,
-          total: r.total,
-          elapsed_ms: 0,
-        }
-      })
-    }
-  }, [effectiveResults, cachedQuery.data, activeStrategy])
+  const effectiveResults = useMemo(() => {
+    if (fullCachedQuery.data?.as_of !== asOf) return null
+    const entries = Object.entries(fullCachedQuery.data.results)
+      .filter(([, item]) => item.as_of === asOf)
+    return Object.fromEntries(entries)
+  }, [fullCachedQuery.data, asOf])
 
-  // symbol → 所属策略列表 (来自 effectiveResults)
+  // symbol → 所属策略列表。单策略接口同时返回轻量归属映射，保留策略列原有展示。
   const symbolStrategyMap = useMemo(() => {
     const map = new Map<string, string[]>()
-    if (!effectiveResults) return map
-    for (const [sid, r] of Object.entries(effectiveResults)) {
-      for (const row of r.rows) {
-        const arr = map.get(row.symbol)
-        if (arr) {
-          arr.push(sid)
-        } else {
-          map.set(row.symbol, [sid])
+    if (showAll) {
+      for (const [sid, r] of Object.entries(effectiveResults ?? {})) {
+        for (const row of r.rows) {
+          const arr = map.get(row.symbol)
+          if (arr) arr.push(sid)
+          else map.set(row.symbol, [sid])
         }
+      }
+      return map
+    }
+    for (const [symbol, ids] of Object.entries(singleCachedQuery.data?.strategy_ids_by_symbol ?? {})) {
+      map.set(symbol, ids)
+    }
+    if (activeStrategy && result) {
+      for (const row of result.rows) {
+        if (!map.has(row.symbol)) map.set(row.symbol, [activeStrategy])
       }
     }
     return map
-  }, [effectiveResults])
+  }, [showAll, effectiveResults, singleCachedQuery.data, activeStrategy, result])
 
   // "全部" 模式: 合并所有策略的去重个股
   const allRows = useMemo(() => {
@@ -312,22 +315,15 @@ export function Screener() {
     return merged
   }, [effectiveResults])
 
-  // 计算失效行: 在 today_ever_rows 中但不在当前 results 中
-  const expiredRowsMap = useMemo(() => {
-    const map = new Map<string, any[]>() // strategyId → expired rows
-    const everRows = cachedQuery.data?.today_ever_rows
-    if (!everRows || !effectiveResults) return map
-
-    for (const [sid, symMap] of Object.entries(everRows) as [string, Record<string, any>][]) {
-      const currentRows = effectiveResults[sid]?.rows ?? []
-      const currentSymbols = new Set(currentRows.map((r: any) => r.symbol))
-      const expired = Object.entries(symMap)
-        .filter(([sym]) => !currentSymbols.has(sym))
-        .map(([, row]) => ({ ...row, _expired: true }))
-      if (expired.length > 0) map.set(sid, expired)
-    }
-    return map
-  }, [cachedQuery.data, effectiveResults])
+  // 计算当前策略的失效行: 今日曾命中但当前已不命中。
+  const expiredRows = useMemo(() => {
+    const everRows = singleCachedQuery.data?.today_ever_rows
+    if (!everRows || !result || result.as_of !== asOf) return []
+    const currentSymbols = new Set(result.rows.map((row: any) => row.symbol))
+    return Object.entries(everRows)
+      .filter(([symbol]) => !currentSymbols.has(symbol))
+      .map(([, row]) => ({ ...row, _expired: true }))
+  }, [singleCachedQuery.data, result, asOf])
 
   // 表头排序（受控）：用户点击列则按该列；未点时下方按评分默认降序
   const { sort, toggle, sortRows } = useTableSort()
@@ -351,13 +347,12 @@ export function Screener() {
 
     // 追加当前策略的失效行 (灰色)
     if (!showAll && activeStrategy) {
-      const expired = expiredRowsMap.get(activeStrategy) ?? []
-      if (expired.length > 0) {
-        return [...mainRows, ...expired]
+      if (expiredRows.length > 0) {
+        return [...mainRows, ...expiredRows]
       }
     }
     return mainRows
-  }, [showAll, allRows, filteredRows, filter, activeStrategy, strategyLimits, expiredRowsMap, sort, sortRows, columns, assetType, marketFilter])
+  }, [showAll, allRows, filteredRows, filter, activeStrategy, strategyLimits, expiredRows, sort, sortRows, columns])
 
   // 日k列是否启用 → 决定是否加载批量 kline 数据
   const candleColumn = useMemo(() =>
@@ -430,8 +425,8 @@ export function Screener() {
   useEffect(() => {
     // ETF 模式无股票盘后缓存/ runAll, 单策略走实时单跑, 不触发 runAll
     if (assetType !== 'stock') return
-    if (!asOf || !strategies.data?.presets?.length || runAll.isPending || visiblePool.length === 0) return
-    const runKey = `${asOf}|${visiblePool.join(',')}|${extColumnsParam}`
+    if (!asOf || !strategies.data?.presets?.length || !summaryQuery.isSuccess || runAll.isPending || visiblePool.length === 0) return
+    const runKey = `${asOf}|${visiblePool.join(',')}`
     if (runAllDateRef.current === runKey) return
     // 缓存已覆盖当前策略池 → 秒加载, 不触发 runAll
     if (cacheCoversPool) {
@@ -441,14 +436,8 @@ export function Screener() {
     // 未覆盖: 受系统开关控制
     if (!screenerAutoRun) return
     runAllDateRef.current = runKey
-    runAll.mutate({ date: asOf }, {
-      onSuccess: (data) => {
-        if (activeStrategy) applyRunAllResult(activeStrategy, asOf, data)
-      },
-    })
-  }, [asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult])
-
-  const qc = useQueryClient()
+    runAll.mutate({ date: asOf, strategyIds: missingStrategyIds })
+  }, [asOf, strategies.data, summaryQuery.isSuccess, visiblePool, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, runAll.isPending])
 
   const run = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string }) =>
@@ -457,9 +446,7 @@ export function Screener() {
       setResult(data)
       // 同步更新卡片上的命中数
       setHitCounts(prev => ({ ...prev, [vars.id]: data.total }))
-      // 单策略重跑后, 后端 _update_cache_strategy 已更新该策略的缓存条目;
-      // 这里 invalidate screenerCached 让前端缓存同步, 避免点卡片时 handleRun
-      // 仍读到旧的 effectiveResults (改参数后刷新会回退到旧个数的根因)
+      // 单策略重跑后刷新摘要和当前按需明细，避免参数保存后回退到旧缓存。
       qc.invalidateQueries({ queryKey: ['screener-cached'] })
     },
   })
@@ -468,43 +455,23 @@ export function Screener() {
     handleStrategySwitch(s.id)
     setActiveStrategy(s.id)
     setShowAll(false)
+    if (result?.strategy !== s.id || result.as_of !== asOf) setResult(null)
     // ETF 模式: 无股票盘后缓存, 始终实时单跑。
     // 传空日期让后端用 ETF 自己的最新交易日 (asOf 跟随的是股票 enriched, 两者可能不同日)。
     if (assetType !== 'stock') {
       run.mutate({ id: s.id, date: '' })
       return
     }
-    // 优先从 effectiveResults (缓存 + runAll) 取数据
-    const r = effectiveResults?.[s.id]
-    if (r && r.as_of === asOf) {
-      setResult({
-        as_of: r.as_of,
-        strategy: s.id,
-        rows: r.rows,
-        total: r.total,
-        elapsed_ms: 0,
-      })
-      setHitCounts(prev => ({ ...prev, [s.id]: r.total }))
-      return
-    }
-    // Fall back to runAll data or single run
-    if (!applyRunAllResult(s.id, asOf)) {
-      run.mutate({ id: s.id, date: asOf })
-    }
+    // 摘要命中时由 singleCachedQuery 按需加载明细；缺失时才单独计算。
+    if (summaryQuery.data?.results[s.id]?.as_of === asOf || runAll.isPending) return
+    run.mutate({ id: s.id, date: asOf })
   }
 
-  // 日期变化时，重新跑全部策略命中数 + 当前激活策略
+  // 日期变化交给统一 effect 计算一次，避免这里与 effect 重复请求。
   const handleDateChange = (newDate: string) => {
     setAsOf(newDate)
-    runAllDateRef.current = `${newDate}|${visiblePool.join(',')}|${extColumnsParam}`
-    runAll.mutate({ date: newDate }, {
-      onSuccess: (data) => {
-        if (activeStrategy) applyRunAllResult(activeStrategy, newDate, data)
-      },
-    })
-    if (activeStrategy) {
-      setResult(null)
-    }
+    runAllDateRef.current = null
+    setResult(null)
   }
 
   const minDate = dataStatus.data?.enriched?.earliest_date ?? ''
@@ -603,7 +570,7 @@ export function Screener() {
         title="策略"
         subtitle="基于本地 enriched 表 · 毫秒级 SQL"
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-max items-center gap-2 md:min-w-0">
             {assetType === 'stock' && (
               <MarketFilterTabs
                 value={marketFilter}
@@ -713,7 +680,9 @@ export function Screener() {
         }
       />
 
-      <div className="px-8 py-4 space-y-3">
+      <div className="space-y-3 px-2 py-3 sm:px-5 lg:px-8 lg:py-4">
+        {assetType === 'stock' && <DowStrategyCard market={marketFilter} />}
+
         {/* 策略卡片 */}
         {cardSize !== 'hidden' && (
         <section>
@@ -733,6 +702,7 @@ export function Screener() {
                   name={s.name}
                   description={s.description}
                   source={s.source}
+                  strategyRole={s.strategy_role}
                   active={activeStrategy === s.id}
                   count={hitCounts[id]}
                   expiredCount={expiredCounts[id]}
@@ -766,7 +736,7 @@ export function Screener() {
               transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
               className="space-y-3"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-sm font-medium text-foreground flex items-center gap-2">
                   {!showAll && activeStrategy && (
                     <span className="text-secondary">{strategyIdToName[activeStrategy] ?? ''}</span>
@@ -786,7 +756,7 @@ export function Screener() {
                     <span className="text-[11px] text-muted animate-pulse">扫描中…</span>
                   )}
                 </h2>
-                <div className="flex items-center gap-3">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap sm:gap-3">
                   {(showAll ? allRows.length > 0 : !!result?.rows.length) && (
                     <div className="inline-flex items-stretch h-7 rounded-btn border border-border bg-surface overflow-hidden">
                       <button
@@ -931,7 +901,7 @@ export function Screener() {
                 <ScanSearch className="h-7 w-7 text-accent/40" />
               </div>
               <div className="flex flex-col items-center gap-1.5">
-                <span className="text-sm text-secondary">可先在右上角切换日期，再点击策略卡片查看选股结果</span>
+                <span className="text-sm text-secondary">点击策略卡片查看选股结果</span>
                 <span className="text-[11px] text-muted">若提示 enriched 表无数据，请先运行盘后管道</span>
               </div>
             </div>
@@ -1000,10 +970,6 @@ export function Screener() {
           pool={pool}
           onConfirm={(newPool) => {
             reorderPool(newPool)
-            if (asOf) {
-              runAllDateRef.current = ''
-              runAll.mutate({ date: asOf, strategyIds: newPool })
-            }
           }}
           onClose={() => setShowPoolDialog(false)}
         />
@@ -1012,6 +978,7 @@ export function Screener() {
         open={showBuilder}
         onClose={() => setShowBuilder(false)}
         mode={builderMode}
+        existingStrategyIds={availableStrategyIds}
         onSavedId={async id => {
           const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('stock'), queryFn: () => api.screenerStrategies('stock'), staleTime: 0 })
           if (!data.presets.some(s => s.id === id)) {

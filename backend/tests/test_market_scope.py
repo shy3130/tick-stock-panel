@@ -99,6 +99,59 @@ def test_market_overview_passes_market_into_screener(monkeypatch) -> None:
     assert result["market"] == "hk"
 
 
+def test_hk_market_overview_ranks_clickhouse_concepts_and_industries(monkeypatch) -> None:
+    from app.services import market_overview_builder as builder
+
+    class Screener:
+        def __init__(self, repo, asset_type: str = "stock", market: str = "cn") -> None:
+            assert market == "hk"
+
+        def _load_enriched_for_date(self, target_date: date) -> pl.DataFrame:
+            return pl.DataFrame(
+                {
+                    "symbol": ["700.HK", "9988.HK"],
+                    "name": ["腾讯控股", "阿里巴巴-W"],
+                    "close": [600.0, 160.0],
+                    "change_pct": [0.02, -0.01],
+                    "amount": [1_000_000.0, 2_000_000.0],
+                    "volume": [1_000.0, 2_000.0],
+                }
+            )
+
+    class DimensionProvider:
+        def get_market_concepts(self, market: str):
+            assert market == "hk"
+            return {
+                "rows": [
+                    {"symbol": "700.HK", "concept": "港股互联网"},
+                    {"symbol": "9988.HK", "concept": "港股互联网"},
+                ]
+            }
+
+        def get_market_industries(self, market: str):
+            assert market == "hk"
+            return {
+                "rows": [
+                    {"symbol": "700.HK", "industry": "软件服务"},
+                    {"symbol": "9988.HK", "industry": "软件服务"},
+                ]
+            }
+
+    monkeypatch.setattr(builder, "ScreenerService", Screener)
+    monkeypatch.setattr(builder, "market_latest_date", lambda repo, market: date(2026, 7, 17))
+
+    result = builder.build_market_overview(
+        object(),
+        market="hk",
+        dimension_provider=DimensionProvider(),
+    )
+
+    assert result["concept_rank"]["leading"][0]["name"] == "港股互联网"
+    assert result["concept_rank"]["leading"][0]["count"] == 2
+    assert result["industry_rank"]["leading"][0]["name"] == "软件服务"
+    assert result["industry_rank"]["leading"][0]["count"] == 2
+
+
 def test_market_industries_endpoint_delegates_selected_market(monkeypatch) -> None:
     from app.api import screener
 

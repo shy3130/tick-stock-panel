@@ -13,6 +13,7 @@ import {
   useOptimizerTask,
 } from '@/lib/optimizerTask'
 import { buildDefaultOverrides } from '@/lib/strategyOverrides'
+import { isBacktestableStrategy } from '@/lib/strategy-role'
 import {
   INPUT_CLS,
   OBJECTIVES,
@@ -29,7 +30,7 @@ const ONE_YEAR_AGO = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 1
 export function StrategyOptimizer() {
   const task = useOptimizerTask()
   const { data: stratData } = useQuery({ queryKey: ['strategies'], queryFn: () => api.strategyList() })
-  const strategies: StrategyDetail[] = stratData?.strategies ?? []
+  const strategies: StrategyDetail[] = (stratData?.strategies ?? []).filter(isBacktestableStrategy)
 
   // 切策略: 有任务在跑时先真正取消 (关 SSE + 后端 cancel + 清 localStorage), 不能静默丢
   const sweep = useParamSweep(strategies, () => {

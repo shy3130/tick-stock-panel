@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 
+import polars as pl
 from fastapi import APIRouter, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/api/intraday", tags=["quotes"])
+logger = logging.getLogger(__name__)
 
 
 def _get_quote_service(request: Request):
@@ -84,6 +87,59 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
     return out
 
 
+def _realtime_index_quotes_from_provider(request: Request, symbols: list[str] | None) -> list[dict]:
+    """Read index quotes without depending on the A-share polling window."""
+    from app.data_providers import custom as custom_sources
+    from app.services import preferences
+
+    provider_name = preferences.get_realtime_data_provider()
+    if provider_name == "tickflow" or not custom_sources.provider_has_dataset(provider_name, "realtime"):
+        return []
+    requested = [str(symbol).strip().upper() for symbol in (symbols or []) if str(symbol).strip()]
+    if not requested:
+        repo = getattr(request.app.state, "repo", None)
+        requested = sorted(repo.get_index_symbol_set()) if repo else []
+    if not requested:
+        return []
+    try:
+        provider = custom_sources.get_provider(provider_name)
+        try:
+            records = provider.get_realtime(symbols=requested)
+        except TypeError:
+            records = provider.get_realtime()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("index realtime provider read failed (%s): %s", provider_name, exc)
+        return []
+    rows = records.to_dicts() if isinstance(records, pl.DataFrame) else list(records or [])
+    requested_set = set(requested)
+    rows = [row for row in rows if str(row.get("symbol") or "").upper() in requested_set]
+    if not rows:
+        return []
+    frame = pl.DataFrame(rows)
+    if "last_price" in frame.columns and "prev_close" in frame.columns:
+        derived_change = (
+            pl.col("last_price").cast(pl.Float64, strict=False)
+            - pl.col("prev_close").cast(pl.Float64, strict=False)
+        ).round(8)
+        if "change_amount" in frame.columns:
+            frame = frame.with_columns(
+                pl.coalesce([pl.col("change_amount").cast(pl.Float64, strict=False), derived_change])
+                .alias("change_amount")
+            )
+        else:
+            frame = frame.with_columns(derived_change.alias("change_amount"))
+    for column in ("change_pct", "amplitude"):
+        if column in frame.columns:
+            frame = frame.with_columns(
+                (pl.col(column).cast(pl.Float64, strict=False) * 100).alias(column)
+            )
+    if "last_price" in frame.columns and "close" not in frame.columns:
+        frame = frame.with_columns(pl.col("last_price").alias("close"))
+    frame = frame.with_columns(pl.lit("realtime").alias("source"))
+    by_symbol = {row["symbol"]: row for row in frame.to_dicts()}
+    return [by_symbol[symbol] for symbol in requested if symbol in by_symbol]
+
+
 @router.get("/status")
 def status(request: Request):
     """行情状态 (来自全局 QuoteService)。"""
@@ -101,6 +157,21 @@ def index_quotes(
 ):
     """返回实时指数行情缓存，不触发 TickFlow 请求。"""
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    provider_rows = _realtime_index_quotes_from_provider(request, symbol_list)
+    if provider_rows:
+        if not symbol_list:
+            return {"rows": provider_rows, "count": len(provider_rows), "source": "realtime"}
+        provider_by_symbol = {row["symbol"]: row for row in provider_rows}
+        missing = [symbol for symbol in symbol_list if symbol not in provider_by_symbol]
+        fallback_rows = _fallback_index_quotes_from_daily(request, missing) if missing else []
+        fallback_by_symbol = {row["symbol"]: row for row in fallback_rows}
+        merged = [
+            provider_by_symbol.get(symbol) or fallback_by_symbol.get(symbol)
+            for symbol in symbol_list
+        ]
+        merged = [row for row in merged if row]
+        source = "mixed" if missing else "realtime"
+        return {"rows": merged, "count": len(merged), "source": source}
     qs = _get_quote_service(request)
     if not qs:
         rows = _fallback_index_quotes_from_daily(request, symbol_list)

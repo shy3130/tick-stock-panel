@@ -140,6 +140,15 @@ start_param: start_time
 end_param: end_time
 ```
 
+分钟数据源如果需要区分资产类型或周期，可继续配置：
+
+```yaml
+asset_type_param: asset_type
+freq_param: period
+```
+
+配置后，分钟请求会分别传入 `stock` / `etf` / `index` 和 `1m`；留空时不向上游发送这两个参数，以兼容已有数据源。
+
 ## 鉴权
 
 支持三种简单鉴权:
@@ -295,4 +304,3 @@ datasets:
 ```
 
 把这段 YAML 保存为 `data/data_sources/my_source.yaml`,然后在设置页重新加载即可。
-

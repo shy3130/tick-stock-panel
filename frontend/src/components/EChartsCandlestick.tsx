@@ -25,12 +25,17 @@ export interface OHLC {
   kdj_j?: number | null
   boll_upper?: number | null
   boll_lower?: number | null
+  vol_ma5?: number | null
+  vol_ma10?: number | null
+  vol_ratio_5d?: number | null
 }
 
 export interface ChartMarker {
   date: string
   kind: 'buy' | 'sell' | 'neutral'
   label?: string
+  /** Exact backend signal price. Falls back to the candle extreme for legacy markers. */
+  price?: number
   /** 若为 true，标记放在蜡烛上方（如涨停连板标签）。 */
   above?: boolean
   /** 自定义标签颜色，覆盖默认的 kind 对应色。 */
@@ -45,11 +50,15 @@ export interface ChartRange {
 }
 
 export interface ChartPriceLine {
+  id?: string
   value: number
+  endValue?: number
   label?: string
   color?: string
   start?: string
   end?: string
+  lineType?: 'solid' | 'dashed' | 'dotted'
+  width?: number
 }
 
 export interface StockInfo {
@@ -60,6 +69,16 @@ export interface StockInfo {
   ext?: Record<string, unknown>
 }
 
+export interface VolumeCompareConfig {
+  enabled: boolean
+  days: number
+}
+
+interface SubChartContext {
+  compact: boolean
+  volumeCompare: VolumeCompareConfig
+}
+
 /** 子图定义 */
 export interface SubChartDef {
   key: string
@@ -67,7 +86,7 @@ export interface SubChartDef {
   /** 子图固定高度 px */
   height: number
   /** 构建 series 数组 */
-  buildSeries: (data: OHLC[]) => any[]
+  buildSeries: (data: OHLC[], context: SubChartContext) => any[]
   /** 构建信息栏文字 (当前数据行 -> 显示内容) */
   buildInfo: (d: OHLC | null) => { label: string; color: string; value: string }[]
   /** Y 轴特殊配置 */
@@ -93,26 +112,60 @@ function fmtVol(v: number | null | undefined): string {
   return v.toFixed(0)
 }
 
+function volumeRatioAt(data: OHLC[], index: number, days: number): number | null {
+  const window = Math.max(1, Math.min(20, Math.round(days)))
+  if (index < window) return null
+  let sum = 0
+  for (let offset = 1; offset <= window; offset++) {
+    const volume = data[index - offset]?.volume
+    if (volume == null || !Number.isFinite(volume)) return null
+    sum += volume
+  }
+  const average = sum / window
+  const current = data[index]?.volume
+  if (current == null || !Number.isFinite(current) || average <= 0) return null
+  return current / average
+}
+
+function fmtVolumeRatio(value: number | null, digits = 2): string {
+  return value == null ? '—' : `${value.toFixed(digits)}x`
+}
+
 export const SUB_CHARTS: SubChartDef[] = [
   {
     key: 'vol',
     label: '成交量',
     height: 84,
     yAxisConfig: { min: 0 },
-    buildSeries: (data) => {
+    buildSeries: (data, context) => {
       const ma5Data = volMaN(data, 5)
       const ma10Data = volMaN(data, 10)
+      const compareDays = context.volumeCompare.days
       return [
         {
           name: '成交量',
           type: 'bar',
-          data: data.map(d => ({
-            value: d.volume ?? 0,
-            itemStyle: {
-              color: d.close >= d.open ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)',
-            },
-          })),
+          data: data.map((d, index) => {
+            const ratio = volumeRatioAt(data, index, compareDays)
+            return {
+              value: d.volume ?? 0,
+              volumeRatioLabel: ratio == null ? '' : fmtVolumeRatio(ratio, 1),
+              itemStyle: {
+                color: d.close >= d.open ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)',
+              },
+            }
+          }),
           barWidth: '60%',
+          label: {
+            show: context.volumeCompare.enabled && !context.compact,
+            position: 'top',
+            distance: 2,
+            color: CT().text,
+            fontSize: 8,
+            fontFamily: 'JetBrains Mono, monospace',
+            formatter: (params: any) => params.data?.volumeRatioLabel ?? '',
+          },
+          labelLayout: { hideOverlap: true },
           animation: false,
         },
         {
@@ -292,6 +345,8 @@ interface Props {
   visibleBars?: number
   /** 已激活的子图 key 列表 (含 vol, 按点击顺序) */
   activeIndicators?: string[]
+  /** 成交量柱相对前 N 个交易日均量的显示设置 */
+  volumeCompare?: VolumeCompareConfig
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -323,6 +378,7 @@ function buildSubInfoGraphics(
   infoIdx: number,
   activeIndicators: string[],
   subStartTop: number,
+  volumeCompare: VolumeCompareConfig,
 ): any[] {
   const d = infoIdx >= 0 && infoIdx < data.length ? data[infoIdx] : null
   const graphics: any[] = []
@@ -344,6 +400,14 @@ function buildSubInfoGraphics(
       const vol10 = calcVolMa(10)
       items.push({ label: 'VOL5', color: '#FACC15', value: fmtVol(vol5) })
       items.push({ label: 'VOL10', color: '#8B5CF6', value: fmtVol(vol10) })
+      if (volumeCompare.enabled) {
+        const ratio = volumeRatioAt(data, infoIdx, volumeCompare.days)
+        items.push({
+          label: `量比${volumeCompare.days}`,
+          color: ratio != null && ratio >= 1 ? '#C74040' : '#2D9B65',
+          value: fmtVolumeRatio(ratio),
+        })
+      }
     }
 
     // 每个元素加固定 id，确保 ECharts 增量更新时能正确匹配
@@ -416,6 +480,7 @@ function buildOption(
   containerHeight: number,
   infoIdx: number,
   linkedPrice: number | null | undefined,
+  volumeCompare: VolumeCompareConfig,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -429,19 +494,22 @@ function buildOption(
       const d = data[idx]
       const isBuy = m.kind === 'buy'
       const isSell = m.kind === 'sell'
+      const markerPrice = typeof m.price === 'number' && Number.isFinite(m.price)
+        ? m.price
+        : (isBuy ? d.low : d.high)
 
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
         if (compact) {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
+            name: m.date, coord: [m.date, markerPrice],
             symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10],
             itemStyle: { color: dotColor, cursor: 'pointer' },
             label: { show: false }, z: 100, zlevel: 10,
           })
         } else {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
+            name: m.date, coord: [m.date, markerPrice],
             symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2],
             itemStyle: { color: 'transparent' },
             label: {
@@ -455,11 +523,11 @@ function buildOption(
       } else {
         markPointData.push({
           name: m.label ?? '',
-          coord: [m.date, isBuy ? d.low : d.high],
+          coord: [m.date, markerPrice],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -544,8 +612,8 @@ function buildOption(
     .map(line => {
       const lineStyle = {
         color: line.color ?? CT().text,
-        type: 'dashed' as const,
-        width: 1,
+        type: line.lineType ?? 'dashed',
+        width: line.width ?? 1,
         opacity: 0.92,
       }
       const label = {
@@ -562,7 +630,13 @@ function buildOption(
       if (line.start && line.end && dateIndexMap.has(line.start) && dateIndexMap.has(line.end)) {
         return [
           { xAxis: line.start, yAxis: line.value },
-          { xAxis: line.end, yAxis: line.value, lineStyle, label, symbol: 'none' },
+          {
+            xAxis: line.end,
+            yAxis: Number.isFinite(line.endValue) ? line.endValue : line.value,
+            lineStyle,
+            label,
+            symbol: 'none',
+          },
         ]
       }
       return { yAxis: line.value, lineStyle, label, symbol: 'none' }
@@ -671,7 +745,7 @@ function buildOption(
 
     xAxisIndices.push(xAxisIdx)
 
-    const subSeries = def.buildSeries(data)
+    const subSeries = def.buildSeries(data, { compact, volumeCompare })
     subSeries.forEach((s: any) => {
       series.push({ ...s, xAxisIndex: xAxisIdx, yAxisIndex: yAxisIdx })
     })
@@ -681,7 +755,7 @@ function buildOption(
 
   // 子图信息栏 graphic
   const subStartTop = topPad + candleAvail + candleBottomPad
-  const infoGraphics = buildSubInfoGraphics(data, infoIdx, activeIndicators, subStartTop)
+  const infoGraphics = buildSubInfoGraphics(data, infoIdx, activeIndicators, subStartTop, volumeCompare)
 
   return {
     animation: false,
@@ -737,6 +811,7 @@ export function EChartsCandlestick({
   onDateClick,
   visibleBars = 60,
   activeIndicators = [],
+  volumeCompare = { enabled: true, days: 1 },
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
@@ -755,6 +830,8 @@ export function EChartsCandlestick({
   // 需要在闭包中访问最新值的变量 — 先声明占位，后面赋值
   const activeIndicatorsRef = useRef(activeIndicators)
   activeIndicatorsRef.current = activeIndicators
+  const volumeCompareRef = useRef(volumeCompare)
+  volumeCompareRef.current = volumeCompare
   const chartHeightRef = useRef(300)
   const subTotalHRef = useRef(0)
   const getInfoBarHTMLRef = useRef<() => string>(() => '')
@@ -769,7 +846,13 @@ export function EChartsCandlestick({
     const chart = chartRef.current
     if (!chart) return
     const subStartTop = chartHeightRef.current - subTotalHRef.current
-    const infoGraphics = buildSubInfoGraphics(curData, idx, activeIndicatorsRef.current, subStartTop)
+    const infoGraphics = buildSubInfoGraphics(
+      curData,
+      idx,
+      activeIndicatorsRef.current,
+      subStartTop,
+      volumeCompareRef.current,
+    )
     if (infoGraphics.length > 0) {
       chart.setOption({ graphic: infoGraphics }, { lazyUpdate: true })
     }
@@ -931,9 +1014,7 @@ export function EChartsCandlestick({
       const newCompact = visibleCount > COMPACT_THRESHOLD
       if (newCompact !== compactRef.current) {
         compactRef.current = newCompact
-        // compact 变了需要更新 markPoint，但只更新 markPoint series
-        // 通过 dispatch 自定义事件来增量更新
-        updateMarkPoints()
+        updateCompactPresentation()
       }
     })
 
@@ -950,32 +1031,35 @@ export function EChartsCandlestick({
     }
   }, [chartHeight]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 增量更新 markPoint (compact 切换时)
-  function updateMarkPoints() {
+  // 缩放跨过紧凑阈值时，仅增量更新标签，不重建整张图。
+  function updateCompactPresentation() {
     const chart = chartRef.current
     if (!chart) return
     const mkrs = showMarkersProp ? markers : undefined
-    if (!mkrs || mkrs.length === 0) return
     const compact = compactRef.current
+    const seriesUpdates: any[] = []
     const markPointData: any[] = []
-    for (const m of mkrs) {
+    for (const m of mkrs ?? []) {
       const idx = dateIndexMap.get(m.date)
       if (idx == null) continue
       const d = data[idx]
       const isBuy = m.kind === 'buy'
       const isSell = m.kind === 'sell'
+      const markerPrice = typeof m.price === 'number' && Number.isFinite(m.price)
+        ? m.price
+        : (isBuy ? d.low : d.high)
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
         if (compact) {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
+            name: m.date, coord: [m.date, markerPrice],
             symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10],
             itemStyle: { color: dotColor, cursor: 'pointer' },
             label: { show: false }, z: 100, zlevel: 10,
           })
         } else {
           markPointData.push({
-            name: m.date, coord: [m.date, d.high],
+            name: m.date, coord: [m.date, markerPrice],
             symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2],
             itemStyle: { color: 'transparent' },
             label: {
@@ -989,11 +1073,11 @@ export function EChartsCandlestick({
       } else {
         markPointData.push({
           name: m.label ?? '',
-          coord: [m.date, isBuy ? d.low : d.high],
+          coord: [m.date, markerPrice],
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: m.color ?? (isBuy ? THEME.bull : isSell ? THEME.bear : CT().text) },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -1003,12 +1087,19 @@ export function EChartsCandlestick({
         })
       }
     }
-    chart.setOption({
-      series: [{
+    if (mkrs?.length) {
+      seriesUpdates.push({
         name: 'K',
         markPoint: markPointData.length > 0 ? { data: markPointData, animation: false } : undefined,
-      }]
-    })
+      })
+    }
+    if (activeIndicatorsRef.current.includes('vol')) {
+      seriesUpdates.push({
+        name: '成交量',
+        label: { show: volumeCompareRef.current.enabled && !compact },
+      })
+    }
+    if (seriesUpdates.length > 0) chart.setOption({ series: seriesUpdates })
   }
 
   // ===== 核心: 仅在数据/配置变更时全量 setOption =====
@@ -1025,6 +1116,7 @@ export function EChartsCandlestick({
       activeIndicators, chartHeight,
       infoIdxRef.current,
       linkedPrice,
+      volumeCompare,
     )
 
     chart.setOption(option, true)
@@ -1042,7 +1134,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

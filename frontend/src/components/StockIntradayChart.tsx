@@ -115,6 +115,7 @@ export function StockIntradayChart({
           prevClose={prevClose}
           date={date}
           symbol={symbol}
+          priceLimit={minute.data?.price_limit ?? undefined}
           onPriceHover={onPriceHover}
         />
       )}

@@ -17,6 +17,7 @@ import { SealedBadge } from '@/components/SealedBadge'
 import type { ExtColumnDisplayConfig } from '@/lib/watchlist-columns'
 import { useMarketScope } from '@/lib/market-scope'
 import { marketLabel } from '@/lib/market-display'
+import { limitLadderRefetchInterval } from '@/lib/limit-ladder-realtime'
 
 // ===== Ext 字段配置 =====
 
@@ -1532,6 +1533,8 @@ function LimitUpLadderCn() {
     queryKey: [QK.limitLadder(asOf || undefined), extColumnsParam, direction],
     queryFn: () => api.limitLadder(asOf || undefined, extColumnsParam, direction),
     staleTime: 5 * 60_000,
+    refetchInterval: limitLadderRefetchInterval(asOf),
+    refetchIntervalInBackground: true,
   })
   const handleOpenDimension = useCallback((kind: DimensionKind, value: string, sourceField?: string) => {
     if (!sourceField) return

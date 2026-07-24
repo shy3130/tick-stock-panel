@@ -48,7 +48,7 @@ def test_all_builtin_strategies_use_matrix_backend_only():
     engine = _engine()
     assert engine.load_errors() == []
     strategies = [engine.get(meta["id"]) for meta in engine.list_strategies()]
-    assert len(strategies) == 19
+    assert len(strategies) == 32
     assert all(strategy.execution_backend == "matrix_native" for strategy in strategies)
     assert all(strategy.matrix_strategy is not None for strategy in strategies)
     assert all(strategy.filter_fn is None for strategy in strategies)
@@ -128,6 +128,20 @@ def test_service_etf_uses_etf_dir(tmp_path):
     svc = ScreenerService(_FakeRepo(tmp_path), asset_type="etf")
     assert svc.asset_type == "etf"
     assert svc._enriched_dirname == "kline_etf_enriched"
+
+
+def test_strategy_context_does_not_use_market_code_as_matrix(tmp_path):
+    svc = ScreenerService(_FakeRepo(tmp_path), market="cn")
+    engine = types.SimpleNamespace(required_history_bars=lambda *args, **kwargs: 1)
+
+    context = svc.build_strategy_context(
+        engine,
+        date(2026, 1, 2),
+        ["trend_breakout"],
+        current=pl.DataFrame({"symbol": ["000001.SZ"]}),
+    )
+
+    assert context.market is None
 
 
 def test_etf_strategy_runs_through_engine_context(tmp_path):

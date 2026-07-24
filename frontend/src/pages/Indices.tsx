@@ -126,6 +126,7 @@ function IndicesMarket({ market }: { market: MarketCode }) {
     queryFn: () => api.indexQuotes(quoteSymbols),
     enabled: quoteSymbols.length > 0,
     placeholderData: (prev) => prev,
+    refetchInterval: 6_000,
   })
 
   const daily = useQuery({
@@ -212,15 +213,15 @@ function IndicesMarket({ market }: { market: MarketCode }) {
   }
 
   return (
-    <div className="h-full overflow-auto bg-base p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
+    <div className="h-full overflow-auto bg-base p-3 sm:p-4">
+      <div className="mb-4 flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-lg font-semibold text-foreground">{marketLabel(market)}指数</h1>
           <p className="mt-1 text-xs text-muted">
             当前市场：{marketLabel(market)} · 指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div aria-label="指数同步操作" className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           <button
             onClick={() => syncInstruments.mutate()}
             disabled={syncInstruments.isPending}
@@ -240,7 +241,11 @@ function IndicesMarket({ market }: { market: MarketCode }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-[15rem_1fr] gap-4">
+      <div
+        role="region"
+        aria-label="指数行情内容"
+        className="grid grid-cols-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]"
+      >
         <aside className="rounded-card border border-border bg-surface p-3">
           <div className="relative mb-3">
             <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted" />
@@ -265,10 +270,10 @@ function IndicesMarket({ market }: { market: MarketCode }) {
           </div>
         </aside>
 
-        <main className="min-w-0 rounded-card border border-border bg-surface p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        <section className="min-w-0 rounded-card border border-border bg-surface p-3">
+          <div className="mb-3 flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Activity className="h-4 w-4 text-accent" />
                 <h2 className="truncate text-sm font-semibold text-foreground">
                   {selectedInfo?.name || selectedSymbol || '未选择指数'}
@@ -281,32 +286,37 @@ function IndicesMarket({ market }: { market: MarketCode }) {
                 实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
               </div>
             </div>
-            <div className="flex items-center gap-2 text-xs">
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs sm:flex">
               <input
                 type="date"
                 value={range.start}
                 onChange={e => setRange(r => ({ ...r, start: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent sm:w-auto"
               />
               <span className="text-muted">至</span>
               <input
                 type="date"
                 value={range.end}
                 onChange={e => setRange(r => ({ ...r, end: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
+                className="min-w-0 rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent sm:w-auto"
               />
             </div>
           </div>
 
-          {daily.isLoading && <div className="py-10 text-center text-sm text-muted">日K加载中…</div>}
-          {daily.isError && <div className="py-4 text-sm text-danger">指数日K加载失败</div>}
-          {!daily.isLoading && !daily.isError && chartRows.length === 0 && (
-            <div className="rounded-card bg-elevated p-6 text-center text-sm text-muted">
-              暂无日K数据。可以先同步指数日K，或选择其他指数。
-            </div>
-          )}
-          {chartRows.length > 0 && (
-            <div className="flex items-start gap-3">
+          <div
+            role="region"
+            aria-label="指数图表组合"
+            className="flex min-w-0 flex-col items-stretch gap-3 xl:flex-row xl:items-start"
+          >
+            {daily.isLoading && <div className="w-full py-10 text-center text-sm text-muted">日K加载中…</div>}
+            {daily.isError && <div className="w-full py-4 text-sm text-danger">指数日K加载失败</div>}
+            {!daily.isLoading && !daily.isError && chartRows.length === 0 && (
+              <div className="w-full rounded-card bg-elevated p-6 text-center text-sm text-muted">
+                暂无日K数据。可以先同步指数日K，或选择其他指数。
+              </div>
+            )}
+            {chartRows.length > 0 && (
+              <>
               <div className="min-w-0 flex-1">
                 <EChartsCandlestick
                   data={chartRows}
@@ -321,7 +331,7 @@ function IndicesMarket({ market }: { market: MarketCode }) {
                   activeIndicators={['vol', 'macd']}
                 />
               </div>
-              <div className="min-w-0 flex-1 border-l border-border pl-3" style={{ height: 620 }}>
+              <div className="min-w-0 w-full flex-1 border-t border-border pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0" style={{ height: 620 }}>
                 {!hasMinuteCap ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                     <Lock className="h-5 w-5 text-muted" />
@@ -351,9 +361,10 @@ function IndicesMarket({ market }: { market: MarketCode }) {
                   </>
                 )}
               </div>
-            </div>
-          )}
-        </main>
+              </>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   )

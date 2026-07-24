@@ -129,3 +129,27 @@ def test_batch_run_passes_saved_params_to_strategy_engine(monkeypatch, tmp_path)
     assert context_call["overrides_map"] == expected_overrides
     assert run_all_call["params_map"] == expected_params
     assert run_all_call["overrides_map"] == expected_overrides
+
+
+def test_batch_summary_response_still_writes_full_cache(monkeypatch, tmp_path):
+    engine = _CapturingStrategyEngine()
+    request = _api_request(tmp_path, engine)
+    _install_api_fakes(monkeypatch)
+    written = []
+    monkeypatch.setattr(screener_api.strategy_config, "list_overrides", lambda *_args: {})
+    monkeypatch.setattr(screener_api.strategy_cache, "write_cache", lambda *args: written.append(args))
+
+    payload = screener_api.run_all(
+        request,
+        body={
+            "as_of": "2026-07-15",
+            "strategy_ids": ["builtin_strategy"],
+            "summary_only": True,
+        },
+    )
+
+    assert payload == {
+        "as_of": "2026-07-15",
+        "results": {"builtin_strategy": {"total": 0, "as_of": "2026-07-15"}},
+    }
+    assert written[0][2]["builtin_strategy"]["rows"] == []

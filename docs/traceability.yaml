@@ -4,6 +4,10 @@ requirements:
     specification: SPEC-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
     implementation:
       - backend/app/main.py
+      - backend/app/api/dow_strategy.py
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/pages/Screener.tsx
+      - frontend/src/components/screener/DowStrategyCard.tsx
       - frontend/src/components/StockPreviewDialog.tsx
     tests:
       - {path: tests/spec_contracts/test_production_source_recovery.py, type: executable-test}

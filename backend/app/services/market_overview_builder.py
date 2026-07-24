@@ -11,10 +11,12 @@ quote_service,depth_service}` 的依赖改为显式参数。
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -26,6 +28,21 @@ from app.services.market_scope import (
     normalize_market,
 )
 from app.services.screener import ScreenerService
+
+logger = logging.getLogger(__name__)
+
+_MARKET_TIMEZONES = {
+    "cn": ZoneInfo("Asia/Shanghai"),
+    "hk": ZoneInfo("Asia/Hong_Kong"),
+    "us": ZoneInfo("America/New_York"),
+}
+
+
+def _realtime_trade_date(rows: list[dict], market: str) -> date | None:
+    timestamps = [row.get("timestamp") for row in rows if row.get("timestamp")]
+    if not timestamps:
+        return None
+    return datetime.fromtimestamp(max(timestamps) / 1000.0, tz=_MARKET_TIMEZONES[market]).date()
 
 # ================================================================
 # 常量(与 overview.py 保持同步;复盘复盘仅 A 股核心指数)
@@ -84,6 +101,42 @@ def _score(value: float, low: float, high: float) -> int:
     if high <= low:
         return 50
     return max(0, min(100, round((value - low) / (high - low) * 100)))
+
+
+def _overlay_realtime_rows(
+    rows: list[dict],
+    quotes: list[dict],
+    *,
+    realtime_only: bool = False,
+) -> list[dict]:
+    """以日线行作为范围和技术基线,只覆盖实时行情字段。"""
+    by_symbol = {
+        str(quote.get("symbol") or "").upper(): quote
+        for quote in quotes
+        if quote.get("symbol")
+    }
+    out: list[dict] = []
+    for row in rows:
+        merged = dict(row)
+        quote = by_symbol.get(str(row.get("symbol") or "").upper())
+        if realtime_only and quote is None:
+            continue
+        if quote:
+            last_price = _finite(quote.get("last_price"))
+            prev_close = _finite(quote.get("prev_close"))
+            if prev_close in (None, 0):
+                prev_close = _finite(merged.get("close"))
+            change_pct = _finite(quote.get("change_pct"))
+            if change_pct is None and last_price is not None and prev_close not in (None, 0):
+                change_pct = (last_price - prev_close) / prev_close
+            for target, source in (("close", "last_price"), ("volume", "volume"), ("amount", "amount")):
+                value = _finite(quote.get(source))
+                if value is not None:
+                    merged[target] = value
+            if change_pct is not None:
+                merged["change_pct"] = change_pct
+        out.append(merged)
+    return out
 
 
 # ================================================================
@@ -250,7 +303,14 @@ def _symbol_keys(row: dict, config: ExtConfig) -> list[str]:
     return keys
 
 
-def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: int | None = None) -> dict:
+def _dimension_rank(
+    rows: list[dict],
+    repo,
+    kind: str,
+    limit: int = 5,
+    level: int | None = None,
+    dimension_rows: list[dict] | None = None,
+) -> dict:
     if not rows:
         return {"leading": [], "lagging": []}
 
@@ -262,27 +322,39 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
         quote_map[symbol] = row
         quote_map[symbol.split(".", 1)[0]] = row
 
-    store = ExtConfigStore(repo.store.data_dir)
     groups: dict[str, dict[str, dict]] = {}
-    for config in store.load_all():
-        field = _dimension_field(config, kind)
-        if not field:
-            continue
-        for ext_row in _read_ext_rows(repo.store.data_dir, config, field):
-            quote = None
-            for key in _symbol_keys(ext_row, config):
-                quote = quote_map.get(key)
-                if quote:
-                    break
-            if not quote:
+    if dimension_rows is not None:
+        configured_rows = [
+            (item, kind, [str(item.get("symbol") or "").strip().upper()])
+            for item in dimension_rows
+        ]
+    else:
+        configured_rows = []
+        store = ExtConfigStore(repo.store.data_dir)
+        for config in store.load_all():
+            field = _dimension_field(config, kind)
+            if not field:
                 continue
-            symbol = str(quote.get("symbol") or "")
-            for value in _dimension_values(ext_row.get(field)):
-                # 行业按 "-" 拆分级: "银行-银行-股份制银行" → level=2 取"银行"(二级)
-                if level is not None and "-" in value:
-                    parts = value.split("-")
-                    value = parts[level - 1] if level <= len(parts) else parts[-1]
-                groups.setdefault(value, {})[symbol] = quote
+            configured_rows.extend(
+                (item, field, _symbol_keys(item, config))
+                for item in _read_ext_rows(repo.store.data_dir, config, field)
+            )
+
+    for dimension_row, field, symbol_keys in configured_rows:
+        quote = None
+        for key in symbol_keys:
+            quote = quote_map.get(key) or quote_map.get(key.split(".", 1)[0])
+            if quote:
+                break
+        if not quote:
+            continue
+        symbol = str(quote.get("symbol") or "")
+        for value in _dimension_values(dimension_row.get(field)):
+            # 行业按 "-" 拆分级: "银行-银行-股份制银行" → level=2 取"银行"(二级)
+            if level is not None and "-" in value:
+                parts = value.split("-")
+                value = parts[level - 1] if level <= len(parts) else parts[-1]
+            groups.setdefault(value, {})[symbol] = quote
 
     items = []
     for name, by_symbol in groups.items():
@@ -368,6 +440,8 @@ def build_market_overview(
     depth_service=None,
     as_of: date | None = None,
     market: str = "cn",
+    dimension_provider=None,
+    realtime_provider=None,
 ) -> dict:
     """装配市场总览(与原 overview._build_overview 行为一致)。
 
@@ -383,6 +457,7 @@ def build_market_overview(
     # 其余装配仍以解析出的真实日期为准。显式指定日期(历史复盘)时才回退数据库。
     explicit_as_of = as_of is not None
     as_of = as_of or market_latest_date(repo, market)
+    realtime_as_of = None
     status = _quote_status(quote_service)
     # 当前本地指数表仅覆盖 A 股核心指数；港美股宁可明确为空，也不能泄漏 A 股指数。
     indices = _index_quotes(repo, quote_service, None if not explicit_as_of else as_of) if market == "cn" else []
@@ -423,6 +498,33 @@ def build_market_overview(
         ]
         df = df.select([c for c in cols if c in df.columns])
         rows = df.to_dicts()
+
+    if rows and not explicit_as_of:
+        if realtime_provider is None:
+            try:
+                from app.data_providers import custom as custom_sources
+                from app.services import preferences
+
+                provider_name = preferences.get_realtime_data_provider()
+                if (
+                    provider_name != "tickflow"
+                    and custom_sources.provider_has_dataset(provider_name, "realtime")
+                ):
+                    realtime_provider = custom_sources.get_provider(provider_name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("market overview realtime provider unavailable: %s", type(exc).__name__)
+        if realtime_provider is not None:
+            try:
+                symbols = [str(row.get("symbol") or "") for row in rows if row.get("symbol")]
+                realtime_rows = realtime_provider.get_realtime(symbols=symbols) or []
+                realtime_as_of = _realtime_trade_date(realtime_rows, market)
+                rows = _overlay_realtime_rows(rows, realtime_rows, realtime_only=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "market overview realtime overlay failed for %s: %s",
+                    market,
+                    type(exc).__name__,
+                )
 
     # 过滤真停牌（volume=0 且 change_pct=0），保留有涨跌幅的浮点误差股以对齐同花顺口径
     if rows and "volume" in rows[0]:
@@ -531,8 +633,38 @@ def build_market_overview(
     avg_vol_ratio = sum(vol_ratios) / len(vol_ratios) if vol_ratios else 1
     high_vol_ratio = sum(1 for v in vol_ratios if v >= 1.5)
 
-    concept_rank = _dimension_rank(rows, repo, "concept")
-    industry_rank = _dimension_rank(rows, repo, "industry", level=2)
+    if market == "cn":
+        concept_rank = _dimension_rank(rows, repo, "concept")
+        industry_rank = _dimension_rank(rows, repo, "industry", level=2)
+    else:
+        try:
+            if dimension_provider is None:
+                from app.plugins.clickhouse.provider import ClickHouseProvider
+
+                dimension_provider = ClickHouseProvider()
+            concept_rows = dimension_provider.get_market_concepts(market).get("rows", [])
+            industry_rows = dimension_provider.get_market_industries(market).get("rows", [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "market overview dimensions load failed for %s: %s",
+                market,
+                type(exc).__name__,
+            )
+            concept_rows = []
+            industry_rows = []
+        concept_rank = _dimension_rank(
+            rows,
+            repo,
+            "concept",
+            dimension_rows=concept_rows,
+        )
+        industry_rank = _dimension_rank(
+            rows,
+            repo,
+            "industry",
+            level=2,
+            dimension_rows=industry_rows,
+        )
 
     strong_diff_pct = (strong_up - strong_down) / total * 100 if total else 0
     high_vol_pct = high_vol_ratio / total * 100 if total else 0
@@ -565,6 +697,7 @@ def build_market_overview(
 
     return _json_safe({
         "as_of": str(as_of),
+        "realtime_as_of": str(realtime_as_of) if realtime_as_of else None,
         "market": market,
         "currency": market_currency(market),
         "features": {"limit_ladder": market == "cn", "cn_market_rules": market == "cn"},

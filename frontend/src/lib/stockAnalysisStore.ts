@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { api, type PriceLevel, type LevelType } from './api'
+import type { MarketCode } from './market-display'
 
 /**
  * AI 个股分析 —— 全局任务/报告 store(与 aiReportStore 解耦、并行存在)。
@@ -157,7 +158,7 @@ export async function findTodayReport(symbol: string): Promise<HistoryReport | n
   return history.find(r => r.symbol === symbol && (r.created_at ?? '').slice(0, 10) === today) ?? null
 }
 
-export async function startAnalysis(symbol: string, name: string, focus = ''): Promise<{ id?: string; error?: string }> {
+export async function startAnalysis(symbol: string, name: string, focus = '', market?: MarketCode): Promise<{ id?: string; error?: string }> {
   const existing = activeTasks.find(t => t.symbol === symbol && (t.phase === 'loading' || t.phase === 'streaming'))
   if (existing) {
     activeDialogTaskId = existing.id
@@ -183,14 +184,14 @@ export async function startAnalysis(symbol: string, name: string, focus = ''): P
   rebuildSnap()
   emit()
 
-  runStream(id, symbol, name, focus)
+  runStream(id, symbol, name, focus, market)
   return { id }
 }
 
-async function runStream(id: string, symbol: string, _name: string, focus: string) {
+async function runStream(id: string, symbol: string, _name: string, focus: string, market?: MarketCode) {
   try {
     let firstDelta = true
-    for await (const chunk of api.stockAnalyzeStream(symbol, focus)) {
+    for await (const chunk of api.stockAnalyzeStream(symbol, focus, market)) {
       const cur = activeTasks.find(t => t.id === id)
       if (!cur) return
       switch (chunk.type) {

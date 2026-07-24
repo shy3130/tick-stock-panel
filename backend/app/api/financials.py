@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.services.financial_sync import get_financial_df
+from app.services.financial_sync import FINANCIAL_TABLES, get_financial_df
 from app.services.financial_analyzer import analyze_financials_stream
 from app.services import ai_reports
 from app.tickflow.capabilities import Cap
@@ -43,7 +43,7 @@ def financial_status(request: Request):
     data_dir = request.app.state.repo.store.data_dir
     tables = {}
 
-    for table in ("metrics", "income", "balance_sheet", "cash_flow"):
+    for table in FINANCIAL_TABLES:
         path = data_dir / "financials" / table / "part.parquet"
         if path.exists():
             try:
@@ -126,18 +126,32 @@ def get_cash_flow(request: Request, symbol: str | None = None):
     return {"data": df.to_dicts()}
 
 
+@router.get("/shares")
+def get_shares(request: Request, symbol: str | None = None):
+    """查询历史股本表。"""
+    capset = request.app.state.capabilities
+    _require_financial(capset)
+
+    df = get_financial_df(request.app.state.repo.store.data_dir, "shares")
+    if df.is_empty():
+        return {"data": []}
+    if symbol:
+        df = df.filter(pl.col("symbol") == symbol)
+    return {"data": df.to_dicts()}
+
+
 @router.post("/sync/{table}")
 def sync_table(request: Request, table: str):
     """手动触发同步(立即返回,后台异步执行)。
 
-    table: metrics / income / balance_sheet / cash_flow / all
+    table: metrics / income / balance_sheet / cash_flow / shares / all
     同步在后台线程执行,全量同步需数分钟。本接口立即返回 started 状态,
     前端通过轮询 GET /status 的 syncing 字段观察进度。
     """
     capset = request.app.state.capabilities
     _require_financial(capset)
 
-    valid_tables = {"metrics", "income", "balance_sheet", "cash_flow", "all"}
+    valid_tables = {*FINANCIAL_TABLES, "all"}
     if table not in valid_tables:
         raise HTTPException(400, f"invalid table: {table}, expected one of {valid_tables}")
 
@@ -161,7 +175,7 @@ class AnalyzeRequest(BaseModel):
 async def analyze_financials(request: Request, req: AnalyzeRequest):
     """AI 财务分析 — SSE 流式返回。
 
-    后端读取该标的 4 张财务表 → 注入 CFA 分析师级提示词 → 流式调用 LLM →
+    后端读取该标的财务报表与股本表 → 注入 CFA 分析师级提示词 → 流式调用 LLM →
     逐 chunk 以 SSE 形式推给前端(JSON per line, 非 text/event-stream,
     以便前端用 ReadableStream 逐行解析,更简单可靠)。
     """

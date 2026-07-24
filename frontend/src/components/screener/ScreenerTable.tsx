@@ -349,6 +349,7 @@ export function ScreenerTable({
       <StockDataTable
         columns={columns}
         rows={rows}
+        className="max-w-full rounded-card border border-border overflow-x-auto"
         renderCell={renderCell}
         sort={sort}
         onSortToggle={onSortToggle}

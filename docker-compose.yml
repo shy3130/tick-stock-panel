@@ -39,4 +39,6 @@ services:
       # 复用主机 Codex 登录态；后端只读后复制到单次请求的临时 CODEX_HOME。
       # Windows PowerShell/CMD 下 HOME 常未设置, 可通过 .env 里 CODEX_HOME_HOST 覆盖。
       - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
+      # 长桥采集器每 30 秒写入轻量运行快照；设置页只读该文件，不扫描行情大表。
+      - ${LONGBRIDGE_STATUS_DIR_HOST:-/data/longbridge/status}:/run/longbridge:ro
     restart: unless-stopped
