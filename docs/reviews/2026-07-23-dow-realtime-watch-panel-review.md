@@ -233,3 +233,26 @@ Critical 0，Important 0，SPEC PASS，READY YES。
 
 反向需求审查未发现 Critical 或 Important 问题，且没有以页面截图代替 DOM 和行为测试
 证据。最终结论：SPEC PASS，QUALITY PASS，READY YES。
+
+## 2026-07-24 港股前导零等价代码独立复核
+
+复核从 `REQ-DOW-WATCH-DATA-001` 反向检查实现、测试和生产状态。根因是监控清单
+允许同时保存 `02714.HK` 与 `2714.HK`，而不是 WebStock 缺少 `2714.HK` 行情；
+生产严格实时和分钟查询均已直接返回该股票数据。
+
+| 要求 | 独立证据 | 结论 |
+| --- | --- | --- |
+| 等价港股代码不能重复监控 | `DowMonitorStore.upsert_symbol` 在持久化边界使用去前导零身份比较 | PASS |
+| 保留用户已有卡片身份 | 第二次加入等价别名更新原记录并返回原 symbol，不静默改写代码 | PASS |
+| 不跨市场误合并 | 身份折叠仅作用于 `.HK` 数字代码；`002714.SZ` 在生产清单中独立保留 | PASS |
+| 行为可执行 | 新测试先 RED 后 GREEN；相关后端回归 141 项通过 | PASS |
+| 下层数据语义 | 生产 `2714.HK` 五周期均为 LIVE，K 线数为 923/308/154/84/112，来源时间为北京时间 15:51 | PASS |
+| 数据可恢复 | 修改生产清单前保存 symbols/states 两份时间戳备份；通知历史未改动 | PASS |
+| 正式发布 | 镜像 `tickflow-stock-panel-app:dow-monitor-hk-alias-20260724-1542` 运行，`/health` 正常 | PASS |
+
+本次实现只封闭了监控清单的等价代码重复入口，没有修改 WebStock 查询、五周期聚合、
+趋势线、买卖点或通知生成。前端 104 项测试、生产构建和规格检查均通过。完整后端
+测试收集仍受工作树中既有的 `longbridge_stock.system_patterns` 与
+`structure_breakout_scanner` 缺失阻断；扩大后的后端回归为 652 项通过、10 项既有
+失败，与本次存储幂等修改无关。最终结论：Critical 0，Important 0，
+SPEC PASS，QUALITY PASS，READY YES。

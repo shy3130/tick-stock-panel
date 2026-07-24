@@ -5,9 +5,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-UV = Path("/home/alwin/apps/tickflow-recovery-artifacts/20260724-1542/uv")
+UV = Path("/home/alwin/apps/tickflow-recovery-artifacts/20260724-1605/uv")
 PNPM = Path(
-    "/home/alwin/apps/tickflow-recovery-artifacts/20260724-1542/"
+    "/home/alwin/apps/tickflow-recovery-artifacts/20260724-1605/"
     "pnpm-runtime/node_modules/pnpm/bin/pnpm.cjs"
 )
 

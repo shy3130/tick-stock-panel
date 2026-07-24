@@ -26,6 +26,17 @@ type RunStatus = {
 const marketNames: Record<string, string> = { cn: 'A股', hk: '港股', us: '美股' }
 const periods = [['15m', '15分钟'], ['30m', '30分钟'], ['day', '日线']] as const
 
+async function ensureServiceConnection(fetcher: Fetcher) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      if ((await fetcher('/health')).ok) return
+    } catch {
+      // A safe GET may be retried after a deployment switches connections.
+    }
+  }
+  throw new Error('服务连接中断，请稍后重新执行')
+}
+
 export function DowStrategyCard({ market, fetcher = fetch }: { market: string; fetcher?: Fetcher }) {
   const [open, setOpen] = useState(true)
   const [stocks, setStocks] = useState<Stock[]>([])
@@ -43,6 +54,7 @@ export function DowStrategyCard({ market, fetcher = fetch }: { market: string; f
     setProgress(null)
     setError('')
     try {
+      await ensureServiceConnection(fetcher)
       const startResponse = await fetcher('/api/dow-strategy/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
