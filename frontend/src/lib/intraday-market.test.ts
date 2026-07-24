@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { intradayTimeLabel, intradayTimes } from './intraday-market'
+import { intradayTimeLabel, intradayTimes, isMarketOpen } from './intraday-market'
 
 describe('intraday market sessions', () => {
   it('keeps market-local minute timestamps unchanged', () => {
@@ -34,5 +34,17 @@ describe('intraday market sessions', () => {
     expect(times).toContain('11:30')
     expect(times).not.toContain('12:30')
     expect(times).toContain('13:00')
+  })
+
+  it('detects CN and Hong Kong sessions in Asia/Shanghai', () => {
+    expect(isMarketOpen('700.HK', new Date('2026-07-24T01:30:00Z'))).toBe(true)
+    expect(isMarketOpen('700.HK', new Date('2026-07-24T04:30:00Z'))).toBe(false)
+    expect(isMarketOpen('000001.SZ', new Date('2026-07-24T06:00:00Z'))).toBe(true)
+    expect(isMarketOpen('000001.SZ', new Date('2026-07-25T02:00:00Z'))).toBe(false)
+  })
+
+  it('detects the US regular session in America/New_York', () => {
+    expect(isMarketOpen('AAPL.US', new Date('2026-07-24T14:00:00Z'))).toBe(true)
+    expect(isMarketOpen('AAPL.US', new Date('2026-07-24T21:00:00Z'))).toBe(false)
   })
 })

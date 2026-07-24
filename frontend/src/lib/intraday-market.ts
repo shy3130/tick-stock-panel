@@ -39,3 +39,21 @@ export function intradayTimes(symbol?: string): string[] {
     return result
   })
 }
+
+export function isMarketOpen(symbol: string, now = new Date()): boolean {
+  const market = marketForSymbol(symbol)
+  const timeZone = market === 'us' ? 'America/New_York' : 'Asia/Shanghai'
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now)
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  if (values.weekday === 'Sat' || values.weekday === 'Sun') return false
+  const current = minuteOfDay(`${values.hour}:${values.minute}`)
+  return MARKET_SESSIONS[market].some(
+    ([start, end]) => current >= minuteOfDay(start) && current <= minuteOfDay(end),
+  )
+}
