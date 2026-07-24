@@ -22,6 +22,7 @@ import {
 } from '@/components/dow-monitor/useDowMonitor'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { useRealtimeMarketData } from '@/lib/realtimeMarketData'
 
 type SignalFilter = 'all' | 'active' | 'buy' | 'sell'
 type InstrumentSuggestion = {
@@ -88,10 +89,11 @@ export function DowMonitor({
   const [toggleErrors, setToggleErrors] = useState<Set<string>>(() => new Set())
   const [removeErrors, setRemoveErrors] = useState<Set<string>>(() => new Set())
   const [readErrors, setReadErrors] = useState<Map<string, string>>(() => new Map())
+  const [realtimeActive, setRealtimeActive] = useState(false)
   const [detail, setDetail] = useState<{ symbol: string; timeframe: DowTimeframe } | null>(null)
   const symbolFormRef = useRef<HTMLFormElement>(null)
   const detailScrollPosition = useRef(0)
-  const overview = useDowMonitorOverview(market)
+  const overview = useDowMonitorOverview(market, realtimeActive)
   const notificationQuery = useDowNotifications(market)
   const status = useDowMonitorStatus()
   const addSymbol = useAddDowMonitorSymbol()
@@ -137,6 +139,18 @@ export function DowMonitor({
   }, [])
 
   const symbols = overview.data?.symbols ?? []
+  const realtimeSymbols = useMemo(
+    () => symbols.filter(item => item.enabled).map(item => item.symbol),
+    [symbols],
+  )
+  const realtime = useRealtimeMarketData(
+    realtimeSymbols,
+    ['quote', 'depth', 'candlestick'],
+    1,
+  )
+  useEffect(() => {
+    setRealtimeActive(realtime.status === 'realtime')
+  }, [realtime.status])
   const notifications = notificationQuery.data?.notifications ?? []
   const filteredSymbols = useMemo(
     () => filterSymbols(symbols, market, signal),
@@ -418,6 +432,8 @@ export function DowMonitor({
               <DowMonitorCard
                 key={item.symbol}
                 item={item}
+                realtimeState={realtime.states.get(item.symbol.toUpperCase())}
+                realtimeStatus={realtime.status}
                 notifications={filteredNotifications.filter(
                   notification => notification.symbol === item.symbol,
                 )}

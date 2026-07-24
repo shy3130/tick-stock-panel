@@ -6,6 +6,10 @@ import { StockIntradayChart } from '@/components/StockIntradayChart'
 import { useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
+import type {
+  RealtimeStatus,
+  RealtimeSymbolState,
+} from '@/lib/realtimeMarketData'
 import {
   loadInfoFields,
   saveInfoFields,
@@ -34,6 +38,8 @@ interface Props {
   onToggleWatchlist?: () => void
   /** 分时图自动刷新间隔(ms)。undefined = 不轮询。个股对话框盘中实时刷新时传入。 */
   refetchIntervalMs?: number
+  realtimeState?: RealtimeSymbolState
+  realtimeStatus?: RealtimeStatus
 }
 
 export { getDefaultRange }
@@ -54,6 +60,8 @@ export function StockPanel({
   inWatchlist,
   onToggleWatchlist,
   refetchIntervalMs,
+  realtimeState,
+  realtimeStatus,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
@@ -133,6 +141,8 @@ export function StockPanel({
         onMonitor={onMonitor}
         inWatchlist={inWatchlist}
         onToggleWatchlist={onToggleWatchlist}
+        realtimeState={realtimeState}
+        realtimeStatus={realtimeStatus}
       />
 
       <div className="flex gap-3 items-start">
@@ -162,6 +172,8 @@ export function StockPanel({
             onPriceHover={setLinkedPrice}
             className="flex-1 min-w-0 border-l border-border pl-3"
             refetchIntervalMs={refetchIntervalMs}
+            realtimeState={realtimeState}
+            realtimeStatus={realtimeStatus}
           />
         )}
       </div>

@@ -4,6 +4,11 @@ import type { KlineRow, FinancialMetricRecord } from '@/lib/api'
 import { fmtPrice, fmtBigNum, fmtVolume } from '@/lib/format'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { INFO_GROUPS, type ColumnConfig } from '@/lib/stock-info-fields'
+import { bestBidAsk } from '@/lib/realtimeOverlays'
+import type {
+  RealtimeStatus,
+  RealtimeSymbolState,
+} from '@/lib/realtimeMarketData'
 
 const BULL = '#C74040'
 const BEAR = '#2D9B65'
@@ -23,6 +28,8 @@ interface Props {
   /** 加自选回调 + 是否已自选 (有 onToggle 时渲染 Star 图标) */
   inWatchlist?: boolean
   onToggleWatchlist?: () => void
+  realtimeState?: RealtimeSymbolState
+  realtimeStatus?: RealtimeStatus
 }
 
 /**
@@ -91,7 +98,20 @@ function renderExtInline(
   )
 }
 
-export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist }: Props) {
+export function StockInfoBar({
+  symbol,
+  name,
+  stockInfo,
+  rows,
+  fields,
+  onFieldsChange,
+  financialMetrics,
+  onMonitor,
+  inWatchlist,
+  onToggleWatchlist,
+  realtimeState,
+  realtimeStatus,
+}: Props) {
   // 弹窗开关：纯本地状态，与数据/配置无关，放早期 return 之前
   const [customizerOpen, setCustomizerOpen] = useState(false)
   // ext 标签展开状态：按 symbol::colId，切股/切字段时互不干扰
@@ -106,13 +126,29 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
     })
   }
 
-  if (rows.length === 0) return null
+  const liveQuote = realtimeState?.quote
+  const liveClose = typeof liveQuote?.lastDone === 'number'
+    ? liveQuote.lastDone
+    : null
+  if (rows.length === 0 && liveClose == null) return null
 
-  const latest = rows[rows.length - 1]
+  const latest = rows[rows.length - 1] ?? {
+    date: liveQuote?.timestamp?.slice(0, 10) ?? '',
+    open: liveQuote?.open ?? liveClose ?? 0,
+    high: liveQuote?.high ?? liveClose ?? 0,
+    low: liveQuote?.low ?? liveClose ?? 0,
+    close: liveClose ?? 0,
+    volume: liveQuote?.volume,
+  }
   const prev = rows.length >= 2 ? rows[rows.length - 2] : null
-  const close = Number(latest.close)
-  const chg = prev ? close - Number(prev.close) : 0
-  const chgPct = prev ? chg / Number(prev.close) * 100 : 0
+  const close = liveClose ?? Number(latest.close)
+  const previousClose = typeof liveQuote?.prevClose === 'number'
+    ? liveQuote.prevClose
+    : prev
+      ? Number(prev.close)
+      : close
+  const chg = close - previousClose
+  const chgPct = previousClose !== 0 ? chg / previousClose * 100 : 0
   const isUp = chg >= 0
   const clr = isUp ? BULL : BEAR
 
@@ -134,17 +170,20 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
       case 'market_cap':       return marketCap != null ? fmtBigNum(marketCap) : null
       case 'float_market_cap': return floatMarketCap != null ? fmtBigNum(floatMarketCap) : null
       case 'turnover':         return turnoverRate != null ? `${turnoverRate.toFixed(2)}%` : null
-      case 'volume':           return latest.volume != null ? fmtVolume(Number(latest.volume)) : null
+      case 'volume': {
+        const volume = liveQuote?.volume ?? latest.volume
+        return volume != null ? fmtVolume(Number(volume)) : null
+      }
       case 'amplitude': {
         const prevClose = prev ? Number(prev.close) : null
         if (prevClose == null || prevClose === 0) return null
-        const hi = Number(latest.high)
-        const lo = Number(latest.low)
+        const hi = Number(liveQuote?.high ?? latest.high)
+        const lo = Number(liveQuote?.low ?? latest.low)
         return `${((hi - lo) / prevClose * 100).toFixed(2)}%`
       }
-      case 'open': return fmtPrice(Number(latest.open))
-      case 'high': return fmtPrice(Number(latest.high))
-      case 'low':  return fmtPrice(Number(latest.low))
+      case 'open': return fmtPrice(Number(liveQuote?.open ?? latest.open))
+      case 'high': return fmtPrice(Number(liveQuote?.high ?? latest.high))
+      case 'low':  return fmtPrice(Number(liveQuote?.low ?? latest.low))
       // 财务指标：百分比字段存储为百分点(12.3 表示 12.3%)，直接 toFixed(2) + %
       case 'eps':         return financialMetrics?.eps_basic != null ? fmtPrice(financialMetrics.eps_basic) : null
       case 'bps':         return financialMetrics?.bps != null ? fmtPrice(financialMetrics.bps) : null
@@ -171,6 +210,12 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
   // 按是否单独显示分组：普通列共一行，standalone 列各占一行
   const inlineFields = visibleFields.filter(f => !f.standalone)
   const standaloneFields = visibleFields.filter(f => f.standalone)
+  const { bid, ask } = bestBidAsk(realtimeState?.depth)
+  const delayed = Boolean(
+    realtimeState?.quoteDelayed
+    || realtimeState?.depthDelayed
+    || realtimeState?.candlestickDelayed,
+  )
 
   // 渲染单个字段（builtin / ext 通用）
   const renderField = (f: ColumnConfig): ReactNode => {
@@ -214,6 +259,33 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
         <span style={{ color: clr }} className="tabular-nums">
           {isUp ? '+' : ''}{fmtPrice(chgPct)}%
         </span>
+        {bid != null && (
+          <span className="text-[10px] text-muted">
+            买一 <span className="text-secondary">{fmtPrice(bid)}</span>
+          </span>
+        )}
+        {ask != null && (
+          <span className="text-[10px] text-muted">
+            卖一 <span className="text-secondary">{fmtPrice(ask)}</span>
+          </span>
+        )}
+        {realtimeStatus && (
+          <span
+            className={`rounded px-1.5 py-0.5 text-[9px] ${
+              realtimeStatus === 'realtime' && !delayed
+                ? 'bg-emerald-500/10 text-emerald-400'
+                : 'bg-amber-500/10 text-amber-400'
+            }`}
+          >
+            {delayed
+              ? '实时数据延迟'
+              : realtimeStatus === 'realtime'
+                ? '实时'
+                : realtimeStatus === 'connecting'
+                  ? '实时连接中'
+                  : 'HTTP 回退'}
+          </span>
+        )}
         {/* 右侧操作按钮：加自选 + 加监控 + 信息条配置 */}
         <div className="ml-auto self-center flex items-center gap-1">
           {onToggleWatchlist && (

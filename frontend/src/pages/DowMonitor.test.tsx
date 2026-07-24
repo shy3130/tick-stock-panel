@@ -14,6 +14,7 @@ import type {
   DowMonitorTimeframeState,
   DowTimeframe,
 } from '@/components/dow-monitor/types'
+import type { RealtimeSymbolState } from '@/lib/realtimeMarketData'
 
 import { DowMonitor } from './DowMonitor'
 
@@ -35,10 +36,26 @@ const apiMocks = vi.hoisted(() => ({
   instrumentSearch: vi.fn(),
 }))
 
+const realtimeMocks = vi.hoisted(() => ({
+  useRealtimeMarketData: vi.fn(),
+  view: {
+    status: 'fallback',
+    states: new Map(),
+  } as {
+    status: 'connecting' | 'realtime' | 'fallback' | 'disconnected'
+    states: Map<string, RealtimeSymbolState>
+  },
+}))
+
 vi.mock('@/lib/api', () => ({
   api: {
     instrumentSearch: apiMocks.instrumentSearch,
   },
+}))
+
+vi.mock('@/lib/realtimeMarketData', () => ({
+  useRealtimeMarketData: (...args: unknown[]) =>
+    realtimeMocks.useRealtimeMarketData(...args),
 }))
 
 const chartMocks = vi.hoisted(() => ({
@@ -277,6 +294,12 @@ function deferred<T = unknown>() {
 }
 
 beforeEach(() => {
+  realtimeMocks.view = {
+    status: 'fallback',
+    states: new Map(),
+  }
+  realtimeMocks.useRealtimeMarketData.mockReset()
+  realtimeMocks.useRealtimeMarketData.mockImplementation(() => realtimeMocks.view)
   apiMocks.instrumentSearch.mockReset()
   apiMocks.instrumentSearch.mockResolvedValue({ results: [] })
   hooks.add.mockReset()
@@ -408,6 +431,57 @@ describe('Dow monitor page', () => {
 
     const unnamed = screen.getByTestId('card-INTC.US')
     expect(within(unnamed).getAllByText('INTC.US')).toHaveLength(1)
+  })
+
+  it('uses the shared realtime state for price, best bid/ask, and the live badge', () => {
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([[
+        '01347.HK',
+        {
+          symbol: '01347.HK',
+          streamId: 'stream-1',
+          sequence: 4,
+          eventAt: '2026-07-24T10:00:00+08:00',
+          publishedAt: '2026-07-24T10:00:00.100+08:00',
+          quote: {
+            lastDone: 14,
+            prevClose: 13.5,
+            timestamp: '2026-07-24T10:00:00+08:00',
+          },
+          depth: {
+            bids: [{ position: 1, price: 13.99 }],
+            asks: [{ position: 1, price: 14.01 }],
+          },
+          candlestick: {
+            period: 'min_1',
+            timestamp: '2026-07-24T10:00:00+08:00',
+            open: 13.8,
+            high: 14.1,
+            low: 13.7,
+            close: 14,
+            volume: 100,
+            turnover: 1400,
+          },
+          quoteDelayed: false,
+          depthDelayed: false,
+          candlestickDelayed: false,
+        },
+      ]]),
+    }
+
+    render(<DowMonitor />)
+
+    const card = screen.getByTestId('card-01347.HK')
+    expect(within(card).getByText('14.00')).toBeInTheDocument()
+    expect(within(card).getByText('+3.70%')).toBeInTheDocument()
+    expect(within(card).getByText('买一 13.99 · 卖一 14.01')).toBeInTheDocument()
+    expect(within(card).getByText('实时')).toBeInTheDocument()
+    expect(realtimeMocks.useRealtimeMarketData).toHaveBeenCalledWith(
+      ['01347.HK', 'INTC.US', '600000.SH', '000001.SZ'],
+      ['quote', 'depth', 'candlestick'],
+      1,
+    )
   })
 
   it('uses red for rising prices and green for falling prices', () => {

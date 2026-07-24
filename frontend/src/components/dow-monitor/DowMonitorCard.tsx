@@ -2,6 +2,15 @@ import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { cn } from '@/lib/cn'
+import {
+  bestBidAsk,
+  overlayDowTimeframeState,
+  overlayQuote,
+} from '@/lib/realtimeOverlays'
+import type {
+  RealtimeStatus,
+  RealtimeSymbolState,
+} from '@/lib/realtimeMarketData'
 
 import { DowMiniChart, getLatestValidDowSignalSide } from './DowMiniChart'
 import { formatServerTimestamp } from './formatServerTimestamp'
@@ -95,6 +104,8 @@ export function DowMonitorCard({
   togglePending = false,
   removePending = false,
   readPendingIds,
+  realtimeState,
+  realtimeStatus,
 }: {
   item: DowMonitorOverviewSymbol
   notifications: DowMonitorNotification[]
@@ -110,19 +121,26 @@ export function DowMonitorCard({
   togglePending?: boolean
   removePending?: boolean
   readPendingIds?: ReadonlySet<string>
+  realtimeState?: RealtimeSymbolState
+  realtimeStatus?: RealtimeStatus
 }) {
   const [timeframe, setTimeframe] = useState<DowTimeframe>('5m')
-  const selectedState = item.states[timeframe]
+  const displayedItem = overlayQuote(item, realtimeState)
+  const selectedState = overlayDowTimeframeState(
+    displayedItem.states[timeframe],
+    realtimeState,
+  )
   const blocked = blockedLabel(item, selectedState, forceBlocked, blockedReason)
-  const price = quoteReady
-    && typeof item.last_price === 'number'
-    && Number.isFinite(item.last_price)
-    ? item.last_price
+  const quoteAvailable = quoteReady || Boolean(realtimeState?.quote)
+  const price = quoteAvailable
+    && typeof displayedItem.last_price === 'number'
+    && Number.isFinite(displayedItem.last_price)
+    ? displayedItem.last_price
     : null
-  const change = quoteReady
-    && typeof item.change_pct === 'number'
-    && Number.isFinite(item.change_pct)
-    ? item.change_pct * 100
+  const change = quoteAvailable
+    && typeof displayedItem.change_pct === 'number'
+    && Number.isFinite(displayedItem.change_pct)
+    ? displayedItem.change_pct * 100
     : null
   const priceDirectionClass = change == null
     ? 'text-foreground'
@@ -134,8 +152,16 @@ export function DowMonitorCard({
   const name = typeof item.name === 'string' && item.name.trim() && item.name.trim() !== item.symbol
     ? item.name.trim()
     : null
-  const quoteTime = quoteReady ? formatServerTimestamp(item.quote_timestamp) : null
+  const quoteTime = quoteAvailable
+    ? formatServerTimestamp(displayedItem.quote_timestamp)
+    : null
   const successTime = quoteReady ? formatServerTimestamp(item.last_success_at) : null
+  const { bid, ask } = bestBidAsk(realtimeState?.depth)
+  const realtimeDelayed = Boolean(
+    realtimeState?.quoteDelayed
+    || realtimeState?.depthDelayed
+    || realtimeState?.candlestickDelayed,
+  )
   return (
     <article
       data-testid={`card-${item.symbol}`}
@@ -207,6 +233,29 @@ export function DowMonitorCard({
             <span className="ml-auto flex min-w-0 gap-2 overflow-hidden font-mono text-[9px] text-muted">
               {quoteTime && <span className="whitespace-nowrap">行情 {quoteTime}</span>}
               {successTime && <span className="whitespace-nowrap">成功 {successTime}</span>}
+            </span>
+          )}
+          {(bid != null || ask != null) && (
+            <span className="shrink-0 font-mono text-[9px] text-muted">
+              买一 {bid?.toFixed(2) ?? '—'} · 卖一 {ask?.toFixed(2) ?? '—'}
+            </span>
+          )}
+          {realtimeStatus && (realtimeState || realtimeStatus !== 'realtime') && (
+            <span
+              className={cn(
+                'shrink-0 rounded px-1 py-0.5 text-[9px]',
+                realtimeStatus === 'realtime' && !realtimeDelayed
+                  ? 'bg-emerald-500/10 text-emerald-400'
+                  : 'bg-amber-500/10 text-amber-400',
+              )}
+            >
+              {realtimeDelayed
+                ? '延迟'
+                : realtimeStatus === 'realtime'
+                  ? '实时'
+                  : realtimeStatus === 'connecting'
+                    ? '连接中'
+                    : 'HTTP 回退'}
             </span>
           )}
         </div>

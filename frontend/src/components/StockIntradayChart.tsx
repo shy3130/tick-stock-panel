@@ -4,6 +4,11 @@ import { Loader2 } from 'lucide-react'
 import { api, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
+import { mergeMinuteRows } from '@/lib/realtimeOverlays'
+import type {
+  RealtimeStatus,
+  RealtimeSymbolState,
+} from '@/lib/realtimeMarketData'
 
 interface Props {
   symbol: string
@@ -14,6 +19,8 @@ interface Props {
   onPriceHover?: (price: number | null) => void
   /** 自动刷新间隔(ms)。undefined/0 = 不轮询(默认)。个股对话框盘中实时刷新时传入。 */
   refetchIntervalMs?: number
+  realtimeState?: RealtimeSymbolState
+  realtimeStatus?: RealtimeStatus
 }
 
 export function StockIntradayChart({
@@ -24,6 +31,8 @@ export function StockIntradayChart({
   className,
   onPriceHover,
   refetchIntervalMs,
+  realtimeState,
+  realtimeStatus,
 }: Props) {
   const qc = useQueryClient()
   const [minuteDismissed, setMinuteDismissed] = useState(false)
@@ -44,7 +53,12 @@ export function StockIntradayChart({
     },
   })
 
-  const minuteRows: MinuteKlineRow[] = useMemo(() => minute.data?.rows ?? [], [minute.data?.rows])
+  const minuteRows: MinuteKlineRow[] = useMemo(() => {
+    const rows = minute.data?.rows ?? []
+    const candle = realtimeState?.candlestick
+    if (!candle || candle.timestamp.slice(0, 10) !== date) return rows
+    return mergeMinuteRows(rows, candle)
+  }, [date, minute.data?.rows, realtimeState?.candlestick])
   // source=none 表示本地无数据且 TickFlow 也拉不到 (停牌/复牌延迟/非交易日)
   // 此时不弹"是否获取"询问窗, 只做静态提示, 避免误导用户去拉明知拉不到的数据
   const sourceIsNone = minute.data?.source === 'none'
@@ -58,6 +72,12 @@ export function StockIntradayChart({
 
   return (
     <div className={className} style={{ height, flexShrink: 0 }}>
+      {realtimeStatus === 'fallback' && (
+        <div className="pb-1 text-[10px] text-amber-400">实时连接不可用，当前使用 HTTP 数据</div>
+      )}
+      {realtimeState?.candlestickDelayed && (
+        <div className="pb-1 text-[10px] text-amber-400">当前分钟数据延迟</div>
+      )}
       {minute.isLoading && <div className="text-xs text-muted py-2">分时加载中…</div>}
       {!minute.isLoading && minuteRows.length === 0 && (
         <>

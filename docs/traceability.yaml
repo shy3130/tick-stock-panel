@@ -30,7 +30,12 @@ requirements:
     specification: SPEC-REALTIME-UI-GATEWAY-001
     implementation:
       - frontend/src/lib/realtimeMarketData.ts
+      - frontend/src/lib/realtimeOverlays.ts
       - frontend/src/components/StockPreviewDialog.tsx
+      - frontend/src/components/StockPanel.tsx
+      - frontend/src/components/StockInfoBar.tsx
+      - frontend/src/components/StockIntradayChart.tsx
+      - frontend/src/components/dow-monitor/DowMonitorCard.tsx
       - frontend/src/pages/DowMonitor.tsx
     tests: {path: tests/spec_contracts/test_realtime_frontend_contract.py, type: executable-test}
     acceptance:

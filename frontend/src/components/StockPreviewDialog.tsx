@@ -10,6 +10,7 @@ import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
+import { useRealtimeMarketData } from '@/lib/realtimeMarketData'
 
 interface Props {
   symbol: string | null
@@ -45,6 +46,12 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const qc = useQueryClient()
+  const realtime = useRealtimeMarketData(
+    symbol ? [symbol] : [],
+    ['quote', 'depth', 'candlestick'],
+    10,
+  )
+  const realtimeState = symbol ? realtime.states.get(symbol.toUpperCase()) : undefined
 
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -86,7 +93,11 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const { data: quoteStatus } = useQuoteStatus()
   const realtimeRunning = quoteStatus?.running ?? false
   const intradayRefreshOn = prefs?.minute_intraday_refresh ?? false
-  const intradayRefetchMs = (intradayRefreshOn && realtimeRunning)
+  const intradayRefetchMs = (
+    intradayRefreshOn
+    && realtimeRunning
+    && realtime.status !== 'realtime'
+  )
     ? (prefs?.minute_intraday_refresh_interval ?? 6) * 1000
     : undefined
 
@@ -263,6 +274,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 inWatchlist={inWatchlist}
                 onToggleWatchlist={() => toggleWatchlist.mutate()}
                 refetchIntervalMs={intradayRefetchMs}
+                realtimeState={realtimeState}
+                realtimeStatus={realtime.status}
               />
             </div>
 

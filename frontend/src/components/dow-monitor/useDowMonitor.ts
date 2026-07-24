@@ -9,11 +9,14 @@ const POLL_INTERVAL_MS = 15_000
 const DOW_MONITOR_OVERVIEW_KEY = ['dow-monitor', 'overview'] as const
 const DOW_MONITOR_NOTIFICATIONS_KEY = ['dow-monitor', 'notifications'] as const
 
-export function useDowMonitorOverview(market: DowMonitorMarket) {
+export function useDowMonitorOverview(
+  market: DowMonitorMarket,
+  realtimeActive = false,
+) {
   return useQuery({
     queryKey: QK.dowMonitorOverview(market),
     queryFn: () => api.dowMonitorOverview(market),
-    refetchInterval: POLL_INTERVAL_MS,
+    refetchInterval: realtimeActive ? false : POLL_INTERVAL_MS,
     placeholderData: keepPreviousData,
   })
 }

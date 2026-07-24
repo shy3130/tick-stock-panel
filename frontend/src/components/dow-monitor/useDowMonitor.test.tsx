@@ -61,6 +61,22 @@ describe('Dow monitor queries', () => {
     )
   })
 
+  it('keeps the overview query but pauses its polling while realtime is active', async () => {
+    const { queryClient, wrapper } = createWrapper()
+
+    renderHook(() => useDowMonitorOverview('hk', true), { wrapper })
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/dow-monitor/overview?market=hk', expect.anything())
+    })
+    const query = queryClient.getQueryCache().find({
+      queryKey: ['dow-monitor', 'overview', 'hk'],
+      exact: true,
+    })
+    const options = query?.options as { refetchInterval?: number | false } | undefined
+    expect(options?.refetchInterval).toBe(false)
+  })
+
   it('uses market and timeframe only as query parameters', async () => {
     const { wrapper } = createWrapper()
 
