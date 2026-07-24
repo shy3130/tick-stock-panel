@@ -1,6 +1,6 @@
 # Production Source Recovery Acceptance
 
-Status: not yet accepted
+Status: accepted on 2026-07-24 16:23 +08:00
 
 Requirement: `REQ-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001`
 
@@ -9,7 +9,10 @@ Authoritative image:
 
 ## Lower-layer verification
 
-Pending final commit recording. The preliminary `build-source.tar.gz` was
+Recovered commit:
+`23a2ae4eda7fecae26ecb14275f536fb7eb58531`
+
+The preliminary 1502 `build-source.tar.gz` was
 rejected because its broad `--exclude=data` rule omitted
 `frontend/src/components/data/`. The authoritative 1502 source input is
 `build-source-v2.tar.gz`, verified by `SHA256SUMS-v2`; the authoritative 1542
@@ -24,10 +27,17 @@ an Enriched rebuild propagates the API `job_id` to the owning data page. The
 1542 HK alias test was observed RED against the recovered 1502 source and must
 be GREEN after importing the image-authoritative 1542 backend.
 The 1605 transient-connectivity test was likewise observed RED against the
-recovered 1542 frontend and must be GREEN after importing the 1605 card.
+recovered 1542 frontend and became GREEN after importing the 1605 card.
 
-Record timestamps, exact recovered commit, manifest result, backend test
-counts, frontend test counts, and frontend build result here.
+Verified results:
+
+- `SHA256SUMS` for the 1605 source, backend, and static archives: 3/3 OK.
+- Backend image manifest: all recovered backend files match image
+  `sha256:fcf690148cb121e4abf328ae8d38a90a39ee83c9ef3ae4bf3d8e298348d2793a`.
+- Specification compliance and the three root contract files: 4/4 passed.
+- Backend characterization: 27/27 passed.
+- Frontend characterization: 43/43 passed across six behavior suites.
+- Frontend TypeScript and Vite production build: passed, 2705 modules.
 
 Commands:
 
@@ -40,7 +50,24 @@ pnpm --dir frontend build
 
 ## Runtime semantic acceptance
 
-Pending. Record candidate image ID, `/dow-monitor`, stock search suggestions,
-`/api/dow-monitor/symbols`, `/screener`, Dow strategy proxy, health,
-single-stock preview, SSE observations, and confirmation that production
-remained on the authoritative image.
+Candidate image:
+`sha256:b926f4555743d421a73370eec12602d4d36b065f8b7d612ad249f65b7e61032d`
+
+Candidate label ties the image to baseline
+`sha256:fcf690148cb121e4abf328ae8d38a90a39ee83c9ef3ae4bf3d8e298348d2793a`
+and source commit `23a2ae4e`.
+
+Loopback candidate observations:
+
+- `/health`: HTTP 200, version `0.1.86`.
+- `/dow-monitor` and `/screener`: HTTP 200.
+- ClickHouse built-in provider registered and four capabilities became active.
+- Authenticated `/api/dow-monitor/symbols`: HTTP 200 with 9 symbols.
+- Authenticated HK `TENCENT` search: 2 suggestions including `700.HK`.
+- Authenticated `700.HK` daily preview query: HTTP 200 with 7 rows.
+- Authenticated Dow strategy pool proxy: HTTP 200.
+- `/api/intraday/stream`: two 15-second SSE ping frames observed.
+
+The candidate ran as `TickFlow_Recovery_1605` on loopback port 13018. The
+production container remained running throughout on the authoritative 1605
+tag and image ID; recovery did not replace, stop, or restart it.
