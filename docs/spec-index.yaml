@@ -5,5 +5,11 @@ specifications:
     path: docs/specs/production-source-recovery.md
     status: authoritative
     requirements: [REQ-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001]
+  - id: SPEC-REALTIME-UI-GATEWAY-001
+    path: docs/specs/realtime-ui-gateway.md
+    status: authoritative
+    requirements:
+      - REQ-REALTIME-UI-GATEWAY-001
+      - REQ-REALTIME-UI-FALLBACK-001
 conflicts: []
 exceptions: []

@@ -1,0 +1,39 @@
+{
+  "type": "update",
+  "version": "v1",
+  "streamId": "8bd8ad30-b2f7-4e6f-9724-53d8c0abf19b",
+  "sequence": 182931,
+  "symbol": "700.HK",
+  "market": "hk",
+  "eventAt": "2026-07-24T10:00:00+08:00",
+  "publishedAt": "2026-07-24T10:00:00.120+08:00",
+  "datasets": {
+    "quote": {
+      "lastDone": 550.2,
+      "prevClose": 548.0,
+      "open": 549.0,
+      "high": 552.0,
+      "low": 547.8,
+      "volume": 1200000,
+      "turnover": 660000000,
+      "tradeStatus": "Normal",
+      "timestamp": "2026-07-24T10:00:00+08:00"
+    },
+    "depth": {
+      "bids": [{"position": 1, "price": 550.0, "volume": 1000, "orderCount": 3}],
+      "asks": [{"position": 1, "price": 550.2, "volume": 800, "orderCount": 2}],
+      "timestamp": "2026-07-24T10:00:00+08:00"
+    },
+    "candlestick": {
+      "period": "min_1",
+      "timestamp": "2026-07-24T10:00:00+08:00",
+      "open": 550.0,
+      "high": 550.3,
+      "low": 549.9,
+      "close": 550.2,
+      "volume": 2200,
+      "turnover": 1210000
+    }
+  },
+  "account": {"cash": 1}
+}

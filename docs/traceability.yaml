@@ -16,3 +16,20 @@ requirements:
     acceptance:
       - {path: docs/acceptance/production-source-recovery.md, type: semantic-acceptance}
       - {path: docs/reviews/production-source-recovery.md, type: independent-review}
+  - id: REQ-REALTIME-UI-GATEWAY-001
+    specification: SPEC-REALTIME-UI-GATEWAY-001
+    implementation:
+      - backend/app/main.py
+    tests: {path: tests/spec_contracts/test_production_source_semantics.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/realtime-ui-fast-path.md, type: semantic-acceptance}
+      - {path: docs/reviews/realtime-ui-fast-path.md, type: independent-review}
+  - id: REQ-REALTIME-UI-FALLBACK-001
+    specification: SPEC-REALTIME-UI-GATEWAY-001
+    implementation:
+      - frontend/src/components/StockPreviewDialog.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests: {path: tests/spec_contracts/test_production_source_semantics.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/realtime-ui-fast-path.md, type: semantic-acceptance}
+      - {path: docs/reviews/realtime-ui-fast-path.md, type: independent-review}

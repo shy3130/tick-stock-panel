@@ -65,6 +65,7 @@ desktop = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "jsonschema>=4.23",
     "ruff>=0.5",
     "mypy>=1.10",
 ]

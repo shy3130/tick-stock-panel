@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://longbridge-stock.local/contracts/realtime-ui/v1.schema.json",
+  "title": "Realtime UI protocol v1 market-data envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "version",
+    "streamId",
+    "sequence",
+    "symbol",
+    "market",
+    "eventAt",
+    "publishedAt",
+    "datasets"
+  ],
+  "properties": {
+    "type": {
+      "enum": ["update", "snapshot"]
+    },
+    "version": {
+      "const": "v1"
+    },
+    "streamId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "symbol": {
+      "type": "string",
+      "minLength": 1
+    },
+    "market": {
+      "enum": ["cn", "hk", "us"]
+    },
+    "eventAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "publishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "datasets": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "quote": {
+          "$ref": "#/$defs/quote"
+        },
+        "depth": {
+          "$ref": "#/$defs/depth"
+        },
+        "candlestick": {
+          "$ref": "#/$defs/candlestick"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "number": {
+      "type": "number"
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lastDone",
+        "prevClose",
+        "open",
+        "high",
+        "low",
+        "volume",
+        "turnover",
+        "tradeStatus",
+        "timestamp"
+      ],
+      "properties": {
+        "lastDone": {"$ref": "#/$defs/number"},
+        "prevClose": {"$ref": "#/$defs/number"},
+        "open": {"$ref": "#/$defs/number"},
+        "high": {"$ref": "#/$defs/number"},
+        "low": {"$ref": "#/$defs/number"},
+        "volume": {"$ref": "#/$defs/number"},
+        "turnover": {"$ref": "#/$defs/number"},
+        "tradeStatus": {"type": "string"},
+        "timestamp": {"type": "string", "format": "date-time"}
+      }
+    },
+    "depthLevel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position", "price", "volume", "orderCount"],
+      "properties": {
+        "position": {"type": "integer", "minimum": 1, "maximum": 10},
+        "price": {"$ref": "#/$defs/number"},
+        "volume": {"$ref": "#/$defs/number"},
+        "orderCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "depth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bids", "asks", "timestamp"],
+      "properties": {
+        "bids": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {"$ref": "#/$defs/depthLevel"}
+        },
+        "asks": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {"$ref": "#/$defs/depthLevel"}
+        },
+        "timestamp": {"type": "string", "format": "date-time"}
+      }
+    },
+    "candlestick": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "period",
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "turnover"
+      ],
+      "properties": {
+        "period": {"const": "min_1"},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "open": {"$ref": "#/$defs/number"},
+        "high": {"$ref": "#/$defs/number"},
+        "low": {"$ref": "#/$defs/number"},
+        "close": {"$ref": "#/$defs/number"},
+        "volume": {"$ref": "#/$defs/number"},
+        "turnover": {"$ref": "#/$defs/number"}
+      }
+    }
+  }
+}
