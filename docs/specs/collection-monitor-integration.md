@@ -36,6 +36,11 @@ The authoritative upstream query contract is:
 `date`, `symbol`, `recovered`, `limit`, and `offset`. Unknown query parameters
 MUST be rejected rather than silently ignored.
 
+The four upstream path templates are identical to the TickFlow paths:
+`/api/collection-monitor/overview`,
+`/api/collection-monitor/markets/{market}`,
+`/api/collection-monitor/tasks`, and `/api/collection-monitor/gaps`.
+
 ## REQ-COLLECTION-MONITOR-PAGE-001
 
 TickFlow MUST provide an authenticated native page at `/collection-monitor`
