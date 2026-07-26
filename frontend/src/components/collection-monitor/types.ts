@@ -9,6 +9,7 @@ export type DatasetKey =
   | 'candlestick_1m'
   | 'depth'
   | 'trades'
+export type DatasetEvidenceKey = DatasetKey | 'market_temperature'
 
 export interface LastConfirmedEvidence {
   evidenceAt: string
@@ -37,8 +38,8 @@ export interface CollectionMonitorOverview extends EvidenceEnvelope {
 
 export interface DatasetCollectionEvidence extends EvidenceEnvelope {
   market: MarketKey
-  datasetKey?: DatasetKey
-  dataset?: DatasetKey
+  datasetKey?: DatasetEvidenceKey
+  dataset?: DatasetEvidenceKey
   taskHealth?: HealthState
   dataHealth?: HealthState
   displayState?: HealthState

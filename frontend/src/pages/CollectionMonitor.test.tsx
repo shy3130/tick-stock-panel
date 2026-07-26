@@ -380,6 +380,46 @@ describe('CollectionMonitor', () => {
     )
   })
 
+  it('renders market temperature evidence without exposing it as a task or gap filter', async () => {
+    installHealthyFetch(overview, {
+      ...markets,
+      hk: {
+        ...markets.hk,
+        datasets: [
+          ...markets.hk.datasets,
+          {
+            market: 'hk',
+            datasetKey: 'market_temperature',
+            taskHealth: 'green',
+            dataHealth: 'green',
+            displayState: 'green',
+            status: 'green',
+            evidenceState: 'live',
+            evidenceAt,
+            expectedCount: 1,
+            collectedCount: 1,
+            missingCount: 0,
+            duplicateCount: 0,
+            latestDataAt: '2026-07-26T10:31:00+08:00',
+            provenance: 'longbridge.market_temperature',
+          },
+        ],
+      },
+    })
+
+    renderPage()
+
+    const matrix = await screen.findByRole('region', { name: '市场 × 数据集' })
+    const hkArticle = within(matrix).getByRole('heading', { name: '港股' }).closest('article')
+    expect(hkArticle).not.toBeNull()
+    expect(await within(hkArticle!).findByText('市场温度')).toBeInTheDocument()
+    expect(within(hkArticle!).getByText(/来源 longbridge.market_temperature/)).toBeInTheDocument()
+
+    const datasetFilter = screen.getByLabelText('数据集')
+    expect(within(datasetFilter).queryByRole('option', { name: '市场温度' })).not.toBeInTheDocument()
+    expect(within(datasetFilter).getAllByRole('option')).toHaveLength(5)
+  })
+
   it('shows only bounded last-confirmed detail for an unavailable dataset', async () => {
     installHealthyFetch(overview, {
       ...markets,

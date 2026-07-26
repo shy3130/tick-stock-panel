@@ -6,6 +6,7 @@ import {
 import type {
   CollectionMonitorFilters,
   DatasetCollectionEvidence,
+  DatasetEvidenceKey,
   DatasetKey,
   EvidenceEnvelope,
   EvidenceState,
@@ -25,6 +26,11 @@ const datasetLabels: Record<DatasetKey, string> = {
   candlestick_1m: '分钟 K 线',
   depth: '盘口深度',
   trades: '逐笔成交',
+}
+
+const datasetEvidenceLabels: Record<DatasetEvidenceKey, string> = {
+  ...datasetLabels,
+  market_temperature: '市场温度',
 }
 
 const statusLabels: Record<HealthState, string> = {
@@ -155,7 +161,7 @@ function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
   return (
     <div className="min-w-0 rounded-btn border border-border bg-base/50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <strong className="text-sm text-foreground">{key ? datasetLabels[key] : '未知数据集'}</strong>
+        <strong className="text-sm text-foreground">{key ? datasetEvidenceLabels[key] : '未知数据集'}</strong>
         <HealthBadge state={dataset.displayState ?? dataset.status ?? dataset.dataHealth} />
       </div>
       <div className="mt-2"><EvidenceBadge evidence={dataset} /></div>
