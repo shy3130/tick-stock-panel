@@ -35,9 +35,11 @@ specifications:
 conflicts: []
 exceptions:
   - id: EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001
-    authority: user
-    date: 2026-07-26
     scope: observation-only deployment before Monday live semantic acceptance
+    owner: user
+    reason: deploy the read-only page before live trading data is available
+    approval: explicit user directive on 2026-07-26
+    expires: 2026-07-28
     constraints:
       - no notifications or actions
       - no collector or schedule mutation

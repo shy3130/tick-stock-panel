@@ -24,7 +24,7 @@
 **Files:**
 - Create: `backend/app/api/collection_monitor.py`
 - Modify: `backend/app/main.py`
-- Create: `backend/tests/test_collection_monitor_proxy.py`
+- Create: `tests/backend/test_collection_monitor_proxy.py`
 
 **Interfaces:**
 - Consumes: `LONGBRIDGE_API_URL`, defaulting to `http://127.0.0.1:19912`.
@@ -41,7 +41,7 @@ or credential leakage.
 
 - [ ] **Step 2: Run tests and verify failure**
 
-Run: `python -m pytest -q backend/tests/test_collection_monitor_proxy.py`
+Run: `python -m pytest -q tests/backend/test_collection_monitor_proxy.py`
 
 Expected: FAIL because `app.api.collection_monitor` does not exist.
 
@@ -58,7 +58,7 @@ all other failures. Register the router in `backend/app/main.py`.
 Run:
 
 ```powershell
-python -m pytest -q backend/tests/test_collection_monitor_proxy.py backend/tests/test_dow_strategy_proxy.py
+python -m pytest -q tests/backend/test_collection_monitor_proxy.py backend/tests/test_dow_strategy_proxy.py
 ```
 
 Expected: PASS.
@@ -66,7 +66,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add backend/app/api/collection_monitor.py backend/app/main.py backend/tests/test_collection_monitor_proxy.py
+git add backend/app/api/collection_monitor.py backend/app/main.py tests/backend/test_collection_monitor_proxy.py
 git commit -m "feat: add read-only collection monitor proxy"
 ```
 
@@ -170,7 +170,7 @@ Expected: PASS.
 Run:
 
 ```powershell
-python -m pytest -q backend/tests/test_collection_monitor_proxy.py tests/spec_contracts/test_collection_monitor_integration_contract.py tests/spec_contracts/test_spec_guard_contract.py
+python -m pytest -q tests/backend/test_collection_monitor_proxy.py tests/spec_contracts/test_collection_monitor_integration_contract.py tests/spec_contracts/test_spec_guard_contract.py
 pnpm --dir frontend test --run src/pages/CollectionMonitor.test.tsx src/pages/dow-monitor-route.test.tsx
 pnpm --dir frontend build
 ```

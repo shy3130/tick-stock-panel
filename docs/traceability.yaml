@@ -6,7 +6,7 @@ requirements:
       - backend/app/api/collection_monitor.py
       - backend/app/main.py
     tests:
-      - {path: backend/tests/test_collection_monitor_proxy.py, type: executable-test}
+      - {path: tests/backend/test_collection_monitor_proxy.py, type: executable-test}
       - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
