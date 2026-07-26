@@ -31,6 +31,12 @@ function signalConclusion(side: string) {
   return '\u5356\u70b9\uff1a\u8dcc\u7834\u4e0a\u6da8\u8d8b\u52bf\u7ebf + \u8dcc\u7834\u524d\u4f4e/\u652f\u6491\u4f4d'
 }
 
+function signalPinLabel(side: string) {
+  if (side === 'BUY') return 'B'
+  if (side === 'RISK') return 'R'
+  return 'S'
+}
+
 function evidenceText(signal: Record<string, unknown>) {
   const evidence = signal.evidence
   if (!Array.isArray(evidence)) return null
@@ -107,7 +113,7 @@ function toTurningMarkers(signals: unknown, bars: unknown): ChartMarker[] {
       above: !buy,
       price: signal.price,
       color: buy ? BUY_RED : SELL_GREEN,
-      label: buy ? '\u4e70' : signal.side === 'RISK' ? '\u98ce\u9669' : '\u5356',
+      label: signalPinLabel(signal.side),
       title,
       conclusion: signalConclusion(signal.side),
       reason: typeof signal.triggerPath === 'string' ? signal.triggerPath : undefined,
@@ -205,7 +211,7 @@ export function toChartMarkers(signals: unknown, bars?: unknown, fallbackSignals
       above: !buy,
       price: signal.price,
       color: buy ? BUY_RED : SELL_GREEN,
-      label: buy ? '\u4e70' : signal.side === 'RISK' ? '\u98ce\u9669' : '\u5356',
+      label: signalPinLabel(signal.side),
       title,
       conclusion: signalConclusion(signal.side),
       reason: typeof signal.reason === 'string' ? signal.reason : undefined,

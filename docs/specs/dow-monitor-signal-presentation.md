@@ -20,10 +20,10 @@ instead of removing it because the first break occurred on the prior session.
 
 ## REQ-DOW-MONITOR-CHINESE-MARKER-001
 
-Visible buy and sell chart markers MUST display the Chinese labels `买` and
-`卖`. Risk exits MUST display `风险`. The marker label MUST NOT fall back to a
-question mark or an internal signal code.
+Visible buy and sell chart pins MUST display the stable labels `B` and `S`.
+Risk exits MUST display `R`. The pin label MUST NOT depend on a CJK canvas
+glyph and MUST NOT fall back to a question mark.
 
-The hover content MUST remain Chinese reader-facing text while retaining the
+The hover title and content MUST remain Chinese reader-facing text while retaining the
 causal trend-line value, structure level, timestamps, confirmation status,
 volume ratio, and evidence.

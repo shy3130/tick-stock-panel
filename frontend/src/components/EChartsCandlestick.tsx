@@ -511,6 +511,8 @@ const THEME = {
   bg: 'transparent',
 }
 
+const MARKER_LABEL_FONT_FAMILY = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "SimHei", "JetBrains Mono", sans-serif'
+
 /** 当前主题的图表调色板 (buildOption/信息栏在渲染时调用; 主题切换由组件 effect 触发重建)。 */
 const CT = () => chartTheme(getTheme())
 
@@ -659,7 +661,7 @@ function buildOption(
             label: {
               show: true, formatter: m.label ?? '',
               color: '#FFFFFF', fontSize: 8, fontWeight: 'bold',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
             },
             z: 100, zlevel: 10,
           })
@@ -673,7 +675,7 @@ function buildOption(
             label: {
               show: true, formatter: m.label ?? '', position: 'inside',
               color: '#FFFFFF', fontSize: 11, fontWeight: 'bold',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
             },
             z: 100, zlevel: 10,
           })
@@ -691,7 +693,7 @@ function buildOption(
           label: {
             show: !!m.label, formatter: m.label ?? '', position: 'inside',
             color: '#FFFFFF', fontSize: compact ? 8 : 11, fontWeight: 'bold',
-            fontFamily: 'JetBrains Mono, monospace',
+            fontFamily: MARKER_LABEL_FONT_FAMILY,
           },
         })
       }
@@ -1227,7 +1229,7 @@ export function EChartsCandlestick({
             label: {
               show: true, formatter: m.label ?? '',
               color: '#FFFFFF', fontSize: 8, fontWeight: 'bold',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
             },
             z: 100, zlevel: 10,
           })
@@ -1241,7 +1243,7 @@ export function EChartsCandlestick({
             label: {
               show: true, formatter: m.label ?? '', position: 'inside',
               color: '#FFFFFF', fontSize: 11, fontWeight: 'bold',
-              fontFamily: 'JetBrains Mono, monospace',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
             },
             z: 100, zlevel: 10,
           })
@@ -1259,7 +1261,7 @@ export function EChartsCandlestick({
           label: {
             show: !!m.label, formatter: m.label ?? '', position: 'inside',
             color: '#FFFFFF', fontSize: compact ? 8 : 11, fontWeight: 'bold',
-            fontFamily: 'JetBrains Mono, monospace',
+            fontFamily: MARKER_LABEL_FONT_FAMILY,
           },
         })
       }

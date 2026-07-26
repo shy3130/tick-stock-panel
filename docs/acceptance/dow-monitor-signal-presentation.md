@@ -11,7 +11,8 @@ Acceptance requires:
 
 - executable mapping tests for direct, primary, buy retest, sell retest, and
   incomplete retest paths;
-- executable assertions that marker labels are `买` and `卖`;
+- executable assertions that pin labels are `B` and `S`, while hover titles
+  remain `买点` and `卖点`;
 - a successful production frontend build;
 - production browser evidence for the NBIS 15-minute cross-session buy signal
   at 2026-07-21 09:45 America/New_York;

@@ -232,7 +232,7 @@ describe('Dow chart mappings', () => {
         kind: 'buy',
         above: false,
         color: '#EF4444',
-        label: '买',
+        label: 'B',
         price: 10.6,
       }),
       expect.objectContaining({
@@ -240,7 +240,7 @@ describe('Dow chart mappings', () => {
         kind: 'sell',
         above: true,
         color: '#22C55E',
-        label: '风险',
+        label: 'R',
         price: 9.8,
       }),
     ])
@@ -322,7 +322,7 @@ describe('Dow chart mappings', () => {
     }))
   })
 
-  it('keeps cross-session two-bar retest confirmations with Chinese marker labels', () => {
+  it('keeps cross-session two-bar retest confirmations with stable marker labels', () => {
     const markers = toChartMarkers([
       {
         side: 'BUY',
@@ -377,14 +377,14 @@ describe('Dow chart mappings', () => {
     expect(markers[0]).toEqual(expect.objectContaining({
       date: '2026-07-21T09:45:00-04:00',
       kind: 'buy',
-      label: '买',
+      label: 'B',
       title: '买点',
       structurePivotPrice: 194.3,
     }))
     expect(markers[1]).toEqual(expect.objectContaining({
       date: '2026-07-23T09:40:00-04:00',
       kind: 'sell',
-      label: '卖',
+      label: 'S',
       title: '卖点',
       structurePivotPrice: 224.0,
     }))
