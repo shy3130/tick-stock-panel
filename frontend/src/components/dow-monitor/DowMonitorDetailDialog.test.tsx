@@ -473,6 +473,32 @@ describe('Dow monitor detail dialog', () => {
     expect(within(dialog).getByRole('button', { name: '退出全屏' })).toBeInTheDocument()
   })
 
+  it('uses one trend-line switch for intraday and daily charts', async () => {
+    const user = userEvent.setup()
+    render(
+      <DowMonitorDetailDialog
+        symbol="01347.HK"
+        timeframe="5m"
+        open
+        onClose={vi.fn()}
+      />,
+    )
+
+    const lineSwitch = screen.getByRole('switch', { name: '显示趋势线和压力线' })
+    expect(lineSwitch).toBeChecked()
+    expect(screen.getByTestId('intraday-candlestick')).toHaveAttribute(
+      'data-price-lines',
+      expect.not.stringMatching(/^\[\]$/),
+    )
+
+    await user.click(lineSwitch)
+    expect(lineSwitch).not.toBeChecked()
+    expect(screen.getByTestId('intraday-candlestick')).toHaveAttribute('data-price-lines', '[]')
+
+    await user.click(screen.getByRole('button', { name: '日K' }))
+    expect(screen.getByTestId('daily-candlestick')).toHaveAttribute('data-price-lines', '[]')
+  })
+
   it('queries only the selected detail timeframe and uses the daily chart framework for day', async () => {
     const user = userEvent.setup()
     render(

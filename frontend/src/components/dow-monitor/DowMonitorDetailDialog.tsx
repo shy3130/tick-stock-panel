@@ -48,6 +48,7 @@ export function DowMonitorDetailDialog({
 }) {
   const [selectedTimeframe, setSelectedTimeframe] = useState(timeframe)
   const [fullscreen, setFullscreen] = useState(false)
+  const [showLines, setShowLines] = useState(true)
   const indicators = useKChartIndicatorControls()
   const detailQuery = useDowMonitorDetail(symbol, selectedTimeframe, open)
 
@@ -55,6 +56,7 @@ export function DowMonitorDetailDialog({
     if (!open) return
     setSelectedTimeframe(timeframe)
     setFullscreen(false)
+    setShowLines(true)
   }, [open, symbol, timeframe])
 
   const detail = detailQuery.data?.symbol === symbol
@@ -167,6 +169,28 @@ export function DowMonitorDetailDialog({
             state={indicators}
             className="flex flex-wrap items-center gap-1.5"
           />
+          <div className="flex items-center gap-1.5 border-l border-border pl-2">
+            <span className="text-[10px] text-muted">趋势线</span>
+            <button
+              type="button"
+              role="switch"
+              aria-label="显示趋势线和压力线"
+              aria-checked={showLines}
+              title={showLines ? '隐藏趋势线和压力线' : '显示趋势线和压力线'}
+              onClick={() => setShowLines(value => !value)}
+              className={cn(
+                'relative h-3.5 w-6 shrink-0 rounded-full transition-colors',
+                showLines ? 'bg-accent' : 'bg-elevated',
+              )}
+            >
+              <span
+                className={cn(
+                  'absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform',
+                  showLines ? 'translate-x-3' : 'translate-x-0.5',
+                )}
+              />
+            </button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto px-2 py-2 sm:px-4">
@@ -196,7 +220,7 @@ export function DowMonitorDetailDialog({
               height={620}
               chartData={chartBars}
               markers={markers}
-              priceLines={detailPriceLines}
+              priceLines={showLines ? detailPriceLines : []}
               showIndicatorControls={false}
               showLimitMarkers={false}
               showMarkerToggle={false}
@@ -207,7 +231,7 @@ export function DowMonitorDetailDialog({
             <EChartsCandlestick
               data={chartBars}
               markers={markers}
-              priceLines={signalPriceLines}
+              priceLines={showLines ? signalPriceLines : []}
               height={chartHeight}
               visibleBars={320}
               activeIndicators={indicators.activeIndicators}

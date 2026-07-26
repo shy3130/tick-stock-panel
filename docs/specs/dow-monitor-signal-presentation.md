@@ -27,3 +27,13 @@ glyph and MUST NOT fall back to a question mark.
 The hover title and content MUST remain Chinese reader-facing text while retaining the
 causal trend-line value, structure level, timestamps, confirmation status,
 volume ratio, and evidence.
+
+## REQ-DOW-MONITOR-LINE-TOGGLE-001
+
+The expanded Dow monitor chart MUST expose one reader-facing `趋势线` switch.
+The switch MUST be enabled when the dialog opens and MUST control trend lines,
+signal-causal trend lines, and support/resistance price lines for every
+timeframe, including the daily chart.
+
+Disabling the switch MUST hide those lines without hiding buy or sell markers.
+The mini chart remains compact and does not expose this control.

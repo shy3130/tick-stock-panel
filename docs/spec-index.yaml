@@ -17,5 +17,6 @@ specifications:
     requirements:
       - REQ-DOW-MONITOR-STRICT-DOUBLE-BREAK-001
       - REQ-DOW-MONITOR-CHINESE-MARKER-001
+      - REQ-DOW-MONITOR-LINE-TOGGLE-001
 conflicts: []
 exceptions: []
