@@ -1,6 +1,6 @@
 # Dow Monitor Signal Presentation Acceptance
 
-Status: pending implementation verification
+Status: accepted
 
 Requirements:
 
@@ -17,3 +17,22 @@ Acceptance requires:
 - production browser evidence for the NBIS 15-minute cross-session buy signal
   at 2026-07-21 09:45 America/New_York;
 - confirmation that mini and detail charts show the same signal set.
+
+## Evidence
+
+- The focused frontend gate passed 50 tests across
+  `DowMonitorDetailDialog.test.tsx` and `DowMonitor.test.tsx`.
+- The production frontend build compiled 2,706 modules successfully.
+- The generated Dow monitor chunk contains
+  `FIRST_ACCEPTANCE_HIGH_BROKEN`, stable `B`/`S` pin labels, and Chinese hover
+  titles.
+- Production serves `assets/index-B9TXovkQ.js` from immutable image
+  `tickflow-stock-panel-app:dow-monitor-716674ba8b78`.
+- The NBIS 15-minute payload contains a strict cross-session buy confirmation
+  at `2026-07-21T09:45:00-04:00` with trigger path `TWO_BAR_RETEST` and reason
+  code `FIRST_ACCEPTANCE_HIGH_BROKEN`.
+- Chrome verification showed the restored red `B` marker in both the mini and
+  detail chart signal sets. No question-mark pin or application error was
+  present.
+- After restarting the production container, the image and frontend entry
+  remained unchanged and the NBIS detail chart retained the signal set.

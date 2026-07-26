@@ -1,6 +1,6 @@
 # Dow Monitor Signal Presentation Independent Review
 
-Status: pending
+Status: complete
 
 The independent requirements-to-evidence review will verify that:
 
@@ -10,3 +10,18 @@ The independent requirements-to-evidence review will verify that:
 - stable `B` and `S` pin labels survive the production build while hover
   content remains Chinese;
 - mini and detail charts consume the same mapped signal semantics.
+
+## Result
+
+The requirements are satisfied by the mapping tests, production build,
+immutable release checks, payload inspection, browser inspection, and
+post-restart verification.
+
+The review found no remaining semantic mismatch:
+
+- direct and primary paths still require their established double-break codes;
+- buy retests require `FIRST_ACCEPTANCE_HIGH_BROKEN`;
+- sell and risk retests require `FIRST_ACCEPTANCE_LOW_BROKEN`;
+- incomplete retests remain excluded;
+- the pin glyph no longer depends on CJK Canvas rendering;
+- Chinese reader-facing hover content is preserved.
