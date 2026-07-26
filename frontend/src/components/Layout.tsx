@@ -81,6 +81,7 @@ const nav = [
   { to: '/financials', label: '财务分析', icon: FileText },
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/dow-monitor', label: '趋势监控', icon: RadioTower },
+  { to: '/collection-monitor', label: '采集监控', icon: RadioTower },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/data',       label: '数据',   icon: Database },

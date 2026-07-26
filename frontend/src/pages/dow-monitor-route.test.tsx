@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { Layout } from '@/components/Layout'
@@ -62,7 +63,8 @@ describe('Dow monitor route', () => {
     expect(routePaths()).toContain('dow-monitor')
   })
 
-  it('retains collection monitoring in desktop and mobile navigation', () => {
+  it('exposes collection monitoring in the route and desktop/mobile navigation', async () => {
+    const user = userEvent.setup()
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -77,11 +79,10 @@ describe('Dow monitor route', () => {
       </QueryClientProvider>,
     )
 
-    expect(screen.getByRole('link', { name: '采集监控' })).toHaveAttribute(
-      'href',
-      '/collection-monitor',
-    )
+    expect(screen.getByRole('link', { name: '采集监控' })).toHaveAttribute('href', '/collection-monitor')
     expect(within(screen.getByRole('banner')).getByText('采集监控')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '打开导航菜单' }))
+    expect(within(screen.getByRole('dialog', { name: '主导航' })).getByRole('link', { name: '采集监控' })).toBeInTheDocument()
     expect(routePaths()).toContain('collection-monitor')
   })
 })
