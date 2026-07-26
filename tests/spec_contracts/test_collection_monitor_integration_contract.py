@@ -18,6 +18,9 @@ CONTRACT_RECORDS = (
     "docs/acceptance/collection-monitor-integration.md",
     "docs/reviews/collection-monitor-integration.md",
 )
+PAGE_BEHAVIORAL_TEST = (
+    "tests/spec_contracts/test_collection_monitor_frontend_behavior.py"
+)
 
 
 def _read(relative_path: str) -> str:
@@ -66,6 +69,22 @@ def test_collection_monitor_traceability_paths_exist() -> None:
             assert (REPOSITORY / relative_path).is_file(), (
                 f"{requirement_id} has missing test evidence: {relative_path.as_posix()}"
             )
+
+
+def test_page_requirement_maps_to_frontend_behavioral_wrapper() -> None:
+    traceability = yaml.safe_load(_read("docs/traceability.yaml"))
+    page_requirement = next(
+        entry
+        for entry in traceability["requirements"]
+        if entry["id"] == "REQ-COLLECTION-MONITOR-PAGE-001"
+    )
+    test_evidence = page_requirement["tests"]
+    if isinstance(test_evidence, dict):
+        test_evidence = [test_evidence]
+
+    assert PAGE_BEHAVIORAL_TEST in {
+        evidence["path"] for evidence in test_evidence
+    }
 
 
 def test_live_semantic_acceptance_remains_pending() -> None:

@@ -21,6 +21,7 @@ requirements:
       - frontend/src/components/Layout.tsx
     tests:
       - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
+      - {path: tests/spec_contracts/test_collection_monitor_frontend_behavior.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
       - {path: docs/reviews/collection-monitor-integration.md, type: independent-review}

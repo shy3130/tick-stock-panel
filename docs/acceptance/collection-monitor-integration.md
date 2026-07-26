@@ -24,7 +24,12 @@ here, but they do not satisfy lower-layer semantic acceptance.
 - Root contract and specification checker:
   `python -m pytest -q
   tests/spec_contracts/test_collection_monitor_integration_contract.py
-  tests/spec_contracts/test_spec_guard_contract.py` — 4 passed.
+  tests/spec_contracts/test_spec_guard_contract.py` — 5 passed after review
+  remediation.
+- Root frontend behavioral wrapper:
+  `python -m pytest -q
+  tests/spec_contracts/test_collection_monitor_frontend_behavior.py` — 1
+  passed; the wrapper executed the focused component and route suites, 8 tests.
 - Backend plus contract suite with `PYTHONPATH=backend` — 31 passed, 1 skipped.
   The skipped full-application import requires the provisioned `polars`
   runtime; the deterministic router-registration assertion ran, and the
