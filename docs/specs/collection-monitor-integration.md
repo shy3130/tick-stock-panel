@@ -14,6 +14,28 @@ sizes, preserve the upstream evidence-unavailable 503 meaning, and sanitize all
 other upstream/network failures. It MUST NOT expose an arbitrary proxy, a
 mutation method, an internal endpoint, a credential, or a raw upstream error.
 
+The authoritative upstream query contract is:
+
+- `market`: `cn`, `hk`, or `us`.
+- `date`: optional, strict valid ISO calendar date `YYYY-MM-DD`.
+- `status`: optional `green`, `yellow`, `red`, `gray`, or `unavailable`.
+- `technology`: optional `rust`, `websocket`, `python`, or `batch`.
+- `dataset`: `capital_distribution`, `capital_flow`, `candlestick_1m`,
+  `depth`, or `trades`; required by `/gaps`, optional on `/tasks`.
+- `mode`: optional `production`, `shadow`, or `backfill`.
+- `symbol`: optional uppercase canonical symbol matching
+  `^[A-Z0-9][A-Z0-9._-]{0,31}\.(HK|US|SH|SZ)$`.
+- `recovered`: optional canonical boolean accepted by FastAPI and forwarded
+  only by `/gaps`.
+- `limit`: integer 1 through 500, default 100.
+- `offset`: integer 0 through 100000, default 0.
+
+`/overview` accepts only `date`; `/markets/{market}` accepts only `date`;
+`/tasks` accepts `date`, `status`, `technology`, `market`, `dataset`, `mode`,
+`limit`, and `offset`; `/gaps` accepts required `market` and `dataset` plus
+`date`, `symbol`, `recovered`, `limit`, and `offset`. Unknown query parameters
+MUST be rejected rather than silently ignored.
+
 ## REQ-COLLECTION-MONITOR-PAGE-001
 
 TickFlow MUST provide an authenticated native page at `/collection-monitor`
