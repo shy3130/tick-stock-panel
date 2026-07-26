@@ -81,6 +81,48 @@ export interface DowMonitorSignal {
   volumeRatio: number | null
   pattern: string | null
   evidence: DowMonitorSignalEvidence[]
+  stage?: string | null
+  triggerPath?: string | null
+  lineValue?: number | null
+  lineRole?: string | null
+  lineAnchorTimes?: string[] | null
+  lineAnchorPrices?: number[] | null
+  structurePivotId?: string | null
+  structurePivotPrice?: number | null
+  structurePivotTime?: string | null
+  reasonCodes?: string[]
+}
+
+export interface DowMonitorTurningSignal {
+  side: string
+  stage: string
+  detectedIndex: number
+  detectedTime: string | null
+  actionableIndex: number
+  actionableTime: string | null
+  price: number
+  trendStateBefore: string
+  trendStateAfter: string
+  lineId: string | null
+  lineRole: string | null
+  lineGeneration: number | null
+  parentLineId: string | null
+  lineValue: number | null
+  lineAnchorTimes?: string[] | null
+  lineAnchorPrices?: number[] | null
+  breakDistanceNormalized: number | null
+  structurePivotId: string | null
+  structurePivotPrice: number | null
+  structurePivotTime?: string | null
+  triggerPath: string | null
+  reasonCodes: string[]
+}
+
+export interface DowMonitorTurningPayload {
+  signals?: DowMonitorTurningSignal[]
+  lineBreaks?: unknown[]
+  lines?: unknown[]
+  pivots?: unknown[]
 }
 
 export interface DowMonitorSnapshot {
@@ -149,6 +191,7 @@ export interface DowMonitorChart {
   lines?: DowMonitorLine[]
   signals?: DowMonitorSignal[]
   longTerm?: DowMonitorPersistedLongTermSnapshot
+  turning?: DowMonitorTurningPayload
 }
 
 export interface DowMonitorTimeframeState {
@@ -214,10 +257,64 @@ export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {
   last_price: number | null
   change_pct: number | null
   quote_timestamp: number | string | null
+  next_day_direction?: DowMonitorNextDayDirection | null
+  intraday_capital?: DowMonitorIntradayCapital | null
   states: Partial<Record<DowTimeframe, DowMonitorTimeframeState>>
   latest_notification: DowMonitorNotification | null
   last_success_at: string | null
   last_error: string | null
+}
+
+export interface DowMonitorIntradayCapital {
+  capital_minute?: string | null
+  total_net?: number | null
+  large_net?: number | null
+  total_in?: number | null
+  total_out?: number | null
+  large_net_ratio?: number | null
+  flow_15m?: number | null
+  flow_30m?: number | null
+  flow_today?: number | null
+  last_flow_time?: string | null
+  flow_points?: number | null
+  windows?: DowMonitorIntradayCapitalWindow[]
+  source?: 'trading_day' | string
+}
+
+export interface DowMonitorIntradayCapitalWindow {
+  label?: string | null
+  minutes?: number | null
+  start_time?: string | null
+  end_time?: string | null
+  start_price?: number | null
+  end_price?: number | null
+  price_change_pct?: number | null
+  start_total_net?: number | null
+  end_total_net?: number | null
+  total_net_delta?: number | null
+  start_large_net?: number | null
+  end_large_net?: number | null
+  large_net_delta?: number | null
+}
+
+export interface DowMonitorNextDayDirection {
+  symbol: string
+  as_of: string | null
+  score: number
+  probability: number
+  direction_label: string
+  realtime_signal?: string
+  realtime_label?: string
+  realtime_reason?: string
+  last_price?: number | null
+  key_levels: {
+    support?: number | null
+    resistance?: number | null
+    stop?: number | null
+    recent_low?: number | null
+  }
+  metrics?: Record<string, number | null>
+  evidence: string[]
 }
 
 export interface DowMonitorOverviewResponse {

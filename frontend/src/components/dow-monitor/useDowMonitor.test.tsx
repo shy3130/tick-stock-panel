@@ -53,7 +53,10 @@ describe('Dow monitor queries', () => {
     renderHook(() => useDowMonitorOverview('hk'), { wrapper })
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/dow-monitor/overview?market=hk', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/dow-monitor\/overview\?market=hk&_=\d+$/),
+        expect.objectContaining({ cache: 'no-store' }),
+      )
     })
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining('/symbols/INTC.US'),
@@ -61,20 +64,23 @@ describe('Dow monitor queries', () => {
     )
   })
 
-  it('keeps the overview query but pauses its polling while realtime is active', async () => {
+  it('keeps polling the overview query while realtime is active', async () => {
     const { queryClient, wrapper } = createWrapper()
 
     renderHook(() => useDowMonitorOverview('hk', true), { wrapper })
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/dow-monitor/overview?market=hk', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/dow-monitor\/overview\?market=hk&_=\d+$/),
+        expect.objectContaining({ cache: 'no-store' }),
+      )
     })
     const query = queryClient.getQueryCache().find({
       queryKey: ['dow-monitor', 'overview', 'hk'],
       exact: true,
     })
     const options = query?.options as { refetchInterval?: number | false } | undefined
-    expect(options?.refetchInterval).toBe(false)
+    expect(options?.refetchInterval).toBe(15_000)
   })
 
   it('uses market and timeframe only as query parameters', async () => {
@@ -86,8 +92,14 @@ describe('Dow monitor queries', () => {
     }, { wrapper })
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/dow-monitor/notifications?market=us', expect.anything())
-      expect(fetchMock).toHaveBeenCalledWith('/api/dow-monitor/INTC.US?timeframe=15m', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/dow-monitor\/notifications\?market=us&_=\d+$/),
+        expect.objectContaining({ cache: 'no-store' }),
+      )
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/dow-monitor\/INTC\.US\?timeframe=15m&_=\d+$/),
+        expect.objectContaining({ cache: 'no-store' }),
+      )
     })
   })
 
@@ -97,7 +109,10 @@ describe('Dow monitor queries', () => {
     renderHook(() => useDowMonitorStatus(), { wrapper })
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/dow-monitor/status', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/dow-monitor\/status\?_=\d+$/),
+        expect.objectContaining({ cache: 'no-store' }),
+      )
     })
     const query = queryClient.getQueryCache().find({
       queryKey: ['dow-monitor', 'status'],

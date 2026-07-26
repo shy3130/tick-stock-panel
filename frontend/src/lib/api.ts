@@ -49,6 +49,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+function uncached(path: string): string {
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}_=${Date.now()}`
+}
+
 // ===== Capabilities =====
 export interface CapabilityLimits {
   rpm: number | null
@@ -1505,9 +1510,15 @@ export const api = {
       body: JSON.stringify({ enabled }),
     }),
   dowMonitorOverview: (market: DowMonitorMarket) =>
-    request<DowMonitorOverviewResponse>(`/api/dow-monitor/overview?market=${market}`),
+    request<DowMonitorOverviewResponse>(
+      uncached(`/api/dow-monitor/overview?market=${market}`),
+      { cache: 'no-store' },
+    ),
   dowMonitorNotifications: (market: DowMonitorMarket) =>
-    request<DowMonitorNotificationsResponse>(`/api/dow-monitor/notifications?market=${market}`),
+    request<DowMonitorNotificationsResponse>(
+      uncached(`/api/dow-monitor/notifications?market=${market}`),
+      { cache: 'no-store' },
+    ),
   markDowNotificationRead: (notificationId: string) =>
     request<DowMonitorNotification>(
       `/api/dow-monitor/notifications/${encodeURIComponent(notificationId)}/read`,
@@ -1515,9 +1526,13 @@ export const api = {
     ),
   dowMonitorDetail: (symbol: string, timeframe: DowTimeframe) =>
     request<DowMonitorDetailResponse>(
-      `/api/dow-monitor/${encodeURIComponent(symbol)}?timeframe=${timeframe}`,
+      uncached(`/api/dow-monitor/${encodeURIComponent(symbol)}?timeframe=${timeframe}`),
+      { cache: 'no-store' },
     ),
-  dowMonitorStatus: () => request<DowMonitorStatusResponse>('/api/dow-monitor/status'),
+  dowMonitorStatus: () => request<DowMonitorStatusResponse>(
+    uncached('/api/dow-monitor/status'),
+    { cache: 'no-store' },
+  ),
 
   screenerStrategies: async (assetType: 'stock' | 'etf' = 'stock') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(

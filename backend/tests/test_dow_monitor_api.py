@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+import polars as pl
+
 from app.api import dow_monitor
 from app.services.dow_monitor_models import DowNotification, DowTimeframeState
 from app.services.dow_monitor_service import DowMonitorService
@@ -129,6 +131,169 @@ def test_overview_api_exposes_authoritative_quote_header_fields(tmp_path) -> Non
     }
     item = response.json()["symbols"][0]
     assert {key: item[key] for key in expected} == expected
+
+
+def test_overview_api_exposes_trading_day_intraday_capital(tmp_path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.store.upsert_symbol("01347.HK", "hk", True)
+
+    def fake_fetch(symbols, *, now, max_quote_age_minutes):
+        assert symbols == ["01347.HK"]
+        assert max_quote_age_minutes >= 60
+        return {
+            "01347.HK": {
+                "capital_minute": "2026-07-23 15:30:00",
+                "total_net": 186.5,
+                "large_net": 92.25,
+                "total_in": 560.0,
+                "total_out": 373.5,
+                "large_net_ratio": 0.19,
+                "flow_15m": -8.5,
+                "flow_30m": 22.0,
+                "flow_today": 186.5,
+                "last_flow_time": "2026-07-23 15:29:00",
+                "flow_points": 88,
+            }
+        }
+
+    monkeypatch.setattr(
+        "app.services.dow_monitor_service._fetch_realtime_signal_rows",
+        fake_fetch,
+    )
+    monkeypatch.setattr(
+        service,
+        "_intraday_capital_windows_by_symbol",
+        lambda symbols: {
+            "01347.HK": [
+                {
+                    "label": "近30分钟",
+                    "minutes": 30,
+                    "start_time": "2026-07-23 15:00:00",
+                    "end_time": "2026-07-23 15:30:00",
+                    "start_price": 13.1,
+                    "end_price": 13.47,
+                    "price_change_pct": 2.824,
+                    "start_total_net": 100.0,
+                    "end_total_net": 186.5,
+                    "total_net_delta": 86.5,
+                    "start_large_net": 48.0,
+                    "end_large_net": 92.25,
+                    "large_net_delta": 44.25,
+                }
+            ]
+        },
+    )
+
+    response = _client(service).get("/api/dow-monitor/overview?market=hk")
+
+    assert response.status_code == 200
+    assert response.json()["symbols"][0]["intraday_capital"] == {
+        "capital_minute": "2026-07-23 15:30:00",
+        "total_net": 186.5,
+        "large_net": 92.25,
+        "total_in": 560.0,
+        "total_out": 373.5,
+        "large_net_ratio": 0.19,
+        "flow_15m": -8.5,
+        "flow_30m": 22.0,
+        "flow_today": 186.5,
+        "last_flow_time": "2026-07-23 15:29:00",
+        "flow_points": 88,
+        "source": "trading_day",
+        "windows": [
+            {
+                "label": "近30分钟",
+                "minutes": 30,
+                "start_time": "2026-07-23 15:00:00",
+                "end_time": "2026-07-23 15:30:00",
+                "start_price": 13.1,
+                "end_price": 13.47,
+                "price_change_pct": 2.824,
+                "start_total_net": 100.0,
+                "end_total_net": 186.5,
+                "total_net_delta": 86.5,
+                "start_large_net": 48.0,
+                "end_large_net": 92.25,
+                "large_net_delta": 44.25,
+            }
+        ],
+    }
+
+
+def test_overview_api_exposes_next_day_realtime_context(tmp_path) -> None:
+    service = _service(tmp_path)
+    service.store.upsert_symbol("01347.HK", "hk", True)
+    service._latest_quotes_by_symbol["01347.HK"] = {
+        "symbol": "01347.HK",
+        "last_price": 14.25,
+        "timestamp": int(NOW.timestamp() * 1_000),
+    }
+    service._next_day_direction_by_symbol["01347.HK"] = {
+        "symbol": "01347.HK",
+        "as_of": "2026-07-23",
+        "score": 86.0,
+        "probability": 0.86,
+        "direction_label": "强势偏多",
+        "key_levels": {"support": 12.8, "resistance": 14.2, "stop": 12.42},
+        "evidence": ["趋势站上MA20且MA20不弱于MA60"],
+    }
+
+    response = _client(service).get("/api/dow-monitor/overview?market=hk")
+
+    assert response.status_code == 200
+    next_day = response.json()["symbols"][0]["next_day_direction"]
+    assert next_day["realtime_signal"] == "BUY_TRIGGER"
+    assert next_day["realtime_label"] == "买点触发"
+
+
+def test_next_day_direction_context_reuses_daily_strategy_factors(tmp_path) -> None:
+    service = _service(tmp_path)
+    rows = []
+    for index in range(70):
+        close = 10.0 + index * 0.08 + (-0.35 if index % 6 == 0 else 0.0)
+        volume = 1_000_000 + index * 5_000
+        if index >= 66:
+            volume *= 1.8
+        rows.append(
+            {
+                "symbol": "01347.HK",
+                "trade_date": (datetime(2026, 5, 1, tzinfo=UTC) + timedelta(days=index)).date().isoformat(),
+                "open": close - 0.05,
+                "high": close + 0.1,
+                "low": close - 0.2,
+                "close": close,
+                "volume": volume,
+            }
+        )
+
+    context = service._compute_next_day_direction("01347.HK", pl.DataFrame(rows))
+
+    assert context is not None
+    assert context["score"] >= 70
+    assert context["key_levels"]["support"] is not None
+    assert "ma20" in context["metrics"]
+
+
+def test_next_day_direction_context_does_not_emit_intraday_monitor_notification(tmp_path) -> None:
+    service = _service(tmp_path)
+    item = service.store.upsert_symbol("01347.HK", "hk", True)
+    service._latest_quotes_by_symbol["01347.HK"] = {"symbol": "01347.HK", "last_price": 14.25}
+    service._next_day_direction_by_symbol["01347.HK"] = {
+        "symbol": "01347.HK",
+        "as_of": "2026-07-23",
+        "score": 86.0,
+        "probability": 0.86,
+        "direction_label": "强势偏多",
+        "key_levels": {"support": 12.8, "resistance": 14.2, "stop": 12.42},
+        "evidence": ["趋势站上MA20且MA20不弱于MA60"],
+    }
+    notification_index = {}
+
+    service._maybe_append_next_day_notification(item, NOW, notification_index)
+    service._maybe_append_next_day_notification(item, NOW + timedelta(seconds=15), notification_index)
+
+    notifications = service.store.list_notifications()
+    assert notifications == []
 
 
 def test_detail_validates_timeframe_and_preserves_long_term_sidecar(tmp_path) -> None:

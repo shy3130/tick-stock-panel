@@ -8,7 +8,7 @@ import type {
   DowTimeframe,
 } from './types'
 import { DowMonitorDetailDialog } from './DowMonitorDetailDialog'
-import { toChartMarkers, toPriceLines } from './chartMappings'
+import { toChartMarkers, toPriceLines, toSignalPriceLines } from './chartMappings'
 import { DowMonitor } from '@/pages/DowMonitor'
 
 const testState = vi.hoisted(() => ({
@@ -144,6 +144,32 @@ const detail: DowMonitorDetailResponse = {
       pattern: '向上突破',
       evidence: [],
     }],
+    turning: {
+      signals: [{
+        side: 'BUY',
+        stage: 'TRIGGER',
+        actionableTime: bars[1].timestamp,
+        actionableIndex: 1,
+        detectedTime: bars[1].timestamp,
+        detectedIndex: 1,
+        price: 10.6,
+        trendStateBefore: 'DOWN',
+        trendStateAfter: 'UP',
+        lineId: 'main-support',
+        lineRole: 'MAIN',
+        lineGeneration: 1,
+        parentLineId: null,
+        lineValue: 10.2,
+        lineAnchorTimes: [bars[0].timestamp, bars[1].timestamp],
+        lineAnchorPrices: [9.6, 10],
+        breakDistanceNormalized: 0.4,
+        structurePivotId: 'LOCAL-HIGH-1',
+        structurePivotPrice: 10.5,
+        structurePivotTime: bars[1].timestamp,
+        triggerPath: 'DIRECT_STRUCTURE',
+        reasonCodes: ['LINE_AND_NEAREST_LEVEL_BROKEN'],
+      }],
+    },
     longTerm: {
       first_anchor_time: bars[0].timestamp,
       first_anchor_price: 9.4,
@@ -201,22 +227,22 @@ describe('Dow chart mappings', () => {
       { side: 'SELL', barTime: 'not-a-time', price: 9.8 },
       null,
     ] as unknown[])).toEqual([
-      {
+      expect.objectContaining({
         date: bars[1].timestamp,
         kind: 'buy',
         above: false,
-        color: '#22C55E',
+        color: '#EF4444',
         label: '买',
         price: 10.6,
-      },
-      {
+      }),
+      expect.objectContaining({
         date: bars[0].timestamp,
         kind: 'sell',
         above: true,
-        color: '#EF4444',
+        color: '#22C55E',
         label: '风险',
         price: 9.8,
-      },
+      }),
     ])
   })
 
@@ -251,6 +277,93 @@ describe('Dow chart mappings', () => {
       }),
     ])
   })
+
+  it('uses only strict turning double-break signals for chart markers', () => {
+    const markers = toChartMarkers([
+      {
+        side: 'BUY',
+        stage: 'TRIGGER',
+        actionableTime: bars[1].timestamp,
+        actionableIndex: 1,
+        detectedTime: bars[0].timestamp,
+        detectedIndex: 0,
+        price: 10.8,
+        lineId: 'down-line',
+        lineValue: 10.2,
+        structurePivotId: 'LEVEL:HIGH',
+        structurePivotPrice: 10.6,
+        triggerPath: 'DIRECT_STRUCTURE',
+        reasonCodes: ['LINE_AND_NEAREST_LEVEL_BROKEN'],
+      },
+      {
+        side: 'BUY',
+        stage: 'TRIGGER',
+        actionableTime: bars[1].timestamp,
+        actionableIndex: 1,
+        detectedTime: bars[0].timestamp,
+        detectedIndex: 0,
+        price: 10.7,
+        lineId: 'down-line',
+        lineValue: 10.2,
+        structurePivotId: 'LOCAL-HIGH',
+        structurePivotPrice: 10.6,
+        triggerPath: 'TWO_BAR_RETEST',
+        reasonCodes: ['SECOND_CLOSE_ABOVE'],
+      },
+    ], bars)
+
+    expect(markers).toHaveLength(1)
+    expect(markers[0]).toEqual(expect.objectContaining({
+      kind: 'buy',
+      price: 10.8,
+      lineValue: 10.2,
+      structurePivotPrice: 10.6,
+      reasonCodes: ['LINE_AND_NEAREST_LEVEL_BROKEN'],
+    }))
+  })
+
+  it('maps signal-local causal trend lines and ignores future anchors', () => {
+    const mapped = toSignalPriceLines([
+      {
+        date: bars[1].timestamp,
+        kind: 'buy',
+        price: 10.6,
+        lineValue: 10.2,
+        lineRole: 'ACCELERATION',
+        lineAnchorTimes: [bars[0].timestamp, bars[1].timestamp],
+        lineAnchorPrices: [9.6, 10],
+        structurePivotTime: bars[0].timestamp,
+        structurePivotPrice: 10.5,
+      },
+      {
+        date: bars[0].timestamp,
+        kind: 'sell',
+        price: 9.8,
+        lineValue: 9.7,
+        lineAnchorTimes: [bars[0].timestamp, bars[1].timestamp],
+        lineAnchorPrices: [10.2, 10],
+      },
+    ])
+
+    expect(mapped).toEqual([
+      expect.objectContaining({
+        start: bars[0].timestamp,
+        end: bars[1].timestamp,
+        value: 9.6,
+        endValue: 10.2,
+        label: '买点趋势线',
+        lineType: 'dashed',
+      }),
+      expect.objectContaining({
+        start: bars[0].timestamp,
+        end: bars[1].timestamp,
+        value: 10.5,
+        endValue: 10.5,
+        label: '前高/压力位',
+        lineType: 'dotted',
+      }),
+    ])
+  })
 })
 
 describe('Dow monitor detail dialog', () => {
@@ -278,7 +391,11 @@ describe('Dow monitor detail dialog', () => {
     expect(within(dialog).getByText(/源 2026/)).toBeInTheDocument()
     expect(screen.getByTestId('intraday-candlestick')).toHaveAttribute(
       'data-price-lines',
-      expect.stringContaining('"id":"long-term"'),
+      expect.not.stringContaining('"id":"long-term"'),
+    )
+    expect(screen.getByTestId('intraday-candlestick')).toHaveAttribute(
+      'data-price-lines',
+      expect.stringContaining('"label":"买点趋势线"'),
     )
     expect(screen.getByTestId('intraday-candlestick')).toHaveAttribute(
       'data-markers',

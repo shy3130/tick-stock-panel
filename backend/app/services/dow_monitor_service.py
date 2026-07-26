@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import math
+import os
+import urllib.parse
+import urllib.request
 from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
@@ -32,6 +37,13 @@ from app.services.dow_monitor_models import (
     DowTimeframeState,
     MonitoredSymbol,
 )
+
+try:  # Optional in isolated backend tests; available in the deployed monorepo.
+    from longbridge_stock.clickhouse_realtime import (
+        fetch_realtime_signal_rows as _fetch_realtime_signal_rows,
+    )
+except Exception:  # pragma: no cover - exercised by fallback behavior.
+    _fetch_realtime_signal_rows = None
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +95,123 @@ def long_term_signal_family(snapshot: DowLongTermSnapshot) -> str | None:
     if snapshot.operation == "卖出触发":
         return "LONG_TERM_SELL"
     return None
+
+
+def _finite_float(value) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _finite_values(values: list[float | None]) -> list[float]:
+    return [value for value in values if value is not None and math.isfinite(value)]
+
+
+def _mean_last(values: list[float | None], window: int) -> float | None:
+    sample = _finite_values(values[-window:])
+    if len(sample) < window:
+        return None
+    return sum(sample) / len(sample)
+
+
+def _max_last(values: list[float | None], window: int) -> float | None:
+    sample = _finite_values(values[-window:])
+    return max(sample) if sample else None
+
+
+def _min_last(values: list[float | None], window: int) -> float | None:
+    sample = _finite_values(values[-window:])
+    return min(sample) if sample else None
+
+
+def _momentum(values: list[float | None], window: int) -> float | None:
+    if len(values) <= window:
+        return None
+    current = values[-1]
+    base = values[-1 - window]
+    if current is None or base in (None, 0):
+        return None
+    return current / base - 1.0
+
+
+def _rsi_last(values: list[float | None], window: int) -> float | None:
+    sample = _finite_values(values)
+    if len(sample) <= window:
+        return None
+    changes = [sample[index] - sample[index - 1] for index in range(1, len(sample))]
+    recent = changes[-window:]
+    gains = [max(change, 0.0) for change in recent]
+    losses = [abs(min(change, 0.0)) for change in recent]
+    avg_gain = sum(gains) / window
+    avg_loss = sum(losses) / window
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def _ema(values: list[float], span: int) -> list[float]:
+    if not values:
+        return []
+    alpha = 2.0 / (span + 1.0)
+    result = [values[0]]
+    for value in values[1:]:
+        result.append(alpha * value + (1.0 - alpha) * result[-1])
+    return result
+
+
+def _macd_hist(values: list[float | None]) -> float | None:
+    sample = _finite_values(values)
+    if len(sample) < 35:
+        return None
+    dif = [fast - slow for fast, slow in zip(_ema(sample, 12), _ema(sample, 26), strict=False)]
+    dea = _ema(dif, 9)
+    if not dea:
+        return None
+    return dif[-1] - dea[-1]
+
+
+def _clickhouse_ident(value: str) -> str:
+    if not value.replace("_", "").isalnum():
+        raise ValueError(f"unsafe ClickHouse identifier: {value!r}")
+    return value
+
+
+def _clickhouse_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _clickhouse_symbol_tuple(symbols: list[str]) -> str:
+    return "(" + ",".join(_clickhouse_string(symbol) for symbol in symbols) + ")"
+
+
+def _clickhouse_query_json_each_row(sql: str) -> list[dict]:
+    base_url = os.getenv("CLICKHOUSE_URL", "http://127.0.0.1:8123").rstrip("/")
+    encoded = urllib.parse.quote(sql + " format JSONEachRow")
+    request = urllib.request.Request(f"{base_url}/?query={encoded}", method="POST")
+    user = os.getenv("CLICKHOUSE_USER", "default")
+    password = os.getenv("CLICKHOUSE_PASSWORD", "")
+    if user:
+        request.add_header("X-ClickHouse-User", user)
+    if password:
+        request.add_header("X-ClickHouse-Key", password)
+    timeout = float(os.getenv("CLICKHOUSE_READ_TIMEOUT_SECONDS", "5"))
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = response.read().decode("utf-8")
+    return [json.loads(line) for line in body.splitlines() if line.strip()]
+
+
+def _parse_clickhouse_time(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _transition_values(
@@ -152,6 +281,7 @@ class DowMonitorService:
         self._last_error: str | None = None
         self._errors: dict[str, str] = {}
         self._latest_quotes_by_symbol: dict[str, dict] = {}
+        self._next_day_direction_by_symbol: dict[str, dict] = {}
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -310,9 +440,10 @@ class DowMonitorService:
                     else "WebStock data is stale"
                 ),
                 False,
-            )
+        )
 
         daily_rows = self._daily_loader(item.symbol, now)
+        self._update_next_day_direction(item, daily_rows)
         canonical_minutes = (
             self._merge_warmup_minutes(
                 item,
@@ -427,6 +558,8 @@ class DowMonitorService:
             "signals": deepcopy(engine_payload["signals"]),
             "longTerm": deepcopy(engine_payload["longTerm"]),
         }
+        if isinstance(engine_payload.get("turning"), dict):
+            chart["turning"] = deepcopy(engine_payload["turning"])
         timestamps = [
             value
             for value in (
@@ -964,12 +1097,22 @@ class DowMonitorService:
                 notification.model_dump(mode="json"),
             )
 
+        items = [
+            item
+            for item in self.store.list_symbols()
+            if market == "all" or item.market == market
+        ]
+        intraday_capital_by_symbol = self._intraday_capital_by_symbol(
+            [item.symbol for item in items]
+        )
         symbols = []
         source_timestamps: list[datetime] = []
-        for item in self.store.list_symbols():
-            if market != "all" and item.market != market:
-                continue
+        for item in items:
             quote = self._latest_quotes_by_symbol.get(item.symbol, {})
+            next_day_direction = self._next_day_direction_with_realtime(
+                item.symbol,
+                quote,
+            )
             states = {}
             for timeframe in TIMEFRAMES:
                 state = self.store.get_state(item.symbol, timeframe)
@@ -984,6 +1127,8 @@ class DowMonitorService:
                     "last_price": quote.get("last_price"),
                     "change_pct": quote.get("change_pct"),
                     "quote_timestamp": quote.get("timestamp"),
+                    "next_day_direction": next_day_direction,
+                    "intraday_capital": intraday_capital_by_symbol.get(item.symbol),
                     "states": states,
                     "latest_notification": latest_by_symbol.get(item.symbol),
                     "last_success_at": self._as_json_time(
@@ -997,6 +1142,173 @@ class DowMonitorService:
             "source": "webstock",
             "source_timestamp": self._as_json_time(max(source_timestamps, default=None)),
         }
+
+    def _intraday_capital_by_symbol(self, symbols: list[str]) -> dict[str, dict]:
+        if not symbols:
+            return {}
+        output: dict[str, dict] = {}
+        if _fetch_realtime_signal_rows is not None:
+            try:
+                rows = _fetch_realtime_signal_rows(
+                    symbols,
+                    now=self._now(),
+                    max_quote_age_minutes=24 * 60,
+                )
+            except Exception as exc:
+                logger.debug("dow monitor intraday capital unavailable: %s", exc)
+                rows = {}
+            for symbol, row in rows.items():
+                if not isinstance(row, dict):
+                    continue
+                output[str(symbol).upper()] = {
+                    "capital_minute": row.get("capital_minute"),
+                    "total_net": _finite_float(row.get("total_net")),
+                    "large_net": _finite_float(row.get("large_net")),
+                    "total_in": _finite_float(row.get("total_in")),
+                    "total_out": _finite_float(row.get("total_out")),
+                    "large_net_ratio": _finite_float(row.get("large_net_ratio")),
+                    "flow_15m": _finite_float(row.get("flow_15m")),
+                    "flow_30m": _finite_float(row.get("flow_30m")),
+                    "flow_today": _finite_float(row.get("flow_today")),
+                    "last_flow_time": row.get("last_flow_time"),
+                    "flow_points": int(row.get("flow_points") or 0),
+                    "source": "trading_day",
+                }
+        windows_by_symbol = self._intraday_capital_windows_by_symbol(symbols)
+        for symbol, windows in windows_by_symbol.items():
+            if not windows:
+                continue
+            current = output.setdefault(symbol, {"source": "trading_day"})
+            current["windows"] = windows
+            latest = windows[0]
+            current.setdefault("capital_minute", latest.get("end_time"))
+            current.setdefault("total_net", latest.get("end_total_net"))
+            current.setdefault("large_net", latest.get("end_large_net"))
+        return output
+
+    def _intraday_capital_windows_by_symbol(
+        self,
+        symbols: list[str],
+        windows_minutes: tuple[int, ...] = (30, 45, 60),
+    ) -> dict[str, list[dict]]:
+        symbol_list = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+        if not symbol_list:
+            return {}
+        database = _clickhouse_ident(os.getenv("CLICKHOUSE_DATABASE", "longbridge"))
+        now_text = self._now().astimezone(ZoneInfo("Asia/Shanghai")).isoformat()
+        try:
+            rows = _clickhouse_query_json_each_row(
+                f"""
+                with parseDateTime64BestEffort({_clickhouse_string(now_text)}, 3, 'Asia/Shanghai') as anchor
+                select q.symbol,
+                       q.snapshot_minute,
+                       q.last_done,
+                       c.total_net,
+                       c.large_net
+                from (
+                  select symbol,
+                         snapshot_minute,
+                         argMax(last_done, inserted_at) as last_done
+                  from {database}.lb_realtime_quotes
+                  where symbol in {_clickhouse_symbol_tuple(symbol_list)}
+                    and snapshot_minute >= anchor - interval 1 day
+                    and snapshot_minute <= anchor + interval 5 minute
+                  group by symbol, snapshot_minute
+                ) q
+                left join (
+                  select symbol,
+                         snapshot_minute,
+                         argMax(total_net, inserted_at) as total_net,
+                         argMax(large_net, inserted_at) as large_net
+                  from {database}.lb_realtime_capital
+                  where symbol in {_clickhouse_symbol_tuple(symbol_list)}
+                    and snapshot_minute >= anchor - interval 1 day
+                    and snapshot_minute <= anchor + interval 5 minute
+                  group by symbol, snapshot_minute
+                ) c on q.symbol = c.symbol and q.snapshot_minute = c.snapshot_minute
+                order by q.symbol, q.snapshot_minute
+                """
+            )
+        except Exception as exc:
+            logger.debug("dow monitor intraday capital windows unavailable: %s", exc)
+            return {}
+
+        rows_by_symbol: dict[str, list[dict]] = {}
+        for row in rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            timestamp = _parse_clickhouse_time(row.get("snapshot_minute"))
+            price = _finite_float(row.get("last_done"))
+            total_net = _finite_float(row.get("total_net"))
+            large_net = _finite_float(row.get("large_net"))
+            if not symbol or timestamp is None or price is None:
+                continue
+            rows_by_symbol.setdefault(symbol, []).append(
+                {
+                    "time": timestamp,
+                    "time_text": row.get("snapshot_minute"),
+                    "price": price,
+                    "total_net": total_net,
+                    "large_net": large_net,
+                }
+            )
+
+        output: dict[str, list[dict]] = {}
+        for symbol, symbol_rows in rows_by_symbol.items():
+            valid_rows = [
+                row
+                for row in symbol_rows
+                if row.get("total_net") is not None or row.get("large_net") is not None
+            ]
+            if len(valid_rows) < 2:
+                continue
+            end_row = valid_rows[-1]
+            end_time = end_row["time"]
+            windows: list[dict] = []
+            for minutes in windows_minutes:
+                target = end_time - timedelta(minutes=minutes)
+                start_candidates = [row for row in valid_rows if row["time"] <= target]
+                start_row = start_candidates[-1] if start_candidates else valid_rows[0]
+                if start_row is end_row:
+                    continue
+                start_price = _finite_float(start_row.get("price"))
+                end_price = _finite_float(end_row.get("price"))
+                price_change_pct = (
+                    (end_price / start_price - 1.0) * 100.0
+                    if start_price not in (None, 0) and end_price is not None
+                    else None
+                )
+                start_total = _finite_float(start_row.get("total_net"))
+                end_total = _finite_float(end_row.get("total_net"))
+                start_large = _finite_float(start_row.get("large_net"))
+                end_large = _finite_float(end_row.get("large_net"))
+                windows.append(
+                    {
+                        "label": f"近{minutes}分钟",
+                        "minutes": minutes,
+                        "start_time": start_row.get("time_text"),
+                        "end_time": end_row.get("time_text"),
+                        "start_price": start_price,
+                        "end_price": end_price,
+                        "price_change_pct": price_change_pct,
+                        "start_total_net": start_total,
+                        "end_total_net": end_total,
+                        "total_net_delta": (
+                            end_total - start_total
+                            if start_total is not None and end_total is not None
+                            else None
+                        ),
+                        "start_large_net": start_large,
+                        "end_large_net": end_large,
+                        "large_net_delta": (
+                            end_large - start_large
+                            if start_large is not None and end_large is not None
+                            else None
+                        ),
+                    }
+                )
+            if windows:
+                output[symbol] = windows
+        return output
 
     def _retain_latest_quotes(self, quotes: list[dict]) -> None:
         for row in quotes:
@@ -1014,6 +1326,224 @@ class DowMonitorService:
                 )
             ):
                 self._latest_quotes_by_symbol[symbol] = deepcopy(row)
+
+    def _update_next_day_direction(
+        self,
+        item: MonitoredSymbol,
+        daily_rows: pl.DataFrame,
+    ) -> None:
+        context = self._compute_next_day_direction(item.symbol, daily_rows)
+        if context is not None:
+            self._next_day_direction_by_symbol[item.symbol] = context
+
+    def _maybe_append_next_day_notification(
+        self,
+        item: MonitoredSymbol,
+        now: datetime,
+        notification_index: NotificationIndex,
+    ) -> None:
+        del item, now, notification_index
+        return
+
+    def _next_day_direction_with_realtime(self, symbol: str, quote: dict) -> dict | None:
+        context = self._next_day_direction_by_symbol.get(symbol)
+        if context is None:
+            return None
+        result = deepcopy(context)
+        price = _finite_float(quote.get("last_price"))
+        if price is None:
+            result["realtime_signal"] = "OBSERVE"
+            result["realtime_label"] = "等待实时价"
+            result["realtime_reason"] = "暂无可用实时价"
+            return result
+
+        key_levels = result.get("key_levels") if isinstance(result.get("key_levels"), dict) else {}
+        support = _finite_float(key_levels.get("support"))
+        resistance = _finite_float(key_levels.get("resistance"))
+        stop = _finite_float(key_levels.get("stop"))
+        score = _finite_float(result.get("score")) or 0.0
+        result["last_price"] = price
+        if resistance is not None and price >= resistance and score >= 70.0:
+            result["realtime_signal"] = "BUY_TRIGGER"
+            result["realtime_label"] = "买点触发"
+            result["realtime_reason"] = f"实时价突破关键位 {resistance:.3f}"
+        elif stop is not None and price <= stop:
+            result["realtime_signal"] = "RISK"
+            result["realtime_label"] = "风险走弱"
+            result["realtime_reason"] = f"实时价跌破风控线 {stop:.3f}"
+        elif support is not None and price < support and score < 70.0:
+            result["realtime_signal"] = "WEAK"
+            result["realtime_label"] = "偏弱观察"
+            result["realtime_reason"] = f"实时价低于支撑 {support:.3f}"
+        elif score >= 85.0 and (support is None or price >= support):
+            result["realtime_signal"] = "BUY_WATCH"
+            result["realtime_label"] = "强势跟踪"
+            result["realtime_reason"] = "日线评分强，实时价守在支撑上方"
+        elif score >= 70.0:
+            result["realtime_signal"] = "WATCH_LONG"
+            result["realtime_label"] = "偏多跟踪"
+            result["realtime_reason"] = "日线评分偏多，等待关键位确认"
+        else:
+            result["realtime_signal"] = "OBSERVE"
+            result["realtime_label"] = "观察"
+            result["realtime_reason"] = "次日方向优势不足"
+        return result
+
+    @staticmethod
+    def _compute_next_day_direction(symbol: str, daily_rows: pl.DataFrame) -> dict | None:
+        if daily_rows.is_empty():
+            return None
+        frame = daily_rows
+        if "symbol" in frame.columns:
+            frame = frame.filter(
+                pl.col("symbol").cast(pl.Utf8).str.to_uppercase() == symbol.upper()
+            )
+        if frame.is_empty():
+            return None
+
+        date_column = next(
+            (
+                column
+                for column in ("trade_date", "date", "datetime", "timestamp")
+                if column in frame.columns
+            ),
+            None,
+        )
+        if date_column is not None:
+            frame = frame.sort(date_column)
+        rows = frame.tail(90).to_dicts()
+        closes = [_finite_float(row.get("close")) for row in rows]
+        opens = [_finite_float(row.get("open")) for row in rows]
+        highs = [_finite_float(row.get("high")) for row in rows]
+        lows = [_finite_float(row.get("low")) for row in rows]
+        volumes = [_finite_float(row.get("volume")) for row in rows]
+        valid_closes = [value for value in closes if value is not None]
+        if len(valid_closes) < 20:
+            return None
+
+        close = closes[-1]
+        open_ = opens[-1]
+        if close is None:
+            return None
+
+        ma5 = _mean_last(closes, 5)
+        ma20 = _mean_last(closes, 20)
+        ma60 = _mean_last(closes, 60)
+        prev_close = closes[-2] if len(closes) >= 2 else None
+        prev_ma20 = _mean_last(closes[:-1], 20)
+        momentum_20d = _momentum(closes, 20)
+        momentum_60d = _momentum(closes, 60)
+        vol_ma5 = _mean_last(volumes, 5)
+        vol_ratio = (
+            volumes[-1] / vol_ma5
+            if volumes and volumes[-1] is not None and vol_ma5 not in (None, 0)
+            else None
+        )
+        rsi = _rsi_last(closes, 14)
+        macd_hist = _macd_hist(closes)
+        prev_macd_hist = _macd_hist(closes[:-1])
+        high60 = _max_last(highs, 60)
+        low20 = _min_last(lows, 20)
+
+        trend_ok = close > (ma20 or math.inf) and (ma20 or -math.inf) >= (ma60 or math.inf)
+        short_trend_ok = close > (ma5 or math.inf) and (ma5 or -math.inf) >= (ma20 or math.inf)
+        momentum_ok = (momentum_20d or -math.inf) > 0 and (momentum_60d or 0.0) > -0.03
+        volume_ok = vol_ratio is not None and 1.05 <= vol_ratio <= 3.5
+        rsi_ok = rsi is not None and 45.0 <= rsi <= 78.0
+        macd_ok = (
+            macd_hist is not None
+            and (
+                macd_hist > 0
+                or (
+                    prev_macd_hist is not None
+                    and macd_hist > prev_macd_hist
+                    and macd_hist > -0.03
+                )
+            )
+        )
+        breakout_ok = (
+            (high60 is not None and close >= high60 * 0.98)
+            or (
+                ma20 is not None
+                and prev_close is not None
+                and prev_ma20 is not None
+                and close > ma20
+                and prev_close <= prev_ma20
+            )
+        )
+        candle_ok = open_ is not None and close > open_
+
+        score = (
+            (18 if trend_ok else 0)
+            + (12 if short_trend_ok else 0)
+            + (18 if momentum_ok else 0)
+            + (14 if volume_ok else 0)
+            + (12 if rsi_ok else 0)
+            + (16 if macd_ok else 0)
+            + (10 if breakout_ok else 0)
+        )
+        if (momentum_20d or -math.inf) <= 0:
+            score -= 18
+        if rsi is not None and rsi > 82.0:
+            score -= 18
+        if candle_ok:
+            score += 4
+        score = max(0.0, min(100.0, float(score)))
+
+        if score >= 85.0:
+            direction_label = "强势偏多"
+        elif score >= 70.0:
+            direction_label = "偏多观察"
+        elif score <= 35.0:
+            direction_label = "偏空风险"
+        else:
+            direction_label = "中性震荡"
+
+        evidence = []
+        if trend_ok:
+            evidence.append("趋势站上MA20且MA20不弱于MA60")
+        if momentum_ok:
+            evidence.append("20/60日动量配合")
+        if volume_ok:
+            evidence.append("量能温和放大")
+        if macd_ok:
+            evidence.append("MACD动能改善")
+        if breakout_ok:
+            evidence.append("接近或突破阶段高点")
+        if rsi is not None and rsi > 82.0:
+            evidence.append("RSI过热，降低追高信号")
+        if not evidence:
+            evidence.append("优势指标不足")
+
+        as_of = None
+        if date_column is not None:
+            as_of = rows[-1].get(date_column)
+            as_of = as_of.isoformat() if hasattr(as_of, "isoformat") else str(as_of)
+        support = ma20 if ma20 is not None else low20
+        return {
+            "symbol": symbol,
+            "as_of": as_of,
+            "score": score,
+            "probability": score / 100.0,
+            "direction_label": direction_label,
+            "key_levels": {
+                "support": support,
+                "resistance": high60,
+                "stop": support * 0.97 if support is not None else None,
+                "recent_low": low20,
+            },
+            "metrics": {
+                "ma5": ma5,
+                "ma20": ma20,
+                "ma60": ma60,
+                "momentum_20d": momentum_20d,
+                "momentum_60d": momentum_60d,
+                "vol_ratio_5d": vol_ratio,
+                "rsi_14": rsi,
+                "macd_hist": macd_hist,
+            },
+            "evidence": evidence[:4],
+        }
 
     def detail(self, symbol: str, timeframe: str) -> dict | None:
         state = self.store.get_state(symbol.strip().upper(), timeframe)

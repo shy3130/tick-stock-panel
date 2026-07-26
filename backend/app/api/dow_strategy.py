@@ -53,6 +53,32 @@ def run_status(run_id: str):
     ))
 
 
+@router.get("/next-day-direction/pool")
+def next_day_direction_pool(
+    market: str = Query(pattern="^(cn|hk|us|all)$"),
+    limit: int = Query(default=80, ge=1, le=500),
+):
+    return _payload(httpx.get(
+        f"{_endpoint()}/api/workbench",
+        params={
+            "market": market,
+            "limit": limit,
+            "strategy": "next_day_direction",
+            "includeDetail": "false",
+        },
+        timeout=90.0,
+    ))
+
+
+@router.get("/next-day-direction/{symbol}")
+def next_day_direction_detail(symbol: str):
+    return _payload(httpx.get(
+        f"{_endpoint()}/api/stocks/{symbol.strip().upper()}",
+        params={"strategy": "next_day_direction"},
+        timeout=90.0,
+    ))
+
+
 @router.get("/{symbol}")
 def detail(symbol: str):
     return _payload(httpx.get(

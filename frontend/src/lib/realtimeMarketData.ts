@@ -111,6 +111,8 @@ interface ViewSnapshot {
 }
 
 const SOCKET_OPEN = 1
+const QUOTE_DEPTH_DELAY_MS = 120_000
+const CANDLESTICK_DELAY_MS = 180_000
 const EMPTY_SNAPSHOT: ViewSnapshot = {
   status: 'disconnected',
   states: new Map(),
@@ -336,11 +338,17 @@ export class RealtimeMarketDataClient {
     const received = this.receivedAt.get(state.symbol) ?? {}
     return {
       ...state,
-      quoteDelayed: Boolean(state.quote && currentTime - (received.quote ?? currentTime) >= 5000),
-      depthDelayed: Boolean(state.depth && currentTime - (received.depth ?? currentTime) >= 5000),
+      quoteDelayed: Boolean(
+        state.quote
+        && currentTime - (received.quote ?? currentTime) >= QUOTE_DEPTH_DELAY_MS,
+      ),
+      depthDelayed: Boolean(
+        state.depth
+        && currentTime - (received.depth ?? currentTime) >= QUOTE_DEPTH_DELAY_MS,
+      ),
       candlestickDelayed: Boolean(
         state.candlestick
-        && currentTime - (received.candlestick ?? currentTime) >= 90_000,
+        && currentTime - (received.candlestick ?? currentTime) >= CANDLESTICK_DELAY_MS,
       ),
     }
   }

@@ -11,7 +11,7 @@ import { StockDailyKChart } from '@/components/StockDailyKChart'
 import { cn } from '@/lib/cn'
 
 import { formatServerTimestamp } from './formatServerTimestamp'
-import { toChartBars, toChartMarkers, toPriceLines } from './chartMappings'
+import { toChartBars, toChartMarkers, toPriceLines, toSignalPriceLines } from './chartMappings'
 import type { DowFreshnessState, DowTimeframe } from './types'
 import { useDowMonitorDetail } from './useDowMonitor'
 
@@ -63,12 +63,16 @@ export function DowMonitorDetailDialog({
     : undefined
   const chartBars = useMemo(() => toChartBars(detail?.chart?.bars), [detail?.chart?.bars])
   const markers = useMemo(
-    () => toChartMarkers(detail?.chart?.signals),
-    [detail?.chart?.signals],
+    () => toChartMarkers(detail?.chart?.turning?.signals, detail?.chart?.bars, detail?.chart?.signals),
+    [detail?.chart?.bars, detail?.chart?.signals, detail?.chart?.turning?.signals],
   )
-  const priceLines = useMemo(
+  const detailPriceLines = useMemo(
     () => toPriceLines(detail?.chart?.lines, detail?.chart?.bars, detail?.chart?.longTerm),
     [detail?.chart?.bars, detail?.chart?.lines, detail?.chart?.longTerm],
+  )
+  const signalPriceLines = useMemo(
+    () => toSignalPriceLines(markers),
+    [markers],
   )
   const subHeight = indicators.activeIndicators.reduce((height, key) => {
     const definition = SUB_CHARTS.find(item => item.key === key)
@@ -192,7 +196,7 @@ export function DowMonitorDetailDialog({
               height={620}
               chartData={chartBars}
               markers={markers}
-              priceLines={priceLines}
+              priceLines={detailPriceLines}
               showIndicatorControls={false}
               showLimitMarkers={false}
               showMarkerToggle={false}
@@ -203,9 +207,9 @@ export function DowMonitorDetailDialog({
             <EChartsCandlestick
               data={chartBars}
               markers={markers}
-              priceLines={priceLines}
+              priceLines={signalPriceLines}
               height={chartHeight}
-              visibleBars={120}
+              visibleBars={320}
               activeIndicators={indicators.activeIndicators}
               volumeCompare={indicators.volumeCompare}
               showMA

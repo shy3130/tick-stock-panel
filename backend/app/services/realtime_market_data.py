@@ -13,6 +13,7 @@ from redis.exceptions import RedisError
 
 
 UI_DATASETS = frozenset({"quote", "depth", "candlestick"})
+PUBSUB_DRAIN_LIMIT = 1000
 ENVELOPE_FIELDS = (
     "type",
     "version",
@@ -299,17 +300,22 @@ class RealtimeHub:
             if self._pubsub is None:
                 self._pubsub = self._redis.pubsub()
                 await self._pubsub.subscribe(self.channel)
-            item = await self._pubsub.get_message(
-                ignore_subscribe_messages=True,
-                timeout=0.1,
-            )
+            drained = 0
             self.state = "connected"
             self._reconnect_delay = 0.5
-            if item and item.get("type") == "message":
-                data = item.get("data")
-                if isinstance(data, bytes):
-                    data = data.decode("utf-8")
-                await self.dispatch(json.loads(data))
+            while drained < PUBSUB_DRAIN_LIMIT:
+                item = await self._pubsub.get_message(
+                    ignore_subscribe_messages=True,
+                    timeout=0.1 if drained == 0 else 0,
+                )
+                if not item:
+                    break
+                drained += 1
+                if item.get("type") == "message":
+                    data = item.get("data")
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8")
+                    await self.dispatch(json.loads(data))
         except (RedisError, json.JSONDecodeError, TypeError):
             await self._degrade()
 

@@ -144,16 +144,30 @@ describe('RealtimeMarketDataClient', () => {
   })
 
   it('marks datasets delayed only while their market is open', () => {
+    client.dispose()
+    socket = new FakeSocket()
+    client = new RealtimeMarketDataClient({
+      socketFactory: () => socket,
+      marketOpen: () => true,
+      livenessMs: 300_000,
+    })
     client.subscribe(['700.HK'], ['quote', 'depth', 'candlestick'], 1)
     socket.message(snapshot())
 
-    vi.advanceTimersByTime(5000)
+    vi.advanceTimersByTime(119_999)
+    expect(client.getState('700.HK')).toEqual(expect.objectContaining({
+      quoteDelayed: false,
+      depthDelayed: false,
+      candlestickDelayed: false,
+    }))
+
+    vi.advanceTimersByTime(1)
     expect(client.getState('700.HK')).toEqual(expect.objectContaining({
       quoteDelayed: true,
       depthDelayed: true,
       candlestickDelayed: false,
     }))
-    vi.advanceTimersByTime(85_000)
+    vi.advanceTimersByTime(60_000)
     expect(client.getState('700.HK')?.candlestickDelayed).toBe(true)
 
     client.dispose()
@@ -165,6 +179,20 @@ describe('RealtimeMarketDataClient', () => {
     client.subscribe(['700.HK'], ['quote', 'depth', 'candlestick'], 1)
     socket.message(snapshot())
     vi.advanceTimersByTime(90_000)
+    expect(client.getState('700.HK')).toEqual(expect.objectContaining({
+      quoteDelayed: false,
+      depthDelayed: false,
+      candlestickDelayed: false,
+    }))
+  })
+
+  it('does not mark a quiet open-market stream delayed while socket liveness is healthy', () => {
+    client.subscribe(['700.HK'], ['quote', 'depth', 'candlestick'], 1)
+    socket.message(snapshot())
+
+    vi.advanceTimersByTime(30_000)
+
+    expect(client.getStatus()).toBe('realtime')
     expect(client.getState('700.HK')).toEqual(expect.objectContaining({
       quoteDelayed: false,
       depthDelayed: false,

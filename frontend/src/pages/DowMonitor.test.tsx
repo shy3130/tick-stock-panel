@@ -241,6 +241,20 @@ function symbolFixture(
     last_price: symbol === '01347.HK' ? 13.47 : 21.5,
     change_pct: symbol === '01347.HK' ? 0.0125 : -0.02,
     quote_timestamp: 1_774_752_700_000,
+    next_day_direction: {
+      symbol,
+      as_of: '2026-07-23',
+      score: symbol === '01347.HK' ? 86 : 62,
+      probability: symbol === '01347.HK' ? 0.86 : 0.62,
+      direction_label: symbol === '01347.HK' ? '强势偏多' : '中性震荡',
+      realtime_signal: symbol === '01347.HK' ? 'BUY_WATCH' : 'OBSERVE',
+      realtime_label: symbol === '01347.HK' ? '强势跟踪' : '观察',
+      realtime_reason: symbol === '01347.HK'
+        ? '日线评分强，实时价守在支撑上方'
+        : '次日方向优势不足',
+      key_levels: { support: 12.8, resistance: 14.2, stop: 12.42, recent_low: 12.1 },
+      evidence: ['趋势站上MA20且MA20不弱于MA60'],
+    },
     market,
     enabled,
     created_at: '2026-07-23T00:00:00Z',
@@ -360,10 +374,527 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  window.history.replaceState(null, '', '/')
   vi.unstubAllGlobals()
 })
 
 describe('Dow monitor page', () => {
+  it('uses the market query parameter as the initial market scope', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+
+    render(<DowMonitor />)
+
+    expect(screen.getByTestId('card-01347.HK')).toBeInTheDocument()
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('方向：')
+    expect(screen.queryByTestId('card-INTC.US')).not.toBeInTheDocument()
+    expect(realtimeMocks.useRealtimeMarketData).toHaveBeenCalledWith(
+      ['01347.HK'],
+      ['quote', 'depth', 'candlestick'],
+      1,
+    )
+  })
+
+  it('shows realtime state as a direct direction conclusion with compact evidence', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([
+        [
+          '01347.HK',
+          {
+            symbol: '01347.HK',
+            streamId: 'stream-1',
+            sequence: 1,
+            eventAt: '2026-07-23T01:05:30Z',
+            publishedAt: '2026-07-23T01:05:31Z',
+            quote: { lastDone: 13.8, prevClose: 13.2, timestamp: '2026-07-23T01:05:30Z' },
+            depth: {
+              bids: [{ price: 13.8, volume: 100_000 }, { price: 13.78, volume: 50_000 }],
+              asks: [{ price: 13.82, volume: 20_000 }, { price: 13.84, volume: 10_000 }],
+              timestamp: '2026-07-23T01:05:30Z',
+            },
+            candlestick: {
+              period: 'min_1',
+              timestamp: '2026-07-23T01:05:00Z',
+              open: 13.5,
+              high: 13.85,
+              low: 13.48,
+              close: 13.8,
+              volume: 240,
+              turnover: 3_300_000,
+            },
+            quoteDelayed: false,
+            depthDelayed: false,
+            candlestickDelayed: false,
+          },
+        ],
+      ]),
+    }
+
+    render(<DowMonitor />)
+
+    const state = screen.getByTestId('realtime-state-01347.HK')
+    expect(state).toHaveTextContent('方向：偏涨')
+    expect(state).toHaveTextContent('上涨概率')
+    expect(state).toHaveTextContent('%')
+    expect(state).toHaveTextContent('主因：页面累计净流入，买盘明显强于卖盘，量能放大')
+    expect(state).toHaveTextContent('证据：累计净流入 +165万；累计买卖比 4.99x；累计均比 2.40x；最新切片净流入 +165万')
+    expect(state).not.toHaveTextContent('买207万/卖41万')
+    expect(state).not.toHaveTextContent('最大买138万/卖28万')
+    const chart = screen.getByTestId('mini-chart-01347.HK-5m')
+    expect(
+      Boolean(chart.compareDocumentPosition(state) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true)
+  })
+
+  it('keeps realtime state summary stable inside the same minute and refreshes on the next minute', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+    const realtimeState: RealtimeSymbolState = {
+      symbol: '01347.HK',
+      streamId: 'stream-1',
+      sequence: 1,
+      eventAt: '2026-07-23T01:05:20Z',
+      publishedAt: '2026-07-23T01:05:21Z',
+      quote: { lastDone: 13.8, prevClose: 13.2, timestamp: '2026-07-23T01:05:20Z' },
+      depth: {
+        bids: [{ price: 13.8, volume: 100_000 }],
+        asks: [{ price: 13.82, volume: 20_000 }],
+        timestamp: '2026-07-23T01:05:20Z',
+      },
+      candlestick: {
+        period: 'min_1',
+        timestamp: '2026-07-23T01:05:00Z',
+        open: 13.5,
+        high: 13.85,
+        low: 13.48,
+        close: 13.8,
+        volume: 240,
+        turnover: 3_300_000,
+      },
+      quoteDelayed: false,
+      depthDelayed: false,
+      candlestickDelayed: false,
+    }
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([['01347.HK', realtimeState]]),
+    }
+
+    const { rerender } = render(<DowMonitor />)
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('累计净流入 +110万')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('累计买卖比 4.99x')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('最新切片净流入 +110万')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('方向：偏涨')
+
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([
+        [
+          '01347.HK',
+          {
+            ...realtimeState,
+            sequence: 2,
+            eventAt: '2026-07-23T01:05:45Z',
+            depth: {
+              bids: [{ price: 13.8, volume: 5_000 }],
+              asks: [{ price: 13.82, volume: 200_000 }],
+              timestamp: '2026-07-23T01:05:45Z',
+            },
+          },
+        ],
+      ]),
+    }
+    rerender(<DowMonitor />)
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('累计净流入 +110万')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('累计买卖比 4.99x')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('最新切片净流入 +110万')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('方向：偏涨')
+
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([
+        [
+          '01347.HK',
+          {
+            ...realtimeState,
+            sequence: 3,
+            eventAt: '2026-07-23T01:06:03Z',
+            depth: {
+              bids: [{ price: 13.8, volume: 5_000 }],
+              asks: [{ price: 13.82, volume: 200_000 }],
+              timestamp: '2026-07-23T01:06:03Z',
+            },
+            candlestick: {
+              ...realtimeState.candlestick!,
+              timestamp: '2026-07-23T01:06:00Z',
+              close: 13.4,
+              turnover: 800_000,
+            },
+          },
+        ],
+      ]),
+    }
+    rerender(<DowMonitor />)
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('累计净流出 -159万')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('累计买卖比 0.48x')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('最新切片净流出 -270万')
+    expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('方向：偏跌')
+  })
+
+  it('uses trading-day capital for direction even when the latest minute slice is negative', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+    const withCapital = structuredClone(overview)
+    withCapital.symbols[0].intraday_capital = {
+      capital_minute: '2026-07-23T01:06:00Z',
+      total_net: 186,
+      large_net: 92,
+      total_in: 560,
+      total_out: 374,
+      large_net_ratio: 0.19,
+      flow_15m: -8,
+      flow_30m: 22,
+      flow_today: 186,
+      last_flow_time: '2026-07-23T01:06:00Z',
+      flow_points: 88,
+      windows: [
+        {
+          label: '近30分钟',
+          minutes: 30,
+          start_time: '2026-07-23 14:30:00.000',
+          end_time: '2026-07-23 15:00:00.000',
+          start_price: 13.1,
+          end_price: 13.47,
+          price_change_pct: 2.82,
+          start_total_net: 100,
+          end_total_net: 186,
+          total_net_delta: 86,
+          start_large_net: 48,
+          end_large_net: 92,
+          large_net_delta: 44,
+        },
+        {
+          label: '近45分钟',
+          minutes: 45,
+          start_time: '2026-07-23 14:15:00.000',
+          end_time: '2026-07-23 15:00:00.000',
+          start_price: 12.98,
+          end_price: 13.47,
+          price_change_pct: 3.78,
+          start_total_net: 80,
+          end_total_net: 186,
+          total_net_delta: 106,
+          start_large_net: 28,
+          end_large_net: 92,
+          large_net_delta: 64,
+        },
+        {
+          label: '近60分钟',
+          minutes: 60,
+          start_time: '2026-07-23 14:00:00.000',
+          end_time: '2026-07-23 15:00:00.000',
+          start_price: 12.9,
+          end_price: 13.47,
+          price_change_pct: 4.42,
+          start_total_net: 70,
+          end_total_net: 186,
+          total_net_delta: 116,
+          start_large_net: 18,
+          end_large_net: 92,
+          large_net_delta: 74,
+        },
+      ],
+      source: 'trading_day',
+    }
+    hooks.overview = {
+      data: withCapital,
+      isError: false,
+      isLoading: false,
+    }
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([
+        [
+          '01347.HK',
+          {
+            symbol: '01347.HK',
+            streamId: 'stream-1',
+            sequence: 3,
+            eventAt: '2026-07-23T01:06:03Z',
+            publishedAt: '2026-07-23T01:06:04Z',
+            quote: { lastDone: 13.8, prevClose: 13.2, timestamp: '2026-07-23T01:06:03Z' },
+            depth: {
+              bids: [{ price: 13.8, volume: 5_000 }],
+              asks: [{ price: 13.82, volume: 200_000 }],
+              timestamp: '2026-07-23T01:06:03Z',
+            },
+            candlestick: {
+              period: 'min_1',
+              timestamp: '2026-07-23T01:06:00Z',
+              open: 13.7,
+              high: 13.8,
+              low: 13.35,
+              close: 13.4,
+              volume: 240,
+              turnover: 800_000,
+            },
+            quoteDelayed: false,
+            depthDelayed: false,
+            candlestickDelayed: false,
+          },
+        ],
+      ]),
+    }
+
+    render(<DowMonitor />)
+
+    const state = screen.getByTestId('realtime-state-01347.HK')
+    expect(state).toHaveTextContent('方向：偏涨')
+    expect(state).toHaveTextContent('当日资金净流入 +186万')
+    expect(state).toHaveTextContent('大单 +92万')
+    expect(state).toHaveTextContent('30分钟 +22万')
+    expect(state).toHaveTextContent('最新切片净流出 -270万')
+    expect(state).toHaveTextContent('分析结论：偏涨')
+    expect(state).toHaveTextContent('上涨条件占优')
+    expect(state).toHaveTextContent('时间切片改善')
+    expect(state).toHaveTextContent('14:30-15:00，价格 +2.8%')
+    expect(state).toHaveTextContent('总资金从 +100万 到 +186万，改善 +86万')
+    expect(state).toHaveTextContent('大单资金从 +48万 到 +92万，改善 +44万')
+    expect(state).toHaveTextContent('连续性观察')
+    expect(state).toHaveTextContent('30分 总+86万 / 大单+44万；45分 总+106万 / 大单+64万；60分 总+116万 / 大单+74万')
+    expect(state).not.toHaveTextContent('大单压力未解')
+  })
+
+  it('treats flat capital windows after close as no fresh capital update', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=us')
+    const withCapital = structuredClone(overview)
+    withCapital.symbols[1].intraday_capital = {
+      capital_minute: '2026-07-24T22:19:00Z',
+      total_net: -5399,
+      large_net: -2087,
+      total_in: 14300,
+      total_out: 19700,
+      large_net_ratio: -0.11,
+      flow_15m: 0,
+      flow_30m: 0,
+      flow_today: -308112902,
+      last_flow_time: '2026-07-24T22:19:00Z',
+      flow_points: 98,
+      windows: [
+        {
+          label: '近30分钟',
+          minutes: 30,
+          start_time: '2026-07-25 05:49:00.000',
+          end_time: '2026-07-25 06:19:00.000',
+          start_price: 315.5,
+          end_price: 313.59,
+          price_change_pct: -0.6,
+          start_total_net: -5399,
+          end_total_net: -5399,
+          total_net_delta: 0,
+          start_large_net: -2087,
+          end_large_net: -2087,
+          large_net_delta: 0,
+        },
+        {
+          label: '近45分钟',
+          minutes: 45,
+          start_time: '2026-07-25 05:34:00.000',
+          end_time: '2026-07-25 06:19:00.000',
+          start_price: 316,
+          end_price: 313.59,
+          price_change_pct: -0.76,
+          start_total_net: -5399,
+          end_total_net: -5399,
+          total_net_delta: 0,
+          start_large_net: -2087,
+          end_large_net: -2087,
+          large_net_delta: 0,
+        },
+        {
+          label: '近60分钟',
+          minutes: 60,
+          start_time: '2026-07-25 05:19:00.000',
+          end_time: '2026-07-25 06:19:00.000',
+          start_price: 317,
+          end_price: 313.59,
+          price_change_pct: -1.08,
+          start_total_net: -5399,
+          end_total_net: -5399,
+          total_net_delta: 0,
+          start_large_net: -2087,
+          end_large_net: -2087,
+          large_net_delta: 0,
+        },
+      ],
+      source: 'trading_day',
+    }
+    hooks.overview = { data: withCapital, isError: false, isLoading: false }
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([
+        [
+          'INTC.US',
+          {
+            symbol: 'INTC.US',
+            streamId: 'stream-flat',
+            sequence: 1,
+            eventAt: '2026-07-24T22:19:00Z',
+            publishedAt: '2026-07-24T22:19:01Z',
+            quote: { lastDone: 313.59, prevClose: 335.96, timestamp: '2026-07-24T22:19:00Z' },
+            depth: {
+              bids: [{ price: 313.56, volume: 80_000 }],
+              asks: [{ price: 313.62, volume: 82_000 }],
+              timestamp: '2026-07-24T22:19:00Z',
+            },
+            candlestick: {
+              period: 'min_1',
+              timestamp: '2026-07-24T22:19:00Z',
+              open: 313.7,
+              high: 313.8,
+              low: 313.45,
+              close: 313.59,
+              volume: 10,
+              turnover: 3_135_900,
+            },
+            quoteDelayed: false,
+            depthDelayed: false,
+            candlestickDelayed: false,
+          },
+        ],
+      ]),
+    }
+
+    render(<DowMonitor />)
+
+    const stateBox = screen.getByTestId('realtime-state-INTC.US')
+    expect(stateBox).toHaveTextContent('分析结论：偏跌')
+    expect(stateBox).toHaveTextContent('下跌风险占优')
+    expect(stateBox).toHaveTextContent('资金未更新')
+    expect(stateBox).toHaveTextContent('05:49-06:19，价格 -0.6%')
+    expect(stateBox).toHaveTextContent('总资金 -5399万，大单资金 -2087万在该窗口未变化')
+    expect(stateBox).toHaveTextContent('连续性观察')
+    expect(stateBox).toHaveTextContent('30分 总0万 / 大单0万；45分 总0万 / 大单0万；60分 总0万 / 大单0万')
+    expect(stateBox).toHaveTextContent('当日资金净流出 -5399万')
+    expect(stateBox).not.toHaveTextContent('-308112902万')
+    expect(stateBox).not.toHaveTextContent('恶化 0万')
+    expect(stateBox).not.toHaveTextContent('大单压力未解')
+  })
+
+  it('explains why a deeply negative stock is being pulled up from the intraday low', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=us')
+    const withCapital = structuredClone(overview)
+    withCapital.symbols[1].change_pct = -0.069
+    withCapital.symbols[1].intraday_capital = {
+      capital_minute: '2026-07-24T16:15:00Z',
+      total_net: -1814,
+      large_net: -448,
+      total_in: 24028,
+      total_out: 25842,
+      large_net_ratio: -0.018,
+      flow_15m: 420,
+      flow_30m: 1063,
+      flow_today: -1814,
+      last_flow_time: '2026-07-24T16:15:00Z',
+      flow_points: 88,
+      windows: [
+        {
+          label: '近30分钟',
+          minutes: 30,
+          start_time: '2026-07-24 23:45:00.000',
+          end_time: '2026-07-25 00:15:00.000',
+          start_price: 202.044,
+          end_price: 205.665,
+          price_change_pct: 1.79,
+          start_total_net: -2876.57,
+          end_total_net: -1813.69,
+          total_net_delta: 1062.88,
+          start_large_net: -976.54,
+          end_large_net: -448.31,
+          large_net_delta: 528.23,
+        },
+      ],
+      source: 'trading_day',
+    }
+    withCapital.symbols[1].states['5m'] = state(
+      'INTC.US',
+      'us',
+      '5m',
+      'WATCH',
+      'LIVE',
+      {
+        bars: [
+          { index: 0, timestamp: '2026-07-24T14:45:00Z', open: 202, high: 203, low: 194.04, close: 194.25, volume: 100 },
+          { index: 1, timestamp: '2026-07-24T15:15:00Z', open: 194.25, high: 206, low: 194.1, close: 205.67, volume: 240 },
+        ],
+        lines: [],
+        signals: [],
+      },
+    )
+    hooks.overview = { data: withCapital, isError: false, isLoading: false }
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([
+        [
+          'INTC.US',
+          {
+            symbol: 'INTC.US',
+            streamId: 'stream-1',
+            sequence: 1,
+            eventAt: '2026-07-24T16:15:00Z',
+            publishedAt: '2026-07-24T16:15:01Z',
+            quote: { lastDone: 205.67, prevClose: 220.97, timestamp: '2026-07-24T16:15:00Z' },
+            depth: {
+              bids: [{ price: 205.6, volume: 80_000 }],
+              asks: [{ price: 205.8, volume: 35_000 }],
+              timestamp: '2026-07-24T16:15:00Z',
+            },
+            candlestick: {
+              period: 'min_1',
+              timestamp: '2026-07-24T16:15:00Z',
+              open: 204,
+              high: 206,
+              low: 203.8,
+              close: 205.67,
+              volume: 360,
+              turnover: 7_400_000,
+            },
+            quoteDelayed: false,
+            depthDelayed: false,
+            candlestickDelayed: false,
+          },
+        ],
+      ]),
+    }
+
+    render(<DowMonitor />)
+
+    const stateBox = screen.getByTestId('realtime-state-INTC.US')
+    expect(stateBox).toHaveTextContent('下跌后卖压衰减')
+    expect(stateBox).toHaveTextContent('大单资金净流仍为 -448万')
+    expect(stateBox).toHaveTextContent('23:45-00:15 从 -977万 修复到 -448万')
+    expect(stateBox).toHaveTextContent('净改善 +528万')
+    expect(stateBox).toHaveTextContent('总资金开始修复')
+    expect(stateBox).toHaveTextContent('23:45-00:15，总资金从 -2877万 修复到 -1814万')
+    expect(stateBox).toHaveTextContent('净改善 +1063万')
+    expect(stateBox).toHaveTextContent('价格和资金开始同步改善')
+    expect(stateBox).toHaveTextContent('23:45-00:15，价格 +1.8%')
+    expect(stateBox).toHaveTextContent('从低点 194.04 拉到 205.67')
+    expect(stateBox).toHaveTextContent('低位承接出现')
+    expect(stateBox).toHaveTextContent('但还不是强势反转')
+    expect(stateBox).toHaveTextContent('下跌承接 / 资金修复 / 卖压衰减 / 弱转强观察')
+  })
+
+  it('keeps the market query parameter in sync when switching tabs', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+
+    render(<DowMonitor />)
+    await user.click(screen.getByRole('button', { name: '美股' }))
+
+    expect(window.location.search).toBe('?market=us')
+    expect(screen.getByTestId('card-INTC.US')).toBeInTheDocument()
+  })
+
   it('shows a wide four-column grid and keeps notifications inside their market card', async () => {
     const user = userEvent.setup()
     render(<DowMonitor />)
@@ -1019,7 +1550,7 @@ describe('Dow monitor page', () => {
 })
 
 describe('Dow mini chart semantics', () => {
-  it('uses solid blue/magenta main lines, dashed acceleration, and backend signal colors', () => {
+  it('uses solid blue/magenta main lines, dashed acceleration, and red-buy green-sell signal colors', () => {
     const option = buildDowMiniChartOption(authoritativeChart)
     const series = option.series as Array<Record<string, any>>
     const main = series.find(item => item.id === 'main-support')
@@ -1029,12 +1560,34 @@ describe('Dow mini chart semantics', () => {
     expect(main?.lineStyle).toMatchObject({ color: '#3B82F6', type: 'solid' })
     expect(acceleration?.lineStyle).toMatchObject({ color: '#D946EF', type: 'dashed' })
     expect(candle?.markPoint.data).toEqual(expect.arrayContaining([
-      expect.objectContaining({ itemStyle: { color: '#22C55E' } }),
-      expect.objectContaining({ itemStyle: { color: '#EF4444' } }),
+      expect.objectContaining({ name: 'BUY', itemStyle: { color: '#EF4444' } }),
+      expect.objectContaining({ name: 'RISK', itemStyle: { color: '#22C55E' } }),
     ]))
+    expect(option.tooltip).toMatchObject({ show: true, trigger: 'item', confine: true })
     expect(option.xAxis).toMatchObject({ axisLabel: { show: false } })
     expect(option.yAxis).toMatchObject({ axisLabel: { show: false } })
     expect(option.legend).toBeUndefined()
+  })
+
+  it('shows signal context in the mini chart hover tooltip', () => {
+    const option = buildDowMiniChartOption(authoritativeChart)
+    const series = option.series as Array<Record<string, any>>
+    const candle = series.find(item => item.id === 'candles')
+    const buyPoint = candle?.markPoint.data.find((item: Record<string, any>) => item.name === 'BUY')
+    const formatter = (option.tooltip as Record<string, any>).formatter
+
+    expect(buyPoint).toMatchObject({
+      value: 10.4,
+      signal: expect.objectContaining({
+        side: 'BUY',
+        reason: 'backend buy',
+        confidence: 'HIGH',
+      }),
+    })
+    expect(formatter({ data: buyPoint })).toContain('买点')
+    expect(formatter({ data: buyPoint })).toContain('10.400')
+    expect(formatter({ data: buyPoint })).toContain('backend buy')
+    expect(formatter({ data: buyPoint })).toContain('HIGH')
   })
 
   it('draws the amber long-term line only when both persisted anchors are complete', () => {
@@ -1052,6 +1605,18 @@ describe('Dow mini chart semantics', () => {
       color: '#F59E0B',
     })
     expect(incomplete.some(item => item.id === 'long-term')).toBe(false)
+  })
+
+  it('can hide trend lines for compact monitor cards while keeping signal markers', () => {
+    const option = buildDowMiniChartOption(authoritativeChart, undefined, { showLines: false })
+    const series = option.series as Array<Record<string, any>>
+    const candle = series.find(item => item.id === 'candles')
+
+    expect(series.filter(item => item.type === 'line')).toHaveLength(0)
+    expect(candle?.markPoint.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'BUY', itemStyle: { color: '#EF4444' } }),
+      expect.objectContaining({ name: 'RISK', itemStyle: { color: '#22C55E' } }),
+    ]))
   })
 
   it('does not infer lines or signals when the backend returns none', () => {

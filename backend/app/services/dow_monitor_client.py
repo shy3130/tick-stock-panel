@@ -159,6 +159,7 @@ class DowEngineResult(_EngineModel):
     lines: tuple[DowLine, ...]
     signals: tuple[DowSignal, ...]
     long_term: DowLongTermSnapshot = Field(alias="longTerm")
+    turning: dict[str, Any] | None = None
     evaluated_at: datetime = Field(alias="evaluatedAt")
 
 

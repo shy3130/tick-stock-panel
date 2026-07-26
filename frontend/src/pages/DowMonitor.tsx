@@ -39,6 +39,14 @@ const SIGNAL_FILTERS: Array<{ value: SignalFilter; label: string }> = [
   { value: 'sell', label: '仅卖点' },
 ]
 
+function initialMarket(): DowMonitorMarket {
+  if (typeof window === 'undefined') return 'all'
+  const value = new URLSearchParams(window.location.search).get('market')
+  return value === 'cn' || value === 'hk' || value === 'us' || value === 'all'
+    ? value
+    : 'all'
+}
+
 function sameMarket(market: DowMonitorMarket, itemMarket: string) {
   return market === 'all' || market === itemMarket
 }
@@ -77,7 +85,7 @@ export function DowMonitor({
 }: {
   onOpen?: (symbol: string, timeframe: DowTimeframe) => void
 }) {
-  const [market, setMarket] = useState<DowMonitorMarket>('all')
+  const [market, setMarket] = useState<DowMonitorMarket>(() => initialMarket())
   const [signal, setSignal] = useState<SignalFilter>('all')
   const [symbolInput, setSymbolInput] = useState('')
   const [suggestions, setSuggestions] = useState<InstrumentSuggestion[]>([])
@@ -140,8 +148,10 @@ export function DowMonitor({
 
   const symbols = overview.data?.symbols ?? []
   const realtimeSymbols = useMemo(
-    () => symbols.filter(item => item.enabled).map(item => item.symbol),
-    [symbols],
+    () => symbols
+      .filter(item => item.enabled && sameMarket(market, item.market))
+      .map(item => item.symbol),
+    [market, symbols],
   )
   const realtime = useRealtimeMarketData(
     realtimeSymbols,
@@ -208,6 +218,14 @@ export function DowMonitor({
         },
       },
     )
+  }
+
+  const setMarketScope = (nextMarket: DowMonitorMarket) => {
+    setMarket(nextMarket)
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('market', nextMarket)
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
   let statusLabel = '后台状态未知'
@@ -394,7 +412,7 @@ export function DowMonitor({
       )}
 
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 sm:px-5">
-        <MarketFilterTabs value={market} onChange={setMarket} />
+        <MarketFilterTabs value={market} onChange={setMarketScope} />
         <div className="flex h-8 items-center overflow-hidden rounded-btn border border-border bg-surface">
           {SIGNAL_FILTERS.map(option => (
             <button

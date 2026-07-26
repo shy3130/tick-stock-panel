@@ -152,3 +152,24 @@ async def test_pubsub_failure_degrades_and_sends_fallback_without_raising() -> N
     assert hub.state == "degraded"
     assert (await connection.buffer.get())["type"] == "fallback"
     assert hub.metrics()["redis_failures"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pubsub_drains_backlog_in_one_cycle() -> None:
+    redis = FakeRedis()
+    redis.messages = [
+        {"type": "message", "data": json.dumps(update("AAPL.US", 1))},
+        {"type": "message", "data": json.dumps(update("AAPL.US", 2))},
+        {"type": "message", "data": json.dumps(update("AAPL.US", 3))},
+    ]
+    hub = RealtimeHub("redis://test", redis_factory=lambda _url: redis)
+    connection = RealtimeConnection()
+    await hub.register(connection)
+    await hub.subscribe(connection, {"AAPL.US"}, {"quote"})
+
+    await hub.run_pubsub_once()
+
+    projected = await connection.buffer.get()
+    assert projected["sequence"] == 3
+    assert redis.messages == []
+    assert hub.metrics()["sent_updates"] == 3

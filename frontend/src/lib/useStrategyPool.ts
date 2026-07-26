@@ -1,8 +1,13 @@
 import { useState, useCallback, useEffect } from 'react'
 import { storage } from '@/lib/storage'
 
+const DEFAULT_POOL = ['next_day_direction']
+
 export function useStrategyPool() {
-  const [pool, setPool] = useState<string[]>(() => storage.strategyPool.get([]))
+  const [pool, setPool] = useState<string[]>(() => {
+    const saved = storage.strategyPool.get(DEFAULT_POOL)
+    return [...new Set([...DEFAULT_POOL, ...saved])]
+  })
 
   // 同步写入 localStorage
   useEffect(() => { storage.strategyPool.set(pool) }, [pool])

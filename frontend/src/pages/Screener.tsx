@@ -22,7 +22,6 @@ import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDi
 import { StrategyPoolDialog } from '@/components/screener/StrategyPoolDialog'
 import { StrategyBuilderDialog } from '@/components/screener/StrategyBuilderDialog'
 import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
-import { DowStrategyCard } from '@/components/screener/DowStrategyCard'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
@@ -681,8 +680,6 @@ export function Screener() {
       />
 
       <div className="space-y-3 px-2 py-3 sm:px-5 lg:px-8 lg:py-4">
-        {assetType === 'stock' && <DowStrategyCard market={marketFilter} />}
-
         {/* 策略卡片 */}
         {cardSize !== 'hidden' && (
         <section>

@@ -13,10 +13,11 @@ export function useDowMonitorOverview(
   market: DowMonitorMarket,
   realtimeActive = false,
 ) {
+  void realtimeActive
   return useQuery({
     queryKey: QK.dowMonitorOverview(market),
     queryFn: () => api.dowMonitorOverview(market),
-    refetchInterval: realtimeActive ? false : POLL_INTERVAL_MS,
+    refetchInterval: POLL_INTERVAL_MS,
     placeholderData: keepPreviousData,
   })
 }
