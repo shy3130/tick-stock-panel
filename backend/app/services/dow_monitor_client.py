@@ -151,6 +151,106 @@ class DowLongTermSnapshot(_EngineModel):
     failure_reason: str | None
 
 
+HeadShouldersStage = Literal[
+    "FORMING",
+    "WAIT_NECKLINE_BREAK",
+    "BREAK_WATCH",
+    "WICK_CROSS",
+    "NECKLINE_BREAK_WEAK",
+    "CONFIRMED",
+    "RETEST_CONFIRMED",
+    "FALSE_BREAKOUT",
+    "FAILED",
+]
+
+
+class DowHeadShouldersPoint(_EngineModel):
+    role: Literal[
+        "LEFT_SHOULDER",
+        "NECKLINE_1",
+        "HEAD",
+        "NECKLINE_2",
+        "RIGHT_SHOULDER",
+        "BREAKOUT",
+    ]
+    bar_index: int = Field(alias="barIndex")
+    bar_time: IsoDateOrDateTime = Field(alias="barTime")
+    confirmed_index: int = Field(alias="confirmedIndex")
+    confirmed_time: IsoDateOrDateTime = Field(alias="confirmedTime")
+    price: float
+
+
+class DowHeadShouldersSignal(_EngineModel):
+    family: Literal["HEAD_SHOULDERS"]
+    pattern_id: str = Field(alias="patternId")
+    side: Literal["BUY", "SELL"]
+    stage: Literal["CONFIRMED", "RETEST_CONFIRMED"]
+    bar_index: int = Field(alias="barIndex")
+    bar_time: IsoDateOrDateTime = Field(alias="barTime")
+    price: float
+
+
+class DowHeadShouldersPoints(_EngineModel):
+    left_shoulder: DowHeadShouldersPoint | None = Field(alias="leftShoulder")
+    neckline_1: DowHeadShouldersPoint | None = Field(alias="neckline1")
+    head: DowHeadShouldersPoint | None
+    neckline_2: DowHeadShouldersPoint | None = Field(alias="neckline2")
+    right_shoulder: DowHeadShouldersPoint | None = Field(alias="rightShoulder")
+    breakout: DowHeadShouldersPoint | None
+
+
+class DowHeadShouldersNeckline(_EngineModel):
+    anchors: tuple[DowHeadShouldersPoint, DowHeadShouldersPoint]
+    anchor_indexes: tuple[int, int] = Field(alias="anchorIndexes")
+    anchor_times: tuple[IsoDateOrDateTime, IsoDateOrDateTime] = Field(alias="anchorTimes")
+    anchor_prices: tuple[float, float] = Field(alias="anchorPrices")
+    value: float
+    trigger_index: int | None = Field(alias="triggerIndex")
+    trigger_time: IsoDateOrDateTime | None = Field(alias="triggerTime")
+    trigger_value: float | None = Field(alias="triggerValue")
+
+
+class DowHeadShouldersVolume(_EngineModel):
+    ratio: float | None
+    required_ratio: float = Field(alias="requiredRatio")
+    baseline: float | None
+    trigger_index: int | None = Field(alias="triggerIndex")
+    trigger_time: IsoDateOrDateTime | None = Field(alias="triggerTime")
+
+
+class DowHeadShouldersInvalidation(_EngineModel):
+    price: float | None
+
+
+class DowHeadShouldersLifecycle(_EngineModel):
+    created_index: int = Field(alias="createdIndex")
+    last_updated_index: int = Field(alias="lastUpdatedIndex")
+    evidence: tuple[str, ...]
+
+
+class DowHeadShouldersPattern(_EngineModel):
+    id: str
+    type: Literal["BOTTOM", "TOP"]
+    stage: HeadShouldersStage
+    side: Literal["BUY", "SELL"] | None
+    signal: DowHeadShouldersSignal | None
+    points: DowHeadShouldersPoints
+    neckline: DowHeadShouldersNeckline | None
+    volume: DowHeadShouldersVolume | None
+    invalidation: DowHeadShouldersInvalidation
+    geometry_score: float = Field(alias="geometryScore")
+    volume_score: float = Field(alias="volumeScore")
+    context_score: float = Field(alias="contextScore")
+    quality_score: float = Field(alias="qualityScore")
+    evidence: tuple[str, ...]
+    lifecycle: DowHeadShouldersLifecycle
+
+
+class DowHeadShouldersPayload(_EngineModel):
+    patterns: tuple[DowHeadShouldersPattern, ...]
+    signals: tuple[DowHeadShouldersSignal, ...]
+
+
 class DowEngineResult(_EngineModel):
     symbol: str
     timeframe: str
@@ -160,6 +260,10 @@ class DowEngineResult(_EngineModel):
     signals: tuple[DowSignal, ...]
     long_term: DowLongTermSnapshot = Field(alias="longTerm")
     turning: dict[str, Any] | None = None
+    head_shoulders: DowHeadShouldersPayload | None = Field(
+        default=None,
+        alias="headShoulders",
+    )
     evaluated_at: datetime = Field(alias="evaluatedAt")
 
 

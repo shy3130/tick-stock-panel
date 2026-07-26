@@ -4,14 +4,18 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import httpx
+import polars as pl
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-import polars as pl
-
 from app.api import dow_monitor
+from app.services.dow_monitor_bars import TimeframeBars
+from app.services.dow_monitor_client import DowEngineResult, LongbridgeDowClient
 from app.services.dow_monitor_models import DowNotification, DowTimeframeState
 from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
@@ -46,6 +50,251 @@ def _client(service: DowMonitorService) -> TestClient:
     app.state.dow_monitor_service = service
     app.include_router(dow_monitor.router)
     return TestClient(app)
+
+
+def _engine_payload_with_head_shoulders() -> dict:
+    bar_time = "2026-07-23T09:55:00+08:00"
+    left_shoulder = {
+        "role": "LEFT_SHOULDER",
+        "barIndex": 0,
+        "barTime": "2026-07-23T09:30:00+08:00",
+        "confirmedIndex": 1,
+        "confirmedTime": "2026-07-23T09:35:00+08:00",
+        "price": 9.6,
+    }
+    neckline_1 = {
+        "role": "NECKLINE_1",
+        "barIndex": 1,
+        "barTime": "2026-07-23T09:35:00+08:00",
+        "confirmedIndex": 2,
+        "confirmedTime": "2026-07-23T09:40:00+08:00",
+        "price": 10.8,
+    }
+    head = {
+        "role": "HEAD",
+        "barIndex": 2,
+        "barTime": "2026-07-23T09:40:00+08:00",
+        "confirmedIndex": 3,
+        "confirmedTime": "2026-07-23T09:45:00+08:00",
+        "price": 9.1,
+    }
+    neckline_2 = {
+        "role": "NECKLINE_2",
+        "barIndex": 3,
+        "barTime": "2026-07-23T09:45:00+08:00",
+        "confirmedIndex": 4,
+        "confirmedTime": "2026-07-23T09:50:00+08:00",
+        "price": 10.0,
+    }
+    right_shoulder = {
+        "role": "RIGHT_SHOULDER",
+        "barIndex": 4,
+        "barTime": "2026-07-23T09:50:00+08:00",
+        "confirmedIndex": 5,
+        "confirmedTime": bar_time,
+        "price": 9.35,
+    }
+    breakout = {
+        "role": "BREAKOUT",
+        "barIndex": 5,
+        "barTime": bar_time,
+        "confirmedIndex": 5,
+        "confirmedTime": bar_time,
+        "price": 10.3,
+    }
+    signal = {
+        "family": "HEAD_SHOULDERS",
+        "patternId": "hs-bottom-confirmed",
+        "side": "BUY",
+        "stage": "CONFIRMED",
+        "barIndex": 5,
+        "barTime": bar_time,
+        "price": 10.3,
+    }
+    head_shoulders = {
+        "patterns": [
+            {
+                "id": "hs-bottom-confirmed",
+                "type": "BOTTOM",
+                "stage": "CONFIRMED",
+                "side": "BUY",
+                "signal": signal,
+                "points": {
+                    "leftShoulder": left_shoulder,
+                    "neckline1": neckline_1,
+                    "head": head,
+                    "neckline2": neckline_2,
+                    "rightShoulder": right_shoulder,
+                    "breakout": breakout,
+                },
+                "neckline": {
+                    "anchors": [neckline_1, neckline_2],
+                    "anchorIndexes": [1, 3],
+                    "anchorTimes": [neckline_1["barTime"], neckline_2["barTime"]],
+                    "anchorPrices": [10.8, 10.0],
+                    "value": 9.2,
+                    "triggerIndex": 5,
+                    "triggerTime": bar_time,
+                    "triggerValue": 9.2,
+                },
+                "volume": {
+                    "ratio": 1.64,
+                    "requiredRatio": 1.2,
+                    "baseline": 109.75,
+                    "triggerIndex": 5,
+                    "triggerTime": bar_time,
+                },
+                "invalidation": {"price": 9.05},
+                "geometryScore": 82.0,
+                "volumeScore": 71.0,
+                "contextScore": 63.0,
+                "qualityScore": 216.0,
+                "evidence": ["BREAK_WATCH", "CONFIRMED"],
+                "lifecycle": {
+                    "createdIndex": 4,
+                    "lastUpdatedIndex": 5,
+                    "evidence": ["BREAK_WATCH", "CONFIRMED"],
+                },
+            }
+        ],
+        "signals": [signal],
+    }
+    return {
+        "symbol": "NBIS.US",
+        "timeframe": "5m",
+        "snapshot": {
+            "symbol": "NBIS.US",
+            "timeframe": "5m",
+            "bar_time": bar_time,
+            "bar_completion": "FINAL",
+            "provisional": False,
+            "phase": "观察",
+            "phase_code": "HOLD",
+            "candle_pattern": None,
+            "line_id": None,
+            "line_role": None,
+            "line_side": None,
+            "line_anchor_times": [],
+            "line_value": None,
+            "price_to_line_pct": None,
+            "sequence_count": 0,
+            "volume_ratio_20": None,
+            "volume_confirmation": "NOT_CONFIRMED",
+            "action": "观察",
+            "action_code": "HOLD",
+            "reason_codes": [],
+        },
+        "bars": [
+            {
+                "index": 0,
+                "timestamp": bar_time,
+                "open": 9.6,
+                "high": 10.4,
+                "low": 9.55,
+                "close": 10.3,
+                "volume": 180.0,
+            }
+        ],
+        "lines": [],
+        "signals": [],
+        "longTerm": {
+            "symbol": "NBIS.US",
+            "timeframe": "5m",
+            "bar_time": bar_time,
+            "bar_completion": "FINAL",
+            "provisional": False,
+            "trend_direction": "UNKNOWN",
+            "trend_name": "",
+            "pattern_name": "",
+            "operation": "观察",
+            "signal_stage": "NONE",
+            "breakout_type": "NONE",
+            "line_id": None,
+            "line_side": None,
+            "line_status": None,
+            "first_anchor_time": None,
+            "first_anchor_price": None,
+            "second_anchor_time": None,
+            "second_anchor_price": None,
+            "line_value": None,
+            "key_level_type": None,
+            "key_level_time": None,
+            "key_level_price": None,
+            "first_break_time": None,
+            "recent_low_scale": None,
+            "recent_low_label": None,
+            "recent_low_time": None,
+            "recent_low_price": None,
+            "recent_low_confirmed_time": None,
+            "evidence_codes": [],
+            "failure_reason": None,
+        },
+        "headShoulders": head_shoulders,
+        "evaluatedAt": "2026-07-23T01:55:00Z",
+    }
+
+
+def test_longbridge_client_accepts_head_shoulders_engine_payload() -> None:
+    payload = _engine_payload_with_head_shoulders()
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json=payload)
+    )
+
+    with LongbridgeDowClient(
+        "http://dow-engine.test",
+        transport=transport,
+    ) as engine_client:
+        result = engine_client.evaluate(
+            "NBIS.US",
+            "5m",
+            payload["bars"],
+            "FINAL",
+            NOW,
+        )
+
+    assert result.model_dump(mode="json", by_alias=True)["headShoulders"] == (
+        payload["headShoulders"]
+    )
+
+
+def test_head_shoulders_engine_payload_keeps_strict_nested_validation() -> None:
+    payload = _engine_payload_with_head_shoulders()
+    payload["headShoulders"]["patterns"][0]["unknownField"] = True
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        DowEngineResult.model_validate(payload)
+
+
+def test_head_shoulders_survives_engine_result_into_detail_chart(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = _engine_payload_with_head_shoulders()
+    service = _service(tmp_path)
+    item = service.store.upsert_symbol("NBIS.US", "us", True)
+    monkeypatch.setattr(
+        "app.services.dow_monitor_service.enrich_dow_chart_bars",
+        lambda _symbol, bars: bars,
+    )
+
+    service._save_result(
+        item,
+        "5m",
+        TimeframeBars(
+            completed=payload["bars"],
+            forming={},
+            completion="FINAL",
+            source_timestamp=NOW,
+        ),
+        DowEngineResult.model_validate(payload),
+        NOW,
+        {},
+    )
+
+    response = _client(service).get("/api/dow-monitor/NBIS.US?timeframe=5m")
+
+    assert response.status_code == 200
+    assert response.json()["chart"]["headShoulders"] == payload["headShoulders"]
 
 
 def test_symbols_are_normalized_and_duplicate_add_is_idempotent(tmp_path) -> None:

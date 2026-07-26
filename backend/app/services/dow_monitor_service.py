@@ -560,6 +560,8 @@ class DowMonitorService:
         }
         if isinstance(engine_payload.get("turning"), dict):
             chart["turning"] = deepcopy(engine_payload["turning"])
+        if isinstance(engine_payload.get("headShoulders"), dict):
+            chart["headShoulders"] = deepcopy(engine_payload["headShoulders"])
         timestamps = [
             value
             for value in (

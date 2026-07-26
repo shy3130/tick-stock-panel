@@ -90,11 +90,14 @@ requirements:
   - id: REQ-DOW-HEAD-SHOULDERS-SIGNAL-001
     specification: SPEC-DOW-HEAD-SHOULDERS-001
     implementation:
+      - backend/app/services/dow_monitor_client.py
+      - backend/app/services/dow_monitor_service.py
       - frontend/src/components/EChartsCandlestick.tsx
       - frontend/src/components/dow-monitor/types.ts
       - frontend/src/components/dow-monitor/chartMappings.ts
       - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
     tests:
+      - {path: backend/tests/test_dow_monitor_api.py, type: executable-test}
       - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-head-shoulders.md, type: semantic-acceptance}

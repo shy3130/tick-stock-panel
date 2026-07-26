@@ -82,13 +82,11 @@ function headShouldersStageLabel(stage: string) {
 
 function headShouldersEvidenceLabel(code: string) {
   const labels: Record<string, string> = {
-    HEAD_DEPTH_CONFIRMED: '头部深度成立',
-    SHOULDER_BALANCED: '双肩结构协调',
-    NECKLINE_VALID: '颈线结构有效',
-    VOLUME_CONFIRMED: '突破量能达标',
-    RETEST_HELD: '回踩颈线有效',
-    CONTEXT_ALIGNED: '趋势背景配合',
-    FALSE_BREAK_DETECTED: '突破后快速回到颈线内',
+    BREAK_WATCH: '颈线收盘突破，等待量能确认',
+    WICK_CROSS: '影线试探颈线，尚未有效突破',
+    CONFIRMED: '颈线突破已确认',
+    RETEST_CONFIRMED: '突破后回踩颈线确认有效',
+    FALSE_BREAKOUT: '突破后快速回到颈线内',
   }
   return labels[code] ?? null
 }

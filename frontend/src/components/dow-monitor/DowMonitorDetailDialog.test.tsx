@@ -190,7 +190,7 @@ const headShouldersPayload = {
     volumeScore: 71,
     contextScore: 63,
     qualityScore: 216,
-    evidence: ['HEAD_DEPTH_CONFIRMED', 'VOLUME_CONFIRMED'],
+    evidence: ['BREAK_WATCH', 'CONFIRMED'],
   }],
   signals: [{
     family: 'HEAD_SHOULDERS',
@@ -437,8 +437,12 @@ describe('Dow chart mappings', () => {
     expect(overlays[0].tooltipHtml).toContain('量能评分')
     expect(overlays[0].tooltipHtml).toContain('背景评分')
     expect(overlays[0].tooltipHtml).toContain('综合评分')
-    expect(overlays[0].tooltipHtml).toContain('头部深度成立')
-    expect(overlays[0].tooltipHtml).not.toMatch(/CONFIRMED|HEAD_DEPTH|VOLUME_CONFIRMED|BREAKOUT/)
+    expect(overlays[0].tooltipHtml).toContain('颈线收盘突破，等待量能确认')
+    expect(overlays[0].tooltipHtml).toContain('颈线突破已确认')
+    expect(overlays[0].tooltipHtml).not.toContain('暂无补充证据')
+    expect(overlays[0].tooltipHtml).not.toMatch(
+      /BREAK_WATCH|CONFIRMED|RETEST_CONFIRMED|FALSE_BREAKOUT/,
+    )
   })
 
   it('maps only authoritative signal sides and omits malformed legacy entries', () => {

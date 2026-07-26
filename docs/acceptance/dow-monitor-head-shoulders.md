@@ -55,20 +55,47 @@ does not call or modify the strict Dow double-break mapper. The switch changes
 only the `headShouldersOverlays` prop, while existing `markers` and
 `priceLines` remain byte-for-byte stable in the interaction test.
 
+## Production Payload Preservation
+
+The backend client now validates `headShoulders` through dedicated strict
+Pydantic models while retaining the engine contract's global
+`extra="forbid"` policy. The monitor service copies the validated payload into
+`detail.chart.headShoulders`, preserving the independent signal family from
+the engine response through the detail API.
+
+The backend RED run failed both focused tests because `headShoulders` was an
+extra forbidden field. After the production change, the same focused command
+passed `2 passed, 19 deselected`.
+
+The frontend contract fixture now uses detector-produced lifecycle evidence
+codes (`BREAK_WATCH` and `CONFIRMED`). The RED run rendered
+`暂无补充证据`; after adding contract-faithful translations, the focused test
+renders meaningful Chinese evidence and verifies that internal codes are
+absent.
+
 ## Final Verification
 
 Final command outputs after the implementation freeze:
 
+- `uv run --extra dev pytest tests/test_dow_monitor_api.py -q` passed:
+  `22 passed`.
+- `uv run --extra dev ruff check --ignore RUF001 ...` passed for the changed
+  backend client, service, and integration test. Without that narrow ignore,
+  Ruff reports three pre-existing full-width comma warnings in unrelated
+  monitor-service text.
+- `pnpm test --run src/components/dow-monitor/DowMonitorDetailDialog.test.tsx
+  src/components/dow-monitor/useDowMonitor.test.tsx` passed: `22 passed`.
 - `pnpm test --run src/components/dow-monitor/DowMonitorDetailDialog.test.tsx`
   passed: `15 passed`.
 - `pnpm test --run` completed with `141 passed` and one unrelated existing
   failure in `src/pages/Screener.dow-strategy.test.tsx`: the test expects
-  `道氏趋势 · 多周期`, but the rendered Screener page does not contain that
-  text. The failing file is outside this task's allowed scope and also fails
+  the legacy multi-timeframe Dow strategy title, but the rendered Screener
+  page does not contain it. The failing file is outside this task's allowed
+  scope and also fails
   when run independently.
 - `pnpm build` passed (`tsc -b && vite build`, 2706 modules transformed).
 - `python scripts/check_spec_compliance.py` reported repository indexing
-  constraints that predate this implementation: frontend Vitest paths are
-  rejected for being outside `tests/`, and this requirement's indexed review
-  path does not yet exist. The task's file-scope restriction prevented changes
-  to the checker, traceability index, or review document.
+  constraints: the monorepo checker rejects executable tests under
+  `backend/tests/` and frontend co-located Vitest paths because they are not
+  under the repository-root `tests/`; it also continues to report the existing
+  indexed review-path issue.
