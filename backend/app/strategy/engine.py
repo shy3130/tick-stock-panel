@@ -143,6 +143,8 @@ class StrategyResult:
     total: int = 0
     elapsed_ms: float = 0.0
     scores: dict[str, float] = field(default_factory=dict)
+    entry_signal_hits: list[dict] = field(default_factory=list)
+    exit_signal_hits: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -629,6 +631,8 @@ class StrategyEngine:
         as_of = context.as_of
         overrides = overrides or {}
         params = self.resolve_params(s, params, overrides)
+        entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
+        exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
 
         if s.execution_backend == "matrix_native":
             return self._run_matrix_strategy(
@@ -642,24 +646,40 @@ class StrategyEngine:
                 started_at=t0,
             )
 
+        signal_df = context.current if context.current is not None else context.history
+        if signal_df is None:
+            signal_df = pl.DataFrame()
+        if not signal_df.is_empty() and "date" in signal_df.columns:
+            signal_df = signal_df.filter(pl.col("date") == as_of)
+        if pool and not signal_df.is_empty():
+            signal_df = signal_df.filter(pl.col("symbol").is_in(pool))
+        exit_signal_hits = self._collect_signal_hits(signal_df, exit_signals)
+
         # 普通策略只读目标日期；历史策略读取调用方注入的历史窗口。
         if s.filter_history_fn:
             if context.history is None:
                 raise ValueError(f"strategy {strategy_id} requires history data")
             df = context.history
             if df.is_empty():
-                return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+                return StrategyResult(
+                    as_of=as_of,
+                    strategy_id=strategy_id,
+                    exit_signal_hits=exit_signal_hits,
+                )
             df = s.filter_history_fn(df, params)
-            if df.is_empty():
-                return StrategyResult(as_of=as_of, strategy_id=strategy_id)
             if "date" in df.columns:
                 df = df.filter(pl.col("date") == as_of)
         else:
             if context.current is None:
                 raise ValueError(f"strategy {strategy_id} requires current data")
             df = context.current
-            if df.is_empty():
-                return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+
+        if df.is_empty():
+            return StrategyResult(
+                as_of=as_of,
+                strategy_id=strategy_id,
+                exit_signal_hits=exit_signal_hits,
+            )
 
         # 基础过滤: 策略默认 basic_filter 兜底, 用户 override 优先覆盖。
         # 这样策略文件里写的 exclude_st/price_min 等默认值即使前端没保存也能生效。
@@ -686,6 +706,12 @@ class StrategyEngine:
         if scoring_overrides:
             scoring = {**scoring, **scoring_overrides}
         df = self._apply_scoring(df, scoring)
+        entry_signal_hits = self._collect_signal_hits(df, entry_signals)
+        if not entry_signals and (s.filter_history_fn or s.filter_fn):
+            entry_signal_hits = [
+                {"symbol": str(symbol), "signals": []}
+                for symbol in df["symbol"].cast(pl.Utf8).unique().to_list()
+            ]
 
         # 排序 + 限制
         limit = self._result_limit(s, overrides)
@@ -715,7 +741,40 @@ class StrategyEngine:
             total=len(rows),
             elapsed_ms=elapsed,
             scores=scores,
+            entry_signal_hits=entry_signal_hits,
+            exit_signal_hits=exit_signal_hits,
         )
+
+    @staticmethod
+    def _effective_signals(overrides: dict, key: str, default: list[str]) -> list[str]:
+        value = overrides.get(key)
+        if isinstance(value, list):
+            return [str(signal) for signal in value if signal]
+        return list(default or [])
+
+    @staticmethod
+    def _collect_signal_hits(df: pl.DataFrame, signals: list[str]) -> list[dict]:
+        if df.is_empty() or not signals or "symbol" not in df.columns:
+            return []
+        resolved = [
+            signal if signal.startswith(("signal_", "csg_")) else f"signal_{signal}"
+            for signal in signals
+        ]
+        available = [
+            (signal, column)
+            for signal, column in zip(signals, resolved, strict=True)
+            if column in df.columns
+        ]
+        if not available:
+            return []
+        hit_df = df.filter(pl.any_horizontal(pl.col(column).fill_null(False) for _, column in available))
+        return [
+            {
+                "symbol": str(row["symbol"]),
+                "signals": [signal for signal, column in available if row.get(column)],
+            }
+            for row in hit_df.iter_rows(named=True)
+        ]
 
     def run_all(
         self,
@@ -880,12 +939,31 @@ class StrategyEngine:
         if not target_ids:
             return StrategyResult(as_of=as_of, strategy_id=strategy_id)
         target_time = target_ids[-1]
-        selected_assets = np.flatnonzero(signals.entry[target_time] != 0)
+        entry_active = signals.entry[target_time]
+        exit_active = signals.exit[target_time]
+        if asset_mask is not None:
+            entry_active = entry_active & asset_mask
+            exit_active = exit_active & asset_mask
+        entry_signal_hits = self._matrix_signal_hits(
+            entry_active,
+            signals.entry_signal_code[target_time],
+            signals.entry_signal_ids,
+            market.symbols,
+        )
+        exit_signal_hits = self._matrix_signal_hits(
+            exit_active,
+            signals.exit_signal_code[target_time],
+            signals.exit_signal_ids,
+            market.symbols,
+        )
+        selected_assets = np.flatnonzero(entry_active != 0)
         if selected_assets.size == 0:
             return StrategyResult(
                 as_of=as_of,
                 strategy_id=strategy_id,
                 elapsed_ms=(time.perf_counter() - started_at) * 1000,
+                entry_signal_hits=entry_signal_hits,
+                exit_signal_hits=exit_signal_hits,
             )
 
         target_frame = self._matrix_target_frame(source_panel, as_of)
@@ -916,7 +994,23 @@ class StrategyEngine:
             total=len(rows),
             elapsed_ms=(time.perf_counter() - started_at) * 1000,
             scores=scores,
+            entry_signal_hits=entry_signal_hits,
+            exit_signal_hits=exit_signal_hits,
         )
+
+    @staticmethod
+    def _matrix_signal_hits(
+        active: np.ndarray,
+        codes: np.ndarray,
+        signal_ids: tuple[str, ...],
+        symbols: tuple[str, ...],
+    ) -> list[dict]:
+        hits = []
+        for asset_id in np.flatnonzero(active != 0):
+            code = int(codes[int(asset_id)])
+            signals = [signal_ids[code]] if 0 <= code < len(signal_ids) else []
+            hits.append({"symbol": symbols[int(asset_id)], "signals": signals})
+        return hits
 
     @staticmethod
     def _matrix_target_frame(panel: pl.DataFrame, as_of: date) -> pl.DataFrame:

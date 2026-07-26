@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -11,7 +12,13 @@ from pathlib import Path
 import yaml
 
 from app.config import settings
-from app.data_providers.custom.config import CustomSourceConfig, load_config
+from app.data_providers.custom.config import (
+    DEFAULT_TIMEOUT,
+    MAX_TIMEOUT,
+    CustomSourceConfig,
+    config_from_dict,
+    load_config,
+)
 from app.data_providers.custom.provider import GenericHTTPProvider
 
 logger = logging.getLogger(__name__)
@@ -246,6 +253,17 @@ def get_provider(name: str) -> GenericHTTPProvider:
     return provider
 
 
+def create_provider(config: dict) -> GenericHTTPProvider:
+    """Build a validated temporary provider without writing or registering it."""
+    parsed = config_from_dict(_sanitize_for_yaml(config))
+    provider = GenericHTTPProvider(parsed)
+    errors = provider.validate()
+    if errors:
+        provider.close()
+        raise ValueError("; ".join(errors))
+    return provider
+
+
 def is_custom_provider(name: str) -> bool:
     return (name or "").lower() in _PROVIDERS
 
@@ -290,14 +308,17 @@ def _config_to_dict(config: CustomSourceConfig) -> dict:
             "method": ds.method,
             **({"batch": ds.batch} if ds.batch is not None else {}),
             **({"rpm": ds.rpm} if ds.rpm is not None else {}),
+            **({"timeout": ds.timeout} if ds.timeout != DEFAULT_TIMEOUT else {}),
             "response_path": ds.response_path,
             "field_map": dict(ds.field_map),
             **({"transforms": dict(ds.transforms)} if ds.transforms else {}),
-            "symbols_param": ds.symbols_param,
-            "start_param": ds.start_param,
-            "end_param": ds.end_param,
-            **({"asset_type_param": ds.asset_type_param} if ds.asset_type_param else {}),
-            **({"freq_param": ds.freq_param} if ds.freq_param else {}),
+            **({
+                "symbols_param": ds.symbols_param,
+                "start_param": ds.start_param,
+                "end_param": ds.end_param,
+            } if ds_name != "realtime" else {}),
+            **({"asset_type_param": ds.asset_type_param} if ds_name == "minute" and ds.asset_type_param else {}),
+            **({"freq_param": ds.freq_param} if ds_name == "minute" and ds.freq_param else {}),
         }
     return out
 
@@ -357,14 +378,14 @@ def _sanitize_for_yaml(config: dict) -> dict:
             continue
         if not isinstance(ds_cfg, dict):
             continue
-        ds = _sanitize_dataset(ds_cfg)
+        ds = _sanitize_dataset(ds_name, ds_cfg)
         if ds:
             datasets_out[ds_name] = ds
     out["datasets"] = datasets_out
     return out
 
 
-def _sanitize_dataset(ds_cfg: dict) -> dict:
+def _sanitize_dataset(ds_name: str, ds_cfg: dict) -> dict:
     out: dict = {}
     url = str(ds_cfg.get("url", "") or "").strip()
     if not url:
@@ -382,6 +403,20 @@ def _sanitize_dataset(ds_cfg: dict) -> dict:
             out["rpm"] = int(ds_cfg["rpm"])
         except (TypeError, ValueError):
             pass
+    if ds_cfg.get("timeout") is not None:
+        try:
+            timeout = float(ds_cfg["timeout"])
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"{ds_name}: timeout must be a number between 0 and "
+                f"{MAX_TIMEOUT:g} seconds"
+            ) from e
+        if not math.isfinite(timeout) or not 0 < timeout <= MAX_TIMEOUT:
+            raise ValueError(
+                f"{ds_name}: timeout must be between 0 and {MAX_TIMEOUT:g} seconds"
+            )
+        if timeout != DEFAULT_TIMEOUT:
+            out["timeout"] = timeout
     out["response_path"] = str(ds_cfg.get("response_path", "") or "")
     field_map = {
         str(k): str(v)
@@ -397,16 +432,39 @@ def _sanitize_dataset(ds_cfg: dict) -> dict:
     }
     if transforms:
         out["transforms"] = transforms
-    if ds_cfg.get("symbols_param"):
-        out["symbols_param"] = str(ds_cfg["symbols_param"])
-    if ds_cfg.get("start_param"):
-        out["start_param"] = str(ds_cfg["start_param"])
-    if ds_cfg.get("end_param"):
-        out["end_param"] = str(ds_cfg["end_param"])
-    if ds_cfg.get("asset_type_param"):
-        out["asset_type_param"] = str(ds_cfg["asset_type_param"])
-    if ds_cfg.get("freq_param"):
-        out["freq_param"] = str(ds_cfg["freq_param"])
+    if ds_name != "realtime":
+        symbols_param = str(ds_cfg.get("symbols_param") or "").strip()
+        start_param = str(ds_cfg.get("start_param") or "").strip()
+        end_param = str(ds_cfg.get("end_param") or "").strip()
+        if symbols_param:
+            out["symbols_param"] = symbols_param
+        if start_param:
+            out["start_param"] = start_param
+        if end_param:
+            out["end_param"] = end_param
+    if ds_name == "minute":
+        asset_type_param = str(ds_cfg.get("asset_type_param") or "").strip()
+        freq_param = str(ds_cfg.get("freq_param") or "").strip()
+        if asset_type_param:
+            out["asset_type_param"] = asset_type_param
+        if freq_param:
+            out["freq_param"] = freq_param
+    request_params = [
+        out.get("symbols_param", "symbols"),
+        out.get("start_param", "start_time"),
+        out.get("end_param", "end_time"),
+    ]
+    if ds_name == "minute":
+        request_params.extend(
+            name for name in (out.get("asset_type_param"), out.get("freq_param")) if name
+        )
+    duplicates = sorted({
+        name for name in request_params if request_params.count(name) > 1
+    })
+    if ds_name != "realtime" and duplicates:
+        raise ValueError(
+            f"{ds_name}: duplicate request parameter names: {', '.join(duplicates)}"
+        )
     return out
 
 

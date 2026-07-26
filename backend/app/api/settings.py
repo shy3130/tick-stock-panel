@@ -8,9 +8,10 @@ import logging
 import time
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import secrets_store
+from app.data_providers.custom.config import MAX_TIMEOUT
 from app.tickflow import client as tf_client
 from app.tickflow.policy import (
     detect_capabilities,
@@ -349,12 +350,6 @@ class DataProvidersIn(BaseModel):
     financial_data_provider: str | None = None
 
 
-class CustomSourceTestIn(BaseModel):
-    provider: str
-    dataset: str
-    symbols: list[str] | None = None
-
-
 class DatasetFieldMapItem(BaseModel):
     source: str
     target: str
@@ -373,6 +368,12 @@ class DatasetConfigIn(BaseModel):
     end_param: str = "end_time"
     asset_type_param: str | None = None
     freq_param: str | None = None
+    timeout: float | None = Field(
+        default=None,
+        gt=0,
+        le=MAX_TIMEOUT,
+        allow_inf_nan=False,
+    )
 
 
 class AuthConfigIn(BaseModel):
@@ -387,6 +388,13 @@ class CustomSourceIn(BaseModel):
     display_name: str = ""
     auth: AuthConfigIn = AuthConfigIn()
     datasets: dict[str, DatasetConfigIn] = {}
+
+
+class CustomSourceTestIn(BaseModel):
+    provider: str
+    dataset: str
+    symbols: list[str] | None = None
+    config: CustomSourceIn | None = None
 
 
 @router.get("/preferences")
@@ -568,11 +576,25 @@ def delete_data_source(name: str) -> dict:
 def test_data_source(req: CustomSourceTestIn) -> dict:
     """试拉自定义数据源，不写盘。"""
     from app.data_providers import custom as custom_sources
-    provider = custom_sources.get_provider(req.provider)
+
+    temporary = req.config is not None
+    provider = None
     try:
+        if req.config:
+            config = req.config.model_dump()
+            dataset_config = config["datasets"].get(req.dataset)
+            if dataset_config is None:
+                raise ValueError(f"dataset '{req.dataset}' is not configured")
+            config["datasets"] = {req.dataset: dataset_config}
+            provider = custom_sources.create_provider(config)
+        else:
+            provider = custom_sources.get_provider(req.provider)
         return provider.test_dataset(req.dataset, req.symbols)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"自定义数据源测试失败: {e}") from e
+    finally:
+        if temporary and provider is not None:
+            provider.close()
 
 
 @router.put("/preferences/data-providers")

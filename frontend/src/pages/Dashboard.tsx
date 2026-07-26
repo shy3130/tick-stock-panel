@@ -17,6 +17,7 @@ import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { getNavIconMeta } from '@/lib/navRegistry'
+import { strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 
 function n(v: number | null | undefined) {
@@ -132,7 +133,6 @@ function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => 
     refetchIntervalInBackground: true,
   })
   const events: AlertEvent[] = alerts.data?.alerts ?? []
-  const visibleEvents = events.filter((ev: AlertEvent) => !(ev.source === 'strategy' && !ev.symbol))
 
   if (alerts.isLoading) {
     return (
@@ -162,7 +162,7 @@ function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => 
     )
   }
 
-  if (visibleEvents.length === 0) {
+  if (events.length === 0) {
     return (
       <div className="py-7 text-center text-[11px] text-muted">暂无触发记录</div>
     )
@@ -170,19 +170,18 @@ function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => 
 
   return (
     <>
-      <div>
+      <div className="mt-1 space-y-1.5">
         {alerts.isError && (
           <div className="border-b border-warning/20 bg-warning/[0.06] px-3 py-1.5 text-[10px] text-warning" role="status">
             更新失败，当前显示上次获取的记录
           </div>
         )}
-        {visibleEvents.map((ev, i) => {
+        {events.map((ev, i) => {
           const sev = _SEVERITY_BAR[ev.severity ?? 'info'] ?? _SEVERITY_BAR.info
           const pct = ev.change_pct ?? 0
           const isStrategy = ev.source === 'strategy'
-          const sm = isStrategy ? ev.message?.match(/策略「([^」]+)」/) : null
-          const sname = sm ? sm[1] : ''
-          const isNew = ev.type === 'new_entry'
+          const sname = isStrategy ? strategyName(ev.message ?? '') : ''
+          const eventMeta = strategyEventMeta(ev.type)
           return (
             <motion.div
               key={`${ev.ts}-${i}`}
@@ -225,17 +224,37 @@ function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => 
               </div>
               {/* 第二行: 策略类型走新格式, 其他走旧格式 */}
               {isStrategy ? (
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <span className={cn('text-[10px] font-medium', isNew ? 'text-danger' : 'text-emerald-400')}>
-                    {isNew ? '进入' : '移出'}
-                  </span>
-                  <span className="text-[10px] text-muted">策略</span>
-                  <span className="text-[10px] font-medium text-amber-400">「{sname}」</span>
-                  <span className="flex-1" />
-                  <span className="shrink-0 font-mono text-[10px] text-muted">
-                    {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
-                  </span>
-                </div>
+                <>
+                  {ev.symbol ? (
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                      <span className={cn('shrink-0 text-[9px] font-medium', eventMeta.className)}>
+                        {eventMeta.action}
+                      </span>
+                      {sname
+                        ? <span className="truncate text-[9px] font-medium text-amber-400">「{sname}」</span>
+                        : ev.message && <span className="truncate text-[9px] text-muted">{ev.message}</span>}
+                      <span className="flex-1" />
+                      <span className="text-[8px] text-muted/50 shrink-0 font-mono">
+                        {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-[9px] text-muted">{ev.message}</span>
+                      <span className="flex-1" />
+                      <span className="text-[8px] text-muted/50 shrink-0 font-mono">
+                        {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                  )}
+                  {ev.signals && ev.signals.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {ev.signals.map(signal => (
+                        <span key={signal} className="rounded bg-accent/8 px-1 py-px text-[8px] text-accent/80">{cnSignal(signal)}</span>
+                      ))}
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
                   <div className="mt-0.5 flex items-center gap-1.5">

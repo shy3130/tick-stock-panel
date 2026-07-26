@@ -31,6 +31,7 @@ RULE_TYPES = {"strategy", "signal", "price", "market", "ladder"}
 SCOPES = {"symbols", "all", "sector"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
+STRATEGY_NOTIFY_EVENTS = {"buy_signal", "sell_signal", "pool_entry", "pool_exit"}
 SEVERITIES = {"info", "warn", "critical"}
 OPS = {">", ">=", "<", "<=", "==", "!="}
 # ladder 规则: 封单监控的指标 (量=手, 额=元)
@@ -60,7 +61,7 @@ def load_all(data_dir: Path) -> list[dict]:
     out: list[dict] = []
     for f in sorted(d.glob("*.json")):
         try:
-            out.append(json.loads(f.read_text(encoding="utf-8")))
+            out.append(normalize(json.loads(f.read_text(encoding="utf-8"))))
         except Exception as e:
             logger.warning("monitor rule load failed %s: %s", f.name, e)
     return out
@@ -71,7 +72,7 @@ def load_one(data_dir: Path, rule_id: str) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return normalize(json.loads(p.read_text(encoding="utf-8")))
     except Exception as e:
         logger.warning("monitor rule load failed %s: %s", rule_id, e)
         return None
@@ -113,6 +114,12 @@ def validate(rule: dict) -> None:
             raise ValueError("策略类型规则必须指定 strategy_id")
         if rule.get("direction", "entry") not in DIRECTIONS:
             raise ValueError(f"direction 必须是 {DIRECTIONS} 之一")
+        notify_events = rule.get("notify_events")
+        if not isinstance(notify_events, list) or not notify_events:
+            raise ValueError("策略类型规则至少选择一个通知事件")
+        invalid_events = set(notify_events) - STRATEGY_NOTIFY_EVENTS
+        if invalid_events:
+            raise ValueError(f"notify_events 包含非法事件: {sorted(invalid_events)}")
     elif rule.get("type") == "ladder":
         # 连板梯队封单监控: 需 metric + threshold + direction(up/down), 不用 conditions
         if rule.get("metric", "sealed_vol") not in LADDER_METRICS:
@@ -183,6 +190,14 @@ def normalize(rule: dict) -> dict:
     r.setdefault("strategy_id", None)
     # direction 默认值: ladder 用 "up", 其余用 "entry"
     r.setdefault("direction", "up" if r.get("type") == "ladder" else "entry")
+    if r.get("type") == "strategy":
+        if r.get("notify_events") is None:
+            # 兼容统一监控上线后的旧规则: 当时实际行为是同时通知进入和移出。
+            r["notify_events"] = ["pool_entry", "pool_exit"]
+        else:
+            r["notify_events"] = list(dict.fromkeys(r["notify_events"]))
+    else:
+        r.pop("notify_events", None)
     r.setdefault("conditions", [])
     # ladder 专属默认字段
     r.setdefault("metric", "sealed_vol")
@@ -253,6 +268,7 @@ def migrate_strategy_monitors(data_dir: Path, strategy_ids: list[str], strategy_
                 "scope": "all",
                 "strategy_id": sid,
                 "direction": "entry",
+                "notify_events": ["pool_entry", "pool_exit"],
                 "conditions": [],
                 "cooldown_seconds": 3600,
                 "enabled": True,

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
+import { DEFAULT_STRATEGY_NOTIFY_EVENTS } from '@/lib/strategyMonitorEvents'
 import { toast } from '@/components/Toast'
 import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
@@ -537,6 +538,7 @@ export function Screener() {
         sector: null,
         strategy_id: strategyId,
         direction: 'entry',
+        notify_events: [...DEFAULT_STRATEGY_NOTIFY_EVENTS],
         conditions: [],
         logic: 'or',
         cooldown_seconds: 3600,

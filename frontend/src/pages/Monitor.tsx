@@ -11,6 +11,7 @@ import { getNavIconMeta } from '@/lib/navRegistry'
 import { fmtPrice, fmtPct } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
+import { LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS, strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
@@ -341,9 +342,7 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
         />
       ) : (
         <div className="space-y-2">
-              {events
-                .filter((ev: any) => !(ev.source === 'strategy' && !ev.symbol))
-                .map((ev: any, i: number) => {
+              {events.map((ev: any, i: number) => {
             const sev = SEVERITY_CONFIG[ev.severity ?? 'info'] ?? SEVERITY_CONFIG.info
             const SevIcon = sev.icon
             const isNew = ev.ts > enterTs
@@ -368,9 +367,8 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                 </div>
                 <div className="min-w-0 flex-1">
                   {ev.source === 'strategy' ? (() => {
-                    const sm = ev.message?.match(/策略「([^」]+)」/)
-                    const sname = sm ? sm[1] : ''
-                    const isNew = ev.type === 'new_entry'
+                    const sname = strategyName(ev.message ?? '')
+                    const eventMeta = strategyEventMeta(ev.type)
                     const _pct = ev.change_pct ?? 0
                     return (
                       <>
@@ -409,13 +407,25 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                             {sname}
                           </span>
                         </div>
-                        <div className="mt-1 flex items-center gap-1.5">
-                          <span className={cn('text-[11px] font-medium', isNew ? 'text-danger' : 'text-emerald-400')}>
-                            {isNew ? '进入' : '移出'}
-                          </span>
-                          <span className="text-[11px] text-foreground/80">策略</span>
-                          <span className="text-[11px] font-medium text-amber-400">「{sname}」</span>
-                        </div>
+                        {ev.symbol ? (
+                          <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                            <span className={cn('shrink-0 text-[11px] font-medium', eventMeta.className)}>
+                              {eventMeta.action}
+                            </span>
+                            {sname
+                              ? <span className="text-[11px] font-medium text-amber-400">「{sname}」</span>
+                              : ev.message && <span className="truncate text-[10px] text-muted">{ev.message}</span>}
+                          </div>
+                        ) : (
+                          <div className="mt-1 truncate text-[11px] text-muted">{ev.message}</div>
+                        )}
+                        {ev.signals && ev.signals.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {ev.signals.map((signal: string) => (
+                              <span key={signal} className="rounded bg-accent/8 px-1.5 py-0.5 text-[9px] text-accent/70">{cnSignal(signal)}</span>
+                            ))}
+                          </div>
+                        )}
                       </>
                     )
                   })() : (
@@ -724,10 +734,17 @@ function RulesList({ rulesQuery, onEdit }: {
                 </div>
               )}
 
-              {/* 第二行: 策略类型显示选股池变更监控 */}
+              {/* 第二行: 策略类型显示通知事件 */}
               {r.type === 'strategy' && r.strategy_id ? (
-                <div className="mt-0.5 flex items-center gap-2 pl-0.5">
-                  <span className="text-[9px] text-secondary">选股池变更监控</span>
+                <div className="mt-1 flex flex-wrap items-center gap-1 pl-0.5">
+                  {(r.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).map(event => {
+                    const option = STRATEGY_NOTIFY_EVENT_OPTIONS.find(item => item.key === event)
+                    return option ? (
+                      <span key={event} className="rounded bg-elevated px-1.5 py-0.5 text-[9px] text-secondary">
+                        {option.label}
+                      </span>
+                    ) : null
+                  })}
                 </div>
               ) : r.conditions.length > 0 && (
                 <div className="mt-0.5 flex items-center gap-1 pl-0.5">

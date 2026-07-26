@@ -4,10 +4,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Bell, TrendingUp, TrendingDown, X } from 'lucide-react'
 import type { AlertEvent } from '@/lib/api'
 import { fmtPct, fmtPrice } from '@/lib/format'
+import { cnSignal } from '@/lib/signals'
 import { cn } from '@/lib/cn'
 import { playNotificationSound } from '@/lib/notificationSound'
 import { speakAlerts } from '@/lib/voiceBroadcast'
 import { usePreferences } from '@/lib/useSharedQueries'
+import { strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 
 /** 通知渠道分发 — 所有副作用渠道在此汇合, 新增渠道只改这里 */
 function dispatchSideEffects(alerts: AlertEvent[]) {
@@ -86,8 +88,12 @@ const SOURCE_BADGE: Record<string, { label: string; cls: string }> = {
   signal:    { label: '信号',   cls: 'bg-accent/15 text-accent' },
   price:     { label: '价格',   cls: 'bg-emerald-400/15 text-emerald-400' },
   market:    { label: '异动',   cls: 'bg-purple-500/15 text-purple-400' },
-  new_entry: { label: '进入',   cls: 'bg-emerald-400/15 text-emerald-400' },
-  dropped:   { label: '移出', cls: 'bg-danger/15 text-danger' },
+  pool_entry: { label: '进入', cls: 'bg-emerald-400/15 text-emerald-400' },
+  pool_exit:   { label: '移出', cls: 'bg-warning/15 text-warning' },
+  buy_signal: { label: '买入', cls: 'bg-danger/15 text-danger' },
+  sell_signal: { label: '卖出', cls: 'bg-bear/15 text-bear' },
+  new_entry: { label: '进入', cls: 'bg-emerald-400/15 text-emerald-400' },
+  dropped:   { label: '移出', cls: 'bg-warning/15 text-warning' },
 }
 
 // ===== 容器 — 挂在 Layout =====
@@ -122,18 +128,15 @@ export function AlertToastContainer() {
       className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 w-[320px] pointer-events-none"
     >
       <AnimatePresence>
-        {items
-          .filter(item => !(item.alert.source === 'strategy' && !item.alert.symbol))
-          .map(item => {
+        {items.map(item => {
           const ev = item.alert
           const sev = SEVERITY_BAR[ev.severity ?? 'info'] ?? SEVERITY_BAR.info
           const badgeKey = (ev.source === 'strategy' && ev.type) ? ev.type : ev.source
           const badge = SOURCE_BADGE[badgeKey] ?? { label: badgeKey, cls: 'bg-elevated text-muted' }
           const pct = ev.change_pct ?? 0
           const isStrategy = ev.source === 'strategy'
-          const sm = isStrategy ? ev.message?.match(/策略「([^」]+)」/) : null
-          const sname = sm ? sm[1] : ''
-          const isNew = ev.type === 'new_entry'
+          const sname = isStrategy ? strategyName(ev.message ?? '') : ''
+          const eventMeta = strategyEventMeta(ev.type)
           return (
             <motion.div
               key={item.id}
@@ -177,16 +180,33 @@ export function AlertToastContainer() {
 
               {/* 底行: 策略类型走新格式, 其他走旧格式 */}
               {isStrategy ? (
-                <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-                  <Bell className={cn('h-3 w-3 shrink-0', sev.replace('bg-', 'text-'))} />
-                  <span className={cn('text-[11px] font-medium', isNew ? 'text-danger' : 'text-emerald-400')}>
-                    {isNew ? '进入' : '移出'}
-                  </span>
-                  <span className="text-[11px] text-foreground/70">策略</span>
-                  <span className="text-[11px] font-medium text-amber-400">「{sname}」</span>
-                  <span className="flex-1" />
-                  {ev.price != null && <span className="text-[10px] font-mono text-muted shrink-0">{fmtPrice(ev.price)}</span>}
-                </div>
+                <>
+                  {ev.symbol ? (
+                    <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-0.5">
+                      <Bell className={cn('h-3 w-3 shrink-0', sev.replace('bg-', 'text-'))} />
+                      <span className={cn('shrink-0 text-[11px] font-medium', eventMeta.className)}>
+                        {eventMeta.action}
+                      </span>
+                      {sname
+                        ? <span className="truncate text-[11px] font-medium text-amber-400">「{sname}」</span>
+                        : ev.message && <span className="truncate text-[10px] text-muted">{ev.message}</span>}
+                      <span className="flex-1" />
+                      {ev.price != null && <span className="text-[10px] font-mono text-muted shrink-0">{fmtPrice(ev.price)}</span>}
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-0.5">
+                      <Bell className={cn('h-3 w-3 shrink-0', sev.replace('bg-', 'text-'))} />
+                      <span className="truncate text-[11px] text-foreground/70">{ev.message}</span>
+                    </div>
+                  )}
+                  {ev.signals && ev.signals.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1 pl-0.5">
+                      {ev.signals.map(signal => (
+                        <span key={signal} className="rounded bg-accent/8 px-1 py-px text-[9px] text-accent/80">{cnSignal(signal)}</span>
+                      ))}
+                    </div>
+                  )}
+                </>
               ) : (
                 <div className="mt-1 flex items-center gap-1.5 pl-0.5">
                   <Bell className={cn('h-3 w-3 shrink-0', sev.replace('bg-', 'text-'))} />

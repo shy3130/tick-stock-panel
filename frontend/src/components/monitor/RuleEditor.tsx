@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Check, Plus, RadioTower, Save, Search, TrendingUp, Waypoints, X } from 'lucide-react'
-import { api, genRuleId, type MonitorRule, type MonitorCondition } from '@/lib/api'
+import { api, genRuleId, type MonitorRule, type MonitorCondition, type StrategyNotifyEvent } from '@/lib/api'
+import { DEFAULT_STRATEGY_NOTIFY_EVENTS, LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS } from '@/lib/strategyMonitorEvents'
 import { QK } from '@/lib/queryKeys'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { MONITOR_INTRADAY_SIGNAL_OPTIONS, SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
@@ -64,14 +65,25 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
-  const [draft, setDraft] = useState<MonitorRule>(
-    rule
-      ? { ...rule, conditions: rule.conditions.map(c => ({ ...c })) }
-      : {
-          ...emptyRule(preset),
-          webhook_channels: preset?.webhook_channels ?? (prefs?.webhook_default_channels ?? []),
-        },
-  )
+  const [draft, setDraft] = useState<MonitorRule>(() => {
+    if (rule) {
+      return {
+        ...rule,
+        notify_events: rule.type === 'strategy'
+          ? [...(rule.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS)]
+          : undefined,
+        conditions: rule.conditions.map(c => ({ ...c })),
+      }
+    }
+    const initial = {
+      ...emptyRule(preset),
+      webhook_channels: preset?.webhook_channels ?? (prefs?.webhook_default_channels ?? []),
+    }
+    if (initial.type === 'strategy' && !initial.notify_events) {
+      initial.notify_events = [...DEFAULT_STRATEGY_NOTIFY_EVENTS]
+    }
+    return initial
+  })
   const assetType = draft.asset_type ?? 'stock'
   // 策略列表跟随资产类型: ETF 只列技术类策略。
   const strategies = useQuery({
@@ -103,7 +115,9 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       }
       if (d.type === 'strategy') {
         if (!d.strategy_id) throw new Error('策略监控必须选择一个策略')
+        if (!d.notify_events?.length) throw new Error('至少选择一个通知事件')
       } else {
+        delete d.notify_events
         if (d.conditions.length === 0) throw new Error('至少选择一个触发条件')
         for (const c of d.conditions) {
           if (!c.field || !c.op) throw new Error('条件填写不完整')
@@ -149,6 +163,17 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       return { ...d, webhook_channels: cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch] }
     })
 
+  const toggleStrategyEvent = (event: StrategyNotifyEvent) =>
+    setDraft(d => {
+      const current = d.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS
+      return {
+        ...d,
+        notify_events: current.includes(event)
+          ? current.filter(item => item !== event)
+          : [...current, event],
+      }
+    })
+
   const thresholdFields = options.data?.threshold_fields ?? []
   const operators = options.data?.operators ?? ['>', '>=', '<', '<=', '==', '!=']
   const selectedSignals = draft.conditions.filter(c => c.op === 'truth').map(c => c.field)
@@ -160,7 +185,6 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   ]
   const thresholdConds = draft.conditions.filter(c => c.op !== 'truth')
   const strategyPresets = strategies.data?.presets ?? []
-  const selectedStrategy = strategyPresets.find(strategy => strategy.id === draft.strategy_id)
   const normalizedStrategyQuery = strategyQuery.trim().toLowerCase()
   const visibleStrategies = strategyPresets.filter(strategy => {
     if (strategyCategory !== 'all' && strategy.source !== strategyCategory) return false
@@ -325,11 +349,17 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 key={t.key}
                 type="button"
                 aria-pressed={active}
-                onClick={() => setDraft(d => ({
-                  ...d,
-                  type: t.key as MonitorRule['type'],
-                  scope: t.key === 'strategy' && d.scope === 'symbols' && d.symbols.length === 0 ? 'all' : d.scope,
-                }))}
+                onClick={() => setDraft(d => {
+                  const type = t.key as MonitorRule['type']
+                  return {
+                    ...d,
+                    type,
+                    notify_events: type === 'strategy'
+                      ? [...(d.notify_events ?? DEFAULT_STRATEGY_NOTIFY_EVENTS)]
+                      : undefined,
+                    scope: type === 'strategy' && d.scope === 'symbols' && d.symbols.length === 0 ? 'all' : d.scope,
+                  }
+                })}
                 className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-btn border px-2 text-xs font-medium transition-colors cursor-pointer ${
                   active
                     ? 'border-accent/40 bg-accent/12 text-accent'
@@ -538,32 +568,36 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             })}
           </div>
 
-          <div className="flex flex-col gap-2 border-t border-border/60 pt-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 text-[11px] text-muted">
-              {selectedStrategy ? (
-                <>已选择 <span className="font-medium text-foreground">{selectedStrategy.name}</span></>
-              ) : '尚未选择策略'}
+          <div className="border-t border-border/60 pt-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-muted">通知事件</span>
+              <span className="text-[9px] text-muted">至少选择一项</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="shrink-0 text-[11px] text-muted">触发方向</span>
-              <div className="inline-flex rounded-btn border border-border bg-base p-0.5">
-                {(options.data?.directions ?? []).map(direction => (
-                  <button
-                    key={direction.key}
-                    type="button"
-                    aria-pressed={draft.direction === direction.key}
-                    onClick={() => setDraft(d => ({ ...d, direction: direction.key as MonitorRule['direction'] }))}
-                    className={`h-7 rounded px-2.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                      draft.direction === direction.key
-                        ? 'bg-accent/15 text-accent'
-                        : 'text-muted hover:text-secondary'
-                    }`}
-                  >
-                    {direction.label}
-                  </button>
-                ))}
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(['signal', 'pool'] as const).map(group => (
+                <div key={group} className="rounded-btn border border-border bg-base p-2.5">
+                  <div className="mb-2 text-[10px] font-medium text-secondary">
+                    {group === 'signal' ? '交易信号' : '选股结果'}
+                  </div>
+                  <div className="space-y-2">
+                    {STRATEGY_NOTIFY_EVENT_OPTIONS.filter(option => option.group === group).map(option => (
+                      <label key={option.key} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={(draft.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).includes(option.key)}
+                          onChange={() => toggleStrategyEvent(option.key)}
+                          className="h-3.5 w-3.5 accent-accent cursor-pointer"
+                        />
+                        <span className="text-[11px] text-foreground">{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
+            {(draft.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).length === 0 && (
+              <div className="mt-2 text-[10px] text-danger">至少选择一个通知事件</div>
+            )}
           </div>
         </div>
       )}

@@ -892,6 +892,20 @@ class QuoteService:
         if not keep or "symbol" not in keep:
             return pl.DataFrame()
         df = df.select(keep)
+        # 自定义源可能不提供 change_pct/change_amount, 按 last_price/prev_close 补算
+        # (TickFlow 路径在 _fetch_full_market_quotes 已算好, 此处只补缺失的)
+        if "change_pct" not in df.columns and "last_price" in df.columns and "prev_close" in df.columns:
+            # prev_close=0 → inf (非合法 JSON), prev_close=null → null; 用 when 守护
+            df = df.with_columns(
+                pl.when(pl.col("prev_close") != 0)
+                .then((pl.col("last_price") - pl.col("prev_close")) / pl.col("prev_close"))
+                .otherwise(None)
+                .alias("change_pct")
+            )
+        if "change_amount" not in df.columns and "last_price" in df.columns and "prev_close" in df.columns:
+            df = df.with_columns(
+                (pl.col("last_price") - pl.col("prev_close")).alias("change_amount")
+            )
         # change_pct / amplitude: 小数 → 百分比 (统一指数展示口径)
         for col in ("change_pct", "amplitude"):
             if col in df.columns:
@@ -1055,7 +1069,7 @@ class QuoteService:
             logger.warning("告警落盘失败: %s", exc)
         all_alerts = [{
             "source": ev["source"], "type": ev["type"], "rule_id": ev.get("rule_id"),
-            "strategy_id": ev.get("rule_id") if ev["source"] == "strategy" else None,
+            "strategy_id": ev.get("strategy_id") if ev["source"] == "strategy" else None,
             "symbol": ev["symbol"], "name": ev["name"], "message": ev["message"],
             "price": ev["price"], "change_pct": ev["change_pct"], "signals": ev["signals"],
             "severity": ev.get("severity", "info"), "conditions": ev.get("conditions") or [],

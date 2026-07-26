@@ -48,6 +48,7 @@ class RuleModel(BaseModel):
     sector: str | None = None
     strategy_id: str | None = None
     direction: str = "entry"  # entry | exit | both
+    notify_events: list[str] | None = None
     conditions: list[ConditionModel] = []
     logic: str = "and"        # and | or
     cooldown_seconds: int = 3600
