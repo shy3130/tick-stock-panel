@@ -1,5 +1,40 @@
 version: 1
 requirements:
+  - id: REQ-COLLECTION-MONITOR-PROXY-001
+    specification: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    implementation:
+      - backend/app/api/collection_monitor.py
+      - backend/app/main.py
+    tests:
+      - {path: backend/tests/test_collection_monitor_proxy.py, type: executable-test}
+      - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
+      - {path: docs/reviews/collection-monitor-integration.md, type: independent-review}
+  - id: REQ-COLLECTION-MONITOR-PAGE-001
+    specification: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    implementation:
+      - frontend/src/pages/CollectionMonitor.tsx
+      - frontend/src/components/collection-monitor/types.ts
+      - frontend/src/components/collection-monitor/useCollectionMonitor.ts
+      - frontend/src/router.tsx
+      - frontend/src/components/Layout.tsx
+    tests:
+      - {path: frontend/src/pages/CollectionMonitor.test.tsx, type: executable-test}
+      - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
+      - {path: docs/reviews/collection-monitor-integration.md, type: independent-review}
+  - id: REQ-COLLECTION-MONITOR-PREACCEPTANCE-001
+    specification: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    implementation:
+      - docs/acceptance/collection-monitor-integration.md
+      - docs/reviews/collection-monitor-integration.md
+    tests:
+      - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
+      - {path: docs/reviews/collection-monitor-integration.md, type: independent-review}
   - id: REQ-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
     specification: SPEC-TICKFLOW-PRODUCTION-SOURCE-RECOVERY-001
     implementation:

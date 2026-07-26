@@ -25,5 +25,20 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-HEAD-SHOULDERS-SIGNAL-001
+  - id: SPEC-COLLECTION-MONITOR-INTEGRATION-001
+    path: docs/specs/collection-monitor-integration.md
+    status: authoritative
+    requirements:
+      - REQ-COLLECTION-MONITOR-PROXY-001
+      - REQ-COLLECTION-MONITOR-PAGE-001
+      - REQ-COLLECTION-MONITOR-PREACCEPTANCE-001
 conflicts: []
-exceptions: []
+exceptions:
+  - id: EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001
+    authority: user
+    date: 2026-07-26
+    scope: observation-only deployment before Monday live semantic acceptance
+    constraints:
+      - no notifications or actions
+      - no collector or schedule mutation
+      - no claim of live semantic acceptance
