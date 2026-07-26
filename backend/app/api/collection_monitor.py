@@ -25,11 +25,12 @@ _TECHNOLOGY_PATTERN = "^(rust|websocket|python|batch)$"
 _DATASET_PATTERN = "^(capital_distribution|capital_flow|candlestick_1m|depth|trades)$"
 _MODE_PATTERN = "^(production|shadow|backfill)$"
 _SYMBOL_PATTERN = r"^[A-Z0-9][A-Z0-9._-]{0,31}\.(HK|US|SH|SZ)$"
-_AUTHORITATIVE_DATASETS = {
+_MARKET_RESPONSE_DATASETS = {
     "capital_distribution",
     "capital_flow",
     "candlestick_1m",
     "depth",
+    "market_temperature",
     "trades",
 }
 
@@ -67,7 +68,7 @@ def _validate_payload(path: str, params: dict[str, object], payload: object) -> 
 
     if path.startswith("/api/collection-monitor/markets/"):
         datasets = payload.get("datasets")
-        if not isinstance(datasets, list) or len(datasets) > len(_AUTHORITATIVE_DATASETS):
+        if not isinstance(datasets, list) or len(datasets) > len(_MARKET_RESPONSE_DATASETS):
             raise ValueError("invalid market datasets")
         seen: set[str] = set()
         for dataset in datasets:
@@ -85,7 +86,7 @@ def _validate_payload(path: str, params: dict[str, object], payload: object) -> 
             ):
                 raise ValueError("invalid market dataset key")
             key = keys[0]
-            if key not in _AUTHORITATIVE_DATASETS or key in seen:
+            if key not in _MARKET_RESPONSE_DATASETS or key in seen:
                 raise ValueError("invalid market dataset key")
             seen.add(key)
         return

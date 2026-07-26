@@ -192,6 +192,8 @@ def test_routes_use_only_their_fixed_upstream_paths(
         "/api/collection-monitor/tasks?technology=java",
         "/api/collection-monitor/tasks?mode=live",
         "/api/collection-monitor/tasks?dataset=quotes",
+        "/api/collection-monitor/tasks?dataset=market_temperature",
+        "/api/collection-monitor/gaps?market=hk&dataset=market_temperature",
         "/api/collection-monitor/gaps?market=hk&dataset=depth&symbol=bad-symbol",
         "/api/collection-monitor/tasks?limit=0",
         "/api/collection-monitor/tasks?limit=501",
@@ -372,6 +374,28 @@ def test_accepts_a_valid_overview_at_the_exact_two_mib_boundary(
     assert len(response.json()["padding"]) == padding_size
 
 
+def test_accepts_six_market_response_datasets_including_market_temperature(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    datasets = [
+        {"datasetKey": "capital_distribution"},
+        {"datasetKey": "capital_flow"},
+        {"datasetKey": "candlestick_1m"},
+        {"datasetKey": "depth"},
+        {"datasetKey": "market_temperature"},
+        {"datasetKey": "trades"},
+    ]
+    _patch_upstream(
+        monkeypatch,
+        _Response(payload={"market": "hk", "datasets": datasets}),
+    )
+
+    response = client.get("/api/collection-monitor/markets/hk")
+
+    assert response.status_code == 200
+    assert response.json()["datasets"] == datasets
+
+
 @pytest.mark.parametrize(
     ("path", "payload"),
     [
@@ -420,8 +444,9 @@ def test_rejects_invalid_route_shapes_and_sanitizes_the_response(
             {"dataset": "capital_flow"},
             {"dataset": "candlestick_1m"},
             {"dataset": "depth"},
+            {"dataset": "market_temperature"},
             {"dataset": "trades"},
-            {"dataset": "secret-sixth-dataset"},
+            {"dataset": "secret-seventh-dataset"},
         ],
         [{"dataset": "depth"}, {"dataset": "depth"}],
         [{"dataset": "secret-unknown-dataset"}],

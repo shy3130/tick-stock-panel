@@ -19,11 +19,20 @@ iteration and MUST contain no more than exactly 2,097,152 decoded body bytes
 (2 MiB). Decompressed output, rather than compressed transfer size, counts
 toward this bound. Successful payloads MUST also satisfy their route shape:
 `/overview` is a mapping; `/markets/{market}` is a mapping whose `datasets` list
-contains at most the five authoritative dataset keys below with no duplicate;
+contains at most the six authoritative response dataset keys with no duplicate;
 and `/tasks` and `/gaps` are mappings whose returned item lists contain no more
 items than the requested `limit`. Every dataset, task, and gap item MUST be a
 mapping. Any size, JSON, or shape violation MUST return only the sanitized 502
 proxy-unavailable response, never a raw body, upstream URL, or credential.
+
+The market-response dataset allowlist is intentionally asymmetric with the
+query allowlist. It consists of the five queryable keys below plus
+`market_temperature`. Production Longbridge `MarketTemperatureSync` persists
+that observation-only evidence and the market store returns it, but the
+Longbridge query validators do not currently accept it as a tasks/gaps dataset
+filter. TickFlow therefore MUST accept `market_temperature` only as returned
+`/markets/{market}` evidence and MUST continue rejecting it in `dataset` query
+parameters. This evidence does not establish Monday live semantic acceptance.
 
 The authoritative upstream query contract is:
 
