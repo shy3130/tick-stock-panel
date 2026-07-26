@@ -190,6 +190,17 @@ function translateReasonCode(value: string) {
   if (value === 'LOWER_SECOND_CLOSE') return '第二根收盘更弱'
   if (value === 'FIRST_ACCEPTANCE_HIGH_BROKEN') return '突破首次承接高点'
   if (value === 'FIRST_ACCEPTANCE_LOW_BROKEN') return '跌破首次承接低点'
+  if (value === 'FOLLOW_THROUGH_FAILED') return '后续走势未能延续突破'
+  if (value === 'FELL_BACK_UNDER_STRUCTURE') return '重新跌回关键结构位下方'
+  if (value === 'RECOVERED_ABOVE_STRUCTURE') return '重新收回关键结构位上方'
+  if (value === 'FOLLOW_THROUGH_HELD') return '后续走势保持在突破方向'
+  if (value === 'STRONG_CLOSE_LOCATION') return '收盘位置较强'
+  if (value === 'WEAK_CLOSE_LOCATION') return '收盘位置较弱'
+  if (value === 'LONG_UPPER_SHADOW') return '上影线较长'
+  if (value === 'LONG_LOWER_SHADOW') return '下影线较长'
+  if (value === 'NOT_OUTSIDE_BOX') return '仍在开盘箱体内'
+  if (value === 'VOLUME_EXPANDED') return '量能放大'
+  if (value === 'VOLUME_NOT_CONFIRMED') return '量能未确认'
   return value.replaceAll('_', ' ').toLowerCase()
 }
 

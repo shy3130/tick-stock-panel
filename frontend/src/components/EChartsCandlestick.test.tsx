@@ -162,6 +162,29 @@ describe('ECharts candlestick shared controls', () => {
     expect(point.marker.price).toBe(10.95)
   })
 
+  it('renders false-break quality evidence in Chinese instead of internal codes', () => {
+    render(
+      <Harness markers={[{
+        date: rows[1].date,
+        kind: 'neutral',
+        signalSide: 'BUY',
+        above: true,
+        price: 10.95,
+        color: '#F59E0B',
+        label: 'F',
+        conclusion: '\u5047\u7a81\u7834',
+        reasonCodes: ['FOLLOW_THROUGH_FAILED', 'FELL_BACK_UNDER_STRUCTURE'],
+      }]} />,
+    )
+
+    const series = latestOption().series as Array<Record<string, any>>
+    const candle = series.find(item => item.name === 'K')
+    const tooltip = candle?.markPoint.data[0].tooltip.formatter()
+    expect(tooltip).toContain('\u540e\u7eed\u8d70\u52bf\u672a\u80fd\u5ef6\u7eed\u7a81\u7834')
+    expect(tooltip).toContain('\u91cd\u65b0\u8dcc\u56de\u5173\u952e\u7ed3\u6784\u4f4d\u4e0b\u65b9')
+    expect(tooltip).not.toContain('follow through failed')
+  })
+
   it('keeps the exact BUY signal price and supplied green color after compact zoom', () => {
     const compactRows = Array.from({ length: 61 }, (_, index): OHLC => ({
       ...rows[index % rows.length],
