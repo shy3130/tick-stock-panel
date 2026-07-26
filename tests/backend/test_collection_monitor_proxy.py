@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import httpx
@@ -12,9 +13,21 @@ from app.api import collection_monitor
 
 
 class _Response:
-    def __init__(self, status_code: int = 200, payload: object | None = None) -> None:
+    def __init__(
+        self,
+        status_code: int = 200,
+        payload: object | None = None,
+        chunks: list[bytes] | None = None,
+    ) -> None:
         self.status_code = status_code
         self._payload = {"evidence": "available"} if payload is None else payload
+        self._chunks = chunks
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -29,6 +42,21 @@ class _Response:
             raise self._payload
         return self._payload
 
+    def iter_bytes(self) -> object:
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        if self._chunks is not None:
+            yield from self._chunks
+            return
+        yield json.dumps(self._payload).encode()
+
+
+def _patch_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+    response: _Response,
+) -> None:
+    monkeypatch.setattr(collection_monitor.httpx, "stream", lambda *args, **kwargs: response)
+
 
 @pytest.fixture
 def client() -> TestClient:
@@ -42,12 +70,13 @@ def test_tasks_uses_fixed_upstream_path_and_forwards_canonical_query(
 ) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def fake_get(url: str, **kwargs: object) -> _Response:
+    def fake_stream(method: str, url: str, **kwargs: object) -> _Response:
+        assert method == "GET"
         calls.append((url, kwargs))
         return _Response(payload={"tasks": []})
 
     monkeypatch.setenv("LONGBRIDGE_API_URL", "http://monitor.internal:19912/")
-    monkeypatch.setattr(collection_monitor.httpx, "get", fake_get)
+    monkeypatch.setattr(collection_monitor.httpx, "stream", fake_stream)
 
     response = client.get(
         "/api/collection-monitor/tasks?date=2026-07-26&status=yellow&technology=rust"
@@ -81,11 +110,12 @@ def test_tasks_forwards_bounded_pagination_defaults(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_get(url: str, **kwargs: object) -> _Response:
+    def fake_stream(method: str, url: str, **kwargs: object) -> _Response:
+        assert method == "GET"
         calls.append(kwargs)
         return _Response(payload={"tasks": []})
 
-    monkeypatch.setattr(collection_monitor.httpx, "get", fake_get)
+    monkeypatch.setattr(collection_monitor.httpx, "stream", fake_stream)
 
     response = client.get("/api/collection-monitor/tasks")
 
@@ -130,11 +160,16 @@ def test_routes_use_only_their_fixed_upstream_paths(
 ) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
-    def fake_get(url: str, **kwargs: object) -> _Response:
+    def fake_stream(method: str, url: str, **kwargs: object) -> _Response:
+        assert method == "GET"
         calls.append((url, kwargs))
-        return _Response()
+        if expected_path == "/api/collection-monitor/overview":
+            return _Response(payload={})
+        if expected_path.startswith("/api/collection-monitor/markets/"):
+            return _Response(payload={"datasets": []})
+        return _Response(payload={"gaps": []})
 
-    monkeypatch.setattr(collection_monitor.httpx, "get", fake_get)
+    monkeypatch.setattr(collection_monitor.httpx, "stream", fake_stream)
 
     response = client.get(path)
 
@@ -238,7 +273,7 @@ def test_preserves_evidence_unavailable_503_without_upstream_detail(
 ) -> None:
     monkeypatch.setattr(
         collection_monitor.httpx,
-        "get",
+        "stream",
         lambda *args, **kwargs: _Response(503, {"detail": "upstream secret"}),
     )
 
@@ -264,7 +299,7 @@ def test_sanitizes_non_finite_upstream_json(
 ) -> None:
     monkeypatch.setattr(
         collection_monitor.httpx,
-        "get",
+        "stream",
         lambda *args, **kwargs: _Response(payload={"value": value}),
     )
 
@@ -285,12 +320,12 @@ def test_sanitizes_non_finite_upstream_json(
 def test_sanitizes_network_http_and_non_json_upstream_failures(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, failure: object
 ) -> None:
-    def fake_get(*args: object, **kwargs: object) -> _Response:
+    def fake_stream(*args: object, **kwargs: object) -> _Response:
         if isinstance(failure, Exception):
             raise failure
         return failure
 
-    monkeypatch.setattr(collection_monitor.httpx, "get", fake_get)
+    monkeypatch.setattr(collection_monitor.httpx, "stream", fake_stream)
 
     response = client.get("/api/collection-monitor/overview")
 
@@ -299,3 +334,109 @@ def test_sanitizes_network_http_and_non_json_upstream_failures(
     assert "upstream.invalid" not in response.text
     assert "password" not in response.text
     assert "secret-body" not in response.text
+
+
+def test_rejects_streamed_response_larger_than_two_mib(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream = _Response(
+        payload={"eager": "buffering would incorrectly accept this"},
+        chunks=[b" " * (2 * 1024 * 1024), b"x", b"credential=do-not-leak"],
+    )
+    _patch_upstream(monkeypatch, upstream)
+
+    response = client.get("/api/collection-monitor/overview")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "collection_monitoring_proxy_unavailable"}
+    assert "credential" not in response.text
+    assert "do-not-leak" not in response.text
+
+
+def test_accepts_a_valid_overview_at_the_exact_two_mib_boundary(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = b'{"padding":"'
+    suffix = b'"}'
+    padding_size = (2 * 1024 * 1024) - len(prefix) - len(suffix)
+    _patch_upstream(
+        monkeypatch,
+        _Response(
+            chunks=[prefix, b"x" * padding_size, suffix],
+        ),
+    )
+
+    response = client.get("/api/collection-monitor/overview")
+
+    assert response.status_code == 200
+    assert len(response.json()["padding"]) == padding_size
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/api/collection-monitor/tasks?limit=1",
+            {"tasks": [{"id": "first"}, {"id": "secret-task"}], "total": 2},
+        ),
+        (
+            "/api/collection-monitor/gaps?market=hk&dataset=depth&limit=1",
+            {"gaps": [{"id": "first"}, {"id": "secret-gap"}], "total": 2},
+        ),
+        (
+            "/api/collection-monitor/overview",
+            [{"secret": "overview-must-be-a-mapping"}],
+        ),
+        (
+            "/api/collection-monitor/tasks?limit=1",
+            {"tasks": ["secret-task-must-be-a-mapping"], "total": 1},
+        ),
+        (
+            "/api/collection-monitor/gaps?market=hk&dataset=depth&limit=1",
+            {"gaps": ["secret-gap-must-be-a-mapping"], "total": 1},
+        ),
+    ],
+)
+def test_rejects_invalid_route_shapes_and_sanitizes_the_response(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    payload: object,
+) -> None:
+    _patch_upstream(monkeypatch, _Response(payload=payload))
+
+    response = client.get(path)
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "collection_monitoring_proxy_unavailable"}
+    assert "secret" not in response.text
+
+
+@pytest.mark.parametrize(
+    "datasets",
+    [
+        [
+            {"dataset": "capital_distribution"},
+            {"dataset": "capital_flow"},
+            {"dataset": "candlestick_1m"},
+            {"dataset": "depth"},
+            {"dataset": "trades"},
+            {"dataset": "secret-sixth-dataset"},
+        ],
+        [{"dataset": "depth"}, {"dataset": "depth"}],
+        [{"dataset": "secret-unknown-dataset"}],
+        ["secret-dataset-must-be-a-mapping"],
+    ],
+)
+def test_rejects_invalid_market_dataset_count_keys_and_duplicates(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    datasets: list[object],
+) -> None:
+    _patch_upstream(monkeypatch, _Response(payload={"market": "hk", "datasets": datasets}))
+
+    response = client.get("/api/collection-monitor/markets/hk")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "collection_monitoring_proxy_unavailable"}
+    assert "secret" not in response.text

@@ -14,6 +14,17 @@ sizes, preserve the upstream evidence-unavailable 503 meaning, and sanitize all
 other upstream/network failures. It MUST NOT expose an arbitrary proxy, a
 mutation method, an internal endpoint, a credential, or a raw upstream error.
 
+Each successful upstream response MUST be consumed with streaming decoded-byte
+iteration and MUST contain no more than exactly 2,097,152 decoded body bytes
+(2 MiB). Decompressed output, rather than compressed transfer size, counts
+toward this bound. Successful payloads MUST also satisfy their route shape:
+`/overview` is a mapping; `/markets/{market}` is a mapping whose `datasets` list
+contains at most the five authoritative dataset keys below with no duplicate;
+and `/tasks` and `/gaps` are mappings whose returned item lists contain no more
+items than the requested `limit`. Every dataset, task, and gap item MUST be a
+mapping. Any size, JSON, or shape violation MUST return only the sanitized 502
+proxy-unavailable response, never a raw body, upstream URL, or credential.
+
 The authoritative upstream query contract is:
 
 - `market`: `cn`, `hk`, or `us`.

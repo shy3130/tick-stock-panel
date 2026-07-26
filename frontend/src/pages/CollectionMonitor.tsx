@@ -55,6 +55,8 @@ const healthClasses: Record<HealthState, string> = {
   unavailable: 'bg-danger/10 text-danger',
 }
 
+const PAGE_LIMIT = 100
+
 function todayInShanghai() {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai',
@@ -176,13 +178,73 @@ function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
   )
 }
 
+function PaginationControls({
+  label,
+  total,
+  limit,
+  offset,
+  count,
+  onPrevious,
+  onNext,
+}: {
+  label: 'Task' | 'Gap'
+  total: number | undefined
+  limit: number
+  offset: number
+  count: number
+  onPrevious: () => void
+  onNext: () => void
+}) {
+  const last = offset + count
+  const knownTotal = total !== undefined
+  const hasNext = knownTotal ? last < total : count === limit
+  const isPaginated = offset > 0 || hasNext
+
+  return (
+    <div
+      role="group"
+      aria-label={`${label} pagination`}
+      className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted"
+    >
+      <span>Total {knownTotal ? total : 'unknown'} · Showing {count ? offset + 1 : 0}–{last}</span>
+      {isPaginated && <span className="rounded-full bg-elevated px-2 py-0.5">Results are paginated</span>}
+      <span className="ml-auto flex gap-2">
+        <button
+          type="button"
+          aria-label={`Previous ${label.toLowerCase()} page`}
+          disabled={offset === 0}
+          onClick={onPrevious}
+          className="rounded-btn border border-border px-2.5 py-1.5 text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          aria-label={`Next ${label.toLowerCase()} page`}
+          disabled={!hasNext}
+          onClick={onNext}
+          className="rounded-btn border border-border px-2.5 py-1.5 text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+        </button>
+      </span>
+    </div>
+  )
+}
+
 export function CollectionMonitor({ initialDate }: { initialDate?: string }) {
   const [filters, setFilters] = useState<CollectionMonitorFilters>({
     date: initialDate ?? todayInShanghai(),
     market: 'hk',
     dataset: 'capital_distribution',
   })
-  const queries = useCollectionMonitor(filters)
+  const [taskOffset, setTaskOffset] = useState(0)
+  const [gapOffset, setGapOffset] = useState(0)
+  const queries = useCollectionMonitor(filters, {
+    taskOffset,
+    gapOffset,
+    limit: PAGE_LIMIT,
+  })
   const availableOverview = queries.overview.data?.evidenceState === 'unavailable'
     ? undefined
     : queries.overview.data
@@ -194,7 +256,11 @@ export function CollectionMonitor({ initialDate }: { initialDate?: string }) {
   const updateFilter = <K extends keyof CollectionMonitorFilters>(
     key: K,
     value: CollectionMonitorFilters[K],
-  ) => setFilters(current => ({ ...current, [key]: value }))
+  ) => {
+    setTaskOffset(0)
+    setGapOffset(0)
+    setFilters(current => ({ ...current, [key]: value }))
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-4 p-3 sm:p-5 lg:p-6">
@@ -203,6 +269,9 @@ export function CollectionMonitor({ initialDate }: { initialDate?: string }) {
           <div className="flex items-center gap-2 text-accent">
             <RadioTower className="h-4 w-4" />
             <span className="text-[10px] font-semibold uppercase tracking-[0.2em]">Observation only</span>
+            <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+              Live semantic acceptance pending
+            </span>
           </div>
           <h1 className="mt-2 text-xl font-semibold text-foreground">采集监控</h1>
           <p className="mt-1 text-xs text-muted">只读证据视图 · 30 秒刷新 · 不控制采集器</p>
@@ -344,6 +413,15 @@ export function CollectionMonitor({ initialDate }: { initialDate?: string }) {
           : (
             <div className="overflow-x-auto">
               {queries.tasks.data && <div className="mb-3"><EvidenceBadge evidence={queries.tasks.data} /></div>}
+              <PaginationControls
+                label="Task"
+                total={queries.tasks.data?.total}
+                limit={PAGE_LIMIT}
+                offset={taskOffset}
+                count={queries.tasks.data?.tasks.length ?? 0}
+                onPrevious={() => setTaskOffset(current => Math.max(0, current - PAGE_LIMIT))}
+                onNext={() => setTaskOffset(current => current + PAGE_LIMIT)}
+              />
               <table className="w-full min-w-[820px] text-left text-xs" aria-label="采集任务">
                 <thead className="border-b border-border text-muted">
                   <tr>
@@ -383,6 +461,15 @@ export function CollectionMonitor({ initialDate }: { initialDate?: string }) {
           : (
             <div className="overflow-x-auto">
               {queries.gaps.data && <div className="mb-3"><EvidenceBadge evidence={queries.gaps.data} /></div>}
+              <PaginationControls
+                label="Gap"
+                total={queries.gaps.data?.total}
+                limit={PAGE_LIMIT}
+                offset={gapOffset}
+                count={queries.gaps.data?.gaps.length ?? 0}
+                onPrevious={() => setGapOffset(current => Math.max(0, current - PAGE_LIMIT))}
+                onNext={() => setGapOffset(current => current + PAGE_LIMIT)}
+              />
               <table className="w-full min-w-[760px] text-left text-xs" aria-label="缺口证据">
                 <thead className="border-b border-border text-muted">
                   <tr>

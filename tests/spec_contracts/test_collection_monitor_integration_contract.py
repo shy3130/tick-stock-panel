@@ -71,20 +71,23 @@ def test_collection_monitor_traceability_paths_exist() -> None:
             )
 
 
-def test_page_requirement_maps_to_frontend_behavioral_wrapper() -> None:
+def test_page_and_preacceptance_requirements_map_to_frontend_behavioral_wrapper() -> None:
     traceability = yaml.safe_load(_read("docs/traceability.yaml"))
-    page_requirement = next(
-        entry
-        for entry in traceability["requirements"]
-        if entry["id"] == "REQ-COLLECTION-MONITOR-PAGE-001"
-    )
-    test_evidence = page_requirement["tests"]
-    if isinstance(test_evidence, dict):
-        test_evidence = [test_evidence]
-
-    assert PAGE_BEHAVIORAL_TEST in {
-        evidence["path"] for evidence in test_evidence
+    requirements = {
+        entry["id"]: entry for entry in traceability["requirements"]
     }
+
+    for requirement_id in (
+        "REQ-COLLECTION-MONITOR-PAGE-001",
+        "REQ-COLLECTION-MONITOR-PREACCEPTANCE-001",
+    ):
+        test_evidence = requirements[requirement_id]["tests"]
+        if isinstance(test_evidence, dict):
+            test_evidence = [test_evidence]
+
+        assert PAGE_BEHAVIORAL_TEST in {
+            evidence["path"] for evidence in test_evidence
+        }, f"{requirement_id} must map to {PAGE_BEHAVIORAL_TEST}"
 
 
 def test_live_semantic_acceptance_remains_pending() -> None:

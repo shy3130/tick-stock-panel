@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from datetime import date as calendar_date
 
 import httpx
@@ -15,6 +16,7 @@ _MARKET_PATH = "/api/collection-monitor/markets/{market}"
 _TASKS_PATH = "/api/collection-monitor/tasks"
 _GAPS_PATH = "/api/collection-monitor/gaps"
 _TIMEOUT_SECONDS = 10.0
+_MAX_DECODED_RESPONSE_BYTES = 2 * 1024 * 1024
 
 _MARKET_PATTERN = "^(cn|hk|us)$"
 _DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
@@ -23,6 +25,13 @@ _TECHNOLOGY_PATTERN = "^(rust|websocket|python|batch)$"
 _DATASET_PATTERN = "^(capital_distribution|capital_flow|candlestick_1m|depth|trades)$"
 _MODE_PATTERN = "^(production|shadow|backfill)$"
 _SYMBOL_PATTERN = r"^[A-Z0-9][A-Z0-9._-]{0,31}\.(HK|US|SH|SZ)$"
+_AUTHORITATIVE_DATASETS = {
+    "capital_distribution",
+    "capital_flow",
+    "candlestick_1m",
+    "depth",
+    "trades",
+}
 
 
 def _endpoint() -> str:
@@ -49,16 +58,71 @@ def _query_parameters(**values: object) -> dict[str, object]:
     return {name: value for name, value in values.items() if value is not None}
 
 
+def _validate_payload(path: str, params: dict[str, object], payload: object) -> None:
+    if not isinstance(payload, Mapping):
+        raise ValueError("upstream payload must be a mapping")
+
+    if path == _OVERVIEW_PATH:
+        return
+
+    if path.startswith("/api/collection-monitor/markets/"):
+        datasets = payload.get("datasets")
+        if not isinstance(datasets, list) or len(datasets) > len(_AUTHORITATIVE_DATASETS):
+            raise ValueError("invalid market datasets")
+        seen: set[str] = set()
+        for dataset in datasets:
+            if not isinstance(dataset, Mapping):
+                raise ValueError("invalid market dataset")
+            keys = [
+                dataset[name]
+                for name in ("datasetKey", "dataset")
+                if name in dataset
+            ]
+            if (
+                not keys
+                or any(not isinstance(key, str) for key in keys)
+                or len(set(keys)) != 1
+            ):
+                raise ValueError("invalid market dataset key")
+            key = keys[0]
+            if key not in _AUTHORITATIVE_DATASETS or key in seen:
+                raise ValueError("invalid market dataset key")
+            seen.add(key)
+        return
+
+    collection_name = "tasks" if path == _TASKS_PATH else "gaps"
+    items = payload.get(collection_name)
+    limit = params.get("limit")
+    if (
+        not isinstance(items, list)
+        or not isinstance(limit, int)
+        or len(items) > limit
+        or any(not isinstance(item, Mapping) for item in items)
+    ):
+        raise ValueError(f"invalid {collection_name} payload")
+
+
 def _read(path: str, params: dict[str, object]) -> object:
     try:
-        response = httpx.get(f"{_endpoint()}{path}", params=params, timeout=_TIMEOUT_SECONDS)
-        if response.status_code == 503:
-            raise HTTPException(
-                status_code=503,
-                detail="collection_monitoring_evidence_unavailable",
-            )
-        response.raise_for_status()
-        payload = response.json()
+        with httpx.stream(
+            "GET",
+            f"{_endpoint()}{path}",
+            params=params,
+            timeout=_TIMEOUT_SECONDS,
+        ) as response:
+            if response.status_code == 503:
+                raise HTTPException(
+                    status_code=503,
+                    detail="collection_monitoring_evidence_unavailable",
+                )
+            response.raise_for_status()
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                if len(body) + len(chunk) > _MAX_DECODED_RESPONSE_BYTES:
+                    raise ValueError("upstream payload exceeds decoded-byte limit")
+                body.extend(chunk)
+        payload = json.loads(body)
+        _validate_payload(path, params, payload)
         json.dumps(payload, allow_nan=False)
         return payload
     except HTTPException:

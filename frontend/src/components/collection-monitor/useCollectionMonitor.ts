@@ -12,6 +12,12 @@ const API_ROOT = '/api/collection-monitor'
 const REFRESH_INTERVAL_MS = 30_000
 const MARKETS: readonly MarketKey[] = ['cn', 'hk', 'us']
 
+export interface CollectionMonitorPagination {
+  taskOffset: number
+  gapOffset: number
+  limit: number
+}
+
 export class CollectionMonitorRequestError extends Error {
   constructor(readonly status: number) {
     super(status === 503 ? 'collection_monitoring_evidence_unavailable' : 'collection_monitor_request_failed')
@@ -38,7 +44,10 @@ const queryOptions = {
   retry: false,
 } as const
 
-export function useCollectionMonitor(filters: CollectionMonitorFilters) {
+export function useCollectionMonitor(
+  filters: CollectionMonitorFilters,
+  pagination: CollectionMonitorPagination,
+) {
   const overview = useQuery({
     queryKey: ['collection-monitor', 'overview', filters.date],
     queryFn: () => readJson<CollectionMonitorOverview>(
@@ -67,6 +76,8 @@ export function useCollectionMonitor(filters: CollectionMonitorFilters) {
       filters.market,
       filters.dataset,
       filters.mode,
+      pagination.limit,
+      pagination.taskOffset,
     ],
     queryFn: () => readJson<CollectionTaskPage>(
       `${API_ROOT}/tasks?${queryString({
@@ -76,22 +87,30 @@ export function useCollectionMonitor(filters: CollectionMonitorFilters) {
         market: filters.market,
         dataset: filters.dataset,
         mode: filters.mode,
-        limit: 100,
-        offset: 0,
+        limit: pagination.limit,
+        offset: pagination.taskOffset,
       })}`,
     ),
     ...queryOptions,
   })
 
   const gaps = useQuery({
-    queryKey: ['collection-monitor', 'gaps', filters.market, filters.dataset, filters.date],
+    queryKey: [
+      'collection-monitor',
+      'gaps',
+      filters.market,
+      filters.dataset,
+      filters.date,
+      pagination.limit,
+      pagination.gapOffset,
+    ],
     queryFn: () => readJson<CollectionGapPage>(
       `${API_ROOT}/gaps?${queryString({
         market: filters.market,
         dataset: filters.dataset,
         date: filters.date,
-        limit: 100,
-        offset: 0,
+        limit: pagination.limit,
+        offset: pagination.gapOffset,
       })}`,
     ),
     ...queryOptions,

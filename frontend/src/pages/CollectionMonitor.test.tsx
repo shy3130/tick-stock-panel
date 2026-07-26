@@ -179,6 +179,39 @@ function installHealthyFetch(
   return fetchMock
 }
 
+function installPaginatedFetch() {
+  const fetchMock = vi.fn((input: string | URL | Request, _init?: RequestInit) => {
+    const rawUrl = String(input)
+    const url = new URL(rawUrl, 'http://tickflow.local')
+    const offset = Number(url.searchParams.get('offset') ?? 0)
+    if (url.pathname.endsWith('/overview')) return jsonResponse(overview)
+    if (url.pathname.endsWith('/markets/cn')) return jsonResponse(markets.cn)
+    if (url.pathname.endsWith('/markets/hk')) return jsonResponse(markets.hk)
+    if (url.pathname.endsWith('/markets/us')) return jsonResponse(markets.us)
+    if (url.pathname.endsWith('/tasks')) {
+      return jsonResponse({
+        ...tasks,
+        total: 250,
+        limit: 100,
+        offset,
+        tasks: [{ ...tasks.tasks[0], taskKey: `task-${offset}` }],
+      })
+    }
+    if (url.pathname.endsWith('/gaps')) {
+      return jsonResponse({
+        ...gaps,
+        total: 150,
+        limit: 100,
+        offset,
+        gaps: [{ ...gaps.gaps[0], symbol: `${offset}.HK` }],
+      })
+    }
+    return jsonResponse({ detail: 'not_found' }, 404)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -202,6 +235,9 @@ describe('CollectionMonitor', () => {
   it('renders the four read-only evidence levels with distinct evidence semantics', async () => {
     renderPage()
 
+    expect(screen.getByText('Observation only')).toBeInTheDocument()
+    expect(screen.getByText('Live semantic acceptance pending')).toBeInTheDocument()
+    expect(screen.queryByText('Live semantic acceptance accepted')).not.toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: '今日采集结论' })).toBeInTheDocument()
     expect(await screen.findByText('4')).toBeInTheDocument()
     expect(screen.getByText('3')).toBeInTheDocument()
@@ -231,6 +267,39 @@ describe('CollectionMonitor', () => {
     for (const controlName of ['重启', '修复', '确认', '排期', '操作']) {
       expect(screen.queryByRole('button', { name: new RegExp(controlName) })).not.toBeInTheDocument()
     }
+  })
+
+  it('shows totals and navigates task and gap pages with GET-only offsets', async () => {
+    const fetchMock = installPaginatedFetch()
+    const user = userEvent.setup()
+    renderPage()
+
+    expect(await screen.findByText('task-0')).toBeInTheDocument()
+    const taskPagination = screen.getByRole('group', { name: 'Task pagination' })
+    expect(within(taskPagination).getByText('Total 250 · Showing 1–1')).toBeInTheDocument()
+    expect(within(taskPagination).getByText('Results are paginated')).toBeInTheDocument()
+    expect(within(taskPagination).getByRole('button', { name: 'Previous task page' })).toBeDisabled()
+
+    await user.click(within(taskPagination).getByRole('button', { name: 'Next task page' }))
+    expect(await screen.findByText('task-100')).toBeInTheDocument()
+    expect(within(taskPagination).getByText('Total 250 · Showing 101–101')).toBeInTheDocument()
+    expect(within(taskPagination).getByRole('button', { name: 'Previous task page' })).toBeEnabled()
+
+    const gapPagination = screen.getByRole('group', { name: 'Gap pagination' })
+    expect(within(gapPagination).getByText('Total 150 · Showing 1–1')).toBeInTheDocument()
+    await user.click(within(gapPagination).getByRole('button', { name: 'Next gap page' }))
+    expect(await screen.findByText('100.HK')).toBeInTheDocument()
+
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map(([input]) => String(input))
+      expect(urls).toContain(
+        '/api/collection-monitor/tasks?date=2026-07-26&market=hk&dataset=capital_distribution&limit=100&offset=100',
+      )
+      expect(urls).toContain(
+        '/api/collection-monitor/gaps?market=hk&dataset=capital_distribution&date=2026-07-26&limit=100&offset=100',
+      )
+    })
+    expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
   })
 
   it('uses only the fixed same-origin GET query contract and applies filters', async () => {
