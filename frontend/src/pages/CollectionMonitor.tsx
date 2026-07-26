@@ -149,6 +149,7 @@ function HealthBadge({ state }: { state: HealthState | undefined }) {
 
 function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
   const key = dataset.datasetKey ?? dataset.dataset
+  const currentEvidenceAvailable = dataset.evidenceState !== 'unavailable'
   return (
     <div className="min-w-0 rounded-btn border border-border bg-base/50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -156,17 +157,21 @@ function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
         <HealthBadge state={dataset.displayState ?? dataset.status ?? dataset.dataHealth} />
       </div>
       <div className="mt-2"><EvidenceBadge evidence={dataset} /></div>
-      <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-        <dt className="text-muted">任务状态</dt><dd className="text-right text-secondary">{statusLabels[dataset.taskHealth ?? 'unavailable']}</dd>
-        <dt className="text-muted">数据状态</dt><dd className="text-right text-secondary">{statusLabels[dataset.dataHealth ?? 'unavailable']}</dd>
-        <dt className="text-muted">采集 / 预期</dt><dd className="text-right font-mono text-secondary">{dataset.collectedCount ?? '—'} / {dataset.expectedCount ?? '—'}</dd>
-        <dt className="text-muted">新鲜 / 陈旧</dt><dd className="text-right font-mono text-secondary">{dataset.freshCount ?? '—'} / {dataset.staleCount ?? '—'}</dd>
-        <dt className="text-muted">缺口 / 重复</dt><dd className="text-right font-mono text-secondary">{dataset.missingCount ?? '—'} / {dataset.duplicateCount ?? '—'}</dd>
-        <dt className="text-muted">最新数据</dt><dd className="text-right font-mono text-secondary">{dataset.latestDataAt ?? '—'}</dd>
-      </dl>
-      <p className="mt-2 truncate text-[11px] text-muted" title={dataset.provenance}>
-        来源 {dataset.provenance ?? '未确认'}
-      </p>
+      {currentEvidenceAvailable && (
+        <>
+          <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+            <dt className="text-muted">任务状态</dt><dd className="text-right text-secondary">{statusLabels[dataset.taskHealth ?? 'unavailable']}</dd>
+            <dt className="text-muted">数据状态</dt><dd className="text-right text-secondary">{statusLabels[dataset.dataHealth ?? 'unavailable']}</dd>
+            <dt className="text-muted">采集 / 预期</dt><dd className="text-right font-mono text-secondary">{dataset.collectedCount ?? '—'} / {dataset.expectedCount ?? '—'}</dd>
+            <dt className="text-muted">新鲜 / 陈旧</dt><dd className="text-right font-mono text-secondary">{dataset.freshCount ?? '—'} / {dataset.staleCount ?? '—'}</dd>
+            <dt className="text-muted">缺口 / 重复</dt><dd className="text-right font-mono text-secondary">{dataset.missingCount ?? '—'} / {dataset.duplicateCount ?? '—'}</dd>
+            <dt className="text-muted">最新数据</dt><dd className="text-right font-mono text-secondary">{dataset.latestDataAt ?? '—'}</dd>
+          </dl>
+          <p className="mt-2 truncate text-[11px] text-muted" title={dataset.provenance}>
+            来源 {dataset.provenance ?? '未确认'}
+          </p>
+        </>
+      )}
     </div>
   )
 }

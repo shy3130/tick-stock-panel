@@ -161,13 +161,16 @@ function jsonResponse(payload: unknown, status = 200) {
   } as Response)
 }
 
-function installHealthyFetch(overviewPayload: unknown = overview) {
+function installHealthyFetch(
+  overviewPayload: unknown = overview,
+  marketPayloads: Record<'cn' | 'hk' | 'us', unknown> = markets,
+) {
   const fetchMock = vi.fn((input: string | URL | Request, _init?: RequestInit) => {
     const url = String(input)
     if (url.includes('/overview')) return jsonResponse(overviewPayload)
-    if (url.includes('/markets/cn')) return jsonResponse(markets.cn)
-    if (url.includes('/markets/hk')) return jsonResponse(markets.hk)
-    if (url.includes('/markets/us')) return jsonResponse(markets.us)
+    if (url.includes('/markets/cn')) return jsonResponse(marketPayloads.cn)
+    if (url.includes('/markets/hk')) return jsonResponse(marketPayloads.hk)
+    if (url.includes('/markets/us')) return jsonResponse(marketPayloads.us)
     if (url.includes('/tasks')) return jsonResponse(tasks)
     if (url.includes('/gaps')) return jsonResponse(gaps)
     return jsonResponse({ detail: 'not_found' }, 404)
@@ -306,5 +309,59 @@ describe('CollectionMonitor', () => {
     expect(within(hkArticle!).getByText('最新数据').nextElementSibling).toHaveTextContent(
       '2026-07-26T10:29:00+08:00',
     )
+  })
+
+  it('shows only bounded last-confirmed detail for an unavailable dataset', async () => {
+    installHealthyFetch(overview, {
+      ...markets,
+      hk: {
+        ...markets.hk,
+        evidenceState: 'unavailable',
+        evidenceAt: null,
+        datasets: [{
+          market: 'hk',
+          datasetKey: 'capital_distribution',
+          taskHealth: 'unavailable',
+          dataHealth: 'unavailable',
+          displayState: 'unavailable',
+          status: 'unavailable',
+          evidenceState: 'unavailable',
+          evidenceAt: null,
+          expectedCount: 0,
+          collectedCount: 0,
+          freshCount: 0,
+          staleCount: 0,
+          missingCount: 0,
+          duplicateCount: 0,
+          latestDataAt: '2026-07-26T10:29:00+08:00',
+          provenance: 'placeholder.current',
+          lastConfirmed: {
+            evidenceAt: '2026-07-25T16:00:00+08:00',
+            expectedCount: 20,
+            collectedCount: 19,
+            freshCount: 18,
+            staleCount: 1,
+            missingCount: 1,
+            latestDataAt: '2026-07-25T15:59:00+08:00',
+            provenance: 'clickhouse.confirmed',
+          },
+        }],
+      },
+    })
+
+    renderPage()
+
+    const matrix = await screen.findByRole('region', { name: '市场 × 数据集' })
+    const hkArticle = within(matrix).getByRole('heading', { name: '港股' }).closest('article')
+    expect(hkArticle).not.toBeNull()
+    await within(hkArticle!).findByText(/来源 clickhouse.confirmed/)
+    expect(within(hkArticle!).getByText(
+      /预期 20 · 采集 19 · 新鲜 18 · 陈旧 1 · 缺失 1 · 最新数据 2026-07-25T15:59:00\+08:00 · 来源 clickhouse.confirmed/,
+    )).toBeInTheDocument()
+    for (const currentLabel of ['采集 / 预期', '新鲜 / 陈旧', '缺口 / 重复', '最新数据']) {
+      expect(within(hkArticle!).queryByText(currentLabel)).not.toBeInTheDocument()
+    }
+    expect(within(hkArticle!).queryByText('来源 placeholder.current')).not.toBeInTheDocument()
+    expect(within(hkArticle!).queryByText('2026-07-26T10:29:00+08:00')).not.toBeInTheDocument()
   })
 })
