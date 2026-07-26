@@ -87,3 +87,15 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-HEAD-SHOULDERS-SIGNAL-001
+    specification: SPEC-DOW-HEAD-SHOULDERS-001
+    implementation:
+      - frontend/src/components/EChartsCandlestick.tsx
+      - frontend/src/components/dow-monitor/types.ts
+      - frontend/src/components/dow-monitor/chartMappings.ts
+      - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
+    tests:
+      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-head-shoulders.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-head-shoulders.md, type: independent-review}

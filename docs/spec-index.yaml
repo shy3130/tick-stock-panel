@@ -20,5 +20,10 @@ specifications:
       - REQ-DOW-MONITOR-LINE-TOGGLE-001
       - REQ-DOW-MONITOR-FALSE-BREAK-PRESENTATION-001
       - REQ-DOW-MONITOR-MARKER-CLEARANCE-001
+  - id: SPEC-DOW-HEAD-SHOULDERS-001
+    path: docs/specs/dow-monitor-head-shoulders.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-HEAD-SHOULDERS-SIGNAL-001
 conflicts: []
 exceptions: []
