@@ -7,6 +7,8 @@ Requirements:
 - `REQ-DOW-MONITOR-STRICT-DOUBLE-BREAK-001`
 - `REQ-DOW-MONITOR-CHINESE-MARKER-001`
 - `REQ-DOW-MONITOR-LINE-TOGGLE-001`
+- `REQ-DOW-MONITOR-FALSE-BREAK-PRESENTATION-001`
+- `REQ-DOW-MONITOR-MARKER-CLEARANCE-001`
 
 Acceptance requires:
 
@@ -20,6 +22,8 @@ Acceptance requires:
 - confirmation that mini and detail charts show the same signal set.
 - confirmation that the expanded chart exposes one line-visibility switch
   shared by intraday and daily timeframes without hiding buy/sell markers.
+- confirmation that replay-failed signals use an `F` false-break pin and that
+  all signal pins clear the candle while retaining the exact trigger price.
 
 ## Evidence
 
@@ -48,3 +52,12 @@ Acceptance requires:
   `显示趋势线和压力线` switch, checked by default. Disabling it preserved the
   visible sell signal, switching to daily K kept the disabled state, and
   re-enabling it restored line visibility.
+- The focused frontend gate passed 57 tests across the shared candlestick,
+  Dow detail dialog, and Dow monitor page suites. The production build
+  compiled 2,706 modules successfully.
+- Production serves `assets/index-BOdk6f6D.js` from immutable image
+  `tickflow-stock-panel-app:dow-monitor-b2d9be78a689`.
+- Chrome verification on the NBIS 15-minute detail chart showed orange `F`
+  false-break pins alongside red `B` and green `S` pins. All pins were
+  positioned in blank space above their candle; the false-break hover retained
+  the exact trigger price and identified the original buy-side failure.
