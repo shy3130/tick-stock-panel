@@ -68,6 +68,14 @@ function isStrictDoubleBreakSignal(signal: Record<string, unknown>) {
     return reasonCodes.includes('LINE_AND_NEAREST_LEVEL_BROKEN')
       || reasonCodes.includes('LINE_AND_KEY_STRUCTURE_BROKEN')
   }
+  if (signal.triggerPath === 'TWO_BAR_RETEST') {
+    if (signal.side === 'BUY') {
+      return reasonCodes.includes('FIRST_ACCEPTANCE_HIGH_BROKEN')
+    }
+    if (signal.side === 'SELL' || signal.side === 'RISK') {
+      return reasonCodes.includes('FIRST_ACCEPTANCE_LOW_BROKEN')
+    }
+  }
   return false
 }
 

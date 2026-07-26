@@ -322,6 +322,74 @@ describe('Dow chart mappings', () => {
     }))
   })
 
+  it('keeps cross-session two-bar retest confirmations with Chinese marker labels', () => {
+    const markers = toChartMarkers([
+      {
+        side: 'BUY',
+        stage: 'TRIGGER',
+        actionableTime: '2026-07-21T09:45:00-04:00',
+        detectedTime: '2026-07-20T15:45:00-04:00',
+        price: 194.8,
+        lineId: 'cross-session-down-line',
+        lineValue: 193.9,
+        structurePivotId: 'FIRST-ACCEPTANCE-HIGH',
+        structurePivotPrice: 194.3,
+        triggerPath: 'TWO_BAR_RETEST',
+        reasonCodes: [
+          'SECOND_CLOSE_ABOVE',
+          'HIGHER_SECOND_CLOSE',
+          'FIRST_ACCEPTANCE_HIGH_BROKEN',
+        ],
+      },
+      {
+        side: 'SELL',
+        stage: 'CONFIRMED',
+        actionableTime: '2026-07-23T09:40:00-04:00',
+        detectedTime: '2026-07-22T15:55:00-04:00',
+        price: 223.7,
+        lineId: 'cross-session-up-line',
+        lineValue: 224.1,
+        structurePivotId: 'FIRST-ACCEPTANCE-LOW',
+        structurePivotPrice: 224.0,
+        triggerPath: 'TWO_BAR_RETEST',
+        reasonCodes: [
+          'SECOND_CLOSE_BELOW',
+          'LOWER_SECOND_CLOSE',
+          'FIRST_ACCEPTANCE_LOW_BROKEN',
+        ],
+      },
+      {
+        side: 'BUY',
+        stage: 'TRIGGER',
+        actionableTime: '2026-07-21T09:35:00-04:00',
+        detectedTime: '2026-07-20T15:45:00-04:00',
+        price: 194.1,
+        lineId: 'cross-session-down-line',
+        lineValue: 193.9,
+        structurePivotId: 'FIRST-ACCEPTANCE-HIGH',
+        structurePivotPrice: 194.3,
+        triggerPath: 'TWO_BAR_RETEST',
+        reasonCodes: ['SECOND_CLOSE_ABOVE', 'HIGHER_SECOND_CLOSE'],
+      },
+    ])
+
+    expect(markers).toHaveLength(2)
+    expect(markers[0]).toEqual(expect.objectContaining({
+      date: '2026-07-21T09:45:00-04:00',
+      kind: 'buy',
+      label: '买',
+      title: '买点',
+      structurePivotPrice: 194.3,
+    }))
+    expect(markers[1]).toEqual(expect.objectContaining({
+      date: '2026-07-23T09:40:00-04:00',
+      kind: 'sell',
+      label: '卖',
+      title: '卖点',
+      structurePivotPrice: 224.0,
+    }))
+  })
+
   it('maps signal-local causal trend lines and ignores future anchors', () => {
     const mapped = toSignalPriceLines([
       {

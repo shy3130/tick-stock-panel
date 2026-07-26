@@ -11,5 +11,11 @@ specifications:
     requirements:
       - REQ-REALTIME-UI-GATEWAY-001
       - REQ-REALTIME-UI-FALLBACK-001
+  - id: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    path: docs/specs/dow-monitor-signal-presentation.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-STRICT-DOUBLE-BREAK-001
+      - REQ-DOW-MONITOR-CHINESE-MARKER-001
 conflicts: []
 exceptions: []

@@ -41,3 +41,21 @@ requirements:
     acceptance:
       - {path: docs/acceptance/realtime-ui-fast-path.md, type: semantic-acceptance}
       - {path: docs/reviews/realtime-ui-fast-path.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-STRICT-DOUBLE-BREAK-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/chartMappings.ts
+    tests:
+      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-CHINESE-MARKER-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/chartMappings.ts
+    tests:
+      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
