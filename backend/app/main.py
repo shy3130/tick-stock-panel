@@ -50,6 +50,7 @@ from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
 from app.services.quote_service import QuoteService
 from app.services.realtime_market_data import RealtimeHub
+from app.spa_entry import spa_entry_path
 from app.tickflow import client as tf_client
 from app.tickflow.policy import detect_capabilities
 from app.tickflow.repository import DataStore, KlineRepository
@@ -485,13 +486,13 @@ if _static.exists():
         app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    def spa_fallback(full_path: str):  # noqa: ARG001
+    def spa_fallback(full_path: str):
         """所有未匹配路径回退到 index.html — React Router 接管。
 
         index.html 禁止缓存 (Cache-Control: no-store), 确保浏览器每次拿到
         最新版本引用的 JS/CSS 文件名 (assets 带 hash, 可长缓存)。
         """
-        index = _static / "index.html"
+        index = spa_entry_path(_static, full_path)
         if index.exists():
             return FileResponse(
                 index,

@@ -27,7 +27,8 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY frontend/ ./
-RUN pnpm build
+RUN pnpm build \
+    && cp ./dist/index.html ./dist/collection-monitor.html
 
 # === Stage 1b: stock-sdk 插件依赖(可选,默认跳过) ===
 # ⚠️ 合规提示: stock-sdk 通过 node bridge.mjs 抓取第三方财经网站(如东方财富)的行情接口,

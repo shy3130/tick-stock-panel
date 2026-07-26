@@ -19,7 +19,11 @@ requirements:
       - frontend/src/components/collection-monitor/useCollectionMonitor.ts
       - frontend/src/router.tsx
       - frontend/src/components/Layout.tsx
+      - backend/app/spa_entry.py
+      - backend/app/main.py
+      - Dockerfile
     tests:
+      - {path: tests/backend/test_collection_monitor_entry.py, type: executable-test}
       - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
       - {path: tests/spec_contracts/test_collection_monitor_frontend_behavior.py, type: executable-test}
     acceptance:

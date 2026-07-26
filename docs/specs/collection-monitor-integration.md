@@ -71,6 +71,11 @@ Unavailable, degraded, shadow, stale, and live states MUST remain visually and
 semantically distinct. The page MUST NOT provide controls that mutate
 collectors, schedules, alerts, or evidence.
 
+The `/collection-monitor` HTTP route MUST use a dedicated build-time copy of
+the reviewed frontend entry document. Other TickFlow routes continue to use the
+shared entry document. Runtime hot patches to the shared entry MUST NOT remove
+or replace the collection-monitor route.
+
 ## REQ-COLLECTION-MONITOR-PREACCEPTANCE-001
 
 The 2026-07-26 user authorization permits deploying this observation-only
