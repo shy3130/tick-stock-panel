@@ -139,3 +139,126 @@ Required Monday evidence:
 
 Deployment evidence: recorded and verified as pre-acceptance evidence.
 Live semantic evidence: pending.
+
+## Final review wave evidence
+
+The final implementation head is
+`63162ba1b83f6e802e1f2f722df0fbff5c02ebeb`. It adds:
+
+- decoded streaming enforcement at the exact 2,097,152-byte boundary;
+- sanitized route-specific shape, count, key, and duplicate rejection;
+- task/gap totals and GET-only offset pagination;
+- the explicit `Live semantic acceptance pending` page state;
+- root behavioral traceability for
+  `REQ-COLLECTION-MONITOR-PREACCEPTANCE-001`;
+- an authoritative response/query asymmetry: market response evidence supports
+  six keys, including `market_temperature`, while task/gap query filters remain
+  the five-key allowlist;
+- distinct `市场温度` rendering without a market-temperature task/gap filter
+  option.
+
+TDD evidence was observed RED before each production edit and GREEN afterward:
+
+- oversize and invalid-shape proxy evidence was not rejected correctly before
+  streaming/shape enforcement;
+- pagination groups, totals, offsets, and the pending label were absent before
+  the page edit;
+- the pre-acceptance requirement lacked the exact root wrapper mapping;
+- the first strict five-key market validator rejected the valid six-key live
+  response with 502;
+- the first frontend six-key response rendered an empty heading for
+  `market_temperature`.
+
+Final automated evidence:
+
+- focused backend, contract, and root wrapper: 47 passed;
+- complete frontend: 32 files, 132 tests passed;
+- production build: 2,709 modules transformed;
+- full Python sweep: 599 passed, 8 failed, with all eight independently
+  confirmed outside the final-wave range.
+
+Independent reviewer
+`/root/collection_deploy_impl/collection_final_reviewer` completed review at
+`2026-07-26T13:03:55+08:00` and returned PASS with no critical, important, or
+minor code/spec findings for range
+`55d6d43bf8945d83c96608f51e7e43da5a141e1a..63162ba1b83f6e802e1f2f722df0fbff5c02ebeb`.
+The exact 35,466-byte package is
+`.superpowers/sdd/2026-07-26-collection-monitor-integration/review-55d6d43..63162ba.diff`
+with SHA-256
+`854875285a019b6edcd7a464d575940dab595e24999ffb7a0337da2349274384`;
+native binary diff equality, reverse apply, and `git diff --check` passed.
+
+## Final deployment and rollback evidence
+
+Protected backup:
+
+`/home/alwin/backups/tickflow-collection-monitor-market-temperature-predeploy-20260726T043626Z`
+
+The backup is mode 700 and its evidence files are mode 600.
+
+Deployed image:
+
+`tickflow-stock-panel-app:collection-monitor-final-63162ba1-20260726T043758Z`
+
+Image ID:
+
+`sha256:f2ce9c786d486509225bd84640758b4ea2b4e9631c8989afd5079cb9eb187bac`
+
+Container:
+
+`5d9cca5ab335c586fe65cab88bd29bd5550d87a9dab812df0d4cea68b04eaf74`
+
+The exact guarded cutover started it at
+`2026-07-26T04:46:04.177526865Z`. A later explicit external/unattributed Docker
+restart changed its current start time to
+`2026-07-26T04:51:28.615036393Z`; it remained the same container and image.
+
+Authenticated final-wave route evidence:
+
+- overview: 200;
+- HK market: 200 with exactly six unique known keys, including
+  `market_temperature`;
+- tasks: 503 with only
+  `{"detail":"collection_monitoring_evidence_unavailable"}`;
+- gaps: 200.
+
+The four public page/health routes returned 200 and all four anonymous monitor
+API routes returned 401. Environment values, mounts, host network, command,
+restart policy, and Compose runtime labels matched the prior runtime except for
+the expected image/revision labels. One port-3018 listener and clean
+application logs were observed. The same active container remained healthy
+through `2026-07-26T05:03:19Z`.
+
+Exact stopped rollback:
+
+- container:
+  `TickFlow_Stock_Panel_pre_market_temperature_20260726T043626Z`
+  (`dfb442fd672072f854e7f075389b9002df439aab66234ed4b7e8dd337c8e2e3e`);
+- image ID:
+  `sha256:bbaa03271f05265dd8d003cf4d1d526fb638e9d6a51e254e65a9c83268e49bf5`;
+- rollback tag:
+  `tickflow-stock-panel-app:rollback-market-temperature-20260726T043626Z`.
+
+## Final-wave operational limitations
+
+- The six Longbridge unit records were byte-identical immediately before and
+  after the exact `63162ba` cutover. They were not identical across the broader
+  final wave: `longbridge-api.service` gracefully restarted before the final
+  backup, changing PID `2706714 → 2798212` and `NRestarts 0 → 1`. No initiating
+  actor was recorded.
+- The prior and current TickFlow containers each received an explicit,
+  unattributed Docker restart outside the guarded cutover. They were not
+  application crashes or OOMs. The read-only attribution sweep found no
+  autoheal/watchtower, matching timer/crontab/script, or Chronicle TickFlow
+  restart event, and no third restart occurred at the next expected boundary.
+- The first `df5944` Compose fallback recreated the old runtime as `9d2ef535...`
+  after Compose removed original container `a4979fb0...`. The exact original
+  inspect/config is protected in the first final-review backup. Later cutovers
+  preserved exact rollback containers.
+
+These are deployment-audit limitations, not Monday semantic evidence.
+Automated checks, HTTP responses, and a clean final-wave code review do not
+substitute for lower-layer live collection acceptance.
+
+Deployment evidence: recorded and independently reviewed as pre-acceptance evidence.
+Live semantic evidence: pending.
