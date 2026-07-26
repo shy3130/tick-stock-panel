@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 import app.api.dow_monitor as dow_monitor
 import app.api.dow_strategy as dow_strategy
 import app.api.realtime as realtime
+from app.api import collection_monitor
 from app import __version__
 from app.api import (
     alerts,
@@ -458,6 +459,7 @@ app.include_router(rps.router)
 app.include_router(dow_strategy.router)
 app.include_router(dow_monitor.router)
 app.include_router(realtime.router)
+app.include_router(collection_monitor.router)
 
 
 # 能力门控异常 → 403(而非默认 500)
