@@ -445,6 +445,27 @@ describe('Dow chart mappings', () => {
     )
   })
 
+  it('presents weak neckline-break evidence in Chinese without raw enum codes', () => {
+    const weak = {
+      ...headShouldersPayload.patterns[0],
+      id: 'hs-bottom-weak-break',
+      stage: 'NECKLINE_BREAK_WEAK' as const,
+      side: null,
+      signal: null,
+      evidence: ['NECKLINE_BREAK_WEAK'],
+    }
+
+    const overlays = toHeadShouldersOverlays({
+      patterns: [weak],
+      signals: [],
+    }, bars)
+
+    expect(overlays).toHaveLength(1)
+    expect(overlays[0].tooltipHtml).toContain('颈线突破但量能不足')
+    expect(overlays[0].tooltipHtml).not.toContain('暂无补充证据')
+    expect(overlays[0].tooltipHtml).not.toContain('NECKLINE_BREAK_WEAK')
+  })
+
   it('maps only authoritative signal sides and omits malformed legacy entries', () => {
     expect(toChartMarkers([
       detail.chart.signals![0],

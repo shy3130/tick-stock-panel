@@ -84,6 +84,7 @@ function headShouldersEvidenceLabel(code: string) {
   const labels: Record<string, string> = {
     BREAK_WATCH: '颈线收盘突破，等待量能确认',
     WICK_CROSS: '影线试探颈线，尚未有效突破',
+    NECKLINE_BREAK_WEAK: '颈线突破但量能不足',
     CONFIRMED: '颈线突破已确认',
     RETEST_CONFIRMED: '突破后回踩颈线确认有效',
     FALSE_BREAKOUT: '突破后快速回到颈线内',

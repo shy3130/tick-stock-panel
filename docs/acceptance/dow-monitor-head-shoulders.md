@@ -73,6 +73,14 @@ codes (`BREAK_WATCH` and `CONFIRMED`). The RED run rendered
 renders meaningful Chinese evidence and verifies that internal codes are
 absent.
 
+## Weak Break Evidence Translation
+
+Task 6 fix round 2 adds a contract-faithful `NECKLINE_BREAK_WEAK` pattern with
+`evidence: ["NECKLINE_BREAK_WEAK"]`. The RED run showed
+`暂无补充证据`. After adding the reader-facing translation, the tooltip shows
+`颈线突破但量能不足` and the executable assertion verifies that neither the raw
+enum nor the empty-evidence fallback is visible.
+
 ## Final Verification
 
 Final command outputs after the implementation freeze:
