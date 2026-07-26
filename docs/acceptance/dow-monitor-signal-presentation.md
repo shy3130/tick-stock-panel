@@ -6,6 +6,7 @@ Requirements:
 
 - `REQ-DOW-MONITOR-STRICT-DOUBLE-BREAK-001`
 - `REQ-DOW-MONITOR-CHINESE-MARKER-001`
+- `REQ-DOW-MONITOR-LINE-TOGGLE-001`
 
 Acceptance requires:
 
@@ -17,6 +18,8 @@ Acceptance requires:
 - production browser evidence for the NBIS 15-minute cross-session buy signal
   at 2026-07-21 09:45 America/New_York;
 - confirmation that mini and detail charts show the same signal set.
+- confirmation that the expanded chart exposes one line-visibility switch
+  shared by intraday and daily timeframes without hiding buy/sell markers.
 
 ## Evidence
 
@@ -36,3 +39,12 @@ Acceptance requires:
   present.
 - After restarting the production container, the image and frontend entry
   remained unchanged and the NBIS detail chart retained the signal set.
+- The focused frontend gate passed 51 tests after adding the line-toggle
+  regression case, and the production frontend build again compiled 2,706
+  modules successfully.
+- Production serves `assets/index-4ZGFFqc6.js` from immutable image
+  `tickflow-stock-panel-app:dow-monitor-6ac84fa83c36`.
+- Chrome verification on the NBIS detail chart found exactly one
+  `显示趋势线和压力线` switch, checked by default. Disabling it preserved the
+  visible sell signal, switching to daily K kept the disabled state, and
+  re-enabling it restored line visibility.
