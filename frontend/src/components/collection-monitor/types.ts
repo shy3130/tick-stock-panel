@@ -45,6 +45,8 @@ export interface DatasetCollectionEvidence extends EvidenceEnvelope {
   status?: HealthState
   expectedCount?: number
   collectedCount?: number
+  freshCount?: number
+  staleCount?: number
   missingCount?: number
   duplicateCount?: number
   latestDataAt?: string

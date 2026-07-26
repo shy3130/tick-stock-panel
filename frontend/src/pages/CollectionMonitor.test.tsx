@@ -55,6 +55,8 @@ const markets = {
       evidenceAt,
       expectedCount: 20,
       collectedCount: 19,
+      freshCount: 18,
+      staleCount: 1,
       missingCount: 1,
       duplicateCount: 0,
       latestDataAt: '2026-07-26T10:29:00+08:00',
@@ -159,10 +161,10 @@ function jsonResponse(payload: unknown, status = 200) {
   } as Response)
 }
 
-function installHealthyFetch() {
+function installHealthyFetch(overviewPayload: unknown = overview) {
   const fetchMock = vi.fn((input: string | URL | Request, _init?: RequestInit) => {
     const url = String(input)
-    if (url.includes('/overview')) return jsonResponse(overview)
+    if (url.includes('/overview')) return jsonResponse(overviewPayload)
     if (url.includes('/markets/cn')) return jsonResponse(markets.cn)
     if (url.includes('/markets/hk')) return jsonResponse(markets.hk)
     if (url.includes('/markets/us')) return jsonResponse(markets.us)
@@ -267,5 +269,42 @@ describe('CollectionMonitor', () => {
     expect(screen.queryByText('capital-hk')).not.toBeInTheDocument()
     expect(screen.queryByText('0700.HK')).not.toBeInTheDocument()
     expect(screen.queryByText('实时证据')).not.toBeInTheDocument()
+  })
+
+  it('suppresses every conclusion value from a 200 unavailable overview envelope', async () => {
+    installHealthyFetch({
+      tradeDate: '2026-07-26',
+      evidenceState: 'unavailable',
+      evidenceAt: null,
+      taskCount: 0,
+      productionHealthyCount: 0,
+      unhealthyTaskCount: 0,
+      openGapCount: 0,
+      lastConfirmed: { evidenceAt: '2026-07-25T16:00:00+08:00' },
+    })
+
+    renderPage()
+
+    const heading = await screen.findByRole('heading', { name: '今日采集结论' })
+    const section = heading.closest('section')
+    expect(section).not.toBeNull()
+    await within(section!).findByText(/最后确认.*2026-07-25T16:00:00\+08:00/)
+    for (const label of ['登记任务', '生产健康任务', '异常任务', '开放缺口']) {
+      expect(within(section!).getByText(label).parentElement).toHaveTextContent(`${label}—`)
+    }
+    expect(within(section!).queryByText('0')).not.toBeInTheDocument()
+  })
+
+  it('renders current dataset fresh and stale counts with the latest-data timestamp', async () => {
+    renderPage()
+
+    const marketMatrix = await screen.findByRole('region', { name: '市场 × 数据集' })
+    const hkArticle = within(marketMatrix).getByRole('heading', { name: '港股' }).closest('article')
+    expect(hkArticle).not.toBeNull()
+    await within(hkArticle!).findByText(/来源 clickhouse.hk_capital_distribution/)
+    expect(within(hkArticle!).getByText('新鲜 / 陈旧').nextElementSibling).toHaveTextContent('18 / 1')
+    expect(within(hkArticle!).getByText('最新数据').nextElementSibling).toHaveTextContent(
+      '2026-07-26T10:29:00+08:00',
+    )
   })
 })

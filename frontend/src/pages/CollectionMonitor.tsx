@@ -160,7 +160,9 @@ function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
         <dt className="text-muted">任务状态</dt><dd className="text-right text-secondary">{statusLabels[dataset.taskHealth ?? 'unavailable']}</dd>
         <dt className="text-muted">数据状态</dt><dd className="text-right text-secondary">{statusLabels[dataset.dataHealth ?? 'unavailable']}</dd>
         <dt className="text-muted">采集 / 预期</dt><dd className="text-right font-mono text-secondary">{dataset.collectedCount ?? '—'} / {dataset.expectedCount ?? '—'}</dd>
+        <dt className="text-muted">新鲜 / 陈旧</dt><dd className="text-right font-mono text-secondary">{dataset.freshCount ?? '—'} / {dataset.staleCount ?? '—'}</dd>
         <dt className="text-muted">缺口 / 重复</dt><dd className="text-right font-mono text-secondary">{dataset.missingCount ?? '—'} / {dataset.duplicateCount ?? '—'}</dd>
+        <dt className="text-muted">最新数据</dt><dd className="text-right font-mono text-secondary">{dataset.latestDataAt ?? '—'}</dd>
       </dl>
       <p className="mt-2 truncate text-[11px] text-muted" title={dataset.provenance}>
         来源 {dataset.provenance ?? '未确认'}
@@ -176,6 +178,9 @@ export function CollectionMonitor({ initialDate }: { initialDate?: string }) {
     dataset: 'capital_distribution',
   })
   const queries = useCollectionMonitor(filters)
+  const availableOverview = queries.overview.data?.evidenceState === 'unavailable'
+    ? undefined
+    : queries.overview.data
   const anyError = queries.overview.isError
     || queries.markets.some(query => query.isError)
     || queries.tasks.isError
@@ -277,10 +282,10 @@ export function CollectionMonitor({ initialDate }: { initialDate?: string }) {
               {queries.overview.data && <EvidenceBadge evidence={queries.overview.data} />}
               <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
                 {[
-                  ['登记任务', queries.overview.data?.taskCount],
-                  ['生产健康任务', queries.overview.data?.productionHealthyCount],
-                  ['异常任务', queries.overview.data?.unhealthyTaskCount],
-                  ['开放缺口', queries.overview.data?.openGapCount],
+                  ['登记任务', availableOverview?.taskCount],
+                  ['生产健康任务', availableOverview?.productionHealthyCount],
+                  ['异常任务', availableOverview?.unhealthyTaskCount],
+                  ['开放缺口', availableOverview?.openGapCount],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="rounded-btn border border-border bg-base/50 p-3">
                     <p className="text-xs text-muted">{label}</p>
