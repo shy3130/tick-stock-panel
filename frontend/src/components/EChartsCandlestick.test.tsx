@@ -142,6 +142,26 @@ describe('ECharts candlestick shared controls', () => {
     expect(candle?.markPoint.data[0].itemStyle.color).toBe('#22C55E')
   })
 
+  it('renders an above-candle signal clear of the candle while retaining its exact price', () => {
+    render(
+      <Harness markers={[{
+        date: rows[1].date,
+        kind: 'buy',
+        above: true,
+        price: 10.95,
+        color: '#EF4444',
+        label: 'B',
+      }]} />,
+    )
+
+    const series = latestOption().series as Array<Record<string, any>>
+    const candle = series.find(item => item.name === 'K')
+    const point = candle?.markPoint.data[0]
+    expect(point.coord).toEqual([rows[1].date, rows[1].high])
+    expect(point.symbolOffset).toEqual([0, -34])
+    expect(point.marker.price).toBe(10.95)
+  })
+
   it('keeps the exact BUY signal price and supplied green color after compact zoom', () => {
     const compactRows = Array.from({ length: 61 }, (_, index): OHLC => ({
       ...rows[index % rows.length],

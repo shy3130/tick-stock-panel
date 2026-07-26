@@ -68,3 +68,22 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-FALSE-BREAK-PRESENTATION-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/chartMappings.ts
+      - frontend/src/components/dow-monitor/types.ts
+    tests:
+      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MARKER-CLEARANCE-001
+    specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
+    implementation:
+      - frontend/src/components/EChartsCandlestick.tsx
+    tests:
+      - {path: frontend/src/components/EChartsCandlestick.test.tsx, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}

@@ -9,6 +9,7 @@ const RESISTANCE_MAGENTA = '#D946EF'
 const LONG_TERM_AMBER = '#F59E0B'
 const BUY_RED = '#EF4444'
 const SELL_GREEN = '#22C55E'
+const FALSE_BREAK_AMBER = '#F59E0B'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -35,6 +36,18 @@ function signalPinLabel(side: string) {
   if (side === 'BUY') return 'B'
   if (side === 'RISK') return 'R'
   return 'S'
+}
+
+function falseBreakTitle(side: string) {
+  return side === 'BUY'
+    ? '\u5047\u7a81\u7834\uff08\u539f\u4e70\u70b9\uff09'
+    : '\u5047\u7a81\u7834\uff08\u539f\u5356\u70b9\uff09'
+}
+
+function falseBreakConclusion(side: string) {
+  return side === 'BUY'
+    ? '\u5047\u7a81\u7834\uff1a\u4e70\u5165\u4fe1\u53f7\u540e\u8dcc\u56de\u8d8b\u52bf\u7ebf\u6216\u524d\u9ad8/\u538b\u529b\u4f4d'
+    : '\u5047\u7a81\u7834\uff1a\u5356\u51fa\u4fe1\u53f7\u540e\u6536\u56de\u8d8b\u52bf\u7ebf\u6216\u524d\u4f4e/\u652f\u6491\u4f4d'
 }
 
 function evidenceText(signal: Record<string, unknown>) {
@@ -99,9 +112,14 @@ function toTurningMarkers(signals: unknown, bars: unknown): ChartMarker[] {
       return []
     }
     const buy = signal.side === 'BUY'
+    const quality = isRecord(signal.signalQuality) ? signal.signalQuality : null
+    const falseBreak = quality?.replayOutcome === 'FAILED'
     const title = buy ? '\u4e70\u70b9' : signal.side === 'RISK' ? '\u98ce\u9669\u5356\u70b9' : '\u5356\u70b9'
     const reasonCodes = Array.isArray(signal.reasonCodes)
       ? signal.reasonCodes.filter((item): item is string => typeof item === 'string')
+      : []
+    const qualityReasonCodes = Array.isArray(quality?.reasonCodes)
+      ? quality.reasonCodes.filter((item): item is string => typeof item === 'string')
       : []
     const lineValue = isFiniteNumber(signal.lineValue) ? signal.lineValue : null
     const structurePivotPrice = isFiniteNumber(signal.structurePivotPrice)
@@ -109,15 +127,18 @@ function toTurningMarkers(signals: unknown, bars: unknown): ChartMarker[] {
       : null
     return [{
       date: signal.actionableTime,
-      kind: buy ? 'buy' as const : 'sell' as const,
-      above: !buy,
+      kind: falseBreak ? 'neutral' as const : buy ? 'buy' as const : 'sell' as const,
+      signalSide: signal.side,
+      above: true,
       price: signal.price,
-      color: buy ? BUY_RED : SELL_GREEN,
-      label: signalPinLabel(signal.side),
-      title,
-      conclusion: signalConclusion(signal.side),
+      color: falseBreak ? FALSE_BREAK_AMBER : buy ? BUY_RED : SELL_GREEN,
+      label: falseBreak ? 'F' : signalPinLabel(signal.side),
+      title: falseBreak ? falseBreakTitle(signal.side) : title,
+      conclusion: falseBreak ? falseBreakConclusion(signal.side) : signalConclusion(signal.side),
       reason: typeof signal.triggerPath === 'string' ? signal.triggerPath : undefined,
-      confidence: typeof signal.stage === 'string' ? signal.stage : undefined,
+      confidence: falseBreak
+        ? '\u56de\u653e\u786e\u8ba4\u5931\u8d25'
+        : typeof signal.stage === 'string' ? signal.stage : undefined,
       lineId: typeof signal.lineId === 'string' ? signal.lineId : null,
       lineRole: typeof signal.lineRole === 'string' ? signal.lineRole : null,
       lineAnchorTimes: Array.isArray(signal.lineAnchorTimes)
@@ -132,10 +153,10 @@ function toTurningMarkers(signals: unknown, bars: unknown): ChartMarker[] {
       structurePivotPrice,
       structurePivotTime: typeof signal.structurePivotTime === 'string' ? signal.structurePivotTime : null,
       triggerPath: typeof signal.triggerPath === 'string' ? signal.triggerPath : null,
-      reasonCodes,
-      pattern: reasonCodes.length > 0 ? reasonCodes.join(' / ') : null,
+      reasonCodes: [...reasonCodes, ...qualityReasonCodes],
+      pattern: [...reasonCodes, ...qualityReasonCodes].join(' / ') || null,
       volumeRatio: volumeRatioForTime(bars, signal.actionableTime),
-      evidenceText: reasonCodes.join(' / ') || null,
+      evidenceText: [...reasonCodes, ...qualityReasonCodes].join(' / ') || null,
     }]
   })
 }
@@ -208,7 +229,8 @@ export function toChartMarkers(signals: unknown, bars?: unknown, fallbackSignals
     return [{
       date: signal.barTime,
       kind: buy ? 'buy' as const : 'sell' as const,
-      above: !buy,
+      signalSide: signal.side,
+      above: true,
       price: signal.price,
       color: buy ? BUY_RED : SELL_GREEN,
       label: signalPinLabel(signal.side),

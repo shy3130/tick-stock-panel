@@ -230,7 +230,7 @@ describe('Dow chart mappings', () => {
       expect.objectContaining({
         date: bars[1].timestamp,
         kind: 'buy',
-        above: false,
+        above: true,
         color: '#EF4444',
         label: 'B',
         price: 10.6,
@@ -319,6 +319,41 @@ describe('Dow chart mappings', () => {
       lineValue: 10.2,
       structurePivotPrice: 10.6,
       reasonCodes: ['LINE_AND_NEAREST_LEVEL_BROKEN'],
+    }))
+  })
+
+  it('presents a replay-failed strict signal as a false breakout', () => {
+    const markers = toChartMarkers([{
+      side: 'BUY',
+      stage: 'TRIGGER',
+      actionableTime: bars[1].timestamp,
+      actionableIndex: 1,
+      detectedTime: bars[0].timestamp,
+      detectedIndex: 0,
+      price: 10.8,
+      lineId: 'down-line',
+      lineValue: 10.2,
+      structurePivotId: 'LEVEL:HIGH',
+      structurePivotPrice: 10.6,
+      triggerPath: 'DIRECT_STRUCTURE',
+      reasonCodes: ['LINE_AND_NEAREST_LEVEL_BROKEN'],
+      signalQuality: {
+        entryQuality: 'WEAK',
+        replayOutcome: 'FAILED',
+        score: 31,
+        summary: 'buy signal failed',
+        reasonCodes: ['FOLLOW_THROUGH_FAILED', 'FELL_BACK_UNDER_STRUCTURE'],
+      },
+    }], bars)
+
+    expect(markers).toHaveLength(1)
+    expect(markers[0]).toEqual(expect.objectContaining({
+      kind: 'neutral',
+      label: 'F',
+      above: true,
+      title: '\u5047\u7a81\u7834\uff08\u539f\u4e70\u70b9\uff09',
+      confidence: '\u56de\u653e\u786e\u8ba4\u5931\u8d25',
+      price: 10.8,
     }))
   })
 

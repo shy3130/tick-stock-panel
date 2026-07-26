@@ -37,3 +37,20 @@ timeframe, including the daily chart.
 
 Disabling the switch MUST hide those lines without hiding buy or sell markers.
 The mini chart remains compact and does not expose this control.
+
+## REQ-DOW-MONITOR-FALSE-BREAK-PRESENTATION-001
+
+The chart MUST preserve the raw strict double-break signal for replay while
+also applying the independent signal-quality result to its presentation.
+When `signalQuality.replayOutcome` is `FAILED`, the chart MUST present the
+point as a false breakout rather than as an actionable buy or sell. The pin
+MUST use the stable ASCII label `F`, and its hover content MUST identify the
+original side and explain that price returned through the causal level.
+
+## REQ-DOW-MONITOR-MARKER-CLEARANCE-001
+
+Buy, sell, risk, and false-break pins MUST be rendered in the blank area above
+their corresponding candle. Their chart coordinate MUST use the candle high,
+with an upward pixel offset sufficient to keep the pin body clear of the
+candle and wick. The exact backend signal price MUST remain available in hover
+content and MUST NOT be replaced by the display coordinate.

@@ -33,6 +33,8 @@ export interface OHLC {
 export interface ChartMarker {
   date: string
   kind: 'buy' | 'sell' | 'neutral'
+  /** Original engine side, retained when a failed replay is shown as neutral. */
+  signalSide?: string
   label?: string
   /** Exact backend signal price. Falls back to the candle extreme for legacy markers. */
   price?: number
@@ -198,12 +200,12 @@ function translateReasonCodes(values: string[] | undefined) {
 
 function trendLineLabel(marker: ChartMarker) {
   const role = marker.lineRole === 'ACCELERATION' ? '加速' : '主'
-  const direction = marker.kind === 'buy' ? '下降' : '上涨'
+  const direction = marker.signalSide === 'BUY' || marker.kind === 'buy' ? '下降' : '上涨'
   return `${role}${direction}趋势线`
 }
 
 function keyLevelLabel(marker: ChartMarker) {
-  return marker.kind === 'buy' ? '前高/压力位' : '前低/支撑位'
+  return marker.signalSide === 'BUY' || marker.kind === 'buy' ? '前高/压力位' : '前低/支撑位'
 }
 
 function formatSignalTime(value: string) {
@@ -651,11 +653,12 @@ function buildOption(
 
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
+        const displayPrice = d.high
         if (compact) {
           markPointData.push({
-            name: m.date, coord: [m.date, markerPrice],
+            name: m.date, coord: [m.date, displayPrice],
             marker: m,
-            symbol: 'pin', symbolSize: 18, symbolOffset: [0, -16],
+            symbol: 'pin', symbolSize: 18, symbolOffset: [0, -22],
             itemStyle: { color: dotColor, cursor: 'pointer' },
             tooltip: { formatter: () => markerTooltipHtml(m) },
             label: {
@@ -667,9 +670,9 @@ function buildOption(
           })
         } else {
           markPointData.push({
-            name: m.date, coord: [m.date, markerPrice],
+            name: m.date, coord: [m.date, displayPrice],
             marker: m,
-            symbol: 'pin', symbolSize: 30, symbolOffset: [0, -22],
+            symbol: 'pin', symbolSize: 30, symbolOffset: [0, -34],
             itemStyle: { color: dotColor },
             tooltip: { formatter: () => markerTooltipHtml(m) },
             label: {
@@ -1219,11 +1222,12 @@ export function EChartsCandlestick({
         : (isBuy ? d.low : d.high)
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
+        const displayPrice = d.high
         if (compact) {
           markPointData.push({
-            name: m.date, coord: [m.date, markerPrice],
+            name: m.date, coord: [m.date, displayPrice],
             marker: m,
-            symbol: 'pin', symbolSize: 18, symbolOffset: [0, -16],
+            symbol: 'pin', symbolSize: 18, symbolOffset: [0, -22],
             itemStyle: { color: dotColor, cursor: 'pointer' },
             tooltip: { formatter: () => markerTooltipHtml(m) },
             label: {
@@ -1235,9 +1239,9 @@ export function EChartsCandlestick({
           })
         } else {
           markPointData.push({
-            name: m.date, coord: [m.date, markerPrice],
+            name: m.date, coord: [m.date, displayPrice],
             marker: m,
-            symbol: 'pin', symbolSize: 30, symbolOffset: [0, -22],
+            symbol: 'pin', symbolSize: 30, symbolOffset: [0, -34],
             itemStyle: { color: dotColor },
             tooltip: { formatter: () => markerTooltipHtml(m) },
             label: {

@@ -116,6 +116,15 @@ export interface DowMonitorTurningSignal {
   structurePivotTime?: string | null
   triggerPath: string | null
   reasonCodes: string[]
+  signalQuality?: {
+    side?: string
+    entryQuality?: 'ACTIONABLE' | 'WAIT_CONFIRMATION' | 'WEAK' | 'NEUTRAL'
+    replayOutcome?: 'PENDING' | 'HELD' | 'FAILED' | 'UNKNOWN'
+    score?: number
+    summary?: string
+    reasonCodes?: string[]
+    confirmationIndex?: number | null
+  } | null
 }
 
 export interface DowMonitorTurningPayload {
