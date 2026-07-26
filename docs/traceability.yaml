@@ -20,7 +20,6 @@ requirements:
       - frontend/src/router.tsx
       - frontend/src/components/Layout.tsx
     tests:
-      - {path: frontend/src/pages/CollectionMonitor.test.tsx, type: executable-test}
       - {path: tests/spec_contracts/test_collection_monitor_integration_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/collection-monitor-integration.md, type: semantic-acceptance}
