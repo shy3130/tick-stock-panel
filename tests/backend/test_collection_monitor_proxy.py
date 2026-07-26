@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -183,7 +186,36 @@ def test_exposes_exactly_four_get_routes_and_no_post_routes() -> None:
     }
 
 
-def test_registers_proxy_router_in_main_application() -> None:
+def test_main_source_registers_collection_monitor_router() -> None:
+    main_path = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+    module = ast.parse(main_path.read_text(encoding="utf-8"))
+
+    imports_collection_monitor = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "app.api"
+        and any(alias.name == "collection_monitor" for alias in node.names)
+        for node in module.body
+    )
+    registers_collection_monitor = any(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id == "app"
+        and node.value.func.attr == "include_router"
+        and len(node.value.args) == 1
+        and isinstance(node.value.args[0], ast.Attribute)
+        and isinstance(node.value.args[0].value, ast.Name)
+        and node.value.args[0].value.id == "collection_monitor"
+        and node.value.args[0].attr == "router"
+        for node in module.body
+    )
+
+    assert imports_collection_monitor
+    assert registers_collection_monitor
+
+
+def test_full_application_registers_proxy_router_when_runtime_is_provisioned() -> None:
     pytest.importorskip("polars", reason="the application import requires the backend runtime dependency")
     from app.main import app
 
@@ -214,6 +246,32 @@ def test_preserves_evidence_unavailable_503_without_upstream_detail(
 
     assert response.status_code == 503
     assert response.json() == {"detail": "collection_monitoring_evidence_unavailable"}
+
+
+def test_sanitizes_malformed_upstream_url(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LONGBRIDGE_API_URL", "http://[malformed")
+
+    response = client.get("/api/collection-monitor/overview")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "collection_monitoring_proxy_unavailable"}
+    assert "malformed" not in response.text
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_sanitizes_non_finite_upstream_json(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, value: float
+) -> None:
+    monkeypatch.setattr(
+        collection_monitor.httpx,
+        "get",
+        lambda *args, **kwargs: _Response(payload={"value": value}),
+    )
+
+    response = client.get("/api/collection-monitor/overview")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "collection_monitoring_proxy_unavailable"}
 
 
 @pytest.mark.parametrize(

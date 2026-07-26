@@ -1,6 +1,7 @@
 """Read-only same-origin proxy for collection-monitor evidence."""
 from __future__ import annotations
 
+import json
 import os
 from datetime import date as calendar_date
 
@@ -57,10 +58,12 @@ def _read(path: str, params: dict[str, object]) -> object:
                 detail="collection_monitoring_evidence_unavailable",
             )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        json.dumps(payload, allow_nan=False)
+        return payload
     except HTTPException:
         raise
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx.HTTPError, httpx.InvalidURL, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=502,
             detail="collection_monitoring_proxy_unavailable",
