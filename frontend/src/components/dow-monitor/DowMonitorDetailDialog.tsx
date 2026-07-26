@@ -11,7 +11,13 @@ import { StockDailyKChart } from '@/components/StockDailyKChart'
 import { cn } from '@/lib/cn'
 
 import { formatServerTimestamp } from './formatServerTimestamp'
-import { toChartBars, toChartMarkers, toPriceLines, toSignalPriceLines } from './chartMappings'
+import {
+  toChartBars,
+  toChartMarkers,
+  toHeadShouldersOverlays,
+  toPriceLines,
+  toSignalPriceLines,
+} from './chartMappings'
 import type { DowFreshnessState, DowTimeframe } from './types'
 import { useDowMonitorDetail } from './useDowMonitor'
 
@@ -49,6 +55,7 @@ export function DowMonitorDetailDialog({
   const [selectedTimeframe, setSelectedTimeframe] = useState(timeframe)
   const [fullscreen, setFullscreen] = useState(false)
   const [showLines, setShowLines] = useState(true)
+  const [showHeadShoulders, setShowHeadShoulders] = useState(true)
   const indicators = useKChartIndicatorControls()
   const detailQuery = useDowMonitorDetail(symbol, selectedTimeframe, open)
 
@@ -57,6 +64,7 @@ export function DowMonitorDetailDialog({
     setSelectedTimeframe(timeframe)
     setFullscreen(false)
     setShowLines(true)
+    setShowHeadShoulders(true)
   }, [open, symbol, timeframe])
 
   const detail = detailQuery.data?.symbol === symbol
@@ -67,6 +75,10 @@ export function DowMonitorDetailDialog({
   const markers = useMemo(
     () => toChartMarkers(detail?.chart?.turning?.signals, detail?.chart?.bars, detail?.chart?.signals),
     [detail?.chart?.bars, detail?.chart?.signals, detail?.chart?.turning?.signals],
+  )
+  const headShouldersOverlays = useMemo(
+    () => toHeadShouldersOverlays(detail?.chart?.headShoulders, detail?.chart?.bars),
+    [detail?.chart?.bars, detail?.chart?.headShoulders],
   )
   const detailPriceLines = useMemo(
     () => toPriceLines(detail?.chart?.lines, detail?.chart?.bars, detail?.chart?.longTerm),
@@ -191,6 +203,28 @@ export function DowMonitorDetailDialog({
               />
             </button>
           </div>
+          <div className="flex items-center gap-1.5 border-l border-border pl-2">
+            <span className="text-[10px] text-muted">头肩形态</span>
+            <button
+              type="button"
+              role="switch"
+              aria-label="头肩形态"
+              aria-checked={showHeadShoulders}
+              title={showHeadShoulders ? '隐藏头肩形态' : '显示头肩形态'}
+              onClick={() => setShowHeadShoulders(value => !value)}
+              className={cn(
+                'relative h-3.5 w-6 shrink-0 rounded-full transition-colors',
+                showHeadShoulders ? 'bg-accent' : 'bg-elevated',
+              )}
+            >
+              <span
+                className={cn(
+                  'absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform',
+                  showHeadShoulders ? 'translate-x-3' : 'translate-x-0.5',
+                )}
+              />
+            </button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto px-2 py-2 sm:px-4">
@@ -231,6 +265,7 @@ export function DowMonitorDetailDialog({
             <EChartsCandlestick
               data={chartBars}
               markers={markers}
+              headShouldersOverlays={showHeadShoulders ? headShouldersOverlays : []}
               priceLines={showLines ? signalPriceLines : []}
               height={chartHeight}
               visibleBars={320}

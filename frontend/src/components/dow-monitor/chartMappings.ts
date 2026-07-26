@@ -1,6 +1,8 @@
 import type {
   ChartMarker,
   ChartPriceLine,
+  HeadShouldersOverlay,
+  HeadShouldersOverlayPoint,
   OHLC,
 } from '@/components/EChartsCandlestick'
 
@@ -10,6 +12,7 @@ const LONG_TERM_AMBER = '#F59E0B'
 const BUY_RED = '#EF4444'
 const SELL_GREEN = '#22C55E'
 const FALSE_BREAK_AMBER = '#F59E0B'
+const HEAD_SHOULDERS_NEUTRAL = '#94A3B8'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -36,6 +39,225 @@ function signalPinLabel(side: string) {
   if (side === 'BUY') return 'B'
   if (side === 'RISK') return 'R'
   return 'S'
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function formatPatternTime(value: string) {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return '-'
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
+}
+
+function formatPatternPoint(date: string, price: number) {
+  return `${formatPatternTime(date)} / ${price.toFixed(3)}`
+}
+
+function headShouldersStageLabel(stage: string) {
+  const labels: Record<string, string> = {
+    FORMING: '形态形成中',
+    BREAK_WATCH: '等待颈线突破',
+    WICK_CROSS: '影线试探颈线',
+    NECKLINE_BREAK_WEAK: '颈线弱突破',
+    CONFIRMED: '已确认',
+    RETEST_CONFIRMED: '回踩确认',
+    FAILED: '形态失效',
+    FALSE_BREAKOUT: '假突破',
+  }
+  return labels[stage] ?? '待确认'
+}
+
+function headShouldersEvidenceLabel(code: string) {
+  const labels: Record<string, string> = {
+    HEAD_DEPTH_CONFIRMED: '头部深度成立',
+    SHOULDER_BALANCED: '双肩结构协调',
+    NECKLINE_VALID: '颈线结构有效',
+    VOLUME_CONFIRMED: '突破量能达标',
+    RETEST_HELD: '回踩颈线有效',
+    CONTEXT_ALIGNED: '趋势背景配合',
+    FALSE_BREAK_DETECTED: '突破后快速回到颈线内',
+  }
+  return labels[code] ?? null
+}
+
+function patternPoint(
+  value: unknown,
+  role: HeadShouldersOverlayPoint['role'],
+  barTimes: Set<string>,
+): HeadShouldersOverlayPoint | null {
+  if (
+    !isRecord(value)
+    || !isTimestamp(value.barTime)
+    || !barTimes.has(value.barTime)
+    || !isFiniteNumber(value.price)
+  ) {
+    return null
+  }
+  return { role, date: value.barTime, price: value.price }
+}
+
+function headShouldersTooltip(
+  pattern: Record<string, unknown>,
+  points: HeadShouldersOverlayPoint[],
+  neckline: HeadShouldersOverlay['neckline'],
+) {
+  const pointByRole = new Map(points.map(point => [point.role, point]))
+  const leftShoulder = pointByRole.get('A')!
+  const head = pointByRole.get('B')!
+  const rightShoulder = pointByRole.get('C')!
+  const breakout = pointByRole.get('D')!
+  const type = pattern.type === 'BOTTOM' ? '头肩底' : '头肩顶'
+  const stage = typeof pattern.stage === 'string' ? pattern.stage : ''
+  const volume = isRecord(pattern.volume) ? pattern.volume : null
+  const invalidation = isRecord(pattern.invalidation) ? pattern.invalidation : null
+  const evidence = Array.isArray(pattern.evidence)
+    ? pattern.evidence
+        .filter((item): item is string => typeof item === 'string')
+        .map(headShouldersEvidenceLabel)
+        .filter((item): item is string => item !== null)
+    : []
+  const rows = [
+    ['左肩', formatPatternPoint(leftShoulder.date, leftShoulder.price)],
+    ['头部', formatPatternPoint(head.date, head.price)],
+    ['右肩', formatPatternPoint(rightShoulder.date, rightShoulder.price)],
+    ['颈线锚点一', formatPatternPoint(neckline.start, neckline.startValue)],
+    ['颈线锚点二', formatPatternPoint(neckline.anchor2, neckline.anchor2Value)],
+    ['触发时颈线', formatPatternPoint(neckline.end, neckline.endValue)],
+    ['突破点', formatPatternPoint(breakout.date, breakout.price)],
+    ['突破量比', isFiniteNumber(volume?.ratio) ? `${volume.ratio.toFixed(2)}x` : '-'],
+    ['确认阶段', headShouldersStageLabel(stage)],
+    ['失效价', isFiniteNumber(invalidation?.price) ? invalidation.price.toFixed(3) : '-'],
+    ['结构评分', isFiniteNumber(pattern.geometryScore) ? pattern.geometryScore.toFixed(1) : '-'],
+    ['量能评分', isFiniteNumber(pattern.volumeScore) ? pattern.volumeScore.toFixed(1) : '-'],
+    ['背景评分', isFiniteNumber(pattern.contextScore) ? pattern.contextScore.toFixed(1) : '-'],
+    ['综合评分', isFiniteNumber(pattern.qualityScore) ? pattern.qualityScore.toFixed(1) : '-'],
+    ['关键证据', evidence.length > 0 ? evidence.join('；') : '暂无补充证据'],
+  ]
+  const title = stage === 'FALSE_BREAKOUT'
+    ? `${type}假突破警示`
+    : `${type}${headShouldersStageLabel(stage)}`
+  return [
+    '<div style="min-width:280px;background:#111217;padding:10px 12px;color:#E5E7EB;font-size:11px;line-height:1.55">',
+    `<div style="font-weight:650;margin-bottom:6px">${escapeHtml(title)}</div>`,
+    ...rows.map(([label, value]) => (
+      `<div><span style="color:#9CA3AF">${escapeHtml(label)}：</span>${escapeHtml(value)}</div>`
+    )),
+    '</div>',
+  ].join('')
+}
+
+export function toHeadShouldersOverlays(
+  payload: unknown,
+  bars: unknown,
+): HeadShouldersOverlay[] {
+  if (!isRecord(payload) || !Array.isArray(payload.patterns)) return []
+  const barTimes = new Set(toChartBars(bars).map(bar => bar.date))
+  const signals = Array.isArray(payload.signals)
+    ? payload.signals.filter(isRecord)
+    : []
+
+  return payload.patterns.flatMap(pattern => {
+    if (
+      !isRecord(pattern)
+      || typeof pattern.id !== 'string'
+      || (pattern.type !== 'BOTTOM' && pattern.type !== 'TOP')
+      || typeof pattern.stage !== 'string'
+      || !isRecord(pattern.points)
+      || !isRecord(pattern.neckline)
+    ) {
+      return []
+    }
+    const points = [
+      patternPoint(pattern.points.leftShoulder, 'A', barTimes),
+      patternPoint(pattern.points.neckline1, 'N1', barTimes),
+      patternPoint(pattern.points.head, 'B', barTimes),
+      patternPoint(pattern.points.neckline2, 'N2', barTimes),
+      patternPoint(pattern.points.rightShoulder, 'C', barTimes),
+      patternPoint(pattern.points.breakout, 'D', barTimes),
+    ]
+    if (points.some(point => point === null)) return []
+    const completePoints = points as HeadShouldersOverlayPoint[]
+    const anchorTimes = pattern.neckline.anchorTimes
+    const anchorPrices = pattern.neckline.anchorPrices
+    if (
+      !Array.isArray(anchorTimes)
+      || anchorTimes.length !== 2
+      || !isTimestamp(anchorTimes[0])
+      || !isTimestamp(anchorTimes[1])
+      || !barTimes.has(anchorTimes[0])
+      || !barTimes.has(anchorTimes[1])
+      || !Array.isArray(anchorPrices)
+      || anchorPrices.length !== 2
+      || !isFiniteNumber(anchorPrices[0])
+      || !isFiniteNumber(anchorPrices[1])
+      || !isTimestamp(pattern.neckline.triggerTime)
+      || !barTimes.has(pattern.neckline.triggerTime)
+      || !isFiniteNumber(pattern.neckline.triggerValue)
+    ) {
+      return []
+    }
+    const neckline = {
+      start: anchorTimes[0],
+      anchor2: anchorTimes[1],
+      end: pattern.neckline.triggerTime,
+      startValue: anchorPrices[0],
+      anchor2Value: anchorPrices[1],
+      endValue: pattern.neckline.triggerValue,
+    }
+    const confirmedStage = pattern.stage === 'CONFIRMED'
+      || pattern.stage === 'RETEST_CONFIRMED'
+    const expectedSide = pattern.type === 'BOTTOM' ? 'BUY' : 'SELL'
+    const formalSignal = confirmedStage
+      ? signals.find(signal => (
+          signal.family === 'HEAD_SHOULDERS'
+          && signal.patternId === pattern.id
+          && signal.side === expectedSide
+          && signal.stage === pattern.stage
+          && isTimestamp(signal.barTime)
+          && signal.barTime === completePoints[5].date
+          && isFiniteNumber(signal.price)
+        ))
+      : undefined
+    const warning = pattern.stage === 'FALSE_BREAKOUT'
+    const color = warning
+      ? FALSE_BREAK_AMBER
+      : formalSignal
+        ? expectedSide === 'BUY' ? BUY_RED : SELL_GREEN
+        : HEAD_SHOULDERS_NEUTRAL
+
+    return [{
+      id: pattern.id,
+      type: pattern.type,
+      stage: pattern.stage,
+      color,
+      warning,
+      points: completePoints,
+      neckline,
+      marker: formalSignal
+        ? {
+            kind: expectedSide === 'BUY' ? 'buy' as const : 'sell' as const,
+            date: formalSignal.barTime as string,
+            price: formalSignal.price as number,
+            color,
+            label: expectedSide === 'BUY' ? 'B' as const : 'S' as const,
+          }
+        : undefined,
+      tooltipHtml: headShouldersTooltip(pattern, completePoints, neckline),
+    }]
+  })
 }
 
 function falseBreakTitle(side: string) {

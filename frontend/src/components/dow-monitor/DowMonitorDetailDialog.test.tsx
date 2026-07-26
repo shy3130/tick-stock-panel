@@ -3,13 +3,20 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
+  DowHeadShouldersPayload,
   DowMonitorDetailResponse,
   DowMonitorOverviewResponse,
   DowTimeframe,
 } from './types'
 import { DowMonitorDetailDialog } from './DowMonitorDetailDialog'
-import { toChartMarkers, toPriceLines, toSignalPriceLines } from './chartMappings'
+import {
+  toChartMarkers,
+  toHeadShouldersOverlays,
+  toPriceLines,
+  toSignalPriceLines,
+} from './chartMappings'
 import { DowMonitor } from '@/pages/DowMonitor'
+import { buildHeadShouldersSeries } from '@/components/EChartsCandlestick'
 
 const testState = vi.hoisted(() => ({
   detail: {} as Record<string, unknown>,
@@ -67,6 +74,7 @@ vi.mock('@/components/EChartsCandlestick', async (importOriginal) => {
         data-testid="intraday-candlestick"
         data-markers={JSON.stringify(props.markers)}
         data-price-lines={JSON.stringify(props.priceLines)}
+        data-head-shoulders-overlays={JSON.stringify(props.headShouldersOverlays)}
       />
     ),
   }
@@ -101,7 +109,99 @@ const bars = [
     close: 10.6,
     volume: 120,
   },
+  {
+    index: 2,
+    timestamp: '2026-07-23T09:40:00+08:00',
+    open: 10.6,
+    high: 10.7,
+    low: 9.1,
+    close: 9.4,
+    volume: 130,
+  },
+  {
+    index: 3,
+    timestamp: '2026-07-23T09:45:00+08:00',
+    open: 9.4,
+    high: 10,
+    low: 9.3,
+    close: 9.8,
+    volume: 115,
+  },
+  {
+    index: 4,
+    timestamp: '2026-07-23T09:50:00+08:00',
+    open: 9.8,
+    high: 9.9,
+    low: 9.35,
+    close: 9.6,
+    volume: 110,
+  },
+  {
+    index: 5,
+    timestamp: '2026-07-23T09:55:00+08:00',
+    open: 9.6,
+    high: 10.4,
+    low: 9.55,
+    close: 10.3,
+    volume: 180,
+  },
 ]
+
+const headShouldersPayload = {
+  patterns: [{
+    id: 'hs-bottom-confirmed',
+    type: 'BOTTOM',
+    stage: 'CONFIRMED',
+    side: 'BUY',
+    signal: {
+      family: 'HEAD_SHOULDERS',
+      patternId: 'hs-bottom-confirmed',
+      side: 'BUY',
+      stage: 'CONFIRMED',
+      barIndex: 5,
+      barTime: bars[5].timestamp,
+      price: 10.3,
+    },
+    points: {
+      leftShoulder: { role: 'A', barIndex: 0, barTime: bars[0].timestamp, price: 9.6 },
+      neckline1: { role: 'N1', barIndex: 1, barTime: bars[1].timestamp, price: 10.8 },
+      head: { role: 'B', barIndex: 2, barTime: bars[2].timestamp, price: 9.1 },
+      neckline2: { role: 'N2', barIndex: 3, barTime: bars[3].timestamp, price: 10 },
+      rightShoulder: { role: 'C', barIndex: 4, barTime: bars[4].timestamp, price: 9.35 },
+      breakout: { role: 'BREAKOUT', barIndex: 5, barTime: bars[5].timestamp, price: 10.3 },
+    },
+    neckline: {
+      anchorIndexes: [1, 3],
+      anchorTimes: [bars[1].timestamp, bars[3].timestamp],
+      anchorPrices: [10.8, 10],
+      triggerIndex: 5,
+      triggerTime: bars[5].timestamp,
+      triggerValue: 9.2,
+    },
+    volume: {
+      ratio: 1.64,
+      requiredRatio: 1.2,
+      baseline: 109.8,
+      triggerIndex: 5,
+      triggerTime: bars[5].timestamp,
+    },
+    invalidation: { price: 9.05 },
+    geometryScore: 82,
+    volumeScore: 71,
+    contextScore: 63,
+    qualityScore: 216,
+    evidence: ['HEAD_DEPTH_CONFIRMED', 'VOLUME_CONFIRMED'],
+  }],
+  signals: [{
+    family: 'HEAD_SHOULDERS',
+    patternId: 'hs-bottom-confirmed',
+    side: 'BUY',
+    stage: 'CONFIRMED',
+    barIndex: 5,
+    barTime: bars[5].timestamp,
+    price: 10.3,
+  }],
+} satisfies DowHeadShouldersPayload
 
 const detail: DowMonitorDetailResponse = {
   symbol: '01347.HK',
@@ -170,6 +270,7 @@ const detail: DowMonitorDetailResponse = {
         reasonCodes: ['LINE_AND_NEAREST_LEVEL_BROKEN'],
       }],
     },
+    headShoulders: headShouldersPayload,
     longTerm: {
       first_anchor_time: bars[0].timestamp,
       first_anchor_price: 9.4,
@@ -219,6 +320,127 @@ const overview: DowMonitorOverviewResponse = {
 }
 
 describe('Dow chart mappings', () => {
+  it('maps complete causal head-and-shoulders geometry and projected neckline', () => {
+    const overlays = toHeadShouldersOverlays(headShouldersPayload, bars)
+
+    expect(overlays).toHaveLength(1)
+    expect(overlays[0]).toEqual(expect.objectContaining({
+      id: 'hs-bottom-confirmed',
+      type: 'BOTTOM',
+      stage: 'CONFIRMED',
+      points: [
+        expect.objectContaining({ role: 'A', date: bars[0].timestamp, price: 9.6 }),
+        expect.objectContaining({ role: 'N1', date: bars[1].timestamp, price: 10.8 }),
+        expect.objectContaining({ role: 'B', date: bars[2].timestamp, price: 9.1 }),
+        expect.objectContaining({ role: 'N2', date: bars[3].timestamp, price: 10 }),
+        expect.objectContaining({ role: 'C', date: bars[4].timestamp, price: 9.35 }),
+        expect.objectContaining({ role: 'D', date: bars[5].timestamp, price: 10.3 }),
+      ],
+      neckline: {
+        start: bars[1].timestamp,
+        anchor2: bars[3].timestamp,
+        end: bars[5].timestamp,
+        startValue: 10.8,
+        anchor2Value: 10,
+        endValue: 9.2,
+      },
+    }))
+
+    const series = buildHeadShouldersSeries(overlays)
+    expect(series).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: '头肩形态 hs-bottom-confirmed',
+        type: 'line',
+      }),
+      expect.objectContaining({
+        name: '头肩颈线 hs-bottom-confirmed',
+        type: 'line',
+      }),
+    ]))
+  })
+
+  it('renders only confirmed independent markers and keeps false breaks as warnings', () => {
+    const top = {
+      ...headShouldersPayload.patterns[0],
+      id: 'hs-top-retest',
+      type: 'TOP',
+      stage: 'RETEST_CONFIRMED',
+      side: 'SELL',
+      signal: {
+        ...headShouldersPayload.patterns[0].signal,
+        patternId: 'hs-top-retest',
+        side: 'SELL',
+        stage: 'RETEST_CONFIRMED',
+      },
+    }
+    const weak = {
+      ...headShouldersPayload.patterns[0],
+      id: 'hs-weak',
+      stage: 'NECKLINE_BREAK_WEAK',
+      signal: null,
+    }
+    const failed = {
+      ...headShouldersPayload.patterns[0],
+      id: 'hs-false',
+      stage: 'FALSE_BREAKOUT',
+      signal: null,
+    }
+
+    const overlays = toHeadShouldersOverlays({
+      patterns: [headShouldersPayload.patterns[0], top, weak, failed],
+      signals: [
+        headShouldersPayload.signals[0],
+        top.signal,
+      ],
+    }, bars)
+
+    expect(overlays.map(item => item.marker)).toEqual([
+      expect.objectContaining({ kind: 'buy', label: 'B', color: '#EF4444' }),
+      expect.objectContaining({ kind: 'sell', label: 'S', color: '#22C55E' }),
+      undefined,
+      undefined,
+    ])
+    expect(overlays[2]).toEqual(expect.objectContaining({
+      color: '#94A3B8',
+      warning: false,
+    }))
+    expect(overlays[3]).toEqual(expect.objectContaining({
+      color: '#F59E0B',
+      warning: true,
+    }))
+  })
+
+  it('omits incomplete patterns and presents Chinese evidence without internal codes', () => {
+    const incomplete = {
+      ...headShouldersPayload.patterns[0],
+      id: 'hs-incomplete',
+      points: {
+        ...headShouldersPayload.patterns[0].points,
+        breakout: null,
+      },
+    }
+    const overlays = toHeadShouldersOverlays({
+      patterns: [incomplete, headShouldersPayload.patterns[0]],
+      signals: headShouldersPayload.signals,
+    }, bars)
+
+    expect(overlays).toHaveLength(1)
+    expect(overlays[0].tooltipHtml).toContain('左肩')
+    expect(overlays[0].tooltipHtml).toContain('头部')
+    expect(overlays[0].tooltipHtml).toContain('右肩')
+    expect(overlays[0].tooltipHtml).toContain('颈线锚点一')
+    expect(overlays[0].tooltipHtml).toContain('触发时颈线')
+    expect(overlays[0].tooltipHtml).toContain('突破量比')
+    expect(overlays[0].tooltipHtml).toContain('已确认')
+    expect(overlays[0].tooltipHtml).toContain('失效价')
+    expect(overlays[0].tooltipHtml).toContain('结构评分')
+    expect(overlays[0].tooltipHtml).toContain('量能评分')
+    expect(overlays[0].tooltipHtml).toContain('背景评分')
+    expect(overlays[0].tooltipHtml).toContain('综合评分')
+    expect(overlays[0].tooltipHtml).toContain('头部深度成立')
+    expect(overlays[0].tooltipHtml).not.toMatch(/CONFIRMED|HEAD_DEPTH|VOLUME_CONFIRMED|BREAKOUT/)
+  })
+
   it('maps only authoritative signal sides and omits malformed legacy entries', () => {
     expect(toChartMarkers([
       detail.chart.signals![0],
@@ -532,6 +754,36 @@ describe('Dow monitor detail dialog', () => {
 
     await user.click(screen.getByRole('button', { name: '日K' }))
     expect(screen.getByTestId('daily-candlestick')).toHaveAttribute('data-price-lines', '[]')
+  })
+
+  it('isolates the head-and-shoulders switch from Dow markers and trend lines', async () => {
+    const user = userEvent.setup()
+    render(
+      <DowMonitorDetailDialog
+        symbol="01347.HK"
+        timeframe="5m"
+        open
+        onClose={vi.fn()}
+      />,
+    )
+
+    const shapeSwitch = screen.getByRole('switch', { name: '头肩形态' })
+    const chart = screen.getByTestId('intraday-candlestick')
+    const dowMarkers = chart.getAttribute('data-markers')
+    const dowLines = chart.getAttribute('data-price-lines')
+
+    expect(shapeSwitch).toBeChecked()
+    expect(chart).toHaveAttribute(
+      'data-head-shoulders-overlays',
+      expect.stringContaining('"id":"hs-bottom-confirmed"'),
+    )
+
+    await user.click(shapeSwitch)
+
+    expect(shapeSwitch).not.toBeChecked()
+    expect(chart).toHaveAttribute('data-head-shoulders-overlays', '[]')
+    expect(chart).toHaveAttribute('data-markers', dowMarkers)
+    expect(chart).toHaveAttribute('data-price-lines', dowLines)
   })
 
   it('queries only the selected detail timeframe and uses the daily chart framework for day', async () => {

@@ -81,6 +81,37 @@ export interface ChartPriceLine {
   width?: number
 }
 
+export interface HeadShouldersOverlayPoint {
+  role: 'A' | 'N1' | 'B' | 'N2' | 'C' | 'D'
+  date: string
+  price: number
+}
+
+export interface HeadShouldersOverlay {
+  id: string
+  type: 'BOTTOM' | 'TOP'
+  stage: string
+  color: string
+  warning: boolean
+  points: HeadShouldersOverlayPoint[]
+  neckline: {
+    start: string
+    anchor2: string
+    end: string
+    startValue: number
+    anchor2Value: number
+    endValue: number
+  }
+  marker?: {
+    kind: 'buy' | 'sell'
+    date: string
+    price: number
+    color: string
+    label: 'B' | 'S'
+  }
+  tooltipHtml: string
+}
+
 export interface StockInfo {
   name?: string
   total_shares?: number
@@ -492,6 +523,7 @@ export const OVERLAY_INDICATORS: { key: string; label: string }[] = [
 interface Props {
   data: OHLC[]
   markers?: ChartMarker[]
+  headShouldersOverlays?: HeadShouldersOverlay[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
   height?: number
@@ -509,6 +541,135 @@ interface Props {
   activeIndicators?: string[]
   /** 成交量柱相对前 N 个交易日均量的显示设置 */
   volumeCompare?: VolumeCompareConfig
+}
+
+function headShouldersPointLabelPosition(
+  overlay: HeadShouldersOverlay,
+  role: HeadShouldersOverlayPoint['role'],
+) {
+  const isStructurePoint = role === 'A' || role === 'B' || role === 'C'
+  if (overlay.type === 'BOTTOM') return isStructurePoint ? 'bottom' : 'top'
+  return isStructurePoint ? 'top' : 'bottom'
+}
+
+export function buildHeadShouldersSeries(overlays: HeadShouldersOverlay[]): any[] {
+  return overlays.flatMap(overlay => {
+    const pointSeries = {
+      name: `头肩点位 ${overlay.id}`,
+      type: 'scatter',
+      data: overlay.points.map(point => ({
+        name: point.role,
+        value: [point.date, point.price],
+        tooltipHtml: overlay.tooltipHtml,
+        label: {
+          show: true,
+          formatter: point.role,
+          position: headShouldersPointLabelPosition(overlay, point.role),
+          distance: 7,
+          color: overlay.color,
+          fontSize: 10,
+          fontWeight: 650,
+          fontFamily: MARKER_LABEL_FONT_FAMILY,
+        },
+      })),
+      symbol: 'circle',
+      symbolSize: 7,
+      itemStyle: { color: overlay.color, borderColor: '#111217', borderWidth: 1 },
+      emphasis: { scale: 1.35 },
+      animation: false,
+      z: 83,
+    }
+    const shapeSeries = {
+      name: `头肩形态 ${overlay.id}`,
+      type: 'line',
+      data: overlay.points.map(point => ({
+        value: [point.date, point.price],
+        tooltipHtml: overlay.tooltipHtml,
+      })),
+      symbol: 'none',
+      lineStyle: {
+        color: overlay.color,
+        width: 1.5,
+        type: overlay.warning ? 'dashed' : 'solid',
+        opacity: 0.92,
+      },
+      animation: false,
+      z: 81,
+    }
+    const necklineSeries = {
+      name: `头肩颈线 ${overlay.id}`,
+      type: 'line',
+      data: [
+        {
+          value: [overlay.neckline.start, overlay.neckline.startValue],
+          tooltipHtml: overlay.tooltipHtml,
+        },
+        {
+          value: [overlay.neckline.end, overlay.neckline.endValue],
+          tooltipHtml: overlay.tooltipHtml,
+        },
+      ],
+      symbol: 'none',
+      lineStyle: { color: overlay.color, width: 1.5, type: 'dotted', opacity: 0.95 },
+      animation: false,
+      z: 82,
+    }
+    const signalSeries = overlay.marker
+      ? [{
+          name: `头肩信号 ${overlay.id}`,
+          type: 'scatter',
+          data: [{
+            name: overlay.marker.date,
+            value: [overlay.marker.date, overlay.marker.price],
+            tooltipHtml: overlay.tooltipHtml,
+            label: {
+              show: true,
+              formatter: overlay.marker.label,
+              position: 'inside',
+              color: '#FFFFFF',
+              fontSize: 10,
+              fontWeight: 'bold',
+              fontFamily: MARKER_LABEL_FONT_FAMILY,
+            },
+          }],
+          symbol: 'pin',
+          symbolSize: 28,
+          symbolOffset: [0, -34],
+          itemStyle: { color: overlay.marker.color },
+          animation: false,
+          z: 101,
+        }]
+      : overlay.warning
+        ? [{
+            name: `头肩警示 ${overlay.id}`,
+            type: 'scatter',
+            data: [{
+              name: overlay.points.at(-1)?.date,
+              value: [
+                overlay.points.at(-1)?.date,
+                overlay.points.at(-1)?.price,
+              ],
+              tooltipHtml: overlay.tooltipHtml,
+              label: {
+                show: true,
+                formatter: '假',
+                position: 'top',
+                distance: 7,
+                color: overlay.color,
+                fontSize: 10,
+                fontWeight: 'bold',
+                fontFamily: MARKER_LABEL_FONT_FAMILY,
+              },
+            }],
+            symbol: 'diamond',
+            symbolSize: 10,
+            itemStyle: { color: overlay.color },
+            animation: false,
+            z: 84,
+          }]
+        : []
+    return [shapeSeries, necklineSeries, pointSeries, ...signalSeries]
+  })
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
@@ -636,6 +797,7 @@ function buildOption(
   dates: string[],
   dateIndexMap: Map<string, number>,
   markers: ChartMarker[] | undefined,
+  headShouldersOverlays: HeadShouldersOverlay[] | undefined,
   ranges: ChartRange[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
   showMA: boolean,
@@ -851,6 +1013,8 @@ function buildOption(
     markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
   })
 
+  series.push(...buildHeadShouldersSeries(headShouldersOverlays ?? []))
+
   if (hasMA) {
     const maLine = (key: keyof OHLC, color: string, name: string) => ({
       name, type: 'line',
@@ -945,9 +1109,11 @@ function buildOption(
       extraCssText: 'box-shadow:0 10px 28px rgba(0,0,0,0.55);border-radius:6px;',
       textStyle: { color: '#E5E7EB', fontSize: 11 },
       formatter: (params: unknown) => {
-        if (!isRecord(params) || params.componentType !== 'markPoint') return ''
+        if (!isRecord(params)) return ''
         const data = params.data
-        if (!isRecord(data) || !isRecord(data.marker)) return ''
+        if (!isRecord(data)) return ''
+        if (typeof data.tooltipHtml === 'string') return data.tooltipHtml
+        if (params.componentType !== 'markPoint' || !isRecord(data.marker)) return ''
         return markerTooltipHtml(data.marker as unknown as ChartMarker)
       },
     },
@@ -981,6 +1147,7 @@ function buildOption(
 export function EChartsCandlestick({
   data,
   markers,
+  headShouldersOverlays,
   ranges,
   priceLines,
   height = 480,
@@ -1304,6 +1471,7 @@ export function EChartsCandlestick({
     const option = buildOption(
       data, dates, dateIndexMap,
       showMarkersProp ? markers : undefined,
+      headShouldersOverlays,
       ranges,
       priceLines,
       showMA, compactRef.current,
@@ -1328,7 +1496,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, headShouldersOverlays, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

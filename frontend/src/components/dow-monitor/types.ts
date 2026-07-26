@@ -134,6 +134,80 @@ export interface DowMonitorTurningPayload {
   pivots?: unknown[]
 }
 
+export type DowHeadShouldersType = 'BOTTOM' | 'TOP'
+export type DowHeadShouldersStage =
+  | 'FORMING'
+  | 'BREAK_WATCH'
+  | 'WICK_CROSS'
+  | 'NECKLINE_BREAK_WEAK'
+  | 'CONFIRMED'
+  | 'RETEST_CONFIRMED'
+  | 'FAILED'
+  | 'FALSE_BREAKOUT'
+
+export interface DowHeadShouldersPoint {
+  role: string
+  barIndex: number
+  barTime: string
+  confirmedIndex?: number
+  confirmedTime?: string
+  price: number
+}
+
+export interface DowHeadShouldersSignal {
+  family: 'HEAD_SHOULDERS'
+  patternId: string
+  side: 'BUY' | 'SELL'
+  stage: 'CONFIRMED' | 'RETEST_CONFIRMED'
+  barIndex: number
+  barTime: string
+  price: number
+}
+
+export interface DowHeadShouldersPattern {
+  id: string
+  type: DowHeadShouldersType
+  stage: DowHeadShouldersStage
+  side: 'BUY' | 'SELL' | null
+  signal: DowHeadShouldersSignal | null
+  points: {
+    leftShoulder: DowHeadShouldersPoint | null
+    neckline1: DowHeadShouldersPoint | null
+    head: DowHeadShouldersPoint | null
+    neckline2: DowHeadShouldersPoint | null
+    rightShoulder: DowHeadShouldersPoint | null
+    breakout: DowHeadShouldersPoint | null
+  }
+  neckline: {
+    anchorIndexes: [number, number]
+    anchorTimes: [string, string]
+    anchorPrices: [number, number]
+    triggerIndex: number | null
+    triggerTime: string | null
+    triggerValue: number | null
+  } | null
+  volume: {
+    ratio: number
+    requiredRatio: number
+    baseline: number
+    triggerIndex: number
+    triggerTime: string | null
+  } | null
+  invalidation: {
+    price: number | null
+  }
+  geometryScore: number
+  volumeScore: number
+  contextScore: number
+  qualityScore: number
+  evidence: string[]
+}
+
+export interface DowHeadShouldersPayload {
+  patterns: DowHeadShouldersPattern[]
+  signals: DowHeadShouldersSignal[]
+}
+
 export interface DowMonitorSnapshot {
   symbol: string
   timeframe: string
@@ -201,6 +275,7 @@ export interface DowMonitorChart {
   signals?: DowMonitorSignal[]
   longTerm?: DowMonitorPersistedLongTermSnapshot
   turning?: DowMonitorTurningPayload
+  headShoulders?: DowHeadShouldersPayload
 }
 
 export interface DowMonitorTimeframeState {
@@ -222,6 +297,7 @@ export interface DowMonitorEnginePayload {
   lines: DowMonitorLine[]
   signals: DowMonitorSignal[]
   longTerm: DowMonitorLongTermSnapshot
+  headShoulders?: DowHeadShouldersPayload
   evaluatedAt: string
 }
 
