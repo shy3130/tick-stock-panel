@@ -1,5 +1,5 @@
 import { lazy } from 'react'
-import { Activity, DatabaseBackup, GitCompareArrows, NotebookPen, WalletCards } from 'lucide-react'
+import { Activity, DatabaseBackup, GitCompareArrows, Newspaper, NotebookPen, WalletCards } from 'lucide-react'
 import type { RouteObject } from 'react-router-dom'
 
 import type { NavItem } from '@/lib/navRegistry'
@@ -19,10 +19,14 @@ const DataBackup = lazy(() => import('./data-backup/DataBackupPage').then(module
 const StrategyTracking = lazy(() => import('./strategy-tracking/StrategyTrackingPage').then(module => ({
   default: module.StrategyTrackingPage,
 })))
+const DailyBriefing = lazy(() => import('./daily-briefing/DailyBriefingPage').then(module => ({
+  default: module.DailyBriefingPage,
+})))
 
 /** Frozen frontend gateway: future Sycee pages register here, not in the upstream router. */
 export const SYCEE_ROUTES: RouteObject[] = [
   { path: 'portfolio', element: <Portfolio /> },
+  { path: 'daily-briefing', element: <DailyBriefing /> },
   { path: 'strategy-compare', element: <StrategyCompare /> },
   { path: 'research-ledger', element: <ResearchLedger /> },
   { path: 'strategy-tracking', element: <StrategyTracking /> },
@@ -36,6 +40,14 @@ export const SYCEE_NAV_ITEMS: NavItem[] = [
     to: '/portfolio',
     label: '持仓',
     icon: WalletCards,
+    group: 'core',
+    extension: false,
+  },
+  {
+    id: '/daily-briefing',
+    to: '/daily-briefing',
+    label: '每日简报',
+    icon: Newspaper,
     group: 'core',
     extension: false,
   },
