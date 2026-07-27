@@ -174,7 +174,7 @@ function StrategyPicker({
   onToggle: (strategyId: string) => void
 }) {
   return (
-    <fieldset className="border-b border-border px-4 py-4">
+    <fieldset className="min-w-0 border-b border-border px-4 py-4">
       <div className="flex items-center justify-between gap-3">
         <legend className="text-xs font-semibold text-secondary">策略</legend>
         <span className="font-mono text-[11px] text-muted">{selected.length} / 5</span>
