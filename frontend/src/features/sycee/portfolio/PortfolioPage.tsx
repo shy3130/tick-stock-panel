@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  Download,
   History,
   Loader2,
   Pencil,
@@ -26,6 +27,7 @@ import {
   type PortfolioTrade,
   type PortfolioTradeSide,
 } from './api'
+import { buildPortfolioTradeExportFilename, buildPortfolioTradesCsv } from './portfolioTradeCsv'
 import { buildPortfolioView, type PortfolioPositionView } from './portfolioView'
 import { PortfolioSellAlertPanel } from './PortfolioSellAlertPanel'
 import { TradeEditorDialog } from './TradeEditorDialog'
@@ -191,6 +193,24 @@ export function PortfolioPage() {
     })
   }
 
+  const downloadTrades = () => {
+    try {
+      const blob = new Blob([buildPortfolioTradesCsv(portfolio.trades)], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = buildPortfolioTradeExportFilename()
+      anchor.style.display = 'none'
+      document.body.append(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      toast(`已导出 ${portfolio.trades.length} 笔交易流水`, 'success')
+    } catch {
+      toast('导出交易流水失败', 'error')
+    }
+  }
+
   const pendingQuoteHint = view.summary.unpriced_count > 0
     ? `${view.summary.unpriced_count} 只待补价`
     : liveCount > 0 ? `${liveCount} 只实盘报价` : '最近可用收盘价'
@@ -227,6 +247,16 @@ export function PortfolioPage() {
         group={navMeta?.group}
         right={
           <div className="flex min-w-max items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={downloadTrades}
+              disabled={portfolio.trades.length === 0}
+              className="flex h-11 w-11 items-center justify-center rounded-btn border border-border text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-40 lg:h-9 lg:w-9"
+              aria-label={portfolio.trades.length > 0 ? `导出全部 ${portfolio.trades.length} 笔交易流水为 CSV` : '暂无交易流水可导出'}
+              title={portfolio.trades.length > 0 ? '导出交易流水 CSV' : '暂无交易流水可导出'}
+            >
+              <Download className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={() => quotesQuery.refetch()}
