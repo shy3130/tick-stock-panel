@@ -66,10 +66,25 @@ def _public_path(token: str) -> Path:
     return _public_dir() / f"{_token_hash(token)}.json"
 
 
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        temp.write_bytes(content)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def _atomic_write(path: Path, payload: dict) -> None:
-    temp = path.with_suffix(f"{path.suffix}.tmp")
-    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, path)
+    content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    _atomic_write_bytes(path, content)
+
+
+def _restore_file(path: Path, content: bytes | None) -> None:
+    if content is None:
+        path.unlink(missing_ok=True)
+    else:
+        _atomic_write_bytes(path, content)
 
 
 def _read_index_unlocked() -> list[dict]:
@@ -195,9 +210,21 @@ def refresh_share(entry_id: str) -> dict:
             "refreshed_at": _now(),
             "entry_updated_at": entry["updated_at"],
         }
-        _atomic_write(_public_path(refreshed["token"]), _public_document(refreshed, entry))
+        public_path = _public_path(refreshed["token"])
+        try:
+            previous = public_path.read_bytes() if public_path.exists() else None
+        except OSError as exc:
+            raise RuntimeError("研究分享公开快照无法读取") from exc
+        _atomic_write(public_path, _public_document(refreshed, entry))
         updated = [refreshed if item.get("id") == refreshed["id"] else item for item in shares]
-        _write_index_unlocked(updated)
+        try:
+            _write_index_unlocked(updated)
+        except Exception as exc:
+            try:
+                _restore_file(public_path, previous)
+            except OSError as rollback_exc:
+                raise RuntimeError("研究分享更新失败且公开快照回滚失败") from rollback_exc
+            raise RuntimeError("研究分享更新失败,公开快照已回滚") from exc
         return refreshed
 
 
@@ -230,15 +257,7 @@ def _revoke_unlocked(shares: list[dict], matched: list[dict]) -> None:
         rollback_errors: list[str] = []
         for path, content in public_snapshots.items():
             try:
-                if content is None:
-                    path.unlink(missing_ok=True)
-                    continue
-                temp = path.with_name(f".{path.name}.{uuid4().hex}.rollback")
-                try:
-                    temp.write_bytes(content)
-                    os.replace(temp, path)
-                finally:
-                    temp.unlink(missing_ok=True)
+                _restore_file(path, content)
             except OSError:
                 rollback_errors.append(path.name)
         try:

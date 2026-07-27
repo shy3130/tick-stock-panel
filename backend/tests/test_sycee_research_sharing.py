@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -45,6 +47,17 @@ def _fail_first_share_index_write(monkeypatch) -> None:
         return real_write_index(shares)
 
     monkeypatch.setattr(research_sharing, "_write_index_unlocked", fail_first_index_write)
+
+
+def _fail_share_index_replace(monkeypatch) -> None:
+    real_replace = research_sharing.os.replace
+
+    def fail_index_replace(source, target):
+        if Path(target).name == "research_shares.json":
+            raise OSError("simulated share index replace failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(research_sharing.os, "replace", fail_index_replace)
 
 
 def _entry_payload(title: str = "贵州茅台渠道验证") -> dict:
@@ -121,6 +134,43 @@ def test_share_snapshot_lifecycle_and_public_redaction(monkeypatch, tmp_path):
     revoked = client.delete(f"/api/sycee/research/{entry['id']}/share")
     assert revoked.status_code == 200
     assert client.get(f"/api/public/sycee/research/{share['token']}").status_code == 404
+
+
+def test_failed_share_creation_cleans_public_and_temp_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = _client(raise_server_exceptions=False)
+    entry = client.post("/api/sycee/research", json=_entry_payload()).json()["entry"]
+    _fail_share_index_replace(monkeypatch)
+
+    response = client.post(f"/api/sycee/research/{entry['id']}/share")
+
+    assert response.status_code == 500
+    assert client.get(f"/api/sycee/research/{entry['id']}/share").json()["share"] is None
+    public_dir = tmp_path / "sycee_public" / "research_shares"
+    assert list(public_dir.glob("*.json")) == []
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_failed_share_refresh_keeps_previous_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = _client(raise_server_exceptions=False)
+    entry = client.post("/api/sycee/research", json=_entry_payload()).json()["entry"]
+    share = client.post(f"/api/sycee/research/{entry['id']}/share").json()["share"]
+    previous = client.get(f"/api/public/sycee/research/{share['token']}").json()
+    client.patch(
+        f"/api/sycee/research/{entry['id']}",
+        json={"thesis": "索引失败时不应公开的新判断。"},
+    )
+    _fail_share_index_replace(monkeypatch)
+
+    response = client.put(f"/api/sycee/research/{entry['id']}/share")
+
+    assert response.status_code == 500
+    public = client.get(f"/api/public/sycee/research/{share['token']}").json()
+    assert public == previous
+    current = client.get(f"/api/sycee/research/{entry['id']}/share").json()["share"]
+    assert current == share
+    assert list(tmp_path.rglob("*.tmp")) == []
 
 
 def test_share_management_is_user_isolated_but_public_read_is_anonymous(
