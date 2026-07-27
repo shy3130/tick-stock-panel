@@ -18,6 +18,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { toast } from '@/components/Toast'
 import { cn } from '@/lib/cn'
 import { getNavIconMeta } from '@/lib/navRegistry'
+import { TradeReviewPanel } from '@/features/sycee/trade-review/TradeReviewPanel'
 import {
   PORTFOLIO_QUERY_KEY,
   portfolioApi,
@@ -356,6 +357,8 @@ export function PortfolioPage() {
             </>
           )}
         </section>
+
+        <TradeReviewPanel portfolio={portfolio} />
 
         <section aria-labelledby="portfolio-history-title" className="overflow-hidden rounded-card border border-border bg-surface">
           <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
