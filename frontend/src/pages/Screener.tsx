@@ -26,6 +26,7 @@ import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
+import { canAuthorStrategies } from '@/features/sycee/strategy-security/access'
 import {
   SCREENER_BUILTIN_COLUMNS,
   SCREENER_COLUMN_GROUPS,
@@ -77,6 +78,8 @@ export function Screener() {
   const filterMap = useRef<Map<string, ScreenerFilterType>>(new Map())
   const runAllDateRef = useRef<string | null>(null)
   const qc = useQueryClient()
+  const authStatus = useQuery({ queryKey: ['auth-status'], queryFn: api.authStatus, staleTime: 30_000 })
+  const canAuthor = canAuthorStrategies(authStatus.data)
 
   // 结果列配置 — 默认内置列，异步合并后端/localStorage 偏好
   const [columns, setColumns] = useState<ColumnConfig[]>([...SCREENER_BUILTIN_COLUMNS])
@@ -589,18 +592,20 @@ export function Screener() {
               ))}
             </div>
             {/* 重新运行策略：重载策略文件并重跑全部策略，更新命中个股 */}
-            <button
-              onClick={() => reloadStrategies.mutate()}
-              disabled={reloadStrategies.isPending}
-              title="重新加载策略并运行全部策略，刷新当前符合条件的个股"
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-btn
-                border border-border bg-surface text-xs font-medium text-muted
-                hover:text-accent hover:border-accent/50 transition-colors cursor-pointer
-                disabled:opacity-50 disabled:cursor-wait"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${reloadStrategies.isPending ? 'animate-spin' : ''}`} />
-              重载
-            </button>
+            {canAuthor && (
+              <button
+                onClick={() => reloadStrategies.mutate()}
+                disabled={reloadStrategies.isPending}
+                title="重新加载策略并运行全部策略，刷新当前符合条件的个股"
+                className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-btn
+                  border border-border bg-surface text-xs font-medium text-muted
+                  hover:text-accent hover:border-accent/50 transition-colors cursor-pointer
+                  disabled:opacity-50 disabled:cursor-wait"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${reloadStrategies.isPending ? 'animate-spin' : ''}`} />
+                重载
+              </button>
+            )}
             {asOf && (
               <DatePicker
                 value={asOf}
@@ -651,15 +656,17 @@ export function Screener() {
               </span>
             </button>
             {/* 创建策略 */}
-            <button
-              onClick={() => { setBuilderMode('create'); setShowBuilder(true) }}
-              className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn
-                text-xs font-medium text-amber-400 border border-amber-400/20 bg-amber-400/5
-                hover:bg-amber-400/15 transition-colors cursor-pointer"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              创建策略 · AI
-            </button>
+            {canAuthor && (
+              <button
+                onClick={() => { setBuilderMode('create'); setShowBuilder(true) }}
+                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn
+                  text-xs font-medium text-amber-400 border border-amber-400/20 bg-amber-400/5
+                  hover:bg-amber-400/15 transition-colors cursor-pointer"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                创建策略 · AI
+              </button>
+            )}
             {/* 获取策略（占位，敬请期待） */}
             <button
               onClick={() => setShowStore(true)}
@@ -919,6 +926,7 @@ export function Screener() {
 
       <StrategySettingsDialog
         strategyId={settingsStrategyId}
+        canAuthorStrategies={canAuthor}
         onClose={() => setSettingsStrategyId(null)}
         onSaved={(limit) => {
           if (settingsStrategyId) {
@@ -959,25 +967,28 @@ export function Screener() {
       {showPoolDialog && (
         <StrategyPoolDialog
           pool={pool}
+          canAuthorStrategies={canAuthor}
           onConfirm={(newPool) => {
             reorderPool(newPool)
           }}
           onClose={() => setShowPoolDialog(false)}
         />
       )}
-      <StrategyBuilderDialog
-        open={showBuilder}
-        onClose={() => setShowBuilder(false)}
-        mode={builderMode}
-        existingStrategyIds={allStrategyIds}
-        onSavedId={async id => {
-          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('all'), queryFn: () => api.screenerStrategies(), staleTime: 0 })
-          if (!data.presets.some(s => s.id === id)) {
-            throw new Error(`策略 ${id} 已保存但未加载，请检查策略代码`)
-          }
-          addToPool(id)
-        }}
-      />
+      {canAuthor && (
+        <StrategyBuilderDialog
+          open={showBuilder}
+          onClose={() => setShowBuilder(false)}
+          mode={builderMode}
+          existingStrategyIds={allStrategyIds}
+          onSavedId={async id => {
+            const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('all'), queryFn: () => api.screenerStrategies(), staleTime: 0 })
+            if (!data.presets.some(s => s.id === id)) {
+              throw new Error(`策略 ${id} 已保存但未加载，请检查策略代码`)
+            }
+            addToPool(id)
+          }}
+        />
+      )}
 
       <StrategyStoreDialog
         open={showStore}

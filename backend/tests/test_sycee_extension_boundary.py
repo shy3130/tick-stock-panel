@@ -16,7 +16,10 @@ def test_backend_uses_one_stable_sycee_gateway():
     sycee_lines = [line.strip() for line in main.splitlines() if "sycee" in line.lower()]
 
     assert sycee_lines == [
-        "from app.sycee.router import router as sycee_router",
+        "from app.sycee.router import (",
+        "requires_admin as sycee_requires_admin,",
+        "router as sycee_router,",
+        "if sycee_requires_admin(path, method):",
         "app.include_router(sycee_router)",
     ]
 

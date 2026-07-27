@@ -26,6 +26,7 @@ Object.assign(FIELD_LABEL, {
 
 interface Props {
   strategyId: string | null
+  canAuthorStrategies?: boolean
   onClose: () => void
   onSaved?: (displayLimit: number | null) => void
   onAiModify?: () => void
@@ -198,7 +199,7 @@ function ScoringField({ col, weight, pct, editing, onChange }: {
   )
 }
 
-export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModify, onDeleted }: Props) {
+export function StrategySettingsDialog({ strategyId, canAuthorStrategies = false, onClose, onSaved, onAiModify, onDeleted }: Props) {
   const [detail, setDetail] = useState<StrategyDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -570,13 +571,13 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                 className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-surface text-xs text-secondary hover:text-danger hover:border-danger/30 transition-colors cursor-pointer disabled:opacity-50">
                 <RotateCcw className="h-3.5 w-3.5" />{resetting ? '重置中…' : '重置默认'}
               </button>
-              {(detail?.source === 'ai' || detail?.source === 'custom') && (
+              {canAuthorStrategies && (detail?.source === 'ai' || detail?.source === 'custom') && (
                 <button onClick={() => { setDeleteError(''); setShowDeleteConfirm(true) }}
                   className="text-[10px] text-danger hover:text-danger/80 transition-colors">删除策略</button>
               )}
             </div>
             <div className="flex items-center gap-2">
-              {(detail?.source === 'ai' || detail?.source === 'custom') && (
+              {canAuthorStrategies && (detail?.source === 'ai' || detail?.source === 'custom') && (
                 <button onClick={onAiModify}
                   className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-amber-400/30 bg-amber-400/8 text-amber-400 text-xs font-medium hover:bg-amber-400/15 transition-colors cursor-pointer">
                   <Sparkles className="h-3.5 w-3.5" />AI 修改

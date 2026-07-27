@@ -1,9 +1,12 @@
 {
   "backend": {
-    "backend/app/main.py": "Mounts the single Sycee API router."
+    "backend/app/main.py": "Mounts the single Sycee API router and delegates strategy-authoring authorization to the Sycee policy."
   },
   "frontend": {
     "frontend/src/components/StockPreviewDialog.tsx": "Renders the Sycee capture adapter once for every stock-preview entry point.",
+    "frontend/src/components/screener/StrategyPoolDialog.tsx": "Accepts one Sycee authorization flag to hide Python strategy import from non-admin users.",
+    "frontend/src/components/screener/StrategySettingsDialog.tsx": "Accepts one Sycee authorization flag to hide strategy deletion and AI modification from non-admin users.",
+    "frontend/src/pages/Screener.tsx": "Reads the existing auth status and passes the Sycee strategy-authoring authorization flag into thin upstream UI adapters.",
     "frontend/src/pages/backtest/StrategyBacktest.tsx": "Renders the Sycee-owned trade CSV export action and passes the completed backtest result.",
     "frontend/src/router.tsx": "Expands the Sycee route registry.",
     "frontend/src/lib/navRegistry.ts": "Expands the Sycee navigation registry.",

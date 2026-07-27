@@ -41,7 +41,10 @@ from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.quote_service import QuoteService
-from app.sycee.router import router as sycee_router
+from app.sycee.router import (
+    requires_admin as sycee_requires_admin,
+    router as sycee_router,
+)
 from app.tickflow import client as tf_client
 from app.tickflow.capabilities import CapabilityDenied
 from app.tickflow.policy import detect_capabilities
@@ -388,6 +391,8 @@ _ADMIN_MUTATION_PREFIXES = (
 
 
 def _admin_required(path: str, method: str) -> bool:
+    if sycee_requires_admin(path, method):
+        return True
     if path.startswith(_ADMIN_PREFIXES):
         return True
     return method not in {"GET", "HEAD", "OPTIONS"} and path.startswith(_ADMIN_MUTATION_PREFIXES)

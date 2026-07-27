@@ -5,6 +5,7 @@ import { api, type StrategyDetail } from '@/lib/api'
 
 interface Props {
   pool: string[]
+  canAuthorStrategies?: boolean
   onConfirm: (newPool: string[]) => void
   onClose: () => void
 }
@@ -41,7 +42,7 @@ function fileStem(name: string): string {
   return name.replace(/\.py$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').replace(/^_+|_+$/g, '')
 }
 
-export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
+export function StrategyPoolDialog({ pool, canAuthorStrategies = false, onConfirm, onClose }: Props) {
   // 草稿状态: 打开时从 pool 复制, 操作只改草稿, 点确定才提交
   const [draftPool, setDraftPool] = useState<string[]>(() => [...pool])
   const [allStrategies, setAllStrategies] = useState<StrategyDetail[]>([])
@@ -154,24 +155,28 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
               {invalidPoolCount > 0 && <span className="ml-2 text-[10px] text-danger">{invalidPoolCount} 个失效</span>}
             </span>
             <div className="flex items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".py,text/x-python,text/plain"
-                className="hidden"
-                onChange={e => {
-                  const file = e.target.files?.[0]
-                  if (file) void handleImportFile(file)
-                }}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={importing}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn border border-accent/30 bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 disabled:opacity-50 transition-colors cursor-pointer"
-              >
-                {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                导入策略
-              </button>
+              {canAuthorStrategies && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".py,text/x-python,text/plain"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0]
+                      if (file) void handleImportFile(file)
+                    }}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={importing}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn border border-accent/30 bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 disabled:opacity-50 transition-colors cursor-pointer"
+                  >
+                    {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                    导入策略
+                  </button>
+                </>
+              )}
               <button onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
                 <X className="h-4 w-4 text-muted" />
               </button>
