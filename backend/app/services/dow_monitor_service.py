@@ -19,6 +19,10 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from app.services.dow_minute_decision import (
+    MinuteDecisionContext,
+    build_minute_decision,
+)
 from app.services.dow_monitor_bars import (
     TIMEFRAME_MINUTES,
     TimeframeBars,
@@ -33,6 +37,7 @@ from app.services.dow_monitor_client import (
 from app.services.dow_monitor_data import WebStockBatch, market_session_policy
 from app.services.dow_monitor_indicators import enrich_dow_chart_bars
 from app.services.dow_monitor_models import (
+    DowMinuteDecision,
     DowNotification,
     DowTimeframeState,
     MonitoredSymbol,
@@ -49,6 +54,15 @@ logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ("5m", "15m", "30m", "60m", "day")
 NotificationIndex = dict[tuple[str, str], list[DowNotification]]
+
+
+def _monitor_symbol_identity(symbol: str) -> str:
+    normalized = str(symbol).strip().upper()
+    if normalized.endswith(".HK"):
+        code = normalized[:-3]
+        if code.isdigit():
+            return f"{int(code)}.HK"
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -415,6 +429,20 @@ class DowMonitorService:
             else:
                 self._errors[item.symbol] = error
                 cycle_errors.append(f"{item.symbol}: {error}")
+
+        if any_success:
+            intraday_capital = await asyncio.to_thread(
+                self._intraday_capital_by_symbol,
+                [item.symbol for item in enabled],
+            )
+            for item in enabled:
+                await asyncio.to_thread(
+                    self._refresh_minute_decision,
+                    item,
+                    batch.minute_rows,
+                    intraday_capital.get(item.symbol),
+                    now,
+                )
 
         self._last_error = "; ".join(cycle_errors) or None
         if any_success:
@@ -1087,7 +1115,206 @@ class DowMonitorService:
             )
         )
 
+    @staticmethod
+    def _market_is_open(item: MonitoredSymbol, now: datetime) -> bool:
+        policy = market_session_policy(item.symbol)
+        local_now = now.astimezone(ZoneInfo(policy.timezone))
+        if local_now.weekday() >= 5:
+            return False
+        return any(start <= local_now.time() < end for start, end in policy.sessions)
+
+    @staticmethod
+    def _latest_completed_minute(
+        item: MonitoredSymbol,
+        rows: pl.DataFrame,
+        now: datetime,
+    ) -> tuple[dict, datetime] | None:
+        if rows.is_empty():
+            return None
+        policy = market_session_policy(item.symbol)
+        zone = ZoneInfo(policy.timezone)
+        local_now = now.astimezone(zone)
+        latest: tuple[dict, datetime] | None = None
+        identity = _monitor_symbol_identity(item.symbol)
+        for row in rows.to_dicts():
+            if _monitor_symbol_identity(row.get("symbol") or "") != identity:
+                continue
+            value = row.get("datetime")
+            if value is None:
+                continue
+            parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+            local_start = (
+                parsed.astimezone(zone)
+                if parsed.tzinfo is not None
+                else parsed.replace(tzinfo=zone)
+            ).replace(second=0, microsecond=0)
+            if local_start.weekday() >= 5:
+                continue
+            if not any(
+                start <= local_start.time() < end
+                for start, end in policy.sessions
+            ):
+                continue
+            if local_start + timedelta(minutes=1) > local_now:
+                continue
+            if latest is None or local_start > latest[1]:
+                latest = (row, local_start)
+        return latest
+
+    def _refresh_minute_decision(
+        self,
+        item: MonitoredSymbol,
+        minute_rows: pl.DataFrame,
+        intraday_capital: dict | None,
+        now: datetime,
+    ) -> None:
+        if not self._market_is_open(item, now):
+            return
+        latest = self._latest_completed_minute(item, minute_rows, now)
+        if latest is None:
+            return
+        latest_row, source_timestamp = latest
+        decision_minute = source_timestamp + timedelta(minutes=1)
+        previous = self.store.get_minute_decision(item.symbol)
+        if previous is not None and previous.decision_minute >= decision_minute:
+            return
+
+        trends: dict[str, str] = {}
+        operations: dict[str, str] = {}
+        state_bars: list[dict] = []
+        for timeframe in TIMEFRAMES:
+            state = self.store.get_state(item.symbol, timeframe)
+            if state is None:
+                continue
+            long_term = state.chart.get("longTerm")
+            if isinstance(long_term, dict):
+                trend = long_term.get("trendDirection") or long_term.get("trend_direction")
+                operation = long_term.get("operation")
+                if isinstance(trend, str):
+                    trends[timeframe] = trend
+                if isinstance(operation, str):
+                    operations[timeframe] = operation
+            if timeframe == "15m" and isinstance(state.chart.get("bars"), list):
+                state_bars = [
+                    bar for bar in state.chart["bars"][-20:] if isinstance(bar, dict)
+                ]
+
+        lows = [
+            float(bar["low"])
+            for bar in state_bars
+            if isinstance(bar.get("low"), (int, float))
+        ]
+        highs = [
+            float(bar["high"])
+            for bar in state_bars
+            if isinstance(bar.get("high"), (int, float))
+        ]
+        identity = _monitor_symbol_identity(item.symbol)
+        completed_volumes: list[float] = []
+        for row in minute_rows.to_dicts():
+            if _monitor_symbol_identity(row.get("symbol") or "") != identity:
+                continue
+            volume = row.get("volume")
+            if not isinstance(volume, (int, float)):
+                continue
+            value = row.get("datetime")
+            if value is None:
+                continue
+            parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+            zone = ZoneInfo(market_session_policy(item.symbol).timezone)
+            local_start = (
+                parsed.astimezone(zone)
+                if parsed.tzinfo is not None
+                else parsed.replace(tzinfo=zone)
+            ).replace(second=0, microsecond=0)
+            if local_start <= source_timestamp:
+                completed_volumes.append(float(volume))
+        recent = completed_volumes[-21:-1]
+        recent_average_volume = (
+            sum(recent) / len(recent)
+            if recent
+            else completed_volumes[-1]
+            if completed_volumes
+            else None
+        )
+        capital = intraday_capital or {}
+        snapshot = build_minute_decision(
+            MinuteDecisionContext(
+                symbol=item.symbol,
+                market=item.market,
+                decision_minute=decision_minute,
+                source_timestamp=source_timestamp,
+                trends=trends,
+                operations=operations,
+                completed_minute=True,
+                latest_close=(
+                    float(latest_row["close"])
+                    if isinstance(latest_row.get("close"), (int, float))
+                    else None
+                ),
+                support_price=min(lows) if lows else None,
+                resistance_price=max(highs) if highs else None,
+                minute_volume=(
+                    float(latest_row["volume"])
+                    if isinstance(latest_row.get("volume"), (int, float))
+                    else None
+                ),
+                recent_average_volume=recent_average_volume,
+                capital={
+                    "total_net": capital.get("total_net", capital.get("flow_today")),
+                    "large_net": capital.get("large_net"),
+                    "flow_15m": capital.get("flow_15m"),
+                    "flow_30m": capital.get("flow_30m"),
+                },
+            )
+        )
+        self.store.save_minute_decision(snapshot)
+
+    def _present_minute_decision(
+        self,
+        item: MonitoredSymbol,
+        decision: DowMinuteDecision | None,
+        now: datetime,
+    ) -> dict | None:
+        if decision is None:
+            return None
+        if not self._market_is_open(item, now):
+            presented = decision.model_copy(
+                update={
+                    "action": "OBSERVE",
+                    "action_label": "继续观察",
+                    "data_status": "MARKET_CLOSED",
+                    "status_label": "已收盘",
+                }
+            )
+            return presented.model_dump(mode="json")
+
+        zone = ZoneInfo(market_session_policy(item.symbol).timezone)
+        local_now = now.astimezone(zone)
+        local_decision = decision.decision_minute.astimezone(zone)
+        age_seconds = (local_now - local_decision).total_seconds()
+        if age_seconds > 90:
+            presented = decision.model_copy(
+                update={
+                    "action": "OBSERVE",
+                    "action_label": "继续观察",
+                    "data_status": "DELAYED",
+                    "status_label": "数据延迟",
+                }
+            )
+            return presented.model_dump(mode="json")
+        if local_now >= local_decision + timedelta(minutes=1):
+            presented = decision.model_copy(
+                update={
+                    "data_status": "WAITING_NEW_MINUTE",
+                    "status_label": "等待新分钟数据",
+                }
+            )
+            return presented.model_dump(mode="json")
+        return decision.model_dump(mode="json")
+
     def overview(self, market: str = "all") -> dict:
+        now = self._now()
         notifications = self.store.list_notifications(
             market=None if market == "all" else market,
             limit=1_000,
@@ -1131,6 +1358,11 @@ class DowMonitorService:
                     "quote_timestamp": quote.get("timestamp"),
                     "next_day_direction": next_day_direction,
                     "intraday_capital": intraday_capital_by_symbol.get(item.symbol),
+                    "minute_decision": self._present_minute_decision(
+                        item,
+                        self.store.get_minute_decision(item.symbol),
+                        now,
+                    ),
                     "states": states,
                     "latest_notification": latest_by_symbol.get(item.symbol),
                     "last_success_at": self._as_json_time(
@@ -1380,11 +1612,11 @@ class DowMonitorService:
         elif score >= 85.0 and (support is None or price >= support):
             result["realtime_signal"] = "BUY_WATCH"
             result["realtime_label"] = "强势跟踪"
-            result["realtime_reason"] = "日线评分强，实时价守在支撑上方"
+            result["realtime_reason"] = "日线评分强、实时价守在支撑上方"
         elif score >= 70.0:
             result["realtime_signal"] = "WATCH_LONG"
             result["realtime_label"] = "偏多跟踪"
-            result["realtime_reason"] = "日线评分偏多，等待关键位确认"
+            result["realtime_reason"] = "日线评分偏多、等待关键位确认"
         else:
             result["realtime_signal"] = "OBSERVE"
             result["realtime_label"] = "观察"
@@ -1513,7 +1745,7 @@ class DowMonitorService:
         if breakout_ok:
             evidence.append("接近或突破阶段高点")
         if rsi is not None and rsi > 82.0:
-            evidence.append("RSI过热，降低追高信号")
+            evidence.append("RSI过热、降低追高信号")
         if not evidence:
             evidence.append("优势指标不足")
 
