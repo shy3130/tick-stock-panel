@@ -4,6 +4,7 @@
   },
   "frontend": {
     "frontend/src/components/StockPreviewDialog.tsx": "Renders the Sycee capture adapter once for every stock-preview entry point.",
+    "frontend/src/pages/backtest/StrategyBacktest.tsx": "Renders the Sycee-owned trade CSV export action and passes the completed backtest result.",
     "frontend/src/router.tsx": "Expands the Sycee route registry.",
     "frontend/src/lib/navRegistry.ts": "Expands the Sycee navigation registry.",
     "frontend/src/lib/api.ts": "Exports the generic request helper used by isolated Sycee API clients."

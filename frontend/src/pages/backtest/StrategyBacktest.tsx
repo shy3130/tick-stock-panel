@@ -25,6 +25,7 @@ import { StrategyNavChart } from './charts/StrategyNavChart'
 import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { TradeKlineModal } from './components/TradeKlineModal'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
+import { BacktestTradeExportButton } from '@/features/sycee/backtest-export/BacktestTradeExportButton'
 
 const formatDate = (date: Date) => date.toISOString().slice(0, 10)
 const monthsAgo = (months: number) => {
@@ -1955,6 +1956,7 @@ export function StrategyBacktest() {
                       </span>
                     </button>
                   ))}
+                  <BacktestTradeExportButton result={result} />
                 </div>
 
                 {resultTab === 'daily' && (
