@@ -123,6 +123,13 @@ function socketUrl(): string {
   return `${scheme}//${window.location.host}/ws/realtime`
 }
 
+export function canonicalRealtimeSymbol(symbol: string): string {
+  const normalized = symbol.trim().toUpperCase()
+  const match = /^(\d{1,5})\.HK$/.exec(normalized)
+  if (!match) return normalized
+  return `${match[1].replace(/^0+(?=\d)/, '')}.HK`
+}
+
 export function reconnectDelayMs(
   attempt: number,
   random: () => number = Math.random,
@@ -169,7 +176,7 @@ export class RealtimeMarketDataClient {
   getStatus = (): RealtimeStatus => this.status
 
   getState = (symbol: string): RealtimeSymbolState | undefined =>
-    this.states.get(symbol.toUpperCase())
+    this.states.get(canonicalRealtimeSymbol(symbol))
 
   getSnapshot = (): ViewSnapshot => this.view
 
@@ -185,7 +192,7 @@ export class RealtimeMarketDataClient {
   ): () => void {
     if (this.disposed) throw new Error('realtime client is disposed')
     const consumer: Consumer = {
-      symbols: new Set(symbols.map(symbol => symbol.trim().toUpperCase()).filter(Boolean)),
+      symbols: new Set(symbols.map(canonicalRealtimeSymbol).filter(Boolean)),
       datasets: new Set(datasets),
       depthLevels: Math.max(1, Math.min(10, Math.trunc(depthLevels))),
     }
@@ -293,7 +300,7 @@ export class RealtimeMarketDataClient {
       || message.sequence <= 0
       || !message.datasets
     ) return false
-    const symbol = message.symbol.toUpperCase()
+    const symbol = canonicalRealtimeSymbol(message.symbol)
     const previous = this.states.get(symbol)
     const sameStream = previous?.streamId === message.streamId
     if (sameStream && message.sequence <= (previous?.sequence ?? 0)) return false
@@ -494,7 +501,7 @@ export function useRealtimeMarketData(
   const states = useMemo(() => {
     const selected = new Map<string, RealtimeSymbolState>()
     for (const symbol of symbolKey ? symbolKey.split(',') : []) {
-      const state = snapshot.states.get(symbol)
+      const state = snapshot.states.get(canonicalRealtimeSymbol(symbol))
       if (state) selected.set(symbol, state)
     }
     return selected

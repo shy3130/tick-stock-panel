@@ -40,6 +40,8 @@ The client MUST:
   45 seconds;
 - hydrate from the Redis-backed snapshot after reconnecting;
 - stop fallback polling only after the realtime snapshot is accepted;
+- normalize Hong Kong display aliases with leading zeros to the collector's
+  canonical Redis/WebSocket symbol while preserving the original display key;
 - mark Quote or Depth delayed after five seconds without an update during an
   open market session;
 - mark the current one-minute Candlestick delayed after 90 seconds during an

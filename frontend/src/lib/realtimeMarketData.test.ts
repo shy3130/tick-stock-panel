@@ -110,6 +110,22 @@ describe('RealtimeMarketDataClient', () => {
     expect(client.getState('700.HK')?.quote?.lastDone).toBe(551)
   })
 
+  it('maps leading-zero Hong Kong aliases to the collector symbol', () => {
+    client.subscribe(['01347.HK', '0981.HK', '002714.SZ'], ['quote'], 1)
+
+    expect(socket.sent.at(-1)).toEqual(expect.objectContaining({
+      action: 'subscribe',
+      symbols: ['002714.SZ', '1347.HK', '981.HK'],
+    }))
+
+    socket.message(snapshot({
+      symbol: '1347.HK',
+      lastDone: 149.8,
+    }))
+
+    expect(client.getState('01347.HK')?.quote?.lastDone).toBe(149.8)
+  })
+
   it('starts fallback at three seconds and recovers only after a valid snapshot', () => {
     client.subscribe(['700.HK'], ['quote'], 1)
     socket.message(update({ streamId: 's1', sequence: 1 }))

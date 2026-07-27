@@ -45,8 +45,7 @@ requirements:
     specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
     implementation:
       - frontend/src/components/dow-monitor/chartMappings.ts
-    tests:
-      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
@@ -54,8 +53,7 @@ requirements:
     specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
     implementation:
       - frontend/src/components/dow-monitor/chartMappings.ts
-    tests:
-      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
@@ -63,8 +61,7 @@ requirements:
     specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
     implementation:
       - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
-    tests:
-      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
@@ -73,8 +70,7 @@ requirements:
     implementation:
       - frontend/src/components/dow-monitor/chartMappings.ts
       - frontend/src/components/dow-monitor/types.ts
-    tests:
-      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
@@ -82,8 +78,7 @@ requirements:
     specification: SPEC-DOW-MONITOR-SIGNAL-PRESENTATION-001
     implementation:
       - frontend/src/components/EChartsCandlestick.tsx
-    tests:
-      - {path: frontend/src/components/EChartsCandlestick.test.tsx, type: executable-test}
+    tests: {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-signal-presentation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-signal-presentation.md, type: independent-review}
