@@ -142,7 +142,7 @@ export function PortfolioSellAlertPanel({ portfolio }: { portfolio: Portfolio })
           <BellRing className="h-4 w-4 shrink-0 text-accent" />
           <div className="min-w-0">
             <h2 id="portfolio-sell-alert-title" className="text-sm font-semibold text-foreground">持仓卖出提醒</h2>
-            <p className="mt-0.5 truncate text-[11px] text-muted">本规则仅扫描当前持仓，买入与选股池事件不会推送。</p>
+            <p className="mt-0.5 text-[11px] leading-4 text-muted sm:truncate">本规则仅扫描当前持仓，买入与选股池事件不会推送。</p>
           </div>
         </div>
         <div className={cn(

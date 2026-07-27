@@ -124,7 +124,7 @@ export function TradeReviewPanel({ portfolio }: { portfolio: Portfolio }) {
             <BookOpenCheck className="h-4 w-4 shrink-0 text-g-research" />
             <div className="min-w-0">
               <h2 id="trade-review-title" className="text-sm font-semibold text-foreground">交易复盘</h2>
-              <p className="mt-0.5 truncate text-[11px] text-muted">盈亏按交易流水实时归因，复盘结论独立保存。</p>
+              <p className="mt-0.5 text-[11px] leading-4 text-muted sm:truncate">盈亏按交易流水实时归因，复盘结论独立保存。</p>
             </div>
           </div>
           <span className="shrink-0 font-mono text-[11px] text-muted">
