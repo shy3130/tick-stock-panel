@@ -327,6 +327,9 @@ def undo_capture(entry_id: str, capture_id: str) -> tuple[dict | None, bool] | N
             if len(remaining) == len(captures):
                 return None
             if entry.get("origin") == "capture" and not remaining:
+                from app.sycee.research_sharing import revoke_shares_for_entry
+
+                revoke_shares_for_entry(entry_id)
                 entries.pop(index)
                 _write_unlocked(entries)
                 return None, True
@@ -397,8 +400,4 @@ def remove_research_capture(entry_id: str, capture_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="捕获记录不存在")
     entry, entry_deleted = result
-    if entry_deleted:
-        from app.sycee.research_sharing import revoke_shares_for_entry
-
-        revoke_shares_for_entry(entry_id)
     return {"ok": True, "entry_deleted": entry_deleted, "entry": entry}
