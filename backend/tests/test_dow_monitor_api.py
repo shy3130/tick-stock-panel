@@ -1350,3 +1350,30 @@ def test_run_once_persists_minute_decision_after_successful_symbol_cycle(
     assert decision is not None
     assert decision.decision_minute == datetime(2026, 7, 27, 10, 26, tzinfo=zone)
     assert decision.action_label == "买入观察"
+
+
+def test_store_preserves_the_production_symbol_feed_contract(tmp_path) -> None:
+    store = DowMonitorStore(tmp_path)
+    store.upsert_symbol("01347.HK", "hk", True)
+
+    authoritative, symbols = store.load_symbol_feed()
+
+    assert authoritative is True
+    assert [item.symbol for item in symbols] == ["01347.HK"]
+
+
+def test_store_preserves_the_production_state_listing_contract(tmp_path) -> None:
+    store = DowMonitorStore(tmp_path)
+    state = DowTimeframeState(
+        symbol="01347.HK",
+        market="hk",
+        timeframe="15m",
+        freshness_state="LIVE",
+        source_timestamp=NOW,
+        snapshot={},
+        chart={},
+        updated_at=NOW,
+    )
+    store.save_state(state)
+
+    assert store.list_states() == [state]
