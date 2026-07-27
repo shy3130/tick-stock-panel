@@ -5,6 +5,7 @@ export interface SyceeBackupData {
   portfolio_sell_alert: { version: 1; config: Record<string, unknown> } | null
   trade_reviews: { version: 1; reviews: unknown[] } | null
   research_ledger: { version: 1; entries: unknown[] } | null
+  strategy_tracking?: { version: 1; tracks: unknown[] } | null
 }
 
 export interface SyceeBackupDocument {

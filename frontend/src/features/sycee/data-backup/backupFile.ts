@@ -29,7 +29,8 @@ export function parseBackupFile(text: string): SyceeBackupDocument {
     || !(data.portfolio_sell_alert === null || (isRecord(data.portfolio_sell_alert)
       && data.portfolio_sell_alert.version === 1 && isRecord(data.portfolio_sell_alert.config)))
     || !validSection(data.trade_reviews, 'reviews')
-    || !validSection(data.research_ledger, 'entries')) {
+    || !validSection(data.research_ledger, 'entries')
+    || !(data.strategy_tracking === undefined || validSection(data.strategy_tracking, 'tracks'))) {
     throw new Error('Sycee 数据备份内容不完整')
   }
   return value as unknown as SyceeBackupDocument
@@ -40,6 +41,7 @@ export function backupSummary(backup: SyceeBackupDocument) {
     trades: backup.data.portfolio?.trades.length ?? 0,
     reviews: backup.data.trade_reviews?.reviews.length ?? 0,
     researchEntries: backup.data.research_ledger?.entries.length ?? 0,
+    strategyTracks: backup.data.strategy_tracking?.tracks.length ?? 0,
     sellAlertSaved: backup.data.portfolio_sell_alert !== null,
   }
 }

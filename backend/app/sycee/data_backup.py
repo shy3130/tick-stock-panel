@@ -33,6 +33,8 @@ from app.sycee.portfolio_sell_alert import (
 )
 from app.sycee.research_ledger import ResearchEntry
 from app.sycee.research_ledger import _lock as research_lock
+from app.sycee.strategy_tracking import StrategyTrack
+from app.sycee.strategy_tracking import _lock as strategy_tracking_lock
 from app.sycee.trade_reviews import TradeReview
 from app.sycee.trade_reviews import _lock as trade_review_lock
 
@@ -43,12 +45,15 @@ _FILES = {
     "portfolio_sell_alert": "portfolio_sell_alert.json",
     "trade_reviews": "trade_reviews.json",
     "research_ledger": "research_ledger.json",
+    "strategy_tracking": "strategy_tracking.json",
 }
 _MAX_BACKUP_BYTES = 20 * 1024 * 1024
 _TRADE_ID_RE = re.compile(r"^trade_[0-9a-f]{32}$")
 _RESEARCH_ID_RE = re.compile(r"^research_[0-9a-f]{32}$")
 _CAPTURE_ID_RE = re.compile(r"^capture_[0-9a-f]{32}$")
 _RULE_ID_RE = re.compile(r"^sycee_pf_sell_[0-9a-f]{20}$")
+_TRACK_ID_RE = re.compile(r"^strategy_track_[0-9a-f]{32}$")
+_OBSERVATION_ID_RE = re.compile(r"^strategy_observation_[0-9a-f]{32}$")
 _backup_lock = threading.RLock()
 
 
@@ -67,6 +72,7 @@ class SyceeBackupData(BaseModel):
     portfolio_sell_alert: dict | None
     trade_reviews: dict | None
     research_ledger: dict | None
+    strategy_tracking: dict | None = None
 
 
 class SyceeBackupDocument(BaseModel):
@@ -102,7 +108,13 @@ def _source_path(key: str) -> Path:
 @contextmanager
 def _locked_sources():
     with _backup_lock, ExitStack() as stack:
-        for lock in (portfolio_lock, sell_alert_lock, research_lock, trade_review_lock):
+        for lock in (
+            portfolio_lock,
+            sell_alert_lock,
+            research_lock,
+            strategy_tracking_lock,
+            trade_review_lock,
+        ):
             stack.enter_context(lock)
         yield
 
@@ -207,12 +219,41 @@ def _normalize_research(payload: dict | None) -> dict | None:
     return {"version": 1, "entries": entries}
 
 
+def _normalize_strategy_tracking(payload: dict | None) -> dict | None:
+    if payload is None:
+        return None
+    raw_tracks = _versioned_list(payload, "tracks", "策略跟踪")
+    if len(raw_tracks) > 100:
+        raise BackupValidationError("策略跟踪计划数量超过限制")
+    try:
+        tracks = [StrategyTrack.model_validate(item).model_dump(mode="json") for item in raw_tracks]
+    except (TypeError, ValueError) as exc:
+        raise BackupValidationError("策略跟踪计划内容无效") from exc
+    track_ids = [track["id"] for track in tracks]
+    observation_ids = [item["id"] for track in tracks for item in track["observations"]]
+    if (
+        len(set(track_ids)) != len(track_ids)
+        or any(not _TRACK_ID_RE.fullmatch(item) for item in track_ids)
+        or len(set(observation_ids)) != len(observation_ids)
+        or any(not _OBSERVATION_ID_RE.fullmatch(item) for item in observation_ids)
+        or any(len(track["observations"]) > 1000 for track in tracks)
+    ):
+        raise BackupValidationError("策略跟踪计划 ID 无效或重复")
+    return {"version": 1, "tracks": tracks}
+
+
 def _normalize_data(data: SyceeBackupData) -> dict[str, dict | None]:
+    normalizers = {
+        "portfolio": _normalize_portfolio,
+        "portfolio_sell_alert": _normalize_sell_alert,
+        "trade_reviews": _normalize_trade_reviews,
+        "research_ledger": _normalize_research,
+        "strategy_tracking": _normalize_strategy_tracking,
+    }
     normalized = {
-        "portfolio": _normalize_portfolio(data.portfolio),
-        "portfolio_sell_alert": _normalize_sell_alert(data.portfolio_sell_alert),
-        "trade_reviews": _normalize_trade_reviews(data.trade_reviews),
-        "research_ledger": _normalize_research(data.research_ledger),
+        key: normalize(getattr(data, key))
+        for key, normalize in normalizers.items()
+        if key in data.model_fields_set
     }
     size = len(json.dumps(normalized, ensure_ascii=False).encode("utf-8"))
     if size > _MAX_BACKUP_BYTES:

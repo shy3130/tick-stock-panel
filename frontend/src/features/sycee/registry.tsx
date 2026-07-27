@@ -1,5 +1,5 @@
 import { lazy } from 'react'
-import { DatabaseBackup, GitCompareArrows, NotebookPen, WalletCards } from 'lucide-react'
+import { Activity, DatabaseBackup, GitCompareArrows, NotebookPen, WalletCards } from 'lucide-react'
 import type { RouteObject } from 'react-router-dom'
 
 import type { NavItem } from '@/lib/navRegistry'
@@ -16,12 +16,16 @@ const StrategyCompare = lazy(() => import('./strategy-compare/StrategyComparePag
 const DataBackup = lazy(() => import('./data-backup/DataBackupPage').then(module => ({
   default: module.DataBackupPage,
 })))
+const StrategyTracking = lazy(() => import('./strategy-tracking/StrategyTrackingPage').then(module => ({
+  default: module.StrategyTrackingPage,
+})))
 
 /** Frozen frontend gateway: future Sycee pages register here, not in the upstream router. */
 export const SYCEE_ROUTES: RouteObject[] = [
   { path: 'portfolio', element: <Portfolio /> },
   { path: 'strategy-compare', element: <StrategyCompare /> },
   { path: 'research-ledger', element: <ResearchLedger /> },
+  { path: 'strategy-tracking', element: <StrategyTracking /> },
   { path: 'data-backup', element: <DataBackup /> },
 ]
 
@@ -40,6 +44,14 @@ export const SYCEE_NAV_ITEMS: NavItem[] = [
     to: '/strategy-compare',
     label: '策略对比',
     icon: GitCompareArrows,
+    group: 'strategy',
+    extension: false,
+  },
+  {
+    id: '/strategy-tracking',
+    to: '/strategy-tracking',
+    label: '策略跟踪',
+    icon: Activity,
     group: 'strategy',
     extension: false,
   },

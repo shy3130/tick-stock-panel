@@ -142,11 +142,12 @@ export function DataBackupPage() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-4 sm:divide-y-0">
+            <div className="grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-5 sm:divide-y-0">
               {[
                 ['交易流水', currentSummary?.trades ?? '--'],
                 ['交易复盘', currentSummary?.reviews ?? '--'],
                 ['研究记录', currentSummary?.researchEntries ?? '--'],
+                ['策略跟踪', currentSummary?.strategyTracks ?? '--'],
                 ['提醒配置', currentSummary ? (currentSummary.sellAlertSaved ? '已保存' : '无') : '--'],
               ].map(([label, value]) => (
                 <div key={label} className="px-4 py-4">
@@ -184,7 +185,7 @@ export function DataBackupPage() {
                       {formatTime(selected.document.exported_at)} · {formatSize(selected.size)}
                     </div>
                     <div className="mt-1 font-mono text-[11px] text-secondary">
-                      {selectedSummary.trades} 笔交易 · {selectedSummary.reviews} 条复盘 · {selectedSummary.researchEntries} 条研究
+                      {selectedSummary.trades} 笔交易 · {selectedSummary.reviews} 条复盘 · {selectedSummary.researchEntries} 条研究 · {selectedSummary.strategyTracks} 项策略跟踪
                     </div>
                   </div>
                 </div>
@@ -212,7 +213,7 @@ export function DataBackupPage() {
       <ConfirmDialog
         open={confirmRestore}
         title="恢复这份 Sycee 数据？"
-        message="当前持仓、卖出提醒、交易复盘和研究账本将被快照内容替换。"
+        message="当前持仓、卖出提醒、交易复盘、研究账本和策略跟踪将被快照内容替换。"
         confirmText="恢复数据"
         danger
         pending={restore.isPending}
