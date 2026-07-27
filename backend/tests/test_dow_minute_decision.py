@@ -228,6 +228,14 @@ def test_capital_quality_is_explained_without_reporting_missing(
     assert "暂无当日资金数据" not in result.contrary_risks
 
 
+def test_delayed_capital_is_not_used_as_a_supporting_reason() -> None:
+    result = build_minute_decision(bullish_context(capital_state="DELAYED"))
+
+    assert "当日资金与大单资金同步净流入" not in result.supporting_reasons
+    assert "15/30分钟资金持续改善" not in result.supporting_reasons
+    assert "资金数据延迟, 暂不作为确认依据" in result.contrary_risks
+
+
 def test_forming_minute_trigger_cannot_emit_watch_buy() -> None:
     result = build_minute_decision(bullish_context(completed_minute=False))
 

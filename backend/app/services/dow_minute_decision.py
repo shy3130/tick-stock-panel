@@ -190,19 +190,20 @@ def _supporting_reasons(
     elif context.trends.get("15m") == context.trends.get("30m") == "DOWN":
         reasons.append("15/30分钟结构同向偏弱")
 
-    total_vote = _number_vote(context.capital.get("total_net"))
-    large_vote = _number_vote(context.capital.get("large_net"))
-    if total_vote == large_vote == 1:
-        reasons.append("当日资金与大单资金同步净流入")
-    elif total_vote == large_vote == -1:
-        reasons.append("当日资金与大单资金同步净流出")
+    if _capital_state(context) not in {"UNAVAILABLE", "DELAYED"}:
+        total_vote = _number_vote(context.capital.get("total_net"))
+        large_vote = _number_vote(context.capital.get("large_net"))
+        if total_vote == large_vote == 1:
+            reasons.append("当日资金与大单资金同步净流入")
+        elif total_vote == large_vote == -1:
+            reasons.append("当日资金与大单资金同步净流出")
 
-    flow15_vote = _number_vote(context.capital.get("flow_15m"))
-    flow30_vote = _number_vote(context.capital.get("flow_30m"))
-    if flow15_vote == flow30_vote == 1:
-        reasons.append("15/30分钟资金持续改善")
-    elif flow15_vote == flow30_vote == -1:
-        reasons.append("15/30分钟资金持续走弱")
+        flow15_vote = _number_vote(context.capital.get("flow_15m"))
+        flow30_vote = _number_vote(context.capital.get("flow_30m"))
+        if flow15_vote == flow30_vote == 1:
+            reasons.append("15/30分钟资金持续改善")
+        elif flow15_vote == flow30_vote == -1:
+            reasons.append("15/30分钟资金持续走弱")
 
     if (
         context.minute_volume is not None
