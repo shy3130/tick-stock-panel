@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.services import user_context
 from app.services.user_context import UserIdentity
-from app.sycee import research_sharing
+from app.sycee import research_ledger, research_sharing
 from app.sycee.research_ledger import router as research_router
 from app.sycee.research_sharing import public_router
 from app.sycee.research_sharing import router as sharing_router
@@ -58,6 +58,20 @@ def _fail_share_index_replace(monkeypatch) -> None:
         return real_replace(source, target)
 
     monkeypatch.setattr(research_sharing.os, "replace", fail_index_replace)
+
+
+def _fail_first_research_write(monkeypatch) -> None:
+    real_write = research_ledger._write_unlocked
+    writes = 0
+
+    def fail_first_write(entries):
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            raise OSError("simulated research ledger failure")
+        return real_write(entries)
+
+    monkeypatch.setattr(research_ledger, "_write_unlocked", fail_first_write)
 
 
 def _entry_payload(title: str = "贵州茅台渠道验证") -> dict:
@@ -214,6 +228,22 @@ def test_failed_share_revocation_keeps_research_entry_and_link(monkeypatch, tmp_
     assert current["token"] == share["token"]
 
 
+def test_failed_research_delete_restores_revoked_share(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = _client(raise_server_exceptions=False)
+    entry = client.post("/api/sycee/research", json=_entry_payload()).json()["entry"]
+    share = client.post(f"/api/sycee/research/{entry['id']}/share").json()["share"]
+    _fail_first_research_write(monkeypatch)
+
+    response = client.delete(f"/api/sycee/research/{entry['id']}")
+
+    assert response.status_code == 500
+    assert client.get("/api/sycee/research").json()["total"] == 1
+    assert client.get(f"/api/public/sycee/research/{share['token']}").status_code == 200
+    current = client.get(f"/api/sycee/research/{entry['id']}/share").json()["share"]
+    assert current["token"] == share["token"]
+
+
 def test_undoing_an_auto_created_research_revokes_its_share(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     client = _client()
@@ -236,6 +266,27 @@ def test_failed_share_revocation_keeps_auto_created_research(monkeypatch, tmp_pa
     entry = captured["entry"]
     share = client.post(f"/api/sycee/research/{entry['id']}/share").json()["share"]
     _fail_first_share_index_write(monkeypatch)
+
+    response = client.delete(
+        f"/api/sycee/research/{entry['id']}/captures/{captured['capture_id']}"
+    )
+
+    assert response.status_code == 500
+    ledger = client.get("/api/sycee/research").json()
+    assert ledger["total"] == 1
+    assert ledger["entries"][0]["captures"][0]["id"] == captured["capture_id"]
+    assert client.get(f"/api/public/sycee/research/{share['token']}").status_code == 200
+    current = client.get(f"/api/sycee/research/{entry['id']}/share").json()["share"]
+    assert current["token"] == share["token"]
+
+
+def test_failed_auto_research_delete_restores_revoked_share(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = _client(raise_server_exceptions=False)
+    captured = client.post("/api/sycee/research/capture", json=_capture_payload()).json()
+    entry = captured["entry"]
+    share = client.post(f"/api/sycee/research/{entry['id']}/share").json()["share"]
+    _fail_first_research_write(monkeypatch)
 
     response = client.delete(
         f"/api/sycee/research/{entry['id']}/captures/{captured['capture_id']}"

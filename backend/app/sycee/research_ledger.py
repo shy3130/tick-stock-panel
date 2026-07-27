@@ -252,7 +252,10 @@ def delete_entry(entry_id: str) -> bool:
         remaining = [entry for entry in entries if entry.get("id") != entry_id]
         if len(remaining) == len(entries):
             return False
-        _write_unlocked(remaining)
+        from app.sycee.research_sharing import revoke_shares_transactionally
+
+        with revoke_shares_transactionally(entry_id):
+            _write_unlocked(remaining)
     return True
 
 
@@ -327,11 +330,11 @@ def undo_capture(entry_id: str, capture_id: str) -> tuple[dict | None, bool] | N
             if len(remaining) == len(captures):
                 return None
             if entry.get("origin") == "capture" and not remaining:
-                from app.sycee.research_sharing import revoke_shares_for_entry
+                from app.sycee.research_sharing import revoke_shares_transactionally
 
-                revoke_shares_for_entry(entry_id)
-                entries.pop(index)
-                _write_unlocked(entries)
+                with revoke_shares_transactionally(entry_id):
+                    entries.pop(index)
+                    _write_unlocked(entries)
                 return None, True
             updated = {**entry, "captures": remaining, "updated_at": _now()}
             entries[index] = updated
@@ -382,9 +385,6 @@ def patch_research_entry(entry_id: str, request: ResearchEntryUpdate):
 @router.delete("/{entry_id}")
 def remove_research_entry(entry_id: str):
     _validate_entry_id(entry_id)
-    from app.sycee.research_sharing import revoke_shares_for_entry
-
-    revoke_shares_for_entry(entry_id)
     if not delete_entry(entry_id):
         raise HTTPException(status_code=404, detail="研究记录不存在")
     return {"ok": True}

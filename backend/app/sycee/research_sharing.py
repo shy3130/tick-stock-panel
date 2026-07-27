@@ -8,6 +8,8 @@ import os
 import re
 import secrets
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -238,7 +240,25 @@ def revoke_shares_for_entry(entry_id: str) -> bool:
         return True
 
 
-def _revoke_unlocked(shares: list[dict], matched: list[dict]) -> None:
+def _restore_revocation_unlocked(
+    shares: list[dict], public_snapshots: dict[Path, bytes | None]
+) -> list[str]:
+    errors: list[str] = []
+    for path, content in public_snapshots.items():
+        try:
+            _restore_file(path, content)
+        except OSError:
+            errors.append(path.name)
+    try:
+        _write_index_unlocked(shares)
+    except Exception:
+        errors.append(_index_path().name)
+    return errors
+
+
+def _revoke_unlocked(
+    shares: list[dict], matched: list[dict]
+) -> dict[Path, bytes | None]:
     public_snapshots: dict[Path, bytes | None] = {}
     try:
         for share in matched:
@@ -254,21 +274,36 @@ def _revoke_unlocked(shares: list[dict], matched: list[dict]) -> None:
             path.unlink(missing_ok=True)
         _write_index_unlocked(remaining)
     except Exception as exc:
-        rollback_errors: list[str] = []
-        for path, content in public_snapshots.items():
-            try:
-                _restore_file(path, content)
-            except OSError:
-                rollback_errors.append(path.name)
-        try:
-            _write_index_unlocked(shares)
-        except Exception:
-            rollback_errors.append(_index_path().name)
+        rollback_errors = _restore_revocation_unlocked(shares, public_snapshots)
         if rollback_errors:
             raise RuntimeError(
                 f"研究分享撤销失败且以下文件回滚失败: {', '.join(rollback_errors)}"
             ) from exc
         raise RuntimeError("研究分享撤销失败,分享状态已回滚") from exc
+    return public_snapshots
+
+
+@contextmanager
+def revoke_shares_transactionally(entry_id: str) -> Iterator[None]:
+    """Restore revoked shares if a dependent ledger write fails."""
+
+    with _lock:
+        shares = _read_index_unlocked()
+        matched = [share for share in shares if share.get("entry_id") == entry_id]
+        if not matched:
+            yield
+            return
+        public_snapshots = _revoke_unlocked(shares, matched)
+        try:
+            yield
+        except Exception as exc:
+            rollback_errors = _restore_revocation_unlocked(shares, public_snapshots)
+            if rollback_errors:
+                raise RuntimeError(
+                    "研究记录更新失败且以下分享文件回滚失败: "
+                    f"{', '.join(rollback_errors)}"
+                ) from exc
+            raise
 
 
 def revoke_orphaned_shares(valid_entry_ids: set[str]) -> int:
