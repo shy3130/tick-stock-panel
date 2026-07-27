@@ -5,6 +5,7 @@ import {
   Activity,
   BellRing,
   BookOpenCheck,
+  ChevronDown,
   CircleAlert,
   Download,
   Loader2,
@@ -27,6 +28,7 @@ import {
   type DailyBriefing,
 } from './briefing'
 import { dailyBriefingFilename, dailyBriefingMarkdown } from './briefingMarkdown'
+import type { EventDirection, EventPriorityLevel } from './eventPriority'
 
 const moneyFormatter = new Intl.NumberFormat('zh-CN', {
   style: 'currency',
@@ -76,6 +78,38 @@ function formatAlertTime(timestamp: number): string {
 
 function formatGeneratedAt(value: string): string {
   return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+function priorityClass(level: EventPriorityLevel): string {
+  return {
+    high: 'border-danger/30 bg-danger/10 text-danger',
+    medium: 'border-warning/30 bg-warning/10 text-warning',
+    normal: 'border-border bg-elevated text-secondary',
+  }[level]
+}
+
+function directionMeta(direction: EventDirection): { label: string; className: string } {
+  return {
+    risk: { label: '风险', className: 'bg-danger/10 text-danger' },
+    opportunity: { label: '机会', className: 'bg-bull/10 text-bull' },
+    observe: { label: '观察', className: 'bg-accent/10 text-accent' },
+  }[direction]
+}
+
+function sourceLabel(source: string): string {
+  return {
+    strategy: '策略',
+    signal: '信号',
+    price: '价格',
+    market: '市场',
+    ladder: '封单',
+  }[source] ?? source
+}
+
+function conditionText(condition: { field: string; op: string; value?: number | null }): string {
+  return condition.op === 'truth'
+    ? condition.field
+    : `${condition.field} ${condition.op} ${condition.value ?? '--'}`
 }
 
 function downloadBriefing(briefing: DailyBriefing) {
@@ -231,9 +265,9 @@ export function DailyBriefingPage() {
             </div>
             <div className="border-t border-border lg:border-l lg:border-t-0">
               <SummaryCell
-                label="相关提醒"
-                value={String(briefing.alerts.length)}
-                hint={`持仓 ${briefing.alertCounts.holding} · 自选 ${briefing.alertCounts.watchlist}`}
+                label="重点事件"
+                value={String(briefing.eventGroups.length)}
+                hint={`原始 ${briefing.alerts.length} · 持仓 ${briefing.alertCounts.holding} · 自选 ${briefing.alertCounts.watchlist}`}
                 valueClassName={briefing.alertCounts.holding > 0 ? 'text-warning' : undefined}
               />
             </div>
@@ -318,18 +352,69 @@ export function DailyBriefingPage() {
           </section>
 
           <section aria-labelledby="briefing-alerts-title" className="overflow-hidden rounded-card border border-border bg-surface">
-            <SectionHeader id="briefing-alerts-title" icon={BellRing} title="持仓与自选提醒" aside={mode === 'morning' ? '近 24 小时' : '今日'} />
-            {briefing.alerts.length === 0 ? (
+            <SectionHeader id="briefing-alerts-title" icon={BellRing} title="重点事件与证据" aside={`${mode === 'morning' ? '近 24 小时' : '今日'} · 按优先级`} />
+            {briefing.eventGroups.length === 0 ? (
               <div className="px-4 py-8 text-center text-xs text-muted">报告窗口内暂无相关提醒</div>
             ) : (
               <div className="divide-y divide-border/70">
-                {briefing.alerts.map((alert, index) => (
-                  <div key={`${alert.ts}-${alert.symbol ?? ''}-${index}`} className="grid gap-1.5 px-4 py-3 sm:grid-cols-[110px_minmax(120px,0.5fr)_minmax(0,1.5fr)] sm:items-center sm:gap-4">
-                    <div className="font-mono text-[10px] text-muted">{formatAlertTime(alert.ts)}</div>
-                    <div className="min-w-0"><span className={cn('mr-2 rounded-input px-1.5 py-0.5 text-[10px]', alert.scope === 'holding' ? 'bg-warning/10 text-warning' : 'bg-accent/10 text-accent')}>{alert.scope === 'holding' ? '持仓' : '自选'}</span><span className="text-xs font-medium text-foreground">{alert.name?.trim() || alert.symbol}</span></div>
-                    <div className="text-xs leading-5 text-secondary">{alert.message}</div>
-                  </div>
-                ))}
+                {briefing.eventGroups.map(group => {
+                  const direction = directionMeta(group.direction)
+                  return (
+                    <details key={group.id} className="group">
+                      <summary className="cursor-pointer list-none px-4 py-3 transition-colors hover:bg-elevated/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent [&::-webkit-details-marker]:hidden">
+                        <div className="flex items-start gap-3">
+                          <span className={cn('flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-btn border font-mono', priorityClass(group.level))}>
+                            <span className="text-sm font-semibold leading-none">{group.score}</span>
+                            <span className="mt-0.5 text-[8px] leading-none">优先级</span>
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-sm font-medium text-foreground">{group.name}</span>
+                              <span className="font-mono text-[10px] text-muted">{group.symbol}</span>
+                              <span className={cn('rounded-input px-1.5 py-0.5 text-[9px]', group.scope === 'holding' ? 'bg-warning/10 text-warning' : 'bg-accent/10 text-accent')}>{group.scope === 'holding' ? '持仓' : '自选'}</span>
+                              <span className={cn('rounded-input px-1.5 py-0.5 text-[9px]', direction.className)}>{direction.label}</span>
+                            </div>
+                            <div className="mt-1 line-clamp-2 text-xs leading-5 text-secondary">{group.primary.message}</div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {group.reasons.map(reason => (
+                                <span key={reason.key} className="rounded-input border border-border bg-base px-1.5 py-0.5 text-[9px] text-muted">{reason.label} <span className="font-mono text-secondary">+{reason.points}</span></span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="font-mono text-[10px] text-muted">{group.evidence.length} 条</span>
+                            <ChevronDown className="h-4 w-4 text-muted transition-transform group-open:rotate-180" />
+                          </div>
+                        </div>
+                      </summary>
+                      <div className="border-t border-border bg-base/40 px-4 py-3 sm:pl-[4.25rem]">
+                        <div className="space-y-3 border-l border-border pl-3">
+                          {group.evidence.map((alert, index) => (
+                            <div key={`${alert.ts}-${alert.rule_id ?? alert.type}-${index}`} className="relative">
+                              <span className="absolute -left-[0.95rem] top-1.5 h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                <span className="font-mono text-[10px] text-muted">{formatAlertTime(alert.ts)}</span>
+                                <span className="rounded-input bg-elevated px-1.5 py-0.5 text-[9px] text-secondary">{alert.rule_name || sourceLabel(alert.source)}</span>
+                                {alert.severity && <span className="text-[9px] text-muted">{alert.severity}</span>}
+                              </div>
+                              <div className="mt-1 text-xs leading-5 text-secondary">{alert.message}</div>
+                              {(alert.conditions?.length || alert.signals?.length) ? (
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {alert.conditions?.map((condition, conditionIndex) => (
+                                    <span key={`condition-${conditionIndex}`} className="rounded-input bg-accent/8 px-1.5 py-0.5 font-mono text-[9px] text-accent">{conditionText(condition)}</span>
+                                  ))}
+                                  {alert.signals?.map(signal => (
+                                    <span key={signal} className="rounded-input bg-elevated px-1.5 py-0.5 font-mono text-[9px] text-muted">{signal}</span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
+                  )
+                })}
               </div>
             )}
           </section>

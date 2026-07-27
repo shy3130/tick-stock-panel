@@ -52,6 +52,9 @@ test('builds a personalized briefing from holdings, watchlist and public outputs
     ['600519.sh', 'holding'],
     ['000001.SZ', 'watchlist'],
   ])
+  assert.equal(briefing.eventGroups.length, 2)
+  assert.equal(briefing.eventGroups[0].scope, 'holding')
+  assert.equal(briefing.eventGroups[0].score, 80)
   assert.equal(briefing.staleTrackCount, 1)
   assert.equal(briefing.openResearchCount, 1)
   assert.ok(briefing.focus.some(item => item.id === 'stale-tracks'))

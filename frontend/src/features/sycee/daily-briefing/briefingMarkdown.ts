@@ -59,12 +59,18 @@ export function dailyBriefingMarkdown(briefing: DailyBriefing): string {
     }
   }
 
-  lines.push('', '## 相关提醒', '')
-  if (briefing.alerts.length === 0) {
+  lines.push('', '## 重点事件与证据', '')
+  if (briefing.eventGroups.length === 0) {
     lines.push('报告窗口内没有持仓或自选股提醒。')
   } else {
-    for (const alert of briefing.alerts) {
-      lines.push(`- ${new Date(alert.ts).toLocaleString('zh-CN')} · ${alert.scope === 'holding' ? '持仓' : '自选'} · ${inline(alert.name?.trim() || alert.symbol || '')}：${inline(alert.message)}`)
+    for (const group of briefing.eventGroups) {
+      const direction = group.direction === 'risk' ? '风险' : group.direction === 'opportunity' ? '机会' : '观察'
+      lines.push(`### ${inline(group.name)} ${group.symbol} · ${group.scope === 'holding' ? '持仓' : '自选'}${direction} · 优先级 ${group.score}`)
+      lines.push('', `权重：${group.reasons.map(reason => `${inline(reason.label)} +${reason.points}`).join('、')}`, '')
+      for (const alert of group.evidence) {
+        lines.push(`- ${new Date(alert.ts).toLocaleString('zh-CN')} · ${inline(alert.rule_name || alert.source)}：${inline(alert.message)}`)
+      }
+      lines.push('')
     }
   }
 

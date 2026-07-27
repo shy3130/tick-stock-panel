@@ -1,7 +1,12 @@
 import { buildPortfolioView } from '../portfolio/portfolioView.ts'
 import type { ResearchEntry } from '../research-ledger/api.ts'
 import type { StrategyObservation } from '../strategy-tracking/api.ts'
-import type { BriefingAlert, DailyBriefingSources } from './api.ts'
+import type { DailyBriefingSources } from './api.ts'
+import {
+  prioritizeEvents,
+  type PrioritizedEventGroup,
+  type ScopedBriefingAlert,
+} from './eventPriority.ts'
 
 export type BriefingMode = 'morning' | 'evening'
 export type BriefingTone = 'neutral' | 'positive' | 'warning' | 'danger'
@@ -27,9 +32,7 @@ export interface BriefingPosition {
   isLive: boolean
 }
 
-export interface BriefingRelevantAlert extends BriefingAlert {
-  scope: 'holding' | 'watchlist'
-}
+export type BriefingRelevantAlert = ScopedBriefingAlert
 
 export interface BriefingTrack {
   id: string
@@ -76,6 +79,7 @@ export interface DailyBriefing {
     liveCount: number
   }
   alerts: BriefingRelevantAlert[]
+  eventGroups: PrioritizedEventGroup[]
   alertCounts: { holding: number; watchlist: number }
   tracks: BriefingTrack[]
   staleTrackCount: number
@@ -116,14 +120,14 @@ function alertWindowStart(mode: BriefingMode, now: Date): number {
   return start.getTime()
 }
 
-function focusFromAlert(alert: BriefingRelevantAlert): BriefingFocusItem {
-  const target = alert.name?.trim() || alert.symbol || '关注标的'
-  const isDanger = alert.severity === 'critical' || alert.type === 'sell_signal'
+function focusFromEventGroup(group: PrioritizedEventGroup): BriefingFocusItem {
+  const scope = group.scope === 'holding' ? '持仓' : '自选'
+  const direction = group.direction === 'risk' ? '风险' : group.direction === 'opportunity' ? '机会' : '观察'
   return {
-    id: `alert-${alert.ts}-${alert.symbol ?? ''}`,
-    tone: isDanger ? 'danger' : alert.severity === 'warn' ? 'warning' : 'neutral',
-    title: `${target} · ${alert.scope === 'holding' ? '持仓提醒' : '自选提醒'}`,
-    detail: alert.message,
+    id: `event-${group.id}`,
+    tone: group.direction === 'risk' ? 'danger' : group.direction === 'opportunity' ? 'positive' : group.level === 'high' ? 'warning' : 'neutral',
+    title: `${group.name} · ${scope}${direction}`,
+    detail: `优先级 ${group.score} · ${group.primary.message}${group.evidence.length > 1 ? ` · ${group.evidence.length} 条证据` : ''}`,
     href: '/monitor',
   }
 }
@@ -194,7 +198,8 @@ export function buildDailyBriefing(
     updatedAt: entry.updated_at,
   }))
   const staleTrackCount = tracks.filter(track => track.pending).length
-  const focus: BriefingFocusItem[] = alerts.slice(0, 3).map(focusFromAlert)
+  const eventGroups = prioritizeEvents(alerts, now)
+  const focus: BriefingFocusItem[] = eventGroups.slice(0, 3).map(focusFromEventGroup)
 
   if (portfolioView.summary.unpriced_count > 0) {
     focus.push({
@@ -280,6 +285,7 @@ export function buildDailyBriefing(
       liveCount,
     },
     alerts,
+    eventGroups,
     alertCounts: {
       holding: alerts.filter(alert => alert.scope === 'holding').length,
       watchlist: alerts.filter(alert => alert.scope === 'watchlist').length,

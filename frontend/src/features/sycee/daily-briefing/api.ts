@@ -12,6 +12,8 @@ export interface BriefingWatchlistEntry {
 
 export interface BriefingAlert {
   ts: number
+  rule_id?: string
+  rule_name?: string
   source: string
   type: string
   symbol?: string
@@ -20,6 +22,10 @@ export interface BriefingAlert {
   price?: number | null
   change_pct?: number | null
   severity?: string
+  strategy_id?: string
+  conditions?: Array<{ field: string; op: string; value?: number | null }>
+  logic?: 'and' | 'or'
+  signals?: string[]
 }
 
 export interface BriefingRankItem {
