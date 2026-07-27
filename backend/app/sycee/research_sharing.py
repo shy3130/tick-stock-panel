@@ -207,12 +207,49 @@ def revoke_shares_for_entry(entry_id: str) -> bool:
         matched = [share for share in shares if share.get("entry_id") == entry_id]
         if not matched:
             return False
-        for share in matched:
-            _public_path(share["token"]).unlink(missing_ok=True)
-        _write_index_unlocked(
-            [share for share in shares if share.get("entry_id") != entry_id]
-        )
+        _revoke_unlocked(shares, matched)
         return True
+
+
+def _revoke_unlocked(shares: list[dict], matched: list[dict]) -> None:
+    public_snapshots: dict[Path, bytes | None] = {}
+    try:
+        for share in matched:
+            path = _public_path(share["token"])
+            public_snapshots[path] = path.read_bytes() if path.exists() else None
+    except OSError as exc:
+        raise RuntimeError("研究分享撤销准备失败") from exc
+
+    matched_ids = {share["id"] for share in matched}
+    remaining = [share for share in shares if share.get("id") not in matched_ids]
+    try:
+        for path in public_snapshots:
+            path.unlink(missing_ok=True)
+        _write_index_unlocked(remaining)
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        for path, content in public_snapshots.items():
+            try:
+                if content is None:
+                    path.unlink(missing_ok=True)
+                    continue
+                temp = path.with_name(f".{path.name}.{uuid4().hex}.rollback")
+                try:
+                    temp.write_bytes(content)
+                    os.replace(temp, path)
+                finally:
+                    temp.unlink(missing_ok=True)
+            except OSError:
+                rollback_errors.append(path.name)
+        try:
+            _write_index_unlocked(shares)
+        except Exception:
+            rollback_errors.append(_index_path().name)
+        if rollback_errors:
+            raise RuntimeError(
+                f"研究分享撤销失败且以下文件回滚失败: {', '.join(rollback_errors)}"
+            ) from exc
+        raise RuntimeError("研究分享撤销失败,分享状态已回滚") from exc
 
 
 def revoke_orphaned_shares(valid_entry_ids: set[str]) -> int:
@@ -223,11 +260,7 @@ def revoke_orphaned_shares(valid_entry_ids: set[str]) -> int:
         ]
         if not orphaned:
             return 0
-        for share in orphaned:
-            _public_path(share["token"]).unlink(missing_ok=True)
-        _write_index_unlocked(
-            [share for share in shares if share.get("entry_id") in valid_entry_ids]
-        )
+        _revoke_unlocked(shares, orphaned)
         return len(orphaned)
 
 

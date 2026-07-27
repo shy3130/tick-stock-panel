@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.services import user_context
 from app.services.user_context import UserIdentity
-from app.sycee import data_backup
+from app.sycee import data_backup, research_sharing
 from app.sycee.data_backup import router as data_backup_router
 from app.sycee.portfolio import router as portfolio_router
 from app.sycee.portfolio_sell_alert import router as sell_alert_router
@@ -19,7 +19,7 @@ from app.sycee.strategy_tracking import router as strategy_tracking_router
 from app.sycee.trade_reviews import router as trade_reviews_router
 
 
-def _client() -> TestClient:
+def _client(*, raise_server_exceptions: bool = True) -> TestClient:
     app = FastAPI()
 
     @app.middleware("http")
@@ -39,7 +39,7 @@ def _client() -> TestClient:
     app.include_router(strategy_tracking_router)
     app.include_router(trade_reviews_router)
     app.include_router(data_backup_router)
-    return TestClient(app)
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
 def _trade(symbol: str = "600519.SH") -> dict:
@@ -171,6 +171,43 @@ def test_restore_revokes_only_shares_orphaned_by_research_replacement(
     assert client.get(f"/api/public/sycee/research/{removed_share['token']}").status_code == 404
     current = client.get(f"/api/sycee/research/{kept['id']}/share").json()["share"]
     assert current["token"] == kept_share["token"]
+
+
+def test_restore_rolls_back_when_orphan_share_revocation_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = _client(raise_server_exceptions=False)
+    kept = client.post("/api/sycee/research", json=_research("保留记录")).json()["entry"]
+    kept_share = client.post(f"/api/sycee/research/{kept['id']}/share").json()["share"]
+    client.post("/api/sycee/portfolio/trades", json=_trade())
+    exported = client.get("/api/sycee/data-backup").json()
+
+    removed = client.post("/api/sycee/research", json=_research("恢复失败后保留")).json()["entry"]
+    removed_share = client.post(f"/api/sycee/research/{removed['id']}/share").json()["share"]
+    client.post("/api/sycee/portfolio/trades", json=_trade("000001.SZ"))
+    real_write_index = research_sharing._write_index_unlocked
+    writes = 0
+
+    def fail_first_index_write(shares):
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            raise OSError("simulated share index failure")
+        return real_write_index(shares)
+
+    monkeypatch.setattr(research_sharing, "_write_index_unlocked", fail_first_index_write)
+    response = client.post(
+        "/api/sycee/data-backup/restore",
+        json={"confirmation": "RESTORE_SYCEE_DATA", "backup": exported},
+    )
+
+    assert response.status_code == 500
+    assert "原数据已回滚" in response.json()["detail"]
+    assert client.get("/api/sycee/research").json()["total"] == 2
+    assert client.get("/api/sycee/portfolio").json()["summary"]["trade_count"] == 2
+    assert client.get(f"/api/public/sycee/research/{kept_share['token']}").status_code == 200
+    assert client.get(f"/api/public/sycee/research/{removed_share['token']}").status_code == 200
+    current = client.get(f"/api/sycee/research/{removed['id']}/share").json()["share"]
+    assert current["token"] == removed_share["token"]
 
 
 def test_invalid_backup_is_rejected_before_current_data_changes(monkeypatch, tmp_path):

@@ -350,10 +350,17 @@ def restore_backup(document: SyceeBackupDocument) -> str:
         backup_id, backup_dir = _create_safety_backup_unlocked()
         _write_restored_data_unlocked(normalized, backup_dir)
         research = normalized.get("research_ledger")
-        if research is not None:
-            revoke_orphaned_shares({entry["id"] for entry in research["entries"]})
-        elif "research_ledger" in normalized:
-            revoke_orphaned_shares(set())
+        try:
+            if research is not None:
+                revoke_orphaned_shares({entry["id"] for entry in research["entries"]})
+            elif "research_ledger" in normalized:
+                revoke_orphaned_shares(set())
+        except (OSError, RuntimeError) as exc:
+            rollback_errors = _rollback_unlocked(backup_dir)
+            detail = f"恢复失败,原数据已回滚; {exc}"
+            if rollback_errors:
+                detail = f"恢复失败且以下文件回滚失败: {', '.join(rollback_errors)}; {exc}"
+            raise BackupRestoreError(detail) from exc
     return backup_id
 
 
