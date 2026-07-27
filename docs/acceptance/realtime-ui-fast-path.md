@@ -62,3 +62,24 @@ The deployment occurred outside a regular CN/HK/US session. A continuous
 ten-minute regular-session observation is still required before changing this
 record to unconditional acceptance. Premarket transport observations are not
 treated as a substitute for that lower-layer semantic acceptance.
+
+## 2026-07-27 Hong Kong alias recovery
+
+- Frontend source commit: `6def4d9`.
+- Production release commit: `4a18b7883211803ee9bb0907a396987f7aa9c3e9`.
+- Production image: `tickflow-stock-panel-app:dow-monitor-4a18b7883211`.
+- Production entrypoint: `assets/index-BF5RdvZR.js`.
+- The regression test first failed because `01347.HK` and `0981.HK` were sent
+  unchanged, while the collector keys were `1347.HK` and `981.HK`. After the
+  implementation, the focused client suite passed 9 tests and the integrated
+  frontend suite passed 75 tests.
+- A production-origin WebSocket subscription received snapshots for
+  `1347.HK`, `981.HK`, `2714.HK`, and `3759.HK`, four subsequent updates, and
+  one 15-second heartbeat over an 18-second observation. It received no
+  fallback message.
+- The production health endpoint returned HTTP 200 and the running container
+  exposed revision `4a18b7883211803ee9bb0907a396987f7aa9c3e9`.
+- Browser asset verification loaded the new entrypoint without console
+  warnings or errors. Card-level browser acceptance remains pending because
+  the pre-existing browser session was invalidated by the production restart
+  and the protected monitor APIs returned HTTP 401.
