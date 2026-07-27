@@ -10,15 +10,15 @@ name: 桌面客户端发布
 #   - 版本号通过 input 传入, 与 tag 解耦, 更灵活
 #
 # 使用:
-#   gh workflow run release.yml -f version=v1.0.1 -f platforms=windows
+#   gh workflow run release.yml -f version=v1.1.0 -f platforms=windows
 #   或 GitHub 网页 Actions → 桌面客户端发布 → Run workflow
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 v1.0.1, 用作 Release tag 和标题)'
+        description: '版本号 (如 v1.1.0, 用作 Release tag 和标题)'
         required: true
-        default: 'v1.0.1'
+        default: 'v1.1.0'
       platforms:
         description: '要构建的平台 (逗号分隔: windows,macos,linux)'
         required: true
@@ -32,6 +32,9 @@ permissions:
   contents: write   # 创建 Release 需要写权限
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
   # 第一步: 过滤出本次要构建的平台
   prepare:
     runs-on: ubuntu-latest
@@ -61,7 +64,7 @@ jobs:
 
   # 第二步: 各平台并行构建
   build:
-    needs: prepare
+    needs: [prepare, quality]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false   # 单平台失败不影响其他平台

@@ -14,6 +14,7 @@ import {
   Plus,
   RadioTower,
   Search,
+  Share2,
   Target,
   Trash2,
   XCircle,
@@ -34,6 +35,7 @@ import {
   type ResearchSubjectType,
 } from './api'
 import { ResearchEditorDialog } from './ResearchEditorDialog'
+import { ResearchShareDialog } from './ResearchShareDialog'
 
 type StatusFilter = 'all' | 'open' | 'concluded' | 'archived'
 
@@ -120,6 +122,7 @@ export function ResearchLedgerPage() {
   const [subjectFilter, setSubjectFilter] = useState<ResearchSubjectType | 'all'>('all')
   const [search, setSearch] = useState('')
   const [editorEntry, setEditorEntry] = useState<ResearchEntry | null | undefined>(undefined)
+  const [shareEntry, setShareEntry] = useState<ResearchEntry | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ResearchEntry | null>(null)
 
   useLayoutEffect(() => {
@@ -376,6 +379,9 @@ export function ResearchLedgerPage() {
                       <button type="button" onClick={() => setEditorEntry(selected)} className="inline-flex min-h-11 items-center gap-2 rounded-btn border border-border px-3 text-sm text-secondary transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent xl:min-h-9">
                         <Edit3 className="h-4 w-4" />编辑
                       </button>
+                      <button type="button" onClick={() => setShareEntry(selected)} className="inline-flex min-h-11 items-center gap-2 rounded-btn border border-border px-3 text-sm text-secondary transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent xl:min-h-9">
+                        <Share2 className="h-4 w-4" />分享
+                      </button>
                       <button type="button" onClick={() => setDeleteTarget(selected)} className="inline-flex min-h-11 items-center gap-2 rounded-btn border border-danger/25 px-3 text-sm text-danger transition-colors hover:bg-danger/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger xl:min-h-9">
                         <Trash2 className="h-4 w-4" />删除
                       </button>
@@ -473,10 +479,18 @@ export function ResearchLedgerPage() {
         />
       )}
 
+      {shareEntry && (
+        <ResearchShareDialog
+          key={shareEntry.id}
+          entry={shareEntry}
+          onClose={() => setShareEntry(null)}
+        />
+      )}
+
       <ConfirmDialog
         open={deleteTarget !== null}
         title="删除研究记录？"
-        message={deleteTarget ? `“${deleteTarget.title}”将被永久删除，且无法恢复。` : ''}
+        message={deleteTarget ? `“${deleteTarget.title}”将被永久删除，公开分享链接也会立即失效。此操作无法恢复。` : ''}
         confirmText="删除记录"
         danger
         pending={remove.isPending}

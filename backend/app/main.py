@@ -41,7 +41,11 @@ from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.quote_service import QuoteService
-from app.sycee.router import router as sycee_router
+from app.sycee.router import (
+    SyceeStrategyAuthoringGuardMiddleware,
+    requires_admin as sycee_requires_admin,
+    router as sycee_router,
+)
 from app.tickflow import client as tf_client
 from app.tickflow.capabilities import CapabilityDenied
 from app.tickflow.policy import detect_capabilities
@@ -331,6 +335,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(SyceeStrategyAuthoringGuardMiddleware)
+
 # CORS: 允许局域网访问 (自托管场景, 放开所有来源)
 # 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
 # 本项目认证走 header (API Key), 不依赖 cookie, 故关闭 credentials 换取通配来源。
@@ -350,8 +356,12 @@ app.add_middleware(
 #   1. 未设密码 + 本机/内网 → 放行(让本机用户访问面板 + 调 /api/auth/setup 设密码)
 #   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
-# 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
-_AUTH_WHITELIST_PREFIX = ("/api/auth/", "/api/invite/")
+# 白名单: 账户入口、明确的公开分享和 /health 等探活。
+_AUTH_WHITELIST_PREFIX = (
+    "/api/auth/",
+    "/api/invite/",
+    "/api/public/sycee/research/",
+)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 _INVITE_PUBLIC_PREFIX = ("/api/invite/", "/assets/")
 _INVITE_PUBLIC_EXACT = ("/invite", "/favicon.svg", "/health", "/api/health")
@@ -388,6 +398,8 @@ _ADMIN_MUTATION_PREFIXES = (
 
 
 def _admin_required(path: str, method: str) -> bool:
+    if sycee_requires_admin(path, method):
+        return True
     if path.startswith(_ADMIN_PREFIXES):
         return True
     return method not in {"GET", "HEAD", "OPTIONS"} and path.startswith(_ADMIN_MUTATION_PREFIXES)

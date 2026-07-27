@@ -1,11 +1,19 @@
 {
   "backend": {
-    "backend/app/main.py": "Mounts the single Sycee API router."
+    "backend/app/main.py": "Mounts the single Sycee API router, delegates strategy-authoring guards, and whitelists only the revocable public research-share endpoint."
   },
   "frontend": {
     "frontend/src/components/StockPreviewDialog.tsx": "Renders the Sycee capture adapter once for every stock-preview entry point.",
-    "frontend/src/router.tsx": "Expands the Sycee route registry.",
+    "frontend/src/components/screener/StrategyPoolDialog.tsx": "Accepts one Sycee authorization flag to hide Python strategy import from non-admin users.",
+    "frontend/src/components/screener/StrategySettingsDialog.tsx": "Accepts one Sycee authorization flag to hide strategy deletion and AI modification from non-admin users.",
+    "frontend/src/pages/Screener.tsx": "Reads the existing auth status and passes the Sycee strategy-authoring authorization flag into thin upstream UI adapters.",
+    "frontend/src/pages/backtest/StrategyBacktest.tsx": "Renders the Sycee-owned trade CSV export action and passes the completed backtest result.",
+    "frontend/src/router.tsx": "Expands the authenticated and explicit public Sycee route registries without implementing feature behavior.",
     "frontend/src/lib/navRegistry.ts": "Expands the Sycee navigation registry.",
     "frontend/src/lib/api.ts": "Exports the generic request helper used by isolated Sycee API clients."
+  },
+  "infrastructure": {
+    ".github/workflows/docker.yml": "Runs the reusable read-only quality gate before building or publishing Docker images.",
+    ".github/workflows/release.yml": "Runs the reusable read-only quality gate before packaging desktop release artifacts."
   }
 }
