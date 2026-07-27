@@ -61,4 +61,27 @@ describe('Dow monitor route', () => {
     expect(within(screen.getByRole('banner')).getByText('趋势监控')).toBeInTheDocument()
     expect(routePaths()).toContain('dow-monitor')
   })
+
+  it('retains collection monitoring in desktop and mobile navigation', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/collection-monitor']}>
+          <MarketScopeProvider>
+            <Layout />
+          </MarketScopeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(screen.getByRole('link', { name: '采集监控' })).toHaveAttribute(
+      'href',
+      '/collection-monitor',
+    )
+    expect(within(screen.getByRole('banner')).getByText('采集监控')).toBeInTheDocument()
+    expect(routePaths()).toContain('collection-monitor')
+  })
 })
