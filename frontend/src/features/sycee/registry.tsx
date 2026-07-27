@@ -22,6 +22,14 @@ const StrategyTracking = lazy(() => import('./strategy-tracking/StrategyTracking
 const DailyBriefing = lazy(() => import('./daily-briefing/DailyBriefingPage').then(module => ({
   default: module.DailyBriefingPage,
 })))
+const ResearchShare = lazy(() => import('./research-ledger/ResearchSharePage').then(module => ({
+  default: module.ResearchSharePage,
+})))
+
+/** Public Sycee routes bypass the authenticated workbench and expose read-only content only. */
+export const SYCEE_PUBLIC_ROUTES: RouteObject[] = [
+  { path: '/share/research/:token', element: <ResearchShare /> },
+]
 
 /** Frozen frontend gateway: future Sycee pages register here, not in the upstream router. */
 export const SYCEE_ROUTES: RouteObject[] = [

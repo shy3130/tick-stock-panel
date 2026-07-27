@@ -144,6 +144,16 @@ data/users/<user-id>/sycee/research_ledger.json
 
 写入采用临时文件加原子替换,避免进程中断留下半写文件。
 
+研究记录可显式创建无需登录即可访问的只读分享快照。公开内容只包含研究标题、对象、判断、证据、状态、标签和经过裁剪的来源摘要,不会暴露账户身份、内部研究/捕获 ID、`source_key` 或原始 `snapshot` 字段。
+
+- 私有记录后续编辑不会静默改变已公开内容;用户需要主动“更新快照”。
+- 更新快照保留原链接,撤销分享后链接立即失效。
+- 每条研究记录最多保留一个有效分享,重复创建不会产生多个公开入口。
+- 删除研究记录,或撤销最后一条捕获而使自动记录被删除时,会先撤销对应分享。
+- 分享令牌属于可撤销访问凭据,不进入用户数据备份。
+
+公开快照保存在独立的 `data/sycee_public/research_shares/` 目录,文件名只使用分享令牌的 SHA-256 摘要;用户目录中的索引仍按登录用户隔离。
+
 ### 私有访问与多用户
 
 Sycee 提供公开品牌入口、邀请码注册和独立账户。用户内容通过请求级用户上下文解析到各自目录;行情数据、基础指标和公共计算仍由所有用户共享,避免复制上游数据层。
@@ -166,8 +176,8 @@ backend/tests/test_sycee_*.py
 
 | 接入点 | 作用 | 冲突风险 |
 | :--- | :--- | :--- |
-| `backend/app/main.py` | 挂载统一 `sycee_router` | 稳定网关,避免继续扩大 |
-| `frontend/src/router.tsx` | 展开 `SYCEE_ROUTES` | 稳定网关,新增路由不再修改 |
+| `backend/app/main.py` | 挂载统一 `sycee_router`,仅放行 `/api/public/sycee/research/` 匿名读取 | 稳定网关,避免继续扩大 |
+| `frontend/src/router.tsx` | 展开认证与公开 Sycee 路由注册表 | 稳定网关,新增路由不再修改 |
 | `frontend/src/lib/navRegistry.ts` | 展开 `SYCEE_NAV_ITEMS` | 稳定网关,新增导航不再修改 |
 | `frontend/src/lib/api.ts` | 导出公共 `request` 请求函数 | 低,不增加业务方法 |
 | `frontend/src/features/sycee/registry.tsx` | 注册全部 Sycee 路由和导航 | Sycee 自有,允许扩展 |
@@ -198,9 +208,3 @@ backend/tests/test_sycee_*.py
 4. 合并上游后同时运行上游测试与 `test_sycee_*` 测试。
 5. 上游升级继续保留 merge commit,具体流程见 [upstream-sync.md](./upstream-sync.md)。
 6. 新增 Sycee 功能完成前必须通过扩展边界测试。
-
-## 后续方向
-
-以下为规划方向,尚未作为已实现功能宣传:
-
-- 研究记录的只读协作分享

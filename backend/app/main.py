@@ -356,8 +356,12 @@ app.add_middleware(
 #   1. 未设密码 + 本机/内网 → 放行(让本机用户访问面板 + 调 /api/auth/setup 设密码)
 #   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
-# 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
-_AUTH_WHITELIST_PREFIX = ("/api/auth/", "/api/invite/")
+# 白名单: 账户入口、明确的公开分享和 /health 等探活。
+_AUTH_WHITELIST_PREFIX = (
+    "/api/auth/",
+    "/api/invite/",
+    "/api/public/sycee/research/",
+)
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 _INVITE_PUBLIC_PREFIX = ("/api/invite/", "/assets/")
 _INVITE_PUBLIC_EXACT = ("/invite", "/favicon.svg", "/health", "/api/health")

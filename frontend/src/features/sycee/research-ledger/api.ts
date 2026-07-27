@@ -47,6 +47,35 @@ export interface ResearchEntry extends ResearchEntryInput {
   captures: ResearchCapture[]
 }
 
+export interface ResearchShare {
+  id: string
+  entry_id: string
+  token: string
+  created_at: string
+  refreshed_at: string
+  entry_updated_at: string
+}
+
+export interface PublicResearchCapture {
+  captured_at: string
+  source_label: string
+  summary: string
+}
+
+export interface PublicResearchEntry extends ResearchEntryInput {
+  created_at: string
+  updated_at: string
+  captures: PublicResearchCapture[]
+}
+
+export interface PublicResearchShare {
+  version: 1
+  share_id: string
+  published_at: string
+  refreshed_at: string
+  entry: PublicResearchEntry
+}
+
 export const RESEARCH_LEDGER_QUERY_KEY = ['sycee', 'research-ledger'] as const
 
 export const researchLedgerApi = {
@@ -74,5 +103,28 @@ export const researchLedgerApi = {
     request<{ ok: boolean; entry_deleted: boolean; entry: ResearchEntry | null }>(
       `/api/sycee/research/${encodeURIComponent(entryId)}/captures/${encodeURIComponent(captureId)}`,
       { method: 'DELETE' },
+    ),
+  getShare: (entryId: string) =>
+    request<{ share: ResearchShare | null }>(
+      `/api/sycee/research/${encodeURIComponent(entryId)}/share`,
+    ),
+  createShare: (entryId: string) =>
+    request<{ share: ResearchShare }>(
+      `/api/sycee/research/${encodeURIComponent(entryId)}/share`,
+      { method: 'POST' },
+    ),
+  refreshShare: (entryId: string) =>
+    request<{ share: ResearchShare }>(
+      `/api/sycee/research/${encodeURIComponent(entryId)}/share`,
+      { method: 'PUT' },
+    ),
+  revokeShare: (entryId: string) =>
+    request<{ ok: true }>(
+      `/api/sycee/research/${encodeURIComponent(entryId)}/share`,
+      { method: 'DELETE' },
+    ),
+  publicShare: (token: string) =>
+    request<PublicResearchShare>(
+      `/api/public/sycee/research/${encodeURIComponent(token)}`,
     ),
 }

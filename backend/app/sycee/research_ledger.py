@@ -379,6 +379,9 @@ def patch_research_entry(entry_id: str, request: ResearchEntryUpdate):
 @router.delete("/{entry_id}")
 def remove_research_entry(entry_id: str):
     _validate_entry_id(entry_id)
+    from app.sycee.research_sharing import revoke_shares_for_entry
+
+    revoke_shares_for_entry(entry_id)
     if not delete_entry(entry_id):
         raise HTTPException(status_code=404, detail="研究记录不存在")
     return {"ok": True}
@@ -394,4 +397,8 @@ def remove_research_capture(entry_id: str, capture_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="捕获记录不存在")
     entry, entry_deleted = result
+    if entry_deleted:
+        from app.sycee.research_sharing import revoke_shares_for_entry
+
+        revoke_shares_for_entry(entry_id)
     return {"ok": True, "entry_deleted": entry_deleted, "entry": entry}

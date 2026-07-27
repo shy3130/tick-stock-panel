@@ -21,6 +21,7 @@ def test_backend_uses_one_stable_sycee_gateway():
         "requires_admin as sycee_requires_admin,",
         "router as sycee_router,",
         "app.add_middleware(SyceeStrategyAuthoringGuardMiddleware)",
+        '"/api/public/sycee/research/",',
         "if sycee_requires_admin(path, method):",
         "app.include_router(sycee_router)",
     ]
@@ -42,6 +43,10 @@ def test_backend_uses_one_stable_sycee_gateway():
         "backend/app/tickflow/",
     )
     assert not any(path.startswith(protected) for path in direct_imports)
+
+    whitelist = main.split("_AUTH_WHITELIST_PREFIX =", 1)[1].split(")", 1)[0]
+    assert '"/api/public/sycee/research/"' in whitelist
+    assert '"/api/public/"' not in whitelist
 
 
 def test_frontend_uses_only_frozen_sycee_gateways():
