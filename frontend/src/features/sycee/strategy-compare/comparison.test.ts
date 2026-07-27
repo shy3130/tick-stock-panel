@@ -102,7 +102,7 @@ test('normalizes equity and maps public backtest statistics', () => {
 
 test('exports an Excel-friendly CSV and neutralizes formula cells', () => {
   const csv = buildComparisonCsv([{
-    strategyId: '=unsafe',
+    strategyId: ' \t=unsafe',
     strategyName: '策略,一',
     totalReturn: 0.2,
     annualReturn: 0.35,
@@ -113,7 +113,7 @@ test('exports an Excel-friendly CSV and neutralizes formula cells', () => {
     elapsedMs: 321,
   }], settings)
   assert.ok(csv.startsWith('\uFEFF策略ID'))
-  assert.match(csv, /'=unsafe/)
+  assert.ok(csv.includes("' \t=unsafe"))
   assert.match(csv, /"策略,一"/)
   assert.match(csv, /000001\.SZ/)
 })

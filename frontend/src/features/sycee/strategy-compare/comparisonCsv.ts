@@ -7,7 +7,7 @@ const FORMULA_PREFIX = /^[=+\-@\t\r]/
 function csvCell(value: CsvValue): string {
   if (value == null) return ''
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : ''
-  const safe = FORMULA_PREFIX.test(value) ? `'${value}` : value
+  const safe = FORMULA_PREFIX.test(value.trimStart()) ? `'${value}` : value
   return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe
 }
 
