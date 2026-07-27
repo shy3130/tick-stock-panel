@@ -17,8 +17,10 @@ def test_backend_uses_one_stable_sycee_gateway():
 
     assert sycee_lines == [
         "from app.sycee.router import (",
+        "SyceeStrategyAuthoringGuardMiddleware,",
         "requires_admin as sycee_requires_admin,",
         "router as sycee_router,",
+        "app.add_middleware(SyceeStrategyAuthoringGuardMiddleware)",
         "if sycee_requires_admin(path, method):",
         "app.include_router(sycee_router)",
     ]

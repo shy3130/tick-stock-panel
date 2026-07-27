@@ -1,6 +1,6 @@
 {
   "backend": {
-    "backend/app/main.py": "Mounts the single Sycee API router and delegates strategy-authoring authorization to the Sycee policy."
+    "backend/app/main.py": "Mounts the single Sycee API router and delegates strategy-authoring authorization and resource guards to Sycee policies."
   },
   "frontend": {
     "frontend/src/components/StockPreviewDialog.tsx": "Renders the Sycee capture adapter once for every stock-preview entry point.",

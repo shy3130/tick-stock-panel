@@ -42,6 +42,7 @@ from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.quote_service import QuoteService
 from app.sycee.router import (
+    SyceeStrategyAuthoringGuardMiddleware,
     requires_admin as sycee_requires_admin,
     router as sycee_router,
 )
@@ -333,6 +334,8 @@ app = FastAPI(
     description="A 股选股 + 回测面板 — TickFlow 适配",
     lifespan=lifespan,
 )
+
+app.add_middleware(SyceeStrategyAuthoringGuardMiddleware)
 
 # CORS: 允许局域网访问 (自托管场景, 放开所有来源)
 # 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
