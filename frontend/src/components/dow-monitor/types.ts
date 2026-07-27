@@ -337,6 +337,31 @@ export interface DowMonitorNotification {
   read_at: string | null
 }
 
+export interface DowMinuteDecision {
+  symbol: string
+  market: DowMonitorSymbolMarket
+  decision_minute: string
+  direction: 'BULLISH' | 'BEARISH' | 'RANGE'
+  direction_label: '偏涨' | '偏跌' | '震荡'
+  action: 'WATCH_BUY' | 'HOLD' | 'REDUCE_SELL' | 'OBSERVE'
+  action_label: '买入观察' | '持有' | '减仓/卖出' | '继续观察'
+  confidence: number
+  dominant_timeframe: DowTimeframe | null
+  confirmation_timeframes: DowTimeframe[]
+  supporting_reasons: string[]
+  contrary_risks: string[]
+  invalidation_conditions: string[]
+  data_status:
+    | 'COMPLETE'
+    | 'WAITING_NEW_MINUTE'
+    | 'DELAYED'
+    | 'CAPITAL_UNCONFIRMED'
+    | 'MARKET_CLOSED'
+    | 'INSUFFICIENT_STRUCTURE'
+  status_label: string
+  source_timestamp: string | null
+}
+
 export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {
   name: string | null
   last_price: number | null
@@ -344,6 +369,7 @@ export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {
   quote_timestamp: number | string | null
   next_day_direction?: DowMonitorNextDayDirection | null
   intraday_capital?: DowMonitorIntradayCapital | null
+  minute_decision?: DowMinuteDecision | null
   states: Partial<Record<DowTimeframe, DowMonitorTimeframeState>>
   latest_notification: DowMonitorNotification | null
   last_success_at: string | null

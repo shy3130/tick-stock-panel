@@ -884,6 +884,68 @@ describe('Dow monitor page', () => {
     expect(stateBox).toHaveTextContent('下跌承接 / 资金修复 / 卖压衰减 / 弱转强观察')
   })
 
+  it('keeps the server minute decision stable while realtime quotes update', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+    const withDecision = structuredClone(overview)
+    withDecision.symbols[0].minute_decision = {
+      symbol: '01347.HK',
+      market: 'hk',
+      decision_minute: '2026-07-27T10:26:00+08:00',
+      direction: 'BULLISH',
+      direction_label: '偏涨',
+      action: 'WATCH_BUY',
+      action_label: '买入观察',
+      confidence: 72,
+      dominant_timeframe: '15m',
+      confirmation_timeframes: ['30m'],
+      supporting_reasons: ['15分钟趋势向上'],
+      contrary_risks: ['5分钟量能仍需确认'],
+      invalidation_conditions: ['跌破 31.20 后取消买入观察'],
+      data_status: 'COMPLETE',
+      status_label: '分钟决策已完成',
+      source_timestamp: '2026-07-27T10:25:58+08:00',
+    }
+    hooks.overview = { data: withDecision, isError: false, isLoading: false }
+
+    const { rerender } = render(<DowMonitor />)
+    const before = within(screen.getByTestId('card-01347.HK'))
+      .getByTestId('minute-decision-panel')
+    expect(before).toHaveTextContent('偏涨')
+    expect(before).toHaveTextContent('买入观察')
+    expect(before).toHaveTextContent('72%')
+
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([
+        [
+          '01347.HK',
+          {
+            symbol: '01347.HK',
+            streamId: 'stream-decision-stability',
+            sequence: 9,
+            eventAt: '2026-07-27T02:26:45Z',
+            publishedAt: '2026-07-27T02:26:46Z',
+            quote: {
+              lastDone: 138.8,
+              prevClose: 133.2,
+              timestamp: '2026-07-27T02:26:45Z',
+            },
+            quoteDelayed: false,
+            depthDelayed: false,
+            candlestickDelayed: false,
+          },
+        ],
+      ]),
+    }
+    rerender(<DowMonitor />)
+
+    const after = within(screen.getByTestId('card-01347.HK'))
+      .getByTestId('minute-decision-panel')
+    expect(after).toHaveTextContent('偏涨')
+    expect(after).toHaveTextContent('买入观察')
+    expect(after).toHaveTextContent('72%')
+  })
+
   it('keeps the market query parameter in sync when switching tabs', async () => {
     const user = userEvent.setup()
     window.history.replaceState(null, '', '/dow-monitor?market=hk')

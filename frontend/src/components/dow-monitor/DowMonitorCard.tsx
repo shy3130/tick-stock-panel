@@ -14,6 +14,7 @@ import type {
 
 import { DowMiniChart, getLatestValidDowSignalSide } from './DowMiniChart'
 import { formatServerTimestamp } from './formatServerTimestamp'
+import { MinuteDecisionPanel } from './MinuteDecisionPanel'
 import type {
   DowMonitorNotification,
   DowMonitorOverviewSymbol,
@@ -1049,33 +1050,39 @@ export function DowMonitorCard({
       </button>
 
       <div className="px-2.5 py-1.5">
-        <div
-          data-testid={`realtime-state-${item.symbol}`}
-          className={cn(
-            'min-w-0 rounded border px-2 py-1.5 text-[10px]',
-            currentStateClass(currentState.tone),
-          )}
-        >
-          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-            <span className="shrink-0 font-medium">方向：{currentState.directionLabel}</span>
-            <span className="shrink-0 font-medium">{currentState.probabilityLabel}</span>
-            <span className="shrink-0 font-mono tabular-nums">{currentState.probability}%</span>
+        <MinuteDecisionPanel decision={displayedItem.minute_decision ?? null} />
+        <details className="mt-1.5 min-w-0">
+          <summary className="cursor-pointer text-[9px] text-muted">
+            分钟行情原始信息（辅助）
+          </summary>
+          <div
+            data-testid={`realtime-state-${item.symbol}`}
+            className={cn(
+              'mt-1 min-w-0 rounded border px-2 py-1.5 text-[10px]',
+              currentStateClass(currentState.tone),
+            )}
+          >
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+              <span className="shrink-0 font-medium">方向：{currentState.directionLabel}</span>
+              <span className="shrink-0 font-medium">{currentState.probabilityLabel}</span>
+              <span className="shrink-0 font-mono tabular-nums">{currentState.probability}%</span>
+            </div>
+            <div className="mt-1 text-[9px] opacity-90">
+              主因：{currentState.conciseReason}
+            </div>
+            <div className="mt-1 space-y-0.5 text-[9px] opacity-90">
+              {currentState.forecastItems.map(item => (
+                <div key={item.title}>
+                  <span className="font-medium">{item.title}：</span>
+                  <span>{item.text}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-0.5 text-[9px] opacity-80">
+              证据：{currentState.evidenceText}
+            </div>
           </div>
-          <div className="mt-1 text-[9px] opacity-90">
-            主因：{currentState.conciseReason}
-          </div>
-          <div className="mt-1 space-y-0.5 text-[9px] opacity-90">
-            {currentState.forecastItems.map(item => (
-              <div key={item.title}>
-                <span className="font-medium">{item.title}：</span>
-                <span>{item.text}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-0.5 text-[9px] opacity-80">
-            证据：{currentState.evidenceText}
-          </div>
-        </div>
+        </details>
       </div>
 
       <section
