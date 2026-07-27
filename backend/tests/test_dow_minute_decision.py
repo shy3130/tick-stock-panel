@@ -171,11 +171,11 @@ def test_missing_capital_keeps_direction_but_lowers_confidence() -> None:
     )
 
     assert missing.direction == "BULLISH"
-    assert missing.data_status == "CAPITAL_UNCONFIRMED"
-    assert missing.status_label == "资金未确认"
+    assert missing.data_status == "CAPITAL_UNAVAILABLE"
+    assert missing.status_label == "暂无当日资金数据"
     assert missing.confidence == 70
     assert missing.confidence < complete.confidence
-    assert "缺少当日资金确认" in missing.contrary_risks
+    assert "暂无当日资金数据" in missing.contrary_risks
 
 
 def test_zero_capital_is_neutral_data_not_missing_data() -> None:
@@ -192,7 +192,40 @@ def test_zero_capital_is_neutral_data_not_missing_data() -> None:
 
     assert result.data_status == "COMPLETE"
     assert result.status_label == "数据完整"
-    assert "缺少当日资金确认" not in result.contrary_risks
+    assert "暂无当日资金数据" not in result.contrary_risks
+
+
+@pytest.mark.parametrize(
+    ("capital_state", "data_status", "status_label", "risk"),
+    [
+        (
+            "DELAYED",
+            "CAPITAL_DELAYED",
+            "资金数据延迟",
+            "资金数据延迟, 暂不作为确认依据",
+        ),
+        (
+            "INSUFFICIENT",
+            "CAPITAL_INSUFFICIENT",
+            "资金数据点不足",
+            "资金数据点不足, 尚不能确认15/30分钟资金",
+        ),
+    ],
+)
+def test_capital_quality_is_explained_without_reporting_missing(
+    capital_state,
+    data_status,
+    status_label,
+    risk,
+) -> None:
+    result = build_minute_decision(
+        bullish_context(capital_state=capital_state)
+    )
+
+    assert result.data_status == data_status
+    assert result.status_label == status_label
+    assert risk in result.contrary_risks
+    assert "暂无当日资金数据" not in result.contrary_risks
 
 
 def test_forming_minute_trigger_cannot_emit_watch_buy() -> None:

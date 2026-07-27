@@ -59,6 +59,9 @@ class DowMinuteDecision(BaseModel):
         "WAITING_NEW_MINUTE",
         "DELAYED",
         "CAPITAL_UNCONFIRMED",
+        "CAPITAL_UNAVAILABLE",
+        "CAPITAL_DELAYED",
+        "CAPITAL_INSUFFICIENT",
         "MARKET_CLOSED",
         "INSUFFICIENT_STRUCTURE",
     ]

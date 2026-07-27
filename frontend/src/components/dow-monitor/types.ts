@@ -353,11 +353,14 @@ export interface DowMinuteDecision {
   invalidation_conditions: string[]
   data_status:
     | 'COMPLETE'
-    | 'WAITING_NEW_MINUTE'
-    | 'DELAYED'
-    | 'CAPITAL_UNCONFIRMED'
-    | 'MARKET_CLOSED'
-    | 'INSUFFICIENT_STRUCTURE'
+      | 'WAITING_NEW_MINUTE'
+      | 'DELAYED'
+      | 'CAPITAL_UNCONFIRMED'
+      | 'CAPITAL_UNAVAILABLE'
+      | 'CAPITAL_DELAYED'
+      | 'CAPITAL_INSUFFICIENT'
+      | 'MARKET_CLOSED'
+      | 'INSUFFICIENT_STRUCTURE'
   status_label: string
   source_timestamp: string | null
 }
@@ -387,8 +390,9 @@ export interface DowMonitorIntradayCapital {
   flow_30m?: number | null
   flow_today?: number | null
   last_flow_time?: string | null
-  flow_points?: number | null
-  windows?: DowMonitorIntradayCapitalWindow[]
+    flow_points?: number | null
+    quality?: 'COMPLETE' | 'UNAVAILABLE' | 'DELAYED' | 'INSUFFICIENT' | string
+    windows?: DowMonitorIntradayCapitalWindow[]
   source?: 'trading_day' | string
 }
 

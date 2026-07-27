@@ -53,6 +53,7 @@ except Exception:  # pragma: no cover - exercised by fallback behavior.
 logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ("5m", "15m", "30m", "60m", "day")
+CAPITAL_DELAY_THRESHOLD = timedelta(minutes=15)
 NotificationIndex = dict[tuple[str, str], list[DowNotification]]
 
 
@@ -431,7 +432,7 @@ class DowMonitorService:
                     self._refresh_minute_decision,
                     item,
                     batch.minute_rows,
-                    intraday_capital.get(item.symbol),
+                    intraday_capital.get(_monitor_symbol_identity(item.symbol)),
                     now,
                 )
                 any_success = True
@@ -1263,6 +1264,7 @@ class DowMonitorService:
                     "flow_15m": capital.get("flow_15m"),
                     "flow_30m": capital.get("flow_30m"),
                 },
+                capital_state=capital.get("quality", "UNAVAILABLE"),
             )
         )
         self.store.save_minute_decision(snapshot)
@@ -1334,7 +1336,10 @@ class DowMonitorService:
         symbols = []
         source_timestamps: list[datetime] = []
         for item in items:
-            quote = self._latest_quotes_by_symbol.get(item.symbol, {})
+            quote = self._latest_quotes_by_symbol.get(
+                _monitor_symbol_identity(item.symbol),
+                self._latest_quotes_by_symbol.get(item.symbol, {}),
+            )
             next_day_direction = self._next_day_direction_with_realtime(
                 item.symbol,
                 quote,
@@ -1354,7 +1359,9 @@ class DowMonitorService:
                     "change_pct": quote.get("change_pct"),
                     "quote_timestamp": quote.get("timestamp"),
                     "next_day_direction": next_day_direction,
-                    "intraday_capital": intraday_capital_by_symbol.get(item.symbol),
+                    "intraday_capital": intraday_capital_by_symbol.get(
+                        _monitor_symbol_identity(item.symbol)
+                    ),
                     "minute_decision": self._present_minute_decision(
                         item,
                         self.store.get_minute_decision(item.symbol),
@@ -1375,13 +1382,16 @@ class DowMonitorService:
         }
 
     def _intraday_capital_by_symbol(self, symbols: list[str]) -> dict[str, dict]:
-        if not symbols:
+        canonical_symbols = sorted(
+            {_monitor_symbol_identity(symbol) for symbol in symbols if symbol.strip()}
+        )
+        if not canonical_symbols:
             return {}
         output: dict[str, dict] = {}
         if _fetch_realtime_signal_rows is not None:
             try:
                 rows = _fetch_realtime_signal_rows(
-                    symbols,
+                    canonical_symbols,
                     now=self._now(),
                     max_quote_age_minutes=24 * 60,
                 )
@@ -1391,7 +1401,7 @@ class DowMonitorService:
             for symbol, row in rows.items():
                 if not isinstance(row, dict):
                     continue
-                output[str(symbol).upper()] = {
+                output[_monitor_symbol_identity(symbol)] = {
                     "capital_minute": row.get("capital_minute"),
                     "total_net": _finite_float(row.get("total_net")),
                     "large_net": _finite_float(row.get("large_net")),
@@ -1405,24 +1415,61 @@ class DowMonitorService:
                     "flow_points": int(row.get("flow_points") or 0),
                     "source": "trading_day",
                 }
-        windows_by_symbol = self._intraday_capital_windows_by_symbol(symbols)
+        windows_by_symbol = self._intraday_capital_windows_by_symbol(canonical_symbols)
         for symbol, windows in windows_by_symbol.items():
             if not windows:
                 continue
-            current = output.setdefault(symbol, {"source": "trading_day"})
+            identity = _monitor_symbol_identity(symbol)
+            current = output.setdefault(identity, {"source": "trading_day"})
             current["windows"] = windows
             latest = windows[0]
             current.setdefault("capital_minute", latest.get("end_time"))
             current.setdefault("total_net", latest.get("end_total_net"))
             current.setdefault("large_net", latest.get("end_large_net"))
+        for capital in output.values():
+            capital["quality"] = self._capital_quality(capital)
         return output
+
+    def _capital_quality(self, capital: dict) -> str:
+        values = (
+            capital.get("total_net"),
+            capital.get("large_net"),
+            capital.get("flow_15m"),
+            capital.get("flow_30m"),
+            capital.get("flow_today"),
+        )
+        if all(value is None for value in values):
+            return "UNAVAILABLE"
+
+        capital_minute = _parse_clickhouse_time(capital.get("capital_minute"))
+        if capital_minute is not None:
+            zone = ZoneInfo("Asia/Shanghai")
+            local_minute = (
+                capital_minute.astimezone(zone)
+                if capital_minute.tzinfo is not None
+                else capital_minute.replace(tzinfo=zone)
+            )
+            age = self._now().astimezone(zone) - local_minute
+            if age > CAPITAL_DELAY_THRESHOLD:
+                return "DELAYED"
+
+        flow_points = int(capital.get("flow_points") or 0)
+        if (
+            flow_points < 2
+            or capital.get("flow_15m") is None
+            or capital.get("flow_30m") is None
+        ):
+            return "INSUFFICIENT"
+        return "COMPLETE"
 
     def _intraday_capital_windows_by_symbol(
         self,
         symbols: list[str],
         windows_minutes: tuple[int, ...] = (30, 45, 60),
     ) -> dict[str, list[dict]]:
-        symbol_list = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+        symbol_list = sorted(
+            {_monitor_symbol_identity(symbol) for symbol in symbols if symbol.strip()}
+        )
         if not symbol_list:
             return {}
         database = _clickhouse_ident(os.getenv("CLICKHOUSE_DATABASE", "longbridge"))
@@ -1543,7 +1590,7 @@ class DowMonitorService:
 
     def _retain_latest_quotes(self, quotes: list[dict]) -> None:
         for row in quotes:
-            symbol = str(row.get("symbol") or "").strip().upper()
+            symbol = _monitor_symbol_identity(row.get("symbol") or "")
             if not symbol:
                 continue
             previous = self._latest_quotes_by_symbol.get(symbol)

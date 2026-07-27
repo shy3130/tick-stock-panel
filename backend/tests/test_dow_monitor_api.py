@@ -485,10 +485,10 @@ def test_overview_api_exposes_trading_day_intraday_capital(tmp_path, monkeypatch
     service.store.upsert_symbol("01347.HK", "hk", True)
 
     def fake_fetch(symbols, *, now, max_quote_age_minutes):
-        assert symbols == ["01347.HK"]
+        assert symbols == ["1347.HK"]
         assert max_quote_age_minutes >= 60
         return {
-            "01347.HK": {
+            "1347.HK": {
                 "capital_minute": "2026-07-23 15:30:00",
                 "total_net": 186.5,
                 "large_net": 92.25,
@@ -511,7 +511,7 @@ def test_overview_api_exposes_trading_day_intraday_capital(tmp_path, monkeypatch
         service,
         "_intraday_capital_windows_by_symbol",
         lambda symbols: {
-            "01347.HK": [
+            "1347.HK": [
                 {
                     "label": "近30分钟",
                     "minutes": 30,
@@ -547,6 +547,7 @@ def test_overview_api_exposes_trading_day_intraday_capital(tmp_path, monkeypatch
         "last_flow_time": "2026-07-23 15:29:00",
         "flow_points": 88,
         "source": "trading_day",
+        "quality": "DELAYED",
         "windows": [
             {
                 "label": "近30分钟",
@@ -565,6 +566,66 @@ def test_overview_api_exposes_trading_day_intraday_capital(tmp_path, monkeypatch
             }
         ],
     }
+
+
+def test_overview_matches_leading_zero_display_alias_to_canonical_capital(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service.store.upsert_symbol("01347.HK", "hk", True)
+
+    monkeypatch.setattr(
+        service,
+        "_intraday_capital_by_symbol",
+        lambda symbols: {
+            "1347.HK": {
+                "capital_minute": "2026-07-23 15:30:00",
+                "total_net": 0,
+                "large_net": 0,
+                "flow_15m": 0,
+                "flow_30m": 0,
+                "flow_points": 17,
+                "source": "trading_day",
+            }
+        },
+    )
+
+    response = _client(service).get("/api/dow-monitor/overview?market=hk")
+
+    assert response.status_code == 200
+    item = response.json()["symbols"][0]
+    assert item["symbol"] == "01347.HK"
+    assert item["intraday_capital"]["total_net"] == 0
+    assert item["intraday_capital"]["large_net"] == 0
+
+
+def test_overview_matches_leading_zero_display_alias_to_canonical_quote(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service = _service(tmp_path)
+    service.store.upsert_symbol("01347.HK", "hk", True)
+    service._retain_latest_quotes(
+        [
+            {
+                "symbol": "1347.HK",
+                "name": "HUA HONG SEMI",
+                "last_price": 148.6,
+                "change_pct": -0.8,
+                "timestamp": int(NOW.timestamp() * 1_000),
+            }
+        ]
+    )
+    monkeypatch.setattr(service, "_intraday_capital_by_symbol", lambda symbols: {})
+
+    response = _client(service).get("/api/dow-monitor/overview?market=hk")
+
+    assert response.status_code == 200
+    item = response.json()["symbols"][0]
+    assert item["symbol"] == "01347.HK"
+    assert item["name"] == "HUA HONG SEMI"
+    assert item["last_price"] == 148.6
 
 
 def test_overview_api_exposes_next_day_realtime_context(tmp_path) -> None:

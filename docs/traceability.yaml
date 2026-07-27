@@ -136,3 +136,14 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-head-shoulders.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-head-shoulders.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-SYMBOL-IDENTITY-001
+    specification: SPEC-DOW-MONITOR-SYMBOL-IDENTITY-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/services/dow_monitor_store.py
+      - backend/app/services/dow_minute_decision.py
+      - backend/app/services/dow_monitor_models.py
+    tests: {path: tests/spec_contracts/test_dow_monitor_symbol_identity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-symbol-identity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-symbol-identity.md, type: independent-review}

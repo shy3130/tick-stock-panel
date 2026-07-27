@@ -32,6 +32,11 @@ specifications:
       - REQ-COLLECTION-MONITOR-PROXY-001
       - REQ-COLLECTION-MONITOR-PAGE-001
       - REQ-COLLECTION-MONITOR-PREACCEPTANCE-001
+  - id: SPEC-DOW-MONITOR-SYMBOL-IDENTITY-001
+    path: docs/specs/dow-monitor-symbol-identity.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-SYMBOL-IDENTITY-001
 conflicts: []
 exceptions:
   - id: EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001

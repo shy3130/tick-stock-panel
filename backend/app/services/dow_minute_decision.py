@@ -9,6 +9,7 @@ from app.services.dow_monitor_models import DowMinuteDecision
 
 Timeframe = Literal["5m", "15m", "30m", "60m", "day"]
 Trend = Literal["UP", "DOWN", "RANGE", "UNKNOWN"]
+CapitalState = Literal["COMPLETE", "UNAVAILABLE", "DELAYED", "INSUFFICIENT"]
 
 TIMEFRAME_WEIGHTS: dict[Timeframe, int] = {
     "5m": 1,
@@ -41,6 +42,7 @@ class MinuteDecisionContext(BaseModel):
     minute_volume: float | None
     recent_average_volume: float | None
     capital: dict[str, float | None]
+    capital_state: CapitalState | None = None
 
     @field_validator("decision_minute")
     @classmethod
@@ -90,7 +92,15 @@ def _capital_missing(context: MinuteDecisionContext) -> bool:
     return all(context.capital.get(field) is None for field in CAPITAL_FIELDS)
 
 
+def _capital_state(context: MinuteDecisionContext) -> CapitalState:
+    if context.capital_state is not None:
+        return context.capital_state
+    return "UNAVAILABLE" if _capital_missing(context) else "COMPLETE"
+
+
 def _capital_internal_conflict(context: MinuteDecisionContext) -> bool:
+    if _capital_state(context) in {"UNAVAILABLE", "DELAYED"}:
+        return False
     votes = {
         vote
         for field in CAPITAL_FIELDS
@@ -108,6 +118,8 @@ def _timeframe_scores(context: MinuteDecisionContext) -> tuple[int, dict[str, in
 
 
 def _capital_score(context: MinuteDecisionContext) -> int:
+    if _capital_state(context) in {"UNAVAILABLE", "DELAYED"}:
+        return 0
     return sum(
         _number_vote(context.capital.get(field)) * weight
         for field, weight in CAPITAL_WEIGHTS.items()
@@ -220,8 +232,13 @@ def _contrary_risks(
         risks.append("价格结构偏弱但资金方向偏强")
     if not context.completed_minute:
         risks.append("最新一分钟K线尚未完成")
-    if _capital_missing(context):
-        risks.append("缺少当日资金确认")
+    capital_state = _capital_state(context)
+    if capital_state == "UNAVAILABLE":
+        risks.append("暂无当日资金数据")
+    elif capital_state == "DELAYED":
+        risks.append("资金数据延迟, 暂不作为确认依据")
+    elif capital_state == "INSUFFICIENT":
+        risks.append("资金数据点不足, 尚不能确认15/30分钟资金")
 
     if direction == "BULLISH" and any(
         context.trends.get(item) == "DOWN" for item in ("60m", "day")
@@ -293,9 +310,13 @@ def build_minute_decision(context: MinuteDecisionContext) -> DowMinuteDecision:
         conflict_penalty += 6
     if not context.completed_minute:
         conflict_penalty += 5
-    missing_capital = _capital_missing(context)
-    if missing_capital:
+    capital_state = _capital_state(context)
+    if capital_state == "UNAVAILABLE":
         conflict_penalty += 12
+    elif capital_state == "DELAYED":
+        conflict_penalty += 10
+    elif capital_state == "INSUFFICIENT":
+        conflict_penalty += 6
     confidence = max(35, min(92, 50 + abs(total_score) * 4 - conflict_penalty))
 
     confirmed = _confirmed(context, direction, capital_score)
@@ -338,7 +359,17 @@ def build_minute_decision(context: MinuteDecisionContext) -> DowMinuteDecision:
             capital_score,
         ),
         invalidation_conditions=_invalidation_conditions(context, direction),
-        data_status="CAPITAL_UNCONFIRMED" if missing_capital else "COMPLETE",
-        status_label="资金未确认" if missing_capital else "数据完整",
+        data_status={
+            "COMPLETE": "COMPLETE",
+            "UNAVAILABLE": "CAPITAL_UNAVAILABLE",
+            "DELAYED": "CAPITAL_DELAYED",
+            "INSUFFICIENT": "CAPITAL_INSUFFICIENT",
+        }[capital_state],
+        status_label={
+            "COMPLETE": "数据完整",
+            "UNAVAILABLE": "暂无当日资金数据",
+            "DELAYED": "资金数据延迟",
+            "INSUFFICIENT": "资金数据点不足",
+        }[capital_state],
         source_timestamp=context.source_timestamp,
     )
