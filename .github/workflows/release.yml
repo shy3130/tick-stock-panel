@@ -32,6 +32,9 @@ permissions:
   contents: write   # 创建 Release 需要写权限
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
   # 第一步: 过滤出本次要构建的平台
   prepare:
     runs-on: ubuntu-latest
@@ -61,7 +64,7 @@ jobs:
 
   # 第二步: 各平台并行构建
   build:
-    needs: prepare
+    needs: [prepare, quality]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false   # 单平台失败不影响其他平台

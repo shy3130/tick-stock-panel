@@ -11,5 +11,9 @@
     "frontend/src/router.tsx": "Expands the authenticated and explicit public Sycee route registries without implementing feature behavior.",
     "frontend/src/lib/navRegistry.ts": "Expands the Sycee navigation registry.",
     "frontend/src/lib/api.ts": "Exports the generic request helper used by isolated Sycee API clients."
+  },
+  "infrastructure": {
+    ".github/workflows/docker.yml": "Runs the reusable read-only quality gate before building or publishing Docker images.",
+    ".github/workflows/release.yml": "Runs the reusable read-only quality gate before packaging desktop release artifacts."
   }
 }
