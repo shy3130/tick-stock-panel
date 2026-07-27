@@ -1,5 +1,5 @@
 import { lazy } from 'react'
-import { GitCompareArrows, NotebookPen, WalletCards } from 'lucide-react'
+import { DatabaseBackup, GitCompareArrows, NotebookPen, WalletCards } from 'lucide-react'
 import type { RouteObject } from 'react-router-dom'
 
 import type { NavItem } from '@/lib/navRegistry'
@@ -13,12 +13,16 @@ const Portfolio = lazy(() => import('./portfolio/PortfolioPage').then(module => 
 const StrategyCompare = lazy(() => import('./strategy-compare/StrategyComparePage').then(module => ({
   default: module.StrategyComparePage,
 })))
+const DataBackup = lazy(() => import('./data-backup/DataBackupPage').then(module => ({
+  default: module.DataBackupPage,
+})))
 
 /** Frozen frontend gateway: future Sycee pages register here, not in the upstream router. */
 export const SYCEE_ROUTES: RouteObject[] = [
   { path: 'portfolio', element: <Portfolio /> },
   { path: 'strategy-compare', element: <StrategyCompare /> },
   { path: 'research-ledger', element: <ResearchLedger /> },
+  { path: 'data-backup', element: <DataBackup /> },
 ]
 
 /** Frozen navigation gateway: future Sycee entries register here, not in navRegistry. */
@@ -45,6 +49,14 @@ export const SYCEE_NAV_ITEMS: NavItem[] = [
     label: '研究账本',
     icon: NotebookPen,
     group: 'strategy',
+    extension: false,
+  },
+  {
+    id: '/data-backup',
+    to: '/data-backup',
+    label: '数据备份',
+    icon: DatabaseBackup,
+    group: 'system',
     extension: false,
   },
 ]
