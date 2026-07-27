@@ -26,6 +26,7 @@ import {
   type PortfolioTradeSide,
 } from './api'
 import { buildPortfolioView, type PortfolioPositionView } from './portfolioView'
+import { PortfolioSellAlertPanel } from './PortfolioSellAlertPanel'
 import { TradeEditorDialog } from './TradeEditorDialog'
 
 interface EditorState {
@@ -260,6 +261,8 @@ export function PortfolioPage() {
       </section>
 
       <div className="space-y-4 p-3 lg:p-5">
+        <PortfolioSellAlertPanel portfolio={portfolio} />
+
         <section aria-labelledby="portfolio-positions-title" className="overflow-hidden rounded-card border border-border bg-surface">
           <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
             <div className="min-w-0">

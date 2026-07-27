@@ -73,7 +73,72 @@ export interface InstrumentSearchResult {
   asset_type?: string
 }
 
+export type PortfolioAlertChannel = 'feishu' | 'wecom'
+
+export interface PortfolioSellAlertConfig {
+  enabled: boolean
+  strategy_id: string
+  webhook_channels: PortfolioAlertChannel[]
+  rule_id: string
+}
+
+export interface PortfolioSellAlertRule {
+  id: string
+  name: string
+  enabled: boolean
+  type: 'strategy'
+  asset_type: 'stock'
+  scope: 'symbols'
+  symbols: string[]
+  sector: null
+  strategy_id: string
+  direction: 'exit'
+  notify_events: ['sell_signal']
+  conditions: []
+  logic: 'and'
+  cooldown_seconds: number
+  severity: 'warn'
+  webhook_channels: PortfolioAlertChannel[]
+  message: string
+}
+
+export interface PortfolioSellAlertStatus {
+  config: PortfolioSellAlertConfig
+  state: 'disabled' | 'waiting_for_positions' | 'ready'
+  position_count: number
+  symbols: string[]
+  desired_rule: PortfolioSellAlertRule | null
+}
+
+export interface PortfolioSellAlertUpdate {
+  enabled: boolean
+  strategy_id: string
+  webhook_channels: PortfolioAlertChannel[]
+}
+
+export interface SellAlertStrategy {
+  id: string
+  name: string
+  description?: string
+  exit_signals: string[]
+}
+
+export interface ExistingMonitorRule extends Omit<PortfolioSellAlertRule, 'type' | 'asset_type' | 'scope' | 'sector' | 'direction' | 'notify_events' | 'conditions' | 'logic' | 'severity' | 'webhook_channels'> {
+  type: string
+  asset_type?: string
+  scope: string
+  sector?: string | null
+  direction: string
+  notify_events?: string[]
+  conditions: Array<Record<string, unknown>>
+  logic: string
+  severity: string
+  webhook_channels?: string[]
+  created_at?: string
+}
+
 export const PORTFOLIO_QUERY_KEY = ['sycee', 'portfolio'] as const
+export const PORTFOLIO_SELL_ALERT_QUERY_KEY = ['sycee', 'portfolio-sell-alert'] as const
 
 export const portfolioApi = {
   get: () => request<Portfolio>('/api/sycee/portfolio'),
@@ -117,4 +182,26 @@ export const portfolioApi = {
     }
     return quotes
   },
+}
+
+export const portfolioSellAlertApi = {
+  get: () => request<PortfolioSellAlertStatus>('/api/sycee/portfolio/sell-alert'),
+  update: (update: PortfolioSellAlertUpdate) =>
+    request<PortfolioSellAlertStatus>('/api/sycee/portfolio/sell-alert', {
+      method: 'PUT',
+      body: JSON.stringify(update),
+    }),
+  strategies: () => request<{ strategies: SellAlertStrategy[] }>(
+    '/api/strategies?asset_type=stock&timeframe=1d',
+  ),
+  rules: () => request<{ rules: ExistingMonitorRule[] }>('/api/monitor-rules'),
+  saveRule: (rule: PortfolioSellAlertRule) =>
+    request<{ ok: boolean; rule: ExistingMonitorRule }>('/api/monitor-rules', {
+      method: 'POST',
+      body: JSON.stringify(rule),
+    }),
+  deleteRule: (ruleId: string) =>
+    request<{ ok: boolean }>(`/api/monitor-rules/${encodeURIComponent(ruleId)}`, {
+      method: 'DELETE',
+    }),
 }
