@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import httpx
 import polars as pl
@@ -16,11 +17,41 @@ from starlette.responses import JSONResponse
 from app.api import dow_monitor
 from app.services.dow_monitor_bars import TimeframeBars
 from app.services.dow_monitor_client import DowEngineResult, LongbridgeDowClient
-from app.services.dow_monitor_models import DowNotification, DowTimeframeState
+from app.services.dow_monitor_models import (
+    DowMinuteDecision,
+    DowNotification,
+    DowTimeframeState,
+)
 from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
 
 NOW = datetime(2026, 7, 23, 8, 0, tzinfo=UTC)
+
+
+def _minute_decision(
+    *,
+    minute: int = 26,
+    confidence: int = 72,
+) -> DowMinuteDecision:
+    zone = ZoneInfo("Asia/Hong_Kong")
+    return DowMinuteDecision(
+        symbol="01347.HK",
+        market="hk",
+        decision_minute=datetime(2026, 7, 27, 10, minute, tzinfo=zone),
+        direction="BULLISH",
+        direction_label="偏涨",
+        action="WATCH_BUY",
+        action_label="买入观察",
+        confidence=confidence,
+        dominant_timeframe="15m",
+        confirmation_timeframes=("30m",),
+        supporting_reasons=("15/30分钟结构同向偏强",),
+        contrary_risks=("60分钟仍处于震荡",),
+        invalidation_conditions=("跌破136.80且大单转为净流出",),
+        data_status="COMPLETE",
+        status_label="数据完整",
+        source_timestamp=datetime(2026, 7, 27, 10, minute - 1, tzinfo=zone),
+    )
 
 
 class _UnusedGateway:
@@ -1001,3 +1032,58 @@ def test_real_lifespan_loads_provider_before_monitor_and_stops_before_shared_clo
 
     assert events.index("monitor-stop") < events.index("monitor-client-close")
     assert events.index("monitor-client-close") < events.index("shared-close")
+
+
+def test_minute_decision_is_immutable_for_same_symbol_and_minute(tmp_path) -> None:
+    store = DowMonitorStore(tmp_path)
+    first = _minute_decision(confidence=72)
+    changed = first.model_copy(update={"confidence": 91})
+
+    assert store.save_minute_decision(first) == first
+    assert store.save_minute_decision(changed) == first
+    assert DowMonitorStore(tmp_path).get_minute_decision("01347.HK") == first
+
+
+def test_minute_decision_advances_once_for_a_newer_minute(tmp_path) -> None:
+    store = DowMonitorStore(tmp_path)
+    current = _minute_decision(minute=26, confidence=72)
+    newer = _minute_decision(minute=27, confidence=81)
+
+    store.save_minute_decision(current)
+
+    assert store.save_minute_decision(newer) == newer
+    assert store.save_minute_decision(current) == newer
+    assert store.get_minute_decision("01347.HK") == newer
+
+
+def test_remove_symbol_also_removes_its_minute_decision(tmp_path) -> None:
+    store = DowMonitorStore(tmp_path)
+    store.upsert_symbol("01347.HK", "hk", True)
+    store.save_minute_decision(_minute_decision())
+
+    assert store.remove_symbol("01347.HK") is True
+    assert store.get_minute_decision("01347.HK") is None
+
+
+def test_corrupt_minute_decision_file_is_ignored(tmp_path) -> None:
+    decision_path = tmp_path / "user_data" / "dow_monitor_minute_decisions.json"
+    decision_path.parent.mkdir(parents=True)
+    decision_path.write_text("{not-json", encoding="utf-8")
+
+    assert DowMonitorStore(tmp_path).get_minute_decision("01347.HK") is None
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    [
+        ({"decision_minute": datetime(2026, 7, 27, 10, 26)}, "timezone-aware"),
+        ({"confidence": 101}, "less than or equal to 100"),
+        ({"confidence": -1}, "greater than or equal to 0"),
+    ],
+)
+def test_minute_decision_rejects_invalid_time_and_confidence(update, message) -> None:
+    payload = _minute_decision().model_dump()
+    payload.update(update)
+
+    with pytest.raises(ValidationError, match=message):
+        DowMinuteDecision.model_validate(payload)
