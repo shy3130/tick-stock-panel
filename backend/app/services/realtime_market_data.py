@@ -301,9 +301,10 @@ class RealtimeHub:
                 self._pubsub = self._redis.pubsub()
                 await self._pubsub.subscribe(self.channel)
             drained = 0
+            pending: OrderedDict[str, dict[str, object]] = OrderedDict()
             self.state = "connected"
             self._reconnect_delay = 0.5
-            while drained < PUBSUB_DRAIN_LIMIT:
+            while not self._stop.is_set():
                 item = await self._pubsub.get_message(
                     ignore_subscribe_messages=True,
                     timeout=0.1 if drained == 0 else 0,
@@ -315,7 +316,24 @@ class RealtimeHub:
                     data = item.get("data")
                     if isinstance(data, bytes):
                         data = data.decode("utf-8")
-                    await self.dispatch(json.loads(data))
+                    message = json.loads(data)
+                    if not isinstance(message, dict):
+                        continue
+                    symbol = message.get("symbol")
+                    if (
+                        not isinstance(symbol, str)
+                        or symbol not in self.subscriptions
+                    ):
+                        continue
+                    pending.pop(symbol, None)
+                    pending[symbol] = message
+                if drained % PUBSUB_DRAIN_LIMIT == 0:
+                    for latest in pending.values():
+                        await self.dispatch(latest)
+                    pending.clear()
+                    await asyncio.sleep(0)
+            for latest in pending.values():
+                await self.dispatch(latest)
         except (RedisError, json.JSONDecodeError, TypeError):
             await self._degrade()
 

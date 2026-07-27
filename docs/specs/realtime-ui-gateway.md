@@ -12,6 +12,8 @@ The gateway MUST:
 - reject malformed symbols and subscription sets above 500 symbols;
 - initialize a new subscription from the Redis latest-state keys;
 - fan out Pub/Sub updates only to clients subscribed to the affected symbol;
+- drain unrelated Pub/Sub backlog without delaying the newest state for
+  subscribed symbols, and coalesce obsolete queued updates per symbol;
 - return one depth level by default and at most ten levels when requested;
 - use a bounded latest-state outbound buffer for every client;
 - replace obsolete pending messages for slow clients;

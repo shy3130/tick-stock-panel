@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -7,6 +8,7 @@ from redis.exceptions import ConnectionError
 
 from app.services.realtime_market_data import (
     LatestOutboundBuffer,
+    PUBSUB_DRAIN_LIMIT,
     RealtimeConnection,
     RealtimeHub,
 )
@@ -169,7 +171,34 @@ async def test_pubsub_drains_backlog_in_one_cycle() -> None:
 
     await hub.run_pubsub_once()
 
-    projected = await connection.buffer.get()
+    projected = await asyncio.wait_for(connection.buffer.get(), timeout=0.1)
     assert projected["sequence"] == 3
     assert redis.messages == []
-    assert hub.metrics()["sent_updates"] == 3
+    assert hub.metrics()["sent_updates"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pubsub_unsubscribed_backlog_does_not_delay_latest_subscribed_update() -> None:
+    redis = FakeRedis()
+    redis.messages = [
+        {"type": "message", "data": json.dumps(update("UNWATCHED.US", sequence))}
+        for sequence in range(1, PUBSUB_DRAIN_LIMIT + 2)
+    ]
+    redis.messages.extend(
+        [
+            {"type": "message", "data": json.dumps(update("AAPL.US", 7))},
+            {"type": "message", "data": json.dumps(update("AAPL.US", 8))},
+        ]
+    )
+    hub = RealtimeHub("redis://test", redis_factory=lambda _url: redis)
+    connection = RealtimeConnection()
+    await hub.register(connection)
+    await hub.subscribe(connection, {"AAPL.US"}, {"quote"})
+
+    await hub.run_pubsub_once()
+
+    projected = await asyncio.wait_for(connection.buffer.get(), timeout=0.1)
+    assert projected["symbol"] == "AAPL.US"
+    assert projected["sequence"] == 8
+    assert redis.messages == []
+    assert hub.metrics()["sent_updates"] == 1
