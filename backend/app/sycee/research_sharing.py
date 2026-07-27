@@ -215,6 +215,22 @@ def revoke_shares_for_entry(entry_id: str) -> bool:
         return True
 
 
+def revoke_orphaned_shares(valid_entry_ids: set[str]) -> int:
+    with _lock:
+        shares = _read_index_unlocked()
+        orphaned = [
+            share for share in shares if share.get("entry_id") not in valid_entry_ids
+        ]
+        if not orphaned:
+            return 0
+        for share in orphaned:
+            _public_path(share["token"]).unlink(missing_ok=True)
+        _write_index_unlocked(
+            [share for share in shares if share.get("entry_id") in valid_entry_ids]
+        )
+        return len(orphaned)
+
+
 def read_public_share(token: str) -> dict:
     if not _TOKEN_RE.fullmatch(token):
         raise HTTPException(status_code=404, detail="分享不存在或已撤销")

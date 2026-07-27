@@ -13,6 +13,8 @@ from app.sycee.data_backup import router as data_backup_router
 from app.sycee.portfolio import router as portfolio_router
 from app.sycee.portfolio_sell_alert import router as sell_alert_router
 from app.sycee.research_ledger import router as research_router
+from app.sycee.research_sharing import public_router as research_public_router
+from app.sycee.research_sharing import router as research_sharing_router
 from app.sycee.strategy_tracking import router as strategy_tracking_router
 from app.sycee.trade_reviews import router as trade_reviews_router
 
@@ -32,6 +34,8 @@ def _client() -> TestClient:
     app.include_router(portfolio_router)
     app.include_router(sell_alert_router)
     app.include_router(research_router)
+    app.include_router(research_sharing_router)
+    app.include_router(research_public_router)
     app.include_router(strategy_tracking_router)
     app.include_router(trade_reviews_router)
     app.include_router(data_backup_router)
@@ -142,6 +146,31 @@ def test_backup_round_trip_is_user_scoped_and_keeps_safety_copy(monkeypatch, tmp
 
     alice = client.get("/api/sycee/data-backup", headers={"x-test-user": "alice"}).json()
     assert all(value is None for value in alice["data"].values())
+
+
+def test_restore_revokes_only_shares_orphaned_by_research_replacement(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    client = _client()
+    kept = client.post("/api/sycee/research", json=_research("保留记录")).json()["entry"]
+    kept_share = client.post(f"/api/sycee/research/{kept['id']}/share").json()["share"]
+    exported = client.get("/api/sycee/data-backup").json()
+    assert kept_share["token"] not in str(exported)
+
+    removed = client.post("/api/sycee/research", json=_research("移除记录")).json()["entry"]
+    removed_share = client.post(f"/api/sycee/research/{removed['id']}/share").json()["share"]
+
+    restored = client.post(
+        "/api/sycee/data-backup/restore",
+        json={"confirmation": "RESTORE_SYCEE_DATA", "backup": exported},
+    )
+
+    assert restored.status_code == 200
+    assert client.get(f"/api/public/sycee/research/{kept_share['token']}").status_code == 200
+    assert client.get(f"/api/public/sycee/research/{removed_share['token']}").status_code == 404
+    current = client.get(f"/api/sycee/research/{kept['id']}/share").json()["share"]
+    assert current["token"] == kept_share["token"]
 
 
 def test_invalid_backup_is_rejected_before_current_data_changes(monkeypatch, tmp_path):

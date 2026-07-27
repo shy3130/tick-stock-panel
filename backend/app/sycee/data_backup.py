@@ -33,6 +33,7 @@ from app.sycee.portfolio_sell_alert import (
 )
 from app.sycee.research_ledger import ResearchEntry
 from app.sycee.research_ledger import _lock as research_lock
+from app.sycee.research_sharing import revoke_orphaned_shares
 from app.sycee.strategy_tracking import StrategyTrack
 from app.sycee.strategy_tracking import _lock as strategy_tracking_lock
 from app.sycee.trade_reviews import TradeReview
@@ -348,6 +349,11 @@ def restore_backup(document: SyceeBackupDocument) -> str:
     with _locked_sources():
         backup_id, backup_dir = _create_safety_backup_unlocked()
         _write_restored_data_unlocked(normalized, backup_dir)
+        research = normalized.get("research_ledger")
+        if research is not None:
+            revoke_orphaned_shares({entry["id"] for entry in research["entries"]})
+        elif "research_ledger" in normalized:
+            revoke_orphaned_shares(set())
     return backup_id
 
 
