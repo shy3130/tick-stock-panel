@@ -1377,3 +1377,67 @@ def test_store_preserves_the_production_state_listing_contract(tmp_path) -> None
     store.save_state(state)
 
     assert store.list_states() == [state]
+
+
+def test_run_once_persists_each_symbol_decision_before_evaluating_the_next(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    zone = ZoneInfo("Asia/Hong_Kong")
+    now = datetime(2026, 7, 27, 10, 26, 10, tzinfo=zone)
+    rows = _minute_rows(25)
+
+    class Gateway:
+        def fetch_since(self, _starts, _end):
+            return WebStockBatch(
+                quotes=[],
+                minute_rows=rows,
+                source_timestamp=datetime(2026, 7, 27, 2, 25, tzinfo=UTC),
+                freshness_by_symbol={
+                    first.symbol: SymbolFreshness(state="LIVE", reason=None),
+                    second.symbol: SymbolFreshness(state="LIVE", reason=None),
+                },
+                gap_details={first.symbol: [], second.symbol: []},
+            )
+
+    store = DowMonitorStore(tmp_path)
+    first = store.upsert_symbol("01347.HK", "hk", True)
+    second = store.upsert_symbol("00981.HK", "hk", True)
+    _save_bullish_decision_states(store, source_timestamp=now)
+    for timeframe in ("5m", "15m", "30m", "60m", "day"):
+        first_state = store.get_state(first.symbol, timeframe)
+        assert first_state is not None
+        store.save_state(first_state.model_copy(update={"symbol": second.symbol}))
+    service = DowMonitorService(
+        store,
+        Gateway(),
+        _UnusedDowClient(),
+        _daily_loader,
+        now_fn=lambda: now,
+    )
+    observed_before_second: list[bool] = []
+
+    def evaluate(item, *_args, **_kwargs):
+        if item.symbol == second.symbol:
+            observed_before_second.append(
+                store.get_minute_decision(first.symbol) is not None
+            )
+        return None, True
+
+    monkeypatch.setattr(service, "_evaluate_symbol", evaluate)
+    monkeypatch.setattr(
+        service,
+        "_intraday_capital_by_symbol",
+        lambda _symbols: {
+            first.symbol: {
+                "total_net": 8_000_000,
+                "large_net": 2_000_000,
+                "flow_15m": 600_000,
+                "flow_30m": 1_200_000,
+            }
+        },
+    )
+
+    asyncio.run(service.run_once())
+
+    assert observed_before_second == [True]

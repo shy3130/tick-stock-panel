@@ -390,6 +390,10 @@ class DowMonitorService:
                         )
 
         notification_index = await asyncio.to_thread(self._load_notification_index)
+        intraday_capital = await asyncio.to_thread(
+            self._intraday_capital_by_symbol,
+            [item.symbol for item in enabled],
+        )
         any_success = False
         cycle_errors: list[str] = []
         for item in enabled:
@@ -423,19 +427,6 @@ class DowMonitorService:
                 logger.exception("dow monitor symbol failed: %s", item.symbol)
             if symbol_succeeded:
                 self._last_success_by_symbol[item.symbol] = now
-                any_success = True
-            if error is None:
-                self._errors.pop(item.symbol, None)
-            else:
-                self._errors[item.symbol] = error
-                cycle_errors.append(f"{item.symbol}: {error}")
-
-        if any_success:
-            intraday_capital = await asyncio.to_thread(
-                self._intraday_capital_by_symbol,
-                [item.symbol for item in enabled],
-            )
-            for item in enabled:
                 await asyncio.to_thread(
                     self._refresh_minute_decision,
                     item,
@@ -443,6 +434,12 @@ class DowMonitorService:
                     intraday_capital.get(item.symbol),
                     now,
                 )
+                any_success = True
+            if error is None:
+                self._errors.pop(item.symbol, None)
+            else:
+                self._errors[item.symbol] = error
+                cycle_errors.append(f"{item.symbol}: {error}")
 
         self._last_error = "; ".join(cycle_errors) or None
         if any_success:
