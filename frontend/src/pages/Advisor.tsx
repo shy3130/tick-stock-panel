@@ -25,19 +25,24 @@ import {
   actionPresentation,
   presentDailyBriefCandidate,
   presentTrustDatasets,
+  resolvePaperActionState,
   selectDailyBriefCandidates,
   type AdvisorActionState,
   type DailyBriefCandidatePresentation,
   type TrustDatasetPresentation,
 } from '@/lib/advisor'
 import {
+  createPaperTradeDraft,
   lotGuidance,
+  paperMutationErrorMessage,
+  preparePaperTradeDraftForSubmit,
   toPaperTradeRequest,
   validatePaperTradeDraft,
   type PaperAccountResponse,
   type PaperJournalEntry,
   type PaperPosition,
   type PaperTradeDraft,
+  type PaperTradeRequest,
   type PaperTradeSide,
 } from '@/lib/paper-account'
 import { QK } from '@/lib/queryKeys'
@@ -54,12 +59,6 @@ const compactDateTime = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit',
   minute: '2-digit',
 })
-
-const today = new Intl.DateTimeFormat('en-CA', {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-}).format(new Date())
 
 const ACTION_TONE: Record<ReturnType<typeof actionPresentation>['tone'], {
   border: string
@@ -408,26 +407,20 @@ function PaperAccountSection({
   accountLoading,
   accountError,
   actionState,
+  briefUnavailable,
 }: {
   account?: PaperAccountResponse
   accountLoading: boolean
   accountError: unknown
   actionState?: AdvisorActionState
+  briefUnavailable: boolean
 }) {
   const queryClient = useQueryClient()
   const [initialCash, setInitialCash] = useState<5000 | 10000>(10000)
   const [confirmation, setConfirmation] = useState('')
   const [formErrors, setFormErrors] = useState<string[]>([])
-  const [draft, setDraft] = useState<PaperTradeDraft>({
-    symbol: '',
-    name: '',
-    side: 'BUY',
-    quantity: '',
-    price: '',
-    trade_date: today,
-    plan_note: '',
-    invalidation_note: '',
-  })
+  const [tradeDateEdited, setTradeDateEdited] = useState(false)
+  const [draft, setDraft] = useState<PaperTradeDraft>(() => createPaperTradeDraft())
 
   const resetMutation = useMutation({
     mutationFn: () => api.paperReset({
@@ -436,31 +429,32 @@ function PaperAccountSection({
     }),
     onSuccess: async () => {
       setConfirmation('')
+      setFormErrors([])
+      setTradeDateEdited(false)
+      setDraft(createPaperTradeDraft())
       await queryClient.invalidateQueries({ queryKey: QK.paperAccount })
     },
   })
 
   const tradeMutation = useMutation({
-    mutationFn: () => api.paperTrade(toPaperTradeRequest(draft)),
+    mutationFn: (payload: PaperTradeRequest) => api.paperTrade(payload),
     onSuccess: async () => {
       setFormErrors([])
-      setDraft(current => ({
-        ...current,
-        quantity: '',
-        price: '',
-        plan_note: '',
-        invalidation_note: '',
-      }))
+      setTradeDateEdited(false)
+      setDraft(createPaperTradeDraft())
       await queryClient.invalidateQueries({ queryKey: QK.paperAccount })
     },
   })
 
   const tradeBlocked = actionState !== 'SIMULATE_ONLY' && actionState !== 'RESEARCH_ONLY'
-  const safetyMessage = actionState === 'OBSERVE_ONLY'
-    ? '安全保护：数据检查未通过，当前只能观察，暂不能记录模拟成交。'
-    : !actionState
-      ? '安全保护：正在确认今日行动，暂不能记录模拟成交。'
-      : null
+  let safetyMessage: string | null = null
+  if (briefUnavailable) {
+    safetyMessage = '安全保护：今日日报刷新失败，为避免继续使用旧判定，暂不能记录模拟成交。'
+  } else if (actionState === 'OBSERVE_ONLY') {
+    safetyMessage = '安全保护：数据检查未通过，当前只能观察，暂不能记录模拟成交。'
+  } else if (!actionState) {
+    safetyMessage = '安全保护：正在确认今日行动，暂不能记录模拟成交。'
+  }
 
   const warningBySymbol = useMemo(
     () => new Map((account?.valuation_warnings ?? []).map(item => [item.symbol, item.message])),
@@ -478,10 +472,12 @@ function PaperAccountSection({
       setFormErrors(['今日行动尚未读取完成。下一步：请先刷新日报。'])
       return
     }
-    const errors = validatePaperTradeDraft(draft, actionState)
+    const preparedDraft = preparePaperTradeDraftForSubmit(draft, tradeDateEdited)
+    const errors = validatePaperTradeDraft(preparedDraft, actionState)
     setFormErrors(errors)
     if (errors.length === 0) {
-      tradeMutation.mutate()
+      setDraft(preparedDraft)
+      tradeMutation.mutate(toPaperTradeRequest(preparedDraft))
     }
   }
 
@@ -576,6 +572,7 @@ function PaperAccountSection({
                       key={value}
                       type="button"
                       onClick={() => setInitialCash(value)}
+                      aria-pressed={initialCash === value}
                       className={`min-h-11 rounded-btn border px-3 text-sm transition-colors ${
                         initialCash === value
                           ? 'border-accent bg-accent/10 text-accent'
@@ -607,7 +604,7 @@ function PaperAccountSection({
                 </button>
                 {resetMutation.error && (
                   <p className="mt-2 break-words text-xs leading-relaxed text-danger">
-                    {resetMutation.error instanceof Error ? resetMutation.error.message : '重置失败，请稍后重试。'}
+                    {paperMutationErrorMessage(resetMutation.error, 'reset')}
                   </p>
                 )}
               </section>
@@ -643,6 +640,7 @@ function PaperAccountSection({
                     type="button"
                     onClick={() => chooseSide(side)}
                     disabled={tradeBlocked || tradeMutation.isPending}
+                    aria-pressed={draft.side === side}
                     className={`min-h-11 rounded-btn border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                       draft.side === side
                         ? side === 'BUY'
@@ -713,7 +711,10 @@ function PaperAccountSection({
                 <input
                   type="date"
                   value={draft.trade_date}
-                  onChange={event => updateDraft('trade_date', event.target.value)}
+                  onChange={event => {
+                    setTradeDateEdited(true)
+                    updateDraft('trade_date', event.target.value)
+                  }}
                   disabled={tradeBlocked || tradeMutation.isPending}
                   className={inputClass}
                 />
@@ -748,9 +749,7 @@ function PaperAccountSection({
               )}
               {tradeMutation.error && (
                 <div className="mt-3 rounded-card border border-danger/25 bg-danger/5 p-3 text-xs leading-relaxed text-danger">
-                  {tradeMutation.error instanceof Error
-                    ? tradeMutation.error.message
-                    : '模拟成交记录失败。下一步：请核对填写内容后重试。'}
+                  {paperMutationErrorMessage(tradeMutation.error, 'trade')}
                 </div>
               )}
 
@@ -843,6 +842,10 @@ export function Advisor() {
   )
 
   const refreshing = briefQuery.isFetching || accountQuery.isFetching
+  const paperActionState = resolvePaperActionState(
+    briefQuery.data?.action_state,
+    Boolean(briefQuery.error),
+  )
   async function refreshAll() {
     await Promise.all([briefQuery.refetch(), accountQuery.refetch()])
   }
@@ -870,7 +873,7 @@ export function Advisor() {
         )}
       />
 
-      <main className="min-w-0 space-y-5 overflow-hidden px-3 py-4 sm:px-5 sm:py-5 lg:px-8">
+      <div className="min-w-0 space-y-5 overflow-hidden px-3 py-4 sm:px-5 sm:py-5 lg:px-8">
         {briefQuery.isLoading ? (
           <section className="rounded-card border border-border bg-surface p-8 text-center">
             <RefreshCw className="mx-auto h-5 w-5 animate-spin text-accent" />
@@ -968,7 +971,8 @@ export function Advisor() {
           account={accountQuery.data}
           accountLoading={accountQuery.isLoading}
           accountError={accountQuery.error}
-          actionState={briefQuery.data?.action_state}
+          actionState={paperActionState}
+          briefUnavailable={Boolean(briefQuery.error)}
         />
 
         <footer className="flex items-start gap-2 rounded-card border border-border/70 bg-elevated/10 px-4 py-3 text-[10px] leading-relaxed text-muted">
@@ -978,7 +982,7 @@ export function Advisor() {
             本页不接券商、不自动下单，不提供实盘指令或收益承诺。
           </span>
         </footer>
-      </main>
+      </div>
     </>
   )
 }

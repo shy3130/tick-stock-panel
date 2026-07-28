@@ -98,7 +98,53 @@ export interface PaperTradeDraft {
   invalidation_note: string
 }
 
+export type PaperMutationOperation = 'reset' | 'trade'
+
 const STOCK_SYMBOL = /^(?:(?:600|601|603|605|688|689)\d{3}\.SH|(?:000|001|002|003|300|301)\d{3}\.SZ|(?:4\d{5}|8\d{5}|92\d{4})\.BJ)$/
+
+function localCalendarDate(now: Date): string {
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export function createPaperTradeDraft(now = new Date()): PaperTradeDraft {
+  return {
+    symbol: '',
+    name: '',
+    side: 'BUY',
+    quantity: '',
+    price: '',
+    trade_date: localCalendarDate(now),
+    plan_note: '',
+    invalidation_note: '',
+  }
+}
+
+export function preparePaperTradeDraftForSubmit(
+  draft: PaperTradeDraft,
+  tradeDateEdited: boolean,
+  now = new Date(),
+): PaperTradeDraft {
+  return {
+    ...draft,
+    trade_date: tradeDateEdited ? draft.trade_date : localCalendarDate(now),
+  }
+}
+
+export function paperMutationErrorMessage(
+  error: unknown,
+  operation: PaperMutationOperation,
+): string {
+  const message = error instanceof Error ? error.message.trim() : ''
+  if (/[\u3400-\u9fff]/u.test(message)) {
+    return message
+  }
+  return operation === 'reset'
+    ? '无法连接本地服务，账户重置尚未确认。下一步：检查应用服务是否运行，再重新提交。'
+    : '无法连接本地服务，模拟成交尚未确认记录。下一步：检查应用服务是否运行，刷新账户后再重试。'
+}
 
 export function lotGuidance(symbol: string, side: PaperTradeSide): string {
   if (side === 'SELL') {

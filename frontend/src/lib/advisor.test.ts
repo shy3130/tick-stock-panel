@@ -4,6 +4,7 @@ import {
   actionPresentation,
   presentDailyBriefCandidate,
   presentTrustDatasets,
+  resolvePaperActionState,
   selectDailyBriefCandidates,
   type AdvisorActionState,
   type BeginnerDailyBriefCandidate,
@@ -91,6 +92,17 @@ describe('actionPresentation', () => {
 
     expect(presentation.label).toBe(label)
     expect(JSON.stringify(presentation)).not.toMatch(FORBIDDEN_INTERNAL_COPY)
+  })
+})
+
+describe('resolvePaperActionState', () => {
+  it('fails closed when a background daily-brief refresh errors after a research state', () => {
+    expect(resolvePaperActionState('RESEARCH_ONLY', false)).toBe('RESEARCH_ONLY')
+    expect(resolvePaperActionState('RESEARCH_ONLY', true)).toBe('OBSERVE_ONLY')
+  })
+
+  it('keeps the form disabled while no daily brief has loaded', () => {
+    expect(resolvePaperActionState(undefined, false)).toBeUndefined()
   })
 })
 

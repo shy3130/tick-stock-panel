@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  createPaperTradeDraft,
   lotGuidance,
+  paperMutationErrorMessage,
+  preparePaperTradeDraftForSubmit,
   toPaperTradeRequest,
   validatePaperTradeDraft,
   type PaperTradeDraft,
@@ -97,5 +100,46 @@ describe('toPaperTradeRequest', () => {
       plan_note: '  保留计划原文  ',
       invalidation_note: '  保留失效条件原文  ',
     })
+  })
+})
+
+describe('dynamic local trade date', () => {
+  it('refreshes an untouched default across local midnight before submission', () => {
+    const beforeMidnight = new Date(2026, 6, 29, 23, 59)
+    const afterMidnight = new Date(2026, 6, 30, 0, 1)
+    const draft = createPaperTradeDraft(beforeMidnight)
+
+    expect(draft.trade_date).toBe('2026-07-29')
+    expect(preparePaperTradeDraftForSubmit(draft, false, afterMidnight).trade_date).toBe(
+      '2026-07-30',
+    )
+  })
+
+  it('preserves a manually selected trade date across midnight', () => {
+    const draft = createPaperTradeDraft(new Date(2026, 6, 29, 23, 59))
+    draft.trade_date = '2026-07-20'
+
+    expect(preparePaperTradeDraftForSubmit(
+      draft,
+      true,
+      new Date(2026, 6, 30, 0, 1),
+    ).trade_date).toBe('2026-07-20')
+  })
+})
+
+describe('paperMutationErrorMessage', () => {
+  it('preserves beginner-readable Chinese backend errors', () => {
+    const backendMessage = '模拟账户现金不足。下一步：请降低数量后重试。'
+
+    expect(paperMutationErrorMessage(new Error(backendMessage), 'trade')).toBe(backendMessage)
+  })
+
+  it('maps network and unknown failures to a Chinese reason and next action', () => {
+    expect(paperMutationErrorMessage(new TypeError('Failed to fetch'), 'trade')).toBe(
+      '无法连接本地服务，模拟成交尚未确认记录。下一步：检查应用服务是否运行，刷新账户后再重试。',
+    )
+    expect(paperMutationErrorMessage(undefined, 'reset')).toBe(
+      '无法连接本地服务，账户重置尚未确认。下一步：检查应用服务是否运行，再重新提交。',
+    )
   })
 })

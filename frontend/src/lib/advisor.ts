@@ -138,6 +138,13 @@ export function actionPresentation(state: AdvisorActionState): ActionPresentatio
   return ACTION_PRESENTATIONS[state]
 }
 
+export function resolvePaperActionState(
+  actionState: AdvisorActionState | undefined,
+  hasBriefError: boolean,
+): AdvisorActionState | undefined {
+  return hasBriefError ? 'OBSERVE_ONLY' : actionState
+}
+
 export function presentTrustDatasets(
   dataGate: DailyBriefDataGate,
 ): TrustDatasetPresentation[] {
