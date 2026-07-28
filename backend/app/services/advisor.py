@@ -399,11 +399,13 @@ def build_beginner_daily_brief(recommendations: dict | None) -> dict:
 
 def _beginner_candidate(candidate: dict) -> dict:
     decision = str(candidate.get("decision") or "NO-GO")
-    decision_label = str(candidate.get("decision_label") or decision)
+    decision_label = candidate.get("decision_label")
+    if decision_label not in _DECISION_LABELS.values():
+        decision_label = _DECISION_LABELS.get(decision, "结论待复核")
     strategies = [str(strategy) for strategy in candidate.get("strategies") or []]
     reasons = [f"研究判断: {decision_label}"]
     if strategies:
-        reasons.append(f"策略共识: {'、'.join(strategies)}")
+        reasons.append(f"策略共识: {len(strategies)}条独立策略给出了同向结果")
 
     return {
         "symbol": candidate.get("symbol"),
@@ -411,13 +413,13 @@ def _beginner_candidate(candidate: dict) -> dict:
         "research_decision": decision,
         "deterministic_reasons": reasons,
         "observation_conditions": [
-            "复核运行后, 数据门禁仍为 PASS",
-            f"复核运行后, 研究判断仍为 {decision}",
+            "下次复核后, 数据检查仍然合格",
+            f"下次复核后, 研究结论仍为{decision_label}",
         ],
         "invalidation_conditions": [
-            "任一必需数据回执或运行时校验使数据门禁变为 BLOCK",
-            f"复核运行后, 研究判断不再为 {decision}",
-            "复核运行后出现任一风险标记",
+            "任一必需数据回执异常或运行时校验失败",
+            f"下次复核后, 研究结论不再是{decision_label}",
+            "下次复核后出现任一风险标记",
         ],
         "risk_flags": candidate.get("risk_flags")
         if isinstance(candidate.get("risk_flags"), list)

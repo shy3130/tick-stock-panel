@@ -119,16 +119,16 @@ def test_daily_brief_research_only_exposes_at_most_three_deterministic_candidate
         "research_decision": "GO",
         "deterministic_reasons": [
             "研究判断: 可进入研究清单",
-            "策略共识: bullish_alignment、trend_breakout",
+            "策略共识: 2条独立策略给出了同向结果",
         ],
         "observation_conditions": [
-            "复核运行后, 数据门禁仍为 PASS",
-            "复核运行后, 研究判断仍为 GO",
+            "下次复核后, 数据检查仍然合格",
+            "下次复核后, 研究结论仍为可进入研究清单",
         ],
         "invalidation_conditions": [
-            "任一必需数据回执或运行时校验使数据门禁变为 BLOCK",
-            "复核运行后, 研究判断不再为 GO",
-            "复核运行后出现任一风险标记",
+            "任一必需数据回执异常或运行时校验失败",
+            "下次复核后, 研究结论不再是可进入研究清单",
+            "下次复核后出现任一风险标记",
         ],
         "risk_flags": [],
     }
@@ -173,3 +173,54 @@ def test_daily_brief_endpoint_uses_persisted_audits_cache_and_runtime_risk(
         "ai_can_change_score": False,
         "auto_trading": False,
     }
+
+
+def _brief_human_strings(brief: dict) -> list[str]:
+    strings = [brief["today_message"], brief["next_step"]]
+    for candidate in brief["candidates"]:
+        for field in (
+            "deterministic_reasons",
+            "observation_conditions",
+            "invalidation_conditions",
+        ):
+            strings.extend(candidate[field])
+    return strings
+
+
+def test_daily_brief_human_copy_hides_internal_tokens_for_every_action_state():
+    from app.services.advisor import build_beginner_daily_brief
+
+    runtime_problem = {
+        "code": "ADJ_FACTOR_RUNTIME_UNAVAILABLE",
+        "reason": "Adjustment-factor data cannot be read",
+        "next_action": "Resync adjustment-factor data",
+    }
+    briefs = [
+        build_beginner_daily_brief(
+            _recommendations(adjustment_factor_problem=runtime_problem)
+        ),
+        build_beginner_daily_brief(_recommendations(cache=_cache(limit_up=True))),
+        build_beginner_daily_brief(_recommendations(cache=_cache())),
+    ]
+
+    assert [brief["action_state"] for brief in briefs] == [
+        "OBSERVE_ONLY",
+        "SIMULATE_ONLY",
+        "RESEARCH_ONLY",
+    ]
+    assert [brief["data_gate"]["decision"] for brief in briefs] == ["BLOCK", "PASS", "PASS"]
+    assert briefs[1]["candidates"][0]["research_decision"] == "NO-GO"
+    assert briefs[2]["candidates"][0]["research_decision"] == "GO"
+
+    forbidden_tokens = {
+        "PASS",
+        "BLOCK",
+        "GO",
+        "WAIT",
+        "NO-GO",
+        "trend_breakout",
+        "bullish_alignment",
+    }
+    for brief in briefs:
+        human_copy = "\n".join(_brief_human_strings(brief))
+        assert not any(token in human_copy for token in forbidden_tokens)
