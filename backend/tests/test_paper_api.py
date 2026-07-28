@@ -5,6 +5,7 @@ from datetime import date
 from types import SimpleNamespace
 
 import polars as pl
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -152,6 +153,58 @@ def test_trade_route_returns_chinese_400_for_domain_validation(tmp_path):
     assert "100 股" in response.json()["detail"]
 
 
+def test_low_proceeds_sell_returns_400_without_changing_account(tmp_path):
+    _write_gate_context(tmp_path, blocked=False)
+    client = _client(tmp_path)
+    buy = _trade_payload()
+    buy["price"] = 99.95
+    buy["trade_date"] = "2026-07-27"
+    assert client.post("/api/paper/trades", json=buy).status_code == 200
+    path = tmp_path / "user_data" / "paper_account.json"
+    persisted_before = path.read_text(encoding="utf-8")
+
+    sell = {
+        **_trade_payload(),
+        "side": "SELL",
+        "quantity": 1,
+        "price": 0.01,
+        "trade_date": "2026-07-29",
+    }
+    response = client.post("/api/paper/trades", json=sell)
+
+    assert response.status_code == 400
+    assert "现金" in response.json()["detail"]
+    assert path.read_text(encoding="utf-8") == persisted_before
+    account = client.get("/api/paper/account").json()
+    assert account["positions"][0]["quantity"] == 100
+    assert len(account["journal"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("name", "股" * 81, "股票名称"),
+        ("plan_note", "计" * 501, "模拟计划"),
+        ("invalidation_note", "失" * 501, "失效条件"),
+    ],
+)
+def test_trade_route_returns_chinese_400_for_oversized_manual_text(
+    tmp_path,
+    field,
+    value,
+    message,
+):
+    _write_gate_context(tmp_path, blocked=False)
+    payload = _trade_payload()
+    payload[field] = value
+
+    response = _client(tmp_path).post("/api/paper/trades", json=payload)
+
+    assert response.status_code == 400
+    assert message in response.json()["detail"]
+    assert not (tmp_path / "user_data" / "paper_account.json").exists()
+
+
 def test_trade_route_missing_manual_fill_fields_returns_chinese_400(tmp_path):
     _write_gate_context(tmp_path, blocked=False)
 
@@ -162,3 +215,34 @@ def test_trade_route_missing_manual_fill_fields_returns_chinese_400(tmp_path):
 
     assert response.status_code == 400
     assert response.json()["detail"]
+
+
+@pytest.mark.parametrize("path", ["/api/paper/reset", "/api/paper/trades"])
+@pytest.mark.parametrize(
+    ("body_kind", "request_kwargs"),
+    [
+        ("empty", {"content": b""}),
+        ("array", {"json": []}),
+        ("scalar", {"json": 123}),
+        (
+            "malformed",
+            {
+                "content": b"{",
+                "headers": {"content-type": "application/json"},
+            },
+        ),
+    ],
+)
+def test_mutating_routes_return_chinese_400_for_non_object_or_invalid_json_body(
+    tmp_path,
+    path,
+    body_kind,
+    request_kwargs,
+):
+    _write_gate_context(tmp_path, blocked=False)
+
+    response = _client(tmp_path).post(path, **request_kwargs)
+
+    assert response.status_code == 400, body_kind
+    detail = response.json()["detail"]
+    assert any(word in detail for word in ("请求", "内容", "JSON"))

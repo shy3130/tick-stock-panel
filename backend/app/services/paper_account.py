@@ -136,22 +136,318 @@ def _read_state(path: Path) -> dict[str, Any]:
         raise PaperAccountStorageError(
             "模拟账户文件损坏或无法读取, 请先备份该文件后再重置账户。"
         ) from exc
-    _validate_state(value)
+    try:
+        _validate_state(value)
+    except PaperAccountStorageError:
+        raise
+    except Exception as exc:
+        # schema-v1 文件即使嵌套值极端或类型恶意, 也必须统一转成可恢复的存储错误,
+        # 不能把 KeyError / DecimalException 等底层异常直接泄漏给接口调用方。
+        raise _invalid_state("嵌套字段无法解析") from exc
+    return value
+
+
+def _invalid_state(reason: str) -> PaperAccountStorageError:
+    return PaperAccountStorageError(
+        f"模拟账户文件{reason}, 已停止读取以防错误扩大。"
+        "下一步: 请先备份 paper_account.json, 再重置模拟账户。"
+    )
+
+
+def _state_int(
+    value: Any,
+    *,
+    field: str,
+    minimum: int | None = None,
+) -> int:
+    if type(value) is not int:
+        raise _invalid_state(f"字段 {field} 不是整数")
+    if minimum is not None and value < minimum:
+        raise _invalid_state(f"字段 {field} 小于允许值")
+    return value
+
+
+def _state_date(value: Any, *, field: str) -> date:
+    if not isinstance(value, str):
+        raise _invalid_state(f"字段 {field} 不是日期文字")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise _invalid_state(f"字段 {field} 不是有效日期") from exc
+    if parsed.isoformat() != value:
+        raise _invalid_state(f"字段 {field} 不是标准日期")
+    return parsed
+
+
+def _state_text(
+    value: Any,
+    *,
+    field: str,
+    maximum: int,
+    allow_empty: bool,
+) -> str:
+    if not isinstance(value, str):
+        raise _invalid_state(f"字段 {field} 不是文字")
+    if not allow_empty and not value.strip():
+        raise _invalid_state(f"字段 {field} 为空")
+    if len(value) > maximum:
+        raise _invalid_state(f"字段 {field} 超过长度上限")
     return value
 
 
 def _validate_state(state: Any) -> None:
     if not isinstance(state, dict) or state.get("schema_version") != SCHEMA_VERSION:
-        raise PaperAccountStorageError("模拟账户文件版本不受支持, 请先备份后再重置账户。")
+        raise _invalid_state("版本不受支持")
     for field in ("initial_cash_cents", "cash_cents", "realized_pnl_cents"):
-        if isinstance(state.get(field), bool) or not isinstance(state.get(field), int):
-            raise PaperAccountStorageError(f"模拟账户文件字段 {field} 无效, 请先备份后再重置。")
+        _state_int(state.get(field), field=field)
     if state["initial_cash_cents"] not in {500_000, 1_000_000}:
-        raise PaperAccountStorageError("模拟账户初始资金无效, 请先备份后再重置账户。")
+        raise _invalid_state("初始资金无效")
     if state["cash_cents"] < 0:
-        raise PaperAccountStorageError("模拟账户现金为负数, 已停止读取以防错误扩大。")
+        raise _invalid_state("现金为负数")
     if not isinstance(state.get("lots"), list) or not isinstance(state.get("journal"), list):
-        raise PaperAccountStorageError("模拟账户持仓或日志结构无效, 请先备份后再重置。")
+        raise _invalid_state("持仓或日志结构无效")
+
+    for index, lot in enumerate(state["lots"]):
+        _validate_lot(lot, index=index)
+    for index, entry in enumerate(state["journal"]):
+        _validate_journal_entry(entry, index=index)
+    _validate_state_reconciliation(state)
+
+
+def _validate_lot(lot: Any, *, index: int) -> None:
+    required = {
+        "id",
+        "symbol",
+        "name",
+        "trade_date",
+        "quantity",
+        "remaining_quantity",
+        "price_cents",
+        "buy_commission_cents",
+        "remaining_buy_commission_cents",
+    }
+    if not isinstance(lot, dict) or not required <= set(lot):
+        raise _invalid_state(f"持仓批次 {index + 1} 缺少必需字段")
+    _state_text(lot["id"], field=f"lots[{index}].id", maximum=100, allow_empty=False)
+    symbol = _state_text(
+        lot["symbol"],
+        field=f"lots[{index}].symbol",
+        maximum=20,
+        allow_empty=False,
+    )
+    if not _STOCK_SYMBOL.fullmatch(symbol):
+        raise _invalid_state(f"持仓批次 {index + 1} 的股票代码无效")
+    _state_text(
+        lot["name"],
+        field=f"lots[{index}].name",
+        maximum=80,
+        allow_empty=False,
+    )
+    _state_date(lot["trade_date"], field=f"lots[{index}].trade_date")
+    quantity = _state_int(
+        lot["quantity"],
+        field=f"lots[{index}].quantity",
+        minimum=1,
+    )
+    remaining = _state_int(
+        lot["remaining_quantity"],
+        field=f"lots[{index}].remaining_quantity",
+        minimum=0,
+    )
+    if remaining > quantity:
+        raise _invalid_state(f"持仓批次 {index + 1} 的剩余数量超过原数量")
+    price_cents = _state_int(
+        lot["price_cents"],
+        field=f"lots[{index}].price_cents",
+        minimum=1,
+    )
+    commission = _state_int(
+        lot["buy_commission_cents"],
+        field=f"lots[{index}].buy_commission_cents",
+        minimum=0,
+    )
+    remaining_commission = _state_int(
+        lot["remaining_buy_commission_cents"],
+        field=f"lots[{index}].remaining_buy_commission_cents",
+        minimum=0,
+    )
+    if commission != _commission_cents(price_cents * quantity):
+        raise _invalid_state(f"持仓批次 {index + 1} 的买入佣金无法对账")
+    if remaining_commission > commission:
+        raise _invalid_state(f"持仓批次 {index + 1} 的剩余佣金无效")
+    if remaining == quantity and remaining_commission != commission:
+        raise _invalid_state(f"持仓批次 {index + 1} 的完整佣金无法对账")
+    if remaining == 0 and remaining_commission != 0:
+        raise _invalid_state(f"持仓批次 {index + 1} 的已结清佣金不为零")
+
+
+def _validate_journal_entry(entry: Any, *, index: int) -> None:
+    required = {
+        "id",
+        "timestamp",
+        "side",
+        "symbol",
+        "name",
+        "trade_date",
+        "quantity",
+        "price_cents",
+        "gross_amount_cents",
+        "cash_before_cents",
+        "cash_after_cents",
+        "commission_cents",
+        "stamp_tax_cents",
+        "total_fees_cents",
+        "fifo_cost_basis_cents",
+        "realized_pnl_cents",
+        "plan_note",
+        "invalidation_note",
+    }
+    if not isinstance(entry, dict) or not required <= set(entry):
+        raise _invalid_state(f"日志 {index + 1} 缺少必需字段")
+    _state_text(entry["id"], field=f"journal[{index}].id", maximum=100, allow_empty=False)
+    timestamp = _state_text(
+        entry["timestamp"],
+        field=f"journal[{index}].timestamp",
+        maximum=50,
+        allow_empty=False,
+    )
+    try:
+        parsed_timestamp = datetime.fromisoformat(timestamp)
+    except ValueError as exc:
+        raise _invalid_state(f"日志 {index + 1} 的时间戳无效") from exc
+    if parsed_timestamp.tzinfo is None:
+        raise _invalid_state(f"日志 {index + 1} 的时间戳缺少时区")
+    side = entry["side"]
+    if side not in {"BUY", "SELL"}:
+        raise _invalid_state(f"日志 {index + 1} 的方向无效")
+    symbol = _state_text(
+        entry["symbol"],
+        field=f"journal[{index}].symbol",
+        maximum=20,
+        allow_empty=False,
+    )
+    if not _STOCK_SYMBOL.fullmatch(symbol):
+        raise _invalid_state(f"日志 {index + 1} 的股票代码无效")
+    _state_text(
+        entry["name"],
+        field=f"journal[{index}].name",
+        maximum=80,
+        allow_empty=False,
+    )
+    _state_date(entry["trade_date"], field=f"journal[{index}].trade_date")
+    quantity = _state_int(
+        entry["quantity"],
+        field=f"journal[{index}].quantity",
+        minimum=1,
+    )
+    price_cents = _state_int(
+        entry["price_cents"],
+        field=f"journal[{index}].price_cents",
+        minimum=1,
+    )
+    gross = _state_int(
+        entry["gross_amount_cents"],
+        field=f"journal[{index}].gross_amount_cents",
+        minimum=1,
+    )
+    if gross != price_cents * quantity:
+        raise _invalid_state(f"日志 {index + 1} 的成交金额无法对账")
+    cash_before = _state_int(
+        entry["cash_before_cents"],
+        field=f"journal[{index}].cash_before_cents",
+        minimum=0,
+    )
+    cash_after = _state_int(
+        entry["cash_after_cents"],
+        field=f"journal[{index}].cash_after_cents",
+        minimum=0,
+    )
+    commission = _state_int(
+        entry["commission_cents"],
+        field=f"journal[{index}].commission_cents",
+        minimum=0,
+    )
+    stamp_tax = _state_int(
+        entry["stamp_tax_cents"],
+        field=f"journal[{index}].stamp_tax_cents",
+        minimum=0,
+    )
+    total_fees = _state_int(
+        entry["total_fees_cents"],
+        field=f"journal[{index}].total_fees_cents",
+        minimum=0,
+    )
+    fifo_basis = _state_int(
+        entry["fifo_cost_basis_cents"],
+        field=f"journal[{index}].fifo_cost_basis_cents",
+        minimum=1,
+    )
+    realized = _state_int(
+        entry["realized_pnl_cents"],
+        field=f"journal[{index}].realized_pnl_cents",
+    )
+    if commission != _commission_cents(gross):
+        raise _invalid_state(f"日志 {index + 1} 的佣金无法对账")
+    if stamp_tax != _stamp_tax_cents(gross, side):
+        raise _invalid_state(f"日志 {index + 1} 的印花税无法对账")
+    if total_fees != commission + stamp_tax:
+        raise _invalid_state(f"日志 {index + 1} 的总费用无法对账")
+    if side == "BUY":
+        if fifo_basis != gross + commission or realized != 0:
+            raise _invalid_state(f"日志 {index + 1} 的买入成本无法对账")
+        expected_cash_after = cash_before - gross - commission
+    else:
+        if realized != gross - total_fees - fifo_basis:
+            raise _invalid_state(f"日志 {index + 1} 的已实现盈亏无法对账")
+        expected_cash_after = cash_before + gross - total_fees
+    if cash_after != expected_cash_after:
+        raise _invalid_state(f"日志 {index + 1} 的现金变化无法对账")
+    _state_text(
+        entry["plan_note"],
+        field=f"journal[{index}].plan_note",
+        maximum=500,
+        allow_empty=True,
+    )
+    _state_text(
+        entry["invalidation_note"],
+        field=f"journal[{index}].invalidation_note",
+        maximum=500,
+        allow_empty=True,
+    )
+
+
+def _validate_state_reconciliation(state: dict[str, Any]) -> None:
+    expected_cash = state["initial_cash_cents"]
+    realized = 0
+    net_quantities: dict[str, int] = defaultdict(int)
+    for index, entry in enumerate(state["journal"]):
+        if entry["cash_before_cents"] != expected_cash:
+            raise _invalid_state(f"日志 {index + 1} 与上一条现金记录不连续")
+        expected_cash = entry["cash_after_cents"]
+        direction = 1 if entry["side"] == "BUY" else -1
+        net_quantities[entry["symbol"]] += direction * entry["quantity"]
+        realized += entry["realized_pnl_cents"]
+    if expected_cash != state["cash_cents"]:
+        raise _invalid_state("日志末笔现金与账户现金不一致")
+    if realized != state["realized_pnl_cents"]:
+        raise _invalid_state("日志已实现盈亏与账户汇总不一致")
+
+    remaining_by_symbol: dict[str, int] = defaultdict(int)
+    remaining_cost = 0
+    for lot in state["lots"]:
+        remaining_by_symbol[lot["symbol"]] += lot["remaining_quantity"]
+        remaining_cost += (
+            lot["price_cents"] * lot["remaining_quantity"]
+            + lot["remaining_buy_commission_cents"]
+        )
+    symbols = set(net_quantities) | set(remaining_by_symbol)
+    if any(net_quantities[symbol] != remaining_by_symbol[symbol] for symbol in symbols):
+        raise _invalid_state("持仓数量与不可变日志无法对账")
+    if (
+        state["cash_cents"] + remaining_cost
+        != state["initial_cash_cents"] + state["realized_pnl_cents"]
+    ):
+        raise _invalid_state("现金、持仓成本与已实现盈亏无法对账")
 
 
 def _write_state(path: Path, state: dict[str, Any]) -> None:
@@ -264,7 +560,11 @@ def _parse_name(value: Any) -> str:
         raise PaperAccountValidationError(
             "股票名称不能为空。下一步: 请填写当前模拟标的名称。"
         )
-    return value.strip()[:80]
+    if len(value) > 80:
+        raise PaperAccountValidationError(
+            "股票名称不能超过 80 个字符。下一步: 请缩短名称后再提交。"
+        )
+    return value
 
 
 def _parse_note(value: Any, label: str) -> str:
@@ -274,7 +574,11 @@ def _parse_note(value: Any, label: str) -> str:
         raise PaperAccountValidationError(
             f"{label}必须是文字。下一步: 请重新填写后再提交。"
         )
-    return value.strip()[:500]
+    if len(value) > 500:
+        raise PaperAccountValidationError(
+            f"{label}不能超过 500 个字符。下一步: 请缩短内容后再提交。"
+        )
+    return value
 
 
 def _validate_buy_lot(symbol: str, quantity: int) -> None:
@@ -414,13 +718,18 @@ def record_trade(
             )
             fifo_cost_basis_cents = gross_cents + commission_cents
         else:
+            cash_received_cents = gross_cents - total_fees_cents
+            if cash_before_cents + cash_received_cents < 0:
+                raise PaperAccountValidationError(
+                    "本次模拟卖出收入不足以覆盖费用, 会导致现金透支。"
+                    "下一步: 请提高模拟成交价或调整数量后重试。"
+                )
             fifo_cost_basis_cents = _consume_fifo(
                 state,
                 symbol=parsed_symbol,
                 quantity=parsed_quantity,
                 sell_date=parsed_date,
             )
-            cash_received_cents = gross_cents - total_fees_cents
             realized_pnl_cents = (
                 cash_received_cents - fifo_cost_basis_cents
             )
@@ -517,37 +826,48 @@ def _consume_fifo(
 
 
 def _load_strategy_marks(data_dir: Path) -> dict[str, int]:
-    cache = strategy_cache.read_cache(Path(data_dir))
-    if not isinstance(cache, dict):
-        return {}
-    as_of = str(cache.get("as_of") or "")
-    marks: dict[str, int] = {}
-    results = cache.get("results")
-    if not isinstance(results, dict):
-        return marks
-    for strategy_id in sorted(results):
-        result = results.get(strategy_id)
-        if not isinstance(result, dict) or str(result.get("as_of") or "") != as_of:
-            continue
-        rows = result.get("rows")
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
+    try:
+        cache = strategy_cache.read_cache(Path(data_dir))
+        if not isinstance(cache, dict):
+            return {}
+        as_of = cache.get("as_of")
+        if not isinstance(as_of, str) or not as_of:
+            return {}
+        if date.fromisoformat(as_of).isoformat() != as_of:
+            return {}
+        results = cache.get("results")
+        if not isinstance(results, dict):
+            return {}
+
+        marks: dict[str, int] = {}
+        strategy_ids = sorted(
+            strategy_id
+            for strategy_id in results
+            if isinstance(strategy_id, str)
+        )
+        for strategy_id in strategy_ids:
+            result = results.get(strategy_id)
+            if not isinstance(result, dict) or result.get("as_of") != as_of:
                 continue
-            symbol = row.get("symbol")
-            if not isinstance(symbol, str) or symbol in marks:
+            rows = result.get("rows")
+            if not isinstance(rows, list):
                 continue
-            try:
-                close = Decimal(str(row.get("close")))
-            except (InvalidOperation, ValueError, TypeError):
-                continue
-            if not close.is_finite() or close <= 0:
-                continue
-            cents = int((close * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-            if cents > 0:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                symbol = row.get("symbol")
+                if not isinstance(symbol, str) or not symbol or symbol in marks:
+                    continue
+                try:
+                    cents = _parse_price_cents(row.get("close"))
+                except PaperAccountValidationError:
+                    continue
                 marks[symbol] = cents
-    return marks
+        return marks
+    except Exception:
+        # 估值缓存是只读辅助信息, 任意读取/结构异常都只能触发成本回退,
+        # 不能让已经原子写入的模拟成交以响应错误的形式制造重复提交歧义。
+        return {}
 
 
 def _build_response(

@@ -1,10 +1,10 @@
 """本地模拟账户 API, 不会向任何券商或外部交易系统发送委托。"""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
 from app.api import advisor as advisor_api
 from app.services import paper_account
@@ -12,24 +12,36 @@ from app.services import paper_account
 router = APIRouter(prefix="/api/paper", tags=["paper-account"])
 
 
-class ResetRequest(BaseModel):
-    initial_cash: Any = None
-    confirmation: Any = None
-
-
-class TradeRequest(BaseModel):
-    symbol: Any = None
-    name: Any = None
-    side: Any = None
-    quantity: Any = None
-    price: Any = None
-    trade_date: Any = None
-    plan_note: Any = None
-    invalidation_note: Any = None
-
-
 def _data_dir(request: Request):
     return request.app.state.repo.store.data_dir
+
+
+async def _read_json_object(request: Request) -> dict[str, Any]:
+    try:
+        raw = await request.body()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="请求内容无法读取。下一步: 请重新提交 JSON 对象。",
+        ) from exc
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail="请求内容不能为空。下一步: 请提交完整的 JSON 对象。",
+        )
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="请求内容不是有效 JSON。下一步: 请检查格式后重新提交。",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="请求内容必须是 JSON 对象。下一步: 请检查字段格式后重新提交。",
+        )
+    return payload
 
 
 def _raise_user_error(exc: Exception) -> None:
@@ -83,12 +95,13 @@ def account(request: Request) -> dict:
 
 
 @router.post("/reset")
-def reset(payload: ResetRequest, request: Request) -> dict:
+async def reset(request: Request) -> dict:
+    payload = await _read_json_object(request)
     try:
         return paper_account.reset_account(
             _data_dir(request),
-            initial_cash=payload.initial_cash,
-            confirmation=payload.confirmation,
+            initial_cash=payload.get("initial_cash"),
+            confirmation=payload.get("confirmation"),
         )
     except paper_account.PaperAccountValidationError as exc:
         _raise_user_error(exc)
@@ -97,19 +110,20 @@ def reset(payload: ResetRequest, request: Request) -> dict:
 
 
 @router.post("/trades")
-def trade(payload: TradeRequest, request: Request) -> dict:
+async def trade(request: Request) -> dict:
+    payload = await _read_json_object(request)
     _require_trusted_data_gate(request)
     try:
         return paper_account.record_trade(
             _data_dir(request),
-            symbol=payload.symbol,
-            name=payload.name,
-            side=payload.side,
-            quantity=payload.quantity,
-            price=payload.price,
-            trade_date=payload.trade_date,
-            plan_note=payload.plan_note,
-            invalidation_note=payload.invalidation_note,
+            symbol=payload.get("symbol"),
+            name=payload.get("name"),
+            side=payload.get("side"),
+            quantity=payload.get("quantity"),
+            price=payload.get("price"),
+            trade_date=payload.get("trade_date"),
+            plan_note=payload.get("plan_note"),
+            invalidation_note=payload.get("invalidation_note"),
         )
     except paper_account.PaperAccountValidationError as exc:
         _raise_user_error(exc)

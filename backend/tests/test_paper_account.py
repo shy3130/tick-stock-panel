@@ -288,6 +288,39 @@ def test_sell_rejects_short_sale_and_quantity_above_position(tmp_path):
         )
 
 
+def test_low_proceeds_sale_cannot_overdraw_cash_or_mutate_persisted_state(tmp_path):
+    paper = _paper()
+    _buy(
+        tmp_path,
+        quantity=100,
+        price="99.95",
+        trade_date="2026-07-27",
+    )
+    path = tmp_path / "user_data" / "paper_account.json"
+    persisted_before = path.read_text(encoding="utf-8")
+    account_before = paper.get_account(tmp_path, as_of=date(2026, 7, 29))
+    assert account_before["cash"] == 0.0
+
+    with pytest.raises(paper.PaperAccountValidationError, match="现金"):
+        paper.record_trade(
+            tmp_path,
+            symbol="600000.SH",
+            name="浦发银行",
+            side="SELL",
+            quantity=1,
+            price="0.01",
+            trade_date="2026-07-29",
+            plan_note="低价部分模拟退出",
+            invalidation_note="不得让现金透支",
+        )
+
+    assert path.read_text(encoding="utf-8") == persisted_before
+    reloaded = paper.get_account(tmp_path, as_of=date(2026, 7, 29))
+    assert reloaded == account_before
+    assert reloaded["positions"][0]["quantity"] == 100
+    assert len(reloaded["journal"]) == 1
+
+
 def test_atomic_persistence_reloads_without_temporary_file(tmp_path):
     first = _buy(tmp_path)
     path = tmp_path / "user_data" / "paper_account.json"
@@ -313,6 +346,137 @@ def test_missing_cache_uses_cost_fallback_and_emits_warning(tmp_path, monkeypatc
             "message": "策略缓存没有可用价格, 当前按持仓成本估值",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "bad_cache",
+    [
+        {
+            "as_of": "",
+            "results": {
+                "strategy_a": {
+                    "as_of": "",
+                    "rows": [{"symbol": "600000.SH", "close": 12.34}],
+                }
+            },
+        },
+        {
+            "as_of": "not-a-date",
+            "results": {
+                "strategy_a": {
+                    "as_of": "not-a-date",
+                    "rows": [{"symbol": "600000.SH", "close": 12.34}],
+                }
+            },
+        },
+        {"as_of": "2026-07-29", "results": []},
+        {
+            "as_of": "2026-07-29",
+            "results": {
+                "strategy_a": {
+                    "as_of": "2026-07-28",
+                    "rows": [{"symbol": "600000.SH", "close": 12.34}],
+                }
+            },
+        },
+        {
+            "as_of": "2026-07-29",
+            "results": {
+                "strategy_a": {
+                    "as_of": "2026-07-29",
+                    "rows": [{"symbol": "600000.SH", "close": "NaN"}],
+                }
+            },
+        },
+        {
+            "as_of": "2026-07-29",
+            "results": {
+                "strategy_a": {
+                    "as_of": "2026-07-29",
+                    "rows": [{"symbol": "600000.SH", "close": 0}],
+                }
+            },
+        },
+    ],
+    ids=[
+        "empty-as-of",
+        "invalid-as-of",
+        "malformed-results",
+        "stale-result",
+        "non-finite-close",
+        "non-positive-close",
+    ],
+)
+def test_malformed_or_stale_strategy_cache_falls_back_to_cost(
+    tmp_path,
+    monkeypatch,
+    bad_cache,
+):
+    paper = _paper()
+    monkeypatch.setattr(
+        paper.strategy_cache,
+        "read_cache",
+        lambda data_dir: bad_cache,
+    )
+
+    account = _buy(tmp_path)
+
+    assert account["positions"][0]["mark_source"] == "COST_FALLBACK"
+    assert account["marked_value"] == account["cost_basis"]
+
+
+def test_unrepresentable_cache_mark_cannot_break_response_after_account_write(
+    tmp_path,
+    monkeypatch,
+):
+    paper = _paper()
+    bad_cache = {
+        "as_of": "2026-07-29",
+        "results": {
+            "strategy_a": {
+                "as_of": "2026-07-29",
+                "rows": [{"symbol": "600000.SH", "close": "1e999999"}],
+            }
+        },
+    }
+    monkeypatch.setattr(
+        paper.strategy_cache,
+        "read_cache",
+        lambda data_dir: bad_cache,
+    )
+
+    response = _buy(
+        tmp_path,
+        plan_note="这次模拟成交只能记一条",
+        invalidation_note="坏估值不得制造重试歧义",
+    )
+
+    assert response["positions"][0]["mark_source"] == "COST_FALLBACK"
+    assert len(response["journal"]) == 1
+    persisted = json.loads(
+        (tmp_path / "user_data" / "paper_account.json").read_text(encoding="utf-8")
+    )
+    assert len(persisted["journal"]) == 1
+    reloaded = paper.get_account(tmp_path, as_of=date(2026, 7, 29))
+    assert len(reloaded["journal"]) == 1
+    assert reloaded["journal"][0]["id"] == response["journal"][0]["id"]
+
+
+def test_strategy_cache_read_failure_falls_back_without_breaking_trade_response(
+    tmp_path,
+    monkeypatch,
+):
+    paper = _paper()
+
+    def fail_read(data_dir):
+        raise RuntimeError("cache unavailable")
+
+    monkeypatch.setattr(paper.strategy_cache, "read_cache", fail_read)
+
+    account = _buy(tmp_path)
+
+    assert account["positions"][0]["mark_source"] == "COST_FALLBACK"
+    assert len(account["journal"]) == 1
 
 
 def test_valid_strategy_cache_marks_position_deterministically(tmp_path):
@@ -365,6 +529,71 @@ def test_journal_is_immutable_and_money_totals_reconcile(tmp_path):
     reloaded = _paper().get_account(tmp_path, as_of=date(2026, 7, 29))
     assert reloaded["journal"][0]["plan_note"] == "原始计划"
     assert reloaded["journal"][0]["id"] == entry["id"]
+
+
+@pytest.mark.parametrize("nested_section", ["lot", "journal", "huge-lot-money"])
+def test_corrupt_nested_state_fails_with_storage_guidance(
+    tmp_path,
+    nested_section,
+):
+    paper = _paper()
+    _buy(tmp_path)
+    path = tmp_path / "user_data" / "paper_account.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if nested_section == "lot":
+        state["lots"][0]["trade_date"] = "not-a-date"
+    elif nested_section == "huge-lot-money":
+        state["lots"][0]["price_cents"] = 10**1000
+    else:
+        state["journal"][0].pop("cash_after_cents")
+    path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(
+        paper.PaperAccountStorageError,
+        match=r"备份.*重置",
+    ):
+        paper.get_account(tmp_path, as_of=date(2026, 7, 29))
+
+
+def test_manual_text_fields_round_trip_without_trimming_or_truncation(tmp_path):
+    name = "  浦发银行(模拟)  "
+    plan_note = "  保留计划前后的普通空格  "
+    invalidation_note = "\t保留失效条件前后的制表符\t"
+
+    account = _buy(
+        tmp_path,
+        name=name,
+        plan_note=plan_note,
+        invalidation_note=invalidation_note,
+    )
+
+    assert account["positions"][0]["name"] == name
+    assert account["journal"][0]["name"] == name
+    assert account["journal"][0]["plan_note"] == plan_note
+    assert account["journal"][0]["invalidation_note"] == invalidation_note
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("name", "股" * 81, "股票名称"),
+        ("plan_note", "计" * 501, "模拟计划"),
+        ("invalidation_note", "失" * 501, "失效条件"),
+    ],
+)
+def test_oversized_manual_text_is_rejected_instead_of_silently_truncated(
+    tmp_path,
+    field,
+    value,
+    message,
+):
+    paper = _paper()
+    kwargs = {field: value}
+
+    with pytest.raises(paper.PaperAccountValidationError, match=message):
+        _buy(tmp_path, **kwargs)
+
+    assert not (tmp_path / "user_data" / "paper_account.json").exists()
 
 
 def test_sellable_quantity_uses_valuation_date(tmp_path):
