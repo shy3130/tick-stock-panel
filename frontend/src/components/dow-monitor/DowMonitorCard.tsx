@@ -756,6 +756,9 @@ function blockedLabel(
 ) {
   if (forceBlocked) return blockedReason ?? '监控状态不可用'
   if (!item.enabled) return '监控已暂停'
+  if (item.analysis_status && item.analysis_status !== 'READY') {
+    return item.analysis_status_label ?? '分析尚未完成'
+  }
   if (state?.freshness_state === 'STALE_DATA') return '数据延迟'
   if (state?.freshness_state === 'ANALYSIS_PAUSED') return '分析暂停'
   return null
@@ -823,7 +826,8 @@ export function DowMonitorCard({
   const quoteTime = quoteAvailable
     ? formatServerTimestamp(displayedItem.quote_timestamp)
     : null
-  const successTime = quoteReady ? formatServerTimestamp(item.last_success_at) : null
+  const completedMinuteTime = formatServerTimestamp(item.completed_minute_timestamp)
+  const analysisTime = formatServerTimestamp(item.analysis_timestamp)
   const { bid, ask } = bestBidAsk(realtimeState?.depth)
   const realtimeDelayed = Boolean(
     realtimeState?.quoteDelayed
@@ -1032,10 +1036,15 @@ export function DowMonitorCard({
               {change > 0 ? '+' : ''}{change.toFixed(2)}%
             </span>
           )}
-          {(quoteTime || successTime) && (
-            <span className="ml-auto flex min-w-0 gap-2 overflow-hidden font-mono text-[9px] text-muted">
+          {(quoteTime || completedMinuteTime || analysisTime) && (
+            <span className="ml-auto flex min-w-0 flex-wrap justify-end gap-x-2 gap-y-0.5 font-mono text-[9px] text-muted">
               {quoteTime && <span className="whitespace-nowrap">行情 {quoteTime}</span>}
-              {successTime && <span className="whitespace-nowrap">成功 {successTime}</span>}
+              {completedMinuteTime && (
+                <span className="whitespace-nowrap">分钟 {completedMinuteTime}</span>
+              )}
+              {analysisTime && (
+                <span className="whitespace-nowrap">分析 {analysisTime}</span>
+              )}
             </span>
           )}
           {(bid != null || ask != null) && (
@@ -1118,7 +1127,9 @@ export function DowMonitorCard({
         )}
         {orderedNotifications.length === 0 && !notificationLoading && !notificationError ? (
           <div className="flex min-h-24 items-center justify-center text-[10px] text-muted">
-            暂无当日决策消息
+            {item.analysis_status === 'READY'
+              ? '当前分钟没有触发提示'
+              : item.analysis_status_label ?? '当前分钟没有触发提示'}
           </div>
         ) : latestNotification ? (
           <div className="min-w-0">

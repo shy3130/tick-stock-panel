@@ -403,6 +403,16 @@ export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {
   last_price: number | null
   change_pct: number | null
   quote_timestamp: number | string | null
+  completed_minute_timestamp?: string | null
+  analysis_timestamp?: string | null
+  analysis_status?:
+    | 'READY'
+    | 'WAITING'
+    | 'HISTORY_PENDING'
+    | 'QUOTE_DELAYED'
+    | 'ANALYSIS_TIMEOUT'
+    | 'ANALYSIS_PAUSED'
+  analysis_status_label?: string
   next_day_direction?: DowMonitorNextDayDirection | null
   intraday_capital?: DowMonitorIntradayCapital | null
   minute_decision?: DowMinuteDecision | null
