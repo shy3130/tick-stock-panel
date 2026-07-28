@@ -365,6 +365,38 @@ export interface DowMinuteRiskWarning {
   message: string
 }
 
+export interface DowDailyDecisionPhase {
+  code:
+    | 'RAPID_RISE_CONFIRMED'
+    | 'PRICE_CAPITAL_DIVERGENCE'
+    | 'SURGE_REVERSAL_RISK'
+    | 'DOWNSIDE_CONFIRMED'
+  label: string
+  first_observed_at: string
+}
+
+export interface DowDailyDecisionEvidence {
+  code: string
+  text: string
+  observed_at: string
+}
+
+export interface DowDailyDecisionSummary {
+  as_of_minute: string
+  direction: 'BULLISH' | 'BEARISH' | 'RANGE'
+  direction_label: '偏涨' | '偏跌' | '震荡'
+  action: 'WATCH_BUY' | 'HOLD' | 'REDUCE_SELL' | 'OBSERVE'
+  action_label: '买入观察' | '持有' | '减仓/卖出' | '继续观察'
+  confidence: number
+  phase_path: DowDailyDecisionPhase[]
+  summary_text: string
+  key_evidence: DowDailyDecisionEvidence[]
+  reversal_condition: string
+  data_status: string
+  status_label: string
+  input_event_ids: string[]
+}
+
 export interface DowMinuteDecision {
   symbol: string
   market: DowMonitorSymbolMarket
@@ -396,6 +428,7 @@ export interface DowMinuteDecision {
   turn_stronger_condition?: string | null
   turn_weaker_condition?: string | null
   risk_warning?: DowMinuteRiskWarning | null
+  daily_summary?: DowDailyDecisionSummary | null
 }
 
 export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {

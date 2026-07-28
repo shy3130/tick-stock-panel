@@ -944,6 +944,196 @@ describe('Dow monitor page', () => {
     expect(within(card).getByText('138.80')).toBeVisible()
   })
 
+  it('shows the compact daily summary above the latest message and keeps detailed history', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+    const withSummary = structuredClone(overview)
+    withSummary.symbols[0].minute_decision = {
+      symbol: '01347.HK',
+      market: 'hk',
+      decision_minute: '2026-07-28T16:00:00+08:00',
+      direction: 'BEARISH',
+      direction_label: '偏跌',
+      action: 'REDUCE_SELL',
+      action_label: '减仓/卖出',
+      confidence: 82,
+      dominant_timeframe: '15m',
+      confirmation_timeframes: ['30m'],
+      supporting_reasons: ['15/30分钟结构同向偏弱'],
+      contrary_risks: [],
+      invalidation_conditions: ['重新站上VWAP并获得资金确认'],
+      data_status: 'COMPLETE',
+      status_label: '数据完整',
+      source_timestamp: '2026-07-28T15:59:00+08:00',
+      daily_summary: {
+        as_of_minute: '2026-07-28T16:00:00+08:00',
+        direction: 'BEARISH',
+        direction_label: '偏跌',
+        action: 'REDUCE_SELL',
+        action_label: '减仓/卖出',
+        confidence: 82,
+        phase_path: [
+          {
+            code: 'RAPID_RISE_CONFIRMED',
+            label: '急涨确认',
+            first_observed_at: '2026-07-28T09:34:00+08:00',
+          },
+          {
+            code: 'PRICE_CAPITAL_DIVERGENCE',
+            label: '价格资金背离',
+            first_observed_at: '2026-07-28T09:36:00+08:00',
+          },
+          {
+            code: 'SURGE_REVERSAL_RISK',
+            label: '冲高回落',
+            first_observed_at: '2026-07-28T09:39:00+08:00',
+          },
+          {
+            code: 'DOWNSIDE_CONFIRMED',
+            label: '下跌确认',
+            first_observed_at: '2026-07-28T10:24:00+08:00',
+          },
+        ],
+        summary_text: '价格结构、资金或正式卖点已经形成下跌确认。',
+        key_evidence: [
+          {
+            code: 'PRICE_CAPITAL_DIVERGENCE',
+            text: '大单转负1436万',
+            observed_at: '2026-07-28T09:36:00+08:00',
+          },
+          {
+            code: 'ACTIVE_SELL_IMBALANCE',
+            text: '主动卖出占优40%',
+            observed_at: '2026-07-28T09:36:00+08:00',
+          },
+          {
+            code: 'SELL_POINT_15m',
+            text: '15分卖出确认',
+            observed_at: '2026-07-28T12:00:00+08:00',
+          },
+        ],
+        reversal_condition: '重新站上VWAP，且15分钟结构转多并得到资金确认',
+        data_status: 'COMPLETE',
+        status_label: '实时',
+        input_event_ids: ['risk-latest', 'risk-history'],
+      },
+    }
+    hooks.overview = { data: withSummary, isError: false, isLoading: false }
+    hooks.notifications = {
+      data: {
+        notifications: [
+          {
+            ...hkNotification,
+            notification_id: 'risk-latest',
+            side: 'RISK',
+            available_at: '2026-07-28T14:11:00+08:00',
+            prompt_text: '冲高回落风险',
+            evidence_text: '高点回落10.60%；盘口卖压78%，5分钟量能放大43.1%。',
+          },
+          {
+            ...hkNotification,
+            notification_id: 'risk-history',
+            side: 'RISK',
+            available_at: '2026-07-28T14:07:00+08:00',
+            prompt_text: '资金承接无效',
+            evidence_text: '价格跌破VWAP 3.76%，大单净流入10070万，但价格继续下跌。',
+          },
+          {
+            ...hkNotification,
+            notification_id: 'sell-history',
+            side: 'SELL',
+            timeframe: '15m',
+            available_at: '2026-07-28T12:00:00+08:00',
+            prompt_text: '卖出触发｜趋势线突破',
+            evidence_text: '周期15分，趋势线突破，触发价139.00。',
+          },
+        ],
+      },
+      isError: false,
+      isLoading: false,
+    }
+
+    render(<DowMonitor />)
+
+    const card = screen.getByTestId('card-01347.HK')
+    const summary = within(card).getByTestId('daily-decision-summary')
+    const latest = within(card).getByTestId('latest-card-message')
+    expect(summary).toHaveTextContent('今日综合决策')
+    expect(summary).toHaveTextContent('偏跌 · 减仓/卖出')
+    expect(summary).toHaveTextContent('82%')
+    expect(summary).toHaveTextContent(
+      '急涨确认 → 价格资金背离 → 冲高回落 → 下跌确认',
+    )
+    expect(summary).toHaveTextContent('大单转负1436万')
+    expect(summary).toHaveTextContent('15分卖出确认')
+    expect(
+      Boolean(summary.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true)
+    expect(latest).toHaveTextContent('冲高回落风险')
+    expect(latest).toHaveTextContent('盘口卖压78%')
+
+    const historyDetails = within(card).getByText('历史信息（2条）').closest('details')
+    expect(historyDetails).not.toBeNull()
+    expect(historyDetails).not.toHaveAttribute('open')
+    const history = within(card).getByTestId('history-card-messages')
+    expect(history).toHaveTextContent('价格跌破VWAP 3.76%')
+    expect(history).toHaveTextContent('大单净流入10070万')
+    expect(history).toHaveTextContent('周期15分，趋势线突破，触发价139.00')
+  })
+
+  it('keeps a daily summary visible when the current day has no message', () => {
+    window.history.replaceState(null, '', '/dow-monitor?market=hk')
+    const withSummary = structuredClone(overview)
+    withSummary.symbols[0].minute_decision = {
+      symbol: '01347.HK',
+      market: 'hk',
+      decision_minute: '2026-07-28T09:31:00+08:00',
+      direction: 'RANGE',
+      direction_label: '震荡',
+      action: 'OBSERVE',
+      action_label: '继续观察',
+      confidence: 40,
+      dominant_timeframe: null,
+      confirmation_timeframes: [],
+      supporting_reasons: [],
+      contrary_risks: ['关键周期不足'],
+      invalidation_conditions: ['等待15/30分钟结构完整'],
+      data_status: 'INSUFFICIENT_STRUCTURE',
+      status_label: '关键周期不足',
+      source_timestamp: '2026-07-28T09:30:00+08:00',
+      daily_summary: {
+        as_of_minute: '2026-07-28T09:31:00+08:00',
+        direction: 'RANGE',
+        direction_label: '震荡',
+        action: 'OBSERVE',
+        action_label: '继续观察',
+        confidence: 40,
+        phase_path: [],
+        summary_text: '多空证据尚未同向，继续观察。',
+        key_evidence: [],
+        reversal_condition: '15/30分钟重新同向并获得资金确认',
+        data_status: 'INSUFFICIENT_STRUCTURE',
+        status_label: '证据不足',
+        input_event_ids: [],
+      },
+    }
+    hooks.overview = { data: withSummary, isError: false, isLoading: false }
+    hooks.notifications = {
+      data: { notifications: [] },
+      isError: false,
+      isLoading: false,
+    }
+
+    render(<DowMonitor />)
+
+    const card = screen.getByTestId('card-01347.HK')
+    expect(within(card).getByTestId('daily-decision-summary')).toHaveTextContent(
+      '证据不足',
+    )
+    expect(within(card).getByRole('log')).toHaveTextContent(
+      '当前分钟没有触发提示',
+    )
+  })
+
   it('keeps the market query parameter in sync when switching tabs', async () => {
     const user = userEvent.setup()
     window.history.replaceState(null, '', '/dow-monitor?market=hk')
@@ -1087,7 +1277,7 @@ describe('Dow monitor page', () => {
     expect(within(named).getByText('+1.25%')).toBeInTheDocument()
     expect(within(named).queryByText('+5.77%')).not.toBeInTheDocument()
     expect(within(named).getByText('行情 2026-03-29 10:51')).toBeVisible()
-    expect(within(named).getByText('成功 2026-07-23 09:05')).toBeVisible()
+    expect(within(named).queryByText('成功 2026-07-23 09:05')).not.toBeInTheDocument()
     expect(screen.getByText('数据源 webstock · 源 2026-07-23 09:05')).toBeVisible()
 
     const unnamed = screen.getByTestId('card-INTC.US')
@@ -1166,7 +1356,7 @@ describe('Dow monitor page', () => {
       'compact-two-row',
     )
     expect(within(card).getByText('行情 2026-03-29 10:51')).toBeInTheDocument()
-    expect(within(card).getByText('成功 2026-07-23 09:05')).toBeInTheDocument()
+    expect(within(card).queryByText('成功 2026-07-23 09:05')).not.toBeInTheDocument()
     expect(within(card).getByTestId('mini-chart-01347.HK-5m')).toHaveStyle({
       height: '180px',
     })
@@ -1381,9 +1571,9 @@ describe('Dow monitor page', () => {
 
     await user.click(screen.getByRole('button', { name: 'A股' }))
 
-    expect(screen.getByRole('log', { name: '600000.SH 当日决策消息' })).toHaveTextContent(
-      '暂无当日决策消息',
-    )
+    const messageBox = screen.getByRole('log', { name: '600000.SH 当日决策消息' })
+    expect(messageBox).toHaveTextContent('分析暂停')
+    expect(messageBox).toHaveTextContent('当前分钟没有触发提示')
     expect(screen.queryByTestId('dow-monitor-signal-rail')).not.toBeInTheDocument()
   })
 

@@ -13,6 +13,7 @@ import type {
 } from '@/lib/realtimeMarketData'
 
 import { DowMiniChart, getLatestValidDowSignalSide } from './DowMiniChart'
+import { DailyDecisionSummary } from './DailyDecisionSummary'
 import { formatServerTimestamp } from './formatServerTimestamp'
 import type {
   DowMonitorNotification,
@@ -918,6 +919,7 @@ export function DowMonitorCard({
     return rightTime - leftTime
   })
   const [latestNotification, ...historicalNotifications] = orderedNotifications
+  const dailySummary = displayedItem.minute_decision?.daily_summary ?? null
 
   const renderNotification = (
     notification: DowMonitorNotification,
@@ -1125,6 +1127,7 @@ export function DowMonitorCard({
         {notificationError && (
           <div className="mb-1 text-center text-[10px] text-danger">通知加载失败</div>
         )}
+        {dailySummary && <DailyDecisionSummary summary={dailySummary} />}
         {orderedNotifications.length === 0 && !notificationLoading && !notificationError ? (
           <div className="flex min-h-24 items-center justify-center text-[10px] text-muted">
             {item.analysis_status === 'READY'
