@@ -139,7 +139,14 @@ export function paperMutationErrorMessage(
 ): string {
   const message = error instanceof Error ? error.message.trim() : ''
   if (/[\u3400-\u9fff]/u.test(message)) {
-    return message
+    if (message.includes('下一步')) {
+      return message
+    }
+    const separator = /[。！？；.!?;]$/u.test(message) ? '' : '。'
+    const nextAction = operation === 'reset'
+      ? '下一步：请刷新账户确认当前状态，确认尚未重置后再重新提交。'
+      : '下一步：请刷新账户及最近记录确认结果，确认尚未记录后再重试。'
+    return `${message}${separator}${nextAction}`
   }
   return operation === 'reset'
     ? '无法连接本地服务，账户重置尚未确认。下一步：检查应用服务是否运行，再重新提交。'

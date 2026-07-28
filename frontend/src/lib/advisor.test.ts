@@ -96,9 +96,9 @@ describe('actionPresentation', () => {
 })
 
 describe('resolvePaperActionState', () => {
-  it('fails closed when a background daily-brief refresh errors after a research state', () => {
+  it('treats a background daily-brief refresh error as unknown instead of fabricating an action', () => {
     expect(resolvePaperActionState('RESEARCH_ONLY', false)).toBe('RESEARCH_ONLY')
-    expect(resolvePaperActionState('RESEARCH_ONLY', true)).toBe('OBSERVE_ONLY')
+    expect(resolvePaperActionState('RESEARCH_ONLY', true)).toBeUndefined()
   })
 
   it('keeps the form disabled while no daily brief has loaded', () => {

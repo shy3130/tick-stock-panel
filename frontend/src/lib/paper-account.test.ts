@@ -128,10 +128,23 @@ describe('dynamic local trade date', () => {
 })
 
 describe('paperMutationErrorMessage', () => {
-  it('preserves beginner-readable Chinese backend errors', () => {
-    const backendMessage = '模拟账户现金不足。下一步：请降低数量后重试。'
+  it('preserves reset and trade backend errors that already include a next step', () => {
+    const resetMessage = '模拟账户无法重置。下一步：请刷新账户后重试。'
+    const tradeMessage = '模拟账户现金不足。下一步：请降低数量后重试。'
 
-    expect(paperMutationErrorMessage(new Error(backendMessage), 'trade')).toBe(backendMessage)
+    expect(paperMutationErrorMessage(new Error(resetMessage), 'reset')).toBe(resetMessage)
+    expect(paperMutationErrorMessage(new Error(tradeMessage), 'trade')).toBe(tradeMessage)
+  })
+
+  it('appends operation-specific next steps to Chinese backend errors without remediation', () => {
+    const backendMessage = '模拟账户保存失败, 本次操作未确认写入。'
+
+    expect(paperMutationErrorMessage(new Error(backendMessage), 'reset')).toBe(
+      `${backendMessage}下一步：请刷新账户确认当前状态，确认尚未重置后再重新提交。`,
+    )
+    expect(paperMutationErrorMessage(new Error(backendMessage), 'trade')).toBe(
+      `${backendMessage}下一步：请刷新账户及最近记录确认结果，确认尚未记录后再重试。`,
+    )
   })
 
   it('maps network and unknown failures to a Chinese reason and next action', () => {

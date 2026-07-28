@@ -142,7 +142,7 @@ export function resolvePaperActionState(
   actionState: AdvisorActionState | undefined,
   hasBriefError: boolean,
 ): AdvisorActionState | undefined {
-  return hasBriefError ? 'OBSERVE_ONLY' : actionState
+  return hasBriefError ? undefined : actionState
 }
 
 export function presentTrustDatasets(
