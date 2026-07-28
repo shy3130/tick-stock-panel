@@ -386,6 +386,8 @@ describe('Dow monitor page', () => {
 
     expect(screen.getByTestId('card-01347.HK')).toBeInTheDocument()
     expect(screen.getByTestId('realtime-state-01347.HK')).toHaveTextContent('方向：')
+    expect(within(screen.getByTestId('card-01347.HK')).queryByText(/历史信息（/))
+      .not.toBeInTheDocument()
     expect(screen.queryByTestId('card-INTC.US')).not.toBeInTheDocument()
     expect(realtimeMocks.useRealtimeMarketData).toHaveBeenCalledWith(
       ['01347.HK'],
@@ -884,7 +886,7 @@ describe('Dow monitor page', () => {
     expect(stateBox).toHaveTextContent('下跌承接 / 资金修复 / 卖压衰减 / 弱转强观察')
   })
 
-  it('keeps the server minute decision stable while realtime quotes update', () => {
+  it('does not render a duplicate minute decision panel while realtime quotes update', () => {
     window.history.replaceState(null, '', '/dow-monitor?market=hk')
     const withDecision = structuredClone(overview)
     withDecision.symbols[0].minute_decision = {
@@ -908,11 +910,9 @@ describe('Dow monitor page', () => {
     hooks.overview = { data: withDecision, isError: false, isLoading: false }
 
     const { rerender } = render(<DowMonitor />)
-    const before = within(screen.getByTestId('card-01347.HK'))
-      .getByTestId('minute-decision-panel')
-    expect(before).toHaveTextContent('偏涨')
-    expect(before).toHaveTextContent('买入观察')
-    expect(before).toHaveTextContent('72%')
+    const card = screen.getByTestId('card-01347.HK')
+    expect(within(card).queryByTestId('minute-decision-panel')).not.toBeInTheDocument()
+    expect(within(card).getByTestId('latest-card-message')).toHaveTextContent('买入')
 
     realtimeMocks.view = {
       status: 'realtime',
@@ -939,11 +939,9 @@ describe('Dow monitor page', () => {
     }
     rerender(<DowMonitor />)
 
-    const after = within(screen.getByTestId('card-01347.HK'))
-      .getByTestId('minute-decision-panel')
-    expect(after).toHaveTextContent('偏涨')
-    expect(after).toHaveTextContent('买入观察')
-    expect(after).toHaveTextContent('72%')
+    expect(within(card).queryByTestId('minute-decision-panel')).not.toBeInTheDocument()
+    expect(within(card).getByTestId('latest-card-message')).toHaveTextContent('买入')
+    expect(within(card).getByText('138.80')).toBeVisible()
   })
 
   it('keeps the market query parameter in sync when switching tabs', async () => {
@@ -976,7 +974,8 @@ describe('Dow monitor page', () => {
     expect(screen.queryByTestId('card-message-INTC.US-SELL')).not.toBeInTheDocument()
   })
 
-  it('shows all current-day buy sell and risk messages newest first in two-line rows', () => {
+  it('shows only the latest message and folds every older message newest first', async () => {
+    const user = userEvent.setup()
     hooks.notifications = {
       data: {
         notifications: [
@@ -1020,24 +1019,39 @@ describe('Dow monitor page', () => {
 
     const hongKongCard = screen.getByTestId('card-01347.HK')
     expect(hongKongCard).toHaveClass('dow-card-container')
+    expect(within(hongKongCard).queryByLabelText('分钟决策分析中心'))
+      .not.toBeInTheDocument()
     const messageBox = within(hongKongCard).getByRole('log', { name: '01347.HK 当日决策消息' })
-    expect(messageBox).toHaveClass('overflow-y-auto')
     expect(messageBox).not.toHaveTextContent('可获知时间')
     expect(messageBox).not.toHaveTextContent('完成后')
     expect(within(messageBox).queryByRole('button', { name: '标记 01347.HK 已读' }))
       .not.toBeInTheDocument()
     expect(messageBox).toHaveTextContent('首次冲高回落预警')
     expect(messageBox).toHaveTextContent('资金流1分钟恶化1500万')
+    const latestMessage = within(messageBox).getByTestId('latest-card-message')
+    expect(within(latestMessage).getByTestId('card-message-01347.HK-BUY-30m'))
+      .toBeInTheDocument()
+    expect(within(latestMessage).queryByTestId('card-message-01347.HK-RISK'))
+      .not.toBeInTheDocument()
+
+    const historySummary = within(messageBox).getByText('历史信息（2条）')
+    const historyDetails = historySummary.closest('details')
+    expect(historyDetails).not.toHaveAttribute('open')
+    const historyMessages = within(messageBox).getByTestId('history-card-messages')
     const messageRows = Array.from(
-      messageBox.querySelectorAll<HTMLElement>('[data-testid^="card-message-"]'),
+      historyMessages.querySelectorAll<HTMLElement>('[data-testid^="card-message-"]'),
     ).filter(element => !element.dataset.testid?.includes('headline')
       && !element.dataset.testid?.includes('evidence'))
     expect(messageRows.map(element => element.dataset.testid)).toEqual([
-      'card-message-01347.HK-BUY-30m',
       'card-message-01347.HK-RISK',
       'card-message-01347.HK-BUY',
     ])
-    const newestMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY-30m')
+    expect(within(historyMessages).queryByTestId('card-message-01347.HK-BUY-30m'))
+      .not.toBeInTheDocument()
+    await user.click(historySummary)
+    expect(historyDetails).toHaveAttribute('open')
+
+    const newestMessage = within(latestMessage).getByTestId('card-message-01347.HK-BUY-30m')
     expect(newestMessage).toHaveClass('border-b', 'dow-timeline-row')
     expect(newestMessage).not.toHaveClass('rounded', 'bg-elevated/50')
     const newestHeadline = within(newestMessage).getByTestId(
@@ -1052,6 +1066,13 @@ describe('Dow monitor page', () => {
       '内部变化：周期30分，跌破趋势线13.20，结构位12.90',
     )
     expect(within(messageBox).queryByTestId('card-message-INTC.US-SELL')).not.toBeInTheDocument()
+    const rawDetails = within(hongKongCard)
+      .getByText('分钟行情原始信息（辅助）')
+      .closest('details')
+    expect(rawDetails).not.toHaveAttribute('open')
+    expect(
+      Boolean(historyDetails?.compareDocumentPosition(rawDetails!) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true)
     expect(screen.queryByTestId('dow-monitor-signal-rail')).not.toBeInTheDocument()
   })
 
