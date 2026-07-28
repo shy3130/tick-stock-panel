@@ -147,3 +147,12 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-symbol-identity.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-symbol-identity.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT-001
+    specification: USER-20260728-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
+    tests:
+      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-detail-toggle-layout.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-detail-toggle-layout.md, type: independent-review}

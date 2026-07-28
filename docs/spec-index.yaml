@@ -25,6 +25,11 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-HEAD-SHOULDERS-SIGNAL-001
+  - id: USER-20260728-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT
+    path: docs/specs/dow-monitor-detail-toggle-layout.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT-001
   - id: SPEC-COLLECTION-MONITOR-INTEGRATION-001
     path: docs/specs/collection-monitor-integration.md
     status: authoritative

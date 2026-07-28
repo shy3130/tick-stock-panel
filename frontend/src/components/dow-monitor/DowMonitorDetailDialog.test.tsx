@@ -781,6 +781,23 @@ describe('Dow monitor detail dialog', () => {
     expect(screen.getByTestId('daily-candlestick')).toHaveAttribute('data-price-lines', '[]')
   })
 
+  it('anchors overlay switch thumbs inside their tracks', () => {
+    render(
+      <DowMonitorDetailDialog
+        symbol="01347.HK"
+        timeframe="5m"
+        open
+        onClose={vi.fn()}
+      />,
+    )
+
+    for (const name of ['显示趋势线和压力线', '头肩形态']) {
+      const control = screen.getByRole('switch', { name })
+      expect(control.firstElementChild).toHaveClass('left-0')
+      expect(control.firstElementChild).toHaveClass('translate-x-3')
+    }
+  })
+
   it('isolates the head-and-shoulders switch from Dow markers and trend lines', async () => {
     const user = userEvent.setup()
     render(

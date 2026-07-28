@@ -197,7 +197,7 @@ export function DowMonitorDetailDialog({
             >
               <span
                 className={cn(
-                  'absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform',
+                  'absolute left-0 top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform',
                   showLines ? 'translate-x-3' : 'translate-x-0.5',
                 )}
               />
@@ -219,7 +219,7 @@ export function DowMonitorDetailDialog({
             >
               <span
                 className={cn(
-                  'absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform',
+                  'absolute left-0 top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-transform',
                   showHeadShoulders ? 'translate-x-3' : 'translate-x-0.5',
                 )}
               />
