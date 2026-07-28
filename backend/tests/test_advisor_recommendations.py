@@ -304,6 +304,58 @@ def test_advisor_quarantines_risk_from_non_representative_strategy_row(
     assert candidate["close"] == 10.2
 
 
+@pytest.mark.parametrize(
+    "invalid_score",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "not-a-number",
+        -0.1,
+        100.1,
+    ],
+)
+def test_advisor_quarantines_invalid_strategy_scores(invalid_score):
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    for result in cache["results"].values():
+        result["rows"][0]["score"] = invalid_score
+
+    recommendation = build_advisor_recommendations(_trusted_audits(), cache)
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert candidate["score"] == 0.0
+    assert candidate["risk_flags"] == [
+        {
+            "code": "INVALID_STRATEGY_SCORE",
+            "message": "策略分数缺失、非有限数或超出 0 到 100, 已隔离并等待重新生成",
+        }
+    ]
+    assert all(value is None for value in candidate["strategy_scores"].values())
+
+
+def test_advisor_quarantines_invalid_score_from_any_contributing_strategy():
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    cache["results"]["bullish_alignment"]["rows"][0]["score"] = float("nan")
+
+    recommendation = build_advisor_recommendations(_trusted_audits(), cache)
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert candidate["score"] == 82.0
+    assert [flag["code"] for flag in candidate["risk_flags"]] == [
+        "INVALID_STRATEGY_SCORE"
+    ]
+    assert candidate["strategy_scores"] == {
+        "bullish_alignment": None,
+        "trend_breakout": 82.0,
+    }
+
+
 def test_advisor_api_reads_only_persisted_audits_and_strategy_cache(monkeypatch, tmp_path):
     from app.api import advisor as advisor_api
 

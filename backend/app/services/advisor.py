@@ -21,6 +21,7 @@ _RISK_FLAG_ORDER = (
     "ADJUSTMENT_EVENT_ON_AS_OF",
     "ABNORMAL_DAILY_RETURN",
     "INVALID_PRICE",
+    "INVALID_STRATEGY_SCORE",
     "LIMIT_UP",
     "LIMIT_DOWN",
 )
@@ -189,6 +190,18 @@ def _extend_unique(target: list[str], values: list[str]) -> None:
             target.append(value)
 
 
+def _validated_strategy_score(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(score) or not 0.0 <= score <= 100.0:
+        return None
+    return score
+
+
 def _risk_flags(
     row: dict[str, Any],
     *,
@@ -283,16 +296,30 @@ def build_advisor_recommendations(
 
     candidates: list[dict] = []
     for symbol, matches in grouped.items():
-        strategy_scores = {
-            strategy_id: float(row.get("score") or 0.0)
-            for strategy_id, row in matches
-        }
-        scores = list(strategy_scores.values())
+        strategy_scores: dict[str, float | None] = {}
+        valid_matches: list[tuple[str, dict, float]] = []
+        invalid_score = False
+        for strategy_id, row in matches:
+            parsed_score = _validated_strategy_score(row.get("score"))
+            strategy_scores[strategy_id] = parsed_score
+            if parsed_score is None:
+                invalid_score = True
+            else:
+                valid_matches.append((strategy_id, row, parsed_score))
+
+        scores = [parsed_score for _, _, parsed_score in valid_matches]
         highest = max(scores) if scores else 0.0
         average = sum(scores) / len(scores) if scores else 0.0
-        consensus_bonus = min(24.0, max(0, len(matches) - 1) * _CONSENSUS_BONUS)
+        consensus_bonus = min(
+            24.0,
+            max(0, len(valid_matches) - 1) * _CONSENSUS_BONUS,
+        )
         score = round(min(100.0, highest * 0.7 + average * 0.3 + consensus_bonus), 1)
-        representative = max(matches, key=lambda item: float(item[1].get("score") or 0.0))[1]
+        representative = (
+            max(valid_matches, key=lambda item: item[2])[1]
+            if valid_matches
+            else matches[0][1]
+        )
         flags_by_code: dict[str, dict[str, str]] = {}
         for _, row in matches:
             for flag in _risk_flags(
@@ -300,6 +327,11 @@ def build_advisor_recommendations(
                 adjustment_event_on_as_of=symbol in (adjustment_event_symbols or set()),
             ):
                 flags_by_code[flag["code"]] = flag
+        if invalid_score:
+            flags_by_code["INVALID_STRATEGY_SCORE"] = {
+                "code": "INVALID_STRATEGY_SCORE",
+                "message": "策略分数缺失、非有限数或超出 0 到 100, 已隔离并等待重新生成",
+            }
         risk_flags = [
             flags_by_code[code]
             for code in _RISK_FLAG_ORDER

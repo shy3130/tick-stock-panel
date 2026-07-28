@@ -53,6 +53,24 @@ _last_finished_cache: dict[str, str | None] | None = None
 _last_finished_lock = threading.Lock()
 
 
+@router.get("/trust")
+def data_trust_status(request: Request) -> dict:
+    """Return durable provenance and quality receipts for ingested datasets."""
+    from app.data_providers.trust import load_latest_audits
+
+    audits = load_latest_audits(request.app.state.repo.store.data_dir)
+    statuses = {str(audit.get("status") or "") for audit in audits}
+    if not audits:
+        overall = "unconfigured"
+    elif statuses & {"error", "invalid"}:
+        overall = "error"
+    elif statuses & {"empty", "partial"}:
+        overall = "warning"
+    else:
+        overall = "ok"
+    return {"overall_status": overall, "audits": audits}
+
+
 def invalidate_data_cache(table: str | None = None) -> None:
     """数据写入/清除后调用。
 

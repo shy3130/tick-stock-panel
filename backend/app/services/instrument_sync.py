@@ -34,6 +34,10 @@ def _flatten_instruments(items: list[dict]) -> list[dict]:
         }
         ext = item.get("ext") or {}
         row["listing_date"] = ext.get("listing_date")
+        row["delist_date"] = ext.get("delist_date")
+        row["list_status"] = ext.get("list_status")
+        row["market"] = ext.get("market")
+        row["universe_history"] = ext.get("universe_history")
         row["total_shares"] = ext.get("total_shares")
         row["float_shares"] = ext.get("float_shares")
         row["tick_size"] = ext.get("tick_size")
@@ -57,15 +61,29 @@ def _fetch_instruments_via_provider() -> list[dict] | None:
     from app.data_providers import custom as custom_sources
 
     if not custom_sources.is_custom_provider(provider_name):
-        return None
+        from app.data_providers.trust import DataProviderUnavailable
+        raise DataProviderUnavailable(
+            provider_name,
+            "instruments",
+            "the selected provider is not configured or available",
+        )
     provider = custom_sources.get_provider(provider_name)
     if not hasattr(provider, "get_instruments"):
-        return None
+        from app.data_providers.trust import DataProviderUnavailable
+        raise DataProviderUnavailable(
+            provider_name,
+            "instruments",
+            "the selected provider does not implement instruments",
+        )
     try:
         items = provider.get_instruments("stock") or []
-    except Exception as e:  # noqa: BLE001
-        logger.warning("provider %s get_instruments 失败: %s", provider_name, e)
-        return None
+    except Exception as error:
+        from app.data_providers.trust import DataProviderFetchFailed
+        raise DataProviderFetchFailed(
+            provider_name,
+            "instruments",
+            error,
+        ) from error
     rows = _flatten_instruments(items)
     logger.info("instruments via %s: %d stocks", provider_name, len(rows))
     return rows
@@ -76,7 +94,30 @@ def sync_instruments(data_dir: Path) -> int:
 
     返回写入的行数。
     """
-    all_rows = _fetch_instruments_via_provider()
+    from app.services import preferences
+
+    provider_name = preferences.get_daily_data_provider()
+    try:
+        all_rows = _fetch_instruments_via_provider()
+    except Exception as error:
+        from app.data_providers.trust import (
+            DataProviderFetchFailed,
+            audit_market_error,
+            write_latest_audit,
+        )
+
+        if not isinstance(error, DataProviderFetchFailed):
+            raise
+        write_latest_audit(
+            data_dir,
+            audit_market_error(
+                provider=provider_name,
+                dataset="instruments",
+                requested_symbols=[],
+                error=error.cause,
+            ),
+        )
+        raise
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连
         tf = get_client()
@@ -95,6 +136,15 @@ def sync_instruments(data_dir: Path) -> int:
 
     df = pl.DataFrame(all_rows)
     df = df.with_columns(pl.lit(date.today()).alias("as_of"))
+    from app.data_providers.trust import audit_market_frame, write_latest_audit
+
+    audit = audit_market_frame(
+        provider=provider_name,
+        dataset="instruments",
+        frame=df,
+        requested_symbols=[],
+    )
+    write_latest_audit(data_dir, audit)
 
     out = data_dir / "instruments" / "instruments.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 import polars as pl
@@ -172,17 +173,46 @@ def sync_and_persist_daily_batch(
     provider_name = preferences.get_daily_data_provider()
     if provider_name != "tickflow":
         from app.data_providers import custom as custom_sources
+        from app.data_providers.trust import (
+            DataProviderFetchFailed,
+            DataProviderUnavailable,
+            DataQualityRejected,
+            audit_market_error,
+            audit_market_frame,
+            write_latest_audit,
+        )
+
         if custom_sources.provider_has_dataset(provider_name, "daily"):
             provider = custom_sources.get_provider(provider_name)
             end_time = end_date or datetime.now()
             days = count or 365
             start_time = start_date or (end_time - timedelta(days=days))
-            df = provider.get_daily(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                on_chunk_done=on_chunk_done,
+            try:
+                df = provider.get_daily(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    on_chunk_done=on_chunk_done,
+                )
+            except Exception as error:
+                audit = audit_market_error(
+                    provider=provider_name,
+                    dataset="daily",
+                    requested_symbols=symbols,
+                    error=error,
+                )
+                write_latest_audit(repo.store.data_dir, audit)
+                raise DataProviderFetchFailed(provider_name, "daily", error) from error
+            audit = audit_market_frame(
+                provider=provider_name,
+                dataset="daily",
+                frame=df,
+                requested_symbols=symbols,
+                requested_end=end_time,
             )
+            write_latest_audit(repo.store.data_dir, audit)
+            if audit.status == "invalid":
+                raise DataQualityRejected(audit)
             if df.is_empty():
                 return 0
             repo.append_daily(df)
@@ -195,7 +225,11 @@ def sync_and_persist_daily_batch(
             except Exception as e:  # noqa: BLE001
                 logger.warning("refresh view failed: %s", e)
             return df.height
-        # 自定义源未配置 daily → 回退 TickFlow
+        raise DataProviderUnavailable(
+            provider_name,
+            "daily",
+            "the selected provider does not declare the daily dataset",
+        )
 
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
@@ -211,6 +245,22 @@ def sync_and_persist_daily_batch(
         on_chunk_done=on_chunk_done,
     )
 
+    from app.data_providers.trust import (
+        DataQualityRejected,
+        audit_market_frame,
+        write_latest_audit,
+    )
+
+    audit = audit_market_frame(
+        provider="tickflow",
+        dataset="daily",
+        frame=df,
+        requested_symbols=symbols,
+        requested_end=end_time,
+    )
+    write_latest_audit(repo.store.data_dir, audit)
+    if audit.status == "invalid":
+        raise DataQualityRejected(audit)
     if df.is_empty():
         return 0
 
@@ -228,7 +278,10 @@ def sync_and_persist_daily_batch(
     return df.height
 
 
-def sync_daily_by_quotes(repo: KlineRepository) -> int:
+def sync_daily_by_quotes(
+    repo: KlineRepository,
+    requested_symbols: list[str] | None = None,
+) -> int:
     """用实时行情接口拉全市场当日数据,覆写 kline_daily 今天分区。
 
     一个请求覆盖 ~5500 只股票,比 batch K-line 快几个数量级。
@@ -236,22 +289,42 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     """
     from datetime import date as _date
 
-    from app.tickflow.client import get_client
-
     tf = get_client()
     try:
         resp = tf.quotes.get_by_universes(universes=["CN_Equity_A"])
     except Exception as e:
+        from app.data_providers.trust import audit_market_error, write_latest_audit
+
+        write_latest_audit(
+            repo.store.data_dir,
+            audit_market_error(
+                provider="tickflow",
+                dataset="daily",
+                requested_symbols=requested_symbols or [],
+                error=e,
+            ),
+        )
         logger.warning("get_by_universes failed: %s", e)
         return 0
 
     if not resp:
+        from app.data_providers.trust import audit_market_frame, write_latest_audit
+
+        write_latest_audit(
+            repo.store.data_dir,
+            audit_market_frame(
+                provider="tickflow",
+                dataset="daily",
+                frame=pl.DataFrame(),
+                requested_symbols=requested_symbols or [],
+                requested_end=_date.today(),
+            ),
+        )
         logger.warning("get_by_universes returned empty")
         return 0
 
     records = []
     for q in resp:
-        ext = q.get("ext") or {}
         records.append({
             "symbol": q.get("symbol"),
             "open": q.get("open"),
@@ -272,6 +345,22 @@ def sync_daily_by_quotes(repo: KlineRepository) -> int:
     # 过滤停牌 (open/high 为 0; close 可能被填充为前收盘价, 不能用全零判断)
     daily_df = filter_halt_days(daily_df)
 
+    from app.data_providers.trust import (
+        DataQualityRejected,
+        audit_market_frame,
+        write_latest_audit,
+    )
+
+    audit = audit_market_frame(
+        provider="tickflow",
+        dataset="daily",
+        frame=daily_df,
+        requested_symbols=requested_symbols or [],
+        requested_end=today,
+    )
+    write_latest_audit(repo.store.data_dir, audit)
+    if audit.status == "invalid":
+        raise DataQualityRejected(audit)
     repo.flush_live_daily(daily_df)
     logger.info("sync_daily_by_quotes: %d symbols flushed for %s", daily_df.height, today)
     return daily_df.height
@@ -337,15 +426,50 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         provider_name = preferences.get_daily_data_provider()
     if provider_name != "tickflow":
         from app.data_providers import custom as custom_sources
+        from app.data_providers.trust import (
+            DataProviderFetchFailed,
+            DataProviderUnavailable,
+            DataQualityRejected,
+            audit_market_error,
+            audit_market_frame,
+            write_latest_audit,
+        )
+
         if custom_sources.provider_has_dataset(provider_name, "adj_factor"):
             provider = custom_sources.get_provider(provider_name)
-            new_data = provider.get_adj_factors(
-                symbols,
-                start_time=start_time,
-                end_time=end_time,
-                asset_type=asset_type,
-                on_chunk_done=on_chunk_done,
+            try:
+                new_data = provider.get_adj_factors(
+                    symbols,
+                    start_time=start_time,
+                    end_time=end_time,
+                    asset_type=asset_type,
+                    on_chunk_done=on_chunk_done,
+                )
+            except Exception as error:
+                write_latest_audit(
+                    repo.store.data_dir,
+                    audit_market_error(
+                        provider=provider_name,
+                        dataset="adj_factor",
+                        requested_symbols=symbols,
+                        error=error,
+                    ),
+                )
+                raise DataProviderFetchFailed(
+                    provider_name,
+                    "adj_factor",
+                    error,
+                ) from error
+            audit = audit_market_frame(
+                provider=provider_name,
+                dataset="adj_factor",
+                frame=new_data,
+                requested_symbols=symbols,
+                requested_end=end_time,
             )
+            write_latest_audit(repo.store.data_dir, audit)
+            if audit.status == "invalid":
+                raise DataQualityRejected(audit)
             if new_data.is_empty():
                 return 0, []
             affected = new_data["symbol"].unique().to_list()
@@ -362,7 +486,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 return merged.height - before, affected
             _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
             return new_data.height, affected
-        # 自定义源未配置 adj_factor → 回退 TickFlow
+        raise DataProviderUnavailable(
+            provider_name,
+            "adj_factor",
+            "the selected provider does not declare the adj_factor dataset",
+        )
 
     if not capset.has(Cap.ADJ_FACTOR):
         return 0, []
@@ -408,10 +536,45 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         logger.warning("adj_factor 同步部分失败: %d/%d 标的未获取复权因子, 将保持旧复权价 (样例: %s)",
                        len(failed_syms), len(symbols), failed_syms[:10])
 
-    if not all_dfs:
-        return 0, []
+    new_data = (
+        pl.concat(all_dfs, how="diagonal_relaxed")
+        if len(all_dfs) > 1
+        else all_dfs[0] if all_dfs else pl.DataFrame()
+    )
+    from app.data_providers.trust import (
+        DataQualityRejected,
+        audit_market_frame,
+        write_latest_audit,
+    )
 
-    new_data = pl.concat(all_dfs, how="diagonal_relaxed") if len(all_dfs) > 1 else all_dfs[0]
+    # TickFlow 的 ex_factors 是“区间内发生过除权事件”的事件流; 一个标的
+    # 没有返回行通常表示没有事件, 不表示请求缺失。覆盖率应按失败分块计算,
+    # 而不是拿事件标的数除以全市场标的数。
+    audit = audit_market_frame(
+        provider="tickflow",
+        dataset="adj_factor",
+        frame=new_data,
+        requested_symbols=[],
+        requested_end=end_time,
+    )
+    requested = tuple(dict.fromkeys(symbols))
+    failed = tuple(dict.fromkeys(failed_syms))
+    coverage = (
+        (len(requested) - len(failed)) / len(requested)
+        if requested
+        else 1.0
+    )
+    audit = replace(
+        audit,
+        status="invalid" if audit.issues else "partial" if failed else "ok",
+        missing_symbols=failed,
+        coverage_ratio=coverage,
+    )
+    write_latest_audit(repo.store.data_dir, audit)
+    if audit.status == "invalid":
+        raise DataQualityRejected(audit)
+    if new_data.is_empty():
+        return 0, []
 
     # 提取受影响的 symbol 列表(合并前)
     affected = new_data["symbol"].unique().to_list()

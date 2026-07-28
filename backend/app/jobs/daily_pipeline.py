@@ -61,7 +61,8 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
     有 batch 能力 → 直接拉 CN_Equity_A universe
     其他用户 → 用 instruments parquet + watchlist 兜底
     """
-    if capset.has(Cap.KLINE_DAILY_BATCH):
+    provider_name = _prefs.get_daily_data_provider()
+    if provider_name == "tickflow" and capset.has(Cap.KLINE_DAILY_BATCH):
         try:
             all_a = get_pool("CN_Equity_A", refresh=True)
             if all_a:
@@ -69,14 +70,17 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
         except Exception as e:  # noqa: BLE001
             logger.warning("CN_Equity_A pool unavailable, fallback: %s", e)
 
-    # Free 用户兜底: instruments parquet + watchlist + demo
-    base: set[str] = set(DEMO_SYMBOLS)
+    # 非 TickFlow 数据源以本地证券主表为准, 避免再向 TickFlow 请求股票池。
+    # TickFlow Free 模式保留既有 demo 标的兜底。
+    base: set[str] = set(DEMO_SYMBOLS) if provider_name == "tickflow" else set()
     base.update(get_pool("watchlist"))
     d = Path(settings.data_dir)
     inst_path = d / "instruments" / "instruments.parquet"
     if inst_path.exists():
         try:
-            inst = pl.read_parquet(inst_path, columns=["symbol"])
+            inst = pl.read_parquet(inst_path)
+            if provider_name != "tickflow" and "list_status" in inst.columns:
+                inst = inst.filter(pl.col("list_status") == "L")
             base.update(inst["symbol"].to_list())
         except Exception as e:  # noqa: BLE001
             logger.warning("instruments supplement failed: %s", e)
@@ -176,7 +180,10 @@ def run_now(
         # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
         # 也降级到下方 batch 路径刷新,避免调用无权限的实时行情接口。
         emit("sync_daily", 12, f"获取日K [{today} ~ {today}] 实时行情…")
-        written_daily = kline_sync.sync_daily_by_quotes(repo)
+        written_daily = kline_sync.sync_daily_by_quotes(
+            repo,
+            requested_symbols=universe,
+        )
         new_daily_days = 1
         emit("sync_daily", 45, f"日K 完成,{written_daily} 只标的")
         logger.info("sync_daily: [%s ~ %s] live quotes, %d symbols", today, today, written_daily)

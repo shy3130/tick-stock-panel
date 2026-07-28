@@ -69,6 +69,22 @@ def _signal_cn_name(name: str) -> str:
     return _SIGNAL_CN.get(name, name)
 
 
+def _snapshot_as_of(df: pl.DataFrame) -> _dt.date:
+    """Use the data snapshot date; wall-clock time is only a last resort."""
+    if not df.is_empty() and "date" in df.columns:
+        try:
+            value = df.select(
+                pl.col("date").cast(pl.Date, strict=False).max()
+            ).item()
+            if isinstance(value, _dt.datetime):
+                return value.date()
+            if isinstance(value, _dt.date):
+                return value
+        except (TypeError, ValueError):
+            pass
+    return cn_today()
+
+
 @dataclass
 class StrategyAlert:
     """策略告警"""
@@ -500,6 +516,7 @@ class MonitorRuleEngine:
             return []
 
         now = time.time()
+        snapshot_as_of = _snapshot_as_of(df)
         events: list[dict] = []
         # 原子化: reset 轮 (股票轮) 时先把本轮结果写到临时容器, 算完后一次性替换
         # _latest_strategy_results。这样 /cached 并发读取永远拿到完整结果,
@@ -550,7 +567,7 @@ class MonitorRuleEngine:
                 context = StrategyDataContext(
                     asset_type=asset_type,
                     timeframe="1d",
-                    as_of=cn_today(),
+                    as_of=snapshot_as_of,
                     current=df,
                     cache_key=f"monitor:{asset_type}",
                 )
@@ -564,12 +581,12 @@ class MonitorRuleEngine:
                 except ValueError as exc:
                     if "requires history data" not in str(exc):
                         raise
-                    history = history_loader(cn_today(), history_bars)
+                    history = history_loader(snapshot_as_of, history_bars)
                     snapshot = self._strategy_engine.prepare_realtime_matrix(
                         StrategyDataContext(
                             asset_type=asset_type,
                             timeframe="1d",
-                            as_of=cn_today(),
+                            as_of=snapshot_as_of,
                             current=df,
                             history=history,
                             cache_key=f"monitor:{asset_type}",
@@ -740,10 +757,11 @@ class MonitorRuleEngine:
         # 现接入 history_loader, 拼历史窗口 + 今日实时行情, 经 precomputed_history 喂给引擎。
         # loader 为 None (未装配) 时退回跳过, 保持旧行为, 不破坏无历史场景。
         from app.strategy.engine import StrategyDataContext
+        snapshot_as_of = _snapshot_as_of(df)
         current_context = StrategyDataContext(
             asset_type=at,
             timeframe="1d",
-            as_of=cn_today(),
+            as_of=snapshot_as_of,
             current=df,
         )
         if getattr(s, "execution_backend", "polars_expr") == "matrix_native":
@@ -754,7 +772,7 @@ class MonitorRuleEngine:
             current_context = StrategyDataContext(
                 asset_type=at,
                 timeframe="1d",
-                as_of=cn_today(),
+                as_of=snapshot_as_of,
                 current=df,
                 market=matrix,
             )
@@ -765,7 +783,7 @@ class MonitorRuleEngine:
                              sid, rule.get("asset_type", "stock"))
                 return []
             try:
-                today = cn_today()
+                today = snapshot_as_of
                 lookback = max(1, getattr(s, "lookback_days", 30))
                 hist_df = history_loader(today, lookback)
                 if hist_df is None or hist_df.is_empty():
@@ -813,7 +831,7 @@ class MonitorRuleEngine:
                 import math
                 self._building_strategy_results[sid] = {
                     "total": result.total,
-                    "as_of": str(cn_today()),
+                    "as_of": str(snapshot_as_of),
                     "rows": [
                         {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
                          for k, v in row.items()}

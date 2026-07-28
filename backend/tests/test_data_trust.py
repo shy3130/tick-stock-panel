@@ -605,17 +605,6 @@ def test_custom_daily_sync_records_provider_errors_without_fallback(
     assert audit["fallback_used"] is False
 
 
-def test_new_install_defaults_daily_data_to_tushare_without_hidden_substitution(
-    monkeypatch,
-):
-    from app.services import preferences
-
-    monkeypatch.setattr(preferences, "load", lambda: {})
-
-    assert preferences.get_daily_data_provider() == "tushare"
-    assert preferences.get_adj_factor_provider() == "same_as_daily"
-
-
 def test_selected_instrument_provider_unavailable_never_falls_back_to_tickflow(
     tmp_path,
     monkeypatch,

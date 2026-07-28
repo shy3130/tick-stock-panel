@@ -16,6 +16,7 @@ const Financials = lazy(() => import('./pages/Financials').then(m => ({ default:
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
+const Advisor = lazy(() => import('./pages/Advisor').then(m => ({ default: m.Advisor })))
 const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
 const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
 const IndustryAnalysis = lazy(() => import('./pages/IndustryAnalysis').then(m => ({ default: m.IndustryAnalysis })))
@@ -67,6 +68,7 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Dashboard /> },
+      { path: 'advisor', element: <Advisor /> },
       { path: 'overview', element: <Navigate to="/" replace /> },
       { path: 'analysis', element: <Navigate to="/settings?tab=ext-pages" replace /> },
       { path: 'analysis/:menuId', element: <AnalysisDetail /> },

@@ -46,6 +46,7 @@ import {
   Moon,
   X,
   WifiOff,
+  ShieldCheck,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -68,6 +69,7 @@ type CoreIndex = (typeof CORE_INDEXES)[number]
 
 const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
+  { to: '/advisor',         label: '量化顾问', icon: ShieldCheck },
   { to: '/watchlist',  label: '自选',   icon: Star },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
   { to: '/backtest',   label: '回测',   icon: History },
