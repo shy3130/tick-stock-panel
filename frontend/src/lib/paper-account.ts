@@ -1,0 +1,182 @@
+import type { AdvisorActionState } from './advisor'
+
+export type PaperTradeSide = 'BUY' | 'SELL'
+
+export interface PaperFeeAssumptions {
+  commission_rate: number
+  commission_rate_label: string
+  minimum_commission: number
+  sell_stamp_tax_rate: number
+  sell_stamp_tax_rate_label: string
+  slippage: string
+  disclaimer: string
+}
+
+export interface PaperPosition {
+  symbol: string
+  name: string
+  quantity: number
+  sellable_quantity: number
+  average_cost: number
+  cost_basis: number
+  mark_price: number
+  marked_value: number
+  market_value: number
+  unrealized_pnl: number
+  mark_source: 'STRATEGY_CACHE' | 'COST_FALLBACK'
+}
+
+export interface PaperValuationWarning {
+  code: string
+  symbol: string
+  message: string
+}
+
+export interface PaperJournalEntry {
+  id: string
+  timestamp: string
+  side: PaperTradeSide
+  symbol: string
+  name: string
+  trade_date: string
+  quantity: number
+  plan_note: string
+  invalidation_note: string
+  price: number
+  gross_amount: number
+  cash_before: number
+  cash_after: number
+  commission: number
+  stamp_tax: number
+  total_fees: number
+  fifo_cost_basis: number
+  realized_pnl: number
+}
+
+export interface PaperAccountResponse {
+  schema_version: number
+  valuation_date: string
+  initial_cash: number
+  cash: number
+  cost_basis: number
+  marked_value: number
+  market_value: number
+  total_equity: number
+  realized_pnl: number
+  unrealized_pnl: number
+  total_pnl: number
+  positions: PaperPosition[]
+  fee_assumptions: PaperFeeAssumptions
+  valuation_warnings: PaperValuationWarning[]
+  journal: PaperJournalEntry[]
+}
+
+export interface PaperResetRequest {
+  initial_cash: 5000 | 10000
+  confirmation: 'RESET'
+}
+
+export interface PaperTradeRequest {
+  symbol: string
+  name: string
+  side: PaperTradeSide
+  quantity: number
+  price: number
+  trade_date: string
+  plan_note: string
+  invalidation_note: string
+}
+
+export interface PaperTradeDraft {
+  symbol: string
+  name: string
+  side: PaperTradeSide
+  quantity: string
+  price: string
+  trade_date: string
+  plan_note: string
+  invalidation_note: string
+}
+
+const STOCK_SYMBOL = /^(?:(?:600|601|603|605|688|689)\d{3}\.SH|(?:000|001|002|003|300|301)\d{3}\.SZ|(?:4\d{5}|8\d{5}|92\d{4})\.BJ)$/
+
+export function lotGuidance(symbol: string, side: PaperTradeSide): string {
+  if (side === 'SELL') {
+    return '模拟卖出以账户显示的可卖数量为准（T+1）'
+  }
+  if (symbol.trim().toUpperCase().startsWith('688')
+    || symbol.trim().toUpperCase().startsWith('689')) {
+    return '科创板：至少 200 股，之后按 100 股递增'
+  }
+  return '普通股票：100 股的整数倍'
+}
+
+export function validatePaperTradeDraft(
+  draft: PaperTradeDraft,
+  actionState: AdvisorActionState,
+): string[] {
+  if (actionState === 'OBSERVE_ONLY') {
+    return [
+      '数据检查尚未通过，当前只能观察，不能记录模拟成交。下一步：先刷新数据并处理可信度问题。',
+    ]
+  }
+
+  const errors: string[] = []
+  const symbol = draft.symbol.trim().toUpperCase()
+  if (!symbol) {
+    errors.push('请填写带交易所后缀的六位股票代码，例如 600000.SH。')
+  } else if (!STOCK_SYMBOL.test(symbol)) {
+    errors.push('当前仅支持带 .SH、.SZ 或 .BJ 后缀的中国内地股票。')
+  }
+  if (!draft.name.trim()) {
+    errors.push('请填写股票名称。')
+  } else if (draft.name.length > 80) {
+    errors.push('股票名称不能超过 80 个字符。')
+  }
+
+  const quantity = Number(draft.quantity)
+  const validQuantity = /^\d+$/.test(draft.quantity.trim())
+    && Number.isSafeInteger(quantity)
+    && quantity > 0
+  if (!validQuantity) {
+    errors.push('模拟数量必须是大于 0 的整数股数。')
+  } else if (draft.side === 'BUY') {
+    if (symbol.startsWith('688') || symbol.startsWith('689')) {
+      if (quantity < 200) {
+        errors.push('科创板模拟数量至少为 200 股。')
+      } else if (quantity % 100 !== 0) {
+        errors.push('科创板模拟数量在 200 股起按 100 股递增。')
+      }
+    } else if (quantity % 100 !== 0) {
+      errors.push('普通股票的模拟数量必须是 100 股的整数倍。')
+    }
+  }
+
+  const price = Number(draft.price)
+  if (!draft.price.trim() || !Number.isFinite(price) || price <= 0) {
+    errors.push('模拟成交价必须是大于 0 的有限数值。')
+  }
+  if (!draft.trade_date.trim()) {
+    errors.push('请填写模拟成交日期。')
+  }
+  if (draft.plan_note.length > 500) {
+    errors.push('模拟计划不能超过 500 个字符。')
+  }
+  if (draft.invalidation_note.length > 500) {
+    errors.push('失效条件不能超过 500 个字符。')
+  }
+  return errors
+}
+
+export function toPaperTradeRequest(draft: PaperTradeDraft): PaperTradeRequest {
+  return {
+    symbol: draft.symbol.trim().toUpperCase(),
+    name: draft.name,
+    side: draft.side,
+    quantity: Number(draft.quantity),
+    price: Number(draft.price),
+    trade_date: draft.trade_date,
+    plan_note: draft.plan_note,
+    invalidation_note: draft.invalidation_note,
+  }
+}

@@ -4,6 +4,12 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import type { BeginnerDailyBriefResponse } from '@/lib/advisor'
+import type {
+  PaperAccountResponse,
+  PaperResetRequest,
+  PaperTradeRequest,
+} from '@/lib/paper-account'
 
 const BASE = ''
 
@@ -1528,6 +1534,20 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+  advisorDailyBrief: () =>
+    request<BeginnerDailyBriefResponse>('/api/advisor/daily-brief'),
+  paperAccount: () =>
+    request<PaperAccountResponse>('/api/paper/account'),
+  paperReset: (payload: PaperResetRequest) =>
+    request<PaperAccountResponse>('/api/paper/reset', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  paperTrade: (payload: PaperTradeRequest) =>
+    request<PaperAccountResponse>('/api/paper/trades', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
