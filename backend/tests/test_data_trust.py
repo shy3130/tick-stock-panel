@@ -326,6 +326,35 @@ def test_latest_audit_preserves_schema_errors_for_fail_closed_gate(tmp_path):
     ]
 
 
+def test_latest_audit_marks_huge_integer_coverage_invalid_without_raising(
+    tmp_path,
+):
+    from app.data_providers.trust import load_latest_audits
+
+    out = tmp_path / "data_quality" / "adj_factor.json"
+    out.parent.mkdir(parents=True)
+    out.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dataset": "adj_factor",
+                "provider": "tushare",
+                "status": "ok",
+                "coverage_ratio": 10**1000,
+                "fallback_used": False,
+                "synthetic": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [receipt] = load_latest_audits(tmp_path)
+
+    assert receipt["schema_errors"] == [
+        "coverage_ratio 必须是 0 到 1 之间的有限数值"
+    ]
+
+
 def test_custom_daily_sync_persists_partial_audit_before_returning(
     tmp_path,
     monkeypatch,

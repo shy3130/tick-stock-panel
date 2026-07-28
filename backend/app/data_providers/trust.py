@@ -256,12 +256,18 @@ def validate_audit_receipt(receipt: dict) -> tuple[str, ...]:
     if receipt.get("status") not in _ALLOWED_AUDIT_STATUSES:
         errors.append("status 必须是 ok、partial、empty、invalid 或 error")
     coverage = receipt.get("coverage_ratio")
-    if (
-        isinstance(coverage, bool)
-        or not isinstance(coverage, (int, float))
-        or not math.isfinite(float(coverage))
-        or not 0.0 <= float(coverage) <= 1.0
-    ):
+    valid_coverage = (
+        not isinstance(coverage, bool)
+        and (
+            (isinstance(coverage, int) and 0 <= coverage <= 1)
+            or (
+                isinstance(coverage, float)
+                and math.isfinite(coverage)
+                and 0.0 <= coverage <= 1.0
+            )
+        )
+    )
+    if not valid_coverage:
         errors.append("coverage_ratio 必须是 0 到 1 之间的有限数值")
     for field in ("fallback_used", "synthetic"):
         if not isinstance(receipt.get(field), bool):

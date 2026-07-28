@@ -369,7 +369,7 @@ def test_advisor_blocks_malformed_receipt_fields_with_explicit_remediation():
 
 @pytest.mark.parametrize(
     "coverage_ratio",
-    [float("nan"), float("inf"), -0.01, 1.01, "0.99"],
+    [float("nan"), float("inf"), -0.01, 1.01, "0.99", 10**1000],
 )
 def test_advisor_rejects_non_finite_out_of_range_or_coerced_coverage(
     coverage_ratio,
@@ -388,3 +388,53 @@ def test_advisor_rejects_non_finite_out_of_range_or_coerced_coverage(
     assert result["data_gate"]["decision"] == "BLOCK"
     assert any("coverage_ratio 必须是" in reason for reason in dataset["reasons"])
     assert dataset["next_actions"]
+
+
+@pytest.mark.parametrize("malformed_first", [True, False])
+def test_advisor_validates_all_duplicate_receipts_regardless_of_order(
+    malformed_first,
+):
+    from app.services.advisor import build_advisor_recommendations
+
+    malformed = _audit(dataset="adj_factor")
+    malformed["status"] = "mystery"
+    valid = _audit(dataset="adj_factor")
+    duplicates = [malformed, valid] if malformed_first else [valid, malformed]
+    audits = [
+        _audit(dataset="instruments"),
+        _audit(dataset="daily"),
+        *duplicates,
+        _audit(dataset="daily_enriched", provider="derived"),
+    ]
+
+    result = build_advisor_recommendations(audits, _cache())
+
+    dataset = result["data_gate"]["datasets"]["adj_factor"]
+    assert result["data_gate"]["decision"] == "BLOCK"
+    assert any("重复" in reason for reason in dataset["reasons"])
+    assert any("status 必须是" in reason for reason in dataset["reasons"])
+    assert dataset["next_actions"] == [
+        "请清理重复的除权因子回执并重新同步, 确保只保留一份最新可信度回执。",
+        "请检查除权因子数据源配置并重新同步, 以重新生成有效可信度回执。",
+    ]
+
+
+@pytest.mark.parametrize(
+    "dataset",
+    ["instruments", "daily", "adj_factor", "daily_enriched"],
+)
+def test_advisor_blocks_duplicate_required_dataset_even_when_both_are_valid(
+    dataset,
+):
+    from app.services.advisor import build_advisor_recommendations
+
+    audits = _trusted_audits()
+    duplicate = next(receipt for receipt in audits if receipt["dataset"] == dataset)
+    audits.append(dict(duplicate))
+
+    result = build_advisor_recommendations(audits, _cache())
+
+    detail = result["data_gate"]["datasets"][dataset]
+    assert result["data_gate"]["decision"] == "BLOCK"
+    assert any("收到 2 份重复回执" in reason for reason in detail["reasons"])
+    assert any("只保留一份最新可信度回执" in action for action in detail["next_actions"])

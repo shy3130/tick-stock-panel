@@ -32,11 +32,10 @@ _DECISION_LABELS = {
 
 
 def _data_gate(audits: list[dict], as_of: str | None) -> dict:
-    by_dataset = {
-        str(audit.get("dataset")): audit
-        for audit in audits
-        if isinstance(audit, dict) and audit.get("dataset")
-    }
+    by_dataset: dict[str, list[dict]] = defaultdict(list)
+    for audit in audits:
+        if isinstance(audit, dict) and audit.get("dataset"):
+            by_dataset[str(audit["dataset"])].append(audit)
     reasons: list[str] = []
     next_actions: list[str] = []
     datasets: dict[str, dict] = {}
@@ -47,10 +46,10 @@ def _data_gate(audits: list[dict], as_of: str | None) -> dict:
 
     for dataset in _REQUIRED_DATASETS:
         label = _DATASET_LABELS[dataset]
-        audit = by_dataset.get(dataset)
+        matching_audits = by_dataset.get(dataset, [])
         dataset_reasons: list[str] = []
         dataset_actions: list[str] = []
-        if audit is None:
+        if not matching_audits:
             dataset_reasons.append(f"缺少{label}可信度回执")
             dataset_actions.append(
                 f"请重新运行{label}同步, 生成最新可信度回执后再试。"
@@ -67,7 +66,42 @@ def _data_gate(audits: list[dict], as_of: str | None) -> dict:
             reasons.extend(dataset_reasons)
             _extend_unique(next_actions, dataset_actions)
             continue
+        if len(matching_audits) > 1:
+            dataset_reasons.append(
+                f"{label}收到 {len(matching_audits)} 份重复回执, 无法确定唯一可信版本"
+            )
+            dataset_actions.append(
+                f"请清理重复的{label}回执并重新同步, "
+                "确保只保留一份最新可信度回执。"
+            )
+            for duplicate in matching_audits:
+                duplicate_errors = validate_audit_receipt(duplicate)
+                _extend_unique(
+                    dataset_reasons,
+                    [
+                        f"{label}回执字段异常: {error}"
+                        for error in duplicate_errors
+                    ],
+                )
+            if len(dataset_reasons) > 1:
+                dataset_actions.append(
+                    f"请检查{label}数据源配置并重新同步, "
+                    "以重新生成有效可信度回执。"
+                )
+            datasets[dataset] = {
+                "status": "duplicate",
+                "provider": None,
+                "coverage_ratio": 0.0,
+                "observed_start": None,
+                "observed_end": None,
+                "reasons": dataset_reasons,
+                "next_actions": dataset_actions,
+            }
+            reasons.extend(dataset_reasons)
+            _extend_unique(next_actions, dataset_actions)
+            continue
 
+        audit = matching_audits[0]
         schema_errors = validate_audit_receipt(audit)
         if schema_errors:
             dataset_reasons.extend(
