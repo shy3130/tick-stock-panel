@@ -17,6 +17,13 @@ _MIN_DAILY_COVERAGE = 0.95
 _CONSENSUS_BONUS = 8.0
 _GO_SCORE = 75.0
 _WAIT_SCORE = 60.0
+_RISK_FLAG_ORDER = (
+    "ADJUSTMENT_EVENT_ON_AS_OF",
+    "ABNORMAL_DAILY_RETURN",
+    "INVALID_PRICE",
+    "LIMIT_UP",
+    "LIMIT_DOWN",
+)
 _REQUIRED_DATASETS = ("instruments", "daily", "adj_factor", "daily_enriched")
 _DATASET_LABELS = {
     "instruments": "证券主表",
@@ -239,11 +246,31 @@ def build_advisor_recommendations(
     *,
     limit: int = 30,
     adjustment_event_symbols: set[str] | None = None,
+    adjustment_factor_problem: dict[str, str] | None = None,
 ) -> dict:
     """Aggregate deterministic strategy scores behind explicit data/risk gates."""
     cache = strategy_cache if isinstance(strategy_cache, dict) else {}
     as_of = str(cache.get("as_of")) if cache.get("as_of") else None
     data_gate = _data_gate(audits, as_of)
+    data_gate["runtime_problems"] = []
+    if adjustment_factor_problem is not None:
+        problem = {
+            "code": adjustment_factor_problem["code"],
+            "reason": adjustment_factor_problem["reason"],
+            "next_action": adjustment_factor_problem["next_action"],
+        }
+        data_gate["runtime_problems"].append(problem)
+        data_gate["decision"] = "BLOCK"
+        _extend_unique(data_gate["reasons"], [problem["reason"]])
+        _extend_unique(data_gate["next_actions"], [problem["next_action"]])
+        _extend_unique(
+            data_gate["datasets"]["adj_factor"]["reasons"],
+            [problem["reason"]],
+        )
+        _extend_unique(
+            data_gate["datasets"]["adj_factor"]["next_actions"],
+            [problem["next_action"]],
+        )
     grouped: dict[str, list[tuple[str, dict]]] = defaultdict(list)
 
     for strategy_id, result in (cache.get("results") or {}).items():
@@ -266,10 +293,18 @@ def build_advisor_recommendations(
         consensus_bonus = min(24.0, max(0, len(matches) - 1) * _CONSENSUS_BONUS)
         score = round(min(100.0, highest * 0.7 + average * 0.3 + consensus_bonus), 1)
         representative = max(matches, key=lambda item: float(item[1].get("score") or 0.0))[1]
-        risk_flags = _risk_flags(
-            representative,
-            adjustment_event_on_as_of=symbol in (adjustment_event_symbols or set()),
-        )
+        flags_by_code: dict[str, dict[str, str]] = {}
+        for _, row in matches:
+            for flag in _risk_flags(
+                row,
+                adjustment_event_on_as_of=symbol in (adjustment_event_symbols or set()),
+            ):
+                flags_by_code[flag["code"]] = flag
+        risk_flags = [
+            flags_by_code[code]
+            for code in _RISK_FLAG_ORDER
+            if code in flags_by_code
+        ]
         risk_reasons = [flag["message"] for flag in risk_flags]
 
         if data_gate["decision"] == "BLOCK" or risk_reasons:

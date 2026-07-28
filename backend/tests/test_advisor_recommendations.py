@@ -276,9 +276,46 @@ def test_advisor_limit_down_block_has_stable_risk_code():
     assert candidate["risk_reasons"] == ["当前处于跌停状态"]
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "expected_code"),
+    [
+        ("change_pct", 0.50, "ABNORMAL_DAILY_RETURN"),
+        ("close", float("nan"), "INVALID_PRICE"),
+        ("status", "limit_up", "LIMIT_UP"),
+        ("status", "limit_down", "LIMIT_DOWN"),
+    ],
+)
+def test_advisor_quarantines_risk_from_non_representative_strategy_row(
+    field,
+    value,
+    expected_code,
+):
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    cache["results"]["bullish_alignment"]["rows"][0][field] = value
+
+    recommendation = build_advisor_recommendations(_trusted_audits(), cache)
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert [flag["code"] for flag in candidate["risk_flags"]] == [expected_code]
+    assert candidate["score"] == 89.1
+    assert candidate["close"] == 10.2
+
+
 def test_advisor_api_reads_only_persisted_audits_and_strategy_cache(monkeypatch, tmp_path):
     from app.api import advisor as advisor_api
 
+    factor_path = tmp_path / "adj_factor" / "all.parquet"
+    factor_path.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "trade_date": [date(2026, 7, 23)],
+            "ex_factor": [1.0],
+        }
+    ).write_parquet(factor_path)
     monkeypatch.setattr(
         advisor_api,
         "load_latest_audits",
@@ -337,15 +374,50 @@ def test_advisor_api_quarantines_symbol_with_adjustment_event_on_strategy_date(
     ]
 
 
-def test_advisor_api_does_not_crash_on_unreadable_adjustment_factor_file(
+@pytest.mark.parametrize(
+    "factor_state",
+    [
+        "missing",
+        "corrupt",
+        "missing_symbol",
+        "missing_trade_date",
+        "malformed_trade_date",
+    ],
+)
+def test_advisor_api_blocks_unavailable_adjustment_factor_file_without_crashing(
     monkeypatch,
     tmp_path,
+    factor_state,
 ):
     from app.api import advisor as advisor_api
 
     factor_path = tmp_path / "adj_factor" / "all.parquet"
-    factor_path.parent.mkdir(parents=True)
-    factor_path.write_bytes(b"not parquet")
+    if factor_state != "missing":
+        factor_path.parent.mkdir(parents=True)
+    if factor_state == "corrupt":
+        factor_path.write_bytes(b"not parquet")
+    elif factor_state == "missing_symbol":
+        pl.DataFrame(
+            {
+                "trade_date": [date(2026, 7, 24)],
+                "ex_factor": [1.1],
+            }
+        ).write_parquet(factor_path)
+    elif factor_state == "missing_trade_date":
+        pl.DataFrame(
+            {
+                "symbol": ["600000.SH"],
+                "ex_factor": [1.1],
+            }
+        ).write_parquet(factor_path)
+    elif factor_state == "malformed_trade_date":
+        pl.DataFrame(
+            {
+                "symbol": ["600000.SH"],
+                "trade_date": ["not-a-date"],
+                "ex_factor": [1.1],
+            }
+        ).write_parquet(factor_path)
     monkeypatch.setattr(
         advisor_api,
         "load_latest_audits",
@@ -362,8 +434,25 @@ def test_advisor_api_does_not_crash_on_unreadable_adjustment_factor_file(
 
     result = advisor_api.recommendations(request, limit=10)
 
-    assert result["data_gate"]["decision"] == "PASS"
-    assert result["candidates"][0]["decision"] == "GO"
+    gate = result["data_gate"]
+    reason = "除权因子文件缺失、无法读取或结构不完整, 无法核对策略日期的除权除息事件"
+    action = (
+        "请重新同步除权因子, 并确认 all.parquet 包含 symbol、trade_date 列后"
+        "再重新生成研究清单。"
+    )
+    assert gate["decision"] == "BLOCK"
+    assert gate["runtime_problems"] == [
+        {
+            "code": "ADJ_FACTOR_RUNTIME_UNAVAILABLE",
+            "reason": reason,
+            "next_action": action,
+        }
+    ]
+    assert reason in gate["reasons"]
+    assert action in gate["next_actions"]
+    assert reason in gate["datasets"]["adj_factor"]["reasons"]
+    assert action in gate["datasets"]["adj_factor"]["next_actions"]
+    assert result["candidates"][0]["decision"] == "NO-GO"
 
 
 def test_advisor_explicitly_blocks_missing_required_receipts():
