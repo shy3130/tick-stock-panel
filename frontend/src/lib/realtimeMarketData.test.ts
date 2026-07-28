@@ -225,7 +225,34 @@ describe('RealtimeMarketDataClient', () => {
       action: 'unsubscribe',
       symbols: ['700.HK'],
     })
+    vi.advanceTimersByTime(0)
     expect(client.getStatus()).toBe('disconnected')
+  })
+
+  it('reuses the open socket when React replaces the last consumer', () => {
+    client.dispose()
+    const sockets: FakeSocket[] = []
+    client = new RealtimeMarketDataClient({
+      socketFactory: () => {
+        const next = new FakeSocket()
+        sockets.push(next)
+        return next
+      },
+      random: () => 0.5,
+      marketOpen: () => true,
+    })
+
+    const unsubscribe = client.subscribe(['NVDA.US'], ['quote'], 1)
+    unsubscribe()
+    client.subscribe(['NVDA.US', 'UAA.US'], ['quote'], 1)
+    vi.advanceTimersByTime(0)
+
+    expect(sockets).toHaveLength(1)
+    expect(sockets[0].readyState).toBe(1)
+    expect(sockets[0].sent.at(-1)).toEqual(expect.objectContaining({
+      action: 'subscribe',
+      symbols: ['NVDA.US', 'UAA.US'],
+    }))
   })
 
   it('caps jittered exponential reconnect delay at 15 seconds', () => {

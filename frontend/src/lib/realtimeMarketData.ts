@@ -162,6 +162,7 @@ export class RealtimeMarketDataClient {
   private initialFallbackTimer: ReturnType<typeof setTimeout> | undefined
   private livenessTimer: ReturnType<typeof setTimeout> | undefined
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
+  private stopTimer: ReturnType<typeof setTimeout> | undefined
   private freshnessTimer: ReturnType<typeof setInterval> | undefined
 
   constructor(options: ClientOptions = {}) {
@@ -191,6 +192,7 @@ export class RealtimeMarketDataClient {
     depthLevels: number,
   ): () => void {
     if (this.disposed) throw new Error('realtime client is disposed')
+    this.cancelScheduledStop()
     const consumer: Consumer = {
       symbols: new Set(symbols.map(canonicalRealtimeSymbol).filter(Boolean)),
       datasets: new Set(datasets),
@@ -202,11 +204,15 @@ export class RealtimeMarketDataClient {
     const after = this.aggregate()
     if (after.symbols.size > 0) {
       if (before.symbols.size === 0) {
-        this.acceptedSnapshot = false
-        this.setStatus('connecting')
-        this.startInitialFallback()
-        this.startFreshnessTimer()
-        this.connect()
+        if (this.socket?.readyState === SOCKET_OPEN) {
+          this.sendSubscription(after)
+        } else {
+          this.acceptedSnapshot = false
+          this.setStatus('connecting')
+          this.startInitialFallback()
+          this.startFreshnessTimer()
+          this.connect()
+        }
       } else {
         this.sendSubscription(after)
       }
@@ -221,7 +227,7 @@ export class RealtimeMarketDataClient {
         this.send({ action: 'unsubscribe', symbols: removed.sort() })
       }
       if (current.symbols.size === 0) {
-        this.stopConnection()
+        this.scheduleStopConnection()
       } else {
         this.sendSubscription(current)
       }
@@ -437,7 +443,21 @@ export class RealtimeMarketDataClient {
     }
   }
 
+  private cancelScheduledStop(): void {
+    clearTimeout(this.stopTimer)
+    this.stopTimer = undefined
+  }
+
+  private scheduleStopConnection(): void {
+    this.cancelScheduledStop()
+    this.stopTimer = setTimeout(() => {
+      this.stopTimer = undefined
+      if (this.aggregate().symbols.size === 0) this.stopConnection()
+    }, 0)
+  }
+
   private stopConnection(): void {
+    this.cancelScheduledStop()
     clearTimeout(this.initialFallbackTimer)
     clearTimeout(this.livenessTimer)
     clearTimeout(this.reconnectTimer)
