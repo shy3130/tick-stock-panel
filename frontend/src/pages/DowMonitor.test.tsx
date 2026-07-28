@@ -1036,6 +1036,7 @@ describe('Dow monitor page', () => {
 
     const historySummary = within(messageBox).getByText('历史信息（2条）')
     const historyDetails = historySummary.closest('details')
+    expect(historyDetails).not.toBeNull()
     expect(historyDetails).not.toHaveAttribute('open')
     const historyMessages = within(messageBox).getByTestId('history-card-messages')
     const messageRows = Array.from(
@@ -1069,9 +1070,10 @@ describe('Dow monitor page', () => {
     const rawDetails = within(hongKongCard)
       .getByText('分钟行情原始信息（辅助）')
       .closest('details')
+    expect(rawDetails).not.toBeNull()
     expect(rawDetails).not.toHaveAttribute('open')
     expect(
-      Boolean(historyDetails?.compareDocumentPosition(rawDetails!) & Node.DOCUMENT_POSITION_FOLLOWING),
+      Boolean(historyDetails!.compareDocumentPosition(rawDetails!) & Node.DOCUMENT_POSITION_FOLLOWING),
     ).toBe(true)
     expect(screen.queryByTestId('dow-monitor-signal-rail')).not.toBeInTheDocument()
   })
