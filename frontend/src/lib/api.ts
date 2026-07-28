@@ -318,6 +318,26 @@ export interface ScreenerResult {
   rows: any[]
   total: number
   elapsed_ms: number
+  scanned_timeframes?: string[]
+  timeframe_errors?: Record<string, string>
+}
+
+export interface ScreenerRunStatus {
+  run_id: string
+  strategy_id: string
+  status: 'queued' | 'running' | 'complete' | 'failed'
+  stage: string
+  progress: number
+  message: string
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  elapsed_ms: number
+  completed: number | null
+  total: number | null
+  current_item: string | null
+  result: ScreenerResult | null
+  error: string | null
 }
 
 export interface ScreenerResultSummary {
@@ -1544,6 +1564,15 @@ export const api = {
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
       body: JSON.stringify({ strategy_id, pool, as_of: asOf ?? null, ext_columns: extColumns || null, asset_type: assetType, market }),
+    }),
+  screenerStartPresetRun: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock', market: MarketCode = 'cn') =>
+    request<ScreenerRunStatus>('/api/screener/runs', {
+      method: 'POST',
+      body: JSON.stringify({ strategy_id, pool, as_of: asOf ?? null, ext_columns: extColumns || null, asset_type: assetType, market }),
+    }),
+  screenerRunStatus: (runId: string) =>
+    request<ScreenerRunStatus>(uncached(`/api/screener/runs/${encodeURIComponent(runId)}`), {
+      cache: 'no-store',
     }),
   screenerRunCustom: (conditions: string[], orderBy?: string, limit = 30, pool?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
     request<ScreenerResult>('/api/screener/run', {

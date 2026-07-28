@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X } from 'lucide-react'
-import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
+import { api, genRuleId, type ScreenerStrategy, type ScreenerResult, type ScreenerRunStatus } from '@/lib/api'
 import { toast } from '@/components/Toast'
 import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
@@ -41,6 +41,7 @@ export function Screener() {
   const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
+  const [runProgress, setRunProgress] = useState<ScreenerRunStatus | null>(null)
   const [asOf, setAsOf] = useState<string>('')
   const [batchMsg, setBatchMsg] = useState<string>('')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
@@ -439,8 +440,32 @@ export function Screener() {
   }, [asOf, strategies.data, summaryQuery.isSuccess, visiblePool, cacheCoversPool, missingStrategyIds, screenerAutoRun, assetType, runAll.isPending])
 
   const run = useMutation({
-    mutationFn: ({ id, date }: { id: string; date: string }) =>
-      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType, marketFilter),
+    mutationFn: async ({ id, date }: { id: string; date: string }) => {
+      let status = await api.screenerStartPresetRun(
+        id,
+        undefined,
+        date || undefined,
+        extColumnsParam || undefined,
+        assetType,
+        marketFilter,
+      )
+      setRunProgress(status)
+      while (status.status === 'queued' || status.status === 'running') {
+        await new Promise(resolve => setTimeout(resolve, 600))
+        status = await api.screenerRunStatus(status.run_id)
+        setRunProgress(status)
+      }
+      if (status.status === 'failed') {
+        throw new Error(status.error || '策略执行失败')
+      }
+      if (status.status === 'complete' && status.result) {
+        return status.result
+      }
+      if (!status.result) {
+        throw new Error('策略执行完成但未返回结果')
+      }
+      return status.result
+    },
     onSuccess: (data, vars) => {
       setResult(data)
       // 同步更新卡片上的命中数
@@ -450,20 +475,30 @@ export function Screener() {
     },
   })
 
+  const startVisibleStrategyRun = (strategyId: string, date: string) => {
+    handleStrategySwitch(strategyId)
+    setActiveStrategy(strategyId)
+    setRunProgress(null)
+    setShowAll(false)
+    if (result?.strategy !== strategyId || result.as_of !== asOf) setResult(null)
+    run.mutate({ id: strategyId, date })
+  }
+
   const handleRun = (s: ScreenerStrategy) => {
     handleStrategySwitch(s.id)
     setActiveStrategy(s.id)
+    setRunProgress(null)
     setShowAll(false)
     if (result?.strategy !== s.id || result.as_of !== asOf) setResult(null)
     // ETF 模式: 无股票盘后缓存, 始终实时单跑。
     // 传空日期让后端用 ETF 自己的最新交易日 (asOf 跟随的是股票 enriched, 两者可能不同日)。
     if (assetType !== 'stock') {
-      run.mutate({ id: s.id, date: '' })
+      startVisibleStrategyRun(s.id, '')
       return
     }
     // 摘要命中时由 singleCachedQuery 按需加载明细；缺失时才单独计算。
     if (summaryQuery.data?.results[s.id]?.as_of === asOf || runAll.isPending) return
-    run.mutate({ id: s.id, date: asOf })
+    startVisibleStrategyRun(s.id, asOf)
   }
 
   // 日期变化交给统一 effect 计算一次，避免这里与 effect 重复请求。
@@ -471,6 +506,7 @@ export function Screener() {
     setAsOf(newDate)
     runAllDateRef.current = null
     setResult(null)
+    setRunProgress(null)
   }
 
   const minDate = dataStatus.data?.enriched?.earliest_date ?? ''
@@ -582,7 +618,7 @@ export function Screener() {
               {(['stock', 'etf'] as const).map(t => (
                 <button
                   key={t}
-                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false) }}
+                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setRunProgress(null); setShowAll(false) }}
                   className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer
                     ${assetType === t
                       ? 'bg-accent/10 text-accent'
@@ -703,10 +739,11 @@ export function Screener() {
                   active={activeStrategy === s.id}
                   count={hitCounts[id]}
                   expiredCount={expiredCounts[id]}
-                  loading={runAll.isPending}
+                  loading={(run.isPending && activeStrategy === s.id) || runAll.isPending}
+                  progress={activeStrategy === s.id ? runProgress : null}
                   cardSize={cardSize}
                   onRun={() => handleRun(s)}
-                  disabled={run.isPending && activeStrategy === s.id}
+                  disabled={run.isPending}
                   onSettings={() => setSettingsStrategyId(s.id)}
                   monitored={strategyMonitorMap.has(s.id)}
                   onToggleMonitor={() => toggleStrategyMonitor(s.id, s.name)}
@@ -753,6 +790,25 @@ export function Screener() {
                     <span className="text-[11px] text-muted animate-pulse">扫描中…</span>
                   )}
                 </h2>
+                {!showAll && result && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted">
+                    {(result.scanned_timeframes?.length ?? 0) > 0 && (
+                      <span className="rounded border border-border bg-surface px-1.5 py-0.5">
+                        已扫描周期 {result.scanned_timeframes!.join(' / ')}
+                      </span>
+                    )}
+                    {Object.keys(result.timeframe_errors ?? {}).length > 0 && (
+                      <span
+                        className="rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-warning"
+                        title={Object.entries(result.timeframe_errors ?? {})
+                          .map(([period, message]) => `${period}: ${message}`)
+                          .join('\n')}
+                      >
+                        失败周期 {Object.keys(result.timeframe_errors ?? {}).join(' / ')}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap sm:gap-3">
                   {(showAll ? allRows.length > 0 : !!result?.rows.length) && (
                     <div className="inline-flex items-stretch h-7 rounded-btn border border-border bg-surface overflow-hidden">
@@ -929,7 +985,7 @@ export function Screener() {
         onSaved={(limit) => {
           if (settingsStrategyId) {
             setStrategyLimits(prev => ({ ...prev, [settingsStrategyId]: limit }))
-            run.mutate({ id: settingsStrategyId, date: asOf })
+            startVisibleStrategyRun(settingsStrategyId, asOf)
           }
         }}
         onAiModify={async () => {
