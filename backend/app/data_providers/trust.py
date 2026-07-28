@@ -235,7 +235,7 @@ def load_latest_audits(data_dir: Path) -> list[dict]:
     for path in sorted(out_dir.glob("*.json")):
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue
         if isinstance(value, dict):
             value = dict(value)

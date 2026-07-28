@@ -355,6 +355,24 @@ def test_latest_audit_marks_huge_integer_coverage_invalid_without_raising(
     ]
 
 
+def test_latest_audit_omits_integer_beyond_json_parser_digit_limit(tmp_path):
+    from app.data_providers.trust import load_latest_audits
+
+    out = tmp_path / "data_quality" / "adj_factor.json"
+    out.parent.mkdir(parents=True)
+    out.write_text(
+        (
+            '{"schema_version":1,"dataset":"adj_factor","provider":"tushare",'
+            '"status":"ok","coverage_ratio":'
+            + ("9" * 5_000)
+            + ',"fallback_used":false,"synthetic":false}'
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_latest_audits(tmp_path) == []
+
+
 def test_custom_daily_sync_persists_partial_audit_before_returning(
     tmp_path,
     monkeypatch,

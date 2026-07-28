@@ -438,3 +438,36 @@ def test_advisor_blocks_duplicate_required_dataset_even_when_both_are_valid(
     assert result["data_gate"]["decision"] == "BLOCK"
     assert any("收到 2 份重复回执" in reason for reason in detail["reasons"])
     assert any("只保留一份最新可信度回执" in action for action in detail["next_actions"])
+
+
+def test_advisor_blocks_when_over_limit_json_receipt_is_omitted(tmp_path):
+    from app.data_providers.trust import load_latest_audits
+    from app.services.advisor import build_advisor_recommendations
+
+    out = tmp_path / "data_quality" / "adj_factor.json"
+    out.parent.mkdir(parents=True)
+    out.write_text(
+        (
+            '{"schema_version":1,"dataset":"adj_factor","provider":"tushare",'
+            '"status":"ok","coverage_ratio":'
+            + ("9" * 5_000)
+            + ',"fallback_used":false,"synthetic":false}'
+        ),
+        encoding="utf-8",
+    )
+    audits = [
+        _audit(dataset="instruments"),
+        _audit(dataset="daily"),
+        *load_latest_audits(tmp_path),
+        _audit(dataset="daily_enriched", provider="derived"),
+    ]
+
+    result = build_advisor_recommendations(audits, _cache())
+
+    detail = result["data_gate"]["datasets"]["adj_factor"]
+    assert result["data_gate"]["decision"] == "BLOCK"
+    assert detail["status"] == "missing"
+    assert detail["reasons"] == ["缺少除权因子可信度回执"]
+    assert detail["next_actions"] == [
+        "请重新运行除权因子同步, 生成最新可信度回执后再试。"
+    ]
