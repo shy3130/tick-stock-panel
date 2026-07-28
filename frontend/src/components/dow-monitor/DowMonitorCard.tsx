@@ -768,7 +768,6 @@ export function DowMonitorCard({
   onOpen,
   onToggle,
   onRemove,
-  onRead,
   forceBlocked = false,
   blockedReason,
   quoteReady = true,
@@ -776,7 +775,6 @@ export function DowMonitorCard({
   notificationError = false,
   togglePending = false,
   removePending = false,
-  readPendingIds,
   realtimeState,
   realtimeStatus,
 }: {
@@ -785,7 +783,6 @@ export function DowMonitorCard({
   onOpen: (symbol: string, timeframe: DowTimeframe) => void
   onToggle: (symbol: string, enabled: boolean) => void
   onRemove: (symbol: string) => void
-  onRead?: (notificationId: string) => void
   forceBlocked?: boolean
   blockedReason?: string
   quoteReady?: boolean
@@ -793,7 +790,6 @@ export function DowMonitorCard({
   notificationError?: boolean
   togglePending?: boolean
   removePending?: boolean
-  readPendingIds?: ReadonlySet<string>
   realtimeState?: RealtimeSymbolState
   realtimeStatus?: RealtimeStatus
 }) {
@@ -916,7 +912,7 @@ export function DowMonitorCard({
   const orderedNotifications = [...notifications].sort((left, right) => {
     const leftTime = Date.parse(left.available_at ?? left.triggered_at)
     const rightTime = Date.parse(right.available_at ?? right.triggered_at)
-    return leftTime - rightTime
+    return rightTime - leftTime
   })
   return (
     <article
@@ -1111,13 +1107,8 @@ export function DowMonitorCard({
           </div>
         ) : orderedNotifications.length > 0 ? (
           <div>
-            <div className="dow-timeline-wide-header grid-cols-[7rem_minmax(0,1fr)_minmax(0,0.85fr)] gap-3 border-b border-border/60 pb-1 text-[9px] font-medium text-secondary">
-              <span>可获知时间</span>
-              <span>当时发生的内部变化</span>
-              <span>应给出的提示</span>
-            </div>
             {orderedNotifications.map((notification, index) => {
-              const isLatest = index === orderedNotifications.length - 1
+              const isLatest = index === 0
               const triggerTimeframe = TIMEFRAMES.find(
                 option => option.value === notification.timeframe,
               )?.label ?? notification.timeframe
@@ -1139,34 +1130,25 @@ export function DowMonitorCard({
                     isLatest && 'border-l-2 border-l-accent pl-2',
                   )}
                 >
-                  <div className="flex min-w-0 items-center gap-1.5 font-mono text-[9px] text-muted">
-                    {isLatest && (
-                      <span className="shrink-0 text-[9px] font-medium text-accent">最新</span>
-                    )}
-                    <span className="shrink-0">{availableTime ?? '—'}完成后</span>
-                    {notification.read_at == null && onRead && (
-                      <button
-                        type="button"
-                        aria-label={`标记 ${notification.symbol} 已读`}
-                        disabled={readPendingIds?.has(notification.notification_id)}
-                        onClick={() => onRead(notification.notification_id)}
-                        className="ml-auto shrink-0 text-[9px] text-muted underline-offset-2 hover:text-foreground hover:underline disabled:cursor-wait disabled:opacity-50"
-                      >
-                        已读
-                      </button>
-                    )}
+                  <div
+                    data-testid={`card-message-headline-${notification.notification_id}`}
+                    className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
+                  >
+                    <span className={cn('min-w-0 break-words font-semibold', signalClass(notification.side))}>
+                      提示：{promptText}
+                    </span>
+                    <span className="shrink-0 font-mono text-[9px] text-muted">
+                      {availableTime ?? '—'}
+                    </span>
                   </div>
-                  <div className="min-w-0 break-words text-secondary">
-                    <span className="dow-timeline-compact-label mr-1 font-medium text-muted">
+                  <div
+                    data-testid={`card-message-evidence-${notification.notification_id}`}
+                    className="min-w-0 break-words text-secondary"
+                  >
+                    <span className="mr-1 font-semibold text-muted">
                       内部变化：
                     </span>
                     {evidenceText}
-                  </div>
-                  <div className={cn('min-w-0 break-words font-medium', signalClass(notification.side))}>
-                    <span className="dow-timeline-compact-label mr-1 text-muted">
-                      提示：
-                    </span>
-                    {promptText}
                   </div>
                 </div>
               )

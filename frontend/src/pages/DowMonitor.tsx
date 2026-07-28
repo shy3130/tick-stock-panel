@@ -16,7 +16,6 @@ import {
   useDowMonitorOverview,
   useDowMonitorStatus,
   useDowNotifications,
-  useMarkDowNotificationRead,
   useRemoveDowMonitorSymbol,
   useSetDowMonitorEnabled,
 } from '@/components/dow-monitor/useDowMonitor'
@@ -93,10 +92,8 @@ export function DowMonitor({
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [pendingToggles, setPendingToggles] = useState<Set<string>>(() => new Set())
   const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(() => new Set())
-  const [pendingReads, setPendingReads] = useState<Set<string>>(() => new Set())
   const [toggleErrors, setToggleErrors] = useState<Set<string>>(() => new Set())
   const [removeErrors, setRemoveErrors] = useState<Set<string>>(() => new Set())
-  const [readErrors, setReadErrors] = useState<Map<string, string>>(() => new Map())
   const [realtimeActive, setRealtimeActive] = useState(false)
   const [detail, setDetail] = useState<{ symbol: string; timeframe: DowTimeframe } | null>(null)
   const symbolFormRef = useRef<HTMLFormElement>(null)
@@ -107,7 +104,6 @@ export function DowMonitor({
   const addSymbol = useAddDowMonitorSymbol()
   const removeSymbol = useRemoveDowMonitorSymbol()
   const setEnabled = useSetDowMonitorEnabled()
-  const markRead = useMarkDowNotificationRead()
 
   useEffect(() => {
     const query = symbolInput.trim()
@@ -199,9 +195,6 @@ export function DowMonitor({
   for (const symbol of removeErrors) {
     mutationIssues.push(`移除 ${symbol} 失败，请重试`)
   }
-  for (const symbol of readErrors.values()) {
-    mutationIssues.push(`标记 ${symbol} 已读失败，请重试`)
-  }
   const visibleIssues = [...connectivityIssues, ...mutationIssues]
   const forceBlocked = connectivityIssues.length > 0
 
@@ -278,28 +271,6 @@ export function DowMonitor({
       setPendingRemovals(current => {
         const next = new Set(current)
         next.delete(symbol)
-        return next
-      })
-    }
-  }
-
-  const beginRead = async (notificationId: string) => {
-    const notification = notifications.find(item => item.notification_id === notificationId)
-    const symbol = notification?.symbol ?? notificationId
-    setPendingReads(current => new Set(current).add(notificationId))
-    setReadErrors(current => {
-      const next = new Map(current)
-      next.delete(notificationId)
-      return next
-    })
-    try {
-      await markRead.mutateAsync(notificationId)
-    } catch {
-      setReadErrors(current => new Map(current).set(notificationId, symbol))
-    } finally {
-      setPendingReads(current => {
-        const next = new Set(current)
-        next.delete(notificationId)
         return next
       })
     }
@@ -465,8 +436,6 @@ export function DowMonitor({
                 onOpen={openDetail}
                 onToggle={beginToggle}
                 onRemove={beginRemove}
-                onRead={beginRead}
-                readPendingIds={pendingReads}
               />
             ))}
           </div>

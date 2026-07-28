@@ -3,29 +3,6 @@
   container-type: inline-size;
 }
 
-.dow-timeline-wide-header {
-  display: none;
-}
-
 .dow-timeline-row {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.dow-timeline-compact-label {
-  display: inline;
-}
-
-@container dow-card (min-width: 56rem) {
-  .dow-timeline-wide-header {
-    display: grid;
-  }
-
-  .dow-timeline-row {
-    column-gap: 0.75rem;
-    grid-template-columns: 7rem minmax(0, 1fr) minmax(0, 0.85fr);
-  }
-
-  .dow-timeline-compact-label {
-    display: none;
-  }
 }

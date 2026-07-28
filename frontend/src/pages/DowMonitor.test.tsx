@@ -976,7 +976,7 @@ describe('Dow monitor page', () => {
     expect(screen.queryByTestId('card-message-INTC.US-SELL')).not.toBeInTheDocument()
   })
 
-  it('shows all current-day buy sell and risk messages as a causal timeline', () => {
+  it('shows all current-day buy sell and risk messages newest first in two-line rows', () => {
     hooks.notifications = {
       data: {
         notifications: [
@@ -1022,26 +1022,35 @@ describe('Dow monitor page', () => {
     expect(hongKongCard).toHaveClass('dow-card-container')
     const messageBox = within(hongKongCard).getByRole('log', { name: '01347.HK 当日决策消息' })
     expect(messageBox).toHaveClass('overflow-y-auto')
-    expect(messageBox).toHaveTextContent('可获知时间')
-    expect(messageBox).toHaveTextContent('当时发生的内部变化')
-    expect(messageBox).toHaveTextContent('应给出的提示')
+    expect(messageBox).not.toHaveTextContent('可获知时间')
+    expect(messageBox).not.toHaveTextContent('完成后')
+    expect(within(messageBox).queryByRole('button', { name: '标记 01347.HK 已读' }))
+      .not.toBeInTheDocument()
     expect(messageBox).toHaveTextContent('首次冲高回落预警')
     expect(messageBox).toHaveTextContent('资金流1分钟恶化1500万')
-    const firstMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY')
-    expect(firstMessage).toHaveClass('border-b')
-    expect(firstMessage).toHaveClass(
-      'grid-cols-1',
-      'dow-timeline-row',
+    const messageRows = Array.from(
+      messageBox.querySelectorAll<HTMLElement>('[data-testid^="card-message-"]'),
+    ).filter(element => !element.dataset.testid?.includes('headline')
+      && !element.dataset.testid?.includes('evidence'))
+    expect(messageRows.map(element => element.dataset.testid)).toEqual([
+      'card-message-01347.HK-BUY-30m',
+      'card-message-01347.HK-RISK',
+      'card-message-01347.HK-BUY',
+    ])
+    const newestMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY-30m')
+    expect(newestMessage).toHaveClass('border-b', 'dow-timeline-row')
+    expect(newestMessage).not.toHaveClass('rounded', 'bg-elevated/50')
+    const newestHeadline = within(newestMessage).getByTestId(
+      'card-message-headline-01347.HK-BUY-30m',
     )
-    expect(within(firstMessage).getByText('内部变化：')).toHaveClass(
-      'dow-timeline-compact-label',
+    expect(within(newestHeadline).getByText('提示：卖出触发｜第二次突破'))
+      .toHaveClass('font-semibold')
+    expect(within(newestHeadline).getByText('2026-07-23 09:06')).toBeVisible()
+    expect(within(newestMessage).getByTestId(
+      'card-message-evidence-01347.HK-BUY-30m',
+    )).toHaveTextContent(
+      '内部变化：周期30分，跌破趋势线13.20，结构位12.90',
     )
-    expect(within(firstMessage).getByText('提示：')).toHaveClass(
-      'dow-timeline-compact-label',
-    )
-    expect(firstMessage).not.toHaveClass('rounded', 'bg-elevated/50')
-    const secondMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY-30m')
-    expect(secondMessage).toHaveTextContent('卖出触发｜第二次突破')
     expect(within(messageBox).queryByTestId('card-message-INTC.US-SELL')).not.toBeInTheDocument()
     expect(screen.queryByTestId('dow-monitor-signal-rail')).not.toBeInTheDocument()
   })
@@ -1152,9 +1161,10 @@ describe('Dow monitor page', () => {
     render(<DowMonitor />)
 
     const card = screen.getByTestId('card-01347.HK')
-    expect(within(card).getByText('2026-07-23 09:05完成后')).toBeVisible()
-    expect(within(card).getByText('日K 向上突破，触发价 11.00')).toBeVisible()
-    expect(within(card).getByText('买入')).toBeVisible()
+    expect(within(card).getByTestId('card-message-headline-01347.HK-BUY'))
+      .toHaveTextContent('提示：买入2026-07-23 09:05')
+    expect(within(card).getByTestId('card-message-evidence-01347.HK-BUY'))
+      .toHaveTextContent('内部变化：日K 向上突破，触发价 11.00')
   })
 
   it('filters both cards and notifications by active, buy, and sell signal states', async () => {
@@ -1276,10 +1286,10 @@ describe('Dow monitor page', () => {
       'data-tradable',
       'false',
     )
-    expect(within(card).getByText('买入')).toHaveClass('text-emerald-400')
+    expect(within(card).getByText('提示：买入')).toHaveClass('text-emerald-400')
 
     expect(
-      within(screen.getByTestId('card-message-INTC.US-SELL')).getByText('卖出'),
+      within(screen.getByTestId('card-message-INTC.US-SELL')).getByText('提示：卖出'),
     ).toHaveClass('text-red-400')
     expect(screen.getByTestId('card-600000.SH')).toHaveAttribute('data-tradable', 'false')
     expect(within(screen.getByTestId('card-600000.SH')).getByText('分析暂停')).toBeInTheDocument()
@@ -1464,7 +1474,6 @@ describe('Dow monitor page', () => {
     hooks.add.mockImplementation(() => undefined)
     hooks.setEnabled.mockRejectedValueOnce(new Error('toggle failed'))
     hooks.remove.mockRejectedValueOnce(new Error('remove failed'))
-    hooks.markRead.mockRejectedValueOnce(new Error('read failed'))
     const { rerender } = render(<DowMonitor />)
 
     expect(screen.getByRole('alert')).toHaveTextContent('添加失败，请重试')
@@ -1476,29 +1485,22 @@ describe('Dow monitor page', () => {
 
     await user.click(screen.getByRole('switch', { name: '01347.HK 监控开关' }))
     await user.click(screen.getByRole('button', { name: '移除 INTC.US' }))
-    await user.click(screen.getByRole('button', { name: '标记 01347.HK 已读' }))
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(
         '01347.HK 监控开关更新失败，请重试',
       )
       expect(screen.getByRole('alert')).toHaveTextContent('移除 INTC.US 失败，请重试')
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        '标记 01347.HK 已读失败，请重试',
-      )
     })
     expect(screen.getByRole('button', { name: '添加' })).not.toBeDisabled()
     expect(screen.getByRole('switch', { name: '01347.HK 监控开关' })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: '移除 INTC.US' })).not.toBeDisabled()
-    expect(screen.getByRole('button', { name: '标记 01347.HK 已读' })).not.toBeDisabled()
 
     await user.click(screen.getByRole('switch', { name: '01347.HK 监控开关' }))
     await user.click(screen.getByRole('button', { name: '移除 INTC.US' }))
-    await user.click(screen.getByRole('button', { name: '标记 01347.HK 已读' }))
     await waitFor(() => {
       expect(hooks.setEnabled).toHaveBeenCalledTimes(2)
       expect(hooks.remove).toHaveBeenCalledTimes(2)
-      expect(hooks.markRead).toHaveBeenCalledTimes(2)
     })
 
     hooks.addState = { isError: false, isPending: false }
@@ -1517,7 +1519,6 @@ describe('Dow monitor page', () => {
     expect(screen.getByRole('switch', { name: '01347.HK 监控开关' })).not.toBeDisabled()
     expect(screen.getByRole('switch', { name: 'INTC.US 监控开关' })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: '移除 INTC.US' })).not.toBeDisabled()
-    expect(screen.getByRole('button', { name: '标记 01347.HK 已读' })).not.toBeDisabled()
   })
 
   it('tracks concurrent toggle pending and errors per symbol in reverse settlement order', async () => {
@@ -1577,34 +1578,6 @@ describe('Dow monitor page', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       '移除 01347.HK 失败，请重试',
     )
-  })
-
-  it('tracks concurrent notification reads by id inside independent card message boxes', async () => {
-    const user = userEvent.setup()
-    const first = deferred()
-    const second = deferred()
-    hooks.markRead
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise)
-    render(<DowMonitor />)
-    const hk = screen.getByRole('button', { name: '标记 01347.HK 已读' })
-    const us = screen.getByRole('button', { name: '标记 INTC.US 已读' })
-
-    await user.click(hk)
-    await user.click(us)
-    expect(hk).toBeDisabled()
-    expect(us).toBeDisabled()
-
-    act(() => second.reject(new Error('US failed')))
-    await waitFor(() => expect(us).not.toBeDisabled())
-    expect(hk).toBeDisabled()
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      '标记 INTC.US 已读失败，请重试',
-    )
-
-    act(() => first.resolve(undefined))
-    await waitFor(() => expect(hk).not.toBeDisabled())
-    expect(us).not.toBeDisabled()
   })
 
   it('uses a dedicated detail control and never opens from nested keyboard actions', async () => {
