@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
@@ -292,6 +293,36 @@ def test_latest_audit_survives_process_restart(tmp_path):
             "observed_end": "2026-07-24",
             "recorded_at": "2026-07-24T16:00:00+00:00",
         }
+    ]
+
+
+def test_latest_audit_preserves_schema_errors_for_fail_closed_gate(tmp_path):
+    from app.data_providers.trust import load_latest_audits
+
+    out = tmp_path / "data_quality" / "adj_factor.json"
+    out.parent.mkdir(parents=True)
+    out.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "dataset": "adj_factor",
+                "provider": "",
+                "status": "mystery",
+                "coverage_ratio": "NaN",
+                "fallback_used": "false",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [receipt] = load_latest_audits(tmp_path)
+
+    assert receipt["schema_errors"] == [
+        "provider 必须是非空字符串",
+        "status 必须是 ok、partial、empty、invalid 或 error",
+        "coverage_ratio 必须是 0 到 1 之间的有限数值",
+        "fallback_used 必须是布尔值",
+        "synthetic 必须是布尔值",
     ]
 
 

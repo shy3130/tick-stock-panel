@@ -10,6 +10,8 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
+from app.data_providers.trust import validate_audit_receipt
+
 _MIN_DAILY_COVERAGE = 0.95
 _CONSENSUS_BONUS = 8.0
 _GO_SCORE = 75.0
@@ -36,17 +38,23 @@ def _data_gate(audits: list[dict], as_of: str | None) -> dict:
         if isinstance(audit, dict) and audit.get("dataset")
     }
     reasons: list[str] = []
+    next_actions: list[str] = []
     datasets: dict[str, dict] = {}
 
     if not as_of:
         reasons.append("尚无策略结果日期")
+        next_actions.append("请先运行策略生成最新结果, 再重新查看研究清单。")
 
     for dataset in _REQUIRED_DATASETS:
         label = _DATASET_LABELS[dataset]
         audit = by_dataset.get(dataset)
         dataset_reasons: list[str] = []
+        dataset_actions: list[str] = []
         if audit is None:
             dataset_reasons.append(f"缺少{label}可信度回执")
+            dataset_actions.append(
+                f"请重新运行{label}同步, 生成最新可信度回执后再试。"
+            )
             datasets[dataset] = {
                 "status": "missing",
                 "provider": None,
@@ -54,29 +62,60 @@ def _data_gate(audits: list[dict], as_of: str | None) -> dict:
                 "observed_start": None,
                 "observed_end": None,
                 "reasons": dataset_reasons,
+                "next_actions": dataset_actions,
             }
             reasons.extend(dataset_reasons)
+            _extend_unique(next_actions, dataset_actions)
             continue
 
-        coverage = float(audit.get("coverage_ratio") or 0.0)
+        schema_errors = validate_audit_receipt(audit)
+        if schema_errors:
+            dataset_reasons.extend(
+                f"{label}回执字段异常: {error}" for error in schema_errors
+            )
+            dataset_actions.append(
+                f"请检查{label}数据源配置并重新同步, 以重新生成有效可信度回执。"
+            )
+        raw_coverage = audit.get("coverage_ratio")
+        coverage_valid = not any(
+            error.startswith("coverage_ratio ") for error in schema_errors
+        )
+        coverage = float(raw_coverage) if coverage_valid else 0.0
         status = audit.get("status")
         if status in {"error", "invalid", "empty"}:
             dataset_reasons.append(f"{label}回执状态为 {status}")
+            dataset_actions.append(
+                f"请重新运行{label}同步; 若仍失败, 请检查数据源配置与同步日志。"
+            )
         if dataset != "instruments":
-            if audit.get("fallback_used"):
+            if isinstance(audit.get("fallback_used"), bool) and audit.get("fallback_used"):
                 dataset_reasons.append(f"{label}发生了未授权的数据源回退")
-            if audit.get("synthetic"):
+                dataset_actions.append(
+                    f"请检查{label}数据源配置, 关闭未授权回退后重新同步。"
+                )
+            if isinstance(audit.get("synthetic"), bool) and audit.get("synthetic"):
                 dataset_reasons.append(f"{label}回执标记为伪造或合成数据")
-            if coverage < _MIN_DAILY_COVERAGE:
+                dataset_actions.append(
+                    f"请切换到真实授权数据源并重新同步{label}。"
+                )
+            if coverage_valid and coverage < _MIN_DAILY_COVERAGE:
                 dataset_reasons.append(
                     f"{label}覆盖率仅 {coverage * 100:.1f}%, "
                     f"低于 {_MIN_DAILY_COVERAGE * 100:.1f}% 门槛"
+                )
+                dataset_actions.append(
+                    f"请补齐缺失标的后重新运行{label}同步, "
+                    f"使覆盖率达到{_MIN_DAILY_COVERAGE * 100:.1f}%以上。"
                 )
         observed_end = audit.get("observed_end")
         if dataset in {"daily", "daily_enriched"} and as_of and observed_end != as_of:
             dataset_reasons.append(
                 f"{label}截止日 {observed_end or '未知'} 与策略日期 {as_of} 不一致"
             )
+            dataset_actions.append(
+                f"请将{label}同步到策略日期 {as_of}, 再重新生成策略结果。"
+            )
+        dataset_actions = list(dict.fromkeys(dataset_actions))
         datasets[dataset] = {
             "status": status,
             "provider": audit.get("provider"),
@@ -84,19 +123,28 @@ def _data_gate(audits: list[dict], as_of: str | None) -> dict:
             "observed_start": audit.get("observed_start"),
             "observed_end": observed_end,
             "reasons": dataset_reasons,
+            "next_actions": dataset_actions,
         }
         reasons.extend(dataset_reasons)
+        _extend_unique(next_actions, dataset_actions)
 
-    daily = by_dataset.get("daily")
+    daily = datasets["daily"]
 
     return {
         "decision": "BLOCK" if reasons else "PASS",
-        "provider": daily.get("provider") if daily else None,
-        "coverage_ratio": float(daily.get("coverage_ratio") or 0.0) if daily else 0.0,
-        "observed_end": daily.get("observed_end") if daily else None,
+        "provider": daily["provider"],
+        "coverage_ratio": daily["coverage_ratio"],
+        "observed_end": daily["observed_end"],
         "reasons": reasons,
+        "next_actions": next_actions,
         "datasets": datasets,
     }
+
+
+def _extend_unique(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
 
 
 def _risk_reasons(row: dict[str, Any]) -> list[str]:

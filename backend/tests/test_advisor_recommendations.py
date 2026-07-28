@@ -101,6 +101,7 @@ def test_advisor_go_requires_fresh_audited_data_and_strategy_consensus():
         "observed_start": "2026-01-02",
         "observed_end": "2026-07-24",
         "reasons": [],
+        "next_actions": [],
     }
     [candidate] = result["candidates"]
     assert candidate["symbol"] == "600000.SH"
@@ -225,10 +226,18 @@ def test_advisor_explicitly_blocks_missing_required_receipts():
         "observed_start": None,
         "observed_end": None,
         "reasons": ["缺少除权因子可信度回执"],
+        "next_actions": ["请重新运行除权因子同步, 生成最新可信度回执后再试。"],
     }
     assert gate["datasets"]["daily_enriched"]["status"] == "missing"
     assert gate["datasets"]["daily_enriched"]["reasons"] == [
         "缺少派生日K可信度回执"
+    ]
+    assert gate["datasets"]["daily_enriched"]["next_actions"] == [
+        "请重新运行派生日K同步, 生成最新可信度回执后再试。"
+    ]
+    assert gate["next_actions"] == [
+        "请重新运行除权因子同步, 生成最新可信度回执后再试。",
+        "请重新运行派生日K同步, 生成最新可信度回执后再试。",
     ]
     assert all(row["decision"] == "NO-GO" for row in result["candidates"])
 
@@ -267,6 +276,10 @@ def test_advisor_blocks_partial_adj_factor_below_95_percent_coverage():
 
     assert result["data_gate"]["decision"] == "BLOCK"
     assert "94.0%" in result["data_gate"]["datasets"]["adj_factor"]["reasons"][0]
+    assert any(
+        "补齐缺失标的" in action
+        for action in result["data_gate"]["datasets"]["adj_factor"]["next_actions"]
+    )
 
 
 def test_advisor_requires_fresh_95_percent_daily_enriched_coverage():
@@ -289,6 +302,8 @@ def test_advisor_requires_fresh_95_percent_daily_enriched_coverage():
     assert result["data_gate"]["decision"] == "BLOCK"
     assert any("94.0%" in reason for reason in dataset["reasons"])
     assert any("策略日期" in reason for reason in dataset["reasons"])
+    assert any("补齐缺失标的" in action for action in dataset["next_actions"])
+    assert any("同步到策略日期" in action for action in dataset["next_actions"])
 
 
 @pytest.mark.parametrize(
@@ -318,3 +333,58 @@ def test_advisor_blocks_unsafe_critical_dataset_receipts(dataset, audit):
 
     assert result["data_gate"]["decision"] == "BLOCK"
     assert result["data_gate"]["datasets"][dataset]["reasons"]
+    assert result["data_gate"]["datasets"][dataset]["next_actions"]
+
+
+def test_advisor_blocks_malformed_receipt_fields_with_explicit_remediation():
+    from app.services.advisor import build_advisor_recommendations
+
+    malformed = _audit(dataset="adj_factor")
+    malformed.update(
+        provider="",
+        status="mystery",
+        coverage_ratio="NaN",
+        fallback_used="false",
+    )
+    malformed.pop("synthetic")
+
+    result = build_advisor_recommendations(
+        _trusted_audits(adj_factor=malformed),
+        _cache(),
+    )
+
+    dataset = result["data_gate"]["datasets"]["adj_factor"]
+    assert result["data_gate"]["decision"] == "BLOCK"
+    assert any("provider 必须是非空字符串" in reason for reason in dataset["reasons"])
+    assert any("status 必须是" in reason for reason in dataset["reasons"])
+    assert any("coverage_ratio 必须是" in reason for reason in dataset["reasons"])
+    assert any("fallback_used 必须是布尔值" in reason for reason in dataset["reasons"])
+    assert any("synthetic 必须是布尔值" in reason for reason in dataset["reasons"])
+    assert dataset["next_actions"] == [
+        "请检查除权因子数据源配置并重新同步, 以重新生成有效可信度回执。"
+    ]
+    assert dataset["next_actions"][0] in result["data_gate"]["next_actions"]
+    assert all(row["decision"] == "NO-GO" for row in result["candidates"])
+
+
+@pytest.mark.parametrize(
+    "coverage_ratio",
+    [float("nan"), float("inf"), -0.01, 1.01, "0.99"],
+)
+def test_advisor_rejects_non_finite_out_of_range_or_coerced_coverage(
+    coverage_ratio,
+):
+    from app.services.advisor import build_advisor_recommendations
+
+    malformed = _audit(dataset="adj_factor")
+    malformed["coverage_ratio"] = coverage_ratio
+
+    result = build_advisor_recommendations(
+        _trusted_audits(adj_factor=malformed),
+        _cache(),
+    )
+
+    dataset = result["data_gate"]["datasets"]["adj_factor"]
+    assert result["data_gate"]["decision"] == "BLOCK"
+    assert any("coverage_ratio 必须是" in reason for reason in dataset["reasons"])
+    assert dataset["next_actions"]

@@ -6,6 +6,7 @@ substitutes another provider and never manufactures rows.
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -16,6 +17,7 @@ from uuid import uuid4
 import polars as pl
 
 AuditStatus = Literal["ok", "partial", "empty", "invalid", "error"]
+_ALLOWED_AUDIT_STATUSES = {"ok", "partial", "empty", "invalid", "error"}
 _SAFE_DATASET = re.compile(r"^[a-z0-9_]+$")
 _REQUIRED_COLUMNS = {
     "daily": {"symbol", "date", "open", "high", "low", "close", "volume", "amount"},
@@ -225,7 +227,7 @@ def write_latest_audit(
 
 
 def load_latest_audits(data_dir: Path) -> list[dict]:
-    """Load valid latest receipts; malformed files are reported by omission."""
+    """Load latest receipts and preserve field-level schema failures."""
     out_dir = Path(data_dir) / "data_quality"
     if not out_dir.exists():
         return []
@@ -236,8 +238,35 @@ def load_latest_audits(data_dir: Path) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
         if isinstance(value, dict):
+            value = dict(value)
+            value.pop("schema_errors", None)
+            schema_errors = validate_audit_receipt(value)
+            if schema_errors:
+                value["schema_errors"] = list(schema_errors)
             audits.append(value)
     return audits
+
+
+def validate_audit_receipt(receipt: dict) -> tuple[str, ...]:
+    """Return human-readable schema errors without coercing corrupt values."""
+    errors: list[str] = []
+    provider = receipt.get("provider")
+    if not isinstance(provider, str) or not provider.strip():
+        errors.append("provider 必须是非空字符串")
+    if receipt.get("status") not in _ALLOWED_AUDIT_STATUSES:
+        errors.append("status 必须是 ok、partial、empty、invalid 或 error")
+    coverage = receipt.get("coverage_ratio")
+    if (
+        isinstance(coverage, bool)
+        or not isinstance(coverage, (int, float))
+        or not math.isfinite(float(coverage))
+        or not 0.0 <= float(coverage) <= 1.0
+    ):
+        errors.append("coverage_ratio 必须是 0 到 1 之间的有限数值")
+    for field in ("fallback_used", "synthetic"):
+        if not isinstance(receipt.get(field), bool):
+            errors.append(f"{field} 必须是布尔值")
+    return tuple(errors)
 
 
 def record_daily_enriched_audit(
