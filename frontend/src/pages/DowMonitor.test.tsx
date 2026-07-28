@@ -1019,6 +1019,7 @@ describe('Dow monitor page', () => {
     render(<DowMonitor />)
 
     const hongKongCard = screen.getByTestId('card-01347.HK')
+    expect(hongKongCard).toHaveClass('dow-card-container')
     const messageBox = within(hongKongCard).getByRole('log', { name: '01347.HK 当日决策消息' })
     expect(messageBox).toHaveClass('overflow-y-auto')
     expect(messageBox).toHaveTextContent('可获知时间')
@@ -1028,6 +1029,16 @@ describe('Dow monitor page', () => {
     expect(messageBox).toHaveTextContent('资金流1分钟恶化1500万')
     const firstMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY')
     expect(firstMessage).toHaveClass('border-b')
+    expect(firstMessage).toHaveClass(
+      'grid-cols-1',
+      'dow-timeline-row',
+    )
+    expect(within(firstMessage).getByText('内部变化：')).toHaveClass(
+      'dow-timeline-compact-label',
+    )
+    expect(within(firstMessage).getByText('提示：')).toHaveClass(
+      'dow-timeline-compact-label',
+    )
     expect(firstMessage).not.toHaveClass('rounded', 'bg-elevated/50')
     const secondMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY-30m')
     expect(secondMessage).toHaveTextContent('卖出触发｜第二次突破')

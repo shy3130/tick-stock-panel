@@ -22,6 +22,7 @@ import type {
   DowSignalSide,
   DowTimeframe,
 } from './types'
+import './DowMonitorCard.css'
 
 const TIMEFRAMES: Array<{ value: DowTimeframe; label: string }> = [
   { value: '5m', label: '5分' },
@@ -922,7 +923,7 @@ export function DowMonitorCard({
       data-testid={`card-${item.symbol}`}
       data-tradable={blocked ? 'false' : 'true'}
       className={cn(
-        'group relative min-w-0 overflow-hidden rounded-card border bg-surface transition-colors hover:border-accent/40',
+        'dow-card-container group relative min-w-0 overflow-hidden rounded-card border bg-surface transition-colors hover:border-accent/40',
         blocked ? 'border-border/70 opacity-75' : 'border-border',
       )}
     >
@@ -1110,7 +1111,7 @@ export function DowMonitorCard({
           </div>
         ) : orderedNotifications.length > 0 ? (
           <div>
-            <div className="hidden grid-cols-[7rem_minmax(0,1fr)_minmax(0,0.85fr)] gap-3 border-b border-border/60 pb-1 text-[9px] font-medium text-secondary sm:grid">
+            <div className="dow-timeline-wide-header grid-cols-[7rem_minmax(0,1fr)_minmax(0,0.85fr)] gap-3 border-b border-border/60 pb-1 text-[9px] font-medium text-secondary">
               <span>可获知时间</span>
               <span>当时发生的内部变化</span>
               <span>应给出的提示</span>
@@ -1134,7 +1135,7 @@ export function DowMonitorCard({
                   key={notification.notification_id}
                   data-testid={`card-message-${notification.notification_id}`}
                   className={cn(
-                    'grid min-w-0 grid-cols-1 gap-1 border-b border-border/50 py-2 text-[10px] last:border-b-0 sm:grid-cols-[7rem_minmax(0,1fr)_minmax(0,0.85fr)] sm:gap-3',
+                    'dow-timeline-row grid min-w-0 grid-cols-1 gap-1 border-b border-border/50 py-2 text-[10px] leading-relaxed last:border-b-0',
                     isLatest && 'border-l-2 border-l-accent pl-2',
                   )}
                 >
@@ -1156,9 +1157,15 @@ export function DowMonitorCard({
                     )}
                   </div>
                   <div className="min-w-0 break-words text-secondary">
+                    <span className="dow-timeline-compact-label mr-1 font-medium text-muted">
+                      内部变化：
+                    </span>
                     {evidenceText}
                   </div>
                   <div className={cn('min-w-0 break-words font-medium', signalClass(notification.side))}>
+                    <span className="dow-timeline-compact-label mr-1 text-muted">
+                      提示：
+                    </span>
                     {promptText}
                   </div>
                 </div>
