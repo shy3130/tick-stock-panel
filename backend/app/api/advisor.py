@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query, Request
 
 from app.data_providers.trust import load_latest_audits
 from app.services import strategy_cache
-from app.services.advisor import build_advisor_recommendations
+from app.services.advisor import build_advisor_recommendations, build_beginner_daily_brief
 
 router = APIRouter(prefix="/api/advisor", tags=["advisor"])
 
@@ -51,11 +51,7 @@ def _load_adjustment_event_symbols(
     return symbols, None
 
 
-@router.get("/recommendations")
-def recommendations(
-    request: Request,
-    limit: int = Query(30, ge=1, le=100),
-) -> dict:
+def _persisted_recommendations(request: Request, *, limit: int) -> dict:
     data_dir = request.app.state.repo.store.data_dir
     cache = strategy_cache.read_cache(data_dir)
     as_of = str(cache.get("as_of")) if isinstance(cache, dict) and cache.get("as_of") else None
@@ -70,3 +66,16 @@ def recommendations(
         adjustment_event_symbols=adjustment_event_symbols,
         adjustment_factor_problem=adjustment_factor_problem,
     )
+
+
+@router.get("/recommendations")
+def recommendations(
+    request: Request,
+    limit: int = Query(30, ge=1, le=100),
+) -> dict:
+    return _persisted_recommendations(request, limit=limit)
+
+
+@router.get("/daily-brief")
+def daily_brief(request: Request) -> dict:
+    return build_beginner_daily_brief(_persisted_recommendations(request, limit=3))

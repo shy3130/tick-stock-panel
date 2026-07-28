@@ -358,3 +358,68 @@ def build_advisor_recommendations(
         "candidates": candidates[: max(0, limit)],
         "disclaimer": "仅供个人研究; GO 仅表示进入研究清单, 不等于买入指令或收益承诺。",
     }
+
+
+def build_beginner_daily_brief(recommendations: dict | None) -> dict:
+    """Turn an existing deterministic recommendation result into a beginner brief."""
+    report = recommendations if isinstance(recommendations, dict) else {}
+    data_gate = report.get("data_gate") if isinstance(report.get("data_gate"), dict) else {}
+    candidates = report.get("candidates") if isinstance(report.get("candidates"), list) else []
+    research_candidates = [
+        _beginner_candidate(candidate)
+        for candidate in candidates[:3]
+        if isinstance(candidate, dict)
+    ]
+
+    if data_gate.get("decision") != "PASS":
+        action_state = "OBSERVE_ONLY"
+        today_message = "数据检查尚未通过, 今天只观察, 不进行模拟或研究筛选。"
+        next_step = "先处理数据检查中的问题, 再重新生成日报。"
+    elif any(candidate.get("research_decision") == "GO" for candidate in research_candidates):
+        action_state = "RESEARCH_ONLY"
+        today_message = "数据检查已通过, 存在通过硬风险检查的研究候选; 今天只做规则化研究。"
+        next_step = "逐项核对候选的规则条件和风险标记, 再决定是否继续跟踪。"
+    else:
+        action_state = "SIMULATE_ONLY"
+        today_message = "数据检查已通过, 但没有通过硬风险检查的研究候选; 今天只做模拟复盘。"
+        next_step = "用历史或模拟环境复盘候选, 等待下一次规则复核。"
+
+    return {
+        "as_of": report.get("as_of"),
+        "generated_at": report.get("generated_at"),
+        "action_state": action_state,
+        "today_message": today_message,
+        "next_step": next_step,
+        "data_gate": data_gate,
+        "method": report.get("method") if isinstance(report.get("method"), dict) else {},
+        "candidates": research_candidates,
+        "disclaimer": report.get("disclaimer"),
+    }
+
+
+def _beginner_candidate(candidate: dict) -> dict:
+    decision = str(candidate.get("decision") or "NO-GO")
+    decision_label = str(candidate.get("decision_label") or decision)
+    strategies = [str(strategy) for strategy in candidate.get("strategies") or []]
+    reasons = [f"研究判断: {decision_label}"]
+    if strategies:
+        reasons.append(f"策略共识: {'、'.join(strategies)}")
+
+    return {
+        "symbol": candidate.get("symbol"),
+        "name": candidate.get("name"),
+        "research_decision": decision,
+        "deterministic_reasons": reasons,
+        "observation_conditions": [
+            "复核运行后, 数据门禁仍为 PASS",
+            f"复核运行后, 研究判断仍为 {decision}",
+        ],
+        "invalidation_conditions": [
+            "任一必需数据回执或运行时校验使数据门禁变为 BLOCK",
+            f"复核运行后, 研究判断不再为 {decision}",
+            "复核运行后出现任一风险标记",
+        ],
+        "risk_flags": candidate.get("risk_flags")
+        if isinstance(candidate.get("risk_flags"), list)
+        else [],
+    }
