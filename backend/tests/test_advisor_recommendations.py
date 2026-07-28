@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 
+import polars as pl
 import pytest
 
 
@@ -111,6 +113,7 @@ def test_advisor_go_requires_fresh_audited_data_and_strategy_consensus():
     assert candidate["strategies"] == ["bullish_alignment", "trend_breakout"]
     assert candidate["score"] == 89.1
     assert candidate["score_method"] == "0.7x最高策略分 + 0.3x平均策略分 + 共识加分"
+    assert candidate["risk_flags"] == []
     assert candidate["ai_generated"] is False
 
 
@@ -183,12 +186,166 @@ def test_advisor_never_labels_a_limit_up_candidate_as_go():
 
     [candidate] = result["candidates"]
     assert candidate["decision"] == "NO-GO"
+    assert candidate["risk_flags"] == [
+        {
+            "code": "LIMIT_UP",
+            "message": "当前处于涨停或一字涨停状态, 不作为可追入候选",
+        }
+    ]
     assert "涨停" in candidate["risk_reasons"][0]
+
+
+def test_advisor_quarantines_finite_daily_return_above_30_percent():
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    for result in cache["results"].values():
+        result["rows"][0]["change_pct"] = 0.50
+
+    recommendation = build_advisor_recommendations(_trusted_audits(), cache)
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert candidate["risk_flags"] == [
+        {
+            "code": "ABNORMAL_DAILY_RETURN",
+            "message": "当日涨跌幅绝对值超过 30%, 已隔离并等待人工复核",
+        }
+    ]
+    assert candidate["risk_reasons"] == [
+        "当日涨跌幅绝对值超过 30%, 已隔离并等待人工复核"
+    ]
+
+
+def test_advisor_quarantines_same_day_adjustment_event_and_50_percent_move():
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    for result in cache["results"].values():
+        result["rows"][0]["change_pct"] = 0.50
+
+    recommendation = build_advisor_recommendations(
+        _trusted_audits(),
+        cache,
+        adjustment_event_symbols={"600000.SH"},
+    )
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert {flag["code"] for flag in candidate["risk_flags"]} == {
+        "ADJUSTMENT_EVENT_ON_AS_OF",
+        "ABNORMAL_DAILY_RETURN",
+    }
+    assert candidate["score"] == 89.1
+
+
+@pytest.mark.parametrize("close", [None, float("nan"), float("inf"), 0.0, -1.0])
+def test_advisor_quarantines_missing_non_finite_or_non_positive_close(close):
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    for result in cache["results"].values():
+        result["rows"][0]["close"] = close
+
+    recommendation = build_advisor_recommendations(_trusted_audits(), cache)
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert candidate["risk_flags"] == [
+        {
+            "code": "INVALID_PRICE",
+            "message": "收盘价缺失、非有限数或不大于 0, 已隔离并等待人工复核",
+        }
+    ]
+
+
+def test_advisor_limit_down_block_has_stable_risk_code():
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    for result in cache["results"].values():
+        result["rows"][0]["status"] = "limit_down"
+
+    recommendation = build_advisor_recommendations(_trusted_audits(), cache)
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert candidate["risk_flags"] == [
+        {"code": "LIMIT_DOWN", "message": "当前处于跌停状态"}
+    ]
+    assert candidate["risk_reasons"] == ["当前处于跌停状态"]
 
 
 def test_advisor_api_reads_only_persisted_audits_and_strategy_cache(monkeypatch, tmp_path):
     from app.api import advisor as advisor_api
 
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_audits",
+        lambda data_dir: _trusted_audits(),
+    )
+    monkeypatch.setattr(advisor_api.strategy_cache, "read_cache", lambda data_dir: _cache())
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+            ),
+        ),
+    )
+
+    result = advisor_api.recommendations(request, limit=10)
+
+    assert result["data_gate"]["decision"] == "PASS"
+    assert result["candidates"][0]["decision"] == "GO"
+
+
+def test_advisor_api_quarantines_symbol_with_adjustment_event_on_strategy_date(
+    monkeypatch,
+    tmp_path,
+):
+    from app.api import advisor as advisor_api
+
+    factor_path = tmp_path / "adj_factor" / "all.parquet"
+    factor_path.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH", "000001.SZ"],
+            "trade_date": [date(2026, 7, 24), date(2026, 7, 23)],
+            "ex_factor": [1.1, 1.0],
+        }
+    ).write_parquet(factor_path)
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_audits",
+        lambda data_dir: _trusted_audits(),
+    )
+    monkeypatch.setattr(advisor_api.strategy_cache, "read_cache", lambda data_dir: _cache())
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+            ),
+        ),
+    )
+
+    result = advisor_api.recommendations(request, limit=10)
+
+    [candidate] = result["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert [flag["code"] for flag in candidate["risk_flags"]] == [
+        "ADJUSTMENT_EVENT_ON_AS_OF"
+    ]
+
+
+def test_advisor_api_does_not_crash_on_unreadable_adjustment_factor_file(
+    monkeypatch,
+    tmp_path,
+):
+    from app.api import advisor as advisor_api
+
+    factor_path = tmp_path / "adj_factor" / "all.parquet"
+    factor_path.parent.mkdir(parents=True)
+    factor_path.write_bytes(b"not parquet")
     monkeypatch.setattr(
         advisor_api,
         "load_latest_audits",

@@ -6,6 +6,7 @@ user's research list.
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
@@ -181,14 +182,55 @@ def _extend_unique(target: list[str], values: list[str]) -> None:
             target.append(value)
 
 
-def _risk_reasons(row: dict[str, Any]) -> list[str]:
-    reasons: list[str] = []
+def _risk_flags(
+    row: dict[str, Any],
+    *,
+    adjustment_event_on_as_of: bool,
+) -> list[dict[str, str]]:
+    flags: list[dict[str, str]] = []
+    if adjustment_event_on_as_of:
+        flags.append(
+            {
+                "code": "ADJUSTMENT_EVENT_ON_AS_OF",
+                "message": "策略日期发生除权除息事件, 已隔离并等待人工复核",
+            }
+        )
+
+    try:
+        change_pct = float(row.get("change_pct"))
+    except (TypeError, ValueError, OverflowError):
+        change_pct = None
+    if change_pct is not None and math.isfinite(change_pct) and abs(change_pct) > 0.30:
+        flags.append(
+            {
+                "code": "ABNORMAL_DAILY_RETURN",
+                "message": "当日涨跌幅绝对值超过 30%, 已隔离并等待人工复核",
+            }
+        )
+
+    try:
+        close = float(row.get("close"))
+    except (TypeError, ValueError, OverflowError):
+        close = None
+    if close is None or not math.isfinite(close) or close <= 0:
+        flags.append(
+            {
+                "code": "INVALID_PRICE",
+                "message": "收盘价缺失、非有限数或不大于 0, 已隔离并等待人工复核",
+            }
+        )
+
     status = str(row.get("status") or "").lower()
     if status in {"limit_up", "one_word_limit_up"}:
-        reasons.append("当前处于涨停或一字涨停状态, 不作为可追入候选")
+        flags.append(
+            {
+                "code": "LIMIT_UP",
+                "message": "当前处于涨停或一字涨停状态, 不作为可追入候选",
+            }
+        )
     if status in {"limit_down", "one_word_limit_down"}:
-        reasons.append("当前处于跌停状态")
-    return reasons
+        flags.append({"code": "LIMIT_DOWN", "message": "当前处于跌停状态"})
+    return flags
 
 
 def build_advisor_recommendations(
@@ -196,6 +238,7 @@ def build_advisor_recommendations(
     strategy_cache: dict | None,
     *,
     limit: int = 30,
+    adjustment_event_symbols: set[str] | None = None,
 ) -> dict:
     """Aggregate deterministic strategy scores behind explicit data/risk gates."""
     cache = strategy_cache if isinstance(strategy_cache, dict) else {}
@@ -223,7 +266,11 @@ def build_advisor_recommendations(
         consensus_bonus = min(24.0, max(0, len(matches) - 1) * _CONSENSUS_BONUS)
         score = round(min(100.0, highest * 0.7 + average * 0.3 + consensus_bonus), 1)
         representative = max(matches, key=lambda item: float(item[1].get("score") or 0.0))[1]
-        risk_reasons = _risk_reasons(representative)
+        risk_flags = _risk_flags(
+            representative,
+            adjustment_event_on_as_of=symbol in (adjustment_event_symbols or set()),
+        )
+        risk_reasons = [flag["message"] for flag in risk_flags]
 
         if data_gate["decision"] == "BLOCK" or risk_reasons:
             decision = "NO-GO"
@@ -248,6 +295,7 @@ def build_advisor_recommendations(
                 "strategy_count": len(matches),
                 "strategies": sorted(strategy_scores),
                 "strategy_scores": dict(sorted(strategy_scores.items())),
+                "risk_flags": risk_flags,
                 "risk_reasons": risk_reasons,
                 "ai_generated": False,
             }
