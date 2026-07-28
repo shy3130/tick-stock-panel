@@ -19,6 +19,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app.data_providers.trust import record_daily_enriched_audit
 from app.indicators.pipeline import run_pipeline
 from app.config import settings
 from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
@@ -354,6 +355,11 @@ def run_now(
     else:
         written_enriched = 0
         logger.info("compute_enriched: skip (no new daily, no adj_factor changes)")
+    if written_enriched > 0:
+        record_daily_enriched_audit(
+            repo.store.data_dir,
+            requested_symbols=universe,
+        )
     _refresh_single_view(repo, "kline_enriched")
     _invalidate("enriched")
 
