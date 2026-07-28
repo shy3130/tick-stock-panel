@@ -10,10 +10,14 @@
     "frontend/src/pages/backtest/StrategyBacktest.tsx": "Renders the Sycee-owned trade CSV export action and passes the completed backtest result.",
     "frontend/src/router.tsx": "Expands the authenticated and explicit public Sycee route registries without implementing feature behavior.",
     "frontend/src/lib/navRegistry.ts": "Expands the Sycee navigation registry.",
-    "frontend/src/lib/api.ts": "Exports the generic request helper used by isolated Sycee API clients."
+    "frontend/src/lib/api.ts": "Exports the generic request helper used by isolated Sycee API clients.",
+    "frontend/package.json": "Provides the Playwright acceptance command and browser-test dependency.",
+    "frontend/pnpm-lock.yaml": "Locks the Playwright acceptance dependency for reproducible CI installs."
   },
   "infrastructure": {
+    ".gitignore": "Excludes local Playwright browser state, traces, screenshots, and isolated E2E data.",
     ".github/workflows/docker.yml": "Runs the reusable read-only quality gate before building or publishing Docker images.",
-    ".github/workflows/release.yml": "Runs the reusable read-only quality gate before packaging desktop release artifacts."
+    ".github/workflows/release.yml": "Runs the reusable read-only quality gate before packaging desktop release artifacts.",
+    ".github/workflows/quality.yml": "Runs isolated Sycee browser acceptance after backend and frontend checks and retains failure diagnostics."
   }
 }

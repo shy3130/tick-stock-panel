@@ -62,6 +62,8 @@ backend/user_prompts/
 
 # ===== Browser automation =====
 .playwright-mcp/
+.playwright-cli/
+output/playwright/
 
 # ===== AI IDE =====
 .trae/

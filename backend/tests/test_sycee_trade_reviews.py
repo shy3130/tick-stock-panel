@@ -8,6 +8,7 @@ from app.config import settings
 from app.services import user_context
 from app.services.user_context import UserIdentity
 from app.sycee.portfolio import router as portfolio_router
+from app.sycee.trade_reviews import _derive_attributions
 from app.sycee.trade_reviews import router as trade_reviews_router
 
 
@@ -131,6 +132,25 @@ def test_holding_period_resets_after_a_position_is_fully_closed(monkeypatch, tmp
 
     assert by_id[first_sell["id"]]["attribution"]["holding_days"] == 2
     assert by_id[second_sell["id"]]["attribution"]["holding_days"] == 1
+
+
+def test_same_second_attribution_uses_portfolio_replay_order():
+    created_at = "2026-07-28T01:02:03+00:00"
+    buy = {
+        "id": "trade_ffffffffffffffffffffffffffffffff",
+        "created_at": created_at,
+        **_trade(),
+    }
+    sell = {
+        "id": "trade_00000000000000000000000000000000",
+        "created_at": created_at,
+        **_trade(side="sell", quantity=40, price=15),
+    }
+
+    attributions = _derive_attributions([sell, buy])
+
+    assert attributions[sell["id"]]["cost_basis"] == 400
+    assert attributions[sell["id"]]["realized_pnl"] == 200
 
 
 def test_deleted_trade_keeps_review_as_an_orphan_until_user_removes_it(monkeypatch, tmp_path):

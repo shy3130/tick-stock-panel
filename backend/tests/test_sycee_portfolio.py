@@ -7,6 +7,7 @@ from pytest import approx
 from app.config import settings
 from app.services import user_context
 from app.services.user_context import UserIdentity
+from app.sycee import portfolio
 from app.sycee.portfolio import router
 
 
@@ -128,6 +129,24 @@ def test_portfolio_rejects_mutations_that_create_historical_oversell(monkeypatch
     unchanged = client.get("/api/sycee/portfolio").json()
     assert unchanged["summary"]["trade_count"] == 2
     assert unchanged["positions"][0]["quantity"] == 20
+
+
+def test_same_second_trades_keep_their_recorded_order(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(portfolio, "_now", lambda: "2026-07-28T01:02:03+00:00")
+    client = _client()
+
+    bought = client.post("/api/sycee/portfolio/trades", json=_trade())
+    sold = client.post(
+        "/api/sycee/portfolio/trades",
+        json=_trade(side="sell", quantity=80, price=12),
+    )
+
+    assert bought.status_code == 201
+    assert sold.status_code == 201
+    result = sold.json()["portfolio"]
+    assert result["positions"][0]["quantity"] == 20
+    assert [trade["side"] for trade in result["trades"]] == ["sell", "buy"]
 
 
 def test_portfolio_is_isolated_per_user(monkeypatch, tmp_path):

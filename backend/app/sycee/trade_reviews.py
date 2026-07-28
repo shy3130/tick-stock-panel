@@ -150,14 +150,12 @@ def _decimal(value: float) -> Decimal:
     return Decimal(str(value))
 
 
-def _trade_sort_key(trade: dict) -> tuple[str, str, str]:
-    return trade["trade_date"], trade["created_at"], trade["id"]
-
-
 def _derive_attributions(trades: list[dict]) -> dict[str, dict]:
     states: dict[str, dict] = {}
     attributions: dict[str, dict] = {}
-    for trade in sorted(trades, key=_trade_sort_key):
+    # Portfolio exposes newest-first trades; reversing exactly preserves its replay order,
+    # including legacy same-second records whose file order is the only stable tiebreaker.
+    for trade in reversed(trades):
         symbol = trade["symbol"]
         state = states.setdefault(
             symbol,

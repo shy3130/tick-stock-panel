@@ -132,7 +132,7 @@ def _write_unlocked(trades: list[dict]) -> None:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _number(value: Decimal) -> float:
@@ -143,8 +143,9 @@ def _decimal(value: float) -> Decimal:
     return Decimal(str(value))
 
 
-def _trade_sort_key(trade: dict) -> tuple[str, str, str]:
-    return trade["trade_date"], trade["created_at"], trade["id"]
+def _trade_sort_key(trade: dict) -> tuple[str, str]:
+    # Python's stable sort preserves file order for legacy records created in the same second.
+    return trade["trade_date"], trade["created_at"]
 
 
 def _build_portfolio(trades: list[dict]) -> dict:
@@ -211,7 +212,7 @@ def _build_portfolio(trades: list[dict]) -> dict:
             }
         )
     positions.sort(key=lambda position: position["symbol"])
-    visible_trades = sorted(trades, key=_trade_sort_key, reverse=True)
+    visible_trades = list(reversed(sorted(trades, key=_trade_sort_key)))
     return {
         "trades": visible_trades,
         "positions": positions,
