@@ -393,7 +393,7 @@ def build_beginner_daily_brief(recommendations: dict | None) -> dict:
         "data_gate": data_gate,
         "method": report.get("method") if isinstance(report.get("method"), dict) else {},
         "candidates": research_candidates,
-        "disclaimer": report.get("disclaimer"),
+        "disclaimer": "仅供个人研究与模拟练习; 进入研究清单不构成任何交易指令或收益承诺, 历史结果不代表未来表现。",
     }
 
 

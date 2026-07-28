@@ -176,7 +176,7 @@ def test_daily_brief_endpoint_uses_persisted_audits_cache_and_runtime_risk(
 
 
 def _brief_human_strings(brief: dict) -> list[str]:
-    strings = [brief["today_message"], brief["next_step"]]
+    strings = [brief["today_message"], brief["next_step"], brief["disclaimer"]]
     for candidate in brief["candidates"]:
         for field in (
             "deterministic_reasons",
@@ -211,6 +211,9 @@ def test_daily_brief_human_copy_hides_internal_tokens_for_every_action_state():
     assert [brief["data_gate"]["decision"] for brief in briefs] == ["BLOCK", "PASS", "PASS"]
     assert briefs[1]["candidates"][0]["research_decision"] == "NO-GO"
     assert briefs[2]["candidates"][0]["research_decision"] == "GO"
+    assert {brief["disclaimer"] for brief in briefs} == {
+        "仅供个人研究与模拟练习; 进入研究清单不构成任何交易指令或收益承诺, 历史结果不代表未来表现。"
+    }
 
     forbidden_tokens = {
         "PASS",
