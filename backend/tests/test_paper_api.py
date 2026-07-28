@@ -246,3 +246,67 @@ def test_mutating_routes_return_chinese_400_for_non_object_or_invalid_json_body(
     assert response.status_code == 400, body_kind
     detail = response.json()["detail"]
     assert any(word in detail for word in ("请求", "内容", "JSON"))
+
+
+@pytest.mark.parametrize(
+    ("path", "field"),
+    [
+        ("/api/paper/reset", "initial_cash"),
+        ("/api/paper/trades", "quantity"),
+    ],
+)
+def test_mutating_routes_return_chinese_400_for_5000_digit_json_integer(
+    tmp_path,
+    path,
+    field,
+):
+    _write_gate_context(tmp_path, blocked=False)
+    raw_json = f'{{"{field}":' + ("9" * 5_000) + "}"
+
+    response = _client(tmp_path).post(
+        path,
+        content=raw_json.encode(),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert isinstance(detail, str)
+    assert "请求" in detail
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_properties"),
+    [
+        (
+            "/api/paper/reset",
+            {"initial_cash", "confirmation"},
+        ),
+        (
+            "/api/paper/trades",
+            {
+                "symbol",
+                "name",
+                "side",
+                "quantity",
+                "price",
+                "trade_date",
+                "plan_note",
+                "invalidation_note",
+            },
+        ),
+    ],
+)
+def test_mutating_routes_publish_request_body_schema(
+    tmp_path,
+    path,
+    expected_properties,
+):
+    document = _client(tmp_path).get("/openapi.json").json()
+    request_body = document["paths"][path]["post"]["requestBody"]
+    body_schema = request_body["content"]["application/json"]["schema"]
+    reference = body_schema["$ref"]
+    schema_name = reference.rsplit("/", 1)[-1]
+    properties = document["components"]["schemas"][schema_name]["properties"]
+
+    assert expected_properties <= set(properties)

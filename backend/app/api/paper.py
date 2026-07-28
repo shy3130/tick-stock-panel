@@ -1,47 +1,82 @@
 """本地模拟账户 API, 不会向任何券商或外部交易系统发送委托。"""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
+from pydantic import BaseModel
 
 from app.api import advisor as advisor_api
 from app.services import paper_account
 
-router = APIRouter(prefix="/api/paper", tags=["paper-account"])
+
+def _is_json_request(request: Request) -> bool:
+    content_type = request.headers.get("content-type", "")
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type == "application/json" or media_type.endswith("+json")
+
+
+class BeginnerReadablePaperRoute(APIRoute):
+    """Keep paper-route body errors local, documented, and beginner-readable."""
+
+    def get_route_handler(self):
+        original_route_handler = super().get_route_handler()
+
+        async def beginner_readable_handler(request: Request):
+            if request.method == "POST" and _is_json_request(request):
+                try:
+                    # Starlette caches this result, so FastAPI reuses it below.
+                    # This also catches Python's JSON integer digit-limit ValueError.
+                    await request.json()
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "请求内容不是有效 JSON。"
+                            "下一步: 请检查格式后重新提交。"
+                        ),
+                    ) from exc
+            try:
+                return await original_route_handler(request)
+            except RequestValidationError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "请求内容必须是包含完整字段的 JSON 对象。"
+                        "下一步: 请检查字段格式后重新提交。"
+                    ),
+                ) from exc
+
+        return beginner_readable_handler
+
+
+router = APIRouter(
+    prefix="/api/paper",
+    tags=["paper-account"],
+    route_class=BeginnerReadablePaperRoute,
+)
+
+
+class ResetRequest(BaseModel):
+    initial_cash: Any = None
+    confirmation: Any = None
+
+
+class TradeRequest(BaseModel):
+    symbol: Any = None
+    name: Any = None
+    side: Any = None
+    quantity: Any = None
+    price: Any = None
+    trade_date: Any = None
+    plan_note: Any = None
+    invalidation_note: Any = None
 
 
 def _data_dir(request: Request):
     return request.app.state.repo.store.data_dir
-
-
-async def _read_json_object(request: Request) -> dict[str, Any]:
-    try:
-        raw = await request.body()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="请求内容无法读取。下一步: 请重新提交 JSON 对象。",
-        ) from exc
-    if not raw:
-        raise HTTPException(
-            status_code=400,
-            detail="请求内容不能为空。下一步: 请提交完整的 JSON 对象。",
-        )
-    try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="请求内容不是有效 JSON。下一步: 请检查格式后重新提交。",
-        ) from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=400,
-            detail="请求内容必须是 JSON 对象。下一步: 请检查字段格式后重新提交。",
-        )
-    return payload
 
 
 def _raise_user_error(exc: Exception) -> None:
@@ -95,13 +130,12 @@ def account(request: Request) -> dict:
 
 
 @router.post("/reset")
-async def reset(request: Request) -> dict:
-    payload = await _read_json_object(request)
+def reset(payload: ResetRequest, request: Request) -> dict:
     try:
         return paper_account.reset_account(
             _data_dir(request),
-            initial_cash=payload.get("initial_cash"),
-            confirmation=payload.get("confirmation"),
+            initial_cash=payload.initial_cash,
+            confirmation=payload.confirmation,
         )
     except paper_account.PaperAccountValidationError as exc:
         _raise_user_error(exc)
@@ -110,20 +144,19 @@ async def reset(request: Request) -> dict:
 
 
 @router.post("/trades")
-async def trade(request: Request) -> dict:
-    payload = await _read_json_object(request)
+def trade(payload: TradeRequest, request: Request) -> dict:
     _require_trusted_data_gate(request)
     try:
         return paper_account.record_trade(
             _data_dir(request),
-            symbol=payload.get("symbol"),
-            name=payload.get("name"),
-            side=payload.get("side"),
-            quantity=payload.get("quantity"),
-            price=payload.get("price"),
-            trade_date=payload.get("trade_date"),
-            plan_note=payload.get("plan_note"),
-            invalidation_note=payload.get("invalidation_note"),
+            symbol=payload.symbol,
+            name=payload.name,
+            side=payload.side,
+            quantity=payload.quantity,
+            price=payload.price,
+            trade_date=payload.trade_date,
+            plan_note=payload.plan_note,
+            invalidation_note=payload.invalidation_note,
         )
     except paper_account.PaperAccountValidationError as exc:
         _raise_user_error(exc)
