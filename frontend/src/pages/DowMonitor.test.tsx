@@ -976,16 +976,38 @@ describe('Dow monitor page', () => {
     expect(screen.queryByTestId('card-message-INTC.US-SELL')).not.toBeInTheDocument()
   })
 
-  it('shows multiple stock notifications as plain text rows in a taller message box', () => {
+  it('shows all current-day buy sell and risk messages as a causal timeline', () => {
     hooks.notifications = {
       data: {
         notifications: [
-          hkNotification,
           {
             ...hkNotification,
             notification_id: '01347.HK-BUY-30m',
             timeframe: '30m',
             shape_name: '第二次突破',
+            triggered_at: '2026-07-23T01:06:00Z',
+            category: 'SELL_POINT',
+            available_at: '2026-07-23T01:06:00Z',
+            evidence_text: '周期30分，跌破趋势线13.20，结构位12.90',
+            prompt_text: '卖出触发｜第二次突破',
+          },
+          {
+            ...hkNotification,
+            notification_id: '01347.HK-RISK',
+            side: 'RISK',
+            timeframe: '1m',
+            triggered_at: '2026-07-23T01:05:30Z',
+            category: 'EARLY_RISK',
+            available_at: '2026-07-23T01:05:30Z',
+            evidence_text: '高点回落1.44%；主动卖出占优27%，盘口卖压64%，资金流1分钟恶化1500万。',
+            prompt_text: '首次冲高回落预警',
+          },
+          {
+            ...hkNotification,
+            category: 'BUY_POINT',
+            available_at: '2026-07-23T01:05:00Z',
+            evidence_text: '周期5分，向上突破，触发价11.00',
+            prompt_text: '买入触发｜向上突破',
           },
           usNotification,
         ],
@@ -997,15 +1019,18 @@ describe('Dow monitor page', () => {
     render(<DowMonitor />)
 
     const hongKongCard = screen.getByTestId('card-01347.HK')
-    const messageBox = within(hongKongCard).getByRole('log', { name: '01347.HK 消息通知' })
-    expect(messageBox).toHaveClass('h-32', 'overflow-y-auto')
+    const messageBox = within(hongKongCard).getByRole('log', { name: '01347.HK 当日决策消息' })
+    expect(messageBox).toHaveClass('overflow-y-auto')
+    expect(messageBox).toHaveTextContent('可获知时间')
+    expect(messageBox).toHaveTextContent('当时发生的内部变化')
+    expect(messageBox).toHaveTextContent('应给出的提示')
+    expect(messageBox).toHaveTextContent('首次冲高回落预警')
+    expect(messageBox).toHaveTextContent('资金流1分钟恶化1500万')
     const firstMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY')
-    expect(firstMessage).toHaveClass('border-b', 'border-l-2', 'border-l-accent')
-    expect(firstMessage).not.toHaveClass('rounded', 'border', 'bg-elevated/50')
-    expect(within(firstMessage).getByText('最新')).toBeInTheDocument()
+    expect(firstMessage).toHaveClass('border-b')
+    expect(firstMessage).not.toHaveClass('rounded', 'bg-elevated/50')
     const secondMessage = within(messageBox).getByTestId('card-message-01347.HK-BUY-30m')
-    expect(secondMessage).not.toHaveClass('border-l-2', 'border-l-accent')
-    expect(within(secondMessage).queryByText('最新')).not.toBeInTheDocument()
+    expect(secondMessage).toHaveTextContent('卖出触发｜第二次突破')
     expect(within(messageBox).queryByTestId('card-message-INTC.US-SELL')).not.toBeInTheDocument()
     expect(screen.queryByTestId('dow-monitor-signal-rail')).not.toBeInTheDocument()
   })
@@ -1104,7 +1129,7 @@ describe('Dow monitor page', () => {
     })
   })
 
-  it('shows the latest signal trigger time and trigger price on the card', () => {
+  it('shows legacy signal fields through the causal message fallback', () => {
     hooks.notifications = {
       data: {
         notifications: [{ ...hkNotification, timeframe: 'day' }, usNotification],
@@ -1116,10 +1141,9 @@ describe('Dow monitor page', () => {
     render(<DowMonitor />)
 
     const card = screen.getByTestId('card-01347.HK')
-    expect(within(card).getByText('周期 日K')).toBeVisible()
-    expect(within(card).getByText('触发 2026-07-23 09:05')).toBeVisible()
-    expect(within(card).getByText('@11.00')).toBeVisible()
-    expect(within(card).getByText('向上突破')).toBeVisible()
+    expect(within(card).getByText('2026-07-23 09:05完成后')).toBeVisible()
+    expect(within(card).getByText('日K 向上突破，触发价 11.00')).toBeVisible()
+    expect(within(card).getByText('买入')).toBeVisible()
   })
 
   it('filters both cards and notifications by active, buy, and sell signal states', async () => {
@@ -1313,8 +1337,8 @@ describe('Dow monitor page', () => {
 
     await user.click(screen.getByRole('button', { name: 'A股' }))
 
-    expect(screen.getByRole('log', { name: '600000.SH 消息通知' })).toHaveTextContent(
-      '暂无消息通知',
+    expect(screen.getByRole('log', { name: '600000.SH 当日决策消息' })).toHaveTextContent(
+      '暂无当日决策消息',
     )
     expect(screen.queryByTestId('dow-monitor-signal-rail')).not.toBeInTheDocument()
   })
@@ -1356,7 +1380,7 @@ describe('Dow monitor page', () => {
     hooks.notifications = { data: undefined, isError: false, isLoading: true }
     rerender(<DowMonitor />)
     expect(screen.getByRole('alert')).toHaveTextContent('正在连接监控服务')
-    expect(screen.getByRole('log', { name: '01347.HK 消息通知' })).toHaveTextContent(
+    expect(screen.getByRole('log', { name: '01347.HK 当日决策消息' })).toHaveTextContent(
       '正在加载通知',
     )
     expect(screen.getByText('数据源不可用')).toBeInTheDocument()

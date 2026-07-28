@@ -335,6 +335,34 @@ export interface DowMonitorNotification {
   trigger_price: number
   snapshot_payload: DowMonitorNotificationSnapshot
   read_at: string | null
+  category?: 'BUY_POINT' | 'SELL_POINT' | 'EARLY_RISK'
+  available_at?: string
+  evidence_text?: string
+  prompt_text?: string
+}
+
+export interface DowDecisionDriver {
+  driver_code: string
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  contribution: number
+  current_value: number | null
+  previous_value: number | null
+  change_value: number | null
+  unit: string | null
+  horizons: string[]
+  confirmation: 'CONFIRMED' | 'UNCONFIRMED' | 'CONFLICT' | 'NOT_APPLICABLE'
+  text: string
+}
+
+export interface DowMinuteRiskWarning {
+  family:
+    | 'OPENING_SURGE_REVERSAL'
+    | 'BUYING_INEFFECTIVE'
+    | 'REBOUND_FAILURE'
+    | 'KEY_LEVEL_BREAKDOWN'
+  stage: 'WATCH' | 'WARNING' | 'CONFIRMED'
+  title: string
+  message: string
 }
 
 export interface DowMinuteDecision {
@@ -363,6 +391,11 @@ export interface DowMinuteDecision {
       | 'INSUFFICIENT_STRUCTURE'
   status_label: string
   source_timestamp: string | null
+  summary_text?: string | null
+  key_drivers?: DowDecisionDriver[]
+  turn_stronger_condition?: string | null
+  turn_weaker_condition?: string | null
+  risk_warning?: DowMinuteRiskWarning | null
 }
 
 export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {

@@ -912,6 +912,11 @@ export function DowMonitorCard({
     currentStateSnapshot.cumulative,
     displayedItem.intraday_capital,
   )
+  const orderedNotifications = [...notifications].sort((left, right) => {
+    const leftTime = Date.parse(left.available_at ?? left.triggered_at)
+    const rightTime = Date.parse(right.available_at ?? right.triggered_at)
+    return leftTime - rightTime
+  })
   return (
     <article
       data-testid={`card-${item.symbol}`}
@@ -1087,8 +1092,8 @@ export function DowMonitorCard({
 
       <section
         role="log"
-        aria-label={`${item.symbol} 消息通知`}
-        className="h-32 overflow-y-auto border-t border-border/60 bg-base/20 px-2.5 py-1.5"
+        aria-label={`${item.symbol} 当日决策消息`}
+        className="max-h-56 overflow-y-auto border-t border-border/60 bg-base/20 px-2.5 py-1.5"
       >
         {blocked && (
           <div className="mb-1 text-[10px] font-medium text-muted">{blocked}</div>
@@ -1099,41 +1104,45 @@ export function DowMonitorCard({
         {notificationError && (
           <div className="mb-1 text-center text-[10px] text-danger">通知加载失败</div>
         )}
-        {notifications.length === 0 && !notificationLoading && !notificationError ? (
-          <div className="flex h-full items-center justify-center text-[10px] text-muted">
-            暂无消息通知
+        {orderedNotifications.length === 0 && !notificationLoading && !notificationError ? (
+          <div className="flex min-h-24 items-center justify-center text-[10px] text-muted">
+            暂无当日决策消息
           </div>
-        ) : notifications.length > 0 ? (
+        ) : orderedNotifications.length > 0 ? (
           <div>
-            {notifications.map((notification, index) => {
-              const isLatest = index === 0
+            <div className="hidden grid-cols-[7rem_minmax(0,1fr)_minmax(0,0.85fr)] gap-3 border-b border-border/60 pb-1 text-[9px] font-medium text-secondary sm:grid">
+              <span>可获知时间</span>
+              <span>当时发生的内部变化</span>
+              <span>应给出的提示</span>
+            </div>
+            {orderedNotifications.map((notification, index) => {
+              const isLatest = index === orderedNotifications.length - 1
               const triggerTimeframe = TIMEFRAMES.find(
                 option => option.value === notification.timeframe,
               )?.label ?? notification.timeframe
-              const triggerTime = formatServerTimestamp(notification.triggered_at)
+              const availableTime = formatServerTimestamp(
+                notification.available_at ?? notification.triggered_at,
+              )
               const triggerPrice = Number.isFinite(notification.trigger_price)
                 ? notification.trigger_price.toFixed(2)
                 : null
+              const evidenceText = notification.evidence_text
+                ?? `${triggerTimeframe} ${notification.shape_name}，触发价 ${triggerPrice ?? '—'}`
+              const promptText = notification.prompt_text ?? notification.action_name
               return (
                 <div
                   key={notification.notification_id}
                   data-testid={`card-message-${notification.notification_id}`}
                   className={cn(
-                    'border-b border-border/50 py-1.5 last:border-b-0',
+                    'grid min-w-0 grid-cols-1 gap-1 border-b border-border/50 py-2 text-[10px] last:border-b-0 sm:grid-cols-[7rem_minmax(0,1fr)_minmax(0,0.85fr)] sm:gap-3',
                     isLatest && 'border-l-2 border-l-accent pl-2',
                   )}
                 >
-                  <div className="flex min-w-0 items-center gap-1.5 text-[10px]">
+                  <div className="flex min-w-0 items-center gap-1.5 font-mono text-[9px] text-muted">
                     {isLatest && (
                       <span className="shrink-0 text-[9px] font-medium text-accent">最新</span>
                     )}
-                    <span className={cn('shrink-0 font-medium', signalClass(notification.side))}>
-                      {notification.action_name}
-                    </span>
-                    <span className="shrink-0 font-mono text-[9px] text-secondary">
-                      周期 {triggerTimeframe}
-                    </span>
-                    <span className="truncate text-secondary">{notification.shape_name}</span>
+                    <span className="shrink-0">{availableTime ?? '—'}完成后</span>
                     {notification.read_at == null && onRead && (
                       <button
                         type="button"
@@ -1146,9 +1155,11 @@ export function DowMonitorCard({
                       </button>
                     )}
                   </div>
-                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5 font-mono text-[9px] text-muted">
-                    <span className="shrink-0">触发 {triggerTime ?? '—'}</span>
-                    <span className="shrink-0 text-foreground">@{triggerPrice ?? '—'}</span>
+                  <div className="min-w-0 break-words text-secondary">
+                    {evidenceText}
+                  </div>
+                  <div className={cn('min-w-0 break-words font-medium', signalClass(notification.side))}>
+                    {promptText}
                   </div>
                 </div>
               )

@@ -100,36 +100,89 @@ export function MinuteDecisionPanel({
         ))}
       </div>
 
-      <div
-        data-testid="minute-decision-evidence"
-        className="mt-2 grid min-w-0 grid-cols-1 gap-2 break-words sm:grid-cols-2"
-      >
-        <div className="min-w-0">
-          <div className="font-medium text-emerald-300">支持理由</div>
-          <ul className="mt-0.5 list-disc space-y-0.5 pl-3.5 text-secondary">
-            {evidenceItems(
-              decision?.supporting_reasons ?? [],
-              '等待分钟结构与资金数据确认',
-            )}
-          </ul>
+      {decision?.risk_warning && (
+        <div className="mt-1.5 rounded border border-red-500/30 bg-red-500/10 px-2 py-1.5">
+          <div className="font-semibold text-red-300">{decision.risk_warning.title}</div>
+          <div className="mt-0.5 break-words text-secondary">
+            {decision.risk_warning.message}
+          </div>
         </div>
-        <div className="min-w-0">
-          <div className="font-medium text-amber-300">反向风险</div>
-          <ul className="mt-0.5 list-disc space-y-0.5 pl-3.5 text-secondary">
-            {evidenceItems(
-              decision?.contrary_risks ?? [],
-              '暂未识别额外反向风险',
-            )}
-          </ul>
-        </div>
-      </div>
+      )}
 
-      <div className="mt-2 min-w-0 border-t border-border/60 pt-1.5 text-[9px]">
-        <span className="font-medium text-red-300">失效条件：</span>
-        <span className="break-words text-secondary">
-          {decision?.invalidation_conditions.join('；') || '尚未形成可执行失效条件'}
-        </span>
-      </div>
+      {decision?.summary_text && (
+        <p className="mt-1.5 break-words text-secondary">{decision.summary_text}</p>
+      )}
+
+      {(decision?.key_drivers?.length ?? 0) > 0 && (
+        <ul className="mt-1.5 flex min-w-0 flex-wrap gap-1">
+          {decision?.key_drivers?.slice(0, 3).map(driver => (
+            <li
+              key={driver.driver_code}
+              className={cn(
+                'rounded bg-elevated px-1.5 py-0.5 text-[9px]',
+                driver.direction === 'BEARISH'
+                  ? 'text-red-300'
+                  : driver.direction === 'BULLISH'
+                    ? 'text-emerald-300'
+                    : 'text-secondary',
+              )}
+            >
+              {driver.text}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {(decision?.turn_stronger_condition || decision?.turn_weaker_condition) && (
+        <div className="mt-1.5 grid min-w-0 grid-cols-1 gap-0.5 text-[9px]">
+          {decision.turn_stronger_condition && (
+            <div className="break-words text-secondary">
+              <span className="font-medium text-emerald-300">转强：</span>
+              {decision.turn_stronger_condition}
+            </div>
+          )}
+          {decision.turn_weaker_condition && (
+            <div className="break-words text-secondary">
+              <span className="font-medium text-red-300">转弱：</span>
+              {decision.turn_weaker_condition}
+            </div>
+          )}
+        </div>
+      )}
+
+      <details className="mt-1.5 min-w-0 border-t border-border/60 pt-1.5">
+        <summary className="cursor-pointer text-[9px] text-muted">展开分析依据</summary>
+        <div
+          data-testid="minute-decision-evidence"
+          className="mt-1.5 grid min-w-0 grid-cols-1 gap-2 break-words sm:grid-cols-2"
+        >
+          <div className="min-w-0">
+            <div className="font-medium text-emerald-300">支持理由</div>
+            <ul className="mt-0.5 list-disc space-y-0.5 pl-3.5 text-secondary">
+              {evidenceItems(
+                decision?.supporting_reasons ?? [],
+                '等待分钟结构与资金数据确认',
+              )}
+            </ul>
+          </div>
+          <div className="min-w-0">
+            <div className="font-medium text-amber-300">反向风险</div>
+            <ul className="mt-0.5 list-disc space-y-0.5 pl-3.5 text-secondary">
+              {evidenceItems(
+                decision?.contrary_risks ?? [],
+                '暂未识别额外反向风险',
+              )}
+            </ul>
+          </div>
+        </div>
+
+        <div className="mt-2 min-w-0 text-[9px]">
+          <span className="font-medium text-red-300">失效条件：</span>
+          <span className="break-words text-secondary">
+            {decision?.invalidation_conditions.join('；') || '尚未形成可执行失效条件'}
+          </span>
+        </div>
+      </details>
     </section>
   )
 }

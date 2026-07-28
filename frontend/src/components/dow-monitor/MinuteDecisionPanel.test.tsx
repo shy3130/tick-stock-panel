@@ -56,4 +56,59 @@ describe('MinuteDecisionPanel', () => {
     expect(evidence).toHaveClass('grid-cols-1', 'sm:grid-cols-2')
     expect(evidence).toHaveClass('break-words')
   })
+
+  it('shows compact quantitative drivers and the active early-risk warning', () => {
+    render(
+      <MinuteDecisionPanel
+        decision={{
+          ...decision,
+          summary_text: '高点回落1.44%，主动卖出占优27%，资金流1分钟恶化1500万',
+          key_drivers: [
+            {
+              driver_code: 'HIGH_DRAWDOWN',
+              direction: 'BEARISH',
+              contribution: -3,
+              current_value: 1.44,
+              previous_value: null,
+              change_value: null,
+              unit: '%',
+              horizons: ['1m'],
+              confirmation: 'CONFIRMED',
+              text: '高点回落1.44%',
+            },
+            {
+              driver_code: 'TRADE_SELL_IMBALANCE',
+              direction: 'BEARISH',
+              contribution: -2,
+              current_value: -27,
+              previous_value: null,
+              change_value: null,
+              unit: '%',
+              horizons: ['1m'],
+              confirmation: 'CONFIRMED',
+              text: '主动卖出占优27%',
+            },
+          ],
+          turn_stronger_condition: '重新站上VWAP并连续2分钟主动买入占优',
+          turn_weaker_condition: '跌破开盘低点且资金继续流出',
+          risk_warning: {
+            family: 'OPENING_SURGE_REVERSAL',
+            stage: 'WARNING',
+            title: '冲高回落风险',
+            message: '高点回落1.44%；主动卖出占优27%，资金流1分钟恶化1500万。',
+          },
+        }}
+      />,
+    )
+
+    expect(screen.getByText('冲高回落风险')).toBeInTheDocument()
+    expect(screen.getAllByText(/高点回落1.44%/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('主动卖出占优27%')).toBeInTheDocument()
+    expect(screen.getByTestId('minute-decision-panel')).toHaveTextContent(
+      '转强：重新站上VWAP',
+    )
+    expect(screen.getByTestId('minute-decision-panel')).toHaveTextContent(
+      '转弱：跌破开盘低点',
+    )
+  })
 })
