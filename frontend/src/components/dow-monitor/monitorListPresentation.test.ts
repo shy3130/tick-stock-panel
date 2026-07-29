@@ -196,6 +196,20 @@ describe('monitor list presentation', () => {
     expect(row.trendPosition.channel.code).toBe('PENDING')
   })
 
+  it('prioritizes 15m relative volume independently of the control timeframe', () => {
+    const item = symbolFixture({
+      states: {
+        '15m': state('15m', [10, 10.2], { volumeRatio: 1.5 }),
+        '30m': state('30m', [10, 10.2], { priceToLinePct: 0.7, volumeRatio: 2.4 }),
+      },
+    })
+
+    const row = deriveMonitorRow(item, [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
+
+    expect(row.trendPosition.control?.timeframe).toBe('30m')
+    expect(row.volumeFunds.relativeVolume).toEqual({ timeframe: '15m', ratio: 1.5 })
+  })
+
   it('derives stable grouped decision metrics from completed bars and decisions', () => {
     const completedCloses = Array.from({ length: 16 }, (_, index) => 100 + index)
     const fifteen = state('15m', [...completedCloses, 1000], { completion: 'FORMING' })

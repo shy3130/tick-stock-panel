@@ -171,12 +171,8 @@ function momentum(
 
 function relativeVolume(
   item: DowMonitorOverviewSymbol,
-  selectedControl: MonitorControl | null,
 ): MonitorRelativeVolume | null {
-  const timeframes = selectedControl
-    ? [selectedControl.timeframe]
-    : CONTROL_TIMEFRAMES
-  for (const timeframe of timeframes) {
+  for (const timeframe of CONTROL_TIMEFRAMES) {
     const ratio = item.states[timeframe]?.snapshot?.volume_ratio_20
     if (finite(ratio)) return { timeframe, ratio }
   }
@@ -398,7 +394,7 @@ export function deriveMonitorRow(
       momentum15m: momentum(item.states['15m']),
     },
     volumeFunds: {
-      relativeVolume: relativeVolume(item, selectedControl),
+      relativeVolume: relativeVolume(item),
       volumeSpeed: null,
       activeFunds: activeFunds(item),
       depthPressurePct: null,
