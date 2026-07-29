@@ -110,10 +110,10 @@ class DowMonitorMinuteResultSource:
                    toString(snapshot_minute) AS snapshot_time,
                    last_done, prev_close, high, low,
                    toString(updated_at) AS updated_at
-            FROM {self._database}.lb_realtime_quotes
+            FROM {self._database}.lb_realtime_quotes AS quotes
             WHERE {common}
-              AND updated_at >= parseDateTime64BestEffort({start_sql})
-              AND updated_at < parseDateTime64BestEffort({end_sql})
+              AND quotes.updated_at >= parseDateTime64BestEffort({start_sql})
+              AND quotes.updated_at < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, updated_at
             """
         )
@@ -123,10 +123,10 @@ class DowMonitorMinuteResultSource:
                    toString(snapshot_minute) AS snapshot_time,
                    bid_volume, ask_volume, payload,
                    toString(updated_at) AS updated_at
-            FROM {self._database}.lb_realtime_depth
+            FROM {self._database}.lb_realtime_depth AS depth
             WHERE {common}
-              AND updated_at >= parseDateTime64BestEffort({start_sql})
-              AND updated_at < parseDateTime64BestEffort({end_sql})
+              AND depth.updated_at >= parseDateTime64BestEffort({start_sql})
+              AND depth.updated_at < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, updated_at
             """
         )
@@ -159,10 +159,10 @@ class DowMonitorMinuteResultSource:
             SELECT symbol, market,
                    toString(snapshot_minute) AS snapshot_time,
                    total_in, total_out, toString(updated_at) AS updated_at
-            FROM {self._database}.lb_realtime_capital
+            FROM {self._database}.lb_realtime_capital AS capital
             WHERE {common}
-              AND updated_at >= parseDateTime64BestEffort({start_sql})
-              AND updated_at < parseDateTime64BestEffort({end_sql})
+              AND capital.updated_at >= parseDateTime64BestEffort({start_sql})
+              AND capital.updated_at < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, updated_at
             """
         )

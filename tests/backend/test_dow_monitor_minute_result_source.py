@@ -57,6 +57,26 @@ def test_uses_final_only_for_replacing_merge_tree_candlesticks() -> None:
     assert all(" FINAL" not in sql for sql in plain_sql)
 
 
+def test_qualifies_timestamp_filters_to_avoid_clickhouse_alias_substitution() -> None:
+    capture = QueryCapture()
+
+    DowMonitorMinuteResultSource(query_fn=capture).load_raw_history(
+        ["700.HK"],
+        START,
+        END,
+    )
+
+    for table, alias in (
+        ("lb_realtime_quotes", "quotes"),
+        ("lb_realtime_depth", "depth"),
+        ("lb_realtime_capital", "capital"),
+    ):
+        sql = next(item for item in capture.sql if table in item)
+        assert f"FROM longbridge.{table} AS {alias}" in sql
+        assert f"{alias}.updated_at >=" in sql
+        assert f"{alias}.updated_at <" in sql
+
+
 def test_parses_raw_rows_and_preserves_five_level_depth() -> None:
     timestamp = "2026-07-29T09:30:59+08:00"
     rows = {
