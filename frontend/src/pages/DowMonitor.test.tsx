@@ -233,7 +233,13 @@ describe('Dow monitor list page', () => {
     const target = symbols[2]
     const { rerender } = render(<DowMonitor />)
     const formalSignalCount = screen.getAllByText('买入确认').length
+    const targetFormalSignal = () => {
+      const targetRow = screen.getByText(target.symbol).closest('tr')
+      if (!targetRow) throw new Error(`Missing row for ${target.symbol}`)
+      return within(targetRow).getByText('买入确认')
+    }
     expect(formalSignalCount).toBeGreaterThan(0)
+    expect(targetFormalSignal()).toBeInTheDocument()
 
     realtimeMocks.view = {
       status: 'realtime',
@@ -282,6 +288,7 @@ describe('Dow monitor list page', () => {
     expect(screen.getByText('188.88')).toBeInTheDocument()
     expect(screen.getByText('1m +1.00%')).toBeInTheDocument()
     expect(screen.getAllByText('买入确认')).toHaveLength(formalSignalCount)
+    expect(targetFormalSignal()).toBeInTheDocument()
 
     realtimeMocks.view = {
       ...realtimeMocks.view,
@@ -306,6 +313,7 @@ describe('Dow monitor list page', () => {
     rerender(<DowMonitor />)
 
     expect(screen.getAllByText('买入确认')).toHaveLength(formalSignalCount)
+    expect(targetFormalSignal()).toBeInTheDocument()
   })
 
   it('toggles the selected stock detail below the list without a dialog', async () => {
