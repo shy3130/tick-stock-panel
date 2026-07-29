@@ -130,6 +130,17 @@ function channel(item: DowMonitorOverviewSymbol): MonitorChannel {
 
 const CONTROL_TIMEFRAMES: DowTimeframe[] = ['15m', '30m']
 
+function stableState(
+  state: DowMonitorTimeframeState | undefined,
+): DowMonitorTimeframeState | undefined {
+  if (
+    !state
+    || state.snapshot.bar_completion === 'FORMING'
+    || state.snapshot.provisional
+  ) return undefined
+  return state
+}
+
 function roleLabel(value: string | null | undefined): string {
   const normalized = value?.trim().toUpperCase()
   if (normalized === 'SUPPORT' || normalized === 'LOW') return '支撑线'
@@ -142,7 +153,7 @@ function control(
   item: DowMonitorOverviewSymbol,
 ): MonitorControl | null {
   for (const timeframe of CONTROL_TIMEFRAMES) {
-    const snapshot = item.states[timeframe]?.snapshot
+    const snapshot = stableState(item.states[timeframe])?.snapshot
     if (!finite(snapshot?.price_to_line_pct)) continue
     return {
       timeframe,
@@ -205,6 +216,7 @@ function volumeSpeed(
   const candleStart = timestampMs(candle.timestamp)
   if (candleStart == null) return null
   const elapsedSeconds = (nowMs - candleStart) / 1000
+  if (Math.floor(nowMs / 60_000) !== Math.floor(candleStart / 60_000)) return null
   if (elapsedSeconds < 20 || elapsedSeconds >= 75) return null
 
   const volumes = completedBars(item.states['5m'])
@@ -254,7 +266,7 @@ function relativeVolume(
   item: DowMonitorOverviewSymbol,
 ): MonitorRelativeVolume | null {
   for (const timeframe of CONTROL_TIMEFRAMES) {
-    const ratio = item.states[timeframe]?.snapshot?.volume_ratio_20
+    const ratio = stableState(item.states[timeframe])?.snapshot.volume_ratio_20
     if (finite(ratio)) return { timeframe, ratio }
   }
   return null

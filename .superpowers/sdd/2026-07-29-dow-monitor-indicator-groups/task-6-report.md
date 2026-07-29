@@ -2,9 +2,11 @@
 
 ## Round-1 evidence correction
 
-Authenticated read-only overview capture for `01347.HK` supplied exact final-bars/OHLC/TR/VWAP inputs. Recomputed 5m `+0.3665689%`, 15m `+0.4402054%`, ATR14 `+1.5444015%`, VWAP distance `+3.0250806%`, and live confirmation `0/2`. The acceptance record now distinguishes this live data from deterministic adversarial depth proof (`+9.0909%` / `-81.8182%`, unchanged persisted CONFIRMED BUY), and cites the actual 45-symbol page-one/page-two pagination tests. Fresh evidence rerun: 21 frontend tests and 2 contracts passed.
+Authenticated read-only overview capture for `01347.HK` supplied exact final-bars/OHLC/TR/VWAP inputs. Recomputed 5m `+0.3665689%`, 15m `+0.4402054%`, ATR14 `+1.5444015%`, VWAP distance `+3.0250806%`, and live confirmation `0/2`. The acceptance record now distinguishes this live data from deterministic adversarial depth proof (`+9.0909%` / `-81.8182%`, unchanged persisted CONFIRMED BUY), and cites the actual 45-symbol page-one/page-two pagination tests.
 
-The prior 21/2 subset has no retained exact command and is superseded; it is not relied upon. Exact reproducible commands are:
+Historical 21/2 subset is superseded, has no retained exact command, and is not acceptance evidence.
+
+Exact reproducible commands are:
 ```powershell
 pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx src/components/dow-monitor/DowMonitorDetailPanel.test.tsx src/pages/DowMonitor.test.tsx src/lib/realtimeMarketData.test.ts
 python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.py tests/spec_contracts/test_realtime_frontend_contract.py -q
@@ -14,7 +16,7 @@ pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresen
 
 Date: 2026-07-29. Result: **PASS**.
 
-Focused tests: 39 Vitest + 3 contract pytest + 5 backend WebSocket pytest all passed. Build passed. The specification checker produced only the two documented baseline findings: expired collection-monitor exception and legacy detail-toggle test path.
+Focused tests: 40 Vitest + 3 contract pytest + 5 backend WebSocket pytest all passed. Build passed. The specification checker produced only the two documented baseline findings: expired collection-monitor exception and legacy detail-toggle test path.
 
 Release: `tickflow-stock-panel-app:dow-monitor-indicator-groups-20260729-192023`, `sha256:b76900033fbd691ee34f3ab360477734576b731bf7e7295c2680d9ba6e3a8c89`; rollback image `tickflow-stock-panel-app:dow-monitor-change-pct-f34edda-20260729-145154`; backup `/home/alwin/backups/dow-monitor-indicator-groups-predeploy-20260729-192023`; symbols SHA-256 `1d5955494b4a74d8ae32bd550e4f744e09c4cab80c85f190acd01f3717bef59e` unchanged.
 

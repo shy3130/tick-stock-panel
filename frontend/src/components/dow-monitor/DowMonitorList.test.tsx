@@ -264,6 +264,8 @@ describe('DowMonitorList', () => {
     const depthPressureBadge = within(volumeFundsCell).getByTestId('depth-pressure-live-badge-700.HK')
     const momentumBadge = screen.getByText('1m +1.00%').previousElementSibling
     const rangeBadges = screen.getByTestId('breakout-risk-700.HK').querySelectorAll('.text-cyan-300')
+    expect(momentumBadge).not.toBeNull()
+    if (!momentumBadge) throw new Error('Missing live badge before 1m momentum')
     expect(momentumBadge).toHaveClass('text-cyan-300')
     expect(momentumBadge).toHaveTextContent('实时')
     expect(momentumBadge.nextElementSibling).toHaveTextContent('1m +1.00%')

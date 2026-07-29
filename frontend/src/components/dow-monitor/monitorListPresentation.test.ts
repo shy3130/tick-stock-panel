@@ -19,6 +19,7 @@ function state(
   closes: number[],
   options: {
     completion?: string
+    provisional?: boolean
     priceToLinePct?: number
     volumeRatio?: number
     upward?: boolean
@@ -46,6 +47,7 @@ function state(
     snapshot: {
       bar_time: bars.at(-1)?.timestamp,
       bar_completion: options.completion ?? 'FINAL',
+      provisional: options.provisional ?? false,
       price_to_line_pct: options.priceToLinePct,
       line_role: 'SUPPORT',
       volume_ratio_20: options.volumeRatio,
@@ -211,6 +213,10 @@ describe('monitor list presentation', () => {
       .volumeFunds.volumeSpeed).toBeCloseTo(0.8)
     expect(deriveMonitorRow(item, [], realtime, Date.parse('2026-07-29T09:35:10+08:00'))
       .volumeFunds.volumeSpeed).toBeNull()
+    expect(deriveMonitorRow(item, [], realtime, Date.parse('2026-07-29T09:36:10+08:00'))
+      .volumeFunds.volumeSpeed).toBeNull()
+    expect(deriveMonitorRow(item, [], realtime, Date.parse('2026-07-29T09:36:15+08:00'))
+      .volumeFunds.volumeSpeed).toBeNull()
     expect(deriveMonitorRow(
       symbolFixture({ states: { '5m': state('5m', Array.from({ length: 11 }, () => 100)) } }),
       [],
@@ -284,19 +290,49 @@ describe('monitor list presentation', () => {
     expect(row.momentumSpeed.momentum15m.valuePct).toBeCloseTo(5)
   })
 
-  it('does not fall back to 5m for control distance or relative volume', () => {
-    const item = symbolFixture({
+  it('rejects forming or provisional stable metrics and never falls back to 5m', () => {
+    const five = state('5m', [10, 10.2], {
+      priceToLinePct: -0.8,
+      volumeRatio: 0.9,
+    })
+    const fiveOnly = deriveMonitorRow(symbolFixture({
       states: {
-        '5m': state('5m', [10, 10.2], { priceToLinePct: -0.8, volumeRatio: 0.9 }),
+        '5m': five,
         '15m': state('15m', [10, 10.2]),
       },
+    }), [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
+    expect(fiveOnly.trendPosition.control).toBeNull()
+    expect(fiveOnly.volumeFunds.relativeVolume).toBeNull()
+    expect(fiveOnly.trendPosition.channel.code).toBe('PENDING')
+
+    const thirty = state('30m', [10, 10.2], {
+      priceToLinePct: 0.7,
+      volumeRatio: 2.4,
     })
-
-    const row = deriveMonitorRow(item, [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
-
-    expect(row.trendPosition.control).toBeNull()
-    expect(row.volumeFunds.relativeVolume).toBeNull()
-    expect(row.trendPosition.channel.code).toBe('PENDING')
+    for (const fifteen of [
+      state('15m', [10, 10.2], {
+        completion: 'FORMING',
+        priceToLinePct: 1.5,
+        volumeRatio: 1.6,
+      }),
+      state('15m', [10, 10.2], {
+        provisional: true,
+        priceToLinePct: 1.5,
+        volumeRatio: 1.6,
+      }),
+    ]) {
+      const row = deriveMonitorRow(symbolFixture({
+        states: { '5m': five, '15m': fifteen, '30m': thirty },
+      }), [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
+      expect(row.trendPosition.control).toMatchObject({
+        timeframe: '30m',
+        distancePct: 0.7,
+      })
+      expect(row.volumeFunds.relativeVolume).toEqual({
+        timeframe: '30m',
+        ratio: 2.4,
+      })
+    }
   })
 
   it('prioritizes 15m relative volume independently of the control timeframe', () => {

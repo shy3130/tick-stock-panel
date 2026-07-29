@@ -8,10 +8,10 @@ Applicable requirements: `REQ-DOW-MONITOR-INDICATOR-GROUPS-LAYOUT-001`, `REQ-DOW
 
 | Command | Result |
 | --- | --- |
-| specified focused Vitest suites | 5 files, 39 passed |
+| specified focused Vitest suites | 5 files, 40 passed |
 | specified specification/realtime contract pytest suites | 3 passed |
 | `backend/tests/test_realtime_websocket.py` | 5 passed; one existing `asyncio_mode` configuration warning |
-| `pnpm --dir frontend build` | exit 0; `index-CTXmgw0J.js`, `DowMonitor-5MeBqeQ7.js`, `realtimeMarketData-CnBtfOxI.js` |
+| `pnpm --dir frontend build` | exit 0; final broad-review build produced `index-DKdW77Ki.js`, `DowMonitor-BTJPiTJw.js`, `realtimeMarketData-CbJf3qZq.js` |
 | `python scripts/check_spec_compliance.py` | only baseline findings: expired `EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001` and legacy detail-toggle test path outside `tests/`; no active grouped-requirement finding |
 
 The local Vite preview returned API HTTP 500 and remained loading, so it was excluded from semantic proof. The authenticated production browser supplied the browser acceptance.
@@ -64,6 +64,16 @@ The 14 TR inputs are `1.8,0.6,7.0,3.7,2.8,2.6,2.2,1.6,1.5,2.1,0.5,0.9,1.1,1.2`, 
 
 Adversarial inputs cannot be injected into production. `monitorListPresentation.test.ts > does not let realtime depth change a formal BUY signal` uses a bid-heavy five-level book `300/250` (`+9.0909%`) and ask-heavy book `10/100` (`-81.8182%`) plus a `100→101` 1m candle (`+1.00%`); both retain the same persisted `CONFIRMED BUY`. `> projects volume speed only within the valid 1m observation window` covers valid, too-early, insufficient-12-bar, and `candlestickDelayed` inputs; `DowMonitorList.test.tsx > keeps missing grouped values explicit instead of rendering zeroes` renders `ATR14 --`; `> requires complete active-funds data` maps delayed capital to unconfirmed/null. `DowMonitorList.test.tsx > renders grouped columns with real-time and stable labels` asserts per-field `实时` labels.
 
+The final broad-review regression extends the volume-speed case with a candle
+at `09:35:00` and `now=09:36:10`: although the elapsed time is only 70
+seconds, the observation is rejected because the two timestamps are not in
+the same absolute minute. The original 20-second lower bound and 75-second
+staleness bound remain in the implementation. The stable-metric case now
+proves both a `FORMING` 15m snapshot and a truthy `provisional` 15m snapshot
+are rejected independently by control distance and relative volume; each
+uses the valid 30m value, while a populated 5m-only fixture still returns
+missing.
+
 Pagination is proven by `DowMonitor.test.tsx > shows three exclusive markets, twenty rows, and subscribes only the current page`, which uses 45 same-market enabled symbols and page-one `1..20`, and `> changes the WebSocket subscription with pagination`, which verifies page-two `21..40`; production 1/5/7 counts are not pagination proof.
 
 Round 2 rerun is `pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx` = 20 (15 presentation, 5 list). It adds `degrades each delayed realtime feed independently`: delayed candle clears 1m momentum while other feeds remain valid; delayed depth clears only depth pressure; delayed quote clears both day-high and day-low distances. The list test verifies the visible cyan live badge immediately precedes 1m and that the breakout cell has two such live badges for high and low.
@@ -71,7 +81,7 @@ Round 2 rerun is `pnpm --dir frontend exec vitest run src/components/dow-monitor
 Historical 21/2 subset is superseded, has no retained exact command, and is not acceptance evidence.
 
 ```powershell
-pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx src/components/dow-monitor/DowMonitorDetailPanel.test.tsx src/pages/DowMonitor.test.tsx src/lib/realtimeMarketData.test.ts # 39
+pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx src/components/dow-monitor/DowMonitorDetailPanel.test.tsx src/pages/DowMonitor.test.tsx src/lib/realtimeMarketData.test.ts # 40
 python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.py tests/spec_contracts/test_realtime_frontend_contract.py -q # 3
 Push-Location backend; python -m pytest tests/test_realtime_websocket.py -q; Pop-Location # 5
 pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx # 20 (15+5)

@@ -67,6 +67,13 @@ specifications:
       - REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
       - REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001
 conflicts: []
+authority_decisions:
+  - id: DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001
+    scope:
+      - REQ-DOW-MONITOR-LIST-INDICATORS-001
+      - REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
+    decision: docs/decisions/2026-07-29-dow-monitor-control-fallback.md
+    approval: explicit user ruling on 2026-07-29
 exceptions:
   - id: EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001
     scope: observation-only deployment before Monday live semantic acceptance

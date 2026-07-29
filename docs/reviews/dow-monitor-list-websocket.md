@@ -105,3 +105,19 @@
   以及旧详情需求把测试登记在 `tests/` 目录之外；本次没有新增规格违规。
 
 复核结论：底层基线、前端单位和生产静态包三层证据相互独立，覆盖本次错误的两个根因。
+
+### 最终广泛复核修复
+
+- 权威性：用户批准的设计明确为稳定 15m → 30m，永不回退 5m；决定记录
+  `DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001` 已同步到旧权威规范。
+- 实现：`stableState` 对 `bar_completion === FORMING` 与 truthy
+  `provisional` 分别拒绝；`control` 与 `relativeVolume` 各自按 15m、30m 查找，
+  没有共享选择结果，也没有 5m 路径。
+- 测试：同一个行为用例分别验证 forming 15m、provisional 15m 的 30m 回退，
+  并保留 5m-only 返回缺失；量速用例验证 70 秒内但已跨分钟必须返回缺失。
+- 追踪：相关需求的直接可执行测试仍且仅为
+  `tests/spec_contracts/test_dow_monitor_list_websocket_contract.py`，符合用户此前裁定。
+- 证据：精确五文件 40 项、三项契约和五项后端 WebSocket 测试通过；构建通过；
+  规格检查仅有过期 collection-monitor 例外与旧详情测试路径两个已知基线。
+
+复核结论：低层稳定快照资格和分钟身份均有可执行语义证据，权威规范、实现和验收一致。

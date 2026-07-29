@@ -30,9 +30,9 @@
 列表指标必须来自已有权威快照，不得由页面重新生成交易建议：
 
 - 通道结构采用最近完成的 15 分钟与 30 分钟 K 线均线排列。两周期同时满足 `close > ma5 > ma10 > ma20` 为上升通道；同时满足 `close < ma5 < ma10 < ma20` 为下降通道；否则为震荡或通道过渡。
-- 距控制线使用 15 分钟快照，缺失时依次回退 30 分钟、5 分钟的 `price_to_line_pct` 与 `line_role`。
+- 距控制线使用稳定的 15 分钟快照，缺失或形成中时仅回退到稳定的 30 分钟快照；否则显示缺失。不得继续回退到 5 分钟。
 - 5 分钟和 15 分钟动量只比较各周期最后两根完成 K 线的收盘价，不读取形成中的 K 线。
-- 相对成交量使用同一控制周期快照的 `volume_ratio_20`。
+- 相对成交量独立使用稳定的 15 分钟快照，缺失或形成中时仅回退到稳定的 30 分钟快照；否则显示缺失。不得读取 5 分钟快照的 `volume_ratio_20`。
 - 主动资金使用 `intraday_capital.total_in` 与 `total_out` 计算主买占比；数据质量不是 `COMPLETE` 或分母为零时显示未确认。
 - 正式买卖信号来自最新持久化通知；若没有正式通知，可显示后端完成 K 线 turning signal 的 `WARNING` 预警，但 `FAILED`/`FALSE_BREAKOUT` 不得显示为可操作信号。
 
@@ -89,3 +89,10 @@ HTTP 概览与通知仍每 15 秒刷新，作为决策字段和 WebSocket 断线
 语义验收记录：`docs/acceptance/dow-monitor-list-websocket.md`。
 
 独立需求证据复核：`docs/reviews/dow-monitor-list-websocket.md`。
+
+## 权威决定历史
+
+- `DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001`：用户于 2026-07-29
+  明确批准控制线距离与相对成交量分别按稳定的 15 分钟、30 分钟快照回退，
+  没有稳定的 15 分钟或 30 分钟值时显示缺失，永不读取 5 分钟快照。
+  决定记录：`docs/decisions/2026-07-29-dow-monitor-control-fallback.md`。
