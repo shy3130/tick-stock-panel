@@ -916,11 +916,20 @@ def test_lifecycle_starts_single_monitor_with_registered_clickhouse_provider(
             events.append(("client", endpoint))
 
     class FakeService:
-        def __init__(self, store, gateway, client, daily_loader) -> None:
+        def __init__(
+            self,
+            store,
+            gateway,
+            client,
+            daily_loader,
+            *,
+            minute_result_materializer=None,
+        ) -> None:
             self.store = store
             self.gateway = gateway
             self.client = client
             self.daily_loader = daily_loader
+            self.minute_result_materializer = minute_result_materializer
             self.started = 0
 
         async def start(self) -> None:
@@ -944,6 +953,7 @@ def test_lifecycle_starts_single_monitor_with_registered_clickhouse_provider(
     ]
     assert app.state.dow_monitor_service.started == 1
     assert app.state.dow_monitor_service.daily_loader("01347.HK", NOW) == "daily"
+    assert app.state.dow_monitor_service.minute_result_materializer is not None
 
 
 def test_lifecycle_stops_monitor_before_closing_its_client() -> None:

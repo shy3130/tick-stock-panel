@@ -280,6 +280,7 @@ class DowMonitorService:
         daily_loader: Callable[[str, datetime], pl.DataFrame],
         poll_seconds: float = 15,
         now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+        minute_result_materializer=None,
     ) -> None:
         self.store = store
         self._data_gateway = data_gateway
@@ -287,6 +288,7 @@ class DowMonitorService:
         self._daily_loader = daily_loader
         self.poll_seconds = poll_seconds
         self._now_fn = now_fn
+        self._minute_result_materializer = minute_result_materializer
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._last_started_at: datetime | None = None
@@ -445,6 +447,15 @@ class DowMonitorService:
         self._last_error = "; ".join(cycle_errors) or None
         if any_success:
             self._last_success_at = now
+        if self._minute_result_materializer is not None:
+            try:
+                await asyncio.to_thread(
+                    self._minute_result_materializer.materialize,
+                    enabled,
+                    now,
+                )
+            except Exception:
+                logger.exception("dow monitor minute result materialization failed")
         self._last_completed_at = self._now()
 
     def _evaluate_symbol(
@@ -1845,6 +1856,11 @@ class DowMonitorService:
                 continue
             if any(start <= local_now.time() < end for start, end in policy.sessions):
                 open_enabled_markets.add(item.market)
+        minute_results = (
+            self._minute_result_materializer.status().model_dump(mode="json")
+            if self._minute_result_materializer is not None
+            else {"enabled": False}
+        )
         return {
             "running": self._task is not None and not self._task.done(),
             "poll_seconds": self.poll_seconds,
@@ -1856,6 +1872,7 @@ class DowMonitorService:
             "last_success_at": self._as_json_time(self._last_success_at),
             "last_error": self._last_error,
             "errors": dict(self._errors),
+            "minute_results": minute_results,
         }
 
     def _now(self) -> datetime:

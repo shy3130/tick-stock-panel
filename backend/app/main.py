@@ -1,11 +1,12 @@
 """FastAPI 入口。"""
 from __future__ import annotations
 
-from ipaddress import ip_address
+import asyncio
 import logging
 import os
 import threading
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -16,12 +17,12 @@ from fastapi.staticfiles import StaticFiles
 import app.api.dow_monitor as dow_monitor
 import app.api.dow_strategy as dow_strategy
 import app.api.realtime as realtime
-from app.api import collection_monitor
 from app import __version__
 from app.api import (
     alerts,
     analysis,
     backtest,
+    collection_monitor,
     data,
     ext_data,
     financials,
@@ -46,6 +47,18 @@ from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.dow_monitor_client import LongbridgeDowClient
 from app.services.dow_monitor_data import WebStockMonitorGateway
+from app.services.dow_monitor_minute_result_history import (
+    DowEngineStableStateBuilder,
+    DowMonitorMinuteResultHistoryBuilder,
+)
+from app.services.dow_monitor_minute_result_materializer import (
+    DowMonitorMinuteResultMaterializer,
+    UnavailableMinuteResultMaterializer,
+)
+from app.services.dow_monitor_minute_result_repository import (
+    DowMonitorMinuteResultRepository,
+)
+from app.services.dow_monitor_minute_result_source import DowMonitorMinuteResultSource
 from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
 from app.services.quote_service import QuoteService
@@ -69,11 +82,27 @@ async def _start_dow_monitor(app: FastAPI, data_dir: Path, provider, endpoint: s
     store = DowMonitorStore(data_dir)
     gateway = WebStockMonitorGateway(provider)
     dow_client = LongbridgeDowClient(endpoint)
+    minute_result_repository = DowMonitorMinuteResultRepository()
+    try:
+        await asyncio.to_thread(minute_result_repository.ensure_schema)
+    except Exception as exc:
+        logger.warning("dow monitor minute result storage unavailable: %s", exc)
+        minute_result_materializer = UnavailableMinuteResultMaterializer(str(exc))
+    else:
+        minute_result_materializer = DowMonitorMinuteResultMaterializer(
+            source=DowMonitorMinuteResultSource(),
+            repository=minute_result_repository,
+            history_builder=DowMonitorMinuteResultHistoryBuilder(
+                DowEngineStableStateBuilder(dow_client)
+            ),
+            notifications_fn=lambda: store.list_notifications(limit=1_000_000),
+        )
     service = DowMonitorService(
         store,
         gateway,
         dow_client,
         _load_dow_daily,
+        minute_result_materializer=minute_result_materializer,
     )
     app.state.dow_monitor_service = service
     app.state.dow_monitor_client = dow_client

@@ -204,3 +204,21 @@ class DowMonitorMinuteResultMaterializer:
     @staticmethod
     def _safe_error(exc: Exception) -> str:
         return str(exc).replace("\n", " ")[:500]
+
+
+class UnavailableMinuteResultMaterializer:
+    def __init__(self, error: str) -> None:
+        self._status = MaterializerStatus(
+            enabled=False,
+            last_error=error.replace("\n", " ")[:500],
+        )
+
+    def materialize(
+        self,
+        _symbols: Sequence[MonitoredSymbol],
+        _now: datetime | None = None,
+    ) -> MaterializeRun:
+        return MaterializeRun(error=self._status.last_error)
+
+    def status(self) -> MaterializerStatus:
+        return self._status.model_copy(deep=True)
