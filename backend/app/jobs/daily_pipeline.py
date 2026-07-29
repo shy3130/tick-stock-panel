@@ -365,7 +365,10 @@ def run_now(
     else:
         written_enriched = 0
         logger.info("compute_enriched: skip (no new daily, no adj_factor changes)")
-    if written_enriched > 0:
+    persisted_enriched_exists = enriched_dir.exists() and any(
+        enriched_dir.glob("date=*")
+    )
+    if persisted_enriched_exists:
         record_daily_enriched_audit(
             repo.store.data_dir,
             requested_symbols=universe,

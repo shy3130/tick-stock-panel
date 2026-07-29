@@ -456,6 +456,73 @@ def test_run_now_missing_tickflow_adjustment_capability_closes_trust_gate(
     )
 
 
+def test_run_now_backfills_daily_enriched_receipt_when_data_is_unchanged(
+    tmp_path,
+    monkeypatch,
+):
+    from app.data_providers.trust import load_latest_audits
+    from app.jobs import daily_pipeline
+    from app.services import preferences
+    from app.tickflow.capabilities import CapabilitySet
+
+    as_of = date.today()
+    symbol = "600000.SH"
+    daily_dir = tmp_path / "kline_daily" / f"date={as_of.isoformat()}"
+    daily_dir.mkdir(parents=True)
+    enriched_path = (
+        tmp_path
+        / "kline_daily_enriched"
+        / f"date={as_of.isoformat()}"
+        / "part.parquet"
+    )
+    enriched_path.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": [symbol],
+            "date": [as_of],
+            "open": [10.0],
+            "high": [10.4],
+            "low": [9.9],
+            "close": [10.2],
+            "volume": [1_000.0],
+            "amount": [10_200.0],
+        }
+    ).write_parquet(enriched_path)
+
+    repo = SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path),
+        latest_daily_date=lambda: as_of,
+    )
+    monkeypatch.setattr(daily_pipeline.instrument_sync, "sync_instruments", lambda path: 0)
+    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: [symbol])
+    monkeypatch.setattr(daily_pipeline, "_invalidate", lambda table=None: None)
+    monkeypatch.setattr(daily_pipeline, "_refresh_single_view", lambda repo, name: None)
+    monkeypatch.setattr(daily_pipeline, "_refresh_views", lambda repo: None)
+    monkeypatch.setattr(daily_pipeline, "run_pipeline", lambda **kwargs: 0)
+    monkeypatch.setattr(
+        daily_pipeline.kline_sync,
+        "sync_adj_factor",
+        lambda *args, **kwargs: (0, []),
+    )
+    monkeypatch.setattr(preferences, "get_pipeline_pull_a_share", lambda: False)
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "tickflow")
+    monkeypatch.setattr(preferences, "get_pipeline_pull_index", lambda: False)
+    monkeypatch.setattr(preferences, "get_pipeline_pull_etf", lambda: False)
+    monkeypatch.setattr(preferences, "get_minute_sync_enabled", lambda: False)
+    monkeypatch.setattr(preferences, "get_minute_sync_days", lambda: 5)
+
+    result = daily_pipeline.run_now(repo, CapabilitySet())
+
+    receipts = {
+        receipt["dataset"]: receipt
+        for receipt in load_latest_audits(tmp_path)
+    }
+    assert result["enriched_days"] == 0
+    assert receipts["daily_enriched"]["status"] == "ok"
+    assert receipts["daily_enriched"]["coverage_ratio"] == 1.0
+    assert receipts["daily_enriched"]["observed_end"] == as_of.isoformat()
+
+
 def test_etf_adjustment_success_cannot_overwrite_stock_factor_failure(
     tmp_path,
     monkeypatch,
