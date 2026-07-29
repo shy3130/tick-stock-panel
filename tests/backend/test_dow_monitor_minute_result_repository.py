@@ -84,6 +84,10 @@ def test_schema_is_permanent_idempotent_and_queryable() -> None:
     assert "PARTITION BY toYYYYMM(decision_minute)" in ddl
     assert "ORDER BY (market, symbol, decision_minute)" in ddl
     assert "TTL" not in ddl.upper()
+    assert "Nullable(LowCardinality(" not in ddl
+    assert "channel Nullable(String)" in ddl
+    assert "formal_signal_side Nullable(String)" in ddl
+    assert "formal_signal_stage Nullable(String)" in ddl
     for column in (
         "channel",
         "control_distance_pct",
