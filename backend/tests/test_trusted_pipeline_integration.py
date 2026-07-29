@@ -479,6 +479,139 @@ def test_etf_adjustment_success_cannot_overwrite_stock_factor_failure(
     assert build_advisor_recommendations(audits, cache)["data_gate"]["decision"] == "BLOCK"
 
 
+def test_adjustment_persist_failure_overwrites_fetched_success_receipt(
+    tmp_path,
+    monkeypatch,
+):
+    from datetime import datetime
+
+    from app.services import kline_sync, preferences
+    from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+
+    cache = _seed_trusted_gate(tmp_path)
+    factors = pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "trade_date": [date(2026, 7, 24)],
+            "ex_factor": [1.2],
+        }
+    )
+    client = SimpleNamespace(
+        klines=SimpleNamespace(ex_factors=lambda *args, **kwargs: factors),
+    )
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "tickflow")
+    monkeypatch.setattr(kline_sync, "get_client", lambda: client)
+    monkeypatch.setattr(
+        kline_sync,
+        "_atomic_write_parquet",
+        lambda frame, path: (_ for _ in ()).throw(OSError("disk write failed")),
+    )
+
+    with pytest.raises(OSError, match="disk write failed"):
+        kline_sync.sync_adj_factor(
+            ["600000.SH"],
+            repo,
+            CapabilitySet({Cap.ADJ_FACTOR: CapabilityLimits(batch=10)}),
+            end_time=datetime(2026, 7, 24),
+        )
+
+    _assert_latest_error_blocks_gate(
+        tmp_path,
+        cache,
+        "adj_factor",
+        "tickflow",
+    )
+
+
+def test_daily_persist_failure_overwrites_fetched_success_receipt(
+    tmp_path,
+    monkeypatch,
+):
+    from datetime import datetime
+
+    from app.services import kline_sync, preferences
+    from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+
+    cache = _seed_trusted_gate(tmp_path)
+    daily = pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "date": [date(2026, 7, 24)],
+            "open": [10.0],
+            "high": [10.4],
+            "low": [9.9],
+            "close": [10.2],
+            "volume": [1000.0],
+            "amount": [10200.0],
+        }
+    )
+    repo = SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path),
+        append_daily=lambda frame: (_ for _ in ()).throw(OSError("daily disk failed")),
+    )
+    monkeypatch.setattr(preferences, "get_daily_data_provider", lambda: "tickflow")
+    monkeypatch.setattr(kline_sync, "sync_daily_batch", lambda *args, **kwargs: daily)
+
+    with pytest.raises(OSError, match="daily disk failed"):
+        kline_sync.sync_and_persist_daily_batch(
+            ["600000.SH"],
+            repo,
+            CapabilitySet({Cap.KLINE_DAILY_BATCH: CapabilityLimits(batch=10)}),
+            end_date=datetime(2026, 7, 24),
+        )
+
+    _assert_latest_error_blocks_gate(
+        tmp_path,
+        cache,
+        "daily",
+        "tickflow",
+    )
+
+
+def test_instrument_persist_failure_overwrites_fetched_success_receipt(
+    tmp_path,
+    monkeypatch,
+):
+    from app.services import instrument_sync, preferences
+
+    class Exchanges:
+        def get_instruments(self, exchange, instrument_type):
+            return [
+                {
+                    "symbol": f"000001.{exchange}",
+                    "name": exchange,
+                    "code": "000001",
+                    "exchange": exchange,
+                    "region": "CN",
+                    "type": instrument_type,
+                }
+            ]
+
+    cache = _seed_trusted_gate(tmp_path)
+    monkeypatch.setattr(preferences, "get_daily_data_provider", lambda: "tickflow")
+    monkeypatch.setattr(
+        instrument_sync,
+        "get_client",
+        lambda: SimpleNamespace(exchanges=Exchanges()),
+    )
+    monkeypatch.setattr(
+        instrument_sync.pl.DataFrame,
+        "write_parquet",
+        lambda frame, path: (_ for _ in ()).throw(OSError("instrument disk failed")),
+    )
+
+    with pytest.raises(OSError, match="instrument disk failed"):
+        instrument_sync.sync_instruments(tmp_path)
+
+    _assert_latest_error_blocks_gate(
+        tmp_path,
+        cache,
+        "instruments",
+        "tickflow",
+    )
+
+
 def test_tickflow_instrument_exchange_failure_overwrites_old_success_receipt(
     tmp_path,
     monkeypatch,

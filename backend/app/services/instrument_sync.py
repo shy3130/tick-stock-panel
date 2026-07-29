@@ -184,7 +184,11 @@ def sync_instruments(data_dir: Path) -> int:
 
     df = pl.DataFrame(all_rows)
     df = df.with_columns(pl.lit(date.today()).alias("as_of"))
-    from app.data_providers.trust import audit_market_frame, write_latest_audit
+    from app.data_providers.trust import (
+        audit_market_error,
+        audit_market_frame,
+        write_latest_audit,
+    )
 
     audit = audit_market_frame(
         provider=provider_name,
@@ -192,11 +196,23 @@ def sync_instruments(data_dir: Path) -> int:
         frame=df,
         requested_symbols=[],
     )
-    write_latest_audit(data_dir, audit)
 
     out = data_dir / "instruments" / "instruments.parquet"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(out)
+    except Exception as error:
+        write_latest_audit(
+            data_dir,
+            audit_market_error(
+                provider=provider_name,
+                dataset="instruments",
+                requested_symbols=[],
+                error=error,
+            ),
+        )
+        raise
+    write_latest_audit(data_dir, audit)
 
     logger.info("instruments synced: %d rows → %s", df.height, out)
     return df.height

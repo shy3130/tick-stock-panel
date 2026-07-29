@@ -267,12 +267,24 @@ def sync_and_persist_daily_batch(
                 requested_symbols=symbols,
                 requested_end=end_time,
             )
-            write_latest_audit(repo.store.data_dir, audit)
             if audit.status == "invalid":
+                write_latest_audit(repo.store.data_dir, audit)
                 raise DataQualityRejected(audit)
             if df.is_empty():
+                write_latest_audit(repo.store.data_dir, audit)
                 return 0
-            repo.append_daily(df)
+            try:
+                repo.append_daily(df)
+            except Exception as error:
+                _write_sync_error(
+                    repo,
+                    provider=provider_name,
+                    dataset="daily",
+                    symbols=symbols,
+                    error=error,
+                )
+                raise
+            write_latest_audit(repo.store.data_dir, audit)
             try:
                 d = repo.store.data_dir.as_posix()
                 repo.db.execute(
@@ -345,13 +357,25 @@ def sync_and_persist_daily_batch(
         requested_symbols=symbols,
         requested_end=end_time,
     )
-    write_latest_audit(repo.store.data_dir, audit)
     if audit.status == "invalid":
+        write_latest_audit(repo.store.data_dir, audit)
         raise DataQualityRejected(audit)
     if df.is_empty():
+        write_latest_audit(repo.store.data_dir, audit)
         return 0
 
-    repo.append_daily(df)
+    try:
+        repo.append_daily(df)
+    except Exception as error:
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset="daily",
+            symbols=symbols,
+            error=error,
+        )
+        raise
+    write_latest_audit(repo.store.data_dir, audit)
 
     try:
         d = repo.store.data_dir.as_posix()
@@ -441,10 +465,24 @@ def sync_daily_by_quotes(
         requested_symbols=requested_symbols or [],
         requested_end=today,
     )
-    write_latest_audit(repo.store.data_dir, audit)
     if audit.status == "invalid":
+        write_latest_audit(repo.store.data_dir, audit)
         raise DataQualityRejected(audit)
-    repo.flush_live_daily(daily_df)
+    if daily_df.is_empty():
+        write_latest_audit(repo.store.data_dir, audit)
+        return 0
+    try:
+        repo.flush_live_daily(daily_df)
+    except Exception as error:
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset="daily",
+            symbols=requested_symbols or [],
+            error=error,
+        )
+        raise
+    write_latest_audit(repo.store.data_dir, audit)
     logger.info("sync_daily_by_quotes: %d symbols flushed for %s", daily_df.height, today)
     return daily_df.height
 
@@ -587,25 +625,42 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 requested_symbols=symbols,
                 requested_end=end_time,
             )
-            write_latest_audit(repo.store.data_dir, audit)
             if audit.status == "invalid":
+                write_latest_audit(repo.store.data_dir, audit)
                 raise DataQualityRejected(audit)
             if new_data.is_empty():
+                write_latest_audit(repo.store.data_dir, audit)
                 return 0, []
             affected = new_data["symbol"].unique().to_list()
             factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
             out = repo.store.data_dir / factor_dir / "all.parquet"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            if out.exists():
-                existing = pl.read_parquet(out)
-                before = existing.height
-                merged = pl.concat([existing, new_data]).unique(
-                    subset=["symbol", "trade_date"], keep="last",
-                ).sort(["symbol", "trade_date"])
-                _atomic_write_parquet(merged, out)
-                return merged.height - before, affected
-            _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
-            return new_data.height, affected
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                if out.exists():
+                    existing = pl.read_parquet(out)
+                    before = existing.height
+                    merged = pl.concat([existing, new_data]).unique(
+                        subset=["symbol", "trade_date"], keep="last",
+                    ).sort(["symbol", "trade_date"])
+                    _atomic_write_parquet(merged, out)
+                    written = merged.height - before
+                else:
+                    _atomic_write_parquet(
+                        new_data.sort(["symbol", "trade_date"]),
+                        out,
+                    )
+                    written = new_data.height
+            except Exception as error:
+                _write_sync_error(
+                    repo,
+                    provider=provider_name,
+                    dataset=audit_dataset,
+                    symbols=symbols,
+                    error=error,
+                )
+                raise
+            write_latest_audit(repo.store.data_dir, audit)
+            return written, affected
         unavailable = DataProviderUnavailable(
             provider_name,
             audit_dataset,
@@ -721,10 +776,11 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         missing_symbols=failed,
         coverage_ratio=coverage,
     )
-    write_latest_audit(repo.store.data_dir, audit)
     if audit.status == "invalid":
+        write_latest_audit(repo.store.data_dir, audit)
         raise DataQualityRejected(audit)
     if new_data.is_empty():
+        write_latest_audit(repo.store.data_dir, audit)
         return 0, []
 
     # 提取受影响的 symbol 列表(合并前)
@@ -732,23 +788,33 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
 
     factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
     out = repo.store.data_dir / factor_dir / "all.parquet"
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    if out.exists():
-        existing = pl.read_parquet(out)
-        before = existing.height
-        merged = pl.concat([existing, new_data]).unique(
-            subset=["symbol", "trade_date"], keep="last",
-        ).sort(["symbol", "trade_date"])
-        _atomic_write_parquet(merged, out)
-        added = merged.height - before
-        logger.info("adj_factor merged: %d total (+%d new), %d/%d symbols",
-                     merged.height, added, new_data.height, len(symbols))
-        return added, affected
-    else:
-        _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
-        logger.info("adj_factor synced: %d rows (%d symbols)", new_data.height, len(symbols))
-        return new_data.height, affected
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            existing = pl.read_parquet(out)
+            before = existing.height
+            merged = pl.concat([existing, new_data]).unique(
+                subset=["symbol", "trade_date"], keep="last",
+            ).sort(["symbol", "trade_date"])
+            _atomic_write_parquet(merged, out)
+            written = merged.height - before
+            logger.info("adj_factor merged: %d total (+%d new), %d/%d symbols",
+                        merged.height, written, new_data.height, len(symbols))
+        else:
+            _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
+            written = new_data.height
+            logger.info("adj_factor synced: %d rows (%d symbols)", new_data.height, len(symbols))
+    except Exception as error:
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset=audit_dataset,
+            symbols=symbols,
+            error=error,
+        )
+        raise
+    write_latest_audit(repo.store.data_dir, audit)
+    return written, affected
 
 
 # ===== 分钟 K 同步 =====
