@@ -130,3 +130,84 @@ class DowMonitorMinuteResult(BaseModel):
     source_timestamps: dict[str, datetime]
     result_payload: dict
     updated_at: datetime
+
+
+class RawQuoteSnapshot(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    symbol: str
+    market: Market
+    snapshot_time: datetime
+    last_price: float | None = None
+    prev_close: float | None = None
+    high: float | None = None
+    low: float | None = None
+    updated_at: datetime
+
+
+class RawDepthSnapshot(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    symbol: str
+    market: Market
+    snapshot_time: datetime
+    bid_volumes: tuple[float, ...] = ()
+    ask_volumes: tuple[float, ...] = ()
+    updated_at: datetime
+
+
+class RawTrade(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    symbol: str
+    market: Market
+    trade_time: datetime
+    price: float | None = None
+    volume: float | None = None
+    direction: str = ""
+    updated_at: datetime
+
+
+class RawCandlestick(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    symbol: str
+    market: Market
+    period: str
+    bar_time: datetime
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    volume: float | None = None
+    turnover: float | None = None
+    updated_at: datetime
+
+
+class RawCapitalSnapshot(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    symbol: str
+    market: Market
+    snapshot_time: datetime
+    total_in: float | None = None
+    total_out: float | None = None
+    updated_at: datetime
+
+
+class RawMinuteHistory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quotes: tuple[RawQuoteSnapshot, ...] = ()
+    depth: tuple[RawDepthSnapshot, ...] = ()
+    trades: tuple[RawTrade, ...] = ()
+    candlesticks: tuple[RawCandlestick, ...] = ()
+    capital: tuple[RawCapitalSnapshot, ...] = ()
+
+
+class MinuteResultKey(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    market: Market
+    symbol: str
+    decision_minute: datetime
