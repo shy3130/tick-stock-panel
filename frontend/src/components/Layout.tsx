@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, Suspense } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
@@ -320,6 +320,7 @@ export function Layout() {
 
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const location = useLocation()
   const version = versionData?.version
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   // Free 档监控限制提示: 可手动关闭, 不持久化 (刷新后恢复显示)
@@ -401,6 +402,11 @@ export function Layout() {
 
   const hiddenIds = new Set(prefs?.nav_hidden ?? [])
   const visibleNavItems = navItems.filter(n => !hiddenIds.has(n.to) && !hiddenIds.has(n.to.replace(/^\/analysis\//, '')))
+  const mobileCurrentPath = location.pathname === '/settings'
+    ? '/settings'
+    : visibleNavItems.some(item => item.to === location.pathname)
+      ? location.pathname
+      : ''
 
   const handleToggle = async (enabled: boolean) => {
     // 开启时重新校验档位
@@ -424,8 +430,32 @@ export function Layout() {
   }
 
   return (
-    <div className="h-screen grid grid-cols-[14rem_1fr] bg-base text-foreground overflow-hidden">
-      <aside className="border-r border-border bg-surface flex flex-col h-full min-h-0 overflow-hidden">
+    <div className="h-screen flex flex-col bg-base text-foreground overflow-hidden md:grid md:grid-cols-[14rem_1fr]">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-4 md:hidden">
+        <Logo
+          size={24}
+          className="shrink-0"
+          style={{ color: BRAND }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold text-foreground">A股量化终端</div>
+          <div className="truncate text-[9px] text-muted">{activeProviderName}</div>
+        </div>
+        <select
+          aria-label="移动端导航"
+          value={mobileCurrentPath}
+          onChange={event => navigate(event.target.value)}
+          className="max-w-[145px] rounded-btn border border-border bg-elevated px-2 py-1.5 text-xs text-foreground outline-none"
+        >
+          <option value="" disabled>选择页面</option>
+          {visibleNavItems.map(item => (
+            <option key={item.to} value={item.to}>{item.label}</option>
+          ))}
+          <option value="/settings">设置</option>
+        </select>
+      </header>
+
+      <aside className="hidden border-r border-border bg-surface md:flex flex-col h-full min-h-0 overflow-hidden">
         <div className="px-5 py-5 border-b border-border shrink-0">
           {/* Brand block — 原创 logo + 等宽 wordmark */}
           <div className="flex items-center gap-2.5">
@@ -659,7 +689,7 @@ export function Layout() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="h-full overflow-auto scrollbar-gutter-stable"
+        className="min-h-0 flex-1 overflow-auto scrollbar-gutter-stable md:h-full"
       >
         {streamStatus === 'reconnecting' && (
           <div

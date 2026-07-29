@@ -59,17 +59,25 @@ def _fetch_instruments_via_provider() -> list[dict] | None:
     if provider_name == "tickflow":
         return None
     from app.data_providers import custom as custom_sources
+    from app.data_providers.trust import DataProviderUnavailable
 
-    if not custom_sources.is_custom_provider(provider_name):
-        from app.data_providers.trust import DataProviderUnavailable
+    try:
+        if not custom_sources.is_custom_provider(provider_name):
+            raise DataProviderUnavailable(
+                provider_name,
+                "instruments",
+                "the selected provider is not configured or available",
+            )
+        provider = custom_sources.get_provider(provider_name)
+    except DataProviderUnavailable:
+        raise
+    except Exception as error:
         raise DataProviderUnavailable(
             provider_name,
             "instruments",
-            "the selected provider is not configured or available",
-        )
-    provider = custom_sources.get_provider(provider_name)
+            f"provider initialization failed: {error}",
+        ) from error
     if not hasattr(provider, "get_instruments"):
-        from app.data_providers.trust import DataProviderUnavailable
         raise DataProviderUnavailable(
             provider_name,
             "instruments",
@@ -102,26 +110,43 @@ def sync_instruments(data_dir: Path) -> int:
     except Exception as error:
         from app.data_providers.trust import (
             DataProviderFetchFailed,
+            DataProviderUnavailable,
             audit_market_error,
             write_latest_audit,
         )
 
-        if not isinstance(error, DataProviderFetchFailed):
+        if not isinstance(error, (DataProviderFetchFailed, DataProviderUnavailable)):
             raise
+        cause = error.cause if isinstance(error, DataProviderFetchFailed) else error
         write_latest_audit(
             data_dir,
             audit_market_error(
                 provider=provider_name,
                 dataset="instruments",
                 requested_symbols=[],
-                error=error.cause,
+                error=cause,
             ),
         )
         raise
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连
-        tf = get_client()
+        from app.data_providers.trust import audit_market_error, write_latest_audit
+
+        try:
+            tf = get_client()
+        except Exception as error:
+            write_latest_audit(
+                data_dir,
+                audit_market_error(
+                    provider="tickflow",
+                    dataset="instruments",
+                    requested_symbols=[],
+                    error=error,
+                ),
+            )
+            return 0
         all_rows = []
+        exchange_errors: list[str] = []
         for ex in _EXCHANGES:
             try:
                 items = tf.exchanges.get_instruments(ex, instrument_type="stock")
@@ -130,8 +155,31 @@ def sync_instruments(data_dir: Path) -> int:
                     logger.info("instruments %s: %d stocks", ex, len(items))
             except Exception as e:
                 logger.warning("get_instruments(%s) failed: %s", ex, e)
+                exchange_errors.append(f"{ex}:{type(e).__name__}:{e}")
+        if exchange_errors:
+            write_latest_audit(
+                data_dir,
+                audit_market_error(
+                    provider="tickflow",
+                    dataset="instruments",
+                    requested_symbols=[],
+                    error=RuntimeError("; ".join(exchange_errors)),
+                ),
+            )
+            return 0
 
     if not all_rows:
+        from app.data_providers.trust import audit_market_frame, write_latest_audit
+
+        write_latest_audit(
+            data_dir,
+            audit_market_frame(
+                provider=provider_name,
+                dataset="instruments",
+                frame=pl.DataFrame(),
+                requested_symbols=[],
+            ),
+        )
         return 0
 
     df = pl.DataFrame(all_rows)

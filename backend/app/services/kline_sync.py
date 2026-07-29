@@ -46,6 +46,27 @@ CANONICAL_DAILY_COLS = [
 ]
 
 
+def _write_sync_error(
+    repo: KlineRepository,
+    *,
+    provider: str,
+    dataset: str,
+    symbols: list[str],
+    error: Exception,
+) -> None:
+    from app.data_providers.trust import audit_market_error, write_latest_audit
+
+    write_latest_audit(
+        repo.store.data_dir,
+        audit_market_error(
+            provider=provider,
+            dataset=dataset,
+            requested_symbols=symbols,
+            error=error,
+        ),
+    )
+
+
 def _normalize_daily(df_in, default_symbol: str | None = None) -> pl.DataFrame:
     """把 SDK 返回的 pandas/任意 DataFrame 规范成 canonical 列。"""
     if df_in is None or len(df_in) == 0:
@@ -170,6 +191,11 @@ def sync_and_persist_daily_batch(
     if not symbols:
         return 0
 
+    from app.data_providers.trust import (
+        DataProviderFetchFailed,
+        DataProviderUnavailable,
+    )
+
     provider_name = preferences.get_daily_data_provider()
     if provider_name != "tickflow":
         from app.data_providers import custom as custom_sources
@@ -182,8 +208,39 @@ def sync_and_persist_daily_batch(
             write_latest_audit,
         )
 
-        if custom_sources.provider_has_dataset(provider_name, "daily"):
-            provider = custom_sources.get_provider(provider_name)
+        try:
+            has_dataset = custom_sources.provider_has_dataset(provider_name, "daily")
+        except Exception as error:
+            unavailable = DataProviderUnavailable(
+                provider_name,
+                "daily",
+                f"provider inspection failed: {error}",
+            )
+            _write_sync_error(
+                repo,
+                provider=provider_name,
+                dataset="daily",
+                symbols=symbols,
+                error=unavailable,
+            )
+            raise unavailable from error
+        if has_dataset:
+            try:
+                provider = custom_sources.get_provider(provider_name)
+            except Exception as error:
+                unavailable = DataProviderUnavailable(
+                    provider_name,
+                    "daily",
+                    f"provider initialization failed: {error}",
+                )
+                _write_sync_error(
+                    repo,
+                    provider=provider_name,
+                    dataset="daily",
+                    symbols=symbols,
+                    error=unavailable,
+                )
+                raise unavailable from error
             end_time = end_date or datetime.now()
             days = count or 365
             start_time = start_date or (end_time - timedelta(days=days))
@@ -225,13 +282,33 @@ def sync_and_persist_daily_batch(
             except Exception as e:  # noqa: BLE001
                 logger.warning("refresh view failed: %s", e)
             return df.height
-        raise DataProviderUnavailable(
+        unavailable = DataProviderUnavailable(
             provider_name,
             "daily",
             "the selected provider does not declare the daily dataset",
         )
+        _write_sync_error(
+            repo,
+            provider=provider_name,
+            dataset="daily",
+            symbols=symbols,
+            error=unavailable,
+        )
+        raise unavailable
 
     if not capset.has(Cap.KLINE_DAILY_BATCH):
+        unavailable = DataProviderUnavailable(
+            "tickflow",
+            "daily",
+            f"missing required capability: {Cap.KLINE_DAILY_BATCH.value}",
+        )
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset="daily",
+            symbols=symbols,
+            error=unavailable,
+        )
         return 0
 
     limit = resolve_limit(capset, Cap.KLINE_DAILY_BATCH, default_batch=100)
@@ -239,11 +316,21 @@ def sync_and_persist_daily_batch(
     end_time = end_date or datetime.now()
     start_time = start_date or (end_time - timedelta(days=365))
 
-    df = sync_daily_batch(
-        symbols, count=count, batch_size=limit.batch, rpm=limit.rpm,
-        start_time=start_time, end_time=end_time,
-        on_chunk_done=on_chunk_done,
-    )
+    try:
+        df = sync_daily_batch(
+            symbols, count=count, batch_size=limit.batch, rpm=limit.rpm,
+            start_time=start_time, end_time=end_time,
+            on_chunk_done=on_chunk_done,
+        )
+    except Exception as error:
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset="daily",
+            symbols=symbols,
+            error=error,
+        )
+        raise DataProviderFetchFailed("tickflow", "daily", error) from error
 
     from app.data_providers.trust import (
         DataQualityRejected,
@@ -289,20 +376,16 @@ def sync_daily_by_quotes(
     """
     from datetime import date as _date
 
-    tf = get_client()
     try:
+        tf = get_client()
         resp = tf.quotes.get_by_universes(universes=["CN_Equity_A"])
     except Exception as e:
-        from app.data_providers.trust import audit_market_error, write_latest_audit
-
-        write_latest_audit(
-            repo.store.data_dir,
-            audit_market_error(
-                provider="tickflow",
-                dataset="daily",
-                requested_symbols=requested_symbols or [],
-                error=e,
-            ),
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset="daily",
+            symbols=requested_symbols or [],
+            error=e,
         )
         logger.warning("get_by_universes failed: %s", e)
         return 0
@@ -421,6 +504,8 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     if not symbols:
         return 0, []
 
+    from app.data_providers.trust import DataProviderUnavailable
+
     provider_name = preferences.get_adj_factor_provider()
     if provider_name == "same_as_daily":
         provider_name = preferences.get_daily_data_provider()
@@ -435,8 +520,42 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
             write_latest_audit,
         )
 
-        if custom_sources.provider_has_dataset(provider_name, "adj_factor"):
-            provider = custom_sources.get_provider(provider_name)
+        try:
+            has_dataset = custom_sources.provider_has_dataset(
+                provider_name,
+                "adj_factor",
+            )
+        except Exception as error:
+            unavailable = DataProviderUnavailable(
+                provider_name,
+                "adj_factor",
+                f"provider inspection failed: {error}",
+            )
+            _write_sync_error(
+                repo,
+                provider=provider_name,
+                dataset="adj_factor",
+                symbols=symbols,
+                error=unavailable,
+            )
+            raise unavailable from error
+        if has_dataset:
+            try:
+                provider = custom_sources.get_provider(provider_name)
+            except Exception as error:
+                unavailable = DataProviderUnavailable(
+                    provider_name,
+                    "adj_factor",
+                    f"provider initialization failed: {error}",
+                )
+                _write_sync_error(
+                    repo,
+                    provider=provider_name,
+                    dataset="adj_factor",
+                    symbols=symbols,
+                    error=unavailable,
+                )
+                raise unavailable from error
             try:
                 new_data = provider.get_adj_factors(
                     symbols,
@@ -486,16 +605,47 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                 return merged.height - before, affected
             _atomic_write_parquet(new_data.sort(["symbol", "trade_date"]), out)
             return new_data.height, affected
-        raise DataProviderUnavailable(
+        unavailable = DataProviderUnavailable(
             provider_name,
             "adj_factor",
             "the selected provider does not declare the adj_factor dataset",
         )
+        _write_sync_error(
+            repo,
+            provider=provider_name,
+            dataset="adj_factor",
+            symbols=symbols,
+            error=unavailable,
+        )
+        raise unavailable
 
     if not capset.has(Cap.ADJ_FACTOR):
+        unavailable = DataProviderUnavailable(
+            "tickflow",
+            "adj_factor",
+            f"missing required capability: {Cap.ADJ_FACTOR.value}",
+        )
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset="adj_factor",
+            symbols=symbols,
+            error=unavailable,
+        )
         return 0, []
 
-    tf = get_client()
+    try:
+        tf = get_client()
+    except Exception as error:
+        _write_sync_error(
+            repo,
+            provider="tickflow",
+            dataset="adj_factor",
+            symbols=symbols,
+            error=error,
+        )
+        logger.warning("tickflow adj_factor client initialization failed: %s", error)
+        return 0, []
     limit = resolve_limit(
         capset,
         Cap.ADJ_FACTOR,
