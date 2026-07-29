@@ -42,11 +42,7 @@
 
 页面必须复用 `/ws/realtime` WebSocket 网关，只订阅当前市场、当前页、已启用股票的 `quote`、`depth`、`candlestick` 数据，周期为 1 分钟。
 
-WebSocket 数据仅覆盖：
-
-- 实时价格；
-- 涨跌幅；
-- 当前交易日日内 mini 趋势线末端。
+WebSocket 数据还可驱动带“实时”标识的描述性观察指标，但这些观察指标不属于后端决策字段，且不得改变正式买卖信号。
 
 实时涨跌幅必须使用当前价与同一市场当前交易时段的上一常规交易时段收盘价计算，
 显示单位为百分数值（`1.25` 表示 `1.25%`）。HTTP 概览的 `change_pct` 使用系统既有
@@ -55,6 +51,22 @@ WebSocket 数据仅覆盖：
 当前交易日日内 mini 趋势线必须是一条无背景、无坐标轴、无 K 线、无均线的折线。历史点取 5 分钟图表中最新交易日的数据，实时 1 分钟 K 线仅用于更新或追加折线末端。
 
 HTTP 概览与通知仍每 15 秒刷新，作为决策字段和 WebSocket 断线时的回退。WebSocket 接收状态按现有实时客户端最多每秒发布一次 React 可见快照。
+
+## REQ-DOW-MONITOR-INDICATOR-GROUPS-LAYOUT-001
+
+列表必须用四个两行组合列替换原先分散的通道、控制线、动能、量比和主动资金列。列顺序固定为：股票、价格/涨跌、日内趋势、趋势/位置、动能/涨速、量价/资金、突破/风险、买卖信号、操作。每页仍为 20 只，操作列仍只显示“查看详情”。
+
+## REQ-DOW-MONITOR-LIVE-OBSERVATION-METRICS-001
+
+1m 涨速、1m 量速、五档盘口压力和距日高低可以由当前页 `/ws/realtime` 驱动，必须标记为“实时”，逐字段检查 candlestick/depth/quote 延迟。这些字段只用于观察，不得改变后端正式信号。
+
+## REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
+
+通道、控制线、成本偏离、5m/15m 动能、量比、主动资金、ATR14 和确认周期必须只使用完成 K 线或后端分钟决策。确认周期分母固定为 15m/30m 两个周期。
+
+## REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001
+
+任意 quote、depth 或形成中 1m K 线更新不得生成、清除、翻转或升级买卖信号。实时字段缺失或延迟时独立显示 `--`，不得污染稳定字段或持久化正式信号。
 
 ## REQ-DOW-MONITOR-LIST-SIGNAL-STABILITY-001
 

@@ -237,3 +237,47 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INDICATOR-GROUPS-LAYOUT-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIVE-OBSERVATION-METRICS-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
