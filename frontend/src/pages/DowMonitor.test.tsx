@@ -211,7 +211,7 @@ describe('Dow monitor list page', () => {
     expect(realtimeMocks.useRealtimeMarketData).toHaveBeenLastCalledWith(
       Array.from({ length: 20 }, (_, index) => `${index + 1}.HK`),
       ['quote', 'depth', 'candlestick'],
-      1,
+      5,
     )
   })
 
@@ -225,14 +225,15 @@ describe('Dow monitor list page', () => {
     expect(realtimeMocks.useRealtimeMarketData).toHaveBeenLastCalledWith(
       Array.from({ length: 20 }, (_, index) => `${index + 21}.HK`),
       ['quote', 'depth', 'candlestick'],
-      1,
+      5,
     )
   })
 
   it('updates real-time price without changing the persisted signal', () => {
     const target = symbols[2]
     const { rerender } = render(<DowMonitor />)
-    expect(screen.getAllByText('买入确认').length).toBeGreaterThan(0)
+    const formalSignalCount = screen.getAllByText('买入确认').length
+    expect(formalSignalCount).toBeGreaterThan(0)
 
     realtimeMocks.view = {
       status: 'realtime',
@@ -249,6 +250,27 @@ describe('Dow monitor list page', () => {
             prevClose: 180,
             timestamp: '2026-07-29T09:35:30+08:00',
           },
+          depth: {
+            bids: [120, 110, 100, 90, 80].map((volume, index) => ({
+              position: index + 1,
+              volume,
+            })),
+            asks: [80, 70, 60, 50, 40].map((volume, index) => ({
+              position: index + 1,
+              volume,
+            })),
+            timestamp: '2026-07-29T09:35:30+08:00',
+          },
+          candlestick: {
+            period: 'min_1',
+            timestamp: '2026-07-29T09:35:00+08:00',
+            open: 100,
+            high: 101,
+            low: 99,
+            close: 101,
+            volume: 100,
+            turnover: 10_100,
+          },
           quoteDelayed: false,
           depthDelayed: false,
           candlestickDelayed: false,
@@ -258,7 +280,32 @@ describe('Dow monitor list page', () => {
     rerender(<DowMonitor />)
 
     expect(screen.getByText('188.88')).toBeInTheDocument()
-    expect(screen.getAllByText('买入确认').length).toBeGreaterThan(0)
+    expect(screen.getByText('1m +1.00%')).toBeInTheDocument()
+    expect(screen.getAllByText('买入确认')).toHaveLength(formalSignalCount)
+
+    realtimeMocks.view = {
+      ...realtimeMocks.view,
+      states: new Map([[
+        target.symbol,
+        {
+          ...realtimeMocks.view.states.get(target.symbol)!,
+          depth: {
+            bids: [40, 50, 60, 70, 80].map((volume, index) => ({
+              position: index + 1,
+              volume,
+            })),
+            asks: [80, 90, 100, 110, 120].map((volume, index) => ({
+              position: index + 1,
+              volume,
+            })),
+            timestamp: '2026-07-29T09:35:30+08:00',
+          },
+        },
+      ]]),
+    }
+    rerender(<DowMonitor />)
+
+    expect(screen.getAllByText('买入确认')).toHaveLength(formalSignalCount)
   })
 
   it('toggles the selected stock detail below the list without a dialog', async () => {

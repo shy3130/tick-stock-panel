@@ -154,7 +154,7 @@ export function DowMonitor({
   const realtime = useRealtimeMarketData(
     realtimeSymbols,
     ['quote', 'depth', 'candlestick'],
-    1,
+    5,
   )
 
   useEffect(() => {
