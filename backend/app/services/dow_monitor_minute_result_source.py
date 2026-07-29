@@ -134,10 +134,10 @@ class DowMonitorMinuteResultSource:
             f"""
             SELECT symbol, market, toString(trade_time) AS trade_time,
                    price, volume, direction, toString(updated_at) AS updated_at
-            FROM {self._database}.lb_realtime_trades
+            FROM {self._database}.lb_realtime_trades AS trades
             WHERE {common}
-              AND trade_time >= parseDateTime64BestEffort({start_sql})
-              AND trade_time < parseDateTime64BestEffort({end_sql})
+              AND trades.trade_time >= parseDateTime64BestEffort({start_sql})
+              AND trades.trade_time < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, trade_time, updated_at
             """
         )
@@ -146,11 +146,11 @@ class DowMonitorMinuteResultSource:
             SELECT symbol, market, period, toString(bar_time) AS bar_time,
                    open, high, low, close, volume, turnover,
                    toString(updated_at) AS updated_at
-            FROM {self._database}.lb_realtime_candlesticks FINAL
+            FROM {self._database}.lb_realtime_candlesticks AS candles FINAL
             WHERE {common}
               AND period IN ('min_1', 'min_5', 'min_15', 'min_30')
-              AND bar_time >= parseDateTime64BestEffort({candle_start_sql})
-              AND bar_time < parseDateTime64BestEffort({end_sql})
+              AND candles.bar_time >= parseDateTime64BestEffort({candle_start_sql})
+              AND candles.bar_time < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, period, bar_time
             """
         )
