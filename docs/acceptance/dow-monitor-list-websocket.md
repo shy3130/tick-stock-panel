@@ -10,7 +10,8 @@
 4. 返回新的完成分钟概览后，列表决策字段同步更新。
 5. 后端正式通知存在时，列表展示对应买入、卖出或风险信号及其时间；失败突破不得升级为操作信号。
 6. 数据延迟超过 90 秒或后端标记延迟时，列表明确显示延迟且不生成新的正式信号。
-7. 点击任意行或“查看详情”，详细 K 线区域出现在列表下方，不出现模态框。
+7. 点击任意行或“查看详情”，详细 K 线区域出现在列表下方，不出现模态框；再次点击
+   同一股票时详情收拢并取消选中状态，点击另一只股票时直接切换详情。
 8. mini 趋势线只有一条折线，无背景、坐标轴、K 线或其他叠加线。
 
 ## 自动化证据
@@ -23,7 +24,8 @@
 - `frontend/src/components/dow-monitor/DowMonitorDetailPanel.test.tsx`
   - 非 dialog 内嵌详情和周期/叠加层控制：`1 passed`。
 - `frontend/src/pages/DowMonitor.test.tsx`
-  - 三市场、20 行、当前页订阅、实时/决策边界、内嵌详情、市场切换和筛选：`7 passed`。
+  - 三市场、20 行、当前页订阅、实时/决策边界、内嵌详情展开/收拢、市场切换和筛选：
+    `7 passed`。
 - `frontend/src/lib/realtimeMarketData.test.ts`
   - 订阅、重连、最新状态与每秒批量发布：`12 passed`。
 - `tests/spec_contracts/test_dow_monitor_list_websocket_contract.py` 与

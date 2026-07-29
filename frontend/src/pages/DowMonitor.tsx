@@ -276,7 +276,7 @@ export function DowMonitor({
       onOpen(stockSymbol, '15m')
       return
     }
-    setSelectedSymbol(stockSymbol)
+    setSelectedSymbol(current => current === stockSymbol ? null : stockSymbol)
   }
 
   let statusLabel = '后台状态未知'

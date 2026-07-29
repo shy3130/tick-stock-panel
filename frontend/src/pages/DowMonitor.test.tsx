@@ -261,15 +261,21 @@ describe('Dow monitor list page', () => {
     expect(screen.getAllByText('买入确认').length).toBeGreaterThan(0)
   })
 
-  it('opens the selected stock below the list without a dialog', async () => {
+  it('toggles the selected stock detail below the list without a dialog', async () => {
     const user = userEvent.setup()
     render(<DowMonitor />)
 
-    await user.click(screen.getByRole('button', { name: '查看详情 2.HK' }))
+    const detailButton = screen.getByRole('button', { name: '查看详情 2.HK' })
+    await user.click(detailButton)
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: '2.HK 详细走势' })).toBeInTheDocument()
     expect(screen.getByTestId('inline-detail')).toBeInTheDocument()
+
+    await user.click(detailButton)
+
+    expect(screen.queryByRole('region', { name: '2.HK 详细走势' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('inline-detail')).not.toBeInTheDocument()
   })
 
   it('resets pagination and URL scope when switching markets without mutating monitoring', async () => {
