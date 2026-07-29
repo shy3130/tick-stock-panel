@@ -769,6 +769,9 @@ function distancePercent(label: string, value: number | null): string {
         ? `${row.volumeFunds.relativeVolume.ratio.toFixed(2)}×`
         : '--'}
     </strong>
+    <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">
+      实时
+    </span>
     <span>
       量速 {row.volumeFunds.volumeSpeed == null
         ? '--'
@@ -776,10 +779,14 @@ function distancePercent(label: string, value: number | null): string {
     </span>
   </div>
   <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+    <span className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
     <span>
       主买 {row.volumeFunds.activeFunds.buyRatioPct == null
         ? '未确认'
         : `${row.volumeFunds.activeFunds.buyRatioPct.toFixed(0)}%`}
+    </span>
+    <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">
+      实时
     </span>
     <span>{compactPercent('五档', row.volumeFunds.depthPressurePct)}</span>
   </div>
