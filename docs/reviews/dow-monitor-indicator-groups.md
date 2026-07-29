@@ -31,3 +31,25 @@ python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.p
 Push-Location backend; python -m pytest tests/test_realtime_websocket.py -q; Pop-Location # 5
 pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx # 20 (15+5)
 ```
+
+## Final production requirements-to-evidence review
+
+The release image is
+`tickflow-stock-panel-app:dow-monitor-stable-fallback-041a384-20260729-200151`
+(`sha256:87f585671cb5ab9864e18358b62883db6652f8f4e14b662828225532397a9ae0`),
+layered from the prior running candidate. The exact live Compose project and
+two configuration files were backed up with container inspect and symbols
+before the switch. Image/status/restart, health, symbols, server logs, and
+all four static hashes were checked before browser acceptance.
+
+The fresh browser evidence independently confirms the higher layer without
+substituting for the lower-layer tests: A/HK/US each render nine headers and
+one mini polyline per row; the HK inline detail opens and closes without a
+dialog; stable and live metric labels coexist; and formal signal/timestamp
+cells remain unchanged across the observation window. The fresh candidate
+tab has no console errors. The current production container is running the
+new image with restart count `0`; no rollback was required.
+
+Result: **PASS**. Authority, stable-snapshot eligibility, independent
+15m→30m fallback, minute identity, executable evidence, static serving, and
+production UI all trace to matching evidence.

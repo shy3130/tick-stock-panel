@@ -98,6 +98,16 @@
   K 线时间戳与 `nowMs` 位于同一绝对分钟，原 20 秒和 75 秒门槛保留。
 - 精确五文件 Vitest：`40 passed`；规格契约：`3 passed`；后端 WebSocket：
   `5 passed`；生产构建成功。规格检查仍只有两个已记录基线问题。
+- 正式镜像：
+  `tickflow-stock-panel-app:dow-monitor-stable-fallback-041a384-20260729-200151`
+  （`sha256:87f585671cb5ab9864e18358b62883db6652f8f4e14b662828225532397a9ae0`）；
+  回滚镜像为上一版 grouped-indicator 镜像，备份目录为
+  `/home/alwin/backups/dow-monitor-stable-fallback-predeploy-20260729-200151`。
+- 容器 `running`、重启 0、健康版本 `0.1.86`、股票文件哈希不变、发布窗口日志无错误；
+  本地/容器/HTTP 的 `index.html`、入口、DowMonitor 和实时分包哈希分别一致。
+- 新建已认证浏览器标签以 cache-busting URL 加载新入口；A/港/美为 1/5/7 行且均为
+  9 列、每行单折线、页面无横向溢出。港股详情第一次展开、第二次收拢且始终无 dialog；
+  五个正式信号与时间在观察窗口内完全一致，新标签控制台无错误。
 
 ## 2026-07-29 详情收拢热修复
 

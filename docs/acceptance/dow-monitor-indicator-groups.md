@@ -86,3 +86,55 @@ python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.p
 Push-Location backend; python -m pytest tests/test_realtime_websocket.py -q; Pop-Location # 5
 pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx # 20 (15+5)
 ```
+
+## Final broad-review production release
+
+Release time: 2026-07-29 20:02 (Asia/Shanghai).
+
+- source commit: `041a384`;
+- image:
+  `tickflow-stock-panel-app:dow-monitor-stable-fallback-041a384-20260729-200151`;
+- image ID:
+  `sha256:87f585671cb5ab9864e18358b62883db6652f8f4e14b662828225532397a9ae0`;
+- rollback image:
+  `tickflow-stock-panel-app:dow-monitor-indicator-groups-20260729-192023`;
+- backup:
+  `/home/alwin/backups/dow-monitor-stable-fallback-predeploy-20260729-200151`;
+- exact Compose project: `dow-monitor-bfd819d438b4`;
+- exact Compose files:
+  `/home/alwin/apps/tickflow-builds/market-snapshot-realtime-20260723-1125/docker-compose.yml`
+  and `docker-compose.override.yml`.
+
+The new image is a unique layer over the running rollback image with only
+`frontend/dist` copied to `/app/static`. Runtime verification returned the
+new tag and image ID, `running`, restart count `0`, and
+`{"status":"ok","version":"0.1.86","mode":"none"}`. The deployment-window
+`ERROR|CRITICAL|Traceback` scan was empty. The symbol file remained
+`1d5955494b4a74d8ae32bd550e4f744e09c4cab80c85f190acd01f3717bef59e`.
+
+Local, container, and served hashes matched:
+
+| Asset | SHA-256 |
+| --- | --- |
+| `index.html` | `0649862ed867b328585ff9b4250587187adf0523e6e4936a08a4c67acefc1676` |
+| `assets/index-DKdW77Ki.js` | `decf4ff97340d00c9e0db6077c45399e6ad7b858baa1bab2c2a72848916e9b85` |
+| `assets/DowMonitor-BTJPiTJw.js` | `b2a6b5b746410d64a03f787c7aa6b4b17eea3a817829459662aa4595698e89e0` |
+| `assets/realtimeMarketData-CbJf3qZq.js` | `45cb96086741fde9d4afef5291d3a639da220181753ffa60f0361bb213d69e91` |
+
+Fresh cache-busting authenticated Chrome pages loaded the new entry and
+verified A/HK/US counts `1/5/7`, nine headers, one polyline per row, and
+`documentElement.scrollWidth === clientWidth`. `01347.HK` detail opened below
+the table with one selected row and no dialog, then closed and cleared the
+selection on the second activation. Its grouped fields rendered stable
+5m `+0.37%`, 15m `+0.44%`, volume ratio `0.70×`, ATR14 `+1.54%`,
+confirmation `0/2`, live book `-87.93%`, and formal
+`买入确认 08:00`. All five HK formal signal/timestamp cells were identical
+across a two-second observation. A newly created authenticated tab loaded
+`index-DKdW77Ki.js` and produced zero console errors.
+
+The first switch command omitted the live Compose project name and Docker
+refused the recreate because the canonical container name was already in use.
+The live container remained healthy and unchanged. The single verified
+`Created` temporary container was removed, then the exact live project
+`-p dow-monitor-bfd819d438b4` was deployed successfully. No rollback
+condition was reached.

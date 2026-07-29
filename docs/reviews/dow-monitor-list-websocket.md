@@ -121,3 +121,11 @@
   规格检查仅有过期 collection-monitor 例外与旧详情测试路径两个已知基线。
 
 复核结论：低层稳定快照资格和分钟身份均有可执行语义证据，权威规范、实现和验收一致。
+
+生产复核补充：新镜像
+`tickflow-stock-panel-app:dow-monitor-stable-fallback-041a384-20260729-200151`
+按容器标签所示的两个 Compose 文件与项目
+`dow-monitor-bfd819d438b4` 发布。发布前完整备份容器 inspect、Compose 配置和股票文件；
+发布后镜像 ID、运行状态、重启次数、健康检查、股票哈希、静态哈希和日志均通过。
+Fresh authenticated A/HK/US 页面、详情开合、9 列/单折线、分组指标与正式信号稳定性通过，
+新候选标签页控制台无错误。未触发回滚。
