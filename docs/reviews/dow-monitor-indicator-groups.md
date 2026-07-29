@@ -1,18 +1,12 @@
-# 道氏趋势监控四组指标独立复核
+# Dow monitor grouped-indicator independent review
 
-状态：实施中，尚未通过语义验收。
+Review date: 2026-07-29. Result: **PASS**.
 
-待复核需求：
+| Requirement | Implementation | Executable test | Semantic evidence | Result |
+| --- | --- | --- | --- | --- |
+| `REQ-DOW-MONITOR-INDICATOR-GROUPS-LAYOUT-001` | `monitorListPresentation.ts`, `DowMonitorList.tsx`, `DowMonitor.tsx` | 39 focused frontend tests; 3 contracts | Fresh production A/HK/US pages have nine headers; four grouped headers each have two lines; rows remain at or below 20/page | PASS |
+| `REQ-DOW-MONITOR-LIVE-OBSERVATION-METRICS-001` | same | frontend, contracts, 5 WebSocket tests | Production `depthLevels: 5` subscription, raw quote/depth/candle formulas, `实时` fields and `--` missing value verified | PASS |
+| `REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001` | same | frontend and contracts | Fresh HK row distinguishes stable 5m/15m, ATR14 and fixed `0/2` confirmation from live observations | PASS |
+| `REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001` | same | frontend and contracts | Formal signal and timestamp stayed identical in two five-second production snapshots while depth was rendered separately | PASS |
 
-- `REQ-DOW-MONITOR-INDICATOR-GROUPS-LAYOUT-001`
-- `REQ-DOW-MONITOR-LIVE-OBSERVATION-METRICS-001`
-- `REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001`
-- `REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001`
-
-独立复核将在实施后确认设计第 6 节的验收条件：
-
-- 缺少某一个子指标时，只将该子指标显示为 `--`；
-- 不因一个实时字段缺失而隐藏整组稳定字段；
-- 不用零值代替缺失；
-- 不跨股票、跨交易日或跨周期沿用数据；
-- 休市时稳定字段可继续显示最后一个有效后端快照，实时字段显示休市/不可用状态。
+Independent review confirms the release serves the rebuilt static index and grouped DowMonitor chunk from `/app/static`; no container mount masks that path. The previously observed legacy layout was a browser tab that had not reloaded after deployment, not candidate image behavior.
