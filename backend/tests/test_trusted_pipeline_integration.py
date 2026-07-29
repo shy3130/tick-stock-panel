@@ -385,6 +385,44 @@ def test_tickflow_adjustment_client_init_failure_overwrites_old_success_receipt(
     )
 
 
+def test_run_now_missing_tickflow_adjustment_capability_closes_trust_gate(
+    tmp_path,
+    monkeypatch,
+):
+    from app.jobs import daily_pipeline
+    from app.services import preferences
+    from app.tickflow.capabilities import CapabilitySet
+
+    cache = _seed_trusted_gate(tmp_path)
+    repo = SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path),
+        latest_daily_date=lambda: date.today(),
+    )
+
+    monkeypatch.setattr(daily_pipeline.instrument_sync, "sync_instruments", lambda path: 0)
+    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: ["600000.SH"])
+    monkeypatch.setattr(daily_pipeline, "_invalidate", lambda table=None: None)
+    monkeypatch.setattr(daily_pipeline, "_refresh_single_view", lambda repo, name: None)
+    monkeypatch.setattr(daily_pipeline, "_refresh_views", lambda repo: None)
+    monkeypatch.setattr(daily_pipeline, "run_pipeline", lambda **kwargs: 0)
+    monkeypatch.setattr(preferences, "get_pipeline_pull_a_share", lambda: False)
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "tickflow")
+    monkeypatch.setattr(preferences, "get_pipeline_pull_index", lambda: False)
+    monkeypatch.setattr(preferences, "get_pipeline_pull_etf", lambda: False)
+    monkeypatch.setattr(preferences, "get_minute_sync_enabled", lambda: False)
+    monkeypatch.setattr(preferences, "get_minute_sync_days", lambda: 5)
+
+    result = daily_pipeline.run_now(repo, CapabilitySet())
+
+    assert "sync_adj" in result["skipped_stages"]
+    _assert_latest_error_blocks_gate(
+        tmp_path,
+        cache,
+        "adj_factor",
+        "tickflow",
+    )
+
+
 def test_tickflow_instrument_exchange_failure_overwrites_old_success_receipt(
     tmp_path,
     monkeypatch,

@@ -188,6 +188,8 @@ def run_extend_history(
         _refresh_single_view(repo, "adj_factor")
         _invalidate("adj_factor")
     else:
+        # 不能只跳过：必须覆盖旧成功回执，让可信数据闸门在能力失效时失败关闭。
+        kline_sync.sync_adj_factor(universe, repo, capset)
         emit("extend_history", 60, "除权因子跳过(无权限)")
         logger.info("extend_history: adj_factor skipped, no ADJ_FACTOR capability")
 

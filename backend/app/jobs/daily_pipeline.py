@@ -288,6 +288,9 @@ def run_now(
             logger.info("sync_adj: [%s ~ %s] no new factors", adj_start_str, adj_end_str)
         _invalidate("adj_factor")
     else:
+        # 仍走 service 入口，让它把“当前无 ADJ_FACTOR 能力”写成最新 error 回执。
+        # 否则套餐降级后会继续保留旧的成功回执，研究闸门可能误判为可信。
+        kline_sync.sync_adj_factor(universe, repo, capset)
         skipped.append("sync_adj")
         logger.info("sync_adj skipped: no ADJ_FACTOR capability")
 
