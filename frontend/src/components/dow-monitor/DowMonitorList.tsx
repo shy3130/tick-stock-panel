@@ -206,7 +206,7 @@ export function DowMonitorList({
                     <DowMonitorSparkline symbol={item.symbol} values={row.sparkline} />
                   </td>
                   <td data-testid={`trend-position-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
-                    <div className="flex items-center gap-2">
+                    <div data-testid={`trend-position-primary-row-${item.symbol}`} className="flex items-center gap-2">
                       <span className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
                       <strong className={cn(
                         'font-medium',
@@ -218,23 +218,23 @@ export function DowMonitorList({
                         {row.trendPosition.channel.label}
                       </strong>
                     </div>
-                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                    <div data-testid={`trend-position-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span>{compactPercent('控制', row.trendPosition.control?.distancePct ?? null)}</span>
                       <span>{compactPercent('成本', row.trendPosition.costDistancePct)}</span>
                     </div>
                   </td>
                   <td data-testid={`momentum-speed-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
-                    <div className="flex items-center gap-2">
+                    <div data-testid={`momentum-speed-primary-row-${item.symbol}`} className="flex items-center gap-2">
                       <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
                       <strong>1m {momentumText(row.momentumSpeed.momentum1m)}</strong>
                     </div>
-                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                    <div data-testid={`momentum-speed-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span>5m {momentumText(row.momentumSpeed.momentum5m)}</span>
                       <span>15m {momentumText(row.momentumSpeed.momentum15m)}</span>
                     </div>
                   </td>
                   <td data-testid={`volume-funds-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
-                    <div className="flex items-center gap-2">
+                    <div data-testid={`volume-funds-primary-row-${item.symbol}`} className="flex items-center gap-2">
                       <span data-testid={`relative-volume-stable-badge-${item.symbol}`} className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
                       <strong>
                         量比 {row.volumeFunds.relativeVolume
@@ -248,7 +248,7 @@ export function DowMonitorList({
                           : `${row.volumeFunds.volumeSpeed.toFixed(2)}×`}
                       </span>
                     </div>
-                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                    <div data-testid={`volume-funds-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span data-testid={`active-funds-stable-badge-${item.symbol}`} className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
                       <span>
                         主买 {row.volumeFunds.activeFunds.buyRatioPct == null
@@ -260,13 +260,13 @@ export function DowMonitorList({
                     </div>
                   </td>
                   <td data-testid={`breakout-risk-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
-                    <div className="flex items-center gap-2">
+                    <div data-testid={`breakout-risk-primary-row-${item.symbol}`} className="flex items-center gap-2">
                       <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
                       <span>{distancePercent('高', row.breakoutRisk.toDayHighPct)}</span>
                       <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
                       <span>{distancePercent('低', row.breakoutRisk.fromDayLowPct)}</span>
                     </div>
-                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                    <div data-testid={`breakout-risk-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span>{compactPercent('ATR14', row.breakoutRisk.atr14Pct)}</span>
                       <span>确认 {row.breakoutRisk.confirmedTimeframes}/{row.breakoutRisk.totalTimeframes}</span>
                       {row.breakoutRisk.riskTitle && <span>{row.breakoutRisk.riskTitle}</span>}
