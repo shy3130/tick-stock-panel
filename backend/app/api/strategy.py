@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from app.backtest.minute_trigger import MINUTE_EXIT_TRIGGER_SIGNALS
 from app.strategy import config as strategy_config
 from app.strategy.ai_generator import AIStrategyGenerator, find_meta_assignment
+from app.strategy.catalog import include_strategy
 from app.strategy.engine import StrategyDef, StrategyEngine
 from app.strategy.monitor import StrategyMonitorService
 from app.strategy.prompt_builder import build_step1, build_step2
@@ -94,6 +95,9 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
         "asset_types": s.meta.get("asset_types", ["stock"]),
         "timeframes": s.meta.get("timeframes", ["1d"]),
         "version": s.meta.get("version", "1.0.0"),
+        "lifecycle": s.meta.get("lifecycle", "user"),
+        "visible_by_default": bool(s.meta.get("visible_by_default", True)),
+        "evidence_status": s.meta.get("evidence_status", "unverified"),
         "basic_filter": bf,
         "params": s.meta.get("params", []),
         "params_defaults": params_defaults,
@@ -131,6 +135,7 @@ class RunAllRequest(BaseModel):
     as_of: date | None = None
     asset_type: str = "stock"
     timeframe: str = "1d"
+    include_experimental: bool = False
 
 
 class SaveConfigRequest(BaseModel):
@@ -177,6 +182,7 @@ def list_strategies(
     request: Request,
     asset_type: str | None = None,
     timeframe: str | None = None,
+    include_experimental: bool = False,
 ):
     engine = _get_engine(request)
     data_dir = _data_dir(request)
@@ -184,6 +190,8 @@ def list_strategies(
 
     result = []
     for meta in engine.list_strategies():
+        if not include_strategy(meta, include_experimental=include_experimental):
+            continue
         if asset_type and asset_type not in meta.get("asset_types", ["stock"]):
             continue
         if timeframe and timeframe not in meta.get("timeframes", ["1d"]):
@@ -273,7 +281,8 @@ def run_all(req: RunAllRequest, request: Request):
     strategy_ids = [
         meta["id"]
         for meta in engine.list_strategies()
-        if req.asset_type in meta.get("asset_types", ["stock"])
+        if include_strategy(meta, include_experimental=req.include_experimental)
+        and req.asset_type in meta.get("asset_types", ["stock"])
         and req.timeframe in meta.get("timeframes", ["1d"])
     ]
     from app.services.screener import ScreenerService

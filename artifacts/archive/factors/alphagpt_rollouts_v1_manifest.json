@@ -1,0 +1,2592 @@
+{
+  "schema_version": 1,
+  "phase": "P11-A AlphaGPT policy rollouts",
+  "dataset_role": "training_only",
+  "source": {
+    "artifact": "artifacts/archive/factors/alphagpt_v1.json",
+    "artifact_sha256": "d2ef69fd73c8c86231915c678ad08811b501d8cb4cf865a086798a4bba30cfd7",
+    "search_method": "evolution",
+    "candidate_scope": "accepted pool candidates only",
+    "metric_scope": "P10 training folds only; final candidate reports are not read",
+    "source_seed": 20260723,
+    "data_fingerprint": "2e15fbab0057e0c00dcd469873de261fea03ca465354a89490f1770f877f15ae",
+    "environment_config": {
+      "max_formula_length": 10,
+      "max_complexity": 20,
+      "min_formula_length": 1,
+      "stop_probability": 0.18,
+      "seed": 20260723
+    }
+  },
+  "vocabulary": {
+    "action_space": [
+      "RET",
+      "MA20_DEV",
+      "MA60_DEV",
+      "VOL_RATIO",
+      "MOM20",
+      "MOM5",
+      "RSI14",
+      "AMP",
+      "TURN",
+      "ADD",
+      "SUB",
+      "MUL",
+      "DIV",
+      "NEG",
+      "ABS",
+      "SIGN",
+      "GATE",
+      "JUMP",
+      "DECAY",
+      "DELAY1",
+      "MAX3",
+      "<STOP>"
+    ],
+    "action_to_id": {
+      "RET": 0,
+      "MA20_DEV": 1,
+      "MA60_DEV": 2,
+      "VOL_RATIO": 3,
+      "MOM20": 4,
+      "MOM5": 5,
+      "RSI14": 6,
+      "AMP": 7,
+      "TURN": 8,
+      "ADD": 9,
+      "SUB": 10,
+      "MUL": 11,
+      "DIV": 12,
+      "NEG": 13,
+      "ABS": 14,
+      "SIGN": 15,
+      "GATE": 16,
+      "JUMP": 17,
+      "DECAY": 18,
+      "DELAY1": 19,
+      "MAX3": 20,
+      "<STOP>": 21
+    }
+  },
+  "split_rule": {
+    "method": "first 64 bits of normalized formula SHA-256",
+    "validation_fraction": 0.2
+  },
+  "counts": {
+    "episodes": 27,
+    "transitions": 237,
+    "episodes_by_split": {
+      "train": 23,
+      "validation": 4
+    },
+    "transitions_by_split": {
+      "train": 201,
+      "validation": 36
+    },
+    "failures": 0
+  },
+  "dataset_sha256": "7ee2446887136e882fec155cf6c178e24b9735bc5dbe0c9a50cfeb4b7877cb63",
+  "episodes": [
+    {
+      "episode_id": "p11a_evolution_000038",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260723,
+      "split": "train",
+      "n_steps": 7,
+      "formula": "TURN MA20_DEV JUMP MUL ABS NEG",
+      "formula_tokens": [
+        "TURN",
+        "MA20_DEV",
+        "JUMP",
+        "MUL",
+        "ABS",
+        "NEG"
+      ],
+      "formula_hash": "549763a50fabb38fd755c620d8b34bf648259636c78924a1d417053b39827005",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 10.943712782933433,
+      "reward_breakdown": {
+        "total": 10.943712782933433,
+        "median_icir": 11.060817117884625,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.4163046207583461,
+        "median_turnover": 0.15675675675675685,
+        "normalized_complexity": 0.35,
+        "fold_icir_variance": 1.9658485108502661,
+        "max_abs_correlation": 0.5761707470101404,
+        "positive_components": {
+          "median_icir": 11.060817117884625,
+          "positive_return_folds": 0.5,
+          "stability": 0.10407615518958653
+        },
+        "penalties": {
+          "turnover": 0.015675675675675686,
+          "complexity": 0.06999999999999999,
+          "fold_variance": 0.49146212771256653,
+          "correlation": 0.1440426867525351
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.07101667845213674,
+          "icir": 11.060817117884625,
+          "total_return": 0.19821058428523464,
+          "turnover": 0.15675675675675685,
+          "top_decile_sharpe": 1.7063166851207152,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.0695761117265252,
+          "icir": 13.392428261653818,
+          "total_return": 0.2816129271709167,
+          "turnover": 0.09066666666666671,
+          "top_decile_sharpe": 4.442302195786361,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.07539738990002035,
+          "icir": 10.042816287059795,
+          "total_return": 0.03452941621557448,
+          "turnover": 0.18884615384615394,
+          "top_decile_sharpe": 0.774960542207916,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000038",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "TURN MOM20 JUMP MUL ABS NEG",
+          "MOM20 AMP MA20_DEV MOM5 ABS ADD JUMP ABS SUB ADD"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000023",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260724,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "MOM20 AMP MA20_DEV MOM5 ABS ADD JUMP ABS SUB ADD",
+      "formula_tokens": [
+        "MOM20",
+        "AMP",
+        "MA20_DEV",
+        "MOM5",
+        "ABS",
+        "ADD",
+        "JUMP",
+        "ABS",
+        "SUB",
+        "ADD"
+      ],
+      "formula_hash": "8237cf68b735baf467c7407cdd4463b89448d5fa34dda03220dfa1c2aa0f7e44",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 10.459630934285915,
+      "reward_breakdown": {
+        "total": 10.459630934285915,
+        "median_icir": 10.80397874375183,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.3983418340789929,
+        "median_turnover": 0.2384615384615385,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 2.2813283299236806,
+        "max_abs_correlation": 0.8790201266343539,
+        "positive_components": {
+          "median_icir": 10.80397874375183,
+          "positive_return_folds": 0.5,
+          "stability": 0.09958545851974822
+        },
+        "penalties": {
+          "turnover": 0.02384615384615385,
+          "complexity": 0.13,
+          "fold_variance": 0.5703320824809202,
+          "correlation": 0.21975503165858848
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.061112923243613906,
+          "icir": 7.682518463538467,
+          "total_return": 0.21349881510993396,
+          "turnover": 0.24594594594594593,
+          "top_decile_sharpe": 2.1775355144701636,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.08832890439632234,
+          "icir": 10.96323167738288,
+          "total_return": 0.4218532738165235,
+          "turnover": 0.215,
+          "top_decile_sharpe": 5.088692503810481,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.093032271311173,
+          "icir": 10.80397874375183,
+          "total_return": 0.2302157671106293,
+          "turnover": 0.2384615384615385,
+          "top_decile_sharpe": 2.7911234028074334,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000023",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 AMP MOM20 MOM5 ABS ADD JUMP ABS SUB ADD"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000025",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260725,
+      "split": "train",
+      "n_steps": 7,
+      "formula": "TURN MOM20 JUMP MUL ABS NEG",
+      "formula_tokens": [
+        "TURN",
+        "MOM20",
+        "JUMP",
+        "MUL",
+        "ABS",
+        "NEG"
+      ],
+      "formula_hash": "4b46e8157eb18d970c54763c4a7a38ac5805fa2f710e5a03cc2db770ebb38820",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 8.32460273455455,
+      "reward_breakdown": {
+        "total": 8.32460273455455,
+        "median_icir": 8.154613638721877,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.5637149199497531,
+        "median_turnover": 0.14695945945945954,
+        "normalized_complexity": 0.35,
+        "fold_icir_variance": 0.5989928848951958,
+        "max_abs_correlation": 0.9459818679400855,
+        "positive_components": {
+          "median_icir": 8.154613638721877,
+          "positive_return_folds": 0.5,
+          "stability": 0.14092872998743827
+        },
+        "penalties": {
+          "turnover": 0.014695945945945955,
+          "complexity": 0.06999999999999999,
+          "fold_variance": 0.14974822122379894,
+          "correlation": 0.23649546698502139
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.04253308607134935,
+          "icir": 8.154613638721877,
+          "total_return": 0.24370312893045742,
+          "turnover": 0.14695945945945954,
+          "top_decile_sharpe": 1.955009578307701,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.028621337006660353,
+          "icir": 6.6167980539852245,
+          "total_return": 0.23567605284322268,
+          "turnover": 0.13866666666666677,
+          "top_decile_sharpe": 3.4944004773914186,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.03965477566644734,
+          "icir": 8.345815424752903,
+          "total_return": 0.03688002764708975,
+          "turnover": 0.17884615384615393,
+          "top_decile_sharpe": 0.7329354125930913,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000025",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 MOM20 JUMP MUL ABS NEG"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000035",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260726,
+      "split": "validation",
+      "n_steps": 7,
+      "formula": "MOM20 MOM5 JUMP MUL ABS NEG",
+      "formula_tokens": [
+        "MOM20",
+        "MOM5",
+        "JUMP",
+        "MUL",
+        "ABS",
+        "NEG"
+      ],
+      "formula_hash": "095c58f615068ee0c6563260a9c7c14f2f84ffe3c9f3c0789ddf914a69ba1a97",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 8.321410949309783,
+      "reward_breakdown": {
+        "total": 8.321410949309783,
+        "median_icir": 8.145054283768843,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.482274281309647,
+        "median_turnover": 0.12692307692307697,
+        "normalized_complexity": 0.35,
+        "fold_icir_variance": 1.1524212936640439,
+        "max_abs_correlation": 0.2936570947126157,
+        "positive_components": {
+          "median_icir": 8.145054283768843,
+          "positive_return_folds": 0.5,
+          "stability": 0.12056857032741175
+        },
+        "penalties": {
+          "turnover": 0.012692307692307697,
+          "complexity": 0.06999999999999999,
+          "fold_variance": 0.28810532341601097,
+          "correlation": 0.07341427367815392
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.046828918013245326,
+          "icir": 6.799330214569862,
+          "total_return": 0.21737266141007638,
+          "turnover": 0.1486486486486487,
+          "top_decile_sharpe": 1.8514228607274887,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.06028454667269623,
+          "icir": 9.428634394665124,
+          "total_return": 0.2647304383703659,
+          "turnover": 0.07933333333333337,
+          "top_decile_sharpe": 4.2581617225422725,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.05866358695712206,
+          "icir": 8.145054283768843,
+          "total_return": 0.04194059445461629,
+          "turnover": 0.12692307692307697,
+          "top_decile_sharpe": 0.9039909710465194,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000035",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 MOM20 JUMP MUL ABS NEG"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000003",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260727,
+      "split": "train",
+      "n_steps": 8,
+      "formula": "MOM20 MOM20 JUMP MUL ABS NEG SIGN",
+      "formula_tokens": [
+        "MOM20",
+        "MOM20",
+        "JUMP",
+        "MUL",
+        "ABS",
+        "NEG",
+        "SIGN"
+      ],
+      "formula_hash": "f21a8daf9e69df3b655cd1eb838248a3c9c2dbf2cf72ba20d4ad51ca290f8464",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 8.311317825683346,
+      "reward_breakdown": {
+        "total": 8.311317825683346,
+        "median_icir": 8.01588661941844,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.5122730967392906,
+        "median_turnover": 0.14695945945945954,
+        "normalized_complexity": 0.4,
+        "fold_icir_variance": 0.9064635127085019,
+        "max_abs_correlation": 0.045300975187379376,
+        "positive_components": {
+          "median_icir": 8.01588661941844,
+          "positive_return_folds": 0.5,
+          "stability": 0.12806827418482264
+        },
+        "penalties": {
+          "turnover": 0.014695945945945955,
+          "complexity": 0.08000000000000002,
+          "fold_variance": 0.22661587817712547,
+          "correlation": 0.011325243796844844
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.0413111830556855,
+          "icir": 8.503399459139674,
+          "total_return": 0.24370312893045742,
+          "turnover": 0.14695945945945954,
+          "top_decile_sharpe": 1.955009578307701,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.029630548565887378,
+          "icir": 6.284590070237856,
+          "total_return": 0.23567605284322268,
+          "turnover": 0.13866666666666677,
+          "top_decile_sharpe": 3.4944004773914186,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.037992019649342595,
+          "icir": 8.01588661941844,
+          "total_return": 0.03688002764708975,
+          "turnover": 0.17884615384615393,
+          "top_decile_sharpe": 0.7329354125930913,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000003",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000012",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260728,
+      "split": "validation",
+      "n_steps": 7,
+      "formula": "MOM20 MOM20 JUMP MUL ABS NEG",
+      "formula_tokens": [
+        "MOM20",
+        "MOM20",
+        "JUMP",
+        "MUL",
+        "ABS",
+        "NEG"
+      ],
+      "formula_hash": "0baed8912059b0bd414a24607055433bef6eee46705d842176e24500687986e1",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 8.016793216201517,
+      "reward_breakdown": {
+        "total": 8.016793216201517,
+        "median_icir": 7.901714720452106,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.528786549305523,
+        "median_turnover": 0.14695945945945954,
+        "normalized_complexity": 0.35,
+        "fold_icir_variance": 0.7940988344737541,
+        "max_abs_correlation": 0.9355899480503411,
+        "positive_components": {
+          "median_icir": 7.901714720452106,
+          "positive_return_folds": 0.5,
+          "stability": 0.13219663732638076
+        },
+        "penalties": {
+          "turnover": 0.014695945945945955,
+          "complexity": 0.06999999999999999,
+          "fold_variance": 0.19852470861843852,
+          "correlation": 0.23389748701258528
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.04097988693191718,
+          "icir": 7.901714720452106,
+          "total_return": 0.24370312893045742,
+          "turnover": 0.14695945945945954,
+          "top_decile_sharpe": 1.955009578307701,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.028233346912004298,
+          "icir": 6.125140721377556,
+          "total_return": 0.23567605284322268,
+          "turnover": 0.13866666666666677,
+          "top_decile_sharpe": 3.4944004773914186,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.038068588850599515,
+          "icir": 8.111737046419758,
+          "total_return": 0.03688002764708975,
+          "turnover": 0.17884615384615393,
+          "top_decile_sharpe": 0.7329354125930913,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000012",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "RSI14 DELAY1 DELAY1 NEG MA20_DEV MOM5 VOL_RATIO DELAY1 GATE DIV",
+          "MOM20 MOM20 JUMP MUL ABS NEG SIGN"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000014",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260729,
+      "split": "validation",
+      "n_steps": 11,
+      "formula": "MOM20 AMP MOM20 MOM5 ABS ADD JUMP ABS SUB ADD",
+      "formula_tokens": [
+        "MOM20",
+        "AMP",
+        "MOM20",
+        "MOM5",
+        "ABS",
+        "ADD",
+        "JUMP",
+        "ABS",
+        "SUB",
+        "ADD"
+      ],
+      "formula_hash": "000df4089444ab421ce00b7dcdb16878e5de3d4749449230ac3006c7de65c1af",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 4.747634344622703,
+      "reward_breakdown": {
+        "total": 4.747634344622703,
+        "median_icir": 5.499862385723217,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.336323632757464,
+        "median_turnover": 0.23269230769230778,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 3.8940178293557515,
+        "max_abs_correlation": 0.8381410447268446,
+        "positive_components": {
+          "median_icir": 5.499862385723217,
+          "positive_return_folds": 0.5,
+          "stability": 0.084080908189366
+        },
+        "penalties": {
+          "turnover": 0.023269230769230778,
+          "complexity": 0.13,
+          "fold_variance": 0.9735044573389379,
+          "correlation": 0.20953526118171115
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.020587953688408083,
+          "icir": 2.262990222875126,
+          "total_return": 0.17718018896928855,
+          "turnover": 0.2371621621621622,
+          "top_decile_sharpe": 1.8451386785965056,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.049113553467186655,
+          "icir": 5.499862385723217,
+          "total_return": 0.3443436229176242,
+          "turnover": 0.20600000000000002,
+          "top_decile_sharpe": 4.3280823357914135,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.06023234742932188,
+          "icir": 6.990296546547185,
+          "total_return": 0.20169226045930833,
+          "turnover": 0.23269230769230778,
+          "top_decile_sharpe": 2.4622790462977684,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000014",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 AMP MA60_DEV MOM5 ABS ADD JUMP ABS SUB ADD"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000040",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260730,
+      "split": "train",
+      "n_steps": 7,
+      "formula": "TURN MOM20 MAX3 MUL ABS NEG",
+      "formula_tokens": [
+        "TURN",
+        "MOM20",
+        "MAX3",
+        "MUL",
+        "ABS",
+        "NEG"
+      ],
+      "formula_hash": "d4d0259507f867ae1ef23cb2994bc7a9cc5c0ca76062c97b2957cf841258fca8",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 4.680798402934898,
+      "reward_breakdown": {
+        "total": 4.680798402934898,
+        "median_icir": 4.976384634942989,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.39107054465215474,
+        "median_turnover": 0.5733333333333329,
+        "normalized_complexity": 0.35,
+        "fold_icir_variance": 2.424508730808549,
+        "max_abs_correlation": 0.6395734085426368,
+        "positive_components": {
+          "median_icir": 4.976384634942989,
+          "positive_return_folds": 0.5,
+          "stability": 0.09776763616303868
+        },
+        "penalties": {
+          "turnover": 0.05733333333333329,
+          "complexity": 0.06999999999999999,
+          "fold_variance": 0.6061271827021373,
+          "correlation": 0.1598933521356592
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.06618006443899085,
+          "icir": 7.552602960983849,
+          "total_return": 0.15030810232290248,
+          "turnover": 0.5729729729729727,
+          "top_decile_sharpe": 1.8198804687580505,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.03406930708641316,
+          "icir": 3.828798077831922,
+          "total_return": 0.24825027820180634,
+          "turnover": 0.5733333333333329,
+          "top_decile_sharpe": 4.840076030926444,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.04741313970774357,
+          "icir": 4.976384634942989,
+          "total_return": 0.07163055935191198,
+          "turnover": 0.6557692307692304,
+          "top_decile_sharpe": 1.947359615171181,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000040",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "TURN MOM20 JUMP MUL ABS NEG"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000004",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260731,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "MOM20 AMP MA60_DEV MOM5 ABS ADD JUMP ABS SUB ADD",
+      "formula_tokens": [
+        "MOM20",
+        "AMP",
+        "MA60_DEV",
+        "MOM5",
+        "ABS",
+        "ADD",
+        "JUMP",
+        "ABS",
+        "SUB",
+        "ADD"
+      ],
+      "formula_hash": "c404aaecfcdef6e38ff2f17f1410a83278a0298d2ba5d70b2bb4c7784593ec4f",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 4.375509397289551,
+      "reward_breakdown": {
+        "total": 4.375509397289551,
+        "median_icir": 4.724539414395139,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.3736792788741365,
+        "median_turnover": 0.22384615384615392,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 2.8092832373825525,
+        "max_abs_correlation": 0.350977648375472,
+        "positive_components": {
+          "median_icir": 4.724539414395139,
+          "positive_return_folds": 0.5,
+          "stability": 0.09341981971853412
+        },
+        "penalties": {
+          "turnover": 0.02238461538461539,
+          "complexity": 0.13,
+          "fold_variance": 0.7023208093456381,
+          "correlation": 0.087744412093868
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.025055693935363704,
+          "icir": 2.3241970497174758,
+          "total_return": 0.16745356595562733,
+          "turnover": 0.23513513513513518,
+          "top_decile_sharpe": 1.7532871757511865,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.045965716984643315,
+          "icir": 4.724539414395139,
+          "total_return": 0.3212610304860066,
+          "turnover": 0.20833333333333337,
+          "top_decile_sharpe": 4.08569320151205,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.05669804799769463,
+          "icir": 6.408903197604778,
+          "total_return": 0.1720826508753115,
+          "turnover": 0.22384615384615392,
+          "top_decile_sharpe": 2.2013598703691497,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000004",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000020",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260732,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "MOM20 AMP MOM20 MOM20 ABS ADD JUMP ABS SUB ADD",
+      "formula_tokens": [
+        "MOM20",
+        "AMP",
+        "MOM20",
+        "MOM20",
+        "ABS",
+        "ADD",
+        "JUMP",
+        "ABS",
+        "SUB",
+        "ADD"
+      ],
+      "formula_hash": "f1ee73ce7c0595de8c428cd33aefc57cfe092a5b76c1772d05de66f7d1a8e9ba",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 4.296926353836787,
+      "reward_breakdown": {
+        "total": 4.296926353836787,
+        "median_icir": 5.494627645545117,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.29677867952525716,
+        "median_turnover": 0.22923076923076927,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 5.614597944522976,
+        "max_abs_correlation": 0.8612935941432959,
+        "positive_components": {
+          "median_icir": 5.494627645545117,
+          "positive_return_folds": 0.5,
+          "stability": 0.07419466988131429
+        },
+        "penalties": {
+          "turnover": 0.022923076923076928,
+          "complexity": 0.13,
+          "fold_variance": 1.403649486130744,
+          "correlation": 0.21532339853582397
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.022823610406054472,
+          "icir": 2.654407360280542,
+          "total_return": 0.19234136217964415,
+          "turnover": 0.24324324324324328,
+          "top_decile_sharpe": 1.9826218252018808,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.048615622696015756,
+          "icir": 5.494627645545117,
+          "total_return": 0.3513395119038134,
+          "turnover": 0.2056666666666667,
+          "top_decile_sharpe": 4.366117775971418,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.06387655454633892,
+          "icir": 8.458072258899357,
+          "total_return": 0.17482093971909096,
+          "turnover": 0.22923076923076927,
+          "top_decile_sharpe": 2.2136461386709123,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000020",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 AMP MOM20 MOM5 ABS ADD JUMP ABS SUB ADD"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000026",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260733,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "MOM20 AMP MOM20 MOM20 JUMP MUL JUMP ABS SUB ADD",
+      "formula_tokens": [
+        "MOM20",
+        "AMP",
+        "MOM20",
+        "MOM20",
+        "JUMP",
+        "MUL",
+        "JUMP",
+        "ABS",
+        "SUB",
+        "ADD"
+      ],
+      "formula_hash": "7ed4094b5f82771092b913a9f391a0136c63335ed0f033090441f835112edad4",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 2.8719104551670425,
+      "reward_breakdown": {
+        "total": 2.8719104551670425,
+        "median_icir": 3.1901205039022775,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.4017089032032565,
+        "median_turnover": 0.21423076923076928,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 2.218207481668449,
+        "max_abs_correlation": 0.8506493087834397,
+        "positive_components": {
+          "median_icir": 3.1901205039022775,
+          "positive_return_folds": 0.5,
+          "stability": 0.10042722580081412
+        },
+        "penalties": {
+          "turnover": 0.02142307692307693,
+          "complexity": 0.13,
+          "fold_variance": 0.5545518704171123,
+          "correlation": 0.21266232719585992
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.02733897657546272,
+          "icir": 3.0749734111142857,
+          "total_return": 0.08680279987096884,
+          "turnover": 0.23141891891891891,
+          "top_decile_sharpe": 1.0056799394689464,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.029566941440028794,
+          "icir": 3.1901205039022775,
+          "total_return": 0.24007294798729362,
+          "turnover": 0.2016666666666667,
+          "top_decile_sharpe": 3.154146613156779,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.05611918705436227,
+          "icir": 6.290392667446447,
+          "total_return": 0.09663058931953739,
+          "turnover": 0.21423076923076928,
+          "top_decile_sharpe": 1.2938571377115056,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000026",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "MOM20 AMP MA20_DEV MOM5 ABS ADD JUMP ABS SUB ADD",
+          "MOM20 MOM20 JUMP MUL ABS NEG"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000008",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260734,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "RET MA20_DEV MAX3 MAX3 MUL MA60_DEV SUB DELAY1 MA60_DEV ADD",
+      "formula_tokens": [
+        "RET",
+        "MA20_DEV",
+        "MAX3",
+        "MAX3",
+        "MUL",
+        "MA60_DEV",
+        "SUB",
+        "DELAY1",
+        "MA60_DEV",
+        "ADD"
+      ],
+      "formula_hash": "64780c765db8946b542aa62a4e9f15fd9f73e7cd849b01916536609f43288717",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 2.811891748028977,
+      "reward_breakdown": {
+        "total": 2.811891748028977,
+        "median_icir": 2.810425090381001,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.4352675778508477,
+        "median_turnover": 0.2695945945945944,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 1.68334373322223,
+        "max_abs_correlation": 0.1182193761988746,
+        "positive_components": {
+          "median_icir": 2.810425090381001,
+          "positive_return_folds": 0.5,
+          "stability": 0.10881689446271192
+        },
+        "penalties": {
+          "turnover": 0.02695945945945944,
+          "complexity": 0.13,
+          "fold_variance": 0.4208359333055575,
+          "correlation": 0.02955484404971865
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.015893520891775623,
+          "icir": 2.810425090381001,
+          "total_return": 0.27752580290532847,
+          "turnover": 0.2695945945945944,
+          "top_decile_sharpe": 2.0727318570162385,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.023676796003033775,
+          "icir": 3.7338022867160845,
+          "total_return": 0.3825566790689683,
+          "turnover": 0.26599999999999974,
+          "top_decile_sharpe": 5.378408817761632,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.0035698351178165303,
+          "icir": 0.6385651861536644,
+          "total_return": 0.06190541178699083,
+          "turnover": 0.32461538461538425,
+          "top_decile_sharpe": 1.0121394815861597,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000008",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000013",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260735,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "MOM20 AMP MA60_DEV MOM5 ABS SUB JUMP ABS SUB ADD",
+      "formula_tokens": [
+        "MOM20",
+        "AMP",
+        "MA60_DEV",
+        "MOM5",
+        "ABS",
+        "SUB",
+        "JUMP",
+        "ABS",
+        "SUB",
+        "ADD"
+      ],
+      "formula_hash": "8ecd5a44d3b319b2d97f36ef220e9eaa203c2e7186010425b856edee22dc6e82",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 1.387723344043192,
+      "reward_breakdown": {
+        "total": 1.387723344043192,
+        "median_icir": 2.0370762789320387,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.34542960924628985,
+        "median_turnover": 0.2211538461538462,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 3.590819623522452,
+        "max_abs_correlation": 0.7435601868176864,
+        "positive_components": {
+          "median_icir": 2.0370762789320387,
+          "positive_return_folds": 0.5,
+          "stability": 0.08635740231157246
+        },
+        "penalties": {
+          "turnover": 0.02211538461538462,
+          "complexity": 0.13,
+          "fold_variance": 0.897704905880613,
+          "correlation": 0.1858900467044216
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.015343587213764399,
+          "icir": -1.548885589007706,
+          "total_return": 0.06844565760971322,
+          "turnover": 0.23243243243243247,
+          "top_decile_sharpe": 0.8344050109972492,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.01889651503742184,
+          "icir": 2.0370762789320387,
+          "total_return": 0.24662305275691243,
+          "turnover": 0.2086666666666667,
+          "top_decile_sharpe": 3.279013836554869,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.025463553088761366,
+          "icir": 2.796417114863565,
+          "total_return": 0.09294867443124066,
+          "turnover": 0.2211538461538462,
+          "top_decile_sharpe": 1.2586104687010435,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000013",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 AMP MA60_DEV MOM5 ABS ADD JUMP ABS SUB ADD"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000021",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260736,
+      "split": "train",
+      "n_steps": 10,
+      "formula": "MOM20 MOM20 MOM5 ABS ADD MUL ABS NEG SIGN",
+      "formula_tokens": [
+        "MOM20",
+        "MOM20",
+        "MOM5",
+        "ABS",
+        "ADD",
+        "MUL",
+        "ABS",
+        "NEG",
+        "SIGN"
+      ],
+      "formula_hash": "799e10b5e0f3c4b6907450b540c63a0f5edfa4172f479b80e8f014e2e19fa47c",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 0.7407267739297461,
+      "reward_breakdown": {
+        "total": 0.7407267739297461,
+        "median_icir": 0.48009338138536967,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.6037800533342456,
+        "median_turnover": 0.129,
+        "normalized_complexity": 0.55,
+        "fold_icir_variance": 0.4306407741157442,
+        "max_abs_correlation": 0.6390057090409961,
+        "positive_components": {
+          "median_icir": 0.48009338138536967,
+          "positive_return_folds": 0.5,
+          "stability": 0.1509450133335614
+        },
+        "penalties": {
+          "turnover": 0.012900000000000002,
+          "complexity": 0.11000000000000001,
+          "fold_variance": 0.10766019352893605,
+          "correlation": 0.15975142726024902
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.004869749977299778,
+          "icir": 1.6116925457097406,
+          "total_return": 0.1569914397982568,
+          "turnover": 0.147972972972973,
+          "top_decile_sharpe": 1.679704601082049,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.0010156250971010356,
+          "icir": 0.48009338138536967,
+          "total_return": 0.24802081538500298,
+          "turnover": 0.129,
+          "top_decile_sharpe": 4.09197128193478,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.00018273344564423058,
+          "icir": 0.05720899887727802,
+          "total_return": 0.07197766112589599,
+          "turnover": 0.11346153846153847,
+          "top_decile_sharpe": 1.5139871044771402,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000021",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "MOM20 MOM20 JUMP MUL ABS NEG SIGN",
+          "MOM20 AMP MOM20 MOM5 ABS ADD JUMP ABS SUB ADD"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000030",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260737,
+      "split": "train",
+      "n_steps": 8,
+      "formula": "MOM20 MOM20 JUMP SUB ABS NEG SIGN",
+      "formula_tokens": [
+        "MOM20",
+        "MOM20",
+        "JUMP",
+        "SUB",
+        "ABS",
+        "NEG",
+        "SIGN"
+      ],
+      "formula_hash": "9d0247fdb6a811e89ac39a8d0f2100c9e5a2e78a01e84fa061a749950e4f5337",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 0.7085042392101644,
+      "reward_breakdown": {
+        "total": 0.7085042392101644,
+        "median_icir": 0.627256991951153,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.5044513264481858,
+        "median_turnover": 0.15066666666666667,
+        "normalized_complexity": 0.4,
+        "fold_icir_variance": 0.9650150784487932,
+        "max_abs_correlation": 0.834180592296681,
+        "positive_components": {
+          "median_icir": 0.627256991951153,
+          "positive_return_folds": 0.5,
+          "stability": 0.12611283161204645
+        },
+        "penalties": {
+          "turnover": 0.015066666666666667,
+          "complexity": 0.08000000000000002,
+          "fold_variance": 0.2412537696121983,
+          "correlation": 0.20854514807417024
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.007015630437085515,
+          "icir": 2.3217161825181063,
+          "total_return": 0.227369809452878,
+          "turnover": 0.12094594594594599,
+          "top_decile_sharpe": 2.140459670058299,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.0013250295797132613,
+          "icir": 0.627256991951153,
+          "total_return": 0.28542131859162234,
+          "turnover": 0.15066666666666667,
+          "top_decile_sharpe": 4.637226528186399,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -1.608326458604716e-05,
+          "icir": -0.00509912898696135,
+          "total_return": 0.048148532129991484,
+          "turnover": 0.15769230769230774,
+          "top_decile_sharpe": 1.0340717773829948,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000030",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 MOM20 JUMP MUL ABS NEG SIGN"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000006",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260738,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "RSI14 DELAY1 DELAY1 NEG MA20_DEV MOM5 VOL_RATIO DELAY1 GATE DIV",
+      "formula_tokens": [
+        "RSI14",
+        "DELAY1",
+        "DELAY1",
+        "NEG",
+        "MA20_DEV",
+        "MOM5",
+        "VOL_RATIO",
+        "DELAY1",
+        "GATE",
+        "DIV"
+      ],
+      "formula_hash": "6fa700cfad00bf32c95550c8324e1b0558b9c9cd5159bd2812df21bcf5c097a5",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 0.4442780387059566,
+      "reward_breakdown": {
+        "total": 0.4442780387059566,
+        "median_icir": 0.21437781117517385,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.5340830054310671,
+        "median_turnover": 0.6573333333333329,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 0.7610261603036832,
+        "max_abs_correlation": 0.07052260167091959,
+        "positive_components": {
+          "median_icir": 0.21437781117517385,
+          "positive_return_folds": 0.5,
+          "stability": 0.13352075135776678
+        },
+        "penalties": {
+          "turnover": 0.0657333333333333,
+          "complexity": 0.13,
+          "fold_variance": 0.1902565400759208,
+          "correlation": 0.017630650417729897
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.0006155885442721671,
+          "icir": 0.21437781117517385,
+          "total_return": 0.15103828215930415,
+          "turnover": 0.6557432432432427,
+          "top_decile_sharpe": 2.1368934061330767,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.0008386966938076124,
+          "icir": -0.2599104728507713,
+          "total_return": 0.19728433209560792,
+          "turnover": 0.6573333333333329,
+          "top_decile_sharpe": 3.5004492966623344,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.005316101465961164,
+          "icir": 1.7816465069278185,
+          "total_return": 0.06171856998328784,
+          "turnover": 0.7107692307692303,
+          "top_decile_sharpe": 1.4341463197521944,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000006",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000018",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260739,
+      "split": "train",
+      "n_steps": 8,
+      "formula": "MOM20 MOM20 DELAY1 MUL ABS NEG SIGN",
+      "formula_tokens": [
+        "MOM20",
+        "MOM20",
+        "DELAY1",
+        "MUL",
+        "ABS",
+        "NEG",
+        "SIGN"
+      ],
+      "formula_hash": "dbf55e60239aef04cf457671991d9fe7ed67526232dec7f6a76fccd09d53e678",
+      "evaluation_status": "training_evaluated",
+      "final_reward": 0.43767363424974304,
+      "reward_breakdown": {
+        "total": 0.43767363424974304,
+        "median_icir": 0.03997967017889693,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.5660107254153635,
+        "median_turnover": 0.085,
+        "normalized_complexity": 0.4,
+        "fold_icir_variance": 0.5879070549865091,
+        "max_abs_correlation": 0.033327814145470064,
+        "positive_components": {
+          "median_icir": 0.03997967017889693,
+          "positive_return_folds": 0.5,
+          "stability": 0.14150268135384086
+        },
+        "penalties": {
+          "turnover": 0.0085,
+          "complexity": 0.08000000000000002,
+          "fold_variance": 0.14697676374662727,
+          "correlation": 0.008331953536367516
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.0009858319406613424,
+          "icir": 0.3151503210968561,
+          "total_return": 0.14990521713649918,
+          "turnover": 0.07702702702702702,
+          "top_decile_sharpe": 1.5890209966618936,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.003062305818094983,
+          "icir": -1.4314075280847416,
+          "total_return": 0.24177948226380508,
+          "turnover": 0.085,
+          "top_decile_sharpe": 3.9568879683713214,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.00012877809029909166,
+          "icir": 0.03997967017889693,
+          "total_return": 0.0857163475056526,
+          "turnover": 0.09076923076923075,
+          "top_decile_sharpe": 1.8221446577879084,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000018",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 MOM20 JUMP MUL ABS NEG SIGN"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000037",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260740,
+      "split": "train",
+      "n_steps": 6,
+      "formula": "MOM20 MOM20 MUL ABS NEG",
+      "formula_tokens": [
+        "MOM20",
+        "MOM20",
+        "MUL",
+        "ABS",
+        "NEG"
+      ],
+      "formula_hash": "e388a2fbebced653e854a4d804992f7551f6769b87855cbfc4b2206b9604b6e0",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -0.2746111827663833,
+      "reward_breakdown": {
+        "total": -0.2746111827663833,
+        "median_icir": 0.14111814749664664,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.36934367480069996,
+        "median_turnover": 0.5789999999999996,
+        "normalized_complexity": 0.3,
+        "fold_icir_variance": 2.9155747467027036,
+        "max_abs_correlation": 0.6450862491501164,
+        "positive_components": {
+          "median_icir": 0.14111814749664664,
+          "positive_return_folds": 0.5,
+          "stability": 0.09233591870017499
+        },
+        "penalties": {
+          "turnover": 0.057899999999999965,
+          "complexity": 0.06,
+          "fold_variance": 0.7288936866756759,
+          "correlation": 0.1612715622875291
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.020754303437013174,
+          "icir": 2.369529682880389,
+          "total_return": 0.13715805282163718,
+          "turnover": 0.5337837837837835,
+          "top_decile_sharpe": 1.796176000217228,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.0012452947497055497,
+          "icir": 0.14111814749664664,
+          "total_return": 0.22534398576728298,
+          "turnover": 0.5789999999999996,
+          "top_decile_sharpe": 4.451966453339535,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.016596973395132063,
+          "icir": -1.8099204277454464,
+          "total_return": 0.022486163972758044,
+          "turnover": 0.6126923076923075,
+          "top_decile_sharpe": 0.6344974909532465,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000037",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "MOM20 MOM5 JUMP MUL ABS NEG",
+          "MOM20 MOM20 JUMP MUL ABS NEG SIGN"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000002",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260741,
+      "split": "train",
+      "n_steps": 7,
+      "formula": "RSI14 TURN ABS DELAY1 MUL SIGN",
+      "formula_tokens": [
+        "RSI14",
+        "TURN",
+        "ABS",
+        "DELAY1",
+        "MUL",
+        "SIGN"
+      ],
+      "formula_hash": "c5bffb738d871e4191fa230c2047c1ac452c697dce2a951397c901f6e49175b8",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -0.7043161693862929,
+      "reward_breakdown": {
+        "total": -0.7043161693862929,
+        "median_icir": -0.9643249804598297,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.5132713888937614,
+        "median_turnover": 0.2631756756756757,
+        "normalized_complexity": 0.35,
+        "fold_icir_variance": 0.8992483287645323,
+        "max_abs_correlation": 0.18871754556481168,
+        "positive_components": {
+          "median_icir": -0.9643249804598297,
+          "positive_return_folds": 0.5,
+          "stability": 0.12831784722344036
+        },
+        "penalties": {
+          "turnover": 0.02631756756756757,
+          "complexity": 0.06999999999999999,
+          "fold_variance": 0.22481208219113308,
+          "correlation": 0.04717938639120292
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.006881693550946197,
+          "icir": -0.9643249804598297,
+          "total_return": 0.024520003412529467,
+          "turnover": 0.2631756756756757,
+          "top_decile_sharpe": 0.44219340147165787,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": 0.004580678181564049,
+          "icir": 0.9003764885596945,
+          "total_return": 0.31670335411113615,
+          "turnover": 0.22233333333333338,
+          "top_decile_sharpe": 4.707758186642417,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.006216766592708225,
+          "icir": -1.2314673901646214,
+          "total_return": 0.12466062345696804,
+          "turnover": 0.2757692307692308,
+          "top_decile_sharpe": 2.275762022730185,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000002",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000001",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260742,
+      "split": "validation",
+      "n_steps": 11,
+      "formula": "MOM20 MA60_DEV DECAY MA20_DEV NEG MA60_DEV MOM5 SIGN GATE GATE",
+      "formula_tokens": [
+        "MOM20",
+        "MA60_DEV",
+        "DECAY",
+        "MA20_DEV",
+        "NEG",
+        "MA60_DEV",
+        "MOM5",
+        "SIGN",
+        "GATE",
+        "GATE"
+      ],
+      "formula_hash": "099c6959b4fffc838b5f367d4e49d022f8b18e78bb55f1662e4e628ca60cb6b8",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -0.8638374376519484,
+      "reward_breakdown": {
+        "total": -0.8638374376519484,
+        "median_icir": -0.8886558400775043,
+        "positive_return_fold_ratio": 0.6666666666666666,
+        "stability": 0.4873887935960312,
+        "median_turnover": 0.13817567567567565,
+        "normalized_complexity": 0.7,
+        "fold_icir_variance": 1.106178246956871,
+        "max_abs_correlation": 0.0,
+        "positive_components": {
+          "median_icir": -0.8886558400775043,
+          "positive_return_folds": 0.3333333333333333,
+          "stability": 0.1218471983990078
+        },
+        "penalties": {
+          "turnover": 0.013817567567567565,
+          "complexity": 0.13999999999999999,
+          "fold_variance": 0.27654456173921776,
+          "correlation": 0.0
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.0009295974492465668,
+          "icir": 0.2706384985144643,
+          "total_return": 0.2087576967296212,
+          "turnover": 0.13817567567567565,
+          "top_decile_sharpe": 1.6818548394804853,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.004904564042459785,
+          "icir": -0.8886558400775043,
+          "total_return": 0.23498662647427881,
+          "turnover": 0.15,
+          "top_decile_sharpe": 3.1569259096575344,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.015579398128556203,
+          "icir": -2.301451791346666,
+          "total_return": -0.03723152952476627,
+          "turnover": 0.1376923076923077,
+          "top_decile_sharpe": -0.42096751614627925,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000001",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000009",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260743,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "VOL_RATIO MOM5 MA60_DEV DECAY MA60_DEV JUMP ABS MUL NEG GATE",
+      "formula_tokens": [
+        "VOL_RATIO",
+        "MOM5",
+        "MA60_DEV",
+        "DECAY",
+        "MA60_DEV",
+        "JUMP",
+        "ABS",
+        "MUL",
+        "NEG",
+        "GATE"
+      ],
+      "formula_hash": "d6ad360754a702598b5ac99b82fbe5ab263b5d1aeb69904d20618480ca5c50e5",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -0.8935029131250929,
+      "reward_breakdown": {
+        "total": -0.8935029131250929,
+        "median_icir": -0.8899036694532257,
+        "positive_return_fold_ratio": 0.6666666666666666,
+        "stability": 0.5183391121706137,
+        "median_turnover": 0.3490000000000001,
+        "normalized_complexity": 0.65,
+        "fold_icir_variance": 0.8634850100340213,
+        "max_abs_correlation": 0.3429844101573938,
+        "positive_components": {
+          "median_icir": -0.8899036694532257,
+          "positive_return_folds": 0.3333333333333333,
+          "stability": 0.12958477804265342
+        },
+        "penalties": {
+          "turnover": 0.03490000000000001,
+          "complexity": 0.13,
+          "fold_variance": 0.21587125250850533,
+          "correlation": 0.08574610253934845
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.015493897960650125,
+          "icir": -1.564978836608024,
+          "total_return": -0.018736459547338047,
+          "turnover": 0.3506756756756758,
+          "top_decile_sharpe": -0.03750141519999099,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.008281242493187974,
+          "icir": -0.8899036694532257,
+          "total_return": 0.2208280468566064,
+          "turnover": 0.3490000000000001,
+          "top_decile_sharpe": 3.5040200413882157,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.006023779432835955,
+          "icir": 0.6550803761070823,
+          "total_return": 0.07774544764562696,
+          "turnover": 0.34500000000000014,
+          "top_decile_sharpe": 1.1526064024822746,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000009",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000017",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260744,
+      "split": "train",
+      "n_steps": 2,
+      "formula": "MOM20",
+      "formula_tokens": [
+        "MOM20"
+      ],
+      "formula_hash": "aba8788ac7a418e1459548d86a9905c1bc343ac4459ab0278bd701cd4c6ba145",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -1.1048939252105208,
+      "reward_breakdown": {
+        "total": -1.1048939252105208,
+        "median_icir": -0.20764902829187298,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.3117044317732503,
+        "median_turnover": 0.18346153846153848,
+        "normalized_complexity": 0.05,
+        "fold_icir_variance": 4.876003316713772,
+        "max_abs_correlation": 0.9112960873494534,
+        "positive_components": {
+          "median_icir": -0.20764902829187298,
+          "positive_return_folds": 0.5,
+          "stability": 0.07792610794331258
+        },
+        "penalties": {
+          "turnover": 0.01834615384615385,
+          "complexity": 0.010000000000000002,
+          "fold_variance": 1.219000829178443,
+          "correlation": 0.22782402183736336
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.03620200914360238,
+          "icir": -3.793994333490937,
+          "total_return": 0.0039192936314513815,
+          "turnover": 0.19831081081081084,
+          "top_decile_sharpe": 0.2023922206542653,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.001838126754954544,
+          "icir": -0.20764902829187298,
+          "total_return": 0.21768065989837493,
+          "turnover": 0.164,
+          "top_decile_sharpe": 2.941233031920834,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": 0.013830739257777136,
+          "icir": 1.505688042340437,
+          "total_return": 0.03786877999904914,
+          "turnover": 0.18346153846153848,
+          "top_decile_sharpe": 0.6138008612535969,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000017",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "MOM20 AMP MOM20 MOM5 ABS ADD JUMP ABS SUB ADD",
+          "MOM20 MOM20 JUMP MUL ABS NEG"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000010",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260745,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "MA20_DEV MA60_DEV SIGN TURN RET RSI14 SIGN DELAY1 GATE GATE",
+      "formula_tokens": [
+        "MA20_DEV",
+        "MA60_DEV",
+        "SIGN",
+        "TURN",
+        "RET",
+        "RSI14",
+        "SIGN",
+        "DELAY1",
+        "GATE",
+        "GATE"
+      ],
+      "formula_hash": "4f8f6c95f29857a4ba02ccd6f92ead2070233bc1c6d967fdeb0485eb384a99c5",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -1.3872980510077055,
+      "reward_breakdown": {
+        "total": -1.3872980510077055,
+        "median_icir": -1.6125344613433064,
+        "positive_return_fold_ratio": 1.0,
+        "stability": 0.6065126557892094,
+        "median_turnover": 0.5515384615384612,
+        "normalized_complexity": 0.7,
+        "fold_icir_variance": 0.42090278783677615,
+        "max_abs_correlation": 0.5040488419946461,
+        "positive_components": {
+          "median_icir": -1.6125344613433064,
+          "positive_return_folds": 0.5,
+          "stability": 0.15162816394730236
+        },
+        "penalties": {
+          "turnover": 0.05515384615384612,
+          "complexity": 0.13999999999999999,
+          "fold_variance": 0.10522569695919404,
+          "correlation": 0.12601221049866151
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.012577158778604141,
+          "icir": -1.9957063523811907,
+          "total_return": 0.10759557103980932,
+          "turnover": 0.5979729729729725,
+          "top_decile_sharpe": 1.2758407255004787,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.0022599531236185957,
+          "icir": -0.46847561062923376,
+          "total_return": 0.25436388011091515,
+          "turnover": 0.543333333333333,
+          "top_decile_sharpe": 4.266924026588524,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.007527642031849774,
+          "icir": -1.6125344613433064,
+          "total_return": 0.0558048424822537,
+          "turnover": 0.5515384615384612,
+          "top_decile_sharpe": 1.0950517680641985,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000010",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000007",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260746,
+      "split": "train",
+      "n_steps": 11,
+      "formula": "MOM5 NEG MOM5 MA20_DEV MA60_DEV ADD RSI14 ABS SUB GATE",
+      "formula_tokens": [
+        "MOM5",
+        "NEG",
+        "MOM5",
+        "MA20_DEV",
+        "MA60_DEV",
+        "ADD",
+        "RSI14",
+        "ABS",
+        "SUB",
+        "GATE"
+      ],
+      "formula_hash": "e8ceba8b9dd1087c852eee9174e0027425ce222a9c2c52a13d9a45245acb32b9",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -1.5094747082559659,
+      "reward_breakdown": {
+        "total": -1.5094747082559659,
+        "median_icir": -1.393627596846913,
+        "positive_return_fold_ratio": 0.6666666666666666,
+        "stability": 0.4742952434821127,
+        "median_turnover": 0.684666666666666,
+        "normalized_complexity": 0.7,
+        "fold_icir_variance": 1.2285314375513745,
+        "max_abs_correlation": 0.20861891823361683,
+        "positive_components": {
+          "median_icir": -1.393627596846913,
+          "positive_return_folds": 0.3333333333333333,
+          "stability": 0.11857381087052818
+        },
+        "penalties": {
+          "turnover": 0.0684666666666666,
+          "complexity": 0.13999999999999999,
+          "fold_variance": 0.3071328593878436,
+          "correlation": 0.05215472955840421
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": 0.0031200959531913442,
+          "icir": 0.4612595893657711,
+          "total_return": 0.11016924197468358,
+          "turnover": 0.7317567567567561,
+          "top_decile_sharpe": 1.4985362129846755,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.01367378877731315,
+          "icir": -2.18313962745342,
+          "total_return": 0.19447917180626484,
+          "turnover": 0.684666666666666,
+          "top_decile_sharpe": 3.2495598469767764,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.009829817234093515,
+          "icir": -1.393627596846913,
+          "total_return": -0.017396725570049565,
+          "turnover": 0.6757692307692303,
+          "top_decile_sharpe": -0.13182565576449157,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000007",
+        "generation_method": "evolution_initial",
+        "parent_formulas": [],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000015",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260747,
+      "split": "train",
+      "n_steps": 9,
+      "formula": "MOM20 MA60_DEV MOM5 ABS ADD JUMP ABS ADD",
+      "formula_tokens": [
+        "MOM20",
+        "MA60_DEV",
+        "MOM5",
+        "ABS",
+        "ADD",
+        "JUMP",
+        "ABS",
+        "ADD"
+      ],
+      "formula_hash": "bd95810c323e666c5d0dec2b22022c66c0b1efe32de9be5485d6db49a4473d03",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -6.059632201960252,
+      "reward_breakdown": {
+        "total": -6.059632201960252,
+        "median_icir": -5.037393492748684,
+        "positive_return_fold_ratio": 0.3333333333333333,
+        "stability": 0.33962378279138605,
+        "median_turnover": 0.26047297297297306,
+        "normalized_complexity": 0.5,
+        "fold_icir_variance": 3.780825718630803,
+        "max_abs_correlation": 0.8102303784843301,
+        "positive_components": {
+          "median_icir": -5.037393492748684,
+          "positive_return_folds": 0.16666666666666666,
+          "stability": 0.08490594569784651
+        },
+        "penalties": {
+          "turnover": 0.02604729729729731,
+          "complexity": 0.1,
+          "fold_variance": 0.9452064296577007,
+          "correlation": 0.20255759462108253
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.07133927196017921,
+          "icir": -7.129197755589245,
+          "total_return": -0.1166889191847732,
+          "turnover": 0.26047297297297306,
+          "top_decile_sharpe": -1.1534189540259785,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.04607571645889737,
+          "icir": -5.037393492748684,
+          "total_return": 0.08647614364299083,
+          "turnover": 0.23166666666666672,
+          "top_decile_sharpe": 1.2961091995860552,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.021718665582527646,
+          "icir": -2.37762673335989,
+          "total_return": -0.09417766347376166,
+          "turnover": 0.2823076923076923,
+          "top_decile_sharpe": -1.1058729909234228,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000015",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "MOM20 AMP MOM20 MOM5 ABS ADD JUMP ABS SUB ADD",
+          "MOM20 AMP MA60_DEV MOM5 ABS ADD JUMP ABS SUB ADD"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000031",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260748,
+      "split": "train",
+      "n_steps": 4,
+      "formula": "MOM20 TURN ADD",
+      "formula_tokens": [
+        "MOM20",
+        "TURN",
+        "ADD"
+      ],
+      "formula_hash": "ecf9d58c025fef5bad2327204d6ef37b982422943350d1e262e19613e0f73140",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -8.602761914410248,
+      "reward_breakdown": {
+        "total": -8.602761914410248,
+        "median_icir": -8.375781941921073,
+        "positive_return_fold_ratio": 0.0,
+        "stability": 0.5528565643923631,
+        "median_turnover": 0.4346666666666667,
+        "normalized_complexity": 0.2,
+        "fold_icir_variance": 0.6541370944446494,
+        "max_abs_correlation": 0.47277269323775273,
+        "positive_components": {
+          "median_icir": -8.375781941921073,
+          "positive_return_folds": 0.0,
+          "stability": 0.13821414109809077
+        },
+        "penalties": {
+          "turnover": 0.043466666666666674,
+          "complexity": 0.04000000000000001,
+          "fold_variance": 0.16353427361116235,
+          "correlation": 0.11819317330943818
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.07376260459122044,
+          "icir": -8.375781941921073,
+          "total_return": -0.2425357785468718,
+          "turnover": 0.4020270270270272,
+          "top_decile_sharpe": -2.7756241027592528,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.05175728754691925,
+          "icir": -7.571930362846678,
+          "total_return": -0.013037472858170585,
+          "turnover": 0.4346666666666667,
+          "top_decile_sharpe": -0.12408616509368832,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.06909095327148299,
+          "icir": -9.541970913527212,
+          "total_return": -0.22331166179568562,
+          "turnover": 0.44038461538461554,
+          "top_decile_sharpe": -3.8844000304196444,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000031",
+        "generation_method": "crossover",
+        "parent_formulas": [
+          "MOM20 AMP MA20_DEV MOM5 ABS ADD JUMP ABS SUB ADD",
+          "TURN MOM20 JUMP MUL ABS NEG"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    },
+    {
+      "episode_id": "p11a_evolution_000011",
+      "policy_name": "evolution_teacher_replay",
+      "seed": 20260749,
+      "split": "train",
+      "n_steps": 8,
+      "formula": "MOM20 MOM20 JUMP MUL ABS DECAY SIGN",
+      "formula_tokens": [
+        "MOM20",
+        "MOM20",
+        "JUMP",
+        "MUL",
+        "ABS",
+        "DECAY",
+        "SIGN"
+      ],
+      "formula_hash": "a2aaf548196ffd093d5e8eea123f273e1ec3cc0f6784d900d304c9cf7a0498eb",
+      "evaluation_status": "training_evaluated",
+      "final_reward": -10.567385546494995,
+      "reward_breakdown": {
+        "total": -10.567385546494995,
+        "median_icir": -10.655347816706179,
+        "positive_return_fold_ratio": 0.6666666666666666,
+        "stability": 0.5707341904775579,
+        "median_turnover": 0.07769230769230771,
+        "normalized_complexity": 0.4,
+        "fold_icir_variance": 0.5656982265533406,
+        "max_abs_correlation": 0.6354432933358946,
+        "positive_components": {
+          "median_icir": -10.655347816706179,
+          "positive_return_folds": 0.3333333333333333,
+          "stability": 0.14268354761938948
+        },
+        "penalties": {
+          "turnover": 0.007769230769230771,
+          "complexity": 0.08000000000000002,
+          "fold_variance": 0.14142455663833514,
+          "correlation": 0.15886082333397364
+        },
+        "formula": "w_icir*median(train_icir) + w_pos*positive_train_return_ratio + w_stability/(1+std(train_icir)) - w_turnover*median(train_turnover) - w_complexity*(complexity/max_complexity) - w_variance*var(train_icir) - w_correlation*max_abs_train_factor_correlation",
+        "training_fold_ids": [
+          "T1",
+          "T2",
+          "T3"
+        ]
+      },
+      "training_fold_metrics": [
+        {
+          "fold_id": "T1",
+          "start": "2025-01-22",
+          "end": "2025-06-05",
+          "mean_ic": -0.06748328552154734,
+          "icir": -11.01638784317342,
+          "total_return": 0.062087742325094064,
+          "turnover": 0.11722972972972978,
+          "top_decile_sharpe": 0.7210322988838677,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T2",
+          "start": "2025-06-06",
+          "end": "2025-10-13",
+          "mean_ic": -0.045877444338749775,
+          "icir": -9.271297731172591,
+          "total_return": 0.216038950669738,
+          "turnover": 0.07633333333333336,
+          "top_decile_sharpe": 3.2605601847694463,
+          "dataset_role": "train"
+        },
+        {
+          "fold_id": "T3",
+          "start": "2025-10-14",
+          "end": "2026-02-12",
+          "mean_ic": -0.053765500067266325,
+          "icir": -10.655347816706179,
+          "total_return": -0.005191495176534944,
+          "turnover": 0.07769230769230771,
+          "top_decile_sharpe": 0.015475072764140958,
+          "dataset_role": "train"
+        }
+      ],
+      "provenance": {
+        "source_phase": "P10",
+        "source_search_method": "evolution",
+        "source_candidate_id": "evolution_000011",
+        "generation_method": "mutation",
+        "parent_formulas": [
+          "MOM20 MOM20 JUMP MUL ABS NEG SIGN"
+        ],
+        "selection": "accepted evolution pool candidate"
+      }
+    }
+  ],
+  "failures": [],
+  "known_limits": [
+    "teacher replay reconstructs token decisions from final evolution formulas",
+    "it does not reconstruct mutation/crossover proposal probabilities",
+    "the dataset is for policy pretraining, not OOS performance claims"
+  ]
+}

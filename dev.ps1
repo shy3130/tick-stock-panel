@@ -7,9 +7,7 @@
 #
 # Ctrl-C closes the backend.
 #
-# Note: the React frontend has been removed (2026-07-22 decision) — the
-# display layer is handled directly by the AI assistant conversation, so no
-# local web UI is launched here.
+# This launcher starts the backend API only.
 #
 # If you see "running scripts is disabled":
 #   Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned

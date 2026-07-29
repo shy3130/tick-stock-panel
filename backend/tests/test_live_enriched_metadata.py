@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
 
+from app.market_time import cn_today
 from app.strategy.engine import StrategyEngine
 from app.strategy.monitor import MonitorRuleEngine
 from app.tickflow.repository import DataStore, KlineRepository
@@ -80,11 +81,12 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
     )
     repo = _repo(tmp_path / "data")
     live = _live_row("600000.SH", 10.0).with_columns(
-        pl.lit(30_000_000.0).alias("amount")
+        pl.lit(cn_today()).alias("date"),
+        pl.lit(30_000_000.0).alias("amount"),
     )
     repo.flush_live_enriched_asset("stock", live)
     current, _ = repo.get_enriched_latest()
-    history = current.with_columns(pl.lit(date(2026, 7, 17)).alias("date"))
+    history = current.with_columns(pl.lit(cn_today() - timedelta(days=3)).alias("date"))
 
     monitor = MonitorRuleEngine()
     monitor.set_strategy_engine(StrategyEngine([Path(strategy_dir)]))

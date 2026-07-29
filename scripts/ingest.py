@@ -32,6 +32,9 @@
   # 等价: TUSHARE_TOKEN=xxx TUSHARE_API_BASE=http://tushare.xyz/v3/ python scripts/ingest.py --tushare
   # 日K已落盘但后续阶段崩溃时，复用已落盘数据补跑（不重抓日K）：
   python scripts/ingest.py --tushare --resume
+
+注意：Tushare 旧入口不再默认清空历史数据。只有显式传入 --clear-first 才会删除
+已有分区；日常补数请优先从 backend/ 运行 ``python -m scripts.tushare_sync``。
 """
 from __future__ import annotations
 
@@ -542,6 +545,24 @@ def main() -> None:
     ap.add_argument("--tushare", action="store_true", help="从 Tushare 拉取")
     ap.add_argument("--resume", action="store_true",
                     help="复用已落盘的 kline_daily/adj_factor，仅补跑 instruments+pipeline+cache")
+    ap.add_argument(
+        "--clear-first",
+        action="store_true",
+        help="危险：显式删除现有日线、复权因子和缓存后重建；默认绝不删除",
+    )
+    ap.add_argument(
+        "--index-start",
+        type=str,
+        default="20240401",
+        help="安全增量同步时的指数/结构信号暖机起点",
+    )
+    ap.add_argument(
+        "--refresh-existing",
+        action="store_true",
+        help="安全增量同步时显式刷新已有有效分区；默认跳过",
+    )
+    ap.add_argument("--skip-daily-basic", action="store_true")
+    ap.add_argument("--skip-pipeline", action="store_true")
     ap.add_argument("--ts-token", type=str, default="", help="Tushare token")
     ap.add_argument("--start", type=str, default="20230101")
     ap.add_argument("--end", type=str, default=date.today().strftime("%Y%m%d"))
@@ -556,14 +577,39 @@ def main() -> None:
     elif args.dir:
         df = load_dir(Path(args.dir))
     elif args.tushare:
+        if args.resume and args.clear_first:
+            ap.error("--resume 与 --clear-first 不能同时使用")
         token = args.ts_token or os.environ.get("TUSHARE_TOKEN", "")
         base = os.environ.get("TUSHARE_API_BASE", "http://api.tushare.pro")
         if not token:
             raise SystemExit("请提供 --ts-token 或设置 TUSHARE_TOKEN 环境变量")
-        summary = ingest_from_tushare(
-            base, token, args.start, args.end,
-            clear_first=not args.resume, resume=args.resume,
-        )
+        if args.clear_first or args.resume:
+            summary = ingest_from_tushare(
+                base, token, args.start, args.end,
+                clear_first=bool(args.clear_first), resume=args.resume,
+            )
+        else:
+            # 默认走 backend/scripts/tushare_sync.py 的安全增量实现：已有有效日线
+            # 跳过，新分区校验后原子写入，绝不执行目录删除。
+            backend_dir = Path(__file__).resolve().parents[1] / "backend"
+            if str(backend_dir) not in sys.path:
+                sys.path.insert(0, str(backend_dir))
+            from scripts.tushare_sync import (
+                TushareClient,
+                _parse_api_date,
+                sync_tushare,
+            )
+
+            summary = sync_tushare(
+                client=TushareClient(base_url=base, token=token),
+                data_dir=Path(os.environ.get("DATA_DIR") or backend_dir.parent / "data"),
+                start=_parse_api_date(args.start),
+                end=_parse_api_date(args.end),
+                index_start=_parse_api_date(args.index_start),
+                refresh_existing=bool(args.refresh_existing),
+                include_daily_basic=not args.skip_daily_basic,
+                run_enrichment=not args.skip_pipeline,
+            )
         print("完成。后端重启后可在「选股/策略」与「回测」页使用真实数据。")
         print("摘要:", summary)
         return

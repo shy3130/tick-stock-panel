@@ -186,6 +186,7 @@ def factor_run(req: FactorBacktestRequest, request: Request):
 
 class StrategyBacktestRequest(BaseModel):
     strategy_id: str
+    composition: dict | None = None
     symbols: list[str] | None = None
     start: date | None = None
     end: date | None = None
@@ -226,6 +227,7 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         end=end,
         params=req.params,
         overrides=req.overrides,
+        composition=req.composition,
         matching=req.matching,
         entry_fill=req.entry_fill,
         exit_fill=req.exit_fill,

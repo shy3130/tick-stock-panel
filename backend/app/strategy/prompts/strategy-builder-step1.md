@@ -5,7 +5,7 @@
 ## 文件与范围铁律（不可违反）
 
 1. **只创建这一个策略文件**：只生成一个 `.py` 文件，绝不创建多文件、不拆分模块、不跨文件 import
-2. **绝不触碰项目源码**：不要写任何会修改 `backend/`、`docs/`、`frontend/` 等现有文件的代码；不要 `import os/sys/pathlib` 等文件系统模块
+2. **绝不触碰项目源码**：不要写任何会修改 `backend/`、`docs/`、`artifacts/` 等现有文件的代码；不要 `import os/sys/pathlib` 等文件系统模块
 3. **不得放入内置策略目录**：AI 生成的策略只属于 `data/strategies/ai/`，文件名/ID 用 `ai_` 前缀；内置目录 `backend/app/strategy/builtin/` 由项目维护，AI 不得染指
 4. Polars 策略只 `import polars as pl`；矩阵策略只 import NumPy 和 `app.backtest.matrix` 协议/算子
 5. 贴合用户需求优先：不要为了套模板而歪曲策略含义

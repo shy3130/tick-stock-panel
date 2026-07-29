@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>regime 条件化应用 · walk-forward OOS 对照</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+         color: #1a1a1a; background: #fafafa; margin: 0; padding: 28px; line-height: 1.6; }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 28px 0 10px; }
+  .sub { color: #666; font-size: 13px; margin: 0 0 18px; }
+  .card { background: #fff; border: 1px solid #e6e6e6; border-radius: 12px; padding: 18px 20px; margin: 14px 0; }
+  .note { background: #fff8ec; border: 1px solid #f3e0bd; border-radius: 10px; padding: 12px 16px; font-size: 13px; color: #6b531f; }
+  .verdict { background: #eef6ec; border: 1px solid #cfe6c6; border-radius: 10px; padding: 14px 18px; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 6px; }
+  th, td { border: 1px solid #ececec; padding: 7px 9px; text-align: right; }
+  th { background: #f5f5f5; font-weight: 600; }
+  td.l, th.l { text-align: left; }
+  .pos { color: #2e7d32; font-weight: 600; }
+  .neg { color: #c0392b; font-weight: 600; }
+  .win { background: #eef6ec; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #555; margin: 4px 0 10px; }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .sw { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+  .mini { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap: 12px; margin: 12px 0; }
+  .mc { background: #f7f7f7; border-radius: 8px; padding: 12px 14px; }
+  .mc .lbl { font-size: 12px; color: #777; }
+  .mc .val { font-size: 21px; font-weight: 600; margin-top: 3px; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>regime 条件化应用 · walk-forward OOS 对照</h1>
+  <p class="sub">检验「按市场状态切换策略」是否真加值 — 硬切换 <code>regime_switch</code> vs 引擎软减仓 <code>regime_flat</code> vs 无 regime 基线</p>
+
+  <div class="note">
+    <b>口径</b>：400 只 universe（seed 20260723）+ 4 折 expanding 测试段，与 B 方案共用切分。数据仅来自
+    <code>data/kline_daily_enriched/**/*.parquet</code>，回测复用真实引擎（费/滑点 5bps、止损 -5%、持仓上限 20 日）。
+    两腿参数固定、非样本内训练；regime 信号为样本外等权指数 MA60（1 日滞后）/ 引擎 leader_index。<br>
+    <b>可比性提示</b>：两次运行之间底层 parquet 快照已增长，<code>random.sample(seed)</code> 抽到的 400 只 universe 实际不同，
+    故<b>绝对收益不可</b>与早先 B 方案报告（+9.46% 等）直接对照；本报告的结论基于<b>同一次运行内 5 个配置的可控对比</b>。
+  </div>
+
+  <div class="mini">
+    <div class="mc"><div class="lbl">regime_switch 正收益折</div><div class="val pos">3 / 4</div></div>
+    <div class="mc"><div class="lbl">regime_switch 均值 Sharpe</div><div class="val pos">+0.51</div></div>
+    <div class="mc"><div class="lbl">regime_switch 均值 MDD</div><div class="val">-15.8%</div></div>
+    <div class="mc"><div class="lbl">regime_switch 均值胜率</div><div class="val pos">33.2%</div></div>
+  </div>
+
+  <h2>每折 OOS 收益（%）</h2>
+  <div class="card">
+    <div class="legend">
+      <span><span class="sw" style="background:#888780"></span>mom_trend（无 regime）</span>
+      <span><span class="sw" style="background:#BA7517"></span>mom_trend_regime（软减仓 0.3）</span>
+      <span><span class="sw" style="background:#378ADD"></span>regime_flat（熊市空仓）</span>
+      <span><span class="sw" style="background:#5DCAA5"></span>pullback_to_support（熊市基准）</span>
+      <span><span class="sw" style="background:#639922"></span>regime_switch（硬切换）</span>
+    </div>
+    <div style="position: relative; width: 100%; height: 320px;">
+      <canvas id="c1" role="img" aria-label="每折 OOS 收益分组柱状图"></canvas>
+    </div>
+  </div>
+
+  <h2>跨区间均值对照</h2>
+  <div class="card">
+    <div style="position: relative; width: 100%; height: 230px;">
+      <canvas id="c2" role="img" aria-label="均值收益水平柱状图"></canvas>
+    </div>
+    <div style="position: relative; width: 100%; height: 230px; margin-top: 16px;">
+      <canvas id="c3" role="img" aria-label="均值 Sharpe 水平柱状图"></canvas>
+    </div>
+    <div style="position: relative; width: 100%; height: 230px; margin-top: 16px;">
+      <canvas id="c4" role="img" aria-label="均值最大回撤水平柱状图"></canvas>
+    </div>
+  </div>
+
+  <h2>完整结果表（F1–F4 × 5 配置）</h2>
+  <div class="card" style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr><th class="l">配置</th><th>折</th><th>收益%</th><th>Sharpe</th><th>MDD%</th><th>胜率%</th><th>笔数</th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <h2>诚实结论</h2>
+  <div class="verdict">
+    <p><b>1. regime 条件化确实加值，但幅度有限、且脆弱。</b>
+    在同一次可控运行内，<code>regime_switch</code>（牛→mom_trend / 熊→pullback_to_support）在 5 个配置中综合最优：
+    正收益折 3/4（其余最高仅 2/4）、均值 Sharpe +0.51（唯一显著为正）、均值 MDD -15.8%（最低）、均值胜率 33.2%（最高）。
+    它靠的是「熊市不只减仓、而是主动部署适合下跌市的 pullback 策略」——比单纯降暴露更进一步。</p>
+
+    <p><b>2. 软减仓（mom_trend_regime，熊市缩到 0.3 仓）反而最差。</b>
+    它均值收益 -3.87%、Sharpe -0.27，连「无 regime 的裸 mom_trend」（均值 -2.25%）都不如。
+    原因：部分暴露仍吃满熊市最差段，而 regime 信号在过渡期滞后，两头不讨好。
+    相比之下，<b>熊市直接空仓（regime_flat，bear_weight=0）更稳</b>：均值 +1.33%、Sharpe +0.15，优于软减仓与裸 mom。</p>
+
+    <p><b>3. 但 regime_switch 有单折炸裂风险。</b>
+    F4 它亏 -17.42%（全场最差单折），源于 regime 信号在震荡市频繁翻转、生成 183 笔交易（最高），被摩擦成本与 whipshaw 拖垮。
+    它的胜利主要由 F2（+13.49%，pullback 抓住反弹）与 F3（+11.51%）贡献。说明<b>收益高度依赖 regime 信号是否判对</b>。</p>
+
+    <p><b>4. 一个方法学警告：regime 信号源不统一。</b>
+    <code>regime_flat</code> 用引擎内置 leader_index 信号，<code>regime_switch</code> 用自实现的等权指数 MA60 信号——
+    后者在 F1 表现远好于前者（-25.09% vs +1.15%）。所以 regime_switch 的部分优势可能来自「更好的 regime 指标」，
+    而非「切换策略本身」。要做干净归因，需把两者统一到同一信号再比一次。</p>
+
+    <p><b>5. 与 B 方案一脉相承的判断。</b>
+    主因子 mom_trend 仍不是稳定 alpha（本运行 2/4 正、均值微负），regime 条件化能改善风险收益特征与胜率，
+    但无法把它变成「稳定赚钱的圣杯」。务实建议：以 <b>regime_flat（熊市空仓）作稳健默认</b>，
+    <b>regime_switch 作高收益/高风险变体</b>，且务必先统一 regime 信号、再做一次严格归因。</p>
+  </div>
+
+  <p class="sub" style="margin-top:18px;">
+    结果文件：<code>strategy_regime_conditional.json</code> · 新建策略：<code>app/strategy/builtin/regime_conditional.py</code> · 脚本：<code>run_regime_conditional.py</code>
+  </p>
+</div>
+
+<script>
+const C = { mom:'#888780', momr:'#BA7517', flat:'#378ADD', pb:'#5DCAA5', sw:'#639922' };
+const folds = ['F1\n25-01~06','F2\n25-06~10','F3\n25-10~26-02','F4\n26-02~06'];
+const data = {
+  mom:   [-14.27,-19.71,23.13,1.84],
+  momr:  [-13.13,-18.33,12.80,3.16],
+  flat:  [-25.09,-12.64,23.62,19.42],
+  pb:    [-17.28,28.65,-7.97,-2.34],
+  sw:    [1.15,13.49,11.51,-17.42]
+};
+const means = {
+  ret:  { mom:-2.25, momr:-3.87, flat:1.33, pb:0.26, sw:2.18 },
+  shar: { mom:-0.01, momr:-0.27, flat:0.15, pb:0.16, sw:0.51 },
+  mdd:  { mom:-23.25, momr:-18.58, flat:-19.71, pb:-21.33, sw:-15.80 }
+};
+const grid = '#eee', tick='#666';
+const baseScale = (title) => ({ grid:{color:grid}, ticks:{color:tick, font:{size:11}}, title:{display:true,text:title,color:'#444',font:{size:12}} });
+const negY = { grid:{color:grid}, ticks:{color:tick, font:{size:11}, callback:v=>v+'%'} };
+
+new Chart(document.getElementById('c1'), {
+  type:'bar',
+  data:{ labels:folds, datasets:[
+    {label:'mom_trend', data:data.mom, backgroundColor:C.mom},
+    {label:'mom_trend_regime', data:data.momr, backgroundColor:C.momr},
+    {label:'regime_flat', data:data.flat, backgroundColor:C.flat},
+    {label:'pullback_to_support', data:data.pb, backgroundColor:C.pb},
+    {label:'regime_switch', data:data.sw, backgroundColor:C.sw}
+  ]},
+  options:{ responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+(c.parsed.y>0?'+':'')+c.parsed.y+'%'}}},
+    scales:{ x:{ grid:{display:false}, ticks:{color:tick,font:{size:11}} }, y:negY } }
+});
+
+function hbar(id, vals, title, fmt){
+  const keys=['mom','momr','flat','pb','sw'];
+  const lbls=['mom_trend','mom_trend_regime','regime_flat','pullback','regime_switch'];
+  const cols=[C.mom,C.momr,C.flat,C.pb,C.sw];
+  new Chart(document.getElementById(id),{
+    type:'bar',
+    data:{ labels:lbls, datasets:[{ label:title, data:keys.map(k=>vals[k]), backgroundColor:cols }] },
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>(c.parsed.x>0?'+':'')+c.parsed.x+fmt}}},
+      scales:{ x:{ grid:{color:grid}, ticks:{color:tick,font:{size:11}, callback:v=>v+fmt} },
+               y:{ grid:{display:false}, ticks:{color:tick,font:{size:11}} } } }
+  });
+}
+hbar('c2', means.ret, '均值收益%', '%');
+hbar('c3', means.shar, '均值 Sharpe', '');
+hbar('c4', means.mdd, '均值最大回撤%', '%');
+
+// 结果表
+const rows = [
+  ['mom_trend','mom',[[-14.27,-0.78,-32.31,27.1,118],[-19.71,-1.47,-27.88,18.0,139],[23.13,1.87,-17.04,20.9,129],[1.84,0.34,-15.76,21.7,115]]],
+  ['mom_trend_regime','momr',[[-13.13,-1.50,-23.72,26.6,139],[-18.33,-1.38,-25.37,17.0,141],[12.80,1.39,-11.89,28.0,132],[3.16,0.43,-13.34,25.0,116]]],
+  ['regime_flat','flat',[[-25.09,-2.15,-32.72,22.3,103],[-12.64,-0.78,-19.74,17.7,147],[23.62,2.00,-15.22,31.4,121],[19.42,1.52,-11.18,25.2,103]]],
+  ['pullback_to_support','pb',[[-17.28,-1.28,-29.79,31.9,94],[28.65,2.48,-13.96,37.0,92],[-7.97,-0.64,-21.16,27.5,109],[-2.34,0.09,-20.40,27.1,96]]],
+  ['regime_switch','sw',[[1.15,0.28,-19.78,33.8,136],[13.49,1.85,-7.89,38.1,118],[11.51,1.50,-9.69,37.7,146],[-17.42,-1.61,-25.84,23.0,183]]]
+];
+const tb = document.getElementById('tbody');
+rows.forEach(([name,,folds])=>{
+  folds.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    if(name==='regime_switch') tr.className='win';
+    const retCls=r[0]>=0?'pos':'neg';
+    tr.innerHTML=`<td class="l">${i===0?`<b>${name}</b>`:''}</td><td>${'F'+(i+1)}</td>`+
+      `<td class="${retCls}">${r[0]>0?'+':''}${r[0].toFixed(2)}</td>`+
+      `<td>${r[1]>0?'+':''}${r[1].toFixed(2)}</td>`+
+      `<td class="neg">${r[2].toFixed(2)}</td>`+
+      `<td>${r[3].toFixed(1)}</td><td>${r[4]}</td>`;
+    tb.appendChild(tr);
+  });
+});
+</script>
+</body>
+</html>

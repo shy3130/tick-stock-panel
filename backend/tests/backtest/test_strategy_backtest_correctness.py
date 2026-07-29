@@ -312,6 +312,89 @@ def test_matrix_native_strategy_uses_shared_orchestrator_path():
     }
 
 
+def test_matrix_native_backtest_composes_existing_strategies():
+    start = date(2024, 1, 1)
+    panel = pl.DataFrame([
+        {"symbol": symbol, "name": symbol, "date": start + timedelta(days=day),
+         "open": 10.0, "high": 10.0, "low": 10.0, "close": 10.0,
+         "volume": 1.0, "amount": 1000.0, "raw_close": 10.0, "raw_high": 10.0,
+         "signal_limit_up": False, "signal_limit_down": False}
+        for day in range(2)
+        for symbol in ("A", "B")
+    ])
+
+    class NativeStrategy:
+        def __init__(self, entry, score, exit_=None):
+            self.entry = entry
+            self.score = score
+            self.exit = np.zeros_like(entry) if exit_ is None else exit_
+
+        def required_fields(self):
+            return frozenset({"open", "high", "low", "close", "volume"})
+
+        def required_warmup_bars(self, params):
+            return 1
+
+        def compute_signals(self, market, params):
+            return make_signal_matrix(
+                market.shape,
+                entry=self.entry,
+                exit=self.exit,
+                score=self.score,
+            )
+
+    common = {
+        "basic_filter": {"enabled": False},
+        "filter_fn": None,
+        "execution_backend": "matrix_native",
+        "required_features": frozenset({"amount"}),
+    }
+    base = _strategy(
+        **common,
+        meta={"id": "base", "name": "base", "scoring": {}, "params": [], "limit": 100},
+        matrix_strategy=NativeStrategy(
+            np.array([[1, 1], [1, 0]], dtype=np.uint8),
+            np.array([[1, 2], [3, 4]], dtype=np.float32),
+        ),
+    )
+    factor = _strategy(
+        **common,
+        meta={"id": "factor", "name": "factor", "scoring": {}, "params": [], "limit": 100},
+        matrix_strategy=NativeStrategy(
+            np.array([[0, 1], [1, 1]], dtype=np.uint8),
+            np.array([[4, 3], [2, 1]], dtype=np.float32),
+            np.array([[0, 0], [0, 1]], dtype=np.uint8),
+        ),
+    )
+
+    class MappedStrategyEngine:
+        def get(self, strategy_id):
+            return {"base": base, "factor": factor}[strategy_id]
+
+    engine = _EngineStub(panel)
+    result = StrategyBacktestService(engine, MappedStrategyEngine()).run(
+        StrategyBacktestConfig(
+            strategy_id="base",
+            symbols=None,
+            start=start,
+            end=start + timedelta(days=1),
+            matching="close_t",
+            composition={
+                "entry_mode": "and",
+                "components": [
+                    {"strategy_id": "base", "weight": 1},
+                    {"strategy_id": "factor", "weight": 1},
+                ],
+            },
+        )
+    )
+
+    assert result.error is None
+    np.testing.assert_array_equal(engine.sim_matrix.entry, [[0, 1], [1, 0]])
+    np.testing.assert_array_equal(engine.sim_matrix.exit, [[0, 0], [0, 1]])
+    assert result.config["composition"]["entry_mode"] == "and"
+
+
 def test_matrix_native_accepts_legacy_default_signal_overrides_but_rejects_replacements():
     start = date(2024, 1, 1)
     panel = pl.DataFrame([

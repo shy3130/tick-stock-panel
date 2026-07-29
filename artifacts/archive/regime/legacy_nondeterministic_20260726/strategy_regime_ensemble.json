@@ -1,0 +1,451 @@
+{
+  "config": {
+    "description": "regime 干净归因(2x2: signal x action) + 因子 ensemble，统一 walk-forward OOS",
+    "universe": 400,
+    "seed": 20260723,
+    "n_folds": 4,
+    "factor": "MOM20 MA60_DEV SIGN MUL",
+    "overrides": {
+      "stop_loss": -0.05,
+      "take_profit": null,
+      "trailing_stop": null,
+      "max_hold_days": 20
+    },
+    "note": "同一次运行内 8 配置可控对比；regime 信号源分 leader(引擎龙头指数) / ew(universe等权指数)；因子 ensemble=6 语义动量因子横截面归一等权平均。"
+  },
+  "folds": [
+    {
+      "fold": "F1",
+      "train": "2024-09-24~2025-01-21",
+      "test": "2025-01-22~2025-06-05",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": 0.0562,
+          "sharpe": 0.59,
+          "max_drawdown": -0.2445,
+          "win_rate": 0.2602,
+          "n_trades": 123,
+          "sortino": 0.81,
+          "calmar": 0.71,
+          "avg_pnl": 0.0107
+        },
+        {
+          "key": "flat_leader",
+          "total_return": -0.0636,
+          "sharpe": -0.47,
+          "max_drawdown": -0.182,
+          "win_rate": 0.2667,
+          "n_trades": 90,
+          "sortino": -0.64,
+          "calmar": -0.96,
+          "avg_pnl": -0.0075
+        },
+        {
+          "key": "switch_leader",
+          "total_return": -0.0806,
+          "sharpe": -0.39,
+          "max_drawdown": -0.2382,
+          "win_rate": 0.3232,
+          "n_trades": 164,
+          "sortino": -0.51,
+          "calmar": -0.92,
+          "avg_pnl": -0.004
+        },
+        {
+          "key": "flat_ew",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew",
+          "total_return": 0.044,
+          "sharpe": 0.6,
+          "max_drawdown": -0.1569,
+          "win_rate": 0.3281,
+          "n_trades": 128,
+          "sortino": 0.73,
+          "calmar": 0.86,
+          "avg_pnl": 0.0045
+        },
+        {
+          "key": "flat_ew20",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew20",
+          "total_return": 0.044,
+          "sharpe": 0.6,
+          "max_drawdown": -0.1569,
+          "win_rate": 0.3281,
+          "n_trades": 128,
+          "sortino": 0.73,
+          "calmar": 0.86,
+          "avg_pnl": 0.0045
+        },
+        {
+          "key": "ensemble",
+          "total_return": -0.2271,
+          "sharpe": -1.29,
+          "max_drawdown": -0.3636,
+          "win_rate": 0.1944,
+          "n_trades": 144,
+          "sortino": -1.6,
+          "calmar": -1.46,
+          "avg_pnl": -0.0192
+        }
+      ]
+    },
+    {
+      "fold": "F2",
+      "train": "2024-09-24~2025-06-05",
+      "test": "2025-06-06~2025-10-13",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": 0.2929,
+          "sharpe": 2.01,
+          "max_drawdown": -0.1221,
+          "win_rate": 0.2752,
+          "n_trades": 109,
+          "sortino": 3.17,
+          "calmar": 9.19,
+          "avg_pnl": 0.032
+        },
+        {
+          "key": "flat_leader",
+          "total_return": 0.3581,
+          "sharpe": 2.4,
+          "max_drawdown": -0.11,
+          "win_rate": 0.3009,
+          "n_trades": 113,
+          "sortino": 3.8,
+          "calmar": 13.2,
+          "avg_pnl": 0.0348
+        },
+        {
+          "key": "switch_leader",
+          "total_return": 0.3273,
+          "sharpe": 2.4,
+          "max_drawdown": -0.0848,
+          "win_rate": 0.336,
+          "n_trades": 125,
+          "sortino": 3.73,
+          "calmar": 15.25,
+          "avg_pnl": 0.0258
+        },
+        {
+          "key": "flat_ew",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew",
+          "total_return": 0.008,
+          "sharpe": 0.22,
+          "max_drawdown": -0.0924,
+          "win_rate": 0.3984,
+          "n_trades": 128,
+          "sortino": 0.29,
+          "calmar": 0.26,
+          "avg_pnl": 0.0007
+        },
+        {
+          "key": "flat_ew20",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew20",
+          "total_return": 0.008,
+          "sharpe": 0.22,
+          "max_drawdown": -0.0924,
+          "win_rate": 0.3984,
+          "n_trades": 128,
+          "sortino": 0.29,
+          "calmar": 0.26,
+          "avg_pnl": 0.0007
+        },
+        {
+          "key": "ensemble",
+          "total_return": 0.1527,
+          "sharpe": 1.23,
+          "max_drawdown": -0.1172,
+          "win_rate": 0.2328,
+          "n_trades": 116,
+          "sortino": 1.82,
+          "calmar": 4.4,
+          "avg_pnl": 0.0163
+        }
+      ]
+    },
+    {
+      "fold": "F3",
+      "train": "2024-09-24~2025-10-13",
+      "test": "2025-10-14~2026-02-12",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": -0.1542,
+          "sharpe": -1.15,
+          "max_drawdown": -0.2494,
+          "win_rate": 0.1862,
+          "n_trades": 145,
+          "sortino": -1.43,
+          "calmar": -1.56,
+          "avg_pnl": -0.0125
+        },
+        {
+          "key": "flat_leader",
+          "total_return": -0.1427,
+          "sharpe": -1.54,
+          "max_drawdown": -0.2179,
+          "win_rate": 0.2846,
+          "n_trades": 123,
+          "sortino": -1.88,
+          "calmar": -1.67,
+          "avg_pnl": -0.012
+        },
+        {
+          "key": "switch_leader",
+          "total_return": -0.2381,
+          "sharpe": -2.3,
+          "max_drawdown": -0.2892,
+          "win_rate": 0.2925,
+          "n_trades": 212,
+          "sortino": -2.73,
+          "calmar": -1.9,
+          "avg_pnl": -0.0135
+        },
+        {
+          "key": "flat_ew",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew",
+          "total_return": 0.0637,
+          "sharpe": 0.88,
+          "max_drawdown": -0.0906,
+          "win_rate": 0.3462,
+          "n_trades": 156,
+          "sortino": 1.23,
+          "calmar": 2.19,
+          "avg_pnl": 0.0045
+        },
+        {
+          "key": "flat_ew20",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew20",
+          "total_return": 0.0637,
+          "sharpe": 0.88,
+          "max_drawdown": -0.0906,
+          "win_rate": 0.3462,
+          "n_trades": 156,
+          "sortino": 1.23,
+          "calmar": 2.19,
+          "avg_pnl": 0.0045
+        },
+        {
+          "key": "ensemble",
+          "total_return": -0.2391,
+          "sharpe": -2.03,
+          "max_drawdown": -0.315,
+          "win_rate": 0.1699,
+          "n_trades": 153,
+          "sortino": -2.5,
+          "calmar": -1.75,
+          "avg_pnl": -0.0177
+        }
+      ]
+    },
+    {
+      "fold": "F4",
+      "train": "2024-09-24~2026-02-12",
+      "test": "2026-02-13~2026-06-30",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": 0.0946,
+          "sharpe": 0.81,
+          "max_drawdown": -0.2156,
+          "win_rate": 0.1714,
+          "n_trades": 140,
+          "sortino": 1.15,
+          "calmar": 1.39,
+          "avg_pnl": 0.0118
+        },
+        {
+          "key": "flat_leader",
+          "total_return": 0.2017,
+          "sharpe": 1.64,
+          "max_drawdown": -0.1342,
+          "win_rate": 0.192,
+          "n_trades": 125,
+          "sortino": 2.51,
+          "calmar": 5.24,
+          "avg_pnl": 0.0198
+        },
+        {
+          "key": "switch_leader",
+          "total_return": -0.0264,
+          "sharpe": -0.01,
+          "max_drawdown": -0.2013,
+          "win_rate": 0.2088,
+          "n_trades": 182,
+          "sortino": -0.01,
+          "calmar": -0.37,
+          "avg_pnl": -0.0002
+        },
+        {
+          "key": "flat_ew",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew",
+          "total_return": -0.1614,
+          "sharpe": -1.84,
+          "max_drawdown": -0.1914,
+          "win_rate": 0.2134,
+          "n_trades": 164,
+          "sortino": -2.28,
+          "calmar": -2.09,
+          "avg_pnl": -0.01
+        },
+        {
+          "key": "flat_ew20",
+          "error": "在指定区间内未产生买入信号"
+        },
+        {
+          "key": "switch_ew20",
+          "total_return": -0.1614,
+          "sharpe": -1.84,
+          "max_drawdown": -0.1914,
+          "win_rate": 0.2134,
+          "n_trades": 164,
+          "sortino": -2.28,
+          "calmar": -2.09,
+          "avg_pnl": -0.01
+        },
+        {
+          "key": "ensemble",
+          "total_return": -0.0442,
+          "sharpe": -0.05,
+          "max_drawdown": -0.2651,
+          "win_rate": 0.1554,
+          "n_trades": 148,
+          "sortino": -0.07,
+          "calmar": -0.46,
+          "avg_pnl": -0.0002
+        }
+      ]
+    }
+  ],
+  "aggregate": {
+    "mom_trend": {
+      "positive_folds": 3,
+      "n_folds": 4,
+      "mean_total_return": 0.0724,
+      "mean_sharpe": 0.565,
+      "mean_max_drawdown": -0.2079,
+      "mean_win_rate": 0.2233,
+      "mean_n_trades": 129.2,
+      "note": "基线：主因子 mom_trend，无 regime"
+    },
+    "flat_leader": {
+      "positive_folds": 2,
+      "n_folds": 4,
+      "mean_total_return": 0.0884,
+      "mean_sharpe": 0.507,
+      "mean_max_drawdown": -0.161,
+      "mean_win_rate": 0.2611,
+      "mean_n_trades": 112.8,
+      "note": "熊市空仓(flat) + leader 信号（= regime_flat，引擎 leader_index bear_weight=0）"
+    },
+    "switch_leader": {
+      "positive_folds": 1,
+      "n_folds": 4,
+      "mean_total_return": -0.0045,
+      "mean_sharpe": -0.075,
+      "mean_max_drawdown": -0.2034,
+      "mean_win_rate": 0.2901,
+      "mean_n_trades": 170.8,
+      "note": "熊市切 pullback(switch) + leader 信号（与 flat_leader 同源，做干净归因）"
+    },
+    "flat_ew": {
+      "positive_folds": 0,
+      "n_folds": 4,
+      "mean_total_return": null,
+      "mean_sharpe": null,
+      "mean_max_drawdown": null,
+      "mean_win_rate": null,
+      "mean_n_trades": null,
+      "note": "熊市空仓(flat) + 等权指数(ew) 信号"
+    },
+    "switch_ew": {
+      "positive_folds": 3,
+      "n_folds": 4,
+      "mean_total_return": -0.0114,
+      "mean_sharpe": -0.035,
+      "mean_max_drawdown": -0.1328,
+      "mean_win_rate": 0.3215,
+      "mean_n_trades": 144.0,
+      "note": "熊市切 pullback(switch) + 等权指数(ew) 信号（= 原 regime_switch）"
+    },
+    "flat_ew20": {
+      "positive_folds": 0,
+      "n_folds": 4,
+      "mean_total_return": null,
+      "mean_sharpe": null,
+      "mean_max_drawdown": null,
+      "mean_win_rate": null,
+      "mean_n_trades": null,
+      "note": "熊市空仓(flat) + 等权指数 MA20 信号（响应式，牛腿可部署）"
+    },
+    "switch_ew20": {
+      "positive_folds": 3,
+      "n_folds": 4,
+      "mean_total_return": -0.0114,
+      "mean_sharpe": -0.035,
+      "mean_max_drawdown": -0.1328,
+      "mean_win_rate": 0.3215,
+      "mean_n_trades": 144.0,
+      "note": "熊市切 pullback(switch) + 等权指数 MA20 信号（干净动作效应）"
+    },
+    "ensemble": {
+      "positive_folds": 1,
+      "n_folds": 4,
+      "mean_total_return": -0.0894,
+      "mean_sharpe": -0.535,
+      "mean_max_drawdown": -0.2652,
+      "mean_win_rate": 0.1881,
+      "mean_n_trades": 140.2,
+      "note": "因子 ensemble：6 语义动量因子横截面归一后等权平均"
+    }
+  },
+  "attribution": {
+    "action_effect_leader": {
+      "mean_total_return": -0.0929,
+      "mean_sharpe": -0.582,
+      "mean_max_drawdown": -0.0424
+    },
+    "action_effect_ew": {
+      "mean_total_return": null,
+      "mean_sharpe": null,
+      "mean_max_drawdown": null
+    },
+    "signal_effect_flat": {
+      "mean_total_return": null,
+      "mean_sharpe": null,
+      "mean_max_drawdown": null
+    },
+    "signal_effect_switch": {
+      "mean_total_return": 0.0069,
+      "mean_sharpe": -0.04,
+      "mean_max_drawdown": -0.0706
+    },
+    "action_effect_ew20": {
+      "mean_total_return": null,
+      "mean_sharpe": null,
+      "mean_max_drawdown": null
+    }
+  }
+}

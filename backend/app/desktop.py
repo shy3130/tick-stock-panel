@@ -8,7 +8,7 @@
   1. 单实例锁 — 已运行则聚焦已有窗口并退出
   2. 选可用端口 — 从 settings.port 起, 被占则递增
   3. 后台线程起 uvicorn (仅监听 127.0.0.1, 不暴露外网)
-  4. 主线程起 pywebview 窗口渲染前端
+  4. 主线程用 pywebview 打开后端 OpenAPI 文档（无自定义前端）
   5. 窗口关闭 → 优雅停止 uvicorn → 进程退出
 
 不含: 业务逻辑、配置持久化、监控告警 (全在 app.main 里)。
@@ -268,7 +268,7 @@ def _wait_for_server(port: int, timeout: float = 60.0) -> bool:
 
 
 def _open_window(url: str) -> None:
-    """主线程: 用 pywebview 打开桌面窗口。"""
+    """主线程：用 pywebview 打开 OpenAPI 文档窗口。"""
     import webview  # type: ignore[import-not-found]
 
     window = webview.create_window(
@@ -325,8 +325,8 @@ def main() -> int:
             _release_single_instance()
             return 1
 
-        url = f"http://127.0.0.1:{port}"
-        logger.info("打开桌面窗口: %s", url)
+        url = f"http://127.0.0.1:{port}/docs"
+        logger.info("打开 OpenAPI 文档窗口: %s", url)
         _open_window(url)
 
         # 窗口关闭后, 进程退出 (daemon 线程会被回收)

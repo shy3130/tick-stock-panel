@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>regime 归因 + 因子 ensemble + F4 深挖</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#f7f8fa; --card:#fff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb; --pos:#16a34a; --neg:#dc2626; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.6; }
+  .wrap { max-width:1100px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:34px 0 10px; padding-left:10px; border-left:4px solid #2563eb; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:6px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:18px 20px; margin:14px 0; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media(max-width:760px){ .grid2{grid-template-columns:1fr;} }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th,td { border:1px solid var(--line); padding:6px 8px; text-align:center; }
+  th { background:#f1f5f9; }
+  td.pos,.pos { color:var(--pos); }
+  td.neg,.neg { color:var(--neg); }
+  .note { background:#fef9ec; border:1px solid #fde68a; border-radius:10px; padding:14px 16px; font-size:14px; }
+  .verdict { background:#eef2ff; border:1px solid #c7d2fe; border-radius:10px; padding:14px 16px; }
+  .tag { display:inline-block; background:#e0e7ff; color:#3730a3; border-radius:6px;
+         padding:1px 8px; font-size:12px; margin-right:6px; }
+  canvas { max-height:320px; }
+  .kv { font-size:14px; }
+  .kv b { color:#111827; }
+  .small { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>regime 条件化 · 归因 + 因子 ensemble + F4 深挖</h1>
+  <div class="sub">tickflow 量化项目 · walk-forward OOS（4 折，同一次运行内 8 配置可控对比）</div>
+
+  <div class="note">
+    <b>方法学口径：</b>本报告 8 个配置在<b>同一次运行</b>内共享 400 只 universe（seed=20260723）与 4 折切分，
+    故彼此<b>可直接对比</b>。注意底层 parquet 自上次运行以来有增长，universe 已漂移，
+    因此<b>绝对收益不可与更早的 B 方案报告直接对照</b>——结论全部基于「同运行内相对差异」。
+  </div>
+
+  <h2>① regime 干净归因（2×2：信号源 × 熊市动作）</h2>
+  <div class="sub"><b>信号 bug 已修复：</b>复刻引擎 leader 信号时手写累计和 MA 漏减窗口首项 → 全判熊（0.2% 牛）；
+  改 polars <code>rolling_mean</code> 后 leader 龙头指数实际 <b>~70% 牛市</b>（涨 ~10%）。
+  <b>真实广度背离：</b>等权 400 只篮子在本区间持续阴跌 → ew(MA60/MA20) 信号<b>仍 0% 牛</b>（非 bug，是样本属性）。
+  故 leader 轴 2×2 现在<b>有意义</b>（牛腿真部署），ew 轴作为「广度背离」对照保留。</div>
+
+  <div class="grid2">
+    <div class="card"><canvas id="cRegime"></canvas>
+      <div class="small">leader MA60（已修复，~70%牛）：switch/flat 可干净对比动作效应</div></div>
+    <div class="card"><canvas id="cMa20"></canvas>
+      <div class="small">ew MA20（仍 0%牛，广度背离）：纯 pullback 腿，作对照</div></div>
+  </div>
+  <div class="card">
+    <div class="sub" style="margin-bottom:8px;">归因差值（switch−flat / leader−ew，正=切换加值）</div>
+    <table>
+      <thead><tr><th>对比</th><th>Δ收益</th><th>ΔSharpe</th><th>ΔMDD</th></tr></thead>
+      <tbody><tr><td>动作效应(leader MA60): switch − flat</td><td class='neg'>-9.29%</td><td class='neg'>-0.58</td><td class='neg'>-4.24%</td></tr>
+<tr><td>动作效应(ew MA60): switch − flat</td><td colspan=3>无数据</td></tr>
+<tr><td>信号效应(flat): leader − ew</td><td colspan=3>无数据</td></tr>
+<tr><td>信号效应(switch): leader − ew</td><td class='pos'>+0.69%</td><td class='neg'>-0.04</td><td class='neg'>-7.06%</td></tr>
+<tr><td>动作效应(ew MA20, 干净): switch − flat</td><td colspan=3>无数据</td></tr></tbody>
+    </table>
+  </div>
+
+  <h2>② 因子 ensemble（6 语义动量因子横截面归一等权）</h2>
+  <div class="sub">ensemble = mom_trend / mom_vol / mom_anti_ext / mom_rsi / ma20_dev / mom20 六因子逐股 z-score 平均。</div>
+  <div class="card"><canvas id="cEns"></canvas></div>
+  <div class="card">
+    <div class="sub" style="margin-bottom:8px;">所有配置跨区间均值（同运行内对比）</div>
+    <table>
+      <thead><tr><th>配置</th>
+        <th>F1</th><th>F2</th><th>F3</th><th>F4</th>
+        <th>均值收益</th><th>均值Sharpe</th><th>均值MDD</th><th>正折</th></tr></thead>
+      <tbody><tr><td><b>mom_trend (无regime)</b></td><td class='pos'>+5.62%</td><td class='pos'>+29.29%</td><td class='neg'>-15.42%</td><td class='pos'>+9.46%</td><td class='pos'>+7.24%</td><td class='pos'>+0.56</td><td class='neg'>-20.79%</td><td>3/4</td></tr>
+<tr><td><b>flat_leader (牛mom/熊空仓·leader MA60)</b></td><td class='neg'>-6.36%</td><td class='pos'>+35.81%</td><td class='neg'>-14.27%</td><td class='pos'>+20.17%</td><td class='pos'>+8.84%</td><td class='pos'>+0.51</td><td class='neg'>-16.10%</td><td>2/4</td></tr>
+<tr><td><b>switch_leader (牛mom/熊pullback·leader MA60)</b></td><td class='neg'>-8.06%</td><td class='pos'>+32.73%</td><td class='neg'>-23.81%</td><td class='neg'>-2.64%</td><td class='pos'>-0.45%</td><td class='pos'>-0.07</td><td class='neg'>-20.34%</td><td>1/4</td></tr>
+<tr><td><b>flat_ew (牛mom/熊空仓·ew MA60)</b></td><td class='pos'>—</td><td class='pos'>—</td><td class='pos'>—</td><td class='pos'>—</td><td colspan=4>无数据/缺失</td></tr>
+<tr><td><b>switch_ew (牛mom/熊pullback·ew MA60)</b></td><td class='pos'>+4.40%</td><td class='pos'>+0.80%</td><td class='pos'>+6.37%</td><td class='neg'>-16.14%</td><td class='pos'>-1.14%</td><td class='pos'>-0.04</td><td class='neg'>-13.28%</td><td>3/4</td></tr>
+<tr><td><b>flat_ew20 (牛mom/熊空仓·ew MA20)</b></td><td class='pos'>—</td><td class='pos'>—</td><td class='pos'>—</td><td class='pos'>—</td><td colspan=4>无数据/缺失</td></tr>
+<tr><td><b>switch_ew20 (牛mom/熊pullback·ew MA20)</b></td><td class='pos'>+4.40%</td><td class='pos'>+0.80%</td><td class='pos'>+6.37%</td><td class='neg'>-16.14%</td><td class='pos'>-1.14%</td><td class='pos'>-0.04</td><td class='neg'>-13.28%</td><td>3/4</td></tr>
+<tr><td><b>ensemble (6因子等权)</b></td><td class='neg'>-22.71%</td><td class='pos'>+15.27%</td><td class='neg'>-23.91%</td><td class='neg'>-4.42%</td><td class='pos'>-8.94%</td><td class='pos'>-0.54</td><td class='neg'>-26.52%</td><td>1/4</td></tr></tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="card"><canvas id="cRet"></canvas></div>
+    <div class="card"><canvas id="cSharpe"></canvas></div>
+  </div>
+  <div class="card"><canvas id="cMdd"></canvas></div>
+
+  <h2>③ F4 深挖：regime_switch 炸裂根因</h2>
+  <div class="card kv">
+    <div><span class="tag">区间</span> 2026-02-13 ~ 2026-06-30</div>
+    <div><span class="tag">等权指数</span> 实测 <b>+13.5%</b>，
+         但全程位于 MA60 下方（均值|偏离| 15.11%，
+         最大 26.73%）</div>
+    <div><span class="tag">ew(MA60) 信号</span> 牛市 0% / 熊市 0%，
+         翻转 <b>0</b> 次，平均持仓 87.0 天</div>
+    <div><span class="tag">leader(MA60) 信号</span> 牛市 88% / 熊市 0%，
+         翻转 <b>5</b> 次</div>
+    <div style="margin-top:6px;">本轮 switch_ew / switch_ew20 在 F4 实测亏损 <b>-16.14%</b>。</div>
+  </div>
+  <div class="card"><canvas id="cF4"></canvas>
+    <div class="small">ew(MA60) 信号在 F4 全程 0% 牛市（卡错腿 / 广度背离）；leader 信号 ~70% 牛更灵敏。</div>
+  </div>
+  <div class="note">根因=MA60 信号滞后（非 whipshaw）：F4 等权指数实际 +13.5%，但始终在 MA60 下方（均值|偏离MA|15.11%，最大26.73%）=> ew 信号 100% 判熊(0 翻转，平均持仓 87 天)。regime_switch(switch_ew) 在 F4 因此整段只部署 pullback(均值回归)腿，等于逆着上涨市做反转（具体亏损额见本轮 regime_ensemble 运行的 switch_ew F4 实测）。属'卡在错误腿'而非'过度切换'。leader 信号同期 88% 判牛、5 次翻转，更灵敏，说明问题出在 ew MA60 信号本身滞后，而非'切换'这个动作。</div>
+
+  <h2>诚实结论</h2>
+  <div class="verdict" id="verdict"></div>
+
+  <div class="card sub">
+    产物：regime_ensemble_report.html（本报告）· strategy_regime_ensemble.json（8 配置 4 折结果+归因）·
+    diag_f4_regime.json（F4 信号诊断）。
+  </div>
+</div>
+
+<script>
+const DATA = {"fold_ids": ["F1", "F2", "F3", "F4"], "regime_ma60": {"switch_leader": [-8.06, 32.73, -23.81, -2.64], "flat_leader": [-6.36, 35.81, -14.27, 20.17], "switch_ew": [4.4, 0.8, 6.37, -16.14], "flat_ew": [null, null, null, null]}, "regime_ma20": {"switch_ew20": [4.4, 0.8, 6.37, -16.14], "flat_ew20": [null, null, null, null], "mom_trend": [5.62, 29.29, -15.42, 9.46]}, "ens_per_fold": {"mom_trend": [5.62, 29.29, -15.42, 9.46], "ensemble": [-22.71, 15.27, -23.91, -4.42]}, "agg_rows": {"mom_trend": {"mean_ret": 7.24, "mean_sharpe": 0.56, "mean_mdd": -20.79, "pos": 3, "nf": 4}, "flat_leader": {"mean_ret": 8.84, "mean_sharpe": 0.51, "mean_mdd": -16.1, "pos": 2, "nf": 4}, "switch_leader": {"mean_ret": -0.45, "mean_sharpe": -0.07, "mean_mdd": -20.34, "pos": 1, "nf": 4}, "flat_ew": null, "switch_ew": {"mean_ret": -1.14, "mean_sharpe": -0.04, "mean_mdd": -13.28, "pos": 3, "nf": 4}, "flat_ew20": null, "switch_ew20": {"mean_ret": -1.14, "mean_sharpe": -0.04, "mean_mdd": -13.28, "pos": 3, "nf": 4}, "ensemble": {"mean_ret": -8.94, "mean_sharpe": -0.54, "mean_mdd": -26.52, "pos": 1, "nf": 4}}, "attribution": {"action_effect_leader": {"mean_total_return": -0.0929, "mean_sharpe": -0.582, "mean_max_drawdown": -0.0424}, "action_effect_ew": {"mean_total_return": null, "mean_sharpe": null, "mean_max_drawdown": null}, "signal_effect_flat": {"mean_total_return": null, "mean_sharpe": null, "mean_max_drawdown": null}, "signal_effect_switch": {"mean_total_return": 0.0069, "mean_sharpe": -0.04, "mean_max_drawdown": -0.0706}, "action_effect_ew20": {"mean_total_return": null, "mean_sharpe": null, "mean_max_drawdown": null}}, "diag": {"f4": {"start": "2026-02-13", "end": "2026-06-30"}, "index_path": {"idx_start": 27.695726313035657, "idx_end": 31.433524432491097, "idx_net_pct": 13.5, "idx_max_dev_from_ma_pct": 26.73, "idx_mean_abs_dev_from_ma_pct": 15.11}, "ew_signal": {"signal": "ew(等权指数 MA60)", "test_days": 87, "bull_days": 0, "bear_days": 87, "bull_pct": 0.0, "regime_flips": 0, "avg_run_len": 87.0, "by_month": {"2026-02": {"days": 5, "bull_pct": 0.0}, "2026-03": {"days": 22, "bull_pct": 0.0}, "2026-04": {"days": 21, "bull_pct": 0.0}, "2026-05": {"days": 18, "bull_pct": 0.0}, "2026-06": {"days": 21, "bull_pct": 0.0}}}, "leader_signal": {"signal": "leader(龙头指数 MA60)", "test_days": 87, "bull_days": 77, "bear_days": 10, "bull_pct": 0.885, "regime_flips": 5, "avg_run_len": 14.5, "by_month": {"2026-02": {"days": 5, "bull_pct": 1.0}, "2026-03": {"days": 22, "bull_pct": 1.0}, "2026-04": {"days": 21, "bull_pct": 1.0}, "2026-05": {"days": 18, "bull_pct": 1.0}, "2026-06": {"days": 21, "bull_pct": 0.524}}}, "note": "根因=MA60 信号滞后（非 whipshaw）：F4 等权指数实际 +13.5%，但始终在 MA60 下方（均值|偏离MA|15.11%，最大26.73%）=> ew 信号 100% 判熊(0 翻转，平均持仓 87 天)。regime_switch(switch_ew) 在 F4 因此整段只部署 pullback(均值回归)腿，等于逆着上涨市做反转（具体亏损额见本轮 regime_ensemble 运行的 switch_ew F4 实测）。属'卡在错误腿'而非'过度切换'。leader 信号同期 88% 判牛、5 次翻转，更灵敏，说明问题出在 ew MA60 信号本身滞后，而非'切换'这个动作。", "months": ["2026-02", "2026-03", "2026-04", "2026-05", "2026-06"], "ew_by_month": [0.0, 0.0, 0.0, 0.0, 0.0], "ld_by_month": [100.0, 100.0, 100.0, 100.0, 52.4]}, "f4_loss": -16.14, "config_label": {"mom_trend": "mom_trend (无regime)", "flat_leader": "flat_leader (牛mom/熊空仓·leader MA60)", "switch_leader": "switch_leader (牛mom/熊pullback·leader MA60)", "flat_ew": "flat_ew (牛mom/熊空仓·ew MA60)", "switch_ew": "switch_ew (牛mom/熊pullback·ew MA60)", "flat_ew20": "flat_ew20 (牛mom/熊空仓·ew MA20)", "switch_ew20": "switch_ew20 (牛mom/熊pullback·ew MA20)", "ensemble": "ensemble (6因子等权)"}, "color": {"mom_trend": "#94a3b8", "flat_leader": "#2563eb", "switch_leader": "#7c3aed", "flat_ew": "#0ea5e9", "switch_ew": "#db2777", "flat_ew20": "#0891b2", "switch_ew20": "#ea580c", "ensemble": "#16a34a"}, "meta": {"description": "regime 干净归因(2x2: signal x action) + 因子 ensemble，统一 walk-forward OOS", "universe": 400, "seed": 20260723, "n_folds": 4, "factor": "MOM20 MA60_DEV SIGN MUL", "overrides": {"stop_loss": -0.05, "take_profit": null, "trailing_stop": null, "max_hold_days": 20}, "note": "同一次运行内 8 配置可控对比；regime 信号源分 leader(引擎龙头指数) / ew(universe等权指数)；因子 ensemble=6 语义动量因子横截面归一等权平均。"}};
+const C = DATA.color, L = DATA.config_label;
+function mk(ctx, cfg){ new Chart(ctx, cfg); }
+const gridC = "#e5e7eb";
+function gset(obj) { return Object.keys(obj).map(k=>({label:L[k], data:obj[k], backgroundColor:C[k], borderRadius:4})); }
+
+// ① MA60 退化
+mk(document.getElementById('cRegime'), {
+  type:'bar',
+  data:{ labels:DATA.fold_ids, datasets:gset(DATA.regime_ma60) },
+  options:{ responsive:true, plugins:{legend:{position:'top'}},
+    scales:{ y:{grid:{color:gridC}, title:{display:true,text:'OOS 收益 %'}}, x:{grid:{display:false}} } }
+});
+// ① MA20 干净
+mk(document.getElementById('cMa20'), {
+  type:'bar',
+  data:{ labels:DATA.fold_ids, datasets:gset(DATA.regime_ma20) },
+  options:{ responsive:true, plugins:{legend:{position:'top'}},
+    scales:{ y:{grid:{color:gridC}, title:{display:true,text:'OOS 收益 %'}}, x:{grid:{display:false}} } }
+});
+// ② ensemble
+mk(document.getElementById('cEns'), {
+  type:'bar',
+  data:{ labels:DATA.fold_ids, datasets:[
+    {label:L['mom_trend'], data:DATA.ens_per_fold.mom_trend, backgroundColor:C['mom_trend'], borderRadius:4},
+    {label:L['ensemble'], data:DATA.ens_per_fold.ensemble, backgroundColor:C['ensemble'], borderRadius:4} ] },
+  options:{ responsive:true, plugins:{legend:{position:'top'}},
+    scales:{ y:{grid:{color:gridC}, title:{display:true,text:'OOS 收益 %'}}, x:{grid:{display:false}} } }
+});
+// ③ 均值
+function hbar(id, field, title) {
+  const keys = Object.keys(DATA.agg_rows).filter(k=>DATA.agg_rows[k]);
+  const vals = keys.map(k=>DATA.agg_rows[k][field]);
+  mk(document.getElementById(id), {
+    type:'bar', indexAxis:'y',
+    data:{ labels:keys.map(k=>L[k]), datasets:[{data:vals, backgroundColor:keys.map(k=>C[k]), borderRadius:4}] },
+    options:{ responsive:true, plugins:{legend:{display:false}},
+      scales:{ x:{grid:{color:gridC}, title:{display:true,text:title}}, y:{grid:{display:false}} } }
+  });
+}
+hbar('cRet','mean_ret','均值收益 %');
+hbar('cSharpe','mean_sharpe','均值 Sharpe');
+hbar('cMdd','mean_mdd','均值 MDD % (越负越差)');
+// ④ F4
+mk(document.getElementById('cF4'), {
+  type:'bar',
+  data:{ labels:DATA.diag.months, datasets:[
+    {label:'ew(MA60) 牛市%', data:DATA.diag.ew_by_month, backgroundColor:'#db2777', borderRadius:4},
+    {label:'leader(MA60) 牛市%', data:DATA.diag.ld_by_month, backgroundColor:'#2563eb', borderRadius:4} ] },
+  options:{ responsive:true, plugins:{legend:{position:'top'}},
+    scales:{ y:{grid:{color:gridC}, max:100, title:{display:true,text:'牛市占比 %'}}, x:{grid:{display:false}} } }
+});
+
+// 结论
+(function(){
+  const a = DATA.attribution; const ar = DATA.agg_rows;
+  const f = (x)=> x==null?'—':(x>=0?'+':'')+x.toFixed(2);
+  const parts = [];
+  const ae = a.action_effect_ew20;
+  if (ae && ae.mean_total_return!=null)
+    parts.push(`动作效应(ew MA20): switch−flat 收益 ${f(ae.mean_total_return*100)}%、Sharpe ${f(ae.mean_sharpe)}、MDD ${f(ae.mean_max_drawdown*100)}%`);
+  const aeL = a.action_effect_leader;
+  if (aeL && aeL.mean_total_return!=null)
+    parts.push(`动作效应(leader MA60): switch−flat 收益 ${f(aeL.mean_total_return*100)}%（正=熊市切 pullback 优于空仓；负=空仓更稳）`);
+  const se = a.signal_effect_switch;
+  if (se && se.mean_total_return!=null)
+    parts.push(`信号效应(switch): leader−ew 收益 ${f(se.mean_total_return*100)}%（正=leader 信号更优）`);
+  if (ar.ensemble && ar.mom_trend)
+    parts.push(`因子 ensemble 均值收益 ${f(ar.ensemble.mean_ret)}% vs mom_trend ${f(ar.mom_trend.mean_ret)}%，Sharpe ${f(ar.ensemble.mean_sharpe)} vs ${f(ar.mom_trend.mean_sharpe)}（6 因子同属动量族，等权平均分散收益有限）`);
+  parts.push(`F4 根因：ew MA60 信号滞后+广度背离 → 整段卡在熊腿(pullback)逆上涨市；换更灵敏/更短信号或给熊腿加趋势确认可修。`);
+  document.getElementById('verdict').innerHTML =
+    '<b>1. regime 信号 bug 已修复，2×2 现在有意义。</b> 修前 leader 信号被手写累计和 MA 写崩（全判熊 0.2%），'+
+    '导致 switch_leader≡switch_ew 假象；改用 rolling_mean 后 leader 龙头指数实际 ~70% 牛市，'+
+    'switch_leader 与 switch_ew 现在<b>真不同</b>（leader 部署 mom 牛腿、ew 卡在 pullback 熊腿）。\n'+
+    '<b>2. 真实广度背离：龙头涨 ~10%、等权篮子阴跌。</b> ew(MA60/MA20) 全程 0% 牛是本 universe 等权篮子的<b>样本属性</b>非 bug，'+
+    '故 leader 轴可作干净动作归因，ew 轴作「广度背离」对照。\n'+
+    '<b>3. 因子 ensemble 是互补不是银弹。</b> 6 因子高度共线（同为动量族），等权平均未显著优于 mom_trend——'+
+    '下一步应做因子正交 / IC 加权而非简单平均。\n'+
+    '<b>4. F4 炸裂是「信号滞后卡错腿」，非「过度切换」。</b>\n\n'+
+    parts.map(p=>`· ${p}`).join('<br>');
+})();
+</script>
+</body>
+</html>

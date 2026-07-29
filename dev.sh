@@ -6,8 +6,7 @@
 #   BACKEND_PORT=8000 ./dev.sh        # 改后端端口
 #
 # Ctrl-C 关闭后端。
-# 说明:前端(React)已移除 (2026-07-22 决策),显示层由 AI 对话直接承担,
-#       回测/报告产物通过 AI 助手呈现,无需本地 web UI。
+# 说明：本脚本只启动后端 API。
 
 set -euo pipefail
 

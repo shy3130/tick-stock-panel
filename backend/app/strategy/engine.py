@@ -294,6 +294,9 @@ class StrategyEngine:
         elif "/ai/" in normalized_path:
             source = "ai"
 
+        from app.strategy.catalog import apply_catalog_metadata
+        meta = apply_catalog_metadata(meta, source=source)
+
         if source == "builtin" and "asset_types" not in meta:
             raise ValueError("builtin strategy META must declare asset_types")
         meta.setdefault("asset_types", ["stock"])

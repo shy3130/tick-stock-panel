@@ -1,0 +1,44 @@
+{
+  "status": "complete_with_failures",
+  "source": "Tushare HTTP API",
+  "start": "2024-04-01",
+  "end": "2026-07-28",
+  "index_start": "2024-04-01",
+  "refresh_existing": false,
+  "workers": 8,
+  "existing_daily_partitions_skipped": 562,
+  "target_open_days": 563,
+  "daily_days_written": 0,
+  "daily_rows_written": 0,
+  "daily_failures": [
+    {
+      "date": "2026-07-28",
+      "error": "daily response missing columns: []"
+    }
+  ],
+  "adj_factor_rows_merged": 668531,
+  "adj_factor_failures": [],
+  "daily_basic_days_written": 0,
+  "daily_basic_failures": [
+    {
+      "date": "2026-07-28",
+      "error": "daily_basic response is empty or missing ts_code"
+    }
+  ],
+  "index_symbols": [
+    "000001.SH",
+    "399001.SZ",
+    "000300.SH",
+    "000905.SH",
+    "000852.SH",
+    "399006.SZ",
+    "000688.SH"
+  ],
+  "index_rows_merged": 2240,
+  "failures": [],
+  "pipeline_rows_written": 3039038,
+  "stock_basic_rows": 5952,
+  "stock_basic_symbols_sha256": "e77e45126f65b2dfdff2e88ffd394515b0946bcbb2c786f62264677fca10ddcd",
+  "finished_at": "2026-07-28T11:41:18+08:00",
+  "note": "已有股票日线默认跳过；新分区校验后原子写入；未执行目录删除。空行情、复权因子或 daily_basic 失败不会覆盖股票日线，并会在对应失败列表中显式保留。"
+}

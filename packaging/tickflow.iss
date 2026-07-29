@@ -23,7 +23,7 @@
 #define MyAppExeName      "TickFlowStockPanel.exe"
 #define MyAppPublisher    "TickFlow"
 
-; 版本号: 从根目录 VERSION 文件读取 (前端已移除, 不再从 frontend/package.json 取),
+; 版本号: 从根目录 VERSION 文件读取,
 ; 与 Release tag 保持一致; 手动指定更可靠 (CI 传入 /DMyAppVersion)
 #ifndef MyAppVersion
   #define MyAppVersion     "0.0.0"

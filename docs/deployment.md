@@ -2,7 +2,8 @@
 
 本项目的几种运行方式，按推荐程度排序。配置项详解见 [configuration.md](./configuration.md)。
 
-> 📌 前置依赖:Python ≥ 3.11 · Node ≥ 20 · [`uv`](https://docs.astral.sh/uv/) · `pnpm`（`npm i -g pnpm`）
+> 📌 前置依赖：Python ≥ 3.11 · [`uv`](https://docs.astral.sh/uv/)。
+> 只有显式启用可选 `stock-sdk` 插件时才需要 Node.js。
 
 ---
 
@@ -17,12 +18,13 @@ cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 ./dev.sh                   # Windows: .\dev.ps1
 ```
 
-`dev.sh` 自动检查 / 下载依赖、释放端口、同时起前后端,Ctrl-C 一并关闭。默认:
+`dev.sh` 自动检查/下载依赖、释放端口并启动后端，Ctrl-C 关闭。默认：
 
-- 后端 → <http://localhost:3018> · 前端 → <http://localhost:3011>
-- 自定义端口:`BACKEND_PORT=8000 FRONTEND_PORT=5173 ./dev.sh`
+- API → <http://localhost:3018>
+- OpenAPI → <http://localhost:3018/docs>
+- 自定义端口：`BACKEND_PORT=8000 ./dev.sh`
 
-### 手动分别启动(不想用 dev.sh)
+### 手动启动
 
 ```bash
 # 后端
@@ -30,9 +32,6 @@ cd backend && uv sync --extra backtest   # 含回测依赖
 # 老 CPU: uv sync --extra legacy-cpu
 # 老 CPU + 回测: uv sync --extra legacy-cpu --extra backtest
 uv run uvicorn app.main:app --reload --port 3018
-
-# 前端
-cd frontend && pnpm install && pnpm dev   # http://localhost:3011
 ```
 
 ---
@@ -45,7 +44,7 @@ docker compose up --build
 # 打开 http://localhost:3018
 ```
 
-Docker 采用两阶段构建,前端 dist 拷进后端镜像,**单容器**运行,数据完全在自己手里。
+Docker 构建纯 FastAPI 后端镜像，数据完全保留在自己的挂载目录中。
 
 > ⚠️ **stock-sdk 插件默认不打包(合规考虑)**
 >

@@ -80,13 +80,19 @@ def compute_features(close, open_, high, low, volume, turnover):
         return out
 
     ret = np.full(n, np.nan)
-    ret[1:] = np.log(close[1:] / close[:-1])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ret[1:] = np.log(close[1:] / close[:-1])
     ma20 = roll_mean(close, 20)
     ma60 = roll_mean(close, 60)
     ma_vol5 = roll_mean(volume, 5)
-    ma20_dev = np.where(ma20 > 0, close / ma20 - 1.0, np.nan)
-    ma60_dev = np.where(ma60 > 0, close / ma60 - 1.0, np.nan)
-    vol_ratio = np.where(ma_vol5 > 0, volume / ma_vol5, np.nan)
+    ma20_dev = np.full(n, np.nan)
+    ma60_dev = np.full(n, np.nan)
+    vol_ratio = np.full(n, np.nan)
+    np.divide(close, ma20, out=ma20_dev, where=ma20 > 0)
+    np.divide(close, ma60, out=ma60_dev, where=ma60 > 0)
+    np.divide(volume, ma_vol5, out=vol_ratio, where=ma_vol5 > 0)
+    ma20_dev -= 1.0
+    ma60_dev -= 1.0
     mom20 = np.full(n, np.nan)
     mom5 = np.full(n, np.nan)
     if n > 20:
@@ -104,11 +110,15 @@ def compute_features(close, open_, high, low, volume, turnover):
         rs = (ag + 1e-9) / (al + 1e-9)
         rsi14 = 100 - 100 / (1 + rs)
         rsi[13:] = (rsi14[13:] - 50) / 50.0
-    amp = np.where(close > 0, (high - low) / close, np.nan)
+    amp = np.full(n, np.nan)
+    np.divide(high - low, close, out=amp, where=close > 0)
     turn = np.asarray(turnover, dtype=float)
-    med = np.nanmedian(turn)
-    mad = np.nanmedian(np.abs(turn - med)) + 1e-6
-    turn_n = np.clip((turn - med) / mad, -5.0, 5.0)
+    finite_turn = np.isfinite(turn)
+    turn_n = np.full(n, np.nan)
+    if finite_turn.any():
+        med = np.median(turn[finite_turn])
+        mad = np.median(np.abs(turn[finite_turn] - med)) + 1e-6
+        turn_n[finite_turn] = np.clip((turn[finite_turn] - med) / mad, -5.0, 5.0)
     return {
         "RET": ret, "MA20_DEV": ma20_dev, "MA60_DEV": ma60_dev,
         "VOL_RATIO": vol_ratio, "MOM20": mom20, "MOM5": mom5,

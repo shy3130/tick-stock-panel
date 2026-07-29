@@ -5,7 +5,7 @@
 ## 文件与范围铁律（不可违反）
 
 1. **只操作这一个策略文件**：本次修改只是改写传入的 `.py` 文件内容，绝不创建新文件、不拆分多文件、不跨文件 import
-2. **绝不触碰项目源码**：不要写任何会修改 `backend/`、`docs/`、`frontend/` 等现有文件的代码；不要 `import os/sys/pathlib` 等文件系统模块
+2. **绝不触碰项目源码**：不要写任何会修改 `backend/`、`docs/`、`artifacts/` 等现有文件的代码；不要 `import os/sys/pathlib` 等文件系统模块
 3. **不得放入内置策略目录**：AI 生成的策略只属于 `data/strategies/ai/`，文件名/ID 用 `ai_` 前缀；内置目录 `backend/app/strategy/builtin/` 由项目维护，AI 不得染指
 
 ## 输入格式

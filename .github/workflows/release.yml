@@ -70,9 +70,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 前端构建已移除 (2026-07-22 决策): 显示层由 AI 对话直接承担,
-      # 不再有 React 前端, 故删除 pnpm / Node / 前端构建步骤。
-
       - name: 安装 uv
         uses: astral-sh/setup-uv@v3
         with:
@@ -116,7 +113,7 @@ jobs:
         # 产物输出到 backend/dist/ (PyInstaller 默认路径), 与 packaging/tickflow.iss
         # 第 78 行的 Source 路径 (..\backend\dist\TickFlowStockPanel\*) 保持一致。
         # SPECPATH 由 spec 文件位置决定 (packaging/tickflow.spec → 项目根),
-        # 与 cwd 无关, 故 tiers.yaml 等相对路径仍正确 (前端已移除, 不再有 frontend/dist)。
+        # 与 cwd 无关, 故 tiers.yaml 等相对路径仍正确。
         working-directory: backend
         run: uv run pyinstaller ../packaging/tickflow.spec --noconfirm
 

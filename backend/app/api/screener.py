@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.services import strategy_cache
 from app.services.screener import ScreenerService
 from app.strategy import config as strategy_config
+from app.strategy.catalog import include_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,7 @@ def strategies(
     request: Request,
     asset_type: str = Query("stock"),
     timeframe: str = Query("1d"),
+    include_experimental: bool = Query(False),
 ):
     """兼容策略清单端点；唯一数据源为 StrategyEngine。"""
     data_dir = request.app.state.repo.store.data_dir
@@ -241,6 +243,8 @@ def strategies(
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
     presets = []
     for meta in engine.list_strategies():
+        if not include_strategy(meta, include_experimental=include_experimental):
+            continue
         if asset_type not in meta.get("asset_types", ["stock"]):
             continue
         if timeframe not in meta.get("timeframes", ["1d"]):
@@ -527,10 +531,12 @@ def run_all(request: Request, body: Optional[dict] = None):
         if unknown:
             raise HTTPException(status_code=404, detail=f"unknown strategies: {unknown}")
     else:
+        include_experimental = body.get("include_experimental") is True
         all_ids = [
             meta["id"]
             for meta in engine.list_strategies()
-            if asset_type in meta.get("asset_types", ["stock"])
+            if include_strategy(meta, include_experimental=include_experimental)
+            and asset_type in meta.get("asset_types", ["stock"])
             and timeframe in meta.get("timeframes", ["1d"])
         ]
 

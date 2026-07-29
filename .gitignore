@@ -26,12 +26,7 @@ node_modules/
 .pnpm-debug.log*
 .npm/
 *.log
-
-# ===== Vite =====
-frontend/dist/
-frontend/.vite/
-backend/static/
-backend/app/static/
+artifacts/logs/
 
 # ===== IDE =====
 .idea/
@@ -66,9 +61,6 @@ backend/user_prompts/
 # ===== AI IDE =====
 .trae/
 .zcode/
-
-# ===== TypeScript build cache =====
-frontend/tsconfig*.tsbuildinfo
 
 # ===== Data files =====
 *.xlsx

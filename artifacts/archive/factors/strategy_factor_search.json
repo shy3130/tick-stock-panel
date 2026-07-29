@@ -1,0 +1,1773 @@
+[
+  {
+    "name": "rand_799",
+    "formula": "VOL_RATIO MOM20 DIV MOM5 DIV JUMP RET ADD AMP DIV",
+    "mean_ic": 0.0874,
+    "icir": 11.53,
+    "top_decile_sharpe": 1.623
+  },
+  {
+    "name": "rand_711",
+    "formula": "MOM20 MAX3 NEG NEG AMP DIV MOM20 SUB MA60_DEV ADD",
+    "mean_ic": 0.0762,
+    "icir": 9.587,
+    "top_decile_sharpe": 1.786
+  },
+  {
+    "name": "rand_1102",
+    "formula": "RET AMP DIV VOL_RATIO MAX3 ADD TURN DIV AMP SIGN SUB",
+    "mean_ic": 0.0554,
+    "icir": 8.526,
+    "top_decile_sharpe": -2.767
+  },
+  {
+    "name": "rand_1002",
+    "formula": "MA60_DEV VOL_RATIO DECAY MA60_DEV ADD ADD SIGN MA60_DEV MOM5 SUB ADD",
+    "mean_ic": 0.0643,
+    "icir": 7.308,
+    "top_decile_sharpe": 2.62
+  },
+  {
+    "name": "rand_595",
+    "formula": "VOL_RATIO NEG MA20_DEV ADD AMP DIV DECAY SIGN JUMP DECAY",
+    "mean_ic": 0.0216,
+    "icir": 6.918,
+    "top_decile_sharpe": -1.748
+  },
+  {
+    "name": "rand_513",
+    "formula": "RSI14 MOM5 MA60_DEV SIGN ADD MOM5 ADD RSI14 ABS AMP ADD ADD MUL",
+    "mean_ic": 0.0363,
+    "icir": 6.702,
+    "top_decile_sharpe": 3.419
+  },
+  {
+    "name": "rand_52",
+    "formula": "RET VOL_RATIO MOM5 SIGN ADD TURN MUL DIV RET VOL_RATIO MUL SUB",
+    "mean_ic": 0.0619,
+    "icir": 6.545,
+    "top_decile_sharpe": -0.124
+  },
+  {
+    "name": "rand_741",
+    "formula": "MOM5 MA60_DEV SIGN SUB TURN SUB MA60_DEV TURN NEG SUB DIV",
+    "mean_ic": 0.0239,
+    "icir": 6.455,
+    "top_decile_sharpe": -0.887
+  },
+  {
+    "name": "rand_665",
+    "formula": "MA20_DEV MOM5 JUMP ABS ADD SIGN MA60_DEV NEG ADD AMP DIV",
+    "mean_ic": 0.0534,
+    "icir": 6.421,
+    "top_decile_sharpe": -3.662
+  },
+  {
+    "name": "rand_522",
+    "formula": "RSI14 ABS ABS TURN MUL NEG RSI14 ADD MOM20 ADD",
+    "mean_ic": 0.0316,
+    "icir": 6.398,
+    "top_decile_sharpe": 1.408
+  },
+  {
+    "name": "rand_497",
+    "formula": "AMP RET ABS ADD MA60_DEV MUL DELAY1 DECAY VOL_RATIO DIV",
+    "mean_ic": 0.0613,
+    "icir": 6.086,
+    "top_decile_sharpe": 2.209
+  },
+  {
+    "name": "rand_678",
+    "formula": "AMP MOM20 SIGN VOL_RATIO DELAY1 SUB TURN DIV SUB NEG",
+    "mean_ic": 0.0478,
+    "icir": 6.002,
+    "top_decile_sharpe": -0.334
+  },
+  {
+    "name": "rand_622",
+    "formula": "RSI14 SIGN VOL_RATIO TURN VOL_RATIO MA60_DEV NEG MUL DIV DELAY1 DIV SUB",
+    "mean_ic": 0.0432,
+    "icir": 5.985,
+    "top_decile_sharpe": 1.784
+  },
+  {
+    "name": "rand_1016",
+    "formula": "TURN MAX3 NEG MOM5 SIGN MUL VOL_RATIO AMP RSI14 DIV DIV SUB",
+    "mean_ic": 0.045,
+    "icir": 5.932,
+    "top_decile_sharpe": -1.337
+  },
+  {
+    "name": "rand_419",
+    "formula": "RSI14 RET NEG SUB RSI14 MA20_DEV ABS SIGN SUB ABS ADD",
+    "mean_ic": 0.0462,
+    "icir": 5.739,
+    "top_decile_sharpe": 1.176
+  },
+  {
+    "name": "rand_25",
+    "formula": "MA60_DEV DECAY MAX3 VOL_RATIO SUB RSI14 JUMP DIV RET SUB",
+    "mean_ic": 0.0525,
+    "icir": 5.601,
+    "top_decile_sharpe": 1.88
+  },
+  {
+    "name": "rand_107",
+    "formula": "MA60_DEV MOM5 VOL_RATIO DELAY1 MOM5 SUB ADD MUL MA60_DEV ADD",
+    "mean_ic": 0.055,
+    "icir": 5.408,
+    "top_decile_sharpe": 2.998
+  },
+  {
+    "name": "rand_949",
+    "formula": "MA20_DEV AMP SIGN MAX3 MOM5 ABS ADD MAX3 DECAY ADD",
+    "mean_ic": 0.0444,
+    "icir": 5.38,
+    "top_decile_sharpe": 1.067
+  },
+  {
+    "name": "rand_36",
+    "formula": "RSI14 AMP MUL SIGN VOL_RATIO MAX3 SUB MOM5 AMP NEG MUL DIV",
+    "mean_ic": 0.0247,
+    "icir": 5.378,
+    "top_decile_sharpe": -2.714
+  },
+  {
+    "name": "rand_681",
+    "formula": "MA20_DEV MA60_DEV RSI14 AMP MUL AMP ADD SUB ADD RET DIV",
+    "mean_ic": 0.0185,
+    "icir": 5.341,
+    "top_decile_sharpe": 0.988
+  },
+  {
+    "name": "rand_1101",
+    "formula": "MOM20 MA20_DEV MA20_DEV MUL ADD MA60_DEV MA60_DEV MOM20 DECAY MOM5 SUB ADD ADD ADD",
+    "mean_ic": 0.0514,
+    "icir": 5.163,
+    "top_decile_sharpe": 2.684
+  },
+  {
+    "name": "rand_902",
+    "formula": "MA60_DEV DECAY RET AMP DIV ADD DELAY1 MAX3 AMP ADD",
+    "mean_ic": 0.033,
+    "icir": 5.134,
+    "top_decile_sharpe": 2.834
+  },
+  {
+    "name": "pullback_ma20",
+    "formula": "MA20_DEV",
+    "mean_ic": 0.0436,
+    "icir": 4.9,
+    "top_decile_sharpe": 2.786
+  },
+  {
+    "name": "momentum20",
+    "formula": "MOM20",
+    "mean_ic": 0.0453,
+    "icir": 4.889,
+    "top_decile_sharpe": 2.824
+  },
+  {
+    "name": "rand_1178",
+    "formula": "MOM20 RET MAX3 JUMP MOM5 MA60_DEV DIV SUB TURN TURN SUB MUL SUB",
+    "mean_ic": 0.0453,
+    "icir": 4.889,
+    "top_decile_sharpe": 2.824
+  },
+  {
+    "name": "rand_560",
+    "formula": "MOM20 RSI14 MA60_DEV NEG SUB JUMP ABS RET MUL SUB",
+    "mean_ic": 0.0453,
+    "icir": 4.883,
+    "top_decile_sharpe": 2.864
+  },
+  {
+    "name": "rand_963",
+    "formula": "VOL_RATIO MOM20 SUB JUMP MOM5 DIV MA60_DEV RET VOL_RATIO SUB ADD DIV",
+    "mean_ic": 0.0187,
+    "icir": 4.853,
+    "top_decile_sharpe": -2.078
+  },
+  {
+    "name": "rand_305",
+    "formula": "RET NEG MA60_DEV RSI14 MA60_DEV SUB SUB MOM20 TURN DELAY1 MUL SUB MUL",
+    "mean_ic": 0.0351,
+    "icir": 4.836,
+    "top_decile_sharpe": 1.35
+  },
+  {
+    "name": "rand_811",
+    "formula": "AMP SIGN RET DECAY SUB MOM20 VOL_RATIO RSI14 ABS MOM5 SUB MUL MUL ADD",
+    "mean_ic": 0.0402,
+    "icir": 4.781,
+    "top_decile_sharpe": 0.755
+  },
+  {
+    "name": "rand_161",
+    "formula": "RSI14 DELAY1 MA60_DEV SUB MA20_DEV DIV MA20_DEV TURN DIV ADD",
+    "mean_ic": 0.0415,
+    "icir": 4.583,
+    "top_decile_sharpe": -2.968
+  },
+  {
+    "name": "rand_198",
+    "formula": "MOM20 AMP DECAY ADD RET TURN MUL SIGN MOM5 MUL SUB",
+    "mean_ic": 0.0431,
+    "icir": 4.54,
+    "top_decile_sharpe": 2.473
+  },
+  {
+    "name": "rand_1180",
+    "formula": "RSI14 AMP MA20_DEV DIV SIGN SUB RSI14 MOM5 DECAY VOL_RATIO SUB MUL MUL",
+    "mean_ic": 0.0242,
+    "icir": 4.503,
+    "top_decile_sharpe": -1.69
+  },
+  {
+    "name": "rand_608",
+    "formula": "VOL_RATIO NEG MAX3 AMP MA20_DEV MOM20 SIGN SUB MUL DIV",
+    "mean_ic": 0.0322,
+    "icir": 4.486,
+    "top_decile_sharpe": -1.242
+  },
+  {
+    "name": "rand_146",
+    "formula": "RET MA60_DEV ADD SIGN MA20_DEV MAX3 DELAY1 ADD AMP SUB",
+    "mean_ic": 0.0427,
+    "icir": 4.446,
+    "top_decile_sharpe": 2.038
+  },
+  {
+    "name": "rand_1112",
+    "formula": "MA60_DEV MA60_DEV ADD VOL_RATIO MAX3 ABS ADD DELAY1 MOM5 ABS MUL",
+    "mean_ic": 0.0297,
+    "icir": 4.36,
+    "top_decile_sharpe": 1.256
+  },
+  {
+    "name": "rand_1028",
+    "formula": "TURN SIGN RSI14 MA60_DEV DIV ADD VOL_RATIO MOM5 ADD ABS ADD",
+    "mean_ic": 0.0115,
+    "icir": 4.281,
+    "top_decile_sharpe": -1.507
+  },
+  {
+    "name": "rand_960",
+    "formula": "MA60_DEV VOL_RATIO RET VOL_RATIO DIV ADD RET TURN ADD MUL MUL",
+    "mean_ic": 0.0377,
+    "icir": 4.256,
+    "top_decile_sharpe": 2.076
+  },
+  {
+    "name": "rand_378",
+    "formula": "MOM20 RET MAX3 ADD RET NEG SUB DELAY1 MAX3 RSI14 ADD",
+    "mean_ic": 0.0392,
+    "icir": 4.169,
+    "top_decile_sharpe": 2.598
+  },
+  {
+    "name": "rand_122",
+    "formula": "RET TURN MOM5 SUB DIV RSI14 ADD VOL_RATIO JUMP MA20_DEV MUL ADD",
+    "mean_ic": 0.0258,
+    "icir": 4.122,
+    "top_decile_sharpe": 1.673
+  },
+  {
+    "name": "rand_603",
+    "formula": "RSI14 JUMP JUMP MA20_DEV AMP DELAY1 SUB DIV MOM20 ADD",
+    "mean_ic": 0.0371,
+    "icir": 3.991,
+    "top_decile_sharpe": 2.817
+  },
+  {
+    "name": "rand_415",
+    "formula": "TURN MAX3 RSI14 ABS SIGN ADD MAX3 MA20_DEV MUL SIGN",
+    "mean_ic": 0.0273,
+    "icir": 3.963,
+    "top_decile_sharpe": 0.638
+  },
+  {
+    "name": "rand_498",
+    "formula": "MA20_DEV DECAY NEG MOM20 MAX3 RSI14 DECAY TURN SUB RET MUL MUL MUL",
+    "mean_ic": 0.0289,
+    "icir": 3.888,
+    "top_decile_sharpe": 0.197
+  },
+  {
+    "name": "rand_1136",
+    "formula": "VOL_RATIO MA60_DEV MOM5 SIGN MA60_DEV MUL SUB DIV RSI14 MUL",
+    "mean_ic": 0.0238,
+    "icir": 3.776,
+    "top_decile_sharpe": 1.857
+  },
+  {
+    "name": "rand_672",
+    "formula": "TURN RSI14 RET DECAY AMP SUB MOM20 MUL ADD SIGN MUL",
+    "mean_ic": 0.0168,
+    "icir": 3.489,
+    "top_decile_sharpe": -0.619
+  },
+  {
+    "name": "rand_221",
+    "formula": "TURN MOM20 MUL SIGN TURN TURN ABS SUB ADD MA60_DEV ADD",
+    "mean_ic": 0.0254,
+    "icir": 3.412,
+    "top_decile_sharpe": 2.628
+  },
+  {
+    "name": "rand_554",
+    "formula": "RSI14 MOM5 SUB MA20_DEV RET JUMP ABS SUB ADD MA20_DEV ADD",
+    "mean_ic": 0.0293,
+    "icir": 3.337,
+    "top_decile_sharpe": 2.048
+  },
+  {
+    "name": "rand_652",
+    "formula": "MA60_DEV MA60_DEV DELAY1 ADD TURN RSI14 SIGN SIGN MAX3 DECAY DIV SUB",
+    "mean_ic": 0.0122,
+    "icir": 3.324,
+    "top_decile_sharpe": -2.307
+  },
+  {
+    "name": "rand_421",
+    "formula": "RSI14 DECAY MA20_DEV ADD RSI14 ADD TURN ADD TURN SUB",
+    "mean_ic": 0.0291,
+    "icir": 3.267,
+    "top_decile_sharpe": 2.087
+  },
+  {
+    "name": "rand_774",
+    "formula": "RET RET MUL DELAY1 MA20_DEV MAX3 DIV AMP DECAY MA20_DEV MUL DIV",
+    "mean_ic": 0.0124,
+    "icir": 3.261,
+    "top_decile_sharpe": -2.703
+  },
+  {
+    "name": "rand_1057",
+    "formula": "RSI14 RET SIGN MOM20 NEG RET ADD ADD VOL_RATIO MOM20 ADD MUL MUL",
+    "mean_ic": 0.0158,
+    "icir": 3.036,
+    "top_decile_sharpe": 1.129
+  },
+  {
+    "name": "rand_835",
+    "formula": "AMP MAX3 MA60_DEV DECAY DIV VOL_RATIO DECAY MOM5 MOM20 VOL_RATIO DIV SUB ADD MUL",
+    "mean_ic": 0.0106,
+    "icir": 3.03,
+    "top_decile_sharpe": -0.436
+  },
+  {
+    "name": "rand_1175",
+    "formula": "MOM20 TURN MUL DELAY1 DECAY MAX3 DECAY AMP ABS DIV",
+    "mean_ic": 0.0231,
+    "icir": 3.015,
+    "top_decile_sharpe": 0.3
+  },
+  {
+    "name": "rand_78",
+    "formula": "MA60_DEV TURN MOM5 MOM20 ADD RET MOM5 RSI14 DELAY1 DELAY1 SUB ADD ADD ADD MUL",
+    "mean_ic": 0.0267,
+    "icir": 2.995,
+    "top_decile_sharpe": 1.081
+  },
+  {
+    "name": "rand_89",
+    "formula": "MOM20 SIGN MOM20 MA20_DEV MA20_DEV DECAY SUB DIV DIV RSI14 DIV",
+    "mean_ic": 0.0097,
+    "icir": 2.98,
+    "top_decile_sharpe": -2.23
+  },
+  {
+    "name": "rand_66",
+    "formula": "RSI14 RSI14 SUB MOM5 MOM5 DIV MA20_DEV SIGN AMP SUB DIV ADD",
+    "mean_ic": 0.0226,
+    "icir": 2.975,
+    "top_decile_sharpe": 1.478
+  },
+  {
+    "name": "rand_605",
+    "formula": "MA60_DEV AMP TURN MUL SUB JUMP DELAY1 DELAY1 AMP NEG SUB",
+    "mean_ic": 0.0216,
+    "icir": 2.962,
+    "top_decile_sharpe": 1.228
+  },
+  {
+    "name": "rand_757",
+    "formula": "RSI14 VOL_RATIO AMP RET AMP ABS SUB ADD SUB RSI14 ADD SUB",
+    "mean_ic": 0.0143,
+    "icir": 2.909,
+    "top_decile_sharpe": -2.303
+  },
+  {
+    "name": "rand_947",
+    "formula": "MOM5 MAX3 MOM5 MOM20 DIV ABS SUB MA20_DEV ADD NEG",
+    "mean_ic": 0.0091,
+    "icir": 2.887,
+    "top_decile_sharpe": -1.079
+  },
+  {
+    "name": "rand_1152",
+    "formula": "VOL_RATIO JUMP VOL_RATIO MOM5 DIV SIGN DIV NEG RET MAX3 MUL",
+    "mean_ic": 0.0146,
+    "icir": 2.873,
+    "top_decile_sharpe": -1.852
+  },
+  {
+    "name": "rand_296",
+    "formula": "MA60_DEV MAX3 RET JUMP MA20_DEV DELAY1 DIV SUB DELAY1 RET ADD",
+    "mean_ic": 0.0145,
+    "icir": 2.666,
+    "top_decile_sharpe": 2.529
+  },
+  {
+    "name": "rand_879",
+    "formula": "RSI14 TURN VOL_RATIO MOM5 RSI14 MA60_DEV ADD MAX3 AMP SUB DIV SUB MUL MUL",
+    "mean_ic": 0.0125,
+    "icir": 2.652,
+    "top_decile_sharpe": 0.827
+  },
+  {
+    "name": "rand_710",
+    "formula": "RSI14 VOL_RATIO RET RET DIV RSI14 NEG SIGN DIV SIGN SUB ADD",
+    "mean_ic": 0.0222,
+    "icir": 2.648,
+    "top_decile_sharpe": 0.53
+  },
+  {
+    "name": "rand_866",
+    "formula": "RET SIGN TURN TURN MA60_DEV SUB DELAY1 VOL_RATIO MA20_DEV JUMP MUL DIV MUL MUL",
+    "mean_ic": 0.0153,
+    "icir": 2.633,
+    "top_decile_sharpe": -0.119
+  },
+  {
+    "name": "rand_151",
+    "formula": "MA60_DEV MAX3 MA20_DEV DIV MA20_DEV SUB TURN DELAY1 MUL DELAY1",
+    "mean_ic": 0.0112,
+    "icir": 2.618,
+    "top_decile_sharpe": 0.291
+  },
+  {
+    "name": "rand_655",
+    "formula": "MA20_DEV DELAY1 SIGN RSI14 SIGN MA60_DEV SUB DIV MOM5 ABS MUL",
+    "mean_ic": 0.0086,
+    "icir": 2.578,
+    "top_decile_sharpe": 0.488
+  },
+  {
+    "name": "rand_265",
+    "formula": "MOM20 ABS DECAY MA60_DEV MUL RSI14 MAX3 VOL_RATIO MUL MUL",
+    "mean_ic": 0.0167,
+    "icir": 2.572,
+    "top_decile_sharpe": 2.044
+  },
+  {
+    "name": "rand_822",
+    "formula": "AMP NEG RET AMP SUB TURN MA20_DEV DELAY1 DECAY NEG MUL MUL DIV",
+    "mean_ic": 0.0207,
+    "icir": 2.514,
+    "top_decile_sharpe": -0.976
+  },
+  {
+    "name": "rand_269",
+    "formula": "MOM5 ABS DECAY RET DIV NEG RET MOM5 MUL ABS SUB",
+    "mean_ic": 0.0074,
+    "icir": 2.49,
+    "top_decile_sharpe": 0.097
+  },
+  {
+    "name": "rand_368",
+    "formula": "AMP SIGN RET ABS DELAY1 RSI14 ADD RET NEG SUB MUL",
+    "mean_ic": 0.0215,
+    "icir": 2.426,
+    "top_decile_sharpe": 2.416
+  },
+  {
+    "name": "trend_strength",
+    "formula": "MA60_DEV MOM20 MUL",
+    "mean_ic": 0.016,
+    "icir": 2.386,
+    "top_decile_sharpe": 1.451
+  },
+  {
+    "name": "rand_545",
+    "formula": "MA60_DEV MAX3 ABS DELAY1 RSI14 RSI14 MAX3 DIV ADD MA20_DEV MUL",
+    "mean_ic": 0.011,
+    "icir": 2.379,
+    "top_decile_sharpe": 2.823
+  },
+  {
+    "name": "rand_693",
+    "formula": "VOL_RATIO TURN MA60_DEV SIGN MOM20 RSI14 DIV DECAY DELAY1 ADD MUL MUL",
+    "mean_ic": 0.0075,
+    "icir": 2.366,
+    "top_decile_sharpe": 0.146
+  },
+  {
+    "name": "rand_726",
+    "formula": "TURN RET SUB NEG SIGN RSI14 MOM5 DIV ADD RSI14 SUB",
+    "mean_ic": 0.0063,
+    "icir": 2.344,
+    "top_decile_sharpe": -1.77
+  },
+  {
+    "name": "rand_85",
+    "formula": "RSI14 MA60_DEV RET ADD SUB JUMP NEG MA60_DEV MUL MA60_DEV DIV",
+    "mean_ic": 0.0025,
+    "icir": 2.294,
+    "top_decile_sharpe": -1.683
+  },
+  {
+    "name": "rand_639",
+    "formula": "MOM5 TURN DIV TURN MUL VOL_RATIO RET SIGN DECAY MUL MUL",
+    "mean_ic": 0.0142,
+    "icir": 2.291,
+    "top_decile_sharpe": 0.594
+  },
+  {
+    "name": "rand_389",
+    "formula": "MA20_DEV TURN VOL_RATIO MAX3 AMP DELAY1 MUL NEG ADD DELAY1 DIV",
+    "mean_ic": 0.0108,
+    "icir": 2.268,
+    "top_decile_sharpe": -0.433
+  },
+  {
+    "name": "rand_406",
+    "formula": "MA20_DEV MOM5 MUL DECAY VOL_RATIO SUB MOM5 NEG DECAY JUMP ADD",
+    "mean_ic": 0.0104,
+    "icir": 2.205,
+    "top_decile_sharpe": -3.196
+  },
+  {
+    "name": "rand_417",
+    "formula": "RSI14 MOM5 TURN SIGN MOM20 VOL_RATIO NEG RSI14 AMP MA60_DEV SUB DIV ADD MUL SUB DIV DIV",
+    "mean_ic": 0.0071,
+    "icir": 2.163,
+    "top_decile_sharpe": 0.449
+  },
+  {
+    "name": "rand_39",
+    "formula": "MOM20 MOM20 DELAY1 MAX3 MAX3 RET SUB SIGN AMP DIV DIV",
+    "mean_ic": 0.0162,
+    "icir": 2.126,
+    "top_decile_sharpe": 2.285
+  },
+  {
+    "name": "rand_997",
+    "formula": "MOM5 MOM20 SUB MOM5 SUB VOL_RATIO MOM20 ABS MA20_DEV RSI14 ADD ADD ADD DIV",
+    "mean_ic": 0.0092,
+    "icir": 2.029,
+    "top_decile_sharpe": -0.866
+  },
+  {
+    "name": "rand_1098",
+    "formula": "MOM20 VOL_RATIO RET RET MA60_DEV RSI14 MOM5 VOL_RATIO MOM20 ABS MUL MUL MUL SUB DIV DIV DIV SUB",
+    "mean_ic": 0.005,
+    "icir": 2.019,
+    "top_decile_sharpe": -2.85
+  },
+  {
+    "name": "rand_362",
+    "formula": "RSI14 RSI14 JUMP DECAY DECAY ADD AMP MAX3 TURN MUL ADD",
+    "mean_ic": 0.0186,
+    "icir": 2.016,
+    "top_decile_sharpe": 0.651
+  },
+  {
+    "name": "vol_breakout",
+    "formula": "MOM5 VOL_RATIO MUL",
+    "mean_ic": 0.0161,
+    "icir": 1.998,
+    "top_decile_sharpe": 0.707
+  },
+  {
+    "name": "rand_435",
+    "formula": "RSI14 RSI14 MA60_DEV SUB RET MA20_DEV TURN MAX3 DIV AMP MUL SUB MUL DIV",
+    "mean_ic": 0.0082,
+    "icir": 1.974,
+    "top_decile_sharpe": -1.732
+  },
+  {
+    "name": "rand_205",
+    "formula": "AMP SIGN MOM5 MUL VOL_RATIO DIV VOL_RATIO MAX3 RET SUB MUL",
+    "mean_ic": 0.014,
+    "icir": 1.925,
+    "top_decile_sharpe": 1.469
+  },
+  {
+    "name": "rand_1051",
+    "formula": "MA20_DEV RSI14 ABS ADD MOM5 ADD MOM5 MUL MA20_DEV RSI14 MUL MUL",
+    "mean_ic": 0.0134,
+    "icir": 1.895,
+    "top_decile_sharpe": 1.849
+  },
+  {
+    "name": "rand_152",
+    "formula": "RET MA20_DEV MA60_DEV DECAY ADD DIV RET VOL_RATIO MUL ABS DIV",
+    "mean_ic": 0.0053,
+    "icir": 1.821,
+    "top_decile_sharpe": -1.195
+  },
+  {
+    "name": "rand_15",
+    "formula": "MOM5 TURN JUMP DIV MOM20 MUL AMP MAX3 DECAY ADD",
+    "mean_ic": 0.0117,
+    "icir": 1.699,
+    "top_decile_sharpe": 1.058
+  },
+  {
+    "name": "rand_1010",
+    "formula": "RET MA60_DEV MAX3 MUL DELAY1 MOM5 MA20_DEV RSI14 MUL MA20_DEV SUB ADD SUB",
+    "mean_ic": 0.0126,
+    "icir": 1.644,
+    "top_decile_sharpe": -0.215
+  },
+  {
+    "name": "rand_845",
+    "formula": "AMP TURN NEG ADD MA60_DEV TURN JUMP ADD RSI14 MOM20 ADD MUL ADD",
+    "mean_ic": 0.0126,
+    "icir": 1.591,
+    "top_decile_sharpe": -1.377
+  },
+  {
+    "name": "rand_950",
+    "formula": "MA60_DEV RET SUB VOL_RATIO MAX3 TURN MOM5 ADD MUL MOM5 MUL SUB",
+    "mean_ic": 0.0108,
+    "icir": 1.525,
+    "top_decile_sharpe": 1.442
+  },
+  {
+    "name": "rand_765",
+    "formula": "RSI14 MA20_DEV MAX3 ABS DIV AMP ADD RET SUB DELAY1",
+    "mean_ic": 0.0056,
+    "icir": 1.514,
+    "top_decile_sharpe": -1.494
+  },
+  {
+    "name": "rand_84",
+    "formula": "VOL_RATIO MOM20 MUL MA60_DEV DECAY DIV MA20_DEV SUB RSI14 SUB",
+    "mean_ic": 0.0053,
+    "icir": 1.511,
+    "top_decile_sharpe": -0.816
+  },
+  {
+    "name": "rand_1008",
+    "formula": "RSI14 MA20_DEV ADD ABS SIGN MA60_DEV MUL MA60_DEV MUL DECAY",
+    "mean_ic": 0.0105,
+    "icir": 1.499,
+    "top_decile_sharpe": 1.794
+  },
+  {
+    "name": "rand_894",
+    "formula": "MA20_DEV MA20_DEV MAX3 ADD MOM20 DELAY1 MA60_DEV RSI14 VOL_RATIO DELAY1 MUL MUL MUL DIV",
+    "mean_ic": 0.0048,
+    "icir": 1.497,
+    "top_decile_sharpe": -1.086
+  },
+  {
+    "name": "rand_615",
+    "formula": "MOM5 NEG SIGN ABS RSI14 MOM20 MUL DIV AMP MUL",
+    "mean_ic": 0.0052,
+    "icir": 1.483,
+    "top_decile_sharpe": -1.695
+  },
+  {
+    "name": "rand_327",
+    "formula": "MOM5 TURN MOM20 ADD DECAY NEG ABS MOM20 MOM20 MA60_DEV SUB SUB SUB DIV",
+    "mean_ic": 0.0061,
+    "icir": 1.462,
+    "top_decile_sharpe": 1.79
+  },
+  {
+    "name": "rand_600",
+    "formula": "MA20_DEV MOM20 ADD RSI14 DIV MA60_DEV MA20_DEV MOM5 DELAY1 ADD ADD DIV",
+    "mean_ic": 0.005,
+    "icir": 1.46,
+    "top_decile_sharpe": -1.017
+  },
+  {
+    "name": "rand_494",
+    "formula": "VOL_RATIO MOM20 SUB TURN DIV AMP RSI14 MUL ADD RSI14 DIV",
+    "mean_ic": 0.0108,
+    "icir": 1.457,
+    "top_decile_sharpe": -0.706
+  },
+  {
+    "name": "rand_308",
+    "formula": "VOL_RATIO MOM20 TURN DECAY SUB RET ABS MA20_DEV SUB DELAY1 SUB MUL",
+    "mean_ic": 0.0107,
+    "icir": 1.406,
+    "top_decile_sharpe": -0.527
+  },
+  {
+    "name": "rand_164",
+    "formula": "RSI14 DELAY1 MOM5 MUL MAX3 MA20_DEV MAX3 RSI14 MUL ABS MUL",
+    "mean_ic": 0.0097,
+    "icir": 1.402,
+    "top_decile_sharpe": 1.04
+  },
+  {
+    "name": "rand_367",
+    "formula": "RSI14 TURN AMP MOM5 ADD DECAY DELAY1 MA60_DEV MOM5 MUL MUL DIV SUB",
+    "mean_ic": 0.0034,
+    "icir": 1.397,
+    "top_decile_sharpe": -3.365
+  },
+  {
+    "name": "rand_771",
+    "formula": "RET RET ADD VOL_RATIO DECAY MUL MOM5 DELAY1 ADD SIGN",
+    "mean_ic": 0.0099,
+    "icir": 1.389,
+    "top_decile_sharpe": 1.399
+  },
+  {
+    "name": "rand_898",
+    "formula": "MOM5 MA20_DEV DIV VOL_RATIO DIV RET ABS MOM5 MOM20 RSI14 SUB SUB MUL MUL",
+    "mean_ic": 0.0102,
+    "icir": 1.385,
+    "top_decile_sharpe": -0.461
+  },
+  {
+    "name": "rand_833",
+    "formula": "MOM5 SIGN SIGN SIGN AMP VOL_RATIO ABS SIGN SUB ADD",
+    "mean_ic": 0.0094,
+    "icir": 1.367,
+    "top_decile_sharpe": 1.172
+  },
+  {
+    "name": "rand_0",
+    "formula": "MOM20 NEG RSI14 DIV MOM20 VOL_RATIO ABS ADD DIV MOM5 SUB",
+    "mean_ic": 0.0051,
+    "icir": 1.337,
+    "top_decile_sharpe": -3.631
+  },
+  {
+    "name": "rand_1177",
+    "formula": "MA20_DEV SIGN ABS RET MUL RSI14 DIV NEG TURN TURN DIV SUB",
+    "mean_ic": 0.0049,
+    "icir": 1.335,
+    "top_decile_sharpe": -2.767
+  },
+  {
+    "name": "rand_951",
+    "formula": "AMP ABS MAX3 MA60_DEV RET NEG MUL SUB DELAY1 VOL_RATIO MUL",
+    "mean_ic": 0.0103,
+    "icir": 1.303,
+    "top_decile_sharpe": -0.452
+  },
+  {
+    "name": "rand_751",
+    "formula": "VOL_RATIO MA60_DEV MAX3 ABS JUMP VOL_RATIO AMP MUL ABS TURN MUL MUL DIV",
+    "mean_ic": 0.0067,
+    "icir": 1.283,
+    "top_decile_sharpe": -2.416
+  },
+  {
+    "name": "rand_297",
+    "formula": "TURN MA20_DEV MAX3 TURN DELAY1 MAX3 SUB DECAY SIGN MOM5 ADD MUL",
+    "mean_ic": 0.0082,
+    "icir": 1.264,
+    "top_decile_sharpe": -1.027
+  },
+  {
+    "name": "rand_458",
+    "formula": "RSI14 MA60_DEV DECAY DIV RET MOM20 SUB ADD DECAY VOL_RATIO SUB",
+    "mean_ic": 0.0045,
+    "icir": 1.258,
+    "top_decile_sharpe": -0.993
+  },
+  {
+    "name": "rand_19",
+    "formula": "TURN MAX3 MA60_DEV JUMP ADD RET TURN MOM5 SUB DIV ADD",
+    "mean_ic": 0.0089,
+    "icir": 1.237,
+    "top_decile_sharpe": -1.811
+  },
+  {
+    "name": "rand_935",
+    "formula": "MA20_DEV RET ADD MOM5 DECAY MA60_DEV MOM20 JUMP ADD TURN MUL SUB SUB",
+    "mean_ic": 0.0095,
+    "icir": 1.133,
+    "top_decile_sharpe": 1.246
+  },
+  {
+    "name": "rand_805",
+    "formula": "MOM5 MA20_DEV MOM20 RSI14 DIV ADD MOM20 TURN SUB ADD SUB",
+    "mean_ic": 0.0047,
+    "icir": 1.103,
+    "top_decile_sharpe": -3.134
+  },
+  {
+    "name": "rand_800",
+    "formula": "AMP DECAY MOM20 ADD MA20_DEV MUL MOM20 VOL_RATIO ADD MAX3 DIV",
+    "mean_ic": 0.0074,
+    "icir": 1.097,
+    "top_decile_sharpe": 3.242
+  },
+  {
+    "name": "rand_1167",
+    "formula": "MOM5 MAX3 TURN AMP MA20_DEV DIV MUL ADD RSI14 SUB",
+    "mean_ic": 0.0038,
+    "icir": 1.084,
+    "top_decile_sharpe": -0.834
+  },
+  {
+    "name": "rand_567",
+    "formula": "VOL_RATIO TURN VOL_RATIO MAX3 NEG SUB VOL_RATIO AMP VOL_RATIO SUB DIV SUB SUB",
+    "mean_ic": 0.0085,
+    "icir": 1.055,
+    "top_decile_sharpe": -1.817
+  },
+  {
+    "name": "rand_332",
+    "formula": "MA20_DEV NEG DELAY1 JUMP AMP JUMP TURN RSI14 MUL RSI14 SUB ADD ADD",
+    "mean_ic": 0.0046,
+    "icir": 0.981,
+    "top_decile_sharpe": 0.22
+  },
+  {
+    "name": "rand_855",
+    "formula": "AMP ABS DECAY MA60_DEV SUB RSI14 ADD VOL_RATIO DIV RSI14 MUL",
+    "mean_ic": 0.005,
+    "icir": 0.956,
+    "top_decile_sharpe": -0.079
+  },
+  {
+    "name": "rand_267",
+    "formula": "VOL_RATIO MA60_DEV VOL_RATIO MOM5 VOL_RATIO MOM5 VOL_RATIO AMP RET DELAY1 ADD DIV DIV ADD SUB SUB ADD DIV",
+    "mean_ic": 0.0039,
+    "icir": 0.931,
+    "top_decile_sharpe": -2.66
+  },
+  {
+    "name": "rand_974",
+    "formula": "AMP RSI14 ABS NEG VOL_RATIO MUL MUL AMP RSI14 MUL ADD",
+    "mean_ic": 0.0063,
+    "icir": 0.899,
+    "top_decile_sharpe": 0.983
+  },
+  {
+    "name": "rand_192",
+    "formula": "MA60_DEV MOM20 DECAY DIV TURN MA20_DEV SUB SIGN MA20_DEV RET ADD DIV SUB",
+    "mean_ic": 0.0029,
+    "icir": 0.898,
+    "top_decile_sharpe": -1.546
+  },
+  {
+    "name": "rand_68",
+    "formula": "AMP RSI14 TURN MUL MUL MOM5 SIGN ADD DELAY1 RSI14 SUB",
+    "mean_ic": 0.0052,
+    "icir": 0.863,
+    "top_decile_sharpe": -1.699
+  },
+  {
+    "name": "rand_30",
+    "formula": "RET MA20_DEV DIV NEG DECAY MAX3 SIGN VOL_RATIO MA60_DEV DIV DIV",
+    "mean_ic": 0.003,
+    "icir": 0.86,
+    "top_decile_sharpe": 1.328
+  },
+  {
+    "name": "rand_742",
+    "formula": "TURN VOL_RATIO MAX3 MAX3 DIV MA60_DEV ADD AMP RET SUB SUB",
+    "mean_ic": 0.0068,
+    "icir": 0.755,
+    "top_decile_sharpe": -0.352
+  },
+  {
+    "name": "rand_1151",
+    "formula": "VOL_RATIO MA60_DEV DECAY MA60_DEV ADD RET MUL JUMP SUB AMP SUB",
+    "mean_ic": 0.0037,
+    "icir": 0.719,
+    "top_decile_sharpe": -2.303
+  },
+  {
+    "name": "rand_849",
+    "formula": "MA60_DEV DELAY1 VOL_RATIO DIV MA60_DEV ADD MOM20 MUL RSI14 RET MUL ADD",
+    "mean_ic": 0.0045,
+    "icir": 0.667,
+    "top_decile_sharpe": 1.454
+  },
+  {
+    "name": "rand_493",
+    "formula": "VOL_RATIO AMP ABS DECAY DIV AMP ABS RSI14 RET RET DIV ADD MUL MUL",
+    "mean_ic": 0.004,
+    "icir": 0.637,
+    "top_decile_sharpe": -1.544
+  },
+  {
+    "name": "rand_637",
+    "formula": "MA60_DEV SIGN TURN RET DECAY DIV MOM20 ADD MA20_DEV VOL_RATIO DIV SUB MUL",
+    "mean_ic": 0.0019,
+    "icir": 0.576,
+    "top_decile_sharpe": -2.324
+  },
+  {
+    "name": "rand_940",
+    "formula": "AMP MOM5 DIV RSI14 NEG ADD DELAY1 RSI14 RET MUL SUB",
+    "mean_ic": 0.0021,
+    "icir": 0.474,
+    "top_decile_sharpe": -0.075
+  },
+  {
+    "name": "rand_485",
+    "formula": "RET MA60_DEV SIGN TURN TURN ADD SUB SUB MA20_DEV AMP ADD MUL",
+    "mean_ic": 0.0032,
+    "icir": 0.404,
+    "top_decile_sharpe": -0.834
+  },
+  {
+    "name": "rand_721",
+    "formula": "MA20_DEV TURN ABS MOM20 VOL_RATIO ABS DIV TURN TURN SUB ADD DIV ADD",
+    "mean_ic": 0.0012,
+    "icir": 0.378,
+    "top_decile_sharpe": -1.18
+  },
+  {
+    "name": "rand_1062",
+    "formula": "MOM20 SIGN MOM20 DELAY1 MUL DELAY1 RET MA60_DEV DIV ADD",
+    "mean_ic": 0.0012,
+    "icir": 0.348,
+    "top_decile_sharpe": -0.386
+  },
+  {
+    "name": "rand_156",
+    "formula": "MA20_DEV TURN MOM5 AMP ADD MAX3 DIV MAX3 MAX3 MUL",
+    "mean_ic": 0.0011,
+    "icir": 0.341,
+    "top_decile_sharpe": 1.869
+  },
+  {
+    "name": "rand_1007",
+    "formula": "TURN DECAY AMP DECAY RET ADD MUL DELAY1 RET DIV",
+    "mean_ic": 0.001,
+    "icir": 0.339,
+    "top_decile_sharpe": -1.232
+  },
+  {
+    "name": "rand_179",
+    "formula": "RET MA20_DEV MAX3 JUMP MOM20 MA20_DEV MA20_DEV ADD MOM20 DIV MUL DIV MUL",
+    "mean_ic": 0.0017,
+    "icir": 0.323,
+    "top_decile_sharpe": -2.689
+  },
+  {
+    "name": "rand_749",
+    "formula": "MOM5 RSI14 VOL_RATIO VOL_RATIO ADD MA60_DEV SUB ABS MOM20 DELAY1 DIV DIV DIV",
+    "mean_ic": 0.0011,
+    "icir": 0.321,
+    "top_decile_sharpe": -0.263
+  },
+  {
+    "name": "rand_64",
+    "formula": "MA20_DEV AMP AMP MAX3 TURN VOL_RATIO MUL JUMP DIV DIV ADD",
+    "mean_ic": 0.002,
+    "icir": 0.299,
+    "top_decile_sharpe": 1.983
+  },
+  {
+    "name": "rand_196",
+    "formula": "TURN MOM20 RET ABS MUL SUB DECAY DELAY1 AMP MOM20 ADD ADD",
+    "mean_ic": 0.002,
+    "icir": 0.231,
+    "top_decile_sharpe": -1.379
+  },
+  {
+    "name": "rand_538",
+    "formula": "MA60_DEV MOM20 MUL DELAY1 SIGN TURN NEG ADD SIGN MA20_DEV DIV",
+    "mean_ic": 0.0004,
+    "icir": 0.158,
+    "top_decile_sharpe": -2.438
+  },
+  {
+    "name": "rand_329",
+    "formula": "AMP MAX3 MOM5 MOM20 MOM5 MUL MAX3 VOL_RATIO ADD ABS ADD ADD",
+    "mean_ic": 0.0007,
+    "icir": 0.123,
+    "top_decile_sharpe": -2.3
+  },
+  {
+    "name": "rand_700",
+    "formula": "RSI14 RSI14 MA60_DEV ABS ADD VOL_RATIO RET SIGN MOM5 MA20_DEV ADD ADD DIV SUB ADD",
+    "mean_ic": 0.0001,
+    "icir": 0.04,
+    "top_decile_sharpe": 0.012
+  },
+  {
+    "name": "rand_492",
+    "formula": "AMP RSI14 AMP DIV DIV SIGN JUMP MOM20 VOL_RATIO MOM5 MUL ADD MUL",
+    "mean_ic": 0.0,
+    "icir": 0.0,
+    "top_decile_sharpe": -1.987
+  },
+  {
+    "name": "rand_722",
+    "formula": "RET SIGN JUMP NEG VOL_RATIO MA20_DEV ADD DIV VOL_RATIO JUMP DIV",
+    "mean_ic": 0.0,
+    "icir": 0.0,
+    "top_decile_sharpe": -1.987
+  },
+  {
+    "name": "rand_829",
+    "formula": "MA60_DEV SIGN TURN SUB DELAY1 TURN NEG DECAY JUMP MUL",
+    "mean_ic": 0.0,
+    "icir": 0.0,
+    "top_decile_sharpe": -1.987
+  },
+  {
+    "name": "rand_1103",
+    "formula": "RSI14 MOM20 ADD JUMP MOM20 MUL DECAY ABS RSI14 MOM20 DIV ADD",
+    "mean_ic": -0.0001,
+    "icir": -0.024,
+    "top_decile_sharpe": -2.889
+  },
+  {
+    "name": "rand_998",
+    "formula": "AMP DELAY1 NEG MOM20 MOM20 DIV DIV MA60_DEV SIGN MUL",
+    "mean_ic": -0.0002,
+    "icir": -0.032,
+    "top_decile_sharpe": -1.113
+  },
+  {
+    "name": "rand_662",
+    "formula": "RET MOM5 DIV RET SUB AMP ADD ABS NEG MA20_DEV DIV",
+    "mean_ic": -0.0006,
+    "icir": -0.187,
+    "top_decile_sharpe": -3.3
+  },
+  {
+    "name": "rand_131",
+    "formula": "MOM5 AMP SUB RET MAX3 ADD TURN SUB SIGN DELAY1",
+    "mean_ic": -0.0014,
+    "icir": -0.217,
+    "top_decile_sharpe": -0.702
+  },
+  {
+    "name": "rand_477",
+    "formula": "MOM5 DECAY RSI14 DIV MA60_DEV NEG VOL_RATIO MOM20 RET ADD ADD MUL DIV",
+    "mean_ic": -0.0008,
+    "icir": -0.242,
+    "top_decile_sharpe": -1.885
+  },
+  {
+    "name": "rand_714",
+    "formula": "AMP TURN DECAY MAX3 AMP DIV TURN ADD ABS MUL",
+    "mean_ic": -0.0019,
+    "icir": -0.246,
+    "top_decile_sharpe": -1.573
+  },
+  {
+    "name": "rand_93",
+    "formula": "MA20_DEV RSI14 SUB MOM20 ADD MA20_DEV MUL RSI14 DELAY1 MOM20 SUB ADD",
+    "mean_ic": -0.0018,
+    "icir": -0.249,
+    "top_decile_sharpe": -1.361
+  },
+  {
+    "name": "rand_999",
+    "formula": "MA20_DEV MA20_DEV MUL DECAY VOL_RATIO AMP MOM20 VOL_RATIO MUL DIV ADD SUB",
+    "mean_ic": -0.0008,
+    "icir": -0.288,
+    "top_decile_sharpe": -1.784
+  },
+  {
+    "name": "rand_191",
+    "formula": "MA60_DEV RSI14 SUB VOL_RATIO JUMP DECAY DELAY1 ADD DELAY1 TURN MUL",
+    "mean_ic": -0.0016,
+    "icir": -0.309,
+    "top_decile_sharpe": -0.741
+  },
+  {
+    "name": "rand_369",
+    "formula": "TURN ABS SIGN VOL_RATIO NEG MAX3 AMP MUL DIV MA60_DEV SUB",
+    "mean_ic": -0.0035,
+    "icir": -0.448,
+    "top_decile_sharpe": -1.144
+  },
+  {
+    "name": "rand_509",
+    "formula": "MA20_DEV VOL_RATIO DIV MOM20 DIV MOM5 SIGN ADD AMP MOM20 MUL SUB",
+    "mean_ic": -0.0015,
+    "icir": -0.474,
+    "top_decile_sharpe": -0.445
+  },
+  {
+    "name": "rand_618",
+    "formula": "AMP RET SUB MA20_DEV MUL MOM20 MUL VOL_RATIO SUB MA60_DEV DIV",
+    "mean_ic": -0.0016,
+    "icir": -0.524,
+    "top_decile_sharpe": -2.633
+  },
+  {
+    "name": "rand_648",
+    "formula": "RSI14 MA60_DEV MA20_DEV NEG MOM20 JUMP MOM20 SUB DELAY1 MUL SUB SUB",
+    "mean_ic": -0.0043,
+    "icir": -0.613,
+    "top_decile_sharpe": -2.689
+  },
+  {
+    "name": "rand_578",
+    "formula": "MOM20 MOM5 SUB AMP MA60_DEV MOM5 MOM20 MOM20 MA60_DEV NEG ADD DIV ADD SUB SUB DIV",
+    "mean_ic": -0.0026,
+    "icir": -0.699,
+    "top_decile_sharpe": -0.986
+  },
+  {
+    "name": "rand_617",
+    "formula": "VOL_RATIO TURN RSI14 SIGN NEG MUL DECAY ADD DELAY1 ABS",
+    "mean_ic": -0.0049,
+    "icir": -0.743,
+    "top_decile_sharpe": -1.512
+  },
+  {
+    "name": "rand_1176",
+    "formula": "MOM5 ABS MOM5 SIGN MOM5 DIV JUMP DIV NEG MOM20 ADD",
+    "mean_ic": -0.0055,
+    "icir": -0.754,
+    "top_decile_sharpe": -3.069
+  },
+  {
+    "name": "rand_841",
+    "formula": "RET VOL_RATIO MOM5 SIGN ABS MA20_DEV DIV MAX3 MAX3 MUL ADD",
+    "mean_ic": -0.0033,
+    "icir": -0.873,
+    "top_decile_sharpe": -1.636
+  },
+  {
+    "name": "rand_165",
+    "formula": "MA20_DEV VOL_RATIO VOL_RATIO MOM20 SUB MAX3 VOL_RATIO MA20_DEV DIV VOL_RATIO DIV DIV MUL MUL",
+    "mean_ic": -0.0077,
+    "icir": -0.921,
+    "top_decile_sharpe": 0.87
+  },
+  {
+    "name": "rand_876",
+    "formula": "MA60_DEV MA20_DEV MAX3 MUL ABS VOL_RATIO MOM20 DELAY1 SUB MAX3 MUL",
+    "mean_ic": -0.0078,
+    "icir": -0.976,
+    "top_decile_sharpe": 1.125
+  },
+  {
+    "name": "rand_852",
+    "formula": "TURN MA20_DEV MA20_DEV RET MOM5 ADD RET DECAY TURN MOM5 ADD SUB SUB DIV SUB ADD",
+    "mean_ic": -0.0073,
+    "icir": -1.069,
+    "top_decile_sharpe": -1.389
+  },
+  {
+    "name": "rand_245",
+    "formula": "RET TURN DELAY1 TURN AMP MAX3 ADD MUL MOM20 SUB ADD",
+    "mean_ic": -0.0081,
+    "icir": -1.097,
+    "top_decile_sharpe": -1.505
+  },
+  {
+    "name": "rand_252",
+    "formula": "RET DELAY1 AMP MOM20 MUL SUB MA20_DEV RET NEG DECAY DIV ADD",
+    "mean_ic": -0.0038,
+    "icir": -1.122,
+    "top_decile_sharpe": -1.963
+  },
+  {
+    "name": "rand_544",
+    "formula": "MOM20 VOL_RATIO TURN SUB TURN SUB MUL RET JUMP MUL",
+    "mean_ic": -0.0067,
+    "icir": -1.135,
+    "top_decile_sharpe": -2.104
+  },
+  {
+    "name": "rand_257",
+    "formula": "RSI14 AMP DELAY1 MOM5 ADD MA20_DEV TURN VOL_RATIO MOM5 NEG DIV ADD MUL DIV MUL",
+    "mean_ic": -0.0057,
+    "icir": -1.156,
+    "top_decile_sharpe": -2.254
+  },
+  {
+    "name": "rand_673",
+    "formula": "RET DELAY1 AMP MOM5 ADD MA20_DEV MAX3 RSI14 ADD ADD MUL",
+    "mean_ic": -0.0085,
+    "icir": -1.185,
+    "top_decile_sharpe": 0.59
+  },
+  {
+    "name": "rand_1063",
+    "formula": "MA60_DEV MA60_DEV DELAY1 DELAY1 MAX3 DIV MA20_DEV ABS DECAY SUB",
+    "mean_ic": -0.0036,
+    "icir": -1.213,
+    "top_decile_sharpe": -1.337
+  },
+  {
+    "name": "rand_1171",
+    "formula": "MA60_DEV TURN NEG RSI14 SUB VOL_RATIO MOM5 ABS ABS MAX3 SUB ADD DIV",
+    "mean_ic": -0.0046,
+    "icir": -1.222,
+    "top_decile_sharpe": -0.514
+  },
+  {
+    "name": "rand_424",
+    "formula": "MOM20 MA20_DEV RET MA20_DEV RSI14 ADD RSI14 SUB SUB DIV ADD",
+    "mean_ic": -0.0038,
+    "icir": -1.236,
+    "top_decile_sharpe": -1.319
+  },
+  {
+    "name": "rand_627",
+    "formula": "TURN RET RSI14 MAX3 RET MUL DECAY ADD MA20_DEV MUL SUB",
+    "mean_ic": -0.0102,
+    "icir": -1.264,
+    "top_decile_sharpe": -1.731
+  },
+  {
+    "name": "rand_1011",
+    "formula": "MOM20 VOL_RATIO DIV AMP JUMP DECAY RSI14 SUB ADD SIGN",
+    "mean_ic": -0.0083,
+    "icir": -1.29,
+    "top_decile_sharpe": -1.411
+  },
+  {
+    "name": "rand_387",
+    "formula": "MOM20 RSI14 ADD NEG TURN MUL MA20_DEV MUL RET DECAY SUB",
+    "mean_ic": -0.0103,
+    "icir": -1.344,
+    "top_decile_sharpe": -0.752
+  },
+  {
+    "name": "rand_623",
+    "formula": "RET JUMP VOL_RATIO ADD JUMP MOM5 MAX3 SUB RSI14 DIV",
+    "mean_ic": -0.0058,
+    "icir": -1.419,
+    "top_decile_sharpe": -2.206
+  },
+  {
+    "name": "rand_730",
+    "formula": "MOM20 RSI14 MA20_DEV MAX3 DIV VOL_RATIO ADD ADD MAX3 DECAY",
+    "mean_ic": -0.0048,
+    "icir": -1.466,
+    "top_decile_sharpe": -1.992
+  },
+  {
+    "name": "rand_515",
+    "formula": "RSI14 AMP MA60_DEV SUB DIV MOM5 MUL JUMP MOM20 NEG DIV",
+    "mean_ic": -0.0003,
+    "icir": -1.478,
+    "top_decile_sharpe": -1.953
+  },
+  {
+    "name": "rand_330",
+    "formula": "RET ABS MA20_DEV SUB VOL_RATIO MOM20 AMP ADD MA20_DEV MOM20 DIV DIV DIV DIV",
+    "mean_ic": -0.009,
+    "icir": -1.5,
+    "top_decile_sharpe": -1.371
+  },
+  {
+    "name": "rand_864",
+    "formula": "RSI14 DECAY MOM5 DIV NEG SIGN MOM20 JUMP ABS DIV",
+    "mean_ic": -0.0074,
+    "icir": -1.518,
+    "top_decile_sharpe": -0.956
+  },
+  {
+    "name": "rand_527",
+    "formula": "RSI14 MAX3 MOM5 MAX3 AMP JUMP MA60_DEV NEG MOM5 NEG DIV ADD ADD ADD",
+    "mean_ic": -0.0059,
+    "icir": -1.705,
+    "top_decile_sharpe": 0.357
+  },
+  {
+    "name": "rand_642",
+    "formula": "MA20_DEV DECAY RSI14 DIV ABS AMP DIV JUMP RSI14 MAX3 SUB",
+    "mean_ic": -0.012,
+    "icir": -1.757,
+    "top_decile_sharpe": -0.694
+  },
+  {
+    "name": "rand_348",
+    "formula": "RET NEG DECAY MOM5 DECAY AMP RET MUL MAX3 SUB DIV",
+    "mean_ic": -0.0043,
+    "icir": -1.78,
+    "top_decile_sharpe": -1.18
+  },
+  {
+    "name": "rand_748",
+    "formula": "MA60_DEV MA60_DEV DIV VOL_RATIO AMP DELAY1 MA20_DEV ABS MAX3 MUL ADD ADD",
+    "mean_ic": -0.0092,
+    "icir": -1.801,
+    "top_decile_sharpe": -2.944
+  },
+  {
+    "name": "rand_263",
+    "formula": "VOL_RATIO JUMP VOL_RATIO RSI14 VOL_RATIO RSI14 DECAY MA20_DEV RET MOM5 SUB SUB MUL MUL SUB ADD SUB",
+    "mean_ic": -0.0134,
+    "icir": -1.852,
+    "top_decile_sharpe": -1.478
+  },
+  {
+    "name": "rand_283",
+    "formula": "VOL_RATIO MA60_DEV VOL_RATIO ADD JUMP MUL AMP ADD MOM5 MUL",
+    "mean_ic": -0.0123,
+    "icir": -1.904,
+    "top_decile_sharpe": 1.195
+  },
+  {
+    "name": "rand_238",
+    "formula": "MOM5 ABS RET ABS MUL TURN MUL TURN MUL DECAY",
+    "mean_ic": -0.0149,
+    "icir": -1.905,
+    "top_decile_sharpe": -1.028
+  },
+  {
+    "name": "rand_43",
+    "formula": "AMP TURN DECAY MOM5 ADD DIV MA60_DEV TURN DECAY ADD SUB",
+    "mean_ic": -0.016,
+    "icir": -1.956,
+    "top_decile_sharpe": -1.602
+  },
+  {
+    "name": "rand_1066",
+    "formula": "MOM20 DECAY DECAY TURN ABS MAX3 DELAY1 DIV MOM5 MUL",
+    "mean_ic": -0.0195,
+    "icir": -1.962,
+    "top_decile_sharpe": 0.876
+  },
+  {
+    "name": "rand_952",
+    "formula": "MA60_DEV MOM20 MOM20 DECAY MUL ADD MA20_DEV TURN ADD NEG MUL",
+    "mean_ic": -0.0159,
+    "icir": -2.02,
+    "top_decile_sharpe": -2.977
+  },
+  {
+    "name": "rand_574",
+    "formula": "VOL_RATIO RSI14 JUMP DIV DECAY MA20_DEV AMP SUB DIV JUMP",
+    "mean_ic": -0.0004,
+    "icir": -2.067,
+    "top_decile_sharpe": -2.032
+  },
+  {
+    "name": "rand_568",
+    "formula": "MA20_DEV MOM5 RET MUL TURN JUMP MA60_DEV AMP DIV SUB DIV MUL",
+    "mean_ic": -0.0074,
+    "icir": -2.121,
+    "top_decile_sharpe": -1.221
+  },
+  {
+    "name": "rand_457",
+    "formula": "RET RET MA20_DEV SIGN SUB MOM5 MAX3 DIV DIV DELAY1",
+    "mean_ic": -0.0157,
+    "icir": -2.151,
+    "top_decile_sharpe": -0.322
+  },
+  {
+    "name": "rand_384",
+    "formula": "AMP AMP AMP MOM20 SUB MA60_DEV DIV JUMP DECAY ADD ADD",
+    "mean_ic": -0.0063,
+    "icir": -2.168,
+    "top_decile_sharpe": 0.639
+  },
+  {
+    "name": "rand_777",
+    "formula": "MOM5 MA60_DEV RSI14 MAX3 DELAY1 SIGN ADD DIV MA20_DEV MOM20 SUB ADD",
+    "mean_ic": -0.0077,
+    "icir": -2.182,
+    "top_decile_sharpe": -1.125
+  },
+  {
+    "name": "rand_461",
+    "formula": "VOL_RATIO DECAY MA60_DEV MA20_DEV MUL JUMP MUL MA60_DEV MA60_DEV SIGN SUB SUB",
+    "mean_ic": -0.0153,
+    "icir": -2.21,
+    "top_decile_sharpe": -1.611
+  },
+  {
+    "name": "rand_733",
+    "formula": "TURN ABS MOM20 MUL MAX3 NEG AMP DECAY DELAY1 ADD",
+    "mean_ic": -0.02,
+    "icir": -2.262,
+    "top_decile_sharpe": -2.582
+  },
+  {
+    "name": "rand_132",
+    "formula": "VOL_RATIO MOM20 ABS RET DELAY1 VOL_RATIO RSI14 DELAY1 MUL DECAY ADD SUB ADD",
+    "mean_ic": -0.0184,
+    "icir": -2.303,
+    "top_decile_sharpe": -2.41
+  },
+  {
+    "name": "rand_9",
+    "formula": "MA20_DEV MOM5 RSI14 SUB NEG VOL_RATIO SUB MA20_DEV ADD TURN MUL MUL",
+    "mean_ic": -0.0162,
+    "icir": -2.333,
+    "top_decile_sharpe": -1.774
+  },
+  {
+    "name": "rand_573",
+    "formula": "MA60_DEV SIGN JUMP VOL_RATIO ABS MUL MOM5 MUL RET MA20_DEV MUL ADD",
+    "mean_ic": -0.0211,
+    "icir": -2.376,
+    "top_decile_sharpe": 0.189
+  },
+  {
+    "name": "rand_1071",
+    "formula": "RSI14 DELAY1 MOM20 ABS NEG MAX3 DECAY MOM5 ABS MOM20 MUL ADD DIV",
+    "mean_ic": -0.0085,
+    "icir": -2.397,
+    "top_decile_sharpe": -2.685
+  },
+  {
+    "name": "rand_204",
+    "formula": "TURN MOM5 NEG MUL ABS NEG NEG NEG SIGN RSI14 DIV",
+    "mean_ic": -0.0087,
+    "icir": -2.41,
+    "top_decile_sharpe": -2.018
+  },
+  {
+    "name": "rand_550",
+    "formula": "MA20_DEV DELAY1 DELAY1 MOM5 RSI14 JUMP DIV VOL_RATIO DIV TURN MUL ADD",
+    "mean_ic": -0.0172,
+    "icir": -2.416,
+    "top_decile_sharpe": -0.395
+  },
+  {
+    "name": "rand_110",
+    "formula": "TURN RSI14 SUB JUMP TURN DIV MOM20 DECAY SUB MA20_DEV DIV",
+    "mean_ic": -0.0084,
+    "icir": -2.509,
+    "top_decile_sharpe": -3.042
+  },
+  {
+    "name": "rand_649",
+    "formula": "AMP TURN DELAY1 MA60_DEV VOL_RATIO SIGN SIGN MA60_DEV ADD SUB SUB DIV",
+    "mean_ic": -0.0062,
+    "icir": -2.559,
+    "top_decile_sharpe": -1.642
+  },
+  {
+    "name": "rand_97",
+    "formula": "VOL_RATIO RET JUMP DIV MAX3 AMP VOL_RATIO DIV NEG MOM20 DIV ADD",
+    "mean_ic": -0.0141,
+    "icir": -2.59,
+    "top_decile_sharpe": -3.009
+  },
+  {
+    "name": "rand_420",
+    "formula": "MOM20 VOL_RATIO MUL DECAY MAX3 MA20_DEV MUL AMP MOM20 JUMP SUB DIV",
+    "mean_ic": -0.0229,
+    "icir": -2.598,
+    "top_decile_sharpe": 1.81
+  },
+  {
+    "name": "rand_285",
+    "formula": "VOL_RATIO RET AMP ADD MOM20 SUB MA60_DEV JUMP DIV MA20_DEV MUL ADD",
+    "mean_ic": -0.0216,
+    "icir": -2.618,
+    "top_decile_sharpe": -0.616
+  },
+  {
+    "name": "rand_686",
+    "formula": "MOM20 MAX3 VOL_RATIO SUB MOM5 SUB DECAY MA60_DEV ADD MOM20 MUL",
+    "mean_ic": -0.0243,
+    "icir": -2.756,
+    "top_decile_sharpe": -2.367
+  },
+  {
+    "name": "rand_63",
+    "formula": "RET NEG AMP RET MA20_DEV MOM20 SUB NEG MA20_DEV MA60_DEV ADD SUB DIV DIV ADD",
+    "mean_ic": -0.0093,
+    "icir": -2.77,
+    "top_decile_sharpe": -1.527
+  },
+  {
+    "name": "rand_768",
+    "formula": "MOM5 RSI14 SUB MOM20 DIV NEG VOL_RATIO MUL RET NEG DIV",
+    "mean_ic": -0.0062,
+    "icir": -2.915,
+    "top_decile_sharpe": -1.272
+  },
+  {
+    "name": "rand_540",
+    "formula": "MOM20 VOL_RATIO ADD JUMP AMP DELAY1 DIV RSI14 DECAY ADD",
+    "mean_ic": -0.0218,
+    "icir": -3.015,
+    "top_decile_sharpe": 0.827
+  },
+  {
+    "name": "rand_880",
+    "formula": "AMP SIGN MOM20 DIV RET SUB MA20_DEV MOM20 MA60_DEV ADD ADD DIV",
+    "mean_ic": -0.0087,
+    "icir": -3.114,
+    "top_decile_sharpe": -2.938
+  },
+  {
+    "name": "rand_969",
+    "formula": "MA20_DEV MA60_DEV DIV SIGN MOM5 MA20_DEV DIV DECAY MAX3 NEG MUL",
+    "mean_ic": -0.0094,
+    "icir": -3.165,
+    "top_decile_sharpe": -2.154
+  },
+  {
+    "name": "rand_1020",
+    "formula": "RSI14 RSI14 JUMP ADD MOM20 TURN DIV SUB MA20_DEV MOM20 MUL MUL",
+    "mean_ic": -0.0311,
+    "icir": -3.166,
+    "top_decile_sharpe": 1.184
+  },
+  {
+    "name": "rand_787",
+    "formula": "MA20_DEV TURN DIV TURN NEG RSI14 MAX3 MUL MOM5 ADD DIV",
+    "mean_ic": -0.0257,
+    "icir": -3.2,
+    "top_decile_sharpe": -2.482
+  },
+  {
+    "name": "rand_784",
+    "formula": "RET MA60_DEV MUL NEG MOM20 NEG SIGN JUMP VOL_RATIO JUMP ADD ADD",
+    "mean_ic": -0.015,
+    "icir": -3.39,
+    "top_decile_sharpe": -0.75
+  },
+  {
+    "name": "rand_54",
+    "formula": "MOM20 VOL_RATIO RET DELAY1 NEG SUB SUB RET TURN SUB MUL",
+    "mean_ic": -0.022,
+    "icir": -3.398,
+    "top_decile_sharpe": -2.478
+  },
+  {
+    "name": "rand_243",
+    "formula": "RSI14 SIGN ABS DECAY TURN DECAY RET RSI14 MUL MAX3 DIV MUL",
+    "mean_ic": -0.0078,
+    "icir": -3.4,
+    "top_decile_sharpe": -2.183
+  },
+  {
+    "name": "rand_17",
+    "formula": "AMP JUMP AMP DIV AMP AMP MAX3 ADD ADD DECAY",
+    "mean_ic": -0.0162,
+    "icir": -3.537,
+    "top_decile_sharpe": -1.131
+  },
+  {
+    "name": "rand_1026",
+    "formula": "AMP MOM5 MOM20 MOM5 DIV MA20_DEV ADD MUL JUMP ADD",
+    "mean_ic": -0.0227,
+    "icir": -3.544,
+    "top_decile_sharpe": 1.163
+  },
+  {
+    "name": "rand_1142",
+    "formula": "MOM5 MA60_DEV ADD JUMP MOM5 ABS ADD VOL_RATIO MOM20 NEG SUB SUB",
+    "mean_ic": -0.0219,
+    "icir": -3.658,
+    "top_decile_sharpe": -2.878
+  },
+  {
+    "name": "rand_365",
+    "formula": "VOL_RATIO RSI14 ABS SIGN MUL SIGN RET DIV VOL_RATIO MOM20 SUB DIV",
+    "mean_ic": -0.0098,
+    "icir": -3.669,
+    "top_decile_sharpe": -1.689
+  },
+  {
+    "name": "rand_955",
+    "formula": "MOM5 VOL_RATIO DELAY1 TURN DIV VOL_RATIO ADD RET MAX3 MUL MUL",
+    "mean_ic": -0.0323,
+    "icir": -3.888,
+    "top_decile_sharpe": 0.582
+  },
+  {
+    "name": "rand_95",
+    "formula": "VOL_RATIO AMP RSI14 RET MA20_DEV MOM20 ABS DIV MA60_DEV MOM5 DIV DIV MUL MUL MUL ADD",
+    "mean_ic": -0.0153,
+    "icir": -3.928,
+    "top_decile_sharpe": -3.584
+  },
+  {
+    "name": "rand_854",
+    "formula": "MOM20 ABS ABS VOL_RATIO DELAY1 DIV MA60_DEV MA20_DEV AMP ADD SUB SUB",
+    "mean_ic": -0.0257,
+    "icir": -3.997,
+    "top_decile_sharpe": -1.662
+  },
+  {
+    "name": "rand_944",
+    "formula": "MOM5 JUMP RSI14 ABS DIV MA20_DEV RSI14 DECAY MUL TURN DIV ADD",
+    "mean_ic": -0.0354,
+    "icir": -4.135,
+    "top_decile_sharpe": -1.755
+  },
+  {
+    "name": "rand_727",
+    "formula": "TURN MOM5 DIV TURN DIV MA60_DEV DECAY JUMP SIGN DIV",
+    "mean_ic": -0.0107,
+    "icir": -4.281,
+    "top_decile_sharpe": -2.146
+  },
+  {
+    "name": "rand_761",
+    "formula": "MOM5 MOM20 MUL AMP RSI14 JUMP VOL_RATIO ADD DIV RSI14 DIV DIV",
+    "mean_ic": -0.0351,
+    "icir": -4.345,
+    "top_decile_sharpe": 1.194
+  },
+  {
+    "name": "rand_49",
+    "formula": "MOM5 JUMP JUMP DECAY MOM5 DIV DELAY1 RET RSI14 JUMP ADD SUB",
+    "mean_ic": -0.0187,
+    "icir": -4.455,
+    "top_decile_sharpe": -3.283
+  },
+  {
+    "name": "rand_535",
+    "formula": "RET MOM5 SUB MOM5 DIV MA20_DEV ABS NEG TURN RSI14 DIV DIV SUB",
+    "mean_ic": -0.0412,
+    "icir": -4.463,
+    "top_decile_sharpe": -3.159
+  },
+  {
+    "name": "rand_18",
+    "formula": "VOL_RATIO MOM5 MA60_DEV MUL MUL RET ADD DECAY JUMP AMP DIV",
+    "mean_ic": -0.024,
+    "icir": -4.476,
+    "top_decile_sharpe": -3.255
+  },
+  {
+    "name": "mean_revert",
+    "formula": "RET NEG",
+    "mean_ic": -0.0388,
+    "icir": -4.54,
+    "top_decile_sharpe": -2.624
+  },
+  {
+    "name": "rand_528",
+    "formula": "MOM20 MA60_DEV DIV MOM20 SUB MOM5 DIV AMP SUB RSI14 ADD",
+    "mean_ic": -0.0137,
+    "icir": -4.634,
+    "top_decile_sharpe": -3.859
+  },
+  {
+    "name": "rand_1135",
+    "formula": "MOM20 MOM5 MOM5 MUL DELAY1 JUMP ABS MUL MOM20 DIV",
+    "mean_ic": -0.0227,
+    "icir": -4.802,
+    "top_decile_sharpe": -3.679
+  },
+  {
+    "name": "rand_685",
+    "formula": "VOL_RATIO MAX3 RET MAX3 TURN MA60_DEV DELAY1 DIV VOL_RATIO TURN SUB SUB SUB DIV",
+    "mean_ic": -0.0143,
+    "icir": -4.824,
+    "top_decile_sharpe": -1.954
+  },
+  {
+    "name": "rand_779",
+    "formula": "VOL_RATIO VOL_RATIO MA60_DEV JUMP ADD DIV TURN TURN MA20_DEV ADD SUB ADD",
+    "mean_ic": -0.0388,
+    "icir": -4.98,
+    "top_decile_sharpe": -1.874
+  },
+  {
+    "name": "rand_224",
+    "formula": "MA60_DEV VOL_RATIO ABS NEG DECAY AMP MOM20 AMP DELAY1 JUMP ADD ADD SUB MUL",
+    "mean_ic": -0.0494,
+    "icir": -5.032,
+    "top_decile_sharpe": -2.444
+  },
+  {
+    "name": "rand_20",
+    "formula": "VOL_RATIO MAX3 MA60_DEV SUB AMP MA20_DEV RET MUL MUL ADD",
+    "mean_ic": -0.0361,
+    "icir": -5.044,
+    "top_decile_sharpe": -3.861
+  },
+  {
+    "name": "rand_459",
+    "formula": "MA20_DEV JUMP MOM20 DELAY1 SUB DECAY AMP SUB RSI14 ADD",
+    "mean_ic": -0.0372,
+    "icir": -5.051,
+    "top_decile_sharpe": -2.754
+  },
+  {
+    "name": "rand_937",
+    "formula": "MA60_DEV NEG MOM5 SIGN DECAY ADD ABS AMP MAX3 MAX3 DIV",
+    "mean_ic": -0.0357,
+    "icir": -5.302,
+    "top_decile_sharpe": -2.888
+  },
+  {
+    "name": "rand_801",
+    "formula": "MOM20 JUMP MOM20 SUB MOM5 MA60_DEV SUB RSI14 JUMP ABS MUL ADD",
+    "mean_ic": -0.0563,
+    "icir": -5.559,
+    "top_decile_sharpe": -2.655
+  },
+  {
+    "name": "rand_73",
+    "formula": "AMP DELAY1 MAX3 MA20_DEV MA20_DEV ADD MAX3 ABS ADD JUMP",
+    "mean_ic": -0.0312,
+    "icir": -5.72,
+    "top_decile_sharpe": -3.046
+  },
+  {
+    "name": "rand_1095",
+    "formula": "MOM20 RSI14 MUL AMP MUL RET MUL DECAY JUMP RSI14 SUB",
+    "mean_ic": -0.0418,
+    "icir": -5.893,
+    "top_decile_sharpe": -2.436
+  },
+  {
+    "name": "rand_830",
+    "formula": "VOL_RATIO MAX3 MOM20 MOM5 MUL MAX3 AMP DIV ABS MUL",
+    "mean_ic": -0.0469,
+    "icir": -6.048,
+    "top_decile_sharpe": -1.022
+  },
+  {
+    "name": "rand_505",
+    "formula": "RET MA20_DEV MOM5 VOL_RATIO AMP MAX3 MUL DIV DELAY1 MA20_DEV ADD SUB ADD",
+    "mean_ic": -0.0426,
+    "icir": -6.122,
+    "top_decile_sharpe": -2.215
+  },
+  {
+    "name": "rand_260",
+    "formula": "MA60_DEV VOL_RATIO DIV NEG MA60_DEV DECAY MOM20 TURN MA20_DEV MOM20 SUB MUL SUB ADD SUB",
+    "mean_ic": -0.063,
+    "icir": -6.224,
+    "top_decile_sharpe": -3.458
+  },
+  {
+    "name": "rand_98",
+    "formula": "MA60_DEV RET DIV ABS RET RSI14 DIV ADD AMP DIV",
+    "mean_ic": -0.0342,
+    "icir": -6.846,
+    "top_decile_sharpe": -3.152
+  },
+  {
+    "name": "rand_858",
+    "formula": "TURN MA60_DEV MOM20 MUL TURN DIV DECAY DIV MOM20 DECAY ADD",
+    "mean_ic": -0.0248,
+    "icir": -7.106,
+    "top_decile_sharpe": -2.022
+  },
+  {
+    "name": "rand_322",
+    "formula": "VOL_RATIO TURN SUB RSI14 SUB TURN MAX3 DELAY1 DIV MAX3",
+    "mean_ic": -0.0445,
+    "icir": -7.172,
+    "top_decile_sharpe": -2.768
+  },
+  {
+    "name": "rand_770",
+    "formula": "VOL_RATIO RSI14 SIGN DELAY1 TURN DIV NEG AMP DIV ADD",
+    "mean_ic": -0.0528,
+    "icir": -7.808,
+    "top_decile_sharpe": -2.256
+  },
+  {
+    "name": "rand_680",
+    "formula": "VOL_RATIO MOM5 JUMP JUMP MA60_DEV ABS SUB TURN MOM5 JUMP ADD MUL ADD",
+    "mean_ic": -0.0471,
+    "icir": -8.914,
+    "top_decile_sharpe": -3.45
+  }
+]

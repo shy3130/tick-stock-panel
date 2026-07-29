@@ -49,16 +49,16 @@ def test_normalize_build_result_updates_code_and_meta():
 
     normalized = _normalize_build_result(
         result,
-        "ai_from_frontend",
+        "ai_generated",
         name="中文策略名",
         description="前端描述",
     )
 
     assert normalized["valid"] is True
-    assert normalized["meta"]["id"] == "ai_from_frontend"
+    assert normalized["meta"]["id"] == "ai_generated"
     assert normalized["meta"]["name"] == "中文策略名"
     assert normalized["meta"]["description"] == "前端描述"
-    assert '"id": "ai_from_frontend"' in normalized["code"]
+    assert '"id": "ai_generated"' in normalized["code"]
 
 
 def test_normalize_strategy_meta_inserts_missing_name_fields():

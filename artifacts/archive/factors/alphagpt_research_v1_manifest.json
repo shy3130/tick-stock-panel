@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "release": {
+    "name": "AlphaGPT Research",
+    "version": "1.0.0",
+    "release_date": "2026-07-24",
+    "status": "complete_research_baseline"
+  },
+  "decision": {
+    "research_version_complete": true,
+    "production_alpha_ready": false,
+    "ppo_ready": false,
+    "frontend_included": false,
+    "reason": "the generation/evaluation/audit pipeline is complete, but locked generalization gates do not support production alpha or PPO"
+  },
+  "capabilities": [
+    "legal token-by-token RPN formula generation with action masks",
+    "StackVM execution and T1-T3 training-fold evaluation",
+    "deduplication, lineage, correlation pruning and failure audit",
+    "random/evolution equal-budget comparison and deterministic checkpoints",
+    "offline rollouts and CPU-only behavior/rank baselines",
+    "locked validation and prospective gate reports"
+  ],
+  "explicit_non_goals": [
+    "frontend or interactive dashboard",
+    "live trading or production strategy deployment",
+    "claiming validated positive alpha",
+    "Transformer/PPO optimization before a new approved phase"
+  ],
+  "validation_checks": [
+    {
+      "name": "p10_equal_search_budgets_consumed",
+      "passed": true,
+      "detail": {
+        "random": {
+          "budget": 40,
+          "used": 40
+        },
+        "evolution": {
+          "budget": 40,
+          "used": 40
+        }
+      }
+    },
+    {
+      "name": "p10_search_folds_are_training_only",
+      "passed": true,
+      "detail": [
+        "train"
+      ]
+    },
+    {
+      "name": "p11a_dataset_hash_matches_manifest",
+      "passed": true,
+      "detail": "7ee2446887136e882fec155cf6c178e24b9735bc5dbe0c9a50cfeb4b7877cb63"
+    },
+    {
+      "name": "p11c_dataset_hash_matches_manifest",
+      "passed": true,
+      "detail": "b3082875ce8072a03ade076bcc4f584e6cd607c595341eed0f1191171023b9a6"
+    },
+    {
+      "name": "rollout_reward_folds_are_training_only",
+      "passed": true,
+      "detail": {
+        "p11a": [
+          "train"
+        ],
+        "p11c": [
+          "train"
+        ]
+      }
+    },
+    {
+      "name": "p11c_behavior_stability_gate_failed_honestly",
+      "passed": true,
+      "detail": "not ready for PPO; expand data or reduce policy collapse"
+    },
+    {
+      "name": "p11c2_reward_conditioned_gate_failed_honestly",
+      "passed": true,
+      "detail": "not ready for PPO; reward-conditioned BC is not stable"
+    },
+    {
+      "name": "p11d_checkpoint_hash_matches_report",
+      "passed": true,
+      "detail": "3a0ee0a6a7c510b942d3ac338cb1b8482b81844ce802997696cb845c313fadce"
+    },
+    {
+      "name": "p11d_validation_gate_passed",
+      "passed": true,
+      "detail": "eligible for prospective training-only reranker test"
+    },
+    {
+      "name": "p11d_prospective_gate_failed_honestly",
+      "passed": true,
+      "detail": "do not integrate reranker into policy search"
+    },
+    {
+      "name": "p11e_seed_split_is_disjoint",
+      "passed": true,
+      "detail": {
+        "train_seeds": [
+          20260821,
+          20260822,
+          20260823,
+          20260824
+        ],
+        "validation_seeds": [
+          20260825,
+          20260826
+        ]
+      }
+    },
+    {
+      "name": "p11e_counts_match_labels",
+      "passed": true,
+      "detail": {
+        "loaded": 236,
+        "reported": 236
+      }
+    },
+    {
+      "name": "p11e_checkpoint_hash_matches_report",
+      "passed": true,
+      "detail": "e15c3548864f6e9c077b0d7f9624ac598fd1e9e54500b553c729fcb028ed0d8b"
+    },
+    {
+      "name": "p11e_locked_validation_gate_failed_honestly",
+      "passed": true,
+      "detail": "do not run or integrate the v2 reranker"
+    },
+    {
+      "name": "no_frontend_is_part_of_alphagpt_release",
+      "passed": true,
+      "detail": "research Python modules and archived artifacts only"
+    }
+  ],
+  "summary": {
+    "p10": {
+      "random_budget": 40,
+      "evolution_budget": 40
+    },
+    "p11a": {
+      "episodes": 27,
+      "transitions": 237,
+      "episodes_by_split": {
+        "train": 23,
+        "validation": 4
+      },
+      "transitions_by_split": {
+        "train": 201,
+        "validation": 36
+      },
+      "failures": 0
+    },
+    "p11c": {
+      "counts": {
+        "episodes": 136,
+        "transitions": 1017,
+        "episodes_by_split": {
+          "train": 117,
+          "validation": 19
+        },
+        "transitions_by_split": {
+          "train": 887,
+          "validation": 130
+        },
+        "failures": 110
+      },
+      "pre_ppo_gate": false
+    },
+    "p11c2": {
+      "pre_ppo_gate": false,
+      "passing_modes": []
+    },
+    "p11d": {
+      "validation_spearman": 0.6175438596491227,
+      "validation_top_k_lift": 5.939562311913429,
+      "validation_gate": true,
+      "prospective_reranker_mean": -0.6489892522209125,
+      "prospective_random_mean": -1.8530792242429832,
+      "prospective_gate": false
+    },
+    "p11e": {
+      "labels": {
+        "labels": 236,
+        "train_labels": 158,
+        "validation_labels": 78,
+        "failures": 4,
+        "failure_reasons": {
+          "evaluation_error": 4
+        }
+      },
+      "selected_objective": "pairwise",
+      "validation_spearman": 0.07166251470048939,
+      "validation_top_k_lift": -0.4386677974738328,
+      "validation_gate": false
+    }
+  },
+  "artifacts": [
+    {
+      "file": "alphagpt_v1.json",
+      "role": "P10 search loop, lineage, reward audit and frozen HOLDOUT report",
+      "bytes": 614087,
+      "sha256": "d2ef69fd73c8c86231915c678ad08811b501d8cb4cf865a086798a4bba30cfd7"
+    },
+    {
+      "file": "alphagpt_rollouts_v1.jsonl",
+      "role": "P11-A original offline token transitions",
+      "bytes": 447511,
+      "sha256": "7ee2446887136e882fec155cf6c178e24b9735bc5dbe0c9a50cfeb4b7877cb63"
+    },
+    {
+      "file": "alphagpt_rollouts_v1_manifest.json",
+      "role": "P11-A dataset provenance and split audit",
+      "bytes": 91203,
+      "sha256": "8d36a2e71e0be721c348f4408c3b9297bb3a37408ef57b2d4d5f9f3253104199"
+    },
+    {
+      "file": "alphagpt_rollouts_multiseed_v1.jsonl",
+      "role": "P11-C expanded token transitions",
+      "bytes": 1971831,
+      "sha256": "b3082875ce8072a03ade076bcc4f584e6cd607c595341eed0f1191171023b9a6"
+    },
+    {
+      "file": "alphagpt_rollouts_multiseed_v1_manifest.json",
+      "role": "P11-C expanded dataset provenance and training rewards",
+      "bytes": 494429,
+      "sha256": "ca0729515249ad603b85364aefee7ee54390f3b7f4419eb9307bb41a618e2ed3"
+    },
+    {
+      "file": "alphagpt_bc_v1.npz",
+      "role": "P11-B deterministic NumPy behavior-clone checkpoint",
+      "bytes": 30451,
+      "sha256": "4377ee930c12d0dd2289212e4e992eead65ca2e177238d2f14b500b2dbe93a39"
+    },
+    {
+      "file": "alphagpt_bc_v1.json",
+      "role": "P11-B training, generation and budget comparison report",
+      "bytes": 326064,
+      "sha256": "33b3c95b96fddd070b3c3fa61c108abdceb89b10847cd8ae22777f9e184f885a"
+    },
+    {
+      "file": "alphagpt_bc_stability_v1.json",
+      "role": "P11-C multi-seed behavior stability gate",
+      "bytes": 273253,
+      "sha256": "b0f1adf73a82ed0f71f840fcb1efe8e5ab9d0d76254b340bc1187b2464f6acf5"
+    },
+    {
+      "file": "alphagpt_reward_conditioned_stability_v1.json",
+      "role": "P11-C2 reward-weighted and elite behavior-clone gate",
+      "bytes": 598845,
+      "sha256": "833384cd008d83d7d4fdd12eb27a0c042218dc80bbb0ea5fee6bfdd7875d89fc"
+    },
+    {
+      "file": "alphagpt_reward_model_v1.npz",
+      "role": "P11-D formula ridge checkpoint",
+      "bytes": 5896,
+      "sha256": "3a0ee0a6a7c510b942d3ac338cb1b8482b81844ce802997696cb845c313fadce"
+    },
+    {
+      "file": "alphagpt_reward_model_v1.json",
+      "role": "P11-D locked formula-model validation gate",
+      "bytes": 4693,
+      "sha256": "7cc14d0176dc34b8811d85eb515a8b352b5de9c6708cc1a79d81b1d6295fb8c9"
+    },
+    {
+      "file": "alphagpt_reward_reranker_v1.json",
+      "role": "P11-D prospective equal-budget reranker report",
+      "bytes": 420433,
+      "sha256": "293377965e5c2f9a1ba6d6f51bc542cb3aaba0898074ec8b6ccbd5511b866dda"
+    },
+    {
+      "file": "alphagpt_reward_labels_v2.json",
+      "role": "P11-E seed-split random-formula labels",
+      "bytes": 1011232,
+      "sha256": "1bb6a51d1026985c088c0e39866280f00c814fe852291e7959bf444c0aa01786"
+    },
+    {
+      "file": "alphagpt_rank_model_v2.npz",
+      "role": "P11-E pairwise/listwise rank checkpoint",
+      "bytes": 7588,
+      "sha256": "e15c3548864f6e9c077b0d7f9624ac598fd1e9e54500b553c729fcb028ed0d8b"
+    },
+    {
+      "file": "alphagpt_rank_model_v2.json",
+      "role": "P11-E locked seed-level validation gate",
+      "bytes": 13577,
+      "sha256": "845a21f58642d599fc987e8fab50928aaa03f4b79d9f399a93bea6bdf7e4c9bf"
+    }
+  ],
+  "reproduction": {
+    "working_directory": "backend",
+    "release_command": ".venv/Scripts/python.exe -m research.alphagpt.run_release_v1",
+    "verify_command": ".venv/Scripts/python.exe -m research.alphagpt.run_release_v1 --verify-only",
+    "tests": ".venv/Scripts/python.exe -m pytest"
+  },
+  "next_phase": {
+    "status": "deferred_optimization",
+    "recommended": "P11-F execution-aware proxy features on new training-only calibration sketches and entirely new validation seeds"
+  }
+}

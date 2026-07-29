@@ -42,7 +42,23 @@ class _CapturingStrategyEngine:
     calls: ClassVar[list[dict]] = []
 
     def has(self, strategy_id):
-        return strategy_id == "builtin_strategy"
+        return strategy_id in {"builtin_strategy", "hidden_strategy"}
+
+    def list_strategies(self):
+        return [
+            {
+                "id": "builtin_strategy",
+                "asset_types": ["stock"],
+                "timeframes": ["1d"],
+                "visible_by_default": True,
+            },
+            {
+                "id": "hidden_strategy",
+                "asset_types": ["stock"],
+                "timeframes": ["1d"],
+                "visible_by_default": False,
+            },
+        ]
 
     def run(self, strategy_id, context, *, pool=None, params=None, overrides=None):
         self.calls.append({
@@ -129,6 +145,34 @@ def test_batch_run_passes_saved_params_to_strategy_engine(monkeypatch, tmp_path)
     assert context_call["overrides_map"] == expected_overrides
     assert run_all_call["params_map"] == expected_params
     assert run_all_call["overrides_map"] == expected_overrides
+
+
+def test_batch_run_defaults_to_visible_strategies(monkeypatch, tmp_path):
+    engine = _CapturingStrategyEngine()
+    request = _api_request(tmp_path, engine)
+    _install_api_fakes(monkeypatch)
+    monkeypatch.setattr(screener_api.strategy_config, "list_overrides", lambda *_args: {})
+
+    screener_api.run_all(request, body={"as_of": "2026-07-15"})
+
+    assert _CapturingStrategyEngine.calls[0]["strategy_ids"] == ["builtin_strategy"]
+
+
+def test_batch_run_can_explicitly_include_hidden_strategies(monkeypatch, tmp_path):
+    engine = _CapturingStrategyEngine()
+    request = _api_request(tmp_path, engine)
+    _install_api_fakes(monkeypatch)
+    monkeypatch.setattr(screener_api.strategy_config, "list_overrides", lambda *_args: {})
+
+    screener_api.run_all(
+        request,
+        body={"as_of": "2026-07-15", "include_experimental": True},
+    )
+
+    assert _CapturingStrategyEngine.calls[0]["strategy_ids"] == [
+        "builtin_strategy",
+        "hidden_strategy",
+    ]
 
 
 def test_batch_summary_response_still_writes_full_cache(monkeypatch, tmp_path):

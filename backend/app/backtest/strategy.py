@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import threading
 import time
 import uuid
@@ -29,6 +30,7 @@ from app.backtest.matrix import (
     apply_time_masks,
     build_market_matrix,
     build_market_matrix_from_signals,
+    matrix_feature,
     rolling_mean,
     slice_market_data_matrix,
     slice_signal_matrix,
@@ -42,6 +44,7 @@ from app.indicators.pipeline import (
     get_signal_dependencies,
 )
 from app.strategy.engine import StrategyDataContext, StrategyDef, StrategyEngine
+from app.strategy.composition import StrategyComposition, compose_signal_matrices
 from app.strategy.scoring import scoring_dependencies, scoring_value_expr
 
 logger = logging.getLogger(__name__)
@@ -457,6 +460,8 @@ class StrategyBacktestConfig:
     end: date
     params: dict | None = None
     overrides: dict | None = None
+    # 可选矩阵策略组合。首个 component 必须等于 strategy_id，并继承本配置的风控规则。
+    composition: dict | None = None
     # matching 为向后兼容入口; 显式传 entry_fill/exit_fill 时以二者为准。
     matching: Literal["close_t", "open_t+1"] = "open_t+1"
     entry_fill: Literal["close_t", "open_t+1"] | None = None
@@ -507,6 +512,15 @@ class StrategyBacktestResult:
     strategy_info: dict = field(default_factory=dict)
     elapsed_ms: float = 0.0
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class _ResolvedCompositionComponent:
+    strategy: StrategyDef
+    params: dict
+    overrides: dict
+    basic_filter: dict
+    feature_plan: ResolvedFeaturePlan
 
 
 @dataclass(frozen=True)
@@ -597,6 +611,76 @@ class StrategyBacktestService:
         self.engine = engine
         self.strategy_engine = strategy_engine
 
+    def _resolve_matrix_composition(
+        self,
+        config: StrategyBacktestConfig,
+    ) -> tuple[StrategyComposition | None, tuple[_ResolvedCompositionComponent, ...]]:
+        if config.composition is None:
+            return None, ()
+
+        composition = StrategyComposition.from_dict(
+            config.composition,
+            primary_strategy_id=config.strategy_id,
+        )
+        resolver = StrategyDependencyResolver()
+        resolved: list[_ResolvedCompositionComponent] = []
+        for index, component in enumerate(composition.components):
+            strategy = self.strategy_engine.get(component.strategy_id)
+            StrategyEngine.validate_context(
+                strategy,
+                StrategyDataContext(
+                    asset_type=config.asset_type,
+                    timeframe="1d",
+                    as_of=config.end,
+                ),
+            )
+            if strategy.execution_backend != "matrix_native" or strategy.matrix_strategy is None:
+                raise ValueError(
+                    "strategy composition only supports matrix_native strategies: "
+                    f"{component.strategy_id}"
+                )
+
+            params_input = dict(config.params or {}) if index == 0 else {}
+            params_input.update(component.params)
+            component_overrides = dict(config.overrides or {}) if index == 0 else {}
+            component_overrides.update(component.overrides)
+            if self._has_matrix_signal_override(strategy, component_overrides):
+                raise ValueError(
+                    "matrix_native composition components do not support column signal "
+                    f"overrides: {component.strategy_id}"
+                )
+            params = self._normalize_params(params_input, strategy)
+            basic_filter = self._effective_basic_filter(strategy, component_overrides)
+            entry_signals = self._effective_signals(
+                component_overrides,
+                "entry_signals",
+                strategy.entry_signals,
+            )
+            exit_signals = self._effective_signals(
+                component_overrides,
+                "exit_signals",
+                strategy.exit_signals,
+            )
+            feature_plan = resolver.resolve(
+                strategy,
+                params=params,
+                basic_filter=basic_filter,
+                entry_signals=entry_signals,
+                exit_signals=exit_signals,
+                overrides=component_overrides,
+                minute_fill=config.minute_fill,
+            )
+            resolved.append(
+                _ResolvedCompositionComponent(
+                    strategy=strategy,
+                    params=params,
+                    overrides=component_overrides,
+                    basic_filter=basic_filter,
+                    feature_plan=feature_plan,
+                )
+            )
+        return composition, tuple(resolved)
+
     @staticmethod
     def _matrix_prepare_signature(config: StrategyBacktestConfig) -> tuple:
         return (
@@ -609,6 +693,7 @@ class StrategyBacktestService:
             config.holding_days,
             config.minute_fill,
             json.dumps(config.overrides or {}, sort_keys=True, ensure_ascii=False, default=str),
+            json.dumps(config.composition or {}, sort_keys=True, ensure_ascii=False, default=str),
         )
 
     def prepare_matrix_optimization(
@@ -652,16 +737,20 @@ class StrategyBacktestService:
         resolver = StrategyDependencyResolver()
         plans: list[ResolvedFeaturePlan] = []
         for config in configs:
-            params = self._normalize_params(config.params or {}, strategy)
-            plans.append(resolver.resolve(
-                strategy,
-                params=params,
-                basic_filter=basic_filter,
-                entry_signals=entry_signals,
-                exit_signals=exit_signals,
-                overrides=overrides,
-                minute_fill=config.minute_fill,
-            ))
+            composition, components = self._resolve_matrix_composition(config)
+            if composition is not None:
+                plans.extend(component.feature_plan for component in components)
+            else:
+                params = self._normalize_params(config.params or {}, strategy)
+                plans.append(resolver.resolve(
+                    strategy,
+                    params=params,
+                    basic_filter=basic_filter,
+                    entry_signals=entry_signals,
+                    exit_signals=exit_signals,
+                    overrides=overrides,
+                    minute_fill=config.minute_fill,
+                ))
         feature_plan = _merge_resolved_feature_plans(plans)
 
         max_hold_days = self._override_value(overrides, "max_hold_days", strategy.max_hold_days)
@@ -809,6 +898,11 @@ class StrategyBacktestService:
         except ValueError as e:
             return _err(str(e))
 
+        try:
+            composition, composition_components = self._resolve_matrix_composition(config)
+        except ValueError as e:
+            return _err(str(e))
+
         params = self._normalize_params(config.params or {}, s)
         overrides = config.overrides or {}
         basic_filter = self._effective_basic_filter(s, overrides)
@@ -852,15 +946,20 @@ class StrategyBacktestService:
         )
 
         try:
-            feature_plan = StrategyDependencyResolver().resolve(
-                s,
-                params=params,
-                basic_filter=basic_filter,
-                entry_signals=entry_signals,
-                exit_signals=exit_signals,
-                overrides=overrides,
-                minute_fill=config.minute_fill,
-            )
+            if composition is not None:
+                feature_plan = _merge_resolved_feature_plans(
+                    [component.feature_plan for component in composition_components]
+                )
+            else:
+                feature_plan = StrategyDependencyResolver().resolve(
+                    s,
+                    params=params,
+                    basic_filter=basic_filter,
+                    entry_signals=entry_signals,
+                    exit_signals=exit_signals,
+                    overrides=overrides,
+                    minute_fill=config.minute_fill,
+                )
         except ValueError as e:
             return _err(str(e))
 
@@ -1001,7 +1100,7 @@ class StrategyBacktestService:
         if s.execution_backend == "matrix_native":
             if s.matrix_strategy is None:
                 return _err("矩阵策略未注册")
-            if self._has_matrix_signal_override(s, overrides):
+            if composition is None and self._has_matrix_signal_override(s, overrides):
                 return _err("matrix_native 策略的进出场信号由策略协议生成，不支持列信号覆盖")
 
             if prepared is not None:
@@ -1044,33 +1143,67 @@ class StrategyBacktestService:
                     else None
                 )
 
-            scoring = dict(s.meta.get("scoring", {}) or {})
-            scoring.update(overrides.get("scoring") or {})
             try:
-                pipeline_config = MatrixPipelineConfig(
-                    basic_filter=basic_filter,
-                    scoring=scoring,
-                    order_by=s.meta.get("order_by"),
-                    descending=bool(s.meta.get("descending", True)),
-                    protect_strategy_cache=prepared is not None,
-                )
-                if prepared is None:
-                    signal_matrix = MatrixStrategyPipeline().run(
-                        s.matrix_strategy,
-                        market_data,
-                        params,
-                        pipeline_config,
-                        timing_ms,
-                    )
-                else:
-                    with prepared.compute_cache.activate(market_data):
-                        signal_matrix = MatrixStrategyPipeline().run(
+                def _compute_matrix_signals():
+                    if composition is None:
+                        scoring = dict(s.meta.get("scoring", {}) or {})
+                        scoring.update(overrides.get("scoring") or {})
+                        return MatrixStrategyPipeline().run(
                             s.matrix_strategy,
                             market_data,
                             params,
-                            pipeline_config,
+                            MatrixPipelineConfig(
+                                basic_filter=basic_filter,
+                                scoring=scoring,
+                                order_by=s.meta.get("order_by"),
+                                descending=bool(s.meta.get("descending", True)),
+                                protect_strategy_cache=prepared is not None,
+                            ),
                             timing_ms,
                         )
+
+                    child_signals = []
+                    for component in composition_components:
+                        child = component.strategy
+                        child_scoring = dict(child.meta.get("scoring", {}) or {})
+                        child_scoring.update(component.overrides.get("scoring") or {})
+                        child_timing: dict[str, float] = {}
+                        child_signals.append(
+                            MatrixStrategyPipeline().run(
+                                child.matrix_strategy,
+                                market_data,
+                                component.params,
+                                MatrixPipelineConfig(
+                                    basic_filter=component.basic_filter,
+                                    scoring=child_scoring,
+                                    order_by=child.meta.get("order_by"),
+                                    descending=bool(child.meta.get("descending", True)),
+                                    protect_strategy_cache=prepared is not None,
+                                ),
+                                child_timing,
+                            )
+                        )
+                        for key, value in child_timing.items():
+                            timing_ms[f"composition.{child.meta['id']}.{key}"] = value
+                    regime_allow = None
+                    if composition.entry_mode == "regime_switch":
+                        regime_allow = (
+                            StrategyBacktestService._market_structure_cache_allow_array(
+                                market_data.timestamp_labels,
+                                composition.regime or {},
+                            )
+                        )
+                    return compose_signal_matrices(
+                        child_signals,
+                        composition,
+                        regime_allow=regime_allow,
+                    )
+
+                if prepared is None:
+                    signal_matrix = _compute_matrix_signals()
+                else:
+                    with prepared.compute_cache.activate(market_data):
+                        signal_matrix = _compute_matrix_signals()
             except (TypeError, ValueError) as e:
                 return _err(f"矩阵策略信号计算失败: {e}")
 
@@ -1082,9 +1215,23 @@ class StrategyBacktestService:
                 exit_time_mask[start_id:stop_id],
             )
             if config.regime_filter:
-                _allow = StrategyBacktestService._regime_allow_array(
-                    market_data.timestamp_labels[start_id:stop_id], config.regime_filter)
                 _rf = config.regime_filter
+                if isinstance(_rf, dict) and _rf.get("type") == "market_breadth":
+                    _allow_full = StrategyBacktestService._market_breadth_allow_array(
+                        market_data,
+                        _rf,
+                    )
+                    _allow = _allow_full[start_id:stop_id]
+                elif isinstance(_rf, dict) and _rf.get("type") == "market_structure_v1":
+                    _allow = (
+                        StrategyBacktestService._market_structure_cache_allow_array(
+                            market_data.timestamp_labels[start_id:stop_id],
+                            _rf,
+                        )
+                    )
+                else:
+                    _allow = StrategyBacktestService._regime_allow_array(
+                        market_data.timestamp_labels[start_id:stop_id], _rf)
                 _mode = _rf.get("mode", "hard") if isinstance(_rf, dict) else "hard"
                 if _mode == "soft":
                     # 软叠加: 不清零 entry, 仅把牛/熊标记传给引擎缩放当日敞口
@@ -1551,6 +1698,121 @@ class StrategyBacktestService:
                 allow[i] = bull[key]  # True=牛=允许; False=熊=禁止
         return allow
 
+    @staticmethod
+    def _market_structure_cache_allow_array(
+        timestamp_labels: tuple[str, ...],
+        regime_filter: dict,
+    ) -> np.ndarray:
+        """Load causal full-market structure labels from the derived data cache.
+
+        Missing dates and warmup rows are treated as structural bear (False).
+        The cache itself already stores the t-1 lag, so this method must not
+        shift the signal a second time.
+        """
+        configured = regime_filter.get("parquet")
+        path = (
+            Path(configured)
+            if configured
+            else Path(settings.data_dir)
+            / ".regime_cache"
+            / "market_structure_v1.parquet"
+        )
+        if not path.exists():
+            raise ValueError(f"market structure cache does not exist: {path}")
+        frame = pl.read_parquet(path)
+        required = {"date", "regime", "protocol_hash"}
+        if not required <= set(frame.columns):
+            raise ValueError(
+                "market structure cache missing columns: "
+                f"{sorted(required - set(frame.columns))}"
+            )
+        expected_hash = regime_filter.get("protocol_hash")
+        hashes = frame["protocol_hash"].drop_nulls().cast(pl.Utf8).unique().to_list()
+        if len(hashes) != 1:
+            raise ValueError("market structure cache must contain exactly one protocol hash")
+        if expected_hash and str(expected_hash) != hashes[0]:
+            raise ValueError("market structure protocol hash mismatch")
+
+        def _norm(value) -> date:
+            if isinstance(value, date):
+                return value
+            return date.fromisoformat(str(value)[:10])
+
+        mapping = {
+            _norm(row["date"]): row["regime"] == "structural_bull"
+            for row in frame.select("date", "regime").to_dicts()
+        }
+        return np.fromiter(
+            (
+                mapping.get(_norm(label), False)
+                for label in timestamp_labels
+            ),
+            dtype=bool,
+            count=len(timestamp_labels),
+        )
+
+    @staticmethod
+    def _breadth_hysteresis_allow(
+        breadth_ma20: np.ndarray,
+        breadth_ma60: np.ndarray,
+        regime_filter: dict,
+    ) -> np.ndarray:
+        """Convert lagged breadth observations into a deterministic bull/bear state."""
+        enter_ma20 = float(regime_filter.get("enter_ma20", 0.55))
+        enter_ma60 = float(regime_filter.get("enter_ma60", 0.50))
+        exit_ma20 = float(regime_filter.get("exit_ma20", 0.45))
+        exit_ma60 = float(regime_filter.get("exit_ma60", 0.40))
+        thresholds = (enter_ma20, enter_ma60, exit_ma20, exit_ma60)
+        if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in thresholds):
+            raise ValueError("market_breadth thresholds must be finite values in [0, 1]")
+        if enter_ma20 < exit_ma20 or enter_ma60 < exit_ma60:
+            raise ValueError("market_breadth enter thresholds must be >= exit thresholds")
+        if breadth_ma20.shape != breadth_ma60.shape or breadth_ma20.ndim != 1:
+            raise ValueError("market_breadth series must be aligned one-dimensional arrays")
+
+        allow = np.zeros(breadth_ma20.shape, dtype=bool)
+        state = False
+        # Use t-1 breadth for day t so close-derived state never controls same-day fills.
+        for time_id in range(1, len(allow)):
+            b20 = float(breadth_ma20[time_id - 1])
+            b60 = float(breadth_ma60[time_id - 1])
+            if not (math.isfinite(b20) and math.isfinite(b60)):
+                state = False
+            elif not state and b20 >= enter_ma20 and b60 >= enter_ma60:
+                state = True
+            elif state and (b20 < exit_ma20 or b60 < exit_ma60):
+                state = False
+            allow[time_id] = state
+        return allow
+
+    @staticmethod
+    def _market_breadth_allow_array(
+        market_data: MarketDataMatrix,
+        regime_filter: dict,
+    ) -> np.ndarray:
+        """Compute breadth from the configured backtest universe without external data."""
+        min_valid_assets = int(regime_filter.get("min_valid_assets", 20))
+        if min_valid_assets <= 0:
+            raise ValueError("market_breadth min_valid_assets must be positive")
+        close = market_data.close
+        ma20 = matrix_feature(market_data, "ma20")
+        ma60 = matrix_feature(market_data, "ma60")
+
+        def _ratio_above(moving_average: np.ndarray) -> np.ndarray:
+            valid = np.isfinite(close) & np.isfinite(moving_average) & (moving_average > 0)
+            counts = valid.sum(axis=1)
+            above = (valid & (close > moving_average)).sum(axis=1)
+            ratio = np.full(close.shape[0], np.nan, dtype=np.float64)
+            enough = counts >= min_valid_assets
+            ratio[enough] = above[enough] / counts[enough]
+            return ratio
+
+        return StrategyBacktestService._breadth_hysteresis_allow(
+            _ratio_above(ma20),
+            _ratio_above(ma60),
+            regime_filter,
+        )
+
     def _build_candidate_filter_mask(
         self,
         panel: pl.DataFrame,
@@ -1811,6 +2073,7 @@ class StrategyBacktestService:
             "end": str(c.end),
             "params": c.params,
             "overrides": c.overrides,
+            "composition": c.composition,
             "score_min": score_min,
             "score_max": score_max,
             "matching": c.matching,

@@ -111,9 +111,6 @@ class Settings(BaseSettings):
     # tiers.yaml 路径 — frozen: 资源目录内; 非 frozen: 项目根目录
     tiers_yaml: Path = _RESOURCE_ROOT / "tiers.yaml" if _IS_FROZEN else _PROJECT_ROOT / "tiers.yaml"
 
-    # 静态文件(前端 dist) — frozen: 资源目录的 static/; 非 frozen: frontend/dist
-    static_dir: Path = _RESOURCE_ROOT / "static" if _IS_FROZEN else (_PROJECT_ROOT / "frontend" / "dist")
-
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:
         """确保 data_dir 是绝对路径（环境变量传入的相对路径基于项目根目录解析）。"""
