@@ -108,7 +108,7 @@ describe('DowMonitorList', () => {
 
     for (const heading of [
       '股票',
-      '价格/涨跌',
+      '价格 / 涨跌',
       '日内走势',
       '趋势 / 位置',
       '动量 / 涨速',
@@ -119,6 +119,7 @@ describe('DowMonitorList', () => {
     ]) {
       expect(screen.getByRole('columnheader', { name: new RegExp(heading) })).toBeInTheDocument()
     }
+    expect(screen.getAllByRole('columnheader')).toHaveLength(9)
     expect(screen.queryByRole('columnheader', { name: '通道' })).not.toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: '主动资金' })).not.toBeInTheDocument()
   })
@@ -248,8 +249,19 @@ describe('DowMonitorList', () => {
     expect(screen.getByText('确认 2/2')).toBeInTheDocument()
     expect(screen.getByText('高 2.00%')).toBeInTheDocument()
     expect(screen.getByText('低 2.00%')).toBeInTheDocument()
-    expect(screen.getAllByText('实时').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('稳').length).toBeGreaterThan(0)
+    for (const group of ['trend-position', 'momentum-speed', 'volume-funds', 'breakout-risk']) {
+      const cell = screen.getByTestId(`${group}-700.HK`)
+      expect(Array.from(cell.children).filter(child => child.tagName === 'DIV')).toHaveLength(2)
+    }
+    const volumeFundsCell = screen.getByTestId('volume-funds-700.HK')
+    expect(within(volumeFundsCell).getByTestId('relative-volume-stable-badge-700.HK').nextElementSibling)
+      .toHaveTextContent('量比 1.50×')
+    expect(within(volumeFundsCell).getByTestId('active-funds-stable-badge-700.HK').nextElementSibling)
+      .toHaveTextContent('主买 60%')
+    expect(within(volumeFundsCell).getByTestId('volume-speed-live-badge-700.HK').nextElementSibling)
+      .toHaveTextContent('量速 --')
+    expect(within(volumeFundsCell).getByTestId('depth-pressure-live-badge-700.HK').nextElementSibling)
+      .toHaveTextContent('五档 --')
     expect(screen.getByText('买入确认')).toBeInTheDocument()
     expect(screen.getByText('09:34')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看详情 700.HK' })).toHaveTextContent('查看详情')
@@ -275,9 +287,19 @@ describe('DowMonitorList', () => {
 
     expect(screen.getByText('控制 --')).toBeInTheDocument()
     expect(screen.getByText('成本 --')).toBeInTheDocument()
+    expect(screen.getByText('1m --')).toBeInTheDocument()
+    expect(screen.getByText('5m --')).toBeInTheDocument()
+    expect(screen.getByText('15m --')).toBeInTheDocument()
     expect(screen.getByText('量比 --')).toBeInTheDocument()
+    expect(screen.getByText('量速 --')).toBeInTheDocument()
     expect(screen.getByText('主买 未确认')).toBeInTheDocument()
-    expect(screen.queryByText('0.00%')).not.toBeInTheDocument()
+    expect(screen.getByText('五档 --')).toBeInTheDocument()
+    expect(screen.getByText('高 --')).toBeInTheDocument()
+    expect(screen.getByText('低 --')).toBeInTheDocument()
+    expect(screen.getByText('ATR14 --')).toBeInTheDocument()
+    for (const group of ['trend-position', 'momentum-speed', 'volume-funds', 'breakout-risk']) {
+      expect(screen.getByTestId(`${group}-700.HK`)).not.toHaveTextContent(/(?:\+|-)?0(?:\.0+)?[%×]/)
+    }
   })
 
   it('selects from the row or detail action and keeps management controls outside the action column', async () => {
