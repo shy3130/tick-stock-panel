@@ -12,3 +12,12 @@ Review date: 2026-07-29. Result: **PASS**.
 Independent review confirms the release serves the rebuilt static index and grouped DowMonitor chunk from `/app/static`; no container mount masks that path. The previously observed legacy layout was a browser tab that had not reloaded after deployment, not candidate image behavior.
 
 Round 2 verification: the exact 20-test presentation/list command passed; `python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.py tests/spec_contracts/test_realtime_frontend_contract.py -q` passed 3; `pnpm --dir frontend build` passed. `python scripts/check_spec_compliance.py` remains limited to its two documented baseline findings.
+
+Historical 21/2 subset is superseded, has no retained exact command, and is not acceptance evidence.
+
+```powershell
+pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx src/components/dow-monitor/DowMonitorDetailPanel.test.tsx src/pages/DowMonitor.test.tsx src/lib/realtimeMarketData.test.ts # 39
+python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.py tests/spec_contracts/test_realtime_frontend_contract.py -q # 3
+Push-Location backend; python -m pytest tests/test_realtime_websocket.py -q; Pop-Location # 5
+pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx # 20 (15+5)
+```

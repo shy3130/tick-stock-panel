@@ -68,4 +68,11 @@ Pagination is proven by `DowMonitor.test.tsx > shows three exclusive markets, tw
 
 Round 2 rerun is a separate, narrower scope: `pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx` returned 20 tests passed (15 presentation, 5 list). It adds `degrades each delayed realtime feed independently`: delayed candle clears 1m momentum while other feeds remain valid; delayed depth clears only depth pressure; delayed quote clears both day-high and day-low distances. The list test verifies the visible cyan live badge immediately precedes 1m and that the breakout cell has two such live badges for high and low. This does not replace the earlier 21-test subset (`presentation` + `DowMonitor`), nor the earlier full 39-test suite.
 
-Round 3 exact command: `pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx` = 20 (15+5), and `python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.py tests/spec_contracts/test_realtime_frontend_contract.py -q` = 3. Historical full command was the five-suite command in the release table = 39. The earlier `presentation + DowMonitor` 21-test / 2-contract subset is superseded and no longer relied upon. Backend historical command `cd backend; python -m pytest tests/test_realtime_websocket.py -q` = 5.
+Historical 21/2 subset is superseded, has no retained exact command, and is not acceptance evidence.
+
+```powershell
+pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx src/components/dow-monitor/DowMonitorDetailPanel.test.tsx src/pages/DowMonitor.test.tsx src/lib/realtimeMarketData.test.ts # 39
+python -m pytest tests/spec_contracts/test_dow_monitor_list_websocket_contract.py tests/spec_contracts/test_realtime_frontend_contract.py -q # 3
+Push-Location backend; python -m pytest tests/test_realtime_websocket.py -q; Pop-Location # 5
+pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts src/components/dow-monitor/DowMonitorList.test.tsx # 20 (15+5)
+```
