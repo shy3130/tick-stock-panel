@@ -210,6 +210,7 @@ requirements:
     implementation:
       - frontend/src/pages/DowMonitor.tsx
       - frontend/src/components/dow-monitor/DowMonitorSparkline.tsx
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
       - frontend/src/lib/realtimeMarketData.ts
     tests:
       - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}

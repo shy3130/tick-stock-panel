@@ -96,7 +96,7 @@ function stock(
     updated_at: '2026-07-29T09:35:02+08:00',
     name: `股票${index}`,
     last_price: 100 + index,
-    change_pct: 1,
+    change_pct: 0.01,
     quote_timestamp: '2026-07-29T09:35:00+08:00',
     analysis_status: 'READY',
     intraday_capital: {

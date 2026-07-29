@@ -17,7 +17,7 @@ function item(
     updated_at: '2026-07-29T09:35:02+08:00',
     name: symbol === '700.HK' ? '腾讯控股' : '测试股票',
     last_price: 500,
-    change_pct: 1.25,
+    change_pct: 0.0125,
     quote_timestamp: '2026-07-29T09:35:00+08:00',
     analysis_status: 'READY',
     intraday_capital: {

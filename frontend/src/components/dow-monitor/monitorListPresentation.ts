@@ -265,9 +265,10 @@ function realtimePrice(
   const lastDone = realtime?.quote?.lastDone
   const price = finite(lastDone) ? lastDone : item.last_price
   const prevClose = realtime?.quote?.prevClose
+  const fallbackChangePct = finite(item.change_pct) ? item.change_pct * 100 : null
   const changePct = finite(price) && finite(prevClose) && prevClose !== 0
     ? (price - prevClose) / prevClose * 100
-    : item.change_pct
+    : fallbackChangePct
   return {
     price: finite(price) ? price : null,
     changePct: finite(changePct) ? changePct : null,

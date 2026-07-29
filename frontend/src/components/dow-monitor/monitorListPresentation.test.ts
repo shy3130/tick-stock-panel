@@ -63,7 +63,7 @@ function symbolFixture(
     updated_at: '2026-07-29T09:35:02+08:00',
     name: '腾讯控股',
     last_price: 500,
-    change_pct: 1.25,
+    change_pct: 0.0125,
     quote_timestamp: '2026-07-29T09:35:00+08:00',
     analysis_status: 'READY',
     intraday_capital: {
@@ -126,6 +126,18 @@ function notification(
 }
 
 describe('monitor list presentation', () => {
+  it('converts the HTTP decimal change ratio to display percent units', () => {
+    const row = deriveMonitorRow(
+      symbolFixture({ last_price: 500, change_pct: 0.0125 }),
+      [],
+      undefined,
+      Date.parse('2026-07-29T09:35:30+08:00'),
+    )
+
+    expect(row.price).toBe(500)
+    expect(row.changePct).toBe(1.25)
+  })
+
   it('uses only completed 15m/30m bars for channel and momentum', () => {
     const item = symbolFixture({
       states: {
