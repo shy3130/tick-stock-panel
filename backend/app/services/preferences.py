@@ -198,14 +198,14 @@ def _allowed_data_providers() -> set[str]:
 
 def get_daily_data_provider() -> str:
     provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
-    return provider if provider in _allowed_data_providers() else "tickflow"
+    return provider
 
 
 def get_adj_factor_provider() -> str:
     provider = str(load().get("adj_factor_provider", "same_as_daily") or "same_as_daily").lower()
     if provider == "same_as_daily":
         return provider
-    return provider if provider in _allowed_data_providers() else "same_as_daily"
+    return provider
 
 
 def get_minute_data_provider() -> str:

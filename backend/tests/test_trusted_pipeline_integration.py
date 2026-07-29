@@ -228,6 +228,39 @@ def test_unavailable_instrument_provider_overwrites_old_success_receipt(
     )
 
 
+def test_persisted_unavailable_provider_selection_never_silently_falls_back(
+    tmp_path,
+    monkeypatch,
+):
+    from app.data_providers import custom as custom_sources
+    from app.data_providers.trust import DataProviderUnavailable
+    from app.services import instrument_sync, preferences
+
+    cache = _seed_trusted_gate(tmp_path)
+    monkeypatch.setattr(
+        preferences,
+        "load",
+        lambda: {
+            "daily_data_provider": "missing-source",
+            "adj_factor_provider": "missing-factor-source",
+        },
+    )
+    monkeypatch.setattr(custom_sources, "names", lambda: set())
+    monkeypatch.setattr(custom_sources, "is_custom_provider", lambda name: False)
+
+    assert preferences.get_daily_data_provider() == "missing-source"
+    assert preferences.get_adj_factor_provider() == "missing-factor-source"
+    with pytest.raises(DataProviderUnavailable):
+        instrument_sync.sync_instruments(tmp_path)
+
+    _assert_latest_error_blocks_gate(
+        tmp_path,
+        cache,
+        "instruments",
+        "missing-source",
+    )
+
+
 def test_unavailable_daily_dataset_overwrites_old_success_receipt(
     tmp_path,
     monkeypatch,
