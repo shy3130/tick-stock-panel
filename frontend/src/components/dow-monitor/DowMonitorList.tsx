@@ -26,10 +26,17 @@ function percentText(value: number | null): string {
 
 function momentumText(momentum: MonitorMomentum): string {
   if (momentum.valuePct == null) return '--'
-  const arrow = momentum.direction === 'UP'
-    ? '↑'
-    : momentum.direction === 'DOWN' ? '↓' : '→'
-  return `${arrow}${Math.abs(momentum.valuePct).toFixed(2)}%`
+  return `${momentum.valuePct > 0 ? '+' : ''}${momentum.valuePct.toFixed(2)}%`
+}
+
+function compactPercent(label: string, value: number | null): string {
+  return value == null
+    ? `${label} --`
+    : `${label} ${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+
+function distancePercent(label: string, value: number | null): string {
+  return value == null ? `${label} --` : `${label} ${value.toFixed(2)}%`
 }
 
 function signalTime(value: string | null): string | null {
@@ -95,30 +102,31 @@ export function DowMonitorList({
 
   return (
     <section aria-label="股票监控列表" className="overflow-hidden rounded-card border border-border bg-surface">
-      <div className="max-w-full overflow-x-auto">
-        <table className="w-full min-w-[1180px] border-collapse text-xs">
+      <div data-testid="dow-monitor-table-scroll" className="max-w-full overflow-x-auto">
+        <table className="w-full min-w-[1660px] border-collapse text-xs">
           <thead className="bg-elevated/70 text-[11px] text-muted">
             <tr>
-              {[
-                '股票',
-                '价格/涨跌',
-                '日内走势',
-                '通道',
-                '控制线',
-                '动量 5m/15m',
-                '量比',
-                '主动资金',
-                '买卖信号',
-                '操作',
-              ].map(label => (
-                <th
-                  key={label}
-                  scope="col"
-                  className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium"
-                >
-                  {label}
-                </th>
-              ))}
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">股票</th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">价格/涨跌</th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">日内走势</th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
+                趋势 / 位置
+                <span className="block text-[9px] text-muted">通道 · 控制线 · 成本位置</span>
+              </th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
+                动量 / 涨速
+                <span className="block text-[9px] text-muted">1m 实时 · 5m/15m 稳</span>
+              </th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
+                量价 / 资金
+                <span className="block text-[9px] text-muted">量比 · 量速 · 主买 · 五档</span>
+              </th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
+                突破 / 风险
+                <span className="block text-[9px] text-muted">日高低 · ATR · 周期确认</span>
+              </th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">买卖信号</th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -198,39 +206,71 @@ export function DowMonitorList({
                     <DowMonitorSparkline symbol={item.symbol} values={row.sparkline} />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
-                    <span className={cn(
-                      'font-medium',
-                      row.channel.code === 'UP' && 'text-danger',
-                      row.channel.code === 'DOWN' && 'text-emerald-400',
-                      (row.channel.code === 'RANGE' || row.channel.code === 'PENDING') && 'text-amber-400',
-                      row.channel.code === 'UNKNOWN' && 'text-muted',
-                    )}>
-                      {row.channel.label}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
+                      <strong className={cn(
+                        'font-medium',
+                        row.trendPosition.channel.code === 'UP' && 'text-danger',
+                        row.trendPosition.channel.code === 'DOWN' && 'text-emerald-400',
+                        (row.trendPosition.channel.code === 'RANGE' || row.trendPosition.channel.code === 'PENDING') && 'text-amber-400',
+                        row.trendPosition.channel.code === 'UNKNOWN' && 'text-muted',
+                      )}>
+                        {row.trendPosition.channel.label}
+                      </strong>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                      <span>{compactPercent('控制', row.trendPosition.control?.distancePct ?? null)}</span>
+                      <span>{compactPercent('成本', row.trendPosition.costDistancePct)}</span>
+                    </div>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
-                    {row.control ? (
-                      <>
-                        <div className="text-secondary">{row.control.role}</div>
-                        <div className="font-mono text-[10px] text-muted">
-                          {percentText(row.control.distancePct)} · {row.control.timeframe}
-                        </div>
-                      </>
-                    ) : <span className="text-muted">--</span>}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 font-mono">
-                    <div>{momentumText(row.momentum5m)}</div>
-                    <div className="text-muted">{momentumText(row.momentum15m)}</div>
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 font-mono text-secondary">
-                    {row.relativeVolume
-                      ? `${row.relativeVolume.ratio.toFixed(2)}×`
-                      : '--'}
+                    <div className="flex items-center gap-2">
+                      <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
+                      <strong>1m {momentumText(row.momentumSpeed.momentum1m)}</strong>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                      <span>5m {momentumText(row.momentumSpeed.momentum5m)}</span>
+                      <span>15m {momentumText(row.momentumSpeed.momentum15m)}</span>
+                    </div>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
-                    {row.activeFunds.confirmed && row.activeFunds.buyRatioPct != null
-                      ? `主买 ${row.activeFunds.buyRatioPct.toFixed(0)}%`
-                      : <span className="text-muted">未确认</span>}
+                    <div className="flex items-center gap-2">
+                      <span className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
+                      <strong>
+                        量比 {row.volumeFunds.relativeVolume
+                          ? `${row.volumeFunds.relativeVolume.ratio.toFixed(2)}×`
+                          : '--'}
+                      </strong>
+                      <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
+                      <span>
+                        量速 {row.volumeFunds.volumeSpeed == null
+                          ? '--'
+                          : `${row.volumeFunds.volumeSpeed.toFixed(2)}×`}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                      <span className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
+                      <span>
+                        主买 {row.volumeFunds.activeFunds.buyRatioPct == null
+                          ? '未确认'
+                          : `${row.volumeFunds.activeFunds.buyRatioPct.toFixed(0)}%`}
+                      </span>
+                      <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
+                      <span>{compactPercent('五档', row.volumeFunds.depthPressurePct)}</span>
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
+                      <span>{distancePercent('高', row.breakoutRisk.toDayHighPct)}</span>
+                      <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
+                      <span>{distancePercent('低', row.breakoutRisk.fromDayLowPct)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
+                      <span>{compactPercent('ATR14', row.breakoutRisk.atr14Pct)}</span>
+                      <span>确认 {row.breakoutRisk.confirmedTimeframes}/{row.breakoutRisk.totalTimeframes}</span>
+                      {row.breakoutRisk.riskTitle && <span>{row.breakoutRisk.riskTitle}</span>}
+                    </div>
                   </td>
                   <td className="min-w-32 whitespace-nowrap px-3 py-2">
                     {row.delayed && (
