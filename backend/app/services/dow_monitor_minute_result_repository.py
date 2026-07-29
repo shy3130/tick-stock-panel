@@ -146,11 +146,11 @@ class DowMonitorMinuteResultRepository:
         rows = self._query(
             f"""
             SELECT market, symbol, toString(decision_minute) AS decision_minute
-            FROM {self._database}.lb_dow_monitor_minute_results FINAL
+            FROM {self._database}.lb_dow_monitor_minute_results AS results FINAL
             WHERE symbol IN {_symbol_tuple(symbols)}
-              AND decision_minute >= parseDateTime64BestEffort({_time_literal(start)})
-              AND decision_minute < parseDateTime64BestEffort({_time_literal(end)})
-            GROUP BY market, symbol, decision_minute
+              AND results.decision_minute >= parseDateTime64BestEffort({_time_literal(start)})
+              AND results.decision_minute < parseDateTime64BestEffort({_time_literal(end)})
+            GROUP BY market, symbol, results.decision_minute
             """
         )
         return {MinuteResultKey(**row) for row in rows}

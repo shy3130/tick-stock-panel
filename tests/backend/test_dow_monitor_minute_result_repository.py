@@ -132,7 +132,10 @@ def test_insert_serializes_nulls_arrays_times_and_json_once_per_batch() -> None:
 
 
 def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
-    def query(_sql: str) -> list[dict]:
+    queries: list[str] = []
+
+    def query(sql: str) -> list[dict]:
+        queries.append(sql)
         return [{
             "market": "hk",
             "symbol": "700.HK",
@@ -148,3 +151,9 @@ def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
     assert key.market == "hk"
     assert key.symbol == "700.HK"
     assert key.decision_minute.utcoffset() == timedelta(hours=8)
+    assert (
+        "FROM longbridge.lb_dow_monitor_minute_results AS results FINAL"
+        in queries[0]
+    )
+    assert "results.decision_minute >=" in queries[0]
+    assert "results.decision_minute <" in queries[0]
