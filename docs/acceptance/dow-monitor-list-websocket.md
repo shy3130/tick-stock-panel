@@ -1,6 +1,6 @@
 # 道氏趋势监控列表与 WebSocket 验收
 
-状态：本地语义验收通过，待生产发布验收
+状态：已发布；本地语义验收与生产静态包、存量股票、WebSocket 验收通过
 
 ## 语义验收场景
 
@@ -53,4 +53,34 @@
   `Screener.dow-strategy.test.tsx` 查找“道氏趋势 · 多周期”失败；本次未修改 Screener。
 - `scripts/check_spec_compliance.py` 仍报告两个基线问题：已过期的采集监控预验收例外，
   以及旧详情需求把前端测试路径登记在 `tests/` 目录之外。本次五条新需求不再新增该类错误。
-- 尚未发布到 `192.168.10.28:3018`，生产 WebSocket、缓存和静态包验收仍待发布阶段执行。
+- 生产页面受密码认证保护；自动化浏览器确认登录门禁正常，但未绕过认证执行生产 DOM
+  操作。生产镜像中的静态包哈希与已经过浏览器语义验收的本地构建完全一致。
+
+## 生产发布证据
+
+发布时间：2026-07-29 14:13（Asia/Shanghai）。
+
+- 源码 revision：`0429bf65b2abb79525124864ae4b4168a18f8567`。
+- 镜像：`tickflow-stock-panel-app:dow-monitor-list-ws-0429bf65-20260729-141117`。
+- 镜像 ID：`sha256:2ab149a4999293fabf3dc60d26479e1feb6018433c1fef457b786a77fa7062f1`。
+- 发布前备份：
+  `/home/alwin/backups/tickflow-dow-monitor-list-ws-predeploy-20260729T141117`。
+- 原始数据文件与发布后容器文件 SHA-256 均为
+  `1d5955494b4a74d8ae32bd550e4f744e09c4cab80c85f190acd01f3717bef59e`。
+- 发布前后 `/api/dow-monitor/symbols` 响应逐字节一致，共 13 只：
+  1 只 A 股、5 只港股、7 只美股，全部保持启用状态和原始创建时间。
+- `/health` 返回版本 `0.1.86`；容器为 `running`，重启次数 0，3018 只有一个监听，
+  发布窗口日志无 `ERROR`、`CRITICAL` 或 `Traceback`。
+- 生产入口：`assets/index-DM-MIE_k.js`；
+  道氏列表分包：`assets/DowMonitor-Bsh30vpz.js`；
+  实时分包：`assets/realtimeMarketData-BdMyWeJ8.js`。
+- 上述三个分包在生产容器内的 SHA-256 分别为：
+  `020c48f1f05c75415b3f54dab9a4c7e2e605daa88409084856962d6031e2f469`、
+  `67c4e465eafc1944179fa180d5488e2405f6d3171845593e2cc39b0fdbeb5221`、
+  `44bebf62be59d4b4e188943b4c60563fd1e8d90562f77cc0d18bb4518530b39a`。
+- 使用生产 Origin `http://192.168.10.28:3018` 连接
+  `ws://192.168.10.28:3018/ws/realtime`，收到 `hello/v1`，并对当前港股页 5 只股票
+  分别收到同时含 `quote`、`depth`、`candlestick` 的 snapshot。
+
+生产验收不把一次 WebSocket 快照当作“盘中持续稳定”的证明；持续更新和完成分钟内
+决策字段不抖动仍应在对应市场交易时段观察。
