@@ -126,4 +126,25 @@ describe('realtime view overlays', () => {
     expect(result.signals).toBe(chart.signals)
     expect(result.longTerm).toBe(chart.longTerm)
   })
+
+  it('keeps the Dow chart reference when only quote or depth changes', () => {
+    const chart: DowMonitorChart = {
+      bars: [{
+        index: 0,
+        timestamp: '2026-07-24T10:00:00+08:00',
+        open: 550,
+        high: 551.2,
+        low: 549.8,
+        close: 551,
+        volume: 1000,
+      }],
+      lines: [{ id: 'preserved' } as any],
+      signals: [{ side: 'BUY' } as any],
+    }
+
+    const result = overlayDowChart(chart, realtime.candlestick, '5m')
+
+    expect(result).toBe(chart)
+    expect(result.bars).toBe(chart.bars)
+  })
 })

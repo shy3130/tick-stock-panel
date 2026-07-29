@@ -156,3 +156,12 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-detail-toggle-layout.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-detail-toggle-layout.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-REALTIME-RENDER-THROTTLE-001
+    specification: USER-20260729-DOW-MONITOR-REALTIME-RENDER
+    implementation:
+      - frontend/src/lib/realtimeOverlays.ts
+    tests:
+      - {path: tests/spec_contracts/test_realtime_frontend_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-realtime-render-performance.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-realtime-render-performance.md, type: independent-review}

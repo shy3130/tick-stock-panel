@@ -116,6 +116,11 @@ export function overlayDowChart(
       : latest.low,
     close: candle.close,
   }
+  if (
+    nextLatest.high === latest.high
+    && nextLatest.low === latest.low
+    && nextLatest.close === latest.close
+  ) return chart
   return {
     ...chart,
     bars: [...bars.slice(0, -1), nextLatest],

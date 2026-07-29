@@ -42,6 +42,11 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-MONITOR-SYMBOL-IDENTITY-001
+  - id: USER-20260729-DOW-MONITOR-REALTIME-RENDER
+    path: docs/specs/dow-monitor-realtime-render-performance.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-REALTIME-RENDER-THROTTLE-001
 conflicts: []
 exceptions:
   - id: EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001
