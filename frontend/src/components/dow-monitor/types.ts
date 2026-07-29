@@ -394,6 +394,9 @@ export interface DowDailyDecisionSummary {
   reversal_condition: string
   data_status: string
   status_label: string
+  current_price?: number | null
+  vwap_price?: number | null
+  vwap_distance_pct?: number | null
   input_event_ids: string[]
 }
 

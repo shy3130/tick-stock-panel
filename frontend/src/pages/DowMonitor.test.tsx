@@ -944,7 +944,8 @@ describe('Dow monitor page', () => {
     expect(within(card).getByText('138.80')).toBeVisible()
   })
 
-  it('shows the compact daily summary above the latest message and keeps detailed history', () => {
+  it('shows a beginner-friendly compact daily summary and keeps detailed history', async () => {
+    const user = userEvent.setup()
     window.history.replaceState(null, '', '/dow-monitor?market=hk')
     const withSummary = structuredClone(overview)
     withSummary.symbols[0].minute_decision = {
@@ -953,9 +954,9 @@ describe('Dow monitor page', () => {
       decision_minute: '2026-07-28T16:00:00+08:00',
       direction: 'BEARISH',
       direction_label: '偏跌',
-      action: 'REDUCE_SELL',
-      action_label: '减仓/卖出',
-      confidence: 82,
+      action: 'OBSERVE',
+      action_label: '继续观察',
+      confidence: 66,
       dominant_timeframe: '15m',
       confirmation_timeframes: ['30m'],
       supporting_reasons: ['15/30分钟结构同向偏弱'],
@@ -968,9 +969,9 @@ describe('Dow monitor page', () => {
         as_of_minute: '2026-07-28T16:00:00+08:00',
         direction: 'BEARISH',
         direction_label: '偏跌',
-        action: 'REDUCE_SELL',
-        action_label: '减仓/卖出',
-        confidence: 82,
+        action: 'OBSERVE',
+        action_label: '继续观察',
+        confidence: 66,
         phase_path: [
           {
             code: 'RAPID_RISE_CONFIRMED',
@@ -993,7 +994,7 @@ describe('Dow monitor page', () => {
             first_observed_at: '2026-07-28T10:24:00+08:00',
           },
         ],
-        summary_text: '价格结构、资金或正式卖点已经形成下跌确认。',
+        summary_text: '当前价格走势偏弱，短线仍承受卖出压力，先不要追涨。',
         key_evidence: [
           {
             code: 'PRICE_CAPITAL_DIVERGENCE',
@@ -1011,9 +1012,12 @@ describe('Dow monitor page', () => {
             observed_at: '2026-07-28T12:00:00+08:00',
           },
         ],
-        reversal_condition: '重新站上VWAP，且15分钟结构转多并得到资金确认',
+        reversal_condition: '价格重新回到今日平均成交成本140.41上方，并且主动买入成交持续增加',
         data_status: 'COMPLETE',
         status_label: '实时',
+        current_price: 139.3,
+        vwap_price: 140.41,
+        vwap_distance_pct: -0.7905,
         input_event_ids: ['risk-latest', 'risk-history'],
       },
     }
@@ -1058,13 +1062,26 @@ describe('Dow monitor page', () => {
     const summary = within(card).getByTestId('daily-decision-summary')
     const latest = within(card).getByTestId('latest-card-message')
     expect(summary).toHaveTextContent('今日综合决策')
-    expect(summary).toHaveTextContent('偏跌 · 减仓/卖出')
-    expect(summary).toHaveTextContent('82%')
+    expect(summary).toHaveTextContent('当前判断：走势偏弱')
+    expect(summary).toHaveTextContent('建议动作：先观望，不追涨')
+    expect(summary).toHaveTextContent('今日平均成交成本：140.41')
+    expect(summary).toHaveTextContent('当前价格：139.30')
+    expect(summary).toHaveTextContent('当前价相对成本：低于0.79%')
+    expect(summary).toHaveTextContent('证据一致度：66%')
+    expect(summary).toHaveTextContent('不是上涨或下跌概率')
+    const decisionDetails = within(summary).getByText('查看详细说明').closest('details')
+    expect(decisionDetails).not.toBeNull()
+    expect(decisionDetails).not.toHaveAttribute('open')
+    await user.click(within(summary).getByText('查看详细说明'))
+    expect(decisionDetails).toHaveAttribute('open')
+    expect(summary).toHaveTextContent('这说明什么')
+    expect(summary).toHaveTextContent('为什么这样判断')
     expect(summary).toHaveTextContent(
       '急涨确认 → 价格资金背离 → 冲高回落 → 下跌确认',
     )
     expect(summary).toHaveTextContent('大单转负1436万')
     expect(summary).toHaveTextContent('15分卖出确认')
+    expect(summary).toHaveTextContent('什么情况下改变判断')
     expect(
       Boolean(summary.compareDocumentPosition(latest) & Node.DOCUMENT_POSITION_FOLLOWING),
     ).toBe(true)
@@ -1113,6 +1130,9 @@ describe('Dow monitor page', () => {
         reversal_condition: '15/30分钟重新同向并获得资金确认',
         data_status: 'INSUFFICIENT_STRUCTURE',
         status_label: '证据不足',
+        current_price: 139.3,
+        vwap_price: null,
+        vwap_distance_pct: null,
         input_event_ids: [],
       },
     }
@@ -1126,9 +1146,11 @@ describe('Dow monitor page', () => {
     render(<DowMonitor />)
 
     const card = screen.getByTestId('card-01347.HK')
-    expect(within(card).getByTestId('daily-decision-summary')).toHaveTextContent(
-      '证据不足',
-    )
+    const summary = within(card).getByTestId('daily-decision-summary')
+    expect(summary).toHaveTextContent('当前判断：方向不清楚')
+    expect(summary).toHaveTextContent('建议动作：先观望，不追涨')
+    expect(summary).toHaveTextContent('今日平均成交成本暂不可用')
+    expect(summary).toHaveTextContent('证据不足')
     expect(within(card).getByRole('log')).toHaveTextContent(
       '当前分钟没有触发提示',
     )

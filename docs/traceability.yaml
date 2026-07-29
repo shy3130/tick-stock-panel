@@ -165,3 +165,14 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-realtime-render-performance.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-realtime-render-performance.md, type: independent-review}
+  - id: REQ-DOW-DAILY-DECISION-BEGINNER-COPY-001
+    specification: USER-20260729-DOW-DAILY-DECISION-BEGINNER-COPY
+    implementation:
+      - frontend/src/components/dow-monitor/DailyDecisionSummary.tsx
+      - frontend/src/components/dow-monitor/DowMonitorCard.css
+      - frontend/src/components/dow-monitor/types.ts
+    tests:
+      - {path: tests/spec_contracts/test_dow_daily_decision_beginner_copy_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-daily-decision-beginner-copy.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-daily-decision-beginner-copy.md, type: independent-review}

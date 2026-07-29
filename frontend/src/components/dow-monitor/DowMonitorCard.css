@@ -48,9 +48,68 @@
   color: var(--color-foreground);
 }
 
+.dow-daily-summary__decision > span {
+  min-width: 0;
+}
+
+.dow-daily-summary__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.375rem;
+  color: var(--color-secondary);
+}
+
+.dow-daily-summary__metrics > span {
+  min-width: 0;
+}
+
+.dow-daily-summary__cost-unavailable {
+  margin-top: 0.375rem;
+  color: var(--color-warning);
+}
+
 .dow-daily-summary__conclusion {
   margin-top: 0.25rem;
   color: var(--color-secondary);
+}
+
+.dow-daily-summary__confidence {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0 0.375rem;
+  margin-top: 0.25rem;
+  color: var(--color-muted);
+}
+
+.dow-daily-summary__details {
+  margin-top: 0.375rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid rgb(255 255 255 / 6%);
+}
+
+.dow-daily-summary__details > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--color-muted);
+}
+
+.dow-daily-summary__details-body {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.375rem;
+  color: var(--color-secondary);
+}
+
+.dow-daily-summary__details-body p,
+.dow-daily-summary__details-body ul {
+  margin-top: 0.125rem;
+}
+
+.dow-daily-summary__details-body ul {
+  padding-left: 1rem;
+  list-style: disc;
 }
 
 .dow-daily-summary__line {
@@ -70,4 +129,15 @@
 .dow-daily-summary__reversal {
   padding-top: 0.125rem;
   border-top: 1px solid rgb(255 255 255 / 6%);
+}
+
+@media (max-width: 640px) {
+  .dow-daily-summary__decision {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dow-daily-summary__metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
