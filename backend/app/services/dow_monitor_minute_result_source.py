@@ -90,11 +90,17 @@ class DowMonitorMinuteResultSource:
         symbols: Sequence[str],
         start: datetime,
         end: datetime,
+        *,
+        candle_start: datetime | None = None,
     ) -> RawMinuteHistory:
         if end <= start:
             raise ValueError("end must be later than start")
+        candle_start = candle_start or start
+        if candle_start > start:
+            raise ValueError("candle_start must not be later than start")
         symbol_sql = _symbol_tuple(symbols)
         start_sql = _time_literal(start)
+        candle_start_sql = _time_literal(candle_start)
         end_sql = _time_literal(end)
         common = f"symbol IN {symbol_sql}"
 
@@ -143,7 +149,7 @@ class DowMonitorMinuteResultSource:
             FROM {self._database}.lb_realtime_candlesticks FINAL
             WHERE {common}
               AND period IN ('min_1', 'min_5', 'min_15', 'min_30')
-              AND bar_time >= parseDateTime64BestEffort({start_sql})
+              AND bar_time >= parseDateTime64BestEffort({candle_start_sql})
               AND bar_time < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, period, bar_time
             """

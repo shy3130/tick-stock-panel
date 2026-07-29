@@ -123,3 +123,21 @@ def test_parses_raw_rows_and_preserves_five_level_depth() -> None:
     assert history.trades[0].direction == "BUY"
     assert history.candlesticks[0].period == "min_1"
     assert history.capital[0].total_in == 60
+
+
+def test_candle_warmup_does_not_expand_other_realtime_queries() -> None:
+    capture = QueryCapture()
+    candle_start = START.replace(day=20)
+
+    DowMonitorMinuteResultSource(query_fn=capture).load_raw_history(
+        ["700.HK"],
+        START,
+        END,
+        candle_start=candle_start,
+    )
+
+    candle_sql = next(sql for sql in capture.sql if "lb_realtime_candlesticks" in sql)
+    other_sql = [sql for sql in capture.sql if "lb_realtime_candlesticks" not in sql]
+    assert candle_start.isoformat() in candle_sql
+    assert all(candle_start.isoformat() not in sql for sql in other_sql)
+    assert all(START.isoformat() in sql for sql in other_sql)
