@@ -9,6 +9,15 @@ Market = Literal["cn", "hk", "us"]
 Timeframe = Literal["5m", "15m", "30m"]
 
 
+def normalize_monitor_symbol(value: str) -> str:
+    normalized = value.strip().upper()
+    if normalized.endswith(".HK"):
+        code = normalized[:-3]
+        if code.isdigit():
+            return f"{int(code)}.HK"
+    return normalized
+
+
 class MinuteBar(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

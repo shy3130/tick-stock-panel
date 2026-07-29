@@ -74,6 +74,22 @@ class Source:
 class HistoryBuilder:
     def __init__(self) -> None:
         self.market_days: list[tuple[str, date]] = []
+        self.build_calls = 0
+
+    def candidate_keys(self, history, symbol, market_day) -> set[MinuteResultKey]:
+        base = datetime.combine(market_day, datetime.min.time(), tzinfo=UTC)
+        return {
+            MinuteResultKey(
+                market=symbol.market,
+                symbol=symbol.symbol,
+                decision_minute=base + timedelta(hours=1, minutes=1),
+            ),
+            MinuteResultKey(
+                market=symbol.market,
+                symbol=symbol.symbol,
+                decision_minute=base + timedelta(hours=1, minutes=2),
+            ),
+        }
 
     def build_contexts(
         self,
@@ -82,12 +98,21 @@ class HistoryBuilder:
         market_day,
         backfill,
         notifications,
+        decision_minutes=None,
     ) -> list[MinuteResultContext]:
+        self.build_calls += 1
         self.market_days.append((symbol.symbol, market_day))
         base = datetime.combine(market_day, datetime.min.time(), tzinfo=UTC)
-        return [
+        contexts = [
             _context(symbol, market_day, base + timedelta(hours=1, minutes=1)),
             _context(symbol, market_day, base + timedelta(hours=1, minutes=2)),
+        ]
+        if decision_minutes is None:
+            return contexts
+        return [
+            context
+            for context in contexts
+            if context.decision_minute in decision_minutes
         ]
 
 
@@ -148,6 +173,27 @@ def test_backfills_only_missing_logical_keys() -> None:
     assert len(repository.inserted) == 1
     assert repository.inserted[0].decision_minute != first_minute
     assert materializer.status().pending_minutes == 0
+
+
+def test_skips_history_replay_when_all_candidate_keys_already_exist() -> None:
+    item = _symbol("700.HK", "hk")
+    market_day = NOW.date()
+    base = datetime.combine(market_day, datetime.min.time(), tzinfo=UTC)
+    existing = {
+        MinuteResultKey(
+            market="hk",
+            symbol=item.symbol,
+            decision_minute=base + timedelta(hours=1, minutes=offset),
+        )
+        for offset in (1, 2)
+    }
+    repository = Repository(existing)
+    materializer, _, history = _materializer(repository)
+
+    run = materializer.materialize([item], NOW)
+
+    assert run.written_rows == 0
+    assert history.build_calls == 0
 
 
 def test_uses_each_markets_local_current_day_and_separate_warmup() -> None:

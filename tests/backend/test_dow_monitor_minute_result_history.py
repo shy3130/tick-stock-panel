@@ -159,6 +159,29 @@ def test_us_market_day_uses_new_york_date_across_shanghai_midnight() -> None:
     assert {item.market_day for item in contexts} == {date(2026, 7, 29)}
 
 
+def test_padded_hk_monitor_symbol_matches_unpadded_raw_history() -> None:
+    bar_time = datetime(2026, 7, 29, 9, 30, tzinfo=SHANGHAI)
+    history = RawMinuteHistory(
+        candlesticks=(
+            _raw_bar(bar_time, symbol="1347.HK"),
+        ),
+    )
+
+    contexts = DowMonitorMinuteResultHistoryBuilder(
+        CountingStableStateBuilder(),
+    ).build_contexts(
+        history,
+        _symbol("01347.HK", "hk"),
+        date(2026, 7, 29),
+        True,
+        notifications=[],
+    )
+
+    assert len(contexts) == 1
+    assert contexts[0].symbol == "1347.HK"
+    assert contexts[0].display_symbol == "01347.HK"
+
+
 def test_stable_state_replay_is_cached_per_completed_bucket() -> None:
     minute_start = datetime(2026, 7, 29, 9, 45, tzinfo=SHANGHAI)
     minute_bars = tuple(

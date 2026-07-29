@@ -121,6 +121,14 @@ class DowMonitorMinuteResultMaterializer:
                 )
                 contexts = []
                 for item in items:
+                    candidate_keys = self._history_builder.candidate_keys(
+                        history,
+                        item,
+                        market_day,
+                    )
+                    missing_keys = candidate_keys - existing
+                    if not missing_keys:
+                        continue
                     contexts.extend(
                         self._history_builder.build_contexts(
                             history,
@@ -128,6 +136,9 @@ class DowMonitorMinuteResultMaterializer:
                             market_day,
                             True,
                             notifications=notifications,
+                            decision_minutes={
+                                key.decision_minute for key in missing_keys
+                            },
                         )
                     )
                 latest_by_symbol = {

@@ -12,9 +12,11 @@ from app.services.dow_monitor_minute_result_models import (
     FormalSignalReference,
     MinuteBar,
     MinuteResultContext,
+    MinuteResultKey,
     RawCandlestick,
     RawMinuteHistory,
     StableTimeframeState,
+    normalize_monitor_symbol,
 )
 from app.services.dow_monitor_models import DowNotification, MonitoredSymbol
 
@@ -150,14 +152,15 @@ class DowMonitorMinuteResultHistoryBuilder:
         market_day: date,
         backfill: bool,
         notifications: Sequence[DowNotification],
+        decision_minutes: set[datetime] | None = None,
     ) -> list[MinuteResultContext]:
-        normalized = symbol.symbol.strip().upper()
+        normalized = normalize_monitor_symbol(symbol.symbol)
         zone = MARKET_ZONES[symbol.market]
         minute_rows = sorted(
             (
                 row
                 for row in history.candlesticks
-                if row.symbol.strip().upper() == normalized
+                if normalize_monitor_symbol(row.symbol) == normalized
                 and row.period == "min_1"
                 and _required_bar(row)
                 and _aware(row.bar_time).astimezone(zone).date() == market_day
@@ -169,7 +172,7 @@ class DowMonitorMinuteResultHistoryBuilder:
                 (
                     row
                     for row in history.candlesticks
-                    if row.symbol.strip().upper() == normalized
+                    if normalize_monitor_symbol(row.symbol) == normalized
                     and row.period == period
                     and _required_bar(row)
                 ),
@@ -184,7 +187,7 @@ class DowMonitorMinuteResultHistoryBuilder:
             (
                 item
                 for item in notifications
-                if item.symbol.strip().upper() == normalized
+                if normalize_monitor_symbol(item.symbol) == normalized
             ),
             key=lambda item: item.triggered_at,
         )
@@ -194,6 +197,11 @@ class DowMonitorMinuteResultHistoryBuilder:
         for minute_index, row in enumerate(minute_rows):
             source_bar_time = _aware(row.bar_time)
             decision_minute = source_bar_time + timedelta(minutes=1)
+            if (
+                decision_minutes is not None
+                and decision_minute not in decision_minutes
+            ):
+                continue
             quote = self._latest_visible(
                 quotes,
                 decision_minute,
@@ -286,13 +294,34 @@ class DowMonitorMinuteResultHistoryBuilder:
             )
         return output
 
+    def candidate_keys(
+        self,
+        history: RawMinuteHistory,
+        symbol: MonitoredSymbol,
+        market_day: date,
+    ) -> set[MinuteResultKey]:
+        normalized = normalize_monitor_symbol(symbol.symbol)
+        zone = MARKET_ZONES[symbol.market]
+        return {
+            MinuteResultKey(
+                market=symbol.market,
+                symbol=normalized,
+                decision_minute=_aware(row.bar_time) + timedelta(minutes=1),
+            )
+            for row in history.candlesticks
+            if normalize_monitor_symbol(row.symbol) == normalized
+            and row.period == "min_1"
+            and _required_bar(row)
+            and _aware(row.bar_time).astimezone(zone).date() == market_day
+        }
+
     @staticmethod
     def _symbol_rows(rows: Sequence, symbol: str, time_field: str) -> list:
         return sorted(
             (
                 row
                 for row in rows
-                if row.symbol.strip().upper() == symbol
+                if normalize_monitor_symbol(row.symbol) == symbol
             ),
             key=lambda row: _aware(getattr(row, time_field)),
         )

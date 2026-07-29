@@ -13,6 +13,7 @@ from app.services.dow_monitor_minute_result_models import (
     RawMinuteHistory,
     RawQuoteSnapshot,
     RawTrade,
+    normalize_monitor_symbol,
 )
 
 QueryFn = Callable[[str], list[dict]]
@@ -23,7 +24,9 @@ def _clickhouse_string(value: str) -> str:
 
 
 def _symbol_tuple(symbols: Sequence[str]) -> str:
-    normalized = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+    normalized = sorted(
+        {normalize_monitor_symbol(symbol) for symbol in symbols if symbol.strip()}
+    )
     if not normalized:
         raise ValueError("symbols must not be empty")
     return "(" + ", ".join(_clickhouse_string(symbol) for symbol in normalized) + ")"

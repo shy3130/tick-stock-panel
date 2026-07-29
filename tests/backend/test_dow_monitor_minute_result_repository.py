@@ -145,7 +145,7 @@ def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
     keys = DowMonitorMinuteResultRepository(
         query_fn=query,
         execute_fn=ExecuteCapture(),
-    ).existing_keys(["700.HK"], DECISION_MINUTE - timedelta(hours=1), NOW)
+    ).existing_keys(["00700.HK"], DECISION_MINUTE - timedelta(hours=1), NOW)
 
     key = next(iter(keys))
     assert key.market == "hk"
@@ -157,3 +157,5 @@ def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
     )
     assert "results.decision_minute >=" in queries[0]
     assert "results.decision_minute <" in queries[0]
+    assert "'700.HK'" in queries[0]
+    assert "'00700.HK'" not in queries[0]

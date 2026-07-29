@@ -42,6 +42,19 @@ def test_queries_each_raw_table_once_for_the_whole_symbol_batch() -> None:
     assert all("'700.HK'" in sql and "'AAPL.US'" in sql for sql in capture.sql)
 
 
+def test_normalizes_padded_hk_symbols_in_batch_query() -> None:
+    capture = QueryCapture()
+
+    DowMonitorMinuteResultSource(query_fn=capture).load_raw_history(
+        ["01347.HK"],
+        START,
+        END,
+    )
+
+    assert all("'1347.HK'" in sql for sql in capture.sql)
+    assert all("'01347.HK'" not in sql for sql in capture.sql)
+
+
 def test_uses_final_only_for_replacing_merge_tree_candlesticks() -> None:
     capture = QueryCapture()
 
