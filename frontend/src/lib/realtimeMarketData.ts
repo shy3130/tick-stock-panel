@@ -97,6 +97,7 @@ interface ClientOptions {
   marketOpen?: (symbol: string, now: Date) => boolean
   initialFallbackMs?: number
   livenessMs?: number
+  uiFlushMs?: number
 }
 
 interface Consumer {
@@ -145,6 +146,7 @@ export class RealtimeMarketDataClient {
   private readonly marketOpen: (symbol: string, now: Date) => boolean
   private readonly initialFallbackMs: number
   private readonly livenessMs: number
+  private readonly uiFlushMs: number
   private readonly consumers = new Map<number, Consumer>()
   private readonly listeners = new Set<() => void>()
   private readonly receivedAt = new Map<
@@ -164,6 +166,7 @@ export class RealtimeMarketDataClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private stopTimer: ReturnType<typeof setTimeout> | undefined
   private freshnessTimer: ReturnType<typeof setInterval> | undefined
+  private viewFlushTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(options: ClientOptions = {}) {
     this.socketFactory = options.socketFactory ?? (url => new WebSocket(url))
@@ -172,6 +175,7 @@ export class RealtimeMarketDataClient {
     this.marketOpen = options.marketOpen ?? isMarketOpen
     this.initialFallbackMs = options.initialFallbackMs ?? 3000
     this.livenessMs = options.livenessMs ?? 45_000
+    this.uiFlushMs = Math.max(0, options.uiFlushMs ?? 1000)
   }
 
   getStatus = (): RealtimeStatus => this.status
@@ -331,8 +335,8 @@ export class RealtimeMarketDataClient {
       depthDelayed: false,
       candlestickDelayed: false,
     }
-    this.states = new Map(this.states).set(symbol, this.withFreshness(next, receivedNow))
-    this.emit()
+    this.states.set(symbol, this.withFreshness(next, receivedNow))
+    this.scheduleViewFlush()
     return true
   }
 
@@ -382,7 +386,7 @@ export class RealtimeMarketDataClient {
     }
     if (changed) {
       this.states = next
-      this.emit()
+      this.scheduleViewFlush()
     }
   }
 
@@ -461,10 +465,12 @@ export class RealtimeMarketDataClient {
     clearTimeout(this.initialFallbackTimer)
     clearTimeout(this.livenessTimer)
     clearTimeout(this.reconnectTimer)
+    clearTimeout(this.viewFlushTimer)
     clearInterval(this.freshnessTimer)
     this.initialFallbackTimer = undefined
     this.livenessTimer = undefined
     this.reconnectTimer = undefined
+    this.viewFlushTimer = undefined
     this.freshnessTimer = undefined
     const socket = this.socket
     this.socket = null
@@ -475,11 +481,25 @@ export class RealtimeMarketDataClient {
   private setStatus(status: RealtimeStatus): void {
     if (this.status === status) return
     this.status = status
-    this.emit()
+    this.emitNow()
   }
 
-  private emit(): void {
-    this.view = { status: this.status, states: this.states }
+  private scheduleViewFlush(): void {
+    if (this.uiFlushMs === 0) {
+      this.emitNow()
+      return
+    }
+    if (this.viewFlushTimer) return
+    this.viewFlushTimer = setTimeout(() => {
+      this.viewFlushTimer = undefined
+      this.emitNow()
+    }, this.uiFlushMs)
+  }
+
+  private emitNow(): void {
+    clearTimeout(this.viewFlushTimer)
+    this.viewFlushTimer = undefined
+    this.view = { status: this.status, states: new Map(this.states) }
     this.listeners.forEach(listener => listener())
   }
 }

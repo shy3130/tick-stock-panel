@@ -47,6 +47,7 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-MONITOR-REALTIME-RENDER-THROTTLE-001
+      - REQ-DOW-MONITOR-REALTIME-RENDER-BATCH-001
   - id: USER-20260729-DOW-DAILY-DECISION-BEGINNER-COPY
     path: docs/specs/dow-daily-decision-beginner-copy.md
     status: authoritative

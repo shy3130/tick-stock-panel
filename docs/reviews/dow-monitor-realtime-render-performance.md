@@ -1,5 +1,8 @@
 # 道氏监控实时 K 线渲染性能独立评审
 
+> 2026-07-29 追加需求 `REQ-DOW-MONITOR-REALTIME-RENDER-BATCH-001`，当前处于实施阶段；
+> 完成低层消息合并语义、前端测试、发布包和生产双终端验收后再更新独立结论。
+
 ## 需求到证据复核
 
 ### REQ-DOW-MONITOR-REALTIME-RENDER-THROTTLE-001
