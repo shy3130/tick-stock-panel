@@ -161,3 +161,22 @@
   13 只（A 股 1、港股 5、美股 7）。
 - 生产 WebSocket 五个港股样本已使用正确昨收；例如 `1347.HK` 实时为约 `-1.88%`，
   `1888.HK` 为约 `-7.29%`，不再使用旧基线得到约 `-9.76%` 和 `-24.39%`。
+
+## 2026-07-30 生产验收：涨跌幅与北京时间
+
+- `REQ-DOW-MONITOR-LIST-SIGNAL-STABILITY-001` 的列表消费者统一调用
+  `formatServerTimestamp`，并明确展示“北京时间 HH:mm”；原始 API 时间保持不变。
+- 行为测试使用 `2026-07-29T16:15:00.313318Z`，断言页面显示
+  `北京时间 00:15` 且不再显示原始 `16:15`。
+- 相关 Vitest：`21 passed`；前端生产构建成功；规格契约：`2 passed`。
+- 10.28 正式镜像为
+  `tickflow-stock-panel-app:dow-monitor-436106d55131`，入口
+  `assets/index-CHti3iOF.js`，列表分包
+  `assets/DowMonitor-XVTpK45l.js`。
+- 本地与 3018 HTTP 返回的列表分包 SHA-256 均为
+  `1890fd6d9ebaa28c4ac74b1736fc957783b6fb8fc0c4a4605262ed9938a55b54`。
+- 已认证生产页面实测：NBIS/INTC/TSLA 信号显示 `北京时间 00:15`，
+  TSLL 显示 `北京时间 00:30`，GTLB 显示 `北京时间 01:36`。
+- 页面实时涨跌幅由校准后的 `lastDone` 与 `prevClose` 计算；验收窗口内
+  NBIS、INTC、TSLA 分别约为 `-4.41%`、`-1.15%`、`-0.83%`，
+  与同一时刻实时行情方向和数量级一致。
