@@ -37,11 +37,12 @@
 - `backend/app/services/dow_monitor_minute_result_repository.py` — ClickHouse result DDL, existing-key reads, and inserts.
 - `backend/app/services/dow_monitor_minute_result_history.py` — causal as-of joins, completed-minute selection, and cached stable-timeframe replay.
 - `backend/app/services/dow_monitor_minute_result_materializer.py` — market-day gap planning and orchestration.
-- `backend/tests/test_dow_monitor_minute_result_calculator.py` — formula, unit, causality, and missing-data tests.
-- `backend/tests/test_dow_monitor_minute_result_source.py` — batched raw-query and source-shape tests.
-- `backend/tests/test_dow_monitor_minute_result_repository.py` — SQL/DDL/serialization tests.
-- `backend/tests/test_dow_monitor_minute_result_history.py` — as-of causality, market-clock, staleness, and replay-cache tests.
-- `backend/tests/test_dow_monitor_minute_result_materializer.py` — backfill, idempotency, and isolation tests.
+- `tests/backend/test_dow_monitor_minute_result_calculator.py` — formula, unit, causality, and missing-data tests.
+- `tests/backend/test_dow_monitor_minute_result_source.py` — batched raw-query and source-shape tests.
+- `tests/backend/test_dow_monitor_minute_result_repository.py` — SQL/DDL/serialization tests.
+- `tests/backend/test_dow_monitor_minute_result_history.py` — as-of causality, market-clock, staleness, and replay-cache tests.
+- `tests/backend/test_dow_monitor_minute_result_materializer.py` — backfill, idempotency, and isolation tests.
+- `tests/backend/test_dow_monitor_minute_result_integration.py` — lifecycle and fail-open integration tests.
 - `docs/acceptance/dow-monitor-minute-results-clickhouse.md` — production semantic acceptance.
 - `docs/reviews/dow-monitor-minute-results-clickhouse.md` — independent requirement-to-evidence review.
 
@@ -51,7 +52,7 @@
 - `docs/traceability.yaml` — map requirements to implementation, executable tests, acceptance, and review.
 - `backend/app/services/dow_monitor_service.py` — invoke an optional materializer after the normal cycle and expose status.
 - `backend/app/main.py` — build the repository/materializer and pass it to the service.
-- `backend/tests/test_dow_monitor_api.py` — lifecycle and fail-open integration tests.
+- `backend/tests/test_dow_monitor_api.py` — retain existing monitor API regression coverage.
 - `tests/spec_contracts/test_dow_monitor_list_websocket_contract.py` — retain existing signal-boundary coverage; do not move minute-result tests here.
 - `E:\Obsidian-alwin\alwin\longbridge-stock\dow-monitor-system-api-runbook.md` — table, backfill, queries, deployment, and rollback.
 
@@ -160,7 +161,7 @@ MUST remain NULL and be listed in `missing_fields`.
 
 - [ ] **Step 4: Register index, traceability, pending acceptance, and pending review**
 
-Traceability must point only to executable test paths under `tests/` or `backend/tests/`. Register all three entries exactly:
+Traceability must point only to executable test paths under `tests/`. Register all three entries exactly:
 
 ```yaml
   - id: REQ-DOW-MONITOR-MINUTE-RESULTS-SCHEMA-001
@@ -170,7 +171,7 @@ Traceability must point only to executable test paths under `tests/` or `backend
       - backend/app/services/dow_monitor_minute_result_repository.py
     tests:
       - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_minute_result_repository.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
@@ -186,10 +187,10 @@ Traceability must point only to executable test paths under `tests/` or `backend
       - backend/app/main.py
     tests:
       - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_minute_result_calculator.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_minute_result_history.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_minute_result_materializer.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_api.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_calculator.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_integration.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
@@ -203,9 +204,9 @@ Traceability must point only to executable test paths under `tests/` or `backend
       - backend/app/services/dow_monitor_minute_result_repository.py
     tests:
       - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_minute_result_source.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_minute_result_history.py, type: executable-test}
-      - {path: backend/tests/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_source.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
@@ -220,7 +221,7 @@ python -m pytest tests/spec_contracts/test_dow_monitor_minute_results_clickhouse
 python scripts/check_spec_compliance.py
 ```
 
-Expected: contract PASS. The checker may still report only the two recorded pre-existing baseline findings; no new finding may be introduced.
+Expected: contract PASS. Until Tasks 2–6 create the registered implementation and executable-test paths, the checker also reports those planned paths as invalid; this is an explicit in-progress state, not acceptance. Final verification may report only the two recorded pre-existing baseline findings and must introduce no new finding.
 
 - [ ] **Step 6: Commit**
 
@@ -237,7 +238,7 @@ git commit -m "docs(dow-monitor): specify minute result persistence"
 
 - Create: `backend/app/services/dow_monitor_minute_result_models.py`
 - Create: `backend/app/services/dow_monitor_minute_result_calculator.py`
-- Create: `backend/tests/test_dow_monitor_minute_result_calculator.py`
+- Create: `tests/backend/test_dow_monitor_minute_result_calculator.py`
 
 **Interfaces:**
 
@@ -292,9 +293,7 @@ def test_matches_frontend_authoritative_indicator_fixture() -> None:
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_calculator.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_calculator.py -q
 ```
 
 Expected: collection FAIL because the model/calculator modules are absent.
@@ -364,9 +363,7 @@ Port completed-bar momentum, 15m ATR14, 15m→30m control/volume-ratio fallback,
 - [ ] **Step 5: Run calculator tests and existing frontend semantic tests**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_calculator.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_calculator.py -q
 pnpm --dir frontend exec vitest run src/components/dow-monitor/monitorListPresentation.test.ts
 ```
 
@@ -375,7 +372,7 @@ Expected: both PASS; the explicit shared semantic fixture proves unit and formul
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add backend/app/services/dow_monitor_minute_result_models.py backend/app/services/dow_monitor_minute_result_calculator.py backend/tests/test_dow_monitor_minute_result_calculator.py
+git add backend/app/services/dow_monitor_minute_result_models.py backend/app/services/dow_monitor_minute_result_calculator.py tests/backend/test_dow_monitor_minute_result_calculator.py
 git commit -m "feat(dow-monitor): calculate minute result snapshots"
 ```
 
@@ -387,8 +384,8 @@ git commit -m "feat(dow-monitor): calculate minute result snapshots"
 
 - Create: `backend/app/services/dow_monitor_minute_result_source.py`
 - Create: `backend/app/services/dow_monitor_minute_result_repository.py`
-- Create: `backend/tests/test_dow_monitor_minute_result_source.py`
-- Create: `backend/tests/test_dow_monitor_minute_result_repository.py`
+- Create: `tests/backend/test_dow_monitor_minute_result_source.py`
+- Create: `tests/backend/test_dow_monitor_minute_result_repository.py`
 
 **Interfaces:**
 
@@ -435,9 +432,7 @@ def test_source_queries_each_raw_table_once_for_the_whole_symbol_batch() -> None
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_source.py tests/test_dow_monitor_minute_result_repository.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_source.py tests/backend/test_dow_monitor_minute_result_repository.py -q
 ```
 
 Expected: FAIL because the source and repository do not exist.
@@ -485,9 +480,7 @@ Insert exactly once per batch using `FORMAT JSONEachRow`.
 - [ ] **Step 6: Run repository tests**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_source.py tests/test_dow_monitor_minute_result_repository.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_source.py tests/backend/test_dow_monitor_minute_result_repository.py -q
 ```
 
 Expected: PASS.
@@ -495,7 +488,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add backend/app/services/dow_monitor_minute_result_source.py backend/app/services/dow_monitor_minute_result_repository.py backend/tests/test_dow_monitor_minute_result_source.py backend/tests/test_dow_monitor_minute_result_repository.py
+git add backend/app/services/dow_monitor_minute_result_source.py backend/app/services/dow_monitor_minute_result_repository.py tests/backend/test_dow_monitor_minute_result_source.py tests/backend/test_dow_monitor_minute_result_repository.py
 git commit -m "feat(dow-monitor): add minute result ClickHouse storage"
 ```
 
@@ -506,7 +499,7 @@ git commit -m "feat(dow-monitor): add minute result ClickHouse storage"
 **Files:**
 
 - Create: `backend/app/services/dow_monitor_minute_result_history.py`
-- Create: `backend/tests/test_dow_monitor_minute_result_history.py`
+- Create: `tests/backend/test_dow_monitor_minute_result_history.py`
 
 **Interfaces:**
 
@@ -561,9 +554,7 @@ def test_stable_state_replay_is_cached_per_completed_bucket() -> None:
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_history.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_history.py -q
 ```
 
 Expected: FAIL because `DowMonitorMinuteResultHistoryBuilder` is absent.
@@ -586,9 +577,7 @@ Use only bars complete at the target decision minute. Cache replay results by `(
 - [ ] **Step 5: Run causal-history and calculator tests**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_history.py tests/test_dow_monitor_minute_result_calculator.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_history.py tests/backend/test_dow_monitor_minute_result_calculator.py -q
 ```
 
 Expected: PASS.
@@ -596,7 +585,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add backend/app/services/dow_monitor_minute_result_history.py backend/tests/test_dow_monitor_minute_result_history.py
+git add backend/app/services/dow_monitor_minute_result_history.py tests/backend/test_dow_monitor_minute_result_history.py
 git commit -m "feat(dow-monitor): build causal minute result history"
 ```
 
@@ -607,7 +596,7 @@ git commit -m "feat(dow-monitor): build causal minute result history"
 **Files:**
 
 - Create: `backend/app/services/dow_monitor_minute_result_materializer.py`
-- Create: `backend/tests/test_dow_monitor_minute_result_materializer.py`
+- Create: `tests/backend/test_dow_monitor_minute_result_materializer.py`
 
 **Interfaces:**
 
@@ -638,9 +627,7 @@ def test_clickhouse_failure_is_reported_without_raising() -> None:
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_materializer.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_materializer.py -q
 ```
 
 Expected: FAIL because the materializer does not exist.
@@ -678,9 +665,7 @@ Catch repository/calculation failures at the materializer boundary, retain the p
 - [ ] **Step 5: Run materializer tests**
 
 ```powershell
-Push-Location backend
-python -m pytest tests/test_dow_monitor_minute_result_materializer.py -q
-Pop-Location
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_materializer.py -q
 ```
 
 Expected: PASS.
@@ -688,7 +673,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add backend/app/services/dow_monitor_minute_result_materializer.py backend/tests/test_dow_monitor_minute_result_materializer.py
+git add backend/app/services/dow_monitor_minute_result_materializer.py tests/backend/test_dow_monitor_minute_result_materializer.py
 git commit -m "feat(dow-monitor): materialize missing minute results"
 ```
 
@@ -700,6 +685,7 @@ git commit -m "feat(dow-monitor): materialize missing minute results"
 
 - Modify: `backend/app/services/dow_monitor_service.py`
 - Modify: `backend/app/main.py`
+- Create: `tests/backend/test_dow_monitor_minute_result_integration.py`
 - Modify: `backend/tests/test_dow_monitor_api.py`
 
 **Interfaces:**
@@ -774,8 +760,9 @@ Add:
 - [ ] **Step 6: Run backend integration and regression tests**
 
 ```powershell
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_integration.py tests/backend/test_dow_monitor_minute_result_calculator.py tests/backend/test_dow_monitor_minute_result_source.py tests/backend/test_dow_monitor_minute_result_repository.py tests/backend/test_dow_monitor_minute_result_history.py tests/backend/test_dow_monitor_minute_result_materializer.py -q
 Push-Location backend
-python -m pytest tests/test_dow_monitor_api.py tests/test_dow_monitor_minute_result_calculator.py tests/test_dow_monitor_minute_result_source.py tests/test_dow_monitor_minute_result_repository.py tests/test_dow_monitor_minute_result_history.py tests/test_dow_monitor_minute_result_materializer.py tests/test_realtime_websocket.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_dow_monitor_api.py tests/test_realtime_websocket.py -q
 Pop-Location
 ```
 
@@ -784,7 +771,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add backend/app/services/dow_monitor_service.py backend/app/main.py backend/tests/test_dow_monitor_api.py
+git add backend/app/services/dow_monitor_service.py backend/app/main.py backend/tests/test_dow_monitor_api.py tests/backend/test_dow_monitor_minute_result_integration.py
 git commit -m "feat(dow-monitor): persist minute results from monitor loop"
 ```
 
@@ -806,8 +793,9 @@ git commit -m "feat(dow-monitor): persist minute results from monitor loop"
 - [ ] **Step 1: Run focused and full relevant tests**
 
 ```powershell
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_minute_result_integration.py tests/backend/test_dow_monitor_minute_result_calculator.py tests/backend/test_dow_monitor_minute_result_source.py tests/backend/test_dow_monitor_minute_result_repository.py tests/backend/test_dow_monitor_minute_result_history.py tests/backend/test_dow_monitor_minute_result_materializer.py -q
 Push-Location backend
-python -m pytest tests/test_dow_monitor_api.py tests/test_dow_monitor_minute_result_calculator.py tests/test_dow_monitor_minute_result_source.py tests/test_dow_monitor_minute_result_repository.py tests/test_dow_monitor_minute_result_history.py tests/test_dow_monitor_minute_result_materializer.py tests/test_realtime_websocket.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_dow_monitor_api.py tests/test_realtime_websocket.py -q
 Pop-Location
 
 python -m pytest tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py tests/spec_contracts/test_dow_monitor_list_websocket_contract.py tests/spec_contracts/test_realtime_frontend_contract.py -q

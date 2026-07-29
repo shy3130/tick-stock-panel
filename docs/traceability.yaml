@@ -310,3 +310,47 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-indicator-help.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-indicator-help.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-SCHEMA-001
+    specification: USER-20260729-DOW-MONITOR-MINUTE-RESULTS-CLICKHOUSE
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_models.py
+      - backend/app/services/dow_monitor_minute_result_repository.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-MATERIALIZATION-001
+    specification: USER-20260729-DOW-MONITOR-MINUTE-RESULTS-CLICKHOUSE
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_models.py
+      - backend/app/services/dow_monitor_minute_result_calculator.py
+      - backend/app/services/dow_monitor_minute_result_history.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/main.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_calculator.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_integration.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-BACKFILL-001
+    specification: USER-20260729-DOW-MONITOR-MINUTE-RESULTS-CLICKHOUSE
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_source.py
+      - backend/app/services/dow_monitor_minute_result_history.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_minute_result_repository.py
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_minute_results_clickhouse_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_source.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
