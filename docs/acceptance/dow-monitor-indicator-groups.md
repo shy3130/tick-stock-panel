@@ -51,3 +51,17 @@ At the requested 1800×1080 viewport override, `document.documentElement.scrollW
 - A/HK/US each render the nine headers and two-line groups; current lists are 1, 5, and 7 rows respectively, all within the fixed maximum 20 rows/page;
 - `查看详情 01347.HK` opens once and the second activation closes it; no modal is used;
 - HK formal signals and timestamps were identical over a five-second real-time observation window.
+
+## Independent raw-input recomputation (round 1)
+
+Read-only authenticated production overview for `01347.HK`: completed minute `2026-07-29T15:59:00+08:00`, final 5m closes `136.4` (`15:50`) and `136.9` (`15:55`), final 15m closes `136.3` (`15:30`) and `136.9` (`15:45`). Thus 5m is `(136.9-136.4)/136.4*100=0.3665689%` → `+0.37%`, and 15m is `(136.9-136.3)/136.3*100=0.4402054%` → `+0.44%`.
+
+Final 15m OHLC bars (open/high/low/close) used for ATR14: `11:15 130.3/131.1/128.1/129.1; 11:30 129.1/129.1/127.3/127.5; 11:45 127.4/127.8/127.2/127.3; 13:00 127.4/133.3/126.3/133.0; 13:15 133.0/133.9/130.2/133.5; 13:30 133.3/134.6/131.8/133.2; 13:45 133.2/134.2/131.6/132.5; 14:00 132.5/133.7/131.5/132.9; 14:15 132.9/134.0/132.4/133.9; 14:30 133.8/134.7/133.2/134.4; 14:45 134.3/136.4/134.3/135.8; 15:00 135.9/136.2/135.7/135.9; 15:15 136.0/136.8/136.0/136.5; 15:30 136.5/137.4/136.3/136.3; 15:45 136.2/136.9/135.7/136.9`.
+
+The 14 TR inputs are `1.8,0.6,7.0,3.7,2.8,2.6,2.2,1.6,1.5,2.1,0.5,0.9,1.1,1.2`, sum `29.6`; `(29.6/14)/136.9*100=1.5444015%` → rendered `+1.54%`. The same response has `current_price=136.9`, `vwap_price=132.88026484713833`, `vwap_distance_pct=3.025080629908339`; `(136.9-132.88026484713833)/132.88026484713833*100=3.0250806%`. Its decision has no dominant or confirmation timeframes, therefore live `0/2`; `monitorListPresentation.test.ts > derives stable grouped decision metrics from completed bars and decisions` independently asserts the constructed `2/2` case.
+
+## Deterministic boundary/missing/pagination proof
+
+Adversarial inputs cannot be injected into production. `monitorListPresentation.test.ts > does not let realtime depth change a formal BUY signal` uses a bid-heavy five-level book `300/250` (`+9.0909%`) and ask-heavy book `10/100` (`-81.8182%`) plus a `100→101` 1m candle (`+1.00%`); both retain the same persisted `CONFIRMED BUY`. `> projects volume speed only within the valid 1m observation window` covers valid, too-early, insufficient-12-bar, and `candlestickDelayed` inputs; `DowMonitorList.test.tsx > keeps missing grouped values explicit instead of rendering zeroes` renders `ATR14 --`; `> requires complete active-funds data` maps delayed capital to unconfirmed/null. `DowMonitorList.test.tsx > renders grouped columns with real-time and stable labels` asserts per-field `实时` labels.
+
+Pagination is proven by `DowMonitor.test.tsx > shows three exclusive markets, twenty rows, and subscribes only the current page`, which uses 45 same-market enabled symbols and page-one `1..20`, and `> changes the WebSocket subscription with pagination`, which verifies page-two `21..40`; production 1/5/7 counts are not pagination proof. Fresh rerun: 21 focused frontend tests and 2 contracts passed.
