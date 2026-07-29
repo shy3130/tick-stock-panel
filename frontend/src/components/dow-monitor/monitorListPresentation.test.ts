@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type {
+  DowMinuteDecision,
   DowMonitorNotification,
   DowMonitorOverviewSymbol,
   DowMonitorTimeframeState,
@@ -81,13 +82,37 @@ function symbolFixture(
       action_label: '买入观察',
       confidence: 0.72,
       dominant_timeframe: '15m',
-      confirmation_timeframes: ['5m', '15m'],
+      confirmation_timeframes: ['30m'],
       supporting_reasons: [],
       contrary_risks: [],
       invalidation_conditions: [],
       data_status: 'COMPLETE',
       status_label: '数据完整',
       source_timestamp: '2026-07-29T09:35:00+08:00',
+      risk_warning: {
+        family: 'KEY_LEVEL_BREAKDOWN',
+        stage: 'WARNING',
+        title: ' 跌破关键位 ',
+        message: '价格跌破关键支撑位',
+      },
+      daily_summary: {
+        as_of_minute: '2026-07-29T09:35:00+08:00',
+        direction: 'BULLISH',
+        direction_label: '偏强' as DowMinuteDecision['direction_label'],
+        action: 'WATCH_BUY',
+        action_label: '买入观察',
+        confidence: 72,
+        phase_path: [],
+        summary_text: '走势偏强',
+        key_evidence: [],
+        reversal_condition: '跌回控制线下方',
+        data_status: 'COMPLETE',
+        status_label: '数据完整',
+        current_price: 10.5,
+        vwap_price: 10.48,
+        vwap_distance_pct: 0.19,
+        input_event_ids: [],
+      },
     },
     states: {
       '5m': state('5m', [10, 10.2]),
@@ -149,14 +174,14 @@ describe('monitor list presentation', () => {
 
     const row = deriveMonitorRow(item, [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
 
-    expect(row.channel).toEqual({ code: 'UP', label: '上升通道' })
-    expect(row.momentum5m.direction).toBe('UP')
-    expect(row.momentum5m.valuePct).toBeCloseTo(4)
-    expect(row.momentum15m.direction).toBe('UP')
-    expect(row.momentum15m.valuePct).toBeCloseTo(5)
+    expect(row.trendPosition.channel.code).toBe('UP')
+    expect(row.momentumSpeed.momentum5m.direction).toBe('UP')
+    expect(row.momentumSpeed.momentum5m.valuePct).toBeCloseTo(4)
+    expect(row.momentumSpeed.momentum15m.direction).toBe('UP')
+    expect(row.momentumSpeed.momentum15m.valuePct).toBeCloseTo(5)
   })
 
-  it('falls back for control distance and leaves missing values explicit', () => {
+  it('does not fall back to 5m for control distance or relative volume', () => {
     const item = symbolFixture({
       states: {
         '5m': state('5m', [10, 10.2], { priceToLinePct: -0.8, volumeRatio: 0.9 }),
@@ -166,13 +191,35 @@ describe('monitor list presentation', () => {
 
     const row = deriveMonitorRow(item, [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
 
-    expect(row.control).toEqual({
-      timeframe: '5m',
-      role: '支撑线',
-      distancePct: -0.8,
+    expect(row.trendPosition.control).toBeNull()
+    expect(row.volumeFunds.relativeVolume).toBeNull()
+    expect(row.trendPosition.channel.code).toBe('PENDING')
+  })
+
+  it('derives stable grouped decision metrics from completed bars and decisions', () => {
+    const completedCloses = Array.from({ length: 16 }, (_, index) => 100 + index)
+    const fifteen = state('15m', [...completedCloses, 1000], { completion: 'FORMING' })
+    fifteen.chart.bars?.forEach(bar => {
+      bar.high = bar.close + 1
+      bar.low = bar.close - 1
     })
-    expect(row.relativeVolume).toEqual({ timeframe: '5m', ratio: 0.9 })
-    expect(row.channel.label).toBe('待确认')
+    const item = symbolFixture({
+      states: {
+        '15m': fifteen,
+        '30m': state('30m', [100, 101], { priceToLinePct: 0.7, volumeRatio: 1.3 }),
+      },
+    })
+
+    const row = deriveMonitorRow(item, [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
+
+    expect(row.trendPosition.costDistancePct).toBe(0.19)
+    expect(row.trendPosition.control).toMatchObject({ timeframe: '30m', distancePct: 0.7 })
+    expect(row.breakoutRisk.atr14Pct).toBeCloseTo(2 / 115 * 100, 6)
+    expect(row.breakoutRisk).toMatchObject({
+      confirmedTimeframes: 2,
+      totalTimeframes: 2,
+      riskTitle: '跌破关键位',
+    })
   })
 
   it('requires complete active-funds data', () => {
@@ -191,8 +238,8 @@ describe('monitor list presentation', () => {
       Date.parse('2026-07-29T09:35:30+08:00'),
     )
 
-    expect(complete.activeFunds).toEqual({ confirmed: true, buyRatioPct: 60 })
-    expect(delayed.activeFunds).toEqual({ confirmed: false, buyRatioPct: null })
+    expect(complete.volumeFunds.activeFunds).toEqual({ confirmed: true, buyRatioPct: 60 })
+    expect(delayed.volumeFunds.activeFunds).toEqual({ confirmed: false, buyRatioPct: null })
   })
 
   it('keeps the newest persisted formal signal and timestamp even when data is stale', () => {

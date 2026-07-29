@@ -18,6 +18,27 @@ export interface MonitorMomentum {
   valuePct: number | null
 }
 
+export interface MonitorChannel {
+  code: 'UP' | 'DOWN' | 'RANGE' | 'PENDING' | 'UNKNOWN'
+  label: string
+}
+
+export interface MonitorControl {
+  timeframe: DowTimeframe
+  role: string
+  distancePct: number
+}
+
+export interface MonitorRelativeVolume {
+  timeframe: DowTimeframe
+  ratio: number
+}
+
+export interface MonitorActiveFunds {
+  confirmed: boolean
+  buyRatioPct: number | null
+}
+
 export interface MonitorSignal {
   level: 'CONFIRMED' | 'WARNING'
   side: 'BUY' | 'SELL' | 'RISK'
@@ -28,24 +49,29 @@ export interface MonitorSignal {
 export interface MonitorRowPresentation {
   price: number | null
   changePct: number | null
-  channel: {
-    code: 'UP' | 'DOWN' | 'RANGE' | 'PENDING' | 'UNKNOWN'
-    label: string
+  trendPosition: {
+    channel: MonitorChannel
+    control: MonitorControl | null
+    costDistancePct: number | null
   }
-  control: {
-    timeframe: DowTimeframe
-    role: string
-    distancePct: number
-  } | null
-  momentum5m: MonitorMomentum
-  momentum15m: MonitorMomentum
-  relativeVolume: {
-    timeframe: DowTimeframe
-    ratio: number
-  } | null
-  activeFunds: {
-    confirmed: boolean
-    buyRatioPct: number | null
+  momentumSpeed: {
+    momentum1m: MonitorMomentum
+    momentum5m: MonitorMomentum
+    momentum15m: MonitorMomentum
+  }
+  volumeFunds: {
+    relativeVolume: MonitorRelativeVolume | null
+    volumeSpeed: number | null
+    activeFunds: MonitorActiveFunds
+    depthPressurePct: number | null
+  }
+  breakoutRisk: {
+    toDayHighPct: number | null
+    fromDayLowPct: number | null
+    atr14Pct: number | null
+    confirmedTimeframes: number
+    totalTimeframes: 2
+    riskTitle: string | null
   }
   signal: MonitorSignal | null
   delayed: boolean
@@ -92,7 +118,7 @@ function barChannel(
   return 'RANGE'
 }
 
-function channel(item: DowMonitorOverviewSymbol): MonitorRowPresentation['channel'] {
+function channel(item: DowMonitorOverviewSymbol): MonitorChannel {
   const fifteen = barChannel(item.states['15m'])
   const thirty = barChannel(item.states['30m'])
   if (fifteen == null && thirty == null) return { code: 'UNKNOWN', label: '--' }
@@ -102,7 +128,7 @@ function channel(item: DowMonitorOverviewSymbol): MonitorRowPresentation['channe
   return { code: 'RANGE', label: '震荡/过渡' }
 }
 
-const CONTROL_TIMEFRAMES: DowTimeframe[] = ['15m', '30m', '5m']
+const CONTROL_TIMEFRAMES: DowTimeframe[] = ['15m', '30m']
 
 function roleLabel(value: string | null | undefined): string {
   const normalized = value?.trim().toUpperCase()
@@ -114,7 +140,7 @@ function roleLabel(value: string | null | undefined): string {
 
 function control(
   item: DowMonitorOverviewSymbol,
-): MonitorRowPresentation['control'] {
+): MonitorControl | null {
   for (const timeframe of CONTROL_TIMEFRAMES) {
     const snapshot = item.states[timeframe]?.snapshot
     if (!finite(snapshot?.price_to_line_pct)) continue
@@ -145,8 +171,8 @@ function momentum(
 
 function relativeVolume(
   item: DowMonitorOverviewSymbol,
-  selectedControl: MonitorRowPresentation['control'],
-): MonitorRowPresentation['relativeVolume'] {
+  selectedControl: MonitorControl | null,
+): MonitorRelativeVolume | null {
   const timeframes = selectedControl
     ? [selectedControl.timeframe]
     : CONTROL_TIMEFRAMES
@@ -159,7 +185,7 @@ function relativeVolume(
 
 function activeFunds(
   item: DowMonitorOverviewSymbol,
-): MonitorRowPresentation['activeFunds'] {
+): MonitorActiveFunds {
   const capital = item.intraday_capital
   const totalIn = capital?.total_in
   const totalOut = capital?.total_out
@@ -175,6 +201,43 @@ function activeFunds(
     confirmed: true,
     buyRatioPct: totalIn / (totalIn + totalOut) * 100,
   }
+}
+
+function atr14Pct(state: DowMonitorTimeframeState | undefined): number | null {
+  const bars = completedBars(state)
+  if (bars.length < 15) return null
+  const ranges = bars.slice(1).map((bar, index) => {
+    const previousClose = bars[index].close
+    if (
+      !finite(bar.high)
+      || !finite(bar.low)
+      || !finite(previousClose)
+    ) return null
+    return Math.max(
+      bar.high - bar.low,
+      Math.abs(bar.high - previousClose),
+      Math.abs(bar.low - previousClose),
+    )
+  })
+  const recent = ranges.slice(-14)
+  const latestClose = bars.at(-1)?.close
+  if (
+    recent.length !== 14
+    || recent.some(range => range == null)
+    || !finite(latestClose)
+    || latestClose <= 0
+  ) return null
+  return (recent as number[]).reduce((sum, value) => sum + value, 0) / 14 / latestClose * 100
+}
+
+function confirmedTimeframes(item: DowMonitorOverviewSymbol): number {
+  const decision = item.minute_decision
+  if (!decision || decision.direction === 'RANGE') return 0
+  const values = new Set([
+    decision.dominant_timeframe,
+    ...decision.confirmation_timeframes,
+  ])
+  return CONTROL_TIMEFRAMES.filter(timeframe => values.has(timeframe)).length
 }
 
 const DELAYED_DECISION_STATUSES = new Set([
@@ -321,14 +384,33 @@ export function deriveMonitorRow(
   const selectedControl = control(item)
   const delayed = isDelayed(item, realtime, nowMs)
   const formal = formalSignal(item, notifications)
+  const costDistancePct = item.minute_decision?.daily_summary?.vwap_distance_pct
   return {
     ...realtimePrice(item, realtime),
-    channel: channel(item),
-    control: selectedControl,
-    momentum5m: momentum(item.states['5m']),
-    momentum15m: momentum(item.states['15m']),
-    relativeVolume: relativeVolume(item, selectedControl),
-    activeFunds: activeFunds(item),
+    trendPosition: {
+      channel: channel(item),
+      control: selectedControl,
+      costDistancePct: finite(costDistancePct) ? costDistancePct : null,
+    },
+    momentumSpeed: {
+      momentum1m: { direction: 'UNKNOWN', valuePct: null },
+      momentum5m: momentum(item.states['5m']),
+      momentum15m: momentum(item.states['15m']),
+    },
+    volumeFunds: {
+      relativeVolume: relativeVolume(item, selectedControl),
+      volumeSpeed: null,
+      activeFunds: activeFunds(item),
+      depthPressurePct: null,
+    },
+    breakoutRisk: {
+      toDayHighPct: null,
+      fromDayLowPct: null,
+      atr14Pct: atr14Pct(item.states['15m']),
+      confirmedTimeframes: confirmedTimeframes(item),
+      totalTimeframes: 2,
+      riskTitle: item.minute_decision?.risk_warning?.title?.trim() || null,
+    },
     signal: formal ?? (delayed ? null : warningSignal(item)),
     delayed,
     sparkline: buildIntradaySparkline(item, realtime?.candlestick),
