@@ -287,7 +287,7 @@ describe('DowMonitorList', () => {
     expect(depthPressureBadge.nextElementSibling)
       .toHaveTextContent('五档 --')
     expect(screen.getByText('买入确认')).toBeInTheDocument()
-    expect(screen.getByText('09:34')).toBeInTheDocument()
+    expect(screen.getByText('北京时间 09:34')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看详情 700.HK' })).toHaveTextContent('查看详情')
   })
 
@@ -324,6 +324,38 @@ describe('DowMonitorList', () => {
     for (const group of ['trend-position', 'momentum-speed', 'volume-funds', 'breakout-risk']) {
       expect(screen.getByTestId(`${group}-700.HK`)).not.toHaveTextContent(/(?:\+|-)?0(?:\.0+)?[%×]/)
     }
+  })
+
+  it('renders every signal occurrence in Beijing time', () => {
+    render(
+      <DowMonitorList
+        items={[item('NBIS.US', {
+          market: 'us',
+          latest_notification: {
+            ...item().latest_notification!,
+            symbol: 'NBIS.US',
+            market: 'us',
+            side: 'SELL',
+            action_name: '卖出确认',
+            triggered_at: '2026-07-29T16:15:00.313318Z',
+          },
+        })]}
+        notifications={[]}
+        realtimeStates={new Map()}
+        selectedSymbol={null}
+        page={1}
+        pageCount={1}
+        total={1}
+        nowMs={Date.parse('2026-07-30T00:16:00+08:00')}
+        onPageChange={vi.fn()}
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('北京时间 00:15')).toBeInTheDocument()
+    expect(screen.queryByText('16:15')).not.toBeInTheDocument()
   })
 
   it('selects from the row or detail action and keeps management controls outside the action column', async () => {

@@ -221,6 +221,8 @@ requirements:
     specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
     implementation:
       - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/components/dow-monitor/formatServerTimestamp.ts
       - frontend/src/pages/DowMonitor.tsx
     tests:
       - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}

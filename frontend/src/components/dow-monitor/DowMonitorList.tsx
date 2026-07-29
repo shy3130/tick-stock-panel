@@ -14,6 +14,7 @@ import type {
   DowMonitorNotification,
   DowMonitorOverviewSymbol,
 } from './types'
+import { formatServerTimestamp } from './formatServerTimestamp'
 
 function numberText(value: number | null, digits = 2): string {
   return value == null ? '--' : value.toFixed(digits)
@@ -40,9 +41,10 @@ function distancePercent(label: string, value: number | null): string {
 }
 
 function signalTime(value: string | null): string | null {
-  if (!value) return null
-  const match = /T(\d{2}:\d{2})/.exec(value)
-  return match?.[1] ?? value
+  const formatted = formatServerTimestamp(value)
+  if (!formatted) return null
+  const match = /(\d{2}:\d{2})$/.exec(formatted)
+  return match?.[1] ?? formatted
 }
 
 function signalClass(signal: MonitorSignal | null): string {
@@ -288,7 +290,7 @@ export function DowMonitorList({
                         </span>
                         {signalTime(row.signal.occurredAt) && (
                           <div className="mt-0.5 font-mono text-[10px] text-muted">
-                            {signalTime(row.signal.occurredAt)}
+                            北京时间 {signalTime(row.signal.occurredAt)}
                           </div>
                         )}
                       </div>
