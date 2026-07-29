@@ -506,6 +506,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
 
     from app.data_providers.trust import DataProviderUnavailable
 
+    audit_dataset = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
     provider_name = preferences.get_adj_factor_provider()
     if provider_name == "same_as_daily":
         provider_name = preferences.get_daily_data_provider()
@@ -528,13 +529,13 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         except Exception as error:
             unavailable = DataProviderUnavailable(
                 provider_name,
-                "adj_factor",
+                audit_dataset,
                 f"provider inspection failed: {error}",
             )
             _write_sync_error(
                 repo,
                 provider=provider_name,
-                dataset="adj_factor",
+                dataset=audit_dataset,
                 symbols=symbols,
                 error=unavailable,
             )
@@ -545,13 +546,13 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
             except Exception as error:
                 unavailable = DataProviderUnavailable(
                     provider_name,
-                    "adj_factor",
+                    audit_dataset,
                     f"provider initialization failed: {error}",
                 )
                 _write_sync_error(
                     repo,
                     provider=provider_name,
-                    dataset="adj_factor",
+                    dataset=audit_dataset,
                     symbols=symbols,
                     error=unavailable,
                 )
@@ -569,19 +570,19 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
                     repo.store.data_dir,
                     audit_market_error(
                         provider=provider_name,
-                        dataset="adj_factor",
+                        dataset=audit_dataset,
                         requested_symbols=symbols,
                         error=error,
                     ),
                 )
                 raise DataProviderFetchFailed(
                     provider_name,
-                    "adj_factor",
+                    audit_dataset,
                     error,
                 ) from error
             audit = audit_market_frame(
                 provider=provider_name,
-                dataset="adj_factor",
+                dataset=audit_dataset,
                 frame=new_data,
                 requested_symbols=symbols,
                 requested_end=end_time,
@@ -607,13 +608,13 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
             return new_data.height, affected
         unavailable = DataProviderUnavailable(
             provider_name,
-            "adj_factor",
+            audit_dataset,
             "the selected provider does not declare the adj_factor dataset",
         )
         _write_sync_error(
             repo,
             provider=provider_name,
-            dataset="adj_factor",
+            dataset=audit_dataset,
             symbols=symbols,
             error=unavailable,
         )
@@ -622,13 +623,13 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     if not capset.has(Cap.ADJ_FACTOR):
         unavailable = DataProviderUnavailable(
             "tickflow",
-            "adj_factor",
+            audit_dataset,
             f"missing required capability: {Cap.ADJ_FACTOR.value}",
         )
         _write_sync_error(
             repo,
             provider="tickflow",
-            dataset="adj_factor",
+            dataset=audit_dataset,
             symbols=symbols,
             error=unavailable,
         )
@@ -640,7 +641,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
         _write_sync_error(
             repo,
             provider="tickflow",
-            dataset="adj_factor",
+            dataset=audit_dataset,
             symbols=symbols,
             error=error,
         )
@@ -702,7 +703,7 @@ def sync_adj_factor(symbols: list[str], repo: KlineRepository,
     # 而不是拿事件标的数除以全市场标的数。
     audit = audit_market_frame(
         provider="tickflow",
-        dataset="adj_factor",
+        dataset=audit_dataset,
         frame=new_data,
         requested_symbols=[],
         requested_end=end_time,

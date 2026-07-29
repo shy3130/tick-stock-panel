@@ -423,6 +423,62 @@ def test_run_now_missing_tickflow_adjustment_capability_closes_trust_gate(
     )
 
 
+def test_etf_adjustment_success_cannot_overwrite_stock_factor_failure(
+    tmp_path,
+    monkeypatch,
+):
+    from datetime import datetime
+
+    from app.data_providers.trust import DataAudit, load_latest_audits, write_latest_audit
+    from app.services import kline_sync, preferences
+    from app.services.advisor import build_advisor_recommendations
+    from app.tickflow.capabilities import Cap, CapabilityLimits, CapabilitySet
+
+    cache = _seed_trusted_gate(tmp_path)
+    write_latest_audit(
+        tmp_path,
+        DataAudit(
+            provider="tickflow",
+            dataset="adj_factor",
+            status="partial",
+            row_count=1,
+            returned_symbols=("600000.SH",),
+            missing_symbols=("000001.SZ",),
+            coverage_ratio=0.5,
+            observed_start="2026-06-10",
+            observed_end="2026-06-10",
+        ),
+    )
+    factors = pl.DataFrame(
+        {
+            "symbol": ["510300.SH"],
+            "trade_date": [date(2026, 6, 10)],
+            "ex_factor": [1.1],
+        }
+    )
+    client = SimpleNamespace(
+        klines=SimpleNamespace(ex_factors=lambda *args, **kwargs: factors),
+    )
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
+    monkeypatch.setattr(preferences, "get_adj_factor_provider", lambda: "tickflow")
+    monkeypatch.setattr(kline_sync, "get_client", lambda: client)
+
+    assert kline_sync.sync_adj_factor(
+        ["510300.SH"],
+        repo,
+        CapabilitySet({Cap.ADJ_FACTOR: CapabilityLimits(batch=10)}),
+        end_time=datetime(2026, 7, 24),
+        asset_type="etf",
+    ) == (1, ["510300.SH"])
+
+    audits = load_latest_audits(tmp_path)
+    latest = {receipt["dataset"]: receipt for receipt in audits}
+    assert latest["adj_factor"]["status"] == "partial"
+    assert latest["adj_factor"]["coverage_ratio"] == 0.5
+    assert latest["adj_factor_etf"]["status"] == "ok"
+    assert build_advisor_recommendations(audits, cache)["data_gate"]["decision"] == "BLOCK"
+
+
 def test_tickflow_instrument_exchange_failure_overwrites_old_success_receipt(
     tmp_path,
     monkeypatch,
