@@ -169,6 +169,87 @@ function momentum(
   return { direction, valuePct }
 }
 
+function momentumFromPct(valuePct: number): MonitorMomentum {
+  return {
+    direction: Math.abs(valuePct) < 0.005 ? 'FLAT' : valuePct > 0 ? 'UP' : 'DOWN',
+    valuePct,
+  }
+}
+
+function realtimeMomentum1m(
+  realtime: RealtimeSymbolState | undefined,
+): MonitorMomentum {
+  const candle = realtime?.candlestick
+  if (
+    realtime?.candlestickDelayed
+    || !finite(candle?.open)
+    || !finite(candle?.close)
+    || candle.open <= 0
+  ) return { direction: 'UNKNOWN', valuePct: null }
+  return momentumFromPct((candle.close - candle.open) / candle.open * 100)
+}
+
+function volumeSpeed(
+  item: DowMonitorOverviewSymbol,
+  realtime: RealtimeSymbolState | undefined,
+  nowMs: number,
+): number | null {
+  const candle = realtime?.candlestick
+  if (
+    realtime?.candlestickDelayed
+    || !candle
+    || !finite(candle.volume)
+    || candle.volume < 0
+  ) return null
+
+  const candleStart = timestampMs(candle.timestamp)
+  if (candleStart == null) return null
+  const elapsedSeconds = (nowMs - candleStart) / 1000
+  if (elapsedSeconds < 20 || elapsedSeconds >= 75) return null
+
+  const volumes = completedBars(item.states['5m'])
+    .slice(-12)
+    .map(bar => bar.volume)
+  if (volumes.length !== 12 || volumes.some(value => !finite(value) || value < 0)) {
+    return null
+  }
+  const baselinePerMinute = volumes.reduce((sum, value) => sum + value, 0) / 12 / 5
+  if (baselinePerMinute <= 0) return null
+  const projectedVolume = candle.volume * 60 / Math.min(elapsedSeconds, 60)
+  return projectedVolume / baselinePerMinute
+}
+
+function depthPressurePct(realtime: RealtimeSymbolState | undefined): number | null {
+  if (realtime?.depthDelayed) return null
+  const bids = realtime?.depth?.bids.slice(0, 5).map(level => level.volume)
+    .filter(finite) ?? []
+  const asks = realtime?.depth?.asks.slice(0, 5).map(level => level.volume)
+    .filter(finite) ?? []
+  if (bids.length === 0 || asks.length === 0) return null
+  const bidVolume = bids.reduce((sum, value) => sum + value, 0)
+  const askVolume = asks.reduce((sum, value) => sum + value, 0)
+  const total = bidVolume + askVolume
+  return total > 0 ? (bidVolume - askVolume) / total * 100 : null
+}
+
+function dayRangeDistances(realtime: RealtimeSymbolState | undefined): {
+  toDayHighPct: number | null
+  fromDayLowPct: number | null
+} {
+  const quote = realtime?.quote
+  if (realtime?.quoteDelayed || !finite(quote?.lastDone) || quote.lastDone <= 0) {
+    return { toDayHighPct: null, fromDayLowPct: null }
+  }
+  return {
+    toDayHighPct: finite(quote.high)
+      ? Math.max(quote.high - quote.lastDone, 0) / quote.lastDone * 100
+      : null,
+    fromDayLowPct: finite(quote.low)
+      ? Math.max(quote.lastDone - quote.low, 0) / quote.lastDone * 100
+      : null,
+  }
+}
+
 function relativeVolume(
   item: DowMonitorOverviewSymbol,
 ): MonitorRelativeVolume | null {
@@ -381,6 +462,7 @@ export function deriveMonitorRow(
   const delayed = isDelayed(item, realtime, nowMs)
   const formal = formalSignal(item, notifications)
   const costDistancePct = item.minute_decision?.daily_summary?.vwap_distance_pct
+  const dayRange = dayRangeDistances(realtime)
   return {
     ...realtimePrice(item, realtime),
     trendPosition: {
@@ -389,19 +471,18 @@ export function deriveMonitorRow(
       costDistancePct: finite(costDistancePct) ? costDistancePct : null,
     },
     momentumSpeed: {
-      momentum1m: { direction: 'UNKNOWN', valuePct: null },
+      momentum1m: realtimeMomentum1m(realtime),
       momentum5m: momentum(item.states['5m']),
       momentum15m: momentum(item.states['15m']),
     },
     volumeFunds: {
       relativeVolume: relativeVolume(item),
-      volumeSpeed: null,
+      volumeSpeed: volumeSpeed(item, realtime, nowMs),
       activeFunds: activeFunds(item),
-      depthPressurePct: null,
+      depthPressurePct: depthPressurePct(realtime),
     },
     breakoutRisk: {
-      toDayHighPct: null,
-      fromDayLowPct: null,
+      ...dayRange,
       atr14Pct: atr14Pct(item.states['15m']),
       confirmedTimeframes: confirmedTimeframes(item),
       totalTimeframes: 2,

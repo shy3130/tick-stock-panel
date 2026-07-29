@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import type { RealtimeSymbolState } from '@/lib/realtimeMarketData'
+
 import type {
   DowMinuteDecision,
   DowMonitorNotification,
@@ -150,7 +152,89 @@ function notification(
   }
 }
 
+function realtimeFixture(
+  overrides: Partial<RealtimeSymbolState> = {},
+): RealtimeSymbolState {
+  return {
+    symbol: '700.HK',
+    streamId: 'stream-1',
+    sequence: 10,
+    eventAt: '2026-07-29T09:35:30+08:00',
+    publishedAt: '2026-07-29T09:35:30+08:00',
+    quote: {
+      lastDone: 101,
+      prevClose: 100,
+      high: 102,
+      low: 95,
+      timestamp: '2026-07-29T09:35:30+08:00',
+    },
+    candlestick: {
+      period: 'min_1',
+      timestamp: '2026-07-29T09:35:00+08:00',
+      open: 100,
+      close: 101,
+      volume: 40,
+    },
+    depth: {
+      bids: [100, 80, 60, 40, 20].map((volume, index) => ({ position: index + 1, volume })),
+      asks: [70, 60, 50, 40, 30].map((volume, index) => ({ position: index + 1, volume })),
+    },
+    quoteDelayed: false,
+    depthDelayed: false,
+    candlestickDelayed: false,
+    ...overrides,
+  }
+}
+
 describe('monitor list presentation', () => {
+  it('derives 1m momentum, day-range distance, and five-level depth pressure independently', () => {
+    const row = deriveMonitorRow(
+      symbolFixture(),
+      [],
+      realtimeFixture(),
+      Date.parse('2026-07-29T09:35:30+08:00'),
+    )
+
+    expect(row.momentumSpeed.momentum1m.valuePct).toBeCloseTo(1)
+    expect(row.breakoutRisk.toDayHighPct).toBeCloseTo(100 / 101)
+    expect(row.breakoutRisk.fromDayLowPct).toBeCloseTo(600 / 101)
+    expect(row.volumeFunds.depthPressurePct).toBeCloseTo((300 - 250) / 550 * 100)
+  })
+
+  it('projects volume speed only within the valid 1m observation window', () => {
+    const fiveMinute = state('5m', Array.from({ length: 12 }, () => 100))
+    fiveMinute.chart.bars?.forEach(bar => { bar.volume = 500 })
+    const item = symbolFixture({ states: { '5m': fiveMinute } })
+    const realtime = realtimeFixture()
+
+    expect(deriveMonitorRow(item, [], realtime, Date.parse('2026-07-29T09:35:30+08:00'))
+      .volumeFunds.volumeSpeed).toBeCloseTo(0.8)
+    expect(deriveMonitorRow(item, [], realtime, Date.parse('2026-07-29T09:35:10+08:00'))
+      .volumeFunds.volumeSpeed).toBeNull()
+    expect(deriveMonitorRow(
+      symbolFixture({ states: { '5m': state('5m', Array.from({ length: 11 }, () => 100)) } }),
+      [],
+      realtime,
+      Date.parse('2026-07-29T09:35:30+08:00'),
+    ).volumeFunds.volumeSpeed).toBeNull()
+    expect(deriveMonitorRow(item, [], realtimeFixture({ candlestickDelayed: true }),
+      Date.parse('2026-07-29T09:35:30+08:00')).volumeFunds.volumeSpeed).toBeNull()
+  })
+
+  it('does not let realtime depth change a formal BUY signal', () => {
+    const item = symbolFixture({ latest_notification: notification() })
+    const bidHeavy = deriveMonitorRow(item, [], realtimeFixture(), Date.parse('2026-07-29T09:35:30+08:00'))
+    const askHeavy = deriveMonitorRow(item, [], realtimeFixture({
+      depth: {
+        bids: [{ position: 1, volume: 10 }],
+        asks: [{ position: 1, volume: 100 }],
+      },
+    }), Date.parse('2026-07-29T09:35:30+08:00'))
+
+    expect(bidHeavy.signal).toEqual(askHeavy.signal)
+    expect(bidHeavy.signal).toMatchObject({ level: 'CONFIRMED', side: 'BUY' })
+  })
+
   it('converts the HTTP decimal change ratio to display percent units', () => {
     const row = deriveMonitorRow(
       symbolFixture({ last_price: 500, change_pct: 0.0125 }),
