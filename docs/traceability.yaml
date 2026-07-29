@@ -281,3 +281,32 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-indicator-groups.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-indicator-groups.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HELP-NAVIGATION-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/pages/DowMonitorHelp.tsx
+      - frontend/src/router.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-help.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-help.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HELP-CONTENT-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-help.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-help.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HELP-ACCESSIBILITY-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-indicator-help.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-indicator-help.md, type: independent-review}

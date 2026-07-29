@@ -16,6 +16,14 @@ GROUP_REQUIREMENTS = {
     "REQ-DOW-MONITOR-INDICATOR-SIGNAL-BOUNDARY-001",
 }
 
+HELP_REQUIREMENTS = {
+    "REQ-DOW-MONITOR-HELP-NAVIGATION-001",
+    "REQ-DOW-MONITOR-HELP-CONTENT-001",
+    "REQ-DOW-MONITOR-HELP-ACCESSIBILITY-001",
+}
+
+ALL_REQUIREMENTS = GROUP_REQUIREMENTS | HELP_REQUIREMENTS
+
 
 def test_grouped_indicator_requirements_are_authoritative_and_traceable() -> None:
     index = yaml.safe_load((ROOT / "docs/spec-index.yaml").read_text(encoding="utf-8"))
@@ -27,14 +35,14 @@ def test_grouped_indicator_requirements_are_authoritative_and_traceable() -> Non
         for item in index["specifications"]
         if item["id"] == "USER-20260729-DOW-MONITOR-LIST-WEBSOCKET"
     )
-    assert GROUP_REQUIREMENTS <= set(specification["requirements"])
+    assert ALL_REQUIREMENTS <= set(specification["requirements"])
 
     entries = {
         item["id"]: item
         for item in traceability["requirements"]
-        if item["id"] in GROUP_REQUIREMENTS
+        if item["id"] in ALL_REQUIREMENTS
     }
-    assert set(entries) == GROUP_REQUIREMENTS
+    assert set(entries) == ALL_REQUIREMENTS
     for requirement_id, entry in entries.items():
         assert entry["specification"] == specification["id"]
         assert entry["implementation"]
@@ -60,6 +68,7 @@ def test_dow_monitor_list_websocket_behavioral_suite() -> None:
             "src/components/dow-monitor/DowMonitorList.test.tsx",
             "src/components/dow-monitor/DowMonitorDetailPanel.test.tsx",
             "src/pages/DowMonitor.test.tsx",
+            "src/pages/DowMonitorHelp.test.tsx",
             "src/lib/realtimeMarketData.test.ts",
         ],
         cwd=ROOT,
