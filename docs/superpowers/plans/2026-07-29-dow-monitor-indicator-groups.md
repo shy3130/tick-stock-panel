@@ -158,7 +158,10 @@ Expected: FAIL because the four requirement IDs are not yet present in `docs/spe
 
 将四个 ID 添加到 `USER-20260729-DOW-MONITOR-LIST-WEBSOCKET.requirements`。
 
-在 `docs/traceability.yaml` 中为四个 ID 建立条目。实现路径使用本计划的三个生产文件；测试路径使用三个前端测试和规格契约测试；验收路径统一指向：
+在 `docs/traceability.yaml` 中为四个 ID 建立条目。实现路径使用本计划的三个生产文件；
+直接测试证据只登记位于 `tests/` 下的
+`tests/spec_contracts/test_dow_monitor_list_websocket_contract.py`，由该契约测试继续执行三个前端行为测试，
+避免放宽全局规格守卫；验收路径统一指向：
 
 ```yaml
 acceptance:
