@@ -61,6 +61,7 @@ describe('Dow monitor route', () => {
     expect(screen.getByRole('link', { name: '趋势监控' })).toHaveAttribute('href', '/dow-monitor')
     expect(within(screen.getByRole('banner')).getByText('趋势监控')).toBeInTheDocument()
     expect(routePaths()).toContain('dow-monitor')
+    expect(routePaths()).toContain('dow-monitor/help')
   })
 
   it('exposes collection monitoring in the route and desktop/mobile navigation', async () => {

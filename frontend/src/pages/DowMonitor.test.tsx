@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
@@ -154,6 +155,14 @@ const symbols: DowMonitorOverviewSymbol[] = [
   stock('AAPL.US', 'us', 101),
 ]
 
+function monitorNode() {
+  return (
+    <MemoryRouter>
+      <DowMonitor />
+    </MemoryRouter>
+  )
+}
+
 function overview(): DowMonitorOverviewResponse {
   return {
     symbols,
@@ -199,12 +208,14 @@ describe('Dow monitor list page', () => {
   })
 
   it('shows three exclusive markets, twenty rows, and subscribes only the current page', () => {
-    render(<DowMonitor />)
+    render(monitorNode())
 
     expect(screen.getByRole('button', { name: 'A股' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '港股' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: '美股' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: '全部' })).toHaveLength(1)
+    expect(screen.getByRole('link', { name: '指标说明' }))
+      .toHaveAttribute('href', '/dow-monitor/help?market=hk')
     expect(within(screen.getByRole('region', { name: '股票监控列表' })).getAllByRole('row'))
       .toHaveLength(21)
     expect(screen.getByText('第 1 / 3 页 · 共 45 只')).toBeInTheDocument()
@@ -217,7 +228,7 @@ describe('Dow monitor list page', () => {
 
   it('changes the WebSocket subscription with pagination', async () => {
     const user = userEvent.setup()
-    render(<DowMonitor />)
+    render(monitorNode())
 
     await user.click(screen.getByRole('button', { name: '下一页' }))
 
@@ -231,7 +242,7 @@ describe('Dow monitor list page', () => {
 
   it('updates real-time price without changing the persisted signal', () => {
     const target = symbols[2]
-    const { rerender } = render(<DowMonitor />)
+    const { rerender } = render(monitorNode())
     const formalSignalCount = screen.getAllByText('买入确认').length
     const targetFormalSignal = () => {
       const targetRow = screen.getByText(target.symbol).closest('tr')
@@ -283,7 +294,7 @@ describe('Dow monitor list page', () => {
         },
       ]]),
     }
-    rerender(<DowMonitor />)
+    rerender(monitorNode())
 
     expect(screen.getByText('188.88')).toBeInTheDocument()
     expect(screen.getByText('1m +1.00%')).toBeInTheDocument()
@@ -310,7 +321,7 @@ describe('Dow monitor list page', () => {
         },
       ]]),
     }
-    rerender(<DowMonitor />)
+    rerender(monitorNode())
 
     expect(screen.getAllByText('买入确认')).toHaveLength(formalSignalCount)
     expect(targetFormalSignal()).toBeInTheDocument()
@@ -318,7 +329,7 @@ describe('Dow monitor list page', () => {
 
   it('toggles the selected stock detail below the list without a dialog', async () => {
     const user = userEvent.setup()
-    render(<DowMonitor />)
+    render(monitorNode())
 
     const detailButton = screen.getByRole('button', { name: '查看详情 2.HK' })
     await user.click(detailButton)
@@ -335,12 +346,14 @@ describe('Dow monitor list page', () => {
 
   it('resets pagination and URL scope when switching markets without mutating monitoring', async () => {
     const user = userEvent.setup()
-    render(<DowMonitor />)
+    render(monitorNode())
     await user.click(screen.getByRole('button', { name: '下一页' }))
 
     await user.click(screen.getByRole('button', { name: '美股' }))
 
     expect(window.location.search).toBe('?market=us')
+    expect(screen.getByRole('link', { name: '指标说明' }))
+      .toHaveAttribute('href', '/dow-monitor/help?market=us')
     expect(screen.getByText('AAPL.US')).toBeInTheDocument()
     expect(screen.getByText('第 1 / 1 页 · 共 1 只')).toBeInTheDocument()
     expect(hooks.setEnabled).not.toHaveBeenCalled()
@@ -349,7 +362,7 @@ describe('Dow monitor list page', () => {
 
   it('filters by persisted signals within the selected market', async () => {
     const user = userEvent.setup()
-    render(<DowMonitor />)
+    render(monitorNode())
 
     await user.click(screen.getByRole('button', { name: '有信号' }))
 
@@ -365,7 +378,7 @@ describe('Dow monitor list page', () => {
       results: [{ symbol: 'AAPL.US', name: '苹果', code: 'AAPL', market: 'us' }],
     })
     hooks.add.mockImplementation((_value, options) => options.onSuccess())
-    render(<DowMonitor />)
+    render(monitorNode())
 
     const input = screen.getByRole('textbox', { name: '股票代码' })
     await user.type(input, 'app')

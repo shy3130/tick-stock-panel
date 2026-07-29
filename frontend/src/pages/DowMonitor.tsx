@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { BookOpen } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { PageHeader } from '@/components/PageHeader'
@@ -297,80 +299,90 @@ export function DowMonitor({
         title="趋势监控"
         subtitle={`${marketSymbols.length} 只 · ${statusLabel}`}
         right={(
-          <form
-            ref={symbolFormRef}
-            className="relative flex items-center gap-2"
-            onSubmit={(event) => {
-              event.preventDefault()
-              submitSymbol()
-            }}
-          >
-            <input
-              value={symbolInput}
-              onChange={(event) => {
-                setSymbolInput(event.target.value)
-                setSuggestionsOpen(true)
-              }}
-              onFocus={() => {
-                if (symbolInput.trim()) setSuggestionsOpen(true)
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') setSuggestionsOpen(false)
-              }}
-              aria-label="股票代码"
-              aria-autocomplete="list"
-              aria-controls="dow-monitor-symbol-suggestions"
-              aria-expanded={suggestionsOpen && Boolean(symbolInput.trim())}
-              placeholder="代码或名称"
-              className="h-8 w-52 rounded-btn border border-border bg-elevated px-2.5 text-xs outline-none transition-colors placeholder:font-sans focus:border-accent/50"
-            />
-            <button
-              type="submit"
-              aria-label={addSymbol.isPending ? '添加中' : '添加'}
-              disabled={addSymbol.isPending}
-              className="h-8 rounded-btn bg-accent px-3 text-xs font-medium text-white transition-opacity disabled:cursor-wait disabled:opacity-50"
+          <div className="flex min-w-max items-center gap-2">
+            <Link
+              to={`/dow-monitor/help?market=${market}`}
+              aria-label="指标说明"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-btn border border-border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
             >
-              {addSymbol.isPending ? '添加中' : '添加'}
-            </button>
-            {suggestionsOpen && symbolInput.trim() && (
-              <div
-                id="dow-monitor-symbol-suggestions"
-                role="listbox"
-                aria-label="股票候选"
-                className="absolute right-0 top-full z-50 mt-1 max-h-72 w-80 overflow-y-auto rounded-btn border border-border bg-base shadow-xl"
+              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+              指标说明
+            </Link>
+            <form
+              ref={symbolFormRef}
+              className="relative flex items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                submitSymbol()
+              }}
+            >
+              <input
+                value={symbolInput}
+                onChange={(event) => {
+                  setSymbolInput(event.target.value)
+                  setSuggestionsOpen(true)
+                }}
+                onFocus={() => {
+                  if (symbolInput.trim()) setSuggestionsOpen(true)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setSuggestionsOpen(false)
+                }}
+                aria-label="股票代码"
+                aria-autocomplete="list"
+                aria-controls="dow-monitor-symbol-suggestions"
+                aria-expanded={suggestionsOpen && Boolean(symbolInput.trim())}
+                placeholder="代码或名称"
+                className="h-8 w-52 rounded-btn border border-border bg-elevated px-2.5 text-xs outline-none transition-colors placeholder:font-sans focus:border-accent/50"
+              />
+              <button
+                type="submit"
+                aria-label={addSymbol.isPending ? '添加中' : '添加'}
+                disabled={addSymbol.isPending}
+                className="h-8 rounded-btn bg-accent px-3 text-xs font-medium text-white transition-opacity disabled:cursor-wait disabled:opacity-50"
               >
-                {suggestionsLoading ? (
-                  <div className="px-3 py-3 text-xs text-muted">搜索中…</div>
-                ) : suggestions.length === 0 ? (
-                  <div className="px-3 py-3 text-xs text-muted">未找到匹配的股票</div>
-                ) : suggestions.map(suggestion => (
-                  <button
-                    key={suggestion.symbol}
-                    type="button"
-                    role="option"
-                    aria-selected={symbolInput.trim().toUpperCase() === suggestion.symbol}
-                    onClick={() => {
-                      setSymbolInput(suggestion.symbol)
-                      setSuggestionsOpen(false)
-                    }}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-elevated"
-                  >
-                    <span className="w-24 shrink-0 font-mono text-foreground">
-                      {suggestion.symbol}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-secondary">
-                      {suggestion.name}
-                    </span>
-                    {suggestion.code && (
-                      <span className="shrink-0 font-mono text-[10px] text-muted">
-                        {suggestion.code}
+                {addSymbol.isPending ? '添加中' : '添加'}
+              </button>
+              {suggestionsOpen && symbolInput.trim() && (
+                <div
+                  id="dow-monitor-symbol-suggestions"
+                  role="listbox"
+                  aria-label="股票候选"
+                  className="absolute right-0 top-full z-50 mt-1 max-h-72 w-80 overflow-y-auto rounded-btn border border-border bg-base shadow-xl"
+                >
+                  {suggestionsLoading ? (
+                    <div className="px-3 py-3 text-xs text-muted">搜索中…</div>
+                  ) : suggestions.length === 0 ? (
+                    <div className="px-3 py-3 text-xs text-muted">未找到匹配的股票</div>
+                  ) : suggestions.map(suggestion => (
+                    <button
+                      key={suggestion.symbol}
+                      type="button"
+                      role="option"
+                      aria-selected={symbolInput.trim().toUpperCase() === suggestion.symbol}
+                      onClick={() => {
+                        setSymbolInput(suggestion.symbol)
+                        setSuggestionsOpen(false)
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-elevated"
+                    >
+                      <span className="w-24 shrink-0 font-mono text-foreground">
+                        {suggestion.symbol}
                       </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </form>
+                      <span className="min-w-0 flex-1 truncate text-secondary">
+                        {suggestion.name}
+                      </span>
+                      {suggestion.code && (
+                        <span className="shrink-0 font-mono text-[10px] text-muted">
+                          {suggestion.code}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </form>
+          </div>
         )}
       />
 
