@@ -265,7 +265,13 @@ describe('DowMonitorList', () => {
     const momentumBadge = screen.getByText('1m +1.00%').previousElementSibling
     const rangeBadges = screen.getByTestId('breakout-risk-700.HK').querySelectorAll('.text-cyan-300')
     expect(momentumBadge).toHaveClass('text-cyan-300')
+    expect(momentumBadge).toHaveTextContent('实时')
+    expect(momentumBadge.nextElementSibling).toHaveTextContent('1m +1.00%')
     expect(rangeBadges).toHaveLength(2)
+    expect(rangeBadges[0]).toHaveTextContent('实时')
+    expect(rangeBadges[1]).toHaveTextContent('实时')
+    expect(rangeBadges[0].nextElementSibling).toHaveTextContent(/高.*2.00%/)
+    expect(rangeBadges[1].nextElementSibling).toHaveTextContent(/低.*2.00%/)
     expect(relativeVolumeBadge).toHaveTextContent('稳')
     expect(activeFundsBadge).toHaveTextContent('稳')
     expect(volumeSpeedBadge).toHaveTextContent('实时')
