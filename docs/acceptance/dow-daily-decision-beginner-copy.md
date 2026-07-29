@@ -13,4 +13,13 @@
 - 最新消息和历史详细消息未被删除或缩略。
 - 桌面和手机视口无重叠、无横向溢出。
 
-当前状态：实施中。可执行测试、构建结果和生产浏览器证据将在发布前补充。
+当前状态：通过。
+
+- `DowMonitor.test.tsx` 与 `DowMonitorDetailDialog.test.tsx` 合计 `60 passed`。
+- `tests/spec_contracts/test_dow_daily_decision_beginner_copy_contract.py` 为 `2 passed`。
+- `npm run build` 通过，入口为 `assets/index-9ekuSwFA.js`。
+- 源提交为 `8c21191dbbca2b6027b989e8cdcdf6751561783f`，静态包 SHA-256 为 `0c94653b416f30e05dc8e485b699d7fb61a7ce315ccf9a96329558d1ef891ee5`。
+- 生产 `01347.HK` 实页显示当前判断、建议动作、今日平均成交成本、当前价格、相对成本偏离和一致度解释。
+- 生产样例显示成本 `133.98`、当前价 `134.20`、相对成本高于 `0.17%`，建议为“先观望，不追涨”。
+- 浏览器外层设为 390 像素后，页面内容区 `clientWidth=354`、`scrollWidth=354`，无横向溢出。
+- 最新消息和“历史信息”折叠入口仍在，详细量化证据未被顶部小白文案替代。
