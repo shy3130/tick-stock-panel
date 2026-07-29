@@ -1,0 +1,432 @@
+import {
+  Activity,
+  ArrowLeft,
+  BarChart3,
+  BookOpenCheck,
+  Gauge,
+  ShieldAlert,
+  TrendingUp,
+} from 'lucide-react'
+import type { ReactNode } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+
+import { PageHeader } from '@/components/PageHeader'
+import { cn } from '@/lib/cn'
+
+type HelpMarket = 'cn' | 'hk' | 'us'
+type MetricMode = 'live' | 'stable'
+
+const MARKET_LABELS: Record<HelpMarket, string> = {
+  cn: 'A股',
+  hk: '港股',
+  us: '美股',
+}
+
+const SECTIONS = [
+  { id: 'quick-start', label: '快速决策路径' },
+  { id: 'trend-position', label: '趋势 / 位置' },
+  { id: 'momentum-speed', label: '动能 / 涨速' },
+  { id: 'volume-funds', label: '量价 / 资金' },
+  { id: 'breakout-risk', label: '突破 / 风险' },
+  { id: 'scenarios', label: '典型组合场景' },
+  { id: 'quick-reference', label: '指标速查表' },
+] as const
+
+const REFERENCE_ROWS = [
+  ['通道', '稳', '趋势方向更明确', '—', '--', '不能单独决定买卖'],
+  ['控制', '稳', '位于控制线上方更远', '贴近稳定控制线', '--', '不能替代正式信号'],
+  ['成本', '稳', '高于当日平均成交成本更多', '接近平均成交成本', '--', '不能判断趋势是否持续'],
+  ['1m', '实时', '当前分钟向上加速', '当前分钟变化较小', '--', '不能升级正式信号'],
+  ['5m / 15m', '稳', '完成K线动能向上', '完成K线变化较小', '--', '不能代表未来必然同向'],
+  ['量比', '稳', '稳定周期成交更活跃', '—', '--', '放量不等于上涨'],
+  ['量速', '实时', '当前分钟成交加速', '—', '--', '容易受分钟初段影响'],
+  ['主买', '稳', '完整资金中主动买入占比更高', '接近买卖均衡', '未确认', '不能单独作为买点'],
+  ['五档', '实时', '买盘挂单相对更强', '买卖挂单接近平衡', '--', '挂单可以快速撤销'],
+  ['高', '实时', '距离日高更远', '更靠近日内高点', '--', '接近日高不等于突破'],
+  ['低', '实时', '距离日低更远', '更靠近日内低点', '--', '接近日低不等于破位'],
+  ['ATR14', '稳', '15m短线波动风险更高', '—', '--', '不表示涨跌方向'],
+  ['确认', '稳', '更多稳定周期同向', '—', '--', '方向仍看正式信号'],
+] as const
+
+function normalizeMarket(value: string | null): HelpMarket {
+  return value === 'cn' || value === 'us' ? value : 'hk'
+}
+
+function ModeBadge({ mode }: { mode: MetricMode }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex h-5 shrink-0 items-center rounded-full border px-1.5 text-[10px] font-semibold',
+        mode === 'live'
+          ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300'
+          : 'border-border bg-elevated text-muted',
+      )}
+    >
+      {mode === 'live' ? '实时' : '稳'}
+    </span>
+  )
+}
+
+function MetricItem({
+  name,
+  mode,
+  summary,
+  reading,
+  caution,
+}: {
+  name: string
+  mode: MetricMode
+  summary: string
+  reading: string
+  caution: string
+}) {
+  return (
+    <article className="rounded-lg border border-border/80 bg-elevated/40 p-3.5">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-foreground">{name}</h3>
+        <ModeBadge mode={mode} />
+      </div>
+      <p className="mt-2 text-xs leading-5 text-muted">{summary}</p>
+      <p className="mt-2 text-xs leading-5 text-foreground/90">
+        <strong className="font-semibold">怎么看：</strong>
+        {reading}
+      </p>
+      <p className="mt-1 text-xs leading-5 text-muted">
+        <strong className="font-semibold text-warning">避免误读：</strong>
+        {caution}
+      </p>
+    </article>
+  )
+}
+
+function GuideSection({
+  id,
+  title,
+  question,
+  icon,
+  children,
+}: {
+  id: string
+  title: string
+  question: string
+  icon: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <section
+      id={id}
+      aria-labelledby={`${id}-title`}
+      className="scroll-mt-20 rounded-xl border border-border bg-surface p-4 shadow-sm sm:p-5"
+    >
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-accent/10 text-accent">
+          {icon}
+        </span>
+        <div>
+          <h2 id={`${id}-title`} tabIndex={-1} className="text-base font-semibold text-foreground outline-none">
+            {title}
+          </h2>
+          <p className="mt-1 text-xs leading-5 text-muted">{question}</p>
+        </div>
+      </div>
+      <div className="mt-4">{children}</div>
+    </section>
+  )
+}
+
+export function DowMonitorHelp() {
+  const [searchParams] = useSearchParams()
+  const market = normalizeMarket(searchParams.get('market'))
+
+  return (
+    <main
+      data-testid="dow-monitor-help-page"
+      className="min-h-full min-w-0 overflow-x-clip bg-base"
+    >
+      <PageHeader
+        title="趋势监控指标说明"
+        subtitle={`当前市场：${MARKET_LABELS[market]} · 先看正式信号，再判断趋势、动能、量价与执行风险`}
+        right={(
+          <Link
+            to={`/dow-monitor?market=${market}`}
+            aria-label="返回趋势监控"
+            className="inline-flex h-8 items-center gap-1.5 rounded-btn border border-border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+            返回趋势监控
+          </Link>
+        )}
+      />
+
+      <div className="mx-auto w-full max-w-[1440px] px-3 py-4 sm:px-5 sm:py-6">
+        <div className="rounded-xl border border-accent/20 bg-accent/5 p-4 sm:p-5">
+          <div className="flex items-start gap-3">
+            <BookOpenCheck className="mt-0.5 h-5 w-5 shrink-0 text-accent" aria-hidden="true" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">先分清“正式信号”和“观察指标”</p>
+              <p className="mt-1 text-xs leading-5 text-muted">
+                正式买卖信号来自后端完成K线和持久化通知。页面中的实时指标用于观察盘中变化，
+                实时指标不能生成、翻转或升级正式信号。
+              </p>
+              <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
+                <span className="inline-flex items-center gap-1.5"><ModeBadge mode="live" />盘中观察，可能快速变化</span>
+                <span className="inline-flex items-center gap-1.5"><ModeBadge mode="stable" />完成K线或后端决策</span>
+                <span><strong className="text-foreground">--</strong> 表示缺失或不满足稳定条件，不表示 0</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="min-w-0">
+            <nav
+              aria-label="指标说明目录"
+              className="overflow-x-auto rounded-xl border border-border bg-surface p-2 lg:sticky lg:top-4 lg:overflow-visible"
+            >
+              <div className="flex min-w-max gap-1 lg:min-w-0 lg:flex-col">
+                {SECTIONS.map((section, index) => (
+                  <a
+                    key={section.id}
+                    href={`#${section.id}`}
+                    className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  >
+                    <span aria-hidden="true" className="text-[10px] tabular-nums text-muted/70">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    {section.label}
+                  </a>
+                ))}
+              </div>
+            </nav>
+          </aside>
+
+          <div className="min-w-0 space-y-4">
+            <GuideSection
+              id="quick-start"
+              title="快速决策路径"
+              question="盯盘时按固定顺序阅读，避免被单个快速变化的数字带着走。"
+              icon={<Gauge className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ['1', '看正式信号', '先确认是否已有后端方向和发生时间。'],
+                  ['2', '看趋势位置', '判断大方向，以及价格处在控制线和成本的哪一侧。'],
+                  ['3', '看动能量价', '判断短线是否同向，成交和盘口是否配合。'],
+                  ['4', '看突破风险', '判断距离关键位置、波动风险和稳定周期确认。'],
+                ].map(([step, title, copy]) => (
+                  <li key={step} className="rounded-lg border border-border bg-elevated/40 p-3">
+                    <span className="text-[10px] font-semibold text-accent">STEP {step}</span>
+                    <p className="mt-1 text-sm font-semibold text-foreground">{title}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted">{copy}</p>
+                  </li>
+                ))}
+              </ol>
+            </GuideSection>
+
+            <GuideSection
+              id="trend-position"
+              title="趋势 / 位置"
+              question="回答：现在是什么方向，价格处在稳定趋势线和当日平均成本的什么位置？"
+              icon={<TrendingUp className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div className="grid gap-3 xl:grid-cols-3">
+                <MetricItem
+                  name="通道"
+                  mode="stable"
+                  summary="比较最近完成的15m、30m K线均线排列，显示上升、下降、震荡/过渡或待确认。"
+                  reading="两个稳定周期同向时，趋势结构比单一短周期更明确。"
+                  caution="通道描述方向，不等于现在就是买点或卖点。"
+                />
+                <MetricItem
+                  name="控制"
+                  mode="stable"
+                  summary="价格相对稳定控制线的百分比距离，只按15m → 30m → 缺失回退，永不使用5m。"
+                  reading="正负表示价格位于控制线哪一侧，绝对值表示距离。"
+                  caution="必须结合通道和正式信号理解；--不是0%。"
+                />
+                <MetricItem
+                  name="成本"
+                  mode="stable"
+                  summary="价格相对当日平均成交成本（VWAP）的偏离百分比。"
+                  reading="正值表示高于当日平均成交成本，负值表示低于平均成本。"
+                  caution="成本位置不能证明趋势一定持续或反转。"
+                />
+              </div>
+            </GuideSection>
+
+            <GuideSection
+              id="momentum-speed"
+              title="动能 / 涨速"
+              question="回答：当前分钟是否加速，完成K线的短线动能是否同向？"
+              icon={<Activity className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div className="grid gap-3 xl:grid-cols-3">
+                <MetricItem
+                  name="1m"
+                  mode="live"
+                  summary="当前1分钟K线从开盘到现价的变化百分比。"
+                  reading="正值表示当前分钟向上加速，负值表示当前分钟向下加速。"
+                  caution="1m会快速变化，只是盘中观察，不能改变正式信号。"
+                />
+                <MetricItem
+                  name="5m"
+                  mode="stable"
+                  summary="最近两根完成5m K线收盘价的变化百分比。"
+                  reading="与1m同向时说明短线加速获得完成K线支持。"
+                  caution="单一5m动能不能代表15m趋势已经确认。"
+                />
+                <MetricItem
+                  name="15m"
+                  mode="stable"
+                  summary="最近两根完成15m K线收盘价的变化百分比。"
+                  reading="与5m同向时，短线方向通常比只有1m变化更稳定。"
+                  caution="动能反映过去两根完成K线，不保证下一根继续同向。"
+                />
+              </div>
+            </GuideSection>
+
+            <GuideSection
+              id="volume-funds"
+              title="量价 / 资金"
+              question="回答：走势有没有成交、主动资金和盘口挂单的配合？"
+              icon={<BarChart3 className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div className="grid gap-3 md:grid-cols-2">
+                <MetricItem
+                  name="量比"
+                  mode="stable"
+                  summary="稳定15m周期成交量相对历史均量的倍数，缺失时只回退稳定30m。"
+                  reading="大于1通常表示当前稳定周期成交比历史均量活跃。"
+                  caution="放量不等于上涨，仍需结合价格方向。"
+                />
+                <MetricItem
+                  name="量速"
+                  mode="live"
+                  summary="当前1m成交量投影，相对最近12根完成5m K线每分钟成交基准的倍数。"
+                  reading="数值上升表示当前分钟成交正在加速。"
+                  caution="分钟不足20秒、跨分钟或历史不足时显示--，不应用旧值补齐。"
+                />
+                <MetricItem
+                  name="主买"
+                  mode="stable"
+                  summary="完整资金数据中，主动买入金额占主动买卖总额的比例。"
+                  reading="高于50%表示主动买入占比较高，低于50%表示主动卖出占比较高。"
+                  caution="数据不完整显示未确认；资金占比不能单独作为买点。"
+                />
+                <MetricItem
+                  name="五档"
+                  mode="live"
+                  summary="买一至买五与卖一至卖五挂单量的压力差百分比。"
+                  reading="正值表示买盘挂单相对更强，负值表示卖盘挂单相对更强。"
+                  caution="五档是当前挂单结构，撤单会使数值快速变化，不能视为成交承诺。"
+                />
+              </div>
+            </GuideSection>
+
+            <GuideSection
+              id="breakout-risk"
+              title="突破 / 风险"
+              question="回答：离日内关键位置有多远，波动风险多大，稳定周期是否同向？"
+              icon={<ShieldAlert className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div className="grid gap-3 md:grid-cols-2">
+                <MetricItem
+                  name="高"
+                  mode="live"
+                  summary="现价距离当日最高价的百分比。"
+                  reading="越接近0%，越靠近日内高点，需要观察动能与量价是否同时增强。"
+                  caution="接近日高不等于必然突破。"
+                />
+                <MetricItem
+                  name="低"
+                  mode="live"
+                  summary="现价距离当日最低价的百分比。"
+                  reading="越接近0%，越靠近日内低点，需要观察下行动能和卖盘是否增强。"
+                  caution="接近日低不等于必然破位。"
+                />
+                <MetricItem
+                  name="ATR14"
+                  mode="stable"
+                  summary="15m最近14个有效真实波幅，相对最新完成收盘价的百分比。"
+                  reading="ATR14 越大表示短线波动风险越高，仓位和止损空间需要更谨慎。"
+                  caution="ATR14只描述波动范围，不表示上涨或下跌。"
+                />
+                <MetricItem
+                  name="确认"
+                  mode="stable"
+                  summary="15m、30m两个稳定周期中的同向确认数量，只显示0/2、1/2、2/2。"
+                  reading="2/2表示两个稳定周期同向，1/2表示仅一个周期确认。"
+                  caution="确认数量表示一致性，最终方向仍看正式买卖信号。"
+                />
+              </div>
+            </GuideSection>
+
+            <GuideSection
+              id="scenarios"
+              title="典型组合场景"
+              question="组合示例用于理解指标之间的关系，不新增前端买卖结论。"
+              icon={<BookOpenCheck className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div className="grid gap-3 md:grid-cols-2">
+                {[
+                  ['向上突破候选', '高接近0%，1m/5m/15m向上，量价增强，并且正式信号为买入。', '关注量价能否持续，不追逐单次盘口跳动。'],
+                  ['向下破位风险', '低接近0%，短线动能向下，主动卖出或卖盘增强，正式信号为卖出/风险。', '先控制风险，不把接近日低直接等同于破位。'],
+                  ['假突破警惕', '靠近日高或日低，但量价不配合，5m/15m分歧，确认仍为0/2。', '等待完成K线或后端正式信号确认。'],
+                  ['继续观察', '距离高低点都较远、动能互相矛盾，或关键字段显示--/未确认。', '不为缺失数据补零，不强行给出方向。'],
+                ].map(([title, condition, action]) => (
+                  <article key={title} className="rounded-lg border border-border bg-elevated/40 p-3.5">
+                    <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+                    <p className="mt-2 text-xs leading-5 text-muted">{condition}</p>
+                    <p className="mt-2 text-xs leading-5 text-foreground/90">
+                      <strong>阅读动作：</strong>{action}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </GuideSection>
+
+            <GuideSection
+              id="quick-reference"
+              title="指标速查表"
+              question="快速确认更新类型、数值方向和最常见的误读。"
+              icon={<Gauge className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div
+                data-testid="indicator-reference-scroll"
+                className="max-w-full overflow-x-auto rounded-lg border border-border"
+              >
+                <table className="min-w-[900px] w-full border-collapse text-left text-xs">
+                  <thead className="bg-elevated text-muted">
+                    <tr>
+                      {['指标', '更新', '越大通常表示', '越接近0通常表示', '缺失', '不能单独得出的结论'].map(label => (
+                        <th key={label} scope="col" className="border-b border-border px-3 py-2.5 font-medium">
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {REFERENCE_ROWS.map(row => (
+                      <tr key={row[0]} className="border-b border-border/70 last:border-0">
+                        <th scope="row" className="px-3 py-2.5 font-semibold text-foreground">{row[0]}</th>
+                        <td className="px-3 py-2.5 text-muted">
+                          <ModeBadge mode={row[1] === '实时' ? 'live' : 'stable'} />
+                        </td>
+                        {row.slice(2).map((value, index) => (
+                          <td key={`${row[0]}-${index}`} className="px-3 py-2.5 leading-5 text-muted">{value}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-3 text-[11px] leading-5 text-muted">
+                指标用于辅助理解后端正式信号的质量和执行风险，不构成收益保证或自动交易建议。
+              </p>
+            </GuideSection>
+          </div>
+        </div>
+      </div>
+    </main>
+  )
+}
