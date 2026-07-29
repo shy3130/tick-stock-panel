@@ -53,6 +53,15 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-DAILY-DECISION-BEGINNER-COPY-001
+  - id: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    path: docs/specs/dow-monitor-list-websocket.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-LIST-LAYOUT-001
+      - REQ-DOW-MONITOR-LIST-INDICATORS-001
+      - REQ-DOW-MONITOR-LIST-REALTIME-001
+      - REQ-DOW-MONITOR-LIST-SIGNAL-STABILITY-001
+      - REQ-DOW-MONITOR-INLINE-DETAIL-001
 conflicts: []
 exceptions:
   - id: EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001

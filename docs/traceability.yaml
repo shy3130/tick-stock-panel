@@ -185,3 +185,54 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-daily-decision-beginner-copy.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-daily-decision-beginner-copy.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-LAYOUT-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-INDICATORS-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-REALTIME-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/DowMonitorSparkline.tsx
+      - frontend/src/lib/realtimeMarketData.ts
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIST-SIGNAL-STABILITY-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INLINE-DETAIL-001
+    specification: USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/DowMonitorDetailPanel.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_list_websocket_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-list-websocket.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-list-websocket.md, type: independent-review}

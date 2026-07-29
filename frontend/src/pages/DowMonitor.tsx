@@ -2,13 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { MarketFilterTabs } from '@/components/MarketFilterTabs'
 import { PageHeader } from '@/components/PageHeader'
-import { DowMonitorCard } from '@/components/dow-monitor/DowMonitorCard'
-import { DowMonitorDetailDialog } from '@/components/dow-monitor/DowMonitorDetailDialog'
+import { DowMonitorDetailPanel } from '@/components/dow-monitor/DowMonitorDetailPanel'
+import { DowMonitorList } from '@/components/dow-monitor/DowMonitorList'
 import { formatServerTimestamp } from '@/components/dow-monitor/formatServerTimestamp'
+import { paginateMonitorSymbols } from '@/components/dow-monitor/monitorListPresentation'
 import type {
   DowMonitorMarket,
   DowMonitorNotification,
   DowMonitorOverviewSymbol,
+  DowMonitorSymbolMarket,
   DowTimeframe,
 } from '@/components/dow-monitor/types'
 import {
@@ -38,45 +40,33 @@ const SIGNAL_FILTERS: Array<{ value: SignalFilter; label: string }> = [
   { value: 'sell', label: '仅卖点' },
 ]
 
-function initialMarket(): DowMonitorMarket {
-  if (typeof window === 'undefined') return 'all'
+function initialMarket(): DowMonitorSymbolMarket {
+  if (typeof window === 'undefined') return 'hk'
   const value = new URLSearchParams(window.location.search).get('market')
-  return value === 'cn' || value === 'hk' || value === 'us' || value === 'all'
-    ? value
-    : 'all'
+  return value === 'cn' || value === 'hk' || value === 'us' ? value : 'hk'
 }
 
-function sameMarket(market: DowMonitorMarket, itemMarket: string) {
-  return market === 'all' || market === itemMarket
+function signalSide(
+  item: DowMonitorOverviewSymbol,
+  notifications: DowMonitorNotification[],
+): string | null {
+  const candidates = [
+    ...(item.latest_notification ? [item.latest_notification] : []),
+    ...notifications.filter(notification => notification.symbol === item.symbol),
+  ].sort((left, right) => {
+    const leftTime = Date.parse(left.available_at ?? left.triggered_at)
+    const rightTime = Date.parse(right.available_at ?? right.triggered_at)
+    return (Number.isFinite(rightTime) ? rightTime : 0)
+      - (Number.isFinite(leftTime) ? leftTime : 0)
+  })
+  return candidates[0]?.side ?? null
 }
 
-function matchesSide(filter: SignalFilter, side: string | null | undefined) {
+function matchesSignal(filter: SignalFilter, side: string | null) {
   if (filter === 'all') return true
   if (filter === 'active') return side != null
   if (filter === 'buy') return side === 'BUY'
   return side === 'SELL' || side === 'RISK'
-}
-
-function filterSymbols(
-  symbols: DowMonitorOverviewSymbol[],
-  market: DowMonitorMarket,
-  signal: SignalFilter,
-) {
-  return symbols.filter(item => (
-    sameMarket(market, item.market)
-    && matchesSide(signal, item.latest_notification?.side)
-  ))
-}
-
-function filterNotifications(
-  notifications: DowMonitorNotification[],
-  market: DowMonitorMarket,
-  signal: SignalFilter,
-) {
-  return notifications.filter(notification => (
-    sameMarket(market, notification.market)
-    && matchesSide(signal, notification.side)
-  ))
 }
 
 export function DowMonitor({
@@ -84,8 +74,10 @@ export function DowMonitor({
 }: {
   onOpen?: (symbol: string, timeframe: DowTimeframe) => void
 }) {
-  const [market, setMarket] = useState<DowMonitorMarket>(() => initialMarket())
+  const [market, setMarket] = useState<DowMonitorSymbolMarket>(() => initialMarket())
   const [signal, setSignal] = useState<SignalFilter>('all')
+  const [page, setPage] = useState(1)
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [symbolInput, setSymbolInput] = useState('')
   const [suggestions, setSuggestions] = useState<InstrumentSuggestion[]>([])
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
@@ -95,9 +87,8 @@ export function DowMonitor({
   const [toggleErrors, setToggleErrors] = useState<Set<string>>(() => new Set())
   const [removeErrors, setRemoveErrors] = useState<Set<string>>(() => new Set())
   const [realtimeActive, setRealtimeActive] = useState(false)
-  const [detail, setDetail] = useState<{ symbol: string; timeframe: DowTimeframe } | null>(null)
   const symbolFormRef = useRef<HTMLFormElement>(null)
-  const detailScrollPosition = useRef(0)
+
   const overview = useDowMonitorOverview(market, realtimeActive)
   const notificationQuery = useDowNotifications(market)
   const status = useDowMonitorStatus()
@@ -112,7 +103,6 @@ export function DowMonitor({
       setSuggestionsLoading(false)
       return
     }
-
     let cancelled = false
     const timer = window.setTimeout(async () => {
       setSuggestionsLoading(true)
@@ -125,7 +115,6 @@ export function DowMonitor({
         if (!cancelled) setSuggestionsLoading(false)
       }
     }, 150)
-
     return () => {
       cancelled = true
       window.clearTimeout(timer)
@@ -143,29 +132,44 @@ export function DowMonitor({
   }, [])
 
   const symbols = overview.data?.symbols ?? []
-  const realtimeSymbols = useMemo(
-    () => symbols
-      .filter(item => item.enabled && sameMarket(market, item.market))
-      .map(item => item.symbol),
+  const notifications = notificationQuery.data?.notifications ?? []
+  const marketSymbols = useMemo(
+    () => symbols.filter(item => item.market === market),
     [market, symbols],
+  )
+  const filteredSymbols = useMemo(
+    () => marketSymbols.filter(item =>
+      matchesSignal(signal, signalSide(item, notifications))),
+    [marketSymbols, notifications, signal],
+  )
+  const pagination = useMemo(
+    () => paginateMonitorSymbols(filteredSymbols, page),
+    [filteredSymbols, page],
+  )
+  const visibleSymbols = pagination.items
+  const realtimeSymbols = useMemo(
+    () => visibleSymbols.filter(item => item.enabled).map(item => item.symbol),
+    [visibleSymbols],
   )
   const realtime = useRealtimeMarketData(
     realtimeSymbols,
     ['quote', 'depth', 'candlestick'],
     1,
   )
+
   useEffect(() => {
     setRealtimeActive(realtime.status === 'realtime')
   }, [realtime.status])
-  const notifications = notificationQuery.data?.notifications ?? []
-  const filteredSymbols = useMemo(
-    () => filterSymbols(symbols, market, signal),
-    [market, signal, symbols],
-  )
-  const filteredNotifications = useMemo(
-    () => filterNotifications(notifications, market, signal),
-    [market, notifications, signal],
-  )
+
+  useEffect(() => {
+    if (page !== pagination.page) setPage(pagination.page)
+  }, [page, pagination.page])
+
+  useEffect(() => {
+    if (!selectedSymbol) return
+    if (visibleSymbols.some(item => item.symbol === selectedSymbol)) return
+    setSelectedSymbol(visibleSymbols[0]?.symbol ?? null)
+  }, [selectedSymbol, visibleSymbols])
 
   const backendReady = Boolean(
     !status.isLoading
@@ -189,21 +193,20 @@ export function DowMonitor({
 
   const mutationIssues: string[] = []
   if (addSymbol.isError) mutationIssues.push('添加失败，请重试')
-  for (const symbol of toggleErrors) {
-    mutationIssues.push(`${symbol} 监控开关更新失败，请重试`)
+  for (const stockSymbol of toggleErrors) {
+    mutationIssues.push(`${stockSymbol} 监控开关更新失败，请重试`)
   }
-  for (const symbol of removeErrors) {
-    mutationIssues.push(`移除 ${symbol} 失败，请重试`)
+  for (const stockSymbol of removeErrors) {
+    mutationIssues.push(`移除 ${stockSymbol} 失败，请重试`)
   }
   const visibleIssues = [...connectivityIssues, ...mutationIssues]
-  const forceBlocked = connectivityIssues.length > 0
 
   const submitSymbol = () => {
-    const symbol = symbolInput.trim().toUpperCase()
-    if (!symbol) return
+    const stockSymbol = symbolInput.trim().toUpperCase()
+    if (!stockSymbol) return
     setSuggestionsOpen(false)
     addSymbol.mutate(
-      { symbol, enabled: true },
+      { symbol: stockSymbol, enabled: true },
       {
         onSuccess: () => {
           setSymbolInput('')
@@ -213,12 +216,67 @@ export function DowMonitor({
     )
   }
 
-  const setMarketScope = (nextMarket: DowMonitorMarket) => {
-    setMarket(nextMarket)
+  const setMarketScope = (value: DowMonitorMarket) => {
+    if (value === 'all') return
+    setMarket(value)
+    setPage(1)
     if (typeof window === 'undefined') return
     const url = new URL(window.location.href)
-    url.searchParams.set('market', nextMarket)
+    url.searchParams.set('market', value)
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
+  const setSignalScope = (value: SignalFilter) => {
+    setSignal(value)
+    setPage(1)
+  }
+
+  const beginToggle = async (stockSymbol: string, enabled: boolean) => {
+    setPendingToggles(current => new Set(current).add(stockSymbol))
+    setToggleErrors(current => {
+      const next = new Set(current)
+      next.delete(stockSymbol)
+      return next
+    })
+    try {
+      await setEnabled.mutateAsync({ symbol: stockSymbol, enabled })
+    } catch {
+      setToggleErrors(current => new Set(current).add(stockSymbol))
+    } finally {
+      setPendingToggles(current => {
+        const next = new Set(current)
+        next.delete(stockSymbol)
+        return next
+      })
+    }
+  }
+
+  const beginRemove = async (stockSymbol: string) => {
+    setPendingRemovals(current => new Set(current).add(stockSymbol))
+    setRemoveErrors(current => {
+      const next = new Set(current)
+      next.delete(stockSymbol)
+      return next
+    })
+    try {
+      await removeSymbol.mutateAsync(stockSymbol)
+    } catch {
+      setRemoveErrors(current => new Set(current).add(stockSymbol))
+    } finally {
+      setPendingRemovals(current => {
+        const next = new Set(current)
+        next.delete(stockSymbol)
+        return next
+      })
+    }
+  }
+
+  const selectSymbol = (stockSymbol: string) => {
+    if (onOpen) {
+      onOpen(stockSymbol, '15m')
+      return
+    }
+    setSelectedSymbol(stockSymbol)
   }
 
   let statusLabel = '后台状态未知'
@@ -229,72 +287,15 @@ export function DowMonitor({
   else if (!backendReady) statusLabel = '后台准备中'
   else statusLabel = '后台运行中'
   const sourceTime = formatServerTimestamp(overview.data?.source_timestamp)
-  const sourceLabel = (
-    !backendReady
-    || !overview.data?.source
-  )
+  const sourceLabel = !backendReady || !overview.data?.source
     ? '数据源不可用'
-    : `数据源 ${overview.data.source}${sourceTime ? ` · 源 ${sourceTime}` : ''}`
-
-  const beginToggle = async (symbol: string, enabled: boolean) => {
-    setPendingToggles(current => new Set(current).add(symbol))
-    setToggleErrors(current => {
-      const next = new Set(current)
-      next.delete(symbol)
-      return next
-    })
-    try {
-      await setEnabled.mutateAsync({ symbol, enabled })
-    } catch {
-      setToggleErrors(current => new Set(current).add(symbol))
-    } finally {
-      setPendingToggles(current => {
-        const next = new Set(current)
-        next.delete(symbol)
-        return next
-      })
-    }
-  }
-
-  const beginRemove = async (symbol: string) => {
-    setPendingRemovals(current => new Set(current).add(symbol))
-    setRemoveErrors(current => {
-      const next = new Set(current)
-      next.delete(symbol)
-      return next
-    })
-    try {
-      await removeSymbol.mutateAsync(symbol)
-    } catch {
-      setRemoveErrors(current => new Set(current).add(symbol))
-    } finally {
-      setPendingRemovals(current => {
-        const next = new Set(current)
-        next.delete(symbol)
-        return next
-      })
-    }
-  }
-
-  const openDetail = (symbol: string, timeframe: DowTimeframe) => {
-    if (onOpen) {
-      onOpen(symbol, timeframe)
-      return
-    }
-    detailScrollPosition.current = window.scrollY
-    setDetail({ symbol, timeframe })
-  }
-
-  const closeDetail = () => {
-    setDetail(null)
-    window.scrollTo({ top: detailScrollPosition.current, behavior: 'auto' })
-  }
+    : `数据源 ${overview.data.source}${sourceTime ? ` · ${sourceTime}` : ''}`
 
   return (
     <div className="min-h-full bg-base">
       <PageHeader
         title="趋势监控"
-        subtitle={`${symbols.length} 只 · ${statusLabel}`}
+        subtitle={`${marketSymbols.length} 只 · ${statusLabel}`}
         right={(
           <form
             ref={symbolFormRef}
@@ -383,14 +384,18 @@ export function DowMonitor({
       )}
 
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 sm:px-5">
-        <MarketFilterTabs value={market} onChange={setMarketScope} />
+        <MarketFilterTabs
+          value={market}
+          onChange={setMarketScope}
+          includeAll={false}
+        />
         <div className="flex h-8 items-center overflow-hidden rounded-btn border border-border bg-surface">
           {SIGNAL_FILTERS.map(option => (
             <button
               key={option.value}
               type="button"
               aria-pressed={signal === option.value}
-              onClick={() => setSignal(option.value)}
+              onClick={() => setSignalScope(option.value)}
               className={cn(
                 'h-full px-2.5 text-xs font-medium transition-colors',
                 signal === option.value
@@ -413,42 +418,33 @@ export function DowMonitor({
             当前筛选暂无监控股票
           </div>
         ) : (
-          <div
-            data-testid="dow-monitor-grid"
-            className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
-          >
-            {filteredSymbols.map(item => (
-              <DowMonitorCard
-                key={item.symbol}
-                item={item}
-                realtimeState={realtime.states.get(item.symbol.toUpperCase())}
-                realtimeStatus={realtime.status}
-                notifications={filteredNotifications.filter(
-                  notification => notification.symbol === item.symbol,
-                )}
-                notificationLoading={notificationQuery.isLoading}
-                notificationError={notificationQuery.isError}
-                forceBlocked={forceBlocked}
-                blockedReason={connectivityIssues[0]}
-                quoteReady={backendReady}
-                togglePending={pendingToggles.has(item.symbol)}
-                removePending={pendingRemovals.has(item.symbol)}
-                onOpen={openDetail}
-                onToggle={beginToggle}
-                onRemove={beginRemove}
+          <>
+            <DowMonitorList
+              items={visibleSymbols}
+              notifications={notifications}
+              realtimeStates={realtime.states}
+              selectedSymbol={selectedSymbol}
+              page={pagination.page}
+              pageCount={pagination.pageCount}
+              total={pagination.total}
+              forceDelayed={connectivityIssues.length > 0}
+              pendingToggles={pendingToggles}
+              pendingRemovals={pendingRemovals}
+              onPageChange={setPage}
+              onSelect={selectSymbol}
+              onToggle={beginToggle}
+              onRemove={beginRemove}
+            />
+            {selectedSymbol && !onOpen && (
+              <DowMonitorDetailPanel
+                key={selectedSymbol}
+                symbol={selectedSymbol}
+                initialTimeframe="15m"
               />
-            ))}
-          </div>
+            )}
+          </>
         )}
       </main>
-      {detail && (
-        <DowMonitorDetailDialog
-          symbol={detail.symbol}
-          timeframe={detail.timeframe}
-          open
-          onClose={closeDetail}
-        />
-      )}
     </div>
   )
 }
