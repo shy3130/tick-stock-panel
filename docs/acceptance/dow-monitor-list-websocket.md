@@ -108,3 +108,34 @@
 - 生产 `DowMonitor-CnwWUXLZ.js` SHA-256 为
   `993c4c23ac757191fb8844c3c0c6cc9fdf4cc2053eccaf4ed9ac4a1d8e45f692`；
   容器运行、重启次数 0，健康检查通过，发布日志无错误。
+
+## 2026-07-29 涨跌幅单位与实时昨收修复
+
+- 两个根因分别位于不同层：
+  1. 港股实时流的昨收基线在自然日零点过早缓存，盘中仍沿用上一交易日的旧值；
+  2. WebSocket 断线时，HTTP 概览的 `change_pct` 是小数制，但列表按百分数值直接显示。
+- RED：前端纯函数测试输入 `change_pct=0.0125`，旧实现返回 `0.0125%`，而要求为
+  `1.25%`；测试按预期失败。
+- GREEN：实时流继续使用 `(lastDone-prevClose)/prevClose*100`；HTTP 回退值只在
+  展示边界乘一次 `100`。纯函数测试 `9 passed`，监控列表相关测试 `19 passed`，
+  规格契约 `2 passed`，生产构建成功。
+- 源码 revision：`f34eddaf5f32a2fc55b12c272c5c20ab035b36e1`。
+- 正式镜像：
+  `tickflow-stock-panel-app:dow-monitor-change-pct-f34edda-20260729-145154`；
+  镜像 ID：
+  `sha256:57bd9849fe0c3767d088c0f08abd5fdcbbab9f9b5df38f33d7491a69b59d53c0`。
+- 回滚镜像：
+  `tickflow-stock-panel-app:dow-monitor-detail-toggle-36ded7fb-20260729-142949`。
+- 发布前备份：
+  `/home/alwin/backups/dow-monitor-change-pct-predeploy-20260729T145154/`。
+- 生产入口为 `assets/index-DyGszm7H.js`，道氏列表分包为
+  `assets/DowMonitor-Ifxr-9VP.js`，实时分包为
+  `assets/realtimeMarketData-CEPvC75R.js`；本地与容器 SHA-256 分别一致为
+  `dad86cf9b4a765dbe50ac256912c7dbf7699bb247f818a567e12555c9725d4d9`、
+  `f79a0c39009299e3696d987b11fc9786643ffcb0a11ad30e16bce2fcd05fdf7a`、
+  `a2e83dcb0386e4d384deeaf6d08c7527d3fe305a09ad2830d69d2de34493ba90`。
+- 3018 健康检查返回 `0.1.86`，容器 `running`、重启次数 0，发布日志无错误。
+- 发布前后监控股票文件和 `/api/dow-monitor/symbols` 响应分别逐字节一致，仍为
+  13 只（A 股 1、港股 5、美股 7）。
+- 生产 WebSocket 五个港股样本已使用正确昨收；例如 `1347.HK` 实时为约 `-1.88%`，
+  `1888.HK` 为约 `-7.29%`，不再使用旧基线得到约 `-9.76%` 和 `-24.39%`。
