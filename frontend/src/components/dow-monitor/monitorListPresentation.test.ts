@@ -221,6 +221,15 @@ describe('monitor list presentation', () => {
       Date.parse('2026-07-29T09:35:30+08:00')).volumeFunds.volumeSpeed).toBeNull()
   })
 
+  it('degrades each delayed realtime feed independently', () => {
+    const now = Date.parse('2026-07-29T09:35:30+08:00')
+    expect(deriveMonitorRow(symbolFixture(), [], realtimeFixture({ candlestickDelayed: true }), now).momentumSpeed.momentum1m.valuePct).toBeNull()
+    expect(deriveMonitorRow(symbolFixture(), [], realtimeFixture({ depthDelayed: true }), now).volumeFunds.depthPressurePct).toBeNull()
+    const row = deriveMonitorRow(symbolFixture(), [], realtimeFixture({ quoteDelayed: true }), now)
+    expect(row.breakoutRisk.toDayHighPct).toBeNull()
+    expect(row.breakoutRisk.fromDayLowPct).toBeNull()
+  })
+
   it('does not let realtime depth change a formal BUY signal', () => {
     const item = symbolFixture({ latest_notification: notification() })
     const bidHeavy = deriveMonitorRow(item, [], realtimeFixture(), Date.parse('2026-07-29T09:35:30+08:00'))

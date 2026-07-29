@@ -262,6 +262,10 @@ describe('DowMonitorList', () => {
     const activeFundsBadge = within(volumeFundsCell).getByTestId('active-funds-stable-badge-700.HK')
     const volumeSpeedBadge = within(volumeFundsCell).getByTestId('volume-speed-live-badge-700.HK')
     const depthPressureBadge = within(volumeFundsCell).getByTestId('depth-pressure-live-badge-700.HK')
+    const momentumBadge = screen.getByText('1m +1.00%').previousElementSibling
+    const rangeBadges = screen.getByTestId('breakout-risk-700.HK').querySelectorAll('.text-cyan-300')
+    expect(momentumBadge).toHaveClass('text-cyan-300')
+    expect(rangeBadges).toHaveLength(2)
     expect(relativeVolumeBadge).toHaveTextContent('稳')
     expect(activeFundsBadge).toHaveTextContent('稳')
     expect(volumeSpeedBadge).toHaveTextContent('实时')
