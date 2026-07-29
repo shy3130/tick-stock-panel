@@ -86,3 +86,25 @@
 
 生产验收不把一次 WebSocket 快照当作“盘中持续稳定”的证明；持续更新和完成分钟内
 决策字段不抖动仍应在对应市场交易时段观察。
+
+## 2026-07-29 详情收拢热修复
+
+- 根因：`DowMonitor.selectSymbol` 无条件把点击股票写入选中状态，没有处理“当前股票已经
+  选中”的分支，因此详情只能展开或切股，不能收拢。
+- RED：页面测试第一次点击展开后再次点击同一“查看详情”，预期详情不存在，实际详情
+  仍在，测试准确失败。
+- GREEN：选中状态改为同股二次点击时置 `null`；页面测试 `7 passed`，相关测试
+  `31 passed`，契约测试 `2 passed`，生产构建成功。
+- 源码 revision：`36ded7fbc24adac99fc8ac5e570f39f6668e2bea`。
+- 正式镜像：
+  `tickflow-stock-panel-app:dow-monitor-detail-toggle-36ded7fb-20260729-142949`。
+- 镜像 ID：`sha256:cc228ab6eacdeac796595b31823e37ce00ddf174f52cf1196a39ebbd9cc76a13`。
+- 回滚镜像：
+  `tickflow-stock-panel-app:dow-monitor-list-ws-0429bf65-20260729-141117`。
+- 发布前备份：
+  `/home/alwin/backups/tickflow-dow-monitor-detail-toggle-predeploy-20260729T142949`。
+- 发布前后 13 只监控股票 API 响应逐字节一致；数据文件 SHA-256 仍为
+  `1d5955494b4a74d8ae32bd550e4f744e09c4cab80c85f190acd01f3717bef59e`。
+- 生产 `DowMonitor-CnwWUXLZ.js` SHA-256 为
+  `993c4c23ac757191fb8844c3c0c6cc9fdf4cc2053eccaf4ed9ac4a1d8e45f692`；
+  容器运行、重启次数 0，健康检查通过，发布日志无错误。
