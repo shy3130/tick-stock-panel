@@ -1,6 +1,6 @@
 # 趋势监控突发异动高亮语义验收
 
-状态：通过（本地实现与验证完成，尚未发布）
+状态：通过（实现、验证和 10.28 生产发布完成）
 
 ## 验收需求
 
@@ -65,5 +65,39 @@
 - 已过期例外 `EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001`；
 - `REQ-DOW-MONITOR-DETAIL-TOGGLE-LAYOUT-001` 的测试路径位于 `frontend/`。
 
-本需求自身的权威规格、追踪、实现、测试和验收文件均通过专属契约。没有修改或发布
-生产容器、后端、WebSocket 订阅、通知和正式信号决策。
+本需求自身的权威规格、追踪、实现、测试和验收文件均通过专属契约。没有修改后端、
+WebSocket 订阅、通知和正式信号决策。
+
+## 生产发布证据
+
+2026-07-30 发布到 `192.168.10.28:3018`：
+
+- 源码提交：
+  `6b9134a70cdcd052494608cb55dd87fadcf0ff41`
+- 镜像：
+  `tickflow-stock-panel-app:dow-monitor-sudden-anomaly-6b9134a-20260730-135855`
+- 镜像 ID：
+  `sha256:b616efacb815268b4bc25fc490e5c0989391cf5ce059a0f4b225108873a947f4`
+- 隔离候选端口 `13018` 冷启动健康通过，容器 running、重启次数 0。
+- 生产容器 running、重启次数 0，`/health` 返回版本 `0.1.86`。
+- `/dow-monitor?market=hk` 和 `/dow-monitor/help?market=hk` 均返回 200；
+  未登录 overview 返回 401，符合既有认证边界。
+- 3018 只有一个监听；发布后 10 分钟日志扫描没有
+  `ERROR|CRITICAL|Traceback`。
+- 股票文件哈希保持
+  `2d8da35aa9eb0da2faca894e72e1cd52e9518fad11a4844bc418962bfeb29ddb`，
+  symbols API 哈希保持
+  `25bb010891a99802a4d7dc7fe226d85eed9b8f9a928e7263d32a69abe0bb3b5c`。
+- 备份：
+  `/home/alwin/backups/dow-monitor-sudden-anomaly-predeploy-20260730-140329`
+- 回滚容器：
+  `TickFlow_Stock_Panel_pre_sudden_anomaly_20260730-140329`
+  （上一版 P0 镜像，停止保留）。
+
+生产 HTTP 静态文件与本地构建、隔离候选镜像三处哈希一致：
+
+| 文件 | SHA-256 |
+| --- | --- |
+| `/app/static/index.html` | `c8cc2189230ec0886cce08f30ba2fa5e90ef36df2a7c698f763bc24e5ffc1b55` |
+| `assets/DowMonitor-VCxyQaF_.js` | `23ee95ea25d8e7c2146811db60d0d9c9b9e190f9a3ae779aca37022f5c5f91cd` |
+| `assets/DowMonitorHelp-DVyLq6bx.js` | `d928ee495ffe375b243fd7feb4d0cd6d6fba1c9b3a9707c429f4929e1a341022` |
