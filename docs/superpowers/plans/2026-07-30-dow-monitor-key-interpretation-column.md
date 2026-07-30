@@ -1,5 +1,9 @@
 # Trend Monitor Key Interpretation Column Implementation Plan
 
+> **Status:** Superseded by the approved opportunity/anomaly interpreter redesign.
+> Do not execute this plan. A replacement plan must be written only after the user
+> reviews the revised authoritative design specification.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a deterministic three-line “重点解读” column that keeps every raw indicator visible while making each of the 20 monitored stocks fast to scan.
