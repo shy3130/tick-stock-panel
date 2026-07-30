@@ -11,6 +11,7 @@ import type { ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 
 import { PageHeader } from '@/components/PageHeader'
+import { INTERPRETATION_THRESHOLDS } from '@/components/dow-monitor/interpretationMarketContext'
 import { cn } from '@/lib/cn'
 
 type HelpMarket = 'cn' | 'hk' | 'us'
@@ -23,6 +24,7 @@ const MARKET_LABELS: Record<HelpMarket, string> = {
 }
 
 const SECTIONS = [
+  { id: 'key-interpretation', label: '重点解读' },
   { id: 'quick-start', label: '快速决策路径' },
   { id: 'trend-position', label: '趋势 / 位置' },
   { id: 'momentum-speed', label: '动能 / 涨速' },
@@ -205,6 +207,86 @@ export function DowMonitorHelp() {
           </aside>
 
           <div className="min-w-0 space-y-4">
+            <GuideSection
+              id="key-interpretation"
+              title="重点解读"
+              question="把分散指标转换成一条可核验的市场结论：先看发生了什么，再看为什么，最后核对关键价。"
+              icon={<BookOpenCheck className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div className="grid gap-3 xl:grid-cols-3">
+                {[
+                  ['第一行：结论', '显示机会、风险、异动、观察或数据状态，以及当前最重要的走势形态。'],
+                  ['第二行：市场行为', '解释价格、趋势、量能、资金与盘口如何共同形成当前结论，不重复罗列指标。'],
+                  ['第三行：关键价', '给出确认、失效、压力、日高日低、VWAP或趋势控制线等可核对价格。'],
+                ].map(([title, copy]) => (
+                  <article key={title} className="rounded-lg border border-border bg-elevated/40 p-3.5">
+                    <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+                    <p className="mt-2 text-xs leading-5 text-muted">{copy}</p>
+                  </article>
+                ))}
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                {[
+                  ['机会', '价格结构与至少一个独立维度形成同向支持。'],
+                  ['风险', '价格结构和动能、量能或卖压共同指向下行或失效。'],
+                  ['异动', '某项实时证据突变，但价格或其他维度尚未确认。'],
+                  ['观察', '周期冲突或证据不足，暂无清晰机会。'],
+                  ['数据', '行情或K线延迟，暂停产生新的实时解读。'],
+                ].map(([title, copy]) => (
+                  <article key={title} className="rounded-lg border border-border bg-base/40 p-3">
+                    <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+                    <p className="mt-1 text-[11px] leading-5 text-muted">{copy}</p>
+                  </article>
+                ))}
+              </div>
+
+              <div className="mt-3 space-y-3 text-xs leading-5 text-muted">
+                <article className="rounded-lg border border-accent/20 bg-accent/5 p-3.5">
+                  <h3 className="font-semibold text-foreground">正在尝试与已确认</h3>
+                  <p className="mt-1">
+                    “正在尝试”使用实时价格判断是否越过结构位；“已确认”只接受最近一根已完成5分钟K线的收盘结果。
+                    近60分钟区间取最近12根已完成5分钟K线，形成中的K线和前一交易日数据不参与确认。
+                  </p>
+                </article>
+
+                <article className="rounded-lg border border-border bg-elevated/40 p-3.5">
+                  <h3 className="font-semibold text-foreground">关键参考价从哪里来</h3>
+                  <p className="mt-1">
+                    日高、日低描述当天实时边界；参考高低来自当天已完成5分钟K线；近60分钟区间用于判断突破或破位；
+                    VWAP表示当日成交量加权均价；趋势线采用稳定的15m或30m控制线。缺少可靠价格时显示“关键价待确认”。
+                  </p>
+                </article>
+
+                <article className="rounded-lg border border-border bg-elevated/40 p-3.5">
+                  <h3 className="font-semibold text-foreground">确认价与失效价</h3>
+                  <p className="mt-1">
+                    确认价表示完成5分钟K线需要站上或跌破的结构位；失效价表示原判断不再成立的边界。
+                    两者可能是同一条区间边界，但比较方向相反，必须结合“5m收&gt;”或“5m收&lt;”阅读。
+                  </p>
+                </article>
+
+                <article className="rounded-lg border border-border bg-elevated/40 p-3.5">
+                  <h3 className="font-semibold text-foreground">组合门槛与盘口限制</h3>
+                  <p className="mt-1">
+                    机会或明确风险至少需要两个独立维度。量能达到
+                    {INTERPRETATION_THRESHOLDS.volumeRatio}倍可构成量能证据；资金流入达到
+                    {INTERPRETATION_THRESHOLDS.fundsUpPct}%可构成向上资金证据；盘口压力达到正负
+                    {INTERPRETATION_THRESHOLDS.depthUpPct}%可构成盘口方向证据。
+                    盘口挂单可快速撤销，因此盘口单项异常不能单独生成机会或明确风险，只能标记“异动待确认”。
+                  </p>
+                </article>
+
+                <article className="rounded-lg border border-warning/30 bg-warning/5 p-3.5">
+                  <h3 className="font-semibold text-foreground">与正式买卖信号的边界</h3>
+                  <p className="mt-1">
+                    重点解读是基于现有指标的确定性市场解释，不会生成、翻转或升级后端正式买卖信号，
+                    也不是买卖建议或自动交易指令。操作前仍应核对正式信号、北京时间、流动性和个人风险限制。
+                  </p>
+                </article>
+              </div>
+            </GuideSection>
+
             <GuideSection
               id="quick-start"
               title="快速决策路径"

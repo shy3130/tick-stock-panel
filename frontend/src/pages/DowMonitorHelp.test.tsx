@@ -21,6 +21,7 @@ describe('DowMonitorHelp', () => {
       .toHaveAttribute('href', '/dow-monitor?market=cn')
 
     for (const heading of [
+      '重点解读',
       '快速决策路径',
       '趋势 / 位置',
       '动能 / 涨速',
@@ -52,6 +53,14 @@ describe('DowMonitorHelp', () => {
     expect(screen.getByText(/距日高\/日低 0.50 个百分点/)).toBeInTheDocument()
     expect(screen.getByText(/高亮持续 10 秒/)).toBeInTheDocument()
     expect(screen.getByText(/仅作观察.*不改变买卖信号/)).toBeInTheDocument()
+    expect(screen.getAllByText(/正在尝试.*已确认/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText(/最近12根已完成5分钟K线/)).toBeInTheDocument()
+    expect(screen.getAllByText(/确认价.*失效价/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText(/盘口.*不能单独/)).toBeInTheDocument()
+    expect(screen.getByText(/不是买卖建议/)).toBeInTheDocument()
+    expect(screen.getByText(/量能.*1\.5倍/)).toBeInTheDocument()
+    expect(screen.getByText(/资金流入.*55%/)).toBeInTheDocument()
+    expect(screen.getByText(/盘口压力.*20%/)).toBeInTheDocument()
   })
 
   it('falls back invalid markets to hk and exposes keyboard-friendly section links', () => {
@@ -61,6 +70,8 @@ describe('DowMonitorHelp', () => {
       .toHaveAttribute('href', '/dow-monitor?market=hk')
 
     const navigation = screen.getByRole('navigation', { name: '指标说明目录' })
+    expect(within(navigation).getByRole('link', { name: '重点解读' }))
+      .toHaveAttribute('href', '#key-interpretation')
     expect(within(navigation).getByRole('link', { name: '趋势 / 位置' }))
       .toHaveAttribute('href', '#trend-position')
     expect(within(navigation).getByRole('link', { name: '突破 / 风险' }))

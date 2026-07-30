@@ -4,7 +4,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -12,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SPECIFICATION_ID = "USER-20260730-DOW-MONITOR-KEY-INTERPRETATION-COLUMN"
 REQUIREMENT_ID = "REQ-DOW-MONITOR-KEY-INTERPRETATION-COLUMN-001"
 BEHAVIOR_TESTS = (
+    "src/components/dow-monitor/interpretationMarketContext.test.ts",
     "src/components/dow-monitor/keyInterpretation.test.ts",
+    "src/components/dow-monitor/KeyInterpretationCell.test.tsx",
     "src/components/dow-monitor/DowMonitorList.test.tsx",
     "src/pages/DowMonitorHelp.test.tsx",
 )
@@ -39,6 +40,9 @@ def test_key_interpretation_requirement_is_authoritative_and_traceable() -> None
     )
     assert entry["specification"] == SPECIFICATION_ID
     assert {
+        "frontend/src/components/dow-monitor/interpretationMarketContext.ts",
+        "frontend/src/components/dow-monitor/keyInterpretation.ts",
+        "frontend/src/components/dow-monitor/KeyInterpretationCell.tsx",
         "frontend/src/components/dow-monitor/DowMonitorList.tsx",
         "frontend/src/pages/DowMonitorHelp.tsx",
     } <= set(entry["implementation"])
@@ -58,8 +62,7 @@ def test_key_interpretation_requirement_is_authoritative_and_traceable() -> None
 def test_key_interpretation_behavioral_suite() -> None:
     frontend = ROOT / "frontend"
     missing = [path for path in BEHAVIOR_TESTS if not (frontend / path).is_file()]
-    if missing:
-        pytest.skip(f"behavioral implementation has not created: {missing}")
+    assert not missing, f"missing behavioral evidence: {missing}"
 
     pnpm = shutil.which("pnpm")
     assert pnpm is not None
