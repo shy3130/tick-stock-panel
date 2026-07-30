@@ -32,7 +32,9 @@ export const SUDDEN_ANOMALY_THRESHOLDS: Record<SuddenAnomalyMetric, number> = {
 
 export const SUDDEN_ANOMALY_DURATION_MS = 10_000
 
-const METRICS = Object.keys(SUDDEN_ANOMALY_THRESHOLDS) as SuddenAnomalyMetric[]
+export const SUDDEN_ANOMALY_METRICS = Object.keys(
+  SUDDEN_ANOMALY_THRESHOLDS,
+) as SuddenAnomalyMetric[]
 
 export function suddenAnomalyKey(
   symbol: string,
@@ -48,7 +50,7 @@ export function advanceSuddenAnomalyState(
 ): SuddenAnomalyTrackerState {
   const currentKeys = new Set(
     readings.flatMap(reading =>
-      METRICS.map(metric => suddenAnomalyKey(reading.symbol, metric))),
+      SUDDEN_ANOMALY_METRICS.map(metric => suddenAnomalyKey(reading.symbol, metric))),
   )
   const baselines = Object.fromEntries(
     Object.entries(previous.baselines)
@@ -60,7 +62,7 @@ export function advanceSuddenAnomalyState(
   )
 
   for (const reading of readings) {
-    for (const metric of METRICS) {
+    for (const metric of SUDDEN_ANOMALY_METRICS) {
       const key = suddenAnomalyKey(reading.symbol, metric)
       const next = reading.metrics[metric]
       if (next.delayed || next.value == null || !Number.isFinite(next.value)) {

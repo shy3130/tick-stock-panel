@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   activeSuddenAnomalyKeys,
   advanceSuddenAnomalyState,
+  SUDDEN_ANOMALY_METRICS,
+  SUDDEN_ANOMALY_THRESHOLDS,
   suddenAnomalyKey,
   type SuddenAnomalyMetric,
   type SuddenAnomalySymbolReading,
@@ -42,6 +44,13 @@ function reading(
 }
 
 describe('sudden anomaly highlight state', () => {
+  it('exports one stable metric order aligned with every threshold', () => {
+    expect(SUDDEN_ANOMALY_METRICS).toEqual(METRICS)
+    expect(Object.keys(SUDDEN_ANOMALY_THRESHOLDS)).toEqual(
+      SUDDEN_ANOMALY_METRICS,
+    )
+  })
+
   it.each([
     ['changePct', 1, 1.50],
     ['momentum1m', 0.1, 0.50],

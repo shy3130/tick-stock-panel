@@ -5,6 +5,9 @@ import type { RealtimeSymbolState } from '@/lib/realtimeMarketData'
 import { cn } from '@/lib/cn'
 
 import { DowMonitorSparkline } from './DowMonitorSparkline'
+import { KeyInterpretationCell } from './KeyInterpretationCell'
+import { deriveInterpretationMarketContext } from './interpretationMarketContext'
+import { deriveKeyInterpretation } from './keyInterpretation'
 import {
   deriveMonitorRow,
   type MonitorMomentum,
@@ -17,6 +20,7 @@ import type {
 } from './types'
 import { formatServerTimestamp } from './formatServerTimestamp'
 import {
+  SUDDEN_ANOMALY_METRICS,
   suddenAnomalyKey,
   type SuddenAnomalyMetric,
   type SuddenAnomalySymbolReading,
@@ -166,7 +170,7 @@ export function DowMonitorList({
         ? null
         : derived.signal,
     }
-    return { item, row }
+    return { item, row, realtime }
   })
   const anomalyReadings: SuddenAnomalySymbolReading[] = presentedItems.map(
     ({ item, row }) => ({
@@ -202,16 +206,30 @@ export function DowMonitorList({
   const anomalyHighlights = useSuddenAnomalyHighlights(anomalyReadings)
   const isAnomaly = (symbol: string, metric: SuddenAnomalyMetric) =>
     anomalyHighlights.has(suddenAnomalyKey(symbol, metric))
+  const interpretedItems = presentedItems.map(({ item, row, realtime }) => ({
+    item,
+    row,
+    interpretation: deriveKeyInterpretation({
+      context: deriveInterpretationMarketContext({ item, row, realtime }),
+      anomalies: new Set(
+        SUDDEN_ANOMALY_METRICS.filter(metric => isAnomaly(item.symbol, metric)),
+      ),
+    }),
+  }))
 
   return (
     <section aria-label="股票监控列表" className="overflow-hidden rounded-card border border-border bg-surface">
       <div data-testid="dow-monitor-table-scroll" className="max-w-full overflow-x-auto">
-        <table className="w-full min-w-[1660px] border-collapse text-xs">
+        <table className="w-full min-w-[1980px] border-collapse text-xs">
           <thead className="bg-elevated/70 text-[11px] text-muted">
             <tr>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">股票</th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">价格 / 涨跌</th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">日内走势</th>
+              <th scope="col" className="min-w-[320px] whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
+                重点解读
+                <span className="block text-[9px] text-muted">结论 · 市场行为 · 关键价</span>
+              </th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
                 趋势 / 位置
                 <span className="block text-[9px] text-muted">通道 · 控制线 · VWAP</span>
@@ -233,7 +251,7 @@ export function DowMonitorList({
             </tr>
           </thead>
           <tbody>
-            {presentedItems.map(({ item, row }) => {
+            {interpretedItems.map(({ item, row, interpretation }) => {
               const selected = selectedSymbol === item.symbol
               const positive = (row.changePct ?? 0) >= 0
               return (
@@ -302,6 +320,9 @@ export function DowMonitorList({
                   </td>
                   <td className="px-3 py-2">
                     <DowMonitorSparkline symbol={item.symbol} values={row.sparkline} />
+                  </td>
+                  <td className="min-w-[320px] px-3 py-2">
+                    <KeyInterpretationCell interpretation={interpretation} />
                   </td>
                   <td data-testid={`trend-position-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
                     <div data-testid={`trend-position-primary-row-${item.symbol}`} className="flex items-center gap-2">

@@ -168,7 +168,7 @@ function anomalyRealtime({
 }
 
 describe('DowMonitorList', () => {
-  it('renders the nine grouped indicator column headers', () => {
+  it('renders the ten grouped columns with interpretation after the intraday line', () => {
     render(
       <DowMonitorList
         items={[]}
@@ -190,6 +190,7 @@ describe('DowMonitorList', () => {
       '股票',
       '价格 / 涨跌',
       '日内走势',
+      '重点解读',
       '趋势 / 位置',
       '动量 / 涨速',
       '量价 / 资金',
@@ -199,7 +200,15 @@ describe('DowMonitorList', () => {
     ]) {
       expect(screen.getByRole('columnheader', { name: new RegExp(heading) })).toBeInTheDocument()
     }
-    expect(screen.getAllByRole('columnheader')).toHaveLength(9)
+    const headers = screen.getAllByRole('columnheader')
+    expect(headers).toHaveLength(10)
+    const texts = headers.map(header => header.textContent ?? '')
+    expect(texts.indexOf('日内走势')).toBeLessThan(
+      texts.findIndex(text => text.includes('重点解读')),
+    )
+    expect(texts.findIndex(text => text.includes('重点解读'))).toBeLessThan(
+      texts.findIndex(text => text.includes('趋势 / 位置')),
+    )
     expect(screen.queryByRole('columnheader', { name: '通道' })).not.toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: '主动资金' })).not.toBeInTheDocument()
   })
@@ -380,6 +389,10 @@ describe('DowMonitorList', () => {
     expect(screen.getByText('买入确认')).toBeInTheDocument()
     expect(screen.getByText('北京时间 09:34')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看详情 700.HK' })).toHaveTextContent('查看详情')
+    const interpretation = screen.getByTestId('key-interpretation')
+    expect(interpretation.querySelectorAll('[data-interpretation-line]')).toHaveLength(3)
+    expect(interpretation).toHaveClass('min-w-[320px]')
+    expect(within(interpretation).queryByText(/量比|量速|五档/)).not.toBeInTheDocument()
   })
 
   it('keeps missing grouped values explicit instead of rendering zeroes', () => {
@@ -474,7 +487,8 @@ describe('DowMonitorList', () => {
       expect(highlight).toHaveClass('border-danger', 'bg-danger/10', 'text-danger')
       expect(highlight).toHaveAccessibleName(new RegExp(`${label}.*突发异动`))
     }
-    expect(screen.getAllByText('异动')).toHaveLength(6)
+    expect(screen.getAllByText('异动')).toHaveLength(7)
+    expect(screen.getByTestId('key-interpretation')).toHaveTextContent('待确认')
     expect(screen.getByRole('row', { name: /腾讯控股/ })).not.toHaveClass('bg-danger/10')
     for (const group of ['momentum-speed', 'volume-funds', 'breakout-risk']) {
       expect(screen.getByTestId(`${group}-700.HK`)).not.toHaveClass('bg-danger/10')
