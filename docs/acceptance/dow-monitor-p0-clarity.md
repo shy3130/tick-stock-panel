@@ -1,6 +1,6 @@
 # 趋势监控 P0 指标语义验收
 
-状态：本地语义验收通过；生产发布待执行
+状态：本地语义验收通过；生产 10.28 发布与运行态验收通过
 
 ## 验收范围
 
@@ -72,4 +72,41 @@ pnpm exec vitest run `
 
 ### 生产边界
 
-本次没有发布到 10.28。生产 3018 仍为上一版本，待用户另行要求正式发布。
+本次仅替换 10.28 的 3018 静态前端层；19912、后端代码、WebSocket
+采集、监控股票池、完成分钟决策和正式信号均未修改。
+
+### 生产发布证据
+
+- 源码提交：
+  `45ec4b0a36525569df0fac9524f70de684b70a84`。
+- 生产镜像：
+  `tickflow-stock-panel-app:dow-monitor-p0-prebuilt-45ec4b0-20260730-100305`；
+  镜像 ID：
+  `sha256:8df2351ad5d7fd569d6f2c24e65053ed6496a0fd470d7f23f3c9c7defd58d11a`。
+- 镜像 revision 标签与源码提交一致；release 标签为
+  `dow-monitor-p0-clarity`。
+- 生产容器 `TickFlow_Stock_Panel` 为 `running`，`RestartCount=0`；
+  `/health` 返回
+  `{"status":"ok","version":"0.1.86","mode":"none"}`。
+- 发布前备份：
+  `/home/alwin/backups/dow-monitor-p0-predeploy-20260730-102500`；
+  回滚容器：
+  `TickFlow_Stock_Panel_pre_p0_20260730-102500`，保持停止状态。
+- `dow_monitor_symbols.json` 发布前后 SHA-256 均为
+  `2d8da35aa9eb0da2faca894e72e1cd52e9518fad11a4844bc418962bfeb29ddb`；
+  `/api/dow-monitor/symbols` 发布前后响应逐字节一致，SHA-256 为
+  `25bb010891a99802a4d7dc7fe226d85eed9b8f9a928e7263d32a69abe0bb3b5c`。
+
+生产容器中的静态文件与本地验收构建逐字节一致：
+
+| 文件 | SHA-256 |
+| --- | --- |
+| `/app/static/index.html` | `07f6b15274806a00cf82fadd35d2c15ddaed9189d7a90eba38f4d9290b701c83` |
+| `assets/index-VN-aagq2.js` | `c607087a56931247190b6ea60204b67653d0f8f753d16b3d3c620754e1cbe1b5` |
+| `assets/DowMonitor-iI7jNzSf.js` | `f19c03e2dbbd6640e696d8f7873ad41e04d62136c2fe263073cd948da9bf8a12` |
+| `assets/DowMonitorHelp-9sYAbmUR.js` | `bb29ebba43f1f02f69444fb062845e4049c9024ee841faad2b81ec27e2aafb5c` |
+
+生产日志确认应用启动完成、WebSocket 重新连接，已登录客户端的
+`/api/dow-monitor/overview?market=hk` 返回 200。受控内置浏览器没有生产
+登录态，只验证到登录边界，没有输入或读取访问密码；生产语义证据由逐字节一致
+的静态包、组件行为测试和底层公式测试共同提供。
