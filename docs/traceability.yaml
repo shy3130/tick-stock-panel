@@ -1,5 +1,33 @@
 version: 1
 requirements:
+  - id: REQ-DOW-MONITOR-P0-SEMANTICS-001
+    specification: USER-20260730-DOW-MONITOR-P0-CLARITY
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_p0_clarity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-p0-clarity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-p0-clarity.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-P0-POSITION-RISK-001
+    specification: USER-20260730-DOW-MONITOR-P0-CLARITY
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_p0_clarity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-p0-clarity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-p0-clarity.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-P0-FRESHNESS-001
+    specification: USER-20260730-DOW-MONITOR-P0-CLARITY
+    implementation:
+      - frontend/src/components/dow-monitor/monitorListPresentation.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_p0_clarity_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-p0-clarity.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-p0-clarity.md, type: independent-review}
   - id: REQ-COLLECTION-MONITOR-PROXY-001
     specification: SPEC-COLLECTION-MONITOR-INTEGRATION-001
     implementation:

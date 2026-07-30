@@ -191,6 +191,7 @@ describe('DowMonitorList', () => {
           data_status: 'COMPLETE',
           status_label: '完整',
           input_event_ids: [],
+          vwap_price: 498.6,
           vwap_distance_pct: 0.19,
         },
         risk_warning: {
@@ -213,6 +214,11 @@ describe('DowMonitorList', () => {
         high: 510,
         low: 490,
         timestamp: '2026-07-29T09:35:30+08:00',
+      },
+      depth: {
+        bids: [{ position: 1, price: 499, volume: 100 }],
+        asks: [{ position: 1, price: 501, volume: 80 }],
+        timestamp: '2026-07-29T09:35:25+08:00',
       },
       candlestick: {
         period: 'min_1',
@@ -244,11 +250,16 @@ describe('DowMonitorList', () => {
     expect(within(sparkline).getByTestId('sparkline-line')).toBeInTheDocument()
     expect(sparkline.querySelectorAll('polyline')).toHaveLength(1)
     expect(sparkline.querySelector('rect')).toBeNull()
-    expect(screen.getByText('成本 +0.19%')).toBeInTheDocument()
+    expect(screen.getByText('VWAP 498.60 / +0.19%')).toBeInTheDocument()
     expect(screen.getByText('1m +1.00%')).toBeInTheDocument()
-    expect(screen.getByText('确认 2/2')).toBeInTheDocument()
+    expect(screen.getByText('周期 2/2')).toBeInTheDocument()
+    expect(screen.getByText('15m✓')).toBeInTheDocument()
+    expect(screen.getByText('30m✓')).toBeInTheDocument()
     expect(screen.getByText('高 2.00%')).toBeInTheDocument()
     expect(screen.getByText('低 2.00%')).toBeInTheDocument()
+    expect(screen.getByText('位置 50')).toBeInTheDocument()
+    expect(screen.getByTestId('freshness-700.HK'))
+      .toHaveAccessibleName('数据时效，行情0s，盘口5s，1m K线30s，分析30s')
     for (const group of ['trend-position', 'momentum-speed', 'volume-funds', 'breakout-risk']) {
       const cell = screen.getByTestId(`${group}-700.HK`)
       const primaryRow = within(cell).getByTestId(`${group}-primary-row-700.HK`)
@@ -259,7 +270,7 @@ describe('DowMonitorList', () => {
     }
     const volumeFundsCell = screen.getByTestId('volume-funds-700.HK')
     const relativeVolumeBadge = within(volumeFundsCell).getByTestId('relative-volume-stable-badge-700.HK')
-    const activeFundsBadge = within(volumeFundsCell).getByTestId('active-funds-stable-badge-700.HK')
+    const capitalInflowBadge = within(volumeFundsCell).getByTestId('capital-inflow-stable-badge-700.HK')
     const volumeSpeedBadge = within(volumeFundsCell).getByTestId('volume-speed-live-badge-700.HK')
     const depthPressureBadge = within(volumeFundsCell).getByTestId('depth-pressure-live-badge-700.HK')
     const momentumBadge = screen.getByText('1m +1.00%').previousElementSibling
@@ -275,17 +286,17 @@ describe('DowMonitorList', () => {
     expect(rangeBadges[0].nextElementSibling).toHaveTextContent(/高.*2.00%/)
     expect(rangeBadges[1].nextElementSibling).toHaveTextContent(/低.*2.00%/)
     expect(relativeVolumeBadge).toHaveTextContent('稳')
-    expect(activeFundsBadge).toHaveTextContent('稳')
+    expect(capitalInflowBadge).toHaveTextContent('稳')
     expect(volumeSpeedBadge).toHaveTextContent('实时')
     expect(depthPressureBadge).toHaveTextContent('实时')
     expect(relativeVolumeBadge.nextElementSibling)
       .toHaveTextContent('量比 1.50×')
-    expect(activeFundsBadge.nextElementSibling)
-      .toHaveTextContent('主买 60%')
+    expect(capitalInflowBadge.nextElementSibling)
+      .toHaveTextContent('资金流入 60%')
     expect(volumeSpeedBadge.nextElementSibling)
       .toHaveTextContent('量速 --')
     expect(depthPressureBadge.nextElementSibling)
-      .toHaveTextContent('五档 --')
+      .toHaveTextContent('五档 +11.11%')
     expect(screen.getByText('买入确认')).toBeInTheDocument()
     expect(screen.getByText('北京时间 09:34')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看详情 700.HK' })).toHaveTextContent('查看详情')
@@ -310,17 +321,21 @@ describe('DowMonitorList', () => {
     )
 
     expect(screen.getByText('控制 --')).toBeInTheDocument()
-    expect(screen.getByText('成本 --')).toBeInTheDocument()
+    expect(screen.getByText('VWAP --')).toBeInTheDocument()
     expect(screen.getByText('1m --')).toBeInTheDocument()
     expect(screen.getByText('5m --')).toBeInTheDocument()
     expect(screen.getByText('15m --')).toBeInTheDocument()
     expect(screen.getByText('量比 --')).toBeInTheDocument()
     expect(screen.getByText('量速 --')).toBeInTheDocument()
-    expect(screen.getByText('主买 未确认')).toBeInTheDocument()
+    expect(screen.getByText('资金流入 未确认')).toBeInTheDocument()
     expect(screen.getByText('五档 --')).toBeInTheDocument()
     expect(screen.getByText('高 --')).toBeInTheDocument()
     expect(screen.getByText('低 --')).toBeInTheDocument()
     expect(screen.getByText('ATR14 --')).toBeInTheDocument()
+    expect(screen.getByText('振幅/ATR --')).toBeInTheDocument()
+    expect(screen.getByText('位置 --')).toBeInTheDocument()
+    expect(screen.getByTestId('freshness-700.HK'))
+      .toHaveAccessibleName('数据时效，行情30s，盘口--，1m K线--，分析28s')
     for (const group of ['trend-position', 'momentum-speed', 'volume-funds', 'breakout-risk']) {
       expect(screen.getByTestId(`${group}-700.HK`)).not.toHaveTextContent(/(?:\+|-)?0(?:\.0+)?[%×]/)
     }

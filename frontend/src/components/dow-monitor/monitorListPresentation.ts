@@ -34,9 +34,14 @@ export interface MonitorRelativeVolume {
   ratio: number
 }
 
-export interface MonitorActiveFunds {
+export interface MonitorCapitalInflow {
   confirmed: boolean
-  buyRatioPct: number | null
+  inflowRatioPct: number | null
+}
+
+export interface MonitorSourceFreshness {
+  ageSeconds: number | null
+  delayed: boolean
 }
 
 export interface MonitorSignal {
@@ -52,7 +57,11 @@ export interface MonitorRowPresentation {
   trendPosition: {
     channel: MonitorChannel
     control: MonitorControl | null
-    costDistancePct: number | null
+    vwap: {
+      price: number | null
+      distancePct: number | null
+    }
+    intradayPositionPct: number | null
   }
   momentumSpeed: {
     momentum1m: MonitorMomentum
@@ -62,16 +71,27 @@ export interface MonitorRowPresentation {
   volumeFunds: {
     relativeVolume: MonitorRelativeVolume | null
     volumeSpeed: number | null
-    activeFunds: MonitorActiveFunds
+    capitalInflow: MonitorCapitalInflow
     depthPressurePct: number | null
   }
   breakoutRisk: {
     toDayHighPct: number | null
     fromDayLowPct: number | null
     atr14Pct: number | null
+    dayRangeAtrRatio: number | null
     confirmedTimeframes: number
     totalTimeframes: 2
+    confirmationTimeframes: Array<{
+      timeframe: '15m' | '30m'
+      confirmed: boolean
+    }>
     riskTitle: string | null
+  }
+  freshness: {
+    quote: MonitorSourceFreshness
+    depth: MonitorSourceFreshness
+    candlestick: MonitorSourceFreshness
+    analysis: MonitorSourceFreshness
   }
   signal: MonitorSignal | null
   delayed: boolean
@@ -244,20 +264,39 @@ function depthPressurePct(realtime: RealtimeSymbolState | undefined): number | n
   return total > 0 ? (bidVolume - askVolume) / total * 100 : null
 }
 
-function dayRangeDistances(realtime: RealtimeSymbolState | undefined): {
+function dayRangeMetrics(
+  realtime: RealtimeSymbolState | undefined,
+  atrAbsolute: number | null,
+): {
   toDayHighPct: number | null
   fromDayLowPct: number | null
+  intradayPositionPct: number | null
+  dayRangeAtrRatio: number | null
 } {
   const quote = realtime?.quote
   if (realtime?.quoteDelayed || !finite(quote?.lastDone) || quote.lastDone <= 0) {
-    return { toDayHighPct: null, fromDayLowPct: null }
+    return {
+      toDayHighPct: null,
+      fromDayLowPct: null,
+      intradayPositionPct: null,
+      dayRangeAtrRatio: null,
+    }
   }
+  const high = finite(quote.high) ? quote.high : null
+  const low = finite(quote.low) ? quote.low : null
+  const validRange = high != null && low != null && high > low
   return {
-    toDayHighPct: finite(quote.high)
-      ? Math.max(quote.high - quote.lastDone, 0) / quote.lastDone * 100
+    toDayHighPct: high != null
+      ? Math.max(high - quote.lastDone, 0) / quote.lastDone * 100
       : null,
-    fromDayLowPct: finite(quote.low)
-      ? Math.max(quote.lastDone - quote.low, 0) / quote.lastDone * 100
+    fromDayLowPct: low != null
+      ? Math.max(quote.lastDone - low, 0) / quote.lastDone * 100
+      : null,
+    intradayPositionPct: validRange
+      ? Math.min(100, Math.max(0, (quote.lastDone - low) / (high - low) * 100))
+      : null,
+    dayRangeAtrRatio: validRange && finite(atrAbsolute) && atrAbsolute > 0
+      ? (high - low) / atrAbsolute
       : null,
   }
 }
@@ -272,9 +311,9 @@ function relativeVolume(
   return null
 }
 
-function activeFunds(
+function capitalInflow(
   item: DowMonitorOverviewSymbol,
-): MonitorActiveFunds {
+): MonitorCapitalInflow {
   const capital = item.intraday_capital
   const totalIn = capital?.total_in
   const totalOut = capital?.total_out
@@ -284,15 +323,18 @@ function activeFunds(
     || !finite(totalOut)
     || totalIn + totalOut <= 0
   ) {
-    return { confirmed: false, buyRatioPct: null }
+    return { confirmed: false, inflowRatioPct: null }
   }
   return {
     confirmed: true,
-    buyRatioPct: totalIn / (totalIn + totalOut) * 100,
+    inflowRatioPct: totalIn / (totalIn + totalOut) * 100,
   }
 }
 
-function atr14Pct(state: DowMonitorTimeframeState | undefined): number | null {
+function atr14(state: DowMonitorTimeframeState | undefined): {
+  absolute: number
+  pct: number
+} | null {
   const bars = completedBars(state)
   if (bars.length < 15) return null
   const ranges = bars.slice(1).map((bar, index) => {
@@ -316,17 +358,81 @@ function atr14Pct(state: DowMonitorTimeframeState | undefined): number | null {
     || !finite(latestClose)
     || latestClose <= 0
   ) return null
-  return (recent as number[]).reduce((sum, value) => sum + value, 0) / 14 / latestClose * 100
+  const absolute = (recent as number[]).reduce((sum, value) => sum + value, 0) / 14
+  return {
+    absolute,
+    pct: absolute / latestClose * 100,
+  }
 }
 
-function confirmedTimeframes(item: DowMonitorOverviewSymbol): number {
+function confirmationTimeframes(
+  item: DowMonitorOverviewSymbol,
+): MonitorRowPresentation['breakoutRisk']['confirmationTimeframes'] {
   const decision = item.minute_decision
-  if (!decision || decision.direction === 'RANGE') return 0
-  const values = new Set([
-    decision.dominant_timeframe,
-    ...decision.confirmation_timeframes,
-  ])
-  return CONTROL_TIMEFRAMES.filter(timeframe => values.has(timeframe)).length
+  const values = !decision || decision.direction === 'RANGE'
+    ? new Set<string>()
+    : new Set([
+      decision.dominant_timeframe,
+      ...decision.confirmation_timeframes,
+    ])
+  return CONTROL_TIMEFRAMES.map(timeframe => ({
+    timeframe: timeframe as '15m' | '30m',
+    confirmed: values.has(timeframe),
+  }))
+}
+
+function sourceFreshness(
+  sourceTimestamp: number | string | null | undefined,
+  sourceDelayed: boolean,
+  nowMs: number,
+): MonitorSourceFreshness {
+  const sourceMs = timestampMs(sourceTimestamp)
+  if (sourceMs == null) return { ageSeconds: null, delayed: sourceDelayed }
+  const ageSeconds = Math.max(0, Math.floor((nowMs - sourceMs) / 1000))
+  return {
+    ageSeconds,
+    delayed: sourceDelayed || ageSeconds > 90,
+  }
+}
+
+function freshness(
+  item: DowMonitorOverviewSymbol,
+  realtime: RealtimeSymbolState | undefined,
+  nowMs: number,
+): MonitorRowPresentation['freshness'] {
+  const analysisDelayed = (
+    item.analysis_status === 'QUOTE_DELAYED'
+    || item.analysis_status === 'ANALYSIS_PAUSED'
+    || DELAYED_DECISION_STATUSES.has(item.minute_decision?.data_status ?? '')
+  )
+  return {
+    quote: sourceFreshness(
+      realtime?.quote?.timestamp ?? item.quote_timestamp,
+      Boolean(realtime?.quoteDelayed),
+      nowMs,
+    ),
+    depth: sourceFreshness(
+      realtime?.depth?.timestamp,
+      Boolean(realtime?.depthDelayed),
+      nowMs,
+    ),
+    candlestick: sourceFreshness(
+      realtime?.candlestick?.timestamp,
+      Boolean(realtime?.candlestickDelayed),
+      nowMs,
+    ),
+    analysis: sourceFreshness(
+      item.minute_decision?.source_timestamp ?? item.last_success_at ?? item.updated_at,
+      analysisDelayed,
+      nowMs,
+    ),
+  }
+}
+
+function confirmedTimeframes(
+  values: MonitorRowPresentation['breakoutRisk']['confirmationTimeframes'],
+): number {
+  return values.filter(value => value.confirmed).length
 }
 
 const DELAYED_DECISION_STATUSES = new Set([
@@ -473,14 +579,22 @@ export function deriveMonitorRow(
   const selectedControl = control(item)
   const delayed = isDelayed(item, realtime, nowMs)
   const formal = formalSignal(item, notifications)
-  const costDistancePct = item.minute_decision?.daily_summary?.vwap_distance_pct
-  const dayRange = dayRangeDistances(realtime)
+  const dailySummary = item.minute_decision?.daily_summary
+  const currentAtr = atr14(item.states['15m'])
+  const dayRange = dayRangeMetrics(realtime, currentAtr?.absolute ?? null)
+  const confirmation = confirmationTimeframes(item)
   return {
     ...realtimePrice(item, realtime),
     trendPosition: {
       channel: channel(item),
       control: selectedControl,
-      costDistancePct: finite(costDistancePct) ? costDistancePct : null,
+      vwap: {
+        price: finite(dailySummary?.vwap_price) ? dailySummary.vwap_price : null,
+        distancePct: finite(dailySummary?.vwap_distance_pct)
+          ? dailySummary.vwap_distance_pct
+          : null,
+      },
+      intradayPositionPct: dayRange.intradayPositionPct,
     },
     momentumSpeed: {
       momentum1m: realtimeMomentum1m(realtime),
@@ -490,16 +604,20 @@ export function deriveMonitorRow(
     volumeFunds: {
       relativeVolume: relativeVolume(item),
       volumeSpeed: volumeSpeed(item, realtime, nowMs),
-      activeFunds: activeFunds(item),
+      capitalInflow: capitalInflow(item),
       depthPressurePct: depthPressurePct(realtime),
     },
     breakoutRisk: {
-      ...dayRange,
-      atr14Pct: atr14Pct(item.states['15m']),
-      confirmedTimeframes: confirmedTimeframes(item),
+      toDayHighPct: dayRange.toDayHighPct,
+      fromDayLowPct: dayRange.fromDayLowPct,
+      atr14Pct: currentAtr?.pct ?? null,
+      dayRangeAtrRatio: dayRange.dayRangeAtrRatio,
+      confirmedTimeframes: confirmedTimeframes(confirmation),
       totalTimeframes: 2,
+      confirmationTimeframes: confirmation,
       riskTitle: item.minute_decision?.risk_warning?.title?.trim() || null,
     },
+    freshness: freshness(item, realtime, nowMs),
     signal: formal ?? (delayed ? null : warningSignal(item)),
     delayed,
     sparkline: buildIntradaySparkline(item, realtime?.candlestick),

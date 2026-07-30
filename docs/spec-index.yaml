@@ -76,6 +76,13 @@ specifications:
       - REQ-DOW-MONITOR-MINUTE-RESULTS-BACKFILL-001
       - REQ-DOW-MONITOR-MINUTE-RESULTS-MATERIALIZATION-001
       - REQ-DOW-MONITOR-MINUTE-RESULTS-SCHEMA-001
+  - id: USER-20260730-DOW-MONITOR-P0-CLARITY
+    path: docs/specs/dow-monitor-p0-clarity.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-P0-SEMANTICS-001
+      - REQ-DOW-MONITOR-P0-POSITION-RISK-001
+      - REQ-DOW-MONITOR-P0-FRESHNESS-001
 conflicts: []
 authority_decisions:
   - id: DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001

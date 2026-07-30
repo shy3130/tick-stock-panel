@@ -180,6 +180,7 @@ function realtimeFixture(
     depth: {
       bids: [100, 80, 60, 40, 20].map((volume, index) => ({ position: index + 1, volume })),
       asks: [70, 60, 50, 40, 30].map((volume, index) => ({ position: index + 1, volume })),
+      timestamp: '2026-07-29T09:35:25+08:00',
     },
     quoteDelayed: false,
     depthDelayed: false,
@@ -201,6 +202,82 @@ describe('monitor list presentation', () => {
     expect(row.breakoutRisk.toDayHighPct).toBeCloseTo(100 / 101)
     expect(row.breakoutRisk.fromDayLowPct).toBeCloseTo(600 / 101)
     expect(row.volumeFunds.depthPressurePct).toBeCloseTo((300 - 250) / 550 * 100)
+    expect(row.trendPosition.intradayPositionPct).toBeCloseTo(6 / 7 * 100)
+  })
+
+  it('presents VWAP, capital inflow, timeframe confirmation, and source ages with their real semantics', () => {
+    const row = deriveMonitorRow(
+      symbolFixture(),
+      [],
+      realtimeFixture(),
+      Date.parse('2026-07-29T09:35:30+08:00'),
+    )
+
+    expect(row.trendPosition.vwap).toEqual({
+      price: 10.48,
+      distancePct: 0.19,
+    })
+    expect(row.volumeFunds.capitalInflow).toEqual({
+      confirmed: true,
+      inflowRatioPct: 60,
+    })
+    expect(row.breakoutRisk.confirmationTimeframes).toEqual([
+      { timeframe: '15m', confirmed: true },
+      { timeframe: '30m', confirmed: true },
+    ])
+    expect(row.freshness).toEqual({
+      quote: { ageSeconds: 0, delayed: false },
+      depth: { ageSeconds: 5, delayed: false },
+      candlestick: { ageSeconds: 30, delayed: false },
+      analysis: { ageSeconds: 30, delayed: false },
+    })
+  })
+
+  it('keeps intraday position, range over ATR, and freshness unavailable when their source is invalid', () => {
+    const completedCloses = Array.from({ length: 15 }, (_, index) => 100 + index)
+    const fifteen = state('15m', completedCloses)
+    fifteen.chart.bars?.forEach(bar => {
+      bar.high = bar.close + 1
+      bar.low = bar.close - 1
+    })
+    const valid = deriveMonitorRow(
+      symbolFixture({ states: { '15m': fifteen } }),
+      [],
+      realtimeFixture({
+        quote: {
+          lastDone: 110,
+          prevClose: 100,
+          high: 114,
+          low: 107,
+          timestamp: '2026-07-29T09:35:30+08:00',
+        },
+      }),
+      Date.parse('2026-07-29T09:35:30+08:00'),
+    )
+    expect(valid.breakoutRisk.dayRangeAtrRatio).toBeCloseTo(3.5)
+
+    const invalid = deriveMonitorRow(
+      symbolFixture({ states: { '15m': fifteen } }),
+      [],
+      realtimeFixture({
+        quote: {
+          lastDone: 110,
+          prevClose: 100,
+          high: 110,
+          low: 110,
+          timestamp: '2026-07-29T09:30:00+08:00',
+        },
+        quoteDelayed: true,
+        depth: undefined,
+        candlestick: undefined,
+      }),
+      Date.parse('2026-07-29T09:35:30+08:00'),
+    )
+    expect(invalid.trendPosition.intradayPositionPct).toBeNull()
+    expect(invalid.breakoutRisk.dayRangeAtrRatio).toBeNull()
+    expect(invalid.freshness.quote).toEqual({ ageSeconds: 330, delayed: true })
+    expect(invalid.freshness.depth).toEqual({ ageSeconds: null, delayed: false })
+    expect(invalid.freshness.candlestick).toEqual({ ageSeconds: null, delayed: false })
   })
 
   it('projects volume speed only within the valid 1m observation window', () => {
@@ -365,7 +442,7 @@ describe('monitor list presentation', () => {
 
     const row = deriveMonitorRow(item, [], undefined, Date.parse('2026-07-29T09:35:30+08:00'))
 
-    expect(row.trendPosition.costDistancePct).toBe(0.19)
+    expect(row.trendPosition.vwap).toEqual({ price: 10.48, distancePct: 0.19 })
     expect(row.trendPosition.control).toMatchObject({ timeframe: '30m', distancePct: 0.7 })
     expect(row.breakoutRisk.atr14Pct).toBeCloseTo(2 / 115 * 100, 6)
     expect(row.breakoutRisk).toMatchObject({
@@ -391,8 +468,8 @@ describe('monitor list presentation', () => {
       Date.parse('2026-07-29T09:35:30+08:00'),
     )
 
-    expect(complete.volumeFunds.activeFunds).toEqual({ confirmed: true, buyRatioPct: 60 })
-    expect(delayed.volumeFunds.activeFunds).toEqual({ confirmed: false, buyRatioPct: null })
+    expect(complete.volumeFunds.capitalInflow).toEqual({ confirmed: true, inflowRatioPct: 60 })
+    expect(delayed.volumeFunds.capitalInflow).toEqual({ confirmed: false, inflowRatioPct: null })
   })
 
   it('keeps the newest persisted formal signal and timestamp even when data is stale', () => {

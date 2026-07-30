@@ -9,6 +9,7 @@ import {
   deriveMonitorRow,
   type MonitorMomentum,
   type MonitorSignal,
+  type MonitorSourceFreshness,
 } from './monitorListPresentation'
 import type {
   DowMonitorNotification,
@@ -38,6 +39,19 @@ function compactPercent(label: string, value: number | null): string {
 
 function distancePercent(label: string, value: number | null): string {
   return value == null ? `${label} --` : `${label} ${value.toFixed(2)}%`
+}
+
+function vwapText(price: number | null, distancePct: number | null): string {
+  if (price == null && distancePct == null) return 'VWAP --'
+  return `VWAP ${numberText(price)} / ${percentText(distancePct)}`
+}
+
+function ratioText(label: string, value: number | null): string {
+  return value == null ? `${label} --` : `${label} ${value.toFixed(2)}×`
+}
+
+function freshnessText(label: string, value: MonitorSourceFreshness): string {
+  return `${label}${value.ageSeconds == null ? '--' : `${value.ageSeconds}s`}`
 }
 
 function signalTime(value: string | null): string | null {
@@ -113,7 +127,7 @@ export function DowMonitorList({
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">日内走势</th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
                 趋势 / 位置
-                <span className="block text-[9px] text-muted">通道 · 控制线 · 成本位置</span>
+                <span className="block text-[9px] text-muted">通道 · 控制线 · VWAP</span>
               </th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
                 动量 / 涨速
@@ -121,7 +135,7 @@ export function DowMonitorList({
               </th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
                 量价 / 资金
-                <span className="block text-[9px] text-muted">量比 · 量速 · 主买 · 五档</span>
+                <span className="block text-[9px] text-muted">量比 · 量速 · 资金流入 · 五档</span>
               </th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
                 突破 / 风险
@@ -222,7 +236,10 @@ export function DowMonitorList({
                     </div>
                     <div data-testid={`trend-position-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span>{compactPercent('控制', row.trendPosition.control?.distancePct ?? null)}</span>
-                      <span>{compactPercent('成本', row.trendPosition.costDistancePct)}</span>
+                      <span>{vwapText(
+                        row.trendPosition.vwap.price,
+                        row.trendPosition.vwap.distancePct,
+                      )}</span>
                     </div>
                   </td>
                   <td data-testid={`momentum-speed-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
@@ -251,11 +268,11 @@ export function DowMonitorList({
                       </span>
                     </div>
                     <div data-testid={`volume-funds-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
-                      <span data-testid={`active-funds-stable-badge-${item.symbol}`} className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
+                      <span data-testid={`capital-inflow-stable-badge-${item.symbol}`} className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
                       <span>
-                        主买 {row.volumeFunds.activeFunds.buyRatioPct == null
+                        资金流入 {row.volumeFunds.capitalInflow.inflowRatioPct == null
                           ? '未确认'
-                          : `${row.volumeFunds.activeFunds.buyRatioPct.toFixed(0)}%`}
+                          : `${row.volumeFunds.capitalInflow.inflowRatioPct.toFixed(0)}%`}
                       </span>
                       <span data-testid={`depth-pressure-live-badge-${item.symbol}`} className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
                       <span>{compactPercent('五档', row.volumeFunds.depthPressurePct)}</span>
@@ -267,10 +284,22 @@ export function DowMonitorList({
                       <span>{distancePercent('高', row.breakoutRisk.toDayHighPct)}</span>
                       <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
                       <span>{distancePercent('低', row.breakoutRisk.fromDayLowPct)}</span>
+                      <span>位置 {row.trendPosition.intradayPositionPct == null
+                        ? '--'
+                        : row.trendPosition.intradayPositionPct.toFixed(0)}</span>
                     </div>
                     <div data-testid={`breakout-risk-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span>{compactPercent('ATR14', row.breakoutRisk.atr14Pct)}</span>
-                      <span>确认 {row.breakoutRisk.confirmedTimeframes}/{row.breakoutRisk.totalTimeframes}</span>
+                      <span>{ratioText('振幅/ATR', row.breakoutRisk.dayRangeAtrRatio)}</span>
+                      <span>周期 {row.breakoutRisk.confirmedTimeframes}/{row.breakoutRisk.totalTimeframes}</span>
+                      {row.breakoutRisk.confirmationTimeframes.map(confirmation => (
+                        <span
+                          key={confirmation.timeframe}
+                          className={confirmation.confirmed ? 'text-foreground' : 'text-muted'}
+                        >
+                          {confirmation.timeframe}{confirmation.confirmed ? '✓' : '○'}
+                        </span>
+                      ))}
                       {row.breakoutRisk.riskTitle && <span>{row.breakoutRisk.riskTitle}</span>}
                     </div>
                   </td>
@@ -297,6 +326,33 @@ export function DowMonitorList({
                     ) : (
                       <span className="text-muted">{row.delayed ? '暂停新信号' : '观察'}</span>
                     )}
+                    <div
+                      data-testid={`freshness-${item.symbol}`}
+                      aria-label={[
+                        '数据时效',
+                        freshnessText('行情', row.freshness.quote),
+                        freshnessText('盘口', row.freshness.depth),
+                        freshnessText('1m K线', row.freshness.candlestick),
+                        freshnessText('分析', row.freshness.analysis),
+                      ].join('，')}
+                      className="mt-1 flex items-center gap-1 font-mono text-[9px] text-muted"
+                      title="行情、盘口、1m K线、后端分析的数据年龄"
+                    >
+                      <span>时效</span>
+                      {([
+                        ['行', row.freshness.quote],
+                        ['盘', row.freshness.depth],
+                        ['K', row.freshness.candlestick],
+                        ['析', row.freshness.analysis],
+                      ] as const).map(([label, value]) => (
+                        <span
+                          key={label}
+                          className={value.delayed ? 'text-amber-400' : undefined}
+                        >
+                          {freshnessText(label, value)}
+                        </span>
+                      ))}
+                    </div>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <button

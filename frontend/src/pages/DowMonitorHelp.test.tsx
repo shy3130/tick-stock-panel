@@ -34,9 +34,15 @@ describe('DowMonitorHelp', () => {
 
     expect(screen.getAllByText('实时').length).toBeGreaterThanOrEqual(5)
     expect(screen.getAllByText('稳').length).toBeGreaterThanOrEqual(8)
-    expect(screen.getByText(/0\/2、1\/2、2\/2/)).toBeInTheDocument()
+    expect(screen.getByText(/周期确认.*0\/2、1\/2、2\/2/)).toBeInTheDocument()
     expect(screen.getByText(/ATR14 越大表示短线波动风险越高/)).toBeInTheDocument()
     expect(screen.getByText(/五档是当前挂单结构/)).toBeInTheDocument()
+    expect(screen.getByText(/VWAP.*不是用户持仓成本/)).toBeInTheDocument()
+    expect(screen.getByText(/资金流入占比.*不是逐笔主动买入占比/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '日内位置' })).toBeInTheDocument()
+    expect(screen.getByText(/限制在0到100/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '数据时效' })).toBeInTheDocument()
+    expect(screen.getByText(/行情、盘口、1m K线和分析分别显示自己的数据年龄/)).toBeInTheDocument()
     expect(screen.getByText(/实时指标不能生成、翻转或升级正式信号/)).toBeInTheDocument()
   })
 
