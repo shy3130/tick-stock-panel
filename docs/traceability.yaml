@@ -1,5 +1,14 @@
 version: 1
 requirements:
+  - id: REQ-DOW-MONITOR-KEY-INTERPRETATION-COLUMN-001
+    specification: USER-20260730-DOW-MONITOR-KEY-INTERPRETATION-COLUMN
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/pages/DowMonitorHelp.tsx
+    tests: {path: tests/spec_contracts/test_dow_monitor_key_interpretation_column_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-key-interpretation-column.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-key-interpretation-column.md, type: independent-review}
   - id: REQ-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT-001
     specification: USER-20260730-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT
     implementation:

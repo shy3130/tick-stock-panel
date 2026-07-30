@@ -88,6 +88,11 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT-001
+  - id: USER-20260730-DOW-MONITOR-KEY-INTERPRETATION-COLUMN
+    path: docs/superpowers/specs/2026-07-30-dow-monitor-key-interpretation-column-design.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-KEY-INTERPRETATION-COLUMN-001
 conflicts: []
 authority_decisions:
   - id: DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001
