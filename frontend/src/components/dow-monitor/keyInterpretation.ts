@@ -21,6 +21,7 @@ export type InterpretationPhase =
 
 export type InterpretationScenarioId =
   | 'DATA_UNAVAILABLE'
+  | 'LIVE_WARMUP'
   | 'BREAKOUT_INVALIDATED'
   | 'BREAKDOWN_CONFIRMED'
   | 'BREAKDOWN_INVALIDATED'
@@ -215,7 +216,7 @@ function liveLowLevel(
 function dataUnavailable({
   context,
 }: KeyInterpretationInput): Candidate | null {
-  if (!context.delayed && finite(context.currentPrice)) return null
+  if (!context.realtimeDelayed && !context.delayed && finite(context.currentPrice)) return null
   return {
     scenarioId: 'DATA_UNAVAILABLE',
     category: 'DATA',
@@ -224,6 +225,52 @@ function dataUnavailable({
     explanation: '行情或K线时效不足，暂停实时机会判断',
     levels: [],
     dimensions: [],
+  }
+}
+
+function signedPercent(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+
+function liveWarmup({
+  context,
+  anomalies,
+}: KeyInterpretationInput): Candidate | null {
+  if (!context.strategyDelayed || context.realtimeDelayed || !finite(context.currentPrice)) {
+    return null
+  }
+  const momentum = context.metrics.momentum1m
+  const momentumValue = finite(momentum.valuePct) ? momentum.valuePct : null
+  const volumeSpeed = context.metrics.volumeSpeed
+  const depthPressure = context.metrics.depthPressurePct
+  const isAnomaly = anomalies.size > 0
+    || (finite(volumeSpeed) && volumeSpeed >= INTERPRETATION_THRESHOLDS.volumeRatio)
+    || (finite(depthPressure) && Math.abs(depthPressure) >= INTERPRETATION_THRESHOLDS.depthUpPct)
+  const direction = momentum.direction === 'UP'
+    ? '上行'
+    : momentum.direction === 'DOWN' ? '下行' : '波动'
+  const evidenceText = [
+    finite(momentumValue) ? `1分钟 ${signedPercent(momentumValue)}` : null,
+    finite(volumeSpeed) ? `量速 ${volumeSpeed.toFixed(2)}×` : null,
+    finite(depthPressure) ? `五档 ${depthPressure >= 0 ? '+' : ''}${depthPressure.toFixed(1)}%` : null,
+  ].filter((value): value is string => value != null)
+  return {
+    scenarioId: 'LIVE_WARMUP',
+    category: isAnomaly ? 'ANOMALY' : 'OBSERVE',
+    phase: isAnomaly ? 'ATTEMPT' : 'NONE',
+    headline: isAnomaly
+      ? `实时${finite(volumeSpeed) && volumeSpeed >= INTERPRETATION_THRESHOLDS.volumeRatio ? '放量' : ''}${direction}，周期待确认`
+      : '实时行情正常，策略仍在预热',
+    explanation: `${evidenceText.join('，') || `现价 ${formatInterpretationPrice(context.currentPrice)}`}；5m/15m与资金仍在预热，不生成正式买卖信号`,
+    levels: [
+      ...liveHighLevel(context),
+      ...liveLowLevel(context),
+    ].slice(0, 3),
+    dimensions: orderedDimensions([
+      ...(finite(momentumValue) ? ['TREND_MOMENTUM' as const] : []),
+      ...(finite(volumeSpeed) ? ['VOLUME' as const] : []),
+      ...(finite(depthPressure) ? ['DEPTH' as const] : []),
+    ]),
   }
 }
 
@@ -662,6 +709,7 @@ export function deriveKeyInterpretation(
 ): KeyInterpretation {
   const candidates: Array<Candidate | null> = [
     dataUnavailable(input),
+    liveWarmup(input),
     breakoutInvalidated(input),
     breakdownConfirmed(input),
     downsideAcceleration(input),

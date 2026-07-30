@@ -203,7 +203,7 @@ requirements:
     implementation:
       - frontend/src/components/dow-monitor/DowMonitorDetailDialog.tsx
     tests:
-      - {path: frontend/src/components/dow-monitor/DowMonitorDetailDialog.test.tsx, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_presentation_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-detail-toggle-layout.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-detail-toggle-layout.md, type: independent-review}
@@ -407,3 +407,13 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-minute-results-clickhouse.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-minute-results-clickhouse.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION-001
+    specification: USER-20260730-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION
+    implementation:
+      - frontend/src/components/dow-monitor/interpretationMarketContext.ts
+      - frontend/src/components/dow-monitor/keyInterpretation.ts
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_live_warmup_interpretation_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-live-warmup-interpretation.md, type: semantic-acceptance}
+      - {path: docs/reviews/dow-monitor-live-warmup-interpretation.md, type: independent-review}

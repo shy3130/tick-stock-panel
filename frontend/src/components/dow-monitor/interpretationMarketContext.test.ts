@@ -295,6 +295,37 @@ describe('interpretation market context', () => {
     expect(context.delayed).toBe(true)
   })
 
+  it('keeps fresh websocket price visible while strategy history is warming up', () => {
+    const context = deriveInterpretationMarketContext({
+      item: itemFixture({
+        states: {},
+        minute_decision: undefined,
+        intraday_capital: undefined,
+      }),
+      row: rowFixture({
+        delayed: true,
+        price: 99,
+      }),
+      realtime: realtimeFixture({
+        quote: {
+          lastDone: 101,
+          prevClose: 100,
+          high: 102,
+          low: 98,
+          timestamp: '2026-07-30T10:45:30+08:00',
+        },
+        quoteDelayed: false,
+        candlestickDelayed: false,
+      }),
+    })
+
+    expect(context.currentPrice).toBe(101)
+    expect(context.liveDayHigh).toBe(102)
+    expect(context.liveDayLow).toBe(98)
+    expect(context.strategyDelayed).toBe(true)
+    expect(context.realtimeDelayed).toBe(false)
+  })
+
   it('applies evidence thresholds at their exact boundaries', () => {
     const context = deriveInterpretationMarketContext({
       item: itemFixture(),

@@ -68,6 +68,8 @@ function contextFixture(
       atr14Pct: 1,
     },
     evidence: evidenceFixture(),
+    strategyDelayed: false,
+    realtimeDelayed: false,
     delayed: false,
     ...overrides,
   }
@@ -328,6 +330,53 @@ describe('key interpretation scenarios', () => {
       context: contextFixture(),
       anomalies: new Set(),
     }))
+  })
+
+  it('explains fresh realtime movement while completed strategy history is warming up', () => {
+    const warmup = interpretation({
+      ...contextFixture({
+        currentPrice: 101,
+        liveDayHigh: 102,
+        liveDayLow: 98,
+        referenceDayHigh: null,
+        referenceDayLow: null,
+        confirmationReferenceDayHigh: null,
+        confirmationReferenceDayLow: null,
+        priorConfirmationReferenceDayHigh: null,
+        priorConfirmationReferenceDayLow: null,
+        attemptRange60m: null,
+        confirmationRange60m: null,
+        priorConfirmationRange60m: null,
+        latestCompleted5mClose: null,
+        previousCompleted5mClose: null,
+        metrics: {
+          ...contextFixture().metrics,
+          momentum1m: { direction: 'UP', valuePct: 1 },
+          momentum5m: { direction: 'UNKNOWN', valuePct: null },
+          momentum15m: { direction: 'UNKNOWN', valuePct: null },
+          volumeSpeed: 2.4,
+          capitalInflowPct: null,
+          depthPressurePct: 30,
+        },
+      }),
+      strategyDelayed: true,
+      realtimeDelayed: false,
+    } as InterpretationMarketContext, ['volumeSpeed'])
+
+    expect(warmup).toMatchObject({
+      scenarioId: 'LIVE_WARMUP',
+      category: 'ANOMALY',
+      phase: 'ATTEMPT',
+      headline: '实时放量上行，周期待确认',
+    })
+    expect(warmup.explanation).toContain('1分钟 +1.00%')
+    expect(warmup.explanation).toContain('量速 2.40×')
+    expect(warmup.explanation).toContain('五档 +30.0%')
+    expect(warmup.explanation).toContain('5m/15m与资金仍在预热')
+    expect(warmup.levels).toEqual([
+      { label: '日高', price: 102, basis: 'LIVE_DAY_HIGH' },
+      { label: '日低', price: 98, basis: 'LIVE_DAY_LOW' },
+    ])
   })
 
   it('formats decision prices with two to four decimals without grouping', () => {

@@ -87,6 +87,8 @@ export interface InterpretationMarketContext {
   } | null
   metrics: InterpretationMarketMetrics
   evidence: Record<EvidenceDimension, InterpretationEvidence>
+  strategyDelayed: boolean
+  realtimeDelayed: boolean
   delayed: boolean
 }
 
@@ -299,17 +301,23 @@ export function deriveInterpretationMarketContext({
   const attemptDay = highLow(sameDayBars)
   const confirmationDay = highLow(sameDayBars.slice(0, -1))
   const priorConfirmationDay = highLow(sameDayBars.slice(0, -2))
-  const delayed = Boolean(
-    row.delayed
-    || realtime?.quoteDelayed
+  const realtimeDelayed = Boolean(
+    realtime?.quoteDelayed
     || realtime?.candlestickDelayed
     || row.freshness.quote.delayed
     || row.freshness.candlestick.delayed,
   )
+  const strategyDelayed = Boolean(
+    row.delayed
+    || row.freshness.analysis.delayed,
+  )
+  const delayed = realtimeDelayed
   const realtimePrice = realtime?.quote?.lastDone
   const currentPrice = delayed
     ? null
-    : finite(realtimePrice) ? realtimePrice : finite(row.price) ? row.price : null
+    : finite(realtimePrice)
+      ? realtimePrice
+      : !strategyDelayed && finite(row.price) ? row.price : null
   const quote = realtime?.quote
   const liveDayHigh = !delayed && finite(quote?.high) ? quote.high : null
   const liveDayLow = !delayed && finite(quote?.low) ? quote.low : null
@@ -338,7 +346,7 @@ export function deriveInterpretationMarketContext({
     latestCompleted5mClose: sameDayBars.at(-1)?.close ?? null,
     previousCompleted5mClose: sameDayBars.at(-2)?.close ?? null,
     vwap,
-    controlLine: delayed ? null : stableControlLine(item),
+    controlLine: delayed || strategyDelayed ? null : stableControlLine(item),
     metrics: {
       changePct: row.changePct,
       intradayPositionPct: row.trendPosition.intradayPositionPct,
@@ -357,6 +365,8 @@ export function deriveInterpretationMarketContext({
       fromDayLowPct: delayed ? null : row.breakoutRisk.fromDayLowPct,
       atr14Pct: row.breakoutRisk.atr14Pct,
     },
+    strategyDelayed,
+    realtimeDelayed,
     delayed,
   }
   return {

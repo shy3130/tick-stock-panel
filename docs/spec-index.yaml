@@ -93,6 +93,11 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-MONITOR-KEY-INTERPRETATION-COLUMN-001
+  - id: USER-20260730-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION
+    path: docs/specs/dow-monitor-live-warmup-interpretation.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION-001
 conflicts: []
 authority_decisions:
   - id: DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001
@@ -101,14 +106,4 @@ authority_decisions:
       - REQ-DOW-MONITOR-STABLE-DECISION-METRICS-001
     decision: docs/decisions/2026-07-29-dow-monitor-control-fallback.md
     approval: explicit user ruling on 2026-07-29
-exceptions:
-  - id: EXC-COLLECTION-MONITOR-PREACCEPTANCE-DEPLOY-001
-    scope: observation-only deployment before Monday live semantic acceptance
-    owner: user
-    reason: deploy the read-only page before live trading data is available
-    approval: explicit user directive on 2026-07-26
-    expires: 2026-07-28
-    constraints:
-      - no notifications or actions
-      - no collector or schedule mutation
-      - no claim of live semantic acceptance
+exceptions: []
