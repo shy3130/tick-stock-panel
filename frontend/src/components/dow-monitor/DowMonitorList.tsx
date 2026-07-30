@@ -1,5 +1,5 @@
 import { Pause, Play, Trash2 } from 'lucide-react'
-import type { KeyboardEvent, MouseEvent } from 'react'
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react'
 
 import type { RealtimeSymbolState } from '@/lib/realtimeMarketData'
 import { cn } from '@/lib/cn'
@@ -16,6 +16,12 @@ import type {
   DowMonitorOverviewSymbol,
 } from './types'
 import { formatServerTimestamp } from './formatServerTimestamp'
+import {
+  suddenAnomalyKey,
+  type SuddenAnomalyMetric,
+  type SuddenAnomalySymbolReading,
+} from './suddenAnomalyHighlights'
+import { useSuddenAnomalyHighlights } from './useSuddenAnomalyHighlights'
 
 function numberText(value: number | null, digits = 2): string {
   return value == null ? '--' : value.toFixed(digits)
@@ -73,6 +79,37 @@ function stop(event: MouseEvent<HTMLButtonElement>) {
   event.stopPropagation()
 }
 
+function AnomalyMetric({
+  active,
+  metric,
+  symbol,
+  label,
+  className,
+  children,
+}: {
+  active: boolean
+  metric: SuddenAnomalyMetric
+  symbol: string
+  label: string
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <span
+      data-testid={`anomaly-${metric}-${symbol}`}
+      aria-label={active ? `${label}，突发异动` : label}
+      className={cn(
+        'inline-flex items-center gap-1',
+        className,
+        active && 'rounded border border-danger bg-danger/10 px-1 py-0.5 text-danger',
+      )}
+    >
+      {children}
+      {active && <span className="text-[9px] font-semibold">异动</span>}
+    </span>
+  )
+}
+
 export function DowMonitorList({
   items,
   notifications,
@@ -116,6 +153,56 @@ export function DowMonitorList({
     onSelect(symbol)
   }
 
+  const presentedItems = items.map(item => {
+    const realtime = realtimeStates.get(item.symbol.toUpperCase())
+    const itemNotifications = notifications.filter(
+      notification => notification.symbol === item.symbol,
+    )
+    const derived = deriveMonitorRow(item, itemNotifications, realtime, nowMs)
+    const row = {
+      ...derived,
+      delayed: forceDelayed || derived.delayed,
+      signal: forceDelayed && derived.signal?.level !== 'CONFIRMED'
+        ? null
+        : derived.signal,
+    }
+    return { item, row }
+  })
+  const anomalyReadings: SuddenAnomalySymbolReading[] = presentedItems.map(
+    ({ item, row }) => ({
+      symbol: item.symbol,
+      metrics: {
+        changePct: {
+          value: row.changePct,
+          delayed: forceDelayed || row.freshness.quote.delayed,
+        },
+        momentum1m: {
+          value: row.momentumSpeed.momentum1m.valuePct,
+          delayed: forceDelayed || row.freshness.candlestick.delayed,
+        },
+        volumeSpeed: {
+          value: row.volumeFunds.volumeSpeed,
+          delayed: forceDelayed || row.freshness.candlestick.delayed,
+        },
+        depthPressurePct: {
+          value: row.volumeFunds.depthPressurePct,
+          delayed: forceDelayed || row.freshness.depth.delayed,
+        },
+        toDayHighPct: {
+          value: row.breakoutRisk.toDayHighPct,
+          delayed: forceDelayed || row.freshness.quote.delayed,
+        },
+        fromDayLowPct: {
+          value: row.breakoutRisk.fromDayLowPct,
+          delayed: forceDelayed || row.freshness.quote.delayed,
+        },
+      },
+    }),
+  )
+  const anomalyHighlights = useSuddenAnomalyHighlights(anomalyReadings)
+  const isAnomaly = (symbol: string, metric: SuddenAnomalyMetric) =>
+    anomalyHighlights.has(suddenAnomalyKey(symbol, metric))
+
   return (
     <section aria-label="股票监控列表" className="overflow-hidden rounded-card border border-border bg-surface">
       <div data-testid="dow-monitor-table-scroll" className="max-w-full overflow-x-auto">
@@ -146,19 +233,7 @@ export function DowMonitorList({
             </tr>
           </thead>
           <tbody>
-            {items.map(item => {
-              const realtime = realtimeStates.get(item.symbol.toUpperCase())
-              const itemNotifications = notifications.filter(
-                notification => notification.symbol === item.symbol,
-              )
-              const derived = deriveMonitorRow(item, itemNotifications, realtime, nowMs)
-              const row = {
-                ...derived,
-                delayed: forceDelayed || derived.delayed,
-                signal: forceDelayed && derived.signal?.level !== 'CONFIRMED'
-                  ? null
-                  : derived.signal,
-              }
+            {presentedItems.map(({ item, row }) => {
               const selected = selectedSymbol === item.symbol
               const positive = (row.changePct ?? 0) >= 0
               return (
@@ -215,7 +290,14 @@ export function DowMonitorList({
                       {numberText(row.price)}
                     </div>
                     <div className={positive ? 'text-danger' : 'text-emerald-400'}>
-                      {percentText(row.changePct)}
+                      <AnomalyMetric
+                        active={isAnomaly(item.symbol, 'changePct')}
+                        metric="changePct"
+                        symbol={item.symbol}
+                        label={`涨跌幅 ${percentText(row.changePct)}`}
+                      >
+                        {percentText(row.changePct)}
+                      </AnomalyMetric>
                     </div>
                   </td>
                   <td className="px-3 py-2">
@@ -245,7 +327,15 @@ export function DowMonitorList({
                   <td data-testid={`momentum-speed-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
                     <div data-testid={`momentum-speed-primary-row-${item.symbol}`} className="flex items-center gap-2">
                       <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
-                      <strong>1m {momentumText(row.momentumSpeed.momentum1m)}</strong>
+                      <AnomalyMetric
+                        active={isAnomaly(item.symbol, 'momentum1m')}
+                        metric="momentum1m"
+                        symbol={item.symbol}
+                        label={`1m 涨速 ${momentumText(row.momentumSpeed.momentum1m)}`}
+                        className="font-semibold"
+                      >
+                        1m {momentumText(row.momentumSpeed.momentum1m)}
+                      </AnomalyMetric>
                     </div>
                     <div data-testid={`momentum-speed-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span>5m {momentumText(row.momentumSpeed.momentum5m)}</span>
@@ -261,11 +351,16 @@ export function DowMonitorList({
                           : '--'}
                       </strong>
                       <span data-testid={`volume-speed-live-badge-${item.symbol}`} className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
-                      <span>
+                      <AnomalyMetric
+                        active={isAnomaly(item.symbol, 'volumeSpeed')}
+                        metric="volumeSpeed"
+                        symbol={item.symbol}
+                        label={`1m 量速 ${ratioText('', row.volumeFunds.volumeSpeed).trim()}`}
+                      >
                         量速 {row.volumeFunds.volumeSpeed == null
                           ? '--'
                           : `${row.volumeFunds.volumeSpeed.toFixed(2)}×`}
-                      </span>
+                      </AnomalyMetric>
                     </div>
                     <div data-testid={`volume-funds-secondary-row-${item.symbol}`} className="mt-1 flex items-center gap-2 font-mono text-[10px] text-muted">
                       <span data-testid={`capital-inflow-stable-badge-${item.symbol}`} className="rounded border border-border px-1 text-[9px] text-muted">稳</span>
@@ -275,15 +370,36 @@ export function DowMonitorList({
                           : `${row.volumeFunds.capitalInflow.inflowRatioPct.toFixed(0)}%`}
                       </span>
                       <span data-testid={`depth-pressure-live-badge-${item.symbol}`} className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
-                      <span>{compactPercent('五档', row.volumeFunds.depthPressurePct)}</span>
+                      <AnomalyMetric
+                        active={isAnomaly(item.symbol, 'depthPressurePct')}
+                        metric="depthPressurePct"
+                        symbol={item.symbol}
+                        label={`五档盘口 ${percentText(row.volumeFunds.depthPressurePct)}`}
+                      >
+                        {compactPercent('五档', row.volumeFunds.depthPressurePct)}
+                      </AnomalyMetric>
                     </div>
                   </td>
                   <td data-testid={`breakout-risk-${item.symbol}`} className="whitespace-nowrap px-3 py-2">
                     <div data-testid={`breakout-risk-primary-row-${item.symbol}`} className="flex items-center gap-2">
                       <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
-                      <span>{distancePercent('高', row.breakoutRisk.toDayHighPct)}</span>
+                      <AnomalyMetric
+                        active={isAnomaly(item.symbol, 'toDayHighPct')}
+                        metric="toDayHighPct"
+                        symbol={item.symbol}
+                        label={`距日高 ${numberText(row.breakoutRisk.toDayHighPct)}%`}
+                      >
+                        {distancePercent('高', row.breakoutRisk.toDayHighPct)}
+                      </AnomalyMetric>
                       <span className="rounded border border-cyan-400/20 px-1 text-[9px] text-cyan-300">实时</span>
-                      <span>{distancePercent('低', row.breakoutRisk.fromDayLowPct)}</span>
+                      <AnomalyMetric
+                        active={isAnomaly(item.symbol, 'fromDayLowPct')}
+                        metric="fromDayLowPct"
+                        symbol={item.symbol}
+                        label={`距日低 ${numberText(row.breakoutRisk.fromDayLowPct)}%`}
+                      >
+                        {distancePercent('低', row.breakoutRisk.fromDayLowPct)}
+                      </AnomalyMetric>
                       <span>位置 {row.trendPosition.intradayPositionPct == null
                         ? '--'
                         : row.trendPosition.intradayPositionPct.toFixed(0)}</span>

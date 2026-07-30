@@ -87,6 +87,86 @@ function item(
   }
 }
 
+function anomalyItem(): DowMonitorOverviewSymbol {
+  const base = item()
+  const fiveMinute = base.states['5m']!
+  return {
+    ...base,
+    last_price: 100,
+    states: {
+      ...base.states,
+      '5m': {
+        ...fiveMinute,
+        chart: {
+          bars: Array.from({ length: 12 }, (_, index) => ({
+            index,
+            timestamp: `2026-07-29T${String(8 + Math.floor((40 + index * 5) / 60)).padStart(2, '0')}:${String((40 + index * 5) % 60).padStart(2, '0')}:00+08:00`,
+            open: 100,
+            high: 101,
+            low: 99,
+            close: 100,
+            volume: 500,
+          })),
+        },
+      },
+    },
+  }
+}
+
+function anomalyRealtime({
+  lastDone = 100,
+  high = 102,
+  low = 98,
+  candleClose = 100,
+  candleVolume = 50,
+  bidVolume = 100,
+  askVolume = 100,
+  quoteDelayed = false,
+  candlestickDelayed = false,
+  depthDelayed = false,
+}: {
+  lastDone?: number
+  high?: number
+  low?: number
+  candleClose?: number
+  candleVolume?: number
+  bidVolume?: number
+  askVolume?: number
+  quoteDelayed?: boolean
+  candlestickDelayed?: boolean
+  depthDelayed?: boolean
+} = {}): RealtimeSymbolState {
+  return {
+    symbol: '700.HK',
+    streamId: 'anomaly-stream',
+    sequence: 1,
+    eventAt: '2026-07-29T09:35:30+08:00',
+    publishedAt: '2026-07-29T09:35:30+08:00',
+    quote: {
+      lastDone,
+      prevClose: 100,
+      high,
+      low,
+      timestamp: '2026-07-29T09:35:30+08:00',
+    },
+    depth: {
+      bids: [{ position: 1, price: 99.9, volume: bidVolume }],
+      asks: [{ position: 1, price: 100.1, volume: askVolume }],
+      timestamp: '2026-07-29T09:35:30+08:00',
+    },
+    candlestick: {
+      period: 'min_1',
+      timestamp: '2026-07-29T09:35:00+08:00',
+      open: 100,
+      close: candleClose,
+      volume: candleVolume,
+    },
+    quoteDelayed,
+    depthDelayed,
+    candlestickDelayed,
+  }
+}
+
 describe('DowMonitorList', () => {
   it('renders the nine grouped indicator column headers', () => {
     render(
@@ -339,6 +419,122 @@ describe('DowMonitorList', () => {
     for (const group of ['trend-position', 'momentum-speed', 'volume-funds', 'breakout-risk']) {
       expect(screen.getByTestId(`${group}-700.HK`)).not.toHaveTextContent(/(?:\+|-)?0(?:\.0+)?[%×]/)
     }
+  })
+
+  it('highlights only six suddenly changed metric values and keeps the formal signal', () => {
+    const monitorItem = anomalyItem()
+    const initialRealtime = anomalyRealtime()
+    const changedRealtime = anomalyRealtime({
+      lastDone: 100.5,
+      high: 102,
+      low: 97.5,
+      candleClose: 100.4,
+      candleVolume: 100,
+      bidVolume: 140,
+      askVolume: 60,
+    })
+    const props = {
+      items: [monitorItem],
+      notifications: [],
+      selectedSymbol: null,
+      page: 1,
+      pageCount: 1,
+      total: 1,
+      nowMs: Date.parse('2026-07-29T09:35:30+08:00'),
+      onPageChange: vi.fn(),
+      onSelect: vi.fn(),
+      onToggle: vi.fn(),
+      onRemove: vi.fn(),
+    }
+    const { rerender } = render(
+      <DowMonitorList
+        {...props}
+        realtimeStates={new Map([['700.HK', initialRealtime]])}
+      />,
+    )
+
+    expect(screen.queryByText('异动')).not.toBeInTheDocument()
+
+    rerender(
+      <DowMonitorList
+        {...props}
+        realtimeStates={new Map([['700.HK', changedRealtime]])}
+      />,
+    )
+
+    for (const [metric, label] of [
+      ['changePct', '涨跌幅'],
+      ['momentum1m', '1m 涨速'],
+      ['volumeSpeed', '1m 量速'],
+      ['depthPressurePct', '五档盘口'],
+      ['toDayHighPct', '距日高'],
+      ['fromDayLowPct', '距日低'],
+    ]) {
+      const highlight = screen.getByTestId(`anomaly-${metric}-700.HK`)
+      expect(highlight).toHaveClass('border-danger', 'bg-danger/10', 'text-danger')
+      expect(highlight).toHaveAccessibleName(new RegExp(`${label}.*突发异动`))
+    }
+    expect(screen.getAllByText('异动')).toHaveLength(6)
+    expect(screen.getByRole('row', { name: /腾讯控股/ })).not.toHaveClass('bg-danger/10')
+    for (const group of ['momentum-speed', 'volume-funds', 'breakout-risk']) {
+      expect(screen.getByTestId(`${group}-700.HK`)).not.toHaveClass('bg-danger/10')
+    }
+    expect(screen.getByText('买入确认')).toBeInTheDocument()
+    expect(screen.getByText('北京时间 09:34')).toBeInTheDocument()
+  })
+
+  it('does not highlight delayed changes or the first recovered values', () => {
+    const monitorItem = anomalyItem()
+    const props = {
+      items: [monitorItem],
+      notifications: [],
+      selectedSymbol: null,
+      page: 1,
+      pageCount: 1,
+      total: 1,
+      nowMs: Date.parse('2026-07-29T09:35:30+08:00'),
+      onPageChange: vi.fn(),
+      onSelect: vi.fn(),
+      onToggle: vi.fn(),
+      onRemove: vi.fn(),
+    }
+    const changed = {
+      lastDone: 101,
+      high: 102,
+      low: 97,
+      candleClose: 101,
+      candleVolume: 150,
+      bidVolume: 180,
+      askVolume: 20,
+    }
+    const { rerender } = render(
+      <DowMonitorList
+        {...props}
+        realtimeStates={new Map([['700.HK', anomalyRealtime()]])}
+      />,
+    )
+
+    rerender(
+      <DowMonitorList
+        {...props}
+        realtimeStates={new Map([['700.HK', anomalyRealtime({
+          ...changed,
+          quoteDelayed: true,
+          candlestickDelayed: true,
+          depthDelayed: true,
+        })]])}
+      />,
+    )
+    expect(screen.queryByText('异动')).not.toBeInTheDocument()
+
+    rerender(
+      <DowMonitorList
+        {...props}
+        realtimeStates={new Map([['700.HK', anomalyRealtime(changed)]])}
+      />,
+    )
+    expect(screen.queryByText('异动')).not.toBeInTheDocument()
+    expect(screen.getByText('买入确认')).toBeInTheDocument()
   })
 
   it('renders every signal occurrence in Beijing time', () => {
