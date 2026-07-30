@@ -3,6 +3,7 @@ requirements:
   - id: REQ-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT-001
     specification: USER-20260730-DOW-MONITOR-SUDDEN-ANOMALY-HIGHLIGHT
     implementation:
+      - frontend/src/components/dow-monitor/suddenAnomalyHighlights.ts
       - frontend/src/components/dow-monitor/DowMonitorList.tsx
       - frontend/src/pages/DowMonitorHelp.tsx
     tests: {path: tests/spec_contracts/test_dow_monitor_sudden_anomaly_highlight_contract.py, type: executable-test}
