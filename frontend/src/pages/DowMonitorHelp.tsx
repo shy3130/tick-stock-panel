@@ -28,6 +28,7 @@ const SECTIONS = [
   { id: 'momentum-speed', label: '动能 / 涨速' },
   { id: 'volume-funds', label: '量价 / 资金' },
   { id: 'breakout-risk', label: '突破 / 风险' },
+  { id: 'sudden-anomaly', label: '突发异动高亮' },
   { id: 'scenarios', label: '典型组合场景' },
   { id: 'quick-reference', label: '指标速查表' },
 ] as const
@@ -382,6 +383,48 @@ export function DowMonitorHelp() {
                   reading="行、盘、K、析后的秒数越小，表示对应证据越接近当前时间。"
                   caution="源时间缺失显示--；延迟标记或超过90秒时自动弱化，但不会清除正式信号。"
                 />
+              </div>
+            </GuideSection>
+
+            <GuideSection
+              id="sudden-anomaly"
+              title="突发异动高亮"
+              question="回答：哪个实时数字刚刚发生了足够大的跳变，需要优先检查？"
+              icon={<Activity className="h-4.5 w-4.5" aria-hidden="true" />}
+            >
+              <div className="rounded-lg border border-danger/30 bg-danger/5 p-3.5">
+                <p className="text-sm font-semibold text-foreground">
+                  红色“异动”只标记发生跳变的具体数字，高亮持续 10 秒。
+                </p>
+                <p className="mt-2 text-xs leading-5 text-muted">
+                  它比较同一只股票相邻两次有效数据的绝对变化；达到或超过阈值后触发。
+                  高亮期间再次发生达标跳变，会重新计时 10 秒。
+                </p>
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {[
+                  ['涨跌幅 0.50 个百分点', '例如从 +1.20% 变为 +1.70%，或从 -0.30% 变为 -0.80%。'],
+                  ['1m 涨速 0.40 个百分点', '观察当前分钟价格动能是否突然加速或转弱。'],
+                  ['量速 1.00 倍', '观察当前分钟成交速度是否突然放大或收缩。'],
+                  ['五档盘口 40 个百分点', '观察买卖五档压力差是否快速翻转或明显跳变。'],
+                  ['距日高/日低 0.50 个百分点', '观察价格与日内关键高低点的距离是否快速变化。'],
+                ].map(([threshold, explanation]) => (
+                  <article key={threshold} className="rounded-lg border border-border bg-elevated/40 p-3.5">
+                    <h3 className="text-sm font-semibold text-foreground">{threshold}</h3>
+                    <p className="mt-2 text-xs leading-5 text-muted">{explanation}</p>
+                  </article>
+                ))}
+              </div>
+
+              <div className="mt-3 rounded-lg border border-warning/30 bg-warning/5 p-3.5 text-xs leading-5 text-muted">
+                <p>
+                  首次取得有效值只建立比较基线，不触发异动；数据缺失、无效或延迟时会清除基线和高亮，
+                  恢复后的第一个有效值也只建立新基线。
+                </p>
+                <p className="mt-2 font-medium text-foreground">
+                  突发异动仅作观察和排序提醒，不改变买卖信号，也不代表上涨或下跌方向。
+                </p>
               </div>
             </GuideSection>
 

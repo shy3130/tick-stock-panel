@@ -26,6 +26,7 @@ describe('DowMonitorHelp', () => {
       '动能 / 涨速',
       '量价 / 资金',
       '突破 / 风险',
+      '突发异动高亮',
       '典型组合场景',
       '指标速查表',
     ]) {
@@ -44,6 +45,13 @@ describe('DowMonitorHelp', () => {
     expect(screen.getByRole('heading', { name: '数据时效' })).toBeInTheDocument()
     expect(screen.getByText(/行情、盘口、1m K线和分析分别显示自己的数据年龄/)).toBeInTheDocument()
     expect(screen.getByText(/实时指标不能生成、翻转或升级正式信号/)).toBeInTheDocument()
+    expect(screen.getByText(/涨跌幅 0.50 个百分点/)).toBeInTheDocument()
+    expect(screen.getByText(/1m 涨速 0.40 个百分点/)).toBeInTheDocument()
+    expect(screen.getByText(/量速 1.00 倍/)).toBeInTheDocument()
+    expect(screen.getByText(/五档盘口 40 个百分点/)).toBeInTheDocument()
+    expect(screen.getByText(/距日高\/日低 0.50 个百分点/)).toBeInTheDocument()
+    expect(screen.getByText(/高亮持续 10 秒/)).toBeInTheDocument()
+    expect(screen.getByText(/仅作观察.*不改变买卖信号/)).toBeInTheDocument()
   })
 
   it('falls back invalid markets to hk and exposes keyboard-friendly section links', () => {
@@ -57,6 +65,8 @@ describe('DowMonitorHelp', () => {
       .toHaveAttribute('href', '#trend-position')
     expect(within(navigation).getByRole('link', { name: '突破 / 风险' }))
       .toHaveAttribute('href', '#breakout-risk')
+    expect(within(navigation).getByRole('link', { name: '突发异动高亮' }))
+      .toHaveAttribute('href', '#sudden-anomaly')
     expect(screen.getByTestId('indicator-reference-scroll')).toHaveClass('overflow-x-auto')
     expect(screen.getByTestId('dow-monitor-help-page')).toHaveClass('overflow-x-clip')
   })
