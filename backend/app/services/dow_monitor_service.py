@@ -556,10 +556,11 @@ class DowMonitorService:
         async def evaluate_one(
             item: MonitoredSymbol,
         ) -> tuple[MonitoredSymbol, str | None, bool]:
+            item_identity = _monitor_symbol_identity(item.symbol)
             symbol_notification_index = {
                 key: list(values)
                 for key, values in notification_index.items()
-                if key[0] == item.symbol
+                if key[0] == item_identity
             }
             try:
                 async with semaphore:
@@ -664,7 +665,8 @@ class DowMonitorService:
         previous_states = {
             state.timeframe: state
             for state in self.store.list_states()
-            if state.symbol == item.symbol
+            if _monitor_symbol_identity(state.symbol)
+            == _monitor_symbol_identity(item.symbol)
         }
         latest = self._latest_completed_minute(item, batch.minute_rows, now)
         due_timeframes = (
@@ -888,7 +890,10 @@ class DowMonitorService:
                     ),
                 )
                 if self.store.append_notification(notification):
-                    notification_index.setdefault((item.symbol, timeframe), []).append(notification)
+                    notification_index.setdefault(
+                        (_monitor_symbol_identity(item.symbol), timeframe),
+                        [],
+                    ).append(notification)
 
         self.store.save_state(
             DowTimeframeState(
@@ -1039,7 +1044,10 @@ class DowMonitorService:
     ) -> ActivationState | None:
         if family is None or structure_id is None:
             return None
-        for notification in notification_index.get((symbol, timeframe), []):
+        for notification in notification_index.get(
+            (_monitor_symbol_identity(symbol), timeframe),
+            [],
+        ):
             activation = notification.snapshot_payload.get("activation")
             notification_family = activation.get("family") if isinstance(activation, dict) else None
             notification_structure = (
@@ -1102,7 +1110,10 @@ class DowMonitorService:
         long_term: bool = False,
     ) -> int:
         maximum = 0
-        for notification in notification_index.get((symbol, timeframe), []):
+        for notification in notification_index.get(
+            (_monitor_symbol_identity(symbol), timeframe),
+            [],
+        ):
             activation = notification.snapshot_payload.get("activation")
             family = activation.get("family") if isinstance(activation, dict) else None
             if not isinstance(family, str):
@@ -1125,7 +1136,13 @@ class DowMonitorService:
     def _load_notification_index(self) -> NotificationIndex:
         index: NotificationIndex = {}
         for notification in self.store.list_notifications(limit=1_000_000):
-            index.setdefault((notification.symbol, notification.timeframe), []).append(notification)
+            index.setdefault(
+                (
+                    _monitor_symbol_identity(notification.symbol),
+                    notification.timeframe,
+                ),
+                [],
+            ).append(notification)
         return index
 
     def _fetch_plan(
@@ -1168,10 +1185,11 @@ class DowMonitorService:
             return pl.DataFrame()
         combined = pl.concat(available, how="diagonal_relaxed")
         zone = ZoneInfo(market_session_policy(item.symbol).timezone)
+        identity = _monitor_symbol_identity(item.symbol)
         deduplicated: dict[tuple[str, datetime], dict] = {}
         for row in combined.to_dicts():
             symbol = str(row.get("symbol") or "").strip().upper()
-            if symbol != item.symbol:
+            if _monitor_symbol_identity(symbol) != identity:
                 continue
             value = row.get("datetime")
             if value is None:
@@ -1182,7 +1200,7 @@ class DowMonitorService:
                 if parsed.tzinfo is not None
                 else parsed
             )
-            deduplicated[(symbol, local)] = row
+            deduplicated[(identity, local)] = row
         if not deduplicated:
             return combined.head(0)
         return pl.DataFrame(list(deduplicated.values()), schema=combined.schema)
@@ -1197,10 +1215,14 @@ class DowMonitorService:
             return minute_rows
 
         zone = ZoneInfo(market_session_policy(item.symbol).timezone)
+        identity = _monitor_symbol_identity(item.symbol)
         reliable_local = reliable.astimezone(zone).replace(tzinfo=None)
         rows = []
         for row in minute_rows.to_dicts():
-            if str(row.get("symbol") or "").strip().upper() != item.symbol:
+            if (
+                _monitor_symbol_identity(row.get("symbol") or "")
+                != identity
+            ):
                 continue
             value = row.get("datetime")
             if value is None:

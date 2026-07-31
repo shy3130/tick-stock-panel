@@ -48,3 +48,19 @@ Pure Python work and third-party networking cannot be forcibly preempted at the 
 ## Final disposition
 
 The production code satisfies the five active requirements and is acceptable for candidate deployment. Production status must not be marked passed until the 10.28 candidate and switched 3018 service complete the runbook acceptance checks without restarting 19912, the market WebSocket service, or the standalone AI worker.
+
+## Supplemental review gate: HK display aliases
+
+The first 10.28 candidate correctly failed the cycle-duration acceptance gate and was rolled back.
+The follow-up change treats padded and unpadded HK symbols as one semantic stock when loading,
+saving and removing timeframe state, selecting previous states and minute rows, and indexing
+notifications. Two executable regressions cover canonical-state reuse and the absence of false
+cold-start evaluation. Independent review disposition and final production evidence must be added
+before this supplemental gate is marked passed.
+
+Supplemental independent review result: `P0=0`, `P1=0`, `P2=0`; approved for
+candidate deployment. The reviewer independently covered store removal,
+notification isolation, non-HK behavior, and the non-collision of `00981.HK`
+with `09981.HK`, in addition to the two production-root-cause regressions.
+Production acceptance remains gated on the ten-cycle candidate and switched
+3018 observations.

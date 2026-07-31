@@ -53,6 +53,80 @@ def test_non_boundary_minute_reuses_all_live_timeframe_states() -> None:
     assert due_timeframes_for_minute("01347.HK", source, previous) == ()
 
 
+def test_hk_display_alias_reuses_canonical_persisted_state(tmp_path) -> None:
+    store = DowMonitorStore(tmp_path)
+    source = datetime(2026, 7, 31, 14, 40, tzinfo=HONG_KONG)
+    canonical = _state("981.HK", "5m", source)
+    store.save_state(canonical)
+
+    assert store.get_state("00981.HK", "5m") == canonical
+
+    displayed = canonical.model_copy(update={"symbol": "00981.HK"})
+    store.save_state(displayed)
+
+    assert store.get_state("981.HK", "5m") == displayed
+    assert store.list_states() == [displayed]
+
+
+def test_hk_display_alias_is_not_reclassified_as_cold_or_reevaluated(
+    tmp_path,
+) -> None:
+    store = DowMonitorStore(tmp_path)
+    item = store.upsert_symbol("00981.HK", "hk", True)
+    source = datetime(2026, 7, 31, 14, 41, tzinfo=HONG_KONG)
+    previous_source = source.replace(minute=40)
+    for timeframe in TIMEFRAMES:
+        store.save_state(_state("981.HK", timeframe, previous_source))
+    service = DowMonitorService(
+        store,
+        object(),
+        object(),
+        lambda *_args: pl.DataFrame(),
+        now_fn=lambda: source + timedelta(minutes=1, seconds=10),
+    )
+
+    starts, cold = service._fetch_plan(
+        [item],
+        source + timedelta(minutes=1, seconds=10),
+    )
+
+    assert cold == set()
+    assert starts == {item.symbol: previous_source}
+
+    batch = SimpleNamespace(
+        minute_rows=pl.DataFrame(
+            [
+                {
+                    "symbol": "981.HK",
+                    "datetime": source,
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1_000.0,
+                }
+            ]
+        ),
+        freshness_by_symbol={
+            item.symbol: SymbolFreshness(state="LIVE", reason=None)
+        },
+    )
+
+    error, ready = service._evaluate_symbol(
+        item,
+        batch,
+        source + timedelta(minutes=1, seconds=10),
+        {},
+        False,
+        pl.DataFrame(),
+    )
+
+    assert error is None
+    assert ready is True
+    assert service.status()["evaluation_request_count"] == 0
+    assert service.status()["cache_skip_count"] == 5
+
+
 def test_fifteen_minute_boundary_only_evaluates_due_intraday_frames() -> None:
     source = datetime(2026, 7, 31, 14, 44, tzinfo=HONG_KONG)
     previous = {

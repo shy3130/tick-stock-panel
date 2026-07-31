@@ -92,14 +92,26 @@ class DowMonitorStore:
 
     def remove_symbol(self, symbol: str) -> bool:
         with self._lock:
+            identity = _monitor_symbol_identity(symbol)
             symbols = self._load_models(self._symbols_path, MonitoredSymbol)
-            kept_symbols = [item for item in symbols if item.symbol != symbol]
+            kept_symbols = [
+                item
+                for item in symbols
+                if _monitor_symbol_identity(item.symbol) != identity
+            ]
             if len(kept_symbols) == len(symbols):
                 return False
             self._write_json(self._symbols_path, kept_symbols)
 
             states = self._load_models(self._states_path, DowTimeframeState)
-            self._write_json(self._states_path, [item for item in states if item.symbol != symbol])
+            self._write_json(
+                self._states_path,
+                [
+                    item
+                    for item in states
+                    if _monitor_symbol_identity(item.symbol) != identity
+                ],
+            )
             decisions = self._load_models(self._decisions_path, DowMinuteDecision)
             self._write_json(
                 self._decisions_path,
@@ -114,19 +126,27 @@ class DowMonitorStore:
     def save_state(self, state: DowTimeframeState) -> DowTimeframeState:
         with self._lock:
             states = self._load_models(self._states_path, DowTimeframeState)
-            for index, existing in enumerate(states):
-                if existing.symbol == state.symbol and existing.timeframe == state.timeframe:
-                    states[index] = state
-                    break
-            else:
-                states.append(state)
+            identity = _monitor_symbol_identity(state.symbol)
+            states = [
+                existing
+                for existing in states
+                if not (
+                    _monitor_symbol_identity(existing.symbol) == identity
+                    and existing.timeframe == state.timeframe
+                )
+            ]
+            states.append(state)
             self._write_json(self._states_path, states)
             return state
 
     def get_state(self, symbol: str, timeframe: str) -> DowTimeframeState | None:
         with self._lock:
+            identity = _monitor_symbol_identity(symbol)
             for state in self._load_models(self._states_path, DowTimeframeState):
-                if state.symbol == symbol and state.timeframe == timeframe:
+                if (
+                    _monitor_symbol_identity(state.symbol) == identity
+                    and state.timeframe == timeframe
+                ):
                     return state
             return None
 

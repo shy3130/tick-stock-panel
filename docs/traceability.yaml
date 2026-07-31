@@ -542,6 +542,7 @@ requirements:
     specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
     implementation:
       - backend/app/services/dow_monitor_service.py
+      - backend/app/services/dow_monitor_store.py
     tests:
       - {path: tests/backend/test_dow_monitor_incremental_evaluation.py, type: executable-test}
     acceptance:

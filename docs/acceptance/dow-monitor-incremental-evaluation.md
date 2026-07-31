@@ -51,13 +51,13 @@
 
 ```text
 tests/backend/test_dow_monitor_incremental_evaluation.py
-13 passed
+15 passed
 
 tests/backend/test_dow_monitor_minute_result_scheduling.py
 10 passed
 
 tests/backend/test_dow_monitor*.py
-127 passed
+129 passed
 
 backend/tests
 704 passed, 13 warnings
@@ -98,3 +98,26 @@ passed
 7. 3018、19912 和 Worker 均健康、重启次数符合预期，发布窗口无新 ERROR/CRITICAL/Traceback。
 
 历史已有物理重复行不在本次自动清理范围内；发布或回滚不得删除分钟结果。
+
+## 2026-07-31 candidate rollback and HK alias root cause
+
+- Candidate image `tickflow-stock-panel-app:dow-monitor-incremental-cb060ebaa228`
+  (`sha256:321bec8ecd09c5310e508e3be140cc059a625f82cbb33185e31efd410ae856a5`)
+  passed health, static-bundle, ClickHouse-availability and WebSocket protocol checks.
+- The candidate was not accepted for production: its first cycle took about 128 seconds and a
+  later cycle still exceeded 50 seconds, violating the 30-second cycle requirement.
+- The lower-layer cause was a symbol-identity mismatch. The monitor list stores display aliases
+  such as `00981.HK`, while persisted states and raw minute rows may use `981.HK`. Exact string
+  matching discarded the existing state on every cycle and repeatedly requested cold history
+  from midnight.
+- Production was rolled back to `tickflow-stock-panel-app:dow-monitor-8a2c007931af` without
+  restarting the 19912 engine, market WebSocket service, or standalone AI worker, and without
+  deleting ClickHouse data.
+- The corrective acceptance tests prove that a padded HK display alias reuses canonical persisted
+  state, is not classified as cold, and performs zero timeframe evaluations on a non-boundary
+  minute. The full targeted Dow monitor suite now contains 129 passing tests.
+- Supplemental independent review found `P0=0`, `P1=0`, and `P2=0`, including probes for store
+  removal, notification isolation, non-HK behavior, and distinct HK codes after canonicalization.
+- Production acceptance remains pending until the corrected immutable image passes ten consecutive
+  candidate cycles and ten consecutive 3018 cycles with every observed start interval at or below
+  30 seconds.
