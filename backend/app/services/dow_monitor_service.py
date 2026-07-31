@@ -1174,25 +1174,52 @@ class DowMonitorService:
         starts: dict[str, datetime] = {}
         cold_symbols: set[str] = set()
         for item in enabled:
+            policy = market_session_policy(item.symbol)
+            zone = ZoneInfo(policy.timezone)
+            local_now = now.astimezone(zone)
+            local_midnight = local_now.replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            ).astimezone(UTC)
             timestamps: list[datetime] = []
-            for timeframe in TIMEFRAMES:
+            for timeframe in TIMEFRAMES[:-1]:
                 state = self.store.get_state(item.symbol, timeframe)
                 if state is None or state.source_timestamp is None:
                     cold_symbols.add(item.symbol)
-                    policy = market_session_policy(item.symbol)
-                    zone = ZoneInfo(policy.timezone)
-                    local_now = now.astimezone(zone)
-                    local_midnight = local_now.replace(
-                        hour=0,
-                        minute=0,
-                        second=0,
-                        microsecond=0,
-                    )
-                    starts[item.symbol] = local_midnight.astimezone(UTC)
+                    starts[item.symbol] = local_midnight
                     break
                 timestamps.append(state.source_timestamp)
             else:
-                starts[item.symbol] = min(timestamps)
+                start = min(timestamps)
+                daily = self.store.get_state(item.symbol, "day")
+                daily_needs_minutes = (
+                    daily is None
+                    or daily.source_timestamp is None
+                    or daily.freshness_state != "LIVE"
+                    or bool(daily.snapshot.get("evaluation_error"))
+                )
+                if not daily_needs_minutes and local_now.weekday() < 5:
+                    final_close = max(end for _start, end in policy.sessions)
+                    if local_now.time().replace(tzinfo=None) >= final_close:
+                        daily_local = daily.source_timestamp.astimezone(zone)
+                        daily_is_final = (
+                            daily.snapshot.get("bar_completion") == "FINAL"
+                            and not bool(daily.snapshot.get("provisional", False))
+                        )
+                        daily_needs_minutes = (
+                            daily_local.date() < local_now.date()
+                            or (
+                                daily_local.date() == local_now.date()
+                                and not daily_is_final
+                            )
+                        )
+                starts[item.symbol] = (
+                    min(start, local_midnight)
+                    if daily_needs_minutes
+                    else start
+                )
         return starts, cold_symbols
 
     def _merge_warmup_minutes(

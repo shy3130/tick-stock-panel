@@ -51,13 +51,13 @@
 
 ```text
 tests/backend/test_dow_monitor_incremental_evaluation.py
-16 passed
+17 passed
 
 tests/backend/test_dow_monitor_minute_result_scheduling.py
 10 passed
 
 tests/backend/test_dow_monitor*.py
-130 passed
+131 passed
 
 backend/tests
 704 passed, 13 warnings
@@ -139,3 +139,24 @@ passed
 - Supplemental independent review found `P0=0`, `P1=0`, and `P2=0` and independently confirmed
   CN/HK final-close equivalence across all intraday periods, HK midday and non-divisible-session
   behavior, US isolation, and final-close aggregation values.
+
+## 2026-07-31 minute-fetch versus daily-state follow-up
+
+- The `2ec297c94449` candidate correctly made zero 19912 requests after final-close repair, but a
+  later cycle still took about 103 seconds. This candidate was also stopped and never promoted.
+- The fetch plan used the minimum timestamp across all five states. A daily state from an earlier
+  session therefore expanded every live minute fetch to that old day even when all intraday states
+  were current. The long cycle was in market-data retrieval, not Dow evaluation.
+- The minute fetch plan now derives its start and cold-history decision only from
+  5m/15m/30m/60m states during the normal live path. Daily due evaluation remains independent
+  through the daily loader and is not suppressed.
+- Independent review found that simply ignoring day could construct today's day bar from only the
+  final few minutes. The corrected plan expands just that cycle to local midnight when day is
+  missing, paused or failed, or when the market has closed and day is old/forming. This supplies a
+  complete current-session OHLCV without classifying the symbol as a ten-day minute-history cold
+  start. A prior-session final day does not expand the fetch while the market is still open.
+- The failing-first regression covers an old daily fast path during the open, missing-only daily
+  full-session input, and an old daily state after close, while all intraday states remain current.
+- Final independent review found `P0=0`, `P1=0`, and `P2=0`. A 390-minute US-session probe
+  reconstructed the correct daily OHLCV and FINAL completion, and market-open, post-close,
+  midday, weekend, timezone, new-symbol and partial-cold scenarios all passed.

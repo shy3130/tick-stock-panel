@@ -79,3 +79,26 @@ candidate deployment. Independent probes confirmed CN 15:00 and HK 16:00
 equivalence with the last regular minute for every supported intraday period,
 HK midday and non-divisible session behavior, US isolation, and final-close bar
 aggregation values.
+
+## Supplemental review gate: minute fetch is independent of daily state
+
+The `2ec297c94449` candidate was not promoted after a zero-evaluation cycle
+still took about 103 seconds. The minute fetch plan had used the oldest of all
+states, including a prior-session daily state, even though daily input is loaded
+through the separate daily loader. A failing regression now covers old and
+missing-only daily state. Independent review must confirm new-symbol, partial
+intraday cold start and daily-due behavior before another candidate is built.
+
+Initial independent disposition for this gate was `P1=1`: ignoring day
+unconditionally could build today's daily candle from only the last few minute
+rows. The follow-up keeps the normal intraday start, but expands a single fetch
+to local midnight when day is missing/failed or due after market close, without
+marking the symbol as a long-history cold start. Final independent disposition
+is pending.
+
+Final independent disposition: `P0=0`, `P1=0`, `P2=0`; approved for candidate
+deployment. Independent probes covered market-open old-day fast paths, missing
+day full-session input, post-close old/forming day, return to the fast path
+after FINAL save, new and partial intraday cold starts, midday, weekends and
+market time zones. A complete 390-minute US session produced the correct daily
+open, high, low, close, volume and FINAL completion.

@@ -161,6 +161,70 @@ def test_hk_display_alias_is_not_reclassified_as_cold_or_reevaluated(
     assert service.status()["cache_skip_count"] == 5
 
 
+def test_minute_fetch_plan_ignores_old_or_missing_daily_state(tmp_path) -> None:
+    recent = datetime(2026, 7, 31, 13, 55, tzinfo=NEW_YORK)
+    old_daily = datetime(2026, 7, 30, 16, 0, tzinfo=NEW_YORK)
+    now = recent + timedelta(minutes=5)
+
+    old_store = DowMonitorStore(tmp_path / "old-daily")
+    old_item = old_store.upsert_symbol("GTLB.US", "us", True)
+    for timeframe in TIMEFRAMES[:-1]:
+        old_store.save_state(_state(old_item.symbol, timeframe, recent))
+    old_store.save_state(_state(old_item.symbol, "day", old_daily))
+    old_service = DowMonitorService(
+        old_store,
+        object(),
+        object(),
+        lambda *_args: pl.DataFrame(),
+    )
+
+    old_starts, old_cold = old_service._fetch_plan([old_item], now)
+
+    assert old_cold == set()
+    assert old_starts == {old_item.symbol: recent}
+
+    missing_store = DowMonitorStore(tmp_path / "missing-daily")
+    missing_item = missing_store.upsert_symbol("GTLB.US", "us", True)
+    for timeframe in TIMEFRAMES[:-1]:
+        missing_store.save_state(_state(missing_item.symbol, timeframe, recent))
+    missing_service = DowMonitorService(
+        missing_store,
+        object(),
+        object(),
+        lambda *_args: pl.DataFrame(),
+    )
+
+    missing_starts, missing_cold = missing_service._fetch_plan(
+        [missing_item],
+        now,
+    )
+
+    assert missing_cold == set()
+    assert missing_starts == {
+        missing_item.symbol: datetime(
+            2026,
+            7,
+            31,
+            tzinfo=NEW_YORK,
+        ).astimezone(ZoneInfo("UTC"))
+    }
+
+    close_starts, close_cold = old_service._fetch_plan(
+        [old_item],
+        datetime(2026, 7, 31, 16, 1, tzinfo=NEW_YORK),
+    )
+
+    assert close_cold == set()
+    assert close_starts == {
+        old_item.symbol: datetime(
+            2026,
+            7,
+            31,
+            tzinfo=NEW_YORK,
+        ).astimezone(ZoneInfo("UTC"))
+    }
+
+
 def test_fifteen_minute_boundary_only_evaluates_due_intraday_frames() -> None:
     source = datetime(2026, 7, 31, 14, 44, tzinfo=HONG_KONG)
     previous = {
