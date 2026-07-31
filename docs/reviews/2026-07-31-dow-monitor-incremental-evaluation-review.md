@@ -1,6 +1,6 @@
 # Independent review: Dow monitor incremental evaluation and realtime priority
 
-Status: passed for local semantic acceptance; production acceptance remains pending until the 10.28 deployment evidence is recorded.
+Status: passed for local semantic acceptance and 10.28 production acceptance.
 
 Reviewed specification: `docs/superpowers/specs/2026-07-31-dow-monitor-incremental-evaluation-and-realtime-priority-design.md`.
 

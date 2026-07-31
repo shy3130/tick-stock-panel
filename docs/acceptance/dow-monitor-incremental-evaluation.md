@@ -1,6 +1,6 @@
 # 趋势监控增量评估与实时优先验收
 
-状态：本地下层语义验收通过；10.28 候选与生产运行态验收待发布步骤补充。
+状态：本地下层语义、10.28 不可变候选与生产运行态验收全部通过。
 
 适用规格：
 `docs/superpowers/specs/2026-07-31-dow-monitor-incremental-evaluation-and-realtime-priority-design.md`。
