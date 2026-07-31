@@ -150,6 +150,53 @@ def test_build_worker_applies_bounded_bootstrap_environment(
         dow_client.close()
 
 
+@pytest.mark.parametrize("timeout", ["nan", "inf", "-inf"])
+def test_build_worker_rejects_non_finite_timeout_before_allocating_client(
+    monkeypatch,
+    tmp_path,
+    timeout: str,
+) -> None:
+    allocations: list[str] = []
+
+    class AnalysisRepository:
+        def ensure_schema(self) -> None:
+            pass
+
+    class Client:
+        def close(self) -> None:
+            pass
+
+    def allocate_analysis_repository():
+        allocations.append("analysis_repository")
+        return AnalysisRepository()
+
+    def allocate_client(endpoint: str):
+        allocations.append(f"dow_client:{endpoint}")
+        return Client()
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS",
+        timeout,
+    )
+    monkeypatch.setenv("DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS", "500")
+    monkeypatch.setattr(
+        worker_module,
+        "DowMonitorHalfHourAiRepository",
+        allocate_analysis_repository,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "LongbridgeDowClient",
+        allocate_client,
+    )
+
+    with pytest.raises(ValueError, match="finite positive"):
+        worker_module.build_worker()
+
+    assert allocations == []
+
+
 def test_worker_compose_propagates_bootstrap_environment_defaults() -> None:
     compose = yaml.safe_load(
         (

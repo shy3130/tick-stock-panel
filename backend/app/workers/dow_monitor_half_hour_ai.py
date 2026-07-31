@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -288,18 +289,15 @@ class DowMonitorHalfHourAiWorker:
 
 
 def build_worker() -> DowMonitorHalfHourAiWorker:
-    analysis_repository = DowMonitorHalfHourAiRepository()
-    analysis_repository.ensure_schema()
-    store = DowMonitorStore(Path(os.getenv("DATA_DIR", "/app/data")))
     timeout_seconds = float(
         os.getenv(
             "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS",
             "15",
         )
     )
-    if timeout_seconds <= 0:
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError(
-            "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS must be positive"
+            "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS must be finite positive"
         )
     max_rows = int(
         os.getenv("DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS", "500")
@@ -308,6 +306,9 @@ def build_worker() -> DowMonitorHalfHourAiWorker:
         raise ValueError(
             "DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS must be positive"
         )
+    analysis_repository = DowMonitorHalfHourAiRepository()
+    analysis_repository.ensure_schema()
+    store = DowMonitorStore(Path(os.getenv("DATA_DIR", "/app/data")))
     minute_repository = DowMonitorMinuteResultRepository()
     dow_client = LongbridgeDowClient(
         os.getenv(
