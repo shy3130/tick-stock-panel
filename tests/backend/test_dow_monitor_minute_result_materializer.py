@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pytest
 
 from app.services.dow_monitor_minute_result_materializer import (
     DowMonitorMinuteResultMaterializer,
@@ -15,6 +18,11 @@ from app.services.dow_monitor_models import MonitoredSymbol
 
 
 NOW = datetime(2026, 7, 30, 1, 5, 30, tzinfo=UTC)
+BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+def beijing(value: str) -> datetime:
+    return datetime.fromisoformat(value).replace(tzinfo=BEIJING)
 
 
 def _symbol(symbol: str, market: str) -> MonitoredSymbol:
@@ -56,8 +64,9 @@ def _context(
 
 
 class Source:
-    def __init__(self) -> None:
+    def __init__(self, *, failure: Exception | None = None) -> None:
         self.calls: list[tuple[tuple[str, ...], datetime, datetime, datetime]] = []
+        self.failure = failure
 
     def load_raw_history(
         self,
@@ -68,27 +77,41 @@ class Source:
         candle_start,
     ) -> RawMinuteHistory:
         self.calls.append((tuple(symbols), start, end, candle_start))
+        if self.failure is not None:
+            raise self.failure
         return RawMinuteHistory()
 
 
 class HistoryBuilder:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        decision_minutes: tuple[datetime, ...] | None = None,
+        *,
+        failure: Exception | None = None,
+    ) -> None:
         self.market_days: list[tuple[str, date]] = []
         self.build_calls = 0
+        self.decision_minutes = decision_minutes
+        self.failure = failure
+        self.requested_decision_minutes: list[set[datetime] | None] = []
+
+    def _decision_minutes(self, market_day: date) -> tuple[datetime, ...]:
+        if self.decision_minutes is not None:
+            return self.decision_minutes
+        base = datetime.combine(market_day, datetime.min.time(), tzinfo=UTC)
+        return (
+            base + timedelta(hours=1, minutes=1),
+            base + timedelta(hours=1, minutes=2),
+        )
 
     def candidate_keys(self, history, symbol, market_day) -> set[MinuteResultKey]:
-        base = datetime.combine(market_day, datetime.min.time(), tzinfo=UTC)
         return {
             MinuteResultKey(
                 market=symbol.market,
                 symbol=symbol.symbol,
-                decision_minute=base + timedelta(hours=1, minutes=1),
-            ),
-            MinuteResultKey(
-                market=symbol.market,
-                symbol=symbol.symbol,
-                decision_minute=base + timedelta(hours=1, minutes=2),
-            ),
+                decision_minute=decision_minute,
+            )
+            for decision_minute in self._decision_minutes(market_day)
         }
 
     def build_contexts(
@@ -102,10 +125,12 @@ class HistoryBuilder:
     ) -> list[MinuteResultContext]:
         self.build_calls += 1
         self.market_days.append((symbol.symbol, market_day))
-        base = datetime.combine(market_day, datetime.min.time(), tzinfo=UTC)
+        self.requested_decision_minutes.append(decision_minutes)
+        if self.failure is not None:
+            raise self.failure
         contexts = [
-            _context(symbol, market_day, base + timedelta(hours=1, minutes=1)),
-            _context(symbol, market_day, base + timedelta(hours=1, minutes=2)),
+            _context(symbol, market_day, decision_minute)
+            for decision_minute in self._decision_minutes(market_day)
         ]
         if decision_minutes is None:
             return contexts
@@ -126,8 +151,10 @@ class Repository:
         self.existing = existing or set()
         self.failures = failures
         self.inserted = []
+        self.existing_calls: list[tuple[tuple[str, ...], datetime, datetime]] = []
 
     def existing_keys(self, symbols, start, end):
+        self.existing_calls.append((tuple(symbols), start, end))
         return set(self.existing)
 
     def insert_results(self, rows):
@@ -138,9 +165,14 @@ class Repository:
         return len(rows)
 
 
-def _materializer(repository: Repository):
-    source = Source()
-    history = HistoryBuilder()
+def _materializer(
+    repository: Repository,
+    *,
+    source: Source | None = None,
+    history: HistoryBuilder | None = None,
+):
+    source = source or Source()
+    history = history or HistoryBuilder()
     materializer = DowMonitorMinuteResultMaterializer(
         source=source,
         repository=repository,
@@ -149,6 +181,160 @@ def _materializer(repository: Repository):
         now_fn=lambda: NOW,
     )
     return materializer, source, history
+
+
+def _checkpoint_minutes() -> tuple[datetime, ...]:
+    return (
+        beijing("2026-07-31T21:31:00"),
+        beijing("2026-07-31T21:45:00"),
+        beijing("2026-07-31T22:00:00"),
+    )
+
+
+def _checkpoint_symbol() -> MonitoredSymbol:
+    return _symbol("RNG.US", "us")
+
+
+# Catches a materializer that widens the checkpoint range, uses a live row,
+# omits the warmup, or loads symbols other than the requested one.
+def test_materialize_checkpoint_writes_only_missing_rows_through_cutoff() -> None:
+    repository = Repository()
+    minutes = _checkpoint_minutes()
+    history = HistoryBuilder(minutes)
+    materializer, source, history = _materializer(repository, history=history)
+    session_open = beijing("2026-07-31T21:30:00")
+    window_end = beijing("2026-07-31T22:00:00")
+
+    run = materializer.materialize_checkpoint(
+        symbol=_checkpoint_symbol(),
+        session_open=session_open,
+        window_end=window_end,
+        max_rows=500,
+    )
+
+    assert run.error is None
+    assert all(
+        session_open < row.decision_minute <= window_end
+        for row in repository.inserted
+    )
+    assert all(row.backfill for row in repository.inserted)
+    assert run.written_rows == len(repository.inserted)
+    assert source.calls == [
+        (("RNG.US",), session_open, window_end, session_open - timedelta(days=10))
+    ]
+    assert repository.existing_calls == [
+        (("RNG.US",), session_open, window_end + timedelta(microseconds=1))
+    ]
+    assert history.requested_decision_minutes == [set(minutes)]
+
+
+# Catches a materializer that replays logical minutes already persisted.
+def test_materialize_checkpoint_skips_already_materialized_logical_minutes() -> None:
+    minutes = _checkpoint_minutes()
+    existing = MinuteResultKey(
+        market="us",
+        symbol="RNG.US",
+        decision_minute=minutes[1],
+    )
+    repository = Repository({existing})
+    history = HistoryBuilder(minutes)
+    materializer, _, history = _materializer(repository, history=history)
+
+    run = materializer.materialize_checkpoint(
+        symbol=_checkpoint_symbol(),
+        session_open=beijing("2026-07-31T21:30:00"),
+        window_end=beijing("2026-07-31T22:00:00"),
+    )
+
+    assert run.error is None
+    assert [row.decision_minute for row in repository.inserted] == [
+        minutes[0],
+        minutes[2],
+    ]
+    assert history.requested_decision_minutes == [{minutes[0], minutes[2]}]
+
+
+# Catches a materializer that begins inserting before it rejects an over-budget
+# checkpoint, which would leave a partially materialized logical window.
+def test_materialize_checkpoint_does_not_insert_when_row_budget_is_exceeded() -> None:
+    repository = Repository()
+    materializer, _, _ = _materializer(
+        repository,
+        history=HistoryBuilder(_checkpoint_minutes()),
+    )
+
+    run = materializer.materialize_checkpoint(
+        symbol=_checkpoint_symbol(),
+        session_open=beijing("2026-07-31T21:30:00"),
+        window_end=beijing("2026-07-31T22:00:00"),
+        max_rows=2,
+    )
+
+    assert run.error is not None
+    assert run.error.code == "BACKFILL_BUDGET_EXCEEDED"
+    assert repository.inserted == []
+
+
+# Catches a materializer that lets an upstream exception escape or erases its
+# diagnostic message instead of returning a typed checkpoint failure.
+@pytest.mark.parametrize(
+    ("source", "history", "repository"),
+    [
+        (Source(failure=RuntimeError("raw source unavailable")), None, Repository()),
+        (None, HistoryBuilder(_checkpoint_minutes(), failure=RuntimeError("history unavailable")), Repository()),
+        (None, None, Repository(failures=1)),
+    ],
+    ids=["source", "history", "repository"],
+)
+def test_materialize_checkpoint_returns_typed_error_for_upstream_failure(
+    source: Source | None,
+    history: HistoryBuilder | None,
+    repository: Repository,
+) -> None:
+    materializer, _, _ = _materializer(
+        repository,
+        source=source,
+        history=history or HistoryBuilder(_checkpoint_minutes()),
+    )
+
+    run = materializer.materialize_checkpoint(
+        symbol=_checkpoint_symbol(),
+        session_open=beijing("2026-07-31T21:30:00"),
+        window_end=beijing("2026-07-31T22:00:00"),
+    )
+
+    assert run.error is not None
+    assert run.error.code == "BACKFILL_FAILED"
+    assert "unavailable" in run.error.message
+    assert repository.inserted == []
+
+
+# Catches a materializer that accepts an invalid budget or an ambiguous
+# checkpoint boundary and could read/write an unbounded interval.
+@pytest.mark.parametrize(
+    ("session_open", "window_end", "max_rows"),
+    [
+        (beijing("2026-07-31T21:30:00"), beijing("2026-07-31T22:00:00"), 0),
+        (datetime(2026, 7, 31, 21, 30), beijing("2026-07-31T22:00:00"), 500),
+        (beijing("2026-07-31T21:30:00"), datetime(2026, 7, 31, 22, 0), 500),
+        (beijing("2026-07-31T22:00:00"), beijing("2026-07-31T22:00:00"), 500),
+    ],
+    ids=["non-positive-budget", "naive-session-open", "naive-window-end", "empty-window"],
+)
+def test_materialize_checkpoint_rejects_invalid_bounds(
+    session_open: datetime,
+    window_end: datetime,
+    max_rows: int,
+) -> None:
+    materializer, _, _ = _materializer(Repository())
+
+    with pytest.raises(ValueError):
+        materializer.materialize_checkpoint(
+            symbol=_checkpoint_symbol(),
+            session_open=session_open,
+            window_end=window_end,
+            max_rows=max_rows,
+        )
 
 
 def test_backfills_only_missing_logical_keys() -> None:

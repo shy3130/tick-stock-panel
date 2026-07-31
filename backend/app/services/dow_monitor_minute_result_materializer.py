@@ -37,13 +37,20 @@ class MaterializerStatus(BaseModel):
     last_written_rows: int = 0
 
 
+class MaterializeError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    message: str
+
+
 class MaterializeRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rows: tuple[DowMonitorMinuteResult, ...] = ()
     inserted_keys: tuple[MinuteResultKey, ...] = ()
     written_rows: int = 0
-    error: str | None = None
+    error: str | MaterializeError | None = None
 
 
 class DowMonitorMinuteResultMaterializer:
@@ -208,6 +215,100 @@ class DowMonitorMinuteResultMaterializer:
             written_rows=written,
             error=error,
         )
+
+    def materialize_checkpoint(
+        self,
+        *,
+        symbol: MonitoredSymbol,
+        session_open: datetime,
+        window_end: datetime,
+        max_rows: int = 500,
+    ) -> MaterializeRun:
+        if max_rows <= 0:
+            raise ValueError("max_rows must be positive")
+        if session_open.tzinfo is None or session_open.utcoffset() is None:
+            raise ValueError("session_open must be timezone-aware")
+        if window_end.tzinfo is None or window_end.utcoffset() is None:
+            raise ValueError("window_end must be timezone-aware")
+        if window_end <= session_open:
+            raise ValueError("window_end must be later than session_open")
+
+        try:
+            market_day = window_end.astimezone(MARKET_ZONES[symbol.market]).date()
+            history = self._source.load_raw_history(
+                [symbol.symbol],
+                session_open,
+                window_end,
+                candle_start=session_open - timedelta(days=WARMUP_DAYS),
+            )
+            candidate_keys = {
+                key
+                for key in self._history_builder.candidate_keys(
+                    history,
+                    symbol,
+                    market_day,
+                )
+                if session_open < key.decision_minute <= window_end
+            }
+            existing = self._repository.existing_keys(
+                [symbol.symbol],
+                session_open,
+                window_end + timedelta(microseconds=1),
+            )
+            missing_keys = candidate_keys - existing
+            if not missing_keys:
+                return MaterializeRun()
+
+            contexts = self._history_builder.build_contexts(
+                history,
+                symbol,
+                market_day,
+                True,
+                notifications=tuple(self._notifications_fn()),
+                decision_minutes={key.decision_minute for key in missing_keys},
+            )
+            missing_contexts = [
+                context
+                for context in contexts
+                if session_open < context.decision_minute <= window_end
+                and MinuteResultKey(
+                    market=context.market,
+                    symbol=context.symbol,
+                    decision_minute=context.decision_minute,
+                ) in missing_keys
+            ]
+            if len(missing_contexts) > max_rows:
+                return MaterializeRun(
+                    error=MaterializeError(
+                        code="BACKFILL_BUDGET_EXCEEDED",
+                        message=(
+                            f"checkpoint requires {len(missing_contexts)} rows; "
+                            f"limit is {max_rows}"
+                        ),
+                    )
+                )
+
+            rows = [calculate_minute_result(context) for context in missing_contexts]
+            written = self._repository.insert_results(rows) if rows else 0
+            return MaterializeRun(
+                rows=tuple(rows),
+                inserted_keys=tuple(
+                    MinuteResultKey(
+                        market=row.market,
+                        symbol=row.symbol,
+                        decision_minute=row.decision_minute,
+                    )
+                    for row in rows[:written]
+                ),
+                written_rows=written,
+            )
+        except Exception as exc:
+            return MaterializeRun(
+                error=MaterializeError(
+                    code="BACKFILL_FAILED",
+                    message=self._safe_error(exc),
+                )
+            )
 
     def status(self) -> MaterializerStatus:
         return self._status.model_copy(deep=True)
