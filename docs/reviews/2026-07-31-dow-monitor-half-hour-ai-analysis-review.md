@@ -1,7 +1,6 @@
 # Independent Review: Dow Monitor Half-Hour AI Analysis
 
-Status: local requirements-to-evidence review passed; production review
-pending.
+Status: local and production requirements-to-evidence review passed.
 
 Independent findings:
 
@@ -26,6 +25,18 @@ Independent findings:
   the history date in the symbol's exchange timezone, preventing both the
   observed eight-hour display error and US cross-midnight history misses.
 
-The production review must still inspect the actual ClickHouse table, container
-process/port state, a completed model call, and before/after signal/WebSocket
-evidence.
+Production review findings:
+
+- The released image and `/health` identify Git revision `8a2c007`; both the
+  3018 panel and dedicated worker are running without restarts, and the previous
+  pair remains stopped under explicit rollback names.
+- ClickHouse contains 29 visible rows for 29 logical keys. The worker remains
+  unexposed and its production error scan is empty.
+- Authenticated browser evidence proves that the former `03:30` UTC rendering
+  is now `北京时间 11:30` in both the lightweight entry and lazy modal detail.
+  Mobile width has no page overflow.
+- RNG.US day/5m and half-hour analysis routes all returned 200. Production
+  WebSocket connections and 19912 Dow-state responses remained healthy after
+  the release.
+- The collector-side new-symbol warmup status provider is still an acknowledged
+  lower-layer gap and was not counted as accepted by this review.

@@ -5,7 +5,7 @@ Requirements:
 - `REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001`
 - `REQ-DOW-MONITOR-HALF-HOUR-AI-VIEW-001`
 
-Status: local semantic acceptance passed; production acceptance pending.
+Status: local and production semantic acceptance passed.
 
 Lower-layer evidence:
 
@@ -37,6 +37,18 @@ API and UI evidence:
 - Compose configuration validates with an unexposed, separate
   `TickFlow_Dow_AI_Worker` service.
 
-Production evidence still required: real ClickHouse schema/rows, one worker
-process, one due checkpoint, lazy detail request, real mobile/desktop rendering,
-and confirmation that formal signals and WebSocket freshness do not change.
+Production evidence on 2026-07-31:
+
+- `TickFlow_Stock_Panel` and `TickFlow_Dow_AI_Worker` run image
+  `tickflow-stock-panel-app:dow-monitor-8a2c007931af`, each with restart count
+  zero. `/health.build_id` is the matching full Git revision.
+- ClickHouse `FINAL` contains 29 rows and 29 unique logical keys in
+  `lb_dow_monitor_half_hour_ai_analyses`; the worker has no public port.
+- Authenticated production requests returned HTTP 200 for overview, RNG.US day
+  and 5m detail, 002714.SZ analysis history, and its lazily loaded detail.
+- A 390px production browser rendered with `scrollWidth=390`. The 002714.SZ
+  entry displayed `北京时间 11:30`, and its modal displayed
+  `截止 2026-07-31 11:30（北京时间）`.
+- Production accepted `/ws/realtime` connections while calls to the independent
+  19912 Dow-state service continued returning HTTP 200. Post-release app and
+  worker `ERROR|CRITICAL|Traceback` counts were both zero.
