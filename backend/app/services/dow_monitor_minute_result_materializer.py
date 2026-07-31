@@ -24,6 +24,7 @@ MARKET_ZONES = {
 }
 WARMUP_DAYS = 10
 LIVE_MINUTE_MAX_AGE = timedelta(minutes=2)
+MAX_CHECKPOINT_ROWS = 500
 
 
 class MaterializerStatus(BaseModel):
@@ -222,7 +223,7 @@ class DowMonitorMinuteResultMaterializer:
         symbol: MonitoredSymbol,
         session_open: datetime,
         window_end: datetime,
-        max_rows: int = 500,
+        max_rows: int = MAX_CHECKPOINT_ROWS,
     ) -> MaterializeRun:
         if max_rows <= 0:
             raise ValueError("max_rows must be positive")
@@ -232,6 +233,7 @@ class DowMonitorMinuteResultMaterializer:
             raise ValueError("window_end must be timezone-aware")
         if window_end <= session_open:
             raise ValueError("window_end must be later than session_open")
+        effective_max_rows = min(max_rows, MAX_CHECKPOINT_ROWS)
 
         try:
             market_day = window_end.astimezone(MARKET_ZONES[symbol.market]).date()
@@ -277,13 +279,13 @@ class DowMonitorMinuteResultMaterializer:
                     decision_minute=context.decision_minute,
                 ) in missing_keys
             ]
-            if len(missing_contexts) > max_rows:
+            if len(missing_contexts) > effective_max_rows:
                 return MaterializeRun(
                     error=MaterializeError(
                         code="BACKFILL_BUDGET_EXCEEDED",
                         message=(
                             f"checkpoint requires {len(missing_contexts)} rows; "
-                            f"limit is {max_rows}"
+                            f"limit is {effective_max_rows}"
                         ),
                     )
                 )

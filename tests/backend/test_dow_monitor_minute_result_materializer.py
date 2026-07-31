@@ -275,6 +275,32 @@ def test_materialize_checkpoint_does_not_insert_when_row_budget_is_exceeded() ->
     assert repository.inserted == []
 
 
+# Catches a caller-provided max_rows value that raises the authoritative
+# 500-row ceiling and permits an oversized checkpoint write.
+def test_materialize_checkpoint_caps_caller_budget_at_500_rows() -> None:
+    session_open = beijing("2026-07-31T09:30:00")
+    minutes = tuple(
+        session_open + timedelta(minutes=offset)
+        for offset in range(1, 502)
+    )
+    repository = Repository()
+    materializer, _, _ = _materializer(
+        repository,
+        history=HistoryBuilder(minutes),
+    )
+
+    run = materializer.materialize_checkpoint(
+        symbol=_checkpoint_symbol(),
+        session_open=session_open,
+        window_end=beijing("2026-07-31T22:00:00"),
+        max_rows=1_000,
+    )
+
+    assert run.error is not None
+    assert run.error.code == "BACKFILL_BUDGET_EXCEEDED"
+    assert repository.inserted == []
+
+
 # Catches a materializer that lets an upstream exception escape or erases its
 # diagnostic message instead of returning a typed checkpoint failure.
 @pytest.mark.parametrize(
