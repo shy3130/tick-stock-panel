@@ -195,3 +195,46 @@ The 10.28 worker image/SHA, live raw and canonical ClickHouse queries, worker
 restart/model-concurrency observations, next-normal-checkpoint behavior, and
 3018/WebSocket restart, backlog, latency, and formal-signal non-regression
 evidence remain pending until Task 8.
+
+## Task 8 failed production boundary and Task 8A local correction (2026-07-31)
+
+Status: the repository boundary is corrected and accepted locally; production
+acceptance remains pending a new Task 8 deployment.
+
+The first controlled Task 8 attempt deployed candidate
+`f4413441afb910f505c170d81dfceb8aa4f53d1e` to the dedicated worker only.
+Production proved the lower layer by persisting 98 canonical `2526.HK` rows,
+all `backfill=1`, no later than the 15:00 Beijing cutoff, and below the 500-row
+limit. The higher-layer snapshot nevertheless contained zero observations and
+saved `INSUFFICIENT_DATA` without calling the model.
+
+The failed handoff was traced to the real storage representation:
+`lb_dow_monitor_minute_results` declares its datetime columns as
+`DateTime64(3, 'Asia/Shanghai')`, while ClickHouse `FORMAT JSONEachRow`
+serialized values such as `2026-07-31 09:31:00.000` without an offset.
+`DowMonitorMinuteResultRepository.load_cumulative_rows()` passed that naive
+local value through, and `HalfHourAiSnapshotBuilder._time()` correctly rejected
+it as ambiguous. The production worker was rolled back and fixture data was
+removed; no production acceptance was promoted.
+
+Task 8A adds deserialization at the owning repository boundary. Naive values
+from the table's declared DateTime64 columns receive `Asia/Shanghai` without
+changing their wall-clock value; already-aware values retain their original
+offset and instant. The executable repository/snapshot test uses the exact
+production string shape, proves the 14:59 row becomes an aware Beijing instant
+and is counted, and proves a 15:01 poison row remains excluded by the 15:00
+cutoff. The existing-key query is covered with the same naive DateTime64 shape,
+so bounded materialization deduplication also receives aware logical keys.
+
+The requested focused repository, snapshot/worker, and offline integration
+slice passed locally (`43 passed`). This is local semantic evidence for the
+corrected storage-to-snapshot boundary only. Task 8 must be rerun from a new
+commit-addressed candidate before claiming a successful model call, the next
+normal checkpoint, or production acceptance.
+
+Fresh broader verification also passed: the complete backend suite reported
+`141 passed`; the offline-bootstrap and specification-guard contracts reported
+`5 passed`; repository compliance reported `Specification compliance passed`;
+Ruff reported `All checks passed`; and targeted mypy reported no issues for the
+changed production module. No production endpoint, host, container, or data was
+accessed during Task 8A.

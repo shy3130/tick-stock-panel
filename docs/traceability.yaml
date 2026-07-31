@@ -505,11 +505,13 @@ requirements:
   - id: REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001
     specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     implementation:
+      - backend/app/services/dow_monitor_minute_result_repository.py
       - backend/app/services/dow_monitor_minute_result_materializer.py
       - backend/app/services/dow_monitor_offline_bootstrap.py
       - backend/app/workers/dow_monitor_half_hour_ai.py
       - docker-compose.yml
     tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
@@ -520,11 +522,13 @@ requirements:
   - id: REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001
     specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     implementation:
+      - backend/app/services/dow_monitor_minute_result_repository.py
       - backend/app/services/dow_monitor_minute_result_materializer.py
       - backend/app/services/dow_monitor_offline_bootstrap.py
       - backend/app/workers/dow_monitor_half_hour_ai.py
       - docker-compose.yml
     tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}

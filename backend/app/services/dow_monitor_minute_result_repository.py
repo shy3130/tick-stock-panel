@@ -17,6 +17,12 @@ from app.services.dow_monitor_minute_result_models import (
 QueryFn = Callable[[str], list[dict]]
 ExecuteFn = Callable[[str, bytes | None], bytes]
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+MINUTE_RESULT_DATETIME_FIELDS = (
+    "decision_minute",
+    "source_bar_time",
+    "formal_signal_time",
+    "updated_at",
+)
 
 
 def _clickhouse_string(value: str) -> str:
@@ -44,6 +50,23 @@ def _clickhouse_datetime(value: datetime | None) -> str | None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("ClickHouse datetime must be timezone-aware")
     return value.astimezone(SHANGHAI).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def _with_shanghai_datetimes(row: dict, *fields: str) -> dict:
+    normalized = dict(row)
+    for field in fields:
+        value = normalized.get(field)
+        if value is None:
+            continue
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        )
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            parsed = parsed.replace(tzinfo=SHANGHAI)
+        normalized[field] = parsed
+    return normalized
 
 
 def _default_execute(sql: str, payload: bytes | None = None) -> bytes:
@@ -156,7 +179,12 @@ class DowMonitorMinuteResultRepository:
             GROUP BY market, symbol, results.decision_minute
             """
         )
-        return {MinuteResultKey(**row) for row in rows}
+        return {
+            MinuteResultKey(
+                **_with_shanghai_datetimes(row, "decision_minute")
+            )
+            for row in rows
+        }
 
     def insert_results(self, rows: Sequence[DowMonitorMinuteResult]) -> int:
         if not rows:
@@ -218,11 +246,16 @@ class DowMonitorMinuteResultRepository:
             ORDER BY symbol, decision_minute
             """
         )
-        output = {symbol: [] for symbol in normalized}
+        output: dict[str, list[dict]] = {symbol: [] for symbol in normalized}
         for row in rows:
             symbol = normalize_monitor_symbol(str(row.get("symbol") or ""))
             if symbol in output:
-                output[symbol].append(row)
+                output[symbol].append(
+                    _with_shanghai_datetimes(
+                        row,
+                        *MINUTE_RESULT_DATETIME_FIELDS,
+                    )
+                )
         return output
 
     def status(self) -> dict[str, object]:

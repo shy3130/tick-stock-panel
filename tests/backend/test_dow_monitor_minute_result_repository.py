@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
+from app.services.dow_monitor_half_hour_ai_snapshot import HalfHourAiSnapshotBuilder
 from app.services.dow_monitor_minute_result_models import DowMonitorMinuteResult
 from app.services.dow_monitor_minute_result_repository import (
     DowMonitorMinuteResultRepository,
@@ -10,6 +12,7 @@ from app.services.dow_monitor_minute_result_repository import (
 
 
 UTC = timezone.utc
+BEIJING = ZoneInfo("Asia/Shanghai")
 NOW = datetime(2026, 7, 29, 1, 31, 5, tzinfo=UTC)
 DECISION_MINUTE = NOW - timedelta(seconds=5)
 
@@ -139,7 +142,7 @@ def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
         return [{
             "market": "hk",
             "symbol": "700.HK",
-            "decision_minute": "2026-07-29T09:31:00+08:00",
+            "decision_minute": "2026-07-29 09:31:00.000",
         }]
 
     keys = DowMonitorMinuteResultRepository(
@@ -150,7 +153,9 @@ def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
     key = next(iter(keys))
     assert key.market == "hk"
     assert key.symbol == "700.HK"
-    assert key.decision_minute.utcoffset() == timedelta(hours=8)
+    assert key.decision_minute == datetime(
+        2026, 7, 29, 9, 31, tzinfo=BEIJING
+    )
     assert (
         "FROM longbridge.lb_dow_monitor_minute_results AS results FINAL"
         in queries[0]
@@ -159,3 +164,98 @@ def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
     assert "results.decision_minute <" in queries[0]
     assert "'700.HK'" in queries[0]
     assert "'00700.HK'" not in queries[0]
+
+
+# Catches ClickHouse DateTime64 local strings being passed through as naive
+# values and consequently discarded by the production snapshot builder.
+def test_cumulative_rows_normalize_clickhouse_local_times_before_snapshot() -> None:
+    rows: list[dict] = [
+        {
+            "market": "hk",
+            "symbol": "700.HK",
+            "decision_minute": "2026-07-31 14:59:00.000",
+            "source_bar_time": "2026-07-31 14:58:00.000",
+            "formal_signal_time": None,
+            "updated_at": "2026-07-31 14:59:00.125",
+            "last_price": 101.0,
+        },
+        {
+            "market": "hk",
+            "symbol": "700.HK",
+            "decision_minute": "2026-07-31 15:01:00.000",
+            "source_bar_time": "2026-07-31 15:00:00.000",
+            "formal_signal_time": "2026-07-31 14:57:00.000",
+            "updated_at": "2026-07-31 15:01:00.125",
+            "last_price": 999.0,
+        },
+    ]
+    repository = DowMonitorMinuteResultRepository(
+        query_fn=lambda _sql: rows,
+        execute_fn=ExecuteCapture(),
+    )
+    session_open = datetime(2026, 7, 31, 9, 30, tzinfo=BEIJING)
+    window_end = datetime(2026, 7, 31, 15, 0, tzinfo=BEIJING)
+
+    loaded = repository.load_cumulative_rows(
+        ["00700.HK"],
+        session_open,
+        window_end,
+    )["700.HK"]
+    snapshot = HalfHourAiSnapshotBuilder(minimum_observations=1).build(
+        market="hk",
+        symbol="700.HK",
+        session_open=session_open,
+        window_end=window_end,
+        data_cutoff=window_end,
+        rows=loaded,
+    )
+
+    assert snapshot.observation_count == 1
+    assert snapshot.window_end == window_end
+    assert snapshot.data_cutoff == window_end
+    assert snapshot.range_start == datetime(
+        2026, 7, 31, 14, 59, tzinfo=BEIJING
+    )
+    assert snapshot.range_end == snapshot.range_start
+    assert snapshot.latest_price == 101.0
+    assert loaded[0]["decision_minute"] == datetime(
+        2026, 7, 31, 14, 59, tzinfo=BEIJING
+    )
+    assert loaded[0]["source_bar_time"] == datetime(
+        2026, 7, 31, 14, 58, tzinfo=BEIJING
+    )
+    assert loaded[0]["updated_at"] == datetime(
+        2026, 7, 31, 14, 59, 0, 125000, tzinfo=BEIJING
+    )
+    assert loaded[1]["formal_signal_time"] == datetime(
+        2026, 7, 31, 14, 57, tzinfo=BEIJING
+    )
+
+
+def test_cumulative_rows_preserve_already_aware_datetime_values() -> None:
+    aware_text = "2026-07-31T06:59:00+00:00"
+    aware = datetime.fromisoformat(aware_text)
+    repository = DowMonitorMinuteResultRepository(
+        query_fn=lambda _sql: [{
+            "market": "hk",
+            "symbol": "700.HK",
+            "decision_minute": aware_text,
+            "source_bar_time": aware_text,
+            "formal_signal_time": aware_text,
+            "updated_at": aware_text,
+            "last_price": 101.0,
+        }],
+        execute_fn=ExecuteCapture(),
+    )
+
+    loaded = repository.load_cumulative_rows(
+        ["700.HK"],
+        datetime(2026, 7, 31, 9, 30, tzinfo=BEIJING),
+        datetime(2026, 7, 31, 15, 0, tzinfo=BEIJING),
+    )["700.HK"][0]
+
+    assert loaded["decision_minute"] == aware
+    assert loaded["source_bar_time"] == aware
+    assert loaded["formal_signal_time"] == aware
+    assert loaded["updated_at"] == aware
+    assert loaded["decision_minute"].isoformat() == aware_text

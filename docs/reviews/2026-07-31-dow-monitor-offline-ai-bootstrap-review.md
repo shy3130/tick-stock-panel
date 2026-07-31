@@ -97,3 +97,36 @@ pending`: Task 8 must still record the 10.28 worker image/SHA, live ClickHouse
 queries, one-poll startup result, next normal checkpoint, model concurrency,
 worker/3018 restart counts, WebSocket queue/latency, and formal-signal
 non-regression before production acceptance can close.
+
+## Task 8A independent requirements-to-evidence review (2026-07-31)
+
+Review scope: the production-discovered ClickHouse DateTime64 handoff only.
+This review does not reopen or promote production acceptance.
+
+The review began from the two authoritative requirement IDs and the recorded
+precedence decision. No unresolved conflict or exception applies. The failed
+Task 8 evidence established the lower-layer canonical rows before the
+higher-layer failure: 98 bounded `backfill=1` rows existed, but
+`decision_minute` arrived from `FORMAT JSONEachRow` as a naive Shanghai
+wall-clock string and the snapshot rejected all 98. Thus neither a passing
+golden nor downstream AI state was used as a substitute for the failed
+storage-to-snapshot semantic boundary.
+
+| Requirement behavior | Implementation evidence | Executable/semantic evidence | Conclusion |
+| --- | --- | --- | --- |
+| Canonical rows reconstructed for an eligible checkpoint must be consumable by the cumulative half-hour snapshot | `DowMonitorMinuteResultRepository` now deserializes the minute-results table's DateTime64 fields at the repository boundary, attaching `Asia/Shanghai` only to naive values | The production-shaped `2026-07-31 14:59:00.000` repository/snapshot test failed with zero observations before the fix and now proves one aware Beijing observation | Passed locally |
+| Cutoff and future-data exclusion must not move | The snapshot's existing aware-time comparisons and `data_cutoff` logic are unchanged | The same test includes a 15:01 poison row and proves it remains excluded from the 15:00 snapshot | Passed locally |
+| Existing canonical keys must remain safe for bounded materialization deduplication | The same repository boundary normalizes `existing_keys().decision_minute` | The existing-key test now uses the real naive DateTime64 shape and proves the same Beijing wall-clock instant | Passed locally |
+| The fix must not reinterpret already-aware timestamps or widen into UI/realtime/formal-signal paths | The helper returns aware values without timezone conversion; only the minute-result repository production module changed | The aware `+00:00` test proves the offset representation is unchanged; diff review finds no snapshot, worker, API, frontend, 3018, WebSocket, or formal-signal production edit | Passed locally |
+
+Fresh evidence: requested focused slice `43 passed`; full backend `141 passed`;
+offline-bootstrap/specification contracts `5 passed`; specification compliance,
+Ruff, targeted production-module mypy, and `git diff --check` all passed.
+Traceability maps the repository implementation and executable repository test
+to both active requirements.
+
+Disposition: the Task 8A local boundary correction passes the independent
+requirements-to-evidence review. The acceptance document must remain
+`status: pending` until a new commit-addressed worker candidate is redeployed
+and the complete Task 8 production sequence succeeds, including a real model
+call and the next normal checkpoint.
