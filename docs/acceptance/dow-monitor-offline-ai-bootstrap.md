@@ -482,9 +482,12 @@ were not rerun during documentation Fix Round 1.
 
 Status: passed. This section records the delta-specific semantic reacceptance
 for commit `6530979992a085f0e09df002ec134d9c0aa6b047` after merge commit
-`62c3112` integrated current `origin/main` (`a975e93`). It is read together
-with the successful `d35a39d` end-to-end model evidence above; it does not
-rewrite that historical run.
+`62c3112` integrated the then-current `origin/main` (`a975e93`). During final
+publication, `origin/main` advanced to `8ead300`; merge commit `f851bb0`
+integrated those four additional security/version commits. They do not change
+the accepted worker, materializer, repository, or coordinator files. This
+section is read together with the successful `d35a39d` end-to-end model
+evidence above; it does not rewrite that historical run.
 
 ### Candidate identity and accepted delta
 
@@ -584,7 +587,8 @@ offline-bootstrap semantic slice: 90 passed in 10.09s
 specification contracts: 5 passed in 0.51s
 repository specification compliance: passed
 repository tests/backend: 147 passed in 13.55s
-complete backend/tests: 680 passed in 51.42s (13 deprecation warnings)
+latest-main affected security/screener/kline slice: 56 passed in 3.46s
+complete backend/tests after latest-main merge: 704 passed in 49.10s (13 deprecation warnings)
 targeted mypy: success, 3 production source files
 scoped final-fix Ruff: all checks passed
 git diff --check: passed

@@ -178,13 +178,15 @@ exception remains.
 
 The reviewed source is commit
 `6530979992a085f0e09df002ec134d9c0aa6b047`, after merge commit `62c3112`
-integrated current `origin/main`. The source archive SHA-256 matched locally
-and remotely. The candidate was built from the already accepted `d35a39d`
-image and replaced only four source files; the repository and coordinator files
-were byte-identical, while the worker and materializer hashes matched the
-reviewed commit. The new runtime imports only the standard library, so the
-worker-only candidate did not depend on the unrelated merged dependency-lock
-changes.
+integrated the then-current `origin/main`. Final publication also merged the
+newer `origin/main` tip `8ead300` as `f851bb0`; the additional security/version
+files do not touch the four accepted worker runtime files. The source archive
+SHA-256 matched locally and remotely. The candidate was built from the already
+accepted `d35a39d` image and replaced only four source files; the repository
+and coordinator files were byte-identical, while the worker and materializer
+hashes matched the reviewed commit. The new runtime imports only the standard
+library, so the worker-only candidate did not depend on unrelated merged
+dependency-lock changes.
 
 | Mandatory behavior | Independent final evidence | Conclusion |
 | --- | --- | --- |
@@ -207,10 +209,12 @@ requirement and is recorded without expanding this fix wave.
 Fresh final evidence from the exact reviewed worktree was: offline-bootstrap
 semantic slice `90 passed`; specification contracts `5 passed`; specification
 compliance passed; repository `tests/backend` `147 passed`; complete
-`backend/tests` `680 passed` with only 13 deprecation warnings; targeted mypy
-clean for all three production modules; scoped final-fix Ruff passed; and
-`git diff --check` passed. The post-merge frontend suite had already passed
-205 tests with 2 skipped and its production build. No failure was waived.
+`backend/tests` after the latest-main merge `704 passed` with only 13
+deprecation warnings; latest-main affected security/screener/kline tests
+`56 passed`; targeted mypy clean for all three production modules; scoped
+final-fix Ruff passed; and `git diff --check` passed. The post-merge frontend
+suite had already passed 205 tests with 2 skipped and its production build. No
+failure was waived.
 
 Disposition: **passed**. The strict scheduler boundary, regular-session gate,
 and millisecond-safe exact-cutoff behavior have lower-layer executable and live
