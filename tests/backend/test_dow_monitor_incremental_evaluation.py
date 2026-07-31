@@ -20,6 +20,7 @@ from app.services.dow_monitor_store import DowMonitorStore
 
 
 HONG_KONG = ZoneInfo("Asia/Hong_Kong")
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 NEW_YORK = ZoneInfo("America/New_York")
 TIMEFRAMES = ("5m", "15m", "30m", "60m", "day")
 
@@ -33,7 +34,13 @@ def _state(
 ) -> DowTimeframeState:
     return DowTimeframeState(
         symbol=symbol,
-        market="hk" if symbol.endswith(".HK") else "us",
+        market=(
+            "hk"
+            if symbol.endswith(".HK")
+            else "cn"
+            if symbol.endswith((".SS", ".SZ"))
+            else "us"
+        ),
         timeframe=timeframe,
         freshness_state=freshness_state,
         source_timestamp=source_timestamp,
@@ -51,6 +58,33 @@ def test_non_boundary_minute_reuses_all_live_timeframe_states() -> None:
     }
 
     assert due_timeframes_for_minute("01347.HK", source, previous) == ()
+
+
+def test_exact_close_labeled_state_reuses_final_intraday_buckets() -> None:
+    cases = (
+        (
+            "002714.SZ",
+            datetime(2026, 7, 31, 14, 59, tzinfo=SHANGHAI),
+            datetime(2026, 7, 31, 15, 0, tzinfo=SHANGHAI),
+        ),
+        (
+            "2714.HK",
+            datetime(2026, 7, 31, 15, 59, tzinfo=HONG_KONG),
+            datetime(2026, 7, 31, 16, 0, tzinfo=HONG_KONG),
+        ),
+    )
+
+    for symbol, last_regular_minute, exact_close in cases:
+        previous = {
+            timeframe: _state(symbol, timeframe, exact_close)
+            for timeframe in TIMEFRAMES
+        }
+
+        assert due_timeframes_for_minute(
+            symbol,
+            last_regular_minute,
+            previous,
+        ) == ()
 
 
 def test_hk_display_alias_reuses_canonical_persisted_state(tmp_path) -> None:

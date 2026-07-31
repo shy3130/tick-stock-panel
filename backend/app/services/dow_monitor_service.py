@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from app.market_rules import market_for_symbol
 from app.services.dow_minute_decision import (
     MinuteDecisionContext,
     build_minute_decision,
@@ -71,6 +72,26 @@ def _completed_bucket_marker(
     local_source = source_timestamp.astimezone(zone)
     local_time = local_source.time().replace(tzinfo=None)
     completed_at = local_source + timedelta(minutes=1)
+    final_session_start, final_session_end = policy.sessions[-1]
+    if (
+        market_for_symbol(symbol) in {"cn", "hk"}
+        and local_time == final_session_end
+    ):
+        session_start_at = datetime.combine(
+            local_source.date(),
+            final_session_start,
+            tzinfo=zone,
+        )
+        session_end_at = datetime.combine(
+            local_source.date(),
+            final_session_end,
+            tzinfo=zone,
+        )
+        elapsed_minutes = int(
+            (session_end_at - session_start_at).total_seconds() // 60
+        )
+        completed_buckets = (elapsed_minutes + minutes - 1) // minutes
+        return session_start_at, completed_buckets
     for session_start, session_end in policy.sessions:
         if not (session_start <= local_time < session_end):
             continue

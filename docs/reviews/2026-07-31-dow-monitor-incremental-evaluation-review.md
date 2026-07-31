@@ -64,3 +64,18 @@ notification isolation, non-HK behavior, and the non-collision of `00981.HK`
 with `09981.HK`, in addition to the two production-root-cause regressions.
 Production acceptance remains gated on the ten-cycle candidate and switched
 3018 observations.
+
+## Supplemental review gate: exact CN/HK close label
+
+The `ab931342f081` candidate was not promoted after repeated 110-112 second
+cycles revealed a completed-bucket mismatch for final rows labeled exactly at
+CN/HK market close. A failing semantic regression was added before the marker
+logic was changed. Independent review must confirm final-close, midday-break,
+non-divisible-session and US isolation semantics before another candidate is
+built.
+
+Supplemental independent review result: `P0=0`, `P1=0`, `P2=0`; approved for
+candidate deployment. Independent probes confirmed CN 15:00 and HK 16:00
+equivalence with the last regular minute for every supported intraday period,
+HK midday and non-divisible session behavior, US isolation, and final-close bar
+aggregation values.

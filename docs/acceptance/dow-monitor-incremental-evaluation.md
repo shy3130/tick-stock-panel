@@ -51,13 +51,13 @@
 
 ```text
 tests/backend/test_dow_monitor_incremental_evaluation.py
-15 passed
+16 passed
 
 tests/backend/test_dow_monitor_minute_result_scheduling.py
 10 passed
 
 tests/backend/test_dow_monitor*.py
-129 passed
+130 passed
 
 backend/tests
 704 passed, 13 warnings
@@ -121,3 +121,21 @@ passed
 - Production acceptance remains pending until the corrected immutable image passes ten consecutive
   candidate cycles and ten consecutive 3018 cycles with every observed start interval at or below
   30 seconds.
+
+## 2026-07-31 exact-close boundary follow-up
+
+- The `ab931342f081` candidate proved that HK alias state was reused, but exposed a second
+  lower-layer boundary mismatch. Some CN/HK feeds include a final row labeled exactly at the
+  market close (`15:00` or `16:00`). Timeframe construction accepts that close row, while the
+  completed-bucket marker previously rejected an exact session-end timestamp.
+- A saved final-close state was therefore compared with the last regular minute (`14:59` or
+  `15:59`) as if its prior bucket marker did not exist, causing repeated 5m/15m/30m/60m
+  evaluations. Candidate observations included repeated 110-112 second cycles, so the candidate
+  was stopped and never promoted to 3018.
+- The corrective semantic test failed first with all four intraday periods reported due. It now
+  proves that final-close-labeled CN/HK states reuse the same completed buckets as the last regular
+  minute. The special case applies only to the final session close in CN/HK; midday breaks and US
+  timestamps retain their prior behavior.
+- Supplemental independent review found `P0=0`, `P1=0`, and `P2=0` and independently confirmed
+  CN/HK final-close equivalence across all intraday periods, HK midday and non-divisible-session
+  behavior, US isolation, and final-close aggregation values.
