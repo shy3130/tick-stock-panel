@@ -146,7 +146,9 @@ class DowMonitorHalfHourAiRepository:
         for row in rows:
             key = (str(row.get("market")), str(row.get("symbol")))
             if key not in output:
-                output[key] = HalfHourAiSummary.model_validate(row)
+                output[key] = HalfHourAiSummary.model_validate(
+                    _with_utc_datetimes(row, "window_end", "updated_at")
+                )
         return output
 
     def list_history(
@@ -167,7 +169,11 @@ class DowMonitorHalfHourAiRepository:
             if identity in seen:
                 continue
             seen.add(identity)
-            summaries.append(HalfHourAiSummary.model_validate(row))
+            summaries.append(
+                HalfHourAiSummary.model_validate(
+                    _with_utc_datetimes(row, "window_end", "updated_at")
+                )
+            )
         return summaries
 
     def get_by_id(self, analysis_id: str) -> HalfHourAiAnalysis | None:
@@ -186,7 +192,15 @@ class DowMonitorHalfHourAiRepository:
         for field in ("evidence", "risks", "scenarios", "data_quality", "input_snapshot"):
             raw = row.pop(f"{field}_json", None)
             row[field] = json.loads(raw or ("{}" if field == "input_snapshot" else "[]"))
-        return HalfHourAiAnalysis.model_validate(row)
+        return HalfHourAiAnalysis.model_validate(
+            _with_utc_datetimes(
+                row,
+                "window_end",
+                "data_cutoff",
+                "created_at",
+                "updated_at",
+            )
+        )
 
     def _summary_select(self, market: str, symbol: str) -> str:
         return f"""
@@ -204,3 +218,18 @@ def _utc_text(value: datetime | None) -> str:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must be timezone-aware")
     return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def _with_utc_datetimes(row: dict, *fields: str) -> dict:
+    normalized = dict(row)
+    for field in fields:
+        value = normalized.get(field)
+        if value is None:
+            continue
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        else:
+            parsed = parsed.astimezone(UTC)
+        normalized[field] = parsed
+    return normalized

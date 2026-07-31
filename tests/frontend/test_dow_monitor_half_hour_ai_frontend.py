@@ -18,6 +18,7 @@ def test_half_hour_ai_frontend_contract() -> None:
             str(FRONTEND / "node_modules" / "vitest" / "vitest.mjs"),
             "run",
             "src/components/dow-monitor/DowMonitorHalfHourAiButton.test.tsx",
+            "src/components/dow-monitor/formatServerTimestamp.test.ts",
             "src/components/dow-monitor/DowMonitorList.test.tsx",
         ],
         cwd=FRONTEND,

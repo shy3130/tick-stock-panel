@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { cn } from '@/lib/cn'
 
 import { DowMonitorAiAnalysisDialog } from './DowMonitorAiAnalysisDialog'
+import { formatServerTimestamp } from './formatServerTimestamp'
 import type { DowMonitorHalfHourAiSummary } from './types'
 
 
@@ -33,6 +34,7 @@ export function DowMonitorHalfHourAiButton({
     summary: null,
   }
   const actionable = Boolean(current.analysis_id)
+  const checkpoint = formatServerTimestamp(current.window_end)
   return (
     <>
       <button
@@ -50,7 +52,7 @@ export function DowMonitorHalfHourAiButton({
       >
         <span className="block text-[9px] text-muted">
           半小时分析 · {STATUS_LABELS[current.status]}
-          {current.window_end ? ` · ${current.window_end.slice(11, 16)}` : ''}
+          {checkpoint ? ` · 北京时间 ${checkpoint.slice(11)}` : ''}
         </span>
         <strong className="block truncate text-[11px] font-medium">
           {current.title || STATUS_LABELS[current.status]}

@@ -107,6 +107,35 @@ def test_repository_schema_is_permanent_and_saves_json_each_row() -> None:
     assert b'"analysis_id": "a1"' in (calls[-1][1] or b"")
 
 
+def test_repository_marks_clickhouse_datetime_values_as_utc() -> None:
+    row = {
+        "analysis_id": "a1",
+        "market": "cn",
+        "symbol": "002714.SZ",
+        "trade_date": "2026-07-31",
+        "window_end": "2026-07-31 03:30:00.000",
+        "status": "completed",
+        "title": "量价仍待确认",
+        "summary": "价格回升但资金持续性不足",
+        "updated_at": "2026-07-31 03:30:02.000",
+    }
+    repository = DowMonitorHalfHourAiRepository(
+        query_fn=lambda _sql: [row],
+        execute_fn=lambda *_args: b"",
+    )
+
+    summary = repository.latest_summaries([("cn", "002714.SZ")])[
+        ("cn", "002714.SZ")
+    ]
+
+    assert summary.window_end == datetime(
+        2026, 7, 31, 3, 30, tzinfo=UTC
+    )
+    assert summary.updated_at == datetime(
+        2026, 7, 31, 3, 30, 2, tzinfo=UTC
+    )
+
+
 def test_snapshot_excludes_rows_after_cutoff_and_uses_cumulative_scope() -> None:
     builder = HalfHourAiSnapshotBuilder(minimum_observations=2)
     snapshot = builder.build(

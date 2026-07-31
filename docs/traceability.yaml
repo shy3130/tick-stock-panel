@@ -493,6 +493,7 @@ requirements:
       - backend/app/services/dow_monitor_service.py
       - frontend/src/components/dow-monitor/DowMonitorAiAnalysisDialog.tsx
       - frontend/src/components/dow-monitor/DowMonitorHalfHourAiButton.tsx
+      - frontend/src/components/dow-monitor/formatServerTimestamp.ts
       - frontend/src/components/dow-monitor/DowMonitorList.tsx
       - frontend/src/components/dow-monitor/DowMonitorMobileRow.tsx
     tests:

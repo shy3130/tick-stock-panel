@@ -21,6 +21,10 @@ Independent findings:
   WebSocket publisher, quote context, or minute-result writer is injected.
 - Overview is lightweight and failure-tolerant; long detail is fetched lazily.
   Mobile and desktop entries remain separate from real-time interpretation.
+- Repository reads restore the UTC timezone that ClickHouse JSON rows omit.
+  The shared frontend formatter then renders Beijing time explicitly and derives
+  the history date in the symbol's exchange timezone, preventing both the
+  observed eight-hour display error and US cross-midnight history misses.
 
 The production review must still inspect the actual ClickHouse table, container
 process/port state, a completed model call, and before/after signal/WebSocket

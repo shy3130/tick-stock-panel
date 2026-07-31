@@ -3,13 +3,16 @@ import { useEffect, useState } from 'react'
 
 import { Modal } from '@/components/Modal'
 
+import {
+  formatExchangeTradeDate,
+  formatServerTimestamp,
+} from './formatServerTimestamp'
 import type { DowMonitorHalfHourAiSummary } from './types'
 import { useDowMonitorAiDetail, useDowMonitorAiHistory } from './useDowMonitor'
 
 
 function checkpoint(value: string | null): string {
-  if (!value) return '--'
-  return value.slice(11, 16)
+  return formatServerTimestamp(value)?.slice(11) ?? '--'
 }
 
 export function DowMonitorAiAnalysisDialog({
@@ -21,7 +24,7 @@ export function DowMonitorAiAnalysisDialog({
   latest: DowMonitorHalfHourAiSummary
   onClose: () => void
 }) {
-  const tradeDate = latest.window_end?.slice(0, 10) ?? ''
+  const tradeDate = formatExchangeTradeDate(latest.window_end, symbol)
   const history = useDowMonitorAiHistory(symbol, tradeDate, true)
   const [selectedId, setSelectedId] = useState(latest.analysis_id ?? '')
   useEffect(() => {
@@ -70,7 +73,7 @@ export function DowMonitorAiAnalysisDialog({
           <div className="space-y-5 text-sm">
             <section>
               <p className="text-xs text-muted">
-                截止 {analysis.data_cutoff.replace('T', ' ').slice(0, 16)}
+                截止 {formatServerTimestamp(analysis.data_cutoff)}（北京时间）
               </p>
               <h3 className="mt-1 text-lg font-semibold">{analysis.title}</h3>
               <p className="mt-2 leading-6 text-secondary">{analysis.conclusion}</p>

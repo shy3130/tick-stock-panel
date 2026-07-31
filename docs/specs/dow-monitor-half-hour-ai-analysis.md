@@ -46,6 +46,10 @@ separate half-hour-analysis view.
 Desktop MUST provide an independent compact entry. Mobile MUST place the entry
 below the real-time key interpretation without merging their content. All saved
 checkpoints for the current trading date MUST remain selectable in the view.
+Visible checkpoints and cutoffs MUST interpret backend timestamps as UTC and
+render them explicitly in `Asia/Shanghai` (Beijing time). The history query date
+MUST remain the symbol exchange's trading date, including US sessions that cross
+Beijing midnight.
 
 AI/provider or ClickHouse unavailability MUST degrade this feature to an
 explicit unavailable/failed state without changing existing real-time analysis

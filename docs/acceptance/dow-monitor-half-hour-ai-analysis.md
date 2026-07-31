@@ -26,6 +26,10 @@ API and UI evidence:
   The backend test proves the conclusion is absent until the detail route.
 - The frontend component test proves history/detail are not requested before
   the independent action is opened.
+- ClickHouse's timezone-less JSON datetime is normalized to aware UTC at the
+  repository boundary. Frontend tests prove `2026-07-31 03:30:00.000` renders
+  as `北京时间 11:30`, while US history queries retain the exchange date across
+  Beijing midnight.
 - Desktop renders an independent half-hour column; mobile reuses the separate
   third-row action slot below real-time interpretation.
 - 21 focused frontend assertions passed and `pnpm build` completed on
