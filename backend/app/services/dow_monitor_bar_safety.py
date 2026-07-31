@@ -3,12 +3,11 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 
-
 _NUMERIC_FIELDS = ("open", "high", "low", "close", "volume")
 _MINIMUM_BARS = {"5m": 2, "15m": 2, "30m": 2, "60m": 2, "day": 2}
 
 
-class InsufficientDowBars(ValueError):
+class InsufficientDowBars(ValueError):  # noqa: N818 - domain condition, not a generic API error
     def __init__(
         self,
         timeframe: str,

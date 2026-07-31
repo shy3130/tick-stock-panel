@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable, Sequence
 
 from app.services.dow_monitor_models import HistoryBackfillStatus
-
 
 _ACTIVE_STATES = {"queued", "running", "rebuilding"}
 _VALID_STATES = _ACTIVE_STATES | {"completed", "partial", "failed"}
