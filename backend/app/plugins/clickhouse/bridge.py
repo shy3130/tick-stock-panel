@@ -24,13 +24,22 @@ def database_identifier() -> str:
     return _database()
 
 
-def query_json_each_row(sql: str) -> list[dict]:
+def query_json_each_row(
+    sql: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> list[dict]:
     """执行 SQL 并返回 JSONEachRow。异常信息不包含凭证。"""
 
     endpoint = _url()
     if not endpoint:
         raise RuntimeError("未配置 CLICKHOUSE_URL")
-    timeout = float(os.getenv("CLICKHOUSE_READ_TIMEOUT_SECONDS", "30"))
+    configured_timeout = float(os.getenv("CLICKHOUSE_READ_TIMEOUT_SECONDS", "30"))
+    timeout = (
+        configured_timeout
+        if timeout_seconds is None
+        else max(0.001, min(configured_timeout, timeout_seconds))
+    )
     database = parse.quote(_database(), safe="")
     body = f"{sql.rstrip().rstrip(';')} FORMAT JSONEachRow".encode()
     req = request.Request(f"{endpoint}/?database={database}", data=body, method="POST")

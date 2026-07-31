@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from inspect import Parameter, signature
+from time import monotonic
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -40,6 +42,8 @@ class StableStateBuilder(Protocol):
         timeframe: str,
         bars: tuple[RawCandlestick, ...],
         as_of: datetime,
+        *,
+        deadline: float | None = None,
     ) -> StableTimeframeState: ...
 
 
@@ -89,6 +93,8 @@ class DowEngineStableStateBuilder:
         timeframe: str,
         bars: tuple[RawCandlestick, ...],
         as_of: datetime,
+        *,
+        deadline: float | None = None,
     ) -> StableTimeframeState:
         payload = [
             {
@@ -102,13 +108,26 @@ class DowEngineStableStateBuilder:
             for bar in bars
             if _required_bar(bar)
         ]
-        result = self._client.evaluate(
-            symbol,
-            timeframe,
-            payload,
-            "FINAL",
-            as_of,
-        )
+        if deadline is None:
+            result = self._client.evaluate(
+                symbol,
+                timeframe,
+                payload,
+                "FINAL",
+                as_of,
+            )
+        else:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError("minute-result materialization deadline exceeded")
+            result = self._client.evaluate(
+                symbol,
+                timeframe,
+                payload,
+                "FINAL",
+                as_of,
+                timeout_s=remaining,
+            )
         engine_bars = [
             bar.model_dump(mode="python")
             for bar in result.bars
@@ -153,7 +172,9 @@ class DowMonitorMinuteResultHistoryBuilder:
         backfill: bool,
         notifications: Sequence[DowNotification],
         decision_minutes: set[datetime] | None = None,
+        deadline: float | None = None,
     ) -> list[MinuteResultContext]:
+        self._require_budget(deadline)
         normalized = normalize_monitor_symbol(symbol.symbol)
         zone = MARKET_ZONES[symbol.market]
         minute_rows = sorted(
@@ -195,6 +216,7 @@ class DowMonitorMinuteResultHistoryBuilder:
         output: list[MinuteResultContext] = []
 
         for minute_index, row in enumerate(minute_rows):
+            self._require_budget(deadline)
             source_bar_time = _aware(row.bar_time)
             decision_minute = source_bar_time + timedelta(minutes=1)
             if (
@@ -223,6 +245,7 @@ class DowMonitorMinuteResultHistoryBuilder:
             states: dict[str, StableTimeframeState] = {}
             source_timestamps = {"candlestick": source_bar_time}
             for timeframe, candidates in period_rows.items():
+                self._require_budget(deadline)
                 eligible = tuple(
                     candidate
                     for candidate in candidates
@@ -238,11 +261,14 @@ class DowMonitorMinuteResultHistoryBuilder:
                     if timeframe == "5m":
                         state = self._local_stable_state(timeframe, eligible)
                     else:
-                        state = self._stable_state_builder.build(
+                        self._require_budget(deadline)
+                        state = self._call_with_deadline(
+                            self._stable_state_builder.build,
                             normalized,
                             timeframe,
                             eligible,
                             decision_minute,
+                            deadline=deadline,
                         )
                     stable_cache[cache_key] = state
                 states[timeframe] = state
@@ -292,7 +318,28 @@ class DowMonitorMinuteResultHistoryBuilder:
                     updated_at=datetime.now(UTC),
                 )
             )
+
         return output
+
+    @staticmethod
+    def _call_with_deadline(method, *args, deadline: float | None, **kwargs):
+        if deadline is not None:
+            try:
+                parameters = tuple(signature(method).parameters.values())
+            except (TypeError, ValueError):
+                parameters = ()
+            if any(
+                parameter.name == "deadline"
+                or parameter.kind == Parameter.VAR_KEYWORD
+                for parameter in parameters
+            ):
+                kwargs["deadline"] = deadline
+        return method(*args, **kwargs)
+
+    @staticmethod
+    def _require_budget(deadline: float | None) -> None:
+        if deadline is not None and monotonic() >= deadline:
+            raise TimeoutError("minute result resource budget exhausted")
 
     def candidate_keys(
         self,

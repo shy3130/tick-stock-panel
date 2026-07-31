@@ -85,7 +85,7 @@ def _service(tmp_path, monkeypatch, materializer: Materializer, events: list[str
     return service
 
 
-def test_monitor_cycle_materializes_after_signal_and_minute_decision(
+def test_monitor_cycle_schedules_backfill_without_waiting_after_realtime_decision(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -94,7 +94,7 @@ def test_monitor_cycle_materializes_after_signal_and_minute_decision(
 
     asyncio.run(service.run_once())
 
-    assert events == ["formal-signals", "minute-decision", "minute-results"]
+    assert events == ["formal-signals", "minute-decision"]
 
 
 def test_materializer_error_does_not_change_monitor_success_state(

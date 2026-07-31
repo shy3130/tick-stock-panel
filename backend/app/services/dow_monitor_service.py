@@ -11,7 +11,8 @@ from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from threading import Lock
 from time import monotonic
 from typing import Literal
 from uuid import uuid4
@@ -23,12 +24,12 @@ from app.services.dow_minute_decision import (
     MinuteDecisionContext,
     build_minute_decision,
 )
+from app.services.dow_monitor_bar_safety import InsufficientDowBars
 from app.services.dow_monitor_bars import (
     TIMEFRAME_MINUTES,
     TimeframeBars,
     build_timeframes,
 )
-from app.services.dow_monitor_bar_safety import InsufficientDowBars
 from app.services.dow_monitor_client import (
     DowEngineResult,
     DowEngineUnavailable,
@@ -55,8 +56,121 @@ except Exception:  # pragma: no cover - exercised by fallback behavior.
 logger = logging.getLogger(__name__)
 
 TIMEFRAMES = ("5m", "15m", "30m", "60m", "day")
+MAX_PARALLEL_SYMBOLS = 3
 CAPITAL_DELAY_THRESHOLD = timedelta(minutes=15)
 NotificationIndex = dict[tuple[str, str], list[DowNotification]]
+
+
+def _completed_bucket_marker(
+    symbol: str,
+    source_timestamp: datetime,
+    minutes: int,
+) -> tuple[datetime, int] | None:
+    policy = market_session_policy(symbol)
+    zone = ZoneInfo(policy.timezone)
+    local_source = source_timestamp.astimezone(zone)
+    local_time = local_source.time().replace(tzinfo=None)
+    completed_at = local_source + timedelta(minutes=1)
+    for session_start, session_end in policy.sessions:
+        if not (session_start <= local_time < session_end):
+            continue
+        session_start_at = datetime.combine(
+            local_source.date(),
+            session_start,
+            tzinfo=zone,
+        )
+        session_end_at = datetime.combine(
+            local_source.date(),
+            session_end,
+            tzinfo=zone,
+        )
+        elapsed_minutes = max(
+            0,
+            int(
+                (
+                    min(completed_at, session_end_at) - session_start_at
+                ).total_seconds()
+                // 60
+            ),
+        )
+        completed_buckets = elapsed_minutes // minutes
+        if completed_at >= session_end_at and elapsed_minutes % minutes:
+            completed_buckets += 1
+        return session_start_at, completed_buckets
+    return None
+
+
+def _completed_daily_marker(
+    symbol: str,
+    source_timestamp: datetime,
+) -> date | None:
+    policy = market_session_policy(symbol)
+    zone = ZoneInfo(policy.timezone)
+    local_source = source_timestamp.astimezone(zone)
+    if local_source.weekday() >= 5:
+        return None
+    final_close = max(end for _start, end in policy.sessions)
+    close_at = datetime.combine(local_source.date(), final_close, tzinfo=zone)
+    return (
+        local_source.date()
+        if local_source + timedelta(minutes=1) >= close_at
+        else None
+    )
+
+
+def due_timeframes_for_minute(
+    symbol: str,
+    source_timestamp: datetime,
+    previous_states: dict[str, DowTimeframeState],
+) -> tuple[str, ...]:
+    """Return only periods whose stable input changed or needs recovery."""
+    policy = market_session_policy(symbol)
+    zone = ZoneInfo(policy.timezone)
+    due: list[str] = []
+    for timeframe in TIMEFRAMES:
+        previous = previous_states.get(timeframe)
+        if (
+            previous is None
+            or previous.source_timestamp is None
+            or previous.freshness_state != "LIVE"
+            or bool(previous.snapshot.get("evaluation_error"))
+        ):
+            due.append(timeframe)
+            continue
+        previous_local = previous.source_timestamp.astimezone(zone)
+        if timeframe == "day":
+            completed_day = _completed_daily_marker(symbol, source_timestamp)
+            if completed_day is None:
+                continue
+            previous_is_final = (
+                previous.snapshot.get("bar_completion") == "FINAL"
+                and not bool(previous.snapshot.get("provisional", False))
+            )
+            if (
+                previous_local.date() < completed_day
+                or (
+                    previous_local.date() == completed_day
+                    and not previous_is_final
+                )
+            ):
+                due.append(timeframe)
+            continue
+        minutes = TIMEFRAME_MINUTES[timeframe]
+        current_marker = _completed_bucket_marker(symbol, source_timestamp, minutes)
+        previous_marker = _completed_bucket_marker(
+            symbol,
+            previous.source_timestamp,
+            minutes,
+        )
+        if current_marker is None or current_marker[1] <= 0:
+            continue
+        if (
+            previous_marker is None
+            or previous_marker[0] != current_marker[0]
+            or previous_marker[1] < current_marker[1]
+        ):
+            due.append(timeframe)
+    return tuple(due)
 
 
 def _monitor_symbol_identity(symbol: str) -> str:
@@ -283,6 +397,7 @@ class DowMonitorService:
         poll_seconds: float = 15,
         now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
         minute_result_materializer=None,
+        minute_result_scheduler=None,
         history_status_reader=None,
         half_hour_ai_repository=None,
     ) -> None:
@@ -291,8 +406,22 @@ class DowMonitorService:
         self._dow_client = dow_client
         self._daily_loader = daily_loader
         self.poll_seconds = poll_seconds
+        self.max_parallel_symbols = MAX_PARALLEL_SYMBOLS
         self._now_fn = now_fn
         self._minute_result_materializer = minute_result_materializer
+        self._minute_result_scheduler = minute_result_scheduler
+        if (
+            self._minute_result_scheduler is None
+            and self._minute_result_materializer is not None
+        ):
+            from app.services.dow_monitor_minute_result_scheduler import (
+                MinuteResultBackfillScheduler,
+            )
+
+            self._minute_result_scheduler = MinuteResultBackfillScheduler(
+                self._minute_result_materializer,
+                now_fn=self._now,
+            )
         self._history_status_reader = history_status_reader
         self._half_hour_ai_repository = half_hour_ai_repository
         self._stop = asyncio.Event()
@@ -305,22 +434,34 @@ class DowMonitorService:
         self._errors: dict[str, str] = {}
         self._latest_quotes_by_symbol: dict[str, dict] = {}
         self._next_day_direction_by_symbol: dict[str, dict] = {}
+        self._metrics_lock = Lock()
+        self._evaluated_symbols: list[str] = []
+        self._last_evaluation_request_count = 0
+        self._last_cache_skip_count = 0
+        self._last_evaluated_timeframes: dict[str, list[str]] = {}
+        self._last_cycle_duration_seconds: float | None = None
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
         self._stop = asyncio.Event()
+        if self._minute_result_scheduler is not None:
+            await self._minute_result_scheduler.start()
         self._task = asyncio.create_task(self._loop(), name="dow-monitor")
 
     async def stop(self) -> None:
         task = self._task
         if task is None:
+            if self._minute_result_scheduler is not None:
+                await self._minute_result_scheduler.stop(timeout_seconds=5.0)
             return
         self._stop.set()
         try:
             await task
         finally:
             self._task = None
+            if self._minute_result_scheduler is not None:
+                await self._minute_result_scheduler.stop(timeout_seconds=5.0)
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
@@ -336,8 +477,14 @@ class DowMonitorService:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
 
     async def run_once(self) -> None:
+        cycle_started = monotonic()
         now = self._now()
         self._last_started_at = now
+        with self._metrics_lock:
+            self._evaluated_symbols = []
+            self._last_evaluation_request_count = 0
+            self._last_cache_skip_count = 0
+            self._last_evaluated_timeframes = {}
         enabled = [
             item for item in await asyncio.to_thread(self.store.list_symbols) if item.enabled
         ]
@@ -345,7 +492,13 @@ class DowMonitorService:
             self._last_error = None
             self._last_success_at = now
             self._last_completed_at = self._now()
+            self._last_cycle_duration_seconds = round(monotonic() - cycle_started, 6)
             return
+        if self._minute_result_scheduler is not None:
+            try:
+                self._minute_result_scheduler.request(enabled, now)
+            except Exception:
+                logger.exception("dow monitor minute result scheduling failed")
 
         starts_by_symbol, cold_symbols = await asyncio.to_thread(
             self._fetch_plan,
@@ -365,6 +518,7 @@ class DowMonitorService:
                 self._errors[item.symbol] = message
                 await asyncio.to_thread(self._mark_all, item, "STALE_DATA", now)
             self._last_completed_at = self._now()
+            self._last_cycle_duration_seconds = round(monotonic() - cycle_started, 6)
             return
         self._retain_latest_quotes(batch.quotes)
 
@@ -376,7 +530,6 @@ class DowMonitorService:
             and freshness.state == "LIVE"
         ]
         history_rows = pl.DataFrame()
-        warmup_errors: dict[str, str] = {}
         if cold_live_symbols:
             try:
                 history = await asyncio.to_thread(
@@ -385,65 +538,85 @@ class DowMonitorService:
                     now,
                 )
             except Exception as exc:
-                message = str(exc)
-                warmup_errors.update(dict.fromkeys(cold_live_symbols, message))
+                logger.warning(
+                    "dow monitor history warmup unavailable; evaluating only due "
+                    "timeframes with current inputs: %s",
+                    exc,
+                )
             else:
                 history_rows = history.minute_rows
-                for symbol in cold_live_symbols:
-                    coverage = history.coverage_by_symbol.get(symbol)
-                    if coverage is None:
-                        warmup_errors[symbol] = "HISTORY_INCOMPLETE:NO_PRIOR_SESSION"
-                    elif coverage.state != "COMPLETE":
-                        warmup_errors[symbol] = (
-                            f"HISTORY_INCOMPLETE:{coverage.reason or 'NO_PRIOR_SESSION'}"
-                        )
 
         notification_index = await asyncio.to_thread(self._load_notification_index)
         intraday_capital = await asyncio.to_thread(
             self._intraday_capital_by_symbol,
             [item.symbol for item in enabled],
         )
-        any_success = False
-        cycle_errors: list[str] = []
-        for item in enabled:
-            warmup_error = warmup_errors.get(item.symbol)
-            if warmup_error is not None:
-                await asyncio.to_thread(
-                    self._mark_all,
-                    item,
-                    "ANALYSIS_PAUSED",
-                    now,
-                )
-                self._errors[item.symbol] = warmup_error
-                cycle_errors.append(f"{item.symbol}: {warmup_error}")
-                continue
+        semaphore = asyncio.Semaphore(self.max_parallel_symbols)
+
+        async def evaluate_one(
+            item: MonitoredSymbol,
+        ) -> tuple[MonitoredSymbol, str | None, bool]:
+            symbol_notification_index = {
+                key: list(values)
+                for key, values in notification_index.items()
+                if key[0] == item.symbol
+            }
             try:
-                error, symbol_succeeded = await asyncio.to_thread(
-                    self._evaluate_symbol,
-                    item,
-                    batch,
-                    now,
-                    notification_index,
-                    item.symbol in cold_symbols,
-                    history_rows,
-                )
+                async with semaphore:
+                    error, symbol_succeeded = await asyncio.to_thread(
+                        self._evaluate_symbol,
+                        item,
+                        batch,
+                        now,
+                        symbol_notification_index,
+                        item.symbol in cold_symbols,
+                        history_rows,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 error = str(exc)
                 symbol_succeeded = False
-                await asyncio.to_thread(self._mark_all, item, "ANALYSIS_PAUSED", now)
+                await asyncio.to_thread(
+                    self._mark_all_analysis_failures,
+                    item,
+                    exc,
+                    now,
+                )
                 logger.exception("dow monitor symbol failed: %s", item.symbol)
             if symbol_succeeded:
                 self._last_success_by_symbol[item.symbol] = now
-                await asyncio.to_thread(
+                refreshed_decision = await asyncio.to_thread(
                     self._refresh_minute_decision,
                     item,
                     batch.minute_rows,
                     intraday_capital.get(_monitor_symbol_identity(item.symbol)),
                     now,
                 )
-                any_success = True
+                if refreshed_decision is not None:
+                    await self._submit_live_minute_result(
+                        item=item,
+                        decision=refreshed_decision,
+                        minute_rows=batch.minute_rows,
+                        intraday_capital=intraday_capital.get(
+                            _monitor_symbol_identity(item.symbol)
+                        ),
+                        notifications=symbol_notification_index,
+                        now=now,
+                    )
+            return item, error, symbol_succeeded
+
+        results = await asyncio.gather(*(evaluate_one(item) for item in enabled))
+        with self._metrics_lock:
+            self._evaluated_symbols = [
+                item.symbol
+                for item in enabled
+                if self._last_evaluated_timeframes.get(item.symbol)
+            ]
+        any_success = False
+        cycle_errors: list[str] = []
+        for item, error, symbol_succeeded in results:
+            any_success = any_success or symbol_succeeded
             if error is None:
                 self._errors.pop(item.symbol, None)
             else:
@@ -453,16 +626,8 @@ class DowMonitorService:
         self._last_error = "; ".join(cycle_errors) or None
         if any_success:
             self._last_success_at = now
-        if self._minute_result_materializer is not None:
-            try:
-                await asyncio.to_thread(
-                    self._minute_result_materializer.materialize,
-                    enabled,
-                    now,
-                )
-            except Exception:
-                logger.exception("dow monitor minute result materialization failed")
         self._last_completed_at = self._now()
+        self._last_cycle_duration_seconds = round(monotonic() - cycle_started, 6)
 
     def _evaluate_symbol(
         self,
@@ -496,15 +661,36 @@ class DowMonitorService:
             if cold_start
             else batch.minute_rows
         )
+        previous_states = {
+            state.timeframe: state
+            for state in self.store.list_states()
+            if state.symbol == item.symbol
+        }
+        latest = self._latest_completed_minute(item, batch.minute_rows, now)
+        due_timeframes = (
+            due_timeframes_for_minute(
+                item.symbol,
+                latest[1],
+                previous_states,
+            )
+            if latest is not None
+            else tuple(
+                timeframe
+                for timeframe in TIMEFRAMES
+                if timeframe not in previous_states
+                or previous_states[timeframe].freshness_state != "LIVE"
+            )
+        )
+        with self._metrics_lock:
+            self._last_cache_skip_count += len(TIMEFRAMES) - len(due_timeframes)
+            self._last_evaluated_timeframes[item.symbol] = list(due_timeframes)
         frames_by_cutoff: dict[str | None, dict[str, TimeframeBars]] = {}
         errors: list[str] = []
         successes = 0
-        for timeframe in TIMEFRAMES:
-            previous_state = self.store.get_state(item.symbol, timeframe)
+        for timeframe in due_timeframes:
+            previous_state = previous_states.get(timeframe)
             cutoff = (
-                None
-                if cold_start
-                else previous_state.source_timestamp
+                previous_state.source_timestamp
                 if previous_state is not None
                 else None
             )
@@ -521,11 +707,13 @@ class DowMonitorService:
             bars, completion = self._merge_evaluation_bars(
                 item,
                 timeframe,
-                None if cold_start else previous_state,
+                previous_state,
                 frame,
                 now,
             )
             try:
+                with self._metrics_lock:
+                    self._last_evaluation_request_count += 1
                 result = self._dow_client.evaluate(
                     item.symbol,
                     timeframe,
@@ -534,10 +722,10 @@ class DowMonitorService:
                     now,
                 )
             except InsufficientDowBars as exc:
-                self._mark_one(
+                self._mark_timeframe_failure(
                     item,
                     timeframe,
-                    "ANALYSIS_PAUSED",
+                    exc,
                     now,
                 )
                 errors.append(
@@ -546,10 +734,10 @@ class DowMonitorService:
                 )
                 continue
             except Exception as exc:
-                self._mark_one(
+                self._mark_timeframe_failure(
                     item,
                     timeframe,
-                    "ANALYSIS_PAUSED",
+                    exc,
                     now,
                 )
                 errors.append(str(exc))
@@ -569,7 +757,12 @@ class DowMonitorService:
                 notification_index,
             )
             successes += 1
-        return "; ".join(dict.fromkeys(errors)) or None, successes > 0
+        decision_ready = successes > 0 or not due_timeframes or all(
+            timeframe in previous_states
+            and bool(previous_states[timeframe].snapshot)
+            for timeframe in ("5m", "15m")
+        )
+        return "; ".join(dict.fromkeys(errors)) or None, decision_ready
 
     def _save_result(
         self,
@@ -1121,6 +1314,42 @@ class DowMonitorService:
         for timeframe in TIMEFRAMES:
             self._mark_one(item, timeframe, freshness_state, now)
 
+    def _mark_all_analysis_failures(
+        self,
+        item: MonitoredSymbol,
+        error: Exception,
+        now: datetime,
+    ) -> None:
+        for timeframe in TIMEFRAMES:
+            self._mark_timeframe_failure(item, timeframe, error, now)
+
+    def _mark_timeframe_failure(
+        self,
+        item: MonitoredSymbol,
+        timeframe: str,
+        error: Exception,
+        now: datetime,
+    ) -> None:
+        previous = self.store.get_state(item.symbol, timeframe)
+        if (
+            previous is None
+            or previous.source_timestamp is None
+            or not previous.snapshot
+        ):
+            self._mark_one(item, timeframe, "ANALYSIS_PAUSED", now)
+            return
+        snapshot = deepcopy(previous.snapshot)
+        snapshot["evaluation_error"] = str(error).replace("\n", " ")[:500]
+        snapshot["evaluation_failed_at"] = now.isoformat()
+        self.store.save_state(
+            previous.model_copy(
+                update={
+                    "freshness_state": "LIVE",
+                    "snapshot": snapshot,
+                }
+            )
+        )
+
     def _mark_one(
         self,
         item: MonitoredSymbol,
@@ -1194,7 +1423,7 @@ class DowMonitorService:
         minute_rows: pl.DataFrame,
         intraday_capital: dict | None,
         now: datetime,
-    ) -> None:
+    ) -> DowMinuteDecision | None:
         if not self._market_is_open(item, now):
             return
         latest = self._latest_completed_minute(item, minute_rows, now)
@@ -1297,6 +1526,52 @@ class DowMonitorService:
             )
         )
         self.store.save_minute_decision(snapshot)
+        return snapshot
+
+    async def _submit_live_minute_result(
+        self,
+        *,
+        item: MonitoredSymbol,
+        decision: DowMinuteDecision,
+        minute_rows: pl.DataFrame,
+        intraday_capital: dict | None,
+        notifications: NotificationIndex,
+        now: datetime,
+    ) -> None:
+        if self._minute_result_scheduler is None:
+            return
+        try:
+            from app.services.dow_monitor_minute_result_live import (
+                build_live_minute_result_context,
+            )
+
+            quote = self._latest_quotes_by_symbol.get(
+                _monitor_symbol_identity(item.symbol),
+                self._latest_quotes_by_symbol.get(item.symbol, {}),
+            )
+            depth = quote.get("depth") if isinstance(quote.get("depth"), dict) else quote
+            context = await asyncio.to_thread(
+                build_live_minute_result_context,
+                item=item,
+                decision=decision,
+                minute_rows=minute_rows,
+                states=self.store.list_states(),
+                quote=quote,
+                depth=depth,
+                capital=intraday_capital,
+                notifications=tuple(
+                    notification
+                    for values in notifications.values()
+                    for notification in values
+                ),
+                updated_at=now,
+            )
+            self._minute_result_scheduler.submit_live(context)
+        except Exception:
+            logger.exception(
+                "dow monitor realtime minute result append failed: %s",
+                item.symbol,
+            )
 
     def _present_minute_decision(
         self,
@@ -1945,13 +2220,22 @@ class DowMonitorService:
             if any(start <= local_now.time() < end for start, end in policy.sessions):
                 open_enabled_markets.add(item.market)
         minute_results = (
-            self._minute_result_materializer.status().model_dump(mode="json")
+            self._minute_result_scheduler.status().model_dump(mode="json")
+            if self._minute_result_scheduler is not None
+            else self._minute_result_materializer.status().model_dump(mode="json")
             if self._minute_result_materializer is not None
             else {"enabled": False}
         )
+        with self._metrics_lock:
+            cycle_duration_seconds = self._last_cycle_duration_seconds
+            evaluation_request_count = self._last_evaluation_request_count
+            cache_skip_count = self._last_cache_skip_count
+            evaluated_symbols = list(self._evaluated_symbols)
+            evaluated_timeframes = deepcopy(self._last_evaluated_timeframes)
         return {
             "running": self._task is not None and not self._task.done(),
             "poll_seconds": self.poll_seconds,
+            "max_parallel_symbols": self.max_parallel_symbols,
             "source": "webstock",
             "enabled_markets": enabled_markets,
             "open_enabled_markets": sorted(open_enabled_markets),
@@ -1960,6 +2244,11 @@ class DowMonitorService:
             "last_success_at": self._as_json_time(self._last_success_at),
             "last_error": self._last_error,
             "errors": dict(self._errors),
+            "cycle_duration_seconds": cycle_duration_seconds,
+            "evaluation_request_count": evaluation_request_count,
+            "cache_skip_count": cache_skip_count,
+            "evaluated_symbols": evaluated_symbols,
+            "evaluated_timeframes": evaluated_timeframes,
             "minute_results": minute_results,
         }
 

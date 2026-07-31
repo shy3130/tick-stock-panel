@@ -1461,7 +1461,7 @@ def test_store_preserves_the_production_state_listing_contract(tmp_path) -> None
     assert store.list_states() == [state]
 
 
-def test_run_once_persists_each_symbol_decision_before_evaluating_the_next(
+def test_run_once_persists_successful_symbol_decisions_with_bounded_concurrency(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1497,13 +1497,7 @@ def test_run_once_persists_each_symbol_decision_before_evaluating_the_next(
         _daily_loader,
         now_fn=lambda: now,
     )
-    observed_before_second: list[bool] = []
-
     def evaluate(item, *_args, **_kwargs):
-        if item.symbol == second.symbol:
-            observed_before_second.append(
-                store.get_minute_decision(first.symbol) is not None
-            )
         return None, True
 
     monkeypatch.setattr(service, "_evaluate_symbol", evaluate)
@@ -1522,4 +1516,5 @@ def test_run_once_persists_each_symbol_decision_before_evaluating_the_next(
 
     asyncio.run(service.run_once())
 
-    assert observed_before_second == [True]
+    assert store.get_minute_decision(first.symbol) is not None
+    assert service.status()["max_parallel_symbols"] == 3

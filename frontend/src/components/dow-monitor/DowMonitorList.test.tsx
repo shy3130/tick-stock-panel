@@ -66,6 +66,34 @@ function item(
         },
         updated_at: '2026-07-29T09:35:02+08:00',
       },
+      '15m': {
+        symbol,
+        market: 'hk',
+        timeframe: '15m',
+        freshness_state: 'LIVE',
+        source_timestamp: '2026-07-29T09:30:00+08:00',
+        snapshot: {
+          bar_time: '2026-07-29T09:30:00+08:00',
+          bar_completion: 'FINAL',
+          price_to_line_pct: 0.4,
+          line_role: 'SUPPORT',
+          volume_ratio_20: 1.2,
+        },
+        chart: {
+          bars: [
+            {
+              index: 0,
+              timestamp: '2026-07-29T09:30:00+08:00',
+              open: 499,
+              high: 501,
+              low: 498,
+              close: 500,
+              volume: 220,
+            },
+          ],
+        },
+        updated_at: '2026-07-29T09:35:02+08:00',
+      },
     },
     latest_notification: {
       notification_id: 'n1',

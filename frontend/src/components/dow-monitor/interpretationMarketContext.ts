@@ -87,6 +87,9 @@ export interface InterpretationMarketContext {
   } | null
   metrics: InterpretationMarketMetrics
   evidence: Record<EvidenceDimension, InterpretationEvidence>
+  stableTimeframesAvailable: boolean
+  capitalAvailable: boolean
+  warmupMissing: string[]
   strategyDelayed: boolean
   realtimeDelayed: boolean
   delayed: boolean
@@ -104,7 +107,7 @@ function timestampDate(value: string | null | undefined): string | null {
 function completedBars(
   state: DowMonitorTimeframeState | undefined,
 ): DowMonitorBar[] {
-  if (!state || state.freshness_state !== 'LIVE') return []
+  if (!state || state.freshness_state === 'STALE_DATA') return []
   const bars = state.chart.bars ?? []
   if (
     state.snapshot.bar_completion !== 'FORMING'
@@ -190,7 +193,7 @@ function stableControlLine(
     const role = state?.snapshot.line_role?.trim()
     if (
       !state
-      || state.freshness_state !== 'LIVE'
+      || state.freshness_state === 'STALE_DATA'
       || state.snapshot.bar_completion === 'FORMING'
       || state.snapshot.provisional
       || !finite(price)
@@ -311,6 +314,18 @@ export function deriveInterpretationMarketContext({
     row.delayed
     || row.freshness.analysis.delayed,
   )
+  const stable5mAvailable = completedBars(item.states['5m']).length > 0
+  const stable15mAvailable = completedBars(item.states['15m']).length > 0
+  const stableTimeframesAvailable = stable5mAvailable && stable15mAvailable
+  const capitalAvailable = Boolean(
+    row.volumeFunds.capitalInflow.confirmed
+    || item.intraday_capital?.quality === 'COMPLETE',
+  )
+  const warmupMissing = [
+    ...(!stable5mAvailable ? ['5m周期'] : []),
+    ...(!stable15mAvailable ? ['15m周期'] : []),
+    ...(!capitalAvailable ? ['资金'] : []),
+  ]
   const delayed = realtimeDelayed
   const realtimePrice = realtime?.quote?.lastDone
   const currentPrice = delayed
@@ -346,7 +361,7 @@ export function deriveInterpretationMarketContext({
     latestCompleted5mClose: sameDayBars.at(-1)?.close ?? null,
     previousCompleted5mClose: sameDayBars.at(-2)?.close ?? null,
     vwap,
-    controlLine: delayed || strategyDelayed ? null : stableControlLine(item),
+    controlLine: delayed ? null : stableControlLine(item),
     metrics: {
       changePct: row.changePct,
       intradayPositionPct: row.trendPosition.intradayPositionPct,
@@ -365,6 +380,9 @@ export function deriveInterpretationMarketContext({
       fromDayLowPct: delayed ? null : row.breakoutRisk.fromDayLowPct,
       atr14Pct: row.breakoutRisk.atr14Pct,
     },
+    stableTimeframesAvailable,
+    capitalAvailable,
+    warmupMissing,
     strategyDelayed,
     realtimeDelayed,
     delayed,

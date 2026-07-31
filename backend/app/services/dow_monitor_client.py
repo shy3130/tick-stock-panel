@@ -299,6 +299,8 @@ class LongbridgeDowClient:
         bars: Sequence[Mapping[str, object]],
         completion: str,
         as_of: datetime,
+        *,
+        timeout_s: float | None = None,
     ) -> DowEngineResult:
         payload = {
             "symbol": symbol,
@@ -308,7 +310,14 @@ class LongbridgeDowClient:
             "bars": sanitize_engine_bars(timeframe, bars),
         }
         try:
-            response = self._client.post("/api/dow-state/evaluate", json=payload)
+            if timeout_s is None:
+                response = self._client.post("/api/dow-state/evaluate", json=payload)
+            else:
+                response = self._client.post(
+                    "/api/dow-state/evaluate",
+                    json=payload,
+                    timeout=timeout_s,
+                )
             response.raise_for_status()
             return DowEngineResult.model_validate(response.json())
         except (httpx.HTTPError, JSONDecodeError, ValidationError) as exc:

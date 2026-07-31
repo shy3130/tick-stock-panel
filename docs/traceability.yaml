@@ -538,3 +538,61 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-07-31-dow-monitor-offline-ai-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-INCREMENTAL-TIMEFRAME-EVALUATION-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_incremental_evaluation.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-BOUNDED-SYMBOL-CONCURRENCY-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_incremental_evaluation.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIVE-INTERPRETATION-AVAILABILITY-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - frontend/src/components/dow-monitor/interpretationMarketContext.ts
+      - frontend/src/components/dow-monitor/keyInterpretation.ts
+    tests:
+      - {path: tests/frontend/test_dow_monitor_live_interpretation_availability.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-REALTIME-APPEND-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_append.py
+      - backend/app/services/dow_monitor_minute_result_live.py
+      - backend/app/services/dow_monitor_minute_result_scheduler.py
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_scheduling.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MINUTE-RESULTS-STAGGERED-BACKFILL-001
+    specification: USER-20260731-DOW-MONITOR-INCREMENTAL-EVALUATION-001
+    implementation:
+      - backend/app/plugins/clickhouse/bridge.py
+      - backend/app/services/dow_monitor_client.py
+      - backend/app/services/dow_monitor_minute_result_history.py
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_minute_result_scheduler.py
+      - backend/app/services/dow_monitor_minute_result_source.py
+      - backend/app/services/dow_monitor_minute_result_repository.py
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_scheduling.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_history.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_minute_result_repository.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}

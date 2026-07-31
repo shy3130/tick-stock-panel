@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from datetime import date, datetime, time
+from time import monotonic
+from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from app.plugins.clickhouse import bridge
 from app.services.dow_monitor_minute_result_models import (
+    MinuteResultKey,
     RawCandlestick,
     RawCapitalSnapshot,
     RawDepthSnapshot,
@@ -15,6 +19,7 @@ from app.services.dow_monitor_minute_result_models import (
     RawTrade,
     normalize_monitor_symbol,
 )
+from app.services.dow_monitor_models import MonitoredSymbol
 
 QueryFn = Callable[[str], list[dict]]
 
@@ -40,7 +45,7 @@ def _time_literal(value: datetime) -> str:
 
 def _number(value: object) -> float | None:
     try:
-        parsed = float(value)
+        parsed = float(cast(Any, value))
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
@@ -88,6 +93,85 @@ class DowMonitorMinuteResultSource:
         self._query = query_fn
         self._database = database
 
+    def _query_with_deadline(
+        self,
+        sql: str,
+        deadline: float | None,
+    ) -> list[dict]:
+        if deadline is None:
+            return self._query(sql)
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("minute result resource budget exhausted")
+        budgeted_sql = (
+            f"{sql.rstrip()}\n"
+            f"SETTINGS max_execution_time = {max(0.001, remaining):.3f}"
+        )
+        if self._query is bridge.query_json_each_row:
+            return bridge.query_json_each_row(
+                budgeted_sql,
+                timeout_seconds=remaining,
+            )
+        return self._query(budgeted_sql)
+
+    def candidate_minute_keys(
+        self,
+        items: Sequence[MonitoredSymbol],
+        market_day: date,
+        end: datetime,
+        *,
+        deadline: float | None = None,
+    ) -> set[MinuteResultKey]:
+        enabled = [item for item in items if item.enabled]
+        if not enabled:
+            return set()
+        markets = {item.market for item in enabled}
+        if len(markets) != 1:
+            raise ValueError("candidate minute key query requires one market")
+        market = next(iter(markets))
+        zones = {
+            "cn": ZoneInfo("Asia/Shanghai"),
+            "hk": ZoneInfo("Asia/Hong_Kong"),
+            "us": ZoneInfo("America/New_York"),
+        }
+        start = datetime.combine(market_day, time.min, tzinfo=zones[market])
+        symbol_sql = _symbol_tuple([item.symbol for item in enabled])
+        rows = self._query_with_deadline(
+            f"""
+            SELECT symbol,
+                   toString(bar_time + interval 1 minute) AS decision_minute
+            FROM {self._database}.lb_realtime_candlesticks AS candles FINAL
+            WHERE symbol IN {symbol_sql}
+              AND period = 'min_1'
+              AND candles.bar_time >= parseDateTime64BestEffort({_time_literal(start)})
+              AND candles.bar_time < parseDateTime64BestEffort({_time_literal(end)})
+              AND candles.bar_time + interval 1 minute
+                    <= parseDateTime64BestEffort({_time_literal(end)})
+              AND isNotNull(open) AND isNotNull(high)
+              AND isNotNull(low) AND isNotNull(close) AND isNotNull(volume)
+            GROUP BY symbol, bar_time
+            ORDER BY symbol, bar_time
+            """,
+            deadline,
+        )
+        storage_zone = ZoneInfo("Asia/Shanghai")
+        output: set[MinuteResultKey] = set()
+        for row in rows:
+            value = row.get("decision_minute")
+            if value is None:
+                continue
+            parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=storage_zone)
+            output.add(
+                MinuteResultKey(
+                    market=market,
+                    symbol=normalize_monitor_symbol(str(row.get("symbol") or "")),
+                    decision_minute=parsed,
+                )
+            )
+        return output
+
     def load_raw_history(
         self,
         symbols: Sequence[str],
@@ -95,6 +179,7 @@ class DowMonitorMinuteResultSource:
         end: datetime,
         *,
         candle_start: datetime | None = None,
+        deadline: float | None = None,
     ) -> RawMinuteHistory:
         if end <= start:
             raise ValueError("end must be later than start")
@@ -107,7 +192,7 @@ class DowMonitorMinuteResultSource:
         end_sql = _time_literal(end)
         common = f"symbol IN {symbol_sql}"
 
-        quote_rows = self._query(
+        quote_rows = self._query_with_deadline(
             f"""
             SELECT symbol, market,
                    toString(snapshot_minute) AS snapshot_time,
@@ -118,9 +203,10 @@ class DowMonitorMinuteResultSource:
               AND quotes.updated_at >= parseDateTime64BestEffort({start_sql})
               AND quotes.updated_at < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, updated_at
-            """
+            """,
+            deadline,
         )
-        depth_rows = self._query(
+        depth_rows = self._query_with_deadline(
             f"""
             SELECT symbol, market,
                    toString(snapshot_minute) AS snapshot_time,
@@ -131,9 +217,10 @@ class DowMonitorMinuteResultSource:
               AND depth.updated_at >= parseDateTime64BestEffort({start_sql})
               AND depth.updated_at < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, updated_at
-            """
+            """,
+            deadline,
         )
-        trade_rows = self._query(
+        trade_rows = self._query_with_deadline(
             f"""
             SELECT symbol, market, toString(trade_time) AS trade_time,
                    price, volume, direction, toString(updated_at) AS updated_at
@@ -142,9 +229,10 @@ class DowMonitorMinuteResultSource:
               AND trades.trade_time >= parseDateTime64BestEffort({start_sql})
               AND trades.trade_time < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, trade_time, updated_at
-            """
+            """,
+            deadline,
         )
-        candle_rows = self._query(
+        candle_rows = self._query_with_deadline(
             f"""
             SELECT symbol, market, period, toString(bar_time) AS bar_time,
                    open, high, low, close, volume, turnover,
@@ -155,9 +243,10 @@ class DowMonitorMinuteResultSource:
               AND candles.bar_time >= parseDateTime64BestEffort({candle_start_sql})
               AND candles.bar_time < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, period, bar_time
-            """
+            """,
+            deadline,
         )
-        capital_rows = self._query(
+        capital_rows = self._query_with_deadline(
             f"""
             SELECT symbol, market,
                    toString(snapshot_minute) AS snapshot_time,
@@ -167,7 +256,8 @@ class DowMonitorMinuteResultSource:
               AND capital.updated_at >= parseDateTime64BestEffort({start_sql})
               AND capital.updated_at < parseDateTime64BestEffort({end_sql})
             ORDER BY symbol, updated_at
-            """
+            """,
+            deadline,
         )
 
         return RawMinuteHistory(

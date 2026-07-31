@@ -236,7 +236,12 @@ function liveWarmup({
   context,
   anomalies,
 }: KeyInterpretationInput): Candidate | null {
-  if (!context.strategyDelayed || context.realtimeDelayed || !finite(context.currentPrice)) {
+  if (
+    context.realtimeDelayed
+    || !finite(context.currentPrice)
+    || context.warmupMissing.length === 0
+    || (context.stableTimeframesAvailable && !context.strategyDelayed)
+  ) {
     return null
   }
   const momentum = context.metrics.momentum1m
@@ -259,9 +264,9 @@ function liveWarmup({
     category: isAnomaly ? 'ANOMALY' : 'OBSERVE',
     phase: isAnomaly ? 'ATTEMPT' : 'NONE',
     headline: isAnomaly
-      ? `实时${finite(volumeSpeed) && volumeSpeed >= INTERPRETATION_THRESHOLDS.volumeRatio ? '放量' : ''}${direction}，周期待确认`
-      : '实时行情正常，策略仍在预热',
-    explanation: `${evidenceText.join('，') || `现价 ${formatInterpretationPrice(context.currentPrice)}`}；5m/15m与资金仍在预热，不生成正式买卖信号`,
+      ? `实时${finite(volumeSpeed) && volumeSpeed >= INTERPRETATION_THRESHOLDS.volumeRatio ? '放量' : ''}${direction}，正式分析更新中`
+      : '实时行情正常，正式分析更新中',
+    explanation: `${evidenceText.join('，') || `现价 ${formatInterpretationPrice(context.currentPrice)}`}；${context.warmupMissing.join('、')}仍在预热，不生成正式买卖信号`,
     levels: [
       ...liveHighLevel(context),
       ...liveLowLevel(context),

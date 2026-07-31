@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 from app.services.dow_monitor_half_hour_ai_snapshot import HalfHourAiSnapshotBuilder
@@ -164,6 +165,23 @@ def test_existing_keys_are_returned_as_timezone_aware_logical_keys() -> None:
     assert "results.decision_minute <" in queries[0]
     assert "'700.HK'" in queries[0]
     assert "'00700.HK'" not in queries[0]
+
+
+def test_backfill_existing_key_query_receives_remaining_wall_clock_budget() -> None:
+    queries: list[str] = []
+    repository = DowMonitorMinuteResultRepository(
+        query_fn=lambda sql: queries.append(sql) or [],
+        execute_fn=ExecuteCapture(),
+    )
+
+    repository.existing_keys(
+        ["700.HK"],
+        DECISION_MINUTE - timedelta(hours=1),
+        NOW,
+        deadline=monotonic() + 5,
+    )
+
+    assert "SETTINGS max_execution_time =" in queries[0]
 
 
 # Catches ClickHouse DateTime64 local strings being passed through as naive

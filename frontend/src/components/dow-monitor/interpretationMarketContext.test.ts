@@ -324,6 +324,42 @@ describe('interpretation market context', () => {
     expect(context.liveDayLow).toBe(98)
     expect(context.strategyDelayed).toBe(true)
     expect(context.realtimeDelayed).toBe(false)
+    expect(context.stableTimeframesAvailable).toBe(false)
+    expect(context.capitalAvailable).toBe(true)
+    expect(context.warmupMissing).toEqual(['5m周期', '15m周期'])
+  })
+
+  it('separates scheduler delay from stable timeframe and capital availability', () => {
+    const context = deriveInterpretationMarketContext({
+      item: itemFixture(),
+      row: rowFixture({ delayed: true }),
+      realtime: realtimeFixture({ quoteDelayed: false, candlestickDelayed: false }),
+    })
+
+    expect(context.strategyDelayed).toBe(true)
+    expect(context.stableTimeframesAvailable).toBe(true)
+    expect(context.capitalAvailable).toBe(true)
+    expect(context.warmupMissing).toEqual([])
+    expect(context.controlLine).not.toBeNull()
+  })
+
+  it('keeps the last stable structure visible while reevaluation is paused', () => {
+    const item = itemFixture()
+    const pausedStates = Object.fromEntries(
+      Object.entries(item.states).map(([timeframe, value]) => [
+        timeframe,
+        value ? { ...value, freshness_state: 'ANALYSIS_PAUSED' as const } : value,
+      ]),
+    )
+    const context = deriveInterpretationMarketContext({
+      item: { ...item, states: pausedStates },
+      row: rowFixture({ delayed: true }),
+      realtime: realtimeFixture({ quoteDelayed: false, candlestickDelayed: false }),
+    })
+
+    expect(context.stableTimeframesAvailable).toBe(true)
+    expect(context.warmupMissing).toEqual([])
+    expect(context.controlLine).not.toBeNull()
   })
 
   it('applies evidence thresholds at their exact boundaries', () => {

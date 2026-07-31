@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from time import monotonic
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -206,6 +207,44 @@ def test_stable_state_replay_is_cached_per_completed_bucket() -> None:
     assert sum(timeframe == "15m" for _, timeframe, _ in stable_builder.calls) == 1
 
 
+def test_history_builder_passes_deadline_to_compatible_stable_builder() -> None:
+    class DeadlineStableStateBuilder(CountingStableStateBuilder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.deadline: float | None = None
+
+        def build(
+            self,
+            symbol: str,
+            timeframe: str,
+            bars: tuple[RawCandlestick, ...],
+            as_of: datetime,
+            *,
+            deadline: float | None = None,
+        ) -> StableTimeframeState:
+            self.deadline = deadline
+            return super().build(symbol, timeframe, bars, as_of)
+
+    minute = datetime(2026, 7, 29, 9, 45, tzinfo=SHANGHAI)
+    stable = _raw_bar(
+        datetime(2026, 7, 29, 9, 30, tzinfo=SHANGHAI),
+        period="min_15",
+    )
+    stable_builder = DeadlineStableStateBuilder()
+    deadline = monotonic() + 5
+
+    DowMonitorMinuteResultHistoryBuilder(stable_builder).build_contexts(
+        RawMinuteHistory(candlesticks=(_raw_bar(minute), stable)),
+        _symbol(),
+        date(2026, 7, 29),
+        True,
+        notifications=[],
+        deadline=deadline,
+    )
+
+    assert stable_builder.deadline == deadline
+
+
 def test_formal_signal_is_visible_only_at_or_after_trigger_time() -> None:
     first = datetime(2026, 7, 29, 9, 30, tzinfo=SHANGHAI)
     notification = DowNotification(
@@ -245,9 +284,20 @@ def test_engine_adapter_returns_authoritative_snapshot_and_enriched_bars() -> No
     class Client:
         def __init__(self) -> None:
             self.completion: str | None = None
+            self.timeout_s: float | None = None
 
-        def evaluate(self, symbol, timeframe, bars, completion, as_of):
+        def evaluate(
+            self,
+            symbol,
+            timeframe,
+            bars,
+            completion,
+            as_of,
+            *,
+            timeout_s=None,
+        ):
             self.completion = completion
+            self.timeout_s = timeout_s
             return SimpleNamespace(
                 snapshot=SimpleNamespace(
                     bar_completion="FINAL",
@@ -277,14 +327,18 @@ def test_engine_adapter_returns_authoritative_snapshot_and_enriched_bars() -> No
         period="min_15",
     )
 
+    deadline = monotonic() + 5
     state = DowEngineStableStateBuilder(client).build(
         "700.HK",
         "15m",
         (raw,),
         datetime(2026, 7, 29, 9, 45, tzinfo=SHANGHAI),
+        deadline=deadline,
     )
 
     assert client.completion == "FINAL"
+    assert client.timeout_s is not None
+    assert 0 < client.timeout_s <= 5
     assert state.price_to_line_pct == 0.7
     assert state.volume_ratio_20 == 2.4
     assert state.bars[0].close == 100

@@ -1,0 +1,50 @@
+# Independent review: Dow monitor incremental evaluation and realtime priority
+
+Status: passed for local semantic acceptance; production acceptance remains pending until the 10.28 deployment evidence is recorded.
+
+Reviewed specification: `docs/superpowers/specs/2026-07-31-dow-monitor-incremental-evaluation-and-realtime-priority-design.md`.
+
+## Requirement disposition
+
+| Requirement | Independent conclusion | Evidence |
+| --- | --- | --- |
+| `REQ-DOW-MONITOR-INCREMENTAL-TIMEFRAME-EVALUATION-001` | Passed | Completed-boundary scheduling, partial cold start, cache reuse, retry and stable-state failure preservation have executable backend coverage. |
+| `REQ-DOW-MONITOR-BOUNDED-SYMBOL-CONCURRENCY-001` | Passed | Cross-symbol concurrency is bounded at three, per-symbol timeframe order is preserved, and one-symbol failure isolation is covered. |
+| `REQ-DOW-MONITOR-LIVE-INTERPRETATION-AVAILABILITY-001` | Passed | Frontend selection distinguishes stale scheduling from genuinely missing stable/capital evidence and preserves business interpretation when stable inputs remain available. |
+| `REQ-DOW-MONITOR-MINUTE-RESULTS-REALTIME-APPEND-001` | Passed | Realtime contexts are symbol-local and causal; queueing is bounded, deduplicated, batched and fail-open. |
+| `REQ-DOW-MONITOR-MINUTE-RESULTS-STAGGERED-BACKFILL-001` | Passed | Backfill is single-flight and market-aware, uses explicit completed market days, has row/time budgets, and propagates the remaining deadline through ClickHouse and Dow-engine HTTP calls. |
+
+## Lower-layer semantic review
+
+The review did not use frontend snapshots or downstream output as substitutes for scheduling, source selection, state preservation, storage-key or timeout semantics. It first reviewed the pure timeframe-due rules and backend service tests, then minute-result source/repository/history behavior, and only then the frontend interpretation behavior.
+
+Four review rounds identified and verified fixes for:
+
+- cross-symbol timeframe-state contamination;
+- partial cold starts incorrectly evaluating every timeframe;
+- temporary evaluation errors replacing an existing stable state with `ANALYSIS_PAUSED`;
+- daily evaluation before the completed market close;
+- nightly audits using the scheduler date instead of the completed market day;
+- frontend fixtures and warmup precedence that hid stable business interpretation;
+- bounded materialization deadlines stopping at cooperative loops instead of reaching ClickHouse and the 19912 HTTP request.
+
+The final review found `P0=0`, `P1=0`, and `P2=0`. The deadline chain was verified as:
+
+`materializer -> history build_contexts -> signature-compatible stable builder -> remaining budget -> LongbridgeDowClient.evaluate(timeout_s) -> httpx request timeout`.
+
+Legacy stable builders without a `deadline` keyword remain compatible.
+
+## Executable evidence
+
+- Independent targeted backend regression: 99 passed.
+- Independent frontend wrapper regression: 3 passed.
+- Deadline propagation and legacy-builder compatibility probes: passed.
+- Primary-agent full backend and frontend results are recorded in `docs/acceptance/dow-monitor-incremental-evaluation.md`.
+
+## Residual boundary
+
+Pure Python work and third-party networking cannot be forcibly preempted at the process level. The implementation provides cooperative loop checks, ClickHouse server/HTTP deadlines, and per-request 19912 HTTP deadlines. This residual is not a release blocker for the approved design.
+
+## Final disposition
+
+The production code satisfies the five active requirements and is acceptable for candidate deployment. Production status must not be marked passed until the 10.28 candidate and switched 3018 service complete the runbook acceptance checks without restarting 19912, the market WebSocket service, or the standalone AI worker.

@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Callable, Sequence
 from datetime import datetime
+from time import monotonic
 from urllib import error, parse, request
 from zoneinfo import ZoneInfo
 
@@ -69,11 +70,21 @@ def _with_shanghai_datetimes(row: dict, *fields: str) -> dict:
     return normalized
 
 
-def _default_execute(sql: str, payload: bytes | None = None) -> bytes:
+def _default_execute(
+    sql: str,
+    payload: bytes | None = None,
+    *,
+    timeout_seconds: float | None = None,
+) -> bytes:
     endpoint = os.getenv("CLICKHOUSE_URL", "").strip().rstrip("/")
     if not endpoint:
         raise RuntimeError("未配置 CLICKHOUSE_URL")
-    timeout = float(os.getenv("CLICKHOUSE_READ_TIMEOUT_SECONDS", "30"))
+    configured_timeout = float(os.getenv("CLICKHOUSE_READ_TIMEOUT_SECONDS", "30"))
+    timeout = (
+        configured_timeout
+        if timeout_seconds is None
+        else max(0.001, min(configured_timeout, timeout_seconds))
+    )
     body = sql.rstrip().rstrip(";").encode("utf-8")
     if payload:
         body += b"\n" + payload
@@ -112,6 +123,31 @@ class DowMonitorMinuteResultRepository:
         self._execute = execute_fn or _default_execute
         self._database = database
         self._last_error: str | None = None
+
+    @staticmethod
+    def _remaining_budget(deadline: float) -> float:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("minute result resource budget exhausted")
+        return max(0.001, remaining)
+
+    def _query_with_deadline(
+        self,
+        sql: str,
+        deadline: float | None,
+    ) -> list[dict]:
+        if deadline is None:
+            return self._query(sql)
+        remaining = self._remaining_budget(deadline)
+        budgeted_sql = (
+            f"{sql.rstrip()}\nSETTINGS max_execution_time = {remaining:.3f}"
+        )
+        if self._query is bridge.query_json_each_row:
+            return bridge.query_json_each_row(
+                budgeted_sql,
+                timeout_seconds=remaining,
+            )
+        return self._query(budgeted_sql)
 
     def ensure_schema(self) -> None:
         ddl = f"""
@@ -168,8 +204,10 @@ class DowMonitorMinuteResultRepository:
         symbols: Sequence[str],
         start: datetime,
         end: datetime,
+        *,
+        deadline: float | None = None,
     ) -> set[MinuteResultKey]:
-        rows = self._query(
+        rows = self._query_with_deadline(
             f"""
             SELECT market, symbol, toString(decision_minute) AS decision_minute
             FROM {self._database}.lb_dow_monitor_minute_results AS results FINAL
@@ -177,7 +215,8 @@ class DowMonitorMinuteResultRepository:
               AND results.decision_minute >= parseDateTime64BestEffort({_time_literal(start)})
               AND results.decision_minute < parseDateTime64BestEffort({_time_literal(end)})
             GROUP BY market, symbol, results.decision_minute
-            """
+            """,
+            deadline,
         )
         return {
             MinuteResultKey(
@@ -186,7 +225,12 @@ class DowMonitorMinuteResultRepository:
             for row in rows
         }
 
-    def insert_results(self, rows: Sequence[DowMonitorMinuteResult]) -> int:
+    def insert_results(
+        self,
+        rows: Sequence[DowMonitorMinuteResult],
+        *,
+        deadline: float | None = None,
+    ) -> int:
         if not rows:
             return 0
         documents = []
@@ -217,10 +261,22 @@ class DowMonitorMinuteResultRepository:
             json.dumps(document, ensure_ascii=False)
             for document in documents
         ).encode("utf-8")
-        self._execute(
-            f"INSERT INTO {self._database}.lb_dow_monitor_minute_results FORMAT JSONEachRow",
-            payload,
+        settings = ""
+        if deadline is not None:
+            remaining = self._remaining_budget(deadline)
+            settings = f" SETTINGS max_execution_time = {remaining:.3f}"
+        sql = (
+            f"INSERT INTO {self._database}.lb_dow_monitor_minute_results"
+            f"{settings} FORMAT JSONEachRow"
         )
+        if deadline is not None and self._execute is _default_execute:
+            _default_execute(
+                sql,
+                payload,
+                timeout_seconds=self._remaining_budget(deadline),
+            )
+        else:
+            self._execute(sql, payload)
         return len(documents)
 
     def load_cumulative_rows(

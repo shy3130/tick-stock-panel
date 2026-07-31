@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from time import monotonic
 
 from app.services.dow_monitor_minute_result_source import DowMonitorMinuteResultSource
 
@@ -180,3 +181,17 @@ def test_candle_warmup_does_not_expand_other_realtime_queries() -> None:
     assert candle_start.isoformat() in candle_sql
     assert all(candle_start.isoformat() not in sql for sql in other_sql)
     assert all(START.isoformat() in sql for sql in other_sql)
+
+
+def test_backfill_queries_receive_the_remaining_wall_clock_budget() -> None:
+    capture = QueryCapture()
+
+    DowMonitorMinuteResultSource(query_fn=capture).load_raw_history(
+        ["700.HK"],
+        START,
+        END,
+        deadline=monotonic() + 5,
+    )
+
+    assert len(capture.sql) == 5
+    assert all("SETTINGS max_execution_time =" in sql for sql in capture.sql)

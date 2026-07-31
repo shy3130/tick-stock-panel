@@ -68,6 +68,9 @@ function contextFixture(
       atr14Pct: 1,
     },
     evidence: evidenceFixture(),
+    stableTimeframesAvailable: true,
+    capitalAvailable: true,
+    warmupMissing: [],
     strategyDelayed: false,
     realtimeDelayed: false,
     delayed: false,
@@ -361,22 +364,64 @@ describe('key interpretation scenarios', () => {
       }),
       strategyDelayed: true,
       realtimeDelayed: false,
+      stableTimeframesAvailable: false,
+      capitalAvailable: false,
+      warmupMissing: ['5m周期', '15m周期', '资金'],
     } as InterpretationMarketContext, ['volumeSpeed'])
 
     expect(warmup).toMatchObject({
       scenarioId: 'LIVE_WARMUP',
       category: 'ANOMALY',
       phase: 'ATTEMPT',
-      headline: '实时放量上行，周期待确认',
+      headline: '实时放量上行，正式分析更新中',
     })
     expect(warmup.explanation).toContain('1分钟 +1.00%')
     expect(warmup.explanation).toContain('量速 2.40×')
     expect(warmup.explanation).toContain('五档 +30.0%')
-    expect(warmup.explanation).toContain('5m/15m与资金仍在预热')
+    expect(warmup.explanation).toContain('5m周期、15m周期、资金仍在预热')
     expect(warmup.levels).toEqual([
       { label: '日高', price: 102, basis: 'LIVE_DAY_HIGH' },
       { label: '日低', price: 98, basis: 'LIVE_DAY_LOW' },
     ])
+  })
+
+  it('shows analysis updating before the strategy age threshold when stable periods are absent', () => {
+    const result = interpretation(contextFixture({
+      strategyDelayed: false,
+      realtimeDelayed: false,
+      stableTimeframesAvailable: false,
+      warmupMissing: ['5m-period', '15m-period'],
+      currentPrice: 101,
+    }))
+
+    expect(result.scenarioId).toBe('LIVE_WARMUP')
+  })
+
+  it('keeps stable interpretation available when only scheduler age is delayed', () => {
+    const result = interpretation(contextFixture({
+      strategyDelayed: true,
+      realtimeDelayed: false,
+      stableTimeframesAvailable: true,
+      capitalAvailable: true,
+      warmupMissing: [],
+      channel: { code: 'UP', label: '上升通道' },
+      currentPrice: 101.2,
+      attemptRange60m: { low: 99, high: 101 },
+      confirmationRange60m: { low: 99, high: 101 },
+      metrics: {
+        ...contextFixture().metrics,
+        volumeSpeed: 2,
+      },
+      evidence: evidenceFixture({
+        PRICE_STRUCTURE: 'UP',
+        TREND_MOMENTUM: 'UP',
+        VOLUME: 'UP',
+        FUNDS: 'UP',
+      }),
+    }))
+
+    expect(result.scenarioId).not.toBe('LIVE_WARMUP')
+    expect(result.headline).not.toContain('正式分析更新中')
   })
 
   it('formats decision prices with two to four decimals without grouping', () => {
