@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import dow_monitor
+from app.services.dow_monitor_client import LongbridgeDowClient
 from app.services.dow_monitor_half_hour_ai_calendar import HalfHourWindowCalendar
 from app.services.dow_monitor_half_hour_ai_models import (
     HalfHourAiAnalysis,
@@ -23,11 +26,22 @@ from app.services.dow_monitor_half_hour_ai_repository import (
     DowMonitorHalfHourAiRepository,
 )
 from app.services.dow_monitor_half_hour_ai_snapshot import HalfHourAiSnapshotBuilder
+from app.services.dow_monitor_minute_result_history import (
+    DowEngineStableStateBuilder,
+    DowMonitorMinuteResultHistoryBuilder,
+)
+from app.services.dow_monitor_minute_result_materializer import (
+    DowMonitorMinuteResultMaterializer,
+)
 from app.services.dow_monitor_minute_result_repository import (
     DowMonitorMinuteResultRepository,
 )
+from app.services.dow_monitor_minute_result_source import DowMonitorMinuteResultSource
 from app.services.dow_monitor_models import MonitoredSymbol
-from app.services.dow_monitor_offline_bootstrap import OfflineBootstrapOutcome
+from app.services.dow_monitor_offline_bootstrap import (
+    DowMonitorOfflineBootstrap,
+    OfflineBootstrapOutcome,
+)
 from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
 from app.workers import dow_monitor_half_hour_ai as worker_module
@@ -40,6 +54,152 @@ def test_production_override_places_ai_worker_on_host_network() -> None:
     ).read_text(encoding="utf-8")
     worker_section = override.split("  dow-ai-worker:", maxsplit=1)[1]
     assert "network_mode: host" in worker_section
+
+
+def test_build_worker_owns_canonical_bootstrap_graph(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("LONGBRIDGE_API_URL", raising=False)
+    monkeypatch.delenv(
+        "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS",
+        raising=False,
+    )
+    monkeypatch.delenv(
+        "DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DowMonitorHalfHourAiRepository,
+        "ensure_schema",
+        lambda _self: None,
+    )
+
+    worker = worker_module.build_worker()
+    bootstrap = worker._offline_bootstrap
+    materializer = bootstrap._materializer
+    history_builder = materializer._history_builder
+    stable_state_builder = history_builder._stable_state_builder
+    dow_client = stable_state_builder._client
+    try:
+        assert isinstance(bootstrap, DowMonitorOfflineBootstrap)
+        assert isinstance(materializer, DowMonitorMinuteResultMaterializer)
+        assert isinstance(materializer._source, DowMonitorMinuteResultSource)
+        assert materializer._repository is worker._minute_repository
+        assert isinstance(
+            history_builder,
+            DowMonitorMinuteResultHistoryBuilder,
+        )
+        assert isinstance(stable_state_builder, DowEngineStableStateBuilder)
+        assert isinstance(dow_client, LongbridgeDowClient)
+        assert str(dow_client._client.base_url) == (
+            "http://host.docker.internal:19912/"
+        )
+        assert bootstrap._timeout_seconds == 15.0
+        assert bootstrap._max_rows == 500
+
+        worker.close()
+
+        assert dow_client._client.is_closed
+    finally:
+        dow_client.close()
+
+
+@pytest.mark.parametrize(
+    ("timeout", "max_rows", "expected_timeout", "expected_max_rows"),
+    [
+        ("3.5", "123", 3.5, 123),
+        ("60", "900", 15.0, 500),
+    ],
+    ids=["custom-within-bounds", "clamped-to-authoritative-bounds"],
+)
+def test_build_worker_applies_bounded_bootstrap_environment(
+    monkeypatch,
+    tmp_path,
+    timeout: str,
+    max_rows: str,
+    expected_timeout: float,
+    expected_max_rows: int,
+) -> None:
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS",
+        timeout,
+    )
+    monkeypatch.setenv("DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS", max_rows)
+    monkeypatch.setattr(
+        DowMonitorHalfHourAiRepository,
+        "ensure_schema",
+        lambda _self: None,
+    )
+
+    worker = worker_module.build_worker()
+    bootstrap = worker._offline_bootstrap
+    dow_client = (
+        bootstrap
+        ._materializer
+        ._history_builder
+        ._stable_state_builder
+        ._client
+    )
+    try:
+        assert bootstrap._timeout_seconds == expected_timeout
+        assert bootstrap._max_rows == expected_max_rows
+    finally:
+        dow_client.close()
+
+
+def test_worker_compose_propagates_bootstrap_environment_defaults() -> None:
+    compose = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[2] / "docker-compose.yml"
+        ).read_text(encoding="utf-8")
+    )
+    environment = set(compose["services"]["dow-ai-worker"]["environment"])
+
+    assert (
+        "LONGBRIDGE_API_URL="
+        "${LONGBRIDGE_API_URL:-http://host.docker.internal:19912}"
+    ) in environment
+    assert (
+        "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS="
+        "${DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS:-15}"
+    ) in environment
+    assert (
+        "DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS="
+        "${DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS:-500}"
+    ) in environment
+
+
+@pytest.mark.asyncio
+async def test_main_closes_worker_when_loop_is_cancelled(monkeypatch) -> None:
+    class Worker:
+        def __init__(self) -> None:
+            self.closed = False
+            self.runs = 0
+
+        async def run_due_jobs(self) -> int:
+            self.runs += 1
+            return 0
+
+        def close(self) -> None:
+            self.closed = True
+
+    worker = Worker()
+
+    async def cancel_sleep(_seconds: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setenv("DOW_AI_WORKER_ENABLED", "true")
+    monkeypatch.setattr(worker_module, "build_worker", lambda: worker)
+    monkeypatch.setattr(worker_module.asyncio, "sleep", cancel_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker_module._main()
+
+    assert worker.runs == 1
+    assert worker.closed is True
 
 
 def test_cn_first_due_window_is_1000_beijing() -> None:

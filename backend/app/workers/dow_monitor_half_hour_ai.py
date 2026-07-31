@@ -73,6 +73,7 @@ class DowMonitorHalfHourAiWorker:
         snapshot_builder,
         prompt_service,
         offline_bootstrap,
+        close_fn: Callable[[], None] | None = None,
         now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._monitor_store = monitor_store
@@ -82,6 +83,7 @@ class DowMonitorHalfHourAiWorker:
         self._snapshot_builder = snapshot_builder
         self._prompt_service = prompt_service
         self._offline_bootstrap = offline_bootstrap
+        self._close_fn = close_fn
         self._now_fn = now_fn
 
     async def run_due_jobs(self, now: datetime | None = None) -> int:
@@ -279,11 +281,33 @@ class DowMonitorHalfHourAiWorker:
             **values,
         )
 
+    def close(self) -> None:
+        close_fn, self._close_fn = self._close_fn, None
+        if close_fn is not None:
+            close_fn()
+
 
 def build_worker() -> DowMonitorHalfHourAiWorker:
     analysis_repository = DowMonitorHalfHourAiRepository()
     analysis_repository.ensure_schema()
     store = DowMonitorStore(Path(os.getenv("DATA_DIR", "/app/data")))
+    timeout_seconds = float(
+        os.getenv(
+            "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS",
+            "15",
+        )
+    )
+    if timeout_seconds <= 0:
+        raise ValueError(
+            "DOW_MONITOR_AI_BOOTSTRAP_TIMEOUT_SECONDS must be positive"
+        )
+    max_rows = int(
+        os.getenv("DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS", "500")
+    )
+    if max_rows <= 0:
+        raise ValueError(
+            "DOW_MONITOR_AI_BOOTSTRAP_MAX_ROWS must be positive"
+        )
     minute_repository = DowMonitorMinuteResultRepository()
     dow_client = LongbridgeDowClient(
         os.getenv(
@@ -299,6 +323,11 @@ def build_worker() -> DowMonitorHalfHourAiWorker:
         ),
         notifications_fn=lambda: store.list_notifications(limit=1_000_000),
     )
+    offline_bootstrap = DowMonitorOfflineBootstrap(
+        materializer,
+        timeout_seconds=timeout_seconds,
+        max_rows=min(max_rows, 500),
+    )
     return DowMonitorHalfHourAiWorker(
         monitor_store=store,
         minute_repository=minute_repository,
@@ -306,7 +335,8 @@ def build_worker() -> DowMonitorHalfHourAiWorker:
         calendar=HalfHourWindowCalendar(),
         snapshot_builder=HalfHourAiSnapshotBuilder(),
         prompt_service=HalfHourAiPromptService(generate_ai_text),
-        offline_bootstrap=DowMonitorOfflineBootstrap(materializer),
+        offline_bootstrap=offline_bootstrap,
+        close_fn=dow_client.close,
     )
 
 
@@ -322,13 +352,16 @@ async def _main() -> None:
         float(os.getenv("DOW_AI_WORKER_POLL_SECONDS", "15")),
     )
     worker = build_worker()
-    while True:
-        try:
-            await worker.run_due_jobs()
-        except Exception:
-            # Infrastructure failures are isolated from the panel and retried.
-            logger.exception("half-hour AI worker cycle failed")
-        await asyncio.sleep(poll_seconds)
+    try:
+        while True:
+            try:
+                await worker.run_due_jobs()
+            except Exception:
+                # Infrastructure failures are isolated from the panel and retried.
+                logger.exception("half-hour AI worker cycle failed")
+            await asyncio.sleep(poll_seconds)
+    finally:
+        worker.close()
 
 
 if __name__ == "__main__":

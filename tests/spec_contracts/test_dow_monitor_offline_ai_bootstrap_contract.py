@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import yaml
@@ -95,3 +96,32 @@ def test_bootstrap_contract_keeps_websocket_and_realtime_paths_out_of_scope() ->
     text = (ROOT / "docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md").read_text(encoding="utf-8")
     assert "WebSocket" in text
     assert "不改变正式买卖信号" in text
+
+
+def test_3018_and_websocket_modules_do_not_import_bootstrap_coordinator() -> None:
+    paths = [
+        "backend/app/main.py",
+        "backend/app/api/realtime.py",
+        "backend/app/services/realtime_market_data.py",
+        "backend/app/services/dow_monitor_service.py",
+    ]
+
+    for relative_path in paths:
+        tree = ast.parse(
+            (ROOT / relative_path).read_text(encoding="utf-8"),
+            filename=relative_path,
+        )
+        imported_modules = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        }
+        imported_names = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        }
+
+        assert "app.services.dow_monitor_offline_bootstrap" not in imported_modules
+        assert "DowMonitorOfflineBootstrap" not in imported_names
