@@ -99,6 +99,43 @@ passed
 
 历史已有物理重复行不在本次自动清理范围内；发布或回滚不得删除分钟结果。
 
+## 2026-08-01 state-file hot-path acceptance
+
+The `33e1ef5eb92f` candidate was not promoted. Although it made zero 19912
+evaluation requests, a cycle still took 105.646 seconds. Production-equivalent
+stage profiling isolated the remaining cost:
+
+- the fetch plan reparsed the same 12 MB state file once per symbol/timeframe,
+  taking 22.144 seconds for 13 symbols;
+- seven stale US symbols rewrote five timeframe states one at a time, taking
+  9.218-10.934 seconds per symbol;
+- minute data, daily data and capital queries were independently measured and
+  did not account for the long cycle.
+
+The corrected lower-layer behavior is covered by failing-first executable
+tests: fetch planning uses one bulk state snapshot; an unchanged
+`STALE_DATA` or `ANALYSIS_PAUSED` mark performs no write; a real transition
+persists all five timeframes with one atomic state-file replacement. HK padded
+and canonical aliases retain their shared semantic identity.
+
+An isolated 10.28 source-overlay candidate then completed ten consecutive
+cycles in 5.684-8.317 seconds. The maximum observed start interval was
+15.004512 seconds, every non-boundary cycle made zero 19912 requests, and the
+configured cross-symbol concurrency remained three. This is lower-layer
+candidate evidence only; immutable-image and switched-3018 evidence remains a
+separate publication gate.
+
+Current regression evidence:
+
+```text
+backend/tests + tests/backend: 885 passed, 13 warnings
+frontend: 209 passed, 2 skipped
+frontend production build: passed
+incremental targeted regression: 21 passed
+specification compliance: passed
+scoped Ruff: passed
+```
+
 ## 2026-07-31 candidate rollback and HK alias root cause
 
 - Candidate image `tickflow-stock-panel-app:dow-monitor-incremental-cb060ebaa228`

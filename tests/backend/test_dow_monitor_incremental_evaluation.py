@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import polars as pl
+import pytest
 
 from app.services.dow_monitor_data import SymbolFreshness
 from app.services import dow_monitor_service as monitor_service_module
@@ -223,6 +224,111 @@ def test_minute_fetch_plan_ignores_old_or_missing_daily_state(tmp_path) -> None:
             tzinfo=NEW_YORK,
         ).astimezone(ZoneInfo("UTC"))
     }
+
+
+def test_minute_fetch_plan_uses_one_bulk_state_snapshot(tmp_path, monkeypatch) -> None:
+    store = DowMonitorStore(tmp_path)
+    item = store.upsert_symbol("GTLB.US", "us", True)
+    source = datetime(2026, 7, 31, 13, 55, tzinfo=NEW_YORK)
+    for timeframe in TIMEFRAMES:
+        store.save_state(_state(item.symbol, timeframe, source))
+    service = DowMonitorService(
+        store,
+        object(),
+        object(),
+        lambda *_args: pl.DataFrame(),
+    )
+
+    def reject_point_read(*_args, **_kwargs):
+        raise AssertionError("fetch planning must not reparse the state file per timeframe")
+
+    monkeypatch.setattr(store, "get_state", reject_point_read)
+
+    starts, cold = service._fetch_plan(
+        [item],
+        source + timedelta(minutes=5),
+    )
+
+    assert cold == set()
+    assert starts == {item.symbol: source}
+
+
+@pytest.mark.parametrize("freshness_state", ["STALE_DATA", "ANALYSIS_PAUSED"])
+def test_repeated_freshness_mark_is_idempotent_without_rewriting_state_file(
+    tmp_path,
+    monkeypatch,
+    freshness_state,
+) -> None:
+    store = DowMonitorStore(tmp_path)
+    item = store.upsert_symbol("GTLB.US", "us", True)
+    source = datetime(2026, 7, 31, 16, 0, tzinfo=NEW_YORK)
+    for timeframe in TIMEFRAMES:
+        store.save_state(
+            _state(
+                item.symbol,
+                timeframe,
+                source,
+                freshness_state=freshness_state,
+            )
+        )
+    service = DowMonitorService(
+        store,
+        object(),
+        object(),
+        lambda *_args: pl.DataFrame(),
+    )
+
+    def reject_write(*_args, **_kwargs):
+        raise AssertionError("unchanged stale states must not be persisted again")
+
+    monkeypatch.setattr(store, "save_states", reject_write)
+
+    service._mark_all(
+        item,
+        freshness_state,
+        source + timedelta(minutes=1),
+    )
+
+    assert {
+        state.timeframe: state.freshness_state for state in store.list_states()
+    } == dict.fromkeys(TIMEFRAMES, freshness_state)
+
+
+def test_stale_transition_persists_all_timeframes_in_one_batch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = DowMonitorStore(tmp_path)
+    item = store.upsert_symbol("GTLB.US", "us", True)
+    source = datetime(2026, 7, 31, 16, 0, tzinfo=NEW_YORK)
+    for timeframe in TIMEFRAMES:
+        store.save_state(_state(item.symbol, timeframe, source))
+    service = DowMonitorService(
+        store,
+        object(),
+        object(),
+        lambda *_args: pl.DataFrame(),
+    )
+    writes = 0
+    original_write = store._write_json
+
+    def count_write(path, payload):
+        nonlocal writes
+        writes += 1
+        return original_write(path, payload)
+
+    monkeypatch.setattr(store, "_write_json", count_write)
+
+    service._mark_all(
+        item,
+        "STALE_DATA",
+        source + timedelta(minutes=1),
+    )
+
+    assert writes == 1
+    assert {
+        state.timeframe: state.freshness_state for state in store.list_states()
+    } == dict.fromkeys(TIMEFRAMES, "STALE_DATA")
 
 
 def test_fifteen_minute_boundary_only_evaluates_due_intraday_frames() -> None:

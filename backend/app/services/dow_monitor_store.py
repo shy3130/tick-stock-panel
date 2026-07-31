@@ -124,20 +124,32 @@ class DowMonitorStore:
             return True
 
     def save_state(self, state: DowTimeframeState) -> DowTimeframeState:
+        return self.save_states([state])[0]
+
+    def save_states(
+        self,
+        updates: list[DowTimeframeState],
+    ) -> list[DowTimeframeState]:
+        if not updates:
+            return []
         with self._lock:
             states = self._load_models(self._states_path, DowTimeframeState)
-            identity = _monitor_symbol_identity(state.symbol)
+            update_keys = {
+                (_monitor_symbol_identity(state.symbol), state.timeframe)
+                for state in updates
+            }
             states = [
                 existing
                 for existing in states
-                if not (
-                    _monitor_symbol_identity(existing.symbol) == identity
-                    and existing.timeframe == state.timeframe
+                if (
+                    _monitor_symbol_identity(existing.symbol),
+                    existing.timeframe,
                 )
+                not in update_keys
             ]
-            states.append(state)
+            states.extend(updates)
             self._write_json(self._states_path, states)
-            return state
+            return updates
 
     def get_state(self, symbol: str, timeframe: str) -> DowTimeframeState | None:
         with self._lock:

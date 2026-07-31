@@ -102,3 +102,23 @@ day full-session input, post-close old/forming day, return to the fast path
 after FINAL save, new and partial intraday cold starts, midday, weekends and
 market time zones. A complete 390-minute US session produced the correct daily
 open, high, low, close, volume and FINAL completion.
+
+## Supplemental review gate: state-file hot path
+
+The fourth immutable candidate (`33e1ef5eb92f`) was not promoted after a
+zero-evaluation cycle still took 105.646 seconds. Production-equivalent stage
+profiling proved that repeated parsing and rewriting of the shared state JSON,
+not 19912 or ClickHouse minute/daily queries, caused the remaining delay.
+
+Independent review confirmed that the bulk fetch-plan index preserves the
+old first-match behavior through `setdefault`, including padded HK aliases.
+`save_states()` removes and replaces keys by canonical identity plus timeframe
+under the existing lock and performs one same-directory atomic replacement.
+Repeated identical stale/paused marks preserve timestamps and payloads without
+writing; real transitions preserve source, snapshot and chart for all five
+timeframes and write once.
+
+The initial review reported `P2=1` because one idempotence test intercepted the
+obsolete single-state method. The test now intercepts the actual bulk method
+and covers both `STALE_DATA` and `ANALYSIS_PAUSED`. Final disposition is
+`P0=0`, `P1=0`, `P2=0`; approved for immutable candidate deployment.

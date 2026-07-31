@@ -1173,7 +1173,14 @@ class DowMonitorService:
     ) -> tuple[dict[str, datetime], set[str]]:
         starts: dict[str, datetime] = {}
         cold_symbols: set[str] = set()
+        states_by_key: dict[tuple[str, str], DowTimeframeState] = {}
+        for state in self.store.list_states():
+            states_by_key.setdefault(
+                (_monitor_symbol_identity(state.symbol), state.timeframe),
+                state,
+            )
         for item in enabled:
+            identity = _monitor_symbol_identity(item.symbol)
             policy = market_session_policy(item.symbol)
             zone = ZoneInfo(policy.timezone)
             local_now = now.astimezone(zone)
@@ -1185,7 +1192,7 @@ class DowMonitorService:
             ).astimezone(UTC)
             timestamps: list[datetime] = []
             for timeframe in TIMEFRAMES[:-1]:
-                state = self.store.get_state(item.symbol, timeframe)
+                state = states_by_key.get((identity, timeframe))
                 if state is None or state.source_timestamp is None:
                     cold_symbols.add(item.symbol)
                     starts[item.symbol] = local_midnight
@@ -1193,7 +1200,7 @@ class DowMonitorService:
                 timestamps.append(state.source_timestamp)
             else:
                 start = min(timestamps)
-                daily = self.store.get_state(item.symbol, "day")
+                daily = states_by_key.get((identity, "day"))
                 daily_needs_minutes = (
                     daily is None
                     or daily.source_timestamp is None
@@ -1381,8 +1388,36 @@ class DowMonitorService:
         freshness_state: Literal["STALE_DATA", "ANALYSIS_PAUSED"],
         now: datetime,
     ) -> None:
-        for timeframe in TIMEFRAMES:
-            self._mark_one(item, timeframe, freshness_state, now)
+        identity = _monitor_symbol_identity(item.symbol)
+        previous_by_timeframe = {
+            state.timeframe: state
+            for state in self.store.list_states()
+            if _monitor_symbol_identity(state.symbol) == identity
+        }
+        if all(
+            (previous := previous_by_timeframe.get(timeframe)) is not None
+            and previous.freshness_state == freshness_state
+            for timeframe in TIMEFRAMES
+        ):
+            return
+        self.store.save_states(
+            [
+                DowTimeframeState(
+                    symbol=item.symbol,
+                    market=item.market,
+                    timeframe=timeframe,
+                    freshness_state=freshness_state,
+                    source_timestamp=(
+                        previous.source_timestamp if previous is not None else None
+                    ),
+                    snapshot=(deepcopy(previous.snapshot) if previous is not None else {}),
+                    chart=(deepcopy(previous.chart) if previous is not None else {}),
+                    updated_at=now,
+                )
+                for timeframe in TIMEFRAMES
+                for previous in [previous_by_timeframe.get(timeframe)]
+            ]
+        )
 
     def _mark_all_analysis_failures(
         self,
