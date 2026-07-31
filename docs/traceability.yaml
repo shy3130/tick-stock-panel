@@ -457,3 +457,16 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-mobile-version-refresh.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-07-31-dow-monitor-mobile-version-refresh-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-NEW-SYMBOL-HISTORY-BACKFILL-001
+    specification: SPEC-DOW-MONITOR-NEW-SYMBOL-HISTORY-BACKFILL-001
+    implementation:
+      - backend/app/services/dow_monitor_history_status.py
+      - backend/app/services/dow_monitor_models.py
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/main.py
+      - frontend/src/components/dow-monitor/types.ts
+    tests:
+      - {path: tests/backend/test_dow_monitor_history_status.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-new-symbol-history-backfill.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-new-symbol-history-backfill-review.md, type: independent-review}

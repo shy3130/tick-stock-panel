@@ -14,6 +14,23 @@ class MonitoredSymbol(BaseModel):
     updated_at: datetime
 
 
+class HistoryBackfillStatus(BaseModel):
+    status: Literal[
+        "pending",
+        "queued",
+        "running",
+        "rebuilding",
+        "completed",
+        "partial",
+        "failed",
+        "unknown",
+    ]
+    progress: int = Field(default=0, ge=0, le=100)
+    missing_timeframes: tuple[str, ...] = ()
+    last_error: str | None = None
+    updated_at: datetime | None = None
+
+
 class DowTimeframeState(BaseModel):
     symbol: str
     market: Literal["cn", "hk", "us"]

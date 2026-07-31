@@ -456,6 +456,23 @@ export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {
   latest_notification: DowMonitorNotification | null
   last_success_at: string | null
   last_error: string | null
+  history_backfill?: DowMonitorHistoryBackfillStatus
+}
+
+export interface DowMonitorHistoryBackfillStatus {
+  status:
+    | 'pending'
+    | 'queued'
+    | 'running'
+    | 'rebuilding'
+    | 'completed'
+    | 'partial'
+    | 'failed'
+    | 'unknown'
+  progress: number
+  missing_timeframes: string[]
+  last_error: string | null
+  updated_at: string | null
 }
 
 export interface DowMonitorIntradayCapital {

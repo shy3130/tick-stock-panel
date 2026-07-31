@@ -47,6 +47,7 @@ from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.dow_monitor_client import LongbridgeDowClient
 from app.services.dow_monitor_data import WebStockMonitorGateway
+from app.services.dow_monitor_history_status import DowMonitorHistoryStatusReader
 from app.services.dow_monitor_minute_result_history import (
     DowEngineStableStateBuilder,
     DowMonitorMinuteResultHistoryBuilder,
@@ -103,6 +104,14 @@ async def _start_dow_monitor(app: FastAPI, data_dir: Path, provider, endpoint: s
         dow_client,
         _load_dow_daily,
         minute_result_materializer=minute_result_materializer,
+        history_status_reader=DowMonitorHistoryStatusReader(
+            Path(
+                os.getenv(
+                    "DOW_MONITOR_HISTORY_STATUS_FILE",
+                    "/run/longbridge/monitor-history-warmup.json",
+                )
+            )
+        ),
     )
     app.state.dow_monitor_service = service
     app.state.dow_monitor_client = dow_client

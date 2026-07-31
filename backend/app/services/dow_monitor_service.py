@@ -41,6 +41,7 @@ from app.services.dow_monitor_models import (
     DowMinuteDecision,
     DowNotification,
     DowTimeframeState,
+    HistoryBackfillStatus,
     MonitoredSymbol,
 )
 
@@ -282,6 +283,7 @@ class DowMonitorService:
         poll_seconds: float = 15,
         now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
         minute_result_materializer=None,
+        history_status_reader=None,
     ) -> None:
         self.store = store
         self._data_gateway = data_gateway
@@ -290,6 +292,7 @@ class DowMonitorService:
         self.poll_seconds = poll_seconds
         self._now_fn = now_fn
         self._minute_result_materializer = minute_result_materializer
+        self._history_status_reader = history_status_reader
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._last_started_at: datetime | None = None
@@ -1354,6 +1357,11 @@ class DowMonitorService:
             for item in self.store.list_symbols()
             if market == "all" or item.market == market
         ]
+        history_statuses = (
+            self._history_status_reader.for_symbols([item.symbol for item in items])
+            if self._history_status_reader is not None
+            else {}
+        )
         intraday_capital_by_symbol = self._intraday_capital_by_symbol(
             [item.symbol for item in items]
         )
@@ -1397,6 +1405,13 @@ class DowMonitorService:
                         self._last_success_for_symbol(item.symbol)
                     ),
                     "last_error": self._errors.get(item.symbol),
+                    "history_backfill": history_statuses.get(
+                        item.symbol,
+                        HistoryBackfillStatus(
+                            status="unknown",
+                            last_error="STATUS_READER_UNAVAILABLE",
+                        ),
+                    ).model_dump(mode="json"),
                 }
             )
         return {

@@ -931,12 +931,14 @@ def test_lifecycle_starts_single_monitor_with_registered_clickhouse_provider(
             daily_loader,
             *,
             minute_result_materializer=None,
-        ) -> None:
+            history_status_reader=None,
+            ) -> None:
             self.store = store
             self.gateway = gateway
             self.client = client
             self.daily_loader = daily_loader
             self.minute_result_materializer = minute_result_materializer
+            self.history_status_reader = history_status_reader
             self.started = 0
 
         async def start(self) -> None:
