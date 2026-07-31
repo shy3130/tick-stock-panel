@@ -334,6 +334,13 @@ def _engine_payload_with_head_shoulders() -> dict:
 
 def test_longbridge_client_accepts_head_shoulders_engine_payload() -> None:
     payload = _engine_payload_with_head_shoulders()
+    request_bars = [
+        {
+            **payload["bars"][0],
+            "timestamp": "2026-07-23T01:50:00Z",
+        },
+        payload["bars"][0],
+    ]
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(200, json=payload)
     )
@@ -345,7 +352,7 @@ def test_longbridge_client_accepts_head_shoulders_engine_payload() -> None:
         result = engine_client.evaluate(
             "NBIS.US",
             "5m",
-            payload["bars"],
+            request_bars,
             "FINAL",
             NOW,
         )

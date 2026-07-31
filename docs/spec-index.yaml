@@ -98,6 +98,11 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-MONITOR-LIVE-WARMUP-INTERPRETATION-001
+  - id: SPEC-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
+    path: docs/specs/dow-monitor-daily-payload-safety.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
 conflicts: []
 authority_decisions:
   - id: DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001

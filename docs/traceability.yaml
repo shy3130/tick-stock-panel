@@ -417,3 +417,14 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-live-warmup-interpretation.md, type: semantic-acceptance}
       - {path: docs/reviews/dow-monitor-live-warmup-interpretation.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
+    specification: SPEC-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
+    implementation:
+      - backend/app/services/dow_monitor_bar_safety.py
+      - backend/app/services/dow_monitor_client.py
+      - backend/app/services/dow_monitor_service.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_bar_safety.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-daily-payload-safety.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-daily-payload-safety-review.md, type: independent-review}

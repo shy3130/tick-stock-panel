@@ -28,6 +28,7 @@ from app.services.dow_monitor_bars import (
     TimeframeBars,
     build_timeframes,
 )
+from app.services.dow_monitor_bar_safety import InsufficientDowBars
 from app.services.dow_monitor_client import (
     DowEngineResult,
     DowEngineUnavailable,
@@ -527,6 +528,18 @@ class DowMonitorService:
                     completion,
                     now,
                 )
+            except InsufficientDowBars as exc:
+                self._mark_one(
+                    item,
+                    timeframe,
+                    "ANALYSIS_PAUSED",
+                    now,
+                )
+                errors.append(
+                    f"{timeframe}: HISTORY_INCOMPLETE:"
+                    f"VALID_BARS_{exc.valid_bars}_OF_{exc.required_bars}"
+                )
+                continue
             except Exception as exc:
                 self._mark_one(
                     item,

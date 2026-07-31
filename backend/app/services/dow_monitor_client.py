@@ -16,6 +16,8 @@ from pydantic import (
     ValidationError,
 )
 
+from app.services.dow_monitor_bar_safety import sanitize_engine_bars
+
 
 def _validate_iso_date_or_datetime(value: str) -> str:
     for parser in (datetime.fromisoformat, date.fromisoformat):
@@ -303,7 +305,7 @@ class LongbridgeDowClient:
             "timeframe": timeframe,
             "completion": completion,
             "asOf": as_of.isoformat(),
-            "bars": bars,
+            "bars": sanitize_engine_bars(timeframe, bars),
         }
         try:
             response = self._client.post("/api/dow-state/evaluate", json=payload)
