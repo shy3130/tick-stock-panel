@@ -3700,6 +3700,7 @@ def matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             "high_60d",
             "low_60d",
             "annual_vol_20d",
+            "macd_hist",
             "ma20_bias",
         }
         or (name.startswith("ma") and name[2:].isdigit())
@@ -3796,6 +3797,12 @@ def _compute_matrix_feature(market: MarketDataMatrix, name: str) -> np.ndarray:
             20,
             ddof=1,
         ) * np.float32(252 ** 0.5)
+    if name == "macd_hist":
+        ema12 = valid_ewm_adjust_false(market.close, close_valid, span=12)
+        ema26 = valid_ewm_adjust_false(market.close, close_valid, span=26)
+        dif = ema12 - ema26
+        dea = valid_ewm_adjust_false(dif, np.isfinite(dif), span=9)
+        return (dif - dea) * np.float32(2.0)
     if name.startswith("rsi_") and name[4:].isdigit():
         window = int(name[4:])
         delta = market.close - valid_shift(market.close, 1, close_valid)

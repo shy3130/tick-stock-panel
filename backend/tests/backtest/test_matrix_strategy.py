@@ -56,7 +56,7 @@ def test_common_matrix_features_match_polars_indicator_pipeline():
         "prev_close", "change_pct", "change_amount", "amplitude",
         "ma5", "ma20", "ma60", "boll_upper", "boll_lower",
         "high_60d", "low_60d", "momentum_60d", "vol_ratio_5d",
-        "annual_vol_20d", "rsi_14",
+        "annual_vol_20d", "rsi_14", "macd_hist",
     }
     enriched = compute_indicators(panel, needed=features)
     market = build_market_data_matrix(panel)
@@ -113,7 +113,7 @@ def test_matrix_features_skip_missing_asset_bars_like_polars_groups():
         "prev_close", "change_pct", "change_amount", "amplitude",
         "ma5", "ma20", "ma60", "boll_upper", "boll_lower",
         "high_60d", "low_60d", "momentum_60d", "vol_ratio_5d",
-        "annual_vol_20d", "rsi_14",
+        "annual_vol_20d", "rsi_14", "macd_hist",
     }
     enriched = compute_indicators(panel, needed=features)
     market = build_market_data_matrix(panel)
@@ -261,12 +261,18 @@ def test_builtin_matrix_strategies_use_their_declared_formula_modules():
         path for path in strategy_dir.glob("*.py") if path.name != "__init__.py"
     )
 
-    assert len(strategy_files) == 18
+    assert len(strategy_files) == 33
     for strategy_path in strategy_files:
         strategy = StrategyEngine._load_file(strategy_path)
         assert strategy.execution_backend == "matrix_native"
         assert strategy.matrix_strategy is not None
-        assert strategy.matrix_strategy.__class__.__module__ == strategy_path.stem
+        if strategy_path.stem.startswith("dow_"):
+            assert strategy.matrix_strategy.__class__.__module__ in {
+                "app.strategy.shared_dow_patterns",
+                "app.strategy.shared_structure_breakout",
+            }
+        else:
+            assert strategy.matrix_strategy.__class__.__module__ == strategy_path.stem
         assert strategy.filter_fn is None
         assert strategy.filter_history_fn is None
 
@@ -673,7 +679,7 @@ def test_registered_builtin_matrix_strategies_share_one_cache_profile():
     profile = build_matrix_cache_profile(engine, "stock")
     strategies = engine.strategy_definitions()
 
-    assert len(strategies) == 18
+    assert len(strategies) == 33
     assert all(strategy.execution_backend == "matrix_native" for strategy in strategies)
     assert profile.warmup_bars > 0
     assert profile.forward_bars == max(int(strategy.max_hold_days or 0) for strategy in strategies)

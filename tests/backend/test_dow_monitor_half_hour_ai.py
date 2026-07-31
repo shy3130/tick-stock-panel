@@ -458,11 +458,22 @@ class WorkerStore:
 
 
 class WorkerCalendar:
-    def __init__(self, completed: list[datetime]) -> None:
+    def __init__(
+        self,
+        completed: list[datetime],
+        *,
+        regular_session_creation: bool = True,
+    ) -> None:
         self.completed = completed
+        self.regular_session_creation = regular_session_creation
+        self.regular_checks: list[tuple[str, datetime]] = []
 
     def completed_window_ends(self, _market, _now):
         return list(self.completed)
+
+    def is_regular_session_time(self, market, observed_at):
+        self.regular_checks.append((market, observed_at))
+        return self.regular_session_creation
 
     def session_open(self, _market, _trade_date):
         return beijing("2026-07-31T21:30:00")
@@ -557,9 +568,11 @@ def make_worker(
     bootstrap_outcomes: (
         dict[str, OfflineBootstrapOutcome | Exception] | None
     ) = None,
+    regular_session_creation: bool = True,
 ):
     calendar = WorkerCalendar(
-        completed or [beijing("2026-07-31T22:00:00")]
+        completed or [beijing("2026-07-31T22:00:00")],
+        regular_session_creation=regular_session_creation,
     )
     minute_repository = WorkerMinuteRepository(rows_by_symbol)
     analysis_repository = WorkerAnalysisRepository(terminal)
@@ -601,6 +614,38 @@ def test_select_due_windows_never_falls_back_from_terminal_latest_startup() -> N
     )
 
     assert selected == [normal]
+
+
+def test_select_due_windows_treats_created_at_equality_as_normal() -> None:
+    created_at = beijing("2026-07-31T22:00:00")
+    previous = beijing("2026-07-31T21:30:00")
+
+    selected = worker_module.select_due_windows(
+        completed_windows=[previous, created_at],
+        created_at=created_at,
+        terminal_window_ends=set(),
+    )
+
+    assert selected == [previous, created_at]
+
+
+@pytest.mark.parametrize(
+    ("market", "observed_at"),
+    [
+        ("hk", beijing("2026-07-31T12:30:00")),
+        ("hk", beijing("2026-07-31T16:30:00")),
+        ("us", beijing("2026-07-03T22:17:00")),
+    ],
+    ids=["hk-lunch", "hk-after-close", "us-holiday"],
+)
+def test_calendar_rejects_non_regular_symbol_creation_times(
+    market: str,
+    observed_at: datetime,
+) -> None:
+    assert not HalfHourWindowCalendar().is_regular_session_time(
+        market,
+        observed_at,
+    )
 
 
 @pytest.mark.asyncio
@@ -651,6 +696,25 @@ async def test_next_normal_checkpoint_runs_after_startup_checkpoint() -> None:
 
     await worker.run_due_jobs(now=beijing("2026-07-31T22:30:05"))
 
+    assert bootstrap.window_ends == []
+    assert prompt.window_ends == [normal]
+
+
+@pytest.mark.asyncio
+async def test_non_regular_creation_suppresses_only_pre_created_startup() -> None:
+    created_at = beijing("2026-07-31T22:17:00")
+    startup = beijing("2026-07-31T22:00:00")
+    normal = beijing("2026-07-31T22:30:00")
+    worker, calendar, _, _, prompt, bootstrap = make_worker(
+        symbols=[monitored_symbol(created_at=created_at)],
+        completed=[startup, normal],
+        rows_by_symbol={"RNG.US": [sufficient_rows(normal)]},
+        regular_session_creation=False,
+    )
+
+    assert await worker.run_due_jobs(now=beijing("2026-07-31T22:30:05")) == 1
+
+    assert calendar.regular_checks == [("us", created_at)]
     assert bootstrap.window_ends == []
     assert prompt.window_ends == [normal]
 

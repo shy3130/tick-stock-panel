@@ -12,3 +12,7 @@ Startup exception: exactly one latest completed checkpoint before `created_at` i
 Normal checkpoint rule: every later completed checkpoint on or after `created_at` may use bounded offline recovery when canonical minute results are missing.
 
 Older checkpoints before the eligible startup checkpoint remain prohibited.
+
+Boundary rule: startup requires `window_end < created_at`; normal scheduling uses `window_end >= created_at`.
+
+Startup gate: a pre-created checkpoint is eligible only when `calendar.is_regular_session_time(market, created_at)` is true.

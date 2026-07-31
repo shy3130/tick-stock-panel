@@ -459,19 +459,6 @@ def _maybe_inject_live_candle(
             logger.warning("stock detail realtime provider unavailable for %s: %s", symbol, type(exc).__name__)
 
         if q is None:
-            from app.plugins.clickhouse.provider import _fetch_longbridge_quote
-
-            q = _fetch_longbridge_quote(symbol) or None
-            if q:
-                timestamp = q.get("timestamp")
-                enriched_date = (
-                    datetime.fromtimestamp(float(timestamp) / 1000.0, tz=market_tz).date()
-                    if timestamp
-                    else market_today
-                )
-                q = {**q, "close": q.get("last_price")}
-
-        if q is None:
             qs = getattr(request.app.state, "quote_service", None)
             if not qs:
                 return rows

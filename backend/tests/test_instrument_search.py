@@ -36,7 +36,9 @@ STOCKS = pl.DataFrame({
 
 def _search(q: str, asset_types: str = "stock", limit: int = 20) -> list[dict]:
     repo = _FakeRepo({"stock": STOCKS})
-    return search_instruments(_request(repo), q=q, limit=limit, asset_types=asset_types)["results"]
+    return search_instruments(
+        _request(repo), q=q, limit=limit, asset_types=asset_types, markets=""
+    )["results"]
 
 
 # ===== 既有逻辑回归: 代码 / 名称搜索不受影响 =====
@@ -113,8 +115,12 @@ def test_polyphone_all_readings_match():
     """'重庆' 多音字: cq (chóng) 和 zq (zhòng) 读音都应命中。"""
     repo = _FakeRepo({"stock": POLYPHONE_STOCKS})
     # 取首字母集, 验证两种读音都能搜到
-    cq = search_instruments(_request(repo), q="cqbh", limit=20, asset_types="stock")["results"]      # chóng qīng
-    zq = search_instruments(_request(repo), q="zqbh", limit=20, asset_types="stock")["results"]      # zhòng qìng
+    cq = search_instruments(
+        _request(repo), q="cqbh", limit=20, asset_types="stock", markets=""
+    )["results"]  # chóng qīng
+    zq = search_instruments(
+        _request(repo), q="zqbh", limit=20, asset_types="stock", markets=""
+    )["results"]  # zhòng qìng
     assert "600729.SH" in [r["symbol"] for r in cq]
     assert "600729.SH" in [r["symbol"] for r in zq]
 
@@ -142,7 +148,11 @@ def test_cache_returns_same_result_across_calls():
     """lru_cache 不应在不同请求间串结果 (按 name 缓存, 查询无状态)。"""
     repo = _FakeRepo({"stock": STOCKS})
     req = _request(repo)
-    r1 = search_instruments(req, q="payh", limit=20, asset_types="stock")["results"]
-    r2 = search_instruments(req, q="payh", limit=20, asset_types="stock")["results"]
+    r1 = search_instruments(
+        req, q="payh", limit=20, asset_types="stock", markets=""
+    )["results"]
+    r2 = search_instruments(
+        req, q="payh", limit=20, asset_types="stock", markets=""
+    )["results"]
     assert r1 == r2
     assert [r["symbol"] for r in r1] == ["000001.SZ"]

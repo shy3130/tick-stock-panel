@@ -24,7 +24,7 @@ def test_dow_pattern_cards_have_exact_registry_contract() -> None:
     engine = StrategyEngine([strategy_dir])
     strategies = {item["id"]: item for item in engine.list_strategies()}
 
-    assert len(strategies) == 32
+    assert len(strategies) == 33
     assert {
         strategy_id: (strategies[strategy_id]["name"], strategies[strategy_id]["strategy_role"])
         for strategy_id in EXPECTED

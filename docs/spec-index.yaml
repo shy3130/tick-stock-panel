@@ -132,7 +132,7 @@ conflicts:
       - SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
       - SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     status: resolved
-    resolution: The bootstrap specification permits exactly one latest completed startup checkpoint before created_at to use bounded offline recovery; older checkpoints remain prohibited. Every later normal checkpoint on or after created_at may also use bounded offline recovery when canonical minute results are missing.
+    resolution: The bootstrap specification permits exactly one latest completed startup checkpoint with window_end < created_at to use bounded offline recovery, and only when calendar.is_regular_session_time(market, created_at) is true; older checkpoints remain prohibited. Every normal checkpoint with window_end >= created_at may also use bounded offline recovery when canonical minute results are missing.
     decision: docs/decisions/2026-07-31-dow-monitor-offline-ai-bootstrap-precedence.md
   - id: CON-20260731-DOW-MONITOR-MOBILE-LAYOUT-001
     specifications:

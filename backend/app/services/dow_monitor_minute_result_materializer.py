@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict
@@ -88,7 +88,7 @@ class DowMonitorMinuteResultMaterializer:
             self._status.pending_minutes = 0
             return MaterializeRun()
 
-        groups: dict[tuple[str, object], list[MonitoredSymbol]] = defaultdict(list)
+        groups: dict[tuple[str, date], list[MonitoredSymbol]] = defaultdict(list)
         for item in enabled:
             local_day = anchor.astimezone(MARKET_ZONES[item.market]).date()
             groups[(item.market, local_day)].append(item)
@@ -255,7 +255,7 @@ class DowMonitorMinuteResultMaterializer:
             existing = self._repository.existing_keys(
                 [symbol.symbol],
                 session_open,
-                window_end + timedelta(microseconds=1),
+                window_end + timedelta(milliseconds=1),
             )
             missing_keys = candidate_keys - existing
             if not missing_keys:

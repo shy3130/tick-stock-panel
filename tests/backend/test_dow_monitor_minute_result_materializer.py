@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+import re
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.services import dow_monitor_minute_result_materializer as materializer_module
 from app.services.dow_monitor_minute_result_materializer import (
     DowMonitorMinuteResultMaterializer,
 )
@@ -13,6 +15,9 @@ from app.services.dow_monitor_minute_result_models import (
     MinuteResultContext,
     MinuteResultKey,
     RawMinuteHistory,
+)
+from app.services.dow_monitor_minute_result_repository import (
+    DowMonitorMinuteResultRepository,
 )
 from app.services.dow_monitor_models import MonitoredSymbol
 
@@ -223,9 +228,75 @@ def test_materialize_checkpoint_writes_only_missing_rows_through_cutoff() -> Non
         (("RNG.US",), session_open, window_end, session_open - timedelta(days=10))
     ]
     assert repository.existing_calls == [
-        (("RNG.US",), session_open, window_end + timedelta(microseconds=1))
+        (("RNG.US",), session_open, window_end + timedelta(milliseconds=1))
     ]
     assert history.requested_decision_minutes == [set(minutes)]
+
+
+def test_checkpoint_exact_cutoff_dedup_respects_datetime64_milliseconds(
+    monkeypatch,
+) -> None:
+    session_open = beijing("2026-07-31T21:30:00")
+    window_end = beijing("2026-07-31T22:00:00")
+    inserted_payloads: list[bytes | None] = []
+    calculated: list[datetime] = []
+
+    def query(sql: str) -> list[dict]:
+        bounds = re.findall(
+            r"parseDateTime64BestEffort\('([^']+)'\)",
+            sql,
+        )
+        assert len(bounds) == 2
+        exclusive_upper = datetime.fromisoformat(bounds[-1])
+        exclusive_upper = exclusive_upper.replace(
+            microsecond=(exclusive_upper.microsecond // 1_000) * 1_000
+        )
+        if window_end < exclusive_upper:
+            return [
+                {
+                    "market": "us",
+                    "symbol": "RNG.US",
+                    "decision_minute": window_end,
+                }
+            ]
+        return []
+
+    repository = DowMonitorMinuteResultRepository(
+        query_fn=query,
+        execute_fn=lambda _sql, payload=None: inserted_payloads.append(payload)
+        or b"",
+    )
+    real_calculate = materializer_module.calculate_minute_result
+
+    def calculate(context):
+        calculated.append(context.decision_minute)
+        return real_calculate(context)
+
+    monkeypatch.setattr(
+        materializer_module,
+        "calculate_minute_result",
+        calculate,
+    )
+    history = HistoryBuilder((window_end,))
+    materializer = DowMonitorMinuteResultMaterializer(
+        source=Source(),
+        repository=repository,
+        history_builder=history,
+        notifications_fn=lambda: [],
+        now_fn=lambda: NOW,
+    )
+
+    run = materializer.materialize_checkpoint(
+        symbol=_checkpoint_symbol(),
+        session_open=session_open,
+        window_end=window_end,
+    )
+
+    assert run.error is None
+    assert run.written_rows == 0
+    assert calculated == []
+    assert inserted_payloads == []
+    assert history.build_calls == 0
 
 
 # Catches a materializer that replays logical minutes already persisted.

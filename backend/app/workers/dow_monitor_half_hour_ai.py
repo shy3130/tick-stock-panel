@@ -45,20 +45,22 @@ def select_due_windows(
     completed_windows: Sequence[datetime],
     created_at: datetime,
     terminal_window_ends: set[datetime],
+    startup_eligible: bool = True,
 ) -> list[datetime]:
     latest_before_created_at = max(
-        (window for window in completed_windows if window <= created_at),
+        (window for window in completed_windows if window < created_at),
         default=None,
     )
     startup = (
         latest_before_created_at
-        if latest_before_created_at not in terminal_window_ends
+        if startup_eligible
+        and latest_before_created_at not in terminal_window_ends
         else None
     )
     normal = sorted(
         window
         for window in completed_windows
-        if window > created_at and window not in terminal_window_ends
+        if window >= created_at and window not in terminal_window_ends
     )
     return ([startup] if startup is not None else []) + normal
 
@@ -100,6 +102,10 @@ class DowMonitorHalfHourAiWorker:
                 ),
                 created_at=symbol.created_at,
                 terminal_window_ends=set(),
+                startup_eligible=self._calendar.is_regular_session_time(
+                    symbol.market,
+                    symbol.created_at,
+                ),
             )
             for window_end in windows:
                 try:

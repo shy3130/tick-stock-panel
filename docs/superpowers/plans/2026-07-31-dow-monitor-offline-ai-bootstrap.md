@@ -463,25 +463,27 @@ def select_due_windows(
     completed_windows: Sequence[datetime],
     created_at: datetime,
     terminal_window_ends: set[datetime],
+    startup_eligible: bool = True,
 ) -> list[datetime]:
     latest_before_created_at = max(
-        (window for window in completed_windows if window <= created_at),
+        (window for window in completed_windows if window < created_at),
         default=None,
     )
     startup = (
         latest_before_created_at
-        if latest_before_created_at not in terminal_window_ends
+        if startup_eligible
+        and latest_before_created_at not in terminal_window_ends
         else None
     )
     normal = [
         window
         for window in completed_windows
-        if window > created_at and window not in terminal_window_ends
+        if window >= created_at and window not in terminal_window_ends
     ]
     return ([startup] if startup is not None else []) + normal
 ```
 
-Do not literally use this code if the repository can query only one logical key at a time; preserve the semantics while avoiding an unnecessary full-history query. The selected startup list must contain at most one checkpoint. If the latest pre-`created_at` checkpoint is already terminal, do nothing for startup; never fall back to an older unfinished checkpoint.
+Do not literally use this code if the repository can query only one logical key at a time; preserve the semantics while avoiding an unnecessary full-history query. The selected startup list must contain at most one checkpoint. Startup uses strict `window_end < created_at`; normal scheduling uses `window_end >= created_at`. Pass `startup_eligible=calendar.is_regular_session_time(market, created_at)` so lunch, after-close, and holiday creation suppress only the pre-created startup exception. If the latest pre-`created_at` checkpoint is already terminal, do nothing for startup; never fall back to an older unfinished checkpoint.
 
 - [ ] **Step 3: Add the bootstrap/reload decision inside the worker**
 

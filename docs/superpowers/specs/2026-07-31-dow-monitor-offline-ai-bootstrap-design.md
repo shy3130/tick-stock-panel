@@ -17,6 +17,10 @@ Normal checkpoint rule: every later completed checkpoint on or after `created_at
 
 Older checkpoints before the eligible startup checkpoint remain prohibited.
 
+Boundary rule: startup requires `window_end < created_at`; normal scheduling uses `window_end >= created_at`.
+
+Startup gate: a pre-created checkpoint is eligible only when `calendar.is_regular_session_time(market, created_at)` is true.
+
 ## 问题
 
 当前 Worker 只读取已经物化到
@@ -61,12 +65,14 @@ Worker 在目标检查点数据不足时，调用既有离线原始数据源和�
 对交易时段内新加入且已启用的趋势监控股票：
 
 1. 若当前已有至少一个已完成的半小时检查点，Worker 必须选择最近的一个作为
-   唯一启动检查点；
+   唯一启动检查点，且该检查点必须满足 `window_end < created_at`；
 2. 即使该检查点早于 `created_at`，也允许使用开盘至该检查点的离线数据生成
-   一次分析；
+   一次分析，但只有 `calendar.is_regular_session_time(market, created_at)` 为
+   `true` 时才允许该启动例外；午休、收盘后或休市日创建均不得触发该例外；
 3. 不得回放更早的检查点；
 4. 已存在同一逻辑键的 `completed` 或 `insufficient_data` 结果时不得重复调用模型；
-5. 后续只处理 `created_at` 之后新完成的正常检查点。
+5. 正常检查点满足 `window_end >= created_at`，因此恰好等于 `created_at` 的
+   检查点属于正常调度；后续新完成的正常检查点继续按相同规则处理。
 
 例如 10:17 加入 A 股时，启动检查点为 10:00；不得补调更早窗口。10:30
 完成后继续执行正常分析。
@@ -128,6 +134,9 @@ Worker 在目标检查点数据不足时，调用既有离线原始数据源和�
 6. 已存在逻辑结果时不重复补算或调用模型；
 7. 正常后续 10:30 检查点继续执行；
 8. WebSocket/3018 组件契约证明没有引入补算依赖。
+9. `window_end == created_at` 按正常检查点处理，启动检查点只允许严格早于；
+10. 午休、收盘后和休市日创建的股票不触发创建前启动检查点；
+11. 精确位于 `window_end` 的 `DateTime64(3)` 分钟结果可被去重，不重复写入。
 
 生产验收必须核对：
 

@@ -23,12 +23,21 @@ NORMAL_RULE = (
     "results are missing."
 )
 OLDER_CHECKPOINT_RULE = "Older checkpoints before the eligible startup checkpoint remain prohibited."
+BOUNDARY_RULE = (
+    "Boundary rule: startup requires `window_end < created_at`; normal "
+    "scheduling uses `window_end >= created_at`."
+)
+STARTUP_GATE_RULE = (
+    "Startup gate: a pre-created checkpoint is eligible only when "
+    "`calendar.is_regular_session_time(market, created_at)` is true."
+)
 INDEX_RESOLUTION = (
     "The bootstrap specification permits exactly one latest completed startup "
-    "checkpoint before created_at to use bounded offline recovery; older "
-    "checkpoints remain prohibited. Every later normal checkpoint on or after "
-    "created_at may also use bounded offline recovery when canonical minute "
-    "results are missing."
+    "checkpoint with window_end < created_at to use bounded offline recovery, "
+    "and only when calendar.is_regular_session_time(market, created_at) is "
+    "true; older checkpoints remain prohibited. Every normal checkpoint with "
+    "window_end >= created_at may also use bounded offline recovery when "
+    "canonical minute results are missing."
 )
 
 
@@ -90,6 +99,8 @@ def test_precedence_allows_bounded_recovery_for_startup_and_later_normal_checkpo
         assert STARTUP_RULE in text
         assert NORMAL_RULE in text
         assert OLDER_CHECKPOINT_RULE in text
+        assert BOUNDARY_RULE in text
+        assert STARTUP_GATE_RULE in text
 
 
 def test_bootstrap_contract_keeps_websocket_and_realtime_paths_out_of_scope() -> None:

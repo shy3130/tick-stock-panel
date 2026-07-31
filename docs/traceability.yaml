@@ -515,6 +515,7 @@ requirements:
       - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_ai_bootstrap_integration.py, type: executable-test}
       - {path: tests/spec_contracts/test_dow_monitor_offline_ai_bootstrap_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
@@ -532,6 +533,7 @@ requirements:
       - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_ai_bootstrap_integration.py, type: executable-test}
       - {path: tests/spec_contracts/test_dow_monitor_offline_ai_bootstrap_contract.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
