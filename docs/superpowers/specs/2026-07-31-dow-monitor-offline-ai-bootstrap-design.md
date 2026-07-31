@@ -3,10 +3,19 @@
 ## 状态与授权
 
 - Status: approved
+- Specification ID: `SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001`
 - 用户决定：2026-07-31 明确同意“新加入股票先使用已离线保存的数据，
   不重新等待 WebSocket 累积 30 分钟”
 - 影响范围：趋势监控独立半小时 AI Worker
 - 不影响：实时重点解读、正式买卖信号、WebSocket 接收和分钟实时追加
+
+## Authoritative Precedence
+
+Startup exception: exactly one latest completed checkpoint before `created_at` is eligible for bounded offline recovery.
+
+Normal checkpoint rule: every later completed checkpoint on or after `created_at` may use bounded offline recovery when canonical minute results are missing.
+
+Older checkpoints before the eligible startup checkpoint remain prohibited.
 
 ## 问题
 

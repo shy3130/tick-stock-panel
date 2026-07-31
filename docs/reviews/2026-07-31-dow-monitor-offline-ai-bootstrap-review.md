@@ -6,7 +6,9 @@ The independent review will trace each approved requirement to the materializer
 and worker implementation, executable backend tests, and the semantic
 acceptance evidence. It will verify that the resolved precedence decision is
 implemented narrowly: one latest completed startup checkpoint may precede
-`created_at`, while every older checkpoint remains prohibited.
+`created_at`, every later normal checkpoint may use bounded offline recovery
+when canonical minute results are missing, and every older checkpoint remains
+prohibited.
 
 The review will reject screenshots, snapshots, or passing downstream metrics as
 substitutes for the lower-layer evidence. It will independently inspect the

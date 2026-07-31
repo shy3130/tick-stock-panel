@@ -10,6 +10,25 @@ REQUIREMENT_IDS = {
     "REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001",
     "REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001",
 }
+SPEC_PATH = "docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md"
+DECISION_PATH = "docs/decisions/2026-07-31-dow-monitor-offline-ai-bootstrap-precedence.md"
+STARTUP_RULE = (
+    "Startup exception: exactly one latest completed checkpoint before "
+    "`created_at` is eligible for bounded offline recovery."
+)
+NORMAL_RULE = (
+    "Normal checkpoint rule: every later completed checkpoint on or after "
+    "`created_at` may use bounded offline recovery when canonical minute "
+    "results are missing."
+)
+OLDER_CHECKPOINT_RULE = "Older checkpoints before the eligible startup checkpoint remain prohibited."
+INDEX_RESOLUTION = (
+    "The bootstrap specification permits exactly one latest completed startup "
+    "checkpoint before created_at to use bounded offline recovery; older "
+    "checkpoints remain prohibited. Every later normal checkpoint on or after "
+    "created_at may also use bounded offline recovery when canonical minute "
+    "results are missing."
+)
 
 
 def load_yaml(relative_path: str) -> dict:
@@ -25,7 +44,7 @@ def approved_spec_is_authoritative(index: dict) -> bool:
     return (
         len(specifications) == 1
         and specifications[0]["path"]
-        == "docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md"
+        == SPEC_PATH
         and specifications[0]["status"] == "authoritative"
         and set(specifications[0]["requirements"]) == REQUIREMENT_IDS
     )
@@ -43,7 +62,8 @@ def old_created_at_conflict_is_resolved(index: dict) -> bool:
         == {OLD_SPECIFICATION, SPECIFICATION}
         and conflicts[0]["status"] == "resolved"
         and conflicts[0]["decision"]
-        == "docs/decisions/2026-07-31-dow-monitor-offline-ai-bootstrap-precedence.md"
+        == DECISION_PATH
+        and conflicts[0]["resolution"] == INDEX_RESOLUTION
     )
 
 
@@ -58,6 +78,17 @@ def test_offline_bootstrap_authority_and_traceability_are_registered() -> None:
     assert approved_spec_is_authoritative(index)
     assert old_created_at_conflict_is_resolved(index)
     assert REQUIREMENT_IDS <= traced_requirement_ids(traceability)
+
+
+def test_precedence_allows_bounded_recovery_for_startup_and_later_normal_checkpoints() -> None:
+    design = (ROOT / SPEC_PATH).read_text(encoding="utf-8")
+    decision = (ROOT / DECISION_PATH).read_text(encoding="utf-8")
+
+    assert f"Specification ID: `{SPECIFICATION}`" in design
+    for text in (design, decision):
+        assert STARTUP_RULE in text
+        assert NORMAL_RULE in text
+        assert OLDER_CHECKPOINT_RULE in text
 
 
 def test_bootstrap_contract_keeps_websocket_and_realtime_paths_out_of_scope() -> None:

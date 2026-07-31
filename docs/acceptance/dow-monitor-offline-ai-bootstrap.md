@@ -16,6 +16,11 @@ does not call the model again; later normal checkpoints follow the existing
 `created_at` rule; and insufficient offline data persists `insufficient_data`
 without an invented result or model call.
 
+The same evidence must prove that later normal checkpoints on or after
+`created_at` may use the same bounded offline recovery only when their canonical
+minute results are missing; this does not expand eligibility to older
+checkpoints before the single startup checkpoint.
+
 Isolation evidence must show that the bounded work uses the existing minute
 result materializer and ClickHouse offline inputs, stays per-symbol and
 per-checkpoint, preserves model concurrency one, enforces the 500-row and
