@@ -136,6 +136,41 @@ specification compliance: passed
 scoped Ruff: passed
 ```
 
+## 2026-08-01 immutable candidate and production publication
+
+Publication completed with exact commit
+`7c7af48a11abddb16d73614061a635105338d029` and immutable image
+`tickflow-stock-panel-app:dow-monitor-incremental-7c7af48a11ab`
+(`sha256:e85403493f57c19ae88946bca4b0bc2b776f87444fb0b782690f30fc9f637d00`).
+Both `/health` and the static frontend bundle exposed the exact build ID.
+
+The immutable 13118 candidate passed ClickHouse availability and WebSocket
+`hello -> snapshot -> unsubscribed`. Ten consecutive cycles took
+6.693-8.780 seconds, with a maximum start interval of 15.085178 seconds,
+zero 19912 requests on all ten non-boundary cycles and concurrency limit three.
+
+Only `TickFlow_Stock_Panel` was recreated on 3018. The switched production
+service passed the same health/build and WebSocket checks. Ten consecutive
+production cycles took 5.152-13.398 seconds, with a maximum start interval of
+15.098651 seconds, zero 19912 requests and concurrency limit three.
+
+Pre/post safety evidence:
+
+```text
+app image: 908b0722... -> e8540349..., restart count 0
+AI worker: 071f5b70..., image f5369507..., start unchanged, restart count 0
+19912: healthy and not restarted
+symbol file sha256: 94fac437... unchanged
+ClickHouse minute results: physical 23568 -> 23568; unique 14356 -> 14356
+new app log: no ERROR / CRITICAL / Traceback
+```
+
+US symbols reported `MINUTE_TOO_OLD` during the publication window. The old
+and new services observed the same upstream freshness condition; the monitor
+correctly failed closed and did not create a new Dow signal from stale minute
+data. This external data freshness condition is not masked by the scheduling
+acceptance result.
+
 ## 2026-07-31 candidate rollback and HK alias root cause
 
 - Candidate image `tickflow-stock-panel-app:dow-monitor-incremental-cb060ebaa228`
