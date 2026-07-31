@@ -506,9 +506,11 @@ requirements:
     specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     implementation:
       - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_offline_bootstrap.py
       - backend/app/workers/dow_monitor_half_hour_ai.py
     tests:
       - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
@@ -517,9 +519,11 @@ requirements:
     specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     implementation:
       - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/services/dow_monitor_offline_bootstrap.py
       - backend/app/workers/dow_monitor_half_hour_ai.py
     tests:
       - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_offline_bootstrap.py, type: executable-test}
       - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
     acceptance:
       - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
