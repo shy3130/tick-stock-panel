@@ -178,6 +178,20 @@ async def test_arbitrary_materializer_exception_becomes_failed_outcome() -> None
 
 
 @pytest.mark.asyncio
+async def test_materializer_timeout_exception_preserves_original_diagnostic() -> None:
+    coordinator = DowMonitorOfflineBootstrap(
+        ImmediateMaterializer(failure=TimeoutError("ClickHouse request timed out"))
+    )
+
+    outcome = await ensure_checkpoint(coordinator)
+
+    assert outcome.status == "failed"
+    assert outcome.attempted is True
+    assert outcome.error_code == "BACKFILL_FAILED"
+    assert outcome.error_message == "ClickHouse request timed out"
+
+
+@pytest.mark.asyncio
 async def test_second_bootstrap_is_busy_while_single_flight_is_running() -> None:
     materializer = ControlledMaterializer(MaterializeRun(written_rows=30))
     coordinator = DowMonitorOfflineBootstrap(materializer, timeout_seconds=1)

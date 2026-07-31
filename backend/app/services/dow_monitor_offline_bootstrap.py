@@ -90,6 +90,15 @@ class DowMonitorOfflineBootstrap:
                 timeout=self._timeout_seconds,
             )
         except TimeoutError:
+            if task.done():
+                materializer_error = task.exception()
+                if isinstance(materializer_error, TimeoutError):
+                    return OfflineBootstrapOutcome(
+                        status="failed",
+                        attempted=True,
+                        error_code="BACKFILL_FAILED",
+                        error_message=str(materializer_error),
+                    )
             # Python cannot forcibly stop a blocking DB call already running in a
             # thread. The timeout is the worker's wait/decision budget; the
             # shielded task retains the slot until physical completion.
