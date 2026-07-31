@@ -279,6 +279,98 @@ The canonical query was evaluated before the AI query and proved:
 - zero row later than the 16:00 data cutoff;
 - 110 rows is below the absolute 500-row budget.
 
+#### Sanitized exact production query record
+
+These are the exact SQL statements executed through
+`app.plugins.clickhouse.bridge.query_json_each_row()` inside the deployed
+worker. The bridge supplied the configured ClickHouse endpoint/credentials and
+appended `FORMAT JSONEachRow`; no credential value is retained here.
+
+Raw preconditions:
+
+```sql
+SELECT count() n, max(updated_at) latest
+FROM longbridge.lb_realtime_quotes
+WHERE symbol='2526.HK'
+  AND updated_at>=parseDateTime64BestEffort('2026-07-31T09:30:00+08:00')
+  AND updated_at<parseDateTime64BestEffort('2026-07-31T16:00:00+08:00');
+
+SELECT count() n, max(updated_at) latest
+FROM longbridge.lb_realtime_depth
+WHERE symbol='2526.HK'
+  AND updated_at>=parseDateTime64BestEffort('2026-07-31T09:30:00+08:00')
+  AND updated_at<parseDateTime64BestEffort('2026-07-31T16:00:00+08:00');
+
+SELECT count() n, max(trade_time) latest
+FROM longbridge.lb_realtime_trades
+WHERE symbol='2526.HK'
+  AND trade_time>=parseDateTime64BestEffort('2026-07-31T09:30:00+08:00')
+  AND trade_time<parseDateTime64BestEffort('2026-07-31T16:00:00+08:00');
+
+SELECT count() n, max(bar_time) latest
+FROM longbridge.lb_realtime_candlesticks FINAL
+WHERE symbol='2526.HK'
+  AND bar_time>=parseDateTime64BestEffort('2026-07-21T09:30:00+08:00')
+  AND bar_time<parseDateTime64BestEffort('2026-07-31T16:00:00+08:00');
+
+SELECT count() n, max(updated_at) latest
+FROM longbridge.lb_realtime_capital
+WHERE symbol='2526.HK'
+  AND updated_at>=parseDateTime64BestEffort('2026-07-31T09:30:00+08:00')
+  AND updated_at<parseDateTime64BestEffort('2026-07-31T16:00:00+08:00');
+```
+
+Zero-row preconditions:
+
+```sql
+SELECT count() n, max(decision_minute) latest
+FROM longbridge.lb_dow_monitor_minute_results FINAL
+WHERE symbol='2526.HK';
+
+SELECT count() n, max(window_end) latest
+FROM longbridge.lb_dow_monitor_half_hour_ai_analyses FINAL
+WHERE symbol='2526.HK';
+```
+
+Canonical-first inspection:
+
+```sql
+SELECT decision_minute, source_bar_time, backfill, source_timestamps, updated_at
+FROM longbridge.lb_dow_monitor_minute_results FINAL
+WHERE market='hk' AND symbol='2526.HK'
+ORDER BY decision_minute;
+```
+
+The retained acceptance script counted these returned rows, summed
+`backfill`, partitioned them at 15:30/16:00, and parsed
+`source_timestamps` to obtain the maximum source instant before running the AI
+query.
+
+AI logical-row and snapshot inspection:
+
+```sql
+SELECT analysis_id, market, symbol, trade_date, window_end, data_cutoff,
+       status, model_name, error_code, input_snapshot_json, updated_at
+FROM longbridge.lb_dow_monitor_half_hour_ai_analyses FINAL
+WHERE market='hk' AND symbol='2526.HK'
+ORDER BY window_end;
+```
+
+Generated-content nonempty check:
+
+```sql
+SELECT window_end, status,
+       length(ifNull(title,'')) title_len,
+       length(ifNull(summary,'')) summary_len,
+       length(ifNull(conclusion,'')) conclusion_len,
+       length(evidence_json) evidence_len,
+       length(risks_json) risks_len,
+       length(scenarios_json) scenarios_len
+FROM longbridge.lb_dow_monitor_half_hour_ai_analyses FINAL
+WHERE market='hk' AND symbol='2526.HK'
+ORDER BY window_end;
+```
+
 The production repository then reloaded all 110 rows through the corrected
 naive `DateTime64` boundary. The failed first attempt's zero-observation symptom
 did not recur.
@@ -349,3 +441,31 @@ Finally, the 110 canonical rows and two AI rows were deleted for exactly
 `hk/2526.HK`; both final counts were independently verified as zero. The
 disposable container, fixture directory, and nested secret bind were removed.
 The commit-addressed candidate remains deployed and healthy.
+
+Exact cleanup statements executed through
+`DowMonitorMinuteResultRepository._default_execute()`:
+
+```sql
+ALTER TABLE longbridge.lb_dow_monitor_minute_results
+DELETE WHERE market='hk' AND symbol='2526.HK'
+SETTINGS mutations_sync=2;
+
+ALTER TABLE longbridge.lb_dow_monitor_half_hour_ai_analyses
+DELETE WHERE market='hk' AND symbol='2526.HK'
+SETTINGS mutations_sync=2;
+```
+
+Exact post-cleanup zero checks executed through the production bridge:
+
+```sql
+SELECT count() n
+FROM longbridge.lb_dow_monitor_minute_results FINAL
+WHERE market='hk' AND symbol='2526.HK';
+
+SELECT count() n
+FROM longbridge.lb_dow_monitor_half_hour_ai_analyses FINAL
+WHERE market='hk' AND symbol='2526.HK';
+```
+
+Both returned `n=0`. These commands are retained as reproducible evidence; they
+were not rerun during documentation Fix Round 1.
