@@ -502,3 +502,25 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-half-hour-ai-analysis.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-07-31-dow-monitor-half-hour-ai-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001
+    specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-offline-ai-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001
+    specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    implementation:
+      - backend/app/services/dow_monitor_minute_result_materializer.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+    tests:
+      - {path: tests/backend/test_dow_monitor_minute_result_materializer.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-offline-ai-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-offline-ai-bootstrap-review.md, type: independent-review}

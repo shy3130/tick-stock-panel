@@ -1,0 +1,66 @@
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SPECIFICATION = "SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001"
+OLD_SPECIFICATION = "SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001"
+REQUIREMENT_IDS = {
+    "REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001",
+    "REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001",
+}
+
+
+def load_yaml(relative_path: str) -> dict:
+    return yaml.safe_load((ROOT / relative_path).read_text(encoding="utf-8"))
+
+
+def approved_spec_is_authoritative(index: dict) -> bool:
+    specifications = [
+        entry
+        for entry in index["specifications"]
+        if entry["id"] == SPECIFICATION
+    ]
+    return (
+        len(specifications) == 1
+        and specifications[0]["path"]
+        == "docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md"
+        and specifications[0]["status"] == "authoritative"
+        and set(specifications[0]["requirements"]) == REQUIREMENT_IDS
+    )
+
+
+def old_created_at_conflict_is_resolved(index: dict) -> bool:
+    conflicts = [
+        entry
+        for entry in index["conflicts"]
+        if entry["id"] == "CON-20260731-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001"
+    ]
+    return (
+        len(conflicts) == 1
+        and set(conflicts[0]["specifications"])
+        == {OLD_SPECIFICATION, SPECIFICATION}
+        and conflicts[0]["status"] == "resolved"
+        and conflicts[0]["decision"]
+        == "docs/decisions/2026-07-31-dow-monitor-offline-ai-bootstrap-precedence.md"
+    )
+
+
+def traced_requirement_ids(traceability: dict) -> set[str]:
+    return {entry["id"] for entry in traceability["requirements"]}
+
+
+def test_offline_bootstrap_authority_and_traceability_are_registered() -> None:
+    index = load_yaml("docs/spec-index.yaml")
+    traceability = load_yaml("docs/traceability.yaml")
+
+    assert approved_spec_is_authoritative(index)
+    assert old_created_at_conflict_is_resolved(index)
+    assert REQUIREMENT_IDS <= traced_requirement_ids(traceability)
+
+
+def test_bootstrap_contract_keeps_websocket_and_realtime_paths_out_of_scope() -> None:
+    text = (ROOT / "docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md").read_text(encoding="utf-8")
+    assert "WebSocket" in text
+    assert "不改变正式买卖信号" in text

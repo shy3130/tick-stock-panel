@@ -120,7 +120,20 @@ specifications:
     requirements:
       - REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
       - REQ-DOW-MONITOR-HALF-HOUR-AI-VIEW-001
+  - id: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    path: docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001
 conflicts:
+  - id: CON-20260731-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    specifications:
+      - SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+      - SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    status: resolved
+    resolution: The existing half-hour specification controls normal checkpoints; the offline bootstrap specification permits exactly one latest completed startup checkpoint before a newly monitored symbol's created_at, while older checkpoints remain prohibited.
+    decision: docs/decisions/2026-07-31-dow-monitor-offline-ai-bootstrap-precedence.md
   - id: CON-20260731-DOW-MONITOR-MOBILE-LAYOUT-001
     specifications:
       - USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
