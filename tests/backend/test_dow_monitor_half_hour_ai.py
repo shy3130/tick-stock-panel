@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import FastAPI
@@ -26,8 +27,10 @@ from app.services.dow_monitor_minute_result_repository import (
     DowMonitorMinuteResultRepository,
 )
 from app.services.dow_monitor_models import MonitoredSymbol
+from app.services.dow_monitor_offline_bootstrap import OfflineBootstrapOutcome
 from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
+from app.workers import dow_monitor_half_hour_ai as worker_module
 from app.workers.dow_monitor_half_hour_ai import DowMonitorHalfHourAiWorker
 
 
@@ -203,90 +206,459 @@ def test_cumulative_query_has_both_time_boundaries() -> None:
     assert "decision_minute <=" in sql[0]
 
 
-@pytest.mark.asyncio
-async def test_new_symbol_starts_at_next_checkpoint_and_worker_is_sequential() -> None:
-    created_at = datetime.fromisoformat("2026-07-31T22:45:00+08:00")
+BEIJING = ZoneInfo("Asia/Shanghai")
 
-    class Store:
-        def list_symbols(self):
-            return [
-                MonitoredSymbol(
-                    symbol="RNG.US",
-                    market="us",
-                    enabled=True,
-                    created_at=created_at,
-                    updated_at=created_at,
-                )
-            ]
 
-    class Calendar:
-        def completed_window_ends(self, _market, _now):
-            return [
-                datetime.fromisoformat("2026-07-31T22:30:00+08:00"),
-                datetime.fromisoformat("2026-07-31T23:00:00+08:00"),
-            ]
+def beijing(value: str) -> datetime:
+    return datetime.fromisoformat(value).replace(tzinfo=BEIJING)
 
-        def session_open(self, _market, _trade_date):
-            return datetime.fromisoformat("2026-07-31T21:30:00+08:00")
 
-        def trade_date_for_checkpoint(self, _market, _window):
-            return date(2026, 7, 31)
+def monitored_symbol(
+    symbol: str = "RNG.US",
+    *,
+    created_at: datetime | None = None,
+) -> MonitoredSymbol:
+    created = created_at or beijing("2026-07-31T22:17:00")
+    return MonitoredSymbol(
+        symbol=symbol,
+        market="us",
+        enabled=True,
+        created_at=created,
+        updated_at=created,
+    )
 
-    class MinuteRepository:
-        def load_cumulative_rows(self, *_args):
-            return {
-                "RNG.US": [
-                    {
-                        "decision_minute": "2026-07-31T22:46:00+08:00",
-                        "last_price": 53,
-                    },
-                    {
-                        "decision_minute": "2026-07-31T22:59:00+08:00",
-                        "last_price": 54,
-                    },
-                ]
-            }
 
-    class AnalysisRepository:
-        def __init__(self):
-            self.saved: list[HalfHourAiAnalysis] = []
+def minute_row(observed_at: datetime, price: float) -> dict:
+    return {
+        "decision_minute": observed_at.isoformat(),
+        "last_price": price,
+    }
 
-        def exists_completed(self, *_args):
-            return False
 
-        def save(self, record):
-            self.saved.append(record)
+def sufficient_rows(window_end: datetime) -> list[dict]:
+    return [
+        minute_row(beijing("2026-07-31T21:31:00"), 53),
+        minute_row(window_end, 54),
+    ]
 
-    class Prompt:
-        async def analyze(self, _snapshot):
-            return ParsedAiAnalysis(
-                title="等待确认",
-                summary="价格回升，资金证据仍不足",
-                conclusion="保持观察。",
-                evidence=[],
-                risks=["样本有限"],
-                scenarios=[],
-                data_quality=["仅覆盖新增后的分钟"],
-            )
 
-    analysis_repository = AnalysisRepository()
+class WorkerStore:
+    def __init__(self, symbols: list[MonitoredSymbol]) -> None:
+        self.symbols = symbols
+
+    def list_symbols(self):
+        return list(self.symbols)
+
+
+class WorkerCalendar:
+    def __init__(self, completed: list[datetime]) -> None:
+        self.completed = completed
+
+    def completed_window_ends(self, _market, _now):
+        return list(self.completed)
+
+    def session_open(self, _market, _trade_date):
+        return beijing("2026-07-31T21:30:00")
+
+    def trade_date_for_checkpoint(self, _market, _window):
+        return date(2026, 7, 31)
+
+
+class WorkerMinuteRepository:
+    def __init__(
+        self,
+        rows_by_symbol: dict[str, list[list[dict]]] | None = None,
+    ) -> None:
+        self.rows_by_symbol = rows_by_symbol or {}
+        self.loads: list[tuple[str, datetime, datetime]] = []
+
+    def load_cumulative_rows(self, symbols, start, end):
+        symbol = symbols[0]
+        self.loads.append((symbol, start, end))
+        batches = self.rows_by_symbol.setdefault(symbol, [[]])
+        rows = batches.pop(0) if len(batches) > 1 else batches[0]
+        return {symbol: list(rows)}
+
+
+class WorkerAnalysisRepository:
+    def __init__(
+        self,
+        terminal: set[tuple[str, datetime]] | None = None,
+    ) -> None:
+        self.terminal = terminal or set()
+        self.saved: list[HalfHourAiAnalysis] = []
+
+    def exists_completed(self, _market, symbol, _trade_date, window_end):
+        return (symbol, window_end) in self.terminal
+
+    def save(self, record):
+        self.saved.append(record)
+        if record.status in {"completed", "insufficient_data", "failed"}:
+            self.terminal.add((record.symbol, record.window_end))
+
+
+class WorkerPrompt:
+    def __init__(self) -> None:
+        self.snapshots = []
+
+    @property
+    def window_ends(self):
+        return [snapshot.window_end for snapshot in self.snapshots]
+
+    async def analyze(self, snapshot):
+        self.snapshots.append(snapshot)
+        return ParsedAiAnalysis(
+            title="等待确认",
+            summary="价格回升，资金证据仍不足",
+            conclusion="保持观察。",
+            evidence=[],
+            risks=["样本有限"],
+            scenarios=[],
+            data_quality=["覆盖至检查点"],
+        )
+
+
+class WorkerBootstrap:
+    def __init__(
+        self,
+        outcomes: dict[str, OfflineBootstrapOutcome | Exception] | None = None,
+    ) -> None:
+        self.outcomes = outcomes or {}
+        self.window_ends: list[datetime] = []
+
+    async def ensure_checkpoint(self, *, symbol, session_open, window_end):
+        self.window_ends.append(window_end)
+        outcome = self.outcomes.get(
+            symbol.symbol,
+            OfflineBootstrapOutcome(
+                status="completed",
+                attempted=True,
+                written_rows=2,
+            ),
+        )
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def make_worker(
+    *,
+    symbols: list[MonitoredSymbol] | None = None,
+    completed: list[datetime] | None = None,
+    rows_by_symbol: dict[str, list[list[dict]]] | None = None,
+    terminal: set[tuple[str, datetime]] | None = None,
+    bootstrap_outcomes: (
+        dict[str, OfflineBootstrapOutcome | Exception] | None
+    ) = None,
+):
+    calendar = WorkerCalendar(
+        completed or [beijing("2026-07-31T22:00:00")]
+    )
+    minute_repository = WorkerMinuteRepository(rows_by_symbol)
+    analysis_repository = WorkerAnalysisRepository(terminal)
+    prompt = WorkerPrompt()
+    bootstrap = WorkerBootstrap(bootstrap_outcomes)
     worker = DowMonitorHalfHourAiWorker(
-        monitor_store=Store(),
-        minute_repository=MinuteRepository(),
+        monitor_store=WorkerStore(symbols or [monitored_symbol()]),
+        minute_repository=minute_repository,
         analysis_repository=analysis_repository,
-        calendar=Calendar(),
+        calendar=calendar,
         snapshot_builder=HalfHourAiSnapshotBuilder(minimum_observations=2),
-        prompt_service=Prompt(),
-        now_fn=lambda: datetime.fromisoformat("2026-07-31T23:00:01+08:00"),
+        prompt_service=prompt,
+        offline_bootstrap=bootstrap,
+        now_fn=lambda: beijing("2026-07-31T22:17:05"),
+    )
+    return (
+        worker,
+        calendar,
+        minute_repository,
+        analysis_repository,
+        prompt,
+        bootstrap,
+    )
+
+
+def test_select_due_windows_never_falls_back_from_terminal_latest_startup() -> None:
+    created_at = beijing("2026-07-31T22:17:00")
+    latest = beijing("2026-07-31T22:00:00")
+    normal = beijing("2026-07-31T22:30:00")
+
+    selected = worker_module.select_due_windows(
+        completed_windows=[
+            beijing("2026-07-31T21:30:00"),
+            latest,
+            normal,
+        ],
+        created_at=created_at,
+        terminal_window_ends={latest},
+    )
+
+    assert selected == [normal]
+
+
+@pytest.mark.asyncio
+async def test_new_symbol_analyzes_only_latest_completed_startup_checkpoint() -> None:
+    worker, _, _, _, prompt, bootstrap = make_worker(
+        completed=[
+            beijing("2026-07-31T21:30:00"),
+            beijing("2026-07-31T22:00:00"),
+        ],
+        rows_by_symbol={
+            "RNG.US": [
+                [minute_row(beijing("2026-07-31T21:31:00"), 53)],
+                sufficient_rows(beijing("2026-07-31T22:00:00")),
+            ]
+        },
+    )
+
+    await worker.run_due_jobs(now=beijing("2026-07-31T22:17:05"))
+
+    assert bootstrap.window_ends == [beijing("2026-07-31T22:00:00")]
+    assert prompt.window_ends == [beijing("2026-07-31T22:00:00")]
+
+
+@pytest.mark.asyncio
+async def test_terminal_latest_startup_checkpoint_does_not_fall_back_older() -> None:
+    latest = beijing("2026-07-31T22:00:00")
+    worker, _, minute_repository, _, prompt, bootstrap = make_worker(
+        completed=[beijing("2026-07-31T21:30:00"), latest],
+        terminal={("RNG.US", latest)},
+    )
+
+    await worker.run_due_jobs()
+
+    assert minute_repository.loads == []
+    assert bootstrap.window_ends == []
+    assert prompt.window_ends == []
+
+
+@pytest.mark.asyncio
+async def test_next_normal_checkpoint_runs_after_startup_checkpoint() -> None:
+    startup = beijing("2026-07-31T22:00:00")
+    normal = beijing("2026-07-31T22:30:00")
+    worker, _, _, _, prompt, bootstrap = make_worker(
+        completed=[startup, normal],
+        terminal={("RNG.US", startup)},
+        rows_by_symbol={"RNG.US": [sufficient_rows(normal)]},
+    )
+
+    await worker.run_due_jobs(now=beijing("2026-07-31T22:30:05"))
+
+    assert bootstrap.window_ends == []
+    assert prompt.window_ends == [normal]
+
+
+@pytest.mark.asyncio
+async def test_normal_checkpoint_can_bootstrap_missing_canonical_rows() -> None:
+    normal = beijing("2026-07-31T22:00:00")
+    worker, _, _, _, prompt, bootstrap = make_worker(
+        symbols=[
+            monitored_symbol(
+                created_at=beijing("2026-07-31T21:45:00"),
+            )
+        ],
+        rows_by_symbol={
+            "RNG.US": [
+                [minute_row(beijing("2026-07-31T21:31:00"), 53)],
+                sufficient_rows(normal),
+            ]
+        },
     )
 
     assert await worker.run_due_jobs() == 1
-    completed = [
-        item for item in analysis_repository.saved if item.status == "completed"
+
+    assert bootstrap.window_ends == [normal]
+    assert prompt.window_ends == [normal]
+
+
+@pytest.mark.asyncio
+async def test_sufficient_canonical_rows_skip_bootstrap_and_invoke_model_once() -> None:
+    window_end = beijing("2026-07-31T22:00:00")
+    worker, _, _, _, prompt, bootstrap = make_worker(
+        rows_by_symbol={"RNG.US": [sufficient_rows(window_end)]}
+    )
+
+    assert await worker.run_due_jobs() == 1
+
+    assert bootstrap.window_ends == []
+    assert prompt.window_ends == [window_end]
+
+
+@pytest.mark.asyncio
+async def test_insufficient_snapshot_bootstraps_reloads_and_then_invokes_model() -> None:
+    window_end = beijing("2026-07-31T22:00:00")
+    worker, _, minute_repository, _, prompt, bootstrap = make_worker(
+        rows_by_symbol={
+            "RNG.US": [
+                [minute_row(beijing("2026-07-31T21:31:00"), 53)],
+                sufficient_rows(window_end),
+            ]
+        }
+    )
+
+    assert await worker.run_due_jobs() == 1
+
+    assert bootstrap.window_ends == [window_end]
+    assert [load[2] for load in minute_repository.loads] == [
+        window_end,
+        window_end,
     ]
-    assert [item.window_end for item in completed] == [
-        datetime.fromisoformat("2026-07-31T23:00:00+08:00")
+    assert prompt.window_ends == [window_end]
+
+
+@pytest.mark.asyncio
+async def test_materialization_still_insufficient_saves_data_result_without_model() -> None:
+    window_end = beijing("2026-07-31T22:00:00")
+    one_row = [minute_row(beijing("2026-07-31T21:31:00"), 53)]
+    worker, _, _, repository, prompt, bootstrap = make_worker(
+        rows_by_symbol={"RNG.US": [one_row, one_row]}
+    )
+
+    assert await worker.run_due_jobs() == 0
+
+    assert bootstrap.window_ends == [window_end]
+    assert prompt.window_ends == []
+    terminal = repository.saved[-1]
+    assert terminal.status == "insufficient_data"
+    assert terminal.error_code == "INSUFFICIENT_DATA"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "error_code"),
+    [
+        (
+            OfflineBootstrapOutcome(
+                status="budget_exceeded",
+                attempted=True,
+                error_code="BACKFILL_BUDGET_EXCEEDED",
+                error_message="checkpoint requires 501 rows; limit is 500",
+            ),
+            "BACKFILL_BUDGET_EXCEEDED",
+        ),
+        (
+            OfflineBootstrapOutcome(
+                status="timed_out",
+                attempted=True,
+                error_code="BACKFILL_TIMEOUT",
+                error_message="materialization exceeded 15 seconds",
+            ),
+            "BACKFILL_TIMEOUT",
+        ),
+        (
+            OfflineBootstrapOutcome(
+                status="failed",
+                attempted=True,
+                error_code="BACKFILL_SOURCE_UNAVAILABLE",
+                error_message="raw quote partition unavailable",
+            ),
+            "BACKFILL_SOURCE_UNAVAILABLE",
+        ),
+    ],
+    ids=["budget", "timeout", "failure"],
+)
+async def test_terminal_bootstrap_error_preserves_diagnostic_without_model(
+    outcome: OfflineBootstrapOutcome,
+    error_code: str,
+) -> None:
+    worker, _, _, repository, prompt, _ = make_worker(
+        bootstrap_outcomes={"RNG.US": outcome}
+    )
+
+    assert await worker.run_due_jobs() == 0
+
+    assert prompt.window_ends == []
+    terminal = repository.saved[-1]
+    assert terminal.status == "insufficient_data"
+    assert terminal.error_code == error_code
+    assert terminal.error_message == outcome.error_message
+
+
+@pytest.mark.asyncio
+async def test_busy_bootstrap_saves_no_terminal_row_and_next_poll_can_retry() -> None:
+    busy = OfflineBootstrapOutcome(
+        status="busy",
+        attempted=False,
+        error_code="BACKFILL_BUSY",
+        error_message="another checkpoint is materializing",
+    )
+    worker, _, _, repository, prompt, _ = make_worker(
+        bootstrap_outcomes={"RNG.US": busy}
+    )
+
+    assert await worker.run_due_jobs() == 0
+
+    assert repository.saved == []
+    assert prompt.window_ends == []
+
+
+@pytest.mark.asyncio
+async def test_one_symbol_bootstrap_failure_does_not_stop_next_symbol() -> None:
+    window_end = beijing("2026-07-31T22:00:00")
+    worker, _, _, _, prompt, _ = make_worker(
+        symbols=[monitored_symbol("BAD.US"), monitored_symbol("GOOD.US")],
+        rows_by_symbol={
+            "BAD.US": [[]],
+            "GOOD.US": [sufficient_rows(window_end)],
+        },
+        bootstrap_outcomes={
+            "BAD.US": RuntimeError("coordinator unavailable"),
+        },
+    )
+
+    assert await worker.run_due_jobs() == 1
+
+    assert prompt.window_ends == [window_end]
+    assert prompt.snapshots[0].symbol == "GOOD.US"
+
+
+@pytest.mark.asyncio
+async def test_existing_terminal_key_skips_bootstrap_and_model() -> None:
+    window_end = beijing("2026-07-31T22:00:00")
+    worker, _, minute_repository, repository, prompt, bootstrap = make_worker(
+        terminal={("RNG.US", window_end)}
+    )
+
+    assert await worker.run_due_jobs() == 0
+
+    assert minute_repository.loads == []
+    assert repository.saved == []
+    assert bootstrap.window_ends == []
+    assert prompt.window_ends == []
+
+
+@pytest.mark.asyncio
+async def test_no_completed_checkpoint_does_nothing() -> None:
+    worker, calendar, minute_repository, repository, prompt, bootstrap = (
+        make_worker()
+    )
+    calendar.completed = []
+
+    assert await worker.run_due_jobs() == 0
+
+    assert minute_repository.loads == []
+    assert repository.saved == []
+    assert bootstrap.window_ends == []
+    assert prompt.window_ends == []
+
+
+@pytest.mark.asyncio
+async def test_worker_never_loads_or_analyzes_rows_after_window_end() -> None:
+    window_end = beijing("2026-07-31T22:00:00")
+    rows = sufficient_rows(window_end) + [
+        minute_row(beijing("2026-07-31T22:01:00"), 99)
     ]
+    worker, _, minute_repository, _, prompt, bootstrap = make_worker(
+        rows_by_symbol={"RNG.US": [rows]}
+    )
+
+    assert await worker.run_due_jobs() == 1
+
+    assert minute_repository.loads[0][2] == window_end
+    assert bootstrap.window_ends == []
+    assert prompt.snapshots[0].observation_count == 2
+    assert prompt.snapshots[0].latest_price == 54
+    assert prompt.snapshots[0].data_cutoff == window_end
 
 
 def test_overview_is_lightweight_and_detail_is_loaded_on_demand(tmp_path) -> None:

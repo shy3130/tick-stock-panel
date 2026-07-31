@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.services.ai_provider import generate_ai_text
+from app.services.dow_monitor_client import LongbridgeDowClient
 from app.services.dow_monitor_half_hour_ai_calendar import HalfHourWindowCalendar
 from app.services.dow_monitor_half_hour_ai_models import (
     HalfHourAiAnalysis,
@@ -20,13 +21,46 @@ from app.services.dow_monitor_half_hour_ai_repository import (
     DowMonitorHalfHourAiRepository,
 )
 from app.services.dow_monitor_half_hour_ai_snapshot import HalfHourAiSnapshotBuilder
+from app.services.dow_monitor_minute_result_history import (
+    DowEngineStableStateBuilder,
+    DowMonitorMinuteResultHistoryBuilder,
+)
+from app.services.dow_monitor_minute_result_materializer import (
+    DowMonitorMinuteResultMaterializer,
+)
 from app.services.dow_monitor_minute_result_models import normalize_monitor_symbol
 from app.services.dow_monitor_minute_result_repository import (
     DowMonitorMinuteResultRepository,
 )
+from app.services.dow_monitor_minute_result_source import DowMonitorMinuteResultSource
+from app.services.dow_monitor_offline_bootstrap import DowMonitorOfflineBootstrap
 from app.services.dow_monitor_store import DowMonitorStore
 
 logger = logging.getLogger(__name__)
+
+
+def select_due_windows(
+    *,
+    completed_windows: Sequence[datetime],
+    created_at: datetime,
+    terminal_window_ends: set[datetime],
+) -> list[datetime]:
+    latest_before_created_at = max(
+        (window for window in completed_windows if window <= created_at),
+        default=None,
+    )
+    startup = (
+        latest_before_created_at
+        if latest_before_created_at not in terminal_window_ends
+        else None
+    )
+    normal = sorted(
+        window
+        for window in completed_windows
+        if window > created_at and window not in terminal_window_ends
+    )
+    return ([startup] if startup is not None else []) + normal
+
 
 class DowMonitorHalfHourAiWorker:
     def __init__(
@@ -38,6 +72,7 @@ class DowMonitorHalfHourAiWorker:
         calendar,
         snapshot_builder,
         prompt_service,
+        offline_bootstrap,
         now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._monitor_store = monitor_store
@@ -46,6 +81,7 @@ class DowMonitorHalfHourAiWorker:
         self._calendar = calendar
         self._snapshot_builder = snapshot_builder
         self._prompt_service = prompt_service
+        self._offline_bootstrap = offline_bootstrap
         self._now_fn = now_fn
 
     async def run_due_jobs(self, now: datetime | None = None) -> int:
@@ -54,95 +90,67 @@ class DowMonitorHalfHourAiWorker:
         for symbol in self._monitor_store.list_symbols():
             if not symbol.enabled:
                 continue
-            windows = self._calendar.completed_window_ends(symbol.market, current)
+            windows = select_due_windows(
+                completed_windows=self._calendar.completed_window_ends(
+                    symbol.market,
+                    current,
+                ),
+                created_at=symbol.created_at,
+                terminal_window_ends=set(),
+            )
             for window_end in windows:
-                if window_end <= symbol.created_at:
-                    continue
-                trade_date = self._calendar.trade_date_for_checkpoint(
-                    symbol.market,
-                    window_end,
-                )
-                if self._analysis_repository.exists_completed(
-                    symbol.market,
-                    symbol.symbol,
-                    trade_date,
-                    window_end,
-                ):
-                    continue
-                session_open = self._calendar.session_open(
-                    symbol.market,
-                    trade_date,
-                )
-                if session_open is None:
-                    continue
-                rows = self._minute_repository.load_cumulative_rows(
-                    [symbol.symbol],
-                    session_open,
-                    window_end,
-                ).get(normalize_monitor_symbol(symbol.symbol), [])
-                snapshot = self._snapshot_builder.build(
-                    market=symbol.market,
-                    symbol=symbol.symbol,
-                    session_open=session_open,
-                    window_end=window_end,
-                    data_cutoff=window_end,
-                    rows=rows,
-                )
-                identity = analysis_id_for(
-                    symbol.market,
-                    symbol.symbol,
-                    trade_date,
-                    window_end,
-                )
-                self._analysis_repository.save(
-                    self._record(
-                        identity,
-                        symbol.market,
-                        symbol.symbol,
-                        trade_date,
-                        window_end,
-                        snapshot,
-                        status="running",
-                    )
-                )
-                if not snapshot.sufficient:
-                    self._analysis_repository.save(
-                        self._record(
-                            identity,
-                            symbol.market,
-                            symbol.symbol,
-                            trade_date,
-                            window_end,
-                            snapshot,
-                            status="insufficient_data",
-                            error_code="INSUFFICIENT_DATA",
-                            error_message="；".join(snapshot.data_quality),
-                        )
-                    )
-                    continue
                 try:
-                    parsed = await self._prompt_service.analyze(snapshot)
+                    completed_count += await self._run_checkpoint(
+                        symbol,
+                        window_end,
+                    )
                 except Exception as exc:
                     logger.warning(
-                        "half-hour AI failed for %s at %s: %s",
+                        "half-hour checkpoint failed for %s at %s: %s",
                         symbol.symbol,
                         window_end.isoformat(),
                         exc,
                     )
-                    self._analysis_repository.save(
-                        self._record(
-                            identity,
-                            symbol.market,
-                            symbol.symbol,
-                            trade_date,
-                            window_end,
-                            snapshot,
-                            status="failed",
-                            error_code=type(exc).__name__,
-                            error_message=str(exc)[:500],
-                        )
-                    )
-                    continue
+        return completed_count
+
+    async def _run_checkpoint(self, symbol, window_end: datetime) -> int:
+        trade_date = self._calendar.trade_date_for_checkpoint(
+            symbol.market,
+            window_end,
+        )
+        if self._analysis_repository.exists_completed(
+            symbol.market,
+            symbol.symbol,
+            trade_date,
+            window_end,
+        ):
+            return 0
+        session_open = self._calendar.session_open(
+            symbol.market,
+            trade_date,
+        )
+        if session_open is None:
+            return 0
+        snapshot = self._load_snapshot(symbol, session_open, window_end)
+        identity = analysis_id_for(
+            symbol.market,
+            symbol.symbol,
+            trade_date,
+            window_end,
+        )
+        if not snapshot.sufficient:
+            outcome = await self._offline_bootstrap.ensure_checkpoint(
+                symbol=symbol,
+                session_open=session_open,
+                window_end=window_end,
+            )
+            if outcome.status == "busy":
+                return 0
+            if outcome.status in {
+                "budget_exceeded",
+                "timed_out",
+                "failed",
+            }:
                 self._analysis_repository.save(
                     self._record(
                         identity,
@@ -151,18 +159,100 @@ class DowMonitorHalfHourAiWorker:
                         trade_date,
                         window_end,
                         snapshot,
-                        status="completed",
-                        title=parsed.title,
-                        summary=parsed.summary,
-                        conclusion=parsed.conclusion,
-                        evidence=parsed.evidence,
-                        risks=parsed.risks,
-                        scenarios=parsed.scenarios,
-                        data_quality=parsed.data_quality,
+                        status="insufficient_data",
+                        error_code=outcome.error_code or "BACKFILL_FAILED",
+                        error_message=outcome.error_message,
                     )
                 )
-                completed_count += 1
-        return completed_count
+                return 0
+            snapshot = self._load_snapshot(
+                symbol,
+                session_open,
+                window_end,
+            )
+            if not snapshot.sufficient:
+                self._analysis_repository.save(
+                    self._record(
+                        identity,
+                        symbol.market,
+                        symbol.symbol,
+                        trade_date,
+                        window_end,
+                        snapshot,
+                        status="insufficient_data",
+                        error_code="INSUFFICIENT_DATA",
+                        error_message="；".join(snapshot.data_quality),
+                    )
+                )
+                return 0
+        self._analysis_repository.save(
+            self._record(
+                identity,
+                symbol.market,
+                symbol.symbol,
+                trade_date,
+                window_end,
+                snapshot,
+                status="running",
+            )
+        )
+        try:
+            parsed = await self._prompt_service.analyze(snapshot)
+        except Exception as exc:
+            logger.warning(
+                "half-hour AI failed for %s at %s: %s",
+                symbol.symbol,
+                window_end.isoformat(),
+                exc,
+            )
+            self._analysis_repository.save(
+                self._record(
+                    identity,
+                    symbol.market,
+                    symbol.symbol,
+                    trade_date,
+                    window_end,
+                    snapshot,
+                    status="failed",
+                    error_code=type(exc).__name__,
+                    error_message=str(exc)[:500],
+                )
+            )
+            return 0
+        self._analysis_repository.save(
+            self._record(
+                identity,
+                symbol.market,
+                symbol.symbol,
+                trade_date,
+                window_end,
+                snapshot,
+                status="completed",
+                title=parsed.title,
+                summary=parsed.summary,
+                conclusion=parsed.conclusion,
+                evidence=parsed.evidence,
+                risks=parsed.risks,
+                scenarios=parsed.scenarios,
+                data_quality=parsed.data_quality,
+            )
+        )
+        return 1
+
+    def _load_snapshot(self, symbol, session_open, window_end):
+        rows = self._minute_repository.load_cumulative_rows(
+            [symbol.symbol],
+            session_open,
+            window_end,
+        ).get(normalize_monitor_symbol(symbol.symbol), [])
+        return self._snapshot_builder.build(
+            market=symbol.market,
+            symbol=symbol.symbol,
+            session_open=session_open,
+            window_end=window_end,
+            data_cutoff=window_end,
+            rows=rows,
+        )
 
     def _record(
         self,
@@ -191,17 +281,32 @@ class DowMonitorHalfHourAiWorker:
 
 
 def build_worker() -> DowMonitorHalfHourAiWorker:
-    repository = DowMonitorHalfHourAiRepository()
-    repository.ensure_schema()
-    return DowMonitorHalfHourAiWorker(
-        monitor_store=DowMonitorStore(
-            Path(os.getenv("DATA_DIR", "/app/data"))
+    analysis_repository = DowMonitorHalfHourAiRepository()
+    analysis_repository.ensure_schema()
+    store = DowMonitorStore(Path(os.getenv("DATA_DIR", "/app/data")))
+    minute_repository = DowMonitorMinuteResultRepository()
+    dow_client = LongbridgeDowClient(
+        os.getenv(
+            "LONGBRIDGE_API_URL",
+            "http://host.docker.internal:19912",
+        )
+    )
+    materializer = DowMonitorMinuteResultMaterializer(
+        source=DowMonitorMinuteResultSource(),
+        repository=minute_repository,
+        history_builder=DowMonitorMinuteResultHistoryBuilder(
+            DowEngineStableStateBuilder(dow_client)
         ),
-        minute_repository=DowMonitorMinuteResultRepository(),
-        analysis_repository=repository,
+        notifications_fn=lambda: store.list_notifications(limit=1_000_000),
+    )
+    return DowMonitorHalfHourAiWorker(
+        monitor_store=store,
+        minute_repository=minute_repository,
+        analysis_repository=analysis_repository,
         calendar=HalfHourWindowCalendar(),
         snapshot_builder=HalfHourAiSnapshotBuilder(),
         prompt_service=HalfHourAiPromptService(generate_ai_text),
+        offline_bootstrap=DowMonitorOfflineBootstrap(materializer),
     )
 
 
