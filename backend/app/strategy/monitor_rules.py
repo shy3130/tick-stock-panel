@@ -31,6 +31,7 @@ RULE_TYPES = {"strategy", "signal", "price", "market", "ladder"}
 SCOPES = {"symbols", "all", "sector"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
+STRATEGY_NOTIFY_EVENTS = {"buy_signal", "sell_signal", "pool_entry", "pool_exit"}
 SEVERITIES = {"info", "warn", "critical"}
 OPS = {">", ">=", "<", "<=", "==", "!="}
 # ladder 规则: 封单监控的指标 (量=手, 额=元)
@@ -59,7 +60,7 @@ def load_all(data_dir: Path) -> list[dict]:
     out: list[dict] = []
     for f in sorted(d.glob("*.json")):
         try:
-            out.append(json.loads(f.read_text(encoding="utf-8")))
+            out.append(normalize(json.loads(f.read_text(encoding="utf-8"))))
         except Exception as e:
             logger.warning("monitor rule load failed %s: %s", f.name, e)
     return out
@@ -70,7 +71,7 @@ def load_one(data_dir: Path, rule_id: str) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return normalize(json.loads(p.read_text(encoding="utf-8")))
     except Exception as e:
         logger.warning("monitor rule load failed %s: %s", rule_id, e)
         return None
@@ -106,12 +107,28 @@ def validate(rule: dict) -> None:
     if rule.get("type") not in RULE_TYPES:
         raise ValueError(f"type 必须是 {RULE_TYPES} 之一")
 
+    # 指数规则: 仅 signal/price + symbols 作用域 + 不含分时信号
+    # (指数无涨跌停/策略/封单语义; 无本地分钟K, 分时信号会静默不触发)
+    if rule.get("asset_type") == "index":
+        if rule.get("type") not in ("signal", "price"):
+            raise ValueError("指数监控仅支持 signal/price 类型 (无涨跌停/策略/封单语义)")
+        if rule.get("scope") != "symbols":
+            raise ValueError("指数监控仅支持指定标的 (scope=symbols)")
+        if uses_intraday_signals(rule):
+            raise ValueError("指数无本地分钟K数据, 不支持分时信号条件")
+
     # 策略类型: 需要 strategy_id + direction,conditions 可空
     if rule.get("type") == "strategy":
         if not rule.get("strategy_id"):
             raise ValueError("策略类型规则必须指定 strategy_id")
         if rule.get("direction", "entry") not in DIRECTIONS:
             raise ValueError(f"direction 必须是 {DIRECTIONS} 之一")
+        notify_events = rule.get("notify_events")
+        if not isinstance(notify_events, list) or not notify_events:
+            raise ValueError("策略类型规则至少选择一个通知事件")
+        invalid_events = set(notify_events) - STRATEGY_NOTIFY_EVENTS
+        if invalid_events:
+            raise ValueError(f"notify_events 包含非法事件: {sorted(invalid_events)}")
     elif rule.get("type") == "ladder":
         # 连板梯队封单监控: 需 metric + threshold + direction(up/down), 不用 conditions
         if rule.get("metric", "sealed_vol") not in LADDER_METRICS:
@@ -156,7 +173,7 @@ def validate(rule: dict) -> None:
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
     if uses_intraday_signals(rule) and rule.get("scope") != "symbols":
-        raise ValueError("分时穿越信号仅支持指定股票")
+        raise ValueError("分时穿越信号仅支持指定标的")
     # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,
     # 一条本意针对某板块的规则会对全市场每只命中都触发(告警风暴)。在板块 JOIN
     # 落地前, 拒绝创建 sector 规则(fail-closed), 避免用户建出会刷屏的规则。
@@ -182,6 +199,14 @@ def normalize(rule: dict) -> dict:
     r.setdefault("strategy_id", None)
     # direction 默认值: ladder 用 "up", 其余用 "entry"
     r.setdefault("direction", "up" if r.get("type") == "ladder" else "entry")
+    if r.get("type") == "strategy":
+        if r.get("notify_events") is None:
+            # 兼容统一监控上线后的旧规则: 当时实际行为是同时通知进入和移出。
+            r["notify_events"] = ["pool_entry", "pool_exit"]
+        else:
+            r["notify_events"] = list(dict.fromkeys(r["notify_events"]))
+    else:
+        r.pop("notify_events", None)
     r.setdefault("conditions", [])
     # ladder 专属默认字段
     r.setdefault("metric", "sealed_vol")
@@ -252,6 +277,7 @@ def migrate_strategy_monitors(data_dir: Path, strategy_ids: list[str], strategy_
                 "scope": "all",
                 "strategy_id": sid,
                 "direction": "entry",
+                "notify_events": ["pool_entry", "pool_exit"],
                 "conditions": [],
                 "cooldown_seconds": 3600,
                 "enabled": True,

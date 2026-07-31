@@ -13,6 +13,7 @@ import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
+import { boardTag as boardBadge } from '@/components/stock-table/primitives'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { cnSignal } from '@/lib/signals'
 import { isBacktestableStrategy } from '@/lib/strategy-role'
@@ -246,6 +247,22 @@ const buildDefaultOverrides = (detail: StrategyDetail) => normalizeStrategyOverr
   trailing_take_profit_drawdown: detail.trailing_take_profit_drawdown,
   score_min: null,
   score_max: null,
+  max_hold_days: detail.max_hold_days,
+})
+
+const strategyBacktestConfigSignature = (detail: StrategyDetail) => JSON.stringify({
+  execution_backend: detail.execution_backend,
+  basic_filter: detail.basic_filter,
+  params: detail.params,
+  params_defaults: detail.params_defaults,
+  scoring: detail.scoring,
+  entry_signals: detail.entry_signals,
+  exit_signals: detail.exit_signals,
+  stop_loss: detail.stop_loss,
+  take_profit: detail.take_profit,
+  trailing_stop: detail.trailing_stop,
+  trailing_take_profit_activate: detail.trailing_take_profit_activate,
+  trailing_take_profit_drawdown: detail.trailing_take_profit_drawdown,
   max_hold_days: detail.max_hold_days,
 })
 
@@ -807,6 +824,12 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
                     <span className="w-[78px] shrink-0 font-mono">{r.symbol}</span>
                     <span className="min-w-0 flex-1 truncate text-secondary">{r.name}</span>
                     <span className="shrink-0 text-[9px] text-muted">{marketLabel(r.market)}</span>
+                    {(() => {
+                      const b = boardBadge(r.symbol)
+                      return b && (
+                        <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
+                      )
+                    })()}
                     <Plus className={`h-3.5 w-3.5 ${added ? 'opacity-30' : 'text-accent'}`} />
                   </button>
                 )
@@ -963,7 +986,12 @@ export function StrategyBacktest() {
   const isPending = backtestTask?.isPending ?? false
 
   const dataStatus = useDataStatus()
-  const earliestDate = dataStatus.data?.daily?.earliest_date ?? null
+  const backtestDataStatus = assetType === 'etf'
+    ? dataStatus.data?.etf_enriched
+    : dataStatus.data?.enriched
+  const earliestDate = backtestDataStatus?.earliest_date ?? null
+  const backtestDataUnavailable = dataStatus.isSuccess && !earliestDate
+  const backtestDataLabel = assetType === 'etf' ? 'ETF 指标数据' : '股票指标数据'
 
   const resetConfigFromDetail = (detail: StrategyDetail) => {
     setStrategyParams(strategyDefaultParams(detail))
@@ -978,16 +1006,24 @@ export function StrategyBacktest() {
 
   useEffect(() => {
     const detail = strategyDetail.data
-    if (!detail || loadedStrategyRef.current === detail.id) return
-    loadedStrategyRef.current = detail.id
-    if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
+    if (!detail) return
+    const configSignature = strategyBacktestConfigSignature(detail)
+    const configKey = `${assetType}:${detail.id}:${configSignature}`
+    if (loadedStrategyRef.current === configKey) return
+    loadedStrategyRef.current = configKey
+    if (
+      saved?.assetType === assetType
+      && saved.selectedStrategy === detail.id
+      && saved.strategyConfigSignature === configSignature
+      && (saved.params || saved.overrides)
+    ) {
       setStrategyParams(mergeStrategyParams(detail, saved.params))
       setOverrides(normalizeStrategyOverrides(detail, saved.overrides ?? buildDefaultOverrides(detail)))
       return
     }
     resetConfigFromDetail(detail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategyDetail.data])
+  }, [assetType, strategyDetail.data])
 
   // 当全局回测任务完成时, 把结果写入组件 (切页回来也能恢复)
   useEffect(() => {
@@ -1018,13 +1054,16 @@ export function StrategyBacktest() {
         minuteFill: highGranularity,
         params: strategyParams,
         overrides,
+        strategyConfigSignature: strategyDetail.data
+          ? strategyBacktestConfigSignature(strategyDetail.data)
+          : undefined,
         result: backtestTask.result,
       })
     }
   }, [backtestTask, market])
 
   const handleRun = () => {
-    if (!selectedStrategy) return
+    if (!selectedStrategy || backtestDataUnavailable) return
     const requestOverrides = detail
       ? normalizeStrategyOverrides(detail, overrides)
       : overrides
@@ -1653,6 +1692,13 @@ export function StrategyBacktest() {
         </div>
         )}
 
+        {backtestDataUnavailable && (
+          <div className="flex items-start gap-1.5 rounded-btn border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-4 text-danger">
+            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>缺少{backtestDataLabel}，请先在数据页面同步日K并完成指标计算。</span>
+          </div>
+        )}
+
         {isPending ? (
           <button
             onClick={stopBacktest}
@@ -1666,7 +1712,7 @@ export function StrategyBacktest() {
         ) : (
           <button
             onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading}
+            disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
             className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
               bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
               transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
@@ -1737,7 +1783,10 @@ export function StrategyBacktest() {
 
         {backtestTask?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-            {backtestTask.error}
+            <div>{backtestTask.error}</div>
+            {result && (
+              <div className="mt-1 text-xs text-secondary">本次回测未生成新结果，下方仍展示上一次成功结果。</div>
+            )}
           </div>
         )}
 

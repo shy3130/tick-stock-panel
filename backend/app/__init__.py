@@ -2,7 +2,7 @@
 
 import sys
 
-__version__ = "0.1.86"
+__version__ = "0.1.87"
 
 # Windows 默认 stdout/stderr 编码为 GBK(cp936),TickFlow SDK 内部输出含 emoji 的
 # 指数/标的名称(如 \U0001f193)时会抛 UnicodeEncodeError,导致请求失败。

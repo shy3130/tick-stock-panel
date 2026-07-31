@@ -23,13 +23,19 @@ import type { AppVersion } from '@/lib/appVersion'
 
 const BASE = ''
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const isFormData = init?.body instanceof FormData
+type RequestOptions = RequestInit & {
+  /** 为 true 时不弹错误 toast（由调用方自行汇总提示，如多图串行队列） */
+  quiet?: boolean
+}
+
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
+  const { quiet, ...fetchInit } = init ?? {}
+  const isFormData = fetchInit.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
   // 合并调用方传入的 headers (此前会被整体覆盖丢弃)
-  Object.assign(headers, init?.headers as Record<string, string> | undefined)
-  const res = await fetch(`${BASE}${path}`, { ...init, headers })
+  Object.assign(headers, fetchInit.headers as Record<string, string> | undefined)
+  const res = await fetch(`${BASE}${path}`, { ...fetchInit, headers })
   if (!res.ok) {
     let detail = ''
     try {
@@ -46,7 +52,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
-    if (res.status !== 401) toast(msg, 'error')
+    if (res.status !== 401 && !quiet) toast(msg, 'error')
     throw new Error(msg)
   }
   return res.json() as Promise<T>
@@ -587,17 +593,20 @@ export interface MonitorCondition {
   value?: number | null   // op 非 truth 时必填
 }
 
+export type StrategyNotifyEvent = 'buy_signal' | 'sell_signal' | 'pool_entry' | 'pool_exit'
+
 export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
   type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder'
-  asset_type?: 'stock' | 'etf'
+  asset_type?: 'stock' | 'etf' | 'index'
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
   sector?: string | null
   strategy_id?: string | null
   direction: 'entry' | 'exit' | 'both' | 'up' | 'down'
+  notify_events?: StrategyNotifyEvent[]
   conditions: MonitorCondition[]
   logic: 'and' | 'or'
   cooldown_seconds: number
@@ -922,6 +931,7 @@ export interface DatasetConfig {
   end_param?: string
   asset_type_param?: string | null
   freq_param?: string | null
+  timeout?: number | null
 }
 
 export interface AuthConfig {
@@ -1136,10 +1146,15 @@ export const api = {
       `/api/settings/plugins/${encodeURIComponent(name)}/install`,
       { method: 'DELETE' },
     ),
-  testDataSource: (provider: string, dataset: string, symbols?: string[]) =>
+  testDataSource: (
+    provider: string,
+    dataset: string,
+    symbols?: string[],
+    config?: CustomSourceConfig,
+  ) =>
     request<DataSourceTestResult>('/api/settings/data-sources/test', {
       method: 'POST',
-      body: JSON.stringify({ provider, dataset, symbols }),
+      body: JSON.stringify({ provider, dataset, symbols, config }),
     }),
   updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>) =>
     request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider'>>(
@@ -1408,6 +1423,7 @@ export const api = {
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'live' | 'none'
+      asset_type?: 'stock' | 'etf' | 'index'
       price_limit?: PriceLimitInfo | null
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
@@ -1497,12 +1513,14 @@ export const api = {
     }),
   watchlistOcrStatus: () =>
     request<{ provider: string; available: boolean }>('/api/watchlist/ocr-status'),
-  watchlistImportImage: (file: File) => {
+  watchlistImportImage: (file: File, signal?: AbortSignal, quiet = false) => {
     const fd = new FormData()
     fd.append('file', file)
     return request<WatchlistImportResult>('/api/watchlist/import-image', {
       method: 'POST',
       body: fd,
+      signal,
+      quiet,
     })
   },
   watchlistRemove: (symbol: string) =>
@@ -1580,9 +1598,9 @@ export const api = {
     { cache: 'no-store' },
   ),
 
-  screenerStrategies: async (assetType: 'stock' | 'etf' = 'stock') => {
+  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
-      `/api/strategies?asset_type=${assetType}&timeframe=1d`,
+      `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}timeframe=1d`,
     )
     return { presets: data.strategies, load_errors: data.load_errors }
   },
@@ -1662,7 +1680,7 @@ export const api = {
     stop_loss_pct?: number
     max_hold_days?: number
     matching?: 'close_t' | 'open_t+1'
-    asset_type?: 'stock' | 'etf'
+    asset_type?: 'stock' | 'etf' | 'index'
     market?: MarketCode
   }) =>
     request<BacktestResult>('/api/backtest/run', {
@@ -1683,7 +1701,7 @@ export const api = {
     weight?: 'equal' | 'factor_weight'
     fees_pct?: number
     slippage_bps?: number
-    asset_type?: 'stock' | 'etf'
+    asset_type?: 'stock' | 'etf' | 'index'
   }) =>
     request<FactorBacktestResult>('/api/backtest/factor/run', {
       method: 'POST',
@@ -1707,7 +1725,7 @@ export const api = {
     max_positions?: number
     initial_capital?: number
     position_sizing?: 'equal' | 'score_weight'
-    asset_type?: 'stock' | 'etf'
+    asset_type?: 'stock' | 'etf' | 'index'
     minute_fill?: boolean
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {

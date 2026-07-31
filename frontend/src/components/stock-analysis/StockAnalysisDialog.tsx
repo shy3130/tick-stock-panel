@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { copyText } from '@/lib/copyText'
+import { toast } from '@/components/Toast'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import {
   type ActiveTask, type HistoryReport,
@@ -78,6 +79,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
     if (!content) return
     const copied = await copyText(content)
     setCopyStatus(copied ? 'success' : 'error')
+    toast(copied ? '已复制到剪贴板' : '复制失败,请手动选择文本', copied ? 'success' : 'error')
     if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current)
     copyResetTimerRef.current = setTimeout(() => setCopyStatus('idle'), 2000)
   }

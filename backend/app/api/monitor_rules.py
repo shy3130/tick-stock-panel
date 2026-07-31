@@ -20,11 +20,35 @@ def _data_dir(request: Request) -> Path:
     return request.app.state.repo.store.data_dir
 
 
+def _reconcile_index_asset_type(rule: dict, repo) -> dict:
+    """纠正误存为 stock 的指数规则 (asset_type → index)。
+
+    个股弹窗加监控 / 点位提醒等入口未传 asset_type, 指数 symbol 的规则被存成
+    stock, 导致监控中心显示「个股」、引擎在股票轮评估 (指数 symbol 永不命中)。
+    仅当规则全部 symbols 都 resolve 为指数时纠正 (股票+指数混合池不动)。
+    """
+    if rule.get("asset_type", "stock") != "stock" or rule.get("scope") != "symbols":
+        return rule
+    symbols = [s for s in rule.get("symbols", []) if s]
+    if not symbols:
+        return rule
+    try:
+        if all(repo.resolve_asset_type(s) == "index" for s in symbols):
+            rule["asset_type"] = "index"
+    except Exception:  # noqa: BLE001
+        pass
+    return rule
+
+
 def _sync_engine(request: Request) -> None:
     """保存/删除后,把最新规则集 reload 到引擎内存态。"""
     engine = getattr(request.app.state, "monitor_engine", None)
     if engine is not None:
-        rules = monitor_rules.load_all(_data_dir(request))
+        repo = request.app.state.repo
+        rules = [
+            _reconcile_index_asset_type(r, repo)
+            for r in monitor_rules.load_all(_data_dir(request))
+        ]
         engine.set_rules(rules)
 
 
@@ -46,6 +70,7 @@ class RuleModel(BaseModel):
     sector: str | None = None
     strategy_id: str | None = None
     direction: str = "entry"  # entry | exit | both
+    notify_events: list[str] | None = None
     conditions: list[ConditionModel] = []
     logic: str = "and"        # and | or
     cooldown_seconds: int = 3600
@@ -100,13 +125,13 @@ def get_options(request: Request):
         "custom_signals": custom_sigs,
         "operators": [">", ">=", "<", "<=", "==", "!="],
         "types": [
-            {"key": "signal", "label": "个股信号"},
+            {"key": "signal", "label": "信号"},
             {"key": "price", "label": "价格/涨跌"},
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
         ],
         "scopes": [
-            {"key": "symbols", "label": "指定股票"},
+            {"key": "symbols", "label": "指定标的"},
             {"key": "all", "label": "全市场"},
             {"key": "sector", "label": "板块"},
         ],
@@ -133,7 +158,11 @@ def get_options(request: Request):
 # ── 列表 ───────────────────────────────────────────────
 @router.get("")
 def list_rules(request: Request):
-    rules = monitor_rules.load_all(_data_dir(request))
+    repo = request.app.state.repo
+    rules = [
+        _reconcile_index_asset_type(r, repo)
+        for r in monitor_rules.load_all(_data_dir(request))
+    ]
     from app.services.kline_sync import intraday_monitor_support
 
     support = intraday_monitor_support(getattr(request.app.state, "capabilities", None))
@@ -166,6 +195,7 @@ def list_rules(request: Request):
 @router.post("")
 def save_rule(req: RuleModel, request: Request):
     rule = monitor_rules.normalize(req.model_dump())
+    rule = _reconcile_index_asset_type(rule, request.app.state.repo)
     # 连板梯队封单监控 (type=ladder) 依赖五档盘口数据, 需 Pro+ (DEPTH5_BATCH 能力)。
     # 无能力时拒绝创建, 避免规则存了却永远无法触发。
     if rule.get("type") == "ladder":

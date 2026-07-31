@@ -10,6 +10,7 @@ import { QK } from '@/lib/queryKeys'
 import { fmtPrice, fmtPct } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
+import { LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS, strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
@@ -20,7 +21,7 @@ import { useMarketScope } from '@/lib/market-scope'
 import { matchesMarketFilter } from '@/lib/market-display'
 
 const TYPE_LABEL: Record<string, string> = {
-  signal: '个股信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控',
+  signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控',
 }
 
 /** 严重级别 → 左侧色条 + 图标 */
@@ -345,13 +346,11 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
         <EmptyState
           icon={Bell}
           title="暂无触发记录"
-          hint="监控规则命中后,触发记录会出现在这里。可在右侧配置规则,或在个股详情页加入监控。"
+          hint="监控规则命中后,触发记录会出现在这里。可在右侧配置规则,或在标的详情页加入监控。"
         />
       ) : (
         <div className="space-y-2">
-              {events
-                .filter((ev: any) => !(ev.source === 'strategy' && !ev.symbol))
-                .map((ev: any, i: number) => {
+              {events.map((ev: any, i: number) => {
             const sev = SEVERITY_CONFIG[ev.severity ?? 'info'] ?? SEVERITY_CONFIG.info
             const SevIcon = sev.icon
             const isNew = ev.ts > enterTs
@@ -376,9 +375,8 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                 </div>
                 <div className="min-w-0 flex-1">
                   {ev.source === 'strategy' ? (() => {
-                    const sm = ev.message?.match(/策略「([^」]+)」/)
-                    const sname = sm ? sm[1] : ''
-                    const isNew = ev.type === 'new_entry'
+                    const sname = strategyName(ev.message ?? '')
+                    const eventMeta = strategyEventMeta(ev.type)
                     const _pct = ev.change_pct ?? 0
                     return (
                       <>
@@ -417,13 +415,25 @@ function AlertsList({ alertsQuery, confirmClear, setConfirmClear, total, enterTs
                             {sname}
                           </span>
                         </div>
-                        <div className="mt-1 flex items-center gap-1.5">
-                          <span className={cn('text-[11px] font-medium', isNew ? 'text-danger' : 'text-emerald-400')}>
-                            {isNew ? '进入' : '移出'}
-                          </span>
-                          <span className="text-[11px] text-foreground/80">策略</span>
-                          <span className="text-[11px] font-medium text-amber-400">「{sname}」</span>
-                        </div>
+                        {ev.symbol ? (
+                          <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                            <span className={cn('shrink-0 text-[11px] font-medium', eventMeta.className)}>
+                              {eventMeta.action}
+                            </span>
+                            {sname
+                              ? <span className="text-[11px] font-medium text-amber-400">「{sname}」</span>
+                              : ev.message && <span className="truncate text-[10px] text-muted">{ev.message}</span>}
+                          </div>
+                        ) : (
+                          <div className="mt-1 truncate text-[11px] text-muted">{ev.message}</div>
+                        )}
+                        {ev.signals && ev.signals.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {ev.signals.map((signal: string) => (
+                              <span key={signal} className="rounded bg-accent/8 px-1.5 py-0.5 text-[9px] text-accent/70">{cnSignal(signal)}</span>
+                            ))}
+                          </div>
+                        )}
                       </>
                     )
                   })() : (
@@ -642,11 +652,11 @@ function RulesList({ rulesQuery, onEdit }: {
         <EmptyState
           icon={RadioTower}
           title="暂无监控规则"
-          hint="点击标题栏「+」新建规则,或在个股详情页点「加监控」快速添加。"
+          hint="点击标题栏「+」新建规则,或在标的详情页点「加监控」快速添加。"
         />
       ) : (
         rules.map(r => {
-          // 名称截取: "策略监控 · MACD金叉" → "MACD金叉", "个股信号监控 · 300750.SZ" → "个股信号监控"
+          // 名称截取: "策略监控 · MACD金叉" → "MACD金叉", "信号监控 · 300750.SZ" → "信号监控"
           const dotIdx = r.name.indexOf(' · ')
           const displayName = dotIdx >= 0 ? r.name.slice(dotIdx + 3) : r.name
           return (
@@ -671,6 +681,9 @@ function RulesList({ rulesQuery, onEdit }: {
                   <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold', SOURCE_BADGE_STYLE[r.type] ?? 'bg-elevated text-muted')}>
                     {TYPE_LABEL[r.type]}
                   </span>
+                  {r.asset_type === 'index' && (
+                    <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold bg-sky-500/10 text-sky-400">指数</span>
+                  )}
                   {/* 个股类型: 直接显示可点击的代码+名称; 其他类型显示规则名 */}
                   {r.scope === 'symbols' && r.symbols.length > 0 ? (
                     <button
@@ -732,10 +745,17 @@ function RulesList({ rulesQuery, onEdit }: {
                 </div>
               )}
 
-              {/* 第二行: 策略类型显示选股池变更监控 */}
+              {/* 第二行: 策略类型显示通知事件 */}
               {r.type === 'strategy' && r.strategy_id ? (
-                <div className="mt-0.5 flex items-center gap-2 pl-0.5">
-                  <span className="text-[9px] text-secondary">选股池变更监控</span>
+                <div className="mt-1 flex flex-wrap items-center gap-1 pl-0.5">
+                  {(r.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).map(event => {
+                    const option = STRATEGY_NOTIFY_EVENT_OPTIONS.find(item => item.key === event)
+                    return option ? (
+                      <span key={event} className="rounded bg-elevated px-1.5 py-0.5 text-[9px] text-secondary">
+                        {option.label}
+                      </span>
+                    ) : null
+                  })}
                 </div>
               ) : r.conditions.length > 0 && (
                 <div className="mt-0.5 flex items-center gap-1 pl-0.5">

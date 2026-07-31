@@ -112,6 +112,7 @@ export const storage = {
     minuteFill?: boolean
     params?: Record<string, any>
     overrides?: Record<string, any>
+    strategyConfigSignature?: string
     result: any
   } | null>('strategy-backtest-last'),
 

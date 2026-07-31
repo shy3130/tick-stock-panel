@@ -342,8 +342,12 @@ def _build_user_prompt(
     market: str = "cn",
     capital_metrics: dict[str, float] | None = None,
     order_flow_context: dict | None = None,
+    asset_type: str = "stock",
 ) -> str:
-    """构建用户消息:标的 + 价位摘要 + 技术指标 JSON + 财务摘要 + 关注点。"""
+    """构建用户消息:标的 + 价位摘要 + 技术指标 JSON + 财务摘要 + 关注点。
+
+    asset_type 用于区分无财务数据时的文案:指数无财务是常态,不走 Free 文案。
+    """
     resolved_market = _resolve_market(symbol, market)
     market_name, currency = _MARKET_CONTEXT[resolved_market]
     parts: list[str] = [
@@ -384,6 +388,13 @@ def _build_user_prompt(
             "```json",
             json.dumps(fins, ensure_ascii=False),
             "```",
+        ])
+    elif asset_type == "index":
+        parts.extend([
+            "",
+            "(该标的为指数: 无财务、股本与涨跌停数据。请按系统提示词第 4 节的说明,"
+            "在基本面/财务面维度给出\"接入中\"的友好提示,不要编造数据;"
+            "消息面维度基于价量异动推断即可。)",
         ])
     else:
         parts.extend([
@@ -489,6 +500,7 @@ async def analyze_stock_stream(
             resolved_market,
             _build_capital_metrics(df),
             order_flow_context,
+            asset_type=repo.resolve_asset_type(symbol),
         )
         async for delta in stream_ai_text(
             [

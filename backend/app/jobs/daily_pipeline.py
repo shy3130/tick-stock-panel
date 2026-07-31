@@ -54,12 +54,15 @@ def _invalidate(table: str | None = None) -> None:
     invalidate_data_cache(table)
 
 
-def _resolve_universe(capset: CapabilitySet) -> list[str]:
-    """解析标的池。
+def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
+    """解析标的池 — 以 CN_Equity_A (沪深京A股 ~5522只) 为主。
 
     自定义日K源 → 使用该数据源同步出的 instruments 全市场维表
     TickFlow 有 batch 能力 → 直接拉 CN_Equity_A universe
     其他用户 → 用 instruments parquet + watchlist 兜底
+
+    repo 传入时过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
+    进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
     """
     d = Path(settings.data_dir)
     inst_path = d / "instruments" / "instruments.parquet"
@@ -88,6 +91,10 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
             base.update(inst["symbol"].to_list())
         except Exception as e:  # noqa: BLE001
             logger.warning("instruments supplement failed: %s", e)
+    # 过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
+    # 进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
+    if repo is not None:
+        base -= set(repo.get_index_symbol_set())
     return sorted(base)
 
 
@@ -136,7 +143,7 @@ def run_now(
     _invalidate("instruments")
 
     emit("resolve_universe", 9, "解析标的池…")
-    universe = _resolve_universe(capset)
+    universe = _resolve_universe(capset, repo)
     emit("resolve_universe", 10, f"标的池规模:{len(universe)} 只")
 
     # Step 1: 日 K 同步
@@ -497,7 +504,7 @@ def run_now(
         minute_start = today - _td(days=minute_days)
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
-        minute_symbols = _resolve_minute_symbols(capset)
+        minute_symbols = _resolve_minute_symbols(capset, repo)
         def _minute_chunk_progress(cur: int, tot: int, seg_label: str = "") -> None:
             emit("sync_minute", 90 + int(3 * cur / tot),
                  f"分钟K 批次 {cur}/{tot}" + (f" [{seg_label}]" if seg_label else ""),
@@ -584,9 +591,9 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
         logger.warning("refresh view %s failed: %s", name, e)
 
 
-def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
+def _resolve_minute_symbols(capset: CapabilitySet, repo=None) -> list[str]:
     """分钟 K 同步标的 — 与日K共用同一标的池。"""
-    return _resolve_universe(capset)
+    return _resolve_universe(capset, repo)
 
 
 def _refresh_instruments_view(repo: KlineRepository) -> None:

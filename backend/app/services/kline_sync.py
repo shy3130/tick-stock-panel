@@ -831,7 +831,7 @@ def fetch_minute_single(
     trade_date: date,
     asset_type: AssetType = "stock",
 ) -> pl.DataFrame:
-    """通过已配置的分钟数据源拉取单股单日分钟 K（不写入本地）。"""
+    """实时拉取单股单日分钟 K(不写入本地)。优先自定义分钟源, 回退 TickFlow。"""
     from datetime import datetime
     start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)

@@ -15,6 +15,7 @@ import { SettingsModal } from '@/components/data/SettingsModal'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
+import { strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 import { useMarketScope } from '@/lib/market-scope'
 import { currencyLabel, marketLabel } from '@/lib/market-display'
@@ -98,8 +99,7 @@ const _SEVERITY_BAR: Record<string, string> = {
   info: 'bg-accent/40', warn: 'bg-warning', critical: 'bg-danger',
 }
 
-function MonitorWidget() {
-  const [previewEv, setPreviewEv] = useState<AlertEvent | null>(null)
+function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => void }) {
   const alerts = useQuery({
     queryKey: ['alerts', ''],
     queryFn: () => api.alertsList({ days: 7, limit: 10 }),
@@ -117,15 +117,12 @@ function MonitorWidget() {
   return (
     <>
       <div className="mt-1 space-y-1.5">
-        {events
-          .filter((ev: AlertEvent) => !(ev.source === 'strategy' && !ev.symbol))
-          .map((ev, i) => {
+        {events.map((ev, i) => {
           const sev = _SEVERITY_BAR[ev.severity ?? 'info'] ?? _SEVERITY_BAR.info
           const pct = ev.change_pct ?? 0
           const isStrategy = ev.source === 'strategy'
-          const sm = isStrategy ? ev.message?.match(/策略「([^」]+)」/) : null
-          const sname = sm ? sm[1] : ''
-          const isNew = ev.type === 'new_entry'
+          const sname = isStrategy ? strategyName(ev.message ?? '') : ''
+          const eventMeta = strategyEventMeta(ev.type)
           return (
             <motion.div
               key={`${ev.ts}-${i}`}
@@ -138,7 +135,7 @@ function MonitorWidget() {
               {/* 第一行: 代码 + 名称 + 价格 + 涨跌幅 (点击代码/名称弹日K) */}
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => ev.symbol && setPreviewEv(ev)}
+                  onClick={() => ev.symbol && onStockClick(ev)}
                   title={ev.symbol ? `查看 ${ev.symbol} 日K` : undefined}
                   className="inline-flex items-center gap-1 min-w-0 shrink-0 rounded hover:bg-elevated/60 transition-colors -mx-0.5 px-0.5 cursor-pointer"
                 >
@@ -165,17 +162,37 @@ function MonitorWidget() {
               </div>
               {/* 第二行: 策略类型走新格式, 其他走旧格式 */}
               {isStrategy ? (
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <span className={cn('text-[9px] font-medium', isNew ? 'text-danger' : 'text-emerald-400')}>
-                    {isNew ? '进入' : '移出'}
-                  </span>
-                  <span className="text-[9px] text-muted">策略</span>
-                  <span className="text-[9px] font-medium text-amber-400">「{sname}」</span>
-                  <span className="flex-1" />
-                  <span className="text-[8px] text-muted/50 shrink-0 font-mono">
-                    {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
-                  </span>
-                </div>
+                <>
+                  {ev.symbol ? (
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                      <span className={cn('shrink-0 text-[9px] font-medium', eventMeta.className)}>
+                        {eventMeta.action}
+                      </span>
+                      {sname
+                        ? <span className="truncate text-[9px] font-medium text-amber-400">「{sname}」</span>
+                        : ev.message && <span className="truncate text-[9px] text-muted">{ev.message}</span>}
+                      <span className="flex-1" />
+                      <span className="text-[8px] text-muted/50 shrink-0 font-mono">
+                        {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-[9px] text-muted">{ev.message}</span>
+                      <span className="flex-1" />
+                      <span className="text-[8px] text-muted/50 shrink-0 font-mono">
+                        {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                  )}
+                  {ev.signals && ev.signals.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {ev.signals.map(signal => (
+                        <span key={signal} className="rounded bg-accent/8 px-1 py-px text-[8px] text-accent/80">{cnSignal(signal)}</span>
+                      ))}
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
                   <div className="mt-0.5 flex items-center gap-1.5">
@@ -202,19 +219,6 @@ function MonitorWidget() {
           )
         })}
       </div>
-
-      <StockPreviewDialog
-        symbol={previewEv?.symbol ?? null}
-        name={previewEv?.name ?? undefined}
-        triggerInfo={previewEv ? {
-          price: previewEv.price ?? null,
-          changePct: previewEv.change_pct ?? null,
-          ts: previewEv.ts,
-          signals: previewEv.signals,
-          message: previewEv.message,
-        } : null}
-        onClose={() => setPreviewEv(null)}
-      />
     </>
   )
 }
@@ -538,7 +542,7 @@ export function Dashboard() {
   const { market } = useMarketScope()
   const [selectedDate, setSelectedDate] = useState<string | undefined>()
   const [manualFetching, setManualFetching] = useState(false)
-  const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string} | null>(null)
+  const [previewStock, setPreviewStock] = useState<{symbol: string; name?: string; alert?: AlertEvent} | null>(null)
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -847,7 +851,9 @@ export function Dashboard() {
                 <ArrowUpRight className="h-3.5 w-3.5" />
               </Link>
             </div>
-            <MonitorWidget />
+            <MonitorWidget onStockClick={(event) => {
+              if (event.symbol) setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event })
+            }} />
           </section>
         </aside>
       </div>
@@ -855,6 +861,13 @@ export function Dashboard() {
       <StockPreviewDialog
         symbol={previewStock?.symbol ?? null}
         name={previewStock?.name}
+        triggerInfo={previewStock?.alert ? {
+          price: previewStock.alert.price ?? null,
+          changePct: previewStock.alert.change_pct ?? null,
+          ts: previewStock.alert.ts,
+          signals: previewStock.alert.signals,
+          message: previewStock.alert.message,
+        } : null}
         onClose={() => setPreviewStock(null)}
       />
     </div>

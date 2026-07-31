@@ -7,6 +7,7 @@ import { StockFinancialSearch } from '@/components/financials/StockFinancialSear
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { LastStockChip } from '@/components/LastStockChip'
 import { AnalysisKChart, type PriceLevel, type LevelType } from '@/components/stock-analysis/AnalysisKChart'
+import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
 import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
@@ -33,6 +34,7 @@ export function StockAnalysis() {
   const [checking, setChecking] = useState(false)
   const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
+  const [showPriceAlerts, setShowPriceAlerts] = useState(false)
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
   const marketLastStock = lastStock && matchesMarketFilter(lastStock.symbol, market) ? lastStock : null
 
@@ -60,6 +62,7 @@ export function StockAnalysis() {
     setSymbol(sym)
     setName(nm)
     setConfirmReport(null)
+    setShowPriceAlerts(false)
     rememberStock(sym, nm)
   }
 
@@ -90,11 +93,6 @@ export function StockAnalysis() {
     <>
       <PageHeader
         title="个股分析"
-        titleExtra={
-          <span className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400">
-            Beta
-          </span>
-        }
         subtitle="日 K · 关键价位 · AI 五维分析(技术 / 资金 / 基本面 / 财务 / 消息面)"
         right={
           <div className="flex items-center gap-2">
@@ -111,7 +109,7 @@ export function StockAnalysis() {
           className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center"
         >
           <div className="w-full sm:w-72 sm:shrink-0">
-            <StockFinancialSearch onSelect={onSelect} />
+            <StockFinancialSearch onSelect={onSelect} assetTypes="stock,index" />
           </div>
           {symbol && (
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -133,15 +131,12 @@ export function StockAnalysis() {
                 AI 个股分析
               </button>
               <button
-                onClick={() => toast('点位提醒功能开发中,敬请期待', 'error')}
-                className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-btn border border-border/40 bg-elevated/40 px-3 py-1.5 text-xs font-medium text-muted transition-all hover:border-border/70 hover:text-secondary"
-                title="当价格触及关键价位时提醒(开发中)"
+                onClick={() => setShowPriceAlerts(true)}
+                className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-btn border border-sky-400/25 bg-sky-400/[0.08] px-3 py-1.5 text-xs font-medium text-sky-300 transition-all hover:border-sky-400/40 hover:bg-sky-400/[0.12]"
+                title="设置价格点位提醒"
               >
                 <Bell className="h-3.5 w-3.5" />
                 点位提醒
-                <span className="rounded-full bg-amber-400/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-amber-400">
-                  开发中
-                </span>
               </button>
             </div>
           )}
@@ -185,6 +180,15 @@ export function StockAnalysis() {
         triggerInfo={null}
         onClose={() => setPreviewSymbol(null)}
       />
+
+      {showPriceAlerts && symbol && (
+        <PriceAlertDialog
+          key={symbol}
+          symbol={symbol}
+          name={name}
+          onClose={() => setShowPriceAlerts(false)}
+        />
+      )}
     </>
   )
 }

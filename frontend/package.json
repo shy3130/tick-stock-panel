@@ -1,7 +1,7 @@
 {
   "name": "tickflow-stock-panel-frontend",
   "private": true,
-  "version": "0.1.86",
+  "version": "0.1.87",
   "type": "module",
   "scripts": {
     "dev": "vite",

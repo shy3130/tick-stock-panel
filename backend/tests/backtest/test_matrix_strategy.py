@@ -42,34 +42,21 @@ def test_common_matrix_features_match_polars_indicator_pipeline():
     start = date(2024, 1, 1)
     for offset in range(100):
         close = 10.0 + offset * 0.03 + np.sin(offset / 4.0) * 0.8
-        rows.append(
-            {
-                "symbol": "000001.SZ",
-                "date": start + timedelta(days=offset),
-                "open": close - 0.1,
-                "high": close + 0.3 + (offset % 3) * 0.02,
-                "low": close - 0.25,
-                "close": close,
-                "volume": 1000.0 + (offset % 7) * 130.0,
-            }
-        )
+        rows.append({
+            "symbol": "000001.SZ",
+            "date": start + timedelta(days=offset),
+            "open": close - 0.1,
+            "high": close + 0.3 + (offset % 3) * 0.02,
+            "low": close - 0.25,
+            "close": close,
+            "volume": 1000.0 + (offset % 7) * 130.0,
+        })
     panel = pl.DataFrame(rows)
     features = {
-        "prev_close",
-        "change_pct",
-        "change_amount",
-        "amplitude",
-        "ma5",
-        "ma20",
-        "ma60",
-        "boll_upper",
-        "boll_lower",
-        "high_60d",
-        "low_60d",
-        "momentum_60d",
-        "vol_ratio_5d",
-        "annual_vol_20d",
-        "rsi_14",
+        "prev_close", "change_pct", "change_amount", "amplitude",
+        "ma5", "ma20", "ma60", "boll_upper", "boll_lower",
+        "high_60d", "low_60d", "momentum_60d", "vol_ratio_5d",
+        "annual_vol_20d", "rsi_14",
     }
     enriched = compute_indicators(panel, needed=features)
     market = build_market_data_matrix(panel)
@@ -101,45 +88,39 @@ def _panel_with_missing_asset_bar() -> pl.DataFrame:
             if symbol == "000001.SZ" and offset == 43:
                 continue
             if asset_id == 0:
-                close = 20.0 - offset * 0.15 if offset < 35 else 14.75 + (offset - 35) * 0.25
+                close = (
+                    20.0 - offset * 0.15
+                    if offset < 35
+                    else 14.75 + (offset - 35) * 0.25
+                )
             else:
                 close = 18.0 + offset * 0.025 + np.sin(offset / 5.0) * 0.7
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "date": start + timedelta(days=offset),
-                    "open": close - 0.1,
-                    "high": close + 0.3,
-                    "low": close - 0.25,
-                    "close": close,
-                    "volume": 1000.0 + asset_id * 200.0 + (offset % 7) * 130.0,
-                }
-            )
+            rows.append({
+                "symbol": symbol,
+                "date": start + timedelta(days=offset),
+                "open": close - 0.1,
+                "high": close + 0.3,
+                "low": close - 0.25,
+                "close": close,
+                "volume": 1000.0 + asset_id * 200.0 + (offset % 7) * 130.0,
+            })
     return pl.DataFrame(rows)
 
 
 def test_matrix_features_skip_missing_asset_bars_like_polars_groups():
     panel = _panel_with_missing_asset_bar()
     features = {
-        "prev_close",
-        "change_pct",
-        "change_amount",
-        "amplitude",
-        "ma5",
-        "ma20",
-        "ma60",
-        "boll_upper",
-        "boll_lower",
-        "high_60d",
-        "low_60d",
-        "momentum_60d",
-        "vol_ratio_5d",
-        "annual_vol_20d",
-        "rsi_14",
+        "prev_close", "change_pct", "change_amount", "amplitude",
+        "ma5", "ma20", "ma60", "boll_upper", "boll_lower",
+        "high_60d", "low_60d", "momentum_60d", "vol_ratio_5d",
+        "annual_vol_20d", "rsi_14",
     }
     enriched = compute_indicators(panel, needed=features)
     market = build_market_data_matrix(panel)
-    time_id_by_date = {label[:10]: time_id for time_id, label in enumerate(market.timestamp_labels)}
+    time_id_by_date = {
+        label[:10]: time_id
+        for time_id, label in enumerate(market.timestamp_labels)
+    }
 
     for symbol in market.symbols:
         expected_rows = enriched.filter(pl.col("symbol") == symbol).sort("date")
@@ -232,7 +213,9 @@ def test_matrix_crossovers_skip_missing_asset_bars_like_polars_signals(
 ):
     panel = _panel_with_missing_asset_bar()
     indicator_names = (
-        {"ma5", "ma20"} if strategy_file == "ma_golden_cross.py" else {"macd_dif", "macd_dea"}
+        {"ma5", "ma20"}
+        if strategy_file == "ma_golden_cross.py"
+        else {"macd_dif", "macd_dea"}
     )
     enriched = compute_indicators(panel, needed=indicator_names)
     expected = compute_indicator_signals(
@@ -244,7 +227,10 @@ def test_matrix_crossovers_skip_missing_asset_bars_like_polars_signals(
         REPO_ROOT / "backend" / "app" / "strategy" / "builtin" / strategy_file
     )
     actual = strategy_def.matrix_strategy.compute_signals(market, params)
-    time_id_by_date = {label[:10]: time_id for time_id, label in enumerate(market.timestamp_labels)}
+    time_id_by_date = {
+        label[:10]: time_id
+        for time_id, label in enumerate(market.timestamp_labels)
+    }
 
     for symbol in market.symbols:
         expected_rows = expected.filter(pl.col("symbol") == symbol).sort("date")
@@ -253,8 +239,12 @@ def test_matrix_crossovers_skip_missing_asset_bars_like_polars_signals(
             dtype=np.intp,
         )
         asset_id = market.symbols.index(symbol)
-        expected_entry = expected_rows[entry_column].fill_null(False).cast(pl.UInt8).to_numpy()
-        expected_exit = expected_rows[exit_column].fill_null(False).cast(pl.UInt8).to_numpy()
+        expected_entry = (
+            expected_rows[entry_column].fill_null(False).cast(pl.UInt8).to_numpy()
+        )
+        expected_exit = (
+            expected_rows[exit_column].fill_null(False).cast(pl.UInt8).to_numpy()
+        )
         np.testing.assert_array_equal(actual.entry[time_ids, asset_id], expected_entry)
         np.testing.assert_array_equal(actual.exit[time_ids, asset_id], expected_exit)
 
@@ -271,34 +261,26 @@ def test_builtin_matrix_strategies_use_their_declared_formula_modules():
         path for path in strategy_dir.glob("*.py") if path.name != "__init__.py"
     )
 
-    assert len(strategy_files) == 32
+    assert len(strategy_files) == 18
     for strategy_path in strategy_files:
         strategy = StrategyEngine._load_file(strategy_path)
         assert strategy.execution_backend == "matrix_native"
         assert strategy.matrix_strategy is not None
-        if strategy_path.stem.startswith("dow_"):
-            assert strategy.matrix_strategy.__class__.__module__ in {
-                "app.strategy.shared_dow_patterns",
-                "app.strategy.shared_structure_breakout",
-            }
-        else:
-            assert strategy.matrix_strategy.__class__.__module__ == strategy_path.stem
+        assert strategy.matrix_strategy.__class__.__module__ == strategy_path.stem
         assert strategy.filter_fn is None
         assert strategy.filter_history_fn is None
 
 
 def test_market_matrix_derives_live_raw_close_when_requested():
-    panel = pl.DataFrame(
-        {
-            "symbol": ["000001.SZ", "600000.SH"],
-            "date": [date(2024, 1, 1)] * 2,
-            "open": [10.0, 20.0],
-            "high": [10.2, 20.2],
-            "low": [9.8, 19.8],
-            "close": [10.1, 20.1],
-            "volume": [1_000.0, 2_000.0],
-        }
-    )
+    panel = pl.DataFrame({
+        "symbol": ["000001.SZ", "600000.SH"],
+        "date": [date(2024, 1, 1)] * 2,
+        "open": [10.0, 20.0],
+        "high": [10.2, 20.2],
+        "low": [9.8, 19.8],
+        "close": [10.1, 20.1],
+        "volume": [1_000.0, 2_000.0],
+    })
     market = build_market_data_matrix(panel, field_columns={"raw_close"})
 
     np.testing.assert_array_equal(market.field("raw_close"), market.close)
@@ -310,6 +292,19 @@ def test_market_matrix_derives_live_raw_close_when_requested():
     live.update(panel.with_columns(pl.lit(date(2024, 1, 2)).alias("date")))
     snapshot = live.snapshot()
     np.testing.assert_array_equal(snapshot.field("raw_close")[-1], snapshot.close[-1])
+
+
+def test_direct_parquet_matrix_reports_actionable_error_when_enriched_is_empty(tmp_path):
+    market_root = tmp_path / "kline_daily_enriched"
+    market_root.mkdir()
+
+    with pytest.raises(ValueError, match="本地指标数据为空"):
+        load_market_data_matrix_from_parquet(
+            market_root,
+            date(2024, 1, 1),
+            date(2024, 1, 31),
+            field_columns=set(),
+        )
 
 
 def test_direct_parquet_matrix_matches_panel_builder_and_reuses_mmap(tmp_path):
@@ -325,38 +320,34 @@ def test_direct_parquet_matrix_matches_panel_builder_and_reuses_mmap(tmp_path):
         for current, close in zip(days, values, strict=True):
             if close is None:
                 continue
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "date": current,
-                    "open": close,
-                    "high": close,
-                    "low": close,
-                    "close": close,
-                    "volume": 1_000.0,
-                    "amount": close * 100_000.0,
-                    "raw_close": close,
-                    "raw_high": close,
-                    "raw_low": close,
-                    "turnover_rate": 1.5,
-                }
-            )
+            rows.append({
+                "symbol": symbol,
+                "date": current,
+                "open": close,
+                "high": close,
+                "low": close,
+                "close": close,
+                "volume": 1_000.0,
+                "amount": close * 100_000.0,
+                "raw_close": close,
+                "raw_high": close,
+                "raw_low": close,
+                "turnover_rate": 1.5,
+            })
     panel = pl.DataFrame(rows).sort(["symbol", "date"])
     for current in days:
         partition = market_root / f"date={current.isoformat()}"
         partition.mkdir(parents=True)
         panel.filter(pl.col("date") == current).write_parquet(partition / "part.parquet")
 
-    instruments = pl.DataFrame(
-        {
-            "symbol": ["000001.SZ", "000002.SZ", "300001.SZ"],
-            "name": ["普通", "ST测试", "创业板"],
-            "total_shares": [1_000_000.0, 2_000_000.0, 3_000_000.0],
-            "float_shares": [800_000.0, 1_500_000.0, 2_000_000.0],
-            "limit_up": [12.0, 11.0, 13.0],
-            "limit_down": [10.0, 9.0, 10.0],
-        }
-    )
+    instruments = pl.DataFrame({
+        "symbol": ["000001.SZ", "000002.SZ", "300001.SZ"],
+        "name": ["普通", "ST测试", "创业板"],
+        "total_shares": [1_000_000.0, 2_000_000.0, 3_000_000.0],
+        "float_shares": [800_000.0, 1_500_000.0, 2_000_000.0],
+        "limit_up": [12.0, 11.0, 13.0],
+        "limit_down": [10.0, 9.0, 10.0],
+    })
     enriched = compute_limit_signals(
         panel,
         instruments,
@@ -449,28 +440,24 @@ def test_covering_matrix_cache_reuses_wider_dates_and_fields(tmp_path):
         partition.mkdir(parents=True)
         for asset_id, symbol in enumerate(("000001.SZ", "600000.SH")):
             close = 10.0 + asset_id + (current - days[0]).days
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "date": current,
-                    "open": close,
-                    "high": close,
-                    "low": close,
-                    "close": close,
-                    "volume": 1_000.0,
-                    "amount": close * 100_000.0,
-                    "raw_close": close,
-                }
-            )
+            rows.append({
+                "symbol": symbol,
+                "date": current,
+                "open": close,
+                "high": close,
+                "low": close,
+                "close": close,
+                "volume": 1_000.0,
+                "amount": close * 100_000.0,
+                "raw_close": close,
+            })
         pl.DataFrame([row for row in rows if row["date"] == current]).write_parquet(
             partition / "part.parquet"
         )
-    instruments = pl.DataFrame(
-        {
-            "symbol": ["000001.SZ", "600000.SH"],
-            "name": ["A", "B"],
-        }
-    )
+    instruments = pl.DataFrame({
+        "symbol": ["000001.SZ", "600000.SH"],
+        "name": ["A", "B"],
+    })
     cache_root = tmp_path / "matrix_cache"
     broad = load_market_data_matrix_from_parquet(
         market_root,
@@ -505,17 +492,15 @@ def test_covering_cache_ignores_outside_slice_change_but_invalidates_inside(tmp_
     for offset, current in enumerate(days):
         partition = market_root / f"date={current.isoformat()}"
         partition.mkdir(parents=True)
-        pl.DataFrame(
-            {
-                "symbol": ["000001.SZ"],
-                "date": [current],
-                "open": [10.0 + offset],
-                "high": [10.0 + offset],
-                "low": [10.0 + offset],
-                "close": [10.0 + offset],
-                "volume": [1_000.0],
-            }
-        ).write_parquet(partition / "part.parquet")
+        pl.DataFrame({
+            "symbol": ["000001.SZ"],
+            "date": [current],
+            "open": [10.0 + offset],
+            "high": [10.0 + offset],
+            "low": [10.0 + offset],
+            "close": [10.0 + offset],
+            "volume": [1_000.0],
+        }).write_parquet(partition / "part.parquet")
     instruments = pl.DataFrame({"symbol": ["000001.SZ"], "name": ["A"]})
     cache_root = tmp_path / "matrix_cache"
     load_market_data_matrix_from_parquet(
@@ -562,17 +547,15 @@ def test_matrix_cache_can_be_disabled(tmp_path):
     current = date(2024, 3, 1)
     partition = market_root / f"date={current.isoformat()}"
     partition.mkdir(parents=True)
-    pl.DataFrame(
-        {
-            "symbol": ["000001.SZ"],
-            "date": [current],
-            "open": [10.0],
-            "high": [10.0],
-            "low": [10.0],
-            "close": [10.0],
-            "volume": [1_000.0],
-        }
-    ).write_parquet(partition / "part.parquet")
+    pl.DataFrame({
+        "symbol": ["000001.SZ"],
+        "date": [current],
+        "open": [10.0],
+        "high": [10.0],
+        "low": [10.0],
+        "close": [10.0],
+        "volume": [1_000.0],
+    }).write_parquet(partition / "part.parquet")
 
     market = load_market_data_matrix_from_parquet(
         market_root,
@@ -593,17 +576,15 @@ def test_matrix_cache_prunes_by_bytes_and_leaves_no_staging_directory(tmp_path):
     path = partition / "part.parquet"
 
     def write_close(value: float) -> None:
-        pl.DataFrame(
-            {
-                "symbol": ["000001.SZ"],
-                "date": [current],
-                "open": [value],
-                "high": [value],
-                "low": [value],
-                "close": [value],
-                "volume": [1_000.0],
-            }
-        ).write_parquet(path)
+        pl.DataFrame({
+            "symbol": ["000001.SZ"],
+            "date": [current],
+            "open": [value],
+            "high": [value],
+            "low": [value],
+            "close": [value],
+            "volume": [1_000.0],
+        }).write_parquet(path)
 
     cache_root = tmp_path / "matrix_cache"
     write_close(10.0)
@@ -639,17 +620,15 @@ def test_managed_source_generation_skips_file_walk_and_invalidates_explicitly(tm
     current = date(2024, 3, 5)
     partition = market_root / f"date={current.isoformat()}"
     partition.mkdir(parents=True)
-    pl.DataFrame(
-        {
-            "symbol": ["000001.SZ"],
-            "date": [current],
-            "open": [10.0],
-            "high": [10.0],
-            "low": [10.0],
-            "close": [10.0],
-            "volume": [1_000.0],
-        }
-    ).write_parquet(partition / "part.parquet")
+    pl.DataFrame({
+        "symbol": ["000001.SZ"],
+        "date": [current],
+        "open": [10.0],
+        "high": [10.0],
+        "low": [10.0],
+        "close": [10.0],
+        "volume": [1_000.0],
+    }).write_parquet(partition / "part.parquet")
     cache_root = tmp_path / "matrix_cache"
 
     first = load_market_data_matrix_from_parquet(
@@ -688,11 +667,13 @@ def test_managed_source_generation_skips_file_walk_and_invalidates_explicitly(tm
 
 
 def test_registered_builtin_matrix_strategies_share_one_cache_profile():
-    engine = StrategyEngine(strategy_dirs=[REPO_ROOT / "backend" / "app" / "strategy" / "builtin"])
+    engine = StrategyEngine(
+        strategy_dirs=[REPO_ROOT / "backend" / "app" / "strategy" / "builtin"]
+    )
     profile = build_matrix_cache_profile(engine, "stock")
     strategies = engine.strategy_definitions()
 
-    assert len(strategies) == 32
+    assert len(strategies) == 18
     assert all(strategy.execution_backend == "matrix_native" for strategy in strategies)
     assert profile.warmup_bars > 0
     assert profile.forward_bars == max(int(strategy.max_hold_days or 0) for strategy in strategies)
@@ -707,19 +688,17 @@ def test_chunked_matrix_score_matches_previous_full_matrix_formula():
     rng = np.random.default_rng(20260715)
     for time_id in range(row_count):
         for asset_id, symbol in enumerate(symbols):
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "date": date(2024, 1, 1) + timedelta(days=time_id),
-                    "open": 10.0,
-                    "high": 10.0,
-                    "low": 10.0,
-                    "close": 10.0,
-                    "volume": 1_000.0,
-                    "feature_a": float(rng.normal()),
-                    "feature_b": float((asset_id % 7) - 3),
-                }
-            )
+            rows.append({
+                "symbol": symbol,
+                "date": date(2024, 1, 1) + timedelta(days=time_id),
+                "open": 10.0,
+                "high": 10.0,
+                "low": 10.0,
+                "close": 10.0,
+                "volume": 1_000.0,
+                "feature_a": float(rng.normal()),
+                "feature_b": float((asset_id % 7) - 3),
+            })
     market = build_market_data_matrix(
         pl.DataFrame(rows),
         field_columns={"feature_a", "feature_b"},
@@ -793,19 +772,17 @@ def test_signal_slice_is_zero_copy_and_masking_only_allocates_final_flags():
 
 
 def test_matrix_pipeline_applies_basic_filter_and_candidate_scoring():
-    panel = pl.DataFrame(
-        {
-            "symbol": ["000001.SZ", "600000.SH"],
-            "name": ["A", "B"],
-            "date": [date(2024, 1, 1)] * 2,
-            "open": [10.0, 20.0],
-            "high": [10.0, 20.0],
-            "low": [10.0, 20.0],
-            "close": [10.0, 20.0],
-            "volume": [100.0, 100.0],
-            "amount": [50.0, 500.0],
-        }
-    )
+    panel = pl.DataFrame({
+        "symbol": ["000001.SZ", "600000.SH"],
+        "name": ["A", "B"],
+        "date": [date(2024, 1, 1)] * 2,
+        "open": [10.0, 20.0],
+        "high": [10.0, 20.0],
+        "low": [10.0, 20.0],
+        "close": [10.0, 20.0],
+        "volume": [100.0, 100.0],
+        "amount": [50.0, 500.0],
+    })
     market = build_market_data_matrix(panel, field_columns={"amount"})
 
     class AllEntries:
@@ -849,18 +826,16 @@ def test_signal_matrix_validation_rejects_mutable_strategy_output():
 
 
 def test_matrix_pipeline_applies_asset_pool_before_cross_sectional_scoring():
-    panel = pl.DataFrame(
-        {
-            "symbol": ["000001.SZ", "600000.SH"],
-            "name": ["A", "B"],
-            "date": [date(2024, 1, 1)] * 2,
-            "open": [10.0, 20.0],
-            "high": [10.0, 20.0],
-            "low": [10.0, 20.0],
-            "close": [10.0, 20.0],
-            "volume": [100.0, 100.0],
-        }
-    )
+    panel = pl.DataFrame({
+        "symbol": ["000001.SZ", "600000.SH"],
+        "name": ["A", "B"],
+        "date": [date(2024, 1, 1)] * 2,
+        "open": [10.0, 20.0],
+        "high": [10.0, 20.0],
+        "low": [10.0, 20.0],
+        "close": [10.0, 20.0],
+        "volume": [100.0, 100.0],
+    })
     market = build_market_data_matrix(panel)
 
     class AllEntries:
@@ -891,19 +866,17 @@ def test_matrix_pipeline_applies_asset_pool_before_cross_sectional_scoring():
 
 
 def test_realtime_market_matrix_overwrites_last_row_and_appends_new_bar():
-    panel = pl.DataFrame(
-        {
-            "symbol": ["000001.SZ", "600000.SH"] * 2,
-            "name": ["A", "B"] * 2,
-            "date": [date(2024, 1, 1)] * 2 + [date(2024, 1, 2)] * 2,
-            "open": [10.0, 20.0, 10.5, 20.5],
-            "high": [10.2, 20.2, 10.7, 20.7],
-            "low": [9.8, 19.8, 10.3, 20.3],
-            "close": [10.1, 20.1, 10.6, 20.6],
-            "volume": [1_000.0, 2_000.0, 1_100.0, 2_100.0],
-            "amount": [10_100.0, 40_200.0, 11_660.0, 43_260.0],
-        }
-    )
+    panel = pl.DataFrame({
+        "symbol": ["000001.SZ", "600000.SH"] * 2,
+        "name": ["A", "B"] * 2,
+        "date": [date(2024, 1, 1)] * 2 + [date(2024, 1, 2)] * 2,
+        "open": [10.0, 20.0, 10.5, 20.5],
+        "high": [10.2, 20.2, 10.7, 20.7],
+        "low": [9.8, 19.8, 10.3, 20.3],
+        "close": [10.1, 20.1, 10.6, 20.6],
+        "volume": [1_000.0, 2_000.0, 1_100.0, 2_100.0],
+        "amount": [10_100.0, 40_200.0, 11_660.0, 43_260.0],
+    })
     buffer = RealtimeMarketDataMatrix(panel, field_columns={"amount"})
 
     same_bar = panel.filter(pl.col("date") == date(2024, 1, 2)).with_columns(
@@ -933,21 +906,19 @@ def test_strategy_engine_runs_matrix_strategy_without_legacy_filter():
             ("600000.SH", 20.0 + offset * 0.03),
         )
         for symbol, close in values:
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "name": symbol,
-                    "date": start + timedelta(days=offset),
-                    "open": close,
-                    "high": close * 1.01,
-                    "low": close * 0.99,
-                    "close": close,
-                    "volume": 1_000_000.0,
-                    "amount": 100_000_000.0,
-                    "total_shares": 1_000_000_000.0,
-                    "float_shares": 800_000_000.0,
-                }
-            )
+            rows.append({
+                "symbol": symbol,
+                "name": symbol,
+                "date": start + timedelta(days=offset),
+                "open": close,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "volume": 1_000_000.0,
+                "amount": 100_000_000.0,
+                "total_shares": 1_000_000_000.0,
+                "float_shares": 800_000_000.0,
+            })
     history = pl.DataFrame(rows)
     target = start + timedelta(days=64)
     engine = StrategyEngine(
@@ -979,21 +950,19 @@ def test_strategy_engine_run_all_builds_one_shared_matrix():
     rows = []
     for offset in range(65):
         close = 10.0 + offset * 0.05
-        rows.append(
-            {
-                "symbol": "000001.SZ",
-                "name": "A",
-                "date": start + timedelta(days=offset),
-                "open": close,
-                "high": close * 1.01,
-                "low": close * 0.99,
-                "close": close,
-                "volume": 1_000_000.0,
-                "amount": 100_000_000.0,
-                "total_shares": 1_000_000_000.0,
-                "float_shares": 800_000_000.0,
-            }
-        )
+        rows.append({
+            "symbol": "000001.SZ",
+            "name": "A",
+            "date": start + timedelta(days=offset),
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": 1_000_000.0,
+            "amount": 100_000_000.0,
+            "total_shares": 1_000_000_000.0,
+            "float_shares": 800_000_000.0,
+        })
     history = pl.DataFrame(rows)
     target = start + timedelta(days=64)
     engine = StrategyEngine(

@@ -2,6 +2,17 @@
 
 Before changing production code, read `docs/spec-index.yaml` and resolve the authority for the task. Stop before implementation when applicable specifications conflict or authority is unresolved. Record each active requirement with a stable ID in `docs/traceability.yaml`, including implementation, executable test, and acceptance evidence. Validate lower-layer semantic acceptance before building or evaluating higher layers. Downstream signals, metrics, or tests cannot substitute for lower-layer acceptance. A golden or snapshot alone is not semantic proof. Complete an independent requirements-to-evidence review before declaring the task complete.
 
+## AI 开发入口
+
+修改、调试或审查本仓库前，必须完整阅读并遵循根目录的 [`CONTRIBUTING.md`](CONTRIBUTING.md)。其中定义了项目架构、数据契约、数据源插件化、缓存与性能要求、测试矩阵以及 PR 复审和合并标准。
+
+同时遵守以下规则：
+
+- 先理解调用链和现有测试，再进行修改。
+- 保持实现简单、改动范围最小，不处理无关问题。
+- 不覆盖工作区已有修改，不虚构测试或审查结果。
+- 以实际验证结果作为完成标准。
+
 ## Existing TickFlow repository guidance
 
 # AGENTS.md

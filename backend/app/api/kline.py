@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,53 @@ def _minute_allowed(capset) -> bool:
     if error is not None:
         logger.warning("minute provider resolution failed while checking access: %s", error)
     return not fallback
+
+
+@lru_cache(maxsize=8192)
+def _name_pinyin_keys(name: str) -> tuple[str, ...]:
+    """返回中文名称所有可能的拼音首字母串 (多音字展开为笛卡尔积)。
+
+    '平安银行' -> ('PAYH',); '重庆百货' -> ('CQBH', 'CQMH', 'ZQBH', 'ZQMH')。
+    非汉字字符原样保留: '万科A' -> ('WKA',)。
+    股票名总量有限且不变, lru_cache 命中后单次查询 ≈ dict 查找, 全市场遍历 < 1ms。
+    """
+    from pypinyin import pinyin, Style
+    if not name:
+        return ()
+    keys = [""]
+    for group in pinyin(name, style=Style.FIRST_LETTER, heteronym=True):
+        keys = [k + g.upper() for k in keys for g in group]
+    return tuple(keys)
+
+
+def _init_pinyin_dict() -> None:
+    """加载 A 股高频多音字地名/词组词典, 使常见误读也能命中。
+
+    pypinyin 默认词典对部分地名取常见读音 (如「重」→ chóng), 补充后「重庆」
+    同时接受 zhòng/qìng (zq) 与 chóng/qīng (cq) 两种首字母, 与同花顺行为一致。
+    幂等: 多次调用安全。
+    """
+    try:
+        from pypinyin import load_phrases_dict
+        # value 用二维 list: 每个字给一个或多个读音
+        load_phrases_dict({
+            "重庆": [["zhòng", "chóng"], ["qīng"]],
+            "长安": [["cháng", "zhǎng"], ["ān"]],
+            "长春": [["cháng", "zhǎng"], ["chūn"]],
+            "长沙": [["cháng", "zhǎng"], ["shā"]],
+            "长城": [["cháng", "zhǎng"], ["chéng"]],
+            "长江": [["cháng", "zhǎng"], ["jiāng"]],
+        })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pypinyin phrases dict load failed (polyphone coverage may degrade): %s", exc)
+
+
+_init_pinyin_dict()
+
+
+def _match_pinyin(name: str, keyword: str) -> bool:
+    """keyword 是否匹配 name 任一拼音首字母串的前缀 (支持多音字)。"""
+    return any(k.startswith(keyword) for k in _name_pinyin_keys(name))
 
 
 @router.get("/instruments/search")
@@ -88,6 +136,7 @@ def search_instruments(
         df = df.filter(pl.col("market").is_in(requested_markets))
 
     keyword = q.strip().upper()
+    is_pinyin_query = keyword.isalpha() and keyword.isascii()
 
     # code/symbol 前缀优先，再 name 包含匹配
     prefix_mask = (
@@ -100,23 +149,45 @@ def search_instruments(
         | pl.col("name").str.contains(keyword, literal=True)
     )
 
-    # 前缀匹配优先，剩余名额用包含匹配补充
+    # 分层匹配: ① code/symbol 前缀 → ② 拼音首字母前缀(纯字母输入) → ③ 包含匹配
     prefix_hits = df.filter(prefix_mask).head(limit)
     if prefix_hits.height >= limit:
         matched = prefix_hits
     else:
+        collected = [prefix_hits] if prefix_hits.height else []
+        seen = set(prefix_hits["symbol"].to_list()) if prefix_hits.height else set()
         remaining = limit - prefix_hits.height
-        # 排除已匹配的 symbol
-        prefix_symbols = set(prefix_hits["symbol"].to_list()) if not prefix_hits.is_empty() else set()
-        contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(prefix_symbols)).head(remaining)
-        matched = pl.concat([prefix_hits, contain_hits]) if not prefix_hits.is_empty() else contain_hits
+
+        # ② 拼音首字母前缀: 仅纯字母输入触发 (如 payh → 平安银行); 中文/代码输入零开销跳过
+        if is_pinyin_query and remaining > 0:
+            pinyin_rows = []
+            for row in df.filter(~pl.col("symbol").is_in(seen)).iter_rows(named=True):
+                if _match_pinyin(row["name"], keyword):
+                    pinyin_rows.append(row)
+                    if len(pinyin_rows) >= remaining:
+                        break
+            if pinyin_rows:
+                collected.append(pl.DataFrame(pinyin_rows))
+                seen.update(r["symbol"] for r in pinyin_rows)
+                remaining -= len(pinyin_rows)
+
+        # ③ 包含匹配补充
+        if remaining > 0:
+            contain_hits = df.filter(contains_mask & ~pl.col("symbol").is_in(seen)).head(remaining)
+            if contain_hits.height:
+                collected.append(contain_hits)
+
+        matched = (
+            pl.concat(collected, how="vertical") if len(collected) > 1
+            else (collected[0] if collected else df.head(0))
+        )
     rows = matched.select(["symbol", "name", "code", "market", "asset_type"]).to_dicts()
     return {"results": rows}
 
 
 @router.post("/instruments/names")
 def instruments_names(request: Request, symbols: list[str]):
-    """批量查标的名称 (股票 + ETF)。传入 symbol 列表, 返回 {symbol: name}。"""
+    """批量查标的名称 (股票 + ETF + 指数)。传入 symbol 列表, 返回 {symbol: name}。"""
     if not symbols:
         return {"names": {}}
     repo = request.app.state.repo
@@ -512,10 +583,37 @@ def get_daily_batch(request: Request, body: dict):
     start = end - timedelta(days=days * 2)  # 多取一些确保交易日够
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
-    df = repo.get_daily_batch(symbols, start, end, columns=cols)
 
-    if df.is_empty():
+    # 按资产类型分组: stock 走批量缓存; etf/index 逐只查独立存储 (数量少, 成本可忽略)
+    stock_symbols: list[str] = []
+    etf_symbols: list[str] = []
+    index_symbols: list[str] = []
+    for s in symbols:
+        t = repo.resolve_asset_type(s)
+        if t == "etf":
+            etf_symbols.append(s)
+        elif t == "index":
+            index_symbols.append(s)
+        else:
+            stock_symbols.append(s)
+
+    frames: list[pl.DataFrame] = []
+    if stock_symbols:
+        df_stock = repo.get_daily_batch(stock_symbols, start, end, columns=cols)
+        if not df_stock.is_empty():
+            frames.append(df_stock)
+    for sym in etf_symbols:
+        sub = repo.get_etf_daily(sym, start, end, columns=cols)
+        if not sub.is_empty():
+            frames.append(sub)
+    for sym in index_symbols:
+        sub = repo.get_index_daily(sym, start, end, columns=cols)
+        if not sub.is_empty():
+            frames.append(sub)
+
+    if not frames:
         return {"data": {}}
+    df = pl.concat(frames, how="diagonal_relaxed")
 
     # 按 symbol 分组, 每只取最近 N 条
     result: dict[str, list[dict]] = {}
@@ -707,6 +805,7 @@ def get_minute(
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "live",
+            "asset_type": asset_type,
             "price_limit": price_limit,
         }
 
@@ -738,6 +837,7 @@ def get_minute(
         return {
             "symbol": symbol, "name": stock_name, "stock_info": stock_info,
             "date": str(trade_date), "rows": df.to_dicts(), "source": "local",
+            "asset_type": asset_type,
             "price_limit": price_limit,
         }
 
@@ -747,6 +847,7 @@ def get_minute(
         "symbol": symbol, "name": stock_name, "stock_info": stock_info,
         "date": str(trade_date), "rows": live_df.to_dicts(),
         "source": "live" if not live_df.is_empty() else "none",
+        "asset_type": asset_type,
         "price_limit": price_limit,
     }
 
@@ -842,6 +943,9 @@ async def sync_minute(request: Request):
                     universe = sorted(set(universe) | set(inst["symbol"].to_list()))
                 except Exception:  # noqa: BLE001
                     pass
+            # 剔除指数 symbol: 指数分钟K无本地存储, 落库会污染 kline_minute
+            index_set = repo.get_index_symbol_set()
+            universe = [s for s in universe if s not in index_set]
             progress("sync_minute", 10, f"标的池 {len(universe)} 只")
 
             days = override_days if override_days else get_minute_sync_days()
@@ -895,6 +999,11 @@ async def sync_minute_single(request: Request, body: dict):
 
     repo = request.app.state.repo
     capset = request.app.state.capabilities
+
+    # 指数分钟K无本地存储, 落库会污染股票分钟表 kline_minute;
+    # 指数分钟数据走 /api/index/minute 实时读取, 此端点显式拒绝。
+    if repo.resolve_asset_type(symbol) == "index":
+        raise HTTPException(status_code=400, detail="指数分钟K不支持落库同步 (指数分钟数据走 /api/index/minute 实时读取)")
 
     if not _minute_allowed(capset):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")

@@ -36,14 +36,17 @@ def preprocess_for_ocr(image_bytes: bytes) -> Image.Image:
     """暗色券商截图预处理：像素上限、降采样、灰度、反相、增强对比。
 
     Raises:
-        ValueError: 图片分辨率过高（像素数超限）。
+        ValueError: 图片分辨率过高（像素数超限）或解压炸弹。
     """
     img = Image.open(BytesIO(image_bytes))
-    img.load()  # 强制解码，便于尽早失败 / 量尺寸
-
+    # 多数格式可读头得到尺寸，在完整解码前拒绝超限图，避免 OOM
     pixels = img.width * img.height
     if pixels > _MAX_PIXELS:
         raise ValueError("图片分辨率过高,请裁剪后重试")
+    try:
+        img.load()
+    except Image.DecompressionBombError as e:
+        raise ValueError("图片分辨率过高,请裁剪后重试") from e
 
     # 大图降采样：既减内存又提速 OCR（只放大不缩小的旧逻辑已去掉）
     if max(img.size) > _MAX_EDGE:

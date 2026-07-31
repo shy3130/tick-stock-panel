@@ -12,6 +12,7 @@
  */
 
 import type { AlertEvent } from './api'
+import { strategyEventMeta, strategyName } from './strategyMonitorEvents'
 
 const LS = {
   enabled: 'voice_broadcast_enabled',     // '1'/'0', 默认关
@@ -121,13 +122,10 @@ function buildSingleText(a: AlertEvent): string {
     if (!a.symbol || a.symbol === '_batch') {
       return a.message || name
     }
-    // 单条事件: 从 message 提取策略名 (格式 "策略「X」" 或直接是策略名)
-    const sm = a.message?.match(/策略「([^」]+)」/)
-    const sname = sm ? sm[1] : a.message || ''
-    const action = a.type === 'new_entry' ? '进入' : a.type === 'dropped' ? '移出' : ''
-    const parts = [name]
-    if (action) parts.push(action)
-    if (sname) parts.push(`策略「${sname}」`)
+    const sname = strategyName(a.message ?? '')
+    const parts = [name, strategyEventMeta(a.type).action]
+    const strategyText = sname ? `策略「${sname}」` : (a.message || a.rule_name || '')
+    if (strategyText) parts.push(strategyText)
     if (pctText) parts.push(pctText)
     return parts.join(' ')
   }

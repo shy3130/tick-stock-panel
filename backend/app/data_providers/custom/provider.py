@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,12 @@ import polars as pl
 from app.config import settings
 from app.data_providers.base import AssetType
 from app.data_providers.custom.config import CustomSourceConfig, DatasetConfig
-from app.data_providers.custom.mapper import apply_transforms, datetime_payload, extract_rows, map_rows
+from app.data_providers.custom.mapper import (
+    apply_transforms,
+    datetime_payload,
+    extract_rows,
+    map_rows,
+)
 from app.data_providers.normalizer import normalize_adj_factors, normalize_daily
 from app.tickflow.rate_limits import chunked, sleep_between_batches
 
@@ -52,6 +57,20 @@ class GenericHTTPProvider:
                 missing = sorted(required - mapped)
                 if missing:
                     errors.append(f"{dataset}: missing mapped fields: {', '.join(missing)}")
+            if dataset != "realtime":
+                request_params = [cfg.symbols_param, cfg.start_param, cfg.end_param]
+                if dataset == "minute":
+                    request_params.extend(
+                        name for name in (cfg.asset_type_param, cfg.freq_param) if name
+                    )
+                duplicates = sorted({
+                    name for name in request_params if request_params.count(name) > 1
+                })
+                if duplicates:
+                    errors.append(
+                        f"{dataset}: duplicate request parameter names: "
+                        f"{', '.join(duplicates)}"
+                    )
         return errors
 
     def get_daily(
@@ -192,7 +211,34 @@ class GenericHTTPProvider:
 
     def test_dataset(self, dataset: str, symbols: list[str] | None = None) -> dict:
         cfg = self._dataset(dataset)
-        rows = self._request_rows(cfg, symbols=symbols or [])
+        test_symbols = symbols or ["000001.SZ"]
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=7)
+        if dataset == "realtime":
+            rows = self._request_rows(cfg)
+        elif dataset == "minute":
+            override: dict[str, Any] = {}
+            if cfg.asset_type_param:
+                override[cfg.asset_type_param] = "stock"
+            if cfg.freq_param:
+                override[cfg.freq_param] = "1m"
+            rows = self._request_rows(
+                cfg,
+                symbols=test_symbols,
+                start_time=start_time,
+                end_time=end_time,
+                override_params=override or None,
+                override_body=override or None,
+            )
+        elif dataset in {"daily", "adj_factor"}:
+            rows = self._request_rows(
+                cfg,
+                symbols=test_symbols,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        else:
+            rows = self._request_rows(cfg, symbols=test_symbols)
         df = self._mapped_frame(cfg, rows)
         return {
             "provider": self.name,

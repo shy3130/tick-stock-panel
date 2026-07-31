@@ -130,8 +130,10 @@ def import_watchlist_image(
     ocr = provider or get_ocr_provider()
     if not ocr.available():
         raise RuntimeError(
-            f"OCR 引擎「{ocr.name}」不可用。请安装 Tesseract（macOS: brew install tesseract；"
-            "Docker 镜像已内置）。"
+            f"OCR 引擎「{ocr.name}」不可用。请安装 Tesseract："
+            "macOS 执行 brew install tesseract；"
+            "Windows 可安装 UB Mannheim 发行版或执行 choco install tesseract；"
+            "Linux/Docker 安装 tesseract-ocr（官方镜像已内置）。"
         )
 
     text = ocr.extract_text(image_bytes)
