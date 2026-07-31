@@ -109,6 +109,85 @@ python scripts\check_spec_compliance.py
 
 Result: `Specification compliance passed.`
 
+## Task 7 local regression and non-impact evidence (2026-07-31)
+
+Status: passed locally; production observations remain pending for Task 8.
+
+Fresh verification from repository HEAD ran the required focused lower-layer,
+worker, and integration slice:
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend/test_dow_monitor_half_hour_ai.py tests/backend/test_dow_monitor_offline_bootstrap.py tests/backend/test_dow_monitor_offline_ai_bootstrap_integration.py tests/backend/test_dow_monitor_minute_result_materializer.py tests/backend/test_dow_monitor_minute_result_history.py tests/backend/test_dow_monitor_minute_result_calculator.py tests/backend/test_dow_monitor_minute_result_source.py tests/backend/test_dow_monitor_minute_result_repository.py -q
+```
+
+Result: `82 passed in 8.53s`.
+
+The authority/isolation contracts and repository specification contract were
+then run together:
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m pytest tests/spec_contracts/test_dow_monitor_offline_ai_bootstrap_contract.py tests/spec_contracts/test_spec_guard_contract.py -q
+```
+
+Result: `5 passed in 0.54s`.
+
+```powershell
+python scripts/check_spec_compliance.py
+```
+
+Result: `Specification compliance passed.`
+
+The complete backend suite passed independently:
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m pytest tests/backend -q
+```
+
+Result: `139 passed in 12.05s`.
+
+No unrelated or pre-existing backend failure was observed. A path-level diff
+from the completed authority slice (`cfac9d8`) through the verified
+implementation changes contains only the canonical materializer, the offline
+bootstrap coordinator, the dedicated AI worker, and its Compose service
+configuration. It contains no frontend/static bundle, API route, API model,
+overview/detail payload, 3018 startup, WebSocket/realtime, monitor-service, or
+formal-signal file change. Therefore this stored-data-availability change
+requires no frontend bundle or API payload change.
+
+### Deferred-minor triage
+
+The six deferred test-quality observations in the SDD ledger were reviewed
+against the authoritative requirements, current implementation, and layered
+executable evidence:
+
+- The row-budget unit test proves zero insertion but does not spy on the pure
+  calculator. This is accepted as non-blocking: the budget branch is visibly
+  before the calculator call, the 501-row hard-ceiling test proves the branch,
+  and the authoritative acceptance is zero rows beyond the 500-row ceiling.
+- The Task 2 history-builder fake hardcodes `backfill=True`. This observation
+  is closed by the Task 6 integration test, which uses the real history builder
+  and asserts every persisted canonical row has `backfill=true`.
+- `select_due_windows()` accepts terminal windows while production supplies an
+  empty set. This is accepted as non-blocking: `_run_checkpoint()` performs
+  the repository terminal-key check before session, canonical-row, bootstrap,
+  or model work, and the executable terminal-startup and duplicate-key tests
+  prove no older fallback or repeated call.
+- The worker `busy` test does not literally execute a second poll. This is
+  accepted as non-blocking: it proves no terminal row is saved, every poll
+  recomputes the same eligible window, and coordinator tests separately prove
+  `busy` is retryable and the slot is released only after physical completion.
+- The integration ClickHouse fake dispatches by table and has no post-cutoff
+  poison row. This is accepted as layered evidence: the integration verifies
+  every persisted source timestamp and 19912 `as_of` is at or before the
+  checkpoint, while source, history, repository, and worker tests independently
+  exercise strict cutoff filtering and future-row exclusion.
+- The integration assertion `len(rows) <= 500` follows from its exact 30/2 row
+  counts. This observation is closed by the independent 501-row materializer
+  test, which proves the absolute 500-row ceiling and zero partial insertion.
+
+None of these observations is a requirement, safety, or production-code gap;
+no test waiver is being used to hide a failing command.
+
 ## Pending production observations (Task 8)
 
 The local executable evidence does not substitute for production acceptance.
