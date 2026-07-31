@@ -16,10 +16,18 @@ does not call the model again; later normal checkpoints follow the existing
 `created_at` rule; and insufficient offline data persists `insufficient_data`
 without an invented result or model call.
 
-The same evidence must prove that later normal checkpoints on or after
-`created_at` may use the same bounded offline recovery only when their canonical
-minute results are missing; this does not expand eligibility to older
-checkpoints before the single startup checkpoint.
+The final evidence must prove the exact boundary: the one startup checkpoint
+requires `window_end < created_at`, while normal scheduling uses
+`window_end >= created_at`. A pre-created startup is eligible only when
+`calendar.is_regular_session_time(market, created_at)` is true, so lunch,
+after-close, and holiday creation must not trigger it. The same evidence must
+prove exact-cutoff deduplication against ClickHouse `DateTime64(3)` without a
+duplicate calculation or insert.
+
+The successful `d35a39d` evidence below remains the end-to-end model-boundary
+evidence. The final-fix reacceptance at the end of this document separately
+accepts the stricter equality boundary, non-regular-session gate, and
+millisecond-safe exact-cutoff behavior introduced by `6530979`.
 
 Isolation evidence must show that the bounded work uses the existing minute
 result materializer and ClickHouse offline inputs, stays per-symbol and
@@ -469,3 +477,123 @@ WHERE market='hk' AND symbol='2526.HK';
 
 Both returned `n=0`. These commands are retained as reproducible evidence; they
 were not rerun during documentation Fix Round 1.
+
+## Final-fix production reacceptance (2026-07-31)
+
+Status: passed. This section records the delta-specific semantic reacceptance
+for commit `6530979992a085f0e09df002ec134d9c0aa6b047` after merge commit
+`62c3112` integrated current `origin/main` (`a975e93`). It is read together
+with the successful `d35a39d` end-to-end model evidence above; it does not
+rewrite that historical run.
+
+### Candidate identity and accepted delta
+
+The source archive `source-6530979992a0.tar` had matching local and remote
+SHA-256
+`b4b584ccfaf47c43346ba8e732055de31b6d66870e96227c3ab62b3c2a53d4ee`.
+The worker-only image was built without cache from the accepted `d35a39d`
+worker image and copied only the four relevant source files. In-image hashes
+matched the commit archive:
+
+| Runtime file | `d35a39d` archive SHA-256 | `6530979` archive SHA-256 | Result |
+| --- | --- | --- | --- |
+| `dow_monitor_minute_result_materializer.py` | `c1d30e1...` | `599fbd6e5499709a61435db21bc4646ea4ed21e8a415450d13281e3de4321fc0` | Changed: millisecond-safe exclusive upper bound |
+| `dow_monitor_minute_result_repository.py` | `517782ac...` | `517782ac...` | Identical |
+| `dow_monitor_offline_bootstrap.py` | `20083270...` | `20083270...` | Identical |
+| `dow_monitor_half_hour_ai.py` | `b9201f4f...` | `90f3cccb009a695c90753562fb2b95d98646516e44fce645e71da9a8256528c3` | Changed: strict startup boundary and regular-session gate |
+
+The deployed tag is
+`tickflow-stock-panel-app:dow-offline-bootstrap-6530979992a0`, image ID
+`sha256:f5369507b798564e271c1f0a731faf3833ee2085928ff4a4380e4666ebd0d442`,
+and worker container ID
+`071f5b701307832c33710fadb369364a5402cb6062224a54148d9ae8d2ad464b`.
+The exact rollback remains
+`tickflow-stock-panel-app:dow-offline-bootstrap-d35a39d6284a` with image ID
+`sha256:c608dd809a49228874c6e6ab03b905ef4594e0a22883252e3a5910e290556a3a`;
+no rollback trigger fired, so the accepted candidate remains deployed.
+
+### Scheduler boundary and gate proof
+
+The same isolated executable probe passed locally and inside the deployed
+candidate image using the real exchange calendar:
+
+- for a symbol created exactly at 15:30, selection returned 15:00 as the one
+  startup checkpoint and 15:30 as the normal checkpoint; after the startup
+  logical key was pre-marked terminal, the worker called the prompt exactly
+  once for the 15:30 normal checkpoint and never fell back to an older startup;
+- HK creation at 12:30 during lunch and at 16:30 after close both returned
+  `is_regular_session_time=false` and performed zero snapshot, bootstrap,
+  persistence, or prompt calls;
+- US creation on the 2026-07-03 exchange holiday also returned false.
+
+This directly proves startup uses `window_end < created_at`, normal scheduling
+uses `window_end >= created_at`, and only the startup exception is suppressed
+outside a regular session.
+
+### Real `DateTime64(3)` lower-layer proof
+
+Production raw inputs for the isolated `hk/2526.HK` fixture were first checked
+to exist. The deployed materializer then wrote 110 canonical backfill rows
+through the 15:30 checkpoint. A real repository lookup found the exact 15:30
+cutoff key through the exclusive `window_end + 1ms` boundary. Repeating the
+same materialization returned:
+
+```json
+{"exact_cutoff_present":true,"first_written_rows":110,"logical_keys_after_second":110,"logical_keys_before_second":110,"second_calculate_calls":0,"second_written_rows":0}
+```
+
+Before cleanup, the independently queried canonical table contained exactly
+110 logical rows, all `backfill=1`, spanning 09:31 through 15:30, with latest
+source bar 15:29, one exact-cutoff row, and zero future rows. This establishes
+storage/key semantics before any higher-layer conclusion. No AI row was
+written during this delta-specific probe; the successful `d35a39d` production
+run above remains the real model-call evidence for the unchanged prompt and
+analysis path.
+
+### Worker-only isolation and cleanup
+
+Only `TickFlow_Dow_AI_Worker` was recreated. At the final 20:48 BJT check it
+was running with `RestartCount=0`, one `uv` parent, and one Python worker. The
+3018 panel remained the exact pre-deployment container
+`183eef17e421ee4e055d020b458a2fa67cb96a3c4a0b3bb4ed27a63271ea92c5`,
+image `sha256:908b0722e187d0b582cae65bb3207456418345d148259634cd22c1d1d4a04aa7`,
+original start time, and `RestartCount=0`. Both 3018 `/health` and 19912
+`/api/health` passed, and worker/panel error scans were empty.
+
+The realtime writer queue remained zero; accumulated `rejected=27595` and
+`flush_failures=11` did not increase; consecutive failures and Redis publish
+failures remained zero; callback-to-publish p95 moved from 172.33 ms to
+169.812 ms. A live 3018 WebSocket probe received `hello`, an `1888.HK`
+snapshot in 429.1 ms, and a clean unsubscribe acknowledgement. The production
+monitor-symbol SHA-256 remained
+`9df392a342def1cf9f32b64ef92a1123dfae6cfa4d96b21de6d41463e04e69cd`.
+
+The 110 fixture canonical rows were deleted with a synchronous exact-symbol
+ClickHouse mutation; final canonical and AI counts were both zero. Those
+materialized fixture rows are no longer recoverable as stored rows, but are
+reconstructible from the retained raw inputs. No AI fixture row had been
+created. Disposable remote scripts and SQL were removed; only the
+commit-addressed Dockerfile and source archive remain in the build directory.
+
+### Fresh final local gates
+
+After the acceptance and review edits, the exact final worktree passed:
+
+```text
+offline-bootstrap semantic slice: 90 passed in 10.09s
+specification contracts: 5 passed in 0.51s
+repository specification compliance: passed
+repository tests/backend: 147 passed in 13.55s
+complete backend/tests: 680 passed in 51.42s (13 deprecation warnings)
+targeted mypy: success, 3 production source files
+scoped final-fix Ruff: all checks passed
+git diff --check: passed
+```
+
+The earlier post-merge frontend gate also passed 205 tests with 2 skipped and
+completed the production build. No test failure was waived.
+
+The combined historical end-to-end evidence and this commit-addressed
+delta-specific production evidence satisfy both active requirements without
+using a downstream signal, snapshot, or golden as a substitute for lower-layer
+semantic acceptance.

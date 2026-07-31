@@ -5,8 +5,9 @@ status: passed
 Review date: 2026-07-31
 
 Scope: requirements-to-evidence review. The original sections preserve the
-local review and failed first production attempt; the final section independently
-reviews the successful Task 8 production retry.
+local review, failed first production attempt, and successful historical
+`d35a39d` retry. The final section independently reviews the `6530979`
+boundary, gate, and exact-cutoff reacceptance on 10.28.
 
 ## Authority
 
@@ -16,23 +17,24 @@ The review began from
 The conflict with
 `SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001` is resolved by
 `DEC-20260731-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001`: exactly one latest
-completed startup checkpoint may be at or before `created_at`; older startup
-checkpoints remain prohibited; every later normal checkpoint may use bounded
-offline recovery when canonical rows are missing. No unresolved conflict or
-exception applies.
+completed startup checkpoint may satisfy `window_end < created_at`, and only
+when `calendar.is_regular_session_time(market, created_at)` is true. Older
+startup checkpoints remain prohibited; every normal checkpoint satisfying
+`window_end >= created_at` may use bounded offline recovery when canonical rows
+are missing. No unresolved conflict or exception applies.
 
 ## Requirements-to-evidence matrix
 
 | Requirement / mandatory behavior | Implementation evidence | Executable and semantic evidence | Review conclusion |
 | --- | --- | --- | --- |
-| `REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001`: select exactly the latest completed startup checkpoint and never replay an older one | `select_due_windows()` in `backend/app/workers/dow_monitor_half_hour_ai.py` takes the maximum completed window at or before `created_at`; `_run_checkpoint()` checks the logical key before any lower-layer work | `test_select_due_windows_never_falls_back_from_terminal_latest_startup`, `test_new_symbol_analyzes_only_latest_completed_startup_checkpoint`, and `test_terminal_latest_startup_checkpoint_does_not_fall_back_older`; the integration test produces 22:00 and proves no 21:30 analysis | Passed |
+| `REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001`: select exactly the latest completed startup checkpoint and never replay an older one | `select_due_windows()` takes the maximum completed window strictly before `created_at`; normal windows start at equality; the worker gates only startup with `calendar.is_regular_session_time(market, created_at)`; `_run_checkpoint()` checks the logical key before lower-layer work | Equality, lunch, after-close, holiday, and startup-only suppression tests plus existing latest-only/terminal tests; the same scheduler probe passed inside the deployed candidate | Passed locally and live |
 | Same requirement: skip duplicate terminal logical keys and continue later normal checkpoints | `DowMonitorHalfHourAiRepository.exists_completed()` treats `completed`, `insufficient_data`, and `failed` as terminal for `(market, symbol, trade_date, window_end)`; the worker checks it first | `test_existing_terminal_key_skips_bootstrap_and_model`, `test_terminal_latest_startup_checkpoint_does_not_fall_back_older`, `test_next_normal_checkpoint_runs_after_startup_checkpoint`, and `test_normal_checkpoint_can_bootstrap_missing_canonical_rows` | Passed |
 | Same requirement: canonical evidence must be reloaded before the model, and insufficient evidence must not call the model | The worker loads `longbridge.lb_dow_monitor_minute_results`, invokes bootstrap only for an insufficient snapshot, reloads on `completed`/`not_needed`, and saves `insufficient_data` before returning on persistent insufficiency | Worker reload/sufficient/insufficient tests plus both Task 6 integration scenarios; canonical rows are asserted before the AI row, with one model call for 30 rows and zero calls for two rows | Passed |
 | `REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001`: use persisted ClickHouse raw evidence and the existing canonical calculation path | `DowMonitorMinuteResultSource` reads the five existing raw tables; `DowMonitorMinuteResultHistoryBuilder` builds contexts; `DowMonitorMinuteResultMaterializer.materialize_checkpoint()` calls the existing `calculate_minute_result()` and writes through `DowMonitorMinuteResultRepository` to `longbridge.lb_dow_monitor_minute_results` | Source/history/calculator/repository/materializer tests and the Task 6 real internal-chain integration test; 30/2 canonical rows are independently validated before the analysis | Passed |
-| Same requirement: one symbol/checkpoint, cutoff bounded, backfill marked, maximum 500 rows | The checkpoint materializer loads one requested symbol, bounds decision minutes to `(session_open, window_end]`, passes `backfill=True`, caps any caller budget at 500, and rejects an over-budget set before calculation/insertion | `test_materialize_checkpoint_writes_only_missing_rows_through_cutoff`, deduplication tests, the 501-row ceiling test, source/history future-data tests, and integration assertions for symbol, cutoff, source timestamps, and backfill flags | Passed |
+| Same requirement: one symbol/checkpoint, cutoff bounded, backfill marked, maximum 500 rows | The checkpoint materializer loads one requested symbol, bounds decision minutes to `(session_open, window_end]`, queries an exclusive `window_end + 1ms` upper bound compatible with `DateTime64(3)`, passes `backfill=True`, caps any caller budget at 500, and rejects an over-budget set before calculation/insertion | `test_checkpoint_exact_cutoff_dedup_respects_datetime64_milliseconds` uses the real repository SQL boundary and proves zero calculation/insert; production `DateTime64(3)` replay found the exact cutoff and performed zero second-pass calculation/insert | Passed locally and live |
 | Same requirement: at most 15 seconds of worker waiting, physical single-flight retained, and failure isolated | `DowMonitorOfflineBootstrap` uses `asyncio.to_thread`, `wait_for(shield(task))`, a 15-second hard cap, and one retained in-flight task; worker terminal outcomes are per checkpoint and the outer symbol loop catches exceptions | Coordinator off-loop, concurrent `busy`, timeout-while-physically-running, late-result, late-exception, and diagnostic tests; worker error and subsequent-symbol tests | Passed |
 | Same requirement: `busy`, timeout, budget, and insufficient outcomes do not invent model evidence | `busy` returns without persistence; timeout/budget/failure persist explicit `insufficient_data` diagnostics; persistent insufficiency uses `INSUFFICIENT_DATA`; all return before prompt invocation | `test_busy_bootstrap_saves_no_terminal_row_and_next_poll_can_retry`, parameterized terminal-error tests, persistent-insufficiency test, coordinator outcome tests, and insufficient integration scenario | Passed |
-| Same requirement: model concurrency remains one and bootstrap stays outside 3018/WebSocket/realtime/formal-signal paths | The dedicated `TickFlow_Dow_AI_Worker` owns the sequential loop and coordinator; Compose keeps concurrency default 1 and exposes no worker port; 15m/30m stable-state evaluation uses the independent 19912 client. No 3018/realtime module imports the coordinator | Worker factory/Compose/lifecycle tests and AST isolation contract; the implementation diff from `cfac9d8` has no frontend, API, 3018 startup, realtime, WebSocket, monitor-service, or formal-signal file change | Passed locally; live restart/backlog/latency evidence remains Task 8 |
+| Same requirement: model concurrency remains one and bootstrap stays outside 3018/WebSocket/realtime/formal-signal paths | The dedicated `TickFlow_Dow_AI_Worker` owns the sequential loop and coordinator; Compose keeps concurrency default 1 and exposes no worker port; 15m/30m stable-state evaluation uses the independent 19912 client. No 3018/realtime module imports the coordinator | Worker factory/Compose/lifecycle tests and AST isolation contract; final worker-only deployment preserved one process tree, the exact 3018 panel identity/start/restart state, healthy queues, WebSocket behavior, and the production monitor-symbol hash | Passed locally and live |
 
 ## Lower-layer semantic gate
 
@@ -164,3 +166,54 @@ repository/worker/integration tests `43 passed`, the complete backend
 Ruff, targeted mypy, and `git diff --check`. Both stable requirements now have
 complete production semantic evidence and the acceptance document is correctly
 promoted to `status: passed`.
+
+## Final-fix independent requirements-to-evidence review (2026-07-31)
+
+This review restarted from the two indexed requirement IDs and the precedence
+decision. The user-ratified authority is unambiguous: startup requires
+`window_end < created_at`, normal scheduling requires
+`window_end >= created_at`, and only startup requires the creation instant to
+be in a regular exchange session. No unresolved specification conflict or
+exception remains.
+
+The reviewed source is commit
+`6530979992a085f0e09df002ec134d9c0aa6b047`, after merge commit `62c3112`
+integrated current `origin/main`. The source archive SHA-256 matched locally
+and remotely. The candidate was built from the already accepted `d35a39d`
+image and replaced only four source files; the repository and coordinator files
+were byte-identical, while the worker and materializer hashes matched the
+reviewed commit. The new runtime imports only the standard library, so the
+worker-only candidate did not depend on the unrelated merged dependency-lock
+changes.
+
+| Mandatory behavior | Independent final evidence | Conclusion |
+| --- | --- | --- |
+| Equality is normal, not startup | The deployed-image scheduler probe selected 15:00 startup plus 15:30 normal for `created_at=15:30`; with startup terminal, it invoked the prompt only for 15:30 | Passed |
+| Startup must be a pre-created regular-session checkpoint | Real exchange-calendar probes returned false for HK lunch, HK after-close, and the 2026-07-03 US holiday, with zero lower-layer or prompt calls | Passed |
+| Exact-cutoff dedup must survive real `DateTime64(3)` | Production materialization created 110 canonical rows; the real repository found the exact 15:30 key; the second pass kept 110 keys and performed zero calculation and zero insertion | Passed |
+| Lower-layer semantics must precede higher-layer claims | The canonical query independently proved 110 exact-symbol backfill rows, one exact-cutoff row, no future row, and bounded source time before any conclusion was drawn | Passed |
+| End-to-end model semantics must remain traceable | The successful `d35a39d` production run remains the real model-call proof; byte-level candidate comparison identifies the changed scheduler/materializer delta, and the deployed scheduler probe exercises the changed prompt-routing path without claiming a new external model run | Passed as composite evidence |
+| Deployment must be worker-only and rollback-safe | Only the worker was recreated; candidate revision/image labels and source hashes matched; exact `d35a39d` rollback tag/image remained available and was not needed | Passed |
+| 3018, 19912, realtime, WebSocket, and formal-signal scope must not regress | Panel identity/start/restart stayed exact; both health endpoints passed; queue/failure counters stayed healthy; latency did not regress; WebSocket hello/snapshot/unsubscribe passed; monitor-symbol hash stayed unchanged | Passed |
+| Acceptance fixtures must be removed | The exact 110 canonical rows were synchronously deleted, canonical and AI final counts were zero, and disposable remote scripts/SQL were removed | Passed |
+
+The final local review also found and closed a static typing issue in the
+materializer (`date` key annotation); targeted mypy, Ruff, and executable tests
+then passed. One reviewer noted that the merged kline tests do not directly
+exercise a private `QuoteService` fallback success branch. That pre-existing,
+non-runtime-path P3 observation is unrelated to either active offline-bootstrap
+requirement and is recorded without expanding this fix wave.
+
+Fresh final evidence from the exact reviewed worktree was: offline-bootstrap
+semantic slice `90 passed`; specification contracts `5 passed`; specification
+compliance passed; repository `tests/backend` `147 passed`; complete
+`backend/tests` `680 passed` with only 13 deprecation warnings; targeted mypy
+clean for all three production modules; scoped final-fix Ruff passed; and
+`git diff --check` passed. The post-merge frontend suite had already passed
+205 tests with 2 skipped and its production build. No failure was waived.
+
+Disposition: **passed**. The strict scheduler boundary, regular-session gate,
+and millisecond-safe exact-cutoff behavior have lower-layer executable and live
+semantic proof. The accepted candidate remains deployed with the exact prior
+worker image retained for rollback. No downstream signal or golden result was
+used as a substitute for canonical storage acceptance.
