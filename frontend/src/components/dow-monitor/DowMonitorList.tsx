@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn'
 
 import { DowMonitorSparkline } from './DowMonitorSparkline'
 import { DowMonitorMobileRow } from './DowMonitorMobileRow'
+import { DowMonitorHalfHourAiButton } from './DowMonitorHalfHourAiButton'
 import { KeyInterpretationCell } from './KeyInterpretationCell'
 import { deriveInterpretationMarketContext } from './interpretationMarketContext'
 import { deriveKeyInterpretation } from './keyInterpretation'
@@ -230,6 +231,13 @@ export function DowMonitorList({
             selected={selectedSymbol === item.symbol}
             pendingToggle={pendingToggles.has(item.symbol)}
             pendingRemoval={pendingRemovals.has(item.symbol)}
+            auxiliaryAction={(
+              <DowMonitorHalfHourAiButton
+                symbol={item.symbol}
+                latest={item.half_hour_ai_analysis}
+                compact
+              />
+            )}
             onSelect={onSelect}
             onToggle={onToggle}
             onRemove={onRemove}
@@ -237,7 +245,7 @@ export function DowMonitorList({
         ))}
       </div>
       <div data-testid="dow-monitor-table-scroll" className="hidden max-w-full overflow-x-auto md:block">
-        <table className="w-full min-w-[1980px] border-collapse text-xs">
+        <table className="w-full min-w-[2160px] border-collapse text-xs">
           <thead className="bg-elevated/70 text-[11px] text-muted">
             <tr>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">股票</th>
@@ -264,6 +272,10 @@ export function DowMonitorList({
                 <span className="block text-[9px] text-muted">日高低 · ATR · 周期确认</span>
               </th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">买卖信号</th>
+              <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">
+                半小时分析
+                <span className="block text-[9px] text-muted">累计指标 · 独立大模型解读</span>
+              </th>
               <th scope="col" className="whitespace-nowrap border-b border-border px-3 py-2 text-left font-medium">操作</th>
             </tr>
           </thead>
@@ -507,6 +519,12 @@ export function DowMonitorList({
                         </span>
                       ))}
                     </div>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <DowMonitorHalfHourAiButton
+                      symbol={item.symbol}
+                      latest={item.half_hour_ai_analysis}
+                    />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     <button

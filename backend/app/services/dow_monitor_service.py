@@ -284,6 +284,7 @@ class DowMonitorService:
         now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
         minute_result_materializer=None,
         history_status_reader=None,
+        half_hour_ai_repository=None,
     ) -> None:
         self.store = store
         self._data_gateway = data_gateway
@@ -293,6 +294,7 @@ class DowMonitorService:
         self._now_fn = now_fn
         self._minute_result_materializer = minute_result_materializer
         self._history_status_reader = history_status_reader
+        self._half_hour_ai_repository = half_hour_ai_repository
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._last_started_at: datetime | None = None
@@ -1362,6 +1364,17 @@ class DowMonitorService:
             if self._history_status_reader is not None
             else {}
         )
+        try:
+            half_hour_ai_summaries = (
+                self._half_hour_ai_repository.latest_summaries(
+                    [(item.market, item.symbol) for item in items]
+                )
+                if self._half_hour_ai_repository is not None
+                else {}
+            )
+        except Exception as exc:
+            logger.debug("half-hour AI summaries unavailable: %s", exc)
+            half_hour_ai_summaries = {}
         intraday_capital_by_symbol = self._intraday_capital_by_symbol(
             [item.symbol for item in items]
         )
@@ -1412,6 +1425,11 @@ class DowMonitorService:
                             last_error="STATUS_READER_UNAVAILABLE",
                         ),
                     ).model_dump(mode="json"),
+                    "half_hour_ai_analysis": self._half_hour_ai_summary(
+                        item.market,
+                        item.symbol,
+                        half_hour_ai_summaries,
+                    ),
                 }
             )
         return {
@@ -1419,6 +1437,48 @@ class DowMonitorService:
             "source": "webstock",
             "source_timestamp": self._as_json_time(max(source_timestamps, default=None)),
         }
+
+    def _half_hour_ai_summary(self, market, symbol, summaries) -> dict:
+        summary = summaries.get((market, symbol))
+        if summary is None:
+            return {
+                "analysis_id": None,
+                "status": (
+                    "pending"
+                    if self._half_hour_ai_repository is not None
+                    else "unavailable"
+                ),
+                "window_end": None,
+                "title": None,
+                "summary": None,
+            }
+        return {
+            "analysis_id": summary.analysis_id,
+            "status": summary.status,
+            "window_end": self._as_json_time(summary.window_end),
+            "title": summary.title,
+            "summary": summary.summary,
+        }
+
+    def list_half_hour_ai(self, market: str, symbol: str, trade_date) -> list[dict]:
+        if self._half_hour_ai_repository is None:
+            return []
+        return [
+            item.model_dump(mode="json")
+            for item in self._half_hour_ai_repository.list_history(
+                market,
+                symbol,
+                trade_date,
+            )
+        ]
+
+    def get_half_hour_ai(self, market: str, symbol: str, analysis_id: str):
+        if self._half_hour_ai_repository is None:
+            return None
+        item = self._half_hour_ai_repository.get_by_id(analysis_id)
+        if item is None or item.market != market or item.symbol != symbol:
+            return None
+        return item.model_dump(mode="json", exclude={"input_snapshot"})
 
     def _intraday_capital_by_symbol(self, symbols: list[str]) -> dict[str, dict]:
         canonical_symbols = sorted(

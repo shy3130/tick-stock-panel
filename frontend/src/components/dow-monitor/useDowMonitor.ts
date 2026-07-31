@@ -54,6 +54,30 @@ export function useDowMonitorDetail(
   })
 }
 
+export function useDowMonitorAiHistory(
+  symbol: string,
+  tradeDate: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: QK.dowMonitorAiHistory(symbol, tradeDate),
+    queryFn: () => api.dowMonitorAiHistory(symbol, tradeDate),
+    enabled: enabled && !!symbol && !!tradeDate,
+  })
+}
+
+export function useDowMonitorAiDetail(
+  symbol: string,
+  analysisId: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: QK.dowMonitorAiDetail(symbol, analysisId),
+    queryFn: () => api.dowMonitorAiDetail(symbol, analysisId),
+    enabled: enabled && !!symbol && !!analysisId,
+  })
+}
+
 export function useAddDowMonitorSymbol() {
   const queryClient = useQueryClient()
   return useMutation({

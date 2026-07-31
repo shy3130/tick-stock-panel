@@ -48,3 +48,27 @@ services:
       # 长桥采集器每 30 秒写入轻量运行快照；设置页只读该文件，不扫描行情大表。
       - ${LONGBRIDGE_STATUS_DIR_HOST:-/data/longbridge/status}:/run/longbridge:ro
     restart: unless-stopped
+
+  dow-ai-worker:
+    image: ${TICKFLOW_IMAGE:-tickflow-stock-panel-app:latest}
+    container_name: TickFlow_Dow_AI_Worker
+    command: ["uv", "run", "python", "-m", "app.workers.dow_monitor_half_hour_ai"]
+    depends_on:
+      - app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      - DATA_DIR=/app/data
+      - CODEX_DOCKER_HOST=host.docker.internal
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:-http://host.docker.internal:8123}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-longbridge}
+      - CLICKHOUSE_READ_TIMEOUT_SECONDS=${CLICKHOUSE_READ_TIMEOUT_SECONDS:-30}
+      - DOW_AI_WORKER_ENABLED=${DOW_AI_WORKER_ENABLED:-true}
+      - DOW_AI_WORKER_CONCURRENCY=${DOW_AI_WORKER_CONCURRENCY:-1}
+      - DOW_AI_WORKER_POLL_SECONDS=${DOW_AI_WORKER_POLL_SECONDS:-15}
+    volumes:
+      - ./data:/app/data:ro
+      - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
+    restart: unless-stopped

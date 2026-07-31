@@ -6,6 +6,7 @@ readme = "../README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
+    "exchange-calendars>=4.10,<5",
     # Web
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

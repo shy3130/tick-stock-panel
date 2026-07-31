@@ -932,6 +932,7 @@ def test_lifecycle_starts_single_monitor_with_registered_clickhouse_provider(
             *,
             minute_result_materializer=None,
             history_status_reader=None,
+            half_hour_ai_repository=None,
             ) -> None:
             self.store = store
             self.gateway = gateway
@@ -939,6 +940,7 @@ def test_lifecycle_starts_single_monitor_with_registered_clickhouse_provider(
             self.daily_loader = daily_loader
             self.minute_result_materializer = minute_result_materializer
             self.history_status_reader = history_status_reader
+            self.half_hour_ai_repository = half_hour_ai_repository
             self.started = 0
 
         async def start(self) -> None:

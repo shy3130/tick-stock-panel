@@ -226,12 +226,13 @@ describe('DowMonitorList', () => {
       '量价 / 资金',
       '突破 / 风险',
       '买卖信号',
+      '半小时分析',
       '操作',
     ]) {
       expect(screen.getByRole('columnheader', { name: new RegExp(heading) })).toBeInTheDocument()
     }
     const headers = screen.getAllByRole('columnheader')
-    expect(headers).toHaveLength(10)
+    expect(headers).toHaveLength(11)
     const texts = headers.map(header => header.textContent ?? '')
     expect(texts.indexOf('日内走势')).toBeLessThan(
       texts.findIndex(text => text.includes('重点解读')),

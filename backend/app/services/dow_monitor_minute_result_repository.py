@@ -195,6 +195,36 @@ class DowMonitorMinuteResultRepository:
         )
         return len(documents)
 
+    def load_cumulative_rows(
+        self,
+        symbols: Sequence[str],
+        session_open: datetime,
+        data_cutoff: datetime,
+    ) -> dict[str, list[dict]]:
+        normalized = [
+            normalize_monitor_symbol(symbol)
+            for symbol in symbols
+            if symbol.strip()
+        ]
+        if not normalized:
+            return {}
+        rows = self._query(
+            f"""
+            SELECT *
+            FROM {self._database}.lb_dow_monitor_minute_results FINAL
+            WHERE symbol IN {_symbol_tuple(normalized)}
+              AND decision_minute >= parseDateTime64BestEffort({_time_literal(session_open)})
+              AND decision_minute <= parseDateTime64BestEffort({_time_literal(data_cutoff)})
+            ORDER BY symbol, decision_minute
+            """
+        )
+        output = {symbol: [] for symbol in normalized}
+        for row in rows:
+            symbol = normalize_monitor_symbol(str(row.get("symbol") or ""))
+            if symbol in output:
+                output[symbol].append(row)
+        return output
+
     def status(self) -> dict[str, object]:
         return {
             "database": self._database,

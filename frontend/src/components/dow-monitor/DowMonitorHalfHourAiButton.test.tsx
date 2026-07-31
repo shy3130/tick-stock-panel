@@ -1,0 +1,71 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+
+import { api } from '@/lib/api'
+
+import { DowMonitorHalfHourAiButton } from './DowMonitorHalfHourAiButton'
+import type { DowMonitorHalfHourAiSummary } from './types'
+
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    dowMonitorAiHistory: vi.fn(),
+    dowMonitorAiDetail: vi.fn(),
+  },
+}))
+
+const summary: DowMonitorHalfHourAiSummary = {
+  analysis_id: 'analysis-1',
+  status: 'completed',
+  window_end: '2026-07-31T23:00:00+08:00',
+  title: '量价仍待确认',
+  summary: '价格回升但资金持续性不足',
+}
+const historyItem = {
+  ...summary,
+  market: 'us' as const,
+  symbol: 'RNG.US',
+  trade_date: '2026-07-31',
+  updated_at: '2026-07-31T23:00:02+08:00',
+}
+
+function renderButton() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <DowMonitorHalfHourAiButton symbol="RNG.US" latest={summary} />
+    </QueryClientProvider>,
+  )
+}
+
+describe('DowMonitorHalfHourAiButton', () => {
+  it('keeps the overview light and loads long content only after opening', async () => {
+    vi.mocked(api.dowMonitorAiHistory).mockResolvedValue({ analyses: [historyItem] })
+    vi.mocked(api.dowMonitorAiDetail).mockResolvedValue({
+      ...historyItem,
+      data_cutoff: '2026-07-31T23:00:00+08:00',
+      conclusion: '价格回升，但资金证据尚未同步。',
+      evidence: [],
+      risks: ['样本有限'],
+      scenarios: [],
+      data_quality: ['数据完整'],
+    })
+    renderButton()
+
+    expect(screen.getByText('量价仍待确认')).toBeInTheDocument()
+    expect(api.dowMonitorAiHistory).not.toHaveBeenCalled()
+    expect(api.dowMonitorAiDetail).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 半小时分析' }))
+
+    await waitFor(() => expect(api.dowMonitorAiHistory).toHaveBeenCalled())
+    await waitFor(() => expect(api.dowMonitorAiDetail).toHaveBeenCalled())
+    expect(screen.getByRole('dialog', { name: 'RNG.US 半小时综合分析' }))
+      .toBeInTheDocument()
+    expect(screen.getByText('价格回升，但资金证据尚未同步。'))
+      .toBeInTheDocument()
+  })
+})

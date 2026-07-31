@@ -114,6 +114,12 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-MONITOR-NEW-SYMBOL-HISTORY-BACKFILL-001
+  - id: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    path: docs/specs/dow-monitor-half-hour-ai-analysis.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+      - REQ-DOW-MONITOR-HALF-HOUR-AI-VIEW-001
 conflicts:
   - id: CON-20260731-DOW-MONITOR-MOBILE-LAYOUT-001
     specifications:

@@ -92,6 +92,10 @@ export const QK = {
   dowMonitorStatus: ['dow-monitor', 'status'] as const,
   dowMonitorDetail: (symbol: string, timeframe: DowTimeframe) =>
                        ['dow-monitor', 'detail', symbol, timeframe] as const,
+  dowMonitorAiHistory: (symbol: string, tradeDate: string) =>
+                         ['dow-monitor', 'ai-history', symbol, tradeDate] as const,
+  dowMonitorAiDetail: (symbol: string, analysisId: string) =>
+                        ['dow-monitor', 'ai-detail', symbol, analysisId] as const,
 
   // AI 大盘复盘
   reviewReports:        ['review-reports'] as const,

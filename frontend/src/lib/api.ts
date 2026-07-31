@@ -6,6 +6,8 @@
 import { toast } from '@/components/Toast'
 import type {
   DowMonitorDetailResponse,
+  DowMonitorHalfHourAiAnalysis,
+  DowMonitorHalfHourAiHistoryResponse,
   DowMonitorMarket,
   DowMonitorNotification,
   DowMonitorNotificationsResponse,
@@ -1557,6 +1559,20 @@ export const api = {
   dowMonitorDetail: (symbol: string, timeframe: DowTimeframe) =>
     request<DowMonitorDetailResponse>(
       uncached(`/api/dow-monitor/${encodeURIComponent(symbol)}?timeframe=${timeframe}`),
+      { cache: 'no-store' },
+    ),
+  dowMonitorAiHistory: (symbol: string, tradeDate: string) =>
+    request<DowMonitorHalfHourAiHistoryResponse>(
+      uncached(
+        `/api/dow-monitor/${encodeURIComponent(symbol)}/ai-analyses?trade_date=${encodeURIComponent(tradeDate)}`,
+      ),
+      { cache: 'no-store' },
+    ),
+  dowMonitorAiDetail: (symbol: string, analysisId: string) =>
+    request<DowMonitorHalfHourAiAnalysis>(
+      uncached(
+        `/api/dow-monitor/${encodeURIComponent(symbol)}/ai-analyses/${encodeURIComponent(analysisId)}`,
+      ),
       { cache: 'no-store' },
     ),
   dowMonitorStatus: () => request<DowMonitorStatusResponse>(

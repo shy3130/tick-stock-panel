@@ -457,6 +457,7 @@ export interface DowMonitorOverviewSymbol extends DowMonitorSymbol {
   last_success_at: string | null
   last_error: string | null
   history_backfill?: DowMonitorHistoryBackfillStatus
+  half_hour_ai_analysis?: DowMonitorHalfHourAiSummary
 }
 
 export interface DowMonitorHistoryBackfillStatus {
@@ -473,6 +474,51 @@ export interface DowMonitorHistoryBackfillStatus {
   missing_timeframes: string[]
   last_error: string | null
   updated_at: string | null
+}
+
+export type DowMonitorHalfHourAiStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'insufficient_data'
+  | 'unavailable'
+
+export interface DowMonitorHalfHourAiSummary {
+  analysis_id: string | null
+  status: DowMonitorHalfHourAiStatus
+  window_end: string | null
+  title: string | null
+  summary: string | null
+}
+
+export interface DowMonitorHalfHourAiHistoryItem extends DowMonitorHalfHourAiSummary {
+  market: DowMonitorSymbolMarket
+  symbol: string
+  trade_date: string
+  updated_at: string
+}
+
+export interface DowMonitorHalfHourAiAnalysis extends DowMonitorHalfHourAiHistoryItem {
+  data_cutoff: string
+  conclusion: string | null
+  evidence: Array<{
+    metric_key: string
+    label: string
+    value: string
+    meaning: string
+  }>
+  risks: string[]
+  scenarios: Array<{
+    condition: string
+    implication: string
+    invalidates_when: string
+  }>
+  data_quality: string[]
+}
+
+export interface DowMonitorHalfHourAiHistoryResponse {
+  analyses: DowMonitorHalfHourAiHistoryItem[]
 }
 
 export interface DowMonitorIntradayCapital {

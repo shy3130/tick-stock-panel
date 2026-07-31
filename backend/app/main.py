@@ -48,6 +48,9 @@ from app.jobs import daily_pipeline
 from app.services.dow_monitor_client import LongbridgeDowClient
 from app.services.dow_monitor_data import WebStockMonitorGateway
 from app.services.dow_monitor_history_status import DowMonitorHistoryStatusReader
+from app.services.dow_monitor_half_hour_ai_repository import (
+    DowMonitorHalfHourAiRepository,
+)
 from app.services.dow_monitor_minute_result_history import (
     DowEngineStableStateBuilder,
     DowMonitorMinuteResultHistoryBuilder,
@@ -84,6 +87,7 @@ async def _start_dow_monitor(app: FastAPI, data_dir: Path, provider, endpoint: s
     gateway = WebStockMonitorGateway(provider)
     dow_client = LongbridgeDowClient(endpoint)
     minute_result_repository = DowMonitorMinuteResultRepository()
+    half_hour_ai_repository = DowMonitorHalfHourAiRepository()
     try:
         await asyncio.to_thread(minute_result_repository.ensure_schema)
     except Exception as exc:
@@ -98,6 +102,11 @@ async def _start_dow_monitor(app: FastAPI, data_dir: Path, provider, endpoint: s
             ),
             notifications_fn=lambda: store.list_notifications(limit=1_000_000),
         )
+    try:
+        await asyncio.to_thread(half_hour_ai_repository.ensure_schema)
+    except Exception as exc:
+        logger.warning("half-hour AI storage unavailable: %s", exc)
+        half_hour_ai_repository = None
     service = DowMonitorService(
         store,
         gateway,
@@ -112,6 +121,7 @@ async def _start_dow_monitor(app: FastAPI, data_dir: Path, provider, endpoint: s
                 )
             )
         ),
+        half_hour_ai_repository=half_hour_ai_repository,
     )
     app.state.dow_monitor_service = service
     app.state.dow_monitor_client = dow_client

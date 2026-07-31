@@ -470,3 +470,33 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-new-symbol-history-backfill.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-07-31-dow-monitor-new-symbol-history-backfill-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/services/dow_monitor_half_hour_ai_calendar.py
+      - backend/app/services/dow_monitor_half_hour_ai_models.py
+      - backend/app/services/dow_monitor_half_hour_ai_repository.py
+      - backend/app/services/dow_monitor_half_hour_ai_prompt.py
+      - backend/app/services/dow_monitor_half_hour_ai_snapshot.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+      - docker-compose.yml
+    tests:
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-half-hour-ai-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-half-hour-ai-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HALF-HOUR-AI-VIEW-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/api/dow_monitor.py
+      - backend/app/services/dow_monitor_service.py
+      - frontend/src/components/dow-monitor/DowMonitorAiAnalysisDialog.tsx
+      - frontend/src/components/dow-monitor/DowMonitorHalfHourAiButton.tsx
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/components/dow-monitor/DowMonitorMobileRow.tsx
+    tests:
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_half_hour_ai_frontend.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-half-hour-ai-analysis.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-half-hour-ai-analysis-review.md, type: independent-review}

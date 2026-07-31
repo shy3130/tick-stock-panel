@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -111,6 +112,39 @@ def mark_notification_read(notification_id: str, request: Request) -> dict:
 @router.get("/status")
 def status(request: Request) -> dict:
     return _service(request).status()
+
+
+@router.get("/{symbol}/ai-analyses")
+def half_hour_ai_history(
+    symbol: str,
+    request: Request,
+    trade_date: date = Query(...),
+) -> dict:
+    normalized, market = _symbol_and_market(symbol)
+    return {
+        "analyses": _service(request).list_half_hour_ai(
+            market,
+            normalized,
+            trade_date,
+        )
+    }
+
+
+@router.get("/{symbol}/ai-analyses/{analysis_id}")
+def half_hour_ai_detail(
+    symbol: str,
+    analysis_id: str,
+    request: Request,
+) -> dict:
+    normalized, market = _symbol_and_market(symbol)
+    result = _service(request).get_half_hour_ai(
+        market,
+        normalized,
+        analysis_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="AI analysis was not found")
+    return result
 
 
 @router.get("/{symbol}")
