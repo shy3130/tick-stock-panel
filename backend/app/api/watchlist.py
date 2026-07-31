@@ -11,6 +11,7 @@ import polars as pl
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
+from app.db_safe import is_valid_ext_ident, quote_ident
 from app.services import watchlist
 from app.services.watchlist_ocr import import_watchlist_image
 from app.services.watchlist_ocr.provider import get_ocr_provider
@@ -276,7 +277,7 @@ def watchlist_enriched(
                     ext_df, _ = _read_ext_dataframe(cfg, data_dir)
                 else:
                     ext_df = pl.from_arrow(db.query(
-                        f"SELECT symbol, \"{field_name}\" FROM {view_name}"
+                        f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                     ).arrow())
                 if not ext_df.is_empty() and "symbol" in ext_df.columns:
                     ext_df = (
@@ -334,6 +335,6 @@ def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
         config_id, field_name = part.split(".", 1)
         config_id = config_id.strip()
         field_name = field_name.strip()
-        if config_id and field_name:
+        if config_id and field_name and is_valid_ext_ident(config_id):
             result.append((config_id, field_name))
     return result
