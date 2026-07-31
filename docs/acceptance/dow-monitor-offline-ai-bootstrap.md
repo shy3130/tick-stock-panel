@@ -1,4 +1,4 @@
-status: pending
+status: passed
 
 # Dow Monitor Offline AI Bootstrap Acceptance
 
@@ -188,13 +188,13 @@ executable evidence:
 None of these observations is a requirement, safety, or production-code gap;
 no test waiver is being used to hide a failing command.
 
-## Pending production observations (Task 8)
+## Production observations originally pending for Task 8
 
 The local executable evidence does not substitute for production acceptance.
 The 10.28 worker image/SHA, live raw and canonical ClickHouse queries, worker
 restart/model-concurrency observations, next-normal-checkpoint behavior, and
 3018/WebSocket restart, backlog, latency, and formal-signal non-regression
-evidence remain pending until Task 8.
+evidence remained pending until the successful Task 8 retry recorded below.
 
 ## Task 8 failed production boundary and Task 8A local correction (2026-07-31)
 
@@ -238,3 +238,114 @@ Fresh broader verification also passed: the complete backend suite reported
 Ruff reported `All checks passed`; and targeted mypy reported no issues for the
 changed production module. No production endpoint, host, container, or data was
 accessed during Task 8A.
+
+## Task 8 production retry acceptance (2026-07-31)
+
+Status: passed on the established 10.28 production host.
+
+The retry used a new clean Git archive from
+`d35a39d6284a0ac5e4c4663e743fc5bd15fe35fe`; it did not reuse the failed
+`f441344` image. The archive SHA-256 was
+`d0c58525a9fb79f9693fdc52b21d87e7869bb198908b5b2173c6996e633b6bf4`.
+The worker-only candidate was:
+
+```text
+tag: tickflow-stock-panel-app:dow-offline-bootstrap-d35a39d6284a
+image ID: sha256:c608dd809a49228874c6e6ab03b905ef4594e0a22883252e3a5910e290556a3a
+revision: d35a39d6284a0ac5e4c4663e743fc5bd15fe35fe
+```
+
+The image was layered from the exact rollback image
+`sha256:908b0722e187d0b582cae65bb3207456418345d148259634cd22c1d1d4a04aa7`.
+Its four worker/repository file hashes matched the extracted Git archive.
+An in-image probe normalized the real ClickHouse shape
+`2026-07-31 14:59:00.000` to
+`2026-07-31T14:59:00+08:00[Asia/Shanghai]`.
+
+### Lower-layer production gate
+
+The disposable `2526.HK` fixture used production ClickHouse raw inputs while
+remaining outside the 3018 data directory and formal-signal store. Before the
+poll, canonical and AI counts were both zero. Raw evidence through the actual
+16:00 Hong Kong close contained 484 quote rows, 4,455 depth rows, 724 trade
+rows, 1,081 candlestick rows including warmup, and 49 capital rows.
+
+The canonical query was evaluated before the AI query and proved:
+
+- 110 rows for exactly `hk/2526.HK`;
+- 110 of 110 rows had `backfill=1`;
+- first decision minute 09:31 BJT and last decision minute 15:30 BJT;
+- maximum source timestamp `2026-07-31T15:29:22.039+08:00`;
+- zero row later than the 16:00 data cutoff;
+- 110 rows is below the absolute 500-row budget.
+
+The production repository then reloaded all 110 rows through the corrected
+naive `DateTime64` boundary. The failed first attempt's zero-observation symptom
+did not recur.
+
+### Startup and next normal checkpoint
+
+The fixture `created_at` was 15:47 BJT. A single actual-wall-clock poll at
+16:04:59 BJT selected exactly:
+
+```text
+startup checkpoint: 15:30 BJT
+next normal checkpoint: 16:00 BJT
+```
+
+It selected no 15:00 or older startup checkpoint and returned
+`completed_count=2`. ClickHouse contained exactly two final AI logical rows:
+
+- 15:30 startup: `status=completed`,
+  `window_end=data_cutoff=15:30`, `observation_count=110`;
+- 16:00 normal: `status=completed`,
+  `window_end=data_cutoff=16:00`, `observation_count=110`.
+
+Both rows had nonempty title, summary, conclusion, evidence, risks, and
+scenarios. The worker schema does not currently populate `model_name`, but the
+production code can save `completed` only after
+`HalfHourAiPromptService.analyze()` returns validated generated content.
+Therefore the two completed rows and `completed_count=2` are direct model
+boundary evidence.
+
+The 16:00 normal checkpoint honestly used the 110 cumulative observations
+available through 15:30; because that snapshot was already sufficient, it did
+not invoke another offline materialization. This evidence proves the next
+normal checkpoint executed, but does not claim that wall-clock rows from
+15:31–15:59 were newly materialized.
+
+A second isolated poll at 16:06:56 selected the same two due windows but
+returned `completed_count=0` and left exactly two logical rows, proving terminal
+logical-key deduplication without another model call.
+
+### Isolation and non-regression
+
+The normal worker was stopped while each disposable poll ran, so physical model
+concurrency remained one. After acceptance, only the normal candidate worker
+was running, with one `uv` parent and one Python worker process.
+
+The 3018 panel container remained
+`183eef17e421ee4e055d020b458a2fa67cb96a3c4a0b3bb4ed27a63271ea92c5`,
+on the old panel image with `RestartCount=0` and unchanged start time. Both
+3018 `/health` and 19912 `/api/health` returned healthy responses.
+
+Against the freshly recorded degraded realtime baseline:
+
+- writer queue remained zero;
+- accumulated `rejected=27595` and `flush_failures=11` did not increase;
+- consecutive flush failures remained zero;
+- Redis stayed connected with zero publish failures;
+- callback-to-publish p95 moved from 168.98 ms to 128.73 ms;
+- live WebSocket returned `hello`, an `1888.HK` snapshot in 224.2 ms, and a
+  clean unsubscribe acknowledgement.
+
+The deployed worker mounts production `/app/data` read-only. The acceptance
+fixture mounted a separate data directory. The panel identity, formal-signal
+code paths, and production monitor-symbol SHA-256
+`9df392a342def1cf9f32b64ef92a1123dfae6cfa4d96b21de6d41463e04e69cd`
+were unchanged. Worker and panel error-log probes were empty.
+
+Finally, the 110 canonical rows and two AI rows were deleted for exactly
+`hk/2526.HK`; both final counts were independently verified as zero. The
+disposable container, fixture directory, and nested secret bind were removed.
+The commit-addressed candidate remains deployed and healthy.

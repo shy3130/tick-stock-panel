@@ -4,8 +4,9 @@ status: passed
 
 Review date: 2026-07-31
 
-Scope: local requirements-to-evidence review. Production acceptance remains
-pending for Task 8 and is not implied by this passed local review.
+Scope: requirements-to-evidence review. The original sections preserve the
+local review and failed first production attempt; the final section independently
+reviews the successful Task 8 production retry.
 
 ## Authority
 
@@ -130,3 +131,36 @@ requirements-to-evidence review. The acceptance document must remain
 `status: pending` until a new commit-addressed worker candidate is redeployed
 and the complete Task 8 production sequence succeeds, including a real model
 call and the next normal checkpoint.
+
+## Task 8 production retry independent review (2026-07-31)
+
+This final review started again from
+`REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001` and
+`REQ-DOW-MONITOR-HALF-HOUR-AI-BOOTSTRAP-ISOLATION-001`, not from the candidate
+status or passing tests. The indexed precedence decision remains resolved and
+no exception applies.
+
+| Mandatory behavior | Independent production evidence | Conclusion |
+| --- | --- | --- |
+| A clean reviewed candidate must be traceable and rollback-safe | The source archive is tied to full commit `d35a39d6284a0ac5e4c4663e743fc5bd15fe35fe`; local/remote archive SHA-256 matched; the image revision label and four in-image source hashes matched the archive; the old image tag/ID and both old container identities were captured before deployment | Passed |
+| Lower-layer canonical semantics must pass before evaluating AI | Production raw inputs existed through the actual HK close; the independent canonical query found 110 exact-symbol rows, all `backfill=1`, at most 500, maximum source time 15:29:22 BJT, and no row after cutoff | Passed |
+| The real ClickHouse `DateTime64` boundary must reload nonzero observations | An in-image naive-string probe produced the declared Shanghai instant; the deployed repository reloaded 110 production canonical observations for both AI snapshots | Passed |
+| Startup eligibility must select only the latest completed checkpoint before `created_at` | With `created_at=15:47`, the actual 16:04:59 poll selected 15:30 as startup and did not produce 15:00 or any older AI row | Passed |
+| Sufficient evidence must reach the model and persist a completed result | The 15:30 row was `completed`, had 110 observations and nonempty validated generated fields; the worker can save that state only after the prompt/model boundary returns | Passed |
+| The next normal checkpoint must still execute | The same honest wall-clock poll selected actual 16:00 and saved a second `completed` row with `window_end=data_cutoff=16:00`; this was not labeled as replay | Passed |
+| Duplicate logical keys must not invoke the model again | A second isolated poll selected the same due windows, returned `completed_count=0`, and left exactly two final logical rows | Passed |
+| Model concurrency and component isolation must remain one/worker-only | The normal worker was stopped during each disposable poll; only one candidate process tree ran. The deployed worker has read-only production data mounts, while the fixture used a separate directory. The 3018 container never changed | Passed |
+| Realtime, WebSocket, 3018/19912, and formal-signal scope must not regress | Panel ID/start/restart remained unchanged; both health endpoints passed; realtime queue stayed zero; existing accumulated reject/failure counters did not increase; Redis failures stayed zero; p95 improved relative to the freshly captured baseline; WebSocket delivered hello/snapshot/unsubscribe; monitor-symbol hash and formal-signal paths were untouched | Passed |
+| Acceptance state must be cleaned without using downstream success as proof | The AI result was inspected only after canonical acceptance. Cleanup then verified zero exact fixture rows in both tables and removed the disposable container/data/secret mount | Passed |
+
+The 16:00 result used the sufficient 110-row cumulative snapshot ending at
+15:30, so this review does not claim new 15:31–15:59 canonical rows. The
+authoritative acceptance requires the next normal checkpoint to execute; that
+checkpoint did execute at real exchange time with the correct 16:00 cutoff.
+
+Fresh verification after the acceptance/review edits passed: focused
+repository/worker/integration tests `43 passed`, the complete backend
+`141 passed`, specification contracts `5 passed`, specification compliance,
+Ruff, targeted mypy, and `git diff --check`. Both stable requirements now have
+complete production semantic evidence and the acceptance document is correctly
+promoted to `status: passed`.
