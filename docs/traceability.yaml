@@ -480,6 +480,7 @@ requirements:
       - backend/app/services/dow_monitor_half_hour_ai_snapshot.py
       - backend/app/workers/dow_monitor_half_hour_ai.py
       - docker-compose.yml
+      - docker-compose.override.yml
     tests:
       - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
     acceptance:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -28,6 +29,14 @@ from app.services.dow_monitor_models import MonitoredSymbol
 from app.services.dow_monitor_service import DowMonitorService
 from app.services.dow_monitor_store import DowMonitorStore
 from app.workers.dow_monitor_half_hour_ai import DowMonitorHalfHourAiWorker
+
+
+def test_production_override_places_ai_worker_on_host_network() -> None:
+    override = (
+        Path(__file__).resolve().parents[2] / "docker-compose.override.yml"
+    ).read_text(encoding="utf-8")
+    worker_section = override.split("  dow-ai-worker:", maxsplit=1)[1]
+    assert "network_mode: host" in worker_section
 
 
 def test_cn_first_due_window_is_1000_beijing() -> None:

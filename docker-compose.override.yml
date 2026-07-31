@@ -4,3 +4,5 @@ services:
       dockerfile: Dockerfile
     network_mode: host
     ports: !reset []
+  dow-ai-worker:
+    network_mode: host
