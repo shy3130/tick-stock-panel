@@ -95,7 +95,7 @@ export function DowMonitorDetailPanel({
       aria-label={`${symbol} 详细走势`}
       data-testid="dow-detail-state"
       data-tradable={blocked ? 'false' : 'true'}
-      className="mt-3 overflow-hidden rounded-card border border-border bg-surface"
+      className="mt-3 min-w-0 overflow-hidden rounded-card border border-border bg-surface"
     >
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 sm:px-4">
         <h2 className="font-mono text-sm font-semibold">{symbol}</h2>

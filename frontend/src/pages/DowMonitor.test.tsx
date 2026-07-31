@@ -245,7 +245,10 @@ describe('Dow monitor list page', () => {
     const { rerender } = render(monitorNode())
     const formalSignalCount = screen.getAllByText('买入确认').length
     const targetFormalSignal = () => {
-      const targetRow = screen.getByText(target.symbol).closest('tr')
+      const monitorTable = within(
+        screen.getByRole('region', { name: '股票监控列表' }),
+      ).getByRole('table')
+      const targetRow = within(monitorTable).getByText(target.symbol).closest('tr')
       if (!targetRow) throw new Error(`Missing row for ${target.symbol}`)
       return within(targetRow).getByText('买入确认')
     }
@@ -296,8 +299,8 @@ describe('Dow monitor list page', () => {
     }
     rerender(monitorNode())
 
-    expect(screen.getByText('188.88')).toBeInTheDocument()
-    expect(screen.getByText('1m +1.00%')).toBeInTheDocument()
+    expect(screen.getAllByText('188.88')).not.toHaveLength(0)
+    expect(screen.getAllByText('1m +1.00%')).not.toHaveLength(0)
     expect(screen.getAllByText('买入确认')).toHaveLength(formalSignalCount)
     expect(targetFormalSignal()).toBeInTheDocument()
 
@@ -354,7 +357,7 @@ describe('Dow monitor list page', () => {
     expect(window.location.search).toBe('?market=us')
     expect(screen.getByRole('link', { name: '指标说明' }))
       .toHaveAttribute('href', '/dow-monitor/help?market=us')
-    expect(screen.getByText('AAPL.US')).toBeInTheDocument()
+    expect(screen.getAllByText('AAPL.US')).not.toHaveLength(0)
     expect(screen.getByText('第 1 / 1 页 · 共 1 只')).toBeInTheDocument()
     expect(hooks.setEnabled).not.toHaveBeenCalled()
     expect(hooks.remove).not.toHaveBeenCalled()
@@ -393,5 +396,18 @@ describe('Dow monitor list page', () => {
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     )
     await waitFor(() => expect(input).toHaveValue(''))
+  })
+
+  it('keeps the page header controls within the mobile viewport', () => {
+    render(monitorNode())
+
+    const input = screen.getByRole('textbox', { name: '股票代码' })
+    expect(input).toHaveClass('min-w-0', 'flex-1', 'sm:w-52')
+    expect(input.closest('form')).toHaveClass('min-w-0', 'flex-1', 'sm:flex-none')
+    expect(input.closest('form')?.parentElement).toHaveClass(
+      'w-full',
+      'flex-wrap',
+      'sm:w-auto',
+    )
   })
 })

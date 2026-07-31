@@ -1,7 +1,9 @@
 """API 路由 — Phase 0 仅 /health 与 /api/capabilities。"""
 from __future__ import annotations
 
-from fastapi import APIRouter
+import os
+
+from fastapi import APIRouter, Response
 
 from app import __version__
 from app.tickflow import client as tf_client
@@ -11,10 +13,13 @@ router = APIRouter()
 
 
 @router.get("/health")
-def health() -> dict:
+def health(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
     return {
         "status": "ok",
         "version": __version__,
+        "build_id": os.getenv("BUILD_ID", __version__),
+        "published_at": os.getenv("PUBLISHED_AT") or None,
         # 三态: none(无key/无效) / free(免费key) / api_key(付费档)
         "mode": tf_client.current_mode(),
     }

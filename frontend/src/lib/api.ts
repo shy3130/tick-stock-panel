@@ -17,6 +17,7 @@ import type {
   DowTimeframe,
 } from '@/components/dow-monitor/types'
 import type { MarketCode } from '@/lib/market-display'
+import type { AppVersion } from '@/lib/appVersion'
 
 const BASE = ''
 
@@ -1051,6 +1052,15 @@ export interface StrategyAlertEvent {
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
+  appVersion: async (): Promise<AppVersion> => {
+    const response = await fetch(uncached('/health'), { cache: 'no-store' })
+    if (!response.ok) throw new Error(`version ${response.status}`)
+    const body = await response.json()
+    return {
+      build_id: body.build_id ?? body.version ?? '',
+      published_at: body.published_at ?? null,
+    }
+  },
 
   // ===== Auth (访问认证) =====
   authStatus: () =>

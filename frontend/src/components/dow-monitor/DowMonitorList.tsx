@@ -5,6 +5,7 @@ import type { RealtimeSymbolState } from '@/lib/realtimeMarketData'
 import { cn } from '@/lib/cn'
 
 import { DowMonitorSparkline } from './DowMonitorSparkline'
+import { DowMonitorMobileRow } from './DowMonitorMobileRow'
 import { KeyInterpretationCell } from './KeyInterpretationCell'
 import { deriveInterpretationMarketContext } from './interpretationMarketContext'
 import { deriveKeyInterpretation } from './keyInterpretation'
@@ -219,7 +220,23 @@ export function DowMonitorList({
 
   return (
     <section aria-label="股票监控列表" className="overflow-hidden rounded-card border border-border bg-surface">
-      <div data-testid="dow-monitor-table-scroll" className="max-w-full overflow-x-auto">
+      <div data-testid="dow-monitor-mobile-list" className="md:hidden">
+        {interpretedItems.map(({ item, row, interpretation }) => (
+          <DowMonitorMobileRow
+            key={item.symbol}
+            item={item}
+            row={row}
+            interpretation={interpretation}
+            selected={selectedSymbol === item.symbol}
+            pendingToggle={pendingToggles.has(item.symbol)}
+            pendingRemoval={pendingRemovals.has(item.symbol)}
+            onSelect={onSelect}
+            onToggle={onToggle}
+            onRemove={onRemove}
+          />
+        ))}
+      </div>
+      <div data-testid="dow-monitor-table-scroll" className="hidden max-w-full overflow-x-auto md:block">
         <table className="w-full min-w-[1980px] border-collapse text-xs">
           <thead className="bg-elevated/70 text-[11px] text-muted">
             <tr>

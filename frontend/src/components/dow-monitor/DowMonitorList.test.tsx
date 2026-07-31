@@ -168,6 +168,36 @@ function anomalyRealtime({
 }
 
 describe('DowMonitorList', () => {
+  it('renders the four approved mobile fields separately from the desktop table', () => {
+    render(
+      <DowMonitorList
+        items={[item()]}
+        notifications={[]}
+        realtimeStates={new Map()}
+        selectedSymbol={null}
+        page={1}
+        pageCount={1}
+        total={1}
+        onPageChange={vi.fn()}
+        onSelect={vi.fn()}
+        onToggle={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    )
+
+    const mobile = screen.getByTestId('dow-monitor-mobile-700.HK')
+    expect(mobile).toHaveTextContent('腾讯控股')
+    expect(mobile).toHaveTextContent('700.HK')
+    expect(mobile).toHaveTextContent('500.00')
+    expect(within(mobile).getByLabelText('700.HK 当日趋势')).toBeInTheDocument()
+    expect(within(mobile).getByTestId('key-interpretation-mobile')).toBeInTheDocument()
+    expect(screen.getByTestId('dow-monitor-mobile-list')).toHaveClass('md:hidden')
+    expect(screen.getByTestId('dow-monitor-table-scroll')).toHaveClass(
+      'hidden',
+      'md:block',
+    )
+  })
+
   it('renders the ten grouped columns with interpretation after the intraday line', () => {
     render(
       <DowMonitorList
@@ -335,7 +365,8 @@ describe('DowMonitorList', () => {
         onRemove={vi.fn()}
       />,
     )
-    const sparkline = screen.getByRole('img', { name: '700.HK 当日趋势' })
+    const desktop = screen.getByTestId('dow-monitor-table-scroll')
+    const sparkline = within(desktop).getByRole('img', { name: '700.HK 当日趋势' })
     expect(within(sparkline).getByTestId('sparkline-line')).toBeInTheDocument()
     expect(sparkline.querySelectorAll('polyline')).toHaveLength(1)
     expect(sparkline.querySelector('rect')).toBeNull()
@@ -487,7 +518,8 @@ describe('DowMonitorList', () => {
       expect(highlight).toHaveClass('border-danger', 'bg-danger/10', 'text-danger')
       expect(highlight).toHaveAccessibleName(new RegExp(`${label}.*突发异动`))
     }
-    expect(screen.getAllByText('异动')).toHaveLength(7)
+    const desktop = screen.getByTestId('dow-monitor-table-scroll')
+    expect(within(desktop).getAllByText('异动')).toHaveLength(7)
     expect(screen.getByTestId('key-interpretation')).toHaveTextContent('待确认')
     expect(screen.getByRole('row', { name: /腾讯控股/ })).not.toHaveClass('bg-danger/10')
     for (const group of ['momentum-speed', 'volume-funds', 'breakout-risk']) {
@@ -605,10 +637,11 @@ describe('DowMonitorList', () => {
       />,
     )
 
-    await user.click(screen.getByRole('row', { name: /腾讯控股/ }))
-    await user.click(screen.getByRole('button', { name: '查看详情 700.HK' }))
-    await user.click(screen.getByRole('button', { name: '暂停监控 700.HK' }))
-    await user.click(screen.getByRole('button', { name: '移除 700.HK' }))
+    const desktop = screen.getByTestId('dow-monitor-table-scroll')
+    await user.click(within(desktop).getByRole('row', { name: /腾讯控股/ }))
+    await user.click(within(desktop).getByRole('button', { name: '查看详情 700.HK' }))
+    await user.click(within(desktop).getByRole('button', { name: '暂停监控 700.HK' }))
+    await user.click(within(desktop).getByRole('button', { name: '移除 700.HK' }))
 
     expect(onSelect).toHaveBeenCalledTimes(2)
     expect(onSelect).toHaveBeenLastCalledWith('700.HK')

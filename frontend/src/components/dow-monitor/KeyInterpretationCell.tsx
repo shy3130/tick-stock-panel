@@ -32,21 +32,31 @@ function levelText(
 
 export function KeyInterpretationCell({
   interpretation,
+  compact = false,
+  testId = 'key-interpretation',
 }: {
   interpretation: KeyInterpretation
+  compact?: boolean
+  testId?: string
 }) {
   const category = CATEGORY_LABEL[interpretation.category]
   const risk = interpretation.category === 'RISK'
   return (
     <div
-      data-testid="key-interpretation"
-      className="grid min-w-[320px] gap-1 leading-tight text-foreground"
+      data-testid={testId}
+      className={cn(
+        'grid gap-1 leading-tight text-foreground',
+        compact ? 'min-w-0' : 'min-w-[320px]',
+      )}
       aria-label={`重点解读，${interpretation.accessibleText}`}
       title={interpretation.accessibleText}
     >
       <div
         data-interpretation-line="conclusion"
-        className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] font-semibold"
+        className={cn(
+          'flex min-w-0 items-start gap-1.5 text-[11px] font-semibold',
+          !compact && 'items-center whitespace-nowrap',
+        )}
       >
         <span
           className={cn(
@@ -58,7 +68,8 @@ export function KeyInterpretationCell({
         </span>
         <span
           className={cn(
-            'min-w-0 overflow-hidden text-ellipsis',
+            'min-w-0',
+            compact ? 'whitespace-normal' : 'overflow-hidden text-ellipsis',
             risk && 'text-danger',
           )}
         >
@@ -67,13 +78,19 @@ export function KeyInterpretationCell({
       </div>
       <div
         data-interpretation-line="explanation"
-        className="overflow-hidden text-ellipsis whitespace-nowrap text-[10px] text-foreground/80"
+        className={cn(
+          'text-[10px] text-foreground/80',
+          compact ? 'whitespace-normal' : 'overflow-hidden text-ellipsis whitespace-nowrap',
+        )}
       >
         {interpretation.explanation}
       </div>
       <div
         data-interpretation-line="levels"
-        className="overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[9px] text-muted"
+        className={cn(
+          'font-mono text-[9px] text-muted',
+          compact ? 'whitespace-normal' : 'overflow-hidden text-ellipsis whitespace-nowrap',
+        )}
       >
         {interpretation.levels.length === 0
           ? '关键价待确认'

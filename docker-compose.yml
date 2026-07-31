@@ -11,6 +11,8 @@ services:
         BASE_IMAGE_PREFIX: ${BASE_IMAGE_PREFIX:-}
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.3}
+        BUILD_ID: ${BUILD_ID:-dev}
+        PUBLISHED_AT: ${PUBLISHED_AT:-}
     container_name: TickFlow_Stock_Panel
     ports:
       - "${PORT:-3018}:3018"

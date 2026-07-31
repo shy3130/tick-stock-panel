@@ -294,12 +294,12 @@ export function DowMonitor({
     : `数据源 ${overview.data.source}${sourceTime ? ` · ${sourceTime}` : ''}`
 
   return (
-    <div className="min-h-full bg-base">
+    <div className="min-h-full min-w-0 bg-base">
       <PageHeader
         title="趋势监控"
         subtitle={`${marketSymbols.length} 只 · ${statusLabel}`}
         right={(
-          <div className="flex min-w-max items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:min-w-max">
             <Link
               to={`/dow-monitor/help?market=${market}`}
               aria-label="指标说明"
@@ -310,7 +310,7 @@ export function DowMonitor({
             </Link>
             <form
               ref={symbolFormRef}
-              className="relative flex items-center gap-2"
+              className="relative flex min-w-0 flex-1 items-center gap-2 sm:flex-none"
               onSubmit={(event) => {
                 event.preventDefault()
                 submitSymbol()
@@ -333,7 +333,7 @@ export function DowMonitor({
                 aria-controls="dow-monitor-symbol-suggestions"
                 aria-expanded={suggestionsOpen && Boolean(symbolInput.trim())}
                 placeholder="代码或名称"
-                className="h-8 w-52 rounded-btn border border-border bg-elevated px-2.5 text-xs outline-none transition-colors placeholder:font-sans focus:border-accent/50"
+                className="h-8 min-w-0 flex-1 rounded-btn border border-border bg-elevated px-2.5 text-xs outline-none transition-colors placeholder:font-sans focus:border-accent/50 sm:w-52 sm:flex-none"
               />
               <button
                 type="submit"
@@ -422,7 +422,7 @@ export function DowMonitor({
         <span className="ml-auto text-[10px] text-muted">{sourceLabel}</span>
       </div>
 
-      <main className="p-3 sm:px-5">
+      <main className="min-w-0 p-3 sm:px-5">
         {overview.isLoading && symbols.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted">加载监控状态…</div>
         ) : filteredSymbols.length === 0 ? (

@@ -11,11 +11,17 @@ ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG CODEX_CLI_VERSION=0.144.3
 ARG BASE_IMAGE_PREFIX=
+ARG BUILD_ID=dev
+ARG PUBLISHED_AT=
 
 # === Stage 1: 前端构建 ===
 FROM ${BASE_IMAGE_PREFIX}node:20-alpine AS frontend-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG BUILD_ID
+ARG PUBLISHED_AT
+ENV VITE_BUILD_ID=${BUILD_ID} \
+    VITE_PUBLISHED_AT=${PUBLISHED_AT}
 WORKDIR /build
 # 关键:corepack 不读 npm 的 registry 配置,且跨 RUN 不保留环境变量,
 # 因此国内网络下最稳的做法是直接用 npm 安装 pnpm(npm 会读取 .npmrc 镜像源),
@@ -71,6 +77,8 @@ ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
 ARG INCLUDE_STOCKSDK=0
+ARG BUILD_ID
+ARG PUBLISHED_AT
 WORKDIR /app
 
 # Node.js 运行时: 仅在启用 stock-sdk 插件时安装(供 node bridge.mjs 使用)。
@@ -133,7 +141,9 @@ COPY --from=stocksdk-builder /build/node_modules ./app/plugins/stocksdk/node_mod
 COPY tiers.yaml /app/tiers.yaml
 ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
-    DATA_DIR=/app/data
+    DATA_DIR=/app/data \
+    BUILD_ID=${BUILD_ID} \
+    PUBLISHED_AT=${PUBLISHED_AT}
 
 # Frontend 静态产物
 COPY --from=frontend-builder /build/dist ./static

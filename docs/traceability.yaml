@@ -428,3 +428,32 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-daily-payload-safety.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-07-31-dow-monitor-daily-payload-safety-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-MOBILE-COMPACT-LIST-001
+    specification: SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorMobileRow.tsx
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/components/dow-monitor/KeyInterpretationCell.tsx
+      - frontend/src/components/dow-monitor/DowMonitorDetailPanel.tsx
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/frontend/test_dow_monitor_mobile_version.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-mobile-version-refresh.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-mobile-version-refresh-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-FRONTEND-VERSION-REFRESH-001
+    specification: SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    implementation:
+      - backend/app/api/routes.py
+      - Dockerfile
+      - docker-compose.yml
+      - frontend/src/components/AppVersionGuard.tsx
+      - frontend/src/lib/appVersion.ts
+      - frontend/src/lib/api.ts
+      - frontend/src/main.tsx
+    tests:
+      - {path: tests/backend/test_app_version.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_mobile_version.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-mobile-version-refresh.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-07-31-dow-monitor-mobile-version-refresh-review.md, type: independent-review}

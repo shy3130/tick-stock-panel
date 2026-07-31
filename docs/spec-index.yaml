@@ -103,7 +103,20 @@ specifications:
     status: authoritative
     requirements:
       - REQ-DOW-MONITOR-DAILY-PAYLOAD-SAFETY-001
-conflicts: []
+  - id: SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    path: docs/specs/dow-monitor-mobile-version-refresh.md
+    status: authoritative
+    requirements:
+      - REQ-DOW-MONITOR-MOBILE-COMPACT-LIST-001
+      - REQ-DOW-MONITOR-FRONTEND-VERSION-REFRESH-001
+conflicts:
+  - id: CON-20260731-DOW-MONITOR-MOBILE-LAYOUT-001
+    specifications:
+      - USER-20260729-DOW-MONITOR-LIST-WEBSOCKET
+      - SPEC-DOW-MONITOR-MOBILE-VERSION-REFRESH-001
+    status: resolved
+    resolution: The mobile specification controls list visibility below 768px; the existing complete table controls 768px and above, while details retain every indicator at all widths.
+    decision: docs/decisions/2026-07-31-dow-monitor-mobile-layout-precedence.md
 authority_decisions:
   - id: DEC-20260729-DOW-MONITOR-CONTROL-FALLBACK-001
     scope:
