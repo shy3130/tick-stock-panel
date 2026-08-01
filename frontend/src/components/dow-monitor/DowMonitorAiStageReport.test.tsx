@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
 import { DowMonitorAiStageReport } from './DowMonitorAiStageReport'
@@ -73,33 +74,58 @@ const analysis: DowMonitorHalfHourAiAnalysis = {
 }
 
 describe('DowMonitorAiStageReport', () => {
-  it('renders the approved business-analysis sections in decision order', () => {
-    const { container } = render(<DowMonitorAiStageReport analysis={analysis} />)
+  it('shows the decision summary first and keeps complete evidence closed by default', async () => {
+    const user = userEvent.setup()
+    render(<DowMonitorAiStageReport analysis={analysis} />)
 
-    expect(screen.getByText('尾盘V形修复，但突破未确认')).toBeInTheDocument()
-    expect(screen.getByText(/北京时间 11:00 至 12:00/)).toBeInTheDocument()
-    expect(screen.getByText(/60 个交易分钟/)).toBeInTheDocument()
-    expect(screen.getByText('V形修复')).toBeInTheDocument()
-    expect(screen.getByText(/持仓者可继续观察前高确认/)).toBeInTheDocument()
-    expect(screen.getByText(/未参与者等待放量站稳/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: analysis.report!.headline.title })).toBeVisible()
+    expect(screen.getByText(/北京时间 11:00 至 12:00/)).toBeVisible()
+    expect(screen.getByText(/60 个交易分钟/)).toBeVisible()
+    expect(screen.getByText(analysis.report!.holding_advice.advice)).toBeVisible()
+    expect(screen.getByText(analysis.report!.watching_advice.advice)).toBeVisible()
+    expect(screen.getByRole('heading', { name: '增强确认' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '风险出现' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '判断失效' })).toBeVisible()
 
-    const text = container.textContent ?? ''
-    const ordered = [
-      '本阶段分钟路径',
-      '分钟K线隐藏变化',
-      '与上一阶段相比',
-      '当日截至当前',
-      '通道与形态',
-      '量价与资金含义',
-      '持仓者建议',
-      '未参与者建议',
-      '下一阶段条件',
-      '数据质量',
-    ]
-    ordered.reduce((position, label) => {
-      const next = text.indexOf(label)
-      expect(next).toBeGreaterThan(position)
-      return next
-    }, -1)
+    const disclosure = screen
+      .getByText('展开完整分析（分钟路径、形态、量价、数据质量）')
+      .closest('details')
+    expect(disclosure).not.toHaveAttribute('open')
+
+    await user.click(screen.getByText('展开完整分析（分钟路径、形态、量价、数据质量）'))
+    expect(disclosure).toHaveAttribute('open')
+    expect(screen.getByRole('heading', { name: '本小时发生了什么' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '当日整体结构与量价资金' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '分析依据与数据质量' })).toBeVisible()
+
+    await user.click(screen.getByText('收起完整分析'))
+    expect(disclosure).not.toHaveAttribute('open')
+  })
+
+  it('stacks available next-stage groups and omits empty optional blocks', () => {
+    const sparse = {
+      ...analysis,
+      report: {
+        ...analysis.report!,
+        watching_advice: {
+          state: 'WAIT_CONFIRMATION' as const,
+          advice: '',
+          conditions: [],
+        },
+        next_stage_conditions: {
+          strengthen: ['站稳阶段高点'],
+          risk: [],
+          invalidation: ['跌破阶段低点'],
+        },
+      },
+    }
+    render(<DowMonitorAiStageReport analysis={sparse} />)
+
+    const conditions = screen.getByTestId('next-stage-conditions')
+    expect(conditions).toHaveClass('grid-cols-1')
+    expect(screen.getByRole('heading', { name: '增强确认' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: '风险出现' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '判断失效' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: '未参与者建议' })).not.toBeInTheDocument()
   })
 })
