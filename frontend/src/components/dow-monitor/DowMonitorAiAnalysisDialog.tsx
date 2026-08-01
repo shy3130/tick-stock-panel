@@ -9,6 +9,7 @@ import {
 } from './formatServerTimestamp'
 import type { DowMonitorHalfHourAiSummary } from './types'
 import { useDowMonitorAiDetail, useDowMonitorAiHistory } from './useDowMonitor'
+import { DowMonitorAiStageReport } from './DowMonitorAiStageReport'
 
 
 function checkpoint(value: string | null): string {
@@ -38,15 +39,15 @@ export function DowMonitorAiAnalysisDialog({
   return (
     <Modal
       onClose={onClose}
-      ariaLabel={`${symbol} 半小时综合分析`}
+      ariaLabel={`${symbol} 盘中AI阶段分析`}
       panelClassName="flex max-h-[92vh] w-[96vw] max-w-4xl flex-col overflow-hidden rounded-card border border-border bg-surface shadow-xl"
     >
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
         <div>
-          <h2 className="font-semibold">{symbol} 半小时综合分析</h2>
-          <p className="text-xs text-muted">独立累计分析，不改变实时解读和买卖信号</p>
+          <h2 className="font-semibold">{symbol} 盘中AI阶段分析</h2>
+          <p className="text-xs text-muted">独立阶段分析，不改变实时解读和买卖信号</p>
         </div>
-        <button type="button" aria-label="关闭半小时分析" onClick={onClose}>
+        <button type="button" aria-label="关闭盘中AI分析" onClick={onClose}>
           <X className="h-5 w-5" />
         </button>
       </header>
@@ -70,6 +71,9 @@ export function DowMonitorAiAnalysisDialog({
         {detail.isLoading && <p className="text-sm text-muted">分析加载中…</p>}
         {detail.isError && <p className="text-sm text-danger">分析暂时不可用</p>}
         {analysis && (
+          analysis.report ? (
+            <DowMonitorAiStageReport analysis={analysis} />
+          ) : (
           <div className="space-y-5 text-sm">
             <section>
               <p className="text-xs text-muted">
@@ -119,6 +123,7 @@ export function DowMonitorAiAnalysisDialog({
               本分析仅用于辅助识别盘中结构，不构成投资建议。
             </p>
           </div>
+          )
         )}
       </div>
     </Modal>

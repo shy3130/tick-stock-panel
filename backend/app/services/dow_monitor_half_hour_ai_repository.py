@@ -55,6 +55,11 @@ class DowMonitorHalfHourAiRepository:
           attempt UInt16,
           error_code Nullable(String),
           error_message Nullable(String),
+          report_frequency LowCardinality(String) DEFAULT 'half_hour',
+          stage_start Nullable(DateTime64(3, 'UTC')),
+          stage_trading_minutes Nullable(UInt16),
+          opportunity_change Nullable(String),
+          report_json String DEFAULT '{{}}',
           created_at DateTime64(3, 'UTC'),
           updated_at DateTime64(3, 'UTC')
         )
@@ -65,6 +70,19 @@ class DowMonitorHalfHourAiRepository:
 
     def ensure_schema(self) -> None:
         self._execute(self.create_table_sql, None)
+        table = f"{self._database}.lb_dow_monitor_half_hour_ai_analyses"
+        alterations = (
+            "report_frequency LowCardinality(String) DEFAULT 'half_hour'",
+            "stage_start Nullable(DateTime64(3, 'UTC'))",
+            "stage_trading_minutes Nullable(UInt16)",
+            "opportunity_change Nullable(String)",
+            "report_json String DEFAULT '{}'",
+        )
+        for definition in alterations:
+            self._execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {definition}",
+                None,
+            )
 
     def save(self, record: HalfHourAiAnalysis) -> None:
         document = record.model_dump(mode="json")
@@ -72,6 +90,7 @@ class DowMonitorHalfHourAiRepository:
             {
                 "window_end": _utc_text(record.window_end),
                 "data_cutoff": _utc_text(record.data_cutoff),
+                "stage_start": _utc_text_optional(record.stage_start),
                 "updated_at": _utc_text(record.updated_at),
                 "created_at": _utc_text(record.updated_at),
                 "evidence_json": json.dumps(
@@ -89,6 +108,9 @@ class DowMonitorHalfHourAiRepository:
                 "input_snapshot_json": json.dumps(
                     document.pop("input_snapshot"), ensure_ascii=False, default=str
                 ),
+                "report_json": json.dumps(
+                    document.pop("report"), ensure_ascii=False, default=str
+                ) if record.report is not None else "{}",
             }
         )
         self._execute(
@@ -136,7 +158,8 @@ class DowMonitorHalfHourAiRepository:
         rows = self._query(
             f"""
             SELECT analysis_id, market, symbol, trade_date, window_end, status,
-                   title, summary, updated_at
+                   report_frequency, stage_start, stage_trading_minutes,
+                   opportunity_change, title, summary, updated_at
             FROM {self._database}.lb_dow_monitor_half_hour_ai_analyses FINAL
             WHERE {conditions}
             ORDER BY market, symbol, window_end DESC, updated_at DESC
@@ -147,7 +170,12 @@ class DowMonitorHalfHourAiRepository:
             key = (str(row.get("market")), str(row.get("symbol")))
             if key not in output:
                 output[key] = HalfHourAiSummary.model_validate(
-                    _with_utc_datetimes(row, "window_end", "updated_at")
+                    _with_utc_datetimes(
+                        row,
+                        "window_end",
+                        "stage_start",
+                        "updated_at",
+                    )
                 )
         return output
 
@@ -171,7 +199,12 @@ class DowMonitorHalfHourAiRepository:
             seen.add(identity)
             summaries.append(
                 HalfHourAiSummary.model_validate(
-                    _with_utc_datetimes(row, "window_end", "updated_at")
+                    _with_utc_datetimes(
+                        row,
+                        "window_end",
+                        "stage_start",
+                        "updated_at",
+                    )
                 )
             )
         return summaries
@@ -188,28 +221,61 @@ class DowMonitorHalfHourAiRepository:
         )
         if not rows:
             return None
-        row = dict(rows[0])
-        for field in ("evidence", "risks", "scenarios", "data_quality", "input_snapshot"):
-            raw = row.pop(f"{field}_json", None)
-            row[field] = json.loads(raw or ("{}" if field == "input_snapshot" else "[]"))
-        return HalfHourAiAnalysis.model_validate(
-            _with_utc_datetimes(
-                row,
-                "window_end",
-                "data_cutoff",
-                "created_at",
-                "updated_at",
-            )
+        return _analysis_from_row(rows[0])
+
+    def latest_completed_before(
+        self,
+        market: str,
+        symbol: str,
+        trade_date: date,
+        window_end: datetime,
+    ) -> HalfHourAiAnalysis | None:
+        rows = self._query(
+            f"""
+            SELECT *
+            FROM {self._database}.lb_dow_monitor_half_hour_ai_analyses FINAL
+            WHERE market = {_quoted(market)}
+              AND symbol = {_quoted(symbol.upper())}
+              AND trade_date = toDate({_quoted(trade_date.isoformat())})
+              AND status = 'completed'
+              AND window_end < parseDateTime64BestEffort(
+                {_quoted(_utc_text(window_end))}, 3, 'UTC'
+              )
+            ORDER BY window_end DESC, updated_at DESC
+            LIMIT 1
+            """
         )
+        return _analysis_from_row(rows[0]) if rows else None
 
     def _summary_select(self, market: str, symbol: str) -> str:
         return f"""
             SELECT analysis_id, market, symbol, trade_date, window_end, status,
-                   title, summary, updated_at
+                   report_frequency, stage_start, stage_trading_minutes,
+                   opportunity_change, title, summary, updated_at
             FROM {self._database}.lb_dow_monitor_half_hour_ai_analyses FINAL
             WHERE market = {_quoted(market)}
               AND symbol = {_quoted(symbol.upper())}
         """
+
+
+def _analysis_from_row(source: dict) -> HalfHourAiAnalysis:
+    row = dict(source)
+    for field in ("evidence", "risks", "scenarios", "data_quality", "input_snapshot"):
+        raw = row.pop(f"{field}_json", None)
+        row[field] = json.loads(raw or ("{}" if field == "input_snapshot" else "[]"))
+    raw_report = row.pop("report_json", None)
+    parsed_report = json.loads(raw_report or "{}")
+    row["report"] = parsed_report or None
+    return HalfHourAiAnalysis.model_validate(
+        _with_utc_datetimes(
+            row,
+            "window_end",
+            "data_cutoff",
+            "stage_start",
+            "created_at",
+            "updated_at",
+        )
+    )
 
 
 def _utc_text(value: datetime | None) -> str:
@@ -218,6 +284,10 @@ def _utc_text(value: datetime | None) -> str:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must be timezone-aware")
     return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def _utc_text_optional(value: datetime | None) -> str | None:
+    return _utc_text(value) if value is not None else None
 
 
 def _with_utc_datetimes(row: dict, *fields: str) -> dict:

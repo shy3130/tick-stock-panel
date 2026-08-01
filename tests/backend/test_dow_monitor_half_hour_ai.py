@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, date, datetime
+import json
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,7 +15,14 @@ from app.api import dow_monitor
 from app.services.dow_monitor_client import LongbridgeDowClient
 from app.services.dow_monitor_half_hour_ai_calendar import HalfHourWindowCalendar
 from app.services.dow_monitor_half_hour_ai_models import (
+    ChannelAssessment,
     HalfHourAiAnalysis,
+    HourlyStageReport,
+    NextStageConditions,
+    PatternAssessment,
+    PositionAdvice,
+    StageHeadline,
+    StagePathSegment,
     analysis_id_for,
 )
 from app.services.dow_monitor_half_hour_ai_prompt import (
@@ -257,13 +265,35 @@ def test_cn_first_due_window_is_1000_beijing() -> None:
     ) == [datetime.fromisoformat("2026-07-31T10:00:00+08:00")]
 
 
-def test_hk_lunch_break_does_not_create_1230_window() -> None:
+def test_cn_schedule_uses_whole_hours_and_continuous_session_closes() -> None:
+    ends = HalfHourWindowCalendar().session_window_ends(
+        "cn",
+        date(2026, 7, 31),
+    )
+
+    assert ends == [
+        datetime.fromisoformat("2026-07-31T10:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T11:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T11:30:00+08:00"),
+        datetime.fromisoformat("2026-07-31T14:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T15:00:00+08:00"),
+    ]
+
+
+def test_hk_schedule_skips_lunch_and_resumes_at_next_whole_hour() -> None:
     ends = HalfHourWindowCalendar().session_window_ends(
         "hk",
         date(2026, 7, 31),
     )
-    assert datetime.fromisoformat("2026-07-31T12:30:00+08:00") not in ends
-    assert datetime.fromisoformat("2026-07-31T13:30:00+08:00") in ends
+
+    assert ends == [
+        datetime.fromisoformat("2026-07-31T10:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T11:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T12:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T14:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T15:00:00+08:00"),
+        datetime.fromisoformat("2026-07-31T16:00:00+08:00"),
+    ]
 
 
 def test_us_dst_session_maps_to_beijing_time() -> None:
@@ -271,7 +301,13 @@ def test_us_dst_session_maps_to_beijing_time() -> None:
         "us",
         date(2026, 7, 31),
     )
-    assert ends[0] == datetime.fromisoformat("2026-07-31T22:00:00+08:00")
+    assert ends == [
+        datetime.fromisoformat(f"2026-07-31T{hour:02d}:00:00+08:00")
+        for hour in range(22, 24)
+    ] + [
+        datetime.fromisoformat(f"2026-08-01T{hour:02d}:00:00+08:00")
+        for hour in range(0, 5)
+    ]
 
 
 def test_exchange_holiday_has_no_due_windows() -> None:
@@ -315,6 +351,190 @@ def test_repository_schema_is_permanent_and_saves_json_each_row() -> None:
     )
     assert calls[-1][0].endswith("FORMAT JSONEachRow")
     assert b'"analysis_id": "a1"' in (calls[-1][1] or b"")
+
+
+def hourly_report() -> HourlyStageReport:
+    return HourlyStageReport(
+        headline=StageHeadline(
+            title="尾盘V形修复，但突破未确认",
+            trend_bias="TRANSITION",
+            opportunity_change="STRENGTHENING",
+            summary="低点后持续修复，但仍需站稳前高。",
+        ),
+        stage_path=[
+            StagePathSegment(
+                period="15:00-16:00",
+                description="先下探后回升",
+                metric_keys=("stage.low", "stage.close"),
+            )
+        ],
+        hidden_changes=["低点出现在阶段前半段"],
+        comparison_with_previous="修复力度增强",
+        day_overview="全天仍处于区间下沿修复",
+        channel=ChannelAssessment(
+            direction="TRANSITION",
+            maturity="FORMING",
+            explanation="下降通道斜率收窄",
+            evidence_metric_keys=("stage.change_pct",),
+        ),
+        patterns=[
+            PatternAssessment(
+                name="V形修复",
+                status="CONFIRMED",
+                explanation="低点后收复阶段跌幅",
+                evidence_metric_keys=("stage.v_recovery_ratio",),
+                invalidation_metric_keys=("stage.low",),
+            )
+        ],
+        volume_capital_interpretation="尾段量能集中，但主动资金仍待确认。",
+        holding_advice=PositionAdvice(
+            state="HOLD_OBSERVE",
+            advice="持仓者观察前高确认。",
+            conditions=("站稳阶段前高",),
+        ),
+        watching_advice=PositionAdvice(
+            state="WAIT_CONFIRMATION",
+            advice="未参与者避免追高。",
+            conditions=("放量站稳阶段前高",),
+        ),
+        next_stage_conditions=NextStageConditions(
+            strengthen=("站稳阶段高点",),
+            risk=("跌回VWAP下方",),
+            invalidation=("跌破阶段低点",),
+        ),
+        confidence="MEDIUM",
+    )
+
+
+def test_hourly_report_model_rejects_unknown_business_enums() -> None:
+    payload = hourly_report().model_dump()
+    payload["headline"]["trend_bias"] = "SIDEWAYS_UP"
+
+    with pytest.raises(ValueError):
+        HourlyStageReport.model_validate(payload)
+
+
+def test_repository_adds_hourly_columns_and_round_trips_structured_report() -> None:
+    calls: list[tuple[str, bytes | None]] = []
+    repository = DowMonitorHalfHourAiRepository(
+        query_fn=lambda _sql: [],
+        execute_fn=lambda sql, payload=None: calls.append((sql, payload)) or b"",
+    )
+
+    repository.ensure_schema()
+
+    schema_sql = "\n".join(sql for sql, _payload in calls)
+    assert "ADD COLUMN IF NOT EXISTS report_frequency" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS stage_start" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS stage_trading_minutes" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS report_json" in schema_sql
+
+    calls.clear()
+    record = HalfHourAiAnalysis(
+        analysis_id="hourly-1",
+        market="us",
+        symbol="NBIS.US",
+        trade_date=date(2026, 7, 31),
+        window_end=beijing("2026-08-01T04:00:00"),
+        data_cutoff=beijing("2026-08-01T04:00:00"),
+        report_frequency="hourly",
+        stage_start=beijing("2026-08-01T03:00:00"),
+        stage_trading_minutes=60,
+        opportunity_change="STRENGTHENING",
+        report=hourly_report(),
+        status="completed",
+        title="尾盘V形修复，但突破未确认",
+        summary="修复增强",
+        updated_at=datetime.now(UTC),
+    )
+
+    repository.save(record)
+
+    payload = (calls[-1][1] or b"").decode("utf-8")
+    assert '"report_frequency": "hourly"' in payload
+    assert '"stage_trading_minutes": 60' in payload
+    assert '"report_json": "{' in payload
+
+
+def test_repository_reads_legacy_row_without_hourly_columns() -> None:
+    row = {
+        "analysis_id": "legacy-1",
+        "market": "us",
+        "symbol": "NBIS.US",
+        "trade_date": "2026-07-31",
+        "window_end": "2026-08-01 03:30:00.000",
+        "data_cutoff": "2026-08-01 03:30:00.000",
+        "status": "completed",
+        "title": "旧报告",
+        "summary": "旧摘要",
+        "conclusion": "旧结论",
+        "evidence_json": "[]",
+        "risks_json": "[]",
+        "scenarios_json": "[]",
+        "data_quality_json": "[]",
+        "input_snapshot_json": "{}",
+        "model_name": "legacy-model",
+        "attempt": 1,
+        "error_code": None,
+        "error_message": None,
+        "created_at": "2026-08-01 03:31:00.000",
+        "updated_at": "2026-08-01 03:31:00.000",
+    }
+    repository = DowMonitorHalfHourAiRepository(query_fn=lambda _sql: [row])
+
+    result = repository.get_by_id("legacy-1")
+
+    assert result is not None
+    assert result.report_frequency == "half_hour"
+    assert result.stage_start is None
+    assert result.report is None
+
+
+def test_repository_latest_completed_before_excludes_current_checkpoint() -> None:
+    queries: list[str] = []
+    row = {
+        "analysis_id": "previous-1",
+        "market": "us",
+        "symbol": "NBIS.US",
+        "trade_date": "2026-07-31",
+        "window_end": "2026-08-01 03:00:00.000",
+        "data_cutoff": "2026-08-01 03:00:00.000",
+        "status": "completed",
+        "title": "上一阶段",
+        "summary": "上一阶段摘要",
+        "conclusion": None,
+        "evidence_json": "[]",
+        "risks_json": "[]",
+        "scenarios_json": "[]",
+        "data_quality_json": "[]",
+        "input_snapshot_json": "{}",
+        "report_frequency": "hourly",
+        "stage_start": "2026-08-01 02:00:00.000",
+        "stage_trading_minutes": 60,
+        "opportunity_change": "UNCHANGED",
+        "report_json": hourly_report().model_dump_json(),
+        "model_name": "test-model",
+        "attempt": 1,
+        "error_code": None,
+        "error_message": None,
+        "created_at": "2026-08-01 03:01:00.000",
+        "updated_at": "2026-08-01 03:01:00.000",
+    }
+    repository = DowMonitorHalfHourAiRepository(
+        query_fn=lambda sql: queries.append(sql) or [row]
+    )
+
+    result = repository.latest_completed_before(
+        "us",
+        "NBIS.US",
+        date(2026, 7, 31),
+        beijing("2026-08-01T04:00:00"),
+    )
+
+    assert result is not None
+    assert result.analysis_id == "previous-1"
+    assert "status = 'completed'" in queries[0]
+    assert "window_end < parseDateTime64BestEffort" in queries[0]
 
 
 def test_repository_marks_clickhouse_datetime_values_as_utc() -> None:
@@ -396,6 +616,123 @@ def test_prompt_rejects_unknown_evidence_and_backend_owns_values() -> None:
         snapshot,
     )
     assert parsed.evidence[0].value == "54.00"
+
+
+def structured_snapshot():
+    closes = [99.5, 98.5, 97.0, 95.0, 96.0, 97.0, 98.0, 99.0, 100.5]
+    rows = []
+    previous = 100.0
+    for index, close in enumerate(closes):
+        rows.append(
+            {
+                "decision_minute": beijing("2026-07-31T22:00:00")
+                + timedelta(minutes=index),
+                "minute_open": previous,
+                "minute_high": max(previous, close) + 0.1,
+                "minute_low": min(previous, close) - 0.1,
+                "minute_close": close,
+                "minute_volume": 100,
+                "last_price": close,
+            }
+        )
+        previous = close
+    return HalfHourAiSnapshotBuilder().build(
+        market="us",
+        symbol="NBIS.US",
+        session_open=beijing("2026-07-31T21:30:00"),
+        stage_start=beijing("2026-07-31T22:00:00"),
+        window_end=beijing("2026-07-31T22:08:00"),
+        data_cutoff=beijing("2026-07-31T22:08:00"),
+        rows=rows,
+    )
+
+
+def structured_model_payload() -> dict:
+    return {
+        "title": "尾盘V形修复，但突破未确认",
+        "summary": "低点后持续修复，下一阶段观察前高确认。",
+        "conclusion": "阶段机会较上一阶段增强，但仍属于修复而非正式突破。",
+        "evidence": [
+            {"metric_key": "stage.close", "meaning": "收盘重新回到阶段成本上方"}
+        ],
+        "risks": ["重新跌破阶段低点会否定修复结构"],
+        "scenarios": [],
+        "data_quality": ["分钟结构完整，资金证据仍有限"],
+        "report": hourly_report().model_dump(mode="json"),
+    }
+
+
+def test_prompt_accepts_complete_structured_analyst_report() -> None:
+    parsed = HalfHourAiPromptService(generate_text=None).parse_and_validate(
+        json.dumps(structured_model_payload(), ensure_ascii=False),
+        structured_snapshot(),
+        require_report=True,
+    )
+
+    assert parsed.report is not None
+    assert parsed.report.headline.opportunity_change == "STRENGTHENING"
+    assert parsed.evidence[0].metric_key == "stage.close"
+
+
+def test_prompt_rejects_missing_hourly_report_for_new_model_calls() -> None:
+    payload = structured_model_payload()
+    payload.pop("report")
+
+    with pytest.raises(InvalidAiAnalysis, match="hourly stage report"):
+        HalfHourAiPromptService(generate_text=None).parse_and_validate(
+            json.dumps(payload, ensure_ascii=False),
+            structured_snapshot(),
+            require_report=True,
+        )
+
+
+def test_prompt_rejects_unknown_metric_key_inside_report() -> None:
+    payload = structured_model_payload()
+    payload["report"]["channel"]["evidence_metric_keys"] = ["invented.price"]
+
+    with pytest.raises(InvalidAiAnalysis, match="unknown evidence key"):
+        HalfHourAiPromptService(generate_text=None).parse_and_validate(
+            json.dumps(payload, ensure_ascii=False),
+            structured_snapshot(),
+            require_report=True,
+        )
+
+
+def test_prompt_rejects_indicator_only_narration_even_with_valid_shape() -> None:
+    payload = structured_model_payload()
+    report = payload["report"]
+    report["headline"]["summary"] = "VWAP、MACD、RSI、量比"
+    report["comparison_with_previous"] = "VWAP、MACD、RSI、量比"
+    report["day_overview"] = "VWAP、MACD、RSI、量比"
+    report["volume_capital_interpretation"] = "VWAP、MACD、RSI、量比"
+    report["channel"]["explanation"] = "VWAP、MACD、RSI、量比"
+    for advice_key in ("holding_advice", "watching_advice"):
+        report[advice_key]["advice"] = "VWAP、MACD、RSI、量比"
+
+    with pytest.raises(InvalidAiAnalysis, match="indicator narration"):
+        HalfHourAiPromptService(generate_text=None).parse_and_validate(
+            json.dumps(payload, ensure_ascii=False),
+            structured_snapshot(),
+            require_report=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_analyze_requests_senior_analyst_report_with_larger_token_budget() -> None:
+    calls: list[tuple[list[dict], dict]] = []
+
+    async def generate(messages, **kwargs):
+        calls.append((messages, kwargs))
+        return json.dumps(structured_model_payload(), ensure_ascii=False)
+
+    parsed = await HalfHourAiPromptService(generate_text=generate).analyze(
+        structured_snapshot()
+    )
+
+    assert parsed.report is not None
+    assert calls[0][1]["max_tokens"] == 3200
+    assert calls[0][1]["temperature"] == 0.2
+    assert "高级盘中证券分析师" in calls[0][0][0]["content"]
 
 
 def test_cumulative_query_has_both_time_boundaries() -> None:
@@ -505,6 +842,7 @@ class WorkerAnalysisRepository:
     ) -> None:
         self.terminal = terminal or set()
         self.saved: list[HalfHourAiAnalysis] = []
+        self.previous: HalfHourAiAnalysis | None = None
 
     def exists_completed(self, _market, symbol, _trade_date, window_end):
         return (symbol, window_end) in self.terminal
@@ -513,6 +851,9 @@ class WorkerAnalysisRepository:
         self.saved.append(record)
         if record.status in {"completed", "insufficient_data", "failed"}:
             self.terminal.add((record.symbol, record.window_end))
+
+    def latest_completed_before(self, _market, _symbol, _trade_date, _window_end):
+        return self.previous
 
 
 class WorkerPrompt:
@@ -626,7 +967,41 @@ def test_select_due_windows_treats_created_at_equality_as_normal() -> None:
         terminal_window_ends=set(),
     )
 
-    assert selected == [previous, created_at]
+    assert selected == [created_at]
+
+
+def test_select_due_windows_returns_only_latest_missed_normal_checkpoint() -> None:
+    created_at = beijing("2026-07-31T21:45:00")
+    latest = beijing("2026-08-01T00:00:00")
+
+    selected = worker_module.select_due_windows(
+        completed_windows=[
+            beijing("2026-07-31T22:00:00"),
+            beijing("2026-07-31T23:00:00"),
+            latest,
+        ],
+        created_at=created_at,
+        terminal_window_ends=set(),
+    )
+
+    assert selected == [latest]
+
+
+def test_select_due_windows_does_not_fall_back_when_latest_normal_is_terminal() -> None:
+    created_at = beijing("2026-07-31T21:45:00")
+    latest = beijing("2026-08-01T00:00:00")
+
+    selected = worker_module.select_due_windows(
+        completed_windows=[
+            beijing("2026-07-31T22:00:00"),
+            beijing("2026-07-31T23:00:00"),
+            latest,
+        ],
+        created_at=created_at,
+        terminal_window_ends={latest},
+    )
+
+    assert selected == []
 
 
 @pytest.mark.parametrize(
@@ -932,6 +1307,63 @@ async def test_worker_never_loads_or_analyzes_rows_after_window_end() -> None:
     assert prompt.snapshots[0].data_cutoff == window_end
 
 
+@pytest.mark.asyncio
+async def test_worker_uses_previous_report_as_hourly_stage_boundary() -> None:
+    previous_end = beijing("2026-07-31T22:00:00")
+    current_end = beijing("2026-07-31T23:00:00")
+    previous = HalfHourAiAnalysis(
+        analysis_id="previous",
+        market="us",
+        symbol="RNG.US",
+        trade_date=date(2026, 7, 31),
+        window_end=previous_end,
+        data_cutoff=previous_end,
+        report_frequency="hourly",
+        stage_start=beijing("2026-07-31T21:30:00"),
+        stage_trading_minutes=31,
+        status="completed",
+        input_snapshot={
+            "market_structure": {
+                "trend_bias": "BEARISH",
+                "opportunity_score": -0.5,
+            }
+        },
+        updated_at=datetime.now(UTC),
+    )
+    rows = []
+    previous_close = 100.0
+    for minute, close in enumerate([100.2, 100.5, 100.8, 101.0, 101.3]):
+        rows.append(
+            {
+                "decision_minute": previous_end + timedelta(minutes=minute + 1),
+                "last_price": close,
+                "minute_open": previous_close,
+                "minute_high": max(previous_close, close) + 0.1,
+                "minute_low": min(previous_close, close) - 0.1,
+                "minute_close": close,
+                "minute_volume": 100,
+            }
+        )
+        previous_close = close
+    worker, _, _, repository, prompt, _ = make_worker(
+        completed=[current_end],
+        rows_by_symbol={"RNG.US": [rows]},
+    )
+    repository.previous = previous
+
+    assert await worker.run_due_jobs(now=current_end) == 1
+
+    snapshot = prompt.snapshots[0]
+    assert snapshot.stage_start == previous_end
+    assert snapshot.previous_stage is not None
+    assert snapshot.previous_stage.trend_bias == "BEARISH"
+    assert snapshot.market_structure.opportunity_change == "REVERSING"
+    completed = repository.saved[-1]
+    assert completed.report_frequency == "hourly"
+    assert completed.stage_start == previous_end
+    assert completed.stage_trading_minutes == 5
+
+
 def test_overview_is_lightweight_and_detail_is_loaded_on_demand(tmp_path) -> None:
     analysis = HalfHourAiAnalysis(
         analysis_id="analysis-1",
@@ -940,6 +1372,10 @@ def test_overview_is_lightweight_and_detail_is_loaded_on_demand(tmp_path) -> Non
         trade_date=date(2026, 7, 31),
         window_end=datetime.fromisoformat("2026-07-31T23:00:00+08:00"),
         data_cutoff=datetime.fromisoformat("2026-07-31T23:00:00+08:00"),
+        report_frequency="hourly",
+        stage_start=datetime.fromisoformat("2026-07-31T22:00:00+08:00"),
+        stage_trading_minutes=60,
+        opportunity_change="STRENGTHENING",
         status="completed",
         title="量价仍待确认",
         summary="价格回升但资金持续性不足",
@@ -947,6 +1383,7 @@ def test_overview_is_lightweight_and_detail_is_loaded_on_demand(tmp_path) -> Non
         risks=["样本有限"],
         data_quality=["完整"],
         input_snapshot={"observation_count": 61},
+        report=hourly_report(),
         updated_at=datetime.now(UTC),
     )
 
@@ -977,7 +1414,11 @@ def test_overview_is_lightweight_and_detail_is_loaded_on_demand(tmp_path) -> Non
 
     overview = client.get("/api/dow-monitor/overview").json()["symbols"][0]
     assert overview["half_hour_ai_analysis"]["analysis_id"] == "analysis-1"
+    assert overview["half_hour_ai_analysis"]["report_frequency"] == "hourly"
+    assert overview["half_hour_ai_analysis"]["stage_trading_minutes"] == 60
+    assert overview["half_hour_ai_analysis"]["opportunity_change"] == "STRENGTHENING"
     assert "conclusion" not in overview["half_hour_ai_analysis"]
+    assert "report" not in overview["half_hour_ai_analysis"]
     history = client.get(
         "/api/dow-monitor/RNG.US/ai-analyses",
         params={"trade_date": "2026-07-31"},
@@ -988,3 +1429,4 @@ def test_overview_is_lightweight_and_detail_is_loaded_on_demand(tmp_path) -> Non
     )
     assert detail.status_code == 200
     assert detail.json()["conclusion"] == "长内容只在详情中返回。"
+    assert detail.json()["report"]["headline"]["title"] == "尾盘V形修复，但突破未确认"

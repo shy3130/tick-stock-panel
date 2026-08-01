@@ -331,6 +331,56 @@ class _FakeModel:
                 "risks": ["Offline evidence can still be incomplete."],
                 "scenarios": [],
                 "data_quality": ["Bounded canonical minute results were used."],
+                "report": {
+                    "headline": {
+                        "title": "离线分钟结构已补足",
+                        "trend_bias": "TRANSITION",
+                        "opportunity_change": "UNCHANGED",
+                        "summary": "阶段路径已恢复，方向仍待下一阶段确认。",
+                    },
+                    "stage_path": [
+                        {
+                            "period": "开盘至检查点",
+                            "description": "价格沿分钟路径震荡修复。",
+                            "metric_keys": ["stage.low", "stage.close"],
+                        }
+                    ],
+                    "hidden_changes": ["离线分钟数据补足了阶段内部路径"],
+                    "comparison_with_previous": "首次报告，暂无上一阶段可比。",
+                    "day_overview": "当日累计结构仍处于方向确认阶段。",
+                    "channel": {
+                        "direction": "TRANSITION",
+                        "maturity": "FORMING",
+                        "explanation": "通道尚未成熟，等待后续高低点确认。",
+                        "evidence_metric_keys": ["stage.change_pct"],
+                    },
+                    "patterns": [
+                        {
+                            "name": "无成熟形态",
+                            "status": "NONE",
+                            "explanation": "当前阶段没有可确认的突破或反转。",
+                            "evidence_metric_keys": ["stage.change_pct"],
+                            "invalidation_metric_keys": [],
+                        }
+                    ],
+                    "volume_capital_interpretation": "量价证据已恢复，但资金推动仍需确认。",
+                    "holding_advice": {
+                        "state": "HOLD_OBSERVE",
+                        "advice": "持仓者继续观察结构确认。",
+                        "conditions": ["通道方向明确"],
+                    },
+                    "watching_advice": {
+                        "state": "WAIT_CONFIRMATION",
+                        "advice": "未参与者等待突破确认。",
+                        "conditions": ["量价同步突破"],
+                    },
+                    "next_stage_conditions": {
+                        "strengthen": ["高点和低点同步抬升"],
+                        "risk": ["量价出现背离"],
+                        "invalidation": ["跌破阶段低点"],
+                    },
+                    "confidence": "MEDIUM",
+                },
             }
         )
 

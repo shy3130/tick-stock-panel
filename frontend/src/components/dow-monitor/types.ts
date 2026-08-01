@@ -484,10 +484,75 @@ export type DowMonitorHalfHourAiStatus =
   | 'insufficient_data'
   | 'unavailable'
 
+export type DowMonitorAiTrendBias = 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'TRANSITION'
+export type DowMonitorAiOpportunityChange =
+  | 'STRENGTHENING'
+  | 'WEAKENING'
+  | 'UNCHANGED'
+  | 'REVERSING'
+export type DowMonitorAiAdviceState =
+  | 'FOCUS'
+  | 'WAIT_CONFIRMATION'
+  | 'HOLD_OBSERVE'
+  | 'DEFENSIVE'
+  | 'AVOID_CHASING'
+  | 'REDUCE_RISK'
+
+export interface DowMonitorAiStageReport {
+  headline: {
+    title: string
+    trend_bias: DowMonitorAiTrendBias
+    opportunity_change: DowMonitorAiOpportunityChange
+    summary: string
+  }
+  stage_path: Array<{
+    period: string
+    description: string
+    metric_keys: string[]
+  }>
+  hidden_changes: string[]
+  comparison_with_previous: string
+  day_overview: string
+  channel: {
+    direction: 'UP' | 'DOWN' | 'RANGE' | 'TRANSITION'
+    maturity: 'FORMING' | 'CONFIRMED' | 'FAILED' | 'NONE'
+    explanation: string
+    evidence_metric_keys: string[]
+  }
+  patterns: Array<{
+    name: string
+    status: 'FORMING' | 'CONFIRMED' | 'FAILED' | 'NONE'
+    explanation: string
+    evidence_metric_keys: string[]
+    invalidation_metric_keys: string[]
+  }>
+  volume_capital_interpretation: string
+  holding_advice: {
+    state: DowMonitorAiAdviceState
+    advice: string
+    conditions: string[]
+  }
+  watching_advice: {
+    state: DowMonitorAiAdviceState
+    advice: string
+    conditions: string[]
+  }
+  next_stage_conditions: {
+    strengthen: string[]
+    risk: string[]
+    invalidation: string[]
+  }
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+}
+
 export interface DowMonitorHalfHourAiSummary {
   analysis_id: string | null
   status: DowMonitorHalfHourAiStatus
   window_end: string | null
+  report_frequency: 'half_hour' | 'hourly'
+  stage_start: string | null
+  stage_trading_minutes: number | null
+  opportunity_change: DowMonitorAiOpportunityChange | null
   title: string | null
   summary: string | null
 }
@@ -515,6 +580,7 @@ export interface DowMonitorHalfHourAiAnalysis extends DowMonitorHalfHourAiHistor
     invalidates_when: string
   }>
   data_quality: string[]
+  report: DowMonitorAiStageReport | null
 }
 
 export interface DowMonitorHalfHourAiHistoryResponse {

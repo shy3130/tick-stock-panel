@@ -8,13 +8,21 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.services.dow_monitor_hourly_ai_structure import (
+    HourlyMarketStructure,
+    PreviousStageContext,
+    build_hourly_market_structure,
+)
+
 
 class HalfHourAiSnapshot(BaseModel):
     market: str
     symbol: str
     session_open: datetime
+    stage_start: datetime
     window_end: datetime
     data_cutoff: datetime
+    stage_trading_minutes: int
     observation_count: int
     range_start: datetime | None
     range_end: datetime | None
@@ -25,6 +33,8 @@ class HalfHourAiSnapshot(BaseModel):
     sufficient: bool
     data_quality: list[str] = Field(default_factory=list)
     evidence_values: dict[str, float] = Field(default_factory=dict)
+    market_structure: HourlyMarketStructure
+    previous_stage: PreviousStageContext | None = None
 
 
 class HalfHourAiSnapshotBuilder:
@@ -40,7 +50,10 @@ class HalfHourAiSnapshotBuilder:
         window_end: datetime,
         data_cutoff: datetime,
         rows: list[dict[str, Any]],
+        stage_start: datetime | None = None,
+        previous_stage: PreviousStageContext | None = None,
     ) -> HalfHourAiSnapshot:
+        effective_stage_start = stage_start or session_open
         filtered: list[tuple[datetime, dict[str, Any], float]] = []
         for row in rows:
             observed_at = _time(row.get("decision_minute") or row.get("observed_at"))
@@ -54,6 +67,17 @@ class HalfHourAiSnapshotBuilder:
                 continue
             filtered.append((observed_at, row, price))
         filtered.sort(key=lambda item: item[0])
+        market_structure = build_hourly_market_structure(
+            minute_rows=rows,
+            stage_start=effective_stage_start,
+            data_cutoff=data_cutoff,
+            previous_stage=previous_stage,
+        )
+        stage_times = {
+            observed_at
+            for observed_at, _row, _price in filtered
+            if effective_stage_start <= observed_at <= data_cutoff
+        }
         prices = [item[2] for item in filtered]
         evidence: dict[str, float] = {}
         if prices:
@@ -80,16 +104,24 @@ class HalfHourAiSnapshotBuilder:
                 value = _number(latest.get(key))
                 if value is not None:
                     evidence[key] = value
-        sufficient = len(filtered) >= self._minimum_observations
+        evidence.update(market_structure.evidence_values)
+        sufficient = len(stage_times) >= self._minimum_observations
         quality = [] if sufficient else [
-            f"有效分钟观察仅 {len(filtered)} 条，至少需要 {self._minimum_observations} 条"
+            f"有效阶段分钟观察仅 {len(stage_times)} 条，至少需要 {self._minimum_observations} 条"
         ]
+        if filtered and str(filtered[-1][1].get("data_quality") or "").upper() == "PARTIAL":
+            quality.append("最新实时评估数据不完整")
+        for reason in market_structure.data_quality:
+            if reason not in quality and len(stage_times) < self._minimum_observations:
+                quality.append(reason)
         return HalfHourAiSnapshot(
             market=market,
             symbol=symbol,
             session_open=session_open,
+            stage_start=effective_stage_start,
             window_end=window_end,
             data_cutoff=data_cutoff,
+            stage_trading_minutes=len(stage_times),
             observation_count=len(filtered),
             range_start=filtered[0][0] if filtered else None,
             range_end=filtered[-1][0] if filtered else None,
@@ -100,6 +132,8 @@ class HalfHourAiSnapshotBuilder:
             sufficient=sufficient,
             data_quality=quality,
             evidence_values=evidence,
+            market_structure=market_structure,
+            previous_stage=previous_stage,
         )
 
 

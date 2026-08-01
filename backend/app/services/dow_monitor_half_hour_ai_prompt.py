@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.services.dow_monitor_half_hour_ai_models import (
     AnalysisScenario,
+    HourlyStageReport,
     ValidatedEvidence,
 )
 from app.services.dow_monitor_half_hour_ai_snapshot import HalfHourAiSnapshot
@@ -48,6 +49,7 @@ class _ModelOutput(BaseModel):
     risks: list[str] = Field(min_length=1, max_length=8)
     scenarios: list[AnalysisScenario] = Field(default_factory=list, max_length=6)
     data_quality: list[str] = Field(min_length=1, max_length=8)
+    report: HourlyStageReport | None = None
 
 
 class ParsedAiAnalysis(BaseModel):
@@ -58,6 +60,7 @@ class ParsedAiAnalysis(BaseModel):
     risks: list[str]
     scenarios: list[AnalysisScenario]
     data_quality: list[str]
+    report: HourlyStageReport | None = None
 
 
 class HalfHourAiPromptService:
@@ -75,15 +78,18 @@ class HalfHourAiPromptService:
                 {
                     "role": "system",
                     "content": (
-                        "你是盘中结构分析助手。只依据输入证据，不给保证性结论或直接交易指令；"
-                        "区分观察、推断、场景和失效条件；必须说明风险与数据质量；只返回JSON。"
-                        "输出必须严格使用："
-                        '{"title":"短标题","summary":"不超过80字","conclusion":"综合分析",'
-                        '"evidence":[{"metric_key":"输入中存在的evidence_values键",'
-                        '"meaning":"为什么重要"}],"risks":["风险"],'
-                        '"scenarios":[{"condition":"条件","implication":"可能含义",'
-                        '"invalidates_when":"失效条件"}],"data_quality":["质量说明"]}。'
-                        "不得自行填写证据数值，数值由后端根据metric_key渲染。"
+                        "你是一位高级盘中证券分析师。你的任务是解释本阶段发生了什么、"
+                        "与上一阶段相比发生了什么变化、这些变化对持仓者和未参与者分别意味着什么。"
+                        "不得只罗列VWAP、动量、量比、盘口等指标；必须解释分钟路径、日内累计结构、"
+                        "通道、形态、量价资金推动或背离，以及下一阶段的确认、风险和失效条件。"
+                        "只依据输入事实，不给保证性结论、仓位比例、下单指令或正式买卖信号。"
+                        "所有数字必须由metric_key引用输入evidence_values，正文不得自行编造数值。"
+                        "只返回JSON，并保留title、summary、conclusion、evidence、risks、scenarios、"
+                        "data_quality字段，同时必须提供report字段。report严格匹配此JSON Schema："
+                        + json.dumps(
+                            HourlyStageReport.model_json_schema(),
+                            ensure_ascii=False,
+                        )
                     ),
                 },
                 {
@@ -94,14 +100,16 @@ class HalfHourAiPromptService:
                 },
             ],
             temperature=0.2,
-            max_tokens=1800,
+            max_tokens=3200,
         )
-        return self.parse_and_validate(raw, snapshot)
+        return self.parse_and_validate(raw, snapshot, require_report=True)
 
     def parse_and_validate(
         self,
         raw: str,
         snapshot: HalfHourAiSnapshot,
+        *,
+        require_report: bool = False,
     ) -> ParsedAiAnalysis:
         text = raw.strip()
         fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
@@ -111,6 +119,10 @@ class HalfHourAiPromptService:
             parsed = _ModelOutput.model_validate(json.loads(text))
         except (json.JSONDecodeError, ValidationError) as exc:
             raise InvalidAiAnalysis("AI output is not valid structured JSON") from exc
+        if require_report and parsed.report is None:
+            raise InvalidAiAnalysis("hourly stage report is required")
+        if parsed.report is not None:
+            self._validate_report(parsed.report, snapshot)
         evidence = []
         for claim in parsed.evidence:
             if claim.metric_key not in snapshot.evidence_values:
@@ -138,4 +150,51 @@ class HalfHourAiPromptService:
             risks=parsed.risks,
             scenarios=parsed.scenarios,
             data_quality=parsed.data_quality,
+            report=parsed.report,
         )
+
+    def _validate_report(
+        self,
+        report: HourlyStageReport,
+        snapshot: HalfHourAiSnapshot,
+    ) -> None:
+        keys: list[str] = []
+        for segment in report.stage_path:
+            keys.extend(segment.metric_keys)
+        keys.extend(report.channel.evidence_metric_keys)
+        for pattern in report.patterns:
+            keys.extend(pattern.evidence_metric_keys)
+            keys.extend(pattern.invalidation_metric_keys)
+        unknown = sorted(set(keys) - set(snapshot.evidence_values))
+        if unknown:
+            raise InvalidAiAnalysis(f"unknown evidence key: {unknown[0]}")
+
+        narrative = " ".join(
+            (
+                report.headline.summary,
+                report.comparison_with_previous,
+                report.day_overview,
+                report.channel.explanation,
+                report.volume_capital_interpretation,
+                report.holding_advice.advice,
+                report.watching_advice.advice,
+            )
+        )
+        meaning_tokens = (
+            "推动",
+            "背离",
+            "修复",
+            "承接",
+            "抛压",
+            "确认",
+            "失效",
+            "风险",
+            "机会",
+            "通道",
+            "突破",
+            "回踩",
+            "转弱",
+            "增强",
+        )
+        if not any(token in narrative for token in meaning_tokens):
+            raise InvalidAiAnalysis("indicator narration lacks business interpretation")

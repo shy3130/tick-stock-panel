@@ -120,6 +120,10 @@ specifications:
     requirements:
       - REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
       - REQ-DOW-MONITOR-HALF-HOUR-AI-VIEW-001
+      - REQ-DOW-MONITOR-HOURLY-AI-CADENCE-001
+      - REQ-DOW-MONITOR-HOURLY-AI-STAGE-REPORT-001
+      - REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001
+      - REQ-DOW-MONITOR-HOURLY-AI-VIEW-001
   - id: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     path: docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md
     status: authoritative
@@ -136,6 +140,13 @@ specifications:
       - REQ-DOW-MONITOR-MINUTE-RESULTS-REALTIME-APPEND-001
       - REQ-DOW-MONITOR-MINUTE-RESULTS-STAGGERED-BACKFILL-001
 conflicts:
+  - id: CON-20260801-DOW-MONITOR-HOURLY-AI-CADENCE-001
+    specifications:
+      - SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+      - SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
+    status: resolved
+    resolution: The updated intraday AI specification controls hourly and continuous-session-close checkpoints; the offline-bootstrap specification still controls bounded recovery, isolation, and resource limits, but its eligible checkpoints come from the updated calendar.
+    decision: docs/decisions/2026-08-01-dow-monitor-hourly-ai-cadence-precedence.md
   - id: CON-20260731-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     specifications:
       - SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001

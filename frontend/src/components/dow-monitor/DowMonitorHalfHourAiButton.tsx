@@ -30,6 +30,10 @@ export function DowMonitorHalfHourAiButton({
     analysis_id: null,
     status: 'unavailable' as const,
     window_end: null,
+    report_frequency: 'hourly' as const,
+    stage_start: null,
+    stage_trading_minutes: null,
+    opportunity_change: null,
     title: null,
     summary: null,
   }
@@ -39,7 +43,7 @@ export function DowMonitorHalfHourAiButton({
     <>
       <button
         type="button"
-        aria-label={`查看 ${symbol} 半小时分析`}
+        aria-label={`查看 ${symbol} 盘中AI分析`}
         disabled={!actionable}
         onClick={(event) => {
           event.stopPropagation()
@@ -51,7 +55,7 @@ export function DowMonitorHalfHourAiButton({
         )}
       >
         <span className="block text-[9px] text-muted">
-          半小时分析 · {STATUS_LABELS[current.status]}
+          {current.report_frequency === 'hourly' ? '盘中AI分析' : '历史半小时分析'} · {STATUS_LABELS[current.status]}
           {checkpoint ? ` · 北京时间 ${checkpoint.slice(11)}` : ''}
         </span>
         <strong className="block truncate text-[11px] font-medium">

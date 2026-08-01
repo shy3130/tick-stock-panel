@@ -48,12 +48,19 @@ class HalfHourWindowCalendar:
 
         checkpoints: list[datetime] = []
         for start, end in segments:
-            checkpoint = start + timedelta(minutes=30)
-            while checkpoint <= end:
+            local_start = start.astimezone(calendar.tz)
+            local_end = end.astimezone(calendar.tz)
+            checkpoint = local_start.replace(
+                minute=0,
+                second=0,
+                microsecond=0,
+            ) + timedelta(hours=1)
+            while checkpoint <= local_end:
                 checkpoints.append(checkpoint.astimezone(BEIJING))
-                checkpoint += timedelta(minutes=30)
-            if (checkpoints and checkpoints[-1] != end.astimezone(BEIJING)) or not checkpoints:
-                checkpoints.append(end.astimezone(BEIJING))
+                checkpoint += timedelta(hours=1)
+            end_beijing = local_end.astimezone(BEIJING)
+            if not checkpoints or checkpoints[-1] != end_beijing:
+                checkpoints.append(end_beijing)
         return checkpoints
 
     def completed_window_ends(

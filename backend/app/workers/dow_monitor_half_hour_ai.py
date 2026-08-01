@@ -22,6 +22,7 @@ from app.services.dow_monitor_half_hour_ai_repository import (
     DowMonitorHalfHourAiRepository,
 )
 from app.services.dow_monitor_half_hour_ai_snapshot import HalfHourAiSnapshotBuilder
+from app.services.dow_monitor_hourly_ai_structure import PreviousStageContext
 from app.services.dow_monitor_minute_result_history import (
     DowEngineStableStateBuilder,
     DowMonitorMinuteResultHistoryBuilder,
@@ -51,18 +52,19 @@ def select_due_windows(
         (window for window in completed_windows if window < created_at),
         default=None,
     )
-    startup = (
-        latest_before_created_at
-        if startup_eligible
-        and latest_before_created_at not in terminal_window_ends
-        else None
-    )
-    normal = sorted(
+    eligible = [
         window
         for window in completed_windows
-        if window >= created_at and window not in terminal_window_ends
-    )
-    return ([startup] if startup is not None else []) + normal
+        if window >= created_at
+    ]
+    if startup_eligible and latest_before_created_at is not None:
+        eligible.append(latest_before_created_at)
+    if not eligible:
+        return []
+    latest = max(eligible)
+    if latest in terminal_window_ends:
+        return []
+    return [latest]
 
 
 class DowMonitorHalfHourAiWorker:
@@ -140,7 +142,25 @@ class DowMonitorHalfHourAiWorker:
         )
         if session_open is None:
             return 0
-        snapshot = self._load_snapshot(symbol, session_open, window_end)
+        previous_analysis = self._analysis_repository.latest_completed_before(
+            symbol.market,
+            symbol.symbol,
+            trade_date,
+            window_end,
+        )
+        stage_start = (
+            previous_analysis.window_end
+            if previous_analysis is not None and previous_analysis.window_end is not None
+            else session_open
+        )
+        previous_stage = _previous_stage_context(previous_analysis)
+        snapshot = self._load_snapshot(
+            symbol,
+            session_open,
+            stage_start,
+            window_end,
+            previous_stage,
+        )
         identity = analysis_id_for(
             symbol.market,
             symbol.symbol,
@@ -177,7 +197,9 @@ class DowMonitorHalfHourAiWorker:
             snapshot = self._load_snapshot(
                 symbol,
                 session_open,
+                stage_start,
                 window_end,
+                previous_stage,
             )
             if not snapshot.sufficient:
                 self._analysis_repository.save(
@@ -244,11 +266,19 @@ class DowMonitorHalfHourAiWorker:
                 risks=parsed.risks,
                 scenarios=parsed.scenarios,
                 data_quality=parsed.data_quality,
+                report=parsed.report,
             )
         )
         return 1
 
-    def _load_snapshot(self, symbol, session_open, window_end):
+    def _load_snapshot(
+        self,
+        symbol,
+        session_open,
+        stage_start,
+        window_end,
+        previous_stage,
+    ):
         rows = self._minute_repository.load_cumulative_rows(
             [symbol.symbol],
             session_open,
@@ -261,6 +291,8 @@ class DowMonitorHalfHourAiWorker:
             window_end=window_end,
             data_cutoff=window_end,
             rows=rows,
+            stage_start=stage_start,
+            previous_stage=previous_stage,
         )
 
     def _record(
@@ -275,6 +307,12 @@ class DowMonitorHalfHourAiWorker:
         status,
         **values,
     ) -> HalfHourAiAnalysis:
+        report = values.pop("report", None)
+        opportunity_change = (
+            report.headline.opportunity_change
+            if report is not None
+            else snapshot.market_structure.opportunity_change
+        )
         return HalfHourAiAnalysis(
             analysis_id=analysis_id,
             market=market,
@@ -282,8 +320,13 @@ class DowMonitorHalfHourAiWorker:
             trade_date=trade_date,
             window_end=window_end,
             data_cutoff=window_end,
+            report_frequency="hourly",
+            stage_start=snapshot.stage_start,
+            stage_trading_minutes=snapshot.stage_trading_minutes,
+            opportunity_change=opportunity_change,
             status=status,
             input_snapshot=snapshot.model_dump(mode="json"),
+            report=report,
             updated_at=self._now_fn(),
             **values,
         )
@@ -292,6 +335,34 @@ class DowMonitorHalfHourAiWorker:
         close_fn, self._close_fn = self._close_fn, None
         if close_fn is not None:
             close_fn()
+
+
+def _previous_stage_context(
+    analysis: HalfHourAiAnalysis | None,
+) -> PreviousStageContext | None:
+    if analysis is None:
+        return None
+    structure = analysis.input_snapshot.get("market_structure")
+    if isinstance(structure, dict):
+        try:
+            return PreviousStageContext(
+                trend_bias=structure["trend_bias"],
+                opportunity_score=float(structure["opportunity_score"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+    if analysis.report is None:
+        return None
+    score = {
+        "BULLISH": 0.45,
+        "BEARISH": -0.45,
+        "NEUTRAL": 0.0,
+        "TRANSITION": 0.0,
+    }[analysis.report.headline.trend_bias]
+    return PreviousStageContext(
+        trend_bias=analysis.report.headline.trend_bias,
+        opportunity_score=score,
+    )
 
 
 def build_worker() -> DowMonitorHalfHourAiWorker:

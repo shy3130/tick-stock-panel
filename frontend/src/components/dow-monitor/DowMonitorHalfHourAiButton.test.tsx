@@ -19,6 +19,10 @@ const summary: DowMonitorHalfHourAiSummary = {
   analysis_id: 'analysis-1',
   status: 'completed',
   window_end: '2026-07-31T15:00:00',
+  report_frequency: 'hourly',
+  stage_start: '2026-07-31T14:00:00',
+  stage_trading_minutes: 60,
+  opportunity_change: 'STRENGTHENING',
   title: '量价仍待确认',
   summary: '价格回升但资金持续性不足',
 }
@@ -52,6 +56,7 @@ describe('DowMonitorHalfHourAiButton', () => {
       risks: ['样本有限'],
       scenarios: [],
       data_quality: ['数据完整'],
+      report: null,
     })
     renderButton()
 
@@ -60,7 +65,7 @@ describe('DowMonitorHalfHourAiButton', () => {
     expect(api.dowMonitorAiHistory).not.toHaveBeenCalled()
     expect(api.dowMonitorAiDetail).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 半小时分析' }))
+    fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 盘中AI分析' }))
 
     await waitFor(() => {
       expect(api.dowMonitorAiHistory).toHaveBeenCalledWith(
@@ -69,7 +74,7 @@ describe('DowMonitorHalfHourAiButton', () => {
       )
     })
     await waitFor(() => expect(api.dowMonitorAiDetail).toHaveBeenCalled())
-    expect(screen.getByRole('dialog', { name: 'RNG.US 半小时综合分析' }))
+    expect(screen.getByRole('dialog', { name: 'RNG.US 盘中AI阶段分析' }))
       .toBeInTheDocument()
     expect(screen.getByText('价格回升，但资金证据尚未同步。'))
       .toBeInTheDocument()

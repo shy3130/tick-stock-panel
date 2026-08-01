@@ -1829,6 +1829,10 @@ class DowMonitorService:
                     else "unavailable"
                 ),
                 "window_end": None,
+                "report_frequency": "hourly",
+                "stage_start": None,
+                "stage_trading_minutes": None,
+                "opportunity_change": None,
                 "title": None,
                 "summary": None,
             }
@@ -1836,6 +1840,10 @@ class DowMonitorService:
             "analysis_id": summary.analysis_id,
             "status": summary.status,
             "window_end": self._as_json_time(summary.window_end),
+            "report_frequency": summary.report_frequency,
+            "stage_start": self._as_json_time(summary.stage_start),
+            "stage_trading_minutes": summary.stage_trading_minutes,
+            "opportunity_change": summary.opportunity_change,
             "title": summary.title,
             "summary": summary.summary,
         }
