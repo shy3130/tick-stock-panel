@@ -61,9 +61,9 @@ function List({ items }: { items: string[] }) {
 function AdviceCard({ title, advice }: { title: string; advice: string }) {
   if (!hasText(advice)) return null
   return (
-    <section className="rounded-card border border-border p-3">
+    <section className="min-w-0 rounded-card border border-border p-3">
       <h4 className="text-xs font-medium text-muted">{title}</h4>
-      <p className="mt-1 break-words leading-6 text-secondary">{advice}</p>
+      <p className="mt-1 whitespace-normal break-words leading-6 text-secondary">{advice}</p>
     </section>
   )
 }
@@ -122,7 +122,10 @@ export function DowMonitorAiStageReport({
     || analysis.data_quality.some(hasText)
 
   return (
-    <div className="space-y-5 text-sm">
+    <div
+      data-testid="hourly-ai-stage-report"
+      className="min-w-0 space-y-5 whitespace-normal text-sm"
+    >
       <section
         aria-label="阶段结论"
         className="rounded-card border border-border bg-elevated p-4"
@@ -150,7 +153,7 @@ export function DowMonitorAiStageReport({
       </section>
 
       {hasAdvice && (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
           <AdviceCard title="持仓者建议" advice={report.holding_advice.advice} />
           <AdviceCard title="未参与者建议" advice={report.watching_advice.advice} />
         </div>
