@@ -2,8 +2,9 @@
 
 Date: 2026-08-01
 
-Status: local requirements-to-evidence review passed; no production-release
-claim is made.
+Status: local requirements-to-evidence review and production-release evidence
+review passed. The first live post-release hourly report remains a
+next-market-session observation.
 
 ## Authority and precedence
 
@@ -57,6 +58,33 @@ compliance check and clean-diff check collectively support local acceptance.
 The real `NBIS.US` replay additionally confirms that a late-volume repair is not
 misclassified as a mature reversal solely because the last price recovered.
 
-Deployment, container health, ClickHouse migration on 10.28, live model calls
-and static-bundle verification on the production host remain release-stage
-evidence and are intentionally not claimed here.
+## Production evidence review
+
+- Commit `1c0cc309d932c6fea176d6f9f590c0fd78d5e144` is the exact revision baked
+  into image
+  `sha256:176e2e17502a4fddb31cca3ae17e0f3d3964d0e2bf703aeb45bc8860fbda8c53`.
+  Both the 3018 app and dedicated AI worker run that image with zero restarts.
+- The additive ClickHouse migration preserved AI rows `156/156` and minute rows
+  `16438/14356` across physical/logical counts. Direct production readback of a
+  legacy `NBIS.US` row proves compatibility rather than relying on a snapshot.
+- 3018 health, production static-bundle resolution and the WebSocket
+  hello/snapshot/unsubscribe protocol were checked after the switch. The 19912
+  PID and start time remained unchanged and `/api/health` passed.
+- No release-window fatal log pattern was found. The worker configuration still
+  enforces model concurrency 1 and keeps the model path outside the real-time
+  WebSocket process.
+- The release occurred outside all applicable regular sessions. Therefore no
+  synthetic ClickHouse row or model output was created to manufacture live
+  evidence. The first real hourly report and its cross-market time rendering
+  must be observed at the next A/H/US sessions; this is a follow-up operational
+  observation, not a reason to weaken the already accepted deterministic
+  semantics.
+
+## Independent release conclusion
+
+The production switch satisfies the four traced requirements without changing
+their lower-layer acceptance basis. Storage compatibility, service isolation,
+static delivery and real-time protocol continuity are directly evidenced. The
+release is accepted with one explicit operational follow-up: observe the first
+naturally scheduled hourly report in each market instead of injecting a fake
+analysis outside trading hours.
