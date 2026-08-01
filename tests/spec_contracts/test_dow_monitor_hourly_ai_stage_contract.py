@@ -7,6 +7,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SPECIFICATION = "SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001"
 SPEC_PATH = "docs/specs/dow-monitor-half-hour-ai-analysis.md"
 DESIGN_PATH = "docs/superpowers/specs/2026-08-01-dow-monitor-hourly-ai-stage-analysis-design.md"
+DECISION_FIRST_DESIGN_PATH = (
+    "docs/superpowers/specs/"
+    "2026-08-02-dow-monitor-hourly-ai-decision-first-view-design.md"
+)
 DECISION_PATH = "docs/decisions/2026-08-01-dow-monitor-hourly-ai-cadence-precedence.md"
 CONFLICT_ID = "CON-20260801-DOW-MONITOR-HOURLY-AI-CADENCE-001"
 REQUIREMENT_IDS = {
@@ -16,6 +20,7 @@ REQUIREMENT_IDS = {
     "REQ-DOW-MONITOR-HOURLY-AI-STAGE-REPORT-001",
     "REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001",
     "REQ-DOW-MONITOR-HOURLY-AI-VIEW-001",
+    "REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001",
 }
 
 
@@ -77,4 +82,15 @@ def test_authoritative_spec_requires_analysis_instead_of_indicator_narration() -
     assert "持仓者" in spec
     assert "未参与者" in spec
     assert "不得仅复述指标" in spec
+    assert "Status: approved" in design
+
+
+def test_hourly_ai_view_is_decision_first_and_complete_evidence_is_disclosed() -> None:
+    spec = (ROOT / SPEC_PATH).read_text(encoding="utf-8")
+    design = (ROOT / DECISION_FIRST_DESIGN_PATH).read_text(encoding="utf-8")
+
+    assert "REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001" in spec
+    assert "decision summary" in spec
+    assert "closed by default" in spec
+    assert "strengthening, risk and invalidation" in spec
     assert "Status: approved" in design

@@ -553,6 +553,17 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-hourly-ai-stage-analysis.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-08-01-dow-monitor-hourly-ai-stage-analysis-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - frontend/src/components/dow-monitor/DowMonitorAiStageReport.tsx
+    tests:
+      - {path: frontend/src/components/dow-monitor/DowMonitorAiStageReport.test.tsx, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_half_hour_ai_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-hourly-ai-decision-first-view.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-hourly-ai-decision-first-view-review.md, type: independent-review}
   - id: REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001
     specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     implementation:

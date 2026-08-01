@@ -3,7 +3,7 @@
 ## Authority
 
 - Status: authoritative
-- Approved by: explicit user approvals on 2026-07-31 and 2026-08-01
+- Approved by: explicit user approvals on 2026-07-31, 2026-08-01 and 2026-08-02
 - Specification ID: `SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001`
 - Requirements:
   - `REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001`
@@ -12,6 +12,7 @@
   - `REQ-DOW-MONITOR-HOURLY-AI-STAGE-REPORT-001`
   - `REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001`
   - `REQ-DOW-MONITOR-HOURLY-AI-VIEW-001`
+  - `REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001`
 
 The internal half-hour class, table and type names MAY remain for backward
 compatibility. New user-facing behavior is an hourly intraday stage analysis.
@@ -107,13 +108,29 @@ checkpoint, stage interval, frequency, title, short summary and opportunity
 change. The complete structured report MUST be fetched only when the user opens
 the separate intraday-AI view.
 
-The new detail view MUST present, in order: headline, current-stage path,
-hidden minute changes, previous-stage comparison, day-to-now overview,
-channel/pattern assessment, volume/capital interpretation, holder guidance,
-watcher guidance, next-stage confirmation/risk/invalidation, and data quality.
+The new detail view MUST retain: headline, current-stage path, hidden minute
+changes, previous-stage comparison, day-to-now overview, channel/pattern
+assessment, volume/capital interpretation, holder guidance, watcher guidance,
+next-stage confirmation/risk/invalidation, and data quality. The decision-first
+view requirement controls default ordering and disclosure state.
 
 Visible checkpoints and cutoffs MUST interpret backend timestamps as UTC and
 render them explicitly in `Asia/Shanghai` (Beijing time). The history query date
 MUST remain the symbol exchange's trading date, including US sessions crossing
 Beijing midnight. Mobile MUST keep the existing compact first-four-column list
 and open the long report in a separate dialog.
+
+## REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001
+
+The structured hourly detail view MUST place a decision summary before its
+supporting evidence. The summary MUST include the concise conclusion,
+opportunity/risk direction, separate concise holder and watcher guidance, and
+available strengthening, risk and invalidation conditions. The three condition
+groups MUST be separately labelled and stacked vertically.
+
+Minute path, hidden changes, previous-stage comparison, cumulative structure,
+channel/pattern, volume/capital interpretation, confidence and data quality
+MUST remain available through one disclosure control that is closed by default
+and can be closed again. Empty optional values MUST NOT create empty blocks.
+The frontend MUST render structured text without Markdown parsing and MUST keep
+the same single-column information order on mobile.

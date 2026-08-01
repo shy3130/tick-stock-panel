@@ -124,6 +124,7 @@ specifications:
       - REQ-DOW-MONITOR-HOURLY-AI-STAGE-REPORT-001
       - REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001
       - REQ-DOW-MONITOR-HOURLY-AI-VIEW-001
+      - REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001
   - id: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     path: docs/superpowers/specs/2026-07-31-dow-monitor-offline-ai-bootstrap-design.md
     status: authoritative

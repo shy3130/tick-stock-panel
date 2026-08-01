@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-- Status: design approved in conversation; pending written-spec review
+- Status: approved
 - Approved direction: user selected option A on 2026-08-02
 - Parent specification: `SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001`
 - Proposed requirement: `REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001`
