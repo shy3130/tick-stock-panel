@@ -558,7 +558,6 @@ requirements:
     implementation:
       - frontend/src/components/dow-monitor/DowMonitorAiStageReport.tsx
     tests:
-      - {path: frontend/src/components/dow-monitor/DowMonitorAiStageReport.test.tsx, type: executable-test}
       - {path: tests/frontend/test_dow_monitor_half_hour_ai_frontend.py, type: executable-test}
       - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
     acceptance:
