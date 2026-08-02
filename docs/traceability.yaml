@@ -563,6 +563,26 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-hourly-ai-decision-first-view.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-08-02-dow-monitor-hourly-ai-decision-first-view-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-HOURLY-AI-MANUAL-RERUN-001
+    specification: SPEC-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001
+    implementation:
+      - backend/app/services/dow_monitor_half_hour_ai_models.py
+      - backend/app/services/dow_monitor_half_hour_ai_repository.py
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/api/dow_monitor.py
+      - backend/app/workers/dow_monitor_half_hour_ai.py
+      - frontend/src/components/dow-monitor/types.ts
+      - frontend/src/lib/api.ts
+      - frontend/src/lib/queryKeys.ts
+      - frontend/src/components/dow-monitor/useDowMonitor.ts
+      - frontend/src/components/dow-monitor/DowMonitorAiAnalysisDialog.tsx
+    tests:
+      - {path: tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py, type: executable-test}
+      - {path: tests/backend/test_dow_monitor_half_hour_ai.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_half_hour_ai_frontend.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-hourly-ai-manual-rerun.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-hourly-ai-manual-rerun-review.md, type: independent-review}
   - id: REQ-DOW-MONITOR-HALF-HOUR-AI-OFFLINE-BOOTSTRAP-001
     specification: SPEC-DOW-MONITOR-OFFLINE-AI-BOOTSTRAP-001
     implementation:

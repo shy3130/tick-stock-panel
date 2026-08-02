@@ -13,6 +13,7 @@
   - `REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001`
   - `REQ-DOW-MONITOR-HOURLY-AI-VIEW-001`
   - `REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001`
+  - `REQ-DOW-MONITOR-HOURLY-AI-MANUAL-RERUN-001`
 
 The internal half-hour class, table and type names MAY remain for backward
 compatibility. New user-facing behavior is an hourly intraday stage analysis.
@@ -134,3 +135,17 @@ MUST remain available through one disclosure control that is closed by default
 and can be closed again. Empty optional values MUST NOT create empty blocks.
 The frontend MUST render structured text without Markdown parsing and MUST keep
 the same single-column information order on mobile.
+
+## REQ-DOW-MONITOR-HOURLY-AI-MANUAL-RERUN-001
+
+An authenticated user MAY request regeneration of the currently selected,
+already stored hourly analysis. The request MUST be durable, deduplicated per
+analysis while active, and executed by the independent AI worker. Manual retry
+MAY run outside regular exchange hours, but MUST reuse the stored trade date,
+window end and data cutoff and MUST NOT read observations after that cutoff.
+
+The previous report MUST remain readable until a validated replacement is
+stored under the same logical key. Failure MUST preserve the previous report.
+Legacy 30-minute analyses MUST remain read-only. The API process MUST NOT call
+the model, and this path MUST NOT mutate realtime interpretation, formal
+signals, minute persistence or WebSocket ingestion.

@@ -12,6 +12,14 @@ DECISION_FIRST_DESIGN_PATH = (
     "2026-08-02-dow-monitor-hourly-ai-decision-first-view-design.md"
 )
 DECISION_PATH = "docs/decisions/2026-08-01-dow-monitor-hourly-ai-cadence-precedence.md"
+MANUAL_RERUN_DESIGN_PATH = (
+    "docs/superpowers/specs/"
+    "2026-08-02-dow-monitor-hourly-ai-manual-rerun-design.md"
+)
+MANUAL_RERUN_DECISION_PATH = (
+    "docs/decisions/"
+    "2026-08-02-dow-monitor-hourly-ai-manual-rerun-session-exception.md"
+)
 CONFLICT_ID = "CON-20260801-DOW-MONITOR-HOURLY-AI-CADENCE-001"
 REQUIREMENT_IDS = {
     "REQ-DOW-MONITOR-HALF-HOUR-AI-ANALYSIS-001",
@@ -21,6 +29,7 @@ REQUIREMENT_IDS = {
     "REQ-DOW-MONITOR-HOURLY-AI-MINUTE-PATH-001",
     "REQ-DOW-MONITOR-HOURLY-AI-VIEW-001",
     "REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001",
+    "REQ-DOW-MONITOR-HOURLY-AI-MANUAL-RERUN-001",
 }
 
 
@@ -94,3 +103,25 @@ def test_hourly_ai_view_is_decision_first_and_complete_evidence_is_disclosed() -
     assert "closed by default" in spec
     assert "strengthening, risk and invalidation" in spec
     assert "Status: approved" in design
+
+
+def test_manual_hourly_ai_rerun_is_authoritative_and_traced() -> None:
+    spec = (ROOT / SPEC_PATH).read_text(encoding="utf-8")
+    index = load_yaml("docs/spec-index.yaml")
+    traceability = load_yaml("docs/traceability.yaml")
+    requirement = "REQ-DOW-MONITOR-HOURLY-AI-MANUAL-RERUN-001"
+
+    assert requirement in spec
+    assert (ROOT / MANUAL_RERUN_DESIGN_PATH).is_file()
+    assert (ROOT / MANUAL_RERUN_DECISION_PATH).is_file()
+    assert requirement in next(
+        item["requirements"]
+        for item in index["specifications"]
+        if item["id"] == SPECIFICATION
+    )
+    traced = next(
+        item
+        for item in traceability["requirements"]
+        if item["id"] == requirement
+    )
+    assert traced["specification"] == SPECIFICATION
