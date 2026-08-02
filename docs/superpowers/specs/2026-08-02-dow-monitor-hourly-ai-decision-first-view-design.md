@@ -20,8 +20,10 @@ the whole report to understand the current opportunity, risk, and next action.
 
 ## Chosen approach
 
-Use one decision-summary card at the top and put the complete analytical
-evidence behind one explicit disclosure control. This preserves all existing
+Use one decision-summary card with a labelled `一眼结论` list at the top and put
+the complete analytical evidence behind one explicit disclosure control. The
+list is composed from existing structured report fields, so historical hourly
+reports receive the same presentation immediately. This preserves all existing
 report facts while changing the default reading path from evidence-first to
 decision-first.
 
@@ -31,18 +33,21 @@ make it harder to restore the complete report context.
 
 ## Default visible content
 
-The first screen MUST show, in this priority order:
+The first screen MUST begin with a labelled `一眼结论` list. It MUST contain no
+more than these six business conclusions, in this order, omitting an item only
+when its source fields are empty:
 
-1. A prominent one-sentence conclusion using the existing report headline and
-   headline summary.
-2. The current opportunity/risk direction.
-3. One concise conditional sentence for existing holders.
-4. One concise conditional sentence for users not yet involved.
-5. Exactly three separately labelled next-stage condition groups when data is
-   available:
-   - strengthening confirmation;
-   - weakening/risk signal;
-   - invalidation condition.
+1. `当前状态` from the existing headline title and summary.
+2. `这一小时` from the existing stage path and stage comparison.
+3. `资金含义` from the existing volume/capital interpretation.
+4. `转强条件` from the existing strengthening conditions.
+5. `风险条件` from the existing risk and invalidation conditions.
+6. `阶段建议` from the existing holder and watcher advice.
+
+Each item MUST use a visible business label and plain structured text. The
+current opportunity/risk direction and report time metadata remain visible but
+visually secondary. The existing next-stage condition cards MAY remain below
+the list as supporting detail, but MUST NOT precede the six conclusions.
 
 Report metadata such as checkpoint, stage interval, trading-minute count, and
 model/data context MUST remain available but MUST be visually secondary to the
@@ -103,8 +108,9 @@ separate AI dialog.
 ## Data and compatibility
 
 This change is presentation-only. It MUST NOT alter the hourly worker, model
-prompt, report schema, ClickHouse persistence, formal signals, real-time key
-interpretation, or WebSocket ingestion.
+prompt, report schema, ClickHouse persistence, API payload, formal signals,
+real-time key interpretation, or WebSocket ingestion. In particular, it MUST
+NOT add a second model call or require historical reports to be regenerated.
 
 Existing structured report fields remain authoritative. Legacy 30-minute
 reports continue through the current legacy renderer. The new view MUST NOT
@@ -124,6 +130,10 @@ as text and list items so model-produced markup cannot alter page structure.
    limitations from the existing structured payload.
 6. The layout remains single-column and readable at the supported mobile width.
 7. Legacy report rendering and backend report generation remain unchanged.
+8. The first visible card contains the labelled `一眼结论` list in the approved
+   order, with no more than six items.
+9. An existing hourly `report_json` row renders the list without regeneration,
+   schema migration, or Markdown parsing.
 
 ## Planned evidence
 
