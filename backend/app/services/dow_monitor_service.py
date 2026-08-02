@@ -1739,9 +1739,25 @@ class DowMonitorService:
             bars = bars[-2:]
         else:
             bars = []
+        list_bar_fields = (
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "ma5",
+            "ma10",
+            "ma20",
+        )
+        bars = [
+            {key: bar.get(key) for key in list_bar_fields if key in bar}
+            for bar in bars
+        ]
         chart = {"bars": bars}
-        if "turning" in source_chart:
-            chart["turning"] = source_chart["turning"]
+        turning = source_chart.get("turning")
+        if isinstance(turning, dict) and "signals" in turning:
+            chart["turning"] = {"signals": list(turning.get("signals") or [])}
         dumped["chart"] = chart
         return dumped
 

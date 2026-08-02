@@ -57,6 +57,7 @@ def _bars(count: int, *, previous_day: int = 0) -> list[dict]:
                 "ma5": 10.2 + index,
                 "ma10": 10.1 + index,
                 "ma20": 10.0 + index,
+                "detailOnly": {"payload": "x" * 1_000},
             }
         )
     return rows
@@ -79,7 +80,12 @@ def _save_states(service: DowMonitorService) -> None:
                 },
                 chart={
                     "bars": _bars(20, previous_day=2),
-                    "turning": {"signals": []},
+                    "turning": {
+                        "signals": [],
+                        "pivots": [{"large": "detail-only"}],
+                        "lines": [{"large": "detail-only"}],
+                        "openingBoxes": [{"large": "detail-only"}],
+                    },
                     "lines": [{"large": "detail-only"}],
                     "signals": [{"large": "detail-only"}],
                     "longTerm": {"large": "detail-only"},
@@ -140,6 +146,19 @@ def test_list_overview_reads_states_once_and_returns_compact_projection(
     assert states["day"]["chart"].get("bars", []) == []
     for state in states.values():
         assert set(state["chart"]) <= {"bars", "turning"}
+        assert set(state["chart"].get("turning", {})) <= {"signals"}
+        for bar in state["chart"].get("bars", []):
+            assert set(bar) <= {
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "ma5",
+                "ma10",
+                "ma20",
+            }
 
 
 def test_legacy_overview_also_uses_one_bulk_state_read(tmp_path, monkeypatch) -> None:

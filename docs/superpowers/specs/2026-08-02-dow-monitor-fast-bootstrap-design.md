@@ -49,6 +49,7 @@
 - `30m`：保留末尾最多 2 根 bars，以及 snapshot、freshness 和 turning signals；用于完成 K 过滤、通道、控制线和量比；
 - `60m`、`day`：保留 snapshot、freshness 和 turning signals，不返回 bars；用于既有预警选择；
 - 列表摘要不返回 lines、普通 signals、longTerm、headShoulders 等详情图表字段。
+- 列表 bars 仅保留 `timestamp`、OHLC、`volume`、`ma5`、`ma10`、`ma20`；turning 仅保留完整 `signals`，不得携带 `openingBoxes`、`pivots`、`lines` 或 `lineBreaks`。
 
 裁剪必须保持当前 `deriveMonitorRow()` 与 `deriveInterpretationMarketContext()` 对同一完整状态的列表语义等价。任何无法证明等价的字段必须保留，不能为了减包而改变指标结果。
 

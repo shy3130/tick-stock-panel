@@ -13,7 +13,8 @@
 
 - `tests/backend/test_dow_monitor_fast_bootstrap.py`：4 项通过。证明轻量 overview
   每次只读取一次状态集合、legacy overview 不再逐周期读盘、五周期裁剪边界、
-  通知摘要不含大快照、未变化 JSONL 不重载，以及 20 只股票/100 条通知的载荷门槛。
+  bars/turning 详情字段裁剪、通知摘要不含大快照、未变化 JSONL 不重载，
+  以及 20 只股票/100 条通知的载荷门槛。
 - `backend/tests/test_dow_monitor_api.py`：40 项通过。证明旧 overview、完整通知、
   已读回执、详情和既有监控 API 行为无回归。
 - `monitorListPresentation.test.ts` 新增完整状态与裁剪状态的派生等价测试，覆盖
