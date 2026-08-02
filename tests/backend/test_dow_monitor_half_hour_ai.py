@@ -17,6 +17,7 @@ from app.services.dow_monitor_half_hour_ai_calendar import HalfHourWindowCalenda
 from app.services.dow_monitor_half_hour_ai_models import (
     ChannelAssessment,
     HalfHourAiAnalysis,
+    HourlyAiRerunRequest,
     HourlyStageReport,
     NextStageConditions,
     PatternAssessment,
@@ -351,6 +352,66 @@ def test_repository_schema_is_permanent_and_saves_json_each_row() -> None:
     )
     assert calls[-1][0].endswith("FORMAT JSONEachRow")
     assert b'"analysis_id": "a1"' in (calls[-1][1] or b"")
+
+
+def test_rerun_repository_round_trips_request_and_finds_active() -> None:
+    calls: list[tuple[str, bytes | None]] = []
+    queries: list[str] = []
+    row = {
+        "request_id": "rerun-1",
+        "analysis_id": "analysis-1",
+        "market": "us",
+        "symbol": "RNG.US",
+        "trade_date": "2026-07-31",
+        "window_end": "2026-07-31 15:00:00.000",
+        "data_cutoff": "2026-07-31 15:00:00.000",
+        "status": "queued",
+        "requested_at": "2026-08-02 02:00:00.000",
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": "2026-08-02 02:00:00.000",
+        "error_code": None,
+        "error_message": None,
+    }
+
+    def query(sql: str) -> list[dict]:
+        queries.append(sql)
+        return [row]
+
+    repository = DowMonitorHalfHourAiRepository(
+        query_fn=query,
+        execute_fn=lambda sql, payload=None: calls.append((sql, payload)) or b"",
+    )
+    request = HourlyAiRerunRequest(
+        request_id="rerun-1",
+        analysis_id="analysis-1",
+        market="us",
+        symbol="RNG.US",
+        trade_date=date(2026, 7, 31),
+        window_end=beijing("2026-07-31T23:00:00"),
+        data_cutoff=beijing("2026-07-31T23:00:00"),
+        status="queued",
+        requested_at=beijing("2026-08-02T10:00:00"),
+        updated_at=beijing("2026-08-02T10:00:00"),
+    )
+
+    repository.ensure_schema()
+    repository.save_rerun_request(request)
+
+    assert "lb_dow_monitor_hourly_ai_rerun_requests" in (
+        repository.create_rerun_table_sql
+    )
+    assert "ReplacingMergeTree(updated_at)" in repository.create_rerun_table_sql
+    assert "ORDER BY request_id" in repository.create_rerun_table_sql
+    assert calls[-1][0].endswith("FORMAT JSONEachRow")
+    assert b'"request_id": "rerun-1"' in (calls[-1][1] or b"")
+    assert repository.active_rerun_request("analysis-1") == request
+    assert repository.next_runnable_rerun(
+        now=beijing("2026-08-02T10:01:00"),
+        stale_after=timedelta(minutes=10),
+    ) == request
+    assert "status IN ('queued', 'running')" in queries[0]
+    assert "ORDER BY requested_at ASC" in queries[1]
 
 
 def hourly_report() -> HourlyStageReport:

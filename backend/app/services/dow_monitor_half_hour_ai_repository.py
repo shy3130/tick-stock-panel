@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from app.plugins.clickhouse import bridge
 from app.services.dow_monitor_half_hour_ai_models import (
     HalfHourAiAnalysis,
     HalfHourAiSummary,
+    HourlyAiRerunRequest,
 )
 from app.services.dow_monitor_minute_result_repository import _default_execute
 
@@ -68,8 +69,34 @@ class DowMonitorHalfHourAiRepository:
         ORDER BY (market, symbol, trade_date, window_end)
         """
 
+    @property
+    def create_rerun_table_sql(self) -> str:
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._database}.lb_dow_monitor_hourly_ai_rerun_requests
+        (
+          request_id String,
+          analysis_id String,
+          market LowCardinality(String),
+          symbol String,
+          trade_date Date,
+          window_end DateTime64(3, 'UTC'),
+          data_cutoff DateTime64(3, 'UTC'),
+          status LowCardinality(String),
+          requested_at DateTime64(3, 'UTC'),
+          started_at Nullable(DateTime64(3, 'UTC')),
+          completed_at Nullable(DateTime64(3, 'UTC')),
+          updated_at DateTime64(3, 'UTC'),
+          error_code Nullable(String),
+          error_message Nullable(String)
+        )
+        ENGINE = ReplacingMergeTree(updated_at)
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY request_id
+        """
+
     def ensure_schema(self) -> None:
         self._execute(self.create_table_sql, None)
+        self._execute(self.create_rerun_table_sql, None)
         table = f"{self._database}.lb_dow_monitor_half_hour_ai_analyses"
         alterations = (
             "report_frequency LowCardinality(String) DEFAULT 'half_hour'",
@@ -83,6 +110,75 @@ class DowMonitorHalfHourAiRepository:
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {definition}",
                 None,
             )
+
+    def save_rerun_request(self, request: HourlyAiRerunRequest) -> None:
+        document = request.model_dump(mode="json")
+        document.update(
+            {
+                "window_end": _utc_text(request.window_end),
+                "data_cutoff": _utc_text(request.data_cutoff),
+                "requested_at": _utc_text(request.requested_at),
+                "started_at": _utc_text_optional(request.started_at),
+                "completed_at": _utc_text_optional(request.completed_at),
+                "updated_at": _utc_text(request.updated_at),
+            }
+        )
+        self._execute(
+            f"INSERT INTO {self._database}.lb_dow_monitor_hourly_ai_rerun_requests FORMAT JSONEachRow",
+            json.dumps(document, ensure_ascii=False).encode("utf-8"),
+        )
+
+    def latest_rerun_request(
+        self,
+        analysis_id: str,
+    ) -> HourlyAiRerunRequest | None:
+        rows = self._query(
+            f"""
+            SELECT *
+            FROM {self._database}.lb_dow_monitor_hourly_ai_rerun_requests FINAL
+            WHERE analysis_id = {_quoted(analysis_id)}
+            ORDER BY requested_at DESC, updated_at DESC
+            LIMIT 1
+            """
+        )
+        return _rerun_request_from_row(rows[0]) if rows else None
+
+    def active_rerun_request(
+        self,
+        analysis_id: str,
+    ) -> HourlyAiRerunRequest | None:
+        rows = self._query(
+            f"""
+            SELECT *
+            FROM {self._database}.lb_dow_monitor_hourly_ai_rerun_requests FINAL
+            WHERE analysis_id = {_quoted(analysis_id)}
+              AND status IN ('queued', 'running')
+            ORDER BY requested_at DESC, updated_at DESC
+            LIMIT 1
+            """
+        )
+        return _rerun_request_from_row(rows[0]) if rows else None
+
+    def next_runnable_rerun(
+        self,
+        *,
+        now: datetime,
+        stale_after: timedelta,
+    ) -> HourlyAiRerunRequest | None:
+        stale_before = now - stale_after
+        rows = self._query(
+            f"""
+            SELECT *
+            FROM {self._database}.lb_dow_monitor_hourly_ai_rerun_requests FINAL
+            WHERE status = 'queued'
+               OR (status = 'running' AND updated_at <= parseDateTime64BestEffort(
+                    {_quoted(_utc_text(stale_before))}, 3, 'UTC'
+                  ))
+            ORDER BY requested_at ASC, updated_at ASC
+            LIMIT 1
+            """
+        )
+        return _rerun_request_from_row(rows[0]) if rows else None
 
     def save(self, record: HalfHourAiAnalysis) -> None:
         document = record.model_dump(mode="json")
@@ -273,6 +369,20 @@ def _analysis_from_row(source: dict) -> HalfHourAiAnalysis:
             "data_cutoff",
             "stage_start",
             "created_at",
+            "updated_at",
+        )
+    )
+
+
+def _rerun_request_from_row(source: dict) -> HourlyAiRerunRequest:
+    return HourlyAiRerunRequest.model_validate(
+        _with_utc_datetimes(
+            source,
+            "window_end",
+            "data_cutoff",
+            "requested_at",
+            "started_at",
+            "completed_at",
             "updated_at",
         )
     )

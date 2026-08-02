@@ -14,6 +14,7 @@ HalfHourAiStatus = Literal[
     "insufficient_data",
     "unavailable",
 ]
+HourlyAiRerunStatus = Literal["queued", "running", "completed", "failed"]
 TrendBias = Literal["BULLISH", "BEARISH", "NEUTRAL", "TRANSITION"]
 OpportunityChange = Literal[
     "STRENGTHENING",
@@ -140,6 +141,23 @@ class HalfHourAiAnalysis(HalfHourAiSummary):
     input_snapshot: dict[str, Any] = Field(default_factory=dict)
     report: HourlyStageReport | None = None
     attempt: int = Field(default=1, ge=1, le=65535)
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class HourlyAiRerunRequest(BaseModel):
+    request_id: str
+    analysis_id: str
+    market: Literal["cn", "hk", "us"]
+    symbol: str
+    trade_date: date
+    window_end: datetime
+    data_cutoff: datetime
+    status: HourlyAiRerunStatus
+    requested_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    updated_at: datetime
     error_code: str | None = None
     error_message: str | None = None
 
