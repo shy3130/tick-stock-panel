@@ -1561,12 +1561,12 @@ export const api = {
     }),
   dowMonitorOverview: (market: DowMonitorMarket) =>
     request<DowMonitorOverviewResponse>(
-      uncached(`/api/dow-monitor/overview?market=${market}`),
+      uncached(`/api/dow-monitor/list-overview?market=${market}`),
       { cache: 'no-store' },
     ),
   dowMonitorNotifications: (market: DowMonitorMarket) =>
     request<DowMonitorNotificationsResponse>(
-      uncached(`/api/dow-monitor/notifications?market=${market}`),
+      uncached(`/api/dow-monitor/notification-summaries?market=${market}`),
       { cache: 'no-store' },
     ),
   markDowNotificationRead: (notificationId: string) =>

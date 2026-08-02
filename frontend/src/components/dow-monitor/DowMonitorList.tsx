@@ -10,6 +10,7 @@ import { DowMonitorHalfHourAiButton } from './DowMonitorHalfHourAiButton'
 import { KeyInterpretationCell } from './KeyInterpretationCell'
 import { deriveInterpretationMarketContext } from './interpretationMarketContext'
 import { deriveKeyInterpretation } from './keyInterpretation'
+import type { KeyInterpretation } from './keyInterpretation'
 import {
   deriveMonitorRow,
   type MonitorMomentum,
@@ -118,6 +119,8 @@ function AnomalyMetric({
 
 export function DowMonitorList({
   items,
+  summaryReadySymbols,
+  summaryError = false,
   notifications,
   realtimeStates,
   selectedSymbol,
@@ -134,6 +137,8 @@ export function DowMonitorList({
   onRemove,
 }: {
   items: DowMonitorOverviewSymbol[]
+  summaryReadySymbols?: ReadonlySet<string>
+  summaryError?: boolean
   notifications: DowMonitorNotification[]
   realtimeStates: ReadonlyMap<string, RealtimeSymbolState>
   selectedSymbol: string | null
@@ -149,6 +154,26 @@ export function DowMonitorList({
   onToggle: (symbol: string, enabled: boolean) => void
   onRemove: (symbol: string) => void
 }) {
+  const loadingInterpretation: KeyInterpretation = {
+    scenarioId: 'DATA_UNAVAILABLE',
+    category: 'DATA',
+    phase: 'NONE',
+    headline: '指标加载中',
+    explanation: '实时行情先展示，稳定指标正在异步补齐',
+    levels: [],
+    dimensions: [],
+    accessibleText: '数据，指标加载中，实时行情先展示，稳定指标正在异步补齐',
+  }
+  const errorInterpretation: KeyInterpretation = {
+    scenarioId: 'DATA_UNAVAILABLE',
+    category: 'DATA',
+    phase: 'NONE',
+    headline: '指标加载失败',
+    explanation: '实时行情继续更新，稳定指标保留为未确认',
+    levels: [],
+    dimensions: [],
+    accessibleText: '数据，指标加载失败，实时行情继续更新，稳定指标保留为未确认',
+  }
   const selectFromKeyboard = (
     event: KeyboardEvent<HTMLTableRowElement>,
     symbol: string,
@@ -211,12 +236,14 @@ export function DowMonitorList({
   const interpretedItems = presentedItems.map(({ item, row, realtime }) => ({
     item,
     row,
-    interpretation: deriveKeyInterpretation({
-      context: deriveInterpretationMarketContext({ item, row, realtime }),
-      anomalies: new Set(
-        SUDDEN_ANOMALY_METRICS.filter(metric => isAnomaly(item.symbol, metric)),
-      ),
-    }),
+    interpretation: summaryReadySymbols && !summaryReadySymbols.has(item.symbol)
+      ? summaryError ? errorInterpretation : loadingInterpretation
+      : deriveKeyInterpretation({
+          context: deriveInterpretationMarketContext({ item, row, realtime }),
+          anomalies: new Set(
+            SUDDEN_ANOMALY_METRICS.filter(metric => isAnomaly(item.symbol, metric)),
+          ),
+        }),
   }))
 
   return (

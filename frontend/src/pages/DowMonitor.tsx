@@ -12,12 +12,14 @@ import type {
   DowMonitorMarket,
   DowMonitorNotification,
   DowMonitorOverviewSymbol,
+  DowMonitorSymbol,
   DowMonitorSymbolMarket,
   DowTimeframe,
 } from '@/components/dow-monitor/types'
 import {
   useAddDowMonitorSymbol,
   useDowMonitorOverview,
+  useDowMonitorSymbols,
   useDowMonitorStatus,
   useDowNotifications,
   useRemoveDowMonitorSymbol,
@@ -25,7 +27,7 @@ import {
 } from '@/components/dow-monitor/useDowMonitor'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
-import { useRealtimeMarketData } from '@/lib/realtimeMarketData'
+import { canonicalRealtimeSymbol, useRealtimeMarketData } from '@/lib/realtimeMarketData'
 
 type SignalFilter = 'all' | 'active' | 'buy' | 'sell'
 type InstrumentSuggestion = {
@@ -71,6 +73,20 @@ function matchesSignal(filter: SignalFilter, side: string | null) {
   return side === 'SELL' || side === 'RISK'
 }
 
+function bootstrapOverviewSymbol(item: DowMonitorSymbol): DowMonitorOverviewSymbol {
+  return {
+    ...item,
+    name: null,
+    last_price: null,
+    change_pct: null,
+    quote_timestamp: null,
+    states: {},
+    latest_notification: null,
+    last_success_at: null,
+    last_error: null,
+  }
+}
+
 export function DowMonitor({
   onOpen,
 }: {
@@ -92,6 +108,7 @@ export function DowMonitor({
   const symbolFormRef = useRef<HTMLFormElement>(null)
 
   const overview = useDowMonitorOverview(market, realtimeActive)
+  const symbolQuery = useDowMonitorSymbols()
   const notificationQuery = useDowNotifications(market)
   const status = useDowMonitorStatus()
   const addSymbol = useAddDowMonitorSymbol()
@@ -133,16 +150,33 @@ export function DowMonitor({
     return () => document.removeEventListener('mousedown', closeSuggestions)
   }, [])
 
-  const symbols = overview.data?.symbols ?? []
+  const stableSymbols = overview.data?.symbols ?? []
+  const stableBySymbol = useMemo(
+    () => new Map(stableSymbols.map(item => [canonicalRealtimeSymbol(item.symbol), item])),
+    [stableSymbols],
+  )
+  const bootstrapSymbols = symbolQuery.data?.symbols ?? stableSymbols
+  const symbols = useMemo(
+    () => bootstrapSymbols.map(item => (
+      stableBySymbol.get(canonicalRealtimeSymbol(item.symbol))
+      ?? bootstrapOverviewSymbol(item)
+    )),
+    [bootstrapSymbols, stableBySymbol],
+  )
+  const summaryReadySymbols = useMemo(
+    () => new Set(stableSymbols.map(item => item.symbol)),
+    [stableSymbols],
+  )
   const notifications = notificationQuery.data?.notifications ?? []
   const marketSymbols = useMemo(
     () => symbols.filter(item => item.market === market),
     [market, symbols],
   )
   const filteredSymbols = useMemo(
-    () => marketSymbols.filter(item =>
-      matchesSignal(signal, signalSide(item, notifications))),
-    [marketSymbols, notifications, signal],
+    () => signal === 'all' || overview.isLoading || overview.isError
+      ? marketSymbols
+      : marketSymbols.filter(item => matchesSignal(signal, signalSide(item, notifications))),
+    [marketSymbols, notifications, overview.isError, overview.isLoading, signal],
   )
   const pagination = useMemo(
     () => paginateMonitorSymbols(filteredSymbols, page),
@@ -433,6 +467,8 @@ export function DowMonitor({
           <>
             <DowMonitorList
               items={visibleSymbols}
+              summaryReadySymbols={summaryReadySymbols}
+              summaryError={overview.isError && stableSymbols.length === 0}
               notifications={notifications}
               realtimeStates={realtime.states}
               selectedSymbol={selectedSymbol}

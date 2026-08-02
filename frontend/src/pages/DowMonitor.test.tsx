@@ -16,6 +16,7 @@ const hooks = vi.hoisted(() => ({
   remove: vi.fn(),
   setEnabled: vi.fn(),
   overview: {} as Record<string, unknown>,
+  symbols: {} as Record<string, unknown>,
   notifications: {} as Record<string, unknown>,
   status: {} as Record<string, unknown>,
 }))
@@ -37,12 +38,18 @@ vi.mock('@/lib/api', () => ({
 }))
 
 vi.mock('@/lib/realtimeMarketData', () => ({
+  canonicalRealtimeSymbol: (symbol: string) => {
+    const normalized = symbol.trim().toUpperCase()
+    const match = /^(\d{1,5})\.HK$/.exec(normalized)
+    return match ? `${match[1].replace(/^0+(?=\d)/, '')}.HK` : normalized
+  },
   useRealtimeMarketData: (...args: unknown[]) =>
     realtimeMocks.useRealtimeMarketData(...args),
 }))
 
 vi.mock('@/components/dow-monitor/useDowMonitor', () => ({
   useDowMonitorOverview: () => hooks.overview,
+  useDowMonitorSymbols: () => hooks.symbols,
   useDowMonitorStatus: () => hooks.status,
   useDowNotifications: () => hooks.notifications,
   useAddDowMonitorSymbol: () => ({
@@ -184,6 +191,19 @@ describe('Dow monitor list page', () => {
       isLoading: false,
       isError: false,
     }
+    hooks.symbols = {
+      data: {
+        symbols: symbols.map(({
+          symbol,
+          market,
+          enabled,
+          created_at,
+          updated_at,
+        }) => ({ symbol, market, enabled, created_at, updated_at })),
+      },
+      isLoading: false,
+      isError: false,
+    }
     hooks.notifications = {
       data: { notifications: symbols.flatMap(item => item.latest_notification ?? []) },
       isLoading: false,
@@ -224,6 +244,79 @@ describe('Dow monitor list page', () => {
       ['quote', 'depth', 'candlestick'],
       5,
     )
+  })
+
+  it('subscribes from the lightweight symbol feed before stable overview is ready', () => {
+    const bootstrap = symbols[0]
+    hooks.symbols = {
+      data: {
+        symbols: [{
+          symbol: bootstrap.symbol,
+          market: bootstrap.market,
+          enabled: bootstrap.enabled,
+          created_at: bootstrap.created_at,
+          updated_at: bootstrap.updated_at,
+        }],
+      },
+      isLoading: false,
+      isError: false,
+    }
+    hooks.overview = {
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    }
+    realtimeMocks.view = {
+      status: 'realtime',
+      states: new Map([[bootstrap.symbol.toUpperCase(), {
+        symbol: bootstrap.symbol,
+        streamId: 'bootstrap-stream',
+        sequence: 1,
+        eventAt: '2026-08-02T09:35:00+08:00',
+        publishedAt: '2026-08-02T09:35:00+08:00',
+        quote: {
+          lastDone: 123.45,
+          prevClose: 120,
+          timestamp: '2026-08-02T09:35:00+08:00',
+        },
+        quoteDelayed: false,
+        depthDelayed: false,
+        candlestickDelayed: false,
+      } as RealtimeSymbolState]]),
+    }
+
+    render(monitorNode())
+
+    expect(realtimeMocks.useRealtimeMarketData).toHaveBeenLastCalledWith(
+      [bootstrap.symbol],
+      ['quote', 'depth', 'candlestick'],
+      5,
+    )
+    expect(screen.getAllByText('123.45').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('指标加载中').length).toBeGreaterThan(0)
+  })
+
+  it('keeps bootstrap rows visible when the stable summary request fails', () => {
+    const bootstrap = symbols[0]
+    hooks.symbols = {
+      data: { symbols: [bootstrap] },
+      isLoading: false,
+      isError: false,
+    }
+    hooks.overview = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    }
+
+    render(monitorNode())
+
+    expect(realtimeMocks.useRealtimeMarketData).toHaveBeenLastCalledWith(
+      [bootstrap.symbol],
+      ['quote', 'depth', 'candlestick'],
+      5,
+    )
+    expect(screen.getAllByText('指标加载失败').length).toBeGreaterThan(0)
   })
 
   it('changes the WebSocket subscription with pagination', async () => {

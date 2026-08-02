@@ -82,6 +82,11 @@ def overview(request: Request, market: Market = "all") -> dict:
     return _service(request).overview(market)
 
 
+@router.get("/list-overview")
+def list_overview(request: Request, market: Market = "all") -> dict:
+    return _service(request).list_overview(market)
+
+
 @router.get("/notifications")
 def notifications(
     request: Request,
@@ -94,6 +99,26 @@ def notifications(
         unread_only=unread_only,
     )
     return {"notifications": [item.model_dump(mode="json") for item in rows]}
+
+
+@router.get("/notification-summaries")
+def notification_summaries(
+    request: Request,
+    market: Market = "all",
+    unread_only: bool = Query(False, alias="unreadOnly"),
+) -> dict:
+    selected_market = None if market == "all" else market
+    service = _service(request)
+    rows = service.store.list_notifications(
+        market=selected_market,
+        unread_only=unread_only,
+    )
+    return {
+        "notifications": [
+            service._notification_summary(item)
+            for item in rows
+        ]
+    }
 
 
 @router.patch("/notifications/{notification_id}/read")

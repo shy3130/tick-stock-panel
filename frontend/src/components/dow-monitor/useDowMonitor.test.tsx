@@ -8,6 +8,7 @@ import {
   useAddDowMonitorSymbol,
   useDowMonitorDetail,
   useDowMonitorOverview,
+  useDowMonitorSymbols,
   useDowMonitorStatus,
   useDowNotifications,
   useMarkDowNotificationRead,
@@ -54,7 +55,7 @@ describe('Dow monitor queries', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringMatching(/^\/api\/dow-monitor\/overview\?market=hk&_=\d+$/),
+        expect.stringMatching(/^\/api\/dow-monitor\/list-overview\?market=hk&_=\d+$/),
         expect.objectContaining({ cache: 'no-store' }),
       )
     })
@@ -71,7 +72,7 @@ describe('Dow monitor queries', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringMatching(/^\/api\/dow-monitor\/overview\?market=hk&_=\d+$/),
+        expect.stringMatching(/^\/api\/dow-monitor\/list-overview\?market=hk&_=\d+$/),
         expect.objectContaining({ cache: 'no-store' }),
       )
     })
@@ -87,13 +88,18 @@ describe('Dow monitor queries', () => {
     const { wrapper } = createWrapper()
 
     renderHook(() => {
+      useDowMonitorSymbols()
       useDowNotifications('us')
       useDowMonitorDetail('INTC.US', '15m')
     }, { wrapper })
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringMatching(/^\/api\/dow-monitor\/notifications\?market=us&_=\d+$/),
+        '/api/dow-monitor/symbols',
+        expect.objectContaining({}),
+      )
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/dow-monitor\/notification-summaries\?market=us&_=\d+$/),
         expect.objectContaining({ cache: 'no-store' }),
       )
       expect(fetchMock).toHaveBeenCalledWith(
@@ -177,8 +183,8 @@ describe('Dow monitor queries', () => {
 
     const symbol = response.symbols[0]
     expect(symbol.states['5m']?.chart.longTerm?.trendDirection).toBe('UP')
-    expect(symbol.latest_notification?.snapshot_payload.engine?.snapshot?.action).toBe('观察')
-    expect(symbol.latest_notification?.snapshot_payload.activation?.active).toBe(true)
+    expect(symbol.latest_notification?.snapshot_payload?.engine?.snapshot?.action).toBe('观察')
+    expect(symbol.latest_notification?.snapshot_payload?.activation?.active).toBe(true)
   })
 
   it('polls each read model every 15 seconds and retains successful data during a refresh', async () => {
@@ -246,6 +252,7 @@ describe('Dow monitor queries', () => {
 
     expect(removeQueries).toHaveBeenCalledWith({ queryKey: ['dow-monitor', 'detail', '01347.HK'] })
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['dow-monitor', 'overview'] })
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['dow-monitor', 'symbols'] })
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['dow-monitor', 'notifications'] })
     for (const [argument] of invalidateQueries.mock.calls) {
       const filter = argument as { queryKey?: readonly unknown[] } | undefined

@@ -658,3 +658,56 @@ requirements:
     acceptance:
       - {path: docs/acceptance/dow-monitor-incremental-evaluation.md, type: semantic-acceptance}
       - {path: docs/reviews/2026-07-31-dow-monitor-incremental-evaluation-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-FAST-BOOTSTRAP-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - frontend/src/pages/DowMonitor.tsx
+      - frontend/src/components/dow-monitor/useDowMonitor.ts
+      - frontend/src/components/dow-monitor/DowMonitorList.tsx
+      - frontend/src/lib/api.ts
+    tests:
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-LIGHTWEIGHT-LIST-OVERVIEW-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - backend/app/api/dow_monitor.py
+      - backend/app/services/dow_monitor_service.py
+      - backend/app/services/dow_monitor_store.py
+      - frontend/src/lib/api.ts
+    tests:
+      - {path: tests/backend/test_dow_monitor_fast_bootstrap.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-NOTIFICATION-SUMMARY-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - backend/app/api/dow_monitor.py
+      - backend/app/services/dow_monitor_store.py
+      - frontend/src/components/dow-monitor/useDowMonitor.ts
+      - frontend/src/lib/api.ts
+    tests:
+      - {path: tests/backend/test_dow_monitor_fast_bootstrap.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}
+  - id: REQ-DOW-MONITOR-STARTUP-PERFORMANCE-001
+    specification: SPEC-DOW-MONITOR-FAST-BOOTSTRAP-001
+    implementation:
+      - backend/app/services/dow_monitor_service.py
+      - frontend/src/pages/DowMonitor.tsx
+    tests:
+      - {path: tests/backend/test_dow_monitor_fast_bootstrap.py, type: executable-test}
+      - {path: tests/frontend/test_dow_monitor_fast_bootstrap_frontend.py, type: executable-test}
+      - {path: tests/spec_contracts/test_dow_monitor_fast_bootstrap_contract.py, type: executable-test}
+    acceptance:
+      - {path: docs/acceptance/dow-monitor-fast-bootstrap.md, type: semantic-acceptance}
+      - {path: docs/reviews/2026-08-02-dow-monitor-fast-bootstrap-review.md, type: independent-review}

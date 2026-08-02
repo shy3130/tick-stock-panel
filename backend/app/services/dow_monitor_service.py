@@ -1721,7 +1721,60 @@ class DowMonitorService:
             return presented.model_dump(mode="json")
         return decision.model_dump(mode="json")
 
+    @staticmethod
+    def _compact_list_state(state) -> dict:
+        dumped = state.model_dump(mode="json")
+        source_chart = dumped.get("chart") or {}
+        bars = list(source_chart.get("bars") or [])
+        if state.timeframe == "5m" and bars:
+            latest_day = str(bars[-1].get("timestamp") or "")[:10]
+            bars = [
+                bar
+                for bar in bars
+                if str(bar.get("timestamp") or "")[:10] == latest_day
+            ]
+        elif state.timeframe == "15m":
+            bars = bars[-16:]
+        elif state.timeframe == "30m":
+            bars = bars[-2:]
+        else:
+            bars = []
+        chart = {"bars": bars}
+        if "turning" in source_chart:
+            chart["turning"] = source_chart["turning"]
+        dumped["chart"] = chart
+        return dumped
+
+    @staticmethod
+    def _notification_summary(notification) -> dict:
+        payload = notification.model_dump(mode="json")
+        return {
+            key: payload.get(key)
+            for key in (
+                "notification_id",
+                "event_key",
+                "symbol",
+                "market",
+                "timeframe",
+                "side",
+                "action_name",
+                "shape_name",
+                "triggered_at",
+                "available_at",
+                "trigger_price",
+                "category",
+                "read_at",
+            )
+            if key in payload
+        }
+
     def overview(self, market: str = "all") -> dict:
+        return self._build_overview(market, compact=False)
+
+    def list_overview(self, market: str = "all") -> dict:
+        return self._build_overview(market, compact=True)
+
+    def _build_overview(self, market: str, *, compact: bool) -> dict:
         now = self._now()
         notifications = self.store.list_notifications(
             market=None if market == "all" else market,
@@ -1731,7 +1784,11 @@ class DowMonitorService:
         for notification in notifications:
             latest_by_symbol.setdefault(
                 notification.symbol,
-                notification.model_dump(mode="json"),
+                (
+                    self._notification_summary(notification)
+                    if compact
+                    else notification.model_dump(mode="json")
+                ),
             )
 
         items = [
@@ -1758,6 +1815,10 @@ class DowMonitorService:
         intraday_capital_by_symbol = self._intraday_capital_by_symbol(
             [item.symbol for item in items]
         )
+        state_index = {
+            (_monitor_symbol_identity(state.symbol), state.timeframe): state
+            for state in self.store.list_states()
+        }
         symbols = []
         source_timestamps: list[datetime] = []
         for item in items:
@@ -1771,9 +1832,15 @@ class DowMonitorService:
             )
             states = {}
             for timeframe in TIMEFRAMES:
-                state = self.store.get_state(item.symbol, timeframe)
+                state = state_index.get(
+                    (_monitor_symbol_identity(item.symbol), timeframe)
+                )
                 if state is not None:
-                    states[timeframe] = state.model_dump(mode="json")
+                    states[timeframe] = (
+                        self._compact_list_state(state)
+                        if compact
+                        else state.model_dump(mode="json")
+                    )
                     if state.source_timestamp is not None:
                         source_timestamps.append(state.source_timestamp)
             symbols.append(
@@ -1795,7 +1862,7 @@ class DowMonitorService:
                     "states": states,
                     "latest_notification": latest_by_symbol.get(item.symbol),
                     "last_success_at": self._as_json_time(
-                        self._last_success_for_symbol(item.symbol)
+                        self._last_success_for_symbol(item.symbol, state_index)
                     ),
                     "last_error": self._errors.get(item.symbol),
                     "history_backfill": history_statuses.get(
@@ -2371,13 +2438,21 @@ class DowMonitorService:
             raise ValueError("now_fn must return a timezone-aware datetime")
         return now
 
-    def _last_success_for_symbol(self, symbol: str) -> datetime | None:
+    def _last_success_for_symbol(
+        self,
+        symbol: str,
+        state_index: dict[tuple[str, str], DowTimeframeState] | None = None,
+    ) -> datetime | None:
         runtime = self._last_success_by_symbol.get(symbol)
         if runtime is not None:
             return runtime
         persisted: list[datetime] = []
         for timeframe in TIMEFRAMES:
-            state = self.store.get_state(symbol, timeframe)
+            state = (
+                state_index.get((_monitor_symbol_identity(symbol), timeframe))
+                if state_index is not None
+                else self.store.get_state(symbol, timeframe)
+            )
             if state is not None and state.snapshot and state.source_timestamp is not None:
                 persisted.append(state.source_timestamp)
         return max(persisted, default=None)

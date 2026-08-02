@@ -8,6 +8,15 @@ import type { DowMonitorMarket, DowTimeframe } from './types'
 const POLL_INTERVAL_MS = 15_000
 const DOW_MONITOR_OVERVIEW_KEY = ['dow-monitor', 'overview'] as const
 const DOW_MONITOR_NOTIFICATIONS_KEY = ['dow-monitor', 'notifications'] as const
+const DOW_MONITOR_SYMBOLS_KEY = ['dow-monitor', 'symbols'] as const
+
+export function useDowMonitorSymbols() {
+  return useQuery({
+    queryKey: QK.dowMonitorSymbols,
+    queryFn: () => api.dowMonitorSymbols(),
+    placeholderData: keepPreviousData,
+  })
+}
 
 export function useDowMonitorOverview(
   market: DowMonitorMarket,
@@ -83,7 +92,10 @@ export function useAddDowMonitorSymbol() {
   return useMutation({
     mutationFn: ({ symbol, enabled = true }: { symbol: string; enabled?: boolean }) =>
       api.addDowMonitorSymbol(symbol, enabled),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: DOW_MONITOR_SYMBOLS_KEY })
+      return queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY })
+    },
   })
 }
 
@@ -93,6 +105,7 @@ export function useRemoveDowMonitorSymbol() {
     mutationFn: (symbol: string) => api.removeDowMonitorSymbol(symbol),
     onSuccess: (_, symbol) => {
       queryClient.removeQueries({ queryKey: ['dow-monitor', 'detail', symbol] })
+      void queryClient.invalidateQueries({ queryKey: DOW_MONITOR_SYMBOLS_KEY })
       return queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY })
     },
   })
@@ -103,7 +116,10 @@ export function useSetDowMonitorEnabled() {
   return useMutation({
     mutationFn: ({ symbol, enabled }: { symbol: string; enabled: boolean }) =>
       api.setDowMonitorEnabled(symbol, enabled),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: DOW_MONITOR_SYMBOLS_KEY })
+      return queryClient.invalidateQueries({ queryKey: DOW_MONITOR_OVERVIEW_KEY })
+    },
   })
 }
 

@@ -85,6 +85,7 @@ export const QK = {
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
   // Dow monitor
+  dowMonitorSymbols: ['dow-monitor', 'symbols'] as const,
   dowMonitorOverview: (market: DowMonitorMarket) =>
                            ['dow-monitor', 'overview', market] as const,
   dowMonitorNotifications: (market: DowMonitorMarket) =>

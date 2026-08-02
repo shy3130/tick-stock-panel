@@ -38,6 +38,7 @@ class DowMonitorStore:
         self._activations_path = self._directory / "dow_monitor_activations.json"
         self._notifications, self._read_at = self._load_notifications()
         self._event_keys = {notification.event_key for notification in self._notifications}
+        self._notifications_signature = self._notification_file_signature()
 
     def list_symbols(self) -> list[MonitoredSymbol]:
         with self._lock:
@@ -198,6 +199,7 @@ class DowMonitorStore:
             self._append_jsonl_record(notification.model_dump(mode="json"))
             self._notifications.append(notification)
             self._event_keys.add(notification.event_key)
+            self._notifications_signature = self._notification_file_signature()
             return True
 
     def list_notifications(
@@ -257,6 +259,7 @@ class DowMonitorStore:
                     }
                 )
                 self._read_at[notification_id] = read_at
+                self._notifications_signature = self._notification_file_signature()
             return True
 
     def _load_models(
@@ -325,8 +328,19 @@ class DowMonitorStore:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _refresh_notifications(self) -> None:
+        signature = self._notification_file_signature()
+        if signature == self._notifications_signature:
+            return
         self._notifications, self._read_at = self._load_notifications()
         self._event_keys = {notification.event_key for notification in self._notifications}
+        self._notifications_signature = signature
+
+    def _notification_file_signature(self) -> tuple[int, int] | None:
+        try:
+            stat = self._notifications_path.stat()
+        except OSError:
+            return None
+        return stat.st_size, stat.st_mtime_ns
 
     def _write_json(
         self,

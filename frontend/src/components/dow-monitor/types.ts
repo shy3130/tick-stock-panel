@@ -333,7 +333,7 @@ export interface DowMonitorNotification {
   shape_name: string
   triggered_at: string
   trigger_price: number
-  snapshot_payload: DowMonitorNotificationSnapshot
+  snapshot_payload?: DowMonitorNotificationSnapshot
   read_at: string | null
   category?: 'BUY_POINT' | 'SELL_POINT' | 'EARLY_RISK'
   available_at?: string

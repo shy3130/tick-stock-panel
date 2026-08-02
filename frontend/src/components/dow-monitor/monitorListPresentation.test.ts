@@ -607,6 +607,59 @@ describe('monitor list presentation', () => {
     })).toEqual([10, 10.35])
   })
 
+  it('keeps list semantics identical after the approved compact state projection', () => {
+    const full = symbolFixture()
+    const makeBars = (count: number, minutes: number) => Array.from(
+      { length: count },
+      (_, index) => {
+        const timestamp = new Date(Date.UTC(2026, 6, 29, 1, 30 + index * minutes))
+        const close = 10 + index * 0.1
+        return {
+          index,
+          timestamp: timestamp.toISOString(),
+          open: close - 0.05,
+          high: close + 0.2,
+          low: close - 0.2,
+          close,
+          volume: 100 + index,
+          ma5: close - 0.1,
+          ma10: close - 0.2,
+          ma20: close - 0.3,
+        }
+      },
+    )
+    full.states['5m']!.chart.bars = [
+      { ...makeBars(1, 5)[0], timestamp: '2026-07-28T15:55:00+08:00' },
+      ...makeBars(18, 5),
+    ]
+    full.states['15m'] = state('15m', [10, 10.5], {
+      upward: true,
+      priceToLinePct: 1.2,
+      volumeRatio: 1.6,
+    })
+    full.states['15m']!.chart.bars = makeBars(24, 15)
+    full.states['30m'] = state('30m', [9.8, 10.5], { upward: true })
+    full.states['30m']!.chart.bars = makeBars(8, 30)
+
+    const compact = structuredClone(full)
+    compact.states['5m']!.chart.bars = compact.states['5m']!.chart.bars!.filter(
+      bar => bar.timestamp.startsWith('2026-07-29'),
+    )
+    compact.states['15m']!.chart.bars = compact.states['15m']!.chart.bars!.slice(-16)
+    compact.states['30m']!.chart.bars = compact.states['30m']!.chart.bars!.slice(-2)
+
+    const now = Date.parse('2026-07-29T09:35:30+08:00')
+    const fullRow = deriveMonitorRow(full, [], undefined, now)
+    const compactRow = deriveMonitorRow(compact, [], undefined, now)
+
+    expect(compactRow.trendPosition).toEqual(fullRow.trendPosition)
+    expect(compactRow.momentumSpeed).toEqual(fullRow.momentumSpeed)
+    expect(compactRow.volumeFunds).toEqual(fullRow.volumeFunds)
+    expect(compactRow.breakoutRisk).toEqual(fullRow.breakoutRisk)
+    expect(compactRow.signal).toEqual(fullRow.signal)
+    expect(compactRow.sparkline).toEqual(fullRow.sparkline)
+  })
+
   it('paginates with a fixed page size of twenty', () => {
     const items = Array.from({ length: 45 }, (_, index) =>
       symbolFixture({ symbol: `${index + 1}.HK` }))
