@@ -7,7 +7,7 @@ import logging
 import math
 import os
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.services.ai_provider import generate_ai_text
@@ -93,7 +93,7 @@ class DowMonitorHalfHourAiWorker:
 
     async def run_due_jobs(self, now: datetime | None = None) -> int:
         current = now or self._now_fn()
-        completed_count = 0
+        completed_count = await self.run_next_manual_rerun(current)
         for symbol in self._monitor_store.list_symbols():
             if not symbol.enabled:
                 continue
@@ -123,6 +123,195 @@ class DowMonitorHalfHourAiWorker:
                         exc,
                     )
         return completed_count
+
+    async def run_next_manual_rerun(
+        self,
+        now: datetime | None = None,
+    ) -> int:
+        current = now or self._now_fn()
+        request = self._analysis_repository.next_runnable_rerun(
+            now=current,
+            stale_after=timedelta(minutes=10),
+        )
+        if request is None:
+            return 0
+        source = self._analysis_repository.get_by_id(request.analysis_id)
+        symbol = next(
+            (
+                item
+                for item in self._monitor_store.list_symbols()
+                if item.enabled
+                and item.market == request.market
+                and normalize_monitor_symbol(item.symbol)
+                == normalize_monitor_symbol(request.symbol)
+            ),
+            None,
+        )
+        if (
+            source is None
+            or source.report_frequency != "hourly"
+            or source.market != request.market
+            or normalize_monitor_symbol(source.symbol)
+            != normalize_monitor_symbol(request.symbol)
+            or source.trade_date != request.trade_date
+            or source.window_end != request.window_end
+            or source.data_cutoff != request.data_cutoff
+            or symbol is None
+        ):
+            self._fail_manual_rerun(
+                request,
+                current,
+                "RERUN_SOURCE_INVALID",
+                "selected hourly analysis is no longer eligible",
+            )
+            return 0
+        running = request.model_copy(
+            update={
+                "status": "running",
+                "started_at": request.started_at or current,
+                "updated_at": current,
+                "error_code": None,
+                "error_message": None,
+            }
+        )
+        self._analysis_repository.save_rerun_request(running)
+        session_open = self._calendar.session_open(
+            source.market,
+            source.trade_date,
+        )
+        if session_open is None:
+            self._fail_manual_rerun(
+                running,
+                current,
+                "RERUN_SESSION_UNAVAILABLE",
+                "session boundary is unavailable",
+            )
+            return 0
+        previous_analysis = self._analysis_repository.latest_completed_before(
+            source.market,
+            source.symbol,
+            source.trade_date,
+            source.window_end,
+        )
+        stage_start = (
+            previous_analysis.window_end
+            if previous_analysis is not None
+            and previous_analysis.window_end is not None
+            else session_open
+        )
+        previous_stage = _previous_stage_context(previous_analysis)
+        try:
+            snapshot = self._load_snapshot(
+                symbol,
+                session_open,
+                stage_start,
+                request.data_cutoff,
+                previous_stage,
+            )
+            if not snapshot.sufficient:
+                outcome = await self._offline_bootstrap.ensure_checkpoint(
+                    symbol=symbol,
+                    session_open=session_open,
+                    window_end=request.data_cutoff,
+                )
+                if outcome.status == "busy":
+                    self._analysis_repository.save_rerun_request(
+                        running.model_copy(
+                            update={"status": "queued", "updated_at": current}
+                        )
+                    )
+                    return 0
+                if outcome.status in {
+                    "budget_exceeded",
+                    "timed_out",
+                    "failed",
+                }:
+                    self._fail_manual_rerun(
+                        running,
+                        current,
+                        outcome.error_code or "BACKFILL_FAILED",
+                        outcome.error_message,
+                    )
+                    return 0
+                snapshot = self._load_snapshot(
+                    symbol,
+                    session_open,
+                    stage_start,
+                    request.data_cutoff,
+                    previous_stage,
+                )
+            if not snapshot.sufficient:
+                self._fail_manual_rerun(
+                    running,
+                    current,
+                    "INSUFFICIENT_DATA",
+                    "；".join(snapshot.data_quality),
+                )
+                return 0
+            parsed = await self._prompt_service.analyze(snapshot)
+            replacement = self._record(
+                source.analysis_id,
+                source.market,
+                source.symbol,
+                source.trade_date,
+                source.window_end,
+                snapshot,
+                status="completed",
+                data_cutoff=source.data_cutoff,
+                attempt=source.attempt + 1,
+                title=parsed.title,
+                summary=parsed.summary,
+                conclusion=parsed.conclusion,
+                evidence=parsed.evidence,
+                risks=parsed.risks,
+                scenarios=parsed.scenarios,
+                data_quality=parsed.data_quality,
+                report=parsed.report,
+            )
+            self._analysis_repository.save(replacement)
+        except Exception as exc:
+            logger.warning(
+                "manual hourly AI rerun failed for %s at %s: %s",
+                request.symbol,
+                request.window_end.isoformat(),
+                exc,
+            )
+            self._fail_manual_rerun(
+                running,
+                current,
+                type(exc).__name__,
+                str(exc)[:500],
+            )
+            return 0
+        self._analysis_repository.save_rerun_request(
+            running.model_copy(
+                update={
+                    "status": "completed",
+                    "completed_at": current,
+                    "updated_at": current,
+                }
+            )
+        )
+        return 1
+
+    def _fail_manual_rerun(
+        self,
+        request,
+        current: datetime,
+        error_code: str,
+        error_message: str | None,
+    ) -> None:
+        self._analysis_repository.save_rerun_request(
+            request.model_copy(
+                update={
+                    "status": "failed",
+                    "completed_at": current,
+                    "updated_at": current,
+                    "error_code": error_code,
+                    "error_message": (error_message or "")[:500] or None,
+                }
+            )
+        )
 
     async def _run_checkpoint(self, symbol, window_end: datetime) -> int:
         trade_date = self._calendar.trade_date_for_checkpoint(
@@ -308,6 +497,7 @@ class DowMonitorHalfHourAiWorker:
         **values,
     ) -> HalfHourAiAnalysis:
         report = values.pop("report", None)
+        data_cutoff = values.pop("data_cutoff", window_end)
         opportunity_change = (
             report.headline.opportunity_change
             if report is not None
@@ -319,7 +509,7 @@ class DowMonitorHalfHourAiWorker:
             symbol=symbol,
             trade_date=trade_date,
             window_end=window_end,
-            data_cutoff=window_end,
+            data_cutoff=data_cutoff,
             report_frequency="hourly",
             stage_start=snapshot.stage_start,
             stage_trading_minutes=snapshot.stage_trading_minutes,

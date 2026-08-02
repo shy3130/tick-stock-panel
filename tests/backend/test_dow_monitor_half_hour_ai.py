@@ -904,6 +904,8 @@ class WorkerAnalysisRepository:
         self.terminal = terminal or set()
         self.saved: list[HalfHourAiAnalysis] = []
         self.previous: HalfHourAiAnalysis | None = None
+        self.source: HalfHourAiAnalysis | None = None
+        self.rerun_requests: list[HourlyAiRerunRequest] = []
 
     def exists_completed(self, _market, symbol, _trade_date, window_end):
         return (symbol, window_end) in self.terminal
@@ -916,10 +918,30 @@ class WorkerAnalysisRepository:
     def latest_completed_before(self, _market, _symbol, _trade_date, _window_end):
         return self.previous
 
+    def get_by_id(self, analysis_id):
+        if self.source is not None and self.source.analysis_id == analysis_id:
+            return self.source
+        return None
+
+    def next_runnable_rerun(self, *, now, stale_after):
+        del now, stale_after
+        return next(
+            (
+                item
+                for item in self.rerun_requests
+                if item.status in {"queued", "running"}
+            ),
+            None,
+        )
+
+    def save_rerun_request(self, request):
+        self.rerun_requests.append(request)
+
 
 class WorkerPrompt:
     def __init__(self) -> None:
         self.snapshots = []
+        self.error: Exception | None = None
 
     @property
     def window_ends(self):
@@ -927,6 +949,8 @@ class WorkerPrompt:
 
     async def analyze(self, snapshot):
         self.snapshots.append(snapshot)
+        if self.error is not None:
+            raise self.error
         return ParsedAiAnalysis(
             title="等待确认",
             summary="价格回升，资金证据仍不足",
@@ -998,6 +1022,90 @@ def make_worker(
         prompt,
         bootstrap,
     )
+
+
+def manual_rerun_source() -> HalfHourAiAnalysis:
+    return HalfHourAiAnalysis(
+        analysis_id="analysis-manual-1",
+        market="us",
+        symbol="RNG.US",
+        trade_date=date(2026, 7, 31),
+        window_end=beijing("2026-07-31T23:00:00"),
+        data_cutoff=beijing("2026-07-31T23:00:00"),
+        report_frequency="hourly",
+        stage_start=beijing("2026-07-31T22:00:00"),
+        stage_trading_minutes=60,
+        status="completed",
+        attempt=1,
+        title="原报告",
+        summary="原摘要",
+        conclusion="原结论",
+        report=hourly_report(),
+        updated_at=beijing("2026-07-31T23:00:05"),
+    )
+
+
+def manual_rerun_request(source: HalfHourAiAnalysis) -> HourlyAiRerunRequest:
+    return HourlyAiRerunRequest(
+        request_id="rerun-manual-1",
+        analysis_id=source.analysis_id,
+        market=source.market,
+        symbol=source.symbol,
+        trade_date=source.trade_date,
+        window_end=source.window_end,
+        data_cutoff=source.data_cutoff,
+        status="queued",
+        requested_at=beijing("2026-08-02T10:00:00"),
+        updated_at=beijing("2026-08-02T10:00:00"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_rerun_worker_runs_off_session_at_original_cutoff() -> None:
+    source = manual_rerun_source()
+    rows = sufficient_rows(source.window_end) + [
+        minute_row(beijing("2026-07-31T23:01:00"), 99)
+    ]
+    worker, calendar, minute_repository, repository, prompt, _bootstrap = (
+        make_worker(rows_by_symbol={"RNG.US": [rows]})
+    )
+    calendar.completed = []
+    repository.source = source
+    repository.rerun_requests = [manual_rerun_request(source)]
+
+    assert await worker.run_next_manual_rerun(
+        beijing("2026-08-02T10:05:00")
+    ) == 1
+
+    replacement = repository.saved[-1]
+    assert replacement.analysis_id == source.analysis_id
+    assert replacement.window_end == source.window_end
+    assert replacement.data_cutoff == source.data_cutoff
+    assert replacement.attempt == source.attempt + 1
+    assert minute_repository.loads[-1][2] == source.data_cutoff
+    assert prompt.snapshots[-1].latest_price == 54
+    assert repository.rerun_requests[-1].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_manual_rerun_worker_failure_preserves_previous_report() -> None:
+    source = manual_rerun_source()
+    worker, _calendar, _minutes, repository, prompt, _bootstrap = make_worker(
+        rows_by_symbol={"RNG.US": [sufficient_rows(source.window_end)]}
+    )
+    repository.source = source
+    repository.rerun_requests = [manual_rerun_request(source)]
+    prompt.error = RuntimeError("model unavailable")
+
+    assert await worker.run_next_manual_rerun(
+        beijing("2026-08-02T10:05:00")
+    ) == 0
+
+    assert repository.saved == []
+    assert repository.get_by_id(source.analysis_id) is source
+    failed = repository.rerun_requests[-1]
+    assert failed.status == "failed"
+    assert failed.error_code == "RuntimeError"
 
 
 def test_select_due_windows_never_falls_back_from_terminal_latest_startup() -> None:
