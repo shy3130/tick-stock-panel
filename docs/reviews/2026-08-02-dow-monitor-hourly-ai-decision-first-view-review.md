@@ -82,6 +82,7 @@ their own requirements and were not re-inferred from this UI result.
   traceability, acceptance, and runbook changes are supporting evidence.
 - **Evidence:** the focused RED failure named the missing accessible region;
   the final component suite passed 3/3, the affected frontend tests passed 4/4,
+  the final full frontend suite passed 47/47 files and 215 tests with 2 skipped,
   and the production build passed. These behavioral assertions, not the built
   bundle or a visual snapshot alone, provide semantic acceptance.
 

@@ -75,8 +75,10 @@ user-authorized action.
 - TDD evidence: the new component expectations first failed because the
   accessible `一眼结论` region did not exist. After the presentation-only
   implementation, `DowMonitorAiStageReport.test.tsx` passed all 3 tests. The
-  related report and AI-entry tests passed 4/4, and the production TypeScript/
-  Vite build succeeded with trend-monitor chunk `DowMonitor-C35O_jR6.js`.
+  related report and AI-entry tests passed 4/4. The final full frontend run
+  passed 47/47 test files and 215 tests, with 2 skipped and 0 failed. The
+  production TypeScript/Vite build succeeded with trend-monitor chunk
+  `DowMonitor-C35O_jR6.js`.
 
 This amendment has local semantic and build acceptance. Production deployment
 is not included and still requires an explicit release action.
