@@ -87,6 +87,36 @@ export function useDowMonitorAiDetail(
   })
 }
 
+export function useDowMonitorAiRerunStatus(
+  symbol: string,
+  analysisId: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: QK.dowMonitorAiRerun(symbol, analysisId),
+    queryFn: () => api.dowMonitorAiRerunStatus(symbol, analysisId),
+    enabled: enabled && !!symbol && !!analysisId,
+    refetchInterval: query => {
+      const status = query.state.data?.request?.status
+      return status === 'queued' || status === 'running' ? 2_000 : false
+    },
+  })
+}
+
+export function useRerunDowMonitorAi() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ symbol, analysisId }: { symbol: string; analysisId: string }) =>
+      api.rerunDowMonitorAi(symbol, analysisId),
+    onSuccess: (data, { symbol, analysisId }) => {
+      queryClient.setQueryData(
+        QK.dowMonitorAiRerun(symbol, analysisId),
+        { request: data.request },
+      )
+    },
+  })
+}
+
 export function useAddDowMonitorSymbol() {
   const queryClient = useQueryClient()
   return useMutation({

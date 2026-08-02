@@ -1,5 +1,6 @@
 import { X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 
 import { Modal } from '@/components/Modal'
 
@@ -8,7 +9,12 @@ import {
   formatServerTimestamp,
 } from './formatServerTimestamp'
 import type { DowMonitorHalfHourAiSummary } from './types'
-import { useDowMonitorAiDetail, useDowMonitorAiHistory } from './useDowMonitor'
+import {
+  useDowMonitorAiDetail,
+  useDowMonitorAiHistory,
+  useDowMonitorAiRerunStatus,
+  useRerunDowMonitorAi,
+} from './useDowMonitor'
 import { DowMonitorAiStageReport } from './DowMonitorAiStageReport'
 
 
@@ -28,6 +34,8 @@ export function DowMonitorAiAnalysisDialog({
   const tradeDate = formatExchangeTradeDate(latest.window_end, symbol)
   const history = useDowMonitorAiHistory(symbol, tradeDate, true)
   const [selectedId, setSelectedId] = useState(latest.analysis_id ?? '')
+  const queryClient = useQueryClient()
+  const refreshedRequest = useRef('')
   useEffect(() => {
     if (!selectedId && history.data?.analyses[0]?.analysis_id) {
       setSelectedId(history.data.analyses[0].analysis_id)
@@ -35,6 +43,39 @@ export function DowMonitorAiAnalysisDialog({
   }, [history.data, selectedId])
   const detail = useDowMonitorAiDetail(symbol, selectedId, Boolean(selectedId))
   const analysis = detail.data
+  const selected = history.data?.analyses.find(item => item.analysis_id === selectedId)
+  const hourlySelected = selected?.report_frequency === 'hourly'
+  const rerunStatus = useDowMonitorAiRerunStatus(
+    symbol,
+    selectedId,
+    Boolean(hourlySelected),
+  )
+  const rerun = useRerunDowMonitorAi()
+  const rerunRequest = rerunStatus.data?.request
+  const submittingSelected = rerun.isPending
+    && rerun.variables?.analysisId === selectedId
+  const rerunActive = rerunRequest?.status === 'queued'
+    || rerunRequest?.status === 'running'
+  const rerunLabel = submittingSelected
+    ? '提交中'
+    : rerunRequest?.status === 'queued'
+      ? '排队中'
+      : rerunRequest?.status === 'running'
+        ? '重跑中'
+        : rerunRequest?.status === 'completed'
+          ? '已更新'
+          : '重跑AI分析'
+
+  useEffect(() => {
+    if (
+      rerunRequest?.status !== 'completed'
+      || refreshedRequest.current === rerunRequest.request_id
+    ) return
+    refreshedRequest.current = rerunRequest.request_id
+    void detail.refetch()
+    void history.refetch()
+    void queryClient.invalidateQueries({ queryKey: ['dow-monitor', 'overview'] })
+  }, [detail, history, queryClient, rerunRequest])
 
   return (
     <Modal
@@ -42,15 +83,38 @@ export function DowMonitorAiAnalysisDialog({
       ariaLabel={`${symbol} 盘中AI阶段分析`}
       panelClassName="flex max-h-[92vh] w-[96vw] max-w-4xl flex-col overflow-hidden rounded-card border border-border bg-surface shadow-xl"
     >
-      <header className="flex items-center justify-between border-b border-border px-4 py-3">
+      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="font-semibold">{symbol} 盘中AI阶段分析</h2>
           <p className="text-xs text-muted">独立阶段分析，不改变实时解读和买卖信号</p>
         </div>
-        <button type="button" aria-label="关闭盘中AI分析" onClick={onClose}>
-          <X className="h-5 w-5" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {hourlySelected && (
+            <button
+              type="button"
+              disabled={submittingSelected || rerunActive}
+              onClick={() => {
+                if (!window.confirm(
+                  '将重新分析当前时间点。新报告成功后会替换当前报告，是否继续？',
+                )) return
+                rerun.mutate({ symbol, analysisId: selectedId })
+              }}
+              className="rounded-btn border border-accent px-2.5 py-1 text-xs text-accent disabled:cursor-wait disabled:opacity-60"
+            >
+              {rerunLabel}
+            </button>
+          )}
+          <button type="button" aria-label="关闭盘中AI分析" onClick={onClose}>
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </header>
+      {hourlySelected && rerunRequest?.status === 'failed' && (
+        <p className="break-words border-b border-border px-4 py-2 text-xs text-danger">
+          重跑失败，可再次尝试
+          {rerunRequest.error_message ? `：${rerunRequest.error_message}` : ''}
+        </p>
+      )}
       <div className="flex gap-2 overflow-x-auto border-b border-border px-4 py-2">
         {(history.data?.analyses ?? []).map(item => (
           <button

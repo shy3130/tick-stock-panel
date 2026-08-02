@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
+from time import sleep
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -1696,6 +1699,31 @@ def test_manual_rerun_api_queues_selected_report_and_deduplicates(tmp_path) -> N
     )
     assert status.status_code == 200
     assert status.json()["request"]["status"] == "queued"
+
+
+def test_manual_rerun_service_deduplicates_concurrent_requests(tmp_path) -> None:
+    client, repository = _manual_rerun_api_client(tmp_path)
+    service = client.app.state.dow_monitor_service
+    original_active = repository.active_rerun_request
+    callers_ready = Barrier(2)
+
+    def slow_active(analysis_id: str):
+        active = original_active(analysis_id)
+        sleep(0.05)
+        return active
+
+    repository.active_rerun_request = slow_active
+
+    def submit():
+        callers_ready.wait()
+        return service.request_hourly_ai_rerun("us", "RNG.US", "analysis-1")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: submit(), range(2)))
+
+    assert len(repository.requests) == 1
+    assert {deduplicated for _request, deduplicated in results} == {False, True}
+    assert len({request["request_id"] for request, _deduplicated in results}) == 1
 
 
 @pytest.mark.parametrize(

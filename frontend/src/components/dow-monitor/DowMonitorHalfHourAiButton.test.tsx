@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
@@ -12,6 +12,8 @@ vi.mock('@/lib/api', () => ({
   api: {
     dowMonitorAiHistory: vi.fn(),
     dowMonitorAiDetail: vi.fn(),
+    dowMonitorAiRerunStatus: vi.fn(),
+    rerunDowMonitorAi: vi.fn(),
   },
 }))
 
@@ -33,6 +35,22 @@ const historyItem = {
   trade_date: '2026-07-31',
   updated_at: '2026-07-31T15:00:02',
 }
+const queuedRequest = {
+  request_id: 'rerun-1',
+  analysis_id: 'analysis-2',
+  market: 'us' as const,
+  symbol: 'RNG.US',
+  trade_date: '2026-07-31',
+  window_end: '2026-07-31T14:00:00Z',
+  data_cutoff: '2026-07-31T14:00:00Z',
+  status: 'queued' as const,
+  requested_at: '2026-08-02T02:00:00Z',
+  started_at: null,
+  completed_at: null,
+  updated_at: '2026-08-02T02:00:00Z',
+  error_code: null,
+  error_message: null,
+}
 
 function renderButton() {
   const client = new QueryClient({
@@ -46,6 +64,15 @@ function renderButton() {
 }
 
 describe('DowMonitorHalfHourAiButton', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.dowMonitorAiRerunStatus).mockResolvedValue({ request: null })
+    vi.mocked(api.rerunDowMonitorAi).mockResolvedValue({
+      request: queuedRequest,
+      deduplicated: false,
+    })
+  })
+
   it('keeps the overview light and loads long content only after opening', async () => {
     vi.mocked(api.dowMonitorAiHistory).mockResolvedValue({ analyses: [historyItem] })
     vi.mocked(api.dowMonitorAiDetail).mockResolvedValue({
@@ -80,5 +107,51 @@ describe('DowMonitorHalfHourAiButton', () => {
       .toBeInTheDocument()
     expect(screen.getAllByText('23:00').length).toBeGreaterThan(0)
     expect(screen.getByText(/截止 2026-07-31 23:00/)).toBeInTheDocument()
+  })
+
+  it('reruns the selected hourly report and disables duplicate submission', async () => {
+    const second = {
+      ...historyItem,
+      analysis_id: 'analysis-2',
+      window_end: '2026-07-31T14:00:00Z',
+      title: '第二阶段',
+    }
+    vi.mocked(api.dowMonitorAiHistory).mockResolvedValue({
+      analyses: [historyItem, second],
+    })
+    vi.mocked(api.dowMonitorAiDetail).mockImplementation(
+      async (_symbol, analysisId) => ({
+        ...(analysisId === 'analysis-2' ? second : historyItem),
+        data_cutoff: analysisId === 'analysis-2'
+          ? '2026-07-31T14:00:00Z'
+          : '2026-07-31T15:00:00Z',
+        conclusion: '当前报告继续显示。',
+        evidence: [],
+        risks: [],
+        scenarios: [],
+        data_quality: [],
+        report: null,
+      }),
+    )
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    renderButton()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 盘中AI分析' }))
+    fireEvent.click(await screen.findByRole('button', { name: '22:00' }))
+    await waitFor(() => {
+      expect(api.dowMonitorAiDetail).toHaveBeenCalledWith('RNG.US', 'analysis-2')
+    })
+    await screen.findByText('第二阶段')
+
+    fireEvent.click(screen.getByRole('button', { name: '重跑AI分析' }))
+
+    expect(confirm).toHaveBeenCalledWith(
+      '将重新分析当前时间点。新报告成功后会替换当前报告，是否继续？',
+    )
+    await waitFor(() => {
+      expect(api.rerunDowMonitorAi).toHaveBeenCalledWith('RNG.US', 'analysis-2')
+    })
+    expect(await screen.findByRole('button', { name: '排队中' })).toBeDisabled()
+    expect(screen.getByText('当前报告继续显示。')).toBeInTheDocument()
   })
 })

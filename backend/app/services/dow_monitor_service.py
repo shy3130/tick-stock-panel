@@ -469,6 +469,7 @@ class DowMonitorService:
         self._latest_quotes_by_symbol: dict[str, dict] = {}
         self._next_day_direction_by_symbol: dict[str, dict] = {}
         self._metrics_lock = Lock()
+        self._hourly_ai_rerun_lock = Lock()
         self._evaluated_symbols: list[str] = []
         self._last_evaluation_request_count = 0
         self._last_cache_skip_count = 0
@@ -1999,23 +2000,24 @@ class DowMonitorService:
         if monitored is None or not monitored.enabled:
             raise HourlyAiRerunConflictError("股票未处于启用的趋势监控中")
         try:
-            active = repository.active_rerun_request(analysis_id)
-            if active is not None:
-                return active.model_dump(mode="json"), True
-            now = self._now()
-            request = HourlyAiRerunRequest(
-                request_id=uuid4().hex,
-                analysis_id=analysis.analysis_id,
-                market=analysis.market,
-                symbol=analysis.symbol,
-                trade_date=analysis.trade_date,
-                window_end=analysis.window_end,
-                data_cutoff=analysis.data_cutoff,
-                status="queued",
-                requested_at=now,
-                updated_at=now,
-            )
-            repository.save_rerun_request(request)
+            with self._hourly_ai_rerun_lock:
+                active = repository.active_rerun_request(analysis_id)
+                if active is not None:
+                    return active.model_dump(mode="json"), True
+                now = self._now()
+                request = HourlyAiRerunRequest(
+                    request_id=uuid4().hex,
+                    analysis_id=analysis.analysis_id,
+                    market=analysis.market,
+                    symbol=analysis.symbol,
+                    trade_date=analysis.trade_date,
+                    window_end=analysis.window_end,
+                    data_cutoff=analysis.data_cutoff,
+                    status="queued",
+                    requested_at=now,
+                    updated_at=now,
+                )
+                repository.save_rerun_request(request)
         except HourlyAiRerunConflictError:
             raise
         except Exception as exc:

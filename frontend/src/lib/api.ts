@@ -8,6 +8,8 @@ import type {
   DowMonitorDetailResponse,
   DowMonitorHalfHourAiAnalysis,
   DowMonitorHalfHourAiHistoryResponse,
+  DowMonitorHourlyAiRerunStatusResponse,
+  DowMonitorHourlyAiRerunSubmitResponse,
   DowMonitorMarket,
   DowMonitorNotification,
   DowMonitorNotificationsResponse,
@@ -1592,6 +1594,18 @@ export const api = {
         `/api/dow-monitor/${encodeURIComponent(symbol)}/ai-analyses/${encodeURIComponent(analysisId)}`,
       ),
       { cache: 'no-store' },
+    ),
+  dowMonitorAiRerunStatus: (symbol: string, analysisId: string) =>
+    request<DowMonitorHourlyAiRerunStatusResponse>(
+      uncached(
+        `/api/dow-monitor/${encodeURIComponent(symbol)}/ai-analyses/${encodeURIComponent(analysisId)}/rerun`,
+      ),
+      { cache: 'no-store' },
+    ),
+  rerunDowMonitorAi: (symbol: string, analysisId: string) =>
+    request<DowMonitorHourlyAiRerunSubmitResponse>(
+      `/api/dow-monitor/${encodeURIComponent(symbol)}/ai-analyses/${encodeURIComponent(analysisId)}/rerun`,
+      { method: 'POST' },
     ),
   dowMonitorStatus: () => request<DowMonitorStatusResponse>(
     uncached('/api/dow-monitor/status'),

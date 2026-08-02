@@ -587,6 +587,32 @@ export interface DowMonitorHalfHourAiHistoryResponse {
   analyses: DowMonitorHalfHourAiHistoryItem[]
 }
 
+export interface DowMonitorHourlyAiRerunRequest {
+  request_id: string
+  analysis_id: string
+  market: DowMonitorSymbolMarket
+  symbol: string
+  trade_date: string
+  window_end: string
+  data_cutoff: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  requested_at: string
+  started_at: string | null
+  completed_at: string | null
+  updated_at: string
+  error_code: string | null
+  error_message: string | null
+}
+
+export interface DowMonitorHourlyAiRerunStatusResponse {
+  request: DowMonitorHourlyAiRerunRequest | null
+}
+
+export interface DowMonitorHourlyAiRerunSubmitResponse {
+  request: DowMonitorHourlyAiRerunRequest
+  deduplicated: boolean
+}
+
 export interface DowMonitorIntradayCapital {
   capital_minute?: string | null
   total_net?: number | null
