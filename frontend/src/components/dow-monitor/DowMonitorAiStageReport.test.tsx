@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
@@ -78,6 +78,31 @@ describe('DowMonitorAiStageReport', () => {
     const user = userEvent.setup()
     render(<DowMonitorAiStageReport analysis={analysis} />)
 
+    const quickView = screen.getByRole('region', { name: '一眼结论' })
+    const quickItems = within(quickView).getAllByRole('listitem')
+    expect(quickItems).toHaveLength(6)
+    expect(quickItems.map((item) => item.textContent)).toEqual([
+      expect.stringContaining('当前状态'),
+      expect.stringContaining('这一小时'),
+      expect.stringContaining('资金含义'),
+      expect.stringContaining('转强条件'),
+      expect.stringContaining('风险条件'),
+      expect.stringContaining('阶段建议'),
+    ])
+    expect(quickItems[0]).toHaveTextContent('尾盘V形修复，但突破未确认')
+    expect(quickItems[1]).toHaveTextContent('下探阶段低点')
+    expect(quickItems[1]).toHaveTextContent('持续回升至阶段收盘')
+    expect(quickItems[2]).toHaveTextContent('尾段放量推动修复')
+    expect(quickItems[3]).toHaveTextContent('放量站稳阶段前高')
+    expect(quickItems[4]).toHaveTextContent('风险：')
+    expect(quickItems[4]).toHaveTextContent('量价背离或重新跌回VWAP下方')
+    expect(quickItems[4]).toHaveTextContent('失效：')
+    expect(quickItems[4]).toHaveTextContent('跌破阶段低点')
+    expect(quickItems[5]).toHaveTextContent('持仓：')
+    expect(quickItems[5]).toHaveTextContent('持仓者可继续观察前高确认')
+    expect(quickItems[5]).toHaveTextContent('未参与：')
+    expect(quickItems[5]).toHaveTextContent('未参与者等待放量站稳')
+
     expect(screen.getByRole('heading', { name: analysis.report!.headline.title })).toBeVisible()
     expect(screen.getByText(/北京时间 11:00 至 12:00/)).toBeVisible()
     expect(screen.getByText(/60 个交易分钟/)).toBeVisible()
@@ -132,5 +157,39 @@ describe('DowMonitorAiStageReport', () => {
     expect(screen.queryByRole('heading', { name: '风险出现' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '判断失效' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: '未参与者建议' })).not.toBeInTheDocument()
+  })
+
+  it('omits empty at-a-glance conclusions instead of rendering blank rows', () => {
+    const sparse = {
+      ...analysis,
+      report: {
+        ...analysis.report!,
+        stage_path: [],
+        comparison_with_previous: '',
+        volume_capital_interpretation: '',
+        holding_advice: {
+          state: 'HOLD_OBSERVE' as const,
+          advice: '',
+          conditions: [],
+        },
+        watching_advice: {
+          state: 'WAIT_CONFIRMATION' as const,
+          advice: '',
+          conditions: [],
+        },
+        next_stage_conditions: {
+          strengthen: [],
+          risk: [],
+          invalidation: [],
+        },
+      },
+    }
+    render(<DowMonitorAiStageReport analysis={sparse} />)
+
+    const quickView = screen.getByRole('region', { name: '一眼结论' })
+    const quickItems = within(quickView).getAllByRole('listitem')
+    expect(quickItems).toHaveLength(1)
+    expect(quickItems[0]).toHaveTextContent('当前状态')
+    expect(quickItems[0]).toHaveTextContent('尾盘V形修复，但突破未确认')
   })
 })

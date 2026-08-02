@@ -28,6 +28,59 @@ function hasText(value: string | null | undefined) {
   return Boolean(value?.trim())
 }
 
+type QuickConclusion = {
+  label: string
+  value: string
+}
+
+function joinText(values: Array<string | null | undefined>) {
+  return values.filter(hasText).join('；')
+}
+
+function prefixedText(label: string, value: string | null | undefined) {
+  return hasText(value) ? `${label}：${value}` : ''
+}
+
+function buildQuickConclusions(
+  report: NonNullable<DowMonitorHalfHourAiAnalysis['report']>,
+): QuickConclusion[] {
+  const stagePath = report.stage_path
+    .map((item) => item.description)
+    .filter(hasText)
+  const stageSummary = stagePath.length > 0
+    ? joinText(stagePath.length <= 2
+      ? stagePath
+      : [stagePath[0], stagePath[stagePath.length - 1]])
+    : report.comparison_with_previous
+
+  return [
+    {
+      label: '当前状态',
+      value: joinText([report.headline.title, report.headline.summary]),
+    },
+    { label: '这一小时', value: stageSummary },
+    { label: '资金含义', value: report.volume_capital_interpretation },
+    {
+      label: '转强条件',
+      value: report.next_stage_conditions.strengthen[0] ?? '',
+    },
+    {
+      label: '风险条件',
+      value: joinText([
+        prefixedText('风险', report.next_stage_conditions.risk[0]),
+        prefixedText('失效', report.next_stage_conditions.invalidation[0]),
+      ]),
+    },
+    {
+      label: '阶段建议',
+      value: joinText([
+        prefixedText('持仓', report.holding_advice.advice),
+        prefixedText('未参与', report.watching_advice.advice),
+      ]),
+    },
+  ].filter((item) => hasText(item.value)).slice(0, 6)
+}
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
@@ -101,6 +154,7 @@ export function DowMonitorAiStageReport({
 
   const start = formatServerTimestamp(analysis.stage_start)
   const cutoff = formatServerTimestamp(analysis.data_cutoff)
+  const quickConclusions = buildQuickConclusions(report)
   const hasAdvice = hasText(report.holding_advice.advice)
     || hasText(report.watching_advice.advice)
   const hasNextStageConditions = [
@@ -126,6 +180,24 @@ export function DowMonitorAiStageReport({
       data-testid="hourly-ai-stage-report"
       className="min-w-0 space-y-5 whitespace-normal text-sm"
     >
+      <section
+        aria-label="一眼结论"
+        className="rounded-card border border-border bg-elevated p-4"
+      >
+        <h3 className="font-semibold">一眼结论</h3>
+        <ul className="mt-3 space-y-2">
+          {quickConclusions.map((item) => (
+            <li
+              key={item.label}
+              className="grid min-w-0 grid-cols-1 gap-1 sm:grid-cols-[5rem_minmax(0,1fr)]"
+            >
+              <strong>{item.label}</strong>
+              <span className="break-words text-secondary">{item.value}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
       <section
         aria-label="阶段结论"
         className="rounded-card border border-border bg-elevated p-4"
