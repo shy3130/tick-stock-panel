@@ -154,4 +154,61 @@ describe('DowMonitorHalfHourAiButton', () => {
     expect(await screen.findByRole('button', { name: '排队中' })).toBeDisabled()
     expect(screen.getByText('当前报告继续显示。')).toBeInTheDocument()
   })
+
+  it('keeps legacy half-hour reports read-only', async () => {
+    const legacy = {
+      ...historyItem,
+      report_frequency: 'half_hour' as const,
+    }
+    vi.mocked(api.dowMonitorAiHistory).mockResolvedValue({ analyses: [legacy] })
+    vi.mocked(api.dowMonitorAiDetail).mockResolvedValue({
+      ...legacy,
+      data_cutoff: '2026-07-31T15:00:00Z',
+      conclusion: '历史报告保持可读。',
+      evidence: [],
+      risks: [],
+      scenarios: [],
+      data_quality: [],
+      report: null,
+    })
+    renderButton()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 盘中AI分析' }))
+
+    expect(await screen.findByText('历史报告保持可读。')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重跑AI分析' })).not.toBeInTheDocument()
+    expect(api.dowMonitorAiRerunStatus).not.toHaveBeenCalled()
+  })
+
+  it('preserves a failed report and exposes a retry action', async () => {
+    vi.mocked(api.dowMonitorAiHistory).mockResolvedValue({ analyses: [historyItem] })
+    vi.mocked(api.dowMonitorAiDetail).mockResolvedValue({
+      ...historyItem,
+      data_cutoff: '2026-07-31T15:00:00Z',
+      conclusion: '失败后仍显示原报告。',
+      evidence: [],
+      risks: [],
+      scenarios: [],
+      data_quality: [],
+      report: null,
+    })
+    vi.mocked(api.dowMonitorAiRerunStatus).mockResolvedValue({
+      request: {
+        ...queuedRequest,
+        analysis_id: 'analysis-1',
+        status: 'failed',
+        error_code: 'provider_error',
+        error_message: '模型暂时不可用',
+      },
+    })
+    renderButton()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 盘中AI分析' }))
+
+    expect(await screen.findByText('失败后仍显示原报告。')).toBeInTheDocument()
+    expect(await screen.findByText(
+      /重跑失败，可再次尝试：模型暂时不可用/,
+    )).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重跑AI分析' })).toBeEnabled()
+  })
 })
