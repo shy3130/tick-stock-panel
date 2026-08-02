@@ -54,3 +54,29 @@ Status: passed
 
 Production deployment was not part of this acceptance and remains a separate
 user-authorized action.
+
+## At-a-glance conclusions amendment
+
+- The first visible report section is now the labelled `一眼结论` list. A
+  complete report renders, in order, `当前状态`, `这一小时`, `资金含义`,
+  `转强条件`, `风险条件`, and `阶段建议`, and never renders more than six
+  rows.
+- `当前状态` uses the existing headline, `这一小时` uses the existing stage
+  path, `资金含义` uses the existing volume/capital interpretation, and the
+  three action rows use the existing next-stage conditions and holder/watcher
+  advice. `风险/失效` and `持仓/未参与` retain visible sublabels when their
+  values are combined.
+- A sparse structured report with no path, flow interpretation, conditions, or
+  advice renders only `当前状态`; empty source fields do not create blank rows.
+- The component consumes the existing `report_json` response. No prompt,
+  worker, model call, API payload, report schema, ClickHouse column, signal, or
+  WebSocket path changed, so stored hourly reports receive the list without
+  regeneration.
+- TDD evidence: the new component expectations first failed because the
+  accessible `一眼结论` region did not exist. After the presentation-only
+  implementation, `DowMonitorAiStageReport.test.tsx` passed all 3 tests. The
+  related report and AI-entry tests passed 4/4, and the production TypeScript/
+  Vite build succeeded with trend-monitor chunk `DowMonitor-C35O_jR6.js`.
+
+This amendment has local semantic and build acceptance. Production deployment
+is not included and still requires an explicit release action.

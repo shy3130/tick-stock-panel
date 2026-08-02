@@ -59,3 +59,32 @@ their own requirements and were not re-inferred from this UI result.
 - Built `DowMonitor-DUqOjF9g.js`: both decision-first labels present.
 - Specification compliance: passed.
 - Final whitespace/diff check: passed.
+
+## Independent amendment review: at-a-glance conclusions
+
+- **Requirement:** the approved design requires a first-visible list of no more
+  than six business conclusions using existing structured fields. The
+  component implements the exact labels and order, and its direct DOM test
+  asserts the six real rendered rows rather than a snapshot.
+- **Empty-data boundary:** a separate real-component case removes every
+  optional source group and proves that only the non-empty `当前状态` row
+  remains. The helper also applies the explicit six-row upper bound.
+- **Semantic clarity:** combined risk text retains `风险/失效` sublabels and
+  combined guidance retains `持仓/未参与` sublabels, preventing adjacent
+  sentences from losing their audience or trigger meaning.
+- **Historical compatibility:** the list is derived after the existing hourly
+  `report_json` is loaded. There is no new field, migration, model request, or
+  regeneration dependency; legacy 30-minute reports still bypass this hourly
+  component.
+- **Scope audit:** the production diff is limited to
+  `DowMonitorAiStageReport.tsx`; backend prompt, worker, API, persistence,
+  signal, WebSocket, and data-source files are unchanged. The test, build,
+  traceability, acceptance, and runbook changes are supporting evidence.
+- **Evidence:** the focused RED failure named the missing accessible region;
+  the final component suite passed 3/3, the affected frontend tests passed 4/4,
+  and the production build passed. These behavioral assertions, not the built
+  bundle or a visual snapshot alone, provide semantic acceptance.
+
+Conclusion: the amendment satisfies
+`REQ-DOW-MONITOR-HOURLY-AI-DECISION-FIRST-VIEW-001` without changing lower-layer
+analysis semantics. Production release remains outside this review.
