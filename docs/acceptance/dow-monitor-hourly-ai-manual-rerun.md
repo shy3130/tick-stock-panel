@@ -1,6 +1,6 @@
 # Dow Monitor Hourly AI Manual Rerun Acceptance
 
-Status: local semantic acceptance passed; production release verification pending
+Status: local and 10.28 production semantic acceptance passed
 
 Requirement: `REQ-DOW-MONITOR-HOURLY-AI-MANUAL-RERUN-001`
 
@@ -50,9 +50,48 @@ Accepted on: 2026-08-02
 - Specification check: `python scripts/check_spec_compliance.py` ->
   `Specification compliance passed.`
 
-## Release boundary
+## 10.28 production release evidence
 
-No deployment, container restart, production request, or GitHub push was
-performed in this acceptance pass. Live 10.28 evidence for the 3018 bundle,
-ClickHouse table creation, worker consumption, and process non-interference
-remains mandatory when the user authorizes release.
+- GitHub branch `userzhangtao2023/tickflow-stock-panel` /
+  `codex/monitor-list-websocket` was pushed through repair commit
+  `d897a60c32b353e012553bd21f94c016b92e012f`.
+- The full release source archive for `91f61f4d4d34` matched SHA-256
+  `72f785d8ead6b6f2b7260453f9b38e74e84ba59dbf4dcacddb565ee3fad9d130`.
+  The worker-repair archive for `d897a60c32b3` matched SHA-256
+  `8cd587b7b10928cca9429bbec75fea8677d57dd722f41c9ece9ad4133dc59eee`.
+  Both builds and the pre-deploy backup live under `/data/apps`, where 346 GB
+  was available; no build was placed on the nearly full root filesystem.
+- 3018 runs immutable image
+  `tickflow-stock-panel-app:dow-hourly-ai-rerun-91f61f4d4d34-20260802-115002`
+  (`sha256:c5361d3839d...`), container `a7f02954fb7c...`, restart count 0.
+  `/health` returns exact build `91f61f4d4d348a3552172639516b1be2c40a6c72`.
+- The independent worker runs
+  `tickflow-stock-panel-app:dow-hourly-ai-rerun-repair-d897a60c32b3-20260802-120547`
+  (`sha256:27e7a3443d51...`), container `cd8e67229d9b...`, restart count 0.
+  The worker-only repair cutover left the 3018 container ID, start time, and
+  restart count byte-for-byte unchanged.
+- The served trend-monitor chunk is `assets/DowMonitor-3LXLC7Qz.js`, SHA-256
+  `57177a2931e88ca6f87574812e336aaf9fc3c297dc702bf35e27a426fff15344`,
+  and contains the rerun/queue presentation.
+- ClickHouse created permanent `ReplacingMergeTree` table
+  `longbridge.lb_dow_monitor_hourly_ai_rerun_requests`. Two pre-repair live
+  requests failed with `InvalidAiAnalysis`; both left the NBIS report at
+  attempt 1 with identical report hash. The repaired request
+  `42a0ae3cd4b1422e9287502190949bfc` completed through
+  `queued -> running -> completed`.
+- The selected NBIS report retained analysis ID
+  `7b26526afc5e622bc66f8f5baa20454d742ebbb860d8f164aeca5d71cc08834a`,
+  advanced from attempt 1 to 2, and received a new validated report hash and
+  title. This is direct success-only replacement evidence, not a screenshot.
+- 19912 remained healthy at PID `3511290`; priority market-data ingestion
+  remained PID `461251`. Production WebSocket verification completed
+  `hello -> snapshot -> unsubscribed`. App and worker scans contained no
+  `ERROR`, `CRITICAL`, `Traceback`, or `Exception` entries.
+
+Rollback is image-only and data preserving. Restore the app from
+`/data/apps/tickflow-builds/fast-bootstrap-eccbd6a` with image
+`tickflow-stock-panel-app:dow-fast-bootstrap-eccbd6a-20260802-095510`; restore
+the worker from
+`/data/apps/tickflow-builds/hourly-ai-rerun-91f61f4d4d34-20260802-115002`
+with its `91f61f4d4d34` image. Do not delete the request table or reports and do
+not restart 19912 or the market-data WebSocket process.
