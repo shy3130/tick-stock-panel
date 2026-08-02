@@ -5,11 +5,17 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool
 
 from app.market_rules import market_for_symbol
-from app.services.dow_monitor_service import DowMonitorService
+from app.services.dow_monitor_service import (
+    DowMonitorService,
+    HourlyAiRerunConflictError,
+    HourlyAiRerunNotFoundError,
+    HourlyAiRerunUnavailableError,
+)
 
 router = APIRouter(prefix="/api/dow-monitor", tags=["dow-monitor"])
 
@@ -170,6 +176,51 @@ def half_hour_ai_detail(
     if result is None:
         raise HTTPException(status_code=404, detail="AI analysis was not found")
     return result
+
+
+@router.post("/{symbol}/ai-analyses/{analysis_id}/rerun")
+def rerun_hourly_ai(
+    symbol: str,
+    analysis_id: str,
+    request: Request,
+) -> Response:
+    normalized, market = _symbol_and_market(symbol)
+    try:
+        result, deduplicated = _service(request).request_hourly_ai_rerun(
+            market,
+            normalized,
+            analysis_id,
+        )
+    except HourlyAiRerunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except HourlyAiRerunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HourlyAiRerunUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return JSONResponse(
+        {"request": result, "deduplicated": deduplicated},
+        status_code=200 if deduplicated else 202,
+    )
+
+
+@router.get("/{symbol}/ai-analyses/{analysis_id}/rerun")
+def hourly_ai_rerun_status(
+    symbol: str,
+    analysis_id: str,
+    request: Request,
+) -> dict:
+    normalized, market = _symbol_and_market(symbol)
+    try:
+        result = _service(request).get_hourly_ai_rerun(
+            market,
+            normalized,
+            analysis_id,
+        )
+    except HourlyAiRerunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except HourlyAiRerunUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"request": result}
 
 
 @router.get("/{symbol}")

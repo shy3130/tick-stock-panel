@@ -38,6 +38,7 @@ from app.services.dow_monitor_client import (
     DowSnapshot,
 )
 from app.services.dow_monitor_data import WebStockBatch, market_session_policy
+from app.services.dow_monitor_half_hour_ai_models import HourlyAiRerunRequest
 from app.services.dow_monitor_indicators import enrich_dow_chart_bars
 from app.services.dow_monitor_models import (
     DowMinuteDecision,
@@ -60,6 +61,18 @@ TIMEFRAMES = ("5m", "15m", "30m", "60m", "day")
 MAX_PARALLEL_SYMBOLS = 3
 CAPITAL_DELAY_THRESHOLD = timedelta(minutes=15)
 NotificationIndex = dict[tuple[str, str], list[DowNotification]]
+
+
+class HourlyAiRerunNotFoundError(LookupError):
+    pass
+
+
+class HourlyAiRerunConflictError(ValueError):
+    pass
+
+
+class HourlyAiRerunUnavailableError(RuntimeError):
+    pass
 
 
 def _completed_bucket_marker(
@@ -1950,6 +1963,89 @@ class DowMonitorService:
         if item is None or item.market != market or item.symbol != symbol:
             return None
         return item.model_dump(mode="json", exclude={"input_snapshot"})
+
+    def request_hourly_ai_rerun(
+        self,
+        market: str,
+        symbol: str,
+        analysis_id: str,
+    ) -> tuple[dict, bool]:
+        repository = self._half_hour_ai_repository
+        if repository is None:
+            raise HourlyAiRerunUnavailableError("AI重跑服务暂不可用")
+        try:
+            analysis = repository.get_by_id(analysis_id)
+        except Exception as exc:
+            raise HourlyAiRerunUnavailableError("AI重跑服务暂不可用") from exc
+        if (
+            analysis is None
+            or analysis.market != market
+            or _monitor_symbol_identity(analysis.symbol)
+            != _monitor_symbol_identity(symbol)
+        ):
+            raise HourlyAiRerunNotFoundError("AI analysis was not found")
+        if analysis.report_frequency != "hourly":
+            raise HourlyAiRerunConflictError("历史半小时报告不支持重跑")
+        monitored = next(
+            (
+                item
+                for item in self.store.list_symbols()
+                if item.market == market
+                and _monitor_symbol_identity(item.symbol)
+                == _monitor_symbol_identity(symbol)
+            ),
+            None,
+        )
+        if monitored is None or not monitored.enabled:
+            raise HourlyAiRerunConflictError("股票未处于启用的趋势监控中")
+        try:
+            active = repository.active_rerun_request(analysis_id)
+            if active is not None:
+                return active.model_dump(mode="json"), True
+            now = self._now()
+            request = HourlyAiRerunRequest(
+                request_id=uuid4().hex,
+                analysis_id=analysis.analysis_id,
+                market=analysis.market,
+                symbol=analysis.symbol,
+                trade_date=analysis.trade_date,
+                window_end=analysis.window_end,
+                data_cutoff=analysis.data_cutoff,
+                status="queued",
+                requested_at=now,
+                updated_at=now,
+            )
+            repository.save_rerun_request(request)
+        except HourlyAiRerunConflictError:
+            raise
+        except Exception as exc:
+            raise HourlyAiRerunUnavailableError("AI重跑服务暂不可用") from exc
+        return request.model_dump(mode="json"), False
+
+    def get_hourly_ai_rerun(
+        self,
+        market: str,
+        symbol: str,
+        analysis_id: str,
+    ) -> dict | None:
+        repository = self._half_hour_ai_repository
+        if repository is None:
+            raise HourlyAiRerunUnavailableError("AI重跑服务暂不可用")
+        try:
+            analysis = repository.get_by_id(analysis_id)
+            if (
+                analysis is None
+                or analysis.market != market
+                or _monitor_symbol_identity(analysis.symbol)
+                != _monitor_symbol_identity(symbol)
+            ):
+                raise HourlyAiRerunNotFoundError("AI analysis was not found")
+            request = repository.latest_rerun_request(analysis_id)
+        except HourlyAiRerunNotFoundError:
+            raise
+        except Exception as exc:
+            raise HourlyAiRerunUnavailableError("AI重跑服务暂不可用") from exc
+        return request.model_dump(mode="json") if request is not None else None
 
     def _intraday_capital_by_symbol(self, symbols: list[str]) -> dict[str, dict]:
         canonical_symbols = sorted(

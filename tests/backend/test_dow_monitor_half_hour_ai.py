@@ -1491,3 +1491,125 @@ def test_overview_is_lightweight_and_detail_is_loaded_on_demand(tmp_path) -> Non
     assert detail.status_code == 200
     assert detail.json()["conclusion"] == "长内容只在详情中返回。"
     assert detail.json()["report"]["headline"]["title"] == "尾盘V形修复，但突破未确认"
+
+
+def _manual_rerun_api_client(
+    tmp_path,
+    *,
+    report_frequency: str = "hourly",
+    enabled: bool = True,
+    repository_available: bool = True,
+) -> tuple[TestClient, object]:
+    analysis = HalfHourAiAnalysis(
+        analysis_id="analysis-1",
+        market="us",
+        symbol="RNG.US",
+        trade_date=date(2026, 7, 31),
+        window_end=beijing("2026-07-31T23:00:00"),
+        data_cutoff=beijing("2026-07-31T23:00:00"),
+        report_frequency=report_frequency,
+        status="completed",
+        title="阶段报告",
+        summary="阶段摘要",
+        updated_at=beijing("2026-08-02T10:00:00"),
+    )
+
+    class AiRepository:
+        def __init__(self) -> None:
+            self.requests: list[HourlyAiRerunRequest] = []
+
+        def get_by_id(self, analysis_id: str):
+            return analysis if analysis_id == analysis.analysis_id else None
+
+        def active_rerun_request(self, analysis_id: str):
+            return next(
+                (
+                    item
+                    for item in reversed(self.requests)
+                    if item.analysis_id == analysis_id
+                    and item.status in {"queued", "running"}
+                ),
+                None,
+            )
+
+        def latest_rerun_request(self, analysis_id: str):
+            return next(
+                (
+                    item
+                    for item in reversed(self.requests)
+                    if item.analysis_id == analysis_id
+                ),
+                None,
+            )
+
+        def save_rerun_request(self, request: HourlyAiRerunRequest) -> None:
+            self.requests.append(request)
+
+    repository = AiRepository()
+    store = DowMonitorStore(tmp_path)
+    store.upsert_symbol("RNG.US", "us", enabled)
+    service = DowMonitorService(
+        store,
+        object(),
+        object(),
+        lambda *_args: None,
+        half_hour_ai_repository=(repository if repository_available else None),
+        now_fn=lambda: beijing("2026-08-02T10:05:00"),
+    )
+    app = FastAPI()
+    app.state.dow_monitor_service = service
+    app.include_router(dow_monitor.router)
+    return TestClient(app), repository
+
+
+def test_manual_rerun_api_queues_selected_report_and_deduplicates(tmp_path) -> None:
+    client, _repository = _manual_rerun_api_client(tmp_path)
+
+    response = client.post(
+        "/api/dow-monitor/RNG.US/ai-analyses/analysis-1/rerun"
+    )
+
+    assert response.status_code == 202
+    assert response.json()["request"]["analysis_id"] == "analysis-1"
+    assert response.json()["request"]["status"] == "queued"
+    assert response.json()["deduplicated"] is False
+
+    duplicate = client.post(
+        "/api/dow-monitor/RNG.US/ai-analyses/analysis-1/rerun"
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["request"]["request_id"] == (
+        response.json()["request"]["request_id"]
+    )
+    assert duplicate.json()["deduplicated"] is True
+
+    status = client.get(
+        "/api/dow-monitor/RNG.US/ai-analyses/analysis-1/rerun"
+    )
+    assert status.status_code == 200
+    assert status.json()["request"]["status"] == "queued"
+
+
+@pytest.mark.parametrize(
+    ("options", "analysis_id", "expected_status"),
+    [
+        ({"report_frequency": "half_hour"}, "analysis-1", 409),
+        ({"enabled": False}, "analysis-1", 409),
+        ({}, "missing-analysis", 404),
+        ({"repository_available": False}, "analysis-1", 503),
+    ],
+    ids=["legacy", "disabled", "missing", "storage-unavailable"],
+)
+def test_manual_rerun_api_rejects_ineligible_requests(
+    tmp_path,
+    options: dict,
+    analysis_id: str,
+    expected_status: int,
+) -> None:
+    client, _repository = _manual_rerun_api_client(tmp_path, **options)
+
+    response = client.post(
+        f"/api/dow-monitor/RNG.US/ai-analyses/{analysis_id}/rerun"
+    )
+
+    assert response.status_code == expected_status
