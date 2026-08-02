@@ -39,3 +39,12 @@ unchanged 19912/market-ingestion PIDs, and live WebSocket path were observed on
 After the bounded one-repair fix, a third request completed and replaced the
 same NBIS logical report at attempt 2. This supplies the missing lower-layer
 success and failure evidence. The requirement is accepted in production.
+
+The follow-up visibility review traced the reported missing action to UI state,
+not API availability: a completed request had renamed the action to `已更新`,
+while legacy reports intentionally hid it. Commit `5125cf316a9d` keeps the
+hourly action explicit, separates completion status, and exposes the legacy
+read-only reason without weakening the backend eligibility gate. Component
+behavior, the frontend contract, full build, exact production bundle, live DOM,
+unchanged worker/19912/ingestion identities, and WebSocket smoke all passed.
+No blocking requirement-to-evidence gap remains.

@@ -76,6 +76,17 @@ Accepted on: 2026-08-02
 - The served trend-monitor chunk is `assets/DowMonitor-3LXLC7Qz.js`, SHA-256
   `57177a2931e88ca6f87574812e336aaf9fc3c297dc702bf35e27a426fff15344`,
   and contains the rerun/queue presentation.
+- The rerun-action visibility fix is released from commit
+  `5125cf316a9d90182d67402f1be1e675be1fc5da` as immutable frontend-overlay
+  image `tickflow-stock-panel-app:dow-ai-rerun-button-5125cf316a9d-20260802-122627`
+  (`sha256:4a575b5e3c92...`). `/health` returns the exact commit build and the
+  served chunk is `assets/DowMonitor-BIeS11fm.js`, SHA-256
+  `07a1529bd01ecd3b6ca69eb359cc27edc17941411b0e9acc6329120dda4f1c96`.
+- Production browser acceptance observed an enabled `重跑AI分析` action plus
+  `上次重跑已完成` for the completed NBIS hourly report, and `旧版报告只读`
+  with no rerun action for the RNG legacy report. The worker container,
+  19912 PID, and market-data WebSocket PID remained unchanged; live WebSocket
+  verification completed `hello -> snapshot -> unsubscribed`.
 - ClickHouse created permanent `ReplacingMergeTree` table
   `longbridge.lb_dow_monitor_hourly_ai_rerun_requests`. Two pre-repair live
   requests failed with `InvalidAiAnalysis`; both left the NBIS report at
