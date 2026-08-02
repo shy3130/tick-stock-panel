@@ -22,7 +22,7 @@ Reviewed on: 2026-08-02
 | Invalid provider JSON is bounded | Prompt service performs at most one schema repair and then fails closed | Repair-success and repair-failure call-count tests | Pass |
 | Legacy 30-minute read-only | Service rejects and frontend hides action unless frequency is hourly | API parametrized eligibility test and component condition | Pass |
 | Realtime/formal-signal/minute/WebSocket isolation | New writes are restricted to the rerun request and hourly analysis repositories; model call remains worker-only | Source-path review, full regression suites, unchanged 19912/ingestion PIDs, and live WebSocket smoke | Pass |
-| Desktop/mobile usability | Existing single-column report stays intact; compact header action uses non-wrapping controls and scrollable history | TypeScript build, component behavior test, and served production chunk | Pass |
+| Desktop/mobile usability | Existing single-column report stays intact; a completed rerun retains the explicit action label, completion is a separate hint, and legacy reports are visibly read-only | TypeScript build, component behavior tests, and served production chunk | Pass |
 
 ## Lower-layer acceptance
 

@@ -62,9 +62,7 @@ export function DowMonitorAiAnalysisDialog({
       ? '排队中'
       : rerunRequest?.status === 'running'
         ? '重跑中'
-        : rerunRequest?.status === 'completed'
-          ? '已更新'
-          : '重跑AI分析'
+        : '重跑AI分析'
 
   useEffect(() => {
     if (
@@ -89,6 +87,12 @@ export function DowMonitorAiAnalysisDialog({
           <p className="text-xs text-muted">独立阶段分析，不改变实时解读和买卖信号</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {selected && !hourlySelected && (
+            <span className="text-[10px] text-muted">旧版报告只读</span>
+          )}
+          {hourlySelected && rerunRequest?.status === 'completed' && (
+            <span className="text-[10px] text-muted">上次重跑已完成</span>
+          )}
           {hourlySelected && (
             <button
               type="button"

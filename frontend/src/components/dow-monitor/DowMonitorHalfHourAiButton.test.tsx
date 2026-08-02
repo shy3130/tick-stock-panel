@@ -155,6 +155,37 @@ describe('DowMonitorHalfHourAiButton', () => {
     expect(screen.getByText('当前报告继续显示。')).toBeInTheDocument()
   })
 
+  it('keeps the rerun action visible after the previous rerun completed', async () => {
+    vi.mocked(api.dowMonitorAiHistory).mockResolvedValue({ analyses: [historyItem] })
+    vi.mocked(api.dowMonitorAiDetail).mockResolvedValue({
+      ...historyItem,
+      data_cutoff: '2026-07-31T15:00:00Z',
+      conclusion: '最新报告保持可读。',
+      evidence: [],
+      risks: [],
+      scenarios: [],
+      data_quality: [],
+      report: null,
+    })
+    vi.mocked(api.dowMonitorAiRerunStatus).mockResolvedValue({
+      request: {
+        ...queuedRequest,
+        analysis_id: 'analysis-1',
+        status: 'completed',
+        started_at: '2026-08-02T02:00:01Z',
+        completed_at: '2026-08-02T02:00:05Z',
+        updated_at: '2026-08-02T02:00:05Z',
+      },
+    })
+    renderButton()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 盘中AI分析' }))
+
+    expect(await screen.findByText('最新报告保持可读。')).toBeInTheDocument()
+    expect(await screen.findByText('上次重跑已完成')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重跑AI分析' })).toBeEnabled()
+  })
+
   it('keeps legacy half-hour reports read-only', async () => {
     const legacy = {
       ...historyItem,
@@ -176,6 +207,7 @@ describe('DowMonitorHalfHourAiButton', () => {
     fireEvent.click(screen.getByRole('button', { name: '查看 RNG.US 盘中AI分析' }))
 
     expect(await screen.findByText('历史报告保持可读。')).toBeInTheDocument()
+    expect(screen.getByText('旧版报告只读')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重跑AI分析' })).not.toBeInTheDocument()
     expect(api.dowMonitorAiRerunStatus).not.toHaveBeenCalled()
   })

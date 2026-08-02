@@ -23,6 +23,9 @@ Accepted on: 2026-08-02
   running, disables duplicate submission, refreshes detail/history only after
   completion, and renders a retryable failure message. Legacy 30-minute reports
   do not expose the action.
+- A completed request no longer replaces the action label with `已更新`.
+  The selected hourly report keeps an enabled `重跑AI分析` action and shows
+  `上次重跑已完成` separately; a selected legacy report shows `旧版报告只读`.
 - The request table has no TTL. The path does not call the model from 3018 and
   does not write realtime interpretation, formal signals, minute results, or
   WebSocket ingestion state.
@@ -38,7 +41,7 @@ Accepted on: 2026-08-02
 - Backend/spec/integration suite:
   `uv run --frozen pytest ../tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py ../tests/backend/test_dow_monitor_half_hour_ai.py ../tests/backend/test_dow_monitor_offline_ai_bootstrap_integration.py -q`
   -> `72 passed` after adding the bounded JSON-repair regression cases.
-- Frontend suite: `pnpm exec vitest run` -> `47` files, `218 passed`,
+- Frontend suite: `pnpm exec vitest run` -> `47` files, `219 passed`,
   `2 skipped`, `0 failed`.
 - Frontend contract: `python -m pytest
   tests/frontend/test_dow_monitor_half_hour_ai_frontend.py -q` -> `1 passed`.
