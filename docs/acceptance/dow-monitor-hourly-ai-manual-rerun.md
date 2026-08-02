@@ -26,6 +26,9 @@ Accepted on: 2026-08-02
 - The request table has no TTL. The path does not call the model from 3018 and
   does not write realtime interpretation, formal signals, minute results, or
   WebSocket ingestion state.
+- If the provider returns invalid structured output, the worker performs one
+  bounded schema-repair call. A second invalid output stops the request as
+  failed; it never loops indefinitely and still preserves the prior report.
 
 ## Executable evidence
 
@@ -34,7 +37,7 @@ Accepted on: 2026-08-02
   1`; after the fix it passed.
 - Backend/spec/integration suite:
   `uv run --frozen pytest ../tests/spec_contracts/test_dow_monitor_hourly_ai_stage_contract.py ../tests/backend/test_dow_monitor_half_hour_ai.py ../tests/backend/test_dow_monitor_offline_ai_bootstrap_integration.py -q`
-  -> `70 passed`.
+  -> `72 passed` after adding the bounded JSON-repair regression cases.
 - Frontend suite: `pnpm exec vitest run` -> `47` files, `218 passed`,
   `2 skipped`, `0 failed`.
 - Frontend contract: `python -m pytest

@@ -73,8 +73,7 @@ class HalfHourAiPromptService:
     async def analyze(self, snapshot: HalfHourAiSnapshot) -> ParsedAiAnalysis:
         if self._generate_text is None:
             raise RuntimeError("AI provider is unavailable")
-        raw = await self._generate_text(
-            [
+        messages = [
                 {
                     "role": "system",
                     "content": (
@@ -98,11 +97,60 @@ class HalfHourAiPromptService:
                         snapshot.model_dump(mode="json"), ensure_ascii=False
                     ),
                 },
-            ],
+            ]
+        raw = await self._generate_text(
+            messages,
             temperature=0.2,
             max_tokens=3200,
         )
-        return self.parse_and_validate(raw, snapshot, require_report=True)
+        try:
+            return self.parse_and_validate(raw, snapshot, require_report=True)
+        except InvalidAiAnalysis as initial_error:
+            repaired = await self._generate_text(
+                self._repair_messages(raw, snapshot, initial_error),
+                temperature=0,
+                max_tokens=3200,
+            )
+            try:
+                return self.parse_and_validate(
+                    repaired,
+                    snapshot,
+                    require_report=True,
+                )
+            except InvalidAiAnalysis as repair_error:
+                raise InvalidAiAnalysis(
+                    "AI output remained invalid after one repair attempt"
+                ) from repair_error
+
+    @staticmethod
+    def _repair_messages(
+        raw: str,
+        snapshot: HalfHourAiSnapshot,
+        error: InvalidAiAnalysis,
+    ) -> list[dict[str, str]]:
+        cause = error.__cause__
+        validation_error = str(cause or error)[:2000]
+        repair_input = {
+            "validation_error": validation_error,
+            "allowed_metric_keys": sorted(snapshot.evidence_values),
+            "required_schema": _ModelOutput.model_json_schema(),
+            "original_output": raw,
+        }
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "你是结构化 JSON 修复器。只修复输入的格式、缺失字段、字段类型、"
+                    "长度和 metric_key，使其严格符合 required_schema；不得添加输入中"
+                    "不存在的行情事实或数字。只返回一个 JSON 对象，不要 Markdown、"
+                    "解释、前后缀或代码围栏。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(repair_input, ensure_ascii=False),
+            },
+        ]
 
     def parse_and_validate(
         self,

@@ -799,6 +799,47 @@ async def test_analyze_requests_senior_analyst_report_with_larger_token_budget()
     assert "高级盘中证券分析师" in calls[0][0][0]["content"]
 
 
+@pytest.mark.asyncio
+async def test_analyze_repairs_invalid_structured_output_once() -> None:
+    calls: list[tuple[list[dict], dict]] = []
+    responses = [
+        "这不是结构化 JSON",
+        json.dumps(structured_model_payload(), ensure_ascii=False),
+    ]
+
+    async def generate(messages, **kwargs):
+        calls.append((messages, kwargs))
+        return responses[len(calls) - 1]
+
+    parsed = await HalfHourAiPromptService(generate_text=generate).analyze(
+        structured_snapshot()
+    )
+
+    assert parsed.report is not None
+    assert len(calls) == 2
+    assert calls[1][1]["temperature"] == 0
+    assert calls[1][1]["max_tokens"] == 3200
+    assert "结构化 JSON 修复器" in calls[1][0][0]["content"]
+    assert "这不是结构化 JSON" in calls[1][0][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_stops_after_one_failed_repair() -> None:
+    calls = 0
+
+    async def generate(_messages, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return "仍然不是结构化 JSON"
+
+    with pytest.raises(InvalidAiAnalysis, match="one repair attempt"):
+        await HalfHourAiPromptService(generate_text=generate).analyze(
+            structured_snapshot()
+        )
+
+    assert calls == 2
+
+
 def test_cumulative_query_has_both_time_boundaries() -> None:
     sql: list[str] = []
     repository = DowMonitorMinuteResultRepository(

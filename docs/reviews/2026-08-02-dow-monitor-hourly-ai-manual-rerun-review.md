@@ -19,6 +19,7 @@ Reviewed on: 2026-08-02
 | Exact stored trade date/window/cutoff; no later data | Worker rebuilds from source identity and passes original cutoff to minute repository/snapshot | Test includes a later minute and verifies exclusion | Pass |
 | Success-only same-report replacement | Worker preserves `analysis_id`/logical key and increments attempt only after validated model output | Success worker test | Pass |
 | Failure preserves prior report and is retryable | Request failure is stored separately; analysis is not overwritten | Failure worker test and frontend failure path | Pass |
+| Invalid provider JSON is bounded | Prompt service performs at most one schema repair and then fails closed | Repair-success and repair-failure call-count tests | Pass |
 | Legacy 30-minute read-only | Service rejects and frontend hides action unless frequency is hourly | API parametrized eligibility test and component condition | Pass |
 | Realtime/formal-signal/minute/WebSocket isolation | New writes are restricted to the rerun request and hourly analysis repositories; model call remains worker-only | Source-path review plus full existing frontend/backend regression suites | Pass locally |
 | Desktop/mobile usability | Existing single-column report stays intact; compact header action uses non-wrapping controls and scrollable history | TypeScript build and component behavior test | Pass locally |

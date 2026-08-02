@@ -568,6 +568,7 @@ requirements:
     implementation:
       - backend/app/services/dow_monitor_half_hour_ai_models.py
       - backend/app/services/dow_monitor_half_hour_ai_repository.py
+      - backend/app/services/dow_monitor_half_hour_ai_prompt.py
       - backend/app/services/dow_monitor_service.py
       - backend/app/api/dow_monitor.py
       - backend/app/workers/dow_monitor_half_hour_ai.py
