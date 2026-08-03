@@ -297,3 +297,21 @@ compliance, and a successful production build. Deployment evidence: image
 feed `authoritative: true`, collection aggregation status `ok`, and no restart
 of the `19912` collector process during the cutover. No unresolved requirement
 conflict was found.
+
+## Independent requirements-to-evidence review: content update time
+
+Verdict: PASS for the timestamp semantics added to
+`REQ-COLLECTION-MONITOR-PAGE-001`.
+
+- The page reads content time only from `latestDataAt` (or the bounded
+  `lastConfirmed.latestDataAt` for unavailable evidence).
+- `evidenceAt` remains visible only with the explicit `巡检` label.
+- The focused test fixes both timestamps to different values and proves the
+  rendered labels independently; it does not use a snapshot as semantic proof.
+- A clean detached build at commit `5023a40` avoided unrelated dirty-worktree
+  changes. Production DOM inspection then confirmed the same distinction with
+  live 3018/19912 data.
+- No mutation control, collector schedule, market-data source, or signal logic
+  changed.
+
+No critical, important, or minor requirement gap was found in this change.

@@ -297,3 +297,31 @@ substitute for lower-layer live collection acceptance.
 
 Deployment evidence: recorded and independently reviewed as pre-acceptance evidence.
 Live semantic evidence: pending.
+
+## 2026-08-03 content-update timestamp acceptance
+
+`REQ-COLLECTION-MONITOR-PAGE-001` now distinguishes the timestamp of the
+underlying data change from the timestamp of the monitor inspection. Dataset
+cards label `latestDataAt` as `内容更新` and label `evidenceAt` as `巡检`; a
+refresh must not present a newer inspection time as a content change.
+
+Evidence:
+
+- the behavioral test was observed RED before the labels and source field were
+  wired, then the focused component suite passed 10 tests;
+- specification compliance passed and the clean production frontend build
+  transformed 2,726 modules;
+- source commit: `5023a407304c5bfb4c49694f6ba6833fae15db3b`;
+- deployed image:
+  `tickflow-stock-panel-app:collection-content-time-5023a40-v2-20260803`;
+- production entry `/collection-monitor` references
+  `index-D20tIt_d.js`, and the immutable image contains the reviewed
+  `CollectionMonitor-Kv-JhNao.js` chunk in the actual `/app/static` runtime
+  directory;
+- authenticated production DOM evidence showed, for example, HK capital
+  distribution `内容更新 2026-08-03T15:33:00+08:00` separately from
+  `巡检 2026-08-03T15:33:58.861720+08:00`.
+
+This acceptance proves timestamp provenance and presentation. It does not turn
+missing dataset rows into healthy evidence and does not substitute for the
+remaining lower-layer live semantic acceptance.
