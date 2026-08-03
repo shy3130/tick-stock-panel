@@ -1,0 +1,93 @@
+name: Sync Main & Build Docker (with Stock-SDK)
+
+on:
+  schedule:
+    - cron: '0 0,20 * * *'  # 每天 UTC 0:00（北京时间 8:00,20:00）自动运行
+  workflow_dispatch:       # 支持手动触发
+  push:
+    branches:
+      - docker           # 当更新 docker 分支的工作流脚本时触发
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # 赋予向 origin/main 强制 push 的权限
+
+    steps:
+      # 1. 检出 main 分支的代码（非 docker 分支本身）
+      - name: Checkout Main Branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      # 2. 将本地 main 分支强行重置为上游 upstream/main 并推送到 GitHub
+      - name: Sync Main Branch with Upstream
+        id: sync
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # 添加上游仓库源
+          git remote add upstream https://github.com/shy3130/tickflow-stock-panel.git
+          git fetch upstream main
+          
+          # 比对当前 main 与上游 upstream/main 的 SHA
+          LOCAL_SHA=$(git rev-parse HEAD)
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          
+          if [ "$LOCAL_SHA" != "$UPSTREAM_SHA" ]; then
+            echo "发现上游更新，重置 main 分支与上游 100% 一致..."
+            git reset --hard upstream/main
+            git push origin main --force
+            echo "has_updates=true" >> $GITHUB_ENV
+          else
+            echo "main 分支已与上游完全一致，无需更新。"
+            if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
+              echo "手动触发或工作流更新，强制进行镜像构建..."
+              echo "has_updates=true" >> $GITHUB_ENV
+            else
+              echo "has_updates=false" >> $GITHUB_ENV
+            fi
+          fi
+
+      # 3. 获取 main 分支最新 commit 的 Short SHA 用于 Docker 镜像 Tag
+      - name: Get Short SHA
+        if: env.has_updates == 'true'
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      # 4. 配置 Docker 构建环境
+      - name: Set up QEMU
+        if: env.has_updates == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: env.has_updates == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # 5. 登录到 Docker Hub
+      - name: Login to DockerHub
+        if: env.has_updates == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # 6. 基于当前检出的 main 分支源码构建 Docker 镜像
+      - name: Build and Push Docker Image
+        if: env.has_updates == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .              # 当前工作区（已检出并同步为最新的 main 分支代码）
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            INCLUDE_STOCKSDK=1    # 打包 stock-sdk 插件
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/tickflow-stock-panel:latest
+            ${{ secrets.DOCKER_USERNAME }}/tickflow-stock-panel:${{ steps.vars.outputs.sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
