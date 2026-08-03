@@ -79,6 +79,12 @@ page MUST derive their badge only from `evidenceState` (`live` as healthy,
 `cached` as degraded, and `unavailable` as unavailable) and MUST NOT fabricate
 missing task metrics or label live/cached evidence unavailable.
 
+Dataset information MUST identify `latestDataAt` as the content update time.
+The page MAY also expose `evidenceAt`, but only with an explicit inspection
+label; it MUST NOT present an inspection/refetch timestamp as if the underlying
+content changed. When repeated refreshes leave `latestDataAt` unchanged, the
+displayed content update time MUST remain unchanged.
+
 The `/collection-monitor` HTTP route MUST use a dedicated build-time copy of
 the reviewed frontend entry document. Other TickFlow routes continue to use the
 shared entry document. Runtime hot patches to the shared entry MUST NOT remove

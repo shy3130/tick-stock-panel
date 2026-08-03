@@ -82,7 +82,13 @@ function evidenceLabel(state: EvidenceState) {
   return '证据不可用'
 }
 
-function EvidenceBadge({ evidence }: { evidence: EvidenceEnvelope }) {
+function EvidenceBadge({
+  evidence,
+  contentUpdatedAt,
+}: {
+  evidence: EvidenceEnvelope
+  contentUpdatedAt?: string | null
+}) {
   const confirmed = evidence.lastConfirmed
   const confirmedDetails = confirmed
     ? [
@@ -101,10 +107,16 @@ function EvidenceBadge({ evidence }: { evidence: EvidenceEnvelope }) {
       <span className={`rounded-full border px-2 py-0.5 font-medium ${evidenceClasses[evidence.evidenceState]}`}>
         {evidenceLabel(evidence.evidenceState)}
       </span>
+      {contentUpdatedAt && (
+        <span className="inline-flex items-center gap-1 text-secondary">
+          <Clock3 className="h-3 w-3" />
+          内容更新 {contentUpdatedAt}
+        </span>
+      )}
       {evidence.evidenceAt && (
         <span className="inline-flex items-center gap-1 text-muted">
           <Clock3 className="h-3 w-3" />
-          {evidence.evidenceAt}
+          巡检 {evidence.evidenceAt}
         </span>
       )}
       {confirmed?.evidenceAt && (
@@ -185,7 +197,14 @@ function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
         <strong className="text-sm text-foreground">{key ? datasetEvidenceLabels[key] : '未知数据集'}</strong>
         <HealthBadge state={health} />
       </div>
-      <div className="mt-2"><EvidenceBadge evidence={dataset} /></div>
+      <div className="mt-2">
+        <EvidenceBadge
+          evidence={dataset}
+          contentUpdatedAt={dataset.evidenceState === 'unavailable'
+            ? dataset.lastConfirmed?.latestDataAt
+            : dataset.latestDataAt}
+        />
+      </div>
       {currentEvidenceAvailable && hasCollectionMetrics && (
         <>
           <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">

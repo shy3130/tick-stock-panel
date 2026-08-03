@@ -380,6 +380,13 @@ describe('CollectionMonitor', () => {
     )
   })
 
+  it('labels content update time separately from inspection time', async () => {
+    renderPage()
+
+    expect(await screen.findByText('内容更新 2026-07-26T10:29:00+08:00')).toBeInTheDocument()
+    expect(screen.getAllByText('巡检 2026-07-26T10:31:30+08:00').length).toBeGreaterThan(0)
+  })
+
   it('renders market temperature evidence without exposing it as a task or gap filter', async () => {
     installHealthyFetch(overview, {
       ...markets,
