@@ -37,13 +37,28 @@ FACTOR_COLUMNS: list[dict] = [
     {"id": "kdj_k",        "label": "KDJ-K",       "group": "趋势",     "desc": "KDJ指标K值"},
     {"id": "change_pct",   "label": "日涨跌幅",    "group": "基础",     "desc": "当日涨跌幅"},
     {"id": "amplitude",    "label": "日振幅",      "group": "基础",     "desc": "当日振幅 (最高-最低)/昨收"},
+    {"id": "expma_12",  "label": "EXPMA12",   "group": "趋势", "desc": "12日指数均线"},
+    {"id": "expma_50",  "label": "EXPMA50",   "group": "趋势", "desc": "50日指数均线"},
+    {"id": "trix",      "label": "TRIX",      "group": "趋势", "desc": "三重指数平滑"},
+    {"id": "dmi_adx",   "label": "DMI-ADX",   "group": "趋势", "desc": "DMI趋势强度"},
+    {"id": "wr_14",     "label": "WR(14)",    "group": "超买超卖", "desc": "威廉指标"},
+    {"id": "cci_14",    "label": "CCI(14)",   "group": "超买超卖", "desc": "商品通道指标"},
+    {"id": "psy_12",    "label": "PSY(12)",   "group": "超买超卖", "desc": "心理线"},
+    {"id": "bias_6",    "label": "BIAS(6)",   "group": "超买超卖", "desc": "6日乖离率"},
+    {"id": "roc_12",    "label": "ROC(12)",   "group": "动量", "desc": "变动率"},
+    {"id": "mtm_12",    "label": "MTM(12)",   "group": "动量", "desc": "动量指标"},
+    {"id": "obv",       "label": "OBV",       "group": "量价", "desc": "能量潮"},
+    {"id": "vr_26",     "label": "VR(26)",    "group": "量价", "desc": "容量比率"},
+    {"id": "mfi_14",    "label": "MFI(14)",   "group": "量价", "desc": "资金流量指标"},
+    {"id": "cr_26",     "label": "CR(26)",    "group": "量价", "desc": "能量指标"},
+    {"id": "asi",       "label": "ASI",       "group": "量价", "desc": "累计振动升降"},
     *[
         {"id": a.id, "label": a.name, "group": a.theme, "desc": a.notes or a.formula}
         for a in list_alphas()
     ],
 ]
 
-FACTOR_WARMUP_DAYS = 120
+FACTOR_WARMUP_DAYS = 330
 
 
 def _rank_average(values: np.ndarray) -> np.ndarray:

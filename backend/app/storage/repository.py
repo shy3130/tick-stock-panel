@@ -23,6 +23,8 @@ import polars as pl
 
 from app.config import settings
 from app.storage.atomic_write import atomic_write_parquet as _atomic_write_parquet
+from app.indicators.engine_compat import ENGINE_COMPAT_WARMUP_CALENDAR_DAYS, build_engine_compat_live_state
+from app.indicators.engine_compat import ENGINE_COMPAT_WARMUP_CALENDAR_DAYS, build_engine_compat_live_state
 
 logger = logging.getLogger(__name__)
 
@@ -480,7 +482,7 @@ class KlineRepository:
         from datetime import timedelta
         from app.indicators.pipeline import _ema_alpha, clean_nan_inf
 
-        start_60d = latest - timedelta(days=90)  # 日历90天 ≈ 60个交易日
+        start_60d = latest - timedelta(days=300)  # 覆盖最长 120 日窗口和 EMA 收敛
 
         # 优先使用已有的历史缓存 (避免重复 scan_parquet + compute_indicators)
         if self._enriched_history_cache is not None and not self._enriched_history_cache.is_empty():
@@ -632,7 +634,11 @@ class KlineRepository:
             ])
         )
 
-        self._live_agg_cache = clean_nan_inf(agg_a.join(agg_b, on="symbol", how="inner"))
+        ec_state = build_engine_compat_live_state(df_hist, latest)
+        live = agg_a.join(agg_b, on="symbol", how="inner")
+        if not ec_state.is_empty():
+            live = live.join(ec_state, on="symbol", how="left")
+        self._live_agg_cache = clean_nan_inf(live)
         self._live_agg_cache_date = latest
 
     def _live_agg_baseline_date(self, latest: date) -> date:
@@ -1047,7 +1053,7 @@ class KlineRepository:
         from datetime import timedelta
 
         # 扩展范围用于指标预热 (MA60 需要 ~60 交易日 ≈ 120 日历日)
-        warmup_start = start - timedelta(days=150)
+        warmup_start = start - timedelta(days=ENGINE_COMPAT_WARMUP_CALENDAR_DAYS)
 
         # 扫描14列 parquet
         df = self._scan_daily_symbol(symbol, warmup_start, end, None)
@@ -1100,7 +1106,7 @@ class KlineRepository:
         """指数日K查询 — 从独立指数 enriched parquet 读取后即时计算通用指标。"""
         from datetime import timedelta
 
-        warmup_start = start - timedelta(days=150)
+        warmup_start = start - timedelta(days=ENGINE_COMPAT_WARMUP_CALENDAR_DAYS)
         df = self._scan_index_daily_symbol(symbol, warmup_start, end, None)
         if not df.is_empty():
             df = self._compute_index_enriched_range(df)
@@ -1120,7 +1126,7 @@ class KlineRepository:
         """ETF 日K查询 — 优先读独立 ETF enriched，兼容旧版 index enriched 中的 ETF。"""
         from datetime import timedelta
 
-        warmup_start = start - timedelta(days=150)
+        warmup_start = start - timedelta(days=ENGINE_COMPAT_WARMUP_CALENDAR_DAYS)
         df = self._scan_etf_daily_symbol(symbol, warmup_start, end, None)
         if df.is_empty():
             # 旧版 ETF 曾存入 kline_index_enriched；没有独立数据时回退读取。

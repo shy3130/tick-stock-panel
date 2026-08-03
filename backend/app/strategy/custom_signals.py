@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 
 import polars as pl
+from app.indicators.engine_compat import ENGINE_COMPAT_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,8 @@ ALLOWED_FIELDS: frozenset[str] = frozenset({
     "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
     "annual_vol_20d",
     "rsi_6", "rsi_14", "rsi_24",
+    # engine/technicals 兼容指标
+    *ENGINE_COMPAT_COLUMNS.keys(),
 })
 
 # 运算符 → Polars 表达式构造器（输入 col_expr, value）

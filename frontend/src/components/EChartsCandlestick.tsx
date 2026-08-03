@@ -30,6 +30,47 @@ export interface OHLC {
   boll_upper?: number | null
   boll_lower?: number | null
   main_net_inflow?: number | null
+  expma_12?: number | null
+  expma_50?: number | null
+  trix?: number | null
+  trix_ma?: number | null
+  bbi?: number | null
+  dfma_dif?: number | null
+  dfma?: number | null
+  dmi_pdi?: number | null
+  dmi_mdi?: number | null
+  dmi_adx?: number | null
+  dmi_adxr?: number | null
+  xsii_upper?: number | null
+  xsii_lower?: number | null
+  xsii_mid?: number | null
+  wr_14?: number | null
+  cci_14?: number | null
+  psy_12?: number | null
+  psyma_6?: number | null
+  bias_6?: number | null
+  bias_12?: number | null
+  bias_24?: number | null
+  roc_12?: number | null
+  roc_ma_6?: number | null
+  mtm_12?: number | null
+  mtm_ma_6?: number | null
+  dpo_20?: number | null
+  dpo_ma_6?: number | null
+  ktn_mid?: number | null
+  ktn_upper?: number | null
+  ktn_lower?: number | null
+  taq_mid?: number | null
+  taq_upper?: number | null
+  taq_lower?: number | null
+  obv?: number | null
+  vr_26?: number | null
+  emv_14?: number | null
+  emv_ma_14?: number | null
+  mfi_14?: number | null
+  cr_26?: number | null
+  mass_9_25?: number | null
+  asi?: number | null
 }
 
 export interface ChartMarker {
@@ -279,6 +320,467 @@ export const SUB_CHARTS: SubChartDef[] = [
       ]
     },
   },
+  {
+    key: 'trix',
+    label: 'TRIX',
+    description: 'TRIX 三重指数平滑及信号线,用于观察趋势的中长期方向。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'TRIX',
+        type: 'line',
+        data: data.map(d => d.trix != null ? Number(d.trix) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'TRIXMA',
+        type: 'line',
+        data: data.map(d => d.trix_ma != null ? Number(d.trix_ma) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'TRIX', color: '#FACC15', value: d.trix != null ? d.trix.toFixed(2) : '—' },
+        { label: 'TRIXMA', color: '#3B82F6', value: d.trix_ma != null ? d.trix_ma.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'dfma',
+    label: 'DFMA',
+    description: 'DFMA 平行线差及信号线,用于观察中短期趋势切换。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'DIF',
+        type: 'line',
+        data: data.map(d => d.dfma_dif != null ? Number(d.dfma_dif) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'DFMA',
+        type: 'line',
+        data: data.map(d => d.dfma != null ? Number(d.dfma) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'DIF', color: '#FACC15', value: d.dfma_dif != null ? d.dfma_dif.toFixed(2) : '—' },
+        { label: 'DFMA', color: '#3B82F6', value: d.dfma != null ? d.dfma.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'dmi',
+    label: 'DMI',
+    description: 'PDI / MDI / ADX / ADXR 趋向指标,用于观察趋势强度和多空力量。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'PDI',
+        type: 'line',
+        data: data.map(d => d.dmi_pdi != null ? Number(d.dmi_pdi) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'MDI',
+        type: 'line',
+        data: data.map(d => d.dmi_mdi != null ? Number(d.dmi_mdi) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+      {
+        name: 'ADX',
+        type: 'line',
+        data: data.map(d => d.dmi_adx != null ? Number(d.dmi_adx) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#8B5CF6' },
+        itemStyle: { color: '#8B5CF6' },
+      },
+      {
+        name: 'ADXR',
+        type: 'line',
+        data: data.map(d => d.dmi_adxr != null ? Number(d.dmi_adxr) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#F97316' },
+        itemStyle: { color: '#F97316' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'PDI', color: '#FACC15', value: d.dmi_pdi != null ? d.dmi_pdi.toFixed(2) : '—' },
+        { label: 'MDI', color: '#3B82F6', value: d.dmi_mdi != null ? d.dmi_mdi.toFixed(2) : '—' },
+        { label: 'ADX', color: '#8B5CF6', value: d.dmi_adx != null ? d.dmi_adx.toFixed(2) : '—' },
+        { label: 'ADXR', color: '#F97316', value: d.dmi_adxr != null ? d.dmi_adxr.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'wr',
+    label: 'WR',
+    description: '威廉指标 WR14,用于观察超买超卖。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'WR14',
+        type: 'line',
+        data: data.map(d => d.wr_14 != null ? Number(d.wr_14) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'WR14', color: '#FACC15', value: d.wr_14 != null ? d.wr_14.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'cci',
+    label: 'CCI',
+    description: 'CCI 商品通道指标 14,用于观察价格偏离均值的程度。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'CCI14',
+        type: 'line',
+        data: data.map(d => d.cci_14 != null ? Number(d.cci_14) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'CCI14', color: '#FACC15', value: d.cci_14 != null ? d.cci_14.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'psy',
+    label: 'PSY',
+    description: 'PSY 心理线及均线,用于观察多空心理周期。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'PSY12',
+        type: 'line',
+        data: data.map(d => d.psy_12 != null ? Number(d.psy_12) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'PSYMA6',
+        type: 'line',
+        data: data.map(d => d.psyma_6 != null ? Number(d.psyma_6) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'PSY12', color: '#FACC15', value: d.psy_12 != null ? d.psy_12.toFixed(2) : '—' },
+        { label: 'PSYMA6', color: '#3B82F6', value: d.psyma_6 != null ? d.psyma_6.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'bias',
+    label: 'BIAS',
+    description: 'BIAS 乖离率 6/12/24,用于观察价格偏离均线的程度。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'BIAS6',
+        type: 'line',
+        data: data.map(d => d.bias_6 != null ? Number(d.bias_6) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'BIAS12',
+        type: 'line',
+        data: data.map(d => d.bias_12 != null ? Number(d.bias_12) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+      {
+        name: 'BIAS24',
+        type: 'line',
+        data: data.map(d => d.bias_24 != null ? Number(d.bias_24) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#8B5CF6' },
+        itemStyle: { color: '#8B5CF6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'BIAS6', color: '#FACC15', value: d.bias_6 != null ? d.bias_6.toFixed(2) : '—' },
+        { label: 'BIAS12', color: '#3B82F6', value: d.bias_12 != null ? d.bias_12.toFixed(2) : '—' },
+        { label: 'BIAS24', color: '#8B5CF6', value: d.bias_24 != null ? d.bias_24.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'roc',
+    label: 'ROC',
+    description: 'ROC 变动率及均线,用于观察价格动量变化。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'ROC12',
+        type: 'line',
+        data: data.map(d => d.roc_12 != null ? Number(d.roc_12) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'ROCMA6',
+        type: 'line',
+        data: data.map(d => d.roc_ma_6 != null ? Number(d.roc_ma_6) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'ROC12', color: '#FACC15', value: d.roc_12 != null ? d.roc_12.toFixed(2) : '—' },
+        { label: 'ROCMA6', color: '#3B82F6', value: d.roc_ma_6 != null ? d.roc_ma_6.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'mtm',
+    label: 'MTM',
+    description: 'MTM 动量及均线,用于观察价格涨跌速度。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'MTM12',
+        type: 'line',
+        data: data.map(d => d.mtm_12 != null ? Number(d.mtm_12) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'MTMMA6',
+        type: 'line',
+        data: data.map(d => d.mtm_ma_6 != null ? Number(d.mtm_ma_6) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'MTM12', color: '#FACC15', value: d.mtm_12 != null ? d.mtm_12.toFixed(2) : '—' },
+        { label: 'MTMMA6', color: '#3B82F6', value: d.mtm_ma_6 != null ? d.mtm_ma_6.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'dpo',
+    label: 'DPO',
+    description: 'DPO 区间震荡及均线,用于消除长期趋势观察中期周期。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'DPO20',
+        type: 'line',
+        data: data.map(d => d.dpo_20 != null ? Number(d.dpo_20) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'DPOMA6',
+        type: 'line',
+        data: data.map(d => d.dpo_ma_6 != null ? Number(d.dpo_ma_6) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'DPO20', color: '#FACC15', value: d.dpo_20 != null ? d.dpo_20.toFixed(2) : '—' },
+        { label: 'DPOMA6', color: '#3B82F6', value: d.dpo_ma_6 != null ? d.dpo_ma_6.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'obv',
+    label: 'OBV',
+    description: 'OBV 能量潮,以累计成交量衡量资金流向。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'OBV',
+        type: 'line',
+        data: data.map(d => d.obv != null ? Number(d.obv) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'OBV', color: '#FACC15', value: d.obv != null ? d.obv.toFixed(0) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'vr',
+    label: 'VR',
+    description: 'VR 容量比率,用于衡量上涨日与下跌日成交量比。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'VR26',
+        type: 'line',
+        data: data.map(d => d.vr_26 != null ? Number(d.vr_26) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'VR26', color: '#FACC15', value: d.vr_26 != null ? d.vr_26.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'emv',
+    label: 'EMV',
+    description: 'EMV 简易波动指标及均线,用于衡量价量配合的效率。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'EMV14',
+        type: 'line',
+        data: data.map(d => d.emv_14 != null ? Number(d.emv_14) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+      {
+        name: 'EMVMA14',
+        type: 'line',
+        data: data.map(d => d.emv_ma_14 != null ? Number(d.emv_ma_14) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#3B82F6' },
+        itemStyle: { color: '#3B82F6' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'EMV14', color: '#FACC15', value: d.emv_14 != null ? d.emv_14.toFixed(2) : '—' },
+        { label: 'EMVMA14', color: '#3B82F6', value: d.emv_ma_14 != null ? d.emv_ma_14.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'mfi',
+    label: 'MFI',
+    description: 'MFI 资金流量指标 14,结合价量的超买超卖指标。',
+    height: 72,
+    yAxisConfig: { min: 0, max: 100 },
+    buildSeries: (data) => [
+      {
+        name: 'MFI14',
+        type: 'line',
+        data: data.map(d => d.mfi_14 != null ? Number(d.mfi_14) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'MFI14', color: '#FACC15', value: d.mfi_14 != null ? d.mfi_14.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'cr',
+    label: 'CR',
+    description: 'CR 能量指标 26,以中间价成交量为基准衡量多空能量。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'CR26',
+        type: 'line',
+        data: data.map(d => d.cr_26 != null ? Number(d.cr_26) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'CR26', color: '#FACC15', value: d.cr_26 != null ? d.cr_26.toFixed(2) : '—' },
+      ]
+    },
+  },
+  {
+    key: 'mass',
+    label: 'MASS',
+    description: 'MASS 梅斯线,用于检测趋势的膨胀与反转。',
+    height: 72,
+    buildSeries: (data) => [
+      {
+        name: 'MASS',
+        type: 'line',
+        data: data.map(d => d.mass_9_25 != null ? Number(d.mass_9_25) : '-'),
+        smooth: true, symbol: 'none', animation: false,
+        lineStyle: { width: 1, color: '#FACC15' },
+        itemStyle: { color: '#FACC15' },
+      },
+    ],
+    buildInfo: (d) => {
+      if (!d) return []
+      return [
+        { label: 'MASS', color: '#FACC15', value: d.mass_9_25 != null ? d.mass_9_25.toFixed(2) : '—' },
+      ]
+    },
+  },
 ]
 
 /** 向后兼容的 INDICATORS 导出 (不含 vol) */
@@ -287,6 +789,11 @@ export const INDICATORS = SUB_CHARTS.filter(s => s.key !== 'vol')
 /** 主图叠加指标 (画在 K 线上方, 不占副图空间) */
 export const OVERLAY_INDICATORS: { key: string; label: string; description?: string }[] = [
   { key: 'boll', label: 'BOLL', description: '布林带上轨/下轨,用于观察价格通道和波动边界。' },
+  { key: 'expma', label: 'EXPMA', description: '12/50日指数均线。' },
+  { key: 'bbi', label: 'BBI', description: '多空指标。' },
+  { key: 'xsii', label: 'XSII', description: '薛斯通道II。' },
+  { key: 'ktn', label: 'KTN', description: '肯特纳通道。' },
+  { key: 'taq', label: 'TAQ', description: '趋势波动通道。' },
   { key: 'td9', label: '九转', description: 'TD Sequential 九转计数,用于提示连续上涨/下跌后的潜在转折点。' },
   {
     key: 'threelock',

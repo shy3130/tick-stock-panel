@@ -25,6 +25,14 @@ import polars as pl
 
 from app.config import settings
 from app.storage.atomic_write import atomic_write_parquet
+from app.indicators.engine_compat import (
+    ENGINE_COMPAT_COLUMNS,
+    ENGINE_COMPAT_COLUMNS_BY_CATEGORY,
+    ENGINE_COMPAT_HISTORY_DAYS,
+    ENGINE_COMPAT_LIVE_STATE_COLUMNS,
+    compute_engine_compat_indicators,
+    compute_engine_compat_today,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +176,8 @@ ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
     "ema":      ["ema5", "ema10", "ema20", "ema30", "ema60"],
     "macd":     ["macd_dif", "macd_dea", "macd_hist"],
     "boll":     ["boll_upper", "boll_lower"],
+    # ── engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化) ─
+    **ENGINE_COMPAT_COLUMNS,
     "kdj":      ["kdj_k", "kdj_d", "kdj_j"],
     "atr":      ["atr_14"],
     "volume":   ["vol_ma5", "vol_ma10", "vol_ratio_5d"],
@@ -187,6 +197,7 @@ def _ema_alpha(span: int) -> float:
 def _math_half_up(expr: pl.Expr, decimals: int = 2) -> pl.Expr:
     """交易所四舍五入 (round half up)，替代 Python round()（银行家舍入）。
 
+    **ENGINE_COMPAT_COLUMNS_BY_CATEGORY,
     round(2.625, 2) = 2.62  ← Python 银行家舍入
     exchange_round(2.625) = 2.63  ← 交易所四舍五入
     """
@@ -476,6 +487,9 @@ def compute_signals(df: pl.DataFrame) -> pl.DataFrame:
         ((pl.col("macd_dif") > pl.col("macd_dea")) &
          (pl.col("macd_dif").shift(1).over("symbol") <= pl.col("macd_dea").shift(1).over("symbol")))
             .alias("signal_macd_golden"),
+    # Pass 6b: engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化)
+    df = compute_engine_compat_indicators(df)
+
         ((pl.col("macd_dif") < pl.col("macd_dea")) &
          (pl.col("macd_dif").shift(1).over("symbol") >= pl.col("macd_dea").shift(1).over("symbol")))
             .alias("signal_macd_dead"),
@@ -1174,7 +1188,7 @@ def run_pipeline(data_dir: Path | None = None,
             # RSI24 的残留权重压到 <0.1%。这条路径是"往后新增日期"的每日常规
             # 同步路径,几乎所有交易日的 ema60/rsi_24/macd_dea 都经它产出。
             sym_list = raw_new["symbol"].unique().to_list()
-            hist_df = _load_recent_history(enriched_base, sym_list, days=300)
+            hist_df = _load_recent_history(enriched_base, sym_list, days=ENGINE_COMPAT_HISTORY_DAYS)
 
             # 合并历史 + 新数据
             if not hist_df.is_empty():
@@ -1699,6 +1713,15 @@ def compute_enriched_today(
         "_prev_consec_up", "_prev_consec_down",
     ]
     df = df.drop([c for c in drop_cols if c in df.columns])
+
+    # engine/technicals 兼容指标增量计算
+    # 缺少状态列时跳过 (由 QuoteService 全量回退路径兜底)
+    if ENGINE_COMPAT_LIVE_STATE_COLUMNS.issubset(live_agg.columns):
+        ec_today = compute_engine_compat_today(live_agg, today_ohlcv)
+        if not ec_today.is_empty():
+            ec_cols = [c for c in ENGINE_COMPAT_COLUMNS if c not in df.columns]
+            if ec_cols:
+                df = df.join(ec_today.select("symbol", *ec_cols), on="symbol", how="inner")
 
     # 自定义信号（日级实时路径同样注入）
     from app.strategy import custom_signals

@@ -248,6 +248,47 @@ export interface KlineRow {
 }
 
 // ===== Watchlist =====
+  expma_12?: number | null
+  expma_50?: number | null
+  trix?: number | null
+  trix_ma?: number | null
+  bbi?: number | null
+  dfma_dif?: number | null
+  dfma?: number | null
+  dmi_pdi?: number | null
+  dmi_mdi?: number | null
+  dmi_adx?: number | null
+  dmi_adxr?: number | null
+  xsii_upper?: number | null
+  xsii_lower?: number | null
+  xsii_mid?: number | null
+  wr_14?: number | null
+  cci_14?: number | null
+  psy_12?: number | null
+  psyma_6?: number | null
+  bias_6?: number | null
+  bias_12?: number | null
+  bias_24?: number | null
+  roc_12?: number | null
+  roc_ma_6?: number | null
+  mtm_12?: number | null
+  mtm_ma_6?: number | null
+  dpo_20?: number | null
+  dpo_ma_6?: number | null
+  ktn_mid?: number | null
+  ktn_upper?: number | null
+  ktn_lower?: number | null
+  taq_mid?: number | null
+  taq_upper?: number | null
+  taq_lower?: number | null
+  obv?: number | null
+  vr_26?: number | null
+  emv_14?: number | null
+  emv_ma_14?: number | null
+  mfi_14?: number | null
+  cr_26?: number | null
+  mass_9_25?: number | null
+  asi?: number | null
 export interface WatchlistEntry {
   symbol: string
   added_at: string

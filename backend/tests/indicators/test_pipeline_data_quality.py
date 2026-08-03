@@ -219,3 +219,53 @@ def test_run_pipeline_forward_incremental_uses_wide_warmup_window(tmp_path, monk
     pipeline_mod.run_pipeline(data_dir=tmp_path, new_dates_only=True)
 
     assert captured.get("days") == 300
+
+
+def test_compute_indicators_produces_engine_compat_columns():
+    """compute_indicators 必须产出 ENGINE_COMPAT_COLUMNS 的全部 41 列。"""
+    import math
+    from app.indicators.engine_compat import ENGINE_COMPAT_COLUMNS
+
+    rows = []
+    for i in range(200):
+        base = 10.0 + i * 0.05
+        amp = 0.4 * math.sin(i / 3.0)
+        c = base + amp
+        o = base + 0.05 + amp * 0.5
+        rows.append({
+            "symbol": "000001.SZ",
+            "date": date(2026, 1, 1) + __import__("datetime").timedelta(days=i),
+            "open": o,
+            "high": max(o, c) + 0.15,
+            "low": min(o, c) - 0.15,
+            "close": c,
+            "volume": float(1000 + i * 7),
+            "amount": float(1000 + i * 7) * c,
+        })
+    df = pl.DataFrame(rows)
+
+    out = compute_indicators(df)
+
+    for col in ENGINE_COMPAT_COLUMNS:
+        assert col in out.columns, f"compute_indicators missing engine compat column: {col}"
+
+    # ENRICHED_STORAGE_COLS must still be exactly 14 (engine compat columns not persisted)
+    from app.indicators.pipeline import ENRICHED_STORAGE_COLS
+    assert len(ENRICHED_STORAGE_COLS) == 14
+    for col in ENGINE_COMPAT_COLUMNS:
+        assert col not in ENRICHED_STORAGE_COLS, f"{col} should not be in storage cols"
+
+
+def test_engine_compat_fields_in_allowed_fields_and_factor_columns():
+    """ALLOWED_FIELDS 和 FACTOR_COLUMNS 必须包含全部 41 列。"""
+    from app.indicators.engine_compat import ENGINE_COMPAT_COLUMNS
+    from app.strategy.custom_signals import ALLOWED_FIELDS
+    from app.backtest.factor import FACTOR_COLUMNS
+
+    for col in ENGINE_COMPAT_COLUMNS:
+        assert col in ALLOWED_FIELDS, f"{col} missing from ALLOWED_FIELDS"
+
+    factor_ids = {f["id"] for f in FACTOR_COLUMNS}
+    # FACTOR_COLUMNS 包含部分常用 engine 指标 (不是全部 41)
+    for col in ["expma_12", "obv", "vr_26", "dmi_adx"]:
+        assert col in factor_ids, f"{col} missing from FACTOR_COLUMNS"
