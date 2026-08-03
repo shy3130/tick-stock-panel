@@ -19,20 +19,22 @@ iteration and MUST contain no more than exactly 2,097,152 decoded body bytes
 (2 MiB). Decompressed output, rather than compressed transfer size, counts
 toward this bound. Successful payloads MUST also satisfy their route shape:
 `/overview` is a mapping; `/markets/{market}` is a mapping whose `datasets` list
-contains at most the six authoritative response dataset keys with no duplicate;
+contains at most the ten authoritative response dataset keys with no duplicate;
 and `/tasks` and `/gaps` are mappings whose returned item lists contain no more
 items than the requested `limit`. Every dataset, task, and gap item MUST be a
 mapping. Any size, JSON, or shape violation MUST return only the sanitized 502
 proxy-unavailable response, never a raw body, upstream URL, or credential.
 
 The market-response dataset allowlist is intentionally asymmetric with the
-query allowlist. It consists of the five queryable keys below plus
-`market_temperature`. Production Longbridge `MarketTemperatureSync` persists
-that observation-only evidence and the market store returns it, but the
-Longbridge query validators do not currently accept it as a tasks/gaps dataset
-filter. TickFlow therefore MUST accept `market_temperature` only as returned
-`/markets/{market}` evidence and MUST continue rejecting it in `dataset` query
-parameters. This evidence does not establish Monday live semantic acceptance.
+query allowlist. It consists of the five queryable keys below plus the
+response-only observation keys `intraday_line`, `market_temperature`,
+`order_book_depth`, `realtime_quote`, and `trade_tick`. Production Longbridge
+returns these bounded observations in `/markets/{market}`, but its task/gap
+query validators do not accept them as dataset filters. TickFlow therefore
+MUST accept all ten known keys as returned market evidence and MUST continue
+rejecting the five response-only keys in `dataset` query parameters. Unknown
+and duplicate response keys remain invalid. This evidence does not establish
+live semantic acceptance.
 
 The authoritative upstream query contract is:
 
@@ -70,6 +72,12 @@ freshness, observation mode, provenance, and bounded last-confirmed evidence.
 Unavailable, degraded, shadow, stale, and live states MUST remain visually and
 semantically distinct. The page MUST NOT provide controls that mutate
 collectors, schedules, alerts, or evidence.
+
+Response-only observation datasets MUST render with explicit user-facing
+names. When those observations do not carry task/data-health counters, the
+page MUST derive their badge only from `evidenceState` (`live` as healthy,
+`cached` as degraded, and `unavailable` as unavailable) and MUST NOT fabricate
+missing task metrics or label live/cached evidence unavailable.
 
 The `/collection-monitor` HTTP route MUST use a dedicated build-time copy of
 the reviewed frontend entry document. Other TickFlow routes continue to use the

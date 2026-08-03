@@ -420,6 +420,35 @@ describe('CollectionMonitor', () => {
     expect(within(datasetFilter).getAllByRole('option')).toHaveLength(5)
   })
 
+  it('renders migrated observation datasets with names and evidence-derived health', async () => {
+    installHealthyFetch(overview, {
+      ...markets,
+      hk: {
+        ...markets.hk,
+        datasets: [
+          { market: 'hk', datasetKey: 'intraday_line', evidenceState: 'live', evidenceAt },
+          { market: 'hk', datasetKey: 'order_book_depth', evidenceState: 'live', evidenceAt },
+          { market: 'hk', datasetKey: 'realtime_quote', evidenceState: 'live', evidenceAt },
+          { market: 'hk', datasetKey: 'trade_tick', evidenceState: 'live', evidenceAt },
+          { market: 'hk', datasetKey: 'market_temperature', evidenceState: 'cached', evidenceAt },
+        ],
+      },
+    })
+
+    renderPage()
+
+    const matrix = await screen.findByRole('region', { name: '市场 × 数据集' })
+    const hkArticle = within(matrix).getByRole('heading', { name: '港股' }).closest('article')
+    expect(hkArticle).not.toBeNull()
+    for (const label of ['分时线', '盘口深度', '实时行情', '逐笔成交', '市场温度']) {
+      expect(await within(hkArticle!).findByText(label)).toBeInTheDocument()
+    }
+    expect(within(hkArticle!).getAllByText('健康')).toHaveLength(4)
+    expect(within(hkArticle!).getAllByText('降级')).toHaveLength(1)
+    expect(within(hkArticle!).queryByText('不可用')).not.toBeInTheDocument()
+    expect(within(hkArticle!).queryByText('任务状态')).not.toBeInTheDocument()
+  })
+
   it('shows only bounded last-confirmed detail for an unavailable dataset', async () => {
     installHealthyFetch(overview, {
       ...markets,

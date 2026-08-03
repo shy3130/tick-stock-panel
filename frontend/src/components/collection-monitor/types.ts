@@ -9,7 +9,13 @@ export type DatasetKey =
   | 'candlestick_1m'
   | 'depth'
   | 'trades'
-export type DatasetEvidenceKey = DatasetKey | 'market_temperature'
+export type DatasetEvidenceKey =
+  | DatasetKey
+  | 'intraday_line'
+  | 'market_temperature'
+  | 'order_book_depth'
+  | 'realtime_quote'
+  | 'trade_tick'
 
 export interface LastConfirmedEvidence {
   evidenceAt: string

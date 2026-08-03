@@ -192,7 +192,11 @@ def test_routes_use_only_their_fixed_upstream_paths(
         "/api/collection-monitor/tasks?technology=java",
         "/api/collection-monitor/tasks?mode=live",
         "/api/collection-monitor/tasks?dataset=quotes",
+        "/api/collection-monitor/tasks?dataset=intraday_line",
         "/api/collection-monitor/tasks?dataset=market_temperature",
+        "/api/collection-monitor/tasks?dataset=order_book_depth",
+        "/api/collection-monitor/tasks?dataset=realtime_quote",
+        "/api/collection-monitor/tasks?dataset=trade_tick",
         "/api/collection-monitor/gaps?market=hk&dataset=market_temperature",
         "/api/collection-monitor/gaps?market=hk&dataset=depth&symbol=bad-symbol",
         "/api/collection-monitor/tasks?limit=0",
@@ -374,7 +378,7 @@ def test_accepts_a_valid_overview_at_the_exact_two_mib_boundary(
     assert len(response.json()["padding"]) == padding_size
 
 
-def test_accepts_six_market_response_datasets_including_market_temperature(
+def test_accepts_ten_authoritative_market_response_datasets(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     datasets = [
@@ -382,8 +386,12 @@ def test_accepts_six_market_response_datasets_including_market_temperature(
         {"datasetKey": "capital_flow"},
         {"datasetKey": "candlestick_1m"},
         {"datasetKey": "depth"},
+        {"datasetKey": "intraday_line"},
         {"datasetKey": "market_temperature"},
+        {"datasetKey": "order_book_depth"},
+        {"datasetKey": "realtime_quote"},
         {"datasetKey": "trades"},
+        {"datasetKey": "trade_tick"},
     ]
     _patch_upstream(
         monkeypatch,
@@ -444,9 +452,13 @@ def test_rejects_invalid_route_shapes_and_sanitizes_the_response(
             {"dataset": "capital_flow"},
             {"dataset": "candlestick_1m"},
             {"dataset": "depth"},
+            {"dataset": "intraday_line"},
             {"dataset": "market_temperature"},
+            {"dataset": "order_book_depth"},
+            {"dataset": "realtime_quote"},
             {"dataset": "trades"},
-            {"dataset": "secret-seventh-dataset"},
+            {"dataset": "trade_tick"},
+            {"dataset": "secret-eleventh-dataset"},
         ],
         [{"dataset": "depth"}, {"dataset": "depth"}],
         [{"dataset": "secret-unknown-dataset"}],

@@ -30,8 +30,12 @@ _MARKET_RESPONSE_DATASETS = {
     "capital_flow",
     "candlestick_1m",
     "depth",
+    "intraday_line",
     "market_temperature",
+    "order_book_depth",
+    "realtime_quote",
     "trades",
+    "trade_tick",
 }
 
 

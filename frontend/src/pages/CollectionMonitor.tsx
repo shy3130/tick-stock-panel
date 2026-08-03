@@ -30,7 +30,11 @@ const datasetLabels: Record<DatasetKey, string> = {
 
 const datasetEvidenceLabels: Record<DatasetEvidenceKey, string> = {
   ...datasetLabels,
+  intraday_line: '分时线',
   market_temperature: '市场温度',
+  order_book_depth: '盘口深度',
+  realtime_quote: '实时行情',
+  trade_tick: '逐笔成交',
 }
 
 const statusLabels: Record<HealthState, string> = {
@@ -158,14 +162,31 @@ function HealthBadge({ state }: { state: HealthState | undefined }) {
 function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
   const key = dataset.datasetKey ?? dataset.dataset
   const currentEvidenceAvailable = dataset.evidenceState !== 'unavailable'
+  const evidenceDerivedHealth: HealthState = dataset.evidenceState === 'live'
+    ? 'green'
+    : dataset.evidenceState === 'cached'
+      ? 'yellow'
+      : 'unavailable'
+  const health = dataset.displayState ?? dataset.status ?? dataset.dataHealth ?? evidenceDerivedHealth
+  const hasCollectionMetrics = [
+    dataset.taskHealth,
+    dataset.dataHealth,
+    dataset.expectedCount,
+    dataset.collectedCount,
+    dataset.freshCount,
+    dataset.staleCount,
+    dataset.missingCount,
+    dataset.duplicateCount,
+    dataset.latestDataAt,
+  ].some((value) => value !== undefined)
   return (
     <div className="min-w-0 rounded-btn border border-border bg-base/50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <strong className="text-sm text-foreground">{key ? datasetEvidenceLabels[key] : '未知数据集'}</strong>
-        <HealthBadge state={dataset.displayState ?? dataset.status ?? dataset.dataHealth} />
+        <HealthBadge state={health} />
       </div>
       <div className="mt-2"><EvidenceBadge evidence={dataset} /></div>
-      {currentEvidenceAvailable && (
+      {currentEvidenceAvailable && hasCollectionMetrics && (
         <>
           <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <dt className="text-muted">任务状态</dt><dd className="text-right text-secondary">{statusLabels[dataset.taskHealth ?? 'unavailable']}</dd>
@@ -175,10 +196,12 @@ function DatasetCard({ dataset }: { dataset: DatasetCollectionEvidence }) {
             <dt className="text-muted">缺口 / 重复</dt><dd className="text-right font-mono text-secondary">{dataset.missingCount ?? '—'} / {dataset.duplicateCount ?? '—'}</dd>
             <dt className="text-muted">最新数据</dt><dd className="text-right font-mono text-secondary">{dataset.latestDataAt ?? '—'}</dd>
           </dl>
-          <p className="mt-2 truncate text-[11px] text-muted" title={dataset.provenance}>
-            来源 {dataset.provenance ?? '未确认'}
-          </p>
         </>
+      )}
+      {currentEvidenceAvailable && dataset.provenance && (
+        <p className="mt-2 truncate text-[11px] text-muted" title={dataset.provenance}>
+          来源 {dataset.provenance}
+        </p>
       )}
     </div>
   )
