@@ -313,14 +313,18 @@ Evidence:
   transformed 2,726 modules;
 - source commit: `5023a407304c5bfb4c49694f6ba6833fae15db3b`;
 - deployed image:
-  `tickflow-stock-panel-app:collection-content-time-5023a40-v2-20260803`;
+  `tickflow-stock-panel-app:collection-content-time-5023a40-v3-buildid-20260803`;
 - production entry `/collection-monitor` references
-  `index-D20tIt_d.js`, and the immutable image contains the reviewed
-  `CollectionMonitor-Kv-JhNao.js` chunk in the actual `/app/static` runtime
+  `index-DENFt0Jd.js`, and the immutable image contains the reviewed
+  `CollectionMonitor-BtTdYpwi.js` chunk in the actual `/app/static` runtime
   directory;
-- authenticated production DOM evidence showed, for example, HK capital
-  distribution `内容更新 2026-08-03T15:33:00+08:00` separately from
-  `巡检 2026-08-03T15:33:58.861720+08:00`.
+- authenticated production DOM evidence showed, for example, HK realtime
+  quote `内容更新 2026-08-03T15:53:00+08:00` separately from
+  `巡检 2026-08-03T15:53:13.366282+08:00`;
+- after the frontend version-check interval, the production DOM contained
+  zero `发现新版本` notices because the immutable bundle embeds the same
+  `5125cf316a9d90182d67402f1be1e675be1fc5da` build ID returned by `/health`;
+  the controlled browser reported no console errors.
 
 This acceptance proves timestamp provenance and presentation. It does not turn
 missing dataset rows into healthy evidence and does not substitute for the

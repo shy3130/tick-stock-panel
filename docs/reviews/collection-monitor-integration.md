@@ -311,6 +311,11 @@ Verdict: PASS for the timestamp semantics added to
 - A clean detached build at commit `5023a40` avoided unrelated dirty-worktree
   changes. Production DOM inspection then confirmed the same distinction with
   live 3018/19912 data.
+- The final immutable image
+  `tickflow-stock-panel-app:collection-content-time-5023a40-v3-buildid-20260803`
+  embeds the deployed `/health` build ID. After the version-check interval,
+  the production DOM showed both timestamp labels, zero `发现新版本` notices,
+  and no browser console errors.
 - No mutation control, collector schedule, market-data source, or signal logic
   changed.
 
