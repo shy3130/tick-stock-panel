@@ -140,6 +140,41 @@ Required Monday evidence:
 Deployment evidence: recorded and verified as pre-acceptance evidence.
 Live semantic evidence: pending.
 
+## 2026-08-03 migrated observation presentation repair
+
+Requirement `REQ-COLLECTION-MONITOR-PAGE-001` was revalidated after production
+rendered migrated collection observations as blank, unavailable cards. The
+lower-layer `19912` response already contained canonical evidence for
+`intraday_line`, `order_book_depth`, `realtime_quote`, and `trade_tick`; the
+3018 frontend lacked names for those keys and inferred health only from legacy
+task fields that canonical observations do not carry.
+
+Acceptance evidence:
+
+- red test: the new page test initially failed because `分时线` was absent and
+  the live observation rendered `不可用`;
+- green tests: 9 focused frontend tests and 46 backend proxy tests passed;
+- specification compliance check passed and the production frontend build
+  completed after transforming 2,727 modules;
+- source commit: `58ab995` (`fix: render migrated collection evidence`);
+- deployed image:
+  `tickflow-stock-panel-app:collection-evidence-ui-58ab995-20260803`
+  (`sha256:d913d084...`);
+- the production symbol-authority endpoint returned `authoritative: true`, and
+  the one-shot collection aggregation completed with status `ok` and zero
+  unavailable verification records;
+- fresh Chrome verification on
+  `/collection-monitor?market=hk` displayed named `分时线`, `市场温度`,
+  `盘口深度`, `实时行情`, and `逐笔成交` rows. Live evidence rendered `健康`,
+  cached market-temperature evidence rendered `降级`, and the market matrix
+  contained no `不可用` label.
+
+This repair does not promote missing lower-layer data to healthy. The five
+legacy rows remain explicitly `未运行`, and absent capital-flow evidence is
+not inferred from another dataset. Rollback is the prior image
+`tickflow-stock-panel-app:authority-feed-repair-20260803-1348`. The `19912`
+collector process was not restarted by this deployment.
+
 ## Final review wave evidence
 
 The final implementation head is

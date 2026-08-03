@@ -274,3 +274,26 @@ event-free:
 These disclosed operational exceptions do not identify a defect in the
 reviewed code and do not invalidate the exact final cutover evidence. They do
 prohibit an unqualified broader-window no-restart claim.
+
+## Independent review: 2026-08-03 migrated observation presentation repair
+
+`REQ-COLLECTION-MONITOR-PAGE-001` traces to the collection-monitor dataset
+types and presentation logic, the proxy contract, executable frontend/backend
+tests, the production build, and a fresh production DOM inspection. The review
+confirmed that every dataset key returned by `19912` has a visible Chinese
+name and that canonical health is derived from its explicit evidence state:
+live is `健康`, cached is `降级`, and unavailable remains `不可用`.
+
+The implementation does not fabricate task status, counts, timestamps, or
+source text when those fields are absent. The Chrome acceptance observation
+showed four live HK canonical datasets as healthy and cached market
+temperature as degraded; it also showed legacy datasets as `未运行`. This is
+presentation and contract acceptance only. It is not evidence that every
+legacy collector or every semantic dataset is currently populated.
+
+Automated evidence: 9 focused frontend tests, 46 proxy tests, specification
+compliance, and a successful production build. Deployment evidence: image
+`tickflow-stock-panel-app:collection-evidence-ui-58ab995-20260803`, authority
+feed `authoritative: true`, collection aggregation status `ok`, and no restart
+of the `19912` collector process during the cutover. No unresolved requirement
+conflict was found.
