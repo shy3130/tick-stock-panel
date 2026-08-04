@@ -164,6 +164,8 @@ export const MONITOR_INTRADAY_SIGNAL_LABELS: Record<string, string> = {
   signal_intraday_avg_cross_down: '分时价格下穿均价',
   signal_intraday_zero_cross_up: '分时价格上穿0轴',
   signal_intraday_zero_cross_down: '分时价格下穿0轴',
+  signal_intraday_macd_golden: '分时MACD金叉',
+  signal_intraday_macd_dead: '分时MACD死叉',
 }
 
 export const MONITOR_INTRADAY_SIGNAL_OPTIONS = Object.keys(MONITOR_INTRADAY_SIGNAL_LABELS)

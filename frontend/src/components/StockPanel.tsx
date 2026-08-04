@@ -38,6 +38,30 @@ interface Props {
 
 export { getDefaultRange }
 
+/**
+ * 分时默认日期策略:
+ * - 交易日: 优先"今天"。实时行情缺失/刚加自选的股票, 日K最后一根可能停在昨天
+ *   (如盘中新增自选且行情轮询被管道暂停), 此时分时仍应默认看今天 ——
+ *   分钟K走实时拉取(腾讯等源有当天数据), 避免落到昨天而整图空白。
+ * - 周末: 今天非交易日无分钟数据, 回落到日K最后一根(最近交易日)。
+ */
+function pickDefaultIntradayDate(rows: { date: string }[]): string {
+  const last = rows[rows.length - 1]?.date
+  if (!last) return last
+  let today: string
+  try {
+    today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date())
+  } catch {
+    // 极端环境兜底: 退回 UTC 日期(与北京时间最多差一天, 可接受)
+    today = new Date().toISOString().slice(0, 10)
+  }
+  const dow = new Date(`${today}T00:00:00`).getDay()
+  if (dow === 0 || dow === 6) return last // 周末 → 最近交易日
+  return today >= last ? today : last     // 交易日 → 优先今天
+}
+
 export function StockPanel({
   symbol,
   height = 520,
@@ -102,10 +126,11 @@ export function StockPanel({
     setDailyResult(null)
   }, [symbol])
 
-  // 当分时开启、无选中日期时，自动选中最新日期
+  // 当分时开启、无选中日期时，自动选中默认分时日期
+  // (交易日优先今天, 周末回落最近一根; 见 pickDefaultIntradayDate)
   useEffect(() => {
     if (showIntraday && !selectedDate && rows.length > 0) {
-      setSelectedDate(rows[rows.length - 1].date)
+      setSelectedDate(pickDefaultIntradayDate(rows))
     }
   }, [showIntraday, selectedDate, rows])
 

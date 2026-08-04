@@ -14,8 +14,14 @@ INTRADAY_SIGNAL_LABELS: dict[str, str] = {
     "signal_intraday_avg_cross_down": "分时价格下穿均价",
     "signal_intraday_zero_cross_up": "分时价格上穿0轴",
     "signal_intraday_zero_cross_down": "分时价格下穿0轴",
+    "signal_intraday_macd_golden": "分时MACD金叉",
+    "signal_intraday_macd_dead": "分时MACD死叉",
 }
 INTRADAY_SIGNAL_FIELDS = frozenset(INTRADAY_SIGNAL_LABELS)
+
+# 分时 MACD 最少分钟线数量: EMA12/26 + DEA(EMA9) 约需 26+9 根才收敛,
+# 更少 bar 时 DIF/DEA 初值影响过大, 金叉/死叉频繁假信号, 故低于此数不触发。
+_MACD_MIN_BARS = 35
 
 
 def uses_intraday_signals(rule: dict) -> bool:
@@ -40,6 +46,29 @@ def _naive_datetime(value: Any) -> datetime | None:
     if value.tzinfo is not None:
         return value.astimezone(CN_TZ).replace(tzinfo=None)
     return value
+
+
+def _ema(values: list[float], period: int) -> list[float]:
+    """标准 EMA 递推: EMA[0]=value[0], EMA[i]=alpha*value[i]+(1-alpha)*EMA[i-1]。"""
+    if not values:
+        return []
+    alpha = 2.0 / (period + 1.0)
+    out: list[float] = []
+    prev = values[0]
+    out.append(prev)
+    for value in values[1:]:
+        prev = alpha * value + (1.0 - alpha) * prev
+        out.append(prev)
+    return out
+
+
+def _macd_series(prices: list[float]) -> tuple[list[float], list[float]]:
+    """分钟级 MACD: DIF=EMA12-EMA26, DEA=EMA9(DIF)。返回 (dif, dea)。"""
+    ema_fast = _ema(prices, 12)
+    ema_slow = _ema(prices, 26)
+    dif = [fast - slow for fast, slow in zip(ema_fast, ema_slow)]
+    dea = _ema(dif, 9)
+    return dif, dea
 
 
 class IntradaySignalEvaluator:
@@ -115,13 +144,25 @@ class IntradaySignalEvaluator:
             avg_down = previous[2] is not None and current[2] is not None and previous[1] >= previous[2] and current[1] < current[2]
             zero_up = baseline is not None and baseline > 0 and previous[1] <= baseline and current[1] > baseline
             zero_down = baseline is not None and baseline > 0 and previous[1] >= baseline and current[1] < baseline
-            if avg_up or avg_down or zero_up or zero_down:
+
+            # 分时 MACD 金叉/死叉: DIF 上穿/下穿 DEA (边沿触发)。
+            # warmup 不足 (< _MACD_MIN_BARS) 时 DIF/DEA 未收敛, 不触发。
+            macd_golden = False
+            macd_dead = False
+            if len(points) >= _MACD_MIN_BARS:
+                dif, dea = _macd_series([p[1] for p in points])
+                macd_golden = dif[-2] <= dea[-2] and dif[-1] > dea[-1]
+                macd_dead = dif[-2] >= dea[-2] and dif[-1] < dea[-1]
+
+            if avg_up or avg_down or zero_up or zero_down or macd_golden or macd_dead:
                 results.append({
                     "symbol": symbol,
                     "signal_intraday_avg_cross_up": avg_up,
                     "signal_intraday_avg_cross_down": avg_down,
                     "signal_intraday_zero_cross_up": zero_up,
                     "signal_intraday_zero_cross_down": zero_down,
+                    "signal_intraday_macd_golden": macd_golden,
+                    "signal_intraday_macd_dead": macd_dead,
                 })
         return results
 

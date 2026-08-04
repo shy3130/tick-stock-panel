@@ -1,16 +1,19 @@
 """自选股服务(§6.1)。
 
 存储:`data/user_data/watchlist.parquet`,字段 symbol + added_at + note。
+
+added_at 统一存北京时间(UTC+8) ISO 字符串: 曾用 datetime.utcnow() 导致
+Docker(UTC 容器) 下写入的时间比真实时间慢 8 小时, UI/导出显示错位。
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 
 from app.config import settings
+from app.market_time import cn_now
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.client import get_client
 from app.tickflow.rate_limits import chunked, resolve_limit
@@ -46,7 +49,8 @@ def add(symbol: str, note: str = "") -> list[dict]:
 
     new_row = pl.DataFrame({
         "symbol": [symbol],
-        "added_at": [datetime.utcnow().isoformat(timespec="seconds")],
+        # 北京时间(UTC+8) ISO; cn_now 带时区后缀, 避免歧义
+        "added_at": [cn_now().isoformat(timespec="seconds")],
         "note": [note],
     })
     out = pl.concat([new_row, df], how="diagonal_relaxed")

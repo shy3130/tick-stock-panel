@@ -560,7 +560,14 @@ class QuoteService:
                 try:
                     t0 = time.perf_counter()
                     now_ts = time.perf_counter()
-                    records = custom_sources.get_provider(provider_name).get_realtime()
+                    # 全市场股票列表 → 分片拉取实时行情 (腾讯 qt.gtimg.cn 需显式指定代码)。
+                    # 无 instruments 时退化为空列表请求 (上游全市场快照, 若有)。
+                    stock_symbols: list[str] = []
+                    if self._repo:
+                        inst_df = self._repo.get_instruments()
+                        if not inst_df.is_empty() and "symbol" in inst_df.columns:
+                            stock_symbols = [str(s) for s in inst_df["symbol"].cast(pl.Utf8).to_list()]
+                    records = custom_sources.get_provider(provider_name).get_realtime(stock_symbols or None)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("自定义实时行情拉取失败: %s", e)
                     return

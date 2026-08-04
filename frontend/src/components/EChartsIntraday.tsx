@@ -27,10 +27,13 @@ interface Props {
 }
 
 function fmtTime(dt: string): string {
+  // 分钟K datetime 后端统一为北京时间 naive (如 "2026-08-04T09:30:00")。
+  // 曾是 SDK UTC(datetime 为 01:30 UTC) 时代需 +8; 切到 direct 北京时间数据源后
+  // 无条件 +8 会把 09:30 整成 17:30, 超出全天 9:30~15:00 时间槽 → 分时曲线全丢。
+  // 现在后端(SDK 路径经 _normalize_minute / custom 源)都已输出北京时间, 直接取 HH:MM。
   const match = dt.match(/(\d{2}):(\d{2})/)
   if (!match) return dt.slice(11, 16)
-  const h = (parseInt(match[1]) + 8) % 24
-  return `${String(h).padStart(2, '0')}:${match[2]}`
+  return `${match[1]}:${match[2]}`
 }
 
 function computeAvgPrice(data: MinuteKlineRow[]): number[] {

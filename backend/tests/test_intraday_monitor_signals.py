@@ -126,6 +126,94 @@ def test_intraday_cutoff_keeps_beijing_time_in_utc_runtime():
     assert signals[0]["signal_intraday_zero_cross_up"] is True
 
 
+def _minute_rows_macd(prices: list[float], symbol: str = "600000.SH") -> pl.DataFrame:
+    """与 _minute_rows 相同, 但用 timedelta 递增分钟 (分钟线足够多时可跨 10 点)。"""
+    base = datetime(2026, 7, 17, 9, 30)
+    from datetime import timedelta
+    return pl.DataFrame({
+        "symbol": [symbol] * len(prices),
+        "datetime": [base + timedelta(minutes=i) for i in range(len(prices))],
+        "close": prices,
+        "volume": [1.0] * len(prices),
+        "amount": [price * 100.0 for price in prices],
+    })
+
+
+def _macd_kwargs(symbol: str = "600000.SH") -> dict:
+    return {
+        "symbols": {symbol},
+        "prev_close": {symbol: 10.0},
+        "asset_type": "stock",
+    }
+
+
+def test_intraday_macd_golden_is_edge_triggered():
+    evaluator = IntradaySignalEvaluator()
+    # 35 根横盘 (warmup) 后单根跳涨 → DIF 上穿 DEA (金叉) 恰好发生在最后一根
+    prices = [10.0] * 35 + [10.5]
+    # 首次建立基线, 不补发历史信号
+    assert evaluator.evaluate(
+        _minute_rows_macd(prices[:-1]), now=datetime(2026, 7, 17, 10, 6), **_macd_kwargs(),
+    ) == []
+    signals = evaluator.evaluate(
+        _minute_rows_macd(prices), now=datetime(2026, 7, 17, 10, 7), **_macd_kwargs(),
+    )
+    assert len(signals) == 1
+    assert signals[0]["signal_intraday_macd_golden"] is True
+    assert signals[0]["signal_intraday_macd_dead"] is False
+
+
+def test_intraday_macd_dead_is_edge_triggered():
+    evaluator = IntradaySignalEvaluator()
+    # 35 根横盘后单根跳水 → DIF 下穿 DEA (死叉) 恰好发生在最后一根
+    prices = [10.0] * 35 + [9.5]
+    assert evaluator.evaluate(
+        _minute_rows_macd(prices[:-1]), now=datetime(2026, 7, 17, 10, 6), **_macd_kwargs(),
+    ) == []
+    signals = evaluator.evaluate(
+        _minute_rows_macd(prices), now=datetime(2026, 7, 17, 10, 7), **_macd_kwargs(),
+    )
+    assert len(signals) == 1
+    assert signals[0]["signal_intraday_macd_dead"] is True
+    assert signals[0]["signal_intraday_macd_golden"] is False
+
+
+def test_intraday_macd_requires_warmup_bars():
+    evaluator = IntradaySignalEvaluator()
+    # 少于 _MACD_MIN_BARS (35) 根分钟线: 不触发 MACD 信号
+    prices = [10.0] * 20 + [11.0] * 10   # 30 根, 明显上扬
+    assert evaluator.evaluate(
+        _minute_rows_macd(prices), now=datetime(2026, 7, 17, 10, 1), **_macd_kwargs(),
+    ) == []
+    # 即便有 34 根 (仍不足 35), 也不触发
+    prices34 = [10.0] * 20 + [11.0] * 14
+    assert evaluator.evaluate(
+        _minute_rows_macd(prices34), now=datetime(2026, 7, 17, 10, 5), **_macd_kwargs(),
+    ) == []
+
+
+def test_intraday_macd_signal_flows_through_monitor_engine():
+    evaluator = IntradaySignalEvaluator()
+    prices = [10.0] * 35 + [10.5]
+    evaluator.evaluate(
+        _minute_rows_macd(prices[:-1]), now=datetime(2026, 7, 17, 10, 6), **_macd_kwargs(),
+    )
+    signals = evaluator.evaluate(
+        _minute_rows_macd(prices), now=datetime(2026, 7, 17, 10, 7), **_macd_kwargs(),
+    )
+    enriched = pl.DataFrame({
+        "symbol": ["600000.SH"], "close": [10.5], "change_pct": [0.05],
+    })
+    engine = MonitorRuleEngine()
+    rule = {**_intraday_rule(), "id": "macd_intraday_rule", "cooldown_seconds": 0,
+            "conditions": [{"field": "signal_intraday_macd_golden", "op": "truth"}]}
+    engine.set_rules([rule])
+    events = engine.evaluate(evaluator.inject(enriched, signals))
+    assert len(events) == 1
+    assert events[0]["rule_id"] == "macd_intraday_rule"
+    assert "signal_intraday_macd_golden" in events[0]["signals"]
+
+
 def _intraday_rule(scope: str = "symbols") -> dict:
     return {
         "id": "intraday_rule", "name": "分时监控", "enabled": True,

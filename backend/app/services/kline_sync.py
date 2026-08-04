@@ -462,9 +462,16 @@ def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
     df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
 
     # datetime 列:优先用 timestamp(毫秒精度),其次 trade_time
+    # 注意:SDK 的 timestamp 是 UTC epoch 毫秒, 必须显式转成北京时间(UTC+8) naive,
+    # 否则序列化给前端的是 UTC 时间(如 01:30), 前端按北京时间绘制会整体偏移/越界。
+    # (custom 源返回的 datetime 本身就是北京时间 naive 字符串, 下方 cast 不改变值。)
     if "timestamp" in df.columns:
         df = df.with_columns(
-            pl.from_epoch("timestamp", time_unit="ms").alias("datetime"),
+            pl.from_epoch("timestamp", time_unit="ms")
+            .dt.replace_time_zone("UTC")
+            .dt.convert_time_zone("Asia/Shanghai")
+            .dt.replace_time_zone(None)
+            .alias("datetime"),
         ).drop("timestamp")
         for drop_col in ("trade_time", "trade_date"):
             if drop_col in df.columns:

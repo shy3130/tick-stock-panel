@@ -117,8 +117,21 @@ class GenericHTTPProvider:
                 on_chunk_done(i + 1, len(chunks))
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
-    def get_realtime(self) -> list[dict]:
+    def get_realtime(self, symbols: list[str] | None = None) -> list[dict]:
         cfg = self._dataset("realtime")
+        if symbols:
+            # 按 batch 分片拉取 (symbols 为空时由上游返回全市场快照)
+            frames: list[pl.DataFrame] = []
+            chunks = chunked(symbols, cfg.batch)
+            for i, chunk in enumerate(chunks):
+                sleep_between_batches(i, cfg.rpm)
+                rows = self._request_rows(cfg, symbols=chunk)
+                df = self._mapped_frame(cfg, rows)
+                if not df.is_empty():
+                    frames.append(df)
+            if not frames:
+                return []
+            return pl.concat(frames, how="diagonal_relaxed").to_dicts()
         rows = self._request_rows(cfg)
         df = self._mapped_frame(cfg, rows)
         if df.is_empty():
