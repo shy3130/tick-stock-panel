@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { useQuoteStream } from '@/lib/useQuoteStream'
@@ -21,6 +21,7 @@ import { QK } from '@/lib/queryKeys'
 import {
   Star,
   ScanSearch,
+  ListFilter,
   History,
   FileText,
   Settings,
@@ -40,8 +41,9 @@ import {
   BookOpenCheck,
   NotebookPen,
   Bot,
+  Eye,
+  Sparkles,
 } from 'lucide-react'
-import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
@@ -62,6 +64,7 @@ const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
   { to: '/watchlist',  label: '自选',   icon: Star },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
+  { to: '/condition-screener', label: '条件选股', icon: ListFilter },
   { to: '/backtest',   label: '回测',   icon: History },
   { to: '/optimizer', label: '组合优化', icon: PieChart },
   { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
@@ -77,6 +80,44 @@ const nav = [
   { to: '/trading', label: '交易', icon: Cable },
   { to: '/data',       label: '数据',   icon: Database },
 ] as const
+
+// ── 导航分组: 查看 / AI 分析 两个 tab ──
+
+type NavCategory = 'view' | 'analysis'
+
+const NAV_CATEGORY: Record<string, NavCategory> = {
+  '/': 'view',
+  '/watchlist': 'view',
+  '/limit-ladder': 'view',
+  '/monitor': 'view',
+  '/indices': 'view',
+  '/trading': 'view',
+  '/data': 'view',
+  '/screener': 'analysis',
+  '/condition-screener': 'analysis',
+  '/backtest': 'analysis',
+  '/optimizer': 'analysis',
+  '/stock-analysis': 'analysis',
+  '/concept-analysis': 'analysis',
+  '/industry-analysis': 'analysis',
+  '/financials': 'analysis',
+  '/review': 'analysis',
+  '/agent': 'analysis',
+  '/journal': 'analysis',
+}
+
+/** 扩展分析菜单 (/analysis/*) 一律归入 AI 分析; 未知内置项默认查看。 */
+function navCategory(to: string): NavCategory {
+  if (to.startsWith('/analysis/')) return 'analysis'
+  return NAV_CATEGORY[to] ?? 'view'
+}
+
+const NAV_TAB_KEY = 'sidebar_nav_tab'
+
+const NAV_TABS: { key: NavCategory; label: string; icon: typeof Eye }[] = [
+  { key: 'view', label: '查看', icon: Eye },
+  { key: 'analysis', label: 'AI 分析', icon: Sparkles },
+]
 
 function fmtIndexValue(v: number | null | undefined) {
   if (v == null || Number.isNaN(Number(v))) return '--'
@@ -218,11 +259,14 @@ export function Layout() {
   }, [alertsTotal])
 
   // 合并内置页面 + 可见的扩展分析菜单
-  const analysisNav = (analysisMenus?.items ?? [])
-    .filter(m => m.visible)
-    .map(m => ({ to: `/analysis/${m.id}`, label: m.label, icon: m.icon === 'tags' ? Tags : BarChart3 }))
+  const analysisNav = useMemo(
+    () => (analysisMenus?.items ?? [])
+      .filter(m => m.visible)
+      .map(m => ({ to: `/analysis/${m.id}`, label: m.label, icon: m.icon === 'tags' ? Tags : BarChart3 })),
+    [analysisMenus],
+  )
 
-  const allNav = [...nav, ...analysisNav]
+  const allNav = useMemo(() => [...nav, ...analysisNav], [analysisNav])
   const savedOrder = prefs?.nav_order ?? []
 
   const navItems = savedOrder.length > 0
@@ -238,6 +282,41 @@ export function Layout() {
 
   const hiddenIds = new Set(prefs?.nav_hidden ?? [])
   const visibleNavItems = navItems.filter(n => !hiddenIds.has(n.to) && !hiddenIds.has(n.to.replace(/^\/analysis\//, '')))
+
+  // ── 查看 / AI 分析 分组 tab ──
+  const location = useLocation()
+  const [navTab, setNavTab] = useState<NavCategory>(() => {
+    try {
+      return localStorage.getItem(NAV_TAB_KEY) === 'analysis' ? 'analysis' : 'view'
+    } catch {
+      return 'view'
+    }
+  })
+  const switchNavTab = (tab: NavCategory) => {
+    setNavTab(tab)
+    try { localStorage.setItem(NAV_TAB_KEY, tab) } catch { /* ignore */ }
+  }
+  // 路由落在某个导航项上时自动切到对应分组，保证激活项始终可见
+  useEffect(() => {
+    const pathname = location.pathname
+    const hit = allNav.find(n =>
+      n.to === '/' ? pathname === '/' : pathname === n.to || pathname.startsWith(`${n.to}/`),
+    )
+    if (!hit) return
+    const cat = navCategory(hit.to)
+    setNavTab(prev => {
+      if (prev === cat) return prev
+      try { localStorage.setItem(NAV_TAB_KEY, cat) } catch { /* ignore */ }
+      return cat
+    })
+  }, [location.pathname, allNav])
+
+  const tabNavItems = visibleNavItems.filter(n => navCategory(n.to) === navTab)
+  // 监控未读: 用户在 AI 分析 tab 时用红点提示「查看」tab 有未读告警
+  const unreadAlerts = useUnreadAlerts()
+  const monitorBadgeEnabled = (() => {
+    try { return localStorage.getItem('monitor_badge_enabled') !== '0' } catch { return true }
+  })()
 
   const handleToggle = async (enabled: boolean) => {
     // 开启时重新校验后端实时行情模式，后端处理数据源 capability。
@@ -263,23 +342,15 @@ export function Layout() {
     <div className="h-screen grid grid-cols-[14rem_1fr] bg-base text-foreground overflow-hidden">
       <aside className="border-r border-border bg-surface flex flex-col h-full min-h-0 overflow-hidden">
         <div className="px-5 py-5 border-b border-border shrink-0">
-          {/* Brand block — 原创 logo + 等宽 wordmark */}
-          <div className="flex items-center gap-2.5">
-            <Logo
-              size={28}
-              className="shrink-0 drop-shadow-[0_0_8px_rgba(139,92,246,0.5)]"
-              style={{ color: BRAND }}
-            />
-            <div
-              className="font-mono font-bold text-[13px] tracking-[0.06em] text-foreground leading-tight"
-              style={{ textShadow: `0 0 10px ${BRAND}44` }}
-            >
-              <div>TickFlow</div>
-              <div>Stock Panel</div>
-            </div>
+          {/* Brand block — FM wordmark */}
+          <div
+            className="font-mono font-bold text-[22px] tracking-[0.12em] leading-tight"
+            style={{ color: BRAND, textShadow: `0 0 12px ${BRAND}55` }}
+          >
+            FM
           </div>
 
-          <div className="mt-2.5 text-[10px] uppercase tracking-[0.22em] text-secondary">
+          <div className="mt-1.5 text-[10px] uppercase tracking-[0.22em] text-secondary">
             Quant · Terminal
           </div>
 
@@ -290,8 +361,36 @@ export function Layout() {
 
         </div>
 
-        <nav className="flex-1 min-h-0 overflow-y-auto px-2 py-3 space-y-0.5">
-          {visibleNavItems.map(({ to, label, icon: Icon }) => (
+        {/* 查看 / AI 分析 分组切换 */}
+        <div className="px-3 pt-3 shrink-0">
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-elevated/50 p-1">
+            {NAV_TABS.map(({ key, label, icon: TabIcon }) => {
+              const active = navTab === key
+              const showUnreadDot = key === 'view' && !active && unreadAlerts > 0 && monitorBadgeEnabled
+              return (
+                <button
+                  key={key}
+                  onClick={() => switchNavTab(key)}
+                  className={cn(
+                    'relative flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors duration-150 ease-smooth',
+                    active
+                      ? 'bg-elevated text-foreground shadow-sm'
+                      : 'text-secondary hover:text-foreground',
+                  )}
+                >
+                  <TabIcon className="h-3.5 w-3.5 shrink-0" />
+                  <span>{label}</span>
+                  {showUnreadDot && (
+                    <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-danger animate-pulse" />
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <nav className="flex-1 min-h-0 overflow-y-auto px-2 pb-3 pt-2 space-y-0.5">
+          {tabNavItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
