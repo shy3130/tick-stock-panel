@@ -230,6 +230,12 @@ class StructuredAIResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     elapsed_ms: int = 0
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class AnalysisTraceNode(BaseModel):
+    """分析 trace 节点 (M12 决策节点归一化契约)。
+
+    程序事实与门禁节点 ``locked=true``, 模型只能解释，不能改写状态；
     locked 节点状态不可变。
     """
 
