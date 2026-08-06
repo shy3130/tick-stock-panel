@@ -40,9 +40,9 @@ export const DATA_CARD_DEFS: CardDef[] = [
   { key: 'adj_factor',  label: '除权因子', desc: '复权计算因子',           defaultHiddenIfNoCap: true },
   { key: 'enriched',    label: 'Enriched', desc: '技术指标计算结果',       defaultHiddenIfNoCap: false },
   { key: 'index',       label: '指数',     desc: '主要市场指数日K',        defaultHiddenIfNoCap: false },
-  { key: 'etf',         label: 'ETF',      desc: '场内交易基金日K',         defaultHiddenIfNoCap: false, defaultHidden: true },
-  { key: 'minute',      label: '分钟 K',   desc: '分钟级K线(需数据源支持)', defaultHiddenIfNoCap: true },
-  { key: 'financials',  label: '财务数据', desc: '财报数据(需数据源支持)',   defaultHiddenIfNoCap: true },
+  { key: 'etf',         label: 'ETF',      desc: '场内交易基金日K/指标 · 复权因子仅覆盖极少数标的', defaultHiddenIfNoCap: false, defaultHidden: true },
+  { key: 'minute',      label: 'A股分钟 K', desc: 'A 股标的池分钟级K线(需数据源支持)', defaultHiddenIfNoCap: true },
+  { key: 'financials',  label: 'A股财务数据', desc: '仅 A 股上市公司财报(需数据源支持)', defaultHiddenIfNoCap: true },
 ]
 
 const DEFAULT_ORDER = DATA_CARD_DEFS.map(d => d.key)

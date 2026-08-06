@@ -7,14 +7,20 @@ import { toast } from '@/components/Toast'
 
 const BASE = ''
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, opts?: { silent404?: boolean }): Promise<T> {
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
+    // 404 对调用方是"无数据"语义(如尚未生成 AI 归因)时静默返回 null,不弹 toast
+    if (opts?.silent404 && res.status === 404) return null as T
     let detail = ''
-    try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
+    try {
+      const j = JSON.parse(await res.text())
+      const rawDetail = j.detail ?? j.message ?? ''
+      detail = typeof rawDetail === 'string' ? rawDetail : JSON.stringify(rawDetail)
+    } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
     if (res.status !== 401) toast(msg, 'error')
@@ -50,6 +56,13 @@ export interface AgentMsg {
   display_content?: string
 }
 
+export interface AgentToolTrace {
+  name: string
+  args?: Record<string, unknown>
+  result?: unknown
+  elapsed_ms?: number
+}
+
 export interface AgentTool {
   name: string
   description: string
@@ -59,11 +72,11 @@ export interface AgentTool {
 export type AgentEvent =
   | { type: 'attempt_start'; attempt_id: string; session_id?: string }
   | { type: 'tool_call'; name: string; args: Record<string, unknown> }
-  | { type: 'tool_result'; name: string; result: unknown }
+  | { type: 'tool_result'; name: string; result: unknown; elapsed_ms?: number }
   | { type: 'delta'; content: string }
   | { type: 'cancelled'; attempt_id: string }
-  | { type: 'done' }
-  | { type: 'error'; message: string }
+  | { type: 'done'; elapsed_ms?: number }
+  | { type: 'error'; message: string; elapsed_ms?: number }
 
 export interface AgentSession {
   session_id: string
@@ -78,6 +91,8 @@ export interface AgentSession {
 export interface AgentStoredMessage extends AgentMsg {
   message_id: string
   created_at: string
+  tool_traces?: AgentToolTrace[]
+  elapsed_ms?: number
 }
 
 export interface DocumentEnvelope {
@@ -244,10 +259,6 @@ export interface KlineRow {
   macd_hist?: number | null
   rsi_14?: number | null
   vol_ratio_5d?: number | null
-  [key: string]: any
-}
-
-// ===== Watchlist =====
   expma_12?: number | null
   expma_50?: number | null
   trix?: number | null
@@ -289,11 +300,26 @@ export interface KlineRow {
   cr_26?: number | null
   mass_9_25?: number | null
   asi?: number | null
+  [key: string]: any
+}
+
+// ===== Watchlist =====
 export interface WatchlistEntry {
   symbol: string
   added_at: string
   note?: string
   name?: string | null
+}
+
+export interface WatchlistImportCandidate {
+  symbol: string
+  source_text: string | null
+}
+
+export interface WatchlistImportResult {
+  available: boolean
+  candidates: WatchlistImportCandidate[]
+  error?: string
 }
 
 export interface Quote {
@@ -344,6 +370,67 @@ export interface ScreenerResult {
   rows: any[]
   total: number
   elapsed_ms: number
+}
+
+export interface ScreenerCondition {
+  field: string
+  op: string
+  value?: number | string | boolean | Array<number | string> | null
+}
+
+export interface ScreenerOrderBy {
+  field: string
+  direction: 'asc' | 'desc'
+}
+
+export interface ScreenerFieldSpec {
+  field: string
+  label: string
+  group: string
+  source: string
+  unit?: string | null
+  value_type: 'numeric' | 'enum' | 'boolean'
+  null_policy: string
+  availability: 'available' | 'unavailable'
+  ops: string[]
+  sortable: boolean
+  options?: { value: string; label: string }[] | null
+}
+
+export interface ScreenerQueryRequest {
+  conditions: ScreenerCondition[]
+  as_of?: string
+  order_by?: ScreenerOrderBy
+  limit: number
+}
+
+export interface ScreenerQueryResponse {
+  rows: Record<string, unknown>[]
+  total: number
+  applied: ScreenerCondition[]
+  as_of: string | null
+  elapsed_ms: number
+}
+
+export interface ScreenerNlUnrecognized {
+  raw: string
+  reason: string
+}
+
+export interface ScreenerNlParseResponse {
+  recognized: ScreenerCondition[]
+  unrecognized: ScreenerNlUnrecognized[]
+}
+
+export interface ScreenerPreset {
+  id: string
+  name: string
+  description: string
+  predicate: {
+    conditions: ScreenerCondition[]
+    order_by: ScreenerOrderBy | null
+  }
+  executable_level: 'full' | 'needs_fundamental' | 'unsupported'
 }
 
 export interface MarketSnapshotRow {
@@ -933,6 +1020,18 @@ export interface AiProfileInput {
   user_agent?: string
 }
 
+/** AI 路由策略 — 备用 profile 受控 fallback(默认关闭,仅 provider 故障时按序切换) */
+export interface AiRoutePolicy {
+  allow_profile_fallback: boolean
+  fallback_profile_ids: string[]
+}
+
+export interface AiProfilesResponse {
+  profiles: AiProfileMasked[]
+  default_id: string
+  route_policy: AiRoutePolicy
+}
+
 export interface Preferences {
   data_provider?: string
   effective_data_provider?: string
@@ -980,6 +1079,7 @@ export interface Preferences {
   nav_order: string[]
   nav_hidden: string[]
   screener_auto_run: boolean
+  tradingAutoReview: boolean
 }
 
 // ===== Strategy Alert =====
@@ -1139,7 +1239,13 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
   aiProfiles: () =>
-    request<{ profiles: AiProfileMasked[]; default_id: string }>('/api/settings/ai/profiles'),
+    request<AiProfilesResponse>('/api/settings/ai/profiles'),
+
+  updateAiRoutePolicy: (policy: AiRoutePolicy) =>
+    request<{ route_policy: AiRoutePolicy }>('/api/settings/ai/route-policy', {
+      method: 'PUT',
+      body: JSON.stringify(policy),
+    }),
 
   createAiProfile: (profile: AiProfileInput) =>
     request<{ id: string }>('/api/settings/ai/profiles', {
@@ -1358,6 +1464,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ channels }),
     }),
+  updateTradingAutoReview: (enabled: boolean) =>
+    request<{ tradingAutoReview: boolean }>('/api/settings/preferences/trading-auto-review', {
+      method: 'PUT',
+      body: JSON.stringify({ tradingAutoReview: enabled }),
+    }),
   updateDepthPollingInterval: (interval: number) =>
     request<{ depth_polling_interval: number }>('/api/settings/preferences/depth-polling-interval', {
       method: 'PUT',
@@ -1523,6 +1634,11 @@ export const api = {
     request<{ status: string; job_id: string }>('/api/kline/rebuild_enriched', {
       method: 'POST',
     }),
+  repairEnrichedRange: (startDate: string, endDate: string) =>
+    request<{ status: string; job_id: string }>('/api/kline/repair_enriched_range', {
+      method: 'POST',
+      body: JSON.stringify({ start_date: startDate, end_date: endDate }),
+    }),
 
   watchlistList: () => request<{ symbols: WatchlistEntry[] }>('/api/watchlist'),
   watchlistAdd: (symbol: string, note = '') =>
@@ -1540,6 +1656,16 @@ export const api = {
       `/api/watchlist/${encodeURIComponent(symbol)}`,
       { method: 'DELETE' },
     ),
+  watchlistOcrStatus: () =>
+    request<{ provider: string; available: boolean }>('/api/watchlist/ocr-status'),
+  watchlistImportImage: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<WatchlistImportResult>('/api/watchlist/import-image', {
+      method: 'POST',
+      body: fd,
+    })
+  },
   watchlistMoveToTop: (symbol: string) =>
     request<{ symbols: WatchlistEntry[] }>(
       `/api/watchlist/${encodeURIComponent(symbol)}/top`,
@@ -1556,6 +1682,18 @@ export const api = {
     ),
 
   screenerStrategies: () => request<{ presets: ScreenerStrategy[] }>('/api/screener/strategies'),
+  screenerFields: () => request<{ fields: ScreenerFieldSpec[] }>('/api/screener/fields'),
+  screenerConditionQuery: (payload: ScreenerQueryRequest) =>
+    request<ScreenerQueryResponse>('/api/screener/query', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  screenerNlParse: (text: string, profileId?: string) =>
+    request<ScreenerNlParseResponse>('/api/screener/nl_parse', {
+      method: 'POST',
+      body: JSON.stringify({ text, ...(profileId ? { profile_id: profileId } : {}) }),
+    }),
+  screenerNlPresets: () => request<{ presets: ScreenerPreset[] }>('/api/screener/nl_presets'),
   screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string) =>
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
@@ -2175,7 +2313,7 @@ export const api = {
 // ===== Pipeline =====
 export interface PipelineJob {
   id: string
-  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed'
   stage: string
   progress: number          // 0-100 整体进度
   stage_pct: number         // 0-100 当前阶段内进度
@@ -2192,6 +2330,7 @@ export interface PipelineJob {
     index_daily_rows?: number
     minute_rows: number
     skipped_stages?: string[]
+    failed_stages?: { stage: string; error: string }[]
   } | null
   error: string | null
 }
@@ -2347,4 +2486,565 @@ export interface AnalysisMenu {
   created_at?: string | null
   updated_at?: string | null
   builtin?: boolean
+}
+
+// ===== Trading (YMOS 交易域) =====
+// 后端: api/trading.py + api/trading_review.py + api/trading_plans.py + api/strategy_profile.py
+// 契约以 services/trading/*.py 源码为准: 事件流 append-only, 单笔文件是当前事实的缓存投影。
+
+export type TradeStatus = '计划中' | '持仓中' | '已平仓'
+
+export type TradeEventKind =
+  | 'open' | 'prepare' | 'revise' | 'fill'
+  | 'add' | 'tp' | 'sl' | 'adjust' | 'close'
+
+export interface TradeThesis {
+  text: string
+  invalidation: string
+  createdAt: string
+}
+
+export interface TradePlanLeg {
+  qty: number | null
+  price: number | null
+  ts: string
+}
+
+/** 单笔交易当前事实 (data/user_data/trading/trades/{id}.json) */
+export interface Trade {
+  schemaVersion: number
+  tradeId: string
+  symbol: string
+  name: string
+  status: TradeStatus
+  strategy: string | null
+  thesis: TradeThesis
+  stopLoss: number | null
+  exitRule?: string
+  position: { qty: number; costPrice: number; invested: number }
+  realizedPnl: number
+  createdAt: string
+  closedAt: string | null
+  /** prepare 事件写入的建仓计划 */
+  plan?: TradePlanLeg
+  /** revise 事件累积的修订历史 */
+  planRevisions?: TradePlanLeg[]
+}
+
+/** 生命周期事件 (trade_events.jsonl, 只追加) */
+export interface TradeEvent {
+  schemaVersion: number
+  tradeId: string
+  kind: TradeEventKind
+  ts: string
+  payload: Record<string, unknown>
+  note: string
+  /** 门禁未通过但用户确认执行 → 绕门留痕 */
+  gateBypassed?: boolean
+  /** 计划偏差接口补充的标的 */
+  symbol?: string
+}
+
+export interface GateCheckResult {
+  id: string
+  name: string
+  passed: boolean
+  detail: string
+}
+
+export interface GateEvaluation {
+  passed: boolean
+  gates: GateCheckResult[]
+  missing: string[]
+}
+
+/** 决策审计条目 (decision_audit.jsonl, 拦截/放行均留痕) */
+export interface AuditEntry {
+  schemaVersion: number
+  ts: string
+  mode: string
+  tradeId: string
+  symbol: string
+  passed: boolean
+  gates: GateCheckResult[]
+  missing: string[]
+  note: string
+}
+
+export interface AccountChange {
+  ts: string
+  amount: number
+  reason: string
+}
+
+export interface TradingAccount {
+  id: string
+  currency: string
+  capital: number
+  horizonFundMonths: number
+  maxSingleRatio: number
+  changes: AccountChange[]
+}
+
+export interface AccountsDoc {
+  schemaVersion: number
+  accounts: TradingAccount[]
+}
+
+export type PortfolioHealth = 'normal' | 'attention' | 'critical'
+
+export interface PortfolioPosition {
+  tradeId: string
+  symbol: string
+  name: string
+  qty: number
+  costPrice: number
+  price: number | null
+  marketValue: number | null
+  unrealizedPnl: number | null
+  stopLoss: number | null
+  stopLossDistance: number | null
+  thesis: TradeThesis
+  stale: boolean
+  exposure?: number | null
+}
+
+export interface FholdAccount {
+  id: string
+  name: string
+  broker: string
+  isDefault: boolean
+}
+
+export interface FholdPosition {
+  symbol: string | null
+  code: string
+  name: string
+  accountId: string
+  qty: number
+  costPrice: number
+  currentPrice: number
+  marketValue: number
+  holdingPnl: number
+  holdingPnlRatio: number
+  sourceDate?: string
+  updatedAt?: string
+}
+
+export interface FholdHoldings {
+  available: boolean
+  accounts: FholdAccount[]
+  positions: FholdPosition[]
+}
+
+/** 组合快照 (GET /api/trading/portfolio, 实时计算派生值) */
+export interface PortfolioSnapshot {
+  nav: number
+  capital: number
+  realizedPnl: number
+  unrealizedPnl: number
+  positionsValue: number
+  available: number
+  pendingPlansAmount: number
+  positions: PortfolioPosition[]
+  health: PortfolioHealth
+  stale: boolean
+  priceSource: string
+  maxSingleRatio: number
+  fhold: FholdHoldings
+}
+
+/** 机械红旗 (red_flags.py):放宽止损/亏损加仓/绕过门禁/审计断链 + P6 期限超限/仓位超限/门禁膨胀 */
+export interface RedFlag {
+  type:
+    | 'stop_loss_widened'
+    | 'loss_add'
+    | 'gate_bypassed'
+    | 'audit_missing'
+    | 'horizon_exceeded'   // 持仓超限(单笔级)
+    | 'size_over_limit'    // 仓位超限(单笔级)
+    | 'gate_proliferation' // 门禁膨胀(全局级)
+    | string
+  ts: string
+  kind?: string
+  old?: number
+  new?: number
+  price?: number
+  costPrice?: number
+  /** P6 新类型:后端预格式化文案,直接展示 */
+  detail?: string
+  // horizon_exceeded
+  holdingDays?: number
+  horizonMonths?: number
+  limitDays?: number
+  // size_over_limit
+  marketValue?: number
+  nav?: number
+  exposure?: number
+  breached?: string[]
+  maxSingleRatio?: number
+  positionLimitPct?: number
+  // gate_proliferation(全局级)
+  ruleCount?: number
+  threshold?: number
+}
+
+/** AI 归因结果 (autopsy.py: A 策略正常不利 / B 执行偏离 / C 规则歧义冲突 / D 数据问题) */
+export interface AutopsyResult {
+  schemaVersion: number
+  tradeId: string
+  classification: string
+  reasoning: string
+  fix: string
+  rawResponse: string
+  redFlags: RedFlag[]
+  ts: string
+}
+
+/** 盘后状态驱动归因结果 (POST /api/trading/review/auto-run) */
+export interface AutoReviewResult {
+  level: 'L0' | 'L1'
+  candidates: number
+  autopsied: number
+  skipped: number
+  errors?: Array<{ tradeId: string; error: string }>
+  /** AI 未配置时为 'blocked_by_dependency' */
+  code?: string
+  detail?: string
+}
+
+export type ProposalStatus = 'draft' | 'approved' | 'rejected' | 'trial' | 'verified'
+
+export interface ProposalHistoryItem {
+  ts: string
+  from: string
+  to: string
+  note: string
+}
+
+export interface Proposal {
+  schemaVersion: number
+  id: string
+  title: string
+  target: string
+  evidence: unknown[]
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  falsifier: string
+  sampleSize: number
+  status: ProposalStatus
+  createdAt: string
+  updatedAt: string
+  history: ProposalHistoryItem[]
+  /** P6:属放宽 && 近30天有亏损平仓 → true,审批警示 */
+  relaxationAfterLoss?: boolean
+}
+
+export type GateRuleMode = 'buy_new' | 'add' | 'tp' | 'sl' | 'close' | 'adjust'
+
+export interface GateRuleItem {
+  id: string
+  text: string
+}
+
+export interface GateRuleSection {
+  all: GateRuleItem[]
+  any: GateRuleItem[]
+  discipline: GateRuleItem[]
+}
+
+export type GateRulesMap = Record<GateRuleMode, GateRuleSection>
+
+export interface GateRulesDoc {
+  schemaVersion: number
+  rules: GateRulesMap
+}
+
+export type PlanAction = 'buy_new' | 'add' | 'tp' | 'sl' | 'close' | 'adjust' | 'watch'
+
+export interface PlanEntry {
+  id: string
+  symbol: string
+  tradeId: string | null
+  action: PlanAction
+  trigger: string
+  qty: number | null
+  reason: string
+  createdAt: string
+}
+
+export interface TradePlanDoc {
+  schemaVersion: number
+  date: string
+  entries: PlanEntry[]
+  actualNotes: string
+}
+
+export interface PlanDeviationPlanned {
+  key: string[]
+  id: string
+  symbol: string
+  action: string
+  tradeId: string | null
+}
+
+export interface PlanDeviationDone {
+  key: string[]
+  symbol: string
+  kind: string
+  tradeId: string
+  ts: string
+}
+
+export interface PlanDeviation {
+  date: string
+  plannedCount: number
+  doneCount: number
+  planned_but_not_done: PlanDeviationPlanned[]
+  done_but_not_planned: PlanDeviationDone[]
+  matched: PlanDeviationPlanned[]
+}
+
+export interface StrategyProfileInvalidation {
+  name: string
+  observable: string
+  action: string
+}
+
+/** 策略坐标卡 family 合法值(P6.3) */
+export type StrategyFamily =
+  | 'value' | 'growth' | 'trend' | 'event'
+  | 'short_horizon' | 'relative_value' | 'mixed'
+
+/** family=mixed 时必填的四要素裁决 */
+export interface StrategyFamilyMix {
+  entryJudge: string
+  invalidationAuthority: string
+  sizingHorizon: string
+  conflictResolution: string
+}
+
+/** 策略剧本(P6.3,三文本均可缺省) */
+export interface StrategyPlaybook {
+  scope?: string
+  entry?: string
+  exit?: string
+}
+
+export interface StrategyProfile {
+  schemaVersion: number
+  strategyId: string
+  invalidation: StrategyProfileInvalidation[]
+  risk: { positionLimitPct: number; lossBudgetPct: number; thesisHorizonMonths: number }
+  cadence: { review: string }
+  /** 策略坐标卡(P6.3 可选) */
+  family?: StrategyFamily | string
+  /** family=mixed 时必填 */
+  familyMix?: StrategyFamilyMix
+  /** 策略剧本(P6.3 可选) */
+  playbook?: StrategyPlaybook
+}
+
+export interface StrategyProfileCheck {
+  id: string
+  name: string
+  status: 'pass' | 'partial' | 'fail' | 'insufficient_evidence' | string
+  detail: string
+}
+
+/** 策略体检响应(ai=true 时追加 AI 深度体检报告) */
+export interface StrategyValidateResult {
+  checks: StrategyProfileCheck[]
+  aiReport?: string | null
+  aiError?: string
+}
+
+// ── 生命周期 (api/trading.py) ──
+
+export function tradingListTrades(status?: TradeStatus | string) {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request<{ trades: Trade[] }>(`/api/trading/trades${qs}`)
+}
+
+export function tradingGetTrade(id: string) {
+  return request<{ trade: Trade; events: TradeEvent[] }>(
+    `/api/trading/trades/${encodeURIComponent(id)}`,
+  )
+}
+
+export interface TradingOpenPayload {
+  symbol: string
+  name: string
+  thesis: { text: string; invalidation: string }
+  stopLoss?: number | null
+  strategy?: string
+  note?: string
+  gate?: { confirmed?: boolean }
+}
+
+export function tradingOpenTrade(payload: TradingOpenPayload) {
+  return request<Trade>('/api/trading/trades', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export interface TradingAppendEventPayload {
+  kind: Exclude<TradeEventKind, 'open'>
+  payload?: Record<string, unknown>
+  note?: string
+  /** 门禁预检未过时由用户确认后带上: {confirmed: true} → 绕门留痕 */
+  gate?: { confirmed?: boolean; gates?: GateCheckResult[]; missing?: string[] }
+}
+
+export function tradingAppendEvent(id: string, payload: TradingAppendEventPayload) {
+  return request<Trade>(`/api/trading/trades/${encodeURIComponent(id)}/events`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingListAudit(params?: { tradeId?: string; passed?: boolean; limit?: number }) {
+  const sp = new URLSearchParams()
+  if (params?.tradeId) sp.set('trade_id', params.tradeId)
+  if (params?.passed !== undefined) sp.set('passed', String(params.passed))
+  if (params?.limit) sp.set('limit', String(params.limit))
+  const qs = sp.toString()
+  return request<{ audit: AuditEntry[] }>(`/api/trading/audit${qs ? `?${qs}` : ''}`)
+}
+
+// ── 账户 / 组合快照 ──
+
+export function tradingGetAccounts() {
+  return request<AccountsDoc>('/api/trading/accounts')
+}
+
+export function tradingPutAccounts(payload: { accounts: TradingAccount[] }) {
+  return request<AccountsDoc>('/api/trading/accounts', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingGetPortfolio() {
+  return request<PortfolioSnapshot>('/api/trading/portfolio')
+}
+
+// ── 红旗 / AI 归因 (api/trading_review.py) ──
+
+export function tradingGetRedFlags() {
+  return request<{ flags: Record<string, RedFlag[]> }>('/api/trading/red-flags')
+}
+
+export function tradingGetTradeRedFlags(id: string) {
+  return request<{ tradeId: string; flags: RedFlag[] }>(
+    `/api/trading/trades/${encodeURIComponent(id)}/red-flags`,
+  )
+}
+
+export function tradingRunAutopsy(id: string) {
+  return request<AutopsyResult>(`/api/trading/trades/${encodeURIComponent(id)}/autopsy`, {
+    method: 'POST',
+  })
+}
+
+export function tradingGetAutopsy(id: string) {
+  // 404 = 尚未生成归因(正常状态), 静默返回 null 不弹 toast
+  return request<AutopsyResult | null>(
+    `/api/trading/trades/${encodeURIComponent(id)}/autopsy`,
+    undefined,
+    { silent404: true },
+  )
+}
+
+/** 盘后状态驱动 AI 归因(L0/L1):POST /api/trading/review/auto-run */
+export function tradingRunAutoReview() {
+  return request<AutoReviewResult>('/api/trading/review/auto-run', { method: 'POST' })
+}
+
+// ── 策略变更提案 ──
+
+export function tradingListProposals(status?: ProposalStatus | string) {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request<{ proposals: Proposal[] }>(`/api/trading/proposals${qs}`)
+}
+
+export function tradingCreateProposal(payload: Partial<Proposal> & { falsifier: string }) {
+  return request<Proposal>('/api/trading/proposals', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function tradingUpdateProposal(id: string, payload: Record<string, unknown>) {
+  return request<Proposal>(`/api/trading/proposals/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+// ── 门禁 (api/trading_plans.py) ──
+
+export function tradingGetGateRules() {
+  return request<GateRulesDoc>('/api/trading/gate-rules')
+}
+
+export function tradingPutGateRules(payload: { rules: Partial<GateRulesMap> }) {
+  return request<GateRulesDoc>('/api/trading/gate-rules', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingEvaluateGates(payload: {
+  mode: string
+  tradeId?: string
+  payload: Record<string, unknown>
+}) {
+  return request<GateEvaluation>('/api/trading/gates/evaluate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// ── 交易计划台 ──
+
+export function tradingGetPlan(date: string) {
+  return request<TradePlanDoc>(`/api/trading/plans/${date}`)
+}
+
+export function tradingPutPlan(date: string, payload: { entries: PlanEntry[]; actualNotes?: string }) {
+  return request<TradePlanDoc>(`/api/trading/plans/${date}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingGetPlanDeviation(date: string) {
+  return request<PlanDeviation>(`/api/trading/plans/${date}/deviation`)
+}
+
+// ── 策略风险声明 (api/strategy_profile.py, prefix=/api/strategies) ──
+
+export function strategyGetProfile(id: string) {
+  return request<{ profile: StrategyProfile }>(
+    `/api/strategies/${encodeURIComponent(id)}/profile`,
+  )
+}
+
+export function strategyPutProfile(
+  id: string,
+  payload: Omit<StrategyProfile, 'schemaVersion' | 'strategyId'> | Record<string, unknown>,
+) {
+  return request<{ ok: boolean; profile: StrategyProfile }>(
+    `/api/strategies/${encodeURIComponent(id)}/profile`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  )
+}
+
+export function strategyDeleteProfile(id: string) {
+  return request<{ ok: boolean }>(`/api/strategies/${encodeURIComponent(id)}/profile`, {
+    method: 'DELETE',
+  })
+}
+
+export function strategyValidateProfile(id: string, ai = false) {
+  const qs = ai ? '?ai=true' : ''
+  return request<StrategyValidateResult>(
+    `/api/strategies/${encodeURIComponent(id)}/profile/validate${qs}`,
+  )
 }

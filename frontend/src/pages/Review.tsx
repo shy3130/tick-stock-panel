@@ -16,10 +16,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   BookOpenCheck, RefreshCw, Sparkles, Trash2, History, ChevronRight, AlertTriangle,
   Database, Wand2, Copy, Download, Clock, X, Check, Activity, Layers, Shuffle, TrendingUp,
+  Flag,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-import { api, type OverviewMarket, type AiReviewReport } from '@/lib/api'
+import { api, tradingGetRedFlags, tradingListTrades, tradingRunAutoReview, type OverviewMarket, type AiReviewReport, type RedFlag, type AutoReviewResult } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { fmtBigNum } from '@/lib/format'
@@ -40,6 +41,8 @@ import { ThemeRotationPanel } from '@/components/review/ThemeRotationPanel'
 import { ReviewCluesPanel } from '@/components/review/ReviewCluesPanel'
 import { HkBreadthPanel } from '@/components/review/HkBreadthPanel'
 import { HkMoversPanel } from '@/components/review/HkMoversPanel'
+import { ReviewCard } from '@/components/review/shared'
+import { EmptyState } from '@/components/EmptyState'
 
 // ================================================================
 // 市场与分区 Tab
@@ -50,7 +53,7 @@ import { HkMoversPanel } from '@/components/review/HkMoversPanel'
 // 所以港股走自己更薄的两个分区。详见 backend services/review_hk 模块头。
 // ================================================================
 type Market = 'a' | 'hk'
-type ReviewTab = 'report' | 'emotion' | 'ladder' | 'rotation' | 'clues' | 'hk-breadth' | 'hk-movers'
+type ReviewTab = 'report' | 'emotion' | 'ladder' | 'rotation' | 'clues' | 'flags' | 'hk-breadth' | 'hk-movers'
 
 const A_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
   { key: 'report', label: 'AI 报告', icon: Sparkles },
@@ -58,6 +61,7 @@ const A_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
   { key: 'ladder', label: '连板天梯', icon: Layers },
   { key: 'rotation', label: '题材轮动', icon: Shuffle },
   { key: 'clues', label: '风险线索', icon: AlertTriangle },
+  { key: 'flags', label: '纪律红旗', icon: Flag },
 ]
 
 const HK_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
@@ -399,7 +403,10 @@ export function Review() {
               : <HkBreadthPanel asOf={asOf} days={hkDays} onDaysChange={setHkDays} />
           )}
 
-          {market === 'a' && (marketQuery.isLoading && !data ? (
+          {/* ===== 纪律红旗(交易域数据,不依赖市场日 K,独立于下方数据守卫)===== */}
+          {market === 'a' && tab === 'flags' && <RedFlagsPanel />}
+
+          {market === 'a' && tab !== 'flags' && (marketQuery.isLoading && !data ? (
             <div className="flex h-40 items-center justify-center">
               <div className="flex items-center gap-2 text-sm text-muted">
                 <RefreshCw className="h-4 w-4 animate-spin" /> 加载市场数据…
@@ -963,5 +970,259 @@ function HistoryPanel({
         )}
       </div>
     </div>
+  )
+}
+
+// ================================================================
+// 纪律红旗 —— 机械检测的交易违规记录(纯代码判定,无 LLM)
+//
+// 数据:GET /api/trading/red-flags(按 tradeId 分组,仅含有红旗的笔)
+//      + GET /api/trading/trades(补股票名称 / 状态)
+// 四类红旗(后端 services/trading/red_flags.py 定义,这里只展示):
+//   放宽止损 stop_loss_widened {old,new,costPrice} / 亏损加仓 loss_add {price,costPrice}
+//   绕过门禁 gate_bypassed {kind} / 审计断链 audit_missing {kind}
+// 红旗与盈亏无关 —— 赚钱的违规也照记。
+// ================================================================
+const FLAG_META: Record<string, { label: string; badge: string }> = {
+  stop_loss_widened: { label: '放宽止损', badge: 'bg-danger/10 text-danger' },
+  loss_add:          { label: '亏损加仓', badge: 'bg-warning/10 text-warning' },
+  gate_bypassed:     { label: '绕过门禁', badge: 'bg-accent/10 text-accent' },
+  audit_missing:     { label: '审计断链', badge: 'bg-muted/10 text-muted' },
+  // P6 新类型
+  horizon_exceeded:  { label: '期限超限', badge: 'bg-warning/10 text-warning' },
+  size_over_limit:   { label: '仓位超限', badge: 'bg-danger/10 text-danger' },
+  gate_proliferation:{ label: '门禁膨胀', badge: 'bg-muted/15 text-secondary' },
+}
+
+const EVENT_KIND_LABEL: Record<string, string> = {
+  open: '开仓', prepare: '建仓准备', revise: '修订', fill: '成交',
+  add: '加仓', tp: '止盈', sl: '止损', adjust: '调整', close: '平仓',
+}
+
+const TRADE_STATUS_BADGE: Record<string, string> = {
+  '计划中': 'bg-warning/10 text-warning',
+  '持仓中': 'bg-accent/10 text-accent',
+  '已平仓': 'bg-muted/10 text-muted',
+}
+
+function fmtPrice(v: number | undefined): string {
+  return v == null || Number.isNaN(v) ? '—' : v.toFixed(2)
+}
+
+function flagDetail(f: RedFlag): string {
+  switch (f.type) {
+    case 'stop_loss_widened':
+      return `止损 ${fmtPrice(f.old)} → ${fmtPrice(f.new)} · 当时成本 ${fmtPrice(f.costPrice)}`
+    case 'loss_add':
+      return `加仓价 ${fmtPrice(f.price)} 低于当时成本 ${fmtPrice(f.costPrice)}`
+    case 'gate_bypassed':
+      return `${EVENT_KIND_LABEL[f.kind ?? ''] ?? f.kind ?? '未知'} 事件绕过门禁检查`
+    case 'audit_missing':
+      return `${EVENT_KIND_LABEL[f.kind ?? ''] ?? f.kind ?? '未知'} 事件缺审计留痕`
+    case 'horizon_exceeded':
+    case 'size_over_limit':
+    case 'gate_proliferation':
+      // P6 新类型:detail 为后端预格式化文案,直接展示
+      return typeof f.detail === 'string' && f.detail ? f.detail : f.type
+    default:
+      return f.type
+  }
+}
+
+// size_over_limit 的 breached[] chip 文案(与后端 _LABELS_LIMIT 对齐)
+const BREACH_LABEL: Record<string, string> = { account: '账户上限', strategy: '策略上限' }
+
+// 盘后状态驱动归因摘要(立即跑按钮触发)
+function AutoReviewSummary({ result }: { result: AutoReviewResult }) {
+  const errs = result.errors?.length ?? 0
+  const blocked = result.code === 'blocked_by_dependency'
+  const warn = blocked || errs > 0
+  return (
+    <div className={cn(
+      'mb-2 rounded-btn border px-3 py-2 text-[11px] leading-relaxed',
+      warn ? 'border-warning/30 bg-warning/5' : 'border-accent/30 bg-accent/5',
+    )}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-medium text-foreground">
+        <span>盘后归因 · {result.level}</span>
+        <span className="text-secondary">候选 {result.candidates}</span>
+        <span className="text-secondary">归因 {result.autopsied}</span>
+        <span className="text-secondary">跳过 {result.skipped}</span>
+        {errs > 0 && <span className="text-warning">{errs} 笔失败</span>}
+      </div>
+      {blocked && <p className="mt-1 text-warning">{result.detail ?? 'AI 未配置,无法执行归因分析'}</p>}
+      {!blocked && errs > 0 && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-warning/90">
+          {(result.errors ?? []).map((e, i) => <li key={i}>{e.tradeId}: {e.error}</li>)}
+        </ul>
+      )}
+      {!blocked && errs === 0 && result.level === 'L0' && (
+        <p className="mt-0.5 text-muted">无新红旗且无新平仓,零 AI 调用。</p>
+      )}
+    </div>
+  )
+}
+
+function RedFlagsPanel() {
+  const flagsQuery = useQuery({
+    queryKey: ['trading-red-flags'],
+    queryFn: () => tradingGetRedFlags(),
+    staleTime: 30_000,
+  })
+  const tradesQuery = useQuery({
+    queryKey: ['trading-trades'],
+    queryFn: () => tradingListTrades(),
+    staleTime: 30_000,
+  })
+
+  // 盘后状态驱动 AI 归因(L0/L1);结果内联摘要展示
+  const [autoResult, setAutoResult] = useState<AutoReviewResult | null>(null)
+  const qc = useQueryClient()
+  const runAutoMut = useMutation({
+    mutationFn: () => tradingRunAutoReview(),
+    onSuccess: (data) => {
+      setAutoResult(data)
+      // 归因可能改写了 autopsy,失效相关缓存
+      qc.invalidateQueries({ queryKey: ['trading-red-flags'] })
+      const errs = data.errors?.length ?? 0
+      if (data.level === 'L0') {
+        toast('盘后归因:无新候选,零 AI 调用', 'success')
+      } else if (errs > 0) {
+        toast(`盘后归因完成,但 ${errs} 笔归因失败`, 'error')
+      } else {
+        toast(`盘后归因完成:候选 ${data.candidates} · 归因 ${data.autopsied}`, 'success')
+      }
+    },
+    onError: () => { /* request() 已 toast */ },
+  })
+
+  if (flagsQuery.isLoading && !flagsQuery.data) {
+    return (
+      <div className="grid h-64 place-items-center rounded-card border border-border bg-surface/80">
+        <RefreshCw className="h-4 w-4 animate-spin text-muted" />
+      </div>
+    )
+  }
+
+  if (flagsQuery.isError) {
+    return (
+      <div className="rounded-card border border-border bg-surface/80">
+        <EmptyState icon={Flag} title="红旗数据加载失败" hint="请确认后端已启动,稍后点击刷新重试" />
+      </div>
+    )
+  }
+
+  const groups = flagsQuery.data?.flags ?? {}
+  const tradeById = new Map((tradesQuery.data?.trades ?? []).map(t => [t.tradeId, t]))
+  // 组按最新红旗时间倒序;组内保持事件先后(后端已按事件顺序输出)
+  const entries = Object.entries(groups)
+    .map(([tradeId, flags]) => ({
+      tradeId,
+      flags,
+      latest: flags.reduce((m, f) => (f.ts > m ? f.ts : m), ''),
+    }))
+    .sort((a, b) => b.latest.localeCompare(a.latest))
+  const total = entries.reduce((n, e) => n + e.flags.length, 0)
+
+  return (
+    <ReviewCard
+      title="纪律红旗"
+      icon={<Flag className="h-3.5 w-3.5 text-danger" />}
+      hint="赚钱的违规也会记录 · 红旗与盈亏无关"
+      right={
+        <div className="flex items-center gap-2">
+          {total > 0 && (
+            <span className="font-mono text-[10px] tabular-nums text-danger">{total} 条</span>
+          )}
+          <button
+            onClick={() => runAutoMut.mutate()}
+            disabled={runAutoMut.isPending}
+            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            title="立即跑盘后状态驱动归因(L0/L1)"
+          >
+            {runAutoMut.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+            立即跑盘后归因
+          </button>
+          <button
+            onClick={() => { flagsQuery.refetch(); tradesQuery.refetch() }}
+            disabled={flagsQuery.isFetching}
+            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            title="刷新红旗数据"
+          >
+            <RefreshCw className={cn('h-3 w-3', flagsQuery.isFetching && 'animate-spin')} />刷新
+          </button>
+        </div>
+      }
+    >
+      {/* 盘后归因摘要(最近一次) */}
+      {autoResult && <AutoReviewSummary result={autoResult} />}
+      {entries.length === 0 ? (
+        <EmptyState
+          icon={Flag}
+          title="无红旗记录"
+          hint="所有交易都守住了纪律:没放宽止损、没亏损加仓、没绕过门禁、审计链完整"
+        />
+      ) : (
+        <div className="divide-y divide-border">
+          {entries.map(({ tradeId, flags }) => {
+            const isGlobal = tradeId === 'global'
+            const trade = tradeById.get(tradeId)
+            return (
+              <div key={tradeId} className="px-3.5 py-2.5">
+                {/* 组头:全局组显示「全局」而非股票 */}
+                <div className="flex items-center gap-2">
+                  {isGlobal ? (
+                    <>
+                      <span className="text-xs font-medium text-foreground">全局</span>
+                      <span className="rounded px-1.5 py-0.5 text-[10px] bg-muted/15 text-secondary">全局级</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xs font-medium text-foreground">{trade?.name ?? tradeId}</span>
+                      {trade?.symbol && (
+                        <span className="font-mono text-[10px] text-muted">{trade.symbol}</span>
+                      )}
+                      {trade?.status && (
+                        <span className={cn('rounded px-1.5 py-0.5 text-[10px]', TRADE_STATUS_BADGE[trade.status] ?? 'bg-muted/10 text-muted')}>
+                          {trade.status}
+                        </span>
+                      )}
+                    </>
+                  )}
+                  <span className="ml-auto font-mono text-[10px] tabular-nums text-muted">
+                    {flags.length} 条
+                  </span>
+                </div>
+                <ul className="mt-1.5 space-y-1">
+                  {flags.map((f, i) => {
+                    const meta = FLAG_META[f.type] ?? { label: f.type, badge: 'bg-muted/10 text-muted' }
+                    return (
+                      <li key={`${f.ts}-${i}`} className="flex flex-wrap items-center gap-2 text-[11px]">
+                        <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', meta.badge)}>
+                          {meta.label}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted">
+                          {/* 交易域 ts 为 "%Y-%m-%d %H:%M"(backend now_str),零填充可直接比序;显示裁掉年份 */}
+                          {/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(f.ts) ? f.ts.slice(5) : f.ts}
+                        </span>
+                        <span className="text-secondary">{flagDetail(f)}</span>
+                        {Array.isArray(f.breached) && f.breached.length > 0 && (
+                          <span className="flex flex-wrap items-center gap-1">
+                            {f.breached.map(b => (
+                              <span key={b} className="rounded bg-danger/10 px-1 py-0.5 text-[9px] font-medium text-danger">
+                                {BREACH_LABEL[b] ?? b}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </ReviewCard>
   )
 }

@@ -13,6 +13,7 @@ export function SectionTitle({ icon: Icon, children }: { icon: React.ComponentTy
 export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) {
   const statusIcon = {
     succeeded: { icon: CheckCircle2, color: 'text-bear' },
+    degraded:  { icon: AlertCircle, color: 'text-warning' },
     failed:    { icon: XCircle, color: 'text-danger' },
     running:   { icon: Loader2, color: 'text-accent', spinning: true },
     pending:   { icon: Loader2, color: 'text-muted', spinning: true },
@@ -54,6 +55,9 @@ export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) 
         })()}
         {job.error && (
           <div className="text-xs text-danger truncate max-w-xs">{job.error}</div>
+        )}
+        {job.status === 'degraded' && job.result?.failed_stages?.[0] && (
+          <div className="text-xs text-warning truncate max-w-xs">{job.result.failed_stages[0].error}</div>
         )}
       </div>
     </button>

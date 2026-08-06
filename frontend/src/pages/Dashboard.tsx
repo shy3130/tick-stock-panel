@@ -504,7 +504,7 @@ export function Dashboard() {
     enabled: !!fetchJobId,
     refetchInterval: (q: any) => {
       const j = q.state.data
-      return j && (j.status === 'succeeded' || j.status === 'failed') ? false : 1_000
+      return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed') ? false : 1_000
     },
   })
   const startFetch = useMutation({
@@ -515,7 +515,7 @@ export function Dashboard() {
     || fetchStatus.data?.status === 'running'
     || fetchStatus.data?.status === 'pending'
   const fetchFailed = fetchStatus.data?.status === 'failed'
-  const fetchSucceeded = fetchStatus.data?.status === 'succeeded'
+  const fetchSucceeded = fetchStatus.data?.status === 'succeeded' || fetchStatus.data?.status === 'degraded'
 
   // 首次使用且无数据 → 自动弹一次引导弹窗(同会话只弹一次)
   useEffect(() => {

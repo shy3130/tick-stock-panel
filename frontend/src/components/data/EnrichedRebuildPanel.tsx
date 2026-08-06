@@ -1,17 +1,28 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
+import { DatePicker } from '@/components/DatePicker'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
 
-export function EnrichedRebuildPanel({ isRunning, onStart }: { isRunning: boolean; onStart: () => void }) {
+export function EnrichedRebuildPanel({
+  isRunning,
+  earliestDate,
+  onStart,
+}: {
+  isRunning: boolean
+  earliestDate: string | null
+  onStart: () => void
+}) {
   const qc = useQueryClient()
   const prefs = usePreferences()
   const batchSize = prefs.data?.enriched_batch_size ?? 1000
   const [editing, setEditing] = useState(false)
   const [draftSize, setDraftSize] = useState(String(batchSize))
   const [hint, setHint] = useState<string | null>(null)
+  const [repairStart, setRepairStart] = useState('')
+  const [repairEnd, setRepairEnd] = useState('')
 
   function clampAndSave(raw: number) {
     if (isNaN(raw) || 1 > raw) { setHint('已自动设为最小值 1'); saveBatch.mutate(1); return }
@@ -33,6 +44,26 @@ export function EnrichedRebuildPanel({ isRunning, onStart }: { isRunning: boolea
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
     },
   })
+
+  const repair = useMutation({
+    mutationFn: ({ startDate, endDate }: { startDate: string; endDate: string }) =>
+      api.repairEnrichedRange(startDate, endDate),
+    onSuccess: () => {
+      onStart()
+      qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+    },
+  })
+  const today = new Date().toISOString().slice(0, 10)
+  const repairDays = repairStart && repairEnd
+    ? Math.floor((Date.parse(`${repairEnd}T00:00:00Z`) - Date.parse(`${repairStart}T00:00:00Z`)) / 86_400_000) + 1
+    : null
+  const invalidRange = repairDays !== null && (repairDays < 1 || repairDays > 31)
+  const repairError = repair.error instanceof Error ? repair.error.message : null
+
+  function handleRepair() {
+    if (!repairStart || !repairEnd || invalidRange) return
+    repair.mutate({ startDate: repairStart, endDate: repairEnd })
+  }
 
   return (
     <div className="px-4 pb-4 pt-3 border-t border-accent/20 space-y-4">
@@ -92,8 +123,65 @@ export function EnrichedRebuildPanel({ isRunning, onStart }: { isRunning: boolea
         )}
       </div>
 
+      <div className="rounded-card border border-accent/25 bg-accent/5 p-3 space-y-3">
+        <div>
+          <div className="text-xs font-medium text-foreground">历史缺口补算</div>
+          <p className="mt-0.5 text-[10px] leading-relaxed text-secondary">
+            从当前 DuckDB 数据源重新读取指定范围的 A 股日 K，仅原子覆盖该范围的 enriched 分区；不会写入 stock raw mirror。
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="space-y-1">
+            <span className="block text-[10px] text-muted">开始日期</span>
+            <DatePicker
+              value={repairStart}
+              onChange={setRepairStart}
+              min={earliestDate ?? undefined}
+              max={repairEnd || today}
+              placeholder="选择开始"
+              align="left"
+              buttonClassName="w-full"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="block text-[10px] text-muted">结束日期</span>
+            <DatePicker
+              value={repairEnd}
+              onChange={setRepairEnd}
+              min={repairStart || earliestDate || undefined}
+              max={today}
+              placeholder="选择结束"
+              align="right"
+              buttonClassName="w-full"
+            />
+          </label>
+        </div>
+        <div className="flex items-center justify-between gap-2 text-[10px]">
+          <span className={invalidRange ? 'text-warning' : 'text-muted'}>
+            {repairDays === null ? '单次最多补算 31 个自然日' : `将补算 ${repairDays} 个自然日`}
+          </span>
+          {invalidRange && <span className="text-warning">范围需为 1–31 天</span>}
+        </div>
+        {repairError && (
+          <div className="rounded-btn border border-danger/25 bg-danger/10 px-2 py-1 text-[10px] text-danger">
+            {repairError}
+          </div>
+        )}
+        <button
+          onClick={handleRepair}
+          disabled={isRunning || repair.isPending || !repairStart || !repairEnd || invalidRange}
+          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn border border-accent/35 bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 disabled:opacity-40 disabled:pointer-events-none transition-colors duration-150"
+        >
+          {repair.isPending ? (
+            <><Loader2 className="h-3 w-3 animate-spin" />提交补算…</>
+          ) : (
+            <>按范围补算</>
+          )}
+        </button>
+      </div>
+
       <div>
-        <div className="text-[10px] text-muted mb-2">基于已有 kline_daily + adj_factor 全量计算前复权 + 技术指标 + 信号</div>
+        <div className="text-[10px] text-muted mb-2">基于已有 kline_daily + adj_factor 全量计算前复权 + 技术指标 + 信号；fquant_local 的历史空洞请使用上方按范围补算。</div>
         <button
           onClick={() => rebuild.mutate()}
           disabled={isRunning || rebuild.isPending}

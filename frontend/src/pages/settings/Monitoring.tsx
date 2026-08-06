@@ -9,6 +9,7 @@ import {
   Zap,
   Webhook,
   ChevronDown,
+  Sparkles,
 } from 'lucide-react'
 import {
   usePreferences,
@@ -59,6 +60,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
+  const tradingAutoReview = prefs?.tradingAutoReview ?? false
   const hasDepth = !!caps?.capabilities?.['depth5.batch']
   // 新建监控规则时是否默认勾选飞书推送 (全局默认值, 单条规则可独立修改)
   const webhookDefault = prefs?.webhook_enabled_default ?? false
@@ -136,6 +138,11 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
   const toggleLimitLadderMonitor = useCallback(async (enabled: boolean) => {
     await api.updateLimitLadderMonitor(enabled)
+    qc.invalidateQueries({ queryKey: QK.preferences })
+  }, [qc])
+
+  const toggleTradingAutoReview = useCallback(async (enabled: boolean) => {
+    await api.updateTradingAutoReview(enabled)
     qc.invalidateQueries({ queryKey: QK.preferences })
   }, [qc])
 
@@ -600,6 +607,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               </div>
             )})}
           </div>
+        </Card>
+
+        <Card icon={Sparkles} title="盘后自动归因">
+          <ToggleRow
+            label="盘后自动归因(L0/L1 状态驱动)"
+            desc="开启后每交易日 16:45 自动对当日新红旗/新平仓跑 AI 归因,无候选零 AI 调用"
+            checked={tradingAutoReview}
+            onChange={toggleTradingAutoReview}
+          />
         </Card>
       </div>
     </div>

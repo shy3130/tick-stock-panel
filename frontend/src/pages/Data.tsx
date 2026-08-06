@@ -71,7 +71,7 @@ export function Data() {
     enabled: !!activeJobId,
     refetchInterval: (q: any) => {
       const j = q.state.data
-      return j && (j.status === 'succeeded' || j.status === 'failed') ? false : 1_000
+      return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed') ? false : 1_000
     },
   })
 
@@ -196,7 +196,7 @@ export function Data() {
     ...(indexAuto ? ['指数'] : []),
     ...(etfAuto ? ['ETF'] : []),
     ...(hkAuto ? ['港股'] : []),
-    ...((hasMinuteCap && minuteAuto) ? ['分钟K'] : []),
+    ...((hasMinuteCap && minuteAuto) ? ['A股分钟K'] : []),
   ]
 
   // 数据画像卡片显隐(由页面设置弹窗控制,存 localStorage)
@@ -211,7 +211,7 @@ export function Data() {
   void cardVisibleTick
 
   useEffect(() => {
-    if (job.data && (job.data.status === 'succeeded' || job.data.status === 'failed')) {
+    if (job.data && (job.data.status === 'succeeded' || job.data.status === 'degraded' || job.data.status === 'failed')) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
       const t = setTimeout(() => setActiveJobId(null), 5_000)
@@ -273,6 +273,7 @@ export function Data() {
     sync_adj: 'adj_factor',
     compute_enriched: 'enriched',
     rebuild_enriched: 'enriched',
+    repair_enriched_range: 'enriched',
     sync_index: 'index_daily',
     sync_minute: 'minute',
     extend_minute: 'minute',
@@ -425,7 +426,7 @@ export function Data() {
         return (
           <StatCard
             title="ETF"
-            hint="场内基金 · 独立存储"
+            hint="场内基金 · 复权因子仅覆盖极少数标的"
             stats={etfOverviewStats}
             loading={isLoading}
             tierKey="etf"
@@ -444,8 +445,8 @@ export function Data() {
       case 'minute':
         return (
           <StatCard
-            title="分钟 K"
-            hint="全市场同步"
+            title="A股分钟 K"
+            hint="A 股全市场同步"
             stats={s?.minute}
             loading={isLoading}
             active={activeCard === 'minute'}
@@ -464,8 +465,8 @@ export function Data() {
       case 'financials':
         return (
           <StatCard
-            title="财务数据"
-            hint="利润表 / 资负表 / 现金流 / 指标"
+            title="A股财务数据"
+            hint="仅 A 股上市公司 · 利润表 / 资负表 / 现金流 / 指标"
             stats={s?.financials ? { rows: s.financials.rows } : null}
             loading={isLoading}
             tierKey="financials"
@@ -743,8 +744,8 @@ export function Data() {
                 { label: '日 K',     files: s?.storage.daily_files,       size: s?.storage.daily_size_mb },
                 { label: '除权因子', files: s?.storage.adj_factor_files,  size: s?.storage.adj_factor_size_mb },
                 { label: 'Enriched', files: s?.storage.enriched_files,    size: s?.storage.enriched_size_mb },
-                { label: '分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
-                { label: '财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
+                { label: 'A股分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
+                { label: 'A股财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between text-[11px]">
                   <span className="text-muted">{item.label}</span>
@@ -860,7 +861,11 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'enriched' && (
           <SettingsModal title="Enriched · 计算设置" onClose={() => setOpenSettings(null)}>
-            <EnrichedRebuildPanel isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <EnrichedRebuildPanel
+              isRunning={!!activeJobId}
+              earliestDate={s?.enriched?.earliest_date ?? null}
+              onStart={() => setOpenSettings(null)}
+            />
           </SettingsModal>
         )}
       </AnimatePresence>
@@ -986,7 +991,7 @@ export function Data() {
 
       <AnimatePresence>
         {openSettings === 'minute' && (
-          <SettingsModal title="分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
+          <SettingsModal title="A股分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
             <MinuteSyncConfig caps={caps.data} isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
           </SettingsModal>
         )}
@@ -1022,8 +1027,8 @@ export function Data() {
                   </p>
                   <ul className="mt-2 text-[11px] text-muted leading-relaxed space-y-0.5">
                     <li>· 个股维表、日 K、除权因子</li>
-                    <li>· Enriched 指标数据、分钟 K</li>
-                    <li>· 财务数据、指数、ETF</li>
+                    <li>· Enriched 指标数据、A股分钟 K</li>
+                    <li>· A股财务数据、指数、ETF</li>
                   </ul>
                   <p className="mt-2 text-[11px] text-danger/90">
                     操作不可恢复，需重新执行同步才能恢复数据。

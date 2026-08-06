@@ -15,11 +15,11 @@ interface ScopeItem {
 const ITEMS: ScopeItem[] = [
   { key: 'pipeline_pull_a_share', label: 'A股', desc: '沪深京 A 股日K(约 5500 只)', defaultOn: true },
   { key: 'pipeline_pull_index', label: '指数', desc: '主要市场指数(默认全量约 600 只)', defaultOn: true },
-  { key: 'pipeline_pull_etf', label: 'ETF', desc: '场内交易基金(约 1500 只,首次较慢)', defaultOn: false },
+  { key: 'pipeline_pull_etf', label: 'ETF', desc: '场内交易基金日K/指标(约 1500 只,首次较慢;复权因子仅覆盖极少数标的,不等于完整复权)', defaultOn: false },
   // 不复权是数据现实,不是可调选项:本地无港股除权数据源(chuquan_chuxi 只有 A 股,
   // tdx-hk 无 xdxr 表)。除权日附近的均线/新高新低会有假信号,故文案里必须点出来,
   // 不能让用户以为这是和 ETF 一样"默认关闭、开了就完整"的开关。
-  { key: 'pipeline_pull_hk', label: '港股', desc: '港股日K(约 2900 只,不复权 —— 除权日附近指标可能失真)', defaultOn: false },
+  { key: 'pipeline_pull_hk', label: '港股', desc: '港股日K(约 2900 只;本地无除权数据源,未复权 —— 除权日附近指标可能失真)', defaultOn: false },
 ]
 
 export function PipelineScopeConfig() {
