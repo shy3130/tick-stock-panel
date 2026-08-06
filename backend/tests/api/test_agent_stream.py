@@ -8,21 +8,23 @@ from fastapi.testclient import TestClient
 import app.api.agent as agent_api
 from app.services import agent_sessions
 from app.services.agent_bus import AgentBus
+from app.services.ai_attempts import AttemptRegistry
 
 
 def _client(monkeypatch, tmp_path, fake_stream=None):
     if fake_stream is None:
         async def fake_stream(messages, app_state, profile_id=None, **kw):
             yield json.dumps({"type": "tool_call", "name": "list_strategies", "args": {}})
-            yield json.dumps({"type": "tool_result", "name": "list_strategies", "result": {"strategies": []}})
+            yield json.dumps({"type": "tool_result", "name": "list_strategies", "result": {"strategies": []}, "elapsed_ms": 12.5})
             yield json.dumps({"type": "delta", "content": "答案"})
-            yield json.dumps({"type": "done"})
+            yield json.dumps({"type": "done", "elapsed_ms": 42.5})
 
     import app.services.agent_runner as runner_mod
     monkeypatch.setattr(runner_mod, "run_agent_stream", fake_stream)
     bus = AgentBus()
     monkeypatch.setattr(agent_api, "get_bus", lambda: bus)
-    monkeypatch.setattr(agent_api, "_TASKS", {})
+    registry = AttemptRegistry()
+    monkeypatch.setattr(agent_api, "get_registry", lambda: registry)
     app = FastAPI()
     app.include_router(agent_api.router)
     app.state.repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
@@ -67,16 +69,22 @@ def test_send_returns_attempt_and_watch_streams_events(monkeypatch, tmp_path):
 
     sent = _send(client, sid).json()
     assert sent["session_id"] == sid
-    assert sent["attempt_id"].startswith("agent_attempt_")
+    assert sent["attempt_id"].startswith("att_")
 
     with client.stream("GET", f"/api/agent/sessions/{sid}/stream") as resp:
         assert resp.status_code == 200
         assert "x-ndjson" in resp.headers["content-type"]
         events = [json.loads(line) for line in resp.iter_lines() if line.strip()]
 
-    types = [e["type"] for e in events]
-    assert types[0] == "attempt_start"
-    assert "delta" in types and types[-1] == "done"
+    types = [event["type"] for event in events]
+    assert types[:2] == ["attempt_start", "attempt_started"]
+    assert "delta" in types
+    assert "done" in types
+    assert types[-1] == "attempt_completed"
+    tool_result = next(event for event in events if event["type"] == "tool_result")
+    assert tool_result["elapsed_ms"] == 12.5
+    done_event = next(event for event in events if event["type"] == "done")
+    assert done_event["elapsed_ms"] == 42.5
 
 
 def test_send_persists_user_and_assistant_messages(monkeypatch, tmp_path):
@@ -90,6 +98,14 @@ def test_send_persists_user_and_assistant_messages(monkeypatch, tmp_path):
     rows = client.get(f"/api/agent/sessions/{sid}/messages").json()["messages"]
     assert [(r["role"], r["content"]) for r in rows] == [("user", "hi"), ("assistant", "答案")]
     assert agent_sessions.get_session(tmp_path, sid)["last_attempt_status"] == "done"
+    assistant = rows[1]
+    assert assistant["tool_traces"] == [{
+        "name": "list_strategies",
+        "args": {},
+        "result": {"strategies": []},
+        "elapsed_ms": 12.5,
+    }]
+    assert assistant["elapsed_ms"] == 42.5
 
 
 def test_send_persists_display_content_not_attachment_context(monkeypatch, tmp_path):
@@ -139,14 +155,10 @@ def test_send_rejects_non_user_last_message(monkeypatch, tmp_path):
 
 
 def test_send_rejects_concurrent_attempt_for_same_session(monkeypatch, tmp_path):
-    class LiveTask:
-        def done(self):
-            return False
-
     client = _client(monkeypatch, tmp_path)
     sid = client.post("/api/agent/sessions", json={"title": ""}).json()["session_id"]
-    agent_sessions.set_attempt(tmp_path, sid, "agent_attempt_busy", "running")
-    agent_api._TASKS["agent_attempt_busy"] = LiveTask()
+    agent_sessions.set_attempt(tmp_path, sid, "att_busy", "running")
+    agent_api.get_registry().register(attempt_id="att_busy")
 
     second = _send(client, sid, content="second message while first still running")
     assert second.status_code == 409

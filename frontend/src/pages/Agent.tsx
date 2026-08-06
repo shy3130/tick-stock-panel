@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Bot, Download, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Square, Trash2, X, Wrench } from 'lucide-react'
+import { Bot, ChevronRight, Clock3, Download, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Square, Trash2, X, Wrench } from 'lucide-react'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { PageHeader } from '@/components/PageHeader'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
-import { api, type AgentEvent, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
+import { api, type AgentEvent, type AgentMsg, type AgentSession, type AgentToolTrace, type DocumentEnvelope } from '@/lib/api'
 import { clearAgentChat, loadAgentChat, saveAgentChat } from '@/lib/agentChatStore'
 
-interface ToolTrace {
-  name: string
-  args?: unknown
-  result?: unknown
-}
+type ToolTrace = AgentToolTrace
 
 interface ChatMsg extends AgentMsg {
   tools?: ToolTrace[]
+  elapsed_ms?: number
 }
 
 interface ExampleItem {
@@ -69,22 +66,64 @@ function AgentAvatar() {
   )
 }
 
-function ToolTraceList({ tools }: { tools?: ToolTrace[] }) {
-  if (!tools?.length) return null
+function formatElapsed(ms?: number) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return null
+  if (ms < 1_000) return `${Math.round(ms)} ms`
+  return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)} 秒`
+}
+
+function ToolPayload({ label, value, pending = false }: { label: string; value?: unknown; pending?: boolean }) {
   return (
-    <div className="mb-2 space-y-1">
-      {tools.map((t, j) => (
-        <details key={`${t.name}-${j}`} className="rounded bg-elevated/60 px-2 py-1">
-          <summary className="flex cursor-pointer items-center gap-1 text-[11px] text-muted">
-            <Wrench className="h-3 w-3" />
-            {t.name}
-          </summary>
-          <pre className="mt-1 max-h-40 overflow-auto text-[10px] text-muted">
-            {JSON.stringify(t.result ?? t.args, null, 2)}
-          </pre>
-        </details>
-      ))}
+    <div className="min-w-0">
+      <div className="mb-1 text-[10px] font-medium tracking-wide text-muted">{label}</div>
+      <pre className="max-h-40 overflow-auto rounded-md bg-background/50 px-2.5 py-2 text-[10px] leading-relaxed text-muted whitespace-pre-wrap">
+        {pending ? '执行中…' : JSON.stringify(value ?? {}, null, 2)}
+      </pre>
     </div>
+  )
+}
+
+function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: number }) {
+  if (!tools?.length) return null
+  const totalElapsed = formatElapsed(elapsedMs)
+  return (
+    <details className="group mb-3 overflow-hidden rounded-card border border-border/80 bg-elevated/40">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-2 text-[11px] text-muted hover:bg-elevated">
+        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+        <Wrench className="h-3.5 w-3.5 text-accent" />
+        <span className="font-medium text-secondary">工具调用链路</span>
+        <span className="rounded-full bg-background/60 px-1.5 py-0.5 text-[10px]">{tools.length} 步</span>
+        {totalElapsed && (
+          <span className="ml-auto inline-flex items-center gap-1 tabular-nums">
+            <Clock3 className="h-3 w-3" />
+            总耗时 {totalElapsed}
+          </span>
+        )}
+      </summary>
+      <div className="divide-y divide-border/70 border-t border-border/70">
+        {tools.map((tool, index) => {
+          const toolElapsed = formatElapsed(tool.elapsed_ms)
+          const pending = tool.result === undefined
+          return (
+            <section key={`${tool.name}-${index}`} className="px-2.5 py-2.5">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-semibold text-accent">
+                  {index + 1}
+                </span>
+                <code className="min-w-0 truncate text-[11px] font-medium text-secondary">{tool.name}</code>
+                <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted">
+                  {toolElapsed ?? (pending ? '执行中…' : '—')}
+                </span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <ToolPayload label="输入" value={tool.args} />
+                <ToolPayload label="输出" value={tool.result} pending={pending} />
+              </div>
+            </section>
+          )
+        })}
+      </div>
+    </details>
   )
 }
 
@@ -114,7 +153,7 @@ function MessageBubble({
     <div className="flex justify-start gap-2">
       <AgentAvatar />
       <div className="max-w-[80%] rounded-card border border-border bg-surface px-3 py-2 text-xs text-foreground">
-        <ToolTraceList tools={msg.tools} />
+        <ToolTraceList tools={msg.tools} elapsedMs={msg.elapsed_ms} />
         {msg.content ? (
           <MarkdownRenderer content={msg.content} />
         ) : streaming && isLatest ? (
@@ -196,10 +235,17 @@ function applyAgentEvent(prev: ChatMsg[], evt: AgentEvent, attemptIdRef: { curre
     for (let k = tools.length - 1; k >= 0; k--) {
       if (tools[k].name === evt.name && tools[k].result === undefined) { idx = k; break }
     }
-    if (idx >= 0) tools[idx] = { ...tools[idx], result: evt.result }
+    if (idx >= 0) {
+      tools[idx] = { ...tools[idx], result: evt.result, elapsed_ms: evt.elapsed_ms }
+    } else {
+      tools.push({ name: evt.name, result: evt.result, elapsed_ms: evt.elapsed_ms })
+    }
     nextLast.tools = tools
+  } else if (evt.type === 'done') {
+    nextLast.elapsed_ms = evt.elapsed_ms
   } else if (evt.type === 'error') {
     nextLast.content += `\n[错误] ${evt.message}`
+    nextLast.elapsed_ms = evt.elapsed_ms
   } else if (evt.type === 'cancelled') {
     nextLast.content += nextLast.content ? '\n[已停止]' : '[已停止]'
   }
@@ -286,7 +332,12 @@ export function Agent() {
     const { messages } = await api.agentSessionMessages(id)
     setSessionId(id)
     setSessionInUrl(id, replaceUrl)
-    setMsgs(messages.map(m => ({ role: m.role, content: m.content })))
+    setMsgs(messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      tools: m.tool_traces,
+      elapsed_ms: m.elapsed_ms,
+    })))
   }
 
   async function reconnect(id: string) {
@@ -294,7 +345,12 @@ export function Agent() {
     const { messages } = await api.agentSessionMessages(id)
     setSessionId(id)
     setSessionInUrl(id, true)
-    setMsgs(messages.map(m => ({ role: m.role, content: m.content })))
+    setMsgs(messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      tools: m.tool_traces,
+      elapsed_ms: m.elapsed_ms,
+    })))
     setStreaming(true)
     const ctrl = new AbortController()
     abortRef.current = ctrl

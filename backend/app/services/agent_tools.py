@@ -13,82 +13,111 @@ _SYMBOL_RE = re.compile(r"^[0-9A-Z]{1,8}\.(SH|SZ|BJ|HK|INDEX|ETF)$")
 TOOLS = [
     {
         "name": "get_capabilities",
-        "description": "Return current data/provider capability labels.",
+        "description": "返回当前数据源/能力标签。可用本工具确认系统具备哪些数据能力。",
         "input_schema": {"type": "object", "properties": {}},
         "parameters": {"type": "object", "properties": {}},
         "read_only": True,
     },
     {
         "name": "list_strategies",
-        "description": "Return available screener strategy ids and names.",
+        "description": "列出所有可选股策略（内置预设 + 自定义），返回 id/名称/标签。配合 run_backtest 使用。",
         "input_schema": {"type": "object", "properties": {}},
         "parameters": {"type": "object", "properties": {}},
         "read_only": True,
     },
     {
         "name": "get_kline",
-        "description": "Return recent daily kline rows for one symbol.",
-        "input_schema": {"type": "object", "properties": {"symbol": {"type": "string"}, "limit": {"type": "integer"}}},
-        "parameters": {"type": "object", "properties": {"symbol": {"type": "string"}, "limit": {"type": "integer"}}},
+        "description": "查询单只标的最近 N 个交易日的日 K 线（开高低收/成交量）。数据来自本地 DuckDB。",
+        "input_schema": {"type": "object", "properties": {"symbol": {"type": "string", "description": "标的代码，如 600519.SH / 000001.SZ / 00700.HK"}, "limit": {"type": "integer", "description": "返回最近多少天，默认 60，上限 200"}}},
+        "parameters": {"type": "object", "properties": {"symbol": {"type": "string", "description": "标的代码，如 600519.SH / 000001.SZ / 00700.HK"}, "limit": {"type": "integer", "description": "返回最近多少天，默认 60，上限 200"}}},
         "read_only": True,
     },
     {
         "name": "run_screener",
-        "description": "Run the local screener with supplied conditions.",
-        "input_schema": {"type": "object", "properties": {"conditions": {"type": "array"}, "limit": {"type": "integer"}}},
-        "parameters": {"type": "object", "properties": {"conditions": {"type": "array"}, "limit": {"type": "integer"}}},
+        "description": (
+            "运行条件选股，在全市场 enriched 数据上执行 DuckDB SQL WHERE 过滤，返回匹配标的。"
+            "数据来自本地 DuckDB，覆盖 5800+ 只 A 股，含当日涨跌/量能/技术指标。\n"
+            "conditions 是 DuckDB SQL 布尔表达式数组（AND 连接），可用字段（均为当日截面值）：\n"
+            "  change_pct   涨跌幅（小数，0.05 = 涨 5%，-0.03 = 跌 3%）\n"
+            "  vol_ratio_5d 5 日量比（1.5 = 今日量是 5 日均量 1.5 倍）\n"
+            "  turnover_rate 换手率（百分比，3.0 = 3%）\n"
+            "  close        收盘价（元）\n"
+            "  amount       成交额（元）\n"
+            "  momentum_20d / momentum_60d  动量\n"
+            "  rsi_14       RSI14（0-100）\n"
+            "  signal_limit_up  是否涨停（布尔）\n"
+            "  consecutive_limit_ups  连板天数\n"
+            "示例：连续放量且涨幅超 5% → [\"change_pct > 0.05\", \"vol_ratio_5d > 1.5\"]"
+        ),
+        "input_schema": {"type": "object", "properties": {"conditions": {"type": "array", "items": {"type": "string"}, "description": "DuckDB SQL WHERE 表达式数组"}, "limit": {"type": "integer", "description": "返回上限，默认 50"}, "as_of": {"type": "string", "description": "指定日期 YYYY-MM-DD，默认最新交易日"}}},
+        "parameters": {"type": "object", "properties": {"conditions": {"type": "array", "items": {"type": "string"}, "description": "DuckDB SQL WHERE 表达式数组"}, "limit": {"type": "integer", "description": "返回上限，默认 50"}, "as_of": {"type": "string", "description": "指定日期 YYYY-MM-DD，默认最新交易日"}}, "required": ["conditions"]},
         "read_only": True,
     },
     {
         "name": "run_backtest",
-        "description": "Run a bounded strategy backtest without saving strategy definitions.",
+        "description": "对指定策略 + 标的池跑回测，返回净值/收益/回撤等。不保存策略定义。",
         "input_schema": {"type": "object", "properties": {"strategy_id": {"type": "string"}, "symbols": {"type": "array"}}},
-        "parameters": {"type": "object", "properties": {"strategy_id": {"type": "string"}, "symbols": {"type": "array"}}},
+        "parameters": {"type": "object", "properties": {"strategy_id": {"type": "string", "description": "策略 id，先调 list_strategies 获取"}, "symbols": {"type": "array", "items": {"type": "string"}, "description": "标的池"}}, "required": ["strategy_id", "symbols"]},
         "read_only": True,
     },
     {
         "name": "get_market_overview",
-        "description": "Return compact market overview.",
+        "description": "返回市场概览（主要指数/涨跌分布/板块热度），数据来自本地 DuckDB。",
         "input_schema": {"type": "object", "properties": {}},
         "parameters": {"type": "object", "properties": {}},
         "read_only": True,
     },
     {
         "name": "list_ext_data",
-        "description": "Return configured extension datasets.",
+        "description": "列出已配置的扩展数据集（概念/行业/自定义）。",
         "input_schema": {"type": "object", "properties": {}},
         "parameters": {"type": "object", "properties": {}},
         "read_only": True,
     },
     {
         "name": "optimize_portfolio",
-        "description": "Compute portfolio weights for a set of symbols (equal/equal_vol/risk_parity/mean_variance/max_diversification/score_weight).",
+        "description": "为一组标的计算优化权重（等权/风险平价/均值方差/最大分散等）。",
         "input_schema": {"type": "object", "properties": {"symbols": {"type": "array"}, "method": {"type": "string"}, "lookback_days": {"type": "integer"}}},
-        "parameters": {"type": "object", "properties": {"symbols": {"type": "array"}, "method": {"type": "string"}, "lookback_days": {"type": "integer"}}},
+        "parameters": {"type": "object", "properties": {"symbols": {"type": "array", "items": {"type": "string"}}, "method": {"type": "string", "description": "equal / equal_vol / risk_parity / mean_variance / max_diversification / score_weight"}, "lookback_days": {"type": "integer", "description": "回看天数，默认 120"}}, "required": ["symbols"]},
         "read_only": True,
     },
     {
         "name": "analyze_factor",
-        "description": "Run single-factor IC/IR analysis and layered backtest for a set of symbols.",
-        "input_schema": {"type": "object", "properties": {"factor_name": {"type": "string"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}, "n_groups": {"type": "integer"}, "rebalance": {"type": "string"}, "weight": {"type": "string"}}},
-        "parameters": {"type": "object", "properties": {"factor_name": {"type": "string"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}, "n_groups": {"type": "integer"}, "rebalance": {"type": "string"}, "weight": {"type": "string"}}},
+        "description": "对单因子运行 IC/IR 分析和分层回测。默认直接使用本地 DuckDB 全市场股票池，并以 enriched 最新交易日为截止日回溯半年；仅在用户明确指定标的或日期时传 symbols/start/end，symbols 最多 50 只。无需也不得调用 quote_pool 获取全市场列表。",
+        "input_schema": {"type": "object", "properties": {"factor_name": {"type": "string"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}, "n_groups": {"type": "integer"}, "rebalance": {"type": "string"}, "weight": {"type": "string"}}, "required": ["factor_name"]},
+        "parameters": {"type": "object", "properties": {"factor_name": {"type": "string", "description": "因子 ID,例如 momentum_20d"}, "symbols": {"type": "array", "items": {"type": "string"}, "description": "可选。省略时直接分析本地 DuckDB 全市场;指定时最多 50 只"}, "start": {"type": "string", "description": "可选，YYYY-MM-DD；仅在用户明确指定起始日时传入"}, "end": {"type": "string", "description": "可选，YYYY-MM-DD；省略时使用本地 enriched 最新交易日"}, "n_groups": {"type": "integer", "description": "分组数,默认 5"}, "rebalance": {"type": "string", "description": "daily/weekly/monthly"}, "weight": {"type": "string", "description": "equal/factor_weight"}}, "required": ["factor_name"]},
         "read_only": True,
     },
     {
         "name": "compare_factors",
-        "description": "Compare multiple Alpha Zoo factors' IC/IR side by side (factor ids must exist in the Alpha Zoo).",
+        "description": "对比多个 Alpha Zoo 因子的 IC/IR（factor_ids 必须在 Alpha Zoo 中存在）。",
         "input_schema": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}}},
-        "parameters": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "symbols": {"type": "array"}, "start": {"type": "string"}, "end": {"type": "string"}}},
+        "parameters": {"type": "object", "properties": {"factor_ids": {"type": "array", "items": {"type": "string"}}, "symbols": {"type": "array", "items": {"type": "string"}}, "start": {"type": "string"}, "end": {"type": "string"}}, "required": ["factor_ids", "symbols"]},
         "read_only": True,
     },
     {
         "name": "compose_factor_score",
-        "description": "Combine multiple factors into one IC-weighted composite score across a symbol pool, ranked descending.",
+        "description": "按 IC 权重合成多因子打分，返回标的地打分排名。",
         "input_schema": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "pool": {"type": "array"}, "as_of": {"type": "string"}, "lookback_days": {"type": "integer"}, "top_n": {"type": "integer"}}},
-        "parameters": {"type": "object", "properties": {"factor_ids": {"type": "array"}, "pool": {"type": "array"}, "as_of": {"type": "string"}, "lookback_days": {"type": "integer"}, "top_n": {"type": "integer"}}},
+        "parameters": {"type": "object", "properties": {"factor_ids": {"type": "array", "items": {"type": "string"}}, "pool": {"type": "array", "items": {"type": "string"}}, "as_of": {"type": "string"}, "lookback_days": {"type": "integer"}, "top_n": {"type": "integer"}}},
         "read_only": True,
     },
 ]
+
+
+def to_openai_tools(tools: list[dict]) -> list[dict]:
+    """把内部 TOOLS 注册表转为 OpenAI function-calling tools 格式。"""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t.get("parameters") or t.get("input_schema") or {"type": "object", "properties": {}},
+            },
+        }
+        for t in tools
+    ]
 
 
 def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
@@ -196,11 +225,11 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         from app.backtest.engine import BacktestEngine
         from app.backtest.factor import FactorBacktestService, FactorConfig
 
-        symbols = _require_list(args, "symbols", 50)
+        symbols = None if args.get("symbols") is None else _require_list(args, "symbols", 50)
         factor_name = str(args.get("factor_name") or "").strip()
         if not factor_name:
             raise ValueError("factor_name required")
-        start, end = _resolve_date_range(args, 180, 186)
+        start, end = _resolve_date_range(args, 180, 186, default_end=repo.enriched_latest_date())
 
         svc = FactorBacktestService(BacktestEngine(repo))
         result = svc.run(FactorConfig(
@@ -225,7 +254,7 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         if unknown:
             raise ValueError(f"unknown factor: {unknown[0]}")
 
-        start, end = _resolve_date_range(args, 180, 186)
+        start, end = _resolve_date_range(args, 180, 186, default_end=repo.enriched_latest_date())
         svc = FactorBacktestService(BacktestEngine(repo))
         out = []
         for factor_id in factor_ids:
@@ -381,8 +410,14 @@ def _require_list(args: dict, key: str, max_len: int) -> list:
     return value
 
 
-def _resolve_date_range(args: dict, default_days: int, max_days: int) -> tuple[date, date]:
-    end = date.fromisoformat(args["end"]) if args.get("end") else date.today()
+def _resolve_date_range(
+    args: dict,
+    default_days: int,
+    max_days: int,
+    *,
+    default_end: date | None = None,
+) -> tuple[date, date]:
+    end = date.fromisoformat(args["end"]) if args.get("end") else (default_end or date.today())
     start = date.fromisoformat(args["start"]) if args.get("start") else end - timedelta(days=default_days)
     if (end - start).days > max_days:
         raise ValueError(f"date range too wide (max {max_days} days)")

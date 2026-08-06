@@ -14,15 +14,20 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from datetime import date, datetime, time
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Any
 
 import polars as pl
 
+from app.markets import market_of
 from app.backtest.patterns import detect_patterns
 from app.indicators.levels import compute_levels, summarize_levels
+from app.services.ai_structured import CancellationToken
+from app.services.analysis_context import assemble_prompt, build_analysis_frame, preflight_analysis
 from app.services.document_reader import format_prompt_document
 from app.services.financial_sync import get_financial_df
 
@@ -274,6 +279,59 @@ def _build_user_prompt(
     if document_block:
         parts.extend(["", document_block])
     return "\n".join(parts)
+def _build_auxiliary_prompt(
+    fins: dict[str, list[dict]],
+    levels: dict[str, list[dict]],
+    close: float | None,
+    symbol: str,
+    focus: str,
+    document_text: str,
+    patterns: list[dict] | None,
+) -> str:
+    """Build non-K-line context; K-line facts come exclusively from AnalysisFrame."""
+    parts = [
+        f"标的标准代码: {symbol}",
+        f"关键价位概览: {summarize_levels(levels, close)}",
+    ]
+    if patterns:
+        parts.append("轻量形态摘要: " + json.dumps(patterns, ensure_ascii=False))
+    if any(fins.values()):
+        parts.append("最新财务数据: " + json.dumps(fins, ensure_ascii=False))
+    else:
+        parts.append("暂无财务数据；对应维度必须明确标注接入中，不得编造。")
+    if focus.strip():
+        parts.append(f"本次分析请特别关注: {focus.strip()}")
+    document_block = format_prompt_document(document_text)
+    if document_block:
+        parts.append(document_block)
+    return "\n\n".join(parts)
+
+
+def _analysis_data_as_of(df: pl.DataFrame, market: str) -> datetime:
+    value = df.sort("date").tail(1)["date"][0]
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        close_at = time(16, 0) if market == "hk" else time(15, 0)
+        return datetime.combine(value, close_at)
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return datetime.now()
+
+
+def _level_prices(levels: Any) -> list[float]:
+    prices: list[float] = []
+    if isinstance(levels, dict):
+        for value in levels.values():
+            prices.extend(_level_prices(value))
+    elif isinstance(levels, list):
+        for value in levels:
+            prices.extend(_level_prices(value))
+    elif isinstance(levels, (int, float)) and float(levels) > 0:
+        prices.append(float(levels))
+    return prices
+
 
 
 # ================================================================
@@ -307,68 +365,139 @@ async def analyze_stock_stream(
     focus: str = "",
     document_text: str = "",
     profile_id: str | None = None,
+    *,
+    cancel_token: CancellationToken | None = None,
+    on_event: Any | None = None,
+    attempt_id: str | None = None,
 ) -> AsyncIterator[str]:
-    """流式个股分析:yield 出每个 NDJSON 事件。
-
-    协议(与 financial_analyzer 一致,前端解析无差异):
-      {"type":"meta","symbol","summary","levels"}  数据 + 价位摘要
-      {"type":"delta","content":"..."}             逐 chunk 文本
-      {"type":"error","message":"..."}
-      {"type":"done"}
-    """
-    # 1. 加载 K 线
+    """Stream Markdown analysis with an auditable K-line context and fail-closed preflight."""
+    token = cancel_token or CancellationToken()
+    token.raise_if_cancelled()
     df = _load_kline(repo, symbol)
     if df.is_empty():
-        yield json.dumps({
-            "type": "error",
-            "message": f"标的 {symbol} 暂无日 K 数据,请先同步",
-        }, ensure_ascii=False)
+        yield json.dumps(
+            {"type": "error", "code": "data_incomplete", "message": f"标的 {symbol} 暂无日 K 数据,请先同步"},
+            ensure_ascii=False,
+        )
         return
 
-    # 2. 价位计算(基于 K 线)
+    market = market_of(symbol).market
     levels = compute_levels(df)
     close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
+    frame = build_analysis_frame(
+        df,
+        symbol=symbol,
+        market=market,
+        timeframe="1d",
+        data_as_of=_analysis_data_as_of(df, market),
+        source="canonical_enriched",
+        adjustment="qfq",
+        degraded=False,
+        key_levels=_level_prices(levels),
+    )
+    preflight = preflight_analysis(
+        frame,
+        purpose="stock_analysis",
+        expected_symbol=symbol,
+        expected_market=market,
+        expected_timeframe="1d",
+    )
+    if on_event is not None:
+        event_value = on_event(
+            "preflight_completed",
+            {
+                "attempt_id": attempt_id,
+                "ok": preflight.ok,
+                "warnings": preflight.warnings,
+            },
+        )
+        if hasattr(event_value, "__await__"):
+            await event_value
+    if not preflight.ok:
+        error = preflight.error
+        yield json.dumps(
+            {
+                "type": "error",
+                "code": error.code if error is not None else "data_incomplete",
+                "message": str(error.detail if error is not None else "K线分析 preflight 未通过"),
+            },
+            ensure_ascii=False,
+        )
+        return
 
-    # 3. 财务(辅助)
     fins = _load_financials(data_dir, symbol)
+    patterns = _detect_pattern_summary(df)
+    from app.services.skill_context import load_skill_context_safe
 
-    # 4. meta
-    yield json.dumps({
-        "type": "meta",
-        "symbol": symbol,
-        "summary": summarize_levels(levels, close),
-        "levels": levels,
-        "close": close,
-    }, ensure_ascii=False)
+    auxiliary = _build_auxiliary_prompt(
+        fins,
+        levels,
+        close,
+        symbol,
+        focus,
+        document_text,
+        patterns,
+    )
+    messages, budget = assemble_prompt(
+        frame,
+        purpose="stock_analysis",
+        user_question=auxiliary,
+        methodology=load_skill_context_safe("stock_analysis") or None,
+        invariants={
+            "source": frame.source,
+            "data_as_of": frame.data_as_of.isoformat(),
+            "adjustment": frame.adjustment,
+        },
+        max_tokens=12000,
+        contract=_SYSTEM_PROMPT,
+    )
+    yield json.dumps(
+        {
+            "type": "meta",
+            "symbol": symbol,
+            "summary": summarize_levels(levels, close),
+            "levels": levels,
+            "close": close,
+            "attempt_id": attempt_id,
+            "data_as_of": frame.data_as_of.isoformat(),
+            "source": frame.source,
+            "adjustment": frame.adjustment,
+            "degraded": frame.degraded,
+            "warnings": preflight.warnings,
+            "prompt_budget": budget,
+        },
+        ensure_ascii=False,
+    )
 
-    # 5+6. 构建提示词 + 流式调用 LLM(整体 try-except,任何异常都 yield error,避免前端卡死)
     try:
         from app.services.ai_provider import stream_ai_text
 
-        kline_tail = _clean_rows(df, _KLINE_KEEP_COLS)
-        from app.services.skill_context import load_skill_context_safe
-
-        skill_context = load_skill_context_safe("stock_analysis")
-        patterns = _detect_pattern_summary(df)
-        user_prompt = _build_user_prompt(kline_tail, fins, levels, close, symbol, focus, document_text, patterns)
-        if skill_context:
-            user_prompt = skill_context + "\n\n---\n\n" + user_prompt
+        token.raise_if_cancelled()
         async for delta in stream_ai_text(
-            [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages,
             profile_id=profile_id,
             temperature=0.5,
             max_tokens=4500,
+            timeout=180,
         ):
+            token.raise_if_cancelled()
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
-
-    except Exception as e:  # noqa: BLE001
-        logger.exception("AI stock analysis failed for %s: %s", symbol, e)
-        yield json.dumps({"type": "error", "message": f"AI 分析失败: {e}"}, ensure_ascii=False)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("AI stock analysis failed for %s: %s", symbol, exc)
+        yield json.dumps({"type": "error", "message": f"AI 分析失败: {exc}"}, ensure_ascii=False)
         return
 
+    yield json.dumps(
+        {
+            "type": "usage",
+            "attempt_id": attempt_id,
+            "usage": None,
+            "warnings": ["stream provider 未暴露 token usage，未伪造统计"],
+        },
+        ensure_ascii=False,
+    )
     yield json.dumps({"type": "done"}, ensure_ascii=False)
 
 

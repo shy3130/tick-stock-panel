@@ -103,7 +103,15 @@ def read_messages(data_dir: Path, session_id: str) -> list[dict[str, Any]]:
     return rows if isinstance(rows, list) else []
 
 
-def append_message(data_dir: Path, session_id: str, role: str, content: str) -> dict[str, Any] | None:
+def append_message(
+    data_dir: Path,
+    session_id: str,
+    role: str,
+    content: str,
+    *,
+    tool_traces: list[dict[str, Any]] | None = None,
+    elapsed_ms: float | None = None,
+) -> dict[str, Any] | None:
     if get_session(data_dir, session_id) is None:
         return None
     row = {
@@ -112,6 +120,10 @@ def append_message(data_dir: Path, session_id: str, role: str, content: str) -> 
         "content": content,
         "created_at": _now(),
     }
+    if tool_traces:
+        row["tool_traces"] = tool_traces
+        if elapsed_ms is not None:
+            row["elapsed_ms"] = elapsed_ms
     rows = read_messages(data_dir, session_id)
     rows.append(row)
     _write_json(_messages_path(data_dir, session_id), rows)

@@ -1,38 +1,102 @@
 from __future__ import annotations
 
 import json
+import re
+from time import perf_counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from app.services import agent_tools
-from app.services.ai_provider import generate_ai_text, stream_ai_text
+from app.services.ai_provider import generate_ai_text, generate_ai_with_tools, stream_ai_text
 
 MAX_TOOL_ROUNDS = 5
 
 _EXCLUDED_TOOLS: set[str] = set()
 ALLOWED_AGENT_TOOLS = [t for t in agent_tools.TOOLS if t["name"] not in _EXCLUDED_TOOLS]
 _ALLOWED_NAMES = {t["name"] for t in ALLOWED_AGENT_TOOLS}
+_OPENAI_TOOLS = agent_tools.to_openai_tools(ALLOWED_AGENT_TOOLS)
+
+_DSML_INVOKE_RE = re.compile(
+    r'<\|\|DSML\|\|invoke\s+name="(?P<name>[^"]+)">(?P<body>.*?)</\|\|DSML\|\|invoke>',
+    re.DOTALL,
+)
+_DSML_PARAMETER_RE = re.compile(
+    r'<\|\|DSML\|\|parameter\s+name="(?P<name>[^"]+)"[^>]*>(?P<value>.*?)</\|\|DSML\|\|parameter>',
+    re.DOTALL,
+)
 
 
 def _tools_system() -> str:
+    """给原生 function calling 与 DSML/文本降级路径共用的工具契约。"""
+    prompt_tools = [
+        {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool.get("parameters") or tool["input_schema"],
+        }
+        for tool in ALLOWED_AGENT_TOOLS
+    ]
     return (
-        "You are TickFlow Stock Panel assistant. If you need a tool, reply with ONLY JSON "
-        '{"tool":"<name>","args":{...}}. Otherwise answer the user directly. Available tools: '
-        + json.dumps(ALLOWED_AGENT_TOOLS, ensure_ascii=False)
+        "你是 TickFlow Stock Panel 的 AI 选股助手。你拥有本地 DuckDB A 股数据库，"
+        "可查询日线、技术指标、财务数据并运行选股和回测。数据问题必须调用下列工具，"
+        "禁止以「无法接入数据」为由拒绝。\n"
+        "优先使用原生 function calling。若当前 Provider 没有返回原生工具调用，"
+        "只能单独输出一个 JSON 对象，格式为 {\"tool\":\"工具名\",\"args\":{...}}。"
+        "严禁输出 DSML、XML 或其他工具标记；只能使用下列工具，不能虚构工具名。\n"
+        "全市场因子分析应直接调用 analyze_factor 并省略 symbols；不得调用 quote_pool。\n"
+        "可用工具及参数："
+        + json.dumps(prompt_tools, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _final_system() -> str:
+    return (
+        "根据上方工具返回的数据，用中文简洁回答用户的问题，列出具体结论和数据依据。"
+        "只输出最终自然语言答案；严禁输出 JSON、DSML、XML 或任何工具调用标记。"
     )
 
 
 def _parse_tool(text: str) -> dict | None:
+    """解析 JSON 降级调用或 OpenAI-compatible Provider 返回的 DSML 调用。"""
     try:
         data = json.loads(text.strip())
     except Exception:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("tool"), str):
+        args = data.get("args")
+        if args is None or isinstance(args, dict):
+            return {"tool": data["tool"], "args": args or {}}
+    return _parse_dsml_tool(text)
+
+
+def _parse_dsml_tool(text: str) -> dict | None:
+    """将 GLM DSML 标记转成内部工具请求，避免把模型控制标记展示给用户。"""
+    normalized = text.replace("｜", "|")
+    invoke = _DSML_INVOKE_RE.search(normalized)
+    if invoke is None:
         return None
-    if not isinstance(data, dict) or not isinstance(data.get("tool"), str):
-        return None
-    args = data.get("args")
-    if args is not None and not isinstance(args, dict):
-        return None
-    return {"tool": data["tool"], "args": args or {}}
+
+    args: dict[str, Any] = {}
+    for parameter in _DSML_PARAMETER_RE.finditer(invoke.group("body")):
+        value = parameter.group("value").strip()
+        if value.startswith(("[", "{")):
+            try:
+                args[parameter.group("name")] = json.loads(value)
+                continue
+            except json.JSONDecodeError:
+                pass
+        args[parameter.group("name")] = value
+    return {"tool": invoke.group("name"), "args": args}
+
+
+def _execute_tool(name: str, app_state: Any, args: dict) -> dict:
+    """执行工具调用，返回结果 dict（出错时返回 {\"error\": ...}）。"""
+    if name not in _ALLOWED_NAMES:
+        return {"error": f"tool not allowed: {name}"}
+    try:
+        return agent_tools.call_tool(name, app_state, args)
+    except ValueError as e:
+        return {"error": str(e)}
 
 
 async def run_agent_stream(
@@ -40,48 +104,92 @@ async def run_agent_stream(
     app_state: Any,
     profile_id: str | None = None,
     *,
+    generate_tool: Callable[..., Awaitable[tuple[str | None, list[dict] | None]]] = generate_ai_with_tools,
     generate: Callable[..., Awaitable[str]] = generate_ai_text,
     stream: Callable[..., Any] = stream_ai_text,
 ) -> AsyncIterator[str]:
-    """Multi-round tool loop plus final streamed answer. Yields NDJSON payload strings."""
+    """Multi-round tool loop plus final streamed answer. Yields NDJSON payload strings.
+
+    优先使用 OpenAI 原生 function calling（``generate_tool`` 传 ``tools=`` 参数）。
+    对于不支持原生 tools 的 provider（Codex CLI / ACP），``generate_tool`` 返回
+    ``(text, None)``，此时降级到 prompt 注入 JSON 模式（``_parse_tool``）。
+    """
     tool_ctx: list[dict] = []
+    started_at = perf_counter()
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             convo = [{"role": "system", "content": _tools_system()}, *messages, *tool_ctx]
-            decision = await generate(convo, profile_id=profile_id, temperature=0.2, max_tokens=1200)
-            tool_req = _parse_tool(decision)
-            if tool_req is None:
-                break
-
-            yield json.dumps(
-                {"type": "tool_call", "name": tool_req["tool"], "args": tool_req["args"]},
-                ensure_ascii=False,
+            content, tool_calls = await generate_tool(
+                convo, _OPENAI_TOOLS,
+                profile_id=profile_id, temperature=0.2, max_tokens=1200,
             )
-            if tool_req["tool"] not in _ALLOWED_NAMES:
-                result = {"error": f"tool not allowed: {tool_req['tool']}"}
-            else:
-                try:
-                    result = agent_tools.call_tool(tool_req["tool"], app_state, tool_req["args"])
-                except ValueError as e:
-                    result = {"error": str(e)}
 
-            yield json.dumps(
-                {"type": "tool_result", "name": tool_req["tool"], "result": result},
-                ensure_ascii=False,
-            )
-            tool_ctx += [
-                {"role": "assistant", "content": decision},
-                {"role": "user", "content": "Tool result:\n" + json.dumps(result, ensure_ascii=False)},
-            ]
+            if tool_calls:
+                # ── 原生 function calling 路径 ──
+                assistant_msg: dict = {"role": "assistant"}
+                if content:
+                    assistant_msg["content"] = content
+                assistant_msg["tool_calls"] = [
+                    {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                    for tc in tool_calls
+                ]
+                tool_ctx.append(assistant_msg)
+
+                for tc in tool_calls:
+                    name = tc["name"]
+                    try:
+                        args = json.loads(tc["arguments"]) if tc.get("arguments") else {}
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    yield json.dumps({"type": "tool_call", "name": name, "args": args}, ensure_ascii=False)
+                    tool_started_at = perf_counter()
+                    result = _execute_tool(name, app_state, args)
+                    yield json.dumps({
+                        "type": "tool_result",
+                        "name": name,
+                        "result": result,
+                        "elapsed_ms": round((perf_counter() - tool_started_at) * 1000, 1),
+                    }, ensure_ascii=False)
+                    tool_ctx.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(result, ensure_ascii=False, default=str),
+                    })
+                continue
+
+            # ── 无 tool_calls：降级解析或直接回答 ──
+            if content:
+                tool_req = _parse_tool(content)
+                if tool_req is not None:
+                    name = tool_req["tool"]
+                    yield json.dumps({"type": "tool_call", "name": name, "args": tool_req["args"]}, ensure_ascii=False)
+                    tool_started_at = perf_counter()
+                    result = _execute_tool(name, app_state, tool_req["args"])
+                    yield json.dumps({
+                        "type": "tool_result",
+                        "name": name,
+                        "result": result,
+                        "elapsed_ms": round((perf_counter() - tool_started_at) * 1000, 1),
+                    }, ensure_ascii=False)
+                    tool_ctx += [
+                        {"role": "assistant", "content": content},
+                        {"role": "user", "content": "Tool result:\n" + json.dumps(result, ensure_ascii=False, default=str)},
+                    ]
+                    continue
+            break
 
         answer_msgs = [
-            {"role": "system", "content": "Answer the user concisely using any tool results above."},
+            {"role": "system", "content": _final_system()},
             *messages,
             *tool_ctx,
         ]
         async for delta in stream(answer_msgs, profile_id=profile_id, temperature=0.4, max_tokens=1600):
             if delta:
                 yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
-        yield json.dumps({"type": "done"}, ensure_ascii=False)
+        yield json.dumps({"type": "done", "elapsed_ms": round((perf_counter() - started_at) * 1000, 1)}, ensure_ascii=False)
     except Exception as e:
-        yield json.dumps({"type": "error", "message": f"Agent 失败: {e}"}, ensure_ascii=False)
+        yield json.dumps({
+            "type": "error",
+            "message": f"Agent 失败: {e}",
+            "elapsed_ms": round((perf_counter() - started_at) * 1000, 1),
+        }, ensure_ascii=False)

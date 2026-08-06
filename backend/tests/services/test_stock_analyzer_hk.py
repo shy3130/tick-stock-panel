@@ -1,7 +1,9 @@
 """HK stock analysis falls back to local on-demand enrichment when batch data is absent."""
-from datetime import date
+import json
+from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 import app.services.stock_analyzer as sa
 
@@ -112,3 +114,69 @@ def test_hk_local_on_demand_uses_provider_float_shares_without_limit_signals(mon
 
     assert out["turnover_rate"].item() == 10.0
     assert "signal_limit_up" not in out.columns
+def _analysis_df(rows: int) -> pl.DataFrame:
+    start = date.today() - timedelta(days=rows - 1)
+    closes = [10.0 + index * 0.1 for index in range(rows)]
+    return pl.DataFrame(
+        {
+            "symbol": ["600519.SH"] * rows,
+            "date": [start + timedelta(days=index) for index in range(rows)],
+            "open": [value - 0.05 for value in closes],
+            "high": [value + 0.2 for value in closes],
+            "low": [value - 0.2 for value in closes],
+            "close": closes,
+            "volume": [1000.0] * rows,
+            "ema20": closes,
+            "atr_14": [0.4] * rows,
+            "vol_ma5": [1000.0] * rows,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_stock_analysis_preflight_rejects_short_history_without_ai(monkeypatch, tmp_path):
+    monkeypatch.setattr(sa, "_load_kline", lambda repo, symbol: _analysis_df(30))
+    called = False
+
+    async def fake_stream(*args, **kwargs):
+        nonlocal called
+        called = True
+        yield "unexpected"
+
+    monkeypatch.setattr("app.services.ai_provider.stream_ai_text", fake_stream)
+    events = [
+        json.loads(line)
+        async for line in sa.analyze_stock_stream(object(), tmp_path, "600519.SH")
+    ]
+    assert events[0]["type"] == "error"
+    assert events[0]["code"] == "data_incomplete"
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_stock_analysis_stream_exposes_context_and_keeps_markdown(monkeypatch, tmp_path):
+    monkeypatch.setattr(sa, "_load_kline", lambda repo, symbol: _analysis_df(65))
+    monkeypatch.setattr(sa, "_load_financials", lambda data_dir, symbol: {})
+    monkeypatch.setattr(sa, "_detect_pattern_summary", lambda df: [])
+    monkeypatch.setattr("app.services.skill_context.load_skill_context_safe", lambda purpose: "")
+
+    async def fake_stream(messages, **kwargs):
+        assert "canonical_enriched" in messages[1]["content"]
+        yield "Markdown 报告"
+
+    monkeypatch.setattr("app.services.ai_provider.stream_ai_text", fake_stream)
+    events = [
+        json.loads(line)
+        async for line in sa.analyze_stock_stream(
+            object(),
+            tmp_path,
+            "600519.SH",
+            attempt_id="att-test",
+        )
+    ]
+    assert events[0]["type"] == "meta"
+    assert events[0]["source"] == "canonical_enriched"
+    assert events[0]["adjustment"] == "qfq"
+    assert events[0]["attempt_id"] == "att-test"
+    assert any(event == {"type": "delta", "content": "Markdown 报告"} for event in events)
+    assert events[-1] == {"type": "done"}
