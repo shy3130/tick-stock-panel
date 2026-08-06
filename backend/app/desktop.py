@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from app.log_redaction import install_secret_redaction_filter
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,7 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    install_secret_redaction_filter()
 
     try:
         _ensure_data_dir_writable()

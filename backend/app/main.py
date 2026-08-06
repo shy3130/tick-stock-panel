@@ -11,20 +11,31 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import agent, analysis, auth as auth_api, backtest, data, documents, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, patterns, pipeline, research, review, rps, screener, settings as settings_api, signals, stock_analysis, strategy, trade_journal, watchlist
+from app.api import agent, analysis, auth as auth_api, backtest, data, documents, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, patterns, pipeline, research, review, rps, screener, settings as settings_api, signals, stock_analysis, strategy, strategy_profile, trade_journal, trading, trading_plans, trading_review, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
+from app.log_redaction import install_secret_redaction_filter
 from app.data_providers.capability_gate import detect_capabilities
 from app.jobs import daily_pipeline
+from app.data_providers.registry import close_all_providers
 from app.services.data_mode import current_data_mode
 from app.services.quote_service import QuoteService
+from app.services.screener import close_screener_sql_connection
 from app.storage.repository import DataStore, KlineRepository
 
 logging.basicConfig(
     level=settings.log_level,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+install_secret_redaction_filter()
 logger = logging.getLogger(__name__)
+
+
+def _run_shutdown_step(name: str, callback) -> None:
+    try:
+        callback()
+    except Exception:  # noqa: BLE001
+        logger.exception("shutdown step failed: %s", name)
 
 
 @asynccontextmanager
@@ -168,23 +179,28 @@ async def lifespan(app: FastAPI):
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
 
-    yield
-
-    if app.state.scheduler:
-        app.state.scheduler.shutdown(wait=False)
-    ps = getattr(app.state, "pull_scheduler", None)
-    if ps:
-        ps.stop()
-    fsc = getattr(app.state, "financial_scheduler", None)
-    if fsc:
-        fsc.stop()
-    qs = getattr(app.state, "quote_service", None)
-    if qs:
-        qs.stop()
-    dsvc = getattr(app.state, "depth_service", None)
-    if dsvc:
-        dsvc.stop_polling()
-    logger.info("shutdown")
+    try:
+        yield
+    finally:
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler:
+            _run_shutdown_step("scheduler", lambda: scheduler.shutdown(wait=False))
+        ps = getattr(app.state, "pull_scheduler", None)
+        if ps:
+            _run_shutdown_step("pull scheduler", ps.stop)
+        fsc = getattr(app.state, "financial_scheduler", None)
+        if fsc:
+            _run_shutdown_step("financial scheduler", fsc.stop)
+        quote_service = getattr(app.state, "quote_service", None)
+        if quote_service:
+            _run_shutdown_step("quote service", quote_service.stop)
+        depth = getattr(app.state, "depth_service", None)
+        if depth:
+            _run_shutdown_step("depth service", depth.stop_polling)
+        _run_shutdown_step("data providers", close_all_providers)
+        _run_shutdown_step("screener SQL connection", close_screener_sql_connection)
+        _run_shutdown_step("data store", store.close)
+        logger.info("shutdown")
 
 
 app = FastAPI(
@@ -280,6 +296,10 @@ app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(patterns.router)
 app.include_router(trade_journal.router)
+app.include_router(trading.router)
+app.include_router(trading_plans.router)
+app.include_router(trading_review.router)
+app.include_router(strategy_profile.router)
 
 
 # 能力门控异常 → 403(而非默认 500)
@@ -289,6 +309,10 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from app.capabilities import CapabilityDenied
 from app.data_providers.fquant.catalog_resolver import CatalogError, StaleCatalogError
+from app.errors import AppError, app_error_handler
+
+# 统一失败语义 (data_incomplete/stale_input/kernel_not_ready 等) → 422 + {code, detail}
+app.add_exception_handler(AppError, app_error_handler)
 
 
 @app.exception_handler(CapabilityDenied)

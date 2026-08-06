@@ -36,6 +36,30 @@ OPS = {">", ">=", "<", "<=", "==", "!="}
 # 布尔信号列前缀 (op=truth 时 field 取这些)
 _SIGNAL_PREFIXES = ("signal_", "csg_")
 
+# 指数评估/校验时需隐藏的信号字段: 涨跌停/连板类 (指数无涨跌停) +
+# 分时穿越类 (指数无本地分钟K, 会静默不触发)。与前端 INDEX_HIDDEN_SIGNALS 对齐。
+INTRADAY_SIGNAL_FIELDS = frozenset({
+    "signal_intraday_avg_cross_up",
+    "signal_intraday_avg_cross_down",
+    "signal_intraday_zero_cross_up",
+    "signal_intraday_zero_cross_down",
+})
+
+
+def _is_index_hidden_field(field: str) -> bool:
+    """指数应隐藏的信号字段: 名字含 limit (涨跌停/炸板) 或属分时穿越信号。"""
+    return "limit" in field or field in INTRADAY_SIGNAL_FIELDS
+
+
+def uses_intraday_signals(rule: dict) -> bool:
+    """规则是否引用了分时穿越信号 (op=truth 且 field 属 INTRADAY_SIGNAL_FIELDS)。"""
+    return any(
+        isinstance(c, dict)
+        and c.get("op") == "truth"
+        and c.get("field") in INTRADAY_SIGNAL_FIELDS
+        for c in rule.get("conditions", [])
+    )
+
 
 # ── 持久化 (镜像 custom_signals.py) ─────────────────────
 def _dir(data_dir: Path) -> Path:

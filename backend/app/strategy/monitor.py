@@ -291,6 +291,31 @@ def _build_condition_mask(df: pl.DataFrame, conditions: list[dict], logic: str) 
         mask = pl.all_horizontal(parts)
     return df.filter(mask)
 
+def _push_rule_webhook(rule: dict, ev: dict) -> None:
+    """规则命中时按需推送到外部 webhook (失败仅记日志,不阻塞告警落盘)。
+    仅当 rule.webhook_enabled 且 webhook_url 非空时触发;POST 同步发,超时 3s,
+    trust_env=False (与 webhook_adapter 一致, 走直连不走代理)。
+    任何异常一律吞成 warning —— 监控命中路径不可因推送失败而中断。
+    """
+    if not rule.get("webhook_enabled"):
+        return
+    url = (rule.get("webhook_url") or "").strip()
+    if not url:
+        return
+    payload = {
+        "ts": ev.get("ts"),
+        "rule_id": ev.get("rule_id"),
+        "rule_name": ev.get("rule_name"),
+        "symbol": ev.get("symbol"),
+        "severity": ev.get("severity", "info"),
+        "message": ev.get("message"),
+    }
+    try:
+        import httpx
+        httpx.post(url, json=payload, timeout=3.0, trust_env=False)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("监控规则 %s webhook 推送失败: %s", rule.get("id"), e)
+
 
 class MonitorRuleEngine:
     """通用监控规则引擎 — 接收实时行情 DataFrame,评估所有规则,返回 AlertEvent。
@@ -484,6 +509,7 @@ class MonitorRuleEngine:
                 "logic": rule.get("logic", "and") if rtype != "strategy" else "and",
             }
             events.append(ev)
+            _push_rule_webhook(rule, ev)
             if self._alert_handler:
                 try:
                     self._alert_handler(ev)
