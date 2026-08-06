@@ -12,13 +12,57 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.services.screener import PRESET_STRATEGIES, ScreenerService
 from app.services import strategy_cache
+from app.services.nl_screener import NLParseRequest, NLScreenerError, parse_nl
+from app.services.screener import PRESET_STRATEGIES, ScreenerService
+from app.services.screener_query import (
+    QueryService,
+    ScreenerDataUnavailableError,
+    ScreenerQueryRequest,
+    ScreenerSemanticError,
+    field_metadata,
+)
 from app.strategy import config as strategy_config
+from app.strategy.gostock_presets import list_gostock_presets
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
+
+
+@router.get("/fields")
+def query_fields() -> dict[str, Any]:
+    """Authoritative metadata for the literal screener query registry."""
+    return {"fields": field_metadata()}
+
+
+@router.post("/query")
+def query(req: ScreenerQueryRequest, request: Request) -> dict[str, Any]:
+    try:
+        return QueryService(request.app.state.repo).query(req)
+    except ScreenerSemanticError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_screener_semantics", "location": exc.location, "reason": exc.reason},
+        ) from None
+    except ScreenerDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "screener_data_unavailable", "fields": exc.fields},
+        ) from None
+
+
+@router.post("/nl_parse")
+async def nl_parse(req: NLParseRequest) -> dict[str, Any]:
+    try:
+        return await parse_nl(req.text, req.profile_id)
+    except NLScreenerError:
+        raise HTTPException(status_code=503, detail={"code": "screener_nl_unavailable"}) from None
+
+
+@router.get("/nl_presets")
+def nl_presets() -> dict[str, Any]:
+    return {"presets": list_gostock_presets()}
 
 
 class CustomRequest(BaseModel):
@@ -73,6 +117,7 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
         return {}
 
     import polars as pl
+
     from app.api.ext_data import _read_ext_dataframe
     from app.services.ext_data import ExtConfigStore
 
@@ -358,7 +403,8 @@ def run_all(request: Request, body: Optional[dict] = None):
     t_total = time.perf_counter()
 
     body = body or {}
-    repo = request.app.state.repo
+    collect_diag = bool(body.get("diagnostics", False))
+    include_consensus = bool(body.get("include_consensus", False))
     svc = ScreenerService(repo)
 
     # 解析日期
