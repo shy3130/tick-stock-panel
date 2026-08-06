@@ -124,5 +124,6 @@ def test_clear_cache_resets_hk_state(tmp_path):
 
     assert r._hk_enriched_cache is None
     assert r._hk_enriched_cache_date is None
-    assert r._hk_enriched_history_cache is None
+    # 港股完整历史缓存已删除, 不应再存在该属性
+    assert not hasattr(r, "_hk_enriched_history_cache")
     assert r._hk_instruments_cache is None

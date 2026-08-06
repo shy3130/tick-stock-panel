@@ -1,59 +1,33 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 
-from app.api.kline import _ensure_minute_capable, extend_minute_history
-from app.capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.api.kline import extend_minute_history
+from app.services.pipeline_jobs import job_store
 
 
 class _Request:
-    def __init__(self, capset: CapabilitySet) -> None:
-        self.app = SimpleNamespace(state=SimpleNamespace(repo=object(), capabilities=capset))
+    def __init__(self) -> None:
+        self.app = SimpleNamespace(state=SimpleNamespace(repo=object()))
 
     async def json(self) -> dict:
         return {"value": 1, "unit": "month"}
 
 
-def test_day_needs_only_minute_batch():
-    capset = CapabilitySet({Cap.KLINE_MINUTE_BATCH: CapabilityLimits(batch=200)})
-
-    _ensure_minute_capable(capset, "day")
-
-
-def test_month_blocked_without_month_cap():
-    capset = CapabilitySet({Cap.KLINE_MINUTE_BATCH: CapabilityLimits(batch=200)})
-
-    with pytest.raises(HTTPException) as exc:
-        _ensure_minute_capable(capset, "month")
-
-    assert exc.value.status_code == 403
-    assert "按月" in exc.value.detail
-
-
-def test_month_allowed_with_month_cap():
-    capset = CapabilitySet({
-        Cap.KLINE_MINUTE_BATCH: CapabilityLimits(batch=200),
-        Cap.KLINE_MINUTE_MONTH: CapabilityLimits(batch=200),
-    })
-
-    _ensure_minute_capable(capset, "month")
-
-
-def test_no_minute_batch_blocks_all():
-    capset = CapabilitySet({})
-
-    with pytest.raises(HTTPException) as exc:
-        _ensure_minute_capable(capset, "day")
-
-    assert exc.value.status_code == 403
-    assert "批量分钟K" in exc.value.detail
-
-
 @pytest.mark.asyncio
-async def test_month_extend_requires_month_capability():
-    capset = CapabilitySet({Cap.KLINE_MINUTE_BATCH: CapabilityLimits(batch=200)})
-    with pytest.raises(HTTPException) as exc:
-        await extend_minute_history(_Request(capset))
-    assert exc.value.status_code == 403
-    assert "当前数据源不支持按月扩展分钟K历史" in exc.value.detail
+async def test_month_extend_is_not_blocked_by_capability_gate(monkeypatch):
+    scheduled = []
+
+    def discard_task(coro):
+        scheduled.append(coro)
+        coro.close()
+
+    monkeypatch.setattr(job_store, "create", lambda: "job-1")
+    monkeypatch.setattr(job_store, "get", lambda _job_id: None)
+    monkeypatch.setattr(asyncio, "create_task", discard_task)
+
+    result = await extend_minute_history(_Request())
+
+    assert result == {"status": "started", "job_id": "job-1"}
+    assert len(scheduled) == 1

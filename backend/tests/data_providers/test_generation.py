@@ -39,7 +39,7 @@ def test_root_for_honours_env_override(tmp_path, monkeypatch):
     assert gen.root_for("tdx") == str(tmp_path)
     # default when unset
     monkeypatch.delenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", raising=False)
-    assert gen.root_for("tdx") == "/Volumes/WD1/snapshots/engine-a"
+    assert gen.root_for("tdx") == "/Volumes/WD1/duckdb/snapshots/engine-a"
 
 
 def test_current_path_resolves_published(tmp_path, monkeypatch):

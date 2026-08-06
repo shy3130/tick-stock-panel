@@ -11,9 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import polars as pl
 
@@ -49,8 +48,6 @@ _PROVIDER_TABLE_MAP: dict[str, str] = {
     "quick": "quick",
     "forecast": "forecast",
 }
-
-_EASTMONEY_DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
 
 # 数据源 provider 单例缓存
@@ -195,218 +192,23 @@ def sync_cash_flow(data_dir: Path, capset: CapabilitySet) -> int:
 
 
 def sync_quick(data_dir: Path, capset: CapabilitySet) -> int:
-    """同步业绩快报。"""
-    if not capset.has(Cap.FINANCIAL):
-        logger.info("sync_quick skipped: no FINANCIAL capability")
-        return 0
+    """同步业绩快报。
+
+    仅通过 active provider 的本地 DuckDB ``financial_report_quick`` 同步;
+    fstore 无行时 ``_sync_table`` 直接返回 0, 不触发任何外部 HTTP 回退。
+    """
     symbols = _get_symbols(data_dir)
-    rows = _sync_table("quick", symbols, data_dir, capset, latest_only=True)
-    existing = get_financial_df(data_dir, "quick") if rows else pl.DataFrame()
-    try:
-        merged_rows = _sync_quick_from_eastmoney(data_dir, capset, existing=existing)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("sync_quick eastmoney fallback failed: %s", e)
-        return rows
-    return merged_rows or rows
+    return _sync_table("quick", symbols, data_dir, capset, latest_only=True)
 
 
 def sync_forecast(data_dir: Path, capset: CapabilitySet) -> int:
-    """同步业绩预告。"""
-    if not capset.has(Cap.FINANCIAL):
-        logger.info("sync_forecast skipped: no FINANCIAL capability")
-        return 0
-    if _forecast_fstore_has_rows():
-        symbols = _get_symbols(data_dir)
-        rows = _sync_table("forecast", symbols, data_dir, capset, latest_only=True)
-        if rows:
-            return rows
-    return _sync_forecast_from_eastmoney(data_dir, capset)
+    """同步业绩预告。
 
-
-def _forecast_fstore_has_rows() -> bool:
-    try:
-        provider = _get_data_provider()
-        fstore = getattr(provider, "_fstore", None)
-        query = getattr(fstore, "query", None)
-        if query is None:
-            return False
-        return bool(query("SELECT 1 FROM financial_report_forecast LIMIT 1", ()))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("check financial_report_forecast failed: %s", e)
-        return False
-
-
-def _recent_report_dates(today: date | None = None) -> list[str]:
-    today = today or date.today()
-    quarters = [(3, 31), (6, 30), (9, 30), (12, 31)]
-    dates: list[date] = []
-    for year in (today.year, today.year - 1):
-        for month, day in quarters:
-            item = date(year, month, day)
-            if item <= today:
-                dates.append(item)
-    return [d.isoformat() for d in sorted(dates, reverse=True)]
-
-
-def _eastmoney_symbol(row: dict[str, Any]) -> str:
-    secucode = row.get("SECUCODE")
-    if secucode:
-        return str(secucode)
-    code = str(row.get("SECURITY_CODE") or "")
-    market = str(row.get("TRADE_MARKET_CODE") or "")
-    if market.startswith("069001002"):
-        return f"{code}.SZ"
-    if market.startswith("069001001"):
-        return f"{code}.SH"
-    return code
-
-
-def _normalize_quick_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        report_date = str(row.get("REPORT_DATE") or "").split(" ")[0] or None
-        notice_date = str(row.get("UPDATE_DATE") or row.get("NOTICE_DATE") or "").split(" ")[0] or None
-        out.append({
-            **row,
-            "symbol": _eastmoney_symbol(row),
-            "t_date": report_date,
-            "report_date": report_date,
-            "notice_date": notice_date,
-            "source": "eastmoney:quick",
-            "basic_eps": row.get("BASIC_EPS"),
-            "total_income": row.get("TOTAL_OPERATE_INCOME"),
-            "net_profit": row.get("PARENT_NETPROFIT"),
-            "bps": row.get("PARENT_BVPS"),
-            "weight_avg_roe": row.get("WEIGHTAVG_ROE"),
-            "yoy_income": row.get("YSTZ"),
-            "yoy_profit": row.get("JLRTBZCL"),
-            "qoq_income": row.get("DJDYSHZ"),
-            "qoq_profit": row.get("DJDJLHZ"),
-        })
-    return pl.DataFrame(out) if out else pl.DataFrame()
-
-
-def _normalize_forecast_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        report_date = str(row.get("REPORT_DATE") or "").split(" ")[0] or None
-        notice_date = str(row.get("NOTICE_DATE") or "").split(" ")[0] or None
-        out.append({
-            **row,
-            "symbol": _eastmoney_symbol(row),
-            "t_date": report_date,
-            "report_date": report_date,
-            "notice_date": notice_date,
-            "source": "eastmoney:forecast",
-            "predict_type": row.get("PREDICT_TYPE"),
-            "predict_content": row.get("PREDICT_CONTENT"),
-            "change_reason": row.get("CHANGE_REASON_EXPLAIN"),
-            "forecast_net_profit": row.get("FORECAST_JZ"),
-            "net_profit_lower": row.get("PREDICT_AMT_LOWER"),
-            "net_profit_upper": row.get("PREDICT_AMT_UPPER"),
-        })
-    return pl.DataFrame(out) if out else pl.DataFrame()
-
-
-def _sync_quick_from_eastmoney(
-    data_dir: Path,
-    capset: CapabilitySet,
-    *,
-    existing: pl.DataFrame | None = None,
-) -> int:
-    if not capset.has(Cap.FINANCIAL):
-        logger.info("sync_quick eastmoney skipped: no FINANCIAL capability")
-        return 0
-
-    from app.services import eastmoney_client
-
-    frames: list[pl.DataFrame] = []
-    for report_date in _recent_report_dates():
-        rows = eastmoney_client.get_datacenter_paged(
-            _EASTMONEY_DATACENTER,
-            {
-                "sortColumns": "UPDATE_DATE,SECURITY_CODE",
-                "sortTypes": "-1,-1",
-                "reportName": "RPT_FCI_PERFORMANCEE",
-                "columns": "ALL",
-                "filter": (
-                    '(SECURITY_TYPE_CODE in ("058001001","058001008"))'
-                    '(TRADE_MARKET_CODE!="069001017")'
-                    f"(REPORT_DATE='{report_date}')"
-                ),
-                "source": "WEB",
-                "client": "WEB",
-            },
-            max_pages=20,
-        )
-        df = _normalize_quick_rows(rows)
-        if df.is_empty():
-            continue
-        frames.append(df)
-
-    if existing is not None and not existing.is_empty():
-        frames.insert(0, existing)
-    if not frames:
-        return 0
-
-    df = pl.concat(frames, how="diagonal_relaxed")
-    if {"symbol", "t_date"}.issubset(df.columns):
-        df = df.unique(subset=["symbol", "t_date"], keep="first")
-
-    out_dir = data_dir / "financials" / "quick"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_parquet(df, out_dir / "part.parquet")
-    logger.info(
-        "sync_quick eastmoney merge done: %d records across %d source frames",
-        len(df),
-        len(frames),
-    )
-    return len(df)
-
-
-def _sync_forecast_from_eastmoney(data_dir: Path, capset: CapabilitySet) -> int:
-    if not capset.has(Cap.FINANCIAL):
-        logger.info("sync_forecast eastmoney skipped: no FINANCIAL capability")
-        return 0
-
-    from app.services import eastmoney_client
-
-    frames: list[pl.DataFrame] = []
-    for report_date in _recent_report_dates():
-        rows = eastmoney_client.get_datacenter_paged(
-            _EASTMONEY_DATACENTER,
-            {
-                "sortColumns": "NOTICE_DATE,SECURITY_CODE",
-                "sortTypes": "-1,-1",
-                "reportName": "RPT_PUBLIC_OP_NEWPREDICT",
-                "columns": "ALL",
-                "filter": (
-                    '(SECURITY_TYPE_CODE in ("058001001","058001008"))'
-                    '(TRADE_MARKET_CODE!="069001017")'
-                    f"(REPORT_DATE='{report_date}')"
-                ),
-                "source": "WEB",
-                "client": "WEB",
-            },
-            max_pages=20,
-        )
-        df = _normalize_forecast_rows(rows)
-        if df.is_empty():
-            continue
-        frames.append(df)
-    if not frames:
-        return 0
-
-    df = pl.concat(frames, how="diagonal_relaxed")
-    out_dir = data_dir / "financials" / "forecast"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_parquet(df, out_dir / "part.parquet")
-    logger.info(
-        "sync_forecast eastmoney done: %d records across %d report dates",
-        len(df),
-        len(frames),
-    )
-    return len(df)
+    仅通过 active provider 的本地 DuckDB ``financial_report_forecast`` 同步;
+    fstore 无行时 ``_sync_table`` 直接返回 0, 不触发任何外部 HTTP 回退。
+    """
+    symbols = _get_symbols(data_dir)
+    return _sync_table("forecast", symbols, data_dir, capset, latest_only=True)
 
 
 def sync_all(data_dir: Path, capset: CapabilitySet) -> dict[str, int]:

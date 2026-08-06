@@ -6,7 +6,8 @@ import polars as pl
 from app.jobs import daily_pipeline
 from app.jobs.daily_pipeline import _latest_enriched_date
 from app.services import preferences
-from app.capabilities import CapabilitySet
+from app.capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.data_providers.fquant.catalog_resolver import CatalogError
 
 
 def test_latest_enriched_date_uses_partition_names(tmp_path):
@@ -51,6 +52,47 @@ def test_run_now_local_mode_skips_raw_sync_and_runs_local_pipeline(tmp_path, mon
 
     assert calls == {"local": 1, "raw": 0}
     assert result["enriched_days"] == 7
+
+
+def test_run_now_marks_minute_catalog_failure_as_degraded(tmp_path, monkeypatch):
+    repo = SimpleNamespace(
+        store=SimpleNamespace(data_dir=tmp_path),
+        latest_daily_date=lambda: None,
+    )
+    refreshed = []
+
+    monkeypatch.setattr(daily_pipeline.instrument_sync, "sync_instruments", lambda data_dir: 0)
+    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: ["600519.SH"])
+    monkeypatch.setattr(daily_pipeline, "_refresh_instruments_view", lambda repo: None)
+    monkeypatch.setattr(daily_pipeline, "_refresh_single_view", lambda repo, name: None)
+    monkeypatch.setattr(daily_pipeline, "_refresh_views", lambda repo: refreshed.append(True))
+    monkeypatch.setattr(daily_pipeline, "_invalidate", lambda table=None: None)
+    monkeypatch.setattr(daily_pipeline, "is_local_daily_mode", lambda: True)
+    monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_a_share", lambda: True)
+    monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_index", lambda: False)
+    monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_etf", lambda: False)
+    monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_hk", lambda: False)
+    monkeypatch.setattr(preferences, "get_minute_sync_enabled", lambda: True)
+    monkeypatch.setattr(preferences, "get_minute_sync_days", lambda: 5)
+    monkeypatch.setattr("app.data_providers.get_provider", lambda name: object())
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(daily_pipeline, "run_pipeline_local", lambda *args, **kwargs: 7)
+    monkeypatch.setattr(
+        daily_pipeline.kline_sync,
+        "sync_and_persist_minute",
+        lambda *args, **kwargs: (_ for _ in ()).throw(CatalogError("broken catalog")),
+    )
+
+    result = daily_pipeline.run_now(
+        repo,
+        CapabilitySet({Cap.KLINE_MINUTE_BATCH: CapabilityLimits(batch=100)}),
+    )
+
+    assert result["minute_rows"] == 0
+    assert result["failed_stages"] == [
+        {"stage": "sync_minute", "error": "broken catalog"},
+    ]
+    assert refreshed == [True]
 
 
 def test_bootstrap_local_enriched_skips_incomplete_new_date(tmp_path, monkeypatch):

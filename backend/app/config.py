@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── 运行环境检测 ──────────────────────────────────────────
@@ -102,6 +102,12 @@ class Settings(BaseSettings):
 
     # 静态文件(前端 dist) — frozen: 资源目录的 static/; 非 frozen: frontend/dist
     static_dir: Path = _RESOURCE_ROOT / "static" if _IS_FROZEN else (_PROJECT_ROOT / "frontend" / "dist")
+
+    # DuckDB — 全局运行预算（连接工厂 app.storage.duckdb_runtime.connect_duckdb 统一注入）。
+    # memory_limit 只约束 DuckDB Buffer Manager，不替代 Polars 缓存边界；
+    # 分别由 DUCKDB_MEMORY_LIMIT / DUCKDB_THREADS 覆盖。
+    duckdb_memory_limit: str = "2GB"
+    duckdb_threads: int = Field(4, ge=1)
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:

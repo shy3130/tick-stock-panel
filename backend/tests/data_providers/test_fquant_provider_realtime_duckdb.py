@@ -7,7 +7,7 @@ import pytest
 
 from app.data_providers.fquant_provider import FQuantProvider
 
-DUCKDB_PATH = "/Volumes/WD1/fstore.duckdb"
+DUCKDB_PATH = "/Volumes/WD1/duckdb/fstore.duckdb"
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(DUCKDB_PATH),

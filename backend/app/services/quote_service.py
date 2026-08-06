@@ -89,6 +89,12 @@ class QuoteService:
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
         self._index_quotes_cache: pl.DataFrame | None = None
+        # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
+        self._final_sync_done: set[tuple[date, str]] = set()
+        self._final_sync_failed: dict[tuple[date, str], str] = {}
+        # 腾讯/新浪实时行情客户端 — 盘中为指数/自选提供秒级实时价格
+        from app.data_providers.fquant.sina_tencent_client import SinaTencentClient
+        self._live_client = SinaTencentClient(timeout=4.0)
 
     # ================================================================
     # 生命周期
@@ -110,13 +116,20 @@ class QuoteService:
         logger.info("行情服务已启动, 轮询间隔 %.1fs", self._interval)
 
     def stop(self) -> None:
-        """停止后台行情轮询线程。"""
+        """停止后台行情轮询线程。
+
+        如果当前处于 close_final 阶段且当日收盘最终同步尚未完成,
+        在停止线程后执行一次 _run_final_sync。
+        """
         self._running = False
         self._enabled = False
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
         self._save_enabled(False)
+        # 停机前: 收盘最终同步
+        if self._market_phase() == "close_final":
+            self._run_final_sync()
         logger.info("行情服务已停止")
 
     def enable(self) -> bool:
@@ -359,6 +372,32 @@ class QuoteService:
             return
         self._fetch_full_market_quotes()
 
+    def _fetch_live_quotes(self, symbols: list[str]) -> list[dict]:
+        """通过腾讯/新浪拉取实时行情，返回 provider 格式的 quote dict 列表。
+
+        腾讯优先（字段更全），失败后降级到新浪。两者都失败返回空列表。
+        返回的 dict 结构与 provider.get_realtime 的行结构对齐:
+          symbol/name/last_price/prev_close/open/high/low/volume/amount/source/ext
+        """
+        if not symbols:
+            return []
+        rows = self._live_client.get_quotes(symbols, prefer="tencent")
+        if not rows:
+            rows = self._live_client.get_quotes(symbols, prefer="sina")
+        if not rows:
+            return []
+        # 标准化: 补 change_pct/change_amount 到 ext (与 _record_from_quote 对齐)
+        for r in rows:
+            price = r.get("last_price")
+            prev = r.get("prev_close")
+            ext = r.get("ext") or {}
+            if price is not None and prev not in (None, 0):
+                ext["change_amount"] = price - prev
+                ext["change_pct"] = (price - prev) / prev * 100
+            r["ext"] = ext
+            r["timestamp"] = r.get("timestamp") or date.today().isoformat()
+        return rows
+
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
 
@@ -395,9 +434,14 @@ class QuoteService:
                 if df_uni is not None and not df_uni.is_empty():
                     resp.extend(df_uni.to_dicts())
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
-                df_idx = provider.get_realtime(symbols=sorted(core_index_symbols))
-                if df_idx is not None and not df_idx.is_empty():
-                    resp.extend(df_idx.to_dicts())
+                # 指数走腾讯/新浪实时行情（盘中秒级），失败时降级到本地 DuckDB 快照
+                live_idx = self._fetch_live_quotes(sorted(core_index_symbols))
+                if live_idx:
+                    resp.extend(live_idx)
+                else:
+                    df_idx = provider.get_realtime(symbols=sorted(core_index_symbols))
+                    if df_idx is not None and not df_idx.is_empty():
+                        resp.extend(df_idx.to_dicts())
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败: %s", e)
             return
@@ -478,9 +522,11 @@ class QuoteService:
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
         try:
-            # 通过 provider 抽象层拉取 (替代 tf.quotes.get)
-            df = provider.get_realtime(symbols=symbols)
-            resp: list[dict] = df.to_dicts() if df is not None and not df.is_empty() else []
+            # 腾讯/新浪实时行情优先（盘中秒级），失败时降级到本地 DuckDB 快照
+            resp = self._fetch_live_quotes(symbols)
+            if not resp:
+                df = provider.get_realtime(symbols=symbols)
+                resp = df.to_dicts() if df is not None and not df.is_empty() else []
         except Exception as e:  # noqa: BLE001
             logger.warning("自选实时拉取失败: %s", e)
             return
@@ -653,6 +699,80 @@ class QuoteService:
 
         return any_market_open_at(datetime.now())
 
+    @staticmethod
+    def _market_phase() -> str:
+        """A 股行情轮询阶段(北京时间)。
+
+        final 阶段用于午休/收盘定版: 需要至少成功拉取一版边界后的行情,
+        才算进入休盘。
+        """
+        try:
+            from app.market_time import cn_now, cn_today
+        except ImportError:
+            cn_now = None
+
+        if cn_now is None:
+            # fallback: 使用系统本地时间 (测试环境常用)
+            now = datetime.now()
+        else:
+            now = cn_now()
+
+        if now.weekday() >= 5:
+            return "closed"
+        t = now.time()
+        from datetime import time as dt_time
+        if dt_time(9, 15) <= t < dt_time(9, 30):
+            return "preopen"
+        if dt_time(9, 30) <= t < dt_time(11, 30):
+            return "morning"
+        if dt_time(11, 30) <= t < dt_time(12, 55):
+            return "morning_final"
+        if dt_time(12, 55) <= t < dt_time(13, 0):
+            return "pre_afternoon"
+        if dt_time(13, 0) <= t < dt_time(15, 0):
+            return "afternoon"
+        if t >= dt_time(15, 0):
+            return "close_final"
+        return "closed"
+
+    @staticmethod
+    def _final_sync_key(phase: str) -> tuple[date, str] | None:
+        try:
+            from app.market_time import cn_today
+        except ImportError:
+            cn_today = None
+
+        if cn_today is None:
+            today = date.today()
+        else:
+            today = cn_today()
+
+        if phase == "morning_final":
+            return (today, "morning")
+        if phase == "close_final":
+            return (today, "close")
+        return None
+
+    def _run_final_sync(self) -> bool:
+        """执行一次最终行情同步。
+
+        如果当日收盘 final sync 尚未完成, 调用 _fetch_quotes 并标记状态。
+        返回是否成功执行了同步。
+        """
+        phase = self._market_phase()
+        key = self._final_sync_key(phase)
+        if not key or key in self._final_sync_done:
+            return False
+        try:
+            self._fetch_quotes()
+            self._final_sync_done.add(key)
+            self._final_sync_failed.pop(key, None)
+            logger.info("收盘最终行情同步完成")
+            return True
+        except Exception as e:  # noqa: BLE001
+            self._final_sync_failed[key] = "fetch_failed"
+            logger.warning("收盘最终行情同步失败: %s", e)
+            return False
     @staticmethod
     def _save_enabled(enabled: bool) -> None:
         from app.services import preferences

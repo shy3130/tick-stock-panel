@@ -11,7 +11,7 @@ import pytest
 
 from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
 
-DUCKDB_PATH = "/Volumes/WD1/fstore.duckdb"
+DUCKDB_PATH = "/Volumes/WD1/duckdb/fstore.duckdb"
 
 
 @pytest.mark.skipif(
@@ -52,3 +52,56 @@ def test_available_false_when_file_missing():
     client = FStoreDuckDBClient(path="/tmp/does-not-exist.duckdb")
     assert client.available is False
     assert client.query("SELECT 1") == []
+
+
+
+class _FakeConn:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_setup_failure_closes_unpublished_connection(monkeypatch):
+    """ATTACH/view 设置失败时，已打开但尚未发布的连接必须被关闭，避免泄漏。"""
+    import app.data_providers.fquant.fstore_duckdb_client as fstore_mod
+
+    opened: list[_FakeConn] = []
+
+    def fake_connect(_path, *, read_only=False):
+        conn = _FakeConn()
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(fstore_mod.snapshot_or_raw, "__call__", lambda self, p: p)
+    monkeypatch.setattr(
+        "app.storage.duckdb_runtime.connect_duckdb", fake_connect
+    )
+    monkeypatch.setattr(os.path, "exists", lambda _p: True)
+    client = FStoreDuckDBClient(path="/tmp/exists.duckdb")
+    # _create_temp_views 之外的任一设置步骤抛错即覆盖整段设置 try。
+    monkeypatch.setattr(client, "_create_temp_views", lambda conn: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    assert client._get_conn() is None
+    assert client._available is False
+    assert len(opened) == 1
+    assert opened[0].closed is True
+
+
+def test_close_is_idempotent_and_releases_connection():
+    """close() 多次调用不抛、幂等；连接被关闭、_available 复位为 None。"""
+    conn = _FakeConn()
+    client = FStoreDuckDBClient(path="/tmp/whatever.duckdb")
+    client._conn = conn
+    client._available = True
+
+    client.close()
+    assert conn.closed is True
+    assert client._conn is None
+    assert client._available is None
+
+    # 幂等：再次关闭不抛、不改变状态。
+    client.close()
+    assert client._conn is None
+    assert client._available is None

@@ -15,12 +15,12 @@
 ## 数据文件
 
 分别打开 A 股与港股拆分后的独立文件（不做跨库 ATTACH，因为没有跨表 join 需求）：
-- /Volumes/WD1/tdx.duckdb          -> market_day_kline / market_wide_kline / market_xdxr
+- /Volumes/WD1/duckdb/tdx.duckdb          -> market_day_kline / market_wide_kline / market_xdxr
 - engine catalog tdx_minutes/a     -> market_minutes（按日期路由快照）
 - engine catalog tdx_trans/a       -> market_transactions（按年份路由快照）
-- /Volumes/WD1/tdx-hk-web.duckdb        -> market_day_kline(dataset='hkday')
-- /Volumes/WD1/tdx-hkminutes-web.duckdb -> market_minutes(dataset='hkminutes')
-- /Volumes/WD1/tdx-hktrans-web.duckdb   -> market_transactions(dataset='hktrans')
+- /Volumes/WD1/duckdb/tdx-hk.duckdb        -> market_day_kline(dataset='hkday')
+- /Volumes/WD1/duckdb/tdx-hkminutes.duckdb -> market_minutes(dataset='hkminutes')
+- /Volumes/WD1/duckdb/tdx-hktrans.duckdb   -> market_transactions(dataset='hktrans')
 """
 from __future__ import annotations
 
@@ -34,31 +34,59 @@ from app.data_providers.fquant.lease import ConnectionSet
 
 logger = logging.getLogger(__name__)
 
-TDX_PATH = os.getenv("FQUANT_TDX_DUCKDB_PATH", "/Volumes/WD1/tdx.duckdb")
-TDX_MINUTES_PATH = os.getenv("FQUANT_TDX_MINUTES_DUCKDB_PATH", "/Volumes/WD1/tdx-minutes.duckdb")
-TDX_HK_PATH = os.getenv("FQUANT_TDX_HK_DUCKDB_PATH", "/Volumes/WD1/tdx-hk-web.duckdb")
-TDX_HK_MINUTES_PATH = os.getenv("FQUANT_TDX_HK_MINUTES_DUCKDB_PATH", "/Volumes/WD1/tdx-hkminutes-web.duckdb")
-TDX_HK_TRANS_PATH = os.getenv("FQUANT_TDX_HK_TRANS_DUCKDB_PATH", "/Volumes/WD1/tdx-hktrans-web.duckdb")
+TDX_PATH = os.getenv("FQUANT_TDX_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx.duckdb")
+# HK 三库默认指向 raw：_LeasedSource._resolve 先按 logical（tdx_hk/tdx_hk_minutes/
+# tdx_hk_trans）解析 engine-hk generation 快照（最新，immutable 只读）；只有快照未
+# 发布时才回退到 raw 本身。旧的 ``*-web.duckdb`` 已停更，不作默认 raw_path。
+TDX_HK_PATH = os.getenv("FQUANT_TDX_HK_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx-hk.duckdb")
+TDX_HK_MINUTES_PATH = os.getenv("FQUANT_TDX_HK_MINUTES_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx-hkminutes.duckdb")
+TDX_HK_TRANS_PATH = os.getenv("FQUANT_TDX_HK_TRANS_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx-hktrans.duckdb")
+# A 股日级资金流派生库（moneyflow_daily_stock / moneyflow_daily_block）。
+# _LeasedSource 按 logical=tdx_moneyflow 解析 engine-a generation 快照。
+TDX_MONEYFLOW_PATH = os.getenv("FQUANT_TDX_MONEYFLOW_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx-moneyflow.duckdb")
 
 # side 直接就是 HTTP 契约的 direction 编码（已实测核实，取值 {0,1,2,5,8}，另外
 # 实测还发现了极少量的 3，规模量级 <1万行/总量 9亿+行，同样直接透传不做映射），
 # 不需要映射表，get_trans 里直接透传。
 
-# A 股代码段 -> 交易所前缀。market_day_kline/market_wide_kline/market_xdxr/
+# A 股/ETF/指数 代码段 -> 交易所前缀。market_day_kline/market_wide_kline/market_xdxr/
 # market_minutes/market_transactions 的 code 列都带这个前缀（如 sh600519），
 # 而 FQuantProvider 传进来的 code 是裸代码（如 600519，来自 symbol_to_code）。
 _PREFIX_BY_HEAD = {
+    # 沪市: 主板/科创板/B股
     "60": "sh", "68": "sh", "90": "sh",
+    # 沪市 ETF (51x/50x/52x/56x/58x)
+    "51": "sh", "50": "sh", "52": "sh", "56": "sh", "58": "sh",
+    # 深市: 主板/创业板/B股
     "00": "sz", "30": "sz", "20": "sz",
-    "43": "bj", "83": "bj", "87": "bj", "92": "bj",
+    # 深市 ETF (15x/16x/17x/18x)
+    "15": "sz", "16": "sz", "17": "sz", "18": "sz",
+    # 深证指数 (39x)
+    "39": "sz",
+    # 北交所
+    "43": "bj", "83": "bj", "87": "bj", "92": "bj", "88": "bj", "89": "bj",
 }
 
+# 00 开头的 code 有歧义: 股票(000001.SZ=平安银行) vs 指数(000001.SH=上证指数)。
+# 仅凭 code 前两位无法区分，需要 asset_type 消歧。
+_INDEX_HEAD_OVERRIDES = {"00": "sh", "39": "sz"}
 
-def _prefixed_code(code: str) -> str:
+
+def _prefixed_code(code: str, asset_type: str | None = None) -> str:
+    """裸 6 位 code -> 带交易所前缀的 TDX code。
+
+    asset_type 用于消歧: 00 开头的 code 在 index 语境下是沪市指数(上证系列),
+    在 stock 语境下是深市股票(000xxx)。不传 asset_type 时按股票处理(向后兼容)。
+    """
     code = code.strip()
     if len(code) != 6:
         return code
-    return _PREFIX_BY_HEAD.get(code[:2], "") + code if code[:2] in _PREFIX_BY_HEAD else code
+    head = code[:2]
+    if asset_type and asset_type.strip().lower() == "index":
+        override = _INDEX_HEAD_OVERRIDES.get(head)
+        if override:
+            return override + code
+    return _PREFIX_BY_HEAD.get(head, "") + code if head in _PREFIX_BY_HEAD else code
 
 
 def _hk_code(code: str) -> str:
@@ -70,6 +98,23 @@ def _hk_code(code: str) -> str:
 
 def _is_hk(asset_type: str | None) -> bool:
     return (asset_type or "").strip().lower() == "hk"
+
+
+def _a_share_wide_volume(wide_volume, day_volume):
+    """A 股 get_wide 对外 volume 的单位归一：统一以「股」为准。
+
+    market_wide_kline.volume 多数交易日就是正确的股数，但实测存在「部分导入」异常日：
+    成交额(amount)正确，volume（及 inner/outer_volume 同比例）只有真实值的若干成
+    （sh600519 2026-07-14 = 31%、2026-07-15 = 61%）——engine 侧 wide 表导入流水线的
+    上游数据质量问题，本客户端无法修源头。market_day_kline.volume（dataset='day'，
+    官方日线成交量）始终是完整股数（全历史仅 1 例 amount/[high,low] 违例，且为
+    high==low 涨停一字板的浮点边界），因此作为权威值。day_volume 缺失（LEFT JOIN 未
+    命中）时回退 wide_volume——仍是「股」，仅个别异常日不准。港股走 _get_hk_day 的
+    ×10000 路径，不经过这里。
+    """
+    if day_volume is not None:
+        return day_volume
+    return wide_volume
 
 
 class _LeasedSource:
@@ -99,11 +144,11 @@ class _LeasedSource:
             return None
         if self._set is None:
             try:
-                import duckdb
+                from app.storage.duckdb_runtime import connect_duckdb
             except ImportError:
                 self._duckdb_missing = True
                 return None
-            self._set = ConnectionSet(lambda p: duckdb.connect(p, read_only=True))
+            self._set = ConnectionSet(lambda p: connect_duckdb(p, read_only=True))
         return self._set
 
     @contextmanager
@@ -166,11 +211,11 @@ class _CatalogSource:
             return None
         if self._set is None:
             try:
-                import duckdb
+                from app.storage.duckdb_runtime import connect_duckdb
             except ImportError:
                 self._duckdb_missing = True
                 return None
-            self._set = ConnectionSet(lambda path: duckdb.connect(path, read_only=True))
+            self._set = ConnectionSet(lambda path: connect_duckdb(path, read_only=True))
         return self._set
 
     def query(self, sql: str, params: list, date_yyyymmdd: str) -> list:
@@ -184,33 +229,23 @@ class _CatalogSource:
             return []
         connection_set = self._ensure_set()
         if connection_set is None:
-            return []
+            raise catalog_resolver.CatalogError("duckdb module is unavailable")
         try:
             path = catalog_resolver.resolve_route(
                 self._route_key, self._market, trade_date
             )
-        except catalog_resolver.RouteNotFoundError as exc:
-            # 目录未覆盖这个日期/路由 —— 这才是真正的"没有数据",返回空是对的。
-            logger.warning(
-                "TdxDuckDBClient: no catalog route %s/%s %s — %s",
-                self._route_key,
-                self._market,
-                date_yyyymmdd,
-                exc,
-            )
-            return []
         except catalog_resolver.CatalogError:
-            # 目录陈旧(StaleCatalogError)或损坏(manifest/pinned 文件异常)必须抛出去。
-            # 吞成空列表会让"数据还没发布出来"和"这天休市/这只票没成交"长得一模一样:
-            # 每天 publish.engine.a 完成到 publish.catalog 完成之间都会短暂命中这个状态,
-            # publish.catalog 失败时更是无限期命中,而前端只会看到一张空图,没人会发现。
+            # RouteNotFoundError 和 StaleCatalogError 现在都原样上抛 (fail-closed)。
+            # 这满足分钟核心契约：多日 A股 中间日缺失 route 或 stale 必须可见。
+            # sync_minute_batch 不再吞, 会传播给 API 映射 503。
             raise
         try:
             with connection_set.lease(path) as connection:
                 return connection.cursor().execute(sql, params).fetchall()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("TdxDuckDBClient: catalog query failed %s — %s", path, exc)
-            return []
+            raise catalog_resolver.CatalogError(
+                f"catalog query failed {path}: {exc}"
+            ) from exc
 
     def close(self) -> None:
         if self._set is not None:
@@ -218,21 +253,20 @@ class _CatalogSource:
 
 
 class TdxDuckDBClient:
-    """只读打开 tdx.duckdb/tdx-minutes.duckdb/tdx-trans.duckdb，完整实现五个数据集。"""
+    """只读打开整库快照，并按交易日从 catalog 解析 A 股 minutes/trans。"""
 
     def __init__(
         self,
         tdx_path: str | None = None,
-        minutes_path: str | None = None,
-        trans_path: str | None = None,
         hk_path: str | None = None,
         hk_minutes_path: str | None = None,
         hk_trans_path: str | None = None,
+        moneyflow_path: str | None = None,
     ) -> None:
         self._tdx = _LeasedSource("tdx", tdx_path or TDX_PATH)
-        self._minutes = _LeasedSource("tdx_minutes", minutes_path or TDX_MINUTES_PATH)
         self._a_catalog_minutes = _CatalogSource("tdx_minutes", "a")
         self._a_catalog_trans = _CatalogSource("tdx_trans", "a")
+        self._moneyflow = _LeasedSource("tdx_moneyflow", moneyflow_path or TDX_MONEYFLOW_PATH)
         self._hk = _LeasedSource("tdx_hk", hk_path or TDX_HK_PATH)
         self._hk_minutes = _LeasedSource("tdx_hk_minutes", hk_minutes_path or TDX_HK_MINUTES_PATH)
         self._hk_trans = _LeasedSource("tdx_hk_trans", hk_trans_path or TDX_HK_TRANS_PATH)
@@ -242,7 +276,7 @@ class TdxDuckDBClient:
             self._a_catalog_minutes,
             self._a_catalog_trans,
             self._tdx,
-            self._minutes,
+            self._moneyflow,
             self._hk,
             self._hk_minutes,
             self._hk_trans,
@@ -284,6 +318,14 @@ class TdxDuckDBClient:
         market_wide_kline 没有 datetime/adjustment_count 两列（market_day_kline 有），
         这里固定填 None/0——调用方的字段归一函数需要能容忍这两个字段缺失。
 
+        volume 口径：market_wide_kline.volume 多数交易日是正确的「股」，但实测存在
+        「部分导入」异常日——amount 正确、volume（及 inner/outer_volume）只有真实值
+        的若干成（sh600519 2026-07-14 = 31%、2026-07-15 = 61%）。这是 engine 侧 wide
+        表导入流水线的上游数据质量问题。market_day_kline.volume（dataset='day'，官方
+        日线成交量，始终为完整股数）是权威值，因此 get_wide LEFT JOIN 它并以
+        _a_share_wide_volume 归一：优先取 day_kline 的股数，未命中才回退 wide.volume。
+        港股走 _get_hk_day 的 ×10000 路径，不经过这里——A/HK 对外 volume 统一为「股」。
+
         已确认 market_wide_kline 相对 market_day_kline 和 HTTP 路径存在约 2 个交易日
         的稳定滞后（表级导入延迟，非单个代码的问题），因此 get_wide 的结果可能缺少
         近期交易日的数据，即使这些数据在 get_day 或 HTTP 路径中已存在——这是 engine
@@ -293,22 +335,30 @@ class TdxDuckDBClient:
             return self._get_hk_day(code, limit)
         rows = self._tdx.query(
             """
-            SELECT trade_date, open, close, high, low, volume, amount, up_count, down_count,
-                   last_close, change_rate, open_volume, open_turnz, open_unmatched,
-                   close_volume, close_turnz, close_unmatched, inner_volume, outer_volume,
-                   inner_amount, outer_amount
-            FROM market_wide_kline
-            WHERE code = ?
-            ORDER BY trade_date DESC
+            SELECT w.trade_date, w.open, w.close, w.high, w.low, w.volume, w.amount,
+                   w.up_count, w.down_count, w.last_close, w.change_rate,
+                   w.open_volume, w.open_turnz, w.open_unmatched,
+                   w.close_volume, w.close_turnz, w.close_unmatched,
+                   w.inner_volume, w.outer_volume, w.inner_amount, w.outer_amount,
+                   d.volume AS day_volume
+            FROM market_wide_kline w
+            LEFT JOIN (
+                SELECT code, trade_date, volume
+                FROM market_day_kline
+                WHERE dataset = 'day' AND code = ?
+            ) d ON d.trade_date = w.trade_date
+            WHERE w.code = ?
+            ORDER BY w.trade_date DESC
             LIMIT ?
             """,
-            [_prefixed_code(code), limit],
+            [_prefixed_code(code, asset_type), _prefixed_code(code, asset_type), limit],
             "get_wide",
         )
         return [
             {
                 "date": r[0].strftime("%Y-%m-%d") if r[0] else None, "datetime": None,
-                "open": r[1], "close": r[2], "high": r[3], "low": r[4], "volume": r[5], "amount": r[6],
+                "open": r[1], "close": r[2], "high": r[3], "low": r[4],
+                "volume": _a_share_wide_volume(r[5], r[21]), "amount": r[6],
                 "up": r[7], "down": r[8], "adjustment_count": 0,
                 "last_close": r[9], "change_rate": r[10],
                 "open_volume": r[11], "open_turnz": r[12], "open_unmatched": r[13],
@@ -318,8 +368,8 @@ class TdxDuckDBClient:
             for r in rows
         ]
 
-    # tdx-hk.duckdb 的 market_day_kline.volume 存的是「手」，不是「股」——和 A股
-    # 同名列（market_wide_kline.volume，存股数）单位不一致。实测 hk00700
+    # tdx-hk.duckdb 的 market_day_kline.volume 存的是「手」，不是「股」，与 A 股对外
+    # 口径（股，见 get_wide → _a_share_wide_volume 的归一）不一致。实测 hk00700
     # 2025-10-20：该列 = 1,496，而 amount/close 推出的真实股数 = 14,947,219，
     # 比值 9,991.5。本项目对外的 volume 口径统一是股数（A股路径拿到的就是股数），
     # 所以港股这一列必须 ×10000 补回去，否则港股日线成交量会比真实值小 1 万倍，
@@ -453,18 +503,23 @@ class TdxDuckDBClient:
         ]
 
     def get_fund_daily(self, code: str, date_iso: str) -> dict:
-        """读 market_fund_flow 单日资金流数据，字段沿用 fund_daily 契约（见模块头「命名」）。
+        """读 tdx-moneyflow.duckdb.moneyflow_daily_stock 单日资金流。
 
         :param code: 裸代码（如 ``600519``），内部会加交易所前缀
         :param date_iso: ``YYYY-MM-DD`` 格式日期字符串
         :return: 含 main_net/total_net/super_large_net/... 的 dict；
                  文件不可达或无数据时返回 {}（与历史 engine-data 契约一致）
+
+        源表从旧的 ``tdx.duckdb.market_fund_flow``（残废，停在 2026-07-02 / 33 行）
+        切换到独立派生库 ``tdx-moneyflow.duckdb.moneyflow_daily_stock``（日级完整，
+        main_traditional_net = 传统主力 = 超大单+大单净额）。
         """
-        rows = self._tdx.query(
+        rows = self._moneyflow.query(
             """
-            SELECT main, super_large, large, medium, small,
-                   main_ratio, super_large_ratio, large_ratio, medium_ratio, small_ratio
-            FROM market_fund_flow
+            SELECT main_traditional_net, main_broad_net, net_amount,
+                   super_large_net, large_net, medium_net, small_net,
+                   main_traditional_inflow, main_traditional_outflow
+            FROM moneyflow_daily_stock
             WHERE code = ? AND trade_date = ?
             """,
             [_prefixed_code(code), date_iso],
@@ -472,30 +527,30 @@ class TdxDuckDBClient:
         )
         if not rows:
             return {}
-        row = rows[0]
-        main = float(row[0] or 0)
-        super_large = float(row[1] or 0)
-        large = float(row[2] or 0)
-        medium = float(row[3] or 0)
-        small = float(row[4] or 0)
+        r = rows[0]
+        main = float(r[0] or 0)
         return {
             "main_net": main,
-            "total_net": main + medium + small,
-            "super_large_net": super_large,
-            "large_net": large,
-            "medium_net": medium,
-            "small_net": small,
-            "main_ratio": float(row[5] or 0),
-            "super_large_ratio": float(row[6] or 0),
-            "large_ratio": float(row[7] or 0),
-            "medium_ratio": float(row[8] or 0),
-            "small_ratio": float(row[9] or 0),
+            "total_net": float(r[2] or 0),
+            "super_large_net": float(r[3] or 0),
+            "large_net": float(r[4] or 0),
+            "medium_net": float(r[5] or 0),
+            "small_net": float(r[6] or 0),
+            "main_inflow": float(r[7] or 0),
+            "main_outflow": float(r[8] or 0),
+            # 旧表有 ratio 列，新表无；下游 _to_float 容忍缺失
+            "main_ratio": None,
+            "super_large_ratio": None,
+            "large_ratio": None,
+            "medium_ratio": None,
+            "small_ratio": None,
         }
 
     def get_fund_range(self, code: str, start_iso: str, end_iso: str):
-        """读 market_fund_flow 区间资金流，返回 polars DataFrame。
+        """读 tdx-moneyflow.duckdb.moneyflow_daily_stock 区间资金流，返回 polars DataFrame。
 
         契约沿用 fund_range：只返回 ["date", "main_net_inflow"] 两列。
+        main_net_inflow 取 main_traditional_net（传统主力净额 = 超大单+大单）。
 
         :param code: 裸代码（如 ``600519``），内部会加交易所前缀
         :param start_iso: ``YYYY-MM-DD`` 格式起始日期（含）
@@ -505,10 +560,10 @@ class TdxDuckDBClient:
         """
         import polars as pl
 
-        rows = self._tdx.query(
+        rows = self._moneyflow.query(
             """
-            SELECT trade_date::TEXT AS date, main AS main_net_inflow
-            FROM market_fund_flow
+            SELECT trade_date::TEXT AS date, main_traditional_net AS main_net_inflow
+            FROM moneyflow_daily_stock
             WHERE code = ? AND trade_date BETWEEN ? AND ?
             ORDER BY trade_date
             """,
@@ -518,3 +573,20 @@ class TdxDuckDBClient:
         if not rows:
             return pl.DataFrame()
         return pl.DataFrame({"date": [r[0] for r in rows], "main_net_inflow": [r[1] for r in rows]})
+
+    def freshness(self):
+        """最新已发布交易日的探测值，供 local enriched bootstrap 判定新鲜度。
+
+        返回 market_day_kline(dataset='day') 的 max(trade_date)。文件不可达时
+        返回 None（调用方据此跳过 bootstrap，不会误判）。
+        """
+        from datetime import date as _date
+        rows = self._tdx.query(
+            "SELECT max(trade_date) FROM market_day_kline WHERE dataset = 'day'",
+            [],
+            "freshness",
+        )
+        if rows and rows[0][0]:
+            d = rows[0][0]
+            return d.date() if hasattr(d, "date") else d
+        return None

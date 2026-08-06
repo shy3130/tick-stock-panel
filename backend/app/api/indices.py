@@ -83,6 +83,21 @@ def get_index_daily(
     start = date.fromisoformat(start_date) if start_date else end - timedelta(days=days)
     info = _index_info(repo, symbol)
 
+    from app.services.data_mode import is_local_daily_mode
+    if is_local_daily_mode():
+        # 本地磁盘模式：provider 直查上游快照（最新），避免本地 parquet 滞后导致
+        # 返回陈旧数据（本地 index parquet 由盘后管道写，盘中/盘后早期会落后一天）。
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider = get_provider(get_active_provider_name("daily"))
+        start_dt = datetime.combine(start, datetime.min.time())
+        end_dt = datetime.combine(end, datetime.min.time())
+        raw = provider.get_daily([symbol], start_dt, end_dt, "index")
+        if not raw.is_empty():
+            enriched = compute_enriched(raw, factors=None, instruments=None)
+            rows = enriched.filter((pl.col("date") >= start) & (pl.col("date") <= end)).to_dicts()
+            return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": rows, "source": "local_disk"}
+
     df = repo.get_index_daily(symbol, start, end)
     if not df.is_empty():
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": df.to_dicts(), "source": "index_enriched"}

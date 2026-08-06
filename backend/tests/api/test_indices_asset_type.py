@@ -42,6 +42,7 @@ def test_index_daily_fallback_fetches_index_asset_type(monkeypatch):
             "amount": [1.0],
         })
 
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
     monkeypatch.setattr(indices.kline_sync, "sync_daily_batch", fake_sync)
     monkeypatch.setattr(indices, "compute_enriched", lambda raw, **kwargs: raw)
 

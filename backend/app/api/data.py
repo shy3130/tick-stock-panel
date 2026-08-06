@@ -484,11 +484,17 @@ def _safe_aggregate_minute(repo) -> dict | None:
     if not minute_dir.exists():
         return None
 
-    # 从 date=YYYY-MM-DD 目录名提取交易日
+    # 从 date=YYYY-MM-DD 目录名提取交易日（跳过 date=None 等非法目录名）
+    from datetime import date as _date
     dates: list[str] = []
     for d in minute_dir.iterdir():
         if d.is_dir() and d.name.startswith("date="):
-            dates.append(d.name[5:])
+            ds = d.name[5:]
+            try:
+                _date.fromisoformat(ds)
+            except ValueError:
+                continue
+            dates.append(ds)
 
     if not dates:
         return None
@@ -671,7 +677,7 @@ def _last_finished(job_label: str) -> str | None:
     jobs = job_store.list_recent(limit=50)
     cache: dict[str, str | None] = {}
     for j in jobs:
-        if j["status"] not in ("succeeded", "failed"):
+        if j["status"] not in ("succeeded", "degraded", "failed"):
             continue
         if "instruments_rows" in (j.get("result") or {}) and "instruments" not in cache:
             cache["instruments"] = j["finished_at"]

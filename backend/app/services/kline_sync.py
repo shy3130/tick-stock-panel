@@ -432,11 +432,12 @@ def sync_minute_batch(
 ) -> pl.DataFrame:
     """批量拉取多股分钟 K（通过 data_providers 抽象层）。
 
-    优先使用 start_time / end_time 区间, 确保所有标的覆盖同一时间段。
+    优先使用 start_time / end_time 区间。对于 A股, provider.get_minute 内部会按交易日期逐日调用 catalog route 并合并结果。
     count 仅作为 fallback 保留。
     on_chunk_done(current, total) 每个 chunk 完成后回调。
 
-    注意: count 参数保留在签名中以保持向后兼容,但 provider 内部自行决定拉取条数。
+    CatalogError (RouteNotFoundError, StaleCatalogError 等) 不再吞掉 —— 由调用方 (API) 映射为 503。
+    这满足 catalog fail-closed 契约和分钟核心契约。
     """
     provider = _get_data_provider()
     out: list[pl.DataFrame] = []
@@ -451,19 +452,12 @@ def sync_minute_batch(
         if i > 0 and interval > 0 and len(chunks) > rpm:
             time.sleep(interval)
         try:
-            # provider.get_minute 返回已 normalize 的 Polars DataFrame
-            # 再过一次 _normalize_minute 作为安全网(幂等)
             raw = provider.get_minute(
                 chunk, start_time=start_time, end_time=end_time,
                 asset_type=asset_type, freq="1m",
             )
-        except RouteNotFoundError as e:
-            # 目录没覆盖这个日期 = 真的没有数据,保持 fail-soft。
-            logger.warning("minute batch: no catalog route for %d symbols: %s", len(chunk), e)
-            continue
         except CatalogError:
-            # 目录陈旧/损坏不能 fail-soft:continue 会把它变成"这批票没数据",
-            # 整个 job 照常 success + 0 行,没人知道读到的是一个还没发布的快照。
+            # 不吞 RouteNotFoundError 或 StaleCatalogError。任何 catalog 问题必须上抛。
             raise
         except Exception as e:  # noqa: BLE001
             logger.warning("minute batch fetch failed for %d symbols: %s", len(chunk), e)

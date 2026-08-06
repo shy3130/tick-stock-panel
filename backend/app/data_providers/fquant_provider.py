@@ -170,6 +170,17 @@ class FQuantProvider:
         self._instruments_cache_ts: dict[str, datetime] = {}
         self._instruments_cache_ttl = 86400  # 秒
 
+    def close(self) -> None:
+        """关闭底层 FStore 与 TDX 连接（幂等）。供 lifespan 关闭链调用。"""
+        try:
+            self._fstore.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("FQuantProvider: 关闭 fstore 连接失败", exc_info=True)
+        try:
+            self._engine.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("FQuantProvider: 关闭 TDX 连接失败", exc_info=True)
+
     # ------------------------------------------------------------------ #
     # get_instruments — §4.3 主源 fstore.base_infos
     # ------------------------------------------------------------------ #
@@ -548,19 +559,47 @@ class FQuantProvider:
     ) -> pl.DataFrame:
         """拉取分钟级数据并归一（§4.6）。
 
-        数据流：engine-data ``minutes``（price/volume，客户端重建时间戳）
-        降级：API 不响应 → 空 df
-
-        date 推断：优先 ``end_time``，其次 ``start_time``。
-        ``freq`` 支持 1m/5m/15m/30m/60m 等分钟聚合；底层取 1m 后在本地聚合。
-
-        输出列（MINUTE_COLUMNS）：symbol/asset_type/source/datetime/open/high/low/close/
-                                 volume/amount/freq
+        A股 (asset_type="stock") 多日 start/end：按交易日期逐日调用 catalog route (engine.get_minutes per date) 并合并。
+        缺任一中间日 route/stale now 原样上抛 (client updated + sync_batch no-swallow)。
+        ETF/HK 维持原有 DuckDB 路径逻辑。
+        所有调用显式 asset_type。
         """
         if not symbols:
             return pl.DataFrame()
 
-        # 确定查询日期（§4.6 date 推断）
+        if (
+            asset_type == "stock"
+            and start_time is not None
+            and end_time is not None
+            and (end_time.date() - start_time.date()).days > 0
+        ):
+            # 多日 A股：逐日 catalog route 合并
+            frames: list[pl.DataFrame] = []
+            current = start_time.date()
+            while current <= end_time.date():
+                date_str = current.strftime("%Y%m%d")
+                day_frames: list[pl.DataFrame] = []
+                for sym in symbols:
+                    code = symbol_to_code(sym)
+                    ticks = self._engine.get_minutes(
+                        code, date_str, asset_type=asset_type  # explicit
+                    )
+                    if ticks:
+                        minute_df = minutes_rows_to_minute_df(
+                            ticks, sym, asset_type, date_str,
+                            source=self.name, freq="1m",
+                        )
+                        if not minute_df.is_empty():
+                            day_frames.append(minute_df)
+                if day_frames:
+                    frames.append(pl.concat(day_frames, how="diagonal_relaxed"))
+                current += timedelta(days=1)
+            if not frames:
+                return pl.DataFrame()
+            df = pl.concat(frames, how="diagonal_relaxed")
+            return _aggregate_minute_df(df, freq)
+
+        # ETF/HK or single day: original DuckDB path
         ref_dt = end_time or start_time
         if ref_dt is None:
             return pl.DataFrame()
@@ -569,7 +608,7 @@ class FQuantProvider:
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
-            ticks = self._engine.get_minutes(code, date_str, asset_type=asset_type)
+            ticks = self._engine.get_minutes(code, date_str, asset_type=asset_type)  # explicit
             if not ticks:
                 logger.debug("tdx minutes %s %s: 无数据", code, date_str)
                 continue
@@ -754,6 +793,13 @@ class FQuantProvider:
         if suffix == "INDEX":
             return 10
         if suffix in {"SH", "SZ", "BJ"}:
+            code = symbol_to_code(symbol)
+            # SH exchange: 000xxx 是指数（上证指数/上证50/沪深300/科创综指等）
+            if suffix == "SH" and code.startswith("000"):
+                return 10
+            # SZ exchange: 399xxx 是指数（深证成指/创业板指等）
+            if suffix == "SZ" and code.startswith("399"):
+                return 10
             return 1
         return None
 

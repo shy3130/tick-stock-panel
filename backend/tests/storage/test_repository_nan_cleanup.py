@@ -81,8 +81,12 @@ def test_get_daily_hot_path_has_no_nan_or_inf_for_illiquid_symbol(tmp_path, monk
     _assert_no_nan_or_inf(out)
 
 
-def test_refresh_enriched_history_cache_has_no_nan_or_inf(tmp_path, monkeypatch):
-    """服务启动/跨日刷新时的 _refresh_enriched -> _enriched_history_cache/_enriched_cache。"""
+def test_refresh_enriched_latest_cache_has_no_nan_or_inf(tmp_path, monkeypatch):
+    """服务启动/跨日刷新时的 _refresh_enriched -> _enriched_cache + _live_agg_cache。
+
+    完整历史不再常驻 (_enriched_history_cache 已删除); 最新日缓存与盘中聚合表是
+    启动时即时计算的两个产物, 都必须复用 compute_all 的 NaN/Inf 清理。
+    """
     monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
     r = repo(tmp_path)
 
@@ -95,8 +99,10 @@ def test_refresh_enriched_history_cache_has_no_nan_or_inf(tmp_path, monkeypatch)
 
     assert r._enriched_cache is not None
     _assert_no_nan_or_inf(r._enriched_cache)
-    if r._enriched_history_cache is not None and not r._enriched_history_cache.is_empty():
-        _assert_no_nan_or_inf(r._enriched_history_cache)
+    # 完整历史缓存已删除, 不应再存在该属性
+    assert not hasattr(r, "_enriched_history_cache")
+    if r._live_agg_cache is not None and not r._live_agg_cache.is_empty():
+        _assert_no_nan_or_inf(r._live_agg_cache)
 
 
 def test_build_live_agg_has_no_inf_when_raw_close_is_zero(tmp_path, monkeypatch):
@@ -105,16 +111,17 @@ def test_build_live_agg_has_no_inf_when_raw_close_is_zero(tmp_path, monkeypatch)
     raw_close 恰好是 0 时,之前会让 _adj_factor 变成 Inf,污染盘中递推状态,
     进而在 compute_enriched_today 里让当天所有增量指标都被 Inf 污染。
 
-    _build_live_agg 只有当历史缓存跨度 >= 90 天时才会走真正的计算分支(否则
-    直接判定"历史不够"提前返回空表),所以这里构造 100 天数据。
+    _build_live_agg 旧实现有一条 `hist_all["date"].min() <= latest - 300 天` 的闸门,
+    历史不够会提前返回空表; 现已删除该闸门 (300 日历天很少恰好落在交易日), 这里仍
+    构造 340 天数据, 确保进入真正的计算分支。
     """
     monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
     r = repo(tmp_path)
 
     symbol = "000001.SZ"
     start = date(2026, 1, 1)
-    df = _flat_illiquid_daily(symbol, 100, start)
-    latest_idx = 99
+    df = _flat_illiquid_daily(symbol, 340, start)
+    latest_idx = 339
     latest = start + timedelta(days=latest_idx)
     # 让最新一天不再是"完全无波动"(避免和 KDJ/vol_ratio 的 0/0 场景混在一起),
     # 但 raw_close 显式设为 0 —— 只触发 _adj_factor 这一处除零。

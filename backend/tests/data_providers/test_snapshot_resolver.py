@@ -58,13 +58,13 @@ def test_resolve_bad_generation_returns_none(tmp_path):
 
 
 def test_snapshot_or_raw_unknown_path_is_raw():
-    raw = "/Volumes/WD1/fstore-web.duckdb"  # panel -web default, not mapped
+    raw = "/Volumes/WD1/duckdb/fstore-web.duckdb"  # -web path, deliberately not mapped
     assert sr.snapshot_or_raw(raw) == raw
 
 
 def test_snapshot_or_raw_known_path_without_snapshot_is_raw(tmp_path, monkeypatch):
     # Isolate the test from a real snapshot that may be published on this host.
-    raw = "/Volumes/WD1/tdx.duckdb"
+    raw = "/Volumes/WD1/duckdb/tdx.duckdb"
     missing_root = str(tmp_path / "unpublished-engine-a")
     monkeypatch.setitem(sr._RAW_TARGETS, raw, (missing_root, "tdx"))
     assert sr.snapshot_or_raw(raw) == raw
@@ -73,5 +73,18 @@ def test_snapshot_or_raw_known_path_without_snapshot_is_raw(tmp_path, monkeypatc
 def test_snapshot_or_raw_prefers_snapshot(tmp_path, monkeypatch):
     root = str(tmp_path / "engine-a")
     want = _publish(root, "20260710T153000", "tdx", "tdx.duckdb")
-    monkeypatch.setitem(sr._RAW_TARGETS, "/Volumes/WD1/tdx.duckdb", (root, "tdx"))
-    assert sr.snapshot_or_raw("/Volumes/WD1/tdx.duckdb") == want
+    monkeypatch.setitem(sr._RAW_TARGETS, "/Volumes/WD1/duckdb/tdx.duckdb", (root, "tdx"))
+    assert sr.snapshot_or_raw("/Volumes/WD1/duckdb/tdx.duckdb") == want
+
+
+def test_minutes_raw_paths_are_catalog_only_not_statically_resolved():
+    # Date-sharded minutes logicals must resolve only through the published
+    # catalog (catalog_resolver.resolve_route), never via a static
+    # snapshot_or_raw bypass that skips date/generation validation.
+    minutes_raw_paths = [
+        "/Volumes/WD1/duckdb/tdx-minutes/tdx-minutes-before-2023.duckdb",
+        "/Volumes/WD1/duckdb/tdx-minutes/tdx-minutes-from-2023.duckdb",
+    ]
+    for raw in minutes_raw_paths:
+        assert raw not in sr._RAW_TARGETS
+        assert sr.snapshot_or_raw(raw) == raw

@@ -3,6 +3,13 @@
 Catalog routes pin an exact generation and file.  Resolution deliberately has
 no cache and no raw-file fallback: callers either receive the catalog-selected
 immutable file or a :class:`CatalogError`.
+
+A *staged* catalog (rows carrying ``stage`` = ``preliminary``/``final``) is
+a precondition for ``require_current`` routes: only a staged row can prove which
+generation a live read should pin.  Legacy ``stage=NULL`` ``require_current``
+rows stay fail-closed and surface staged-migration guidance rather than a bare
+historical-fallback error.  Publish order and safe-rollback constraints are
+documented in ``AGENTS.md`` ("catalog/engine 发布顺序（staged 迁移运维）").
 """
 
 from __future__ import annotations
@@ -14,21 +21,44 @@ from pathlib import Path
 from typing import Any
 
 _ROOT_ENV: dict[str, str] = {
-    "/Volumes/WD1/snapshots/fstore": "FQUANT_SNAPSHOT_ROOT_FSTORE",
-    "/Volumes/WD1/snapshots/engine-a": "FQUANT_SNAPSHOT_ROOT_ENGINE_A",
-    "/Volumes/WD1/snapshots/engine-hk": "FQUANT_SNAPSHOT_ROOT_ENGINE_HK",
-    "/Volumes/WD1/snapshots/engine-a-trans-archive": (
+    "/Volumes/WD1/duckdb/snapshots/fstore": "FQUANT_SNAPSHOT_ROOT_FSTORE",
+    "/Volumes/WD1/duckdb/snapshots/engine-a": "FQUANT_SNAPSHOT_ROOT_ENGINE_A",
+    "/Volumes/WD1/duckdb/snapshots/engine-a-preliminary": (
+        "FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY"
+    ),
+    "/Volumes/WD1/duckdb/snapshots/engine-hk": "FQUANT_SNAPSHOT_ROOT_ENGINE_HK",
+    "/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive": (
         "FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE"
     ),
-    "/Volumes/WD1/snapshots/engine-a-minutes-archive": (
+    "/Volumes/WD1/duckdb/snapshots/engine-a-minutes-archive": (
         "FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE"
     ),
 }
-_CATALOG_ROOT_DEFAULT = "/Volumes/WD1/snapshots/catalog"
+_CATALOG_ROOT_DEFAULT = "/Volumes/WD1/duckdb/snapshots/catalog"
 _CATALOG_LOGICAL = "duckdb_catalog"
 
 FRESHNESS_PINNED_IMMUTABLE = "pinned_immutable"
 FRESHNESS_REQUIRE_CURRENT = "require_current"
+
+_PRELIMINARY_ROUTE_KEYS = {
+    "tdx_minutes": "tdx_minutes_preliminary",
+    "tdx_trans": "tdx_trans_preliminary",
+}
+
+# Guidance surfaced verbatim in fail-closed diagnostics. Two distinct classes,
+# kept separate so an operator can tell a legacy-catalog precondition from a
+# stale-generation republish need:
+# * legacy (stage=NULL) require_current -> republish as staged first.
+# * staged (final/preliminary) stale generation -> republish a row pinning the
+#   root's current generation (the route is already staged, no migration needed).
+_STAGE_MIGRATION_GUIDANCE = (
+    "publish this route as staged (preliminary then final) via the engine "
+    "catalog publisher; a stage=NULL require_current row is unsafe until then "
+    "(see AGENTS.md 'catalog/engine 发布顺序（staged 迁移运维）')"
+)
+_STALE_REPUBLISH_GUIDANCE = (
+    "republish a catalog row that pins the root's current generation"
+)
 
 
 class CatalogError(RuntimeError):
@@ -141,38 +171,64 @@ def _catalog_db_path() -> str:
     return _resolve_pinned(root, generation, _CATALOG_LOGICAL, "catalog.duckdb")
 
 
-def resolve_route(route_key: str, market: str, trade_date: date | None) -> str:
-    """Resolve a route to its catalog-pinned immutable DuckDB file.
+def _coerce_trade_date(value: date | datetime | str | None) -> date:
+    if value is None:
+        raise CatalogError("trade_date is required for date-sharded routes")
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise CatalogError(f"invalid trade_date {value!r}") from exc
+        if parsed.isoformat() != value:
+            raise CatalogError(f"invalid trade_date {value!r}")
+        return parsed
+    raise CatalogError(f"invalid trade_date {value!r}")
 
-    The catalog is re-read on every call. Any failure raises ``CatalogError``;
-    callers must not fall back to a writer-owned raw database.
-    """
-    import duckdb
+
+def _optional_date(value: object, field: str) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise CatalogError(f"route has invalid {field} {value!r}") from exc
+        if parsed.isoformat() != value:
+            raise CatalogError(f"route has invalid {field} {value!r}")
+        return parsed
+    raise CatalogError(f"route has invalid {field} {value!r}")
+
+
+def _route_rows_for_keys(route_keys: list[str], market: str) -> dict[str, list[dict[str, Any]]]:
+    if not route_keys:
+        return {}
+    from app.storage.duckdb_runtime import connect_duckdb
 
     try:
-        connection = duckdb.connect(_catalog_db_path(), read_only=True)
+        # Pin the catalog generation once per request.  Do not resolve the
+        # catalog separately for final, preliminary, and historical queries:
+        # a publish between those reads could otherwise mix two generations.
+        connection = connect_duckdb(_catalog_db_path(), read_only=True)
         try:
-            if trade_date is None:
-                dated_row = connection.execute(
-                    "SELECT count(*) FROM catalog_routes "
-                    "WHERE route_key = ? AND market = ? "
-                    "AND (start_date IS NOT NULL OR end_date IS NOT NULL)",
-                    [route_key, market],
-                ).fetchone()
-                if dated_row and dated_row[0]:
-                    raise CatalogError(
-                        f"{route_key}/{market} is date-sharded; trade_date is required"
-                    )
-            row = connection.execute(
-                """SELECT root, generation, logical, file, freshness_mode
-                     FROM catalog_routes
-                    WHERE route_key = ? AND market = ?
-                      AND (start_date IS NULL OR (? IS NOT NULL AND start_date <= CAST(? AS DATE)))
-                      AND (end_date IS NULL OR (? IS NOT NULL AND end_date >= CAST(? AS DATE)))
-                    ORDER BY priority DESC
-                    LIMIT 1""",
-                [route_key, market, trade_date, trade_date, trade_date, trade_date],
-            ).fetchone()
+            placeholders = ", ".join("?" for _ in route_keys)
+            result = connection.execute(
+                f"SELECT * FROM catalog_routes WHERE route_key IN ({placeholders}) AND market = ?",
+                [*route_keys, market],
+            )
+            columns = [str(item[0]) for item in result.description]
+            grouped: dict[str, list[dict[str, Any]]] = {key: [] for key in route_keys}
+            for row in result.fetchall():
+                mapped = dict(zip(columns, row, strict=True))
+                grouped.setdefault(str(mapped.get("route_key")), []).append(mapped)
+            return grouped
         finally:
             connection.close()
     except CatalogError:
@@ -180,20 +236,171 @@ def resolve_route(route_key: str, market: str, trade_date: date | None) -> str:
     except Exception as exc:
         raise CatalogError(f"cannot query route catalog: {exc}") from exc
 
-    if row is None:
-        raise RouteNotFoundError(f"no catalog route for {route_key}/{market} on {trade_date}")
 
-    canonical_root, generation, logical, file, freshness = row
+def _route_stage(row: dict[str, Any]) -> str:
+    value = row.get("stage")
+    return "" if value is None else str(value)
+
+
+def _validate_route_metadata(row: dict[str, Any]) -> None:
+    stage = _route_stage(row)
+    generation = row.get("generation")
+    preliminary_root = row.get("preliminary_root_id")
+    preliminary_generation = row.get("preliminary_generation")
+    if (preliminary_root in (None, "")) != (preliminary_generation in (None, "")):
+        raise CatalogError("route preliminary root and generation must be provided together")
+    if stage:
+        _safe_generation(generation)
+    if preliminary_generation not in (None, ""):
+        _safe_generation(preliminary_generation)
+    supersedes = row.get("supersedes")
+    if supersedes not in (None, ""):
+        _safe_generation(supersedes)
+        if supersedes == generation:
+            raise CatalogError("route supersedes its own generation")
+    coverage = _optional_date(row.get("coverage_date"), "coverage_date")
+    if stage == "":
+        if coverage is not None or any(
+            row.get(key) not in (None, "", False, 0)
+            for key in (
+                "reconciled", "quality", "reconciliation_ref", "supersedes",
+                "preliminary_root_id", "preliminary_generation",
+            )
+        ):
+            raise CatalogError("legacy route carries staged metadata")
+        return
+    if stage == "preliminary":
+        if coverage is None or bool(row.get("reconciled")) or row.get("quality") != "preliminary":
+            raise CatalogError("preliminary route has invalid staged metadata")
+        if any(
+            row.get(key) not in (None, "", False, 0)
+            for key in ("reconciliation_ref", "supersedes", "preliminary_root_id", "preliminary_generation")
+        ):
+            raise CatalogError("preliminary route has invalid staged metadata")
+        return
+    if stage == "final":
+        if coverage is None or not bool(row.get("reconciled")) or row.get("quality") != "verified":
+            raise CatalogError("final route has invalid staged metadata")
+        if not isinstance(row.get("reconciliation_ref"), str) or not row["reconciliation_ref"]:
+            raise CatalogError("final route has invalid staged metadata")
+        for key in ("supersedes", "preliminary_generation"):
+            if row.get(key) not in (None, ""):
+                _safe_generation(row[key])
+        return
+    raise CatalogError(f"route has unknown stage {stage!r}")
+
+
+def _matches_span(row: dict[str, Any], requested: date) -> bool:
+    start = _optional_date(row.get("start_date"), "start_date")
+    end = _optional_date(row.get("end_date"), "end_date")
+    if start is not None and end is not None and end < start:
+        raise CatalogError("route has end_date before start_date")
+    return (start is None or start <= requested) and (end is None or requested <= end)
+
+
+def _priority(row: dict[str, Any]) -> int:
+    try:
+        return int(row.get("priority") or 0)
+    except (TypeError, ValueError) as exc:
+        raise CatalogError(f"route has invalid priority {row.get('priority')!r}") from exc
+
+
+def _resolve_row(
+    row: dict[str, Any], route_key: str, market: str, requested: date, *, historical: bool
+) -> str:
+    _validate_route_metadata(row)
+    canonical_root = row.get("root")
     root = _physical_root(canonical_root)
-    generation = _safe_generation(generation)
+    generation = _safe_generation(row.get("generation"))
+    logical = row.get("logical")
+    if not isinstance(logical, str) or not logical:
+        raise CatalogError(f"{route_key}/{market} has invalid logical {logical!r}")
+    file = row.get("file")
     _safe_relative_file(file)
+    freshness = row.get("freshness_mode")
+    stage = _route_stage(row)
     if freshness == FRESHNESS_REQUIRE_CURRENT:
+        if not stage:
+            # A legacy (stage=NULL) require_current row cannot prove which
+            # generation a live read should pin, so it is unsafe as either an
+            # exact match or a historical fallback. Fail closed with the staged
+            # migration precondition instead of silently serving a snapshot.
+            raise CatalogError(
+                f"{route_key}/{market} is a legacy (stage=NULL) require_current "
+                f"route and cannot serve a safe snapshot; {_STAGE_MIGRATION_GUIDANCE}"
+            )
+        if historical:
+            coverage = _optional_date(row.get("coverage_date"), "coverage_date")
+            if coverage is None or requested >= coverage:
+                raise CatalogError(
+                    f"{route_key}/{market} coverage_date does not strictly follow requested {requested}"
+                )
         current = _current_generation(root)
         if current != generation:
+            # The route is already staged (final/preliminary); only its pinned
+            # generation has drifted from the root's current pointer. Give the
+            # accurate republish guidance, not the legacy-migration guidance.
             raise StaleCatalogError(
                 f"{route_key}/{market} pins {generation} but {root} is at {current}; "
-                "the catalog needs republishing"
+                f"the catalog is stale — {_STALE_REPUBLISH_GUIDANCE}"
             )
     elif freshness != FRESHNESS_PINNED_IMMUTABLE:
         raise CatalogError(f"{route_key}/{market} has unknown freshness_mode {freshness!r}")
+    if freshness == FRESHNESS_PINNED_IMMUTABLE and stage:
+        raise CatalogError(f"{route_key}/{market} staged route cannot be pinned_immutable")
     return _resolve_pinned(root, generation, logical, file)
+
+
+def resolve_route(route_key: str, market: str, trade_date: date | datetime | str | None) -> str:
+    """Resolve an exact staged route, then a safe historical fallback.
+
+    Catalog state is read on every call. A dated lookup never falls back to a
+    writer-owned raw file.
+    """
+    requested = _coerce_trade_date(trade_date)
+    preliminary_key = _PRELIMINARY_ROUTE_KEYS.get(route_key)
+    route_keys = [route_key] + ([preliminary_key] if preliminary_key else [])
+    rows_by_key = _route_rows_for_keys(route_keys, market)
+    rows = rows_by_key.get(route_key, [])
+    for candidate_key, expected_stage in (
+        (route_key, "final"),
+        (preliminary_key, "preliminary"),
+    ):
+        if not candidate_key:
+            continue
+        candidates = []
+        for row in rows_by_key.get(candidate_key, []):
+            _validate_route_metadata(row)
+            if _route_stage(row) != expected_stage:
+                continue
+            if _optional_date(row.get("coverage_date"), "coverage_date") != requested:
+                continue
+            if _matches_span(row, requested):
+                candidates.append(row)
+        if candidates:
+            candidates.sort(
+                key=lambda item: (
+                    -_priority(item),
+                    str(item.get("root", "")),
+                    str(item.get("generation", "")),
+                    str(item.get("logical", "")),
+                    str(item.get("file", "")),
+                )
+            )
+            return _resolve_row(candidates[0], route_key, market, requested, historical=False)
+
+    if not rows:
+        raise RouteNotFoundError(f"no catalog route for {route_key}/{market} on {requested}")
+    rows = [row for row in rows if _matches_span(row, requested)]
+    if not rows:
+        raise RouteNotFoundError(f"no catalog route for {route_key}/{market} on {requested}")
+    rows.sort(
+        key=lambda item: (
+            -_priority(item),
+            str(item.get("root", "")),
+            str(item.get("generation", "")),
+            str(item.get("logical", "")),
+            str(item.get("file", "")),
+        )
+    )
+    return _resolve_row(rows[0], route_key, market, requested, historical=True)

@@ -42,7 +42,19 @@ def test_fetch_minute_single_propagates_stale_catalog(monkeypatch: pytest.Monkey
 
 
 def test_route_not_found_still_fails_soft(monkeypatch: pytest.MonkeyPatch) -> None:
-    """目录没覆盖这个日期是真的没数据,保持原来的 fail-soft 行为。"""
+    """目录没覆盖这个日期是真的没数据,保持原来的 fail-soft 行为 (仅用于 fetch_single)。"""
     monkeypatch.setattr(kline_sync, "_get_data_provider", lambda: _NoRouteProvider())
     got = kline_sync.fetch_minute_single("sh600000", date(2019, 5, 1))
     assert got.is_empty()
+
+
+def test_sync_minute_batch_propagates_route_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sync_minute_batch 不吞 RouteNotFoundError。"""
+    monkeypatch.setattr(kline_sync, "_get_data_provider", lambda: _NoRouteProvider())
+    with pytest.raises(RouteNotFoundError):
+        kline_sync.sync_minute_batch(
+            ["sh600000"],
+            start_time=datetime(2026, 7, 13, 9, 25),
+            end_time=datetime(2026, 7, 14, 15, 5),
+            asset_type="stock",
+        )

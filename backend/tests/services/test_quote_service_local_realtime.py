@@ -56,3 +56,32 @@ def test_index_quote_cache_outputs_percentage_points():
 
     assert row["change_pct"] == 1.23
     assert row["amplitude"] == 4.56
+
+
+
+def test_stop_in_close_final_calls_run_final_sync_exactly_once(monkeypatch):
+    """stop() 在 close_final 阶段必须恰好调用 _run_final_sync 一次。"""
+    quote_service._provider_instance = None
+    monkeypatch.setattr(quote_service, "get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(quote_service, "get_provider", lambda name: _fake_provider(name))
+
+    service = quote_service.QuoteService()
+    # 强制 close_final 阶段
+    monkeypatch.setattr(quote_service.QuoteService, "_market_phase", staticmethod(lambda: "close_final"))
+    # _fetch_quotes 不应实际执行 (无 repo / 无 provider 连接)
+    monkeypatch.setattr(service, "_fetch_quotes", lambda: None)
+
+    # spy: 捕获 _run_final_sync 调用次数
+    call_count = 0
+    original_run_final_sync = service._run_final_sync
+
+    def spy_run_final_sync():
+        nonlocal call_count
+        call_count += 1
+        original_run_final_sync()
+
+    monkeypatch.setattr(service, "_run_final_sync", spy_run_final_sync)
+
+    service.stop()
+
+    assert call_count == 1, f"expected _run_final_sync called exactly once, got {call_count}"

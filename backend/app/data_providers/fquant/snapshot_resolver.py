@@ -23,9 +23,14 @@ import re
 import time
 
 # Canonical per-domain snapshot roots (must match engine pkg/snapshot).
-ROOT_FSTORE = "/Volumes/WD1/snapshots/fstore"
-ROOT_ENGINE_A = "/Volumes/WD1/snapshots/engine-a"
-ROOT_ENGINE_HK = "/Volumes/WD1/snapshots/engine-hk"
+ROOT_FSTORE = "/Volumes/WD1/duckdb/snapshots/fstore"
+ROOT_ENGINE_A = "/Volumes/WD1/duckdb/snapshots/engine-a"
+ROOT_ENGINE_HK = "/Volumes/WD1/duckdb/snapshots/engine-hk"
+# Date-sharded archive roots (engine-a-trans-archive / engine-a-minutes-archive)
+# are intentionally NOT exposed here: their logicals are date-sharded and must
+# resolve only through catalog_resolver.resolve_route, which pins an exact
+# generation and validates the trade-date span. A static snapshot_or_raw entry
+# would bypass that and serve a snapshot for the wrong date/generation.
 
 # resolve() is called on every TdxDuckDBClient query (see
 # tdx_duckdb_client.py's _LeasedSource._resolve, which re-resolves the
@@ -40,21 +45,26 @@ _CACHE_TTL_SECONDS = 1.5
 _cache: dict[tuple[str, str], tuple[float, str | None]] = {}
 
 # Raw production path -> (root, logical). Mirrors engine pkg/snapshot.rawTargets.
-# Note: the panel's default ``-web`` paths are intentionally absent; they fall
-# back to raw and are served from the separate web copies.
+# Only raw paths are mapped here so snapshot_or_raw() resolves them to the
+# published generation snapshot; ``-web`` paths are deliberately NOT mapped
+# (they would bypass the snapshot and serve a stale separate copy), so clients
+# must default to raw paths, not ``-web``.
 _RAW_TARGETS: dict[str, tuple[str, str]] = {
-    "/Volumes/WD1/tdx.duckdb": (ROOT_ENGINE_A, "tdx"),
-    "/Volumes/WD1/tdx-minutes.duckdb": (ROOT_ENGINE_A, "tdx_minutes"),
-    "/Volumes/WD1/tdx-trans.duckdb": (ROOT_ENGINE_A, "tdx_trans"),
-    "/Volumes/WD1/tdx-chip.duckdb": (ROOT_ENGINE_A, "tdx_chip"),
-    "/Volumes/WD1/tdx-moneyflow-minute.duckdb": (ROOT_ENGINE_A, "tdx_moneyflow_minute"),
-    "/Volumes/WD1/tdx-hk.duckdb": (ROOT_ENGINE_HK, "tdx_hk"),
-    "/Volumes/WD1/tdx-hkminutes.duckdb": (ROOT_ENGINE_HK, "tdx_hk_minutes"),
-    "/Volumes/WD1/tdx-hktrans.duckdb": (ROOT_ENGINE_HK, "tdx_hk_trans"),
-    "/Volumes/WD1/fstore.duckdb": (ROOT_FSTORE, "fstore"),
-    "/Volumes/WD1/fstore-markets.duckdb": (ROOT_FSTORE, "markets"),
-    "/Volumes/WD1/fstore-klines.duckdb": (ROOT_FSTORE, "klines"),
-    "/Volumes/WD1/fstore-minutes.duckdb": (ROOT_FSTORE, "minutes"),
+    "/Volumes/WD1/duckdb/tdx.duckdb": (ROOT_ENGINE_A, "tdx"),
+    # A 股 minutes (tdx-minutes/*) are intentionally absent: they are
+    # date-sharded and must resolve through catalog_resolver.resolve_route,
+    # never via this static snapshot_or_raw bypass.
+    "/Volumes/WD1/duckdb/tdx-chip.duckdb": (ROOT_ENGINE_A, "tdx_chip"),
+    "/Volumes/WD1/duckdb/tdx-moneyflow.duckdb": (ROOT_ENGINE_A, "tdx_moneyflow"),
+    "/Volumes/WD1/duckdb/tdx-moneyflow-minute.duckdb": (ROOT_ENGINE_A, "tdx_moneyflow_minute"),
+    "/Volumes/WD1/duckdb/tdx-hk.duckdb": (ROOT_ENGINE_HK, "tdx_hk"),
+    "/Volumes/WD1/duckdb/tdx-hkminutes.duckdb": (ROOT_ENGINE_HK, "tdx_hk_minutes"),
+    "/Volumes/WD1/duckdb/tdx-hktrans.duckdb": (ROOT_ENGINE_HK, "tdx_hk_trans"),
+    "/Volumes/WD1/duckdb/fstore.duckdb": (ROOT_FSTORE, "fstore"),
+    "/Volumes/WD1/duckdb/fstore-markets.duckdb": (ROOT_FSTORE, "markets"),
+    "/Volumes/WD1/duckdb/fstore-klines.duckdb": (ROOT_FSTORE, "klines"),
+    "/Volumes/WD1/duckdb/fstore-minutes.duckdb": (ROOT_FSTORE, "minutes"),
+    "/Volumes/WD1/duckdb/fstore-extended.duckdb": (ROOT_FSTORE, "extended"),
 }
 
 _GENERATION_RE = re.compile(r"^[0-9]{8}T[0-9]{6}$")
