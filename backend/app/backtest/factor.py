@@ -429,10 +429,14 @@ class FactorBacktestService:
 
     @staticmethod
     def _add_groups(panel: pl.DataFrame, factor_col: str, n_groups: int) -> pl.DataFrame:
-        """截面分位数分组。"""
+        """按日做截面分位数分组，并将相等因子值保留在同一分组。"""
         return panel.with_columns(
             pl.col(factor_col)
-            .qcut(n_groups, labels=[f"Q{i+1}" for i in range(n_groups)])
+            .qcut(
+                n_groups,
+                labels=[f"Q{i+1}" for i in range(n_groups)],
+                allow_duplicates=True,
+            )
             .over("date")
             .alias("_group")
         )

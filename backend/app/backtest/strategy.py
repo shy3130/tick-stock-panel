@@ -634,6 +634,7 @@ class StrategyBacktestService:
             "entry_signal_date": str(t.entry_signal_date) if getattr(t, "entry_signal_date", None) is not None else None,
             "exit_signal_date": str(t.exit_signal_date) if getattr(t, "exit_signal_date", None) is not None else None,
             "blocked_exit_days": getattr(t, "blocked_exit_days", 0),
+            "cause_tag": getattr(t, "cause_tag", "strategy_outcome"),
         }
 
     @staticmethod

@@ -71,3 +71,32 @@ def test_compute_ic_only_reports_error_on_empty_panel():
     assert out["ic_std"] is None
     assert out["ir"] is None
     assert out["ic_win_rate"] is None
+
+
+
+def test_run_keeps_tied_cross_section_in_one_group():
+    """重复分位数边界不应使完整因子回测失败或任意拆分并列因子值。"""
+    panel = pl.DataFrame([
+        {
+            "symbol": symbol,
+            "date": date(2024, 1, day),
+            "close": close,
+            "test_factor": 0.0,
+        }
+        for day, close in ((1, 10.0), (2, 11.0), (3, 12.0))
+        for symbol in ("A", "B", "C", "D", "E", "F")
+    ])
+    svc = _service_with_panel(panel)
+
+    result = svc.run(FactorConfig(
+        factor_name="test_factor",
+        symbols=["A", "B", "C", "D", "E", "F"],
+        start=date(2024, 1, 1),
+        end=date(2024, 1, 3),
+        n_groups=5,
+        rebalance="daily",
+    ))
+
+    assert result.error is None
+    assert {row["Q1"] for row in result.group_nav} == {1.1, 1.2}
+    assert all("Q2" not in row for row in result.group_nav)

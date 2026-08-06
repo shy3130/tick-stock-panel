@@ -82,6 +82,7 @@ class TradeRecord:
     entry_signal_date: date | str | None = None
     exit_signal_date: date | str | None = None
     blocked_exit_days: int = 0
+    cause_tag: str = "strategy_outcome"  # YMOS 归因: strategy_outcome(策略按设计执行) | driver_quality(数据/驱动异常)
 
 
 @dataclass
@@ -93,25 +94,54 @@ class SimResult:
     stats: dict
 
 
+# ── YMOS cause_tag 归因 ─────────────────────────────────
+# 现有全部退出原因 (见上方 TradeRecord.exit_reason 注释) → strategy_outcome;
+# 未知原因 → driver_quality (异常退出, 如数据缺失/驱动层 bug, 防止"因一笔输赢改内核")。
+_STRATEGY_OUTCOME_REASONS = frozenset({
+    "signal", "stop_loss", "take_profit", "trailing_stop", "trailing_take_profit", "max_hold", "end",
+})
+
+
+def cause_tag_for(exit_reason: str) -> str:
+    """退出原因 → cause_tag。已知原因 = strategy_outcome, 未知 = driver_quality。"""
+    return "strategy_outcome" if exit_reason in _STRATEGY_OUTCOME_REASONS else "driver_quality"
+
+
 # ================================================================
 # PanelCache — 避免重复 scan_parquet + compute_all
 # ================================================================
 
-class _CacheEntry:
-    __slots__ = ("df", "ts")
 
-    def __init__(self, df: pl.DataFrame, ts: float):
+def _estimate_panel_bytes(df: pl.DataFrame) -> int:
+    """估算 DataFrame 常驻字节数(用于面板缓存字节预算)。"""
+    try:
+        return int(df.estimated_size())
+    except Exception:  # noqa: BLE001
+        return 2**63 - 1
+
+
+class _CacheEntry:
+    __slots__ = ("df", "ts", "size")
+
+    def __init__(self, df: pl.DataFrame, ts: float, size: int):
         self.df = df
         self.ts = ts
+        self.size = size
 
 
 class PanelCache:
-    """LRU + TTL 数据面板缓存。"""
+    """LRU + TTL + 字节上限的数据面板缓存。
 
-    def __init__(self, max_size: int = 2, ttl_seconds: int = 180):
+    超过单帧字节预算的面板正常返回但不缓存(超大绕过),避免两个超大回测面板
+    重现「全市场历史长期常驻」的原留存模式。
+    """
+
+    def __init__(self, max_size: int = 2, ttl_seconds: int = 180,
+                 max_bytes: int = 512 * 1024 * 1024):
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl_seconds
+        self._max_bytes = max_bytes
 
     def get_or_compute(
         self,
@@ -132,13 +162,25 @@ class PanelCache:
             del self._cache[key]
 
         df = compute_fn(symbols, start, end, columns)
-        self._cache[key] = _CacheEntry(df=df, ts=now)
-        if len(self._cache) > self._max_size:
-            self._cache.popitem(last=False)
+        # 单帧超过字节预算: 正常返回但不缓存(超大绕过)
+        if not df.is_empty():
+            size = _estimate_panel_bytes(df)
+            if size <= self._max_bytes:
+                self._cache[key] = _CacheEntry(df=df, ts=now, size=size)
+                self._evict()
         return df
 
     def invalidate(self) -> None:
         self._cache.clear()
+
+    def _evict(self) -> None:
+        while (
+            len(self._cache) > self._max_size
+            or sum(e.size for e in self._cache.values()) > self._max_bytes
+        ):
+            if not self._cache:
+                break
+            self._cache.popitem(last=False)
 
     @staticmethod
     def _make_key(symbols: list[str] | None, start: date, end: date, columns: list[str] | None) -> str:
@@ -357,6 +399,7 @@ class BacktestEngine:
                             pnl_pct=round(pnl_pct, 6),
                             duration=int(hold_days),
                             exit_reason=exit_reason,
+                            cause_tag=cause_tag_for(exit_reason),
                         ))
                         holding = False
 
@@ -611,7 +654,6 @@ class BacktestEngine:
                 exit_price=round(exit_price, 4),
                 pnl_pct=round(float(pnl_pct), 6),
                 duration=int(pos["hold_days"]),
-                exit_reason=reason,
                 shares=shares,
                 lots=1.0,
                 position_pct=0.0,
@@ -622,6 +664,8 @@ class BacktestEngine:
                 entry_signal_date=pos.get("entry_signal_date"),
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
+                exit_reason=reason,
+                cause_tag=cause_tag_for(reason),
             ))
             return True
 
@@ -949,7 +993,6 @@ class BacktestEngine:
                 exit_price=round(exit_price, 4),
                 pnl_pct=round(float(pnl_pct), 6),
                 duration=int(pos["hold_days"]),
-                exit_reason=reason,
                 shares=round(float(pos["shares"]), 4),
                 lots=round(float(pos["lots"]), 2),
                 position_pct=round(float(pos.get("position_pct", 0.0)), 6),
@@ -960,6 +1003,8 @@ class BacktestEngine:
                 entry_signal_date=pos.get("entry_signal_date"),
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
+                exit_reason=reason,
+                cause_tag=cause_tag_for(reason),
             ))
 
         def _try_sell(
