@@ -166,8 +166,37 @@ def clear_ai_settings() -> dict:
 
 @router.get("/ai/profiles")
 def list_ai_profiles() -> dict:
-    from app.services import ai_profiles
-    return {"profiles": ai_profiles.list_profiles_masked(), "default_id": ai_profiles.get_default_profile_id()}
+    from app.services import ai_profiles, ai_routing
+    return {
+        "profiles": ai_profiles.list_profiles_masked(),
+        "default_id": ai_profiles.get_default_profile_id(),
+        "route_policy": ai_routing.load_route_policy().__dict__,
+    }
+
+
+class AiRoutePolicyIn(BaseModel):
+    allow_profile_fallback: bool = False
+    fallback_profile_ids: list[str] = []
+
+
+@router.put("/ai/route-policy")
+def update_ai_route_policy(req: AiRoutePolicyIn) -> dict:
+    """保存 AI profile 受控 fallback 策略。
+
+    默认关闭；仅用户显式开启后才按 allowlist 顺序切换。
+    不存在/非法 profile id 直接 400，不做静默过滤。
+    """
+    from app.services import ai_profiles, ai_routing
+
+    available = set(ai_profiles.list_profile_ids())
+    try:
+        policy = ai_routing.validate_route_policy(
+            req.allow_profile_fallback, req.fallback_profile_ids, available
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    saved = ai_routing.save_route_policy(policy)
+    return {"route_policy": saved.__dict__}
 
 
 @router.post("/ai/profiles")
@@ -303,6 +332,7 @@ def get_preferences() -> dict:
         "depth_finalize_time": preferences.get_depth_finalize_time(),
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
+        "tradingAutoReview": preferences.get_trading_auto_review(),
     }
 
 
@@ -892,3 +922,19 @@ def update_review_push(req: ReviewPushIn) -> dict:
     from app.services import preferences
     saved = preferences.set_review_push_channels(req.channels)
     return {"review_push_channels": saved}
+
+
+class TradingAutoReviewIn(BaseModel):
+    tradingAutoReview: bool
+
+
+@router.put("/preferences/trading-auto-review")
+def update_trading_auto_review(req: TradingAutoReviewIn) -> dict:
+    """保存交易自动复盘开关 (P6.4 盘后状态驱动 AI 归因)。
+
+    纯偏好写入; APScheduler job 在 start_scheduler 启动时注册, 到点读此开关决定
+    是否执行实质逻辑 (false=零开销直接返回)。手动触发走 POST /api/trading/review/auto-run。
+    """
+    from app.services import preferences
+    saved = preferences.set_trading_auto_review(req.tradingAutoReview)
+    return {"tradingAutoReview": saved}

@@ -139,3 +139,9 @@ def migrate_legacy_if_needed() -> None:
         "user_agent": data.get("ai_user_agent") or "",
     }
     _persist([profile], profile["id"])
+
+
+
+def list_profile_ids() -> list[str]:
+    """返回所有已注册 profile id，用于 route policy 校验（保持顺序）。"""
+    return [p.get("id") for p in list_profiles() if p.get("id")]

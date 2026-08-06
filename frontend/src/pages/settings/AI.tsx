@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check, Eye, EyeOff, Loader2, Plug, Plus, Save, Settings2,
@@ -31,6 +31,8 @@ const PRESETS: Array<AiProfileInput & { label: string; website?: string; website
   { label: '通义千问', name: '通义千问', provider: OPENAI_PROVIDER, base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', description: '阿里云 DashScope 兼容模式接口。', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com' },
   { label: '智谱 GLM', name: '智谱 GLM', provider: OPENAI_PROVIDER, base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', description: '智谱 AI 官方 OpenAI 兼容接口。', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn' },
   { label: 'Kimi', name: 'Kimi', provider: OPENAI_PROVIDER, base_url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.6', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口。', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn' },
+  { label: 'OpenCode Go', name: 'OpenCode Go', provider: OPENAI_PROVIDER, base_url: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4-flash', description: 'OpenCode Go 订阅制的 OpenAI 兼容接口，含 glm/deepseek/kimi/grok 等编码模型。', website: 'https://opencode.ai/', websiteLabel: 'opencode.ai' },
+  { label: 'OpenCode Zen', name: 'OpenCode Zen', provider: OPENAI_PROVIDER, base_url: 'https://opencode.ai/zen/v1', model: 'deepseek-v4-flash', description: 'OpenCode Zen 按量付费的 OpenAI 兼容接口。', website: 'https://opencode.ai/', websiteLabel: 'opencode.ai' },
   { label: 'Hermes (ACP)', name: 'Hermes ACP', provider: ACP_PROVIDER, launch_command: 'hermes acp', model: '', description: '通过本机 Hermes ACP 作为纯文本生成器。' },
   { label: 'Codex CLI', name: 'Codex CLI', provider: CODEX_PROVIDER, codex_command: CODEX_COMMAND, model: '', description: '调用本机 Codex CLI 的 codex exec。', website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec' },
   { label: '炸鸡中转站', name: '炸鸡中转站', provider: OPENAI_PROVIDER, base_url: 'https://code.alysc.top/v1', model: 'gpt-5.5', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。', website: 'https://code.alysc.top/sign-up?aff=1afk', websiteLabel: 'code.alysc.top', partner: true, promo: '通过链接邀请注册赠送免费额度 · 国际模型最低0.01倍率' },
@@ -54,11 +56,14 @@ export function SettingsAIPanel() {
   const profilesQuery = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
   const profiles = profilesQuery.data?.profiles ?? []
   const defaultId = profilesQuery.data?.default_id ?? ''
+  const routePolicy = profilesQuery.data?.route_policy ?? { allow_profile_fallback: false, fallback_profile_ids: [] }
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<AiProfileInput>(EMPTY_FORM)
   const [showKey, setShowKey] = useState(false)
   const [saved, setSaved] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [policySaved, setPolicySaved] = useState(false)
+  const didAutoSelect = useRef(false)
 
   const editing = useMemo(
     () => profiles.find(profile => profile.id === editingId) ?? null,
@@ -70,10 +75,22 @@ export function SettingsAIPanel() {
   const canSave = form.name.trim() && (isOpenAI ? !!form.model?.trim() : true)
   const configured = profiles.length > 0
 
+  const allowFallback = routePolicy.allow_profile_fallback
+  const fallbackIds = routePolicy.fallback_profile_ids
+  const fallbackProfiles = fallbackIds
+    .map(id => profiles.find(p => p.id === id))
+    .filter((p): p is AiProfileMasked => !!p)
+  const fallbackCandidates = profiles.filter(
+    p => p.id !== defaultId && !fallbackIds.includes(p.id),
+  )
+
   useEffect(() => {
-    if (!editingId && profiles[0]) {
-      setEditingId(profiles[0].id)
-      setForm(formFromProfile(profiles[0]))
+    if (!didAutoSelect.current && profiles[0]) {
+      didAutoSelect.current = true
+      if (!editingId) {
+        setEditingId(profiles[0].id)
+        setForm(formFromProfile(profiles[0]))
+      }
     }
   }, [editingId, profiles])
 
@@ -127,6 +144,34 @@ export function SettingsAIPanel() {
       setTestResult({ ok: false, msg: error instanceof Error ? error.message : '测试失败' })
     },
   })
+
+  const updatePolicy = useMutation({
+    mutationFn: (policy: { allow_profile_fallback: boolean; fallback_profile_ids: string[] }) =>
+      api.updateAiRoutePolicy(policy),
+    onSuccess: () => {
+      setPolicySaved(true)
+      qc.invalidateQueries({ queryKey: ['aiProfiles'] })
+      setTimeout(() => setPolicySaved(false), 1500)
+    },
+  })
+
+  const toggleFallback = (enabled: boolean) => {
+    updatePolicy.mutate({ allow_profile_fallback: enabled, fallback_profile_ids: fallbackIds })
+  }
+  const addFallback = (id: string) => {
+    updatePolicy.mutate({ allow_profile_fallback: allowFallback, fallback_profile_ids: [...fallbackIds, id] })
+  }
+  const removeFallback = (id: string) => {
+    updatePolicy.mutate({ allow_profile_fallback: allowFallback, fallback_profile_ids: fallbackIds.filter(x => x !== id) })
+  }
+  const moveFallback = (id: string, dir: -1 | 1) => {
+    const idx = fallbackIds.indexOf(id)
+    const target = idx + dir
+    if (idx < 0 || target < 0 || target >= fallbackIds.length) return
+    const next = [...fallbackIds]
+    ;[next[idx], next[target]] = [next[target], next[idx]]
+    updatePolicy.mutate({ allow_profile_fallback: allowFallback, fallback_profile_ids: next })
+  }
 
   const applyPreset = (preset: typeof PRESETS[number]) => {
     setEditingId(null)

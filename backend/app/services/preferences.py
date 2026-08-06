@@ -369,6 +369,20 @@ def set_review_push_channels(channels: list[str]) -> list[str]:
     return cleaned
 
 
+# ===== 交易自动复盘 (P6.4 L0/L1/L2 状态驱动 AI 归因) =====
+
+def get_trading_auto_review() -> bool:
+    """交易自动复盘开关。默认 False —— 盘后状态驱动归因依赖 AI,
+    且会消耗 token, 由用户明确开启。"""
+    return bool(load().get("tradingAutoReview", False))
+
+
+def set_trading_auto_review(enabled: bool) -> bool:
+    """保存交易自动复盘开关。"""
+    save({"tradingAutoReview": bool(enabled)})
+    return bool(enabled)
+
+
 
 # ===== 实时监控 =====
 
@@ -663,3 +677,28 @@ def set_financial_sync_time(table: str, iso_ts: str) -> None:
     times = get_financial_sync_times()
     times[table] = iso_ts
     save({"financial_sync_times": times})
+
+
+
+# ===== AI profile 路由策略 (P3 显式受控 fallback，默认关闭) =====
+
+def get_ai_route_policy() -> dict:
+    """返回当前 route policy。默认关闭。存储于 preferences（非密钥数据）。"""
+    d = load().get("ai_route_policy") or {}
+    return {
+        "allow_profile_fallback": bool(d.get("allow_profile_fallback", False)),
+        "fallback_profile_ids": [str(x) for x in (d.get("fallback_profile_ids") or []) if str(x).strip()],
+    }
+
+
+def set_ai_route_policy(allow_profile_fallback: bool, fallback_profile_ids: list[str]) -> dict:
+    """保存策略（内部去重保序）。返回规范化值。"""
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for x in (fallback_profile_ids or []):
+        s = str(x).strip()
+        if s and s not in seen:
+            seen.add(s)
+            cleaned.append(s)
+    save({"ai_route_policy": {"allow_profile_fallback": bool(allow_profile_fallback), "fallback_profile_ids": cleaned}})
+    return get_ai_route_policy()
