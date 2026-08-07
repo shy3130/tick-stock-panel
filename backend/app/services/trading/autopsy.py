@@ -15,11 +15,18 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.services.ai_structured import CancellationToken, run_structured_ai
-from app.services.ai_provider import ai_configured, generate_ai_text
+from app.services.ai_structured import CancellationToken, build_ai_meta, run_structured_ai
+from app.services.ai_budgets import resolve_budget
+from app.services.ai_usage_snapshot import record_structured_usage
+from app.services.ai_provider import ai_configured, generate_ai_text_with_meta, profile_configured
 from app.services.trading import store
 from app.services.trading.lifecycle import now_str
 from app.services.trading.red_flags import scan_trade_events
+
+
+async def _default_generate(messages, **kwargs):
+    """P3: 默认走 metadata 路径 (真实 fallback + usage 回传)。"""
+    return await generate_ai_text_with_meta(messages, **kwargs)
 
 _SYSTEM_PROMPT = """\
 你是一位严格的交易纪律复盘分析师。根据给定的交易事件流、机械红旗和计划偏差，\
@@ -145,33 +152,44 @@ async def run_autopsy(
     data_dir: Path,
     trade_id: str,
     *,
+    profile_id: str | None = None,
     cancel_token: CancellationToken | None = None,
     on_event: Any | None = None,
     generate: Any | None = None,
 ) -> dict[str, Any]:
-    """读取事实 → 结构化 AI → 校验 → 落盘；畸形输出绝不默认成 A。"""
+    """读取事实 → 结构化 AI → 校验 → 落盘；畸形输出绝不默认成 A。
+
+    P3: 接受 ``profile_id`` 选择实际使用的 profile; 结果 additive 追加 ``ai_meta``
+    (旧字段 schemaVersion/classification/.../usage/profileId/model 全部保留)。
+    """
     trade = store.read_trade(data_dir, trade_id)
     if trade is None:
         raise HTTPException(status_code=404, detail="单笔交易不存在")
 
+
+
     events = store.read_events(data_dir, trade_id)
     audit = store.read_audit(data_dir, trade_id, limit=10000)
     red_flags = scan_trade_events(events, audit)
-    if not ai_configured():
+    if not profile_configured(profile_id):
         raise HTTPException(status_code=503, detail="AI 未配置,无法执行归因分析")
 
+
+
+    budget = resolve_budget("trading_autopsy")
     try:
         structured = await run_structured_ai(
             messages=build_autopsy_prompt(trade, events, red_flags, deviation=None),
             output_model=_AutopsyOutput,
             purpose="trading_autopsy",
+            profile_id=profile_id,
             immutable_context={"tradeId": trade_id},
             cancel_token=cancel_token,
             on_event=on_event,
-            generate=generate or generate_ai_text,
-            temperature=0.2,
-            max_tokens=2000,
-            timeout=60,
+            generate=generate or _default_generate,
+            temperature=budget.temperature,
+            max_tokens=budget.max_tokens,
+            timeout=budget.timeout,
         )
     except HTTPException:
         raise
@@ -180,12 +198,17 @@ async def run_autopsy(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 归因调用失败: {exc}") from exc
 
+
+
+    record_structured_usage("trading_autopsy", structured)
     if structured.status == "cancelled":
         raise asyncio.CancelledError
     if structured.status != "ok" or not isinstance(structured.data, dict):
         category = structured.error.category if structured.error is not None else "invalid"
         message = structured.error.message if structured.error is not None else "结构化输出校验失败"
         raise HTTPException(status_code=502, detail=f"AI 归因输出无效 [{category}]: {message}")
+
+
 
     parsed = structured.data
     ts = now_str()
@@ -205,6 +228,7 @@ async def run_autopsy(
         "provider": structured.provider,
         "profileId": structured.profile_id,
         "model": structured.model,
+        "ai_meta": build_ai_meta(structured),
     }
     directory = _autopsies_dir(data_dir)
     directory.mkdir(parents=True, exist_ok=True)

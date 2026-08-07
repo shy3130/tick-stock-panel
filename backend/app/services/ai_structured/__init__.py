@@ -1,5 +1,5 @@
 """统一结构化 AI 运行时公共接口。"""
-from app.services.ai_structured.audit import audit_metadata, redact_messages
+from app.services.ai_structured.audit import audit_metadata, build_ai_meta, redact_messages
 from app.services.ai_structured.immutable import validate_immutable
 from app.services.ai_structured.models import (
     AIErrorCategory,
@@ -40,6 +40,7 @@ __all__ = [
     "RetryPolicy",
     "StructuredAIResult",
     "audit_metadata",
+    "build_ai_meta",
     "extract_json_text",
     "new_attempt_id",
     "new_node_id",

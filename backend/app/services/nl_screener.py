@@ -11,14 +11,23 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
-from app.services.ai_structured import CancellationToken, run_structured_ai
-from app.services.ai_provider import generate_ai_text
+from app.services.ai_structured import CancellationToken, build_ai_meta, run_structured_ai
+from app.services.ai_budgets import resolve_budget
+from app.services.ai_usage_snapshot import record_structured_usage
+from app.services.ai_provider import generate_ai_text_with_meta
 from app.services.screener_query import (
     FIELD_REGISTRY,
     QueryCondition,
     ScreenerQueryRequest,
     validate_query,
 )
+
+
+# P3: 默认 generate 绑定为 metadata 路径的包装。生产走 meta (fallback+usage);
+# 旧测试 monkeypatch ``nl_screener.generate_ai_text`` 注入纯字符串返回时,
+# 替换的是这个模块属性, parse_nl 经 ``generate or generate_ai_text`` 命中注入实现。
+async def generate_ai_text(messages, **kwargs):  # noqa: A001 - keep public name
+    return await generate_ai_text_with_meta(messages, **kwargs)
 
 
 class NLScreenerError(RuntimeError):
@@ -146,9 +155,14 @@ async def parse_nl(
     cancel_token: CancellationToken | None = None,
     on_event: Any | None = None,
     generate: Any | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    """Parse one request through the shared structured runtime."""
+) -> dict[str, Any]:
+    """Parse one request through the shared structured runtime.
+
+    返回值在旧 ``recognized`` / ``unrecognized`` 基础上 additive 追加顶层 ``ai_meta``
+    (实际 profile / fallback / usage)，旧消费方忽略该字段即可。
+    """
     messages = _prompt(text)
+    budget = resolve_budget("nl_screener")
     result = await run_structured_ai(
         messages=messages,
         output_model=_ConditionCandidates,
@@ -157,21 +171,33 @@ async def parse_nl(
         cancel_token=cancel_token,
         on_event=on_event,
         generate=generate or generate_ai_text,
-        temperature=0,
-        max_tokens=2000,
-        timeout=60,
+        temperature=budget.temperature,
+        max_tokens=budget.max_tokens,
+        timeout=budget.timeout,
     )
+    record_structured_usage("nl_screener", result)
+    ai_meta = build_ai_meta(result)
     if getattr(result, "status", None) != "ok" or not getattr(result, "data", None):
         reason = _structured_error_reason(result)
         if reason == "provider_unavailable":
             raise NLScreenerError(reason)
-        return {"recognized": [], "unrecognized": [{"raw": text[:200], "reason": reason}]}
+        return {
+            "recognized": [],
+            "unrecognized": [{"raw": text[:200], "reason": reason}],
+            "ai_meta": ai_meta,
+        }
     candidates = result.data
     if isinstance(candidates, dict):
         candidates = candidates.get("root", candidates.get("conditions", []))
     if not isinstance(candidates, list):
-        return {"recognized": [], "unrecognized": [{"raw": text[:200], "reason": "malformed"}]}
-    return _validate_candidates(candidates)
+        return {
+            "recognized": [],
+            "unrecognized": [{"raw": text[:200], "reason": "malformed"}],
+            "ai_meta": ai_meta,
+        }
+    validated = _validate_candidates(candidates)
+    validated["ai_meta"] = ai_meta
+    return validated
 
 
 parse = parse_nl

@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import pytest
+
 from app.services import agent_runner
 from app.services import agent_sessions
 from app.services.agent_bus import AgentBus
@@ -86,7 +88,8 @@ async def test_turn_cancelled_midstream_still_persists_partial(tmp_path, monkeyp
     ))
     await started.wait()
     task.cancel()
-    await task
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     rows = agent_sessions.read_messages(tmp_path, sid)
     assert rows[0]["role"] == "assistant"

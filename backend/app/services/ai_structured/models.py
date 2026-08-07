@@ -248,6 +248,9 @@ class AnalysisTraceNode(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     reason: str | None = None
     locked: bool = False
+    # P4/M12: 节点依赖链 (DAG)；每个 final 节点必须回溯到至少一个 locked 程序节点。
+    # model_assessment 节点的 depends_on 必须含至少一个 locked 节点，禁止凭空判定。
+    depends_on: list[str] = Field(default_factory=list)
 
 
 class AnalysisArtifact(BaseModel):

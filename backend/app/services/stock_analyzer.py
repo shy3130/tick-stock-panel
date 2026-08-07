@@ -438,6 +438,9 @@ async def analyze_stock_stream(
         document_text,
         patterns,
     )
+    from app.services.ai_budgets import resolve_budget
+
+    ai_budget = resolve_budget("stock_analysis", context_max_tokens=12000)
     messages, budget = assemble_prompt(
         frame,
         purpose="stock_analysis",
@@ -448,7 +451,7 @@ async def analyze_stock_stream(
             "data_as_of": frame.data_as_of.isoformat(),
             "adjustment": frame.adjustment,
         },
-        max_tokens=12000,
+        max_tokens=ai_budget.context_max_tokens or 12000,
         contract=_SYSTEM_PROMPT,
     )
     yield json.dumps(
@@ -476,9 +479,9 @@ async def analyze_stock_stream(
         async for delta in stream_ai_text(
             messages,
             profile_id=profile_id,
-            temperature=0.5,
-            max_tokens=4500,
-            timeout=180,
+            temperature=ai_budget.temperature,
+            max_tokens=ai_budget.max_tokens,
+            timeout=ai_budget.timeout,
         ):
             token.raise_if_cancelled()
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)

@@ -167,10 +167,18 @@ def clear_ai_settings() -> dict:
 @router.get("/ai/profiles")
 def list_ai_profiles() -> dict:
     from app.services import ai_profiles, ai_routing
+    from app.services.ai_usage_snapshot import usage_snapshot
+
+    registry = ai_routing.get_health_registry()
+    profiles = ai_profiles.list_profiles_masked()
+    # M9: 只读 health snapshot, 无凭据/无 prompt; 每个 profile 附加 in-memory 健康态。
+    for p in profiles:
+        p["health"] = registry.get_health(p["id"])
     return {
-        "profiles": ai_profiles.list_profiles_masked(),
+        "profiles": profiles,
         "default_id": ai_profiles.get_default_profile_id(),
         "route_policy": ai_routing.load_route_policy().__dict__,
+        "usage_snapshot": usage_snapshot(),
     }
 
 
@@ -333,6 +341,7 @@ def get_preferences() -> dict:
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
         "tradingAutoReview": preferences.get_trading_auto_review(),
+        "structured_plan_check_enabled": preferences.get_structured_plan_check_enabled(),
     }
 
 
@@ -618,6 +627,8 @@ class WebhookChannelPrefsIn(BaseModel):
     url: str = ""
     secret: str = ""
     nickname: str = ""
+    token: str = ""
+    clear_token: bool = False
 
 
 @router.put("/preferences/feishu-webhook")
@@ -938,3 +949,18 @@ def update_trading_auto_review(req: TradingAutoReviewIn) -> dict:
     from app.services import preferences
     saved = preferences.set_trading_auto_review(req.tradingAutoReview)
     return {"tradingAutoReview": saved}
+
+
+class StructuredPlanCheckIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/preferences/structured-plan-check")
+def update_structured_plan_check(req: StructuredPlanCheckIn) -> dict:
+    """保存结构化计划检查开关 (P4 默认关闭)。
+
+    纯偏好写入。关闭时计划检查端点返回 HTTP 403、零 AI 调用。
+    """
+    from app.services import preferences
+    saved = preferences.set_structured_plan_check_enabled(req.enabled)
+    return {"structured_plan_check_enabled": saved}

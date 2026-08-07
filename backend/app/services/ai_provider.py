@@ -105,6 +105,25 @@ def ai_configured(provider: str | None = None) -> bool:
         return codex_cli_available()
     return bool(secrets_store.get_ai_key())
 
+def profile_configured(profile_id: str | None = None) -> bool:
+    """检查指定 profile (或默认 profile) 是否已配置可用。
+
+    与 ``ai_configured()`` 的区别: 当传入 ``profile_id`` 时检查该具体 profile,
+    而非始终检查默认 profile; 不传时等价于 ``ai_configured()`` (保持既有调用语义)。
+    """
+    if not profile_id:
+        return ai_configured()
+    from app.services import ai_profiles
+    profile = ai_profiles.resolve_profile(profile_id)
+    if not profile:
+        return False
+    provider = profile.get("provider") or OPENAI_COMPAT_PROVIDER
+    if provider == CODEX_CLI_PROVIDER:
+        return codex_cli_available()
+    if provider == ACP_PROVIDER:
+        return ai_profiles.is_available(profile)
+    return bool(profile.get("api_key"))
+
 
 async def generate_ai_text(
     messages: Sequence[Message],
@@ -139,17 +158,21 @@ async def _generate_for_single_profile(
     timeout: float = 180.0,
 ) -> "GenerateResponse":
     """Single profile generation core (extracted for P3 fallback orchestration).
+
     Always returns GenerateResponse populated with primary=actual (no fb) for this attempt.
+    P3: ``profile_id`` 字段反映 *实际命中* profile (默认 profile 解析后回填其 id，
+    而非保留 None)，使 ai_meta 精确反映实际使用的 profile。
     """
     from app.services.ai_structured.models import AIUsage, GenerateResponse
 
     profile = _resolve_ai_profile(profile_id)
+    actual_id = (profile or {}).get("id") or profile_id
     provider = profile.get("provider") if profile else current_ai_provider()
     model = (profile or {}).get("model") or current_ai_model()
     if provider == CODEX_CLI_PROVIDER:
         text = await _run_codex_cli(messages, profile=profile, max_tokens=max_tokens, timeout=max(timeout, 600.0))
         return GenerateResponse(
-            text=text, provider=provider, profile_id=profile_id, model=model,
+            text=text, provider=provider, profile_id=actual_id, model=model,
             primary_profile_id=profile_id, fallback_used=False, fallback_reason=None,
         )
     if provider == ACP_PROVIDER:
@@ -176,7 +199,7 @@ async def _generate_for_single_profile(
         text=text,
         usage=AIUsage(prompt_tokens=prompt, cached_prompt_tokens=cached, completion_tokens=completion, total_tokens=total),
         provider=provider,
-        profile_id=profile_id,
+        profile_id=actual_id,
         model=model,
         primary_profile_id=profile_id,
         fallback_used=False,
@@ -215,7 +238,12 @@ async def generate_ai_text_with_meta(
 
     from app.services import ai_profiles
     avail = set(ai_profiles.list_profile_ids())
-    chain = ai_routing.build_fallback_chain(profile_id, policy, avail)
+    # P3: primary 必须先解析为默认 profile id，否则 profile_id=None 时
+    # build_fallback_chain(None,...) 会把默认 profile 排除在链外。
+    resolved_primary = profile_id
+    if not resolved_primary:
+        resolved_primary = ai_profiles.get_default_profile_id() or None
+    chain = ai_routing.build_fallback_chain(resolved_primary, policy, avail)
     if not chain:
         return await _generate_for_single_profile(
             messages, profile_id=profile_id, temperature=temperature, max_tokens=max_tokens, timeout=timeout
@@ -223,10 +251,9 @@ async def generate_ai_text_with_meta(
 
     registry = ai_routing.get_health_registry()
     running = AIUsage()
-    primary = profile_id
+    primary = resolved_primary
     last_reason: str | None = None
     last_exc: BaseException | None = None
-
     for idx, pid in enumerate(chain):
         if idx > 0 and registry.is_in_cooldown(pid):
             continue
@@ -257,7 +284,7 @@ async def generate_ai_text_with_meta(
             registry.record_failure(pid, cat, lat)
             last_reason = cat
             last_exc = exc
-            if idx == 0 or not ai_routing.is_fallback_worthy(cat):
+            if not ai_routing.is_fallback_worthy(cat):
                 raise
             continue
 

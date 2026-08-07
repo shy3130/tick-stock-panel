@@ -20,10 +20,9 @@ async def test_nl_parser_validates_candidates_without_running_query(monkeypatch)
 
     monkeypatch.setattr(nl_screener, "generate_ai_text", fake_generate)
     result = await nl_screener.parse_nl("涨幅大于5%", profile_id="profile-a")
-    assert result == {
-        "recognized": [{"field": "change_pct", "op": ">", "value": 0.05}],
-        "unrecognized": [],
-    }
+    assert result["recognized"] == [{"field": "change_pct", "op": ">", "value": 0.05}]
+    assert result["unrecognized"] == []
+    assert result["ai_meta"]["profile_id"] == "profile-a"
     assert profiles == ["profile-a"]
 
 
@@ -66,4 +65,6 @@ async def test_nl_parser_provider_failure_and_double_malformed_are_safe(monkeypa
 
     monkeypatch.setattr(nl_screener, "generate_ai_text", malformed_generate)
     result = await nl_screener.parse_nl("无法解析")
-    assert result == {"recognized": [], "unrecognized": [{"raw": "无法解析", "reason": "malformed"}]}
+    assert result["recognized"] == []
+    assert result["unrecognized"] == [{"raw": "无法解析", "reason": "malformed"}]
+    assert result["ai_meta"]["profile_id"] is None

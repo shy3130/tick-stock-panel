@@ -84,7 +84,7 @@ async def test_l0_no_candidates_zero_ai_calls(tmp_path):
     mock_autopsy = AsyncMock(return_value={"classification": "A", "reasoning": "x", "fix": "y"})
     with patch("app.services.trading.review_job.run_autopsy", mock_autopsy), \
          patch("app.services.trading.review_job.ai_configured", return_value=True):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result == {"level": "L0", "candidates": 0, "autopsied": 0, "skipped": 0}
     assert mock_autopsy.call_count == 0  # 零 AI 调用
@@ -100,7 +100,7 @@ async def test_l1_candidates_autopsied(tmp_path):
                                            "classification": "B", "reasoning": "r", "fix": "f"})
     with patch("app.services.trading.review_job.run_autopsy", mock_autopsy), \
          patch("app.services.trading.review_job.ai_configured", return_value=True):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result["level"] == "L1"
     assert result["candidates"] == 1
@@ -124,7 +124,7 @@ async def test_l1_recent_close_is_candidate(tmp_path):
                                            "classification": "A", "reasoning": "r", "fix": "f"})
     with patch("app.services.trading.review_job.run_autopsy", mock_autopsy), \
          patch("app.services.trading.review_job.ai_configured", return_value=True):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result["level"] == "L1"
     assert result["candidates"] == 1
@@ -149,7 +149,7 @@ async def test_dedup_skip_when_event_count_unchanged(tmp_path):
     mock_autopsy = AsyncMock()
     with patch("app.services.trading.review_job.run_autopsy", mock_autopsy), \
          patch("app.services.trading.review_job.ai_configured", return_value=True):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result["level"] == "L1"
     assert result["candidates"] == 1
@@ -175,7 +175,7 @@ async def test_dedup_rerun_when_event_count_changed(tmp_path):
                                            "classification": "C", "reasoning": "new", "fix": "new"})
     with patch("app.services.trading.review_job.run_autopsy", mock_autopsy), \
          patch("app.services.trading.review_job.ai_configured", return_value=True):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result["autopsied"] == 1
     assert result["skipped"] == 0
@@ -199,7 +199,7 @@ async def test_old_autopsy_without_event_count_reruns(tmp_path):
                                            "classification": "C", "reasoning": "new", "fix": "new"})
     with patch("app.services.trading.review_job.run_autopsy", mock_autopsy), \
          patch("app.services.trading.review_job.ai_configured", return_value=True):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result["autopsied"] == 1
     assert mock_autopsy.call_count == 1
@@ -214,7 +214,7 @@ async def test_l1_ai_not_configured_degrades(tmp_path):
     mock_autopsy = AsyncMock()
     with patch("app.services.trading.review_job.run_autopsy", mock_autopsy), \
          patch("app.services.trading.review_job.ai_configured", return_value=False):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result["level"] == "L1"
     assert result["candidates"] == 1
@@ -241,7 +241,7 @@ async def test_fail_soft_one_failure_doesnt_block_others(tmp_path):
 
     with patch("app.services.trading.review_job.run_autopsy", side_effect=_fake_run), \
          patch("app.services.trading.review_job.ai_configured", return_value=True):
-        result = await run_state_driven_autopsy(tmp_path)
+        result = await run_state_driven_autopsy(tmp_path, now=NOW)
 
     assert result["level"] == "L1"
     assert result["candidates"] == 2

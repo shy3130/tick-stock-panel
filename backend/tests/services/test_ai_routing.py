@@ -88,7 +88,7 @@ async def test_fallback_disabled_calls_primary_only(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fallback_enabled_tries_allowlist_in_order_and_accumulates_usage(monkeypatch):
-    from app.services import ai_provider
+    from app.services import ai_profiles, ai_provider
 
     calls: list[str | None] = []
 
@@ -110,7 +110,7 @@ async def test_fallback_enabled_tries_allowlist_in_order_and_accumulates_usage(m
         "load_route_policy",
         lambda: ai_routing.RoutePolicy(allow_profile_fallback=True, fallback_profile_ids=["p2"]),
     )
-    monkeypatch.setattr(ai_provider.ai_profiles, "list_profile_ids", lambda: ["p1", "p2"])
+    monkeypatch.setattr(ai_profiles, "list_profile_ids", lambda: ["p1", "p2"])
     monkeypatch.setattr(
         ai_provider.ai_routing,
         "get_health_registry",
@@ -128,7 +128,7 @@ async def test_fallback_enabled_tries_allowlist_in_order_and_accumulates_usage(m
 
 @pytest.mark.asyncio
 async def test_cancelled_never_triggers_fallback(monkeypatch):
-    from app.services import ai_provider
+    from app.services import ai_profiles, ai_provider
 
     calls: list[str | None] = []
 
@@ -142,7 +142,7 @@ async def test_cancelled_never_triggers_fallback(monkeypatch):
         "load_route_policy",
         lambda: ai_routing.RoutePolicy(allow_profile_fallback=True, fallback_profile_ids=["p2"]),
     )
-    monkeypatch.setattr(ai_provider.ai_profiles, "list_profile_ids", lambda: ["p1", "p2"])
+    monkeypatch.setattr(ai_profiles, "list_profile_ids", lambda: ["p1", "p2"])
 
     with pytest.raises(asyncio.CancelledError):
         await ai_provider.generate_ai_text_with_meta([{"role": "user", "content": "x"}], profile_id="p1")

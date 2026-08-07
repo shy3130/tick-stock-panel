@@ -304,7 +304,7 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
 
 # 复盘推送可选渠道白名单。
 # 多选: 不推送 = 空数组, 而非 'none'
-REVIEW_PUSH_CHANNELS = {"feishu", "dingtalk", "wecom", "meow"}
+REVIEW_PUSH_CHANNELS = {"feishu", "dingtalk", "wecom", "meow", "pushplus"}
 
 
 def get_review_schedule() -> dict:
@@ -508,33 +508,93 @@ def set_feishu_webhook_secret(secret: str) -> str:
     save({"feishu_webhook_secret": str(secret or "").strip()})
     return get_feishu_webhook_secret()
 
+# ── PushPlus (M18): token 存于 secrets.json (0600), 不入 preferences.json ──
+
+_PUSHPLUS_SECRET_KEY = "pushplus_token"
+
+
+def get_pushplus_token() -> str:
+    """PushPlus token — 从 secrets.json 读取 (0600), 绝不回退到 preferences.json。"""
+    from app import secrets_store
+    return str(secrets_store.load().get(_PUSHPLUS_SECRET_KEY, "") or "")
+
+
+def get_pushplus_status() -> dict:
+    """PushPlus 对外可见状态: configured + masked token (不含真实 token)。"""
+    from app import secrets_store
+    token = get_pushplus_token()
+    return {
+        "configured": bool(token),
+        "token_masked": secrets_store.mask(token) if token else "",
+    }
+
+
+def set_pushplus_token(token: str) -> None:
+    """保存 PushPlus token 到 secrets.json (0600)。"""
+    from app import secrets_store
+    secrets_store.save({_PUSHPLUS_SECRET_KEY: str(token or "").strip()})
+
+
+def clear_pushplus_token() -> None:
+    """从 secrets.json 删除 PushPlus token。"""
+    from app import secrets_store
+    secrets_store.clear(_PUSHPLUS_SECRET_KEY)
+
 
 def get_webhook_channels() -> dict:
-    """返回所有 webhook 通道配置；兼容旧 feishu 字段。"""
+    """返回所有 webhook 通道配置；兼容旧 feishu 字段。
+
+    PushPlus 例外: token 存于 secrets.json, 对外只暴露 configured/token_masked。
+    """
     channels = load().get("webhook_channels", {})
     if not isinstance(channels, dict):
         channels = {}
     out = {k: v for k, v in channels.items() if k in REVIEW_PUSH_CHANNELS and isinstance(v, dict)}
+    # PushPlus token 永远存于 secrets.json, 不从 preferences.json 读取 (防泄漏)
+    out.pop("pushplus", None)
     out["feishu"] = {
         "url": get_feishu_webhook_url(),
         "secret": get_feishu_webhook_secret(),
     }
+    out["pushplus"] = get_pushplus_status()
     return out
 
 
 def get_configured_webhook_channels() -> dict:
-    channels = get_webhook_channels()
-    return {
-        k: v for k, v in channels.items()
-        if (v.get("url") or v.get("nickname") or "").strip()
-    }
+    """返回已配置通道 (含真实凭据), 供 adapter 发送。
+
+    PushPlus: 从 secrets.json 注入真实 token; 其他通道复用 get_webhook_channels 的 url/nickname。
+    """
+    out = {}
+    for k, v in get_webhook_channels().items():
+        if k == "pushplus":
+            token = get_pushplus_token()
+            if token:
+                out[k] = {"token": token}
+        elif (v.get("url") or v.get("nickname") or "").strip():
+            out[k] = v
+    return out
 
 
 def set_webhook_channel(channel: str, config: dict) -> dict:
-    """保存单个 webhook 通道。feishu 仍写旧字段，其他写 webhook_channels。"""
+    """保存单个 webhook 通道。feishu 仍写旧字段，其他写 webhook_channels。
+
+    PushPlus 特殊处理: token 存于 secrets.json (0600), 不入 preferences.json。
+    - token 非空 → 保存到 secrets.json
+    - clear_token=True → 从 secrets.json 删除
+    - token 空 + clear_token=False → 保留旧 token (无操作)
+    """
     channel = str(channel or "").strip().lower()
     if channel not in REVIEW_PUSH_CHANNELS:
         raise ValueError(f"unsupported webhook channel: {channel}")
+    if channel == "pushplus":
+        token = str(config.get("token") or "").strip()
+        clear_token = bool(config.get("clear_token"))
+        if clear_token:
+            clear_pushplus_token()
+        elif token:
+            set_pushplus_token(token)
+        return get_pushplus_status()
     cleaned = {
         "url": str(config.get("url") or "").strip(),
         "secret": str(config.get("secret") or "").strip(),
@@ -702,3 +762,17 @@ def set_ai_route_policy(allow_profile_fallback: bool, fallback_profile_ids: list
             cleaned.append(s)
     save({"ai_route_policy": {"allow_profile_fallback": bool(allow_profile_fallback), "fallback_profile_ids": cleaned}})
     return get_ai_route_policy()
+
+
+# ===== 结构化计划检查 (P4 默认关闭) =====
+
+def get_structured_plan_check_enabled() -> bool:
+    """结构化计划检查开关。默认 False —— AI 双阶段检查会消耗 token,
+    且涉及交易决策辅助, 由用户明确开启。"""
+    return bool(load().get("structured_plan_check_enabled", False))
+
+
+def set_structured_plan_check_enabled(enabled: bool) -> bool:
+    """保存结构化计划检查开关。"""
+    save({"structured_plan_check_enabled": bool(enabled)})
+    return bool(enabled)

@@ -99,8 +99,11 @@ def _collect_candidates(
     return candidates
 
 
-async def run_state_driven_autopsy(data_dir: Path | str) -> dict[str, Any]:
+async def run_state_driven_autopsy(data_dir: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     """盘后状态驱动 AI 归因。
+
+    ``now`` 可注入 (默认 ``datetime.now()``), 用于测试与确定性调度; 其语义与
+    ``_collect_candidates`` 的时间窗完全一致 —— 近 1 日内的新红旗 / 新平仓才入候选。
 
     返回 schema::
 
@@ -119,7 +122,7 @@ async def run_state_driven_autopsy(data_dir: Path | str) -> dict[str, Any]:
     - L1 正常: 逐候选归因; 已归因且事件数未变 skip; 单笔失败记 errors 继续 (fail-soft)。
     """
     data_dir = Path(data_dir)
-    candidates = _collect_candidates(data_dir, now=_now())
+    candidates = _collect_candidates(data_dir, now=now or datetime.now())
 
     if not candidates:
         logger.info("trading auto-review L0: no candidates, zero AI calls")

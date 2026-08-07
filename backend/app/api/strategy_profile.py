@@ -16,29 +16,33 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from app.config import settings
-from app.services.ai_structured import CancellationToken, run_structured_ai
-from app.services.strategy_profile import (
-    SCHEMA_VERSION,
-    delete_profile,
-    read_profile,
-    validate_profile,
-    write_profile,
-)
-from app.services.strategy_validator import validate_strategy
-from app.services.trade_journal import store as journal_store
-from app.services.ai_provider import ai_configured, generate_ai_text
+from app.services.ai_structured import CancellationToken, build_ai_meta, run_structured_ai
+from app.services.ai_budgets import resolve_budget
+from app.services.ai_usage_snapshot import record_structured_usage
+from app.services.ai_provider import ai_configured, generate_ai_text_with_meta, profile_configured as _profile_configured
 from app.services.trading import proposals as proposals_svc
 
 router = APIRouter(prefix="/api/strategies", tags=["strategy-profile"])
 
+def profile_configured(profile_id: str | None = None) -> bool:
+    """按指定 profile 检查；默认路径复用本模块可注入的兼容 seam。"""
+    return _profile_configured(profile_id) if profile_id else ai_configured()
+
 
 @router.get("/{strategy_id}/profile/validate")
-async def validate(strategy_id: str, ai: Annotated[bool, Query()] = False):
+async def validate(
+    strategy_id: str,
+    ai: Annotated[bool, Query()] = False,
+    profile_id: Annotated[str | None, Query()] = None,
+):
     """机械体检: profile + 台账 ledger + 关联提案。
+
+
 
     ai=true 时追加 AI 深度体检报告 (对照 7 结构不变量 + 可证伪性语义判断);
     AI 未配置/调用失败 → aiReport=None 且附加 aiError, 不抛 500。
-    ai=false 时响应结构与现状一致 (前端向后兼容)。
+    P3: ``profile_id`` (可选) 选择实际使用的 AI profile; 响应 additive 追加
+    ``ai_meta`` (实际 profile / fallback / usage)。ai=false 时与现状一致。
     """
     profile = read_profile(settings.data_dir, strategy_id)
     ledger = journal_store.read_ledger(settings.data_dir)
@@ -46,10 +50,14 @@ async def validate(strategy_id: str, ai: Annotated[bool, Query()] = False):
     result = validate_strategy(strategy_id, profile, ledger, proposals)
     if not ai:
         return result
-    report, error = await _ai_deep_review(strategy_id, profile, ledger)
+    report, error, ai_meta = await _ai_deep_review(
+        strategy_id, profile, ledger, ai_profile_id=profile_id, include_meta=True
+    )
     result["aiReport"] = report
     if error is not None:
         result["aiError"] = error
+    if ai_meta is not None:
+        result["ai_meta"] = ai_meta
     return result
 
 
@@ -150,41 +158,66 @@ def _render_review(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+async def generate_ai_text(messages, **kwargs):
+    """兼容生成 seam；生产默认返回带实际 profile/usage 的元数据响应。"""
+    return await generate_ai_text_with_meta(messages, **kwargs)
+
+
+async def _default_generate(messages, **kwargs):
+    """P3: 默认走 metadata 路径 (真实 fallback + usage 回传)。"""
+    return await generate_ai_text(messages, **kwargs)
+
+
 async def _ai_deep_review(
     strategy_id: str,
     profile: dict[str, Any] | None,
     ledger: dict[str, Any] | None,
     *,
+    ai_profile_id: str | None = None,
     cancel_token: CancellationToken | None = None,
     on_event: Any | None = None,
-) -> tuple[str | None, str | None]:
-    """结构化体检并渲染为兼容的可读报告。"""
-    if not ai_configured():
-        return None, "AI 未配置, 深度体检不可用"
+    include_meta: bool = False,
+) -> tuple[Any, ...]:
+    """结构化体检并渲染为兼容的可读报告。
+
+    P3: 返回 ``(report, error, ai_meta)``; ``ai_meta`` 为 None 表示未触发 AI
+    (未配置 / 调用失败时仍尽量回填，便于前端展示实际 profile)。
+    """
+    def response(
+        report: str | None, error: str | None, ai_meta: dict[str, Any] | None
+    ) -> tuple[Any, ...]:
+        return (report, error, ai_meta) if include_meta else (report, error)
+
+    if not profile_configured(ai_profile_id):
+        return response(None, "AI 未配置, 深度体检不可用", None)
+    budget = resolve_budget("strategy_profile_deep_review")
     try:
         result = await run_structured_ai(
             messages=_build_ai_review_messages(strategy_id, profile, ledger),
             output_model=_DeepReview,
             purpose="strategy_profile_deep_review",
+            profile_id=ai_profile_id,
             invariants=(_review_invariant,),
             cancel_token=cancel_token,
             on_event=on_event,
-            generate=generate_ai_text,
-            temperature=0.2,
-            max_tokens=2000,
-            timeout=60,
+            generate=_default_generate,
+            temperature=budget.temperature,
+            max_tokens=budget.max_tokens,
+            timeout=budget.timeout,
         )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        return None, f"AI 深度体检调用失败: {exc}"
+        return response(None, f"AI 深度体检调用失败: {exc}", None)
+    record_structured_usage("strategy_profile_deep_review", result)
+    ai_meta = build_ai_meta(result)
     if result.status == "cancelled":
         raise asyncio.CancelledError
     if result.status != "ok" or not result.data:
         category = getattr(getattr(result, "error", None), "category", "malformed")
         message = getattr(getattr(result, "error", None), "message", "结构化输出校验失败")
-        return None, f"AI 深度体检调用失败 [{category}]: {message}"
+        return response(None, f"AI 深度体检调用失败 [{category}]: {message}", ai_meta)
     try:
-        return _render_review(result.data), None
+        return response(_render_review(result.data), None, ai_meta)
     except Exception as exc:
-        return None, f"AI 深度体检调用失败: {exc}"
+        return response(None, f"AI 深度体检调用失败: {exc}", ai_meta)
