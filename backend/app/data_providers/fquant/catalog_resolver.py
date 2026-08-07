@@ -56,9 +56,7 @@ _STAGE_MIGRATION_GUIDANCE = (
     "catalog publisher; a stage=NULL require_current row is unsafe until then "
     "(see AGENTS.md 'catalog/engine 发布顺序（staged 迁移运维）')"
 )
-_STALE_REPUBLISH_GUIDANCE = (
-    "republish a catalog row that pins the root's current generation"
-)
+_STALE_REPUBLISH_GUIDANCE = "republish a catalog row that pins the root's current generation"
 
 
 class CatalogError(RuntimeError):
@@ -263,8 +261,12 @@ def _validate_route_metadata(row: dict[str, Any]) -> None:
         if coverage is not None or any(
             row.get(key) not in (None, "", False, 0)
             for key in (
-                "reconciled", "quality", "reconciliation_ref", "supersedes",
-                "preliminary_root_id", "preliminary_generation",
+                "reconciled",
+                "quality",
+                "reconciliation_ref",
+                "supersedes",
+                "preliminary_root_id",
+                "preliminary_generation",
             )
         ):
             raise CatalogError("legacy route carries staged metadata")
@@ -274,7 +276,12 @@ def _validate_route_metadata(row: dict[str, Any]) -> None:
             raise CatalogError("preliminary route has invalid staged metadata")
         if any(
             row.get(key) not in (None, "", False, 0)
-            for key in ("reconciliation_ref", "supersedes", "preliminary_root_id", "preliminary_generation")
+            for key in (
+                "reconciliation_ref",
+                "supersedes",
+                "preliminary_root_id",
+                "preliminary_generation",
+            )
         ):
             raise CatalogError("preliminary route has invalid staged metadata")
         return
@@ -352,7 +359,7 @@ def _resolve_row(
 
 
 def resolve_route(route_key: str, market: str, trade_date: date | datetime | str | None) -> str:
-    """Resolve an exact staged route, then a safe historical fallback.
+    """Resolve an exact final route, then a safe later final or preliminary route.
 
     Catalog state is read on every call. A dated lookup never falls back to a
     writer-owned raw file.
@@ -362,23 +369,62 @@ def resolve_route(route_key: str, market: str, trade_date: date | datetime | str
     route_keys = [route_key] + ([preliminary_key] if preliminary_key else [])
     rows_by_key = _route_rows_for_keys(route_keys, market)
     rows = rows_by_key.get(route_key, [])
-    for candidate_key, expected_stage in (
-        (route_key, "final"),
-        (preliminary_key, "preliminary"),
-    ):
-        if not candidate_key:
+    final_candidates = []
+    for row in rows_by_key.get(route_key, []):
+        _validate_route_metadata(row)
+        if _route_stage(row) != "final":
             continue
-        candidates = []
-        for row in rows_by_key.get(candidate_key, []):
+        if _optional_date(row.get("coverage_date"), "coverage_date") != requested:
+            continue
+        if _matches_span(row, requested):
+            final_candidates.append(row)
+    if final_candidates:
+        final_candidates.sort(
+            key=lambda item: (
+                -_priority(item),
+                str(item.get("root", "")),
+                str(item.get("generation", "")),
+                str(item.get("logical", "")),
+                str(item.get("file", "")),
+            )
+        )
+        return _resolve_row(final_candidates[0], route_key, market, requested, historical=False)
+
+    final_candidates = []
+    for row in rows_by_key.get(route_key, []):
+        _validate_route_metadata(row)
+        if _route_stage(row) != "final":
+            continue
+        coverage = _optional_date(row.get("coverage_date"), "coverage_date")
+        if coverage is None or coverage <= requested:
+            continue
+        if _matches_span(row, requested):
+            final_candidates.append(row)
+    if final_candidates:
+        final_candidates.sort(
+            key=lambda item: (
+                -_priority(item),
+                _optional_date(item.get("coverage_date"), "coverage_date"),
+                str(item.get("root", "")),
+                str(item.get("generation", "")),
+                str(item.get("logical", "")),
+                str(item.get("file", "")),
+            )
+        )
+        return _resolve_row(final_candidates[0], route_key, market, requested, historical=True)
+
+    if preliminary_key:
+        preliminary_candidates = []
+        for row in rows_by_key.get(preliminary_key, []):
             _validate_route_metadata(row)
-            if _route_stage(row) != expected_stage:
+            if _route_stage(row) != "preliminary":
                 continue
             if _optional_date(row.get("coverage_date"), "coverage_date") != requested:
                 continue
             if _matches_span(row, requested):
-                candidates.append(row)
-        if candidates:
-            candidates.sort(
+                preliminary_candidates.append(row)
+        if preliminary_candidates:
+            preliminary_candidates.sort(
                 key=lambda item: (
                     -_priority(item),
                     str(item.get("root", "")),
@@ -387,7 +433,9 @@ def resolve_route(route_key: str, market: str, trade_date: date | datetime | str
                     str(item.get("file", "")),
                 )
             )
-            return _resolve_row(candidates[0], route_key, market, requested, historical=False)
+            return _resolve_row(
+                preliminary_candidates[0], route_key, market, requested, historical=False
+            )
 
     if not rows:
         raise RouteNotFoundError(f"no catalog route for {route_key}/{market} on {requested}")

@@ -310,6 +310,64 @@ def test_route_resolution_pins_catalog_generation_once_per_request(
     cr.resolve_route("tdx_trans", "a", date(2026, 7, 13))
     assert calls == 1
 
+def test_later_month_final_wins_over_exact_preliminary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final_root = tmp_path / "engine-a"
+    preliminary_root = tmp_path / "engine-a-preliminary"
+    final = _write_generation(
+        final_root,
+        "20260806T174226",
+        "tdx_trans_2026_08",
+        "final-month.duckdb",
+    )
+    _write_generation(
+        preliminary_root,
+        "20260805T174226",
+        "tdx_trans_preliminary",
+        "pre.duckdb",
+    )
+    (final_root / "current.json").write_text(
+        json.dumps({"generation": "20260806T174226"}), encoding="utf-8"
+    )
+    (preliminary_root / "current.json").write_text(
+        json.dumps({"generation": "20260805T174226"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                start_date="2026-08-01",
+                end_date="2026-08-31",
+                generation="20260806T174226",
+                logical="tdx_trans_2026_08",
+                file="final-month.duckdb",
+                stage="final",
+                coverage_date="2026-08-06",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="reconcile-20260806",
+            ),
+            _route(
+                route_key="tdx_trans_preliminary",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                generation="20260805T174226",
+                logical="tdx_trans_preliminary",
+                file="pre.duckdb",
+                stage="preliminary",
+                coverage_date="2026-08-05",
+                reconciled=False,
+                quality="preliminary",
+            ),
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(final_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY", str(preliminary_root))
+
+    assert cr.resolve_route("tdx_trans", "a", date(2026, 8, 5)) == str(final)
+
+
 
 def test_exact_preliminary_fallback_uses_preliminary_root_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

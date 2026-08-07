@@ -2,21 +2,21 @@
 
 > 主线任务：**让 tickflow-stock-panel 通过 `data_providers` 抽象层读取本地 DuckDB 发布快照，并保留可切换 provider 的业务契约。**
 >
-> 最后更新：2026-07-13
+> 最后更新：2026-08-07
 > 状态：本地 DuckDB provider 已落地；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
 ---
 
-## 0. 2026-07-13 当前状态
+## 0. 2026-08-07 当前状态
 
 - `FQuantProvider` 的行情主路径是只读本地 DuckDB；旧的 PG / engine-data HTTP 阶段说明保留在下文，仅作为迁移历史，不再代表当前运行架构。
-- A 股分钟线通过 `catalog_resolver.resolve_route("tdx_minutes", "a", trade_date)` 定位 2023 年前归档或当前快照；A 股逐笔通过 `catalog_resolver.resolve_route("tdx_trans", "a", trade_date)` 定位逐年快照。
+- A 股分钟线通过 `catalog_resolver.resolve_route("tdx_minutes", "a", trade_date)` 定位 2023 年前归档或当前快照；A 股逐笔通过 `catalog_resolver.resolve_route("tdx_trans", "a", trade_date)` 定位历史归档年片或活跃年的月度快照。
 - route catalog 每次查询都重新解析，不缓存 catalog 结果。连接仍由 `ConnectionSet` 按最终物理路径复用并安全退役，因此同一个 catalog generation 内的 2019 / 2026 年路由不会串用连接。
 - `require_current` 必须与映射后数据 root 的 `current.json` generation 精确一致；`pinned_immutable` 直接解析固定 generation。任一路由、manifest、路径或 freshness 校验失败都返回空结果并记录 warning，**不会降级到 raw 文件**。
 - 港股 minutes/trans 和其它已知整库仍走现有 `_LeasedSource` / `snapshot_or_raw` 语义；它们不属于本次日期分片迁移。
 - 配置入口：`FQUANT_SNAPSHOT_ROOT_CATALOG`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE`。这些变量也用于 staging 与测试重定向。
-- 验证：catalog resolver 与客户端聚焦测试 `29 passed, 2 skipped`；`tests/data_providers/` 为 `101 passed, 2 skipped`，另有 1 个父提交同样失败的本机 snapshot 环境假设用例，不是本次路由回归；相关 source 的 mypy 与新增文件 ruff 检查通过。
+- 验证：2026-08-07，`tests/data_providers/test_catalog_resolver.py` 21 passed；以 `tdx_trans_2026_08` 的真实 2026-08-05 快照执行 `TdxDuckDBClient.get_trans()`，成功读取 5 行。生产 `require_current` 路由仍严格校验 catalog 与 root 的 generation 一致性。
 
 下文第 1～7 节记录 2026-07-02 前后的迁移过程。涉及 PG、HTTP、未提交状态或旧单文件 minutes/trans 的描述，以本节和仓库当前代码为准。
 

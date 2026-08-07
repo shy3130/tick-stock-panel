@@ -17,7 +17,7 @@
 分别打开 A 股与港股拆分后的独立文件（不做跨库 ATTACH，因为没有跨表 join 需求）：
 - /Volumes/WD1/duckdb/tdx.duckdb          -> market_day_kline / market_wide_kline / market_xdxr
 - engine catalog tdx_minutes/a     -> market_minutes（按日期路由快照）
-- engine catalog tdx_trans/a       -> market_transactions（按年份路由快照）
+- engine catalog tdx_trans/a       -> market_transactions（历史归档按年、活跃年按月的日期路由快照）
 - /Volumes/WD1/duckdb/tdx-hk.duckdb        -> market_day_kline(dataset='hkday')
 - /Volumes/WD1/duckdb/tdx-hkminutes.duckdb -> market_minutes(dataset='hkminutes')
 - /Volumes/WD1/duckdb/tdx-hktrans.duckdb   -> market_transactions(dataset='hktrans')
