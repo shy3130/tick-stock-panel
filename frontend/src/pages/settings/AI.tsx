@@ -238,6 +238,56 @@ export function SettingsAIPanel() {
         </div>
       </Card>
 
+      <Card icon={Shield} title="备用配置" right={
+        <button onClick={() => toggleFallback(!allowFallback)} disabled={updatePolicy.isPending}
+          className={`relative h-5 w-9 rounded-full transition-colors ${allowFallback ? 'bg-accent' : 'bg-elevated'}`}
+          role="switch" aria-checked={allowFallback} aria-label="启用备用配置">
+          <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${allowFallback ? 'translate-x-4' : 'translate-x-0.5'}`} />
+        </button>
+      }>
+        <p className="text-[11px] leading-relaxed text-muted">
+          默认关闭。仅在连接、额度、认证或超时等 provider 故障时按顺序切换备用配置；
+          模型输出内容错误不会触发切换，取消请求也不会切换。token 用量跨尝试累计。
+          {policySaved && <span className="ml-1 text-emerald-400">已保存</span>}
+        </p>
+        {allowFallback && (
+          <div className="mt-3 space-y-2">
+            {fallbackProfiles.length === 0 && (
+              <div className="text-xs text-muted">尚未配置备用顺序。</div>
+            )}
+            {fallbackProfiles.map((profile, idx) => (
+              <div key={profile.id}
+                className="flex items-center gap-2 rounded-lg border border-border bg-base px-3 py-2">
+                <span className="text-[10px] text-muted/60 w-4">{idx + 1}.</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-medium text-foreground">{profile.name}</div>
+                  <div className="truncate text-[10px] text-muted">{providerLabel(profile.provider)} · {profile.model || '默认'}</div>
+                </div>
+                <button onClick={() => moveFallback(profile.id, -1)} disabled={idx === 0 || updatePolicy.isPending}
+                  className="rounded px-1 text-muted hover:text-accent disabled:opacity-30" aria-label="上移">↑</button>
+                <button onClick={() => moveFallback(profile.id, 1)} disabled={idx === fallbackProfiles.length - 1 || updatePolicy.isPending}
+                  className="rounded px-1 text-muted hover:text-accent disabled:opacity-30" aria-label="下移">↓</button>
+                <button onClick={() => removeFallback(profile.id)} disabled={updatePolicy.isPending}
+                  className="rounded px-1 text-danger/70 hover:text-danger" aria-label="移除">×</button>
+              </div>
+            ))}
+            {fallbackCandidates.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {fallbackCandidates.map(profile => (
+                  <button key={profile.id} onClick={() => addFallback(profile.id)} disabled={updatePolicy.isPending}
+                    className="rounded-full border border-dashed border-border px-2.5 py-1 text-[11px] text-secondary hover:border-accent/40 hover:text-accent">
+                    + {profile.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {profiles.length <= 1 && (
+              <div className="text-[11px] text-muted/70">再新增一条 AI 配置后才可选择备用。</div>
+            )}
+          </div>
+        )}
+      </Card>
+
       <div className="grid gap-5 lg:grid-cols-[260px,1fr]">
         <Card icon={Settings2} title="配置列表" right={
           <button onClick={() => { setEditingId(null); setForm(EMPTY_FORM); setTestResult(null) }}

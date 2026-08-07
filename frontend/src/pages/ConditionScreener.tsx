@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Loader2, ListFilter, X } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { AiExecutionMetaBadge } from '@/components/AiExecutionMetaBadge'
+import { resolveEntryProfile } from '@/lib/aiProfile'
 import {
   api,
+  type AiExecutionMeta,
   type ScreenerCondition,
   type ScreenerFieldSpec,
   type ScreenerOrderBy,
@@ -52,6 +57,10 @@ export function ConditionScreener() {
   const [queryLoading, setQueryLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerQueryResponse | null>(null)
+  // P3: nl_screener 入口 profile 选择 + 执行元信息(ai_meta 全部 optional,旧响应兼容)
+  const [profileId, setProfileId] = useState<string>()
+  const [nlMeta, setNlMeta] = useState<AiExecutionMeta | null>(null)
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
 
   useEffect(() => {
     let active = true
@@ -105,8 +114,12 @@ export function ConditionScreener() {
     if (!text || nlLoading) return
     setNlLoading(true)
     setError(null)
+    setNlMeta(null)
     try {
-      const parsed = await api.screenerNlParse(text)
+      const resolvedProfileId =
+        resolveEntryProfile('nl_screener', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '') || profileId
+      const parsed = await api.screenerNlParse(text, resolvedProfileId || undefined)
+      setNlMeta(parsed.ai_meta ?? null)
       const recognized = (parsed.recognized ?? []).filter(condition => condition.field && condition.op)
       setConditions(previous => {
         const existing = new Set(previous.map(conditionKey))
@@ -160,7 +173,10 @@ export function ConditionScreener() {
             <ListFilter className="h-4 w-4 text-accent" />
             自然语言辅助填充
           </h2>
-          <span className="text-[11px] text-muted">仅解析填充，不会自动执行</span>
+          <div className="flex items-center gap-2">
+            <AiProviderSelector entry="nl_screener" value={profileId} onChange={setProfileId} compact />
+            <span className="text-[11px] text-muted">仅解析填充，不会自动执行</span>
+          </div>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <label className="sr-only" htmlFor="condition-nl-input">自然语言条件</label>
@@ -183,7 +199,10 @@ export function ConditionScreener() {
             解析填充
           </button>
         </div>
-        <div className="text-right text-[11px] text-muted">{nlText.length}/500</div>
+        <div className="flex items-center justify-between gap-2 text-right text-[11px] text-muted">
+          <AiExecutionMetaBadge meta={nlMeta} />
+          <span className="ml-auto">{nlText.length}/500</span>
+        </div>
         {unresolved.length > 0 && (
           <div className="space-y-1 rounded-input border border-warning/30 bg-warning/5 p-2 text-xs" aria-live="polite">
             <div className="font-medium text-warning">有未识别条件，确认或移除后才能执行：</div>

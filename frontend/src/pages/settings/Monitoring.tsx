@@ -41,6 +41,7 @@ const EXTRA_WEBHOOK_CHANNELS = [
   { id: 'dingtalk', name: '钉钉', hint: '群机器人' },
   { id: 'wecom', name: '企微', hint: '群机器人' },
   { id: 'meow', name: 'MeoW', hint: '个人推送' },
+  { id: 'pushplus', name: 'PushPlus', hint: '监控告警与复盘报告微信推送' },
 ]
 
 // ===== 导出为 Panel 组件 (由 Settings.tsx 嵌入) =====
@@ -78,7 +79,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [feishuSecretDraft, setFeishuSecretDraft] = useState(feishuWebhookSecret)
   const [feishuError, setFeishuError] = useState('')
   const [extraOpen, setExtraOpen] = useState('')
-  const [extraDrafts, setExtraDrafts] = useState<Record<string, { url: string; secret: string; nickname: string }>>({})
+  const [extraDrafts, setExtraDrafts] = useState<Record<string, { url: string; secret: string; nickname: string; token: string; clear_token: boolean }>>({})
   const [extraErrors, setExtraErrors] = useState<Record<string, string>>({})
   // 飞书渠道配置区展开态 (推送通知卡片内)
   const [channelOpen, setChannelOpen] = useState(false)
@@ -94,6 +95,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         url: cfg.url ?? '',
         secret: cfg.secret ?? '',
         nickname: cfg.nickname ?? '',
+        token: cfg.token ?? '',
+        clear_token: false,
       }]
     })))
   }, [prefs?.webhook_channels])
@@ -172,27 +175,32 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   }, [feishuDraft, feishuSecretDraft, saveFeishuWebhook])
 
   const saveWebhookChannel = useMutation({
-    mutationFn: ({ channel, config }: { channel: string; config: { url?: string; secret?: string; nickname?: string } }) =>
+    mutationFn: ({ channel, config }: { channel: string; config: { url?: string; secret?: string; nickname?: string; token?: string; clear_token?: boolean } }) =>
       api.updateWebhookChannel(channel, config),
     onSuccess: (_data, vars) => {
       setExtraErrors(e => ({ ...e, [vars.channel]: '' }))
       toast('Webhook 通道已保存', 'success')
       qc.invalidateQueries({ queryKey: QK.preferences })
     },
-    onError: (err: any, vars) => setExtraErrors(e => ({ ...e, [vars.channel]: String(err?.message ?? '保存失败') })),
+    onError: (err: unknown, vars) => setExtraErrors(e => ({ ...e, [vars.channel]: String((err as Error)?.message ?? '保存失败') })),
   })
 
-  const updateExtraDraft = useCallback((channel: string, patch: Partial<{ url: string; secret: string; nickname: string }>) => {
-    setExtraDrafts(d => ({ ...d, [channel]: { ...(d[channel] ?? { url: '', secret: '', nickname: '' }), ...patch } }))
+  const updateExtraDraft = useCallback((channel: string, patch: Partial<{ url: string; secret: string; nickname: string; token: string; clear_token: boolean }>) => {
+    setExtraDrafts(d => ({ ...d, [channel]: { ...(d[channel] ?? { url: '', secret: '', nickname: '', token: '', clear_token: false }), ...patch } }))
   }, [])
 
   const submitExtra = useCallback((channel: string) => {
-    const draft = extraDrafts[channel] ?? { url: '', secret: '', nickname: '' }
+    const draft = extraDrafts[channel] ?? { url: '', secret: '', nickname: '', token: '', clear_token: false }
     if (channel === 'meow' && !draft.nickname.trim()) {
       setExtraErrors(e => ({ ...e, [channel]: 'MeoW 需填写昵称' }))
       return
     }
-    if (channel !== 'meow' && draft.url.trim() && !draft.url.trim().startsWith('http')) {
+    if (channel === 'pushplus') {
+      // PushPlus: token 非空则保存, clear_token=true 则清除
+      saveWebhookChannel.mutate({ channel, config: { token: draft.token, clear_token: draft.clear_token } })
+      return
+    }
+    if (draft.url.trim() && !draft.url.trim().startsWith('http')) {
       setExtraErrors(e => ({ ...e, [channel]: 'Webhook 地址需以 http/https 开头' }))
       return
     }
@@ -532,8 +540,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             </div>
 
             {EXTRA_WEBHOOK_CHANNELS.map(ch => {
-              const draft = extraDrafts[ch.id] ?? { url: '', secret: '', nickname: '' }
-              const configured = ch.id === 'meow' ? !!draft.nickname : !!draft.url
+              const draft = extraDrafts[ch.id] ?? { url: '', secret: '', nickname: '', token: '', clear_token: false }
+              const ppCfg = prefs?.webhook_channels?.pushplus
+              const configured = ch.id === 'meow' ? !!draft.nickname
+                : ch.id === 'pushplus' ? !!(ppCfg?.configured ?? false)
+                : !!draft.url
+              const ppMasked = ch.id === 'pushplus' ? (ppCfg?.token_masked ?? '') : ''
               const opened = extraOpen === ch.id
               const extraError = extraErrors[ch.id] ?? ''
               return (
@@ -565,6 +577,31 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                           className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground focus:outline-none focus:border-accent/50"
                         />
                       </label>
+                    ) : ch.id === 'pushplus' ? (
+                      <>
+                        <label className="block space-y-1.5">
+                          <span className="text-[11px] text-muted">Token</span>
+                          <input
+                            type="password"
+                            value={draft.token}
+                            onChange={e => updateExtraDraft(ch.id, { token: e.target.value, clear_token: false })}
+                            placeholder={ppMasked ? `当前 ${ppMasked}（留空保留，填写则覆盖）` : 'PushPlus Token'}
+                            className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                          />
+                        </label>
+                        <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+                          配置后可用于监控告警；是否接收每日复盘需在复盘页单独勾选。
+                        </p>
+                        {configured && (
+                          <button
+                            onClick={() => saveWebhookChannel.mutate({ channel: ch.id, config: { token: '', clear_token: true } })}
+                            disabled={saveWebhookChannel.isPending}
+                            className="mt-2 px-2.5 py-1 rounded-btn border border-border text-[11px] text-danger disabled:opacity-50 cursor-pointer hover:bg-danger/10 transition-colors"
+                          >
+                            清除 Token
+                          </button>
+                        )}
+                      </>
                     ) : (
                       <>
                         <label className="block space-y-1.5">

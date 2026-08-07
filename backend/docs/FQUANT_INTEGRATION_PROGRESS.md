@@ -355,6 +355,7 @@ PG / HTTP
 | 2026-07-02 | 2 | 完成 service 层 7/7 解耦 | 端到端 + tickflow 回归 ✅ |
 | 2026-07-02 | 6 | 完成 `fquant_local` 本地磁盘模式工作区实现 | 71 tests + 真盘 smoke ✅ |
 | 2026-07-02 | — | 撰写本进度文档 | — |
+| 2026-08-06 | 跨域校对 | PA_Agent P4 结构化计划检查与 P5 PushPlus 完成；计划检查的行情输入只读既有 `data_providers`/canonical enriched 路径，PushPlus 仅分发用户已配置的监控告警/复盘报告，均未新增或绕过数据源 | 终审修复后后端全量 1075 tests + `import app.main` + 前端 build + 开发服务/UI smoke ✅ |
 
 ---
 

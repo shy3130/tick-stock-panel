@@ -86,6 +86,7 @@
 | `accounts.py` / `portfolio.py` | 账户资金基数、NAV、敞口与健康度派生快照 | 行情估值仍必须走 `data_providers` |
 | `fhold_client.py` | 只读调用 `fhold-cli --format json` 获取 `../fhold` 真实券商账户/持仓 | 仅持仓事实，不是行情 provider；禁止绕过 CLI 直读 `~/.fhold/fhold.db`；不可用时 fail-soft |
 | `gates.py` / `plans.py` | 五条后端结构红线、用户清单、盘前计划与计划/实际偏差 | 结构红线不可由前端或用户配置关闭 |
+| `plan_check.py` | 默认关闭的两阶段计划检查：Stage1 canonical K 线诊断 → 程序门禁 → Stage2 用户计划审查；输出 append-only artifact 与 trace | 只读已保存计划；程序门禁只可保持或降级；AI 不得输出订单/方向/建议价格/执行动作；不得写 `trade_events` 或进入 screener/backtest/monitor |
 | `red_flags.py` / `red_flag_webhook.py` | 放宽止损、亏损加仓、绕门、审计断链、期限超限、仓位超限、门禁膨胀（global 分组）检测；可选去重 Webhook | 红旗与盈亏无关；推送失败不得阻断事实落盘 |
 | `review_job.py` | L0/L1/L2 状态驱动盘后归因（L0 零 AI 调用；L1 按事件数去重） | AI 未配置走 `blocked_by_dependency`，不得中断调度 |
 | `proposals.py` / `autopsy.py` | AI 四分类归因（12 不一致模式 rubric）、带反证条件的策略变更提案与人工审批状态机；疑似亏损后放宽自动打 `relaxationAfterLoss` | 单笔结果不自动改策略；AI 不能替代人工批准 |
@@ -99,6 +100,7 @@
 | `backend/docs/FQUANT_PROVIDER_DESIGN.md` | 846 行设计稿（三源实测 + 架构） |
 | `backend/docs/FQUANT_PROVIDER.md` | 旧 PoC 说明（已被 v2 覆盖，仅供回溯） |
 | `backend/docs/YMOS_PORTING_PLAN.md` | YMOS 纪律层移植设计、契约与完成进度 |
+| `backend/docs/PA_AGENT_PORTING_PLAN.md` | PA_Agent 工程机制移植总账、决策门、已交付边界与明确暂缓项 |
 | `README.md` | 用户向快速开始；末尾有"本地开发与数据源"开发者附录 |
 
 ### 测试
@@ -301,6 +303,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-05（红线 2 修订：外部行情从「一刀切禁止」改为「受控外部 fallback」政策——默认关闭、仅补真缺口、provenance 标记、不写 raw/enriched/回测选股输入，catalog minutes/trans 与付费源/券商 SDK 永久豁免；设计见 `backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md`。上一变更：Trading 纪律域 P6 诊断框架）
+**最后更新**：2026-08-06（PA_Agent P4 结构化计划检查完成：默认关闭、仅审查已保存计划、程序门禁最终权威、SSE 取消/审计、artifact 导出与中性 trace UI；P5 增加 secrets-only PushPlus 可选复盘通知，M21/M25 经复评暂缓。上一变更：受控外部 fallback 政策）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

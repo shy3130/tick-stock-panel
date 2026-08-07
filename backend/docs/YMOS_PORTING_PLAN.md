@@ -251,9 +251,11 @@ health     = normal | attention | critical（敞口超 maxSingleRatio、止损�
 
 核心原则（YMOS）：**把产生决策的任务挪到收盘后，盘中只执行**。UI 上盘中时段计划编辑入口收起为只读。
 
+**PA_Agent 条件式扩展（2026-08-06）**：计划条目可追加 `strategyId/plannedPrice/stopLoss/exitRule/thesisHorizonMonths/invalidation`，旧 JSON 仍兼容。默认关闭的结构化计划检查只读取已保存条目，先做 canonical K 线 preflight 和本节程序门禁，再决定是否调用第二阶段 AI 审查；程序门禁有最终权威，AI 不能升级结果。检查只产生独立 append-only analysis artifact/trace，不写 `trade_events.jsonl` 或 `decision_audit.jsonl`，也不改变生命周期状态。
+
 ### 5.3 前端
 
-- 交易计划台页：盘前计划编辑 + 盘中执行勾选 + 盘后偏差表。
+- 交易计划台页：盘前计划编辑 + 盘中执行勾选 + 盘后偏差表；可显式开启只读的结构化计划检查，以中性文案展示数据充分性、审查项和可审计 trace，不展示交易方向。
 - 买卖决策台页：每个动作类型一组门禁（结构红线自动校验结果 + 用户规则勾选），全绿才允许提交；提交即走 §3 事件流 + 审计流。
 
 ### 5.4 验收
@@ -407,7 +409,7 @@ health     = normal | attention | critical（敞口超 maxSingleRatio、止损�
 |---|---|---|---|
 | P0 交易事件流+生命周期+审计 | ✅ 完成 | 2026-08-04 | `services/trading/` + `api/trading.py`,审计读写并入 store.py 无独立 audit.py |
 | P1 账户+组合快照+持仓页 | ✅ 完成 | 2026-08-04 | `accounts.py` + `portfolio.py` + `fhold_client.py`，组合快照含 fhold 真实券商持仓与 fail-soft 降级；前端持仓页已接入 |
-| P2 门禁+计划台 | ✅ 完成 | 2026-08-04 | `gates.py` 五条后端结构红线 + `plans.py` CRUD/deviation（支持 `replace:true` 全量删除）+ 决策台/计划台前端 |
+| P2 门禁+计划台 | ✅ 完成（2026-08-06 增强） | 2026-08-04 | `gates.py` 五条后端结构红线 + `plans.py` CRUD/deviation（支持 `replace:true` 全量删除）+ 决策台/计划台前端；后续增加默认关闭的两阶段计划检查，保持门禁最终权威且不写交易事实流 |
 | P3 红旗+复盘增强 | ✅ 完成 | 2026-08-04 | 三条机械红旗+审计断链、按读取实时计算、AI 四分类归因、Review 红旗分区、可选 `TRADING_RED_FLAG_WEBHOOK_URL` 去重推送 |
 | P4 策略内核 | ✅ 完成 | 2026-08-04 | 策略 profile/机械体检、回测 `cause_tag`、变更提案状态机与设置页审批/体检 UI |
 | P5 收尾 | ✅ 完成 | 2026-08-04 | 监控 Webhook + 红旗 Webhook、统一 AppError、README、`scripts/test_trading_lifecycle.py` E2E 冒烟 |

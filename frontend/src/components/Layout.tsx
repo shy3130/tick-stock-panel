@@ -39,6 +39,7 @@ import {
   RadioTower,
   CheckCircle2,
   BookOpenCheck,
+  BookOpen,
   NotebookPen,
   Bot,
   Eye,
@@ -496,6 +497,20 @@ export function Layout() {
         </div>
 
         <div className="border-t border-border px-2 py-3 space-y-0.5 shrink-0">
+          <NavLink
+            to="/guide"
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-3 px-3 py-2 rounded-btn text-sm transition-colors duration-150 ease-smooth',
+                isActive
+                  ? 'bg-elevated text-foreground font-medium'
+                  : 'text-foreground/80 hover:bg-elevated hover:text-foreground',
+              )
+            }
+          >
+            <BookOpen className="h-4 w-4 shrink-0" />
+            <span>功能说明</span>
+          </NavLink>
           <NavLink
             to="/settings"
             className={({ isActive }) =>

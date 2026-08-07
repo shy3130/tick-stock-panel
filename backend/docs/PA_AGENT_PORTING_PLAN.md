@@ -1,7 +1,7 @@
 # PA_Agent 可移植能力方案
 
-> 日期：2026-08-06  
-> 状态：实施中；P0-P2 已完成，P3 实施中，P4 需产品决策门批准  
+> 日期：2026-08-07  
+> 状态：约定范围已完成；P0-P4 与 P5 M15-M19 已交付，M20/M22 明确排除，M21/M25 经复评暂缓，M23/M24 由既有能力覆盖  
 > 源项目：`../PA_Agent`  
 > 目标项目：`tickflow-stock-panel`  
 > 目标读者：tickflow 后端、前端、数据与 AI 功能维护者  
@@ -43,11 +43,11 @@ flowchart LR
 | P0 安全与公共契约 | ✅ 已完成 | 日志密钥脱敏；`AIUsage`/统一错误/attempt/request/cancellation；artifact/trace v1；敏感字段只留摘要与 hash | `backend/app/log_redaction.py`、`backend/app/errors.py`、`backend/app/services/ai_structured/` |
 | P1 结构化 AI 运行时 | ✅ 已完成 | JSON fence/语法/schema/不变量校验；分类限次重试；attempt audit/usage；迁移自然语言选股、策略体检与交易归因 | `backend/app/services/ai_structured/`、`nl_screener.py`、`api/strategy_profile.py`、`services/trading/autopsy.py` |
 | P2 K 线分析上下文 | ✅ 已完成 | `KlineAnalysisFrame`、Polars 特征、形成中 K 线排除、preflight、Prompt 分层预算；接入个股分析并保持 Markdown/SSE 展示 | `backend/app/services/analysis_context.py`、`stock_analyzer.py`、`api/stock_analysis.py` |
-| P3 profile fallback 与缓存 | 🚧 实施中 | 显式 allowlist fallback、内存健康态、usage/cache 可观测、设置页开关与顺序 | 见 P3 交付后更新 |
-| P4 两阶段分析 | ⏸️ 未启动 | 必须先通过 Gate C；不得进入选股、回测、监控、下单或 trade event | — |
-| P5 记录、通知和可靠性 | ⏳ 未启动 | M15-M21/M25 按依赖与实际需求推进 | — |
+| P3 profile fallback 与缓存 | ✅ 已完成 | 显式 allowlist fallback（默认关闭）、内存健康态、provider 原生 usage/cache 聚合、四入口预算上限、设置页备用顺序与实际 profile/usage 展示 | `ai_provider.py`、`ai_routing.py`、`ai_budgets.py`、`ai_usage_snapshot.py`、`frontend/src/components/AiExecutionMetaBadge.tsx` |
+| P4 两阶段分析 | ✅ 已完成（Gate C 条件全部落实） | Stage1 诊断 → 程序门禁 → Stage2 计划审查；仅检查已保存计划，门禁只可保持或降级；默认关闭；SSE 进度/取消、append-only artifact、JSON/Markdown 导出、列表式 trace UI | `services/trading/plan_check.py`、`api/trading_plans.py`、`frontend/src/components/analysis/DecisionTrace.tsx`、`frontend/src/pages/Trading.tsx` |
+| P5 记录、通知和可靠性 | ✅ 已完成约定范围 | M15/M16 append-only artifact、失败队列和纯重放计划；M17 飞书报告卡片；M18 PushPlus 可选复盘通道；M19 受控 HTTP 可靠性。M21/M25 经复评暂缓，不为追求完整移植扩张主链路 | `analysis_artifacts.py`、`webhook_adapter.py`、`preferences.py`、`sina_tencent_client.py` |
 
-2026-08-06 验证基线：P0-P2 新增及受影响入口定向回归 `110 passed`；完整后端回归与前端构建在 P3 合并后统一执行。关闭 P3+ 开关时，P0-P2 不改变原有产品入口和数据主链路。
+2026-08-06 验证基线：终审修复后后端全量回归 `1075 passed`；前端 `npm run build` 通过；后端 `import app.main` 通过；真实开发服务 `/health` 返回 `status=ok`；浏览器验证计划台默认关闭文案与 PushPlus Token 配置入口，页面无 console/error/network 诊断。P3 fallback、P4 计划检查均默认关闭；M19 只强化既有受控适配器，不增加数据源，不写 canonical/enriched 数据。
 
 ## 2. 调研基线
 
@@ -180,6 +180,38 @@ PA_Agent 的核心模块复杂度很高，尤其是 `PromptAssembler`、`JsonVal
 | M23 | EMA20/ATR14 增量算法 | 低 | 低 | 低 | 无需迁移，已有覆盖 |
 | M24 | 自由追问会话 | 低 | 低 | 低 | 无需迁移，tickflow 已更完整 |
 | M25 | 跨轮连续性与增量分析 | 中高 | 中高 | 中高 | M16 后条件式迁移 |
+
+### 4.1 最终处置账本
+
+> “暂缓/排除/已有覆盖”是多 Agent 评估后的明确产品决策，不属于未完成实现；若需求或上游契约变化，必须重新通过对应决策门。
+
+| ID | 最终处置 | 当前证据 |
+|---|---|---|
+| M1 | ✅ 已交付 | `app/log_redaction.py` |
+| M2 | ✅ 已交付 | `services/ai_structured/runtime.py` |
+| M3 | ✅ 已交付 | `services/ai_structured/parser.py`、`retry.py` |
+| M4 | ✅ 已交付 | `services/ai_structured/immutable.py` |
+| M5 | ✅ 已交付，默认关闭 | `services/ai_routing.py`、AI 设置页 |
+| M6 | ✅ 已交付 | `services/analysis_context.py` |
+| M7 | ✅ 已交付 | `services/analysis_context.py` 的 Polars 特征行 |
+| M8 | ✅ 已交付 | `assemble_prompt()`、`ai_budgets.py` |
+| M9 | ✅ 已交付 | provider 原生 usage/cache 聚合、`ai_usage_snapshot.py` |
+| M10 | ✅ 已交付 | `preflight_analysis()` |
+| M11 | ✅ 已交付，默认关闭 | `services/trading/plan_check.py` 两阶段计划检查 |
+| M12 | ✅ 已交付 | `AnalysisTraceNode`、trace DAG 校验 |
+| M13 | ✅ 已交付 | `frontend/src/components/analysis/DecisionTrace.tsx` |
+| M14 | ✅ 已交付 | cancellation token、attempt registry、进度/timeout/watchdog |
+| M15 | ✅ 已交付 | `analysis_artifacts.py` 失败队列与纯重放计划 |
+| M16 | ✅ 已交付 | append-only analysis artifact/sidecar |
+| M17 | ✅ 已交付 | 飞书报告白名单卡片 |
+| M18 | ✅ 已交付，可选 | PushPlus 固定 host 适配、secrets-only Token、设置与复盘 UI |
+| M19 | ✅ 已交付 | 受控 HTTP single-flight/cache/retry/backoff/circuit breaker |
+| M20 | ❌ 明确不迁移 | 多 Host/TLS 指纹轮换不符合服务条款与项目安全边界 |
+| M21 | ⏸ 经复评暂缓 | canonical enriched 口径已稳定，暂无查询级复权的明确场景 |
+| M22 | ❌ 明确不迁移 | 不引入 PA_Agent 多公网行情适配器，继续遵守本地 provider 主链路 |
+| M23 | ♻️ 既有能力覆盖 | 指标流水线已有 EMA/ATR 批量计算，无需复制增量算法 |
+| M24 | ♻️ 既有能力覆盖 | tickflow Agent/分析会话能力已更完整 |
+| M25 | ⏸ 经复评暂缓 | 跨日论点追踪与失效/重放语义未形成产品契约 |
 
 ## 5. M1：日志密钥脱敏
 
@@ -1012,9 +1044,18 @@ flowchart TD
 - cooldown 和取消行为正确；
 - 不缓存敏感完整 prompt。
 
+P3 完成记录（2026-08-06）：
+
+- 非流式入口（自然语言选股、策略体检、交易归因）返回 additive `ai_meta`；实际 profile、fallback 及 provider 原生 usage 可见，旧业务字段保留。
+- fallback 仅在用户开启 allowlist 后，对 provider/quota/auth/timeout 等可判定故障按顺序尝试；取消和输出校验错误不触发切换。
+- 缓存仅保留方法论文档的安全内容与 provider 返回的 `cached_prompt_tokens` 计数；不缓存完整 prompt、凭据或账户/交易数据。
+- 四入口 completion/context 预算由 `ai_budgets.py` 集中限制，调用方只能向下收缩。
+
 ### P4：实验性两阶段分析
 
 前置：P0-P3 稳定，且产品明确接受“结构化个股分析/计划检查”入口。
+
+Gate C 已于 2026-08-06 通过多 Agent 条件式决策：架构与安全评估判定现有 P0-P3 基座足以隔离实现；产品仲裁判定真实存在“计划写入后、执行前”的质量检查空档；可测试性与 UX 的 defer 意见均源于语义误读风险，而非技术缺口。实施必须吸收其约束：`proceed` 只表示输入与前置条件充分，UI 使用中性文案，不呈现为买入/执行信号；程序门禁只能保持或降级，模型不能升级；空计划或关键输入缺失 fail-closed；M13 使用列表式 trace，不复制 PA_Agent 的交易终态图或动画。
 
 任务：
 
@@ -1034,6 +1075,13 @@ flowchart TD
 - 不写 trade event；
 - 全链路可取消、可审计；失败重放在 P5 的 M15 交付后再作为增强验收。
 
+P4 当前交付（2026-08-06）：
+
+- 新增 `services/trading/plan_check.py`：Stage1 只诊断 canonical 日 K 事实，程序门禁复用 `trading/gates.py` 与 strategy profile；只有门禁为 `proceed` 才运行 Stage2，且 Stage2 schema 不含订单、方向、建议价格或执行动作。
+- 计划条目以 additive 字段补齐策略、计划价、止损、退出规则、期限和失效条件；旧计划仍可读取。检查入口只接受已持久化的 `date + entry_id`，不读取前端临时文本。
+- 新增默认关闭的 `structured_plan_check_enabled` 开关、独立 AI profile 选择、SSE 进度与取消、attempt/result/export API。取消、失败和成功均使用统一 artifact；trace DAG 与 locked 节点由程序生成和校验。
+- 前端计划台使用中性文案显示数据充分性、诊断、审查项和可审计决策链；`proceed` 不直接展示为交易建议。JSON/Markdown 导出只读取结构化白名单字段并固定附带免责声明。
+
 ### P5：记录、通知和可靠性
 
 任务：
@@ -1046,6 +1094,15 @@ flowchart TD
 6. 评估 M21 查询级复权。
 7. M16 稳定后，按实际需求实施 M25 跨轮连续性与增量分析。
 
+P5 当前交付（2026-08-06）：
+
+- M15/M16：`analysis_artifacts.py` 将结构化结果安全投影为 append-only artifact；失败副本独立、索引只追加、重放计划只生成新 attempt/parent 关联并强制刷新 `data_as_of`，不执行 AI 或写交易事件。
+- M17：`build_analysis_card_payload()` 只读取报告白名单字段；账户、持仓与完整流水一律忽略，不阻断既有 webhook。
+- M18：复评结论为“值得作为严格可选的低风险通知通道”。PushPlus 用于用户已配置渠道的监控告警，并可在复盘页单独勾选接收已生成报告；固定 `https://www.pushplus.plus/send`、`trust_env=False`、5 秒超时、失败静默降级。Token 只存 `secrets.json`（0600），API/UI 只返回掩码；不接收自定义 URL，不进入分析、交易或行情输入链路。
+- M19：既有 Sina/Tencent 适配器增加 host allowlist、`trust_env=False`、限流、短 TTL cache、single-flight、有界重试/退避与熔断。它不启用外部 fallback，真正接线仍须遵守受控 fallback 契约。
+- M21（查询级复权）暂缓：当前 canonical enriched 复权口径稳定，新增查询级 `hfq/qfq` 会扩大缓存键、跨市场口径和回测一致性验证面，但没有已确认的用户场景。
+- M25（跨轮连续性/增量分析）暂缓：当前产品没有“同一论点跨日追踪”的明确入口；在 parent chain、失效策略与 stale replay 的用户语义确定前，不引入隐式上下文或 token 成本。
+
 验收：
 
 - 失败不会丢失或伪装成功；
@@ -1053,7 +1110,7 @@ flowchart TD
 - 通知不泄露敏感信息；
 - external fallback 不污染 canonical 数据；
 - 关闭所有开关时行为与迁移前一致。
-- M25 连续性分析生成新 artifact 且保留 parent chain，失效时强制回到全量分析。
+- 若未来重新开启 M25，必须生成新 artifact、保留 parent chain，并在连续性失效时强制回到全量分析；当前不启用。
 
 ## 24. 测试与验证策略
 
@@ -1257,6 +1314,14 @@ flowchart TD
 - 交易门禁、策略 profile 和分析 trace 是否能用一套领域词汇？
 - 是否确认该功能不进入自动选股/监控/下单？
 
+2026-08-06 决策记录：5 个独立评估切片（架构、产品风险、安全、UX、可测试性）加 1 次产品仲裁完成。架构、安全与产品评估支持条件式 GO；UX/可测试性建议 defer 的核心理由均为本 Gate 尚未给出可执行语义。产品仲裁接受用户授权的多 Agent 决策方式并解除 Gate C，统一边界如下：
+
+1. `proceed/wait/unknown` 只作为机器门禁状态；UI 分别表述为“信息充分，已生成检查 / 暂缓检查 / 信息不足”，不使用交易方向或执行措辞；
+2. Stage2 只检查用户已保存的计划，不包含订单、方向、建议价格或执行动作字段；
+3. 程序门禁拥有最终权威，只能保持或把结果降级为 `wait/unknown`，模型不能把程序结果升级；
+4. 功能默认关闭、每次由用户显式触发；不写 trade event，不进入 screener/backtest/monitor；
+5. M13 采用可访问的列表式 trace，程序事实节点锁定；导出物保留数据截止时间、规则版本、实际 profile 与免责声明。
+
 任何 Gate 不通过，停在当前阶段，不为追求“完整移植”继续扩大范围。
 
 ## 32. 源码证据索引
@@ -1303,6 +1368,10 @@ flowchart TD
 - SSE：`backend/app/api/intraday.py`
 - 受控外部 fallback：`backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md`
 - YMOS：`backend/docs/YMOS_PORTING_PLAN.md`
+- 结构化计划检查：`backend/app/services/trading/plan_check.py`
+- 计划检查 API：`backend/app/api/trading_plans.py`
+- 决策链 UI：`frontend/src/components/analysis/DecisionTrace.tsx`
+- PushPlus 安全适配：`backend/app/services/webhook_adapter.py`
 
 ## 33. 最终建议
 
@@ -1314,4 +1383,4 @@ PA_Agent 对 tickflow 最有价值的不是它的桌面端、七个数据源或�
 4. 用紧凑 K 线特征和分层 Prompt 控制 token 与事实密度；
 5. 对外部依赖实施单飞、退避、熔断、取消和失败重放。
 
-建议先完成 P0-P2。只有在这些基础机制稳定、且产品明确需要的情况下，才进入 P3/P4 的 fallback 和两阶段分析。不要以“代码已经存在”为理由迁移 PA_Agent 的业务形态；是否迁移应由 tickflow 的产品价值、数据一致性和可审计性决定。
+P0-P4 与 P5 的 M15-M19 已按上述边界交付。后续不再以“完整移植”为目标：M21 查询级复权与 M25 连续性分析保持暂缓，只有出现明确用户场景、口径契约和可验证收益时才重新过决策门；PA_Agent 的桌面 GUI、多公网数据源、自动交易/荐股语义与专用连接器继续明确排除。

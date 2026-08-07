@@ -18,12 +18,16 @@ import {
 } from 'lucide-react'
 
 import {
+  api,
   tradingCreateProposal, tradingListProposals, tradingUpdateProposal,
   strategyGetProfile, strategyPutProfile, strategyValidateProfile,
-  type StrategyProfile, type StrategyProfileCheck,
+  type AiExecutionMeta, type StrategyProfile, type StrategyProfileCheck,
 } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { resolveEntryProfile } from '@/lib/aiProfile'
 import { toast } from '@/components/Toast'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { AiExecutionMetaBadge } from '@/components/AiExecutionMetaBadge'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 
 // ===== 提案状态与合法迁移(与 backend services/trading/proposals.py 一致)=====
@@ -473,11 +477,15 @@ function StrategyCheckSection() {
   const [busy, setBusy] = useState<'load' | 'save' | 'validate' | 'ai' | null>(null)
   const [aiReport, setAiReport] = useState<string | undefined>(undefined)
   const [aiError, setAiError] = useState('')
+  // P3: strategy_profile_deep_review 入口 profile 选择 + 执行元信息(optional,旧响应兼容)
+  const [profileId, setProfileId] = useState<string>()
+  const [aiMeta, setAiMeta] = useState<AiExecutionMeta | null>(null)
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
 
   const load = async () => {
     const id = strategyId.trim()
     if (!id || busy) return
-    setBusy('load'); setProblems([]); setChecks(null); setAiReport(undefined); setAiError('')
+    setBusy('load'); setProblems([]); setChecks(null); setAiReport(undefined); setAiError(''); setAiMeta(null)
     try {
       const res = await strategyGetProfile(id)
       setDraft(toDraft(res?.profile))
@@ -546,7 +554,7 @@ function StrategyCheckSection() {
   const validate = async () => {
     const id = loadedId ?? strategyId.trim()
     if (!id || busy) return
-    setBusy('validate'); setAiReport(undefined); setAiError('')
+    setBusy('validate'); setAiReport(undefined); setAiError(''); setAiMeta(null)
     try {
       const res = await strategyValidateProfile(id)
       setChecks(res.checks)
@@ -558,11 +566,14 @@ function StrategyCheckSection() {
   const validateAi = async () => {
     const id = loadedId ?? strategyId.trim()
     if (!id || busy) return
-    setBusy('ai'); setAiError('')
+    setBusy('ai'); setAiError(''); setAiMeta(null)
     try {
-      const res = await strategyValidateProfile(id, true)
+      const resolvedProfileId =
+        resolveEntryProfile('strategy_profile_deep_review', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '') || profileId
+      const res = await strategyValidateProfile(id, true, resolvedProfileId || undefined)
       setChecks(res.checks)
       setAiReport(res.aiReport ?? '')
+      setAiMeta(res.ai_meta ?? null)
       if (res.aiError) setAiError(res.aiError)
     } catch { /* request() 已 toast */ } finally {
       setBusy(null)
@@ -619,6 +630,7 @@ function StrategyCheckSection() {
             {busy === 'ai' ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
             AI 深度体检
           </button>
+          <AiProviderSelector entry="strategy_profile_deep_review" value={profileId} onChange={setProfileId} compact />
           {loadedId && (
             <span className="font-mono text-[10px] text-muted">当前:{loadedId}</span>
           )}
@@ -844,6 +856,7 @@ function StrategyCheckSection() {
             <div className="flex items-center gap-1.5 border-b border-border px-3.5 py-2 text-[11px] font-medium text-foreground">
               <Sparkles className="h-3 w-3 text-accent" />
               AI 深度体检
+              <AiExecutionMetaBadge meta={aiMeta} className="ml-auto font-normal" />
             </div>
             {aiReport ? (
               <div className="prose prose-invert max-w-none px-3.5 py-3">

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { api, type PriceLevel, type LevelType } from './api'
+import { api, type AiExecutionMeta, type PriceLevel, type LevelType } from './api'
 
 /**
  * AI 个股分析 —— 全局任务/报告 store(与 aiReportStore 解耦、并行存在)。
@@ -26,6 +26,8 @@ export interface ActiveTask {
     summary?: string
     levels?: Record<LevelType, PriceLevel[]>
     close?: number | null
+    /** P3: 流 meta 可携带执行元信息;流式 provider 不上报 usage 时缺失 */
+    ai_meta?: AiExecutionMeta | null
   } | null
   createdAt: number
   savedReportId?: string
@@ -195,7 +197,7 @@ async function runStream(id: string, symbol: string, _name: string, focus: strin
       if (!cur) return
       switch (chunk.type) {
         case 'meta':
-          patchTask(id, { meta: { summary: chunk.summary, levels: chunk.levels, close: chunk.close } })
+          patchTask(id, { meta: { summary: chunk.summary, levels: chunk.levels, close: chunk.close, ai_meta: chunk.ai_meta ?? null } })
           break
         case 'delta':
           if (firstDelta) { patchTask(id, { phase: 'streaming' }); firstDelta = false }

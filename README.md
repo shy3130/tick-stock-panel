@@ -17,7 +17,7 @@
 
 <div align="center">
 
-**[快速开始](#-快速开始)** · **[核心功能](#-核心功能)** · **[配置](#️-配置)** · **[路线图](#-路线图)**
+**[快速开始](#-快速开始)** · **[功能指南](./docs/FEATURE_GUIDE.md)** · **[核心功能](#-核心功能)** · **[配置](#️-配置)** · **[路线图](#-路线图)**
 
 </div>
 
@@ -27,7 +27,7 @@
 - 🤖 **多 AI 配置** — 支持 OpenAI 兼容接口 / ACP / Codex CLI profile,可按功能选择
 - 🔌 **自由扩展** — 自有量化项目数据,与内置数据同台分析
 - 🇨🇳 **A 股为主,港股 P1 已接入** — A 股全功能;港股支持单股行情/K线/分析的第一阶段能力
-- 📣 **多通道推送** — 飞书 / 钉钉 / 企微 / MeoW webhook,用于监控告警与复盘推送
+- 📣 **多通道推送** — 飞书 / 钉钉 / 企微 / MeoW webhook + PushPlus,用于监控告警与复盘推送
 
 
 
@@ -243,10 +243,11 @@ git pull
 - **决策审计**:任何买卖动作(含门禁未通过仍确认的绕行)都写入 append-only 审计流(`decision_audit.jsonl`),永不清理;审计断链即告警
 - **机械红旗**:在事件流+审计流上实时检出放宽止损、亏损加仓、绕过门禁、审计断链、期限超限（对照策略声明 horizon）、仓位超限（对照账户/策略上限）与门禁膨胀（规则清单>15 条全局提示）；赚钱的违规也照记。设置 `TRADING_RED_FLAG_WEBHOOK_URL` 后每条新红旗去重推送一次
 - **策略内核治理**:策略 profile 声明失效信号/风险/期限，可选策略坐标卡 family（价值/成长/趋势/事件/短周期/套利/混合，混合需声明裁判归属）与 playbook（scope/entry/exit）；机械体检 7 项检查（完整性/节奏/期限漂移/剧本声明/混合冲突/自称与行为冲突/提案治理），`validate?ai=true` 追加 AI 深度体检（对照 7 项结构不变量）；回测交易带 `cause_tag`，变更提案必须有反证条件并走人工审批状态机，疑似亏损后放宽规则的提案自动打 `relaxationAfterLoss` 警示
+- **结构化计划检查（默认关闭）**:计划台可对“已保存的单条计划”运行 Stage1 市场诊断 → 程序门禁 → Stage2 计划审查。程序门禁只可保持或降级，AI 不生成订单、方向、建议价格或执行动作；结果含可审计决策链并支持 JSON/Markdown 导出。页面中的“输入完整，可进入审查”仅表示数据与前置条件充分，不代表建议交易
 - **盘后状态驱动归因（L0/L1/L2）**:`POST /api/trading/review/auto-run` 或开启 `tradingAutoReview` 后每交易日 16:45 自动跑——无新红旗/新平仓时 L0 零 AI 调用，有候选时 L1 只对涉及单笔归因且按事件数去重，L2 为用户手动全量；AI 未配置按 `blocked_by_dependency` 降级
 - **统一失败语义**:`AppError` + 7 个标准错误码(`data_incomplete / stale_input / blocked_by_dependency / no_change / kernel_not_ready / ai_output_invalid / ai_provider_error`),API 返回 HTTP 422 + `{"code","detail"}`,前端可据此区分数据前置条件、模型输出无效、provider 故障、需介入与无变化
-- **Webhook**:监控规则命中按 `webhook_enabled/webhook_url` 推送；纪律红旗按环境变量推送。失败只记日志，不阻断告警、事件或审计落盘
-- 前端 `/trading` 提供持仓、单笔生命周期、计划台、账户与桥接规划五个页签；`/review` 增加纪律红旗；设置页增加策略提案与策略体检
+- **Webhook / PushPlus**:监控规则命中按已配置渠道推送；纪律红旗按环境变量推送；每日复盘可选飞书、钉钉、企微、MeoW 或 PushPlus。PushPlus Token 只保存在 `secrets.json` 并通过设置页掩码展示。所有外部推送失败均只记日志，不阻断报告、告警、事件或审计落盘
+- 前端 `/trading` 提供持仓、单笔生命周期、计划台、账户与桥接规划五个页签；计划台可显式开启结构化检查并选择 AI profile；`/review` 增加纪律红旗；设置页增加策略提案、策略体检和复盘通知通道
 
 > 完整机制设计与移植计划见 [`backend/docs/YMOS_PORTING_PLAN.md`](./backend/docs/YMOS_PORTING_PLAN.md)(来源:`fm/YMOS` 投资操作系统 V4)。
 
@@ -302,7 +303,7 @@ FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hktrans.duckdb
 
 ### AI(可选)
 
-用于自然语言生成策略、个股/财务/市场复盘。**所有配置留空即跳过**,不影响核心功能。支持多 profile:
+用于自然语言生成策略、个股/财务/市场复盘，以及用户显式触发的结构化交易计划检查。**所有配置留空即跳过**,不影响核心功能。支持多 profile:
 
 ```ini
 AI_PROVIDER=openai_compat              # openai_compat | acp | codex_cli

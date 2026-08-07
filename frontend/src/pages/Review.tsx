@@ -171,9 +171,9 @@ export function Review() {
     { id: 'dingtalk', name: '钉钉', hint: '群机器人', configured: !!webhookChannels.dingtalk?.url },
     { id: 'wecom', name: '企微', hint: '群机器人', configured: !!webhookChannels.wecom?.url },
     { id: 'meow', name: 'MeoW', hint: '个人推送', configured: !!webhookChannels.meow?.nickname },
+    { id: 'pushplus', name: 'PushPlus', hint: '复盘报告微信推送', configured: !!webhookChannels.pushplus?.configured },
   ]
-  // 推送渠道是独立的顶层偏好(多选), 与定时 / 实时行情无关, 常驻可单独设置
-  // []=不推送, ['feishu']=飞书(微信开发中, 仅占位)
+  // 复盘推送渠道为独立多选；空数组表示不推送，PushPlus 需先在实时监控设置中配置 Token。
   const reviewPushChannels = prefs.data?.review_push_channels ?? []
   // 弹窗内的本地草稿: 开关和时间都在本地改, 点「保存」才真正提交(避免开关一拨就关弹窗)
   const [draft, setDraft] = useState(reviewSched)

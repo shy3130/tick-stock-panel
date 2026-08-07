@@ -32,6 +32,7 @@ const Financials = lazy(() => import('./pages/Financials').then((m) => ({ defaul
 const Optimizer = lazy(() => import('./pages/Optimizer').then((m) => ({ default: m.Optimizer })))
 const Agent = lazy(() => import('./pages/Agent').then((m) => ({ default: m.Agent })))
 const Dev = lazy(() => import('./pages/Dev').then((m) => ({ default: m.Dev })))
+const FeatureGuide = lazy(() => import('./pages/FeatureGuide').then((m) => ({ default: m.FeatureGuide })))
 
 // 懒加载页面占位：渲染在 Layout Outlet 内，不触碰 Layout/OnboardingGuard 结构。
 function PageFallback() {
@@ -147,6 +148,7 @@ export const router = createBrowserRouter([
       { path: 'agent', element: lazyPage(<Agent />) },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
+      { path: 'guide', element: lazyPage(<FeatureGuide />) },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）
       { path: 'dev', element: lazyPage(<Dev />) },
       // 旧路由兼容重定向

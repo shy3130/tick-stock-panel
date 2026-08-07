@@ -7,6 +7,8 @@ import {
 import { cn } from '@/lib/cn'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { AiExecutionMetaBadge } from '@/components/AiExecutionMetaBadge'
+import type { AiExecutionMeta } from '@/lib/api'
 import {
   type ActiveTask, type HistoryReport,
   minimizeDialog, closeDialog, startAnalysis,
@@ -48,6 +50,8 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
   const phase = getPhase(task)
   const content = getContent(task)
   const meta = getMeta(task)
+  // P3: 流 meta.ai_meta(仅活动任务有;历史报告/旧响应缺失时为 null,不渲染)
+  const aiMeta: AiExecutionMeta | null = task && 'meta' in task ? (task.meta?.ai_meta ?? null) : null
   const isHistory = mode === 'history'
   const isWorking = phase === 'loading' || phase === 'streaming'
   const open = !!task && !minimized
@@ -234,6 +238,11 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                 </button>
               )}
             </div>
+            {aiMeta && (
+              <div className="mt-1.5">
+                <AiExecutionMetaBadge meta={aiMeta} />
+              </div>
+            )}
             <p className="mt-1.5 text-[10px] text-muted/50 leading-relaxed">
               {isHistory
                 ? '历史报告为静态记录;修改关注重点后将作为新任务重新生成。报告仅供参考,不构成投资建议。'

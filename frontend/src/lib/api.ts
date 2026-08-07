@@ -420,6 +420,8 @@ export interface ScreenerNlUnrecognized {
 export interface ScreenerNlParseResponse {
   recognized: ScreenerCondition[]
   unrecognized: ScreenerNlUnrecognized[]
+  /** P3: 执行元信息(实际 profile/模型/fallback/usage),旧响应可缺失 */
+  ai_meta?: AiExecutionMeta | null
 }
 
 export interface ScreenerPreset {
@@ -752,6 +754,7 @@ export interface MonitorRule {
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
   sector?: string | null
+  asset_type?: 'stock' | 'etf' | 'index'
   strategy_id?: string | null
   direction: 'entry' | 'exit' | 'both'
   conditions: MonitorCondition[]
@@ -1026,6 +1029,34 @@ export interface AiRoutePolicy {
   fallback_profile_ids: string[]
 }
 
+/**
+ * P3: token 用量 — 原生 prompt-cache 可观测。
+ * 全部 optional;provider 不上报时字段缺失,前端不得展示伪数据(尤其 cached_prompt_tokens)。
+ */
+export interface AiUsageMeta {
+  prompt_tokens?: number
+  cached_prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+}
+
+/**
+ * P3: AI 执行元信息 — 结构化入口(nl_screener / strategy_profile_deep_review / trading_autopsy)
+ * 与个股流 meta 统一携带的 `ai_meta` 对象。全部 optional,旧响应可缺失整个字段。
+ * fallback 默认关闭;开启时仅在 provider/quota/auth/timeout 类故障按序切换。
+ */
+export interface AiExecutionMeta {
+  /** 用户/入口最初选中的 profile */
+  primary_profile_id?: string | null
+  /** 实际执行的 profile(fallback 后与 primary 不同) */
+  profile_id?: string | null
+  fallback_used?: boolean
+  fallback_reason?: string | null
+  provider?: string
+  model?: string
+  usage?: AiUsageMeta | null
+}
+
 export interface AiProfilesResponse {
   profiles: AiProfileMasked[]
   default_id: string
@@ -1073,13 +1104,14 @@ export interface Preferences {
   system_notify_enabled: boolean
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
-  webhook_channels?: Record<string, { url?: string; secret?: string; nickname?: string }>
+  webhook_channels?: Record<string, { url?: string; secret?: string; nickname?: string; token?: string; configured?: boolean; token_masked?: string }>
   webhook_enabled_default?: boolean
   sidebar_index_symbols: string[]
   nav_order: string[]
   nav_hidden: string[]
   screener_auto_run: boolean
   tradingAutoReview: boolean
+  structured_plan_check_enabled?: boolean
 }
 
 // ===== Strategy Alert =====
@@ -1439,7 +1471,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url, secret }),
     }),
-  updateWebhookChannel: (channel: string, config: { url?: string; secret?: string; nickname?: string }) =>
+  updateWebhookChannel: (channel: string, config: { url?: string; secret?: string; nickname?: string; token?: string; clear_token?: boolean }) =>
     request<{ webhook_channels: Preferences['webhook_channels'] }>('/api/settings/preferences/webhook-channel', {
       method: 'PUT',
       body: JSON.stringify({ channel, ...config }),
@@ -1468,6 +1500,11 @@ export const api = {
     request<{ tradingAutoReview: boolean }>('/api/settings/preferences/trading-auto-review', {
       method: 'PUT',
       body: JSON.stringify({ tradingAutoReview: enabled }),
+    }),
+  updateStructuredPlanCheck: (enabled: boolean) =>
+    request<{ structured_plan_check_enabled: boolean }>('/api/settings/preferences/structured-plan-check', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     }),
   updateDepthPollingInterval: (interval: number) =>
     request<{ depth_polling_interval: number }>('/api/settings/preferences/depth-polling-interval', {
@@ -1572,6 +1609,7 @@ export const api = {
       symbol: string
       name?: string
       stock_info?: { name?: string; total_shares?: number; float_shares?: number }
+      asset_type?: 'stock' | 'etf' | 'index'
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'local_disk' | 'tdx_api' | 'live' | 'none'
@@ -2074,6 +2112,8 @@ export const api = {
     close?: number | null
     content?: string
     message?: string
+    /** P3: meta chunk 可带执行元信息;流式 provider 不上报 usage 时缺失,不得展示伪数据 */
+    ai_meta?: AiExecutionMeta | null
   }> {
     const res = await fetch('/api/stock-analysis/analyze', {
       method: 'POST',
@@ -2699,6 +2739,8 @@ export interface AutopsyResult {
   rawResponse: string
   redFlags: RedFlag[]
   ts: string
+  /** P3: 执行元信息(实际 profile/模型/fallback/usage),旧落盘记录可缺失 */
+  ai_meta?: AiExecutionMeta | null
 }
 
 /** 盘后状态驱动归因结果 (POST /api/trading/review/auto-run) */
@@ -2771,6 +2813,13 @@ export interface PlanEntry {
   qty: number | null
   reason: string
   createdAt: string
+  /** P4 additive fields; old saved plans may omit them. */
+  strategyId?: string | null
+  plannedPrice?: number | null
+  stopLoss?: number | null
+  exitRule?: string
+  thesisHorizonMonths?: number | null
+  invalidation?: string
 }
 
 export interface TradePlanDoc {
@@ -2803,6 +2852,83 @@ export interface PlanDeviation {
   planned_but_not_done: PlanDeviationPlanned[]
   done_but_not_planned: PlanDeviationDone[]
   matched: PlanDeviationPlanned[]
+}
+
+export interface AnalysisTraceNode {
+  id: string
+  kind: string
+  label: string
+  status: 'pass' | 'fail' | 'unknown' | 'skipped' | string
+  source_refs: string[]
+  reason?: string | null
+  locked: boolean
+  depends_on: string[]
+}
+
+export interface PlanCheckGate {
+  status: 'proceed' | 'wait' | 'unknown'
+  reasons: string[]
+  missing_inputs: string[]
+  data_as_of: string
+  source: string
+  program_rules_version: string
+}
+
+export interface PlanCheckStage1 {
+  trend: string
+  volatility: string
+  liquidity: string
+  readiness: 'sufficient' | 'insufficient'
+  conflicts: string[]
+  notes: string[]
+}
+
+export interface PlanCheckReview {
+  checks: Array<{ item: string; conclusion: '满足' | '部分满足' | '不满足'; reason: string }>
+  summary: string
+}
+
+export interface PlanCheckResult {
+  status: 'no_action' | 'review_ready'
+  gate: PlanCheckGate
+  stage1: PlanCheckStage1 | null
+  review: PlanCheckReview | null
+  disclaimer: string
+  ai_meta?: AiExecutionMeta | null
+  warnings: string[]
+}
+
+export interface PlanCheckArtifact {
+  id?: string
+  attempt_id: string
+  request_id: string
+  purpose?: string
+  status: 'ok' | 'failed' | 'cancelled'
+  data_as_of?: string | null
+  symbol?: string | null
+  result: PlanCheckResult
+  trace: AnalysisTraceNode[]
+  usage: AiUsageMeta
+  warnings: string[]
+}
+
+export type PlanCheckStreamEvent =
+  | { type: 'meta'; attempt_id: string; request_id: string; date: string; entry_id: string }
+  | { type: 'progress'; kind: string; stage?: string; status?: string; [key: string]: unknown }
+  | ({ type: 'result' } & PlanCheckArtifact)
+  | { type: 'error'; code: string; message: string }
+  | { type: 'done'; attempt_id: string; request_id: string }
+
+export interface PlanCheckSummary {
+  id: string
+  attempt_id: string
+  request_id: string
+  status: string
+  symbol?: string | null
+  market?: string | null
+  profile_id?: string | null
+  created_at?: string | null
+  result_status?: string | null
 }
 
 export interface StrategyProfileInvalidation {
@@ -2857,6 +2983,8 @@ export interface StrategyValidateResult {
   checks: StrategyProfileCheck[]
   aiReport?: string | null
   aiError?: string
+  /** P3: AI 深度体检的执行元信息(实际 profile/模型/fallback/usage),旧响应可缺失 */
+  ai_meta?: AiExecutionMeta | null
 }
 
 // ── 生命周期 (api/trading.py) ──
@@ -2939,8 +3067,9 @@ export function tradingGetTradeRedFlags(id: string) {
   )
 }
 
-export function tradingRunAutopsy(id: string) {
-  return request<AutopsyResult>(`/api/trading/trades/${encodeURIComponent(id)}/autopsy`, {
+export function tradingRunAutopsy(id: string, profileId?: string) {
+  const qs = profileId ? `?${new URLSearchParams({ profile_id: profileId })}` : ''
+  return request<AutopsyResult>(`/api/trading/trades/${encodeURIComponent(id)}/autopsy${qs}`, {
     method: 'POST',
   })
 }
@@ -3007,7 +3136,10 @@ export function tradingGetPlan(date: string) {
   return request<TradePlanDoc>(`/api/trading/plans/${date}`)
 }
 
-export function tradingPutPlan(date: string, payload: { entries: PlanEntry[]; actualNotes?: string }) {
+export function tradingPutPlan(
+  date: string,
+  payload: { entries: PlanEntry[]; actualNotes?: string; replace?: boolean; schemaVersion?: number },
+) {
   return request<TradePlanDoc>(`/api/trading/plans/${date}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
@@ -3016,6 +3148,57 @@ export function tradingPutPlan(date: string, payload: { entries: PlanEntry[]; ac
 
 export function tradingGetPlanDeviation(date: string) {
   return request<PlanDeviation>(`/api/trading/plans/${date}/deviation`)
+}
+
+export async function* tradingCheckPlanStream(
+  date: string,
+  entryId: string,
+  profileId?: string,
+  signal?: AbortSignal,
+): AsyncGenerator<PlanCheckStreamEvent> {
+  const qs = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : ''
+  const res = await fetch(
+    `/api/trading/plans/${encodeURIComponent(date)}/entries/${encodeURIComponent(entryId)}/check${qs}`,
+    { method: 'POST', signal },
+  )
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const body = JSON.parse(await res.text()) as { detail?: string }
+      if (body.detail) detail = body.detail
+    } catch { /* retain status */ }
+    throw new Error(detail)
+  }
+  if (!res.body) throw new Error('计划检查响应无流数据')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      yield JSON.parse(line) as PlanCheckStreamEvent
+    }
+  }
+  if (buffer.trim()) yield JSON.parse(buffer) as PlanCheckStreamEvent
+}
+
+export function tradingListPlanChecks(symbol?: string, limit = 50) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (symbol) params.set('symbol', symbol)
+  return request<{ items: PlanCheckSummary[] }>(`/api/trading/plan-checks?${params}`)
+}
+
+export function tradingGetPlanCheck(attemptId: string) {
+  return request<PlanCheckArtifact>(`/api/trading/plan-checks/${encodeURIComponent(attemptId)}`)
+}
+
+export function tradingPlanCheckExportUrl(attemptId: string, format: 'json' | 'markdown') {
+  return `/api/trading/plan-checks/${encodeURIComponent(attemptId)}/export?format=${format}`
 }
 
 // ── 策略风险声明 (api/strategy_profile.py, prefix=/api/strategies) ──
@@ -3042,9 +3225,13 @@ export function strategyDeleteProfile(id: string) {
   })
 }
 
-export function strategyValidateProfile(id: string, ai = false) {
-  const qs = ai ? '?ai=true' : ''
+export function strategyValidateProfile(id: string, ai = false, profileId?: string) {
+  const params = new URLSearchParams()
+  if (ai) params.set('ai', 'true')
+  // P3: additive — 选中 profile 时传给后端路由;缺省走后端默认/路由策略
+  if (profileId) params.set('profile_id', profileId)
+  const qs = params.toString()
   return request<StrategyValidateResult>(
-    `/api/strategies/${encodeURIComponent(id)}/profile/validate${qs}`,
+    `/api/strategies/${encodeURIComponent(id)}/profile/validate${qs ? `?${qs}` : ''}`,
   )
 }

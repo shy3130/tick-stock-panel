@@ -13,28 +13,37 @@
  *   事件提交 payload={kind,payload,note?,gate?}; 门禁预检未过时展示红线清单,
  *   用户确认后带 gate:{confirmed:true} 重提(绕门留痕)。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Bot, Briefcase, Cable, CalendarDays, FileText, Plus, RefreshCw, Save,
-  ShieldAlert, Trash2, Wallet, type LucideIcon,
+  Bot, Briefcase, Cable, CalendarDays, FileDown, FileText, Plus, RefreshCw, Save,
+  ShieldAlert, ShieldCheck, Square, Trash2, Wallet, type LucideIcon,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { toast } from '@/components/Toast'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { AiExecutionMetaBadge } from '@/components/AiExecutionMetaBadge'
+import { DecisionTrace } from '@/components/analysis/DecisionTrace'
+import { resolveEntryProfile } from '@/lib/aiProfile'
 import { cn } from '@/lib/cn'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import {
+  api,
   tradingAppendEvent,
+  tradingCheckPlanStream,
   tradingEvaluateGates,
   tradingGetAccounts,
   tradingGetAutopsy,
   tradingGetPlan,
+  tradingGetPlanCheck,
   tradingGetPlanDeviation,
   tradingGetPortfolio,
+  tradingListPlanChecks,
   tradingGetTrade,
   tradingListTrades,
   tradingOpenTrade,
+  tradingPlanCheckExportUrl,
   tradingPutAccounts,
   tradingPutPlan,
   tradingRunAutopsy,
@@ -42,6 +51,7 @@ import {
   type AutopsyResult,
   type GateEvaluation,
   type PlanAction,
+  type PlanCheckArtifact,
   type PlanEntry,
   type PortfolioSnapshot,
   type Trade,
@@ -933,13 +943,19 @@ function EventForm({ trade }: { trade: Trade }) {
 function AutopsySection({ tradeId }: { tradeId: string }) {
   const qc = useQueryClient()
   const [requested, setRequested] = useState(false)
+  // P3: trading_autopsy 入口 profile 选择(ai_meta 由响应携带,optional,旧落盘记录兼容)
+  const [profileId, setProfileId] = useState<string>()
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
   const autopsyQuery = useQuery({
     queryKey: ['trading-autopsy', tradeId],
     queryFn: () => tradingGetAutopsy(tradeId),
     enabled: requested,
   })
   const runMut = useMutation({
-    mutationFn: () => tradingRunAutopsy(tradeId),
+    mutationFn: () => tradingRunAutopsy(
+      tradeId,
+      resolveEntryProfile('trading_autopsy', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '') || profileId || undefined,
+    ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['trading-autopsy', tradeId] })
       toast('AI 归因完成', 'success')
@@ -953,6 +969,7 @@ function AutopsySection({ tradeId }: { tradeId: string }) {
       title="AI 归因"
       extra={(
         <div className="flex items-center gap-1.5">
+          <AiProviderSelector entry="trading_autopsy" value={profileId} onChange={setProfileId} compact />
           {requested && data === null && (
             <button
               onClick={() => runMut.mutate()}
@@ -984,6 +1001,7 @@ function AutopsySection({ tradeId }: { tradeId: string }) {
               {data.classification || '未分类'}
             </span>
             <span className="font-mono text-[10px] text-muted">{data.ts}</span>
+            <AiExecutionMetaBadge meta={data.ai_meta} className="ml-auto" />
           </div>
           {data.reasoning && (
             <div>
@@ -1027,6 +1045,34 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
   const qc = useQueryClient()
   const [date, setDate] = useState(todayCompact)
   const planQuery = useQuery({ queryKey: ['trading-plan', date], queryFn: () => tradingGetPlan(date) })
+  const preferencesQuery = useQuery({ queryKey: ['preferences'], queryFn: api.preferences })
+  const aiProfiles = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
+  const featureEnabled = preferencesQuery.data?.structured_plan_check_enabled === true
+  const [profileId, setProfileId] = useState<string>()
+  const [checkingEntryId, setCheckingEntryId] = useState<string | null>(null)
+  const [checkProgress, setCheckProgress] = useState('')
+  const [checkError, setCheckError] = useState('')
+  const [checkArtifact, setCheckArtifact] = useState<PlanCheckArtifact | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const checksQuery = useQuery({
+    queryKey: ['trading-plan-checks'],
+    queryFn: () => tradingListPlanChecks(undefined, 20),
+    enabled: featureEnabled,
+    retry: false,
+  })
+  const toggleFeature = useMutation({
+    mutationFn: (enabled: boolean) => api.updateStructuredPlanCheck(enabled),
+    onSuccess: data => {
+      qc.setQueryData(['preferences'], {
+        ...(preferencesQuery.data ?? {}),
+        structured_plan_check_enabled: data.structured_plan_check_enabled,
+      })
+      if (!data.structured_plan_check_enabled) {
+        abortRef.current?.abort()
+        setCheckArtifact(null)
+      }
+    },
+  })
   const deviationQuery = useQuery({
     queryKey: ['trading-plan-deviation', date],
     queryFn: () => tradingGetPlanDeviation(date),
@@ -1036,9 +1082,13 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
   const [entries, setEntries] = useState<PlanEntry[] | null>(null)
   const [notes, setNotes] = useState<string | null>(null)
   useEffect(() => {
+    abortRef.current?.abort()
     setEntries(null)
     setNotes(null)
+    setCheckArtifact(null)
+    setCheckError('')
   }, [date])
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const draftEntries = entries ?? planQuery.data?.entries ?? []
   const draftNotes = notes ?? planQuery.data?.actualNotes ?? ''
@@ -1053,7 +1103,15 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
           symbol: e.symbol.trim(),
           trigger: e.trigger.trim(),
           reason: e.reason.trim(),
+          strategyId: e.strategyId?.trim() || null,
+          exitRule: e.exitRule?.trim() || '',
+          invalidation: e.invalidation?.trim() || '',
           qty: e.qty != null && e.qty > 0 ? e.qty : null,
+          plannedPrice: e.plannedPrice != null && e.plannedPrice > 0 ? e.plannedPrice : null,
+          stopLoss: e.stopLoss != null && e.stopLoss > 0 ? e.stopLoss : null,
+          thesisHorizonMonths: e.thesisHorizonMonths != null && e.thesisHorizonMonths > 0
+            ? Math.trunc(e.thesisHorizonMonths)
+            : null,
         }))
       // replace:true → 后端全量覆盖, 删除的条目生效
       const body = { schemaVersion: 1, date, entries: cleaned, actualNotes: draftNotes, replace: true }
@@ -1078,11 +1136,67 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
       : `e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
     setEntries([
       ...draftEntries,
-      { id, symbol: '', tradeId: null, action: 'buy_new', trigger: '', qty: null, reason: '', createdAt: nowStr() },
+      {
+        id, symbol: '', tradeId: null, action: 'buy_new', trigger: '', qty: null,
+        reason: '', createdAt: nowStr(), strategyId: null, plannedPrice: null,
+        stopLoss: null, exitRule: '', thesisHorizonMonths: null, invalidation: '',
+      },
     ])
   }
   const removeEntry = (i: number) => {
     setEntries(draftEntries.filter((_, idx) => idx !== i))
+  }
+
+  const runPlanCheck = async (entry: PlanEntry) => {
+    if (dirty) {
+      toast('请先保存计划，再运行结构化检查')
+      return
+    }
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    setCheckingEntryId(entry.id)
+    setCheckProgress('正在准备 canonical K 线与程序门禁…')
+    setCheckError('')
+    setCheckArtifact(null)
+    const selectedProfile = profileId
+      || resolveEntryProfile('trading_plan_check', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '')
+      || undefined
+    try {
+      for await (const event of tradingCheckPlanStream(date, entry.id, selectedProfile, controller.signal)) {
+        if (event.type === 'progress') {
+          const stage = typeof event.stage === 'string' ? event.stage : ''
+          setCheckProgress(stage === 'stage2' ? '正在检查已保存计划…' : stage === 'stage1' ? '正在诊断 K 线事实…' : '正在执行程序检查…')
+        } else if (event.type === 'result') {
+          setCheckArtifact(event)
+          setCheckProgress('')
+        } else if (event.type === 'error') {
+          throw new Error(event.message)
+        }
+      }
+      qc.invalidateQueries({ queryKey: ['trading-plan-checks'] })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setCheckProgress('')
+        toast('计划检查已取消')
+      } else {
+        const message = error instanceof Error ? error.message : '计划检查失败'
+        setCheckError(message)
+        setCheckProgress('')
+      }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null
+      setCheckingEntryId(null)
+    }
+  }
+
+  const loadPlanCheck = async (attemptId: string) => {
+    setCheckError('')
+    try {
+      setCheckArtifact(await tradingGetPlanCheck(attemptId))
+    } catch (error) {
+      setCheckError(error instanceof Error ? error.message : '读取检查记录失败')
+    }
   }
 
   const deviation = deviationQuery.data
@@ -1110,6 +1224,30 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
           </div>
         )}
       >
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-elevated/30 px-3 py-2.5">
+          <div>
+            <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <ShieldCheck className="h-3.5 w-3.5 text-accent" />
+              结构化计划检查
+            </div>
+            <p className="mt-1 max-w-2xl text-[10px] leading-relaxed text-muted">
+              仅检查已保存计划的输入完整性、K 线事实与程序门禁。不会生成订单或买卖信号；“输入完整”也不代表建议交易。
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {featureEnabled && <AiProviderSelector entry="trading_plan_check" value={profileId} onChange={setProfileId} compact />}
+            <button
+              onClick={() => toggleFeature.mutate(!featureEnabled)}
+              disabled={toggleFeature.isPending || preferencesQuery.isLoading}
+              className={cn(
+                BTN_GHOST,
+                featureEnabled && 'border-accent/30 bg-accent/10 text-accent',
+              )}
+            >
+              {featureEnabled ? '已启用' : '启用检查'}
+            </button>
+          </div>
+        </div>
         {planQuery.isLoading ? (
           <p className="py-6 text-center text-xs text-muted">加载计划中…</p>
         ) : (
@@ -1123,48 +1261,131 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
                   ))}
                 </div>
                 {draftEntries.map((e, i) => (
-                  <div key={e.id} className="grid grid-cols-[7rem_7rem_1fr_6rem_1fr_2rem] items-center gap-2">
-                    <input
-                      value={e.symbol}
-                      onChange={ev => updateEntry(i, { symbol: ev.target.value })}
-                      placeholder="600519"
-                      className={cn(INPUT, 'font-mono')}
-                    />
-                    <select
-                      value={e.action}
-                      onChange={ev => updateEntry(i, { action: ev.target.value as PlanAction })}
-                      className={cn(INPUT, 'cursor-pointer')}
-                    >
-                      {(Object.keys(ACTION_LABEL) as PlanAction[]).map(a => (
-                        <option key={a} value={a}>{ACTION_LABEL[a]}</option>
-                      ))}
-                    </select>
-                    <input
-                      value={e.trigger}
-                      onChange={ev => updateEntry(i, { trigger: ev.target.value })}
-                      placeholder="如: 跌破 12.5 或 放量突破"
-                      className={INPUT}
-                    />
-                    <input
-                      value={e.qty == null ? '' : String(e.qty)}
-                      onChange={ev => updateEntry(i, { qty: posNum(ev.target.value) ?? null })}
-                      placeholder="—"
-                      inputMode="decimal"
-                      className={cn(INPUT, 'font-mono')}
-                    />
-                    <input
-                      value={e.reason}
-                      onChange={ev => updateEntry(i, { reason: ev.target.value })}
-                      placeholder="为什么"
-                      className={INPUT}
-                    />
-                    <button
-                      onClick={() => removeEntry(i)}
-                      title="删除条目"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                  <div key={e.id} className="space-y-2 rounded-lg border border-border/70 bg-base/40 p-2.5">
+                    <div className="grid grid-cols-[7rem_7rem_1fr_6rem_1fr_2rem] items-center gap-2">
+                      <input
+                        value={e.symbol}
+                        onChange={ev => updateEntry(i, { symbol: ev.target.value })}
+                        placeholder="600519.SH"
+                        className={cn(INPUT, 'font-mono')}
+                      />
+                      <select
+                        value={e.action}
+                        onChange={ev => updateEntry(i, { action: ev.target.value as PlanAction })}
+                        className={cn(INPUT, 'cursor-pointer')}
+                      >
+                        {(Object.keys(ACTION_LABEL) as PlanAction[]).map(action => (
+                          <option key={action} value={action}>{ACTION_LABEL[action]}</option>
+                        ))}
+                      </select>
+                      <input
+                        value={e.trigger}
+                        onChange={ev => updateEntry(i, { trigger: ev.target.value })}
+                        placeholder="如：放量突破后收盘确认"
+                        className={INPUT}
+                      />
+                      <input
+                        value={e.qty == null ? '' : String(e.qty)}
+                        onChange={ev => updateEntry(i, { qty: posNum(ev.target.value) ?? null })}
+                        placeholder="数量"
+                        inputMode="decimal"
+                        className={cn(INPUT, 'font-mono')}
+                      />
+                      <input
+                        value={e.reason}
+                        onChange={ev => updateEntry(i, { reason: ev.target.value })}
+                        placeholder="计划依据"
+                        className={INPUT}
+                      />
+                      <button
+                        onClick={() => removeEntry(i)}
+                        title="删除条目"
+                        className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+                      <label className="space-y-1">
+                        <span className="text-[9px] text-muted">策略声明 ID</span>
+                        <input
+                          value={e.strategyId ?? ''}
+                          onChange={ev => updateEntry(i, { strategyId: ev.target.value || null })}
+                          placeholder="strategy_id"
+                          className={cn(INPUT, 'w-full font-mono')}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[9px] text-muted">计划价格</span>
+                        <input
+                          value={e.plannedPrice == null ? '' : String(e.plannedPrice)}
+                          onChange={ev => updateEntry(i, { plannedPrice: posNum(ev.target.value) ?? null })}
+                          inputMode="decimal"
+                          placeholder="plannedPrice"
+                          className={cn(INPUT, 'w-full font-mono')}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[9px] text-muted">止损价格</span>
+                        <input
+                          value={e.stopLoss == null ? '' : String(e.stopLoss)}
+                          onChange={ev => updateEntry(i, { stopLoss: posNum(ev.target.value) ?? null })}
+                          inputMode="decimal"
+                          placeholder="stopLoss"
+                          className={cn(INPUT, 'w-full font-mono')}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[9px] text-muted">论点期限（月）</span>
+                        <input
+                          value={e.thesisHorizonMonths == null ? '' : String(e.thesisHorizonMonths)}
+                          onChange={ev => updateEntry(i, { thesisHorizonMonths: posNum(ev.target.value) ?? null })}
+                          inputMode="numeric"
+                          placeholder="months"
+                          className={cn(INPUT, 'w-full font-mono')}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[9px] text-muted">退出规则</span>
+                        <input
+                          value={e.exitRule ?? ''}
+                          onChange={ev => updateEntry(i, { exitRule: ev.target.value })}
+                          placeholder="可观察退出条件"
+                          className={cn(INPUT, 'w-full')}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <span className="text-[9px] text-muted">失效条件</span>
+                        <input
+                          value={e.invalidation ?? ''}
+                          onChange={ev => updateEntry(i, { invalidation: ev.target.value })}
+                          placeholder="论点何时失效"
+                          className={cn(INPUT, 'w-full')}
+                        />
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[9px] text-muted">
+                        新建/加仓完整检查需数量、计划价格、策略声明、期限及止损/退出/失效条件。
+                      </span>
+                      {checkingEntryId === e.id ? (
+                        <button
+                          onClick={() => abortRef.current?.abort()}
+                          className={cn(BTN_GHOST, 'border-warning/30 text-warning')}
+                        >
+                          <Square className="h-3 w-3" />取消检查
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => void runPlanCheck(e)}
+                          disabled={!featureEnabled || dirty || !e.symbol.trim() || checkingEntryId !== null}
+                          title={!featureEnabled ? '请先启用结构化计划检查' : dirty ? '请先保存计划' : undefined}
+                          className={BTN_GHOST}
+                        >
+                          <Bot className="h-3 w-3" />检查已保存计划
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
                 {draftEntries.length === 0 && (
@@ -1187,6 +1408,48 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
                 className={cn(INPUT, 'w-full resize-y')}
               />
             </label>
+
+            {checkProgress && (
+              <div className="flex items-center gap-2 rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-xs text-accent">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                {checkProgress}
+              </div>
+            )}
+            {checkError && (
+              <div className="rounded-lg border border-danger/25 bg-danger/5 px-3 py-2 text-xs text-danger">
+                {checkError}
+              </div>
+            )}
+            {checkArtifact && <PlanCheckResultView artifact={checkArtifact} />}
+
+            {featureEnabled && (checksQuery.data?.items.length ?? 0) > 0 && (
+              <div className="rounded-lg border border-border bg-elevated/20 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <h4 className="text-[11px] font-medium text-foreground">最近计划检查记录</h4>
+                  <span className="text-[9px] text-muted">append-only artifact</span>
+                </div>
+                <div className="space-y-1">
+                  {checksQuery.data?.items.slice(0, 8).map(item => (
+                    <div key={item.attempt_id} className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5 text-[10px] hover:bg-elevated/50">
+                      <button
+                        onClick={() => void loadPlanCheck(item.attempt_id)}
+                        className="font-mono text-accent hover:underline"
+                      >
+                        {item.symbol ?? '未知标的'}
+                      </button>
+                      <span className="text-muted">{item.result_status === 'review_ready' ? '已生成审查' : '无可执行结果'}</span>
+                      <span className="ml-auto font-mono text-muted">{item.created_at?.slice(0, 19).replace('T', ' ') ?? '—'}</span>
+                      <a
+                        href={tradingPlanCheckExportUrl(item.attempt_id, 'markdown')}
+                        className="inline-flex items-center gap-1 text-secondary hover:text-foreground"
+                      >
+                        <FileDown className="h-3 w-3" />Markdown
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </SectionCard>
@@ -1238,6 +1501,123 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
         </DeviationCard>
       </div>
     </div>
+  )
+}
+
+const PLAN_GATE_COPY: Record<string, { label: string; detail: string; className: string }> = {
+  proceed: {
+    label: '输入完整，可进入审查',
+    detail: '仅表示数据与程序门禁允许继续检查，不代表建议交易。',
+    className: 'border-success/30 bg-success/5 text-success',
+  },
+  wait: {
+    label: '暂缓，需补充或修正',
+    detail: '程序门禁或数据充分性未通过，第二阶段未运行。',
+    className: 'border-warning/30 bg-warning/5 text-warning',
+  },
+  unknown: {
+    label: '信息不足，无法判断',
+    detail: '缺少计划字段、策略声明或 canonical 数据，未调用后续审查。',
+    className: 'border-border bg-elevated/40 text-muted',
+  },
+}
+
+function PlanCheckResultView({ artifact }: { artifact: PlanCheckArtifact }) {
+  const result = artifact.result
+  const gate = PLAN_GATE_COPY[result.gate.status] ?? PLAN_GATE_COPY.unknown
+  const failed = artifact.status === 'failed'
+  const cancelled = artifact.status === 'cancelled'
+
+  return (
+    <section className="rounded-lg border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-start gap-2">
+        <div>
+          <h4 className="text-xs font-medium text-foreground">结构化计划检查报告</h4>
+          <p className="mt-0.5 font-mono text-[9px] text-muted">{artifact.attempt_id}</p>
+        </div>
+        <span className={cn('rounded-md border px-2 py-1 text-[10px] font-medium', gate.className)}>
+          {failed ? '检查失败，未产生结论' : cancelled ? '检查已取消' : gate.label}
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          <AiExecutionMetaBadge meta={result.ai_meta} />
+          <a
+            href={tradingPlanCheckExportUrl(artifact.attempt_id, 'json')}
+            className="inline-flex items-center gap-1 text-[10px] text-secondary hover:text-foreground"
+          >
+            <FileDown className="h-3 w-3" />JSON
+          </a>
+          <a
+            href={tradingPlanCheckExportUrl(artifact.attempt_id, 'markdown')}
+            className="inline-flex items-center gap-1 text-[10px] text-secondary hover:text-foreground"
+          >
+            <FileDown className="h-3 w-3" />Markdown
+          </a>
+        </div>
+      </div>
+
+      <p className="mt-2 text-[10px] leading-relaxed text-muted">{gate.detail}</p>
+      {result.gate.reasons.length > 0 && (
+        <ul className="mt-2 space-y-1 rounded-md bg-elevated/30 p-2 text-[10px] text-secondary">
+          {result.gate.reasons.map((reason, index) => <li key={`${reason}-${index}`}>· {reason}</li>)}
+        </ul>
+      )}
+
+      {result.stage1 && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {[
+            ['趋势诊断', result.stage1.trend],
+            ['波动诊断', result.stage1.volatility],
+            ['流动性诊断', result.stage1.liquidity],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-md border border-border/60 bg-base/50 p-2">
+              <div className="text-[9px] text-muted">{label}</div>
+              <div className="mt-1 text-[11px] leading-relaxed text-secondary">{value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {result.review && (
+        <div className="mt-3">
+          <div className="mb-1.5 text-[10px] font-medium text-foreground">计划审查项</div>
+          <div className="space-y-1.5">
+            {result.review.checks.map((check, index) => (
+              <div key={`${check.item}-${index}`} className="rounded-md border border-border/60 px-2.5 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-medium text-foreground">{check.item}</span>
+                  <span className={cn(
+                    'rounded px-1.5 py-0.5 text-[9px]',
+                    check.conclusion === '满足'
+                      ? 'bg-success/10 text-success'
+                      : check.conclusion === '不满足'
+                        ? 'bg-danger/10 text-danger'
+                        : 'bg-warning/10 text-warning',
+                  )}>
+                    {check.conclusion}
+                  </span>
+                </div>
+                <p className="mt-1 text-[10px] leading-relaxed text-secondary">{check.reason}</p>
+              </div>
+            ))}
+          </div>
+          {result.review.summary && <p className="mt-2 text-[10px] text-secondary">{result.review.summary}</p>}
+        </div>
+      )}
+
+      {result.warnings.length > 0 && (
+        <div className="mt-3 rounded-md border border-warning/20 bg-warning/5 p-2 text-[10px] text-warning">
+          {result.warnings.map((warning, index) => <div key={`${warning}-${index}`}>{warning}</div>)}
+        </div>
+      )}
+
+      <div className="mt-4">
+        <div className="mb-2 text-[10px] font-medium text-foreground">可审计决策链</div>
+        <DecisionTrace nodes={artifact.trace} />
+      </div>
+      <p className="mt-3 border-t border-border pt-2 text-[9px] leading-relaxed text-muted">
+        {result.disclaimer}
+      </p>
+    </section>
   )
 }
 
