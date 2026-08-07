@@ -10,7 +10,11 @@ Schema:
   "entries": [ {
     "id": "...", "symbol": "...", "tradeId": null,
     "action": "buy_new|add|tp|sl|close|watch",
-    "trigger": "...", "qty": null, "reason": "...", "createdAt": "..."
+    "trigger": "...", "qty": null, "reason": "...", "createdAt": "...",
+    // P4 additive (全可缺省, 旧计划可读写):
+    "strategyId": "trend_a" | null, "plannedPrice": 12.5 | null,
+    "stopLoss": 11.0 | null, "exitRule": "...", "thesisHorizonMonths": 3 | null,
+    "invalidation": "..."
   } ],
   "actualNotes": ""
 }
@@ -137,6 +141,33 @@ def write_plan(data_dir: Path, date: str, payload: dict[str, Any]) -> dict[str, 
         tmp.replace(p)
     return out
 
+# ── P4 additive 字段工具 ─────────────────────────────────
+def _opt_str(v: Any) -> str | None:
+    s = str(v or "").strip()
+    return s or None
+
+
+def _opt_float(v: Any) -> float | None:
+    """正数值 → float; None/非数值/≤0 → None。"""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+def _opt_int(v: Any) -> int | None:
+    """正整数 → int; None/bool/非整数/≤0 → None。"""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
 
 def _validate_entry(raw: dict[str, Any], now: str) -> dict[str, Any]:
     eid = str(raw.get("id") or "").strip()
@@ -166,6 +197,13 @@ def _validate_entry(raw: dict[str, Any], now: str) -> dict[str, Any]:
             entry["qty"] = None
     else:
         entry["qty"] = None
+    # ── P4 计划检查 additive 字段 (camelCase); 全部可缺省, 旧计划可读写。
+    entry["strategyId"] = _opt_str(raw.get("strategyId"))
+    entry["plannedPrice"] = _opt_float(raw.get("plannedPrice"))
+    entry["stopLoss"] = _opt_float(raw.get("stopLoss"))
+    entry["exitRule"] = str(raw.get("exitRule") or "").strip()
+    entry["thesisHorizonMonths"] = _opt_int(raw.get("thesisHorizonMonths"))
+    entry["invalidation"] = str(raw.get("invalidation") or "").strip()
     return entry
 
 

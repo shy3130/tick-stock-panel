@@ -35,9 +35,12 @@ def get_trade_red_flags(trade_id: str):
 
 # ── AI 归因 ──────────────────────────────────────────────
 @router.post("/trades/{trade_id}/autopsy")
-async def run_autopsy(trade_id: str):
-    """跑 AI 归因并返回结果(同时落盘)。AI 调用失败时不落盘,返回友好错误。"""
-    return await autopsy_svc.run_autopsy(settings.data_dir, trade_id)
+async def run_autopsy(trade_id: str, profile_id: Annotated[str | None, Query()] = None):
+    """跑 AI 归因并返回结果(同时落盘)。AI 调用失败时不落盘,返回友好错误。
+
+    P3: ``profile_id`` 查询参数 (可选) 选择实际使用的 AI profile; 不传走默认 profile。
+    """
+    return await autopsy_svc.run_autopsy(settings.data_dir, trade_id, profile_id=profile_id)
 
 
 @router.get("/trades/{trade_id}/autopsy")
