@@ -71,6 +71,7 @@ export const QK = {
   monitorRuleOptions:   ['monitor-rule-options'] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
+
   // AI 大盘复盘
   reviewReports:        ['review-reports'] as const,
 
@@ -86,6 +87,16 @@ export const QK = {
 
   // 概念涨幅轮动矩阵
   rpsRotation:          (days: number) => ['rps-rotation', days] as const,
+
+  // Research (假设注册 + 定时研究)
+  researchHypothesesRoot: ['research-hypotheses'] as const,
+  researchHypotheses: (status?: string, query?: string) =>
+    ['research-hypotheses', status ?? '', query ?? ''] as const,
+  researchHypothesis: (id: string) => ['research-hypothesis', id] as const,
+  researchRunCard:    (runId: string) => ['research-run-card', runId] as const,
+  researchSchedules:  ['research-schedules'] as const,
+  // Trading (结构化计划检查 · M25 连续性链)
+  planCheckContinuity: (attemptId: string) => ['plan-check-continuity', attemptId] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

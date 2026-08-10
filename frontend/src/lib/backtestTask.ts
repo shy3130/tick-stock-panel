@@ -136,6 +136,7 @@ export function startBacktest(params: {
   overrides?: Record<string, any> | null
   mode?: 'position' | 'full'
   holding_days?: number
+  regime_filter?: { states?: string[]; min_score?: number } | null
 }): void {
   // 取消之前的任务状态
   if (eventSource) {
@@ -165,6 +166,7 @@ export function startBacktest(params: {
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     mode: params.mode,
     holding_days: params.holding_days,
+    regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
   })
 
   // 存 reconnect 信息 (刷新后用)

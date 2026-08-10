@@ -28,11 +28,16 @@ const IndustryAnalysis = lazy(() => import('./pages/IndustryAnalysis').then((m) 
 const StockAnalysis = lazy(() => import('./pages/StockAnalysis').then((m) => ({ default: m.StockAnalysis })))
 const ConditionScreener = lazy(() => import('./pages/ConditionScreener').then((m) => ({ default: m.ConditionScreener })))
 const Backtest = lazy(() => import('./pages/Backtest').then((m) => ({ default: m.Backtest })))
+const Regime = lazy(() => import('./pages/Regime').then((m) => ({ default: m.Regime })))
 const Financials = lazy(() => import('./pages/Financials').then((m) => ({ default: m.Financials })))
 const Optimizer = lazy(() => import('./pages/Optimizer').then((m) => ({ default: m.Optimizer })))
 const Agent = lazy(() => import('./pages/Agent').then((m) => ({ default: m.Agent })))
 const Dev = lazy(() => import('./pages/Dev').then((m) => ({ default: m.Dev })))
 const FeatureGuide = lazy(() => import('./pages/FeatureGuide').then((m) => ({ default: m.FeatureGuide })))
+const Research = lazy(() => import('./pages/Research').then((m) => ({ default: m.Research })))
+const SignalScorecard = lazy(() => import('./pages/SignalScorecard').then((m) => ({ default: m.SignalScorecard })))
+const CrossSection = lazy(() => import('./pages/CrossSection').then((m) => ({ default: m.CrossSection })))
+
 
 // 懒加载页面占位：渲染在 Layout Outlet 内，不触碰 Layout/OnboardingGuard 结构。
 function PageFallback() {
@@ -131,6 +136,7 @@ export const router = createBrowserRouter([
       { path: 'analysis/:menuId', element: lazyPage(<AnalysisDetail />) },
       { path: 'concept-analysis', element: lazyPage(<ConceptAnalysis />) },
       { path: 'industry-analysis', element: lazyPage(<IndustryAnalysis />) },
+      { path: 'regime', element: lazyPage(<Regime />) },
       { path: 'stock-analysis', element: lazyPage(<StockAnalysis />) },
       { path: 'review', element: <Review /> },
       { path: 'watchlist', element: <Watchlist /> },
@@ -142,6 +148,10 @@ export const router = createBrowserRouter([
       { path: 'monitor', element: <Monitor /> },
       { path: 'trading', element: <Trading /> },
       { path: 'journal', element: <TradeJournal /> },
+      { path: 'research', element: lazyPage(<Research />) },
+      { path: 'signal-scorecard', element: lazyPage(<SignalScorecard />) },
+      { path: 'cross-section', element: lazyPage(<CrossSection />) },
+
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },
       { path: 'optimizer', element: lazyPage(<Optimizer />) },

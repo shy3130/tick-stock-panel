@@ -118,7 +118,7 @@ const BASIC_FILTER_FIELDS = [
   { key: 'turnover_min', label: '最低换手率', unit: '%' },
   { key: 'turnover_max', label: '最高换手率', unit: '%' },
 ]
-type AdvancedSettingsTab = 'params' | 'filter' | 'entry' | 'exit' | 'scoring' | 'risk' | 'range'
+type AdvancedSettingsTab = 'params' | 'filter' | 'entry' | 'exit' | 'scoring' | 'risk' | 'range' | 'regime'
 type StrategyGroup = 'all' | 'custom' | 'ai' | 'builtin'
 const STRATEGY_GROUPS: { id: StrategyGroup; label: string }[] = [
   { id: 'all', label: '全部' },
@@ -134,6 +134,7 @@ const ADVANCED_TABS: { id: AdvancedSettingsTab; label: string }[] = [
   { id: 'scoring', label: '评分权重' },
   { id: 'risk', label: '风控' },
   { id: 'range', label: '回测范围' },
+  { id: 'regime', label: '环境过滤' },
 ]
 const toSignalId = (sig: string) => (sig.startsWith('signal_') || sig.startsWith('csg_')) ? sig : `signal_${sig}`
 const numOrNull = (v: string) => v === '' || Number.isNaN(Number(v)) ? null : Number(v)
@@ -671,6 +672,10 @@ export function StrategyBacktest() {
   const [positionSizing, setPositionSizing] = useState<'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'>(saved?.positionSizing ?? 'equal')
   const [simMode, setSimMode] = useState<'position' | 'full'>(saved?.mode ?? 'position')
   const [holdingDays, setHoldingDays] = useState(saved?.holdingDays ?? '5')
+  // regime 环境过滤: 可选, 限制只在指定状态的次日入场 (T-1 mask)
+  const [regimeEnabled, setRegimeEnabled] = useState<boolean>(saved?.regimeEnabled ?? false)
+  const [regimeStates, setRegimeStates] = useState<string[]>(saved?.regimeStates ?? ['strong', 'lean_strong'])
+  const [regimeMinScore, setRegimeMinScore] = useState<string>(saved?.regimeMinScore ?? '')
   const [settingsOpen, setSettingsOpen] = useState(false)
   // 高颗粒回测（分钟K精确回测）— 开发中，Starter+ 功能
   const [highGranularity, setHighGranularity] = useState(false)
@@ -777,6 +782,9 @@ export function StrategyBacktest() {
         positionSizing,
         mode: simMode,
         holdingDays,
+        regimeEnabled,
+        regimeStates,
+        regimeMinScore,
         params: strategyParams,
         overrides,
         result: backtestTask.result,
@@ -804,6 +812,10 @@ export function StrategyBacktest() {
       overrides,
       mode: simMode,
       holding_days: Number(holdingDays) || 5,
+      regime_filter: regimeEnabled ? {
+        states: regimeStates.length > 0 ? regimeStates : undefined,
+        min_score: regimeMinScore !== '' && !Number.isNaN(Number(regimeMinScore)) ? Number(regimeMinScore) : undefined,
+      } : undefined,
     })
   }
 
@@ -2245,6 +2257,69 @@ export function StrategyBacktest() {
                       />
                     </label>
                   </div>
+                </ConfigSection>
+              )}
+
+              {settingsTab === 'regime' && (
+                <ConfigSection title="环境过滤" hint="T-1 市场环境入场过滤">
+                  <p className="text-[11px] text-muted leading-relaxed">
+                    启用后, 回测只在<strong className="text-secondary">前一交易日(T-1)市场环境</strong>符合条件时允许新入场。
+                    缺数据自动放行(fail-open), 不影响已建仓的退出。
+                  </p>
+                  <label className="flex items-center gap-2 mt-2">
+                    <input
+                      type="checkbox"
+                      checked={regimeEnabled}
+                      onChange={e => setRegimeEnabled(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-border accent-accent"
+                    />
+                    <span className="text-xs text-secondary">启用环境过滤</span>
+                  </label>
+                  {regimeEnabled && (
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <span className="mb-1.5 block text-[11px] text-secondary">允许入场的状态</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {([
+                            { s: 'strong', l: '强势', c: '#F04438' },
+                            { s: 'lean_strong', l: '偏强', c: '#FB923C' },
+                            { s: 'range', l: '震荡', c: '#9CA3AF' },
+                            { s: 'lean_weak', l: '偏弱', c: '#60A5FA' },
+                            { s: 'weak', l: '弱势', c: '#12B76A' },
+                          ] as const).map(({ s, l, c }) => (
+                            <button
+                              key={s}
+                              type="button"
+                              onClick={() => setRegimeStates(prev =>
+                                prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
+                              )}
+                              className={`inline-flex items-center gap-1 rounded-btn border px-2 py-1 text-[10px] transition-colors ${
+                                regimeStates.includes(s)
+                                  ? 'border-accent/40 text-foreground'
+                                  : 'border-border text-muted hover:text-secondary'
+                              }`}
+                            >
+                              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: c }} />
+                              {l}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <label className="block">
+                        <span className="mb-1 block text-[11px] text-secondary">最低综合分(可选)</span>
+                        <input
+                          type="number"
+                          value={regimeMinScore}
+                          min={0}
+                          max={100}
+                          step={5}
+                          placeholder="不限"
+                          onChange={e => setRegimeMinScore(e.target.value)}
+                          className={INPUT_CLS}
+                        />
+                      </label>
+                    </div>
+                  )}
                 </ConfigSection>
               )}
             </div>

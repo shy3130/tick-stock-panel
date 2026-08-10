@@ -98,6 +98,9 @@ export const storage = {
     positionSizing: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
     mode: 'position' | 'full'
     holdingDays: string
+    regimeEnabled?: boolean
+    regimeStates?: string[]
+    regimeMinScore?: string
     params?: Record<string, any>
     overrides?: Record<string, any>
     result: any

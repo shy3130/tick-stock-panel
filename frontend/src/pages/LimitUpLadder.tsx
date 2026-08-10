@@ -1199,6 +1199,8 @@ export function LimitUpLadder() {
               sealedCountsDown={data?.sealed_counts_down}
               rawUp={data?.counts_raw?.up}
               rawDown={data?.counts_raw?.down}
+              sealedDegraded={data?.sealed_degraded === true}
+              sealedSource={data?.sealed_source}
             />
             {/* 涨跌停切换(胶囊式): 点击切换方向, 当前方向有背景 */}
             <div className="flex items-center rounded-full bg-elevated/60 p-0.5">

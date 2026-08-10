@@ -353,7 +353,50 @@ export interface IndexQuote {
   volume?: number | null
   amount?: number | null
   timestamp?: number | null
+  // 受控外部 fallback provenance — 仅外部降级数据出现; 本地/日线兜底不带
+  source?: string
+  degraded?: boolean
   [key: string]: any
+}
+
+// ===== 受控外部行情降级 (external fallback, 默认关闭) =====
+// 契约: backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md §4.3
+// 外部数据仅供展示, 绝不写入本地行情库, 不参与选股/监控/回测。
+
+/** 外部降级行情来源标记 — 行级 source 命中即视为降级 */
+export const EXTERNAL_QUOTE_SOURCE = 'tencent_quote'
+
+/** 响应级 source 中表示外部 fallback 的 legacy 值(其余 realtime/provider_realtime/index_daily 均为本地数据, 不可误标) */
+export const EXTERNAL_FALLBACK_RESPONSE_SOURCE = 'fallback_external'
+
+export type IndexFallbackReason = 'local_snapshot_missing' | 'local_snapshot_stale'
+
+/**
+ * GET /api/intraday/indices 响应。
+ * degraded / sources / fallback_reason 仅在实际外部 fallback 时出现;
+ * 旧后端可整体缺失, 前端按未降级处理(完全向后兼容)。
+ */
+export interface IndexQuotesResponse {
+  rows: IndexQuote[]
+  count: number
+  source?: string
+  degraded?: boolean
+  sources?: { realtime?: string }
+  fallback_reason?: IndexFallbackReason
+}
+
+/** 是否处于外部源降级 — 响应级 degraded/source 或任一行 source=tencent_quote; 本地与日线兜底均不命中 */
+export function indexQuotesDegraded(resp: IndexQuotesResponse | null | undefined): boolean {
+  if (!resp) return false
+  if (resp.degraded === true) return true
+  if (resp.source === EXTERNAL_FALLBACK_RESPONSE_SOURCE) return true
+  return (resp.rows ?? []).some(r => r?.source === EXTERNAL_QUOTE_SOURCE || r?.degraded === true)
+}
+
+export function indexFallbackReasonText(reason: IndexFallbackReason | string | null | undefined): string | null {
+  if (reason === 'local_snapshot_missing') return '本地快照缺失'
+  if (reason === 'local_snapshot_stale') return '本地快照已过期'
+  return null
 }
 
 // ===== Screener =====
@@ -697,7 +740,7 @@ export interface StrategyDetail {
   name: string
   description: string
   tags: string[]
-  source: 'builtin' | 'custom' | 'ai'
+  source: 'builtin' | 'custom' | 'ai' | 'composite'
   version: string
   basic_filter: Record<string, any>
   params: StrategyParamDef[]
@@ -716,6 +759,13 @@ export interface StrategyDetail {
   order_by: string
   descending: boolean
   limit: number
+  execution_backend?: 'polars_expr' | 'composite'
+  composite_children?: Array<{
+    id: string
+    name?: string
+    description?: string
+    weight: number
+  }> | null
 }
 
 // ===== Custom Signals (自定义信号) =====
@@ -804,6 +854,7 @@ export function genRuleId(): string {
   return `mr_${ts}_${rand}`
 }
 
+
 // ===== Limit Ladder =====
 export interface LimitLadderStock {
   symbol: string
@@ -842,6 +893,13 @@ export interface LimitLadderResult {
   sealed_counts_up?: { real: number; fake: number; pending: number }
   /** 跌停侧 sealed 明细 */
   sealed_counts_down?: { real: number; fake: number; pending: number }
+  /**
+   * 外部 depth 展示降级: 权威 sealed map 缺失且命中 get_display_depth_map 时为 true。
+   * 仅连板页当前展示; 不修正 counts/status, 不写入 sealed/历史, 不参与选股回测监控。
+   */
+  sealed_degraded?: boolean
+  /** 外部展示来源, 如 tencent_quote; 无外部 map 时为 null/缺省 */
+  sealed_source?: string | null
 }
 
 // ===== Backtest =====
@@ -975,6 +1033,191 @@ export interface StrategyBacktestResult {
   error: string | null
   methodology_context?: string
   warnings?: string[]
+}
+
+// ===== Strategy experiments / cross-section / signal scorecard =====
+export interface CompositeStrategyInput {
+  strategy_id: string
+  name: string
+  description?: string
+  children: Array<{ strategy_id: string; weight: number }>
+  merge_mode: 'union' | 'intersect'
+  min_confirm: number
+  mode: 'create' | 'update'
+}
+
+export interface ParameterGridRequest {
+  strategy_id: string
+  symbols?: string[] | null
+  start?: string | null
+  end?: string | null
+  params?: Record<string, number> | null
+  grid: Record<string, number[]>
+  objective: 'sharpe' | 'calmar' | 'total_return' | 'risk_adjusted'
+  max_scenarios?: number
+  matching?: 'close_t' | 'open_t+1'
+  holding_days?: number
+  regime_filter?: { states?: string[]; min_score?: number } | null
+}
+
+export interface ParameterGridScenario {
+  scenario_id: string
+  params: Record<string, number>
+  stats: Record<string, number>
+  score: number | null
+  rank: number
+  error: string | null
+  elapsed_ms: number
+}
+
+export interface ParameterGridExperiment {
+  experiment_id: string
+  config_hash: string
+  strategy_id: string
+  objective: string
+  base_config: Record<string, unknown>
+  grid: Record<string, number[]>
+  requested_count: number
+  scenario_count: number
+  max_scenarios: number
+  truncated: boolean
+  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
+  scenarios: ParameterGridScenario[]
+  best_scenario_id: string | null
+  robustness: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+  completed: number
+  total: number
+}
+
+export interface SignalScorecardTrackedItem {
+  signal_key: string
+  signal_name: string
+  signal_kind: string
+  direction: 'up' | 'not_up'
+  enabled: boolean
+}
+
+export interface SignalScorecardEvent {
+  id: string
+  signal_key: string
+  signal_name: string
+  signal_kind: string
+  source: string
+  symbol: string
+  name?: string
+  date: string
+  anchor_price: number | null
+  direction_expected: 'up' | 'not_up'
+  created_ts: number
+  context: Record<string, unknown>
+}
+
+export interface SignalScorecardStat {
+  signal_key: string
+  horizon: number
+  total: number
+  completed: number
+  pending: number
+  hit_count: number
+  miss_count: number
+  neutral_count: number
+  hit_rate_pct: number | null
+  avg_return_pct: number | null
+  sample_size: number
+}
+
+export interface SignalScorecardOutcome {
+  horizon: number
+  eval_status: 'pending' | 'completed' | 'unable'
+  outcome: 'hit' | 'miss' | 'neutral' | null
+  direction_correct: boolean | null
+  stock_return_pct: number | null
+  end_close: number | null
+  unable_reason: string | null
+  evaluated_ts: number | null
+}
+
+export interface CrossCorrelationResponse {
+  selected: string
+  peers: string[]
+  industry: string | null
+  window: number
+  minSamples: number
+  alignedDays: number
+  pairRows: Array<{
+    peer: string
+    correlation: number | null
+    covariance: number | null
+    beta: number | null
+    samples: number | null
+    previousCorrelation: number | null
+    correlationDelta: number | null
+  }>
+  matrix: {
+    instruments: string[]
+    correlation: Array<Array<number | null>>
+    covariance: Array<Array<number | null>>
+    samples: Array<Array<number | null>>
+  }
+  averageCorrelation: number | null
+  boundaryNotes: string[]
+}
+
+export interface CrossRelativeStrengthResponse {
+  selected: string
+  summary: {
+    label: string
+    detail: string
+    tone: 'bull' | 'risk' | 'neutral'
+    latestDate: string | null
+    dataLimitations: string[]
+  }
+  benchmarks: Array<{
+    key: string
+    label: string
+    latestRelativePct: number | null
+    points: Array<{ date: string; stockNav: number; benchmarkNav: number; relativePct: number }>
+  }>
+  windows: Array<{
+    days: number
+    label: string
+    stockReturnPct: number | null
+    benchmarks: Array<{
+      key: string
+      label: string
+      returnPct: number | null
+      relativeReturnPct: number | null
+    }>
+  }>
+  boundaryNotes: string[]
+}
+
+export interface CrossPeerResponse {
+  selected: string
+  mode: string
+  sortKey: string
+  universe: string | null
+  rows: Array<Record<string, unknown> & { symbol?: string; name?: string; isCurrent?: boolean }>
+  allRows: Array<Record<string, unknown>>
+  summary: {
+    total: number
+    displayed: number
+    averages: Record<string, number | null>
+    currentRank: number | null
+    currentTotal: number
+  }
+  boundaryNotes: string[]
+}
+
+export interface CrossReverseScreenResponse {
+  selected: string
+  request: { conditions: Array<Record<string, unknown>>; order_by: Record<string, string>; limit: number } | null
+  result: { rows?: Array<Record<string, unknown>>; total?: number } | null
+  reasons: string[]
+  features: Record<string, unknown>
+  boundaryNotes: string[]
 }
 
 // ===== Settings =====
@@ -1112,6 +1355,9 @@ export interface Preferences {
   screener_auto_run: boolean
   tradingAutoReview: boolean
   structured_plan_check_enabled?: boolean
+  /** 受控外部行情降级(默认关闭); scopes 仅 realtime/depth 白名单, 首批仅 realtime */
+  external_fallback_enabled?: boolean
+  external_fallback_scopes?: string[]
 }
 
 // ===== Strategy Alert =====
@@ -1196,6 +1442,147 @@ export interface JournalPresets {
   presets: { id: string; label: string; sheet: string; mapping: Record<string, string> }[]
   benchmarks: { symbol: string; name: string }[]
 }
+
+// ===== 实时行情状态 (GET /api/intraday/status) =====
+
+/** 行情数据健康状态 — 与后端 /api/intraday/status 契约一致 */
+export type QuoteDataState = 'disabled' | 'warming_up' | 'ready' | 'empty' | 'error' | 'stale'
+
+export interface QuoteStatusResponse {
+  enabled: boolean
+  running: boolean
+  mode?: 'none' | 'watchlist' | 'full_market'
+  realtime_allowed?: boolean
+  interval_s: number
+  symbol_count: number
+  watchlist_symbol_count?: number
+  index_symbol_count?: number
+  etf_symbol_count?: number
+  quote_age_ms: number | null
+  is_trading_hours: boolean
+  last_fetch_ms: number | null
+  // 数据健康契约追加字段 — 旧后端可能缺失, 全部 optional; 经 resolveQuoteDataState 安全降级
+  data_state?: QuoteDataState
+  has_recent_data?: boolean
+  total_symbol_count?: number
+  last_error_code?: 'provider_empty' | 'provider_error' | null
+  source_as_of?: string | null
+}
+
+/** 数据新鲜度阈值 — 与后端一致: max(2 * interval_s, 30s) */
+export function quoteRecentThresholdMs(intervalS: number | null | undefined): number {
+  return Math.max(2 * (intervalS ?? 0), 30) * 1000
+}
+
+/**
+ * 解析行情数据状态。新后端直接采用 data_state;
+ * 旧后端缺该字段时从旧字段降级推断 — 绝不把轮询线程存活当作数据健康。
+ */
+export function resolveQuoteDataState(s: QuoteStatusResponse | null | undefined): QuoteDataState | null {
+  if (!s) return null
+  if (s.data_state) return s.data_state
+  if (!s.enabled) return 'disabled'
+  if (s.quote_age_ms != null && s.quote_age_ms <= quoteRecentThresholdMs(s.interval_s)) return 'ready'
+  if (s.last_fetch_ms == null && s.quote_age_ms == null) return 'warming_up'
+  return 'stale'
+}
+
+const QUOTE_DATA_STATE_TEXT: Record<QuoteDataState, string> = {
+  disabled: '未开启',
+  warming_up: '正在获取首批数据',
+  empty: '轮询中但数据源未返回行情',
+  error: '行情源暂不可用',
+  stale: '行情已过期',
+  ready: '行情已更新',
+}
+
+export function quoteDataStateText(state: QuoteDataState | null | undefined): string {
+  return state ? QUOTE_DATA_STATE_TEXT[state] : '状态未知'
+}
+
+/** source_as_of 非本日时返回 "本地快照截至 YYYY-MM-DD"; 本日/缺失/不可解析时返回 null。 */
+export function quoteSnapshotText(sourceAsOf: string | null | undefined, now: Date = new Date()): string | null {
+  if (!sourceAsOf) return null
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(sourceAsOf.trim())
+  if (!m) return null
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return m[1] === today ? null : `本地快照截至 ${m[1]}`
+}
+
+// ===== Research (假设注册 + 定时研究) =====
+// 后端: api/research.py + services/research_registry.py + scheduled_research.py
+// 假设状态机与证据 kind 以后端 STATUSES / EVIDENCE_KINDS 为准。
+
+export type ResearchHypothesisStatus =
+  | 'exploring'
+  | 'testing'
+  | 'validated'
+  | 'rejected'
+  | 'monitoring'
+
+export type ResearchEvidenceKind = 'backtest' | 'note' | 'observation'
+
+export type ResearchScheduleTemplate =
+  | 'market_recap_daily'
+  | 'watchlist_recap_daily'
+  | 'strategy_pool_weekly'
+
+export interface ResearchEvidence {
+  ts: string
+  kind: ResearchEvidenceKind | string
+  ref: string
+  summary: string
+}
+
+export interface ResearchHypothesis {
+  id: string
+  title: string
+  thesis: string
+  status: ResearchHypothesisStatus | string
+  tags: string[]
+  evidence: ResearchEvidence[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ResearchRunCard {
+  run_id: string
+  kind: string
+  config: Record<string, unknown>
+  config_hash: string
+  strategy_hash: string
+  stats: Record<string, unknown>
+  created_at: string
+}
+
+export interface ResearchSchedule {
+  id: string
+  name: string
+  template: ResearchScheduleTemplate | string
+  cron: string
+  enabled: boolean
+  params: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  last_run_at: string | null
+  last_status: string | null
+  last_error: string | null
+}
+
+export interface ResearchScheduleRunResult {
+  title?: string
+  summary?: string
+  artifacts?: unknown[]
+  warnings?: string[]
+  [key: string]: unknown
+}
+
+export interface ResearchScheduleRunNowResponse {
+  schedule: ResearchSchedule
+  result: ResearchScheduleRunResult
+}
+
 
 // ===== API surface =====
 export const api = {
@@ -1415,21 +1802,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ indices_nav_pinned: pinned }),
     }),
+  /** 受控外部行情降级开关 — 开启时 scopes 固定 ["realtime"], 关闭置空; 返回清洗后的两字段(非法 scope 400) */
+  updateExternalFallback: (enabled: boolean, scopes: string[]) =>
+    request<{ external_fallback_enabled: boolean; external_fallback_scopes: string[] }>(
+      '/api/settings/preferences/external-fallback',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ external_fallback_enabled: enabled, external_fallback_scopes: scopes }),
+      },
+    ),
   quoteStatus: () =>
-    request<{
-      enabled: boolean
-      running: boolean
-      mode?: 'none' | 'watchlist' | 'full_market'
-      realtime_allowed?: boolean
-      interval_s: number
-      symbol_count: number
-      watchlist_symbol_count?: number
-      index_symbol_count?: number
-      etf_symbol_count?: number
-      quote_age_ms: number | null
-      is_trading_hours: boolean
-      last_fetch_ms: number | null
-    }>('/api/intraday/status'),
+    request<QuoteStatusResponse>('/api/intraday/status'),
   quoteInterval: () =>
     request<{ interval: number; min_interval: number; max_interval: number }>(
       '/api/settings/preferences/quote-interval',
@@ -1441,7 +1824,7 @@ export const api = {
     ),
   intradayRefresh: () => request<{ status: string }>('/api/intraday/refresh', { method: 'POST' }),
   indexQuotes: (symbols?: string[]) =>
-    request<{ rows: IndexQuote[]; count: number }>(
+    request<IndexQuotesResponse>(
       `/api/intraday/indices${symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(','))}` : ''}`,
     ),
   updateRealtimeMonitorConfig: (cfg: {
@@ -1828,11 +2211,37 @@ export const api = {
     max_positions?: number
     initial_capital?: number
     position_sizing?: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
+    regime_filter?: { states?: string[]; min_score?: number } | null
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  parameterGridLaunch: (payload: ParameterGridRequest) =>
+    request<{
+      experiment_id: string
+      config_hash: string
+      scenario_count: number
+      requested_count?: number
+      truncated: boolean
+      objective?: string
+      status: 'started' | 'already_running'
+    }>('/api/backtest/parameter-grid', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  parameterGridGet: (experimentId: string) =>
+    request<ParameterGridExperiment>(
+      `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}`,
+    ),
+
+  parameterGridCancel: (experimentId: string) =>
+    request<{ ok: boolean; experiment_id?: string; message?: string }>(
+      `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}/cancel`,
+      { method: 'POST' },
+    ),
 
   pipelineRun: () => request<{ job_id: string; reused: boolean }>(
     '/api/pipeline/run', { method: 'POST' },
@@ -2258,12 +2667,95 @@ export const api = {
   strategyResetConfig: (strategyId: string) =>
     request<{ ok: boolean }>(`/api/strategies/config/${strategyId}`, { method: 'DELETE' }),
 
+  strategySaveComposite: (payload: CompositeStrategyInput) =>
+    request<{ ok: boolean; strategy_id: string; source: 'composite'; path: string }>(
+      '/api/strategies/composite/save',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+
   /** 删除自定义策略（内置策略不可删除） */
   strategyDelete: (strategyId: string) =>
     request<{ ok: boolean }>(`/api/strategies/${strategyId}`, { method: 'DELETE' }),
 
   strategyReload: () =>
     request<{ ok: boolean; count: number }>('/api/strategies/reload', { method: 'POST' }),
+
+  // ===== Cross-section research =====
+  crossCorrelation: (symbol: string, window = 120) =>
+    request<CrossCorrelationResponse>(
+      `/api/cross-section/correlation?symbol=${encodeURIComponent(symbol)}&window=${window}`,
+    ),
+
+  crossRelativeStrength: (symbol: string, days = 120) =>
+    request<CrossRelativeStrengthResponse>(
+      `/api/cross-section/relative-strength?symbol=${encodeURIComponent(symbol)}&days=${days}`,
+    ),
+
+  crossPeerComparison: (symbol: string, mode = 'industry', sortKey = 'amount') =>
+    request<CrossPeerResponse>(
+      `/api/cross-section/peer-comparison?symbol=${encodeURIComponent(symbol)}&mode=${encodeURIComponent(mode)}&sort_key=${encodeURIComponent(sortKey)}`,
+    ),
+
+  crossReverseScreen: (symbol: string) =>
+    request<CrossReverseScreenResponse>(
+      `/api/cross-section/reverse-screen?symbol=${encodeURIComponent(symbol)}`,
+    ),
+
+  // ===== Signal scorecard =====
+  signalScorecardTracked: () =>
+    request<{ items: SignalScorecardTrackedItem[] }>('/api/signal-scorecard/tracked-signals'),
+
+  signalScorecardUpdateTracked: (items: SignalScorecardTrackedItem[]) =>
+    request<{ items: SignalScorecardTrackedItem[] }>('/api/signal-scorecard/tracked-signals', {
+      method: 'PUT',
+      body: JSON.stringify({ items }),
+    }),
+
+  signalScorecardStats: (signalKey?: string, horizon?: number) => {
+    const params = new URLSearchParams()
+    if (signalKey) params.set('signal_key', signalKey)
+    if (horizon) params.set('horizon', String(horizon))
+    const qs = params.toString()
+    return request<{ stats: SignalScorecardStat[]; neutral_band_pct: number; horizons: number[] }>(
+      `/api/signal-scorecard/stats${qs ? `?${qs}` : ''}`,
+    )
+  },
+
+  signalScorecardEvents: (filters?: {
+    signal_key?: string
+    symbol?: string
+    status?: 'pending' | 'mature'
+    limit?: number
+  }) => {
+    const params = new URLSearchParams()
+    if (filters?.signal_key) params.set('signal_key', filters.signal_key)
+    if (filters?.symbol) params.set('symbol', filters.symbol)
+    if (filters?.status) params.set('status', filters.status)
+    params.set('limit', String(filters?.limit ?? 200))
+    return request<{ events: SignalScorecardEvent[]; total: number }>(
+      `/api/signal-scorecard/events?${params}`,
+    )
+  },
+
+  signalScorecardEventDetail: (eventId: string) =>
+    request<{ event: SignalScorecardEvent; outcomes: SignalScorecardOutcome[]; status: 'pending' | 'mature' }>(
+      `/api/signal-scorecard/events/${encodeURIComponent(eventId)}/outcomes`,
+    ),
+
+  signalScorecardEvaluate: () =>
+    request<Record<string, number | boolean>>('/api/signal-scorecard/evaluate', { method: 'POST' }),
+
+  signalScorecardBackfill: (signalKeys: string[], dateFrom: string, dateTo: string) => {
+    const params = new URLSearchParams({
+      signal_keys: signalKeys.join(','),
+      date_from: dateFrom,
+      date_to: dateTo,
+    })
+    return request<Record<string, number | boolean>>(
+      `/api/signal-scorecard/backfill?${params}`,
+      { method: 'POST' },
+    )
+  },
 
   // ===== Custom Signals (自定义信号) =====
   customSignalsList: () =>
@@ -2348,6 +2840,103 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ strategy_id: strategyId, code }),
     }),
+
+  // ===== Research (假设注册 + 定时研究) =====
+  researchListHypotheses: (params?: { status?: string; query?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.set('status', params.status)
+    if (params?.query) qs.set('query', params.query)
+    const q = qs.toString()
+    return request<{ items: ResearchHypothesis[] }>(`/api/research/hypotheses${q ? `?${q}` : ''}`)
+  },
+
+  researchGetHypothesis: (id: string) =>
+    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}`),
+
+  researchCreateHypothesis: (body: {
+    title: string
+    thesis: string
+    status?: ResearchHypothesisStatus | string
+    tags?: string[]
+  }) =>
+    request<ResearchHypothesis>('/api/research/hypotheses', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  researchUpdateHypothesis: (
+    id: string,
+    body: {
+      title?: string
+      thesis?: string
+      status?: ResearchHypothesisStatus | string
+      tags?: string[]
+    },
+  ) =>
+    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  researchAddEvidence: (
+    id: string,
+    body: { kind: ResearchEvidenceKind | string; ref?: string; summary: string },
+  ) =>
+    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}/evidence`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** 404 → null(中性"未找到"语义,不弹 toast) */
+  researchGetRunCard: (runId: string) =>
+    request<ResearchRunCard | null>(
+      `/api/research/run-cards/${encodeURIComponent(runId)}`,
+      undefined,
+      { silent404: true },
+    ),
+
+  researchListSchedules: () =>
+    request<{ items: ResearchSchedule[] }>('/api/research/schedules'),
+
+  researchCreateSchedule: (body: {
+    name: string
+    template: ResearchScheduleTemplate | string
+    cron: string
+    enabled?: boolean
+    params?: Record<string, unknown>
+  }) =>
+    request<ResearchSchedule>('/api/research/schedules', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  researchUpdateSchedule: (
+    id: string,
+    body: {
+      name?: string
+      template?: ResearchScheduleTemplate | string
+      cron?: string
+      enabled?: boolean
+      params?: Record<string, unknown>
+    },
+  ) =>
+    request<ResearchSchedule>(`/api/research/schedules/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  researchDeleteSchedule: (id: string) =>
+    request<{ ok: boolean }>(`/api/research/schedules/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  researchRunScheduleNow: (id: string) =>
+    request<ResearchScheduleRunNowResponse>(
+      `/api/research/schedules/${encodeURIComponent(id)}/run-now`,
+      { method: 'POST' },
+    ),
+
+
 }
 
 // ===== Pipeline =====
@@ -2782,6 +3371,18 @@ export interface Proposal {
   relaxationAfterLoss?: boolean
 }
 
+export interface PlanCheckContinuityMeta {
+  mode: 'fresh' | 'incremental' | 'full_reanalysis'
+  parent_attempt_id: string | null
+  parent_artifact_id: string | null
+  reason: string
+  bars_delta: number
+  new_bar_dates: string[]
+  parent_data_as_of: string | null
+  self_data_as_of: string | null
+  compatibility: Record<string, boolean>
+}
+
 export type GateRuleMode = 'buy_new' | 'add' | 'tp' | 'sl' | 'close' | 'adjust'
 
 export interface GateRuleItem {
@@ -2896,6 +3497,7 @@ export interface PlanCheckResult {
   disclaimer: string
   ai_meta?: AiExecutionMeta | null
   warnings: string[]
+  continuity?: PlanCheckContinuityMeta
 }
 
 export interface PlanCheckArtifact {
@@ -2906,6 +3508,7 @@ export interface PlanCheckArtifact {
   status: 'ok' | 'failed' | 'cancelled'
   data_as_of?: string | null
   symbol?: string | null
+  parent_attempt_id?: string | null
   result: PlanCheckResult
   trace: AnalysisTraceNode[]
   usage: AiUsageMeta
@@ -2927,6 +3530,8 @@ export interface PlanCheckSummary {
   symbol?: string | null
   market?: string | null
   profile_id?: string | null
+  parent_attempt_id?: string | null
+  continuity_mode?: PlanCheckContinuityMeta['mode'] | null
   created_at?: string | null
   result_status?: string | null
 }
@@ -3155,8 +3760,12 @@ export async function* tradingCheckPlanStream(
   entryId: string,
   profileId?: string,
   signal?: AbortSignal,
+  continuity = false,
 ): AsyncGenerator<PlanCheckStreamEvent> {
-  const qs = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : ''
+  const params = new URLSearchParams()
+  if (profileId) params.set('profile_id', profileId)
+  if (continuity) params.set('continuity', 'true')
+  const qs = params.toString()
   const res = await fetch(
     `/api/trading/plans/${encodeURIComponent(date)}/entries/${encodeURIComponent(entryId)}/check${qs}`,
     { method: 'POST', signal },
@@ -3195,6 +3804,28 @@ export function tradingListPlanChecks(symbol?: string, limit = 50) {
 
 export function tradingGetPlanCheck(attemptId: string) {
   return request<PlanCheckArtifact>(`/api/trading/plan-checks/${encodeURIComponent(attemptId)}`)
+}
+
+export interface PlanCheckContinuityChainNode {
+  attempt_id: string
+  artifact_id: string
+  status: string
+  symbol: string | null
+  data_as_of: string | null
+  created_at: string | null
+  parent_attempt_id: string | null
+  continuity_mode: PlanCheckContinuityMeta['mode'] | 'unknown'
+  continuity_reason: string
+  bars_delta: number
+  usage: AiUsageMeta
+}
+
+export function tradingGetPlanCheckContinuity(attemptId: string) {
+  return request<{
+    chain: PlanCheckContinuityChainNode[]
+    depth: number
+    has_parent: boolean
+  }>(`/api/trading/plan-checks/${encodeURIComponent(attemptId)}/continuity`)
 }
 
 export function tradingPlanCheckExportUrl(attemptId: string, format: 'json' | 'markdown') {

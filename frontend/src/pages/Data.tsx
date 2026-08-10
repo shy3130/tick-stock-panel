@@ -41,6 +41,7 @@ import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
+import { ExternalFallbackCard } from '@/components/data/ExternalFallbackCard'
 import { EnrichedSchemaModal } from '@/components/data/SchemaModal'
 import { Skeleton } from '@/components/data/Skeleton'
 import { ExtDataStatCard } from '@/components/ext-data/ExtDataStatCard'
@@ -769,6 +770,9 @@ export function Data() {
               )}
             </div>
           </div>
+
+          {/* 受控外部行情降级(默认关闭) — 紧邻实时行情配置 */}
+          <ExternalFallbackCard />
         </div>
 
         {/* 数据画像 */}

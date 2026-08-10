@@ -18,7 +18,7 @@ import {
   useCapabilities,
 } from '@/lib/useSharedQueries'
 import { useUpdateQuoteInterval, useToggleRealtimeQuotes } from '@/lib/useSharedMutations'
-import { api } from '@/lib/api'
+import { api, resolveQuoteDataState, quoteDataStateText, quoteSnapshotText } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
@@ -69,6 +69,24 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const indicesPinned = prefs?.indices_nav_pinned ?? true
   const isRunning = quoteStatus?.running ?? false
   const isTrading = quoteStatus?.is_trading_hours ?? false
+  // 数据健康: 仅 ready 代表行情真的在更新, 线程存活不算
+  const quoteDataState = resolveQuoteDataState(quoteStatus)
+  const isQuoteReady = quoteDataState === 'ready'
+  const quoteSnapshot = quoteSnapshotText(quoteStatus?.source_as_of)
+  const isQuoteLive = isQuoteReady && !quoteSnapshot
+  const quoteStateDesc = !realtimeEnabled
+    ? '已关闭'
+    : isQuoteLive
+      ? '运行中'
+      : isQuoteReady
+        ? '轮询中，本地快照可用'
+        : !isTrading
+          ? '非交易时段，将在交易时间自动开启'
+          : quoteDataState
+            ? quoteDataStateText(quoteDataState)
+            : isRunning
+              ? '轮询中'
+              : '已关闭'
   const interval = intervalData?.interval ?? 10
   const minInterval = intervalData?.min_interval ?? 5
   const maxInterval = intervalData?.max_interval ?? 60
@@ -275,7 +293,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         <Card icon={Activity} title="行情轮询">
           <ToggleRow
             label="实时行情"
-            desc={isRunning && isTrading ? '运行中' : isRunning ? '运行中 (非交易时段)' : '已关闭'}
+            desc={quoteSnapshot ? `${quoteStateDesc} · ${quoteSnapshot}` : quoteStateDesc}
             checked={realtimeEnabled}
             onChange={handleToggleQuote}
           />

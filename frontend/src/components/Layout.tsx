@@ -33,7 +33,7 @@ import {
   Flame,
   BarChart3,
   PieChart,
-  Layers3,
+  Activity,
   Landmark,
   Cable,
   RadioTower,
@@ -43,9 +43,14 @@ import {
   NotebookPen,
   Bot,
   Eye,
+  FlaskConical,
+  Target,
+  Network,
+
   Sparkles,
+  Globe,
 } from 'lucide-react'
-import { api, type IndexQuote } from '@/lib/api'
+import { api, resolveQuoteDataState, quoteDataStateText, quoteSnapshotText, indexQuotesDegraded, indexFallbackReasonText, type IndexQuotesResponse } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
 
@@ -70,13 +75,17 @@ const nav = [
   { to: '/optimizer', label: '组合优化', icon: PieChart },
   { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
   { to: '/limit-ladder', label: '连板梯队', icon: Flame },
-  { to: '/concept-analysis', label: '概念分析', icon: Layers3 },
   { to: '/industry-analysis', label: '行业分析', icon: Landmark },
+  { to: '/regime', label: '市场环境', icon: Activity },
   { to: '/financials', label: '财务分析', icon: FileText },
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/agent', label: 'AI 助手', icon: Bot },
   { to: '/journal', label: '交易复盘', icon: NotebookPen },
+  { to: '/research', label: '研究中心', icon: FlaskConical },
+  { to: '/signal-scorecard', label: '信号记分卡', icon: Target },
+  { to: '/cross-section', label: '横截面分析', icon: Network },
+
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/trading', label: '交易', icon: Cable },
   { to: '/data',       label: '数据',   icon: Database },
@@ -101,10 +110,15 @@ const NAV_CATEGORY: Record<string, NavCategory> = {
   '/stock-analysis': 'analysis',
   '/concept-analysis': 'analysis',
   '/industry-analysis': 'analysis',
+  '/regime': 'analysis',
   '/financials': 'analysis',
   '/review': 'analysis',
   '/agent': 'analysis',
   '/journal': 'analysis',
+  '/research': 'analysis',
+  '/signal-scorecard': 'analysis',
+  '/cross-section': 'analysis',
+
 }
 
 /** 扩展分析菜单 (/analysis/*) 一律归入 AI 分析; 未知内置项默认查看。 */
@@ -152,32 +166,50 @@ function MonitorBadge({ active }: { active: boolean }) {
   )
 }
 
-function SidebarIndexQuotes({ rows, items }: { rows: IndexQuote[] | undefined; items: CoreIndex[] }) {
+function SidebarIndexQuotes({ data, items }: { data: IndexQuotesResponse | undefined; items: CoreIndex[] }) {
   if (items.length === 0) return null
+  const rows = data?.rows
+  // 外部源降级标识: 仅 degraded=true / source=fallback_external / 行 source=tencent_quote 时显示;
+  // 本地实时与日线兜底(index_daily)一律不误标
+  const degraded = indexQuotesDegraded(data)
+  const reasonText = indexFallbackReasonText(data?.fallback_reason)
   const quoteBySymbol = new Map((rows ?? []).map(q => [q.symbol, q]))
   return (
-    <div className="mt-2 grid grid-cols-2 gap-1.5">
-      {items.map(item => {
-        const q = quoteBySymbol.get(item.symbol)
-        const value = q?.last_price ?? q?.close
-        const pct = q?.change_pct
-        return (
-          <NavLink
-            key={item.symbol}
-            to={`/indices?symbol=${encodeURIComponent(item.symbol)}`}
-            className="block rounded bg-elevated/60 px-2 py-1.5 transition-colors hover:bg-elevated"
-            title={`${item.name} ${item.symbol}`}
+    <div className="mt-2">
+      {degraded && (
+        <div className="mb-1">
+          <span
+            className="inline-flex cursor-help items-center gap-1 rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] leading-none text-warning/80"
+            title={`指数行情来自腾讯公共行情（${reasonText ?? '本地快照不可用'}），为外部源降级数据，仅供展示；不会写入本地行情库，也不参与选股、监控、回测。`}
           >
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[10px] text-secondary">{item.name}</span>
-              <span className={`text-[10px] font-mono ${indexPctClass(pct)}`}>{fmtIndexPct(pct)}</span>
-            </div>
-            <div className="mt-0.5 truncate font-mono text-[10px] text-foreground/80">
-              {fmtIndexValue(value)}
-            </div>
-          </NavLink>
-        )
-      })}
+            <Globe className="h-2.5 w-2.5" aria-hidden />
+            外部源·降级数据
+          </span>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-1.5">
+        {items.map(item => {
+          const q = quoteBySymbol.get(item.symbol)
+          const value = q?.last_price ?? q?.close
+          const pct = q?.change_pct
+          return (
+            <NavLink
+              key={item.symbol}
+              to={`/indices?symbol=${encodeURIComponent(item.symbol)}`}
+              className="block rounded bg-elevated/60 px-2 py-1.5 transition-colors hover:bg-elevated"
+              title={`${item.name} ${item.symbol}`}
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] text-secondary">{item.name}</span>
+                <span className={`text-[10px] font-mono ${indexPctClass(pct)}`}>{fmtIndexPct(pct)}</span>
+              </div>
+              <div className="mt-0.5 truncate font-mono text-[10px] text-foreground/80">
+                {fmtIndexValue(value)}
+              </div>
+            </NavLink>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -237,8 +269,12 @@ export function Layout() {
   useQuoteStream(realtimeEnabled, prefs?.sse_refresh_pages)
 
   const toggleQuote = useToggleRealtimeQuotes()
-  const isRunning = quoteStatus?.running ?? false
   const isTrading = quoteStatus?.is_trading_hours ?? false
+  // 数据健康: 仅 ready 才算行情真的在更新, 线程存活不算
+  const quoteDataState = resolveQuoteDataState(quoteStatus)
+  const isQuoteReady = quoteDataState === 'ready'
+  const quoteSnapshot = quoteSnapshotText(quoteStatus?.source_as_of)
+  const isQuoteLive = isQuoteReady && !quoteSnapshot
   const quoteMode = quoteStatus?.mode ?? 'none'
   const realtimeAllowed = quoteStatus?.realtime_allowed ?? quoteMode !== 'none'
   const isNoneTier = !realtimeAllowed
@@ -448,7 +484,7 @@ export function Layout() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 min-w-0">
                 <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${
-                  realtimeEnabled && isRunning && isTrading
+                  realtimeEnabled && isQuoteLive
                     ? 'bg-accent animate-pulse'
                     : realtimeEnabled
                       ? 'bg-warning/60'
@@ -481,18 +517,27 @@ export function Layout() {
             </div>
           )}
 
-          {/* 状态提示 */}
+          {/* 状态提示 — 仅 ready 视为行情在更新, 其余状态给出真实原因 */}
           {realtimeEnabled && !isNoneTier && (
             <div className="mt-1.5 text-[10px] leading-snug">
-              {isRunning && isTrading ? (
+              {isQuoteLive ? (
                 <span className="text-accent">行情运行中</span>
-              ) : realtimeEnabled && !isTrading ? (
+              ) : isQuoteReady ? (
+                <span className="text-warning/70">轮询中，本地快照可用</span>
+              ) : !isTrading ? (
                 <span className="text-warning/70">非交易时段，将在交易时间自动开启</span>
+              ) : quoteDataState ? (
+                <span className={quoteDataState === 'error' ? 'text-danger/80' : 'text-warning/70'}>
+                  {quoteDataStateText(quoteDataState)}
+                </span>
               ) : null}
+              {quoteSnapshot && (
+                <div className="text-muted">{quoteSnapshot}</div>
+              )}
             </div>
           )}
           {showSidebarQuotes && !isWatchlistMode && !isNoneTier && (
-            <SidebarIndexQuotes rows={sidebarIndexQuotes?.rows} items={sidebarIndexes} />
+            <SidebarIndexQuotes data={sidebarIndexQuotes} items={sidebarIndexes} />
           )}
         </div>
 

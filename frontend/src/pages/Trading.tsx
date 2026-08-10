@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Bot, Briefcase, Cable, CalendarDays, FileDown, FileText, Plus, RefreshCw, Save,
+  Bot, Briefcase, Cable, CalendarDays, FileDown, FileText, GitBranch, Plus, RefreshCw, Save,
   ShieldAlert, ShieldCheck, Square, Trash2, Wallet, type LucideIcon,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
@@ -28,6 +28,7 @@ import { DecisionTrace } from '@/components/analysis/DecisionTrace'
 import { resolveEntryProfile } from '@/lib/aiProfile'
 import { cn } from '@/lib/cn'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
+import { QK } from '@/lib/queryKeys'
 import {
   api,
   tradingAppendEvent,
@@ -39,9 +40,10 @@ import {
   tradingGetPlanCheck,
   tradingGetPlanDeviation,
   tradingGetPortfolio,
-  tradingListPlanChecks,
+  tradingGetPlanCheckContinuity,
   tradingGetTrade,
   tradingListTrades,
+  tradingListPlanChecks,
   tradingOpenTrade,
   tradingPlanCheckExportUrl,
   tradingPutAccounts,
@@ -52,6 +54,8 @@ import {
   type GateEvaluation,
   type PlanAction,
   type PlanCheckArtifact,
+  type PlanCheckContinuityChainNode,
+  type PlanCheckContinuityMeta,
   type PlanEntry,
   type PortfolioSnapshot,
   type Trade,
@@ -127,6 +131,14 @@ const FLAG_LABEL: Record<string, string> = {
   loss_add: '亏损加仓',
   gate_bypassed: '绕过门禁',
   audit_missing: '审计断链',
+}
+
+/** M25 连续性判定模式 — 徽标映射。仅比较本地数据锚点，不含执行语义。 */
+const CONTINUITY_MODE_META: Record<string, { label: string; badge: string }> = {
+  fresh:           { label: '全新分析',   badge: 'border-border bg-elevated/40 text-muted' },
+  incremental:     { label: '增量分析',   badge: 'border-success/30 bg-success/10 text-success' },
+  full_reanalysis: { label: '全量重算',   badge: 'border-warning/30 bg-warning/10 text-warning' },
+  unknown:         { label: '未知',       badge: 'border-border bg-elevated/40 text-muted' },
 }
 
 // ===== 工具函数 =====
@@ -1053,6 +1065,8 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
   const [checkProgress, setCheckProgress] = useState('')
   const [checkError, setCheckError] = useState('')
   const [checkArtifact, setCheckArtifact] = useState<PlanCheckArtifact | null>(null)
+  // M25: 连续性分析 opt-in, 默认关闭; 仅比较本地数据锚点, 不含执行语义。
+  const [continuity, setContinuity] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const checksQuery = useQuery({
     queryKey: ['trading-plan-checks'],
@@ -1070,6 +1084,7 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
       if (!data.structured_plan_check_enabled) {
         abortRef.current?.abort()
         setCheckArtifact(null)
+        setContinuity(false)
       }
     },
   })
@@ -1163,7 +1178,7 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
       || resolveEntryProfile('trading_plan_check', aiProfiles.data?.profiles ?? [], aiProfiles.data?.default_id ?? '')
       || undefined
     try {
-      for await (const event of tradingCheckPlanStream(date, entry.id, selectedProfile, controller.signal)) {
+      for await (const event of tradingCheckPlanStream(date, entry.id, selectedProfile, controller.signal, continuity)) {
         if (event.type === 'progress') {
           const stage = typeof event.stage === 'string' ? event.stage : ''
           setCheckProgress(stage === 'stage2' ? '正在检查已保存计划…' : stage === 'stage1' ? '正在诊断 K 线事实…' : '正在执行程序检查…')
@@ -1248,6 +1263,23 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
             </button>
           </div>
         </div>
+        {featureEnabled && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-elevated/20 px-3 py-2">
+            <label className="inline-flex cursor-pointer items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={continuity}
+                onChange={e => setContinuity(e.target.checked)}
+                className="h-3.5 w-3.5 cursor-pointer rounded border-border accent-accent"
+              />
+              <GitBranch className="h-3 w-3 text-muted" />
+              <span className="text-[11px] font-medium text-foreground">连续性分析</span>
+            </label>
+            <span className="text-[9px] leading-relaxed text-muted">
+              仅比较本地数据锚点（数据截止日 / 策略配置 / 市场 / 复权），不含执行语义；锚点失配或跨度过大时自动回到全量分析，不生成交易建议。
+            </span>
+          </div>
+        )}
         {planQuery.isLoading ? (
           <p className="py-6 text-center text-xs text-muted">加载计划中…</p>
         ) : (
@@ -1438,6 +1470,18 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
                         {item.symbol ?? '未知标的'}
                       </button>
                       <span className="text-muted">{item.result_status === 'review_ready' ? '已生成审查' : '无可执行结果'}</span>
+                      {item.continuity_mode && (
+                        <span
+                          className={cn(
+                            'inline-flex items-center gap-0.5 rounded border px-1 py-px text-[9px] font-medium',
+                            (CONTINUITY_MODE_META[item.continuity_mode] ?? CONTINUITY_MODE_META.unknown).badge,
+                          )}
+                          title={`连续性: ${(CONTINUITY_MODE_META[item.continuity_mode] ?? CONTINUITY_MODE_META.unknown).label}`}
+                        >
+                          <GitBranch className="h-2.5 w-2.5" />
+                          {(CONTINUITY_MODE_META[item.continuity_mode] ?? CONTINUITY_MODE_META.unknown).label}
+                        </span>
+                      )}
                       <span className="ml-auto font-mono text-muted">{item.created_at?.slice(0, 19).replace('T', ' ') ?? '—'}</span>
                       <a
                         href={tradingPlanCheckExportUrl(item.attempt_id, 'markdown')}
@@ -1561,6 +1605,7 @@ function PlanCheckResultView({ artifact }: { artifact: PlanCheckArtifact }) {
           {result.gate.reasons.map((reason, index) => <li key={`${reason}-${index}`}>· {reason}</li>)}
         </ul>
       )}
+      <ContinuitySection artifact={artifact} />
 
       {result.stage1 && (
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -1619,6 +1664,126 @@ function PlanCheckResultView({ artifact }: { artifact: PlanCheckArtifact }) {
       </p>
     </section>
   )
+}
+
+/**
+ * M25: 计划检查连续性面板。
+ *
+ * 触发条件: artifact.parent_attempt_id 或 artifact.result.continuity 存在。
+ * - 摘要: 当前 artifact 自身的连续性判定 (mode / reason / bars_delta / data_as_of)。
+ * - 父链: 仅在存在 parent_attempt_id 时按需查询 tradingGetPlanCheckContinuity,
+ *   展示 self → parent → ... 的 mode / reason / bars_delta / data_as_of / token usage。
+ * 只读研究投影, 不含执行语义, 不生成交易建议。
+ */
+function ContinuitySection({ artifact }: { artifact: PlanCheckArtifact }) {
+  const meta: PlanCheckContinuityMeta | undefined = artifact.result.continuity
+  const hasParent = Boolean(artifact.parent_attempt_id) || Boolean(meta?.parent_attempt_id)
+  // 链查询仅在确有父链时启用 (避免 fresh / 无 parent 的 artifact 发起无谓请求)。
+  const chainQuery = useQuery({
+    queryKey: QK.planCheckContinuity(artifact.attempt_id),
+    queryFn: () => tradingGetPlanCheckContinuity(artifact.attempt_id),
+    enabled: hasParent,
+    retry: false,
+  })
+
+  // 既无 parent 也无 continuity 摘要 → 不渲染。
+  if (!meta && !hasParent) return null
+
+  const modeMeta = meta ? (CONTINUITY_MODE_META[meta.mode] ?? CONTINUITY_MODE_META.unknown) : null
+
+  return (
+    <div className="mt-3 rounded-md border border-border/60 bg-elevated/20 p-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground">
+          <GitBranch className="h-3 w-3 text-muted" />连续性
+        </span>
+        {modeMeta && (
+          <span className={cn('rounded border px-1.5 py-0.5 text-[9px] font-medium', modeMeta.badge)}>
+            {modeMeta.label}
+          </span>
+        )}
+        <span className="text-[9px] leading-relaxed text-muted">
+          仅比较本地数据锚点，不含执行语义；锚点失配或跨度过大时回到全量分析。
+        </span>
+      </div>
+
+      {meta && (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <ContinuityField label="判定原因" value={meta.reason || '—'} span />
+          <ContinuityField label="新增 bar" value={String(meta.bars_delta ?? 0)} mono />
+          <ContinuityField label="父数据截止" value={meta.parent_data_as_of ?? '—'} mono />
+          <ContinuityField label="当前数据截止" value={meta.self_data_as_of ?? '—'} mono />
+        </div>
+      )}
+
+      {hasParent && (
+        <div className="mt-2">
+          <div className="mb-1 text-[9px] font-medium text-muted">
+            父链{chainQuery.data ? `（深度 ${chainQuery.data.depth}）` : ''}
+          </div>
+          {chainQuery.isLoading ? (
+            <p className="text-[10px] text-muted">加载父链中…</p>
+          ) : chainQuery.isError ? (
+            <p className="text-[10px] text-danger">父链查询失败</p>
+          ) : chainQuery.data && chainQuery.data.chain.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full border-separate border-spacing-0 text-[10px]">
+                <thead>
+                  <tr>
+                    {['节点', '模式', '新增 bar', '数据截止', 'tokens', '原因'].map(h => (
+                      <th key={h} className="border-b border-border px-2 py-1 text-left text-[9px] font-medium uppercase tracking-wider text-muted">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {chainQuery.data.chain.map((node: PlanCheckContinuityChainNode, idx: number) => {
+                    const nm = CONTINUITY_MODE_META[node.continuity_mode] ?? CONTINUITY_MODE_META.unknown
+                    const isSelf = idx === 0
+                    return (
+                      <tr key={node.attempt_id} className={cn('align-top', isSelf && 'bg-accent/5')}>
+                        <td className="border-b border-border/50 px-2 py-1 font-mono text-muted">
+                          {isSelf ? '当前' : `↑ ${node.attempt_id.slice(0, 8)}`}
+                        </td>
+                        <td className="border-b border-border/50 px-2 py-1">
+                          <span className={cn('rounded border px-1 py-px text-[9px] font-medium', nm.badge)}>{nm.label}</span>
+                        </td>
+                        <td className="border-b border-border/50 px-2 py-1 text-right font-mono tabular-nums">{node.bars_delta ?? 0}</td>
+                        <td className="border-b border-border/50 px-2 py-1 font-mono text-muted">{node.data_as_of ?? '—'}</td>
+                        <td className="border-b border-border/50 px-2 py-1 font-mono tabular-nums text-muted">{fmtUsageTokens(node.usage)}</td>
+                        <td className="border-b border-border/50 px-2 py-1 text-secondary">{node.continuity_reason || '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 连续性摘要字段卡: value 横跨多列时 span=true。 */
+function ContinuityField({ label, value, mono, span }: {
+  label: string
+  value: string
+  mono?: boolean
+  span?: boolean
+}) {
+  return (
+    <div className={cn('rounded border border-border/50 bg-base/40 px-2 py-1.5', span && 'lg:col-span-2')}>
+      <div className="text-[9px] text-muted">{label}</div>
+      <div className={cn('mt-0.5 text-[10px] leading-relaxed text-secondary', mono && 'font-mono tabular-nums')}>{value}</div>
+    </div>
+  )
+}
+
+/** token 用量紧凑展示: 全 0 / 缺失 → '—'。与 AiExecutionMetaBadge 的计数口径一致。 */
+function fmtUsageTokens(usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null): string {
+  if (!usage) return '—'
+  const total = usage.total_tokens ?? ((usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0))
+  return total > 0 ? total.toLocaleString('en-US') : '—'
 }
 
 function DeviationCard({ title, count, loading, children }: {
