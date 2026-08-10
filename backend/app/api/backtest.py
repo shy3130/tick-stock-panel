@@ -383,7 +383,7 @@ class StrategyBacktestRequest(BaseModel):
     position_sizing: Literal["equal", "score_weight"] = "equal"
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
-
+    regime_filter: dict | None = None  # {states: [...], min_score?: float}
 
 @router.post("/strategy/run")
 def strategy_run(req: StrategyBacktestRequest, request: Request):
@@ -416,6 +416,7 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         position_sizing=req.position_sizing,
         mode=req.mode,
         holding_days=req.holding_days,
+        regime_filter=req.regime_filter,
     )
     result = svc.run(cfg)
     _save_strategy_run_card(request, result)
@@ -465,6 +466,7 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
             position_sizing=req.position_sizing,
             mode=req.mode,
             holding_days=req.holding_days,
+            regime_filter=req.regime_filter,
         ))
 
     full = run_one(start, end)
@@ -536,9 +538,9 @@ def _make_job_key(
     fees_pct: float, slippage_bps: float,
     max_positions: int, max_exposure_pct: float, initial_capital: float, position_sizing: str,
     params: str | None, overrides: str | None,
-    mode: str = "position", holding_days: int = 5,
+    mode: str = "position", holding_days: int = 5, regime_filter: str | None = None,
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -562,6 +564,7 @@ async def strategy_stream(
     overrides: str | None = None,
     mode: str = "position",
     holding_days: int = 5,
+    regime_filter: str | None = None,
 ):
     """SSE 流式策略回测: 实时推送进度, 完成后推送结果, 支持重连 (刷新/切页后恢复)。
 
@@ -600,7 +603,7 @@ async def strategy_stream(
         matching, entry_fill, exit_fill,
         fees_pct, slippage_bps, max_positions, max_exposure_pct, initial_capital, position_sizing,
         params, overrides,
-        mode, holding_days,
+        mode, holding_days, regime_filter,
     )
 
     _cleanup_stale_jobs()
@@ -641,6 +644,7 @@ async def strategy_stream(
                 position_sizing=position_sizing,
                 mode=mode,
                 holding_days=int(holding_days),
+                regime_filter=json.loads(regime_filter) if regime_filter else None,
             )
 
             def _run_backtest():

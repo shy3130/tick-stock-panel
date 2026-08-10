@@ -44,12 +44,34 @@ class StrategyBacktestConfig:
     ] = "equal"
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
+    regime_filter: dict | None = None  # {states: [...], min_score?: float}; None/空 → 不过滤
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
             self.entry_fill = self.matching
         if self.exit_fill is None:
             self.exit_fill = self.matching
+
+    @staticmethod
+    def _regime_filter_allowed_states(rf: dict | None) -> set[str] | None:
+        if not rf or not isinstance(rf, dict):
+            return None
+        states = rf.get("states")
+        if not states or not isinstance(states, list):
+            return None
+        return {s for s in states if isinstance(s, str)}
+
+    @staticmethod
+    def _regime_filter_min_score(rf: dict | None) -> float | None:
+        if not rf or not isinstance(rf, dict):
+            return None
+        ms = rf.get("min_score")
+        if ms is None:
+            return None
+        try:
+            return float(ms)
+        except (TypeError, ValueError):
+            return None
 
 
 @dataclass
@@ -81,6 +103,8 @@ class StrategyBacktestService:
         config: StrategyBacktestConfig,
         progress_cb: "Callable[[dict], None] | None" = None,
         cancel_event: "threading.Event | None" = None,
+        *,
+        panel: "pl.DataFrame | None" = None,
     ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:10]
@@ -136,20 +160,12 @@ class StrategyBacktestService:
         timing_ms: dict[str, float] = {}
 
         # 加载面板 (含 warmup + 全量指标 + 信号)。warmup 只用于指标/形态计算, 不参与正式交易。
-        warmup_days = max(120, int(max(s.lookback_days or 1, 1) * 1.5))
-        load_start = config.start - timedelta(days=warmup_days)
-
         # 全量模式: entries 只在正式区间触发, exits 需要 end 之后的尾部数据继续执行策略卖点。
-        # 若策略有 max_hold_days, 用它决定尾部窗口；否则 holding_days 只作为兜底观察上限。
-        full_horizon_days = int(max_hold_days or config.holding_days or 5)
-        full_horizon_days = max(full_horizon_days, 1)
-        load_end = config.end
-        if config.mode == "full":
-            fwd_buffer = full_horizon_days + 5  # 多取几天, 容错停牌缺口/open_t+1
-            load_end = config.end + timedelta(days=fwd_buffer * 2)  # 日历日放宽, 确保覆盖 N 个交易日
+        load_start, load_end, full_horizon_days = self._compute_load_range(s, config, max_hold_days)
 
         t_load = time.perf_counter()
-        panel = self.engine.load_panel(config.symbols, load_start, load_end)
+        if panel is None:
+            panel = self.engine.load_panel(config.symbols, load_start, load_end)
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
         if panel.is_empty():
             return _err("无数据，请检查日期范围或先运行盘后管道")
@@ -171,15 +187,24 @@ class StrategyBacktestService:
                     logger.warning("basic_filter mask failed: %s", e)
                     return _err(f"基础过滤计算失败: {e}")
 
-        # 策略候选层用于评分归一化；entry_signals 只是买点层, 不参与 score universe。
-        candidate_filter_mask = self._build_candidate_filter_mask(panel, s, params)
-        candidate_mask = basic_mask & candidate_filter_mask
-        panel = self._apply_score(panel, s, overrides, universe_mask=candidate_mask)
+        if getattr(s, "execution_backend", "polars_expr") == "composite":
+            # 叠加策略回测: 逐子策略构建 entry/exit/score 掩码后合并。
+            # 退出采用来源投影(每个子策略 exit 仅在自己持仓窗口生效, 不串平其他子的仓位)。
+            entry_mask, exit_mask, panel = self._build_composite_masks(
+                panel, s, overrides, params, basic_mask,
+                formal_range=formal_range, load_end=load_end, config=config,
+            )
+        else:
+            # 策略候选层用于评分归一化；entry_signals 只是买点层, 不参与 score universe。
+            candidate_filter_mask = self._build_candidate_filter_mask(panel, s, params)
+            candidate_mask = basic_mask & candidate_filter_mask
+            panel = self._apply_score(panel, s, overrides, universe_mask=candidate_mask)
 
-        entry_mask = self._build_entry_mask_from_candidate(panel, candidate_mask, s, entry_signals)
-        entry_mask = entry_mask & formal_range
-        raw_exit_mask = self._build_signal_mask(panel, exit_signals, "_exit")
-        exit_mask = raw_exit_mask & (self._date_range_mask(panel, config.start, load_end) if config.mode == "full" else formal_range)
+            entry_mask = self._build_entry_mask_from_candidate(panel, candidate_mask, s, entry_signals)
+            entry_mask = entry_mask & formal_range
+            entry_mask = entry_mask & self._apply_regime_t1_mask(panel, config)
+            raw_exit_mask = self._build_signal_mask(panel, exit_signals, "_exit")
+            exit_mask = raw_exit_mask & (self._date_range_mask(panel, config.start, load_end) if config.mode == "full" else formal_range)
         timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
 
         if not entry_mask.any():
@@ -263,6 +288,15 @@ class StrategyBacktestService:
             "score_min": score_min,
             "score_max": score_max,
             "source": s.source,
+            "execution_backend": getattr(s, "execution_backend", "polars_expr"),
+            "composite_children": (
+                [
+                    {"id": c.strategy_id, "weight": c.weight}
+                    for c in s.composite.children
+                ]
+                if getattr(s, "execution_backend", "polars_expr") == "composite" and s.composite is not None
+                else None
+            ),
         }
 
         elapsed = (time.perf_counter() - t0) * 1000
@@ -280,7 +314,237 @@ class StrategyBacktestService:
             elapsed_ms=round(elapsed, 1),
         )
 
+    # ── 叠加策略回测: 掩码合并 ──
+
+    def _build_composite_masks(
+        self,
+        panel: pl.DataFrame,
+        s: StrategyDef,
+        overrides: dict,
+        params: dict,
+        basic_mask: pl.Series,
+        *,
+        formal_range: pl.Series,
+        load_end: date,
+        config: "StrategyBacktestConfig",
+    ) -> tuple[pl.Series, pl.Series, pl.DataFrame]:
+        """叠加策略: 逐子策略构建 entry/exit/score → 合并为统一掩码。
+
+        合并语义(与选股 merge_results 同口径):
+        - entry: union=OR(各子 entry); intersect=Σ(entries) >= min_confirm
+        - exit: 来源投影。每个子策略 i 的 exit 仅在自己 entry 后的持仓窗口内生效,
+          避免"B 的退出信号平掉 A 的仓位"。窗口由全局 max_hold 封顶。
+        - score: 各子内部按 score 降序排名归一到 [0,1](跨子策略可比), 命中子策略间按权重加权。
+        """
+        from app.strategy.engine import _parse_composite_children
+
+        assert s.composite is not None
+
+        override_children = overrides.get("children")
+        if isinstance(override_children, list) and override_children:
+            children = _parse_composite_children(override_children).children
+        else:
+            children = s.composite.children
+
+        child_ids = [c.strategy_id for c in children]
+        child_weights = [c.weight for c in children]
+        merge_mode = str(params.get("merge_mode") or "union")
+        min_confirm = int(params.get("min_confirm") or 0)
+
+        # 退出投影窗口: 与撮合层 max_hold 一致; 无上限时取 250 交易日封顶。
+        max_hold = self._override_value(overrides, "max_hold_days", s.max_hold_days)
+        composite_max_hold = int(max_hold) if max_hold else 250
+        composite_max_hold = max(composite_max_hold, 1)
+
+        shared_bf = self._effective_basic_filter(s, overrides)
+        override_loader = getattr(self.strategy_engine, "_override_loader", None)
+
+        entry_masks: list[pl.Series] = []
+        exit_masks: list[pl.Series] = []
+        child_scores: list[pl.Series] = []
+
+        for idx, cid in enumerate(child_ids):
+            child_def = self.strategy_engine.get(cid)
+            child_override: dict = {}
+            if override_loader is not None:
+                try:
+                    loaded = override_loader(cid)
+                    if isinstance(loaded, dict):
+                        child_override = dict(loaded)
+                except Exception:  # noqa: BLE001
+                    pass
+            if shared_bf:
+                child_override["basic_filter"] = shared_bf
+            child_params = self._normalize_params({}, child_def)
+
+            # 候选层 AND composite basic_filter; entry = 候选 AND 买点信号。
+            candidate = self._build_candidate_filter_mask(panel, child_def, child_params) & basic_mask
+            child_entry_signals = self._effective_signals(
+                child_override, "entry_signals", child_def.entry_signals
+            )
+            child_exit_signals = self._effective_signals(
+                child_override, "exit_signals", child_def.exit_signals
+            )
+            entry_m = self._build_entry_mask_from_candidate(
+                panel, candidate, child_def, child_entry_signals
+            )
+            exit_m = self._build_signal_mask(panel, child_exit_signals, f"_cexit_{idx}")
+
+            # 子策略 score: 复用 _apply_score(子策略自身口径), 取 score 列。
+            scored = self._apply_score(panel, child_def, child_override, universe_mask=candidate)
+            child_scores.append(
+                scored["score"] if "score" in scored.columns
+                else pl.Series(f"_cscore_{idx}", [0.0] * len(panel))
+            )
+            entry_masks.append(entry_m)
+            exit_masks.append(exit_m)
+
+        # ── 合并 entry ──
+        if merge_mode == "intersect":
+            effective_min = max(min_confirm, 1) if min_confirm and min_confirm > 0 else len(child_ids)
+            hit_count = entry_masks[0].cast(pl.Int32)
+            for m in entry_masks[1:]:
+                hit_count = hit_count + m.cast(pl.Int32)
+            merged_entry = hit_count >= effective_min
+        else:
+            merged_entry = entry_masks[0]
+            for m in entry_masks[1:]:
+                merged_entry = merged_entry | m
+
+        # ── 合并 exit (来源投影) ──
+        merged_exit = self._merge_exit_with_projection(
+            panel, entry_masks, exit_masks, composite_max_hold
+        )
+
+        # ── 合并 score (排名归一加权) ──
+        composite_score = self._composite_ranked_score(
+            panel, child_scores, entry_masks, child_weights
+        )
+        panel = panel.with_columns(composite_score.alias("score"))
+
+        entry_mask = merged_entry & formal_range
+        # composite 入场同样受 regime T-1 过滤约束(与普通策略口径一致)。
+        entry_mask = entry_mask & self._apply_regime_t1_mask(panel, config)
+        full_or_formal = (
+            self._date_range_mask(panel, config.start, load_end)
+            if config.mode == "full" else formal_range
+        )
+        exit_mask = merged_exit & full_or_formal
+        return entry_mask, exit_mask, panel
+
+    @staticmethod
+    def _hold_window_mask(panel: pl.DataFrame, entry_mask: pl.Series, max_hold: int) -> pl.Series:
+        """计算持仓窗口掩码: entry 后 max_hold 个 bar 内为 True(同 symbol)。
+
+        panel 须按 [symbol, date] 排序(回测面板保证)。实现用前向填充 last-entry 行号:
+        hold[t] = True 当且仅当存在 t'<=t 使 entry[t']=True 且 t-t' < max_hold。
+        """
+        if max_hold <= 0:
+            max_hold = 1
+        work = panel.select("symbol").with_columns(
+            entry_mask.cast(pl.Boolean).alias("_e"),
+            pl.int_range(pl.len()).over("symbol").alias("_rn"),
+        )
+        work = work.with_columns(
+            pl.when(pl.col("_e"))
+            .then(pl.col("_rn"))
+            .otherwise(None)
+            .forward_fill()
+            .over("symbol")
+            .alias("_last_entry")
+        )
+        hold_expr = (
+            pl.col("_last_entry").is_not_null()
+            & ((pl.col("_rn") - pl.col("_last_entry")) < max_hold)
+        )
+        return work.select(hold_expr.alias("_hold"))["_hold"].fill_null(False).cast(pl.Boolean)
+
+    def _merge_exit_with_projection(
+        self,
+        panel: pl.DataFrame,
+        entry_masks: list[pl.Series],
+        exit_masks: list[pl.Series],
+        max_hold: int,
+    ) -> pl.Series:
+        """退出来源投影: 每个子策略的 exit 仅在自己持仓窗口内生效, 再 OR 合并。"""
+        n = len(panel)
+        merged = pl.Series("_exit_merged", [False] * n, dtype=pl.Boolean)
+        for entry_m, exit_m in zip(entry_masks, exit_masks, strict=True):
+            hold = self._hold_window_mask(panel, entry_m, max_hold)
+            merged = merged | (exit_m & hold)
+        return merged
+
+    @staticmethod
+    def _composite_ranked_score(
+        panel: pl.DataFrame,
+        child_scores: list[pl.Series],
+        entry_masks: list[pl.Series],
+        child_weights: list[float],
+    ) -> pl.Series:
+        """各子内部按 score 降序排名归一到 [0,1](跨子策略可比), 命中子策略间按权重加权。
+
+        单候选/无 score 用中性分 0.5。结果 *100 对齐 _apply_score 的 0~100 量纲。
+        """
+        n = len(panel)
+        neutral = 0.5
+        # 命中权重和 与 加权排名分
+        weight_sum_parts: list[pl.Expr] = []
+        blended_parts: list[pl.Expr] = []
+        for idx, (score_col, entry_m) in enumerate(zip(child_scores, entry_masks, strict=True)):
+            w = float(child_weights[idx]) if idx < len(child_weights) else 1.0
+            hit_score = pl.when(entry_m).then(score_col).otherwise(None)
+            hit_count = hit_score.is_not_null().sum().over("date")
+            rk = hit_score.rank(method="ordinal", descending=True).over("date")
+            norm = pl.when(entry_m).then(
+                pl.when(hit_count > 1).then(
+                    1.0 - (rk.cast(pl.Float64) - 1.0) / (hit_count.cast(pl.Float64) - 1.0)
+                ).otherwise(pl.lit(neutral))
+            ).otherwise(0.0)
+            weight_sum_parts.append(pl.when(entry_m).then(pl.lit(w)).otherwise(pl.lit(0.0)))
+            blended_parts.append(pl.when(entry_m).then(norm * pl.lit(w)).otherwise(pl.lit(0.0)))
+
+        weight_sum = weight_sum_parts[0]
+        for part in weight_sum_parts[1:]:
+            weight_sum = weight_sum + part
+        blended = blended_parts[0]
+        for part in blended_parts[1:]:
+            blended = blended + part
+        safe = pl.when(weight_sum > 0).then(weight_sum).otherwise(pl.lit(1.0))
+        score_expr = (blended / safe * 100.0).fill_null(0.0).fill_nan(0.0)
+        return panel.select(score_expr.alias("score"))["score"]
+
     # ── 全量模拟 (选股能力统计, 不建组合不算净值) ──
+
+    @staticmethod
+    def _compute_load_range(
+        s: "StrategyDef",
+        config: "StrategyBacktestConfig",
+        max_hold_days: int | None,
+    ) -> "tuple[date, date, int]":
+        """计算 panel 加载区间 (含 warmup) 与 full 模式前瞻天数。
+
+        warmup 只用于指标/形态计算, 不参与正式交易。
+        full 模式: entries 只在正式区间触发, exits 需要 end 之后尾部数据继续执行卖点。
+        """
+        warmup_days = max(120, int(max(s.lookback_days or 1, 1) * 1.5))
+        load_start = config.start - timedelta(days=warmup_days)
+        full_horizon_days = max(int(max(max_hold_days or config.holding_days or 5, 1)), 1)
+        load_end = config.end
+        if config.mode == "full":
+            fwd_buffer = full_horizon_days + 5  # 多取几天, 容错停牌缺口/open_t+1
+            load_end = config.end + timedelta(days=fwd_buffer * 2)
+        return load_start, load_end, full_horizon_days
+
+    def compute_load_range(self, config: "StrategyBacktestConfig") -> "tuple[date, date]":
+        """计算 config 对应的 panel 加载区间 (含 warmup)。
+
+        供参数网格预加载共享 panel: 所有 grid scenario 的 load 区间相同
+        (仅 params 不同, 不影响 warmup/horizon), 故可复用同一份 panel。
+        """
+        s = self.strategy_engine.get(config.strategy_id)
+        max_hold_days = self._override_value(config.overrides or {}, "max_hold_days", s.max_hold_days)
+        load_start, load_end, _ = self._compute_load_range(s, config, max_hold_days)
+        return load_start, load_end
 
     def _run_full_simulation(
         self,
@@ -637,6 +901,28 @@ class StrategyBacktestService:
             "cause_tag": getattr(t, "cause_tag", "strategy_outcome"),
         }
 
+    def _apply_regime_t1_mask(self, panel: pl.DataFrame, config: "StrategyBacktestConfig") -> pl.Series:
+        """T-1 环境入场过滤: 缺数据 fail-open, 只 mask entry 不动 exit。
+
+        返回与 panel 行对齐的 Boolean Series。任何异常 → 全 True(fail-open),
+        绝不因 regime 数据缺失而阻断回测。
+        """
+        rf = config.regime_filter
+        allowed = StrategyBacktestConfig._regime_filter_allowed_states(rf)
+        min_score = StrategyBacktestConfig._regime_filter_min_score(rf)
+        if allowed is None and min_score is None:
+            return pl.Series([True] * len(panel), dtype=pl.Boolean)
+        try:
+            from app.services.regime_builder import regime_t1_entry_mask
+            data_dir = self.engine.repo.store.data_dir
+            mask = regime_t1_entry_mask(panel, data_dir, allowed_states=allowed, min_score=min_score)
+            if mask is None:
+                return pl.Series([True] * len(panel), dtype=pl.Boolean)
+            return mask.cast(pl.Boolean).fill_null(True)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("regime T-1 mask failed (fail-open): %s", e)
+            return pl.Series([True] * len(panel), dtype=pl.Boolean)
+
     @staticmethod
     def _config_to_dict(c: StrategyBacktestConfig) -> dict:
         score_min, score_max = StrategyBacktestService._normalize_score_range(
@@ -653,16 +939,16 @@ class StrategyBacktestService:
             "score_min": score_min,
             "score_max": score_max,
             "matching": c.matching,
-            "entry_fill": c.entry_fill,
-            "exit_fill": c.exit_fill,
+            "mode": c.mode,
+            "holding_days": c.holding_days,
+            "regime_filter": c.regime_filter,
             "fees_pct": c.fees_pct,
             "slippage_bps": c.slippage_bps,
             "max_positions": c.max_positions,
             "max_exposure_pct": c.max_exposure_pct,
             "initial_capital": c.initial_capital,
             "position_sizing": c.position_sizing,
-            "mode": c.mode,
-            "holding_days": c.holding_days,
+
         }
 
     @staticmethod

@@ -8,7 +8,7 @@ import math
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -51,7 +51,22 @@ def _safe(result_dict: dict) -> dict:
     return result_dict
 
 
-def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
+def _child_meta(engine: StrategyEngine | None, child_id: str) -> dict:
+    """查询子策略的可读名称与来源; engine 缺失或子策略不存在时回退为 id/unknown。"""
+    if engine is None:
+        return {"name": child_id, "source": "unknown"}
+    try:
+        child = engine.get(child_id)
+    except ValueError:
+        return {"name": child_id, "source": "unknown"}
+    return {"name": str(child.meta.get("name") or child_id), "source": child.source}
+
+
+def _strategy_detail(
+    s: StrategyDef,
+    overrides: dict | None = None,
+    engine: StrategyEngine | None = None,
+) -> dict:
     """策略详情（含用户覆盖）"""
     bf = {**s.basic_filter}
     scoring = dict(s.meta.get("scoring", {}))
@@ -69,6 +84,22 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
     # 名称/描述可被用户覆盖
     name = overrides.get("name", s.meta.get("name", "")) if overrides else s.meta.get("name", "")
     description = overrides.get("description", s.meta.get("description", "")) if overrides else s.meta.get("description", "")
+    # 叠加策略: 子策略列表与权重(供前端展示)。override.children 可覆盖 META 固化值。
+    composite_children = None
+    if getattr(s, "execution_backend", "polars_expr") == "composite":
+        raw_children = (
+            overrides.get("children")
+            if overrides and isinstance(overrides.get("children"), list)
+            else s.meta.get("children", [])
+        )
+        composite_children = [
+            {
+                "id": c["strategy_id"],
+                **_child_meta(engine, c["strategy_id"]),
+                "weight": c.get("weight", 1.0),
+            }
+            for c in raw_children
+        ]
 
     return {
         "id": s.meta["id"],
@@ -76,6 +107,8 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
         "description": description or s.meta.get("description", ""),
         "tags": s.meta.get("tags", []),
         "source": s.source,
+        "execution_backend": getattr(s, "execution_backend", "polars_expr"),
+        "asset_types": s.meta.get("asset_types", ["stock"]),
         "version": s.meta.get("version", "1.0.0"),
         "basic_filter": bf,
         "params": s.meta.get("params", []),
@@ -94,6 +127,7 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
         "descending": s.meta.get("descending", True),
         "limit": s.meta.get("limit", 30),
         "display_limit": overrides.get("display_limit") if overrides and "display_limit" in overrides else None,
+        "composite_children": composite_children,
     }
 
 
@@ -136,6 +170,21 @@ class ExportRequest(BaseModel):
     conditions: list[dict] | None = None
 
 
+
+class CompositeChildItem(BaseModel):
+    strategy_id: str
+    weight: float = 1.0
+
+
+class StrategyCompositeSaveRequest(BaseModel):
+    strategy_id: str
+    name: str = ""
+    description: str = ""
+    children: list[CompositeChildItem]
+    merge_mode: Literal["union", "intersect"] = "union"
+    min_confirm: int = 0
+    mode: Literal["create", "update"] = "create"
+
 # ── 列表 / 详情 ─────────────────────────────────────────────────────
 
 
@@ -150,8 +199,8 @@ def list_strategies(request: Request):
         sid = meta["id"]
         s = engine.get(sid)
         overrides = all_overrides.get(sid)
-        result.append(_strategy_detail(s, overrides))
-    return {"strategies": result}
+        result.append(_strategy_detail(s, overrides, engine))
+    return {"strategies": result, "load_errors": engine.load_errors()}
 
 
 @router.get("/{strategy_id}")
@@ -162,7 +211,7 @@ def get_strategy(strategy_id: str, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     overrides = strategy_config.load_override(_data_dir(request), strategy_id)
-    return _strategy_detail(s, overrides or None)
+    return _strategy_detail(s, overrides or None, engine)
 
 
 @router.post("/{strategy_id}/export")
@@ -425,6 +474,143 @@ async def ai_save(req: AISaveRequest, request: Request):
     return {"ok": True, "path": str(path)}
 
 
+def _composite_dir(data_dir: Path) -> Path:
+    return data_dir / "strategies" / "composite"
+
+
+def _render_composite_code(
+    sid: str,
+    name: str,
+    description: str,
+    children: list[dict],
+    merge_mode: str,
+    min_confirm: int,
+) -> str:
+    """渲染声明式 composite 策略 .py 文件内容。
+
+    composite 不含业务代码, 仅通过 META.children 引用子策略 + EXECUTION_BACKEND 声明。
+    权重固化在 META; merge_mode/min_confirm 作为 params(可经 override 轻量调整)。
+    """
+    import json as _json
+
+    children_json = ",\n        ".join(
+        _json.dumps({"strategy_id": c["strategy_id"], "weight": c["weight"]}, ensure_ascii=False)
+        for c in children
+    )
+    safe_name = name or sid
+    return f'''"""叠加策略 {sid}（自动生成, 请勿手改业务逻辑）。"""
+META = {{
+    "id": {sid!r},
+    "name": {safe_name!r},
+    "description": {description!r},
+    "asset_types": ["stock"],
+    "params": [
+        {{"id": "merge_mode", "label": "合并模式", "type": "select",
+          "options": ["union", "intersect"], "default": {merge_mode!r}}},
+        {{"id": "min_confirm", "label": "交集最少确认数", "type": "int",
+          "default": {int(min_confirm)!r}, "min": 0}},
+    ],
+    "scoring": {{}},
+    "order_by": "score",
+    "descending": True,
+    "limit": 100,
+    "children": [
+        {children_json}
+    ],
+}}
+EXECUTION_BACKEND = "composite"
+'''
+
+
+@router.post("/composite/save")
+def save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request):
+    """保存叠加策略: 渲染声明式 .py → 写盘 → reload → 校验。"""
+    import re
+
+    sid = req.strategy_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", sid):
+        raise HTTPException(status_code=400, detail="策略 ID 只能包含字母、数字和下划线")
+    if not sid.startswith("composite_"):
+        raise HTTPException(status_code=400, detail="叠加策略 ID 必须以 composite_ 开头")
+
+    engine = _get_engine(request)
+    data_dir = _data_dir(request)
+
+    existing: StrategyDef | None = None
+    try:
+        existing = engine.get(sid)
+    except ValueError:
+        existing = None
+
+    if req.mode == "create":
+        if existing is not None:
+            raise HTTPException(status_code=400, detail=f"策略 {sid} 已存在，请改用修改模式或换一个策略 ID")
+    else:  # update
+        if existing is None:
+            raise HTTPException(status_code=400, detail=f"策略 {sid} 不存在")
+        if existing.source == "builtin":
+            raise HTTPException(status_code=403, detail="内置策略不可覆盖")
+        # 只允许覆盖 composite 策略(防止把普通策略覆盖成 composite)
+        if getattr(existing, "execution_backend", "polars_expr") != "composite":
+            raise HTTPException(status_code=400, detail="目标策略不是叠加策略，无法以叠加模式覆盖")
+
+    if not req.children:
+        raise HTTPException(status_code=400, detail="叠加策略至少需要一个子策略")
+
+    children = [{"strategy_id": c.strategy_id, "weight": c.weight} for c in req.children]
+    # 子策略存在性 + 非嵌套预检(给出清晰错误, 而非等到 reload 后孤儿移除的笼统报错)。
+    for c in children:
+        if not engine.has(c["strategy_id"]):
+            raise HTTPException(status_code=400, detail=f"子策略 {c['strategy_id']!r} 不存在")
+        try:
+            child_def = engine.get(c["strategy_id"])
+            if getattr(child_def, "execution_backend", "polars_expr") == "composite":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"子策略 {c['strategy_id']!r} 也是叠加策略; 首版禁止嵌套叠加",
+                )
+        except HTTPException:
+            raise
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"子策略 {c['strategy_id']!r} 不存在")
+
+    code = _render_composite_code(
+        sid, req.name, req.description, children, req.merge_mode, req.min_confirm
+    )
+
+    out_dir = _composite_dir(data_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{sid}.py"
+    previous_code = path.read_text(encoding="utf-8") if path.exists() else None
+    path.write_text(code, encoding="utf-8")
+
+    try:
+        engine.reload()
+        loaded = engine.get(sid)
+        if loaded.file_path is None or loaded.file_path.resolve() != path.resolve():
+            raise ValueError("策略加载到了非预期文件，请检查是否存在重复 strategy_id")
+        if loaded.source != "composite":
+            raise ValueError(f"策略来源异常: 期望 composite, 实际 {loaded.source}")
+        if getattr(loaded, "execution_backend", "polars_expr") != "composite":
+            raise ValueError("策略后端异常: 期望 composite")
+    except HTTPException:
+        raise
+    except Exception as e:
+        if previous_code is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(previous_code, encoding="utf-8")
+        engine.reload()
+        raise HTTPException(status_code=400, detail=f"叠加策略保存失败: {e}") from e
+
+    return {
+        "ok": True,
+        "strategy_id": sid,
+        "source": "composite",
+        "path": str(path),
+    }
+
+
 @router.delete("/{strategy_id}")
 def delete_strategy(strategy_id: str, request: Request):
     """删除自定义策略 — 清除 .py 文件 + overrides + 热重载。内置策略不可删除。"""
@@ -438,6 +624,13 @@ def delete_strategy(strategy_id: str, request: Request):
 
     if s.source == "builtin":
         raise HTTPException(status_code=403, detail="内置策略不可删除")
+    # 删除被引用的子策略会令叠加策略加载失败; 删除前 fail-closed 阻止。
+    dependents = engine.find_dependents(strategy_id)
+    if dependents:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该策略被叠加策略 {dependents} 引用，请先解除引用后再删除",
+        )
 
     # 删除策略文件
     if s.file_path and s.file_path.exists():
