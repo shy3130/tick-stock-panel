@@ -407,7 +407,7 @@ export function Agent() {
   async function sendPrompt(prompt: string) {
     const text = prompt.trim()
     if (!text || streaming) return
-    const content = attachment
+    const content = attachment?.text.trim()
       ? `${text}\n\n## 用户附件（只读上下文）\n文件: ${attachment.title}\n类型: ${attachment.kind}\n\n${attachment.text}`
       : text
     let activeSessionId = sessionId
@@ -652,13 +652,22 @@ export function Agent() {
       <div className="flex items-end gap-2 border-t border-border pt-3">
         <div className="min-w-0 flex-1">
           {attachment && (
-            <div className="mb-2 flex max-w-full items-center gap-2 rounded-btn border border-border bg-elevated px-2 py-1 text-xs text-muted">
-              <Paperclip className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{attachment.title}</span>
-              <span className="shrink-0 text-[10px]">{attachment.char_count} 字</span>
-              <button onClick={() => setAttachment(null)} className="ml-auto shrink-0 hover:text-secondary">
-                <X className="h-3.5 w-3.5" />
-              </button>
+            <div className="mb-2 max-w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-xs text-muted">
+              <div className="flex items-center gap-2">
+                <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{attachment.title}</span>
+                <span className="shrink-0 text-[10px]">{attachment.char_count} 字</span>
+                <button onClick={() => setAttachment(null)} className="ml-auto shrink-0 hover:text-secondary">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {attachment.warnings.length > 0 && (
+                <div className="mt-1 text-[10px] text-warning">
+                  {attachment.text
+                    ? attachment.warnings.join('；')
+                    : '未提取到文本（可能是扫描件）；当前未启用 OCR。'}
+                </div>
+              )}
             </div>
           )}
           <textarea

@@ -6,6 +6,43 @@ import pytest
 from app.services import document_reader as dr
 
 
+def _pdf_bytes(text: str | None = "Hello PDF text layer") -> bytes:
+    stream = (
+        f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode()
+        if text is not None
+        else b""
+    )
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    body = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(body))
+        body.extend(f"{index} 0 obj\n".encode())
+        body.extend(obj)
+        body.extend(b"\nendobj\n")
+    xref = len(body)
+    body.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    body.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        body.extend(f"{offset:010d} 00000 n \n".encode())
+    body.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref}\n%%EOF\n"
+        ).encode()
+    )
+    return bytes(body)
+
+
 def test_read_txt_truncates(monkeypatch):
     monkeypatch.setattr(dr, "MAX_CHARS", 5)
 
@@ -115,3 +152,63 @@ def test_redirect_to_private_url_rejected_before_second_request(monkeypatch):
         dr.read_url("https://example.com/a")
 
     assert calls == ["https://example.com/a"]
+
+
+
+def test_read_pdf_extracts_text_layer():
+    out = dr.read_document("report.pdf", _pdf_bytes())
+
+    assert out.kind == "pdf"
+    assert "Hello PDF text layer" in out.text
+    assert out.char_count == len(out.text)
+    assert out.truncated is False
+    assert not any("unsupported" in warning for warning in out.warnings)
+
+
+def test_read_pdf_reports_image_only_page():
+    out = dr.read_document("scan.pdf", _pdf_bytes(None))
+
+    assert out.kind == "pdf"
+    assert out.text == ""
+    assert any("no extractable text" in warning for warning in out.warnings)
+
+
+def test_read_pdf_rejects_magic_mismatch():
+    out = dr.read_document("fake.pdf", b"not a pdf")
+
+    assert out.kind == "pdf"
+    assert out.text == ""
+    assert any("magic header" in warning for warning in out.warnings)
+
+
+def test_read_pdf_skips_oversized_input(monkeypatch):
+    monkeypatch.setattr(dr, "MAX_BYTES", 8)
+
+    out = dr.read_document("large.pdf", b"%PDF-" + b"x" * 20)
+
+    assert out.kind == "pdf"
+    assert out.text == ""
+    assert out.truncated is True
+    assert any("exceeds max bytes" in warning for warning in out.warnings)
+
+
+def test_read_pdf_missing_dependency_is_fail_soft(monkeypatch):
+    def missing():
+        raise ImportError("missing")
+
+    monkeypatch.setattr(dr, "_import_pdfium", missing)
+
+    out = dr.read_document("report.pdf", _pdf_bytes())
+
+    assert out.kind == "pdf"
+    assert out.text == ""
+    assert any("extraction unavailable" in warning for warning in out.warnings)
+
+
+def test_read_pdf_applies_page_limit(monkeypatch):
+    monkeypatch.setattr(dr, "MAX_PDF_PAGES", 0)
+
+    out = dr.read_document("report.pdf", _pdf_bytes())
+
+    assert out.text == ""
+    assert any("page limit applied" in warning for warning in out.warnings)

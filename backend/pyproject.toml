@@ -19,6 +19,7 @@ dependencies = [
     "pyarrow>=16.0",
     "pandas>=2.2",                # 仅在 BacktestService 边界使用,见 §7.4 / ADR-19
     "fastexcel>=0.10",            # Polars 读取 xlsx/xls
+    "pypdfium2>=4.0",              # PDF 文本层提取（不启用 OCR）
     "psycopg[binary]>=3.2",        # fstore PostgreSQL 直连
     # Scheduling
     "apscheduler>=3.10",
