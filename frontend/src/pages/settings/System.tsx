@@ -77,7 +77,7 @@ export function SettingsSystemPanel() {
         subtitle="全局行为开关"
       />
 
-      <section className="rounded-card border border-border bg-surface p-5">
+      <section className="panel">
         <div className="flex items-center gap-2 mb-4">
           <Database className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-medium text-foreground">数据源</h3>
@@ -94,7 +94,7 @@ export function SettingsSystemPanel() {
             value={currentProvider}
             disabled={saving || providerEnvOverride}
             onChange={(e) => saveDataProvider(e.target.value as 'fquant' | 'fquant_local')}
-            className="w-32 h-8 px-2 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
+            className="control w-32 h-8 px-2 text-xs text-foreground disabled:opacity-50"
           >
             <option value="fquant">FQuant 本地</option>
             <option value="fquant_local">duckdb</option>
@@ -102,7 +102,7 @@ export function SettingsSystemPanel() {
         </div>
       </section>
 
-      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+      <section className="panel mt-6">
         <div className="flex items-center gap-2 mb-4">
           <Settings2 className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-medium text-foreground">策略页</h3>
@@ -117,7 +117,7 @@ export function SettingsSystemPanel() {
         />
       </section>
 
-      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+      <section className="panel mt-6">
         <div className="flex items-center gap-2 mb-4">
           <Bell className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-medium text-foreground">通知弹窗</h3>
@@ -149,7 +149,7 @@ export function SettingsSystemPanel() {
               setToastMax(v)
               refreshAlertToastConfig()
             }}
-            className="w-16 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
+            className="control w-16 h-8 px-1.5 text-xs text-foreground disabled:opacity-50"
           >
             {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
           </select>
@@ -185,14 +185,14 @@ export function SettingsSystemPanel() {
                 setSoundType(v)
                 if (v !== 'none') previewSound(v)
               }}
-              className="w-20 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground disabled:opacity-50"
+              className="control w-20 h-8 px-1.5 text-xs text-foreground disabled:opacity-50"
             >
               {SOUND_OPTIONS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
             <button
               onClick={() => previewSound(soundType)}
               disabled={!toastEnabled || !soundEnabled || soundType === 'none'}
-              className="px-2 h-8 rounded-btn border border-border bg-base text-xs text-secondary hover:text-foreground hover:border-accent/30 disabled:opacity-50 transition-colors cursor-pointer"
+              className="control px-2 h-8 text-xs text-secondary hover:text-foreground hover:border-accent/30 disabled:opacity-50 transition-colors cursor-pointer"
             >
               试听
             </button>
@@ -200,7 +200,7 @@ export function SettingsSystemPanel() {
         </div>
       </section>
 
-      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+      <section className="panel mt-6">
         <div className="flex items-center gap-2 mb-4">
           <Trash2 className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-medium text-foreground">缓存</h3>
@@ -216,9 +216,7 @@ export function SettingsSystemPanel() {
           <button
             onClick={handleClearCache}
             disabled={clearing}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs
-                       bg-elevated text-secondary hover:text-foreground transition-colors
-                       disabled:opacity-50 shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs bg-elevated text-secondary hover:text-foreground transition-colors disabled:opacity-50 shrink-0"
           >
             {clearing ? (
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -230,7 +228,7 @@ export function SettingsSystemPanel() {
         </div>
       </section>
 
-      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+      <section className="panel mt-6">
         <div className="flex items-center gap-2 mb-4">
           <Info className="h-4 w-4 text-accent" />
           <h3 className="text-sm font-medium text-foreground">关于</h3>
@@ -255,8 +253,7 @@ export function SettingsSystemPanel() {
             href="https://github.com/shy3130/tickflow-stock-panel/releases/latest"
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs
-                       bg-elevated text-secondary hover:text-foreground transition-colors shrink-0"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs bg-elevated text-secondary hover:text-foreground transition-colors shrink-0"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             检查更新

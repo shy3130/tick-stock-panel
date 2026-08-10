@@ -22,8 +22,7 @@ const COMPOSITE_DETAIL_KEY = (id: string) => ['composite-strategy-detail', id] a
 const MAX_CHILDREN = 8
 const MIN_CHILDREN = 2
 
-const INPUT_CLS = `w-full px-2.5 py-1.5 rounded-input bg-surface border border-border text-xs
-  focus:outline-none focus:border-accent transition-colors duration-150 ease-smooth`
+const INPUT_CLS = 'control w-full text-xs'
 
 const SOURCE_LABEL: Record<string, string> = {
   builtin: '内置',
@@ -34,9 +33,9 @@ const SOURCE_LABEL: Record<string, string> = {
 
 const SOURCE_BADGE: Record<string, string> = {
   builtin: 'border-accent/25 bg-accent/10 text-accent',
-  custom: 'border-amber-400/30 bg-amber-400/10 text-amber-400',
-  ai: 'border-purple-400/25 bg-purple-400/10 text-purple-400',
-  composite: 'border-sky-400/25 bg-sky-400/10 text-sky-400',
+  custom: 'border-warning/30 bg-warning/10 text-warning',
+  ai: 'border-accent/20 bg-elevated text-secondary',
+  composite: 'border-border bg-elevated text-secondary',
 }
 
 type ChildRow = { strategy_id: string; weight: number }
@@ -303,23 +302,25 @@ export function CompositeStrategyBuilder() {
   }, [children.length, mergeMode, minConfirm])
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 lg:flex-row">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-3 lg:flex-row">
       {/* 左：说明 + 已有组合 */}
-      <aside className="flex w-full shrink-0 flex-col gap-3 lg:w-72 xl:w-80">
-        <section className="rounded-card border border-border bg-surface/70 p-3">
-          <div className="flex items-start gap-2">
-            <div className="mt-0.5 rounded-btn border border-sky-400/20 bg-sky-400/10 p-1.5">
-              <Layers className="h-3.5 w-3.5 text-sky-400" />
-            </div>
+      <aside className="flex w-full shrink-0 flex-col gap-3 lg:w-72 xl:w-80 min-w-0">
+        <section className="panel">
+          <div className="panel-header">
             <div>
-              <h2 className="text-sm font-semibold text-foreground">组合策略构建器</h2>
-              <p className="mt-1 text-[11px] leading-relaxed text-muted">
-                将多个非组合子策略按权重合并为一条可回测策略。仅研究用途，不产生下单指令。
-              </p>
+              <div className="section-kicker">Composite</div>
+              <h2 className="section-title flex items-center gap-1.5">
+                <Layers className="h-3.5 w-3.5 text-accent" />
+                组合策略构建器
+              </h2>
             </div>
           </div>
+          <div className="panel-body space-y-3">
+          <p className="text-[11px] leading-relaxed text-muted">
+            将多个非组合子策略按权重合并为一条可回测策略。仅研究用途，不产生下单指令。
+          </p>
 
-          <div className="mt-3 space-y-2 rounded-btn border border-border/70 bg-base/50 p-2.5 text-[11px] leading-relaxed text-secondary">
+          <div className="space-y-2 rounded-btn border border-border bg-elevated/40 p-2.5 text-[11px] leading-relaxed text-secondary">
             <div>
               <span className="font-medium text-foreground">union（并集）</span>
               <span className="text-muted"> — 任一子策略命中即入选；分数按命中子策略的排名归一后加权融合。</span>
@@ -336,21 +337,26 @@ export function CompositeStrategyBuilder() {
               保存后可在「策略回测」中直接选择该组合策略运行；合并逻辑与选股一致，不改交易撮合，也不自动荐股/下单。
             </div>
           </div>
+          </div>
         </section>
 
-        <section className="flex min-h-0 flex-1 flex-col rounded-card border border-border bg-surface/70 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="text-xs font-medium text-secondary">已有组合策略</h3>
+        <section className="panel flex min-h-0 flex-1 flex-col">
+          <div className="panel-header">
+            <div>
+              <div className="section-kicker">Library</div>
+              <h3 className="section-title">已有组合策略</h3>
+            </div>
             <button
               type="button"
               onClick={() => listQuery.refetch()}
               disabled={listQuery.isFetching}
-              className="inline-flex items-center gap-1 rounded-btn px-1.5 py-0.5 text-[11px] text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              className="btn-ghost !h-7 !px-2 text-[11px]"
             >
               <RefreshCw className={cn('h-3 w-3', listQuery.isFetching && 'animate-spin')} />
               刷新
             </button>
           </div>
+          <div className="panel-body flex min-h-0 flex-1 flex-col !pt-2">
 
           <button
             type="button"
@@ -359,7 +365,7 @@ export function CompositeStrategyBuilder() {
               'mb-2 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-btn border text-xs font-medium transition-colors',
               mode === 'create'
                 ? 'border-accent/40 bg-accent/10 text-accent'
-                : 'border-border bg-base text-secondary hover:bg-elevated hover:text-foreground',
+                : 'border-border bg-elevated text-secondary hover:bg-surface hover:text-foreground',
             )}
           >
             <Plus className="h-3.5 w-3.5" />
@@ -412,16 +418,18 @@ export function CompositeStrategyBuilder() {
               )
             })}
           </div>
+          </div>
         </section>
       </aside>
 
       {/* 右：表单 */}
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto rounded-card border border-border bg-surface/70">
-        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2">
-            <GitMerge className="h-4 w-4 text-sky-400" />
-            <div>
-              <h3 className="text-sm font-semibold text-foreground">
+      <main className="panel min-h-0 min-w-0 flex-1 overflow-y-auto">
+        <header className="panel-header flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <GitMerge className="h-4 w-4 text-accent shrink-0" />
+            <div className="min-w-0">
+              <div className="section-kicker">{mode === 'update' ? 'Update' : 'Create'}</div>
+              <h3 className="section-title">
                 {mode === 'update' ? '更新组合策略' : '创建组合策略'}
               </h3>
               <p className="text-[11px] text-muted">
@@ -429,7 +437,7 @@ export function CompositeStrategyBuilder() {
               </p>
             </div>
           </div>
-          <div className="inline-flex rounded-btn border border-border bg-base p-0.5">
+          <div className="inline-flex rounded-btn border border-border bg-elevated p-0.5">
             {(['create', 'update'] as const).map(m => (
               <button
                 key={m}
@@ -454,7 +462,7 @@ export function CompositeStrategyBuilder() {
           </div>
         </header>
 
-        <div className="space-y-4 p-4">
+        <div className="panel-body space-y-4">
           {mode === 'update' && detailQuery.isLoading && editPick && (
             <div className="flex items-center gap-2 text-xs text-muted">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -562,7 +570,7 @@ export function CompositeStrategyBuilder() {
               </div>
             </div>
 
-            <div className="space-y-1.5 rounded-btn border border-border bg-base/40 p-2">
+            <div className="space-y-1.5 rounded-btn border border-border bg-elevated/30 p-2">
               {children.length === 0 && (
                 <div className="py-6 text-center text-xs text-muted">
                   从下方列表添加至少 {MIN_CHILDREN} 个非组合子策略
@@ -634,7 +642,7 @@ export function CompositeStrategyBuilder() {
                 className={cn(INPUT_CLS, 'pl-8')}
               />
             </div>
-            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-btn border border-border bg-base/40 p-1.5">
+            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-btn border border-border bg-elevated/30 p-1.5">
               {listQuery.isLoading && (
                 <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -698,7 +706,7 @@ export function CompositeStrategyBuilder() {
                 type="button"
                 onClick={resetCreate}
                 disabled={save.isPending}
-                className="h-8 rounded-btn bg-elevated px-3 text-xs text-secondary hover:text-foreground disabled:opacity-50"
+                className="btn-secondary"
               >
                 转为新建
               </button>
@@ -707,7 +715,7 @@ export function CompositeStrategyBuilder() {
               type="button"
               onClick={submit}
               disabled={save.isPending || listQuery.isLoading}
-              className="inline-flex h-8 items-center gap-1.5 rounded-btn bg-accent px-3 text-xs font-medium text-white disabled:opacity-50"
+              className="btn-primary"
             >
               {save.isPending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

@@ -4,13 +4,34 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="theme-color" content="#8B5CF6" />
-    <title>TickFlow Stock Panel · Quant Terminal</title>
-    <link rel="preconnect" href="https://rsms.me/" />
-    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <meta name="theme-color" content="#0f1419" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme: light)" />
+    <meta name="color-scheme" content="dark light" />
+    <title>TickFlow · Quant Research Workbench</title>
+    <!-- Apply stored theme before paint to avoid flash. Key: tickflow-theme -->
+    <script>
+      (function () {
+        try {
+          var key = 'tickflow-theme';
+          var stored = localStorage.getItem(key);
+          var theme = stored === 'light' || stored === 'dark' ? stored : 'dark';
+          var root = document.documentElement;
+          if (theme === 'light') root.classList.remove('dark');
+          else root.classList.add('dark');
+          root.dataset.theme = theme;
+          var meta = document.querySelectorAll('meta[name="theme-color"]');
+          // Prefer matching media; fallback first meta
+          var color = theme === 'light' ? '#f5f7fa' : '#0f1419';
+          meta.forEach(function (m) {
+            var media = m.getAttribute('media') || '';
+            if (!media || media.indexOf(theme) !== -1) m.setAttribute('content', color);
+          });
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
   </head>
   <body class="bg-base text-foreground">
     <div id="root"></div>

@@ -30,10 +30,10 @@ import { cn } from '@/lib/cn'
 import { fmtPrice } from '@/lib/format'
 import { BUILTIN_SIGNAL_DEFINITIONS } from '@/lib/signals'
 
-const INPUT = 'w-full rounded-btn border border-border bg-base px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors placeholder:text-muted/60 focus:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50'
-const BTN_PRIMARY = 'inline-flex items-center justify-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50'
-const BTN_GHOST = 'inline-flex items-center justify-center gap-1.5 rounded-btn border border-border bg-elevated px-3 py-1.5 text-xs text-secondary transition-colors hover:bg-elevated/80 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50'
-const CARD = 'rounded-card border border-border bg-surface/70 shadow-[0_1px_2px_hsl(var(--border)/0.35)]'
+const INPUT = 'control w-full text-xs'
+const BTN_PRIMARY = 'btn-primary text-xs'
+const BTN_GHOST = 'btn-secondary text-xs'
+const CARD = 'panel'
 
 const SCORECARD_ROOT = ['signal-scorecard'] as const
 const HORIZON_LABEL: Record<number, string> = { 1: 'T+1', 3: 'T+3', 5: 'T+5', 10: 'T+10' }
@@ -182,7 +182,7 @@ export function SignalScorecard() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="workspace-page h-full min-h-0">
       <PageHeader
         title="信号记分卡"
         subtitle="本地事件事实流 · append-only · 可追溯"
@@ -200,10 +200,10 @@ export function SignalScorecard() {
         }
       />
 
-      <main className="min-h-0 flex-1 overflow-auto px-4 py-4 sm:px-5">
-        <div className="mx-auto max-w-6xl space-y-4">
-          <section className="rounded-card border border-warning/35 bg-warning/5 px-4 py-3" aria-label="研究边界">
-            <div className="flex items-start gap-2.5">
+      <main className="workspace-content min-h-0 flex-1 overflow-auto">
+        <div className="mx-auto max-w-6xl space-y-3">
+          <section className="panel border-warning/35 bg-warning/5" aria-label="研究边界">
+            <div className="panel-body flex items-start gap-2.5 !py-3">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
               <div>
                 <h2 className="text-sm font-semibold text-foreground">仅回顾性研究</h2>
@@ -239,8 +239,8 @@ export function SignalScorecard() {
             />
           ) : (
             <>
-              <section className={cn(CARD, 'p-3')} aria-label="记分卡筛选">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <section className={cn(CARD)} aria-label="记分卡筛选">
+                <div className="panel-body flex flex-col gap-3 sm:flex-row sm:items-end !py-3">
                   <label className="grid min-w-0 flex-1 gap-1.5 text-xs text-secondary">
                     查看信号
                     <select value={selectedSignal} onChange={(event) => { setSelectedSignal(event.target.value); setSelectedEventId(null) }} className={INPUT}>
@@ -349,7 +349,7 @@ function TrackingConfiguration({
   onRetry: () => void
 }) {
   return (
-    <section className={cn(CARD, 'p-4')} aria-labelledby="tracked-signals-title">
+    <section className={cn(CARD)} aria-labelledby="tracked-signals-title">
       <div className="flex flex-col gap-3 border-b border-border pb-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex gap-2.5">
           <SlidersHorizontal className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
@@ -547,7 +547,7 @@ function EventDetail({ event, outcomes, status, loading, error, onClose, onRetry
   onRetry: () => void
 }) {
   return (
-    <section className={cn(CARD, 'p-4')} aria-labelledby="event-detail-title">
+    <section className={cn(CARD)} aria-labelledby="event-detail-title">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 id="event-detail-title" className="text-sm font-semibold text-foreground">单事件结果</h2>
@@ -608,7 +608,7 @@ function BackfillForm({
   const today = new Date().toISOString().slice(0, 10)
 
   return (
-    <section className={cn(CARD, 'p-4')} aria-labelledby="scorecard-backfill-title">
+    <section className={cn(CARD)} aria-labelledby="scorecard-backfill-title">
       <div className="flex items-start gap-2.5">
         <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
         <div>
@@ -666,10 +666,12 @@ function BackfillForm({
 
 function StatCard({ label, value, hint, accent = false }: { label: string; value: string; hint: string; accent?: boolean }) {
   return (
-    <div className={cn(CARD, 'p-3')}>
-      <p className="text-xs text-muted">{label}</p>
-      <p className={cn('mt-1 text-xl font-semibold tabular-nums text-foreground', accent && 'text-accent')}>{value}</p>
-      <p className="mt-1 text-[11px] text-muted">{hint}</p>
+    <div className={cn(CARD)}>
+      <div className="panel-body !py-2.5">
+        <p className="section-kicker normal-case tracking-normal">{label}</p>
+        <p className={cn('metric-value mt-1 text-xl', accent && 'text-accent')}>{value}</p>
+        <p className="mt-1 text-[11px] text-muted">{hint}</p>
+      </div>
     </div>
   )
 }
@@ -710,7 +712,7 @@ function LoadingState({ label, compact = false }: { label: string; compact?: boo
 
 function QueryError({ title, message, onRetry, compact = false }: { title: string; message: string; onRetry: () => void; compact?: boolean }) {
   return (
-    <section className={cn('rounded-card border border-danger/40 bg-danger/5 p-4 text-center', compact && 'mt-3 p-3')} role="alert">
+    <section className={cn('panel border-danger/40 bg-danger/5 p-4 text-center', compact && 'mt-3 p-3')} role="alert">
       <AlertCircle className="mx-auto h-5 w-5 text-danger" />
       <p className="mt-2 text-sm font-medium text-foreground">{title}</p>
       <p className="mt-1 break-words text-xs text-danger">{message}</p>

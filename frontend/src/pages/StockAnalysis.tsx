@@ -71,22 +71,22 @@ export function StockAnalysis() {
   }
 
   return (
-    <>
+    <div className="workspace-page">
       <PageHeader
         title="个股分析"
         titleExtra={
-          <span className="inline-flex items-center rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-400">
+          <span className="inline-flex items-center rounded-btn border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
             Beta
           </span>
         }
         subtitle="日 K · 关键价位 · AI 四维分析(技术 / 基本面 / 财务 / 消息面)"
         right={
-          <div className="flex items-center gap-2">
+          <div className="workspace-toolbar">
             <LastStockChip stock={lastStock} onSelect={onSelect} />
             {symbol && (
               <button
                 onClick={() => setShowHistory(v => !v)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn border border-border text-secondary text-xs hover:text-foreground hover:bg-elevated transition-colors"
+                className="btn-secondary text-xs"
               >
                 <HistoryIcon className="h-3.5 w-3.5" />
                 历史报告
@@ -96,9 +96,9 @@ export function StockAnalysis() {
         }
       />
 
-      <div className="px-8 py-6 space-y-6 max-w-7xl">
+      <div className="workspace-content mx-auto max-w-7xl gap-3">
         {/* 搜索栏 */}
-        <div className="flex items-center gap-3">
+        <div className="workspace-toolbar">
           <div className="w-[36rem] max-w-full shrink-0">
             <StockFinancialSearch onSelect={onSelect} />
           </div>
@@ -116,7 +116,7 @@ export function StockAnalysis() {
               <button
                 onClick={handleAnalyze}
                 disabled={checking}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-sky-500/25 to-blue-500/15 border border-sky-400/30 text-sky-300 text-xs font-medium hover:from-sky-500/35 hover:to-blue-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                className="btn-primary text-xs"
               >
                 {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                 AI 个股分析
@@ -124,12 +124,12 @@ export function StockAnalysis() {
               <AiProviderSelector entry="stock_analysis" value={profileId} onChange={setProfileId} compact />
               <button
                 onClick={() => toast('点位提醒功能开发中,敬请期待', 'error')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn border border-border/40 bg-elevated/40 text-muted text-xs font-medium hover:border-border/70 hover:text-secondary transition-all"
+                className="btn-ghost text-xs text-muted"
                 title="当价格触及关键价位时提醒(开发中)"
               >
                 <Bell className="h-3.5 w-3.5" />
                 点位提醒
-                <span className="rounded-full bg-amber-400/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-amber-400">
+                <span className="rounded-btn bg-warning/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-warning">
                   开发中
                 </span>
               </button>
@@ -168,7 +168,7 @@ export function StockAnalysis() {
         triggerInfo={null}
         onClose={() => setPreviewSymbol(null)}
       />
-    </>
+    </div>
   )
 }
 
@@ -304,9 +304,9 @@ function ConfirmModal({ report, onView, onRedo, onClose }: {
   onClose: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-sm bg-surface border border-border rounded-2xl p-5 shadow-2xl"
+        className="panel w-full max-w-sm bg-surface p-5"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 mb-2">
@@ -324,7 +324,7 @@ function ConfirmModal({ report, onView, onRedo, onClose }: {
             查看历史
           </button>
           <button onClick={onRedo}
-            className="flex-1 h-8 rounded-lg bg-gradient-to-r from-sky-500/20 to-blue-500/15 border border-sky-400/30 text-xs text-sky-300 hover:from-sky-500/30 transition-all">
+            className="btn-primary flex-1 h-8 text-xs transition-all">
             重新分析
           </button>
         </div>

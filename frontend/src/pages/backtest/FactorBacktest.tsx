@@ -18,8 +18,7 @@ const monthsAgo = (months: number) => {
 const TODAY = formatDate(new Date())
 const THREE_MONTHS_AGO = monthsAgo(3)
 
-const INPUT_CLS = `w-full px-2.5 py-1.5 rounded-input bg-surface border border-border text-xs
-  focus:outline-none focus:border-accent transition-colors duration-150 ease-smooth`
+const INPUT_CLS = 'control w-full text-xs'
 
 function StatCard({ label, value, highlight }: {
   label: string
@@ -29,9 +28,9 @@ function StatCard({ label, value, highlight }: {
   const colorCls = highlight === 'bull'
     ? 'text-bull' : highlight === 'bear' ? 'text-bear' : ''
   return (
-    <div>
+    <div className="min-w-0">
       <div className="text-[11px] text-muted">{label}</div>
-      <div className={`mt-1 text-lg font-mono font-semibold tracking-tight num ${colorCls}`}>
+      <div className={`metric-value mt-1 !text-base ${colorCls}`}>
         {value ?? '—'}
       </div>
     </div>
@@ -40,39 +39,38 @@ function StatCard({ label, value, highlight }: {
 
 function LoadingPanel({ symbolsText }: { symbolsText: string }) {
   return (
-    <div className="space-y-4">
-      <div className="rounded-card border border-accent/25 bg-accent/[0.04] p-4">
-        <div className="flex items-center justify-between gap-3">
+    <div className="space-y-3">
+      <div className="panel">
+        <div className="panel-body flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium text-foreground">正在计算因子分析</div>
+            <div className="section-title">正在计算因子分析</div>
             <div className="mt-1 text-xs text-muted">{symbolsText} · 完成后会一次性刷新 IC、分层收益和净值曲线。</div>
           </div>
-          <div className="h-8 w-8 rounded-full border-2 border-accent/25 border-t-accent animate-spin" />
-        </div>
-        <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-base">
-          <div className="h-full w-1/2 rounded-full bg-accent/70 animate-pulse" />
+          <div className="h-7 w-7 rounded-full border-2 border-border border-t-accent animate-spin" />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {['读取因子', '计算 IC', '分层回测', '汇总指标'].map(item => (
-          <div key={item} className="rounded-btn border border-border bg-surface p-3">
-            <div className="h-2 w-10 rounded bg-accent/30 animate-pulse" />
-            <div className="mt-3 text-xs text-secondary">{item}</div>
+          <div key={item} className="rounded-btn border border-border bg-elevated px-3 py-2">
+            <div className="h-2 w-10 rounded bg-border animate-pulse" />
+            <div className="mt-2 text-xs text-secondary">{item}</div>
           </div>
         ))}
       </div>
 
-      <div className="rounded-card border border-border bg-surface p-4">
-        <div className="flex items-center justify-between">
-          <div className="text-xs font-medium text-secondary">分层净值预览</div>
-          <div className="text-[11px] text-muted">等待后端返回完整结果</div>
+      <div className="panel">
+        <div className="panel-header">
+          <span className="section-title">分层净值预览</span>
+          <span className="text-[11px] text-muted">等待后端返回完整结果</span>
         </div>
-        <div className="mt-4 h-[260px] rounded-btn border border-border bg-base/60 p-4">
-          <div className="flex h-full items-end gap-2 opacity-70">
-            {[46, 38, 54, 50, 64, 58, 74, 68, 84, 78, 90, 86].map((h, i) => (
-              <div key={i} className="flex-1 rounded-t bg-accent/20 animate-pulse" style={{ height: `${h}%` }} />
-            ))}
+        <div className="panel-body">
+          <div className="h-[220px] rounded-btn border border-border bg-elevated/60 p-4">
+            <div className="flex h-full items-end gap-2 opacity-60">
+              {[46, 38, 54, 50, 64, 58, 74, 68, 84, 78, 90, 86].map((h, i) => (
+                <div key={i} className="flex-1 rounded-t bg-border animate-pulse" style={{ height: `${h}%` }} />
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -161,130 +159,137 @@ export function FactorBacktest() {
           : '自定义区间'
   const rangeButtonCls = (key: string) => `rounded-btn px-2 py-1 text-[11px] font-medium transition-colors ${rangeKey === key
     ? 'bg-accent/15 text-accent'
-    : 'text-muted hover:bg-elevated/70 hover:text-secondary'
+    : 'text-muted hover:bg-elevated hover:text-secondary'
   }`
 
   return (
-    <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)]">
-      {/* 配置面板 */}
-      <section className="space-y-3 border-b xl:border-b-0 xl:border-r border-border bg-base/25 px-3 py-3 xl:overflow-y-auto">
-        <div className="border-b border-border/70 pb-2">
-          <div className="text-xs font-semibold text-foreground">因子配置</div>
-          <div className="mt-0.5 text-[10px] leading-4 text-muted">选择因子、区间和分组方式。默认最近 3 个月。</div>
+    <div className="h-full min-h-0 min-w-0 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)] gap-3">
+      <section className="panel flex flex-col min-h-0 xl:overflow-y-auto">
+        <div className="panel-header">
+          <div>
+            <div className="section-kicker">Parameters</div>
+            <h2 className="section-title">因子配置</h2>
+          </div>
         </div>
+        <div className="panel-body space-y-3">
+          <p className="text-[11px] leading-4 text-muted">选择因子、区间和分组方式。默认最近 3 个月。</p>
 
-        <div>
-          <label className="text-xs font-medium text-secondary block mb-1.5">因子</label>
-          <select
-            value={factorName}
-            onChange={e => setFactorName(e.target.value)}
-            className={INPUT_CLS}
+          <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5">因子</label>
+            <select
+              value={factorName}
+              onChange={e => setFactorName(e.target.value)}
+              className={INPUT_CLS}
+            >
+              {Object.entries(factorGroups).map(([group, cols]) => (
+                <optgroup key={group} label={group}>
+                  {cols.map(c => (
+                    <option key={c.id} value={c.id}>{c.label}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            {factorDesc && (
+              <p className="mt-1 text-[11px] text-muted">{factorDesc}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5">
+              标的(逗号分隔，留空=全市场)
+            </label>
+            <input
+              type="text"
+              value={symbols}
+              onChange={e => setSymbols(e.target.value)}
+              placeholder="留空则使用全市场，建议最近3个月"
+              className={`${INPUT_CLS} font-mono`}
+            />
+          </div>
+
+          <div className="rounded-btn border border-border bg-elevated/40 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-medium text-foreground">回测区间</div>
+              <span className="shrink-0 rounded-btn border border-accent/25 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
+                {rangeTitle}
+              </span>
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-secondary block mb-1">开始</label>
+                <DatePicker
+                  value={start}
+                  onChange={setStart}
+                  max={end || undefined}
+                  placeholder="全部历史"
+                  className="w-full"
+                  buttonClassName="w-full justify-start"
+                  align="left"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-secondary block mb-1">结束</label>
+                <DatePicker
+                  value={end}
+                  onChange={setEnd}
+                  min={start || undefined}
+                  className="w-full"
+                  buttonClassName="w-full justify-start"
+                />
+              </div>
+            </div>
+
+            <div className="mt-2 flex rounded-input bg-base p-0.5">
+              <button type="button" onClick={() => applyRange(3)} className={`${rangeButtonCls('3m')} flex-1`}>3个月</button>
+              <button type="button" onClick={() => applyRange(6)} className={`${rangeButtonCls('6m')} flex-1`}>6个月</button>
+              <button type="button" onClick={() => applyRange(12)} className={`${rangeButtonCls('1y')} flex-1`}>1年</button>
+              <button type="button" onClick={applyAllRange} className={`${rangeButtonCls('all')} flex-1`}>全部</button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-medium text-secondary block mb-1.5">分组数</label>
+              <select value={nGroups} onChange={e => setNGroups(Number(e.target.value))} className={INPUT_CLS}>
+                <option value={3}>3组</option>
+                <option value={5}>5组</option>
+                <option value={10}>10组</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-secondary block mb-1.5">权重</label>
+              <select value={weight} onChange={e => setWeight(e.target.value as 'equal' | 'factor_weight')} className={INPUT_CLS}>
+                <option value="equal">等权</option>
+                <option value="factor_weight">因子加权</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-secondary block mb-1.5">佣金(万分之)</label>
+              <input type="number" value={fees} onChange={e => setFees(e.target.value)}
+                className={INPUT_CLS} />
+            </div>
+          </div>
+
+          <button
+            onClick={() => run.mutate()}
+            disabled={run.isPending}
+            className="btn-primary w-full"
           >
-            {Object.entries(factorGroups).map(([group, cols]) => (
-              <optgroup key={group} label={group}>
-                {cols.map(c => (
-                  <option key={c.id} value={c.id}>{c.label}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          {factorDesc && (
-            <p className="mt-1 text-[11px] text-muted">{factorDesc}</p>
-          )}
+            <Play className="h-3.5 w-3.5" />
+            {run.isPending ? '分析中…' : '开始因子分析'}
+          </button>
         </div>
-
-        <div>
-          <label className="text-xs font-medium text-secondary block mb-1.5">
-            标的(逗号分隔，留空=全市场)
-          </label>
-          <input
-            type="text"
-            value={symbols}
-            onChange={e => setSymbols(e.target.value)}
-            placeholder="留空则使用全市场，建议最近3个月"
-            className={`w-full px-2.5 py-1.5 rounded-input bg-surface border border-border text-xs font-mono
-              focus:outline-none focus:border-accent transition-colors duration-150 ease-smooth`}
-          />
-        </div>
-
-        <div className="rounded-btn border border-border bg-surface p-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-xs font-medium text-foreground">回测区间</div>
-            <span className="shrink-0 rounded-full border border-accent/25 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
-              {rangeTitle}
-            </span>
-          </div>
-
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[11px] text-secondary block mb-1">开始</label>
-              <DatePicker
-                value={start}
-                onChange={setStart}
-                max={end || undefined}
-                placeholder="全部历史"
-                className="w-full"
-                buttonClassName="w-full justify-start"
-                align="left"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-secondary block mb-1">结束</label>
-              <DatePicker
-                value={end}
-                onChange={setEnd}
-                min={start || undefined}
-                className="w-full"
-                buttonClassName="w-full justify-start"
-              />
-            </div>
-          </div>
-
-          <div className="mt-2 flex rounded-input bg-base/60 p-0.5">
-            <button type="button" onClick={() => applyRange(3)} className={`${rangeButtonCls('3m')} flex-1`}>3个月</button>
-            <button type="button" onClick={() => applyRange(6)} className={`${rangeButtonCls('6m')} flex-1`}>6个月</button>
-            <button type="button" onClick={() => applyRange(12)} className={`${rangeButtonCls('1y')} flex-1`}>1年</button>
-            <button type="button" onClick={applyAllRange} className={`${rangeButtonCls('all')} flex-1`}>全部</button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs font-medium text-secondary block mb-1.5">分组数</label>
-            <select value={nGroups} onChange={e => setNGroups(Number(e.target.value))} className={INPUT_CLS}>
-              <option value={3}>3组</option>
-              <option value={5}>5组</option>
-              <option value={10}>10组</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-secondary block mb-1.5">权重</label>
-            <select value={weight} onChange={e => setWeight(e.target.value as any)} className={INPUT_CLS}>
-              <option value="equal">等权</option>
-              <option value="factor_weight">因子加权</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-secondary block mb-1.5">佣金(万分之)</label>
-            <input type="number" value={fees} onChange={e => setFees(e.target.value)}
-              className={INPUT_CLS} />
-          </div>
-        </div>
-
-        <button
-          onClick={() => run.mutate()}
-          disabled={run.isPending}
-          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-btn
-            bg-accent text-sm font-medium hover:bg-accent/90
-            transition-colors duration-150 ease-smooth disabled:opacity-50"
-        >
-          <Play className="h-3.5 w-3.5" />
-          {run.isPending ? '分析中…' : '开始因子分析'}
-        </button>
       </section>
 
-      {/* 结果面板 */}
-      <section className="min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto">
+      <section className="panel flex flex-col min-h-0 min-w-0 xl:overflow-y-auto">
+        <div className="panel-header">
+          <div>
+            <div className="section-kicker">Results</div>
+            <h2 className="section-title">分析结果</h2>
+          </div>
+        </div>
+        <div className="panel-body space-y-3">
         {result?.error && !result.ic_mean && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
             {result.error}
@@ -293,7 +298,7 @@ export function FactorBacktest() {
 
         {run.isError && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-            {String((run.error as any).message)}
+            {String((run.error as Error).message)}
           </div>
         )}
 
@@ -306,7 +311,7 @@ export function FactorBacktest() {
         )}
 
         {run.isPending && result && (
-          <div className="rounded-card border border-accent/25 bg-accent/[0.04] px-4 py-3 text-xs text-secondary">
+          <div className="rounded-btn border border-border bg-elevated px-3 py-2 text-xs text-secondary">
             正在重新计算，当前暂时展示上一次因子分析结果，完成后会自动替换。
           </div>
         )}
@@ -317,15 +322,14 @@ export function FactorBacktest() {
 
         {result && result.ic_mean != null && (
           <motion.div
-            initial={{ opacity: 0, y: 8 }}
+            initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-            className="space-y-4"
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="space-y-3"
           >
-            {/* IC/IR 指标 */}
-            <div className="rounded-card border border-border bg-surface p-4">
+            <div className="rounded-btn border border-border bg-elevated/30 p-3">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-foreground">因子预测能力</h3>
+                <h3 className="section-title">因子预测能力</h3>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-muted">
                     Rank IC · 日度调仓
@@ -338,7 +342,7 @@ export function FactorBacktest() {
                   )}
                 </div>
               </div>
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <StatCard
                   label="IC 均值"
                   value={result.ic_mean != null ? fmtPct(result.ic_mean) : null}
@@ -358,10 +362,9 @@ export function FactorBacktest() {
               </div>
             </div>
 
-            {/* IC 时序图 */}
             {result.ic_series.length > 0 && (
-              <div className="rounded-card border border-border overflow-hidden">
-                <div className="bg-elevated px-4 py-2">
+              <div className="rounded-btn border border-border overflow-hidden">
+                <div className="border-b border-border px-3 py-2">
                   <span className="text-xs font-medium text-secondary">IC 时序</span>
                 </div>
                 <div className="p-2">
@@ -370,10 +373,9 @@ export function FactorBacktest() {
               </div>
             )}
 
-            {/* 分层净值 */}
             {result.group_nav.length > 0 && (
-              <div className="rounded-card border border-border overflow-hidden">
-                <div className="bg-elevated px-4 py-2">
+              <div className="rounded-btn border border-border overflow-hidden">
+                <div className="border-b border-border px-3 py-2">
                   <span className="text-xs font-medium text-secondary">分层净值曲线</span>
                 </div>
                 <div className="p-2">
@@ -382,50 +384,48 @@ export function FactorBacktest() {
               </div>
             )}
 
-            {/* 分层统计表 */}
             {result.group_stats.length > 0 && (
-              <div className="rounded-card border border-border overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-elevated">
-                    <tr className="text-left text-secondary">
-                      <th className="px-4 py-2.5 font-medium">分组</th>
-                      <th className="px-4 py-2.5 font-medium text-right">总收益</th>
-                      <th className="px-4 py-2.5 font-medium text-right">年化</th>
-                      <th className="px-4 py-2.5 font-medium text-right">最大回撤</th>
-                      <th className="px-4 py-2.5 font-medium text-right">夏普</th>
-                      <th className="px-4 py-2.5 font-medium text-right">胜率</th>
+              <div className="data-table-scroll rounded-btn border border-border overflow-hidden">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>分组</th>
+                      <th className="text-right">总收益</th>
+                      <th className="text-right">年化</th>
+                      <th className="text-right">最大回撤</th>
+                      <th className="text-right">夏普</th>
+                      <th className="text-right">胜率</th>
                     </tr>
                   </thead>
                   <tbody>
                     {result.group_stats.map((g: GroupStat) => (
-                      <tr key={g.group} className="border-t border-border hover:bg-elevated/50 transition-colors">
-                        <td className="px-4 py-2 text-sm font-medium">{g.label}</td>
-                        <td className={`px-4 py-2 text-right num ${priceColorClass(g.total_return)}`}>
+                      <tr key={g.group}>
+                        <td className="font-medium">{g.label}</td>
+                        <td className={`text-right num ${priceColorClass(g.total_return)}`}>
                           {fmtPct(g.total_return)}
                         </td>
-                        <td className={`px-4 py-2 text-right num ${priceColorClass(g.annual_return)}`}>
+                        <td className={`text-right num ${priceColorClass(g.annual_return)}`}>
                           {fmtPct(g.annual_return)}
                         </td>
-                        <td className="px-4 py-2 text-right num text-bear">{fmtPct(g.max_drawdown)}</td>
-                        <td className="px-4 py-2 text-right num">{g.sharpe?.toFixed(2)}</td>
-                        <td className="px-4 py-2 text-right num">{fmtPct(g.win_rate)}</td>
+                        <td className="text-right num text-bear">{fmtPct(g.max_drawdown)}</td>
+                        <td className="text-right num">{g.sharpe?.toFixed(2)}</td>
+                        <td className="text-right num">{fmtPct(g.win_rate)}</td>
                       </tr>
                     ))}
-                    {/* 多空行 */}
                     {result.long_short_stats?.total_return != null && (
-                      <tr className="border-t-2 border-accent/30 bg-accent/[0.03]">
-                        <td className="px-4 py-2 text-sm font-medium text-accent">
+                      <tr className="bg-elevated/40">
+                        <td className="font-medium text-accent">
                           多空({result.long_short_stats.top_group ?? ''}-{result.long_short_stats.bottom_group ?? ''})
                         </td>
-                        <td className={`px-4 py-2 text-right num font-medium ${priceColorClass(result.long_short_stats.total_return)}`}>
+                        <td className={`text-right num font-medium ${priceColorClass(result.long_short_stats.total_return)}`}>
                           {fmtPct(result.long_short_stats.total_return as number)}
                         </td>
-                        <td className="px-4 py-2 text-right num">—</td>
-                        <td className="px-4 py-2 text-right num text-bear">
+                        <td className="text-right num">—</td>
+                        <td className="text-right num text-bear">
                           {fmtPct(result.long_short_stats.max_drawdown as number)}
                         </td>
-                        <td className="px-4 py-2 text-right num">—</td>
-                        <td className="px-4 py-2 text-right num">—</td>
+                        <td className="text-right num">—</td>
+                        <td className="text-right num">—</td>
                       </tr>
                     )}
                   </tbody>
@@ -433,14 +433,14 @@ export function FactorBacktest() {
               </div>
             )}
 
-            {/* 数据概要 */}
-            <div className="flex items-center gap-4 text-[11px] text-muted">
-              <span>{result.n_symbols} 只标的</span>
-              <span>{result.n_dates} 个交易日</span>
-              <span>run_id: {result.run_id}</span>
+            <div className="flex flex-wrap items-center gap-4 text-[11px] text-muted">
+              <span className="num">{result.n_symbols} 只标的</span>
+              <span className="num">{result.n_dates} 个交易日</span>
+              <span className="font-mono">run_id: {result.run_id}</span>
             </div>
           </motion.div>
         )}
+        </div>
       </section>
     </div>
   )

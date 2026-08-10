@@ -13,8 +13,8 @@ import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
 import { REGIME_STATE_LABELS, type RegimeState } from '@/lib/regime'
 
-const INPUT_CLS = `w-full rounded-input border border-border bg-surface px-2.5 py-1.5 text-xs
-  focus:outline-none focus:border-accent transition-colors duration-150 ease-smooth`
+const INPUT_CLS = 'control w-full text-xs'
+
 
 const TODAY = new Date().toISOString().slice(0, 10)
 const threeMonthsAgo = () => {
@@ -66,20 +66,20 @@ function formatMetric(value: unknown, key?: string): string {
 
 function statusMeta(status: ParameterGridExperiment['status'] | null) {
   switch (status) {
-    case 'pending': return { label: '等待执行', cls: 'border-amber-400/30 bg-amber-400/10 text-amber-400', Icon: Loader2 }
-    case 'running': return { label: '运行中', cls: 'border-accent/30 bg-accent/10 text-accent', Icon: Loader2 }
-    case 'completed': return { label: '已完成', cls: 'border-bull/30 bg-bull/10 text-bull', Icon: CheckCircle2 }
-    case 'cancelled': return { label: '已取消', cls: 'border-muted/30 bg-muted/10 text-secondary', Icon: Square }
-    case 'failed': return { label: '失败', cls: 'border-danger/30 bg-danger/10 text-danger', Icon: XCircle }
-    default: return { label: '未启动', cls: 'border-border bg-base text-muted', Icon: FlaskConical }
+    case 'pending': return { label: '等待执行', cls: 'border-warning/30 bg-warning/10 text-warning', Icon: Loader2, state: 'warn' as const }
+    case 'running': return { label: '运行中', cls: 'border-accent/30 bg-accent/10 text-accent', Icon: Loader2, state: 'live' as const }
+    case 'completed': return { label: '已完成', cls: 'border-bull/30 bg-bull/10 text-bull', Icon: CheckCircle2, state: 'ok' as const }
+    case 'cancelled': return { label: '已取消', cls: 'border-border bg-elevated text-secondary', Icon: Square, state: 'idle' as const }
+    case 'failed': return { label: '失败', cls: 'border-danger/30 bg-danger/10 text-danger', Icon: XCircle, state: 'error' as const }
+    default: return { label: '未启动', cls: 'border-border bg-elevated text-muted', Icon: FlaskConical, state: 'off' as const }
   }
 }
 
 function Stat({ label, value, valueClass = 'text-foreground' }: { label: string; value: string; valueClass?: string }) {
   return (
-    <div className="rounded-btn border border-border bg-surface px-3 py-2">
+    <div className="rounded-btn border border-border bg-elevated/40 px-3 py-2">
       <div className="text-[10px] text-muted">{label}</div>
-      <div className={`mt-1 font-mono text-sm font-semibold num ${valueClass}`}>{value}</div>
+      <div className={`metric-value mt-1 !text-sm ${valueClass}`}>{value}</div>
     </div>
   )
 }
@@ -286,12 +286,16 @@ export function ParameterGridPanel() {
   const robustnessPermutation = robustness?.mc_permutation as Record<string, unknown> | undefined
 
   return (
-    <div className="h-full min-h-0 overflow-hidden rounded-card border border-border bg-surface/80 grid grid-cols-1 xl:grid-cols-[20rem_minmax(0,1fr)]">
-      <section className="space-y-3 border-b border-border bg-base/25 px-3 py-3 xl:overflow-y-auto xl:border-b-0 xl:border-r">
-        <div className="border-b border-border/70 pb-2">
-          <div className="text-xs font-semibold text-foreground">参数网格寻优</div>
-          <p className="mt-0.5 text-[10px] leading-4 text-muted">仅运行本地 DuckDB 历史数据实验；不生成荐股或下单指令。</p>
+    <div className="h-full min-h-0 min-w-0 grid grid-cols-1 xl:grid-cols-[20rem_minmax(0,1fr)] gap-3">
+      <section className="panel flex flex-col min-h-0 xl:overflow-y-auto">
+        <div className="panel-header">
+          <div>
+            <div className="section-kicker">Parameters</div>
+            <h2 className="section-title">参数网格寻优</h2>
+          </div>
         </div>
+        <div className="panel-body space-y-3">
+        <p className="text-[11px] leading-4 text-muted">仅运行本地 DuckDB 历史数据实验；不生成荐股或下单指令。</p>
 
         <div>
           <label htmlFor="parameter-grid-strategy" className="mb-1.5 block text-xs font-medium text-secondary">策略</label>
@@ -317,14 +321,14 @@ export function ParameterGridPanel() {
         </div>
 
         {strategyId && detail.isLoading && (
-          <div className="flex items-center gap-2 rounded-btn border border-border bg-surface px-2.5 py-2 text-xs text-muted">
+          <div className="flex items-center gap-2 rounded-btn border border-border bg-elevated px-2.5 py-2 text-xs text-muted">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />正在读取可优化参数…
           </div>
         )}
         {detail.isError && <div className="rounded-btn border border-danger/30 bg-danger/10 px-2.5 py-2 text-xs text-danger">策略参数读取失败，无法启动实验。</div>}
 
         {detail.data && (
-          <div className="space-y-2 rounded-btn border border-border bg-surface p-2.5">
+          <div className="space-y-2 rounded-btn border border-border bg-elevated/40 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-medium text-foreground">候选参数网格</label>
               <span className="text-[10px] text-muted">逗号分隔数值</span>
@@ -359,7 +363,7 @@ export function ParameterGridPanel() {
           <input id="parameter-grid-symbols" value={symbols} onChange={event => setSymbols(event.target.value)} placeholder="逗号分隔；留空=全市场" className={`${INPUT_CLS} font-mono`} />
         </div>
 
-        <div className="rounded-btn border border-border bg-surface p-2.5">
+        <div className="rounded-btn border border-border bg-elevated/40 p-2.5">
           <div className="text-xs font-medium text-foreground">历史区间</div>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <div>
@@ -404,7 +408,7 @@ export function ParameterGridPanel() {
           </label>
         </div>
 
-        <div className="rounded-btn border border-border bg-surface p-2.5">
+        <div className="rounded-btn border border-border bg-elevated/40 p-2.5">
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={regimeEnabled} onChange={event => setRegimeEnabled(event.target.checked)} className="h-3.5 w-3.5 rounded border-border accent-accent" />
             <span className="text-xs font-medium text-secondary">按市场环境过滤（可选）</span>
@@ -435,18 +439,32 @@ export function ParameterGridPanel() {
           type="button"
           onClick={() => { void launch() }}
           disabled={launching || isActive || !strategyId || detail.isLoading || numericParams.length === 0}
-          className="inline-flex w-full items-center justify-center gap-1.5 rounded-btn bg-accent px-3 py-2 text-sm font-medium transition-colors duration-150 ease-smooth hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-primary w-full"
         >
           {launching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           {launching ? '正在启动…' : isActive ? '实验运行中' : '启动本地历史实验'}
         </button>
+        </div>
       </section>
 
-      <section className="min-w-0 space-y-3 bg-base/15 px-3 py-3 xl:overflow-y-auto">
-        <div className="rounded-card border border-amber-400/25 bg-amber-400/5 p-3">
+      <section className="panel flex flex-col min-h-0 min-w-0 xl:overflow-y-auto">
+        <div className="panel-header">
+          <div>
+            <div className="section-kicker">Experiment</div>
+            <h2 className="section-title">实验结果</h2>
+          </div>
+          {experiment && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-muted">
+              <span className="status-dot" data-state={status.state} />
+              {status.label}
+            </span>
+          )}
+        </div>
+        <div className="panel-body space-y-3">
+        <div className="rounded-btn border border-warning/30 bg-warning/5 p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-            <p className="text-[11px] leading-4 text-secondary"><strong className="text-amber-400">研究边界：</strong>本面板只读取本地 DuckDB 历史数据并保存实验结果，不提供买卖建议、不连接下单。网格搜索会放大数据挖掘偏差；请用未参与寻优的样本独立验证，不把单次最佳结果视为可执行结论。</p>
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <p className="text-[11px] leading-4 text-secondary"><strong className="text-warning">研究边界：</strong>本面板只读取本地 DuckDB 历史数据并保存实验结果，不提供买卖建议、不连接下单。网格搜索会放大数据挖掘偏差；请用未参与寻优的样本独立验证，不把单次最佳结果视为可执行结论。</p>
           </div>
         </div>
 
@@ -458,14 +476,14 @@ export function ParameterGridPanel() {
 
         {(launching || experiment) && (
           <div className="space-y-3">
-            <div className="rounded-card border border-border bg-surface p-3">
+            <div className="rounded-btn border border-border bg-elevated/30 p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <div className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${status.cls}`}>
                   <StatusIcon className={`h-3 w-3 ${experiment?.status === 'pending' || experiment?.status === 'running' ? 'animate-spin' : ''}`} />
                   {launching && !experiment ? '正在创建实验' : status.label}
                 </div>
                 {experiment && <span className="text-[11px] text-muted">目标：{OBJECTIVES.find(item => item.value === experiment.objective)?.label ?? experiment.objective}</span>}
-                {experiment?.truncated && <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-400">已截断</span>}
+                {experiment?.truncated && <span className="rounded-btn border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">已截断</span>}
                 {experiment && <span className="ml-auto font-mono text-[10px] text-muted">{experiment.experiment_id}</span>}
               </div>
 
@@ -482,7 +500,7 @@ export function ParameterGridPanel() {
                     <span>请求组合 {experiment.requested_count}</span>
                     <span>实际场景 {experiment.scenario_count}</span>
                     <span>本次上限 {experiment.max_scenarios}</span>
-                    {experiment.truncated && <span className="text-amber-400">超限组合未执行</span>}
+                    {experiment.truncated && <span className="text-warning">超限组合未执行</span>}
                   </div>
                 </>
               )}
@@ -496,14 +514,14 @@ export function ParameterGridPanel() {
             </div>
 
             {experiment?.status === 'failed' && (
-              <div role="alert" className="rounded-card border border-danger/30 bg-danger/10 p-3 text-xs text-danger">实验执行失败。请检查策略参数范围、日期覆盖和本地历史数据后重新发起。</div>
+              <div role="alert" className="rounded-btn border border-danger/30 bg-danger/10 p-3 text-xs text-danger">实验执行失败。请检查策略参数范围、日期覆盖和本地历史数据后重新发起。</div>
             )}
             {experiment?.status === 'cancelled' && (
-              <div className="rounded-card border border-border bg-surface p-3 text-xs text-secondary">实验已取消；下方仅保留已完成场景，未完成场景不应作为比较依据。</div>
+              <div className="rounded-btn border border-border bg-elevated/30 p-3 text-xs text-secondary">实验已取消；下方仅保留已完成场景，未完成场景不应作为比较依据。</div>
             )}
 
             {bestScenario && (
-              <div className="rounded-card border border-accent/30 bg-accent/[0.04] p-3">
+              <div className="rounded-btn border border-accent/30 bg-accent/5 p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-xs font-semibold text-foreground">当前最佳场景</div>
@@ -524,7 +542,7 @@ export function ParameterGridPanel() {
             )}
 
             {robustness && (
-              <div className="rounded-card border border-border bg-surface p-3">
+              <div className="rounded-btn border border-border bg-elevated/30 p-3">
                 <div className="flex items-baseline justify-between gap-2">
                   <div className="text-xs font-semibold text-foreground">最佳场景稳健性</div>
                   <div className="text-[10px] text-muted">仅为历史后处理，不构成预测</div>
@@ -534,11 +552,11 @@ export function ParameterGridPanel() {
                   {robustnessPermutation && <Stat label="置换检验 p 值" value={formatMetric(robustnessPermutation.p_value)} />}
                 </div>
                 {Array.isArray(robustness.exit_breakdown) && robustness.exit_breakdown.length > 0 && (
-                  <div className="mt-3 overflow-x-auto">
-                    <table className="w-full min-w-[28rem] text-left text-[11px]">
+                  <div className="mt-3 data-table-scroll">
+                    <table className="data-table min-w-[28rem]">
                       <caption className="mb-1 text-left text-[10px] text-muted">退出原因分布</caption>
-                      <thead className="border-b border-border text-muted"><tr><th className="px-2 py-1.5 font-medium">原因</th><th className="px-2 py-1.5 font-medium">笔数</th><th className="px-2 py-1.5 font-medium">胜率</th><th className="px-2 py-1.5 font-medium">平均收益</th></tr></thead>
-                      <tbody>{(robustness.exit_breakdown as Array<Record<string, unknown>>).map((row, index) => <tr key={`${String(row.exit_reason)}-${index}`} className="border-b border-border/50 text-secondary"><td className="px-2 py-1.5">{String(row.exit_reason ?? '—')}</td><td className="px-2 py-1.5 font-mono num">{String(row.n ?? '—')}</td><td className="px-2 py-1.5 font-mono num">{formatMetric(row.win_rate, 'win_rate')}</td><td className="px-2 py-1.5 font-mono num">{formatMetric(row.avg_pnl_pct, 'pnl')}</td></tr>)}</tbody>
+                      <thead><tr><th>原因</th><th>笔数</th><th>胜率</th><th>平均收益</th></tr></thead>
+                      <tbody>{(robustness.exit_breakdown as Array<Record<string, unknown>>).map((row, index) => <tr key={`${String(row.exit_reason)}-${index}`} className="text-secondary"><td>{String(row.exit_reason ?? '—')}</td><td className="font-mono num">{String(row.n ?? '—')}</td><td className="font-mono num">{formatMetric(row.win_rate, 'win_rate')}</td><td className="font-mono num">{formatMetric(row.avg_pnl_pct, 'pnl')}</td></tr>)}</tbody>
                     </table>
                   </div>
                 )}
@@ -546,27 +564,27 @@ export function ParameterGridPanel() {
             )}
 
             {rankedScenarios.length > 0 && (
-              <div className="overflow-hidden rounded-card border border-border bg-surface">
+              <div className="overflow-hidden rounded-btn border border-border">
                 <div className="flex items-baseline justify-between gap-2 border-b border-border px-3 py-2.5">
                   <div className="text-xs font-semibold text-foreground">场景排名</div>
                   <div className="text-[10px] text-muted">按目标得分降序；无得分或出错场景置后</div>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[48rem] text-left text-[11px]">
-                    <thead className="border-b border-border bg-base/30 text-muted">
-                      <tr><th className="px-3 py-2 font-medium">排名</th><th className="px-3 py-2 font-medium">参数</th><th className="px-3 py-2 text-right font-medium">得分</th><th className="px-3 py-2 text-right font-medium">累计收益</th><th className="px-3 py-2 text-right font-medium">夏普</th><th className="px-3 py-2 text-right font-medium">最大回撤</th><th className="px-3 py-2 text-right font-medium">耗时</th><th className="px-3 py-2 font-medium">状态</th></tr>
+                <div className="data-table-scroll">
+                  <table className="data-table min-w-[48rem]">
+                    <thead>
+                      <tr><th>排名</th><th>参数</th><th className="text-right">得分</th><th className="text-right">累计收益</th><th className="text-right">夏普</th><th className="text-right">最大回撤</th><th className="text-right">耗时</th><th>状态</th></tr>
                     </thead>
                     <tbody>
                       {rankedScenarios.map((scenario: ParameterGridScenario) => (
-                        <tr key={scenario.scenario_id} className={`border-b border-border/50 last:border-0 ${scenario.scenario_id === experiment?.best_scenario_id ? 'bg-accent/[0.04]' : ''}`}>
-                          <td className="px-3 py-2 font-mono text-secondary num">{scenario.rank > 0 ? `#${scenario.rank}` : '—'}</td>
-                          <td className="px-3 py-2"><ScenarioParams params={scenario.params} /></td>
-                          <td className="px-3 py-2 text-right font-mono text-foreground num">{formatMetric(scenario.score)}</td>
-                          <td className={`px-3 py-2 text-right font-mono num ${Number(scenario.stats.total_return) >= 0 ? 'text-bull' : 'text-bear'}`}>{formatMetric(scenario.stats.total_return, 'total_return')}</td>
-                          <td className="px-3 py-2 text-right font-mono text-secondary num">{formatMetric(scenario.stats.sharpe)}</td>
-                          <td className="px-3 py-2 text-right font-mono text-bear num">{formatMetric(scenario.stats.max_drawdown, 'max_drawdown')}</td>
-                          <td className="px-3 py-2 text-right font-mono text-secondary num">{scenario.elapsed_ms ? `${Math.round(scenario.elapsed_ms)} ms` : '—'}</td>
-                          <td className="px-3 py-2">{scenario.error ? <span className="text-danger">{scenario.error}</span> : <span className="text-bull">完成</span>}</td>
+                        <tr key={scenario.scenario_id} className={scenario.scenario_id === experiment?.best_scenario_id ? 'bg-accent/5' : undefined}>
+                          <td className="font-mono text-secondary num">{scenario.rank > 0 ? `#${scenario.rank}` : '—'}</td>
+                          <td><ScenarioParams params={scenario.params} /></td>
+                          <td className="text-right font-mono text-foreground num">{formatMetric(scenario.score)}</td>
+                          <td className={`text-right font-mono num ${Number(scenario.stats.total_return) >= 0 ? 'text-bull' : 'text-bear'}`}>{formatMetric(scenario.stats.total_return, 'total_return')}</td>
+                          <td className="text-right font-mono text-secondary num">{formatMetric(scenario.stats.sharpe)}</td>
+                          <td className="text-right font-mono text-bear num">{formatMetric(scenario.stats.max_drawdown, 'max_drawdown')}</td>
+                          <td className="text-right font-mono text-secondary num">{scenario.elapsed_ms ? `${Math.round(scenario.elapsed_ms)} ms` : '—'}</td>
+                          <td>{scenario.error ? <span className="text-danger">{scenario.error}</span> : <span className="text-bull">完成</span>}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -576,6 +594,7 @@ export function ParameterGridPanel() {
             )}
           </div>
         )}
+        </div>
       </section>
     </div>
   )

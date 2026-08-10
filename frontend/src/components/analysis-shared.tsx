@@ -48,6 +48,9 @@ export interface SchemaOption {
   columns: { name: string; type: string; label: string }[]
 }
 
+/** colorScheme 兼容旧调用方 'blue' | 'amber'；视觉统一落到 accent token。 */
+type ColorScheme = 'blue' | 'amber' | 'accent'
+
 // ===== 配置弹窗 =====
 
 export function AnalysisConfigDialog({
@@ -89,24 +92,24 @@ export function AnalysisConfigDialog({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-surface border border-border rounded-lg shadow-xl w-[420px]"
+        className="panel w-[420px] shadow-xl"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 pt-3 pb-2">
+        <div className="panel-header px-4 pt-3">
           <span className="text-sm font-medium">配置数据源</span>
-          <button onClick={onClose} className="p-0.5 text-muted hover:text-foreground">
+          <button onClick={onClose} className="btn-ghost h-auto p-0.5 text-muted hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="px-4 pb-4 space-y-3">
+        <div className="space-y-3 px-4 pb-4 pt-2">
           {/* 数据源选择 */}
           <div className="space-y-1.5">
             <span className="text-xs text-secondary">扩展数据源</span>
             <select
               value={draft.configId ?? ''}
               onChange={e => setDraft(d => ({ ...d, configId: e.target.value || undefined, dimensionField: undefined }))}
-              className="w-full h-8 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+              className="control w-full text-xs"
             >
               <option value="">自动选择</option>
               {configs.map(c => (
@@ -122,7 +125,7 @@ export function AnalysisConfigDialog({
               <select
                 value={draft.dimensionField ?? ''}
                 onChange={e => setDraft(d => ({ ...d, dimensionField: e.target.value || undefined }))}
-                className="w-full h-8 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+                className="control w-full text-xs"
               >
                 <option value="">自动探测</option>
                 {nonMetaFields.map(f => (
@@ -138,7 +141,7 @@ export function AnalysisConfigDialog({
               <select
                 value={draft.hierarchyLevel ?? 2}
                 onChange={e => setDraft(d => ({ ...d, hierarchyLevel: Number(e.target.value) as 1 | 2 | 3 }))}
-                className="w-full h-8 bg-elevated border border-border rounded text-xs text-foreground px-2 focus:outline-none focus:border-accent/50"
+                className="control w-full text-xs"
               >
                 <option value={1}>一级行业</option>
                 <option value={2}>二级行业（默认）</option>
@@ -147,17 +150,17 @@ export function AnalysisConfigDialog({
             </div>
           )}
 
-          <div className="text-[10px] text-muted leading-relaxed">
+          <div className="text-[10px] leading-relaxed text-muted">
             系统自动检测数据结构：支持"个股→概念/行业"和"概念/行业→成分股列表"两种模式。
             {showHierarchyLevel ? ' 行业字段按 “-” 拆分为 1/2/3 级。' : ''}
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs text-secondary hover:text-foreground">取消</button>
+        <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+          <button onClick={onClose} className="btn-ghost h-auto px-3 py-1.5 text-xs">取消</button>
           <button
             onClick={() => { onSave(draft); onClose() }}
-            className="px-3 py-1.5 text-xs bg-accent/15 text-accent rounded hover:bg-accent/25"
+            className="btn-primary h-auto px-3 py-1.5 text-xs"
           >
             保存
           </button>
@@ -180,8 +183,10 @@ export function OverviewStatCards({
   totalStocks: number
   configLabel: string
   dateStr?: string | null
-  accentColor: string
+  /** 兼容旧调用方；视觉统一用 accent token，忽略具体色值 */
+  accentColor?: string
 }) {
+  void accentColor
   const cards = [
     { label: '数据源', value: configLabel, hint: dateStr ?? '快照', icon: Database },
     { label: '维度数量', value: groups.length, hint: '按维度聚合分组', icon: Tags },
@@ -195,17 +200,17 @@ export function OverviewStatCards({
   ]
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       {cards.map(card => (
-        <div key={card.label} className="rounded-card border border-border bg-surface p-4">
+        <div key={card.label} className="panel p-4">
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted">{card.label}</span>
-            <card.icon className="h-4 w-4" style={{ color: accentColor }} />
+            <card.icon className="h-4 w-4 text-accent" />
           </div>
-          <div className="mt-2 text-xl font-semibold tracking-tight text-foreground truncate">
+          <div className="metric-value mt-2 truncate text-xl">
             {card.value}
           </div>
-          <div className="mt-1 text-[11px] text-muted truncate">{card.hint}</div>
+          <div className="mt-1 truncate text-[11px] text-muted">{card.hint}</div>
         </div>
       ))}
     </div>
@@ -213,6 +218,17 @@ export function OverviewStatCards({
 }
 
 // ===== 维度热力图 =====
+
+/** 热力强度档 — 全部静态 class，无动态拼接 / raw RGB */
+const HEAT_LEVELS = [
+  'bg-accent/10 text-accent/70',
+  'bg-accent/15 text-accent/80',
+  'bg-accent/20 text-accent/85',
+  'bg-accent/25 text-accent/90',
+  'bg-accent/35 text-accent',
+] as const
+
+const HEAT_ACTIVE = 'bg-accent text-white outline outline-1 outline-accent'
 
 export function DimensionHeatmap({
   groups,
@@ -225,8 +241,10 @@ export function DimensionHeatmap({
   quoteMap: Map<string, QuoteMap>
   selectedKey: string | null
   onSelect: (key: string | null) => void
-  colorScheme: 'blue' | 'amber'
+  /** 兼容旧 'blue' | 'amber'；视觉统一 accent */
+  colorScheme?: ColorScheme
 }) {
+  void colorScheme
   const [showAll, setShowAll] = useState(false)
   // 收起时最大高度（约 3 行标签高度）
   const collapsedMaxH = '8rem'
@@ -238,21 +256,16 @@ export function DimensionHeatmap({
     })
   }, [groups, quoteMap])
 
-  // 根据涨跌比渲染颜色强度
-  const colors = colorScheme === 'blue'
-    ? { up: [59, 130, 246], down: [96, 165, 250], bg: [30, 64, 175] }
-    : { up: [245, 158, 11], down: [251, 191, 36], bg: [180, 83, 9] }
-
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
+      <div className="mb-2 flex items-center justify-between">
         <span className="text-xs text-muted">热度分布（按标的覆盖数）</span>
         <button
           onClick={() => setShowAll(v => !v)}
-          className="text-[10px] text-muted hover:text-foreground flex items-center gap-0.5"
+          className="flex items-center gap-0.5 text-[10px] text-muted hover:text-foreground"
         >
           {showAll ? '收起' : `展开全部 (${enriched.length})`}
-          <ChevronDown className={`h-3 w-3 transition-transform ${showAll ? 'rotate-180' : ''}`} />
+          <ChevronDown className={cn('h-3 w-3 transition-transform', showAll && 'rotate-180')} />
         </button>
       </div>
       <div
@@ -265,28 +278,23 @@ export function DimensionHeatmap({
           const upRatio = total > 0 ? qm.upCount / total : 0.5
           const size = Math.max(0.6, Math.min(1.4, g.count / (enriched[0]?.count || 1)))
           const active = selectedKey === g.key
-          const [r, gr, b] = colors.up
+          const level = Math.min(HEAT_LEVELS.length - 1, Math.floor(upRatio * HEAT_LEVELS.length))
 
           return (
             <button
               key={g.key}
               onClick={() => onSelect(active ? null : g.key)}
-              className="px-2.5 py-1.5 rounded-sm text-[11px] whitespace-nowrap cursor-pointer hover:brightness-125 transition-all"
-              style={{
-                fontSize: `${10 + size * 2}px`,
-                color: active ? '#fff' : `rgba(${r},${gr},${b},${0.6 + upRatio * 0.4})`,
-                backgroundColor: active
-                  ? `rgba(${r},${gr},${b},0.7)`
-                  : `rgba(${r},${gr},${b},${0.08 + upRatio * 0.15})`,
-                outline: active ? `1px solid rgba(${r},${gr},${b},0.8)` : 'none',
-                outlineOffset: 1,
-              }}
+              className={cn(
+                'cursor-pointer whitespace-nowrap rounded-sm px-2.5 py-1.5 text-[11px] transition-all hover:brightness-110',
+                active ? HEAT_ACTIVE : HEAT_LEVELS[level],
+              )}
+              style={{ fontSize: `${10 + size * 2}px` }}
               title={`${g.key}: ${g.count}只, 涨${qm.upCount}/跌${qm.downCount}, 均幅${qm.avgPct != null ? fmtPct(qm.avgPct) : '—'}`}
             >
               {g.key}
               <span className="ml-1 opacity-60">{g.count}</span>
               {qm.avgPct != null && (
-                <span className={`ml-1 ${priceColorClass(qm.avgPct)}`} style={{ fontSize: '9px' }}>
+                <span className={cn('ml-1', priceColorClass(qm.avgPct))} style={{ fontSize: '9px' }}>
                   {fmtPct(qm.avgPct)}
                 </span>
               )}
@@ -317,35 +325,33 @@ export function DimensionGroupSidebar({
   searchValue: string
   onSearchChange: (v: string) => void
   kindLabel: string
-  colorScheme: 'blue' | 'amber'
+  /** 兼容旧 'blue' | 'amber'；视觉统一 accent */
+  colorScheme?: ColorScheme
 }) {
+  void colorScheme
   const q = searchValue.trim().toLowerCase()
   const filtered = q
     ? groups.filter(g => g.key.toLowerCase().includes(q))
     : groups
 
-  const accentColor = colorScheme === 'blue' ? 'rgba(59,130,246,0.7)' : 'rgba(245,158,11,0.7)'
-  const accentBg = colorScheme === 'blue' ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)'
-  const accentBorder = colorScheme === 'blue' ? 'rgba(59,130,246,0.25)' : 'rgba(245,158,11,0.25)'
-
   return (
-    <section className="rounded-card border border-border bg-surface overflow-hidden">
-      <div className="px-4 py-3 border-b border-border">
+    <section className="panel overflow-hidden">
+      <div className="border-b border-border px-4 py-3">
         <h3 className="text-sm font-medium text-foreground">{kindLabel}榜单</h3>
         <p className="mt-0.5 text-[11px] text-muted">按覆盖标的数量排序</p>
       </div>
-      <div className="p-3 border-b border-border/60">
+      <div className="border-b border-border/60 p-3">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
           <input
             value={searchValue}
             onChange={e => onSearchChange(e.target.value)}
             placeholder={`搜索${kindLabel}`}
-            className="h-8 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:outline-none focus:border-accent/50"
+            className="control w-full pl-8 text-xs"
           />
         </div>
       </div>
-      <div className="max-h-[560px] overflow-auto p-2 space-y-1">
+      <div className="max-h-[560px] space-y-1 overflow-auto p-2">
         {filtered.length === 0 ? (
           <div className="px-3 py-8 text-center text-xs text-muted">没有可展示的分组</div>
         ) : filtered.slice(0, 200).map((group, i) => {
@@ -356,27 +362,27 @@ export function DimensionGroupSidebar({
               key={group.key}
               onClick={() => onSelect(group.key)}
               className={cn(
-                'w-full rounded-lg px-3 py-2 text-left transition-colors',
-                active ? 'border' : 'border border-transparent hover:bg-elevated/60',
+                'w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                active
+                  ? 'border-accent/25 bg-accent/10'
+                  : 'border-transparent hover:bg-elevated/60',
               )}
-              style={active ? { backgroundColor: accentBg, borderColor: accentBorder } : undefined}
             >
               <div className="flex items-center gap-2">
-                <span className="w-5 text-[10px] font-mono text-muted">#{i + 1}</span>
+                <span className="w-5 font-mono text-[10px] text-muted">#{i + 1}</span>
                 <span className="flex-1 truncate text-xs font-medium text-foreground">{group.key}</span>
                 <span className="font-mono text-xs text-secondary">{group.count}</span>
               </div>
               {/* 覆盖量进度条 */}
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-elevated">
                 <div
-                  className="h-full rounded-full transition-all"
+                  className="h-full rounded-full bg-accent/70 transition-all"
                   style={{
                     width: `${Math.max(6, (group.count / (filtered[0]?.count || 1)) * 100)}%`,
-                    backgroundColor: accentColor,
                   }}
                 />
               </div>
-              {/* 行情摘要 */}
+              {/* 行情摘要 — bull/bear 仅价格语义 */}
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted">
                 {qm.avgPct != null && (
                   <span className={priceColorClass(qm.avgPct)}>
@@ -427,14 +433,14 @@ export function QuoteSummaryBar({
 
   return (
     <div className="flex items-center gap-3 text-[11px]">
-      <div className="flex-1 h-2 rounded-full overflow-hidden bg-elevated flex">
-        <div className="h-full bg-bull/70 rounded-l-full" style={{ width: `${upPct}%` }} />
+      <div className="flex h-2 flex-1 overflow-hidden rounded-full bg-elevated">
+        <div className="h-full rounded-l-full bg-bull/70" style={{ width: `${upPct}%` }} />
         <div className="flex-1" />
-        <div className="h-full bg-bear/70 rounded-r-full" style={{ width: `${downPct}%` }} />
+        <div className="h-full rounded-r-full bg-bear/70" style={{ width: `${downPct}%` }} />
       </div>
-      <span className="text-bull font-mono">{stats.upTotal}涨</span>
+      <span className="font-mono text-bull">{stats.upTotal}涨</span>
       <span className="text-muted">/</span>
-      <span className="text-bear font-mono">{stats.downTotal}跌</span>
+      <span className="font-mono text-bear">{stats.downTotal}跌</span>
     </div>
   )
 }
@@ -445,7 +451,7 @@ export function ConfigButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="p-1.5 hover:bg-surface text-muted hover:text-accent transition-colors"
+      className="btn-ghost h-auto p-1.5 text-muted hover:text-accent"
       title="配置数据源"
     >
       <Settings2 className="h-3.5 w-3.5" />
@@ -474,15 +480,15 @@ export function PresetFetchState({
 }) {
   const errMsg = error instanceof Error ? error.message : error ? String(error) : ''
   return (
-    <div className="h-full grid place-items-center px-8 py-16">
-      <div className="text-center max-w-md">
+    <div className="grid h-full place-items-center px-8 py-16">
+      <div className="max-w-md text-center">
         <DownloadCloud className="mx-auto h-10 w-10 text-muted" strokeWidth={1.5} />
         <h2 className="mt-4 text-base font-medium text-foreground">{title}</h2>
-        <p className="mt-2 text-sm text-secondary leading-relaxed">{hint}</p>
+        <p className="mt-2 text-sm leading-relaxed text-secondary">{hint}</p>
         <button
           onClick={onFetch}
           disabled={isLoading}
-          className="mt-5 inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:brightness-110 disabled:opacity-60"
+          className="btn-primary mt-5"
         >
           {isLoading ? (
             <><RefreshCw className="h-4 w-4 animate-spin" /> 获取中...</>
@@ -491,7 +497,7 @@ export function PresetFetchState({
           )}
         </button>
         {errMsg && (
-          <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-bear">
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-danger">
             <AlertCircle className="h-3.5 w-3.5" /> {errMsg}
           </p>
         )}

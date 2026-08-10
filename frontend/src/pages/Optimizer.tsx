@@ -82,131 +82,165 @@ export function Optimizer() {
   const pieRef = useECharts(pieOption, [result])
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="workspace-page">
       <PageHeader title="组合优化" subtitle="标的权重 · 组合波动 · 分散度" />
 
-      <div className="rounded-card border border-border bg-surface p-3 space-y-2">
-        <div className="flex flex-wrap gap-1.5">
-          {symbols.map(s => (
-            <span key={s.symbol} className="inline-flex items-center gap-1 rounded bg-elevated px-2 py-0.5 text-xs">
-              {s.name ?? s.symbol}
-              <button type="button" onClick={() => setSymbols(symbols.filter(x => x.symbol !== s.symbol))}>
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            disabled={importFromStrategy.isPending}
-            onChange={e => {
-              if (e.target.value) importFromStrategy.mutate(e.target.value)
-              e.target.value = ''
-            }}
-            className="h-7 px-2 rounded-input border border-border bg-elevated text-xs"
-          >
-            <option value="">从策略导入标的…</option>
-            {strategies.data?.presets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          {importFromStrategy.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />}
-        </div>
-        <div className="relative">
-          <input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="搜索代码/名称/拼音添加标的（支持 A股 / ETF）"
-            className="w-full h-8 px-2.5 rounded-input border border-border bg-elevated text-xs"
-          />
-          {search.data && search.data.results.length > 0 && query && (
-            <div className="absolute z-20 mt-1 w-full rounded-card border border-border bg-surface max-h-52 overflow-auto">
-              {search.data.results.map(r => {
-                const meta = instrumentSearchMeta(r)
-                return (
-                  <button
-                    key={r.symbol}
-                    type="button"
-                    onClick={() => addSymbol(r.symbol, r.name)}
-                    className="flex w-full items-center justify-between px-2.5 py-1.5 text-xs hover:bg-elevated"
-                  >
-                    <span>{r.name} <span className="text-muted">{r.symbol}</span></span>
-                    {meta ? <span className="text-muted">{meta}</span> : null}
+      <div className="workspace-content space-y-3">
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <div className="section-kicker">Universe</div>
+              <h2 className="section-title">标的池</h2>
+            </div>
+            <span className="text-[11px] text-muted num">{symbols.length} 只</span>
+          </div>
+          <div className="panel-body space-y-2">
+            <div className="flex flex-wrap gap-1.5">
+              {symbols.map(s => (
+                <span key={s.symbol} className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-0.5 text-xs">
+                  {s.name ?? s.symbol}
+                  <button type="button" className="text-muted hover:text-foreground" onClick={() => setSymbols(symbols.filter(x => x.symbol !== s.symbol))}>
+                    <X className="h-3 w-3" />
                   </button>
-                )
-              })}
+                </span>
+              ))}
+              {symbols.length === 0 && <span className="text-xs text-muted">从策略导入或搜索添加至少 2 只标的</span>}
             </div>
-          )}
-        </div>
-      </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                disabled={importFromStrategy.isPending}
+                onChange={e => {
+                  if (e.target.value) importFromStrategy.mutate(e.target.value)
+                  e.target.value = ''
+                }}
+                className="control w-auto"
+              >
+                <option value="">从策略导入标的…</option>
+                {strategies.data?.presets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              {importFromStrategy.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />}
+            </div>
+            <div className="relative">
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="搜索代码/名称/拼音添加标的（支持 A股 / ETF）"
+                className="control w-full"
+              />
+              {search.data && search.data.results.length > 0 && query && (
+                <div className="absolute z-20 mt-1 w-full rounded-btn border border-border bg-surface max-h-52 overflow-auto shadow-sm">
+                  {search.data.results.map(r => {
+                    const meta = instrumentSearchMeta(r)
+                    return (
+                      <button
+                        key={r.symbol}
+                        type="button"
+                        onClick={() => addSymbol(r.symbol, r.name)}
+                        className="flex w-full items-center justify-between px-2.5 py-1.5 text-xs hover:bg-elevated"
+                      >
+                        <span>{r.name} <span className="text-muted">{r.symbol}</span></span>
+                        {meta ? <span className="text-muted">{meta}</span> : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
 
-      <div className="rounded-card border border-border bg-surface p-3 flex flex-wrap items-end gap-3">
-        <label className="text-xs text-muted flex flex-col gap-1">
-          优化方法
-          <select
-            value={method}
-            onChange={e => setMethod(e.target.value as OptimizeMethod)}
-            className="h-8 px-2 rounded-input border border-border bg-elevated text-xs text-foreground"
+        <section className="workspace-toolbar !mb-0 flex-wrap items-end gap-3">
+          <label className="text-xs text-muted flex flex-col gap-1">
+            优化方法
+            <select
+              value={method}
+              onChange={e => setMethod(e.target.value as OptimizeMethod)}
+              className="control w-auto text-foreground"
+            >
+              {METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-muted flex flex-col gap-1">
+            回看天数
+            <input
+              type="number"
+              min={20}
+              max={1000}
+              value={lookback}
+              onChange={e => setLookback(Number(e.target.value))}
+              className="control w-24 num"
+            />
+          </label>
+          <span className="text-[11px] text-muted pb-2">{METHODS.find(m => m.key === method)?.hint}</span>
+          <button
+            type="button"
+            disabled={symbols.length < 2 || run.isPending}
+            onClick={() => run.mutate()}
+            className="btn-primary ml-auto"
           >
-            {METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-          </select>
-        </label>
-        <label className="text-xs text-muted flex flex-col gap-1">
-          回看天数
-          <input
-            type="number"
-            min={20}
-            max={1000}
-            value={lookback}
-            onChange={e => setLookback(Number(e.target.value))}
-            className="h-8 w-24 px-2 rounded-input border border-border bg-elevated text-xs num"
-          />
-        </label>
-        <span className="text-[11px] text-muted">{METHODS.find(m => m.key === method)?.hint}</span>
-        <button
-          type="button"
-          disabled={symbols.length < 2 || run.isPending}
-          onClick={() => run.mutate()}
-          className="ml-auto h-8 px-4 rounded-btn bg-accent/90 text-base text-xs font-medium hover:bg-accent disabled:opacity-40 flex items-center gap-1.5"
-        >
-          {run.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          计算权重
-        </button>
+            {run.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            计算权重
+          </button>
+        </section>
+
+        {run.isError && <div className="text-xs text-danger">{(run.error as Error).message}</div>}
+
+        {result && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 min-w-0">
+            <section className="panel min-w-0">
+              <div className="panel-header">
+                <div>
+                  <div className="section-kicker">Weights</div>
+                  <h2 className="section-title">权重结果</h2>
+                </div>
+                <div className="flex flex-wrap gap-3 text-[11px] text-muted">
+                  <span>标的 <span className="metric-value !text-xs text-foreground">{result.stats.n}</span></span>
+                  {result.stats.annualized_vol != null && (
+                    <span>年化波动 <span className="metric-value !text-xs text-foreground">{(result.stats.annualized_vol * 100).toFixed(1)}%</span></span>
+                  )}
+                  {result.stats.diversification_ratio != null && (
+                    <span>分散度 <span className="metric-value !text-xs text-foreground">{result.stats.diversification_ratio}</span></span>
+                  )}
+                </div>
+              </div>
+              <div className="panel-body !p-0">
+                <div className="overflow-x-auto">
+                  <table className="data-table w-full">
+                    <thead>
+                      <tr>
+                        <th className="text-left">标的</th>
+                        <th className="text-right">权重</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.weights.slice().sort((a, b) => b.weight - a.weight).map(w => (
+                        <tr key={w.symbol}>
+                          <td>{w.name ?? w.symbol} <span className="text-muted">{w.symbol}</span></td>
+                          <td className="text-right num">{(w.weight * 100).toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {result.meta.dropped.length > 0 && (
+                  <div className="border-t border-border px-3 py-2 text-[11px] text-muted">已剔除（无本地数据，如港股）：{result.meta.dropped.join(', ')}</div>
+                )}
+              </div>
+            </section>
+            <section className="panel min-w-0">
+              <div className="panel-header">
+                <div>
+                  <div className="section-kicker">Allocation</div>
+                  <h2 className="section-title">权重分布</h2>
+                </div>
+              </div>
+              <div className="panel-body">
+                <div ref={pieRef} style={{ width: '100%', height: 300 }} />
+              </div>
+            </section>
+          </div>
+        )}
       </div>
-
-      {run.isError && <div className="text-xs text-danger">{(run.error as Error).message}</div>}
-
-      {result && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-card border border-border bg-surface p-3">
-            <div className="flex gap-4 text-[11px] text-muted mb-2">
-              <span>标的 {result.stats.n}</span>
-              {result.stats.annualized_vol != null && <span>年化波动 {(result.stats.annualized_vol * 100).toFixed(1)}%</span>}
-              {result.stats.diversification_ratio != null && <span>分散度 {result.stats.diversification_ratio}</span>}
-            </div>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-muted">
-                  <th className="text-left py-1">标的</th>
-                  <th className="text-right">权重</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.weights.slice().sort((a, b) => b.weight - a.weight).map(w => (
-                  <tr key={w.symbol} className="border-t border-border/40">
-                    <td className="py-1">{w.name ?? w.symbol} <span className="text-muted">{w.symbol}</span></td>
-                    <td className="text-right num">{(w.weight * 100).toFixed(2)}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {result.meta.dropped.length > 0 && (
-              <div className="mt-2 text-[11px] text-muted">已剔除（无本地数据，如港股）：{result.meta.dropped.join(', ')}</div>
-            )}
-          </div>
-          <div className="rounded-card border border-border bg-surface p-3">
-            <div ref={pieRef} style={{ width: '100%', height: 300 }} />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

@@ -67,95 +67,110 @@ export function TradeJournal() {
   const previewColumns = useMemo(() => preview?.columns.slice(0, 8) ?? [], [preview])
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="workspace-page">
       <PageHeader title="交易复盘" subtitle="券商成交流水上传 · FIFO 台账 · 行为诊断" />
-      <div className="flex-1 overflow-auto px-5 py-6">
-        <div className="mx-auto flex max-w-6xl flex-col gap-5">
-          <section className="rounded-card border border-border bg-surface p-5">
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-card border border-border px-3 py-2 text-sm text-foreground hover:bg-surface-hover">
-                <FileUp className="h-4 w-4" />
-                <span>{file ? file.name : '选择 xlsx / csv'}</span>
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] ?? null
-                    setFile(f)
-                    if (f) previewUpload.mutate(f)
-                  }}
-                />
-              </label>
-              {previewUpload.isPending && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
-              {preview && (
-                <>
-                  <select className="rounded-card border border-border bg-base px-3 py-2 text-sm" value={sheet} onChange={(e) => setSheet(e.target.value)}>
-                    {preview.sheets.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                  <select className="rounded-card border border-border bg-base px-3 py-2 text-sm" value={benchmark} onChange={(e) => setBenchmark(e.target.value)}>
-                    {presets.data?.benchmarks.map((b) => <option key={b.symbol} value={b.symbol}>{b.name}</option>)}
-                  </select>
+      <div className="workspace-content overflow-auto">
+        <div className="mx-auto flex w-full max-w-6xl min-w-0 flex-col gap-3">
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <div className="section-kicker">Import</div>
+                <h2 className="section-title">流水导入</h2>
+              </div>
+            </div>
+            <div className="panel-body">
+              <div className="workspace-toolbar flex-wrap">
+                <label className="btn-secondary cursor-pointer !h-8">
+                  <FileUp className="h-4 w-4" />
+                  <span className="max-w-[14rem] truncate">{file ? file.name : '选择 xlsx / csv'}</span>
                   <input
-                    className="w-32 rounded-card border border-border bg-base px-3 py-2 text-sm"
-                    value={accountId}
-                    onChange={(e) => setAccountId(e.target.value)}
-                    placeholder="账户"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null
+                      setFile(f)
+                      if (f) previewUpload.mutate(f)
+                    }}
                   />
-                  <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
-                    <input type="checkbox" checked={appendMode} onChange={(e) => setAppendMode(e.target.checked)} />
-                    追加去重
-                  </label>
-                  <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
-                    <input type="checkbox" checked={narrative} onChange={(e) => setNarrative(e.target.checked)} />
-                    聚合摘要
-                  </label>
-                  <button
-                    className="rounded-card bg-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-                    disabled={!file || commitUpload.isPending}
-                    onClick={() => commitUpload.mutate()}
-                  >
-                    {commitUpload.isPending ? '导入中…' : '确认导入'}
+                </label>
+                {previewUpload.isPending && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
+                {preview && (
+                  <>
+                    <select className="control w-auto" value={sheet} onChange={(e) => setSheet(e.target.value)}>
+                      {preview.sheets.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <select className="control w-auto" value={benchmark} onChange={(e) => setBenchmark(e.target.value)}>
+                      {presets.data?.benchmarks.map((b) => <option key={b.symbol} value={b.symbol}>{b.name}</option>)}
+                    </select>
+                    <input
+                      className="control w-32"
+                      value={accountId}
+                      onChange={(e) => setAccountId(e.target.value)}
+                      placeholder="账户"
+                    />
+                    <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
+                      <input type="checkbox" checked={appendMode} onChange={(e) => setAppendMode(e.target.checked)} />
+                      追加去重
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
+                      <input type="checkbox" checked={narrative} onChange={(e) => setNarrative(e.target.checked)} />
+                      聚合摘要
+                    </label>
+                    <button
+                      className="btn-primary"
+                      disabled={!file || commitUpload.isPending}
+                      onClick={() => commitUpload.mutate()}
+                    >
+                      {commitUpload.isPending ? '导入中…' : '确认导入'}
+                    </button>
+                  </>
+                )}
+                {current && (
+                  <button className="btn-ghost ml-auto text-danger hover:text-danger" onClick={() => deleteLedger.mutate()}>
+                    <Trash2 className="h-4 w-4" />删除台账
                   </button>
-                </>
-              )}
-              {current && (
-                <button className="ml-auto inline-flex items-center gap-2 rounded-card border border-border px-3 py-2 text-sm text-danger" onClick={() => deleteLedger.mutate()}>
-                  <Trash2 className="h-4 w-4" />删除台账
-                </button>
-              )}
+                )}
+              </div>
             </div>
           </section>
 
           {preview && (
-            <section className="rounded-card border border-border bg-surface p-5">
-              <h3 className="text-sm font-semibold text-foreground">列映射预览</h3>
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
-                {preview.columns.map((col) => (
-                  <label key={col} className="flex items-center gap-2 text-sm">
-                    <span className="w-28 truncate text-secondary" title={col}>{col}</span>
-                    <select
-                      className="min-w-0 flex-1 rounded-card border border-border bg-base px-2 py-1.5"
-                      value={mapping[col] ?? ''}
-                      onChange={(e) => setMapping({ ...mapping, [col]: e.target.value })}
-                    >
-                      <option value="">忽略</option>
-                      {FIELDS.map((f) => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
-                    </select>
-                  </label>
-                ))}
+            <section className="panel">
+              <div className="panel-header">
+                <div>
+                  <div className="section-kicker">Mapping</div>
+                  <h2 className="section-title">列映射预览</h2>
+                </div>
               </div>
-              <div className="mt-4 overflow-auto">
-                <table className="min-w-full text-left text-xs">
-                  <thead className="text-muted"><tr>{previewColumns.map((c) => <th key={c} className="px-2 py-1">{c}</th>)}</tr></thead>
-                  <tbody>
-                    {preview.preview_rows.slice(0, 8).map((row, i) => (
-                      <tr key={i} className="border-t border-border">
-                        {previewColumns.map((c) => <td key={c} className="px-2 py-1 text-secondary">{String(row[c] ?? '')}</td>)}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="panel-body space-y-3">
+                <div className="grid gap-3 md:grid-cols-3">
+                  {preview.columns.map((col) => (
+                    <label key={col} className="flex min-w-0 items-center gap-2 text-sm">
+                      <span className="w-28 shrink-0 truncate text-secondary" title={col}>{col}</span>
+                      <select
+                        className="control min-w-0 flex-1"
+                        value={mapping[col] ?? ''}
+                        onChange={(e) => setMapping({ ...mapping, [col]: e.target.value })}
+                      >
+                        <option value="">忽略</option>
+                        {FIELDS.map((f) => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                <div className="data-table-scroll">
+                  <table className="data-table min-w-full text-xs">
+                    <thead><tr>{previewColumns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+                    <tbody>
+                      {preview.preview_rows.slice(0, 8).map((row, i) => (
+                        <tr key={i}>
+                          {previewColumns.map((c) => <td key={c} className="text-secondary">{String(row[c] ?? '')}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </section>
           )}
@@ -187,7 +202,7 @@ function Report({
         <Metric label={`超额 vs ${ledger.benchmark.name}`} value={ledger.benchmark.account.excess == null ? '—' : pct(ledger.benchmark.account.excess)} tone={(ledger.benchmark.account.excess ?? 0) >= 0 ? 'bull' : 'bear'} />
       </section>
       {(ledger.accounts?.length || ledger.import || ledger.narrative) && (
-        <section className="rounded-card border border-border bg-surface p-4 text-sm text-secondary">
+        <section className="panel panel-body text-sm text-secondary">
           {ledger.accounts?.length ? (
             <div>账户：{ledger.accounts.map(a => `${a.id}(${a.fills})`).join('、')}</div>
           ) : null}
@@ -197,51 +212,65 @@ function Report({
           {ledger.narrative ? <div className="mt-2 text-foreground">{ledger.narrative}</div> : null}
         </section>
       )}
-      <section className="rounded-card border border-border bg-surface p-4">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-secondary">
-          <span>这份诊断有帮助吗</span>
-          <button disabled={feedbackPending} onClick={() => onFeedback('helpful')} className="rounded border border-border px-2 py-1 text-xs hover:bg-elevated disabled:opacity-50">有帮助</button>
-          <button disabled={feedbackPending} onClick={() => onFeedback('not_helpful')} className="rounded border border-border px-2 py-1 text-xs hover:bg-elevated disabled:opacity-50">没帮助</button>
+      <section className="panel">
+        <div className="panel-body">
+          <div className="workspace-toolbar text-sm text-secondary">
+            <span>这份诊断有帮助吗</span>
+            <button disabled={feedbackPending} onClick={() => onFeedback('helpful')} className="btn-secondary !h-7 text-xs">有帮助</button>
+            <button disabled={feedbackPending} onClick={() => onFeedback('not_helpful')} className="btn-secondary !h-7 text-xs">没帮助</button>
+          </div>
         </div>
       </section>
-      <section className="rounded-card border border-border bg-surface p-5">
-        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-          <NotebookPen className="h-4 w-4" />行为诊断
+      <section className="panel">
+        <div className="panel-header">
+          <div className="flex items-center gap-2">
+            <NotebookPen className="h-4 w-4" />
+            <h3 className="section-title">行为诊断</h3>
+          </div>
         </div>
-        <div className="grid gap-3 md:grid-cols-4">
-          <Diagnosis title="处置效应" flag={d.disposition?.flag} value={`${num(d.disposition?.loss_to_win_holding_ratio)}x`} />
-          <Diagnosis title="过度交易" flag={d.overtrading?.flag} value={`${num(d.overtrading?.monthly_roundtrips)} / 月`} />
-          <Diagnosis title="追涨买入" flag={d.chasing?.flag} value={pct(d.chasing?.ratio)} />
-          <Diagnosis title="浮亏加仓" flag={d.anchoring?.flag} value={pct(d.anchoring?.ratio)} />
+        <div className="panel-body">
+          <div className="grid gap-3 md:grid-cols-4">
+            <Diagnosis title="处置效应" flag={d.disposition?.flag} value={`${num(d.disposition?.loss_to_win_holding_ratio)}x`} />
+            <Diagnosis title="过度交易" flag={d.overtrading?.flag} value={`${num(d.overtrading?.monthly_roundtrips)} / 月`} />
+            <Diagnosis title="追涨买入" flag={d.chasing?.flag} value={pct(d.chasing?.ratio)} />
+            <Diagnosis title="浮亏加仓" flag={d.anchoring?.flag} value={pct(d.anchoring?.ratio)} />
+          </div>
         </div>
       </section>
-      <section className="rounded-card border border-border bg-surface p-5">
-        <h3 className="text-sm font-semibold text-foreground">Roundtrip 台账</h3>
-        <p className="mt-1 text-xs text-muted">{ledger.benchmark.noise_note}</p>
-        <div className="mt-3 overflow-auto">
-          <table className="min-w-full text-left text-xs">
-            <thead className="text-muted">
-              <tr><th className="px-2 py-1">账户</th><th>代码</th><th>建仓</th><th>清仓</th><th>数量</th><th>盈亏</th><th>收益率</th><th>基准</th><th>超额</th></tr>
-            </thead>
-            <tbody>
-              {ledger.trips.slice(0, 200).map((t, i) => {
-                const b = ledger.benchmark.per_trip.find((r) => (r.account_id ?? 'default') === (t.account_id ?? 'default') && r.symbol === t.symbol && r.open_date === t.open_date && r.close_date === t.close_date)
-                return (
-                <tr key={`${t.symbol}-${t.open_date}-${i}`} className="border-t border-border">
-                  <td className="px-2 py-1 text-muted">{t.account_id ?? 'default'}</td>
-                  <td className="text-foreground">{t.symbol}</td>
-                  <td>{t.open_date}</td>
-                  <td>{t.close_date}</td>
-                  <td>{num(t.qty)}</td>
-                  <td className={Number(t.total_pnl) >= 0 ? 'text-bull' : 'text-bear'}>{money(t.total_pnl)}</td>
-                  <td>{pct(t.pnl_pct)}</td>
-                  <td>{b?.benchmark_pct == null ? '—' : pct(b.benchmark_pct)}</td>
-                  <td>{b?.excess == null ? '—' : pct(b.excess)}</td>
-                </tr>
-                )
-              })}
-            </tbody>
-          </table>
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <div className="section-kicker">Ledger</div>
+            <h3 className="section-title">Roundtrip 台账</h3>
+          </div>
+        </div>
+        <div className="panel-body space-y-2">
+          <p className="text-xs text-muted">{ledger.benchmark.noise_note}</p>
+          <div className="data-table-scroll">
+            <table className="data-table min-w-full text-xs">
+              <thead>
+                <tr><th>账户</th><th>代码</th><th>建仓</th><th>清仓</th><th>数量</th><th>盈亏</th><th>收益率</th><th>基准</th><th>超额</th></tr>
+              </thead>
+              <tbody>
+                {ledger.trips.slice(0, 200).map((t, i) => {
+                  const b = ledger.benchmark.per_trip.find((r) => (r.account_id ?? 'default') === (t.account_id ?? 'default') && r.symbol === t.symbol && r.open_date === t.open_date && r.close_date === t.close_date)
+                  return (
+                  <tr key={`${t.symbol}-${t.open_date}-${i}`}>
+                    <td className="text-muted">{t.account_id ?? 'default'}</td>
+                    <td className="text-foreground">{t.symbol}</td>
+                    <td className="num">{t.open_date}</td>
+                    <td className="num">{t.close_date}</td>
+                    <td className="num">{num(t.qty)}</td>
+                    <td className={Number(t.total_pnl) >= 0 ? 'text-bull num' : 'text-bear num'}>{money(t.total_pnl)}</td>
+                    <td className="num">{pct(t.pnl_pct)}</td>
+                    <td className="num">{b?.benchmark_pct == null ? '—' : pct(b.benchmark_pct)}</td>
+                    <td className="num">{b?.excess == null ? '—' : pct(b.excess)}</td>
+                  </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </>
@@ -250,18 +279,18 @@ function Report({
 
 function Metric({ label, value, tone }: { label: string; value: string | number; tone?: 'bull' | 'bear' }) {
   return (
-    <div className="rounded-card border border-border bg-surface p-4">
-      <div className="text-xs text-muted">{label}</div>
-      <div className={`mt-1 text-xl font-semibold ${tone === 'bull' ? 'text-bull' : tone === 'bear' ? 'text-bear' : 'text-foreground'}`}>{value}</div>
+    <div className="panel p-3">
+      <div className="section-kicker">{label}</div>
+      <div className={`metric-value mt-1 text-base ${tone === 'bull' ? 'text-bull' : tone === 'bear' ? 'text-bear' : ''}`}>{value}</div>
     </div>
   )
 }
 
 function Diagnosis({ title, flag, value }: { title: string; flag?: boolean; value: string }) {
   return (
-    <div className="rounded-card border border-border bg-base p-3">
+    <div className="rounded-input border border-border bg-elevated/40 p-3">
       <div className="text-xs text-muted">{title}</div>
-      <div className={flag ? 'mt-1 text-sm font-semibold text-bear' : 'mt-1 text-sm font-semibold text-foreground'}>{value}</div>
+      <div className={flag ? 'metric-value mt-1 !text-sm text-bear' : 'metric-value mt-1 !text-sm'}>{value}</div>
     </div>
   )
 }

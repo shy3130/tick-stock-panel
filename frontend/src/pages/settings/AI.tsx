@@ -391,7 +391,7 @@ export function SettingsAIPanel() {
               <input value={form.user_agent ?? ''} onChange={e => setForm({ ...form, user_agent: e.target.value })} placeholder="默认留空" className={INPUT_CLS} />
             </Field>
 
-            <div className="rounded-card border border-amber-400/20 bg-amber-400/[0.04] px-4 py-3 flex items-start gap-3">
+            <div className="panel flex items-start gap-3 border-warning/30 bg-warning/5 px-3 py-2.5">
               <Shield className="h-4 w-4 text-amber-400/70 mt-0.5 shrink-0" />
               <div className="text-[11px] text-amber-400/70 leading-relaxed">
                 API Key 仅保存在本机项目文件中。ACP/Codex 命令在后端宿主机执行，panel 只把它们作为文本生成器使用。
@@ -425,7 +425,7 @@ interface CardProps {
 
 function Card({ icon: Icon, title, right, children }: CardProps) {
   return (
-    <section className="rounded-card border border-border bg-surface p-5">
+    <section className="panel">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
           <Icon className="h-4 w-4 text-secondary" />

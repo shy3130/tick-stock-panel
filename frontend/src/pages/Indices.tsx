@@ -202,148 +202,153 @@ export function Indices() {
   }
 
   return (
-    <div className="h-full overflow-auto bg-base p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">指数</h1>
-          <p className="mt-1 text-xs text-muted">
-            指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
-          </p>
+    <div className="workspace-page h-full overflow-auto">
+      <div className="workspace-content gap-3">
+        <div className="workspace-toolbar justify-between">
+          <div className="min-w-0">
+            <h1 className="section-title text-base">指数</h1>
+            <p className="mt-0.5 text-xs text-muted">
+              指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
+            </p>
+          </div>
+          <div className="workspace-toolbar">
+            <button
+              onClick={() => syncInstruments.mutate()}
+              disabled={syncInstruments.isPending}
+              className="btn-secondary text-xs"
+            >
+              {syncInstruments.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              同步指数列表
+            </button>
+            <button
+              onClick={() => syncDaily.mutate()}
+              disabled={syncDaily.isPending}
+              className="btn-primary text-xs"
+            >
+              {syncDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              同步指数日K
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => syncInstruments.mutate()}
-            disabled={syncInstruments.isPending}
-            className="inline-flex items-center gap-1.5 rounded-btn bg-elevated px-3 py-1.5 text-xs text-secondary hover:text-foreground disabled:opacity-50"
-          >
-            {syncInstruments.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            同步指数列表
-          </button>
-          <button
-            onClick={() => syncDaily.mutate()}
-            disabled={syncDaily.isPending}
-            className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base hover:bg-accent/90 disabled:opacity-50"
-          >
-            {syncDaily.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            同步指数日K
-          </button>
-        </div>
-      </div>
 
-      <div className="grid grid-cols-[15rem_1fr] gap-4">
-        <aside className="rounded-card border border-border bg-surface p-3">
-          <div className="relative mb-3">
-            <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted" />
-            <input
-              value={keyword}
-              onChange={e => setKeyword(e.target.value)}
-              placeholder="搜索指数代码/名称"
-              className="w-full rounded-btn border border-border bg-base py-1.5 pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
-            />
-          </div>
-          <div className="mb-3 space-y-1 border-b border-border/60 pb-3">
-            {topRows.map(renderIndexItem)}
-          </div>
-          <div className="max-h-[calc(100vh-24rem)] space-y-1 overflow-auto pr-1">
-            {(list.isLoading || search.isLoading) && <div className="py-4 text-center text-xs text-muted">加载中…</div>}
-            {!list.isLoading && listRows.length === 0 && (
-              <div className="rounded-btn bg-elevated p-3 text-xs text-muted">
-                {keyword.trim() ? '无匹配指数。' : '暂无更多指数，先点击“同步指数列表”。'}
-              </div>
-            )}
-            {listRows.map(renderIndexItem)}
-          </div>
-        </aside>
-
-        <main className="min-w-0 rounded-card border border-border bg-surface p-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4 text-accent" />
-                <h2 className="truncate text-sm font-semibold text-foreground">
-                  {selectedInfo?.name || selectedSymbol || '未选择指数'}
-                </h2>
-                {selectedSymbol && <span className="font-mono text-xs text-muted">{selectedSymbol}</span>}
-                {selectedSymbol && <span className="font-mono text-xs text-foreground">{fmtNum(selectedQuoteValue)}</span>}
-                {selectedSymbol && <span className={`font-mono text-xs ${Number(selectedQuotePct ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{fmtPct(selectedQuotePct)}</span>}
-              </div>
-              <div className="mt-1 text-xs text-muted">
-                实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <input
-                type="date"
-                value={range.start}
-                onChange={e => setRange(r => ({ ...r, start: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
-              />
-              <span className="text-muted">至</span>
-              <input
-                type="date"
-                value={range.end}
-                onChange={e => setRange(r => ({ ...r, end: e.target.value }))}
-                className="rounded-btn border border-border bg-base px-2 py-1 text-secondary outline-none focus:border-accent"
-              />
-            </div>
-          </div>
-
-          {daily.isLoading && <div className="py-10 text-center text-sm text-muted">日K加载中…</div>}
-          {daily.isError && <div className="py-4 text-sm text-danger">指数日K加载失败</div>}
-          {!daily.isLoading && !daily.isError && chartRows.length === 0 && (
-            <div className="rounded-card bg-elevated p-6 text-center text-sm text-muted">
-              暂无日K数据。可以先同步指数日K，或选择其他指数。
-            </div>
-          )}
-          {chartRows.length > 0 && (
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <EChartsCandlestick
-                  data={chartRows}
-                  height={620}
-                  showMA={true}
-                  showInfoBar={true}
-                  showMarkers={false}
-                  symbol={selectedSymbol}
-                  linkedPrice={linkedPrice}
-                  onDateClick={setSelectedDate}
-                  visibleBars={48}
-                  activeIndicators={['vol', 'macd']}
+        <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[15rem_minmax(0,1fr)]">
+          <aside className="panel">
+            <div className="panel-body space-y-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+                <input
+                  value={keyword}
+                  onChange={e => setKeyword(e.target.value)}
+                  placeholder="搜索指数代码/名称"
+                  className="control w-full pl-7"
                 />
               </div>
-              <div className="min-w-0 flex-1 border-l border-border pl-3" style={{ height: 620 }}>
-                {!hasMinuteCap ? (
-                  <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-                    <Lock className="h-5 w-5 text-muted" />
-                    <div className="text-xs text-secondary">当前数据源缺少批量分钟K能力</div>
-                    <div className="text-[10px] text-muted">切换到支持该能力的数据源后可查看指数分时走势</div>
+              <div className="space-y-1 border-b border-border pb-3">
+                {topRows.map(renderIndexItem)}
+              </div>
+              <div className="max-h-[calc(100vh-24rem)] space-y-1 overflow-auto pr-1">
+                {(list.isLoading || search.isLoading) && <div className="py-4 text-center text-xs text-muted">加载中…</div>}
+                {!list.isLoading && listRows.length === 0 && (
+                  <div className="rounded-btn bg-elevated p-3 text-xs text-muted">
+                    {keyword.trim() ? '无匹配指数。' : '暂无更多指数，先点击“同步指数列表”。'}
                   </div>
-                ) : (
-                  <>
-                    {minute.isLoading && <div className="py-2 text-xs text-muted">分时加载中…</div>}
-                    {!minute.isLoading && minuteRows.length === 0 && (
-                      <div className="flex h-full items-center justify-center text-xs text-muted">
-                        暂无分时数据
-                      </div>
-                    )}
-                    {minuteRows.length > 0 && (
-                      <EChartsIntraday
-                        data={minuteRows}
-                        height={620}
-                        prevClose={prevClose}
-                        date={selectedDate ?? undefined}
-                        symbol={selectedSymbol}
-                        showLimitLines={false}
-                        showAvgLine={false}
-                        onPriceHover={setLinkedPrice}
-                      />
-                    )}
-                  </>
                 )}
+                {listRows.map(renderIndexItem)}
               </div>
             </div>
-          )}
-        </main>
+          </aside>
+
+          <main className="panel min-w-0">
+            <div className="panel-header flex-wrap">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Activity className="h-4 w-4 text-accent" />
+                  <h2 className="section-title truncate">
+                    {selectedInfo?.name || selectedSymbol || '未选择指数'}
+                  </h2>
+                  {selectedSymbol && <span className="font-mono text-xs text-muted">{selectedSymbol}</span>}
+                  {selectedSymbol && <span className="metric-value text-sm">{fmtNum(selectedQuoteValue)}</span>}
+                  {selectedSymbol && <span className={`font-mono text-xs ${Number(selectedQuotePct ?? 0) >= 0 ? 'text-bull' : 'text-bear'}`}>{fmtPct(selectedQuotePct)}</span>}
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  实时缓存 {quotes.data?.count ?? 0} 只指数 · 日K来源 {daily.data?.source ?? '--'}
+                </div>
+              </div>
+              <div className="workspace-toolbar text-xs">
+                <input
+                  type="date"
+                  value={range.start}
+                  onChange={e => setRange(r => ({ ...r, start: e.target.value }))}
+                  className="control"
+                />
+                <span className="text-muted">至</span>
+                <input
+                  type="date"
+                  value={range.end}
+                  onChange={e => setRange(r => ({ ...r, end: e.target.value }))}
+                  className="control"
+                />
+              </div>
+            </div>
+            <div className="panel-body">
+              {daily.isLoading && <div className="py-10 text-center text-sm text-muted">日K加载中…</div>}
+              {daily.isError && <div className="py-4 text-sm text-danger">指数日K加载失败</div>}
+              {!daily.isLoading && !daily.isError && chartRows.length === 0 && (
+                <div className="rounded-btn bg-elevated p-6 text-center text-sm text-muted">
+                  暂无日K数据。可以先同步指数日K，或选择其他指数。
+                </div>
+              )}
+              {chartRows.length > 0 && (
+                <div className="flex min-w-0 flex-col items-stretch gap-3 xl:flex-row xl:items-start">
+                  <div className="min-w-0 flex-1">
+                    <EChartsCandlestick
+                      data={chartRows}
+                      height={620}
+                      showMA={true}
+                      showInfoBar={true}
+                      showMarkers={false}
+                      symbol={selectedSymbol}
+                      linkedPrice={linkedPrice}
+                      onDateClick={setSelectedDate}
+                      visibleBars={48}
+                      activeIndicators={['vol', 'macd']}
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1 border-t border-border pt-3 xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0" style={{ height: 620 }}>
+                    {!hasMinuteCap ? (
+                      <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                        <Lock className="h-5 w-5 text-muted" />
+                        <div className="text-xs text-secondary">当前数据源缺少批量分钟K能力</div>
+                        <div className="text-[10px] text-muted">切换到支持该能力的数据源后可查看指数分时走势</div>
+                      </div>
+                    ) : (
+                      <>
+                        {minute.isLoading && <div className="py-2 text-xs text-muted">分时加载中…</div>}
+                        {!minute.isLoading && minuteRows.length === 0 && (
+                          <div className="flex h-full items-center justify-center text-xs text-muted">
+                            暂无分时数据
+                          </div>
+                        )}
+                        {minuteRows.length > 0 && (
+                          <EChartsIntraday
+                            data={minuteRows}
+                            height={620}
+                            prevClose={prevClose}
+                            date={selectedDate ?? undefined}
+                            symbol={selectedSymbol}
+                            showLimitLines={false}
+                            showAvgLine={false}
+                            onPriceHover={setLinkedPrice}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   )

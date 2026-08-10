@@ -2,6 +2,8 @@ import { motion } from 'framer-motion'
 import { Loader2, CheckCircle2, Settings, Table2 } from 'lucide-react'
 import { formatNumber } from '@/lib/format'
 import { fmtDate } from '@/lib/format'
+import { cn } from '@/lib/cn'
+import { StatusDot } from '@/components/ui/Primitives'
 import { Skeleton } from './Skeleton'
 
 // 卡片能力定义：capKey → 查 capability limits；tierReq → 无权限时显示的档位要求
@@ -23,9 +25,9 @@ export const CARD_META: Record<string, {
 
 export function Pill({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="rounded-btn bg-base/40 border border-border px-3 py-1.5">
+    <div className="rounded-btn border border-border bg-base/40 px-3 py-1.5">
       <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
-      <div className="font-mono text-sm font-medium tabular-nums mt-0.5">{value}</div>
+      <div className="mt-0.5 font-mono text-sm font-medium tabular-nums">{value}</div>
     </div>
   )
 }
@@ -40,7 +42,7 @@ function CapBadge({ hasCap, isLocal, tierLabel, tierReq, capInfo, localSuffix }:
 }) {
   if (isLocal) {
     return (
-      <span className="text-[10px] text-secondary bg-elevated rounded px-1.5 py-px font-medium">
+      <span className="rounded bg-elevated px-1.5 py-px text-[10px] font-medium text-secondary">
         本地计算{localSuffix ? ` · ${localSuffix}` : ''}
       </span>
     )
@@ -50,7 +52,7 @@ function CapBadge({ hasCap, isLocal, tierLabel, tierReq, capInfo, localSuffix }:
     const parts = [tierLabel, `${capInfo.rpm}/min`]
     if (capInfo.batch != null && capInfo.batch > 1) parts.push(`${capInfo.batch}股/批`)
     return (
-      <span className="text-[10px] text-accent/80 bg-accent/8 rounded px-1.5 py-px font-mono font-medium">
+      <span className="rounded bg-accent/8 px-1.5 py-px font-mono text-[10px] font-medium text-accent/80">
         {parts.join(' · ')}
       </span>
     )
@@ -58,7 +60,7 @@ function CapBadge({ hasCap, isLocal, tierLabel, tierReq, capInfo, localSuffix }:
 
   if (!hasCap && tierReq && tierReq !== 'Free') {
     return (
-      <span className="text-[10px] text-warning/90 bg-warning/8 rounded px-1.5 py-px font-medium">
+      <span className="rounded bg-warning/8 px-1.5 py-px text-[10px] font-medium text-warning/90">
         需数据源支持
       </span>
     )
@@ -66,7 +68,7 @@ function CapBadge({ hasCap, isLocal, tierLabel, tierReq, capInfo, localSuffix }:
 
   if (hasCap) {
     return (
-      <span className="text-[10px] text-accent/80 bg-accent/8 rounded px-1.5 py-px font-medium">
+      <span className="rounded bg-accent/8 px-1.5 py-px text-[10px] font-medium text-accent/80">
         {tierLabel ?? '已授权'}
       </span>
     )
@@ -109,7 +111,7 @@ export function StatCard({
   const borderCls = active
     ? 'border-accent/50'
     : done
-      ? 'border-bear/30'
+      ? 'border-success/30'
       : 'border-border'
   const bgCls = active ? 'bg-accent/[0.03]' : 'bg-surface'
 
@@ -127,7 +129,7 @@ export function StatCard({
       return (
         <button
           onClick={(e) => { e.stopPropagation(); onShowFields() }}
-          className="inline-flex align-middle ml-1 p-0.5 rounded hover:bg-elevated transition-colors text-secondary hover:text-accent"
+          className="ml-1 inline-flex align-middle rounded p-0.5 text-secondary transition-colors hover:bg-elevated hover:text-accent"
           title="查看字段说明"
         >
           <Table2 className="h-3 w-3" />
@@ -142,7 +144,7 @@ export function StatCard({
     <button
       key={tab.table}
       onClick={(e) => { e.stopPropagation(); onShowFields?.(tab.table) }}
-      className="inline-flex align-middle -mt-px p-0.5 rounded hover:bg-elevated transition-colors text-secondary hover:text-accent"
+      className="-mt-px inline-flex align-middle rounded p-0.5 text-secondary transition-colors hover:bg-elevated hover:text-accent"
       title={`查看${tab.label}字段说明`}
     >
       <Table2 className="h-3 w-3" />
@@ -194,29 +196,34 @@ export function StatCard({
   }
 
   return (
-    <div className={`rounded-card border ${borderCls} ${bgCls} flex flex-col transition-all duration-300 ${active ? 'shadow-[0_0_16px_rgba(61,214,140,0.08)]' : ''}`}>
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
+    <div className={cn(
+      'panel flex flex-col transition-all duration-300',
+      borderCls,
+      bgCls,
+    )}>
+      <div className="flex items-center justify-between px-4 pb-2 pt-4">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>
         <div className="flex items-center gap-1.5">
           {auto !== undefined && !loading && (
             <span className="inline-flex items-center gap-1 text-[10px] font-medium">
-              <span className={`inline-block h-1.5 w-1.5 rounded-full ${auto ? 'bg-accent shadow-[0_0_4px_rgba(61,214,140,0.5)]' : 'bg-muted'}`} />
+              <StatusDot state={auto ? 'live' : 'off'} />
               <span className={auto ? 'text-accent/70' : 'text-muted'}>{auto ? '自动' : '关闭'}</span>
             </span>
           )}
-          {active && <Loader2 className="h-3.5 w-3.5 text-accent animate-spin" />}
-          {done && !active && !skipped && <CheckCircle2 className="h-3.5 w-3.5 text-bear" />}
+          {active && <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />}
+          {done && !active && !skipped && <CheckCircle2 className="h-3.5 w-3.5 text-success" />}
           {skipped && !active && (
-            <span className="text-[10px] text-muted bg-elevated rounded px-1.5 py-px font-medium">
+            <span className="rounded bg-elevated px-1.5 py-px text-[10px] font-medium text-muted">
               本次跳过
             </span>
           )}
           {onSettings && (
             <button
               onClick={(e) => { e.stopPropagation(); onSettings() }}
-              className={`p-0.5 rounded hover:bg-elevated transition-colors ${
-                settingsOpen ? 'text-accent' : 'text-secondary'
-              }`}
+              className={cn(
+                'rounded p-0.5 transition-colors hover:bg-elevated',
+                settingsOpen ? 'text-accent' : 'text-secondary',
+              )}
             >
               <Settings className="h-3.5 w-3.5" />
             </button>
@@ -249,28 +256,28 @@ export function StatCard({
           </>
         ) : empty ? (
           <>
-            <div className="font-mono text-2xl font-bold tracking-tight tabular-nums text-foreground">—</div>
-            <div className="text-[11px] text-muted mt-0.5">
+            <div className="metric-value text-2xl">—</div>
+            <div className="mt-0.5 text-[11px] text-muted">
               暂无数据{renderFieldButtons()}
             </div>
           </>
         ) : (
           <>
-            <div className="font-mono text-2xl font-bold tracking-tight tabular-nums text-foreground">
+            <div className="metric-value text-2xl">
               {stats.fields
                 ? stats.fields
                 : stats.trading_days && !stats.rows
                   ? stats.trading_days.toLocaleString()
                   : formatNumber(stats.rows)}
             </div>
-            <div className="text-[11px] text-muted mt-0.5">
+            <div className="mt-0.5 text-[11px] text-muted">
               {renderSubLabelInline()}
             </div>
           </>
         )}
       </div>
 
-      <div className="mt-auto px-4 pb-4 pt-2 border-t border-border space-y-0.5">
+      <div className="mt-auto space-y-0.5 border-t border-border px-4 pb-4 pt-2">
         {loading ? (
           <>
             <div className="flex justify-between"><Skeleton w="w-6" h="h-3" /><Skeleton w="w-16" h="h-3" /></div>
@@ -302,7 +309,7 @@ export function StatCard({
       </div>
 
       {active && stagePct > 0 && (
-        <div className="h-1 bg-elevated overflow-hidden rounded-b-card">
+        <div className="h-1 overflow-hidden rounded-b-[var(--panel-radius)] bg-elevated">
           <motion.div
             className="h-full bg-accent"
             initial={{ width: 0 }}

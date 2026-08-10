@@ -1,12 +1,20 @@
 import { LockKeyhole } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import type { AnalysisTraceNode } from '@/lib/api'
+import { SOLID_TONE, STATUS_TONE } from '@/components/ui/Primitives'
 
 const STATUS_CLASS: Record<string, string> = {
-  pass: 'border-success/30 bg-success/5 text-success',
-  fail: 'border-danger/30 bg-danger/5 text-danger',
-  unknown: 'border-warning/30 bg-warning/5 text-warning',
-  skipped: 'border-border bg-elevated/40 text-muted',
+  pass: STATUS_TONE.success,
+  fail: STATUS_TONE.danger,
+  unknown: STATUS_TONE.warning,
+  skipped: STATUS_TONE.neutral,
+}
+
+const STATUS_DOT: Record<string, string> = {
+  pass: SOLID_TONE.success,
+  fail: SOLID_TONE.danger,
+  unknown: SOLID_TONE.warning,
+  skipped: SOLID_TONE.muted,
 }
 
 /**
@@ -27,7 +35,7 @@ export function DecisionTrace({ nodes }: { nodes: AnalysisTraceNode[] }) {
           <span
             className={cn(
               'absolute left-0 top-2 h-3.5 w-3.5 rounded-full border-2 border-surface',
-              node.status === 'pass' ? 'bg-success' : node.status === 'fail' ? 'bg-danger' : 'bg-warning',
+              STATUS_DOT[node.status] ?? STATUS_DOT.unknown,
             )}
             aria-hidden
           />

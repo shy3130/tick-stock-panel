@@ -33,11 +33,11 @@ import {
 import { cn } from '@/lib/cn'
 import { QK } from '@/lib/queryKeys'
 
-const INPUT = 'w-full rounded-btn border border-border bg-base px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors placeholder:text-muted/60 focus:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50'
-const BTN_PRIMARY = 'inline-flex items-center justify-center gap-1.5 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50'
-const BTN_GHOST = 'inline-flex items-center justify-center gap-1.5 rounded-btn border border-border bg-elevated px-3 py-1.5 text-xs text-secondary transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50'
-const BTN_DANGER = 'inline-flex items-center justify-center gap-1.5 rounded-btn border border-danger/40 bg-danger/10 px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50'
-const CARD = 'rounded-card border border-border bg-surface/70 shadow-[0_1px_2px_hsl(var(--border)/0.35)]'
+const INPUT = 'control w-full text-xs'
+const BTN_PRIMARY = 'btn-primary text-xs'
+const BTN_GHOST = 'btn-secondary text-xs'
+const BTN_DANGER = 'btn-ghost text-xs text-danger hover:bg-danger/10 hover:text-danger border border-danger/40'
+const CARD = 'panel'
 
 const HYPOTHESIS_STATUSES: { value: ResearchHypothesisStatus; label: string; badge: string; icon: LucideIcon }[] = [
   { value: 'exploring', label: '探索中', badge: 'bg-accent/10 text-accent', icon: CircleDashed },
@@ -148,9 +148,9 @@ export function Research() {
   const [tab, setTab] = useState<ResearchTab>('hypotheses')
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="workspace-page h-full">
       <PageHeader title="研究中心" subtitle="假设、证据与定时研究均留存为可复核事实" />
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border px-5 pt-3 pb-2">
+      <div className="workspace-toolbar overflow-x-auto border-b border-border px-3 pt-2 pb-2 sm:px-4">
         <TabButton active={tab === 'hypotheses'} icon={FlaskConical} onClick={() => setTab('hypotheses')}>
           研究假设
         </TabButton>
@@ -158,7 +158,7 @@ export function Research() {
           定时研究
         </TabButton>
       </div>
-      <main className="min-h-0 flex-1 overflow-auto px-5 py-4">
+      <main className="workspace-content min-h-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-6xl">
           {tab === 'hypotheses' ? <HypothesesPanel /> : <SchedulesPanel />}
         </div>
@@ -247,8 +247,8 @@ function HypothesesPanel() {
 
   return (
     <div className="space-y-4">
-      <section className={cn(CARD, 'p-3')} aria-label="研究假设筛选">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+      <section className={cn(CARD)} aria-label="研究假设筛选">
+        <div className="panel-body flex flex-col gap-3 md:flex-row md:items-center">
           <label className="relative flex-1">
             <span className="sr-only">搜索研究假设</span>
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
@@ -279,8 +279,9 @@ function HypothesesPanel() {
       </section>
 
       {createOpen && (
-        <section className={cn(CARD, 'p-4')} aria-labelledby="new-hypothesis-title">
-          <h2 id="new-hypothesis-title" className="text-sm font-semibold text-foreground">建立研究假设</h2>
+        <section className={cn(CARD)} aria-labelledby="new-hypothesis-title">
+          <div className="panel-body">
+          <h2 id="new-hypothesis-title" className="section-title">建立研究假设</h2>
           <p className="mt-1 text-xs leading-relaxed text-muted">写下可被证据支持或否决的命题；不会生成任何交易建议。</p>
           <form onSubmit={submitCreate} className="mt-4 grid gap-3 md:grid-cols-2">
             <label className="grid gap-1.5 text-xs text-secondary">
@@ -309,6 +310,7 @@ function HypothesesPanel() {
               </button>
             </div>
           </form>
+          </div>
         </section>
       )}
 
@@ -572,7 +574,7 @@ function SchedulesPanel() {
 
   return (
     <div className="space-y-4">
-      <section className={cn(CARD, 'p-3')}>
+      <section className={cn(CARD)}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-foreground">定时研究</h2>
@@ -664,7 +666,7 @@ function ScheduleCard({ item, togglePending, runPending, runError, onToggle, onE
       : { label: '尚未运行', cls: 'text-muted' }
 
   return (
-    <article className={cn(CARD, 'p-4')}>
+    <article className={cn(CARD)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -734,7 +736,7 @@ function ScheduleForm({ title, draft: initialDraft, pending, submitLabel, error,
   }
 
   return (
-    <section className={cn(CARD, 'p-4')}>
+    <section className={cn(CARD)}>
       <h2 className="text-sm font-semibold text-foreground">{title}</h2>
       <form onSubmit={submit} className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="grid gap-1.5 text-xs text-secondary">

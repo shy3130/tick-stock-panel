@@ -270,7 +270,7 @@ export function SettingsMenuSettingsPanel() {
         </p>
       </section>
 
-      <section className="rounded-card border border-border bg-surface overflow-hidden">
+      <section className="panel overflow-hidden">
         <div className="grid grid-cols-[2.5rem_1fr_4.5rem_3rem_3rem_3rem] items-center border-b border-border px-4 py-2 text-[11px] text-muted">
           <div />
           <div>菜单</div>

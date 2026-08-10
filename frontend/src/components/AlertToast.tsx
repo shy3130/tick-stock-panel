@@ -6,6 +6,7 @@ import type { AlertEvent } from '@/lib/api'
 import { fmtPct, fmtPrice } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { playNotificationSound } from '@/lib/notificationSound'
+import { SOLID_TONE, TEXT_TONE } from '@/components/ui/Primitives'
 
 // ===== 全局状态 (模块级, 仿 Toast.tsx 模式) =====
 type Item = { id: number; alert: AlertEvent }
@@ -69,16 +70,25 @@ export function dismiss(id: number) {
   _emit()
 }
 
-// ===== 配色 =====
+// ===== 配色 — 全部静态 semantic token =====
 const SEVERITY_BAR: Record<string, string> = {
-  info: 'bg-accent', warn: 'bg-warning', critical: 'bg-danger',
+  info: SOLID_TONE.accent,
+  warn: SOLID_TONE.warning,
+  critical: SOLID_TONE.danger,
 }
+
+const SEVERITY_ICON: Record<string, string> = {
+  info: TEXT_TONE.accent,
+  warn: TEXT_TONE.warning,
+  critical: TEXT_TONE.danger,
+}
+
 const SOURCE_BADGE: Record<string, { label: string; cls: string }> = {
-  strategy:  { label: '策略',   cls: 'bg-amber-400/15 text-amber-400' },
-  signal:    { label: '信号',   cls: 'bg-accent/15 text-accent' },
-  price:     { label: '价格',   cls: 'bg-emerald-400/15 text-emerald-400' },
-  market:    { label: '异动',   cls: 'bg-purple-500/15 text-purple-400' },
-  new_entry: { label: '进入',   cls: 'bg-emerald-400/15 text-emerald-400' },
+  strategy:  { label: '策略', cls: 'bg-accent/15 text-accent' },
+  signal:    { label: '信号', cls: 'bg-info/15 text-info' },
+  price:     { label: '价格', cls: 'bg-success/15 text-success' },
+  market:    { label: '异动', cls: 'bg-warning/15 text-warning' },
+  new_entry: { label: '进入', cls: 'bg-success/15 text-success' },
   dropped:   { label: '移出', cls: 'bg-danger/15 text-danger' },
 }
 
@@ -102,13 +112,15 @@ export function AlertToastContainer() {
   if (!items.length) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 w-[320px] pointer-events-none">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex w-[320px] flex-col gap-2">
       <AnimatePresence>
         {items
           .filter(item => !(item.alert.source === 'strategy' && !item.alert.symbol))
           .map(item => {
           const ev = item.alert
-          const sev = SEVERITY_BAR[ev.severity ?? 'info'] ?? SEVERITY_BAR.info
+          const sevKey = ev.severity ?? 'info'
+          const sev = SEVERITY_BAR[sevKey] ?? SEVERITY_BAR.info
+          const sevIcon = SEVERITY_ICON[sevKey] ?? SEVERITY_ICON.info
           const badgeKey = (ev.source === 'strategy' && ev.type) ? ev.type : ev.source
           const badge = SOURCE_BADGE[badgeKey] ?? { label: badgeKey, cls: 'bg-elevated text-muted' }
           const pct = ev.change_pct ?? 0
@@ -125,7 +137,7 @@ export function AlertToastContainer() {
               exit={{ opacity: 0, x: 60, scale: 0.9 }}
               transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
               onClick={() => handleClick(item.id)}
-              className="pointer-events-auto relative overflow-hidden rounded-xl border border-border/60 bg-surface/95 backdrop-blur-md shadow-2xl pl-3 pr-2 py-2.5 cursor-pointer hover:border-accent/40 hover:shadow-accent/10 transition-all"
+              className="pointer-events-auto relative cursor-pointer overflow-hidden rounded-xl border border-border bg-surface py-2.5 pl-3 pr-2 shadow-lg transition-colors hover:border-accent/40"
             >
               {/* 左侧色条 */}
               <div className={cn('absolute left-0 top-0 h-full w-0.5', sev)} />
@@ -135,15 +147,21 @@ export function AlertToastContainer() {
                 <span className={cn('shrink-0 rounded px-1 py-px text-[9px] font-medium', badge.cls)}>
                   {badge.label}
                 </span>
-                {ev.symbol && <span className="font-mono text-xs font-medium text-foreground shrink-0">{ev.symbol}</span>}
-                {ev.name && <span className="text-xs text-secondary truncate flex-1">{ev.name}</span>}
+                {ev.symbol && <span className="shrink-0 font-mono text-xs font-medium text-foreground">{ev.symbol}</span>}
+                {ev.name && <span className="flex-1 truncate text-xs text-secondary">{ev.name}</span>}
                 {ev.change_pct != null && (
-                  <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-mono font-medium shrink-0', pct >= 0 ? 'text-danger' : 'text-bear')}>
+                  <span className={cn(
+                    'inline-flex shrink-0 items-center gap-0.5 font-mono text-[10px] font-medium',
+                    pct >= 0 ? 'text-bull' : 'text-bear',
+                  )}>
                     {pct >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
                     {fmtPct(pct)}
                   </span>
                 )}
-                <button onClick={(e) => { e.stopPropagation(); dismiss(item.id) }} className="shrink-0 p-0.5 rounded text-muted/50 hover:text-foreground hover:bg-elevated transition-colors cursor-pointer">
+                <button
+                  onClick={(e) => { e.stopPropagation(); dismiss(item.id) }}
+                  className="shrink-0 cursor-pointer rounded p-0.5 text-muted/50 transition-colors hover:bg-elevated hover:text-foreground"
+                >
                   <X className="h-3 w-3" />
                 </button>
               </div>
@@ -151,20 +169,20 @@ export function AlertToastContainer() {
               {/* 底行: 策略类型走新格式, 其他走旧格式 */}
               {isStrategy ? (
                 <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-                  <Bell className={cn('h-3 w-3 shrink-0', sev.replace('bg-', 'text-'))} />
-                  <span className={cn('text-[11px] font-medium', isNew ? 'text-danger' : 'text-emerald-400')}>
+                  <Bell className={cn('h-3 w-3 shrink-0', sevIcon)} />
+                  <span className={cn('text-[11px] font-medium', isNew ? 'text-bull' : 'text-bear')}>
                     {isNew ? '进入' : '移出'}
                   </span>
-                  <span className="text-[11px] text-foreground/70">策略</span>
-                  <span className="text-[11px] font-medium text-amber-400">「{sname}」</span>
+                  <span className="text-[11px] text-secondary">策略</span>
+                  <span className="text-[11px] font-medium text-foreground">「{sname}」</span>
                   <span className="flex-1" />
-                  {ev.price != null && <span className="text-[10px] font-mono text-muted shrink-0">{fmtPrice(ev.price)}</span>}
+                  {ev.price != null && <span className="shrink-0 font-mono text-[10px] text-muted">{fmtPrice(ev.price)}</span>}
                 </div>
               ) : (
                 <div className="mt-1 flex items-center gap-1.5 pl-0.5">
-                  <Bell className={cn('h-3 w-3 shrink-0', sev.replace('bg-', 'text-'))} />
+                  <Bell className={cn('h-3 w-3 shrink-0', sevIcon)} />
                   {/* message 已含「条件摘要 · 现价 · 涨跌幅」(后端生成), 直接展示避免重复 */}
-                  {ev.message && <span className="text-[11px] text-foreground/70 truncate flex-1">{ev.message}</span>}
+                  {ev.message && <span className="flex-1 truncate text-[11px] text-secondary">{ev.message}</span>}
                 </div>
               )}
             </motion.div>

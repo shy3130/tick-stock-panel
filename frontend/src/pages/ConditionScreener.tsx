@@ -164,190 +164,212 @@ export function ConditionScreener() {
   }
 
   return (
-    <div className="min-h-full space-y-4 p-4">
+    <div className="workspace-page">
       <PageHeader title="条件选股" subtitle="结构化条件 · 本地数据" />
 
-      <section className="rounded-card border border-border bg-surface p-4 space-y-3" aria-labelledby="condition-nl-heading">
-        <div className="flex items-center justify-between gap-3">
-          <h2 id="condition-nl-heading" className="flex items-center gap-2 text-sm font-medium">
-            <ListFilter className="h-4 w-4 text-accent" />
-            自然语言辅助填充
-          </h2>
-          <div className="flex items-center gap-2">
-            <AiProviderSelector entry="nl_screener" value={profileId} onChange={setProfileId} compact />
-            <span className="text-[11px] text-muted">仅解析填充，不会自动执行</span>
+      <div className="workspace-content space-y-3">
+        <section className="panel" aria-labelledby="condition-nl-heading">
+          <div className="panel-header">
+            <div>
+              <div className="section-kicker">Natural Language</div>
+              <h2 id="condition-nl-heading" className="section-title flex items-center gap-2">
+                <ListFilter className="h-3.5 w-3.5 text-accent" />
+                自然语言辅助填充
+              </h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <AiProviderSelector entry="nl_screener" value={profileId} onChange={setProfileId} compact />
+              <span className="text-[11px] text-muted">仅解析填充，不会自动执行</span>
+            </div>
           </div>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <label className="sr-only" htmlFor="condition-nl-input">自然语言条件</label>
-          <textarea
-            id="condition-nl-input"
-            value={nlText}
-            maxLength={500}
-            onChange={event => setNlText(event.target.value)}
-            placeholder="例如：换手率大于 3%，量比大于 2，排除 ST"
-            rows={2}
-            className="min-h-16 flex-1 resize-y rounded-input border border-border bg-elevated px-3 py-2 text-xs text-foreground placeholder:text-muted"
-          />
-          <button
-            type="button"
-            onClick={parseNaturalLanguage}
-            disabled={!nlText.trim() || nlLoading || metadataLoading}
-            className="h-8 self-end rounded-btn bg-accent px-4 text-xs font-medium text-base hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40 sm:self-center"
-          >
-            {nlLoading && <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />}
-            解析填充
-          </button>
-        </div>
-        <div className="flex items-center justify-between gap-2 text-right text-[11px] text-muted">
-          <AiExecutionMetaBadge meta={nlMeta} />
-          <span className="ml-auto">{nlText.length}/500</span>
-        </div>
-        {unresolved.length > 0 && (
-          <div className="space-y-1 rounded-input border border-warning/30 bg-warning/5 p-2 text-xs" aria-live="polite">
-            <div className="font-medium text-warning">有未识别条件，确认或移除后才能执行：</div>
-            {unresolved.map((item, index) => (
-              <div key={`${item.raw}-${index}`} className="flex items-start gap-2 text-secondary">
-                <span className="min-w-0 flex-1">“{item.raw}” — {item.reason}</span>
-                <button
-                  type="button"
-                  onClick={() => setUnresolved(previous => previous.filter((_, itemIndex) => itemIndex !== index))}
-                  aria-label={`移除未识别条件 ${item.raw}`}
-                  className="shrink-0 rounded p-0.5 text-muted hover:bg-elevated hover:text-foreground"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-card border border-border bg-surface p-4 space-y-3" aria-labelledby="condition-presets-heading">
-        <div className="flex items-center justify-between gap-3">
-          <h2 id="condition-presets-heading" className="text-sm font-medium">常用条件</h2>
-          <span className="text-[11px] text-muted">点击只填入条件</span>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {presets.map(preset => {
-            const unsupported = preset.executable_level === 'unsupported'
-            return (
+          <div className="panel-body space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <label className="sr-only" htmlFor="condition-nl-input">自然语言条件</label>
+              <textarea
+                id="condition-nl-input"
+                value={nlText}
+                maxLength={500}
+                onChange={event => setNlText(event.target.value)}
+                placeholder="例如：换手率大于 3%，量比大于 2，排除 ST"
+                rows={2}
+                className="control min-h-16 flex-1 resize-y !h-auto px-3 py-2"
+              />
               <button
-                key={preset.id}
                 type="button"
-                disabled={unsupported}
-                onClick={() => applyPreset(preset)}
-                title={preset.description}
-                className="rounded-btn border border-border px-3 py-1.5 text-xs text-secondary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={parseNaturalLanguage}
+                disabled={!nlText.trim() || nlLoading || metadataLoading}
+                className="btn-primary h-8 self-end sm:self-center"
               >
-                {preset.name}
-                {preset.executable_level === 'needs_fundamental' && (
-                  <span className="ml-1.5 rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">基本面</span>
-                )}
-                {unsupported && <span className="ml-1.5 text-[10px] text-muted">（暂不支持）</span>}
+                {nlLoading && <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />}
+                解析填充
               </button>
-            )
-          })}
-          {!metadataLoading && presets.length === 0 && <span className="text-xs text-muted">暂无可用条件</span>}
-        </div>
-      </section>
+            </div>
+            <div className="flex items-center justify-between gap-2 text-right text-[11px] text-muted">
+              <AiExecutionMetaBadge meta={nlMeta} />
+              <span className="ml-auto num">{nlText.length}/500</span>
+            </div>
+            {unresolved.length > 0 && (
+              <div className="space-y-1 rounded-input border border-warning/30 bg-warning/5 p-2 text-xs" aria-live="polite">
+                <div className="font-medium text-warning">有未识别条件，确认或移除后才能执行：</div>
+                {unresolved.map((item, index) => (
+                  <div key={`${item.raw}-${index}`} className="flex items-start gap-2 text-secondary">
+                    <span className="min-w-0 flex-1">“{item.raw}” — {item.reason}</span>
+                    <button
+                      type="button"
+                      onClick={() => setUnresolved(previous => previous.filter((_, itemIndex) => itemIndex !== index))}
+                      aria-label={`移除未识别条件 ${item.raw}`}
+                      className="btn-ghost shrink-0 !p-0.5"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
 
-      <section className="rounded-card border border-border bg-surface p-4 space-y-3" aria-labelledby="condition-builder-heading">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id="condition-builder-heading" className="text-sm font-medium">筛选条件</h2>
-          <span className="text-[11px] text-muted">{conditions.length}/20 条</span>
-        </div>
-        {metadataLoading ? (
-          <div className="flex items-center gap-2 text-xs text-muted" aria-live="polite"><Loader2 className="h-3.5 w-3.5 animate-spin" />加载字段定义…</div>
-        ) : metadataError ? (
-          <div className="text-xs text-danger" role="alert">{metadataError}</div>
-        ) : (
-          <ConditionBuilder fields={fields} value={conditions} onChange={setConditions} />
-        )}
-        {fields.length > 0 && !builderValid && conditions.length > 0 && (
-          <div className="text-xs text-warning" role="status">请补全每条条件的字段、运算符和值。</div>
-        )}
-      </section>
+        <section className="panel" aria-labelledby="condition-presets-heading">
+          <div className="panel-header">
+            <div>
+              <div className="section-kicker">Presets</div>
+              <h2 id="condition-presets-heading" className="section-title">常用条件</h2>
+            </div>
+            <span className="text-[11px] text-muted">点击只填入条件</span>
+          </div>
+          <div className="panel-body">
+            <div className="flex flex-wrap gap-2">
+              {presets.map(preset => {
+                const unsupported = preset.executable_level === 'unsupported'
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    disabled={unsupported}
+                    onClick={() => applyPreset(preset)}
+                    title={preset.description}
+                    className="btn-secondary disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {preset.name}
+                    {preset.executable_level === 'needs_fundamental' && (
+                      <span className="ml-1.5 rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">基本面</span>
+                    )}
+                    {unsupported && <span className="ml-1.5 text-[10px] text-muted">（暂不支持）</span>}
+                  </button>
+                )
+              })}
+              {!metadataLoading && presets.length === 0 && <span className="text-xs text-muted">暂无可用条件</span>}
+            </div>
+          </div>
+        </section>
 
-      <section className="flex flex-wrap items-end gap-3 rounded-card border border-border bg-surface p-4" aria-label="执行选项">
-        <label className="flex flex-col gap-1 text-xs text-muted">
-          截止日期（可选）
-          <input type="date" value={asOf} onChange={event => setAsOf(event.target.value)} className="h-8 rounded-input border border-border bg-elevated px-2 text-xs text-foreground" />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-muted">
-          排序字段
-          <select
-            value={orderBy?.field ?? ''}
-            onChange={event => {
-              const field = event.target.value
-              setOrderBy(field ? { field, direction: orderBy?.direction ?? 'desc' } : undefined)
-            }}
-            className="h-8 min-w-36 rounded-input border border-border bg-elevated px-2 text-xs text-foreground"
-          >
-            <option value="">默认顺序</option>
-            {sortableFields.map(field => <option key={field.field} value={field.field}>{field.label}</option>)}
-          </select>
-        </label>
-        {orderBy && (
+        <section className="panel" aria-labelledby="condition-builder-heading">
+          <div className="panel-header">
+            <div>
+              <div className="section-kicker">Conditions</div>
+              <h2 id="condition-builder-heading" className="section-title">筛选条件</h2>
+            </div>
+            <span className="text-[11px] text-muted num">{conditions.length}/20 条</span>
+          </div>
+          <div className="panel-body space-y-3">
+            {metadataLoading ? (
+              <div className="flex items-center gap-2 text-xs text-muted" aria-live="polite"><Loader2 className="h-3.5 w-3.5 animate-spin" />加载字段定义…</div>
+            ) : metadataError ? (
+              <div className="text-xs text-danger" role="alert">{metadataError}</div>
+            ) : (
+              <ConditionBuilder fields={fields} value={conditions} onChange={setConditions} />
+            )}
+            {fields.length > 0 && !builderValid && conditions.length > 0 && (
+              <div className="text-xs text-warning" role="status">请补全每条条件的字段、运算符和值。</div>
+            )}
+          </div>
+        </section>
+
+        <section className="workspace-toolbar !mb-0 flex-wrap items-end gap-3" aria-label="执行选项">
           <label className="flex flex-col gap-1 text-xs text-muted">
-            方向
-            <select value={orderBy.direction} onChange={event => setOrderBy({ ...orderBy, direction: event.target.value as 'asc' | 'desc' })} className="h-8 rounded-input border border-border bg-elevated px-2 text-xs text-foreground">
-              <option value="desc">降序</option>
-              <option value="asc">升序</option>
+            截止日期（可选）
+            <input type="date" value={asOf} onChange={event => setAsOf(event.target.value)} className="control w-auto" />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            排序字段
+            <select
+              value={orderBy?.field ?? ''}
+              onChange={event => {
+                const field = event.target.value
+                setOrderBy(field ? { field, direction: orderBy?.direction ?? 'desc' } : undefined)
+              }}
+              className="control min-w-36 w-auto"
+            >
+              <option value="">默认顺序</option>
+              {sortableFields.map(field => <option key={field.field} value={field.field}>{field.label}</option>)}
             </select>
           </label>
-        )}
-        <label className="flex flex-col gap-1 text-xs text-muted">
-          返回条数
-          <input type="number" min={1} max={500} value={limit} onChange={event => setLimit(Math.min(500, Math.max(1, Number(event.target.value) || 1)))} className="h-8 w-24 rounded-input border border-border bg-elevated px-2 text-xs num" />
-        </label>
-        <button
-          type="button"
-          onClick={runQuery}
-          disabled={!canQuery || queryLoading}
-          className="h-8 rounded-btn bg-accent px-4 text-xs font-medium text-base hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {queryLoading && <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />}
-          {queryLoading ? '选股中…' : '执行选股'}
-        </button>
-        <div className="basis-full text-[11px] text-muted" aria-live="polite">
-          {queryLoading ? '正在执行选股…' : unresolved.length > 0 ? '请先移除未识别条件。' : conditions.length === 0 ? '至少添加一条条件。' : !builderValid ? '请补全条件值。' : '条件已就绪。'}
-        </div>
-      </section>
-
-      {error && <div className="rounded-input border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger" role="alert" aria-live="assertive">{error}</div>}
-
-      {result && (
-        <section className="rounded-card border border-border bg-surface p-4 space-y-3" aria-labelledby="condition-results-heading">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 id="condition-results-heading" className="text-sm font-medium">选股结果</h2>
-            <div className="text-[11px] text-muted" aria-live="polite">
-              共 {result.total} 条 · {result.rows.length} 条已返回 · {result.as_of ?? '最新'} · {result.elapsed_ms}ms · 已应用 {result.applied.length} 条
-            </div>
-          </div>
-          {result.rows.length === 0 ? (
-            <div className="py-8 text-center text-xs text-muted" aria-live="polite">没有符合条件的标的。</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-xs">
-                <caption className="sr-only">条件选股结果</caption>
-                <thead>
-                  <tr className="border-b border-border text-left text-[11px] text-muted">
-                    {resultColumns.map(column => <th key={column.field} scope="col" className="whitespace-nowrap px-3 py-2 font-medium">{column.label}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.rows.map((row, index) => (
-                    <tr key={`${String(row.symbol ?? index)}-${String(row.date ?? index)}`} className="border-b border-border/60 hover:bg-elevated/40">
-                      {resultColumns.map(column => <td key={column.field} className="whitespace-nowrap px-3 py-2 text-secondary">{formatCell(row[column.field])}</td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {orderBy && (
+            <label className="flex flex-col gap-1 text-xs text-muted">
+              方向
+              <select value={orderBy.direction} onChange={event => setOrderBy({ ...orderBy, direction: event.target.value as 'asc' | 'desc' })} className="control w-auto">
+                <option value="desc">降序</option>
+                <option value="asc">升序</option>
+              </select>
+            </label>
           )}
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            返回条数
+            <input type="number" min={1} max={500} value={limit} onChange={event => setLimit(Math.min(500, Math.max(1, Number(event.target.value) || 1)))} className="control w-24 num" />
+          </label>
+          <button
+            type="button"
+            onClick={runQuery}
+            disabled={!canQuery || queryLoading}
+            className="btn-primary"
+          >
+            {queryLoading && <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />}
+            {queryLoading ? '选股中…' : '执行选股'}
+          </button>
+          <div className="basis-full text-[11px] text-muted" aria-live="polite">
+            {queryLoading ? '正在执行选股…' : unresolved.length > 0 ? '请先移除未识别条件。' : conditions.length === 0 ? '至少添加一条条件。' : !builderValid ? '请补全条件值。' : '条件已就绪。'}
+          </div>
         </section>
-      )}
+
+        {error && <div className="rounded-input border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger" role="alert" aria-live="assertive">{error}</div>}
+
+        {result && (
+          <section className="panel" aria-labelledby="condition-results-heading">
+            <div className="panel-header">
+              <div>
+                <div className="section-kicker">Results</div>
+                <h2 id="condition-results-heading" className="section-title">选股结果</h2>
+              </div>
+              <div className="text-[11px] text-muted num" aria-live="polite">
+                共 {result.total} 条 · {result.rows.length} 条已返回 · {result.as_of ?? '最新'} · {result.elapsed_ms}ms · 已应用 {result.applied.length} 条
+              </div>
+            </div>
+            <div className="panel-body !p-0">
+              {result.rows.length === 0 ? (
+                <div className="py-8 text-center text-xs text-muted" aria-live="polite">没有符合条件的标的。</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="data-table min-w-full">
+                    <caption className="sr-only">条件选股结果</caption>
+                    <thead>
+                      <tr>
+                        {resultColumns.map(column => <th key={column.field} scope="col">{column.label}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.rows.map((row, index) => (
+                        <tr key={`${String(row.symbol ?? index)}-${String(row.date ?? index)}`}>
+                          {resultColumns.map(column => <td key={column.field} className="text-secondary">{formatCell(row[column.field])}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+      </div>
     </div>
   )
 }

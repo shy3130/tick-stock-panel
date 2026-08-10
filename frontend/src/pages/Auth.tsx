@@ -77,32 +77,30 @@ export function Auth() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-base px-4">
-      {/* 背景辉光(与 Onboarding 风格一致) */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(139,92,246,0.15),transparent_40%),radial-gradient(circle_at_70%_80%,rgba(59,130,246,0.12),transparent_40%)]" />
-
       <motion.div
-        initial={{ opacity: 0, y: 16 }}
+        initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
         className="relative w-full max-w-sm"
       >
         {/* Logo */}
         <div className="mb-6 flex flex-col items-center gap-2">
           <Logo className="h-10 w-10" />
-          <h1 className="text-lg font-semibold text-foreground">TickFlow Stock Panel</h1>
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">TickFlow Stock Panel</h1>
+          <p className="section-kicker">Access Control</p>
         </div>
 
-        <div className="rounded-card border border-border bg-surface/90 p-6 shadow-2xl backdrop-blur">
+        <div className="panel p-5">
           {/* 标题区: 图标 + 文案随模式切换 */}
           <div className="mb-5 flex items-center gap-2.5">
             <div className={cn(
-              'grid h-9 w-9 place-items-center rounded-lg',
-              isSetup ? 'bg-accent/15 text-accent' : 'bg-purple-500/15 text-purple-400',
+              'grid h-9 w-9 place-items-center rounded-btn',
+              isSetup ? 'bg-accent/15 text-accent' : 'bg-elevated text-secondary',
             )}>
               {isSetup ? <ShieldCheck className="h-5 w-5" /> : <Lock className="h-5 w-5" />}
             </div>
             <div>
-              <div className="text-sm font-medium text-foreground">
+              <div className="section-title">
                 {isSetup ? '设置访问密码' : '登录访问'}
               </div>
               <div className="text-[11px] text-muted">
@@ -120,7 +118,7 @@ export function Auth() {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="访问密码"
                 autoFocus
-                className="h-10 w-full rounded-btn border border-border bg-base px-3 pr-9 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+                className="control w-full pr-9"
               />
               <button
                 type="button"
@@ -139,13 +137,13 @@ export function Auth() {
                 value={confirmPassword}
                 onChange={e => setConfirmPassword(e.target.value)}
                 placeholder="再次输入密码"
-                className="h-10 w-full rounded-btn border border-border bg-base px-3 text-sm text-foreground outline-none transition-colors focus:border-accent/50"
+                className="control w-full"
               />
             )}
 
             {/* 错误提示 */}
             {(localError || submitMut.error) && (
-              <div className="flex items-start gap-1.5 rounded-btn bg-danger/10 px-3 py-2 text-[11px] text-danger">
+              <div className="flex items-start gap-1.5 rounded-input border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] text-danger">
                 <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>{localError}</span>
               </div>
@@ -154,7 +152,7 @@ export function Auth() {
             <button
               type="submit"
               disabled={submitMut.isPending || !password}
-              className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-btn bg-accent text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
+              className="btn-primary w-full"
             >
               {submitMut.isPending ? (
                 <><Loader2 className="h-4 w-4 animate-spin" />处理中…</>
@@ -185,7 +183,7 @@ export function Auth() {
           )}
         </div>
 
-        <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-muted/60">
+        <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-muted">
           <Sparkles className="h-3 w-3" />
           自托管量化工作台 · 数据完全掌握在自己手里
         </div>

@@ -265,9 +265,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   if (isNoneTier) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
-                        bg-gradient-to-br from-purple-500/20 to-blue-500/20 mb-5">
-          <Activity className="h-7 w-7 text-purple-400" />
+        <div className="inline-flex items-center justify-center w-14 h-14 rounded-btn bg-accent/10">
+          <Activity className="h-7 w-7 text-accent" />
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
@@ -275,9 +274,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </p>
         <a
           href="/settings?tab=system"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
-                     bg-accent text-white text-sm font-medium
-                     hover:bg-accent/90 transition-colors"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors"
         >
           切换数据源
         </a>
@@ -348,7 +345,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               })}
             </div>
           ) : (
-            <div className="rounded-btn border border-border bg-base/40 px-3 py-3 text-xs text-muted">
+            <div className="control /40 px-3 py-3 text-xs text-muted">
               自选列表为空，Free 实时行情开启前请先添加自选股。
             </div>
           )}
@@ -416,7 +413,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         {/* 连板梯队降级修正 (移至右列顶部) */}
         <div
           id="depth-fix"
-          className={`rounded-card transition-all duration-500 ${flash ? 'ring-2 ring-accent/60 ring-offset-2 ring-offset-base scale-[1.01]' : 'ring-0 ring-transparent'}`}
+          className={`panel transition-all duration-500 ${flash ? 'ring-2 ring-accent/60 ring-offset-2 ring-offset-base scale-[1.01]' : 'ring-0 ring-transparent'}`}
         >
         <Card
           icon={Flame}
@@ -426,9 +423,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             <button
               onClick={() => runFix.mutate()}
               disabled={runFix.isPending}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px]
-                         bg-accent/15 text-accent hover:bg-accent/25 transition-colors
-                         disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-accent/15 text-accent hover:bg-accent/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Zap className="h-3 w-3" />
               {runFix.isPending ? '修正中…' : '立即修正'}
@@ -505,7 +500,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={feishuDraft}
                       onChange={e => setFeishuDraft(e.target.value)}
                       placeholder={FEISHU_PREFIX + 'xxxxxxxx'}
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                     />
                   </label>
 
@@ -516,7 +511,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={feishuSecretDraft}
                       onChange={e => setFeishuSecretDraft(e.target.value)}
                       placeholder="机器人未启用签名校验则留空"
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                     />
                   </label>
 
@@ -592,7 +587,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                           value={draft.nickname}
                           onChange={e => updateExtraDraft(ch.id, { nickname: e.target.value })}
                           placeholder="MeoW 昵称"
-                          className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground focus:outline-none focus:border-accent/50"
+                          className="control h-9 w-full px-3 text-xs text-foreground focus:outline-none focus:border-accent/50"
                         />
                       </label>
                     ) : ch.id === 'pushplus' ? (
@@ -604,7 +599,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                             value={draft.token}
                             onChange={e => updateExtraDraft(ch.id, { token: e.target.value, clear_token: false })}
                             placeholder={ppMasked ? `当前 ${ppMasked}（留空保留，填写则覆盖）` : 'PushPlus Token'}
-                            className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                            className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                           />
                         </label>
                         <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
@@ -628,7 +623,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                             value={draft.url}
                             onChange={e => updateExtraDraft(ch.id, { url: e.target.value })}
                             placeholder="https://..."
-                            className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                            className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                           />
                         </label>
                         {ch.id === 'dingtalk' && (
@@ -639,7 +634,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                               value={draft.secret}
                               onChange={e => updateExtraDraft(ch.id, { secret: e.target.value })}
                               placeholder="未启用签名则留空"
-                              className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                              className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                             />
                           </label>
                         )}
@@ -731,7 +726,7 @@ interface CardProps {
 
 function Card({ icon: Icon, title, badge, right, children }: CardProps) {
   return (
-    <section className="rounded-card border border-border bg-surface p-5">
+    <section className="panel">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <Icon className="h-4 w-4 text-secondary" />

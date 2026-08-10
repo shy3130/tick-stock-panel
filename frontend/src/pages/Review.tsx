@@ -290,7 +290,7 @@ export function Review() {
   const displayContent = viewing?.content ?? content
 
   return (
-    <>
+    <div className="workspace-page">
       <PageHeader
         title="大盘复盘"
         titleExtra={<BookOpenCheck className="h-4 w-4 text-accent" />}
@@ -300,7 +300,7 @@ export function Review() {
             : `${displayDate}${data?.emotion ? ` · 情绪 ${data.emotion.label}` : ''}`
         }
         right={
-          <div className="flex items-center gap-1">
+          <div className="workspace-toolbar">
             {/* AI 复盘只喂 A 股盘面(market_recap 走 A 股 overview)。港股模式下隐藏这组按钮,
                 否则会生成一份内容全是 A 股、标题却写着港股的报告。 */}
             {market === 'a' && (
@@ -309,7 +309,7 @@ export function Review() {
             <button
               onClick={() => { marketQuery.refetch() }}
               disabled={marketQuery.isFetching}
-              className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+              className="btn-secondary !h-7 text-[11px]"
               title="刷新市场数据"
             >
               <RefreshCw className={cn('h-3 w-3', marketQuery.isFetching && 'animate-spin')} />刷新
@@ -317,10 +317,8 @@ export function Review() {
             <button
               onClick={openSchedule}
               className={cn(
-                'inline-flex items-center gap-1 rounded-btn border px-2 py-1 text-[11px] transition-colors',
-                reviewSched.enabled
-                  ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/20'
-                  : 'border-border bg-elevated text-secondary hover:text-foreground',
+                'btn-secondary !h-7 text-[11px]',
+                reviewSched.enabled && 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15',
               )}
               title={reviewSched.enabled ? `定时复盘已开启 · 每日 ${String(reviewSched.hour).padStart(2,'0')}:${String(reviewSched.minute).padStart(2,'0')}` : '定时复盘'}
             >
@@ -330,10 +328,7 @@ export function Review() {
               onClick={generate}
               disabled={isGenerating}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-btn px-3.5 py-1.5 text-xs font-medium transition-all',
-                isGenerating
-                  ? 'border border-accent/40 bg-accent/10 text-accent cursor-not-allowed'
-                  : 'bg-accent text-white shadow-sm shadow-accent/25 hover:bg-accent/90 hover:shadow hover:shadow-accent/30',
+                isGenerating ? 'btn-secondary !h-8 border-accent/40 text-accent' : 'btn-primary !h-8',
               )}
             >
               {isGenerating ? (
@@ -348,11 +343,11 @@ export function Review() {
         }
       />
 
-      <div className="min-h-full bg-[radial-gradient(circle_at_15%_-5%,rgba(59,130,246,0.10),transparent_30%),radial-gradient(circle_at_85%_5%,rgba(139,92,246,0.08),transparent_30%)] px-4 py-4 sm:px-6">
-        <div className="mx-auto max-w-[1280px] space-y-3">
+      <div className="workspace-content overflow-auto">
+        <div className="mx-auto w-full max-w-[1280px] min-w-0 space-y-3">
 
           {/* ===== 市场 + 分区切换(常驻:A 股无数据时也要能切到港股)===== */}
-          <div className="flex flex-wrap items-center gap-1 rounded-card border border-border bg-surface/80 px-2 py-1.5">
+          <div className="workspace-toolbar panel !mb-0 px-2 py-1.5">
             {/* 市场段控件 */}
             <div className="flex items-center gap-0.5 rounded-btn bg-elevated/60 p-0.5">
               {MARKETS.map(m => (
@@ -413,9 +408,9 @@ export function Review() {
               </div>
             </div>
           ) : !data || !data.as_of ? (
-            <div className="flex flex-col items-center justify-center gap-4 rounded-card border border-border bg-surface/80 px-6 py-16">
+            <div className="flex flex-col items-center justify-center gap-4 panel px-6 py-16">
               <div className="relative">
-                <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+                <div className="grid h-14 w-14 place-items-center rounded-btn border border-accent/30 bg-accent/10">
                   <Database className="h-6 w-6 text-accent" strokeWidth={1.8} />
                 </div>
               </div>
@@ -439,7 +434,7 @@ export function Review() {
               {tab === 'report' && (
                 <>
                   {/* ===== 关注点输入 ===== */}
-                  <div className="flex items-center gap-2 rounded-card border border-border bg-surface/80 px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
+                  <div className="flex items-center gap-2 panel px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
                     <Wand2 className="h-3.5 w-3.5 shrink-0 text-accent" />
                     <input
                       value={focus}
@@ -510,7 +505,7 @@ export function Review() {
               initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
-              className="w-full max-w-md rounded-card border border-border bg-surface p-5 shadow-2xl"
+              className="panel w-full max-w-md p-5"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-4 flex items-center justify-between">
@@ -555,13 +550,13 @@ export function Review() {
                   <input
                     type="number" min={0} max={23} value={draft.hour}
                     onChange={e => setDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, Number(e.target.value))) }))}
-                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
                   />
                   <span className="text-xs text-muted">:</span>
                   <input
                     type="number" min={0} max={59} value={draft.minute}
                     onChange={e => setDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, Number(e.target.value))) }))}
-                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
                   />
                   <span className="text-[10px] text-muted/70">不早于 15:00 · 工作日执行</span>
                 </div>
@@ -592,7 +587,7 @@ export function Review() {
                       </span>
                       <span className="text-[11px] text-foreground">{ch.name}</span>
                       <span className="text-[9px] text-muted">{ch.hint}</span>
-                      <span className={cn('ml-auto text-[9px]', ch.configured ? 'text-emerald-500' : 'text-warning')}>
+                      <span className={cn('ml-auto text-[9px]', ch.configured ? 'text-accent' : 'text-warning')}>
                         {ch.configured ? '已配置' : '未配置'}
                       </span>
                     </button>
@@ -618,14 +613,14 @@ export function Review() {
               <div className="mt-5 flex justify-end gap-2">
                 <button
                   onClick={() => setShowSchedule(false)}
-                  className="rounded-btn bg-elevated px-4 py-1.5 text-xs text-secondary transition-colors hover:text-foreground"
+                  className="btn-secondary"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => reviewMut.mutate({ enabled: draft.enabled, hour: draft.hour, minute: draft.minute })}
                   disabled={reviewMut.isPending}
-                  className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
+                  className="btn-primary"
                 >
                   {reviewMut.isPending ? '保存中…' : '保存'}
                 </button>
@@ -634,7 +629,7 @@ export function Review() {
           </motion.div>
         )}
       </AnimatePresence>
-    </>
+    </div>
   )
 }
 
@@ -676,7 +671,7 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
   const indices = (data.indices ?? []).slice(0, 4)
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-card border border-border bg-surface/80 px-4 py-2.5">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 panel px-4 py-2.5">
       {/* 情绪分(带色徽章)—— 复盘的核心定调 */}
       <div className="flex items-center gap-2">
         <span
@@ -749,7 +744,7 @@ function ReportPanel({
 }) {
   if (phase === 'error') {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 rounded-card border border-border bg-surface/80 px-6 py-14">
+      <div className="flex flex-col items-center justify-center gap-3 panel px-6 py-14">
         <div className="grid h-12 w-12 place-items-center rounded-full bg-danger/10">
           <AlertTriangle className="h-5 w-5 text-danger" />
         </div>
@@ -757,7 +752,7 @@ function ReportPanel({
         <div className="max-w-md text-center text-xs text-secondary">{error || '请检查 AI 配置后重试'}</div>
         <button
           onClick={onRegenerate}
-          className="mt-1 inline-flex items-center gap-1.5 rounded-btn bg-accent/15 px-3 py-1.5 text-xs text-accent transition-colors hover:bg-accent/20"
+          className="btn-secondary mt-1 text-xs text-accent"
         >
           <RefreshCw className="h-3.5 w-3.5" />重新生成
         </button>
@@ -767,9 +762,9 @@ function ReportPanel({
 
   if (phase === 'idle' && !content) {
     return (
-      <div className="flex min-h-[28rem] flex-col items-center justify-center gap-5 rounded-card border border-border bg-surface/80 px-6 py-16">
+      <div className="flex min-h-[28rem] flex-col items-center justify-center gap-5 panel px-6 py-16">
         <div className="relative">
-          <div className="grid h-20 w-20 place-items-center rounded-2xl bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+          <div className="grid h-20 w-20 place-items-center rounded-btn border border-accent/30 bg-accent/10">
             <BookOpenCheck className="h-9 w-9 text-accent" strokeWidth={1.8} />
           </div>
           <Sparkles className="absolute -right-1 -top-1 h-5 w-5 text-accent" />
@@ -817,9 +812,9 @@ function ReportPanel({
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="overflow-hidden rounded-card border border-border bg-surface/80"
+      className="overflow-hidden panel"
     >
-      <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-accent/5 to-transparent px-4 py-2.5">
+      <div className="panel-header">
         <div className="flex items-center gap-1.5">
           {isGenerating ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-accent" /> : <BookOpenCheck className="h-3.5 w-3.5 text-accent" />}
           <span className="text-xs font-medium text-foreground">
@@ -841,7 +836,7 @@ function ReportPanel({
         {isLoading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <div className="relative">
-              <div className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+              <div className="grid h-11 w-11 place-items-center rounded-btn border border-accent/30 bg-accent/10">
                 <Sparkles className="h-5 w-5 animate-pulse text-accent" />
               </div>
               <RefreshCw className="absolute -inset-1 h-13 w-13 animate-spin text-accent/30" style={{ animationDuration: '3s' }} />
@@ -879,8 +874,8 @@ function HistoryPanel({
 }) {
   const empty = !generating && reports.length === 0
   return (
-    <div className="overflow-hidden rounded-card border border-border bg-surface/80">
-      <div className="flex items-center gap-1.5 border-b border-border bg-gradient-to-r from-accent/5 to-transparent px-3 py-2.5">
+    <div className="overflow-hidden panel">
+      <div className="panel-header gap-1.5">
         <History className="h-3.5 w-3.5 text-accent" />
         <span className="text-xs font-medium text-foreground">历史复盘</span>
         <span className="font-mono text-[10px] text-muted">({reports.length})</span>
@@ -1097,7 +1092,7 @@ function RedFlagsPanel() {
 
   if (flagsQuery.isLoading && !flagsQuery.data) {
     return (
-      <div className="grid h-64 place-items-center rounded-card border border-border bg-surface/80">
+      <div className="grid h-64 place-items-center panel">
         <RefreshCw className="h-4 w-4 animate-spin text-muted" />
       </div>
     )
@@ -1105,7 +1100,7 @@ function RedFlagsPanel() {
 
   if (flagsQuery.isError) {
     return (
-      <div className="rounded-card border border-border bg-surface/80">
+      <div className="panel">
         <EmptyState icon={Flag} title="红旗数据加载失败" hint="请确认后端已启动,稍后点击刷新重试" />
       </div>
     )
@@ -1136,7 +1131,7 @@ function RedFlagsPanel() {
           <button
             onClick={() => runAutoMut.mutate()}
             disabled={runAutoMut.isPending}
-            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            className="btn-secondary !h-7 text-[11px]"
             title="立即跑盘后状态驱动归因(L0/L1)"
           >
             {runAutoMut.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
@@ -1145,7 +1140,7 @@ function RedFlagsPanel() {
           <button
             onClick={() => { flagsQuery.refetch(); tradesQuery.refetch() }}
             disabled={flagsQuery.isFetching}
-            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            className="btn-secondary !h-7 text-[11px]"
             title="刷新红旗数据"
           >
             <RefreshCw className={cn('h-3 w-3', flagsQuery.isFetching && 'animate-spin')} />刷新

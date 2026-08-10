@@ -149,7 +149,7 @@ export function SettingsExtPagesPanel() {
       </section>
 
       {showForm && (
-        <section className="rounded-card border border-border bg-surface p-5 space-y-4">
+        <section className="panel space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-medium text-foreground">{editingMenu ? '编辑扩展页面' : '新建扩展页面'}</h3>
@@ -168,12 +168,12 @@ export function SettingsExtPagesPanel() {
                 disabled={!!editingMenu}
                 onChange={e => setId(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
                 placeholder="如 concept_hot"
-                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground disabled:opacity-60"
+                className="control h-9 w-full px-3 text-xs text-foreground disabled:opacity-60"
               />
             </label>
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">菜单名称</span>
-              <input value={label} onChange={e => setLabel(e.target.value)} placeholder="如 概念热度" className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+              <input value={label} onChange={e => setLabel(e.target.value)} placeholder="如 概念热度" className="control h-9 w-full px-3 text-xs text-foreground" />
             </label>
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">扩展数据源</span>
@@ -186,7 +186,7 @@ export function SettingsExtPagesPanel() {
                   setRankField('')
                   setSelectedColumns(cfg?.fields.filter(f => !['symbol', 'code'].includes(f.name)).slice(0, 6).map(f => f.name) ?? [])
                 }}
-                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground"
+                className="control h-9 w-full px-3 text-xs text-foreground"
               >
                 {configs.map(cfg => <option key={cfg.id} value={cfg.id}>{cfg.label}</option>)}
               </select>
@@ -196,7 +196,7 @@ export function SettingsExtPagesPanel() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">模板</span>
-              <select value={template} onChange={e => setTemplate(e.target.value as any)} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+              <select value={template} onChange={e => setTemplate(e.target.value as any)} className="control h-9 w-full px-3 text-xs text-foreground">
                 <option value="dimension_rank">维度热度榜</option>
                 <option value="ranking">指标排名榜</option>
                 <option value="table">明细表</option>
@@ -204,14 +204,14 @@ export function SettingsExtPagesPanel() {
             </label>
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">分组字段</span>
-              <select value={dimensionField} onChange={e => setDimensionField(e.target.value)} disabled={template !== 'dimension_rank'} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground disabled:opacity-50">
+              <select value={dimensionField} onChange={e => setDimensionField(e.target.value)} disabled={template !== 'dimension_rank'} className="control h-9 w-full px-3 text-xs text-foreground disabled:opacity-50">
                 <option value="">请选择</option>
                 {fields.map(f => <option key={f.name} value={f.name}>{f.label || f.name}</option>)}
               </select>
             </label>
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">排名字段</span>
-              <select value={rankField} onChange={e => setRankField(e.target.value)} disabled={template !== 'ranking'} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground disabled:opacity-50">
+              <select value={rankField} onChange={e => setRankField(e.target.value)} disabled={template !== 'ranking'} className="control h-9 w-full px-3 text-xs text-foreground disabled:opacity-50">
                 <option value="">请选择</option>
                 {numericFields.map(f => <option key={f.name} value={f.name}>{f.label || f.name}</option>)}
               </select>
@@ -249,7 +249,7 @@ export function SettingsExtPagesPanel() {
 
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {menuItems.map(menu => (
-          <div key={menu.id} className="rounded-card border border-border bg-surface p-4">
+          <div key={menu.id} className="panel p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
@@ -276,14 +276,14 @@ export function SettingsExtPagesPanel() {
               {menu.dimension_field && <div>分组字段：{menu.dimension_field}</div>}
               <div>列表列：{menu.detail_columns.length} 个</div>
             </div>
-            <Link to={`/analysis/${menu.id}`} className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-btn border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-border/30 transition-colors">
+            <Link to={`/analysis/${menu.id}`} className="control mt-4 inline-flex w-full items-center justify-center gap-1.5 px-3 py-1.5 text-xs text-foreground hover:bg-border/30 transition-colors">
               <ExternalLink className="h-3.5 w-3.5" />
               打开分析页
             </Link>
           </div>
         ))}
         {menuItems.length === 0 && (
-          <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-sm text-muted md:col-span-2 xl:col-span-3">暂无扩展页面，点击右上角新建。</div>
+          <div className="panel px-5 py-10 text-center text-sm text-muted md:col-span-2 xl:col-span-3">暂无扩展页面，点击右上角新建。</div>
         )}
       </section>
     </div>

@@ -219,7 +219,7 @@ export function SettingsProposalsPanel() {
   return (
     <div className="max-w-4xl space-y-6">
       {/* ===== 策略提案 ===== */}
-      <section className="overflow-hidden rounded-card border border-border bg-surface">
+      <section className="overflow-hidden panel">
         <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
           <div className="flex items-center gap-2">
             <Lightbulb className="h-4 w-4 text-accent" />
@@ -232,7 +232,7 @@ export function SettingsProposalsPanel() {
             <button
               onClick={() => listQuery.refetch()}
               disabled={listQuery.isFetching}
-              className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+              className="control inline-flex items-center gap-1 px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
               title="刷新提案列表"
             >
               <RefreshCw className={cn('h-3 w-3', listQuery.isFetching && 'animate-spin')} />刷新
@@ -305,7 +305,7 @@ export function SettingsProposalsPanel() {
             <div className="flex items-center justify-end gap-2">
               <button
                 onClick={() => setShowForm(false)}
-                className="rounded-btn border border-border bg-elevated px-3 py-1.5 text-xs text-secondary transition-colors hover:text-foreground"
+                className="control px-3 py-1.5 text-xs text-secondary transition-colors hover:text-foreground"
               >
                 取消
               </button>
@@ -421,11 +421,11 @@ export function SettingsProposalsPanel() {
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div>
                           <div className="mb-1 text-[11px] font-medium text-secondary">变更前 before</div>
-                          <pre className="max-h-40 overflow-auto rounded-btn border border-border bg-base p-2.5 font-mono text-[10px] leading-relaxed text-secondary">{jsonBlock(p.before)}</pre>
+                          <pre className="control max-h-40 overflow-auto p-2.5 font-mono text-[10px] leading-relaxed text-secondary">{jsonBlock(p.before)}</pre>
                         </div>
                         <div>
                           <div className="mb-1 text-[11px] font-medium text-secondary">变更后 after</div>
-                          <pre className="max-h-40 overflow-auto rounded-btn border border-border bg-base p-2.5 font-mono text-[10px] leading-relaxed text-secondary">{jsonBlock(p.after)}</pre>
+                          <pre className="control max-h-40 overflow-auto p-2.5 font-mono text-[10px] leading-relaxed text-secondary">{jsonBlock(p.after)}</pre>
                         </div>
                       </div>
                       <div>
@@ -588,7 +588,7 @@ function StrategyCheckSection() {
   }
 
   return (
-    <section className="overflow-hidden rounded-card border border-border bg-surface">
+    <section className="overflow-hidden panel">
       <div className="flex items-center gap-2 border-b border-border px-5 py-3">
         <Stethoscope className="h-4 w-4 text-accent" />
         <h2 className="text-sm font-medium text-foreground">策略体检</h2>
@@ -608,7 +608,7 @@ function StrategyCheckSection() {
           <button
             onClick={load}
             disabled={!strategyId.trim() || busy !== null}
-            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            className="control inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
           >
             {busy === 'load' ? <RefreshCw className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
             加载声明
@@ -616,7 +616,7 @@ function StrategyCheckSection() {
           <button
             onClick={validate}
             disabled={!strategyId.trim() || busy !== null}
-            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2.5 py-1.5 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            className="control inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
           >
             {busy === 'validate' ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Stethoscope className="h-3 w-3" />}
             跑体检
@@ -638,7 +638,7 @@ function StrategyCheckSection() {
 
         {/* 声明编辑 */}
         {draft && loadedId && (
-          <div className="space-y-4 rounded-btn border border-border bg-elevated/20 p-4">
+          <div className="control space-y-4 /20 p-4">
             {/* 失效信号三要素 */}
             <div>
               <div className="mb-2 text-[11px] font-medium text-secondary">

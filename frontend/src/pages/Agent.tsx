@@ -87,7 +87,7 @@ function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: 
   if (!tools?.length) return null
   const totalElapsed = formatElapsed(elapsedMs)
   return (
-    <details className="group mb-3 overflow-hidden rounded-card border border-border/80 bg-elevated/40">
+    <details className="group mb-3 overflow-hidden rounded-input border border-border/80 bg-elevated/40">
       <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-2 text-[11px] text-muted hover:bg-elevated">
         <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
         <Wrench className="h-3.5 w-3.5 text-accent" />
@@ -141,7 +141,7 @@ function MessageBubble({
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-card bg-accent/20 px-3 py-2 text-xs text-foreground whitespace-pre-wrap">
+        <div className="max-w-[80%] rounded-input bg-accent/15 px-3 py-2 text-xs text-foreground whitespace-pre-wrap">
           {msg.content}
         </div>
       </div>
@@ -152,7 +152,7 @@ function MessageBubble({
   return (
     <div className="flex justify-start gap-2">
       <AgentAvatar />
-      <div className="max-w-[80%] rounded-card border border-border bg-surface px-3 py-2 text-xs text-foreground">
+      <div className="panel max-w-[80%] px-3 py-2 text-xs text-foreground">
         <ToolTraceList tools={msg.tools} elapsedMs={msg.elapsed_ms} />
         {msg.content ? (
           <MarkdownRenderer content={msg.content} />
@@ -204,7 +204,7 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
                 key={ex.title}
                 disabled={disabled}
                 onClick={() => onExample(ex.prompt)}
-                className="block w-full rounded-card border border-border bg-surface px-3 py-2 text-left hover:bg-elevated disabled:opacity-50"
+                className="panel block w-full px-3 py-2 text-left hover:bg-elevated disabled:opacity-50"
               >
                 <div className="text-xs font-medium text-foreground">{ex.title}</div>
                 <div className="mt-1 text-[11px] leading-relaxed text-muted">{ex.prompt}</div>
@@ -549,60 +549,60 @@ export function Agent() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col p-4">
-      <div className="flex items-center justify-between gap-3">
-        <PageHeader title="AI 助手" subtitle="多轮对话 · 可调用面板数据工具" />
-        <div className="flex items-center gap-2">
+    <div className="workspace-page h-[calc(100vh-3rem)]">
+      <PageHeader
+        title="AI 助手"
+        subtitle="多轮对话 · 可调用面板数据工具"
+        right={
+          <div className="workspace-toolbar">
             <select
               value={sessionId ?? ''}
               onChange={e => {
                 if (e.target.value) openSession(e.target.value)
                 else clear()
               }}
-            className="h-8 max-w-40 rounded-input border border-border bg-elevated px-2 text-xs text-foreground md:hidden"
-          >
-            <option value="">本地草稿</option>
-            {sessions.map(s => (
-              <option key={s.session_id} value={s.session_id}>{s.title || s.session_id}</option>
-            ))}
-          </select>
-          <button
-            onClick={() => void newSession()}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            新建
-          </button>
-          <button
-            onClick={() => void renameCurrentSession()}
-            disabled={!sessionId}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary disabled:opacity-40"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            改名
-          </button>
-          <AiProviderSelector entry="agent" value={profileId} onChange={setProfileId} />
-          <button
-            onClick={exportMarkdown}
-            disabled={msgs.length === 0}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary disabled:opacity-40"
-          >
-            <Download className="h-3.5 w-3.5" />
-            导出
-          </button>
-          <button
-            onClick={sessionId ? () => void deleteCurrentSession() : clear}
-            disabled={!sessionId && msgs.length === 0}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {sessionId ? '删除' : '清空'}
-          </button>
-        </div>
-      </div>
+              className="control max-w-40 text-xs md:hidden"
+            >
+              <option value="">本地草稿</option>
+              {sessions.map(s => (
+                <option key={s.session_id} value={s.session_id}>{s.title || s.session_id}</option>
+              ))}
+            </select>
+            <button onClick={() => void newSession()} className="btn-secondary !h-8 text-xs">
+              <Plus className="h-3.5 w-3.5" />
+              新建
+            </button>
+            <button
+              onClick={() => void renameCurrentSession()}
+              disabled={!sessionId}
+              className="btn-ghost !h-8 text-xs"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              改名
+            </button>
+            <AiProviderSelector entry="agent" value={profileId} onChange={setProfileId} />
+            <button
+              onClick={exportMarkdown}
+              disabled={msgs.length === 0}
+              className="btn-ghost !h-8 text-xs"
+            >
+              <Download className="h-3.5 w-3.5" />
+              导出
+            </button>
+            <button
+              onClick={sessionId ? () => void deleteCurrentSession() : clear}
+              disabled={!sessionId && msgs.length === 0}
+              className="btn-ghost !h-8 text-xs"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {sessionId ? '删除' : '清空'}
+            </button>
+          </div>
+        }
+      />
 
-      <div className="mt-3 flex min-h-0 flex-1 overflow-hidden border-t border-border">
-        <aside className="hidden w-56 shrink-0 border-r border-border py-3 pr-3 md:block">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <aside className="hidden w-56 shrink-0 border-r border-border p-3 md:block">
           <button
             onClick={clear}
             className={`mb-2 flex w-full items-center justify-between rounded-btn px-2 py-2 text-left text-xs ${
@@ -610,13 +610,13 @@ export function Agent() {
             }`}
           >
             <span>本地草稿</span>
-            {!sessionId && msgs.length > 0 && <span className="text-[10px] text-muted">{msgs.length}</span>}
+            {!sessionId && msgs.length > 0 && <span className="text-[10px] text-muted num">{msgs.length}</span>}
           </button>
           <div className="space-y-1 overflow-auto">
             {sessions.map(s => (
-                <button
-                  key={s.session_id}
-                  onClick={() => openSession(s.session_id)}
+              <button
+                key={s.session_id}
+                onClick={() => openSession(s.session_id)}
                 className={`w-full rounded-btn px-2 py-2 text-left ${
                   s.session_id === sessionId
                     ? 'bg-accent/15 text-foreground'
@@ -626,92 +626,92 @@ export function Agent() {
                 <div className="truncate text-xs font-medium">{s.title || s.session_id}</div>
                 <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted">
                   <span className="truncate">{new Date(s.updated_at).toLocaleString()}</span>
-                  <span className="shrink-0">{s.message_count}</span>
+                  <span className="shrink-0 num">{s.message_count}</span>
                 </div>
               </button>
             ))}
           </div>
         </aside>
 
-        <div ref={scrollRef} className="min-w-0 flex-1 space-y-3 overflow-auto py-3 md:pl-3">
-          {msgs.length === 0 && (
-            <WelcomeScreen disabled={streaming} onExample={sendPrompt} />
-          )}
-          {msgs.map((m, i) => (
-            <MessageBubble
-              key={i}
-              msg={m}
-              streaming={streaming}
-              isLatest={i === msgs.length - 1}
-              onRetry={() => retryAt(i)}
-            />
-          ))}
-        </div>
-      </div>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+            {msgs.length === 0 && (
+              <WelcomeScreen disabled={streaming} onExample={sendPrompt} />
+            )}
+            {msgs.map((m, i) => (
+              <MessageBubble
+                key={i}
+                msg={m}
+                streaming={streaming}
+                isLatest={i === msgs.length - 1}
+                onRetry={() => retryAt(i)}
+              />
+            ))}
+          </div>
 
-      <div className="flex items-end gap-2 border-t border-border pt-3">
-        <div className="min-w-0 flex-1">
-          {attachment && (
-            <div className="mb-2 max-w-full rounded-btn border border-border bg-elevated px-2 py-1.5 text-xs text-muted">
-              <div className="flex items-center gap-2">
-                <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{attachment.title}</span>
-                <span className="shrink-0 text-[10px]">{attachment.char_count} 字</span>
-                <button onClick={() => setAttachment(null)} className="ml-auto shrink-0 hover:text-secondary">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              {attachment.warnings.length > 0 && (
-                <div className="mt-1 text-[10px] text-warning">
-                  {attachment.text
-                    ? attachment.warnings.join('；')
-                    : '未提取到文本（可能是扫描件）；当前未启用 OCR。'}
+          <div className="workspace-toolbar items-end border-t border-border p-3">
+            <div className="min-w-0 flex-1">
+              {attachment && (
+                <div className="mb-2 max-w-full rounded-input border border-border bg-elevated px-2 py-1.5 text-xs text-muted">
+                  <div className="flex items-center gap-2">
+                    <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{attachment.title}</span>
+                    <span className="shrink-0 text-[10px] num">{attachment.char_count} 字</span>
+                    <button onClick={() => setAttachment(null)} className="btn-ghost ml-auto !h-auto shrink-0 !p-0.5">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {attachment.warnings.length > 0 && (
+                    <div className="mt-1 text-[10px] text-warning">
+                      {attachment.text
+                        ? attachment.warnings.join('；')
+                        : '未提取到文本（可能是扫描件）；当前未启用 OCR。'}
+                    </div>
+                  )}
                 </div>
               )}
+              <textarea
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    send()
+                  }
+                }}
+                rows={2}
+                placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
+                className="control min-h-16 w-full resize-none !h-auto py-2 text-xs"
+              />
             </div>
-          )}
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                send()
-              }
-            }}
-            rows={2}
-            placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
-            className="w-full resize-none rounded-input border border-border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-accent/60"
-          />
+            <input
+              ref={fileRef}
+              type="file"
+              className="hidden"
+              accept=".txt,.md,.csv,.xlsx,.xls,.pdf"
+              onChange={e => {
+                const file = e.target.files?.[0]
+                if (file) void attachFile(file)
+              }}
+            />
+            <button
+              disabled={streaming || readingFile}
+              onClick={() => fileRef.current?.click()}
+              className="btn-secondary"
+            >
+              {readingFile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+              附件
+            </button>
+            <button
+              disabled={!streaming && !input.trim()}
+              onClick={streaming ? cancelStream : send}
+              className={streaming ? 'btn-secondary border-danger/30 text-danger hover:bg-danger/10' : 'btn-primary'}
+            >
+              {streaming ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+              {streaming ? '停止' : '发送'}
+            </button>
+          </div>
         </div>
-        <input
-          ref={fileRef}
-          type="file"
-          className="hidden"
-          accept=".txt,.md,.csv,.xlsx,.xls,.pdf"
-          onChange={e => {
-            const file = e.target.files?.[0]
-            if (file) void attachFile(file)
-          }}
-        />
-        <button
-          disabled={streaming || readingFile}
-          onClick={() => fileRef.current?.click()}
-          className="flex h-9 items-center gap-1.5 rounded-btn bg-elevated px-3 text-xs text-muted hover:text-secondary disabled:opacity-40"
-        >
-          {readingFile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
-          附件
-        </button>
-        <button
-          disabled={!streaming && !input.trim()}
-          onClick={streaming ? cancelStream : send}
-          className={`flex h-9 items-center gap-1.5 rounded-btn px-4 text-xs font-medium disabled:opacity-40 ${
-            streaming ? 'bg-danger/15 text-danger hover:bg-danger/20' : 'bg-accent/90 text-base hover:bg-accent'
-          }`}
-        >
-          {streaming ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
-          {streaming ? '停止' : '发送'}
-        </button>
       </div>
     </div>
   )

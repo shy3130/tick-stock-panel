@@ -259,16 +259,15 @@ function DataPulse({
   detail: string
   tone?: 'neutral' | 'good' | 'warn'
 }) {
-  const toneClass = tone === 'good' ? 'text-bull' : tone === 'warn' ? 'text-warning' : 'text-foreground'
-  const dotClass = tone === 'good' ? 'bg-bull' : tone === 'warn' ? 'bg-warning' : 'bg-muted'
+  const toneClass = tone === 'good' ? 'text-success' : tone === 'warn' ? 'text-warning' : 'text-foreground'
 
   return (
-    <article className="rounded-xl border border-border bg-surface/70 p-3.5 shadow-[0_10px_28px_-24px_rgba(0,0,0,0.8)]">
-      <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-muted">
-        <span className={cn('h-1.5 w-1.5 rounded-full', dotClass)} />
+    <article className="panel p-3">
+      <div className="section-kicker flex items-center gap-2">
+        <span className={cn('status-dot', tone === 'good' && 'bg-accent', tone === 'warn' && 'bg-warning')} data-state={tone === 'good' ? 'ok' : tone === 'warn' ? 'warn' : 'idle'} />
         {title}
       </div>
-      <p className={cn('mt-2 truncate font-mono text-sm font-semibold tabular-nums', toneClass)} title={value}>
+      <p className={cn('metric-value mt-2 truncate !text-sm', toneClass)} title={value}>
         {value}
       </p>
       <p className="mt-1.5 min-h-8 text-[10px] leading-relaxed text-secondary">{detail}</p>
@@ -286,7 +285,7 @@ function ModuleCard({ module, position }: { module: GuideModule; position: numbe
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.32, delay: Math.min(position * 0.035, 0.3), ease: [0.16, 1, 0.3, 1] }}
       className={cn(
-        'group relative overflow-hidden rounded-xl border border-border bg-surface/75 p-4 transition-colors duration-200',
+        'group panel relative overflow-hidden p-3 transition-colors duration-200',
         tone.border,
       )}
     >
@@ -371,14 +370,14 @@ export function FeatureGuide() {
           : '已开启，等待行情服务运行'
 
   return (
-    <div className="min-h-full">
+    <div className="workspace-page">
       <PageHeader
         title="功能与数据说明"
         subtitle="模块导航 · 建议用法 · 数据时效"
         right={
           <Link
             to="/data"
-            className="hidden items-center gap-1.5 rounded-btn border border-border bg-surface px-2.5 py-1.5 text-[11px] font-medium text-secondary transition-colors hover:border-accent/40 hover:text-foreground sm:inline-flex"
+            className="btn-secondary hidden !h-8 text-[11px] sm:inline-flex"
           >
             <Database className="h-3.5 w-3.5" aria-hidden="true" />
             查看数据页
@@ -386,22 +385,21 @@ export function FeatureGuide() {
         }
       />
 
-      <div className="mx-auto max-w-7xl px-5 py-5 pb-10">
+      <div className="workspace-content overflow-auto">
+      <div className="mx-auto w-full max-w-7xl min-w-0 space-y-6 pb-6">
         <motion.section
-          initial={{ opacity: 0, y: 10 }}
+          initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-          className="relative overflow-hidden rounded-2xl border border-border bg-surface px-5 py-5 shadow-[0_20px_50px_-38px_rgba(0,0,0,0.9)] sm:px-6"
+          transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+          className="panel px-4 py-4 sm:px-5"
         >
-          <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-accent/10 blur-3xl" />
-          <div className="absolute bottom-0 left-0 h-px w-full bg-gradient-to-r from-accent/70 via-accent/15 to-transparent" />
-          <div className="relative grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)] lg:items-end">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)] lg:items-end">
             <div>
-              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+              <div className="section-kicker flex items-center gap-2 text-accent">
                 <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
                 Field Manual
               </div>
-              <h1 className="mt-2 max-w-2xl text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+              <h1 className="mt-2 max-w-2xl text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
                 先确认数据，再解释信号，最后做自己的决策。
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-relaxed text-secondary">
@@ -432,14 +430,14 @@ export function FeatureGuide() {
           </div>
         </motion.section>
 
-        <section className="mt-7" aria-labelledby="freshness-title">
+        <section aria-labelledby="freshness-title">
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div>
-              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-accent">
+              <div className="section-kicker flex items-center gap-2 text-accent">
                 <Activity className="h-3.5 w-3.5" aria-hidden="true" />
                 Live Data Ledger
               </div>
-              <h2 id="freshness-title" className="mt-1 text-base font-semibold tracking-tight">当前数据时效</h2>
+              <h2 id="freshness-title" className="section-title mt-1 text-base">当前数据时效</h2>
               <p className="mt-1 text-[11px] text-muted">状态来自当前服务；“最新日期”是本地已可用数据的终点，不等同于盘中实时更新。</p>
             </div>
             <Link to="/data" className="inline-flex items-center gap-1.5 text-[11px] font-medium text-accent hover:text-accent/80">
@@ -475,21 +473,21 @@ export function FeatureGuide() {
             />
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-border/70 bg-elevated/35 px-3 py-2 text-[10px] text-muted">
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-input border border-border/70 bg-elevated/35 px-3 py-2 text-[10px] text-muted">
             <span className="inline-flex items-center gap-1.5"><RefreshCw className="h-3 w-3" aria-hidden="true" />最近管道：{formatTimestamp(data?.last_pipeline_run)}</span>
             <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3 w-3" aria-hidden="true" />provider：{capabilities.data?.label ?? '检测中'} · {capabilityCount || '—'} 项能力</span>
             <span className="inline-flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3" aria-hidden="true" />状态检查：{formatTimestamp(data?.checked_at)}</span>
           </div>
         </section>
 
-        <section className="mt-8" aria-labelledby="modules-title">
+        <section aria-labelledby="modules-title">
           <div className="flex items-end justify-between gap-4">
             <div>
-              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-accent">
+              <div className="section-kicker flex items-center gap-2 text-accent">
                 <Filter className="h-3.5 w-3.5" aria-hidden="true" />
                 Module Map
               </div>
-              <h2 id="modules-title" className="mt-1 text-base font-semibold tracking-tight">模块功能与使用方法</h2>
+              <h2 id="modules-title" className="section-title mt-1 text-base">模块功能与使用方法</h2>
               <p className="mt-1 text-[11px] text-muted">按研究链路排列；点击卡片底部入口直接进入对应页面。</p>
             </div>
             <span className="hidden font-mono text-[10px] text-muted sm:block">{MODULES.length.toString().padStart(2, '0')} MODULES</span>
@@ -502,7 +500,7 @@ export function FeatureGuide() {
           </div>
         </section>
 
-        <section className="mt-8 rounded-xl border border-border bg-elevated/35 p-4 sm:p-5" aria-labelledby="boundaries-title">
+        <section className="panel bg-elevated/35 p-4 sm:p-5" aria-labelledby="boundaries-title">
           <div className="flex items-start gap-3">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-warning/10 text-warning">
               <Sparkles className="h-4 w-4" aria-hidden="true" />
@@ -518,6 +516,7 @@ export function FeatureGuide() {
             </div>
           </div>
         </section>
+      </div>
       </div>
     </div>
   )

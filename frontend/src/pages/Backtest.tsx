@@ -35,51 +35,61 @@ export function Backtest() {
   const [activeTab, setActiveTab] = useState<Tab>('strategy')
 
   const modeSwitch = (
-    <div className="inline-flex rounded-btn border border-border bg-surface/80 p-0.5 shadow-sm">
-      {(['factor', 'strategy', 'composite', 'grid'] as const).map(tab => {
-        const Icon = tab === 'factor'
-          ? BarChart3
-          : tab === 'strategy'
-            ? FlaskConical
-            : tab === 'composite'
-              ? GitMerge
-              : Grid3X3
-        const active = activeTab === tab
-        return (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
-              active
-                ? 'bg-accent text-white shadow-sm'
-                : 'text-secondary hover:bg-elevated hover:text-foreground'
-            }`}
-          >
-            <Icon className="h-3.5 w-3.5" />
-            {MODES[tab].title}
-          </button>
-        )
-      })}
+    <div className="workspace-toolbar !border-0 !bg-transparent !px-0 !py-0 !mb-0" role="group" aria-label="回测模式">
+      <div className="inline-flex rounded-btn border border-border bg-elevated p-0.5">
+        {(['factor', 'strategy', 'composite', 'grid'] as const).map(tab => {
+          const Icon = tab === 'factor'
+            ? BarChart3
+            : tab === 'strategy'
+              ? FlaskConical
+              : tab === 'composite'
+                ? GitMerge
+                : Grid3X3
+          const active = activeTab === tab
+          return (
+            <button
+              key={tab}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setActiveTab(tab)}
+              className={`inline-flex items-center gap-1.5 rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors duration-150 cursor-pointer ${
+                active
+                  ? 'bg-accent text-white shadow-sm'
+                  : 'text-secondary hover:bg-surface hover:text-foreground'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {MODES[tab].title}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 
   return (
-    <div className="min-h-full bg-base flex flex-col">
+    <div className="workspace-page">
       <PageHeader
         title="回测工作台"
-        subtitle={`${MODES[activeTab].title} · ${MODES[activeTab].hint}`}
+        subtitle={`${MODES[activeTab].title} · ${MODES[activeTab].subtitle}`}
+        titleExtra={
+          <span className="hidden sm:inline text-[11px] text-muted font-normal max-w-md truncate">
+            {MODES[activeTab].hint}
+          </span>
+        }
         right={modeSwitch}
-        className="shrink-0 bg-base/95"
       />
 
-      <main className="flex-1 min-h-0 px-3 pb-3 pt-3 lg:px-4 lg:pb-4">
-        {activeTab === 'factor' && <FactorBacktest />}
-        {activeTab === 'strategy' && <StrategyBacktest />}
-        {activeTab === 'composite' && <CompositeStrategyBuilder />}
-        <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
-          <ParameterGridPanel />
+      <div className="workspace-content !pt-0 min-h-0 flex-1 flex flex-col">
+        <div className="flex-1 min-h-0 min-w-0">
+          {activeTab === 'factor' && <FactorBacktest />}
+          {activeTab === 'strategy' && <StrategyBacktest />}
+          {activeTab === 'composite' && <CompositeStrategyBuilder />}
+          <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
+            <ParameterGridPanel />
+          </div>
         </div>
-      </main>
+      </div>
     </div>
   )
 }

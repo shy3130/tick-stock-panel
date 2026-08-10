@@ -72,7 +72,7 @@ function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; titl
     <div className="mb-2 flex items-center justify-between gap-2">
       <div className="flex items-center gap-1.5">
         <Icon className="h-3.5 w-3.5 text-accent" />
-        <h2 className="text-xs font-semibold text-foreground">{title}</h2>
+        <h2 className="section-title text-xs">{title}</h2>
       </div>
       {hint && <span className="font-mono text-[10px] text-muted">{hint}</span>}
     </div>
@@ -218,9 +218,9 @@ function KpiCell({ label, value, sub, tone = 'neutral' }: { label: ReactNode; va
   const isPlain = typeof value === 'string' || typeof value === 'number'
   const color = tone === 'bull' ? 'text-bull' : tone === 'bear' ? 'text-bear' : tone === 'accent' ? 'text-accent' : 'text-foreground'
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-surface/80 px-3 py-2">
-      <div className="flex items-center gap-1 text-[11px] text-muted">{label}</div>
-      <div className={`mt-1 truncate font-mono text-lg font-semibold leading-none tabular-nums ${isPlain ? color : 'text-foreground'}`}>{value}</div>
+    <div className="panel min-w-0 px-3 py-2">
+      <div className="section-kicker flex items-center gap-1 normal-case tracking-normal">{label}</div>
+      <div className={`metric-value mt-1 truncate text-base leading-none ${isPlain ? color : 'text-foreground'}`}>{value}</div>
       {sub && <div className="mt-1 truncate text-[10px] text-muted">{sub}</div>}
     </div>
   )
@@ -232,7 +232,7 @@ function IndexTicker({ item }: { item: OverviewMarket['indices'][number] }) {
   return (
     <Link
       to={`/indices?symbol=${encodeURIComponent(item.symbol)}`}
-      className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-x-2 gap-y-0.5 rounded-lg border border-border bg-elevated/45 px-2.5 py-1.5 transition-colors hover:border-accent/40 hover:bg-elevated"
+      className="panel grid min-w-0 grid-cols-[1fr_auto] items-center gap-x-2 gap-y-0.5 bg-elevated/45 px-2.5 py-1.5 transition-colors hover:border-accent/40 hover:bg-elevated"
     >
       <div className="truncate text-xs font-medium text-foreground">{item.name || item.symbol}</div>
       <div className={`font-mono text-xs font-semibold ${pctClass(pct)}`}>{fmtIndexPct(pct)}</div>
@@ -377,18 +377,18 @@ function LadderMini({ limit }: { limit: OverviewMarket['limit'] }) {
 
 function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; value: string; cls?: string }) {
   return (
-    <div className="rounded bg-elevated/45 px-2 py-1.5">
-      <div className="text-[10px] text-muted">{label}</div>
-      <div className={`mt-0.5 font-mono text-xs font-semibold ${cls}`}>{value}</div>
+    <div className="rounded-btn bg-elevated/45 px-2 py-1.5">
+      <div className="section-kicker normal-case tracking-normal">{label}</div>
+      <div className={`metric-value mt-0.5 text-xs ${cls}`}>{value}</div>
     </div>
   )
 }
 
 function StockList({ title, rows, mode }: { title: string; rows: MarketSnapshotRow[]; mode: 'gain' | 'loss' | 'amount' | 'active' }) {
   return (
-    <div className="rounded-card border border-border bg-surface/80 p-2.5">
+    <div className="panel p-2.5">
       <div className="mb-1.5 flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+        <h3 className="section-title text-xs">{title}</h3>
         <span className="text-[9px] text-muted">TOP {Math.min(rows.length, 8)}</span>
       </div>
       <div className="space-y-1">
@@ -447,7 +447,7 @@ function RankColumn({ title, rows, tone }: { title: string; rows: OverviewDimens
 function HotRankCard({ title, rank, configUrl }: { title: string; rank?: OverviewMarket['concept_rank']; configUrl: string }) {
   const hasData = (rank?.leading?.length ?? 0) > 0 || (rank?.lagging?.length ?? 0) > 0
   return (
-    <section className="rounded-card border border-border bg-surface/80 p-2.5">
+    <section className="panel p-2.5">
       <SectionTitle icon={Flame} title={title} hint="领涨/领跌" />
       {hasData ? (
         <div className="grid grid-cols-2 gap-2">
@@ -556,7 +556,7 @@ export function Dashboard() {
 
   if (overview.isLoading && !data) {
     return (
-      <div className="flex h-full items-center justify-center bg-base">
+      <div className="workspace-page h-full items-center justify-center">
         <div className="flex items-center gap-2 text-sm text-muted">
           <Loader2 className="h-4 w-4 animate-spin" /> 加载市场看板…
         </div>
@@ -566,10 +566,10 @@ export function Dashboard() {
 
   if (!data) {
     return (
-      <div className="flex h-full items-center justify-center bg-base p-6">
-        <div className="rounded-card border border-border bg-surface p-6 text-center">
+      <div className="workspace-page h-full items-center justify-center p-6">
+        <div className="panel p-6 text-center">
           <div className="text-sm text-danger">看板加载失败</div>
-          <button onClick={() => overview.refetch()} className="mt-3 rounded-btn bg-accent px-3 py-1.5 text-xs font-medium text-base">重试</button>
+          <button onClick={() => overview.refetch()} className="btn-primary mt-3 text-xs">重试</button>
         </div>
       </div>
     )
@@ -586,7 +586,8 @@ export function Dashboard() {
   const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
 
   return (
-    <div className="min-h-full bg-base p-3">
+    <div className="workspace-page">
+      <div className="workspace-content gap-2 !p-2 sm:!p-3">
       {/* 无本地数据常驻引导卡片 —— 一键触发盘后管道获取数据(无 Key 也可) */}
       {hasNoData && (
         <FetchDataCard
@@ -612,12 +613,12 @@ export function Dashboard() {
           />
         )}
       </AnimatePresence>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-card border border-border bg-surface/85 px-3 py-2">
-        <div className="flex items-center gap-2">
+      <div className="workspace-toolbar panel justify-between px-3 py-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Gauge className="h-4 w-4 text-accent" />
-          <h1 className="text-base font-semibold text-foreground">市场看板</h1>
+          <h1 className="section-title text-base">市场看板</h1>
           <span
-            className="rounded-full border px-2 py-0.5 text-[10px] font-medium"
+            className="rounded-btn border px-2 py-0.5 text-[10px] font-medium"
             style={{
               color: scoreColor(score),
               borderColor: `${scoreColor(score)}40`,
@@ -627,7 +628,7 @@ export function Dashboard() {
             {data.emotion.label} · {score}
           </span>
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-muted">
+        <div className="workspace-toolbar text-[11px] text-muted">
           {currentDate ? (
             <DatePicker
               value={currentDate}
@@ -640,11 +641,14 @@ export function Dashboard() {
             <span className="font-mono text-secondary">—</span>
           )}
           <span className="flex items-center gap-1"><Timer className="h-3 w-3" />{quoteAge(data.quote_status?.quote_age_ms)}</span>
-          <span className={quoteRunning ? 'text-accent' : 'text-warning'}>{quoteRunning ? '实时' : '非实时'}</span>
+          <span className="inline-flex items-center gap-1">
+            <span className="status-dot" data-state={quoteRunning ? 'live' : 'warn'} />
+            <span className={quoteRunning ? 'text-accent' : 'text-warning'}>{quoteRunning ? '实时' : '非实时'}</span>
+          </span>
           <button
             onClick={handleRefresh}
             disabled={manualFetching}
-            className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+            className="btn-secondary h-7 px-2 text-[11px]"
           >
             <RefreshCw className={`h-3 w-3 ${manualFetching ? 'animate-spin' : ''}`} />刷新
           </button>
@@ -653,8 +657,8 @@ export function Dashboard() {
 
       {/* Free 档提示: 大盘看板为盘后数据, 仅自选股实时。避免用户误读为全市场实时。 */}
       {quoteMode === 'watchlist' && (
-        <div className="mb-3 flex items-start gap-2 rounded-card border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-[11px] leading-relaxed">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+        <div className="panel flex items-start gap-2 border-warning/30 bg-warning/8 px-3 py-2 text-[11px] leading-relaxed">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <div className="min-w-0 flex-1 text-secondary">
             当前为「自选实时」模式,看板展示的大盘数据为<strong className="text-foreground">盘后快照</strong>(最新有数据日),并非盘中实时;
             仅自选股({data.quote_status?.watchlist_symbol_count ?? 0} 只)支持实时监控。
@@ -663,11 +667,11 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="mb-3 grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
       </div>
 
-      <div className="mb-3 grid grid-cols-6 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
         <KpiCell label="个股涨 / 平 / 跌" value={<><span className="text-bull">{data.breadth.up}</span><span className="text-muted">/</span><span className="text-muted">{data.breadth.flat}</span><span className="text-muted">/</span><span className="text-bear">{data.breadth.down}</span></>} sub={`上涨率 ${data.breadth.up_pct.toFixed(1)}%`} />
         <KpiCell label="强势 / 弱势" value={<><span className="text-bull">{strongUp}</span><span className="text-muted">/</span><span className="text-bear">{strongDown}</span></>} sub="涨跌 ≥3%" />
         <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
@@ -676,10 +680,10 @@ export function Dashboard() {
         <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <main className="min-w-0 space-y-3">
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <section className="rounded-card border border-border bg-surface/80 p-2.5">
+      <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <main className="min-w-0 space-y-2">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
+            <section className="panel p-2.5">
               <SectionTitle icon={BarChart3} title="涨跌分布 / 广度" hint={`${data.breadth.total}只`} />
               <DistributionBars rows={data.distribution} />
               <div className="mt-2">
@@ -692,14 +696,14 @@ export function Dashboard() {
             </section>
 
             <section
-              className="rounded-card border bg-surface/80 p-2.5"
+              className="panel p-2.5"
               style={{ borderColor: `${scoreColor(score)}40` }}
             >
               <SectionTitle icon={Sparkles} title="情绪雷达" hint={`情绪评分 ${score}`} />
               <EmotionRadar radar={data.radar} score={score} />
             </section>
 
-            <section className="flex flex-col rounded-card border border-border bg-surface/80 p-2.5">
+            <section className="panel flex flex-col p-2.5">
               <div>
                 <SectionTitle icon={LineChart} title="趋势强度" hint="均线/新高低" />
                 <div className="grid grid-cols-3 gap-1.5">
@@ -725,12 +729,12 @@ export function Dashboard() {
             </section>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <HotRankCard title="概念热度" rank={data.concept_rank} configUrl="/concept-analysis" />
             <HotRankCard title="行业热度" rank={data.industry_rank} configUrl="/industry-analysis" />
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <StockList title="涨幅榜" rows={data.top_gainers} mode="gain" />
             <StockList title="跌幅榜" rows={data.top_losers} mode="loss" />
             <StockList title="成交额榜" rows={data.turnover_leaders} mode="amount" />
@@ -738,16 +742,16 @@ export function Dashboard() {
           </div>
         </main>
 
-        <aside className="min-w-0 space-y-3">
-          <section className="rounded-card border border-border bg-surface/80 p-3">
+        <aside className="min-w-0 space-y-2">
+          <section className="panel p-3">
             <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
             <LadderMini limit={data.limit} />
           </section>
-          <section className="rounded-card border border-border bg-surface/80 p-3">
+          <section className="panel p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <BellRing className="h-3.5 w-3.5 text-accent" />
-                <h2 className="text-xs font-semibold text-foreground">监控中心</h2>
+                <h2 className="section-title text-xs">监控中心</h2>
                 <span className="font-mono text-[10px] text-muted">实时信号</span>
               </div>
               <Link to="/monitor" className="inline-flex items-center justify-center h-5 w-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors" title="进入监控中心">
@@ -757,6 +761,7 @@ export function Dashboard() {
             <MonitorWidget />
           </section>
         </aside>
+      </div>
       </div>
     </div>
   )
@@ -776,7 +781,7 @@ function FetchDataCard({
 }) {
   const stageText = stage ? (STAGE_LABELS[stage] ?? stage) : '正在同步行情数据…'
   return (
-    <div className="mb-3 rounded-card border border-border bg-surface/85 p-3.5">
+    <div className="mb-3 panel/85 p-3.5">
       <div className="flex items-start gap-3">
         <div className="rounded-lg bg-accent/10 p-2 shrink-0">
           <Database className="h-4 w-4 text-accent" />
@@ -860,7 +865,7 @@ function WelcomeFetchModal({
           initial={{ scale: 0.85, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-          className="mx-auto w-fit rounded-2xl bg-accent/10 p-3.5"
+          className="mx-auto w-fit rounded-btn bg-accent/10 p-3.5"
         >
           <Sparkles className="h-7 w-7 text-accent" />
         </motion.div>
@@ -883,7 +888,7 @@ function WelcomeFetchModal({
           </button>
           <button
             onClick={onStart}
-            className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 transition-all"
+            className="btn-primary h-9 px-5 text-sm font-semibold transition-all"
           >
             <Play className="h-4 w-4" />开始获取
           </button>

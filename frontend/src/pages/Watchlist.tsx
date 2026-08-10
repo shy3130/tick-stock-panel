@@ -359,9 +359,9 @@ function StockCard({
 
   // 动态背景渐变: 涨=红底, 跌=绿底, 平=无色
   const bgGlow = isUp
-    ? 'bg-gradient-to-br from-bull/[0.06] via-transparent to-bull/[0.02]'
+    ? 'bg-bull/[0.04]'
     : isDown
-      ? 'bg-gradient-to-br from-bear/[0.06] via-transparent to-bear/[0.02]'
+      ? 'bg-bear/[0.04]'
       : ''
   // 左侧指示条颜色
   const barColor = isUp ? 'bg-bull/70' : isDown ? 'bg-bear/70' : 'bg-muted/30'
@@ -775,7 +775,7 @@ export function Watchlist() {
   const hiddenCount = Math.max(0, allSymbols.length - sortedRows.length)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="workspace-page h-full">
       <PageHeader
         title="自选股"
         titleExtra={
@@ -800,14 +800,14 @@ export function Watchlist() {
           </span>
         }
         right={
-          <div className="flex items-center gap-2">
+          <div className="workspace-toolbar">
             {/* 筛选 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}
-              className={`inline-flex items-center justify-center h-8 w-8 rounded-btn transition-colors duration-150 ease-smooth ${
+              className={`btn-ghost h-8 w-8 px-0 ${
                 filterOpen || activeFilterCount > 0
                   ? 'bg-accent/15 text-accent hover:bg-accent/25'
-                  : 'bg-elevated text-secondary hover:bg-elevated/80'
+                  : ''
               }`}
               title={`筛选${activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}`}
             >
@@ -822,7 +822,7 @@ export function Watchlist() {
             {/* 视图 */}
             <button
               onClick={toggleView}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
+              className="btn-ghost h-8 w-8 px-0"
               title={viewMode === 'table' ? '卡片视图' : '列表视图'}
             >
               {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
@@ -831,7 +831,7 @@ export function Watchlist() {
             {/* 自定义列 / 刷新 */}
             <button
               onClick={() => setCustomizerOpen(true)}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
+              className="btn-ghost h-8 w-8 px-0"
               title="自定义列"
             >
               <Settings2 className="h-4 w-4" />
@@ -839,7 +839,7 @@ export function Watchlist() {
             <button
               onClick={() => enriched.refetch()}
               disabled={enriched.isFetching}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth disabled:opacity-50"
+              className="btn-ghost h-8 w-8 px-0 disabled:opacity-50"
               title="刷新"
             >
               <RefreshCw className={`h-4 w-4 ${enriched.isFetching ? 'animate-spin' : ''}`} />
@@ -849,7 +849,7 @@ export function Watchlist() {
                 <div className="w-px h-5 bg-border" />
                 <button
                   onClick={() => setConfirmClear(true)}
-                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-danger/10 text-danger hover:bg-danger/20 transition-colors duration-150 ease-smooth"
+                  className="btn-ghost h-8 w-8 px-0 bg-danger/10 text-danger hover:bg-danger/20"
                   title="清空自选"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -862,10 +862,10 @@ export function Watchlist() {
 
       {/* 筛选栏 */}
       {filterOpen && (
-        <div className="px-5 py-2 border-b border-border bg-surface/50 max-h-[184px] overflow-y-auto">
+        <div className="max-h-[184px] overflow-y-auto border-b border-border bg-surface/50 px-3 py-2 sm:px-4">
           {/* 板块筛选 */}
           <div className="mb-2">
-            <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">板块</div>
+            <div className="section-kicker mb-0.5">板块</div>
             <div className="flex flex-wrap gap-1">
               {BOARDS.map(board => {
                 const active = boardFilter.has(board)
@@ -890,7 +890,7 @@ export function Watchlist() {
             if (!items?.length) return null
             return (
               <div key={cat.label} className="mb-1.5 last:mb-0">
-                <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">{cat.label}</div>
+                <div className="section-kicker mb-0.5">{cat.label}</div>
                 <div className="flex flex-wrap gap-x-2 gap-y-1">
                   {items.map(item => {
                     const f = filters[item.id] || {}
@@ -933,8 +933,8 @@ export function Watchlist() {
       )}
 
       {/* 可滚动列表区 — 占满剩余高度，内部独立滚动，表头 sticky 固定 */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="px-5 py-3">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="workspace-content !gap-2 !p-2 sm:!p-3">
           {/* 列表 */}
           {list.isLoading && <div className="text-sm text-muted">加载中…</div>}
           {list.isError && <div className="text-sm text-danger">读取自选失败</div>}
@@ -1104,7 +1104,7 @@ export function Watchlist() {
                 // 其余纯数据列 → 共享原语
                 return renderBuiltinDataCell(r, col)
               }}
-              className="rounded-card overflow-x-auto"
+              className="panel data-table-scroll overflow-x-auto"
             />
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
@@ -1139,7 +1139,7 @@ export function Watchlist() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/60"
               onClick={() => setConfirmClear(false)}
             />
             <motion.div
@@ -1147,7 +1147,7 @@ export function Watchlist() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: 8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6"
+              className="panel relative w-[90vw] max-w-[380px] bg-base p-6"
             >
               <h3 className="text-sm font-medium text-foreground mb-2">确认清空自选</h3>
               <p className="text-xs text-secondary mb-5">
@@ -1156,14 +1156,14 @@ export function Watchlist() {
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmClear(false)}
-                  className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors"
+                  className="btn-secondary text-sm"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => clearAll.mutate()}
                   disabled={clearAll.isPending}
-                  className="px-3 py-1.5 rounded-btn bg-danger/15 text-danger hover:bg-danger/25 text-sm font-medium transition-colors disabled:opacity-50"
+                  className="btn-ghost bg-danger/15 text-sm font-medium text-danger hover:bg-danger/25"
                 >
                   {clearAll.isPending ? '清除中...' : '确认清空'}
                 </button>

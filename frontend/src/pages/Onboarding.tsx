@@ -30,8 +30,6 @@ import { Logo } from '@/components/Logo'
 
 const STEPS = ['欢迎', '数据源', '能力探测', '完成'] as const
 
-const BRAND = '#8B5CF6'
-
 const HIGHLIGHTS = [
   { icon: LineChart,   title: '看板与自选', desc: '市场全景看板、涨跌分布、情绪雷达,自定义自选列表', tint: 'text-accent' },
   { icon: ScanSearch,  title: '策略选股',   desc: '内置多套选股策略,一键扫描全市场命中标的', tint: 'text-bull' },
@@ -71,36 +69,11 @@ export function Onboarding() {
   const finish = () => complete.mutate()
 
   return (
-    <div className="relative min-h-screen bg-base overflow-hidden flex flex-col">
-      {/* 背景光晕 —— 品牌 + 主色渐变 */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div
-          className="absolute -top-40 -left-40 h-[28rem] w-[28rem] rounded-full blur-[120px] opacity-20"
-          style={{ background: `radial-gradient(circle, ${BRAND}, transparent 70%)` }}
-        />
-        <div
-          className="absolute -bottom-40 -right-32 h-[26rem] w-[26rem] rounded-full blur-[120px] opacity-15"
-          style={{ background: 'radial-gradient(circle, hsl(var(--accent)), transparent 70%)' }}
-        />
-        {/* 极淡网格底纹 */}
-        <div
-          className="absolute inset-0 opacity-[0.025]"
-          style={{
-            backgroundImage:
-              'linear-gradient(hsl(var(--fg-primary)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--fg-primary)) 1px, transparent 1px)',
-            backgroundSize: '40px 40px',
-          }}
-        />
-      </div>
-
+    <div className="relative flex min-h-screen flex-col overflow-hidden bg-base">
       {/* 顶栏:logo + 进度指示 */}
-      <header className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-border">
+      <header className="relative z-10 flex items-center justify-between border-b border-border px-6 py-4">
         <div className="flex items-center gap-2.5 text-foreground">
-          <Logo
-            size={24}
-            className="shrink-0"
-            style={{ color: BRAND, filter: `drop-shadow(0 0 8px ${BRAND}55)` }}
-          />
+          <Logo size={24} className="shrink-0 text-accent" />
           <span className="text-sm font-semibold tracking-tight">TickFlow Stock Panel</span>
         </div>
         {/* 步骤进度条 —— 胶囊式 */}
@@ -162,13 +135,12 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
     <div className="text-center">
       {/* 品牌 badge */}
       <motion.div
-        initial={{ scale: 0.85, opacity: 0 }}
+        initial={{ scale: 0.95, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-        className="mx-auto w-fit rounded-2xl p-4 border border-border"
-        style={{ background: `linear-gradient(135deg, ${BRAND}22, transparent)` }}
+        transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+        className="mx-auto grid h-14 w-14 place-items-center rounded-btn border border-border bg-accent/10"
       >
-        <Sparkles className="h-8 w-8" style={{ color: BRAND }} />
+        <Sparkles className="h-7 w-7 text-accent" />
       </motion.div>
 
       <h1 className="mt-6 text-3xl font-bold text-foreground tracking-tight">
@@ -188,7 +160,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.3, delay: 0.04 * i + 0.1 }}
             whileHover={{ y: -2 }}
-            className="group flex items-start gap-2.5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-2.5 transition-colors hover:border-accent/30"
+            className="group flex items-start gap-2.5 panel p-2.5 transition-colors hover:border-accent/30"
           >
             <div className="rounded-lg bg-elevated/50 p-1.5 shrink-0">
               <h.icon className={`h-4 w-4 ${h.tint} transition-transform group-hover:scale-110`} />
@@ -204,14 +176,14 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       <div className="mt-8 flex items-center justify-center gap-3">
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-6 h-11 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 hover:shadow-accent/30 transition-all"
+          className="btn-primary h-10 px-6 text-sm"
         >
           开始配置
           <ArrowRight className="h-4 w-4" />
         </button>
         <button
           onClick={onSkip}
-          className="px-4 h-11 rounded-xl text-sm text-secondary hover:text-foreground hover:bg-elevated transition-colors"
+          className="btn-ghost h-10 px-4 text-sm"
         >
           稍后再说
         </button>
@@ -243,14 +215,14 @@ function KeyStep({ onNext, onBack }: { onNext: () => void; onSkip: () => void; o
       <div className="mt-6 flex items-center justify-between">
         <button
           onClick={onBack}
-          className="inline-flex items-center gap-1.5 px-3 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
+          className="btn-ghost text-sm"
         >
           <ArrowLeft className="h-4 w-4" />
           上一步
         </button>
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-all"
+          className="btn-primary text-sm"
         >
           下一步
           <ArrowRight className="h-4 w-4" />
@@ -279,21 +251,20 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
         以下是当前数据源声明的可用能力。
       </p>
 
-      <div className="mt-5 rounded-card border border-border bg-surface/80 backdrop-blur-sm p-5">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[10px] uppercase tracking-widest text-muted">数据源能力</span>
-          <span className="font-mono text-2xl font-bold tracking-tight text-foreground">
-            {caps.data?.label ?? '—'}
-          </span>
+      <div className="panel mt-5">
+        <div className="panel-header">
+          <span className="section-kicker">Capabilities</span>
+          <span className="metric-value text-base">{caps.data?.label ?? '—'}</span>
         </div>
+        <div className="panel-body">
 
         {caps.isLoading ? (
-          <div className="mt-4 flex items-center gap-2 text-xs text-muted">
+          <div className="flex items-center gap-2 text-xs text-muted">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             正在读取能力…
           </div>
         ) : capList.length > 0 ? (
-          <div className="mt-4 grid grid-cols-1 gap-1.5">
+          <div className="grid grid-cols-1 gap-1.5">
             {capList.slice(0, 8).map(([cap]) => {
               const meta = CAP_LABELS[cap]
               return (
@@ -308,22 +279,23 @@ function ResultStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
             )}
           </div>
         ) : (
-          <div className="mt-4 text-xs text-muted">暂未读取到能力缓存</div>
+          <div className="text-xs text-muted">暂未读取到能力缓存</div>
         )}
+        </div>
       </div>
 
       {/* 底部操作 */}
       <div className="mt-6 flex items-center justify-between">
         <button
           onClick={onBack}
-          className="inline-flex items-center gap-1.5 px-3 h-9 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
+          className="btn-ghost text-sm"
         >
           <ArrowLeft className="h-4 w-4" />
           上一步
         </button>
         <button
           onClick={onNext}
-          className="inline-flex items-center gap-2 px-5 h-9 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent/90 transition-colors"
+          className="btn-primary text-sm"
         >
           下一步
           <ArrowRight className="h-4 w-4" />
@@ -351,17 +323,8 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         className="mx-auto w-fit"
       >
-        <div
-          className="relative rounded-2xl p-5 border border-border"
-          style={{ background: `linear-gradient(135deg, ${BRAND}22, transparent)` }}
-        >
-          <CheckCircle2 className="h-12 w-12 text-bear" />
-          {/* 光晕脉冲 */}
-          <motion.div
-            animate={{ scale: [1, 1.4], opacity: [0.4, 0] }}
-            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeOut' }}
-            className="absolute inset-5 rounded-full bg-bear/30"
-          />
+        <div className="relative grid place-items-center rounded-btn border border-border bg-accent/10 p-5">
+          <CheckCircle2 className="h-12 w-12 text-accent" />
         </div>
       </motion.div>
 
@@ -375,7 +338,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, delay: 0.2 }}
-        className="mt-5 flex items-start gap-2.5 rounded-card border border-accent/30 bg-accent/[0.06] px-4 py-3 text-left"
+        className="panel mt-5 flex items-start gap-2.5 border-accent/30 bg-accent/5 px-3 py-3 text-left"
       >
         <div className="rounded-lg bg-accent/15 p-1.5 shrink-0 mt-px">
           <Database className="h-4 w-4 text-accent" />
@@ -396,7 +359,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
             initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.3, delay: 0.1 * i + 0.3 }}
-            className="flex items-center gap-3 rounded-card border border-border bg-surface/80 backdrop-blur-sm px-3.5 py-2.5"
+            className="panel flex items-center gap-3 px-3 py-2.5"
           >
             <div className="rounded-lg bg-accent/10 p-1.5 shrink-0">
               <t.icon className="h-3.5 w-3.5 text-accent" />
@@ -410,7 +373,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
       <div className="mt-8 flex items-center justify-between">
         <button
           onClick={onBack}
-          className="inline-flex items-center gap-1.5 px-3 h-10 rounded-btn text-sm text-secondary hover:text-foreground transition-colors"
+          className="btn-ghost text-sm"
         >
           <ArrowLeft className="h-4 w-4" />
           上一步
@@ -418,7 +381,7 @@ function FinishStep({ onNext, onBack, pending }: { onNext: () => void; onBack: (
         <button
           onClick={onNext}
           disabled={pending}
-          className="inline-flex items-center gap-2 px-6 h-10 rounded-xl bg-accent text-white text-sm font-semibold shadow-lg shadow-accent/20 hover:bg-accent/90 hover:shadow-accent/30 disabled:opacity-60 transition-all"
+          className="btn-primary h-10 px-6 text-sm"
         >
           {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {pending ? '正在进入…' : '进入面板'}

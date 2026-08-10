@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { cn } from '@/lib/cn'
+import { TOAST_KIND } from '@/components/ui/Primitives'
 
 // ===== 全局 toast 状态 =====
 type ToastItem = { id: number; msg: string; kind: 'error' | 'success' }
@@ -31,15 +33,15 @@ export function ToastContainer() {
   if (!items.length) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[9999] flex flex-col gap-2">
       {items.map(t => (
         <div
           key={t.id}
-          className={`pointer-events-auto px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium animate-in slide-in-from-bottom-2 fade-in duration-200 ${
-            t.kind === 'error'
-              ? 'bg-red-500/90 text-white'
-              : 'bg-emerald-500/90 text-white'
-          }`}
+          className={cn(
+            'pointer-events-auto rounded-lg px-4 py-2.5 text-sm font-medium shadow-lg',
+            'animate-in slide-in-from-bottom-2 fade-in duration-200',
+            TOAST_KIND[t.kind],
+          )}
         >
           {t.msg}
         </div>

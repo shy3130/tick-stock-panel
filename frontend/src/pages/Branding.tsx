@@ -82,27 +82,27 @@ const MOCK_NAV = [
 
 export function Branding() {
   return (
-    <>
+    <div className="workspace-page">
       <PageHeader
         title="视觉风格预览"
         subtitle="名字保持 TickFlow Stock Panel,4 种赛博朋克 + 高级感的视觉处理 — 字重、字距、配色、图标各不同。挑你最喜欢的告诉我。"
       />
 
-      <div className="px-8 py-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="workspace-content overflow-auto">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {VARIANTS.map((v) => (
             <Sample key={v.id} v={v} />
           ))}
         </div>
 
-        <div className="mt-8 rounded-card border border-border bg-surface p-5 text-sm text-secondary leading-relaxed max-w-2xl">
-          <div className="font-medium text-foreground mb-2">挑哪个?</div>
+        <div className="panel mt-4 max-w-2xl p-4 text-sm leading-relaxed text-secondary">
+          <div className="section-title mb-2">挑哪个?</div>
           回复 <code className="font-mono text-accent">pulsar / vanta / helix / aurora</code> 任一,
           我把该风格的字体、配色、图标、发光效果应用到真实侧栏。
           也可以告诉我你想微调哪里(比如"用 VANTA 但换青色"),都行。
         </div>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -114,7 +114,7 @@ function Sample({ v }: { v: Variant }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-      className="rounded-card border border-border overflow-hidden bg-base flex"
+      className="panel flex overflow-hidden bg-base"
     >
       {/* 模拟侧边栏 */}
       <div className="w-56 bg-surface border-r border-border flex flex-col">
@@ -191,7 +191,7 @@ function Sample({ v }: { v: Variant }) {
         </div>
 
         {/* 模拟一个数据卡片,看与配色协调度 */}
-        <div className="mt-5 rounded-btn bg-surface border border-border px-3 py-2 flex items-baseline justify-between">
+        <div className="mt-5 flex items-baseline justify-between rounded-input border border-border bg-surface px-3 py-2">
           <span className="text-xs text-secondary">600519.SH</span>
           <span className="font-mono text-sm" style={{ color: v.glow }}>
             +1.85%

@@ -481,20 +481,20 @@ export function Data() {
   }
 
   return (
-    <>
+    <div className="workspace-page">
       <div ref={topRef} />
       <PageHeader
         title="数据"
         subtitle="本地数据画像 · 同步状态 · 历史记录"
         right={
-          <div className="flex items-center gap-3">
+          <div className="workspace-toolbar">
             {!hasData && !isLoading && (
               <span className="text-xs text-accent animate-pulse">首次使用请点击右侧按钮同步数据</span>
             )}
             <button
               onClick={() => startSync.mutate()}
               disabled={isStarting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 disabled:opacity-40 transition-all duration-150"
+              className="btn-primary"
             >
               {(isRunning || isStarting) ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -505,23 +505,23 @@ export function Data() {
             </button>
             <button
               onClick={() => setOpenSettings('pipeline-scope')}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+              className="btn-ghost !h-8 text-xs"
             >
               <CheckSquare className="h-3.5 w-3.5" />
               数据范围
             </button>
-            <div className="w-px h-4 bg-border" />
+            <div className="h-4 w-px bg-border" />
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setShowCreateExt(true)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+                className="btn-ghost !h-8 text-xs"
               >
                 <Plus className="h-3.5 w-3.5" />
                 扩展数据
               </button>
               <button
                 onClick={() => setOpenSettings('page-settings')}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+                className="btn-ghost !h-8 text-xs"
               >
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 页面设置
@@ -529,7 +529,7 @@ export function Data() {
               <button
                 onClick={() => setShowClearConfirm(true)}
                 disabled={isRunning}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-muted hover:text-danger hover:bg-danger/8 text-xs transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none"
+                className="btn-ghost !h-8 text-xs text-muted hover:text-danger"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 清除数据
@@ -539,10 +539,11 @@ export function Data() {
         }
       />
 
-      <div className="px-8 py-6 space-y-6 max-w-6xl">
+      <div className="workspace-content overflow-auto">
+      <div className="mx-auto w-full max-w-6xl min-w-0 space-y-4">
         {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K, 仅实时行情等扩展能力受限 */}
         {isNoKey && (
-          <div className="flex items-center gap-2 rounded-card border border-border bg-elevated/40 px-3 py-2 text-xs">
+          <div className="flex items-center gap-2 panel bg-elevated/40 px-3 py-2 text-xs">
             <Info className="h-4 w-4 shrink-0 text-muted" />
             <span className="text-secondary leading-relaxed">
               当前为 None 档,将使用免费数据源获取历史日K(无需注册)。
@@ -589,11 +590,14 @@ export function Data() {
           />
 
           {/* 自动调度 */}
-          <div className="rounded-card border border-border bg-surface p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Calendar className="h-4 w-4 text-secondary" />
-              <h3 className="text-sm font-medium text-foreground">自动调度</h3>
+          <div className="panel">
+            <div className="panel-header">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-secondary" />
+                <h3 className="section-title">自动调度</h3>
+              </div>
             </div>
+            <div className="panel-body">
             {isLoading ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between"><Skeleton w="w-16" /><Skeleton w="w-28" /></div>
@@ -714,21 +718,23 @@ export function Data() {
                 </AnimatePresence>
               </div>
             )}
+            </div>
           </div>
 
           {/* 存储 */}
-          <div className="rounded-card border border-border bg-surface p-4">
-            <div className="flex items-center justify-between mb-3">
+          <div className="panel">
+            <div className="panel-header">
               <div className="flex items-center gap-2">
                 <HardDrive className="h-4 w-4 text-secondary" />
-                <h3 className="text-sm font-medium text-foreground">存储</h3>
+                <h3 className="section-title">存储</h3>
               </div>
               {isLoading ? (
                 <Skeleton w="w-12" />
               ) : (
-                <span className="font-mono text-xs text-muted">{s ? `${s.storage.total_size_mb} MB` : '—'}</span>
+                <span className="font-mono text-xs text-muted num">{s ? `${s.storage.total_size_mb} MB` : '—'}</span>
               )}
             </div>
+            <div className="panel-body">
             <div className="space-y-2">
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
@@ -769,6 +775,7 @@ export function Data() {
                 </div>
               )}
             </div>
+            </div>
           </div>
 
           {/* 受控外部行情降级(默认关闭) — 紧邻实时行情配置 */}
@@ -797,7 +804,7 @@ export function Data() {
         {/* 同步历史 */}
         <div>
           <SectionTitle icon={Clock}>同步历史</SectionTitle>
-          <div className="mt-3 rounded-card border border-border overflow-hidden">
+          <div className="mt-3 panel overflow-hidden">
             {history.isLoading ? (
               <div className="px-5 py-6 space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
@@ -894,7 +901,7 @@ export function Data() {
         {openSettings === 'index' && (
           <SettingsModal title="指数 · 手动获取" onClose={() => setOpenSettings(null)}>
             <div className="space-y-4">
-              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+              <div className="panel bg-base/30 p-4 space-y-3">
                 <div>
                   <div className="text-sm font-medium text-foreground">指数日 K</div>
                   <div className="text-[11px] text-muted mt-1">获取数据时会先刷新 CN_Index 维表，再向前扩展指数历史；指数不需要复权。</div>
@@ -1010,7 +1017,7 @@ export function Data() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/60"
               onClick={() => !clearData.isPending && setShowClearConfirm(false)}
             />
             <motion.div
@@ -1018,7 +1025,7 @@ export function Data() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: 8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              className="relative w-[90vw] max-w-[420px] rounded-card border border-border bg-base shadow-2xl p-6"
+              className="panel relative w-[90vw] max-w-[420px] bg-base p-6"
             >
               <div className="flex items-start gap-3">
                 <div className="shrink-0 h-10 w-10 rounded-full bg-danger/12 flex items-center justify-center">
@@ -1047,14 +1054,14 @@ export function Data() {
                 <button
                   onClick={() => setShowClearConfirm(false)}
                   disabled={clearData.isPending}
-                  className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors disabled:opacity-50"
+                  className="btn-secondary"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => clearData.mutate()}
                   disabled={clearData.isPending}
-                  className="px-3 py-1.5 rounded-btn bg-danger/90 text-base text-sm font-medium hover:bg-danger disabled:opacity-50 transition-colors"
+                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-btn bg-danger px-3 text-sm font-medium text-white hover:bg-danger/90 disabled:opacity-50"
                 >
                   {clearData.isPending ? '清除中…' : '清除数据'}
                 </button>
@@ -1063,6 +1070,7 @@ export function Data() {
           </div>
         )}
       </AnimatePresence>
-    </>
+      </div>
+    </div>
   )
 }

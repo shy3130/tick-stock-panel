@@ -42,16 +42,17 @@ function resolveDays(preset: RangePreset, rows: number): number {
 
 function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; title: string; hint?: ReactNode }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="h-3 w-0.5 rounded-full bg-gradient-to-b from-accent to-accent/30" />
-      <Icon className="h-3.5 w-3.5 text-accent" />
-      <h2 className="text-xs font-semibold text-foreground">{title}</h2>
-      {hint != null && <span className="ml-auto text-[10px] text-muted font-mono">{hint}</span>}
+    <div className="panel-header !border-0 !px-0 !py-0">
+      <div className="flex items-center gap-2">
+        <Icon className="h-3.5 w-3.5 text-accent" />
+        <h2 className="section-title text-xs">{title}</h2>
+      </div>
+      {hint != null && <span className="text-[10px] font-mono text-muted">{hint}</span>}
     </div>
   )
 }
 
-const cardCls = 'rounded-card border border-border bg-surface/80 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]'
+const cardCls = 'panel'
 
 export function Regime() {
   const qc = useQueryClient()
@@ -209,140 +210,146 @@ export function Regime() {
   const pieRef = useECharts(pieOption, [pieOption])
 
   return (
-    <div className="mx-auto max-w-[1440px] px-4 py-5 space-y-4">
-      {/* ── 标题栏 ── */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Activity className="h-5 w-5 text-accent" />
-          <h1 className="text-lg font-bold text-foreground">市场环境</h1>
-          {coverage.data && coverage.data.rows > 0 && (
-            <span className="text-[10px] text-muted font-mono">
-              {coverage.data.earliest_date} ~ {coverage.data.latest_date} · {coverage.data.rows} 天
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-btn border border-border overflow-hidden">
-            {(['1y', '2y', 'all'] as const).map(k => (
-              <button key={k} onClick={() => setRange(k)}
-                className={cn('px-3 py-1 text-xs transition-colors',
-                  range === k ? 'bg-accent text-white' : 'bg-surface text-secondary hover:text-accent')}>
-                {RANGE_LABELS[k]}
-              </button>
-            ))}
-          </div>
-          <button onClick={handleRecompute} disabled={recomputing}
-            className="inline-flex items-center gap-1.5 rounded-btn border border-border bg-surface px-3 py-1 text-xs text-secondary hover:text-accent hover:border-accent/40 transition-colors disabled:opacity-50">
-            <RefreshCw className={cn('h-3 w-3', recomputing && 'animate-spin')} />
-            {recomputing ? '重算中…' : '重算'}
-          </button>
-        </div>
-      </div>
-
-      {/* ── 最新日概览 ── */}
-      {latest ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {/* 状态卡 */}
-          <div className={cn(cardCls, 'p-3')}>
-            <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Gauge className="h-3 w-3" /> 最新状态 · {latest.date}
-            </div>
-            <div className="mt-1.5 flex items-baseline gap-2">
-              <span className="text-2xl font-bold" style={{ color: REGIME_STATE_COLORS[latest.state] }}>
-                {REGIME_STATE_LABELS[latest.state]}
+    <div className="workspace-page">
+      <div className="workspace-content mx-auto max-w-[1440px] gap-3">
+        <div className="workspace-toolbar justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Activity className="h-4 w-4 text-accent" />
+            <h1 className="section-title text-base">市场环境</h1>
+            {coverage.data && coverage.data.rows > 0 && (
+              <span className="text-[10px] font-mono text-muted">
+                {coverage.data.earliest_date} ~ {coverage.data.latest_date} · {coverage.data.rows} 天
               </span>
-              <span className="text-sm text-muted">{latest.score} 分</span>
-            </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-base">
-              <div className="h-full rounded-full transition-all"
-                style={{ width: `${Math.max(2, Math.min(100, latest.score))}%`, backgroundColor: REGIME_STATE_COLORS[latest.state] }} />
-            </div>
+            )}
           </div>
-
-          {/* 当前势头 */}
-          <div className={cn(cardCls, 'p-3')}>
-            <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              {(() => {
-                const TrendIcon = (momentum?.slope ?? 0) > 0.5 ? TrendingUp : (momentum?.slope ?? 0) < -0.5 ? TrendingDown : Minus
-                return <TrendIcon className={cn('h-3 w-3', (momentum?.slope ?? 0) > 0.5 ? 'text-bull' : (momentum?.slope ?? 0) < -0.5 ? 'text-bear' : 'text-muted')} />
-              })()} 当前势头
-            </div>
-            {momentum ? (
-              <>
-                <div className="mt-1.5 text-sm font-semibold text-foreground">
-                  连续 <span style={{ color: REGIME_STATE_COLORS[momentum.state] }}>{momentum.streak}</span> 天{REGIME_STATE_LABELS[momentum.state]}
-                </div>
-                <div className="mt-1 text-[10px] text-muted">
-                  5日{(momentum.slope > 0 ? '改善' : momentum.slope < 0 ? '恶化' : '持平')}
-                </div>
-              </>
-            ) : <div className="mt-1.5 text-sm text-muted">—</div>}
-          </div>
-
-          {/* 四维拆解 */}
-          <div className={cn(cardCls, 'p-3 col-span-2 sm:col-span-1')}>
-            <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Activity className="h-3 w-3" /> 四维拆解
-            </div>
-            <div className="mt-2 space-y-1">
-              {([
-                { label: '赚钱', val: latest.profit_score, color: '#f59e0b' },
-                { label: '投机', val: latest.speculation_score, color: '#a855f7' },
-                { label: '抗跌', val: latest.resilience_score, color: '#10b981' },
-                { label: '趋势', val: latest.trend_score, color: '#3b82f6' },
-              ] as const).map(d => (
-                <div key={d.label} className="flex items-center gap-1.5">
-                  <span className="w-6 shrink-0 text-[9px] text-muted">{d.label}</span>
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-base">
-                    <div className="h-full rounded-full transition-all"
-                      style={{ width: `${d.val ?? 0}%`, backgroundColor: d.color }} />
-                  </div>
-                  <span className="w-5 shrink-0 text-right text-[9px] font-mono text-muted">{d.val ?? '—'}</span>
-                </div>
+          <div className="workspace-toolbar">
+            <div className="flex overflow-hidden rounded-btn border border-border">
+              {(['1y', '2y', 'all'] as const).map(k => (
+                <button key={k} onClick={() => setRange(k)}
+                  className={cn('h-8 px-3 text-xs transition-colors',
+                    range === k ? 'bg-accent text-white' : 'bg-surface text-secondary hover:text-accent')}>
+                  {RANGE_LABELS[k]}
+                </button>
               ))}
             </div>
+            <button onClick={handleRecompute} disabled={recomputing}
+              className="btn-secondary text-xs">
+              <RefreshCw className={cn('h-3 w-3', recomputing && 'animate-spin')} />
+              {recomputing ? '重算中…' : '重算'}
+            </button>
           </div>
         </div>
-      ) : (
-        <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-          {history.isLoading ? '加载中…' : '暂无环境数据，请先运行盘后管道或点击「重算」'}
-        </div>
-      )}
 
-      {/* ── 状态色带时间轴 ── */}
-      {rows.length > 0 && (
-        <div className={cn(cardCls, 'p-3')}>
-          <SectionTitle icon={Activity} title="状态时间轴"
-            hint={`${rows[0]?.date} → ${rows[rows.length - 1]?.date} · ${rows.length} 天`} />
-          <div className="mt-2.5 flex h-7 w-full overflow-hidden rounded-md">
-            {rows.map(r => (
-              <div key={r.date} title={`${r.date} ${REGIME_STATE_LABELS[r.state]}(${r.score})`}
-                className="flex-1 min-w-[2px] transition-opacity hover:opacity-80"
-                style={{ backgroundColor: REGIME_STATE_COLORS[r.state] }} />
-            ))}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[10px] text-muted">
-            {STATE_ORDER.map(s => (
-              <span key={s} className="flex items-center gap-1">
-                <span className="inline-block h-2.5 w-2.5 rounded"
-                  style={{ backgroundColor: REGIME_STATE_COLORS[s] }} />
-                {REGIME_STATE_LABELS[s]}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+        {latest ? (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className={cn(cardCls)}>
+              <div className="panel-body">
+                <div className="section-kicker flex items-center gap-1.5">
+                  <Gauge className="h-3 w-3" /> 最新状态 · {latest.date}
+                </div>
+                <div className="mt-1.5 flex items-baseline gap-2">
+                  <span className="metric-value text-2xl" style={{ color: REGIME_STATE_COLORS[latest.state] }}>
+                    {REGIME_STATE_LABELS[latest.state]}
+                  </span>
+                  <span className="text-sm text-muted">{latest.score} 分</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-base">
+                  <div className="h-full rounded-full transition-all"
+                    style={{ width: `${Math.max(2, Math.min(100, latest.score))}%`, backgroundColor: REGIME_STATE_COLORS[latest.state] }} />
+                </div>
+              </div>
+            </div>
 
-      {/* ── 趋势图 + 分布图 ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className={cn(cardCls, 'p-3 lg:col-span-2')}>
-          <SectionTitle icon={Activity} title="环境综合分趋势"
-            hint="综合分主线 · 背景色=状态 · 阈值虚线" />
-          <div ref={trendRef} className="mt-2 h-[320px]" />
-        </div>
-        <div className={cn(cardCls, 'p-3')}>
-          <SectionTitle icon={Gauge} title="状态分布" hint={`近 ${days} 天`} />
-          <div ref={pieRef} className="mt-2 h-[320px]" />
+            <div className={cn(cardCls)}>
+              <div className="panel-body">
+                <div className="section-kicker flex items-center gap-1.5">
+                  {(() => {
+                    const TrendIcon = (momentum?.slope ?? 0) > 0.5 ? TrendingUp : (momentum?.slope ?? 0) < -0.5 ? TrendingDown : Minus
+                    return <TrendIcon className={cn('h-3 w-3', (momentum?.slope ?? 0) > 0.5 ? 'text-bull' : (momentum?.slope ?? 0) < -0.5 ? 'text-bear' : 'text-muted')} />
+                  })()} 当前势头
+                </div>
+                {momentum ? (
+                  <>
+                    <div className="mt-1.5 text-sm font-semibold text-foreground">
+                      连续 <span style={{ color: REGIME_STATE_COLORS[momentum.state] }}>{momentum.streak}</span> 天{REGIME_STATE_LABELS[momentum.state]}
+                    </div>
+                    <div className="mt-1 text-[10px] text-muted">
+                      5日{(momentum.slope > 0 ? '改善' : momentum.slope < 0 ? '恶化' : '持平')}
+                    </div>
+                  </>
+                ) : <div className="mt-1.5 text-sm text-muted">—</div>}
+              </div>
+            </div>
+
+            <div className={cn(cardCls, 'col-span-2 sm:col-span-1')}>
+              <div className="panel-body">
+                <div className="section-kicker flex items-center gap-1.5">
+                  <Activity className="h-3 w-3" /> 四维拆解
+                </div>
+                <div className="mt-2 space-y-1">
+                  {([
+                    { label: '赚钱', val: latest.profit_score, color: 'hsl(var(--warning))' },
+                    { label: '投机', val: latest.speculation_score, color: 'hsl(var(--accent))' },
+                    { label: '抗跌', val: latest.resilience_score, color: 'hsl(var(--bear))' },
+                    { label: '趋势', val: latest.trend_score, color: 'hsl(var(--accent))' },
+                  ] as const).map(d => (
+                    <div key={d.label} className="flex items-center gap-1.5">
+                      <span className="w-6 shrink-0 text-[9px] text-muted">{d.label}</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-base">
+                        <div className="h-full rounded-full transition-all"
+                          style={{ width: `${d.val ?? 0}%`, backgroundColor: d.color }} />
+                      </div>
+                      <span className="w-5 shrink-0 text-right text-[9px] font-mono text-muted">{d.val ?? '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="panel border-dashed p-8 text-center text-sm text-muted">
+            {history.isLoading ? '加载中…' : '暂无环境数据，请先运行盘后管道或点击「重算」'}
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <div className={cn(cardCls)}>
+            <div className="panel-body space-y-2.5">
+              <SectionTitle icon={Activity} title="状态时间轴"
+                hint={`${rows[0]?.date} → ${rows[rows.length - 1]?.date} · ${rows.length} 天`} />
+              <div className="flex h-7 w-full overflow-hidden rounded-btn">
+                {rows.map(r => (
+                  <div key={r.date} title={`${r.date} ${REGIME_STATE_LABELS[r.state]}(${r.score})`}
+                    className="min-w-[2px] flex-1 transition-opacity hover:opacity-80"
+                    style={{ backgroundColor: REGIME_STATE_COLORS[r.state] }} />
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[10px] text-muted">
+                {STATE_ORDER.map(s => (
+                  <span key={s} className="flex items-center gap-1">
+                    <span className="status-dot" style={{ backgroundColor: REGIME_STATE_COLORS[s] }} />
+                    {REGIME_STATE_LABELS[s]}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <div className={cn(cardCls, 'lg:col-span-2')}>
+            <div className="panel-body">
+              <SectionTitle icon={Activity} title="环境综合分趋势"
+                hint="综合分主线 · 背景色=状态 · 阈值虚线" />
+              <div ref={trendRef} className="mt-2 h-[320px]" />
+            </div>
+          </div>
+          <div className={cn(cardCls)}>
+            <div className="panel-body">
+              <SectionTitle icon={Gauge} title="状态分布" hint={`近 ${days} 天`} />
+              <div ref={pieRef} className="mt-2 h-[320px]" />
+            </div>
+          </div>
         </div>
       </div>
     </div>

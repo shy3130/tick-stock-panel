@@ -66,20 +66,18 @@ import {
   type TradingAppendEventPayload,
 } from '@/lib/api'
 
-// ===== 样式(沿用项目 tokens) =====
+// ===== 样式(共享工作区 classes) =====
 
-const INPUT =
-  'rounded-btn border border-border bg-base px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors placeholder:text-muted/60 focus:border-accent/50'
-const BTN_PRIMARY =
-  'inline-flex items-center gap-1.5 rounded-btn bg-accent px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50'
-const BTN_GHOST =
-  'inline-flex items-center gap-1.5 rounded-btn border border-border bg-elevated px-3 py-1.5 text-xs text-secondary transition-colors hover:text-foreground disabled:opacity-50'
+const INPUT = 'control w-full !h-8 text-xs'
+const BTN_PRIMARY = 'btn-primary !h-8 text-xs'
+const BTN_GHOST = 'btn-secondary !h-8 text-xs'
 const BTN_DANGER =
-  'inline-flex items-center gap-1.5 rounded-btn bg-danger px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-danger/90 disabled:opacity-50'
+  'inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-btn border border-transparent bg-danger px-3 text-xs font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-50'
 
-const TH = 'px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-muted border-b border-border'
-const TD = 'px-3 py-2 text-xs border-b border-border/50'
-const TD_NUM = `${TD} text-right font-mono tabular-nums`
+const TH = ''
+const TD = ''
+const TD_NUM = 'text-right font-mono tabular-nums'
+
 
 // ===== 领域常量(与 backend services/trading 一致) =====
 
@@ -196,11 +194,11 @@ export function Trading() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="workspace-page">
       <PageHeader title="交易" subtitle="生命周期 · 门禁 · 计划与账户" />
 
       {/* tab 栏 */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border px-5 pt-3 pb-2">
+      <div className="workspace-toolbar border-b border-border px-3 sm:px-4 !min-h-0 py-2">
         {TABS.map(t => (
           <button
             key={t.key}
@@ -215,8 +213,8 @@ export function Trading() {
         ))}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto px-5 py-4">
-        <div className="mx-auto max-w-6xl">
+      <div className="workspace-content overflow-auto">
+        <div className="mx-auto w-full max-w-6xl min-w-0 space-y-3">
           {tab === 'positions' && <PositionsPanel onSelectTrade={openDetail} />}
           {tab === 'detail' && (
             selectedId
@@ -248,15 +246,16 @@ function SectionCard({ title, extra, children }: {
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-card border border-border bg-surface overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+    <section className="panel overflow-hidden">
+      <div className="panel-header">
+        <h3 className="section-title">{title}</h3>
         {extra}
       </div>
-      <div className="p-4">{children}</div>
+      <div className="panel-body">{children}</div>
     </section>
   )
 }
+
 
 /** 门禁预检未过: 红线清单 + 绕门二次确认 */
 function GateFailPanel({ evaluation, pending, onConfirm, onCancel }: {
@@ -267,7 +266,7 @@ function GateFailPanel({ evaluation, pending, onConfirm, onCancel }: {
 }) {
   const failed = evaluation.gates.filter(g => !g.passed)
   return (
-    <div className="space-y-3 rounded-card border border-danger/40 bg-danger/5 p-4">
+    <div className="panel space-y-3 border-danger/40 bg-danger/5 p-3">
       <div className="flex items-center gap-2 text-sm font-medium text-danger">
         <ShieldAlert className="h-4 w-4" />门禁预检未通过, 动作未执行
       </div>
@@ -319,11 +318,11 @@ function PositionsPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void
     <div className="space-y-4">
       {/* 组合快照 */}
       {portfolioQuery.isLoading ? (
-        <div className="rounded-card border border-border bg-surface px-5 py-8 text-center text-sm text-muted">加载组合快照中…</div>
+        <div className="panel px-5 py-8 text-center text-sm text-muted">加载组合快照中…</div>
       ) : pf ? (
         <PortfolioHeader pf={pf} />
       ) : (
-        <div className="rounded-card border border-border bg-surface px-5 py-8 text-center text-sm text-muted">组合快照不可用。</div>
+        <div className="panel px-5 py-8 text-center text-sm text-muted">组合快照不可用。</div>
       )}
 
       {/* fhold 真实券商持仓 */}
@@ -354,8 +353,8 @@ function PositionsPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void
         ) : trades.length === 0 ? (
           <p className="py-6 text-center text-xs text-muted">暂无交易记录, 从下方「新建仓」开始。</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px]">
+          <div className="data-table-scroll">
+            <table className="data-table min-w-[760px]">
               <thead>
                 <tr>
                   <th className={TH}>tradeId</th>
@@ -431,9 +430,9 @@ function PortfolioHeader({ pf }: { pf: PortfolioSnapshot }) {
       </div>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {cards.map(c => (
-          <div key={c.label} className="rounded-card border border-border bg-surface p-4">
+          <div key={c.label} className="panel p-3">
             <div className="text-xs text-muted">{c.label}</div>
-            <div className={cn('mt-1 font-mono text-lg font-medium tabular-nums text-foreground', c.cls)}>
+            <div className={cn('metric-value mt-1 text-base', c.cls)}>
               {c.value}
             </div>
           </div>
@@ -454,14 +453,14 @@ function FholdTable({ pf }: { pf: PortfolioSnapshot }) {
   return (
     <SectionCard title="券商持仓 (fhold)">
       {!pf.fhold.available ? (
-        <div className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3 text-xs text-warning">
+        <div className="panel border-warning/40 bg-warning/5 px-4 py-3 text-xs text-warning">
           fhold 券商持仓暂不可用(未接入或读取失败), 当前仅展示生命周期记录与账户快照。
         </div>
       ) : pf.fhold.positions.length === 0 ? (
         <p className="py-4 text-center text-xs text-muted">券商账户当前无持仓。</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px]">
+        <div className="data-table-scroll">
+          <table className="data-table min-w-[820px]">
             <thead>
               <tr>
                 <th className={TH}>账户</th>
@@ -614,7 +613,7 @@ function DetailPanel({ tradeId }: { tradeId: string }) {
   })
 
   if (detailQuery.isLoading) {
-    return <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-sm text-muted">加载交易详情中…</div>
+    return <div className="panel px-5 py-10 text-center text-sm text-muted">加载交易详情中…</div>
   }
   const trade = detailQuery.data?.trade
   if (!trade) {
@@ -1284,7 +1283,7 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
           <p className="py-6 text-center text-xs text-muted">加载计划中…</p>
         ) : (
           <div className="space-y-3">
-            <div className="overflow-x-auto">
+            <div className="data-table-scroll">
               <div className="min-w-[860px] space-y-2">
                 {/* 表头 */}
                 <div className="grid grid-cols-[7rem_7rem_1fr_6rem_1fr_2rem] items-center gap-2 px-1">
@@ -1726,8 +1725,8 @@ function ContinuitySection({ artifact }: { artifact: PlanCheckArtifact }) {
           ) : chainQuery.isError ? (
             <p className="text-[10px] text-danger">父链查询失败</p>
           ) : chainQuery.data && chainQuery.data.chain.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="min-w-full border-separate border-spacing-0 text-[10px]">
+            <div className="data-table-scroll">
+              <table className="data-table min-w-full text-[10px]">
                 <thead>
                   <tr>
                     {['节点', '模式', '新增 bar', '数据截止', 'tokens', '原因'].map(h => (
@@ -1793,7 +1792,7 @@ function DeviationCard({ title, count, loading, children }: {
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-card border border-border bg-surface p-4">
+    <section className="panel p-3">
       <div className="flex items-center justify-between">
         <h4 className="text-xs font-medium text-foreground">{title}</h4>
         <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">
@@ -1875,7 +1874,7 @@ function AccountsPanel() {
   }
 
   if (accountsQuery.isLoading) {
-    return <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-sm text-muted">加载账户中…</div>
+    return <div className="panel px-5 py-10 text-center text-sm text-muted">加载账户中…</div>
   }
   if (!first) {
     return <EmptyState icon={Wallet} title="暂无资金账户" hint="后端尚未配置资金账户(accounts.json)。" />
@@ -1905,7 +1904,7 @@ function AccountsPanel() {
             </label>
           </div>
 
-          <div className="rounded-card border border-border/60 bg-base/40 p-3">
+          <div className="panel border-border/60 bg-base/40 p-3">
             <div className="text-[10px] text-muted">追加资金变更(随保存一并提交, 历史不可改)</div>
             <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-[10rem_1fr]">
               <input
@@ -2007,7 +2006,7 @@ const PLAN: { title: string; desc: string }[] = [
 function BridgePanel() {
   return (
     <div className="max-w-3xl">
-      <section className="rounded-card border border-border bg-surface p-5">
+      <section className="panel p-4">
         <h3 className="text-sm font-semibold text-foreground">信号自动下单桥接 · 后续实现规划</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted">
           把监控产生的买卖信号, 自动推送给支持外部信号的交易软件(QMT/掘金/Ptrade 等)执行下单。

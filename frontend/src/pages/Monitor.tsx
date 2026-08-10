@@ -96,57 +96,55 @@ export function Monitor() {
   }, [])
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="workspace-page h-full">
       <PageHeader title="监控中心" subtitle="实时信号与规则管理" />
-      <div className="flex-1 min-h-0 px-5 py-4">
-        <div className="mx-auto flex h-full max-w-7xl flex-col gap-4 lg:flex-row">
+      <div className="workspace-content min-h-0 flex-1 !gap-0 overflow-hidden p-3 sm:p-4">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col gap-3 lg:flex-row">
           {/* 左栏: 触发记录 */}
-          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-surface/40 shadow-lg shadow-black/5">
-            <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
+          <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="panel-header flex-wrap gap-2">
               <SectionHeader icon={BellRing} title="触发记录" />
-              {/* 过滤标签 */}
-              <div className="flex flex-wrap items-center gap-0.5">
+              <div className="workspace-toolbar">
                 {(['all', 'strategy', 'signal', 'price', 'market'] as const).map(f => (
                   <button
                     key={f}
                     onClick={() => setFilter(f)}
                     className={cn(
-                      'rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-all cursor-pointer',
-                      filter === f ? 'bg-accent/15 text-accent' : 'text-muted hover:bg-elevated/60 hover:text-secondary',
+                      'btn-ghost h-7 px-2 text-[10px]',
+                      filter === f ? 'bg-accent/15 text-accent' : '',
                     )}
                   >
                     {f === 'all' ? '全部' : TYPE_LABEL[f]}
                   </button>
                 ))}
               </div>
-              {/* 数量 + 清空 */}
-              <div className="ml-auto flex items-center gap-2 shrink-0">
-                <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{total}</span>
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                <span className="rounded-btn bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-muted">{total}</span>
                 {total > 0 && (
                   <button
                     onClick={() => setConfirmClear(true)}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted transition-colors hover:bg-danger/10 hover:text-danger cursor-pointer"
+                    className="btn-ghost h-7 px-2 text-[10px] hover:bg-danger/10 hover:text-danger"
                   >
                     <Trash2 className="h-2.5 w-2.5" />清空
                   </button>
                 )}
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto p-3.5">
+            <div className="panel-body min-h-0 flex-1 overflow-auto">
               <AlertsList alertsQuery={alertsQuery} confirmClear={confirmClear} setConfirmClear={setConfirmClear} total={total} enterTs={enterTsRef.current} />
             </div>
           </section>
 
           {/* 右栏: 监控规则 */}
-          <section className="flex min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border bg-surface/40 shadow-lg shadow-black/5 lg:w-[400px] lg:shrink-0">
-            <div className="flex items-center gap-3 border-b border-border/60 bg-surface/60 px-4 py-2.5">
+          <section className="panel flex min-h-0 w-full flex-col overflow-hidden lg:w-[400px] lg:shrink-0">
+            <div className="panel-header">
               <SectionHeader icon={ListChecks} title="监控规则" />
-              <span className="rounded-md bg-elevated/50 px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>
+              <span className="rounded-btn bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-muted">{rulesCount}</span>
               <div className="ml-auto flex items-center gap-1">
                 <button
                   onClick={() => { setEditingRule(null); setEditorOpen(true) }}
                   title="新建规则"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-accent/40 hover:text-accent hover:shadow-sm cursor-pointer"
+                  className="btn-ghost h-7 w-7 px-0"
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
@@ -154,13 +152,13 @@ export function Monitor() {
                   onClick={() => setConfirmClearRules(true)}
                   disabled={rulesCount === 0}
                   title="清除全部规则"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-border/60 bg-surface text-muted transition-all hover:border-danger/40 hover:text-danger disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  className="btn-ghost h-7 w-7 px-0 hover:text-danger disabled:opacity-30"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto p-3.5">
+            <div className="panel-body min-h-0 flex-1 overflow-auto">
               <RulesList
                 rulesQuery={rulesQuery}
                 onEdit={(r) => { setEditingRule(r); setEditorOpen(true) }}
@@ -650,7 +648,7 @@ function RuleEditorDialog({ open, rule, onClose }: { open: boolean; rule: Monito
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/40 p-4"
           onClick={onClose}
         >
           <motion.div
@@ -691,7 +689,7 @@ function ConfirmDialog({ open, title, message, confirmText, danger, pending, onC
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={onCancel}
         >
           <motion.div
@@ -699,7 +697,7 @@ function ConfirmDialog({ open, title, message, confirmText, danger, pending, onC
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.15 }}
-            className="w-full max-w-sm rounded-2xl border border-border bg-surface p-5 shadow-2xl"
+            className="panel w-full max-w-sm bg-surface p-5"
             onClick={e => e.stopPropagation()}
           >
             <h3 className="text-sm font-medium text-foreground">{title}</h3>
