@@ -383,6 +383,30 @@ def run_now(
         except Exception as e:  # noqa: BLE001
             logger.warning("historical turnover recompute non-fatal for incremental/repair: %s", e)
 
+    # Step 2.2: regime 增量计算 — enriched 完成后补算环境时序。
+    # 非致命失败: 记录警告但不中断主 pipeline。
+    try:
+        from app.services import regime_builder
+        regime_builder.compute_regime_incremental(repo, repo.store.data_dir)
+        from app.api.regime import invalidate_regime_cache
+        invalidate_regime_cache()
+        emit("compute_enriched", 90, "环境时序(regime)增量计算完成")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("regime incremental compute non-fatal: %s", e)
+
+    # Step 2.15: 信号记分卡 — post-enriched 实例化 + pending 评估 (opt-in, 非致命)。
+    # tracked_signals 默认空 (用户在设置页显式开启); 失败不得阻断主管道。
+    try:
+        from app.jobs import signal_scorecard_job
+        _tracked = _prefs.get_tracked_signals()
+        if _tracked:
+            signal_scorecard_job.generate_instances(
+                repo, repo.store.data_dir, _tracked, today
+            )
+            signal_scorecard_job.evaluate_pending(repo, repo.store.data_dir)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("signal scorecard hook non-fatal: %s", e)
+
     # Step 2.3: 指数 / ETF / 港股同步 — 物理分开存储。
     # ETF 会尝试同步复权因子，但本地事件仅覆盖极少数标的，不能视作完整复权；
     # 港股则无本地除权数据源，保持未复权（见 sync_and_persist_hk_daily 注释）。
