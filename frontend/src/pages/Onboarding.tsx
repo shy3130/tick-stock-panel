@@ -74,7 +74,7 @@ export function Onboarding() {
       <header className="relative z-10 flex items-center justify-between border-b border-border px-6 py-4">
         <div className="flex items-center gap-2.5 text-foreground">
           <Logo size={24} className="shrink-0 text-accent" />
-          <span className="text-sm font-semibold tracking-tight">TickFlow Stock Panel</span>
+          <span className="text-sm font-semibold tracking-tight">Quant Research Workbench</span>
         </div>
         {/* 步骤进度条 —— 胶囊式 */}
         <div className="flex items-center gap-1.5">
@@ -144,7 +144,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       </motion.div>
 
       <h1 className="mt-6 text-3xl font-bold text-foreground tracking-tight">
-        欢迎使用 TickFlow Stock Panel
+        欢迎使用量化研究工作台
       </h1>
       <p className="mt-3 text-sm text-secondary leading-relaxed max-w-md mx-auto">
         一个本地化的 A 股量化分析面板 —— 行情、选股、回测、监控、财务一体化。

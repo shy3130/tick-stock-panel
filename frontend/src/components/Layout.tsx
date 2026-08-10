@@ -546,14 +546,14 @@ export function Layout() {
       <div className="shrink-0 border-b border-border px-3 py-3">
         <div className="flex items-center gap-2.5">
           <div className="flex h-7 w-7 items-center justify-center rounded-btn border border-border bg-elevated font-mono text-[11px] font-bold tracking-wider text-accent">
-            FM
+            QR
           </div>
           <div className="min-w-0">
             <div className="truncate text-[13px] font-semibold tracking-tight text-foreground">
-              TickFlow
+              Quant Research
             </div>
             <div className="truncate text-[10px] uppercase tracking-[0.14em] text-muted">
-              Research Workbench
+              Workbench
             </div>
           </div>
         </div>

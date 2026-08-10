@@ -25,12 +25,12 @@ interface Variant {
   glow?: string                       // 名字下方的发光线条 hex
 }
 
-// 同一个名字 "TickFlow Stock Panel" 在 4 种风格语言里的呈现
+// 同一个名字 "Quant Research Workbench" 在 4 种风格语言里的呈现
 // 长字符串自动用更小字号 + 更窄字距,免得撑爆卡片;但风格语言(字体/字重/配色/图标)保持不变
 const VARIANTS: Variant[] = [
   {
     id: 'pulsar',
-    name: 'TickFlow Stock Panel',
+    name: 'Quant Research Workbench',
     tagline: 'A-SHARE · SIGNAL TERMINAL',
     hint: '脉冲星、雷达波纹 — 青绿强调色,字重黑体,中等字距',
     icon: RadioTower,
@@ -40,7 +40,7 @@ const VARIANTS: Variant[] = [
   },
   {
     id: 'vanta',
-    name: 'TickFlow Stock Panel',
+    name: 'Quant Research Workbench',
     tagline: 'MARKET · INTELLIGENCE',
     hint: 'Vantablack — 纯白单色,字重最重,字距最宽,monochrome 高级感',
     icon: Square,
@@ -50,7 +50,7 @@ const VARIANTS: Variant[] = [
   },
   {
     id: 'helix',
-    name: 'TickFlow Stock Panel',
+    name: 'Quant Research Workbench',
     tagline: 'QUANT · TERMINAL',
     hint: 'DNA 螺旋 — 紫色强调,等宽字体,赛博朋克经典意象',
     icon: GitFork,
@@ -60,7 +60,7 @@ const VARIANTS: Variant[] = [
   },
   {
     id: 'aurora',
-    name: 'TickFlow Stock Panel',
+    name: 'Quant Research Workbench',
     tagline: 'A-SHARE · DASHBOARD',
     hint: '极光 — 青色强调,细字优雅,适中字距,与涨跌语义色不冲突',
     icon: Sparkles,
@@ -85,7 +85,7 @@ export function Branding() {
     <div className="workspace-page">
       <PageHeader
         title="视觉风格预览"
-        subtitle="名字保持 TickFlow Stock Panel,4 种赛博朋克 + 高级感的视觉处理 — 字重、字距、配色、图标各不同。挑你最喜欢的告诉我。"
+        subtitle="以 Quant Research Workbench 为统一产品名，比较 4 种视觉处理中的字重、字距、配色与图标。"
       />
 
       <div className="workspace-content overflow-auto">

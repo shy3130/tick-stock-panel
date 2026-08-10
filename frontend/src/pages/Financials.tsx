@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, Lock, Loader2, X, Search, FileText, Database, Clock, CheckCircle2, Hourglass, Lightbulb, ExternalLink } from 'lucide-react'
+import { RefreshCw, Lock, Loader2, X, Search, FileText, Database, Clock, CheckCircle2, Hourglass, Lightbulb } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { useCapabilities } from '@/lib/useSharedQueries'
@@ -78,15 +78,9 @@ export function Financials() {
               <p className="mt-1.5 text-[11px] leading-relaxed text-secondary">
                 FQuant 数据源的财务数据走 fstore。
               </p>
-              <a
-                href="https://github.com/shy3130/tickflow-stock-panel/issues"
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
-              >
-                前往 Issues 推荐
-                <ExternalLink className="h-3 w-3" />
-              </a>
+              <p className="mt-2 text-[11px] leading-relaxed text-secondary">
+                如需财务能力，请在数据源设置中选择支持该 capability 的 provider。
+              </p>
             </div>
           </div>
         </div>

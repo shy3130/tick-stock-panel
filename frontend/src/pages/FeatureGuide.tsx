@@ -403,7 +403,7 @@ export function FeatureGuide() {
                 先确认数据，再解释信号，最后做自己的决策。
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-relaxed text-secondary">
-                TickFlow 以本地 DuckDB 与封存的 enriched 数据为研究主链路。每个模块都应先看它使用的数据范围和最新日期；实时、AI、通知与计划检查均需要明确的 capability 或用户配置。
+                量化研究工作台以本地 DuckDB 与封存的 enriched 数据为研究主链路。每个模块都应先看它使用的数据范围和最新日期；实时、AI、通知与计划检查均需要明确的 capability 或用户配置。
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 {['本地数据优先', '能力门控', '可追溯研究', '不自动交易'].map((label) => (

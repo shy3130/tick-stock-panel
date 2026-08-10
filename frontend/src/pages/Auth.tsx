@@ -86,7 +86,7 @@ export function Auth() {
         {/* Logo */}
         <div className="mb-6 flex flex-col items-center gap-2">
           <Logo className="h-10 w-10" />
-          <h1 className="text-lg font-semibold tracking-tight text-foreground">TickFlow Stock Panel</h1>
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">Quant Research Workbench</h1>
           <p className="section-kicker">Access Control</p>
         </div>
 
@@ -169,15 +169,7 @@ export function Auth() {
                 出于安全考虑, 首次设置密码需在服务器本机或内网访问时操作。公网环境下仅可登录。
               </p>
               <p>
-                详细配置说明见{' '}
-                <a
-                  href="https://github.com/shy3130/tickflow-stock-panel/blob/main/docs/deploy-password.md"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-accent underline-offset-2 hover:underline"
-                >
-                  访问密码部署文档
-                </a>
+                访问密码和网络访问策略由部署管理员按当前运行环境统一配置。
               </p>
             </div>
           )}
