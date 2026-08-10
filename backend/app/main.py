@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import agent, analysis, auth as auth_api, backtest, data, documents, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, patterns, pipeline, research, review, rps, screener, settings as settings_api, signals, stock_analysis, strategy, strategy_profile, trade_journal, trading, trading_plans, trading_review, watchlist
+from app.api import agent, analysis, auth as auth_api, backtest, backtest_parameter_grid, cross_section, data, documents, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, patterns, pipeline, regime, research, review, rps, screener, settings as settings_api, signal_scorecard, signals, stock_analysis, strategy, strategy_profile, trade_journal, trading, trading_plans, trading_review, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.log_redaction import install_secret_redaction_filter
@@ -126,6 +126,7 @@ async def lifespan(app: FastAPI):
 
     # 策略引擎
     from app.strategy.engine import StrategyEngine
+    from app.strategy import config as strategy_config
     from app.strategy.monitor import StrategyMonitorService
     from app.services.screener import ScreenerService
 
@@ -134,11 +135,15 @@ async def lifespan(app: FastAPI):
         Path(__file__).resolve().parent / "strategy" / "builtin",
         store.data_dir / "strategies" / "custom",
         store.data_dir / "strategies" / "ai",
+        store.data_dir / "strategies" / "composite",
     ]
     strategy_engine = StrategyEngine(
         enriched_loader=_screener_svc._load_enriched_for_date,
         enriched_history_loader=_screener_svc._load_enriched_history,
         strategy_dirs=strategy_dirs,
+        override_loader=lambda strategy_id: strategy_config.load_override(
+            store.data_dir, strategy_id
+        ),
     )
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
@@ -274,6 +279,7 @@ app.include_router(kline.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
+app.include_router(backtest_parameter_grid.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
@@ -281,6 +287,7 @@ app.include_router(analysis.router)
 app.include_router(agent.router)
 app.include_router(pipeline.router)
 app.include_router(research.router)
+app.include_router(cross_section.router)
 app.include_router(data.router)
 app.include_router(documents.router)
 app.include_router(ext_data.router)
@@ -290,7 +297,9 @@ app.include_router(market_recap.router)
 app.include_router(review.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
+app.include_router(regime.router)
 app.include_router(signals.router)
+app.include_router(signal_scorecard.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)

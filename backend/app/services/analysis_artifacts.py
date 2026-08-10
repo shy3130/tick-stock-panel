@@ -46,6 +46,7 @@ __all__ = [
     "ArtifactExistsError",
     "ReplayPlan",
     "build_artifact",
+    "find_latest_artifact",
     "is_replayable",
     "list_artifacts",
     "list_failed",
@@ -308,6 +309,36 @@ def list_artifacts(
     if limit is not None:
         items = items[:limit]
     return items
+
+
+def find_latest_artifact(
+    data_dir: Path,
+    *,
+    purpose: str | None = None,
+    status: str | None = None,
+    symbol: str | None = None,
+    schema_version: str | None = None,
+    program_rules_version: str | None = None,
+) -> AnalysisArtifact | None:
+    """返回最新 (created_at 最大) 的匹配 artifact，或 None。
+
+    泛用过滤函数：可按 purpose / status / symbol / schema_version /
+    program_rules_version 任意组合过滤。用于跨日连续性 parent 选择等场景。
+    """
+    items = list_artifacts(
+        data_dir,
+        status=status,
+        purpose=purpose,
+    )
+    if symbol is not None:
+        items = [a for a in items if (a.symbol or "") == symbol]
+    if schema_version is not None:
+        items = [a for a in items if a.schema_version == schema_version]
+    if program_rules_version is not None:
+        items = [
+            a for a in items if a.program_rules_version == program_rules_version
+        ]
+    return items[0] if items else None
 
 
 def list_failed(

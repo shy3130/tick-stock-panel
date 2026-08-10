@@ -498,8 +498,9 @@ def _no_action_result(
     warnings: list[str] | None = None,
     stage1: dict[str, Any] | None = None,
     ai_meta: dict[str, Any] | None = None,
+    continuity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "status": "no_action",
         "gate": gate.model_dump(mode="json"),
         "stage1": stage1,
@@ -509,6 +510,9 @@ def _no_action_result(
         "trace": [n.model_dump(mode="json") for n in trace],
         "warnings": list(warnings or []),
     }
+    if continuity is not None:
+        result["continuity"] = continuity
+    return result
 
 
 def _empty_ai_meta() -> dict[str, Any]:
@@ -610,6 +614,7 @@ async def run_plan_check(
     stage1_generate: GenerateCallable | None = None,
     stage2_generate: GenerateCallable | None = None,
     analysis_frame: KlineAnalysisFrame | None = None,
+    enable_continuity: bool = False,
 ) -> AnalysisArtifact:
     """对已保存的计划 entry 执行两阶段计划检查。
 
@@ -627,6 +632,10 @@ async def run_plan_check(
     data_as_of = _utcnow()
     total_usage = AIUsage()
     trace: list[AnalysisTraceNode] = []
+    parent_attempt_id: str | None = None
+    continuity_meta: dict[str, Any] | None = None
+    market: str | None = None
+    adjustment: str | None = None
     warnings: list[str] = []
 
     # ── 1. preflight: 读已保存计划 ──
@@ -832,6 +841,29 @@ async def run_plan_check(
 
     data_as_of = frame.data_as_of
     market = market_of(symbol).market
+    adjustment = frame.adjustment
+    # ── M25: 跨日连续性评估 (显式 opt-in, 有 canonical frame 即评估) ──
+    # 先于 preflight 执行, 使 data_incomplete/no_action artifact 也保留连续性链;
+    # 该步骤只比较本地事实, 不调 AI, 不改变程序门禁。
+    if enable_continuity:
+        from app.services import ai_continuity as cont
+
+        parent = cont.select_parent(
+            data_dir,
+            symbol=symbol,
+            purpose=PURPOSE,
+            schema_version="v1",
+            program_rules_version=PROGRAM_RULES_VERSION,
+        )
+        verdict = cont.assess_continuity(
+            parent,
+            frame,
+            profile_id=profile_id,
+            prompt_version=PROMPT_VERSION,
+        )
+        continuity_meta = cont.build_continuity_meta(verdict)
+        parent_attempt_id = verdict.parent_attempt_id
+        warnings.append(f"连续性: {verdict.mode.value} — {verdict.reason}")
     preflight = preflight_analysis(
         frame,
         purpose=PURPOSE,
@@ -882,6 +914,7 @@ async def run_plan_check(
             gate=gate,
             trace=trace,
             warnings=warnings,
+            continuity=continuity_meta,
         )
         return _persist_and_build(
             data_dir,
@@ -894,6 +927,9 @@ async def run_plan_check(
             entry=entry,
             data_as_of=data_as_of,
             status="cancelled",
+            parent_attempt_id=parent_attempt_id,
+            market=market,
+            adjustment=adjustment,
         )
     if not preflight.ok:
         detail = str(preflight.error.detail if preflight.error else "K 线 preflight 未通过")
@@ -919,6 +955,7 @@ async def run_plan_check(
             gate=gate,
             trace=trace,
             warnings=[*warnings, detail],
+            continuity=continuity_meta,
         )
         return _persist_and_build(
             data_dir,
@@ -931,7 +968,11 @@ async def run_plan_check(
             entry=entry,
             data_as_of=data_as_of,
             status="ok",
+            parent_attempt_id=parent_attempt_id,
+            market=market,
+            adjustment=adjustment,
         )
+
 
     # ── 5. Stage1 诊断 (结构化 AI) ──
     stage1_data: dict[str, Any] | None = None
@@ -1051,6 +1092,7 @@ async def run_plan_check(
             warnings=[*warnings, f"门禁状态 {gate.status}: 不调用 Stage2"],
             stage1=stage1_data,
             ai_meta=stage1_meta,
+            continuity=continuity_meta,
         )
         return _persist_and_build(
             data_dir,
@@ -1063,6 +1105,9 @@ async def run_plan_check(
             entry=entry,
             data_as_of=data_as_of,
             status=stage1_terminal or "ok",
+            parent_attempt_id=parent_attempt_id,
+            market=market,
+            adjustment=adjustment,
         )
 
     # ── 7. Stage2 计划审查 (仅 proceed) ──
@@ -1146,6 +1191,7 @@ async def run_plan_check(
             warnings=warnings,
             stage1=stage1_data,
             ai_meta=combined_meta,
+            continuity=continuity_meta,
         )
         return _persist_and_build(
             data_dir,
@@ -1158,6 +1204,9 @@ async def run_plan_check(
             entry=entry,
             data_as_of=data_as_of,
             status=stage2_terminal or "failed",
+            parent_attempt_id=parent_attempt_id,
+            market=market,
+            adjustment=adjustment,
         )
 
     result: dict[str, Any] = {
@@ -1170,6 +1219,8 @@ async def run_plan_check(
         "trace": [n.model_dump(mode="json") for n in trace],
         "warnings": warnings,
     }
+    if continuity_meta is not None:
+        result["continuity"] = continuity_meta
     return _persist_and_build(
         data_dir,
         result,
@@ -1181,6 +1232,9 @@ async def run_plan_check(
         entry=entry,
         data_as_of=data_as_of,
         status="ok",
+        parent_attempt_id=parent_attempt_id,
+        market=market,
+        adjustment=adjustment,
     )
 
 
@@ -1219,6 +1273,9 @@ def _persist_and_build(
     entry: dict[str, Any] | None,
     data_as_of: datetime,
     status: Literal["ok", "failed", "cancelled"],
+    parent_attempt_id: str | None = None,
+    market: str | None = None,
+    adjustment: str | None = None,
 ) -> AnalysisArtifact:
     """校验 trace DAG → 构建组合 artifact → 落 analysis_artifacts.record。"""
     dag_problems = _validate_trace_dag(trace)
@@ -1239,6 +1296,8 @@ def _persist_and_build(
         program_rules_version=PROGRAM_RULES_VERSION,
         data_as_of=data_as_of,
         symbol=symbol,
+        market=market,
+        adjustment=adjustment,
         profile_id=ai_meta.get("profile_id"),
         model=str(ai_meta.get("model") or ""),
         source_refs=source_refs,
@@ -1246,6 +1305,7 @@ def _persist_and_build(
         trace=list(trace),
         warnings=list(warnings),
         usage=usage,
+        parent_attempt_id=parent_attempt_id,
     )
     # 持久化失败必须向上抛出, 不能把不可重放的结果伪装成成功。
     artifacts_store.record(data_dir, artifact)

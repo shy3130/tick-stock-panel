@@ -126,6 +126,7 @@ async def check_plan_entry(
     date: str,
     entry_id: str,
     profile_id: Annotated[str | None, Query()] = None,
+    continuity: Annotated[bool, Query()] = False,
 ):
     """结构化计划检查 — NDJSON 流式返回。
 
@@ -211,6 +212,7 @@ async def check_plan_entry(
                     on_event=on_event,
                     attempt_id=attempt_id,
                     request_id=request_id,
+                    enable_continuity=continuity,
                 )
             except asyncio.CancelledError:
                 await progress_queue.put(
@@ -301,6 +303,10 @@ def list_plan_checks(
                 "symbol": a.symbol,
                 "market": a.market,
                 "profile_id": a.profile_id,
+                "parent_attempt_id": a.parent_attempt_id,
+                "continuity_mode": ((a.result or {}).get("continuity") or {}).get("mode")
+                if a.result
+                else None,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
                 "result_status": (a.result or {}).get("status") if a.result else None,
             }
@@ -358,3 +364,25 @@ def export_plan_check(
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="plan-check-{safe_name}.md"'},
     )
+
+
+# ── M25: 跨日连续性链查询 (只读安全投影) ──────────────────
+@router.get("/plan-checks/{attempt_id}/continuity")
+def get_plan_check_continuity(attempt_id: str):
+    """查询 artifact 的 parent 链与连续性判定 (只读安全投影)。
+
+    返回: {chain: [{attempt_id, mode, reason, bars_delta, usage, ...}, ...],
+           depth, has_parent}。
+    不含交易行动字段; 不执行 AI 调用。
+    """
+    from app.services import ai_continuity
+
+    _require_feature_enabled()
+    artifact = _read_plan_check_artifact(attempt_id)
+
+    chain = ai_continuity.build_parent_chain(settings.data_dir, artifact.attempt_id)
+    return {
+        "chain": chain,
+        "depth": len(chain),
+        "has_parent": artifact.parent_attempt_id is not None,
+    }
