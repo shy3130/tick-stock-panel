@@ -1739,6 +1739,7 @@ class KlineRepository:
         """按 symbol 合并当天指定资产日K分区。用于少量自选实时，不覆盖全市场。"""
         if df.is_empty() or "date" not in df.columns:
             return
+        self._assert_sealed_write_source(df)
         if self._skip_raw_daily_write(f"merge_live_daily_asset:{asset_type}", df):
             return
         table = {
@@ -1766,6 +1767,7 @@ class KlineRepository:
         """按 symbol 合并当天 enriched 分区和内存缓存。用于少量自选实时。"""
         if df.is_empty() or "date" not in df.columns:
             return
+        self._assert_sealed_write_source(df)
         dt = df["date"][0]
         if asset_type == "stock":
             table = "kline_daily_enriched"
@@ -1827,6 +1829,7 @@ class KlineRepository:
         """覆写当天指定资产日K分区 (实时行情落盘, 非merge)。"""
         if df.is_empty() or "date" not in df.columns:
             return
+        self._assert_sealed_write_source(df)
         if self._skip_raw_daily_write(f"flush_live_daily_asset:{asset_type}", df):
             return
         table = {
@@ -1843,6 +1846,30 @@ class KlineRepository:
         out = base / f"date={ds}" / "part.parquet"
         out.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_parquet(df.sort(["symbol", "date"]), out)
+
+    @staticmethod
+    def _assert_sealed_write_source(df: pl.DataFrame) -> None:
+        """拒绝外部或无法确认 provenance 的帧进入 sealed 分区。
+
+        现有实时链路产出的帧无 source 列，零误伤；有 source 但无法规范化时
+        fail-closed，不能借异常绕过 provenance 检查。
+        """
+        if "source" not in df.columns or df.is_empty():
+            return
+        try:
+            bad = df.filter(
+                pl.col("source").is_not_null()
+                & ~pl.col("source").cast(pl.Utf8).str.starts_with("fquant")
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(
+                "sealed partition write rejected: unrecognized source provenance"
+            ) from exc
+        if not bad.is_empty():
+            raise ValueError(
+                "sealed partition write rejected: external fallback frame "
+                f"(rows={bad.height})"
+            )
 
     def _skip_raw_daily_write(self, op: str, df: pl.DataFrame) -> bool:
         from app.services.data_mode import is_local_daily_mode
@@ -1877,6 +1904,7 @@ class KlineRepository:
         """覆写当天指定资产 enriched 分区 (实时 enriched 落盘, 非merge)。"""
         if df.is_empty() or "date" not in df.columns:
             return
+        self._assert_sealed_write_source(df)
         if "symbol" in df.columns:
             df = df.unique(
                 subset=["symbol", "date"], keep="last", maintain_order=True,

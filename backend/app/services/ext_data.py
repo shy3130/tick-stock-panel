@@ -9,6 +9,7 @@ from typing import Literal
 
 import polars as pl
 
+from app.db_safe import is_valid_ext_ident
 from app.storage.atomic_write import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,8 @@ class ExtConfigStore:
         self._base = data_dir / "ext_data"
 
     def _config_path(self, config_id: str) -> Path:
+        if not is_valid_ext_ident(config_id):
+            raise ValueError("扩展配置 ID 只能包含字母、数字和下划线")
         return self._base / config_id / "config.json"
 
     def load_all(self) -> list[ExtConfig]:
@@ -197,25 +200,36 @@ class ExtConfigStore:
         configs = []
         for d in sorted(self._base.iterdir()):
             cp = d / "config.json"
-            if d.is_dir() and cp.exists():
-                try:
-                    raw = json.loads(cp.read_text(encoding="utf-8"))
-                    configs.append(ExtConfig.from_dict(raw))
-                except Exception as e:
-                    logger.warning("扩展表配置解析失败 %s: %s", cp, e)
+            if not d.is_dir() or not is_valid_ext_ident(d.name) or not cp.exists():
+                continue
+            try:
+                raw = json.loads(cp.read_text(encoding="utf-8"))
+                config_id = raw.get("id")
+                if config_id != d.name or not is_valid_ext_ident(config_id):
+                    logger.warning("扩展表配置 ID 与目录不一致: %s", cp)
+                    continue
+                configs.append(ExtConfig.from_dict(raw))
+            except Exception as e:
+                logger.warning("扩展表配置解析失败 %s: %s", cp, e)
         return configs
 
     def get(self, config_id: str) -> ExtConfig | None:
+        if not is_valid_ext_ident(config_id):
+            return None
         cp = self._config_path(config_id)
         if not cp.exists():
             return None
         try:
             raw = json.loads(cp.read_text(encoding="utf-8"))
+            if raw.get("id") != config_id:
+                return None
             return ExtConfig.from_dict(raw)
         except Exception:
             return None
 
     def upsert(self, config: ExtConfig) -> None:
+        if not is_valid_ext_ident(config.id):
+            raise ValueError("扩展配置 ID 只能包含字母、数字和下划线")
         config.updated_at = datetime.now().isoformat()
         cp = self._config_path(config.id)
         cp.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +240,8 @@ class ExtConfigStore:
 
     def delete(self, config_id: str) -> bool:
         import shutil
+        if not is_valid_ext_ident(config_id):
+            return False
         cp = self._config_path(config_id)
         if not cp.exists():
             return False
@@ -372,6 +388,8 @@ def cast_df_to_schema(df: pl.DataFrame, fields: list[ExtField]) -> pl.DataFrame:
 
 def _config_dir(config_id: str, data_dir: Path) -> Path:
     """返回扩展配置的根目录 data/ext_data/{config_id}/。"""
+    if not is_valid_ext_ident(config_id):
+        raise ValueError("扩展配置 ID 只能包含字母、数字和下划线")
     return data_dir / "ext_data" / config_id
 
 

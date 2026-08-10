@@ -26,6 +26,12 @@ import time
 ROOT_FSTORE = "/Volumes/WD1/duckdb/snapshots/fstore"
 ROOT_ENGINE_A = "/Volumes/WD1/duckdb/snapshots/engine-a"
 ROOT_ENGINE_HK = "/Volumes/WD1/duckdb/snapshots/engine-hk"
+# Dedicated whole-DB roots that engine/fstore publish separately from the
+# shared fstore / engine-a generations. Keeping these on their own root means
+# a republish of one cannot swap the file read for the other logical, and a
+# missing publish on the shared root cannot shadow them (Contract A).
+ROOT_FSTORE_EXTENDED = "/Volumes/WD1/duckdb/snapshots/fstore-extended"
+ROOT_ENGINE_A_MONEYFLOW_MINUTE = "/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute"
 # Date-sharded archive roots (engine-a-trans-archive / engine-a-minutes-archive)
 # are intentionally NOT exposed here: their logicals are date-sharded and must
 # resolve only through catalog_resolver.resolve_route, which pins an exact
@@ -56,7 +62,7 @@ _RAW_TARGETS: dict[str, tuple[str, str]] = {
     # never via this static snapshot_or_raw bypass.
     "/Volumes/WD1/duckdb/tdx-chip.duckdb": (ROOT_ENGINE_A, "tdx_chip"),
     "/Volumes/WD1/duckdb/tdx-moneyflow.duckdb": (ROOT_ENGINE_A, "tdx_moneyflow"),
-    "/Volumes/WD1/duckdb/tdx-moneyflow-minute.duckdb": (ROOT_ENGINE_A, "tdx_moneyflow_minute"),
+    "/Volumes/WD1/duckdb/tdx-moneyflow-minute.duckdb": (ROOT_ENGINE_A_MONEYFLOW_MINUTE, "tdx_moneyflow_minute"),
     "/Volumes/WD1/duckdb/tdx-hk.duckdb": (ROOT_ENGINE_HK, "tdx_hk"),
     "/Volumes/WD1/duckdb/tdx-hkminutes.duckdb": (ROOT_ENGINE_HK, "tdx_hk_minutes"),
     "/Volumes/WD1/duckdb/tdx-hktrans.duckdb": (ROOT_ENGINE_HK, "tdx_hk_trans"),
@@ -64,7 +70,18 @@ _RAW_TARGETS: dict[str, tuple[str, str]] = {
     "/Volumes/WD1/duckdb/fstore-markets.duckdb": (ROOT_FSTORE, "markets"),
     "/Volumes/WD1/duckdb/fstore-klines.duckdb": (ROOT_FSTORE, "klines"),
     "/Volumes/WD1/duckdb/fstore-minutes.duckdb": (ROOT_FSTORE, "minutes"),
-    "/Volumes/WD1/duckdb/fstore-extended.duckdb": (ROOT_FSTORE, "extended"),
+    "/Volumes/WD1/duckdb/fstore-extended.duckdb": (ROOT_FSTORE_EXTENDED, "extended"),
+}
+
+# Keep raw-path consumers (notably FStoreDuckDBClient) configurable too.
+# generation.current_path() has the same overrides for its logical consumers,
+# but importing generation here would create a cycle.
+_ROOT_ENV: dict[str, str] = {
+    ROOT_FSTORE: "FQUANT_SNAPSHOT_ROOT_FSTORE",
+    ROOT_FSTORE_EXTENDED: "FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED",
+    ROOT_ENGINE_A: "FQUANT_SNAPSHOT_ROOT_ENGINE_A",
+    ROOT_ENGINE_A_MONEYFLOW_MINUTE: "FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE",
+    ROOT_ENGINE_HK: "FQUANT_SNAPSHOT_ROOT_ENGINE_HK",
 }
 
 _GENERATION_RE = re.compile(r"^[0-9]{8}T[0-9]{6}$")
@@ -117,5 +134,7 @@ def snapshot_or_raw(raw_path: str) -> str:
     target = _RAW_TARGETS.get(raw_path)
     if target is None:
         return raw_path
-    resolved = resolve(target[0], target[1])
+    root, logical = target
+    configured_root = (os.getenv(_ROOT_ENV.get(root, "")) or "").strip() or root
+    resolved = resolve(configured_root, logical)
     return resolved if resolved else raw_path

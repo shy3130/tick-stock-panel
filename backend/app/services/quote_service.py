@@ -44,7 +44,7 @@ def _get_data_provider():
 
     通过 registry 解析当前 provider。
 
-    FQuantProvider 走 tdx-api / sina/tencent / fstore daily_markets，本地源不可用时降级为空。
+    FQuantProvider 走 fstore daily_markets 本地只读快照, 本地源不可用时降级为空。
     """
     global _provider_instance
     if _provider_instance is None:
@@ -92,9 +92,13 @@ class QuoteService:
         # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
         self._final_sync_done: set[tuple[date, str]] = set()
         self._final_sync_failed: dict[tuple[date, str], str] = {}
-        # 腾讯/新浪实时行情客户端 — 盘中为指数/自选提供秒级实时价格
-        from app.data_providers.fquant.sina_tencent_client import SinaTencentClient
-        self._live_client = SinaTencentClient(timeout=4.0)
+        # 行情数据健康状态 (给 status() 用; 只保存非敏感摘要, 不保存原始异常/路径)
+        self._last_outcome: str | None = None      # None | "success" | "empty" | "error"
+        self._last_success_perf: float = 0.0       # 最近一次成功非空拉取的 perf_counter
+        self._last_success_total: int = 0          # 最近一次成功非空拉取的总标的数
+        self._consecutive_empty: int = 0           # 连续空结果计数
+        self._last_error_code: str | None = None   # None | "provider_empty" | "provider_error"
+        self._source_as_of: str | None = None      # 成功数据中最新的 source timestamp/date
 
     # ================================================================
     # 生命周期
@@ -322,11 +326,18 @@ class QuoteService:
         return df
 
     def status(self) -> dict:
-        """返回行情服务状态。"""
+        """返回行情服务状态。
+
+        既有字段含义不变; 追加 data_state / has_recent_data /
+        total_symbol_count / last_error_code / source_as_of (向后兼容)。
+        data_state 只暴露有限枚举, 不包含原始异常/路径/凭据。
+        """
         from app.services import preferences
         age = (time.perf_counter() - self._fetch_time) * 1000 if self._fetch_time else -1
         mode = self.realtime_mode()
+        data_state, has_recent = self._data_health()
         return {
+            # ---- 既有字段 (含义不变) ----
             "enabled": self._enabled,
             "running": self._running,
             "mode": mode,
@@ -339,7 +350,90 @@ class QuoteService:
             "quote_age_ms": round(age, 0) if age >= 0 else None,
             "is_trading_hours": self._is_trading_hours(),
             "last_fetch_ms": round(self._fetched_at, 0) if self._fetched_at else None,
+            # ---- 追加: 数据健康 (向后兼容, 不暴露原始异常) ----
+            "data_state": data_state,
+            "has_recent_data": has_recent,
+            "total_symbol_count": self._symbol_count + self._index_symbol_count + self._etf_symbol_count,
+            "last_error_code": self._last_error_code,
+            "source_as_of": self._source_as_of,
         }
+
+    def _data_health(self) -> tuple[str, bool]:
+        """计算 data_state 与 has_recent_data (供 status 用, 不暴露原始异常)。
+
+        data_state 优先级 (与共享 Contract 一致):
+          disabled (未启用) → warming_up (启用且尚未完成任何成功/失败轮次)
+          → error (最近轮次异常) → empty (最近轮次为空)
+          → stale (有过成功数据但已不新鲜) → ready (新鲜且 total>0)。
+        """
+        recent_window = max(2.0 * (self._interval or self.DEFAULT_INTERVAL), 30.0)
+        total = self._symbol_count + self._index_symbol_count + self._etf_symbol_count
+        has_recent = (
+            self._last_outcome == "success"
+            and self._last_success_perf > 0.0
+            and total > 0
+            and (time.perf_counter() - self._last_success_perf) <= recent_window
+        )
+        if not self._enabled:
+            state = "disabled"
+        elif self._last_outcome is None:
+            state = "warming_up"
+        elif self._last_outcome == "error":
+            state = "error"
+        elif self._last_outcome == "empty":
+            state = "empty"
+        elif has_recent:
+            state = "ready"
+        else:
+            state = "stale"
+        return state, has_recent
+
+    # ------------------------------------------------------------------
+    # 拉取健康状态记录 (只保存非敏感摘要; 调用方不在持锁状态下调用)
+    # ------------------------------------------------------------------
+    def _record_fetch_success(self, total: int, source_as_of: str | None) -> None:
+        """记录一次成功非空拉取。"""
+        self._last_outcome = "success"
+        self._last_success_perf = time.perf_counter()
+        self._last_success_total = max(total, 0)
+        self._consecutive_empty = 0
+        self._last_error_code = None
+        if source_as_of:
+            self._source_as_of = source_as_of
+
+    def _record_fetch_empty(self) -> None:
+        """记录一次空结果拉取 (provider 返回空)。"""
+        self._last_outcome = "empty"
+        self._consecutive_empty += 1
+        self._last_error_code = "provider_empty"
+
+    def _record_fetch_error(self) -> None:
+        """记录一次异常拉取 (不保存原始异常文本)。"""
+        self._last_outcome = "error"
+        self._last_error_code = "provider_error"
+
+    @staticmethod
+    def _extract_source_as_of(rows: list[dict]) -> str | None:
+        """从成功数据中取最新的 source timestamp/date (字符串, 不暴露内部信息)。"""
+        best: str | None = None
+        for r in rows:
+            ts = r.get("timestamp")
+            if isinstance(ts, str) and ts.strip():
+                value = ts.strip()
+                if best is None or value > best:
+                    best = value
+        return best
+
+    @staticmethod
+    def _is_index_record(record: dict, known_index_symbols: set[str]) -> bool:
+        """判断归一化行情记录是否为指数。
+
+        本地 FQuantProvider 把指数统一为 ``.INDEX`` 后缀，而用户偏好和历史
+        配置可能仍使用 ``.SH`` / ``.SZ``；两种表示均需进入指数缓存。
+        """
+        symbol = str(record.get("symbol") or "")
+        return symbol in known_index_symbols or symbol.endswith(".INDEX")
+
 
     def refresh(self) -> dict:
         """手动触发一次行情拉取。"""
@@ -359,6 +453,7 @@ class QuoteService:
                     logger.debug("非交易时段, 跳过行情轮询")
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
+                self._record_fetch_error()
 
             waited = 0.0
             while self._running and self._enabled and waited < self._interval:
@@ -372,37 +467,11 @@ class QuoteService:
             return
         self._fetch_full_market_quotes()
 
-    def _fetch_live_quotes(self, symbols: list[str]) -> list[dict]:
-        """通过腾讯/新浪拉取实时行情，返回 provider 格式的 quote dict 列表。
-
-        腾讯优先（字段更全），失败后降级到新浪。两者都失败返回空列表。
-        返回的 dict 结构与 provider.get_realtime 的行结构对齐:
-          symbol/name/last_price/prev_close/open/high/low/volume/amount/source/ext
-        """
-        if not symbols:
-            return []
-        rows = self._live_client.get_quotes(symbols, prefer="tencent")
-        if not rows:
-            rows = self._live_client.get_quotes(symbols, prefer="sina")
-        if not rows:
-            return []
-        # 标准化: 补 change_pct/change_amount 到 ext (与 _record_from_quote 对齐)
-        for r in rows:
-            price = r.get("last_price")
-            prev = r.get("prev_close")
-            ext = r.get("ext") or {}
-            if price is not None and prev not in (None, 0):
-                ext["change_amount"] = price - prev
-                ext["change_pct"] = (price - prev) / prev * 100
-            r["ext"] = ext
-            r["timestamp"] = r.get("timestamp") or date.today().isoformat()
-        return rows
-
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
 
         通过 data_providers 抽象层取数,支持 provider 切换。
-        FQuantProvider 走 tdx-api / sina/tencent / fstore daily_markets，本地源不可用时降级为空。
+        FQuantProvider 走 fstore daily_markets 本地快照, 本地源不可用时降级为空。
         """
         provider = _get_data_provider()
         t0 = time.perf_counter()
@@ -434,29 +503,31 @@ class QuoteService:
                 if df_uni is not None and not df_uni.is_empty():
                     resp.extend(df_uni.to_dicts())
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
-                # 指数走腾讯/新浪实时行情（盘中秒级），失败时降级到本地 DuckDB 快照
-                live_idx = self._fetch_live_quotes(sorted(core_index_symbols))
-                if live_idx:
-                    resp.extend(live_idx)
-                else:
-                    df_idx = provider.get_realtime(symbols=sorted(core_index_symbols))
-                    if df_idx is not None and not df_idx.is_empty():
-                        resp.extend(df_idx.to_dicts())
+                # 指数走 provider realtime (本地 DuckDB 快照); 不再直连腾讯/新浪
+                df_idx = provider.get_realtime(symbols=sorted(core_index_symbols))
+                if df_idx is not None and not df_idx.is_empty():
+                    resp.extend(df_idx.to_dicts())
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败: %s", e)
+            self._record_fetch_error()
             return
 
         if not resp:
             logger.warning("行情数据为空")
+            self._record_fetch_empty()
             return
 
         records = [self._record_from_quote(q) for q in resp]
 
-        index_records = [r for r in records if r.get("symbol") in all_index_symbols]
+        index_records = [
+            r for r in records if self._is_index_record(r, all_index_symbols)
+        ]
         etf_records = [r for r in records if r.get("symbol") in all_etf_symbols]
         stock_records = [
-            r for r in records
-            if r.get("symbol") not in all_index_symbols and r.get("symbol") not in all_etf_symbols
+            r
+            for r in records
+            if not self._is_index_record(r, all_index_symbols)
+            and r.get("symbol") not in all_etf_symbols
         ]
 
         fetch_ms = (time.perf_counter() - t0) * 1000
@@ -471,6 +542,10 @@ class QuoteService:
             self._index_symbol_count = len(index_records)
             self._etf_symbol_count = len(etf_records)
             self._index_quotes_cache = self._build_index_quotes(index_records)
+        self._record_fetch_success(
+            total=len(stock_records) + len(index_records) + len(etf_records),
+            source_as_of=self._extract_source_as_of(resp),
+        )
 
         logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
 
@@ -509,7 +584,7 @@ class QuoteService:
         """Free 档自选股实时: 只拉取最多 5 个 symbols。
 
         通过 data_providers 抽象层取数,支持 provider 切换。
-        FQuantProvider 走 tdx-api / fstore daily_markets，本地源不可用时降级为空。
+        FQuantProvider 走 fstore daily_markets 本地快照, 本地源不可用时降级为空。
         """
         from app.services import preferences
 
@@ -521,18 +596,18 @@ class QuoteService:
         provider = _get_data_provider()
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
+        resp: list[dict] = []
         try:
-            # 腾讯/新浪实时行情优先（盘中秒级），失败时降级到本地 DuckDB 快照
-            resp = self._fetch_live_quotes(symbols)
-            if not resp:
-                df = provider.get_realtime(symbols=symbols)
-                resp = df.to_dicts() if df is not None and not df.is_empty() else []
+            df = provider.get_realtime(symbols=symbols)
+            resp = df.to_dicts() if df is not None and not df.is_empty() else []
         except Exception as e:  # noqa: BLE001
             logger.warning("自选实时拉取失败: %s", e)
+            self._record_fetch_error()
             return
 
         if not resp:
             logger.warning("自选实时行情数据为空")
+            self._record_fetch_empty()
             return
 
         records = [self._record_from_quote(q) for q in resp]
@@ -547,6 +622,10 @@ class QuoteService:
             self._index_symbol_count = 0
             self._etf_symbol_count = 0
             self._index_quotes_cache = None
+        self._record_fetch_success(
+            total=len(records),
+            source_as_of=self._extract_source_as_of(resp),
+        )
 
         logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
 
@@ -707,7 +786,7 @@ class QuoteService:
         才算进入休盘。
         """
         try:
-            from app.market_time import cn_now, cn_today
+            from app.market_time import cn_now
         except ImportError:
             cn_now = None
 

@@ -630,12 +630,31 @@ class FQuantProvider:
         universes: list[str] | None = None,
         symbols: list[str] | None = None,
     ) -> pl.DataFrame:
-        """从本地 DuckDB ``daily_markets`` 最新快照返回 realtime 形状。"""
-        target_symbols = self._resolve_realtime_symbols(universes, symbols)
-        if not target_symbols:
+        """从本地 DuckDB ``daily_markets`` 最新快照返回 realtime 形状。
+
+        两条路径：
+        - 全 universe 请求（A股/ETF/指数）走快路径：按 asset_type 直接取该类型最新
+          trade_date 的全部行，**不构造数千个 code 的 IN 列表**（全市场慢查询根因）。
+        - 精确 symbols 请求走原有按 code 最新行（IN）逻辑。
+        两条路径都经 ``_fstore_quote_to_row`` / ``normalize_realtime``，输出形状与
+        source 标记一致（``fquant:fstore:daily_markets``）。
+        """
+        if universes and symbols:
+            raise ValueError("FQuant realtime accepts either universes or symbols, not both")
+
+        if symbols:
+            target_symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
+            if not target_symbols:
+                return pl.DataFrame()
+            rows = self._get_fstore_realtime(list(dict.fromkeys(target_symbols)))
+        elif universes:
+            asset_types = self._realtime_universe_asset_types(universes)
+            if not asset_types:
+                return pl.DataFrame()
+            rows = self._get_fstore_realtime_by_asset_types(asset_types)
+        else:
             return pl.DataFrame()
 
-        rows = self._get_fstore_realtime(list(dict.fromkeys(target_symbols)))
         return normalize_realtime(rows, source=self.name) if rows else pl.DataFrame()
 
     def get_depth(self, symbols: list[str]) -> dict:
@@ -711,36 +730,62 @@ class FQuantProvider:
         number = FQuantProvider._float_or_none(value)
         return number / 100 if number is not None else None
 
-    def _resolve_realtime_symbols(
-        self,
-        universes: list[str] | None,
-        symbols: list[str] | None,
-    ) -> list[str]:
-        if universes and symbols:
-            raise ValueError("FQuant realtime accepts either universes or symbols, not both")
-        if symbols:
-            return [str(s).strip().upper() for s in symbols if str(s).strip()]
-        if not universes:
-            return []
+    @staticmethod
+    def _realtime_universe_asset_types(universes: list[str]) -> list[int]:
+        """universe 前缀 → fstore daily_markets asset_type 数字（去重保序）。
 
-        frames: list[pl.DataFrame] = []
+        - ``CN_EQUITY*`` → 1（A 股）
+        - ``CN_ETF*``    → 20
+        - ``CN_INDEX*``  → 10
+        """
         upper = {u.upper() for u in universes}
+        nums: list[int] = []
         if any(u.startswith("CN_EQUITY") for u in upper):
-            frames.append(self.get_instruments("stock"))
+            nums.append(1)
         if any(u.startswith("CN_ETF") for u in upper):
-            frames.append(self.get_instruments("etf"))
+            nums.append(20)
         if any(u.startswith("CN_INDEX") for u in upper):
-            frames.append(self.get_instruments("index"))
+            nums.append(10)
+        return nums
 
-        if not frames:
-            return []
-        non_empty = [f for f in frames if f is not None and not f.is_empty()]
-        if not non_empty:
-            return []
-        df = pl.concat(non_empty, how="diagonal_relaxed")
-        if df.is_empty() or "symbol" not in df.columns:
-            return []
-        return df["symbol"].cast(pl.Utf8).to_list()
+    def _get_fstore_realtime_by_asset_types(self, asset_types: list[int]) -> list[dict]:
+        """全 universe 快路径：按 asset_type 取 daily_markets 最新 trade_date 全体行。
+
+        不构造 code IN 列表（全市场数千个 code 时是慢查询根因），仅参数化 asset_type。
+        输出经 ``_fstore_quote_to_row``，与精确 symbols 路径形状一致。
+        """
+        out: list[dict] = []
+        for asset_type in asset_types:
+            rows = self._query_fstore_realtime_universe_rows(asset_type)
+            out.extend(self._fstore_quote_to_row(r, asset_type) for r in rows)
+        return [r for r in out if r]
+
+    def _query_fstore_realtime_universe_rows(self, asset_type: int) -> list[dict]:
+        """按 asset_type 取 daily_markets 每个 code 的最新 trade_date 行（无 IN 列表）。
+
+        SQL 仅参数化 asset_type；用 QUALIFY + ROW_NUMBER 取每 code 最新行。
+        字段抽取与 ``_query_fstore_realtime_rows`` 完全一致，保证两条路径输出形状相同。
+        """
+        sql = """
+            SELECT code,
+                   COALESCE(payload_json->>'Name', '') AS name,
+                   trade_date AS tdate,
+                   price,
+                   CAST(NULLIF(payload_json->>'Zdfd', '') AS DOUBLE) AS zdfd,
+                   CAST(NULLIF(payload_json->>'Zded', '') AS DOUBLE) AS zded,
+                   CAST(NULLIF(payload_json->>'Cjl', '') AS BIGINT) AS cjl,
+                   CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS cje,
+                   CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS jrkpj,
+                   CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS zgj,
+                   CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS zdj,
+                   CAST(NULLIF(payload_json->>'Zrspj', '') AS DOUBLE) AS zrspj,
+                   CAST(NULLIF(payload_json->>'Hslv', '') AS DOUBLE) AS hslv,
+                   CAST(NULLIF(payload_json->>'Zhfu', '') AS DOUBLE) AS zhfu
+            FROM daily_markets
+            WHERE asset_type = %s
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) = 1
+        """
+        return self._fstore.query(sql, (asset_type,))
 
     def _get_fstore_realtime(self, symbols: list[str]) -> list[dict]:
         grouped: dict[int, list[str]] = {}

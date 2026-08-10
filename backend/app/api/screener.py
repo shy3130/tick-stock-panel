@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 import time
 from dataclasses import asdict
 from datetime import date, datetime
@@ -12,6 +11,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.db_safe import is_valid_ext_ident, quote_ident
 from app.services import strategy_cache
 from app.services.nl_screener import NLParseRequest, NLScreenerError, parse_nl
 from app.services.screener import PRESET_STRATEGIES, ScreenerService
@@ -91,19 +91,12 @@ def _safe(result_dict: dict) -> dict:
     return result_dict
 
 
-_EXT_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
-
-
 def _safe_ext_value(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return value
-
-
-def _quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
 
 
 def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str, Any]]:
@@ -137,7 +130,7 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
             else:
                 view_name = f"ext_{config_id}"
                 ext_df = pl.from_arrow(db.query(
-                    f"SELECT symbol, {_quote_ident(field_name)} FROM {view_name}"
+                    f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                 ).arrow())
 
             if ext_df.is_empty() or "symbol" not in ext_df.columns or field_name not in ext_df.columns:
@@ -555,6 +548,8 @@ def limit_ladder(
     fake_down = 0
     sealed_up_ready = False
     sealed_down_ready = False
+    up_map: dict = {}
+    down_map: dict = {}
     if depth_svc_global:
         up_map = depth_svc_global.get_sealed_map(as_of, is_down=False)
         down_map = depth_svc_global.get_sealed_map(as_of, is_down=True)
@@ -616,17 +611,23 @@ def limit_ladder(
     df = df.filter(pl.col("status").is_not_null() & (pl.col("boards") > 0))
 
     # ── 五档 sealed 叠加(独立旁路, 不改 signal_limit_up) ──
-    # 假涨停(收盘价=涨停价但卖一有量)从 limit 降级为 broken(归炸板视图)
-    # 真涨停保留 + 附封单量; sealed=null(待确认/降级)保持原状
+    # 权威 map(provider/parquet): 假涨停(收盘价=涨停价但卖一有量)从 limit 降级为 broken,
+    #   真涨停保留 + 附封单量, sealed=null(待确认)保持原状。
+    # 外部展示 map(degraded, 仅当权威 map 缺失时): 只填充 sealed_status/sealed_vol 供展示,
+    #   绝不修正 status/tiers/counts/sealed_ready —— 源无 provenance, 仅供当前页面只读展示。
     depth_svc = getattr(request.app.state, "depth_service", None)
     sealed_ready = False
     sealed_age: float | None = None
+    sealed_degraded = False          # 当前方向是否走外部降级展示 map
+    sealed_source: str | None = None  # 降级来源标识(仅 degraded 时非空)
+
     if depth_svc:
         sealed_map = depth_svc.get_sealed_map(as_of, is_down=is_down)
         sealed_ready = bool(sealed_map) and depth_svc.is_sealed_ready(as_of)
         sealed_age = depth_svc.get_sealed_age(as_of) if sealed_ready else None
 
         if sealed_map:
+            # —— 权威 map: 既有行为(可修正 status/counts 归类) ——
             # 构建 sealed 列(symbol → sealed bool, vol)
             sym_sealed = {s: v.get("sealed") for s, v in sealed_map.items()}
             sym_vol = {s: v.get("vol") for s, v in sealed_map.items()}
@@ -669,10 +670,53 @@ def limit_ladder(
                     pl.lit(None).alias("sealed_vol"),
                 )
         else:
-            df = df.with_columns(
-                pl.lit(None).alias("sealed_status"),
-                pl.lit(None).alias("sealed_vol"),
-            )
+            # —— 权威 map 缺失: 尝试外部展示 map(degraded, 只读展示, 不修正任何口径) ——
+            display_map = depth_svc.get_display_depth_map(as_of, is_down=is_down)
+            if display_map:
+                sealed_degraded = True
+                # 来源取首个条目的 source(统一 tencent_quote); 无条目则保持 None
+                sealed_source = next(
+                    (v.get("source") for v in display_map.values() if v.get("source")),
+                    None,
+                )
+                sym_sealed = {s: v.get("sealed") for s, v in display_map.items()}
+                sym_vol = {s: v.get("vol") for s, v in display_map.items()}
+                sealed_rows = pl.DataFrame({
+                    "symbol": list(sym_sealed.keys()),
+                    "_sealed": list(sym_sealed.values()),
+                    "_sealed_vol": list(sym_vol.values()),
+                }) if sym_sealed else pl.DataFrame()
+
+                if not sealed_rows.is_empty():
+                    df = df.join(sealed_rows, on="symbol", how="left")
+                    # ⚠️ 仅展示: 派生 sealed_status/sealed_vol, 但不改 status ——
+                    #    外部源无 provenance, 不得把 limit 降成 broken/recovery。
+                    df = df.with_columns(
+                        pl.when(
+                            (pl.col("status") == status_main)
+                            & (pl.col("_sealed") == True)  # noqa: E712
+                        ).then(pl.lit("real"))
+                        .when(
+                            (pl.col("status") == status_main)
+                            & (pl.col("_sealed") == False)  # noqa: E712
+                        ).then(pl.lit("fake"))
+                        .when(
+                            (pl.col("status") == status_main)
+                            & pl.col("_sealed").is_null()
+                        ).then(pl.lit("pending"))
+                        .otherwise(None).alias("sealed_status"),
+                        pl.col("_sealed_vol").alias("sealed_vol"),
+                    ).drop(["_sealed", "_sealed_vol"])
+                else:
+                    df = df.with_columns(
+                        pl.lit(None).alias("sealed_status"),
+                        pl.lit(None).alias("sealed_vol"),
+                    )
+            else:
+                df = df.with_columns(
+                    pl.lit(None).alias("sealed_status"),
+                    pl.lit(None).alias("sealed_vol"),
+                )
     else:
         df = df.with_columns(
             pl.lit(None).alias("sealed_status"),
@@ -695,7 +739,7 @@ def limit_ladder(
             ext_col_name = f"{config_id}__{field_name}"
             try:
                 ext_df = pl.from_arrow(db.query(
-                    f"SELECT symbol, \"{field_name}\" FROM {view_name}"
+                    f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                 ).arrow())
                 if not ext_df.is_empty() and "symbol" in ext_df.columns:
                     ext_df = ext_df.rename({field_name: ext_col_name})
@@ -755,6 +799,11 @@ def limit_ladder(
         },
         "sealed_counts_up": sealed_counts_up,
         "sealed_counts_down": sealed_counts_down,
+        # 外部降级展示标识(provenance): 仅当权威 sealed map 缺失、改用外部展示 map 时为 true。
+        # sealed_source 标明降级来源(如 tencent_quote); 权威 map 或无 depth 时分别为 null。
+        # 注意: degraded 时不影响 counts/status/tiers/sealed_ready, 仅填充展示字段。
+        "sealed_degraded": sealed_degraded,
+        "sealed_source": sealed_source,
     }
 
 
@@ -770,7 +819,7 @@ def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
         field_name = field_name.strip()
         if not config_id or not field_name:
             continue
-        if not _EXT_IDENT_RE.match(config_id) or "\x00" in field_name:
+        if not is_valid_ext_ident(config_id) or "\x00" in field_name:
             continue
         result.append((config_id, field_name))
     return result

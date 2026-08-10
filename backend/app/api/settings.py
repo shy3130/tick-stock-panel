@@ -342,6 +342,8 @@ def get_preferences() -> dict:
         "review_push_channels": preferences.get_review_push_channels(),
         "tradingAutoReview": preferences.get_trading_auto_review(),
         "structured_plan_check_enabled": preferences.get_structured_plan_check_enabled(),
+        "external_fallback_enabled": preferences.get_external_fallback_enabled(),
+        "external_fallback_scopes": preferences.get_external_fallback_scopes(),
     }
 
 
@@ -964,3 +966,26 @@ def update_structured_plan_check(req: StructuredPlanCheckIn) -> dict:
     from app.services import preferences
     saved = preferences.set_structured_plan_check_enabled(req.enabled)
     return {"structured_plan_check_enabled": saved}
+
+
+class ExternalFallbackPrefsIn(BaseModel):
+    external_fallback_enabled: bool = False
+    external_fallback_scopes: list[str] = []
+
+
+@router.put("/preferences/external-fallback")
+def update_external_fallback(req: ExternalFallbackPrefsIn) -> dict:
+    """保存受控外部 fallback 偏好 (P1 realtime, 默认关闭)。
+
+    仅 realtime/depth scope 白名单内合法; 非 scope 直接 400, 不做静默过滤。
+    返回清洗后的偏好 {external_fallback_enabled, external_fallback_scopes}。
+    启用不触发任何网络; fallback 仅在本地 realtime 快照缺失/陈旧且为交易日时触发。
+    """
+    from app.services import preferences
+    try:
+        enabled, scopes = preferences.set_external_fallback(
+            req.external_fallback_enabled, req.external_fallback_scopes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"external_fallback_enabled": enabled, "external_fallback_scopes": scopes}

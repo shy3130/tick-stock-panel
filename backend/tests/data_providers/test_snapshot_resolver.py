@@ -88,3 +88,55 @@ def test_minutes_raw_paths_are_catalog_only_not_statically_resolved():
     for raw in minutes_raw_paths:
         assert raw not in sr._RAW_TARGETS
         assert sr.snapshot_or_raw(raw) == raw
+
+
+def test_extended_and_moneyflow_minute_have_independent_default_roots():
+    # Contract A: these two logicals must resolve to dedicated snapshot roots,
+    # not the shared fstore / engine-a generation roots. A revert to the shared
+    # constant would make this fail.
+    assert sr._RAW_TARGETS["/Volumes/WD1/duckdb/fstore-extended.duckdb"] == (
+        sr.ROOT_FSTORE_EXTENDED,
+        "extended",
+    )
+    assert sr.ROOT_FSTORE_EXTENDED != sr.ROOT_FSTORE
+    assert sr._RAW_TARGETS["/Volumes/WD1/duckdb/tdx-moneyflow-minute.duckdb"] == (
+        sr.ROOT_ENGINE_A_MONEYFLOW_MINUTE,
+        "tdx_moneyflow_minute",
+    )
+    assert sr.ROOT_ENGINE_A_MONEYFLOW_MINUTE != sr.ROOT_ENGINE_A
+
+
+def test_snapshot_or_raw_extended_prefers_independent_root(tmp_path, monkeypatch):
+    # Publish the extended snapshot under the dedicated root and an older decoy
+    # under the shared fstore root. The production raw path must resolve to the
+    # dedicated root's snapshot — never the shared-root decoy — because the
+    # default _RAW_TARGETS entry points at ROOT_FSTORE_EXTENDED (asserted above).
+    indep = str(tmp_path / "fstore-extended")
+    shared = str(tmp_path / "fstore")
+    want = _publish(indep, "20260710T153000", "extended", "fstore-extended.duckdb")
+    _publish(shared, "20260709T000000", "extended", "fstore-extended.duckdb")
+    raw = "/Volumes/WD1/duckdb/fstore-extended.duckdb"
+    monkeypatch.setitem(sr._RAW_TARGETS, raw, (indep, "extended"))
+    assert sr.snapshot_or_raw(raw) == want
+
+
+def test_snapshot_or_raw_extended_honours_dedicated_root_env(tmp_path, monkeypatch):
+    root = str(tmp_path / "fstore-extended-staging")
+    want = _publish(root, "20260710T153000", "extended", "fstore-extended.duckdb")
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED", root)
+
+    assert sr.snapshot_or_raw("/Volumes/WD1/duckdb/fstore-extended.duckdb") == want
+
+
+def test_snapshot_or_raw_moneyflow_minute_prefers_independent_root(tmp_path, monkeypatch):
+    indep = str(tmp_path / "engine-a-moneyflow-minute")
+    shared = str(tmp_path / "engine-a")
+    want = _publish(
+        indep, "20260710T153000", "tdx_moneyflow_minute", "tdx-moneyflow-minute.duckdb"
+    )
+    _publish(
+        shared, "20260709T000000", "tdx_moneyflow_minute", "tdx-moneyflow-minute.duckdb"
+    )
+    raw = "/Volumes/WD1/duckdb/tdx-moneyflow-minute.duckdb"
+    monkeypatch.setitem(sr._RAW_TARGETS, raw, (indep, "tdx_moneyflow_minute"))
+    assert sr.snapshot_or_raw(raw) == want

@@ -776,3 +776,114 @@ def set_structured_plan_check_enabled(enabled: bool) -> bool:
     """保存结构化计划检查开关。"""
     save({"structured_plan_check_enabled": bool(enabled)})
     return bool(enabled)
+
+
+# ===== 受控外部 fallback (P1 realtime, 默认关闭) =====
+# 完整契约见 backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md 与 AGENTS.md §4。
+# 首批仅 realtime scope 启用; depth scope 占位 (P2 接线)。
+# 外部数据只用于只读展示, 绝不写入 canonical/enriched/选股/监控/回测。
+
+# 合法 scope 白名单 (契约: 仅 realtime/depth 子集)。
+_EXTERNAL_FALLBACK_SCOPES_ALLOWED = ("realtime", "depth")
+
+
+def get_external_fallback_enabled() -> bool:
+    """受控外部 fallback 总开关。默认 False —— 用户显式开启后对应 scope 才激活。"""
+    return bool(load().get("external_fallback_enabled", False))
+
+
+def get_external_fallback_scopes() -> list[str]:
+    """已启用的 fallback scope 子集 (realtime/depth 白名单内), 去重保序。
+
+    默认空列表 (即便 enabled=True, 也需 scope 显式包含才触发)。
+    非白名单值被静默过滤 (读取侧防御; 写入侧 400 拒绝)。
+    """
+    stored = load().get("external_fallback_scopes", []) or []
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in stored:
+        key = str(s).strip().lower()
+        if key in _EXTERNAL_FALLBACK_SCOPES_ALLOWED and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def set_external_fallback(enabled: bool, scopes: list[str]) -> tuple[bool, list[str]]:
+    """保存受控外部 fallback 偏好。
+
+    enabled: 总开关。scopes: 启用 scope 子集 (白名单内, 去重保序)。
+    返回清洗后的 (enabled, scopes)。非法 scope 抛 ValueError (API 层转 400)。
+    """
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for s in scopes or []:
+        key = str(s).strip().lower()
+        if not key:
+            continue
+        if key not in _EXTERNAL_FALLBACK_SCOPES_ALLOWED:
+            raise ValueError(f"invalid external_fallback scope: {key}")
+        if key not in seen:
+            seen.add(key)
+            cleaned.append(key)
+    enabled_b = bool(enabled)
+    save({"external_fallback_enabled": enabled_b, "external_fallback_scopes": cleaned})
+    return enabled_b, cleaned
+
+# ===== 信号记分卡 (Signal Scorecard, opt-in 默认空) =====
+# 记分卡是回顾性分析工具: 把布尔技术信号实例化为不可变事件, 再用本地 enriched
+# 前向 N 个交易日收盘价计算 hit/miss/neutral。tracked_signals 白名单 + 默认空
+# 防止全市场信号洪泛。不接 provider、不生成荐股/买卖建议。
+
+_SIGNAL_DIRECTION_ALLOWED = ("up", "not_up")
+
+
+def get_tracked_signals() -> list[dict]:
+    """返回信号记分卡跟踪的信号列表。默认空 (opt-in)。
+
+    每项: {signal_key, signal_name, signal_kind, direction, enabled}
+      - signal_key: enriched 布尔列名 (signal_* 内置 / csg_* 自定义)
+      - signal_kind: entry | exit | builtin (决定默认方向推断)
+      - direction: "up"/"not_up" 覆盖推断, 或 None (按 kind 推断)
+      - enabled: 是否参与实例化/评估
+    """
+    stored = load().get("tracked_signals", []) or []
+    out: list[dict] = []
+    for t in stored:
+        if not isinstance(t, dict):
+            continue
+        sk = str(t.get("signal_key", "")).strip()
+        if not sk:
+            continue
+        d = t.get("direction")
+        out.append({
+            "signal_key": sk,
+            "signal_name": str(t.get("signal_name", sk)),
+            "signal_kind": str(t.get("signal_kind", "builtin")),
+            "direction": d if d in _SIGNAL_DIRECTION_ALLOWED else None,
+            "enabled": bool(t.get("enabled", True)),
+        })
+    return out
+
+
+def set_tracked_signals(items: list[dict]) -> list[dict]:
+    """保存跟踪信号列表 (去重保序, 过滤空 signal_key)。返回清洗后的列表。"""
+    cleaned: list[dict] = []
+    seen: set[str] = set()
+    for t in items or []:
+        if not isinstance(t, dict):
+            continue
+        sk = str(t.get("signal_key", "")).strip()
+        if not sk or sk in seen:
+            continue
+        seen.add(sk)
+        d = t.get("direction")
+        cleaned.append({
+            "signal_key": sk,
+            "signal_name": str(t.get("signal_name", sk)),
+            "signal_kind": str(t.get("signal_kind", "builtin")),
+            "direction": d if d in _SIGNAL_DIRECTION_ALLOWED else None,
+            "enabled": bool(t.get("enabled", True)),
+        })
+    save({"tracked_signals": cleaned})
+    return get_tracked_signals()

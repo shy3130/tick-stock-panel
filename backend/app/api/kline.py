@@ -14,6 +14,7 @@ from app.data_providers.fquant.catalog_resolver import (
     RouteNotFoundError,
     StaleCatalogError,
 )
+from app.db_safe import is_valid_ext_ident, quote_ident
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync
 from app.storage.atomic_write import atomic_write_parquet
@@ -390,7 +391,7 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
             continue
         config_id, field_name = part.split(".", 1)
         config_id, field_name = config_id.strip(), field_name.strip()
-        if config_id and field_name:
+        if config_id and field_name and is_valid_ext_ident(config_id) and "\x00" not in field_name:
             specs.append((config_id, field_name))
     if not specs:
         return resp
@@ -416,7 +417,7 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
             else:
                 ext_df = pl.from_arrow(
                     repo.store.db.query(
-                        f'SELECT symbol, "{field_name}" FROM ext_{config_id}'
+                        f"SELECT symbol, {quote_ident(field_name)} FROM ext_{config_id}"
                     ).arrow()
                 )
             if not ext_df.is_empty() and "symbol" in ext_df.columns and field_name in ext_df.columns:

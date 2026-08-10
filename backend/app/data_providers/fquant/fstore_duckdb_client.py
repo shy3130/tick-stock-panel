@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Any
 
 from app.data_providers.fquant.snapshot_resolver import snapshot_or_raw
@@ -39,6 +40,10 @@ FSTORE_KLINES_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_KLINES_DUCKDB_PATH", "/Volu
 FSTORE_MINUTES_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_MINUTES_DUCKDB_PATH", "/Volumes/WD1/duckdb/fstore-minutes.duckdb")
 FSTORE_EXTENDED_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_EXTENDED_DUCKDB_PATH", "/Volumes/WD1/duckdb/fstore-extended.duckdb")
 
+# 初始连接失败后的固定退避窗口（秒）：窗口内不重试，避免紧密重连和日志风暴；
+# 窗口过后下次查询自动重连。查询异常释放连接后立即允许重连（不施加退避）。
+RECONNECT_BACKOFF_SECONDS = float(os.getenv("FQUANT_FSTORE_RECONNECT_BACKOFF_S", "30"))
+
 
 class FStoreDuckDBClient:
     """fstore DuckDB 只读客户端，接口对齐 FStoreClient。"""
@@ -47,6 +52,7 @@ class FStoreDuckDBClient:
         self._path = path or FSTORE_DUCKDB_PATH
         self._conn: Any = None
         self._available: bool | None = None
+        self._unavailable_until: float | None = None
         self._lock = threading.Lock()
 
     def refresh(self) -> None:
@@ -62,31 +68,48 @@ class FStoreDuckDBClient:
     def close(self) -> None:
         """关闭当前连接；幂等。后续查询会重新解析 generation 快照。"""
         with self._lock:
-            if self._conn is not None:
-                try:
-                    self._conn.close()
-                except Exception:  # noqa: BLE001
-                    pass
-                self._conn = None
-            self._available = None
+            self._reset_conn_locked()
+
+    def _reset_conn_locked(self) -> None:
+        """锁内：关闭并清空当前连接，复位可用/退避状态（不施加退避）。"""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._conn = None
+        self._available = None
+        self._unavailable_until = None
 
     def _get_conn(self):
-        if self._available is False:
-            return None
-        if self._conn is not None:
+        # 在锁内完成"是否需要重连"的判断，避免并发查询同时触发紧密重连。
+        with self._lock:
+            return self._get_conn_locked()
+
+    def _get_conn_locked(self):
+        # 复用已建立的连接。
+        if self._conn is not None and self._available is not False:
             return self._conn
+        # 初始连接失败后的固定退避窗口：窗口内不重试（避免紧密重连和日志风暴）。
+        if self._unavailable_until is not None:
+            if time.monotonic() < self._unavailable_until:
+                return None
+            # 退避窗口已过：允许重连。
+            self._unavailable_until = None
+            self._available = None
+
         try:
             from app.storage.duckdb_runtime import connect_duckdb
         except ImportError:
             logger.warning("FStoreDuckDBClient: duckdb 未安装")
-            self._available = False
+            self._mark_unavailable_locked()
             return None
         # Prefer the published generation snapshot for the raw path; a
         # not-yet-published root falls back to the raw path itself unchanged.
         main_path = snapshot_or_raw(self._path)
         if not os.path.exists(main_path):
             logger.warning("FStoreDuckDBClient: 文件不存在 %s", main_path)
-            self._available = False
+            self._mark_unavailable_locked()
             return None
         conn: Any = None
         try:
@@ -105,12 +128,18 @@ class FStoreDuckDBClient:
                 except Exception:  # noqa: BLE001
                     pass
             logger.warning("FStoreDuckDBClient: 打开失败 %s — %s", main_path, e)
-            self._available = False
+            self._mark_unavailable_locked()
             return None
         self._conn = conn
         self._available = True
+        self._unavailable_until = None
         logger.info("FStoreDuckDBClient: 已打开 %s（只读）", main_path)
         return conn
+
+    def _mark_unavailable_locked(self) -> None:
+        """锁内：记录一次初始连接失败，进入固定退避窗口；窗口过后允许重连。"""
+        self._available = False
+        self._unavailable_until = time.monotonic() + RECONNECT_BACKOFF_SECONDS
 
     def _attach(self, conn: Any, alias: str, path: str, main_path: str) -> None:
         path = snapshot_or_raw(path)
@@ -181,6 +210,9 @@ class FStoreDuckDBClient:
                 rows = cursor.fetchall()
         except Exception as e:  # noqa: BLE001
             logger.warning("FStoreDuckDBClient: 查询失败 — %s | SQL: %s", e, duck_sql[:200])
+            # 查询异常通常意味着连接已失效：释放它，使下次调用可重连（不施加退避）。
+            with self._lock:
+                self._reset_conn_locked()
             return []
         return [dict(zip(columns, row)) for row in rows]
 
