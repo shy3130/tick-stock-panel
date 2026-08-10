@@ -1,11 +1,11 @@
 # PA_Agent 可移植能力方案
 
-> 日期：2026-08-07  
-> 状态：约定范围已完成；P0-P4 与 P5 M15-M19 已交付，M20/M22 明确排除，M21/M25 经复评暂缓，M23/M24 由既有能力覆盖  
+> 日期：2026-08-10
+> 状态：约定范围已完成；P0-P4、P5 M15-M19 与条件式 M25 已交付，M20/M22 明确排除，M21 暂缓，M23/M24 由既有能力覆盖
 > 源项目：`../PA_Agent`  
 > 目标项目：`tickflow-stock-panel`  
 > 目标读者：tickflow 后端、前端、数据与 AI 功能维护者  
-> 关联约束：[`CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md`](./CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md)、[`YMOS_PORTING_PLAN.md`](./YMOS_PORTING_PLAN.md)、[`FQUANT_INTEGRATION_PROGRESS.md`](./FQUANT_INTEGRATION_PROGRESS.md)
+> 关联约束：[`CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md`](./CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md)、[`YMOS_PORTING_PLAN.md`](./YMOS_PORTING_PLAN.md)、[`FQUANT_INTEGRATION_PROGRESS.md`](./FQUANT_INTEGRATION_PROGRESS.md)、[`PA_AGENT_PORTING_REASSESSMENT_2026-08-09.md`](./PA_AGENT_PORTING_REASSESSMENT_2026-08-09.md)
 > 路径约定：除 Markdown 链接外，本文代码路径均以 `tickflow-stock-panel` 仓库根目录为基准。  
 
 ## 1. 结论摘要
@@ -45,7 +45,7 @@ flowchart LR
 | P2 K 线分析上下文 | ✅ 已完成 | `KlineAnalysisFrame`、Polars 特征、形成中 K 线排除、preflight、Prompt 分层预算；接入个股分析并保持 Markdown/SSE 展示 | `backend/app/services/analysis_context.py`、`stock_analyzer.py`、`api/stock_analysis.py` |
 | P3 profile fallback 与缓存 | ✅ 已完成 | 显式 allowlist fallback（默认关闭）、内存健康态、provider 原生 usage/cache 聚合、四入口预算上限、设置页备用顺序与实际 profile/usage 展示 | `ai_provider.py`、`ai_routing.py`、`ai_budgets.py`、`ai_usage_snapshot.py`、`frontend/src/components/AiExecutionMetaBadge.tsx` |
 | P4 两阶段分析 | ✅ 已完成（Gate C 条件全部落实） | Stage1 诊断 → 程序门禁 → Stage2 计划审查；仅检查已保存计划，门禁只可保持或降级；默认关闭；SSE 进度/取消、append-only artifact、JSON/Markdown 导出、列表式 trace UI | `services/trading/plan_check.py`、`api/trading_plans.py`、`frontend/src/components/analysis/DecisionTrace.tsx`、`frontend/src/pages/Trading.tsx` |
-| P5 记录、通知和可靠性 | ✅ 已完成约定范围 | M15/M16 append-only artifact、失败队列和纯重放计划；M17 飞书报告卡片；M18 PushPlus 可选复盘通道；M19 受控 HTTP 可靠性。M21/M25 经复评暂缓，不为追求完整移植扩张主链路 | `analysis_artifacts.py`、`webhook_adapter.py`、`preferences.py`、`sina_tencent_client.py` |
+| P5 记录、通知和可靠性 | ✅ 已完成约定范围；受控 external fallback realtime/depth 与条件式 M25 已交付 | M15/M16 append-only artifact、失败队列和纯重放计划；M17 飞书报告卡片；M18 PushPlus 可选复盘通道；M19 受控 HTTP 可靠性；M25 仅在计划检查内显式 opt-in，兼容性失配强制全量，新 artifact 保留 parent chain。外部 fallback 默认关闭，`realtime`/`depth` 独立 scope、仅展示、全程 provenance、不写主链路。M21 继续暂缓。 | `services/analysis_artifacts.py`、`services/ai_continuity.py`、`services/external_fallback/`、`api/trading_plans.py`、`frontend/src/pages/Trading.tsx`、`frontend/src/components/data/ExternalFallbackCard.tsx` |
 
 2026-08-06 验证基线：终审修复后后端全量回归 `1075 passed`；前端 `npm run build` 通过；后端 `import app.main` 通过；真实开发服务 `/health` 返回 `status=ok`；浏览器验证计划台默认关闭文案与 PushPlus Token 配置入口，页面无 console/error/network 诊断。P3 fallback、P4 计划检查均默认关闭；M19 只强化既有受控适配器，不增加数据源，不写 canonical/enriched 数据。
 
@@ -152,6 +152,8 @@ tickflow 已有：
 PA_Agent 的核心模块复杂度很高，尤其是 `PromptAssembler`、`JsonValidator`、`TwoStageOrchestrator` 和 `decision_nodes.py`。禁止直接复制整个文件。每个候选应先形成小接口和独立测试，再按 tickflow 需要重写。
 
 ## 4. 候选总表
+> 本表“建议”记录原始评估时的推荐方向；当前状态、是否可实施和最终证据一律以 [§4.1 最终处置账本](#41-最终处置账本) 为准。
+
 
 | ID | 候选能力 | 价值 | 成本 | 风险 | 建议 |
 |---|---|---:|---:|---:|---|
@@ -211,7 +213,7 @@ PA_Agent 的核心模块复杂度很高，尤其是 `PromptAssembler`、`JsonVal
 | M22 | ❌ 明确不迁移 | 不引入 PA_Agent 多公网行情适配器，继续遵守本地 provider 主链路 |
 | M23 | ♻️ 既有能力覆盖 | 指标流水线已有 EMA/ATR 批量计算，无需复制增量算法 |
 | M24 | ♻️ 既有能力覆盖 | tickflow Agent/分析会话能力已更完整 |
-| M25 | ⏸ 经复评暂缓 | 跨日论点追踪与失效/重放语义未形成产品契约 |
+| M25 | ✅ 条件式交付 | 仅作为结构化计划检查的显式 opt-in；兼容性程序判定、失效强制全量、append-only parent chain、成本可见，不含执行语义 |
 
 ## 5. M1：日志密钥脱敏
 
@@ -270,11 +272,12 @@ ai_structured/
 ├── models.py       # 请求、结果、错误与 usage schema
 ├── runtime.py      # 调用、解析、校验、重试编排
 ├── parser.py       # fence 清洗、JSON 抽取、有限修复
-├── validator.py    # Pydantic/业务不变量
 ├── retry.py        # 重试分类与 corrective prompt
 ├── immutable.py    # 不可变字段、防篡改检查
 └── audit.py        # attempt 记录、usage、耗时和失败原因
+
 ```
+> 实际交付未单列 `validator.py`：Pydantic/schema 校验职责并入 `runtime.py`，业务不变量与防篡改校验位于 `immutable.py`。该合并不改变 §4.1 中 M3/M4 的交付边界。
 
 公共接口：
 
@@ -704,6 +707,8 @@ PA_Agent 的 `decision_continuity.py`、失效检查、翻转冷却和增量 Sta
 
 该能力主要服务用户重复查看同一标的时的变化解释和成本控制，不用于自动持仓决策。
 
+2026-08-10 交付状态：M25 已在结构化计划检查内按上述收缩契约实现。功能默认关闭，用户需在已启用计划检查的前提下再次勾选连续性；程序依据 `data_as_of`、策略配置、市场、复权、schema/prompt 版本等决定 `fresh` / `incremental` / `full_reanalysis`。每次运行生成新 artifact，parent chain 只读可查；任何不兼容或缺失都回到全量分析，且连续性元数据递归拒绝交易执行字段。
+
 ## 15. M15-M16：失败队列与分析记录
 
 ### 15.1 失败待处理队列
@@ -1093,15 +1098,17 @@ P4 当前交付（2026-08-06）：
 5. 将 M19 工程模式合并进受控 external fallback 实施；
 6. 评估 M21 查询级复权。
 7. M16 稳定后，按实际需求实施 M25 跨轮连续性与增量分析。
+> 任务 6/7 的评估已完成：M21 继续暂缓；M25 于 2026-08-10 在用户可见入口、parent/失效语义和 append-only 验收齐备后按收缩契约交付。历史复评与重启门见 [§34](#34-2026-08-09-深度复评与重启门)。
+
 
 P5 当前交付（2026-08-06）：
 
 - M15/M16：`analysis_artifacts.py` 将结构化结果安全投影为 append-only artifact；失败副本独立、索引只追加、重放计划只生成新 attempt/parent 关联并强制刷新 `data_as_of`，不执行 AI 或写交易事件。
 - M17：`build_analysis_card_payload()` 只读取报告白名单字段；账户、持仓与完整流水一律忽略，不阻断既有 webhook。
 - M18：复评结论为“值得作为严格可选的低风险通知通道”。PushPlus 用于用户已配置渠道的监控告警，并可在复盘页单独勾选接收已生成报告；固定 `https://www.pushplus.plus/send`、`trust_env=False`、5 秒超时、失败静默降级。Token 只存 `secrets.json`（0600），API/UI 只返回掩码；不接收自定义 URL，不进入分析、交易或行情输入链路。
-- M19：既有 Sina/Tencent 适配器增加 host allowlist、`trust_env=False`、限流、短 TTL cache、single-flight、有界重试/退避与熔断。它不启用外部 fallback，真正接线仍须遵守受控 fallback 契约。
+- M19：受控 external fallback P1 realtime 已交付于独立 `services/external_fallback/`，不修改既有 provider。它固定 `qt.gtimg.cn` host allowlist、`trust_env=False`、5 秒超时、限速、短 TTL cache、single-flight、有界重试/退避与可自动恢复的熔断；网络、熔断短路与口径校准失败分开计数。默认关闭、本地优先、仅 `api/intraday` 只读展示，带 `source` / `degraded` / `stale_session` provenance，绝不写 canonical/enriched 或进入策略、回测、监控输入。
 - M21（查询级复权）暂缓：当前 canonical enriched 复权口径稳定，新增查询级 `hfq/qfq` 会扩大缓存键、跨市场口径和回测一致性验证面，但没有已确认的用户场景。
-- M25（跨轮连续性/增量分析）暂缓：当前产品没有“同一论点跨日追踪”的明确入口；在 parent chain、失效策略与 stale replay 的用户语义确定前，不引入隐式上下文或 token 成本。
+- M25（跨轮连续性/增量分析）已条件式交付：只挂在结构化计划检查的显式 opt-in 开关下；兼容性由程序决定，不兼容强制全量；新 artifact 保留 parent chain 与 token usage；不写交易事件，不包含执行动作字段。
 
 验收：
 
@@ -1110,7 +1117,7 @@ P5 当前交付（2026-08-06）：
 - 通知不泄露敏感信息；
 - external fallback 不污染 canonical 数据；
 - 关闭所有开关时行为与迁移前一致。
-- 若未来重新开启 M25，必须生成新 artifact、保留 parent chain，并在连续性失效时强制回到全量分析；当前不启用。
+- M25 每次生成新 artifact 并保留 parent chain；连续性失效或父记录不可用时强制回到全量分析。
 
 ## 24. 测试与验证策略
 
@@ -1371,6 +1378,8 @@ flowchart TD
 - 结构化计划检查：`backend/app/services/trading/plan_check.py`
 - 计划检查 API：`backend/app/api/trading_plans.py`
 - 决策链 UI：`frontend/src/components/analysis/DecisionTrace.tsx`
+- 连续性判定与 parent chain：`backend/app/services/ai_continuity.py`
+- 连续性 UI：`frontend/src/pages/Trading.tsx`
 - PushPlus 安全适配：`backend/app/services/webhook_adapter.py`
 
 ## 33. 最终建议
@@ -1383,4 +1392,21 @@ PA_Agent 对 tickflow 最有价值的不是它的桌面端、七个数据源或�
 4. 用紧凑 K 线特征和分层 Prompt 控制 token 与事实密度；
 5. 对外部依赖实施单飞、退避、熔断、取消和失败重放。
 
-P0-P4 与 P5 的 M15-M19 已按上述边界交付。后续不再以“完整移植”为目标：M21 查询级复权与 M25 连续性分析保持暂缓，只有出现明确用户场景、口径契约和可验证收益时才重新过决策门；PA_Agent 的桌面 GUI、多公网数据源、自动交易/荐股语义与专用连接器继续明确排除。
+P0-P4、P5 M15-M19 与条件式 M25 已按上述边界交付。后续不再以“完整移植”为目标：M21 查询级复权继续暂缓；M25 只保留在结构化计划检查的显式 opt-in 收缩入口，不扩展到自动选股、监控或执行。PA_Agent 的桌面 GUI、多公网数据源、自动交易/荐股语义与专用连接器继续明确排除。
+
+## 34. 2026-08-09 深度复评与重启门
+
+本轮完整复核 PA_Agent 的数据、AI/编排、记录/通知和 GUI 源码，以及 tickflow 的 provider、复权、回测、监控告警、API 和 React 实现；详细证据与排序见 [`PA_AGENT_PORTING_REASSESSMENT_2026-08-09.md`](./PA_AGENT_PORTING_REASSESSMENT_2026-08-09.md)。
+
+历史结论（2026-08-09）：当时不存在同时满足“明确用户场景、独立消费者、保持本地 canonical 数据边界、可用确定性测试验证”的新增运行时迁移项。2026-08-10 在结构化计划检查形成用户可见 opt-in、兼容性程序门禁、失效全量回退、append-only parent chain 和成本展示后，仅 M25 通过重启门；其余处置不变。
+
+| 候选 | 当前处置 | 允许重新立项的必要条件 |
+|---|---|---|
+| M21 查询级 qfq/hfq/none | ⏸ 暂缓 | 具体用户场景；展示/AI 查询层与 canonical/回测隔离契约；除权日 fixture 对拍；缓存键、跨市场和 `adjustment` provenance 验证 |
+| M25 跨轮连续性与增量分析 | ✅ 2026-08-10 条件式交付 | 仅计划检查 opt-in；parent 选择与失效语义由程序决定；失效强制全量；新 artifact 保留 append-only parent 链与成本；递归拒绝交易执行字段 |
+| 多周期 forming-bar 判定 | ⏸ 暂缓 | 产品明确接入实时分钟 K 线分析消费者；形成中/收盘状态和市场时段契约先确定；不得改变 canonical 日 K 或当前回测输入 |
+| 泛化 artifact API | 不实施 | 至少出现第二个已持久化且需要统一检索的 artifact purpose；否则继续使用计划检查的领域 API，避免重复接口 |
+
+M25 重启门验收证据：`backend/tests/services/test_ai_continuity.py` 覆盖 fresh/incremental/full-reanalysis、兼容性与禁用字段；`backend/app/api/trading_plans.py` 提供只读 parent chain；`frontend/src/pages/Trading.tsx` 默认关闭并展示模式、原因、bar 增量、数据截止日和 usage。该交付不改变 canonical/enriched 或交易事实流。
+
+策略/回测的因子 IC 衰减、换手和 OOS 稳健性属于独立研究能力缺口，不是 PA_Agent 遗漏项；若需推进，应在回测/研究路线中单独立项，不借本迁移计划扩大范围。

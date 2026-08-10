@@ -278,6 +278,7 @@ FQUANT_FSTORE_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore.duckdb
 FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-markets.duckdb
 FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-klines.duckdb
 FQUANT_FSTORE_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-minutes.duckdb
+FQUANT_FSTORE_EXTENDED_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-extended.duckdb
 FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx.duckdb
 FQUANT_SNAPSHOT_ROOT_CATALOG=/Volumes/WD1/duckdb/snapshots/catalog
 # A 股 minutes/trans 按交易日从 staged catalog 解析;所有 root 默认根 /Volumes/WD1/duckdb
@@ -285,6 +286,8 @@ FQUANT_SNAPSHOT_ROOT_ENGINE_A=/Volumes/WD1/duckdb/snapshots/engine-a
 FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY=/Volumes/WD1/duckdb/snapshots/engine-a-preliminary
 FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-minutes-archive
 FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive
+FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED=/Volumes/WD1/duckdb/snapshots/fstore-extended
+FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE=/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute
 FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hk.duckdb
 FQUANT_TDX_HK_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hkminutes.duckdb
 FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hktrans.duckdb
@@ -403,6 +406,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 | **fstore markets DuckDB** | DuckDB read-only | realtime 快照 / 每日行情 | `FQUANT_FSTORE_MARKETS_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-markets.duckdb`，解析为 generation 快照） |
 | **fstore klines DuckDB** | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-klines.duckdb`，解析为 generation 快照） |
 | **fstore minutes DuckDB** | DuckDB read-only | fstore 分钟 K 线 | `FQUANT_FSTORE_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-minutes.duckdb`；fstore generation 未发布 minutes 时回退 raw） |
+| **fstore extended DuckDB** | DuckDB read-only | 财务三表 / 复权事件 | `FQUANT_FSTORE_EXTENDED_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-extended.duckdb`，解析为独立 `snapshots/fstore-extended/<gen>/` 快照） |
 | **TDX DuckDB** | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx.duckdb`） |
 | **TDX minutes/trans catalog** | DuckDB read-only snapshots | 按交易日解析分钟 K 与逐笔成交分片（staged：preliminary→final，刻意不降级 raw） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_MINUTES_ARCHIVE,_TRANS_ARCHIVE}`（默认根 `/Volumes/WD1/duckdb`） |
 | **TDX HK DuckDB** | DuckDB read-only | 港股日 K / 多周期 K | `FQUANT_TDX_HK_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx-hk.duckdb`，解析为 engine-hk generation 快照） |

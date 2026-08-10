@@ -38,6 +38,7 @@
 | fstore markets DuckDB | DuckDB read-only | realtime 快照 / 每日行情 | `FQUANT_FSTORE_MARKETS_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-markets.duckdb`，解析为 generation 快照） |
 | fstore klines DuckDB | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-klines.duckdb`，解析为 generation 快照） |
 | fstore minutes DuckDB | DuckDB read-only | fstore 分钟 K 线 | `FQUANT_FSTORE_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-minutes.duckdb`；fstore generation 未发布 minutes 时回退 raw） |
+| fstore extended DuckDB | DuckDB read-only | 财务三表 / 复权事件 | `FQUANT_FSTORE_EXTENDED_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-extended.duckdb`，解析为独立 `snapshots/fstore-extended/<gen>/` 快照） |
 | TDX DuckDB | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx.duckdb`） |
 | TDX A 股 minutes 路由 | 发布 catalog + DuckDB read-only | 按交易日定位 2023 年前归档或当前 minutes 快照（staged，preliminary→final） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_MINUTES_ARCHIVE}` |
 | TDX A 股 trans 路由 | 发布 catalog + DuckDB read-only | 按交易日定位历史归档年片或活跃年的月度 trans 快照（staged，preliminary→final） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_TRANS_ARCHIVE}` |
@@ -182,6 +183,7 @@ export FQUANT_FSTORE_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore.duckdb
 export FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-markets.duckdb
 export FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-klines.duckdb
 export FQUANT_FSTORE_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-minutes.duckdb
+export FQUANT_FSTORE_EXTENDED_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-extended.duckdb
 export FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx.duckdb
 export FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hk.duckdb
 export FQUANT_TDX_HK_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hkminutes.duckdb
@@ -195,6 +197,8 @@ export FQUANT_SNAPSHOT_ROOT_ENGINE_A=/Volumes/WD1/duckdb/snapshots/engine-a
 export FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY=/Volumes/WD1/duckdb/snapshots/engine-a-preliminary
 export FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-minutes-archive
 export FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive
+export FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED=/Volumes/WD1/duckdb/snapshots/fstore-extended
+export FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE=/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute
 
 # 可选：AI
 export AI_PROVIDER=openai_compat
@@ -267,6 +271,8 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 | engine-a-preliminary | `/Volumes/WD1/duckdb/snapshots/engine-a-preliminary` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY` | preliminary 快照（早发布，质量未校验） |
 | engine-a-minutes-archive | `/Volumes/WD1/duckdb/snapshots/engine-a-minutes-archive` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE` | pinned_immutable 历史归档 |
 | engine-a-trans-archive | `/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE` | pinned_immutable 历史归档 |
+| fstore-extended | `/Volumes/WD1/duckdb/snapshots/fstore-extended` | `FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED` | extended 整库（财务三表）独立快照，与 fstore generation 隔离 |
+| engine-a-moneyflow-minute | `/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE` | tdx_moneyflow_minute 整库独立快照，与 engine-a generation 隔离 |
 
 **无中断发布顺序**（先数据后路由，避免读到未发布的物理文件）：
 
@@ -303,6 +309,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-06（PA_Agent P4 结构化计划检查完成：默认关闭、仅审查已保存计划、程序门禁最终权威、SSE 取消/审计、artifact 导出与中性 trace UI；P5 增加 secrets-only PushPlus 可选复盘通知，M21/M25 经复评暂缓。上一变更：受控外部 fallback 政策）
+**最后更新**：2026-08-10（研究中心、横截面、信号记分卡、组合策略与参数网格完成 Web 接线；PA_Agent M25 以计划检查内二次 opt-in 收缩交付，append-only parent chain、失效强制全量且无执行语义；受控 external fallback UI 支持 `realtime`/`depth` 独立 scope，默认关闭、仅展示、不写 sealed/canonical/enriched。M21 继续暂缓。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

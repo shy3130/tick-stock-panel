@@ -1,8 +1,8 @@
 # 受控外部 Fallback 适配层设计
 
-> 日期：2026-08-05  
-> 状态：设计稿（未实现）  
-> 政策来源：AGENTS.md 第 4 节「受控外部 fallback 契约」（红线 2 于 2026-08-05 修订）  
+> 日期：2026-08-05（2026-08-07 更新 P1 进度）
+> 状态：P1 realtime 已实现（默认关闭，仅展示，不写入主链路）；P2 depth 未开始
+> 政策来源：AGENTS.md 第 4 节「受控外部 fallback 契约」（红线 2 于 2026-08-05 修订）
 > 触发背景：`backend/docs/DAILY_STOCK_ANALYSIS_PORTING_ASSESSMENT.md` 与 `VIBE_TRADING_PORTING_ASSESSMENT.md` 审计中发现多个候选能力依赖外部公共免费行情，原"一刀切禁止"红线将其整体排除；经决策者拍板改为受控放开。
 
 ## 1. 目标与非目标
@@ -20,7 +20,7 @@
 
 | 缺口 | 现状 | fallback 范围 | 首批 |
 |---|---|---|---|
-| depth 五档盘口 | provider 不暴露 depth capability，`depth_service` 门控降级返回空 | 公共免费源五档快照（腾讯 qt.gtimg 等） | ✅ P1 |
+| depth 五档盘口 | provider 不暴露 depth capability，`depth_service` 门控降级返回空 | 公共免费源五档快照（腾讯 qt.gtimg 等） | ⏸ P2，未开始 |
 | realtime 快照过期/缺失 | `fstore-markets.duckdb.daily_markets` generation 快照过期时返回空 + warning | 快照级实时报价（仅当本地快照日期 < 当前交易日） | ✅ P1 |
 | 港股资金流/换手/开高低收 | `daily_markets` 港股行这些列全 NULL（已实测，见 `fquant_provider.py` 注释） | 免费源港股资金流覆盖差、口径杂 | ❌ 暂不纳入 |
 | A 股 minutes/trans | catalog 路由 fail-closed | **永久豁免，绝不 fallback** | — |
@@ -102,13 +102,15 @@ fallback 数据**禁止写入**：`kline_daily`、`kline_daily_enriched`、`klin
 | 腾讯行情 | `qt.gtimg.cn/q=sh600000` | 实时快照 + 五档 + A/港 | 否 | 字段位置契约（`|` 分隔定长序），需 pinning 测试锁死字段序号；GBK 编码 |
 | 东财 push2 | `push2.eastmoney.com/api/qt/...` | 实时快照 + 五档 + A/港 | 否 | JSON 字段名变更历史存在；走 Host 白名单 |
 
-首批只接入这两类只读公开端点。任何新源按第 2 节缺口登记 + 本表评估后再加。
+首批实际只接入腾讯 realtime；任何新增源均按第 2 节缺口登记 + 本表评估后再加。
 
 ## 6. 实施批次
 
-1. **P1 骨架 + realtime**：`external_fallback/` 模块、preferences 开关、realtime 过期兜底、provenance 贯穿 quote_service → SSE → 前端角标；校准 + 熔断测试。
-2. **P2 depth**：腾讯五档接入 `depth_service` 缺口路径；连板梯队页角标。
-3. **P3 视需求**：港股增强字段（先证明免费源口径可靠，否则维持 NULL 诚实降级）。
+1. **P1 骨架 + realtime — ✅ 已实现 (2026-08-07)**：`backend/app/services/external_fallback/`（adapter / circuit / calibration / sources/tencent_quote）、preferences 开关（`external_fallback_enabled` + `external_fallback_scopes`）、settings API（GET 暴露 + PUT `/preferences/external-fallback` 校验）、intraday 路由本地优先 snapshot resolver（`/indices` 扩展 + `/snapshot` 只读端点）。腾讯公共行情为唯一 realtime 源；固定 host allowlist（`qt.gtimg.cn`）、`trust_env=False`、≤5s timeout、≥0.35s/host 限速、批量上限 60、single-flight + 短 TTL 缓存、网络连续 5 次或口径连续 3 次失败后冷却 10 分钟（冷却不会被轮询延长）；日志/API 不含原始响应或 URL。校准：volume=股、amount=元、change_pct=百分点、timestamp=Asia/Shanghai ISO、闭市快照 `stale_session=true`。provenance：每行 `source="tencent_quote"`、响应级 `degraded/sources/fallback_reason`（仅实际命中时）。
+   - **已实现边界**：realtime scope；本地优先（provider/QuoteService 缓存 → provider realtime → daily 兜底 → 仅当缺失/陈旧才走外部）；默认关闭、非交易日/本地当日零网络；网络失败、熔断短路与口径失败分开计数；绝不把外部行交给 QuoteService/repository/enriched/monitor/screener/backtest（适配层无 repo/QuoteService 句柄）。
+   - **未实现边界（P2+）**：depth scope 五档接入 `depth_service`；QuoteService/SSE 贯穿 provenance（当前仅 intraday 路由）；节假日精确判定（当前周末兜底）；ext_data 独立时序表（当前进程内缓存）。
+2. **P2 depth — ⏸ 未开始**：腾讯五档接入 `depth_service` 缺口路径；连板梯队页角标。
+3. **P3 视需求 — ⏸ 未开始**：港股增强字段（先证明免费源口径可靠，否则维持 NULL 诚实降级）。
 
 每批验收：开关关闭时全量回归零差异；开启后 `degraded` 标记可观测；sealed 分区写禁令断言生效；`scripts/test_fquant_provider.py` 不引入对新源的网络依赖（fallback 测试全部 mock）。
 

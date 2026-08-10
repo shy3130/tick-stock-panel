@@ -1,6 +1,6 @@
 # TickFlow Stock Panel 功能使用指南
 
-> **更新时间：2026-08-07**  
+> **更新时间：2026-08-10**
 > **适用版本：** 当前 `main` 工作树中的 React + FastAPI 面板  
 > **读者：** 希望使用面板进行市场研究、选股、回测、监控与交易复盘的用户  
 > **范围：** 本文覆盖已挂载的 Web 功能，以及可通过 REST / Agent / MCP 使用的高级功能；不把路线图、内部开发页或占位 UI 当作已交付能力。
@@ -89,8 +89,12 @@ flowchart LR
 | `/watchlist` | 自选 | 自选标的、排序、行情快照与扩展字段 | 标的资料；实时数据为可选 |
 | `/screener` | 策略 | 内置/自定义/AI 策略扫描、参数覆盖、公式导出 | enriched 数据 |
 | `/condition-screener` | 条件选股 | 字段、运算符与阈值组合选股；可选自然语言解析 | enriched 数据；NL 解析需 AI |
-| `/backtest` | 回测 | 策略回测、单因子 IC/IR 与分层回测 | `vectorbt` 可选依赖、enriched 数据 |
+| `/backtest` | 回测 | 策略/因子回测、组合策略构建与参数网格实验 | `vectorbt` 可选依赖、enriched 数据 |
 | `/optimizer` | 组合优化 | 六种权重方法、风险统计与策略池导入 | 至少两只具有共同历史的数据标的 |
+| `/regime` | 市场环境 | 本地 enriched 市场环境分型、历史与覆盖率 | enriched 数据 |
+| `/cross-section` | 横截面研究 | 相关矩阵、相对强度、同业排名和以股找股 | enriched / 财务快照 |
+| `/signal-scorecard` | 信号记分卡 | 显式跟踪信号的 T+1/3/5/10 回顾性命中统计 | 先显式启用 tracked signals |
+| `/research` | 研究中心 | 研究假设、证据、Run Card 和定时研究 | 本地研究存储；定时任务需显式创建 |
 | `/stock-analysis` | 个股分析 | 日 K、关键价位、形态和 AI 四维分析 | 单股 K 线；AI 分析需 profile |
 | `/financials` | 财务分析 | 六类财务表、同步、AI 财务报告 | `financial` capability |
 | `/concept-analysis` | 概念分析 | 概念热度、领涨股与 RPS 轮动 | 概念扩展数据 |
@@ -117,6 +121,9 @@ flowchart LR
 | 实时行情轮询 / SSE | 关闭 | 设置 → 实时监控 | provider 无 realtime 能力时整页降级 |
 | AI profile fallback | 关闭 | 设置 → AI | 仅 allowlist 中 profile 可按顺序回退 |
 | 结构化计划检查 | 关闭 | 设置 → 实时监控 / 交易计划台 | 消耗 token，仅检查已保存计划 |
+| 计划检查连续性分析（M25） | 关闭 | 交易 → 计划台 | 仅在结构化计划检查已开启时可选择；每次生成新 artifact |
+| 受控外部行情 fallback | 关闭 | 数据 → 外部行情降级 | `realtime` / `depth` scope 独立选择；只读展示且带 provenance |
+| 信号记分卡跟踪 | 空白名单 | 信号记分卡 | 未显式保存启用信号时不采集事件 |
 | 交易自动归因 | 关闭 | 设置 → 实时监控 | 工作日 16:45 的 L0/L1 盘后任务 |
 | 定时大盘复盘 | 关闭 | 大盘复盘页 | 生成后可选择推送渠道 |
 | 系统通知与规则默认 Webhook | 关闭 | 设置 → 实时监控 | 通知和外部发送均可独立配置 |
@@ -259,7 +266,15 @@ AI 大盘复盘支持流式生成、历史归档和可选发送。定时复盘�
 
 AI 助手支持会话保存、多轮工具调用、工具调用链展示、流式响应、取消和 AI profile 选择。内置工具都是只读研究工具，例如查看能力、读取 K 线、运行条件选股、策略回测、组合优化和因子分析。
 
-附件能力包括文本、Markdown、CSV、XLSX/XLS 上传，以及受 SSRF 保护的公开 URL 读取。PDF 当前不支持。附件会标记为“非行情事实”上下文，不能替换行情/财务主数据。
+附件能力包括文本、Markdown、CSV、XLSX/XLS 和 PDF 上传，以及受 SSRF 保护的公开 URL 读取。PDF 使用 pypdfium2 提取文本层；扫描件或图片页不做 OCR，逐页提取失败会返回 warning。附件会标记为“非行情事实”上下文，不能替换行情/财务主数据。
+
+### 5.5 研究中心、横截面研究与信号记分卡
+
+**研究中心**用于维护可审计的研究假设：状态流转、证据追加、Run Card 引用和定时研究均保留本地记录。证据采用追加语义；定时研究只执行白名单模板，不生成交易动作。
+
+**横截面研究**在用户明确输入标的后，读取本地 enriched/财务快照，展示收益率相关矩阵、相对强度、同业排名和以股找股条件。每个结果区都显示 `boundaryNotes`；样本不足或零方差返回空值，不补造相关性。
+
+**信号记分卡**默认没有 tracked signal。用户显式保存白名单后，盘后管道才会为对应信号生成去重事件，并按 T+1/3/5/10 追加 outcome。页面可查看 hit/miss/neutral、事件明细和受限历史回填；结果只用于回顾性研究，不进入选股、回测、监控或交易。
 
 **本节源码依据**
 
@@ -270,6 +285,12 @@ AI 助手支持会话保存、多轮工具调用、工具调用链展示、流�
 - [`frontend/src/pages/LimitUpLadder.tsx`](../frontend/src/pages/LimitUpLadder.tsx)
 - [`frontend/src/pages/Review.tsx`](../frontend/src/pages/Review.tsx)
 - [`frontend/src/pages/Agent.tsx`](../frontend/src/pages/Agent.tsx)
+- [`frontend/src/pages/Research.tsx`](../frontend/src/pages/Research.tsx)
+- [`frontend/src/pages/CrossSection.tsx`](../frontend/src/pages/CrossSection.tsx)
+- [`frontend/src/pages/SignalScorecard.tsx`](../frontend/src/pages/SignalScorecard.tsx)
+- [`backend/app/api/research.py`](../backend/app/api/research.py)
+- [`backend/app/api/cross_section.py`](../backend/app/api/cross_section.py)
+- [`backend/app/api/signal_scorecard.py`](../backend/app/api/signal_scorecard.py)
 - [`backend/app/api/stock_analysis.py`](../backend/app/api/stock_analysis.py)
 - [`backend/app/api/financials.py`](../backend/app/api/financials.py)
 - [`backend/app/api/review.py`](../backend/app/api/review.py)
@@ -282,10 +303,12 @@ AI 助手支持会话保存、多轮工具调用、工具调用链展示、流�
 
 ### 6.1 信号与策略回测
 
-回测页提供信号与策略两类分析：
+回测工作台提供四类分析：
 
-- **信号回测：** 指定标的、日期、入/出场信号、止损、最长持有日、手续费和滑点；
+- **因子回测：** IC、IR、胜率、分层与多空组合；
 - **策略回测：** 针对策略和标的池执行全周期回测，支持 T+1、手续费、滑点、止损、持仓天数、最大持仓数、敞口和仓位方式；
+- **组合策略：** 声明式合并至少两个非组合策略，支持并集、交集、最少确认数与权重；
+- **参数网格：** 对有限参数组合运行本地历史场景，展示进度、排名、稳健性、截断与取消状态；
 - **流式策略回测：** 支持进度事件、切页重连和取消；
 - **结果：** 净值、收益、夏普、最大回撤、胜率、交易明细、出场原因以及 `cause_tag`。
 
@@ -318,6 +341,12 @@ AI 助手支持会话保存、多轮工具调用、工具调用链展示、流�
 
 至少需要两只具有共同历史交易日的有效标的。当前港股或无数据标的会在结果中标记为 dropped，而不是混入计算。
 
+### 6.4 组合策略与参数网格
+
+组合策略只允许引用非组合子策略，禁止递归嵌套和重复子策略。`union` 表示任一子策略命中即可进入合并结果；`intersect` 由 `min_confirm` 控制最少同时命中数量。保存后仍经现有策略引擎和回测入口运行，不产生订单。
+
+参数网格只接受策略声明中的有界数值参数。前端显示请求组合数，服务端默认限制 24 个场景、硬上限 36；实验可取消，并持久化配置 hash、各场景统计、最佳场景和稳健性摘要。排序靠前不代表样本外有效，页面明确提示数据挖掘偏差和过拟合风险。
+
 ```mermaid
 flowchart LR
     S[策略 / 条件 / 因子假设] --> E[本地 enriched 数据]
@@ -332,6 +361,9 @@ flowchart LR
 
 - [`frontend/src/pages/Backtest.tsx`](../frontend/src/pages/Backtest.tsx)
 - [`frontend/src/pages/Optimizer.tsx`](../frontend/src/pages/Optimizer.tsx)
+- [`frontend/src/pages/backtest/CompositeStrategyBuilder.tsx`](../frontend/src/pages/backtest/CompositeStrategyBuilder.tsx)
+- [`frontend/src/pages/backtest/ParameterGridPanel.tsx`](../frontend/src/pages/backtest/ParameterGridPanel.tsx)
+- [`backend/app/backtest/parameter_grid.py`](../backend/app/backtest/parameter_grid.py)
 - [`backend/app/api/backtest.py`](../backend/app/api/backtest.py)
 - [`backend/app/backtest/strategy.py`](../backend/app/backtest/strategy.py)
 - [`backend/app/backtest/factor.py`](../backend/app/backtest/factor.py)
@@ -434,6 +466,8 @@ flowchart LR
 
 `proceed` 仅表示输入与前置条件足以进行检查，不表示建议交易。Stage2 schema 不包含订单、方向、数量、建议价格或执行动作；模型也不能把程序门禁升级。结果可查看可审计 trace 并导出 JSON/Markdown，且不写交易事件。
 
+计划检查还提供默认关闭的 **M25 连续性分析**。开启后，程序只比较上一份同用途 artifact 的数据截止日、策略配置、市场与复权等兼容性锚点；兼容时可使用增量上下文，锚点失配、跨度过大或父记录不可用时强制回到全量分析。每次运行都生成新的 append-only artifact，通过 `parent_attempt_id` 保留链路，UI 展示 mode、原因、新增 K 线数量、截止日和 token 用量。连续性元数据不包含订单、方向、建议价格或执行动作。
+
 ### 8.4 券商流水交易复盘
 
 “交易复盘”页独立于人工生命周期，面向导入的券商成交流水：上传文件、修正列映射、预览后进入 FIFO 配对台账。系统输出已清仓/持仓回合、处置效应、过度交易、追涨、浮亏加仓、基准超额和可选 narrative 摘要。
@@ -451,6 +485,7 @@ flowchart LR
 - [`backend/app/services/trading/gates.py`](../backend/app/services/trading/gates.py)
 - [`backend/app/services/trading/red_flags.py`](../backend/app/services/trading/red_flags.py)
 - [`backend/app/services/trading/plan_check.py`](../backend/app/services/trading/plan_check.py)
+- [`backend/app/services/ai_continuity.py`](../backend/app/services/ai_continuity.py)
 - [`backend/app/api/trade_journal.py`](../backend/app/api/trade_journal.py)
 
 ---
@@ -467,6 +502,13 @@ flowchart LR
 - 按页面授权范围维护本地数据。
 
 在 `fquant_local` 模式，stock raw mirror 被显式禁止写入；选股和分析依赖的是 enriched 分区。数据页不能把外部 fallback 结果写进 canonical/enriched 或回测输入。
+
+数据页的“外部行情降级”仍默认关闭，且 scope 需显式选择：
+
+- `realtime`：本地快照缺失或陈旧时，只为页面展示补读实时快照；
+- `depth`：本地 provider 无五档能力时，只在盘中补读腾讯公共行情五档。
+
+两条路径都保留 `source` / `degraded` provenance，并复用 host 白名单、`trust_env=False`、限速、缓存、重试与熔断。它们不写 sealed、canonical、enriched，也不进入选股、回测或监控评估。连板 sealed 真假判断仍只认本地 sealed 分区，不因开启 depth fallback 而改变历史口径。
 
 ### 9.2 扩展数据
 
@@ -510,20 +552,15 @@ flowchart LR
 
 ### 10.1 REST-only 研究能力
 
-下列能力已经有 REST API，但当前没有专属 Web 页面；适合 API 客户端、Agent 或 MCP 调用。
+下列能力主要面向 API 客户端、Agent 或 MCP；部分结果也会被已有 Web 页面引用。
 
 | 能力 | API 前缀 | 用途 |
 |---|---|---|
-| 研究假设与证据 | `/api/research/hypotheses` | 管理 `exploring/testing/validated/rejected/monitoring` 假设及证据 |
-| Run Card 查询 | `/api/research/run-cards/{id}` | 读取不可变的回测/研究运行记录 |
-| 定时研究 | `/api/research/schedules` | 创建、更新、立即执行 cron 研究任务；模板为市场复盘、自选复盘、策略池周报 |
 | 因子对比 | `/api/backtest/factors/compare` | 对比 Alpha Zoo 因子的 IC/IR |
 | 稳健性分析 | `/api/backtest/strategy/robustness` | walk-forward、Bootstrap、Monte-Carlo、出场归因 |
 | 文件 / URL 读取 | `/api/documents/read`、`/api/documents/read-url` | 为 AI 提供受限的非行情事实附件上下文 |
 
-这些接口是可用功能，但不应被描述成已有完整页面。特别是 `research` 没有前端路由；文档读取目前通过 AI 助手附件入口暴露。
-
-多因子评分合成目前没有 REST 端点；请通过 AI 助手或 MCP 的 `compose_factor_score` 调用。
+研究假设、证据、Run Card 和定时研究已挂载到 `/research`；横截面研究和信号记分卡也已有独立页面，不再属于“仅 REST”能力。多因子评分合成仍没有 REST 端点，请通过 AI 助手或 MCP 的 `compose_factor_score` 调用。
 
 ### 10.2 AI 助手的只读工具
 
@@ -584,13 +621,13 @@ uv run python -m app.mcp_server --self-test
 
 | 范围 | 当前状态 | 正确理解 |
 |---|---|---|
-| 五档盘口 depth5 | 不可用 | FQuantProvider 不暴露 depth；sealed 真假涨停会降级为空 |
+| 五档盘口 depth5 | 本地 provider 不可用；受控 fallback 可选 | `depth` scope 默认关闭，只补盘中只读展示；sealed/历史判断仍按本地能力降级 |
 | 自动交易、券商下单 | 不支持 | 交易页仅记录人工事件、审计和计划；桥接页是占位 |
 | AI 荐股、涨停预测 | 不支持 | AI 只提供研究、报告、归因和计划检查辅助 |
 | 任意外部行情替代主数据 | 不支持 | 主链路只读本地 DuckDB；受控 fallback 也不得污染 canonical/enriched/回测 |
-| PDF 附件解析 | 不支持 | 文档读取支持文本、Markdown、CSV、XLSX/XLS 与受限 URL |
+| PDF 附件解析 | 支持文本层，图片页降级 | 使用 pypdfium2 提取文本层；扫描件不做 OCR，逐页提取失败会返回 warning |
 | 港股连板/情绪/题材轮动 | 不适用 | 港股没有 A 股涨跌停制度与对应概念标签链路 |
-| 研究登记和稳健性独立页面 | 未挂载页面 | 相关 REST、Agent 与 MCP 能力可用 |
+| 研究登记、横截面与信号记分卡 | 已挂载页面 | `/research`、`/cross-section`、`/signal-scorecard` 均为只读/回顾性研究入口 |
 
 **本节源码依据**
 
