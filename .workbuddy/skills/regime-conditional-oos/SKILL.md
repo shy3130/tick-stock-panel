@@ -82,7 +82,9 @@ description: 在 tickflow-stock-panel 量化项目中，对"regime 条件化策�
   安全增量补数，默认不得删除旧日线。
 - P13 已使用前置行情暖机并重跑；研究期无 warmup。不要在现有四折反向扫描阈值
   或交换牛熊腿。
-- 策略结论只能等待新的 60–120 个交易日观察。结构标签可以用于描述和归因，当前不得生产启用。
+- P14 已在 2026-07-29 注册冻结协议，只观察 `trend_always/pullback_always`；
+  2026-07-30 起的新交易日才计入60/120日门槛。结构标签可以用于描述和归因，
+  当前不得生产启用。
 
 ## 速查命令
 ```bash
@@ -91,6 +93,7 @@ cd backend && .venv/Scripts/python.exe -m research.regime.diag_f4_regime
 cd backend && .venv/Scripts/python.exe -m research.reporting.make_regime_ensemble_report
 cd backend && .venv/Scripts/python.exe -m research.regime.run_market_structure_v1
 cd backend && TICKFLOW_BACKTEST_MODE=inprocess .venv/Scripts/python.exe -m research.regime.run_structure_strategy_replay_v1
+cd backend && TICKFLOW_BACKTEST_MODE=inprocess .venv/Scripts/python.exe -m research.validation.run_structure_strategy_forward_watch_v1
 cd backend && .venv/Scripts/python.exe -m scripts.tushare_sync --start 20240401 --index-start 20240401 --workers 8
 cd backend && .venv/Scripts/python.exe -m py_compile app/strategy/builtin/regime_conditional.py app/strategy/builtin/factor_ensemble.py research/regime/run_regime_ensemble.py
 ```

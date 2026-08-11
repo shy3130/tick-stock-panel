@@ -1,0 +1,918 @@
+{
+  "status": "REJECTED_OVERFIT",
+  "protocol": {
+    "version": 1,
+    "strategy_id": "bullish_alignment",
+    "calibration": [
+      "2026-03-24",
+      "2026-06-24"
+    ],
+    "calibration_evidence": "in_sample_already_observed",
+    "validation_windows": [
+      {
+        "id": "leader_bull_2025_a",
+        "range": [
+          "2025-05-24",
+          "2025-08-24"
+        ],
+        "is_predeclared_bull_window": true
+      },
+      {
+        "id": "leader_bull_2025_b",
+        "range": [
+          "2025-07-24",
+          "2025-10-24"
+        ],
+        "is_predeclared_bull_window": true
+      },
+      {
+        "id": "post_target_audit",
+        "range": [
+          "2026-06-25",
+          "2026-08-07"
+        ],
+        "is_predeclared_bull_window": false
+      }
+    ],
+    "targets": {
+      "win_rate_min": 0.6,
+      "total_return_min": 0.8,
+      "minimum_trades": 30
+    },
+    "candidate_budget": 30,
+    "candidate_grid": {
+      "take_profit": [
+        0.055,
+        0.06,
+        0.065,
+        0.07,
+        0.075,
+        0.08
+      ],
+      "stop_loss": [
+        -0.08
+      ],
+      "max_hold_days": [
+        20
+      ],
+      "max_positions": [
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "position_sizing": [
+        "score_weight"
+      ]
+    },
+    "selection": "target-met candidates first; then maximize the weaker normalized target; then lower absolute drawdown and lexical candidate id",
+    "leakage_warning": "The 2026 target window selects the candidate and is not OOS. Validation windows never change the selected candidate. No result can auto-promote.",
+    "backtest_kwargs": {
+      "matching": "open_t+1",
+      "fees_pct": 0.0002,
+      "slippage_bps": 5.0,
+      "max_positions": 10,
+      "max_exposure_pct": 1.0,
+      "initial_capital": 1000000.0,
+      "position_sizing": "equal",
+      "mode": "position",
+      "holding_days": 5,
+      "asset_type": "stock",
+      "minute_fill": false
+    },
+    "sha256": "c8d9ba04718b2fad6550e4805504a34c97715414c6d13f35caa04e4cfa3fffaf"
+  },
+  "calibration": {
+    "id": "target_2026",
+    "universe": {
+      "start": "2026-03-24",
+      "end": "2026-06-24",
+      "selection": "all end-date listed non-ST stocks; no sampling",
+      "size": 5303,
+      "sha256": "17161d4e1d504b62ea65ce967f56f1475115eadd33caf7ed7a506ffc29666137"
+    },
+    "trials": [
+      {
+        "candidate": {
+          "id": "tp0.055_equal_score_4",
+          "take_profit": 0.055,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 4,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.9594,
+          "max_drawdown": -0.2026,
+          "sharpe": 4.19,
+          "sortino": 7.4,
+          "calmar": 71.07,
+          "win_rate": 0.6536,
+          "n_trades": 179
+        },
+        "target_met": true,
+        "joint_score": 1.089333
+      },
+      {
+        "candidate": {
+          "id": "tp0.055_equal_score_5",
+          "take_profit": 0.055,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 5,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.5506,
+          "max_drawdown": -0.253,
+          "sharpe": 3.0,
+          "sortino": 4.77,
+          "calmar": 19.56,
+          "win_rate": 0.6167,
+          "n_trades": 227
+        },
+        "target_met": false,
+        "joint_score": 0.68825
+      },
+      {
+        "candidate": {
+          "id": "tp0.055_equal_score_6",
+          "take_profit": 0.055,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 6,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.5005,
+          "max_drawdown": -0.2149,
+          "sharpe": 2.85,
+          "sortino": 4.53,
+          "calmar": 19.56,
+          "win_rate": 0.6053,
+          "n_trades": 266
+        },
+        "target_met": false,
+        "joint_score": 0.625625
+      },
+      {
+        "candidate": {
+          "id": "tp0.055_equal_score_7",
+          "take_profit": 0.055,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 7,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.6159,
+          "max_drawdown": -0.1908,
+          "sharpe": 3.41,
+          "sortino": 5.51,
+          "calmar": 31.61,
+          "win_rate": 0.6146,
+          "n_trades": 314
+        },
+        "target_met": false,
+        "joint_score": 0.769875
+      },
+      {
+        "candidate": {
+          "id": "tp0.055_equal_score_8",
+          "take_profit": 0.055,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 8,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.81,
+          "max_drawdown": -0.1666,
+          "sharpe": 4.31,
+          "sortino": 7.67,
+          "calmar": 60.94,
+          "win_rate": 0.6233,
+          "n_trades": 361
+        },
+        "target_met": true,
+        "joint_score": 1.0125
+      },
+      {
+        "candidate": {
+          "id": "tp0.060_equal_score_4",
+          "take_profit": 0.06,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 4,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.814,
+          "max_drawdown": -0.2162,
+          "sharpe": 3.99,
+          "sortino": 6.64,
+          "calmar": 47.43,
+          "win_rate": 0.6358,
+          "n_trades": 173
+        },
+        "target_met": true,
+        "joint_score": 1.0175
+      },
+      {
+        "candidate": {
+          "id": "tp0.060_equal_score_5",
+          "take_profit": 0.06,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 5,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.4105,
+          "max_drawdown": -0.2428,
+          "sharpe": 2.45,
+          "sortino": 3.76,
+          "calmar": 12.55,
+          "win_rate": 0.5926,
+          "n_trades": 216
+        },
+        "target_met": false,
+        "joint_score": 0.513125
+      },
+      {
+        "candidate": {
+          "id": "tp0.060_equal_score_6",
+          "take_profit": 0.06,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 6,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.2792,
+          "max_drawdown": -0.2209,
+          "sharpe": 1.91,
+          "sortino": 2.89,
+          "calmar": 7.79,
+          "win_rate": 0.583,
+          "n_trades": 259
+        },
+        "target_met": false,
+        "joint_score": 0.349
+      },
+      {
+        "candidate": {
+          "id": "tp0.060_equal_score_7",
+          "take_profit": 0.06,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 7,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.574,
+          "max_drawdown": -0.1855,
+          "sharpe": 3.32,
+          "sortino": 5.25,
+          "calmar": 28.68,
+          "win_rate": 0.6066,
+          "n_trades": 305
+        },
+        "target_met": false,
+        "joint_score": 0.7175
+      },
+      {
+        "candidate": {
+          "id": "tp0.060_equal_score_8",
+          "take_profit": 0.06,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 8,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.5335,
+          "max_drawdown": -0.1665,
+          "sharpe": 3.24,
+          "sortino": 5.73,
+          "calmar": 28.13,
+          "win_rate": 0.5994,
+          "n_trades": 347
+        },
+        "target_met": false,
+        "joint_score": 0.666875
+      },
+      {
+        "candidate": {
+          "id": "tp0.065_equal_score_4",
+          "take_profit": 0.065,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 4,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.5537,
+          "max_drawdown": -0.2053,
+          "sharpe": 3.3,
+          "sortino": 5.46,
+          "calmar": 24.34,
+          "win_rate": 0.6024,
+          "n_trades": 166
+        },
+        "target_met": false,
+        "joint_score": 0.692125
+      },
+      {
+        "candidate": {
+          "id": "tp0.065_equal_score_5",
+          "take_profit": 0.065,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 5,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.423,
+          "max_drawdown": -0.1915,
+          "sharpe": 2.59,
+          "sortino": 4.02,
+          "calmar": 16.68,
+          "win_rate": 0.586,
+          "n_trades": 215
+        },
+        "target_met": false,
+        "joint_score": 0.52875
+      },
+      {
+        "candidate": {
+          "id": "tp0.065_equal_score_6",
+          "take_profit": 0.065,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 6,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.4184,
+          "max_drawdown": -0.179,
+          "sharpe": 2.63,
+          "sortino": 3.96,
+          "calmar": 17.55,
+          "win_rate": 0.5837,
+          "n_trades": 257
+        },
+        "target_met": false,
+        "joint_score": 0.523
+      },
+      {
+        "candidate": {
+          "id": "tp0.065_equal_score_7",
+          "take_profit": 0.065,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 7,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.7467,
+          "max_drawdown": -0.1425,
+          "sharpe": 4.32,
+          "sortino": 7.42,
+          "calmar": 60.7,
+          "win_rate": 0.6081,
+          "n_trades": 296
+        },
+        "target_met": false,
+        "joint_score": 0.933375
+      },
+      {
+        "candidate": {
+          "id": "tp0.065_equal_score_8",
+          "take_profit": 0.065,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 8,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.6228,
+          "max_drawdown": -0.1237,
+          "sharpe": 3.68,
+          "sortino": 6.74,
+          "calmar": 49.77,
+          "win_rate": 0.5946,
+          "n_trades": 333
+        },
+        "target_met": false,
+        "joint_score": 0.7785
+      },
+      {
+        "candidate": {
+          "id": "tp0.070_equal_score_4",
+          "take_profit": 0.07,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 4,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.8451,
+          "max_drawdown": -0.2593,
+          "sharpe": 4.08,
+          "sortino": 6.67,
+          "calmar": 42.64,
+          "win_rate": 0.6038,
+          "n_trades": 159
+        },
+        "target_met": true,
+        "joint_score": 1.006333
+      },
+      {
+        "candidate": {
+          "id": "tp0.070_equal_score_5",
+          "take_profit": 0.07,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 5,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.5754,
+          "max_drawdown": -0.232,
+          "sharpe": 3.28,
+          "sortino": 5.22,
+          "calmar": 23.03,
+          "win_rate": 0.5829,
+          "n_trades": 199
+        },
+        "target_met": false,
+        "joint_score": 0.71925
+      },
+      {
+        "candidate": {
+          "id": "tp0.070_equal_score_6",
+          "take_profit": 0.07,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 6,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.3017,
+          "max_drawdown": -0.187,
+          "sharpe": 2.1,
+          "sortino": 3.12,
+          "calmar": 10.27,
+          "win_rate": 0.5579,
+          "n_trades": 242
+        },
+        "target_met": false,
+        "joint_score": 0.377125
+      },
+      {
+        "candidate": {
+          "id": "tp0.070_equal_score_7",
+          "take_profit": 0.07,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 7,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.6464,
+          "max_drawdown": -0.1343,
+          "sharpe": 3.83,
+          "sortino": 6.72,
+          "calmar": 49.05,
+          "win_rate": 0.5851,
+          "n_trades": 282
+        },
+        "target_met": false,
+        "joint_score": 0.808
+      },
+      {
+        "candidate": {
+          "id": "tp0.070_equal_score_8",
+          "take_profit": 0.07,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 8,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.8404,
+          "max_drawdown": -0.1106,
+          "sharpe": 4.55,
+          "sortino": 8.68,
+          "calmar": 98.82,
+          "win_rate": 0.5988,
+          "n_trades": 324
+        },
+        "target_met": false,
+        "joint_score": 0.998
+      },
+      {
+        "candidate": {
+          "id": "tp0.075_equal_score_4",
+          "take_profit": 0.075,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 4,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.9388,
+          "max_drawdown": -0.2637,
+          "sharpe": 4.27,
+          "sortino": 7.06,
+          "calmar": 52.13,
+          "win_rate": 0.6026,
+          "n_trades": 156
+        },
+        "target_met": true,
+        "joint_score": 1.004333
+      },
+      {
+        "candidate": {
+          "id": "tp0.075_equal_score_5",
+          "take_profit": 0.075,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 5,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.6196,
+          "max_drawdown": -0.236,
+          "sharpe": 3.32,
+          "sortino": 5.37,
+          "calmar": 25.84,
+          "win_rate": 0.5795,
+          "n_trades": 195
+        },
+        "target_met": false,
+        "joint_score": 0.7745
+      },
+      {
+        "candidate": {
+          "id": "tp0.075_equal_score_6",
+          "take_profit": 0.075,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 6,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.5764,
+          "max_drawdown": -0.1841,
+          "sharpe": 3.35,
+          "sortino": 5.26,
+          "calmar": 29.12,
+          "win_rate": 0.569,
+          "n_trades": 232
+        },
+        "target_met": false,
+        "joint_score": 0.7205
+      },
+      {
+        "candidate": {
+          "id": "tp0.075_equal_score_7",
+          "take_profit": 0.075,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 7,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.7705,
+          "max_drawdown": -0.1309,
+          "sharpe": 4.33,
+          "sortino": 7.7,
+          "calmar": 70.23,
+          "win_rate": 0.5876,
+          "n_trades": 274
+        },
+        "target_met": false,
+        "joint_score": 0.963125
+      },
+      {
+        "candidate": {
+          "id": "tp0.075_equal_score_8",
+          "take_profit": 0.075,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 8,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.6436,
+          "max_drawdown": -0.1064,
+          "sharpe": 3.83,
+          "sortino": 7.11,
+          "calmar": 61.4,
+          "win_rate": 0.5688,
+          "n_trades": 327
+        },
+        "target_met": false,
+        "joint_score": 0.8045
+      },
+      {
+        "candidate": {
+          "id": "tp0.080_equal_score_4",
+          "take_profit": 0.08,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 4,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 1.0868,
+          "max_drawdown": -0.2603,
+          "sharpe": 4.64,
+          "sortino": 7.77,
+          "calmar": 72.54,
+          "win_rate": 0.6065,
+          "n_trades": 155
+        },
+        "target_met": true,
+        "joint_score": 1.010833
+      },
+      {
+        "candidate": {
+          "id": "tp0.080_equal_score_5",
+          "take_profit": 0.08,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 5,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.6928,
+          "max_drawdown": -0.2411,
+          "sharpe": 3.57,
+          "sortino": 5.79,
+          "calmar": 31.09,
+          "win_rate": 0.5781,
+          "n_trades": 192
+        },
+        "target_met": false,
+        "joint_score": 0.866
+      },
+      {
+        "candidate": {
+          "id": "tp0.080_equal_score_6",
+          "take_profit": 0.08,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 6,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.4443,
+          "max_drawdown": -0.1809,
+          "sharpe": 2.84,
+          "sortino": 4.23,
+          "calmar": 19.1,
+          "win_rate": 0.5517,
+          "n_trades": 232
+        },
+        "target_met": false,
+        "joint_score": 0.555375
+      },
+      {
+        "candidate": {
+          "id": "tp0.080_equal_score_7",
+          "take_profit": 0.08,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 7,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.76,
+          "max_drawdown": -0.1308,
+          "sharpe": 4.19,
+          "sortino": 7.22,
+          "calmar": 68.42,
+          "win_rate": 0.5746,
+          "n_trades": 268
+        },
+        "target_met": false,
+        "joint_score": 0.95
+      },
+      {
+        "candidate": {
+          "id": "tp0.080_equal_score_8",
+          "take_profit": 0.08,
+          "stop_loss": -0.08,
+          "max_hold_days": 20,
+          "max_positions": 8,
+          "position_sizing": "score_weight"
+        },
+        "status": "ok",
+        "stats": {
+          "total_return": 0.8295,
+          "max_drawdown": -0.0828,
+          "sharpe": 4.91,
+          "sortino": 9.55,
+          "calmar": 128.64,
+          "win_rate": 0.5768,
+          "n_trades": 319
+        },
+        "target_met": false,
+        "joint_score": 0.961333
+      }
+    ],
+    "selected_candidate": {
+      "id": "tp0.055_equal_score_4",
+      "take_profit": 0.055,
+      "stop_loss": -0.08,
+      "max_hold_days": 20,
+      "max_positions": 4,
+      "position_sizing": "score_weight"
+    },
+    "selected_stats": {
+      "total_return": 0.9594,
+      "max_drawdown": -0.2026,
+      "sharpe": 4.19,
+      "sortino": 7.4,
+      "calmar": 71.07,
+      "win_rate": 0.6536,
+      "n_trades": 179
+    },
+    "target_met_in_sample": true
+  },
+  "validation": [
+    {
+      "id": "leader_bull_2025_a",
+      "is_predeclared_bull_window": true,
+      "universe": {
+        "start": "2025-05-24",
+        "end": "2025-08-24",
+        "selection": "all end-date listed non-ST stocks; no sampling",
+        "size": 5184,
+        "sha256": "10eb34ee0e7a5a3b7d4cbbdd216bdeb05247ceaa9d7f0913895e9ae8790fd27f"
+      },
+      "baseline": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.1033,
+          "max_drawdown": -0.1918,
+          "sharpe": -0.65,
+          "sortino": -1.01,
+          "calmar": -1.82,
+          "win_rate": 0.1724,
+          "n_trades": 116
+        }
+      },
+      "challenge": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.1694,
+          "max_drawdown": -0.2626,
+          "sharpe": -0.61,
+          "sortino": -0.96,
+          "calmar": -1.97,
+          "win_rate": 0.5143,
+          "n_trades": 175
+        }
+      },
+      "stats": {
+        "total_return": -0.1694,
+        "max_drawdown": -0.2626,
+        "sharpe": -0.61,
+        "sortino": -0.96,
+        "calmar": -1.97,
+        "win_rate": 0.5143,
+        "n_trades": 175
+      },
+      "target_met": false
+    },
+    {
+      "id": "leader_bull_2025_b",
+      "is_predeclared_bull_window": true,
+      "universe": {
+        "start": "2025-07-24",
+        "end": "2025-10-24",
+        "selection": "all end-date listed non-ST stocks; no sampling",
+        "size": 5204,
+        "sha256": "7e89805f3ba30d7fbd69f5ef52cd13efb3f1f5cea5a1bbddfa94d303ca805b6e"
+      },
+      "baseline": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.3102,
+          "max_drawdown": -0.3984,
+          "sharpe": -3.3,
+          "sortino": -4.04,
+          "calmar": -1.97,
+          "win_rate": 0.177,
+          "n_trades": 113
+        }
+      },
+      "challenge": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.3987,
+          "max_drawdown": -0.5132,
+          "sharpe": -2.32,
+          "sortino": -2.9,
+          "calmar": -1.71,
+          "win_rate": 0.4813,
+          "n_trades": 160
+        }
+      },
+      "stats": {
+        "total_return": -0.3987,
+        "max_drawdown": -0.5132,
+        "sharpe": -2.32,
+        "sortino": -2.9,
+        "calmar": -1.71,
+        "win_rate": 0.4813,
+        "n_trades": 160
+      },
+      "target_met": false
+    },
+    {
+      "id": "post_target_audit",
+      "is_predeclared_bull_window": false,
+      "universe": {
+        "start": "2026-06-25",
+        "end": "2026-08-07",
+        "selection": "all end-date listed non-ST stocks; no sampling",
+        "size": 5329,
+        "sha256": "0a7dc89f0068e843bae4b3ac327e97c2f5508ab29cd75e4e8ddf1d439e3da8f2"
+      },
+      "baseline": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.5344,
+          "max_drawdown": -0.5542,
+          "sharpe": -10.05,
+          "sortino": -8.93,
+          "calmar": -1.8,
+          "win_rate": 0.1111,
+          "n_trades": 126
+        }
+      },
+      "challenge": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.4711,
+          "max_drawdown": -0.5217,
+          "sharpe": -5.5,
+          "sortino": -5.67,
+          "calmar": -1.9,
+          "win_rate": 0.419,
+          "n_trades": 105
+        }
+      },
+      "stats": {
+        "total_return": -0.4711,
+        "max_drawdown": -0.5217,
+        "sharpe": -5.5,
+        "sortino": -5.67,
+        "calmar": -1.9,
+        "win_rate": 0.419,
+        "n_trades": 105
+      },
+      "target_met": false
+    }
+  ],
+  "strict_bull_generalization_pass": false,
+  "production_changed": false,
+  "failures": [],
+  "elapsed_seconds": 90.7,
+  "conclusion": "The requested thresholds were found only in the inspected calibration window; the frozen candidate failed both predeclared 2025 bull windows."
+}

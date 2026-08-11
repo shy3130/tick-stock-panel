@@ -29,7 +29,7 @@ def test_builtin_catalog_is_complete_and_defaults_to_three_core_strategies():
 
     assert not engine.load_errors()
     assert ids == strategy_catalog.BUILTIN_STRATEGY_IDS
-    assert len(ids) == 21
+    assert len(ids) == 22
     assert {
         item["id"]
         for item in metadata

@@ -1,0 +1,670 @@
+{
+  "status": "HISTORICAL_REPLAY_ONLY",
+  "protocol": {
+    "version": 1,
+    "evidence_status": "historical_replay_only_all_windows_already_observed",
+    "selection_change": "fixed quality/risk scorecard; no parameter search",
+    "baseline": "bullish_alignment",
+    "candidate": "quality_momentum_v1",
+    "same_budget": "one baseline and one candidate evaluation per window",
+    "universe": "all end-date listed non-ST stocks; no sampling",
+    "seed": null,
+    "deterministic_tie_break": "score descending, symbol lexical",
+    "portfolio": {
+      "historical_replay": {
+        "max_positions": 10,
+        "position_sizing": "equal"
+      },
+      "latest_display_only": {
+        "max_per_current_industry": 2
+      }
+    },
+    "windows": [
+      {
+        "id": "leader_bull_2025_a",
+        "range": [
+          "2025-05-24",
+          "2025-08-24"
+        ]
+      },
+      {
+        "id": "leader_bull_2025_b",
+        "range": [
+          "2025-07-24",
+          "2025-10-24"
+        ]
+      },
+      {
+        "id": "target_2026_contaminated",
+        "range": [
+          "2026-03-24",
+          "2026-06-24"
+        ]
+      },
+      {
+        "id": "post_target_audit",
+        "range": [
+          "2026-06-25",
+          "2026-08-07"
+        ]
+      }
+    ],
+    "leakage_barriers": [
+      "no replay result selects or changes a threshold",
+      "current static industry classification never enters historical score",
+      "news requires timezone-aware published_at and is disabled without historical archive",
+      "daily signal uses only current/prior bars; engine executes on the next bar",
+      "no automatic production promotion"
+    ],
+    "sha256": "79d24b9ba2b8b67d8e28e34d7ed8a2590d49b238d8fc7c1a5838c4a9d0c3d7de"
+  },
+  "score_definition": {
+    "positive": "32% trend + 28% momentum quality + 12% volume confirmation + 8% liquidity",
+    "penalties": "8% overextension + 5% volatility + 3% drawdown + 2% gap + 2% extreme momentum",
+    "range": [
+      0,
+      100
+    ],
+    "thresholds": {
+      "min_momentum_20d": 0.03,
+      "max_momentum_20d": 0.35,
+      "min_momentum_60d": 0.05,
+      "max_ma20_bias": 0.18,
+      "max_annual_vol_20d": 1.0,
+      "max_abs_gap": 0.1,
+      "min_amount_20d": 30000000.0
+    },
+    "weights_selected_without_replay_search": true
+  },
+  "historical_comparisons": [
+    {
+      "id": "leader_bull_2025_a",
+      "range": [
+        "2025-05-24",
+        "2025-08-24"
+      ],
+      "universe": {
+        "selection": "all end-date listed non-ST stocks; no sampling",
+        "size": 5184,
+        "sha256": "10eb34ee0e7a5a3b7d4cbbdd216bdeb05247ceaa9d7f0913895e9ae8790fd27f"
+      },
+      "evaluation_budget": {
+        "bullish_alignment": 1,
+        "quality_momentum_v1": 1
+      },
+      "baseline": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.1033,
+          "max_drawdown": -0.1918,
+          "sharpe": -0.65,
+          "sortino": -1.01,
+          "calmar": -1.82,
+          "win_rate": 0.1724,
+          "n_trades": 116
+        }
+      },
+      "candidate": {
+        "status": "ok",
+        "stats": {
+          "total_return": 0.3535,
+          "max_drawdown": -0.0387,
+          "sharpe": 5.08,
+          "sortino": 9.36,
+          "calmar": 59.24,
+          "win_rate": 0.4667,
+          "n_trades": 60
+        }
+      },
+      "delta": {
+        "total_return": 0.4568,
+        "win_rate": 0.2943,
+        "max_drawdown": 0.1531,
+        "sharpe": 5.73
+      }
+    },
+    {
+      "id": "leader_bull_2025_b",
+      "range": [
+        "2025-07-24",
+        "2025-10-24"
+      ],
+      "universe": {
+        "selection": "all end-date listed non-ST stocks; no sampling",
+        "size": 5204,
+        "sha256": "7e89805f3ba30d7fbd69f5ef52cd13efb3f1f5cea5a1bbddfa94d303ca805b6e"
+      },
+      "evaluation_budget": {
+        "bullish_alignment": 1,
+        "quality_momentum_v1": 1
+      },
+      "baseline": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.3102,
+          "max_drawdown": -0.3984,
+          "sharpe": -3.3,
+          "sortino": -4.04,
+          "calmar": -1.97,
+          "win_rate": 0.177,
+          "n_trades": 113
+        }
+      },
+      "candidate": {
+        "status": "ok",
+        "stats": {
+          "total_return": 0.0274,
+          "max_drawdown": -0.1235,
+          "sharpe": 0.52,
+          "sortino": 0.71,
+          "calmar": 0.96,
+          "win_rate": 0.3059,
+          "n_trades": 85
+        }
+      },
+      "delta": {
+        "total_return": 0.3376,
+        "win_rate": 0.1289,
+        "max_drawdown": 0.2749,
+        "sharpe": 3.82
+      }
+    },
+    {
+      "id": "target_2026_contaminated",
+      "range": [
+        "2026-03-24",
+        "2026-06-24"
+      ],
+      "universe": {
+        "selection": "all end-date listed non-ST stocks; no sampling",
+        "size": 5303,
+        "sha256": "17161d4e1d504b62ea65ce967f56f1475115eadd33caf7ed7a506ffc29666137"
+      },
+      "evaluation_budget": {
+        "bullish_alignment": 1,
+        "quality_momentum_v1": 1
+      },
+      "baseline": {
+        "status": "ok",
+        "stats": {
+          "total_return": 0.184,
+          "max_drawdown": -0.1783,
+          "sharpe": 1.64,
+          "sortino": 2.44,
+          "calmar": 5.54,
+          "win_rate": 0.233,
+          "n_trades": 103
+        }
+      },
+      "candidate": {
+        "status": "ok",
+        "stats": {
+          "total_return": 0.0118,
+          "max_drawdown": -0.1664,
+          "sharpe": 0.32,
+          "sortino": 0.45,
+          "calmar": 0.29,
+          "win_rate": 0.2321,
+          "n_trades": 112
+        }
+      },
+      "delta": {
+        "total_return": -0.1722,
+        "win_rate": -0.0009,
+        "max_drawdown": 0.0119,
+        "sharpe": -1.32
+      }
+    },
+    {
+      "id": "post_target_audit",
+      "range": [
+        "2026-06-25",
+        "2026-08-07"
+      ],
+      "universe": {
+        "selection": "all end-date listed non-ST stocks; no sampling",
+        "size": 5329,
+        "sha256": "0a7dc89f0068e843bae4b3ac327e97c2f5508ab29cd75e4e8ddf1d439e3da8f2"
+      },
+      "evaluation_budget": {
+        "bullish_alignment": 1,
+        "quality_momentum_v1": 1
+      },
+      "baseline": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.5344,
+          "max_drawdown": -0.5542,
+          "sharpe": -10.05,
+          "sortino": -8.93,
+          "calmar": -1.8,
+          "win_rate": 0.1111,
+          "n_trades": 126
+        }
+      },
+      "candidate": {
+        "status": "ok",
+        "stats": {
+          "total_return": -0.327,
+          "max_drawdown": -0.3475,
+          "sharpe": -7.33,
+          "sortino": -7.43,
+          "calmar": -2.75,
+          "win_rate": 0.119,
+          "n_trades": 84
+        }
+      },
+      "delta": {
+        "total_return": 0.2074,
+        "win_rate": 0.0079,
+        "max_drawdown": 0.2067,
+        "sharpe": 2.72
+      }
+    }
+  ],
+  "latest_audit": {
+    "signal_date": "2026-08-07",
+    "execution_status": "signal_only; no next trading bar is available for a fill",
+    "universe_sha256": "0a7dc89f0068e843bae4b3ac327e97c2f5508ab29cd75e4e8ddf1d439e3da8f2",
+    "summary": {
+      "universe_size": 5329,
+      "signal_eligible": 56,
+      "selected_signal_count": 10,
+      "signal_rejected_count": 5273,
+      "portfolio_rejected_count": 46,
+      "selected_symbols": [
+        "603882.SH",
+        "300347.SZ",
+        "603979.SH",
+        "600267.SH",
+        "002832.SZ",
+        "600882.SH",
+        "000739.SZ",
+        "002412.SZ",
+        "603087.SH",
+        "600352.SH"
+      ],
+      "rejection_counts": {
+        "未满足 MA5>MA10>MA20>MA60": 4946,
+        "60日趋势强度不足": 4815,
+        "20日动量低于门槛": 3050,
+        "收盘价低于MA20": 689,
+        "20日年化波动过高": 570,
+        "20日平均成交额不足": 490,
+        "偏离MA20过远，追高风险": 202,
+        "20日涨幅过热": 62,
+        "组合持仓名额已满": 46,
+        "历史数据不足或指标非有限值": 38,
+        "当日跳空幅度过大": 6
+      },
+      "industry_counts": {
+        "中成药": 1,
+        "乳制品": 1,
+        "化学制药": 2,
+        "医疗保健": 2,
+        "服饰": 1,
+        "染料涂料": 1,
+        "生物制药": 1,
+        "铜": 1
+      }
+    },
+    "selected": [
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "603882.SH",
+        "name": "金域医学",
+        "industry_current": "医疗保健",
+        "decision": "selected_signal",
+        "eligible_rank": 1,
+        "score": 62.446,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.176686,
+        "momentum_60d": 0.103199,
+        "ma20_bias": 0.066249,
+        "ma20_slope_10d": 0.083938,
+        "annual_vol_20d": 0.402164,
+        "volume_ratio_5d": 1.689101,
+        "drawdown_20d": 0.0,
+        "gap": -0.007849,
+        "amount_20d": 268860384.0,
+        "trend_quality": 0.990505,
+        "momentum_quality": 0.590875,
+        "volume_confirmation": 0.873933,
+        "liquidity_quality": 0.464764,
+        "overextension_penalty": 0.0,
+        "volatility_penalty": 0.0,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "300347.SZ",
+        "name": "泰格医药",
+        "industry_current": "医疗保健",
+        "decision": "selected_signal",
+        "eligible_rank": 2,
+        "score": 58.5262,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.149778,
+        "momentum_60d": 0.136369,
+        "ma20_bias": 0.09153,
+        "ma20_slope_10d": 0.039179,
+        "annual_vol_20d": 0.706538,
+        "volume_ratio_5d": 1.925092,
+        "drawdown_20d": 0.0,
+        "gap": -0.009873,
+        "amount_20d": 1175434368.0,
+        "trend_quality": 0.821406,
+        "momentum_quality": 0.714048,
+        "volume_confirmation": 0.716605,
+        "liquidity_quality": 0.785099,
+        "overextension_penalty": 0.082356,
+        "volatility_penalty": 0.394674,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "603979.SH",
+        "name": "金诚信",
+        "industry_current": "铜",
+        "decision": "selected_signal",
+        "eligible_rank": 3,
+        "score": 58.2516,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.21364,
+        "momentum_60d": 0.203071,
+        "ma20_bias": 0.119681,
+        "ma20_slope_10d": 0.091,
+        "annual_vol_20d": 0.71117,
+        "volume_ratio_5d": 1.234386,
+        "drawdown_20d": 0.0,
+        "gap": -0.006122,
+        "amount_20d": 685260032.0,
+        "trend_quality": 1.0,
+        "momentum_quality": 0.613175,
+        "volume_confirmation": 0.667983,
+        "liquidity_quality": 0.667928,
+        "overextension_penalty": 0.283436,
+        "volatility_penalty": 0.4018,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "600267.SH",
+        "name": "海正药业",
+        "industry_current": "化学制药",
+        "decision": "selected_signal",
+        "eligible_rank": 4,
+        "score": 57.024,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.21727,
+        "momentum_60d": 0.160901,
+        "ma20_bias": 0.101357,
+        "ma20_slope_10d": 0.061864,
+        "annual_vol_20d": 0.683099,
+        "volume_ratio_5d": 1.367513,
+        "drawdown_20d": 0.0,
+        "gap": -0.001678,
+        "amount_20d": 658464768.0,
+        "trend_quality": 0.920657,
+        "momentum_quality": 0.546058,
+        "volume_confirmation": 0.834391,
+        "liquidity_quality": 0.659266,
+        "overextension_penalty": 0.152548,
+        "volatility_penalty": 0.358613,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "002832.SZ",
+        "name": "比音勒芬",
+        "industry_current": "服饰",
+        "decision": "selected_signal",
+        "eligible_rank": 5,
+        "score": 56.5528,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.189947,
+        "momentum_60d": 0.215218,
+        "ma20_bias": 0.048106,
+        "ma20_slope_10d": 0.105438,
+        "annual_vol_20d": 0.536308,
+        "volume_ratio_5d": 0.778645,
+        "drawdown_20d": -0.052713,
+        "gap": -0.010152,
+        "amount_20d": 403740000.0,
+        "trend_quality": 1.0,
+        "momentum_quality": 0.70045,
+        "volume_confirmation": 0.098307,
+        "liquidity_quality": 0.553051,
+        "overextension_penalty": 0.0,
+        "volatility_penalty": 0.132782,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "600882.SH",
+        "name": "妙可蓝多",
+        "industry_current": "乳制品",
+        "decision": "selected_signal",
+        "eligible_rank": 6,
+        "score": 56.1517,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.153767,
+        "momentum_60d": 0.149024,
+        "ma20_bias": 0.03127,
+        "ma20_slope_10d": 0.121821,
+        "annual_vol_20d": 0.44911,
+        "volume_ratio_5d": 0.601542,
+        "drawdown_20d": -0.029092,
+        "gap": 0.0,
+        "amount_20d": 311028704.0,
+        "trend_quality": 1.0,
+        "momentum_quality": 0.720731,
+        "volume_confirmation": 0.0,
+        "liquidity_quality": 0.4964,
+        "overextension_penalty": 0.0,
+        "volatility_penalty": 0.0,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "000739.SZ",
+        "name": "普洛药业",
+        "industry_current": "化学制药",
+        "decision": "selected_signal",
+        "eligible_rank": 7,
+        "score": 55.8166,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.300556,
+        "momentum_60d": 0.352397,
+        "ma20_bias": 0.143876,
+        "ma20_slope_10d": 0.086741,
+        "annual_vol_20d": 0.733243,
+        "volume_ratio_5d": 1.799915,
+        "drawdown_20d": 0.0,
+        "gap": -0.005639,
+        "amount_20d": 539235200.0,
+        "trend_quality": 1.0,
+        "momentum_quality": 0.54659,
+        "volume_confirmation": 0.800057,
+        "liquidity_quality": 0.615889,
+        "overextension_penalty": 0.456259,
+        "volatility_penalty": 0.435758,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.093434
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "002412.SZ",
+        "name": "汉森制药",
+        "industry_current": "中成药",
+        "decision": "selected_signal",
+        "eligible_rank": 8,
+        "score": 55.6342,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.211667,
+        "momentum_60d": 0.057882,
+        "ma20_bias": 0.073776,
+        "ma20_slope_10d": 0.084842,
+        "annual_vol_20d": 0.739576,
+        "volume_ratio_5d": 1.751131,
+        "drawdown_20d": -0.014905,
+        "gap": -0.007143,
+        "amount_20d": 308407680.0,
+        "trend_quality": 1.0,
+        "momentum_quality": 0.42551,
+        "volume_confirmation": 0.832579,
+        "liquidity_quality": 0.494563,
+        "overextension_penalty": 0.0,
+        "volatility_penalty": 0.445502,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "603087.SH",
+        "name": "甘李药业",
+        "industry_current": "生物制药",
+        "decision": "selected_signal",
+        "eligible_rank": 9,
+        "score": 54.9882,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.048443,
+        "momentum_60d": 0.252706,
+        "ma20_bias": 0.033969,
+        "ma20_slope_10d": 0.050547,
+        "annual_vol_20d": 0.527467,
+        "volume_ratio_5d": 1.486793,
+        "drawdown_20d": -0.010085,
+        "gap": -0.002932,
+        "amount_20d": 868875968.0,
+        "trend_quality": 0.871145,
+        "momentum_quality": 0.36249,
+        "volume_confirmation": 0.983492,
+        "liquidity_quality": 0.719479,
+        "overextension_penalty": 0.0,
+        "volatility_penalty": 0.119181,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      },
+      {
+        "signal_date": "2026-08-07",
+        "symbol": "600352.SH",
+        "name": "浙江龙盛",
+        "industry_current": "染料涂料",
+        "decision": "selected_signal",
+        "eligible_rank": 10,
+        "score": 54.7722,
+        "reasons": [
+          "趋势排列通过",
+          "动量处于非过热区间",
+          "量价与流动性通过",
+          "风险扣分后综合排名入围"
+        ],
+        "momentum_20d": 0.104866,
+        "momentum_60d": 0.119815,
+        "ma20_bias": 0.022476,
+        "ma20_slope_10d": 0.043806,
+        "annual_vol_20d": 0.536326,
+        "volume_ratio_5d": 1.333003,
+        "drawdown_20d": -0.028044,
+        "gap": -0.00687,
+        "amount_20d": 955448000.0,
+        "trend_quality": 0.841649,
+        "momentum_quality": 0.467415,
+        "volume_confirmation": 0.791254,
+        "liquidity_quality": 0.740104,
+        "overextension_penalty": 0.0,
+        "volatility_penalty": 0.13281,
+        "drawdown_penalty": 0.0,
+        "gap_penalty": 0.0,
+        "extreme_momentum_penalty": 0.0
+      }
+    ],
+    "csv": "artifacts/archive/selection/selection_logic_v1_latest_audit.csv",
+    "industry": {
+      "available": true,
+      "source": "data/tushare_stock_basic/all.parquet",
+      "point_in_time": false,
+      "usage": "latest-date display/diversification only; excluded from historical score and replay",
+      "mapped_symbols": 5545
+    },
+    "news": {
+      "available": false,
+      "enabled_in_score": false,
+      "expected_source": "data/news/events.jsonl",
+      "required_fields": [
+        "published_at",
+        "ts_code",
+        "source",
+        "event_type",
+        "score"
+      ],
+      "reason": "no historical point-in-time news archive; neutral score, no fabricated signal"
+    }
+  },
+  "failures": [],
+  "production_default_changed": false,
+  "fresh_oos_status": "NOT_STARTED",
+  "elapsed_seconds": 40.0,
+  "conclusion": "Selection logic is executable and auditable. Historical replay is diagnostic only; a future frozen observation period is required before any promotion."
+}

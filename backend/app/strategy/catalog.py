@@ -21,6 +21,7 @@ _EXPERIMENTAL_IDS = frozenset({
     "regime_conditional",
     "oversold_reversal",
     "limit_up_momentum",
+    "quality_momentum_v1",
 })
 _LEGACY_IDS = frozenset({
     "boll_breakout",
@@ -63,6 +64,8 @@ def _builtin_metadata(strategy_id: str) -> dict[str, Any]:
 
     if strategy_id == "custom_factor":
         evidence_status = "not_a_standalone_alpha"
+    elif strategy_id == "quality_momentum_v1":
+        evidence_status = "historical_replay_mixed_not_oos"
     elif strategy_id in _FAILED_REPLAY_IDS:
         evidence_status = "historical_replay_failed"
     else:

@@ -1,6 +1,9 @@
-# 功能手册
+# 历史面板功能手册（已归档）
 
-各功能模块的详细说明。配置见 [configuration.md](./configuration.md),部署见 [deployment.md](./deployment.md),策略相关见 [strategy.md](./strategy.md)。
+> 本文描述已下线的页面工作流，只用于追溯，不代表当前无前端项目结构。
+
+各功能模块的详细说明。配置见 [configuration.md](../../configuration.md)，部署见
+[deployment.md](../../deployment.md)，策略相关见 [strategy.md](./strategy.md)。
 
 > 首次使用建议顺序:**设置 → 凭据与能力**(重新检测) → **立即跑盘后管道**(拉日 K + 算指标) → **自选页**加标的 → **选股页**扫描 → **回测页**验证 → **监控中心**配规则。
 

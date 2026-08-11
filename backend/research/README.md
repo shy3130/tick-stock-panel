@@ -11,8 +11,10 @@
   随机公式标签和 pairwise/listwise ranker。
 - `regime/`：市场状态过滤、条件切换和 F4 诊断。
 - `optimization/`：历史参数搜索实验；不能作为 OOS 证据。
+- `selection/`：可解释选股评分、行业/消息数据边界与逐股决策审计。
 - `validation/`：区间复验和 walk-forward 基准脚本。
 - `reporting/`：从机器可读结果生成报告。
+- `legacy/`：已退出当前路线但为复现保留的历史脚本；禁止作为新实验入口。
 - `paths.py`：数据与产物的唯一稳定路径定义。
 
 ## 运行约定
@@ -41,12 +43,46 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 .\.venv\Scripts\python.exe -m research.validation.run_core_strategy_forward_watch_v1
 .\.venv\Scripts\python.exe -m research.optimization.run_core_exit_walkforward_v1
 .\.venv\Scripts\python.exe -m research.optimization.run_bullish_breadth_walkforward_v1
+.\.venv\Scripts\python.exe -m research.optimization.run_structural_bull_challenge_v1
+.\.venv\Scripts\python.exe -m research.selection.run_selection_logic_v1
 .\.venv\Scripts\python.exe -m research.regime.run_market_structure_v1
 .\.venv\Scripts\python.exe -m research.regime.run_structure_strategy_replay_v1
 ```
 
 数据固定读取项目根的 `data/`；产物固定写入项目根的 `artifacts/`。
 生产代码 `app/` 不得 import `research/`。
+
+活跃入口必须使用 `run_<明确对象>[_vN].py`；`run_opt_v2.py`、`run_walkforward.py`
+这类缺少对象和协议语义的名字禁止新增。结构检查命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.check_structure
+```
+
+## 可解释选股 v1
+
+`research.selection.run_selection_logic_v1` 使用全部上市非 ST 股票，同一窗口各运行一次
+旧 `bullish_alignment` 与实验 `quality_momentum_v1`。新逻辑不再正向追逐高换手，
+改为趋势/动量/量价/流动性质量减去过热、波动、回撤、跳空与极端动量风险。
+
+四段均为已见历史诊断：两个 2025 强势窗口新逻辑分别 +35.35%、+2.74%，旧逻辑
+-10.33%、-31.02%；已污染的 2026-03-24~06-24 新逻辑 +1.18%，旧逻辑 +18.40%；
+2026-06-25~08-07 新逻辑 -32.70%，旧逻辑 -53.44%。结论是选股质量有所改善但不稳定，
+熊段仍无有效收益，状态只能是 `HISTORICAL_REPLAY_ONLY`。
+
+JSON 与 5329 只股票逐股审计 CSV 写入 `artifacts/archive/selection/`。当前行业分类只用于
+最新截面分散展示，消息面因缺少历史 point-in-time 数据保持关闭；两者均未进入回放评分。
+
+早盘入口 `research.selection.run_auction_selection_v1` 固定以前一完整交易日排名为基础，
+只用 9:25 集合竞价做确认、观察或拒绝，不用盘中数据重新拟合评分。2026-08-10 的 56 个
+基础候选全部匹配竞价，其中 19 个确认、36 个观察、1 个追高拒绝，行业上限后输出 10 个
+早盘候选。原始竞价只写入 `data/tushare_auction/`，JSON/CSV 写入
+`artifacts/archive/selection/`；状态为 `LIVE_SCREEN_ONLY`，不是历史 OOS 业绩或买入承诺。
+
+独立实验入口 `research.selection.run_first_board_second_day_v1` 实现一进二竞价规则，不伪装
+成标准日线回测。2026-08-10 的前日首板池 62 只、竞价匹配 62 只、严格入选 0 只；
+海正药业虽满足成交额占比和均线条件，但竞价涨幅 5.80% 低于 6% 门槛，未放宽入选。
+产物完整保存逐股四项得分、失败原因和当日/次日收盘反馈字段。
 
 ## 五个核心策略参数复验
 
@@ -93,14 +129,14 @@ MA20/MA60 宽度并带迟滞；默认关闭。固定的默认/温和减仓/弱�
 `structural_bull` / `structural_bear`；中间带保持原状态，避免频繁切换。等权路径
 先算个股收益再截面平均，修正旧实验直接平均股票价格水平的概念错误。
 
-当前本地 Tushare 日线有 3,039,038 行、5,628 只股票、562 个交易日，覆盖
-2024-04-01~2026-07-27，唯一键无重复；enriched 与原始日线行数一致。同步默认
-跳过旧分区，未删除旧日线。2026-07-28 的股票日线和 daily_basic 返回空数据，
-已写入 `artifacts/archive/data/tushare_sync_latest.json` 的失败列表。
+当前本地 Tushare 日线有 3,094,338 行、5,635 只股票、572 个交易日，覆盖
+2024-04-01~2026-08-10，唯一键无重复；enriched 与原始日线行数一致。同步默认
+跳过旧分区，未删除旧日线。2026-08-10 收盘后已安全补入 5,538 行；集合竞价仍作为
+独立快照保存，不能混入日线字段。
 
 结构特征从 2024-04-01 起暖机，标签只输出 2024-09-24 之后：结构牛 191 日、
-结构熊 253 日、无 warmup、20 次切换；最新 2026-07-27 是结构熊，使用的是前一
-交易日 2026-07-24 信号。事实源：
+结构熊 263 日、无 warmup、20 次切换；最新 2026-08-10 是结构熊，使用的是前一
+交易日 2026-08-07 信号。事实源：
 `artifacts/archive/regime/market_structure_v1.json`。
 
 `run_structure_strategy_replay_v1` 在 canonical 400 universe 的同一四折中比较：
@@ -112,6 +148,27 @@ MA20/MA60 宽度并带迟滞；默认关闭。固定的默认/温和减仓/弱�
 四个切换候选均只在 1/4 折战胜相应基线，状态为
 `REJECTED_HISTORICAL_REPLAY`。切换能力保留，生产默认关闭，不得继续用这四折扫描
 结构阈值或反向交换牛熊腿。
+
+## 结构牛市 60% / 80% 挑战
+
+`research.optimization.run_structural_bull_challenge_v1` 在全量上市非 ST 股票上固定比较
+30 个均线多头候选。2026-03-24~06-24 已被反复观察，因此只作为样本内 calibration：
+4 只评分加权、5.5% 止盈、8% 止损达到 65.36% 胜率、+95.94% 收益。冻结候选在报告
+预先存在的两个 2025 强牛窗口均亏损且胜率低于 60%，最终状态 `REJECTED_OVERFIT`。
+产物为 `artifacts/archive/optimization/structural_bull_challenge_v1.json`；生产参数未改。
+
+## P14 结构策略冻结前向观察
+
+`research.validation.run_structure_strategy_forward_watch_v1` 冻结观察 P13 的
+`trend_always` 和 `pullback_always`，直接复用 P13 的 canonical 400 股清单、
+费用、持仓、风控及执行方式。协议注册日是 2026-07-29，因此此前已经可见的 7 月
+数据不计入 fresh OOS；门槛从 2026-07-30 起计算。
+
+产物逐日记录策略收益、基准收益、相对收益、结构牛熊归因、回撤、平均敞口和
+“已平仓交易入场金额/平均权益”的单边换手代理。换手代理明确不包含尚未平仓交易，
+不得冒充完整成交换手。最低 60 日只解锁人工审计，目标 120 日，`auto_promote`
+始终为 false。当前 0 个 fresh 交易日、`PENDING_DATA`，事实源：
+`artifacts/archive/validation/structure_strategy_forward_watch_v1.json`。
 
 Tushare 安全增量命令：
 

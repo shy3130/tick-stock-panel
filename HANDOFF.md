@@ -1,6 +1,6 @@
 # tickflow-stock-panel 项目交接文档
 
-> 最近审计：2026-07-28 ｜ 交接人：本会话主理人 ｜ 接手人：＿（同事）
+> 最近审计：2026-08-09 ｜ 交接人：本会话主理人 ｜ 接手人：＿（同事）
 > 定位：A 股量化策略因子研究 + 真实回测引擎的 **样本外（OOS）诚实验证** 项目。核心目标不是「做出漂亮曲线」，而是用 walk-forward + 多重检验判定因子/策略是否真有 alpha。
 
 ---
@@ -29,7 +29,7 @@ universe 哈希，固定 seed 并未固定股票池。修复为“symbol 排序�
 固定 30/70 的组合历史复验和 15 日未见观察已完成；部分相对差值为正，但绝对收益与
 跨期一致性不足，仍不能宣称组合后稳定更高。晋级门状态为 `PENDING_DATA`（最低 60 日，
 目标 120 日，当前还差 45 日），且即使数据够长也只进入冻结复核，不会自动晋级。
-生产策略目录已从“21 个全部暴露”先收敛为5个、现进一步收敛为3个默认 core：均线
+生产策略目录已从“全部暴露”先收敛为5个、现进一步收敛为3个默认 core：均线
 多头、趋势突破、回踩支撑。超卖反转、涨停动量因入场/仓位/退出多层复验持续失败，
 降为 experimental；实现和显式 ID 保留兼容。该分类代表产品入口去重，**不代表3个
 core 已通过收益晋级**。历史五策略协议已完成统一的 train-only 参数 walk-forward：
@@ -49,16 +49,23 @@ P12 市场宽度保护采用前一日MA20/MA60宽度、迟滞与既有软减仓�
 训练选择累计 -23.34%，默认 -0.90%；仅2/7正折、3/7战胜默认。实现未退化，但门控
 错杀趋势收益，已拒绝、不补扫阈值、默认关闭。
 P13 已把 2024-09-24 后的大级别行情拆为因果的结构牛/结构熊标签。特征使用
-2024-04-01 起行情暖机，研究期 444 日中结构牛191日、结构熊253日、无 warmup、
-20次切换；最新 2026-07-27 为结构熊，标签只读取到前一交易日 2026-07-24。
+2024-04-01 起行情暖机，研究期 454 日中结构牛191日、结构熊263日、无 warmup、
+20次切换；最新 2026-08-10 为结构熊，标签只读取到前一交易日 2026-08-07。
 双腿矩阵组合和翻转退出已实现，但四折历史复验不支持启用：
 趋势突破全时段复合 +11.88%，结构熊现金 -3.27%，结构熊回踩 -8.32%；均线多头
 三者分别 -12.27%/-30.65%/-32.82%。四个切换候选都只在1/4折战胜基线，状态
 `REJECTED_HISTORICAL_REPLAY`，生产默认关闭。
-本地 Tushare 股票日线现有3,039,038行、5,628只、562个交易日，覆盖
-2024-04-01~2026-07-27且无重复键；enriched 行数与唯一键完全一致。安全增量同步
-默认绝不删除旧日线，本轮补数已完成。2026-07-28 虽在交易日历中，但股票日线和
-daily_basic 返回空数据，已在 manifest 显式记录，未伪造当日分区。
+P14 已于 2026-07-29 冻结注册“趋势突破始终运行”和“回踩支撑始终运行”的
+前向观察。由于 7 月既有数据在注册前已可见，不能冒充 fresh OOS；门槛只从
+2026-07-30 起计算。当前 0/60 日、`PENDING_DATA`、无失败，永不自动晋级。
+结构牛市 60% 胜率 / 80% 收益挑战已做 30 个固定候选的诚实审计：在已经反复查看的
+2026-03-24~06-24 目标窗口，均线多头的 4 只评分加权、5.5% 止盈、8% 止损达到
+65.36% 胜率和 +95.94% 收益；但冻结后在两个既有 2025 强牛窗口分别为
+51.43%/-16.94% 和 48.13%/-39.87%。状态 `REJECTED_OVERFIT`，没有写回生产。
+本地 Tushare 股票日线现有3,094,338行、5,635只、572个交易日，覆盖
+2024-04-01~2026-08-10且无重复键；enriched 行数与唯一键完全一致。安全增量同步
+默认绝不删除旧日线。2026-08-10 收盘后补入5,538行，daily_basic与7条指数日线同步
+成功；当日集合竞价另存独立数据集。
 
 ---
 
@@ -85,9 +92,10 @@ daily_basic 返回空数据，已在 manifest 显式记录，未伪造当日分�
 - `backend/app/backtest/engine.py` — 模拟主循环；regime 字段 `regime_allow / regime_bear_weight / regime_scale_existing`（line 74-80）。**本质是软减仓，不是换策略**。
 
 ### 策略载体（builtin）
-- `backend/app/strategy/catalog.py` — 21 个 builtin 的生命周期事实源；默认 core 为
-  `bullish_alignment`、`trend_breakout`、`pullback_to_support`、`oversold_reversal`、
-  `limit_up_momentum`。core 是代表性入口，不是收益晋级名单。
+- `backend/app/strategy/catalog.py` — 22 个 builtin 的生命周期事实源；默认 core 只有
+  `bullish_alignment`、`trend_breakout`、`pullback_to_support`。`oversold_reversal`、
+  `limit_up_momentum`、`quality_momentum_v1` 均为 experimental/hidden。core 是产品
+  入口，不是收益晋级名单。
 - `custom_factor.py` — `tool`；AlphaGPT DSL 因子/组合组件，非已验证独立 alpha。
 - `regime_conditional.py` / `factor_ensemble.py` — `experimental`；historical replay
   未通过，默认隐藏但显式 ID 仍可回测。
@@ -151,6 +159,10 @@ daily_basic 返回空数据，已在 manifest 显式记录，未伪造当日分�
   `run_market_structure_v1.py` — 全市场结构牛/结构熊因果标签、连续区间和运行时缓存。
 - `backend/research/regime/run_structure_strategy_replay_v1.py` — P13 七配置四折同次对照；
   牛腿为趋势突破/均线多头，熊腿为现金/回踩，并保留全时段基线。
+- `backend/research/validation/run_structure_strategy_forward_watch_v1.py` — P14 两个
+  always-on 候选的注册后前向观察；固定400股、执行参数、t-1结构归因和60/120日门槛。
+- `backend/research/optimization/run_structural_bull_challenge_v1.py` — 全量非 ST 的
+  结构牛市高胜率/高收益样本内挑战；固定30候选并在既有强牛窗口做冻结泛化审计。
 - `backend/research/regime/diag_f4_regime.py` — F4 regime 信号诊断（输出 `artifacts/current/diag_f4_regime.json`）。
 - `backend/research/reporting/make_regime_ensemble_report.py` — 读两个 JSON 生成综合 HTML 报告（Chart.js）。
 
@@ -173,6 +185,10 @@ daily_basic 返回空数据，已在 manifest 显式记录，未伪造当日分�
   连续区间和数据清单；前置行情已用于暖机，研究期无 warmup ✅
 - `artifacts/archive/regime/structure_strategy_replay_v1.json` — P13 七配置四折历史复验；
   所有切换候选均失败，禁止生产启用 ✅
+- `artifacts/archive/validation/structure_strategy_forward_watch_v1.json` — P14 冻结
+  协议；注册日2026-07-29，fresh起点2026-07-30，当前0日 `PENDING_DATA` ✅
+- `artifacts/archive/optimization/structural_bull_challenge_v1.json` — 60%/80% 挑战的
+  完整候选、股票池哈希和外部窗口结果；`REJECTED_OVERFIT`，禁止生产写回 ✅
 - `artifacts/archive/optimization/legacy_core_strategy_walkforward_v1_pre_no_signal_fix_20260726.json`
   — 修正“无信号折被排除”偏差前的审计备份，不得作为结论。
 - `artifacts/archive/regime/legacy_nondeterministic_20260726/` — universe 缺陷修复前的三项 current 备份，仅供追溯，不得作为权威结论。
@@ -338,6 +354,58 @@ daily_basic 返回空数据，已在 manifest 显式记录，未伪造当日分�
 
 ## 8. 速查命令
 
+### 选股逻辑 v1（2026-08-09）
+
+已新增实验策略 `quality_momentum_v1` 和 `research/selection/` 审计链。它把旧均线多头的
+“动量 + 高换手优先”替换为固定质量评分，并对追高、波动、回撤和跳空显式扣分；每只
+非 ST 股票的信号门槛、排名和淘汰原因均写入 CSV。
+
+全量非 ST、每窗口同预算历史诊断结果：
+
+| 窗口 | 旧均线多头 | 质量动量 v1 | 结论 |
+|---|---:|---:|---|
+| 2025-05-24~08-24 | -10.33% | +35.35% | 改善，但已见历史 |
+| 2025-07-24~10-24 | -31.02% | +2.74% | 改善，但已见历史 |
+| 2026-03-24~06-24 | +18.40% | +1.18% | 在已污染目标窗相对退化 |
+| 2026-06-25~08-07 | -53.44% | -32.70% | 仅少亏，熊段仍失败 |
+
+截至 2026-08-07，5329 只非 ST 中有 56 只通过信号门槛；最新展示按 10 只持仓、当前
+行业最多 2 只留下 10 只。行业分类不是 point-in-time，只用于最新展示；本地无历史
+消息库，消息覆盖保持关闭。状态为 `HISTORICAL_REPLAY_ONLY`，生产默认未改，下一步只能
+注册冻结日期并等待真正新数据。
+
+2026-08-10 早盘已在上述 56 只基础候选上叠加 Tushare 9:25 集合竞价：56 只全部匹配，
+19 只确认、36 只观察、1 只因追高拒绝，按基础排名与行业最多 2 只规则输出 10 只。
+竞价只做固定规则确认，不重拟合基础评分；原始快照写入
+`data/tushare_auction/date=2026-08-10/open.parquet`。该结果是 `LIVE_SCREEN_ONLY`，没有
+9:30 后实时行情权限，不能把竞价价表述为当前价或成交承诺。
+
+产物：`artifacts/archive/selection/selection_logic_v1.json`、
+`artifacts/archive/selection/selection_logic_v1_latest_audit.csv`、
+`artifacts/archive/selection/auction_selection_20260810.json`、
+`artifacts/archive/selection/auction_selection_20260810.csv`。
+
+同日新增独立的“一进二竞价 v1” specialized runner：前日仅取
+`consecutive_limit_ups == 1` 的首板，竞价成交额占首板全天成交额 8%~12% 得满分，
+12%~20% 线性降分，区间外淘汰；竞价涨幅 6%~8% 与 MA5>MA10>MA20 且三线同步向上
+都是硬门槛；首板阳线穿越 MA5/10/20/60 至少两条加 20 分。2026-08-10 的 62 只首板
+全部匹配竞价，但严格入选 0 只；最接近的海正药业竞价涨幅仅 5.80%，没有擅自放宽。
+产物：`artifacts/archive/selection/first_board_second_day_20260810.json/csv`。该策略不进入
+core 默认清单，历史竞价数据补齐并冻结协议前只能是 `LIVE_SCREEN_ONLY`。
+
+### 仓库结构治理（2026-08-09）
+
+- 根架构文档统一为 `ARCHITECTURE.md`，仓库内引用已更新。
+- 13 个无明确对象名的旧研究脚本没有删除，已按 optimization/regime/validation/reporting
+  移入 `backend/research/legacy/` 并改成描述性名称；旧模块路径保留为无业务逻辑的薄
+  兼容入口，映射见 `backend/research/legacy/README.md`。
+- factors、regime、optimization、validation、reporting、legacy 均有本域 README。
+- 旧面板功能/策略手册移入 `docs/archive/legacy-panel/`；当前 `docs/strategy.md` 只描述
+  无前端的后端策略开发。
+- `backend/scripts/check_structure.py` 自动拒绝根目录 JSON/HTML/日志、顶层前端目录、
+  `app -> research` 反向依赖、模糊活跃 runner 和未登记的 current 产物。
+- 仓库名因 Git 远程与发布兼容保留 `tickflow-stock-panel`；这不授权恢复前端。
+
 ```bash
 # 跑权威 regime 归因 + ensemble（8 配置 × 4 折）
 cd backend && TICKFLOW_BACKTEST_MODE=inprocess .venv/Scripts/python.exe -m research.regime.run_regime_ensemble > ../artifacts/logs/regime_ensemble_run.log 2>&1
@@ -395,6 +463,11 @@ cd backend && .venv/Scripts/python.exe -m scripts.tushare_sync --start 20240401 
 # P13 结构标签与双腿历史复验
 cd backend && .venv/Scripts/python.exe -m research.regime.run_market_structure_v1
 cd backend && TICKFLOW_BACKTEST_MODE=inprocess .venv/Scripts/python.exe -m research.regime.run_structure_strategy_replay_v1
+
+# P14 注册后冻结观察；运行前先增量同步并重算结构标签
+cd backend && TICKFLOW_BACKTEST_MODE=inprocess .venv/Scripts/python.exe -m research.validation.run_structure_strategy_forward_watch_v1
+cd backend && TICKFLOW_BACKTEST_MODE=inprocess .venv/Scripts/python.exe -m research.selection.run_selection_logic_v1
+cd backend && .venv/Scripts/python.exe -m scripts.check_structure
 ```
 
 ---
@@ -412,5 +485,6 @@ cd backend && TICKFLOW_BACKTEST_MODE=inprocess .venv/Scripts/python.exe -m resea
   P11-E 前瞻测试或补扫 alpha/gap/pair 数；下一次实验必须换成 execution-aware
   特征并使用全新 validation seed。
 - 项目级工作日志在 `.workbuddy/memory/2026-07-23.md`，含更细的分步记录。
-- 2026-07-28 最终验收：`compileall` 通过；P13 结构标签/双腿复验后的完整 `pytest` 为
-  `520 passed, 11 warnings`；AlphaGPT release v1.0 的 15 个产物校验通过。
+- 2026-07-29 最终验收：`compileall` 通过；P13/P14 结构标签、历史复验和冻结观察后的完整 `pytest` 为
+  `526 passed, 11 warnings`；AlphaGPT release v1.0 的 15 个产物校验通过。P14
+  冻结协议专项与产物生成同样通过。

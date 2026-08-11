@@ -7,7 +7,7 @@
 按顺序读取：
 
 1. `HANDOFF.md`：项目现状、文件地图、已验证结论、已修 bug 和下一步路线。
-2. `BackendArchitecture.md`：目录边界、依赖方向和新增文件放置规则。
+2. `ARCHITECTURE.md`：目录边界、依赖方向、命名和新增文件放置规则。
 3. `.workbuddy/skills/regime-conditional-oos/SKILL.md`：涉及 regime 条件化、真实回测引擎、walk-forward、flat/switch 对照或 F4 诊断时的工具工作流。
 4. 与任务直接相关的实现文件；不要只根据报告标题推断代码行为。
 
@@ -23,13 +23,13 @@
 
 这是 A 股量化策略因子研究与真实回测引擎项目。核心目标是用 walk-forward OOS 和多重检验判断 alpha 是否可靠，而不是优化出漂亮的样本内曲线。
 
-当前最值得复用的基线结论是：
+当前最值得复用的是研究协议和执行能力，不是某个收益赢家：
 
-- `flat_leader`：leader 信号判牛时运行 `mom_trend`，判熊时空仓。
-- 在当前同一次 OOS 对照中，`flat_leader` 的平均收益与平均最大回撤均优于裸 `mom_trend`。
-- 熊市切换到 `pullback_to_support` 未产生增益；6 因子等权 ensemble 也未产生增益。
+- canonical universe 必须先排序再按 seed 抽样并记录完整 manifest/hash。
+- 当前 regime、结构切换、因子 ensemble 和核心策略历史复验都没有通过稳健晋级门槛。
+- `quality_momentum_v1` 已具备逐股解释能力，但仍是 mixed historical replay，默认隐藏。
 
-这些是当前数据与当前运行口径下的研究结论，不应表述为未来收益承诺。
+不得把历史窗口相对改善表述为未来收益承诺。
 
 ## 3. 不可违反的研究约束
 
@@ -115,6 +115,8 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 - `backend/research/regime/market_structure.py`：前一日全市场 breadth/收益生成结构牛熊标签。
 - `backend/research/regime/run_market_structure_v1.py`：P13 标签事实源与可重建运行时缓存。
 - `backend/research/regime/run_structure_strategy_replay_v1.py`：结构牛/熊双腿七配置四折复验。
+- `backend/research/validation/run_structure_strategy_forward_watch_v1.py`：P14 注册后
+  冻结观察；只有注册次日后的交易日可计入 fresh 门槛。
 - `backend/research/reporting/make_regime_ensemble_report.py`：由 JSON 重新生成综合 HTML。
 
 ## 5. 修改原则
@@ -136,6 +138,7 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 
 ```powershell
 Set-Location backend
+.\.venv\Scripts\python.exe -m scripts.check_structure
 .\.venv\Scripts\python.exe -m py_compile `
   .\app\strategy\builtin\regime_conditional.py `
   .\app\strategy\builtin\factor_ensemble.py `
@@ -157,6 +160,8 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 - HTML 报告读取的是最新两个 JSON，关键数值与 JSON 一致。
 - 失败折和无信号折在 JSON 与报告中均可见。
 - `git diff` 只包含本任务预期改动，且没有覆盖他人的未提交工作。
+- `scripts.check_structure` 通过；不得新增根目录产物、前端目录、`app -> research`
+  反向依赖或模糊命名的活跃研究入口。
 
 ## 7. 交接包维护
 
