@@ -1,4 +1,4 @@
-# AGENTS.md
+# AI 开发入口
 
 本文件是 AI 编码代理和自动化工具在 `tickflow-stock-panel` 仓库中的项目级入口。目标是让接手者先恢复正确上下文，再进行可复现、可比较的样本外（OOS）研究。
 
@@ -6,10 +6,11 @@
 
 按顺序读取：
 
-1. `HANDOFF.md`：项目现状、文件地图、已验证结论、已修 bug 和下一步路线。
-2. `ARCHITECTURE.md`：目录边界、依赖方向、命名和新增文件放置规则。
-3. `.workbuddy/skills/regime-conditional-oos/SKILL.md`：涉及 regime 条件化、真实回测引擎、walk-forward、flat/switch 对照或 F4 诊断时的工具工作流。
-4. 与任务直接相关的实现文件；不要只根据报告标题推断代码行为。
+1. `CONTRIBUTING.md`：通用架构、数据契约、缓存、性能、测试和 PR 标准。
+2. `HANDOFF.md`：项目现状、文件地图、已验证结论、已修 bug 和下一步路线。
+3. `ARCHITECTURE.md`：目录边界、依赖方向、命名和新增文件放置规则。
+4. `.workbuddy/skills/regime-conditional-oos/SKILL.md`：涉及 regime 条件化、真实回测引擎、walk-forward、flat/switch 对照或 F4 诊断时的工具工作流。
+5. 与任务直接相关的实现文件；不要只根据报告标题推断代码行为。
 
 涉及当前 regime 结论时，再读取以下三个最新产物：
 

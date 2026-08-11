@@ -33,7 +33,12 @@ from pathlib import Path
 import polars as pl
 
 from app.tickflow.capabilities import Cap
-from app.tickflow.rate_limits import chunked, resolve_limit, sleep_between_batches
+from app.tickflow.rate_limits import (
+    apply_safety_rpm,
+    chunked,
+    resolve_limit,
+    sleep_between_batches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +52,6 @@ TIER_INTERVAL_RANGE: dict[str, tuple[float, float]] = {
 DEFAULT_RANGE = (10.0, 120.0)
 
 # 限速余量: 只用 rpm 的 80%, 给系统其他 depth 调用留空间
-RPM_MARGIN = 0.8
 # 间隔硬下限/上限(任何套餐)
 INTERVAL_HARD_MIN = 10.0
 INTERVAL_HARD_MAX = 300.0
@@ -511,9 +515,9 @@ class DepthService:
         raw_user = preferences.get_depth_polling_interval()
         user_interval = max(lo, min(hi, raw_user))
 
-        # ② 限速安全 clamp
+        # ② 限速安全 clamp（与 resolve_limit 共用 SAFETY_RPM_FACTOR，不叠乘）
         batches = max(1, math.ceil(n_symbols / batch_size))
-        usable_rpm = rpm * RPM_MARGIN
+        usable_rpm = apply_safety_rpm(rpm) or 1
         calls_per_min = usable_rpm / batches if batches > 0 else usable_rpm
         safe_interval = 60.0 / calls_per_min if calls_per_min > 0 else INTERVAL_HARD_MAX
 

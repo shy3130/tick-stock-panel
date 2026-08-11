@@ -11,12 +11,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import (
+    alerts,
+    analysis,
+    backtest,
+    data,
+    ext_data,
+    financials,
+    indices,
+    intraday,
+    kline,
+    market_recap,
+    monitor_rules,
+    overview,
+    pipeline,
+    regime,
+    rps,
+    screener,
+    signals,
+    stock_analysis,
+    strategy,
+    watchlist,
+)
+from app.api import auth as auth_api
+from app.api import settings as settings_api
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
 from app.services.quote_service import QuoteService
 from app.tickflow import client as tf_client
+from app.tickflow.capabilities import CapabilityDenied
 from app.tickflow.policy import detect_capabilities
 from app.tickflow.repository import DataStore, KlineRepository
 
@@ -32,6 +56,7 @@ def _strategy_dirs(data_dir: Path) -> list[Path]:
         Path(__file__).resolve().parent / "strategy" / "builtin",
         data_dir / "strategies" / "custom",
         data_dir / "strategies" / "ai",
+        data_dir / "strategies" / "composite",
     ]
 
 
@@ -147,14 +172,16 @@ async def lifespan(app: FastAPI):
     app.state.financial_scheduler = financial_scheduler
 
     # 策略引擎
+    from app.services.screener import ScreenerService
+    from app.strategy import config as strategy_config
     from app.strategy.engine import StrategyEngine
     from app.strategy.monitor import StrategyMonitorService
-    from app.services.screener import ScreenerService
 
     _screener_svc = ScreenerService(repo)
     _etf_screener_svc = ScreenerService(repo, asset_type="etf")
     strategy_engine = StrategyEngine(
         strategy_dirs=_strategy_dirs(store.data_dir),
+        override_loader=lambda sid: strategy_config.load_override(store.data_dir, sid),
     )
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
@@ -210,12 +237,15 @@ async def lifespan(app: FastAPI):
         _schedule_matrix_cache_prewarm()
 
     # 通用监控规则引擎: 启动时 reload 规则到内存态 (修复重启后告警失效)
-    from app.strategy.monitor import MonitorRuleEngine
-    from app.strategy import monitor_rules as mr_store
     from app.services import preferences
+    from app.services.sector_monitor import SectorMonitorService
+    from app.strategy import monitor_rules as mr_store
+    from app.strategy.monitor import MonitorRuleEngine
     monitor_engine = MonitorRuleEngine()
+    sector_monitor_service = SectorMonitorService(repo)
     monitor_engine.set_strategy_engine(strategy_engine)
     monitor_engine.set_data_dir(store.data_dir)
+    monitor_engine.set_sector_monitor_service(sector_monitor_service)
     # 复用 ScreenerService 的历史窗口加载器 (三级缓存, 启动预计算命中 ~0ms),
     # 让声明 filter_history 的策略 (如反包) 也能在实时监控里跑选股 → 盘中触发通知。
     monitor_engine.set_history_loader(_screener_svc._load_enriched_history)
@@ -240,6 +270,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
+    app.state.sector_monitor_service = sector_monitor_service
 
     yield
 
@@ -337,6 +368,7 @@ app.include_router(backtest.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
+app.include_router(regime.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
 app.include_router(data.router)
@@ -354,10 +386,7 @@ app.include_router(rps.router)
 
 # 能力门控异常 → 403(而非默认 500)
 # 业务代码用 capset.require(Cap.X) 断言能力,缺失时抛 CapabilityDenied;
-# 若不注册 handler 会冒泡成 500 Internal Server Error,对前端不友好且语义错误。
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from app.tickflow.capabilities import CapabilityDenied
+# 若不注册 handler 会冒泡成 500 Internal Server Error,对 API 调用方不友好且语义错误。
 
 
 @app.exception_handler(CapabilityDenied)

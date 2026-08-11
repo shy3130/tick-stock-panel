@@ -582,6 +582,14 @@ class QuoteService:
             all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
             core_index_symbols = set(preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS)
             all_index_symbols.update(core_index_symbols)
+            # 指数监控规则标的并入轮询 (mode=core 时 quotes.get 显式拉取覆盖; mode=all 被 CN_Index 全覆盖)
+            monitor_index_symbols: set[str] = set()
+            engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+            if engine:
+                for _r in list(engine.rules.values()):
+                    if _r.get("enabled", True) and _r.get("asset_type") == "index" and _r.get("scope") == "symbols":
+                        monitor_index_symbols.update(s for s in _r.get("symbols", []) if s)
+            all_index_symbols.update(monitor_index_symbols)
             all_etf_symbols = set()
             if self._repo:
                 etf_inst = self._repo.get_etf_instruments()
@@ -604,7 +612,7 @@ class QuoteService:
                 logger.info("全市场行情拉取完成: %d 条 (%.2fs)", len(resp), time.perf_counter() - _u0)
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
                 _i0 = time.perf_counter()
-                _core_syms = sorted(core_index_symbols)
+                _core_syms = sorted(core_index_symbols | monitor_index_symbols)
                 resp.extend(tf.quotes.get(symbols=_core_syms) or [])
                 logger.info("核心指数行情拉取完成: %d 只 (%.2fs)", len(_core_syms), time.perf_counter() - _i0)
         except Exception as e:  # noqa: BLE001
@@ -712,6 +720,21 @@ class QuoteService:
             self._flush_live_enriched(daily_df, quote_extra, asset_type="stock")
         if not etf_daily_df.is_empty() and self._repo:
             self._flush_live_enriched(etf_daily_df, etf_quote_extra, asset_type="etf")
+        # ---- 指数: 仅有指数监控规则时才写盘 (无规则零成本) ----
+        # mode=all (完整 CN_Index universe) → flush 覆盖; mode=core (部分标的) → merge 不截断分区
+        engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+        if engine and engine.has_asset_rules("index") and self._repo:
+            index_daily_df = self._build_daily(index_records)
+            if not index_daily_df.is_empty():
+                use_flush = preferences.get_realtime_index_mode() == "all"
+                try:
+                    if use_flush:
+                        self._repo.flush_live_daily_asset("index", index_daily_df)
+                    else:
+                        self._repo.merge_live_daily_asset("index", index_daily_df)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("指数日K写盘失败: %s", e)
+                self._flush_live_enriched(index_daily_df, self._build_quote_extra(index_records), asset_type="index", merge=not use_flush)
 
         # ---- 通知 SSE ----
         self._broadcast_quote_updated()
@@ -720,11 +743,22 @@ class QuoteService:
         self._evaluate_monitors(daily_df, quote_extra)
 
     def _fetch_watchlist_quotes(self) -> None:
-        """Free 档自选股实时: 只拉取最多 5 个 symbols。"""
+        """Free 档自选股实时: 按 capability batch 上限分批拉取。"""
         from app.services import preferences
         from app.tickflow.client import get_paid_realtime_client
+        from app.tickflow.capabilities import Cap
+        from app.tickflow.policy import detect_capabilities
+        from app.tickflow.rate_limits import chunked, resolve_limit, sleep_between_batches
 
         symbols = preferences.get_realtime_watchlist_symbols()
+        # 指数监控规则标的并入轮询 (与股票共享 batch 额度)
+        engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+        if engine:
+            for _r in list(engine.rules.values()):
+                if _r.get("enabled", True) and _r.get("asset_type") == "index" and _r.get("scope") == "symbols":
+                    for _s in _r.get("symbols", []):
+                        if _s and _s not in symbols:
+                            symbols.append(_s)
         if not symbols:
             logger.info("自选实时未配置标的, 跳过行情拉取")
             return
@@ -734,13 +768,20 @@ class QuoteService:
             logger.warning("自选实时拉取失败:未配置付费服务器 API Key")
             return
 
+        # 按 capability batch 上限分批: 股票+指数共享额度, 超过上限会导致整轮失败
+        capset = detect_capabilities()
+        lim = resolve_limit(capset, Cap.QUOTE_BY_SYMBOL, default_batch=5)
+        batches = chunked(symbols, lim.batch)
+
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
-        try:
-            resp = tf.quotes.get(symbols=symbols) or []
-        except Exception as e:  # noqa: BLE001
-            logger.warning("自选实时拉取失败: %s", e)
-            return
+        resp = []
+        for i, batch in enumerate(batches):
+            sleep_between_batches(i, lim.rpm)
+            try:
+                resp.extend(tf.quotes.get(symbols=batch) or [])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("自选实时批次 %d/%d 拉取失败: %s", i + 1, len(batches), e)
 
         if not resp:
             logger.warning("自选实时行情数据为空")
@@ -776,22 +817,27 @@ class QuoteService:
                 "session": q.get("session"),
             })
 
+        index_set = self._repo.get_index_symbol_set() if self._repo else set()
+        etf_set = self._repo.get_etf_symbol_set() if self._repo else set()
+        index_records, etf_records, stock_records = self._split_records_by_asset(records, index_set, etf_set)
+
         fetch_ms = (time.perf_counter() - t0) * 1000
         fetched_at = time.time() * 1000
         with self._lock:
             self._fetch_time = now_ts
             self._fetch_ms = fetch_ms
             self._fetched_at = fetched_at
-            self._symbol_count = len(records)
-            self._index_symbol_count = 0
-            self._etf_symbol_count = 0
-            self._index_quotes_cache = None
+            self._symbol_count = len(stock_records)
+            self._index_symbol_count = len(index_records)
+            self._etf_symbol_count = len(etf_records)
+            self._index_quotes_cache = self._build_index_quotes(index_records) if index_records else None
 
         _persist_last_fetch(fetched_at)
-        logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
+        logger.info("自选实时刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms",
+                    len(stock_records), len(etf_records), len(index_records), fetch_ms)
 
-        daily_df = self._build_daily(records)
-        quote_extra = self._build_quote_extra(records)
+        daily_df = self._build_daily(stock_records)
+        quote_extra = self._build_quote_extra(stock_records)
         if not daily_df.is_empty() and self._repo:
             try:
                 self._repo.merge_live_daily_asset("stock", daily_df)
@@ -799,12 +845,46 @@ class QuoteService:
                 logger.warning("自选实时日K写盘失败: %s", e)
             self._flush_live_enriched(daily_df, quote_extra, asset_type="stock", merge=True)
 
+        # ETF/指数进自选前5时按各自资产落盘, 不污染股票表
+        etf_daily_df = self._build_daily(etf_records)
+        if not etf_daily_df.is_empty() and self._repo:
+            try:
+                self._repo.merge_live_daily_asset("etf", etf_daily_df)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("自选实时 ETF 日K写盘失败: %s", e)
+            self._flush_live_enriched(etf_daily_df, self._build_quote_extra(etf_records), asset_type="etf", merge=True)
+        index_daily_df = self._build_daily(index_records)
+        if not index_daily_df.is_empty() and self._repo:
+            try:
+                self._repo.merge_live_daily_asset("index", index_daily_df)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("自选实时指数日K写盘失败: %s", e)
+            self._flush_live_enriched(index_daily_df, self._build_quote_extra(index_records), asset_type="index", merge=True)
+
         self._broadcast_quote_updated()
         self._evaluate_monitors(daily_df, quote_extra)
 
     # ================================================================
     # 工具
     # ================================================================
+
+    @staticmethod
+    def _split_records_by_asset(
+        records: list[dict], index_set: set[str], etf_set: set[str],
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """把行情 records 按资产拆成 (index, etf, stock)。判定顺序与 resolve_asset_type 一致: 先 ETF 后指数。"""
+        index_records: list[dict] = []
+        etf_records: list[dict] = []
+        stock_records: list[dict] = []
+        for r in records:
+            sym = r.get("symbol")
+            if sym in etf_set:
+                etf_records.append(r)
+            elif sym in index_set:
+                index_records.append(r)
+            else:
+                stock_records.append(r)
+        return index_records, etf_records, stock_records
 
     @staticmethod
     def _build_daily(records: list[dict]) -> pl.DataFrame:
@@ -884,6 +964,20 @@ class QuoteService:
         if not keep or "symbol" not in keep:
             return pl.DataFrame()
         df = df.select(keep)
+        # 自定义源可能不提供 change_pct/change_amount, 按 last_price/prev_close 补算
+        # (TickFlow 路径在 _fetch_full_market_quotes 已算好, 此处只补缺失的)
+        if "change_pct" not in df.columns and "last_price" in df.columns and "prev_close" in df.columns:
+            # prev_close=0 → inf (非合法 JSON), prev_close=null → null; 用 when 守护
+            df = df.with_columns(
+                pl.when(pl.col("prev_close") != 0)
+                .then((pl.col("last_price") - pl.col("prev_close")) / pl.col("prev_close"))
+                .otherwise(None)
+                .alias("change_pct")
+            )
+        if "change_amount" not in df.columns and "last_price" in df.columns and "prev_close" in df.columns:
+            df = df.with_columns(
+                (pl.col("last_price") - pl.col("prev_close")).alias("change_amount")
+            )
         # change_pct / amplitude: 小数 → 百分比 (统一指数展示口径)
         for col in ("change_pct", "amplitude"):
             if col in df.columns:
@@ -971,14 +1065,12 @@ class QuoteService:
                 return
             # 获取 enriched 数据 (刚算好的)
             enriched_today, enriched_date = self.get_enriched_today()
-            if enriched_today.is_empty():
-                return
-            # 快照日期必须是北京当日: 节假日或数据未刷新时 enriched_date 会落后于当日,
-            # 说明市场未在交易 → 跳过。无需维护 A股交易日历即可挡住节假日与陈旧价告警。
-            if enriched_date != cn_today():
-                logger.debug("监控评估跳过: enriched 快照日期 %s 非当日 %s (节假日/数据未刷新)",
-                             enriched_date, cn_today())
-                return
+            # 股票快照就绪 = 非空 + 日期为当日。未就绪时仅跳过股票轮,
+            # ETF/指数轮有各自的空表+日期守卫, 不受影响 (纯指数行情/自选场景可独立评估)。
+            stock_ready = (not enriched_today.is_empty()) and (enriched_date == cn_today())
+            if not stock_ready:
+                logger.debug("股票快照未就绪(空=%s, 日期=%s), 跳过股票轮",
+                             enriched_today.is_empty(), enriched_date)
 
             all_alerts: list[dict] = []
             rule_events: list[dict] = []
@@ -1004,18 +1096,31 @@ class QuoteService:
                                 for row in etf_inst.select(["symbol", "name"]).iter_rows(named=True):
                                     if row.get("name"):
                                         name_map.setdefault(row["symbol"], row["name"])
+                        # 仅当存在指数规则时补指数维表 (setdefault 不覆盖股票/ETF)
+                        if engine.has_asset_rules("index"):
+                            idx_inst = self._app_state.repo.get_instruments_asset("index")
+                            if not idx_inst.is_empty() and "symbol" in idx_inst.columns and "name" in idx_inst.columns:
+                                for row in idx_inst.select(["symbol", "name"]).iter_rows(named=True):
+                                    if row.get("name"):
+                                        name_map.setdefault(row["symbol"], row["name"])
                         if name_map:
                             engine.set_name_map(name_map)
                     except Exception as e:  # noqa: BLE001
                         logger.debug("name_map 构建失败 (不影响监控): %s", e)
-                    # 连板梯队封单监控: 有 ladder 规则时, 从 depth_service 注入封单量到 enriched
-                    eval_df = enriched_today
-                    if engine.has_rule_type("ladder"):
-                        eval_df = self._inject_sealed_vol(enriched_today, enriched_date)
-                    eval_df = self._inject_intraday_signals(eval_df, engine, "stock")
-                    rule_events = engine.evaluate(eval_df, asset_type="stock")
-                    if engine.consume_strategy_result_updates():
-                        self.notify_strategy_results_updated()
+                    # 股票轮: 快照未就绪时跳过 (ladder 封单也依赖股票快照日期, 一并跳过)
+                    if stock_ready:
+                        eval_df = enriched_today
+                        if engine.has_rule_type("ladder"):
+                            eval_df = self._inject_sealed_vol(enriched_today, enriched_date)
+                        eval_df = self._inject_intraday_signals(eval_df, engine, "stock")
+                        rule_events = engine.evaluate(eval_df, asset_type="stock")
+                        if engine.consume_strategy_result_updates():
+                            self.notify_strategy_results_updated()
+                    if engine.has_rule_type("sector"):
+                        rule_events += engine.evaluate_sectors(
+                            enriched_today if stock_ready else pl.DataFrame(),
+                            self.get_index_quotes(),
+                        )
                     # ETF 规则轮: 股票快照不含 ETF, 用 ETF enriched 快照单独评估。
                     # 独立 try —— ETF 轮任何异常都不得丢弃本轮已算出的股票告警。
                     # refresh=False —— 不在轮询线程上触发 ETF 冷缓存的同步重算 (缓存由 ETF 实时
@@ -1030,6 +1135,19 @@ class QuoteService:
                                 )
                         except Exception as e:  # noqa: BLE001
                             logger.warning("ETF 监控评估失败 (不影响股票告警): %s", e)
+                    # 指数规则轮: 复刻 ETF 轮。快照由指数实时 flush 焐热;
+                    # refresh=False 冷缓存不同步重算; 显式日期守卫防陈旧 parquet 误告警
+                    # (ETF 轮靠空表隐式跳过, 指数轮更显式, 行为等价)。
+                    if engine.has_asset_rules("index") and self._repo is not None:
+                        try:
+                            index_enriched, index_date = self._repo.get_enriched_latest_asset("index", refresh=False)
+                            if not index_enriched.is_empty() and index_date == cn_today():
+                                index_enriched = self._inject_intraday_signals(index_enriched, engine, "index")
+                                rule_events = rule_events + engine.evaluate(
+                                    index_enriched, asset_type="index", reset_strategy_results=False,
+                                )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("指数监控评估失败 (不影响股票/ETF 告警): %s", e)
                     if rule_events:
                         # 落盘到 alerts.jsonl
                         try:
@@ -1041,11 +1159,11 @@ class QuoteService:
                             logger.warning("告警落盘失败: %s", e)
                         # 转为 SSE 推送格式 (兼容旧 alert schema)
                         for ev in rule_events:
-                            all_alerts.append({
+                            alert = {
                                 "source": ev["source"],
                                 "type": ev["type"],
                                 "rule_id": ev.get("rule_id"),
-                                "strategy_id": ev.get("rule_id") if ev["source"] == "strategy" else None,
+                                "strategy_id": ev.get("strategy_id") if ev["source"] == "strategy" else None,
                                 "symbol": ev["symbol"],
                                 "name": ev["name"],
                                 "message": ev["message"],
@@ -1055,7 +1173,16 @@ class QuoteService:
                                 "severity": ev.get("severity", "info"),
                                 "conditions": ev.get("conditions") or [],
                                 "logic": ev.get("logic") or "and",
-                            })
+                            }
+                            for key in (
+                                "sector_kind", "sector_key", "sector_name",
+                                "sector_source_field", "sector_value", "sector_level",
+                                "window_change_pct", "coverage_ratio", "valid_count",
+                                "total_count", "up_count", "down_count", "leader",
+                            ):
+                                if key in ev:
+                                    alert[key] = ev[key]
+                            all_alerts.append(alert)
 
             # 策略页实时回显: 不写文件 (实时行情每轮更新 enriched, 写文件会被 read_cache
             # 的 mtime 校验判过期, 反复读不到)。监控引擎本轮已算出的结果存在内存
@@ -1226,6 +1353,7 @@ class QuoteService:
             source_labels = {
                 "strategy": "策略", "signal": "信号",
                 "price": "价格", "market": "异动", "ladder": "连板梯队",
+                "sector": "板块",
             }
             rules = engine.rules if engine is not None else {}
             enqueued = 0
@@ -1278,7 +1406,7 @@ class QuoteService:
                 source = ev.get("source", "")
                 source_label = {
                     "strategy": "策略", "signal": "信号",
-                    "price": "价格", "market": "异动",
+                    "price": "价格", "market": "异动", "sector": "板块",
                 }.get(source, source or "通知")
 
                 name = ev.get("name") or ""
@@ -1366,7 +1494,7 @@ class QuoteService:
                             "ok" if not live_agg.is_empty() else "空", prev_date)
 
                 cutoff = today - timedelta(days=90)
-                table = "kline_etf_daily" if asset_type == "etf" else "kline_daily"
+                table = {"etf": "kline_etf_daily", "index": "kline_index_daily"}.get(asset_type, "kline_daily")
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
                 hist_df = (
@@ -1384,10 +1512,10 @@ class QuoteService:
                 full_df = pl.concat([hist_df, daily_ohlcv], how="diagonal_relaxed")
                 full_df = full_df.sort(["symbol", "date"])
 
-                factor_dir = "adj_factor_etf" if asset_type == "etf" else "adj_factor"
-                factor_path = self._repo.store.data_dir / factor_dir / "all.parquet"
+                factor_dir = {"stock": "adj_factor", "etf": "adj_factor_etf"}.get(asset_type)
+                factor_path = self._repo.store.data_dir / factor_dir / "all.parquet" if factor_dir else None
                 factors = pl.DataFrame()
-                if factor_path.exists():
+                if factor_path and factor_path.exists():
                     try:
                         factors = pl.read_parquet(factor_path)
                     except Exception:

@@ -144,7 +144,7 @@ def test_intraday_rule_pool_is_derived_from_enabled_rules():
 
 
 def test_intraday_rule_rejects_non_symbol_scope():
-    with pytest.raises(ValueError, match="仅支持指定股票"):
+    with pytest.raises(ValueError, match="仅支持指定标的"):
         monitor_rules.validate(_intraday_rule("all"))
 
 

@@ -294,6 +294,19 @@ def test_market_matrix_derives_live_raw_close_when_requested():
     np.testing.assert_array_equal(snapshot.field("raw_close")[-1], snapshot.close[-1])
 
 
+def test_direct_parquet_matrix_reports_actionable_error_when_enriched_is_empty(tmp_path):
+    market_root = tmp_path / "kline_daily_enriched"
+    market_root.mkdir()
+
+    with pytest.raises(ValueError, match="本地指标数据为空"):
+        load_market_data_matrix_from_parquet(
+            market_root,
+            date(2024, 1, 1),
+            date(2024, 1, 31),
+            field_columns=set(),
+        )
+
+
 def test_direct_parquet_matrix_matches_panel_builder_and_reuses_mmap(tmp_path):
     market_root = tmp_path / "kline_daily_enriched"
     days = (date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4))

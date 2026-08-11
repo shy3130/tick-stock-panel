@@ -1382,8 +1382,11 @@ def compute_enriched_today(
 
     alpha = _ema_alpha
 
-    # ---- JOIN: 今天的 OHLCV + 昨天的递推状态 ----
-    df = today_ohlcv.join(live_agg, on="symbol", how="inner")
+    # ---- JOIN: 今天的 OHLCV + 各股票最后一个有效交易日的递推状态 ----
+    # 当日行情是主表, 复牌或新上市股票不能因为没有历史状态而被静默删除。
+    live_state = live_agg.with_columns(pl.lit(True).alias("_has_history_state"))
+    df = today_ohlcv.join(live_state, on="symbol", how="left")
+    has_history_state = pl.col("_has_history_state").fill_null(False)
 
     # ---- 前复权: 保存原始价 → 调整 OHLCV ----
     df = df.with_columns([
@@ -1527,8 +1530,14 @@ def compute_enriched_today(
 
     # ---- 极值 60 日 ----
     df = df.with_columns([
-        pl.max_horizontal(pl.col("_high_59d"), pl.col("high")).alias("high_60d"),
-        pl.min_horizontal(pl.col("_low_59d"), pl.col("low")).alias("low_60d"),
+        pl.when(has_history_state)
+          .then(pl.max_horizontal(pl.col("_high_59d"), pl.col("high")))
+          .otherwise(None)
+          .alias("high_60d"),
+        pl.when(has_history_state)
+          .then(pl.min_horizontal(pl.col("_low_59d"), pl.col("low")))
+          .otherwise(None)
+          .alias("low_60d"),
     ])
 
     # ---- 动量 (5d/10d/20d/30d/60d) ----
@@ -1548,7 +1557,7 @@ def compute_enriched_today(
     vol_mean = total_sum / 20
     vol_var = total_sq_sum / 20 - vol_mean ** 2
     df = df.with_columns(
-        pl.when(vol_var > 0)
+        pl.when(has_history_state & (vol_var > 0))
           .then(vol_var.sqrt() * (252 ** 0.5))
           .otherwise(None)
           .alias("annual_vol_20d"),
@@ -1638,6 +1647,7 @@ def compute_enriched_today(
         "_adj_factor",
         "_vol_19d_pct_sum", "_vol_19d_pct_sq_sum",
         "_prev_consec_up", "_prev_consec_down",
+        "_has_history_state",
     ]
     df = df.drop([c for c in drop_cols if c in df.columns])
 
@@ -1722,7 +1732,7 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
     limit_down_price = polars_limit_price(prev_raw, limit_pct, up=False)
 
     # 生效涨跌停价: 维表日期与行情日期一致时优先使用交易所权威值;
-    # 维表过期、价格缺失或新股哨兵值均回退自算理论价。旧版无 as_of 维表保持兼容。
+    # 维表过期或价格缺失时回退自算理论价。旧版无 as_of 维表保持兼容。
     # 哨兵阈值 10000 用于识别 "新股无涨跌停限制" 的占位值 (实际涨停价不可能上万)。
     _SENTINEL = 10000.0
     authoritative_date = (
@@ -1730,30 +1740,51 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
         if "_instrument_as_of" in df.columns
         else pl.lit(True)
     )
+    has_authoritative_up = pl.lit(False)
+    has_authoritative_down = pl.lit(False)
+    no_price_limit = pl.lit(False)
     if "limit_up" in df.columns:
-        effective_limit_up = pl.when(
+        has_authoritative_up = (
             authoritative_date
             & pl.col("limit_up").is_not_null()
+            & (pl.col("limit_up") > 0)
             & (pl.col("limit_up") < _SENTINEL)
+        )
+        no_price_limit = (
+            authoritative_date
+            & pl.col("limit_up").is_not_null()
+            & (pl.col("limit_up") >= _SENTINEL)
+        )
+        effective_limit_up = pl.when(
+            has_authoritative_up
         ).then(pl.col("limit_up")).otherwise(limit_up_price)
     else:
         effective_limit_up = limit_up_price
     if "limit_down" in df.columns:
-        effective_limit_down = pl.when(
+        has_authoritative_down = (
             authoritative_date
             & pl.col("limit_down").is_not_null()
+            & (pl.col("limit_down") > 0)
             & (pl.col("limit_down") < _SENTINEL)
+        )
+        effective_limit_down = pl.when(
+            has_authoritative_down
         ).then(pl.col("limit_down")).otherwise(limit_down_price)
     else:
         effective_limit_down = limit_down_price
 
+    valid_prev_raw = prev_raw.is_not_null() & (prev_raw > 0)
     is_limit_up = (
-        pl.when((prev_raw > 0) & (pl.col("raw_close") > 0))
+        pl.when(no_price_limit)
+          .then(False)
+          .when((valid_prev_raw | has_authoritative_up) & (pl.col("raw_close") > 0))
           .then(pl.col("raw_close") >= (effective_limit_up - 0.005))
           .otherwise(None).cast(pl.Boolean)
     )
     is_limit_down = (
-        pl.when((prev_raw > 0) & (pl.col("raw_close") > 0))
+        pl.when(no_price_limit)
+          .then(False)
+          .when((valid_prev_raw | has_authoritative_down) & (pl.col("raw_close") > 0))
           .then(pl.col("raw_close") <= (effective_limit_down + 0.005))
           .otherwise(None).cast(pl.Boolean)
     )
@@ -1762,7 +1793,9 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
         is_limit_up.alias("signal_limit_up"),
         is_limit_down.alias("signal_limit_down"),
         # 跌停翘板
-        pl.when(prev_raw > 0)
+        pl.when(no_price_limit)
+          .then(False)
+          .when(valid_prev_raw | has_authoritative_down)
           .then(
               (~is_limit_down.fill_null(True))
               & (pl.col("low") <= effective_limit_down + 0.005)
@@ -1770,7 +1803,9 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
           ).otherwise(None).cast(pl.Boolean)
           .alias("signal_limit_down_recovery"),
         # 炸板: 最高价曾触及涨停价 + 最终未封住
-        pl.when((prev_raw > 0) & (pl.col("raw_high") > 0))
+        pl.when(no_price_limit)
+          .then(False)
+          .when((valid_prev_raw | has_authoritative_up) & (pl.col("raw_high") > 0))
           .then(
               (~is_limit_up.fill_null(True))
               & (pl.col("raw_high") >= effective_limit_up - 0.005)

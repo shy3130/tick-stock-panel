@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import polars as pl
@@ -25,7 +25,7 @@ def _repo(tmp_path) -> KlineRepository:
 def _live_row(symbol: str, close: float) -> pl.DataFrame:
     return pl.DataFrame({
         "symbol": [symbol],
-        "date": [date(2026, 7, 20)],
+        "date": [cn_today()],
         "open": [close],
         "high": [close],
         "low": [close],
@@ -45,7 +45,7 @@ def test_live_enriched_cache_keeps_instrument_metadata_without_persisting_it(tmp
     repo.merge_live_enriched_asset("stock", _live_row("000001.SZ", 12.0))
 
     cached, cached_date = repo.get_enriched_latest()
-    assert cached_date == date(2026, 7, 20)
+    assert cached_date == cn_today()
     assert cached.select("symbol", "name").sort("symbol").to_dicts() == [
         {"symbol": "000001.SZ", "name": "平安银行"},
         {"symbol": "600000.SH", "name": "浦发银行"},
@@ -54,7 +54,7 @@ def test_live_enriched_cache_keeps_instrument_metadata_without_persisting_it(tmp
     assert cached["float_shares"].null_count() == 0
 
     persisted = pl.read_parquet(
-        tmp_path / "kline_daily_enriched" / "date=2026-07-20" / "part.parquet"
+        tmp_path / "kline_daily_enriched" / f"date={cn_today().isoformat()}" / "part.parquet"
     )
     assert "name" not in persisted.columns
     assert "total_shares" not in persisted.columns

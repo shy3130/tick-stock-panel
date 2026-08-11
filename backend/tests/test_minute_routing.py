@@ -680,3 +680,25 @@ def test_intraday_monitor_support_resolver_exception_falls_back(monkeypatch):
 
     assert support["available"] is True
     assert support["source"] == "minute_batch"
+
+
+# ---------- 测试 20: sync_minute_single 拒绝指数 symbol (防污染 kline_minute) ----------
+
+def test_sync_minute_single_rejects_index_symbol():
+    """指数分钟K无本地存储, 落库会污染股票分钟表; 端点应显式 400 而非 500。"""
+    import asyncio
+
+    import pytest
+    from fastapi import HTTPException
+
+    from app.api import kline as kline_api
+
+    mock_repo = MagicMock()
+    mock_repo.resolve_asset_type.return_value = "index"
+    mock_request = MagicMock()
+    mock_request.app.state.repo = mock_repo
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(kline_api.sync_minute_single(mock_request, {"symbol": "000001.SH"}))
+    assert exc_info.value.status_code == 400
+    assert "指数" in str(exc_info.value.detail)

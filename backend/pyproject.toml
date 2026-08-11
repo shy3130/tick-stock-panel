@@ -1,6 +1,6 @@
 [project]
 name = "tickflow-stock-panel-backend"
-version = "0.1.83"
+version = "0.1.88"
 description = "A 股量化研究、选股与回测后端 — TickFlow 适配（无自定义前端）"
 readme = "../README.md"
 requires-python = ">=3.11"
@@ -22,6 +22,7 @@ dependencies = [
     # llvmlite 不再提供 macOS Intel wheel；该平台使用 Matrix 纯 Python fallback。
     "numba>=0.65.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "fastexcel>=0.10",            # Polars 读取 xlsx/xls
+    "pypinyin>=0.50",             # 股票名拼音首字母搜索 (同花顺式 payh → 平安银行)
     # TickFlow 官方 SDK
     "tickflow[all]>=0.1.23",
     # Scheduling

@@ -54,11 +54,14 @@ def _invalidate(table: str | None = None) -> None:
     invalidate_data_cache(table)
 
 
-def _resolve_universe(capset: CapabilitySet) -> list[str]:
+def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
     """解析标的池 — 以 CN_Equity_A (沪深京A股 ~5522只) 为主。
 
     有 batch 能力 → 直接拉 CN_Equity_A universe
     其他用户 → 用 instruments parquet + watchlist 兜底
+
+    repo 传入时过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
+    进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
     """
     if capset.has(Cap.KLINE_DAILY_BATCH):
         try:
@@ -79,6 +82,10 @@ def _resolve_universe(capset: CapabilitySet) -> list[str]:
             base.update(inst["symbol"].to_list())
         except Exception as e:  # noqa: BLE001
             logger.warning("instruments supplement failed: %s", e)
+    # 过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
+    # 进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
+    if repo is not None:
+        base -= set(repo.get_index_symbol_set())
     return sorted(base)
 
 
@@ -127,7 +134,7 @@ def run_now(
     _invalidate("instruments")
 
     emit("resolve_universe", 9, "解析标的池…")
-    universe = _resolve_universe(capset)
+    universe = _resolve_universe(capset, repo)
     emit("resolve_universe", 10, f"标的池规模:{len(universe)} 只")
 
     # Step 1: 日 K 同步
@@ -488,7 +495,7 @@ def run_now(
         minute_start = today - _td(days=minute_days)
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
-        minute_symbols = _resolve_minute_symbols(capset)
+        minute_symbols = _resolve_minute_symbols(capset, repo)
         def _minute_chunk_progress(cur: int, tot: int, seg_label: str = "") -> None:
             emit("sync_minute", 90 + int(3 * cur / tot),
                  f"分钟K 批次 {cur}/{tot}" + (f" [{seg_label}]" if seg_label else ""),
@@ -509,6 +516,32 @@ def run_now(
         else:
             logger.info("sync_minute skipped: user disabled")
 
+    # Step 2.6: 市场环境(regime) 增量计算 — enriched 已就绪后聚合环境指标。
+    # 双检测(缺口+stale), 自动补算遗漏/被覆写的日。软失败: 不阻断主管道。
+    # 默认关闭: regime 是本地聚合计算(非拉取), 首次/regime 表为空时需全量回填
+    # 多日, 内存与耗时较高。用户可在数据页「市场环境」卡片设置里开启自动计算,
+    # 或直接在该页面点「重算」手动触发(不受此开关影响)。
+    regime_days = 0
+    from app.services import preferences as _prefs_regime
+    if not _prefs_regime.get_pipeline_regime_enabled():
+        skipped.append("regime")
+        logger.info("compute_regime skipped: user disabled (pipeline_regime_enabled=False)")
+    else:
+        try:
+            emit("compute_regime", 90, "计算市场环境…")
+            from app.services import regime_builder
+            from app.api.regime import invalidate_regime_cache
+            new_regime = regime_builder.compute_regime_incremental(repo, repo.store.data_dir)
+            regime_days = new_regime.height if not new_regime.is_empty() else 0
+            if regime_days:
+                invalidate_regime_cache()
+                logger.info("compute_regime: %d days", regime_days)
+            emit("compute_regime", 92, f"市场环境 {regime_days} 天")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("compute_regime failed (soft): %s", e)
+            stage_errors.append(f"compute_regime: {e}")
+            skipped.append("regime")
+
     # Step 3: 刷新视图
     emit("refresh_views", 95, "刷新 DuckDB 视图…")
     _refresh_views(repo)
@@ -527,6 +560,7 @@ def run_now(
         "etf_daily_rows": written_etf_daily,
         "etf_adj_factor_symbols": etf_adj_symbols,
         "minute_rows": written_minute,
+        "regime_days": regime_days,
         "lagging_symbols": len(lagging_symbols),
         "skipped_stages": skipped,
         "stage_errors": stage_errors,
@@ -575,9 +609,9 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
         logger.warning("refresh view %s failed: %s", name, e)
 
 
-def _resolve_minute_symbols(capset: CapabilitySet) -> list[str]:
+def _resolve_minute_symbols(capset: CapabilitySet, repo=None) -> list[str]:
     """分钟 K 同步标的 — 与日K共用同一标的池。"""
-    return _resolve_universe(capset)
+    return _resolve_universe(capset, repo)
 
 
 def _refresh_instruments_view(repo: KlineRepository) -> None:

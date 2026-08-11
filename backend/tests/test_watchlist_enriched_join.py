@@ -20,14 +20,18 @@ class _FakeRepo:
     """最小化 repo mock: 只实现 watchlist_enriched 调用到的方法."""
 
     def __init__(self, enriched_df, enriched_date, etf_df=None, etf_date=None,
-                 instruments_df=None, name_map=None, etf_set=None):
+                 instruments_df=None, name_map=None, etf_set=None,
+                 index_df=None, index_date=None, index_set=None):
         self._enriched = enriched_df
         self._enriched_date = enriched_date
         self._etf = etf_df
         self._etf_date = etf_date
+        self._index = index_df
+        self._index_date = index_date
         self._instruments = instruments_df or pl.DataFrame()
         self._name_map = name_map or {}
         self._etf_set = etf_set or set()
+        self._index_set = index_set or set()
 
     def get_enriched_latest(self):
         return self._enriched, self._enriched_date
@@ -36,10 +40,16 @@ class _FakeRepo:
         if asset == "etf":
             etf = self._etf if self._etf is not None else pl.DataFrame()
             return etf, self._etf_date
+        if asset == "index":
+            idx = self._index if self._index is not None else pl.DataFrame()
+            return idx, self._index_date
         return pl.DataFrame(), None
 
     def get_etf_symbol_set(self):
         return self._etf_set
+
+    def get_index_symbol_set(self):
+        return self._index_set
 
     def get_instruments(self):
         return self._instruments
@@ -212,3 +222,45 @@ def test_mixed_watchlist_keeps_pending_etf_rows(monkeypatch):
     assert all(next(r for r in res["rows"] if r["symbol"] == symbol).get("close") is None
                for symbol in ("510300", "510500"))
     assert res["as_of"] == "2026-07-08"
+
+
+def test_watchlist_enriched_index_branch(monkeypatch):
+    """自选含指数: 行走 index enriched, asset_type=index, 名称回填, 股票/ETF 行不受影响。
+
+    断言 (计划 Task 4 Step 1):
+      - 指数行存在, close == 3000.0, asset_type == "index", name == "上证指数"
+      - 指数行 turnover_rate 为 None (列不存在或 null, 不报错)
+      - 股票行 asset_type == "stock"; ETF 行 == "etf"
+      - as_of == min(股票日期, etf日期, index日期)
+    """
+    monkeypatch.setattr(wl_api.watchlist, "list_symbols",
+                        lambda: [{"symbol": "600000.SH"}, {"symbol": "510300.SH"},
+                                 {"symbol": "000001.SH"}])
+    repo = _FakeRepo(
+        enriched_df=_enriched_df([("600000.SH", 10.0, 0.3, 2e9)]),
+        enriched_date="2026-07-23",
+        etf_df=_enriched_df([("510300.SH", 4.0, 0.5, 1e8)]),
+        etf_date="2026-07-24",
+        etf_set={"510300.SH"},
+        index_df=pl.DataFrame([{"symbol": "000001.SH", "close": 3000.0, "change_pct": 0.01,
+                                "amount": 1e9, "ma5": 2990.0}]),
+        index_date="2026-07-24",
+        index_set={"000001.SH"},
+        name_map={"600000.SH": "浦发银行", "510300.SH": "沪深300ETF", "000001.SH": "上证指数"},
+    )
+
+    res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
+
+    rows = {r["symbol"]: r for r in res["rows"]}
+    # 指数行
+    idx = rows["000001.SH"]
+    assert idx["close"] == 3000.0
+    assert idx["asset_type"] == "index"
+    assert idx["name"] == "上证指数"
+    # 指数无换手率: 列缺失或 null, 不报错
+    assert idx.get("turnover_rate") is None
+    # 股票行 / ETF 行 asset_type
+    assert rows["600000.SH"]["asset_type"] == "stock"
+    assert rows["510300.SH"]["asset_type"] == "etf"
+    # as_of == min(三类缓存日期)
+    assert res["as_of"] == "2026-07-23"

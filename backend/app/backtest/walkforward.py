@@ -154,7 +154,10 @@ class WalkForwardService:
             return None
         strategy = self.strategy_engine.get(cfg.strategy_id)
         if strategy.execution_backend != "matrix_native":
-            return None
+            raise ValueError(
+                f"步进优化暂仅支持矩阵(matrix_native)策略; "
+                f"{cfg.strategy_id} 是 {strategy.execution_backend}"
+            )
 
         from app.backtest.optimizer import expand_param_grid
         from app.backtest.strategy import StrategyBacktestConfig
