@@ -488,3 +488,38 @@ cd backend && .venv/Scripts/python.exe -m scripts.check_structure
 - 2026-07-29 最终验收：`compileall` 通过；P13/P14 结构标签、历史复验和冻结观察后的完整 `pytest` 为
   `526 passed, 11 warnings`；AlphaGPT release v1.0 的 15 个产物校验通过。P14
   冻结协议专项与产物生成同样通过。
+
+## 10. P15 Selection MVP v2 交接 (2026-08-12)
+
+入口为 `backend/research/selection/run_selection_mvp_v2.py`，纯评估内核在
+`backend/research/selection/mvp_v2.py`。它完成了动态全市场 universe、next-open
+1/3/5/10 日标签、Top 5/10/20、交易成本、120/40 walk-forward、训练段因子开关、
+结构牛熊诊断、最新全市场淘汰原因和每日 Top20 审计。没有新增前端，生产默认未改。
+
+本地事实数据截至 2026-08-10。8 个非重叠测试折的 5 日 Top10：
+
+| 版本 | 平均净收益/候选批次 | 批次胜率 | 个股胜率 | 相对等权池超额 |
+|---|---:|---:|---:|---:|
+| 质量动量 | -0.065% | 51.56% | 44.54% | -0.051% |
+| 质量动量 + 20% 因子 | -0.205% | 49.69% | 44.90% | -0.191% |
+| 每折训练选择 | -0.145% | 52.19% | 44.71% | -0.131% |
+
+因子在训练折投票 4:4，平局选择基础版；测试结果从未参与开关。结构牛段平均净收益
++0.286%、批次胜率 55.28%，但超额 -0.260%；结构熊段 -0.413%、50.25%。因此结论
+是 selector 仍无稳定 alpha，尤其不能根据牛市正收益声称选股有效。
+
+严格限制：`tushare_stock_basic` 有上市/退市日期，但没有历史 ST/证券简称变更区间。
+当前用“现在是否非 ST”代理历史状态，存在 point-in-time/幸存者偏差，已在 JSON 中
+披露。下一位不要继续扫描因子权重或 Top-K；先补历史状态表，再冻结协议并从
+2026-08-11 之后积累真正未见数据。
+
+复现命令：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m research.selection.run_selection_mvp_v2
+.\.venv\Scripts\python.exe -m pytest tests/research/selection -q
+```
+
+权威产物：`artifacts/archive/selection/selection_mvp_v2.json`、
+`selection_mvp_v2_latest_audit.csv`、`selection_mvp_v2_daily_top20.csv`。

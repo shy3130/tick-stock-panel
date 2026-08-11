@@ -234,3 +234,21 @@ AlphaGPT Research v1.0 已冻结为完整研究基线。统一验收命令：
 
 该命令校验 15 个必需产物及其哈希、rollout 数据集、checkpoint、训练折边界、
 seed 切分和历史 gate；它不会重新训练，也不会把失败结果改写成成功结论。
+
+## P15 选股 MVP v2
+
+当前优先级从继续扩展 AlphaGPT 转为验证选股链。统一入口：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m research.selection.run_selection_mvp_v2
+```
+
+该入口复用生产侧 `quality_momentum_v1` 和 `custom_factor` 的矩阵实现，在动态全市场
+股票池上生成 1/3/5/10 日 next-open 标签，固定比较 Top 5/10/20。因子仅作为 20%
+可选 overlay；120/40 walk-forward 每折只用训练指标决定开关。结果为历史 replay，
+不会写回 `app/`。当前 8 折里因子训练投票 4:4，按预注册规则关闭；基础版测试平均
+5 日净收益 -0.065%，因子叠加 -0.205%，两者均不具备晋级证据。
+
+历史 ST/更名区间尚未入库，因此 v2 对历史日期使用“当前非 ST”代理，并在产物中披露
+point-in-time 缺口。补齐该数据前，不得把 v2 的动态 universe 描述成无幸存者偏差。

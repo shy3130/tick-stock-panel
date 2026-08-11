@@ -29,6 +29,7 @@
 - canonical universe 必须先排序再按 seed 抽样并记录完整 manifest/hash。
 - 当前 regime、结构切换、因子 ensemble 和核心策略历史复验都没有通过稳健晋级门槛。
 - `quality_momentum_v1` 已具备逐股解释能力，但仍是 mixed historical replay，默认隐藏。
+- P15 选股 MVP 的因子叠加没有改善 walk-forward 测试；基础版仍无稳定超额，不得晋级。
 
 不得把历史窗口相对改善表述为未来收益承诺。
 
@@ -61,6 +62,8 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 - parquet 集合增长会导致固定随机种子下的抽样 universe 漂移；不得直接比较不同运行的绝对收益。
 - 调参、因子选择和 regime 选择只能使用训练区间信息；测试折不得反向参与选择。
 - 报告错误折、无信号折和空结果，不得静默删除或用 0 替代。
+- P15 统一走 `research.selection.run_selection_mvp_v2`。future label 和结构标签不得进入
+  当日排名，因子开关只能读取训练指标；历史 ST 状态补齐前必须披露当前状态代理偏差。
 
 ### Regime 实现
 
@@ -119,6 +122,8 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 - `backend/research/validation/run_structure_strategy_forward_watch_v1.py`：P14 注册后
   冻结观察；只有注册次日后的交易日可计入 fresh 门槛。
 - `backend/research/reporting/make_regime_ensemble_report.py`：由 JSON 重新生成综合 HTML。
+- `backend/research/selection/mvp_v2.py`：选股标签、Top-K、成本和 walk-forward 评估内核。
+- `backend/research/selection/run_selection_mvp_v2.py`：P15 动态全市场选股历史验证入口。
 
 ## 5. 修改原则
 

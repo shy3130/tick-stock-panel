@@ -279,3 +279,24 @@ tests -> app/research
 ```
 
 无法明确归类时，先补充职责说明，不要把文件临时堆在仓库根目录或 `backend/` 根目录。
+
+## 8. Selection MVP v2 边界
+
+当前选股链保持“生产实现、研究评估、运行时数据、归档证据”四层单向依赖：
+
+```text
+data/kline_daily_enriched + tushare_stock_basic
+  -> research.selection.run_selection_mvp_v2
+  -> app.strategy.builtin.quality_momentum_v1 / custom_factor (只调用生产实现)
+  -> research.selection.mvp_v2 (标签、Top-K、walk-forward、成本与统计)
+  -> artifacts/archive/selection (JSON + CSV 审计)
+```
+
+`app/` 不导入 `research/`。因子只允许作为 selector 的可选 overlay；一进二仍是独立的
+9:25 竞价 specialized runner，不与日线横截面标签混合。结构牛熊只在 P15 结果生成后
+做诊断归因，不进入评分、折内选择或参数搜索。
+
+P15 的执行时点固定为收盘 `t` 计算、开盘 `t+1` 买入。任何 forward label 都在评分和
+排名之后构建；涨停无法买入、跌停无法退出、停牌和缺失行情显式标记为缺失成交，不能
+按未来可成交性补位。当前结构足以继续开发后端选股，但历史证券状态表仍缺失，因此
+universe 尚未达到严格 point-in-time 标准。
