@@ -35,11 +35,11 @@ def test_builtin_catalog_is_complete_and_defaults_to_three_core_strategies():
         for item in metadata
         if strategy_catalog.include_strategy(item, include_experimental=False)
     } == strategy_catalog.CORE_STRATEGY_IDS
-    assert strategy_catalog.CORE_STRATEGY_IDS == {
+    assert {
         "bullish_alignment",
         "trend_breakout",
         "pullback_to_support",
-    }
+    } == strategy_catalog.CORE_STRATEGY_IDS
     assert len(strategy_catalog.CORE_STRATEGY_IDS) == 3
     assert {
         item["evidence_status"]
@@ -75,7 +75,7 @@ def test_strategy_list_apis_hide_non_core_builtins_but_keep_direct_access(tmp_pa
     assert hidden["lifecycle"] == "experimental"
     assert hidden["visible_by_default"] is False
     assert hidden["evidence_status"] == "historical_replay_failed"
-    for strategy_id in ("oversold_reversal", "limit_up_momentum"):
+    for strategy_id in ("oversold_reversal", "limit_up_momentum", "quality_momentum_v1"):
         demoted = strategy_api.get_strategy(strategy_id, request)
         assert demoted["lifecycle"] == "experimental"
         assert demoted["visible_by_default"] is False
@@ -86,7 +86,7 @@ def test_user_strategy_remains_visible_by_default(tmp_path):
     custom_dir = tmp_path / "strategies" / "custom"
     custom_dir.mkdir(parents=True)
     (custom_dir / "custom_user.py").write_text(
-        '''import polars as pl
+        """import polars as pl
 META = {
     "id": "custom_user",
     "name": "user strategy",
@@ -95,7 +95,7 @@ META = {
 }
 def filter(df, params):
     return pl.lit(True)
-''',
+""",
         encoding="utf-8",
     )
     engine = StrategyEngine(strategy_dirs=[custom_dir])

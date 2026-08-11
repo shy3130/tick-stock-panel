@@ -1,4 +1,4 @@
-r"""安全、可断点续跑的 Tushare 日线增量同步。
+r"""安全、可断点续跑的 Tushare 日线与历史 ST 状态增量同步。
 
 默认行为只补缺失交易日，不删除也不重写已有股票日线。新分区会先在同目录写入
 临时文件，通过 schema、日期、唯一键和 OHLC 合法性检查后再用 ``os.replace``
@@ -9,29 +9,30 @@ r"""安全、可断点续跑的 Tushare 日线增量同步。
     .\.venv\Scripts\python.exe -m scripts.tushare_sync \
         --start 20240924 --end 20260728
 
+历史 ST 清单按交易日写入 ``data/tushare_stock_st/date=...``；已有合法分区同样跳过。
 认证仅从 ``--ts-token`` 或 ``TUSHARE_TOKEN`` 读取，token 不会写入日志或产物。
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import math
 import os
 import threading
 import time
 import uuid
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import polars as pl
 
 from app.config import settings
-from research.paths import ARCHIVE_ARTIFACTS_DIR, DATA_DIR
-
+from research.paths import ARCHIVE_ARTIFACTS_DIR
 
 DEFAULT_RESEARCH_START = "20240924"
 DEFAULT_WARMUP_START = "20240401"
@@ -54,6 +55,7 @@ _DAILY_COLUMNS = (
     "volume",
     "amount",
 )
+_STOCK_ST_COLUMNS = ("symbol", "name", "trade_date", "st_type", "st_type_name")
 
 
 def _parse_api_date(value: str) -> date:
@@ -163,7 +165,7 @@ class TushareClient:
                         time.sleep(self.throttle_seconds)
                     return payload["data"]
                 last_error = str(payload.get("msg") or f"code={payload.get('code')}")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_error = str(exc)
             if attempt + 1 < self.retries:
                 time.sleep(1.2 * (attempt + 1))
@@ -291,6 +293,66 @@ def _normalise_daily_basic(data: Mapping[str, Any], trading_day: date) -> pl.Dat
     return frame
 
 
+def _normalise_stock_st(data: Mapping[str, Any], trading_day: date) -> pl.DataFrame:
+    """Normalize the point-in-time risk-warning list for one trading session."""
+    frame = _frame_from_tushare(data)
+    required = {"ts_code", "name", "trade_date", "type", "type_name"}
+    if not required <= set(frame.columns):
+        raise ValueError(
+            f"stock_st response missing columns: {sorted(required - set(frame.columns))}"
+        )
+    if frame.is_empty():
+        return pl.DataFrame(
+            schema={
+                "symbol": pl.String,
+                "name": pl.String,
+                "trade_date": pl.Date,
+                "st_type": pl.String,
+                "st_type_name": pl.String,
+            }
+        )
+    normalized = (
+        frame.rename({"ts_code": "symbol", "type": "st_type", "type_name": "st_type_name"})
+        .with_columns(
+            pl.col("symbol").cast(pl.String).str.to_uppercase(),
+            pl.col("name").cast(pl.String),
+            pl.col("trade_date").cast(pl.String).str.to_date("%Y%m%d", strict=False),
+            pl.col("st_type").cast(pl.String),
+            pl.col("st_type_name").cast(pl.String),
+        )
+        .select(_STOCK_ST_COLUMNS)
+        .drop_nulls(["symbol", "trade_date"])
+        .unique(subset=["symbol", "trade_date"], keep="last")
+        .sort("symbol")
+    )
+    observed_dates = normalized["trade_date"].unique().to_list()
+    if observed_dates != [trading_day]:
+        raise ValueError(f"stock_st partition date mismatch: {observed_dates} != {trading_day}")
+    return normalized
+
+
+def _existing_stock_st_is_valid(path: Path, trading_day: date) -> bool:
+    if not path.exists():
+        return False
+    try:
+        frame = pl.read_parquet(path)
+        if set(frame.columns) != set(_STOCK_ST_COLUMNS):
+            return False
+        if frame.is_empty():
+            return frame.schema == {
+                "symbol": pl.String,
+                "name": pl.String,
+                "trade_date": pl.Date,
+                "st_type": pl.String,
+                "st_type_name": pl.String,
+            }
+        return frame["trade_date"].unique().to_list() == [trading_day] and (
+            frame.select(pl.struct(["symbol", "trade_date"]).n_unique()).item() == frame.height
+        )
+    except Exception:
+        return False
+
+
 def _normalise_index_daily(data: Mapping[str, Any], symbol: str) -> pl.DataFrame:
     frame = _frame_from_tushare(data)
     required = {"trade_date", "open", "high", "low", "close", "vol", "amount"}
@@ -303,9 +365,7 @@ def _normalise_index_daily(data: Mapping[str, Any], symbol: str) -> pl.DataFrame
     else:
         frame = frame.filter(pl.col("ts_code").cast(pl.Utf8) == symbol)
         if frame.is_empty():
-            raise ValueError(
-                f"index_daily response contains no rows for requested symbol {symbol}"
-            )
+            raise ValueError(f"index_daily response contains no rows for requested symbol {symbol}")
     return (
         frame.rename({"ts_code": "symbol", "trade_date": "date", "vol": "volume"})
         .with_columns(
@@ -343,10 +403,7 @@ def _merge_new_ex_factors(
 ) -> int:
     cumulative = pl.concat(list(cumulative_rows), how="diagonal_relaxed")
     cumulative = cumulative.sort(["symbol", "trade_date"]).with_columns(
-        (
-            pl.col("adj_factor")
-            / pl.col("adj_factor").shift(1).over("symbol")
-        ).alias("ex_factor")
+        (pl.col("adj_factor") / pl.col("adj_factor").shift(1).over("symbol")).alias("ex_factor")
     )
     new = (
         cumulative.filter(pl.col("trade_date").is_in(sorted(target_days)))
@@ -382,9 +439,7 @@ def _merge_index_rows(
             current = pl.read_parquet(target)
             if not refresh_existing:
                 existing_symbols = current["symbol"].cast(pl.Utf8).unique().to_list()
-                incoming = incoming.filter(
-                    ~pl.col("symbol").cast(pl.Utf8).is_in(existing_symbols)
-                )
+                incoming = incoming.filter(~pl.col("symbol").cast(pl.Utf8).is_in(existing_symbols))
                 if incoming.is_empty():
                     continue
             merged = pl.concat([current, incoming], how="diagonal_relaxed").unique(
@@ -415,6 +470,7 @@ def sync_tushare(
     index_symbols: tuple[str, ...] = DEFAULT_INDEX_SYMBOLS,
     refresh_existing: bool = False,
     include_daily_basic: bool = True,
+    include_stock_st: bool = False,
     run_enrichment: bool = True,
     workers: int = 1,
 ) -> dict[str, Any]:
@@ -440,10 +496,7 @@ def sync_tushare(
     if calendar.is_empty() or "cal_date" not in calendar.columns:
         raise TushareError("trade_cal returned no open days")
     open_days = sorted(
-        {
-            _parse_api_date(str(value))
-            for value in calendar["cal_date"].drop_nulls().to_list()
-        }
+        {_parse_api_date(str(value)) for value in calendar["cal_date"].drop_nulls().to_list()}
     )
     target_open_days = [day for day in open_days if start <= day <= end]
     if not target_open_days:
@@ -463,8 +516,7 @@ def sync_tushare(
     if existing_adj_path.exists() and not refresh_existing:
         try:
             existing_adj_dates = set(
-                pl.read_parquet(existing_adj_path, columns=["trade_date"])
-                ["trade_date"]
+                pl.read_parquet(existing_adj_path, columns=["trade_date"])["trade_date"]
                 .cast(pl.Date, strict=False)
                 .drop_nulls()
                 .unique()
@@ -473,9 +525,7 @@ def sync_tushare(
         except Exception:
             existing_adj_dates = set()
     missing_adj_days = {
-        day
-        for day in target_open_days
-        if refresh_existing or day not in existing_adj_dates
+        day for day in target_open_days if refresh_existing or day not in existing_adj_dates
     }
     factor_days = set(missing_adj_days)
     factor_days.update(_contiguous_gap_predecessors(open_days, missing_adj_days))
@@ -487,14 +537,21 @@ def sync_tushare(
         if include_daily_basic
         and (
             refresh_existing
-            or not (
-                daily_basic_dir
-                / f"date={day.isoformat()}"
-                / "part.parquet"
-            ).exists()
+            or not (daily_basic_dir / f"date={day.isoformat()}" / "part.parquet").exists()
         )
     }
-    work_days = missing_daily_days | factor_days | missing_basic_days
+    missing_stock_st_days = {
+        day
+        for day in target_open_days
+        if include_stock_st
+        and (
+            refresh_existing
+            or not _existing_stock_st_is_valid(
+                _partition_path(data_dir, "tushare_stock_st", day), day
+            )
+        )
+    }
+    work_days = missing_daily_days | factor_days | missing_basic_days | missing_stock_st_days
 
     summary: dict[str, Any] = {
         "status": "running",
@@ -513,6 +570,12 @@ def sync_tushare(
         "adj_factor_failures": [],
         "daily_basic_days_written": 0,
         "daily_basic_failures": [],
+        "stock_st_existing_partitions_skipped": (
+            len(target_open_days) - len(missing_stock_st_days) if include_stock_st else 0
+        ),
+        "stock_st_days_written": 0,
+        "stock_st_rows_written": 0,
+        "stock_st_failures": [],
         "index_symbols": list(index_symbols),
         "index_rows_merged": 0,
         "failures": [],
@@ -522,15 +585,26 @@ def sync_tushare(
     def fetch_day(
         trading_day: date,
         request_client: TushareClient,
-    ) -> tuple[date, Mapping[str, Any] | None, Mapping[str, Any] | None, Mapping[str, Any] | None, str | None]:
+    ) -> tuple[
+        date,
+        Mapping[str, Any] | None,
+        Mapping[str, Any] | None,
+        Mapping[str, Any] | None,
+        str | None,
+        Mapping[str, Any] | None,
+        str | None,
+    ]:
         needs_daily = trading_day in missing_daily_days
         needs_adj = trading_day in factor_days
         needs_basic = trading_day in missing_basic_days
+        needs_stock_st = trading_day in missing_stock_st_days
         api_day = _api_date(trading_day)
         daily_data: Mapping[str, Any] | None = None
         adj_data: Mapping[str, Any] | None = None
         basic_data: Mapping[str, Any] | None = None
         basic_error: str | None = None
+        stock_st_data: Mapping[str, Any] | None = None
+        stock_st_error: str | None = None
         if needs_daily:
             daily_data = request_client.post(
                 "daily",
@@ -557,7 +631,24 @@ def sync_tushare(
                 )
             except TushareError as exc:
                 basic_error = str(exc)
-        return trading_day, daily_data, adj_data, basic_data, basic_error
+        if needs_stock_st:
+            try:
+                stock_st_data = request_client.post(
+                    "stock_st",
+                    {"trade_date": api_day},
+                    fields="ts_code,name,trade_date,type,type_name",
+                )
+            except TushareError as exc:
+                stock_st_error = str(exc)
+        return (
+            trading_day,
+            daily_data,
+            adj_data,
+            basic_data,
+            basic_error,
+            stock_st_data,
+            stock_st_error,
+        )
 
     ordered_work_days = sorted(work_days)
     if workers == 1:
@@ -583,7 +674,15 @@ def sync_tushare(
 
     cumulative_adj: list[pl.DataFrame] = []
     try:
-        for trading_day, daily_data, adj_data, basic_data, basic_error in fetched_days:
+        for (
+            trading_day,
+            daily_data,
+            adj_data,
+            basic_data,
+            basic_error,
+            stock_st_data,
+            stock_st_error,
+        ) in fetched_days:
             if daily_data is not None:
                 try:
                     daily = _normalise_daily(daily_data, trading_day)
@@ -596,9 +695,7 @@ def sync_tushare(
                 daily = None
             if adj_data is not None:
                 try:
-                    cumulative_adj.append(
-                        _normalise_adj_factor(adj_data, trading_day)
-                    )
+                    cumulative_adj.append(_normalise_adj_factor(adj_data, trading_day))
                 except ValueError as exc:
                     summary["adj_factor_failures"].append(
                         {"date": trading_day.isoformat(), "error": str(exc)}
@@ -611,11 +708,7 @@ def sync_tushare(
                 summary["daily_rows_written"] += daily.height
 
             if trading_day in missing_basic_days:
-                basic_target = (
-                    daily_basic_dir
-                    / f"date={trading_day.isoformat()}"
-                    / "part.parquet"
-                )
+                basic_target = daily_basic_dir / f"date={trading_day.isoformat()}" / "part.parquet"
                 try:
                     if basic_error is not None:
                         raise TushareError(basic_error)
@@ -626,6 +719,22 @@ def sync_tushare(
                     summary["daily_basic_days_written"] += 1
                 except (TushareError, ValueError) as exc:
                     summary["daily_basic_failures"].append(
+                        {"date": trading_day.isoformat(), "error": str(exc)}
+                    )
+
+            if trading_day in missing_stock_st_days:
+                stock_st_target = _partition_path(data_dir, "tushare_stock_st", trading_day)
+                try:
+                    if stock_st_error is not None:
+                        raise TushareError(stock_st_error)
+                    if stock_st_data is None:
+                        raise ValueError("stock_st returned no data envelope")
+                    stock_st = _normalise_stock_st(stock_st_data, trading_day)
+                    _atomic_write_parquet(stock_st, stock_st_target)
+                    summary["stock_st_days_written"] += 1
+                    summary["stock_st_rows_written"] += stock_st.height
+                except (TushareError, ValueError) as exc:
+                    summary["stock_st_failures"].append(
                         {"date": trading_day.isoformat(), "error": str(exc)}
                     )
     finally:
@@ -705,13 +814,15 @@ def sync_tushare(
             "daily_failures",
             "adj_factor_failures",
             "daily_basic_failures",
+            "stock_st_failures",
         )
     )
     summary["status"] = "complete_with_failures" if has_failures else "complete"
     summary["finished_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     summary["note"] = (
         "已有股票日线默认跳过；新分区校验后原子写入；未执行目录删除。"
-        "空行情、复权因子或 daily_basic 失败不会覆盖股票日线，并会在对应失败列表中显式保留。"
+        "空行情、复权因子、daily_basic 或 stock_st 失败不会覆盖股票日线，"
+        "并会在对应失败列表中显式保留。"
     )
     return summary
 
@@ -742,6 +853,11 @@ def main() -> None:
         help="跳过需要更高积分权限的 daily_basic",
     )
     parser.add_argument(
+        "--skip-stock-st",
+        action="store_true",
+        help="跳过按交易日历史 ST/风险警示清单；默认增量补齐",
+    )
+    parser.add_argument(
         "--skip-pipeline",
         action="store_true",
         help="只同步原始数据，不重算 enriched",
@@ -757,11 +873,7 @@ def main() -> None:
     token = args.ts_token or os.environ.get("TUSHARE_TOKEN", "")
     if not token:
         raise SystemExit("请通过 --ts-token 或 TUSHARE_TOKEN 配置 token")
-    base_url = (
-        args.api_base
-        or os.environ.get("TUSHARE_API_BASE", "")
-        or "http://api.tushare.pro"
-    )
+    base_url = args.api_base or os.environ.get("TUSHARE_API_BASE", "") or "http://api.tushare.pro"
     result = sync_tushare(
         client=TushareClient(base_url=base_url, token=token),
         data_dir=Path(settings.data_dir),
@@ -770,6 +882,7 @@ def main() -> None:
         index_start=_parse_api_date(args.index_start),
         refresh_existing=bool(args.refresh_existing),
         include_daily_basic=not args.skip_daily_basic,
+        include_stock_st=not args.skip_stock_st,
         run_enrichment=not args.skip_pipeline,
         workers=args.workers,
     )

@@ -298,5 +298,20 @@ data/kline_daily_enriched + tushare_stock_basic
 
 P15 的执行时点固定为收盘 `t` 计算、开盘 `t+1` 买入。任何 forward label 都在评分和
 排名之后构建；涨停无法买入、跌停无法退出、停牌和缺失行情显式标记为缺失成交，不能
-按未来可成交性补位。当前结构足以继续开发后端选股，但历史证券状态表仍缺失，因此
-universe 尚未达到严格 point-in-time 标准。
+按未来可成交性补位。P15 最初缺少历史证券状态，只能使用当前名称代理；该缺口由下面
+的 P16 ST 日表修正，旧代理结果仅作为偏差对照保留。
+
+P16 已把 ST 维度升级为逐交易日事实表：
+
+```text
+Tushare stock_st
+  -> scripts.tushare_sync (校验、断点续跑、原子分区)
+  -> data/tushare_stock_st/date=YYYY-MM-DD/part.parquet
+  -> research.selection.point_in_time_universe_mask
+  -> P15 冻结逻辑的同预算 proxy/PIT 对照
+  -> P16 历史证据 + forward-watch 冻结协议
+```
+
+PIT runner 对研究范围内每个交易日做严格覆盖检查，禁止缺口回退。历史行业分类和完整
+证券主数据变更史仍未提供，因此“ST 维度 point-in-time”不等于整个证券主数据已经完全
+无偏。前向观察只追加校准截止日之后的数据；观察脚本不得修改生产目录或自动晋级。

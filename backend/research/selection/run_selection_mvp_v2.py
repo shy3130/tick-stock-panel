@@ -43,6 +43,7 @@ from research.selection.mvp_v2 import (
     evaluate_score_grid,
     generate_session_folds,
     instrument_windows,
+    point_in_time_universe_mask,
     preferred_live_variant,
     select_variant_from_training,
     summarize_record_grid,
@@ -81,7 +82,11 @@ def _sha256(path: Path) -> str:
 
 
 def _relative(path: Path) -> str:
-    return str(path.relative_to(DATA_DIR.parent)).replace("\\", "/")
+    try:
+        display = path.relative_to(DATA_DIR.parent)
+    except ValueError:
+        display = path
+    return str(display).replace("\\", "/")
 
 
 def _json_safe(value: Any) -> Any:
@@ -96,13 +101,13 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _atomic_json(payload: Mapping[str, Any]) -> None:
-    temporary = REPORT.with_suffix(".tmp")
+def _atomic_json(payload: Mapping[str, Any], path: Path = REPORT) -> None:
+    temporary = path.with_suffix(".tmp")
     temporary.write_text(
         json.dumps(_json_safe(payload), ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",
     )
-    temporary.replace(REPORT)
+    temporary.replace(path)
 
 
 def _atomic_csv(path: Path, rows: Sequence[Mapping[str, Any]], fields: Sequence[str]) -> None:
@@ -120,6 +125,56 @@ def _ranked_ids(score: np.ndarray, eligible: np.ndarray, symbols: Sequence[str])
         return ids
     symbol_values = np.asarray(symbols, dtype=str)
     return ids[np.lexsort((symbol_values[ids], -np.asarray(score)[ids]))]
+
+
+def _historical_st_mask(
+    *,
+    market: Any,
+    root: Path,
+    required_start: date,
+    required_end: date,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    required_labels = {
+        str(label)[:10]
+        for label in market.timestamp_labels
+        if str(required_start) <= str(label)[:10] <= str(required_end)
+    }
+    partition_paths = {
+        path.parent.name.removeprefix("date="): path for path in root.glob("date=*/part.parquet")
+    }
+    missing = sorted(required_labels - set(partition_paths))
+    if missing:
+        preview = ", ".join(missing[:5])
+        raise ValueError(f"historical stock_st coverage missing {len(missing)} sessions: {preview}")
+    time_by_label = {
+        str(label)[:10]: time_id for time_id, label in enumerate(market.timestamp_labels)
+    }
+    asset_by_symbol = {symbol: asset_id for asset_id, symbol in enumerate(market.symbols)}
+    mask = np.zeros(market.shape, dtype=bool)
+    row_count = 0
+    matched_rows = 0
+    digest = hashlib.sha256()
+    for label in sorted(required_labels):
+        path = partition_paths[label]
+        file_hash = _sha256(path)
+        digest.update(f"{label}:{file_hash}\n".encode())
+        frame = pl.read_parquet(path, columns=["symbol", "trade_date"])
+        row_count += frame.height
+        time_id = time_by_label[label]
+        for symbol in frame["symbol"].cast(pl.String).to_list():
+            asset_id = asset_by_symbol.get(str(symbol).upper())
+            if asset_id is not None:
+                mask[time_id, asset_id] = True
+                matched_rows += 1
+    return mask, {
+        "source": _relative(root),
+        "required_range": [str(required_start), str(required_end)],
+        "covered_sessions": len(required_labels),
+        "rows": row_count,
+        "matched_axis_rows": matched_rows,
+        "dataset_manifest_sha256": digest.hexdigest(),
+        "coverage_complete": True,
+    }
 
 
 def _record_rows(
@@ -240,13 +295,14 @@ def _regime_breakdown(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _protocol(start: date, end: date, costs: TradingCosts) -> dict[str, Any]:
+def _protocol(start: date, end: date, costs: TradingCosts, *, universe_mode: str) -> dict[str, Any]:
     protocol: dict[str, Any] = {
         "version": 2,
         "status": "HISTORICAL_WALK_FORWARD_REPLAY_NOT_FRESH_OOS",
         "signal_timing": "score at close t; buy open t+1",
         "labels": {str(h): f"exit open t+{h + 1}" for h in HORIZONS},
         "range": [str(start), str(end)],
+        "universe_mode": universe_mode,
         "top_k": list(TOP_KS),
         "folds": {
             "train_sessions": TRAIN_SESSIONS,
@@ -274,7 +330,15 @@ def _protocol(start: date, end: date, costs: TradingCosts) -> dict[str, Any]:
     return protocol
 
 
-def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, Any]:
+def run(
+    *,
+    start: date = DEFAULT_START,
+    end: date | None = None,
+    universe_mode: str = "current_proxy",
+    report_path: Path = REPORT,
+    latest_audit_path: Path = LATEST_AUDIT,
+    daily_top_path: Path = DAILY_TOP,
+) -> dict[str, Any]:
     started = time.time()
     ensure_artifact_dirs()
     parquet_root = DATA_DIR / "kline_daily_enriched"
@@ -309,9 +373,27 @@ def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, An
         & np.isfinite(market.volume)
         & (market.volume > 0)
     )
-    dynamic_mask, universe_summary = dynamic_universe_mask(
-        market.timestamp_labels, market.symbols, windows, present
-    )
+    stock_st_status: dict[str, Any] | None = None
+    if universe_mode == "current_proxy":
+        dynamic_mask, universe_summary = dynamic_universe_mask(
+            market.timestamp_labels, market.symbols, windows, present
+        )
+    elif universe_mode == "point_in_time":
+        historical_st, stock_st_status = _historical_st_mask(
+            market=market,
+            root=DATA_DIR / "tushare_stock_st",
+            required_start=start,
+            required_end=effective_end,
+        )
+        dynamic_mask, universe_summary = point_in_time_universe_mask(
+            market.timestamp_labels,
+            market.symbols,
+            windows,
+            present,
+            historical_st,
+        )
+    else:
+        raise ValueError("universe_mode must be current_proxy or point_in_time")
 
     cache = MatrixComputeCache(max_bytes=768 * 1024 * 1024, max_item_bytes=256 * 1024 * 1024)
     try:
@@ -428,7 +510,7 @@ def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, An
         live_variant=live_variant,
     )
     _atomic_csv(
-        LATEST_AUDIT,
+        latest_audit_path,
         latest_rows,
         (
             "signal_date",
@@ -453,7 +535,7 @@ def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, An
         labels=labels,
     )
     _atomic_csv(
-        DAILY_TOP,
+        daily_top_path,
         daily_rows,
         (
             "signal_date",
@@ -477,7 +559,7 @@ def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, An
     effective_test_ids = sorted(set(all_test_ids))
     payload = {
         "status": "HISTORICAL_WALK_FORWARD_REPLAY_NOT_FRESH_OOS",
-        "protocol": _protocol(start, effective_end, costs),
+        "protocol": _protocol(start, effective_end, costs, universe_mode=universe_mode),
         "data": {
             "market_source": _relative(parquet_root),
             "stock_basic_source": _relative(stock_basic_source),
@@ -496,9 +578,15 @@ def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, An
                 "maximum": int(dynamic_mask.sum(axis=1).max()),
             },
             "universe_filter": universe_summary,
+            "universe_mode": universe_mode,
+            "stock_st": stock_st_status,
             "point_in_time_gap": (
-                "local data has listing/delisting dates but no historical ST/name-change intervals; "
-                "current non-ST status is used as a disclosed proxy"
+                None
+                if universe_mode == "point_in_time"
+                else (
+                    "local data has listing/delisting dates but no historical ST/name-change "
+                    "intervals; current non-ST status is used as a disclosed proxy"
+                )
             ),
         },
         "score_definition": {
@@ -531,8 +619,8 @@ def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, An
             "top20": latest_picks,
         },
         "artifacts": {
-            "latest_audit_csv": _relative(LATEST_AUDIT),
-            "daily_top20_csv": _relative(DAILY_TOP),
+            "latest_audit_csv": _relative(latest_audit_path),
+            "daily_top20_csv": _relative(daily_top_path),
         },
         "leakage_barriers": [
             "signals and ranks are built before forward labels are read",
@@ -545,11 +633,11 @@ def run(*, start: date = DEFAULT_START, end: date | None = None) -> dict[str, An
         "production_default_changed": False,
         "fresh_oos_status": "NOT_STARTED",
     }
-    payload["artifacts"]["latest_audit_sha256"] = _sha256(LATEST_AUDIT)
-    payload["artifacts"]["daily_top20_sha256"] = _sha256(DAILY_TOP)
-    _atomic_json(payload)
+    payload["artifacts"]["latest_audit_sha256"] = _sha256(latest_audit_path)
+    payload["artifacts"]["daily_top20_sha256"] = _sha256(daily_top_path)
+    _atomic_json(payload, report_path)
     print(
-        f"[selection-mvp-v2] {payload['status']} in {time.time() - started:.1f}s -> {REPORT}",
+        f"[selection-mvp-v2] {payload['status']} in {time.time() - started:.1f}s -> {report_path}",
         flush=True,
     )
     return payload

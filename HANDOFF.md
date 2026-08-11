@@ -523,3 +523,31 @@ cd backend
 
 权威产物：`artifacts/archive/selection/selection_mvp_v2.json`、
 `selection_mvp_v2_latest_audit.csv`、`selection_mvp_v2_daily_top20.csv`。
+
+## 11. P16 PIT-ST 修正与策略淘汰 (2026-08-12)
+
+Tushare `stock_st` 已接入 `scripts.tushare_sync`，按交易日原子写入
+`data/tushare_stock_st/`。2024-09-24~2026-08-11 共 455 个交易日覆盖完整、77,759 条
+状态记录。同步没有删除旧日线：454 个已有日线分区全部跳过，只新增 2026-08-11 的
+5,539 行，并完成 enriched 重算。ST 分区支持断点续跑，失败和缺口均显式报告。
+
+`run_selection_pit_v1` 原样冻结 P15 的评分、20% 因子权重、Top-K、持有期与成本，只
+替换 universe。PIT 后 5 日 Top10 基础平均净收益 -0.116%、批次胜率 52.19%、个股
+胜率 44.42%、平均超额 -0.071%；相比当前名称代理，净收益下降 0.051pct、超额下降
+0.019pct。因子版平均净收益 -0.234%，训练投票仍 4:4，继续关闭。
+
+结构牛市 PIT 结果是平均净收益 +0.252%、批次胜率 56.10%，但超额 -0.267%；结构熊
+-0.447%。因此 `quality_momentum_v1` 已正式标记 `historical_replay_failed`，默认隐藏、
+不具备生产资格，仅保留显式执行供复现。不要继续优化这个 selector。
+
+冻结观察协议注册于 2026-08-12，校准截止 2026-08-11。当前 0/60 日，目标 120 日，
+`auto_promote=false`。执行：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m research.selection.run_selection_forward_watch_v1
+```
+
+事实源为 `artifacts/archive/selection/selection_pit_v1.json`、
+`selection_forward_watch_v1.json` 和 `selection_forward_watch_v1_observations.json`。
+仍缺历史行业分类和完整证券主数据变更史；P16 只关闭了 ST 维度的 PIT 缺口。

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "status": "PENDING_DATA",
+  "registered_on": "2026-08-12",
+  "calibration_end": "2026-08-11",
+  "first_eligible_observation": "first complete trading session after 2026-08-11",
+  "minimum_sessions": 60,
+  "target_sessions": 120,
+  "observed_sessions": 0,
+  "selector": "quality_momentum",
+  "universe": "point_in_time_stock_st",
+  "frozen_source_report_sha256": "64875866644ea3ee1ccdd5c2637f63e6c54fe7ac33f8aac08d798ad5ea55fd12",
+  "auto_promote": false,
+  "rules": [
+    "do not change score thresholds, Top-K, holding horizon, costs or universe rules",
+    "append only sessions strictly after calibration_end",
+    "60 sessions unlock manual audit; they do not prove production readiness",
+    "test results cannot reactivate the rejected factor overlay"
+  ],
+  "sha256": "8f68d69324a09134aa3a8af3fc54ab5398190ccd0a3a44e6c627c54ec4bdd075"
+}

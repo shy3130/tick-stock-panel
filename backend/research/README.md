@@ -250,5 +250,22 @@ cd backend
 不会写回 `app/`。当前 8 折里因子训练投票 4:4，按预注册规则关闭；基础版测试平均
 5 日净收益 -0.065%，因子叠加 -0.205%，两者均不具备晋级证据。
 
-历史 ST/更名区间尚未入库，因此 v2 对历史日期使用“当前非 ST”代理，并在产物中披露
-point-in-time 缺口。补齐该数据前，不得把 v2 的动态 universe 描述成无幸存者偏差。
+P15 初次运行时历史 ST 区间尚未入库，因此该版保留“当前非 ST”代理作为偏差基线；
+下述 P16 已补齐逐日 ST 状态。两个口径必须并列保留，不能覆盖旧结果来隐藏偏差。
+
+## P16 历史 ST 状态与冻结观察
+
+P16 已通过 Tushare `stock_st` 补齐 2024-09-24~2026-08-11 的逐交易日风险警示清单。
+`research.selection.run_selection_pit_v1` 在完全冻结 P15 参数的前提下，同时运行旧当前
+名称代理和 point-in-time ST universe。基础版 5 日 Top10 平均净收益从 -0.065%
+降至 -0.116%，平均超额从 -0.051% 降至 -0.071%；结论更差而不是更好。
+
+`quality_momentum_v1` 因此标记为 `historical_replay_failed`，只保留显式复现能力。
+`research.selection.run_selection_forward_watch_v1` 读取哈希冻结协议；校准截止
+2026-08-11，之后至少 60 个完整交易日才能进入人工审计，120 日为目标，永不自动晋级。
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m research.selection.run_selection_pit_v1
+.\.venv\Scripts\python.exe -m research.selection.run_selection_forward_watch_v1
+```

@@ -81,3 +81,34 @@ alpha”的说法。
 - `artifacts/archive/selection/selection_mvp_v2.json`
 - `artifacts/archive/selection/selection_mvp_v2_latest_audit.csv`
 - `artifacts/archive/selection/selection_mvp_v2_daily_top20.csv`
+
+## P16 point-in-time 股票池修正
+
+`scripts.tushare_sync` 现按交易日增量保存 Tushare `stock_st` 风险警示清单。P16 覆盖
+2024-09-24~2026-08-11 的 455 个交易日、77,759 条 ST 状态记录；每个研究交易日都必须
+有分区，缺失一天就拒绝运行。上市/退市日期、有效成交和当日 ST 状态共同决定 universe，
+不再用“当前名称是否含 ST”代理历史日期。
+
+冻结 P15 的评分、因子公式、20% 权重、Top-K、持有期和费用后，同预算对照结果：
+
+| 5日 Top10 | 当前名称代理 | PIT-ST | PIT - 代理 |
+|---|---:|---:|---:|
+| 基础平均净收益 | -0.065% | -0.116% | -0.051% |
+| 基础批次胜率 | 51.56% | 52.19% | +0.63pct |
+| 基础平均超额 | -0.051% | -0.071% | -0.019% |
+| 因子叠加平均净收益 | -0.205% | -0.234% | -0.029% |
+
+PIT 修正没有挽救 selector。结构牛市平均净收益 +0.252%、批次胜率 56.10%，但相对
+等权可交易池超额仍为 -0.267%；结构熊市平均净收益 -0.447%。因此
+`quality_momentum_v1` 的证据状态已改为 `historical_replay_failed`，仍可显式运行以便
+复现，但默认隐藏且不具备生产资格。因子训练投票仍为 4:4，继续关闭。
+
+入口与冻结观察：
+
+```powershell
+python -m research.selection.run_selection_pit_v1
+python -m research.selection.run_selection_forward_watch_v1
+```
+
+前向协议注册于 2026-08-12，校准截止 2026-08-11；只有此后完整交易日可计入。当前
+0/60 日，状态 `PENDING_DATA`，达到 60 日也只解锁人工审计，不自动晋级。

@@ -1,0 +1,677 @@
+{
+  "status": "SELECTOR_REJECTED_HISTORICAL_EVIDENCE",
+  "protocol": {
+    "version": 1,
+    "comparison": "same frozen P15 selector under current-name proxy vs daily stock_st",
+    "parameters_changed": false,
+    "test_metrics_used_for_tuning": false,
+    "production_default_changed": false,
+    "sha256": "92ea165213fb4ed144602232953f93af436d6707929cd13a70011c50cbbd8f24"
+  },
+  "data": {
+    "range": [
+      "2024-09-24",
+      "2026-07-27"
+    ],
+    "stock_st": {
+      "source": "data/tushare_stock_st",
+      "required_range": [
+        "2024-09-24",
+        "2026-08-11"
+      ],
+      "covered_sessions": 455,
+      "rows": 77759,
+      "matched_axis_rows": 77549,
+      "dataset_manifest_sha256": "9f43625354b13b357b2d2a81d475c0657b87e1f7ed05679ff9707d9fccaea331",
+      "coverage_complete": true
+    },
+    "point_in_time_gap_closed_for_st": true,
+    "remaining_gaps": [
+      "stock_st identifies risk-warning membership but is not a full security-master history",
+      "historical industry classification remains unavailable and excluded from scoring"
+    ]
+  },
+  "universe_comparison": {
+    "current_proxy": {
+      "minimum": 5047,
+      "median": 5162,
+      "maximum": 5332
+    },
+    "point_in_time": {
+      "minimum": 5191,
+      "median": 5264,
+      "maximum": 5362
+    },
+    "latest_top20_overlap": 20,
+    "latest_top20_added": [],
+    "latest_top20_removed": []
+  },
+  "primary_5d_top10": {
+    "quality_momentum": {
+      "current_proxy": {
+        "signal_days": 320,
+        "usable_cohorts": 320,
+        "complete_cohorts": 219,
+        "complete_cohort_ratio": 0.684375,
+        "mean_net_return": -0.00065006,
+        "median_net_return": 0.00146951,
+        "cohort_win_rate": 0.515625,
+        "stock_win_rate": 0.445386,
+        "profit_factor": 0.965327,
+        "mean_excess_return": -0.00051292,
+        "mean_top_bottom_spread": 0.00306625,
+        "mean_rank_ic": -0.03201747,
+        "positive_rank_ic_ratio": 0.378125,
+        "mean_selection_turnover": 0.812853,
+        "phase_portfolios": {
+          "definition": "non-overlapping open_t+1 cohorts for each phase offset; no phase is selected",
+          "phases": [
+            {
+              "phase": 0,
+              "periods": 41,
+              "compounded_return": 0.13823196,
+              "max_drawdown": -0.17093386
+            },
+            {
+              "phase": 1,
+              "periods": 48,
+              "compounded_return": -0.23182263,
+              "max_drawdown": -0.23182263
+            },
+            {
+              "phase": 2,
+              "periods": 42,
+              "compounded_return": 0.22298837,
+              "max_drawdown": -0.13231978
+            },
+            {
+              "phase": 3,
+              "periods": 41,
+              "compounded_return": -0.31705622,
+              "max_drawdown": -0.32268086
+            },
+            {
+              "phase": 4,
+              "periods": 47,
+              "compounded_return": -0.08015381,
+              "max_drawdown": -0.24047855
+            }
+          ],
+          "median_compounded_return": -0.08015381,
+          "worst_max_drawdown": -0.32268086
+        }
+      },
+      "point_in_time": {
+        "signal_days": 320,
+        "usable_cohorts": 320,
+        "complete_cohorts": 217,
+        "complete_cohort_ratio": 0.678125,
+        "mean_net_return": -0.00115853,
+        "median_net_return": 0.00241508,
+        "cohort_win_rate": 0.521875,
+        "stock_win_rate": 0.444191,
+        "profit_factor": 0.938885,
+        "mean_excess_return": -0.00070535,
+        "mean_top_bottom_spread": 0.00268011,
+        "mean_rank_ic": -0.03281664,
+        "positive_rank_ic_ratio": 0.375,
+        "mean_selection_turnover": 0.810031,
+        "phase_portfolios": {
+          "definition": "non-overlapping open_t+1 cohorts for each phase offset; no phase is selected",
+          "phases": [
+            {
+              "phase": 0,
+              "periods": 41,
+              "compounded_return": 0.20107534,
+              "max_drawdown": -0.17093386
+            },
+            {
+              "phase": 1,
+              "periods": 47,
+              "compounded_return": -0.24065934,
+              "max_drawdown": -0.24065934
+            },
+            {
+              "phase": 2,
+              "periods": 41,
+              "compounded_return": 0.20092144,
+              "max_drawdown": -0.12136102
+            },
+            {
+              "phase": 3,
+              "periods": 41,
+              "compounded_return": -0.2960107,
+              "max_drawdown": -0.30793467
+            },
+            {
+              "phase": 4,
+              "periods": 47,
+              "compounded_return": -0.14715017,
+              "max_drawdown": -0.26490774
+            }
+          ],
+          "median_compounded_return": -0.14715017,
+          "worst_max_drawdown": -0.30793467
+        }
+      },
+      "pit_minus_proxy": {
+        "mean_net_return": -0.00050847,
+        "cohort_win_rate": 0.00625,
+        "stock_win_rate": -0.001195,
+        "mean_excess_return": -0.00019243,
+        "mean_top_bottom_spread": -0.00038614,
+        "mean_rank_ic": -0.00079917
+      }
+    },
+    "quality_momentum_plus_factor": {
+      "current_proxy": {
+        "signal_days": 320,
+        "usable_cohorts": 320,
+        "complete_cohorts": 215,
+        "complete_cohort_ratio": 0.671875,
+        "mean_net_return": -0.00205022,
+        "median_net_return": -0.00058444,
+        "cohort_win_rate": 0.496875,
+        "stock_win_rate": 0.44902,
+        "profit_factor": 0.899262,
+        "mean_excess_return": -0.00191308,
+        "mean_top_bottom_spread": 0.00166302,
+        "mean_rank_ic": -0.02802207,
+        "positive_rank_ic_ratio": 0.40625,
+        "mean_selection_turnover": 0.765517,
+        "phase_portfolios": {
+          "definition": "non-overlapping open_t+1 cohorts for each phase offset; no phase is selected",
+          "phases": [
+            {
+              "phase": 0,
+              "periods": 40,
+              "compounded_return": 0.1136557,
+              "max_drawdown": -0.18911964
+            },
+            {
+              "phase": 1,
+              "periods": 45,
+              "compounded_return": -0.30597206,
+              "max_drawdown": -0.32986839
+            },
+            {
+              "phase": 2,
+              "periods": 42,
+              "compounded_return": -0.08995359,
+              "max_drawdown": -0.23124687
+            },
+            {
+              "phase": 3,
+              "periods": 40,
+              "compounded_return": -0.03696363,
+              "max_drawdown": -0.19326059
+            },
+            {
+              "phase": 4,
+              "periods": 48,
+              "compounded_return": -0.30392492,
+              "max_drawdown": -0.39381224
+            }
+          ],
+          "median_compounded_return": -0.08995359,
+          "worst_max_drawdown": -0.39381224
+        }
+      },
+      "point_in_time": {
+        "signal_days": 320,
+        "usable_cohorts": 320,
+        "complete_cohorts": 214,
+        "complete_cohort_ratio": 0.66875,
+        "mean_net_return": -0.00234035,
+        "median_net_return": 0.00069897,
+        "cohort_win_rate": 0.50625,
+        "stock_win_rate": 0.449133,
+        "profit_factor": 0.886635,
+        "mean_excess_return": -0.00188718,
+        "mean_top_bottom_spread": 0.00155548,
+        "mean_rank_ic": -0.02873378,
+        "positive_rank_ic_ratio": 0.40625,
+        "mean_selection_turnover": 0.76395,
+        "phase_portfolios": {
+          "definition": "non-overlapping open_t+1 cohorts for each phase offset; no phase is selected",
+          "phases": [
+            {
+              "phase": 0,
+              "periods": 39,
+              "compounded_return": 0.22338426,
+              "max_drawdown": -0.18911964
+            },
+            {
+              "phase": 1,
+              "periods": 45,
+              "compounded_return": -0.3324007,
+              "max_drawdown": -0.34863254
+            },
+            {
+              "phase": 2,
+              "periods": 41,
+              "compounded_return": 0.04146749,
+              "max_drawdown": -0.23124687
+            },
+            {
+              "phase": 3,
+              "periods": 41,
+              "compounded_return": -0.08354037,
+              "max_drawdown": -0.19812806
+            },
+            {
+              "phase": 4,
+              "periods": 48,
+              "compounded_return": -0.40487257,
+              "max_drawdown": -0.4237765
+            }
+          ],
+          "median_compounded_return": -0.08354037,
+          "worst_max_drawdown": -0.4237765
+        }
+      },
+      "pit_minus_proxy": {
+        "mean_net_return": -0.00029013,
+        "cohort_win_rate": 0.009375,
+        "stock_win_rate": 0.000113,
+        "mean_excess_return": 2.59e-05,
+        "mean_top_bottom_spread": -0.00010754,
+        "mean_rank_ic": -0.00071171
+      }
+    }
+  },
+  "factor_decision": {
+    "point_in_time_train_votes": {
+      "quality_momentum": 4,
+      "quality_momentum_plus_factor": 4
+    },
+    "selected_variant": "quality_momentum",
+    "test_metrics_used": false
+  },
+  "selector_lifecycle": {
+    "quality_momentum_v1": "rejected_historical_evidence",
+    "kept_executable_for_reproduction": true,
+    "visible_by_default": false,
+    "production_eligible": false
+  },
+  "regime_diagnostic": {
+    "available": true,
+    "source": "data/.regime_cache/market_structure_v1.parquet",
+    "causal_lag": "cache date uses its disclosed source_date; regime is diagnostic only",
+    "used_for_selection": false,
+    "protocol_hashes": [
+      "158f9fd76fd1168abcb78d0d27edd70f6a5ebe02af17159ed65ef7cc0a2429a9"
+    ],
+    "metrics": {
+      "structural_bear": {
+        "signal_days": 197,
+        "usable_cohorts": 197,
+        "complete_cohorts": 127,
+        "complete_cohort_ratio": 0.64467,
+        "mean_net_return": -0.00446731,
+        "median_net_return": 0.00117036,
+        "cohort_win_rate": 0.51269,
+        "stock_win_rate": 0.444741,
+        "profit_factor": 0.805328,
+        "mean_excess_return": -0.0004887,
+        "mean_top_bottom_spread": 0.0030569,
+        "mean_rank_ic": -0.01667762,
+        "positive_rank_ic_ratio": 0.461929,
+        "mean_selection_turnover": 0.776531,
+        "phase_portfolios": {
+          "definition": "non-overlapping open_t+1 cohorts for each phase offset; no phase is selected",
+          "phases": [
+            {
+              "phase": 0,
+              "periods": 21,
+              "compounded_return": -0.09639446,
+              "max_drawdown": -0.19475837
+            },
+            {
+              "phase": 1,
+              "periods": 31,
+              "compounded_return": -0.32192869,
+              "max_drawdown": -0.32192869
+            },
+            {
+              "phase": 2,
+              "periods": 24,
+              "compounded_return": -0.0042726,
+              "max_drawdown": -0.19709243
+            },
+            {
+              "phase": 3,
+              "periods": 23,
+              "compounded_return": -0.10687147,
+              "max_drawdown": -0.1828197
+            },
+            {
+              "phase": 4,
+              "periods": 28,
+              "compounded_return": 0.17707441,
+              "max_drawdown": -0.09452028
+            }
+          ],
+          "median_compounded_return": -0.09639446,
+          "worst_max_drawdown": -0.32192869
+        }
+      },
+      "structural_bull": {
+        "signal_days": 123,
+        "usable_cohorts": 123,
+        "complete_cohorts": 90,
+        "complete_cohort_ratio": 0.731707,
+        "mean_net_return": 0.00252052,
+        "median_net_return": 0.00571444,
+        "cohort_win_rate": 0.560976,
+        "stock_win_rate": 0.452561,
+        "profit_factor": 1.183126,
+        "mean_excess_return": -0.00267273,
+        "mean_top_bottom_spread": 0.00074313,
+        "mean_rank_ic": -0.05337924,
+        "positive_rank_ic_ratio": 0.260163,
+        "mean_selection_turnover": 0.822131,
+        "phase_portfolios": {
+          "definition": "non-overlapping open_t+1 cohorts for each phase offset; no phase is selected",
+          "phases": [
+            {
+              "phase": 0,
+              "periods": 21,
+              "compounded_return": 0.24277253,
+              "max_drawdown": -0.09824966
+            },
+            {
+              "phase": 1,
+              "periods": 18,
+              "compounded_return": -0.23675379,
+              "max_drawdown": -0.23675379
+            },
+            {
+              "phase": 2,
+              "periods": 19,
+              "compounded_return": 0.01909175,
+              "max_drawdown": -0.11304314
+            },
+            {
+              "phase": 3,
+              "periods": 12,
+              "compounded_return": -0.12359848,
+              "max_drawdown": -0.19287421
+            },
+            {
+              "phase": 4,
+              "periods": 20,
+              "compounded_return": 0.1105617,
+              "max_drawdown": -0.08819564
+            }
+          ],
+          "median_compounded_return": 0.01909175,
+          "worst_max_drawdown": -0.23675379
+        }
+      }
+    }
+  },
+  "latest_signal": {
+    "date": "2026-08-11",
+    "variant": "quality_momentum",
+    "execution_status": "close-data signal only; no order placed",
+    "auction_data_used": false,
+    "top20": [
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "601168.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 1,
+        "quality_score": 72.230049,
+        "base_percentile": 1.0,
+        "factor_raw_score": 1.17969489,
+        "combined_score": 0.9813084,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "600988.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 2,
+        "quality_score": 67.006706,
+        "base_percentile": 0.99065423,
+        "factor_raw_score": 1.13315153,
+        "combined_score": 0.9457944,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "000739.SZ",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 3,
+        "quality_score": 66.963539,
+        "base_percentile": 0.9813084,
+        "factor_raw_score": 1.2184937,
+        "combined_score": 0.97383177,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "601899.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 4,
+        "quality_score": 66.852119,
+        "base_percentile": 0.97196263,
+        "factor_raw_score": 1.08155739,
+        "combined_score": 0.86542058,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "600267.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 5,
+        "quality_score": 63.248943,
+        "base_percentile": 0.9626168,
+        "factor_raw_score": 1.13936651,
+        "combined_score": 0.92897195,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "603882.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 6,
+        "quality_score": 62.387245,
+        "base_percentile": 0.95327103,
+        "factor_raw_score": 1.09079063,
+        "combined_score": 0.86542058,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "000703.SZ",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 7,
+        "quality_score": 61.271942,
+        "base_percentile": 0.94392526,
+        "factor_raw_score": 1.10533988,
+        "combined_score": 0.88598132,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "600298.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 8,
+        "quality_score": 60.059631,
+        "base_percentile": 0.93457943,
+        "factor_raw_score": 1.14210773,
+        "combined_score": 0.91401869,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "603939.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 9,
+        "quality_score": 59.78754,
+        "base_percentile": 0.92523366,
+        "factor_raw_score": 1.08812809,
+        "combined_score": 0.83551401,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "603979.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 10,
+        "quality_score": 59.514999,
+        "base_percentile": 0.91588783,
+        "factor_raw_score": 1.03686965,
+        "combined_score": 0.76261681,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "601233.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 11,
+        "quality_score": 58.519344,
+        "base_percentile": 0.90654206,
+        "factor_raw_score": 1.03111589,
+        "combined_score": 0.74579442,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "603456.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 12,
+        "quality_score": 58.436394,
+        "base_percentile": 0.89719623,
+        "factor_raw_score": 1.14407253,
+        "combined_score": 0.88598126,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "605599.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 13,
+        "quality_score": 58.174377,
+        "base_percentile": 0.88785046,
+        "factor_raw_score": 1.06771135,
+        "combined_score": 0.77383178,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "002832.SZ",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 14,
+        "quality_score": 58.014763,
+        "base_percentile": 0.87850469,
+        "factor_raw_score": 1.18067956,
+        "combined_score": 0.88598132,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "600428.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 15,
+        "quality_score": 57.842285,
+        "base_percentile": 0.86915886,
+        "factor_raw_score": 1.29212856,
+        "combined_score": 0.89345795,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "603198.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 16,
+        "quality_score": 57.669483,
+        "base_percentile": 0.85981309,
+        "factor_raw_score": 1.0960865,
+        "combined_score": 0.80186915,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "688758.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 17,
+        "quality_score": 56.986904,
+        "base_percentile": 0.85046726,
+        "factor_raw_score": 1.23934102,
+        "combined_score": 0.87289715,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "002746.SZ",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 18,
+        "quality_score": 56.464897,
+        "base_percentile": 0.84112149,
+        "factor_raw_score": 1.07553971,
+        "combined_score": 0.7495327,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "600436.SH",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 19,
+        "quality_score": 56.295967,
+        "base_percentile": 0.83177572,
+        "factor_raw_score": 1.11261725,
+        "combined_score": 0.8056075,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      },
+      {
+        "signal_date": "2026-08-11",
+        "symbol": "300347.SZ",
+        "name": "",
+        "decision": "selected_signal",
+        "rank": 20,
+        "quality_score": 55.458588,
+        "base_percentile": 0.8224299,
+        "factor_raw_score": 1.14632165,
+        "combined_score": 0.82803738,
+        "reasons": "quality_momentum 横截面排名进入 Top20"
+      }
+    ]
+  },
+  "artifacts": {
+    "pit_detail": "artifacts/archive/selection/selection_pit_v1_detail.json",
+    "pit_detail_sha256": "64875866644ea3ee1ccdd5c2637f63e6c54fe7ac33f8aac08d798ad5ea55fd12",
+    "pit_latest_audit": "artifacts/archive/selection/selection_pit_v1_latest_audit.csv",
+    "pit_latest_audit_sha256": "4cbfe0376a660aaa66235c9e42d4ccabe16875b0cfdd1897d34ba59033cf3282",
+    "pit_daily_top20": "artifacts/archive/selection/selection_pit_v1_daily_top20.csv",
+    "pit_daily_top20_sha256": "6770c7a83ca3859f5b95f281ef3b52b207b5dd9fe7aae2c542d463f9e6c70c90",
+    "forward_protocol": "artifacts/archive/selection/selection_forward_watch_v1.json",
+    "forward_protocol_sha256": "981566cddb67a9a0d031bc424d1c77266b2bcffd13a3302398b1e32edb7b8e9c"
+  },
+  "next_step": {
+    "action": "wait for frozen forward observations; do not optimize rejected selector",
+    "earliest_calendar_date_hint": "2026-08-12",
+    "fresh_oos_status": "NOT_STARTED"
+  }
+}

@@ -134,6 +134,41 @@ def dynamic_universe_mask(
     }
 
 
+def point_in_time_universe_mask(
+    timestamp_labels: Sequence[str],
+    symbols: Sequence[str],
+    instruments: Mapping[str, InstrumentWindow],
+    present: np.ndarray,
+    historical_st: np.ndarray,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Build a daily listed, tradable and historically non-ST universe mask."""
+    shape = (len(timestamp_labels), len(symbols))
+    if present.shape != shape or historical_st.shape != shape:
+        raise ValueError("point-in-time masks do not align with market axes")
+    session_dates = [date.fromisoformat(str(label)[:10]) for label in timestamp_labels]
+    mask = np.zeros(shape, dtype=bool)
+    missing_metadata = 0
+    for asset_id, symbol in enumerate(symbols):
+        info = instruments.get(str(symbol))
+        if info is None:
+            missing_metadata += 1
+            continue
+        first = info.list_date or session_dates[0]
+        last = info.delist_date or session_dates[-1]
+        active = np.fromiter(
+            (first <= session_date <= last for session_date in session_dates),
+            dtype=bool,
+            count=len(session_dates),
+        )
+        mask[:, asset_id] = active & present[:, asset_id] & ~historical_st[:, asset_id]
+    return mask, {
+        "axis_symbols": len(symbols),
+        "missing_stock_basic": missing_metadata,
+        "historical_st_observations_excluded": int(historical_st.sum()),
+        "symbols_ever_historical_st": int(np.any(historical_st, axis=0).sum()),
+    }
+
+
 def _lexical_rank(symbols: Sequence[str]) -> np.ndarray:
     order = np.argsort(np.asarray(symbols, dtype=str), kind="stable")
     ranks = np.empty(len(symbols), dtype=np.int64)

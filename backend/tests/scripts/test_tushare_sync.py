@@ -9,6 +9,7 @@ import polars as pl
 from scripts.tushare_sync import (
     _normalise_daily,
     _normalise_index_daily,
+    _normalise_stock_st,
     _partition_path,
     sync_tushare,
 )
@@ -48,10 +49,7 @@ class _FakeClient:
     def post(self, api_name, params, *, fields):
         self.calls.append((api_name, dict(params)))
         key_value = (
-            params.get("trade_date")
-            or params.get("list_status")
-            or params.get("ts_code")
-            or ""
+            params.get("trade_date") or params.get("list_status") or params.get("ts_code") or ""
         )
         return self.responses.get((api_name, str(key_value)), {"fields": [], "items": []})
 
@@ -88,6 +86,58 @@ def test_normalise_index_daily_keeps_only_requested_symbol():
     assert result["symbol"].item() == "000300.SH"
 
 
+def test_normalise_stock_st_preserves_daily_point_in_time_status():
+    trading_day = date(2026, 8, 10)
+    payload = _payload(
+        ["ts_code", "name", "trade_date", "type", "type_name"],
+        [
+            ["000001.SZ", "ST样本", "20260810", "ST", "风险警示板"],
+            ["000001.SZ", "*ST样本", "20260810", "ST", "风险警示板"],
+        ],
+    )
+
+    result = _normalise_stock_st(payload, trading_day)
+
+    assert result.columns == ["symbol", "name", "trade_date", "st_type", "st_type_name"]
+    assert result.height == 1
+    assert result["trade_date"].item() == trading_day
+    assert result["name"].item() == "*ST样本"
+
+
+def test_sync_writes_stock_st_partition_without_touching_existing_daily(tmp_path):
+    trading_day = date(2026, 8, 10)
+    target = _write_daily(tmp_path, trading_day)
+    before_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+    client = _FakeClient(
+        {
+            ("trade_cal", ""): _payload(["cal_date"], [["20260810"]]),
+            ("stock_st", "20260810"): _payload(
+                ["ts_code", "name", "trade_date", "type", "type_name"],
+                [["000001.SZ", "ST样本", "20260810", "ST", "风险警示板"]],
+            ),
+        }
+    )
+
+    summary = sync_tushare(
+        client=client,
+        data_dir=tmp_path,
+        start=trading_day,
+        end=trading_day,
+        index_start=trading_day,
+        index_symbols=(),
+        include_daily_basic=False,
+        include_stock_st=True,
+        run_enrichment=False,
+    )
+
+    stock_st_path = _partition_path(tmp_path, "tushare_stock_st", trading_day)
+    assert summary["stock_st_days_written"] == 1
+    assert summary["stock_st_rows_written"] == 1
+    assert stock_st_path.exists()
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == before_hash
+    assert not any(name == "daily" for name, _ in client.calls)
+
+
 def test_sync_skips_existing_valid_daily_without_rewriting(tmp_path):
     trading_day = date(2024, 9, 24)
     target = _write_daily(tmp_path, trading_day)
@@ -102,15 +152,10 @@ def test_sync_skips_existing_valid_daily_without_rewriting(tmp_path):
         }
     ).write_parquet(adj_path)
     basic_path = (
-        tmp_path
-        / "tushare_daily_basic"
-        / f"date={trading_day.isoformat()}"
-        / "part.parquet"
+        tmp_path / "tushare_daily_basic" / f"date={trading_day.isoformat()}" / "part.parquet"
     )
     basic_path.parent.mkdir(parents=True)
-    pl.DataFrame({"symbol": ["000001.SZ"], "trade_date": [trading_day]}).write_parquet(
-        basic_path
-    )
+    pl.DataFrame({"symbol": ["000001.SZ"], "trade_date": [trading_day]}).write_parquet(basic_path)
     client = _FakeClient(
         {
             ("trade_cal", ""): _payload(["cal_date"], [["20240924"]]),

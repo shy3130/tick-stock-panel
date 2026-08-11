@@ -17,6 +17,7 @@ from research.selection.mvp_v2 import (
     dynamic_universe_mask,
     evaluate_score_grid,
     generate_session_folds,
+    point_in_time_universe_mask,
     preferred_live_variant,
     select_variant_from_training,
 )
@@ -57,6 +58,23 @@ def test_dynamic_universe_applies_listing_dates_and_current_non_st_proxy():
 
     assert mask.tolist() == [[True, False, False], [True, True, False], [True, True, False]]
     assert summary["excluded_current_st_or_delisting_name"] == 1
+
+
+def test_point_in_time_universe_excludes_st_only_on_observed_dates():
+    labels = ("2025-01-02", "2025-01-03", "2025-01-06")
+    symbols = ("000001.SZ", "000002.SZ")
+    present = np.ones((3, 2), dtype=bool)
+    historical_st = np.array([[True, False], [False, False], [False, True]])
+    windows = {
+        symbol: InstrumentWindow(symbol, "当前名称不参与历史过滤", None, None, True)
+        for symbol in symbols
+    }
+
+    mask, summary = point_in_time_universe_mask(labels, symbols, windows, present, historical_st)
+
+    assert mask.tolist() == [[False, True], [True, True], [True, False]]
+    assert summary["historical_st_observations_excluded"] == 2
+    assert summary["symbols_ever_historical_st"] == 2
 
 
 def test_cross_sectional_percentiles_and_overlay_are_deterministic():

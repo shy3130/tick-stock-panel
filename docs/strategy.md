@@ -33,10 +33,11 @@ matrix-native 策略组合。组合支持 AND/OR 入场、截面百分位评分�
 
 ## 可解释选股
 
-`quality_momentum_v1` 是 experimental 策略。执行评分事实源位于
+`quality_momentum_v1` 保留在 experimental 生命周期以便复现，但 P16 的 PIT-ST
+walk-forward 已把证据状态降为 `historical_replay_failed`。执行评分事实源位于
 `backend/app/strategy/builtin/quality_momentum_v1.py`，逐股审计位于
-`backend/research/selection/`。当前行业分类不是 point-in-time，消息历史库尚未提供，
-两者不得倒灌历史评分。
+`backend/research/selection/`。历史 ST 状态已按日接入；当前行业分类仍不是
+point-in-time，消息历史库尚未提供，两者不得倒灌历史评分。
 
 ## 最低验证
 

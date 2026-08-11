@@ -29,7 +29,7 @@
 - canonical universe 必须先排序再按 seed 抽样并记录完整 manifest/hash。
 - 当前 regime、结构切换、因子 ensemble 和核心策略历史复验都没有通过稳健晋级门槛。
 - `quality_momentum_v1` 已具备逐股解释能力，但仍是 mixed historical replay，默认隐藏。
-- P15 选股 MVP 的因子叠加没有改善 walk-forward 测试；基础版仍无稳定超额，不得晋级。
+- P16 的逐日 PIT-ST 修正后，质量动量基础版仍为负超额；证据状态已失败，不得晋级。
 
 不得把历史窗口相对改善表述为未来收益承诺。
 
@@ -64,6 +64,8 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 - 报告错误折、无信号折和空结果，不得静默删除或用 0 替代。
 - P15 统一走 `research.selection.run_selection_mvp_v2`。future label 和结构标签不得进入
   当日排名，因子开关只能读取训练指标；历史 ST 状态补齐前必须披露当前状态代理偏差。
+- P16 PIT 对照统一走 `research.selection.run_selection_pit_v1`；研究期每个交易日必须
+  有 `data/tushare_stock_st` 分区，缺口不得回退。冻结观察只记录 2026-08-11 之后日期。
 
 ### Regime 实现
 
@@ -124,6 +126,8 @@ $env:TICKFLOW_BACKTEST_MODE = "inprocess"
 - `backend/research/reporting/make_regime_ensemble_report.py`：由 JSON 重新生成综合 HTML。
 - `backend/research/selection/mvp_v2.py`：选股标签、Top-K、成本和 walk-forward 评估内核。
 - `backend/research/selection/run_selection_mvp_v2.py`：P15 动态全市场选股历史验证入口。
+- `backend/research/selection/run_selection_pit_v1.py`：P16 当前名称代理/PIT-ST 同预算对照。
+- `backend/research/selection/run_selection_forward_watch_v1.py`：P16 冻结前向观察入口。
 
 ## 5. 修改原则
 
