@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.json_safe import json_safe
 from app.services.backtest import (
     BacktestConfig,
     BacktestService,
@@ -124,7 +125,7 @@ def run(req: BacktestRequest, request: Request):
         result = svc.run(cfg)
     except VectorbtUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return asdict(result)
+    return json_safe(asdict(result))
 
 
 # ================================================================
@@ -185,13 +186,13 @@ def optimize(req: OptimizeRequest, request: Request):
         {"symbol": symbol, "name": name_map.get(symbol), "weight": round(float(weights_arr[i]), 6)}
         for i, symbol in enumerate(kept)
     ]
-    return {
+    return json_safe({
         "weights": weights,
         "stats": stats,
         "method": req.method,
         "lookback_days": req.lookback_days,
         "meta": {"kept": kept, "dropped": dropped},
-    }
+    })
 
 
 # ================================================================
@@ -268,7 +269,7 @@ def factor_run(req: FactorBacktestRequest, request: Request):
         slippage_bps=req.slippage_bps,
     )
     result = svc.run(cfg)
-    return asdict(result)
+    return json_safe(asdict(result))
 
 
 @router.post("/factors/compare")
@@ -317,7 +318,7 @@ def factor_compare(req: FactorCompareRequest, request: Request):
                 else None
             )
         out.append(row)
-    return {"factors": out}
+    return json_safe({"factors": out})
 
 
 def _save_strategy_run_card(request: Request, result) -> None:
@@ -330,7 +331,7 @@ def _save_strategy_run_card(request: Request, result) -> None:
             kind="strategy",
             config=result.config,
             strategy_def=result.strategy_info,
-            stats=result.stats,
+            stats=json_safe(result.stats),
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("save strategy run_card failed: %s", e)
@@ -342,7 +343,8 @@ def _strategy_stream_done_event(request: Request, result) -> str:
     if hasattr(result, "error") and result.error:
         return f"event: error\ndata: {json.dumps({'message': result.error}, ensure_ascii=False)}\n\n"
     _save_strategy_run_card(request, result)
-    return f"event: done\ndata: {json.dumps(asdict(result), ensure_ascii=False, default=str)}\n\n"
+    payload = json_safe(asdict(result))
+    return f"event: done\ndata: {json.dumps(payload, ensure_ascii=False, allow_nan=False, default=str)}\n\n"
 
 
 def _walk_forward_windows(start: date, end: date, n_folds: int) -> list[tuple[date, date]]:
@@ -685,7 +687,7 @@ async def strategy_stream(
                 while cursor < len(prog_list):
                     msg = prog_list[cursor]
                     cursor += 1
-                    yield f"event: progress\ndata: {json.dumps(msg, ensure_ascii=False, default=str)}\n\n"
+                    yield f"event: progress\ndata: {json.dumps(json_safe(msg), ensure_ascii=False, allow_nan=False, default=str)}\n\n"
 
                 await asyncio.sleep(0.5)
 

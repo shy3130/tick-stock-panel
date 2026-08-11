@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import date
-from types import SimpleNamespace
 
 import polars as pl
 
@@ -10,8 +9,8 @@ from app.services import signal_scorecard_eval as ev
 from app.services.signal_scorecard_store import ENGINE_VERSION
 
 
-def _bar(d: str, o: float, h: float, l: float, c: float) -> dict:
-    return {"date": d, "open": o, "high": h, "low": l, "close": c}
+def _bar(d: str, o: float, h: float, low: float, c: float) -> dict:
+    return {"date": d, "open": o, "high": h, "low": low, "close": c}
 
 
 def _event(anchor: float = 100.0, direction: str = "up", kind: str = "builtin") -> dict:

@@ -17,15 +17,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
-from typing import AsyncIterator, Any
+from typing import Any, AsyncIterator
 
 import polars as pl
 
-from app.markets import market_of
 from app.backtest.patterns import detect_patterns
 from app.indicators.levels import compute_levels, summarize_levels
+from app.json_safe import finite_float_or_none, json_safe
+from app.markets import market_of
 from app.services.ai_structured import CancellationToken
 from app.services.analysis_context import assemble_prompt, build_analysis_frame, preflight_analysis
 from app.services.document_reader import format_prompt_document
@@ -307,17 +308,46 @@ def _build_auxiliary_prompt(
     return "\n\n".join(parts)
 
 
-def _analysis_data_as_of(df: pl.DataFrame, market: str) -> datetime:
-    value = df.sort("date").tail(1)["date"][0]
+def _parse_analysis_date(value: Any, market: str) -> datetime | None:
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, date):
+        parsed = value
+    elif isinstance(value, date):
         close_at = time(16, 0) if market == "hk" else time(15, 0)
-        return datetime.combine(value, close_at)
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return datetime.now()
+        parsed = datetime.combine(value, close_at)
+    elif value is None:
+        return None
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _filter_valid_dated_rows(df: pl.DataFrame, market: str) -> pl.DataFrame:
+    required = ("open", "high", "low", "close")
+    if "date" not in df.columns or any(column not in df.columns for column in required):
+        return df.clear()
+    valid = []
+    for row in df.select(["date", *required]).iter_rows(named=True):
+        valid.append(
+            _parse_analysis_date(row["date"], market) is not None
+            and all(finite_float_or_none(row[column]) is not None for column in required)
+        )
+    return df.filter(pl.Series("_valid_analysis_row", valid))
+
+
+def _analysis_data_as_of(df: pl.DataFrame, market: str) -> datetime:
+    values = [
+        parsed
+        for value in df["date"].to_list()
+        if (parsed := _parse_analysis_date(value, market)) is not None
+    ]
+    if not values:
+        raise ValueError("日 K 不含有效交易日期")
+    return max(values)
 
 
 def _level_prices(levels: Any) -> list[float]:
@@ -382,8 +412,16 @@ async def analyze_stock_stream(
         return
 
     market = market_of(symbol).market
+    df = _filter_valid_dated_rows(df, market)
+    if df.is_empty():
+        yield json.dumps(
+            {"type": "error", "code": "data_incomplete", "message": f"标的 {symbol} 日 K 不含有效交易日期"},
+            ensure_ascii=False,
+        )
+        return
+    df = df.sort("date")
     levels = compute_levels(df)
-    close = float(df.tail(1)["close"][0]) if "close" in df.columns else None
+    close = finite_float_or_none(df.tail(1)["close"][0]) if "close" in df.columns else None
     frame = build_analysis_frame(
         df,
         symbol=symbol,
@@ -455,7 +493,7 @@ async def analyze_stock_stream(
         contract=_SYSTEM_PROMPT,
     )
     yield json.dumps(
-        {
+        json_safe({
             "type": "meta",
             "symbol": symbol,
             "summary": summarize_levels(levels, close),
@@ -468,8 +506,9 @@ async def analyze_stock_stream(
             "degraded": frame.degraded,
             "warnings": preflight.warnings,
             "prompt_budget": budget,
-        },
+        }),
         ensure_ascii=False,
+        allow_nan=False,
     )
 
     try:

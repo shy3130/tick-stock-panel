@@ -991,13 +991,16 @@ const FLAG_META: Record<string, { label: string; badge: string }> = {
 
 const EVENT_KIND_LABEL: Record<string, string> = {
   open: '开仓', prepare: '建仓准备', revise: '修订', fill: '成交',
-  add: '加仓', tp: '止盈', sl: '止损', adjust: '调整', close: '平仓',
+  add: '调大计划', trim: '缩减计划', tp: '止盈', sl: '止损',
+  adjust: '调整', close: '平仓', void: '作废计划',
 }
 
 const TRADE_STATUS_BADGE: Record<string, string> = {
   '计划中': 'bg-warning/10 text-warning',
+  '建仓中': 'bg-accent/10 text-accent',
   '持仓中': 'bg-accent/10 text-accent',
   '已平仓': 'bg-muted/10 text-muted',
+  '已作废': 'bg-muted/10 text-muted',
 }
 
 function fmtPrice(v: number | undefined): string {

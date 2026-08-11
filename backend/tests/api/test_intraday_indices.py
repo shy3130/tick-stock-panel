@@ -69,3 +69,31 @@ def test_index_quotes_fallback_to_daily_when_provider_empty(monkeypatch):
     body = resp.json()
     assert body["source"] == "index_daily"
     assert body["rows"][0]["date"] == "2026-07-02"
+
+
+
+def test_index_quotes_convert_provider_non_finite_numbers_to_null(monkeypatch):
+    class NonFiniteProvider:
+        capabilities = SimpleNamespace(realtime=True)
+
+        def get_realtime(self, symbols=None, universes=None):  # noqa: ARG002
+            return pl.DataFrame([{
+                "symbol": "000001.SH",
+                "last_price": float("inf"),
+                "prev_close": float("nan"),
+                "change_pct": -float("inf"),
+            }])
+
+    class Repo:
+        def execute_all(self, query, params):  # noqa: ARG002
+            raise AssertionError("provider row should be returned without daily fallback")
+
+    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr("app.data_providers.registry.get_provider", lambda name: NonFiniteProvider())
+
+    response = _client(Repo()).get("/api/intraday/indices?symbols=000001.SH")
+    assert response.status_code == 200
+    row = response.json()["rows"][0]
+    assert row["last_price"] is None
+    assert row["prev_close"] is None
+    assert row["change_pct"] is None

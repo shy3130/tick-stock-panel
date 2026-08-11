@@ -24,7 +24,7 @@
 - 🏠 **本地数据优先** — 默认 `DATA_PROVIDER=fquant_local`,走本地 DuckDB (`fstore*.duckdb` + `tdx*.duckdb`,含港股拆分库)
 - 🏠 **自托管零运维** — Docker 单容器部署,数据完全掌握在自己手里
 - 🔍 **多工具工作台** — 选股(20 内置策略)+ 实时监控 + 向量化回测 + 组合优化 + 交易复盘
-- 🤖 **多 AI 配置** — 支持 OpenAI 兼容接口 / ACP / Codex CLI profile,可按功能选择
+- 🤖 **多 AI 配置** — 支持 OpenAI 兼容接口 / ACP / Codex CLI profile，可按功能选择；已保存 profile 可做不经过 fallback 的最小连通性测试
 - 🔌 **自由扩展** — 自有量化项目数据,与内置数据同台分析
 - 🇨🇳 **A 股为主,港股 P1 已接入** — A 股全功能;港股支持单股行情/K线/分析的第一阶段能力
 - 📣 **多通道推送** — 飞书 / 钉钉 / 企微 / MeoW webhook + PushPlus,用于监控告警与复盘推送
@@ -238,16 +238,17 @@ git pull
 
 ### 🧭 交易与复盘(Trading & Review)
 
-- **单笔交易生命周期**:从「计划中 → 持仓中 → 已平仓」的事件流驱动生命周期,事件 append-only 持久化(`trade_events.jsonl`),支持 open/prepare/fill/add/tp/sl/adjust/close 全路径,服务端重算成本均价与已实现盈亏
-- **真实券商持仓**:`GET /api/trading/portfolio` 只读调用 `fhold-cli --format json` 聚合 `../fhold` 的账户与持仓；CLI/服务不可用时 `fhold.available=false`，不阻断生命周期快照
-- **决策审计**:任何买卖动作(含门禁未通过仍确认的绕行)都写入 append-only 审计流(`decision_audit.jsonl`),永不清理;审计断链即告警
+- **单笔交易生命周期**：事件流驱动 `计划中 → 建仓中 → 持仓中 → 已平仓`，零成交计划可进入 `已作废`。`fill` 支持分批成交和显式收口；`trim` 只在建仓中缩减未成交计划，`add` 可调大计划并从持仓中重开建仓，但都不伪造仓位；事件 append-only 持久化（`trade_events.jsonl`），服务端重算成本均价与已实现盈亏，平仓资金按 `tradeId` 幂等结转
+- **组合风险透视**：`GET /api/trading/portfolio/risk` 只读 `建仓中/持仓中` 的真实敞口与 canonical 日 K，在后端计算组合波动、最大回撤、相关性集中、有效持仓数和风险贡献；缺持仓/共同样本不足时返回明确状态与 warning，前端不重算
+- **真实券商持仓**：`GET /api/trading/portfolio` 只读调用 `fhold-cli --format json` 聚合 `../fhold` 的账户与持仓；CLI/服务不可用时 `fhold.available=false`，不阻断生命周期快照
+- **决策审计**：任何买卖动作（含门禁未通过仍确认的绕行）都写入 append-only 审计流（`decision_audit.jsonl`），永不清理；审计断链即告警
 - **机械红旗**:在事件流+审计流上实时检出放宽止损、亏损加仓、绕过门禁、审计断链、期限超限（对照策略声明 horizon）、仓位超限（对照账户/策略上限）与门禁膨胀（规则清单>15 条全局提示）；赚钱的违规也照记。设置 `TRADING_RED_FLAG_WEBHOOK_URL` 后每条新红旗去重推送一次
 - **策略内核治理**:策略 profile 声明失效信号/风险/期限，可选策略坐标卡 family（价值/成长/趋势/事件/短周期/套利/混合，混合需声明裁判归属）与 playbook（scope/entry/exit）；机械体检 7 项检查（完整性/节奏/期限漂移/剧本声明/混合冲突/自称与行为冲突/提案治理），`validate?ai=true` 追加 AI 深度体检（对照 7 项结构不变量）；回测交易带 `cause_tag`，变更提案必须有反证条件并走人工审批状态机，疑似亏损后放宽规则的提案自动打 `relaxationAfterLoss` 警示
 - **结构化计划检查（默认关闭）**:计划台可对“已保存的单条计划”运行 Stage1 市场诊断 → 程序门禁 → Stage2 计划审查。程序门禁只可保持或降级，AI 不生成订单、方向、建议价格或执行动作；结果含可审计决策链并支持 JSON/Markdown 导出。页面中的“输入完整，可进入审查”仅表示数据与前置条件充分，不代表建议交易
 - **盘后状态驱动归因（L0/L1/L2）**:`POST /api/trading/review/auto-run` 或开启 `tradingAutoReview` 后每交易日 16:45 自动跑——无新红旗/新平仓时 L0 零 AI 调用，有候选时 L1 只对涉及单笔归因且按事件数去重，L2 为用户手动全量；AI 未配置按 `blocked_by_dependency` 降级
 - **统一失败语义**:`AppError` + 7 个标准错误码(`data_incomplete / stale_input / blocked_by_dependency / no_change / kernel_not_ready / ai_output_invalid / ai_provider_error`),API 返回 HTTP 422 + `{"code","detail"}`,前端可据此区分数据前置条件、模型输出无效、provider 故障、需介入与无变化
 - **Webhook / PushPlus**:监控规则命中按已配置渠道推送；纪律红旗按环境变量推送；每日复盘可选飞书、钉钉、企微、MeoW 或 PushPlus。PushPlus Token 只保存在 `secrets.json` 并通过设置页掩码展示。所有外部推送失败均只记日志，不阻断报告、告警、事件或审计落盘
-- 前端 `/trading` 提供持仓、单笔生命周期、计划台、账户与桥接规划五个页签；计划台可显式开启结构化检查并选择 AI profile；`/review` 增加纪律红旗；设置页增加策略提案、策略体检和复盘通知通道
+- 前端 `/trading` 提供持仓、单笔生命周期、计划台、账户与桥接规划五个页签，并展示后端组合风险透视；计划台可显式开启结构化检查并选择 AI profile；`/review` 增加纪律红旗；设置页提供策略提案、策略体检、复盘通知和单 profile 连接测试
 
 > 完整机制设计与移植计划见 [`backend/docs/YMOS_PORTING_PLAN.md`](./backend/docs/YMOS_PORTING_PLAN.md)(来源:`fm/YMOS` 投资操作系统 V4)。
 
@@ -477,6 +478,7 @@ ipconfig getifaddr en1   # 有线/USB 网卡
 完整的 FQuant 接入进度、架构设计、风险与注意事项请阅：
 
 - **`backend/docs/FQUANT_INTEGRATION_PROGRESS.md`** — 团队状态文档（**权威进度源**）
+- **`backend/docs/UPSTREAM_FEATURE_PORTING.md`** — 上游项目、已移植能力、暂缓/排除项与维护流程总账
 - `backend/docs/FQUANT_PROVIDER_DESIGN.md` — 846 行设计稿（三源实测 + 架构）
 - `backend/docs/FQUANT_PROVIDER.md` — 旧 PoC 说明（已被 v2 覆盖，仅供回溯）
 - `docs/hk-us-stock-expansion-assessment.md` — 港股/美股扩展可行性与实测矩阵

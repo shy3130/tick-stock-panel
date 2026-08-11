@@ -43,11 +43,13 @@ flowchart LR
 | P0 安全与公共契约 | ✅ 已完成 | 日志密钥脱敏；`AIUsage`/统一错误/attempt/request/cancellation；artifact/trace v1；敏感字段只留摘要与 hash | `backend/app/log_redaction.py`、`backend/app/errors.py`、`backend/app/services/ai_structured/` |
 | P1 结构化 AI 运行时 | ✅ 已完成 | JSON fence/语法/schema/不变量校验；分类限次重试；attempt audit/usage；迁移自然语言选股、策略体检与交易归因 | `backend/app/services/ai_structured/`、`nl_screener.py`、`api/strategy_profile.py`、`services/trading/autopsy.py` |
 | P2 K 线分析上下文 | ✅ 已完成 | `KlineAnalysisFrame`、Polars 特征、形成中 K 线排除、preflight、Prompt 分层预算；接入个股分析并保持 Markdown/SSE 展示 | `backend/app/services/analysis_context.py`、`stock_analyzer.py`、`api/stock_analysis.py` |
-| P3 profile fallback 与缓存 | ✅ 已完成 | 显式 allowlist fallback（默认关闭）、内存健康态、provider 原生 usage/cache 聚合、四入口预算上限、设置页备用顺序与实际 profile/usage 展示 | `ai_provider.py`、`ai_routing.py`、`ai_budgets.py`、`ai_usage_snapshot.py`、`frontend/src/components/AiExecutionMetaBadge.tsx` |
+| P3 profile fallback 与缓存 | ✅ 已完成 | 显式 allowlist fallback（默认关闭）、内存健康态、provider 原生 usage/cache 聚合、四入口预算上限、设置页备用顺序与实际 profile/usage 展示；设置页可对单个已保存 profile 做不经过 fallback 的最小连通性探测，返回模型、耗时与脱敏错误 | `ai_provider.py`、`ai_routing.py`、`ai_budgets.py`、`ai_usage_snapshot.py`、`api/settings.py`、`frontend/src/components/AiExecutionMetaBadge.tsx` |
 | P4 两阶段分析 | ✅ 已完成（Gate C 条件全部落实） | Stage1 诊断 → 程序门禁 → Stage2 计划审查；仅检查已保存计划，门禁只可保持或降级；默认关闭；SSE 进度/取消、append-only artifact、JSON/Markdown 导出、列表式 trace UI | `services/trading/plan_check.py`、`api/trading_plans.py`、`frontend/src/components/analysis/DecisionTrace.tsx`、`frontend/src/pages/Trading.tsx` |
 | P5 记录、通知和可靠性 | ✅ 已完成约定范围；受控 external fallback realtime/depth 与条件式 M25 已交付 | M15/M16 append-only artifact、失败队列和纯重放计划；M17 飞书报告卡片；M18 PushPlus 可选复盘通道；M19 受控 HTTP 可靠性；M25 仅在计划检查内显式 opt-in，兼容性失配强制全量，新 artifact 保留 parent chain。外部 fallback 默认关闭，`realtime`/`depth` 独立 scope、仅展示、全程 provenance、不写主链路。M21 继续暂缓。 | `services/analysis_artifacts.py`、`services/ai_continuity.py`、`services/external_fallback/`、`api/trading_plans.py`、`frontend/src/pages/Trading.tsx`、`frontend/src/components/data/ExternalFallbackCard.tsx` |
 
 2026-08-06 验证基线：终审修复后后端全量回归 `1075 passed`；前端 `npm run build` 通过；后端 `import app.main` 通过；真实开发服务 `/health` 返回 `status=ok`；浏览器验证计划台默认关闭文案与 PushPlus Token 配置入口，页面无 console/error/network 诊断。P3 fallback、P4 计划检查均默认关闭；M19 只强化既有受控适配器，不增加数据源，不写 canonical/enriched 数据。
+
+2026-08-10 加固验证：Agent 流只有收到显式 `done/error` 终态才写完成/失败，异常断流不得伪装成功；`KlineAnalysisFrame` 与个股分析入口会剔除无有效日期或非有限 OHLC 的行，所有新增响应/回测 artifact 边界把 `NaN/±Inf` 转为 JSON `null`。AI profile 的“测试连接”只探测目标 profile，强制 `allow_fallback=false`，不会以备用 profile 成功掩盖目标故障。相关定向回归 `315 passed`，AI 路由/接口回归 `13 passed`；完整验证记录见本轮末尾变更日志。
 
 ## 2. 调研基线
 
@@ -193,7 +195,7 @@ PA_Agent 的核心模块复杂度很高，尤其是 `PromptAssembler`、`JsonVal
 | M2 | ✅ 已交付 | `services/ai_structured/runtime.py` |
 | M3 | ✅ 已交付 | `services/ai_structured/parser.py`、`retry.py` |
 | M4 | ✅ 已交付 | `services/ai_structured/immutable.py` |
-| M5 | ✅ 已交付，默认关闭 | `services/ai_routing.py`、AI 设置页 |
+| M5 | ✅ 已交付，fallback 默认关闭 | `services/ai_routing.py`、AI 设置页；单 profile 健康探测强制不 fallback，记录 latency/错误分类且不返回密钥 |
 | M6 | ✅ 已交付 | `services/analysis_context.py` |
 | M7 | ✅ 已交付 | `services/analysis_context.py` 的 Polars 特征行 |
 | M8 | ✅ 已交付 | `assemble_prompt()`、`ai_budgets.py` |
@@ -389,6 +391,8 @@ PA_Agent 的 WorkBuddy→Cursor→QClaw 顺序绑定特定桌面环境，不适�
 - quota/auth 故障状态。
 
 不得把 API key 写入健康状态或日志。
+
+设置页另提供显式“测试连接”：只对当前已保存 profile 发一个 `max_tokens=8`、15 秒上限的最小探测，不走备用链；结果返回实际 provider/model、延迟、usage 与脱敏错误，并更新该 profile 的内存健康态。未知 profile 返回 404，取消仍向上传播，不记成 provider 故障。该探测是用户主动诊断工具，不会自动运行。
 
 ### 7.4 验收
 

@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.json_safe import finite_float_or_none
 from app.services.strategy_profile import read_profile
 from app.services.trading import accounts as accounts_store
 from app.services.trading import gates as gates_store
@@ -34,10 +35,14 @@ from app.services.trading.models import (
     KIND_OPEN,
     KIND_SL,
     KIND_TP,
+    KIND_TRIM,
+    KIND_VOID,
 )
 
 # 需要审计留痕的事件类型(审计断链一律告警)
-_AUDITED_KINDS = frozenset({KIND_FILL, KIND_ADD, KIND_TP, KIND_SL, KIND_CLOSE})
+_AUDITED_KINDS = frozenset({
+    KIND_FILL, KIND_ADD, KIND_TRIM, KIND_TP, KIND_SL, KIND_ADJUST, KIND_CLOSE, KIND_VOID,
+})
 
 # 门禁膨胀阈值(用户规则清单总条数超过即告警)
 _GATE_PROLIFERATION_THRESHOLD = 15
@@ -59,6 +64,7 @@ def scan_trade_events(
     flags: list[dict[str, Any]] = []
     cost_price = 0.0
     qty = 0.0
+    add_phase = False
 
     for event in events:
         kind = str(event.get("kind", ""))
@@ -85,7 +91,21 @@ def scan_trade_events(
                     })
 
         # ── 亏损加仓 ──
-        if kind == KIND_ADD and not payload.get("planOnly"):
+        # 新模型中 add 只调大计划，随后的 fill 才是实际加仓；兼容旧 planOnly=false add。
+        if kind == KIND_FILL and add_phase:
+            price = payload.get("price")
+            if price is not None and cost_price > 0:
+                try:
+                    if float(price) < cost_price:
+                        flags.append({
+                            "type": "loss_add",
+                            "ts": ts,
+                            "price": float(price),
+                            "costPrice": round(cost_price, 4),
+                        })
+                except (TypeError, ValueError):
+                    pass
+        elif kind == KIND_ADD and not payload.get("planOnly"):
             price = payload.get("price")
             if price is not None and cost_price > 0:
                 try:
@@ -106,23 +126,32 @@ def scan_trade_events(
             if kind not in audit_modes:
                 flags.append({"type": "audit_missing", "ts": ts, "kind": kind})
 
-        # ── 更新运行状态(AFTER 检测,保证 add/adjust 用到的是当时成本) ──
+        # ── 更新运行状态(AFTER 检测,保证 fill/adjust 用到的是当时成本) ──
         if kind == KIND_FILL:
             try:
-                cost_price = float(payload.get("price", 0))
-                qty = float(payload.get("qty", 0))
-            except (TypeError, ValueError):
-                pass
-        elif kind == KIND_ADD and not payload.get("planOnly"):
-            try:
-                add_qty = float(payload.get("qty", 0))
-                add_price = float(payload.get("price", 0))
-                new_qty = qty + add_qty
-                if new_qty > 0:
-                    cost_price = (qty * cost_price + add_qty * add_price) / new_qty
+                fill_price = float(payload.get("price", 0))
+                fill_qty = float(payload.get("qty", 0))
+                new_qty = qty + fill_qty
+                if new_qty > 0 and fill_price > 0:
+                    cost_price = (qty * cost_price + fill_qty * fill_price) / new_qty
                 qty = new_qty
+                if payload.get("complete") is True or payload.get("finalizeOnly") is True:
+                    add_phase = False
             except (TypeError, ValueError):
                 pass
+        elif kind == KIND_ADD:
+            if payload.get("planOnly"):
+                add_phase = True
+            else:
+                try:
+                    add_qty = float(payload.get("qty", 0))
+                    add_price = float(payload.get("price", 0))
+                    new_qty = qty + add_qty
+                    if new_qty > 0:
+                        cost_price = (qty * cost_price + add_qty * add_price) / new_qty
+                    qty = new_qty
+                except (TypeError, ValueError):
+                    pass
         elif kind in (KIND_TP, KIND_SL):
             try:
                 qty -= float(payload.get("qty", 0))
@@ -135,14 +164,6 @@ def scan_trade_events(
 
 
 # ── P6.1 纯函数检测器(不读磁盘,便于单测) ──────────────────
-def _to_float(v: Any) -> float | None:
-    """数值 → float;None/bool/非数值 → None。"""
-    if isinstance(v, bool) or v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
 
 
 def _first_event_ts(events: list[dict[str, Any]], kinds: tuple[str, ...]) -> str | None:
@@ -254,14 +275,14 @@ def detect_size_over_limit(
 
         # ── 卖出:累计已实现盈亏 + 扣减持仓(先于后续买入的 NAV 计算) ──
         if kind == KIND_CLOSE:
-            sell_price = _to_float(payload.get("price"))
+            sell_price = finite_float_or_none(payload.get("price"))
             if sell_price is not None and cost_price > 0 and qty > 0:
                 realized_pnl += (sell_price - cost_price) * qty
             qty = 0.0
             continue
         if kind in (KIND_TP, KIND_SL):
-            sell_qty = _to_float(payload.get("qty")) or 0.0
-            sell_price = _to_float(payload.get("price"))
+            sell_qty = finite_float_or_none(payload.get("qty")) or 0.0
+            sell_price = finite_float_or_none(payload.get("price"))
             if sell_qty > 0 and sell_price is not None and cost_price > 0:
                 realized_pnl += (sell_price - cost_price) * sell_qty
             qty = max(0.0, qty - sell_qty)
@@ -269,8 +290,8 @@ def detect_size_over_limit(
 
         # ── fill/add 成交:更新持仓后检测超限 ──
         if kind == KIND_FILL or (kind == KIND_ADD and not payload.get("planOnly")):
-            price = _to_float(payload.get("price")) or 0.0
-            add_qty = _to_float(payload.get("qty")) or 0.0
+            price = finite_float_or_none(payload.get("price")) or 0.0
+            add_qty = finite_float_or_none(payload.get("qty")) or 0.0
             new_qty = qty + add_qty
             if new_qty > 0 and price > 0:
                 cost_price = (qty * cost_price + add_qty * price) / new_qty
@@ -359,7 +380,7 @@ def _read_horizon_months(data_dir: Path, trade: dict[str, Any] | None) -> float 
     if not isinstance(profile, dict):
         return None
     risk = profile.get("risk") or {}
-    h = _to_float(risk.get("thesisHorizonMonths"))
+    h = finite_float_or_none(risk.get("thesisHorizonMonths"))
     return h if (h is not None and h > 0) else None
 
 
@@ -374,7 +395,7 @@ def _read_position_limit_pct(data_dir: Path, trade: dict[str, Any] | None) -> fl
     if not isinstance(profile, dict):
         return None
     risk = profile.get("risk") or {}
-    pct = _to_float(risk.get("positionLimitPct"))
+    pct = finite_float_or_none(risk.get("positionLimitPct"))
     return pct if (pct is not None and pct > 0) else None
 
 
@@ -384,8 +405,8 @@ def _scan_size_over_limit(
     """读取账户 + profile,调用纯函数检测单笔仓位超限。无账户/无 profile → skip。"""
     accs = accounts_store.read_accounts(data_dir).get("accounts") or []
     acc = accs[0] if accs else {}
-    capital = _to_float(acc.get("capital"))
-    max_single = _to_float(acc.get("maxSingleRatio"))
+    capital = finite_float_or_none(acc.get("capital"))
+    max_single = finite_float_or_none(acc.get("maxSingleRatio"))
     position_limit = _read_position_limit_pct(data_dir, trade)
     return detect_size_over_limit(events, capital, max_single, position_limit)
 

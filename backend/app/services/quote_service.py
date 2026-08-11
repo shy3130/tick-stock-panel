@@ -31,6 +31,7 @@ from datetime import date, datetime
 import polars as pl
 
 from app.data_providers.registry import get_active_provider_name, get_provider
+from app.json_safe import finite_float_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -645,16 +646,10 @@ class QuoteService:
     # 工具
     # ================================================================
 
-    @staticmethod
-    def _to_float(value) -> float | None:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
 
     @classmethod
     def _ratio_from_points(cls, value) -> float | None:
-        number = cls._to_float(value)
+        number = finite_float_or_none(value)
         return number / 100.0 if number is not None else None
 
     @classmethod
@@ -664,31 +659,32 @@ class QuoteService:
         prev_close = q.get("prev_close")
         change_amount = ext.get("change_amount")
         if change_amount is None and last_price is not None and prev_close is not None:
-            lp = cls._to_float(last_price)
-            pc = cls._to_float(prev_close)
+            lp = finite_float_or_none(last_price)
+            pc = finite_float_or_none(prev_close)
             if lp is not None and pc is not None:
                 change_amount = lp - pc
 
         change_pct = cls._ratio_from_points(ext.get("change_pct"))
-        pc = cls._to_float(prev_close)
-        ca = cls._to_float(change_amount)
+        pc = finite_float_or_none(prev_close)
+        ca = finite_float_or_none(change_amount)
         if change_pct is None and ca is not None and pc not in (None, 0):
             change_pct = ca / pc
+        change_amount = ca
 
         return {
             "symbol": q.get("symbol"),
             "name": q.get("name") or ext.get("name"),
-            "last_price": last_price,
-            "prev_close": prev_close,
-            "open": q.get("open"),
-            "high": q.get("high"),
-            "low": q.get("low"),
-            "volume": q.get("volume"),
-            "amount": q.get("amount"),
+            "last_price": finite_float_or_none(last_price),
+            "prev_close": finite_float_or_none(prev_close),
+            "open": finite_float_or_none(q.get("open")),
+            "high": finite_float_or_none(q.get("high")),
+            "low": finite_float_or_none(q.get("low")),
+            "volume": finite_float_or_none(q.get("volume")),
+            "amount": finite_float_or_none(q.get("amount")),
             "change_pct": change_pct,
             "change_amount": change_amount,
             "amplitude": cls._ratio_from_points(ext.get("amplitude")),
-            "turnover_rate": ext.get("turnover_rate"),
+            "turnover_rate": finite_float_or_none(ext.get("turnover_rate")),
             "timestamp": q.get("timestamp"),
             "session": q.get("session"),
         }
@@ -955,8 +951,7 @@ class QuoteService:
         以便反查引擎规则判断是否启用推送。
         """
         try:
-            from app.services import preferences
-            from app.services import webhook_adapter
+            from app.services import preferences, webhook_adapter
 
             if not preferences.get_configured_webhook_channels():
                 return
@@ -994,8 +989,7 @@ class QuoteService:
         - 批量策略事件 (symbol="") 聚合为一条通知, 避免刷屏
         """
         try:
-            from app.services import preferences
-            from app.services import notify_adapter
+            from app.services import notify_adapter, preferences
 
             if not preferences.get_system_notify_enabled():
                 return
@@ -1078,6 +1072,7 @@ class QuoteService:
             # ---- 全量回退路径 ----
             if not use_incremental:
                 from datetime import timedelta
+
                 from app.indicators.pipeline import compute_enriched
 
                 logger.info("enriched 全量计算 (live_agg=%s, 上次日期=%s)",

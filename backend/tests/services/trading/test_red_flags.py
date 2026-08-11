@@ -135,6 +135,26 @@ def test_plan_only_add_not_flagged():
     assert not any(f["type"] == "loss_add" for f in flags)
 
 
+def test_plan_increase_then_lower_fill_is_loss_add():
+    events = [
+        _event("open", TS, {"stopLoss": 1600.0}),
+        _event("prepare", TS, {"plannedQty": 100, "plannedPrice": 1680}),
+        _event("fill", TS, {"qty": 100, "price": 1680.0, "complete": True}),
+        _event("add", TS2, {"planOnly": True, "newTotal": 333000.0}),
+        _event("fill", TS3, {"qty": 100, "price": 1650.0, "complete": True}),
+    ]
+    audit = [
+        _audit("fill", TS),
+        _audit("add", TS2),
+        _audit("fill", TS3),
+    ]
+    flags = scan_trade_events(events, audit)
+    loss_adds = [f for f in flags if f["type"] == "loss_add"]
+    assert len(loss_adds) == 1
+    assert loss_adds[0]["price"] == 1650.0
+    assert loss_adds[0]["costPrice"] == 1680.0
+
+
 def test_loss_add_uses_avg_cost_after_multiple_fills():
     # fill 100@1680 → cost=1680; add 100@1600(cost→1640); 再 add@1605<1640 → 红旗
     events = [

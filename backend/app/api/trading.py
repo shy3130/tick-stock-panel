@@ -9,26 +9,30 @@
 from __future__ import annotations
 
 import logging
-
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from app.config import settings
 from app.data_providers.registry import get_active_provider_name, get_provider
+from app.services.trading import accounts as accounts_store
 from app.services.trading import fhold_client, red_flag_webhook, red_flags, store
 from app.services.trading.accounts import read_accounts, write_accounts
 from app.services.trading.gates import evaluate_gates
 from app.services.trading.lifecycle import apply_event, has_prepare_or_revise, new_trade, now_str
-from app.services.trading.portfolio import compute_snapshot
 from app.services.trading.models import (
     EVENT_KINDS,
+    KIND_CLOSE,
     KIND_FILL,
     KIND_OPEN,
-    LifecycleError,
     SCHEMA_VERSION,
+    STATUS_BUILDING,
+    STATUS_CLOSED,
+    STATUS_HOLDING,
+    LifecycleError,
 )
+from app.services.trading.portfolio import compute_risk_snapshot, compute_snapshot
 
 router = APIRouter(prefix="/api/trading", tags=["trading"])
 logger = logging.getLogger(__name__)
@@ -37,10 +41,12 @@ logger = logging.getLogger(__name__)
 _KIND_TO_MODE = {
     "fill": "fill",
     "add": "add",
+    "trim": "trim",
     "tp": "tp",
     "sl": "sl",
     "adjust": "adjust",
     "close": "close",
+    "void": "void",
 }
 
 
@@ -132,12 +138,10 @@ def open_trade(payload: Annotated[dict[str, Any], Body()]):
 
 @router.post("/trades/{trade_id}/events")
 def append_event(trade_id: str, payload: Annotated[dict[str, Any], Body()]):
-    """追加生命周期事件 (prepare/revise/fill/add/tp/sl/adjust/close)。
+    """追加生命周期事件。
 
-    payload.gate 可选: {"passed": bool, "gates": [...], "missing": [...], "confirmed": bool}
-    - 服务端结构红线失败 → passed=false (同客户端 gate.passed=false 语义)
-    - passed=false 且未 confirmed → 拒绝执行,仅记 passed=false 审计
-    - passed=false 且 confirmed → 事件落盘并标记 gateBypassed (绕门留痕)
+    支持分批 fill、add/trim 计划变更、零成交 void 与 close 平仓结转。
+    payload.gate.confirmed=true 仍只表示用户确认绕过门禁，所有结构不变量不可关闭。
     """
     kind = str(payload.get("kind") or "").strip()
     if kind not in EVENT_KINDS or kind == KIND_OPEN:
@@ -145,6 +149,17 @@ def append_event(trade_id: str, payload: Annotated[dict[str, Any], Body()]):
     trade = store.read_trade(settings.data_dir, trade_id)
     if trade is None:
         raise HTTPException(status_code=404, detail="单笔交易不存在")
+
+    # close 事件已落盘但账户结转失败时，客户端可原请求重试。
+    # 此路径只修复幂等 settlement，不重复事件或审计。
+    if kind == KIND_CLOSE and trade.get("status") == STATUS_CLOSED:
+        try:
+            accounts_store.settle_trade(settings.data_dir, trade, now_str())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"平仓结转写入失败: {e}")
+        return trade
 
     mode = _KIND_TO_MODE.get(kind, kind)
     gate = _merge_gate(mode, trade, payload.get("payload") or {}, payload.get("gate"))
@@ -175,6 +190,13 @@ def append_event(trade_id: str, payload: Annotated[dict[str, Any], Body()]):
     }
     _persist(updated, event)
     _write_audit(_audit_entry(kind, trade_id, trade["symbol"], True, gate))
+    if kind == KIND_CLOSE:
+        try:
+            accounts_store.settle_trade(settings.data_dir, updated, ts)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"平仓已落盘，但结转失败: {e}")
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"平仓已落盘，但结转写入失败: {e}")
     _notify_red_flags(trade_id)
     return updated
 
@@ -230,12 +252,26 @@ def get_portfolio():
     return snapshot
 
 
+@router.get("/portfolio/risk")
+def get_portfolio_risk(
+    request: Request,
+    lookback_days: Annotated[int, Query(ge=20, le=500)] = 120,
+):
+    """基于 canonical 日 K 的当前持仓静态权重风险透视。"""
+    trades = store.list_trades(settings.data_dir)
+    return compute_risk_snapshot(
+        request.app.state.repo,
+        trades,
+        lookback_days=lookback_days,
+    )
+
+
 def _fetch_prices(trades: list[dict[str, Any]]) -> dict[str, float | None]:
     """收集持仓中 symbols,经 registry provider 拉最新价。失败/不可用 → 全 None (stale)。"""
     symbols = sorted({
         str(t["symbol"])
         for t in trades
-        if t.get("status") == "持仓中" and t.get("symbol")
+        if t.get("status") in (STATUS_BUILDING, STATUS_HOLDING) and t.get("symbol")
     })
     if not symbols:
         return {}

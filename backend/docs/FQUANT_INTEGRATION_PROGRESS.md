@@ -2,7 +2,7 @@
 
 > 主线任务：**让 tickflow-stock-panel 通过 `data_providers` 抽象层读取本地 DuckDB 发布快照，并保留可切换 provider 的业务契约。**
 >
-> 最后更新：2026-08-09
+> 最后更新：2026-08-10
 > 状态：本地 DuckDB provider 已落地；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
@@ -358,6 +358,7 @@ PG / HTTP
 | 2026-07-02 | — | 撰写本进度文档 | — |
 | 2026-08-06 | 跨域校对 | PA_Agent P4 结构化计划检查与 P5 PushPlus 完成；计划检查的行情输入只读既有 `data_providers`/canonical enriched 路径，PushPlus 仅分发用户已配置的监控告警/复盘报告，均未新增或绕过数据源 | 终审修复后后端全量 1075 tests + `import app.main` + 前端 build + 开发服务/UI smoke ✅ |
 | 2026-08-10 | 受控缺口与研究入口校对 | `FQuantProvider.depth` 仍为 false；数据页新增默认关闭的 `realtime`/`depth` 独立 fallback scope。外部 depth 已与 authoritative sealed cache 隔离，仅在连板当前展示响应中携带 `sealed_degraded`/`sealed_source`，不修正 counts/状态、不进入总览/研究/选股/回测/监控。研究中心、横截面、信号记分卡、组合策略、参数网格和 M25 连续性 UI 完成接线，均保持本地 DuckDB/append-only/provenance 与无自动执行边界 | 最终集成定向回归 `303 passed`；`import app.main`、前端 TypeScript/build、真实服务 `/health` 与浏览器多页面诊断通过 |
+| 2026-08-10 | 数值与风险边界校对 | provider mapping 将 `NaN/±Inf` 统一视为缺失，实时/分钟展示和 AI K 线上下文不得输出非标准 JSON 数值；交易组合风险只读既有 canonical 日 K，不新增 provider capability、外部源或写入路径 | 映射/行情/分析/交易定向回归通过；真实服务 `/health` 与 `/api/trading/portfolio/risk` smoke 通过 |
 
 ---
 

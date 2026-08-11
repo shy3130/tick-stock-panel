@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -99,7 +100,13 @@ class AiProfileIn(BaseModel):
 def save_ai_settings(req: AiSettingsIn) -> dict:
     """保存 AI 配置（全部持久化到 secrets.json）"""
     from app.config import settings
-    from app.services.ai_provider import ai_configured, current_ai_model, current_ai_provider, current_codex_command, normalize_codex_command
+    from app.services.ai_provider import (
+        ai_configured,
+        current_ai_model,
+        current_ai_provider,
+        current_codex_command,
+        normalize_codex_command,
+    )
 
     updates: dict = {}
     if req.provider:
@@ -249,18 +256,49 @@ def set_default_ai_profile(profile_id: str) -> dict:
 
 @router.post("/ai/profiles/{profile_id}/test")
 async def test_ai_profile(profile_id: str) -> dict:
-    from app.services.ai_provider import generate_ai_text
+    """显式探测单个 AI profile；不走 fallback，避免把备用源成功误报为目标健康。"""
+    from app.log_redaction import redact_text
+    from app.services import ai_profiles, ai_routing
+    from app.services.ai_provider import generate_ai_text_with_meta
+
+    if ai_profiles.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="AI 配置不存在")
+
+    registry = ai_routing.get_health_registry()
+    started = time.monotonic()
     try:
-        text = await generate_ai_text(
+        response = await generate_ai_text_with_meta(
             [{"role": "user", "content": "Reply exactly: OK"}],
             profile_id=profile_id,
             temperature=0,
             max_tokens=8,
             timeout=15,
+            allow_fallback=False,
         )
-        return {"ok": True, "response": text[:80]}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": str(e)}
+        latency_ms = round((time.monotonic() - started) * 1000, 1)
+        registry.record_success(profile_id, latency_ms)
+        return {
+            "ok": True,
+            "response": response.text[:80],
+            "provider": response.provider,
+            "model": response.model,
+            "latency_ms": latency_ms,
+            "usage": response.usage.model_dump(mode="json"),
+            "health": registry.get_health(profile_id),
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        latency_ms = round((time.monotonic() - started) * 1000, 1)
+        category = ai_routing.classify_provider_error(exc)
+        registry.record_failure(profile_id, category)
+        return {
+            "ok": False,
+            "error": redact_text(exc),
+            "category": category,
+            "latency_ms": latency_ms,
+            "health": registry.get_health(profile_id),
+        }
 
 
 # ===== 偏好设置 =====
@@ -640,8 +678,7 @@ def update_feishu_webhook(req: FeishuWebhookPrefsIn) -> dict:
     - url: 传入空串表示清空配置; 非空则需为合法的飞书自定义机器人地址。
     - secret: 机器人启用了「签名校验」时填密钥, 留空表示不验签。
     """
-    from app.services import preferences
-    from app.services import webhook_adapter
+    from app.services import preferences, webhook_adapter
 
     url = (req.url or "").strip()
     if url and not webhook_adapter.is_valid_feishu_url(url):
@@ -658,8 +695,7 @@ def update_feishu_webhook(req: FeishuWebhookPrefsIn) -> dict:
 @router.put("/preferences/webhook-channel")
 def update_webhook_channel(req: WebhookChannelPrefsIn) -> dict:
     """保存一个 Webhook 通道配置。"""
-    from app.services import preferences
-    from app.services import webhook_adapter
+    from app.services import preferences, webhook_adapter
 
     channel = (req.channel or "").strip().lower()
     url = (req.url or "").strip()
@@ -904,7 +940,7 @@ def update_review_schedule(req: ReviewScheduleIn, request: Request) -> dict:
     sched = preferences.set_review_schedule(req.enabled, req.hour, req.minute)
 
     # 动态操作 APScheduler job
-    from app.jobs.daily_pipeline import _register_review_job, REVIEW_JOB_ID
+    from app.jobs.daily_pipeline import REVIEW_JOB_ID, _register_review_job
     scheduler = getattr(request.app.state, "scheduler", None)
     if scheduler:
         if sched["enabled"]:

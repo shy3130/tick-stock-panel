@@ -52,6 +52,7 @@ def _install_fake_plan_check(monkeypatch, *, status="ok", error=None):
         request_id=None,
         stage1_generate=None,
         stage2_generate=None,
+        enable_continuity=False,
     ):
         call_log["kwargs"] = {
             "date": date,
@@ -59,6 +60,7 @@ def _install_fake_plan_check(monkeypatch, *, status="ok", error=None):
             "profile_id": profile_id,
             "attempt_id": attempt_id,
             "request_id": request_id,
+            "enable_continuity": enable_continuity,
         }
         call_log["cancel_token"] = cancel_token
         # 模拟进度事件 (含应被过滤的 prompt 字段)

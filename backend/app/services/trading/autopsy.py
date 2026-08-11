@@ -7,6 +7,7 @@
 - D 数据问题: 数据缺失/错误导致决策依据失真
 """
 from __future__ import annotations
+
 import asyncio
 import json
 from pathlib import Path
@@ -15,10 +16,10 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.services.ai_structured import CancellationToken, build_ai_meta, run_structured_ai
 from app.services.ai_budgets import resolve_budget
+from app.services.ai_provider import generate_ai_text_with_meta, profile_configured
+from app.services.ai_structured import CancellationToken, build_ai_meta, run_structured_ai
 from app.services.ai_usage_snapshot import record_structured_usage
-from app.services.ai_provider import ai_configured, generate_ai_text_with_meta, profile_configured
 from app.services.trading import store
 from app.services.trading.lifecycle import now_str
 from app.services.trading.red_flags import scan_trade_events

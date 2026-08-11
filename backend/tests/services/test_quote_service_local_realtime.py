@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import app.services.quote_service as quote_service
@@ -42,6 +43,24 @@ def test_record_from_quote_converts_realtime_points_to_ratio():
     assert abs(record["change_pct"] - 0.0123) < 1e-12
     assert abs(record["amplitude"] - 0.0456) < 1e-12
     assert record["turnover_rate"] == 7.89
+
+
+def test_record_from_quote_converts_non_finite_numbers_to_null():
+    record = quote_service.QuoteService._record_from_quote({
+        "symbol": "600519.SH",
+        "last_price": float("nan"),
+        "prev_close": float("inf"),
+        "open": -float("inf"),
+        "volume": float("nan"),
+        "ext": {"change_amount": float("inf"), "turnover_rate": float("nan")},
+    })
+    assert record["last_price"] is None
+    assert record["prev_close"] is None
+    assert record["open"] is None
+    assert record["volume"] is None
+    assert record["change_amount"] is None
+    assert record["turnover_rate"] is None
+    json.dumps(record, allow_nan=False)
 
 
 def test_index_quote_cache_outputs_percentage_points():

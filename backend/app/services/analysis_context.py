@@ -100,8 +100,8 @@ def _compute_bar_features(df: pl.DataFrame) -> pl.DataFrame:
     work = df.clone()
 
     # 基础
-    o, h, l, c = pl.col("open"), pl.col("high"), pl.col("low"), pl.col("close")
-    rng = (h - l).clip(lower_bound=1e-12)
+    o, h, low, c = pl.col("open"), pl.col("high"), pl.col("low"), pl.col("close")
+    rng = (h - low).clip(lower_bound=1e-12)
     body = (c - o).abs()
 
     # bar_type
@@ -123,12 +123,12 @@ def _compute_bar_features(df: pl.DataFrame) -> pl.DataFrame:
 
     # 影线
     upper_shadow = h - pl.max_horizontal(o, c)
-    lower_shadow = pl.min_horizontal(o, c) - l
+    lower_shadow = pl.min_horizontal(o, c) - low
     upper_ratio = upper_shadow / rng
     lower_ratio = lower_shadow / rng
 
     # 收盘位置
-    close_pos = _safe_div(c - l, rng)
+    close_pos = _safe_div(c - low, rng)
 
     # range / atr
     atr = pl.col("atr_14") if "atr_14" in work.columns else pl.lit(None)
@@ -146,14 +146,14 @@ def _compute_bar_features(df: pl.DataFrame) -> pl.DataFrame:
 
     # 相邻重叠率
     prev_h = h.shift(1).over("symbol") if "symbol" in work.columns else h.shift(1)
-    prev_l = l.shift(1).over("symbol") if "symbol" in work.columns else l.shift(1)
-    inter = pl.min_horizontal(h, prev_h) - pl.max_horizontal(l, prev_l)
-    union = pl.max_horizontal(h, prev_h) - pl.min_horizontal(l, prev_l)
+    prev_l = low.shift(1).over("symbol") if "symbol" in work.columns else low.shift(1)
+    inter = pl.min_horizontal(h, prev_h) - pl.max_horizontal(low, prev_l)
+    union = pl.max_horizontal(h, prev_h) - pl.min_horizontal(low, prev_l)
     overlap = _safe_div(inter.clip(lower_bound=0), union.clip(lower_bound=1e-12))
 
     # inside / outside（无 symbol 时按传入帧顺序计算）
-    inside = ((l >= prev_l) & (h <= prev_h)).fill_null(False)
-    outside = ((l <= prev_l) & (h >= prev_h)).fill_null(False)
+    inside = ((low >= prev_l) & (h <= prev_h)).fill_null(False)
+    outside = ((low <= prev_l) & (h >= prev_h)).fill_null(False)
 
     # ii / iii / ioi（连续形态）
     prev_inside = inside.shift(1).over("symbol") if "symbol" in work.columns else inside.shift(1)
@@ -328,6 +328,20 @@ def build_analysis_frame(
         warnings.append("missing columns: " + ", ".join(missing))
 
     work = _ensure_min_columns(df.clone())
+    finite_ohlc = pl.all_horizontal([
+        pl.col(column).cast(pl.Float64, strict=False).is_finite()
+        for column in ("open", "high", "low", "close")
+    ])
+    valid_rows = finite_ohlc & pl.col("date").is_not_null()
+    before = work.height
+    work = work.filter(valid_rows)
+    if work.height < before:
+        warnings.append(f"dropped_non_finite_or_undated_bars:{before - work.height}")
+    if "volume" in work.columns:
+        volume = pl.col("volume").cast(pl.Float64, strict=False)
+        work = work.with_columns(
+            pl.when(volume.is_finite()).then(volume).otherwise(None).alias("volume")
+        )
 
     # 排除形成中（默认）
     work, form_warn = _exclude_forming_bars(work, data_as_of, market, include_forming)

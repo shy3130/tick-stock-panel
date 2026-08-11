@@ -180,3 +180,47 @@ async def test_stock_analysis_stream_exposes_context_and_keeps_markdown(monkeypa
     assert events[0]["attempt_id"] == "att-test"
     assert any(event == {"type": "delta", "content": "Markdown 报告"} for event in events)
     assert events[-1] == {"type": "done"}
+
+
+
+def test_analysis_data_as_of_uses_latest_valid_date():
+    df = pl.DataFrame({
+        "date": [None, "not-a-date", "2026-07-01", "2026-07-03"],
+    })
+    assert sa._analysis_data_as_of(df, "cn").date() == date(2026, 7, 3)
+
+
+def test_analysis_data_as_of_rejects_all_invalid_dates():
+    df = pl.DataFrame({"date": [None, "not-a-date"]})
+    with pytest.raises(ValueError, match="有效交易日期"):
+        sa._analysis_data_as_of(df, "cn")
+
+
+@pytest.mark.asyncio
+async def test_stock_analysis_drops_non_finite_latest_bar(monkeypatch, tmp_path):
+    df = _analysis_df(66)
+    expected_date = df["date"][-2]
+    expected_close = df["close"][-2]
+    df = df.with_columns(
+        pl.when(pl.int_range(pl.len()) == pl.len() - 1)
+        .then(float("inf"))
+        .otherwise(pl.col("close"))
+        .alias("close")
+    )
+    monkeypatch.setattr(sa, "_load_kline", lambda repo, symbol: df)
+    monkeypatch.setattr(sa, "_load_financials", lambda data_dir, symbol: {})
+    monkeypatch.setattr(sa, "_detect_pattern_summary", lambda frame: [])
+    monkeypatch.setattr("app.services.skill_context.load_skill_context_safe", lambda purpose: "")
+
+    async def fake_stream(messages, **kwargs):
+        yield "ok"
+
+    monkeypatch.setattr("app.services.ai_provider.stream_ai_text", fake_stream)
+    lines = [
+        line
+        async for line in sa.analyze_stock_stream(object(), tmp_path, "600519.SH")
+    ]
+    events = [json.loads(line, parse_constant=lambda token: pytest.fail(f"invalid JSON number: {token}")) for line in lines]
+    assert events[0]["type"] == "meta"
+    assert events[0]["close"] == pytest.approx(expected_close)
+    assert events[0]["data_as_of"].startswith(expected_date.isoformat())

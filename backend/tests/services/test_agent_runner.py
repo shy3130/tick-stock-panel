@@ -64,6 +64,30 @@ async def test_turn_persists_even_with_no_subscriber(tmp_path, monkeypatch):
     assert [(r["role"], r["content"]) for r in rows] == [("assistant", "独立")]
 
 
+
+async def test_turn_marks_error_when_stream_ends_without_terminal_event(tmp_path, monkeypatch):
+    async def fake_stream(messages, app_state, profile_id=None, **kw):
+        yield json.dumps({"type": "delta", "content": "未完成"})
+
+    monkeypatch.setattr(agent_runner, "run_agent_stream", fake_stream)
+    bus = AgentBus()
+    bus.begin("s")
+    sid = _make_session(tmp_path)
+
+    await agent_runner.run_agent_turn(
+        data_dir=tmp_path,
+        session_id=sid,
+        attempt_id="agent_attempt_x",
+        messages=[{"role": "user", "content": "hi"}],
+        app_state=object(),
+        profile_id=None,
+        bus=bus,
+    )
+
+    rows = agent_sessions.read_messages(tmp_path, sid)
+    assert rows[0]["content"] == "未完成\n[错误] Agent 流式响应在完成前中断，请重试"
+    assert agent_sessions.get_session(tmp_path, sid)["last_attempt_status"] == "error"
+
 async def test_turn_cancelled_midstream_still_persists_partial(tmp_path, monkeypatch):
     started = asyncio.Event()
 

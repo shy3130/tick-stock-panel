@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.trading.accounts import read_accounts, write_accounts
+from app.services.trading.accounts import read_accounts, settle_trade, write_accounts
 
 TS = "2026-08-04 14:30"
 
@@ -16,6 +16,7 @@ def _acct(**over):
         "horizonFundMonths": 12,
         "maxSingleRatio": 0.25,
         "changes": [],
+        "settlements": [],
     }
     base.update(over)
     return base
@@ -110,3 +111,37 @@ def test_new_account_no_changes_constraint(tmp_path):
         _acct(id="b", changes=[]),
     ]})
     assert {a["id"] for a in out["accounts"]} == {"a", "b"}
+
+
+def test_close_settlement_updates_capital_once(tmp_path):
+    write_accounts(tmp_path, {"accounts": [_acct()]})
+    trade = {
+        "tradeId": "600519.SH_1",
+        "accountId": "default",
+        "symbol": "600519.SH",
+        "status": "已平仓",
+        "realizedPnl": 1200.5,
+        "closedAt": TS,
+    }
+    first = settle_trade(tmp_path, trade, TS)
+    second = settle_trade(tmp_path, trade, "2026-08-05 10:00")
+    assert second == first
+    account = read_accounts(tmp_path)["accounts"][0]
+    assert account["capital"] == 501200.5
+    assert len(account["settlements"]) == 1
+    assert len(account["changes"]) == 1
+    assert account["changes"][0]["kind"] == "settlement"
+
+
+def test_settlement_history_rewrite_rejected(tmp_path):
+    write_accounts(tmp_path, {"accounts": [_acct()]})
+    trade = {
+        "tradeId": "t1",
+        "status": "已平仓",
+        "realizedPnl": 100,
+    }
+    settle_trade(tmp_path, trade, TS)
+    account = read_accounts(tmp_path)["accounts"][0]
+    tampered = {**account, "settlements": [{**account["settlements"][0], "realizedPnl": 999}]}
+    with pytest.raises(ValueError, match="settlements 历史记录不可改写"):
+        write_accounts(tmp_path, {"accounts": [tampered]})

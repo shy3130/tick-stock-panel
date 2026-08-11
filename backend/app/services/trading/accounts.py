@@ -1,19 +1,22 @@
-"""账户模型 — data/user_data/trading/accounts.json 单文件读写。
-
-账户是组合快照的结构红线输入 (capital / maxSingleRatio / horizonFundMonths)。
-与交易事件流一致,账户的 changes 只允许在末尾追加,历史不可改写。
+"""账户模型 — 资金基数、append-only 变更与平仓结转台账。
 
 Schema:
 {
   "schemaVersion": 1,
-  "accounts": [ {
+  "accounts": [{
     "id": "default", "currency": "CNY",
-    "capital": 500000,            # 资金基数,不随行情变
-    "horizonFundMonths": 12,      # 资金可用期限
-    "maxSingleRatio": 0.25,       # 单一标的上限 (结构红线输入)
-    "changes": [ { "ts": "...", "amount": 50000, "reason": "增资" } ]
-  } ]
+    "capital": 500000,
+    "horizonFundMonths": 12,
+    "maxSingleRatio": 0.25,
+    "changes": [...],
+    "settlements": [{
+      "id": "settle:{tradeId}", "tradeId": "...", "realizedPnl": 1200,
+      "capitalBefore": 500000, "capitalAfter": 501200
+    }]
+  }]
 }
+
+用户资金变更与服务端平仓结转都只允许追加；settlement id 保证重试幂等。
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ _DEFAULT_ACCOUNT: dict[str, Any] = {
     "horizonFundMonths": 12,
     "maxSingleRatio": 0.25,
     "changes": [],
+    "settlements": [],
 }
 
 
@@ -66,29 +70,18 @@ def read_accounts(data_dir: Path) -> dict[str, Any]:
 
 
 def write_accounts(data_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    """校验并落盘账户。校验失败抛 ValueError (调用方转 HTTP 400)。
-
-    - capital >= 0
-    - 0 < maxSingleRatio <= 1
-    - horizonFundMonths > 0
-    - changes 只允许追加: 传入 changes 不得少于现有,且现有 changes 必须是新 changes 的前缀
-    """
+    """校验并原子落盘账户；changes/settlements 历史只允许追加。"""
     accounts = payload.get("accounts")
     if not isinstance(accounts, list) or not accounts:
         raise ValueError("accounts 必须是非空数组")
     for acc in accounts:
         _validate_account(acc)
 
-    existing = read_accounts(data_dir)
-    _enforce_changes_append_only(existing, accounts)
-
     out: dict[str, Any] = {"schemaVersion": SCHEMA_VERSION, "accounts": accounts}
-    p = _path(data_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
     with _lock:
-        tmp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(p)
+        existing = read_accounts(data_dir)
+        _enforce_append_only(existing, accounts)
+        _write_payload(data_dir, out)
     return out
 
 
@@ -123,20 +116,100 @@ def _validate_account(acc: Any) -> None:
     elif not isinstance(changes, list):
         raise ValueError(f"账户 {aid}: changes 必须是数组")
 
+    settlements = acc.get("settlements")
+    if settlements is None:
+        acc["settlements"] = []
+    elif not isinstance(settlements, list):
+        raise ValueError(f"账户 {aid}: settlements 必须是数组")
 
-def _enforce_changes_append_only(existing: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
-    """现有账户的 changes 不得被删改,只能在末尾追加。新账户无约束。"""
+
+def _enforce_append_only(existing: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
+    """现有账户的 changes/settlements 不得删改，只能在末尾追加。"""
     by_id = {a.get("id"): a for a in existing.get("accounts", [])}
     for acc in accounts:
         aid = acc.get("id")
         old = by_id.get(aid)
         if not old:
             continue
-        old_changes = old.get("changes") or []
-        new_changes = acc.get("changes") or []
-        if len(new_changes) < len(old_changes):
-            raise ValueError(f"账户 {aid}: changes 只允许追加,传入条数少于现有 {len(old_changes)} 条")
-        # 现有 changes 必须逐条等于新 changes 的前缀 (历史不可改写)
-        for i, oc in enumerate(old_changes):
-            if i >= len(new_changes) or new_changes[i] != oc:
-                raise ValueError(f"账户 {aid}: changes 历史记录不可改写,只能在末尾追加")
+        for field in ("changes", "settlements"):
+            old_rows = old.get(field) or []
+            new_rows = acc.get(field) or []
+            if len(new_rows) < len(old_rows):
+                raise ValueError(f"账户 {aid}: {field} 只允许追加，传入条数少于现有 {len(old_rows)} 条")
+            for index, old_row in enumerate(old_rows):
+                if index >= len(new_rows) or new_rows[index] != old_row:
+                    raise ValueError(f"账户 {aid}: {field} 历史记录不可改写，只能在末尾追加")
+
+
+def settle_trade(data_dir: Path, trade: dict[str, Any], ts: str) -> dict[str, Any]:
+    """把已平仓单笔的累计已实现盈亏结转进资金基数；按 tradeId 幂等。"""
+    if trade.get("status") != "已平仓":
+        raise ValueError("只有已平仓单笔可以结转")
+    trade_id = str(trade.get("tradeId") or "").strip()
+    if not trade_id:
+        raise ValueError("tradeId 必填")
+    account_id = str(trade.get("accountId") or "default").strip() or "default"
+    settlement_id = f"settle:{trade_id}"
+
+    with _lock:
+        document = read_accounts(data_dir)
+        accounts = document.get("accounts") or []
+        account = next((item for item in accounts if item.get("id") == account_id), None)
+        if account is None:
+            raise ValueError(f"账户不存在: {account_id}")
+        account.setdefault("changes", [])
+        account.setdefault("settlements", [])
+        existing = next(
+            (row for row in account["settlements"] if row.get("id") == settlement_id),
+            None,
+        )
+        if existing is not None:
+            return existing
+
+        realized = round(float(trade.get("realizedPnl") or 0.0), 2)
+        before = round(float(account.get("capital") or 0.0), 2)
+        after = round(before + realized, 2)
+        if after < 0:
+            raise ValueError(
+                f"账户 {account_id}: 结转后 capital={after:g} 为负，拒绝写入"
+            )
+        settlement = {
+            "id": settlement_id,
+            "ts": ts,
+            "tradeId": trade_id,
+            "symbol": str(trade.get("symbol") or ""),
+            "accountId": account_id,
+            "realizedPnl": realized,
+            "closeDate": trade.get("closedAt") or ts,
+            "capitalBefore": before,
+            "capitalAfter": after,
+        }
+        account["capital"] = after
+        account["changes"].append({
+            "id": settlement_id,
+            "ts": ts,
+            "amount": realized,
+            "reason": f"平仓结转 {trade_id}",
+            "kind": "settlement",
+            "tradeId": trade_id,
+        })
+        account["settlements"].append(settlement)
+        _write_payload(data_dir, {"schemaVersion": SCHEMA_VERSION, "accounts": accounts})
+        return settlement
+
+
+def settled_trade_ids(accounts_doc: dict[str, Any]) -> set[str]:
+    return {
+        str(row.get("tradeId"))
+        for account in accounts_doc.get("accounts") or []
+        for row in account.get("settlements") or []
+        if row.get("tradeId")
+    }
+
+
+def _write_payload(data_dir: Path, payload: dict[str, Any]) -> None:
+    p = _path(data_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)

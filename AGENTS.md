@@ -83,8 +83,8 @@
 
 | 文件 | 作用 | 红线 |
 |------|------|------|
-| `lifecycle.py` / `store.py` | 单笔状态机 + `trade_events.jsonl` / `decision_audit.jsonl` append-only 事实流 | 历史事件和审计只能追加，禁止整份覆盖 |
-| `accounts.py` / `portfolio.py` | 账户资金基数、NAV、敞口与健康度派生快照 | 行情估值仍必须走 `data_providers` |
+| `lifecycle.py` / `store.py` | 单笔状态机（计划中/建仓中/持仓中/已平仓/已作废）+ `trade_events.jsonl` / `decision_audit.jsonl` append-only 事实流；分批 fill、计划 add/trim、零成交 void | 历史事件和审计只能追加，禁止整份覆盖；`add/trim` 仅改变计划、不改变真实仓位，`add` 可从持仓中重开建仓，终态拒绝后续事件 |
+| `accounts.py` / `portfolio.py` | 账户资金基数、幂等平仓结转、NAV/敞口/健康度快照；canonical 日 K 驱动的只读组合风险透视 | 行情估值仍必须走 `data_providers`；前端不得重算风险，非有限数值必须以 `null` 输出 |
 | `fhold_client.py` | 只读调用 `fhold-cli --format json` 获取 `../fhold` 真实券商账户/持仓 | 仅持仓事实，不是行情 provider；禁止绕过 CLI 直读 `~/.fhold/fhold.db`；不可用时 fail-soft |
 | `gates.py` / `plans.py` | 五条后端结构红线、用户清单、盘前计划与计划/实际偏差 | 结构红线不可由前端或用户配置关闭 |
 | `plan_check.py` | 默认关闭的两阶段计划检查：Stage1 canonical K 线诊断 → 程序门禁 → Stage2 用户计划审查；输出 append-only artifact 与 trace | 只读已保存计划；程序门禁只可保持或降级；AI 不得输出订单/方向/建议价格/执行动作；不得写 `trade_events` 或进入 screener/backtest/monitor |
@@ -102,6 +102,7 @@
 | `backend/docs/FQUANT_PROVIDER.md` | 旧 PoC 说明（已被 v2 覆盖，仅供回溯） |
 | `backend/docs/YMOS_PORTING_PLAN.md` | YMOS 纪律层移植设计、契约与完成进度 |
 | `backend/docs/PA_AGENT_PORTING_PLAN.md` | PA_Agent 工程机制移植总账、决策门、已交付边界与明确暂缓项 |
+| `backend/docs/UPSTREAM_FEATURE_PORTING.md` | 上游项目、已移植能力、暂缓/排除项与维护流程总账 |
 | `README.md` | 用户向快速开始；末尾有"本地开发与数据源"开发者附录 |
 
 ### 测试
@@ -309,6 +310,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-10（研究中心、横截面、信号记分卡、组合策略与参数网格完成 Web 接线；PA_Agent M25 以计划检查内二次 opt-in 收缩交付，append-only parent chain、失效强制全量且无执行语义；受控 external fallback UI 支持 `realtime`/`depth` 独立 scope，默认关闭、仅展示、不写 sealed/canonical/enriched。M21 继续暂缓。）
+**最后更新**：2026-08-10（交易生命周期补齐“建仓中/已作废”、分批 fill、计划 add/trim 与幂等 settlement；新增 canonical 日 K 后端组合风险透视；Agent 异常断流 fail-closed，分析日期与 `NaN/±Inf` JSON 边界加固；AI profile 测试连接精确探测目标 profile 且禁止 fallback。沪深市场两融总余额与财经日历因缺少本地契约/消费入口继续暂缓；M21 继续暂缓。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.data_providers.fquant.mapping import generated_minute_time, klines_rows_to_daily
+from app.data_providers.fquant.mapping import (
+    generated_minute_time,
+    klines_rows_to_daily,
+    wide_rows_to_daily,
+)
 
 
 def test_generated_minute_time_a_share_unchanged():
@@ -72,3 +76,18 @@ def test_klines_rows_to_daily_hk_cjl_is_already_shares():
     # The invariant that actually pins this down, independent of any volume column:
     implied_shares = out[0]["amount"] / out[0]["close"]
     assert volume == pytest.approx(implied_shares, rel=0.01)
+
+
+def test_daily_mapping_converts_non_finite_numbers_to_null():
+    rows = [{
+        "date": "2026-08-10",
+        "open": float("nan"),
+        "high": float("inf"),
+        "low": -float("inf"),
+        "close": 10.0,
+    }]
+    out = wide_rows_to_daily(rows, "600519.SH")
+    assert out[0]["open"] is None
+    assert out[0]["high"] is None
+    assert out[0]["low"] is None
+    assert out[0]["close"] == 10.0

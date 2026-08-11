@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from time import perf_counter
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from app.services import agent_sessions
@@ -29,6 +29,7 @@ async def run_agent_turn(
     status = "done"
     started_at = perf_counter()
     elapsed_ms: float | None = None
+    received_terminal = False
     bus.publish(
         session_id,
         {"type": "attempt_start", "attempt_id": attempt_id, "session_id": session_id},
@@ -63,14 +64,24 @@ async def run_agent_turn(
                 trace["result"] = event.get("result")
                 if isinstance(event.get("elapsed_ms"), (int, float)):
                     trace["elapsed_ms"] = event["elapsed_ms"]
-            if event_type in {"done", "error"} and isinstance(event.get("elapsed_ms"), (int, float)):
-                elapsed_ms = event["elapsed_ms"]
+            if event_type in {"done", "error"}:
+                received_terminal = True
+                if isinstance(event.get("elapsed_ms"), (int, float)):
+                    elapsed_ms = event["elapsed_ms"]
             if event_type == "delta" and isinstance(event.get("content"), str):
                 assistant_chunks.append(event["content"])
             elif event_type == "error" and isinstance(event.get("message"), str):
                 assistant_chunks.append(f"[错误] {event['message']}")
                 status = "error"
             bus.publish(session_id, event)
+        if not received_terminal:
+            status = "error"
+            message = "Agent 流式响应在完成前中断，请重试"
+            assistant_chunks.append(f"\n[错误] {message}" if assistant_chunks else f"[错误] {message}")
+            bus.publish(
+                session_id,
+                {"type": "error", "code": "ai_provider_error", "message": message},
+            )
         terminal_type = "attempt_failed" if status == "error" else "attempt_completed"
         bus.publish(session_id, {"type": terminal_type, "attempt_id": attempt_id})
     except asyncio.CancelledError:

@@ -53,6 +53,24 @@ def test_builder_excludes_forming_bar_and_keeps_input_immutable():
     assert frame.features[-1].dist_to_key is not None
 
 
+def test_builder_drops_non_finite_ohlc_and_nulls_non_finite_volume():
+    source = _frame()
+    source = source.with_columns(
+        pl.when(pl.int_range(pl.len()) == pl.len() - 1)
+        .then(float("nan"))
+        .otherwise(pl.col("close"))
+        .alias("close"),
+        pl.when(pl.int_range(pl.len()) == pl.len() - 2)
+        .then(float("inf"))
+        .otherwise(pl.col("volume"))
+        .alias("volume"),
+    )
+    frame = _build(source, as_of=datetime(2026, 8, 5, 16, 0))
+    assert len(frame.bars) == 64
+    assert frame.bars[-1].volume is None
+    assert any(warning == "dropped_non_finite_or_undated_bars:1" for warning in frame.warnings)
+
+
 def test_preflight_distinguishes_incomplete_and_stale():
     short = _build(_frame(30), as_of=datetime(2026, 8, 5, 16, 0))
     rejected = preflight_analysis(short, now=datetime(2026, 8, 6, 16, 0))

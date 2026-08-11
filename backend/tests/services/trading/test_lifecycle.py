@@ -13,10 +13,14 @@ from app.services.trading.models import (
     KIND_PREPARE,
     KIND_SL,
     KIND_TP,
+    KIND_TRIM,
+    KIND_VOID,
     LifecycleError,
+    STATUS_BUILDING,
     STATUS_CLOSED,
     STATUS_HOLDING,
     STATUS_PLANNED,
+    STATUS_VOIDED,
 )
 
 TS = "2026-08-04 14:30"
@@ -39,7 +43,7 @@ def _open() -> dict:
 def _holding() -> dict:
     trade = _open()
     trade = apply_event(trade, KIND_PREPARE, {"plannedQty": 100, "plannedPrice": 1680}, TS)
-    return apply_event(trade, KIND_FILL, {"qty": 100, "price": 1680.0}, TS)
+    return apply_event(trade, KIND_FILL, {"qty": 100, "price": 1680.0, "complete": True}, TS)
 
 
 # ── 建档 ─────────────────────────────────────────────────
@@ -67,9 +71,26 @@ def test_fill_computes_invested_server_side():
     assert trade["position"] == {"qty": 100, "costPrice": 1680.0, "invested": 168000.0}
 
 
-def test_fill_twice_rejected():
+def test_repeated_partial_fills_accumulate_then_complete():
+    trade = apply_event(_open(), KIND_PREPARE, {"plannedQty": 100, "plannedPrice": 10}, TS)
+    trade = apply_event(trade, KIND_FILL, {"qty": 40, "price": 10}, TS)
+    assert trade["status"] == STATUS_BUILDING
+    assert trade["build"] == {
+        "filledQty": 40.0,
+        "filledAmount": 400.0,
+        "fillCount": 1,
+        "completedAt": None,
+    }
+    trade = apply_event(trade, KIND_FILL, {"qty": 60, "price": 11, "complete": True}, TS)
+    assert trade["status"] == STATUS_HOLDING
+    assert trade["position"]["qty"] == 100
+    assert trade["position"]["costPrice"] == pytest.approx(10.6)
+    assert trade["build"]["filledAmount"] == 1060.0
+
+
+def test_fill_after_completion_requires_add_first():
     trade = _holding()
-    with pytest.raises(LifecycleError, match="只能发生一次"):
+    with pytest.raises(LifecycleError, match="先用 add"):
         apply_event(trade, KIND_FILL, {"qty": 100, "price": 1680}, TS)
 
 
@@ -79,20 +100,36 @@ def test_fill_rejects_non_positive():
         apply_event(trade, KIND_FILL, {"qty": -1, "price": 1680}, TS)
 
 
-# ── 加仓 / 卖出 ──────────────────────────────────────────
-def test_add_real_recomputes_avg_cost():
-    trade = apply_event(_holding(), KIND_ADD, {"qty": 100, "price": 1700.0}, TS)
-    pos = trade["position"]
-    assert pos["qty"] == 200
-    assert pos["invested"] == 338000.0
-    assert pos["costPrice"] == pytest.approx(1690.0)
+# ── 调整计划 / 卖出 ──────────────────────────────────────
+def test_add_then_fill_recomputes_avg_cost():
+    trade = apply_event(_holding(), KIND_ADD, {"newTotal": 338000}, TS)
+    assert trade["position"]["qty"] == 100
+    assert trade["plan"]["total"] == 338000
+    assert trade["build"]["filledAmount"] == 168000
+    trade = apply_event(trade, KIND_FILL, {"qty": 100, "price": 1700.0, "complete": True}, TS)
+    assert trade["position"]["qty"] == 200
+    assert trade["position"]["invested"] == 338000.0
+    assert trade["position"]["costPrice"] == pytest.approx(1690.0)
 
 
-def test_add_plan_only_does_not_change_position():
-    before = _holding()["position"].copy()
-    trade = apply_event(_holding(), KIND_ADD, {"planOnly": True, "qty": 100, "price": 1700}, TS)
+def test_trim_changes_remaining_plan_without_changing_position():
+    trade = apply_event(_open(), KIND_PREPARE, {"plannedQty": 100, "plannedPrice": 1680}, TS)
+    trade = apply_event(trade, KIND_FILL, {"qty": 40, "price": 1680}, TS)
+    before = trade["position"].copy()
+    trade = apply_event(trade, KIND_TRIM, {"newTotal": 100000, "reason": "降低风险预算"}, TS)
     assert trade["position"] == before
+    assert trade["plan"]["total"] == 100000
+    assert trade["status"] == STATUS_BUILDING
 
+
+def test_void_zero_fill_plan_is_terminal_and_auditable():
+    payload = {"reason": "催化剂消失"}
+    trade = apply_event(_open(), KIND_VOID, payload, TS)
+    assert trade["status"] == STATUS_VOIDED
+    assert payload["reason"] == "催化剂消失"
+    assert payload["filledAmount"] == 0.0
+    with pytest.raises(LifecycleError, match="已作废"):
+        apply_event(trade, KIND_PREPARE, {"plannedQty": 10}, TS)
 
 def test_tp_partial_sell_keeps_cost_and_realizes_pnl():
     trade = apply_event(_holding(), KIND_TP, {"qty": 40, "price": 1750.0}, TS)

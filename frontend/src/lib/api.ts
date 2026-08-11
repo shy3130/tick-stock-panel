@@ -1685,7 +1685,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/settings/ai/profiles/${encodeURIComponent(id)}/default`, { method: 'POST' }),
 
   testAiProfile: (id: string) =>
-    request<{ ok: boolean; error?: string; model?: string; response?: string }>(
+    request<{ ok: boolean; error?: string; category?: string; model?: string; provider?: string; response?: string; latency_ms?: number }>(
       `/api/settings/ai/profiles/${encodeURIComponent(id)}/test`,
       { method: 'POST' },
     ),
@@ -3121,11 +3121,11 @@ export interface AnalysisMenu {
 // 后端: api/trading.py + api/trading_review.py + api/trading_plans.py + api/strategy_profile.py
 // 契约以 services/trading/*.py 源码为准: 事件流 append-only, 单笔文件是当前事实的缓存投影。
 
-export type TradeStatus = '计划中' | '持仓中' | '已平仓'
+export type TradeStatus = '计划中' | '建仓中' | '持仓中' | '已平仓' | '已作废'
 
 export type TradeEventKind =
   | 'open' | 'prepare' | 'revise' | 'fill'
-  | 'add' | 'tp' | 'sl' | 'adjust' | 'close'
+  | 'add' | 'trim' | 'tp' | 'sl' | 'adjust' | 'close' | 'void'
 
 export interface TradeThesis {
   text: string
@@ -3136,6 +3136,7 @@ export interface TradeThesis {
 export interface TradePlanLeg {
   qty: number | null
   price: number | null
+  total?: number | null
   ts: string
 }
 
@@ -3154,10 +3155,19 @@ export interface Trade {
   realizedPnl: number
   createdAt: string
   closedAt: string | null
+  voidedAt?: string | null
+  accountId?: string
   /** prepare 事件写入的建仓计划 */
   plan?: TradePlanLeg
   /** revise 事件累积的修订历史 */
   planRevisions?: TradePlanLeg[]
+  /** 分批建仓累计事实；filledAmount 不因后续减仓回退 */
+  build?: {
+    filledQty: number
+    filledAmount: number
+    fillCount: number
+    completedAt: string | null
+  }
 }
 
 /** 生命周期事件 (trade_events.jsonl, 只追加) */
@@ -3206,6 +3216,18 @@ export interface AccountChange {
   reason: string
 }
 
+export interface AccountSettlement {
+  id: string
+  ts: string
+  tradeId: string
+  symbol: string
+  accountId: string
+  realizedPnl: number
+  closeDate: string
+  capitalBefore: number
+  capitalAfter: number
+}
+
 export interface TradingAccount {
   id: string
   currency: string
@@ -3213,6 +3235,7 @@ export interface TradingAccount {
   horizonFundMonths: number
   maxSingleRatio: number
   changes: AccountChange[]
+  settlements?: AccountSettlement[]
 }
 
 export interface AccountsDoc {
@@ -3224,6 +3247,7 @@ export type PortfolioHealth = 'normal' | 'attention' | 'critical'
 
 export interface PortfolioPosition {
   tradeId: string
+  status?: TradeStatus
   symbol: string
   name: string
   qty: number
@@ -3271,6 +3295,7 @@ export interface PortfolioSnapshot {
   nav: number
   capital: number
   realizedPnl: number
+  settledRealizedPnl?: number
   unrealizedPnl: number
   positionsValue: number
   available: number
@@ -3281,6 +3306,33 @@ export interface PortfolioSnapshot {
   priceSource: string
   maxSingleRatio: number
   fhold: FholdHoldings
+}
+
+export interface PortfolioRiskPosition {
+  symbol: string
+  weight: number
+  annualizedVolatility: number | null
+  riskContribution: number | null
+}
+
+export interface PortfolioRiskSnapshot {
+  status: 'ok' | 'no_positions' | 'insufficient_data'
+  lookbackDays: number
+  source: 'canonical_kline_daily'
+  methodology: string
+  degraded: boolean
+  dataAsOf: string | null
+  observations: number
+  metrics: {
+    annualizedVolatility: number | null
+    maxDrawdown: number | null
+    maxPairCorrelation: number | null
+    effectivePositions: number | null
+    topWeight: number | null
+  }
+  positions: PortfolioRiskPosition[]
+  correlation: { symbols: string[]; matrix: Array<Array<number | null>> }
+  meta: { kept: string[]; dropped: string[]; warnings: string[] }
 }
 
 /** 机械红旗 (red_flags.py):放宽止损/亏损加仓/绕过门禁/审计断链 + P6 期限超限/仓位超限/门禁膨胀 */
@@ -3685,6 +3737,12 @@ export function tradingGetAutopsy(id: string) {
     `/api/trading/trades/${encodeURIComponent(id)}/autopsy`,
     undefined,
     { silent404: true },
+  )
+}
+
+export function tradingGetPortfolioRisk(lookbackDays = 120) {
+  return request<PortfolioRiskSnapshot>(
+    `/api/trading/portfolio/risk?lookback_days=${encodeURIComponent(String(lookbackDays))}`,
   )
 }
 

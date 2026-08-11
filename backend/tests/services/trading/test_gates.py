@@ -192,7 +192,7 @@ def test_fill_reconciliation_passes_when_within_threshold(tmp_path):
     store.write_trade(tmp_path, trade)
     _write_event(tmp_path, trade["tradeId"], "prepare", TS, {"plannedQty": 100, "plannedPrice": 1680.0})
     # fill 100@1680 = 168000, plan 100@1680 = 168000 → 偏差 0
-    result = evaluate_gates(tmp_path, "fill", trade=trade, payload={"qty": 100, "price": 1680.0})
+    result = evaluate_gates(tmp_path, "fill", trade=trade, payload={"qty": 100, "price": 1680.0, "complete": True})
     gate = _gate(result, "fill_reconciliation")
     assert gate["passed"] is True
 
@@ -203,7 +203,7 @@ def test_fill_reconciliation_rejected_when_deviation_exceeds_without_reason(tmp_
     store.write_trade(tmp_path, trade)
     _write_event(tmp_path, trade["tradeId"], "prepare", TS, {"plannedQty": 100, "plannedPrice": 1680.0})
     # plan 168000, fill 200000 → 偏差 ~19% > 10%, 无 reconcileReason
-    result = evaluate_gates(tmp_path, "fill", trade=trade, payload={"qty": 100, "price": 2000.0})
+    result = evaluate_gates(tmp_path, "fill", trade=trade, payload={"qty": 100, "price": 2000.0, "complete": True})
     gate = _gate(result, "fill_reconciliation")
     assert gate["passed"] is False
     assert result["passed"] is False
@@ -215,7 +215,7 @@ def test_fill_reconciliation_passes_when_deviation_exceeds_with_reason(tmp_path)
     store.write_trade(tmp_path, trade)
     _write_event(tmp_path, trade["tradeId"], "prepare", TS, {"plannedQty": 100, "plannedPrice": 1680.0})
     result = evaluate_gates(tmp_path, "fill", trade=trade,
-                            payload={"qty": 100, "price": 2000.0, "reconcileReason": "集合竞价跳空"})
+                            payload={"qty": 100, "price": 2000.0, "complete": True, "reconcileReason": "集合竞价跳空"})
     gate = _gate(result, "fill_reconciliation")
     assert gate["passed"] is True
 
@@ -347,7 +347,7 @@ def test_server_fill_deviation_rejected_without_reason(tmp_path, monkeypatch):
     with pytest.raises(_HTTPException) as exc:
         trading.append_event(trade["tradeId"], {
             "kind": "fill",
-            "payload": {"qty": 100, "price": 2000.0},
+            "payload": {"qty": 100, "price": 2000.0, "complete": True},
         })
     assert exc.value.status_code == 422
 
@@ -370,7 +370,7 @@ def test_server_fill_deviation_passes_with_reason(tmp_path, monkeypatch):
     # 偏差 >10% 但有 reconcileReason → 通过
     updated = trading.append_event(trade["tradeId"], {
         "kind": "fill",
-        "payload": {"qty": 100, "price": 2000.0, "reconcileReason": "集合竞价跳空高开"},
+        "payload": {"qty": 100, "price": 2000.0, "complete": True, "reconcileReason": "集合竞价跳空高开"},
     })
     assert updated["status"] == "持仓中"
     assert updated["position"]["qty"] == 100
@@ -433,7 +433,7 @@ def test_server_fill_confirmed_bypasses_deviation(tmp_path, monkeypatch):
     # 偏差 >10%, 无 reason, 但 confirmed → 落盘 + gateBypassed
     updated = trading.append_event(trade["tradeId"], {
         "kind": "fill",
-        "payload": {"qty": 100, "price": 2000.0},
+        "payload": {"qty": 100, "price": 2000.0, "complete": True},
         "gate": {"confirmed": True},
     })
     assert updated["status"] == "持仓中"
@@ -453,10 +453,45 @@ def test_server_fill_within_threshold_no_gate_needed(tmp_path, monkeypatch):
     # fill 100@1690 = 169000 vs 168000 → 偏差 <1% → 通过, gateBypassed=false
     updated = trading.append_event(trade["tradeId"], {
         "kind": "fill",
-        "payload": {"qty": 100, "price": 1690.0},
+        "payload": {"qty": 100, "price": 1690.0, "complete": True},
     })
     assert updated["status"] == "持仓中"
     from app.services.trading import store as tstore
     events = tstore.read_events(tmp_path, trade["tradeId"])
     fill_events = [e for e in events if e["kind"] == "fill"]
     assert fill_events[0]["gateBypassed"] is False
+
+
+def test_server_close_settles_realized_pnl_once(tmp_path, monkeypatch):
+    from app.api import trading
+    from app.services.trading.accounts import read_accounts
+
+    monkeypatch.setattr(trading.settings, "data_dir", tmp_path)
+    _setup_accounts(tmp_path)
+    trade = _make_trade(qty=0)
+    _setup_fill_flow(tmp_path, trade, plan_price=1680.0)
+    holding = trading.append_event(trade["tradeId"], {
+        "kind": "fill",
+        "payload": {"qty": 100, "price": 1680.0, "complete": True},
+    })
+    assert holding["status"] == "持仓中"
+
+    closed = trading.append_event(trade["tradeId"], {
+        "kind": "close",
+        "payload": {"price": 1700.0},
+    })
+    assert closed["status"] == "已平仓"
+    account = read_accounts(tmp_path)["accounts"][0]
+    assert account["capital"] == 502000.0
+    assert len(account["settlements"]) == 1
+
+    # 相同 close 原请求重试只补/确认 settlement，不重复事件和资金结转。
+    retried = trading.append_event(trade["tradeId"], {
+        "kind": "close",
+        "payload": {"price": 1700.0},
+    })
+    assert retried["status"] == "已平仓"
+    account = read_accounts(tmp_path)["accounts"][0]
+    assert account["capital"] == 502000.0
+    assert len(account["settlements"]) == 1
+    assert len([e for e in store.read_events(tmp_path, trade["tradeId"]) if e["kind"] == "close"]) == 1

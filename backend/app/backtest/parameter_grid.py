@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from app.json_safe import json_safe
 from typing import Callable, Literal
 
 from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestResult, StrategyBacktestService
@@ -313,7 +314,13 @@ class ParameterGridExperimentStore:
         """原子写: tmp 文件 + os.replace。"""
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self._path(experiment.experiment_id)
-        payload = json.dumps(experiment.to_dict(), ensure_ascii=False, indent=2, default=str)
+        payload = json.dumps(
+            json_safe(experiment.to_dict()),
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+            default=str,
+        )
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(payload, encoding="utf-8")
         os.replace(tmp, path)

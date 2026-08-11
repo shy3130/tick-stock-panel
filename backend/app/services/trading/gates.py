@@ -159,30 +159,60 @@ def _gate_fill_reconciliation(
 ) -> dict[str, Any]:
     if not trade:
         return {"passed": True, "detail": "无单笔上下文,跳过对账"}
-    qty = _positive(payload.get("qty"))
-    price = _positive(payload.get("price"))
-    if not (qty and price):
-        return {"passed": True, "detail": "未提供 fill qty/price,跳过对账"}
-    fill_amount = qty * price
-    events = store.read_events(data_dir, trade.get("tradeId"))
-    plan_amount: float | None = None
-    for e in reversed(events):
-        if e.get("kind") in ("prepare", "revise"):
-            p = e.get("payload") or {}
-            pq = _positive(p.get("plannedQty"))
-            pp = _positive(p.get("plannedPrice"))
-            if pq and pp:
-                plan_amount = pq * pp
+
+    plan = trade.get("plan") or {}
+    plan_amount = _positive(plan.get("total"))
+    if plan_amount is None:
+        planned_qty = _positive(plan.get("qty"))
+        planned_price = _positive(plan.get("price"))
+        if planned_qty and planned_price:
+            plan_amount = planned_qty * planned_price
+    if plan_amount is None:
+        events = store.read_events(data_dir, trade.get("tradeId"))
+        for event in reversed(events):
+            if event.get("kind") not in ("prepare", "revise"):
+                continue
+            event_payload = event.get("payload") or {}
+            planned_qty = _positive(event_payload.get("plannedQty"))
+            planned_price = _positive(event_payload.get("plannedPrice"))
+            if planned_qty and planned_price:
+                plan_amount = planned_qty * planned_price
                 break
     if plan_amount is None or plan_amount <= 0:
         return {"passed": True, "detail": "无建仓计划金额,跳过对账"}
-    deviation = abs(fill_amount - plan_amount) / plan_amount
+
+    build = trade.get("build") or {}
+    filled_before = _positive(build.get("filledAmount")) or 0.0
+    finalize_only = payload.get("finalizeOnly") is True
+    if finalize_only:
+        fill_amount = 0.0
+    else:
+        qty = _positive(payload.get("qty"))
+        price = _positive(payload.get("price"))
+        if not (qty and price):
+            return {"passed": True, "detail": "未提供 fill qty/price,跳过对账"}
+        fill_amount = qty * price
+    cumulative = filled_before + fill_amount
+    deviation = abs(cumulative - plan_amount) / plan_amount
+
+    if payload.get("complete") is not True and not finalize_only:
+        if cumulative <= plan_amount * (1 + _FILL_DEVIATION_THRESHOLD):
+            return {
+                "passed": True,
+                "detail": f"累计成交进度 {cumulative / plan_amount:.1%}，尚未收口",
+            }
     if deviation <= _FILL_DEVIATION_THRESHOLD:
-        return {"passed": True, "detail": f"偏差 {deviation:.1%} ≤ {_FILL_DEVIATION_THRESHOLD:.0%}"}
+        return {"passed": True, "detail": f"累计偏差 {deviation:.1%} ≤ {_FILL_DEVIATION_THRESHOLD:.0%}"}
     reason = _str(payload.get("reconcileReason"))
     if reason:
-        return {"passed": True, "detail": f"偏差 {deviation:.1%} > {_FILL_DEVIATION_THRESHOLD:.0%},已填写对账原因"}
-    return {"passed": False, "detail": f"偏差 {deviation:.1%} > {_FILL_DEVIATION_THRESHOLD:.0%},需填写 reconcileReason"}
+        return {
+            "passed": True,
+            "detail": f"累计偏差 {deviation:.1%} > {_FILL_DEVIATION_THRESHOLD:.0%},已填写对账原因",
+        }
+    return {
+        "passed": False,
+        "detail": f"累计偏差 {deviation:.1%} > {_FILL_DEVIATION_THRESHOLD:.0%},需填写 reconcileReason",
+    }
 
 
 _GATE_FUNCS: dict[str, Callable[..., dict[str, Any]]] = {

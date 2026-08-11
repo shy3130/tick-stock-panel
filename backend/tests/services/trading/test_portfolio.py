@@ -1,9 +1,13 @@
 """组合快照纯函数测试 (不依赖真实 provider)。"""
 from __future__ import annotations
 
-from app.services.trading.accounts import read_accounts
-from app.services.trading.models import STATUS_HOLDING, STATUS_CLOSED, STATUS_PLANNED
-from app.services.trading.portfolio import compute_snapshot
+import json
+from datetime import date, timedelta
+
+import polars as pl
+
+from app.services.trading.models import STATUS_BUILDING, STATUS_CLOSED, STATUS_HOLDING, STATUS_PLANNED
+from app.services.trading.portfolio import compute_risk_snapshot, compute_snapshot
 
 
 def _trade(symbol="600519.SH", qty=100, cost=1680.0, realized=0.0, stop=1600.0, status=STATUS_HOLDING, name="贵州茅台"):
@@ -23,7 +27,7 @@ def _accounts(capital=500000.0, ratio=0.25):
     return {"accounts": [{
         "id": "default", "currency": "CNY",
         "capital": capital, "horizonFundMonths": 12,
-        "maxSingleRatio": ratio, "changes": [],
+        "maxSingleRatio": ratio, "changes": [], "settlements": [],
     }]}
 
 
@@ -60,6 +64,40 @@ def test_non_holding_trades_excluded_from_positions():
     assert snap["positions"] == []
     assert snap["priceSource"] == "无持仓"
 
+
+
+def test_building_trade_is_position_and_only_remaining_plan_is_pending():
+    trade = _trade(qty=40, cost=100.0, status=STATUS_BUILDING)
+    trade["plan"] = {"total": 10000.0}
+    trade["build"] = {"filledAmount": 4000.0, "filledQty": 40, "fillCount": 1}
+    snap = compute_snapshot([trade], _accounts(capital=50000), prices={"600519.SH": 110.0})
+    assert len(snap["positions"]) == 1
+    assert snap["positions"][0]["status"] == STATUS_BUILDING
+    assert snap["pendingPlansAmount"] == 6000.0
+    assert snap["available"] == 50000 + 400 - 4400 - 6000
+
+
+def test_planned_trade_reserves_full_plan_amount():
+    trade = _trade(qty=0, cost=0, status=STATUS_PLANNED)
+    trade["plan"] = {"qty": 100, "price": 20, "total": 2000.0}
+    snap = compute_snapshot([trade], _accounts(capital=10000), prices={})
+    assert snap["pendingPlansAmount"] == 2000.0
+    assert snap["available"] == 8000.0
+
+
+def test_settled_realized_pnl_is_not_counted_twice():
+    trade = _trade(status=STATUS_CLOSED, realized=1200.0)
+    accounts = _accounts(capital=501200.0)
+    accounts["accounts"][0]["settlements"] = [{
+        "id": f"settle:{trade['tradeId']}",
+        "tradeId": trade["tradeId"],
+        "realizedPnl": 1200.0,
+    }]
+    snap = compute_snapshot([trade], accounts, prices={})
+    assert snap["capital"] == 501200.0
+    assert snap["realizedPnl"] == 0.0
+    assert snap["settledRealizedPnl"] == 1200.0
+    assert snap["nav"] == 501200.0
 
 # ── 敞口 / 止损距离 ──────────────────────────────────────
 def test_exposure_ratio():
@@ -162,3 +200,68 @@ def test_multiple_accounts_capital_summed():
     assert snap["capital"] == 500000.0
     # maxSingleRatio 取首个账户
     assert snap["maxSingleRatio"] == 0.25
+
+
+class _RiskRepo:
+    def __init__(self, closes: dict[str, list[float]]):
+        self.closes = closes
+
+    def get_daily_asset(self, asset_type, symbol, start, end, columns):
+        values = self.closes.get(symbol)
+        if values is None:
+            return pl.DataFrame()
+        dates = [date(2026, 1, 1) + timedelta(days=i) for i in range(len(values))]
+        return pl.DataFrame({"symbol": [symbol] * len(values), "date": dates, "close": values})
+
+
+def test_risk_snapshot_is_deterministic_and_json_safe():
+    closes = {
+        "600519.SH": [100 + i * 0.5 + (i % 3) for i in range(50)],
+        "000001.SZ": [80 + i * 0.2 - (i % 4) * 0.3 for i in range(50)],
+    }
+    trades = [
+        _trade(symbol="600519.SH", qty=100, cost=100),
+        _trade(symbol="000001.SZ", qty=200, cost=80),
+    ]
+    result = compute_risk_snapshot(
+        _RiskRepo(closes),
+        trades,
+        lookback_days=40,
+        end=date(2026, 3, 1),
+        min_observations=20,
+    )
+    assert result["status"] == "ok"
+    assert result["source"] == "canonical_kline_daily"
+    assert result["observations"] == 40
+    assert result["metrics"]["annualizedVolatility"] is not None
+    assert result["metrics"]["maxDrawdown"] <= 0
+    assert abs(sum(row["weight"] for row in result["positions"]) - 1.0) < 1e-5
+    contributions = [row["riskContribution"] for row in result["positions"]]
+    assert all(value is not None for value in contributions)
+    assert abs(sum(contributions) - 1.0) < 1e-5
+    json.dumps(result, allow_nan=False)
+
+
+def test_risk_snapshot_flat_series_uses_null_not_nan():
+    trades = [_trade(symbol="600519.SH", qty=100, cost=100)]
+    result = compute_risk_snapshot(
+        _RiskRepo({"600519.SH": [100.0] * 30}),
+        trades,
+        lookback_days=25,
+        end=date(2026, 3, 1),
+        min_observations=20,
+    )
+    assert result["status"] == "ok"
+    assert result["metrics"]["annualizedVolatility"] == 0.0
+    assert result["positions"][0]["riskContribution"] is None
+    assert result["correlation"]["matrix"] == [[None]]
+    json.dumps(result, allow_nan=False)
+
+
+def test_risk_snapshot_without_positions_is_explicit():
+    result = compute_risk_snapshot(
+        _RiskRepo({}),
+        [_trade(status=STATUS_PLANNED, qty=0)],
+    )
+    assert result["status"] == "no_positions"
+    assert result["degraded"] is False

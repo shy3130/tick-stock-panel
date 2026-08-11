@@ -8,8 +8,8 @@
  *   账户      资金账户编辑 + 追加资金变更(只追加, 不改历史)
  *   桥接规划  信号 → 交易软件的后续接入规划(占位保留)
  *
- * 后端语义 (api/trading*.py + services/trading/*):
- *   计划中允许 prepare/revise/fill; 持仓中允许 add/tp/sl/adjust/close; 已平仓只读。
+ *   计划中允许 prepare/revise/fill/void; 建仓中允许分批 fill、add/trim 与仓位管理;
+ *   持仓中允许 add→fill/tp/sl/adjust/close; 已平仓/已作废只读。
  *   事件提交 payload={kind,payload,note?,gate?}; 门禁预检未过时展示红线清单,
  *   用户确认后带 gate:{confirmed:true} 重提(绕门留痕)。
  */
@@ -40,6 +40,7 @@ import {
   tradingGetPlanCheck,
   tradingGetPlanDeviation,
   tradingGetPortfolio,
+  tradingGetPortfolioRisk,
   tradingGetPlanCheckContinuity,
   tradingGetTrade,
   tradingListTrades,
@@ -84,8 +85,9 @@ const TD_NUM = 'text-right font-mono tabular-nums'
 type AppendKind = TradingAppendEventPayload['kind']
 
 const KIND_LABEL: Record<TradeEventKind, string> = {
-  open: '建仓', prepare: '建仓准备', revise: '修订计划', fill: '确认成交',
-  add: '加仓', tp: '止盈', sl: '止损', adjust: '调整规则', close: '平仓',
+  open: '建仓', prepare: '建仓准备', revise: '修订计划', fill: '记录成交',
+  add: '调大计划', trim: '缩减计划', tp: '止盈', sl: '止损',
+  adjust: '调整规则', close: '平仓', void: '作废计划',
 }
 
 const KIND_BADGE: Record<TradeEventKind, string> = {
@@ -94,23 +96,29 @@ const KIND_BADGE: Record<TradeEventKind, string> = {
   revise: 'bg-muted/10 text-muted',
   fill: 'bg-accent/10 text-accent',
   add: 'bg-accent/10 text-accent',
+  trim: 'bg-warning/10 text-warning',
   tp: 'bg-warning/10 text-warning',
   sl: 'bg-danger/10 text-danger',
   adjust: 'bg-warning/10 text-warning',
   close: 'bg-danger/10 text-danger',
+  void: 'bg-muted/10 text-muted',
 }
 
-/** 状态机允许录入的事件 (lifecycle.py: 已平仓终态拒绝一切写入) */
+/** 状态机允许录入的事件；终态拒绝后续写入 */
 const ALLOWED_KINDS: Record<TradeStatus, AppendKind[]> = {
-  计划中: ['prepare', 'revise', 'fill'],
-  持仓中: ['add', 'tp', 'sl', 'adjust', 'close'],
+  计划中: ['prepare', 'revise', 'fill', 'void'],
+  建仓中: ['fill', 'add', 'trim', 'tp', 'sl', 'adjust', 'close'],
+  持仓中: ['add', 'fill', 'tp', 'sl', 'adjust', 'close'],
   已平仓: [],
+  已作废: [],
 }
 
 const STATUS_BADGE: Record<TradeStatus, string> = {
   计划中: 'bg-accent/10 text-accent',
+  建仓中: 'bg-accent/10 text-accent',
   持仓中: 'bg-warning/10 text-warning',
   已平仓: 'bg-muted/10 text-muted',
+  已作废: 'bg-muted/10 text-muted',
 }
 
 const ACTION_LABEL: Record<PlanAction, string> = {
@@ -325,6 +333,8 @@ function PositionsPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void
         <div className="panel px-5 py-8 text-center text-sm text-muted">组合快照不可用。</div>
       )}
 
+      <PortfolioRiskPanel />
+
       {/* fhold 真实券商持仓 */}
       {pf && <FholdTable pf={pf} />}
 
@@ -333,7 +343,7 @@ function PositionsPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void
         title="生命周期交易"
         extra={(
           <div className="flex items-center gap-0.5">
-            {(['全部', '计划中', '持仓中', '已平仓'] as const).map(f => (
+            {(['全部', '计划中', '建仓中', '持仓中', '已平仓', '已作废'] as const).map(f => (
               <button
                 key={f}
                 onClick={() => setStatusFilter(f)}
@@ -439,6 +449,116 @@ function PortfolioHeader({ pf }: { pf: PortfolioSnapshot }) {
         ))}
       </div>
     </div>
+  )
+}
+
+/** canonical 日 K 驱动的确定性组合风险透视；前端只展示后端计算结果 */
+function PortfolioRiskPanel() {
+  const riskQuery = useQuery({
+    queryKey: ['trading-portfolio-risk', 120],
+    queryFn: () => tradingGetPortfolioRisk(120),
+  })
+  const risk = riskQuery.data
+  if (riskQuery.isLoading) {
+    return <div className="panel px-5 py-6 text-center text-xs text-muted">计算组合风险中…</div>
+  }
+  if (!risk) {
+    return <div className="panel px-5 py-6 text-center text-xs text-muted">组合风险暂不可用。</div>
+  }
+  if (risk.status === 'no_positions') {
+    return (
+      <SectionCard title="组合风险透视">
+        <p className="py-4 text-center text-xs text-muted">暂无真实持仓，不计算组合风险。</p>
+      </SectionCard>
+    )
+  }
+
+  const metrics = [
+    { label: '年化波动', value: risk.metrics.annualizedVolatility == null ? '—' : fmtPct(risk.metrics.annualizedVolatility) },
+    { label: '静态最大回撤', value: risk.metrics.maxDrawdown == null ? '—' : fmtPct(risk.metrics.maxDrawdown) },
+    { label: '最高两两相关', value: risk.metrics.maxPairCorrelation == null ? '—' : risk.metrics.maxPairCorrelation.toFixed(2) },
+    { label: '有效持仓数', value: risk.metrics.effectivePositions == null ? '—' : risk.metrics.effectivePositions.toFixed(2) },
+    { label: '最大单仓权重', value: risk.metrics.topWeight == null ? '—' : fmtPct(risk.metrics.topWeight) },
+  ]
+
+  return (
+    <SectionCard
+      title="组合风险透视"
+      extra={(
+        <span className="text-[10px] text-muted">
+          canonical 日 K · {risk.observations} 个共同样本 · 截至 {risk.dataAsOf ?? '—'}
+        </span>
+      )}
+    >
+      {(risk.degraded || risk.status === 'insufficient_data') && (
+        <div className="mb-3 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+          {risk.status === 'insufficient_data' ? '共同样本不足，风险指标暂不下结论。' : '部分持仓数据缺失，结果已降级。'}
+          {risk.meta.warnings.length > 0 && <span className="ml-1">{risk.meta.warnings.join('；')}</span>}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+        {metrics.map(metric => (
+          <div key={metric.label} className="rounded-md border border-border/50 bg-elevated/30 p-2.5">
+            <div className="text-[10px] text-muted">{metric.label}</div>
+            <div className="metric-value mt-1 text-sm">{metric.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {risk.positions.length > 0 && (
+        <div className="mt-3 data-table-scroll">
+          <table className="data-table min-w-[560px]">
+            <thead>
+              <tr>
+                <th className={TH}>标的</th>
+                <th className={cn(TH, 'text-right')}>组合权重</th>
+                <th className={cn(TH, 'text-right')}>年化波动</th>
+                <th className={cn(TH, 'text-right')}>风险贡献</th>
+              </tr>
+            </thead>
+            <tbody>
+              {risk.positions.map(position => (
+                <tr key={position.symbol}>
+                  <td className={cn(TD, 'font-mono text-foreground')}>{position.symbol}</td>
+                  <td className={TD_NUM}>{fmtPct(position.weight)}</td>
+                  <td className={TD_NUM}>{position.annualizedVolatility == null ? '—' : fmtPct(position.annualizedVolatility)}</td>
+                  <td className={TD_NUM}>{position.riskContribution == null ? '—' : fmtPct(position.riskContribution)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {risk.correlation.matrix.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 text-[10px] font-medium text-secondary">收益相关性矩阵</div>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th className={TH}>标的</th>
+                  {risk.correlation.symbols.map(symbol => <th key={symbol} className={cn(TH, 'text-right font-mono')}>{symbol}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {risk.correlation.symbols.map((symbol, rowIndex) => (
+                  <tr key={symbol}>
+                    <td className={cn(TD, 'font-mono text-foreground')}>{symbol}</td>
+                    {risk.correlation.matrix[rowIndex]?.map((value, colIndex) => (
+                      <td key={`${symbol}-${risk.correlation.symbols[colIndex]}`} className={TD_NUM}>
+                        {value == null ? '—' : value.toFixed(2)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <p className="mt-3 text-[10px] leading-relaxed text-muted">{risk.methodology}</p>
+    </SectionCard>
   )
 }
 
@@ -644,13 +764,31 @@ function TradeFactsCard({ trade }: { trade: Trade }) {
     { label: '已实现盈亏', value: <span className={cn('font-mono', priceColorClass(trade.realizedPnl))}>{fmtMoney(trade.realizedPnl)}</span> },
     { label: '建仓时间', value: trade.createdAt },
     { label: '平仓时间', value: trade.closedAt ?? '—' },
+    { label: '作废时间', value: trade.voidedAt ?? '—' },
   ]
   if (trade.plan) {
     items.push({
       label: '建仓计划',
       value: (
         <span className="font-mono">
-          {trade.plan.qty != null ? fmtQty(trade.plan.qty) : '—'} 股 @ {fmtPrice(trade.plan.price)}
+          {trade.plan.qty != null ? `${fmtQty(trade.plan.qty)} 股` : '—'}
+          {trade.plan.price != null ? ` @ ${fmtPrice(trade.plan.price)}` : ''}
+          {trade.plan.total != null ? ` / ${fmtMoney(trade.plan.total)}` : ''}
+        </span>
+      ),
+    })
+  }
+  if (trade.build) {
+    const total = trade.plan?.total
+    const progress = total && total > 0 ? Math.min(100, trade.build.filledAmount / total * 100) : null
+    items.push({
+      label: '建仓进度',
+      value: (
+        <span className="font-mono">
+          {fmtMoney(trade.build.filledAmount)}
+          {total != null ? ` / ${fmtMoney(total)}` : ''}
+          {progress != null ? ` (${progress.toFixed(1)}%)` : ''}
+          {` · ${trade.build.fillCount} 批`}
         </span>
       ),
     })
@@ -738,7 +876,11 @@ function EventForm({ trade }: { trade: Trade }) {
   const [stopLoss, setStopLoss] = useState('')
   const [newStopLoss, setNewStopLoss] = useState('')
   const [newExitRule, setNewExitRule] = useState('')
-  const [planOnly, setPlanOnly] = useState(false)
+  const [newTotal, setNewTotal] = useState('')
+  const [planReason, setPlanReason] = useState('')
+  const [complete, setComplete] = useState(false)
+  const [finalizeOnly, setFinalizeOnly] = useState(false)
+  const [voidReason, setVoidReason] = useState('')
   const [note, setNote] = useState('')
   const [gateFail, setGateFail] = useState<GateEvaluation | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -752,8 +894,8 @@ function EventForm({ trade }: { trade: Trade }) {
 
   const resetFields = () => {
     setQty(''); setPrice(''); setPlannedQty(''); setPlannedPrice('')
-    setStopLoss(''); setNewStopLoss(''); setNewExitRule('')
-    setPlanOnly(false); setNote('')
+    setStopLoss(''); setNewStopLoss(''); setNewExitRule(''); setNewTotal(''); setPlanReason('')
+    setComplete(false); setFinalizeOnly(false); setVoidReason(''); setNote('')
   }
 
   const evalMut = useMutation({ mutationFn: tradingEvaluateGates })
@@ -763,6 +905,7 @@ function EventForm({ trade }: { trade: Trade }) {
       qc.invalidateQueries({ queryKey: ['trading-trade', trade.tradeId] })
       qc.invalidateQueries({ queryKey: ['trading-trades'] })
       qc.invalidateQueries({ queryKey: ['trading-portfolio'] })
+      qc.invalidateQueries({ queryKey: ['trading-accounts'] })
       qc.invalidateQueries({ queryKey: ['trading-plan-deviation'] })
       toast('事件已录入', 'success')
       resetFields()
@@ -774,7 +917,9 @@ function EventForm({ trade }: { trade: Trade }) {
   if (allowed.length === 0) {
     return (
       <SectionCard title="事件录入">
-        <p className="py-3 text-center text-xs text-muted">该笔交易已平仓归档, 拒绝任何后续写入。</p>
+        <p className="py-3 text-center text-xs text-muted">
+          该笔交易已{trade.status === '已作废' ? '作废' : '平仓'}归档，拒绝任何后续写入。
+        </p>
       </SectionCard>
     )
   }
@@ -786,15 +931,28 @@ function EventForm({ trade }: { trade: Trade }) {
       if (q) p.plannedQty = q
       if (pr) p.plannedPrice = pr
       if (s) p.stopLoss = s
+    } else if (kind === 'fill') {
+      p.complete = complete || finalizeOnly
+      p.finalizeOnly = finalizeOnly
+      if (!finalizeOnly) {
+        const q = posNum(qty); const pr = posNum(price)
+        if (q) p.qty = q
+        if (pr) p.price = pr
+      }
+    } else if (kind === 'add' || kind === 'trim') {
+      const total = posNum(newTotal)
+      if (total) p.newTotal = total
+      if (kind === 'trim' && planReason.trim()) p.reason = planReason.trim()
     } else if (kind === 'adjust') {
       const s = posNum(newStopLoss)
       if (s) p.newStopLoss = s
       if (newExitRule.trim()) p.newExitRule = newExitRule.trim()
+    } else if (kind === 'void') {
+      if (voidReason.trim()) p.reason = voidReason.trim()
     } else {
       const q = posNum(qty); const pr = posNum(price)
       if (q) p.qty = q
       if (pr) p.price = pr
-      if (kind === 'add' && planOnly) p.planOnly = true
     }
     return p
   }
@@ -804,12 +962,19 @@ function EventForm({ trade }: { trade: Trade }) {
       if (p.plannedQty == null && p.plannedPrice == null && p.stopLoss == null) {
         return '至少填写 计划股数 / 计划价格 / 止损 中的一项。'
       }
+    } else if (kind === 'fill') {
+      if (!finalizeOnly && (p.qty == null || p.price == null)) return '请填写本批成交数量与价格。'
+    } else if (kind === 'add' || kind === 'trim') {
+      if (p.newTotal == null) return '请填写调整后的计划总额。'
+      if (kind === 'trim' && p.reason == null) return '缩减计划必须填写原因。'
     } else if (kind === 'adjust') {
       if (p.newStopLoss == null && p.newExitRule == null) return 'adjust 必须提供 newStopLoss 或 newExitRule。'
     } else if (kind === 'close') {
       if (p.price == null) return '请填写平仓价格。'
-    } else {
-      if (p.qty == null || p.price == null) return '请填写数量与价格(正数)。'
+    } else if (kind === 'void') {
+      if (p.reason == null) return '作废计划必须填写原因。'
+    } else if (p.qty == null || p.price == null) {
+      return '请填写数量与价格(正数)。'
     }
     return null
   }
@@ -832,7 +997,7 @@ function EventForm({ trade }: { trade: Trade }) {
     if (v) { setErr(v); return }
     try {
       const ev = await evalMut.mutateAsync({
-        mode: kind === 'fill' ? 'buy_new' : kind,
+        mode: kind,
         tradeId: trade.tradeId,
         payload,
       })
@@ -844,7 +1009,7 @@ function EventForm({ trade }: { trade: Trade }) {
   }
 
   const busy = evalMut.isPending || appendMut.isPending
-  const showQtyPrice = kind === 'fill' || kind === 'add' || kind === 'tp' || kind === 'sl'
+  const showQtyPrice = kind === 'fill' || kind === 'tp' || kind === 'sl'
   const showPlanLeg = kind === 'prepare' || kind === 'revise'
 
   return (
@@ -884,24 +1049,74 @@ function EventForm({ trade }: { trade: Trade }) {
           </div>
         )}
         {showQtyPrice && (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <label className="block">
-              <span className="mb-1 block text-[10px] text-muted">数量 qty *</span>
-              <input value={qty} onChange={e => setQty(e.target.value)} inputMode="decimal" className={cn(INPUT, 'w-full font-mono')} />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[10px] text-muted">价格 price *</span>
-              <input value={price} onChange={e => setPrice(e.target.value)} inputMode="decimal" className={cn(INPUT, 'w-full font-mono')} />
-            </label>
-            {kind === 'add' && (
-              <label className="col-span-2 flex items-end gap-2 pb-1.5">
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-3 md:max-w-md">
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-muted">本批数量 qty *</span>
                 <input
-                  type="checkbox"
-                  checked={planOnly}
-                  onChange={e => setPlanOnly(e.target.checked)}
-                  className="h-3.5 w-3.5 accent-[hsl(var(--accent))]"
+                  value={qty}
+                  onChange={e => setQty(e.target.value)}
+                  inputMode="decimal"
+                  disabled={kind === 'fill' && finalizeOnly}
+                  className={cn(INPUT, 'w-full font-mono')}
                 />
-                <span className="text-xs text-secondary">仅记录加仓计划(planOnly, 不改变仓位事实)</span>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-muted">本批价格 price *</span>
+                <input
+                  value={price}
+                  onChange={e => setPrice(e.target.value)}
+                  inputMode="decimal"
+                  disabled={kind === 'fill' && finalizeOnly}
+                  className={cn(INPUT, 'w-full font-mono')}
+                />
+              </label>
+            </div>
+            {kind === 'fill' && (
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-2 text-xs text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={complete}
+                    disabled={finalizeOnly}
+                    onChange={e => setComplete(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[hsl(var(--accent))]"
+                  />
+                  本批后完成建仓（complete）
+                </label>
+                {trade.status === '建仓中' && (
+                  <label className="flex items-center gap-2 text-xs text-secondary">
+                    <input
+                      type="checkbox"
+                      checked={finalizeOnly}
+                      onChange={e => {
+                        setFinalizeOnly(e.target.checked)
+                        if (e.target.checked) setComplete(true)
+                      }}
+                      className="h-3.5 w-3.5 accent-[hsl(var(--accent))]"
+                    />
+                    不新增成交，仅收口（finalizeOnly）
+                  </label>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {(kind === 'add' || kind === 'trim') && (
+          <div className="grid gap-3 md:max-w-xl md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-[10px] text-muted">
+                调整后计划总额 newTotal *
+              </span>
+              <input value={newTotal} onChange={e => setNewTotal(e.target.value)} inputMode="decimal" className={cn(INPUT, 'font-mono')} />
+              <span className="mt-1 block text-[10px] text-muted">
+                只调整建仓计划，不直接改变真实持仓。
+              </span>
+            </label>
+            {kind === 'trim' && (
+              <label className="block">
+                <span className="mb-1 block text-[10px] text-muted">缩减原因 reason *</span>
+                <input value={planReason} onChange={e => setPlanReason(e.target.value)} className={INPUT} />
               </label>
             )}
           </div>
@@ -922,6 +1137,12 @@ function EventForm({ trade }: { trade: Trade }) {
           <label className="block max-w-48">
             <span className="mb-1 block text-[10px] text-muted">平仓价格 price *</span>
             <input value={price} onChange={e => setPrice(e.target.value)} inputMode="decimal" className={cn(INPUT, 'w-full font-mono')} />
+          </label>
+        )}
+        {kind === 'void' && (
+          <label className="block">
+            <span className="mb-1 block text-[10px] text-muted">作废原因 reason *</span>
+            <input value={voidReason} onChange={e => setVoidReason(e.target.value)} placeholder="记录为何取消这份零成交计划" className={cn(INPUT, 'w-full')} />
           </label>
         )}
 

@@ -18,7 +18,7 @@ import logging
 
 import polars as pl
 
-from app.data_providers.fquant.mapping import _to_float
+from app.json_safe import finite_float_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +53,13 @@ def compute_ex_factor_from_xdxr(
 
     for ev in sorted_events:
         category = ev.get("category")
-        if category is not None and int(_to_float(category) or 0) != 1:
+        if category is not None and int(finite_float_or_none(category) or 0) != 1:
             continue
 
-        fenhong = _to_float(ev.get("fenhong")) or 0.0
-        fenshu = _to_float(ev.get("fenshu")) or 0.0
-        songzhuangu = _to_float(ev.get("songzhuangu")) or 0.0
-        peigu = _to_float(ev.get("peigu")) or 0.0
+        fenhong = finite_float_or_none(ev.get("fenhong")) or 0.0
+        fenshu = finite_float_or_none(ev.get("fenshu")) or 0.0
+        songzhuangu = finite_float_or_none(ev.get("songzhuangu")) or 0.0
+        peigu = finite_float_or_none(ev.get("peigu")) or 0.0
 
         if fenhong <= 0 and fenshu <= 0 and songzhuangu <= 0 and peigu <= 0:
             continue

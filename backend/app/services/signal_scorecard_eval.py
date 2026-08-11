@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from app.json_safe import finite_float_or_none
 from app.services.signal_scorecard_store import NEUTRAL_BAND_PCT
 
 # 前向窗口查询所需的 OHLC 列 (均为 ENRICHED_STORAGE_COLS, 走快速扫描路径)。
@@ -87,10 +88,10 @@ def compute_forward_window(
         d = rec.get("date")
         rows.append({
             "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
-            "open": _to_float(rec.get("open")),
-            "high": _to_float(rec.get("high")),
-            "low": _to_float(rec.get("low")),
-            "close": _to_float(rec.get("close")),
+            "open": finite_float_or_none(rec.get("open")),
+            "high": finite_float_or_none(rec.get("high")),
+            "low": finite_float_or_none(rec.get("low")),
+            "close": finite_float_or_none(rec.get("close")),
         })
     # 兜底: 若 OHLC 列缺失则不影响结构 (字段为 None)
     _ = cols_present
@@ -197,15 +198,3 @@ def _unable(reason: str, direction: str) -> dict[str, Any]:
         "stock_return_pct": None,
         "unable_reason": reason,
     }
-
-
-def _to_float(v: Any) -> float | None:
-    if v is None:
-        return None
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    if f != f:  # NaN
-        return None
-    return f

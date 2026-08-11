@@ -53,11 +53,11 @@
 ```mermaid
 graph TD
   subgraph 新增 trading 域
-    TP[交易计划 trade_plans] --> TL[生命周期 trade_lifecycle<br/>open→prepare→fill→add/tp/sl/adjust→close]
+    TP[交易计划 trade_plans] --> TL[生命周期 trade_lifecycle<br/>open→prepare/revise→分批 fill→add/trim→tp/sl/adjust→close/void]
     TL --> EV[事件流 trade_events.jsonl<br/>append-only]
     GATE[门禁 gate_engine<br/>结构红线 + rules 配置] --> TL
     GATE --> AUD[决策审计 decision_audit.jsonl<br/>拦截/放行均留痕]
-    ACC[账户 accounts.json] --> SNAP[组合快照 portfolio snapshot<br/>provider 实时估值]
+    ACC[账户 accounts.json] --> SNAP[组合快照 portfolio snapshot<br/>provider 实时估值 + canonical K 风险]
     TL --> SNAP
     EV --> RF[红旗检测 red_flags<br/>放宽止损/亏损加仓/绕过门禁]
     AUD --> RF
@@ -122,7 +122,7 @@ P0 → P1 → P2 串行；P3 在 P0 之后即可启动；P4 完全独立；P6 �
 **事件**（只追加，写单笔文件的同时追加到事件流；事件是唯一历史源，单笔文件是缓存投影）：
 
 ```json
-{ "schemaVersion": 1, "tradeId": "...", "kind": "open|prepare|revise|fill|add|tp|sl|adjust|close",
+{ "schemaVersion": 1, "tradeId": "...", "kind": "open|prepare|revise|fill|add|trim|tp|sl|adjust|close|void",
   "ts": "2026-08-04 14:30", "payload": { "...kind 相关字段..." }, "note": "自由文本" }
 ```
 
@@ -130,11 +130,12 @@ P0 → P1 → P2 串行；P3 在 P0 之后即可启动；P4 完全独立；P6 �
 |---|---|---|
 | `open` | 建档：论点 + 失效信号 | thesis.invalidation 必填（可观察反证，不能是"我觉得不好"） |
 | `prepare` / `revise` | 建仓准备 / 成交前修订 | 不改变 position 事实 |
-| `fill` | 确认成交（**只能一次**） | 必须已有 prepare/revise；qty>0、price>0；服务端重算 invested=qty×price；状态→持仓中 |
-| `add` | 加仓计划或加仓成交（`planOnly: bool`） | 仅持仓中；planOnly=false 时服务端重算 qty/成本均价 |
+| `fill` | 确认一次部分或最终建仓成交 | 必须已有 prepare/revise；qty>0、price>0；服务端累计 qty 与成本；`complete/finalizeOnly` 显式收口前状态保持建仓中，收口后→持仓中 |
+| `add` / `trim` | 调整建仓计划总额 | `add` 可在建仓中或持仓中调大计划（持仓中会重回建仓中）；`trim` 仅建仓中且须给原因；`newTotal` 不得低于已成交金额；二者只改变计划，不改变 position |
 | `tp` / `sl` | 止盈 / 止损卖出 | 仅持仓中且已有 fill；0<sellQty≤当前 qty；服务端重算剩余 qty 与剩余成本 |
 | `adjust` | 调整止损 / 逻辑退出 | 记录 oldRule→newRule（红旗检测输入） |
-| `close` | 全部平仓 | 必须卖完全部剩余；状态→已平仓；之后拒绝一切写入 |
+| `close` | 全部平仓 | 必须卖完全部剩余；状态→已平仓；账户按 `tradeId` 幂等结转；之后拒绝一切写入 |
+| `void` | 作废零成交计划 | 仅计划中且累计成交为 0；状态→已作废；之后拒绝一切写入 |
 
 ### 3.2 决策审计
 
@@ -163,13 +164,13 @@ P0 → P1 → P2 串行；P3 在 P0 之后即可启动；P4 完全独立；P6 �
 | `models.py` | TradeEvent / Trade / AuditEntry dataclass + kind 枚举 |
 | `store.py` | 单笔文件读写 + 事件流/审计流追加（线程锁，参照 `alert_store.py`） |
 | `lifecycle.py` | 状态机校验（上表全部规则），纯函数便于测试 |
-| `audit.py` | 审计写入与查询 |
+| `audit.py` | 原设计项；实际审计读写已并入 `store.py`，不再存在独立文件 |
 
 新增 `backend/app/api/trading.py`：
 
 ```
 POST   /api/trading/trades                 建档(open)
-POST   /api/trading/trades/{id}/events     追加事件(prepare/fill/add/tp/sl/adjust/close)
+POST   /api/trading/trades/{id}/events     追加事件(prepare/revise/fill/add/trim/tp/sl/adjust/close/void)
 GET    /api/trading/trades?status=         列表
 GET    /api/trading/trades/{id}            详情(当前事实+事件时间线)
 GET    /api/trading/audit?tradeId=&passed= 审计查询
@@ -179,8 +180,8 @@ GET    /api/trading/audit?tradeId=&passed= 审计查询
 
 ### 3.4 验收
 
-- 状态机全路径单测：open→prepare→fill→tp→close；非法迁移（重复 fill、未 fill 就 tp、close 后再写）全部 400。
-- 审计断链测试：任何成交事件必有对应审计记录。
+- 状态机全路径单测：open→prepare→分批 fill→完成→tp→close；计划 add/trim、零成交 void、终态后写入、超计划成交等边界均有行为回归。
+- 审计断链测试：任何成交事件必有对应审计记录；close 重试不会重复事件、审计或账户结转。
 
 ---
 
@@ -216,14 +217,16 @@ health     = normal | attention | critical（敞口超 maxSingleRatio、止损�
 
 估值走 `_get_data_provider().get_realtime(symbols)`；realtime 不可用时 capabilities 门控降级为 `price: null` + `stale: true`，不把过期收盘价伪装成实时数据。真实券商持仓另通过 `services/trading/fhold_client.py` 只读调用 `fhold-cli --format json` 获取，写入快照的 `fhold` 分区；CLI 不可用或超时时 `available: false`，不阻断生命周期持仓快照。
 
+`GET /api/trading/portfolio/risk` 只读取建仓中/持仓中的真实敞口与 canonical 日 K，后端计算年化波动、最大回撤、最大两两相关性、有效持仓数、风险贡献和相关性矩阵。共同样本不足、平坦序列或空组合返回明确 `status`/`warnings` 与 `null`，不返回 `NaN/±Inf`，前端只展示不重算。
+
 ### 4.3 前端
 
-持仓页：账户卡片（NAV/可用/待建）+ 生命周期持仓表格（盈亏、敞口、止损距离、失效信号）+ fhold 真实券商持仓表（账户、股数、成本、现价、持仓盈亏）+ health 徽标。
+持仓页：账户卡片（NAV/可用/待建）+ 生命周期持仓表格（含计划中/建仓中/持仓中/已平仓/已作废状态）+ 后端组合风险透视 + fhold 真实券商持仓表（账户、股数、成本、现价、持仓盈亏）+ health 徽标。
 
 ### 4.4 验收
 
-- NAV 口径与台账 FIFO 结果对账一致（用现有 `ledger.json` 样例数据交叉验证）。
-- realtime 源断开时页面显示 stale 标记而非报错。
+- 分批 fill 的累计成本、平仓资金结转和请求重试幂等；账户文件只追加 settlement/changes。
+- realtime 源断开时页面显示 stale 标记而非报错；组合风险无样本时显示原因和 warning，不伪造数值。
 
 ---
 
@@ -407,8 +410,8 @@ health     = normal | attention | critical（敞口超 maxSingleRatio、止损�
 
 | 阶段 | 状态 | 完成日期 | 备注 |
 |---|---|---|---|
-| P0 交易事件流+生命周期+审计 | ✅ 完成 | 2026-08-04 | `services/trading/` + `api/trading.py`,审计读写并入 store.py 无独立 audit.py |
-| P1 账户+组合快照+持仓页 | ✅ 完成 | 2026-08-04 | `accounts.py` + `portfolio.py` + `fhold_client.py`，组合快照含 fhold 真实券商持仓与 fail-soft 降级；前端持仓页已接入 |
+| P0 交易事件流+生命周期+审计 | ✅ 完成（2026-08-10 增强） | 2026-08-04 | `services/trading/` + `api/trading.py`；支持计划中/建仓中/持仓中/已平仓/已作废、分批 fill、计划 add/trim、零成交 void、终态保护和 append-only 审计 |
+| P1 账户+组合快照+持仓页 | ✅ 完成（2026-08-10 增强） | 2026-08-04 | `accounts.py` + `portfolio.py` + `fhold_client.py`；close 按 `tradeId` 幂等结转；组合快照含 fhold fail-soft，新增 canonical 日 K 后端风险透视；前端已接入 |
 | P2 门禁+计划台 | ✅ 完成（2026-08-06 增强） | 2026-08-04 | `gates.py` 五条后端结构红线 + `plans.py` CRUD/deviation（支持 `replace:true` 全量删除）+ 决策台/计划台前端；后续增加默认关闭的两阶段计划检查，保持门禁最终权威且不写交易事实流 |
 | P3 红旗+复盘增强 | ✅ 完成 | 2026-08-04 | 三条机械红旗+审计断链、按读取实时计算、AI 四分类归因、Review 红旗分区、可选 `TRADING_RED_FLAG_WEBHOOK_URL` 去重推送 |
 | P4 策略内核 | ✅ 完成 | 2026-08-04 | 策略 profile/机械体检、回测 `cause_tag`、变更提案状态机与设置页审批/体检 UI |
@@ -420,5 +423,5 @@ health     = normal | attention | critical（敞口超 maxSingleRatio、止损�
 
 ---
 
-**创建日期**：2026-08-04（P0–P5）；P6 追加于 2026-08-04
+**创建日期**：2026-08-04（P0–P5）；P6 追加于 2026-08-04；生命周期与组合风险契约校对于 2026-08-10
 **依据文档**：`fm/YMOS_PROJECTS_GUIDE.md`、`fm/YMOS/Console/TRADE_DATA_CONTRACT.md`、`fm/ymos-diagnosis/skills/ymos-diagnosis/references/`

@@ -15,6 +15,7 @@ import pandas as pd
 import polars as pl
 
 from app.config import settings
+from app.json_safe import json_safe
 from app.storage.atomic_write import atomic_write_parquet
 from app.storage.repository import KlineRepository
 
@@ -384,10 +385,7 @@ def _config_to_dict(c: BacktestConfig) -> dict:
 
 
 def _json_safe(v):
-    if isinstance(v, (int, float, str, bool)) or v is None:
-        return v
-    if isinstance(v, (np.floating, np.integer)):
-        return float(v) if not np.isnan(float(v)) else None
-    if hasattr(v, "isoformat"):
-        return v.isoformat()
-    return str(v)
+    safe = json_safe(v)
+    if safe is v and not isinstance(v, (int, float, str, bool, list, dict, tuple, type(None))):
+        return str(v)
+    return safe

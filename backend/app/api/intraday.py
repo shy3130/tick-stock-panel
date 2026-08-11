@@ -16,6 +16,8 @@ import time
 from fastapi import APIRouter, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.json_safe import finite_float_or_none
+
 # 受控外部 fallback (P1 realtime) — 仅只读展示; 绝不写入 repository/enriched。
 from app.services.external_fallback import get_adapter
 
@@ -116,19 +118,21 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
         return []
 
     out: list[dict] = []
-    for symbol, dt, last_price, prev_close in rows:
+    for symbol, dt, raw_last_price, raw_prev_close in rows:
+        last_price = finite_float_or_none(raw_last_price)
+        prev_close = finite_float_or_none(raw_prev_close)
         change_amount = None
         change_pct = None
         if last_price is not None and prev_close not in (None, 0):
-            change_amount = float(last_price) - float(prev_close)
-            change_pct = change_amount / float(prev_close) * 100
+            change_amount = last_price - prev_close
+            change_pct = change_amount / prev_close * 100
         out.append({
             "symbol": symbol,
             "name": None,
             "date": str(dt) if dt else None,
-            "last_price": float(last_price) if last_price is not None else None,
-            "close": float(last_price) if last_price is not None else None,
-            "prev_close": float(prev_close) if prev_close is not None else None,
+            "last_price": last_price,
+            "close": last_price,
+            "prev_close": prev_close,
             "change_amount": change_amount,
             "change_pct": change_pct,
             "source": "index_daily",
@@ -136,13 +140,6 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
     return out
 
 
-def _to_float(value) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _fallback_index_quotes_from_provider(symbols: list[str] | None = None) -> list[dict]:
@@ -164,12 +161,16 @@ def _fallback_index_quotes_from_provider(symbols: list[str] | None = None) -> li
     out: list[dict] = []
     for row in df.to_dicts():
         ext = row.get("ext") or {}
-        last_price = _to_float(row.get("last_price") if row.get("last_price") is not None else row.get("close"))
-        prev_close = _to_float(row.get("prev_close") if row.get("prev_close") is not None else ext.get("prev_close"))
-        change_amount = _to_float(
+        last_price = finite_float_or_none(
+            row.get("last_price") if row.get("last_price") is not None else row.get("close")
+        )
+        prev_close = finite_float_or_none(
+            row.get("prev_close") if row.get("prev_close") is not None else ext.get("prev_close")
+        )
+        change_amount = finite_float_or_none(
             row.get("change_amount") if row.get("change_amount") is not None else ext.get("change_amount")
         )
-        change_pct = _to_float(
+        change_pct = finite_float_or_none(
             row.get("change_pct") if row.get("change_pct") is not None else ext.get("change_pct")
         )
         if change_amount is None and last_price is not None and prev_close not in (None, 0):

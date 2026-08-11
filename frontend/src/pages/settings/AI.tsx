@@ -138,7 +138,8 @@ export function SettingsAIPanel() {
       return api.testAiProfile(editingId)
     },
     onSuccess: result => {
-      setTestResult({ ok: result.ok, msg: result.ok ? `连通成功 · ${result.model ?? form.name}` : (result.error ?? '测试失败') })
+      const latency = result.latency_ms != null ? ` · ${Math.round(result.latency_ms)}ms` : ''
+      setTestResult({ ok: result.ok, msg: result.ok ? `连通成功 · ${result.model ?? form.name}${latency}` : (result.error ?? '测试失败') })
     },
     onError: error => {
       setTestResult({ ok: false, msg: error instanceof Error ? error.message : '测试失败' })

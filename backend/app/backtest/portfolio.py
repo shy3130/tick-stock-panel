@@ -6,8 +6,8 @@ import numpy as np
 import polars as pl
 
 
-def load_price_matrix(repo, symbols: list[str], start: date, end: date) -> tuple[np.ndarray, list[str]]:
-    """Load close prices into a date-aligned [T,N] matrix."""
+def load_price_panel(repo, symbols: list[str], start: date, end: date) -> tuple[pl.DataFrame, list[str]]:
+    """Load canonical closes into a date-aligned frame: ``date`` + symbol columns."""
     from app.api.kline import _asset_type_for_symbol
 
     frames = []
@@ -21,7 +21,7 @@ def load_price_matrix(repo, symbols: list[str], start: date, end: date) -> tuple
             frames.append(df.select(["symbol", "date", "close"]))
 
     if not frames:
-        return np.empty((0, 0), dtype=float), []
+        return pl.DataFrame({"date": []}, schema={"date": pl.Date}), []
 
     wide = (
         pl.concat(frames, how="vertical_relaxed")
@@ -30,6 +30,12 @@ def load_price_matrix(repo, symbols: list[str], start: date, end: date) -> tuple
         .drop_nulls()
     )
     kept = [symbol for symbol in symbols if symbol in wide.columns]
+    return wide.select(["date", *kept]), kept
+
+
+def load_price_matrix(repo, symbols: list[str], start: date, end: date) -> tuple[np.ndarray, list[str]]:
+    """Load close prices into a date-aligned [T,N] matrix."""
+    wide, kept = load_price_panel(repo, symbols, start, end)
     if not kept or wide.height == 0:
         return np.empty((0, len(kept)), dtype=float), kept
     return wide.select(kept).to_numpy().astype(float), kept
