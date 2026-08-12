@@ -353,12 +353,22 @@ export function ConceptAnalysis() {
       </div>
     )
   }
+  const classificationAsOf =
+    activeConfig.latest_sync_date?.slice(0, 10) ??
+    rowsQuery.data?.date ??
+    null
+  const marketAsOf = marketQuery.data?.as_of ?? null
+  const classificationStale =
+    classificationAsOf !== null &&
+    marketAsOf !== null &&
+    classificationAsOf < marketAsOf
+
 
   return (
     <div className="workspace-page">
       <PageHeader
         title="概念分析"
-        subtitle={`${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
+        subtitle={`分类 ${classificationAsOf ?? '未知'} · 行情 ${marketAsOf ?? '未知'} · ${stats.length} 个概念 · ${totalSymbols} 只标的`}
         right={
           <div className="workspace-toolbar">
             {/* RPS 轮动: 打开涨幅轮动矩阵对话框 */}
@@ -386,6 +396,11 @@ export function ConceptAnalysis() {
 
       <div className="workspace-content">
         <div className="mx-auto max-w-[1440px] space-y-3">
+          {classificationStale && (
+            <div className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+              概念分类快照停在 {classificationAsOf}，行情价格截至 {marketAsOf}；统计为旧分类与新行情的组合，请先刷新分类数据再用于当日判断。
+            </div>
+          )}
           <HeroPanel leading={leading[0]} falling={falling[0]} activeConcept={activeConcept} conceptBreadth={conceptBreadth} />
 
           <MarketPulse

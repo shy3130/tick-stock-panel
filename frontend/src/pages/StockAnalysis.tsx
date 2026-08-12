@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell } from 'lucide-react'
+import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
@@ -122,17 +122,6 @@ export function StockAnalysis() {
                 AI 个股分析
               </button>
               <AiProviderSelector entry="stock_analysis" value={profileId} onChange={setProfileId} compact />
-              <button
-                onClick={() => toast('点位提醒功能开发中,敬请期待', 'error')}
-                className="btn-ghost text-xs text-muted"
-                title="当价格触及关键价位时提醒(开发中)"
-              >
-                <Bell className="h-3.5 w-3.5" />
-                点位提醒
-                <span className="rounded-btn bg-warning/15 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-warning">
-                  开发中
-                </span>
-              </button>
             </>
           )}
         </div>
@@ -210,6 +199,10 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
   const isUp = prev ? (last.close >= prev.close) : (last.close >= last.open)
   const selectedIdx = selectedDate ? rows.findIndex(r => r.date === selectedDate) : -1
   const prevClose = selectedIdx > 0 ? rows[selectedIdx - 1].close : undefined
+  const sourceLabel = kline.data?.source === 'local_disk'
+    ? '本地 DuckDB'
+    : (kline.data?.source ?? '来源未知')
+  const adjustmentLabel = kline.data?.adjustment ? ` · ${kline.data.adjustment}` : ''
 
   return (
     <div className="rounded-card border border-border/60 bg-surface/40 overflow-hidden">
@@ -219,13 +212,16 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
             <LineChart className="h-4 w-4 text-sky-400 shrink-0" />
             <span className="text-sm font-medium text-foreground">关键价位分析</span>
           </div>
-          <div className="flex items-baseline gap-2 shrink-0">
-            <span className="text-[10px] text-muted">{rows.length} 个交易日</span>
-            <span className="text-[10px] text-muted/60">·</span>
-            <span className="text-[10px] text-muted">当前价</span>
-            <span className={`text-base font-mono font-bold ${isUp ? 'text-bull' : 'text-bear'}`}>
-              {curClose?.toFixed(2) ?? '—'}
+          <div className="flex shrink-0 flex-col items-end gap-0.5">
+            <span className="text-[10px] text-muted">
+              {rows.length} 个交易日 · 截至 {last.date} · {sourceLabel}{adjustmentLabel}
             </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-[10px] text-muted">当前价</span>
+              <span className={`text-base font-mono font-bold ${isUp ? 'text-bull' : 'text-bear'}`}>
+                {curClose?.toFixed(2) ?? '—'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
