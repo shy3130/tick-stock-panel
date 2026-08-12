@@ -51,9 +51,17 @@ def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
 
 
 def _invalidate(table: str | None = None) -> None:
-    """stage 写完调用,让 /api/data/status 只重算被影响的那张表。"""
+    """stage 写完调用,让 /api/data/status 只重算被影响的那张表。
+
+    同步失效总览聚合缓存,避免 QuoteService 未运行时 300s 静态窗口继续返回旧聚合。
+    """
     from app.api.data import invalidate_data_cache
     invalidate_data_cache(table)
+    try:
+        from app.api.overview import invalidate_overview_cache
+        invalidate_overview_cache()
+    except Exception:  # noqa: BLE001
+        logger.debug("overview cache invalidate failed", exc_info=True)
 
 
 def _resolve_universe(capset: CapabilitySet) -> list[str]:
@@ -101,9 +109,17 @@ def _load_watchlist_symbols() -> list[str]:
 
 
 def run_instruments_sync(repo: KlineRepository) -> dict:
-    """盘前同步个股维表。"""
+    """盘前同步个股维表。
+
+    sync_instruments 直接写 instruments.parquet, 不经过 repo.save_*; 写完后
+    必须刷新 repo 内存缓存, 否则 get_instruments() 在下次进程级 refresh_cache 前
+    持续返回旧数据。复用 repo.refresh_instruments_cache() 公开方法。
+    """
     rows = instrument_sync.sync_instruments(repo.store.data_dir)
     _refresh_instruments_view(repo)
+    refresh_inst = getattr(repo, "refresh_instruments_cache", None)
+    if callable(refresh_inst):
+        refresh_inst()
     _invalidate("instruments")
     return {"instruments_rows": rows}
 
@@ -123,12 +139,13 @@ def run_now(
     failed_stages: list[dict[str, str]] = []
 
     # Step -1: 刷新 fstore provider 连接，确保读到最新 generation 快照
-    # （FStoreDuckDBClient 长连接不跟随 generation 切换，进程跑久后会读到旧快照）
+    # （FStoreDuckDBClient 长连接不跟随 generation 切换，进程跑久后会读到旧快照；
+    #  同时刷新 markets 客户端，保证 realtime 读新快照）
     try:
         provider = kline_sync._get_data_provider()
-        fstore = getattr(provider, "_fstore", None)
-        if fstore is not None and hasattr(fstore, "refresh"):
-            fstore.refresh()
+        refresh = getattr(provider, "refresh_fstore_clients", None)
+        if callable(refresh):
+            refresh()
     except Exception:  # noqa: BLE001
         logger.debug("fstore refresh before pipeline failed", exc_info=True)
 
@@ -383,6 +400,13 @@ def run_now(
         except Exception as e:  # noqa: BLE001
             logger.warning("historical turnover recompute non-fatal for incremental/repair: %s", e)
 
+    # 本地盘后分区只有通过 provider freshness + 相邻分区覆盖率校验后才可见。
+    # 发布后立即刷新 repo，使同一轮 regime / strategy cache 也读取新 canonical 日。
+    if local_daily_mode and pull_a_share:
+        canonical_date = initialize_local_enriched_ceiling(repo)
+        if canonical_date is not None:
+            repo.refresh_cache()
+
     # Step 2.2: regime 增量计算 — enriched 完成后补算环境时序。
     # 非致命失败: 记录警告但不中断主 pipeline。
     try:
@@ -436,6 +460,18 @@ def run_now(
                 emit("sync_index", 88, "同步指数维表…")
                 index_count = index_sync.sync_index_instruments(repo, pull_index=True, pull_etf=False)
                 emit("sync_index", 88, f"指数维表完成,{index_count} 只")
+                backfilled_index_daily = index_sync.ensure_required_index_history(
+                    repo,
+                    capset,
+                    end_date=_dt.combine(today, _dt.min.time()),
+                )
+                written_index_daily += backfilled_index_daily
+                if backfilled_index_daily:
+                    emit(
+                        "sync_index",
+                        88,
+                        f"关键指数长历史补齐,{backfilled_index_daily} 行",
+                    )
                 index_dir = repo.store.data_dir / "kline_index_enriched"
                 index_dates = sorted(
                     d.name[5:] for d in index_dir.glob("date=*")
@@ -447,7 +483,7 @@ def run_now(
                     emit("sync_index", 88, f"指数日K批次 {cur}/{tot}",
                          stage_pct=int(100 * cur / tot) if tot else 100, skip_log=cur < tot)
 
-                written_index_daily = index_sync.sync_and_persist_index_daily(
+                written_index_daily += index_sync.sync_and_persist_index_daily(
                     repo,
                     capset,
                     start_date=_dt.combine(index_start, _dt.min.time()),
@@ -789,6 +825,49 @@ def _provider_freshness_date() -> date_type | None:
         return None
 
 
+def _latest_verified_enriched_date(
+    repo: KlineRepository,
+    ceiling: date_type | None = None,
+) -> date_type | None:
+    """返回最近一个通过完整性校验的 enriched 分区日期（≤ ceiling）。
+
+    只读目标与前一分区的 symbol 列（各一次 parquet 列裁剪读取），不做全量扫描。
+    用于 ``initialize_local_enriched_ceiling`` 发布 canonical 水位前回退到安全分区。
+    """
+    dates = [
+        d for d in _enriched_partition_dates(repo)
+        if ceiling is None or d <= ceiling
+    ]
+    if not dates:
+        return None
+    latest = dates[-1]
+    previous = dates[-2] if len(dates) >= 2 else None
+    if _local_partition_coverage_ok(repo, previous, latest):
+        return latest
+    # 最近分区不完整 → 退回前一个（前一个在上一轮管道已验证完整）
+    return previous
+
+
+def initialize_local_enriched_ceiling(repo: KlineRepository) -> date_type | None:
+    """在首次缓存预热前发布已验证的安全 enriched 水位。
+
+    **不得**直接把 provider freshness 发布成 canonical —— freshness 只表示 provider
+    有该日期数据，不代表本地 enriched 分区已写完。仅当目标 enriched 分区通过既有
+    ``_local_partition_coverage_ok`` 完整性校验才发布该日期；否则退回到最近已验证
+    完整分区。``pipeline_pull_a_share`` 关闭时也不越过校验发布未验证日期。
+    """
+    if not is_local_daily_mode():
+        return None
+    fresh = _provider_freshness_date()
+    if fresh is None:
+        return None
+    publish = getattr(repo, "set_enriched_canonical_date", None)
+    verified = _latest_verified_enriched_date(repo, ceiling=fresh)
+    if verified is not None and callable(publish):
+        publish(verified)
+    return verified
+
+
 def _local_daily_coverage_ok(
     target: date_type,
     sample_symbols: tuple[str, ...] = _BOOTSTRAP_SAMPLE_SYMBOLS,
@@ -857,33 +936,42 @@ def bootstrap_local_enriched_if_stale(repo: KlineRepository, capset: CapabilityS
     if not is_local_daily_mode() or not _prefs.get_pipeline_pull_a_share():
         return {"started": False, "reason": "not_local_or_disabled"}
 
-    latest_enriched = _latest_enriched_date(repo)
+    partition_dates = _enriched_partition_dates(repo)
+    latest_on_disk = max(partition_dates) if partition_dates else None
     fresh = _provider_freshness_date()
     if fresh is None:
         return {"started": False, "reason": "no_freshness"}
-    if latest_enriched is not None and fresh <= latest_enriched:
-        if fresh == latest_enriched:
-            previous = _previous_enriched_date(repo, fresh)
-            if not _local_partition_coverage_ok(repo, previous, fresh):
-                _remove_enriched_partition(repo, fresh)
-                latest_enriched = previous
-                repo.refresh_cache()
-            else:
-                return {
-                    "started": False,
-                    "reason": "up_to_date",
-                    "freshness": str(fresh),
-                    "enriched": str(latest_enriched),
-                }
+
+    # 不在此处提前发布 fresh canonical —— 分区可能不完整。
+    # initialize_local_enriched_ceiling 已在启动时发布安全水位；
+    # 仅在下方分区通过完整性校验后才发布 fresh。
+    publish_canonical = getattr(repo, "set_enriched_canonical_date", None)
+
+    future_dates = [value for value in partition_dates if value > fresh]
+    if future_dates:
+        logger.warning(
+            "忽略 provider 未确认的 enriched 分区: canonical=%s latest_on_disk=%s",
+            fresh,
+            latest_on_disk,
+        )
+    canonical_dates = [value for value in partition_dates if value <= fresh]
+    latest_enriched = max(canonical_dates) if canonical_dates else None
+
+    if latest_enriched is not None and fresh == latest_enriched:
+        previous = _previous_enriched_date(repo, fresh)
+        if not _local_partition_coverage_ok(repo, previous, fresh):
+            _remove_enriched_partition(repo, fresh)
+            latest_enriched = previous
+            repo.refresh_cache()
         else:
+            if callable(publish_canonical):
+                publish_canonical(fresh)
             return {
                 "started": False,
                 "reason": "up_to_date",
                 "freshness": str(fresh),
                 "enriched": str(latest_enriched),
             }
-    if latest_enriched is not None and fresh <= latest_enriched:
-        return {"started": False, "reason": "up_to_date", "freshness": str(fresh), "enriched": str(latest_enriched)}
     if not _local_daily_coverage_ok(fresh):
         return {
             "started": False,
@@ -917,6 +1005,8 @@ def bootstrap_local_enriched_if_stale(repo: KlineRepository, capset: CapabilityS
             "enriched": str(latest_enriched) if latest_enriched else None,
             "written": written,
         }
+    if callable(publish_canonical):
+        publish_canonical(fresh)
     repo.refresh_cache()
     return {
         "started": True,
@@ -979,12 +1069,12 @@ def _bootstrap_asset_daily_if_stale(repo: KlineRepository, capset: CapabilitySet
         return
     from datetime import datetime as _dt, timedelta as _td
 
-    # 先刷新 fstore 连接，确保读到最新 generation 的 instruments
+    # 先刷新 fstore 连接，确保读到最新 generation 的 instruments/markets 快照
     try:
         provider = kline_sync._get_data_provider()
-        fstore = getattr(provider, "_fstore", None)
-        if fstore is not None and hasattr(fstore, "refresh"):
-            fstore.refresh()
+        refresh = getattr(provider, "refresh_fstore_clients", None)
+        if callable(refresh):
+            refresh()
     except Exception:  # noqa: BLE001
         logger.debug("fstore refresh in asset bootstrap failed", exc_info=True)
 

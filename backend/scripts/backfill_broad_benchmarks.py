@@ -6,47 +6,47 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-BROAD = ["000300.SH", "000905.SH", "399006.SZ", "000688.SH"]
 
 
 def main() -> int:
-    from app.services import index_sync, preferences
     from app.data_providers.capability_gate import detect_capabilities
+    from app.services import index_sync
     from app.storage.repository import DataStore, KlineRepository
 
     repo = KlineRepository(DataStore())
     capset = detect_capabilities(force=True)
+    required = index_sync.REQUIRED_INDEX_HISTORY_STARTS
     n = index_sync.sync_and_persist_index_daily(
         repo,
         capset,
-        symbols_override=BROAD,
-        start_date=datetime(2015, 1, 1),
+        symbols_override=list(required),
+        start_date=datetime.combine(min(required.values()), datetime.min.time()),
         end_date=datetime.now(),
     )
     print(f"回填完成: +{n} 行")
 
-    current = {
-        s.strip()
-        for s in preferences.get_pipeline_index_symbols().replace("\n", ",").replace(" ", ",").split(",")
-        if s.strip()
-    }
-    merged = ",".join(sorted(current | set(BROAD)))
-    preferences.set_pipeline_index_symbols(merged)
-    print(f"常驻指数已更新: {merged}")
-
-    df = repo.get_index_daily(
-        "000300.SH",
-        datetime(2024, 1, 1).date(),
-        datetime(2024, 12, 31).date(),
-        columns=["date", "close"],
-    )
-    print(f"校验 000300.SH 2024 年: rows={df.height} (预期 ~242)")
-    return 0 if df.height > 200 else 1
+    incomplete: list[str] = []
+    for symbol, required_start in required.items():
+        df = repo.get_index_daily(
+            symbol,
+            required_start,
+            datetime.now().date(),
+            columns=["date", "close"],
+        )
+        earliest = df["date"].min() if not df.is_empty() else None
+        ok = earliest is not None and earliest <= required_start + timedelta(days=45)
+        print(f"校验 {symbol}: rows={df.height}, earliest={earliest}, ok={ok}")
+        if not ok:
+            incomplete.append(symbol)
+    if incomplete:
+        print(f"回填不完整: {', '.join(incomplete)}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
