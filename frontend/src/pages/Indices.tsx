@@ -55,10 +55,10 @@ function fmtNum(v: number | null | undefined, digits = 2) {
 }
 
 const PINNED_INDEXES = [
-  { symbol: '000001.SH', name: '上证指数' },
-  { symbol: '399001.SZ', name: '深证成指' },
-  { symbol: '399006.SZ', name: '创业板指' },
-  { symbol: '000680.SH', name: '科创综指' },
+  { symbol: '000001.INDEX', name: '上证指数' },
+  { symbol: '399001.INDEX', name: '深证成指' },
+  { symbol: '399006.INDEX', name: '创业板指' },
+  { symbol: '000680.INDEX', name: '科创综指' },
 ]
 
 function pinnedRank(item: IndexInstrument) {
