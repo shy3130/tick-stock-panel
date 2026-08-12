@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleDashed,
+  Database,
   FileSearch,
   FlaskConical,
   Loader2,
@@ -19,6 +20,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
+import { MarketDataPanel } from '@/components/research/MarketDataPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { toast } from '@/components/Toast'
 import {
@@ -59,7 +61,7 @@ const SCHEDULE_TEMPLATES: { value: ResearchScheduleTemplate; label: string; hint
   { value: 'strategy_pool_weekly', label: '策略池周报', hint: '统计策略池与既有 Run Card' },
 ]
 
-type ResearchTab = 'hypotheses' | 'schedules'
+type ResearchTab = 'hypotheses' | 'schedules' | 'market-data'
 
 type HypothesisDraft = {
   title: string
@@ -157,10 +159,13 @@ export function Research() {
         <TabButton active={tab === 'schedules'} icon={Activity} onClick={() => setTab('schedules')}>
           定时研究
         </TabButton>
+        <TabButton active={tab === 'market-data'} icon={Database} onClick={() => setTab('market-data')}>
+          市场数据
+        </TabButton>
       </div>
       <main className="workspace-content min-h-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-6xl">
-          {tab === 'hypotheses' ? <HypothesesPanel /> : <SchedulesPanel />}
+          {tab === 'hypotheses' ? <HypothesesPanel /> : tab === 'schedules' ? <SchedulesPanel /> : <MarketDataPanel />}
         </div>
       </main>
     </div>
