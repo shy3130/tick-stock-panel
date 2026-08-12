@@ -226,6 +226,19 @@ class TestFallbackTriggered:
         # tencent amount field is 万元 → ×10000
         assert row["amount"] == 503383 * 10000
 
+    def test_index_canonical_symbol_triggers_fallback_and_remaps(self, enabled_realtime):
+        """.INDEX canonical 指数 symbol 经 adapter: 映射为腾讯交易所代码,
+        返回行 symbol 逆映射回 .INDEX (不泄漏 .SH/.SZ)。"""
+        calls: list = []
+        adapter = _make_adapter(calls, responses=[_tencent_response("sh000001")])
+        result = adapter.resolve_realtime(["000001.INDEX"], local_rows=[])
+        assert result.used_fallback is True
+        assert len(result.rows) == 1
+        # 返回行 symbol 是 canonical .INDEX, 不是腾讯的 .SH
+        assert result.rows[0]["symbol"] == "000001.INDEX"
+        # 腾讯 HTTP 请求使用 sh000001 交易所代码
+        assert "sh000001" in calls[0]
+
 
 # ===========================================================================
 # 4. Invalid / over-limit symbols rejected
@@ -283,6 +296,19 @@ class TestCalibration:
         assert to_exch_code("BAD") is None
         assert is_supported("600519.SH") is True
         assert is_supported("AAPL.US") is False
+
+    def test_index_symbol_mapping_roundtrip(self):
+        """canonical .INDEX → 腾讯交易所代码 → 返回逆映射回 .INDEX。"""
+        assert is_supported("000001.INDEX") is True
+        assert is_supported("399001.INDEX") is True
+        assert to_exch_code("000001.INDEX") == "sh000001"
+        assert to_exch_code("399001.INDEX") == "sz399001"
+        assert to_exch_code("000680.INDEX") == "sh000680"
+        # to_symbol 仍返回 .SH/.SZ (腾讯响应解析); adapter 负责逆映射
+        assert to_symbol("sh000001") == "000001.SH"
+        assert to_symbol("sz399001") == "399001.SZ"
+        # 无法推导交易所的指数 code → None
+        assert to_exch_code("999999.INDEX") is None
 
     def test_decode_gbk_and_utf8(self):
         assert decode_response("hello".encode("utf-8")) == "hello"

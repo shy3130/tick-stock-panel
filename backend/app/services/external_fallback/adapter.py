@@ -23,6 +23,8 @@ from app.services.external_fallback.circuit import CircuitBreaker
 from app.services.external_fallback.sources.tencent_quote import (
     TencentQuoteSource,
     is_supported,
+    to_exch_code,
+    to_symbol,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +171,17 @@ class ExternalFallbackAdapter:
         if not clean_symbols:
             return FallbackResult()
 
+        # 外部 adapter 边界: 内部 canonical .INDEX → 腾讯交易所代码映射后,
+        # 腾讯返回的 symbol 是 .SH/.SZ 形式 → 需逆映射回调用方的 .INDEX。
+        symbol_remap: dict[str, str] = {}
+        for s in symbols:
+            if s.endswith(".INDEX"):
+                exch = to_exch_code(s)
+                if exch:
+                    tencent_form = to_symbol(exch)
+                    if tencent_form and tencent_form != s:
+                        symbol_remap[tencent_form] = s
+
         try:
             fetch_result = self._tencent.get_realtime_result(clean_symbols[:MAX_SYMBOLS])
         except Exception:
@@ -192,6 +205,14 @@ class ExternalFallbackAdapter:
 
         # 校准成功 → 重置连续口径失败计数
         self._reset_calibration_failures("tencent_quote")
+
+        # 外部 adapter 边界: 把腾讯返回的 .SH/.SZ 指数 symbol 逆映射回 .INDEX
+        if symbol_remap:
+            for row in rows:
+                sym = row.get("symbol")
+                if sym and sym in symbol_remap:
+                    row["symbol"] = symbol_remap[sym]
+
         logger.info(
             "external_fallback realtime fallback: %d rows, reason=%s",
             len(rows), reason.value,

@@ -102,14 +102,32 @@ _IDX_AMOUNT_WAN = 37
 _SUFFIX_TO_PREFIX = {"SH": "sh", "SZ": "sz", "BJ": "bj", "HK": "hk"}
 _PREFIX_TO_SUFFIX = {"sh": "SH", "sz": "SZ", "bj": "BJ", "hk": "HK"}
 
-# 支持的市场后缀白名单 (指数 000xxx.SH / 399xxx.SZ 也通过 SH/SZ 映射)。
-_SUPPORTED_SUFFIXES = frozenset({"SH", "SZ", "BJ", "HK"})
+# 支持的市场后缀白名单 (指数 .INDEX 也通过 code 前缀推导交易所)。
+_SUPPORTED_SUFFIXES = frozenset({"SH", "SZ", "BJ", "HK", "INDEX"})
+
+
+def _index_code_to_exchange(code: str) -> str | None:
+    """指数 code → 交易所前缀 (sh/sz)。无法确定返回 None。
+
+    399xxx → 深证系列 (sz); 000xxx/880xxx → 上证系列 (sh)。
+    """
+    if code.startswith("399"):
+        return "sz"
+    if code.startswith(("000", "880")):
+        return "sh"
+    return None
 
 
 def to_exch_code(symbol: str) -> str | None:
-    """内部 symbol → 腾讯 exchange code (如 sh600000)。非法返回 None。"""
+    """内部 symbol → 腾讯 exchange code (如 sh600000)。非法返回 None。
+
+    .INDEX 后缀按 code 前缀推导交易所 (000→sh, 399→sz)。
+    """
     code, _, suffix = symbol.strip().upper().partition(".")
-    prefix = _SUFFIX_TO_PREFIX.get(suffix)
+    if suffix == "INDEX":
+        prefix = _index_code_to_exchange(code)
+    else:
+        prefix = _SUFFIX_TO_PREFIX.get(suffix)
     if prefix is None or not code:
         return None
     return f"{prefix}{code}"
