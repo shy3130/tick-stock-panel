@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Plus, Save, Search, X } from 'lucide-react'
 import { api, type CustomSignal, type CustomSignalCondition, type CustomSignalFieldGroup } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   open: boolean
@@ -21,6 +22,7 @@ const emptySignal = (kind: CustomSignal['kind'] = 'exit'): CustomSignal => ({
 
 export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose, onSaved }: Props) {
   const qc = useQueryClient()
+  const backdrop = useDialogBackdrop(onClose)
   const options = useQuery({ queryKey: QK.customSignalsOptions, queryFn: api.customSignalsOptions, enabled: open })
 
   const [draft, setDraft] = useState<CustomSignal>(() => emptySignal(defaultKind))
@@ -71,7 +73,7 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-          onClick={onClose}
+          {...backdrop}
         >
           <motion.div
             role="dialog"
@@ -184,6 +186,7 @@ function FieldPicker({ value, fields, groups, onChange }: {
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const backdrop = useDialogBackdrop(() => setOpen(false))
   const selectedLabel = fields.find(f => f.key === value)?.label ?? value
 
   const filteredGroups = useMemo(() => {
@@ -217,7 +220,7 @@ function FieldPicker({ value, fields, groups, onChange }: {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-              onClick={() => setOpen(false)}
+              {...backdrop}
             >
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 10 }}

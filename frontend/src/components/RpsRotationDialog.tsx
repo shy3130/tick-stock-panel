@@ -11,6 +11,8 @@ import { Modal } from '@/components/Modal'
 
 interface Props {
   onClose: () => void
+  /** 维度: concept 概念(默认) / industry 行业 */
+  kind?: 'concept' | 'industry'
 }
 
 const DEFAULT_DAYS = 12
@@ -45,10 +47,14 @@ function rankColorClass(rank: number, total: number): string {
   return 'text-accent'
 }
 
-export function RpsRotationDialog({ onClose }: Props) {
+export function RpsRotationDialog({ onClose, kind = 'concept' }: Props) {
+  // 维度文案: concept→概念, industry→行业
+  const dimLabel = kind === 'industry' ? '行业' : '概念'
   const [days, setDays] = useState(DEFAULT_DAYS)
   const [reversed, setReversed] = useState(false)        // false=高→低, true=低→高
-  const [selected, setSelected] = useState<string | null>(null)  // 点中的概念名, 高亮追踪
+  const [selected, setSelected] = useState<string | null>(null)  // 点中的成员名, 高亮追踪
+  // 行业层级(仅 industry): 1/2/3 级, 默认 2 级。concept 时为 null 不生效。
+  const [level, setLevel] = useState<number>(kind === 'industry' ? 2 : 0)
 
   // ---- AI 轮动分析状态 (组件内, 不建全局 store: 切页即关对话框) ----
   const [analysis, setAnalysis] = useState('')            // 累积的 Markdown 报告
@@ -63,7 +69,8 @@ export function RpsRotationDialog({ onClose }: Props) {
     setAnalysisError('')
     setAnalysisMeta(null)
     try {
-      for await (const ev of api.rotationAnalyzeStream(daysParam, focusParam)) {
+      const lv = kind === 'industry' ? level : undefined
+      for await (const ev of api.rotationAnalyzeStream(daysParam, focusParam, kind, lv)) {
         if (ev.type === 'meta') setAnalysisMeta({ summary: ev.summary })
         else if (ev.type === 'delta') setAnalysis(a => a + (ev.content ?? ''))
         else if (ev.type === 'error') setAnalysisError(ev.message ?? '未知错误')
@@ -74,12 +81,13 @@ export function RpsRotationDialog({ onClose }: Props) {
     } finally {
       setAnalyzing(false)
     }
-  }, [])
+  }, [kind, level])
 
-  // 数据请求: React Query 缓存, 同 days 5 分钟内重开秒开
+  // 数据请求: React Query 缓存, 同 (kind, level, days) 5 分钟内重开秒开
+  const lvParam = kind === 'industry' ? level : undefined
   const { data, isLoading, error } = useQuery({
-    queryKey: QK.rpsRotation(days),
-    queryFn: () => api.rpsRotation(days),
+    queryKey: [...QK.rpsRotation(days), kind, lvParam],
+    queryFn: () => api.rpsRotation(days, kind, lvParam),
     staleTime: 5 * 60 * 1000,
   })
 
@@ -209,10 +217,27 @@ export function RpsRotationDialog({ onClose }: Props) {
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
             <div className="flex items-center gap-2">
               <Repeat className="h-4 w-4 text-accent" />
-              <span id="rps-rotation-title" className="text-sm font-medium text-foreground">概念涨幅轮动</span>
+              <span id="rps-rotation-title" className="text-sm font-medium text-foreground">{dimLabel}涨幅轮动</span>
               <span className="text-[11px] text-muted">
-                {conceptCount > 0 ? `${dates.length} 天 · ${conceptCount} 个概念` : '暂无数据'}
+                {conceptCount > 0 ? `${dates.length} 天 · ${conceptCount} 个${dimLabel}` : '暂无数据'}
               </span>
+              {/* 行业层级选择器: 1/2/3 级, 默认 2 级。仅 kind=industry 显示 */}
+              {kind === 'industry' && (
+                <div className="ml-1 flex items-center rounded-btn border border-border bg-base/60 p-0.5">
+                  {[1, 2, 3].map(lv => (
+                    <button
+                      key={lv}
+                      onClick={() => { setLevel(lv); setSelected(null) }}
+                      className={cn(
+                        'h-5 rounded-[5px] px-2 text-[10px] font-medium transition-colors',
+                        level === lv ? 'bg-accent text-white shadow-sm' : 'text-secondary hover:text-foreground',
+                      )}
+                    >
+                      {lv}级
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <button aria-label="关闭" onClick={onClose} className="p-1 rounded hover:bg-elevated transition-colors cursor-pointer">
               <X className="h-4 w-4 text-muted" />
@@ -332,7 +357,7 @@ export function RpsRotationDialog({ onClose }: Props) {
               </div>
             ) : rowCount === 0 ? (
               <div className="flex items-center justify-center py-16 text-[11px] text-muted">
-                暂无概念数据,请先在「概念分析」页配置并获取概念数据源
+                暂无{dimLabel}数据,请先在「{kind === 'industry' ? '行业分析' : '概念分析'}」页配置并获取{dimLabel}数据源
               </div>
             ) : (
               <div

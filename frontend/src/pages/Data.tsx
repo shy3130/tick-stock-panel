@@ -43,6 +43,7 @@ import { ExtendHistoryPanel } from '@/components/data/ExtendHistoryPanel'
 import { RepairDailyPanel } from '@/components/data/RepairDailyPanel'
 import { EnrichedRebuildPanel } from '@/components/data/EnrichedRebuildPanel'
 import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
+import { RegimeConfigCard } from '@/components/data/RegimeConfigCard'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
@@ -68,6 +69,14 @@ export function Data() {
       if (activeJobId || data?.indicators_ready === false) return 2_000
       return 30_000
     },
+  })
+
+  // 市场环境(regime) 覆盖画像 —— 走独立接口(/api/regime/coverage), 不在 data/status 内。
+  // 同步任务完成后刷新一次; 平时 30s 轮询与 status 对齐。
+  const regimeCoverage = useQuery({
+    queryKey: QK.regimeCoverage,
+    queryFn: () => api.regimeCoverage(),
+    refetchInterval: activeJobId ? false : 30_000,
   })
 
   const history = useQuery({
@@ -260,6 +269,8 @@ export function Data() {
     if (job.data && (job.data.status === 'succeeded' || job.data.status === 'failed')) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
+      // 同步任务结束后 regime 覆盖范围可能变化, 一并刷新画像
+      qc.invalidateQueries({ queryKey: QK.regimeCoverage })
       const t = setTimeout(() => setActiveJobId(null), 5_000)
       return () => clearTimeout(t)
     }
@@ -323,6 +334,9 @@ export function Data() {
     sync_index: 'index_daily',
     sync_minute: 'minute',
     extend_minute: 'minute',
+    compute_regime: 'regime',
+    // regime 软失败时入 skipped_stages 的是 'regime'(非 stage 名), 也映射到该卡片
+    regime: 'regime',
   }
   const activeCard = isRunning && job.data ? STAGE_CARD[job.data.stage] ?? null : null
 
@@ -530,6 +544,26 @@ export function Data() {
           />
         )
       }
+      case 'regime':
+        return (
+          <StatCard
+            title="市场环境"
+            hint="每日环境状态 · 本地计算"
+            stats={regimeCoverage.data ?? null}
+            loading={regimeCoverage.isLoading}
+            active={activeCard === 'regime'}
+            done={doneStages.has('regime')}
+            skipped={skippedCards.has('regime')}
+            stagePct={activeCard === 'regime' ? (job.data?.stage_pct ?? 0) : 0}
+            tierKey="regime"
+            capLimits={caps.data?.capabilities}
+            tierLabel={caps.data?.label}
+            auto={prefs.data?.pipeline_regime_enabled === true}
+            subLabel="状态 · 综合分 · 指标"
+            onSettings={hasData ? () => setOpenSettings(v => v === 'regime' ? null : 'regime') : undefined}
+            settingsOpen={openSettings === 'regime'}
+          />
+        )
       default:
         return null
     }
@@ -980,6 +1014,14 @@ export function Data() {
               historicalShareRows={s?.financials?.tables?.shares?.rows ?? 0}
               onStart={(jobId) => { setActiveJobId(jobId); setOpenSettings(null) }}
             />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'regime' && (
+          <SettingsModal title="市场环境 · 计算设置" onClose={() => setOpenSettings(null)}>
+            <RegimeConfigCard />
           </SettingsModal>
         )}
       </AnimatePresence>

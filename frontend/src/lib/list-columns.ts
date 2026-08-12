@@ -7,7 +7,7 @@
 
 export type ColumnSource =
   | { type: 'builtin'; key: string }
-  | { type: 'ext'; configId: string; fieldName: string; fieldLabel?: string }
+  | { type: 'ext'; configId: string; fieldName: string; fieldLabel?: string; fieldType?: string }
   | { type: 'computed'; key: string }
 
 /** 扩展列字符串值渲染配置 */
@@ -24,6 +24,12 @@ export interface ExtColumnDisplayConfig {
   hiddenIndices?: number[]
   /** 标签排列方向: horizontal=横向(默认), vertical=竖向 */
   tagLayout?: 'horizontal' | 'vertical'
+  /** 数字千分位逗号(仅 number 类型有效): true=1,234,567 */
+  thousandSeparator?: boolean
+  /** 单位换算(仅 number 类型有效): none=不换算(默认), wan=万, yi=亿, auto=自动 */
+  unitConvert?: 'none' | 'wan' | 'yi' | 'auto'
+  /** 单位换算后保留小数位(仅 number 类型 + unitConvert≠none 有效), 默认 2 */
+  unitDecimals?: number
 }
 
 /** 日k列渲染配置（builtin: candle 列专用） */

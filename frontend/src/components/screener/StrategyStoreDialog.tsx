@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Store, Hammer, Download, Zap } from 'lucide-react'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   open: boolean
@@ -11,6 +12,7 @@ interface Props {
  * 目标：不定时更新更多策略。功能正在建设中，当前仅占位。
  */
 export function StrategyStoreDialog({ open, onClose }: Props) {
+  const backdrop = useDialogBackdrop(onClose)
   return (
     <AnimatePresence>
       {open && (
@@ -19,7 +21,7 @@ export function StrategyStoreDialog({ open, onClose }: Props) {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={e => { if (e.target === e.currentTarget) onClose() }}
+          {...backdrop}
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}

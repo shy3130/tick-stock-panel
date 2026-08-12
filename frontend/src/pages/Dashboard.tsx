@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
@@ -14,6 +14,7 @@ import { SettingsModal } from '@/components/data/SettingsModal'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
+import { strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 
 function n(v: number | null | undefined) {
@@ -86,15 +87,17 @@ const _SOURCE_BADGE: Record<string, string> = {
   signal: 'bg-accent/10 text-accent',
   price: 'bg-emerald-400/10 text-emerald-400',
   market: 'bg-purple-500/10 text-purple-400',
+  sector: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-300',
 }
 const _SOURCE_LABEL: Record<string, string> = {
-  strategy: '策略', signal: '信号', price: '价格', market: '异动',
+  strategy: '策略', signal: '信号', price: '价格', market: '异动', sector: '板块',
 }
 const _SEVERITY_BAR: Record<string, string> = {
   info: 'bg-accent/40', warn: 'bg-warning', critical: 'bg-danger',
 }
 
 function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => void }) {
+  const navigate = useNavigate()
   const alerts = useQuery({
     queryKey: ['alerts', ''],
     queryFn: () => api.alertsList({ days: 7, limit: 10 }),
@@ -112,15 +115,13 @@ function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => 
   return (
     <>
       <div className="mt-1 space-y-1.5">
-        {events
-          .filter((ev: AlertEvent) => !(ev.source === 'strategy' && !ev.symbol))
-          .map((ev, i) => {
+        {events.map((ev, i) => {
           const sev = _SEVERITY_BAR[ev.severity ?? 'info'] ?? _SEVERITY_BAR.info
           const pct = ev.change_pct ?? 0
           const isStrategy = ev.source === 'strategy'
-          const sm = isStrategy ? ev.message?.match(/策略「([^」]+)」/) : null
-          const sname = sm ? sm[1] : ''
-          const isNew = ev.type === 'new_entry'
+          const isSector = ev.source === 'sector'
+          const sname = isStrategy ? strategyName(ev.message ?? '') : ''
+          const eventMeta = strategyEventMeta(ev.type)
           return (
             <motion.div
               key={`${ev.ts}-${i}`}
@@ -133,9 +134,9 @@ function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => 
               {/* 第一行: 代码 + 名称 + 价格 + 涨跌幅 (点击代码/名称弹日K) */}
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => ev.symbol && onStockClick(ev)}
-                  title={ev.symbol ? `查看 ${ev.symbol} 日K` : undefined}
-                  className="inline-flex items-center gap-1 min-w-0 shrink-0 rounded hover:bg-elevated/60 transition-colors -mx-0.5 px-0.5 cursor-pointer"
+                  onClick={() => isSector ? navigate('/monitor') : ev.symbol && onStockClick(ev)}
+                  title={isSector ? '在监控中心查看板块告警' : ev.symbol ? `查看 ${ev.symbol} 日K` : undefined}
+                  className={`inline-flex items-center gap-1 min-w-0 shrink-0 rounded hover:bg-elevated/60 transition-colors -mx-0.5 px-0.5 ${isSector || ev.symbol ? 'cursor-pointer' : 'cursor-default'}`}
                 >
                   <span className="font-mono text-[10px] font-medium text-foreground/80 hover:text-accent">{ev.symbol?.replace(/\.(SH|SZ|BJ)$/, '')}</span>
                   {ev.symbol && (() => {
@@ -160,17 +161,37 @@ function MonitorWidget({ onStockClick }: { onStockClick: (event: AlertEvent) => 
               </div>
               {/* 第二行: 策略类型走新格式, 其他走旧格式 */}
               {isStrategy ? (
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <span className={cn('text-[9px] font-medium', isNew ? 'text-danger' : 'text-emerald-400')}>
-                    {isNew ? '进入' : '移出'}
-                  </span>
-                  <span className="text-[9px] text-muted">策略</span>
-                  <span className="text-[9px] font-medium text-amber-400">「{sname}」</span>
-                  <span className="flex-1" />
-                  <span className="text-[8px] text-muted/50 shrink-0 font-mono">
-                    {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
-                  </span>
-                </div>
+                <>
+                  {ev.symbol ? (
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                      <span className={cn('shrink-0 text-[9px] font-medium', eventMeta.className)}>
+                        {eventMeta.action}
+                      </span>
+                      {sname
+                        ? <span className="truncate text-[9px] font-medium text-amber-400">「{sname}」</span>
+                        : ev.message && <span className="truncate text-[9px] text-muted">{ev.message}</span>}
+                      <span className="flex-1" />
+                      <span className="text-[8px] text-muted/50 shrink-0 font-mono">
+                        {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-[9px] text-muted">{ev.message}</span>
+                      <span className="flex-1" />
+                      <span className="text-[8px] text-muted/50 shrink-0 font-mono">
+                        {ev.ts ? new Date(ev.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                  )}
+                  {ev.signals && ev.signals.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {ev.signals.map(signal => (
+                        <span key={signal} className="rounded bg-accent/8 px-1 py-px text-[8px] text-accent/80">{cnSignal(signal)}</span>
+                      ))}
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
                   <div className="mt-0.5 flex items-center gap-1.5">

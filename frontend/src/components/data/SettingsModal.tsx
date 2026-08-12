@@ -1,10 +1,12 @@
 import { motion } from 'framer-motion'
 import { X } from 'lucide-react'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 export function SettingsModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const backdrop = useDialogBackdrop(onClose)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" {...backdrop} />
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}

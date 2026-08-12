@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Check, Plus, RadioTower, Save, Search, TrendingUp, Waypoints, X } from 'lucide-react'
-import { api, genRuleId, type MonitorRule, type MonitorCondition } from '@/lib/api'
+import { Activity, Building2, ChartNoAxesCombined, Check, Layers3, Plus, RadioTower, Save, Search, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
+import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget, type StrategyNotifyEvent } from '@/lib/api'
+import { DEFAULT_STRATEGY_NOTIFY_EVENTS, LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS } from '@/lib/strategyMonitorEvents'
 import { QK } from '@/lib/queryKeys'
+import { boardTag } from '@/components/stock-table/primitives'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { MONITOR_INTRADAY_SIGNAL_OPTIONS, SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -20,7 +22,7 @@ interface Props {
 }
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
-  signal: '个股信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控',
+  signal: '信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', sector: '板块监控',
 }
 
 const TYPE_ICONS = {
@@ -28,12 +30,20 @@ const TYPE_ICONS = {
   price: TrendingUp,
   market: RadioTower,
   strategy: Waypoints,
+  sector: Layers3,
 }
+
+const SECTOR_KIND_OPTIONS: Array<{ key: SectorKind; label: string; icon: typeof ChartNoAxesCombined }> = [
+  { key: 'index', label: '大盘指数', icon: ChartNoAxesCombined },
+  { key: 'concept', label: '概念题材', icon: Tags },
+  { key: 'industry', label: '行业板块', icon: Building2 },
+]
 
 const STRATEGY_SOURCE_META = {
   builtin: { label: '内置', className: 'border-accent/25 bg-accent/10 text-accent' },
   custom: { label: '自定义', className: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-400' },
   ai: { label: 'AI', className: 'border-amber-400/25 bg-amber-400/10 text-amber-400' },
+  composite: { label: '叠加', className: 'border-teal-500/25 bg-teal-500/10 text-teal-400' },
 } as const
 
 const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
@@ -45,6 +55,11 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   scope: 'symbols',
   symbols: [],
   sector: null,
+  sector_kind: 'index',
+  sector_targets: [],
+  sector_trigger: 'change_pct',
+  threshold_pct: 1,
+  window_minutes: 5,
   strategy_id: null,
   direction: 'entry',
   conditions: [],
@@ -64,14 +79,26 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
-  const [draft, setDraft] = useState<MonitorRule>(
-    rule
-      ? { ...rule, conditions: rule.conditions.map(c => ({ ...c })) }
-      : {
-          ...emptyRule(preset),
-          webhook_channels: preset?.webhook_channels ?? (prefs?.webhook_default_channels ?? []),
-        },
-  )
+  const [draft, setDraft] = useState<MonitorRule>(() => {
+    if (rule) {
+      return {
+        ...rule,
+        notify_events: rule.type === 'strategy'
+          ? [...(rule.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS)]
+          : undefined,
+        conditions: rule.conditions.map(c => ({ ...c })),
+        sector_targets: rule.sector_targets?.map(target => ({ ...target })) ?? [],
+      }
+    }
+    const initial = {
+      ...emptyRule(preset),
+      webhook_channels: preset?.webhook_channels ?? (prefs?.webhook_default_channels ?? []),
+    }
+    if (initial.type === 'strategy' && !initial.notify_events) {
+      initial.notify_events = [...DEFAULT_STRATEGY_NOTIFY_EVENTS]
+    }
+    return initial
+  })
   const assetType = draft.asset_type ?? 'stock'
   // 策略列表跟随资产类型: ETF 只列技术类策略。
   const strategies = useQuery({
@@ -80,10 +107,15 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   })
   const [error, setError] = useState('')
   const [symbolQuery, setSymbolQuery] = useState('')
+  const [sectorQuery, setSectorQuery] = useState('')
+  const [industryLevel, setIndustryLevel] = useState<1 | 2 | 3>(() => {
+    const level = rule?.sector_targets?.[0]?.level
+    return level === 1 || level === 3 ? level : 2
+  })
   const [strategyQuery, setStrategyQuery] = useState('')
-  const [strategyCategory, setStrategyCategory] = useState<'all' | 'builtin' | 'custom' | 'ai'>('all')
-  // ETF 规则时标的搜索一并搜出 ETF。
-  const symbolAssetTypes = assetType === 'etf' ? 'stock,etf' : 'stock'
+  const [strategyCategory, setStrategyCategory] = useState<'all' | 'builtin' | 'custom' | 'ai' | 'composite'>('all')
+  // 标的搜索资产类型: ETF 一并搜股票; 指数只搜指数; 否则只搜股票。
+  const symbolAssetTypes = assetType === 'etf' ? 'stock,etf' : assetType === 'index' ? 'index' : 'stock'
   const symbolSearch = useQuery({
     queryKey: QK.instrumentSearch(symbolQuery, symbolAssetTypes),
     queryFn: () => api.instrumentSearch(symbolQuery, 20, symbolAssetTypes),
@@ -97,20 +129,31 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       // name 为空时用默认名
       if (!d.name.trim()) {
         const base = TYPE_DEFAULT_NAME[d.type] ?? '监控规则'
-        d.name = d.scope === 'symbols' && d.symbols.length > 0
+        d.name = d.type === 'sector' && d.sector_targets?.length
+          ? `${base} · ${d.sector_targets[0].name}${d.sector_targets.length > 1 ? ` 等${d.sector_targets.length}个` : ''}`
+          : d.scope === 'symbols' && d.symbols.length > 0
           ? `${base} · ${d.symbols[0]}${d.symbols.length > 1 ? ` 等${d.symbols.length}只` : ''}`
           : base
       }
       if (d.type === 'strategy') {
         if (!d.strategy_id) throw new Error('策略监控必须选择一个策略')
+        if (!d.notify_events?.length) throw new Error('至少选择一个通知事件')
+      } else if (d.type === 'sector') {
+        d.scope = 'all'
+        d.symbols = []
+        d.conditions = []
+        delete d.notify_events
+        if (!d.sector_targets?.length) throw new Error('请选择至少一个监控对象')
+        if ((d.threshold_pct ?? 0) <= 0 || (d.threshold_pct ?? 0) > 20) throw new Error('阈值必须大于 0 且不超过 20%')
       } else {
+        delete d.notify_events
         if (d.conditions.length === 0) throw new Error('至少选择一个触发条件')
         for (const c of d.conditions) {
           if (!c.field || !c.op) throw new Error('条件填写不完整')
           if (c.op !== 'truth' && (c.value === null || c.value === undefined)) throw new Error('阈值条件需要数值')
         }
       }
-      if (d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只股票')
+      if (d.type !== 'sector' && d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只标的')
       return api.monitorRuleSave(d)
     },
     onSuccess: () => {
@@ -142,11 +185,38 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     setSymbolQuery('')
   }
 
+  const selectSectorKind = (kind: SectorKind) => {
+    setDraft(d => ({ ...d, sector_kind: kind, sector_targets: [] }))
+    setSectorQuery('')
+  }
+
+  const toggleSectorTarget = (target: SectorMonitorTarget) => {
+    setDraft(d => {
+      const current = d.sector_targets ?? []
+      if (current.some(item => item.key === target.key)) {
+        return { ...d, sector_targets: current.filter(item => item.key !== target.key) }
+      }
+      if (current.length >= 20) return d
+      return { ...d, sector_targets: [...current, target] }
+    })
+  }
+
   // 勾选/取消勾选某个推送渠道 (飞书 / 企业微信 各自独立)
   const toggleChannel = (ch: string) =>
     setDraft(d => {
       const cur = d.webhook_channels ?? []
       return { ...d, webhook_channels: cur.includes(ch) ? cur.filter(c => c !== ch) : [...cur, ch] }
+    })
+
+  const toggleStrategyEvent = (event: StrategyNotifyEvent) =>
+    setDraft(d => {
+      const current = d.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS
+      return {
+        ...d,
+        notify_events: current.includes(event)
+          ? current.filter(item => item !== event)
+          : [...current, event],
+      }
     })
 
   const thresholdFields = options.data?.threshold_fields ?? []
@@ -158,9 +228,30 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     ...SIGNAL_OPTIONS.map(key => ({ key, label: cnSignal(key) })),
     ...(options.data?.builtin_signals ?? []).filter(option => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(option.key)),
   ]
+  // 指数: 隐藏涨跌停/连板类 (指数无这些列) 与分时信号 (无本地分钟K, 会静默不触发)
+  const INDEX_HIDDEN_SIGNALS = (key: string) =>
+    key.includes('limit') || MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(key)
+  const pickerSignals = assetType === 'index'
+    ? monitorBuiltinSignals.filter(o => !INDEX_HIDDEN_SIGNALS(o.key))
+    : monitorBuiltinSignals
+  // 指数: 监控类型仅 signal/price (无涨跌停/策略/封单语义)
+  const visibleTypes = (options.data?.types ?? []).filter(
+    t => assetType !== 'index' || t.key === 'signal' || t.key === 'price',
+  )
+  // 指数: 作用范围仅 symbols (无全市场/板块语义)
+  const visibleScopes = (options.data?.scopes ?? []).filter(
+    s => assetType !== 'index' || s.key === 'symbols',
+  )
+  const sectorKind = draft.sector_kind ?? 'index'
+  const sectorTargets = options.data?.sector_targets?.[sectorKind] ?? []
+  const visibleSectorTargets = sectorTargets.filter(target => {
+    if (sectorKind === 'industry' && target.level !== industryLevel) return false
+    const query = sectorQuery.trim().toLowerCase()
+    if (!query) return true
+    return `${target.name} ${target.symbol ?? ''} ${target.value ?? ''}`.toLowerCase().includes(query)
+  }).slice(0, 100)
   const thresholdConds = draft.conditions.filter(c => c.op !== 'truth')
   const strategyPresets = strategies.data?.presets ?? []
-  const selectedStrategy = strategyPresets.find(strategy => strategy.id === draft.strategy_id)
   const normalizedStrategyQuery = strategyQuery.trim().toLowerCase()
   const visibleStrategies = strategyPresets.filter(strategy => {
     if (strategyCategory !== 'all' && strategy.source !== strategyCategory) return false
@@ -173,6 +264,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     { key: 'builtin' as const, label: '内置', count: strategyPresets.filter(strategy => strategy.source === 'builtin').length },
     { key: 'custom' as const, label: '自定义', count: strategyPresets.filter(strategy => strategy.source === 'custom').length },
     { key: 'ai' as const, label: 'AI', count: strategyPresets.filter(strategy => strategy.source === 'ai').length },
+    { key: 'composite' as const, label: '叠加', count: strategyPresets.filter(strategy => strategy.source === 'composite').length },
   ]
 
   const onSignalPickerChange = (next: string[]) => {
@@ -212,7 +304,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             signals={selectedSignals}
             onChange={onSignalPickerChange}
             kind="entry"
-            builtinSignals={monitorBuiltinSignals}
+            builtinSignals={pickerSignals}
             disabledSignals={intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : []}
             disabledSignalHint={intradaySupport?.reason}
           />
@@ -287,26 +379,33 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </button>
       </div>
 
-      {/* 资产类型: 股票 / ETF (个股极简模式不显示) */}
-      {!simple && (
+      {/* 资产类型: 股票 / ETF / 指数 (个股极简模式不显示) */}
+      {!simple && draft.type !== 'sector' && (
         <div className="space-y-1.5">
           <span className="text-[11px] text-muted">资产类型</span>
           <div className="inline-flex h-9 rounded-btn border border-border overflow-hidden">
-            {(['stock', 'etf'] as const).map(t => (
+            {(['stock', 'etf', 'index'] as const).map(t => (
               <button
                 key={t}
                 type="button"
                 aria-pressed={assetType === t}
                 onClick={() => {
                   if (assetType === t) return
-                  setDraft(d => ({ ...d, asset_type: t, strategy_id: null, symbols: [] }))
+                  setDraft(d => ({
+                    ...d,
+                    asset_type: t,
+                    strategy_id: null,
+                    symbols: [],
+                    type: t === 'index' && d.type !== 'signal' && d.type !== 'price' ? 'signal' : d.type,
+                    scope: t === 'index' ? 'symbols' : d.scope,
+                  }))
                   setStrategyQuery('')
                   setStrategyCategory('all')
                 }}
                 className={`h-full px-4 text-xs font-medium transition-colors cursor-pointer
                   ${assetType === t ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'}`}
               >
-                {t === 'stock' ? '股票' : 'ETF'}
+                {t === 'stock' ? '股票' : t === 'etf' ? 'ETF' : '指数'}
               </button>
             ))}
           </div>
@@ -316,8 +415,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       {/* 监控类型 */}
       <div className="space-y-1.5">
         <span className="text-[11px] text-muted">监控类型</span>
-        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-          {(options.data?.types ?? []).map(t => {
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+          {visibleTypes.map(t => {
             const Icon = TYPE_ICONS[t.key as keyof typeof TYPE_ICONS] ?? Activity
             const active = draft.type === t.key
             return (
@@ -325,11 +424,20 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 key={t.key}
                 type="button"
                 aria-pressed={active}
-                onClick={() => setDraft(d => ({
-                  ...d,
-                  type: t.key as MonitorRule['type'],
-                  scope: t.key === 'strategy' && d.scope === 'symbols' && d.symbols.length === 0 ? 'all' : d.scope,
-                }))}
+                onClick={() => setDraft(d => {
+                  const type = t.key as MonitorRule['type']
+                  return {
+                    ...d,
+                    type,
+                    notify_events: type === 'strategy'
+                      ? [...(d.notify_events ?? DEFAULT_STRATEGY_NOTIFY_EVENTS)]
+                      : undefined,
+                    scope: type === 'sector'
+                      ? 'all'
+                      : type === 'strategy' && d.scope === 'symbols' && d.symbols.length === 0 ? 'all' : d.scope,
+                    direction: type === 'sector' ? 'up' : d.type === 'sector' ? 'entry' : d.direction,
+                  }
+                })}
                 className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-btn border px-2 text-xs font-medium transition-colors cursor-pointer ${
                   active
                     ? 'border-accent/40 bg-accent/12 text-accent'
@@ -349,12 +457,208 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         <input value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} placeholder="留空用默认名称" className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
       </label>
 
+      {draft.type === 'sector' && (
+        <div className="space-y-4 border-t border-border/60 pt-4">
+          <div className="space-y-1.5">
+            <span className="text-[11px] text-muted">板块分类</span>
+            <div className="grid grid-cols-3 gap-1.5">
+              {SECTOR_KIND_OPTIONS.map(option => {
+                const Icon = option.icon
+                const active = sectorKind === option.key
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => selectSectorKind(option.key)}
+                    className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-btn border text-xs font-medium transition-colors cursor-pointer ${
+                      active ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border bg-base text-secondary hover:border-accent/25'
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {sectorKind === 'industry' && (
+            <div className="space-y-1.5">
+              <span className="text-[11px] text-muted">行业层级</span>
+              <div className="inline-flex h-8 overflow-hidden rounded-btn border border-border bg-base">
+                {([1, 2, 3] as const).map(level => (
+                  <button
+                    key={level}
+                    type="button"
+                    aria-pressed={industryLevel === level}
+                    onClick={() => {
+                      setIndustryLevel(level)
+                      setDraft(d => ({ ...d, sector_targets: [] }))
+                    }}
+                    className={`px-3 text-[11px] transition-colors cursor-pointer ${
+                      industryLevel === level ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'
+                    }`}
+                  >
+                    {level}级
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[11px] text-muted">监控对象</span>
+              <span className="text-[10px] font-mono text-muted">{draft.sector_targets?.length ?? 0}/20</span>
+            </div>
+            {(draft.sector_targets?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {draft.sector_targets?.map(target => (
+                  <span key={target.key} className="inline-flex items-center gap-1 rounded bg-accent/8 px-1.5 py-1 text-[10px] text-accent">
+                    {target.name}
+                    <button type="button" onClick={() => toggleSectorTarget(target)} title="移除" className="text-accent/60 hover:text-danger cursor-pointer">
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <label className="relative block">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted" />
+              <input
+                value={sectorQuery}
+                onChange={event => setSectorQuery(event.target.value)}
+                placeholder={`搜索${SECTOR_KIND_OPTIONS.find(option => option.key === sectorKind)?.label ?? '板块'}`}
+                className="h-9 w-full rounded-btn border border-border bg-base pl-8 pr-3 text-xs text-foreground placeholder:text-muted/50 focus:border-accent/50 focus:outline-none"
+              />
+            </label>
+            <div className="grid max-h-48 grid-cols-1 gap-1 overflow-y-auto pr-1 sm:grid-cols-2">
+              {visibleSectorTargets.length === 0 ? (
+                <div className="col-span-full rounded-btn border border-dashed border-border py-6 text-center text-xs text-muted">
+                  {options.isLoading ? '正在加载...' : '没有可用的监控对象'}
+                </div>
+              ) : visibleSectorTargets.map(target => {
+                const selected = draft.sector_targets?.some(item => item.key === target.key) ?? false
+                const unavailable = !target.available || (target.kind !== 'index' && target.member_count < 5)
+                const targetLabel = target.kind === 'industry'
+                  ? (target.value ?? target.name).replaceAll('-', ' / ')
+                  : target.name
+                return (
+                  <button
+                    key={target.key}
+                    type="button"
+                    disabled={unavailable}
+                    aria-pressed={selected}
+                    onClick={() => toggleSectorTarget(target)}
+                    title={!target.available ? '请先在实时监控设置中加入该指数' : target.member_count < 5 ? '有效成分少于 5 只' : targetLabel}
+                    className={`flex h-9 min-w-0 items-center gap-2 rounded-btn border px-2.5 text-left transition-colors ${
+                      unavailable
+                        ? 'cursor-not-allowed border-border/40 bg-base/40 text-muted/40'
+                        : selected
+                          ? 'cursor-pointer border-accent/40 bg-accent/10 text-accent'
+                          : 'cursor-pointer border-border bg-base text-secondary hover:border-accent/25 hover:text-foreground'
+                    }`}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[11px]">{targetLabel}</span>
+                    {target.symbol && <span className="shrink-0 font-mono text-[9px] opacity-60">{target.symbol}</span>}
+                    {target.kind !== 'index' && <span className="shrink-0 font-mono text-[9px] opacity-60">{target.member_count}</span>}
+                    <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-accent bg-accent text-white' : 'border-border text-transparent'}`}>
+                      <Check className="h-2.5 w-2.5" />
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="grid gap-3 border-t border-border/60 pt-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <span className="text-[11px] text-muted">触发方式</span>
+              <div className="grid h-9 grid-cols-2 overflow-hidden rounded-btn border border-border bg-base">
+                {([
+                  ['change_pct', '涨跌幅到达'],
+                  ['momentum', '快速异动'],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={(draft.sector_trigger ?? 'change_pct') === key}
+                    onClick={() => setDraft(d => ({ ...d, sector_trigger: key }))}
+                    className={`text-[11px] font-medium transition-colors cursor-pointer ${
+                      (draft.sector_trigger ?? 'change_pct') === key ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <span className="text-[11px] text-muted">方向</span>
+              <div className="grid h-9 grid-cols-2 overflow-hidden rounded-btn border border-border bg-base">
+                {([
+                  ['up', draft.sector_trigger === 'momentum' ? '快速上涨' : '上涨'],
+                  ['down', draft.sector_trigger === 'momentum' ? '快速下跌' : '下跌'],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={draft.direction === key}
+                    onClick={() => setDraft(d => ({ ...d, direction: key }))}
+                    className={`text-[11px] font-medium transition-colors cursor-pointer ${
+                      draft.direction === key ? 'bg-accent/10 text-accent' : 'text-muted hover:text-foreground'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {draft.sector_trigger === 'momentum' && (
+              <label className="space-y-1.5">
+                <span className="text-[11px] text-muted">统计窗口</span>
+                <select
+                  value={draft.window_minutes ?? 5}
+                  onChange={event => setDraft(d => ({ ...d, window_minutes: Number(event.target.value) as MonitorRule['window_minutes'] }))}
+                  className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground"
+                >
+                  {[1, 3, 5, 10, 15].map(window => <option key={window} value={window}>{window} 分钟</option>)}
+                </select>
+              </label>
+            )}
+            <label className="space-y-1.5">
+              <span className="text-[11px] text-muted">{draft.sector_trigger === 'momentum' ? '窗口变化阈值' : '板块涨跌幅阈值'}</span>
+              <span className="relative block">
+                <input
+                  type="number"
+                  min="0.01"
+                  max="20"
+                  step="0.1"
+                  value={draft.threshold_pct ?? 1}
+                  onChange={event => setDraft(d => ({ ...d, threshold_pct: Number(event.target.value) }))}
+                  className="h-9 w-full rounded-btn border border-border bg-base pl-3 pr-8 text-xs font-mono text-foreground"
+                />
+                <span className="absolute right-3 top-2.5 text-xs text-muted">%</span>
+              </span>
+            </label>
+          </div>
+          {sectorKind !== 'index' && (
+            <div className="flex flex-wrap gap-1.5 text-[9px] text-muted">
+              <span className="rounded bg-elevated px-1.5 py-0.5">等权平均</span>
+              <span className="rounded bg-elevated px-1.5 py-0.5">行情覆盖 ≥ 80%</span>
+              <span className="rounded bg-elevated px-1.5 py-0.5">有效成分 ≥ 5</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 作用范围 */}
-      <div className="space-y-2">
+      {draft.type !== 'sector' && <div className="space-y-2">
         <span className="text-[11px] text-muted">作用范围</span>
         <div className="flex items-center gap-2">
           <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-            {(options.data?.scopes ?? []).map(s => <option key={s.key} value={s.key} disabled={hasIntradaySignal && s.key !== 'symbols'}>{s.label}</option>)}
+            {visibleScopes.map(s => <option key={s.key} value={s.key} disabled={hasIntradaySignal && s.key !== 'symbols'}>{s.label}</option>)}
           </select>
           {draft.scope === 'symbols' && (
             <div className="flex-1 flex flex-wrap items-center gap-1.5">
@@ -370,7 +674,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 <input
                   value={symbolQuery}
                   onChange={e => setSymbolQuery(e.target.value)}
-                  placeholder="搜索股票..."
+                  placeholder="搜索代码或名称..."
                   className="h-7 w-32 rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:outline-none focus:border-accent/50"
                 />
                 <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
@@ -379,6 +683,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                     {symbolSearch.data.results.map(r => (
                       <button key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated cursor-pointer">
                         <span className="font-mono text-foreground/80">{r.symbol}</span>
+                        {(() => { const b = boardTag(r.symbol); return b && <span className={`ml-1 inline-flex items-center justify-center rounded px-0.5 text-[9px] font-bold leading-tight border ${b.color}`}>{b.label}</span> })()}
                         <span className="ml-1 text-muted">{r.name}</span>
                       </button>
                     ))}
@@ -387,13 +692,13 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               </div>
             </div>
           )}
-          {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有股票生效</span>}
+          {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有标的生效</span>}
           {draft.scope === 'sector' && <span className="text-[11px] text-muted/60">板块精确过滤(开发中,当前等同全市场)</span>}
         </div>
-      </div>
+      </div>}
 
       {/* 触发条件 (非 strategy) */}
-      {draft.type !== 'strategy' && (
+      {draft.type !== 'strategy' && draft.type !== 'sector' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-muted">触发条件</span>
@@ -417,7 +722,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 signals={selectedSignals}
                 onChange={onSignalPickerChange}
                 kind="entry"
-                builtinSignals={monitorBuiltinSignals}
+                builtinSignals={pickerSignals}
                 disabledSignals={intradaySupport?.available === false ? MONITOR_INTRADAY_SIGNAL_OPTIONS : []}
                 disabledSignalHint={intradaySupport?.reason}
               />
@@ -425,7 +730,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 <div className={`mt-2 text-[10px] ${intradaySupport?.available === false ? 'text-danger' : 'text-muted'}`}>
                   {intradaySupport?.available === false
                     ? intradaySupport.reason
-                    : `分时穿越按已完成的一分钟判断,仅支持指定股票,当前最多监听 ${intradaySupport?.max_symbols ?? 0} 只。`}
+                    : `分时穿越按已完成的一分钟判断,仅支持指定标的,当前最多监听 ${intradaySupport?.max_symbols ?? 0} 只。`}
                 </div>
               )}
             </div>
@@ -538,32 +843,36 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             })}
           </div>
 
-          <div className="flex flex-col gap-2 border-t border-border/60 pt-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 text-[11px] text-muted">
-              {selectedStrategy ? (
-                <>已选择 <span className="font-medium text-foreground">{selectedStrategy.name}</span></>
-              ) : '尚未选择策略'}
+          <div className="border-t border-border/60 pt-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-muted">通知事件</span>
+              <span className="text-[9px] text-muted">至少选择一项</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="shrink-0 text-[11px] text-muted">触发方向</span>
-              <div className="inline-flex rounded-btn border border-border bg-base p-0.5">
-                {(options.data?.directions ?? []).map(direction => (
-                  <button
-                    key={direction.key}
-                    type="button"
-                    aria-pressed={draft.direction === direction.key}
-                    onClick={() => setDraft(d => ({ ...d, direction: direction.key as MonitorRule['direction'] }))}
-                    className={`h-7 rounded px-2.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                      draft.direction === direction.key
-                        ? 'bg-accent/15 text-accent'
-                        : 'text-muted hover:text-secondary'
-                    }`}
-                  >
-                    {direction.label}
-                  </button>
-                ))}
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(['signal', 'pool'] as const).map(group => (
+                <div key={group} className="rounded-btn border border-border bg-base p-2.5">
+                  <div className="mb-2 text-[10px] font-medium text-secondary">
+                    {group === 'signal' ? '交易信号' : '选股结果'}
+                  </div>
+                  <div className="space-y-2">
+                    {STRATEGY_NOTIFY_EVENT_OPTIONS.filter(option => option.group === group).map(option => (
+                      <label key={option.key} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={(draft.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).includes(option.key)}
+                          onChange={() => toggleStrategyEvent(option.key)}
+                          className="h-3.5 w-3.5 accent-accent cursor-pointer"
+                        />
+                        <span className="text-[11px] text-foreground">{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
+            {(draft.notify_events ?? LEGACY_STRATEGY_NOTIFY_EVENTS).length === 0 && (
+              <div className="mt-2 text-[10px] text-danger">至少选择一个通知事件</div>
+            )}
           </div>
         </div>
       )}

@@ -14,6 +14,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { useTheme } from '@/lib/theme'
 import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { SealedBadge } from '@/components/SealedBadge'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 import type { ExtColumnDisplayConfig } from '@/lib/watchlist-columns'
 
 // ===== Ext 字段配置 =====
@@ -407,6 +408,7 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
   // 推送渠道默认值: 取偏好设置中的全局默认 (已有规则沿用其值)
   const { data: prefs } = usePreferences()
   const webhookDefaultChannels = prefs?.webhook_default_channels ?? []
+  const backdrop = useDialogBackdrop(onClose)
 
   // 单位倍率: 输入值 × 倍率 = 原始单位 (量=手, 额=元)
   const VOL_UNITS = [
@@ -507,7 +509,7 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
 
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed inset-0 z-40" {...backdrop} />
       <div
         className="fixed z-50 w-60 rounded-lg bg-surface border border-border shadow-xl text-xs overflow-hidden"
         style={{ left, top }}
@@ -1357,6 +1359,7 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
   onClose: () => void
 }) {
   const [draft, setDraft] = useState(fields)
+  const backdrop = useDialogBackdrop(onClose)
   const { data: schemaData } = useQuery({
     queryKey: QK.extDataSchemaAll,
     queryFn: api.extDataSchemaAll,
@@ -1377,7 +1380,7 @@ function ExtConfigDialog({ fields, onSave, onClose }: {
   }, [schemaData])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" {...backdrop}>
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}

@@ -23,6 +23,7 @@ import { useQuery } from '@tanstack/react-query'
 import { QK } from '@/lib/queryKeys'
 import type { ColumnConfig, ColumnGroup, ExtColumnDisplayConfig, CandleColumnConfig, IntradayColumnConfig } from '@/lib/list-columns'
 import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface ListColumnCustomizerProps {
   columns: ColumnConfig[]
@@ -38,6 +39,19 @@ interface ListColumnCustomizerProps {
   showExtColumns?: boolean
   /** 是否显示「单独显示」勾选项（默认 false；仅信息条场景启用，让某列独占一行）。 */
   showStandaloneToggle?: boolean
+}
+
+/** 判断扩展数据字段类型是否为数字(int/float/double/number/decimal 等)。
+ * 旧列 source 无 fieldType 时默认 true(放宽), 让旧列也能配置数字格式 ——
+ * 若列实际非数字, 渲染时 typeof val==='number' 判断会跳过格式化, 无副作用。 */
+function isNumericFieldType(ft?: string): boolean {
+  if (!ft) return true
+  const t = ft.toLowerCase()
+  // 明确是文本类则不显示
+  if (['str', 'string', 'text', 'char', 'varchar', 'date', 'time', 'bool', 'boolean'].some(k => t.includes(k))) {
+    return false
+  }
+  return true
 }
 
 function SortableActiveCol({ col, onRemove, onConfig, configOpen, extTableLabel, extConfig, candleConfig: candlePanel, intradayConfig: intradayPanel, strategiesConfig, showStandaloneToggle, onToggleStandalone }: {
@@ -142,6 +156,7 @@ export function ListColumnCustomizer({
     enabled: open && showExtColumns,
     staleTime: 60_000,
   })
+  const backdrop = useDialogBackdrop(onClose)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
@@ -189,7 +204,7 @@ export function ListColumnCustomizer({
     onChange([...pinnedCols, ...reordered])
   }, [columns, onChange])
 
-  const addExtColumn = useCallback((configId: string, fieldName: string, fieldLabel?: string) => {
+  const addExtColumn = useCallback((configId: string, fieldName: string, fieldLabel?: string, fieldType?: string) => {
     const colId = `ext:${configId}:${fieldName}`
     if (columns.some(c => c.id === colId)) {
       toggleVisible(colId)
@@ -197,7 +212,7 @@ export function ListColumnCustomizer({
     }
     const newCol: ColumnConfig = {
       id: colId,
-      source: { type: 'ext', configId, fieldName, fieldLabel },
+      source: { type: 'ext', configId, fieldName, fieldLabel, fieldType },
       label: fieldLabel || fieldName,
       visible: true,
       align: extColumnAlign,
@@ -405,6 +420,53 @@ export function ListColumnCustomizer({
               >竖向</button>
             </div>
           </label>
+        )}
+        {/* 数字格式化配置: 千分位 + 单位换算 + 小数位(仅 number 类型字段) */}
+        {col.source.type === 'ext' && isNumericFieldType(col.source.fieldType) && (
+          <>
+            <div className="border-t border-border/40 pt-2 mt-1 text-[10px] text-muted">数字格式</div>
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-secondary w-16 shrink-0">千分位</span>
+              <button
+                type="button"
+                onClick={() => updateExtDisplay(col.id, { thousandSeparator: !col.extDisplay?.thousandSeparator })}
+                className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 cursor-pointer ${
+                  col.extDisplay?.thousandSeparator ? 'bg-accent' : 'bg-elevated'
+                }`}
+                aria-pressed={!!col.extDisplay?.thousandSeparator}
+              >
+                <span className={`inline-block h-3 w-3 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                  col.extDisplay?.thousandSeparator ? 'translate-x-[14px]' : 'translate-x-0.5'
+                }`} />
+              </button>
+              <span className="text-[10px] text-muted">如 1,234,567</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-secondary w-16 shrink-0">单位换算</span>
+              <select
+                value={col.extDisplay?.unitConvert ?? 'none'}
+                onChange={e => updateExtDisplay(col.id, { unitConvert: e.target.value as 'none' | 'wan' | 'yi' | 'auto' })}
+                className="flex-1 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 focus:outline-none focus:border-accent/50"
+              >
+                <option value="none">不换算</option>
+                <option value="wan">万 (÷1万)</option>
+                <option value="yi">亿 (÷1亿)</option>
+                <option value="auto">自动 (≥亿用亿, ≥万用万)</option>
+              </select>
+            </label>
+            {(col.extDisplay?.unitConvert ?? 'none') !== 'none' && (
+              <label className="flex items-center gap-2 text-xs">
+                <span className="text-secondary w-16 shrink-0">小数位</span>
+                <input
+                  type="number" min={0} max={6} step={1}
+                  value={col.extDisplay?.unitDecimals ?? 2}
+                  onChange={e => updateExtDisplay(col.id, { unitDecimals: Math.max(0, Math.min(6, Number(e.target.value) || 0)) })}
+                  className="w-16 h-7 rounded bg-elevated border border-border text-foreground text-xs px-2 text-center focus:outline-none focus:border-accent/50"
+                />
+                <span className="text-[10px] text-muted">换算后保留几位</span>
+              </label>
+            )}
+          </>
         )}
         {col.extDisplay && (
           <div className="flex justify-end pt-1">
@@ -643,7 +705,7 @@ export function ListColumnCustomizer({
     return (
       <button
         key={field.name}
-        onClick={() => addExtColumn(configId, field.name, field.label)}
+        onClick={() => addExtColumn(configId, field.name, field.label, field.type)}
         className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-elevated/50 text-left group transition-colors"
       >
         {renderCheckbox(checked)}
@@ -661,7 +723,7 @@ export function ListColumnCustomizer({
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-            onClick={onClose}
+            {...backdrop}
           />
           <motion.div
             initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}

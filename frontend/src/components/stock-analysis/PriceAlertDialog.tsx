@@ -7,6 +7,7 @@ import { LEVEL_GROUPS } from './AnalysisKChart'
 import { api, genRuleId, type MonitorRule, type PriceLevel } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   symbol: string
@@ -37,6 +38,7 @@ function levelGroupLabel(level: PriceLevel) {
 
 export function PriceAlertDialog({ symbol, name, onClose }: Props) {
   const qc = useQueryClient()
+  const backdrop = useDialogBackdrop(onClose)
   const { data: prefs } = usePreferences()
   const levelsQuery = useQuery({
     queryKey: QK.stockLevels(symbol),
@@ -189,7 +191,7 @@ export function PriceAlertDialog({ symbol, name, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3 backdrop-blur-sm sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3 backdrop-blur-sm sm:p-4" {...backdrop}>
       <div role="dialog" aria-modal="true" aria-labelledby="price-alert-title" className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-2xl" onClick={event => event.stopPropagation()}>
         <header className="flex items-center gap-3 border-b border-border/60 px-5 py-3.5">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-sky-400/25 bg-sky-400/10 text-sky-400">

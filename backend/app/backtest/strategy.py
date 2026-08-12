@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -473,6 +474,9 @@ class StrategyBacktestConfig:
     holding_days: int = 5
     # 分钟K精确成交: 开启后用当日分钟K确定穿越价/VWAP (需 Pro+ 分钟K能力)
     minute_fill: bool = False
+    # 市场环境过滤: {"states": ["strong",...], "min_score": 60}。
+    # 强制 T-1: regime[T-1] 决定 entry[T](防未来函数)。None=不过滤。
+    regime_filter: dict | None = None
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
@@ -596,6 +600,128 @@ class StrategyBacktestService:
             config.holding_days,
             config.minute_fill,
             json.dumps(config.overrides or {}, sort_keys=True, ensure_ascii=False, default=str),
+        )
+
+    def _resolve_composite_feature_plan(
+        self,
+        strategy: StrategyDef,
+        *,
+        params: dict,
+        basic_filter: dict,
+        overrides: dict,
+    ) -> tuple[ResolvedFeaturePlan, list[tuple[StrategyDef, dict, dict]]]:
+        """解析 composite 回测的特征计划: 所有子策略 feature_plan 的并集。
+
+        返回 (合并 feature_plan, [(子策略定义, 子params, 子pipeline_config_dict), ...])。
+        子策略必须全为 matrix_native, 否则 fail-closed(首版硬约束)。
+        """
+        from app.strategy import composite as composite_mod
+        from app.strategy.engine import _parse_composite_children
+
+        assert strategy.composite is not None
+        # 权重: override.children 优先, 否则 META 声明。
+        override_children = overrides.get("children")
+        if isinstance(override_children, list) and override_children:
+            spec = _parse_composite_children(override_children)
+            children = spec.children
+        else:
+            children = strategy.composite.children
+
+        resolver = StrategyDependencyResolver()
+        plans: list[ResolvedFeaturePlan] = []
+        resolved_children: list[tuple[StrategyDef, dict, dict]] = []
+        for child in children:
+            child_def = self.strategy_engine.get(child.strategy_id)
+            if child_def.execution_backend != "matrix_native":
+                raise ValueError(
+                    f"叠加回测暂仅支持矩阵子策略; {child.strategy_id!r} "
+                    f"是 {child_def.execution_backend}"
+                )
+            if child_def.matrix_strategy is None:
+                raise ValueError(f"子策略 {child.strategy_id!r} 未注册矩阵策略")
+            # 加载子策略的用户 override(参数/评分等), 保证回测与单独跑子策略同口径。
+            child_override: dict = {}
+            loader = getattr(self.strategy_engine, "_override_loader", None)
+            if loader is not None:
+                try:
+                    loaded = loader(child.strategy_id)
+                    if isinstance(loaded, dict):
+                        child_override = dict(loaded)
+                except Exception:  # noqa: BLE001
+                    pass
+            child_params = self.strategy_engine.resolve_params(child_def, overrides=child_override)
+            child_plan = resolver.resolve(
+                child_def,
+                params=child_params,
+                basic_filter=basic_filter,  # 统一 basic_filter(计划 §3.3)
+                entry_signals=[],
+                exit_signals=[],
+                overrides=child_override,
+            )
+            plans.append(child_plan)
+            # pipeline 用 composite 统一的 basic_filter; scoring 用子策略自己的
+            # (默认 + 用户 override), 因为子策略内部排序影响合并器的排名融合。
+            child_scoring = dict(child_def.meta.get("scoring", {}) or {})
+            if isinstance(child_override.get("scoring"), dict):
+                child_scoring.update(child_override["scoring"])
+            child_pipeline_cfg = MatrixPipelineConfig(
+                basic_filter=basic_filter,
+                scoring=child_scoring,
+                order_by=child_def.meta.get("order_by"),
+                descending=bool(child_def.meta.get("descending", True)),
+                protect_strategy_cache=False,
+            )
+            resolved_children.append((child_def, child_params, child_pipeline_cfg))
+
+        merged_plan = _merge_resolved_feature_plans(plans)
+        # composite 模块用于合并时读取权重列表(顺序对齐 resolved_children)。
+        self._composite_children_weights = [(c.strategy_id, c.weight) for c in children]
+        _ = composite_mod  # 确保模块可导入(回测时由调用方使用)
+        return merged_plan, resolved_children
+
+    def _generate_composite_signal_matrix(
+        self,
+        resolved_children: list[tuple[StrategyDef, dict, dict]],
+        market_data: MarketDataMatrix,
+        merge_mode: str,
+        min_confirm: int,
+        max_hold: int,
+        timing_ms: dict[str, float],
+    ):
+        """逐子策略计算 SignalMatrix, 再合并为单个 SignalMatrix(回测合并)。
+
+        合并语义见 app.strategy.composite.merge_signal_matrices:
+        - entry: union/intersect
+        - exit: 来源投影(每个子的 exit 仅在自己持仓窗口生效, 不串平)
+        - score: 标准化排名加权
+        """
+        from app.strategy import composite as composite_mod
+
+        t_signals = time.perf_counter()
+        sigs = []
+        for child_def, child_params, child_pipeline_cfg in resolved_children:
+            try:
+                child_sig = MatrixStrategyPipeline().run(
+                    child_def.matrix_strategy,
+                    market_data,
+                    child_params,
+                    child_pipeline_cfg,
+                )
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"子策略 {child_def.meta.get('id')} 信号计算失败: {e}") from e
+            sigs.append(child_sig)
+        timing_ms["strategy_signals"] = round((time.perf_counter() - t_signals) * 1000, 1)
+
+        children_weights = getattr(self, "_composite_children_weights", None) or [
+            (cd.meta.get("id", ""), 1.0) for cd, _, _ in resolved_children
+        ]
+        return composite_mod.merge_signal_matrices(
+            market_data.shape,
+            sigs,
+            children_weights,
+            merge_mode,
+            min_confirm,
+            max_hold,
         )
 
     def prepare_matrix_optimization(
@@ -724,6 +850,13 @@ class StrategyBacktestService:
             first.start,
             first.end,
         )
+        # 市场环境过滤(优化器共享, 用首个 config 的 regime_filter)
+        _rm = self._build_regime_mask(
+            market_data.timestamp_labels, first.regime_filter,
+            getattr(getattr(self.engine.repo, "store", None), "data_dir", None),
+        )
+        if _rm is not None:
+            entry_time_mask = entry_time_mask & _rm
         exit_time_mask = self._matrix_date_range_mask(
             market_data.timestamp_labels,
             first.start,
@@ -839,15 +972,23 @@ class StrategyBacktestService:
         )
 
         try:
-            feature_plan = StrategyDependencyResolver().resolve(
-                s,
-                params=params,
-                basic_filter=basic_filter,
-                entry_signals=entry_signals,
-                exit_signals=exit_signals,
-                overrides=overrides,
-                minute_fill=config.minute_fill,
-            )
+            if s.execution_backend == "composite":
+                # composite 回测: 子策略必须全为 matrix_native(否则 fail-closed),
+                # feature_plan 取所有子策略计划的并集(_merge_resolved_feature_plans)。
+                feature_plan, composite_children_resolved = self._resolve_composite_feature_plan(
+                    s, params=params, basic_filter=basic_filter, overrides=overrides
+                )
+            else:
+                composite_children_resolved = None
+                feature_plan = StrategyDependencyResolver().resolve(
+                    s,
+                    params=params,
+                    basic_filter=basic_filter,
+                    entry_signals=entry_signals,
+                    exit_signals=exit_signals,
+                    overrides=overrides,
+                    minute_fill=config.minute_fill,
+                )
         except ValueError as e:
             return _err(str(e))
 
@@ -887,7 +1028,7 @@ class StrategyBacktestService:
             matrix_data_cache_status = prepared.market_data.cache_status
             matrix_data_cache_hit = matrix_data_cache_status in {"exact", "covering"}
             matrix_data_cache_timing_ms = prepared.market_data.cache_timing_ms
-        elif s.execution_backend == "matrix_native":
+        elif s.execution_backend in ("matrix_native", "composite"):
             t_load = time.perf_counter()
             max_hold_for_profile = self._override_value(
                 overrides,
@@ -985,7 +1126,96 @@ class StrategyBacktestService:
         t_signal = time.perf_counter()
         selection_stats: dict[str, int | bool]
 
-        if s.execution_backend == "matrix_native":
+        if s.execution_backend == "composite":
+            # composite 回测信号生成: 复用 matrix 数据加载, 逐子策略算信号后合并。
+            # 退出采用来源投影(composite.merge_signal_matrices), 不串平其他子策略仓位。
+            if composite_children_resolved is None:
+                return _err("叠加策略子策略解析失败")
+            if market_data is None:
+                return _err("矩阵回测缺少基础行情矩阵")
+            entry_time_mask = self._matrix_date_range_mask(
+                market_data.timestamp_labels,
+                config.start,
+                config.end,
+            )
+            # 市场环境过滤(强制 T-1): 只叠加 entry, 不影响 exit
+            _rm = self._build_regime_mask(
+                market_data.timestamp_labels, config.regime_filter,
+                getattr(getattr(self.engine.repo, "store", None), "data_dir", None),
+            )
+            if _rm is not None:
+                entry_time_mask = entry_time_mask & _rm
+            exit_time_mask = self._matrix_date_range_mask(
+                market_data.timestamp_labels,
+                config.start,
+                load_end if config.mode == "full" else config.end,
+            )
+            sim_time_mask = self._matrix_date_range_mask(
+                market_data.timestamp_labels,
+                config.start,
+                sim_end,
+            )
+            time_ids = np.flatnonzero(sim_time_mask)
+            if time_ids.size == 0:
+                return _err("正式回测区间内无数据")
+            start_id = int(time_ids[0])
+            stop_id = int(time_ids[-1]) + 1
+            panel_rows = int(np.isfinite(market_data.close[start_id:stop_id]).sum())
+            panel_columns = len(feature_plan.matrix_columns)
+            reference_price = (
+                rolling_mean(market_data.close, 5)[start_id:stop_id]
+                if matcher_config.minute_fill
+                else None
+            )
+
+            merge_mode = str(params.get("merge_mode") or "union")
+            min_confirm = int(params.get("min_confirm") or 0)
+            # max_hold 用于退出投影窗口封顶; 无值时给一个足够大的兜底(仅靠信号退出)。
+            composite_max_hold = max(int(max_hold_days or 0), 1) if max_hold_days else 250
+            try:
+                signal_matrix = self._generate_composite_signal_matrix(
+                    composite_children_resolved,
+                    market_data,
+                    merge_mode,
+                    min_confirm,
+                    composite_max_hold,
+                    timing_ms,
+                )
+            except ValueError as e:
+                return _err(str(e))
+
+            sim_market_data = slice_market_data_matrix(market_data, start_id, stop_id)
+            sim_signal_matrix = slice_signal_matrix(signal_matrix, start_id, stop_id)
+            sim_signal_matrix = apply_time_masks(
+                sim_signal_matrix,
+                entry_time_mask[start_id:stop_id],
+                exit_time_mask[start_id:stop_id],
+            )
+            timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
+            if not sim_signal_matrix.entry.any():
+                return _err("在指定区间内未产生买入信号")
+
+            raw_candidates = int(sim_signal_matrix.entry.sum())
+            selection_stats = {
+                "strategy_matches": raw_candidates,
+                "entry_candidates": raw_candidates,
+                "entry_trigger_filtered": 0,
+                "entry_trigger_enabled": False,
+            }
+            del market_data, signal_matrix
+
+            t_matrix = time.perf_counter()
+            market_matrix = build_market_matrix_from_signals(
+                sim_market_data,
+                sim_signal_matrix,
+                entry_delay_bars=1 if matcher_config.entry_fill == "open_t+1" else 0,
+                exit_delay_bars=1 if matcher_config.exit_fill == "open_t+1" else 0,
+                reference_price=reference_price,
+                minute_exit_trigger=matcher_config.exit_fill == "signal_next_minute",
+            )
+            timing_ms["matrix_build"] = round((time.perf_counter() - t_matrix) * 1000, 1)
+            del sim_market_data, sim_signal_matrix
+        elif s.execution_backend == "matrix_native":
             if s.matrix_strategy is None:
                 return _err("矩阵策略未注册")
             if self._has_matrix_signal_override(s, overrides):
@@ -1008,6 +1238,12 @@ class StrategyBacktestService:
                     config.start,
                     config.end,
                 )
+                _rm = self._build_regime_mask(
+                    market_data.timestamp_labels, config.regime_filter,
+                    getattr(getattr(self.engine.repo, "store", None), "data_dir", None),
+                )
+                if _rm is not None:
+                    entry_time_mask = entry_time_mask & _rm
                 exit_time_mask = self._matrix_date_range_mask(
                     market_data.timestamp_labels,
                     config.start,
@@ -1227,6 +1463,19 @@ class StrategyBacktestService:
             "score_max": score_max,
             "source": s.source,
             "execution_backend": s.execution_backend,
+            **(
+                {
+                    "composite_children": [
+                        {
+                            "id": cid,
+                            "weight": cw,
+                        }
+                        for cid, cw in getattr(self, "_composite_children_weights", [])
+                    ]
+                }
+                if s.execution_backend == "composite"
+                else {}
+            ),
         } if result_policy.include_strategy_info else {}
 
         selected_stats = result_policy.select_stats(result.stats)
@@ -1394,6 +1643,56 @@ class StrategyBacktestService:
             dtype=bool,
             count=len(timestamp_labels),
         )
+
+    @staticmethod
+    def _build_regime_mask(
+        timestamp_labels: tuple[str, ...],
+        regime_filter: dict | None,
+        data_dir: Path | None,
+    ) -> np.ndarray | None:
+        """构造逐日 regime mask。强制 T-1 防未来函数: regime[T-1] 决定 entry[T]。
+
+        timestamp_labels[i] 的入场资格 = 它的"前一交易日"的 regime 是否满足条件。
+        "前一交易日"用 timestamp_labels 自身的顺序确定(回测时间轴上的前一天)。
+        边界: 首日无前一日环境 → 默认允许(不阻断)。
+        regime_filter 为 None 或无 regime 数据时返回 None(不过滤)。
+        """
+        if not regime_filter or data_dir is None:
+            return None
+        allowed_states = set(regime_filter.get("states") or [])
+        min_score = regime_filter.get("min_score")
+        if not allowed_states and min_score is None:
+            return None
+
+        from app.services import regime_builder
+        regime_df = regime_builder.load_regime_history(data_dir)
+        if regime_df.is_empty():
+            return None
+
+        # 构建 date(ISO) → (state, score) 映射
+        regime_map: dict[str, tuple[str, int]] = {}
+        for r in regime_df.iter_rows(named=True):
+            d = r.get("date")
+            ds = str(d)[:10] if d is not None else None
+            if ds:
+                regime_map[ds] = (str(r.get("state", "")), int(r.get("score", 0) or 0))
+
+        # 对每个 label, 找它的前一交易日的 regime(timestamp_labels 顺序里的前一天)
+        n = len(timestamp_labels)
+        mask = np.ones(n, dtype=bool)  # 默认允许
+        for i in range(1, n):
+            prev_label = timestamp_labels[i - 1][:10]
+            entry = regime_map.get(prev_label)
+            if entry is None:
+                continue  # 无前一日环境数据 → 允许(不阻断)
+            state, score = entry
+            ok = True
+            if allowed_states and state not in allowed_states:
+                ok = False
+            if min_score is not None and score < min_score:
+                ok = False
+            mask[i] = ok
+        return mask
 
     def _build_candidate_filter_mask(
         self,

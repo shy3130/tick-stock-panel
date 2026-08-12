@@ -48,6 +48,10 @@ export function Modal({
   closeOnBackdrop = true,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  // 记录鼠标按下时是否落在遮罩(而非面板)上。
+  // 仅当 mousedown 和 mouseup 都在遮罩时才视为"点击遮罩关闭",
+  // 避免在面板内拖选文本时鼠标移出面板边缘导致误关 (拖拽穿透)。
+  const mouseDownOnBackdrop = useRef(false)
   // onClose 存 ref: 焦点陷阱/ESC effect 只在挂载时装一次。否则父级每次重渲染 (或未 memo 的
   // onClose) 都让 effect 重跑, requestAnimationFrame(focusFirst) 会在每次输入后把焦点抢回
   // 面板首个元素, 导致对话框内文本框无法输入。
@@ -118,7 +122,14 @@ export function Modal({
   return (
     <div
       className={overlayClassName}
-      onClick={closeOnBackdrop ? (e) => { if (e.target === e.currentTarget) onClose() } : undefined}
+      onMouseDown={(e) => {
+        // 仅记录"按下时确实在遮罩上"; 在面板内按下时记 false。
+        mouseDownOnBackdrop.current = e.target === e.currentTarget
+      }}
+      onClick={closeOnBackdrop ? (e) => {
+        // 只有按下和松开都在遮罩上才关闭, 避免拖选文本误关。
+        if (mouseDownOnBackdrop.current && e.target === e.currentTarget) onClose()
+      } : undefined}
     >
       <div
         ref={panelRef}

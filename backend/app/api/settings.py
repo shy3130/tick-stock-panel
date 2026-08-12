@@ -8,9 +8,10 @@ import logging
 import time
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import secrets_store
+from app.data_providers.custom.config import MAX_TIMEOUT
 from app.tickflow import client as tf_client
 from app.tickflow.policy import (
     detect_capabilities,
@@ -349,12 +350,6 @@ class DataProvidersIn(BaseModel):
     financial_data_provider: str | None = None
 
 
-class CustomSourceTestIn(BaseModel):
-    provider: str
-    dataset: str
-    symbols: list[str] | None = None
-
-
 class DatasetFieldMapItem(BaseModel):
     source: str
     target: str
@@ -373,6 +368,12 @@ class DatasetConfigIn(BaseModel):
     end_param: str = "end_time"
     asset_type_param: str | None = None
     freq_param: str | None = None
+    timeout: float | None = Field(
+        default=None,
+        gt=0,
+        le=MAX_TIMEOUT,
+        allow_inf_nan=False,
+    )
 
 
 class AuthConfigIn(BaseModel):
@@ -387,6 +388,13 @@ class CustomSourceIn(BaseModel):
     display_name: str = ""
     auth: AuthConfigIn = AuthConfigIn()
     datasets: dict[str, DatasetConfigIn] = {}
+
+
+class CustomSourceTestIn(BaseModel):
+    provider: str
+    dataset: str
+    symbols: list[str] | None = None
+    config: CustomSourceIn | None = None
 
 
 @router.get("/preferences")
@@ -410,6 +418,9 @@ def get_preferences() -> dict:
         "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
         "pipeline_pull_etf": preferences.get_pipeline_pull_etf(),
         "pipeline_pull_index": preferences.get_pipeline_pull_index(),
+        "pipeline_regime_enabled": preferences.get_pipeline_regime_enabled(),
+        "regime_batch_days": preferences.get_regime_batch_days(),
+        "regime_warmup_days": preferences.get_regime_warmup_days(),
         "pipeline_index_symbols": preferences.get_pipeline_index_symbols(),
         "pipeline_schedule": preferences.get_pipeline_schedule(),
         "instruments_schedule": preferences.get_instruments_schedule(),
@@ -568,11 +579,25 @@ def delete_data_source(name: str) -> dict:
 def test_data_source(req: CustomSourceTestIn) -> dict:
     """试拉自定义数据源，不写盘。"""
     from app.data_providers import custom as custom_sources
-    provider = custom_sources.get_provider(req.provider)
+
+    temporary = req.config is not None
+    provider = None
     try:
+        if req.config:
+            config = req.config.model_dump()
+            dataset_config = config["datasets"].get(req.dataset)
+            if dataset_config is None:
+                raise ValueError(f"dataset '{req.dataset}' is not configured")
+            config["datasets"] = {req.dataset: dataset_config}
+            provider = custom_sources.create_provider(config)
+        else:
+            provider = custom_sources.get_provider(req.provider)
         return provider.test_dataset(req.dataset, req.symbols)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"自定义数据源测试失败: {e}") from e
+    finally:
+        if temporary and provider is not None:
+            provider.close()
 
 
 @router.put("/preferences/data-providers")
@@ -806,6 +831,42 @@ def update_pipeline_pull_types(req: PipelinePullTypesIn) -> dict:
     from app.services import preferences
     cfg = req.model_dump(exclude_none=True)
     return preferences.set_pipeline_pull_types(cfg)
+
+
+class PipelineRegimeEnabledIn(BaseModel):
+    """盘后管道是否自动计算市场环境(regime)。"""
+    pipeline_regime_enabled: bool
+
+
+@router.put("/preferences/pipeline-regime-enabled")
+def update_pipeline_regime_enabled(req: PipelineRegimeEnabledIn) -> dict:
+    """更新盘后管道 regime 自动计算开关。"""
+    from app.services import preferences
+    preferences.save({"pipeline_regime_enabled": bool(req.pipeline_regime_enabled)})
+    return {"pipeline_regime_enabled": preferences.get_pipeline_regime_enabled()}
+
+
+class RegimeBatchParamsIn(BaseModel):
+    """regime 全量回填分批参数(控制内存峰值)。"""
+    batch_days: int | None = None
+    warmup_days: int | None = None
+
+
+@router.put("/preferences/regime-batch-params")
+def update_regime_batch_params(req: RegimeBatchParamsIn) -> dict:
+    """更新 regime 分批参数。仅在传入字段时保存对应项(支持部分更新)。"""
+    from app.services import preferences
+    updates: dict = {}
+    if req.batch_days is not None:
+        updates["regime_batch_days"] = req.batch_days
+    if req.warmup_days is not None:
+        updates["regime_warmup_days"] = req.warmup_days
+    if updates:
+        preferences.save(updates)
+    return {
+        "regime_batch_days": preferences.get_regime_batch_days(),
+        "regime_warmup_days": preferences.get_regime_warmup_days(),
+    }
 
 
 class PipelineIndexSymbolsIn(BaseModel):

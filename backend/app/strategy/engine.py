@@ -39,6 +39,9 @@ DEFAULT_BASIC_FILTER: dict = {
     "boards": ["沪主板", "深主板", "创业板", "科创板", "北交所"],
 }
 
+# 叠加策略硬上限：子策略数量。控制信号计算成本与字段并集膨胀，避免 OOM。
+MAX_COMPOSITE_CHILDREN = 8
+
 
 def _normalize_param_defs(params: Any) -> list[dict]:
     """把 META["params"] 归一化为标准 list[dict] (每项含 id/label/type/default).
@@ -98,6 +101,42 @@ def _normalize_param_item(item: dict) -> dict:
     return norm
 
 
+def _parse_composite_children(raw: Any) -> CompositeSpec:
+    """解析 META["children"] 为 CompositeSpec。
+
+    每项形如 {"strategy_id": "xxx", "weight": 0.4}。仅做结构和权重校验:
+    - 非空 list, 每项含合法 strategy_id 与非负 weight
+    - 数量 <= MAX_COMPOSITE_CHILDREN (超出在加载期拒绝, 避免信号计算成本爆炸)
+    子策略的存在性/非嵌套/asset_types 一致性由 _load_all 两阶段校验保证。
+    """
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("composite strategy META['children'] must be a non-empty list")
+    if len(raw) > MAX_COMPOSITE_CHILDREN:
+        raise ValueError(
+            f"composite strategy children count {len(raw)} exceeds limit {MAX_COMPOSITE_CHILDREN}"
+        )
+    children: list[CompositeChild] = []
+    seen: set[str] = set()
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"composite children[{i}] must be a dict")
+        cid = item.get("strategy_id")
+        if not isinstance(cid, str) or not cid:
+            raise ValueError(f"composite children[{i}] missing non-empty 'strategy_id'")
+        if cid in seen:
+            raise ValueError(f"composite children[{i}] duplicate strategy_id {cid!r}")
+        seen.add(cid)
+        weight = item.get("weight", 1.0)
+        try:
+            weight = float(weight)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"composite children[{i}] weight must be a number") from e
+        if weight < 0:
+            raise ValueError(f"composite children[{i}] weight must be >= 0")
+        children.append(CompositeChild(strategy_id=cid, weight=weight))
+    return CompositeSpec(children=tuple(children))
+
+
 @dataclass
 class StrategyDataContext:
     """一次策略调用所需的标准数据上下文。"""
@@ -109,6 +148,25 @@ class StrategyDataContext:
     history: pl.DataFrame | None = None
     market: Any | None = None
     cache_key: str | None = None
+
+
+@dataclass(frozen=True)
+class CompositeChild:
+    """叠加策略的一个子策略引用。"""
+
+    strategy_id: str
+    weight: float
+
+
+@dataclass(frozen=True)
+class CompositeSpec:
+    """叠加策略的子策略声明（无业务代码，仅引用与权重）。
+
+    引用合法性与一致性由 _load_all 两阶段校验保证：子策略必须存在、
+    非嵌套、asset_types 一致、数量 ≤ MAX_COMPOSITE_CHILDREN。
+    """
+
+    children: tuple[CompositeChild, ...]
 
 
 @dataclass
@@ -127,11 +185,12 @@ class StrategyDef:
     filter_fn: Callable[[pl.DataFrame, dict], pl.Expr] | None
     filter_history_fn: Callable[[pl.DataFrame, dict], pl.DataFrame] | None
     lookback_days: int
-    source: str  # "builtin" | "custom" | "ai"
+    source: str  # "builtin" | "custom" | "ai" | "composite"
     required_features: frozenset[str] = field(default_factory=frozenset)
     file_path: Path | None = None
     execution_backend: str = "polars_expr"
     matrix_strategy: Any | None = None
+    composite: CompositeSpec | None = None  # 仅 backend=="composite" 时非空
 
 
 @dataclass
@@ -143,6 +202,8 @@ class StrategyResult:
     total: int = 0
     elapsed_ms: float = 0.0
     scores: dict[str, float] = field(default_factory=dict)
+    entry_signal_hits: list[dict] = field(default_factory=list)
+    exit_signal_hits: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -156,12 +217,21 @@ class StrategyEngine:
 
     _module_load_lock = threading.RLock()
 
-    def __init__(self, strategy_dirs: list[Path] | None = None):
+    def __init__(
+        self,
+        strategy_dirs: list[Path] | None = None,
+        *,
+        override_loader: Callable[[str], dict] | None = None,
+    ):
         self._strategies: dict[str, StrategyDef] = {}
         self._load_errors: list[dict] = []  # 加载失败的策略 [{file, error}]
         self._strategy_dirs = strategy_dirs or []
         self._realtime_matrices: dict[str, _RealtimeMatrixEntry] = {}
         self._realtime_matrix_lock = threading.RLock()
+        # 可选的 override 加载器: 叠加策略执行时用它查子策略的用户覆盖配置,
+        # 保证 composite 内跑子策略与单独跑子策略使用同一口径(CONTRIBUTING §5.1)。
+        # None 时(测试/无 data_dir) 子策略用默认参数, 不报错。
+        self._override_loader = override_loader
         self._load_all(retain_previous_on_error=False)
 
     # ================================================================
@@ -204,6 +274,24 @@ class StrategyEngine:
                     logger.warning("load strategy %s failed: %s", f.name, e)
                     errors.append({"file": str(f), "error": str(e)})
 
+        # 第二阶段: 校验 composite 引用合法性。
+        # _load_file 是 staticmethod, 加载单个文件时无法判断 child 是否存在;
+        # 此处已拿到全部 candidates, 可做引用、嵌套、asset_types 与数量校验。
+        # 孤儿 composite (引用不合法) 被移出 candidates 并记入 errors,
+        # 但不触发整体 reload 失败 —— 不波及其他正常策略(插件隔离原则)。
+        for sid in list(candidates):
+            strategy = candidates[sid]
+            if strategy.execution_backend != "composite" or strategy.composite is None:
+                continue
+            error = self._validate_composite_references(sid, strategy, candidates)
+            if error is not None:
+                errors.append({
+                    "file": str(strategy.file_path) if strategy.file_path else sid,
+                    "error": error,
+                })
+                candidates.pop(sid, None)
+                candidate_paths.pop(sid, None)
+
         self._load_errors = errors
         if errors and retain_previous_on_error:
             return False
@@ -216,6 +304,53 @@ class StrategyEngine:
     def load_errors(self) -> list[dict]:
         """返回最近一次 _load_all 中加载失败的策略 [{file, error}]。"""
         return list(self._load_errors)
+
+    @staticmethod
+    def _validate_composite_references(
+        sid: str,
+        strategy: StrategyDef,
+        candidates: dict[str, StrategyDef],
+    ) -> str | None:
+        """校验 composite 策略的引用合法性。返回错误描述或 None。
+
+        规则(首版硬约束):
+        - 每个 child 必须已加载(candidates 中存在)
+        - 禁止 composite 嵌套 composite(子策略必须是叶子)
+        - child 的 asset_types / timeframes 必须与父 composite 完全一致
+        - 数量 <= MAX_COMPOSITE_CHILDREN
+        任一不满足返回错误描述, 由 _load_all 移除该孤儿策略(不波及无辜)。
+        """
+        assert strategy.composite is not None
+        children = strategy.composite.children
+        if len(children) > MAX_COMPOSITE_CHILDREN:
+            return (
+                f"composite strategy {sid} children count {len(children)} "
+                f"exceeds limit {MAX_COMPOSITE_CHILDREN}"
+            )
+        parent_assets = list(strategy.meta.get("asset_types", ["stock"]))
+        parent_timeframes = list(strategy.meta.get("timeframes", ["1d"]))
+        for child in children:
+            child_def = candidates.get(child.strategy_id)
+            if child_def is None:
+                return f"composite strategy {sid} 引用的子策略 {child.strategy_id!r} 不存在"
+            if child_def.execution_backend == "composite":
+                return (
+                    f"composite strategy {sid} 引用的子策略 {child.strategy_id!r} "
+                    f"也是叠加策略; 首版禁止嵌套叠加"
+                )
+            child_assets = list(child_def.meta.get("asset_types", ["stock"]))
+            if not set(parent_assets).issubset(set(child_assets)):
+                return (
+                    f"composite strategy {sid} 的 asset_types {parent_assets} "
+                    f"未被子策略 {child.strategy_id!r} 完全支持(支持 {child_assets})"
+                )
+            child_timeframes = list(child_def.meta.get("timeframes", ["1d"]))
+            if not set(parent_timeframes).issubset(set(child_timeframes)):
+                return (
+                    f"composite strategy {sid} 的 timeframes {parent_timeframes} "
+                    f"未被子策略 {child.strategy_id!r} 完全支持(支持 {child_timeframes})"
+                )
+        return None
 
     @staticmethod
     def _load_file(path: Path) -> StrategyDef:
@@ -293,6 +428,8 @@ class StrategyEngine:
             source = "builtin"
         elif "/ai/" in normalized_path:
             source = "ai"
+        elif "/composite/" in normalized_path:
+            source = "composite"
 
         if source == "builtin" and "asset_types" not in meta:
             raise ValueError("builtin strategy META must declare asset_types")
@@ -336,7 +473,7 @@ class StrategyEngine:
                 ),
             )
         )
-        valid_backends = {"polars_expr", "matrix_native", "python_history_legacy"}
+        valid_backends = {"polars_expr", "matrix_native", "python_history_legacy", "composite"}
         if execution_backend not in valid_backends:
             raise ValueError(
                 f"unsupported execution backend {execution_backend!r}; "
@@ -344,6 +481,7 @@ class StrategyEngine:
             )
 
         matrix_strategy = getattr(mod, "MATRIX_STRATEGY", None)
+        composite_spec: CompositeSpec | None = None
         if execution_backend == "matrix_native":
             from app.backtest.matrix import MatrixStrategy
 
@@ -356,6 +494,19 @@ class StrategyEngine:
         elif execution_backend == "polars_expr":
             if filter_fn is None or filter_history_fn is not None:
                 raise ValueError("polars_expr strategy must declare only filter")
+        elif execution_backend == "composite":
+            # 叠加策略是声明式的: 不含业务代码, 仅通过 META["children"] 引用其他策略。
+            # 引用合法性(子策略存在/非嵌套/asset_types 一致/数量上限)延后到
+            # _load_all 两阶段校验 —— 因为此时注册表尚未加载完, 无法判断 child 是否存在。
+            if (
+                filter_fn is not None
+                or filter_history_fn is not None
+                or matrix_strategy is not None
+            ):
+                raise ValueError(
+                    "composite strategy must not declare filter, filter_history or MATRIX_STRATEGY"
+                )
+            composite_spec = _parse_composite_children(meta.get("children"))
         elif filter_history_fn is None or filter_fn is not None:
             raise ValueError("python_history_legacy strategy must declare only filter_history")
 
@@ -379,6 +530,7 @@ class StrategyEngine:
             file_path=path,
             execution_backend=execution_backend,
             matrix_strategy=matrix_strategy,
+            composite=composite_spec,
         )
 
     def reload(self) -> None:
@@ -418,6 +570,32 @@ class StrategyEngine:
 
     def has(self, strategy_id: str) -> bool:
         return strategy_id in self._strategies
+
+    def unregister(self, strategy_id: str) -> bool:
+        """从运行时注册表移除单个策略, 不重新加载其他策略文件。"""
+        if strategy_id not in self._strategies:
+            return False
+        strategies = dict(self._strategies)
+        strategies.pop(strategy_id)
+        self._strategies = strategies
+        with self._realtime_matrix_lock:
+            self._realtime_matrices.clear()
+        return True
+
+    def find_dependents(self, strategy_id: str) -> list[str]:
+        """返回引用了 strategy_id 作为子策略的所有 composite 策略 id。
+
+        供删除校验使用: 删除被引用的子策略会令 composite 加载失败,
+        删除前应阻止(fail-closed)或提示用户先解除引用。策略数量通常很小,
+        线性遍历注册表即可, 无需维护反向索引。
+        """
+        dependents: list[str] = []
+        for sid, strategy in self._strategies.items():
+            if strategy.execution_backend != "composite" or strategy.composite is None:
+                continue
+            if any(c.strategy_id == strategy_id for c in strategy.composite.children):
+                dependents.append(sid)
+        return dependents
 
     @staticmethod
     def validate_context(strategy: StrategyDef, context: StrategyDataContext) -> None:
@@ -486,6 +664,16 @@ class StrategyEngine:
                 required = max(
                     required,
                     int(strategy.matrix_strategy.required_warmup_bars(params)) + 1,
+                )
+            elif strategy.execution_backend == "composite":
+                # composite 预热 = 各子策略预热的 max。
+                # 子策略已通过加载期校验(非嵌套叶子), 这里展开一层即可。
+                if strategy.composite is None:
+                    continue
+                child_ids = [c.strategy_id for c in strategy.composite.children]
+                required = max(
+                    required,
+                    self.required_history_bars(child_ids, params_map=params_map),
                 )
             elif strategy.filter_history_fn:
                 required = max(required, int(strategy.lookback_days))
@@ -618,6 +806,8 @@ class StrategyEngine:
         as_of = context.as_of
         overrides = overrides or {}
         params = self.resolve_params(s, params, overrides)
+        entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
+        exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
 
         if s.execution_backend == "matrix_native":
             return self._run_matrix_strategy(
@@ -631,24 +821,51 @@ class StrategyEngine:
                 started_at=t0,
             )
 
+        if s.execution_backend == "composite":
+            return self._run_composite_strategy(
+                strategy_id,
+                s,
+                context,
+                pool=pool,
+                params=params,
+                overrides=overrides,
+                started_at=t0,
+            )
+
+        signal_df = context.current if context.current is not None else context.history
+        if signal_df is None:
+            signal_df = pl.DataFrame()
+        if not signal_df.is_empty() and "date" in signal_df.columns:
+            signal_df = signal_df.filter(pl.col("date") == as_of)
+        if pool and not signal_df.is_empty():
+            signal_df = signal_df.filter(pl.col("symbol").is_in(pool))
+        exit_signal_hits = self._collect_signal_hits(signal_df, exit_signals)
+
         # 普通策略只读目标日期；历史策略读取调用方注入的历史窗口。
         if s.filter_history_fn:
             if context.history is None:
                 raise ValueError(f"strategy {strategy_id} requires history data")
             df = context.history
             if df.is_empty():
-                return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+                return StrategyResult(
+                    as_of=as_of,
+                    strategy_id=strategy_id,
+                    exit_signal_hits=exit_signal_hits,
+                )
             df = s.filter_history_fn(df, params)
-            if df.is_empty():
-                return StrategyResult(as_of=as_of, strategy_id=strategy_id)
             if "date" in df.columns:
                 df = df.filter(pl.col("date") == as_of)
         else:
             if context.current is None:
                 raise ValueError(f"strategy {strategy_id} requires current data")
             df = context.current
-            if df.is_empty():
-                return StrategyResult(as_of=as_of, strategy_id=strategy_id)
+
+        if df.is_empty():
+            return StrategyResult(
+                as_of=as_of,
+                strategy_id=strategy_id,
+                exit_signal_hits=exit_signal_hits,
+            )
 
         # 基础过滤: 策略默认 basic_filter 兜底, 用户 override 优先覆盖。
         # 这样策略文件里写的 exclude_st/price_min 等默认值即使前端没保存也能生效。
@@ -675,6 +892,12 @@ class StrategyEngine:
         if scoring_overrides:
             scoring = {**scoring, **scoring_overrides}
         df = self._apply_scoring(df, scoring)
+        entry_signal_hits = self._collect_signal_hits(df, entry_signals)
+        if not entry_signals and (s.filter_history_fn or s.filter_fn):
+            entry_signal_hits = [
+                {"symbol": str(symbol), "signals": []}
+                for symbol in df["symbol"].cast(pl.Utf8).unique().to_list()
+            ]
 
         # 排序 + 限制
         limit = self._result_limit(s, overrides)
@@ -704,7 +927,40 @@ class StrategyEngine:
             total=len(rows),
             elapsed_ms=elapsed,
             scores=scores,
+            entry_signal_hits=entry_signal_hits,
+            exit_signal_hits=exit_signal_hits,
         )
+
+    @staticmethod
+    def _effective_signals(overrides: dict, key: str, default: list[str]) -> list[str]:
+        value = overrides.get(key)
+        if isinstance(value, list):
+            return [str(signal) for signal in value if signal]
+        return list(default or [])
+
+    @staticmethod
+    def _collect_signal_hits(df: pl.DataFrame, signals: list[str]) -> list[dict]:
+        if df.is_empty() or not signals or "symbol" not in df.columns:
+            return []
+        resolved = [
+            signal if signal.startswith(("signal_", "csg_")) else f"signal_{signal}"
+            for signal in signals
+        ]
+        available = [
+            (signal, column)
+            for signal, column in zip(signals, resolved, strict=True)
+            if column in df.columns
+        ]
+        if not available:
+            return []
+        hit_df = df.filter(pl.any_horizontal(pl.col(column).fill_null(False) for _, column in available))
+        return [
+            {
+                "symbol": str(row["symbol"]),
+                "signals": [signal for signal, column in available if row.get(column)],
+            }
+            for row in hit_df.iter_rows(named=True)
+        ]
 
     def run_all(
         self,
@@ -869,12 +1125,31 @@ class StrategyEngine:
         if not target_ids:
             return StrategyResult(as_of=as_of, strategy_id=strategy_id)
         target_time = target_ids[-1]
-        selected_assets = np.flatnonzero(signals.entry[target_time] != 0)
+        entry_active = signals.entry[target_time]
+        exit_active = signals.exit[target_time]
+        if asset_mask is not None:
+            entry_active = entry_active & asset_mask
+            exit_active = exit_active & asset_mask
+        entry_signal_hits = self._matrix_signal_hits(
+            entry_active,
+            signals.entry_signal_code[target_time],
+            signals.entry_signal_ids,
+            market.symbols,
+        )
+        exit_signal_hits = self._matrix_signal_hits(
+            exit_active,
+            signals.exit_signal_code[target_time],
+            signals.exit_signal_ids,
+            market.symbols,
+        )
+        selected_assets = np.flatnonzero(entry_active != 0)
         if selected_assets.size == 0:
             return StrategyResult(
                 as_of=as_of,
                 strategy_id=strategy_id,
                 elapsed_ms=(time.perf_counter() - started_at) * 1000,
+                entry_signal_hits=entry_signal_hits,
+                exit_signal_hits=exit_signal_hits,
             )
 
         target_frame = self._matrix_target_frame(source_panel, as_of)
@@ -905,7 +1180,129 @@ class StrategyEngine:
             total=len(rows),
             elapsed_ms=(time.perf_counter() - started_at) * 1000,
             scores=scores,
+            entry_signal_hits=entry_signal_hits,
+            exit_signal_hits=exit_signal_hits,
         )
+
+    def _run_composite_strategy(
+        self,
+        strategy_id: str,
+        strategy: StrategyDef,
+        context: StrategyDataContext,
+        *,
+        pool: list[str] | None = None,
+        params: dict | None = None,
+        overrides: dict | None = None,
+        started_at: float,
+    ) -> StrategyResult:
+        """叠加策略选股: 调度各子策略(共享 context)→ 合并结果。
+
+        复用 run_all 共享 current/history/market, 避免各子策略重复加载数据。
+        子策略必须已在加载期通过两阶段引用校验(存在/非嵌套/asset_types 一致)。
+        """
+        from app.strategy import composite as composite_mod
+
+        assert strategy.composite is not None
+        overrides = overrides or {}
+
+        # 权重: override.children 优先(META 固化值的轻量覆盖), 否则用 META 声明。
+        override_children = overrides.get("children")
+        if isinstance(override_children, list) and override_children:
+            spec = _parse_composite_children(override_children)
+            children = spec.children
+        else:
+            children = strategy.composite.children
+
+        child_ids = [c.strategy_id for c in children]
+        child_weights = [c.weight for c in children]
+        merge_mode = str(params.get("merge_mode") or "union")
+        min_confirm = int(params.get("min_confirm") or 0)
+
+        # 子策略 override: 先加载各自保存的用户配置(参数/评分/信号等),
+        # 再叠加 composite 统一的 basic_filter(计划 §3.3, 保证候选池一致)。
+        # 这样 composite 内跑子策略与单独跑子策略使用同一口径。
+        shared_basic_filter = overrides.get("basic_filter")
+        overrides_map: dict[str, dict] = {}
+        for cid in child_ids:
+            child_override: dict = {}
+            if self._override_loader is not None:
+                try:
+                    loaded = self._override_loader(cid)
+                    if isinstance(loaded, dict):
+                        child_override = dict(loaded)
+                except Exception:  # noqa: BLE001
+                    pass
+            if shared_basic_filter:
+                child_override["basic_filter"] = shared_basic_filter
+            overrides_map[cid] = child_override
+
+        # 共享 context 跑所有子策略。run_all 内部对 matrix_native 子策略会
+        # 合并 field_columns 构建超集矩阵, 一次加载。
+        child_results = self.run_all(
+            context,
+            params_map={},
+            overrides_map=overrides_map,
+            strategy_ids=child_ids,
+        )
+        ordered_results = [child_results[cid] for cid in child_ids]
+
+        merged = composite_mod.merge_results(
+            ordered_results,
+            child_weights,
+            merge_mode,
+            min_confirm,
+            as_of=context.as_of,
+            strategy_id=strategy_id,
+        )
+
+        # 构造展示行: 按 symbol 从各子结果取首个命中的行(含 name/价格等展示字段),
+        # 融合 score。子策略间 schema 可能不同, 保留首个命中子的字段即可。
+        row_by_symbol: dict[str, dict] = {}
+        for res in ordered_results:
+            for row in res.rows:
+                sym = str(row.get("symbol"))
+                if sym and sym not in row_by_symbol and sym in merged.scores:
+                    row_by_symbol[sym] = row
+
+        order_desc = bool(strategy.meta.get("descending", True))
+        ranked_symbols = sorted(
+            merged.scores.keys(),
+            key=lambda s: merged.scores[s],
+            reverse=order_desc,
+        )
+        limit = self._result_limit(strategy, overrides)
+        if limit is not None:
+            ranked_symbols = ranked_symbols[:limit]
+
+        rows = _sanitize([
+            {**row_by_symbol[sym], "score": merged.scores[sym]}
+            for sym in ranked_symbols
+            if sym in row_by_symbol
+        ])
+        scores = {str(row["symbol"]): float(row.get("score") or 0.0) for row in rows}
+
+        return StrategyResult(
+            as_of=context.as_of,
+            strategy_id=strategy_id,
+            rows=rows,
+            total=len(rows),
+            elapsed_ms=(time.perf_counter() - started_at) * 1000,
+            scores=scores,
+        )
+
+    @staticmethod
+    def _matrix_signal_hits(
+        active: np.ndarray,
+        codes: np.ndarray,
+        signal_ids: tuple[str, ...],
+        symbols: tuple[str, ...],
+    ) -> list[dict]:
+        hits = []
+        for asset_id in np.flatnonzero(active != 0):
+            code = int(codes[int(asset_id)])
+            signals = [signal_ids[code]] if 0 <= code < len(signal_ids) else []
+            hits.append({"symbol": symbols[int(asset_id)], "signals": signals})
+        return hits
 
     @staticmethod
     def _matrix_target_frame(panel: pl.DataFrame, as_of: date) -> pl.DataFrame:

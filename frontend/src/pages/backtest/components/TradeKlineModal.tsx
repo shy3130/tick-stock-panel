@@ -5,6 +5,7 @@ import { StockPanel } from '@/components/StockPanel'
 import type { ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import type { StrategyBacktestTrade } from '@/lib/api'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   trade: StrategyBacktestTrade | null
@@ -34,6 +35,7 @@ function fmtSignedMoney(v: number | null | undefined): string {
 
 export function TradeKlineModal({ trade, onClose }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
+  const backdrop = useDialogBackdrop(onClose)
 
   useEffect(() => {
     if (!trade) return
@@ -98,7 +100,7 @@ export function TradeKlineModal({ trade, onClose }: Props) {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={onClose}
+            {...backdrop}
           />
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 12 }}

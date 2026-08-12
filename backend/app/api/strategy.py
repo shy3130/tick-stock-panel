@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import math
 import re
 from dataclasses import asdict
@@ -25,6 +26,7 @@ from app.strategy.monitor import StrategyMonitorService
 from app.strategy.prompt_builder import build_step1, build_step2
 
 router = APIRouter(prefix="/api/strategies", tags=["strategies"])
+logger = logging.getLogger(__name__)
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -56,6 +58,57 @@ def _invalidate_strategy_runtime(request: Request) -> None:
         monitor_engine.invalidate_strategy_state()
 
 
+def _cleanup_deleted_strategy(request: Request, strategy_id: str) -> list[str]:
+    """尽力清理删除后的派生状态, 清理失败不应把已成功的源文件删除变成 500。"""
+    from app.services import preferences
+    from app.strategy import monitor_rules
+
+    data_dir = _data_dir(request)
+    warnings: list[str] = []
+
+    try:
+        strategy_config.delete_override(data_dir, strategy_id)
+    except Exception as e:
+        warnings.append(f"覆盖配置清理失败: {e}")
+
+    try:
+        _invalidate_strategy_runtime(request)
+    except Exception as e:
+        warnings.append(f"运行缓存清理失败: {e}")
+
+    try:
+        monitored_ids = preferences.get_strategy_monitor_ids()
+        if strategy_id in monitored_ids:
+            preferences.set_realtime_monitor_config({
+                "strategy_monitor_ids": [sid for sid in monitored_ids if sid != strategy_id],
+            })
+    except Exception as e:
+        warnings.append(f"监控偏好清理失败: {e}")
+
+    try:
+        rules_changed = False
+        for rule in monitor_rules.load_all(data_dir):
+            if (
+                rule.get("type") == "strategy"
+                and rule.get("strategy_id") == strategy_id
+                and rule.get("enabled", True)
+            ):
+                rule = dict(rule)
+                rule["enabled"] = False
+                monitor_rules.save_one(data_dir, rule)
+                rules_changed = True
+
+        monitor_engine = getattr(request.app.state, "monitor_engine", None)
+        if rules_changed and monitor_engine is not None:
+            monitor_engine.set_rules(monitor_rules.load_all(data_dir))
+    except Exception as e:
+        warnings.append(f"关联监控清理失败: {e}")
+
+    for warning in warnings:
+        logger.warning("delete strategy %s: %s", strategy_id, warning)
+    return warnings
+
+
 def _safe(result_dict: dict) -> dict:
     rows = result_dict.get("rows", [])
     for r in rows:
@@ -65,7 +118,22 @@ def _safe(result_dict: dict) -> dict:
     return result_dict
 
 
-def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
+def _child_meta(engine: StrategyEngine | None, child_id: str) -> dict:
+    """查询子策略的可读名称与来源; engine 缺失或子策略不存在时回退为 id/unknown。"""
+    if engine is None:
+        return {"name": child_id, "source": "unknown"}
+    try:
+        child = engine.get(child_id)
+    except ValueError:
+        return {"name": child_id, "source": "unknown"}
+    return {"name": str(child.meta.get("name") or child_id), "source": child.source}
+
+
+def _strategy_detail(
+    s: StrategyDef,
+    overrides: dict | None = None,
+    engine: StrategyEngine | None = None,
+) -> dict:
     """策略详情（含用户覆盖）"""
     bf = {**s.basic_filter}
     scoring = dict(s.meta.get("scoring", {}))
@@ -112,6 +180,19 @@ def _strategy_detail(s: StrategyDef, overrides: dict | None = None) -> dict:
         "descending": s.meta.get("descending", True),
         "limit": s.meta.get("limit", 30),
         "display_limit": overrides.get("display_limit") if overrides and "display_limit" in overrides else None,
+        # 叠加策略: 子策略列表与权重(供前端展示)。override.children 可覆盖 META 固化值。
+        "composite_children": (
+            [
+                {
+                    "id": c["strategy_id"],
+                    **_child_meta(engine, c["strategy_id"]),
+                    "weight": c.get("weight", 1.0),
+                }
+                for c in (overrides.get("children") if overrides and isinstance(overrides.get("children"), list) else s.meta.get("children", []))
+            ]
+            if s.execution_backend == "composite"
+            else None
+        ),
     }
 
 
@@ -165,6 +246,21 @@ class StrategyCodeSaveRequest(BaseModel):
     description: str = ""
 
 
+class CompositeChildItem(BaseModel):
+    strategy_id: str
+    weight: float = 1.0
+
+
+class StrategyCompositeSaveRequest(BaseModel):
+    strategy_id: str
+    name: str = ""
+    description: str = ""
+    children: list[CompositeChildItem]
+    merge_mode: Literal["union", "intersect"] = "union"
+    min_confirm: int = 0
+    mode: Literal["create", "update"] = "create"
+
+
 class MonitorStartRequest(BaseModel):
     strategy_id: str
 
@@ -191,7 +287,7 @@ def list_strategies(
         sid = meta["id"]
         s = engine.get(sid)
         overrides = all_overrides.get(sid)
-        result.append(_strategy_detail(s, overrides))
+        result.append(_strategy_detail(s, overrides, engine))
     return {"strategies": result, "load_errors": engine.load_errors()}
 
 
@@ -203,7 +299,7 @@ def get_strategy(strategy_id: str, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     overrides = strategy_config.load_override(_data_dir(request), strategy_id)
-    return _strategy_detail(s, overrides or None)
+    return _strategy_detail(s, overrides or None, engine)
 
 
 # ── 执行选股 ─────────────────────────────────────────────────────────
@@ -481,8 +577,8 @@ def _validate_strategy_id(strategy_id: str) -> str:
 
 
 def _target_dir(data_dir: Path, source: str) -> Path:
-    if source not in {"ai", "custom"}:
-        raise ValueError("target_source 必须是 ai 或 custom")
+    if source not in {"ai", "custom", "composite"}:
+        raise ValueError("target_source 必须是 ai、custom 或 composite")
     return data_dir / "strategies" / source
 
 
@@ -743,6 +839,135 @@ def save_strategy_code(req: StrategyCodeSaveRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+def _render_composite_code(
+    sid: str,
+    name: str,
+    description: str,
+    children: list[dict],
+    merge_mode: str,
+    min_confirm: int,
+) -> str:
+    """渲染声明式 composite 策略 .py 文件内容。
+
+    composite 不含业务代码, 仅通过 META.children 引用子策略 + EXECUTION_BACKEND 声明。
+    权重固化在 META; merge_mode/min_confirm 作为 params(可经 override 轻量调整)。
+    """
+    import json as _json
+
+    children_json = ",\n        ".join(
+        _json.dumps({"strategy_id": c["strategy_id"], "weight": c["weight"]}, ensure_ascii=False)
+        for c in children
+    )
+    safe_name = name or sid
+    return f'''"""叠加策略 {sid}（自动生成, 请勿手改业务逻辑）。"""
+META = {{
+    "id": {sid!r},
+    "name": {safe_name!r},
+    "description": {description!r},
+    "asset_types": ["stock"],
+    "timeframes": ["1d"],
+    "params": [
+        {{"id": "merge_mode", "label": "合并模式", "type": "select",
+          "options": ["union", "intersect"], "default": {merge_mode!r}}},
+        {{"id": "min_confirm", "label": "交集最少确认数", "type": "int",
+          "default": {int(min_confirm)!r}, "min": 0}},
+    ],
+    "scoring": {{}},
+    "order_by": "score",
+    "descending": True,
+    "limit": 100,
+    "children": [
+        {children_json}
+    ],
+}}
+EXECUTION_BACKEND = "composite"
+'''
+
+
+def _save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request) -> dict:
+    """保存叠加策略: 渲染声明式 .py → 写盘 → reload → 校验。"""
+    sid = _validate_strategy_id(req.strategy_id)
+    if not sid.startswith("composite_"):
+        raise ValueError("叠加策略 ID 必须以 composite_ 开头")
+
+    engine = _get_engine(request)
+    data_dir = _data_dir(request)
+
+    existing: StrategyDef | None = None
+    try:
+        existing = engine.get(sid)
+    except ValueError:
+        existing = None
+
+    if req.mode == "create":
+        if existing is not None:
+            raise ValueError(f"策略 {sid} 已存在，请改用修改模式或换一个策略 ID")
+    else:  # update
+        if existing is None:
+            raise ValueError(f"策略 {sid} 不存在")
+        if existing.source == "builtin":
+            raise ValueError("内置策略不可覆盖")
+        # 只允许覆盖 composite 策略(防止把普通策略覆盖成 composite)
+        if existing.execution_backend != "composite":
+            raise ValueError("目标策略不是叠加策略，无法以叠加模式覆盖")
+
+    if not req.children:
+        raise ValueError("叠加策略至少需要一个子策略")
+
+    children = [{"strategy_id": c.strategy_id, "weight": c.weight} for c in req.children]
+    # 子策略存在性预检(给出清晰错误, 而非等到 reload 后孤儿移除的笼统报错)。
+    for c in children:
+        if not engine.has(c["strategy_id"]):
+            raise ValueError(f"子策略 {c['strategy_id']!r} 不存在")
+        try:
+            child_def = engine.get(c["strategy_id"])
+            if child_def.execution_backend == "composite":
+                raise ValueError(f"子策略 {c['strategy_id']!r} 也是叠加策略; 首版禁止嵌套叠加")
+        except ValueError:
+            raise
+
+    code = _render_composite_code(
+        sid, req.name, req.description, children, req.merge_mode, req.min_confirm
+    )
+
+    out_dir = _target_dir(data_dir, "composite")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{sid}.py"
+    previous_code = path.read_text(encoding="utf-8") if path.exists() else None
+    path.write_text(code, encoding="utf-8")
+
+    try:
+        engine.reload()
+        loaded = engine.get(sid)
+        if loaded.file_path is None or loaded.file_path.resolve() != path.resolve():
+            raise ValueError("策略加载到了非预期文件，请检查是否存在重复 strategy_id")
+        if loaded.source != "composite":
+            raise ValueError(f"策略来源异常: 期望 composite, 实际 {loaded.source}")
+        if loaded.execution_backend != "composite":
+            raise ValueError("策略后端异常: 期望 composite")
+    except Exception as e:
+        _restore_strategy_file(path, previous_code)
+        engine.reload()
+        raise ValueError(f"叠加策略保存失败: {e}") from e
+
+    _invalidate_strategy_runtime(request)
+
+    return {
+        "ok": True,
+        "strategy_id": sid,
+        "source": "composite",
+        "path": str(path),
+    }
+
+
+@router.post("/composite/save")
+def save_composite_strategy(req: StrategyCompositeSaveRequest, request: Request):
+    try:
+        return _save_composite_strategy(req, request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.post("/ai/save")
 async def ai_save(req: AISaveRequest, request: Request):
     try:
@@ -763,34 +988,54 @@ async def ai_save(req: AISaveRequest, request: Request):
 
 @router.delete("/{strategy_id}")
 def delete_strategy(strategy_id: str, request: Request):
-    """删除自定义策略 — 清除 .py 文件 + overrides + 热重载。内置策略不可删除。"""
+    """删除自定义策略 — 清除源文件、运行时注册和关联状态。内置策略不可删除。"""
 
     engine = _get_engine(request)
     try:
         s = engine.get(strategy_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在") from e
 
     if s.source == "builtin":
         raise HTTPException(status_code=403, detail="内置策略不可删除")
 
-    data_dir = _data_dir(request)
-    path = s.file_path
-    previous_code = path.read_text(encoding="utf-8") if path and path.exists() else None
-    if path and path.exists():
-        path.unlink()
-    try:
-        engine.reload()
-    except Exception as e:
-        if path is not None and previous_code is not None:
-            path.write_text(previous_code, encoding="utf-8")
-            engine.reload()
-        raise HTTPException(status_code=400, detail=f"策略删除失败: {e}") from e
+    # 删除被引用的子策略会令叠加策略加载失败; 删除前 fail-closed 阻止。
+    dependents = engine.find_dependents(strategy_id)
+    if dependents:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该策略被叠加策略 {dependents} 引用，请先解除引用后再删除",
+        )
 
-    override_path = data_dir / "user_data" / "strategy_overrides" / f"{strategy_id}.json"
-    override_path.unlink(missing_ok=True)
-    _invalidate_strategy_runtime(request)
-    return {"ok": True}
+    path = s.file_path
+    data_dir = _data_dir(request)
+    if path is None or s.source not in {"custom", "ai", "composite"}:
+        raise HTTPException(status_code=400, detail="策略源文件路径无效, 无法删除")
+
+    try:
+        allowed_dir = (data_dir / "strategies" / s.source).resolve()
+        resolved_path = path.resolve()
+    except (OSError, RuntimeError) as e:
+        raise HTTPException(status_code=409, detail=f"无法访问策略文件: {e}") from e
+    if not resolved_path.is_relative_to(allowed_dir):
+        raise HTTPException(status_code=400, detail="策略源文件不在用户策略目录, 拒绝删除")
+
+    try:
+        resolved_path.unlink(missing_ok=True)
+    except OSError as e:
+        reason = e.strerror or str(e)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"无法删除策略文件 {resolved_path.name}: {reason}。"
+                "请确认数据目录可写; Docker 部署请检查数据卷不是只读挂载。"
+            ),
+        ) from e
+
+    # 删除只影响当前策略, 全量 reload 会让其他损坏或重复 ID 的文件阻塞本次删除。
+    engine.unregister(strategy_id)
+    warnings = _cleanup_deleted_strategy(request, strategy_id)
+    return {"ok": True, "warnings": warnings}
 
 
 # ── 监控 ─────────────────────────────────────────────────────────────

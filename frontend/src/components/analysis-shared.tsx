@@ -30,6 +30,7 @@ import { cn } from '@/lib/cn'
 import type { DimensionGroup, QuoteMap } from '@/lib/analysis-adapter'
 import { computeQuoteMetrics } from '@/lib/analysis-adapter'
 import { fmtPct, priceColorClass } from '@/lib/format'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 // ===== 配置类型 =====
 
@@ -62,6 +63,7 @@ export function AnalysisConfigDialog({
   showHierarchyLevel?: boolean
 }) {
   const [draft, setDraft] = useState<AnalysisFieldConfig>(currentConfig)
+  const backdrop = useDialogBackdrop(onClose)
   const { data: extList } = useQuery({
     queryKey: QK.extData,
     queryFn: api.extDataList,
@@ -84,7 +86,7 @@ export function AnalysisConfigDialog({
   )
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" {...backdrop}>
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}

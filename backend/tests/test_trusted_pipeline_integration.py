@@ -433,7 +433,11 @@ def test_run_now_missing_tickflow_adjustment_capability_closes_trust_gate(
     )
 
     monkeypatch.setattr(daily_pipeline.instrument_sync, "sync_instruments", lambda path: 0)
-    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: ["600000.SH"])
+    monkeypatch.setattr(
+        daily_pipeline,
+        "_resolve_universe",
+        lambda capset, repo=None: ["600000.SH"],
+    )
     monkeypatch.setattr(daily_pipeline, "_invalidate", lambda table=None: None)
     monkeypatch.setattr(daily_pipeline, "_refresh_single_view", lambda repo, name: None)
     monkeypatch.setattr(daily_pipeline, "_refresh_views", lambda repo: None)
@@ -494,7 +498,11 @@ def test_run_now_backfills_daily_enriched_receipt_when_data_is_unchanged(
         latest_daily_date=lambda: as_of,
     )
     monkeypatch.setattr(daily_pipeline.instrument_sync, "sync_instruments", lambda path: 0)
-    monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: [symbol])
+    monkeypatch.setattr(
+        daily_pipeline,
+        "_resolve_universe",
+        lambda capset, repo=None: [symbol],
+    )
     monkeypatch.setattr(daily_pipeline, "_invalidate", lambda table=None: None)
     monkeypatch.setattr(daily_pipeline, "_refresh_single_view", lambda repo, name: None)
     monkeypatch.setattr(daily_pipeline, "_refresh_views", lambda repo: None)

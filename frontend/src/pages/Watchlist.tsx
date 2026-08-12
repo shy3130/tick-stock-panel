@@ -6,7 +6,7 @@ import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, 
 import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPrice, fmtPct, fmtBigNum, priceColorClass } from '@/lib/format'
+import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
@@ -16,6 +16,7 @@ import {
   type DimensionMembersTarget,
 } from '@/components/DimensionMembersDialog'
 import { WatchlistImportDialog } from '@/components/WatchlistImportDialog'
+import { getOcrInstallHint } from '@/lib/ocrInstallHint'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { VIRTUAL_LIST_THRESHOLD, useParentScroll } from '@/components/virtual-list/useParentScroll'
@@ -77,8 +78,12 @@ function renderExtValue(
 ): React.ReactNode {
   if (val == null || Number.isNaN(val)) return <span className="text-muted">—</span>
   if (typeof val === 'number') {
-    // int 类型不显示小数
-    const displayVal = Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val)
+    // 数字格式化: 千分位 + 单位换算 + 小数位(由列配置控制)
+    const cfg = col.extDisplay
+    const hasNumFmt = cfg?.thousandSeparator || (cfg?.unitConvert && cfg.unitConvert !== 'none')
+    const displayVal = hasNumFmt
+      ? formatExtNumber(val, { thousandSeparator: cfg?.thousandSeparator, unitConvert: cfg?.unitConvert, unitDecimals: cfg?.unitDecimals })
+      : (Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val))
     return <span className="tabular-nums">{displayVal}</span>
   }
   if (typeof val === 'boolean') {
@@ -219,8 +224,8 @@ function StockSearchBox({
   const [activeIdx, setActiveIdx] = useState(-1)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, 'stock,etf'),
-    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf'),
+    queryKey: QK.instrumentSearch(query, 'stock,etf,index'),
+    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index'),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -304,6 +309,15 @@ function StockSearchBox({
                     {r.asset_type === 'etf' && (
                       <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-accent/10 text-accent">ETF</span>
                     )}
+                    {r.asset_type === 'index' && (
+                      <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-sky-500/10 text-sky-400">指数</span>
+                    )}
+                    {(() => {
+                      const b = boardTag(r.symbol)
+                      return b && (
+                        <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
+                      )
+                    })()}
                   </button>
                   <button
                     type="button"
@@ -570,12 +584,33 @@ export function Watchlist() {
   const [columns, setColumns] = useState<ColumnConfig[]>([...BUILTIN_COLUMNS])
   const [customizerOpen, setCustomizerOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [ocrAvailable, setOcrAvailable] = useState<boolean | null>(null)
+  const [ocrInstallHint, setOcrInstallHint] = useState('')
   const columnsLoaded = useRef(false)
 
   useEffect(() => {
     if (columnsLoaded.current) return
     columnsLoaded.current = true
     loadColumnConfig().then(setColumns)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void api.watchlistOcrStatus().then(
+      res => {
+        if (cancelled) return
+        setOcrAvailable(res.available)
+        if (!res.available) setOcrInstallHint(getOcrInstallHint())
+      },
+      () => {
+        if (cancelled) return
+        setOcrAvailable(false)
+        setOcrInstallHint(getOcrInstallHint())
+      },
+    )
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const handleColumnsChange = useCallback((next: ColumnConfig[]) => {
@@ -671,6 +706,13 @@ export function Watchlist() {
   const symbols = enriched.data?.rows?.map((r: any) => r.symbol) ?? []
   const symbolsKey = symbols.join(',')
 
+  // 指数无本地分钟K数据, 分时批量请求剔除指数 symbol (省请求, 避免逐只 404)
+  const minuteSymbols = useMemo(
+    () => symbols.filter((s: string) => (enriched.data?.rows ?? []).find((r: any) => r.symbol === s)?.asset_type !== 'index'),
+    [symbols, enriched.data],
+  )
+  const minuteSymbolsKey = minuteSymbols.join(',')
+
   // 实时行情状态 (提前到此处: 分时轮询判断需要 realtimeRunning)
   const quoteStatus = useQuoteStatus()
   const realtimeRunning = quoteStatus.data?.running ?? false
@@ -692,9 +734,9 @@ export function Watchlist() {
   const intradayRefreshEnabled = prefsData?.minute_intraday_refresh ?? false
   const intradayRefreshInterval = prefsData?.minute_intraday_refresh_interval ?? 6
   const minuteBatch = useQuery({
-    queryKey: QK.minuteBatch(symbolsKey),
-    queryFn: () => api.klineMinuteBatch(symbols),
-    enabled: intradayVisible && symbols.length > 0,
+    queryKey: QK.minuteBatch(minuteSymbolsKey),
+    queryFn: () => api.klineMinuteBatch(minuteSymbols),
+    enabled: intradayVisible && minuteSymbols.length > 0,
     staleTime: 10_000,
     refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? intradayRefreshInterval * 1000 : false,
   })
@@ -846,6 +888,8 @@ export function Watchlist() {
     let result = rows
     if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
+        // 非股票 (指数/ETF) 无板块语义, 不受板块筛选影响 (顺带修复 ETF 行被误过滤)
+        if (r.asset_type && r.asset_type !== 'stock') return true
         const board = getBoardType(r.symbol)
         return board != null && boardFilter.has(board)
       })
@@ -1004,9 +1048,17 @@ export function Watchlist() {
               onAdd={(sym) => addMutation.mutate(sym)}
             />
             <button
-              onClick={() => setImportOpen(true)}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
-              title="从截图导入自选"
+              onClick={() => {
+                if (ocrAvailable === false) return
+                setImportOpen(true)
+              }}
+              disabled={ocrAvailable === false}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-elevated disabled:hover:text-secondary"
+              title={
+                ocrAvailable === false
+                  ? ocrInstallHint || 'OCR 不可用，请先安装 Tesseract'
+                  : '从截图导入自选'
+              }
             >
               <ImagePlus className="h-4 w-4" />
             </button>
@@ -1333,6 +1385,18 @@ export function Watchlist() {
                 }
                 // 分时列
                 if (key === 'intraday') {
+                  // 指数无本地分钟K数据, 分时列降级为占位符
+                  if (r.asset_type === 'index') {
+                    const iw = intradayChartVisible ? intradayResolved.width : 40
+                    const ih = intradayChartVisible ? intradayResolved.height : 40
+                    return (
+                      <td className="pl-3 pr-2 py-1.5 border-l border-border/30" style={{ width: iw + 4, minWidth: iw + 4, maxWidth: iw + 4, height: ih }}>
+                        <div className="flex items-center justify-center">
+                          <span className="text-[10px] text-muted">—</span>
+                        </div>
+                      </td>
+                    )
+                  }
                   const rows: MinuteKlineRow[] = minuteData[r.symbol] ?? []
                   // 眼睛关闭(收起)时用小尺寸 (和日k收起态一致 40x40); 开启时用配置值
                   const iw = intradayChartVisible ? intradayResolved.width : 40

@@ -1,4 +1,5 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import * as echarts from 'echarts'
 import { useECharts } from './useECharts'
 import type { StrategyBacktestResult } from '@/lib/api'
 import { useChartTheme } from '@/lib/theme'
@@ -9,8 +10,25 @@ interface Props {
 
 export function StrategyNavChart({ result }: Props) {
   const ct = useChartTheme()
+  // 可点击隐藏的图例(series name 为 key)。策略净值/回撤保持常显。
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  // 保存上一次 dataZoom 的 start/end, 切换图例重绘(notMerge:true)时回填, 避免缩放窗口复位。
+  const containerRef = useRef<HTMLDivElement>(null)
+  const toggleLegend = (name: string) =>
+    setHidden(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
   const option = useMemo(() => {
     if (!result.equity_curve.length) return null
+
+    // 回填上次 dataZoom 的 start/end, 切换图例(notMerge:true 全量重绘)时不丢失缩放窗口。
+    const prevInstance = containerRef.current ? echarts.getInstanceByDom(containerRef.current) : null
+    const prevZoom = (prevInstance?.getOption() as any)?.dataZoom?.[0]
+    const zoomStart = prevZoom && typeof prevZoom.start === 'number' ? prevZoom.start : undefined
+    const zoomEnd = prevZoom && typeof prevZoom.end === 'number' ? prevZoom.end : undefined
 
     const moneyFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
     const valueFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -25,6 +43,18 @@ export function StrategyNavChart({ result }: Props) {
     const benchmarkValues = dates.map(d => benchmarkByDate.get(d) ?? null)
     const hasBenchmark = benchmarkValues.some(v => v != null)
     const ddValues = result.drawdown_curve.map(r => r.value * 100)
+    const positionValues = result.equity_curve.map(r => {
+      if (r.exposure != null) return r.exposure * 100
+      if (r.cash != null && r.value > 0) {
+        return Math.max(0, Math.min(100, (1 - r.cash / r.value) * 100))
+      }
+      return null
+    })
+    const hasPosition = positionValues.some(v => v != null)
+    const navColor = '#3b82f6'
+    const benchmarkColor = '#64748b'
+    const drawdownColor = '#f04438'
+    const positionColor = '#f59e0b'
 
     return {
       animation: false,
@@ -91,6 +121,15 @@ export function StrategyNavChart({ result }: Props) {
           splitLine: { lineStyle: { color: ct.grid } },
           axisLine: { show: false },
         },
+        ...(hasPosition ? [{
+          type: 'value',
+          gridIndex: 0,
+          min: 0,
+          max: 100,
+          show: false,
+          splitLine: { show: false },
+          axisLine: { show: false },
+        }] : []),
       ],
       dataZoom: [
         {
@@ -100,6 +139,8 @@ export function StrategyNavChart({ result }: Props) {
           zoomOnMouseWheel: true,
           moveOnMouseMove: true,
           moveOnMouseWheel: false,
+          ...(zoomStart !== undefined ? { start: zoomStart } : {}),
+          ...(zoomEnd !== undefined ? { end: zoomEnd } : {}),
         },
         {
           type: 'slider',
@@ -113,6 +154,8 @@ export function StrategyNavChart({ result }: Props) {
           handleStyle: { color: ct.text, borderColor: '#94a3b8' },
           textStyle: { color: ct.text, fontSize: 10 },
           brushSelect: false,
+          ...(zoomStart !== undefined ? { start: zoomStart } : {}),
+          ...(zoomEnd !== undefined ? { end: zoomEnd } : {}),
         },
       ],
       tooltip: {
@@ -127,10 +170,11 @@ export function StrategyNavChart({ result }: Props) {
             if (p.value == null) continue
             const isDrawdown = p.seriesName === '回撤'
             const isBenchmark = p.seriesName === '同期上证指数'
+            const isPosition = p.seriesName === '仓位'
             html += `<div style="display:flex;justify-content:space-between;gap:16px">
               <span style="color:${p.color}">${p.seriesName}</span>
               <span style="font-family:monospace">${
-                isDrawdown
+                isDrawdown || isPosition
                   ? `${(p.value as number).toFixed(2)}%`
                   : isBenchmark
                     ? `${valueFmt.format(p.value as number)} 点`
@@ -149,7 +193,8 @@ export function StrategyNavChart({ result }: Props) {
           yAxisIndex: hasBenchmark ? 1 : 0,
           data: navValues,
           symbol: 'none',
-          lineStyle: { color: '#3b82f6', width: 2.2 },
+          itemStyle: { color: navColor },
+          lineStyle: { color: navColor, width: 2.2 },
           areaStyle: {
             color: {
               type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
@@ -160,7 +205,7 @@ export function StrategyNavChart({ result }: Props) {
             } as any,
           },
         },
-        ...(hasBenchmark ? [{
+        ...(hasBenchmark && !hidden.has('同期上证指数') ? [{
           name: '同期上证指数',
           type: 'line',
           xAxisIndex: 0,
@@ -168,7 +213,8 @@ export function StrategyNavChart({ result }: Props) {
           data: benchmarkValues,
           symbol: 'none',
           connectNulls: true,
-          lineStyle: { color: 'rgba(148,163,184,0.45)', width: 1, type: 'dashed' },
+          itemStyle: { color: benchmarkColor },
+          lineStyle: { color: benchmarkColor, opacity: 0.55, width: 1, type: 'dashed' },
         }] : []),
         {
           name: '回撤',
@@ -177,31 +223,65 @@ export function StrategyNavChart({ result }: Props) {
           yAxisIndex: 2,
           data: ddValues,
           symbol: 'none',
-          lineStyle: { color: 'rgba(240,68,56,0.6)', width: 1 },
+          itemStyle: { color: drawdownColor },
+          lineStyle: { color: drawdownColor, opacity: 0.65, width: 1 },
           areaStyle: { color: 'rgba(240,68,56,0.12)' },
         },
+        ...(hasPosition && !hidden.has('仓位') ? [{
+          name: '仓位',
+          type: 'line',
+          step: 'end',
+          xAxisIndex: 0,
+          yAxisIndex: 3,
+          data: positionValues,
+          symbol: 'none',
+          itemStyle: { color: positionColor },
+          lineStyle: { color: positionColor, width: 1.2 },
+          areaStyle: { color: 'rgba(245,158,11,0.08)' },
+          z: 1,
+        }] : []),
       ],
     } as any
-  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id, ct])
+  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id, ct, hidden])
 
-  const chartRef = useECharts(option, [result.run_id, ct])
+  const chartRef = useECharts(option, [result.run_id, ct], containerRef)
 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-4 px-4 pb-2">
         <span className="flex items-center gap-1.5 text-[10px] text-secondary">
-          <span className="w-3 h-0.5 rounded bg-accent" />
+          <span className="w-3 h-0.5 rounded bg-[#3b82f6]" />
           策略净值
         </span>
         <span className="flex items-center gap-1.5 text-[10px] text-secondary">
-          <span className="w-3 h-0.5 rounded bg-red-400/60" />
+          <span className="w-3 h-0.5 rounded bg-[#f04438]" />
           回撤
         </span>
+        {result.equity_curve.some(r => r.exposure != null || (r.cash != null && r.value > 0)) && (
+          <button
+            type="button"
+            onClick={() => toggleLegend('仓位')}
+            title="点击显示/隐藏"
+            className={`flex items-center gap-1.5 text-[10px] text-secondary cursor-pointer transition-opacity ${
+              hidden.has('仓位') ? 'opacity-40' : 'opacity-100'
+            }`}
+          >
+            <span className="w-3 h-0.5 rounded bg-[#f59e0b]" />
+            仓位
+          </button>
+        )}
         {(result.benchmark_curve?.length ?? 0) > 0 && (
-          <span className="flex items-center gap-1.5 text-[10px] text-secondary">
-            <span className="w-3 h-0.5 rounded border-t border-dashed border-slate-400/60" />
+          <button
+            type="button"
+            onClick={() => toggleLegend('同期上证指数')}
+            title="点击显示/隐藏"
+            className={`flex items-center gap-1.5 text-[10px] text-secondary cursor-pointer transition-opacity ${
+              hidden.has('同期上证指数') ? 'opacity-40' : 'opacity-100'
+            }`}
+          >
+            <span className="w-3 h-0.5 rounded border-t border-dashed border-[#64748b]" />
             同期上证指数
-          </span>
+          </button>
         )}
         <span className="ml-auto text-[10px] text-muted">滚轮缩放 · 拖动平移</span>
       </div>

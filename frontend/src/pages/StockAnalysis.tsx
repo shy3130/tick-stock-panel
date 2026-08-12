@@ -93,7 +93,7 @@ export function StockAnalysis() {
         {/* 搜索栏 */}
         <div className="flex items-center gap-3">
           <div className="w-72">
-            <StockFinancialSearch onSelect={onSelect} />
+            <StockFinancialSearch onSelect={onSelect} assetTypes="stock,index" />
           </div>
           {symbol && (
             <>

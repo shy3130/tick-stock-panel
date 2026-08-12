@@ -8,7 +8,7 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Check, Plus, Eye, EyeOff, RefreshCw } from 'lucide-react'
 import type { KlineRow, MinuteKlineRow } from '@/lib/api'
-import { fmtPrice } from '@/lib/format'
+import { fmtPrice, formatExtNumber } from '@/lib/format'
 import type { ColumnConfig } from '@/lib/screener-columns'
 import { getSignals, signalCls } from '@/lib/stock-table'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
@@ -121,7 +121,12 @@ function renderExtValue(
 ): ReactNode {
   if (val == null || Number.isNaN(val)) return <span className="text-muted">—</span>
   if (typeof val === 'number') {
-    const displayVal = Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val)
+    // 数字格式化: 千分位 + 单位换算 + 小数位(由列配置控制)
+    const cfg = col.extDisplay
+    const hasNumFmt = cfg?.thousandSeparator || (cfg?.unitConvert && cfg.unitConvert !== 'none')
+    const displayVal = hasNumFmt
+      ? formatExtNumber(val, { thousandSeparator: cfg?.thousandSeparator, unitConvert: cfg?.unitConvert, unitDecimals: cfg?.unitDecimals })
+      : (Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val))
     return <span className="tabular-nums">{displayVal}</span>
   }
   if (typeof val === 'boolean') {

@@ -4,9 +4,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
+import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
   onSelect: (symbol: string, name: string) => void
+  /** 搜索资产类型, 逗号分隔 (默认 'stock')。如 'stock,index' */
+  assetTypes?: string
 }
 
 /**
@@ -14,7 +17,7 @@ interface Props {
  * 复用 instrumentSearch 后端(代码 / 名称模糊匹配),单选即跳转该股财务详情。
  * 模式对齐 Watchlist.StockSearchBox:useQuery + 外部点击关闭 + 键盘导航。
  */
-export function StockFinancialSearch({ onSelect }: Props) {
+export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(-1)
@@ -22,8 +25,8 @@ export function StockFinancialSearch({ onSelect }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query),
-    queryFn: () => api.instrumentSearch(query),
+    queryKey: QK.instrumentSearch(query, assetTypes ?? 'stock'),
+    queryFn: () => api.instrumentSearch(query, 20, assetTypes),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })
@@ -116,6 +119,15 @@ export function StockFinancialSearch({ onSelect }: Props) {
                 >
                   <span className="font-mono shrink-0 text-xs w-[88px]">{r.symbol}</span>
                   <span className="truncate text-sm flex-1">{r.name}</span>
+                  {(() => {
+                    const b = boardTag(r.symbol)
+                    return b && (
+                      <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
+                    )
+                  })()}
+                  {r.asset_type === 'index' && (
+                    <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-sky-500/10 text-sky-400">指数</span>
+                  )}
                   {r.code && <span className="text-[10px] text-muted font-mono shrink-0">{r.code}</span>}
                 </button>
               ))

@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import { X, Plus, GripVertical, Upload, Loader2 } from 'lucide-react'
 import { api, type StrategyDetail } from '@/lib/api'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   pool: string[]
@@ -42,6 +43,7 @@ function fileStem(name: string): string {
 }
 
 export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
+  const backdrop = useDialogBackdrop(onClose)
   // 草稿状态: 打开时从 pool 复制, 操作只改草稿, 点确定才提交
   const [draftPool, setDraftPool] = useState<string[]>(() => [...pool])
   const [allStrategies, setAllStrategies] = useState<StrategyDetail[]>([])
@@ -121,7 +123,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
         mode: 'create',
       })
       await loadStrategies()
-      setActiveTab(result.source)
+      setActiveTab(result.source === 'ai' ? 'ai' : 'custom')
       setImportMsg(`已导入到${result.source === 'ai' ? 'AI' : '自定义'}策略: ${result.strategy_id}`)
     } catch (e: any) {
       setImportError(String(e?.message ?? '导入失败'))
@@ -138,7 +140,7 @@ export function StrategyPoolDialog({ pool, onConfirm, onClose }: Props) {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        onClick={e => { if (e.target === e.currentTarget) onClose() }}
+        {...backdrop}
       >
         <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 10 }}

@@ -207,6 +207,7 @@ class StrategyBacktestRequest(BaseModel):
     holding_days: int = 5
     asset_type: str = "stock"
     minute_fill: bool = False
+    regime_filter: dict | None = None
 
 
 @router.post("/strategy/run")
@@ -241,6 +242,7 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         holding_days=req.holding_days,
         asset_type=req.asset_type,
         minute_fill=req.minute_fill,
+        regime_filter=req.regime_filter,
     )
     task = make_worker_task("backtest", settings.data_dir, cfg)
     return run_worker_task(task)
@@ -315,8 +317,9 @@ def _make_job_key(
     commission_pct: float | None = None, stamp_tax_pct: float | None = None,
     asset_type: str = "stock",
     minute_fill: bool = False,
+    regime_filter: str | None = None,
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{commission_pct}|{stamp_tax_pct}|{asset_type}|{minute_fill}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{commission_pct}|{stamp_tax_pct}|{asset_type}|{minute_fill}|{regime_filter}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -344,6 +347,7 @@ async def strategy_stream(
     holding_days: int = 5,
     asset_type: str = "stock",
     minute_fill: bool = False,
+    regime_filter: str | None = None,
 ):
     """SSE 流式策略回测: 实时推送进度, 完成后推送结果, 支持重连 (刷新/切页后恢复)。
 
@@ -383,6 +387,7 @@ async def strategy_stream(
         commission_pct, stamp_tax_pct,
         asset_type=asset_type,
         minute_fill=minute_fill,
+        regime_filter=regime_filter,
     )
 
     _cleanup_stale_jobs()
@@ -443,6 +448,7 @@ async def strategy_stream(
                 holding_days=int(holding_days),
                 asset_type=asset_type,
                 minute_fill=minute_fill,
+                regime_filter=json.loads(regime_filter) if regime_filter else None,
             )
 
             def _run_backtest():

@@ -14,13 +14,19 @@ import type {
 
 const BASE = ''
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const isFormData = init?.body instanceof FormData
+type RequestOptions = RequestInit & {
+  /** 为 true 时不弹错误 toast（由调用方自行汇总提示，如多图串行队列） */
+  quiet?: boolean
+}
+
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
+  const { quiet, ...fetchInit } = init ?? {}
+  const isFormData = fetchInit.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
   // 合并调用方传入的 headers (此前会被整体覆盖丢弃)
-  Object.assign(headers, init?.headers as Record<string, string> | undefined)
-  const res = await fetch(`${BASE}${path}`, { ...init, headers })
+  Object.assign(headers, fetchInit.headers as Record<string, string> | undefined)
+  const res = await fetch(`${BASE}${path}`, { ...fetchInit, headers })
   if (!res.ok) {
     let detail = ''
     try {
@@ -37,7 +43,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
-    if (res.status !== 401) toast(msg, 'error')
+    if (res.status !== 401 && !quiet) toast(msg, 'error')
     throw new Error(msg)
   }
   return res.json() as Promise<T>
@@ -403,6 +409,75 @@ export interface RpsRotationData {
   concept_count: number
 }
 
+// ===== 市场环境(Regime) =====
+export type RegimeState = 'strong' | 'lean_strong' | 'range' | 'lean_weak' | 'weak'
+
+export const REGIME_STATE_LABELS: Record<RegimeState, string> = {
+  strong: '强势',
+  lean_strong: '偏强',
+  range: '震荡',
+  lean_weak: '偏弱',
+  weak: '弱势',
+}
+
+export const REGIME_STATE_COLORS: Record<RegimeState, string> = {
+  strong: '#ef4444',      // 红(强)
+  lean_strong: '#f97316', // 橙
+  range: '#6b7280',       // 灰
+  lean_weak: '#3b82f6',   // 蓝
+  weak: '#10b981',        // 绿(弱)
+}
+
+export interface RegimeRow {
+  date: string
+  state: RegimeState
+  score: number
+  limit_up: number
+  limit_down: number
+  broken_limit: number
+  max_consecutive: number
+  seal_rate: number
+  up_count: number
+  down_count: number
+  up_ratio: number
+  index_pct: number
+  above_ma20_pct: number
+  total_amount: number
+  avg_turnover: number
+  // 4 个子维度分(0-100, 重算后才有; 旧数据可能缺) — 综合分的加权来源
+  avg_pct?: number
+  median_pct?: number
+  strong_up_pct?: number
+  strong_down_pct?: number
+  profit_score?: number
+  speculation_score?: number
+  resilience_score?: number
+  trend_score?: number
+}
+
+export interface RegimeHistory {
+  rows: RegimeRow[]
+  total: number
+}
+
+export interface RegimeStateItem {
+  state: RegimeState
+  label: string
+  count: number
+  pct: number
+}
+
+export interface RegimeStates {
+  distribution: RegimeStateItem[]
+  days: number
+}
+
+export interface RegimeCoverage {
+  rows: number
+  earliest_date: string | null
+  latest_date: string | null
+}
+
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
   id: string
@@ -427,13 +502,20 @@ export interface StrategyParamDef {
   options?: string[]
 }
 
+export interface CompositeChildInfo {
+  id: string
+  name: string
+  source: string
+  weight: number
+}
+
 export interface StrategyDetail {
   id: string
   name: string
   description: string
   tags: string[]
-  source: 'builtin' | 'custom' | 'ai'
-  execution_backend: 'polars_expr' | 'matrix_native' | 'python_history_legacy'
+  source: 'builtin' | 'custom' | 'ai' | 'composite'
+  execution_backend: 'polars_expr' | 'matrix_native' | 'python_history_legacy' | 'composite'
   asset_types: string[]
   timeframes: string[]
   version: string
@@ -455,6 +537,8 @@ export interface StrategyDetail {
   order_by: string
   descending: boolean
   limit: number
+  // 叠加策略(composite)专属: 子策略列表与合并模式。非 composite 时为 null。
+  composite_children?: CompositeChildInfo[] | null
 }
 
 export interface StrategyBuildResult {
@@ -473,7 +557,7 @@ export type StrategyBuildStreamEvent =
 export interface StrategyCodeSaveResult {
   ok: boolean
   strategy_id: string
-  source: 'ai' | 'custom'
+  source: 'ai' | 'custom' | 'composite'
   path: string
   meta: Record<string, any>
 }
@@ -516,17 +600,41 @@ export interface MonitorCondition {
   value?: number | null   // op 非 truth 时必填
 }
 
+export type StrategyNotifyEvent = 'buy_signal' | 'sell_signal' | 'pool_entry' | 'pool_exit'
+
+export type SectorKind = 'index' | 'concept' | 'industry'
+
+export interface SectorMonitorTarget {
+  key: string
+  kind: SectorKind
+  name: string
+  symbol?: string
+  source_id?: string
+  field?: string
+  source_field?: string
+  value?: string
+  level?: number | null
+  available: boolean
+  member_count: number
+}
+
 export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder'
-  asset_type?: 'stock' | 'etf'
+  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder' | 'sector'
+  asset_type?: 'stock' | 'etf' | 'index'
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
   sector?: string | null
+  sector_kind?: SectorKind | null
+  sector_targets?: SectorMonitorTarget[]
+  sector_trigger?: 'change_pct' | 'momentum'
+  threshold_pct?: number
+  window_minutes?: 1 | 3 | 5 | 10 | 15
   strategy_id?: string | null
   direction: 'entry' | 'exit' | 'both' | 'up' | 'down'
+  notify_events?: StrategyNotifyEvent[]
   conditions: MonitorCondition[]
   logic: 'and' | 'or'
   cooldown_seconds: number
@@ -558,6 +666,7 @@ export interface MonitorRuleOptions {
     max_symbols: number
     reason: string
   }
+  sector_targets: Record<SectorKind, SectorMonitorTarget[]>
 }
 
 export interface AlertEvent {
@@ -576,6 +685,19 @@ export interface AlertEvent {
   strategy_id?: string
   conditions?: MonitorCondition[]
   logic?: 'and' | 'or'
+  sector_kind?: SectorKind
+  sector_key?: string
+  sector_name?: string
+  sector_source_field?: string
+  sector_value?: string
+  sector_level?: number | null
+  window_change_pct?: number | null
+  coverage_ratio?: number
+  valid_count?: number
+  total_count?: number
+  up_count?: number
+  down_count?: number
+  leader?: { symbol?: string; name?: string; change_pct?: number } | null
   /** ext 富化字段 (行业/概念等), 键为 "{configId}__{fieldName}" */
   [key: string]: unknown
 }
@@ -731,6 +853,9 @@ export interface StrategyBacktestResult {
     score_max: number | null
     max_hold_days: number | null
     source: string
+    execution_backend?: string
+    // 叠加策略回测: 子策略构成与权重归因
+    composite_children?: { id: string; weight: number }[]
   }
   elapsed_ms: number
   error: string | null
@@ -849,6 +974,7 @@ export interface DatasetConfig {
   end_param?: string
   asset_type_param?: string | null
   freq_param?: string | null
+  timeout?: number | null
 }
 
 export interface AuthConfig {
@@ -894,6 +1020,9 @@ export interface Preferences {
   pipeline_pull_a_share: boolean
   pipeline_pull_etf: boolean
   pipeline_pull_index: boolean
+  pipeline_regime_enabled: boolean
+  regime_batch_days: number
+  regime_warmup_days: number
   pipeline_index_symbols: string
   pipeline_schedule: { hour: number; minute: number }
   instruments_schedule: { hour: number; minute: number }
@@ -1024,10 +1153,15 @@ export const api = {
       `/api/settings/plugins/${encodeURIComponent(name)}/install`,
       { method: 'DELETE' },
     ),
-  testDataSource: (provider: string, dataset: string, symbols?: string[]) =>
+  testDataSource: (
+    provider: string,
+    dataset: string,
+    symbols?: string[],
+    config?: CustomSourceConfig,
+  ) =>
     request<DataSourceTestResult>('/api/settings/data-sources/test', {
       method: 'POST',
-      body: JSON.stringify({ provider, dataset, symbols }),
+      body: JSON.stringify({ provider, dataset, symbols, config }),
     }),
   updateDataProviders: (cfg: Partial<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider' | 'financial_data_provider'>>) =>
     request<Pick<Preferences, 'daily_data_provider' | 'adj_factor_provider' | 'minute_data_provider' | 'realtime_data_provider'>>(
@@ -1051,6 +1185,16 @@ export const api = {
     }>('/api/settings/preferences/pipeline-pull-types', {
       method: 'PUT',
       body: JSON.stringify(cfg),
+    }),
+  updatePipelineRegimeEnabled: (enabled: boolean) =>
+    request<{ pipeline_regime_enabled: boolean }>('/api/settings/preferences/pipeline-regime-enabled', {
+      method: 'PUT',
+      body: JSON.stringify({ pipeline_regime_enabled: enabled }),
+    }),
+  updateRegimeBatchParams: (params: { batch_days?: number; warmup_days?: number }) =>
+    request<{ regime_batch_days: number; regime_warmup_days: number }>('/api/settings/preferences/regime-batch-params', {
+      method: 'PUT',
+      body: JSON.stringify(params),
     }),
   updatePipelineIndexSymbols: (symbols: string) =>
     request<{ pipeline_index_symbols: string }>('/api/settings/preferences/pipeline-index-symbols', {
@@ -1294,6 +1438,7 @@ export const api = {
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'live' | 'none'
+      asset_type?: 'stock' | 'etf' | 'index'
       price_limit?: PriceLimitInfo | null
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
@@ -1381,12 +1526,14 @@ export const api = {
     }),
   watchlistOcrStatus: () =>
     request<{ provider: string; available: boolean }>('/api/watchlist/ocr-status'),
-  watchlistImportImage: (file: File) => {
+  watchlistImportImage: (file: File, signal?: AbortSignal, quiet = false) => {
     const fd = new FormData()
     fd.append('file', file)
     return request<WatchlistImportResult>('/api/watchlist/import-image', {
       method: 'POST',
       body: fd,
+      signal,
+      quiet,
     })
   },
   watchlistRemove: (symbol: string) =>
@@ -1409,7 +1556,7 @@ export const api = {
         : '/api/watchlist/enriched',
     ),
 
-  screenerStrategies: async (assetType?: 'stock' | 'etf') => {
+  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(
       `/api/strategies?${assetType ? `asset_type=${assetType}&` : ''}timeframe=1d`,
     )
@@ -1448,8 +1595,28 @@ export const api = {
   overviewMarket: (asOf?: string) => request<OverviewMarket>(`/api/overview/market${asOf ? `?as_of=${asOf}` : ''}`),
 
   // 概念涨幅轮动矩阵: 每列(日期)各自把所有概念按当天涨幅从高到低排序
-  rpsRotation: (days: number) =>
-    request<RpsRotationData>(`/api/rps/rotation?days=${days}`),
+  rpsRotation: (days: number, kind?: 'concept' | 'industry', level?: number) =>
+    request<RpsRotationData>(`/api/rps/rotation?days=${days}${kind ? `&kind=${kind}` : ''}${level ? `&level=${level}` : ''}`),
+
+  // 市场环境(Regime)
+  regimeHistory: (start?: string, end?: string, limit?: number) => {
+    const params = new URLSearchParams()
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    if (limit) params.set('limit', String(limit))
+    const qs = params.toString()
+    return request<RegimeHistory>(`/api/regime/history${qs ? `?${qs}` : ''}`)
+  },
+  regimeLatest: () => request<{ row: RegimeRow | null }>('/api/regime/latest'),
+  regimeStates: (days = 60) => request<RegimeStates>(`/api/regime/states?days=${days}`),
+  regimeCoverage: () => request<RegimeCoverage>('/api/regime/coverage'),
+  regimeRecompute: (start?: string, end?: string) => {
+    const params = new URLSearchParams()
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    const qs = params.toString()
+    return request<{ ok: boolean; computed: number }>(`/api/regime/recompute${qs ? `?${qs}` : ''}`, { method: 'POST' })
+  },
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()
@@ -1473,7 +1640,7 @@ export const api = {
     stop_loss_pct?: number
     max_hold_days?: number
     matching?: 'close_t' | 'open_t+1'
-    asset_type?: 'stock' | 'etf'
+    asset_type?: 'stock' | 'etf' | 'index'
   }) =>
     request<BacktestResult>('/api/backtest/run', {
       method: 'POST',
@@ -1493,7 +1660,7 @@ export const api = {
     weight?: 'equal' | 'factor_weight'
     fees_pct?: number
     slippage_bps?: number
-    asset_type?: 'stock' | 'etf'
+    asset_type?: 'stock' | 'etf' | 'index'
   }) =>
     request<FactorBacktestResult>('/api/backtest/factor/run', {
       method: 'POST',
@@ -1517,7 +1684,7 @@ export const api = {
     max_positions?: number
     initial_capital?: number
     position_sizing?: 'equal' | 'score_weight'
-    asset_type?: 'stock' | 'etf'
+    asset_type?: 'stock' | 'etf' | 'index'
     minute_fill?: boolean
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
@@ -1947,7 +2114,7 @@ export const api = {
   },
 
   /** AI 概念轮动分析 — 流式 NDJSON。 */
-  async *rotationAnalyzeStream(days: number, focus?: string): AsyncGenerator<{
+  async *rotationAnalyzeStream(days: number, focus?: string, kind?: 'concept' | 'industry', level?: number): AsyncGenerator<{
     type: 'meta' | 'delta' | 'error' | 'done'
     days?: number
     summary?: string
@@ -1957,7 +2124,7 @@ export const api = {
     const res = await fetch('/api/rps/rotation-analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ days, focus: focus ?? '' }),
+      body: JSON.stringify({ days, focus: focus ?? '', kind: kind ?? 'concept', level: level ?? null }),
     })
     if (!res.ok) {
       let detail = ''
@@ -2186,6 +2353,21 @@ export const api = {
     description?: string
   }) =>
     request<StrategyCodeSaveResult>('/api/strategies/code/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 创建/更新叠加策略(composite): 声明式引用多个子策略 */
+  strategySaveComposite: (payload: {
+    strategy_id: string
+    name: string
+    description?: string
+    children: { strategy_id: string; weight: number }[]
+    merge_mode: 'union' | 'intersect'
+    min_confirm?: number
+    mode: 'create' | 'update'
+  }) =>
+    request<StrategyCodeSaveResult>('/api/strategies/composite/save', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

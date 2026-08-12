@@ -10,6 +10,7 @@ import { DatePicker } from '@/components/DatePicker'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface Props {
   symbol: string | null
@@ -45,6 +46,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const qc = useQueryClient()
+  const backdrop = useDialogBackdrop(onClose)
 
   const watchlist = useQuery({
     queryKey: QK.watchlist,
@@ -109,7 +111,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={onClose}
+            {...backdrop}
           />
 
           {/* 弹窗主体 */}

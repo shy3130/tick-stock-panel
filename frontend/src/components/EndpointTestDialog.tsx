@@ -5,6 +5,7 @@ import { Wifi, Play, Loader2, X, Check, Crown } from 'lucide-react'
 import { api, type EndpointItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { EXPERT_RANK, tierRank } from '@/lib/capability-labels'
+import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
 
 interface EpResult {
   ok: boolean
@@ -18,6 +19,7 @@ interface EpResult {
 
 export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose }: { hasKey: boolean; tierLabel: string; currentEndpoint: string; onClose: () => void }) {
   const qc = useQueryClient()
+  const backdrop = useDialogBackdrop(onClose)
   const [results, setResults] = useState<Record<string, EpResult | null>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
   const [switching, setSwitching] = useState<string | null>(null)
@@ -78,7 +80,7 @@ export function EndpointTestDialog({ hasKey, tierLabel, currentEndpoint, onClose
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-          onClick={onClose}
+          {...backdrop}
         />
         <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 12 }}

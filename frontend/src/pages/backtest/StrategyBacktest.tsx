@@ -1,18 +1,21 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, ChevronRight, AlertTriangle } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus, HelpCircle, ChevronRight, AlertTriangle, Layers } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
   type StrategyBacktestTrade,
   type StrategyDetail,
   type StrategyParamDef,
+  REGIME_STATE_LABELS,
+  REGIME_STATE_COLORS,
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
+import { boardTag as boardBadge } from '@/components/stock-table/primitives'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { cnSignal } from '@/lib/signals'
 import { SignalPicker } from '@/components/screener/SignalPicker'
@@ -21,6 +24,7 @@ import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
 import { EmptyState } from '@/components/EmptyState'
 import { WarmupBadge } from '@/components/WarmupBadge'
 import { DatePicker } from '@/components/DatePicker'
+import { toast } from '@/components/Toast'
 import { StrategyNavChart } from './charts/StrategyNavChart'
 import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { TradeKlineModal } from './components/TradeKlineModal'
@@ -148,12 +152,13 @@ function FillRuleHint() {
   )
 }
 
-const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
+const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI', composite: '叠加' }
 const TRADE_PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100]
 const BADGE_CLS_MAP: Record<string, string> = {
   builtin: 'bg-secondary/10 text-muted border-border',
   ai: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
   custom: 'bg-amber-400/10 text-amber-400 border-amber-400/30',
+  composite: 'bg-teal-500/10 text-teal-400 border-teal-500/30',
 }
 const FIELD_LABEL: Record<string, string> = {}
 for (const c of BUILTIN_COLUMNS) {
@@ -178,11 +183,12 @@ const BASIC_FILTER_FIELDS = [
   { key: 'turnover_max', label: '最高换手率', unit: '%' },
 ]
 type AdvancedSettingsTab = 'params' | 'filter' | 'entry' | 'exit' | 'scoring' | 'risk' | 'range'
-type StrategyGroup = 'all' | 'custom' | 'ai' | 'builtin'
+type StrategyGroup = 'all' | 'custom' | 'ai' | 'builtin' | 'composite'
 const STRATEGY_GROUPS: { id: StrategyGroup; label: string }[] = [
   { id: 'all', label: '全部' },
   { id: 'custom', label: '自定义' },
   { id: 'ai', label: 'AI' },
+  { id: 'composite', label: '叠加' },
   { id: 'builtin', label: '内置' },
 ]
 const ADVANCED_TABS: { id: AdvancedSettingsTab; label: string }[] = [
@@ -201,6 +207,54 @@ const clamp = (v: number, min?: number, max?: number) => {
   if (min != null) next = Math.max(next, min)
   if (max != null) next = Math.min(next, max)
   return next
+}
+// 截断浮点长尾(如 0.07*100=7.000000000000001 → 7)。用于百分比派生显示。
+const round4 = (v: number) => Math.round(v * 10000) / 10000
+
+/**
+ * 数字输入框 — 解决"删除即跳最小值"问题。
+ * 受控 input 的 onChange 立即 clamp 会让用户键入低于 min 的中间值时被钳到 min,
+ * 无法平滑输入/删除重输。本组件: 输入时只更新文本草稿(不钳制), 失焦时才校正到 [min,max]。
+ */
+function NumberField({ value, onChange, min, max, step, className, placeholder }:
+{
+  value: number | null
+  onChange: (v: number | null) => void
+  min?: number
+  max?: number
+  step?: number
+  className?: string
+  placeholder?: string
+}) {
+  // 文本草稿: null 表示与外部 value 同步(无未提交编辑); 非 null 表示用户正在输入
+  const [draft, setDraft] = useState<string | null>(null)
+  // 显示值: 有草稿用草稿, 否则用外部 value (null 显示空)
+  const display = draft !== null ? draft : (value == null ? '' : String(value))
+  return (
+    <input
+      type="number"
+      value={display}
+      min={min}
+      max={max}
+      step={step}
+      placeholder={placeholder}
+      onChange={e => {
+        // 输入时只更新草稿 + 把原始数字推给父级(不钳制), 让用户自由编辑
+        setDraft(e.target.value)
+        onChange(numOrNull(e.target.value))
+      }}
+      onBlur={() => {
+        // 失焦时校正: 空值保持 null; 否则钳制到 [min,max]
+        const n = numOrNull(draft ?? '')
+        if (n != null && (min != null || max != null)) {
+          const clamped = clamp(n, min, max)
+          if (clamped !== n) onChange(clamped)
+        }
+        setDraft(null) // 清除草稿, 回到外部 value 同步
+      }}
+      className={className}
+    />
+  )
 }
 const strategyDefaultParams = (detail: StrategyDetail) => {
   const values: Record<string, any> = { ...detail.params_defaults }
@@ -235,6 +289,22 @@ const buildDefaultOverrides = (detail: StrategyDetail) => normalizeStrategyOverr
   trailing_take_profit_drawdown: detail.trailing_take_profit_drawdown,
   score_min: null,
   score_max: null,
+  max_hold_days: detail.max_hold_days,
+})
+
+const strategyBacktestConfigSignature = (detail: StrategyDetail) => JSON.stringify({
+  execution_backend: detail.execution_backend,
+  basic_filter: detail.basic_filter,
+  params: detail.params,
+  params_defaults: detail.params_defaults,
+  scoring: detail.scoring,
+  entry_signals: detail.entry_signals,
+  exit_signals: detail.exit_signals,
+  stop_loss: detail.stop_loss,
+  take_profit: detail.take_profit,
+  trailing_stop: detail.trailing_stop,
+  trailing_take_profit_activate: detail.trailing_take_profit_activate,
+  trailing_take_profit_drawdown: detail.trailing_take_profit_drawdown,
   max_hold_days: detail.max_hold_days,
 })
 
@@ -672,18 +742,12 @@ function StrategyParamInput({ param, value, onChange }: {
   return (
     <label className="block">
       <span className="mb-1 block text-[11px] text-secondary">{param.label}</span>
-      <input
-        type="number"
-        value={value ?? ''}
+      <NumberField
+        value={value == null || value === '' ? null : Number(value)}
         min={param.min}
         max={param.max}
         step={param.step ?? (param.type === 'int' ? 1 : 0.01)}
-        onChange={e => {
-          const n = numOrNull(e.target.value)
-          if (n == null) return onChange('')
-          const next = clamp(n, param.min, param.max)
-          onChange(param.type === 'int' ? Math.round(next) : next)
-        }}
+        onChange={n => onChange(n == null ? '' : (param.type === 'int' ? Math.round(n) : n))}
         className={INPUT_CLS}
       />
     </label>
@@ -778,6 +842,12 @@ function StockPoolPicker({ value, onChange, assetType = 'stock' }: { value: stri
                   >
                     <span className="w-[78px] shrink-0 font-mono">{r.symbol}</span>
                     <span className="min-w-0 flex-1 truncate text-secondary">{r.name}</span>
+                    {(() => {
+                      const b = boardBadge(r.symbol)
+                      return b && (
+                        <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
+                      )
+                    })()}
                     <Plus className={`h-3.5 w-3.5 ${added ? 'opacity-30' : 'text-accent'}`} />
                   </button>
                 )
@@ -858,6 +928,9 @@ export function StrategyBacktest() {
   const [simMode, setSimMode] = useState<'position' | 'full'>(saved?.mode ?? 'position')
   const [holdingDays, setHoldingDays] = useState(saved?.holdingDays ?? '5')
   const [highGranularity, setHighGranularity] = useState(saved?.minuteFill ?? false)
+  // 市场环境过滤(空=不过滤)
+  const [regimeStates, setRegimeStates] = useState<string[]>([])
+  const [regimeMinScore, setRegimeMinScore] = useState<number | ''>('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   // 分钟K成交价细化: 不改变信号日或成交日, 需 Pro+ 分钟K能力
   const { data: caps } = useCapabilities()
@@ -921,11 +994,36 @@ export function StrategyBacktest() {
   const isPending = backtestTask?.isPending ?? false
 
   const dataStatus = useDataStatus()
-  const earliestDate = dataStatus.data?.daily?.earliest_date ?? null
+  const backtestDataStatus = assetType === 'etf'
+    ? dataStatus.data?.etf_enriched
+    : dataStatus.data?.enriched
+  const earliestDate = backtestDataStatus?.earliest_date ?? null
+  const backtestDataUnavailable = dataStatus.isSuccess && !earliestDate
+  const backtestDataLabel = assetType === 'etf' ? 'ETF 指标数据' : '股票指标数据'
 
   const resetConfigFromDetail = (detail: StrategyDetail) => {
     setStrategyParams(strategyDefaultParams(detail))
     setOverrides(buildDefaultOverrides(detail))
+  }
+
+  // 「应用到策略」: 把弹窗里当前编辑的 overrides + params 持久化为策略定义,
+  // 使所有页面加载该策略时都用这些参数(后端 save_config → 落盘 strategy_overrides/{id}.json)。
+  const [applying, setApplying] = useState(false)
+  const handleApplyToStrategy = async () => {
+    if (!detail || !selectedStrategy) return
+    setApplying(true)
+    try {
+      // 合并 params 进 overrides(后端 _strategy_detail 会把 params 合并进 params_defaults)
+      const payload = { ...normalizeStrategyOverrides(detail, overrides), params: strategyParams }
+      await api.strategySaveConfig(selectedStrategy, payload)
+      toast('已应用到策略定义', 'success')
+      await strategyDetail.refetch()
+      setSettingsOpen(false)
+    } catch (e) {
+      toast(`应用失败 · ${String((e as Error)?.message || e)}`, 'error')
+    } finally {
+      setApplying(false)
+    }
   }
 
   // 刷新页面后: 从 localStorage 恢复未完成的回测任务
@@ -936,16 +1034,24 @@ export function StrategyBacktest() {
 
   useEffect(() => {
     const detail = strategyDetail.data
-    if (!detail || loadedStrategyRef.current === detail.id) return
-    loadedStrategyRef.current = detail.id
-    if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
+    if (!detail) return
+    const configSignature = strategyBacktestConfigSignature(detail)
+    const configKey = `${assetType}:${detail.id}:${configSignature}`
+    if (loadedStrategyRef.current === configKey) return
+    loadedStrategyRef.current = configKey
+    if (
+      saved?.assetType === assetType
+      && saved.selectedStrategy === detail.id
+      && saved.strategyConfigSignature === configSignature
+      && (saved.params || saved.overrides)
+    ) {
       setStrategyParams(mergeStrategyParams(detail, saved.params))
       setOverrides(normalizeStrategyOverrides(detail, saved.overrides ?? buildDefaultOverrides(detail)))
       return
     }
     resetConfigFromDetail(detail)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategyDetail.data])
+  }, [assetType, strategyDetail.data])
 
   // 当全局回测任务完成时, 把结果写入组件 (切页回来也能恢复)
   useEffect(() => {
@@ -975,13 +1081,16 @@ export function StrategyBacktest() {
         minuteFill: highGranularity,
         params: strategyParams,
         overrides,
+        strategyConfigSignature: strategyDetail.data
+          ? strategyBacktestConfigSignature(strategyDetail.data)
+          : undefined,
         result: backtestTask.result,
       })
     }
   }, [backtestTask])
 
   const handleRun = () => {
-    if (!selectedStrategy) return
+    if (!selectedStrategy || backtestDataUnavailable) return
     const requestOverrides = detail
       ? normalizeStrategyOverrides(detail, overrides)
       : overrides
@@ -1006,6 +1115,12 @@ export function StrategyBacktest() {
       mode: simMode,
       holding_days: Number(holdingDays) || 5,
       minute_fill: highGranularity,
+      regime_filter: regimeStates.length > 0 || regimeMinScore !== ''
+        ? {
+            ...(regimeStates.length > 0 ? { states: regimeStates } : {}),
+            ...(regimeMinScore !== '' ? { min_score: Number(regimeMinScore) } : {}),
+          }
+        : null,
     })
   }
 
@@ -1150,11 +1265,15 @@ export function StrategyBacktest() {
 
   const detail = strategyDetail.data
   const matrixStrategy = detail?.execution_backend === 'matrix_native'
+  const compositeStrategy = detail?.source === 'composite'
   const visibleAdvancedTabs = useMemo(
     () => matrixStrategy
       ? ADVANCED_TABS.filter(tab => tab.id !== 'entry' && tab.id !== 'exit')
-      : ADVANCED_TABS,
-    [matrixStrategy],
+      : compositeStrategy
+        // composite 的 entry/exit/scoring 由子策略决定, composite 层只调合并参数(params Tab)
+        ? ADVANCED_TABS.filter(tab => tab.id !== 'entry' && tab.id !== 'exit' && tab.id !== 'scoring')
+        : ADVANCED_TABS,
+    [matrixStrategy, compositeStrategy],
   )
   const basicFilter = (overrides.basic_filter ?? {}) as Record<string, any>
   const entrySignals = (overrides.entry_signals ?? []) as string[]
@@ -1172,11 +1291,11 @@ export function StrategyBacktest() {
   const scoring = useMemo(() => (overrides.scoring ?? {}) as Record<string, number>, [overrides.scoring])
   const scoreMinValue = overrides.score_min == null ? '' : String(overrides.score_min)
   const scoreMaxValue = overrides.score_max == null ? '' : String(overrides.score_max)
-  const stopLossPct = overrides.stop_loss == null ? '' : String(Math.abs(Number(overrides.stop_loss)) * 100)
-  const takeProfitPct = overrides.take_profit == null ? '' : String(Math.abs(Number(overrides.take_profit)) * 100)
-  const trailingStopPct = overrides.trailing_stop == null ? '' : String(Math.abs(Number(overrides.trailing_stop)) * 100)
-  const trailingTakeProfitActivatePct = overrides.trailing_take_profit_activate == null ? '' : String(Math.abs(Number(overrides.trailing_take_profit_activate)) * 100)
-  const trailingTakeProfitDrawdownPct = overrides.trailing_take_profit_drawdown == null ? '' : String(Math.abs(Number(overrides.trailing_take_profit_drawdown)) * 100)
+  const stopLossPct = overrides.stop_loss == null ? '' : String(round4(Math.abs(Number(overrides.stop_loss)) * 100))
+  const takeProfitPct = overrides.take_profit == null ? '' : String(round4(Math.abs(Number(overrides.take_profit)) * 100))
+  const trailingStopPct = overrides.trailing_stop == null ? '' : String(round4(Math.abs(Number(overrides.trailing_stop)) * 100))
+  const trailingTakeProfitActivatePct = overrides.trailing_take_profit_activate == null ? '' : String(round4(Math.abs(Number(overrides.trailing_take_profit_activate)) * 100))
+  const trailingTakeProfitDrawdownPct = overrides.trailing_take_profit_drawdown == null ? '' : String(round4(Math.abs(Number(overrides.trailing_take_profit_drawdown)) * 100))
   const maxHoldDaysValue = overrides.max_hold_days == null ? '' : String(overrides.max_hold_days)
   const targetPositionPct = Number(maxPositions) > 0 ? Number(maxExposure) / Number(maxPositions) : 0
 
@@ -1587,6 +1706,13 @@ export function StrategyBacktest() {
         </div>
         )}
 
+        {backtestDataUnavailable && (
+          <div className="flex items-start gap-1.5 rounded-btn border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-4 text-danger">
+            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+            <span>缺少{backtestDataLabel}，请先在数据页面同步日K并完成指标计算。</span>
+          </div>
+        )}
+
         {isPending ? (
           <button
             onClick={stopBacktest}
@@ -1600,7 +1726,7 @@ export function StrategyBacktest() {
         ) : (
           <button
             onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading}
+            disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
             className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
               bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
               transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
@@ -1663,6 +1789,40 @@ export function StrategyBacktest() {
           )}
         </div>
 
+        {/* 市场环境过滤: 只在指定环境的交易日入场(强制 T-1, 用前一日环境判定) */}
+        <div className="rounded-btn border border-border bg-surface/50 px-3 py-2 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <Gauge className="h-3.5 w-3.5 text-accent" />
+            <span className="text-xs font-medium text-foreground">环境过滤</span>
+            <span className="text-[10px] text-muted">仅在前一日环境满足时入场(防未来函数)</span>
+            <div className="ml-auto flex items-center gap-1">
+              <span className="text-[10px] text-muted">最低分</span>
+              <input type="number" min={0} max={100} value={regimeMinScore} placeholder="不限"
+                onChange={e => setRegimeMinScore(e.target.value ? Number(e.target.value) : '')}
+                className="w-14 h-6 px-1 rounded border border-border bg-base text-[11px] text-foreground text-center focus:outline-none focus:border-accent/50" />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {(Object.keys(REGIME_STATE_LABELS) as (keyof typeof REGIME_STATE_LABELS)[]).map(s => {
+              const active = regimeStates.includes(s)
+              return (
+                <button key={s} onClick={() => setRegimeStates(prev => active ? prev.filter(x => x !== s) : [...prev, s])}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] transition-colors cursor-pointer ${
+                    active ? 'border-transparent text-white' : 'border-border text-muted hover:text-secondary'
+                  }`}
+                  style={active ? { backgroundColor: REGIME_STATE_COLORS[s] } : undefined}>
+                  <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: active ? '#fff' : REGIME_STATE_COLORS[s] }} />
+                  {REGIME_STATE_LABELS[s]}
+                </button>
+              )
+            })}
+            {(regimeStates.length > 0 || regimeMinScore !== '') && (
+              <button onClick={() => { setRegimeStates([]); setRegimeMinScore('') }}
+                className="text-[10px] text-muted hover:text-danger px-1">清除</button>
+            )}
+          </div>
+        </div>
+
         {result?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
             {result.error}
@@ -1671,7 +1831,10 @@ export function StrategyBacktest() {
 
         {backtestTask?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-            {backtestTask.error}
+            <div>{backtestTask.error}</div>
+            {result && (
+              <div className="mt-1 text-xs text-secondary">本次回测未生成新结果，下方仍展示上一次成功结果。</div>
+            )}
           </div>
         )}
 
@@ -1815,6 +1978,18 @@ export function StrategyBacktest() {
                     </span>
                   )}
                 </div>
+                {/* 叠加策略: 子策略构成归因 */}
+                {result.strategy_info.composite_children && result.strategy_info.composite_children.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Layers className="h-3 w-3 text-teal-400 shrink-0" />
+                    <span className="text-[10px] text-muted">叠加 {result.strategy_info.composite_children.length} 策略</span>
+                    {result.strategy_info.composite_children.map(c => (
+                      <span key={c.id} className="text-[9px] px-1.5 py-px rounded border border-teal-500/25 bg-teal-500/10 text-teal-400">
+                        {c.id}<span className="text-teal-400/60 ml-0.5">{(c.weight * 100).toFixed(0)}%</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {result.strategy_info.stop_loss != null && (
                   <span className="text-[10px] text-secondary">止损 {fmtPct(result.strategy_info.stop_loss)}</span>
                 )}
@@ -2285,19 +2460,15 @@ export function StrategyBacktest() {
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {BASIC_FILTER_FIELDS.map(field => {
                       const scale = field.scale ?? 1
-                      const value = basicFilter[field.key] == null ? '' : Number(basicFilter[field.key]) / scale
+                      const raw = basicFilter[field.key]
                       return (
                         <label key={field.key} className="block">
                           <span className="mb-1 block text-[11px] text-secondary">{field.label}({field.unit})</span>
-                          <input
-                            type="number"
-                            value={value}
+                          <NumberField
+                            value={raw == null ? null : Number(raw) / scale}
                             min={0}
                             step={field.unit === '%' ? 0.1 : 0.01}
-                            onChange={e => {
-                              const n = numOrNull(e.target.value)
-                              updateBasicFilter(field.key, n == null ? null : n * scale)
-                            }}
+                            onChange={n => updateBasicFilter(field.key, n == null ? null : n * scale)}
                             className={INPUT_CLS}
                           />
                         </label>
@@ -2415,33 +2586,19 @@ export function StrategyBacktest() {
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <label className="block">
                         <span className="mb-1 block text-[11px] text-secondary">最小评分</span>
-                        <input
-                          type="number"
-                          value={scoreMinValue}
-                          min={0}
-                          max={100}
-                          step={1}
-                          placeholder="不限"
-                          onChange={e => {
-                            const n = numOrNull(e.target.value)
-                            updateOverride('score_min', n == null ? null : clamp(n, 0, 100))
-                          }}
+                        <NumberField
+                          value={overrides.score_min == null ? null : Number(overrides.score_min)}
+                          min={0} max={100} step={1} placeholder="不限"
+                          onChange={n => updateOverride('score_min', n)}
                           className={INPUT_CLS}
                         />
                       </label>
                       <label className="block">
                         <span className="mb-1 block text-[11px] text-secondary">最大评分</span>
-                        <input
-                          type="number"
-                          value={scoreMaxValue}
-                          min={0}
-                          max={100}
-                          step={1}
-                          placeholder="不限"
-                          onChange={e => {
-                            const n = numOrNull(e.target.value)
-                            updateOverride('score_max', n == null ? null : clamp(n, 0, 100))
-                          }}
+                        <NumberField
+                          value={overrides.score_max == null ? null : Number(overrides.score_max)}
+                          min={0} max={100} step={1} placeholder="不限"
+                          onChange={n => updateOverride('score_max', n)}
                           className={INPUT_CLS}
                         />
                       </label>
@@ -2456,61 +2613,40 @@ export function StrategyBacktest() {
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <label className="block">
                       <span className="mb-1 block text-[11px] text-secondary">止损(%)</span>
-                      <input
-                        type="number"
-                        value={stopLossPct}
-                        min={0}
-                        max={99}
-                        step={0.5}
-                        onChange={e => {
-                          const n = numOrNull(e.target.value)
-                          updateOverride('stop_loss', n == null ? null : -Math.abs(n) / 100)
-                        }}
+                      <NumberField
+                        value={numOrNull(stopLossPct)}
+                        min={0} max={99} step={0.5}
+                        onChange={n => updateOverride('stop_loss', n == null ? null : -Math.abs(n) / 100)}
                         className={INPUT_CLS}
                       />
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[11px] text-secondary">止盈(%)</span>
-                      <input
-                        type="number"
-                        value={takeProfitPct}
-                        min={1}
-                        max={500}
-                        step={0.5}
-                        onChange={e => {
-                          const n = numOrNull(e.target.value)
-                          updateOverride('take_profit', n == null ? null : clamp(Math.abs(n), 1, 500) / 100)
-                        }}
+                      <NumberField
+                        value={numOrNull(takeProfitPct)}
+                        min={1} max={500} step={0.5}
+                        onChange={n => updateOverride('take_profit', n == null ? null : Math.abs(n) / 100)}
                         className={INPUT_CLS}
                       />
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[11px] text-secondary">移动止损(%)</span>
-                      <input
-                        type="number"
-                        value={trailingStopPct}
-                        min={0.5}
-                        max={50}
-                        step={0.5}
-                        onChange={e => {
-                          const n = numOrNull(e.target.value)
-                          updateOverride('trailing_stop', n == null ? null : -clamp(Math.abs(n), 0.5, 50) / 100)
-                        }}
+                      <NumberField
+                        value={numOrNull(trailingStopPct)}
+                        min={0.5} max={50} step={0.5}
+                        onChange={n => updateOverride('trailing_stop', n == null ? null : -Math.abs(n) / 100)}
                         className={INPUT_CLS}
                       />
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[11px] text-secondary">回撤止盈启动(%)</span>
-                      <input
-                        type="number"
-                        value={trailingTakeProfitActivatePct}
-                        min={1}
-                        max={200}
-                        step={0.5}
-                        onChange={e => {
-                          const n = numOrNull(e.target.value)
-                          const next = n == null ? null : clamp(Math.abs(n), 1, 200) / 100
+                      <NumberField
+                        value={numOrNull(trailingTakeProfitActivatePct)}
+                        min={1} max={200} step={0.5}
+                        onChange={n => {
+                          const next = n == null ? null : Math.abs(n) / 100
                           updateOverride('trailing_take_profit_activate', next)
+                          // 联动: 回撤不能超过启动值
                           const drawdown = numOrNull(trailingTakeProfitDrawdownPct)
                           if (next != null && drawdown != null && drawdown / 100 > next) {
                             updateOverride('trailing_take_profit_drawdown', next)
@@ -2521,32 +2657,19 @@ export function StrategyBacktest() {
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[11px] text-secondary">回撤止盈回撤(点)</span>
-                      <input
-                        type="number"
-                        value={trailingTakeProfitDrawdownPct}
-                        min={0.5}
-                        max={50}
-                        step={0.5}
-                        onChange={e => {
-                          const n = numOrNull(e.target.value)
-                          const activate = numOrNull(trailingTakeProfitActivatePct)
-                          const maxValue = activate == null ? 50 : Math.min(50, Math.abs(activate))
-                          updateOverride('trailing_take_profit_drawdown', n == null ? null : clamp(Math.abs(n), 0.5, maxValue) / 100)
-                        }}
+                      <NumberField
+                        value={numOrNull(trailingTakeProfitDrawdownPct)}
+                        min={0.5} max={50} step={0.5}
+                        onChange={n => updateOverride('trailing_take_profit_drawdown', n == null ? null : Math.abs(n) / 100)}
                         className={INPUT_CLS}
                       />
                     </label>
                     <label className="block">
                       <span className="mb-1 block text-[11px] text-secondary">最长持仓(天)</span>
-                      <input
-                        type="number"
-                        value={maxHoldDaysValue}
-                        min={1}
-                        step={1}
-                        onChange={e => {
-                          const n = numOrNull(e.target.value)
-                          updateOverride('max_hold_days', n == null ? null : Math.max(1, Math.round(n)))
-                        }}
+                      <NumberField
+                        value={numOrNull(maxHoldDaysValue)}
+                        min={1} step={1}
+                        onChange={n => updateOverride('max_hold_days', n == null ? null : Math.round(n))}
                         className={INPUT_CLS}
                       />
                     </label>
@@ -2563,6 +2686,17 @@ export function StrategyBacktest() {
               >
                 恢复默认
               </button>
+              {/* 应用到策略: 把当前配置持久化为策略定义(仅用户自有策略可改) */}
+              {(detail.source === 'custom' || detail.source === 'ai' || detail.source === 'composite') && (
+                <button
+                  type="button"
+                  onClick={handleApplyToStrategy}
+                  disabled={applying}
+                  className="ml-auto rounded-btn border border-emerald-500/30 bg-emerald-500/8 px-3 py-1.5 text-xs font-medium text-emerald-500 transition-colors hover:bg-emerald-500/15 disabled:opacity-50"
+                >
+                  {applying ? '应用中…' : '应用到策略'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setSettingsOpen(false)}

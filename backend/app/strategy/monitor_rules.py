@@ -27,16 +27,20 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-RULE_TYPES = {"strategy", "signal", "price", "market", "ladder"}
+RULE_TYPES = {"strategy", "signal", "price", "market", "ladder", "sector"}
 SCOPES = {"symbols", "all", "sector"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
+STRATEGY_NOTIFY_EVENTS = {"buy_signal", "sell_signal", "pool_entry", "pool_exit"}
 SEVERITIES = {"info", "warn", "critical"}
 OPS = {">", ">=", "<", "<=", "==", "!="}
 # ladder 规则: 封单监控的指标 (量=手, 额=元)
 LADDER_METRICS = {"sealed_vol", "sealed_amount"}
 # ladder 规则: 方向 (up=涨停炸板预警, down=跌停翘板预警)
 LADDER_DIRECTIONS = {"up", "down"}
+SECTOR_KINDS = {"index", "concept", "industry"}
+SECTOR_TRIGGERS = {"change_pct", "momentum"}
+SECTOR_WINDOWS = {1, 3, 5, 10, 15}
 
 # 布尔信号列前缀 (op=truth 时 field 取这些)
 _SIGNAL_PREFIXES = ("signal_", "csg_")
@@ -59,7 +63,7 @@ def load_all(data_dir: Path) -> list[dict]:
     out: list[dict] = []
     for f in sorted(d.glob("*.json")):
         try:
-            out.append(json.loads(f.read_text(encoding="utf-8")))
+            out.append(normalize(json.loads(f.read_text(encoding="utf-8"))))
         except Exception as e:
             logger.warning("monitor rule load failed %s: %s", f.name, e)
     return out
@@ -70,7 +74,7 @@ def load_one(data_dir: Path, rule_id: str) -> dict | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return normalize(json.loads(p.read_text(encoding="utf-8")))
     except Exception as e:
         logger.warning("monitor rule load failed %s: %s", rule_id, e)
         return None
@@ -106,12 +110,28 @@ def validate(rule: dict) -> None:
     if rule.get("type") not in RULE_TYPES:
         raise ValueError(f"type 必须是 {RULE_TYPES} 之一")
 
+    # 指数规则: 仅 signal/price + symbols 作用域 + 不含分时信号
+    # (指数无涨跌停/策略/封单语义; 无本地分钟K, 分时信号会静默不触发)
+    if rule.get("asset_type") == "index":
+        if rule.get("type") not in ("signal", "price"):
+            raise ValueError("指数监控仅支持 signal/price 类型 (无涨跌停/策略/封单语义)")
+        if rule.get("scope") != "symbols":
+            raise ValueError("指数监控仅支持指定标的 (scope=symbols)")
+        if uses_intraday_signals(rule):
+            raise ValueError("指数无本地分钟K数据, 不支持分时信号条件")
+
     # 策略类型: 需要 strategy_id + direction,conditions 可空
     if rule.get("type") == "strategy":
         if not rule.get("strategy_id"):
             raise ValueError("策略类型规则必须指定 strategy_id")
         if rule.get("direction", "entry") not in DIRECTIONS:
             raise ValueError(f"direction 必须是 {DIRECTIONS} 之一")
+        notify_events = rule.get("notify_events")
+        if not isinstance(notify_events, list) or not notify_events:
+            raise ValueError("策略类型规则至少选择一个通知事件")
+        invalid_events = set(notify_events) - STRATEGY_NOTIFY_EVENTS
+        if invalid_events:
+            raise ValueError(f"notify_events 包含非法事件: {sorted(invalid_events)}")
     elif rule.get("type") == "ladder":
         # 连板梯队封单监控: 需 metric + threshold + direction(up/down), 不用 conditions
         if rule.get("metric", "sealed_vol") not in LADDER_METRICS:
@@ -121,6 +141,29 @@ def validate(rule: dict) -> None:
         thr = rule.get("threshold")
         if not isinstance(thr, (int, float)) or thr < 0:
             raise ValueError("threshold 必须是非负数字 (封单 ≤ 此值时报警)")
+    elif rule.get("type") == "sector":
+        kind = rule.get("sector_kind")
+        if kind not in SECTOR_KINDS:
+            raise ValueError(f"sector_kind 必须是 {SECTOR_KINDS} 之一")
+        targets = rule.get("sector_targets")
+        if not isinstance(targets, list) or not targets:
+            raise ValueError("板块监控至少选择一个监控对象")
+        if len(targets) > 20:
+            raise ValueError("板块监控对象最多 20 个")
+        for target in targets:
+            if not isinstance(target, dict) or not target.get("key") or not target.get("name"):
+                raise ValueError("板块监控对象格式错误")
+            if target.get("kind") != kind:
+                raise ValueError("板块监控对象类型必须一致")
+        if rule.get("sector_trigger") not in SECTOR_TRIGGERS:
+            raise ValueError(f"sector_trigger 必须是 {SECTOR_TRIGGERS} 之一")
+        if rule.get("direction") not in LADDER_DIRECTIONS:
+            raise ValueError("板块监控 direction 必须是 up 或 down")
+        threshold_pct = rule.get("threshold_pct")
+        if not isinstance(threshold_pct, (int, float)) or not 0 < threshold_pct <= 20:
+            raise ValueError("板块监控阈值必须大于 0 且不超过 20%")
+        if rule.get("sector_trigger") == "momentum" and rule.get("window_minutes") not in SECTOR_WINDOWS:
+            raise ValueError(f"板块异动窗口必须是 {sorted(SECTOR_WINDOWS)} 分钟之一")
     else:
         # 信号/价格/市场类型: 需要 conditions
         conds = rule.get("conditions")
@@ -156,7 +199,7 @@ def validate(rule: dict) -> None:
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
     if uses_intraday_signals(rule) and rule.get("scope") != "symbols":
-        raise ValueError("分时穿越信号仅支持指定股票")
+        raise ValueError("分时穿越信号仅支持指定标的")
     # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,
     # 一条本意针对某板块的规则会对全市场每只命中都触发(告警风暴)。在板块 JOIN
     # 落地前, 拒绝创建 sector 规则(fail-closed), 避免用户建出会刷屏的规则。
@@ -179,13 +222,29 @@ def normalize(rule: dict) -> dict:
     r.setdefault("scope", "symbols")
     r.setdefault("symbols", [])
     r.setdefault("sector", None)
+    r.setdefault("sector_kind", None)
+    r.setdefault("sector_targets", [])
+    r.setdefault("sector_trigger", "change_pct")
+    r.setdefault("threshold_pct", 1.0)
+    r.setdefault("window_minutes", 5)
     r.setdefault("strategy_id", None)
-    # direction 默认值: ladder 用 "up", 其余用 "entry"
-    r.setdefault("direction", "up" if r.get("type") == "ladder" else "entry")
+    # direction 默认值: ladder/sector 用 "up", 其余用 "entry"
+    r.setdefault("direction", "up" if r.get("type") in {"ladder", "sector"} else "entry")
+    if r.get("type") == "strategy":
+        if r.get("notify_events") is None:
+            # 兼容统一监控上线后的旧规则: 当时实际行为是同时通知进入和移出。
+            r["notify_events"] = ["pool_entry", "pool_exit"]
+        else:
+            r["notify_events"] = list(dict.fromkeys(r["notify_events"]))
+    else:
+        r.pop("notify_events", None)
     r.setdefault("conditions", [])
     # ladder 专属默认字段
     r.setdefault("metric", "sealed_vol")
     r.setdefault("threshold", 0)
+    if r.get("type") == "sector":
+        r["scope"] = "all"
+        r["symbols"] = []
     r.setdefault("logic", "and")
     r.setdefault("cooldown_seconds", 3600)
     r.setdefault("severity", "info")
@@ -252,6 +311,7 @@ def migrate_strategy_monitors(data_dir: Path, strategy_ids: list[str], strategy_
                 "scope": "all",
                 "strategy_id": sid,
                 "direction": "entry",
+                "notify_events": ["pool_entry", "pool_exit"],
                 "conditions": [],
                 "cooldown_seconds": 3600,
                 "enabled": True,

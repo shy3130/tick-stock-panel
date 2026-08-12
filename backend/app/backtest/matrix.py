@@ -27,6 +27,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as pads
 
 from app.backtest.minute_trigger import build_minute_exit_reference
+from app.backtest.numba_runtime import run_numba_parallel
 from app.price_limits import (
     MAIN_BOARD_ST_LIMIT_CHANGE_DATE,
     numpy_limit_pct_vectors,
@@ -686,7 +687,7 @@ def load_market_data_matrix_from_parquet(
         raise ValueError(f"matrix parquet root does not exist: {root}")
     available_start, available_end = _partition_date_bounds(root)
     if available_start is None or available_end is None:
-        raise ValueError("matrix parquet root contains no dated partitions")
+        raise ValueError("本地指标数据为空，请先在数据页面同步日K并完成指标计算")
     effective_start = max(start, available_start)
     effective_end = min(end, available_end)
     if effective_start > effective_end:
@@ -2929,12 +2930,14 @@ def valid_shift(
         "valid_shift",
         (source, valid, index.offsets, index.rows),
         {"periods": int(periods)},
-        lambda: _valid_shift_kernel(
-            source,
-            valid,
-            index.offsets,
-            index.rows,
-            int(periods),
+        lambda: run_numba_parallel(
+            lambda: _valid_shift_kernel(
+                source,
+                valid,
+                index.offsets,
+                index.rows,
+                int(periods),
+            )
         ),
     )
 
@@ -3076,14 +3079,16 @@ def _valid_rolling_reduce(
     if ddof < 0 or ddof >= window:
         raise ValueError("valid rolling ddof must be in [0, window)")
     index = _resolve_valid_bar_index(source, valid, bar_index)
-    return _valid_rolling_kernel(
-        source,
-        valid,
-        index.offsets,
-        index.rows,
-        int(window),
-        int(operation),
-        int(ddof),
+    return run_numba_parallel(
+        lambda: _valid_rolling_kernel(
+            source,
+            valid,
+            index.offsets,
+            index.rows,
+            int(window),
+            int(operation),
+            int(ddof),
+        )
     )
 
 
@@ -3311,12 +3316,14 @@ def valid_ewm_adjust_false(
         "valid_ewm_adjust_false",
         (source, valid, index.offsets, index.rows),
         {"alpha": alpha_value},
-        lambda: _valid_ewm_kernel(
-            source,
-            valid,
-            index.offsets,
-            index.rows,
-            alpha_value,
+        lambda: run_numba_parallel(
+            lambda: _valid_ewm_kernel(
+                source,
+                valid,
+                index.offsets,
+                index.rows,
+                alpha_value,
+            )
         ),
     )
 

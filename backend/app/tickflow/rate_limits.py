@@ -14,13 +14,25 @@ from app.tickflow.capabilities import Cap, CapabilitySet
 
 T = TypeVar("T")
 
-# 进程级共享限速器: 原先每个调用方各自本地 sleep(60/rpm), 并发同步 (kline/index/
-# depth/watchlist/custom) 时聚合请求速率会成倍超过单能力 rpm → 429。
-# 这里用一张按 rpm 分桶的「下一个可用时刻」表 (Lock 守护), 所有调用方按同一时间轴
-# 排队, 使跨调用方的聚合发包间隔 >= 60/rpm。以 rpm 为键 (调用方签名只带 rpm, 不带 cap;
-# rpm 是各能力速率的代理); 恰好同 rpm 的不同能力会共享一队, 偏保守但绝不超速。
+# TickFlow Pro 单进程安全预算: 套餐标称 rpm 的 80%。
+# 注意: _next_slot 仅在本 Python 进程内共享, 不能跨 Gold 容器与 A 股面板进程。
+# Stage A 期间跨产品靠错峰(盘中 Gold 优先, A 股 Pro 批处理建议 16:00 后),
+# 不要把「各进程各扣 80%」误当成账户级共享限频。
+SAFETY_RPM_FACTOR = 0.8
+
+# 进程级共享限速器: 按 rpm 分桶的「下一个可用时刻」表 (Lock 守护)。
+# 限制: sleep_between_batches(index=0) 只登记槽位、不 sleep, 因此多个调用方若同时以
+# index=0 启动, 仍可能瞬时突发超过单能力 rpm。后续 index>0 批次会按同一时间轴排队。
+# Phase 1 / Stage A: 不要并发启动多个 probe 或大批量 sync; 跨进程仍靠错峰, 非账户级限频。
 _slot_lock = threading.Lock()
 _next_slot: dict[int, float] = {}
+
+
+def apply_safety_rpm(rpm: int | None, *, factor: float = SAFETY_RPM_FACTOR) -> int | None:
+    """Scale a package rpm by the shared safety factor (default 80%)."""
+    if rpm is None or rpm <= 0:
+        return rpm
+    return max(1, int(rpm * factor))
 
 
 def _reserve_slot(rpm: int, interval: float) -> float:
@@ -50,14 +62,26 @@ def resolve_limit(
     default_batch: int | None = None,
     default_rpm: int | None = None,
     default_rpm_when_unset: bool = True,
+    apply_safety: bool = True,
 ) -> ResolvedLimit:
-    """Return a capability's batch/rpm with caller-provided fallbacks."""
+    """Return a capability's batch/rpm with caller-provided fallbacks.
+
+    By default rpm is scaled by SAFETY_RPM_FACTOR (0.8) inside this process only.
+    This is not a cross-container account budget. Pass apply_safety=False for diagnostics.
+    """
     lim = capset.limits(cap)
     if lim is None:
-        return ResolvedLimit(batch=default_batch, rpm=default_rpm)
+        rpm = default_rpm
+    else:
+        rpm = lim.rpm if lim.rpm else (default_rpm if default_rpm_when_unset else None)
+        default_batch = lim.batch if lim.batch else default_batch
+    if apply_safety:
+        rpm = apply_safety_rpm(rpm)
+    if lim is None:
+        return ResolvedLimit(batch=default_batch, rpm=rpm)
     return ResolvedLimit(
-        batch=lim.batch if lim.batch else default_batch,
-        rpm=lim.rpm if lim.rpm else (default_rpm if default_rpm_when_unset else None),
+        batch=default_batch,
+        rpm=rpm,
     )
 
 
@@ -74,16 +98,20 @@ def chunked(items: list[T], batch_size: int | None) -> list[list[T]]:
 
 
 def sleep_between_batches(index: int, rpm: int | None, *, default_interval: float = 0.0) -> None:
-    """Sleep before every batch after the first, using the existing interval formula.
+    """Pace batches via the process-local shared slot table.
 
-    内部改用进程级共享限速器 (_reserve_slot): 保持「首批不 sleep, 后续每批间隔 60/rpm」
-    的单调用方观感, 同时让并发调用方按同一时间轴排队, 聚合速率不再超过单能力 rpm。
+    - index == 0: reserve a slot but do **not** sleep (documented first-batch burst).
+    - index > 0: wait until the reserved slot time.
+
+    Concurrent callers that all pass index=0 can still burst above rpm; only later
+    batches and single-pipeline callers get full spacing. Do not launch multiple
+    Phase 1 probes/syncs at once during Stage A.
     """
     interval = batch_interval(rpm, default=default_interval)
     if interval <= 0:
         return
     if index <= 0:
-        # 首批不 sleep, 但登记一个占位槽, 让后续/并发调用方在同一时间轴上排队
+        # First batch: reserve only (no sleep). Concurrent index=0 calls may burst.
         _reserve_slot(rpm or -1, interval)
         return
     wait = _reserve_slot(rpm or -1, interval)
