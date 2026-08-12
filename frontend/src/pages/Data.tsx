@@ -42,6 +42,7 @@ import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
 import { ExternalFallbackCard } from '@/components/data/ExternalFallbackCard'
+import { CanonicalHistoryCard } from '@/components/data/CanonicalHistoryCard'
 import { EnrichedSchemaModal } from '@/components/data/SchemaModal'
 import { Skeleton } from '@/components/data/Skeleton'
 import { ExtDataStatCard } from '@/components/ext-data/ExtDataStatCard'
@@ -253,6 +254,13 @@ export function Data() {
     symbols_covered: s.etf_daily?.symbols_covered ?? s.etf_instruments?.rows ?? 0,
     trading_days: s.etf_daily?.trading_days ?? s.etf_enriched?.trading_days ?? 0,
   } : null
+  const financialOverviewStats = s?.financials ? {
+    rows: s.financials.rows,
+    symbols_covered: Math.max(
+      0,
+      ...Object.values(s.financials.tables).map(table => table.symbols),
+    ),
+  } : null
   const indexOverviewLabel = s ? '日 · 维表 · 日K · 指标' : undefined
   const indexEarliestDate = s?.index_daily?.earliest_date ?? s?.index_enriched?.earliest_date ?? null
   const indexOffsetDays = indexExtendUnit === 'month' ? indexExtendValue * 30 : indexExtendValue * 365
@@ -447,7 +455,7 @@ export function Data() {
         return (
           <StatCard
             title="A股分钟 K"
-            hint="A 股全市场同步"
+            hint="DuckDB 按需查询 · 本地缓存可选"
             stats={s?.minute}
             loading={isLoading}
             active={activeCard === 'minute'}
@@ -458,6 +466,9 @@ export function Data() {
             capLimits={caps.data?.capabilities}
             tierLabel={caps.data?.label}
             auto={minuteAuto}
+            subLabel={s?.minute?.source === 'catalog_tdx_minutes'
+              ? 'DuckDB catalog · 按需查询'
+              : undefined}
             onShowFields={() => setSchemaTable('minute')}
             onSettings={hasData ? () => setOpenSettings(v => v === 'minute' ? null : 'minute') : undefined}
             settingsOpen={openSettings === 'minute'}
@@ -468,7 +479,7 @@ export function Data() {
           <StatCard
             title="A股财务数据"
             hint="仅 A 股上市公司 · 利润表 / 资负表 / 现金流 / 指标"
-            stats={s?.financials ? { rows: s.financials.rows } : null}
+            stats={financialOverviewStats}
             loading={isLoading}
             tierKey="financials"
             capLimits={caps.data?.capabilities}
@@ -785,6 +796,9 @@ export function Data() {
         {/* 数据画像 */}
         <div>
           <SectionTitle icon={Database}>数据画像</SectionTitle>
+          <div className="mt-3">
+            <CanonicalHistoryCard />
+          </div>
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 items-stretch">
             {getCardOrder().filter(k => cardVisible[k]).map((k: CardKey) => (
               <Fragment key={k}>{renderStatCard(k)}</Fragment>

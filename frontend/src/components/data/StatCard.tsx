@@ -49,7 +49,8 @@ function CapBadge({ hasCap, isLocal, tierLabel, tierReq, capInfo, localSuffix }:
   }
 
   if (hasCap && capInfo && tierLabel) {
-    const parts = [tierLabel, `${capInfo.rpm}/min`]
+    const parts = [tierLabel]
+    if (capInfo.rpm != null) parts.push(`${capInfo.rpm}/min`)
     if (capInfo.batch != null && capInfo.batch > 1) parts.push(`${capInfo.batch}股/批`)
     return (
       <span className="rounded bg-accent/8 px-1.5 py-px font-mono text-[10px] font-medium text-accent/80">
@@ -107,7 +108,7 @@ export function StatCard({
   // 提供时渲染多个图标按钮(每个对应一张表的字段说明); 否则回退到单个 onShowFields
   fieldTabs?: FieldTab[]
 }) {
-  const empty = loading || !stats || (stats.rows === 0 && !stats.trading_days && !stats.fields)
+  const empty = loading || !stats || (stats.rows === 0 && !stats.trading_days && !stats.fields && !stats.available)
   const borderCls = active
     ? 'border-accent/50'
     : done
@@ -268,7 +269,9 @@ export function StatCard({
                 ? stats.fields
                 : stats.trading_days && !stats.rows
                   ? stats.trading_days.toLocaleString()
-                  : formatNumber(stats.rows)}
+                  : stats.available && !stats.rows
+                    ? '可用'
+                    : formatNumber(stats.rows)}
             </div>
             <div className="mt-0.5 text-[11px] text-muted">
               {renderSubLabelInline()}
