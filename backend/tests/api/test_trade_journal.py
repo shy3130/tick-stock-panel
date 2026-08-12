@@ -37,6 +37,12 @@ CSV = """成交日期,成交时间,代码,名称,交易类别,成交数量,成�
 """
 
 
+def test_get_ledger_returns_normal_empty_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+
+    assert trade_journal.get_ledger() is None
+
+
 @pytest.mark.asyncio
 async def test_upload_preview_does_not_write(tmp_path, monkeypatch):
     monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
@@ -151,6 +157,10 @@ async def test_upload_narrative_uses_aggregate_only(tmp_path, monkeypatch):
     assert "14:53:08" not in resp["narrative"]
 
 
+def test_normalize_benchmark_accepts_legacy_suffix():
+    assert trade_journal._normalize_benchmark("399006.SZ") == "399006.INDEX"
+
+
 @pytest.mark.asyncio
 async def test_upload_commit_falls_back_unknown_benchmark(tmp_path, monkeypatch):
     repo = FakeRepo()
@@ -162,8 +172,8 @@ async def test_upload_commit_falls_back_unknown_benchmark(tmp_path, monkeypatch)
         benchmark="BAD.INDEX",
         mapping=json.dumps(trade_journal.THS_PRESET["mapping"], ensure_ascii=False),
     )
-    assert resp["benchmark"]["code"] == "000300.SH"
-    assert repo.symbols == ["000300.SH"]
+    assert resp["benchmark"]["code"] == "000300.INDEX"
+    assert repo.symbols == ["000300.INDEX"]
 
 
 def test_feedback_records_value_signal(tmp_path, monkeypatch):

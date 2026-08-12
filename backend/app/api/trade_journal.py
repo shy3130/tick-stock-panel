@@ -22,10 +22,10 @@ from app.services.trade_journal.pricepos import build_price_lookup
 router = APIRouter(prefix="/api/journal", tags=["trade-journal"])
 
 BENCHMARKS = [
-    {"symbol": "000300.SH", "name": "沪深300"},
-    {"symbol": "000905.SH", "name": "中证500"},
-    {"symbol": "399006.SZ", "name": "创业板指"},
-    {"symbol": "000688.SH", "name": "科创50"},
+    {"symbol": "000300.INDEX", "name": "沪深300"},
+    {"symbol": "000905.INDEX", "name": "中证500"},
+    {"symbol": "399006.INDEX", "name": "创业板指"},
+    {"symbol": "000688.INDEX", "name": "科创50"},
 ]
 
 
@@ -42,7 +42,7 @@ async def upload_journal(
     append: Annotated[bool, Form()] = False,
     sheet: Annotated[str | None, Form()] = None,
     mapping: Annotated[str | None, Form()] = None,
-    benchmark: Annotated[str, Form()] = "000300.SH",
+    benchmark: Annotated[str, Form()] = "000300.INDEX",
     account_id: Annotated[str, Form()] = "default",
     narrative: Annotated[bool, Form()] = False,
 ):
@@ -126,10 +126,11 @@ async def upload_journal(
 
 
 @router.get("/ledger")
-def get_ledger():
+def get_ledger() -> dict | None:
+    """返回已导入台账；尚未导入是正常空态，不制造 404 网络错误。"""
     ledger = store.read_ledger(settings.data_dir)
     if ledger is None:
-        raise HTTPException(status_code=404, detail="尚未导入交易复盘台账")
+        return None
     from app.services.skill_context import load_skill_context_safe
 
     methodology_context = load_skill_context_safe("trade_journal", max_chars=4000, warnings=ledger.setdefault("warnings", []))
@@ -293,5 +294,8 @@ def _benchmark_name(symbol: str) -> str:
 
 
 def _normalize_benchmark(symbol: str) -> str:
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+
+    canonical = canonical_index_symbol(symbol)
     allowed = {item["symbol"] for item in BENCHMARKS}
-    return symbol if symbol in allowed else "000300.SH"
+    return canonical if canonical in allowed else "000300.INDEX"
