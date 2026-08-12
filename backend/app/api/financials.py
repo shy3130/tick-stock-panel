@@ -4,14 +4,14 @@ from __future__ import annotations
 import logging
 
 import polars as pl
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.services.financial_sync import FINANCIAL_TABLES, get_financial_df
-from app.services.financial_analyzer import analyze_financials_stream
-from app.services import ai_reports
 from app.capabilities import Cap
+from app.services import ai_reports
+from app.services.financial_analyzer import analyze_financials_stream
+from app.services.financial_sync import FINANCIAL_TABLES, get_financial_df
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def financial_status(request: Request):
 
 
 @router.get("/metrics")
-def get_metrics(request: Request, symbol: str | None = None):
+def get_metrics(request: Request, symbol: str = Query(..., min_length=1)):
     """查询核心财务指标。"""
     capset = request.app.state.capabilities
     capset.require(Cap.FINANCIAL)
@@ -64,13 +64,12 @@ def get_metrics(request: Request, symbol: str | None = None):
     df = get_financial_df(request.app.state.repo.store.data_dir, "metrics")
     if df.is_empty():
         return {"data": []}
-    if symbol:
-        df = df.filter(pl.col("symbol") == symbol)
+    df = df.filter(pl.col("symbol") == symbol)
     return {"data": df.to_dicts()}
 
 
 @router.get("/income")
-def get_income(request: Request, symbol: str | None = None):
+def get_income(request: Request, symbol: str = Query(..., min_length=1)):
     """查询利润表。"""
     capset = request.app.state.capabilities
     capset.require(Cap.FINANCIAL)
@@ -78,13 +77,12 @@ def get_income(request: Request, symbol: str | None = None):
     df = get_financial_df(request.app.state.repo.store.data_dir, "income")
     if df.is_empty():
         return {"data": []}
-    if symbol:
-        df = df.filter(pl.col("symbol") == symbol)
+    df = df.filter(pl.col("symbol") == symbol)
     return {"data": df.to_dicts()}
 
 
 @router.get("/balance-sheet")
-def get_balance_sheet(request: Request, symbol: str | None = None):
+def get_balance_sheet(request: Request, symbol: str = Query(..., min_length=1)):
     """查询资产负债表。"""
     capset = request.app.state.capabilities
     capset.require(Cap.FINANCIAL)
@@ -92,13 +90,12 @@ def get_balance_sheet(request: Request, symbol: str | None = None):
     df = get_financial_df(request.app.state.repo.store.data_dir, "balance_sheet")
     if df.is_empty():
         return {"data": []}
-    if symbol:
-        df = df.filter(pl.col("symbol") == symbol)
+    df = df.filter(pl.col("symbol") == symbol)
     return {"data": df.to_dicts()}
 
 
 @router.get("/cash-flow")
-def get_cash_flow(request: Request, symbol: str | None = None):
+def get_cash_flow(request: Request, symbol: str = Query(..., min_length=1)):
     """查询现金流量表。"""
     capset = request.app.state.capabilities
     capset.require(Cap.FINANCIAL)
@@ -106,13 +103,12 @@ def get_cash_flow(request: Request, symbol: str | None = None):
     df = get_financial_df(request.app.state.repo.store.data_dir, "cash_flow")
     if df.is_empty():
         return {"data": []}
-    if symbol:
-        df = df.filter(pl.col("symbol") == symbol)
+    df = df.filter(pl.col("symbol") == symbol)
     return {"data": df.to_dicts()}
 
 
 @router.get("/quick")
-def get_quick(request: Request, symbol: str | None = None):
+def get_quick(request: Request, symbol: str = Query(..., min_length=1)):
     """查询业绩快报。"""
     capset = request.app.state.capabilities
     capset.require(Cap.FINANCIAL)
@@ -120,13 +116,12 @@ def get_quick(request: Request, symbol: str | None = None):
     df = get_financial_df(request.app.state.repo.store.data_dir, "quick")
     if df.is_empty():
         return {"data": []}
-    if symbol:
-        df = df.filter(pl.col("symbol") == symbol)
+    df = df.filter(pl.col("symbol") == symbol)
     return {"data": df.to_dicts()}
 
 
 @router.get("/forecast")
-def get_forecast(request: Request, symbol: str | None = None):
+def get_forecast(request: Request, symbol: str = Query(..., min_length=1)):
     """查询业绩预告。"""
     capset = request.app.state.capabilities
     capset.require(Cap.FINANCIAL)
@@ -134,8 +129,7 @@ def get_forecast(request: Request, symbol: str | None = None):
     df = get_financial_df(request.app.state.repo.store.data_dir, "forecast")
     if df.is_empty():
         return {"data": []}
-    if symbol:
-        df = df.filter(pl.col("symbol") == symbol)
+    df = df.filter(pl.col("symbol") == symbol)
     return {"data": df.to_dicts()}
 
 

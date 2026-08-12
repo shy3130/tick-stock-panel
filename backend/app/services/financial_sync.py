@@ -258,16 +258,188 @@ def _refresh_financials_views(data_dir: Path) -> None:
         logger.debug("financial parquet ready: %s (%d rows)", name, out.stat().st_size)
 
 
+# ================================================================
+# 读取期 canonicalization：raw fstore 列 → 前端/分析器约定的 canonical alias
+# ================================================================
+# 背景：_sync_table 把 provider 返回的 raw 列（symbol/t_date/...fstore 源列.../
+# notice_date/source）原样落盘。前端与 financial_analyzer 期望 canonical 字段名
+# （period_end/announce_date/eps_basic/revenue/...）。这里在读取时做 additive
+# 回填：canonical 列已存在且非空时优先保留，仅当为空/缺失时才从 raw 列派生，
+# 因此旧 raw parquet 无需重同步即可产出 canonical alias，也不会破坏既有
+# canonical parquet。绝不臆造上游不存在的数值。
+
+# fstore 用 0001-01-01 表示"无公告日期"，视作 null。
+_SENTINEL_ANNOUNCE_DATE = "0001-01-01"
+
+
+def _coalesce_fill(df: pl.DataFrame, canonical: str, sources: list[str]) -> pl.DataFrame:
+    """字符串 canonical 字段 additive 回填。
+
+    canonical 列已存在时优先保留（coalesce 取第一个非空），仅当 canonical 为
+    空/缺失时按 sources 顺序回退到 raw 列。canonical 与所有 source 都缺失时不动。
+    用于 period_end 等字符串字段。
+    """
+    exprs: list[pl.Expr] = []
+    if canonical in df.columns:
+        exprs.append(pl.col(canonical))
+    for s in sources:
+        if s in df.columns:
+            exprs.append(pl.col(s))
+    if not exprs:
+        return df
+    return df.with_columns(pl.coalesce(exprs).alias(canonical))
+
+
+def _coalesce_fill_num(df: pl.DataFrame, canonical: str, sources: list[str]) -> pl.DataFrame:
+    """数值 canonical 字段 additive 回填。
+
+    所有 candidate（canonical 自身 + sources）先统一 cast 成 Float64(strict=False)
+    再 coalesce。这样上游混合 dtype（fstore annual 表 yo_y_income=DOUBLE 而
+    yoy_income=VARCHAR）不会把结果污染成 String —— strict=False 下不可解析为
+    数值的字符串变 null，由 coalesce 跳过。canonical 已有有效数值时仍优先保留。
+    """
+    exprs: list[pl.Expr] = []
+    if canonical in df.columns:
+        exprs.append(pl.col(canonical).cast(pl.Float64, strict=False))
+    for s in sources:
+        if s in df.columns:
+            exprs.append(pl.col(s).cast(pl.Float64, strict=False))
+    if not exprs:
+        return df
+    return df.with_columns(pl.coalesce(exprs).alias(canonical))
+
+
+def _sanitize_announce_expr(expr: pl.Expr) -> pl.Expr:
+    """把公告日表达式中的哨兵(0001-01-01)/空串/null 统一置空。
+
+    canonical announce_date 列与 raw notice_date 列都要先过此 sanitize 再 coalesce，
+    否则已存在的 canonical 哨兵值(非 null)会抢占有效的 raw notice_date。
+    """
+    return (
+        pl.when(
+            expr.is_null()
+            | (expr == _SENTINEL_ANNOUNCE_DATE)
+            | (expr == "")
+        )
+        .then(None)
+        .otherwise(expr)
+    )
+
+
+def _canonicalize_common(df: pl.DataFrame) -> pl.DataFrame:
+    """所有财务表共有的 canonical 化：period_end / announce_date。"""
+    df = _coalesce_fill(df, "period_end", ["t_date"])
+    # announce_date ← canonical announce_date(先 sanitize) 再 ← notice_date(sanitize)。
+    # canonical 与 raw 的 0001-01-01 哨兵 / 空串 / null 都置空，避免哨兵抢占有效值。
+    candidates: list[pl.Expr] = []
+    if "announce_date" in df.columns:
+        candidates.append(_sanitize_announce_expr(pl.col("announce_date")))
+    if "notice_date" in df.columns:
+        candidates.append(_sanitize_announce_expr(pl.col("notice_date")))
+    if candidates:
+        df = df.with_columns(pl.coalesce(candidates).alias("announce_date"))
+    return df
+
+
+def _canonicalize_metrics(df: pl.DataFrame) -> pl.DataFrame:
+    """annual 核心指标 → metrics canonical alias。
+
+    全部用 _coalesce_fill_num：fstore yo_y_*=DOUBLE 而 yoy_*=VARCHAR，混合 dtype
+    会把 coalesce 结果污染成 String，前端 formatValue 只接受 number 会显示 —。
+    bps / gross_margin 在 raw 中已同名存在（DOUBLE），无需映射。
+    net_margin 可从 net_profit / total_income 严格派生（百分点口径，与 gross_margin
+    一致）；分母为 0 时不派生（保持 null），绝不臆造。
+    """
+    df = _coalesce_fill_num(df, "eps_basic", ["basic_eps"])
+    df = _coalesce_fill_num(df, "ocfps", ["net_cash_flow"])
+    df = _coalesce_fill_num(df, "roe", ["weight_avg_roe"])
+    df = _coalesce_fill_num(df, "revenue_yoy", ["yo_y_income", "yoy_income"])
+    df = _coalesce_fill_num(df, "net_income_yoy", ["yo_y_profit", "yoy_profit"])
+    if "net_profit" in df.columns and "total_income" in df.columns:
+        np = pl.col("net_profit").cast(pl.Float64, strict=False)
+        ti = pl.col("total_income").cast(pl.Float64, strict=False)
+        derived = pl.when(ti != 0).then(np / ti * 100.0).otherwise(None)
+        if "net_margin" in df.columns:
+            df = df.with_columns(
+                pl.coalesce([pl.col("net_margin").cast(pl.Float64, strict=False), derived]).alias("net_margin")
+            )
+        else:
+            df = df.with_columns(derived.alias("net_margin"))
+    return df
+
+
+def _canonicalize_income(df: pl.DataFrame) -> pl.DataFrame:
+    """利润表 canonical alias（数值字段统一 _coalesce_fill_num 防 dtype 污染）。
+
+    注意：上游 income 表无"净利润"列（只有利润总额 total_profit 与归母净利
+    parent_net_profit）。绝不把归母净利伪造成总净利 net_income，保持 null。
+    """
+    df = _coalesce_fill_num(df, "revenue", ["total_oper_income"])
+    df = _coalesce_fill_num(df, "operating_cost", ["operate_cost"])
+    df = _coalesce_fill_num(df, "operating_profit", ["operate_profit"])
+    df = _coalesce_fill_num(df, "selling_expense", ["sale_expense"])
+    df = _coalesce_fill_num(df, "admin_expense", ["manage_expense"])
+    df = _coalesce_fill_num(df, "financial_expense", ["finance_expense"])
+    df = _coalesce_fill_num(df, "net_income_attributable", ["parent_net_profit"])
+    return df
+
+
+def _canonicalize_balance(df: pl.DataFrame) -> pl.DataFrame:
+    """资产负债表 canonical alias（数值字段统一 _coalesce_fill_num 防 dtype 污染）。
+
+    其余同名 canonical（total_assets/total_liabilities/total_equity/
+    accounts_receivable/inventory）在 raw 中已同名存在，无需映射。
+    """
+    df = _coalesce_fill_num(df, "cash_and_equivalents", ["monetary_funds"])
+    df = _coalesce_fill_num(df, "short_term_borrowing", ["short_loan"])
+    return df
+
+
+def _canonicalize_cash_flow(df: pl.DataFrame) -> pl.DataFrame:
+    """现金流量表 canonical alias（数值字段统一 _coalesce_fill_num 防 dtype 污染）。"""
+    df = _coalesce_fill_num(df, "net_operating_cash_flow", ["net_cash_operate"])
+    df = _coalesce_fill_num(df, "net_investing_cash_flow", ["net_cash_invest"])
+    df = _coalesce_fill_num(df, "net_financing_cash_flow", ["net_cash_finance"])
+    df = _coalesce_fill_num(df, "net_cash_change", ["net_cash_flow"])
+    return df
+
+
+_TABLE_CANONICALIZERS = {
+    "metrics": _canonicalize_metrics,
+    "income": _canonicalize_income,
+    "balance_sheet": _canonicalize_balance,
+    "cash_flow": _canonicalize_cash_flow,
+}
+
+
+def _canonicalize_financial_df(df: pl.DataFrame, table: str) -> pl.DataFrame:
+    """读取已持久化 raw fstore 财务 Parquet 后做 additive canonicalization。
+
+    common：period_end←t_date；announce_date←notice_date（0001-01-01 哨兵置空）。
+    各表 canonical alias 从 raw 列回填；canonical 已存在时优先保留，raw 只填空。
+    metrics.net_margin 可从 net_profit/total_income 严格派生（分母非0）。
+    quick / forecast 无 canonical 化需求（前端按原始列展示）。
+    """
+    if df.is_empty():
+        return df
+    df = _canonicalize_common(df)
+    fn = _TABLE_CANONICALIZERS.get(table)
+    if fn is not None:
+        df = fn(df)
+    return df
+
+
 def get_financial_df(data_dir: Path, table: str) -> pl.DataFrame:
-    """读取本地财务 Parquet。"""
+    """读取本地财务 Parquet（读取期 additive canonicalization：raw→canonical alias 回填）。"""
     path = data_dir / "financials" / table / "part.parquet"
     if not path.exists():
         return pl.DataFrame()
     try:
-        return pl.read_parquet(path)
+        df = pl.read_parquet(path)
     except Exception as e:
         logger.warning("读取 financials/%s 失败: %s", table, e)
         return pl.DataFrame()
+    return _canonicalize_financial_df(df, table)
 
 
 # ================================================================
