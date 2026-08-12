@@ -159,6 +159,13 @@ def validate(rule: dict) -> None:
                 raise ValueError(f"第 {i+1} 个条件: op {op!r} 非法 (应为 truth 或 {OPS})")
 
     # scope 校验
+    if rule.get("scope", "symbols") == "sector":
+        # sector 精确过滤尚未实现 (需 ext_data 板块 JOIN); 禁止保存,
+        # 避免历史/误建规则在引擎里被当作全市场执行 (fail-closed)。
+        raise ValueError(
+            "scope=sector 当前不可用: 尚未提供精确板块过滤,"
+            "为防止被当作全市场执行已禁止保存。请改用「指定股票」或「全市场」。"
+        )
     if rule.get("scope", "symbols") not in SCOPES:
         raise ValueError(f"scope 必须是 {SCOPES} 之一")
     if rule.get("scope") == "symbols":

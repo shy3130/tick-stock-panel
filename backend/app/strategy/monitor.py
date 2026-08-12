@@ -520,7 +520,16 @@ class MonitorRuleEngine:
 
     @staticmethod
     def _apply_scope(df: pl.DataFrame, rule: dict) -> pl.DataFrame:
-        """按 scope 过滤 DataFrame。"""
+        """按 scope 过滤作用域 DataFrame (fail-closed)。
+
+        安全策略 — 任何不支持的 scope 都返回空, 绝不退化为全市场:
+          - scope=all      → 全市场 (显式允许)
+          - scope=symbols  → 仅指定股票; symbols 为空则空
+          - scope=sector   → 未提供精确板块过滤, 返回空
+          - 未知 scope     → 返回空
+        历史已保存的 sector 规则不允许保存(validate 拒绝), 但存量文件可能仍含
+        sector; 此处保证它不会被当作全市场执行。
+        """
         scope = rule.get("scope", "symbols")
         if scope == "all":
             return df
@@ -529,11 +538,13 @@ class MonitorRuleEngine:
             if not syms:
                 return df.head(0)
             return df.filter(pl.col("symbol").is_in(syms))
-        if scope == "sector":
-            # sector 过滤: 需 df 含板块列 (后续接入 ext_data JOIN)
-            # 当前先返回全量, sector 精确过滤第二步完善
-            return df
-        return df
+        # sector 或任何未知 scope: fail-closed, 返回空 (不当全市场执行)
+        logger.warning(
+            "MonitorRuleEngine._apply_scope: 规则 %s scope=%r 不支持精确过滤, "
+            "fail-closed 返回空 (不退化为全市场)",
+            rule.get("id"), scope,
+        )
+        return df.head(0)
 
     def _match_strategy(
         self, df: pl.DataFrame, rule: dict,

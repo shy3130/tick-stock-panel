@@ -38,7 +38,7 @@ class RuleModel(BaseModel):
     name: str
     enabled: bool = True
     type: str          # strategy | signal | price | market
-    scope: str = "symbols"   # symbols | all | sector
+    scope: str = "symbols"   # symbols | all  (sector 已禁用: validate 拒绝保存, 引擎 fail-closed)
     symbols: list[str] = []
     sector: str | None = None
     strategy_id: str | None = None
@@ -96,7 +96,8 @@ def get_options(request: Request):
         "scopes": [
             {"key": "symbols", "label": "指定股票"},
             {"key": "all", "label": "全市场"},
-            {"key": "sector", "label": "板块"},
+            # sector 已移除: 板块精确过滤未实现, 不向新规则提供。
+            # 编辑历史 sector 规则时, 前端额外渲染一个 disabled 选项。
         ],
         "logics": [
             {"key": "and", "label": "全部满足 (AND)"},
