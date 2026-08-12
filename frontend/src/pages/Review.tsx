@@ -146,7 +146,7 @@ export function Review() {
   })
 
   // 历史报告
-  const historyQuery = useQuery<{ reports: AiReviewReport[] }>({
+  const historyQuery = useQuery({
     queryKey: QK.reviewReports,
     queryFn: () => api.reviewReportsList(),
   })
@@ -447,6 +447,16 @@ export function Review() {
                       <button onClick={() => setFocus('')} className="text-xs text-muted transition-colors hover:text-foreground">清除</button>
                     )}
                   </div>
+
+                  {(historyQuery.data?.discarded_reports.length ?? 0) > 0 && (
+                    <div className="flex items-center gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        已隔离 {historyQuery.data!.discarded_reports.length} 份晚于 canonical 日期
+                        {' '}{historyQuery.data!.canonical_as_of ?? '未知'} 的复盘报告，原文件未删除。
+                      </span>
+                    </div>
+                  )}
 
                   {/* ===== 报告 + 历史 双栏(报告为主体)===== */}
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_18rem]">

@@ -164,7 +164,7 @@ export const router = createBrowserRouter([
       // 旧路由兼容重定向
       { path: 'settings/keys', element: <Navigate to="/settings?tab=account" replace /> },
       { path: 'settings/ai', element: <Navigate to="/settings?tab=ai" replace /> },
-      { path: 'settings/queries', element: <Navigate to="/settings?tab=queries" replace /> },
+      { path: 'settings/queries', element: <Navigate to="/condition-screener" replace /> },
     ],
   },
 ])

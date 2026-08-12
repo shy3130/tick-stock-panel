@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, Gauge, Zap, ListPlus } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
@@ -11,14 +11,13 @@ import {
 } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { instrumentSearchMeta } from '@/lib/instrumentSearch'
-import { tierRank } from '@/lib/capability-labels'
 import { storage } from '@/lib/storage'
 import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
-import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
+import { useDataStatus } from '@/lib/useSharedQueries'
 import { EmptyState } from '@/components/EmptyState'
 import { WarmupBadge } from '@/components/WarmupBadge'
 import { DatePicker } from '@/components/DatePicker'
@@ -676,10 +675,6 @@ export function StrategyBacktest() {
   const [regimeStates, setRegimeStates] = useState<string[]>(saved?.regimeStates ?? ['strong', 'lean_strong'])
   const [regimeMinScore, setRegimeMinScore] = useState<string>(saved?.regimeMinScore ?? '')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 高颗粒回测（分钟K精确回测）— 开发中，Starter+ 功能
-  const [highGranularity, setHighGranularity] = useState(false)
-  const { data: caps } = useCapabilities()
-  const isFreeTier = tierRank(caps?.label ?? '') < 1
   const [rangeSettingsOpen, setRangeSettingsOpen] = useState(false)
   const [quickRanges, setQuickRanges] = useState(loadQuickRanges)
   const [settingsTab, setSettingsTab] = useState<AdvancedSettingsTab>('params')
@@ -1049,49 +1044,9 @@ export function StrategyBacktest() {
         </div>
         <div className="panel-body space-y-3">
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="mb-1.5">
             <label className="text-xs font-medium text-secondary">选择策略</label>
-            {/* 高颗粒回测（分钟K）— 开发中占位 */}
-            <div className="flex items-center gap-1">
-              <Gauge className={`h-3 w-3 ${highGranularity ? 'text-warning' : 'text-muted/50'}`} />
-              <button
-                onClick={() => {
-                  if (isFreeTier) return
-                  // 功能开发中，暂不实际启用
-                  setHighGranularity(v => !v)
-                }}
-                disabled={isFreeTier}
-                title={isFreeTier
-                  ? '高颗粒回测（分钟K精确回测）：需 Starter+ 档位'
-                  : '高颗粒回测（分钟K精确回测）：切换后结合每日分钟K更精确回测。⚠️ 开发中，且会显著影响性能、回测很慢。'
-                }
-                className={`group relative inline-flex h-3.5 w-6 items-center rounded-full shrink-0 transition-colors duration-200 ${
-                  isFreeTier ? 'bg-elevated opacity-50 cursor-not-allowed'
-                  : highGranularity ? 'bg-warning cursor-pointer'
-                  : 'bg-elevated cursor-pointer'
-                }`}
-              >
-                <span className={`inline-block h-2.5 w-2.5 rounded-full bg-base shadow-sm transition-transform duration-200 ${
-                  highGranularity ? 'translate-x-[13px]' : 'translate-x-0.5'
-                }`} />
-              </button>
-              <span className={`text-[9px] font-medium ${highGranularity ? 'text-warning' : 'text-muted/50'}`}>分钟K</span>
-              {isFreeTier && (
-                <span className="text-[8px] text-accent/70 font-medium bg-accent/10 px-1 py-px rounded">Starter+</span>
-              )}
-            </div>
           </div>
-          {/* 高颗粒开启时的警告条 */}
-          {highGranularity && !isFreeTier && (
-            <div className="mb-2 flex items-start gap-1.5 rounded-btn border border-warning/30 bg-warning/5 px-2 py-1.5">
-              <Zap className="h-3 w-3 text-warning shrink-0 mt-px" />
-              <div className="text-[10px] leading-snug text-warning">
-                <span className="font-medium">高颗粒回测（开发中）</span>
-                ：将结合每日分钟K进行更精确的回测。
-                <span className="opacity-80"> 此功能尚未完成，且开启后会显著拖慢回测速度、占用大量资源。</span>
-              </div>
-            </div>
-          )}
           <div className="overflow-hidden rounded-input border border-border bg-surface">
             <div className="flex border-b border-border/60 bg-base/30 p-0.5">
               {STRATEGY_GROUPS.map(group => (

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileUp, Loader2, NotebookPen, Trash2 } from 'lucide-react'
+import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { api, type JournalLedger, type JournalPreview } from '@/lib/api'
 
@@ -24,13 +25,13 @@ export function TradeJournal() {
   const [preview, setPreview] = useState<JournalPreview | null>(null)
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [sheet, setSheet] = useState('')
-  const [benchmark, setBenchmark] = useState('000300.SH')
+  const [benchmark, setBenchmark] = useState('000300.INDEX')
   const [accountId, setAccountId] = useState('default')
   const [appendMode, setAppendMode] = useState(false)
   const [narrative, setNarrative] = useState(false)
 
   const presets = useQuery({ queryKey: ['journal-presets'], queryFn: api.journalPresets })
-  const ledger = useQuery<JournalLedger>({
+  const ledger = useQuery<JournalLedger | null>({
     queryKey: ['journal-ledger'],
     queryFn: api.journalLedger,
     retry: false,
@@ -172,6 +173,22 @@ export function TradeJournal() {
                   </table>
                 </div>
               </div>
+            </section>
+          )}
+
+          {!ledger.isLoading && !ledger.isError && !current && (
+            <section className="panel">
+              <EmptyState
+                icon={NotebookPen}
+                title="尚未导入交易复盘台账"
+                hint="选择券商导出的 xlsx 或 csv，预览列映射并确认导入后，这里会显示 FIFO 台账与行为诊断。"
+              />
+            </section>
+          )}
+
+          {ledger.isError && (
+            <section className="panel px-6 py-8 text-center text-sm text-danger">
+              台账读取失败，请稍后重试。
             </section>
           )}
 
