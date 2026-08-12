@@ -47,6 +47,7 @@ export const QK = {
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
+  dataTrust:            ['data-trust'] as const,
   advisorBrief:         ['advisor-daily-brief'] as const,
   paperAccount:         ['paper-account'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,

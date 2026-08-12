@@ -41,6 +41,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Primary A-share market-data adapters used by the personal research profile.
+# Enable with: uv sync --extra market-data
+market-data = [
+    "tushare==1.4.29",
+    "akshare==1.18.80",
+]
+
 # Legacy CPU runtime: install the Polars compatibility kernel on
 # machines without AVX2/FMA support.
 # Enable with: uv sync --extra legacy-cpu

@@ -216,10 +216,12 @@ def test_fifo_sale_reconciles_realized_profit_and_all_fees(tmp_path):
             "mark_price": 12.05,
             "marked_value": 1205.0,
             "market_value": 1205.0,
-            "unrealized_pnl": 0.0,
-            "mark_source": "COST_FALLBACK",
-        }
-    ]
+                "unrealized_pnl": 0.0,
+                "mark_source": "COST_FALLBACK",
+                "portfolio_weight_pct": 11.49,
+                "invested_weight_pct": 100.0,
+            }
+        ]
     sale = account["journal"][-1]
     assert sale["commission"] == 5.0
     assert sale["stamp_tax"] == 0.75

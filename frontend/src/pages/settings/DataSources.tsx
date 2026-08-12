@@ -1,25 +1,34 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Check, Database, Plus, RefreshCw, Zap, FileWarning } from 'lucide-react'
+import { AlertTriangle, Check, Database, Plus, RefreshCw, ShieldCheck, Zap, FileWarning } from 'lucide-react'
 import { api, type DataSourceItem, type PluginDataSourceItem } from '@/lib/api'
+import {
+  buildProviderPreferencePatch,
+  resolveInitialProviderSelection,
+} from '@/lib/data-source-selection'
+import { buildDataTrustRows, getDataTrustSummaryLabel, type DataTrustResponse } from '@/lib/data-trust'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { toast } from '@/components/Toast'
 import { DataSourceEditor } from './DataSourceEditor'
 
 const DATASET_LABEL: Record<string, string> = {
+  instruments: '证券主表',
   daily: '日K',
-  adj_factor: '除权',
+  adj_factor: '复权因子',
   realtime: '实时',
   minute: '分钟',
+  financial: '财务',
 }
 
 export function SettingsDataSourcesPanel() {
   const qc = useQueryClient()
   const prefs = usePreferences()
   const sources = useQuery({ queryKey: QK.dataSources, queryFn: api.dataSources })
+  const trust = useQuery({ queryKey: QK.dataTrust, queryFn: api.dataTrust })
   const [selected, setSelected] = useState<string>('tickflow') // 当前在右侧编辑的源 name
+  const initializedProviderSelection = useRef(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   const reload = useMutation({
@@ -43,33 +52,12 @@ export function SettingsDataSourcesPanel() {
 
   const switchProvider = useMutation({
     mutationFn: (name: string) => {
-      // tickflow: 5 个数据集全量重置为 tickflow
-      if (name === 'tickflow') {
-        return api.updateDataProviders({
-          daily_data_provider: 'tickflow',
-          adj_factor_provider: 'same_as_daily',
-          realtime_data_provider: 'tickflow',
-          minute_data_provider: 'tickflow',
-          financial_data_provider: 'tickflow',
-        })
-      }
-      // 非 tickflow: 按源声明的 datasets 动态切换。支持的数据集切到该源,
-      // 不支持的保持 tickflow, 使 preferences 与实际取数路由一致
-      // (避免 UI 显示某源、后台却走 tickflow 的假象)。
-      const supported = new Set(
-        allItems.find(s => s.name === name)?.datasets ?? []
-      )
-      const pick = (dataset: string) => (supported.has(dataset) ? name : 'tickflow')
-      return api.updateDataProviders({
-        daily_data_provider: pick('daily'),
-        adj_factor_provider: 'same_as_daily', // 除权始终跟随日K
-        realtime_data_provider: pick('realtime'),
-        minute_data_provider: pick('minute'),
-        financial_data_provider: pick('financial'),
-      })
+      const datasets = allItems.find(s => s.name === name)?.datasets ?? []
+      return api.updateDataProviders(buildProviderPreferencePatch(name, datasets))
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK.preferences })
+      qc.invalidateQueries({ queryKey: QK.dataTrust })
       toast('数据源已切换', 'success')
     },
   })
@@ -111,6 +99,16 @@ export function SettingsDataSourcesPanel() {
   const customList: DataSourceItem[] = sources.data?.custom ?? []
   const errors = sources.data?.errors ?? []
   const activeName = prefs.data?.daily_data_provider || 'tickflow'
+  useEffect(() => {
+    const next = resolveInitialProviderSelection({
+      current: selected,
+      active: activeName,
+      preferencesLoaded: prefs.data != null,
+      initialized: initializedProviderSelection.current,
+    })
+    if (next !== selected) setSelected(next)
+    if (prefs.data != null) initializedProviderSelection.current = true
+  }, [activeName, prefs.data, selected])
 
   // 插件 name → 状态 (供卡片渲染时判断 available/installing 等)
   const pluginMap = new Map(pluginList.map(p => [p.name, p]))
@@ -125,6 +123,7 @@ export function SettingsDataSourcesPanel() {
     ...pluginItems,
     ...customList,
   ]
+  const activeDisplayName = allItems.find(s => s.name === activeName)?.display_name || activeName
 
   const selectedCustom = customList.find(s => s.name === selected)
 
@@ -158,7 +157,7 @@ export function SettingsDataSourcesPanel() {
           <span className="text-[10px] uppercase tracking-widest text-muted">当前</span>
           <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
           <span className="text-sm font-medium text-foreground">
-            {activeName === 'tickflow' ? 'TickFlow' : customList.find(s => s.name === activeName)?.display_name || activeName}
+            {activeDisplayName}
           </span>
         </div>
 
@@ -169,13 +168,13 @@ export function SettingsDataSourcesPanel() {
             const isSelected = selected === item.name
             const plugin = pluginMap.get(item.name)
             const pluginUnavailable = plugin && !plugin.available
+            const dependencyMissing = pluginUnavailable && plugin.status.includes('未安装')
             const installing = installMut.isPending && installMut.variables === item.name
             const uninstalling = uninstallMut.isPending && uninstallMut.variables === item.name
             return (
               <div
                 key={item.name}
                 onClick={() => {
-                  if (pluginUnavailable) return  // 未安装的插件不可选中
                   setSelected(item.name)
                   // 只有用户自定义源 (YAML) 才进编辑器; tickflow 和插件不可编辑
                   if (customList.some(c => c.name === item.name)) {
@@ -204,7 +203,7 @@ export function SettingsDataSourcesPanel() {
                     <span className="text-[9px] text-muted/50 uppercase tracking-wider shrink-0">插件</span>
                   )}
                   {/* 右侧操作区: 插件未安装→安装按钮; 已激活→使用中; 否则→使用/卸载 */}
-                  {pluginUnavailable ? (
+                  {dependencyMissing ? (
                     installing ? (
                       <span className="inline-flex items-center gap-1 text-[9px] text-accent shrink-0">
                         <RefreshCw className="h-2.5 w-2.5 animate-spin" /> 安装中...
@@ -218,6 +217,8 @@ export function SettingsDataSourcesPanel() {
                         <Zap className="h-2.5 w-2.5" /> 安装
                       </button>
                     )
+                  ) : pluginUnavailable ? (
+                    <span className="text-[9px] text-warning shrink-0">未就绪</span>
                   ) : isActive ? (
                     <span className="inline-flex items-center gap-0.5 text-[9px] text-accent shrink-0">
                       <Check className="h-2.5 w-2.5" /> 使用中
@@ -267,9 +268,11 @@ export function SettingsDataSourcesPanel() {
                 {item.name === 'tickflow' && (
                   <div className="text-[10px] text-muted/60 ml-3.5">日K · 除权 · 实时 · 分钟K</div>
                 )}
-                {/* 未安装插件显示安装命令提示 */}
-                {pluginUnavailable && plugin?.install_hint && (
-                  <div className="ml-3.5 mt-1 text-[10px] text-muted/40 font-mono truncate">{plugin.install_hint}</div>
+                {/* 未就绪插件显示真实原因，避免把缺少凭据误报成缺依赖。 */}
+                {pluginUnavailable && (
+                  <div className="ml-3.5 mt-1 text-[10px] text-warning/80 truncate" title={plugin?.status}>
+                    {plugin?.status}
+                  </div>
                 )}
               </div>
             )
@@ -308,9 +311,15 @@ export function SettingsDataSourcesPanel() {
           <span className="text-muted/30">·</span>
           <span>点「使用」切换为当前数据源</span>
           <span className="text-muted/30">·</span>
-          <span>未启用的数据集自动回退 TickFlow</span>
+          <span>各数据集独立选择；切换不会暗改不支持的数据集</span>
         </div>
       </section>
+
+      <DataTrustPanel
+        data={trust.data}
+        loading={trust.isLoading}
+        error={trust.error instanceof Error ? trust.error.message : null}
+      />
 
       {/* ===== 下方: 编辑区 ===== */}
       <AnimatePresence mode="wait">
@@ -390,6 +399,93 @@ export function SettingsDataSourcesPanel() {
   )
 }
 
+function DataTrustPanel({ data, loading, error }: {
+  data?: DataTrustResponse
+  loading: boolean
+  error: string | null
+}) {
+  const rows = data ? buildDataTrustRows(data) : []
+  const healthy = data?.overall_status === 'ok'
+  const unconfigured = data?.overall_status === 'unconfigured'
+  const summaryLabel = data ? getDataTrustSummaryLabel(data) : null
+
+  return (
+    <section className="rounded-card border border-border bg-surface p-5">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="flex items-start gap-2.5">
+          {healthy ? (
+            <ShieldCheck className="h-4 w-4 text-accent mt-0.5" />
+          ) : (
+            <AlertTriangle className="h-4 w-4 text-warning mt-0.5" />
+          )}
+          <div>
+            <h2 className="text-sm font-medium text-foreground">数据可信度回执</h2>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted">
+              这里显示真实来源、覆盖率和数据截止日；拉取失败或校验不通过不会换源伪装成功。
+            </p>
+          </div>
+        </div>
+        {data && (
+          <span className={`shrink-0 rounded px-2 py-1 text-[10px] ${
+            healthy
+              ? 'bg-accent/10 text-accent'
+              : unconfigured
+                ? 'bg-elevated text-muted'
+                : 'bg-warning/10 text-warning'
+          }`}>
+            {summaryLabel}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-muted">正在读取回执...</div>
+      ) : error ? (
+        <div className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">
+          回执读取失败：{error}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-lg border border-border/50 bg-elevated/20 px-3 py-3 text-xs text-muted">
+          尚未执行数据同步。完成一次证券主表或日线同步后，这里才会出现可审计结果。
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left">
+            <thead>
+              <tr className="border-b border-border/60 text-[10px] text-muted">
+                <th className="pb-2 pr-3 font-normal">数据集</th>
+                <th className="pb-2 pr-3 font-normal">真实来源</th>
+                <th className="pb-2 pr-3 font-normal">状态</th>
+                <th className="pb-2 pr-3 font-normal">覆盖率</th>
+                <th className="pb-2 pr-3 font-normal">行数</th>
+                <th className="pb-2 pr-3 font-normal">数据截止日</th>
+                <th className="pb-2 font-normal">问题</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={row.dataset} className="border-b border-border/30 last:border-0 text-xs">
+                  <td className="py-2.5 pr-3 text-foreground">{row.datasetLabel}</td>
+                  <td className="py-2.5 pr-3 font-mono text-secondary">{row.provider}</td>
+                  <td className={`py-2.5 pr-3 ${
+                    row.status === 'ok' ? 'text-accent' : row.status === 'partial' || row.status === 'empty' ? 'text-warning' : 'text-danger'
+                  }`}>
+                    {row.statusLabel}
+                  </td>
+                  <td className="py-2.5 pr-3 text-secondary">{row.coverageLabel}</td>
+                  <td className="py-2.5 pr-3 font-mono text-secondary">{row.rowCount.toLocaleString()}</td>
+                  <td className="py-2.5 pr-3 font-mono text-secondary">{row.observedEnd || '—'}</td>
+                  <td className="py-2.5 text-muted">{row.issueText || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function PluginDetail({ plugin, isActive, onSwitch, switching }: {
   plugin: PluginDataSourceItem
   isActive: boolean
@@ -411,7 +507,19 @@ function PluginDetail({ plugin, isActive, onSwitch, switching }: {
         </div>
       </div>
       <div className="flex items-center gap-3">
-        {isActive ? (
+        {!plugin.available ? (
+          <div className="w-full rounded-lg border border-warning/20 bg-warning/5 px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-xs text-warning">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              {plugin.status || '数据源尚未就绪'}
+            </div>
+            <p className="mt-1 text-[10px] leading-relaxed text-muted">
+              {plugin.status.includes('TUSHARE_TOKEN')
+                ? '请在后端 .env 中配置 TUSHARE_TOKEN，然后点击上方“重新加载”。'
+                : plugin.install_hint || '请先完成依赖安装，再重新加载数据源。'}
+            </p>
+          </div>
+        ) : isActive ? (
           <span className="inline-flex items-center gap-1.5 text-xs text-accent">
             <Check className="h-3.5 w-3.5" /> 当前使用中
           </span>
@@ -439,7 +547,7 @@ function TickFlowDetail({ active, onSwitch, switching }: { active: boolean; onSw
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-base font-semibold text-foreground">TickFlow</h2>
-            <span className="text-[10px] text-muted/60 uppercase tracking-wider border border-border rounded px-1.5 py-0.5">内置默认</span>
+            <span className="text-[10px] text-muted/60 uppercase tracking-wider border border-border rounded px-1.5 py-0.5">内置可选</span>
             {active && (
               <span className="inline-flex items-center gap-1 text-[10px] text-accent bg-accent/10 px-1.5 py-0.5 rounded">
                 <Check className="h-2.5 w-2.5" /> 当前使用
@@ -447,7 +555,7 @@ function TickFlowDetail({ active, onSwitch, switching }: { active: boolean; onSw
             )}
           </div>
           <p className="text-xs text-secondary mt-1.5 leading-relaxed">
-            项目默认数据源。日K、除权因子、实时行情、分钟K均由 TickFlow 提供,无需额外配置。
+            可选数据源。日K、复权因子、实时行情、分钟K均可由 TickFlow 提供；只有明确选择后才会使用。
           </p>
         </div>
       </div>

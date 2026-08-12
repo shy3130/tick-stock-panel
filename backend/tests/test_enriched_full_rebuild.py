@@ -78,3 +78,20 @@ def test_full_rebuild_rejects_missing_existing_dates_before_writing(tmp_path, mo
         tmp_path / "kline_daily_enriched" / "date=2026-07-15" / "part.parquet"
     )
     assert existing["close"].to_list() == [1.0]
+
+
+def test_incremental_pipeline_prefixes_new_rows_with_recent_history(tmp_path, monkeypatch):
+    _write_existing(tmp_path, "2026-07-30", 10.0)
+    _write_daily(tmp_path, "2026-07-31", 11.0)
+    seen_dates: list[date] = []
+
+    def _capture_compute(raw: pl.DataFrame, **_kwargs) -> pl.DataFrame:
+        seen_dates.extend(raw["date"].to_list())
+        return _fake_compute_enriched(raw)
+
+    monkeypatch.setattr(pipeline, "compute_enriched", _capture_compute)
+
+    written = pipeline.run_pipeline(data_dir=tmp_path, new_dates_only=True)
+
+    assert seen_dates == [date(2026, 7, 30), date(2026, 7, 31)]
+    assert written == 1

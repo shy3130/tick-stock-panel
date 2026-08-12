@@ -26,6 +26,7 @@ import duckdb
 import polars as pl
 
 from app.config import settings
+from app.file_io import replace_with_retry
 from app.parquet import scan_enriched_parquet
 
 logger = logging.getLogger(__name__)
@@ -1843,7 +1844,7 @@ class KlineRepository:
         """
         tmp = out.with_name(out.name + ".tmp")
         df.write_parquet(tmp)
-        tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+        replace_with_retry(tmp, out)
 
     def _write_daily_partition(self, df: pl.DataFrame, table: str) -> None:
         """按 date 分区写入 parquet，每个日期一个文件，支持 merge-upsert。"""

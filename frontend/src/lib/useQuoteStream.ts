@@ -162,8 +162,9 @@ export function useQuoteStream(
       })
 
       es.addEventListener('strategy_results_updated', () => {
-        // 策略监控完成后只刷新策略结果缓存，不扩散到其他行情页面。
+        // 策略监控完成后刷新策略结果与次日研究计划状态。
         qc.invalidateQueries({ queryKey: ['screener-cached'] })
+        qc.invalidateQueries({ queryKey: QK.advisorBrief })
       })
 
       es.addEventListener('depth_updated', () => {

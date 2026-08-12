@@ -14,7 +14,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-≥3.11-blue.svg)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
-[![Data: TickFlow](https://img.shields.io/badge/Data-TickFlow-00b386.svg)](https://tickflow.org/auth/register?ref=V3KDKGXPEA)
+[![Data: Tushare](https://img.shields.io/badge/Data-Tushare_Pro-00b386.svg)](https://tushare.pro/)
 [![Deploy: Docker](https://img.shields.io/badge/Deploy-Docker-2496ed.svg)](./Dockerfile)
 [![GitHub stars](https://img.shields.io/github/stars/shy3130/tickflow-stock-panel?style=social)](https://github.com/shy3130/tickflow-stock-panel/stargazers)
 
@@ -33,14 +33,14 @@
 
 
 
-**本项目个人开源，基于 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 数据源，非 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方项目。仅供学习研究使用，严禁商业用途。** 
+**本分支面向个人自用研究：Tushare Pro 为主数据源，AKShare 仅作显式备用，TickFlow 保留为可选源。任何拉取失败都不会静默换源或伪造成功。**
 
 
 
 
 > ⚠️ 小白请绕路，本开源项目谨作为本地量化提供解决思路Demo，不作为投资软件或者看盘软件。
 >
-> **明确不做**:不对标同花顺 / 通达信,不内置「AI 荐股 / 涨停预测」。
+> **明确不做**:不对标同花顺 / 通达信，不做 AI 荐股、收益承诺、目标价或自动下单。
 
 有问题可以邮件415333856@qq.com,交流群二维码在文末。
 
@@ -53,6 +53,7 @@
 | 模块             | 一句话                                                                 | 详见                              |
 | :--------------- | :--------------------------------------------------------------------- | :-------------------------------- |
 | 🔍 **选股引擎**   | 18 个内置策略 + 自定义信号 + AI 生成 + 代码迁移,Polars 毫秒级扫全 A 股 | [strategy.md](./docs/strategy.md) |
+| 🛡️ **量化顾问**   | 数据可信度门禁 + 多策略共识评分 + GO/WAIT/NO-GO 研究清单              | [a-share-advisor.md](./docs/a-share-advisor.md) |
 | 📊 **指标流水线** | MA/EMA/MACD/RSI/KDJ/布林/量比等,一次扫表落盘 enriched Parquet          | [features.md](./docs/features.md) |
 | 🧪 **回测引擎**   | 三种模式(个股/策略组合/自由信号),T+1/手续费/滑点/止损,SSE 流式进度     | [features.md](./docs/features.md) |
 | 📡 **监控中心**   | 四类监控(策略/个股信号/价格/异动),多条件 AND/OR + 语音播报 + 飞书推送  | [features.md](./docs/features.md) |
@@ -74,6 +75,7 @@
 
 **🔍 选股与回测**
 - **策略** Screener — Polars 毫秒级扫描全 A 股,18 个内置策略卡片 + 自定义条件
+- **量化顾问** Advisor — 读取已落盘的策略结果和数据回执，确定性生成 GO / WAIT / NO-GO 研究清单
 - **回测** Backtest — 两种模式:
   - **因子回测** — IC/IR、分层收益、多空组合,先筛掉无效指标
   - **策略回测** — 净值曲线、回撤、夏普、胜率,支持 T+1/手续费/滑点/止损,SSE 流式进度
@@ -92,7 +94,7 @@
 **🗄️ 数据与扩展**
 - **数据** Data — 本地数据画像与同步状态(维表/日K/除权/Enriched/指数/ETF/分钟K/财务),盘后管道与历史扩展
 - **扩展分析** (动态菜单) — 把任意第三方/扩展数据字段配成一级菜单,与内置数据同台分析
-- **设置** Settings — TickFlow Key 与订阅档位、AI 接口、实时监控、扩展页面、信号库、菜单与系统设置
+- **设置** Settings — Tushare/AKShare/TickFlow 数据源、可信度回执、AI 接口、实时监控、菜单与系统设置
 
 </details>
 
@@ -147,7 +149,7 @@
 ### 方式 A:Dev 模式(二次开发推荐)
 
 ```bash
-cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
+cp .env.example .env       # 填 TUSHARE_TOKEN；Windows 可用 Copy-Item
 ./dev.sh                   # Windows: .\dev.ps1
 ```
 
@@ -161,31 +163,17 @@ docker compose up --build
 # 打开 http://localhost:3018
 ```
 
-Docker 镜像内置固定版本的 **Codex CLI**，Compose 会将主机 `${HOME}/.codex` 只读挂载到容器，因此主机需先完成 Codex 登录。若主机 Codex 使用 loopback local-access provider，容器会保留实际端口并自动将主机名映射为 `host.docker.internal`。需要覆盖镜像内版本时可设置构建参数：
-
-```bash
-CODEX_CLI_VERSION=0.144.3 docker compose up --build
-```
-
-> **Windows 用户注意**：纯 PowerShell / CMD 下 `HOME` 环境变量通常未设置，会导致挂载路径解析失败、容器读不到 Codex 登录态。请在 `.env` 中显式指定主机 Codex 目录：
-> ```bash
-> # PowerShell 示例(实际路径以本机为准)
-> echo "CODEX_HOME_HOST=C:\Users\你的用户名\.codex" >> .env
-> ```
-
-> Codex CLI 模式允许 TickFlow 容器读取本机 Codex 登录凭据，仅应在受信任的本机环境启用。凭据目录以只读方式挂载，不会写入镜像。
-
-镜像已内置 **stock-sdk** 数据源插件(Node 运行时 + 依赖),开箱即用。
+默认 Compose 只将服务映射到 `127.0.0.1:3018`，不暴露到局域网或公网，也不会挂载主机 Codex 凭据。`market-data` 依赖组会安装 Tushare 与 AKShare；stock-sdk 默认不打包。
 
 > 📖 Docker 进阶、GitHub Actions 自构建、老 CPU 兼容、访问密码设置等见 [docs/deployment.md](./docs/deployment.md)。
 
 ### 跑起来后的第一次使用
 
-1. **设置 → 凭据与能力** → 点 **重新检测**,确认档位标签
-2. **设置** → **立即跑盘后管道**:拉日 K + 计算 enriched 表(None / Free 走 free-api,当日数据盘后 1-2 小时可用)
-3. **自选**页加标的 → **选股**页点策略卡片扫描 / 配自定义信号
-4. **回测**页选策略 + 区间 → 看净值 / 夏普 / 交易明细(SSE 实时进度)
-5. **监控中心**配规则,盘中实时弹窗 + 持久化记录
+1. 在 `.env` 填入 `TUSHARE_TOKEN`，启动后到 **设置 → 数据源** 确认 Tushare 为“使用中”
+2. 同步证券主表、日 K、复权因子和财务/股本数据，检查“数据可信度回执”
+3. 到 **策略** 页运行至少两个策略；只有同一数据截止日的结果才进入共识
+4. 到 **量化顾问** 查看 GO / WAIT / NO-GO；GO 只表示可进入人工研究清单
+5. 回测时核对 T+1、手续费、滑点、涨跌停和样本期，不把历史结果当成收益承诺
 
 ---
 
@@ -194,7 +182,9 @@ CODEX_CLI_VERSION=0.144.3 docker compose up --build
 所有配置从根目录 `.env` 读取(复制 `.env.example` 开始),也可在面板 **设置** 页修改。最常用的三项:
 
 ```ini
-TICKFLOW_API_KEY=              # 留空 = None 模式(历史日K免费);填 Key 解锁更多
+TUSHARE_TOKEN=                 # 主数据源凭据，不要提交到 Git
+TUSHARE_SHARE_HISTORY_YEARS=3  # 股本历史回溯年数
+BACKEND_EXTRAS=market-data     # 安装 Tushare + AKShare
 AI_API_KEY=                    # 留空 = 关闭 AI;填 Key 启用策略生成
 PORT=3018                      # 服务端口
 ```
@@ -210,7 +200,7 @@ PORT=3018                      # 服务端口
 | **后端**     | FastAPI · Pydantic v2 · APScheduler · sse-starlette                                               |
 | **数据**     | Polars(计算)· DuckDB(查询)· Parquet(存储)                                                         |
 | **回测**     | vectorbt(全项目唯一 pandas 边界)                                                                  |
-| **数据源**   | [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方 SDK · 其他数据源后续迭代实装   |
+| **数据源**   | Tushare Pro 主源 · AKShare 显式备用 · TickFlow 可选                                      |
 | **AI**(可选) | OpenAI 兼容接口(DeepSeek / 通义 / Ollama 等)                                                      |
 | **前端**     | React 18 · Vite · TypeScript · Tailwind · Tanstack Query · Lightweight Charts · ECharts · dnd-kit |
 | **部署**     | Docker 两阶段构建,前端 dist 拷进后端镜像,**单容器**                                               |
@@ -234,7 +224,10 @@ PORT=3018                      # 服务端口
 | 文档                                                                                               | 内容                                                                 |
 | :------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------- |
 | [docs/deployment.md](./docs/deployment.md)                                                         | 部署方式(Dev / Docker / GH Actions)、老 CPU 兼容、更新代码、访问密码 |
+| [docs/private-tailscale-deployment.md](./docs/private-tailscale-deployment.md)                     | Tailscale 私网 HTTPS、手机/平板接入与安全边界                        |
+| [docs/verified-backup-and-restore.md](./docs/verified-backup-and-restore.md)                       | 无凭据快照、自动轮换、manifest 校验与隔离恢复演练                    |
 | [docs/configuration.md](./docs/configuration.md)                                                   | 所有 `.env` 配置项详解(数据源、AI、服务、密码、数据目录)             |
+| [docs/a-share-advisor.md](./docs/a-share-advisor.md)                                               | 数据源边界、可信度回执、推荐门禁、首跑流程与已知限制                 |
 | [docs/features.md](./docs/features.md)                                                             | 各功能模块详细说明(选股/指标/回测/监控/个股分析/数据扩展)            |
 | [docs/custom-data-source.md](./docs/custom-data-source.md)                                         | 自定义数据源接入、YAML 配置与 mock 联调示例                         |
 | [docs/strategy.md](./docs/strategy.md)                                                             | 策略体系(18 内置策略 + 三种扩展方式 + 文件结构)                      |
@@ -254,13 +247,13 @@ fork同时请点个star哦,欢迎 Issue 和 PR。
 
 ## ⚠️ 免责声明
 
-本项目仅供**学习与量化研究**,**不构成任何投资建议**。回测结果不代表未来收益。A 股有风险,入市需谨慎。数据准确性以数据源 TickFlow 官方为准。
+本项目仅供**个人学习与量化研究**，**不构成任何投资建议**。GO 不是买入指令；回测结果不代表未来收益。A 股有风险，入市需谨慎。数据准确性应以所选数据源的实际回执和官方口径为准。
 
 ## 📄 License
 
 [MIT](./LICENSE) © tickflow-stock-panel contributors 
 
-本项目依赖 [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 提供数据服务,使用前请遵守其服务条款
+使用 Tushare、AKShare 或 TickFlow 前，请分别遵守其许可证、服务条款和数据使用边界。
 
 数据源插件 [stock-sdk](https://stock-sdk.linkdiary.cn) 遵循其各自的 ISC 协议。
 

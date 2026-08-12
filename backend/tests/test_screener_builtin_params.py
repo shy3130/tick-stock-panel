@@ -79,7 +79,6 @@ def _install_api_fakes(monkeypatch):
     monkeypatch.setattr(screener_api, "ScreenerService", _CapturingScreenerService)
     monkeypatch.setattr(screener_api, "_load_ext_value_maps", lambda *_args: {})
     monkeypatch.setattr(screener_api, "_update_cache_strategy", lambda *_args: None)
-    monkeypatch.setattr(screener_api.strategy_cache, "write_cache", lambda *_args: None)
 
 
 def test_single_run_passes_saved_params_to_strategy_engine(monkeypatch, tmp_path):
@@ -135,9 +134,7 @@ def test_batch_summary_response_still_writes_full_cache(monkeypatch, tmp_path):
     engine = _CapturingStrategyEngine()
     request = _api_request(tmp_path, engine)
     _install_api_fakes(monkeypatch)
-    written = []
     monkeypatch.setattr(screener_api.strategy_config, "list_overrides", lambda *_args: {})
-    monkeypatch.setattr(screener_api.strategy_cache, "write_cache", lambda *args: written.append(args))
 
     payload = screener_api.run_all(
         request,
@@ -152,4 +149,6 @@ def test_batch_summary_response_still_writes_full_cache(monkeypatch, tmp_path):
         "as_of": "2026-07-15",
         "results": {"builtin_strategy": {"total": 0, "as_of": "2026-07-15"}},
     }
-    assert written[0][2]["builtin_strategy"]["rows"] == []
+    cached = screener_api.strategy_cache.read_cache(tmp_path)
+    assert cached["as_of"] == "2026-07-15"
+    assert cached["results"]["builtin_strategy"]["rows"] == []

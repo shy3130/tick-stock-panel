@@ -4,9 +4,12 @@
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import polars as pl
 import pytest
 
+from app.api import pipeline as pipeline_api
 from app.jobs import daily_pipeline
 from app.services import pipeline_jobs, quote_service
 from app.services.pipeline_jobs import JobStore
@@ -58,6 +61,23 @@ def test_run_slot_is_exclusive():
     # 释放后可再次获取
     assert pipeline_jobs.try_acquire_run_slot() is True
     pipeline_jobs.release_run_slot()
+
+
+def test_reap_stale_keeps_run_slot_until_executor_really_finishes(tmp_path):
+    """job 超时只改变可见状态, 不能放行仍在写盘的僵尸执行体。"""
+    store = JobStore(store_dir=tmp_path / "jobs")
+    assert pipeline_jobs.try_acquire_run_slot() is True
+    try:
+        job_id, _ = store.create(timeout_s=0)
+        store.start(job_id)
+        store._active_jobs[job_id]["started_at"] = "2000-01-01T00:00:00Z"
+
+        store.reap_stale(timeout_s=0)
+
+        assert store.get(job_id)["status"] == "failed"
+        assert pipeline_jobs.try_acquire_run_slot() is False
+    finally:
+        pipeline_jobs.release_run_slot()
     # 重复释放幂等, 不抛
     pipeline_jobs.release_run_slot()
 
@@ -150,3 +170,257 @@ def test_review_webhooks_use_title_without_brand(monkeypatch):
 
     assert [args[1] for _, args in calls] == ["每日复盘", "每日复盘"]
     assert all("TickFlow" not in args[1] for _, args in calls)
+
+
+# ── 盘后数据与策略缓存同日闭环 ──────────────────────────────────────
+
+def test_scheduled_pipeline_refreshes_strategy_cache_after_daily_data(
+    monkeypatch,
+    tmp_path,
+):
+    """定时盘后任务成功后必须重算策略,避免行情和策略日期错一天。"""
+    events: list[str] = []
+    jobs: dict[str, object] = {}
+
+    class FakeScheduler:
+        def __init__(self, **_kwargs):
+            pass
+
+        def add_job(self, fn, *args, id: str, **kwargs):
+            jobs[id] = fn
+
+        def start(self):
+            pass
+
+    class FakeRepo:
+        store = SimpleNamespace(data_dir=tmp_path)
+
+        def refresh_cache(self):
+            events.append("repo_refresh")
+
+    engine = object()
+    app_state = SimpleNamespace(
+        capabilities=object(),
+        quote_service=None,
+        strategy_engine=engine,
+    )
+
+    monkeypatch.setattr(daily_pipeline, "AsyncIOScheduler", FakeScheduler)
+    monkeypatch.setattr(daily_pipeline, "_get_app_state", lambda: app_state)
+    monkeypatch.setattr(
+        daily_pipeline,
+        "_run_tracked",
+        lambda fn, _label: fn(on_progress=None),
+    )
+    monkeypatch.setattr(
+        daily_pipeline,
+        "run_now",
+        lambda *_args, **_kwargs: events.append("daily_data") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        daily_pipeline,
+        "refresh_strategy_cache",
+        lambda repo, actual_engine: (
+            events.append("strategy_cache")
+            or {"as_of": "2026-07-29", "strategy_count": 3}
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        daily_pipeline,
+        "publish_research_snapshot",
+        lambda _data_dir: (
+            events.append("research_snapshot")
+            or {"snapshot_id": "snapshot-1", "as_of": "2026-07-29"}
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.preferences.get_pipeline_schedule",
+        lambda: {"hour": 15, "minute": 30},
+    )
+    monkeypatch.setattr(
+        "app.services.preferences.get_instruments_schedule",
+        lambda: {"hour": 9, "minute": 10},
+    )
+    monkeypatch.setattr(
+        "app.services.preferences.get_depth_finalize_time",
+        lambda: {"hour": 15, "minute": 2},
+    )
+    monkeypatch.setattr(
+        "app.services.preferences.get_review_schedule",
+        lambda: {"enabled": False, "hour": 15, "minute": 10},
+    )
+
+    daily_pipeline.start_scheduler(FakeRepo(), object())
+    jobs["daily_pipeline"]()
+
+    assert events == [
+        "daily_data",
+        "repo_refresh",
+        "strategy_cache",
+        "research_snapshot",
+    ]
+
+
+def test_post_market_data_failure_refreshes_repo_but_skips_strategies(monkeypatch):
+    """行情管道失败时保留已落盘数据,但绝不能用不完整数据重算策略。"""
+    events: list[str] = []
+
+    class FakeRepo:
+        def refresh_cache(self):
+            events.append("repo_refresh")
+
+    def fail_daily(*_args, **_kwargs):
+        events.append("daily_data")
+        raise RuntimeError("data failed")
+
+    monkeypatch.setattr(daily_pipeline, "run_now", fail_daily)
+    monkeypatch.setattr(
+        daily_pipeline,
+        "refresh_strategy_cache",
+        lambda *_args, **_kwargs: events.append("strategy_cache"),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="data failed"):
+        daily_pipeline.run_post_market(
+            FakeRepo(),
+            object(),
+            app_state=SimpleNamespace(
+                capabilities=object(),
+                quote_service=None,
+                strategy_engine=object(),
+            ),
+        )
+
+    assert events == ["daily_data", "repo_refresh"]
+
+
+def test_post_market_publishes_research_snapshot_after_strategy_cache(monkeypatch):
+    """The visible research bundle is the final commit point of a successful run."""
+    events: list[str] = []
+
+    class FakeRepo:
+        store = SimpleNamespace(data_dir="data-dir")
+
+        def refresh_cache(self):
+            events.append("repo_refresh")
+
+    monkeypatch.setattr(
+        daily_pipeline,
+        "run_now",
+        lambda *_args, **_kwargs: events.append("daily_data") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        daily_pipeline,
+        "refresh_strategy_cache",
+        lambda *_args, **_kwargs: (
+            events.append("strategy_cache")
+            or {"as_of": "2026-07-31", "strategy_count": 3, "results": {}}
+        ),
+    )
+    monkeypatch.setattr(
+        daily_pipeline,
+        "publish_research_snapshot",
+        lambda data_dir: (
+            events.append(("research_snapshot", data_dir))
+            or {"snapshot_id": "snapshot-1", "as_of": "2026-07-31"}
+        ),
+        raising=False,
+    )
+
+    result = daily_pipeline.run_post_market(
+        FakeRepo(),
+        object(),
+        app_state=SimpleNamespace(
+            capabilities=object(),
+            quote_service=None,
+            strategy_engine=object(),
+        ),
+    )
+
+    assert events == [
+        "daily_data",
+        "repo_refresh",
+        "strategy_cache",
+        ("research_snapshot", "data-dir"),
+    ]
+    assert result["research_snapshot"] == {
+        "snapshot_id": "snapshot-1",
+        "as_of": "2026-07-31",
+    }
+
+
+@pytest.mark.asyncio
+async def test_manual_pipeline_uses_same_post_market_executor(monkeypatch):
+    """手动刷新与定时刷新必须共用入口,不能再维护两套收尾逻辑。"""
+    events: list[str] = []
+    scheduled = []
+
+    class FakeJobStore:
+        def reap_stale(self):
+            pass
+
+        def create(self):
+            return "job-1", True
+
+        def start(self, _job_id):
+            events.append("job_start")
+
+        def progress(self, *_args, **_kwargs):
+            pass
+
+        def succeed(self, _job_id, result):
+            events.append(("job_success", result))
+
+        def fail(self, _job_id, message):
+            events.append(("job_failed", message))
+
+    class FakeRepo:
+        store = SimpleNamespace(data_dir=None)
+
+        def refresh_cache(self):
+            events.append("duplicate_repo_refresh")
+
+    def capture_task(coro):
+        scheduled.append(coro)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(pipeline_api, "job_store", FakeJobStore())
+    monkeypatch.setattr(pipeline_api, "try_acquire_run_slot", lambda: True)
+    monkeypatch.setattr(pipeline_api, "release_run_slot", lambda: None)
+    monkeypatch.setattr(pipeline_api, "invalidate_storage_cache", lambda: None)
+    monkeypatch.setattr(pipeline_api.asyncio, "create_task", capture_task)
+    monkeypatch.setattr(
+        daily_pipeline,
+        "run_now",
+        lambda *_args, **_kwargs: events.append("legacy_pipeline") or {"legacy": True},
+    )
+    monkeypatch.setattr(
+        daily_pipeline,
+        "run_post_market",
+        lambda *_args, **_kwargs: (
+            events.append("post_market")
+            or {"strategy_cache": {"as_of": "2026-07-29"}}
+        ),
+    )
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                repo=FakeRepo(),
+                capabilities=object(),
+                quote_service=None,
+                strategy_engine=object(),
+            )
+        )
+    )
+    response = await pipeline_api.run_now(request)
+    await scheduled[0]
+
+    assert response == {"job_id": "job-1", "reused": False}
+    assert events == [
+        "job_start",
+        "post_market",
+        ("job_success", {"strategy_cache": {"as_of": "2026-07-29"}}),
+    ]

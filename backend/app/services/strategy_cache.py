@@ -188,3 +188,4 @@ def _write_cache_locked(
         logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(merged_results), total_rows, total_ever)
     except Exception as e:  # noqa: BLE001
         logger.warning("写入策略缓存失败: %s", e)
+        raise

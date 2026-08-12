@@ -886,6 +886,7 @@ def _build_response(
     warnings: list[dict[str, str]] = []
     total_cost_cents = 0
     total_marked_cents = 0
+    marked_cents_by_symbol: dict[str, int] = {}
     for symbol in sorted(grouped):
         lots = grouped[symbol]
         quantity = sum(int(lot["remaining_quantity"]) for lot in lots)
@@ -917,6 +918,7 @@ def _build_response(
             mark_price = _money(mark_cents)
         total_cost_cents += cost_cents
         total_marked_cents += marked_cents
+        marked_cents_by_symbol[symbol] = marked_cents
         positions.append(
             {
                 "symbol": symbol,
@@ -944,6 +946,21 @@ def _build_response(
             "模拟账户金额无法对账, 已停止返回结果。下一步: 请先备份账户文件。"
         )
 
+    for position in positions:
+        marked_cents = marked_cents_by_symbol[position["symbol"]]
+        position["portfolio_weight_pct"] = _percent(marked_cents, equity_cents)
+        position["invested_weight_pct"] = _percent(
+            marked_cents,
+            total_marked_cents,
+        )
+    portfolio_risk = _build_portfolio_risk(
+        positions=positions,
+        marked_cents_by_symbol=marked_cents_by_symbol,
+        cash_cents=cash_cents,
+        total_marked_cents=total_marked_cents,
+        equity_cents=equity_cents,
+    )
+
     return {
         "schema_version": SCHEMA_VERSION,
         "valuation_date": as_of.isoformat(),
@@ -957,6 +974,7 @@ def _build_response(
         "unrealized_pnl": _money(unrealized_cents),
         "total_pnl": _money(total_pnl_cents),
         "positions": positions,
+        "portfolio_risk": portfolio_risk,
         "fee_assumptions": {
             "commission_rate": float(COMMISSION_RATE),
             "commission_rate_label": "0.03%",
@@ -968,6 +986,92 @@ def _build_response(
         },
         "valuation_warnings": warnings,
         "journal": [_journal_response(entry) for entry in state["journal"]],
+    }
+
+
+def _percent(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator * 100, 2)
+
+
+def _build_portfolio_risk(
+    *,
+    positions: list[dict[str, Any]],
+    marked_cents_by_symbol: dict[str, int],
+    cash_cents: int,
+    total_marked_cents: int,
+    equity_cents: int,
+) -> dict[str, Any]:
+    position_count = len(positions)
+    cash_pct = _percent(cash_cents, equity_cents)
+    invested_pct = _percent(total_marked_cents, equity_cents)
+    if position_count == 0 or total_marked_cents <= 0:
+        return {
+            "position_count": 0,
+            "cash_pct": cash_pct,
+            "invested_pct": invested_pct,
+            "largest_position_pct": 0.0,
+            "largest_invested_position_pct": 0.0,
+            "concentration_hhi": 0.0,
+            "concentration_level": "NONE",
+            "warnings": [],
+        }
+
+    invested_weights = [
+        value / total_marked_cents
+        for value in marked_cents_by_symbol.values()
+    ]
+    largest_invested_pct = round(max(invested_weights) * 100, 2)
+    largest_position_pct = max(
+        float(position["portfolio_weight_pct"])
+        for position in positions
+    )
+    concentration_hhi = round(sum(weight * weight for weight in invested_weights), 4)
+    risk_warnings: list[dict[str, str]] = []
+
+    if position_count == 1:
+        concentration_level = "EXTREME"
+        risk_warnings.append(
+            {
+                "code": "SINGLE_POSITION_CONCENTRATION",
+                "message": "当前持仓内部100%集中于单一股票",
+            }
+        )
+    elif largest_invested_pct >= 50:
+        concentration_level = "HIGH"
+        risk_warnings.append(
+            {
+                "code": "POSITION_CONCENTRATION",
+                "message": (
+                    "最大单一持仓占已投资资产"
+                    f"{largest_invested_pct:.2f}%"
+                ),
+            }
+        )
+    elif largest_invested_pct >= 35:
+        concentration_level = "MODERATE"
+        risk_warnings.append(
+            {
+                "code": "POSITION_CONCENTRATION",
+                "message": (
+                    "最大单一持仓占已投资资产"
+                    f"{largest_invested_pct:.2f}%"
+                ),
+            }
+        )
+    else:
+        concentration_level = "LOW"
+
+    return {
+        "position_count": position_count,
+        "cash_pct": cash_pct,
+        "invested_pct": invested_pct,
+        "largest_position_pct": largest_position_pct,
+        "largest_invested_position_pct": largest_invested_pct,
+        "concentration_hhi": concentration_hhi,
+        "concentration_level": concentration_level,
+        "warnings": risk_warnings,
     }
 
 

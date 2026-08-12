@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services import strategy_cache
 
 
@@ -47,3 +49,30 @@ def test_new_date_resets_results_and_ever_rows(tmp_path):
     assert cached["as_of"] == "2026-07-21"
     assert set(cached["results"]) == {"strategy_b"}
     assert set(cached["today_ever_rows"]) == {"strategy_b"}
+
+
+def test_write_cache_propagates_replace_failure_and_preserves_published_cache(
+    tmp_path,
+    monkeypatch,
+):
+    """A failed atomic replace must not be reported as a successful refresh."""
+    strategy_cache.write_cache(
+        tmp_path,
+        "2026-07-20",
+        {"strategy_a": _result("000001.SZ")},
+    )
+
+    def fail_replace(_source, _target):
+        raise OSError("disk replace failed")
+
+    monkeypatch.setattr(strategy_cache.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="disk replace failed"):
+        strategy_cache.write_cache(
+            tmp_path,
+            "2026-07-20",
+            {"strategy_b": _result("600000.SH")},
+        )
+
+    cached = strategy_cache.read_cache(tmp_path)
+    assert set(cached["results"]) == {"strategy_a"}

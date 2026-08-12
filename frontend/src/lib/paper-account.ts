@@ -24,6 +24,26 @@ export interface PaperPosition {
   market_value: number
   unrealized_pnl: number
   mark_source: 'STRATEGY_CACHE' | 'COST_FALLBACK'
+  portfolio_weight_pct: number
+  invested_weight_pct: number
+}
+
+export type PaperConcentrationLevel = 'NONE' | 'LOW' | 'MODERATE' | 'HIGH' | 'EXTREME'
+
+export interface PaperPortfolioRiskWarning {
+  code: string
+  message: string
+}
+
+export interface PaperPortfolioRisk {
+  position_count: number
+  cash_pct: number
+  invested_pct: number
+  largest_position_pct: number
+  largest_invested_position_pct: number
+  concentration_hhi: number
+  concentration_level: PaperConcentrationLevel
+  warnings: PaperPortfolioRiskWarning[]
 }
 
 export interface PaperValuationWarning {
@@ -66,6 +86,7 @@ export interface PaperAccountResponse {
   unrealized_pnl: number
   total_pnl: number
   positions: PaperPosition[]
+  portfolio_risk: PaperPortfolioRisk
   fee_assumptions: PaperFeeAssumptions
   valuation_warnings: PaperValuationWarning[]
   journal: PaperJournalEntry[]
@@ -100,7 +121,37 @@ export interface PaperTradeDraft {
 
 export type PaperMutationOperation = 'reset' | 'trade'
 
+export interface PaperPortfolioRiskPresentation {
+  label: string
+  tone: 'neutral' | 'safe' | 'warning' | 'danger'
+  detail: string
+}
+
 const STOCK_SYMBOL = /^(?:(?:600|601|603|605|688|689)\d{3}\.SH|(?:000|001|002|003|300|301)\d{3}\.SZ|(?:4\d{5}|8\d{5}|92\d{4})\.BJ)$/
+
+const CONCENTRATION_PRESENTATION: Record<PaperConcentrationLevel, {
+  label: string
+  tone: PaperPortfolioRiskPresentation['tone']
+}> = {
+  NONE: { label: '暂无持仓', tone: 'neutral' },
+  LOW: { label: '集中度较低', tone: 'safe' },
+  MODERATE: { label: '集中度需关注', tone: 'warning' },
+  HIGH: { label: '高度集中', tone: 'warning' },
+  EXTREME: { label: '极高集中', tone: 'danger' },
+}
+
+export function portfolioRiskPresentation(
+  risk: PaperPortfolioRisk,
+): PaperPortfolioRiskPresentation {
+  const presentation = CONCENTRATION_PRESENTATION[risk.concentration_level]
+  const detail = risk.position_count === 0
+    ? `已用资金 ${risk.invested_pct.toFixed(2)}% · 现金 ${risk.cash_pct.toFixed(2)}%`
+    : `已用资金 ${risk.invested_pct.toFixed(2)}% · 最大单票占已投资部分 ${risk.largest_invested_position_pct.toFixed(2)}%`
+  return {
+    ...presentation,
+    detail,
+  }
+}
 
 function localCalendarDate(now: Date): string {
   const year = now.getFullYear()
@@ -164,14 +215,43 @@ export function lotGuidance(symbol: string, side: PaperTradeSide): string {
   return '普通股票：100 股的整数倍'
 }
 
+export function canRecordPaperTrade(
+  actionState: AdvisorActionState | undefined,
+  side: PaperTradeSide = 'BUY',
+): boolean {
+  return side === 'SELL' || actionState === 'SIMULATE_ONLY'
+}
+
 export function validatePaperTradeDraft(
   draft: PaperTradeDraft,
-  actionState: AdvisorActionState,
+  actionState: AdvisorActionState | undefined,
 ): string[] {
-  if (actionState === 'OBSERVE_ONLY') {
-    return [
-      '数据检查尚未通过，当前只能观察，不能记录模拟成交。下一步：先刷新数据并处理可信度问题。',
-    ]
+  if (draft.side === 'BUY') {
+    if (!actionState) {
+      return [
+        '今日行动尚未读取完成，不能记录模拟买入。下一步：请先刷新日报。',
+      ]
+    }
+    if (actionState === 'OBSERVE_ONLY') {
+      return [
+        '今日安全检查未通过，不能记录模拟买入。下一步：先处理页面显示的数据或市场问题。',
+      ]
+    }
+    if (actionState === 'RESEARCH_ONLY') {
+      return [
+        '候选只完成第 1 个确认日，不能记录模拟买入。下一步：等待下一可信交易日复核。',
+      ]
+    }
+    if (actionState === 'NO_CANDIDATE') {
+      return [
+        '本批没有可模拟候选，不能记录模拟买入。下一步：查看淘汰原因并等待新结果。',
+      ]
+    }
+    if (actionState === 'MODEL_WARNING') {
+      return [
+        '模型正在校准，不能记录新的模拟买入。下一步：先完成最近 10 个交易日回放。',
+      ]
+    }
   }
 
   const errors: string[] = []

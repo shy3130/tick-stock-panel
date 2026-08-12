@@ -49,7 +49,12 @@ def _financial_is_custom() -> bool:
     if provider == "tickflow":
         return False
     from app.data_providers import custom as custom_sources
-    return custom_sources.provider_has_dataset(provider, "financial")
+    if custom_sources.provider_has_dataset(provider, "financial"):
+        return True
+    from app.data_providers.custom.loader import plugin_manifest
+
+    manifest = plugin_manifest(provider)
+    return bool(manifest and "financial" in (manifest.get("datasets") or []))
 
 
 def _fetch_table(
@@ -75,8 +80,14 @@ def _fetch_table(
             provider = custom_sources.get_provider(preferences.get_financial_provider())
             df = provider.get_financials(table, symbols, latest_only=latest_only)
         except Exception as e:  # noqa: BLE001
-            logger.warning("sync_%s custom provider failed: %s", table, e)
-            return pl.DataFrame()
+            from app.data_providers.trust import DataProviderFetchFailed
+
+            provider_name = preferences.get_financial_provider()
+            raise DataProviderFetchFailed(
+                provider_name,
+                f"financial_{table}",
+                e,
+            ) from e
         if df.is_empty() or "symbol" not in df.columns:
             return pl.DataFrame()
         return df
@@ -147,11 +158,39 @@ def _sync_table(
     latest_only: bool = True,
 ) -> int:
     """同步单张财务表。返回写入的行数。"""
-    return _write_table(
-        table,
-        _fetch_table(table, symbols, capset, latest_only=latest_only),
-        data_dir,
+    from app.data_providers.trust import (
+        DataProviderFetchFailed,
+        DataQualityRejected,
+        audit_market_error,
+        audit_market_frame,
+        write_latest_audit,
     )
+    from app.services import preferences
+
+    try:
+        frame = _fetch_table(table, symbols, capset, latest_only=latest_only)
+    except DataProviderFetchFailed as error:
+        write_latest_audit(
+            data_dir,
+            audit_market_error(
+                provider=error.provider,
+                dataset=error.dataset,
+                requested_symbols=symbols,
+                error=error.cause,
+            ),
+        )
+        raise
+
+    audit = audit_market_frame(
+        provider=preferences.get_financial_provider(),
+        dataset=f"financial_{table}",
+        frame=frame,
+        requested_symbols=symbols,
+    )
+    write_latest_audit(data_dir, audit)
+    if audit.status == "invalid":
+        raise DataQualityRejected(audit)
+    return _write_table(table, frame, data_dir)
 
 
 def _merge_share_history(*frames: pl.DataFrame) -> pl.DataFrame:
@@ -180,16 +219,46 @@ def _sync_shares_for_symbols(
     if existing.is_empty() or not {"symbol", "period_end"} <= set(existing.columns):
         return _sync_table("shares", symbols, data_dir, capset, latest_only=False)
 
-    existing_symbols = set(existing["symbol"].drop_nulls().to_list())
-    missing_symbols = [symbol for symbol in symbols if symbol not in existing_symbols]
-    missing_history = (
-        _fetch_table("shares", missing_symbols, capset, latest_only=False)
-        if missing_symbols
-        else pl.DataFrame()
+    from app.data_providers.trust import (
+        DataProviderFetchFailed,
+        DataQualityRejected,
+        audit_market_error,
+        audit_market_frame,
+        write_latest_audit,
     )
-    current_symbols = [symbol for symbol in symbols if symbol in existing_symbols]
-    latest = _fetch_table("shares", current_symbols, capset, latest_only=True)
+    from app.services import preferences
+
+    try:
+        existing_symbols = set(existing["symbol"].drop_nulls().to_list())
+        missing_symbols = [symbol for symbol in symbols if symbol not in existing_symbols]
+        missing_history = (
+            _fetch_table("shares", missing_symbols, capset, latest_only=False)
+            if missing_symbols
+            else pl.DataFrame()
+        )
+        current_symbols = [symbol for symbol in symbols if symbol in existing_symbols]
+        latest = _fetch_table("shares", current_symbols, capset, latest_only=True)
+    except DataProviderFetchFailed as error:
+        write_latest_audit(
+            data_dir,
+            audit_market_error(
+                provider=error.provider,
+                dataset=error.dataset,
+                requested_symbols=symbols,
+                error=error.cause,
+            ),
+        )
+        raise
     merged = _merge_share_history(existing, missing_history, latest)
+    audit = audit_market_frame(
+        provider=preferences.get_financial_provider(),
+        dataset="financial_shares",
+        frame=merged,
+        requested_symbols=symbols,
+    )
+    write_latest_audit(data_dir, audit)
+    if audit.status == "invalid":
+        raise DataQualityRejected(audit)
     return _write_table("shares", merged, data_dir)
 
 

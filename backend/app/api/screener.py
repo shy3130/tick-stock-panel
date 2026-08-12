@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from app.services import strategy_cache
 from app.services.screener import ScreenerService
+from app.services.strategy_refresh import UnknownStrategiesError, refresh_strategy_cache
 from app.strategy import config as strategy_config
 
 logger = logging.getLogger(__name__)
@@ -495,7 +496,7 @@ def market_snapshot(request: Request):
 
 @router.post("/run_all")
 def run_all(request: Request, body: Optional[dict] = None):
-    """批量运行指定策略；注册、路由和执行均由 StrategyEngine 负责。"""
+    """批量运行指定策略，并通过统一服务写入、回读校验缓存。"""
     from datetime import date as date_type
 
     t_total = time.perf_counter()
@@ -518,75 +519,42 @@ def run_all(request: Request, body: Optional[dict] = None):
     if not as_of:
         return {"as_of": None, "results": {}}
 
-    data_dir = request.app.state.repo.store.data_dir
-
     requested_ids = body.get("strategy_ids")
     if requested_ids and isinstance(requested_ids, list):
-        all_ids = [str(sid) for sid in requested_ids]
-        unknown = [sid for sid in all_ids if not engine.has(sid)]
-        if unknown:
-            raise HTTPException(status_code=404, detail=f"unknown strategies: {unknown}")
+        strategy_ids = [str(sid) for sid in requested_ids]
     else:
-        all_ids = [
-            meta["id"]
-            for meta in engine.list_strategies()
-            if asset_type in meta.get("asset_types", ["stock"])
-            and timeframe in meta.get("timeframes", ["1d"])
-        ]
+        strategy_ids = None
 
-    if not all_ids:
-        return {"as_of": str(as_of), "results": {}}
-
-    # 批量预加载所有 override 配置
-    t0 = time.perf_counter()
-    all_overrides = strategy_config.list_overrides(data_dir)
-    logger.info("run_all: list_overrides took %.1fms (%d overrides)", (time.perf_counter() - t0) * 1000, len(all_overrides))
-
-    params_map = {
-        sid: dict((all_overrides.get(sid) or {}).get("params") or {})
-        for sid in all_ids
-    }
-    overrides_map = {sid: all_overrides.get(sid, {}) for sid in all_ids}
     try:
-        context = svc.build_strategy_context(
+        receipt = refresh_strategy_cache(
+            repo,
             engine,
-            as_of,
-            all_ids,
+            as_of=as_of,
+            asset_type=asset_type,
             timeframe=timeframe,
-            params_map=params_map,
-            overrides_map=overrides_map,
+            strategy_ids=strategy_ids,
+            screener_service=svc,
         )
-        engine_results = engine.run_all(
-            context,
-            params_map=params_map,
-            overrides_map=overrides_map,
-            strategy_ids=all_ids,
-        )
+    except UnknownStrategiesError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown strategies: {e.strategy_ids}",
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    results: dict[str, dict] = {}
-    for sid, result in engine_results.items():
-        safe_rows = _safe(asdict(result)).get("rows", [])
-        results[sid] = {
-            "total": result.total,
-            "as_of": str(as_of),
-            "rows": safe_rows,
-        }
+    results = receipt["results"]
 
     elapsed = (time.perf_counter() - t_total) * 1000
-    logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))
-
-    # 写入策略缓存 (供页面秒加载)
-    if results:
-        try:
-            strategy_cache.write_cache(data_dir, str(as_of), results)
-        except Exception:  # noqa: BLE001
-            pass
+    logger.info(
+        "run_all: total took %.1fms (%d strategies)",
+        elapsed,
+        receipt["strategy_count"],
+    )
 
     if body.get("summary_only"):
         return {
-            "as_of": str(as_of),
+            "as_of": receipt["as_of"],
             "results": {
                 sid: {"total": result["total"], "as_of": result["as_of"]}
                 for sid, result in results.items()
@@ -594,7 +562,10 @@ def run_all(request: Request, body: Optional[dict] = None):
         }
 
     ext_values = _load_ext_value_maps(repo, body.get("ext_columns"))
-    return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values)}
+    return {
+        "as_of": receipt["as_of"],
+        "results": _results_with_ext(results, ext_values),
+    }
 
 
 @router.get("/limit-ladder")

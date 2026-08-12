@@ -11,6 +11,7 @@ mock 范式沿用 test_stocksdk_provider.py (monkeypatch 模块属性)。
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from unittest.mock import MagicMock
 
@@ -313,6 +314,36 @@ def test_get_minute_batch_splits_stock_and_etf(monkeypatch):
     # 两个 symbol 都在结果里 (concat 后按 symbol filter 命中)
     assert "600519.SH" in result["data"]
     assert "510300.SH" in result["data"]
+
+
+def test_sync_minute_single_route_persists_requested_symbol(monkeypatch):
+    """单股分钟 K 接口应在事件循环中完成同步,而不是因缺少 asyncio 崩溃。"""
+    from app.api import kline as kline_api
+    from app.jobs import daily_pipeline
+    from app.services import preferences
+
+    mock_repo = MagicMock()
+    mock_capset = MagicMock()
+    mock_request = MagicMock()
+    mock_request.app.state.repo = mock_repo
+    mock_request.app.state.capabilities = mock_capset
+
+    sync_spy = MagicMock(return_value=7)
+    refresh_spy = MagicMock()
+    monkeypatch.setattr(kline_api, "_minute_allowed", lambda _capset: True)
+    monkeypatch.setattr(kline_api.kline_sync, "sync_and_persist_minute", sync_spy)
+    monkeypatch.setattr(preferences, "get_minute_sync_days", lambda: 30)
+    monkeypatch.setattr(daily_pipeline, "_refresh_single_view", refresh_spy)
+
+    result = asyncio.run(
+        kline_api.sync_minute_single(mock_request, {"symbol": "600519.SH"})
+    )
+
+    assert result == {"status": "ok", "symbol": "600519.SH", "rows": 7}
+    sync_spy.assert_called_once_with(
+        ["600519.SH"], mock_repo, mock_capset, days=30
+    )
+    refresh_spy.assert_called_once_with(mock_repo, "kline_minute")
 
 
 # ---------- 测试 10: sync_minute_batch 自定义源成功时调 on_segment (Issue 1) ----------

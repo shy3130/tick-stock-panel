@@ -6,28 +6,29 @@
 
 ---
 
-## 数据源:TickFlow
+## 数据源：Tushare 主源
 
 ```ini
-TICKFLOW_API_KEY=              # 留空 = None 模式(历史日K免费);填 Key = 按订阅档位解锁
+TUSHARE_TOKEN=
+TUSHARE_REQUEST_INTERVAL_SECONDS=0.35
+TUSHARE_SHARE_HISTORY_YEARS=3
+BACKEND_EXTRAS=market-data
 ```
 
-本项目基于 [TickFlow](https://tickflow.org) 数据源。
+Tushare Pro 是个人研究配置的默认主数据源，提供证券主表、未复权日 K、复权因子、财务报表与股本数据。Token 只放在本机 `.env`。不同接口所需积分和权限可能变化，请以 [Tushare 官方接口文档](https://tushare.pro/document/2) 为准。
 
-- **留空(None 模式)**:通过 free-api 使用历史日 K(当日数据盘后 1-2 小时可用),**无需付费**即可体验核心选股/回测功能
-- **填入 API Key**:按你的订阅档位解锁更多能力
+- `TUSHARE_REQUEST_INTERVAL_SECONDS`：真实请求的最小间隔；默认约 171 次/分钟。
+- `TUSHARE_SHARE_HISTORY_YEARS`：首次同步股本变更历史的回溯年数，越大越慢。
+- `BACKEND_EXTRAS=market-data`：安装锁定版本的 Tushare 和 AKShare。
+- AKShare 只会在设置页被明确选中后使用；不会因 Tushare 失败自动切换。
 
-### 实时行情按档位
+### 可选：TickFlow
 
-| 档位     | 实时能力                                 |
-| :------- | :--------------------------------------- |
-| Free     | 自选页前 5 个标的实时监控(最低 6 秒刷新) |
-| Starter+ | 全市场实时行情                           |
-| Pro      | 分钟 K + 盘口                            |
-| Expert   | WebSocket + 财务数据                     |
+```ini
+TICKFLOW_API_KEY=
+```
 
-> 完整能力矩阵见 [tickflow.org/pricing](https://tickflow.org/pricing/),高等档位含较低档全部权益。
-> 在面板 **设置 → 凭据与能力** 点「重新检测」可查看当前档位标签。
+TickFlow 仍可在 **设置 → 数据源** 明确选择，用于其套餐支持的数据集。选择某个来源只修改该来源明确声明支持的数据集。
 
 ---
 
@@ -58,12 +59,12 @@ AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
 ## 服务
 
 ```ini
-HOST=0.0.0.0          # 监听地址
+HOST=127.0.0.1        # 个人自用默认只监听本机
 PORT=3018             # 服务端口
 LOG_LEVEL=INFO        # DEBUG | INFO | WARNING | ERROR
 ```
 
-- `HOST`:`0.0.0.0` 监听所有网卡(容器/公网部署需要);仅本机用可设 `127.0.0.1`
+- `HOST`：默认 `127.0.0.1`，仅本机可访问。只有明确需要局域网部署并配置认证后才改为 `0.0.0.0`。
 - `PORT`:默认 `3018`,改端口后 Docker 映射、SSH 转发命令里的端口也要同步改
 - `LOG_LEVEL`:排查问题时改 `DEBUG`
 
@@ -96,10 +97,10 @@ AUTH_PASSWORD=你的密码    # 至少 6 位;仅首次生效,已设过则不覆�
 ## 后端依赖 Extras(可选)
 
 ```ini
-BACKEND_EXTRAS=             # 留空默认;legacy-cpu 兼容老 CPU
+BACKEND_EXTRAS=market-data  # Tushare + AKShare；可追加 legacy-cpu/backtest
 ```
 
-老 CPU 无 AVX2/FMA 支持时设为 `legacy-cpu`,会给 Polars 切到 `rtcompat` 运行时;需回测则 `legacy-cpu backtest`。Docker 构建和 `./dev.sh` / `.\dev.ps1` 都会读取此值并同步依赖。详见 [deployment.md → 老 CPU 兼容](./deployment.md#老-cpu-兼容avx2fma-缺失)。
+多个 extra 用空格分隔，例如 `market-data legacy-cpu backtest`。Docker 构建和启动脚本都会读取此值。详见 [deployment.md → 老 CPU 兼容](./deployment.md#老-cpu-兼容avx2fma-缺失)。
 
 ---
 

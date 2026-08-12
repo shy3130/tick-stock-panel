@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -23,18 +23,25 @@ import { PageHeader } from '@/components/PageHeader'
 import { api } from '@/lib/api'
 import {
   actionPresentation,
+  dataPhasePresentation,
+  formatAdvisorCoverage,
   presentDailyBriefCandidate,
+  presentResearchSnapshot,
   presentTrustDatasets,
   resolvePaperActionState,
   selectDailyBriefCandidates,
+  selectPlanMonitorStrategyIds,
   type AdvisorActionState,
+  type AdvisorDataPhase,
   type DailyBriefCandidatePresentation,
   type TrustDatasetPresentation,
 } from '@/lib/advisor'
 import {
+  canRecordPaperTrade,
   createPaperTradeDraft,
   lotGuidance,
   paperMutationErrorMessage,
+  portfolioRiskPresentation,
   preparePaperTradeDraftForSubmit,
   toPaperTradeRequest,
   validatePaperTradeDraft,
@@ -59,6 +66,15 @@ const compactDateTime = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit',
   minute: '2-digit',
 })
+
+const PLAN_MONITOR_REFRESH_MS = 5 * 60 * 1000
+
+const PORTFOLIO_RISK_TONE = {
+  neutral: 'border-border bg-elevated/20 text-secondary',
+  safe: 'border-bear/25 bg-bear/5 text-bear',
+  warning: 'border-warning/30 bg-warning/5 text-warning',
+  danger: 'border-danger/30 bg-danger/5 text-danger',
+} as const
 
 const ACTION_TONE: Record<ReturnType<typeof actionPresentation>['tone'], {
   border: string
@@ -94,14 +110,22 @@ function ActionOverview({
   todayMessage,
   nextStep,
   dataPassed,
+  dataPhase,
 }: {
   actionState: AdvisorActionState
   todayMessage: string
   nextStep: string
   dataPassed: boolean
+  dataPhase: AdvisorDataPhase
 }) {
   const presentation = actionPresentation(actionState)
   const tone = ACTION_TONE[presentation.tone]
+  const phasePresentation = dataPhasePresentation(dataPhase, dataPassed)
+  const phaseTextClass = phasePresentation.tone === 'success'
+    ? 'text-bear'
+    : phasePresentation.tone === 'warning'
+      ? 'text-warning'
+      : 'text-danger'
 
   return (
     <section className={`rounded-card border ${tone.border} ${tone.background} p-4 sm:p-5`}>
@@ -129,12 +153,12 @@ function ActionOverview({
 
         <div className="min-w-0 border-t border-border/70 pt-4 lg:border-l lg:border-t-0 lg:px-6 lg:pt-0">
           <div className="flex items-start gap-2.5">
-            {dataPassed
+            {phasePresentation.tone === 'success'
               ? <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-bear" />
-              : <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger" />}
+              : <AlertTriangle className={`mt-0.5 h-5 w-5 shrink-0 ${phaseTextClass}`} />}
             <div className="min-w-0">
-              <h2 className={`text-sm font-semibold ${dataPassed ? 'text-bear' : 'text-danger'}`}>
-                {dataPassed ? '数据检查已通过' : '数据检查未通过'}
+              <h2 className={`text-sm font-semibold ${phaseTextClass}`}>
+                {phasePresentation.label}
               </h2>
               <p className="mt-1 text-xs leading-relaxed text-secondary">{todayMessage}</p>
             </div>
@@ -164,7 +188,32 @@ function CandidateCard({
   candidate: DailyBriefCandidatePresentation
   index: number
 }) {
+  const monitorItems = candidate.planMonitor
+    ? [
+        `复核日期：${candidate.planMonitor.asOf}`,
+        ...(candidate.planMonitor.lastPrice == null
+          ? []
+          : [`最新价：${money.format(candidate.planMonitor.lastPrice)}`]),
+        ...(candidate.planMonitor.changePct == null
+          ? []
+          : [`当日涨跌：${(candidate.planMonitor.changePct * 100).toFixed(2)}%`]),
+        ...candidate.planMonitor.evidence,
+      ]
+    : []
   const sections = [
+    ...(candidate.planMonitor
+      ? [{
+          title: '盘中监控依据',
+          icon: Eye,
+          iconClass: candidate.planMonitor.tone === 'danger'
+            ? 'text-danger'
+            : candidate.planMonitor.tone === 'success'
+              ? 'text-bear'
+              : 'text-warning',
+          items: monitorItems,
+          empty: '尚无盘中复核证据。',
+        }]
+      : []),
     {
       title: '为什么入选',
       icon: ClipboardCheck,
@@ -173,7 +222,7 @@ function CandidateCard({
       empty: '后端未返回入选原因。',
     },
     {
-      title: '继续观察条件',
+      title: '状态推进',
       icon: CheckCircle2,
       iconClass: 'text-bear',
       items: candidate.observationConditions,
@@ -194,6 +243,15 @@ function CandidateCard({
       empty: '当前未返回硬风险标记。',
     },
   ]
+  const statusClass = candidate.planMonitor?.tone === 'danger'
+    ? 'border-danger/35 bg-danger/5 text-danger'
+    : candidate.planMonitor?.tone === 'success'
+      ? 'border-bear/35 bg-bear/5 text-bear'
+      : candidate.planMonitor?.tone === 'warning'
+        ? 'border-warning/35 bg-warning/5 text-warning'
+        : candidate.readyForSimulation
+          ? 'border-bear/35 bg-bear/5 text-bear'
+          : 'border-warning/35 bg-warning/5 text-warning'
 
   return (
     <article className="min-w-0 rounded-card border border-border bg-surface p-4">
@@ -205,10 +263,14 @@ function CandidateCard({
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-foreground">{candidate.name}</div>
             <div className="mt-0.5 break-all font-mono text-[11px] text-muted">{candidate.symbol}</div>
+            <div className="mt-1 text-[10px] text-muted">
+              连续确认 {candidate.goStreak} 日 · {candidate.lotSize} 股约
+              {candidate.lotCost == null ? ' 未提供' : ` ${money.format(candidate.lotCost)}`}
+            </div>
           </div>
         </div>
-        <span className="shrink-0 rounded border border-border bg-elevated px-2 py-1 text-[10px] text-secondary">
-          {candidate.statusLabel}
+        <span className={`shrink-0 rounded border px-2 py-1 text-[10px] ${statusClass}`}>
+          {candidate.planMonitor?.label ?? candidate.statusLabel}
         </span>
       </header>
 
@@ -254,7 +316,7 @@ function TrustReceiptCard({ receipt }: { receipt: TrustDatasetPresentation }) {
         <dd className="min-w-0 break-all text-right font-mono text-secondary">{receipt.provider}</dd>
         <dt className="text-muted">覆盖率</dt>
         <dd className="text-right font-mono text-secondary">
-          {(receipt.coverageRatio * 100).toFixed(1)}%
+          {formatAdvisorCoverage(receipt.coverageRatio)}
         </dd>
         <dt className="text-muted">日期范围</dt>
         <dd className="min-w-0 break-words text-right font-mono text-secondary">
@@ -337,6 +399,18 @@ function PositionCard({
           <dt className="text-muted">估值来源</dt>
           <dd className="mt-0.5 text-secondary">
             {position.mark_source === 'STRATEGY_CACHE' ? '策略缓存' : '持仓成本回退'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted">占账户总资产</dt>
+          <dd className="mt-0.5 font-mono text-secondary">
+            {position.portfolio_weight_pct.toFixed(2)}%
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted">占已投资部分</dt>
+          <dd className="mt-0.5 font-mono text-secondary">
+            {position.invested_weight_pct.toFixed(2)}%
           </dd>
         </div>
       </dl>
@@ -446,20 +520,31 @@ function PaperAccountSection({
     },
   })
 
-  const tradeBlocked = actionState !== 'SIMULATE_ONLY' && actionState !== 'RESEARCH_ONLY'
+  const tradeBlocked = !canRecordPaperTrade(actionState, draft.side)
   let safetyMessage: string | null = null
-  if (briefUnavailable) {
-    safetyMessage = '安全保护：今日日报刷新失败，为避免继续使用旧判定，暂不能记录模拟成交。'
+  if (draft.side === 'SELL') {
+    safetyMessage = '模拟卖出不受新增买入门槛限制；后端仍会检查持仓数量和 T+1。'
+  } else if (briefUnavailable) {
+    safetyMessage = '安全保护：今日日报刷新失败，暂不能记录模拟买入。'
   } else if (actionState === 'OBSERVE_ONLY') {
-    safetyMessage = '安全保护：数据检查未通过，当前只能观察，暂不能记录模拟成交。'
+    safetyMessage = '安全保护：数据或市场条件未通过，暂不能记录模拟买入。'
+  } else if (actionState === 'RESEARCH_ONLY') {
+    safetyMessage = '候选仅确认第 1 天；下一可信交易日再次通过后，才允许模拟买入。'
+  } else if (actionState === 'NO_CANDIDATE') {
+    safetyMessage = '本批候选已全部淘汰，暂不能记录模拟买入。'
+  } else if (actionState === 'MODEL_WARNING') {
+    safetyMessage = '连续 10 个完整交易日没有候选完成确认，模型校准前暂停模拟买入。'
   } else if (!actionState) {
-    safetyMessage = '安全保护：正在确认今日行动，暂不能记录模拟成交。'
+    safetyMessage = '安全保护：正在确认今日行动，暂不能记录模拟买入。'
   }
 
   const warningBySymbol = useMemo(
     () => new Map((account?.valuation_warnings ?? []).map(item => [item.symbol, item.message])),
     [account?.valuation_warnings],
   )
+  const riskPresentation = account
+    ? portfolioRiskPresentation(account.portfolio_risk)
+    : null
 
   function updateDraft<K extends keyof PaperTradeDraft>(key: K, value: PaperTradeDraft[K]) {
     setDraft(current => ({ ...current, [key]: value }))
@@ -468,7 +553,7 @@ function PaperAccountSection({
 
   function submitTrade(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!actionState) {
+    if (!actionState && draft.side === 'BUY') {
       setFormErrors(['今日行动尚未读取完成。下一步：请先刷新日报。'])
       return
     }
@@ -534,6 +619,28 @@ function PaperAccountSection({
               />
             </div>
           </div>
+
+          {riskPresentation && (
+            <section className={`rounded-card border px-4 py-3 ${PORTFOLIO_RISK_TONE[riskPresentation.tone]}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="flex items-center gap-2 text-xs font-semibold">
+                  <ShieldAlert className="h-4 w-4" />
+                  组合风险：{riskPresentation.label}
+                </h3>
+                <span className="font-mono text-[10px]">
+                  HHI {account.portfolio_risk.concentration_hhi.toFixed(4)}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed">
+                {riskPresentation.detail}
+              </p>
+              {account.portfolio_risk.warnings.map(warning => (
+                <p key={warning.code} className="mt-1 text-[11px] leading-relaxed">
+                  {warning.message}。这只是风险提示，不是买入或卖出指令。
+                </p>
+              ))}
+            </section>
+          )}
 
           <div className="grid min-w-0 gap-5 xl:grid-cols-[1.1fr_0.9fr]">
             <div className="min-w-0 space-y-5">
@@ -639,7 +746,7 @@ function PaperAccountSection({
                     key={side}
                     type="button"
                     onClick={() => chooseSide(side)}
-                    disabled={tradeBlocked || tradeMutation.isPending}
+                    disabled={!canRecordPaperTrade(actionState, side) || tradeMutation.isPending}
                     aria-pressed={draft.side === side}
                     className={`min-h-11 rounded-btn border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                       draft.side === side
@@ -822,14 +929,74 @@ function PaperAccountSection({
 }
 
 export function Advisor() {
+  const queryClient = useQueryClient()
   const briefQuery = useQuery({
     queryKey: QK.advisorBrief,
     queryFn: api.advisorDailyBrief,
+    refetchInterval: query => {
+      const phase = query.state.data?.data_phase?.phase
+      return phase === 'LIVE_PROVISIONAL' || phase === 'EOD_PENDING'
+        ? 30_000
+        : false
+    },
   })
   const accountQuery = useQuery({
     queryKey: QK.paperAccount,
     queryFn: api.paperAccount,
   })
+
+  const planStrategyKey = useMemo(
+    () => JSON.stringify(selectPlanMonitorStrategyIds(briefQuery.data?.candidates ?? [])),
+    [briefQuery.data?.candidates],
+  )
+  const lastPlanRefreshRef = useRef<{ key: string; at: number } | null>(null)
+  const {
+    mutate: refreshPlanStrategies,
+    isPending: planRefreshPending,
+    isError: planRefreshFailed,
+  } = useMutation({
+    mutationFn: ({ asOf, strategyIds }: { asOf: string; strategyIds: string[] }) =>
+      api.screenerRunAll(asOf, strategyIds, 'stock'),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: QK.advisorBrief })
+    },
+  })
+
+  useEffect(() => {
+    const phase = briefQuery.data?.data_phase?.phase
+    const asOf = briefQuery.data?.data_phase?.as_of
+    const sourceAsOf = briefQuery.data?.plan_source_as_of
+    const strategyIds = JSON.parse(planStrategyKey) as string[]
+    if (
+      phase !== 'LIVE_PROVISIONAL'
+      || !asOf
+      || !sourceAsOf
+      || strategyIds.length === 0
+    ) return undefined
+
+    const refreshKey = `${sourceAsOf}|${asOf}|${planStrategyKey}`
+    const refreshPlan = () => {
+      const now = Date.now()
+      const lastRefresh = lastPlanRefreshRef.current
+      if (
+        planRefreshPending
+        || (lastRefresh?.key === refreshKey && now - lastRefresh.at < PLAN_MONITOR_REFRESH_MS)
+      ) return
+      lastPlanRefreshRef.current = { key: refreshKey, at: now }
+      refreshPlanStrategies({ asOf, strategyIds })
+    }
+
+    refreshPlan()
+    const timer = window.setInterval(refreshPlan, PLAN_MONITOR_REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [
+    briefQuery.data?.data_phase?.as_of,
+    briefQuery.data?.data_phase?.phase,
+    briefQuery.data?.plan_source_as_of,
+    planRefreshPending,
+    planStrategyKey,
+    refreshPlanStrategies,
+  ])
 
   const candidates = useMemo(
     () => selectDailyBriefCandidates(briefQuery.data?.candidates ?? [])
@@ -840,6 +1007,15 @@ export function Advisor() {
     () => briefQuery.data ? presentTrustDatasets(briefQuery.data.data_gate) : [],
     [briefQuery.data],
   )
+  const snapshot = useMemo(
+    () => presentResearchSnapshot(
+      briefQuery.data?.snapshot_id ?? null,
+      briefQuery.data?.snapshot_published_at ?? null,
+    ),
+    [briefQuery.data?.snapshot_id, briefQuery.data?.snapshot_published_at],
+  )
+  const planSourceAsOf = briefQuery.data?.plan_source_as_of ?? null
+  const planMonitorAsOf = briefQuery.data?.data_phase?.as_of ?? null
 
   const refreshing = briefQuery.isFetching || accountQuery.isFetching
   const paperActionState = resolvePaperActionState(
@@ -901,23 +1077,67 @@ export function Advisor() {
               todayMessage={briefQuery.data.today_message}
               nextStep={briefQuery.data.next_step}
               dataPassed={briefQuery.data.data_gate.decision === 'PASS'}
+              dataPhase={
+                briefQuery.data.data_phase?.phase
+                ?? (briefQuery.data.snapshot_id ? 'EOD_SEALED' : 'UNAVAILABLE')
+              }
             />
 
             <section className="min-w-0">
               <div className="mb-2.5 flex flex-wrap items-end justify-between gap-2">
                 <div>
-                  <h2 className="text-sm font-semibold text-foreground">研究候选（最多 3 只）</h2>
+                  <h2 className="text-sm font-semibold text-foreground">
+                    {planSourceAsOf ? '次日研究计划（最多 3 只）' : '研究候选（最多 3 只）'}
+                  </h2>
                   <p className="mt-1 text-[11px] text-muted">
-                    这里只解释规则结果，不构成任何交易指令。
+                    {planSourceAsOf
+                      ? `来自 ${planSourceAsOf} 封存快照；盘中只复核原计划，不临时新增标的。`
+                      : '这里只解释规则结果，不构成任何交易指令。'}
                   </p>
+                  {planSourceAsOf && briefQuery.data.data_phase?.phase === 'LIVE_PROVISIONAL' && (
+                    <p className={`mt-1 text-[11px] ${planRefreshFailed ? 'text-danger' : 'text-accent'}`}>
+                      {planRefreshPending
+                        ? '正在自动复核封存计划…'
+                        : planRefreshFailed
+                          ? '盘中自动复核失败；当前状态保持只观察，5 分钟后自动重试。'
+                          : '盘中自动复核已启用：打开本页后立即复核，交易时段每 5 分钟更新。'}
+                    </p>
+                  )}
                 </div>
-                <span className="text-[10px] text-muted">按后端确定性顺序展示</span>
+                <span className="text-[10px] text-muted">
+                  {planSourceAsOf
+                    ? `计划来源 ${planSourceAsOf} · 监控日期 ${planMonitorAsOf || '未提供'}`
+                    : '按后端确定性顺序展示'}
+                </span>
+              </div>
+              <div className={`mb-3 rounded-card border px-3 py-2.5 text-[11px] leading-relaxed ${
+                briefQuery.data.model_health.status === 'WARNING'
+                  ? 'border-warning/35 bg-warning/5 text-warning'
+                  : 'border-border bg-elevated/20 text-secondary'
+              }`}>
+                <span className="font-medium">
+                  模型体检：{briefQuery.data.model_health.sample_days}/
+                  {briefQuery.data.model_health.window_days} 个交易日
+                </span>
+                <span className="mx-1.5 text-border">|</span>
+                <span>{briefQuery.data.model_health.message}</span>
+                <span className="mx-1.5 text-border">|</span>
+                <span>
+                  本批淘汰：非主板 {briefQuery.data.excluded_counts.not_main_board}、
+                  ST {briefQuery.data.excluded_counts.st_or_risk_warning}、
+                  硬风险 {briefQuery.data.excluded_counts.hard_risk}、
+                  超预算 {briefQuery.data.excluded_counts.over_practice_budget}
+                </span>
               </div>
               {candidates.length === 0 ? (
                 <div className="rounded-card border border-dashed border-border bg-surface px-4 py-8 text-center">
                   <Info className="mx-auto h-5 w-5 text-muted" />
-                  <p className="mt-2 text-sm text-secondary">今天没有研究候选</p>
-                  <p className="mt-1 text-[11px] text-muted">按上方“下一步”处理，不需要勉强寻找标的。</p>
+                  <p className="mt-2 text-sm text-secondary">
+                    {planSourceAsOf ? '该封存快照没有可带入今天的研究计划' : '今天没有研究候选'}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted">
+                    按上方“下一步”处理，不需要勉强寻找标的。
+                  </p>
                 </div>
               ) : (
                 <div className="grid min-w-0 gap-3 lg:grid-cols-3">
@@ -929,14 +1149,28 @@ export function Advisor() {
             </section>
 
             <section className="min-w-0">
-              <div className="mb-2.5">
-                <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <ShieldCheck className="h-4 w-4 text-accent" />
-                  数据可信度
-                </h2>
-                <p className="mt-1 text-[11px] text-muted">
-                  逐项展示后端回执；整体结论以“今日行动”中的数据检查结果为准。
-                </p>
+              <div className="mb-2.5 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <ShieldCheck className="h-4 w-4 text-accent" />
+                    数据可信度
+                  </h2>
+                  <p className="mt-1 text-[11px] text-muted">
+                    逐项展示后端回执；整体结论以“今日行动”中的数据检查结果为准。
+                  </p>
+                </div>
+                <div
+                  className="rounded border border-border bg-elevated px-2.5 py-1.5 text-[10px] leading-relaxed text-secondary"
+                  title={snapshot.fullId ?? undefined}
+                >
+                  <span className={snapshot.fullId ? 'text-bear' : 'text-warning'}>
+                    研究快照：{snapshot.statusLabel}
+                  </span>
+                  <span className="mx-1.5 text-border">|</span>
+                  <span className="font-mono">{snapshot.shortId}</span>
+                  <span className="mx-1.5 text-border">|</span>
+                  <span>发布时间：{snapshot.publishedAt}</span>
+                </div>
               </div>
               <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-4">
                 {receipts.map(receipt => (

@@ -269,13 +269,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS: 允许局域网访问 (自托管场景, 放开所有来源)
-# 注: allow_credentials=True 与 allow_origins=['*'] 不能共存 (浏览器规范),
-# 本项目认证走 header (API Key), 不依赖 cookie, 故关闭 credentials 换取通配来源。
+# CORS 只允许显式配置的开发前端来源。生产前端与 API 同源，不依赖 CORS。
+# 会话使用 HttpOnly Cookie，因此必须允许凭据且绝不能使用通配来源。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

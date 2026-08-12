@@ -95,8 +95,8 @@ class MyProvider:
 ### config.datasets 的作用
 
 `provider_has_dataset(name, dataset)` 通过 `dataset in provider.config.datasets` 判断。
-这是 services 层路由的关键: 用户在设置页选了插件, 但某数据集未声明时, 该数据集
-自动回退 TickFlow。
+这是 services 层路由的关键。设置页只会修改插件明确声明支持的数据集；未声明的数据集
+保留原选择。已选择的数据源拉取失败时会记录失败回执并终止，不会自动回退 TickFlow。
 
 ```python
 class MyConfig:

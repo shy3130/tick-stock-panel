@@ -13,20 +13,20 @@
 ```bash
 git clone https://github.com/shy3130/tickflow-stock-panel.git
 cd tickflow-stock-panel
-cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
+cp .env.example .env       # 填 TUSHARE_TOKEN
 ./dev.sh                   # Windows: .\dev.ps1
 ```
 
 `dev.sh` 自动检查 / 下载依赖、释放端口、同时起前后端,Ctrl-C 一并关闭。默认:
 
-- 后端 → <http://localhost:3018> · 前端 → <http://localhost:3011>
+- 后端 → <http://127.0.0.1:3018> · 前端 → <http://127.0.0.1:3011>
 - 自定义端口:`BACKEND_PORT=8000 FRONTEND_PORT=5173 ./dev.sh`
 
 ### 手动分别启动(不想用 dev.sh)
 
 ```bash
 # 后端
-cd backend && uv sync --extra backtest   # 含回测依赖
+cd backend && uv sync --extra market-data --extra backtest
 # 老 CPU: uv sync --extra legacy-cpu
 # 老 CPU + 回测: uv sync --extra legacy-cpu --extra backtest
 uv run uvicorn app.main:app --reload --port 3018
@@ -46,6 +46,7 @@ docker compose up --build
 ```
 
 Docker 采用两阶段构建,前端 dist 拷进后端镜像,**单容器**运行,数据完全在自己手里。
+Compose 默认只绑定 `127.0.0.1:3018`，不会暴露到局域网，也不会挂载主机 Codex 凭据。
 
 > ⚠️ **stock-sdk 插件默认不打包(合规考虑)**
 >
@@ -77,11 +78,11 @@ docker compose up --build -d
 - **Docker**:在根目录 `.env` 设置后执行 `docker compose up --build`
 
 ```ini
-BACKEND_EXTRAS=legacy-cpu          # 兼容老 CPU
-BACKEND_EXTRAS=legacy-cpu backtest # 兼容老 CPU + 回测依赖
+BACKEND_EXTRAS=market-data legacy-cpu          # 数据源 + 兼容老 CPU
+BACKEND_EXTRAS=market-data legacy-cpu backtest # 数据源 + 老 CPU + 回测
 ```
 
-手动启动源码时，也可以在 `backend/` 目录直接执行 `uv sync --extra legacy-cpu`。不要设置 `POLARS_SKIP_CPU_CHECK`，它只会隐藏警告，实际执行不支持的指令时仍可能崩溃。
+手动启动源码时，也可以在 `backend/` 目录执行 `uv sync --extra market-data --extra legacy-cpu`。不要设置 `POLARS_SKIP_CPU_CHECK`，它只会隐藏警告，实际执行不支持的指令时仍可能崩溃。
 
 ### 回测依赖说明
 

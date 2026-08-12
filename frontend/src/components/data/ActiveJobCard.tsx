@@ -17,6 +17,7 @@ export const STAGE_LABELS: Record<string, string> = {
   extend_minute: '扩展分钟K历史',
   rebuild_enriched: '全量计算',
   refresh_views: '刷新视图',
+  refresh_strategies: '重算并校验策略',
   done: '完成',
 }
 

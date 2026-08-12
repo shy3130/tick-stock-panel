@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from ipaddress import ip_address, ip_network
 from threading import Lock
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -37,51 +38,42 @@ _fail_counter: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
 _fail_lock = Lock()
 _MAX_FAILS = 5
 _LOCK_SECONDS = 300
+_RFC1918_NETWORKS = tuple(
+    ip_network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
 
 
 def _is_local_network(host: str | None) -> bool:
-    """是否本机或内网请求。
-
-    反向代理(Nginx)场景下 request.client.host 是代理本身(127.0.0.1),
-    需信任 X-Forwarded-For 的最左(原始客户端)。本项目部署若经反代,
-    请在反代配置正确的 X-Forwarded-For(标准做法)。
-    """
+    """是否回环或 RFC1918 私网请求。"""
     if not host:
         return False
-    if host in ("127.0.0.1", "::1", "localhost"):
+    if host == "localhost":
         return True
-    # 内网网段: 10.x / 172.16-31.x / 192.168.x
-    if host.startswith("10.") or host.startswith("192.168."):
-        return True
-    if host.startswith("172."):
-        try:
-            second = int(host.split(".")[1])
-            if 16 <= second <= 31:
-                return True
-        except (IndexError, ValueError):
-            pass
-    return False
+    try:
+        parsed = ip_address(host)
+    except ValueError:
+        return False
+    return parsed.is_loopback or any(parsed in network for network in _RFC1918_NETWORKS)
 
 
 def _client_ip(request: Request) -> str:
-    """取真实客户端 IP。
+    """取服务器已经解析的客户端 IP。
 
-    安全关键: 仅当直连 peer(request.client.host)本身是回环/内网地址
-    (即请求确实经过同机/内网的可信反代)时, 才采信 X-Forwarded-For。
-    否则公网请求可伪造 `X-Forwarded-For: 127.0.0.1` 冒充内网, 绕过
-    「未设密码仅本机可访问」闸门、抢占 setup 端点、并绕过登录限流。
+    应用层不自行信任 X-Forwarded-For。只有 Uvicorn 的精确可信代理列表
+    可以把经过验证的转发头解析进 request.client, 避免双重信任边界。
     """
-    direct = request.client.host if request.client else ""
-    xff = request.headers.get("x-forwarded-for")
-    if xff and direct and _is_local_network(direct):
-        return xff.split(",")[0].strip()
-    return direct or "unknown"
+    return request.client.host if request.client else "unknown"
+
+
+def _request_is_https(request: Request) -> bool:
+    """只信 ASGI 已解析的 scheme, 不直接读取 X-Forwarded-Proto。"""
+    return request.url.scheme == "https"
 
 
 def _check_login_rate_limit(ip: str) -> None:
     """登录失败限流检查, 触发则抛 429。锁定过期后重置计数(重新给 5 次机会)。"""
     with _fail_lock:
-        count, until = _fail_counter.get(ip, (0, 0.0))
+        _count, until = _fail_counter.get(ip, (0, 0.0))
         now = time.time()
         if until > now:
             wait = int(until - now)
@@ -189,7 +181,7 @@ def login(req: LoginIn, request: Request, response: Response) -> dict:
         httponly=True,
         samesite="lax",
         path="/",
-        secure=False,  # 自托管可能无 HTTPS, 不强制 secure(建议反代加 HTTPS)
+        secure=_request_is_https(request),
     )
     return {"ok": True, "authenticated": True}
 
@@ -200,7 +192,13 @@ def logout(request: Request, response: Response) -> dict:
     token = request.cookies.get(COOKIE_NAME)
     if token:
         auth.revoke_session(token)
-    response.delete_cookie(key=COOKIE_NAME, path="/")
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        path="/",
+        secure=_request_is_https(request),
+        httponly=True,
+        samesite="lax",
+    )
     return {"ok": True}
 
 

@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { RefreshCw, Download, Lock, Loader2, X, Search, FileText, Database, Clock, CheckCircle2, Hourglass, Lightbulb, ExternalLink, ChartPie } from 'lucide-react'
+import { RefreshCw, Download, Lock, Loader2, X, Search, FileText, Database, Clock, CheckCircle2, Hourglass, Lightbulb, ChartPie } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { useCapabilities } from '@/lib/useSharedQueries'
+import { useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { useFinancialStatus, useFinancialSync } from '@/lib/useFinancials'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { StockFinancialDetail } from '@/components/financials/StockFinancialDetail'
@@ -30,8 +30,11 @@ const TABLE_ICON: Record<string, typeof FileText> = {
 
 export function Financials() {
   const { data: caps } = useCapabilities()
+  const { data: preferences } = usePreferences()
   const { data: status, isLoading } = useFinancialStatus()
   const hasFinancial = caps?.capabilities?.['financial'] != null || status?.available === true
+  const selectedFinancialProvider = preferences?.financial_data_provider || 'tickflow'
+  const customFinancialSelected = selectedFinancialProvider !== 'tickflow'
   const syncMut = useFinancialSync()
   // 同步进行中 = 服务端真值(status.syncing)或本地乐观态(请求已发出待确认)。
   // 乐观窗口:点击后到 invalidate 触发的 refetch 返回之间,status.syncing 暂为 false,
@@ -62,34 +65,31 @@ export function Financials() {
   if (!hasFinancial) {
     return (
       <>
-        <PageHeader title="财务分析" subtitle="利润表 / 资负表 / 现金流 / 关键指标 / 股本 / AI分析 · Expert" />
+        <PageHeader title="财务分析" subtitle="利润表 / 资负表 / 现金流 / 关键指标 / 股本" />
         <div className="px-8 py-10">
           <div className="mx-auto max-w-md rounded-card border border-warning/30 bg-warning/[0.04] p-8 text-center">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-warning/10">
               <Lock className="h-6 w-6 text-warning" />
             </div>
-            <h3 className="mt-4 text-base font-semibold text-foreground">需要 Expert 套餐</h3>
+            <h3 className="mt-4 text-base font-semibold text-foreground">
+              {customFinancialSelected
+                ? `${selectedFinancialProvider} 财务源未就绪`
+                : '财务数据源尚未就绪'}
+            </h3>
             <p className="mt-2 text-xs leading-relaxed text-secondary">
-              财务数据接口仅 Expert 套餐可用。升级后此页自动显示财务数据面板。
+              {customFinancialSelected
+                ? '请检查插件依赖和数据源凭据；系统不会静默切换到其他来源。'
+                : '可在“设置 → 数据源”选择 Tushare，或使用具备财务能力的 TickFlow 套餐。'}
             </p>
-            {/* 当前财务数据源(TickFlow)需付费,后续将接入免费数据源;期间欢迎在 issues 推荐免费源 */}
             <div className="mt-5 rounded-btn border border-accent/25 bg-accent/[0.05] px-3.5 py-3 text-left">
               <div className="flex items-center gap-1.5 text-xs font-medium text-accent">
                 <Lightbulb className="h-3.5 w-3.5 shrink-0" />
-                关于数据源
+                Tushare 配置提示
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-secondary">
-                当前财务数据源需付费,后续会接入免费数据源。如你常用某个免费财务数据源,欢迎在 Issues 中多多推荐哈 ~
+                在根目录 .env 配置 TUSHARE_TOKEN，安装 market-data 依赖后重新加载数据源。
+                财务接口通常还需要相应的 Tushare 积分权限。
               </p>
-              <a
-                href="https://github.com/shy3130/tickflow-stock-panel/issues"
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline"
-              >
-                前往 Issues 推荐
-                <ExternalLink className="h-3 w-3" />
-              </a>
             </div>
           </div>
         </div>

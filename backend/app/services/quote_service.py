@@ -259,9 +259,13 @@ class QuoteService:
 
         用于盘后管道/数据修正运行期间, 防止实时行情覆写管道正在写的 parquet。
         与 stop() 的区别: 线程继续存活但跳过 _fetch_quotes; preferences 开关态不变,
-        管道结束调用 resume() 即恢复。线程级检查, 即时生效, 无 join 等待。
+        管道结束调用 resume() 即恢复。进入暂停时会等待正在执行的写盘轮次结束。
         """
         self._paused = True
+        # 与行情写盘形成一道同步屏障: 先置 paused 阻止后续刷新,再等待当前
+        # _fetch_quotes 释放锁。pause() 返回后,管道才可以安全改写同一批分区。
+        with self._fetch_lock:
+            pass
         logger.info("行情轮询已临时暂停 (管道/修正运行中)")
 
     def resume(self) -> None:
@@ -540,6 +544,33 @@ class QuoteService:
     def _fetch_quotes(self, *, final: bool = False) -> bool:
         """按当前档位拉取行情。加锁串行化 (后台轮询 vs 手动 refresh)。返回本轮是否成功更新。"""
         with self._fetch_lock:
+            if self._paused:
+                logger.info("行情服务处于管道暂停态, 跳过本次刷新")
+                return False
+
+            phase = self._market_phase()
+            if phase == "close_final" and self._repo is not None:
+                from app.services.research_snapshot import is_research_date_sealed
+
+                try:
+                    sealed = is_research_date_sealed(
+                        self._repo.store.data_dir,
+                        cn_today().isoformat(),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "检查盘后研究封存状态失败, 保持原有行情同步: %s",
+                        exc,
+                    )
+                    sealed = False
+                if sealed:
+                    key = self._final_sync_key(phase)
+                    if key:
+                        self._final_sync_done.add(key)
+                        self._final_sync_failed.pop(key, None)
+                    logger.info("当日盘后研究已封存, 跳过实时行情再次落盘")
+                    return False
+
             before = self._fetched_at
             if final:
                 logger.info("最终行情同步开始")

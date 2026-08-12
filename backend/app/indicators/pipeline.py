@@ -1315,10 +1315,14 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
     """
     from datetime import date, timedelta
     cutoff = date.today() - timedelta(days=days + 30)  # 多读 30 天余量
+    cast_options = pl.ScanCastOptions(integer_cast="allow-float")
 
     try:
         lf = (
-            scan_enriched_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=_cast)
+            scan_enriched_parquet(
+                str(enriched_base / "**" / "*.parquet"),
+                cast_options=cast_options,
+            )
             .filter(
                 (pl.col("symbol").is_in(symbols))
                 & (pl.col("date") >= cutoff)

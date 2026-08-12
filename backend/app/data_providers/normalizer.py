@@ -10,6 +10,39 @@ ADJ_FACTOR_COLS = ["symbol", "trade_date", "ex_factor"]
 INSTRUMENT_COLS = ["symbol", "name", "code", "exchange", "asset_type", "source"]
 
 
+def cumulative_to_event_factors(data) -> pl.DataFrame:
+    """Convert cumulative adjustment factors into per-event multipliers."""
+    df = to_polars(data)
+    required = {"symbol", "trade_date", "adj_factor"}
+    if df.is_empty() or not required <= set(df.columns):
+        return pl.DataFrame()
+    normalized = (
+        df.select("symbol", "trade_date", "adj_factor")
+        .with_columns(
+            pl.col("trade_date").cast(pl.Date, strict=False),
+            pl.col("adj_factor").cast(pl.Float64, strict=False),
+        )
+        .drop_nulls()
+        .filter(pl.col("adj_factor") > 0)
+        .unique(subset=["symbol", "trade_date"], keep="last")
+        .sort(["symbol", "trade_date"])
+        .with_columns(
+            pl.col("adj_factor").shift(1).over("symbol").alias("_previous_factor")
+        )
+        .filter(
+            pl.col("_previous_factor").is_null()
+            | ((pl.col("adj_factor") - pl.col("_previous_factor")).abs() > 1e-12)
+        )
+        .with_columns(
+            pl.when(pl.col("_previous_factor").is_null())
+            .then(pl.col("adj_factor"))
+            .otherwise(pl.col("adj_factor") / pl.col("_previous_factor"))
+            .alias("ex_factor")
+        )
+    )
+    return normalized.select("symbol", "trade_date", "ex_factor")
+
+
 def to_polars(data) -> pl.DataFrame:
     if data is None:
         return pl.DataFrame()

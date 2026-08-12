@@ -804,6 +804,8 @@ async def sync_minute_single(request: Request, body: dict):
     body: { "symbol": "000001.SZ" }
     用于个股分时图"获取数据"按钮: 本地无数据时单独拉取并持久化。
     """
+    import asyncio
+
     from app.services.preferences import get_minute_sync_days
     from app.tickflow.capabilities import Cap
 

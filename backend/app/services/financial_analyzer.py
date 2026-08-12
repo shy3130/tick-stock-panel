@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 
 # 最多注入的报告期数(最新 N 期),避免上下文爆炸 / token 浪费
 _MAX_PERIODS = 4
+_TABLE_LABELS = {
+    "metrics": "核心财务指标",
+    "income": "利润表",
+    "balance_sheet": "资产负债表",
+    "cash_flow": "现金流量表",
+    "shares": "股本表",
+}
 
 
 def _load_stock_financials(data_dir: Path, symbol: str) -> dict[str, list[dict]]:
@@ -163,6 +170,23 @@ async def analyze_financials_stream(
     total_rows = sum(len(v) for v in fins.values())
     if total_rows == 0:
         yield json.dumps({"type": "error", "message": f"标的 {symbol} 暂无任何财务数据,请先同步财务表"}, ensure_ascii=False)
+        return
+    missing_tables = [
+        _TABLE_LABELS[table]
+        for table in FINANCIAL_TABLES
+        if not fins.get(table)
+    ]
+    if missing_tables:
+        yield json.dumps(
+            {
+                "type": "error",
+                "message": (
+                    f"标的 {symbol} 财务数据不完整，缺少{'、'.join(missing_tables)}，"
+                    "不能生成完整财务分析"
+                ),
+            },
+            ensure_ascii=False,
+        )
         return
 
     # 2. meta

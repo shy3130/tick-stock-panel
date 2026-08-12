@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 import polars as pl
@@ -19,10 +20,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app.config import settings
 from app.data_providers.trust import record_daily_enriched_audit
 from app.indicators.pipeline import run_pipeline
-from app.config import settings
 from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
+from app.services.research_snapshot import publish_research_snapshot
+from app.services.strategy_refresh import refresh_strategy_cache
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
 from app.tickflow.repository import KlineRepository
@@ -107,7 +110,7 @@ def run_now(
     repo: KlineRepository,
     capset: CapabilitySet,
     on_progress: ProgressCb | None = None,
-    override_start_date: _date | None = None,
+    override_start_date: date | None = None,
 ) -> dict:
     """立即执行一次盘后管道,支持进度回调。
 
@@ -559,6 +562,81 @@ def run_now(
     return result
 
 
+def run_post_market(
+    repo: KlineRepository,
+    capset: CapabilitySet,
+    on_progress=None,
+    *,
+    app_state=None,
+) -> dict:
+    """统一盘后执行入口: 行情落盘、内存刷新、策略重算和同日校验。
+
+    手动 API 与定时任务必须共同调用本函数, 避免其中一条路径漏掉策略刷新。
+    行情阶段失败时仍刷新已落盘的 Polars 缓存, 但不会继续计算策略。
+    """
+    state = app_state if app_state is not None else _get_app_state()
+    capset_live = getattr(state, "capabilities", None) or capset
+    quote_service = getattr(state, "quote_service", None)
+    emit = on_progress or _noop
+
+    def data_progress(
+        stage: str,
+        pct: int,
+        message: str,
+        stage_pct: int | None = None,
+        skip_log: bool = False,
+    ) -> None:
+        # run_now 单独使用时仍以 done/100 收尾；进入完整盘后流程时拦截该事件，
+        # 给策略重算预留最后进度，避免进度条先显示完成再倒退。
+        if stage == "done":
+            emit("refresh_views", 96, "行情数据已完成,准备重算策略…")
+            return
+        emit(
+            stage,
+            min(pct, 96),
+            message,
+            stage_pct=stage_pct,
+            skip_log=skip_log,
+        )
+
+    try:
+        if quote_service:
+            with quote_service.paused():
+                result = run_now(repo, capset_live, on_progress=data_progress)
+        else:
+            result = run_now(repo, capset_live, on_progress=data_progress)
+    finally:
+        # 即便行情阶段部分落盘后失败,也要让内存缓存看见已保存的数据;异常会继续
+        # 上抛,因此下面的策略重算不会运行,避免以不完整数据生成新日期结果。
+        repo.refresh_cache()
+
+    engine = getattr(state, "strategy_engine", None)
+    if engine is None:
+        raise RuntimeError("策略引擎未初始化,盘后策略缓存未刷新")
+
+    emit("refresh_strategies", 98, "重算并校验当日策略…")
+    receipt = refresh_strategy_cache(repo, engine)
+    emit("publish_snapshot", 99, "发布同日研究快照…")
+    snapshot = publish_research_snapshot(repo.store.data_dir)
+    emit("done", 100, f"完成,策略日期 {receipt['as_of']}")
+
+    strategy_summary = {
+        key: value
+        for key, value in receipt.items()
+        if key != "results"
+    }
+    snapshot_summary = {
+        key: snapshot[key]
+        for key in ("snapshot_id", "as_of", "published_at")
+        if key in snapshot
+    }
+    return {
+        **result,
+        "strategy_cache": strategy_summary,
+        "research_snapshot": snapshot_summary,
+    }
+
+
 def _refresh_views(repo: KlineRepository) -> None:
     """刷新所有 DuckDB 视图 —— 委托给 repository 的唯一权威实现 rebuild_views()。"""
     repo.rebuild_views()
@@ -878,27 +956,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
 
     # 盘后: 日 K + enriched（时间由偏好决定）
     def _pipeline_then_refresh(on_progress=None):
-        # 与手动触发 (/api/pipeline/run) 对齐: 管道落盘后重建 Polars 内存缓存,
-        # 否则 live_agg 的昨日连板数等基准列会停留在旧交易日, 次日开盘连板梯队
-        # 整体少算一档 (仅手动触发或重启才会刷缓存, cron 调度路径此前漏了这步)。
-        # 用 app.state 上的**实时** capset(周期重探会热更新它), 而非启动时捕获的
-        # 旧 capset —— 否则 Key 中途过期/续费后, 调度管道仍按旧档位打端点。
-        app_state = _get_app_state()
-        capset_live = getattr(app_state, "capabilities", None) or capset
-        # 管道运行期间暂停实时行情取数, 防止覆写同一批 parquet 竞态
-        qs = getattr(app_state, "quote_service", None)
-        try:
-            if qs:
-                with qs.paused():
-                    result = run_now(repo, capset_live, on_progress=on_progress)
-            else:
-                result = run_now(repo, capset_live, on_progress=on_progress)
-        finally:
-            # 即便有阶段软失败(run_now 末尾抛 PipelineStageError), 已落盘的日K/enriched
-            # 仍需刷进内存缓存, 否则 live_agg 基准列停留在旧交易日。放 finally 保证部分
-            # 成功也生效; 随后异常继续上抛, 由 _run_tracked 标记任务 failed。
-            repo.refresh_cache()
-        return result
+        return run_post_market(repo, capset, on_progress=on_progress)
 
     scheduler.add_job(
         lambda: _run_tracked(_pipeline_then_refresh, "daily_pipeline"),

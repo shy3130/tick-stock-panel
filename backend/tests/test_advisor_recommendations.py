@@ -7,6 +7,17 @@ import polars as pl
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _stable_published_source_for_advisor_api_unit_tests(monkeypatch):
+    from app.api import advisor as advisor_api
+
+    monkeypatch.setattr(
+        advisor_api,
+        "research_snapshot_source_problem",
+        lambda _data_dir, _snapshot: None,
+    )
+
+
 def _audit(
     *,
     dataset: str,
@@ -77,6 +88,17 @@ def _trusted_audits(**overrides: dict) -> list[dict]:
     }
     audits.update(overrides)
     return list(audits.values())
+
+
+def _published_snapshot(*, audits: list[dict] | None = None, cache: dict | None = None) -> dict:
+    return {
+        "schema_version": 1,
+        "snapshot_id": "a" * 64,
+        "as_of": "2026-07-24",
+        "published_at": "2026-07-24T08:10:00+00:00",
+        "audits": audits or _trusted_audits(),
+        "strategy_cache": cache or _cache(),
+    }
 
 
 def test_advisor_go_requires_fresh_audited_data_and_strategy_consensus():
@@ -161,6 +183,27 @@ def test_advisor_requires_at_least_95_percent_daily_coverage():
     assert "94.0%" in result["data_gate"]["reasons"][0]
 
 
+@pytest.mark.parametrize("dataset", ["daily", "daily_enriched"])
+def test_advisor_excludes_symbols_missing_required_market_data(dataset):
+    from app.services.advisor import build_advisor_recommendations
+
+    audit = _audit(
+        dataset=dataset,
+        provider="derived" if dataset == "daily_enriched" else "tickflow",
+        status="partial",
+        coverage_ratio=0.9996,
+    )
+    audit["missing_symbols"] = ["600000.SH"]
+
+    result = build_advisor_recommendations(
+        _trusted_audits(**{dataset: audit}),
+        _cache(),
+    )
+
+    assert result["data_gate"]["decision"] == "PASS"
+    assert result["candidates"] == []
+
+
 def test_advisor_marks_single_strategy_as_wait_instead_of_go():
     from app.services.advisor import build_advisor_recommendations
 
@@ -193,6 +236,33 @@ def test_advisor_never_labels_a_limit_up_candidate_as_go():
         }
     ]
     assert "涨停" in candidate["risk_reasons"][0]
+
+
+@pytest.mark.parametrize(
+    ("signal_field", "expected_code"),
+    [
+        ("signal_limit_up", "LIMIT_UP"),
+        ("signal_limit_down", "LIMIT_DOWN"),
+    ],
+)
+def test_advisor_quarantines_boolean_price_limit_signals(
+    signal_field,
+    expected_code,
+):
+    """Catch strategy rows that carry indicator booleans but no status string."""
+    from app.services.advisor import build_advisor_recommendations
+
+    cache = _cache()
+    for result in cache["results"].values():
+        row = result["rows"][0]
+        row.pop("status")
+        row[signal_field] = True
+
+    recommendation = build_advisor_recommendations(_trusted_audits(), cache)
+
+    [candidate] = recommendation["candidates"]
+    assert candidate["decision"] == "NO-GO"
+    assert [flag["code"] for flag in candidate["risk_flags"]] == [expected_code]
 
 
 def test_advisor_quarantines_finite_daily_return_above_30_percent():
@@ -374,6 +444,11 @@ def test_advisor_api_reads_only_persisted_audits_and_strategy_cache(monkeypatch,
         lambda data_dir: _trusted_audits(),
     )
     monkeypatch.setattr(advisor_api.strategy_cache, "read_cache", lambda data_dir: _cache())
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_research_snapshot",
+        lambda _data_dir: _published_snapshot(),
+    )
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
@@ -386,6 +461,168 @@ def test_advisor_api_reads_only_persisted_audits_and_strategy_cache(monkeypatch,
 
     assert result["data_gate"]["decision"] == "PASS"
     assert result["candidates"][0]["decision"] == "GO"
+
+
+def test_advisor_api_reads_the_published_bundle_instead_of_mixed_live_files(
+    monkeypatch,
+    tmp_path,
+):
+    """Receipt and strategy inputs must cross the same published snapshot seam."""
+    from app.api import advisor as advisor_api
+
+    factor_path = tmp_path / "adj_factor" / "all.parquet"
+    factor_path.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "trade_date": [date(2026, 7, 23)],
+            "ex_factor": [1.0],
+        }
+    ).write_parquet(factor_path)
+
+    live_cache = _cache()
+    live_cache["as_of"] = "2026-07-25"
+    for result in live_cache["results"].values():
+        result["as_of"] = "2026-07-25"
+    live_audits = _trusted_audits(
+        daily=_audit(dataset="daily", observed_end="2026-07-25"),
+        daily_enriched=_audit(
+            dataset="daily_enriched",
+            provider="derived",
+            observed_end="2026-07-25",
+        ),
+    )
+
+    monkeypatch.setattr(advisor_api, "load_latest_audits", lambda _data_dir: live_audits)
+    monkeypatch.setattr(
+        advisor_api.strategy_cache,
+        "read_cache",
+        lambda _data_dir: live_cache,
+    )
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_research_snapshot",
+        lambda _data_dir: {
+            "schema_version": 1,
+            "snapshot_id": "a" * 64,
+            "as_of": "2026-07-24",
+            "published_at": "2026-07-24T08:10:00+00:00",
+            "audits": _trusted_audits(),
+            "strategy_cache": _cache(),
+        },
+        raising=False,
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+            ),
+        ),
+    )
+
+    result = advisor_api._persisted_recommendations(request, limit=3)
+
+    assert result["as_of"] == "2026-07-24"
+    assert result["snapshot_id"] == "a" * 64
+    assert result["snapshot_published_at"] == "2026-07-24T08:10:00+00:00"
+
+
+def test_advisor_api_fails_closed_until_a_research_snapshot_is_published(
+    monkeypatch,
+    tmp_path,
+):
+    """Individually valid live files are not a committed research bundle."""
+    from app.api import advisor as advisor_api
+
+    factor_path = tmp_path / "adj_factor" / "all.parquet"
+    factor_path.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "trade_date": [date(2026, 7, 23)],
+            "ex_factor": [1.0],
+        }
+    ).write_parquet(factor_path)
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_research_snapshot",
+        lambda _data_dir: None,
+    )
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_audits",
+        lambda _data_dir: _trusted_audits(),
+    )
+    monkeypatch.setattr(
+        advisor_api.strategy_cache,
+        "read_cache",
+        lambda _data_dir: _cache(),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+            ),
+        ),
+    )
+
+    result = advisor_api._persisted_recommendations(request, limit=3)
+
+    assert result["data_gate"]["decision"] == "BLOCK"
+    assert result["data_gate"]["runtime_problems"][0]["code"] == (
+        "RESEARCH_SNAPSHOT_MISSING"
+    )
+    assert all(candidate["decision"] == "NO-GO" for candidate in result["candidates"])
+    assert result["snapshot_id"] is None
+
+
+def test_advisor_api_turns_a_corrupt_snapshot_into_an_observe_only_gate(
+    monkeypatch,
+    tmp_path,
+):
+    """A damaged latest pointer must be visible as a gate, not an HTTP crash."""
+    from app.api import advisor as advisor_api
+    from app.services.research_snapshot import ResearchSnapshotCorruptError
+
+    factor_path = tmp_path / "adj_factor" / "all.parquet"
+    factor_path.parent.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "trade_date": [date(2026, 7, 23)],
+            "ex_factor": [1.0],
+        }
+    ).write_parquet(factor_path)
+
+    def fail_load(_data_dir):
+        raise ResearchSnapshotCorruptError("checksum mismatch")
+
+    monkeypatch.setattr(advisor_api, "load_latest_research_snapshot", fail_load)
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_audits",
+        lambda _data_dir: _trusted_audits(),
+    )
+    monkeypatch.setattr(
+        advisor_api.strategy_cache,
+        "read_cache",
+        lambda _data_dir: _cache(),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)),
+            ),
+        ),
+    )
+
+    result = advisor_api._persisted_recommendations(request, limit=3)
+
+    assert result["data_gate"]["decision"] == "BLOCK"
+    assert result["data_gate"]["runtime_problems"][0]["code"] == (
+        "RESEARCH_SNAPSHOT_CORRUPT"
+    )
+    assert result["snapshot_id"] is None
 
 
 def test_advisor_api_quarantines_symbol_with_adjustment_event_on_strategy_date(
@@ -409,6 +646,11 @@ def test_advisor_api_quarantines_symbol_with_adjustment_event_on_strategy_date(
         lambda data_dir: _trusted_audits(),
     )
     monkeypatch.setattr(advisor_api.strategy_cache, "read_cache", lambda data_dir: _cache())
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_research_snapshot",
+        lambda _data_dir: _published_snapshot(),
+    )
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
@@ -476,6 +718,11 @@ def test_advisor_api_blocks_unavailable_adjustment_factor_file_without_crashing(
         lambda data_dir: _trusted_audits(),
     )
     monkeypatch.setattr(advisor_api.strategy_cache, "read_cache", lambda data_dir: _cache())
+    monkeypatch.setattr(
+        advisor_api,
+        "load_latest_research_snapshot",
+        lambda _data_dir: _published_snapshot(),
+    )
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(

@@ -47,7 +47,26 @@ function Require-Cmd($cmd, $hint) {
 }
 
 Require-Cmd 'uv'   'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"   OR   winget install --id=astral-sh.uv'
-Require-Cmd 'pnpm' 'npm i -g pnpm   OR   corepack enable; corepack prepare pnpm@9 --activate'
+
+# Prefer Corepack so the packageManager version pinned in package.json is used
+# consistently, even when another pnpm.cmd is injected earlier on PATH.
+$PnpmCommand = Get-Command 'corepack.cmd' -ErrorAction SilentlyContinue
+if (-not $PnpmCommand) {
+    $PnpmCommand = Get-Command 'corepack' -CommandType Application -ErrorAction SilentlyContinue
+}
+$PnpmViaCorepack = [bool]$PnpmCommand
+if (-not $PnpmCommand) {
+    $PnpmCommand = Get-Command 'pnpm.cmd' -ErrorAction SilentlyContinue
+}
+if (-not $PnpmCommand) {
+    $PnpmCommand = Get-Command 'pnpm' -CommandType Application -ErrorAction SilentlyContinue
+}
+if (-not $PnpmCommand) {
+    Log-Err 'pnpm/Corepack not found'
+    Write-Host '       install Node.js LTS, then reopen PowerShell'
+    exit 1
+}
+$PnpmExecutable = $PnpmCommand.Source
 
 # ===== 2. Port check - kill anything listening on the target ports =====
 function Free-Port($name, $port) {
@@ -146,7 +165,13 @@ if (-not (Test-Path (Join-Path $BackendDir '.venv')) -or $BackendExtraArgs.Count
 if (-not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
     Log-Info 'first run - installing Node deps...'
     Push-Location $FrontendDir
-    try { & pnpm install } finally { Pop-Location }
+    try {
+        if ($PnpmViaCorepack) {
+            & $PnpmExecutable pnpm install
+        } else {
+            & $PnpmExecutable install
+        }
+    } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { Log-Err 'pnpm install failed'; exit 1 }
     Log-Ok 'frontend deps installed'
 }
@@ -179,18 +204,22 @@ $backendJob = Start-Job -Name 'backend' -ScriptBlock {
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
     $env:PYTHONUNBUFFERED = '1'
     Set-Location $dir
-    & .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port $port 2>&1
+    & .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port $port 2>&1
 } -ArgumentList $backendPidFile, $BackendDir, $BackendPort
 
 $frontendJob = Start-Job -Name 'frontend' -ScriptBlock {
-    param($pidFile, $dir, $port)
+    param($pidFile, $dir, $port, $pnpmExecutable, $pnpmViaCorepack)
     # 同上: job 子进程默认 GBK, pnpm/前端工具链也是 UTF-8 输出, 需对齐。
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
     $OutputEncoding           = New-Object System.Text.UTF8Encoding $false
     $PID | Out-File -FilePath $pidFile -Encoding ascii -Force
     Set-Location $dir
-    & pnpm dev --host 0.0.0.0 --port $port 2>&1
-} -ArgumentList $frontendPidFile, $FrontendDir, $FrontendPort
+    if ($pnpmViaCorepack) {
+        & $pnpmExecutable pnpm dev --host 0.0.0.0 --port $port 2>&1
+    } else {
+        & $pnpmExecutable dev --host 0.0.0.0 --port $port 2>&1
+    }
+} -ArgumentList $frontendPidFile, $FrontendDir, $FrontendPort, $PnpmExecutable, $PnpmViaCorepack
 
 # Wait up to 5 seconds for the PID files to materialise
 function Read-JobPid($file) {

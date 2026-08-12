@@ -7,26 +7,37 @@ services:
       dockerfile: Dockerfile
       args:
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
-        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.3}
     container_name: TickFlow_Stock_Panel
     ports:
-      - "${PORT:-3018}:3018"
+      - "127.0.0.1:${PORT:-3018}:3018"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       # 强制固定为容器内绝对路径, 防止 .env 里的 DATA_DIR=./data(开发模式用)
       # 被 env_file 原样传入容器后按错误的相对路径解析, 写到未挂载卷的目录,
       # 导致每次 up --build 重建容器都丢数据。environment 优先级高于 env_file,
       # 无论 .env 怎么写这里都以容器路径为准。
       - DATA_DIR=/app/data
-      # 将主机 Codex Desktop 的 loopback local-access 端点映射到 Docker host gateway。
-      - CODEX_DOCKER_HOST=host.docker.internal
+      # Uvicorn 仅信任容器回环和固定 Docker 网关写入的转发头。
+      # 宿主端口仍只绑定 127.0.0.1；严禁配置为 * 或整个私网网段。
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1,172.21.0.1}
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro
-      # 复用主机 Codex 登录态；后端只读后复制到单次请求的临时 CODEX_HOME。
-      # Windows PowerShell/CMD 下 HOME 常未设置, 可通过 .env 里 CODEX_HOME_HOST 覆盖。
-      - ${CODEX_HOME_HOST:-${HOME}/.codex}:/root/.codex:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3018/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
     restart: unless-stopped
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1

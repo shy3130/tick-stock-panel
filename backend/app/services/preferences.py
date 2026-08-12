@@ -183,9 +183,10 @@ def get_minute_sync_segment_days() -> int:
     return max(5, min(30, load().get("minute_sync_segment_days", 20)))
 
 
-# ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
+# ===== 数据源选择 =====
 
-_ALLOWED_DATA_PROVIDERS = {"tickflow"}
+_DEFAULT_DAILY_PROVIDER = "tushare"
+_ALLOWED_DATA_PROVIDERS = {"tickflow", "tushare", "akshare"}
 
 
 def _allowed_data_providers() -> set[str]:
@@ -197,7 +198,10 @@ def _allowed_data_providers() -> set[str]:
 
 
 def get_daily_data_provider() -> str:
-    provider = str(load().get("daily_data_provider", "tickflow") or "tickflow").lower()
+    provider = str(
+        load().get("daily_data_provider", _DEFAULT_DAILY_PROVIDER)
+        or _DEFAULT_DAILY_PROVIDER
+    ).lower()
     return provider
 
 

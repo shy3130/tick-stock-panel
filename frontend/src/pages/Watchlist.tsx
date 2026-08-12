@@ -374,7 +374,7 @@ function useCardColumnCount(): number {
   return count
 }
 
-const StockCard = React.memo(function StockCard({
+export const StockCard = React.memo(function StockCard({
   r,
   candleRows,
   showCandle,
@@ -485,7 +485,7 @@ const StockCard = React.memo(function StockCard({
           </span>
           {pct != null && (
             <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
-              {isUp ? '+' : ''}{pct.toFixed(2)}%
+              {fmtPct(pct)}
             </span>
           )}
         </div>

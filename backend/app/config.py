@@ -91,9 +91,14 @@ class Settings(BaseSettings):
     )
 
     # Server
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 3018
     log_level: str = "INFO"
+    # 浏览器跨域仅用于本机前端开发。生产环境由 FastAPI 同源托管前端,
+    # 因此 Tailscale Serve 域名无需加入此列表。
+    cors_allow_origins: str = (
+        "http://127.0.0.1:3011,http://localhost:3011"
+    )
     backtest_range_guard: bool = False
     backtest_matrix_disk_cache_enabled: bool = True
     backtest_matrix_cache_max_mb: int = 512
@@ -124,7 +129,20 @@ class Settings(BaseSettings):
             raise ValueError("backtest_matrix_cache_max_mb must be positive")
         if self.backtest_matrix_cache_prewarm_years <= 0:
             raise ValueError("backtest_matrix_cache_prewarm_years must be positive")
+        if "*" in self.cors_origins:
+            raise ValueError("CORS wildcard is not allowed when credentials are enabled")
         return self
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """解析显式 CORS 来源, 丢弃空项并保持配置顺序去重。"""
+        return list(
+            dict.fromkeys(
+                origin.strip()
+                for origin in self.cors_allow_origins.split(",")
+                if origin.strip()
+            )
+        )
 
     @property
     def use_free_mode(self) -> bool:

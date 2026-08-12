@@ -1,0 +1,8 @@
+name: akshare
+display_name: "AKShare（显式备用源）"
+runtime: python
+entry: app.plugins.akshare.provider:AkShareProvider
+check: app.plugins.akshare.check:availability
+datasets: [instruments, daily, adj_factor]
+description: "第三方公开接口的当前股票列表、未复权日线和复权因子。只在用户主动选择时使用；证券主表仅覆盖当前股票，不适合作为无幸存者偏差回测的唯一来源。"
+install_hint: "在设置页安装依赖后重启后端。数据取自第三方公开接口，稳定性与授权边界需自行评估。"

@@ -294,6 +294,35 @@ def test_market_matrix_derives_live_raw_close_when_requested():
     np.testing.assert_array_equal(snapshot.field("raw_close")[-1], snapshot.close[-1])
 
 
+def test_direct_parquet_matrix_ignores_stale_temp_files(tmp_path):
+    market_root = tmp_path / "kline_daily_enriched"
+    current = date(2024, 1, 2)
+    partition = market_root / f"date={current.isoformat()}"
+    partition.mkdir(parents=True)
+    panel = pl.DataFrame({
+        "symbol": ["000001.SZ"],
+        "date": [current],
+        "open": [10.0],
+        "high": [10.2],
+        "low": [9.8],
+        "close": [10.1],
+        "volume": [1_000.0],
+    })
+    panel.write_parquet(partition / "part.parquet")
+    panel.write_parquet(partition / "part.parquet.tmp")
+
+    market = load_market_data_matrix_from_parquet(
+        market_root,
+        current,
+        current,
+        field_columns=set(),
+    )
+
+    assert market.timestamp_labels == (current.isoformat(),)
+    assert market.symbols == ("000001.SZ",)
+    np.testing.assert_array_equal(market.close, np.array([[10.1]], dtype=np.float32))
+
+
 def test_direct_parquet_matrix_matches_panel_builder_and_reuses_mmap(tmp_path):
     market_root = tmp_path / "kline_daily_enriched"
     days = (date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4))

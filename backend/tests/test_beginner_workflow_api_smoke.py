@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 
 def _write_trusted_context(data_dir) -> None:
+    from app.services.research_snapshot import publish_research_snapshot
+
     as_of = "2026-07-29"
     quality_dir = data_dir / "data_quality"
     quality_dir.mkdir(parents=True)
@@ -85,12 +87,36 @@ def _write_trusted_context(data_dir) -> None:
         json.dumps(cache, ensure_ascii=False),
         encoding="utf-8",
     )
+    for dataset in ("kline_daily", "kline_daily_enriched"):
+        source_path = data_dir / dataset / f"date={as_of}" / "part.parquet"
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            {
+                "symbol": ["600000.SH"],
+                "date": [as_of],
+                "close": [10.0],
+            }
+        ).write_parquet(source_path)
+    publish_research_snapshot(data_dir)
 
 
-def test_daily_brief_and_paper_account_http_smoke_use_temporary_data_dir(tmp_path):
+def test_daily_brief_and_paper_account_http_smoke_use_temporary_data_dir(
+    tmp_path,
+    monkeypatch,
+):
     from app.api import advisor, paper
 
     _write_trusted_context(tmp_path)
+    monkeypatch.setattr(
+        advisor,
+        "build_market_overview",
+        lambda **kwargs: {
+            "as_of": "2026-07-29",
+            "breadth": {"total": 5_500},
+            "emotion": {"score": 60, "label": "偏暖"},
+        },
+        raising=False,
+    )
     app = FastAPI()
     app.include_router(advisor.router)
     app.include_router(paper.router)

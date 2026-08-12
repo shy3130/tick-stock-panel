@@ -5,6 +5,7 @@
 
 import { toast } from '@/components/Toast'
 import type { BeginnerDailyBriefResponse } from '@/lib/advisor'
+import type { DataTrustResponse } from '@/lib/data-trust'
 import type {
   PaperAccountResponse,
   PaperResetRequest,
@@ -1534,6 +1535,7 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+  dataTrust: () => request<DataTrustResponse>('/api/data/trust'),
   advisorDailyBrief: () =>
     request<BeginnerDailyBriefResponse>('/api/advisor/daily-brief'),
   paperAccount: () =>

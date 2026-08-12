@@ -7,9 +7,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.api.data import invalidate_storage_cache
 from app.jobs import daily_pipeline
 from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
-from app.api.data import invalidate_storage_cache
 
 # 长时间任务专用线程池（隔离于 FastAPI 默认线程池，防止阻塞请求处理）
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
@@ -44,8 +44,6 @@ async def run_now(request: Request) -> dict:
         if not try_acquire_run_slot():
             job_store.fail(job_id, "已有数据任务在运行(或上一次任务卡死未结束),请稍后再试")
             return
-        # 管道运行期间暂停实时行情取数, 防止覆写同一批 parquet 竞态
-        qs = getattr(request.app.state, "quote_service", None)
         try:
             job_store.start(job_id)
             loop = asyncio.get_event_loop()
@@ -55,15 +53,16 @@ async def run_now(request: Request) -> dict:
                 job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
             def _run() -> dict:
-                if qs:
-                    with qs.paused():
-                        return daily_pipeline.run_now(repo, capset, on_progress=progress)
-                return daily_pipeline.run_now(repo, capset, on_progress=progress)
+                return daily_pipeline.run_post_market(
+                    repo,
+                    capset,
+                    on_progress=progress,
+                    app_state=request.app.state,
+                )
 
             result = await loop.run_in_executor(_long_task_executor, _run)
             job_store.succeed(job_id, result)
             invalidate_storage_cache()
-            repo.refresh_cache()  # 刷新 Polars 缓存
         except Exception as e:  # noqa: BLE001
             logger.exception("pipeline failed")
             job_store.fail(job_id, str(e))

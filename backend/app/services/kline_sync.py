@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 import polars as pl
 
 from app.data_providers.base import AssetType
+from app.file_io import replace_with_retry
 from app.indicators.pipeline import filter_halt_days
 from app.market_time import cn_now
 from app.services import preferences
@@ -37,7 +38,7 @@ def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
     """
     tmp = out.with_name(out.name + ".tmp")
     df.write_parquet(tmp)
-    tmp.replace(out)  # 同目录 rename, POSIX/NTFS 均为原子操作
+    replace_with_retry(tmp, out)
 
 
 # 标准列(无论 SDK 返回什么形状,我们把它规范成这套)

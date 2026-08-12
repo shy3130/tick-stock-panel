@@ -1,6 +1,7 @@
 """策略页实时结果刷新 SSE 回归测试。"""
 from __future__ import annotations
 
+import threading
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -217,3 +218,76 @@ def test_quote_service_skips_notification_without_strategy_result_update():
         service._evaluate_monitors(pl.DataFrame(), None)
 
     assert subscriber.pop()["strategy_results_updated"] is False
+
+
+def test_quote_service_refuses_post_close_refresh_after_research_is_sealed(
+    tmp_path,
+):
+    """A restart/manual refresh after sealing must not rewrite EOD partitions."""
+    service = QuoteService()
+    service.set_repo(SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)))
+
+    with (
+        patch.object(QuoteService, "_market_phase", return_value="close_final"),
+        patch(
+            "app.services.research_snapshot.is_research_date_sealed",
+            return_value=True,
+        ),
+        patch.object(
+            service,
+            "_fetch_full_market_quotes",
+            side_effect=AssertionError("sealed research data was fetched again"),
+        ),
+    ):
+        assert service._fetch_quotes() is False
+
+    assert (cn_today(), "close") in service._final_sync_done
+
+
+def test_quote_service_manual_refresh_is_blocked_while_pipeline_is_paused():
+    service = QuoteService()
+
+    with (
+        patch.object(
+            service,
+            "_fetch_full_market_quotes",
+            side_effect=AssertionError("manual refresh bypassed the pipeline pause"),
+        ),
+        service.paused(),
+    ):
+        assert service._fetch_quotes() is False
+
+
+def test_quote_service_pause_waits_for_an_inflight_persist_before_entering():
+    service = QuoteService()
+    fetch_started = threading.Event()
+    allow_fetch_to_finish = threading.Event()
+    pause_entered = threading.Event()
+
+    def blocking_fetch() -> None:
+        fetch_started.set()
+        assert allow_fetch_to_finish.wait(timeout=2)
+
+    def enter_pause() -> None:
+        with service.paused():
+            pause_entered.set()
+
+    with (
+        patch.object(QuoteService, "realtime_mode", return_value="full_market"),
+        patch.object(service, "_fetch_full_market_quotes", side_effect=blocking_fetch),
+    ):
+        fetch_thread = threading.Thread(target=service._fetch_quotes)
+        fetch_thread.start()
+        assert fetch_started.wait(timeout=1)
+
+        pause_thread = threading.Thread(target=enter_pause)
+        pause_thread.start()
+        assert pause_entered.wait(timeout=0.05) is False
+
+        allow_fetch_to_finish.set()
+        fetch_thread.join(timeout=1)
+        pause_thread.join(timeout=1)
+
+    assert not fetch_thread.is_alive()
+    assert not pause_thread.is_alive()
+    assert pause_entered.is_set()

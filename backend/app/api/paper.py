@@ -83,41 +83,60 @@ def _raise_user_error(exc: Exception) -> None:
     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _require_trusted_data_gate(request: Request) -> None:
-    """Re-evaluate persisted receipts/cache for every simulated fill."""
+def _require_simulation_action(request: Request, *, side: Any, symbol: Any) -> None:
+    """Gate new simulated buys without trapping an existing simulated position."""
+    normalized_side = str(side or "").strip().upper()
+    if normalized_side == "SELL":
+        return
+    if normalized_side != "BUY":
+        return
     try:
-        recommendations = advisor_api._persisted_recommendations(request, limit=1)
+        brief = advisor_api._persisted_daily_brief(request)
     except Exception as exc:
         raise HTTPException(
             status_code=409,
             detail=(
-                "当前无法完成数据检查, 已阻止记录模拟成交。"
-                "下一步: 请先刷新数据并确认四项可信回执正常。"
+                "当前无法完成今日行动检查, 已阻止记录模拟成交。"
+                "下一步: 请先刷新日报并确认数据与市场状态正常。"
             ),
         ) from exc
-    gate = (
-        recommendations.get("data_gate")
-        if isinstance(recommendations, dict)
-        and isinstance(recommendations.get("data_gate"), dict)
-        else {}
-    )
-    if gate.get("decision") == "PASS":
-        return
-    reasons = gate.get("reasons") if isinstance(gate.get("reasons"), list) else []
-    actions = (
-        gate.get("next_actions")
-        if isinstance(gate.get("next_actions"), list)
-        else []
-    )
-    reason = str(reasons[0]) if reasons else "必需数据尚未通过可信度检查"
-    next_action = (
-        str(actions[0])
-        if actions
-        else "请先刷新数据并确认四项可信回执正常后再试。"
-    )
+    normalized_symbol = str(symbol or "").strip().upper()
+    if isinstance(brief, dict) and brief.get("action_state") == "SIMULATE_ONLY":
+        candidates = brief.get("candidates")
+        if isinstance(candidates, list) and any(
+            isinstance(candidate, dict)
+            and str(candidate.get("symbol") or "").strip().upper() == normalized_symbol
+            and candidate.get("candidate_state") == "READY"
+            for candidate in candidates
+        ):
+            return
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "该股票未被今日可信日报标记为可模拟练习, 已阻止模拟买入。"
+                "下一步: 只选择连续两个交易日确认的候选。"
+            ),
+        )
+    if isinstance(brief, dict) and brief.get("action_state") == "RESEARCH_ONLY":
+        detail = (
+            "候选只完成第1个确认日, 已阻止模拟买入。"
+            "下一步: 等待下一可信交易日复核。"
+        )
+    else:
+        message = (
+            str(brief.get("today_message"))
+            if isinstance(brief, dict) and brief.get("today_message")
+            else "今日行动未通过安全检查"
+        )
+        next_step = (
+            str(brief.get("next_step"))
+            if isinstance(brief, dict) and brief.get("next_step")
+            else "请先刷新日报后再试。"
+        )
+        detail = f"{message} 下一步: {next_step}"
     raise HTTPException(
         status_code=409,
-        detail=f"数据检查未通过, 已阻止记录模拟成交: {reason}。下一步: {next_action}",
+        detail=detail,
     )
 
 
@@ -145,7 +164,11 @@ def reset(payload: ResetRequest, request: Request) -> dict:
 
 @router.post("/trades")
 def trade(payload: TradeRequest, request: Request) -> dict:
-    _require_trusted_data_gate(request)
+    _require_simulation_action(
+        request,
+        side=payload.side,
+        symbol=payload.symbol,
+    )
     try:
         return paper_account.record_trade(
             _data_dir(request),

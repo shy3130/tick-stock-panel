@@ -108,6 +108,99 @@ def test_custom_financial_provider_receives_shares_contract(monkeypatch):
     assert received == [("shares", ["600000.SH"], False)]
 
 
+def test_custom_financial_failure_records_error_and_never_reports_success(
+    tmp_path,
+    monkeypatch,
+):
+    from app.data_providers import custom as custom_sources
+    from app.data_providers.trust import DataProviderFetchFailed, load_latest_audits
+    from app.services import preferences
+
+    _write_instruments(tmp_path, ["600000.SH"])
+
+    class Provider:
+        def get_financials(self, table, symbols, latest_only=True):
+            raise TimeoutError("upstream timeout")
+
+    monkeypatch.setattr(financial_sync, "_financial_is_custom", lambda: True)
+    monkeypatch.setattr(preferences, "get_financial_provider", lambda: "tushare")
+    monkeypatch.setattr(custom_sources, "get_provider", lambda _name: Provider())
+
+    with pytest.raises(DataProviderFetchFailed, match=r"tushare.*financial_metrics"):
+        financial_sync.sync_metrics(tmp_path, CapabilitySet())
+
+    assert not (tmp_path / "financials" / "metrics" / "part.parquet").exists()
+    [audit] = load_latest_audits(tmp_path)
+    assert audit["dataset"] == "financial_metrics"
+    assert audit["provider"] == "tushare"
+    assert audit["status"] == "error"
+    assert audit["missing_symbols"] == ["600000.SH"]
+    assert audit["fallback_used"] is False
+
+
+def test_custom_financial_missing_point_in_time_fields_is_rejected(
+    tmp_path,
+    monkeypatch,
+):
+    from app.data_providers import custom as custom_sources
+    from app.data_providers.trust import DataQualityRejected, load_latest_audits
+    from app.services import preferences
+
+    _write_instruments(tmp_path, ["600000.SH"])
+
+    class Provider:
+        def get_financials(self, table, symbols, latest_only=True):
+            return pl.DataFrame({"symbol": ["600000.SH"], "roe": [8.0]})
+
+    monkeypatch.setattr(financial_sync, "_financial_is_custom", lambda: True)
+    monkeypatch.setattr(preferences, "get_financial_provider", lambda: "tushare")
+    monkeypatch.setattr(custom_sources, "get_provider", lambda _name: Provider())
+
+    with pytest.raises(DataQualityRejected, match=r"financial_metrics.missing_columns"):
+        financial_sync.sync_metrics(tmp_path, CapabilitySet())
+
+    assert not (tmp_path / "financials" / "metrics" / "part.parquet").exists()
+    [audit] = load_latest_audits(tmp_path)
+    assert audit["status"] == "invalid"
+    assert audit["issues"] == [
+        "financial_metrics.missing_columns:announce_date,period_end"
+    ]
+
+
+def test_custom_financial_partial_coverage_is_visible_in_receipt(
+    tmp_path,
+    monkeypatch,
+):
+    from app.data_providers import custom as custom_sources
+    from app.data_providers.trust import load_latest_audits
+    from app.services import preferences
+
+    _write_instruments(tmp_path, ["600000.SH", "000001.SZ"])
+
+    class Provider:
+        def get_financials(self, table, symbols, latest_only=True):
+            return pl.DataFrame(
+                {
+                    "symbol": ["600000.SH"],
+                    "period_end": [date(2026, 3, 31)],
+                    "announce_date": [date(2026, 4, 22)],
+                    "roe": [8.0],
+                }
+            )
+
+    monkeypatch.setattr(financial_sync, "_financial_is_custom", lambda: True)
+    monkeypatch.setattr(preferences, "get_financial_provider", lambda: "tushare")
+    monkeypatch.setattr(custom_sources, "get_provider", lambda _name: Provider())
+
+    assert financial_sync.sync_metrics(tmp_path, CapabilitySet()) == 1
+
+    [audit] = load_latest_audits(tmp_path)
+    assert audit["status"] == "partial"
+    assert audit["coverage_ratio"] == pytest.approx(0.5)
+    assert audit["missing_symbols"] == ["000001.SZ"]
+    assert audit["observed_end"] == "2026-03-31"
+
+
 def test_historical_turnover_uses_only_available_share_capital(monkeypatch):
     monkeypatch.setattr(pipeline, "cn_today", lambda: date(2026, 7, 18))
     bars = pl.DataFrame({

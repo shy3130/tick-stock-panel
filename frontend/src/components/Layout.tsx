@@ -53,6 +53,7 @@ import { api, type IndexQuote } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { toggleTheme, useTheme } from '@/lib/theme'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
+import { buildProviderStatusIndicators } from '@/lib/data-source-selection'
 
 // 品牌色 — 只用于 logo / brand 区域,不影响功能语义色
 const BRAND = '#8B5CF6'
@@ -352,20 +353,28 @@ export function Layout() {
   const isWatchlistMode = tier === 0
   const realtimeModeLabel = isWatchlistMode ? '自选股' : '全市场'
   // 当前实时行情数据源名称 (custom 时显示源名, tickflow 时不显示)
+  const providerCatalog = [
+    ...(dataSources?.builtin ?? []),
+    ...(dataSources?.plugins ?? []),
+    ...(dataSources?.custom ?? []),
+  ]
   const realtimeProvider = prefs?.realtime_data_provider
   const realtimeProviderName = realtimeProvider && realtimeProvider !== 'tickflow'
-    ? (dataSources?.custom?.find(s => s.name === realtimeProvider)?.display_name || realtimeProvider)
+    ? (providerCatalog.find(s => s.name === realtimeProvider)?.display_name || realtimeProvider)
     : null
 
   // 当前主数据源 (用于菜单底部状态条)
   const activeProvider = prefs?.daily_data_provider || 'tickflow'
-  const activeProviderName = activeProvider === 'tickflow'
-    ? 'TickFlow'
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.display_name || activeProvider)
+  const activeProviderItem = providerCatalog.find(s => s.name === activeProvider)
+  const activeProviderName = activeProviderItem?.display_name || activeProvider
   const activeProviderDatasets = activeProvider === 'tickflow'
     ? ['daily', 'adj_factor', 'realtime', 'minute']
-    : (dataSources?.custom?.find(s => s.name === activeProvider)?.datasets || [])
-  const isCustomActive = activeProvider !== 'tickflow'
+    : (activeProviderItem?.datasets || [])
+  const activeProviderIndicators = buildProviderStatusIndicators(activeProviderDatasets)
+  const isExternalActive = activeProvider !== 'tickflow'
+  const activeProviderKind = dataSources?.plugins?.some(s => s.name === activeProvider)
+    ? '插件'
+    : '自定义'
 
   // 轮询触发记录总数 → 更新监控中心徽标 (每 15 秒)
   const alertsTotalQuery = useQuery({
@@ -532,37 +541,32 @@ export function Layout() {
           title="数据源设置"
         >
           <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${
-            isCustomActive ? 'bg-accent/15' : 'bg-elevated'
+            isExternalActive ? 'bg-accent/15' : 'bg-elevated'
           }`}>
-            <Database className={`h-3 w-3 ${isCustomActive ? 'text-accent' : 'text-muted'}`} />
+            <Database className={`h-3 w-3 ${isExternalActive ? 'text-accent' : 'text-muted'}`} />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] font-medium text-secondary truncate group-hover:text-foreground transition-colors">
                 {activeProviderName}
               </span>
-              {isCustomActive && (
+              {isExternalActive && (
                 <span className="shrink-0 rounded bg-accent/15 px-1 py-px text-[8px] font-semibold uppercase tracking-wider text-accent">
-                  自定义
+                  {activeProviderKind}
                 </span>
               )}
             </div>
             <div className="mt-0.5 flex gap-0.5">
-              {(['daily', 'adj_factor', 'realtime', 'minute'] as const).map(ds => {
-                const supported = ds === 'daily' || ds === 'adj_factor' || ds === 'realtime' || ds === 'minute'
-                const active = supported && (
-                  isCustomActive ? activeProviderDatasets.includes(ds) : true
-                )
-                return (
-                  <span
-                    key={ds}
-                    title={ds}
-                    className={`h-1 flex-1 rounded-full transition-colors ${
-                      active ? 'bg-accent/60' : 'bg-muted/20'
-                    }`}
-                  />
-                )
-              })}
+              {activeProviderIndicators.map(indicator => (
+                <span
+                  key={indicator.dataset}
+                  title={`${indicator.label}：${indicator.supported ? '支持' : '不支持'}`}
+                  aria-label={`${indicator.label}：${indicator.supported ? '支持' : '不支持'}`}
+                  className={`h-1 flex-1 rounded-full transition-colors ${
+                    indicator.supported ? 'bg-accent/60' : 'bg-muted/20'
+                  }`}
+                />
+              ))}
             </div>
           </div>
         </button>

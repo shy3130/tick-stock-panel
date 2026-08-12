@@ -709,10 +709,14 @@ def load_market_data_matrix_from_parquet(
         pa.schema([("date", pa.date32())]),
         flavor="hive",
     )
+    parquet_files = sorted(root.glob("date=*/part.parquet"))
+    if not parquet_files:
+        raise ValueError("matrix parquet root contains no formal part.parquet files")
     dataset = pads.dataset(
-        str(root),
+        [str(path) for path in parquet_files],
         format="parquet",
         partitioning=partitioning,
+        partition_base_dir=str(root),
     )
     _validate_matrix_dataset_schema(dataset)
 

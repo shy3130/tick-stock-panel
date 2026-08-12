@@ -1,0 +1,8 @@
+name: tushare
+display_name: "Tushare Pro（主数据源）"
+runtime: python
+entry: app.plugins.tushare.provider:TushareProvider
+check: app.plugins.tushare.check:availability
+datasets: [instruments, daily, adj_factor, financial]
+description: "带来源审计的 A 股标的、未复权日线、复权因子和财务数据。需要 TUSHARE_TOKEN；不会静默切换到其他数据源。"
+install_hint: "安装依赖后在根目录 .env 配置 TUSHARE_TOKEN，再重启后端。"
