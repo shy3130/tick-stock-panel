@@ -86,7 +86,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           if (c.op !== 'truth' && (c.value === null || c.value === undefined)) throw new Error('阈值条件需要数值')
         }
       }
-      if (d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只股票')
+      if (d.scope === 'sector') throw new Error('板块(scope=sector)当前不可用,请改选「指定股票」或「全市场」')
       return api.monitorRuleSave(d)
     },
     onSuccess: () => {
@@ -235,6 +235,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         <div className="flex items-center gap-2">
           <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
             {(options.data?.scopes ?? []).map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+            {/* 仅历史 sector 规则可见的 disabled 选项: 不可新建, 必须显式改 scope */}
+            {draft.scope === 'sector' && <option value="sector" disabled>板块（当前不可用）</option>}
           </select>
           {draft.scope === 'symbols' && (
             <div className="flex-1 flex flex-wrap items-center gap-1.5">
@@ -269,7 +271,9 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             </div>
           )}
           {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有股票生效</span>}
-          {draft.scope === 'sector' && <span className="text-[11px] text-muted/60">板块精确过滤(开发中,当前等同全市场)</span>}
+          {draft.scope === 'sector' && (
+            <span className="text-[11px] text-warning">板块(scope=sector)当前不可用且不会触发; 请改选「指定股票」或「全市场」后再保存。</span>
+          )}
         </div>
       </div>
 

@@ -31,10 +31,10 @@ const PAGE_LABELS: Record<string, string> = {
 }
 
 const SIDEBAR_INDEX_OPTIONS = [
-  { symbol: '000001.SH', name: '上证指数' },
-  { symbol: '399001.SZ', name: '深证成指' },
-  { symbol: '399006.SZ', name: '创业板指' },
-  { symbol: '000680.SH', name: '科创综指' },
+  { symbol: '000001.INDEX', name: '上证指数' },
+  { symbol: '399001.INDEX', name: '深证成指' },
+  { symbol: '399006.INDEX', name: '创业板指' },
+  { symbol: '000680.INDEX', name: '科创综指' },
 ]
 
 const EXTRA_WEBHOOK_CHANNELS = [
@@ -455,9 +455,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </Card>
         </div>
 
-        {/* 推送通知 — 监控告警的外部推送渠道 (全局配置)。
-            飞书已实现; 微信开发中, QMT/ptrade 待定。
-            每个渠道合并成一行: 勾选=新建规则默认推送, 点行展开地址配置。 */}
+        {/* 推送通知：每个已接入渠道合并成一行，勾选默认并展开配置。 */}
         <Card icon={Webhook} title="推送通知">
           <p className="text-xs text-secondary mb-3">
             监控规则命中后,可把告警推送到外部。勾选渠道作为<b className="text-foreground/80">新建规则的默认推送</b>,
