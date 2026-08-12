@@ -13,7 +13,6 @@ from app.indicators.engine_compat import (
     compute_engine_compat_today,
 )
 
-
 _FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "engine_technicals_compat_v1.json"
 
 
@@ -140,3 +139,48 @@ def test_engine_compat_live_last_row_matches_history_recomputation() -> None:
 
     missing_state = live_state.drop(next(iter(ENGINE_COMPAT_LIVE_STATE_COLUMNS)))
     assert compute_engine_compat_today(missing_state, today).is_empty()
+
+
+def test_engine_compat_today_skips_symbols_with_null_live_state() -> None:
+    """_build_live_agg 以 LEFT JOIN 注入 engine compat 状态: 未通过 warmup 的标的
+    其 _ec_*_hist 列为 null (列存在, 值为 null)。compute_engine_compat_today 必须
+    剔除这些行, 而非在 len(None) 上抛 TypeError。
+
+    回归根因: compute_enriched_today 对带 null 状态列的 live_agg 调用本函数时,
+    历史版本会 raise "object of type 'NoneType' has no len()" (len(row["_ec_open_hist"])),
+    该异常上冒 _flush_live_enriched 被吞为 "enriched 计算失败: NoneType...",
+    导致 enriched 写盘/缓存始终不完成 → 实时行情一直 stale。
+    """
+    all_rows = _synth_ohlcv()
+    history = all_rows.head(359)
+    today_valid = all_rows.tail(1)
+    live_state = build_engine_compat_live_state(history, history["date"][-1])
+
+    # 构造一个未通过 warmup 的标的: 同样的状态列但 _ec_*_hist 为 null
+    null_row: dict[str, object] = {col: None for col in live_state.columns}
+    null_row["symbol"] = "999999.SZ"
+    live_with_null = pl.concat(
+        [live_state, pl.DataFrame([null_row], schema=live_state.schema)],
+        how="vertical_relaxed",
+    )
+
+    today_with_null = pl.concat([
+        today_valid,
+        pl.DataFrame([{
+            "symbol": "999999.SZ",
+            "date": today_valid["date"][-1],
+            "open": 10.0,
+            "high": 10.5,
+            "low": 9.8,
+            "close": 10.2,
+            "volume": 1000.0,
+        }]),
+    ], how="diagonal_relaxed")
+
+    # 历史版本会在这一行 raise TypeError: object of type 'NoneType' has no len()
+    result = compute_engine_compat_today(live_with_null, today_with_null)
+
+    # null 状态标的被剔除, 仅保留有效标的
+    assert "999999.SZ" not in result["symbol"].to_list()
+    assert result.height == 1
+    assert set(ENGINE_COMPAT_COLUMNS).issubset(result.columns)

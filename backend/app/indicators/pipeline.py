@@ -1865,7 +1865,7 @@ def compute_enriched_today(
         if not ec_today.is_empty():
             ec_cols = [c for c in ENGINE_COMPAT_COLUMNS if c not in df.columns]
             if ec_cols:
-                df = df.join(ec_today.select("symbol", *ec_cols), on="symbol", how="inner")
+                df = df.join(ec_today.select("symbol", *ec_cols), on="symbol", how="left")
 
     # 自定义信号（日级实时路径同样注入）
     from app.strategy import custom_signals

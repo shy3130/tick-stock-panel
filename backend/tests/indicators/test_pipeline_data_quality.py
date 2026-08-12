@@ -72,7 +72,7 @@ def test_daily_change_uses_raw_prices_to_avoid_ex_rights_spikes():
     assert abs(row["amplitude"] - ((8.49 - 8.02) / 8.13)) < 1e-12
 
 
-def test_enriched_today_recomputes_quote_change_after_adjustment():
+def test_enriched_today_recomputes_quote_change_after_adjustment(monkeypatch):
     live_agg = pl.DataFrame({
         "symbol": ["600988.SH"],
         "ema5": [20.0],
@@ -144,6 +144,41 @@ def test_enriched_today_recomputes_quote_change_after_adjustment():
     assert row["change_amount"] == 1.0
     assert row["amplitude"] == 0.3
     assert row["turnover_rate"] == 10.0
+
+    # engine compat 只返回已 warmup 标的时，主 enriched 必须左连保留历史不足标的。
+    live_with_engine = live_agg.with_columns([
+        pl.lit(None).alias(c)
+        for c in pipeline_mod.ENGINE_COMPAT_LIVE_STATE_COLUMNS
+    ])
+    live_two = pl.concat([
+        live_with_engine,
+        live_with_engine.with_columns(pl.lit("999999.SZ").alias("symbol")),
+    ])
+    today_two = pl.concat([
+        today_ohlcv,
+        today_ohlcv.with_columns(pl.lit("999999.SZ").alias("symbol")),
+    ])
+    instruments_two = pl.concat([
+        instruments,
+        instruments.with_columns(pl.lit("999999.SZ").alias("symbol")),
+    ])
+    partial_compat = pl.DataFrame({
+        "symbol": ["600988.SH"],
+        **{column: [None] for column in pipeline_mod.ENGINE_COMPAT_COLUMNS},
+    })
+    monkeypatch.setattr(
+        pipeline_mod,
+        "compute_engine_compat_today",
+        lambda _live, _today: partial_compat,
+    )
+
+    out_two = compute_enriched_today(
+        live_two,
+        pl.DataFrame(),
+        today_two,
+        instruments=instruments_two,
+    )
+    assert set(out_two["symbol"].to_list()) == {"600988.SH", "999999.SZ"}
 
 
 def test_market_snapshot_lot_volume_maps_to_shares():
