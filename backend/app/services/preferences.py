@@ -71,9 +71,6 @@ def get_realtime_watchlist_symbols() -> list[str]:
     return out
 
 
-def set_realtime_watchlist_symbols(symbols: list[str]) -> list[str]:  # noqa: ARG001
-    """兼容旧接口: Free 实时标的现在由自选页前 5 个决定。"""
-    return get_realtime_watchlist_symbols()
 
 
 def set_realtime_quote_interval(interval: float) -> float:
@@ -197,15 +194,6 @@ def set_pipeline_pull_types(cfg: dict) -> dict:
     return get_pipeline_pull_types()
 
 
-def get_pipeline_index_symbols() -> str:
-    """指数自定义拉取代码(逗号/换行/空格分隔)。空串表示全量。"""
-    return str(load().get("pipeline_index_symbols", "") or "").strip()
-
-
-def set_pipeline_index_symbols(symbols: str) -> str:
-    """保存指数自定义代码,返回规范化后的字符串。"""
-    save({"pipeline_index_symbols": symbols})
-    return get_pipeline_index_symbols()
 
 
 def get_pipeline_schedule() -> dict:
@@ -393,7 +381,7 @@ SSE_REFRESH_PAGES_DEFAULT = {
     "limit-ladder": False,
 }
 
-SIDEBAR_INDEX_SYMBOLS_DEFAULT = ["000001.SH", "399001.SZ", "399006.SZ", "000680.SH"]
+SIDEBAR_INDEX_SYMBOLS_DEFAULT = ["000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX"]
 
 
 # ===== 盘中实时行情范围 (独立于盘后管道范围) =====
@@ -418,11 +406,13 @@ def get_realtime_index_mode() -> str:
 
 
 def get_realtime_index_symbols() -> list[str]:
+    from app.data_providers.fquant.symbols import canonical_index_symbol
     stored = load().get("realtime_index_symbols", SIDEBAR_INDEX_SYMBOLS_DEFAULT)
     if isinstance(stored, str):
         import re
         stored = [s.strip() for s in re.split(r"[,\s]+", stored) if s.strip()]
-    return [str(s) for s in stored if str(s).strip()]
+    # 兼容旧存量值: 内存规范化为 .INDEX (不回写磁盘)
+    return [canonical_index_symbol(str(s)) for s in stored if str(s).strip()]
 
 
 def set_realtime_quote_scope(cfg: dict) -> dict:
@@ -465,10 +455,23 @@ def set_sse_refresh_pages(pages: dict[str, bool]) -> dict[str, bool]:
 
 
 def get_sidebar_index_symbols() -> list[str]:
-    """返回左侧菜单显示的指数代码。"""
+    """返回左侧菜单显示的 canonical 指数代码。"""
+    import re
+
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+
     stored = load().get("sidebar_index_symbols", SIDEBAR_INDEX_SYMBOLS_DEFAULT)
+    if isinstance(stored, str):
+        stored = [s for s in re.split(r"[,\s]+", stored) if s]
+    if not isinstance(stored, list):
+        stored = SIDEBAR_INDEX_SYMBOLS_DEFAULT
     allowed = set(SIDEBAR_INDEX_SYMBOLS_DEFAULT)
-    return [s for s in stored if s in allowed]
+    normalized = (
+        canonical_index_symbol(str(s))
+        for s in stored
+        if str(s).strip()
+    )
+    return list(dict.fromkeys(s for s in normalized if s in allowed))
 
 
 def get_strategy_monitor_enabled() -> bool:
@@ -778,10 +781,10 @@ def set_structured_plan_check_enabled(enabled: bool) -> bool:
     return bool(enabled)
 
 
-# ===== 受控外部 fallback (P1 realtime, 默认关闭) =====
+# ===== 受控外部 fallback (默认关闭) =====
 # 完整契约见 backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md 与 AGENTS.md §4。
-# 首批仅 realtime scope 启用; depth scope 占位 (P2 接线)。
-# 外部数据只用于只读展示, 绝不写入 canonical/enriched/选股/监控/回测。
+# realtime/depth scope 均已接线；外部数据只用于只读展示，绝不写入
+# canonical/enriched/选股/监控/回测。
 
 # 合法 scope 白名单 (契约: 仅 realtime/depth 子集)。
 _EXTERNAL_FALLBACK_SCOPES_ALLOWED = ("realtime", "depth")

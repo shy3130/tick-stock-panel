@@ -354,7 +354,6 @@ def get_preferences() -> dict:
         "pipeline_pull_etf": preferences.get_pipeline_pull_etf(),
         "pipeline_pull_index": preferences.get_pipeline_pull_index(),
         "pipeline_pull_hk": preferences.get_pipeline_pull_hk(),
-        "pipeline_index_symbols": preferences.get_pipeline_index_symbols(),
         "pipeline_schedule": preferences.get_pipeline_schedule(),
         "instruments_schedule": preferences.get_instruments_schedule(),
         "enriched_batch_size": preferences.get_enriched_batch_size(),
@@ -544,16 +543,6 @@ def update_realtime_quote_scope(req: RealtimeQuoteScopePrefs) -> dict:
     return preferences.set_realtime_quote_scope(cfg)
 
 
-class RealtimeWatchlistPrefs(BaseModel):
-    symbols: list[str] = []
-
-
-@router.put("/preferences/realtime-watchlist")
-def update_realtime_watchlist(req: RealtimeWatchlistPrefs) -> dict:
-    """兼容旧入口；Free 实时标的由自选页前 5 个决定。"""
-    from app.services import preferences
-    symbols = preferences.set_realtime_watchlist_symbols(req.symbols)
-    return {"realtime_watchlist_symbols": symbols}
 
 
 class IndicesNavPinnedPrefs(BaseModel):
@@ -624,17 +613,6 @@ def update_pipeline_pull_types(req: PipelinePullTypesIn) -> dict:
     return preferences.set_pipeline_pull_types(cfg)
 
 
-class PipelineIndexSymbolsIn(BaseModel):
-    """指数自定义拉取代码(逗号/换行/空格分隔,空串表示全量)。"""
-    symbols: str = ""
-
-
-@router.put("/preferences/pipeline-index-symbols")
-def update_pipeline_index_symbols(req: PipelineIndexSymbolsIn) -> dict:
-    """保存指数自定义拉取代码。"""
-    from app.services import preferences
-    symbols = preferences.set_pipeline_index_symbols(req.symbols)
-    return {"pipeline_index_symbols": symbols}
 
 
 class QuoteIntervalIn(BaseModel):
@@ -720,9 +698,8 @@ class WebhookEnabledDefaultIn(BaseModel):
 
 @router.put("/preferences/webhook-enabled-default")
 def update_webhook_enabled_default(req: WebhookEnabledDefaultIn) -> dict:
-    """新建监控规则时是否默认勾选「飞书推送」。
+    """设置新建监控规则是否默认启用已配置的 Webhook 推送。
 
-    数据模型当前只有飞书一个可用渠道 (QMT/ptrade 待定),故此处仅一个布尔。
     单条规则仍可在规则编辑页独立修改此项。
     """
     from app.services import preferences
@@ -736,7 +713,7 @@ def update_quote_interval(req: QuoteIntervalIn, request: Request) -> dict:
     """更新行情轮询间隔。按档位自动 clamp。"""
     qs = getattr(request.app.state, "quote_service", None)
     if not qs:
-        return {"interval": req.interval, "min_interval": qs.get_min_interval(), "max_interval": 60.0}
+        return {"interval": req.interval, "min_interval": 5.0, "max_interval": 60.0}
     clamped = qs.set_interval(req.interval)
     return {
         "interval": clamped,
@@ -957,7 +934,7 @@ def update_review_schedule(req: ReviewScheduleIn, request: Request) -> dict:
 
 
 class ReviewPushIn(BaseModel):
-    channels: list[str]  # 多选: ['feishu'] 等; 空数组=不推送。微信等开发中
+    channels: list[str]  # 多选；空数组表示不推送，写入时按支持渠道白名单过滤。
 
 
 @router.put("/preferences/review-push")
