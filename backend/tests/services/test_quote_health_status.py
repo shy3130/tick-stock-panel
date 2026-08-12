@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 
 import polars as pl
@@ -88,6 +89,17 @@ def _new_service(monkeypatch, provider) -> quote_service.QuoteService:
     return service
 
 
+def _freeze_market_today(monkeypatch, d: date = date(2026, 8, 7)) -> None:
+    """把当前交易日固定为 d, 使 source_as_of (默认 2026-08-07) 的日期判定确定性。
+
+    _data_health 现在要求 source_as_of == 当前交易日才判 ready; 默认 _quote_row
+    的 timestamp 为 2026-08-07, 所以 ready 类用例统一冻结当天。
+    """
+    monkeypatch.setattr(
+        quote_service.QuoteService, "_market_today", staticmethod(lambda: d)
+    )
+
+
 def _quote_row(symbol="600519.SH", ts="2026-08-07") -> dict:
     return {
         "symbol": symbol,
@@ -143,6 +155,13 @@ def test_ready_after_non_empty_success(monkeypatch):
     provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row()]))
     service = _new_service(monkeypatch, provider)
     service._enabled = True
+    _freeze_market_today(monkeypatch)  # source_as_of=2026-08-07 == 当天
+    trusted: list[date] = []
+    monkeypatch.setattr(
+        service,
+        "_trust_current_source_date",
+        lambda: trusted.append(service._market_today()),
+    )
 
     service._fetch_full_market_quotes()
     status = service.status()
@@ -151,6 +170,7 @@ def test_ready_after_non_empty_success(monkeypatch):
     assert status["total_symbol_count"] > 0
     assert status["last_error_code"] is None
     assert status["source_as_of"] == "2026-08-07"
+    assert trusted == [date(2026, 8, 7)]
 
 
 def test_normalized_index_symbol_populates_index_cache(monkeypatch):
@@ -214,6 +234,7 @@ def test_stale_when_success_data_exceeds_recent_window(monkeypatch):
     provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row()]))
     service = _new_service(monkeypatch, provider)
     service._enabled = True
+    _freeze_market_today(monkeypatch)  # 当天, 使 stale 只由时间窗口触发
 
     service._fetch_full_market_quotes()
     # 成功一次, 然后把"最近成功时间"人工拨到很久以前
@@ -223,6 +244,150 @@ def test_stale_when_success_data_exceeds_recent_window(monkeypatch):
     assert status["has_recent_data"] is False
     # source_as_of 仍保留历史快照时间戳
     assert status["source_as_of"] == "2026-08-07"
+
+
+def test_ready_when_source_as_of_equals_current_trading_day(monkeypatch):
+    """当日数据: source_as_of == 当前交易日 且在轮询窗口内 → ready。"""
+    provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row(ts="2026-08-07")]))
+    service = _new_service(monkeypatch, provider)
+    service._enabled = True
+    _freeze_market_today(monkeypatch, date(2026, 8, 7))  # 与 source 同日
+
+    service._fetch_full_market_quotes()
+    status = service.status()
+    assert status["data_state"] == "ready"
+    assert status["has_recent_data"] is True
+    assert status["source_as_of"] == "2026-08-07"
+
+
+def test_stale_when_source_as_of_is_previous_trading_day(monkeypatch):
+    """昨日源立即 stale: source_as_of 落后于当前交易日时, 即便本轮刚成功、
+    在轮询窗口内、total>0, 也必须 data_state=stale / has_recent_data=false。
+
+    复现 "本地 daily_markets 快照停在昨天但轮询仍成功" 的误导场景:
+    修复前会显示 ready, 修复后历史快照必须判 stale。
+    """
+    provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row(ts="2026-08-07")]))
+    service = _new_service(monkeypatch, provider)
+    service._enabled = True
+    _freeze_market_today(monkeypatch, date(2026, 8, 8))  # 当前交易日 = 次日
+
+    service._fetch_full_market_quotes()
+    status = service.status()
+    assert status["data_state"] == "stale"
+    assert status["has_recent_data"] is False
+    assert status["source_as_of"] == "2026-08-07"
+    # 轮询本身是成功的 (last_error_code 为空), 仅数据新鲜度判 stale
+    assert status["last_error_code"] is None
+    assert status["symbol_count"] > 0
+
+
+def test_stale_full_market_never_builds_canonical_rows_or_evaluates_monitors(monkeypatch):
+    """昨日快照只可供降级展示，禁止改写今日 canonical/enriched 或触发监控。"""
+    provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row(ts="2026-08-07")]))
+    service = _new_service(monkeypatch, provider)
+    service._enabled = True
+    _freeze_market_today(monkeypatch, date(2026, 8, 8))
+    side_effects: list[str] = []
+    monkeypatch.setattr(
+        service,
+        "_build_daily",
+        lambda records: side_effects.append("build_daily") or pl.DataFrame(),
+    )
+    monkeypatch.setattr(
+        service,
+        "_evaluate_monitors",
+        lambda *args: side_effects.append("evaluate_monitors"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_trust_current_source_date",
+        lambda: side_effects.append("trust_live_date"),
+    )
+
+    service._fetch_full_market_quotes()
+
+    assert service.status()["data_state"] == "stale"
+    assert side_effects == []
+    assert service._update_event.is_set()
+
+
+def test_stale_watchlist_never_builds_canonical_rows_or_evaluates_monitors(monkeypatch):
+    """自选轮询同样不得把昨日 provider 行情贴上今天日期后写盘。"""
+    provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row(ts="2026-08-07")]))
+    service = _new_service(monkeypatch, provider)
+    service._enabled = True
+    _wire_preferences(monkeypatch, watchlist_symbols=["600519.SH"])
+    _freeze_market_today(monkeypatch, date(2026, 8, 8))
+    side_effects: list[str] = []
+    monkeypatch.setattr(
+        service,
+        "_build_daily",
+        lambda records: side_effects.append("build_daily") or pl.DataFrame(),
+    )
+    monkeypatch.setattr(
+        service,
+        "_evaluate_monitors",
+        lambda *args: side_effects.append("evaluate_monitors"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_trust_current_source_date",
+        lambda: side_effects.append("trust_live_date"),
+    )
+
+    service._fetch_watchlist_quotes()
+
+    assert service.status()["data_state"] == "stale"
+    assert side_effects == []
+    assert service._update_event.is_set()
+
+
+def test_stale_when_source_as_of_is_missing(monkeypatch):
+    """缺少源日期无法证明数据新鲜，成功非空轮次也必须判 stale。"""
+    provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row(ts=None)]))
+    service = _new_service(monkeypatch, provider)
+    service._enabled = True
+    _freeze_market_today(monkeypatch)
+
+    service._fetch_full_market_quotes()
+    status = service.status()
+    assert status["data_state"] == "stale"
+    assert status["has_recent_data"] is False
+    assert status["source_as_of"] is None
+
+
+def test_missing_source_as_of_clears_previous_fresh_date(monkeypatch):
+    """新一轮缺少源日期时必须清掉旧日期，不能沿用上一轮 ready 状态。"""
+    rows = {"value": pl.DataFrame([_quote_row(ts="2026-08-07")])}
+    provider = _make_provider(lambda **kw: rows["value"])
+    service = _new_service(monkeypatch, provider)
+    service._enabled = True
+    _freeze_market_today(monkeypatch)
+
+    service._fetch_full_market_quotes()
+    assert service.status()["data_state"] == "ready"
+
+    rows["value"] = pl.DataFrame([_quote_row(ts=None)])
+    service._fetch_full_market_quotes()
+    status = service.status()
+    assert status["data_state"] == "stale"
+    assert status["has_recent_data"] is False
+    assert status["source_as_of"] is None
+
+
+def test_stale_when_source_as_of_is_invalid(monkeypatch):
+    """无法解析的源日期必须 fail-closed，不能伪装成 ready。"""
+    provider = _make_provider(lambda **kw: pl.DataFrame([_quote_row(ts="unknown")]))
+    service = _new_service(monkeypatch, provider)
+    service._enabled = True
+    _freeze_market_today(monkeypatch)
+
+    service._fetch_full_market_quotes()
+    status = service.status()
+    assert status["data_state"] == "stale"
+    assert status["has_recent_data"] is False
+    assert status["source_as_of"] == "unknown"
 
 
 def test_ready_then_empty_transitions_back(monkeypatch):
@@ -235,6 +400,7 @@ def test_ready_then_empty_transitions_back(monkeypatch):
     provider = _make_provider(_switch)
     service = _new_service(monkeypatch, provider)
     service._enabled = True
+    _freeze_market_today(monkeypatch)  # 当天, 保证首拉判 ready
 
     service._fetch_full_market_quotes()
     assert service.status()["data_state"] == "ready"
@@ -256,6 +422,7 @@ def test_watchlist_path_records_health(monkeypatch):
         quote_service.QuoteService, "realtime_mode", staticmethod(lambda: "watchlist")
     )
     _wire_preferences(monkeypatch, watchlist_symbols=["600519.SH"], pull_index=False)
+    _freeze_market_today(monkeypatch)  # 当天, 保证首拉判 ready
 
     service._fetch_quotes()
     assert service.status()["data_state"] == "ready"

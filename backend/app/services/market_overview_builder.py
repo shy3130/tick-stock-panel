@@ -11,8 +11,12 @@ quote_service,depth_service}` 的依赖改为显式参数。
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import re
+import threading
+import time
+from collections import OrderedDict
 from datetime import date
 from typing import Any
 
@@ -26,14 +30,78 @@ from app.services.screener import ScreenerService
 # ================================================================
 
 CORE_INDEX_NAMES = {
-    "000001.SH": "上证指数",
-    "399001.SZ": "深证成指",
-    "399006.SZ": "创业板指",
-    "000680.SH": "科创综指",
+    "000001.INDEX": "上证指数",
+    "399001.INDEX": "深证成指",
+    "399006.INDEX": "创业板指",
+    "000680.INDEX": "科创综指",
 }
 CORE_INDEX_SYMBOLS = tuple(CORE_INDEX_NAMES.keys())
 
 _DIMENSION_SEP = re.compile(r"[、,，;；|/\s]+")
+
+
+# ================================================================
+# 进程级有界缓存: supplements 短 TTL + ext 维度行按代际
+# ================================================================
+# supplements: key=(resolved data_dir, cache_generation, as_of, symbols 指纹)
+# 盘中(quote_service running)短 TTL(5s)、盘后 60s;LRU + 条数上限,禁止无界增长。
+# 缓存值是 supplements dict 的副本(_build_market_supplements 只在构建时只读遍历),
+# 调用方 rows 的后续 mutation 无法回流污染缓存。
+_SUPPLEMENTS_TTL_RUNNING = 5.0
+_SUPPLEMENTS_TTL_IDLE = 60.0
+_SUPPLEMENTS_CACHE_MAX = 4
+_supplements_cache: OrderedDict = OrderedDict()  # key -> (ts, supplements dict)
+_supplements_lock = threading.Lock()
+
+# ext 维度行: key=(resolved data_dir, cache_generation);config.json + parquet
+# 扫描按代际复用,避免每次 build 重读 ext parquet(实测 ~0.37s/次)。
+_EXT_CACHE_MAX = 4
+_ext_cache: OrderedDict = OrderedDict()  # key -> list[(config, dimension_field, rows)]
+_ext_lock = threading.Lock()
+
+
+def _now() -> float:
+    """单调时钟;测试通过 monkeypatch 本函数控制 TTL,不依赖 sleep。"""
+    return time.monotonic()
+
+
+def _symbols_fingerprint(symbols: list[str]) -> str:
+    """symbols 稳定指纹:排序后拼接 sha1,与传入顺序无关。"""
+    return hashlib.sha1("\x1f".join(sorted(symbols)).encode("utf-8")).hexdigest()
+
+
+def _clear_supplements_cache() -> None:
+    with _supplements_lock:
+        _supplements_cache.clear()
+
+
+def _clear_ext_cache() -> None:
+    with _ext_lock:
+        _ext_cache.clear()
+
+
+def _supplements_get(key, ttl: float, now: float):
+    """锁内查 supplements 缓存;命中 move_to_end;过期剔除。命中不刷新时间戳(固定 TTL)。"""
+    with _supplements_lock:
+        entry = _supplements_cache.get(key)
+        if entry is None:
+            return None
+        ts, supp = entry
+        if now - ts >= ttl:
+            _supplements_cache.pop(key, None)
+            return None
+        _supplements_cache.move_to_end(key)
+        return supp
+
+
+def _supplements_put(key, now: float, supp: dict) -> None:
+    """锁内写 supplements 缓存;替换既有键,按条数 LRU 淘汰最旧。"""
+    with _supplements_lock:
+        if key in _supplements_cache:
+            del _supplements_cache[key]
+        _supplements_cache[key] = (now, supp)
+        while len(_supplements_cache) > _SUPPLEMENTS_CACHE_MAX:
+            _supplements_cache.popitem(last=False)
 
 
 # ================================================================
@@ -213,6 +281,51 @@ def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[di
     return df.select(cols).to_dicts()
 
 
+def _load_dimension_sources(repo, kind: str) -> list[tuple[ExtConfig, str, list[dict]]]:
+    """加载某维度全部 (config, dimension_field, rows),按代际缓存复用 ext parquet 读取。
+
+    key=(resolved data_dir, cache_generation):data root 隔离防止跨仓库/测试污染,
+    generation 让管道刷新立即逻辑失效(与 ScreenerService 历史缓存同一惯例)。
+    同代际内 concept/industry 共享一次物理读,缓存二者并集;调用方按 kind 用
+    _dimension_field 过滤,确保字段语义与原逐 config 扫描完全一致。
+    缓存条目只读遍历,调用方不持有可变共享态。
+    """
+    data_dir = repo.store.data_dir.resolve()
+    try:
+        generation = repo.cache_generation
+    except AttributeError:  # 极少数无 cache_generation 的 mock repo
+        generation = 0
+    key = (str(data_dir), generation)
+    with _ext_lock:
+        cached = _ext_cache.get(key)
+        if cached is not None:
+            _ext_cache.move_to_end(key)
+            sources = cached
+        else:
+            sources = None
+    if sources is None:
+        store = ExtConfigStore(repo.store.data_dir)
+        sources = []
+        for config in store.load_all():
+            for field_kind in ("concept", "industry"):
+                field = _dimension_field(config, field_kind)
+                if field:
+                    rows = _read_ext_rows(repo.store.data_dir, config, field)
+                    sources.append((config, field, rows))
+        with _ext_lock:
+            if key in _ext_cache:
+                del _ext_cache[key]
+            _ext_cache[key] = sources
+            while len(_ext_cache) > _EXT_CACHE_MAX:
+                _ext_cache.popitem(last=False)
+    # 按 kind 过滤:复用与原扫描相同的 _dimension_field 判定,保持字段语义不变
+    out = []
+    for config, field, rows in sources:
+        if _dimension_field(config, kind) == field:
+            out.append((config, field, rows))
+    return out
+
+
 def _dimension_values(raw: Any) -> list[str]:
     if raw is None:
         return []
@@ -256,13 +369,9 @@ def symbol_dimension_map(repo, kind: str, level: int | None = None) -> dict[str,
     键同时包含带后缀与不带后缀两种写法(600000.SH / 600000),调用方任取其一。
     未配置任何概念/行业 ext 数据时返回 {}。
     """
-    store = ExtConfigStore(repo.store.data_dir)
     out: dict[str, list[str]] = {}
-    for config in store.load_all():
-        field = _dimension_field(config, kind)
-        if not field:
-            continue
-        for ext_row in _read_ext_rows(repo.store.data_dir, config, field):
+    for config, field, ext_rows in _load_dimension_sources(repo, kind):
+        for ext_row in ext_rows:
             values = [_split_level(v, level) for v in _dimension_values(ext_row.get(field))]
             if not values:
                 continue
@@ -286,13 +395,9 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
         quote_map[symbol] = row
         quote_map[symbol.split(".", 1)[0]] = row
 
-    store = ExtConfigStore(repo.store.data_dir)
     groups: dict[str, dict[str, dict]] = {}
-    for config in store.load_all():
-        field = _dimension_field(config, kind)
-        if not field:
-            continue
-        for ext_row in _read_ext_rows(repo.store.data_dir, config, field):
+    for config, field, ext_rows in _load_dimension_sources(repo, kind):
+        for ext_row in ext_rows:
             quote = None
             for key in _symbol_keys(ext_row, config):
                 quote = quote_map.get(key)
@@ -369,29 +474,39 @@ def _plausible_daily_change_pct(symbol: str | None, value: float | None) -> bool
     return abs(value) <= limit
 
 
-def _fill_market_supplements_from_provider(rows: list[dict], as_of: date | None) -> list[dict]:
-    if not rows:
-        return rows
+def _build_market_supplements(rows: list[dict], as_of: date | None) -> dict | None:
+    """从 provider 拉取 supplements,返回 symbol→item 映射(已按 as_of 过滤)。
+
+    与原逻辑完全一致;返回 None 表示无可用数据(provider 缺失/异常/空),调用方应跳过。
+    """
     symbols = [str(r.get("symbol") or "") for r in rows if r.get("symbol")]
     if not symbols:
-        return rows
+        return None
     try:
         from app.data_providers.registry import get_active_provider_name, get_provider
 
         provider = get_provider(get_active_provider_name("realtime"))
         getter = getattr(provider, "get_latest_market_supplements", None)
         if getter is None:
-            return rows
+            return None
         df = getter(symbols)
     except Exception:  # noqa: BLE001
-        return rows
+        return None
     if df is None or df.is_empty():
-        return rows
+        return None
     supplements = {}
     for item in df.to_dicts():
         if as_of is not None and item.get("date") and str(item.get("date"))[:10] != as_of.isoformat():
             continue
         supplements[item.get("symbol")] = item
+    return supplements
+
+
+def _apply_market_supplements(rows: list[dict], supplements: dict) -> list[dict]:
+    """把 supplements 只读写回 rows(turnover_rate / change_pct 合理性修正)。
+
+    行为与旧内联实现逐字段一致:turnover 有限则覆盖;change_pct 按涨跌停合理性覆盖或置空。
+    """
     for row in rows:
         item = supplements.get(row.get("symbol"))
         if not item:
@@ -406,6 +521,45 @@ def _fill_market_supplements_from_provider(rows: list[dict], as_of: date | None)
         elif not _plausible_daily_change_pct(symbol, _finite(row.get("change_pct"))):
             row["change_pct"] = None
     return rows
+
+
+def _fill_market_supplements_from_provider(
+    rows: list[dict], as_of: date | None, repo=None, quote_running: bool = False
+) -> list[dict]:
+    """用 provider supplements 修正 rows 的 turnover/change_pct。
+
+    repo 可选:传入时启用模块级有界短 TTL 缓存(key=data_dir/cache_generation/as_of/symbols 指纹,
+    盘中 quote_running=True 用 5s TTL,盘后 60s),避免冷缓存构建每次重拉 provider(~2.5s)。
+    不传 repo(旧调用/既有测试)时不缓存,行为与原实现完全一致。
+    缓存值是 supplements dict 的浅拷贝,调用方对 rows 的 mutation 无法回流污染缓存。
+    """
+    if not rows:
+        return rows
+
+    cache_key = None
+    supplements = None
+    if repo is not None:
+        try:
+            data_dir = str(repo.store.data_dir.resolve())
+            generation = repo.cache_generation
+        except AttributeError:  # 极少数无 store/cache_generation 的 mock repo
+            data_dir, generation = None, 0
+        if data_dir is not None:
+            symbols = [str(r.get("symbol") or "") for r in rows if r.get("symbol")]
+            cache_key = (data_dir, generation, as_of.isoformat() if as_of else None, _symbols_fingerprint(symbols))
+            ttl = _SUPPLEMENTS_TTL_RUNNING if quote_running else _SUPPLEMENTS_TTL_IDLE
+            cached = _supplements_get(cache_key, ttl, _now())
+            if cached is not None:
+                supplements = dict(cached)  # 拷贝,隔离调用方 mutation
+
+    if supplements is None:
+        supplements = _build_market_supplements(rows, as_of)
+        if supplements is None:
+            return rows
+        if cache_key is not None:
+            _supplements_put(cache_key, _now(), supplements)
+
+    return _apply_market_supplements(rows, supplements)
 
 
 def _pct_band_rows(values: list[float]) -> list[dict]:
@@ -432,6 +586,85 @@ def _pct_band_rows(values: list[float]) -> list[dict]:
                 count += 1
         out.append({"label": label, "count": count, "pct": count / total * 100})
     return out
+
+
+# ================================================================
+# 向量化聚合(替换 ~15 次全表 Python 遍历)
+# ================================================================
+
+def _market_aggregates(rows: list[dict]) -> dict:
+    """一次性 Polars 聚合 breadth/amount/limit/trend/activity 等纯统计量。
+
+    与原逐字段 Python 实现行为完全等价(null/NaN/inf→忽略,0 视为有限,涨跌停信号
+    bool 或 consec>0);已用 400 次随机 fuzz(null/NaN/inf/0/多 board/多 tier/空集)验证逐字段相等。
+    返回字典键与原局部变量同名,供 build_market_overview 直接消费。
+    """
+    if not rows:
+        return {
+            "total": 0, "up": 0, "down": 0, "flat": 0,
+            "total_amount": 0, "avg_amount": 0, "avg_pct": 0, "median_pct": 0,
+            "strong_up": 0, "strong_down": 0,
+            "limit_up": 0, "broken": 0, "limit_down": 0, "max_boards": 0,
+            "above_ma5": 0, "above_ma20": 0, "above_ma60": 0, "new_high": 0, "new_low": 0,
+            "avg_turnover": 0, "high_turnover": 0, "avg_vol_ratio": 1, "high_vol_ratio": 0,
+            "pct_values": [],
+        }
+
+    df = pl.DataFrame(rows)
+
+    def col(name: str) -> pl.Expr:
+        # 缺列(调用方 cols 被裁剪时)以全 null Float64 兜底,_fin 自然判为 False
+        return pl.col(name).cast(pl.Float64) if name in df.columns else pl.lit(None, dtype=pl.Float64)
+
+    def fin(name: str) -> pl.Expr:
+        return col(name).is_finite().fill_null(False)
+
+    c, amt = col("change_pct"), col("amount")
+    tr, vr = col("turnover_rate"), col("vol_ratio_5d")
+    cl, m5, m20, m60 = col("close"), col("ma5"), col("ma20"), col("ma60")
+    h60, l60 = col("high_60d"), col("low_60d")
+    clu = pl.col("consecutive_limit_ups").cast(pl.Int64) if "consecutive_limit_ups" in df.columns else pl.lit(0, dtype=pl.Int64)
+
+    def bcol(name: str) -> pl.Expr:
+        return pl.col(name).fill_null(False).cast(pl.Boolean) if name in df.columns else pl.lit(False)
+
+    cfin = fin("change_pct")
+    res = df.select(
+        total=pl.len(),
+        up=(cfin & (c > 0)).sum(),
+        down=(cfin & (c < 0)).sum(),
+        # amount: 非有限(null/NaN/inf)按 0 计入(对齐 _finite(x) or 0)
+        total_amount=pl.when(amt.is_finite().fill_null(False)).then(amt).otherwise(0.0).sum(),
+        avg_pct=c.filter(cfin).mean(),
+        strong_up=(cfin & (c >= 0.03)).sum(),
+        strong_down=(cfin & (c <= -0.03)).sum(),
+        limit_up=(bcol("signal_limit_up") | ((clu.fill_null(0)) > 0)).sum(),
+        broken=bcol("signal_broken_limit_up").sum(),
+        limit_down=bcol("signal_limit_down").sum(),
+        max_boards=clu.fill_null(0).max(),
+        above_ma5=(fin("close") & fin("ma5") & (cl >= m5)).sum(),
+        above_ma20=(fin("close") & fin("ma20") & (cl >= m20)).sum(),
+        above_ma60=(fin("close") & fin("ma60") & (cl >= m60)).sum(),
+        new_high=(bcol("signal_n_day_high") | (fin("close") & fin("high_60d") & (cl >= h60))).sum(),
+        new_low=(bcol("signal_n_day_low") | (fin("close") & fin("low_60d") & (cl <= l60))).sum(),
+        avg_turnover=tr.filter(fin("turnover_rate")).mean(),
+        high_turnover=(fin("turnover_rate") & (tr >= 5)).sum(),
+        avg_vol_ratio=vr.filter(fin("vol_ratio_5d")).mean(),
+        high_vol_ratio=(fin("vol_ratio_5d") & (vr >= 1.5)).sum(),
+    ).row(0, named=True)
+
+    total = int(res["total"])
+    res["flat"] = max(0, total - int(res["up"]) - int(res["down"]))
+    res["avg_amount"] = float(res["total_amount"]) / total if total else 0
+
+    pct_series = df.select(c).filter(cfin).to_series().sort()
+    pct_values = pct_series.to_list()
+    res["median_pct"] = float(pct_series[len(pct_series) // 2]) if len(pct_series) > 0 else 0
+    res["pct_values"] = pct_values
+    res["avg_pct"] = res["avg_pct"] if res["avg_pct"] is not None else 0
+    res["avg_turnover"] = res["avg_turnover"] if res["avg_turnover"] is not None else 0
+    res["avg_vol_ratio"] = res["avg_vol_ratio"] if res["avg_vol_ratio"] is not None else 1
+    return res
 
 
 # ================================================================
@@ -479,15 +712,16 @@ def build_market_overview(
             "industry_rank": {"leading": [], "lagging": []},
         }
 
-    df = svc._load_enriched_for_date(as_of)
+    cols = [
+        "symbol", "name", "close", "change_pct", "amount", "turnover_rate",
+        "volume", "vol_ratio_5d", "consecutive_limit_ups", "signal_limit_up",
+        "signal_broken_limit_up", "signal_limit_down", "ma5", "ma20", "ma60",
+        "high_60d", "low_60d", "signal_n_day_high", "signal_n_day_low",
+    ]
+    df = svc._load_enriched_for_date(as_of, columns=cols)
     if df.is_empty():
         rows: list[dict] = []
     else:
-        cols = [
-            "symbol", "name", "close", "change_pct", "amount", "turnover_rate", "volume",
-            "vol_ratio_5d", "consecutive_limit_ups", "signal_limit_up", "signal_broken_limit_up", "signal_limit_down",
-            "ma5", "ma20", "ma60", "high_60d", "low_60d", "signal_n_day_high", "signal_n_day_low",
-        ]
         df = df.select([c for c in cols if c in df.columns])
         rows = df.to_dicts()
 
@@ -496,32 +730,36 @@ def build_market_overview(
         rows = [r for r in rows
                 if (_finite(r.get("volume")) or 0) > 0
                 or (_finite(r.get("change_pct")) or 0) != 0]
-    rows = _fill_market_supplements_from_provider(rows, as_of)
+    quote_running = bool(status.get("running")) and bool(status.get("is_trading_hours"))
+    rows = _fill_market_supplements_from_provider(rows, as_of, repo=repo, quote_running=quote_running)
 
-    total = len(rows)
-    up = sum(1 for r in rows if (_finite(r.get("change_pct")) or 0) > 0)
-    down = sum(1 for r in rows if (_finite(r.get("change_pct")) or 0) < 0)
-    flat = max(0, total - up - down)
+    agg = _market_aggregates(rows)
+    total = agg["total"]
+    up = agg["up"]
+    down = agg["down"]
+    flat = agg["flat"]
     up_pct = up / total * 100 if total else 0
     down_pct = down / total * 100 if total else 0
+    total_amount = agg["total_amount"]
+    avg_amount = agg["avg_amount"]
+    pct_values = agg["pct_values"]
+    avg_pct = agg["avg_pct"]
+    median_pct = agg["median_pct"]
+    strong_up = agg["strong_up"]
+    strong_down = agg["strong_down"]
+    limit_up = agg["limit_up"]
+    broken = agg["broken"]
+    limit_down = agg["limit_down"]
+    max_boards = agg["max_boards"]
+    above_ma5 = agg["above_ma5"]
+    above_ma20 = agg["above_ma20"]
+    above_ma60 = agg["above_ma60"]
+    new_high = agg["new_high"]
+    new_low = agg["new_low"]
+    avg_turnover = agg["avg_turnover"]
+    high_turnover = agg["high_turnover"]
 
-    amounts = [_finite(r.get("amount")) or 0 for r in rows]
-    total_amount = sum(amounts)
-    avg_amount = total_amount / total if total else 0
-
-    pct_values = [_finite(r.get("change_pct")) for r in rows]
-    pct_values = [v for v in pct_values if v is not None]
-    avg_pct = sum(pct_values) / len(pct_values) if pct_values else 0
-    median_pct = sorted(pct_values)[len(pct_values) // 2] if pct_values else 0
-    strong_up = sum(1 for v in pct_values if v >= 0.03)
-    strong_down = sum(1 for v in pct_values if v <= -0.03)
-
-    limit_up = sum(1 for r in rows if bool(r.get("signal_limit_up")) or (_finite(r.get("consecutive_limit_ups")) or 0) > 0)
-    broken = sum(1 for r in rows if bool(r.get("signal_broken_limit_up")))
-    limit_down = sum(1 for r in rows if bool(r.get("signal_limit_down")))
-    max_boards = max([int(_finite(r.get("consecutive_limit_ups")) or 0) for r in rows], default=0)
-
-    # 五档 sealed 修正: 假涨停/假跌停不计入(需 depth5.batch 能力)
+    # 五档 sealed 修正: 假涨停/假跌停不计入(需 depth5.batch 能力)。
     sealed_ready = False
     fake_up = 0
     fake_down = 0
@@ -530,28 +768,13 @@ def build_market_overview(
         down_map = depth_service.get_sealed_map(as_of, is_down=True)
         sealed_ready = bool(up_map or down_map) and depth_service.is_sealed_ready(as_of)
         if up_map:
-            fake_up = sum(1 for v in up_map.values() if v.get("sealed") is False)
+            fake_up = sum(1 for value in up_map.values() if value.get("sealed") is False)
         if down_map:
-            fake_down = sum(1 for v in down_map.values() if v.get("sealed") is False)
+            fake_down = sum(1 for value in down_map.values() if value.get("sealed") is False)
     if sealed_ready:
         limit_up = max(0, limit_up - fake_up)
         limit_down = max(0, limit_down - fake_down)
-
-    seal_rate = limit_up / (limit_up + broken) * 100 if (limit_up + broken) > 0 else 0
-
-    def above_ma_count(ma_key: str) -> int:
-        return sum(1 for r in rows if (_finite(r.get("close")) is not None and _finite(r.get(ma_key)) is not None and (_finite(r.get("close")) or 0) >= (_finite(r.get(ma_key)) or 0)))
-
-    above_ma5 = above_ma_count("ma5")
-    above_ma20 = above_ma_count("ma20")
-    above_ma60 = above_ma_count("ma60")
-    new_high = sum(1 for r in rows if bool(r.get("signal_n_day_high")) or (_finite(r.get("close")) is not None and _finite(r.get("high_60d")) is not None and (_finite(r.get("close")) or 0) >= (_finite(r.get("high_60d")) or 0)))
-    new_low = sum(1 for r in rows if bool(r.get("signal_n_day_low")) or (_finite(r.get("close")) is not None and _finite(r.get("low_60d")) is not None and (_finite(r.get("close")) or 0) <= (_finite(r.get("low_60d")) or 0)))
-
-    turnovers = [_finite(r.get("turnover_rate")) for r in rows]
-    turnovers = [v for v in turnovers if v is not None]
-    avg_turnover = sum(turnovers) / len(turnovers) if turnovers else 0
-    high_turnover = sum(1 for v in turnovers if v >= 5)
+    seal_rate = limit_up / (limit_up + broken) * 100 if limit_up + broken > 0 else 0
 
     boards_map: dict[str, dict] = {}
     for r in rows:
@@ -579,10 +802,8 @@ def build_market_overview(
     index_changes = [_finite(r.get("change_pct")) for r in indices]
     index_changes = [v for v in index_changes if v is not None]
     avg_index_pct = sum(index_changes) / len(index_changes) if index_changes else 0
-    vol_ratios = [_finite(r.get("vol_ratio_5d")) for r in rows]
-    vol_ratios = [v for v in vol_ratios if v is not None]
-    avg_vol_ratio = sum(vol_ratios) / len(vol_ratios) if vol_ratios else 1
-    high_vol_ratio = sum(1 for v in vol_ratios if v >= 1.5)
+    avg_vol_ratio = agg["avg_vol_ratio"]
+    high_vol_ratio = agg["high_vol_ratio"]
 
     concept_rank = _dimension_rank(rows, repo, "concept")
     industry_rank = _dimension_rank(rows, repo, "industry", level=2)

@@ -13,6 +13,7 @@ import json
 import re
 import time
 
+import polars as pl
 from fastapi import APIRouter, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
@@ -20,6 +21,7 @@ from app.json_safe import finite_float_or_none
 
 # 受控外部 fallback (P1 realtime) — 仅只读展示; 绝不写入 repository/enriched。
 from app.services.external_fallback import get_adapter
+from app.services.external_fallback.adapter import _cn_today_iso as _fb_cn_today_iso
 
 router = APIRouter(prefix="/api/intraday", tags=["quotes"])
 
@@ -77,9 +79,107 @@ def _get_quote_service(request: Request):
     """获取全局 QuoteService。"""
     return getattr(request.app.state, "quote_service", None)
 
+# 核心指数代码: canonical (.INDEX) + 旧式后缀兼容 (仅分类用, 数据路径统一 .INDEX)。
+# 注意: 000001.SH = 上证指数 (指数), 但 000001.SZ = 平安银行 (股票) — 靠后缀区分。
+# 与 QuoteService._is_index_record 口径一致: .INDEX 后缀或已知指数代码即指数。
+_CORE_INDEX_SYMBOLS = frozenset({
+    "000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX",
+    # 旧式后缀仅作分类兼容; 数据查询前统一 canonical_index_symbol 规范化
+    "000001.SH", "399001.SZ", "399006.SZ", "000680.SH",
+})
+
+
+def _is_index_symbol(
+    symbol: str, *, cached_index_symbols: set[str] | None = None
+) -> bool:
+    """判断 symbol 是否走指数缓存路径。
+
+    分类口径与 QuoteService._is_index_record 一致: .INDEX 后缀、核心指数代码
+    (含旧式 .SH/.SZ 后缀), 或当前存在于指数实时缓存中 (覆盖用户自定义
+    realtime_index_symbols) → 指数; 其余 .SH/.SZ/.BJ/.HK → 股票。
+    注意 000001.SH (上证指数) 与 000001.SZ (平安银行) 靠后缀区分。
+    """
+    if symbol.endswith(".INDEX") or symbol in _CORE_INDEX_SYMBOLS:
+        return True
+    return symbol in (cached_index_symbols or ())
+
+
+def _read_stock_quotes_from_cache(
+    qs, stock_symbols: list[str]
+) -> tuple[list[dict], list[str]]:
+    """从股票实时缓存 (QuoteService.get_quotes_compat / enriched) 读取并按 symbol 过滤。
+
+    只读本地缓存, 绝不请求 provider; 返回 (命中行, 缓存缺失的 symbol)。
+    缺失的 symbol 由调用方交给受控外部 fallback 补齐。
+    """
+    if not stock_symbols:
+        return [], []
+    try:
+        df = qs.get_quotes_compat()
+    except Exception:  # noqa: BLE001
+        return [], list(stock_symbols)
+    if df is None or df.is_empty() or "symbol" not in df.columns:
+        return [], list(stock_symbols)
+    hit_df = df.filter(pl.col("symbol").is_in(stock_symbols))
+    hit_rows = hit_df.to_dicts() if not hit_df.is_empty() else []
+    hits = {r.get("symbol") for r in hit_rows}
+    missing = [s for s in stock_symbols if s not in hits]
+    return hit_rows, missing
+
+
+def _stamp_local_stock_rows(rows: list[dict], *, has_recent: bool) -> None:
+    """给未触发外部 fallback 的本地股票行打 provenance (原地)。
+
+    据行内 date/timestamp 是否为当前交易日标 realtime / local_disk; has_recent
+    (来自 qs.status) 在日期缺失时兜底。绝不把昨日数据叫 realtime。
+    """
+    today = _fb_cn_today_iso()
+    for r in rows:
+        ts = r.get("date") or r.get("timestamp")
+        if ts and str(ts)[:10] == today:
+            r["source"] = "realtime"
+        elif has_recent and ts is None:
+            r["source"] = "realtime"
+        else:
+            r["source"] = "local_disk"
+
+
+def _partition_stock_rows_by_freshness(
+    stock_symbols: list[str], stock_rows: list[dict]
+) -> tuple[list[dict], list[str], list[dict]]:
+    """按 symbol 分新鲜度: 保留当日 fresh 行, 只把 missing/stale 交给 resolver。
+
+    adapter._local_snapshot_is_fresh 是「任一行当日即整批 fresh」, 在混合请求
+    (A fresh + B missing/stale) 下会零网络且丢 B。这里按 symbol 精确分区:
+      - 行 date/timestamp == 当前交易日 → fresh, 原样保留 (零网络)
+      - 行存在但日期 < 今日 → stale, 行连同 symbol 交给 resolver
+      - 无行 → missing, symbol 交给 resolver
+    返回 (fresh_rows, gap_symbols, gap_rows)。gap_rows 为 stale 行 (供 resolver
+    分类 reason), fresh 行不进 resolver。
+    """
+    today = _fb_cn_today_iso()
+    fresh_rows: list[dict] = []
+    stale_rows_by_sym: dict[str, dict] = {}
+    gap_symbols: list[str] = []
+    for sym in stock_symbols:
+        row = next((r for r in stock_rows if r.get("symbol") == sym), None)
+        if row is None:
+            gap_symbols.append(sym)
+            continue
+        ts = row.get("date") or row.get("timestamp")
+        if ts and str(ts)[:10] == today:
+            fresh_rows.append(row)
+        else:
+            gap_symbols.append(sym)
+            stale_rows_by_sym[sym] = row
+    # gap_rows 按 gap_symbols 顺序排列 stale 行 (missing symbol 无行)
+    gap_rows = [stale_rows_by_sym[s] for s in gap_symbols if s in stale_rows_by_sym]
+    return fresh_rows, gap_symbols, gap_rows
+
 
 def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | None = None) -> list[dict]:
     """实时指数缓存为空时，从本地指数日 K 取最近收盘价作为兜底。"""
+    from app.data_providers.fquant.symbols import canonical_index_symbol
     repo = getattr(request.app.state, "repo", None)
     if not repo:
         return []
@@ -87,6 +187,7 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
     params: list[str] = []
     symbol_filter = ""
     if symbols:
+        symbols = [canonical_index_symbol(s) for s in symbols]
         placeholders = ", ".join("?" for _ in symbols)
         symbol_filter = f"WHERE symbol IN ({placeholders})"
         params.extend(symbols)
@@ -144,7 +245,11 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
 
 def _fallback_index_quotes_from_provider(symbols: list[str] | None = None) -> list[dict]:
     """QuoteService 尚无指数缓存时，走当前 realtime provider 拉取最新指数行情。"""
-    symbol_list = symbols or ["000001.SH", "399001.SZ", "399006.SZ", "000680.SH"]
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+    if symbols:
+        symbol_list = [canonical_index_symbol(s) for s in symbols]
+    else:
+        symbol_list = ["000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX"]
     try:
         from app.data_providers.registry import get_active_provider_name, get_provider
 
@@ -213,7 +318,9 @@ def index_quotes(
     受控外部 fallback (P1): 当本地所有路径均无当日数据时, 才尝试腾讯公共源。
     fallback 响应追加 degraded/sources/fallback_reason (仅实际命中时); 旧字段保留。
     """
-    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+    raw_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None
+    symbol_list = [canonical_index_symbol(s) for s in raw_list] if raw_list else None
     qs = _get_quote_service(request)
     source = "realtime"
     if qs:
@@ -229,7 +336,8 @@ def index_quotes(
         source = "index_daily"
 
     # 本地优先 → 受控外部 fallback (仅展示, 绝不写 repository/enriched)
-    norm_symbols = _normalize_symbols(symbols, limit=60) if symbols else []
+    raw_norm = _normalize_symbols(symbols, limit=60) if symbols else []
+    norm_symbols = [canonical_index_symbol(s) for s in raw_norm]
     final_rows, meta = _maybe_external_fallback(norm_symbols, rows)
     if meta:
         source = "fallback_external"
@@ -243,24 +351,118 @@ def snapshot_quotes(
 ):
     """只读 realtime 快照端点 (同一响应形状)。
 
-    本地优先: 取 QuoteService 缓存或 provider realtime; 缺失/陈旧且受控 fallback
-    启用时才调腾讯公共源。输入 symbol 经形状规范化, 不得形成用户可控 URL/host。
-    绝不把结果交给 QuoteService / repository 写入。
+    股票 symbol 优先从 QuoteService 股票实时缓存 (get_quotes_compat / enriched) 读取
+    并按 symbol 过滤; 按 symbol 分新鲜度:
+      - 当日命中行 → fresh, 零网络, 原样保留 (source=realtime)
+      - 缺失/陈旧 symbol + 对应 stale 行 → 交给受控外部 fallback resolver:
+        开启则调腾讯替换并标 degraded (source=fallback_external);
+        关闭则保留 stale 行 (source=local_disk, 绝不叫 realtime)。
+    混合请求 (A fresh + B missing/stale) 不会因 A fresh 而丢 B。本地行据其 date
+    区分当日(realtime) vs 非当日(local_disk)。指数 symbol 按既有分类走指数缓存路径
+    (实时缓存 → provider realtime → 日线兜底)。输入 symbol 经形状规范化, 不得形成
+    用户可控 URL/host。绝不把结果交给 QuoteService / repository 写入。
     """
     norm_symbols = _normalize_symbols(symbols, limit=60)
+    # 保持既有无参契约：返回 QuoteService 的默认指数快照，而不是空集合。
+    if not norm_symbols:
+        return index_quotes(request, symbols=None)
     qs = _get_quote_service(request)
-    local_rows: list[dict] = []
-    source = "realtime"
-    if qs:
-        df = qs.get_index_quotes(norm_symbols) if norm_symbols else qs.get_index_quotes()
-        local_rows = df.to_dicts() if not df.is_empty() else []
-    if not local_rows:
-        local_rows = _fallback_index_quotes_from_provider(norm_symbols or None)
-        source = "provider_realtime"
 
-    final_rows, meta = _maybe_external_fallback(norm_symbols, local_rows)
+    # ---- 分类: 指数 vs 股票 (禁止用 get_index_quotes 处理股票) ----
+    # 分类口径与 QuoteService._is_index_record 一致: .INDEX 后缀 / 核心指数代码 /
+    # 当前存在于指数实时缓存 (覆盖用户自定义 realtime_index_symbols) → 指数。
+    cached_index_symbols: set[str] = set()
+    if qs:
+        try:
+            idx_df = qs.get_index_quotes()
+            if idx_df is not None and not idx_df.is_empty() and "symbol" in idx_df.columns:
+                cached_index_symbols = set(idx_df["symbol"].to_list())
+        except Exception:  # noqa: BLE001
+            pass
+    index_symbols = [
+        s for s in norm_symbols
+        if _is_index_symbol(s, cached_index_symbols=cached_index_symbols)
+    ]
+    # 指数数据路径统一 canonical .INDEX (cache/provider/daily 查询均用 .INDEX)
+    if index_symbols:
+        from app.data_providers.fquant.symbols import canonical_index_symbol
+        index_symbols = [canonical_index_symbol(s) for s in index_symbols]
+    stock_symbols = [
+        s for s in norm_symbols
+        if not _is_index_symbol(s, cached_index_symbols=cached_index_symbols)
+    ]
+
+    # ---- 股票: 本地实时缓存读取 (绝不请求 provider) + 按 symbol 分新鲜度 ----
+    if qs and stock_symbols:
+        stock_rows, _missing = _read_stock_quotes_from_cache(qs, stock_symbols)
+    else:
+        stock_rows = []
+    fresh_stock_rows, gap_symbols, gap_rows = _partition_stock_rows_by_freshness(
+        stock_symbols, stock_rows
+    )
+
+    # ---- 指数: 保留既有缓存路径 (实时 → provider → 日线), 禁止回归 ----
+    index_rows: list[dict] = []
+    index_source = "realtime"
+    if index_symbols:
+        if qs:
+            df = qs.get_index_quotes(index_symbols)
+            index_rows = df.to_dicts() if not df.is_empty() else []
+        if not index_rows:
+            index_rows = _fallback_index_quotes_from_provider(index_symbols)
+            index_source = "provider_realtime"
+        if not index_rows:
+            index_rows = _fallback_index_quotes_from_daily(request, index_symbols)
+            index_source = "index_daily"
+
+    # ---- 受控外部 fallback resolver (本地优先; 仅补 missing/stale symbols) ----
+    # 只把 gap_symbols + gap_rows 交给 resolver: fresh 行不进 resolver, 故混合请求
+    # (A fresh + B missing/stale) 不会因 A fresh 而丢 B。resolver 命中外部 → 替换 gap
+    # 行并标 degraded; 关闭/未命中 → 返回原 gap_rows (stale 行保留)。
+    gap_resolved_rows, stock_meta = _maybe_external_fallback(gap_symbols, gap_rows)
+    stock_used_external = bool(stock_meta)
+    index_final_rows, index_meta = _maybe_external_fallback(index_symbols, index_rows)
+
+    meta: dict = {}
+    if index_meta:
+        meta.update(index_meta)
+    if stock_meta:
+        meta.update(stock_meta)
+
+    # ---- 股票 provenance ----
+    # fresh 行: 当日 → realtime。gap 行: 触发外部则为外部行 (source 已是 tencent_quote);
+    # 未触发外部则按行内日期标 realtime/local_disk (绝不把昨日数据叫 realtime)。
+    # qs.status().has_recent_data 在 gap 行日期缺失时兜底。
+    has_recent = True
+    if qs:
+        try:
+            has_recent = bool(qs.status().get("has_recent_data", True))
+        except Exception:  # noqa: BLE001
+            has_recent = True
+    _stamp_local_stock_rows(fresh_stock_rows, has_recent=True)
+    if not stock_used_external:
+        _stamp_local_stock_rows(gap_resolved_rows, has_recent=has_recent)
+
+    stock_final_rows = fresh_stock_rows + gap_resolved_rows
+
+    # ---- 汇总 source ----
     if meta:
         source = "fallback_external"
+    elif stock_used_external:
+        source = "fallback_external"
+    else:
+        # 未触发外部: 股票本地 + 指数本地/provider/daily 混合 → 取较低保真度
+        stock_has_local_disk = any(
+            r.get("source") == "local_disk" for r in stock_final_rows
+        )
+        if index_symbols and index_source in ("provider_realtime", "index_daily"):
+            source = index_source
+        elif stock_has_local_disk:
+            source = "local_disk"
+        else:
+            source = "realtime"
+
+    final_rows = stock_final_rows + index_final_rows
     return {"rows": final_rows, "count": len(final_rows), "source": source, **meta}
 
 

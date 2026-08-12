@@ -290,23 +290,32 @@ class ScreenerService:
         """
         _history_cache_clear()
 
-    def _load_enriched_for_date(self, target_date: date) -> pl.DataFrame:
-        """从 enriched 读取指定日期的完整指标+信号数据。
+    def _load_enriched_for_date(
+        self,
+        target_date: date,
+        columns: list[str] | None = None,
+    ) -> pl.DataFrame:
+        """从 enriched 读取指定日期的指标+信号数据。
 
-        最新日优先用内存缓存(已含完整指标);历史日走 repo.get_enriched_range
-        按需扫描 + compute_all。周末/假日通过精确分区存在性检查短路,避免
-        无谓的全窗口扫描。仓库唯一公开历史入口为 get_enriched_range。
+        ``columns`` 非空时只读取请求列, 但始终保留 repository 强制的
+        ``symbol``/``date`` 语义; 省略时保持完整数据调用的原行为。
         """
+        instrument_requested = columns is None or bool(
+            set(columns) & {"name", "total_shares", "float_shares"}
+        )
         # 最新日热缓存(已含完整指标)
         cache, cache_date = self.repo.get_enriched_latest()
         if cache is not None and not cache.is_empty() and cache_date == target_date:
             df = cache
             # JOIN instruments (name/total_shares/float_shares)
-            df_i = self.repo.get_instruments()
+            df_i = self.repo.get_instruments() if instrument_requested else pl.DataFrame()
             if not df_i.is_empty():
                 inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
                 if "name" not in df.columns:
                     df = df.join(df_i.select(inst_cols), on="symbol", how="left")
+            if columns is not None:
+                projected = list(dict.fromkeys(["symbol", "date", *columns]))
+                df = df.select([c for c in projected if c in df.columns])
             return df
 
         # 精确分区存在性检查: 周末/假日或未落盘日期直接返回空,避免按需扫描
@@ -317,16 +326,18 @@ class ScreenerService:
             return pl.DataFrame()
 
         # 历史日: 仓库按需扫描 + compute_all(返回完整指标/信号)
-        df = self.repo.get_enriched_range(target_date, target_date)
+        df = self.repo.get_enriched_range(target_date, target_date, columns=columns)
         if df is None or df.is_empty():
             return pl.DataFrame()
-
         # JOIN instruments(name 等列) — compute_all 已传 instruments,此处幂等补全
-        df_i = self.repo.get_instruments()
+        df_i = self.repo.get_instruments() if instrument_requested else pl.DataFrame()
         if not df_i.is_empty():
             inst_cols = [c for c in ["symbol", "name", "total_shares", "float_shares"] if c in df_i.columns]
             if "name" not in df.columns:
                 df = df.join(df_i.select(inst_cols), on="symbol", how="left")
+        if columns is not None:
+            projected = list(dict.fromkeys(["symbol", "date", *columns]))
+            df = df.select([c for c in projected if c in df.columns])
         return df
 
     def _load_enriched_history(self, target_date: date, lookback_days: int) -> pl.DataFrame:

@@ -15,7 +15,8 @@ from app.services.screener import ScreenerService
 
 router = APIRouter(prefix="/api/overview", tags=["overview"])
 
-_CACHE_TTL = 5.0
+_CACHE_TTL_LIVE = 5.0
+_CACHE_TTL_STATIC = 300.0
 _cache: dict[str, Any] | None = None
 _cache_key: str | None = None
 _cache_ts: float = 0.0
@@ -33,10 +34,10 @@ def invalidate_overview_cache() -> None:
 
 
 CORE_INDEX_NAMES = {
-    "000001.SH": "上证指数",
-    "399001.SZ": "深证成指",
-    "399006.SZ": "创业板指",
-    "000680.SH": "科创综指",
+    "000001.INDEX": "上证指数",
+    "399001.INDEX": "深证成指",
+    "399006.INDEX": "创业板指",
+    "000680.INDEX": "科创综指",
 }
 CORE_INDEX_SYMBOLS = tuple(CORE_INDEX_NAMES.keys())
 
@@ -363,7 +364,18 @@ def market_overview(request: Request, as_of: date | None = None):
     global _cache, _cache_key, _cache_ts
     now = time.time()
     cache_key = as_of.isoformat() if as_of else "latest"
-    if _cache is not None and _cache_key == cache_key and (now - _cache_ts) < _CACHE_TTL:
+    quote_service = getattr(request.app.state, "quote_service", None)
+    quote_status = quote_service.status() if quote_service is not None else {}
+    cache_ttl = (
+        _CACHE_TTL_LIVE
+        if as_of is None and quote_status.get("running")
+        else _CACHE_TTL_STATIC
+    )
+    if (
+        _cache is not None
+        and _cache_key == cache_key
+        and (now - _cache_ts) < cache_ttl
+    ):
         return _cache
     data = _build_overview(request, as_of)
     _cache = data

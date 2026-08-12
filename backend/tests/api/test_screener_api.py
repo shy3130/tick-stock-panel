@@ -105,6 +105,64 @@ def test_query_missing_required_source_is_sanitized_503(monkeypatch):
     assert "path" not in response.text and "exception" not in response.text
 
 
+def test_cached_results_beyond_canonical_date_are_isolated(monkeypatch):
+    class CanonicalRepo(_Repo):
+        def get_enriched_latest(self):
+            return pl.DataFrame(), date(2026, 8, 10)
+
+    monkeypatch.setattr(
+        screener.strategy_cache,
+        "read_cache",
+        lambda data_dir: {
+            "as_of": "2026-08-11",
+            "results": {"boll_breakout": {"as_of": "2026-08-11", "total": 1, "rows": []}},
+            "updated_at": 123,
+        },
+    )
+    app = FastAPI()
+    app.state.repo = CanonicalRepo()
+    app.include_router(screener.router)
+    client = TestClient(app)
+
+    payload = client.get("/api/screener/cached").json()
+
+    assert payload == {
+        "as_of": None,
+        "results": {},
+        "updated_at": None,
+        "discarded_as_of": "2026-08-11",
+        "canonical_as_of": "2026-08-10",
+    }
+
+
+
+def test_run_all_uses_request_repository(monkeypatch):
+    class RunAllService(_Service):
+        def run_preset(self, strategy_id, as_of, **_kwargs):
+            return screener_module.ScreenerResult(
+                as_of=as_of,
+                strategy=strategy_id,
+                rows=[{"symbol": "600001.SH"}],
+                total=1,
+            )
+
+    monkeypatch.setattr(screener, "ScreenerService", RunAllService)
+    monkeypatch.setattr(screener, "PRESET_STRATEGIES", {"stub": {}})
+    monkeypatch.setattr(screener.strategy_config, "list_overrides", lambda _data_dir: {})
+    monkeypatch.setattr(screener.strategy_cache, "write_cache", lambda *_args: None)
+    monkeypatch.setattr(screener, "_load_ext_value_maps", lambda *_args: {})
+    app = FastAPI()
+    app.state.repo = _Repo()
+    app.include_router(screener.router)
+
+    response = TestClient(app).post(
+        "/api/screener/run_all",
+        json={"as_of": "2026-07-16", "strategy_ids": ["stub"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"]["stub"]["total"] == 1
+
 
 # ===========================================================================
 # limit-ladder: 外部降级展示 map 接入(provenance 隔离)
@@ -119,16 +177,19 @@ def test_query_missing_required_source_is_sanitized_503(monkeypatch):
 class _LadderService:
     """连板梯队专用 service: 按 as_of 返回不同 enriched(当日/前日)。"""
 
+    load_calls: list[tuple[date, list[str] | None]] = []
+
     def __init__(self, repo):
         self.repo = repo
 
     def latest_date(self):
         return date(2026, 8, 7)
 
-    def _load_enriched_for_date(self, as_of):
+    def _load_enriched_for_date(self, as_of, columns=None):
+        self.load_calls.append((as_of, columns))
         if as_of == date(2026, 8, 7):
             # 当日: 两只涨停股(600519 真封 / 600999 假封将由外部 map 标注)
-            return pl.DataFrame({
+            df = pl.DataFrame({
                 "symbol": ["600519.SH", "600999.SH", "000001.SZ"],
                 "date": [as_of, as_of, as_of],
                 "name": ["甲", "乙", "丙"],
@@ -140,15 +201,20 @@ class _LadderService:
                 "consecutive_limit_ups": [3, 1, None],
                 "consecutive_limit_downs": [None, None, 1],
             })
-        if as_of == date(2026, 8, 6):
-            # 前日: 提供 prev consecutive_limit_ups
-            return pl.DataFrame({
+        elif as_of == date(2026, 8, 6):
+            # 前日: 提供 prev consecutive_limit_ups/downs
+            df = pl.DataFrame({
                 "symbol": ["600519.SH", "600999.SH", "000001.SZ"],
                 "date": [as_of, as_of, as_of],
                 "consecutive_limit_ups": [2, 0, None],
                 "consecutive_limit_downs": [None, None, 0],
             })
-        return pl.DataFrame()
+        else:
+            return pl.DataFrame()
+        if columns is not None:
+            projected = list(dict.fromkeys(["symbol", "date", *columns]))
+            return df.select([c for c in projected if c in df.columns])
+        return df
 
 
 class _FakeDepth:
@@ -187,6 +253,7 @@ class _FakeDepth:
 
 
 def _ladder_client(monkeypatch, depth_service=None):
+    _LadderService.load_calls = []
     monkeypatch.setattr(screener, "ScreenerService", _LadderService)
     app = FastAPI()
     app.state.repo = _Repo()
@@ -278,6 +345,20 @@ def test_limit_ladder_provider_map_still_corrects(monkeypatch):
     assert by_sym["600519.SH"]["sealed_status"] == "real"
     assert by_sym["600999.SH"]["status"] == "broken"
     assert by_sym["600999.SH"]["sealed_status"] == "fake"
+
+
+def test_limit_ladder_projects_previous_day_columns_for_both_directions(monkeypatch):
+    for direction, consec_col in (
+        ("up", "consecutive_limit_ups"),
+        ("down", "consecutive_limit_downs"),
+    ):
+        client = _ladder_client(monkeypatch)
+        response = client.get(f"/api/screener/limit-ladder?direction={direction}")
+        assert response.status_code == 200
+        assert _LadderService.load_calls == [
+            (date(2026, 8, 7), None),
+            (date(2026, 8, 6), ["symbol", consec_col]),
+        ]
 
 
 def test_limit_ladder_no_depth_service(monkeypatch):

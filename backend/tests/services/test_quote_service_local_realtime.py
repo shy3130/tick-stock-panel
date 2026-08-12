@@ -1,4 +1,6 @@
 import json
+import threading
+from datetime import date
 from types import SimpleNamespace
 
 import app.services.quote_service as quote_service
@@ -65,7 +67,7 @@ def test_record_from_quote_converts_non_finite_numbers_to_null():
 
 def test_index_quote_cache_outputs_percentage_points():
     record = quote_service.QuoteService._record_from_quote({
-        "symbol": "000001.SH",
+        "symbol": "000001.INDEX",
         "last_price": 101,
         "prev_close": 100,
         "ext": {"change_pct": 1.23, "amplitude": 4.56},
@@ -88,7 +90,7 @@ def test_stop_in_close_final_calls_run_final_sync_exactly_once(monkeypatch):
     # 强制 close_final 阶段
     monkeypatch.setattr(quote_service.QuoteService, "_market_phase", staticmethod(lambda: "close_final"))
     # _fetch_quotes 不应实际执行 (无 repo / 无 provider 连接)
-    monkeypatch.setattr(service, "_fetch_quotes", lambda: None)
+    monkeypatch.setattr(service, "_fetch_quotes", lambda: True)
 
     # spy: 捕获 _run_final_sync 调用次数
     call_count = 0
@@ -104,3 +106,61 @@ def test_stop_in_close_final_calls_run_final_sync_exactly_once(monkeypatch):
     service.stop()
 
     assert call_count == 1, f"expected _run_final_sync called exactly once, got {call_count}"
+
+
+def test_final_sync_skipped_by_reentrancy_remains_pending(monkeypatch):
+    """慢拉取占用执行权时，收盘同步必须保留 pending，不能误记完成。"""
+    service = quote_service.QuoteService()
+    key = (date(2026, 8, 10), "close")
+    monkeypatch.setattr(
+        quote_service.QuoteService, "_market_phase", staticmethod(lambda: "close_final")
+    )
+    monkeypatch.setattr(
+        quote_service.QuoteService, "_final_sync_key", staticmethod(lambda _phase: key)
+    )
+    service._fetch_in_progress = True
+
+    assert service._run_final_sync() is False
+    assert key not in service._final_sync_done
+    assert key not in service._final_sync_failed
+
+
+def test_fetch_quotes_reentrancy_guard_skips_overlapping_pull(monkeypatch):
+    """轮询间隔小于一次 full-market 拉取耗时时, 后台轮询 / 手动 refresh /
+    收盘 final_sync 并发触发 _fetch_quotes, 上一轮未结束必须直接跳过,
+    不并发重入重复写盘 / 重复算指标 (状态语义仍准确, 不假装 ready)。"""
+    quote_service._provider_instance = None
+    monkeypatch.setattr(
+        quote_service, "get_active_provider_name", lambda capability=None: "fquant_local"
+    )
+    monkeypatch.setattr(quote_service, "get_provider", lambda name: _fake_provider(name))
+
+    service = quote_service.QuoteService()
+    monkeypatch.setattr(
+        quote_service.QuoteService, "realtime_mode", staticmethod(lambda: "full_market")
+    )
+
+    started = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def slow_full_market(self):
+        calls["n"] += 1
+        started.set()
+        release.wait(timeout=2.0)  # 模拟一次慢的全市场拉取 (> interval)
+
+    monkeypatch.setattr(
+        quote_service.QuoteService, "_fetch_full_market_quotes", slow_full_market
+    )
+
+    t1 = threading.Thread(target=service._fetch_quotes)
+    t2 = threading.Thread(target=service._fetch_quotes)
+    t1.start()
+    assert started.wait(timeout=2.0)  # t1 已进入拉取并持有重入标志
+    t2.start()
+    t2.join(timeout=2.0)
+    assert not t2.is_alive(), "重入调用应立即跳过返回, 不阻塞"
+    assert calls["n"] == 1, "并发重入必须被跳过, 不得重复拉取"
+    release.set()
+    t1.join(timeout=2.0)
+    assert calls["n"] == 1

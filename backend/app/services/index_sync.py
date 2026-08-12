@@ -8,16 +8,16 @@ universes 补充也走 provider 抽象层（FQuantProvider 走 fstore chengfen_g
 """
 from __future__ import annotations
 
-import logging
 import gc
+import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
+from app.capabilities import Cap, CapabilitySet
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync, preferences
-from app.capabilities import Cap, CapabilitySet
 from app.storage.repository import KlineRepository
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,18 @@ _get_data_provider = kline_sync._get_data_provider
 
 # exchanges.get_instruments 查询的交易所(沪深京)
 _EXCHANGES = ["SH", "SZ", "BJ"]
+
+# 看板、回测与交易复盘直接依赖的指数必须保留足够长的 canonical 历史。
+# 新安装默认只同步近一年；这些小规模基准单独补齐，避免长窗口分析静默截断。
+REQUIRED_INDEX_HISTORY_STARTS: dict[str, date] = {
+    "000001.INDEX": date(2015, 1, 1),
+    "000300.INDEX": date(2015, 1, 1),
+    "000905.INDEX": date(2015, 1, 1),
+    "399001.INDEX": date(2015, 1, 1),
+    "399006.INDEX": date(2015, 1, 1),
+    "000688.INDEX": date(2019, 12, 1),
+    "000680.INDEX": date(2020, 1, 1),
+}
 
 
 def _quotes_to_index_instruments(resp) -> pl.DataFrame:
@@ -158,7 +170,18 @@ def sync_index_instruments(
 
     total = 0
     if index_parts:
-        index_inst = pl.concat(index_parts, how="diagonal_relaxed").unique(subset=["symbol"], keep="last").sort("symbol")
+        from app.data_providers.fquant.symbols import canonical_index_symbol
+
+        index_inst = (
+            pl.concat(index_parts, how="diagonal_relaxed")
+            .with_columns(
+                pl.col("symbol")
+                .cast(pl.Utf8)
+                .map_elements(canonical_index_symbol, return_dtype=pl.Utf8)
+            )
+            .unique(subset=["symbol"], keep="last")
+            .sort("symbol")
+        )
         if not index_inst.is_empty():
             repo.save_index_instruments(index_inst)
             total += index_inst.height
@@ -312,8 +335,10 @@ def sync_and_persist_index_daily(
     if not capset.has(Cap.KLINE_DAILY_BATCH):
         return 0
 
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+
     if symbols_override:
-        symbols = sorted(set(s for s in symbols_override if s))
+        symbols = sorted({canonical_index_symbol(s) for s in symbols_override if s})
         if not symbols:
             return 0
     else:
@@ -325,7 +350,7 @@ def sync_and_persist_index_daily(
             instruments = instruments.filter(pl.col("asset_type") != "etf")
         if instruments.is_empty() or "symbol" not in instruments.columns:
             return 0
-        symbols = sorted(set(instruments["symbol"].to_list()))
+        symbols = sorted({canonical_index_symbol(s) for s in instruments["symbol"].to_list()})
     lim = capset.limits(Cap.KLINE_DAILY_BATCH)
     batch_size = preferences.get_index_daily_batch_size()
     if lim and lim.batch:
@@ -376,6 +401,52 @@ def sync_and_persist_index_daily(
         logger.warning("index/etf daily sync: %d symbols failed, %s", len(failed_symbols), failed_symbols[:20])
     repo.refresh_index_views()
     return total_rows
+
+
+def ensure_required_index_history(
+    repo: KlineRepository,
+    capset: CapabilitySet,
+    *,
+    end_date: datetime | None = None,
+    on_chunk_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """补齐关键指数 canonical 长历史；已有早期历史时零网络请求。"""
+    if not capset.has(Cap.KLINE_DAILY_BATCH):
+        return 0
+
+    missing: list[str] = []
+    for symbol, required_start in REQUIRED_INDEX_HISTORY_STARTS.items():
+        probe_end = required_start + timedelta(days=45)
+        try:
+            probe = repo.get_index_daily(
+                symbol,
+                required_start,
+                probe_end,
+                columns=["date"],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("probe index history failed for %s: %s", symbol, exc)
+            probe = pl.DataFrame()
+        if probe is None or probe.is_empty():
+            missing.append(symbol)
+
+    if not missing:
+        return 0
+
+    start = min(REQUIRED_INDEX_HISTORY_STARTS[symbol] for symbol in missing)
+    logger.info(
+        "backfilling canonical index history: symbols=%s start=%s",
+        missing,
+        start,
+    )
+    return sync_and_persist_index_daily(
+        repo,
+        capset,
+        symbols_override=missing,
+        start_date=datetime.combine(start, datetime.min.time()),
+        end_date=end_date or datetime.now(),
+        on_chunk_done=on_chunk_done,
+    )
 
 
 def _load_etf_factors(repo: KlineRepository) -> pl.DataFrame:

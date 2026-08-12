@@ -12,14 +12,14 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
+from app.capabilities import Cap, CapabilitySet
 from app.data_providers.fquant.catalog_resolver import CatalogError, RouteNotFoundError
 from app.data_providers.registry import get_active_provider_name, get_provider
 from app.indicators.pipeline import filter_halt_days
-from app.capabilities import Cap, CapabilitySet
 from app.storage.atomic_write import atomic_write_parquet
 from app.storage.repository import KlineRepository
 

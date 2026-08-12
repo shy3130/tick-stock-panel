@@ -323,11 +323,40 @@ def get_cached(
       不落盘 (避免与 read_cache 的 mtime 校验冲突), 在此直接叠加覆盖盘后结果。
       被监控的策略拿到新鲜数据, 非监控策略仍用盘后缓存。
     """
-    data_dir = request.app.state.repo.store.data_dir
+    repo = request.app.state.repo
+    data_dir = repo.store.data_dir
     cached = strategy_cache.read_cache(data_dir)
     if cached is None:
         cached = {"as_of": None, "results": {}, "updated_at": None}
 
+    try:
+        _, canonical_date = repo.get_enriched_latest()
+    except Exception:  # noqa: BLE001
+        canonical_date = None
+    cached_as_of_raw = cached.get("as_of")
+    invalid_cached_as_of: str | None = None
+    if cached_as_of_raw:
+        try:
+            cached_as_of = date.fromisoformat(str(cached_as_of_raw))
+        except ValueError:
+            invalid_cached_as_of = str(cached_as_of_raw)
+        else:
+            if canonical_date is not None and cached_as_of > canonical_date:
+                invalid_cached_as_of = str(cached_as_of_raw)
+    if invalid_cached_as_of is not None:
+        logger.warning(
+            "忽略超出 canonical 水位的选股缓存: cached=%s canonical=%s",
+            invalid_cached_as_of,
+            canonical_date,
+        )
+        cached = {
+            "as_of": None,
+            "results": {},
+            "updated_at": None,
+            "discarded_as_of": invalid_cached_as_of,
+        }
+    cached = dict(cached)
+    cached["canonical_as_of"] = str(canonical_date) if canonical_date else None
     # 叠加监控引擎内存里的实时结果 (若有), 用新鲜数据覆盖同策略的盘后结果
     monitor_engine = getattr(request.app.state, "monitor_engine", None)
     if monitor_engine is not None:
@@ -343,9 +372,9 @@ def get_cached(
 
     # 无任何数据 (盘后缓存空 + 无实时结果) → 返回空标记, 前端据此提示
     if not cached.get("results") and cached.get("as_of") is None:
-        return {"as_of": None, "results": {}, "updated_at": None}
+        return cached
 
-    ext_values = _load_ext_value_maps(request.app.state.repo, ext_columns)
+    ext_values = _load_ext_value_maps(repo, ext_columns)
     return _cache_payload_with_ext(cached, ext_values)
 
 
@@ -397,6 +426,7 @@ def run_all(request: Request, body: Optional[dict] = None):
 
     body = body or {}
     collect_diag = bool(body.get("diagnostics", False))
+    repo = request.app.state.repo
     include_consensus = bool(body.get("include_consensus", False))
     svc = ScreenerService(repo)
 
@@ -577,7 +607,7 @@ def limit_ladder(
     prev_consec: pl.DataFrame = pl.DataFrame()
     for delta in range(1, 10):
         candidate = as_of - timedelta(days=delta)
-        df_prev = svc._load_enriched_for_date(candidate)
+        df_prev = svc._load_enriched_for_date(candidate, columns=["symbol", consec_col])
         if not df_prev.is_empty() and consec_col in df_prev.columns:
             prev_consec = df_prev.select(
                 "symbol",
