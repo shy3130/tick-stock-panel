@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class ExtField:
     """扩展字段定义。"""
-    __slots__ = ("name", "dtype", "label")
+    __slots__ = ("dtype", "label", "name")
 
     def __init__(self, name: str, dtype: str = "string", label: str = "") -> None:
         self.name = name
@@ -36,10 +36,19 @@ class ExtField:
 class PullConfig:
     """定时拉取配置。"""
     __slots__ = (
-        "url", "method", "headers", "body", "response_path",
-        "field_map", "schedule_minutes", "enabled",
-        "last_run", "last_status", "last_message", "last_rows",
+        "body",
+        "enabled",
+        "field_map",
+        "headers",
+        "last_message",
+        "last_rows",
+        "last_run",
+        "last_status",
+        "method",
         "next_run",
+        "response_path",
+        "schedule_minutes",
+        "url",
     )
 
     def __init__(
@@ -113,9 +122,16 @@ class PullConfig:
 class ExtConfig:
     """一个扩展数据源的完整配置。"""
     __slots__ = (
-        "id", "label", "mode", "fields", "description",
-        "symbol_map", "code_map",
-        "created_at", "updated_at", "pull",
+        "code_map",
+        "created_at",
+        "description",
+        "fields",
+        "id",
+        "label",
+        "mode",
+        "pull",
+        "symbol_map",
+        "updated_at",
     )
 
     def __init__(
@@ -323,7 +339,7 @@ def build_code_lookup(data_dir: Path) -> dict[str, str]:
         return {}
     try:
         df = pl.read_parquet(path, columns=["code", "symbol"])
-        return dict(zip(df["code"].to_list(), df["symbol"].to_list()))
+        return dict(zip(df["code"].to_list(), df["symbol"].to_list(), strict=False))
     except Exception:
         return {}
 
@@ -369,16 +385,24 @@ def apply_config_mapping(df: pl.DataFrame, config: ExtConfig, data_dir: Path) ->
     if cm.get("type") == "mapped" and cm["col"] in df.columns:
         df = df.with_columns(df[cm["col"]].cast(pl.Utf8).alias("code"))
 
-    if "symbol" not in df.columns and sm.get("type") == "computed":
-        if sm.get("from") == "code" and "code" in df.columns:
-            lookup = build_code_lookup(data_dir)
-            df = df.with_columns(normalize_symbol(df["code"].cast(pl.Utf8), lookup).alias("symbol"))
+    if (
+        "symbol" not in df.columns
+        and sm.get("type") == "computed"
+        and sm.get("from") == "code"
+        and "code" in df.columns
+    ):
+        lookup = build_code_lookup(data_dir)
+        df = df.with_columns(normalize_symbol(df["code"].cast(pl.Utf8), lookup).alias("symbol"))
 
-    if "code" not in df.columns and cm.get("type") == "computed":
-        if cm.get("from") == "symbol" and "symbol" in df.columns:
-            df = df.with_columns(
-                df["symbol"].cast(pl.Utf8).str.split(".").list.first().alias("code")
-            )
+    if (
+        "code" not in df.columns
+        and cm.get("type") == "computed"
+        and cm.get("from") == "symbol"
+        and "symbol" in df.columns
+    ):
+        df = df.with_columns(
+            df["symbol"].cast(pl.Utf8).str.split(".").list.first().alias("code")
+        )
 
     if "symbol" in df.columns and "code" not in df.columns:
         df = df.with_columns(

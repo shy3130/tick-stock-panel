@@ -7,11 +7,13 @@
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+import duckdb
 import polars as pl
 
 from app.parquet import scan_enriched_parquet
@@ -22,6 +24,27 @@ logger = logging.getLogger(__name__)
 # ── 进程级历史数据缓存 (避免 run_all 每次重新扫描 parquet + 计算指标) ──
 _history_cache: dict[tuple[str, date, int], tuple[float, pl.DataFrame]] = {}
 _HISTORY_CACHE_TTL = 120.0  # 秒
+
+
+def _open_sandboxed_query_connection() -> duckdb.DuckDBPyConnection:
+    """Create the isolated DuckDB used for user-authored filter expressions.
+
+    The connection may only query registered in-memory data.  Locking the
+    configuration is essential because DuckDB accepts multiple statements;
+    without it, an injected ``SET enable_external_access=true`` could undo the
+    filesystem boundary before a COPY/read_csv statement.
+    """
+    connection = duckdb.connect(
+        database=":memory:",
+        config={
+            "allow_unsigned_extensions": "false",
+            "enable_external_access": "false",
+            "memory_limit": "128MB",
+            "threads": "1",
+        },
+    )
+    connection.execute("SET lock_configuration = true")
+    return connection
 
 
 @dataclass
@@ -91,7 +114,7 @@ class ScreenerService:
 
         try:
             df = pl.read_parquet(target_parquet)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("load_enriched_for_date failed: %s", e)
             return pl.DataFrame()
 
@@ -124,7 +147,7 @@ class ScreenerService:
             try:
                 lf = pl.scan_parquet(target_parquet)
                 cols = lf.collect_schema().names()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("load_prior_consecutive scan failed for %s: %s", candidate, e)
                 return pl.DataFrame()
             # 存储列理论上必含 consec_col; 若该分区缺列则继续向前找 (与旧循环一致)
@@ -135,7 +158,7 @@ class ScreenerService:
                     "symbol",
                     pl.col(consec_col).alias("prev_consec"),
                 ).collect()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("load_prior_consecutive read failed for %s: %s", candidate, e)
                 return pl.DataFrame()
         return pl.DataFrame()
@@ -168,7 +191,7 @@ class ScreenerService:
             )
             available = [c for c in read_cols if c in lf.schema]
             df_hist = lf.select(available).collect()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("warmup history load failed: %s", e)
             df_hist = df_target
 
@@ -256,7 +279,7 @@ class ScreenerService:
             )
             available = [c for c in read_cols if c in lf.collect_schema().names()]
             df_hist = lf.select(available).collect()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("load_enriched_history failed: %s", e)
             return pl.DataFrame()
 
@@ -332,13 +355,11 @@ class ScreenerService:
             df = df.filter(pl.col("symbol").is_in(pool))
 
         # 用 DuckDB 做 SQL 过滤 (注册临时视图)
-        # 用独立的 :memory: 连接 (而非复用 repo 共享连接的 cursor): conditions 是用户
-        # 传入的 SQL 片段, 隔离连接下注入至多能碰 read_csv/read_parquet 文件; 若复用共享
-        # 连接则会把 app 已注册的真实业务表也暴露给注入, 扩大攻击面。隔离连接创建开销极低。
+        # conditions 是用户传入的 SQL 片段：只能在禁用外部访问且锁定配置的
+        # :memory: 连接中执行，不能读取文件、加载扩展或接触业务数据库。
         con = None
         try:
-            import duckdb
-            con = duckdb.connect(database=":memory:")
+            con = _open_sandboxed_query_connection()
             con.register("enriched", df.to_arrow())
             where = " AND ".join(f"({c})" for c in conditions)
             sql = f"SELECT * FROM enriched WHERE {where}"
@@ -347,15 +368,13 @@ class ScreenerService:
             if limit:
                 sql += f" LIMIT {limit}"
             df_result = con.execute(sql).pl()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("screener SQL query failed: %s", e)
             df_result = pl.DataFrame()
         finally:
             if con is not None:
-                try:
+                with contextlib.suppress(Exception):
                     con.close()
-                except Exception:  # noqa: BLE001
-                    pass
 
         rows = df_result.to_dicts() if not df_result.is_empty() else []
         elapsed = (time.perf_counter() - t0) * 1000
@@ -419,6 +438,6 @@ class ScreenerService:
             if res and res[0]:
                 d = res[0]
                 return d if isinstance(d, date) else date.fromisoformat(str(d))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         return None

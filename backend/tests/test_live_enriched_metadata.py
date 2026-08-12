@@ -81,7 +81,8 @@ def filter_history(df: pl.DataFrame, params: dict) -> pl.DataFrame:
     )
     repo = _repo(tmp_path / "data")
     live = _live_row("600000.SH", 10.0).with_columns(
-        pl.lit(30_000_000.0).alias("amount")
+        pl.lit(cn_today()).alias("date"),
+        pl.lit(30_000_000.0).alias("amount"),
     )
     repo.flush_live_enriched_asset("stock", live)
     current, _ = repo.get_enriched_latest()

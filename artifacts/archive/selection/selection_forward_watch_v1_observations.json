@@ -1,0 +1,21 @@
+{
+  "status": "PENDING_DATA",
+  "protocol_sha256": "8f68d69324a09134aa3a8af3fc54ab5398190ccd0a3a44e6c627c54ec4bdd075",
+  "calibration_end": "2026-08-11",
+  "latest_local_session": "2026-08-11",
+  "minimum_sessions": 60,
+  "target_sessions": 120,
+  "remaining_to_minimum": 60,
+  "remaining_to_target": 120,
+  "metrics": {
+    "observed_sessions": 0,
+    "usable_cohorts": 0,
+    "mean_5d_net_return": null,
+    "cohort_win_rate": null,
+    "stock_win_rate": null,
+    "cohorts": []
+  },
+  "auto_promote": false,
+  "production_default_changed": false,
+  "note": "Observation starts strictly after calibration_end. Reaching the minimum only unlocks manual audit and cannot reactivate the rejected factor overlay."
+}

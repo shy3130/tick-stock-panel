@@ -336,4 +336,3 @@ def test_build_regime_mask_first_day_allowed(tmp_path):
     )
     # 1/1 首日 → True; 1/2 由 1/1(weak) → False
     assert mask.tolist() == [True, False]
-

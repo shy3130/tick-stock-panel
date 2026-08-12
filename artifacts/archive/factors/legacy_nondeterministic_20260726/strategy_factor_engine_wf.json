@@ -1,0 +1,318 @@
+{
+  "config": {
+    "description": "mom_trend 接入真实引擎 walk-forward OOS（实盘式回测，含费/滑点/风控）",
+    "universe": 400,
+    "seed": 20260723,
+    "n_folds": 4,
+    "factor": "MOM20 MA60_DEV SIGN MUL",
+    "overrides": {
+      "stop_loss": -0.05,
+      "take_profit": null,
+      "trailing_stop": null,
+      "max_hold_days": 20
+    },
+    "note": "与 P9 因子级 OOS 同 universe/同 4 折测试段；因子为语义预设(非样本内训练)，故每段均为真实 OOS。引擎自动 warmup 用段前历史算指标，净值仅覆盖测试段。"
+  },
+  "folds": [
+    {
+      "fold": "F1",
+      "train": "2024-09-24~2025-01-21",
+      "test": "2025-01-22~2025-06-05",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": -0.1302,
+          "sharpe": -0.74,
+          "max_drawdown": -0.3038,
+          "win_rate": 0.2143,
+          "n_trades": 126,
+          "sortino": -0.92,
+          "calmar": -1.1,
+          "avg_pnl": -0.0087
+        },
+        {
+          "key": "mom20_raw",
+          "total_return": -0.3819,
+          "sharpe": -3.34,
+          "max_drawdown": -0.4412,
+          "win_rate": 0.1554,
+          "n_trades": 148,
+          "sortino": -3.92,
+          "calmar": -1.71,
+          "avg_pnl": -0.0329
+        },
+        {
+          "key": "mom_trend_regime",
+          "total_return": -0.1204,
+          "sharpe": -1.53,
+          "max_drawdown": -0.165,
+          "win_rate": 0.2536,
+          "n_trades": 138,
+          "sortino": -1.99,
+          "calmar": -1.9,
+          "avg_pnl": -0.0065
+        },
+        {
+          "key": "pullback_to_support",
+          "total_return": -0.1397,
+          "sharpe": -1.06,
+          "max_drawdown": -0.306,
+          "win_rate": 0.3474,
+          "n_trades": 95,
+          "sortino": -1.26,
+          "calmar": -1.17,
+          "avg_pnl": -0.0071
+        },
+        {
+          "key": "bullish_alignment",
+          "total_return": -0.3533,
+          "sharpe": -3.19,
+          "max_drawdown": -0.4237,
+          "win_rate": 0.1908,
+          "n_trades": 173,
+          "sortino": -3.67,
+          "calmar": -1.7,
+          "avg_pnl": -0.0256
+        }
+      ]
+    },
+    {
+      "fold": "F2",
+      "train": "2024-09-24~2025-06-05",
+      "test": "2025-06-06~2025-10-13",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": -0.0829,
+          "sharpe": -0.48,
+          "max_drawdown": -0.145,
+          "win_rate": 0.232,
+          "n_trades": 125,
+          "sortino": -0.67,
+          "calmar": -1.54,
+          "avg_pnl": -0.0055
+        },
+        {
+          "key": "mom20_raw",
+          "total_return": -0.0648,
+          "sharpe": -0.32,
+          "max_drawdown": -0.145,
+          "win_rate": 0.2439,
+          "n_trades": 123,
+          "sortino": -0.45,
+          "calmar": -1.23,
+          "avg_pnl": -0.0037
+        },
+        {
+          "key": "mom_trend_regime",
+          "total_return": -0.0947,
+          "sharpe": -0.57,
+          "max_drawdown": -0.1899,
+          "win_rate": 0.2698,
+          "n_trades": 126,
+          "sortino": -0.81,
+          "calmar": -1.33,
+          "avg_pnl": -0.0026
+        },
+        {
+          "key": "pullback_to_support",
+          "total_return": -0.0326,
+          "sharpe": -0.13,
+          "max_drawdown": -0.1729,
+          "win_rate": 0.3171,
+          "n_trades": 82,
+          "sortino": -0.17,
+          "calmar": -0.53,
+          "avg_pnl": -0.002
+        },
+        {
+          "key": "bullish_alignment",
+          "total_return": -0.1441,
+          "sharpe": -1.03,
+          "max_drawdown": -0.1943,
+          "win_rate": 0.2042,
+          "n_trades": 142,
+          "sortino": -1.38,
+          "calmar": -1.88,
+          "avg_pnl": -0.0123
+        }
+      ]
+    },
+    {
+      "fold": "F3",
+      "train": "2024-09-24~2025-10-13",
+      "test": "2025-10-14~2026-02-12",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": 0.1744,
+          "sharpe": 1.33,
+          "max_drawdown": -0.1434,
+          "win_rate": 0.2014,
+          "n_trades": 144,
+          "sortino": 2.03,
+          "calmar": 4.2,
+          "avg_pnl": 0.0172
+        },
+        {
+          "key": "mom20_raw",
+          "total_return": -0.0305,
+          "sharpe": 0.01,
+          "max_drawdown": -0.2037,
+          "win_rate": 0.1656,
+          "n_trades": 157,
+          "sortino": 0.02,
+          "calmar": -0.43,
+          "avg_pnl": -0.0015
+        },
+        {
+          "key": "mom_trend_regime",
+          "total_return": 0.0511,
+          "sharpe": 0.62,
+          "max_drawdown": -0.1367,
+          "win_rate": 0.2579,
+          "n_trades": 159,
+          "sortino": 0.88,
+          "calmar": 1.15,
+          "avg_pnl": 0.0026
+        },
+        {
+          "key": "pullback_to_support",
+          "total_return": 0.3422,
+          "sharpe": 2.42,
+          "max_drawdown": -0.1148,
+          "win_rate": 0.3295,
+          "n_trades": 88,
+          "sortino": 4.1,
+          "calmar": 11.93,
+          "avg_pnl": 0.0174
+        },
+        {
+          "key": "bullish_alignment",
+          "total_return": -0.0843,
+          "sharpe": -0.44,
+          "max_drawdown": -0.1962,
+          "win_rate": 0.1854,
+          "n_trades": 178,
+          "sortino": -0.61,
+          "calmar": -1.16,
+          "avg_pnl": -0.0082
+        }
+      ]
+    },
+    {
+      "fold": "F4",
+      "train": "2024-09-24~2026-02-12",
+      "test": "2026-02-13~2026-06-30",
+      "runs": [
+        {
+          "key": "mom_trend",
+          "total_return": 0.4171,
+          "sharpe": 2.88,
+          "max_drawdown": -0.1394,
+          "win_rate": 0.2459,
+          "n_trades": 122,
+          "sortino": 5.22,
+          "calmar": 12.52,
+          "avg_pnl": 0.0309
+        },
+        {
+          "key": "mom20_raw",
+          "total_return": 0.252,
+          "sharpe": 1.96,
+          "max_drawdown": -0.1211,
+          "win_rate": 0.224,
+          "n_trades": 125,
+          "sortino": 3.13,
+          "calmar": 7.58,
+          "avg_pnl": 0.0193
+        },
+        {
+          "key": "mom_trend_regime",
+          "total_return": 0.258,
+          "sharpe": 2.19,
+          "max_drawdown": -0.0675,
+          "win_rate": 0.2481,
+          "n_trades": 133,
+          "sortino": 3.84,
+          "calmar": 13.99,
+          "avg_pnl": 0.0219
+        },
+        {
+          "key": "pullback_to_support",
+          "total_return": 0.3314,
+          "sharpe": 2.28,
+          "max_drawdown": -0.2452,
+          "win_rate": 0.3011,
+          "n_trades": 93,
+          "sortino": 3.63,
+          "calmar": 5.27,
+          "avg_pnl": 0.0221
+        },
+        {
+          "key": "bullish_alignment",
+          "total_return": 0.4755,
+          "sharpe": 3.25,
+          "max_drawdown": -0.1201,
+          "win_rate": 0.2754,
+          "n_trades": 138,
+          "sortino": 5.46,
+          "calmar": 17.37,
+          "avg_pnl": 0.0355
+        }
+      ]
+    }
+  ],
+  "aggregate": {
+    "mom_trend": {
+      "note": "主因子：MOM20·SIGN(MA60_DEV) 站稳长期趋势才采信动量",
+      "positive_folds": 2,
+      "n_folds": 4,
+      "mean_total_return": 0.0946,
+      "mean_sharpe": 0.748,
+      "mean_max_drawdown": -0.1829,
+      "mean_win_rate": 0.2234,
+      "mean_n_trades": 129.2
+    },
+    "mom20_raw": {
+      "note": "对照：纯 20 日动量（无 MA60 趋势确认）",
+      "positive_folds": 1,
+      "n_folds": 4,
+      "mean_total_return": -0.0563,
+      "mean_sharpe": -0.422,
+      "mean_max_drawdown": -0.2277,
+      "mean_win_rate": 0.1972,
+      "mean_n_trades": 138.2
+    },
+    "mom_trend_regime": {
+      "note": "主因子 + 龙头指数 regime 软减仓(scale_existing, bear=0.3)",
+      "positive_folds": 2,
+      "n_folds": 4,
+      "mean_total_return": 0.0235,
+      "mean_sharpe": 0.177,
+      "mean_max_drawdown": -0.1398,
+      "mean_win_rate": 0.2573,
+      "mean_n_trades": 139.0
+    },
+    "pullback_to_support": {
+      "note": "既定强策略基准",
+      "positive_folds": 2,
+      "n_folds": 4,
+      "mean_total_return": 0.1253,
+      "mean_sharpe": 0.877,
+      "mean_max_drawdown": -0.2097,
+      "mean_win_rate": 0.3238,
+      "mean_n_trades": 89.5
+    },
+    "bullish_alignment": {
+      "note": "既定强策略基准",
+      "positive_folds": 1,
+      "n_folds": 4,
+      "mean_total_return": -0.0266,
+      "mean_sharpe": -0.353,
+      "mean_max_drawdown": -0.2336,
+      "mean_win_rate": 0.214,
+      "mean_n_trades": 157.8
+    }
+  }
+}

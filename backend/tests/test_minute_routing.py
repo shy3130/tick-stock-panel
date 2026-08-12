@@ -17,10 +17,11 @@ from unittest.mock import MagicMock
 import httpx
 import polars as pl
 
+from app.data_providers.custom.config import CustomSourceConfig, DatasetConfig
+from app.data_providers.custom.provider import GenericHTTPProvider
 from app.plugins.stocksdk import provider as sp
 from app.plugins.stocksdk.provider import StockSDKProvider
 from app.services import kline_sync
-
 
 # ---------- 辅助 ----------
 
@@ -470,9 +471,6 @@ def test_provider_has_dataset_exception_falls_back(monkeypatch):
 
 
 # ---------- 测试 15-17: GenericHTTPProvider opt-in 参数传递 (Issue 3) ----------
-
-from app.data_providers.custom.config import CustomSourceConfig, DatasetConfig
-from app.data_providers.custom.provider import GenericHTTPProvider
 
 
 def _make_minute_config(**extra) -> CustomSourceConfig:

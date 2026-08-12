@@ -1,0 +1,1 @@
+"""Legacy validation diagnostics."""

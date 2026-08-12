@@ -111,8 +111,8 @@ def _parse_days(c: dict, key: str, i: int) -> int:
     raw = c.get(key, 0)
     try:
         n = int(raw)
-    except (TypeError, ValueError):
-        raise ValueError(f"第 {i+1} 个条件: {key} 必须是整数: {raw!r}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"第 {i+1} 个条件: {key} 必须是整数: {raw!r}") from exc
     if n < 0 or n > MAX_DAYS:
         raise ValueError(f"第 {i+1} 个条件: {key} 必须在 0..{MAX_DAYS} 之间: {n}")
     return n
@@ -132,8 +132,8 @@ def _parse_right(right: str) -> tuple[str, object]:
     # 纯数字
     try:
         return ("const", float(right))
-    except ValueError:
-        raise ValueError(f"非法右值（应为 field:xxx 或数字）: {right!r}")
+    except ValueError as exc:
+        raise ValueError(f"非法右值（应为 field:xxx 或数字）: {right!r}") from exc
 
 
 def validate(sig: dict) -> None:

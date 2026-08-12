@@ -6,15 +6,17 @@
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -64,10 +66,7 @@ def _normalize_param_defs(params: Any) -> list[dict]:
         for key, val in params.items():
             if not isinstance(key, str) or not key:
                 continue
-            if isinstance(val, dict):
-                item = {"id": key, **val}
-            else:
-                item = {"id": key, "default": val}
+            item = {"id": key, **val} if isinstance(val, dict) else {"id": key, "default": val}
             items.append(item)
         return [_normalize_param_item(item) for item in items]
 
@@ -382,7 +381,7 @@ class StrategyEngine:
                 )
         except ValueError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:
             # 文件读不到/语法错等: 不阻断, 让下方 exec_module 抛原样错误
             pass
 
@@ -406,10 +405,8 @@ class StrategyEngine:
                     sys.modules[spec.name] = previous_module
                 raise
             finally:
-                try:
+                with contextlib.suppress(ValueError):
                     sys.path.remove(inserted_path)
-                except ValueError:
-                    pass
 
         meta = dict(getattr(mod, "META", {}) or {})
         meta.setdefault("id", path.stem)
@@ -430,6 +427,9 @@ class StrategyEngine:
             source = "ai"
         elif "/composite/" in normalized_path:
             source = "composite"
+
+        from app.strategy.catalog import apply_catalog_metadata
+        meta = apply_catalog_metadata(meta, source=source)
 
         if source == "builtin" and "asset_types" not in meta:
             raise ValueError("builtin strategy META must declare asset_types")
@@ -1230,7 +1230,7 @@ class StrategyEngine:
                     loaded = self._override_loader(cid)
                     if isinstance(loaded, dict):
                         child_override = dict(loaded)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             if shared_basic_filter:
                 child_override["basic_filter"] = shared_basic_filter

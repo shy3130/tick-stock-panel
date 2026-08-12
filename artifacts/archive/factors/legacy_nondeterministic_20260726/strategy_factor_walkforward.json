@@ -1,0 +1,334 @@
+{
+  "config": {
+    "full_range": "2024-09-24~2026-06-30",
+    "n_symbols": 400,
+    "n_folds": 4,
+    "n_random_null_per_fold": 100,
+    "seed": 20260723,
+    "robust_rule": "positive_folds>=3/4 AND beat_null_folds>=3/4 (在多数区间既盈利、又跑赢随机 null)"
+  },
+  "folds": [
+    {
+      "fold": "F1",
+      "train": "2024-09-24~2025-01-21",
+      "test": "2025-01-22~2025-06-05",
+      "n_symbols": 389,
+      "T_test": 59,
+      "null_frac_positive": 0.5,
+      "null_mean_sharpe": 0.059,
+      "factors": {
+        "mom_trend": {
+          "train_mean_ic": 0.0015,
+          "train_icir": 0.488,
+          "train_sharpe": 1.213,
+          "test_mean_ic": -0.0085,
+          "test_icir": -2.059,
+          "test_sharpe": 0.027,
+          "oos_pct_in_null": 0.5263
+        },
+        "mom_vol": {
+          "train_mean_ic": -0.0234,
+          "train_icir": -2.546,
+          "train_sharpe": -0.774,
+          "test_mean_ic": -0.0386,
+          "test_icir": -4.097,
+          "test_sharpe": -2.167,
+          "oos_pct_in_null": 0.0526
+        },
+        "mom_anti_ext": {
+          "train_mean_ic": -0.0118,
+          "train_icir": -3.269,
+          "train_sharpe": -0.255,
+          "test_mean_ic": -0.0004,
+          "test_icir": -0.164,
+          "test_sharpe": -0.396,
+          "oos_pct_in_null": 0.4737
+        },
+        "mom_rsi": {
+          "train_mean_ic": 0.0302,
+          "train_icir": 3.613,
+          "train_sharpe": 0.864,
+          "test_mean_ic": -0.0144,
+          "test_icir": -1.593,
+          "test_sharpe": -1.13,
+          "oos_pct_in_null": 0.2632
+        },
+        "ma20_dev": {
+          "train_mean_ic": 0.008,
+          "train_icir": 0.849,
+          "train_sharpe": 0.063,
+          "test_mean_ic": -0.0259,
+          "test_icir": -2.565,
+          "test_sharpe": -2.389,
+          "oos_pct_in_null": 0.0526
+        },
+        "mom20": {
+          "train_mean_ic": -0.0234,
+          "train_icir": -2.546,
+          "train_sharpe": -0.774,
+          "test_mean_ic": -0.0386,
+          "test_icir": -4.097,
+          "test_sharpe": -2.167,
+          "oos_pct_in_null": 0.0526
+        }
+      }
+    },
+    {
+      "fold": "F2",
+      "train": "2024-09-24~2025-06-05",
+      "test": "2025-06-06~2025-10-13",
+      "n_symbols": 391,
+      "T_test": 72,
+      "null_frac_positive": 0.944,
+      "null_mean_sharpe": 4.219,
+      "factors": {
+        "mom_trend": {
+          "train_mean_ic": -0.0031,
+          "train_icir": -0.362,
+          "train_sharpe": 1.269,
+          "test_mean_ic": -0.0035,
+          "test_icir": -0.672,
+          "test_sharpe": 2.593,
+          "oos_pct_in_null": 0.1053
+        },
+        "mom_vol": {
+          "train_mean_ic": -0.0182,
+          "train_icir": -1.788,
+          "train_sharpe": 0.392,
+          "test_mean_ic": 0.0382,
+          "test_icir": 3.527,
+          "test_sharpe": 3.864,
+          "oos_pct_in_null": 0.4211
+        },
+        "mom_anti_ext": {
+          "train_mean_ic": -0.0029,
+          "train_icir": -1.093,
+          "train_sharpe": 0.339,
+          "test_mean_ic": -0.0031,
+          "test_icir": -1.09,
+          "test_sharpe": 2.619,
+          "oos_pct_in_null": 0.1053
+        },
+        "mom_rsi": {
+          "train_mean_ic": -0.0006,
+          "train_icir": -0.069,
+          "train_sharpe": 0.57,
+          "test_mean_ic": 0.0483,
+          "test_icir": 4.516,
+          "test_sharpe": 4.774,
+          "oos_pct_in_null": 0.5263
+        },
+        "ma20_dev": {
+          "train_mean_ic": -0.0091,
+          "train_icir": -0.883,
+          "train_sharpe": 0.377,
+          "test_mean_ic": 0.0492,
+          "test_icir": 4.704,
+          "test_sharpe": 5.155,
+          "oos_pct_in_null": 0.6316
+        },
+        "mom20": {
+          "train_mean_ic": -0.0182,
+          "train_icir": -1.788,
+          "train_sharpe": 0.392,
+          "test_mean_ic": 0.0382,
+          "test_icir": 3.527,
+          "test_sharpe": 3.864,
+          "oos_pct_in_null": 0.4211
+        }
+      }
+    },
+    {
+      "fold": "F3",
+      "train": "2024-09-24~2025-10-13",
+      "test": "2025-10-14~2026-02-12",
+      "n_symbols": 393,
+      "T_test": 75,
+      "null_frac_positive": 0.833,
+      "null_mean_sharpe": 1.815,
+      "factors": {
+        "mom_trend": {
+          "train_mean_ic": 0.0165,
+          "train_icir": 1.543,
+          "train_sharpe": 2.372,
+          "test_mean_ic": -0.0086,
+          "test_icir": -1.332,
+          "test_sharpe": 1.997,
+          "oos_pct_in_null": 0.6316
+        },
+        "mom_vol": {
+          "train_mean_ic": 0.017,
+          "train_icir": 1.551,
+          "train_sharpe": 2.421,
+          "test_mean_ic": -0.0041,
+          "test_icir": -0.486,
+          "test_sharpe": 0.224,
+          "oos_pct_in_null": 0.2632
+        },
+        "mom_anti_ext": {
+          "train_mean_ic": 0.0009,
+          "train_icir": 0.278,
+          "train_sharpe": 2.627,
+          "test_mean_ic": 0.0022,
+          "test_icir": 0.735,
+          "test_sharpe": 1.236,
+          "oos_pct_in_null": 0.5263
+        },
+        "mom_rsi": {
+          "train_mean_ic": 0.023,
+          "train_icir": 2.066,
+          "train_sharpe": 2.869,
+          "test_mean_ic": -0.0126,
+          "test_icir": -1.406,
+          "test_sharpe": 0.548,
+          "oos_pct_in_null": 0.3158
+        },
+        "ma20_dev": {
+          "train_mean_ic": 0.0243,
+          "train_icir": 2.265,
+          "train_sharpe": 2.796,
+          "test_mean_ic": 0.0016,
+          "test_icir": 0.199,
+          "test_sharpe": -0.051,
+          "oos_pct_in_null": 0.2105
+        },
+        "mom20": {
+          "train_mean_ic": 0.017,
+          "train_icir": 1.551,
+          "train_sharpe": 2.421,
+          "test_mean_ic": -0.0041,
+          "test_icir": -0.486,
+          "test_sharpe": 0.224,
+          "oos_pct_in_null": 0.2632
+        }
+      }
+    },
+    {
+      "fold": "F4",
+      "train": "2024-09-24~2026-02-12",
+      "test": "2026-02-13~2026-06-30",
+      "n_symbols": 391,
+      "T_test": 61,
+      "null_frac_positive": 0.778,
+      "null_mean_sharpe": 0.764,
+      "factors": {
+        "mom_trend": {
+          "train_mean_ic": 0.0066,
+          "train_icir": 0.682,
+          "train_sharpe": 1.713,
+          "test_mean_ic": 0.0092,
+          "test_icir": 2.394,
+          "test_sharpe": 2.025,
+          "oos_pct_in_null": 0.7368
+        },
+        "mom_vol": {
+          "train_mean_ic": 0.0001,
+          "train_icir": 0.014,
+          "train_sharpe": 1.188,
+          "test_mean_ic": 0.0552,
+          "test_icir": 5.164,
+          "test_sharpe": 3.226,
+          "oos_pct_in_null": 0.8421
+        },
+        "mom_anti_ext": {
+          "train_mean_ic": 0.0025,
+          "train_icir": 0.708,
+          "train_sharpe": 1.68,
+          "test_mean_ic": 0.0089,
+          "test_icir": 2.239,
+          "test_sharpe": 0.541,
+          "oos_pct_in_null": 0.3684
+        },
+        "mom_rsi": {
+          "train_mean_ic": 0.0127,
+          "train_icir": 1.261,
+          "train_sharpe": 2.047,
+          "test_mean_ic": 0.0423,
+          "test_icir": 6.432,
+          "test_sharpe": 3.184,
+          "oos_pct_in_null": 0.8421
+        },
+        "ma20_dev": {
+          "train_mean_ic": 0.0003,
+          "train_icir": 0.026,
+          "train_sharpe": 0.93,
+          "test_mean_ic": 0.0561,
+          "test_icir": 5.571,
+          "test_sharpe": 3.703,
+          "oos_pct_in_null": 0.8947
+        },
+        "mom20": {
+          "train_mean_ic": 0.0001,
+          "train_icir": 0.014,
+          "train_sharpe": 1.188,
+          "test_mean_ic": 0.0552,
+          "test_icir": 5.164,
+          "test_sharpe": 3.226,
+          "oos_pct_in_null": 0.8421
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "mom_trend": {
+      "narrative": "趋势确认动量：站稳 MA60 才采信 20 日动量方向。",
+      "formula": "MOM20 MA60_DEV SIGN MUL",
+      "positive_folds": 4,
+      "beat_null_folds": 2,
+      "n_folds": 4,
+      "mean_oos_sharpe": 1.66,
+      "mean_test_icir": -0.417,
+      "robust_across_regimes": false
+    },
+    "mom_vol": {
+      "narrative": "量能确认动量：放量才信动量，缩量反弹视为假动作。",
+      "formula": "MOM20 VOL_RATIO SIGN MUL",
+      "positive_folds": 3,
+      "beat_null_folds": 1,
+      "n_folds": 4,
+      "mean_oos_sharpe": 1.287,
+      "mean_test_icir": 1.027,
+      "robust_across_regimes": false
+    },
+    "mom_anti_ext": {
+      "narrative": "防追高动量：动量按 |MA20 偏离| 倒数加权，规避追顶。",
+      "formula": "MOM20 MA20_DEV ABS DIV",
+      "positive_folds": 3,
+      "beat_null_folds": 0,
+      "n_folds": 4,
+      "mean_oos_sharpe": 1.0,
+      "mean_test_icir": 0.43,
+      "robust_across_regimes": false
+    },
+    "mom_rsi": {
+      "narrative": "RSI 加权动量：用 RSI14 给动量加置信权重。",
+      "formula": "MOM20 RSI14 MUL",
+      "positive_folds": 3,
+      "beat_null_folds": 2,
+      "n_folds": 4,
+      "mean_oos_sharpe": 1.844,
+      "mean_test_icir": 1.987,
+      "robust_across_regimes": false
+    },
+    "ma20_dev": {
+      "narrative": "基准：纯均线偏离。",
+      "formula": "MA20_DEV",
+      "positive_folds": 2,
+      "beat_null_folds": 2,
+      "n_folds": 4,
+      "mean_oos_sharpe": 1.605,
+      "mean_test_icir": 1.977,
+      "robust_across_regimes": false
+    },
+    "mom20": {
+      "narrative": "基准：纯 20 日动量。",
+      "formula": "MOM20",
+      "positive_folds": 3,
+      "beat_null_folds": 1,
+      "n_folds": 4,
+      "mean_oos_sharpe": 1.287,
+      "mean_test_icir": 1.027,
+      "robust_across_regimes": false
+    }
+  }
+}

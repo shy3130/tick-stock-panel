@@ -1,84 +1,51 @@
-# 策略指南
+# 后端策略开发指南
 
-策略是选股引擎、回测、监控的基础。本文介绍策略体系与三种扩展方式。
+当前项目不包含自定义前端。策略通过 Python 模块、回测 API、MVP CLI 和研究脚本使用。
 
-完整策略开发规范(AI 生成与手写)见 [`backend/app/strategy/prompts/strategy-guide.md`](../backend/app/strategy/prompts/strategy-guide.md)。
+## 生命周期
 
----
+生命周期事实源是 `backend/app/strategy/catalog.py`：
 
-## 内置策略
+- `core`：默认展示的产品入口，目前仅均线多头、趋势突破、回踩支撑。
+- `tool`：自定义因子载体，不代表独立 alpha。
+- `experimental`：能力可运行但没有通过 fresh OOS，默认隐藏。
+- `legacy`：为兼容保留的旧模板，默认隐藏。
+- `user`：用户或 AI 生成策略，证据状态从 `unverified` 开始。
 
-**18 个内置策略**,每个策略一个独立 Python 文件,基于 Polars 表达式向量化实现(`backend/app/strategy/builtin/`):
+当前共有 22 个 builtin；数量不等于有效策略数量。显式 ID 可以运行隐藏策略，但不能
+绕过其证据状态。
 
-| 类型        | 代表策略                                                 |
-| :---------- | :------------------------------------------------------- |
-| 趋势 / 形态 | 趋势突破 · 均线多头 · MA 金叉 · MACD 金叉放量 · 布林突破 |
-| 量价 / 涨停 | 量价齐升 · 高换手强势 · 连板股 · 断板反包 · 涨停动量 · 接近涨停 |
-| 反转 / 波动 | 超跌反弹 · 超卖反转 · 新低反转 · 低波动龙头 · 回踩 MA20 · 回踩支撑 · 强势开盘 |
+## 新增 builtin
 
-内置目录 `backend/app/strategy/builtin/` 由项目维护,**AI 生成的策略不会落入此目录**。
+1. 文件放入 `backend/app/strategy/builtin/<descriptive_name>.py`，ID 与文件名一致。
+2. 实现 `META`、`EXECUTION_BACKEND="matrix_native"` 和 `MATRIX_STRATEGY`。
+3. 只使用安全白名单依赖；builtin 之间禁止互相 import。
+4. `compute_signals` 输出 finite `float32` score，并显式声明所需字段和暖机 bars。
+5. 在 `catalog.py` 登记生命周期。新策略默认必须是 experimental 或 legacy，不能直接 core。
+6. 测试放 `backend/tests/strategy/` 或 `backend/tests/backtest/`。
+7. 收益研究放 `backend/research/<domain>/`；测试折不得参与选参。
 
----
+## 因子组合
 
-## 扩展策略的三种方式
+`custom_factor` 可作为独立研究工具，也可通过 `StrategyBacktestConfig.composition` 与现有
+matrix-native 策略组合。组合支持 AND/OR 入场、截面百分位评分和任一组件退出。是否组合
+是可选配置；机制可用不代表组合已经通过 OOS。
 
-### 🎛️ 方式一:自定义信号(不写代码)
+## 可解释选股
 
-在选股页 UI 上用 `字段 + 操作符 + 阈值` 组合,编译成 Polars 表达式热加载。适合:
+`quality_momentum_v1` 保留在 experimental 生命周期以便复现，但 P16 的 PIT-ST
+walk-forward 已把证据状态降为 `historical_replay_failed`。执行评分事实源位于
+`backend/app/strategy/builtin/quality_momentum_v1.py`，逐股审计位于
+`backend/research/selection/`。历史 ST 状态已按日接入；当前行业分类仍不是
+point-in-time，消息历史库尚未提供，两者不得倒灌历史评分。
 
-- 快速验证一个简单的筛选思路(如 `RSI < 30 AND 量比 > 2`)
-- 不熟悉 Python 但想自定义筛选条件
+## 最低验证
 
-底层实现在 `backend/app/strategy/custom_signals.py`。
+```powershell
+Set-Location backend
+.\.venv\Scripts\python.exe -m scripts.check_structure
+.\.venv\Scripts\python.exe -m pytest tests\strategy tests\backtest -q
+```
 
-### 🤖 方式二:AI 生成
-
-一句话描述思路,LLM 读取精简运行时指南生成完整策略文件:
-
-1. **配置 AI 接口**(留空即关闭,见 [configuration.md → AI](./configuration.md#ai可选)):
-   ```ini
-   AI_PROVIDER=openai_compat
-   AI_BASE_URL=https://api.deepseek.com/v1
-   AI_API_KEY=sk-...
-   AI_MODEL=deepseek-chat
-   ```
-2. 在选股页打开「AI 策略生成器」,用自然语言描述你的策略思路
-3. 前端流式接收生成代码,后端经 `ast` 安全校验(禁止 import os/sys/subprocess 等危险模块)后返回结果
-4. 保存后落入 `data/strategies/ai/`,文件名/ID 用 `ai_` 前缀
-
-生成策略相关提示词位于 `backend/app/strategy/prompts/`:
-
-- `strategy-guide-compact.md` — AI 运行时精简指南(用于降低长请求超时概率)
-- `strategy-guide.md` — 完整策略开发规范(供人工开发和详细参考)
-- `strategy-builder-step2.md` — 步骤 2 提示词模板(修改已有策略)
-- `strategy-example.md` — 从零创建强势反包策略的三步演示
-
-> 💡 **文件与范围铁律**:AI 生成的策略只生成一个 `.py` 文件,只 `import polars as pl`,绝不修改 `backend/`、`docs/`、`frontend/` 等现有文件。
-
-### 📝 方式三:自定义编写 / 代码迁移
-
-可以在选股页「自定义编写」中直接编辑策略代码并保存,新建自定义策略会落入 `data/strategies/custom/`,文件名/ID 用 `custom_` 前缀。也可以手动把已有策略改写为 Polars 文件后放入该目录,引擎会自动发现。
-
-手写策略需遵循 [`strategy-guide.md`](../backend/app/strategy/prompts/strategy-guide.md) 的文件结构(META / basic_filter / scoring / ENTRY_SIGNALS / filter 等),完整规范见该文档。
-
----
-
-## 策略文件结构(简述)
-
-一个策略 `.py` 文件通常包含:
-
-| 部分 | 作用 |
-| :--- | :--- |
-| `META` | 策略元信息(名称、参数、方向等),用户可在 UI 调整阈值 |
-| `basic_filter(df, params)` | 模式 A:单日过滤,返回 `pl.Expr` |
-| `filter_history(df, params)` | 模式 B:历史窗口过滤,返回 `pl.DataFrame`(配 `LOOKBACK_DAYS`) |
-| `scoring` | 评分权重,总和 = 1.0 |
-| `ENTRY_SIGNALS` / `EXIT_SIGNALS` | 进出场信号列(回测用) |
-
-完整字段说明与示例见 [`strategy-guide.md`](../backend/app/strategy/prompts/strategy-guide.md)。
-
----
-
-## 新增内置策略(贡献者)
-
-如果你想为项目贡献一个内置策略:在 `backend/app/strategy/builtin/` 参照现有文件实现 `StrategyDef`,引擎会自动发现并加载。欢迎提交 PR。
+完整目录与依赖规范见 [`ARCHITECTURE.md`](../ARCHITECTURE.md)。旧页面操作说明已归档到
+`docs/archive/legacy-panel/`。

@@ -1,0 +1,1145 @@
+{
+  "bullish_alignment": {
+    "design": {
+      "goal": "趋势赢家加固：在保持高收益下尝试评分集中与宽松移动止盈，进一步提升 Sharpe/回撤。",
+      "metric": "总收益保持 >= +50% 且 Sharpe 由 4.10 不降(目标 >= 4.2)。",
+      "steps": [
+        "候选: 默认基线 / score_min∈{0.5,0.7}(只取评分前段) / 宽松移动止盈(浮盈>=18%启动, 回撤10%卖)。",
+        "目标=总收益最大化, tie-break Sharpe, n_trades>=20; 取最优。",
+        "若移动止盈因砍早赢家而劣于基线, 优化器自动回落到基线/评分过滤。"
+      ]
+    },
+    "baseline": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 95,
+        "win_rate": 0.2632,
+        "total_return": 0.5857,
+        "final_return": 0.5857450200000001,
+        "max_drawdown": -0.0987,
+        "sharpe": 4.1,
+        "sortino": 7.49,
+        "profit_factor": 5.48,
+        "final_equity": 1585745.02
+      }
+    },
+    "optimized": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 95,
+        "win_rate": 0.2632,
+        "total_return": 0.5857,
+        "final_return": 0.5857450200000001,
+        "max_drawdown": -0.0987,
+        "sharpe": 4.1,
+        "sortino": 7.49,
+        "profit_factor": 5.48,
+        "final_equity": 1585745.02
+      },
+      "improved": false
+    },
+    "grid": [
+      {
+        "tag": "默认(基线)",
+        "params": null,
+        "overrides": null,
+        "summary": {
+          "n_trades": 95,
+          "win_rate": 0.2632,
+          "total_return": 0.5857,
+          "final_return": 0.5857450200000001,
+          "max_drawdown": -0.0987,
+          "sharpe": 4.1,
+          "sortino": 7.49,
+          "profit_factor": 5.48,
+          "final_equity": 1585745.02
+        }
+      },
+      {
+        "tag": {
+          "ov:score_min": 0.5
+        },
+        "params": null,
+        "overrides": {
+          "score_min": 0.5
+        },
+        "summary": {
+          "n_trades": 95,
+          "win_rate": 0.2632,
+          "total_return": 0.5857,
+          "final_return": 0.5857450200000001,
+          "max_drawdown": -0.0987,
+          "sharpe": 4.1,
+          "sortino": 7.49,
+          "profit_factor": 5.48,
+          "final_equity": 1585745.02
+        }
+      },
+      {
+        "tag": {
+          "ov:score_min": 0.7
+        },
+        "params": null,
+        "overrides": {
+          "score_min": 0.7
+        },
+        "summary": {
+          "n_trades": 95,
+          "win_rate": 0.2632,
+          "total_return": 0.5857,
+          "final_return": 0.5857450200000001,
+          "max_drawdown": -0.0987,
+          "sharpe": 4.1,
+          "sortino": 7.49,
+          "profit_factor": 5.48,
+          "final_equity": 1585745.02
+        }
+      },
+      {
+        "tag": {
+          "ov:trailing_take_profit_activate": 0.18,
+          "ov:trailing_take_profit_drawdown": 0.1
+        },
+        "params": null,
+        "overrides": {
+          "trailing_take_profit_activate": 0.18,
+          "trailing_take_profit_drawdown": 0.1
+        },
+        "summary": {
+          "n_trades": 166,
+          "win_rate": 0.3494,
+          "total_return": 0.4161,
+          "final_return": 0.41608376,
+          "max_drawdown": -0.1184,
+          "sharpe": 3.08,
+          "sortino": 5.14,
+          "profit_factor": 2.88,
+          "final_equity": 1416083.76
+        }
+      },
+      {
+        "tag": {
+          "ov:stop_loss": -0.06,
+          "ov:trailing_take_profit_activate": 0.2,
+          "ov:trailing_take_profit_drawdown": 0.1
+        },
+        "params": null,
+        "overrides": {
+          "stop_loss": -0.06,
+          "trailing_take_profit_activate": 0.2,
+          "trailing_take_profit_drawdown": 0.1
+        },
+        "summary": {
+          "n_trades": 161,
+          "win_rate": 0.3354,
+          "total_return": 0.4786,
+          "final_return": 0.47856903000000006,
+          "max_drawdown": -0.1151,
+          "sharpe": 3.38,
+          "sortino": 5.92,
+          "profit_factor": 3.22,
+          "final_equity": 1478569.03
+        }
+      }
+    ]
+  },
+  "pullback_to_support": {
+    "design": {
+      "goal": "趋势赢家加固：提升回踩质量与选股集中度，进一步抬升 Sharpe。",
+      "metric": "Sharpe 由 3.59 提升至 >= 4.0, 总收益保持 >= +35%。",
+      "steps": [
+        "候选: 默认基线 / ma_proximity∈{0.03}, vol_ratio_max∈{0.6} / score_min∈{0.3} / 收紧止损+缩持仓(-0.04,12天)。",
+        "目标=总收益最大化, tie-break Sharpe; 取最优组合。"
+      ]
+    },
+    "baseline": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 145,
+        "win_rate": 0.3379,
+        "total_return": 0.3962,
+        "final_return": 0.39624393999999996,
+        "max_drawdown": -0.1004,
+        "sharpe": 3.59,
+        "sortino": 6.58,
+        "profit_factor": 3.74,
+        "final_equity": 1396243.94
+      }
+    },
+    "optimized": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 145,
+        "win_rate": 0.3379,
+        "total_return": 0.3962,
+        "final_return": 0.39624393999999996,
+        "max_drawdown": -0.1004,
+        "sharpe": 3.59,
+        "sortino": 6.58,
+        "profit_factor": 3.74,
+        "final_equity": 1396243.94
+      },
+      "improved": false
+    },
+    "grid": [
+      {
+        "tag": "默认(基线)",
+        "params": null,
+        "overrides": null,
+        "summary": {
+          "n_trades": 145,
+          "win_rate": 0.3379,
+          "total_return": 0.3962,
+          "final_return": 0.39624393999999996,
+          "max_drawdown": -0.1004,
+          "sharpe": 3.59,
+          "sortino": 6.58,
+          "profit_factor": 3.74,
+          "final_equity": 1396243.94
+        }
+      },
+      {
+        "tag": {
+          "ma_proximity": 0.03,
+          "vol_ratio_max": 0.6
+        },
+        "params": {
+          "ma_proximity": 0.03,
+          "vol_ratio_max": 0.6
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 146,
+          "win_rate": 0.3014,
+          "total_return": 0.1134,
+          "final_return": 0.11337271999999987,
+          "max_drawdown": -0.1232,
+          "sharpe": 1.5,
+          "sortino": 2.19,
+          "profit_factor": 3.03,
+          "final_equity": 1113372.72
+        }
+      },
+      {
+        "tag": {
+          "ov:score_min": 0.3
+        },
+        "params": null,
+        "overrides": {
+          "score_min": 0.3
+        },
+        "summary": {
+          "n_trades": 145,
+          "win_rate": 0.3379,
+          "total_return": 0.3962,
+          "final_return": 0.39624393999999996,
+          "max_drawdown": -0.1004,
+          "sharpe": 3.59,
+          "sortino": 6.58,
+          "profit_factor": 3.74,
+          "final_equity": 1396243.94
+        }
+      },
+      {
+        "tag": {
+          "ma_proximity": 0.03,
+          "ov:score_min": 0.3
+        },
+        "params": {
+          "ma_proximity": 0.03
+        },
+        "overrides": {
+          "score_min": 0.3
+        },
+        "summary": {
+          "n_trades": 129,
+          "win_rate": 0.3333,
+          "total_return": 0.3659,
+          "final_return": 0.36592249,
+          "max_drawdown": -0.1062,
+          "sharpe": 3.65,
+          "sortino": 6.71,
+          "profit_factor": 3.72,
+          "final_equity": 1365922.49
+        }
+      },
+      {
+        "tag": {
+          "ov:stop_loss": -0.04,
+          "ov:max_hold_days": 12
+        },
+        "params": null,
+        "overrides": {
+          "stop_loss": -0.04,
+          "max_hold_days": 12
+        },
+        "summary": {
+          "n_trades": 179,
+          "win_rate": 0.2961,
+          "total_return": 0.0157,
+          "final_return": 0.015651069999999878,
+          "max_drawdown": -0.2255,
+          "sharpe": 0.37,
+          "sortino": 0.53,
+          "profit_factor": 2.54,
+          "final_equity": 1015651.07
+        }
+      }
+    ]
+  },
+  "limit_up_momentum": {
+    "design": {
+      "goal": "连板接力：过滤弱势追板、并测试加长持仓以捕捉真龙头的连续上攻，提升总收益。",
+      "metric": "总收益由 -8.6% 显著提升(向 0% 靠拢或转正)。",
+      "steps": [
+        "候选: 默认基线 / min_boards∈{2}, min_change∈{5,7} / 加长持仓(max_hold=10)配合 min_boards=2~3。",
+        "连板股波动大, 硬止损候选一并纳入但由目标函数自动淘汰(若被洗则回撤更差)。",
+        "目标=总收益最大化, tie-break Sharpe, n_trades>=20; 取最优。"
+      ]
+    },
+    "baseline": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 221,
+        "win_rate": 0.3122,
+        "total_return": -0.0861,
+        "final_return": -0.08608251,
+        "max_drawdown": -0.1199,
+        "sharpe": -0.71,
+        "sortino": -0.98,
+        "profit_factor": 2.04,
+        "final_equity": 913917.49
+      }
+    },
+    "optimized": {
+      "tag": {
+        "min_boards": 2,
+        "ov:max_hold_days": 10
+      },
+      "params": {
+        "min_boards": 2
+      },
+      "overrides": {
+        "max_hold_days": 10
+      },
+      "summary": {
+        "n_trades": 156,
+        "win_rate": 0.2308,
+        "total_return": 0.073,
+        "final_return": 0.07299513999999996,
+        "max_drawdown": -0.1542,
+        "sharpe": 1.01,
+        "sortino": 1.56,
+        "profit_factor": 3.74,
+        "final_equity": 1072995.14
+      },
+      "improved": true
+    },
+    "grid": [
+      {
+        "tag": "默认(基线)",
+        "params": null,
+        "overrides": null,
+        "summary": {
+          "n_trades": 221,
+          "win_rate": 0.3122,
+          "total_return": -0.0861,
+          "final_return": -0.08608251,
+          "max_drawdown": -0.1199,
+          "sharpe": -0.71,
+          "sortino": -0.98,
+          "profit_factor": 2.04,
+          "final_equity": 913917.49
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 2,
+          "min_change": 5.0
+        },
+        "params": {
+          "min_boards": 2,
+          "min_change": 5.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 228,
+          "win_rate": 0.2939,
+          "total_return": -0.1527,
+          "final_return": -0.15269343999999996,
+          "max_drawdown": -0.2053,
+          "sharpe": -1.66,
+          "sortino": -2.21,
+          "profit_factor": 2.09,
+          "final_equity": 847306.56
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 2,
+          "min_change": 7.0
+        },
+        "params": {
+          "min_boards": 2,
+          "min_change": 7.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 228,
+          "win_rate": 0.2939,
+          "total_return": -0.1527,
+          "final_return": -0.15269343999999996,
+          "max_drawdown": -0.2053,
+          "sharpe": -1.66,
+          "sortino": -2.21,
+          "profit_factor": 2.09,
+          "final_equity": 847306.56
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 2,
+          "ov:max_hold_days": 10
+        },
+        "params": {
+          "min_boards": 2
+        },
+        "overrides": {
+          "max_hold_days": 10
+        },
+        "summary": {
+          "n_trades": 156,
+          "win_rate": 0.2308,
+          "total_return": 0.073,
+          "final_return": 0.07299513999999996,
+          "max_drawdown": -0.1542,
+          "sharpe": 1.01,
+          "sortino": 1.56,
+          "profit_factor": 3.74,
+          "final_equity": 1072995.14
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 3,
+          "min_change": 7.0,
+          "ov:max_hold_days": 10
+        },
+        "params": {
+          "min_boards": 3,
+          "min_change": 7.0
+        },
+        "overrides": {
+          "max_hold_days": 10
+        },
+        "summary": {
+          "n_trades": 116,
+          "win_rate": 0.1897,
+          "total_return": -0.252,
+          "final_return": -0.25198062,
+          "max_drawdown": -0.2906,
+          "sharpe": -3.62,
+          "sortino": -4.26,
+          "profit_factor": 2.56,
+          "final_equity": 748019.38
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 1,
+          "min_change": 3.0
+        },
+        "params": {
+          "min_boards": 1,
+          "min_change": 3.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 221,
+          "win_rate": 0.3122,
+          "total_return": -0.0861,
+          "final_return": -0.08608251,
+          "max_drawdown": -0.1199,
+          "sharpe": -0.71,
+          "sortino": -0.98,
+          "profit_factor": 2.04,
+          "final_equity": 913917.49
+        }
+      }
+    ]
+  },
+  "consecutive_limit_ups": {
+    "design": {
+      "goal": "连板股：只接力更高连板、并测试加长持仓捕捉 AI 硬件真龙头的连板主升，提升收益/降回撤。",
+      "metric": "总收益由 -14.0% 显著提升, 最大回撤由 -19.6% 收窄。",
+      "steps": [
+        "候选: 默认基线 / min_boards∈{3} / min_boards=3 配 max_hold∈{10,15} / min_boards=4 配 max_hold=15。",
+        "目标=总收益最大化, tie-break Sharpe, n_trades>=20; 取最优。"
+      ]
+    },
+    "baseline": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 227,
+        "win_rate": 0.2996,
+        "total_return": -0.1403,
+        "final_return": -0.14029493000000004,
+        "max_drawdown": -0.1956,
+        "sharpe": -1.44,
+        "sortino": -1.9,
+        "profit_factor": 2.11,
+        "final_equity": 859705.07
+      }
+    },
+    "optimized": {
+      "tag": {
+        "min_boards": 4,
+        "ov:max_hold_days": 15
+      },
+      "params": {
+        "min_boards": 4
+      },
+      "overrides": {
+        "max_hold_days": 15
+      },
+      "summary": {
+        "n_trades": 53,
+        "win_rate": 0.2453,
+        "total_return": -0.0475,
+        "final_return": -0.04753364999999998,
+        "max_drawdown": -0.0966,
+        "sharpe": -0.79,
+        "sortino": -1.06,
+        "profit_factor": 2.71,
+        "final_equity": 952466.35
+      },
+      "improved": true
+    },
+    "grid": [
+      {
+        "tag": "默认(基线)",
+        "params": null,
+        "overrides": null,
+        "summary": {
+          "n_trades": 227,
+          "win_rate": 0.2996,
+          "total_return": -0.1403,
+          "final_return": -0.14029493000000004,
+          "max_drawdown": -0.1956,
+          "sharpe": -1.44,
+          "sortino": -1.9,
+          "profit_factor": 2.11,
+          "final_equity": 859705.07
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 3
+        },
+        "params": {
+          "min_boards": 3
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 123,
+          "win_rate": 0.2276,
+          "total_return": -0.2381,
+          "final_return": -0.23813756000000008,
+          "max_drawdown": -0.2492,
+          "sharpe": -4.05,
+          "sortino": -4.77,
+          "profit_factor": 2.1,
+          "final_equity": 761862.44
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 3,
+          "ov:max_hold_days": 10
+        },
+        "params": {
+          "min_boards": 3
+        },
+        "overrides": {
+          "max_hold_days": 10
+        },
+        "summary": {
+          "n_trades": 117,
+          "win_rate": 0.188,
+          "total_return": -0.2509,
+          "final_return": -0.25093747999999994,
+          "max_drawdown": -0.2952,
+          "sharpe": -3.73,
+          "sortino": -4.4,
+          "profit_factor": 2.59,
+          "final_equity": 749062.52
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 3,
+          "ov:max_hold_days": 15
+        },
+        "params": {
+          "min_boards": 3
+        },
+        "overrides": {
+          "max_hold_days": 15
+        },
+        "summary": {
+          "n_trades": 110,
+          "win_rate": 0.1727,
+          "total_return": -0.1768,
+          "final_return": -0.17683866000000004,
+          "max_drawdown": -0.247,
+          "sharpe": -2.08,
+          "sortino": -2.71,
+          "profit_factor": 3.42,
+          "final_equity": 823161.34
+        }
+      },
+      {
+        "tag": {
+          "min_boards": 4,
+          "ov:max_hold_days": 15
+        },
+        "params": {
+          "min_boards": 4
+        },
+        "overrides": {
+          "max_hold_days": 15
+        },
+        "summary": {
+          "n_trades": 53,
+          "win_rate": 0.2453,
+          "total_return": -0.0475,
+          "final_return": -0.04753364999999998,
+          "max_drawdown": -0.0966,
+          "sharpe": -0.79,
+          "sortino": -1.06,
+          "profit_factor": 2.71,
+          "final_equity": 952466.35
+        }
+      }
+    ]
+  },
+  "volume_price_surge": {
+    "design": {
+      "goal": "量价齐升(原最亏)：抬高量比门槛做真突破，并叠加止损+缩短持仓截断假突破，扭亏为盈。",
+      "metric": "总收益由 -11.8% 转正(目标 > +3%), Sharpe 由 -1.38 转正。",
+      "steps": [
+        "候选: 默认基线 / vol_ratio_min∈{2.5,3.0,4.0} / vol_ratio_min=3.0 或 4.0 叠加(止损-0.05, 持仓10天)。",
+        "该策略非连板高波动, 止损有效; 目标=总收益最大化自动择优。"
+      ]
+    },
+    "baseline": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 105,
+        "win_rate": 0.2381,
+        "total_return": -0.1181,
+        "final_return": -0.11813353000000004,
+        "max_drawdown": -0.217,
+        "sharpe": -1.38,
+        "sortino": -1.73,
+        "profit_factor": 2.33,
+        "final_equity": 881866.47
+      }
+    },
+    "optimized": {
+      "tag": {
+        "vol_ratio_min": 3.0,
+        "ov:stop_loss": -0.05,
+        "ov:max_hold_days": 10
+      },
+      "params": {
+        "vol_ratio_min": 3.0
+      },
+      "overrides": {
+        "stop_loss": -0.05,
+        "max_hold_days": 10
+      },
+      "summary": {
+        "n_trades": 131,
+        "win_rate": 0.2977,
+        "total_return": 0.0395,
+        "final_return": 0.03949958999999992,
+        "max_drawdown": -0.1318,
+        "sharpe": 0.62,
+        "sortino": 0.9,
+        "profit_factor": 2.52,
+        "final_equity": 1039499.59
+      },
+      "improved": true
+    },
+    "grid": [
+      {
+        "tag": "默认(基线)",
+        "params": null,
+        "overrides": null,
+        "summary": {
+          "n_trades": 105,
+          "win_rate": 0.2381,
+          "total_return": -0.1181,
+          "final_return": -0.11813353000000004,
+          "max_drawdown": -0.217,
+          "sharpe": -1.38,
+          "sortino": -1.73,
+          "profit_factor": 2.33,
+          "final_equity": 881866.47
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 2.5
+        },
+        "params": {
+          "vol_ratio_min": 2.5
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 103,
+          "win_rate": 0.2718,
+          "total_return": -0.0527,
+          "final_return": -0.05268724999999996,
+          "max_drawdown": -0.1818,
+          "sharpe": -0.39,
+          "sortino": -0.49,
+          "profit_factor": 2.35,
+          "final_equity": 947312.75
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 3.0
+        },
+        "params": {
+          "vol_ratio_min": 3.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 106,
+          "win_rate": 0.3113,
+          "total_return": 0.0217,
+          "final_return": 0.021696710000000063,
+          "max_drawdown": -0.1515,
+          "sharpe": 0.43,
+          "sortino": 0.56,
+          "profit_factor": 2.28,
+          "final_equity": 1021696.71
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 4.0
+        },
+        "params": {
+          "vol_ratio_min": 4.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 107,
+          "win_rate": 0.271,
+          "total_return": -0.0626,
+          "final_return": -0.06257707999999995,
+          "max_drawdown": -0.1729,
+          "sharpe": -0.56,
+          "sortino": -0.73,
+          "profit_factor": 2.35,
+          "final_equity": 937422.92
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 3.0,
+          "ov:stop_loss": -0.05,
+          "ov:max_hold_days": 10
+        },
+        "params": {
+          "vol_ratio_min": 3.0
+        },
+        "overrides": {
+          "stop_loss": -0.05,
+          "max_hold_days": 10
+        },
+        "summary": {
+          "n_trades": 131,
+          "win_rate": 0.2977,
+          "total_return": 0.0395,
+          "final_return": 0.03949958999999992,
+          "max_drawdown": -0.1318,
+          "sharpe": 0.62,
+          "sortino": 0.9,
+          "profit_factor": 2.52,
+          "final_equity": 1039499.59
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 4.0,
+          "ov:stop_loss": -0.05,
+          "ov:max_hold_days": 10
+        },
+        "params": {
+          "vol_ratio_min": 4.0
+        },
+        "overrides": {
+          "stop_loss": -0.05,
+          "max_hold_days": 10
+        },
+        "summary": {
+          "n_trades": 133,
+          "win_rate": 0.2782,
+          "total_return": 0.005,
+          "final_return": 0.004964949999999968,
+          "max_drawdown": -0.1278,
+          "sharpe": 0.24,
+          "sortino": 0.34,
+          "profit_factor": 2.6,
+          "final_equity": 1004964.95
+        }
+      }
+    ]
+  },
+  "broken_board_recovery": {
+    "design": {
+      "goal": "断板反包：确认真实放量反包，并测试止损是否改善，提升 Sharpe/收益。",
+      "metric": "Sharpe 由 0.30 提升至 > 1.0, 总收益 > +5%。",
+      "steps": [
+        "候选: 默认基线 / vol_ratio_min∈{2.0,2.5,3.0} / change_pct_min=0.05 / 止损-0.06+持仓8天。",
+        "目标=总收益最大化, tie-break Sharpe, n_trades>=20; 取最优。"
+      ]
+    },
+    "baseline": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 131,
+        "win_rate": 0.3282,
+        "total_return": 0.0099,
+        "final_return": 0.009915029999999936,
+        "max_drawdown": -0.165,
+        "sharpe": 0.3,
+        "sortino": 0.44,
+        "profit_factor": 2.17,
+        "final_equity": 1009915.03
+      }
+    },
+    "optimized": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 131,
+        "win_rate": 0.3282,
+        "total_return": 0.0099,
+        "final_return": 0.009915029999999936,
+        "max_drawdown": -0.165,
+        "sharpe": 0.3,
+        "sortino": 0.44,
+        "profit_factor": 2.17,
+        "final_equity": 1009915.03
+      },
+      "improved": false
+    },
+    "grid": [
+      {
+        "tag": "默认(基线)",
+        "params": null,
+        "overrides": null,
+        "summary": {
+          "n_trades": 131,
+          "win_rate": 0.3282,
+          "total_return": 0.0099,
+          "final_return": 0.009915029999999936,
+          "max_drawdown": -0.165,
+          "sharpe": 0.3,
+          "sortino": 0.44,
+          "profit_factor": 2.17,
+          "final_equity": 1009915.03
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 2.0
+        },
+        "params": {
+          "vol_ratio_min": 2.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 131,
+          "win_rate": 0.3206,
+          "total_return": -0.0938,
+          "final_return": -0.09378215000000001,
+          "max_drawdown": -0.2012,
+          "sharpe": -1.16,
+          "sortino": -1.51,
+          "profit_factor": 1.82,
+          "final_equity": 906217.85
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 2.5
+        },
+        "params": {
+          "vol_ratio_min": 2.5
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 130,
+          "win_rate": 0.2923,
+          "total_return": -0.0621,
+          "final_return": -0.06211034999999998,
+          "max_drawdown": -0.1711,
+          "sharpe": -0.61,
+          "sortino": -0.83,
+          "profit_factor": 2.25,
+          "final_equity": 937889.65
+        }
+      },
+      {
+        "tag": {
+          "vol_ratio_min": 3.0
+        },
+        "params": {
+          "vol_ratio_min": 3.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 135,
+          "win_rate": 0.2741,
+          "total_return": -0.2111,
+          "final_return": -0.21113490000000001,
+          "max_drawdown": -0.2395,
+          "sharpe": -3.34,
+          "sortino": -3.82,
+          "profit_factor": 1.8,
+          "final_equity": 788865.1
+        }
+      },
+      {
+        "tag": {
+          "change_pct_min": 0.05
+        },
+        "params": {
+          "change_pct_min": 0.05
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 131,
+          "win_rate": 0.3282,
+          "total_return": 0.0099,
+          "final_return": 0.009915029999999936,
+          "max_drawdown": -0.165,
+          "sharpe": 0.3,
+          "sortino": 0.44,
+          "profit_factor": 2.17,
+          "final_equity": 1009915.03
+        }
+      },
+      {
+        "tag": {
+          "ov:stop_loss": -0.06,
+          "ov:max_hold_days": 8
+        },
+        "params": null,
+        "overrides": {
+          "stop_loss": -0.06,
+          "max_hold_days": 8
+        },
+        "summary": {
+          "n_trades": 155,
+          "win_rate": 0.3226,
+          "total_return": -0.0427,
+          "final_return": -0.04268786999999996,
+          "max_drawdown": -0.2281,
+          "sharpe": -0.23,
+          "sortino": -0.34,
+          "profit_factor": 2.07,
+          "final_equity": 957312.13
+        }
+      }
+    ]
+  },
+  "near_limit_up": {
+    "design": {
+      "goal": "逼近涨停：提升信号确定性，并测试加长持仓捕捉次日惯性，推高收益与 Sharpe。",
+      "metric": "总收益由 +3.1% 提升至 > +5%, Sharpe 由 0.50 提升至 > 1.0。",
+      "steps": [
+        "候选: 默认基线 / min_change∈{8,9} 配 limit_gap∈{2,3} / 加长持仓(max_hold=10)配合高确定性参数。",
+        "目标=总收益最大化, tie-break Sharpe, n_trades>=20; 取最优。"
+      ]
+    },
+    "baseline": {
+      "tag": "默认(基线)",
+      "params": null,
+      "overrides": null,
+      "summary": {
+        "n_trades": 224,
+        "win_rate": 0.3348,
+        "total_return": 0.031,
+        "final_return": 0.031020440000000038,
+        "max_drawdown": -0.0897,
+        "sharpe": 0.5,
+        "sortino": 0.76,
+        "profit_factor": 2.08,
+        "final_equity": 1031020.44
+      }
+    },
+    "optimized": {
+      "tag": {
+        "min_change": 9.0,
+        "limit_gap": 3.0,
+        "ov:max_hold_days": 10
+      },
+      "params": {
+        "min_change": 9.0,
+        "limit_gap": 3.0
+      },
+      "overrides": {
+        "max_hold_days": 10
+      },
+      "summary": {
+        "n_trades": 146,
+        "win_rate": 0.2671,
+        "total_return": 0.11,
+        "final_return": 0.11003016999999993,
+        "max_drawdown": -0.1362,
+        "sharpe": 1.15,
+        "sortino": 1.73,
+        "profit_factor": 3.23,
+        "final_equity": 1110030.17
+      },
+      "improved": true
+    },
+    "grid": [
+      {
+        "tag": "默认(基线)",
+        "params": null,
+        "overrides": null,
+        "summary": {
+          "n_trades": 224,
+          "win_rate": 0.3348,
+          "total_return": 0.031,
+          "final_return": 0.031020440000000038,
+          "max_drawdown": -0.0897,
+          "sharpe": 0.5,
+          "sortino": 0.76,
+          "profit_factor": 2.08,
+          "final_equity": 1031020.44
+        }
+      },
+      {
+        "tag": {
+          "min_change": 8.0,
+          "limit_gap": 2.0
+        },
+        "params": {
+          "min_change": 8.0,
+          "limit_gap": 2.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 222,
+          "win_rate": 0.3243,
+          "total_return": -0.0398,
+          "final_return": -0.039795890000000056,
+          "max_drawdown": -0.1151,
+          "sharpe": -0.15,
+          "sortino": -0.23,
+          "profit_factor": 2.02,
+          "final_equity": 960204.11
+        }
+      },
+      {
+        "tag": {
+          "min_change": 9.0,
+          "limit_gap": 3.0
+        },
+        "params": {
+          "min_change": 9.0,
+          "limit_gap": 3.0
+        },
+        "overrides": null,
+        "summary": {
+          "n_trades": 222,
+          "win_rate": 0.3333,
+          "total_return": -0.0046,
+          "final_return": -0.004577480000000023,
+          "max_drawdown": -0.1141,
+          "sharpe": 0.17,
+          "sortino": 0.26,
+          "profit_factor": 2.03,
+          "final_equity": 995422.52
+        }
+      },
+      {
+        "tag": {
+          "min_change": 8.0,
+          "limit_gap": 2.0,
+          "ov:max_hold_days": 10
+        },
+        "params": {
+          "min_change": 8.0,
+          "limit_gap": 2.0
+        },
+        "overrides": {
+          "max_hold_days": 10
+        },
+        "summary": {
+          "n_trades": 155,
+          "win_rate": 0.2581,
+          "total_return": -0.031,
+          "final_return": -0.031032579999999976,
+          "max_drawdown": -0.1454,
+          "sharpe": -0.04,
+          "sortino": -0.05,
+          "profit_factor": 2.86,
+          "final_equity": 968967.42
+        }
+      },
+      {
+        "tag": {
+          "min_change": 9.0,
+          "limit_gap": 3.0,
+          "ov:max_hold_days": 10
+        },
+        "params": {
+          "min_change": 9.0,
+          "limit_gap": 3.0
+        },
+        "overrides": {
+          "max_hold_days": 10
+        },
+        "summary": {
+          "n_trades": 146,
+          "win_rate": 0.2671,
+          "total_return": 0.11,
+          "final_return": 0.11003016999999993,
+          "max_drawdown": -0.1362,
+          "sharpe": 1.15,
+          "sortino": 1.73,
+          "profit_factor": 3.23,
+          "final_equity": 1110030.17
+        }
+      }
+    ]
+  }
+}

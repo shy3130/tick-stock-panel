@@ -70,24 +70,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: 设置 Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: 构建前端
-        working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-
       - name: 安装 uv
         uses: astral-sh/setup-uv@v3
         with:
@@ -131,7 +113,7 @@ jobs:
         # 产物输出到 backend/dist/ (PyInstaller 默认路径), 与 packaging/tickflow.iss
         # 第 78 行的 Source 路径 (..\backend\dist\TickFlowStockPanel\*) 保持一致。
         # SPECPATH 由 spec 文件位置决定 (packaging/tickflow.spec → 项目根),
-        # 与 cwd 无关, 故 frontend/dist、tiers.yaml 等相对路径仍正确。
+        # 与 cwd 无关, 故 tiers.yaml 等相对路径仍正确。
         working-directory: backend
         run: uv run pyinstaller ../packaging/tickflow.spec --noconfirm
 
@@ -158,9 +140,9 @@ jobs:
 
       - name: 生成 Windows 安装包 (Inno Setup)
         if: matrix.platform == 'windows'
-        # 从 frontend/package.json 读版本号传给 ISCC, 保持与 Release tag 一致
+        # 从根目录 VERSION 文件读版本号传给 ISCC (前端已移除), 保持与 Release tag 一致
         run: |
-          $ver = (Get-Content frontend/package.json | ConvertFrom-Json).version
+          $ver = ((Get-Content VERSION | Select-Object -First 1).Trim() -replace '^v','')
           echo "版本号: $ver"
           ISCC.exe "/DMyAppVersion=$ver" packaging/tickflow.iss
           # 把生成的 Setup.exe 移到工作区根 (Release 上传用)

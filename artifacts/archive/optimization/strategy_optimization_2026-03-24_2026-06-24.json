@@ -1,0 +1,718 @@
+{
+  "bullish_alignment": {
+    "baseline": {
+      "error": null,
+      "summary": {
+        "n_trades": 95,
+        "win_rate": 0.2632,
+        "total_return": 0.5857,
+        "final_return": 0.5857450200000001,
+        "max_drawdown": -0.0987,
+        "sharpe": 4.1,
+        "sortino": 7.49,
+        "profit_factor": 5.48,
+        "final_equity": 1585745.02
+      },
+      "config": {
+        "strategy_id": "bullish_alignment",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": null,
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "optimized": {
+      "error": null,
+      "summary": {
+        "n_trades": 252,
+        "win_rate": 0.4524,
+        "total_return": 0.3987,
+        "final_return": 0.39873877,
+        "max_drawdown": -0.1281,
+        "sharpe": 2.89,
+        "sortino": 4.44,
+        "profit_factor": 1.71,
+        "final_equity": 1398738.77
+      },
+      "config": {
+        "strategy_id": "bullish_alignment",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": {
+          "trailing_take_profit_activate": 0.12,
+          "trailing_take_profit_drawdown": 0.06,
+          "stop_loss": -0.06
+        },
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "design": {
+      "name": "均线多头 · 移动止盈锁利",
+      "goal": "在保持高收益的同时锁定主升浪利润、降低回撤(赢家加固)。",
+      "metric": "max_drawdown 由 -9.9% 收窄至 < -9%，且 Sharpe 保持 ≥ 4.0。",
+      "steps": [
+        "新增移动止盈：持仓浮盈 ≥ 12% 时启动，价格自峰值回撤 6% 即卖出（trailing_take_profit）。",
+        "止损由 -6% 保持，作为下行兜底。",
+        "不改变入场条件（MA 多头排列 + 20 日动量>0），仅加尾部风控。"
+      ],
+      "params": null,
+      "overrides": {
+        "trailing_take_profit_activate": 0.12,
+        "trailing_take_profit_drawdown": 0.06,
+        "stop_loss": -0.06
+      }
+    }
+  },
+  "pullback_to_support": {
+    "baseline": {
+      "error": null,
+      "summary": {
+        "n_trades": 145,
+        "win_rate": 0.3379,
+        "total_return": 0.3962,
+        "final_return": 0.39624393999999996,
+        "max_drawdown": -0.1004,
+        "sharpe": 3.59,
+        "sortino": 6.58,
+        "profit_factor": 3.74,
+        "final_equity": 1396243.94
+      },
+      "config": {
+        "strategy_id": "pullback_to_support",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": null,
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "optimized": {
+      "error": null,
+      "summary": {
+        "n_trades": 189,
+        "win_rate": 0.291,
+        "total_return": 0.0582,
+        "final_return": 0.05822503000000001,
+        "max_drawdown": -0.1679,
+        "sharpe": 0.77,
+        "sortino": 1.15,
+        "profit_factor": 2.73,
+        "final_equity": 1058225.03
+      },
+      "config": {
+        "strategy_id": "pullback_to_support",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": {
+          "stop_loss": -0.04,
+          "max_hold_days": 12,
+          "scoring": {
+            "momentum_20d": 0.5,
+            "momentum_60d": 0.3,
+            "turnover_rate": 0.2
+          }
+        },
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "design": {
+      "name": "缩量回踩 · 评分集中 + 缩短持仓",
+      "goal": "提升选股集中度于近月强势龙头(AI硬件)，提高换手效率与 Sharpe(赢家加固)。",
+      "metric": "Sharpe 由 3.59 提升至 ≥ 4.0，且 total_return 保持 ≥ 35%。",
+      "steps": [
+        "止损由 -5% 收紧至 -4%，更快截断弱势回踩。",
+        "持仓上限由 20 天缩短至 12 天，提升资金效率。",
+        "评分权重向 momentum_20d 倾斜(0.5)，优先选中短期最强动量标的。"
+      ],
+      "params": null,
+      "overrides": {
+        "stop_loss": -0.04,
+        "max_hold_days": 12,
+        "scoring": {
+          "momentum_20d": 0.5,
+          "momentum_60d": 0.3,
+          "turnover_rate": 0.2
+        }
+      }
+    }
+  },
+  "limit_up_momentum": {
+    "baseline": {
+      "error": null,
+      "summary": {
+        "n_trades": 221,
+        "win_rate": 0.3122,
+        "total_return": -0.0861,
+        "final_return": -0.08608251,
+        "max_drawdown": -0.1199,
+        "sharpe": -0.71,
+        "sortino": -0.98,
+        "profit_factor": 2.04,
+        "final_equity": 913917.49
+      },
+      "config": {
+        "strategy_id": "limit_up_momentum",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": null,
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "optimized": {
+      "error": null,
+      "summary": {
+        "n_trades": 285,
+        "win_rate": 0.3474,
+        "total_return": -0.2857,
+        "final_return": -0.28569420999999995,
+        "max_drawdown": -0.3135,
+        "sharpe": -3.71,
+        "sortino": -4.45,
+        "profit_factor": 1.43,
+        "final_equity": 714305.79
+      },
+      "config": {
+        "strategy_id": "limit_up_momentum",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": {
+          "min_boards": 2,
+          "min_change": 7.0
+        },
+        "overrides": {
+          "stop_loss": -0.06,
+          "max_hold_days": 3
+        },
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "design": {
+      "name": "连板接力 · 收紧入场 + 快进快出",
+      "goal": "过滤弱势追板信号，把亏损策略扭亏为盈。",
+      "metric": "total_return 由 -8.6% 提升至 ≥ 0%，Sharpe 由 -0.71 提升至 > 0。",
+      "steps": [
+        "连板数门槛 min_boards 由 1 提升至 2，只接力真正连板强势股。",
+        "最低涨幅 min_change 由 5% 提升至 7%，要求更强上攻动能。",
+        "加 -6% 硬止损，持仓由 5 天缩短至 3 天，快进快出截断深套。"
+      ],
+      "params": {
+        "min_boards": 2,
+        "min_change": 7.0
+      },
+      "overrides": {
+        "stop_loss": -0.06,
+        "max_hold_days": 3
+      }
+    }
+  },
+  "consecutive_limit_ups": {
+    "baseline": {
+      "error": null,
+      "summary": {
+        "n_trades": 227,
+        "win_rate": 0.2996,
+        "total_return": -0.1403,
+        "final_return": -0.14029493000000004,
+        "max_drawdown": -0.1956,
+        "sharpe": -1.44,
+        "sortino": -1.9,
+        "profit_factor": 2.11,
+        "final_equity": 859705.07
+      },
+      "config": {
+        "strategy_id": "consecutive_limit_ups",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": null,
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "optimized": {
+      "error": null,
+      "summary": {
+        "n_trades": 292,
+        "win_rate": 0.3322,
+        "total_return": -0.2841,
+        "final_return": -0.28406999,
+        "max_drawdown": -0.2946,
+        "sharpe": -3.81,
+        "sortino": -4.49,
+        "profit_factor": 1.53,
+        "final_equity": 715930.01
+      },
+      "config": {
+        "strategy_id": "consecutive_limit_ups",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": {
+          "stop_loss": -0.05,
+          "max_hold_days": 3
+        },
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "design": {
+      "name": "连板股 · 硬止损 + 缩短持仓",
+      "goal": "截断连板接力的深套，显著缩小最大回撤(最弱策略之一)。",
+      "metric": "max_drawdown 由 -19.6% 收窄至 > -15%，Sharpe 由 -1.44 改善至 > -0.5。",
+      "steps": [
+        "加 -5% 硬止损，避免单笔连板断崖式亏损。",
+        "持仓由 5 天缩短至 3 天，降低持有不确定性。",
+        "入场条件不变（涨停 + 连板≥2），仅加尾部风控。"
+      ],
+      "params": null,
+      "overrides": {
+        "stop_loss": -0.05,
+        "max_hold_days": 3
+      }
+    }
+  },
+  "volume_price_surge": {
+    "baseline": {
+      "error": null,
+      "summary": {
+        "n_trades": 105,
+        "win_rate": 0.2381,
+        "total_return": -0.1181,
+        "final_return": -0.11813353000000004,
+        "max_drawdown": -0.217,
+        "sharpe": -1.38,
+        "sortino": -1.73,
+        "profit_factor": 2.33,
+        "final_equity": 881866.47
+      },
+      "config": {
+        "strategy_id": "volume_price_surge",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": null,
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "optimized": {
+      "error": null,
+      "summary": {
+        "n_trades": 131,
+        "win_rate": 0.2977,
+        "total_return": 0.0395,
+        "final_return": 0.03949958999999992,
+        "max_drawdown": -0.1318,
+        "sharpe": 0.62,
+        "sortino": 0.9,
+        "profit_factor": 2.52,
+        "final_equity": 1039499.59
+      },
+      "config": {
+        "strategy_id": "volume_price_surge",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": {
+          "vol_ratio_min": 3.0
+        },
+        "overrides": {
+          "stop_loss": -0.05,
+          "max_hold_days": 10
+        },
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "design": {
+      "name": "量价齐升 · 抬高量比门槛 + 止损",
+      "goal": "滤除伪突破，把最亏策略的回撤压回 -18% 以内。",
+      "metric": "max_drawdown 由 -21.7% 收窄至 > -18%，Sharpe 由 -1.38 改善至 > -0.5。",
+      "steps": [
+        "最低量比 vol_ratio_min 由 2.0 提升至 3.0，仅做真正放量的有效突破。",
+        "加 -5% 硬止损，持仓由 15 天缩短至 10 天。",
+        "保留突破 MA20 + 收阳的入场逻辑。"
+      ],
+      "params": {
+        "vol_ratio_min": 3.0
+      },
+      "overrides": {
+        "stop_loss": -0.05,
+        "max_hold_days": 10
+      }
+    }
+  },
+  "broken_board_recovery": {
+    "baseline": {
+      "error": null,
+      "summary": {
+        "n_trades": 131,
+        "win_rate": 0.3282,
+        "total_return": 0.0099,
+        "final_return": 0.009915029999999936,
+        "max_drawdown": -0.165,
+        "sharpe": 0.3,
+        "sortino": 0.44,
+        "profit_factor": 2.17,
+        "final_equity": 1009915.03
+      },
+      "config": {
+        "strategy_id": "broken_board_recovery",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": null,
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "optimized": {
+      "error": null,
+      "summary": {
+        "n_trades": 156,
+        "win_rate": 0.2885,
+        "total_return": -0.1669,
+        "final_return": -0.16686035,
+        "max_drawdown": -0.2272,
+        "sharpe": -2.03,
+        "sortino": -2.59,
+        "profit_factor": 1.9,
+        "final_equity": 833139.65
+      },
+      "config": {
+        "strategy_id": "broken_board_recovery",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": {
+          "vol_ratio_min": 2.5
+        },
+        "overrides": {
+          "stop_loss": -0.06,
+          "max_hold_days": 8
+        },
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "design": {
+      "name": "断板反包 · 确认放量 + 止损",
+      "goal": "确认真实放量反包，把微盈策略的 Sharpe 推过 1。",
+      "metric": "Sharpe 由 0.30 提升至 > 1.0，且 total_return > 5%。",
+      "steps": [
+        "最低量比 vol_ratio_min 由 1.5 提升至 2.5，过滤缩量假反包。",
+        "加 -6% 硬止损，持仓由 10 天缩短至 8 天。",
+        "保留涨停 + 涨幅>3% 的反包入场。"
+      ],
+      "params": {
+        "vol_ratio_min": 2.5
+      },
+      "overrides": {
+        "stop_loss": -0.06,
+        "max_hold_days": 8
+      }
+    }
+  },
+  "near_limit_up": {
+    "baseline": {
+      "error": null,
+      "summary": {
+        "n_trades": 224,
+        "win_rate": 0.3348,
+        "total_return": 0.031,
+        "final_return": 0.031020440000000038,
+        "max_drawdown": -0.0897,
+        "sharpe": 0.5,
+        "sortino": 0.76,
+        "profit_factor": 2.08,
+        "final_equity": 1031020.44
+      },
+      "config": {
+        "strategy_id": "near_limit_up",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": null,
+        "overrides": null,
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "optimized": {
+      "error": null,
+      "summary": {
+        "n_trades": 251,
+        "win_rate": 0.3426,
+        "total_return": 0.0251,
+        "final_return": 0.025134109999999987,
+        "max_drawdown": -0.1144,
+        "sharpe": 0.45,
+        "sortino": 0.71,
+        "profit_factor": 2.01,
+        "final_equity": 1025134.11
+      },
+      "config": {
+        "strategy_id": "near_limit_up",
+        "symbols": null,
+        "start": "2026-03-24",
+        "end": "2026-06-24",
+        "params": {
+          "min_change": 8.0
+        },
+        "overrides": {
+          "stop_loss": -0.05,
+          "max_hold_days": 4
+        },
+        "score_min": null,
+        "score_max": null,
+        "matching": "open_t+1",
+        "entry_fill": "open_t+1",
+        "exit_fill": "open_t+1",
+        "timing_mode": "strict",
+        "fees_pct": 0.0002,
+        "commission_pct": null,
+        "stamp_tax_pct": null,
+        "slippage_bps": 5.0,
+        "max_positions": 10,
+        "max_exposure_pct": 1.0,
+        "initial_capital": 1000000.0,
+        "position_sizing": "equal",
+        "mode": "position",
+        "holding_days": 5,
+        "minute_fill": false
+      }
+    },
+    "design": {
+      "name": "逼近涨停 · 提高确定性 + 止损",
+      "goal": "提升信号确定性，把收益与 Sharpe 进一步推高。",
+      "metric": "total_return 由 +3.1% 提升至 > 8%，Sharpe 由 0.50 提升至 > 1.0。",
+      "steps": [
+        "最低涨幅 min_change 由 7% 提升至 8%，更贴近涨停、次日溢价更确定。",
+        "加 -5% 硬止损，持仓由 5 天缩短至 4 天。",
+        "保留距涨停空间 < 3% 的过滤。"
+      ],
+      "params": {
+        "min_change": 8.0
+      },
+      "overrides": {
+        "stop_loss": -0.05,
+        "max_hold_days": 4
+      }
+    }
+  }
+}

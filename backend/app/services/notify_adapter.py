@@ -85,7 +85,7 @@ def notify(title: str, message: str, icon: Path | None = None) -> bool:
             return _notify_osascript(title, message)
         if backend == "notify-send":
             return _notify_notify_send(title, message, icon)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("系统通知失败 (%s): %s", backend, e)
         return False
 
@@ -108,14 +108,15 @@ def _notify_winotify(title: str, message: str) -> bool:
 
 def _notify_osascript(title: str, message: str) -> bool:
     """macOS 通知 (osascript) — 调用系统 AppleScript。"""
-    # 转义双引号, 避免 AppleScript 注入
-    safe_title = title.replace('"', '\\"')
-    safe_msg = message.replace('"', '\\"')
+    # Values travel in argv rather than being interpolated into AppleScript.
+    # Quote/backslash escaping is otherwise easy to bypass with crafted alerts.
     script = (
-        f'display notification "{safe_msg}" with title "{safe_title}"'
+        "on run argv\n"
+        "display notification (item 2 of argv) with title (item 1 of argv)\n"
+        "end run"
     )
-    result = subprocess.run(  # noqa: S603, S607
-        ["osascript", "-e", script],
+    result = subprocess.run(
+        ["osascript", "-e", script, "--", title, message],
         capture_output=True,
         timeout=5,
     )
@@ -128,7 +129,7 @@ def _notify_notify_send(title: str, message: str, icon: Path | None) -> bool:
     if icon and Path(icon).exists():
         args.extend(["--icon", str(icon)])
     args.append(message)
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(
         args,
         capture_output=True,
         timeout=5,

@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import date
-from typing import AsyncIterator
 
 from app.services.market_overview_builder import build_market_overview
 
@@ -311,7 +311,7 @@ async def recap_market_stream(
         ):
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("AI market recap failed for %s: %s", as_of_str, e)
         yield json.dumps({"type": "error", "message": f"AI 复盘失败: {e}"}, ensure_ascii=False)
         return
@@ -337,7 +337,7 @@ async def recap_market_once(
     async for evt in recap_market_stream(repo, quote_service, depth_service, as_of, focus, news):
         try:
             obj = json.loads(evt)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         t = obj.get("type")
         if t == "meta":

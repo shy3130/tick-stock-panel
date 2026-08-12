@@ -1,0 +1,98 @@
+[
+  {
+    "window": "2026-03-24~2026-06-24",
+    "label": "结构牛(目标)",
+    "runs": [
+      {
+        "name": "cf:MA60_DEV VOL_RATIO",
+        "formula": "MA60_DEV VOL_RATIO DECAY MA60_DEV ADD ADD SIGN MA60_DEV MOM5 SUB ADD",
+        "ret": -0.307841348063701,
+        "n": 115,
+        "win": 19.1
+      },
+      {
+        "name": "cf:MA60_DEV MOM5 VOL_",
+        "formula": "MA60_DEV MOM5 VOL_RATIO DELAY1 MOM5 SUB ADD MUL MA60_DEV ADD",
+        "ret": -0.4640402182155149,
+        "n": 123,
+        "win": 17.9
+      },
+      {
+        "name": "cf:MOM20",
+        "formula": "MOM20",
+        "ret": 2.6052260207342854,
+        "n": 120,
+        "win": 16.7
+      },
+      {
+        "name": "cf:MA20_DEV",
+        "formula": "MA20_DEV",
+        "ret": 0.03144471237796309,
+        "n": 112,
+        "win": 21.4
+      },
+      {
+        "name": "pullback_to_support",
+        "formula": "(builtin)",
+        "ret": 2.4654481502661354,
+        "n": 75,
+        "win": 36.0
+      },
+      {
+        "name": "bullish_alignment",
+        "formula": "(builtin)",
+        "ret": 3.623079643960976,
+        "n": 108,
+        "win": 22.2
+      }
+    ]
+  },
+  {
+    "window": "2025-09-24~2025-12-24",
+    "label": "普跌段",
+    "runs": [
+      {
+        "name": "cf:MA60_DEV VOL_RATIO",
+        "formula": "MA60_DEV VOL_RATIO DECAY MA60_DEV ADD ADD SIGN MA60_DEV MOM5 SUB ADD",
+        "ret": -0.8771441092103739,
+        "n": 81,
+        "win": 21.0
+      },
+      {
+        "name": "cf:MA60_DEV MOM5 VOL_",
+        "formula": "MA60_DEV MOM5 VOL_RATIO DELAY1 MOM5 SUB ADD MUL MA60_DEV ADD",
+        "ret": -0.9657405396212337,
+        "n": 99,
+        "win": 16.2
+      },
+      {
+        "name": "cf:MOM20",
+        "formula": "MOM20",
+        "ret": -0.4067343937125196,
+        "n": 105,
+        "win": 18.1
+      },
+      {
+        "name": "cf:MA20_DEV",
+        "formula": "MA20_DEV",
+        "ret": -0.9281414629355051,
+        "n": 98,
+        "win": 15.3
+      },
+      {
+        "name": "pullback_to_support",
+        "formula": "(builtin)",
+        "ret": -0.8792866393231471,
+        "n": 100,
+        "win": 21.0
+      },
+      {
+        "name": "bullish_alignment",
+        "formula": "(builtin)",
+        "ret": 1.9664744812599748,
+        "n": 96,
+        "win": 29.2
+      }
+    ]
+  }
+]

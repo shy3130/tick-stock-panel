@@ -23,7 +23,7 @@ _SYSTEM_PREFIX = """你是A股量化策略设计专家。根据用户描述的�
 
 文件与范围铁律（不可违反）:
 1. 只创建这一个策略文件：只生成一个 .py 文件，绝不创建多文件、不拆分模块、不跨文件引用
-2. 绝不触碰项目源码：不要写任何会修改 backend/、docs/、frontend/ 等现有文件的代码；不要 import os/sys/pathlib 等文件系统模块
+2. 绝不触碰项目源码：不要写任何会修改 backend/、docs/、artifacts/ 等现有文件的代码；不要 import os/sys/pathlib 等文件系统模块
 3. 不得放入内置策略目录：AI 生成的策略只属于 data/strategies/ai/，文件名/ID 用 ai_ 前缀；内置目录 backend/app/strategy/builtin/ 由项目维护，AI 不得染指
 4. polars 策略只 import polars 和 datetime；matrix_native 策略只允许 import numpy 以及 from app.backtest.matrix import 所需矩阵协议和算子
 
@@ -397,9 +397,12 @@ META = {{...}}，{entrypoint_requirement}。只输出完整 Python 代码。
                 mod = node.module or ""
                 if not _module_allowed(mod):
                     raise ValueError(f"禁止 from {node.module} import (不在策略安全白名单)")
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id in forbidden_calls:
-                    raise ValueError(f"禁止调用 {node.func.id}()")
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in forbidden_calls
+            ):
+                raise ValueError(f"禁止调用 {node.func.id}()")
             # 拦截 dunder 属性访问: x.__globals__ / ().__class__ 等
             if isinstance(node, ast.Attribute) and node.attr in forbidden_dunder_attrs:
                 raise ValueError(f"禁止访问属性 {node.attr} (策略不允许 dunder 遍历逃逸)")

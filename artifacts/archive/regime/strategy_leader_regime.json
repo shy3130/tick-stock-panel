@@ -1,0 +1,92 @@
+[
+  {
+    "window": "2025-03-24~2025-06-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.051742534742010404,
+    "gated": -0.029914345910160955,
+    "dropped": 62,
+    "used": 25,
+    "regime_up_ratio": 0.3387096774193548,
+    "benchmark": 0.03259607423552158
+  },
+  {
+    "window": "2025-05-24~2025-08-24",
+    "config": "pullback_mp5",
+    "unfiltered": 0.2608159987562113,
+    "gated": 0.2319145140982175,
+    "dropped": 9,
+    "used": 64,
+    "regime_up_ratio": 0.9375,
+    "benchmark": 0.2354190493512207
+  },
+  {
+    "window": "2025-07-24~2025-10-24",
+    "config": "pullback_mp5",
+    "unfiltered": 0.31678378352174086,
+    "gated": 0.27510775222428374,
+    "dropped": 1,
+    "used": 69,
+    "regime_up_ratio": 0.9180327868852459,
+    "benchmark": 0.10697248925392389
+  },
+  {
+    "window": "2025-09-24~2025-12-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.27544964729394283,
+    "gated": -0.06091326345303516,
+    "dropped": 52,
+    "used": 48,
+    "regime_up_ratio": 0.43333333333333335,
+    "benchmark": 0.03505025870393452
+  },
+  {
+    "window": "2025-11-24~2026-02-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.05930264471536062,
+    "gated": -0.00665955446211508,
+    "dropped": 43,
+    "used": 44,
+    "regime_up_ratio": 0.6101694915254238,
+    "benchmark": 0.15803328406177242
+  },
+  {
+    "window": "2026-01-24~2026-04-24",
+    "config": "pullback_mp5",
+    "unfiltered": -0.3304673918153833,
+    "gated": -0.2624396507980933,
+    "dropped": 35,
+    "used": 62,
+    "regime_up_ratio": 0.603448275862069,
+    "benchmark": -0.044353860287901004
+  },
+  {
+    "window": "2026-03-24~2026-06-24",
+    "config": "pullback_mp5",
+    "unfiltered": 0.6150541669024563,
+    "gated": 0.5269893177323963,
+    "dropped": 18,
+    "used": 57,
+    "regime_up_ratio": 0.7096774193548387,
+    "benchmark": 0.04511071231782604
+  },
+  {
+    "window": "2026-05-24~2026-07-20",
+    "config": "pullback_mp5",
+    "unfiltered": -0.3895724752744075,
+    "gated": -0.19032094162171975,
+    "dropped": 13,
+    "used": 54,
+    "regime_up_ratio": 0.875,
+    "benchmark": -0.19217394556811473
+  },
+  {
+    "window": "2026-03-24~2026-06-24",
+    "config": "pullback_mp1",
+    "unfiltered": 1.6837474824421372,
+    "gated": 1.4075585920992988,
+    "dropped": 2,
+    "used": 7,
+    "regime_up_ratio": 0.7096774193548387,
+    "benchmark": 0.04511071231782604
+  }
+]

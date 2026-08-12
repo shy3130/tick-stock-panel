@@ -1,4 +1,6 @@
 """指数资产路由 — repository 层测试。"""
+import datetime as _dt
+
 import polars as pl
 import pytest
 
@@ -42,9 +44,6 @@ def test_name_map_stock_beats_index(repo):
     }).write_parquet(repo.store.data_dir / "instruments" / "instruments.parquet")
     repo._refresh_instruments()
     assert repo.get_name_map(["600000.SH"]).get("600000.SH") == "浦发银行"
-
-
-import datetime as _dt
 
 
 def _write_index_enriched(repo, dates_rows):
@@ -106,4 +105,3 @@ def test_merge_live_enriched_asset_index_merges_cache(repo):
     cached, dt = repo.get_enriched_latest_asset("index", refresh=False)
     assert str(dt) == "2026-07-25"
     assert set(cached["symbol"].to_list()) == {"000001.SH", "000300.SH"}
-

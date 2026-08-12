@@ -2,11 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import threading
-from datetime import date, datetime, timezone
-from functools import reduce
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -256,7 +253,7 @@ class PullScheduler:
                 # 先执行一次 (启用即拉取, 让用户立刻看到生效)
                 try:
                     n, d = await fetch_and_ingest(fresh, self._data_dir)
-                    fresh.pull.last_run = datetime.now(timezone.utc).isoformat()
+                    fresh.pull.last_run = datetime.now(UTC).isoformat()
                     fresh.pull.last_status = "success"
                     fresh.pull.last_message = f"{n} rows @ {d}"
                     fresh.pull.last_rows = n
@@ -265,7 +262,7 @@ class PullScheduler:
                 except Exception as e:
                     fresh2 = store.get(config.id)
                     if fresh2 and fresh2.pull:
-                        fresh2.pull.last_run = datetime.now(timezone.utc).isoformat()
+                        fresh2.pull.last_run = datetime.now(UTC).isoformat()
                         fresh2.pull.last_status = "error"
                         fresh2.pull.last_message = str(e)[:200]
                         store.upsert(fresh2)
@@ -274,11 +271,11 @@ class PullScheduler:
                 # 间隔取自最新配置 (每次重新读取, 修复改间隔不生效)
                 interval = max(pull.schedule_minutes * 60, 60)  # 至少 60s
                 # 预告下次运行时间, 供前端展示
-                next_dt = datetime.now(timezone.utc).timestamp() + interval
+                next_dt = datetime.now(UTC).timestamp() + interval
                 latest = store.get(config.id)
                 if latest and latest.pull:
                     latest.pull.next_run = datetime.fromtimestamp(
-                        next_dt, tz=timezone.utc
+                        next_dt, tz=UTC
                     ).isoformat()
                     store.upsert(latest)
 

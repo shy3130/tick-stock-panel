@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -53,7 +54,7 @@ def _load() -> dict:
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("auth.json malformed: %s", e)
     return {}
 
@@ -61,10 +62,8 @@ def _load() -> dict:
 def _save(data: dict) -> None:
     p = _path()
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(p, 0o600)
-    except OSError:
-        pass
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> tuple[str, str]:
@@ -210,5 +209,5 @@ def _restore_sessions() -> None:
 # 模块加载时恢复会话
 try:
     _restore_sessions()
-except Exception as e:  # noqa: BLE001
+except Exception as e:
     logger.warning("restore sessions failed: %s", e)

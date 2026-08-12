@@ -1,6 +1,6 @@
 """生成应用图标 — 白色 squircle 背景 + 紫色 Logo。
 
-设计 (与 frontend Logo.tsx / favicon.svg 一致):
+设计：
   背景: 白色 squircle (macOS Big Sur+ 要求不透明 squircle 背景, 用白色填充)
   内容: 紫色 #5B21B6 方括号 + K线 (上影短/下影长, bullish 站稳)
 

@@ -178,19 +178,19 @@ def _pivot_points(df: pl.DataFrame) -> list[dict]:
         return []
     last = df.tail(1)
     h = last["high"][0]
-    l = last["low"][0]
+    low = last["low"][0]
     c = last["close"][0]
-    if not _ok(h) or not _ok(l) or not _ok(c):
+    if not _ok(h) or not _ok(low) or not _ok(c):
         return []
 
-    h, l, c = float(h), float(l), float(c)
-    p = (h + l + c) / 3
-    r1 = 2 * p - l
+    h, low, c = float(h), float(low), float(c)
+    p = (h + low + c) / 3
+    r1 = 2 * p - low
     s1 = 2 * p - h
-    r2 = p + (h - l)
-    s2 = p - (h - l)
-    r3 = h + 2 * (p - l)
-    s3 = l - 2 * (h - p)
+    r2 = p + (h - low)
+    s2 = p - (h - low)
+    r3 = h + 2 * (p - low)
+    s3 = low - 2 * (h - p)
 
     def lv(v: float, label: str, side: str, strength: str, rank: int) -> dict:
         # rank:档位标记,前端据此按"显示到第几档"过滤
@@ -499,10 +499,7 @@ def _fibonacci_levels(df: pl.DataFrame, window: int = 120) -> list[dict]:
     # 判断波段方向:高点在低点之后 = 上涨波段(从低回撤)
     up_trend = hi_pos > lo_pos
     for r in ratios:
-        if up_trend:
-            val = hi_val - rng * r          # 从高点向下回撤
-        else:
-            val = lo_val + rng * r          # 从低点向上回撤
+        val = hi_val - rng * r if up_trend else lo_val + rng * r
         out.append({"value": round(val, 2), "label": f"Fib {int(r * 1000) / 10:.1f}%",
                     "type": "fib", "side": _side(val, close), "strength": "medium"})
     return out
@@ -587,7 +584,7 @@ def compute_levels(df: pl.DataFrame) -> dict[str, list[dict]]:
             "fib": _fibonacci_levels(df),
             "round": _round_numbers(df),
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("compute_levels failed: %s", e)
         return {k: [] for k in LEVEL_TYPES}
 

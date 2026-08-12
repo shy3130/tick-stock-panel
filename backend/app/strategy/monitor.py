@@ -11,12 +11,14 @@
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import polars as pl
 
@@ -152,7 +154,7 @@ class StrategyMonitorService:
                         strategy_id=strategy_id,
                         symbol=sym,
                         name=name,
-                        message=f"入场信号触发",
+                        message="入场信号触发",
                         price=price,
                         change_pct=pct,
                         signals=hit_sigs,
@@ -169,7 +171,7 @@ class StrategyMonitorService:
                         strategy_id=strategy_id,
                         symbol=sym,
                         name=name,
-                        message=f"出场信号触发",
+                        message="出场信号触发",
                         price=price,
                         change_pct=pct,
                         signals=hit_sigs,
@@ -303,10 +305,7 @@ def _build_condition_mask(df: pl.DataFrame, conditions: list[dict], logic: str) 
             return df.head(0)
     if not parts:
         return df.head(0)
-    if logic == "or":
-        mask = pl.any_horizontal(parts)
-    else:
-        mask = pl.all_horizontal(parts)
+    mask = pl.any_horizontal(parts) if logic == "or" else pl.all_horizontal(parts)
     return df.filter(mask)
 
 
@@ -339,9 +338,9 @@ class MonitorRuleEngine:
         # 历史窗口加载器: (target_date, lookback_days) → 多日 enriched DataFrame。
         # 用于声明 filter_history 的策略 (如反包), 实时监控时拼历史窗口 + 今日行情跑选股。
         # 为 None 时, filter_history 策略仍会被跳过 (保持旧行为, 不破坏无历史场景)。
-        self._history_loader: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
+        self._history_loader: Callable[[_dt.date, int], pl.DataFrame] | None = None
         # ETF 版历史窗口加载器 (asset_type=etf 的规则用)。为 None 时 ETF filter_history 策略跳过。
-        self._history_loader_etf: Callable[[_dt.date, int], "pl.DataFrame"] | None = None
+        self._history_loader_etf: Callable[[_dt.date, int], pl.DataFrame] | None = None
         self._active_matrix_snapshots: dict[str, Any] = {}
         # 本轮 evaluate() 产出的策略选股结果: strategy_id → {rows, total, as_of}
         # 供策略页实时回显复用 (/api/screener/cached 端点直接读取, 避免重跑)。
@@ -712,7 +711,7 @@ class MonitorRuleEngine:
         for rule in rules:
             try:
                 events.extend(self._evaluate_sector_rule(rule, snapshots, timestamp))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("板块规则评估失败 %s: %s", rule.get("id"), exc)
         return events
 
@@ -786,7 +785,7 @@ class MonitorRuleEngine:
             if self._alert_handler:
                 try:
                     self._alert_handler(event)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("alert handler failed: %s", exc)
         return events
 
@@ -953,10 +952,8 @@ class MonitorRuleEngine:
         # 运行策略选股: 复用当前 enriched DataFrame 跳过数据加载
         overrides = {}
         if self._data_dir:
-            try:
+            with contextlib.suppress(Exception):
                 overrides = _strategy_config.load_override(self._data_dir, sid)
-            except Exception:
-                pass
 
         # 声明 filter_history 的策略 (如反包) 需要多日历史窗口才能判定形态。
         # 旧实现因"实时监控不支持 history loader"直接跳过 → 反包等策略盘中永不触发。
@@ -1050,7 +1047,7 @@ class MonitorRuleEngine:
                     ],
                 }
                 self._latest_strategy_result_ids.add(sid)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
         current_pool: set[str] = {r["symbol"] for r in result.rows}
@@ -1278,7 +1275,7 @@ class MonitorRuleEngine:
                 try:
                     s = self._strategy_engine.get(sid)
                     sname = s.meta.get("name", "") or s.meta.get("id", "")
-                except Exception:  # noqa: BLE001
+                except Exception:
                     sname = ""
             if not sname:
                 rn = rule.get("name", "")

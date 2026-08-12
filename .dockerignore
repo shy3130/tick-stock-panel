@@ -12,12 +12,6 @@
 data
 backend/data
 
-# ===== 前端构建产物 / 依赖(镜像内会重新 build, 带进来反而污染) =====
-frontend/node_modules
-frontend/dist
-backend/static
-backend/app/static
-
 # ===== Python 缓存 / 虚拟环境 =====
 **/__pycache__
 **/*.py[cod]
@@ -33,9 +27,8 @@ backend/app/static
 .DS_Store
 **/*.swp
 
-# ===== 文档 / 截图(镜像不需要; README.md 除外, Dockerfile 显式 COPY 了它) =====
+# ===== 文档(镜像不需要; README.md 除外, Dockerfile 显式 COPY 了它) =====
 docs
-screenshots
 
 # ===== 桌面客户端打包(PyInstaller 专用, 与 Docker 部署无关) =====
 packaging

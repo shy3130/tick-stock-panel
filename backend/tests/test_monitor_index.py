@@ -56,6 +56,7 @@ def _signal_rule(rid, asset_type, sym):
 def test_evaluate_index_round_triggers_and_isolates():
     """指数轮只评估指数规则, 且不触碰策略结果缓存。"""
     import polars as pl
+
     from app.strategy.monitor import MonitorRuleEngine
 
     eng = MonitorRuleEngine()

@@ -27,11 +27,11 @@ def to_polars(data) -> pl.DataFrame:
         return pl.from_pandas(data.reset_index())
     try:
         return pl.DataFrame(data)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return pl.DataFrame()
 
 
-def normalize_daily(data, default_symbol: str | None = None, source: str = "tickflow") -> pl.DataFrame:  # noqa: ARG001
+def normalize_daily(data, default_symbol: str | None = None, source: str = "tickflow") -> pl.DataFrame:
     df = to_polars(data)
     if df.is_empty():
         return df
@@ -47,7 +47,12 @@ def normalize_daily(data, default_symbol: str | None = None, source: str = "tick
     if "symbol" not in df.columns and default_symbol:
         df = df.with_columns(pl.lit(default_symbol).alias("symbol"))
     if "date" in df.columns and df.schema["date"] != pl.Date:
-        df = df.with_columns(pl.col("date").cast(pl.Date, strict=False))
+        date_expr = (
+            pl.col("date").str.to_date(strict=False)
+            if df.schema["date"] == pl.String
+            else pl.col("date").cast(pl.Date, strict=False)
+        )
+        df = df.with_columns(date_expr)
     # quote_ts: 毫秒级行情时间戳, 用于盘后校验/量比折算。保留为 Int64, 缺失则置 null。
     if "quote_ts" in df.columns:
         df = df.with_columns(pl.col("quote_ts").cast(pl.Int64, strict=False))
@@ -59,7 +64,7 @@ def normalize_daily(data, default_symbol: str | None = None, source: str = "tick
     return df.select(keep) if keep else pl.DataFrame()
 
 
-def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:  # noqa: ARG001
+def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:
     df = to_polars(data)
     if df.is_empty():
         return df
@@ -75,7 +80,12 @@ def normalize_adj_factors(data, source: str = "tickflow") -> pl.DataFrame:  # no
                 pl.from_epoch(pl.col("trade_date").cast(pl.Int64), time_unit="ms").dt.date().alias("trade_date")
             )
         else:
-            df = df.with_columns(pl.col("trade_date").cast(pl.Date, strict=False))
+            date_expr = (
+                pl.col("trade_date").str.to_date(strict=False)
+                if df.schema["trade_date"] == pl.String
+                else pl.col("trade_date").cast(pl.Date, strict=False)
+            )
+            df = df.with_columns(date_expr)
     if "ex_factor" in df.columns:
         df = df.with_columns(pl.col("ex_factor").cast(pl.Float64, strict=False))
     keep = [c for c in ADJ_FACTOR_COLS if c in df.columns]

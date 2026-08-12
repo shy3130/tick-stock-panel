@@ -1,5 +1,6 @@
 """TickFlow Stock Panel backend."""
 
+import contextlib
 import sys
 
 __version__ = "0.1.88"
@@ -9,7 +10,5 @@ __version__ = "0.1.88"
 # 进程加载最早阶段强制 UTF-8,根治此类编码崩溃。
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
-        try:
+        with contextlib.suppress(Exception):
             _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            pass

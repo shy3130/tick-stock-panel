@@ -36,7 +36,7 @@ def _find_universe_id(hints: list[str]) -> str | None:
     try:
         tf = get_client()
         unis = tf.universes.list()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("universes.list failed: %s", e)
         return None
     for u in unis or []:
@@ -85,7 +85,7 @@ def _fetch_pool(pool_id: PoolId) -> list[str]:
             df = tf.quotes.get_by_universes([uid], as_dataframe=True)
             if df is not None and len(df) > 0 and "symbol" in df.columns:
                 return df["symbol"].astype(str).tolist()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("fetch pool %s via universe %s failed: %s", pool_id, uid, e)
 
     if pool_id == "CN_Equity_A":
@@ -96,13 +96,13 @@ def _fetch_pool(pool_id: PoolId) -> list[str]:
                 df = tf.quotes.get_by_universes([uid], as_dataframe=True)
                 if df is not None and len(df) > 0 and "symbol" in df.columns:
                     return sorted(set(df["symbol"].astype(str).tolist()))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("fetch CN_Equity_A via universe %s failed: %s", uid, e)
 
         # fallback: 聚合申万一级行业 (覆盖度较低, 缺北交所/新股)
         try:
             unis = tf.universes.list()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("universes.list failed: %s", e)
             unis = []
         sw1_ids = []
@@ -116,7 +116,7 @@ def _fetch_pool(pool_id: PoolId) -> list[str]:
                 df = tf.quotes.get_by_universes(sw1_ids, as_dataframe=True)
                 if df is not None and "symbol" in df.columns:
                     return sorted(set(df["symbol"].astype(str).tolist()))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("aggregate SW1 fetch failed: %s", e)
 
     if pool_id == "CN_Index":
@@ -126,7 +126,7 @@ def _fetch_pool(pool_id: PoolId) -> list[str]:
             df = tf.quotes.get_by_universes(ids, as_dataframe=True)
             if df is not None and len(df) > 0 and "symbol" in df.columns:
                 return sorted(set(df["symbol"].astype(str).tolist()))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("fetch CN_Index via universe %s failed: %s", ids, e)
 
     return []

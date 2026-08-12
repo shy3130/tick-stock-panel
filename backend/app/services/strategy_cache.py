@@ -91,7 +91,7 @@ def _read_cache_unlocked(data_dir: Path) -> dict | None:
         if not text.strip():
             return None
         cached = json.loads(text)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("读取策略缓存失败: %s", e)
         return None
 
@@ -138,10 +138,7 @@ def _write_cache_locked(
     old_as_of = old.get("as_of") if old else None
     old_ever_rows: dict[str, dict[str, dict]] = old.get("today_ever_rows", {}) if old else {}
 
-    if old_as_of == as_of:
-        merged_results = {**(old.get("results") or {}), **results}
-    else:
-        merged_results = results
+    merged_results = {**(old.get("results") or {}), **results} if old_as_of == as_of else results
 
     # 当前命中的行数据 → symbol 映射
     current_row_maps: dict[str, dict[str, dict]] = {}
@@ -186,5 +183,5 @@ def _write_cache_locked(
         total_rows = sum(len(r.get("rows", [])) for r in merged_results.values())
         total_ever = sum(len(v) for v in today_ever_matched.values())
         logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(merged_results), total_rows, total_ever)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("写入策略缓存失败: %s", e)

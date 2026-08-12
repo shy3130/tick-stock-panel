@@ -4,10 +4,10 @@ from datetime import date
 
 import polars as pl
 
-from app.services.backtest import BacktestConfig
 from app.backtest.engine import BacktestEngine, PanelCache
 from app.backtest.factor import FactorConfig
 from app.backtest.strategy import StrategyBacktestConfig
+from app.services.backtest import BacktestConfig
 
 
 def test_configs_default_to_stock():

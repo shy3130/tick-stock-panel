@@ -8,7 +8,11 @@ from datetime import datetime
 import polars as pl
 
 from app.data_providers.base import AssetType, ProviderCapabilities
-from app.data_providers.normalizer import normalize_adj_factors, normalize_daily, normalize_instruments
+from app.data_providers.normalizer import (
+    normalize_adj_factors,
+    normalize_daily,
+    normalize_instruments,
+)
 from app.tickflow.client import get_client
 
 logger = logging.getLogger(__name__)
@@ -35,7 +39,7 @@ class TickFlowProvider:
             try:
                 items = tf.exchanges.get_instruments(ex, instrument_type=instrument_type)
                 rows.extend([it for it in (items or []) if isinstance(it, dict)])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("TickFlow instruments %s/%s failed: %s", ex, instrument_type, e)
         return normalize_instruments(rows, asset_type=asset_type, source=self.name)
 
@@ -44,7 +48,7 @@ class TickFlowProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: AssetType,  # noqa: ARG002
+        asset_type: AssetType,
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
@@ -78,7 +82,7 @@ class TickFlowProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: AssetType,  # noqa: ARG002
+        asset_type: AssetType,
     ) -> pl.DataFrame:
         if not symbols:
             return pl.DataFrame()
@@ -98,9 +102,9 @@ class TickFlowProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: AssetType = "stock",  # noqa: ARG002
-        freq: str = "1m",  # noqa: ARG002
-        on_chunk_done: Callable[[int, int], None] | None = None,  # noqa: ARG002
+        asset_type: AssetType = "stock",
+        freq: str = "1m",
+        on_chunk_done: Callable[[int, int], None] | None = None,
     ) -> pl.DataFrame:
         # Existing minute sync remains in app.services.kline_sync for now.
         return pl.DataFrame()

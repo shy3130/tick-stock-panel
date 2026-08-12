@@ -1,0 +1,76 @@
+{
+  "f4": {
+    "start": "2026-02-13",
+    "end": "2026-06-30"
+  },
+  "index_path": {
+    "idx_start": 27.695726313035657,
+    "idx_end": 31.433524432491097,
+    "idx_net_pct": 13.5,
+    "idx_max_dev_from_ma_pct": 26.73,
+    "idx_mean_abs_dev_from_ma_pct": 15.11
+  },
+  "ew_signal": {
+    "signal": "ew(等权指数 MA60)",
+    "test_days": 87,
+    "bull_days": 0,
+    "bear_days": 87,
+    "bull_pct": 0.0,
+    "regime_flips": 0,
+    "avg_run_len": 87.0,
+    "by_month": {
+      "2026-02": {
+        "days": 5,
+        "bull_pct": 0.0
+      },
+      "2026-03": {
+        "days": 22,
+        "bull_pct": 0.0
+      },
+      "2026-04": {
+        "days": 21,
+        "bull_pct": 0.0
+      },
+      "2026-05": {
+        "days": 18,
+        "bull_pct": 0.0
+      },
+      "2026-06": {
+        "days": 21,
+        "bull_pct": 0.0
+      }
+    }
+  },
+  "leader_signal": {
+    "signal": "leader(龙头指数 MA60)",
+    "test_days": 87,
+    "bull_days": 77,
+    "bear_days": 10,
+    "bull_pct": 0.885,
+    "regime_flips": 5,
+    "avg_run_len": 14.5,
+    "by_month": {
+      "2026-02": {
+        "days": 5,
+        "bull_pct": 1.0
+      },
+      "2026-03": {
+        "days": 22,
+        "bull_pct": 1.0
+      },
+      "2026-04": {
+        "days": 21,
+        "bull_pct": 1.0
+      },
+      "2026-05": {
+        "days": 18,
+        "bull_pct": 1.0
+      },
+      "2026-06": {
+        "days": 21,
+        "bull_pct": 0.524
+      }
+    }
+  },
+  "note": "根因=MA60 信号滞后（非 whipshaw）：F4 等权指数实际 +13.5%，但始终在 MA60 下方（均值|偏离MA|15.11%，最大26.73%）=> ew 信号 100% 判熊(0 翻转，平均持仓 87 天)。regime_switch(switch_ew) 在 F4 因此整段只部署 pullback(均值回归)腿，等于逆着上涨市做反转（具体亏损额见本轮 regime_ensemble 运行的 switch_ew F4 实测）。属'卡在错误腿'而非'过度切换'。leader 信号同期 88% 判牛、5 次翻转，更灵敏，说明问题出在 ew MA60 信号本身滞后，而非'切换'这个动作。"
+}

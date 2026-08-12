@@ -81,7 +81,7 @@ def _client_ip(request: Request) -> str:
 def _check_login_rate_limit(ip: str) -> None:
     """登录失败限流检查, 触发则抛 429。锁定过期后重置计数(重新给 5 次机会)。"""
     with _fail_lock:
-        count, until = _fail_counter.get(ip, (0, 0.0))
+        _count, until = _fail_counter.get(ip, (0, 0.0))
         now = time.time()
         if until > now:
             wait = int(until - now)

@@ -1,0 +1,149 @@
+{
+  "artifacts": [
+    {
+      "bytes": 6456,
+      "file": "mvp_backtest.json",
+      "role": "deterministic machine-readable MVP result",
+      "sha256": "b3458edad226dc476087e8e6b6bfc67aa43960baa0950a3e541665782e24d05c"
+    },
+    {
+      "bytes": 1641,
+      "file": "mvp_backtest.html",
+      "role": "offline human-readable MVP report",
+      "sha256": "6eaf85742eac2aee0cfa9f1f3442afadbcdb860aa76e0258c11fbec7c6b69ce3"
+    },
+    {
+      "bytes": 14921,
+      "file": "source/backend/scripts/run_mvp.py",
+      "role": "MVP source snapshot",
+      "sha256": "0189d73e2ea5224a378ddb7fc52cfd1f674b2693ba79b61fe35cb5ebd1f55f23"
+    },
+    {
+      "bytes": 5813,
+      "file": "source/backend/app/config.py",
+      "role": "MVP source snapshot",
+      "sha256": "e77c26c171f626ab9432409496d96bbbd60706319f1463511b00d18236104a67"
+    },
+    {
+      "bytes": 15478,
+      "file": "source/backend/app/main.py",
+      "role": "MVP source snapshot",
+      "sha256": "3caa3cc0dd9bc79a291135e5dca1d33025d083454eca8d4daf19027c7efa0031"
+    },
+    {
+      "bytes": 144361,
+      "file": "source/backend/app/backtest/engine.py",
+      "role": "MVP source snapshot",
+      "sha256": "00e902af50e551d6e74fac7acd65f4ade469cd7243542613ceb392850f45f11b"
+    },
+    {
+      "bytes": 93856,
+      "file": "source/backend/app/backtest/strategy.py",
+      "role": "MVP source snapshot",
+      "sha256": "4d77affa221869c7f7db23a14380a81be69c695525ec488c1e961858df82f47c"
+    },
+    {
+      "bytes": 14153,
+      "file": "source/backend/app/backtest/worker.py",
+      "role": "MVP source snapshot",
+      "sha256": "50fc505cf5697c85e8b5e3c95080dd739f433e2b63a1eae25429caa9b0825340"
+    },
+    {
+      "bytes": 3168,
+      "file": "source/backend/app/strategy/builtin/trend_breakout.py",
+      "role": "MVP source snapshot",
+      "sha256": "b93df025af0246bb0b0f87bccd239362486ac5028a3f06e19060f0ab6c77cd2f"
+    },
+    {
+      "bytes": 1946,
+      "file": "source/backend/research/common/universe.py",
+      "role": "MVP source snapshot",
+      "sha256": "54eaa4da076f3309204d632a42b0057555c03d26e8189d61b598e22b256c536f"
+    },
+    {
+      "bytes": 1154,
+      "file": "source/backend/research/paths.py",
+      "role": "MVP source snapshot",
+      "sha256": "2f111f5fb01f6ed1a7d55c50b79d3d67e1a3858f99bb64a4355c6eb1681de60b"
+    },
+    {
+      "bytes": 7755,
+      "file": "source/dev.ps1",
+      "role": "MVP source snapshot",
+      "sha256": "feb433365a15886963abe023e880a5f017d8c69e174e256967b8294e6d3be0bf"
+    },
+    {
+      "bytes": 4290,
+      "file": "source/dev.sh",
+      "role": "MVP source snapshot",
+      "sha256": "f590b1a939cc87eb0411164ebc4a2deb94aeac0db8c30802478f1873e78f9d4e"
+    },
+    {
+      "bytes": 1013,
+      "file": "source/.env.example",
+      "role": "MVP source snapshot",
+      "sha256": "98146d71c5a77970060d88f189ad701652bcf2cb6c7b744cea34c42ccec91810"
+    },
+    {
+      "bytes": 6298,
+      "file": "source/README.md",
+      "role": "MVP source snapshot",
+      "sha256": "01a3cc63ac74afda76d91b438f149b50c3ef64ced2c327007f8442674b1e0abf"
+    }
+  ],
+  "git": {
+    "branch": "codex/p14-forward-observation",
+    "head": "2a950e5560965591554e36c972027c9a01287159",
+    "note": "完整仓库源码尚未 Git 冻结；本发布归档保存 MVP 入口及关键依赖快照。",
+    "working_tree_dirty": true
+  },
+  "release": {
+    "date": "2026-08-02",
+    "status": "frozen_research_mvp_not_production_alpha",
+    "version": "0.1.0"
+  },
+  "result_summary": {
+    "data": {
+      "duplicate_date_symbol_rows": 0,
+      "file_count": 562,
+      "max_date": "2026-07-27",
+      "min_date": "2024-04-01",
+      "non_finite_ohlcv_values": 0,
+      "non_positive_prices": 0,
+      "required_null_values": 0,
+      "row_count": 3039038,
+      "source": "data/kline_daily_enriched/**/*.parquet",
+      "symbol_count": 5628,
+      "trading_day_count": 562,
+      "valid": true
+    },
+    "evidence_status": "historical_backtest_only_not_live_validated",
+    "metrics": {
+      "annual_return": -0.0114,
+      "benchmark_return": 0.0789,
+      "calmar": -0.02,
+      "excess": -0.0989,
+      "max_drawdown": -0.5604,
+      "n_trades": 386,
+      "profit_factor": 3.16,
+      "sharpe": 0.14,
+      "sortino": 0.21,
+      "total_return": -0.02,
+      "win_rate": 0.2591
+    },
+    "protocol_hash": "358a241014958743dbd862e3f2c60998939d6ff4e657db6dd2f84fd5a11e3425",
+    "seed": 20260723,
+    "strategy": {
+      "evidence_status": "historical_replay_failed",
+      "id": "trend_breakout",
+      "name": "趋势突破",
+      "warning": "仅用于验证回测闭环，不代表策略已经通过样本外晋级。"
+    },
+    "universe_sha256": "5c3fa419cdbb98462d235a47a01b1141170e3e7abe8e46b0c5de614f70770bb7"
+  },
+  "schema": "tickflow.mvp_release.v1",
+  "verification": {
+    "command": ".venv/Scripts/python.exe -m scripts.freeze_mvp --verify-only",
+    "policy": "same version is idempotent; any differing frozen file is rejected"
+  }
+}

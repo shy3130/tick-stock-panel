@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "phase": "P11-D formula reward model v1",
+  "config": {
+    "alphas": [
+      0.1,
+      1.0,
+      10.0,
+      100.0
+    ],
+    "cv_folds": 4,
+    "top_fraction": 0.2,
+    "bootstrap_samples": 1000,
+    "seed": 20260810,
+    "model": "standardized dual ridge on fixed formula structure features",
+    "feature_count": 558,
+    "gpu_required": false
+  },
+  "data": {
+    "manifest": "artifacts/archive/factors/alphagpt_rollouts_multiseed_v1_manifest.json",
+    "dataset_sha256": "b3082875ce8072a03ade076bcc4f584e6cd607c595341eed0f1191171023b9a6",
+    "train_formulas": 117,
+    "validation_formulas": 19,
+    "boundary": "formula and RobustReward labels from T1-T3 only; HOLDOUT excluded"
+  },
+  "leakage_controls": {
+    "model_fit_inputs": "formula tokens and train-split final training rewards only",
+    "alpha_selection": "formula-hash CV within train split only",
+    "validation_usage": "one locked rank/top-k/calibration gate after fitting",
+    "holdout_usage": "none; HOLDOUT is neither loaded nor represented in labels",
+    "formula_hashes_verified_and_unique": true,
+    "market_features_used_by_model": false
+  },
+  "training_cv": {
+    "fold_rule": "first 64 formula-hash bits modulo n_folds",
+    "n_folds": 4,
+    "candidates": [
+      {
+        "alpha": 0.1,
+        "spearman": 0.284194278349743,
+        "pearson": 0.09952443977846913,
+        "mae": 3.2457774346399653,
+        "rmse": 5.191418842008533,
+        "sign_accuracy": 0.6068376068376068
+      },
+      {
+        "alpha": 1.0,
+        "spearman": 0.2877309715416086,
+        "pearson": 0.10786996800297781,
+        "mae": 3.2165205595008555,
+        "rmse": 5.131196822161851,
+        "sign_accuracy": 0.6239316239316239
+      },
+      {
+        "alpha": 10.0,
+        "spearman": 0.28735632183908044,
+        "pearson": 0.10163444508687391,
+        "mae": 3.1136120282433124,
+        "rmse": 5.024912557323701,
+        "sign_accuracy": 0.6068376068376068
+      },
+      {
+        "alpha": 100.0,
+        "spearman": 0.2681143131172353,
+        "pearson": 0.090771526718888,
+        "mae": 2.879372692715927,
+        "rmse": 4.679308859198933,
+        "sign_accuracy": 0.6153846153846154
+      }
+    ],
+    "selected_alpha": 1.0,
+    "selection_rule": "max OOF Spearman, then min OOF RMSE"
+  },
+  "train_metrics": {
+    "spearman": 0.9992806725711461,
+    "pearson": 0.9998499024956694,
+    "mae": 0.03372216277180862,
+    "rmse": 0.07532471392693789,
+    "sign_accuracy": 1.0
+  },
+  "validation_metrics": {
+    "spearman": 0.6175438596491227,
+    "pearson": 0.504846690739979,
+    "mae": 3.2687569783145975,
+    "rmse": 5.266244432965893,
+    "sign_accuracy": 0.7368421052631579
+  },
+  "validation_spearman_bootstrap_90pct": {
+    "samples": 1000,
+    "p05": 0.24554729917249418,
+    "median": 0.6285465034030715,
+    "p95": 0.8637288533099848
+  },
+  "validation_top_k": {
+    "fraction": 0.2,
+    "count": 4,
+    "selected_actual_mean": 7.76476662883409,
+    "overall_actual_mean": 1.8252043169206615,
+    "absolute_lift": 5.939562311913429,
+    "oracle_actual_mean": 7.86298996044147,
+    "selected_positive_ratio": 1.0
+  },
+  "validation_calibration": [
+    {
+      "n": 5,
+      "predicted_mean": -7.017420415802642,
+      "actual_mean": -0.7259471387857361
+    },
+    {
+      "n": 5,
+      "predicted_mean": 0.30793072695605506,
+      "actual_mean": -0.5944512889519923
+    },
+    {
+      "n": 5,
+      "predicted_mean": 2.455506761724112,
+      "actual_mean": 2.044361528968969
+    },
+    {
+      "n": 4,
+      "predicted_mean": 6.319364022481775,
+      "actual_mean": 7.76476662883409
+    }
+  ],
+  "gate": {
+    "checks": {
+      "validation_examples_at_least_15": true,
+      "validation_spearman_at_least_0_20": true,
+      "top_k_absolute_lift_positive": true,
+      "top_k_actual_mean_positive": true,
+      "bootstrap_p05_above_minus_0_10": true
+    },
+    "passed": true,
+    "decision": "eligible for prospective training-only reranker test"
+  },
+  "checkpoint": {
+    "file": "alphagpt_reward_model_v1.npz",
+    "sha256": "3a0ee0a6a7c510b942d3ac338cb1b8482b81844ce802997696cb845c313fadce",
+    "reload_predictions_identical": true
+  },
+  "known_limits": [
+    "only 19 validation formulas are available",
+    "all labels are training-fold rewards and are not OOS evidence",
+    "558 fixed features on 117 train formulas can interpolate; OOF and prospective gates are authoritative",
+    "calibration is biased at the low predicted-reward tail",
+    "no prospective candidate reranking is run unless the gate passes"
+  ]
+}

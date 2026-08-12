@@ -8,8 +8,7 @@ TypeError, 导致整个 /api/strategies 列表 500. 加载边界归一化后保�
 from __future__ import annotations
 
 from app.api.strategy import _strategy_detail
-from app.strategy.engine import _normalize_param_defs, StrategyDef
-
+from app.strategy.engine import StrategyDef, _normalize_param_defs
 
 # ── 归一化各格式分支 ──────────────────────────────────────────────────
 

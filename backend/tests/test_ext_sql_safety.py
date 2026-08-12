@@ -16,7 +16,6 @@ import pytest
 
 from app.db_safe import is_valid_ext_ident, quote_ident
 
-
 # ===== quote_ident 转义正确性 =====
 
 def test_quote_ident_wraps_in_double_quotes():
@@ -72,7 +71,7 @@ def test_sink_with_malicious_field_name_does_not_write_file():
     evil = 'close" UNION SELECT * FROM (COPY (SELECT 1) TO \'' + tmp + '\') --'
     sql = f'SELECT symbol, {quote_ident(evil)} FROM ext_x'
     # 转义后查询合法列失败 → 报 Binder Error, 绝不会执行 COPY
-    with pytest.raises(Exception):
+    with pytest.raises(duckdb.Error):
         con.execute(sql).fetchall()
 
     # 关键断言: 文件未被创建 (COPY 未执行)
@@ -89,7 +88,7 @@ def test_sink_with_malicious_field_name_does_not_leak_data():
     evil = 'close" UNION SELECT pw FROM secret --'
     sql = f'SELECT symbol, {quote_ident(evil)} FROM ext_x'
     # 不会返回 secret 表内容, 而是报错 (列 close"... UNION... 不存在)
-    with pytest.raises(Exception):
+    with pytest.raises(duckdb.Error):
         con.execute(sql).fetchall()
 
 

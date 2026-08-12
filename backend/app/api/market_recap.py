@@ -53,8 +53,8 @@ async def analyze_market(request: Request, req: AnalyzeRequest):
     if req.as_of:
         try:
             as_of = date_cls.fromisoformat(req.as_of)
-        except ValueError:
-            raise HTTPException(400, f"as_of 格式应为 YYYY-MM-DD,收到: {req.as_of}")
+        except ValueError as exc:
+            raise HTTPException(400, f"as_of 格式应为 YYYY-MM-DD,收到: {req.as_of}") from exc
 
     async def stream_gen():
         async for chunk in recap_market_stream(repo, quote_service, depth_service, as_of, req.focus):

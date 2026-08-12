@@ -20,10 +20,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import threading
-import time
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ class WecomBotService:
         try:
             if preferences.get_wecom_bot_enabled():
                 self.start()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("智能机器人 boot_check 失败: %s", e)
 
     def apply_credential_change(self) -> None:
@@ -144,21 +144,20 @@ class WecomBotService:
                 self._ws_loop = loop
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._connect_loop())
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("智能机器人连接线程异常: %s", e)
             self._last_error = str(e)
         finally:
             with self._lock:
                 self._connected = False
                 self._ws_loop = None
-            try:
+            with contextlib.suppress(Exception):
                 loop.close()
-            except Exception:  # noqa: BLE001
-                pass
 
     async def _connect_loop(self) -> None:
         """主连接循环: 连接 → 鉴权 → 心跳保活 → 断开 → 退避重连。"""
         import websockets
+
         from app.services import preferences
 
         attempt = 0
@@ -208,10 +207,10 @@ class WecomBotService:
                     # 3. 心跳保活 + 接收循环
                     await self._maintain_connection(ws)
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._last_error = "鉴权响应超时"
                 logger.warning("智能机器人鉴权超时")
-            except Exception as e:  # noqa: BLE001 — 网络/断开, 可重连
+            except Exception as e:
                 self._last_error = str(e)
                 logger.warning("智能机器人连接异常: %s", e)
             finally:
@@ -238,11 +237,11 @@ class WecomBotService:
                     raw = await asyncio.wait_for(ws.recv(), timeout=_HEARTBEAT_INTERVAL)
                     self._log_incoming(raw)
                     continue
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass  # 接收超时 → 到了心跳时间
                 # 发送业务层 ping 保活
                 await ws.send(json.dumps({"cmd": "ping"}))
-            except Exception as e:  # noqa: BLE001 — 连接断开, 抛给上层重连
+            except Exception:
                 raise
 
     def _log_incoming(self, raw) -> None:

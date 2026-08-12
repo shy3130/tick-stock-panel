@@ -6,8 +6,8 @@ quotes.get_by_universes 作为补充来源。日K统一走 klines.batch。
 """
 from __future__ import annotations
 
-import logging
 import gc
+import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -95,7 +95,7 @@ def _fetch_instruments_by_type(instrument_type: str, asset_type_label: str) -> p
                     "symbol": str(symbol),
                     "name": item.get("name") or str(symbol),
                 })
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("get_instruments(%s, type=%s) failed: %s", ex, instrument_type, e)
 
     if not rows:
@@ -141,7 +141,7 @@ def sync_index_instruments(
         try:
             from app.tickflow import policy
             capset = policy.detect_capabilities(force=False)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         if capset is not None and capset.has(Cap.QUOTE_POOL):
             tf = get_client()
@@ -156,7 +156,7 @@ def sync_index_instruments(
                         if not sup.is_empty():
                             index_parts.append(sup)
                         break
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.debug("CN_Index universe supplement failed: %s", e)
 
     total = 0
@@ -260,7 +260,7 @@ def _load_etf_factors(repo: KlineRepository) -> pl.DataFrame:
         return pl.DataFrame()
     try:
         return pl.read_parquet(factor_path)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("ETF 复权因子读取失败: %s", e)
         return pl.DataFrame()
 

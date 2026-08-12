@@ -7,7 +7,6 @@ from __future__ import annotations
 import types
 
 import polars as pl
-import pytest
 
 from app.api.kline import search_instruments
 

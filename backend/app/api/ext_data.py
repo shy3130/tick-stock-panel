@@ -1,13 +1,14 @@
 """扩展数据 API — CRUD + 文件上传 + JSON 写入 + 定时拉取 + schema 发现。"""
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
 import re
 import shutil
 import tempfile
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -25,9 +26,8 @@ from app.services.ext_data import (
     ensure_utf8_csv,
     fix_symbol_format,
     infer_fields_from_df,
-    parse_upload_file,
-    write_ext_parquet,
     rows_to_parquet,
+    write_ext_parquet,
 )
 from app.services.ext_pull import fetch_and_ingest, pull_scheduler
 
@@ -639,8 +639,9 @@ async def test_pull(request: Request, config_id: str):
         raise HTTPException(400, "拉取未配置或 URL 为空")
 
     # 临时构建一个带新配置的 config 用于测试
-    from app.services.ext_pull import _extract_rows, _apply_field_map
     import httpx
+
+    from app.services.ext_pull import _apply_field_map, _extract_rows
 
     pull = config.pull
     try:
@@ -683,8 +684,8 @@ async def run_pull(request: Request, config_id: str):
         # 写回执行状态, 让前端"上次执行"面板立即反映
         updated = store.get(config_id)
         if updated and updated.pull:
-            from datetime import datetime, timezone
-            updated.pull.last_run = datetime.now(timezone.utc).isoformat()
+            from datetime import datetime
+            updated.pull.last_run = datetime.now(UTC).isoformat()
             updated.pull.last_status = "success"
             updated.pull.last_message = f"{n} rows @ {d}"
             updated.pull.last_rows = n
@@ -694,8 +695,8 @@ async def run_pull(request: Request, config_id: str):
         # 失败也写回状态, 记录错误信息
         failed = store.get(config_id)
         if failed and failed.pull:
-            from datetime import datetime, timezone
-            failed.pull.last_run = datetime.now(timezone.utc).isoformat()
+            from datetime import datetime
+            failed.pull.last_run = datetime.now(UTC).isoformat()
             failed.pull.last_status = "error"
             failed.pull.last_message = str(e)[:200]
             store.upsert(failed)
@@ -797,8 +798,9 @@ def _find_row_arrays(data, prefix: str = "", limit: int = 8) -> list[str]:
 @router.post("/detect-url")
 async def detect_url(body: DetectUrlReq):
     """请求外部 URL，自动检测 JSON 行数据的字段和标的代码列。"""
-    from app.services.ext_pull import _extract_rows, _apply_field_map
     import httpx
+
+    from app.services.ext_pull import _apply_field_map, _extract_rows
 
     method = body.method.upper()
     if method not in ("GET", "POST"):
@@ -929,10 +931,8 @@ def _refresh_views(request: Request) -> None:
                 f"CREATE OR REPLACE VIEW {name} AS "
                 f"SELECT * FROM read_parquet('{old_glob}', union_by_name=true)"
             )
-            try:
+            with contextlib.suppress(Exception):
                 db.execute(sql)
-            except Exception:
-                pass
 
     # 注册新路径视图：每个扩展表一个视图 ext_{config_id}
     ext_base = Path(d) / "ext_data"

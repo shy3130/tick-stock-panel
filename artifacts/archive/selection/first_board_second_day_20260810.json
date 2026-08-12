@@ -1,0 +1,2309 @@
+{
+  "status": "LIVE_SCREEN_ONLY",
+  "as_of": "2026-08-10T17:00:20.745765+08:00",
+  "strategy": {
+    "id": "first_board_second_day_v1",
+    "name": "一进二竞价 v1（实验）",
+    "lifecycle": "experimental",
+    "evidence_status": "live_screen_only_not_historical_oos",
+    "execution_backend": "specialized_auction_runner"
+  },
+  "first_board_date": "2026-08-07",
+  "auction_trade_date": "2026-08-10",
+  "universe": "previous complete trading-day consecutive_limit_ups == 1; ST/risk names rejected",
+  "rules": {
+    "ratio_min": 0.08,
+    "ratio_ideal_max": 0.12,
+    "ratio_max": 0.2,
+    "gap_min": 0.06,
+    "gap_max": 0.08,
+    "ratio_points": 30.0,
+    "gap_points": 30.0,
+    "ma_points": 20.0,
+    "cross_points": 20.0,
+    "cross_min_count": 2
+  },
+  "score_definition": {
+    "auction_amount_ratio": "8%-12% = 30; 12%-20% linearly decays to 0; outside 8%-20% rejected",
+    "auction_gap": "6%-8% = 30; outside rejected",
+    "ma_bullish_rising": "MA5>MA10>MA20 and all three above previous-day values = 20; otherwise rejected",
+    "single_candle_cross": "first-board bullish candle crosses at least 2 of MA5/10/20/60 = 20 bonus",
+    "tie_break": "ratio distance to 10%, gap distance to 7%, then symbol"
+  },
+  "source": {
+    "daily": "data/kline_daily_enriched",
+    "auction": "data/tushare_auction/date=2026-08-10/open.parquet",
+    "auction_load": "local_snapshot"
+  },
+  "summary": {
+    "first_board_pool_count": 62,
+    "auction_matched_count": 62,
+    "selected_count": 0,
+    "selected_symbols": [],
+    "rejected_count": 62
+  },
+  "feedback_status": {
+    "same_day_available": false,
+    "next_day_available": false,
+    "next_trading_day": null,
+    "note": "gross mark-to-close feedback only; fees, slippage and actual 09:25 fills are not verified"
+  },
+  "selected": [],
+  "candidates": [
+    {
+      "symbol": "600267.SH",
+      "name": "海正药业",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 11.9,
+      "first_board_close": 13.11,
+      "first_board_amount": 731855689.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 13.87,
+      "pre_close": 13.11,
+      "auction_amount": 76010374.0,
+      "auction_amount_ratio": 0.10385978430236675,
+      "auction_gap": 0.05797101449275366,
+      "ma5": 12.122,
+      "ma10": 11.913,
+      "ma20": 11.9035,
+      "ma60": 10.719140285760984,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA10",
+        "MA20"
+      ],
+      "cross_count": 3,
+      "score_components": {
+        "auction_amount_ratio": 30.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 70.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价涨幅5.80%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "001296.SZ",
+      "name": "长江材料",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 18.13,
+      "first_board_close": 19.94,
+      "first_board_amount": 104254134.69999999,
+      "auction_trade_date": "20260810",
+      "auction_price": 19.88,
+      "pre_close": 19.94,
+      "auction_amount": 9649752.0,
+      "auction_amount_ratio": 0.0925598972910568,
+      "auction_gap": -0.0030090270812438424,
+      "ma5": 18.23,
+      "ma10": 17.552,
+      "ma20": 17.2305,
+      "ma60": 18.99316480669928,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 30.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 70.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价涨幅-0.30%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "002742.SZ",
+      "name": "冀衡医药",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 3.75,
+      "first_board_close": 4.13,
+      "first_board_amount": 73389971.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 4.17,
+      "pre_close": 4.13,
+      "auction_amount": 7000596.0,
+      "auction_amount_ratio": 0.0953890007668759,
+      "auction_gap": 0.009685230024213176,
+      "ma5": 3.786,
+      "ma10": 3.618,
+      "ma20": 3.537,
+      "ma60": 3.716972822141253,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 30.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 50.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价涨幅0.97%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "002900.SZ",
+      "name": "哈三联",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 12.26,
+      "first_board_close": 13.48,
+      "first_board_amount": 414891610.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 14.3,
+      "pre_close": 13.48,
+      "auction_amount": 21307000.0,
+      "auction_amount_ratio": 0.051355581762668086,
+      "auction_gap": 0.060830860534124565,
+      "ma5": 12.422,
+      "ma10": 12.245000000000001,
+      "ma20": 11.5545,
+      "ma60": 10.598500000000001,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 30.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 50.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比5.14%低于8%"
+      ]
+    },
+    {
+      "symbol": "301230.SZ",
+      "name": "泓博医药",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 27.12,
+      "first_board_close": 32.42,
+      "first_board_amount": 757602236.4000001,
+      "auction_trade_date": "20260810",
+      "auction_price": 34.68,
+      "pre_close": 32.42,
+      "auction_amount": 30130920.36,
+      "auction_amount_ratio": 0.03977142478245197,
+      "auction_gap": 0.06971005552128307,
+      "ma5": 27.596000000000004,
+      "ma10": 25.918,
+      "ma20": 27.379464265341046,
+      "ma60": 27.64270825523592,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5",
+        "MA20",
+        "MA60"
+      ],
+      "cross_count": 3,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 30.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 50.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.98%低于8%",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603102.SH",
+      "name": "百合股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 34.01,
+      "first_board_close": 37.51,
+      "first_board_amount": 77628320.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 36.0,
+      "pre_close": 37.51,
+      "auction_amount": 5929200.0,
+      "auction_amount_ratio": 0.07637934197210502,
+      "auction_gap": -0.04025593175153286,
+      "ma5": 34.708,
+      "ma10": 33.562,
+      "ma20": 32.833999999999996,
+      "ma60": 34.352,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比7.64%低于8%",
+        "竞价涨幅-4.03%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "603758.SH",
+      "name": "秦安股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 9.45,
+      "first_board_close": 10.48,
+      "first_board_amount": 86291752.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 11.0,
+      "pre_close": 10.48,
+      "auction_amount": 5871800.0,
+      "auction_amount_ratio": 0.06804590084113717,
+      "auction_gap": 0.04961832061068705,
+      "ma5": 9.642,
+      "ma10": 9.349,
+      "ma20": 9.177,
+      "ma60": 10.155000000000001,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比6.80%低于8%",
+        "竞价涨幅4.96%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "002589.SZ",
+      "name": "瑞康医药",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 2.74,
+      "first_board_close": 3.04,
+      "first_board_amount": 476503273.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 3.17,
+      "pre_close": 3.04,
+      "auction_amount": 29466101.0,
+      "auction_amount_ratio": 0.06183819224259557,
+      "auction_gap": 0.042763157894736725,
+      "ma5": 2.828,
+      "ma10": 2.779,
+      "ma20": 2.7515,
+      "ma60": 2.7431666666666668,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA10",
+        "MA20",
+        "MA60"
+      ],
+      "cross_count": 4,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比6.18%低于8%",
+        "竞价涨幅4.28%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "300986.SZ",
+      "name": "志特新材",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 12.38,
+      "first_board_close": 14.8,
+      "first_board_amount": 1096398357.1,
+      "auction_trade_date": "20260810",
+      "auction_price": 15.5,
+      "pre_close": 14.8,
+      "auction_amount": 56261900.0,
+      "auction_amount_ratio": 0.05131519911140152,
+      "auction_gap": 0.04729729729729715,
+      "ma5": 12.514000000000001,
+      "ma10": 11.451,
+      "ma20": 10.868500000000001,
+      "ma60": 12.571366877423111,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比5.13%低于8%",
+        "竞价涨幅4.73%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "301234.SZ",
+      "name": "五洲医疗",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 69.0,
+      "first_board_close": 83.62,
+      "first_board_amount": 548745851.5,
+      "auction_trade_date": "20260810",
+      "auction_price": 82.3,
+      "pre_close": 83.62,
+      "auction_amount": 19887548.1,
+      "auction_amount_ratio": 0.03624181949738166,
+      "auction_gap": -0.01578569720162648,
+      "ma5": 71.95,
+      "ma10": 71.09799999999998,
+      "ma20": 55.041,
+      "ma60": 44.454850047393364,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA10"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.62%低于8%",
+        "竞价涨幅-1.58%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "301366.SZ",
+      "name": "一博科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 44.7,
+      "first_board_close": 53.33,
+      "first_board_amount": 1022173808.8,
+      "auction_trade_date": "20260810",
+      "auction_price": 54.0,
+      "pre_close": 53.33,
+      "auction_amount": 32216400.0,
+      "auction_amount_ratio": 0.031517536178921515,
+      "auction_gap": 0.012563285205325458,
+      "ma5": 46.37,
+      "ma10": 42.515,
+      "ma20": 41.899,
+      "ma60": 47.64633279495461,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.15%低于8%",
+        "竞价涨幅1.26%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "600651.SH",
+      "name": "飞乐音响",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 5.84,
+      "first_board_close": 6.4,
+      "first_board_amount": 266221505.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 6.58,
+      "pre_close": 6.4,
+      "auction_amount": 8266454.0,
+      "auction_amount_ratio": 0.03105103774392681,
+      "auction_gap": 0.028124999999999956,
+      "ma5": 5.936,
+      "ma10": 5.654,
+      "ma20": 5.456,
+      "ma60": 5.9254999999999995,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.11%低于8%",
+        "竞价涨幅2.81%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "603567.SH",
+      "name": "珍宝岛",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 6.32,
+      "first_board_close": 7.08,
+      "first_board_amount": 918982605.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 7.08,
+      "pre_close": 7.08,
+      "auction_amount": 27954913.0,
+      "auction_amount_ratio": 0.030419414739629374,
+      "auction_gap": 0.0,
+      "ma5": 6.57,
+      "ma10": 6.478999999999999,
+      "ma20": 6.0575,
+      "ma60": 6.016,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA10"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.04%低于8%",
+        "竞价涨幅0.00%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "000831.SZ",
+      "name": "中国稀土",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 51.55,
+      "first_board_close": 57.19,
+      "first_board_amount": 3390463975.2000003,
+      "auction_trade_date": "20260810",
+      "auction_price": 57.22,
+      "pre_close": 57.19,
+      "auction_amount": 95523068.0,
+      "auction_amount_ratio": 0.028174040101507106,
+      "auction_gap": 0.0005245672320335348,
+      "ma5": 51.74400000000001,
+      "ma10": 49.681,
+      "ma20": 48.5185,
+      "ma60": 52.05736217399581,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.82%低于8%",
+        "竞价涨幅0.05%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "688137.SH",
+      "name": "近岸蛋白",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 38.8,
+      "first_board_close": 46.72,
+      "first_board_amount": 171227019.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 48.99,
+      "pre_close": 46.72,
+      "auction_amount": 4458776.0,
+      "auction_amount_ratio": 0.026040142648281462,
+      "auction_gap": 0.04858732876712346,
+      "ma5": 40.25,
+      "ma10": 37.449,
+      "ma20": 37.3705,
+      "ma60": 38.941,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.60%低于8%",
+        "竞价涨幅4.86%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "600744.SH",
+      "name": "华银电力",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 7.16,
+      "first_board_close": 7.88,
+      "first_board_amount": 1491023167.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 7.88,
+      "pre_close": 7.88,
+      "auction_amount": 35366228.0,
+      "auction_amount_ratio": 0.02371943560820608,
+      "auction_gap": 0.0,
+      "ma5": 7.406000000000001,
+      "ma10": 7.263,
+      "ma20": 6.8694999999999995,
+      "ma60": 7.197166666666667,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5",
+        "MA10",
+        "MA60"
+      ],
+      "cross_count": 3,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 40.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.37%低于8%",
+        "竞价涨幅0.00%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "002443.SZ",
+      "name": "金洲管道",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 8.79,
+      "first_board_close": 9.33,
+      "first_board_amount": 115035440.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 9.29,
+      "pre_close": 9.33,
+      "auction_amount": 13566187.0,
+      "auction_amount_ratio": 0.11793050037449329,
+      "auction_gap": -0.004287245444801857,
+      "ma5": 8.506,
+      "ma10": 8.215,
+      "ma20": 8.3265,
+      "ma60": 10.223061630449957,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 30.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 30.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价涨幅-0.43%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "600641.SH",
+      "name": "先导基电",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 28.44,
+      "first_board_close": 31.28,
+      "first_board_amount": 2390774159.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 33.4,
+      "pre_close": 31.28,
+      "auction_amount": 78586860.0,
+      "auction_amount_ratio": 0.0328708839787991,
+      "auction_gap": 0.06777493606138107,
+      "ma5": 26.824,
+      "ma10": 27.173000000000002,
+      "ma20": 30.5685,
+      "ma60": 32.27916666666667,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 30.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 30.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.29%低于8%",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "002037.SZ",
+      "name": "保利联合",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 7.33,
+      "first_board_close": 7.69,
+      "first_board_amount": 176362326.1,
+      "auction_trade_date": "20260810",
+      "auction_price": 7.31,
+      "pre_close": 7.69,
+      "auction_amount": 11451846.0,
+      "auction_amount_ratio": 0.06493362983603787,
+      "auction_gap": -0.04941482444733425,
+      "ma5": 7.036,
+      "ma10": 6.712000000000001,
+      "ma20": 6.326,
+      "ma60": 6.740166666666667,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比6.49%低于8%",
+        "竞价涨幅-4.94%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "301080.SZ",
+      "name": "百普赛斯",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 53.96,
+      "first_board_close": 64.75,
+      "first_board_amount": 915450283.1999999,
+      "auction_trade_date": "20260810",
+      "auction_price": 76.88,
+      "pre_close": 64.75,
+      "auction_amount": 57275600.0,
+      "auction_amount_ratio": 0.06256549487296068,
+      "auction_gap": 0.18733590733590733,
+      "ma5": 54.0,
+      "ma10": 52.21900000000001,
+      "ma20": 52.205,
+      "ma60": 45.57129314830242,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比6.26%低于8%",
+        "竞价涨幅18.73%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "002437.SZ",
+      "name": "誉衡药业",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 2.83,
+      "first_board_close": 3.12,
+      "first_board_amount": 703776134.4,
+      "auction_trade_date": "20260810",
+      "auction_price": 3.29,
+      "pre_close": 3.12,
+      "auction_amount": 41485337.25,
+      "auction_amount_ratio": 0.058946780406766805,
+      "auction_gap": 0.054487179487179516,
+      "ma5": 2.946,
+      "ma10": 2.9080000000000004,
+      "ma20": 2.9285,
+      "ma60": 2.882833333333333,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5",
+        "MA10",
+        "MA20",
+        "MA60"
+      ],
+      "cross_count": 4,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比5.89%低于8%",
+        "竞价涨幅5.45%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603137.SH",
+      "name": "恒尚节能",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 24.5,
+      "first_board_close": 27.5,
+      "first_board_amount": 666293546.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 28.34,
+      "pre_close": 27.5,
+      "auction_amount": 34954556.0,
+      "auction_amount_ratio": 0.05246119553437788,
+      "auction_gap": 0.03054545454545443,
+      "ma5": 26.040000000000003,
+      "ma10": 25.905,
+      "ma20": 27.185499999999998,
+      "ma60": 18.7505,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5",
+        "MA10",
+        "MA20"
+      ],
+      "cross_count": 3,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比5.25%低于8%",
+        "竞价涨幅3.05%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "688046.SH",
+      "name": "药康生物",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 27.78,
+      "first_board_close": 33.31,
+      "first_board_amount": 499948527.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 36.64,
+      "pre_close": 33.31,
+      "auction_amount": 26088046.0,
+      "auction_amount_ratio": 0.052181463872979866,
+      "auction_gap": 0.0999699789852897,
+      "ma5": 27.668,
+      "ma10": 26.418,
+      "ma20": 26.0545,
+      "ma60": 22.355669297654572,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比5.22%低于8%",
+        "竞价涨幅10.00%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "301047.SZ",
+      "name": "义翘神州",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 88.85,
+      "first_board_close": 107.88,
+      "first_board_amount": 1370944799.7,
+      "auction_trade_date": "20260810",
+      "auction_price": 119.25,
+      "pre_close": 107.88,
+      "auction_amount": 71498484.0,
+      "auction_amount_ratio": 0.052152708129200975,
+      "auction_gap": 0.10539488320355961,
+      "ma5": 88.322,
+      "ma10": 78.16,
+      "ma20": 74.8,
+      "ma60": 67.79383333333334,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比5.22%低于8%",
+        "竞价涨幅10.54%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "600664.SH",
+      "name": "哈药股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 6.65,
+      "first_board_close": 6.84,
+      "first_board_amount": 1806257753.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 7.52,
+      "pre_close": 6.84,
+      "auction_amount": 88934227.0,
+      "auction_amount_ratio": 0.04923673094401384,
+      "auction_gap": 0.09941520467836251,
+      "ma5": 6.453999999999999,
+      "ma10": 6.046,
+      "ma20": 5.577,
+      "ma60": 3.9993333333333334,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比4.92%低于8%",
+        "竞价涨幅9.94%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "001223.SZ",
+      "name": "欧克科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 38.22,
+      "first_board_close": 41.17,
+      "first_board_amount": 132099591.8,
+      "auction_trade_date": "20260810",
+      "auction_price": 41.07,
+      "pre_close": 41.17,
+      "auction_amount": 4653231.0,
+      "auction_amount_ratio": 0.03522517319391141,
+      "auction_gap": -0.0024289531212048354,
+      "ma5": 38.536,
+      "ma10": 34.845,
+      "ma20": 32.7545,
+      "ma60": 41.23810937267173,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.52%低于8%",
+        "竞价涨幅-0.24%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "002821.SZ",
+      "name": "凯莱英",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 156.5,
+      "first_board_close": 172.26,
+      "first_board_amount": 1802066694.2,
+      "auction_trade_date": "20260810",
+      "auction_price": 180.0,
+      "pre_close": 172.26,
+      "auction_amount": 61596000.0,
+      "auction_amount_ratio": 0.034180754906712595,
+      "auction_gap": 0.04493207941483801,
+      "ma5": 160.154,
+      "ma10": 157.469,
+      "ma20": 163.6875,
+      "ma60": 141.5833781745117,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5",
+        "MA10",
+        "MA20"
+      ],
+      "cross_count": 3,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.42%低于8%",
+        "竞价涨幅4.49%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "600449.SH",
+      "name": "宁夏建材",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 14.0,
+      "first_board_close": 15.5,
+      "first_board_amount": 492007660.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 13.95,
+      "pre_close": 15.5,
+      "auction_amount": 15163650.0,
+      "auction_amount_ratio": 0.030819946990256208,
+      "auction_gap": -0.10000000000000009,
+      "ma5": 14.032,
+      "ma10": 13.074000000000002,
+      "ma20": 12.4405,
+      "ma60": 12.972671427204968,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.08%低于8%",
+        "竞价涨幅-10.00%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "601865.SH",
+      "name": "福莱特",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 10.8,
+      "first_board_close": 11.75,
+      "first_board_amount": 561153802.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 11.47,
+      "pre_close": 11.75,
+      "auction_amount": 16205963.0,
+      "auction_amount_ratio": 0.028879717008493153,
+      "auction_gap": -0.0238297872340425,
+      "ma5": 11.112,
+      "ma10": 10.452000000000002,
+      "ma20": 9.889,
+      "ma60": 10.596661564308382,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.89%低于8%",
+        "竞价涨幅-2.38%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "002762.SZ",
+      "name": "金发拉比",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 9.4,
+      "first_board_close": 10.41,
+      "first_board_amount": 191682327.7,
+      "auction_trade_date": "20260810",
+      "auction_price": 10.06,
+      "pre_close": 10.41,
+      "auction_amount": 5015916.0,
+      "auction_amount_ratio": 0.026167858352859518,
+      "auction_gap": -0.03362151777137368,
+      "ma5": 9.4,
+      "ma10": 8.774000000000001,
+      "ma20": 8.0785,
+      "ma60": 8.464019626059011,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.62%低于8%",
+        "竞价涨幅-3.36%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "000739.SZ",
+      "name": "普洛药业",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 21.16,
+      "first_board_close": 23.41,
+      "first_board_amount": 946186051.9,
+      "auction_trade_date": "20260810",
+      "auction_price": 24.37,
+      "pre_close": 23.41,
+      "auction_amount": 23917814.65,
+      "auction_amount_ratio": 0.02527813066148201,
+      "auction_gap": 0.04100811618966249,
+      "ma5": 21.759999999999998,
+      "ma10": 20.965,
+      "ma20": 20.4655,
+      "ma60": 17.988666666666667,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.53%低于8%",
+        "竞价涨幅4.10%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "603757.SH",
+      "name": "大元泵业",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 59.7,
+      "first_board_close": 65.01,
+      "first_board_amount": 361318954.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 65.05,
+      "pre_close": 65.01,
+      "auction_amount": 8144260.0,
+      "auction_amount_ratio": 0.022540361942927578,
+      "auction_gap": 0.000615289955391285,
+      "ma5": 57.775999999999996,
+      "ma10": 56.730999999999995,
+      "ma20": 63.497,
+      "ma60": 62.79365014049533,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.25%低于8%",
+        "竞价涨幅0.06%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "000603.SZ",
+      "name": "盛达资源",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 31.38,
+      "first_board_close": 34.43,
+      "first_board_amount": 3615996168.5,
+      "auction_trade_date": "20260810",
+      "auction_price": 34.52,
+      "pre_close": 34.43,
+      "auction_amount": 74617051.2,
+      "auction_amount_ratio": 0.0206352683252297,
+      "auction_gap": 0.0026139994191114457,
+      "ma5": 29.419999999999998,
+      "ma10": 27.057,
+      "ma20": 24.2475,
+      "ma60": 26.749862469761545,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.06%低于8%",
+        "竞价涨幅0.26%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "603660.SH",
+      "name": "苏州科达",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 11.0,
+      "first_board_close": 11.99,
+      "first_board_amount": 394399723.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 12.19,
+      "pre_close": 11.99,
+      "auction_amount": 7834513.0,
+      "auction_amount_ratio": 0.019864397825654658,
+      "auction_gap": 0.016680567139282676,
+      "ma5": 10.716,
+      "ma10": 9.647,
+      "ma20": 9.093,
+      "ma60": 11.008166666666666,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA60"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.99%低于8%",
+        "竞价涨幅1.67%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "000506.SZ",
+      "name": "招金黄金",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 16.33,
+      "first_board_close": 18.13,
+      "first_board_amount": 1651156742.7,
+      "auction_trade_date": "20260810",
+      "auction_price": 18.27,
+      "pre_close": 18.13,
+      "auction_amount": 31491999.0,
+      "auction_amount_ratio": 0.019072688973491236,
+      "auction_gap": 0.007722007722007707,
+      "ma5": 15.952000000000002,
+      "ma10": 14.542000000000002,
+      "ma20": 13.48,
+      "ma60": 13.640833333333335,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.91%低于8%",
+        "竞价涨幅0.77%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "603459.SH",
+      "name": "红板科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 95.2,
+      "first_board_close": 105.58,
+      "first_board_amount": 1981697461.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 106.78,
+      "pre_close": 105.58,
+      "auction_amount": 36305200.0,
+      "auction_amount_ratio": 0.018320253577798776,
+      "auction_gap": 0.01136578897518481,
+      "ma5": 92.08399999999999,
+      "ma10": 90.652,
+      "ma20": 87.7855,
+      "ma60": 91.97683333333333,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.83%低于8%",
+        "竞价涨幅1.14%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "300916.SZ",
+      "name": "朗特智能",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 21.97,
+      "first_board_close": 26.4,
+      "first_board_amount": 416363572.5,
+      "auction_trade_date": "20260810",
+      "auction_price": 25.58,
+      "pre_close": 26.4,
+      "auction_amount": 6451276.0,
+      "auction_amount_ratio": 0.015494333380953974,
+      "auction_gap": -0.031060606060606122,
+      "ma5": 21.804000000000002,
+      "ma10": 20.351,
+      "ma20": 19.807000000000002,
+      "ma60": 25.295279104756567,
+      "ma_bullish_rising": true,
+      "crossed_mas": [
+        "MA60"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.55%低于8%",
+        "竞价涨幅-3.11%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "605287.SH",
+      "name": "德才股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 37.18,
+      "first_board_close": 40.93,
+      "first_board_amount": 367718328.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 39.95,
+      "pre_close": 40.93,
+      "auction_amount": 4526335.0,
+      "auction_amount_ratio": 0.012309245026263689,
+      "auction_gap": -0.02394331785976045,
+      "ma5": 37.44,
+      "ma10": 35.194,
+      "ma20": 34.3635,
+      "ma60": 40.80692281568028,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5",
+        "MA60"
+      ],
+      "cross_count": 2,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 20.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.23%低于8%",
+        "竞价涨幅-2.39%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "301008.SZ",
+      "name": "宏昌科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 41.41,
+      "first_board_close": 41.41,
+      "first_board_amount": 105885825.5,
+      "auction_trade_date": "20260810",
+      "auction_price": 41.0,
+      "pre_close": 41.41,
+      "auction_amount": 54095400.0,
+      "auction_amount_ratio": 0.510884244841629,
+      "auction_gap": -0.009900990099009799,
+      "ma5": 35.162,
+      "ma10": 33.217999999999996,
+      "ma20": 31.359499999999997,
+      "ma60": 28.852614863468084,
+      "ma_bullish_rising": true,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 20.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 20.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比51.09%超过淘汰上限20%",
+        "竞价涨幅-0.99%不在[6%, 8%]"
+      ]
+    },
+    {
+      "symbol": "603655.SH",
+      "name": "朗博科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 27.26,
+      "first_board_close": 30.04,
+      "first_board_amount": 40859199.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 31.21,
+      "pre_close": 30.04,
+      "auction_amount": 1741518.0,
+      "auction_amount_ratio": 0.042622421452755355,
+      "auction_gap": 0.03894806924101202,
+      "ma5": 27.268,
+      "ma10": 25.971000000000004,
+      "ma20": 26.024,
+      "ma60": 31.339245772427624,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比4.26%低于8%",
+        "竞价涨幅3.89%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "600110.SH",
+      "name": "诺德股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 9.51,
+      "first_board_close": 10.46,
+      "first_board_amount": 1209763718.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 10.8,
+      "pre_close": 10.46,
+      "auction_amount": 43945200.0,
+      "auction_amount_ratio": 0.03632544053532278,
+      "auction_gap": 0.03250478011472269,
+      "ma5": 9.290000000000001,
+      "ma10": 8.955,
+      "ma20": 9.5385,
+      "ma60": 11.879999999999999,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.63%低于8%",
+        "竞价涨幅3.25%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "688073.SH",
+      "name": "毕得医药",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 51.4,
+      "first_board_close": 61.6,
+      "first_board_amount": 323122052.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 67.99,
+      "pre_close": 61.6,
+      "auction_amount": 10965631.0,
+      "auction_amount_ratio": 0.03393649839782523,
+      "auction_gap": 0.10373376623376607,
+      "ma5": 52.274,
+      "ma10": 49.691,
+      "ma20": 50.6335,
+      "ma60": 50.2851546516972,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.39%低于8%",
+        "竞价涨幅10.37%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "002631.SZ",
+      "name": "德尔未来",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 7.93,
+      "first_board_close": 8.68,
+      "first_board_amount": 261976005.4,
+      "auction_trade_date": "20260810",
+      "auction_price": 8.7,
+      "pre_close": 8.68,
+      "auction_amount": 8127540.0,
+      "auction_amount_ratio": 0.031023986290616215,
+      "auction_gap": 0.0023041474654377225,
+      "ma5": 7.5280000000000005,
+      "ma10": 6.9399999999999995,
+      "ma20": 7.1309999999999985,
+      "ma60": 8.087,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA60"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.10%低于8%",
+        "竞价涨幅0.23%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603186.SH",
+      "name": "华正新材",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 132.3,
+      "first_board_close": 143.0,
+      "first_board_amount": 2343854878.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 150.0,
+      "pre_close": 143.0,
+      "auction_amount": 72360000.0,
+      "auction_amount_ratio": 0.030872218531611664,
+      "auction_gap": 0.04895104895104896,
+      "ma5": 119.87399999999998,
+      "ma10": 117.84699999999998,
+      "ma20": 135.6975,
+      "ma60": 158.353,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比3.09%低于8%",
+        "竞价涨幅4.90%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "600500.SH",
+      "name": "中化国际",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 5.0,
+      "first_board_close": 5.51,
+      "first_board_amount": 811470636.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 5.52,
+      "pre_close": 5.51,
+      "auction_amount": 22740490.0,
+      "auction_amount_ratio": 0.028023799002876056,
+      "auction_gap": 0.001814882032667775,
+      "ma5": 4.962000000000001,
+      "ma10": 4.819000000000001,
+      "ma20": 5.047,
+      "ma60": 6.281166666666667,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.80%低于8%",
+        "竞价涨幅0.18%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "688020.SH",
+      "name": "方邦股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 126.01,
+      "first_board_close": 146.16,
+      "first_board_amount": 862235783.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 150.0,
+      "pre_close": 146.16,
+      "auction_amount": 23590800.0,
+      "auction_amount_ratio": 0.027360033606955977,
+      "auction_gap": 0.026272577996715896,
+      "ma5": 119.08399999999999,
+      "ma10": 112.26299999999999,
+      "ma20": 126.51850000000002,
+      "ma60": 167.65266666666668,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.74%低于8%",
+        "竞价涨幅2.63%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "300363.SZ",
+      "name": "博腾股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 17.03,
+      "first_board_close": 20.44,
+      "first_board_amount": 1383423818.1000001,
+      "auction_trade_date": "20260810",
+      "auction_price": 21.31,
+      "pre_close": 20.44,
+      "auction_amount": 36671228.26,
+      "auction_amount_ratio": 0.026507587754535274,
+      "auction_gap": 0.042563600782778765,
+      "ma5": 17.682,
+      "ma10": 16.683,
+      "ma20": 16.9465,
+      "ma60": 15.857999999999999,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.65%低于8%",
+        "竞价涨幅4.26%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603936.SH",
+      "name": "博敏电子",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 14.49,
+      "first_board_close": 15.93,
+      "first_board_amount": 663102985.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 16.48,
+      "pre_close": 15.93,
+      "auction_amount": 17257856.0,
+      "auction_amount_ratio": 0.026025906066461154,
+      "auction_gap": 0.034526051475204156,
+      "ma5": 13.994,
+      "ma10": 13.458000000000002,
+      "ma20": 14.218,
+      "ma60": 20.351153389029786,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.60%低于8%",
+        "竞价涨幅3.45%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "601208.SH",
+      "name": "东材科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 42.39,
+      "first_board_close": 45.94,
+      "first_board_amount": 4979797228.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 47.21,
+      "pre_close": 45.94,
+      "auction_amount": 118483079.0,
+      "auction_amount_ratio": 0.02379275170760025,
+      "auction_gap": 0.027644754026991736,
+      "ma5": 39.056,
+      "ma10": 38.167979816513764,
+      "ma20": 41.79314263640753,
+      "ma60": 54.1014416545952,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.38%低于8%",
+        "竞价涨幅2.76%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "002913.SZ",
+      "name": "奥士康",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 50.1,
+      "first_board_close": 55.42,
+      "first_board_amount": 362154847.8,
+      "auction_trade_date": "20260810",
+      "auction_price": 55.43,
+      "pre_close": 55.42,
+      "auction_amount": 8092780.0,
+      "auction_amount_ratio": 0.022346187132828987,
+      "auction_gap": 0.00018044027426911136,
+      "ma5": 47.85,
+      "ma10": 44.611000000000004,
+      "ma20": 45.1355,
+      "ma60": 53.3580168350908,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA60"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.23%低于8%",
+        "竞价涨幅0.02%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "600183.SH",
+      "name": "生益科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 131.0,
+      "first_board_close": 139.98,
+      "first_board_amount": 10729352256.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 141.98,
+      "pre_close": 139.98,
+      "auction_amount": 239420874.0,
+      "auction_amount_ratio": 0.02231456925706886,
+      "auction_gap": 0.014287755393627588,
+      "ma5": 120.856,
+      "ma10": 115.756,
+      "ma20": 125.022,
+      "ma60": 139.21086830442673,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA60"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.23%低于8%",
+        "竞价涨幅1.43%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603127.SH",
+      "name": "昭衍新药",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 46.2,
+      "first_board_close": 50.89,
+      "first_board_amount": 2888425195.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 53.0,
+      "pre_close": 50.89,
+      "auction_amount": 62646000.0,
+      "auction_amount_ratio": 0.021688635076457293,
+      "auction_gap": 0.04146197681273334,
+      "ma5": 45.769999999999996,
+      "ma10": 44.965,
+      "ma20": 46.4205,
+      "ma60": 39.955961356165425,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比2.17%低于8%",
+        "竞价涨幅4.15%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "688265.SH",
+      "name": "南模生物",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 35.8,
+      "first_board_close": 42.9,
+      "first_board_amount": 157960559.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 45.0,
+      "pre_close": 42.9,
+      "auction_amount": 2796750.0,
+      "auction_amount_ratio": 0.017705369097864486,
+      "auction_gap": 0.04895104895104896,
+      "ma5": 36.812,
+      "ma10": 34.607000000000006,
+      "ma20": 34.9005,
+      "ma60": 34.801199549505114,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA5"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.77%低于8%",
+        "竞价涨幅4.90%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "688419.SH",
+      "name": "耐科装备",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 41.37,
+      "first_board_close": 49.67,
+      "first_board_amount": 354893417.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 49.98,
+      "pre_close": 49.67,
+      "auction_amount": 5946420.0,
+      "auction_amount_ratio": 0.01675550944355781,
+      "auction_gap": 0.0062411918663176635,
+      "ma5": 40.403999999999996,
+      "ma10": 38.225,
+      "ma20": 43.60850000000001,
+      "ma60": 54.9365381767168,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.68%低于8%",
+        "竞价涨幅0.62%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "002943.SZ",
+      "name": "宇晶股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 32.91,
+      "first_board_close": 35.96,
+      "first_board_amount": 542657579.3,
+      "auction_trade_date": "20260810",
+      "auction_price": 37.09,
+      "pre_close": 35.96,
+      "auction_amount": 8923854.0,
+      "auction_amount_ratio": 0.016444723782373605,
+      "auction_gap": 0.03142380422691882,
+      "ma5": 31.174,
+      "ma10": 29.804000000000002,
+      "ma20": 32.183499999999995,
+      "ma60": 46.7207643005081,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.64%低于8%",
+        "竞价涨幅3.14%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603011.SH",
+      "name": "合锻智能",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 20.62,
+      "first_board_close": 22.68,
+      "first_board_amount": 2248253731.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 23.46,
+      "pre_close": 22.68,
+      "auction_amount": 33796054.0,
+      "auction_amount_ratio": 0.015032135178518247,
+      "auction_gap": 0.03439153439153442,
+      "ma5": 20.326,
+      "ma10": 18.934,
+      "ma20": 19.433,
+      "ma60": 25.572333333333336,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.50%低于8%",
+        "竞价涨幅3.44%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "002741.SZ",
+      "name": "光华科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 24.0,
+      "first_board_close": 26.3,
+      "first_board_amount": 878841129.3000001,
+      "auction_trade_date": "20260810",
+      "auction_price": 26.16,
+      "pre_close": 26.3,
+      "auction_amount": 12219336.0,
+      "auction_amount_ratio": 0.013903919141486632,
+      "auction_gap": -0.005323193916349833,
+      "ma5": 23.016,
+      "ma10": 22.278,
+      "ma20": 23.622,
+      "ma60": 28.514333333333333,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.39%低于8%",
+        "竞价涨幅-0.53%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "001232.SZ",
+      "name": "C嘉立创",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 172.0,
+      "first_board_close": 198.29,
+      "first_board_amount": 4585772153.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 191.0,
+      "pre_close": 198.29,
+      "auction_amount": 58407800.0,
+      "auction_amount_ratio": 0.012736742701398667,
+      "auction_gap": -0.03676433506480403,
+      "ma5": null,
+      "ma10": null,
+      "ma20": null,
+      "ma60": null,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.27%低于8%",
+        "竞价涨幅-3.68%不在[6%, 8%]",
+        "MA5/10/20/60或前一日均线数据不足"
+      ]
+    },
+    {
+      "symbol": "002281.SZ",
+      "name": "光迅科技",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 182.0,
+      "first_board_close": 193.04,
+      "first_board_amount": 13289069178.9,
+      "auction_trade_date": "20260810",
+      "auction_price": 190.93,
+      "pre_close": 193.04,
+      "auction_amount": 158510086.0,
+      "auction_amount_ratio": 0.011927854680121445,
+      "auction_gap": -0.010930377123912094,
+      "ma5": 173.81,
+      "ma10": 171.871,
+      "ma20": 185.463,
+      "ma60": 212.5865,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比1.19%低于8%",
+        "竞价涨幅-1.09%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603124.SH",
+      "name": "江南新材",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 128.8,
+      "first_board_close": 141.66,
+      "first_board_amount": 1338197849.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 141.65,
+      "pre_close": 141.66,
+      "auction_amount": 8782300.0,
+      "auction_amount_ratio": 0.006562781435168784,
+      "auction_gap": -7.059155724964405e-05,
+      "ma5": 119.896,
+      "ma10": 116.06300000000002,
+      "ma20": 120.17249999999999,
+      "ma60": 146.83639483400918,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比0.66%低于8%",
+        "竞价涨幅-0.01%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "605289.SH",
+      "name": "罗曼股份",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 94.96,
+      "first_board_close": 104.49,
+      "first_board_amount": 488524439.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 105.0,
+      "pre_close": 104.49,
+      "auction_amount": 2992500.0,
+      "auction_amount_ratio": 0.006125589143760319,
+      "auction_gap": 0.004880849842090251,
+      "ma5": 92.21600000000001,
+      "ma10": 90.195,
+      "ma20": 98.658,
+      "ma60": 113.80654227839717,
+      "ma_bullish_rising": false,
+      "crossed_mas": [
+        "MA20"
+      ],
+      "cross_count": 1,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比0.61%低于8%",
+        "竞价涨幅0.49%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    },
+    {
+      "symbol": "603328.SH",
+      "name": "依顿电子",
+      "first_board_date": "2026-08-07",
+      "consecutive_limit_ups": 1,
+      "first_board_open": 10.44,
+      "first_board_close": 10.85,
+      "first_board_amount": 148161205.0,
+      "auction_trade_date": "20260810",
+      "auction_price": 11.94,
+      "pre_close": 10.85,
+      "auction_amount": 30834178.0,
+      "auction_amount_ratio": 0.2081123597773115,
+      "auction_gap": 0.10046082949308754,
+      "ma5": 9.98,
+      "ma10": 9.522,
+      "ma20": 9.339,
+      "ma60": 11.594805616565589,
+      "ma_bullish_rising": false,
+      "crossed_mas": [],
+      "cross_count": 0,
+      "score_components": {
+        "auction_amount_ratio": 0.0,
+        "auction_gap": 0.0,
+        "ma_bullish_rising": 0.0,
+        "single_candle_cross": 0.0
+      },
+      "score": 0.0,
+      "decision": "REJECTED",
+      "failure_reasons": [
+        "竞价成交额占比20.81%超过淘汰上限20%",
+        "竞价涨幅10.05%不在[6%, 8%]",
+        "未满足MA5>MA10>MA20且三线同步向上"
+      ]
+    }
+  ],
+  "limitations": [
+    "Only locally archived auction dates can be replayed without fetching a separate historical auction dataset.",
+    "The 09:25 price is an assumed research fill; queue position and actual execution are unknown.",
+    "No threshold has passed fresh OOS validation; this strategy remains experimental and hidden from core defaults."
+  ]
+}
