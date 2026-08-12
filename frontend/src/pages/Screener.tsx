@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2 } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { useDataStatus, usePreferences } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
@@ -18,7 +18,6 @@ import { ScreenerFilter as ScreenerFilterType, defaultFilter, filterActive, coun
 import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDialog'
 import { StrategyPoolDialog } from '@/components/screener/StrategyPoolDialog'
 import { StrategyBuilderDialog } from '@/components/screener/StrategyBuilderDialog'
-import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
@@ -43,7 +42,6 @@ export function Screener() {
   const [showPoolDialog, setShowPoolDialog] = useState(false)
   const [showBuilder, setShowBuilder] = useState(false)
   const [builderMode, setBuilderMode] = useState<'create' | 'modify'>('create')
-  const [showStore, setShowStore] = useState(false)
   const { pool, addToPool, removeFromPool, reorderPool, prune } = useStrategyPool()
   const [cardSize, setCardSize] = useState<CardSize>(loadCardSize)
   // 日k蜡烛图显示开关（仅当 candle 列可见时才有意义；持久化）
@@ -552,18 +550,20 @@ export function Screener() {
               <Sparkles className="h-3.5 w-3.5" />
               创建策略 · AI
             </button>
-            <button
-              onClick={() => setShowStore(true)}
-              className="btn-secondary"
-            >
-              <Store className="h-3.5 w-3.5" />
-              获取策略
-            </button>
           </div>
         }
       />
 
       <div className="workspace-content space-y-3">
+        {cachedQuery.data?.discarded_as_of && (
+          <div className="flex items-center gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+            <Clock className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              已隔离未获数据源确认的 {cachedQuery.data.discarded_as_of} 选股缓存；
+              当前 canonical 日期为 {cachedQuery.data.canonical_as_of ?? '未知'}，请按当前日期重新运行。
+            </span>
+          </div>
+        )}
         {cardSize !== 'hidden' && (
         <section className="panel">
           <div className="panel-header">
@@ -842,11 +842,6 @@ export function Screener() {
           }
           addToPool(id)
         }}
-      />
-
-      <StrategyStoreDialog
-        open={showStore}
-        onClose={() => setShowStore(false)}
       />
     </div>
   )
