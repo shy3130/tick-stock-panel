@@ -7,16 +7,18 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import tomllib
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app import secrets_store
 from app.config import settings
-
-import time
-
 from app.services import ai_routing
+
+if TYPE_CHECKING:
+    from app.services.ai_structured.models import GenerateResponse
 
 OPENAI_COMPAT_PROVIDER = "openai_compat"
 ACP_PROVIDER = "acp"
