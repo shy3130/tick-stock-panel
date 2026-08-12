@@ -116,8 +116,16 @@ export interface FinancialStatus {
 
 export interface FinancialMetricRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   eps_basic?: number | null
   eps_diluted?: number | null
   bps?: number | null
@@ -132,13 +140,21 @@ export interface FinancialMetricRecord {
   net_income_yoy?: number | null
   operating_cash_to_revenue?: number | null
   inventory_turnover?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface FinancialIncomeRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   revenue?: number | null
   operating_cost?: number | null
   operating_profit?: number | null
@@ -147,32 +163,48 @@ export interface FinancialIncomeRecord {
   net_income_attributable?: number | null
   basic_eps?: number | null
   diluted_eps?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface FinancialBalanceSheetRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   total_assets?: number | null
   total_current_assets?: number | null
   cash_and_equivalents?: number | null
   total_liabilities?: number | null
   total_equity?: number | null
   equity_attributable?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface FinancialCashFlowRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   net_operating_cash_flow?: number | null
   net_investing_cash_flow?: number | null
   net_financing_cash_flow?: number | null
   capex?: number | null
   net_cash_change?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /** AI 财务分析历史报告 */
@@ -398,6 +430,53 @@ export function indexFallbackReasonText(reason: IndexFallbackReason | string | n
   if (reason === 'local_snapshot_stale') return '本地快照已过期'
   return null
 }
+
+// ===== 自选/通用实时快照 (GET /api/intraday/snapshot) =====
+// 与 indices 同形响应；只读展示，绝不写回 canonical/enriched/monitor/backtest。
+// 行 change_pct 为【百分点】(5.0 = 5%)；Watchlist 的 rt_pct/change_pct 为小数比率，合并时必须 /100。
+
+export interface IntradaySnapshotRow {
+  symbol: string
+  name?: string | null
+  last_price?: number | null
+  prev_close?: number | null
+  /** 百分点 (5.0 = 5%)，非小数比率 */
+  change_pct?: number | null
+  amount?: number | null
+  timestamp?: string | number | null
+  // 受控外部 fallback provenance — 仅外部降级出现; 本地 realtime 不带
+  source?: string
+  degraded?: boolean
+}
+
+/**
+ * GET /api/intraday/snapshot 响应。
+ * symbols 最多 60 个；degraded / sources / fallback_reason 仅实际外部 fallback 时出现。
+ * 本地当日快照不带降级标记。
+ */
+export interface IntradaySnapshotResponse {
+  rows: IntradaySnapshotRow[]
+  count: number
+  source?: string
+  degraded?: boolean
+  sources?: { realtime?: string }
+  fallback_reason?: IndexFallbackReason
+}
+
+/** 是否处于外部源降级 — 与 indexQuotesDegraded 同口径；本地 realtime/provider 不命中 */
+export function intradaySnapshotDegraded(resp: IntradaySnapshotResponse | null | undefined): boolean {
+  if (!resp) return false
+  if (resp.degraded === true) return true
+  if (resp.source === EXTERNAL_FALLBACK_RESPONSE_SOURCE) return true
+  return (resp.rows ?? []).some(r => r?.source === EXTERNAL_QUOTE_SOURCE || r?.degraded === true)
+}
+
+/** 百分点 → 小数比率；非有限数返回 null（调用方不覆盖原值） */
+export function snapshotPctToRatio(pctPoints: number | null | undefined): number | null {
+  if (pctPoints == null || !Number.isFinite(Number(pctPoints))) return null
+  return Number(pctPoints) / 100
+}
+
 
 // ===== Screener =====
 export interface ScreenerStrategy {
@@ -1331,7 +1410,6 @@ export interface Preferences {
   pipeline_pull_etf: boolean
   pipeline_pull_index: boolean
   pipeline_pull_hk: boolean
-  pipeline_index_symbols: string
   pipeline_schedule: { hour: number; minute: number }
   instruments_schedule: { hour: number; minute: number }
   enriched_batch_size: number
@@ -1510,6 +1588,199 @@ export function quoteSnapshotText(sourceAsOf: string | null | undefined, now: Da
   return m[1] === today ? null : `本地快照截至 ${m[1]}`
 }
 
+// ===== Market Data（上游已发布只读快照） =====
+// `/api/market-data` 的 rows 直接透传 provider DataFrame 字段；此处仅描述已发布字段，
+// 不对日期、金额、side/direction 等上游语义作二次归一化。
+
+export type MarketDataFrequency = 'daily' | 'minute'
+export type MarketDataCallAuctionSession = 'open' | 'close'
+
+export type MarketDataCapabilityKey =
+  | 'chip'
+  | 'moneyflow_daily_stock'
+  | 'moneyflow_daily_block'
+  | 'moneyflow_minute_stock'
+  | 'moneyflow_minute_block'
+  | 'call_auction'
+  | 'transactions'
+  | 'hk_adjustment'
+  | 'hk_financial'
+
+export interface MarketDataCapability {
+  available: boolean
+  source: string | null
+  earliest_date: string | null
+  latest_date: string | null
+  rows: number | null
+  symbols: number | null
+  reason: string | null
+}
+
+export type MarketDataCapabilities = Record<MarketDataCapabilityKey, MarketDataCapability>
+
+/** status 在旧服务或部署切换窗口可缺 capabilities；消费方须按 unavailable 防御展示。 */
+export interface MarketDataStatusResponse {
+  available?: boolean
+  source?: string | null
+  provider?: string | null
+  capabilities?: Partial<MarketDataCapabilities>
+}
+
+export interface MarketDataResponse<Row> {
+  available: boolean
+  source: string | null
+  rows: Row[]
+  reason?: string | null
+}
+
+export interface MarketDataChipRow {
+  symbol: string
+  trade_date: string
+  peak_price: number | null
+  peak_volume: number | null
+  peak_ratio: number | null
+  profit_ratio: number | null
+  avg_cost: number | null
+  concentration_90: number | null
+  range_90_low: number | null
+  range_90_high: number | null
+  concentration_70: number | null
+  range_70_low: number | null
+  range_70_high: number | null
+  cr10: number | null
+  cr30: number | null
+  gini: number | null
+  main_peak_price: number | null
+  main_peak_volume: number | null
+  main_peak_ratio: number | null
+  main_concentration: number | null
+  retail_peak_price: number | null
+  retail_peak_volume: number | null
+  retail_peak_ratio: number | null
+  retail_concentration: number | null
+  has_retail_peak: boolean | null
+  peak_count: number | null
+  window_days: number | null
+  price_step: number | null
+  asset_type: number | null
+  source: string
+}
+
+export interface MarketDataMoneyflowStockRow {
+  symbol?: string
+  trade_date?: string
+  bucket_time?: string | null
+  total_amount?: number | null
+  inflow_amount?: number | null
+  outflow_amount?: number | null
+  net_amount?: number | null
+  super_large_net?: number | null
+  large_net?: number | null
+  medium_net?: number | null
+  small_net?: number | null
+  main_traditional_net?: number | null
+  main_broad_net?: number | null
+  retail_net?: number | null
+  neutral_net?: number | null
+  unknown_net?: number | null
+  valid_count?: number | null
+  invalid_count?: number | null
+  unknown_count?: number | null
+  source?: string | null
+}
+
+export interface MarketDataMoneyflowBlockRow extends MarketDataMoneyflowStockRow {
+  block_type?: number | null
+  block_code?: string | null
+  block_name?: string | null
+}
+export interface MarketDataCallAuctionRow {
+  event_time: string
+  price: number | null
+  volume: number | null
+  amount: number | null
+  direction: number | null
+  session: MarketDataCallAuctionSession
+  venue: string | null
+  source: string
+}
+
+export interface MarketDataTransactionRow {
+  symbol: string
+  datetime: string
+  price: number | null
+  volume: number | null
+  amount: number | null
+  direction: number | null
+  order_count: number | null
+  venue: string | null
+  source: string
+}
+
+export interface MarketDataChipResponse extends MarketDataResponse<MarketDataChipRow> {
+  symbol: string
+  start: string
+  end: string
+  limit: number
+}
+
+export interface MarketDataMoneyflowStockResponse extends MarketDataResponse<MarketDataMoneyflowStockRow> {
+  symbol: string
+  freq: MarketDataFrequency
+  start: string
+  end: string
+}
+
+export interface MarketDataMoneyflowBlocksResponse extends MarketDataResponse<MarketDataMoneyflowBlockRow> {
+  freq: MarketDataFrequency
+  date: string
+  block_type: number | null
+  limit: number
+}
+
+export interface MarketDataCallAuctionResponse extends MarketDataResponse<MarketDataCallAuctionRow> {
+  symbol: string
+  date: string
+  session: MarketDataCallAuctionSession | null
+  limit: number
+}
+
+export interface MarketDataTransactionsResponse extends MarketDataResponse<MarketDataTransactionRow> {
+  symbol: string
+  date: string
+  limit: number
+}
+
+export interface MarketDataChipRequest {
+  start: string
+  end: string
+  limit?: number
+}
+
+export interface MarketDataMoneyflowStockRequest {
+  freq: MarketDataFrequency
+  start: string
+  end: string
+}
+
+export interface MarketDataMoneyflowBlocksRequest {
+  freq: MarketDataFrequency
+  date: string
+  blockType?: number
+  limit?: number
+}
+
+export interface MarketDataCallAuctionRequest {
+  date: string
+  session?: MarketDataCallAuctionSession
+  limit?: number
+}
+
+export interface MarketDataTransactionsRequest {
+  date: string
+  limit?: number
+}
+
 // ===== Research (假设注册 + 定时研究) =====
 // 后端: api/research.py + services/research_registry.py + scheduled_research.py
 // 假设状态机与证据 kind 以后端 STATUSES / EVIDENCE_KINDS 为准。
@@ -1610,7 +1881,7 @@ export const api = {
     }),
 
   journalPresets: () => request<JournalPresets>('/api/journal/presets'),
-  journalLedger: () => request<JournalLedger>('/api/journal/ledger'),
+  journalLedger: () => request<JournalLedger | null>('/api/journal/ledger'),
   journalDelete: () => request<{ deleted: boolean }>('/api/journal/ledger', { method: 'DELETE' }),
   journalFeedback: (rating: 'helpful' | 'not_helpful') =>
     request<{ ok: boolean }>('/api/journal/feedback', {
@@ -1782,11 +2053,6 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(cfg),
     }),
-  updatePipelineIndexSymbols: (symbols: string) =>
-    request<{ pipeline_index_symbols: string }>('/api/settings/preferences/pipeline-index-symbols', {
-      method: 'PUT',
-      body: JSON.stringify({ symbols }),
-    }),
   updateRealtimeQuotes: (enabled: boolean) =>
     request<{ realtime_quotes_enabled: boolean; realtime_allowed?: boolean; mode?: string; error?: string }>('/api/settings/preferences/realtime-quotes', {
       method: 'PUT',
@@ -1827,6 +2093,12 @@ export const api = {
     request<IndexQuotesResponse>(
       `/api/intraday/indices${symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(','))}` : ''}`,
     ),
+  /** 只读实时快照（本地优先 / 受控外部 fallback），最多 60 个 symbol；仅供展示 */
+  intradaySnapshot: (symbols?: string[]) =>
+    request<IntradaySnapshotResponse>(
+      `/api/intraday/snapshot${symbols?.length ? `?symbols=${encodeURIComponent(symbols.slice(0, 60).join(','))}` : ''}`,
+    ),
+
   updateRealtimeMonitorConfig: (cfg: {
     sse_refresh_pages?: Record<string, boolean>
     strategy_monitor_enabled?: boolean
@@ -2130,7 +2402,15 @@ export const api = {
       '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null }) },
     ),
   screenerCached: (extColumns?: string) =>
-    request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }>; today_ever_matched: Record<string, string[]> | null; today_ever_rows: Record<string, Record<string, any>> | null; updated_at: number | null }>(
+    request<{
+      as_of: string | null
+      results: Record<string, Pick<ScreenerResult, 'total' | 'as_of' | 'rows'>>
+      today_ever_matched: Record<string, string[]> | null
+      today_ever_rows: Record<string, Record<string, ScreenerResult['rows'][number]>> | null
+      updated_at: number | null
+      canonical_as_of?: string | null
+      discarded_as_of?: string | null
+    }>(
       extColumns
         ? `/api/screener/cached?ext_columns=${encodeURIComponent(extColumns)}`
         : '/api/screener/cached',
@@ -2253,6 +2533,13 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+  canonicalHistoryStatus: () =>
+    request<CanonicalHistoryStatus>('/api/data/canonical-history/status'),
+  canonicalHistoryBackfill: (body: CanonicalHistoryBackfillRequest = {}) =>
+    request<CanonicalHistoryBackfillResponse>('/api/data/canonical-history/backfill', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
 
@@ -2390,24 +2677,24 @@ export const api = {
   financialStatus: () =>
     request<FinancialStatus>('/api/financials/status'),
 
-  financialMetrics: (symbol?: string) =>
+  financialMetrics: (symbol: string) =>
     request<{ data: FinancialMetricRecord[] }>(
-      `/api/financials/metrics${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/metrics?symbol=${encodeURIComponent(symbol)}`,
     ),
 
-  financialIncome: (symbol?: string) =>
+  financialIncome: (symbol: string) =>
     request<{ data: FinancialIncomeRecord[] }>(
-      `/api/financials/income${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/income?symbol=${encodeURIComponent(symbol)}`,
     ),
 
-  financialBalanceSheet: (symbol?: string) =>
+  financialBalanceSheet: (symbol: string) =>
     request<{ data: FinancialBalanceSheetRecord[] }>(
-      `/api/financials/balance-sheet${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/balance-sheet?symbol=${encodeURIComponent(symbol)}`,
     ),
 
-  financialCashFlow: (symbol?: string) =>
+  financialCashFlow: (symbol: string) =>
     request<{ data: FinancialCashFlowRecord[] }>(
-      `/api/financials/cash-flow${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/cash-flow?symbol=${encodeURIComponent(symbol)}`,
     ),
 
   /** 触发财务数据同步(后台异步执行,接口立即返回 started 状态) */
@@ -2579,7 +2866,11 @@ export const api = {
 
   // ===== 大盘复盘 =====
   reviewReportsList: () =>
-    request<{ reports: AiReviewReport[] }>('/api/market-recap/reports'),
+    request<{
+      reports: AiReviewReport[]
+      canonical_as_of: string | null
+      discarded_reports: Array<{ id: string | null; as_of: string | null }>
+    }>('/api/market-recap/reports'),
 
   reviewReportSave: (r: {
     as_of: string; focus?: string; content: string
@@ -2841,6 +3132,51 @@ export const api = {
       body: JSON.stringify({ strategy_id: strategyId, code }),
     }),
 
+  // ===== Market Data（上游发布快照，只读查询） =====
+  marketDataStatus: () =>
+    request<MarketDataStatusResponse>('/api/market-data/status'),
+
+  marketDataChip: (symbol: string, params: MarketDataChipRequest) => {
+    const qs = new URLSearchParams({ start: params.start, end: params.end })
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataChipResponse>(
+      `/api/market-data/chip/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  marketDataMoneyflowStock: (symbol: string, params: MarketDataMoneyflowStockRequest) => {
+    const qs = new URLSearchParams({ freq: params.freq, start: params.start, end: params.end })
+    return request<MarketDataMoneyflowStockResponse>(
+      `/api/market-data/moneyflow/stock/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  marketDataMoneyflowBlocks: (params: MarketDataMoneyflowBlocksRequest) => {
+    const qs = new URLSearchParams({ freq: params.freq, date: params.date })
+    if (params.blockType != null) qs.set('block_type', String(params.blockType))
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataMoneyflowBlocksResponse>(
+      `/api/market-data/moneyflow/blocks?${qs.toString()}`,
+    )
+  },
+
+  marketDataCallAuction: (symbol: string, params: MarketDataCallAuctionRequest) => {
+    const qs = new URLSearchParams({ date: params.date })
+    if (params.session) qs.set('session', params.session)
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataCallAuctionResponse>(
+      `/api/market-data/call-auction/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  marketDataTransactions: (symbol: string, params: MarketDataTransactionsRequest) => {
+    const qs = new URLSearchParams({ date: params.date })
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataTransactionsResponse>(
+      `/api/market-data/transactions/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
   // ===== Research (假设注册 + 定时研究) =====
   researchListHypotheses: (params?: { status?: string; query?: string }) => {
     const qs = new URLSearchParams()
@@ -2966,13 +3302,59 @@ export interface PipelineJob {
 
 export type PipelineJobSummary = Omit<PipelineJob, 'log'>
 
+export interface CanonicalHistoryPublished {
+  generation: string
+  created_at: string
+  earliest_date: string | null
+  latest_date: string | null
+  row_count: number
+  symbols: number
+  trading_days: number
+}
+
+export interface CanonicalHistoryJob {
+  id: string
+  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  progress_pct: number
+  processed_symbols: number
+  total_symbols: number
+  written_rows: number
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+}
+
+export interface CanonicalHistoryStatus {
+  available: boolean
+  reason: string | null
+  published: CanonicalHistoryPublished | null
+  job: CanonicalHistoryJob | null
+}
+
+export interface CanonicalHistoryBackfillRequest {
+  start_date?: string
+  end_date?: string
+  batch_size?: number
+}
+
+export interface CanonicalHistoryBackfillResponse {
+  job_id: string
+  status: 'pending' | 'running'
+}
+
 // ===== Data status =====
 interface TableStats {
   rows: number
+  row_count_exact?: boolean
   earliest_date: string | null
   latest_date: string | null
   symbols_covered: number
   trading_days: number
+  available?: boolean
+  source?: 'local_cache' | 'catalog_tdx_minutes'
+  stage?: 'preliminary' | 'final'
+  generation?: string
+  logical?: string
 }
 
 interface InstrumentsStats {

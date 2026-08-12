@@ -25,6 +25,9 @@ export const QK = {
   watchlistQuotes:      ['watchlist-quotes'] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext] as const,
   watchlistKlineBatch:  (symbols: string) => ['watchlist-kline-batch', symbols] as const,
+  // 前缀 watchlist- 以便 SSE quotes_updated 经 SSE_INVALIDATE_PREFIXES 命中
+  watchlistSnapshot:    (symbols: string) => ['watchlist-snapshot', symbols] as const,
+
   instrumentSearch:     (q: string) => ['instrument-search', q] as const,
 
   // Screener
@@ -40,6 +43,7 @@ export const QK = {
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
+  canonicalHistoryStatus: ['canonical-history-status'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
   pipelineJob:          (id: string) => ['pipeline-job', id] as const,
   extData:              ['ext-data'] as const,
@@ -87,6 +91,19 @@ export const QK = {
 
   // 概念涨幅轮动矩阵
   rpsRotation:          (days: number) => ['rps-rotation', days] as const,
+
+  // Market Data（只读上游发布快照；用户触发查询）
+  marketDataStatus:       ['market-data-status'] as const,
+  marketDataChip:         (symbol: string, start: string, end: string, limit: number) =>
+                            ['market-data-chip', symbol, start, end, limit] as const,
+  marketDataMoneyflowStock: (symbol: string, freq: 'daily' | 'minute', start: string, end: string) =>
+                            ['market-data-moneyflow-stock', symbol, freq, start, end] as const,
+  marketDataMoneyflowBlocks: (freq: 'daily' | 'minute', date: string, blockType: number | undefined, limit: number) =>
+                            ['market-data-moneyflow-blocks', freq, date, blockType ?? 'all', limit] as const,
+  marketDataCallAuction:  (symbol: string, date: string, session: string | undefined, limit: number) =>
+                            ['market-data-call-auction', symbol, date, session ?? 'all', limit] as const,
+  marketDataTransactions: (symbol: string, date: string, limit: number) =>
+                            ['market-data-transactions', symbol, date, limit] as const,
 
   // Research (假设注册 + 定时研究)
   researchHypothesesRoot: ['research-hypotheses'] as const,

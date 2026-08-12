@@ -22,7 +22,7 @@ export function useFinancialStatus() {
 export function useFinancialMetrics(symbol?: string) {
   return useQuery({
     queryKey: FINANCIAL_QK.metrics(symbol),
-    queryFn: () => api.financialMetrics(symbol),
+    queryFn: () => api.financialMetrics(symbol!),
     enabled: !!symbol,
     staleTime: 300_000,
   })
@@ -31,7 +31,7 @@ export function useFinancialMetrics(symbol?: string) {
 export function useFinancialIncome(symbol?: string) {
   return useQuery({
     queryKey: FINANCIAL_QK.income(symbol),
-    queryFn: () => api.financialIncome(symbol),
+    queryFn: () => api.financialIncome(symbol!),
     enabled: !!symbol,
     staleTime: 300_000,
   })
@@ -40,7 +40,7 @@ export function useFinancialIncome(symbol?: string) {
 export function useFinancialBalanceSheet(symbol?: string) {
   return useQuery({
     queryKey: FINANCIAL_QK.balanceSheet(symbol),
-    queryFn: () => api.financialBalanceSheet(symbol),
+    queryFn: () => api.financialBalanceSheet(symbol!),
     enabled: !!symbol,
     staleTime: 300_000,
   })
@@ -49,7 +49,7 @@ export function useFinancialBalanceSheet(symbol?: string) {
 export function useFinancialCashFlow(symbol?: string) {
   return useQuery({
     queryKey: FINANCIAL_QK.cashFlow(symbol),
-    queryFn: () => api.financialCashFlow(symbol),
+    queryFn: () => api.financialCashFlow(symbol!),
     enabled: !!symbol,
     staleTime: 300_000,
   })
