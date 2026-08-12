@@ -138,7 +138,7 @@ def test_daily_close_map_uses_raw_close():
     assert closes["2012-10-26"] == 241.0
 
 
-def test_raw_oracle_prefers_daily_markets_over_day_klines():
+def test_raw_oracle_prefers_day_klines_over_daily_markets():
     provider = object.__new__(FQuantProvider)
     provider._fstore = FakeFStoreWithDailyMarkets()
 
@@ -146,12 +146,10 @@ def test_raw_oracle_prefers_daily_markets_over_day_klines():
 
     assert rows == [{
         "date": "2026-07-01",
-        "oracle_open": 34.25,
-        "oracle_high": 39.74,
-        "oracle_low": 33.80,
-        "oracle_close": 37.85,
-        "oracle_volume": 12_300,
-        "oracle_amount": 456,
+        "oracle_open": 50.0,
+        "oracle_high": 55.0,
+        "oracle_low": 47.0,
+        "oracle_close": 53.09,
     }]
 
 
@@ -281,3 +279,27 @@ def test_hk_fstore_daily_uses_asset_type_3_table_and_correct_volume_multiplier()
 
     implied_shares = rows[0]["amount"] / rows[0]["close"]
     assert rows[0]["volume"] == pytest.approx(implied_shares, rel=0.01)
+
+
+def test_hk_adjustment_and_financial_boundaries_fail_closed():
+    provider = object.__new__(FQuantProvider)
+
+    assert provider.get_adj_factors(
+        ["00700.HK"],
+        datetime(2024, 1, 1),
+        datetime(2024, 1, 31),
+        "hk",
+    ).is_empty()
+    assert provider.get_financial("00700.HK", "income").is_empty()
+    assert provider.get_corp_action("00700.HK").is_empty()
+
+
+def test_market_data_status_exposes_hk_unavailable_reasons():
+    provider = object.__new__(FQuantProvider)
+
+    status = provider.get_market_data_status()
+
+    assert status["hk_adjustment"]["available"] is False
+    assert "no HK corporate-action" in status["hk_adjustment"]["reason"]
+    assert status["hk_financial"]["available"] is False
+    assert "no HK symbols" in status["hk_financial"]["reason"]

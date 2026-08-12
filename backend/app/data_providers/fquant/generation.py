@@ -27,6 +27,10 @@ _ROOT_ENV = {
         "FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE",
         sr.ROOT_ENGINE_A_MONEYFLOW_MINUTE,
     ),
+    "engine_a_callauction": (
+        "FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION",
+        sr.ROOT_ENGINE_A_CALLAUCTION,
+    ),
     "engine_hk": ("FQUANT_SNAPSHOT_ROOT_ENGINE_HK", sr.ROOT_ENGINE_HK),
 }
 
@@ -41,6 +45,7 @@ LOGICAL_OWNERS = {
     "tdx_chip": "engine_a",
     "tdx_moneyflow": "engine_a",
     "tdx_moneyflow_minute": "engine_a_moneyflow_minute",
+    "tdx_callauction": "engine_a_callauction",
     "tdx_hk": "engine_hk",
     "tdx_hk_minutes": "engine_hk",
     "tdx_hk_trans": "engine_hk",
@@ -48,8 +53,10 @@ LOGICAL_OWNERS = {
 
 
 def root_for(logical: str) -> str | None:
-    """Snapshot root for a logical database, honouring env overrides at call time."""
+    """Snapshot root for a logical database, honouring env overrides."""
     owner = LOGICAL_OWNERS.get(logical)
+    if owner is None and logical.startswith("tdx_callauction_"):
+        owner = "engine_a_callauction"
     if owner is None:
         return None
     env_key, default = _ROOT_ENV[owner]

@@ -595,3 +595,45 @@ def test_legacy_require_current_route_fails_with_actionable_migration_guidance(
     # legacy-current case in test_legacy_pinned_archive_allowed_but_legacy_current_rejected.
     assert "publish this route as staged" in message
     assert "republish a catalog row that pins" not in message
+
+
+
+def test_latest_route_coverage_returns_newest_readable_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_root = tmp_path / "engine-a"
+    _write_generation(
+        final_root, "20260810T120615", "tdx_minutes_from_2023", "minutes.duckdb",
+    )
+    (final_root / "current.json").write_text(
+        json.dumps({"generation": "20260810T120615"}), encoding="utf-8",
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                route_key="tdx_minutes",
+                start_date="2023-01-01",
+                end_date=None,
+                generation="20260810T120615",
+                logical="tdx_minutes_from_2023",
+                file="minutes.duckdb",
+                stage="final",
+                coverage_date="2026-08-10",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="reconciliation/minutes.json",
+            )
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(final_root))
+
+    status = cr.latest_route_coverage("tdx_minutes", "a")
+
+    assert status is not None
+    assert status["latest_date"] == "2026-08-10"
+    assert status["stage"] == "final"
+    assert status["generation"] == "20260810T120615"
+    assert status["logical"] == "tdx_minutes_from_2023"
+    assert status["path"].endswith("/minutes.duckdb")

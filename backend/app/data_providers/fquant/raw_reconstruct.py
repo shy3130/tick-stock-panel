@@ -34,10 +34,25 @@ def reconstruct_raw_rows(
         merged = dict(row)
         raw = oracle.get(_date(row))
         if raw:
+            oracle_amount = _get_price(raw, "amount")
             for col in MERGE_COLS:
                 value = _get_price(raw, col)
-                if value is not None:
-                    merged[col] = value
+                if value is None:
+                    continue
+                # volume=0 while amount>0 is physically impossible —
+                # fstore daily_markets carries stale Cjl=0 on real trading
+                # days. Keep engine/base volume; genuine zero-volume/
+                # zero-amount rows still fall through and override as before.
+                if (
+                    col == "volume"
+                    and value == 0
+                    and (
+                        (oracle_amount or 0) > 0
+                        or (_get_price(merged, "amount") or 0) > 0
+                    )
+                ):
+                    continue
+                merged[col] = value
         out.append(merged)
     return out
 

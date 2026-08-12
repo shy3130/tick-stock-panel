@@ -16,7 +16,6 @@ fquant_provider.py 里所有直连 fstore 的 SQL 都不满足这个反例。
 - ``FQUANT_FSTORE_DUCKDB_PATH``（默认 ``/Volumes/WD1/duckdb/fstore.duckdb``）
 - ``FQUANT_FSTORE_MARKETS_DUCKDB_PATH``（默认 ``/Volumes/WD1/duckdb/fstore-markets.duckdb``）
 - ``FQUANT_FSTORE_KLINES_DUCKDB_PATH``（默认 ``/Volumes/WD1/duckdb/fstore-klines.duckdb``）
-- ``FQUANT_FSTORE_MINUTES_DUCKDB_PATH``（默认 ``/Volumes/WD1/duckdb/fstore-minutes.duckdb``）
 """
 from __future__ import annotations
 
@@ -37,7 +36,6 @@ logger = logging.getLogger(__name__)
 FSTORE_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_DUCKDB_PATH", "/Volumes/WD1/duckdb/fstore.duckdb")
 FSTORE_MARKETS_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_MARKETS_DUCKDB_PATH", "/Volumes/WD1/duckdb/fstore-markets.duckdb")
 FSTORE_KLINES_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_KLINES_DUCKDB_PATH", "/Volumes/WD1/duckdb/fstore-klines.duckdb")
-FSTORE_MINUTES_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_MINUTES_DUCKDB_PATH", "/Volumes/WD1/duckdb/fstore-minutes.duckdb")
 FSTORE_EXTENDED_DUCKDB_PATH = os.getenv("FQUANT_FSTORE_EXTENDED_DUCKDB_PATH", "/Volumes/WD1/duckdb/fstore-extended.duckdb")
 
 # 初始连接失败后的固定退避窗口（秒）：窗口内不重试，避免紧密重连和日志风暴；
@@ -116,7 +114,6 @@ class FStoreDuckDBClient:
             conn = connect_duckdb(main_path, read_only=True)
             self._attach(conn, "fstore_markets", FSTORE_MARKETS_DUCKDB_PATH, main_path)
             self._attach(conn, "fstore_klines", FSTORE_KLINES_DUCKDB_PATH, main_path)
-            self._attach(conn, "fstore_minutes", FSTORE_MINUTES_DUCKDB_PATH, main_path)
             self._attach(conn, "fstore_extended", FSTORE_EXTENDED_DUCKDB_PATH, main_path)
             self._create_temp_views(conn)
         except Exception as e:  # noqa: BLE001
@@ -160,7 +157,6 @@ class FStoreDuckDBClient:
         # ponytail: connection-local aliases keep old SQL working after split files.
         self._create_split_alias(conn, "daily_markets", "fstore_markets.daily_markets")
         self._create_split_alias(conn, "day_klines", "fstore_klines.day_klines")
-        self._create_split_alias(conn, "minute_kline", "fstore_minutes.minute_kline")
         self._create_split_alias(conn, "chuquan_chuxi", "fstore_extended.chuquan_chuxi")
         # financial_report_* 物理表在 fstore-extended.duckdb（已从 fstore.duckdb 迁出），
         # 为 provider.get_financial 的裸表名查询建别名。

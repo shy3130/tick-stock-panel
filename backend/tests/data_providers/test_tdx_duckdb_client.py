@@ -28,6 +28,9 @@ def test_prefixed_code():
     assert _prefixed_code("000001") == "sz000001"
     assert _prefixed_code("300059") == "sz300059"
     assert _prefixed_code("830799") == "bj830799"
+    assert _prefixed_code("000001", "index") == "sh000001"
+    assert _prefixed_code("399001", "index") == "sz399001"
+    assert _prefixed_code("000001", "stock") == "sz000001"
 
 
 
@@ -221,15 +224,37 @@ def test_get_xdxr_returns_rows_with_aliased_column():
 @pytest.mark.skipif(not os.path.exists(CATALOG_CURRENT), reason="本机没有已发布 route catalog")
 def test_get_minutes_returns_price_volume_shape():
     client = TdxDuckDBClient()
-    rows = client.get_minutes("600519", "20260706", limit=5)
+    try:
+        rows = client.get_minutes("600519", "20260706", limit=5)
+    except catalog_resolver.CatalogError as exc:
+        pytest.skip(f"published minutes route unavailable: {exc}")
     assert len(rows) > 0
     assert set(rows[0].keys()) == {"price", "volume"}
+
+
+def test_get_minutes_uses_index_exchange_prefix():
+    client = TdxDuckDBClient()
+    seen: list[tuple[list[object], str]] = []
+
+    def query(_sql, params, date_yyyymmdd):
+        seen.append((params, date_yyyymmdd))
+        return [(3999.0, 12)]
+
+    client._a_catalog_minutes.query = query
+
+    assert client.get_minutes(
+        "000001", "20260810", limit=5, asset_type="index",
+    ) == [{"price": 3999.0, "volume": 12}]
+    assert seen == [(["sh000001", "2026-08-10", "minutes", 5], "20260810")]
 
 
 @pytest.mark.skipif(not os.path.exists(CATALOG_CURRENT), reason="本机没有已发布 route catalog")
 def test_get_trans_returns_rows_with_expected_shape():
     client = TdxDuckDBClient()
-    rows = client.get_trans("600519", "20260706", limit=10)
+    try:
+        rows = client.get_trans("600519", "20260706", limit=10)
+    except catalog_resolver.CatalogError as exc:
+        pytest.skip(f"published trans route unavailable: {exc}")
     assert len(rows) > 0
     for key in ("time", "price", "volume", "amount", "order_count", "direction"):
         assert key in rows[0]

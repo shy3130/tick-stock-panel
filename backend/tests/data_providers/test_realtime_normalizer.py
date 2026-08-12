@@ -7,6 +7,9 @@ class FakeFStore:
         self.rows = rows or []
 
     def query(self, sql, params=None):  # noqa: ARG002
+        # 全局最新 trade_date 探针：SELECT MAX(trade_date) AS latest ...
+        if "MAX(" in sql.upper() and "TRADE_DATE" in sql.upper():
+            return [{"latest": "2026-07-03"}]
         return self.rows
 
 
@@ -30,7 +33,7 @@ def test_normalize_realtime_preserves_quote_service_contract():
 def test_fquant_realtime_symbols_use_duckdb_snapshot_and_normalizer():
     provider = object.__new__(FQuantProvider)
     provider.name = "fquant_local"
-    provider._fstore = FakeFStore([{
+    fake = FakeFStore([{
         "code": "600519",
         "name": "贵州茅台",
         "tdate": "2026-07-03",
@@ -38,6 +41,8 @@ def test_fquant_realtime_symbols_use_duckdb_snapshot_and_normalizer():
         "zrspj": 1180.0,
         "cjl": 34268,
     }])
+    provider._fstore = fake
+    provider._fstore_markets = fake
 
     df = provider.get_realtime(symbols=["600519.SH"])
 
@@ -68,3 +73,32 @@ def test_latest_market_supplements_returns_ratio_fields():
     assert row["change_pct"] == 0.006
     assert row["amplitude"] == 0.0567
     assert row["turnover_rate"] == 1.86
+
+
+def test_latest_market_supplements_uses_universe_query_for_large_symbol_sets():
+    provider = object.__new__(FQuantProvider)
+    provider._get_fstore_realtime = lambda symbols: (_ for _ in ()).throw(
+        AssertionError("large symbol sets must not build an IN clause")
+    )
+    seen: list[list[int]] = []
+    provider._get_fstore_realtime_by_asset_types = lambda asset_types: (
+        seen.append(asset_types)
+        or [
+            {
+                "symbol": "000001.SZ",
+                "timestamp": "2026-07-03",
+                "ext": {"change_pct": 0.6},
+            },
+            {
+                "symbol": "999999.SZ",
+                "timestamp": "2026-07-03",
+                "ext": {"change_pct": 1.0},
+            },
+        ]
+    )
+    symbols = [f"{code:06d}.SZ" for code in range(1, 501)]
+
+    rows = provider.get_latest_market_supplements(symbols).to_dicts()
+
+    assert seen == [[1]]
+    assert [row["symbol"] for row in rows] == ["000001.SZ"]

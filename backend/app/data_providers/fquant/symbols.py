@@ -167,3 +167,26 @@ def asset_type_str_to_nums(asset_type: str) -> list[int]:
         "etf": [20],
     }
     return mapping.get(asset_type, [1])
+
+def canonical_index_symbol(symbol: str) -> str:
+    """在明确的指数上下文，把任意输入形式规范成 ``{code}.INDEX``。
+
+    持久化 canonical 指数 symbol 是 ``{code}.INDEX``。用户偏好、历史 API
+    入参可能仍传 ``.SH`` / ``.SZ`` / ``.BJ`` 或纯 code；本函数在**单一读边界**
+    把它们统一为 ``.INDEX``，绝不查询/优先命中旧后缀行。
+
+    **仅在明确指数上下文调用** — 不猜测普通股票上下文。
+    ``000001.SZ`` (平安银行) 若被误传入指数上下文，会变成 ``000001.INDEX``
+    (上证指数)；调用方必须先做指数/股票分类 (如 ``_is_index_symbol``)。
+
+    >>> canonical_index_symbol("000001")
+    '000001.INDEX'
+    >>> canonical_index_symbol("000001.SH")
+    '000001.INDEX'
+    >>> canonical_index_symbol("000001.INDEX")
+    '000001.INDEX'
+    >>> canonical_index_symbol("399001.SZ")
+    '399001.INDEX'
+    """
+    code, _ = split_symbol(str(symbol).strip().upper())
+    return f"{code}.INDEX"

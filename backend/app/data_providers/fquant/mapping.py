@@ -465,8 +465,10 @@ def trans_rows_to_df(
             "price": finite_float_or_none(r.get("price")),
             "volume": finite_float_or_none(r.get("volume")),
             "amount": finite_float_or_none(r.get("amount")),
-            "order_count": r.get("order_count"),
-            "direction": r.get("direction"),   # 0=中性 / 1=买 / 2=卖
+            "order_count": r.get("order_count", r.get("num")),
+            "direction": r.get("direction"),
+            "venue": r.get("venue"),
             "source": f"{source}:engine-data:trans",
         })
+
     return pl.DataFrame(out) if out else pl.DataFrame()

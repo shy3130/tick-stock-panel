@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -44,6 +45,15 @@ TDX_HK_TRANS_PATH = os.getenv("FQUANT_TDX_HK_TRANS_DUCKDB_PATH", "/Volumes/WD1/d
 # A 股日级资金流派生库（moneyflow_daily_stock / moneyflow_daily_block）。
 # _LeasedSource 按 logical=tdx_moneyflow 解析 engine-a generation 快照。
 TDX_MONEYFLOW_PATH = os.getenv("FQUANT_TDX_MONEYFLOW_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx-moneyflow.duckdb")
+TDX_CALLAUCTION_PATH = os.getenv(
+    "FQUANT_TDX_CALLAUCTION_DUCKDB_PATH",
+    "/Volumes/WD1/duckdb/tdx-callauction.duckdb",
+)
+# A 股筹码分布派生库（stock_chip_peaks / derived_manifest）。
+# _LeasedSource 按 logical=tdx_chip 解析 engine-a generation 快照（strict：
+# 不回退 raw，未发布快照即 unavailable）。
+TDX_CHIP_PATH = os.getenv("FQUANT_TDX_CHIP_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx-chip.duckdb")
+TDX_MONEYFLOW_MINUTE_PATH = os.getenv("FQUANT_TDX_MONEYFLOW_MINUTE_DUCKDB_PATH", "/Volumes/WD1/duckdb/tdx-moneyflow-minute.duckdb")
 
 # side 直接就是 HTTP 契约的 direction 编码（已实测核实，取值 {0,1,2,5,8}，另外
 # 实测还发现了极少量的 3，规模量级 <1万行/总量 9亿+行，同样直接透传不做映射），
@@ -124,10 +134,10 @@ class _LeasedSource:
     raw path when no snapshot is published) and runs under a refcounted lease, so
     a generation swap mid-query never closes the connection in use.
     """
-
-    def __init__(self, logical: str, raw_path: str) -> None:
+    def __init__(self, logical: str, raw_path: str, *, strict_snapshot: bool = False) -> None:
         self._logical = logical
         self._raw_path = raw_path
+        self._strict_snapshot = strict_snapshot
         self._set: ConnectionSet | None = None
         self._duckdb_missing = False
 
@@ -135,6 +145,8 @@ class _LeasedSource:
         path = generation.current_path(self._logical)
         if path and os.path.exists(path):
             return path
+        if self._strict_snapshot:
+            return None
         if os.path.exists(self._raw_path):
             return self._raw_path
         return None
@@ -175,19 +187,25 @@ class _LeasedSource:
             cm.__exit__(None, None, None)
 
     def query(self, sql: str, params: list, label: str = "") -> list:
-        """Run a read query under a lease; returns rows, or [] if unavailable.
-
-        Uses ``conn.cursor()`` rather than executing directly on the leased
-        connection — DuckDB's documented pattern for letting concurrent
-        callers share one underlying database without contending on a single
-        connection object (measured ~12% faster than sharing the raw
-        connection under concurrent load, no added locking needed).
-        """
+        """Run a read query under a lease; returns rows, or [] if unavailable."""
         with self.lease() as conn:
             if conn is None:
                 return []
             try:
                 return conn.cursor().execute(sql, params).fetchall()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("TdxDuckDBClient: %s 查询失败 — %s", label, e)
+                return []
+
+    def query_dicts(self, sql: str, params: list, label: str = "") -> list[dict]:
+        """Execute a read-only query and return rows keyed by source columns."""
+        with self.lease() as conn:
+            if conn is None:
+                return []
+            try:
+                cur = conn.cursor().execute(sql, params)
+                names = [str(d[0]) for d in (cur.description or [])]
+                return [dict(zip(names, row)) for row in cur.fetchall()]
             except Exception as e:  # noqa: BLE001
                 logger.warning("TdxDuckDBClient: %s 查询失败 — %s", label, e)
                 return []
@@ -262,14 +280,27 @@ class TdxDuckDBClient:
         hk_minutes_path: str | None = None,
         hk_trans_path: str | None = None,
         moneyflow_path: str | None = None,
+        chip_path: str | None = None,
     ) -> None:
         self._tdx = _LeasedSource("tdx", tdx_path or TDX_PATH)
         self._a_catalog_minutes = _CatalogSource("tdx_minutes", "a")
         self._a_catalog_trans = _CatalogSource("tdx_trans", "a")
         self._moneyflow = _LeasedSource("tdx_moneyflow", moneyflow_path or TDX_MONEYFLOW_PATH)
+        self._moneyflow_minute = _LeasedSource(
+            "tdx_moneyflow_minute", TDX_MONEYFLOW_MINUTE_PATH, strict_snapshot=True
+        )
+        self._moneyflow_strict = _LeasedSource(
+            "tdx_moneyflow", moneyflow_path or TDX_MONEYFLOW_PATH, strict_snapshot=True
+        )
         self._hk = _LeasedSource("tdx_hk", hk_path or TDX_HK_PATH)
         self._hk_minutes = _LeasedSource("tdx_hk_minutes", hk_minutes_path or TDX_HK_MINUTES_PATH)
         self._hk_trans = _LeasedSource("tdx_hk_trans", hk_trans_path or TDX_HK_TRANS_PATH)
+
+        # A 股筹码分布（stock_chip_peaks）——严格只读已发布 generation 快照，
+        # 绝不回退 writer raw：current/manifest 缺失 = unavailable，不是 raw fallback。
+        self._chip = _LeasedSource(
+            "tdx_chip", chip_path or TDX_CHIP_PATH, strict_snapshot=True
+        )
 
     def close(self) -> None:
         for src in (
@@ -277,9 +308,12 @@ class TdxDuckDBClient:
             self._a_catalog_trans,
             self._tdx,
             self._moneyflow,
+            self._moneyflow_strict,
+            self._moneyflow_minute,
             self._hk,
             self._hk_minutes,
             self._hk_trans,
+            self._chip,
         ):
             src.close()
 
@@ -403,72 +437,116 @@ class TdxDuckDBClient:
         ]
 
     def get_minutes(self, code: str, date_yyyymmdd: str, limit: int = 5000, asset_type: str | None = None) -> list[dict]:
-        """读 market_minutes，字段沿用 minutes 数据集契约（命名见模块头）（price/volume）。
-
-        market_minutes 的 time/amount 两列全表 34 亿+行全是 NULL（已实测确认），
-        只有 price/volume/minute_index 有真实数据，这也是为什么只选 price/volume
-        两列、靠 minute_index 排序——不要改成查 time 列，查了也是 None。
-        """
         hk = _is_hk(asset_type)
         trade_date = f"{date_yyyymmdd[0:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:8]}"
         sql = """
-            SELECT price, volume
-            FROM market_minutes
+            SELECT price, volume FROM market_minutes
             WHERE code = ? AND trade_date = ? AND dataset = ?
-            ORDER BY minute_index
-            LIMIT ?
-            """
-        params = [
-            _hk_code(code) if hk else _prefixed_code(code),
-            trade_date,
-            "hkminutes" if hk else "minutes",
-            limit,
-        ]
-        rows = (
-            self._hk_minutes.query(sql, params, "get_minutes")
-            if hk
-            else self._a_minutes_source(date_yyyymmdd).query(
-                sql, params, date_yyyymmdd
-            )
-        )
+            ORDER BY minute_index LIMIT ?
+        """
+        params = [_hk_code(code) if hk else _prefixed_code(code, asset_type), trade_date,
+                  "hkminutes" if hk else "minutes", limit]
+        rows = self._hk_minutes.query(sql, params, "get_minutes") if hk else self._a_minutes_source(date_yyyymmdd).query(sql, params, date_yyyymmdd)
         return [{"price": r[0], "volume": r[1]} for r in rows]
 
     def get_trans(self, code: str, date_yyyymmdd: str, limit: int = 5000, asset_type: str | None = None) -> list[dict]:
-        """读 market_transactions，字段沿用 trans 数据集契约（命名见模块头）。
-
-        market_transactions 没有 order_count 列，这里固定填 None——
-        调用方 trans_rows_to_df 需要能容忍这一列缺失/为空。
-        """
         hk = _is_hk(asset_type)
         trade_date = f"{date_yyyymmdd[0:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:8]}"
-        sql = """
-            SELECT time, price, volume, amount, side
-            FROM market_transactions
-            WHERE code = ? AND trade_date = ? AND dataset = ?
-            ORDER BY time
-            LIMIT ?
-            """
-        params = [
-            _hk_code(code) if hk else _prefixed_code(code),
-            trade_date,
-            "hktrans" if hk else "trans",
-            limit,
-        ]
-        rows = (
-            self._hk_trans.query(sql, params, "get_trans")
-            if hk
-            else self._a_trans_source(date_yyyymmdd).query(
-                sql, params, date_yyyymmdd
-            )
-        )
-        return [
-            {
-                "time": r[0], "price": r[1], "volume": r[2], "amount": r[3],
-                "order_count": None, "direction": r[4],
-            }
-            for r in rows
-        ]
+        sql = ("""SELECT time, price, volume, amount, side, NULL, NULL FROM market_transactions
+                  WHERE code = ? AND trade_date = ? AND dataset = ? ORDER BY time LIMIT ?"""
+                if hk else
+                """SELECT time, price, volume, amount, side, num, venue FROM market_transactions
+                   WHERE code = ? AND trade_date = ? AND dataset = ? ORDER BY time LIMIT ?""")
+        params = [_hk_code(code) if hk else _prefixed_code(code, asset_type), trade_date,
+                  "hktrans" if hk else "trans", limit]
+        rows = self._hk_trans.query(sql, params, "get_trans") if hk else self._a_trans_source(date_yyyymmdd).query(sql, params, date_yyyymmdd)
+        return [{"time": r[0], "price": r[1], "volume": r[2], "amount": r[3],
+                 "order_count": r[5], "num": r[5], "direction": r[4], "venue": r[6]} for r in rows]
 
+    def get_call_auction(self, code: str, date_yyyymmdd: str, session: str | None = None, limit: int = 5000) -> list[dict]:
+        year = date_yyyymmdd[:4]
+        source = _LeasedSource(
+            f"tdx_callauction_{year}",
+            TDX_CALLAUCTION_PATH,
+            strict_snapshot=True,
+        )
+        try:
+            where = "code = ? AND trade_date = ?"
+            params: list = [_prefixed_code(code), f"{year}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:8]}"]
+            if session:
+                where += " AND session = ?"; params.append(session)
+            params.append(limit)
+            rows = source.query(f"""SELECT event_time, price, volume, amount, direction, session, venue
+                FROM market_call_auction_results WHERE {where}
+                ORDER BY tick_index, event_time LIMIT ?""", params, "get_call_auction")
+            return [{"event_time": r[0], "price": r[1], "volume": r[2], "amount": r[3],
+                     "direction": r[4], "session": r[5], "venue": r[6],
+                     "source": f"fquant:engine-a-callauction:{year}"} for r in rows]
+        finally:
+            source.close()
+    def get_microstructure_status(self) -> dict[str, dict]:
+        year = str(datetime.now().year)
+        call_path = generation.current_path(f"tdx_callauction_{year}") or generation.current_path("tdx_callauction")
+        try:
+            coverage = catalog_resolver.latest_route_coverage("tdx_trans", "a")
+        except Exception as exc:
+            coverage = None
+            trans_reason = str(exc)
+        else:
+            trans_reason = None if coverage else "no staged trans catalog coverage"
+        call_source = _LeasedSource(
+            f"tdx_callauction_{year}",
+            TDX_CALLAUCTION_PATH,
+            strict_snapshot=True,
+        )
+        try:
+            call_rows = call_source.query_dicts(
+                """
+                SELECT count(*) AS rows,
+                       min(trade_date)::TEXT AS earliest_date,
+                       max(trade_date)::TEXT AS latest_date,
+                       count(DISTINCT code) AS symbols
+                FROM market_call_auction_results
+                """,
+                [],
+                "get_call_auction_status",
+            )
+            call_coverage = call_rows[0] if call_rows else None
+        except Exception as exc:
+            call_coverage = None
+            call_reason = str(exc)
+        else:
+            call_reason = (
+                None
+                if int((call_coverage or {}).get("rows") or 0) > 0
+                else "empty published snapshot"
+            )
+        finally:
+            call_source.close()
+        return {
+            "call_auction": {
+                "available": call_path is not None and bool((call_coverage or {}).get("rows")),
+                "source": "engine-a-callauction",
+                "earliest_date": (call_coverage or {}).get("earliest_date"),
+                "latest_date": (call_coverage or {}).get("latest_date"),
+                "rows": (call_coverage or {}).get("rows"),
+                "symbols": (call_coverage or {}).get("symbols"),
+                "reason": (
+                    call_reason
+                    if call_path is not None
+                    else "no published snapshot"
+                ),
+            },
+            "transactions": {
+                "available": coverage is not None,
+                "source": "staged trans catalog",
+                "earliest_date": None,
+                "latest_date": (coverage or {}).get("latest_date"),
+                "rows": (coverage or {}).get("rows"),
+                "symbols": (coverage or {}).get("symbols"),
+                "reason": trans_reason,
+            },
+        }
     def get_xdxr(self, code: str, limit: int = 100, asset_type: str | None = None) -> list[dict]:
         """读 market_xdxr，字段沿用 xdxr 数据集契约（命名见模块头）。
 
@@ -574,6 +652,152 @@ class TdxDuckDBClient:
             return pl.DataFrame()
         return pl.DataFrame({"date": [r[0] for r in rows], "main_net_inflow": [r[1] for r in rows]})
 
+    @staticmethod
+    def _moneyflow_value(row: dict, *names: str):
+        for name in names:
+            if name in row:
+                return row[name]
+        return None
+
+    def get_moneyflow_stock(self, symbol: str, start: str, end: str, freq: str = "daily"):
+        """Read published stock moneyflow snapshots with a stable schema."""
+        import polars as pl
+        from datetime import date as _date
+        if freq not in {"daily", "minute"} or not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", symbol):
+            return pl.DataFrame()
+        try:
+            begin, finish = _date.fromisoformat(start), _date.fromisoformat(end)
+        except ValueError:
+            return pl.DataFrame()
+        if begin > finish or (finish - begin).days > 3660:
+            return pl.DataFrame()
+        source = self._moneyflow_strict if freq == "daily" else self._moneyflow_minute
+        table = "moneyflow_daily_stock" if freq == "daily" else "moneyflow_minute_stock"
+        code = _prefixed_code(symbol.split(".", 1)[0])
+        order_by = "trade_date, bucket_time" if freq == "minute" else "trade_date"
+        rows = source.query_dicts(
+            f"SELECT * FROM {table} WHERE code = ? AND trade_date BETWEEN ? AND ? ORDER BY {order_by}",
+            [code, start, end], "get_moneyflow_stock",
+        )
+        columns = [
+            "symbol", "trade_date", "bucket_time", "total_amount", "inflow_amount",
+            "outflow_amount", "net_amount", "super_large_net", "large_net", "medium_net",
+            "small_net", "main_traditional_net", "main_broad_net", "retail_net",
+            "neutral_net", "unknown_net", "valid_count", "invalid_count", "unknown_count",
+            "source",
+        ]
+        out = []
+        for row in rows:
+            item = {"symbol": symbol, "source": "fquant:tdx_moneyflow:" + freq}
+            for col in columns[1:-1]:
+                item[col] = self._moneyflow_value(row, col, col.replace("_amount", ""), col.replace("_net", ""))
+            out.append(item)
+        return pl.DataFrame(out, schema=columns) if out else pl.DataFrame({c: [] for c in columns})
+
+    def get_moneyflow_blocks(self, trade_date: str, freq: str = "daily",
+                             block_type: int | None = None, limit: int = 100):
+        """Read published block moneyflow ranking for one date."""
+        import polars as pl
+        from datetime import date as _date
+        if freq not in {"daily", "minute"} or limit < 1 or limit > 10000:
+            return pl.DataFrame()
+        try:
+            _date.fromisoformat(trade_date)
+        except ValueError:
+            return pl.DataFrame()
+        source = self._moneyflow_strict if freq == "daily" else self._moneyflow_minute
+        table = "moneyflow_daily_block" if freq == "daily" else "moneyflow_minute_block"
+        where = "trade_date = ?"
+        params: list = [trade_date]
+        if block_type:
+            where += " AND block_type = ?"
+            params.append(block_type)
+        params.append(limit)
+        rows = source.query_dicts(
+            f"SELECT * FROM {table} WHERE {where} ORDER BY net_amount DESC NULLS LAST, block_code, block_name LIMIT ?",
+            params, "get_moneyflow_blocks",
+        )
+        columns = [
+            "block_code", "block_name", "block_type", "trade_date", "bucket_time",
+            "total_amount", "inflow_amount", "outflow_amount", "net_amount",
+            "main_traditional_net", "main_broad_net", "retail_net", "neutral_net",
+            "unknown_net", "valid_count", "invalid_count", "unknown_count", "source",
+        ]
+        out = []
+        for row in rows:
+            item = {"source": "fquant:tdx_moneyflow:" + freq}
+            for col in columns[:-1]:
+                item[col] = self._moneyflow_value(row, col)
+            out.append(item)
+        return pl.DataFrame(out, schema=columns) if out else pl.DataFrame({c: [] for c in columns})
+
+    def get_moneyflow_status(self) -> dict[str, dict]:
+        """Return four independent moneyflow availability facts."""
+        result = {}
+        for key, source, table, symbol_col, source_name in (
+            (
+                "moneyflow_daily_stock",
+                self._moneyflow_strict,
+                "moneyflow_daily_stock",
+                "code",
+                "tdx_moneyflow",
+            ),
+            (
+                "moneyflow_daily_block",
+                self._moneyflow_strict,
+                "moneyflow_daily_block",
+                "block_code",
+                "tdx_moneyflow",
+            ),
+            (
+                "moneyflow_minute_stock",
+                self._moneyflow_minute,
+                "moneyflow_minute_stock",
+                "code",
+                "tdx_moneyflow_minute",
+            ),
+            (
+                "moneyflow_minute_block",
+                self._moneyflow_minute,
+                "moneyflow_minute_block",
+                "block_code",
+                "tdx_moneyflow_minute",
+            ),
+        ):
+            rows = source.query_dicts(
+                f"""
+                SELECT count(*) AS rows,
+                       min(trade_date)::TEXT AS earliest_date,
+                       max(trade_date)::TEXT AS latest_date,
+                       count(DISTINCT {symbol_col}) AS symbols
+                FROM {table}
+                """,
+                [],
+                "get_moneyflow_status",
+            )
+            if rows:
+                row = rows[0]
+                result[key] = {
+                    "available": bool(row.get("rows")),
+                    "source": source_name,
+                    "earliest_date": row.get("earliest_date"),
+                    "latest_date": row.get("latest_date"),
+                    "rows": int(row.get("rows") or 0),
+                    "symbols": int(row.get("symbols") or 0),
+                    "reason": None if row.get("rows") else "empty",
+                }
+            else:
+                result[key] = {
+                    "available": False,
+                    "source": source_name,
+                    "earliest_date": None,
+                    "latest_date": None,
+                    "rows": 0,
+                    "symbols": 0,
+                    "reason": "snapshot unavailable",
+                }
+        return result
+
     def freshness(self):
         """最新已发布交易日的探测值，供 local enriched bootstrap 判定新鲜度。
 
@@ -590,3 +814,86 @@ class TdxDuckDBClient:
             d = rows[0][0]
             return d.date() if hasattr(d, "date") else d
         return None
+
+    # ------------------------------------------------------------------ #
+    # 筹码分布（stock_chip_peaks）—— strict snapshot，不回退 raw
+    # ------------------------------------------------------------------ #
+    def get_chip(
+        self, code: str, start_iso: str | None, end_iso: str | None, limit: int = 500,
+    ) -> list[dict]:
+        """读 tdx-chip.duckdb.stock_chip_peaks 区间筹码，返回升序 dict 行。
+
+        :param code: 带 sh/sz/bj 前缀的 TDX code（如 ``sh600519``）
+        :param start_iso: ``YYYY-MM-DD`` 起始日期（含），None 不限下界
+        :param end_iso: ``YYYY-MM-DD`` 结束日期（含），None 不限上界
+        :param limit: 最大返回行数（默认 500）
+        :return: 每行含 trade_date 及 peak/profit/avg_cost/concentration/ranges/
+                 cr/gini/main+retail peak 等字段；snapshot 不可达或无数据时返回 []
+        """
+        where = "code = ?"
+        params: list = [code]
+        if start_iso:
+            where += " AND trade_date >= ?"
+            params.append(start_iso)
+        if end_iso:
+            where += " AND trade_date <= ?"
+            params.append(end_iso)
+        params.append(limit)
+        rows = self._chip.query_dicts(
+            f"""
+            SELECT trade_date, peak_price, peak_volume, peak_ratio,
+                   profit_ratio, avg_cost,
+                   concentration_90, range_90_low, range_90_high,
+                   concentration_70, range_70_low, range_70_high,
+                   cr10, cr30, gini,
+                   main_peak_price, main_peak_volume, main_peak_ratio,
+                   main_concentration,
+                   retail_peak_price, retail_peak_volume, retail_peak_ratio,
+                   retail_concentration, has_retail_peak,
+                   peak_count, window_days, price_step, asset_type
+            FROM stock_chip_peaks
+            WHERE {where}
+            ORDER BY trade_date ASC
+            LIMIT ?
+            """,
+            params,
+            "get_chip",
+        )
+        return rows
+
+    def get_chip_coverage(self) -> dict:
+        """查询 stock_chip_peaks 已发布 snapshot 的覆盖事实（min/max/count/symbols）。
+
+        不可达与空表用 reason 区分：
+        - snapshot 不可达 → available=False, reason="snapshot unavailable"
+        - 表可达但空 → available=False, reason="empty"
+        - 有数据 → available=True, reason=None
+        """
+        rows = self._chip.query_dicts(
+            """
+            SELECT count(*) AS rows,
+                   min(trade_date)::TEXT AS earliest_date,
+                   max(trade_date)::TEXT AS latest_date,
+                   count(DISTINCT code) AS symbols
+            FROM stock_chip_peaks
+            """,
+            [],
+            "get_chip_coverage",
+        )
+        if rows:
+            row = rows[0]
+            cnt = int(row.get("rows") or 0)
+            return {
+                "available": cnt > 0,
+                "source": "tdx_chip",
+                "earliest_date": row.get("earliest_date"),
+                "latest_date": row.get("latest_date"),
+                "rows": cnt,
+                "symbols": int(row.get("symbols") or 0),
+                "reason": None if cnt else "empty",
+            }
+        return {
+            "available": False, "source": "tdx_chip",
+            "earliest_date": None, "latest_date": None, "rows": 0, "symbols": 0,
+            "reason": "snapshot unavailable",
+        }

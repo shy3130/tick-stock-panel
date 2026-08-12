@@ -1,4 +1,10 @@
-from app.data_providers.fquant.symbols import asset_type_str_to_nums, code_to_symbol, is_a_stock, symbol_to_market
+from app.data_providers.fquant.symbols import (
+    asset_type_str_to_nums,
+    canonical_index_symbol,
+    code_to_symbol,
+    is_a_stock,
+    symbol_to_market,
+)
 from app.data_providers.fquant_provider import FQuantProvider
 
 
@@ -46,3 +52,23 @@ def test_exchange_suffixed_etf_reverse_mapping():
     assert is_a_stock("000001.SZ")
     assert is_a_stock("128012.SZ")
     assert is_a_stock("127045.SZ")
+
+
+def test_canonical_index_symbol_normalizes_all_forms():
+    """明确指数上下文: 纯 code / .SH / .SZ / .BJ / .INDEX → {code}.INDEX。"""
+    assert canonical_index_symbol("000001") == "000001.INDEX"
+    assert canonical_index_symbol("000001.SH") == "000001.INDEX"
+    assert canonical_index_symbol("000001.SZ") == "000001.INDEX"
+    assert canonical_index_symbol("000001.BJ") == "000001.INDEX"
+    assert canonical_index_symbol("000001.INDEX") == "000001.INDEX"
+    assert canonical_index_symbol("399001.SZ") == "399001.INDEX"
+    assert canonical_index_symbol("000680.SH") == "000680.INDEX"
+    assert canonical_index_symbol(" 399001.sz ") == "399001.INDEX"
+
+
+def test_canonical_index_symbol_idempotent():
+    """重复规范化不产生 .INDEX.INDEX。"""
+    once = canonical_index_symbol("000001.SH")
+    twice = canonical_index_symbol(once)
+    assert once == "000001.INDEX"
+    assert twice == "000001.INDEX"

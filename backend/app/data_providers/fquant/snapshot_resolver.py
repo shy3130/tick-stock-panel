@@ -31,6 +31,7 @@ ROOT_ENGINE_HK = "/Volumes/WD1/duckdb/snapshots/engine-hk"
 # a republish of one cannot swap the file read for the other logical, and a
 # missing publish on the shared root cannot shadow them (Contract A).
 ROOT_FSTORE_EXTENDED = "/Volumes/WD1/duckdb/snapshots/fstore-extended"
+ROOT_ENGINE_A_CALLAUCTION = "/Volumes/WD1/duckdb/snapshots/engine-a-callauction"
 ROOT_ENGINE_A_MONEYFLOW_MINUTE = "/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute"
 # Date-sharded archive roots (engine-a-trans-archive / engine-a-minutes-archive)
 # are intentionally NOT exposed here: their logicals are date-sharded and must

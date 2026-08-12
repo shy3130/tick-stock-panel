@@ -452,3 +452,44 @@ def resolve_route(route_key: str, market: str, trade_date: date | datetime | str
         )
     )
     return _resolve_row(rows[0], route_key, market, requested, historical=True)
+
+
+def latest_route_coverage(route_key: str, market: str) -> dict[str, Any] | None:
+    """Return the newest safely readable staged coverage without scanning data tables."""
+    preliminary_key = _PRELIMINARY_ROUTE_KEYS.get(route_key)
+    route_keys = [route_key] + ([preliminary_key] if preliminary_key else [])
+    rows_by_key = _route_rows_for_keys(route_keys, market)
+    candidates: list[tuple[date, int, int, dict[str, Any]]] = []
+    for key in route_keys:
+        for row in rows_by_key.get(key, []):
+            _validate_route_metadata(row)
+            stage = _route_stage(row)
+            if stage not in {"final", "preliminary"}:
+                continue
+            coverage = _optional_date(row.get("coverage_date"), "coverage_date")
+            if coverage is None or not _matches_span(row, coverage):
+                continue
+            candidates.append(
+                (coverage, 1 if stage == "final" else 0, _priority(row), row)
+            )
+    if not candidates:
+        return None
+    coverage, _, _, selected = max(
+        candidates,
+        key=lambda item: (
+            item[0],
+            item[1],
+            item[2],
+            str(item[3].get("generation", "")),
+        ),
+    )
+    path = _resolve_row(
+        selected, route_key, market, coverage, historical=False
+    )
+    return {
+        "latest_date": coverage.isoformat(),
+        "stage": _route_stage(selected),
+        "generation": str(selected.get("generation", "")),
+        "logical": str(selected.get("logical", "")),
+        "path": path,
+    }
