@@ -10,16 +10,16 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable
-
-logger = logging.getLogger(__name__)
-from typing import Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 import numpy as np
 import polars as pl
 
 from app.backtest.optimizers import portfolio_weights
 from app.storage.repository import KlineRepository
+
+if TYPE_CHECKING:
+    import threading
 
 logger = logging.getLogger(__name__)
 

@@ -9,17 +9,20 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 import numpy as np
 import polars as pl
 
 from app.backtest.engine import BacktestEngine, MatcherConfig, SimResult
-from app.strategy.engine import StrategyEngine, StrategyDef
+from app.strategy.engine import StrategyDef, StrategyEngine
+
+if TYPE_CHECKING:
+    import threading
 
 logger = logging.getLogger(__name__)
 
-BENCHMARK_SYMBOL = "000001.SH"
+BENCHMARK_SYMBOL = "000001.INDEX"
 
 
 @dataclass
