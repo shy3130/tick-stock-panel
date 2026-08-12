@@ -7,6 +7,7 @@
   - 非交易日起点的 live state 仍能构建 (300 天闸门已删除);
   - cache_generation 在 refresh/clear 后自增。
 """
+import json
 from datetime import date, timedelta
 
 import polars as pl
@@ -103,6 +104,42 @@ def test_refresh_enriched_not_multiplied_by_duplicates(tmp_path, monkeypatch):
     assert r._live_agg_cache is not None
     assert r._live_agg_cache.height == 1
 
+
+
+def test_enriched_read_ceiling_isolates_unconfirmed_partition_without_deleting_it(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
+    _write_inst(tmp_path)
+    r = repo(tmp_path)
+    r.append_enriched(_storage_rows("000001.SZ", 20, date(2026, 7, 23)))
+    _register_kline_enriched_view(r)
+    r._refresh_enriched()
+    assert r.get_enriched_latest()[1] == date(2026, 8, 11)
+
+    r.set_enriched_canonical_date(date(2026, 8, 10))
+
+    latest, latest_date = r.get_enriched_latest()
+    assert not latest.is_empty()
+    assert latest_date == date(2026, 8, 10)
+    history = r.get_enriched_range(
+        date(2026, 8, 10),
+        date(2026, 8, 11),
+        columns=["symbol", "date", "close"],
+    )
+    assert history is not None
+    assert history["date"].max() == date(2026, 8, 10)
+    assert (
+        tmp_path
+        / "kline_daily_enriched"
+        / "date=2026-08-11"
+        / "part.parquet"
+    ).exists()
+
+    r.trust_live_enriched_date(date(2026, 8, 11))
+    r._refresh_enriched()
+    assert r.get_enriched_latest()[1] == date(2026, 8, 11)
 
 # ── cache_generation invalidation ────────────────────────────────────
 
@@ -334,3 +371,135 @@ def test_merge_and_flush_enriched_deduplicate_memory_and_disk(tmp_path):
         assert cached.height == 1
         assert on_disk.height == 1
         r.store.close()
+
+
+def _publish_external_history(root, frame: pl.DataFrame) -> None:
+    generation = "20260812T000000-deadbeef"
+    generation_dir = root / "generations" / generation
+    for value in frame.get_column("date").unique().sort().to_list():
+        partition = generation_dir / f"date={value.isoformat()}"
+        partition.mkdir(parents=True, exist_ok=True)
+        frame.filter(pl.col("date") == value).write_parquet(partition / "part.parquet")
+    manifest = {
+        "schema_version": 1,
+        "kind": "tickflow_canonical_enriched_history",
+        "generation": generation,
+        "path": f"generations/{generation}",
+        "start_date": frame.get_column("date").min().isoformat(),
+        "end_date": frame.get_column("date").max().isoformat(),
+        "rows": frame.height,
+        "symbols": frame.get_column("symbol").n_unique(),
+        "trading_days": frame.get_column("date").n_unique(),
+        "source": "test",
+        "columns": frame.columns,
+        "published_at": "2026-08-12T00:00:00+00:00",
+    }
+    payload = json.dumps(manifest)
+    (generation_dir / "manifest.json").write_text(payload, encoding="utf-8")
+    (root / "current.json").write_text(payload, encoding="utf-8")
+
+
+def test_external_history_is_visible_without_local_partitions(tmp_path, monkeypatch):
+    external_root = tmp_path / "published-history"
+    _publish_external_history(
+        external_root,
+        _storage_rows("000001.SZ", 180, date(2025, 1, 1)),
+    )
+    monkeypatch.setenv("TICKFLOW_CANONICAL_HISTORY_ROOT", str(external_root))
+    r = repo(tmp_path / "user-data")
+
+    storage = r.get_enriched_range(
+        date(2025, 5, 20),
+        date(2025, 5, 30),
+        columns=["symbol", "date", "close"],
+    )
+    assert storage is not None and storage.height == 11
+
+    derived = r.get_enriched_range(
+        date(2025, 5, 20),
+        date(2025, 5, 30),
+        columns=["symbol", "date", "change_pct", "ma5"],
+    )
+    assert derived is not None and derived.height == 11
+    assert derived.get_column("ma5").drop_nulls().len() > 0
+
+    chart = r.get_daily(
+        "000001.SZ",
+        date(2025, 5, 20),
+        date(2025, 5, 30),
+        columns=["symbol", "date", "close", "ma5"],
+    )
+    assert chart.height == 11
+    assert chart.get_column("ma5").drop_nulls().len() > 0
+
+    batch = r.get_daily_batch(
+        ["000001.SZ"],
+        date(2025, 5, 20),
+        date(2025, 5, 30),
+        columns=["symbol", "date", "close"],
+    )
+    assert batch.height == 11
+
+    r._refresh_enriched()
+    assert r.get_enriched_latest()[1] == date(2025, 6, 29)
+    r.store.close()
+
+
+def test_get_daily_returns_empty_when_no_local_or_external_history(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "TICKFLOW_CANONICAL_HISTORY_ROOT",
+        str(tmp_path / "unpublished-history"),
+    )
+    r = repo(tmp_path / "user-data")
+
+    out = r.get_daily(
+        "000001.SZ",
+        date(2026, 1, 1),
+        date(2026, 1, 5),
+    )
+
+    assert out.is_empty()
+    r.store.close()
+
+
+def test_trusted_local_overlay_wins_without_exposing_newer_untrusted_day(
+    tmp_path,
+    monkeypatch,
+):
+    external_root = tmp_path / "published-history"
+    _publish_external_history(
+        external_root,
+        _storage_rows("000001.SZ", 3, date(2026, 1, 1)),
+    )
+    monkeypatch.setenv("TICKFLOW_CANONICAL_HISTORY_ROOT", str(external_root))
+    user_data = tmp_path / "user-data"
+    r = repo(user_data)
+    local = _storage_rows("000001.SZ", 2, date(2026, 1, 3)).with_columns(
+        pl.lit(99.0).alias("close"),
+        pl.lit(99.0).alias("raw_close"),
+    )
+    r.append_enriched(local)
+    r.set_enriched_canonical_date(date(2026, 1, 3))
+
+    out = r.get_enriched_range(
+        date(2026, 1, 1),
+        date(2026, 1, 4),
+        columns=["symbol", "date", "close"],
+    )
+    assert out is not None
+    assert out.get_column("date").to_list() == [
+        date(2026, 1, 1),
+        date(2026, 1, 2),
+        date(2026, 1, 3),
+    ]
+    assert out.filter(pl.col("date") == date(2026, 1, 3)).item(0, "close") == 99.0
+    assert (
+        user_data
+        / "kline_daily_enriched"
+        / "date=2026-01-04"
+        / "part.parquet"
+    ).exists()
+    r.store.close()

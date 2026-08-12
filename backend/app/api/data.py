@@ -1,15 +1,20 @@
 """数据画像 API —— 让前端知道"我们本地有什么数据"。"""
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import os
+import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from fastapi import APIRouter, Request
+import polars as pl
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.indicators.pipeline import ENRICHED_COLUMNS
 
@@ -17,9 +22,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
-# ===== 缓存:storage(文件扫描) + 每张表 aggregate 各自缓存 =====
-# 同步期间前端 2s 轮一次 status,每张表 aggregate 全表 count + min/max + distinct
-# 太重,加 TTL + 事件失效。stage 写完只清对应那张表的缓存。
+# ===== 缓存：storage 文件统计 + 各数据域轻量元数据 =====
+# 首个请求在锁内完成一次采样，后续请求复用 TTL 缓存，避免并发轮询形成查询风暴。
 
 _TABLE_TTL = 30.0  # 兜底 TTL,即使没人调 invalidate 也会过期
 _TABLE_TTL_LARGE = 120.0  # 大表(分钟K等)单独 TTL，避免多分区聚合反复重算
@@ -82,21 +86,17 @@ def invalidate_storage_cache() -> None:
 
 
 def _get_table_stats(name: str, fetch: Callable[[], dict | None]) -> dict | None:
-    """走 TTL+事件 双重缓存。fetch 在锁外执行避免阻塞别的请求。"""
+    """读取带 TTL 的单飞缓存；无数据的 None 结果同样缓存。"""
     ttl = _TABLE_TTL_LARGE if name in _LARGE_TABLES else _TABLE_TTL
-    now = time.time()
     with _table_cache_lock:
-        cached = _table_cache.get(name)
         cached_ts = _table_cache_ts.get(name, 0.0)
-        if cached is not None and (now - cached_ts) < ttl:
-            return cached
+        if cached_ts > 0 and (time.time() - cached_ts) < ttl:
+            return _table_cache.get(name)
 
-    fresh = fetch()
-
-    with _table_cache_lock:
+        fresh = fetch()
         _table_cache[name] = fresh
-        _table_cache_ts[name] = now
-    return fresh
+        _table_cache_ts[name] = time.time()
+        return fresh
 
 
 def _safe_aggregate(repo, view: str) -> dict | None:
@@ -124,388 +124,314 @@ def _safe_aggregate(repo, view: str) -> dict | None:
     }
 
 
-def _safe_aggregate_daily(repo, view: str = "kline_daily") -> dict | None:
-    """日K轻量统计 — 零数据扫描。
+_PARTITION_DATE_RE = re.compile(r"^date=(\d{4}-\d{2}-\d{2})$")
 
-    从分区目录名获取日期范围和交易日数，不读任何 parquet。
-    标的数从 instruments 小表获取（~5000行，毫秒级）。
-    """
-    daily_dir = repo.store.data_dir / "kline_daily"
-    if not daily_dir.exists():
-        try:
-            from app.services.data_mode import is_local_daily_mode
-            if is_local_daily_mode():
-                return _safe_aggregate_local_daily(repo)
-        except Exception:  # noqa: BLE001
-            pass
+
+def _partition_date_stats(
+    repo,
+    directory: str,
+    instruments_table: str | None,
+    *,
+    schema_view: str | None = None,
+    max_date: date | None = None,
+) -> dict | None:
+    """从严格 ISO 日期分区、标的小表和 schema 获取轻量统计。"""
+    data_dir = repo.store.data_dir / directory
+    if not data_dir.exists():
         return None
     dates: list[str] = []
-    for d in daily_dir.iterdir():
-        if d.is_dir() and d.name.startswith("date="):
-            dates.append(d.name[5:])
-    if not dates:
+    for entry in data_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        match = _PARTITION_DATE_RE.fullmatch(entry.name)
+        if not match:
+            continue
         try:
-            from app.services.data_mode import is_local_daily_mode
-            if is_local_daily_mode():
-                return _safe_aggregate_local_daily(repo)
-        except Exception:  # noqa: BLE001
-            pass
-        return None
+            parsed = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if max_date is not None and parsed > max_date:
+            continue
+        dates.append(parsed.isoformat())
     dates.sort()
-
-    symbols = _count_instruments_symbols(repo)
-
-    return {
+    if not dates:
+        return None
+    result = {
         "rows": 0,
+        "row_count_exact": False,
         "earliest_date": dates[0],
         "latest_date": dates[-1],
-        "symbols_covered": symbols,
+        "symbols_covered": _count_instruments_symbols(repo, instruments_table) if instruments_table else 0,
         "trading_days": len(dates),
     }
+    if schema_view is not None:
+        latest_dir = data_dir / f"date={dates[-1]}"
+        parquet = next(latest_dir.glob("*.parquet"), None)
+        if parquet is not None:
+            try:
+                result["fields"] = len(pl.read_parquet_schema(parquet))
+            except Exception:
+                result["fields"] = 0
+        else:
+            result["fields"] = 0
+    return result
+
+
+def _safe_aggregate_daily(repo) -> dict | None:
+    """日 K 轻量统计；本地模式始终以 canonical enriched 为准。"""
+    try:
+        from app.services.data_mode import is_local_daily_mode
+
+        if is_local_daily_mode():
+            return _safe_aggregate_local_daily(repo)
+    except Exception:  # noqa: BLE001
+        pass
+    return _partition_date_stats(repo, "kline_daily", "instruments")
 
 
 def _safe_aggregate_local_daily(repo) -> dict | None:
     """fquant_local 禁写 raw mirror 时，用 enriched 分区表示日线可用性。"""
-    enriched_dir = repo.store.data_dir / "kline_daily_enriched"
-    if not enriched_dir.exists():
-        return None
-    dates = sorted(
-        d.name[5:] for d in enriched_dir.iterdir()
-        if d.is_dir() and d.name.startswith("date=")
+    stats = _partition_date_stats(
+        repo,
+        "kline_daily_enriched",
+        "instruments",
+        max_date=getattr(repo, "enriched_read_ceiling", None),
     )
-    if not dates:
+    if stats is None:
         return None
-    return {
-        "rows": 0,
-        "earliest_date": dates[0],
-        "latest_date": dates[-1],
-        "symbols_covered": _count_instruments_symbols(repo),
-        "trading_days": len(dates),
-        "source": "fquant_local_enriched",
-        "raw_mirror_disabled": True,
-    }
+    stats["source"] = "fquant_local_enriched"
+    stats["raw_mirror_disabled"] = True
+    return stats
 
 
 def _safe_aggregate_enriched(repo) -> dict | None:
-    """Enriched 轻量统计 — 零数据扫描。
+    """Enriched 轻量统计；字段从最新分区的 Parquet schema 获取。"""
+    return _partition_date_stats(
+        repo,
+        "kline_daily_enriched",
+        "instruments",
+        schema_view="kline_enriched",
+        max_date=getattr(repo, "enriched_read_ceiling", None),
+    )
 
-    字段数从 DESCRIBE 读 schema（不碰数据），毫秒级。
-    日期范围从分区目录名获取（同 minute 策略），不读任何 parquet。
-    标的数从 instruments 小表取。
-    """
-    # 字段数：读 schema，不碰数据
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
 
-    # 日期范围：从分区目录名获取，不扫数据
-    enriched_dir = repo.store.data_dir / "kline_daily_enriched"
-    if not enriched_dir.exists():
-        return None
-    dates: list[str] = []
-    for d in enriched_dir.iterdir():
-        if d.is_dir() and d.name.startswith("date="):
-            dates.append(d.name[5:])
-    if not dates:
-        return None
-    dates.sort()
-
-    symbols = _count_instruments_symbols(repo)
-
-    return {
-        "rows": 0,
-        "fields": fields,
-        "earliest_date": dates[0],
-        "latest_date": dates[-1],
-        "symbols_covered": symbols,
-        "trading_days": len(dates),
+def _instruments_frame(repo, table: str):
+    getters = {
+        "instruments": "get_instruments",
+        "instruments_index": "get_index_instruments",
+        "instruments_etf": "get_etf_instruments",
+        "instruments_hk": "get_hk_instruments",
     }
-
-
-def _count_instruments_symbols(repo) -> int:
-    """从 instruments 小表取标的数（~5000行，毫秒级）。"""
+    getter = getattr(repo, getters.get(table, ""), None)
+    if not callable(getter):
+        return None
     try:
-        sym_row = repo.execute_one(
-            "SELECT count(DISTINCT symbol) FROM instruments"
-        )
+        return getter()
+    except Exception:
+        return None
+
+
+def _count_instruments_symbols(repo, table: str = "instruments") -> int:
+    """优先读已预热的 instruments 内存表，避免与后台 DuckDB 写任务争锁。"""
+    frame = _instruments_frame(repo, table)
+    if frame is not None and not frame.is_empty() and "symbol" in frame.columns:
+        return frame.get_column("symbol").n_unique()
+    try:
+        sym_row = repo.execute_one(f"SELECT count(DISTINCT symbol) FROM {table}")
         if sym_row and sym_row[0]:
             return int(sym_row[0])
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return 0
 
 
-def _safe_aggregate_instruments(repo) -> dict | None:
-    """instruments 视图统计(无 date 列,用 as_of)。"""
-    try:
-        row = repo.execute_one(
-            """SELECT count(*) AS rows,
-                      count(DISTINCT symbol) AS symbols,
-                      max(as_of) AS latest_as_of,
-                      count_if(name IS NOT NULL AND name != '') AS named
-               FROM instruments"""
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.debug("aggregate instruments failed: %s", e)
+def _instrument_stats(repo, table: str) -> dict | None:
+    frame = _instruments_frame(repo, table)
+    if frame is None or frame.is_empty() or "symbol" not in frame.columns:
         return None
-    if not row or not row[0]:
-        return None
+    names = frame.get_column("name").to_list() if "name" in frame.columns else []
+    latest_as_of = (
+        frame.get_column("as_of").max()
+        if "as_of" in frame.columns
+        else None
+    )
     return {
-        "rows": int(row[0]),
-        "symbols_covered": int(row[1] or 0),
-        "latest_as_of": str(row[2]) if row[2] else None,
-        "named": int(row[3] or 0),
+        "rows": frame.height,
+        "symbols_covered": frame.get_column("symbol").n_unique(),
+        "latest_as_of": str(latest_as_of) if latest_as_of else None,
+        "named": sum(1 for value in names if value is not None and str(value)),
     }
+
+
+def _safe_aggregate_instruments(repo) -> dict | None:
+    """instruments 统计；优先使用启动时已预热的 Polars 缓存。"""
+    return _instrument_stats(repo, "instruments")
 
 
 def _safe_aggregate_index_daily(repo) -> dict | None:
-    """指数日K统计。指数数据量较小，直接读取 parquet 元数据统计真实行数。"""
-    return _safe_aggregate(repo, "kline_index_daily")
+    return _partition_date_stats(repo, "kline_index_daily", "instruments_index")
 
 
 def _safe_aggregate_index_enriched(repo) -> dict | None:
-    """指数 enriched 统计。指数数据量较小，直接读取 parquet 元数据统计真实行数。"""
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_index_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
-    stats = _safe_aggregate(repo, "kline_index_enriched")
-    if not stats:
-        return None
-    return {**stats, "fields": fields}
+    return _partition_date_stats(
+        repo,
+        "kline_index_enriched",
+        "instruments_index",
+        schema_view="kline_index_enriched",
+    )
+
+
 
 
 def _safe_aggregate_index_instruments(repo) -> dict | None:
-    """指数 instruments 视图统计。"""
-    try:
-        row = repo.execute_one(
-            """SELECT count(*) AS rows,
-                      count(DISTINCT symbol) AS symbols,
-                      count_if(name IS NOT NULL AND name != '') AS named
-               FROM instruments_index"""
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.debug("aggregate instruments_index failed: %s", e)
-        return None
-    if not row or not row[0]:
-        return None
-    return {
-        "rows": int(row[0]),
-        "symbols_covered": int(row[1] or 0),
-        "latest_as_of": None,
-        "named": int(row[2] or 0),
-    }
+    """指数 instruments 统计；不占用共享 DuckDB 查询锁。"""
+    return _instrument_stats(repo, "instruments_index")
 
 
 def _safe_aggregate_etf_instruments(repo) -> dict | None:
-    """ETF instruments 统计 — 优先独立 instruments_etf，兼容旧 instruments_index。"""
-    queries = [
-        """SELECT count(*) AS rows,
-                  count(DISTINCT symbol) AS symbols,
-                  count_if(name IS NOT NULL AND name != '') AS named
-           FROM instruments_etf""",
-        """SELECT count(*) AS rows,
-                  count(DISTINCT symbol) AS symbols,
-                  count_if(name IS NOT NULL AND name != '') AS named
-           FROM instruments_index
-           WHERE asset_type = 'etf'""",
-    ]
-    for sql in queries:
-        try:
-            row = repo.execute_one(sql)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("aggregate etf instruments fallback failed: %s", e)
-            continue
-        if row and row[0]:
-            return {
-                "rows": int(row[0]),
-                "symbols_covered": int(row[1] or 0),
-                "latest_as_of": None,
-                "named": int(row[2] or 0),
-            }
-    return None
+    """ETF instruments 统计；getter 已兼容旧 instruments_index 数据。"""
+    return _instrument_stats(repo, "instruments_etf")
 
 
 def _safe_aggregate_etf_enriched(repo) -> dict | None:
-    """ETF enriched 统计 — 独立 kline_etf_enriched。"""
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_etf_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
-    stats = _safe_aggregate(repo, "kline_etf_enriched")
-    if not stats:
-        return None
-    return {**stats, "fields": fields}
+    """ETF enriched 统计；新独立目录优先，为空时只读回退旧 kline_index_enriched。
+
+    历史契约（见 repository.get_etf_daily / _refresh_etf_instruments）：旧版 ETF 曾与
+    指数混存于 kline_index_enriched。未迁移老用户在新独立目录为空时走此只读回退，
+    不做任何写迁移。兼容统计仍受 provider-confirmed read ceiling 约束，不计入未来/
+    未确认分区；新独立 kline_etf_enriched 存在且有数据时永远优先。
+    """
+    stats = _partition_date_stats(
+        repo,
+        "kline_etf_enriched",
+        "instruments_etf",
+        schema_view="kline_etf_enriched",
+    )
+    if stats is not None:
+        return stats
+    return _partition_date_stats(
+        repo,
+        "kline_index_enriched",
+        "instruments_etf",
+        schema_view="kline_index_enriched",
+        max_date=getattr(repo, "enriched_read_ceiling", None),
+    )
 
 
 def _safe_aggregate_etf_daily(repo) -> dict | None:
-    """ETF 日K统计 — 优先独立 kline_etf_daily，兼容旧 index 存储。"""
-    queries = [
-        """SELECT count(*) AS rows,
-                  min(date) AS earliest,
-                  max(date) AS latest,
-                  count(DISTINCT symbol) AS symbols,
-                  count(DISTINCT date) AS trading_days
-           FROM kline_etf_daily""",
-        """SELECT count(*) AS rows,
-                  min(date) AS earliest,
-                  max(date) AS latest,
-                  count(DISTINCT symbol) AS symbols,
-                  count(DISTINCT date) AS trading_days
-           FROM kline_index_daily
-           WHERE symbol IN (
-               SELECT DISTINCT symbol FROM instruments_index WHERE asset_type = 'etf'
-           )""",
-    ]
-    for sql in queries:
-        try:
-            row = repo.execute_one(sql)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("aggregate etf daily fallback failed: %s", e)
-            continue
-        if row and row[0]:
-            return {
-                "rows": int(row[0]),
-                "earliest_date": str(row[1]) if row[1] else None,
-                "latest_date": str(row[2]) if row[2] else None,
-                "symbols_covered": int(row[3] or 0),
-                "trading_days": int(row[4] or 0),
-            }
-    return None
+    """ETF 日K统计；新独立目录优先，为空时只读回退旧 kline_index_daily。
+
+    旧版 ETF 日K曾与指数混存于 kline_index_daily。未迁移老用户在新独立目录为空时
+    走此只读回退，不做写迁移。兼容统计仍受 provider-confirmed read ceiling 约束，
+    不计入未来/未确认分区；新独立 kline_etf_daily 存在且有数据时永远优先。
+    """
+    stats = _partition_date_stats(repo, "kline_etf_daily", "instruments_etf")
+    if stats is not None:
+        return stats
+    return _partition_date_stats(
+        repo,
+        "kline_index_daily",
+        "instruments_etf",
+        max_date=getattr(repo, "enriched_read_ceiling", None),
+    )
 
 
 def _safe_aggregate_hk_instruments(repo) -> dict | None:
-    """港股 instruments 统计 — 独立 instruments_hk,无旧版兼容路径。"""
-    try:
-        row = repo.execute_one(
-            """SELECT count(*) AS rows,
-                      count(DISTINCT symbol) AS symbols,
-                      count_if(name IS NOT NULL AND name != '') AS named
-               FROM instruments_hk"""
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.debug("aggregate hk instruments failed: %s", e)
-        return None
-    if not row or not row[0]:
-        return None
-    return {
-        "rows": int(row[0]),
-        "symbols_covered": int(row[1] or 0),
-        "latest_as_of": None,
-        "named": int(row[2] or 0),
-    }
+    """港股 instruments 统计；不占用共享 DuckDB 查询锁。"""
+    return _instrument_stats(repo, "instruments_hk")
 
 
 def _safe_aggregate_hk_enriched(repo) -> dict | None:
-    """港股 enriched 统计 — 独立 kline_hk_enriched。不复权,故无 adj_factor 覆盖率。"""
-    fields = 0
-    try:
-        cols = repo.execute_all("DESCRIBE kline_hk_enriched")
-        fields = len(cols)
-    except Exception:  # noqa: BLE001
-        pass
-    stats = _safe_aggregate(repo, "kline_hk_enriched")
-    if not stats:
-        return None
-    return {**stats, "fields": fields}
+    return _partition_date_stats(
+        repo,
+        "kline_hk_enriched",
+        "instruments_hk",
+        schema_view="kline_hk_enriched",
+    )
 
 
 def _safe_aggregate_hk_daily(repo) -> dict | None:
-    """港股日K统计 — 独立 kline_hk_daily。"""
-    try:
-        row = repo.execute_one(
-            """SELECT count(*) AS rows,
-                      min(date) AS earliest,
-                      max(date) AS latest,
-                      count(DISTINCT symbol) AS symbols,
-                      count(DISTINCT date) AS trading_days
-               FROM kline_hk_daily"""
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.debug("aggregate hk daily failed: %s", e)
+    return _partition_date_stats(repo, "kline_hk_daily", "instruments_hk")
+
+
+
+
+def _single_parquet_stats(
+    repo,
+    directory: str,
+    *,
+    date_column: str,
+) -> dict | None:
+    """Return exact lightweight coverage for a single-file Parquet dataset."""
+    path = repo.store.data_dir / directory / "all.parquet"
+    if not path.is_file():
         return None
-    if not row or not row[0]:
+    try:
+        row = (
+            pl.scan_parquet(path)
+            .select(
+                pl.len().alias("rows"),
+                pl.col(date_column).min().alias("earliest_date"),
+                pl.col(date_column).max().alias("latest_date"),
+                pl.col("symbol").n_unique().alias("symbols_covered"),
+                pl.col(date_column).n_unique().alias("trading_days"),
+            )
+            .collect()
+            .row(0, named=True)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("single parquet stats failed for %s: %s", directory, exc)
+        return None
+    if not row["rows"]:
         return None
     return {
-        "rows": int(row[0]),
-        "earliest_date": str(row[1]) if row[1] else None,
-        "latest_date": str(row[2]) if row[2] else None,
-        "symbols_covered": int(row[3] or 0),
-        "trading_days": int(row[4] or 0),
+        "rows": int(row["rows"]),
+        "row_count_exact": True,
+        "earliest_date": str(row["earliest_date"]) if row["earliest_date"] is not None else None,
+        "latest_date": str(row["latest_date"]) if row["latest_date"] is not None else None,
+        "symbols_covered": int(row["symbols_covered"] or 0),
+        "trading_days": int(row["trading_days"] or 0),
     }
 
 
 def _safe_aggregate_adj_factor(repo) -> dict | None:
-    """adj_factor 视图统计,日期范围对齐日 K 覆盖区间。"""
-    try:
-        # 取日 K 的日期范围作为过滤条件
-        dr = repo.execute_one(
-            "SELECT min(date), max(date) FROM kline_daily"
-        )
-        if not dr or not dr[0]:
-            return None
-        d_min, d_max = dr[0], dr[1]
-        row = repo.execute_one(
-            """SELECT count(*) AS rows,
-                      count(DISTINCT symbol) AS symbols,
-                      count(DISTINCT trade_date) AS trading_days
-               FROM adj_factor
-               WHERE trade_date BETWEEN ? AND ?""",
-            [str(d_min), str(d_max)],
-        )
-        if not row or not row[0]:
-            return None
-        return {
-            "rows": int(row[0]),
-            "symbols_covered": int(row[1]) if isinstance(row[1], (int, float)) else 0,
-            "earliest_date": str(d_min),
-            "latest_date": str(d_max),
-            "trading_days": int(row[2] or 0),
-        }
-    except Exception as e:  # noqa: BLE001
-        logger.debug("aggregate adj_factor failed: %s", e)
-        return None
+    """复权因子使用单文件存储，按实际 ``all.parquet`` 精确统计。"""
+    return _single_parquet_stats(repo, "adj_factor", date_column="trade_date")
 
 
 def _safe_aggregate_minute(repo) -> dict | None:
-    """kline_minute 统计 — 从分区目录名获取交易日数，跳过全表扫描。
+    """分钟 K 状态：本地缓存优先，否则展示 active provider 的发布水位。"""
+    local = _partition_date_stats(repo, "kline_minute", None)
+    if local is not None:
+        local.update({"available": True, "source": "local_cache"})
+        return local
 
-    分钟 K 按 date=YYYY-MM-DD 分区存储，直接数目录即可，
-    无需 count(*) / count(DISTINCT ...) 等昂贵查询。
-    """
-    minute_dir = repo.store.data_dir / "kline_minute"
-    if not minute_dir.exists():
+    try:
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider_name = get_active_provider_name("minute")
+        provider = get_provider(provider_name)
+        get_coverage = getattr(provider, "get_minute_coverage", None)
+        if not callable(get_coverage):
+            return None
+        coverage = get_coverage()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("minute provider coverage unavailable: %s", exc)
         return None
-
-    # 从 date=YYYY-MM-DD 目录名提取交易日（跳过 date=None 等非法目录名）
-    from datetime import date as _date
-    dates: list[str] = []
-    for d in minute_dir.iterdir():
-        if d.is_dir() and d.name.startswith("date="):
-            ds = d.name[5:]
-            try:
-                _date.fromisoformat(ds)
-            except ValueError:
-                continue
-            dates.append(ds)
-
-    if not dates:
+    if not coverage:
         return None
-
-    dates.sort()
     return {
-        "rows": 0,  # 不再查询行数
-        "earliest_date": dates[0],
-        "latest_date": dates[-1],
-        "symbols_covered": 0,  # 不再查询标的数
-        "trading_days": len(dates),
+        "rows": 0,
+        "row_count_exact": False,
+        "earliest_date": None,
+        "latest_date": coverage["latest_date"],
+        "symbols_covered": 0,
+        "trading_days": 0,
+        "available": True,
+        "source": "catalog_tdx_minutes",
+        "stage": coverage.get("stage"),
+        "generation": coverage.get("generation"),
+        "logical": coverage.get("logical"),
     }
 
 
@@ -581,10 +507,7 @@ def _scan_dir_recursive(entry: os.DirEntry) -> tuple[int, int]:
 
 
 def _compute_storage(data_dir: Path) -> dict:
-    """单次遍历计算 storage 统计，避免多次 rglob。"""
-    import os
-
-    # 只统计关心的子目录
+    """计算各数据域与整个 data 根目录的文件体积。"""
     subdirs = {
         "daily": data_dir / "kline_daily",
         "enriched": data_dir / "kline_daily_enriched",
@@ -595,47 +518,23 @@ def _compute_storage(data_dir: Path) -> dict:
         "etf_enriched": data_dir / "kline_etf_enriched",
         "etf_instruments": data_dir / "instruments_etf",
         "etf_adj_factor": data_dir / "adj_factor_etf",
+        "hk_daily": data_dir / "kline_hk_daily",
+        "hk_enriched": data_dir / "kline_hk_enriched",
+        "hk_instruments": data_dir / "instruments_hk",
         "minute": data_dir / "kline_minute",
         "adj_factor": data_dir / "adj_factor",
         "instruments": data_dir / "instruments",
+        "financials": data_dir / "financials",
         "ext_data": data_dir / "ext_data",
     }
-    stats = {}
-    total_size = 0
-    for key, d in subdirs.items():
-        fc, sz = _scan_dir_stats(d)
-        total_size += sz
-        stats[f"{key}_files"] = fc
-        stats[f"{key}_size_mb"] = sz
+    stats: dict[str, int | float] = {}
+    for key, directory in subdirs.items():
+        file_count, size_mb = _scan_dir_stats(directory)
+        stats[f"{key}_files"] = file_count
+        stats[f"{key}_size_mb"] = size_mb
 
-    # total: 再加上其他零散文件(pools, financials, capabilities.json 等)
-    other_dirs = ["pools", "financials", "backtest_results", "screener_results", "ai_cache"]
-    for name in other_dirs:
-        d = data_dir / name
-        if d.exists():
-            _, s = _scan_dir_stats(d)
-            total_size += s
-
-    # financials 单独统计
-    fin_dir = data_dir / "financials"
-    if fin_dir.exists():
-        fc, sz = _scan_dir_stats(fin_dir)
-        stats["financials_files"] = fc
-        stats["financials_size_mb"] = sz
-        total_size += sz
-    for name in other_dirs:
-        d = data_dir / name
-        if d.exists():
-            _, s = _scan_dir_stats(d)
-            total_size += s
-    # 根目录散文件
-    for entry in os.scandir(data_dir):
-        if entry.is_file(follow_symlinks=False):
-            try:
-                total_size += entry.stat().st_size / 1048576
-            except OSError:
-                pass
-    stats["total_size_mb"] = round(total_size, 2)
+    _, total_size_mb = _scan_dir_stats(data_dir)
+    stats["total_size_mb"] = total_size_mb
     return stats
 
 
@@ -653,17 +552,15 @@ def _next_cron_run(scheduler, job_id: str) -> str | None:
 
 
 def _get_storage(data_dir: Path) -> dict:
-    """返回缓存的 storage 统计；走独立 TTL，stage 写完不触发重算。"""
+    """返回 storage 单飞缓存，避免页面轮询并发遍历目录。"""
     global _storage_cache, _storage_cache_ts
-    now = time.time()
     with _storage_lock:
-        if _storage_cache is not None and (now - _storage_cache_ts) < _STORAGE_TTL:
+        if _storage_cache is not None and (time.time() - _storage_cache_ts) < _STORAGE_TTL:
             return _storage_cache
-    fresh = _compute_storage(data_dir)
-    with _storage_lock:
+        fresh = _compute_storage(data_dir)
         _storage_cache = fresh
-        _storage_cache_ts = now
-    return fresh
+        _storage_cache_ts = time.time()
+        return fresh
 
 
 def _last_finished(job_label: str) -> str | None:
@@ -687,6 +584,82 @@ def _last_finished(job_label: str) -> str | None:
         _last_finished_cache = cache
     return cache.get(job_label)
 
+
+class CanonicalHistoryBackfillRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_date: date | None = None
+    end_date: date | None = None
+    batch_size: int = Field(default=100, ge=1, le=1_000)
+
+
+def _canonical_history_view() -> dict[str, Any]:
+    from app.services.canonical_history import canonical_history_manager
+
+    raw = canonical_history_manager().status()
+    available = bool(raw.get("available"))
+    manifest = raw.get("manifest") if available else None
+    job = None
+    if raw.get("job_id"):
+        job = {
+            "id": raw.get("job_id"),
+            "status": raw.get("status"),
+            "progress_pct": round(float(raw.get("progress", 0)) * 100, 2),
+            "processed_symbols": raw.get("symbols_done", 0),
+            "total_symbols": raw.get("symbols_total", 0),
+            "written_rows": raw.get("rows", 0),
+            "started_at": raw.get("started_at"),
+            "finished_at": raw.get("finished_at"),
+            "error": raw.get("error"),
+        }
+    published = None
+    if isinstance(manifest, dict):
+        published = {
+            "generation": manifest.get("generation"),
+            "created_at": manifest.get("published_at"),
+            "earliest_date": manifest.get("start_date"),
+            "latest_date": manifest.get("end_date"),
+            "row_count": manifest.get("rows", 0),
+            "symbols": manifest.get("symbols", 0),
+            "trading_days": manifest.get("trading_days", 0),
+        }
+    return {
+        "available": available,
+        "reason": None if available else raw.get("reason") or "not_published",
+        "published": published,
+        "job": job,
+    }
+
+
+@router.get("/canonical-history/status")
+def canonical_history_status() -> dict[str, Any]:
+    return _canonical_history_view()
+
+
+@router.post("/canonical-history/backfill", status_code=202)
+def canonical_history_backfill(
+    body: CanonicalHistoryBackfillRequest | None = None,
+) -> dict[str, str]:
+    from app.services.canonical_history import canonical_history_manager
+
+    payload = body or CanonicalHistoryBackfillRequest()
+    if (
+        payload.start_date is not None
+        and payload.end_date is not None
+        and payload.start_date > payload.end_date
+    ):
+        raise HTTPException(status_code=422, detail="start_date must not be after end_date")
+    try:
+        result = canonical_history_manager().start(
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            batch_size=payload.batch_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"job_id": str(result["job_id"]), "status": str(result["status"])}
 
 @router.get("/status")
 def status(request: Request) -> dict:

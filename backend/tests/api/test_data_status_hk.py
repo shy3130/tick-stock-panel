@@ -68,20 +68,23 @@ def test_hk_instruments_status_reads_real_view(tmp_path):
 
 def test_hk_daily_status_reads_real_view(tmp_path):
     r = repo(tmp_path)
+    r.save_hk_instruments(_hk_instruments())
     r.append_hk_daily(_hk_daily())
     r.refresh_index_views()
 
     stats = _safe_aggregate_hk_daily(r)
 
     assert stats is not None
-    assert stats["rows"] == 2
+    assert stats["rows"] == 0
     assert stats["earliest_date"] == "2026-06-30"
     assert stats["latest_date"] == "2026-07-01"
     assert stats["symbols_covered"] == 1
 
 
+
 def test_hk_enriched_status_reads_real_view(tmp_path):
     r = repo(tmp_path)
+    r.save_hk_instruments(_hk_instruments())
     enriched = compute_enriched(
         _hk_daily(), factors=None, instruments=_hk_instruments(), asset_type="hk",
     )
@@ -91,5 +94,5 @@ def test_hk_enriched_status_reads_real_view(tmp_path):
     stats = _safe_aggregate_hk_enriched(r)
 
     assert stats is not None
-    assert stats["rows"] == 2
+    assert stats["rows"] == 0
     assert stats["fields"] > 0
