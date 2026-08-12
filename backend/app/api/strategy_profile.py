@@ -15,11 +15,22 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+
 from app.config import settings
-from app.services.ai_structured import CancellationToken, build_ai_meta, run_structured_ai
 from app.services.ai_budgets import resolve_budget
+from app.services.ai_provider import ai_configured, generate_ai_text_with_meta
+from app.services.ai_provider import profile_configured as _profile_configured
+from app.services.ai_structured import CancellationToken, build_ai_meta, run_structured_ai
 from app.services.ai_usage_snapshot import record_structured_usage
-from app.services.ai_provider import ai_configured, generate_ai_text_with_meta, profile_configured as _profile_configured
+from app.services.strategy_profile import (
+    SCHEMA_VERSION,
+    delete_profile,
+    read_profile,
+    validate_profile,
+    write_profile,
+)
+from app.services.strategy_validator import validate_strategy
+from app.services.trade_journal import store as journal_store
 from app.services.trading import proposals as proposals_svc
 
 router = APIRouter(prefix="/api/strategies", tags=["strategy-profile"])
