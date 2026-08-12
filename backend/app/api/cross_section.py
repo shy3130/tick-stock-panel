@@ -47,7 +47,7 @@ def relative_strength(
     request: Request,
     symbol: str = Query(..., description="标的代码, 如 000001.SZ"),
     days: int = Query(120, ge=1, le=400, description="回溯交易日上限"),
-    benchmark: str = Query("000001.SH", description="基准指数 (000001.SH / 399001.SZ / 399006.SZ)"),
+    benchmark: str = Query("000001.INDEX", description="基准指数 (000001.INDEX / 399001.INDEX / 399006.INDEX)"),
 ) -> dict[str, Any]:
     """Stock NAV vs benchmark NAV with 10/20/60-day window return comparison."""
     repo = request.app.state.repo

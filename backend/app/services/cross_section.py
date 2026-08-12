@@ -43,11 +43,11 @@ logger = logging.getLogger(__name__)
 # ── Constants ─────────────────────────────────────────────────────────────
 
 _WINDOW_CHOICES = (60, 120, 180)
-_BENCHMARKS = ("000001.SH", "399001.SZ", "399006.SZ")
+_BENCHMARKS = ("000001.INDEX", "399001.INDEX", "399006.INDEX")
 _BENCHMARK_LABELS = {
-    "000001.SH": "上证指数",
-    "399001.SZ": "深证成指",
-    "399006.SZ": "创业板指",
+    "000001.INDEX": "上证指数",
+    "399001.INDEX": "深证成指",
+    "399006.INDEX": "创业板指",
 }
 _RS_WINDOWS = (10, 20, 60)
 _FLAT_VAR_THRESHOLD = 1e-12
@@ -623,9 +623,11 @@ def compute_relative_strength(
     symbol: str,
     *,
     days: int = 120,
-    benchmark: str = "000001.SH",
+    benchmark: str = "000001.INDEX",
 ) -> dict[str, Any]:
     """Stock NAV vs benchmark NAV with 10/20/60-day window return comparison."""
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+    benchmark = canonical_index_symbol(benchmark)
     _require_range(days, "days", 30, 250)
     if benchmark not in _BENCHMARKS:
         raise ValueError(f"benchmark must be one of {list(_BENCHMARKS)}")
