@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -149,7 +151,7 @@ class FormulaFeaturizer:
             unigrams[token_id] += 1.0 / length
         bigrams = np.zeros((self.vocab_size, self.vocab_size), dtype=float)
         denominator = max(1, length - 1)
-        for left, right in zip(ids, ids[1:]):
+        for left, right in itertools.pairwise(ids):
             bigrams[left, right] += 1.0 / denominator
         first = np.zeros(self.vocab_size, dtype=float)
         last = np.zeros(self.vocab_size, dtype=float)
@@ -300,7 +302,7 @@ def top_k_metrics(
         raise ValueError("fraction must be within (0, 1]")
     y = np.asarray(actual, dtype=float)
     p = np.asarray(predicted, dtype=float)
-    count = max(1, int(math.ceil(len(y) * fraction)))
+    count = max(1, math.ceil(len(y) * fraction))
     selected = np.argsort(p, kind="mergesort")[-count:]
     oracle = np.argsort(y, kind="mergesort")[-count:]
     selected_mean = float(np.mean(y[selected]))

@@ -86,7 +86,7 @@ def test_tradable_matches_legacy_suspension_rules():
         _row("D", 0, 0, volume=100),
     ])
     matrix = build_market_matrix(panel, None, None)
-    tradable = dict(zip(matrix.symbols, matrix.tradable[0].tolist()))
+    tradable = dict(zip(matrix.symbols, matrix.tradable[0].tolist(), strict=False))
     assert tradable == {"A": 1, "B": 0, "C": 1, "D": 0}
 
 

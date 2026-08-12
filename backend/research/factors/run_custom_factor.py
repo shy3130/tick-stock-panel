@@ -14,7 +14,6 @@ from app.backtest.worker import make_worker_task, run_worker_task
 from app.config import settings
 from research.paths import FACTOR_ARTIFACTS_DIR
 
-
 # 目标窗口（与历史研究一致）+ 一段普跌段看稳健性
 WINDOWS = [
     ("2026-03-24", "2026-06-24", "结构牛(目标)"),

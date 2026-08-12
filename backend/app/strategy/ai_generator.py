@@ -397,9 +397,12 @@ META = {{...}}，{entrypoint_requirement}。只输出完整 Python 代码。
                 mod = node.module or ""
                 if not _module_allowed(mod):
                     raise ValueError(f"禁止 from {node.module} import (不在策略安全白名单)")
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id in forbidden_calls:
-                    raise ValueError(f"禁止调用 {node.func.id}()")
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in forbidden_calls
+            ):
+                raise ValueError(f"禁止调用 {node.func.id}()")
             # 拦截 dunder 属性访问: x.__globals__ / ().__class__ 等
             if isinstance(node, ast.Attribute) and node.attr in forbidden_dunder_attrs:
                 raise ValueError(f"禁止访问属性 {node.attr} (策略不允许 dunder 遍历逃逸)")

@@ -11,16 +11,16 @@ P2 落地：龙头指数趋势(leader-index trend) regime 过滤的回测层验�
   严格不重新寻优：直接套用 mp=5 稳健 / mp=1 单只集中，在 8 段 walk-forward 窗口 + 目标窗口上验证。
 数据：全部来自 data/，宽表复用 .regime_cache；不改策略源码。
 """
-import json
 import glob
+import json
 import time
 from datetime import date as _date
 
 import polars as pl
 
-from app.config import settings
 from app.backtest.strategy import StrategyBacktestConfig
 from app.backtest.worker import make_worker_task, run_worker_task
+from app.config import settings
 from research.paths import DATA_DIR, REGIME_ARTIFACTS_DIR
 
 # ---- 可调参数 ----
@@ -69,10 +69,9 @@ def compute_leader_index(wide):
         level = ld["level"].to_list()
         ma = ld["ma60"].to_list()
         regime = {d: (lv is not None and mv is not None and lv > mv)
-                  for d, lv, mv in zip(dates, level, ma)}
+                  for d, lv, mv in zip(dates, level, ma, strict=False)}
         return dates, level, ma, regime, float(pl.Series(level).count())
 
-    syms = [c for c in wide.columns if c != "date"]
     long = wide.unpivot(index="date", variable_name="symbol", value_name="close").sort(["date", "symbol"])
     # 日收益（用于构建指数）
     long = long.with_columns(
@@ -95,7 +94,6 @@ def compute_leader_index(wide):
     # 指数净值
     lead = lead.with_columns(
         (1.0 + pl.col("leader_ret")).cum_prod().alias("level"))
-    level_series = lead["level"]
     ma_series = lead["level"].rolling_mean(MA_WIN)
     lead = lead.with_columns(ma_series.alias("ma60"))
     # regime：用 d-1 信息（level[d-1] > ma60[d-1]），warmup(ma60 为空)默认 True 不过滤
@@ -138,7 +136,6 @@ def run_engine(sid, max_positions, position_sizing, start, end):
 def simulate(trades, wide, rets, regime, gate, max_positions):
     dates = wide["date"].to_list()
     date_pos = {d: i for i, d in enumerate(dates)}
-    syms = [c for c in wide.columns if c != "date"]
     openw = {}
     ret_map = {}
     used = dropped = 0
@@ -156,7 +153,7 @@ def simulate(trades, wide, rets, regime, gate, max_positions):
         used += 1
         seg = rets.filter((pl.col("date") >= ed) & (pl.col("date") <= xd)).select("date", t["symbol"])
         dl, rl = seg["date"].to_list(), seg[t["symbol"]].to_list()
-        for d, r in zip(dl, rl):
+        for d, r in zip(dl, rl, strict=False):
             ret_map[(d, t["symbol"])] = r if r is not None else 0.0
         w = t.get("position_pct") or (1.0 / max_positions)
         s, e = date_pos[ed], date_pos[xd]
@@ -199,7 +196,7 @@ def regime_up_ratio(regime, s, e):
 def main():
     t0 = time.time()
     wide, rets = build_wide()
-    dates, level, ma, regime, _ = compute_leader_index(wide)
+    dates, level, _ma, regime, _ = compute_leader_index(wide)
     lret = leader_full_return(dates, level)
     print(f"[setup] 龙头指数全区间={pct(lret)} 牛市区占比(整体)={pct(regime_up_ratio(regime, dates[0].isoformat() if hasattr(dates[0],'isoformat') else dates[0], dates[-1].isoformat() if hasattr(dates[-1],'isoformat') else dates[-1]))}", flush=True)
 
@@ -214,7 +211,7 @@ def main():
         if err:
             print(f"  [FAIL] mp5 {s}~{e}: {err}", flush=True)
             continue
-        unf, u, d = simulate(trades, wide, rets, regime, False, 5)
+        unf, _, _ = simulate(trades, wide, rets, regime, False, 5)
         gat, u2, d2 = simulate(trades, wide, rets, regime, True, 5)
         up = regime_up_ratio(regime, s, e)
         print(f"  mp5 {s}~{e}: 不过滤={pct(unf)} 门控={pct(gat)} "
@@ -228,7 +225,7 @@ def main():
     ts, te = TARGET
     trades, err = run_engine("pullback_to_support", 1, "score_weight", ts, te)
     if not err:
-        unf, u, d = simulate(trades, wide, rets, regime, False, 1)
+        unf, _u, _d = simulate(trades, wide, rets, regime, False, 1)
         gat, u2, d2 = simulate(trades, wide, rets, regime, True, 1)
         up = regime_up_ratio(regime, ts, te)
         print(f"  mp1 {ts}~{te}: 不过滤={pct(unf)} 门控={pct(gat)} "

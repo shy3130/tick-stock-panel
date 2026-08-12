@@ -1039,7 +1039,7 @@ def run_pipeline(data_dir: Path | None = None,
     instruments = pl.DataFrame()
     try:
         instruments = scan_parquet_compat(inst_glob, cast_options=_cast).collect()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("instruments 读取失败: %s", e)
     historical_shares = load_share_history(d)
 
@@ -1067,7 +1067,7 @@ def run_pipeline(data_dir: Path | None = None,
             raw_new = scan_daily_parquet(new_date_dirs[0] / "*.parquet", cast_options=_cast)
             for nd in new_date_dirs[1:]:
                 raw_new = pl.concat([raw_new, scan_daily_parquet(nd / "*.parquet", cast_options=_cast)], how="diagonal_relaxed")
-            raw_new = raw_new.sort(["symbol", "date"]).collect(streaming=True)
+            raw_new = raw_new.sort(["symbol", "date"]).collect(engine="streaming")
 
             # 增量模式: 只算新日期, 但指标需要历史窗口
             # 读已有 enriched 最近 60 天作为历史前缀
@@ -1121,7 +1121,7 @@ def run_pipeline(data_dir: Path | None = None,
             sym_set = set(symbols)
             raw_sym = scan_daily_parquet(daily_glob, cast_options=_cast).sort(["symbol", "date"])
             raw_sym = raw_sym.filter(pl.col("symbol").is_in(list(sym_set)))
-            raw_sym = raw_sym.collect(streaming=True)
+            raw_sym = raw_sym.collect(engine="streaming")
             if not raw_sym.is_empty():
                 factors_sym = factors.filter(pl.col("symbol").is_in(list(sym_set))) if not factors.is_empty() else factors
                 inst_sym = instruments.filter(pl.col("symbol").is_in(list(sym_set))) if not instruments.is_empty() else instruments
@@ -1172,7 +1172,7 @@ def run_pipeline(data_dir: Path | None = None,
 
     all_symbols = (
         lf_all.select("symbol").unique().sort("symbol")
-        .collect(streaming=True)["symbol"].to_list()
+        .collect(engine="streaming")["symbol"].to_list()
     )
     if not all_symbols:
         logger.info("无日K数据, 跳过管道")
@@ -1203,7 +1203,7 @@ def run_pipeline(data_dir: Path | None = None,
         # 只读取本批 symbol 的数据
         lf_batch = scan_daily_parquet(daily_glob, cast_options=_cast)
         lf_batch = lf_batch.filter(pl.col("symbol").is_in(batch_syms))
-        raw = lf_batch.sort(["symbol", "date"]).collect(streaming=True)
+        raw = lf_batch.sort(["symbol", "date"]).collect(engine="streaming")
 
         if raw.is_empty():
             continue
@@ -1303,7 +1303,7 @@ def _load_factors(factor_path: Path) -> pl.DataFrame:
         return pl.DataFrame()
     try:
         return pl.read_parquet(factor_path)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("复权因子读取失败: %s", e)
         return pl.DataFrame()
 
@@ -1318,7 +1318,7 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
 
     try:
         lf = (
-            scan_enriched_parquet(str(enriched_base / "**" / "*.parquet"), cast_options=_cast)
+            scan_enriched_parquet(str(enriched_base / "**" / "*.parquet"))
             .filter(
                 (pl.col("symbol").is_in(symbols))
                 & (pl.col("date") >= cutoff)
@@ -1329,7 +1329,7 @@ def _load_recent_history(enriched_base: Path, symbols: list[str], days: int) -> 
                                  "volume", "amount", "raw_close", "raw_high", "raw_low"]
                     if c in lf.schema]
         return lf.select(hist_cols).collect()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("历史数据加载失败: %s", e)
         return pl.DataFrame()
 
@@ -1518,10 +1518,7 @@ def compute_enriched_today(
     # _vol_ma5_prev_sum 是前5个交易日成交量之和(tail(5)), 不含当天
     # 盘中 volume 是部分量, 按 elapsed_minutes 折算到全天量级
     vol_ma5_prev = pl.col("_vol_ma5_prev_sum") / 5  # 前5日均量(不含当天)
-    if elapsed_minutes and elapsed_minutes > 0:
-        time_factor = 240.0 / elapsed_minutes  # 盘中折算: 部分量 → 全天量级
-    else:
-        time_factor = 1.0  # 盘后/无效时间: 不折算(此时 volume 已是全天量)
+    time_factor = 240.0 / elapsed_minutes if elapsed_minutes and elapsed_minutes > 0 else 1.0
     df = df.with_columns([
         vol_ma5.alias("vol_ma5"),
         vol_ma10.alias("vol_ma10"),
@@ -1700,14 +1697,17 @@ def _compute_limit_signals_today(df: pl.DataFrame, instruments: pl.DataFrame) ->
     df = df.join(inst_subset, on="symbol", how="left", suffix="_inst")
 
     # 换手率: API 有则直接用, 无则从 float_shares 计算
-    if "turnover_rate" not in df.columns:
-        if "float_shares" in df.columns and "volume" in df.columns:
-            df = df.with_columns(
-                pl.when(pl.col("float_shares") > 0)
-                  .then(pl.col("volume") * 10000.0 / pl.col("float_shares"))
-                  .otherwise(None)
-                  .alias("turnover_rate")
-            )
+    if (
+        "turnover_rate" not in df.columns
+        and "float_shares" in df.columns
+        and "volume" in df.columns
+    ):
+        df = df.with_columns(
+            pl.when(pl.col("float_shares") > 0)
+              .then(pl.col("volume") * 10000.0 / pl.col("float_shares"))
+              .otherwise(None)
+              .alias("turnover_rate")
+        )
 
     # 涨跌停 (用 raw_close / raw_high 和前一日原始收盘价)
     # 优先用 API 原始前收盘价, 回退到 close_right, 最后回退到 raw_close

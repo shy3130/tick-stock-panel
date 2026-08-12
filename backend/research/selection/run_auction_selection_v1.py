@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import polars as pl
+
 from research.paths import DATA_DIR, SELECTION_ARTIFACTS_DIR, ensure_artifact_dirs
 from research.selection.auction import AuctionOverlayConfig, apply_auction_overlay
 from research.selection.auction_data import fetch_auction_snapshot
-
 
 ASIA_SHANGHAI = ZoneInfo("Asia/Shanghai")
 BASE_JSON = SELECTION_ARTIFACTS_DIR / "selection_logic_v1.json"

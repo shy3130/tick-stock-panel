@@ -56,7 +56,7 @@ class JsonReportStore:
             data = json.loads(p.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 return sorted(data, key=lambda r: r.get("created_at", ""), reverse=True)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("%s malformed: %s", self.filename, e)
         return []
 

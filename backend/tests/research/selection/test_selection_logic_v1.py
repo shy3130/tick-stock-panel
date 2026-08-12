@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import numpy as np
@@ -166,7 +166,7 @@ def test_news_overlay_excludes_future_and_deduplicates() -> None:
     ]
     result = news_scores_as_of(
         records,
-        as_of=datetime(2026, 8, 7, 8, 0, tzinfo=timezone.utc),
+        as_of=datetime(2026, 8, 7, 8, 0, tzinfo=UTC),
     )
     assert result["000001.SZ"]["score"] == pytest.approx(0.8)
     assert result["000001.SZ"]["event_count"] == 1

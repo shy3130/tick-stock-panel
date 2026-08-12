@@ -15,13 +15,13 @@
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import socket
 import sys
 import threading
 import time
 import traceback
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def _ensure_data_dir_writable() -> None:
         probe = data_root / ".write_probe"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("数据目录不可写, 桌面版无法运行: %s (%s)", data_root, e)
         raise
 
@@ -63,7 +63,7 @@ def _acquire_single_instance() -> bool:
         try:
             pid_str = lock_path.read_text(encoding="utf-8").strip()
             pid = int(pid_str) if pid_str.isdigit() else None
-        except Exception:  # noqa: BLE001
+        except Exception:
             pid = None
 
         if pid is not None and _pid_alive(pid):
@@ -80,10 +80,8 @@ def _release_single_instance() -> None:
     from app.config import settings
 
     lock_path = settings.data_dir / ".desktop.lock"
-    try:
+    with contextlib.suppress(Exception):
         lock_path.unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _guard_streams() -> None:
@@ -100,7 +98,6 @@ def _guard_streams() -> None:
     修法: console=False 下把 stdout/stderr 换成丢弃写入的空对象 (devnull),
     让 logging / reconfigure / 任何 print 都安全落地。console=True 不动 (有真控制台)。
     """
-    import os
 
     class _NullStream:
         """丢弃所有写入的空流 (替代 None 的 stdout/stderr)。"""
@@ -143,7 +140,7 @@ def _setup_logging() -> None:
             logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
         )
         logging.getLogger().addHandler(handler)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # 日志落盘失败不阻断启动 (开发模式 data_dir 可能不可写)
         logger.warning("日志文件初始化失败, 仅输出到 stderr: %s", e)
 
@@ -162,7 +159,7 @@ def _show_crash(title: str, text: str) -> None:
             import ctypes
 
             ctypes.windll.user32.MessageBoxW(0, text, title, 0x10)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("弹框失败 (已写日志文件): %s", e)
     else:
         logger.error("%s: %s", title, text)
@@ -251,8 +248,8 @@ def _wait_for_server(port: int, timeout: float = 60.0) -> bool:
 
     比 monkey-patch uvicorn 内部方法更健壮, 不依赖版本内部实现。
     """
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.monotonic() + timeout
@@ -271,7 +268,7 @@ def _open_window(url: str) -> None:
     """主线程：用 pywebview 打开 OpenAPI 文档窗口。"""
     import webview  # type: ignore[import-not-found]
 
-    window = webview.create_window(
+    _window = webview.create_window(
         _APP_NAME,
         url,
         width=1440,

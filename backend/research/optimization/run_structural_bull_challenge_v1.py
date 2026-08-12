@@ -30,7 +30,6 @@ from research.optimization.run_core_strategy_walkforward_v1 import BACKTEST_KWAR
 from research.paths import DATA_DIR, OPTIMIZATION_ARTIFACTS_DIR, ensure_artifact_dirs
 from scripts.run_mvp import select_universe
 
-
 OUT = OPTIMIZATION_ARTIFACTS_DIR / "structural_bull_challenge_v1.json"
 STRATEGY_ID = "bullish_alignment"
 WIN_RATE_TARGET = 0.60

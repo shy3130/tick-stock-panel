@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from research.alphagpt.environment import STOP_ACTION, AlphaEnvConfig
+from research.alphagpt.pool import formula_hash
 from research.alphagpt.rollouts import (
     collect_p10_evolution_rollouts,
     replay_teacher_formula,
 )
-from research.alphagpt.pool import formula_hash
 
 
 def _candidate(

@@ -178,7 +178,7 @@ def main():
     symbols = select_universe()
     print(f"[regime-cond] universe = {len(symbols)} 只 (seed={SEED})", flush=True)
     folds = fold_dates()
-    print(f"[regime-cond] 折叠: " + ", ".join(
+    print("[regime-cond] 折叠: " + ", ".join(
         f"{fid}:{te0}~{te1}" for fid, _, _, te0, te1 in folds), flush=True)
 
     fold_records = []
@@ -206,8 +206,11 @@ def main():
             r = next((x for x in fr["runs"] if x.get("key") == key and "error" not in x), None)
             if not r:
                 continue
-            rets.append(r["total_return"]); shps.append(r["sharpe"])
-            mdds.append(r["max_drawdown"]); wins.append(r["win_rate"]); ntr.append(r["n_trades"])
+            rets.append(r["total_return"])
+            shps.append(r["sharpe"])
+            mdds.append(r["max_drawdown"])
+            wins.append(r["win_rate"])
+            ntr.append(r["n_trades"])
             if r["total_return"] > 0:
                 pos += 1
         agg[key] = {

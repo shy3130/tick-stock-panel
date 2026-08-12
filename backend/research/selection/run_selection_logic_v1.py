@@ -27,7 +27,6 @@ from research.paths import DATA_DIR, SELECTION_ARTIFACTS_DIR, ensure_artifact_di
 from research.selection.audit import build_decision_rows
 from scripts.run_mvp import select_universe
 
-
 OUT = SELECTION_ARTIFACTS_DIR / "selection_logic_v1.json"
 AUDIT_CSV = SELECTION_ARTIFACTS_DIR / "selection_logic_v1_latest_audit.csv"
 BASELINE_ID = "bullish_alignment"

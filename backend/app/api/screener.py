@@ -1,15 +1,15 @@
 """Screener API。"""
 from __future__ import annotations
 
+import contextlib
 import glob as _glob
 import logging
 import math
 import os
-import re
 import time
 from dataclasses import asdict
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -27,19 +27,19 @@ router = APIRouter(prefix="/api/screener", tags=["screener"])
 
 class CustomRequest(BaseModel):
     conditions: list[str]
-    order_by: Optional[str] = None
+    order_by: str | None = None
     limit: int = 30
-    pool: Optional[list[str]] = None
-    as_of: Optional[date] = None
-    ext_columns: Optional[str] = None
+    pool: list[str] | None = None
+    as_of: date | None = None
+    ext_columns: str | None = None
     asset_type: str = "stock"
 
 
 class PresetRequest(BaseModel):
     strategy_id: str
-    pool: Optional[list[str]] = None
-    as_of: Optional[date] = None
-    ext_columns: Optional[str] = None
+    pool: list[str] | None = None
+    as_of: date | None = None
+    ext_columns: str | None = None
     asset_type: str = "stock"
     timeframe: str = "1d"
 
@@ -89,7 +89,7 @@ def _safe_ext_value(value: Any) -> Any:
 _ext_value_map_cache: dict[tuple[str, str], tuple[Any, dict[str, Any]]] = {}
 
 
-def _ext_parquet_signature(cfg, data_dir) -> Optional[tuple]:
+def _ext_parquet_signature(cfg, data_dir) -> tuple | None:
     """该扩展配置底层 parquet 文件的 (路径, mtime) 签名; 出错返回 None (禁用缓存)。"""
     try:
         from app.api.ext_data import _parquet_glob
@@ -98,11 +98,11 @@ def _ext_parquet_signature(cfg, data_dir) -> Optional[tuple]:
         if not files:
             return None
         return tuple((f, os.path.getmtime(f)) for f in files)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
-def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str, Any]]:
+def _load_ext_value_maps(repo, ext_columns: str | None) -> dict[str, dict[str, Any]]:
     """按请求加载扩展列，返回 {输出列名: {symbol: value}}。
 
     策略结果缓存是共享文件，不能被不同 ext_columns 组合污染；因此扩展列只在
@@ -157,13 +157,13 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
             value_maps[out_col] = vmap
             if cfg and sig is not None:
                 _ext_value_map_cache[cache_key] = (sig, vmap)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("screener ext column join skipped for %s.%s: %s", config_id, field_name, e)
 
     return value_maps
 
 
-def _row_with_ext(row: dict, ext_values: dict[str, dict[str, Any]], symbol: Optional[str] = None) -> dict:
+def _row_with_ext(row: dict, ext_values: dict[str, dict[str, Any]], symbol: str | None = None) -> dict:
     next_row = dict(row)
     sym = symbol or next_row.get("symbol")
     for out_col, value_map in ext_values.items():
@@ -348,7 +348,7 @@ def _cached_with_realtime(request: Request) -> dict:
 @router.get("/cached")
 def get_cached(
     request: Request,
-    ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+    ext_columns: str | None = Query(None, description="逗号分隔: config_id.field_name"),
 ):
     """读取策略结果缓存, 并叠加监控引擎本轮实时算出的结果。
 
@@ -405,7 +405,7 @@ def get_cached_summary(request: Request):
 def get_cached_result(
     strategy_id: str,
     request: Request,
-    ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+    ext_columns: str | None = Query(None, description="逗号分隔: config_id.field_name"),
 ):
     """按需返回单个策略的完整明细及其今日失效行。"""
     cached = _cached_with_realtime(request)
@@ -495,7 +495,7 @@ def market_snapshot(request: Request):
 
 
 @router.post("/run_all")
-def run_all(request: Request, body: Optional[dict] = None):
+def run_all(request: Request, body: dict | None = None):
     """批量运行指定策略；注册、路由和执行均由 StrategyEngine 负责。"""
     from datetime import date as date_type
 
@@ -582,10 +582,8 @@ def run_all(request: Request, body: Optional[dict] = None):
 
     # 写入策略缓存 (供页面秒加载)
     if results:
-        try:
+        with contextlib.suppress(Exception):
             strategy_cache.write_cache(data_dir, str(as_of), results)
-        except Exception:  # noqa: BLE001
-            pass
 
     if body.get("summary_only"):
         return {
@@ -603,9 +601,9 @@ def run_all(request: Request, body: Optional[dict] = None):
 @router.get("/limit-ladder")
 def limit_ladder(
     request: Request,
-    as_of: Optional[date] = None,
+    as_of: date | None = None,
     direction: str = Query("up", description="up=涨停梯队 | down=跌停梯队"),
-    ext_columns: Optional[str] = Query(None, description="逗号分隔: config_id.field_name"),
+    ext_columns: str | None = Query(None, description="逗号分隔: config_id.field_name"),
 ):
     """连板/连跌梯队 — 按连板数分组, 含三状态。
     返回: tiers = [{ boards, count, stocks: [{symbol,name,change_pct,status,...}] }]
@@ -745,7 +743,7 @@ def limit_ladder(
                         & (pl.col("_sealed") == True)  # noqa: E712
                     ).then(pl.lit("real"))
                     .when(
-                        (pl.col("_sealed") == False)  # noqa: E712
+                        pl.col("_sealed") == False  # noqa: E712
                     ).then(pl.lit("fake"))
                     .when(
                         (pl.col("status") == status_main)
@@ -809,7 +807,7 @@ def limit_ladder(
                         pass
 
     # 选择输出列
-    cols = ["symbol", "name", "close", "change_pct", "boards", "status", consec_col, "sealed_status", "sealed_vol", "is_one_word"] + ext_col_names
+    cols = ["symbol", "name", "close", "change_pct", "boards", "status", consec_col, "sealed_status", "sealed_vol", "is_one_word", *ext_col_names]
     df = df.select([c for c in cols if c in df.columns])
     # 排序: boards 降序, status 按主状态→炸/翘→断/止
     status_order = pl.when(pl.col("status") == status_main).then(0)

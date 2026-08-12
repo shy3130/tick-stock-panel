@@ -25,13 +25,12 @@ import math
 import os
 import threading
 import time
-from datetime import date, time as dt_time
-
-from app.market_time import cn_now, cn_today
-from pathlib import Path
+from datetime import date
+from datetime import time as dt_time
 
 import polars as pl
 
+from app.market_time import cn_now, cn_today
 from app.tickflow.capabilities import Cap
 from app.tickflow.rate_limits import (
     apply_safety_rpm,
@@ -111,7 +110,7 @@ class DepthService:
         logger.info("depth sealed: 启动补跑今天定版")
         try:
             self.finalize()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("depth sealed 启动补跑失败: %s", e)
 
     def _restore_from_parquet(self, d: date) -> None:
@@ -142,7 +141,7 @@ class DepthService:
                 self._sealed_date = d
                 self._persisted_date = d
             logger.info("depth sealed: 从 parquet 恢复 %d 只 (日期=%s)", len(cache), d)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("depth sealed 从 parquet 恢复失败: %s", e)
 
     def start_polling(self) -> None:
@@ -189,7 +188,7 @@ class DepthService:
             with self._lock:
                 count = len(self._sealed_cache)
             return {"ok": True, "count": count, "msg": f"已修正 {count} 只"}
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("depth run_once 失败: %s", e)
             return {"ok": False, "count": 0, "msg": f"修正失败: {e}"}
 
@@ -301,7 +300,7 @@ class DepthService:
                 data = tf.depth.batch(chunk)
                 if isinstance(data, dict):
                     result.update(data)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("depth.batch 第 %d 批失败(%d 只): %s", i + 1, len(chunk), e)
                 # 单批失败不影响其他批
         return result
@@ -409,7 +408,7 @@ class DepthService:
             return {}
         try:
             df = pl.read_parquet(out)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("depth5 parquet 读取失败: %s", e)
             return {}
         sealed_key = "sealed_down" if is_down else "sealed_up"
@@ -454,7 +453,7 @@ class DepthService:
                     self._poll_once()
                 else:
                     logger.debug("depth sealed: 非连续竞价时段, 跳过(避免集合竞价盘口覆盖 11:30 定格值)")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning("depth sealed 轮询异常: %s", e)
 
             # 等待下一轮(用 _running 检查保证能及时退出)
@@ -563,7 +562,7 @@ class DepthService:
         }
         try:
             qs.push_alerts([alert])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("depth 接管通知推送失败: %s", e)
 
     def _notify_depth_updated(self, count: int) -> None:
@@ -575,7 +574,7 @@ class DepthService:
             return
         try:
             qs.notify_depth_updated()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("depth 更新通知推送失败: %s", e)
 
     # ================================================================

@@ -6,7 +6,8 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as dt_time
 
 CN_TZ = timezone(timedelta(hours=8))
 

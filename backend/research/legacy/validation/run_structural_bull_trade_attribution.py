@@ -9,12 +9,11 @@
 数据：从 data/ 实时回测（无需重新拉数据）。
 """
 import json
-import statistics
 from datetime import date as _date
 
-from app.config import settings
 from app.backtest.strategy import StrategyBacktestConfig
 from app.backtest.worker import make_worker_task, run_worker_task
+from app.config import settings
 from research.paths import VALIDATION_ARTIFACTS_DIR
 
 START, END = "2026-03-24", "2026-06-24"
@@ -139,7 +138,6 @@ def main():
         L.append("")
         L.append("| 月份 | 月收益 | 月初净值 | 月末净值 |")
         L.append("|---|---|---|---|")
-        cum = 1.0
         for m in r["monthly"]:
             L.append(f"| {m['month']} | {pct(m['return'])} | {m['start']:,.0f} | {m['end']:,.0f} |")
         L.append(f"| **整段** | **{pct(r['total_return'])}** | 1,000,000 | {r['final_equity']:,.0f} |")

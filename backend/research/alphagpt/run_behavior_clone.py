@@ -18,8 +18,8 @@ from research.alphagpt.behavior_clone import (
     load_behavior_examples,
 )
 from research.alphagpt.environment import AlphaEnv, AlphaEnvConfig
-from research.alphagpt.pool import FactorPool, formula_hash
 from research.alphagpt.policy import MaskedLogitPolicy, RandomTokenPolicy
+from research.alphagpt.pool import FactorPool, formula_hash
 from research.alphagpt.reward import RobustReward, RobustRewardConfig
 from research.alphagpt.rollouts import run_policy_episode
 from research.alphagpt.run_alphagpt_v1 import FoldSpec, TrainingEvaluator, load_fold_dataset

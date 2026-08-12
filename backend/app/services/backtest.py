@@ -25,7 +25,7 @@ _vbt = None
 _vbt_unavailable_reason: str | None = None
 
 
-class VectorbtUnavailable(RuntimeError):
+class VectorbtUnavailable(RuntimeError):  # noqa: N818 - public compatibility name
     """vectorbt 未安装 — 提示用户 `uv sync --extra backtest`."""
 
 
@@ -147,7 +147,7 @@ class BacktestService:
                 .sort(["date", "symbol"])
                 .collect()
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("backtest load failed: %s", e)
             return pd.DataFrame()
 
@@ -282,7 +282,7 @@ class BacktestService:
                 pf_kwargs["exits"] = (exits | exits_idx).astype(bool)
 
             pf = vbt.Portfolio.from_signals(**pf_kwargs)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("vectorbt backtest failed")
             return BacktestResult(
                 run_id=run_id,
@@ -301,7 +301,7 @@ class BacktestService:
                 stats_dict = stats_series.mean(numeric_only=True).to_dict()
             else:
                 stats_dict = stats_series.to_dict()
-        except Exception:  # noqa: BLE001
+        except Exception:
             stats_dict = {}
 
         # 净值曲线(组合平均)
@@ -328,7 +328,7 @@ class BacktestService:
                 }
                 for t in trades
             ]
-        except Exception:  # noqa: BLE001
+        except Exception:
             trades = []
 
         # 每标的统计
@@ -339,7 +339,7 @@ class BacktestService:
                 for sym, ret in total_ret.items():
                     if pd.notna(ret):
                         per_symbol.append({"symbol": sym, "total_return": float(ret)})
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         result = BacktestResult(

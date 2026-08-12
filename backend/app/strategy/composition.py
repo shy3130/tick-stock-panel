@@ -6,13 +6,13 @@ and the backtest service.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 import numpy as np
 
 from app.backtest.matrix import SignalMatrix, make_signal_matrix, validate_signal_matrix
-
 
 EntryMode = Literal["and", "or", "regime_switch"]
 
@@ -46,7 +46,7 @@ class StrategyComposition:
         payload: Mapping[str, Any],
         *,
         primary_strategy_id: str,
-    ) -> "StrategyComposition":
+    ) -> StrategyComposition:
         if not isinstance(payload, Mapping):
             raise ValueError("composition must be an object")
         unknown = set(payload) - {"components", "entry_mode", "score_mode", "regime"}
@@ -257,7 +257,7 @@ def compose_signal_matrices(
 
     weight_total = sum(component.weight for component in composition.components)
     combined_score = np.zeros(shape, dtype=np.float32)
-    for signal, component, eligible in zip(signals, composition.components, entries):
+    for signal, component, eligible in zip(signals, composition.components, entries, strict=False):
         ranked = _cross_sectional_percentile(signal.score, eligible)
         combined_score += ranked * np.float32(component.weight / weight_total)
     combined_score[~combined_entry] = np.float32(0.0)

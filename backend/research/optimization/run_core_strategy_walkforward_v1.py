@@ -26,7 +26,6 @@ from app.strategy.engine import StrategyEngine
 from research.common.universe import stable_symbol_sample, universe_manifest
 from research.paths import DATA_DIR, OPTIMIZATION_ARTIFACTS_DIR, ensure_artifact_dirs
 
-
 OUT = OPTIMIZATION_ARTIFACTS_DIR / "core_strategy_walkforward_v1.json"
 START = date(2024, 9, 24)
 END = date(2026, 6, 30)

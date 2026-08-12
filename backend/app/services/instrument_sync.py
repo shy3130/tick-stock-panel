@@ -63,7 +63,7 @@ def _fetch_instruments_via_provider() -> list[dict] | None:
         return None
     try:
         items = provider.get_instruments("stock") or []
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("provider %s get_instruments 失败: %s", provider_name, e)
         return None
     rows = _flatten_instruments(items)

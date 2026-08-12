@@ -309,6 +309,7 @@ def _compute_batch(repo, enriched_dir, instruments, historical_shares,
     返回目标区间(不含 warmup)的含指标列 DataFrame。
     """
     from datetime import timedelta
+
     from app.indicators.pipeline import compute_indicators, compute_limit_signals
     warmup_start = batch_start - timedelta(days=warmup_days)
     df = pl.scan_parquet(enriched_dir / "**" / "*.parquet").filter(
@@ -346,7 +347,7 @@ def _scan_enriched_fallback(repo, start: date, end: date) -> pl.DataFrame | None
         from app.services import preferences
         batch_days = preferences.get_regime_batch_days()
         warmup_days = preferences.get_regime_warmup_days()
-    except Exception:  # noqa: BLE001
+    except Exception:
         batch_days = _REGIME_BATCH_DAYS_DEFAULT
         warmup_days = _REGIME_WARMUP_DAYS_DEFAULT
 
@@ -384,7 +385,7 @@ def _scan_enriched_fallback(repo, start: date, end: date) -> pl.DataFrame | None
         if not parts:
             return None
         return pl.concat(parts, how="vertical_relaxed")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("regime scan_enriched_fallback failed: %s", e)
         return None
 
@@ -396,7 +397,7 @@ def _load_index_pct(repo, start: date, end: date, symbol: str = "000001.SH") -> 
         if df.is_empty() or "change_pct" not in df.columns:
             return {}
         return {r["date"]: float(r["change_pct"] or 0) for r in df.iter_rows(named=True)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("regime load_index_pct failed: %s", e)
         return {}
 
@@ -441,7 +442,7 @@ def load_regime_history(data_dir: Path) -> pl.DataFrame:
         return pl.DataFrame()
     try:
         return pl.read_parquet(p)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("load_regime_history failed: %s", e)
         return pl.DataFrame()
 

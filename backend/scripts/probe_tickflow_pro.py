@@ -171,13 +171,13 @@ def run_live(
     try:
         raw = tf.klines.batch(list(GOLDEN), period="1d", count=5, as_dataframe=False)
         samples["klines.batch.1d"] = _to_sample(raw)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         errors.append(f"klines.batch.1d: {type(exc).__name__}")
 
     try:
         raw = tf.quotes.get(symbols=list(GOLDEN), as_dataframe=False)
         samples["quotes.get"] = _to_sample(raw)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         errors.append(f"quotes.get: {type(exc).__name__}")
 
     report = {

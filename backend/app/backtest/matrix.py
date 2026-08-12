@@ -12,7 +12,7 @@ import uuid
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date
@@ -1289,16 +1289,12 @@ def _mask_unseen_staging_fields(
 
 def _close_matrix_memmaps(mapped: list[np.memmap]) -> None:
     for values in reversed(mapped):
-        try:
+        with suppress(OSError, ValueError):
             values.flush()
-        except (OSError, ValueError):
-            pass
         mmap_obj = getattr(values, "_mmap", None)
         if mmap_obj is not None:
-            try:
+            with suppress(OSError, ValueError):
                 mmap_obj.close()
-            except (OSError, ValueError):
-                pass
 
 
 def _scan_matrix_values(
@@ -1585,9 +1581,11 @@ def _find_covering_matrix_cache(
                 continue
             if manifest.get("instrument_fingerprint") != instrument_fingerprint:
                 continue
-            if source_generation is not None:
-                if manifest.get("source_generation") != source_generation:
-                    continue
+            if (
+                source_generation is not None
+                and manifest.get("source_generation") != source_generation
+            ):
+                continue
             cached_start = date.fromisoformat(str(manifest["coverage_start"]))
             cached_end = date.fromisoformat(str(manifest["coverage_end"]))
             if cached_start > start or cached_end < end:
@@ -3502,9 +3500,7 @@ def _estimate_pipeline_cache_bytes(
     for name in feature_names:
         if name in {"open", "high", "low", "close", "volume"} or name in market.fields:
             continue
-        if name == "vol_ratio_5d":
-            estimated += 2 * float_bytes
-        elif name == "ma20_bias":
+        if name == "vol_ratio_5d" or name == "ma20_bias":
             estimated += 2 * float_bytes
         elif name == "change_pct" or (
             name.startswith("momentum_") and name.endswith("d")

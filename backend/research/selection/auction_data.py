@@ -9,7 +9,6 @@ import polars as pl
 from research.paths import DATA_DIR
 from scripts.tushare_sync import TushareClient, _frame_from_tushare
 
-
 AUCTION_FIELDS = (
     "ts_code,trade_date,vol,price,amount,pre_close,turnover_rate,volume_ratio,float_share"
 )

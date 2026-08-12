@@ -22,7 +22,6 @@ from app.strategy.specialized.first_board_second_day_v1 import (
 from research.paths import DATA_DIR, SELECTION_ARTIFACTS_DIR, ensure_artifact_dirs
 from research.selection.auction_data import load_or_fetch_auction_snapshot
 
-
 ASIA_SHANGHAI = ZoneInfo("Asia/Shanghai")
 _RISK_NAME = re.compile(r"ST|\*ST|退", re.IGNORECASE)
 

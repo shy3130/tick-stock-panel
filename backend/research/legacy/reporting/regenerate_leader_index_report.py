@@ -4,7 +4,6 @@
 Markdown 报告，不重跑回测。
 """
 import json
-from datetime import date as _date
 
 import polars as pl
 
@@ -23,7 +22,6 @@ def pct(x):
 def main():
     recs = json.loads(JP.read_text(encoding="utf-8"))
     ld = pl.read_parquet(LEADER)
-    dates = ld["date"].to_list()
     level = ld["level"].to_list()
     lret = float(level[-1] / level[0] - 1.0) if level and level[0] not in (None, 0) else None
     # 整体牛市区占比

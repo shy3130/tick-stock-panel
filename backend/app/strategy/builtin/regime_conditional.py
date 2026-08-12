@@ -213,7 +213,7 @@ def _regime_bull_mask(close: np.ndarray, ma_win: int) -> np.ndarray:
         idx = np.nanmean(cf, axis=1)
     T = idx.shape[0]
     bull = np.ones(T, dtype=bool)
-    if T < ma_win + 1:
+    if ma_win + 1 > T:
         return bull
     c = np.nan_to_num(idx, nan=0.0)
     cum = np.cumsum(c)

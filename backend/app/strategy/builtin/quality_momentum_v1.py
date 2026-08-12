@@ -16,7 +16,6 @@ from app.backtest.matrix import (
     valid_shift,
 )
 
-
 META = {
     "id": "quality_momentum_v1",
     "name": "质量动量选股 v1（实验）",

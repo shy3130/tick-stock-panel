@@ -19,7 +19,6 @@ from research.regime.market_structure import (
     market_structure_segments,
 )
 
-
 RESEARCH_START = date(2024, 9, 24)
 OUTPUT = REGIME_ARTIFACTS_DIR / "market_structure_v1.json"
 CACHE = DATA_DIR / ".regime_cache" / "market_structure_v1.parquet"

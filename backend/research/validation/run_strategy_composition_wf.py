@@ -29,7 +29,6 @@ from app.config import settings
 from research.common.universe import stable_symbol_sample, universe_manifest
 from research.paths import DATA_DIR, VALIDATION_ARTIFACTS_DIR, ensure_artifact_dirs
 
-
 OUT = VALIDATION_ARTIFACTS_DIR / "strategy_composition_wf_v1.json"
 N_SYM = 400
 SEED = 20260723

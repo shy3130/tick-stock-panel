@@ -77,7 +77,7 @@ class TesseractOcrProvider(OcrProvider):
 
             pytesseract.get_tesseract_version()
             return True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("tesseract unavailable: %s", e)
             return False
 
@@ -97,7 +97,7 @@ class TesseractOcrProvider(OcrProvider):
                 text = pytesseract.image_to_string(img, lang=lang, config=cfg)
                 if text and text.strip():
                     return text
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 last_err = e
                 logger.debug("tesseract lang=%s failed: %s", lang, e)
         if last_err:

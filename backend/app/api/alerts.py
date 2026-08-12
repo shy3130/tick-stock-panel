@@ -40,7 +40,7 @@ def list_alerts(
             value_maps = _load_ext_value_maps(repo, ext_columns)
             if value_maps:
                 events = _rows_with_ext(events, value_maps)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     total = alert_store.count(_data_dir(request))
     return {"alerts": events, "total": total}

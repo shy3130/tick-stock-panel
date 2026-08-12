@@ -15,9 +15,9 @@
 import json
 import traceback
 
-from app.config import settings
 from app.backtest.strategy import StrategyBacktestConfig
 from app.backtest.worker import make_worker_task, run_worker_task
+from app.config import settings
 from research.paths import VALIDATION_ARTIFACTS_DIR
 
 # ---- 8 个滚动窗口（window≈3个月, step≈2个月, 含原始窗口）----
@@ -92,7 +92,7 @@ def run_one(c, start, end):
         print(f"     [OK]   {c['tag']} {start}~{end}: n={s['n_trades']} 胜率={s['win_rate']} "
               f"收益={s['total_return']} 回撤={s['max_drawdown']} sharpe={s['sharpe']}", flush=True)
         return {"error": None, "summary": s}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"     [EXC]  {c['tag']} {start}~{end}: {e}", flush=True)
         return {"error": f"{type(e).__name__}: {e}", "summary": None,
                 "traceback": traceback.format_exc()}
@@ -154,7 +154,9 @@ def main():
         npos = sum(1 for v in vals if v > 0)
         return (mean, med, npos, len(vals))
 
-    mp1s = stats(mp1); mp5s = stats(mp5); bus = stats(bu)
+    mp1s = stats(mp1)
+    mp5s = stats(mp5)
+    bus = stats(bu)
 
     # ---- 写 markdown ----
     L = ["# 多段滚动 Walk-Forward 验证报告", ""]
@@ -167,9 +169,9 @@ def main():
     L.append("| 窗口 | pullback_mp1 (待验证) | pullback_mp5 (稳健增强) | bullish_mp10 (基准) |")
     L.append("|---|---|---|---|")
     for row in records:
-        def g(tag):
-            sm = row["configs"].get(tag, {}).get("summary")
-            return pct(sm["total_return"]) if sm and sm.get("total_return") is not None else ("ERR" if row["configs"].get(tag, {}).get("error") else "—")
+        def g(tag, record=row):
+            sm = record["configs"].get(tag, {}).get("summary")
+            return pct(sm["total_return"]) if sm and sm.get("total_return") is not None else ("ERR" if record["configs"].get(tag, {}).get("error") else "—")
         L.append(f"| {row['window']} | {g('pullback_mp1_sw')} | {g('pullback_mp5_sw')} | {g('bullish_mp10_eq')} |")
     L.append("")
     L.append("## 二、详细指标（每段 × 配置）")

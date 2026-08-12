@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from research.alphagpt.environment import AlphaEnv
 from research.alphagpt.rollouts import RolloutCollection, RolloutEpisode

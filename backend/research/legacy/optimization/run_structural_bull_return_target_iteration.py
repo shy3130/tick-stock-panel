@@ -127,7 +127,7 @@ def run_one(sid, params, overrides, max_positions, position_sizing, ensemble_wit
         print(f"     [OK]   {sid}: n={s['n_trades']} 胜率={s['win_rate']} "
               f"收益={s['total_return']} 回撤={s['max_drawdown']} sharpe={s['sharpe']}", flush=True)
         return {"error": None, "summary": s}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"     [EXC]  {sid}: {e}", flush=True)
         return {"error": f"{type(e).__name__}: {e}", "summary": None,
                 "traceback": traceback.format_exc()}
@@ -147,7 +147,7 @@ def ensemble_summarize(resA, resB):
         return {"n_trades": 0, "win_rate": None, "total_return": None,
                 "max_drawdown": None, "sharpe": None, "sortino": None,
                 "profit_factor": None, "final_equity": None}
-    combo = [(a / va[0] + b / vb[0]) / 2.0 for a, b in zip(va, vb)]  # 相对净值
+    combo = [(a / va[0] + b / vb[0]) / 2.0 for a, b in zip(va, vb, strict=False)]  # 相对净值
     eq = [c * 1_000_000.0 for c in combo]
     total_return = combo[-1] - 1.0
     # 日收益

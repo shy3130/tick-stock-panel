@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import Sequence
 
 
 @dataclass(frozen=True)

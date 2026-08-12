@@ -38,7 +38,7 @@ def main():
     folds = build_folds()
     W = 130  # diagnostic warmup
     print(f"{'fold':<5}{'test range':<26}{'ewMA20':>8}{'ewMA60':>8}{'leader60':>9}")
-    for name, tr0, tr1, te0, te1 in folds:
+    for name, _tr0, _tr1, te0, te1 in folds:
         d0 = te0 - timedelta(days=W)
         dates, close = load_pivot(uni, d0, te1)
         labels = [str(d) for d in dates]

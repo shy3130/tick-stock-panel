@@ -20,7 +20,6 @@ from research.factors.run_factor_engine_wf import fold_dates, select_universe
 from research.paths import DATA_DIR, REGIME_ARTIFACTS_DIR
 from research.regime.run_regime_ensemble import derive_metrics
 
-
 OUTPUT = REGIME_ARTIFACTS_DIR / "structure_strategy_replay_v1.json"
 CACHE = DATA_DIR / ".regime_cache" / "market_structure_v1.parquet"
 BASE_OVERRIDES = {

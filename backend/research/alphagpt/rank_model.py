@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
 import numpy as np
 

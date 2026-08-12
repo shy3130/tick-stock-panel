@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
-from typing import Collection, Sequence
 
 from research.alphagpt.environment import AlphaEnv, AlphaEnvConfig
 from research.alphagpt.pool import formula_hash

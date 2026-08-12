@@ -14,7 +14,6 @@ P8 结论里最刺眼的一点：6 个语义因子 train(2025) ICIR 全负、tes
 """
 
 import json
-import math
 import random
 import time
 from datetime import date
@@ -24,7 +23,6 @@ import polars as pl
 
 from research.common.factor_dsl import StackVM, formula_to_str, gen_formula
 from research.common.universe import stable_symbol_sample, universe_manifest
-from research.factors.run_factor_oos import norm_cdf
 from research.factors.run_factor_search import build_features, cross_sectional_score
 from research.paths import DATA_DIR, FACTOR_ARTIFACTS_DIR
 
@@ -172,7 +170,7 @@ def main():
         common = set(tr.keys()) & set(te.keys())
         tr = {s: tr[s] for s in common}
         te = {s: te[s] for s in common}
-        res_tr, T_tr = eval_formulas(tr, all_formulas)
+        res_tr, _T_tr = eval_formulas(tr, all_formulas)
         res_te, T_te = eval_formulas(te, all_formulas)
         by_tr = {r[0]: r for r in res_tr}
         by_te = {r[0]: r for r in res_te}

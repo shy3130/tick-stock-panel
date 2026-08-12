@@ -22,7 +22,7 @@ from datetime import date
 import numpy as np
 import polars as pl
 
-from research.common.factor_dsl import FEATURE_NAMES, StackVM, formula_to_str, gen_formula
+from research.common.factor_dsl import StackVM, formula_to_str, gen_formula
 from research.common.universe import stable_symbol_sample, universe_manifest
 from research.factors.run_factor_search import (
     SEED_FORMULAS,
@@ -137,7 +137,7 @@ def main():
     for i in range(N_FORMULAS):
         formulas.append((f"rand_{i}", gen_formula(rng, max_len=10)))
 
-    res_train, T_train = eval_formulas(feats_train, formulas)
+    res_train, _T_train = eval_formulas(feats_train, formulas)
     res_test, T_test = eval_formulas(feats_test, formulas)
     print(f"[factor-oos] 训练段评 {len(res_train)} 公式 / 测试段评 {len(res_test)} 公式", flush=True)
 
@@ -157,7 +157,6 @@ def main():
         if name not in test_by_name:
             continue
         _, _, mic_te, icir_te, shp_te = test_by_name[name]
-        all_sharpes_sorted = sorted(null_sharpes)
         rank = (sum(1 for x in null_sharpes if x <= shp_te) + 1)
         pct = rank / (len(null_sharpes) + 1)
         top_oos.append({

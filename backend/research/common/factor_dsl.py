@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import random as _rng_mod
+
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -188,10 +190,7 @@ class StackVM:
 # 随机 RPN 公式生成（保证语法有效）
 # ---------------------------------------------------------------------------
 
-import random as _rng_mod
-
-
-def gen_formula(rng: _rng_mod.Random = None, max_len: int = 10):
+def gen_formula(rng: _rng_mod.Random | None = None, max_len: int = 10):
     """生成语法有效的 RPN 公式（用可读 token 名）。"""
     rng = rng or _rng_mod
     feats = list(FEATURE_NAMES)

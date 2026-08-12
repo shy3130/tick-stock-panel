@@ -38,7 +38,6 @@ from research.optimization.run_core_strategy_walkforward_v1 import (
 )
 from research.paths import OPTIMIZATION_ARTIFACTS_DIR, ensure_artifact_dirs
 
-
 OUT = OPTIMIZATION_ARTIFACTS_DIR / "core_exit_walkforward_v1.json"
 DEFAULT_CANDIDATE_ID = "default"
 FUTURE_OBSERVATION_START = date(2026, 7, 22)

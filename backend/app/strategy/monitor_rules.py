@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.strategy.custom_signals import ALLOWED_FIELDS
@@ -260,7 +260,7 @@ def normalize(rule: dict) -> dict:
     else:
         # 防御性过滤, 只保留合法渠道
         r["webhook_channels"] = [c for c in r["webhook_channels"] if c in ("feishu", "wecom")]
-    r.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    r.setdefault("created_at", datetime.now(UTC).isoformat())
     return r
 
 

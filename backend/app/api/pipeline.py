@@ -7,9 +7,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.api.data import invalidate_storage_cache
 from app.jobs import daily_pipeline
 from app.services.pipeline_jobs import job_store, release_run_slot, try_acquire_run_slot
-from app.api.data import invalidate_storage_cache
 
 # 长时间任务专用线程池（隔离于 FastAPI 默认线程池，防止阻塞请求处理）
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
@@ -17,6 +17,13 @@ _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _start_background_task(coro) -> None:
+    background_task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(background_task)
+    background_task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 @router.post("/run")
@@ -64,14 +71,14 @@ async def run_now(request: Request) -> dict:
             job_store.succeed(job_id, result)
             invalidate_storage_cache()
             repo.refresh_cache()  # 刷新 Polars 缓存
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("pipeline failed")
             job_store.fail(job_id, str(e))
             invalidate_storage_cache()
         finally:
             release_run_slot()
 
-    asyncio.create_task(task())
+    _start_background_task(task())
     return {"job_id": job_id, "reused": False}
 
 

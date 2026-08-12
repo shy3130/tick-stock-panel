@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -46,7 +46,7 @@ def add(symbol: str, note: str = "") -> list[dict]:
 
     new_row = pl.DataFrame({
         "symbol": [symbol],
-        "added_at": [datetime.utcnow().isoformat(timespec="seconds")],
+        "added_at": [datetime.now(UTC).isoformat(timespec="seconds")],
         "note": [note],
     })
     out = pl.concat([new_row, df], how="diagonal_relaxed")
@@ -96,7 +96,8 @@ def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8
     优先用 quote.batch;否则降级为 quote.by_symbol 单股请求。
     timeout_s: 单批次请求超时(秒)，防止 API 卡死阻塞整个请求。
     """
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FuturesTimeout
 
     if not symbols:
         return []
@@ -135,7 +136,7 @@ def fetch_quotes(symbols: list[str], capset: CapabilitySet, timeout_s: float = 8
         except FuturesTimeout:
             logger.warning("quote fetch timeout (%.1fs) for %d symbols", timeout_s, len(chunk))
             break  # 超时后不再尝试后续批次
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("quote fetch failed for %d symbols: %s", len(chunk), e)
     pool.shutdown(wait=False)
 

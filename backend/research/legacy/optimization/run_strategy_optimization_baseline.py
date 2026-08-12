@@ -188,7 +188,7 @@ def run_one(sid: str, params, overrides) -> dict:
             print(f"   [OK]   {sid}: trades={s['n_trades']} 胜率={s['win_rate']} "
                   f"收益={s['total_return']} 回撤={s['max_drawdown']} sharpe={s['sharpe']}")
         return out
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"   [EXC]  {sid}: {e}")
         return {"error": f"{type(e).__name__}: {e}", "summary": None,
                 "traceback": traceback.format_exc()}
@@ -212,7 +212,7 @@ def main() -> None:
                         "design": OPTIMIZATIONS[sid]}
         out_json.write_text(json.dumps(results, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
-    print(f"\n== 再跑优化版(全部 7 策略) ==")
+    print("\n== 再跑优化版(全部 7 策略) ==")
     for sid in STRATEGIES:
         spec = OPTIMIZATIONS[sid]
         print(f"-- optimized: {sid} ({spec['name']})")
@@ -269,7 +269,7 @@ def main() -> None:
         for i, st in enumerate(spec["steps"], 1):
             lines.append(f"  {i}. {st}")
         if b is None or o is None:
-            lines.append(f"- **结果**：基线或优化版回测失败（见 JSON）。")
+            lines.append("- **结果**：基线或优化版回测失败（见 JSON）。")
             lines.append("")
             continue
         # 判定是否改善（以总收益升、回撤收窄、Sharpe 升综合判断）

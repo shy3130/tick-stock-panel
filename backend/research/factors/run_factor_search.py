@@ -19,7 +19,7 @@ from datetime import date
 import numpy as np
 import polars as pl
 
-from research.common.factor_dsl import FEATURE_NAMES, StackVM, formula_to_str, gen_formula
+from research.common.factor_dsl import StackVM, formula_to_str, gen_formula
 from research.common.universe import (
     stable_symbol_sample,
     universe_manifest,

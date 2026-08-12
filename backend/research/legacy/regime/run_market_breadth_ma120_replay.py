@@ -7,17 +7,16 @@ P0+P1 落地：市场宽度(regime)过滤的回测层验证。
 - 严格不重新寻优：直接套用已知配置(mp=5 稳健 / mp=1 单只集中)，在 8 段 walk-forward 窗口 + 目标窗口上验证。
 数据：全部来自 data/，无需重新拉取、不改策略源码。
 """
-import json
 import glob
-import os
+import json
 import time
 from datetime import date as _date
 
 import polars as pl
 
-from app.config import settings
 from app.backtest.strategy import StrategyBacktestConfig
 from app.backtest.worker import make_worker_task, run_worker_task
+from app.config import settings
 from research.paths import DATA_DIR, REGIME_ARTIFACTS_DIR
 
 WINDOWS = [
@@ -96,7 +95,6 @@ def simulate(trades, wide, rets, regime, gate, max_positions):
     """回测层门控重算。gate=True 时剔除入场日在熊市的成交单。返回 (总收益, n_used, n_dropped)。"""
     dates = wide["date"].to_list()
     date_pos = {d: i for i, d in enumerate(dates)}
-    syms = [c for c in wide.columns if c != "date"]
     openw = {}
     ret_map = {}
     used = dropped = 0
@@ -114,7 +112,7 @@ def simulate(trades, wide, rets, regime, gate, max_positions):
         used += 1
         seg = rets.filter((pl.col("date") >= ed) & (pl.col("date") <= xd)).select("date", t["symbol"])
         dl, rl = seg["date"].to_list(), seg[t["symbol"]].to_list()
-        for d, r in zip(dl, rl):
+        for d, r in zip(dl, rl, strict=False):
             ret_map[(d, t["symbol"])] = r if r is not None else 0.0
         w = t.get("position_pct") or (1.0 / max_positions)
         s, e = date_pos[ed], date_pos[xd]
@@ -136,7 +134,7 @@ def pct(x):
 def main():
     t0 = time.time()
     wide, rets = build_wide()
-    regime, br = compute_regime(wide)
+    regime, _br = compute_regime(wide)
     bench_full = benchmark_return(rets)
     print(f"[setup] wide={wide.shape} 基准(等权全市场)全区间={pct(bench_full)} "
           f"牛市交易日占比={sum(regime.values())}/{len(regime)}", flush=True)
@@ -152,7 +150,7 @@ def main():
         if err:
             print(f"  [FAIL] mp5 {s}~{e}: {err}", flush=True)
             continue
-        unf, u, d = simulate(trades, wide, rets, regime, False, 5)
+        unf, _, _ = simulate(trades, wide, rets, regime, False, 5)
         gat, u2, d2 = simulate(trades, wide, rets, regime, True, 5)
         print(f"  mp5 {s}~{e}: 不过滤={pct(unf)} 门控={pct(gat)} "
               f"(剔除{d2}笔/用{u2}笔) 基准段={pct(seg_bench(rets, s, e))}", flush=True)
@@ -164,7 +162,7 @@ def main():
     ts, te = "2026-03-24", "2026-06-24"
     trades, err = run_engine("pullback_to_support", 1, "score_weight", ts, te)
     if not err:
-        unf, u, d = simulate(trades, wide, rets, regime, False, 1)
+        unf, _u, _d = simulate(trades, wide, rets, regime, False, 1)
         gat, u2, d2 = simulate(trades, wide, rets, regime, True, 1)
         print(f"  mp1 {ts}~{te}: 不过滤={pct(unf)} 门控={pct(gat)} "
               f"(剔除{d2}笔/用{u2}笔)", flush=True)

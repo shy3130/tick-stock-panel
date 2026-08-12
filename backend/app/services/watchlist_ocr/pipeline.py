@@ -89,7 +89,7 @@ def build_instrument_lookups(data_dir: Path) -> tuple[dict[str, str], dict[str, 
                     name = str(row.get("name") or "").strip()
                     if name:
                         symbol_to_name.setdefault(symbol, name)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("read instruments %s failed: %s", path, e)
 
     return code_to_symbol, symbol_to_name

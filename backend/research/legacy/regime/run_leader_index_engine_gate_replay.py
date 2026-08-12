@@ -10,11 +10,9 @@ import json
 import time
 from datetime import date as _date
 
-import polars as pl
-
-from app.config import settings
 from app.backtest.strategy import StrategyBacktestConfig
 from app.backtest.worker import make_worker_task, run_worker_task
+from app.config import settings
 from research.paths import REGIME_ARTIFACTS_DIR
 
 WINDOWS = [
@@ -50,10 +48,7 @@ def run_engine(sid, max_positions, position_sizing, start, end, regime=None):
         if pnl is None:
             # 退化为 entry/exit 价计算
             ep, xp = t.get("entry_price"), t.get("exit_price")
-            if ep and xp:
-                pnl = (xp / ep - 1.0)
-            else:
-                pnl = 0.0
+            pnl = xp / ep - 1.0 if ep and xp else 0.0
         eq *= (1.0 + pnl)
     return float(eq - 1.0), None
 

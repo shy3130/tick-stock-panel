@@ -50,8 +50,10 @@ def load_pivot(symbols, d0, d1):
     close = np.full((len(dates), len(syms)), np.nan)
     dmap = {d: i for i, d in enumerate(dates)}
     smap = {s: j for j, s in enumerate(syms)}
-    dcol = df["date"].to_list(); scol = df["symbol"].to_list(); ccol = df["close"].to_list()
-    for d, s, c in zip(dcol, scol, ccol):
+    dcol = df["date"].to_list()
+    scol = df["symbol"].to_list()
+    ccol = df["close"].to_list()
+    for d, s, c in zip(dcol, scol, ccol, strict=False):
         close[dmap[d], smap[s]] = float(c)
     return dates, close
 
@@ -60,7 +62,7 @@ def bull_mask_from_index(idx, ma_win):
     """idx: (T,) 等权指数；返回 (T,) bool（1 日滞后、暖机判牛）。"""
     T = len(idx)
     bull = np.ones(T, dtype=bool)
-    if T < ma_win + 1:
+    if ma_win + 1 > T:
         return bull
     c = np.nan_to_num(idx, nan=0.0)
     cum = np.cumsum(c)
@@ -109,7 +111,7 @@ def summarize(dates, bull, label):
     flips = int(np.sum(seg[1:] != seg[:-1]))
     # 按月牛熊占比
     by_month = {}
-    for d, b in zip(test_dates, seg):
+    for d, b in zip(test_dates, seg, strict=False):
         mk = f"{d.year}-{d.month:02d}"
         by_month.setdefault(mk, [0, 0])
         by_month[mk][0] += 1
@@ -154,8 +156,8 @@ def main():
         "idx_mean_abs_dev_from_ma_pct": round(float(np.nanmean(np.abs(dev_test)) * 100), 2),
     }
 
-    loss_txt = (f"regime_switch(switch_ew) 在 F4 因此整段只部署 pullback(均值回归)腿，"
-                f"等于逆着上涨市做反转（具体亏损额见本轮 regime_ensemble 运行的 switch_ew F4 实测）。")
+    loss_txt = ("regime_switch(switch_ew) 在 F4 因此整段只部署 pullback(均值回归)腿，"
+                "等于逆着上涨市做反转（具体亏损额见本轮 regime_ensemble 运行的 switch_ew F4 实测）。")
     out = {
         "universe_manifest": universe_manifest(
             symbols,

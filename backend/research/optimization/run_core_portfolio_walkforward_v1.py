@@ -40,7 +40,6 @@ from research.optimization.run_core_strategy_walkforward_v1 import (
 )
 from research.paths import OPTIMIZATION_ARTIFACTS_DIR, ensure_artifact_dirs
 
-
 OUT = OPTIMIZATION_ARTIFACTS_DIR / "core_portfolio_walkforward_v1.json"
 MIN_TRAIN_TRADES = 30
 DEFAULT_CANDIDATE_ID = "equal_10_default"

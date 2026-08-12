@@ -5,7 +5,6 @@ import math
 from collections import Counter
 from typing import Any
 
-
 CHECK_LABELS = {
     "finite_history": "历史数据不足或指标非有限值",
     "ma_alignment": "未满足 MA5>MA10>MA20>MA60",

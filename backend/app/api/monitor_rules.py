@@ -4,6 +4,9 @@
 """
 from __future__ import annotations
 
+import contextlib
+import logging
+import time as _time
 from datetime import date
 from pathlib import Path
 
@@ -13,6 +16,7 @@ from pydantic import BaseModel
 from app.strategy import monitor_rules
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/monitor-rules", tags=["monitor-rules"])
 
 
@@ -35,7 +39,7 @@ def _reconcile_index_asset_type(rule: dict, repo) -> dict:
     try:
         if all(repo.resolve_asset_type(s) == "index" for s in symbols):
             rule["asset_type"] = "index"
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return rule
 
@@ -109,7 +113,8 @@ def get_options(request: Request):
     """返回可选字段、信号列、运算符、枚举,供前端表单使用。"""
     from app.indicators.pipeline import ENRICHED_COLUMNS
     from app.services.kline_sync import intraday_monitor_support
-    from app.strategy.custom_signals import ALLOWED_FIELDS, load_all as load_csg
+    from app.strategy.custom_signals import ALLOWED_FIELDS
+    from app.strategy.custom_signals import load_all as load_csg
 
     # 阈值字段 (带中文标签)
     threshold_fields = [
@@ -316,9 +321,6 @@ def delete_rule(rule_id: str, request: Request):
 
 # ── 演示数据生成 (仅 Dev 页用) ─────────────────────────
 
-import time as _time
-from datetime import datetime, timezone
-
 
 def _demo_rule(rule_id: str, name: str, rtype: str, scope: str, symbols: list[str],
                conditions: list[dict], logic: str = "or", cooldown: int = 3600,
@@ -376,7 +378,7 @@ def seed_demo_rules(request: Request):
     ts = int(_time.time() * 1000)
     created = []
     i = 0
-    for (name, rtype, scope, symbols, conditions, logic, severity, sev) in _DEMO_RULES_TEMPLATE:
+    for (name, rtype, scope, symbols, conditions, logic, _severity, sev) in _DEMO_RULES_TEMPLATE:
         rule_id = f"demo_{ts}_{i}"
         rule = _demo_rule(rule_id, name, rtype, scope, symbols, conditions, logic, 3600, sev)
         monitor_rules.save_one(_data_dir(request), rule)
@@ -519,6 +521,7 @@ def trigger_ladder(request: Request):
     让用户看到真实的预警通知。绕过 cooldown 强制触发。
     """
     import time
+
     from app.services import alert_store
 
     repo = request.app.state.repo
@@ -561,7 +564,7 @@ def trigger_ladder(request: Request):
         inst = repo.get_instruments()
         if not inst.is_empty() and "name" in inst.columns:
             name_map = {r["symbol"]: r["name"] for r in inst.select(["symbol", "name"]).iter_rows(named=True) if r.get("name")}
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     for rule in engine.rules.values():
@@ -614,8 +617,8 @@ def trigger_ladder(request: Request):
     # 1. 落盘到 alerts.jsonl
     try:
         alert_store.append_many(repo.store.data_dir, rule_events)
-    except Exception as e:  # noqa: BLE001
-        pass  # 落盘失败不阻断推送
+    except Exception as exc:
+        logger.warning("monitor rule events could not be persisted: %s", exc)
 
     # 2. SSE 推送 (入 pending_alerts 队列)
     if quote_svc:
@@ -626,17 +629,13 @@ def trigger_ladder(request: Request):
             "signals": ev["signals"], "severity": ev["severity"],
             "conditions": ev["conditions"], "logic": ev["logic"],
         } for ev in rule_events]
-        try:
+        with contextlib.suppress(Exception):
             quote_svc.push_alerts(sse_alerts)
-        except Exception:  # noqa: BLE001
-            pass
 
     # 3. 飞书推送
     if quote_svc:
-        try:
+        with contextlib.suppress(Exception):
             quote_svc._maybe_send_webhook(rule_events, engine)
-        except Exception:  # noqa: BLE001
-            pass
 
     return {
         "ok": True,

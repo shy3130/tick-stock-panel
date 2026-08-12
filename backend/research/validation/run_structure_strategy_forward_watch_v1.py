@@ -7,12 +7,14 @@ already visible to the researchers and must not be relabelled as fresh OOS.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import uuid
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import polars as pl
 
@@ -27,7 +29,6 @@ from research.paths import (
 )
 from research.regime.run_regime_ensemble import derive_metrics
 from research.regime.run_structure_strategy_replay_v1 import BASE_OVERRIDES
-
 
 VERSION = "structure_strategy_forward_watch_v1"
 REGISTRATION_DATE = date(2026, 7, 29)
@@ -294,7 +295,7 @@ def daily_attribution(
     benchmark = _curve_values(benchmark_curve, "close")
     common_dates = sorted(set(equity) & set(benchmark) & set(labels))
     rows: list[dict[str, Any]] = []
-    for previous, current in zip(common_dates, common_dates[1:], strict=False):
+    for previous, current in itertools.pairwise(common_dates):
         strategy_return = equity[current] / equity[previous] - 1.0
         benchmark_return = benchmark[current] / benchmark[previous] - 1.0
         relative_return = (1.0 + strategy_return) / (1.0 + benchmark_return) - 1.0

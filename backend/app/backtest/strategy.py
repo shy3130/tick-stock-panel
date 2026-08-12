@@ -744,7 +744,7 @@ class StrategyBacktestService:
                     loaded = loader(child.strategy_id)
                     if isinstance(loaded, dict):
                         child_override = dict(loaded)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             child_params = self.strategy_engine.resolve_params(child_def, overrides=child_override)
             child_plan = resolver.resolve(
@@ -1531,7 +1531,7 @@ class StrategyBacktestService:
                 if expr is not None:
                     try:
                         basic_mask = panel.select(expr.alias("_basic"))["_basic"].fill_null(False).cast(pl.Boolean)
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         logger.warning("basic_filter mask failed: %s", e)
                         return _err(f"基础过滤计算失败: {e}")
 
@@ -1579,7 +1579,7 @@ class StrategyBacktestService:
                     sim_entry_mask = sim_entry_mask & _allow
                     logger.info("[regime] legacy 路径门控生效: 允许 %d/%d 行开仓",
                                 int(_allow.sum()), len(_allow))
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning("[regime] legacy 路径门控失败，已跳过: %s", e)
             if sim_panel.is_empty():
                 return _err("正式回测区间内无数据")
@@ -2350,8 +2350,8 @@ class StrategyBacktestService:
         return {
             "symbol": t.symbol,
             "name": t.name,
-            "entry_date": str(t.entry_date) if isinstance(t.entry_date, date) else str(t.entry_date),
-            "exit_date": str(t.exit_date) if isinstance(t.exit_date, date) else str(t.exit_date),
+            "entry_date": str(t.entry_date),
+            "exit_date": str(t.exit_date),
             "entry_price": t.entry_price,
             "exit_price": t.exit_price,
             "pnl_pct": t.pnl_pct,

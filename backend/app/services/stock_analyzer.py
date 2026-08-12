@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import polars as pl
 
@@ -325,7 +325,7 @@ async def analyze_stock_stream(
         ):
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("AI stock analysis failed for %s: %s", symbol, e)
         yield json.dumps({"type": "error", "message": f"AI 分析失败: {e}"}, ensure_ascii=False)
         return

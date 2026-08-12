@@ -38,7 +38,6 @@ from research.optimization.run_core_strategy_walkforward_v1 import (
 )
 from research.paths import OPTIMIZATION_ARTIFACTS_DIR, ensure_artifact_dirs
 
-
 OUT = OPTIMIZATION_ARTIFACTS_DIR / "bullish_breadth_walkforward_v1.json"
 STRATEGY_ID = "bullish_alignment"
 DEFAULT_CANDIDATE_ID = "default"

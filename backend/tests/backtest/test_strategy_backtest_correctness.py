@@ -216,7 +216,7 @@ def test_score_normalizes_inside_strategy_candidate_universe():
     strategy = SimpleNamespace(meta={"scoring": {"factor": 1.0}, "order_by": "score", "descending": True})
 
     scored = StrategyBacktestService._apply_score(panel, strategy, None, universe_mask=universe)
-    scores = dict(zip(scored["symbol"].to_list(), scored["score"].to_list()))
+    scores = dict(zip(scored["symbol"].to_list(), scored["score"].to_list(), strict=False))
 
     assert scores["A"] == 0.0
     assert scores["B"] == 100.0

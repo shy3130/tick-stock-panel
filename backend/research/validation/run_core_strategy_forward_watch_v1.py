@@ -27,9 +27,11 @@ from research.optimization.run_core_portfolio_walkforward_v1 import (
 )
 from research.optimization.run_core_strategy_walkforward_v1 import (
     BACKTEST_KWARGS,
-    END as CALIBRATION_END,
     N_SYMBOLS,
     SEED,
+)
+from research.optimization.run_core_strategy_walkforward_v1 import (
+    END as CALIBRATION_END,
 )
 from research.paths import (
     DATA_DIR,
@@ -37,7 +39,6 @@ from research.paths import (
     VALIDATION_ARTIFACTS_DIR,
     ensure_artifact_dirs,
 )
-
 
 OUT = VALIDATION_ARTIFACTS_DIR / "core_strategy_forward_watch_v1.json"
 PARAM_SOURCE = OPTIMIZATION_ARTIFACTS_DIR / "core_strategy_walkforward_v1.json"

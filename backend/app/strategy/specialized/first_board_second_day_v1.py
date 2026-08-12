@@ -9,7 +9,6 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
-
 STRATEGY_META = {
     "id": "first_board_second_day_v1",
     "name": "一进二竞价 v1（实验）",

@@ -73,7 +73,7 @@ class CapabilitySet:
         }
 
 
-class CapabilityDenied(Exception):
+class CapabilityDenied(Exception):  # noqa: N818 - public compatibility name
     """请求的 capability 当前不可用。"""
 
     def __init__(self, cap: Cap, suggestion: str | None = None) -> None:

@@ -126,7 +126,7 @@ def main() -> None:
                 s = results[sid]["summary"]
                 print(f"[OK]   {sid}: trades={s['n_trades']} 胜率={s['win_rate']} "
                       f"收益={s['total_return']} 回撤={s['max_drawdown']} sharpe={s['sharpe']}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results[sid] = {"error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc()}
             print(f"[EXC]  {sid}: {e}")
 

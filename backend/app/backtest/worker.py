@@ -165,8 +165,8 @@ def _worker_entry(task: dict[str, Any], event_queue, cancel_event) -> None:
         from app.backtest.engine import BacktestEngine
         from app.backtest.optimizer import StrategyOptimizer
         from app.backtest.strategy import StrategyBacktestService
-        from app.strategy.engine import StrategyEngine
         from app.strategy import config as strategy_config
+        from app.strategy.engine import StrategyEngine
         from app.tickflow.repository import DataStore, KlineRepository
 
         data_dir = Path(task["data_dir"])

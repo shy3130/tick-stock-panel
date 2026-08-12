@@ -624,9 +624,8 @@ def _restore_strategy_file(path: Path, previous_code: str | None) -> None:
 
 def _save_strategy_code(req: StrategyCodeSaveRequest, request: Request, *, legacy_ai_path: bool = False) -> dict:
     sid = _validate_strategy_id(req.strategy_id)
-    if legacy_ai_path:
-        if not (sid.startswith("ai_") or sid.startswith("custom_")):
-            raise ValueError("策略 ID 必须以 ai_ 或 custom_ 开头")
+    if legacy_ai_path and not (sid.startswith("ai_") or sid.startswith("custom_")):
+        raise ValueError("策略 ID 必须以 ai_ 或 custom_ 开头")
 
     engine = _get_engine(request)
     data_dir = _data_dir(request)
@@ -719,8 +718,8 @@ def get_strategy_source(strategy_id: str, request: Request):
     engine = _get_engine(request)
     try:
         s = engine.get(strategy_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"策略 {strategy_id} 不存在") from exc
 
     path = s.file_path
     if not path or not path.exists():

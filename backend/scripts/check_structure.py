@@ -8,7 +8,6 @@ from pathlib import Path
 
 from research.paths import PROJECT_ROOT
 
-
 FORBIDDEN_ROOT_OUTPUT_SUFFIXES = frozenset({".csv", ".html", ".json", ".log", ".parquet"})
 FORBIDDEN_FRONTEND_DIRS = frozenset({"frontend", "web", "ui"})
 ALLOWED_CURRENT_FILES = frozenset({

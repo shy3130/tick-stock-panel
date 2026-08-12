@@ -24,7 +24,7 @@ def load() -> dict:
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("preferences.json malformed: %s", e)
     return {}
 
@@ -58,7 +58,7 @@ def get_realtime_watchlist_symbols() -> list[str]:
     try:
         from app.services import watchlist
         rows = watchlist.list_symbols()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("load watchlist for realtime failed: %s", e)
         return []
     out: list[str] = []
@@ -71,7 +71,7 @@ def get_realtime_watchlist_symbols() -> list[str]:
     return out
 
 
-def set_realtime_watchlist_symbols(symbols: list[str]) -> list[str]:  # noqa: ARG001
+def set_realtime_watchlist_symbols(symbols: list[str]) -> list[str]:
     """兼容旧接口: Free 实时标的现在由自选页前 5 个决定。"""
     return get_realtime_watchlist_symbols()
 
@@ -192,7 +192,7 @@ def _allowed_data_providers() -> set[str]:
     try:
         from app.data_providers import custom as custom_sources
         return _ALLOWED_DATA_PROVIDERS | custom_sources.names()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return set(_ALLOWED_DATA_PROVIDERS)
 
 

@@ -82,7 +82,15 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
-ignore = ["E501"]   # 长行交给 fmt
+ignore = [
+    "E501",   # 长行交给 fmt
+    "N801", "N803", "N806", "N815",  # 科研矩阵记号及外部 API 字段名
+    "RUF001", "RUF002", "RUF003",     # 中文文档/注释中的全角标点
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI uses parameter-default calls as declarative, immutable route metadata.
+extend-immutable-calls = ["fastapi.File", "fastapi.Query"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

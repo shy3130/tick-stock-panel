@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import numpy as np
 

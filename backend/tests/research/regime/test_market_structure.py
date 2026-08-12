@@ -5,9 +5,9 @@ from datetime import date, timedelta
 import polars as pl
 
 from research.regime.market_structure import (
-    MarketStructureConfig,
     STRUCTURAL_BEAR,
     STRUCTURAL_BULL,
+    MarketStructureConfig,
     build_market_structure_features,
     classify_market_structure,
     market_structure_segments,

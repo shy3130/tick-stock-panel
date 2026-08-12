@@ -1,13 +1,15 @@
 """数据画像 API —— 让前端知道"我们本地有什么数据"。"""
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import APIRouter, Request
 
@@ -107,7 +109,7 @@ def _safe_aggregate(repo, view: str) -> dict | None:
                        count(DISTINCT date) AS trading_days
                 FROM {view}"""
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("aggregate %s failed: %s", view, e)
         return None
     if not row or not row[0]:
@@ -161,7 +163,7 @@ def _safe_aggregate_enriched(repo) -> dict | None:
     try:
         cols = repo.execute_all("DESCRIBE kline_enriched")
         fields = len(cols)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 日期范围：从分区目录名获取，不扫数据
@@ -196,7 +198,7 @@ def _count_instruments_symbols(repo) -> int:
         )
         if sym_row and sym_row[0]:
             return int(sym_row[0])
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return 0
 
@@ -211,7 +213,7 @@ def _safe_aggregate_instruments(repo) -> dict | None:
                       count_if(name IS NOT NULL AND name != '') AS named
                FROM instruments"""
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("aggregate instruments failed: %s", e)
         return None
     if not row or not row[0]:
@@ -235,7 +237,7 @@ def _safe_aggregate_index_enriched(repo) -> dict | None:
     try:
         cols = repo.execute_all("DESCRIBE kline_index_enriched")
         fields = len(cols)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     stats = _safe_aggregate(repo, "kline_index_enriched")
     if not stats:
@@ -252,7 +254,7 @@ def _safe_aggregate_index_instruments(repo) -> dict | None:
                       count_if(name IS NOT NULL AND name != '') AS named
                FROM instruments_index"""
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("aggregate instruments_index failed: %s", e)
         return None
     if not row or not row[0]:
@@ -281,7 +283,7 @@ def _safe_aggregate_etf_instruments(repo) -> dict | None:
     for sql in queries:
         try:
             row = repo.execute_one(sql)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("aggregate etf instruments fallback failed: %s", e)
             continue
         if row and row[0]:
@@ -300,7 +302,7 @@ def _safe_aggregate_etf_enriched(repo) -> dict | None:
     try:
         cols = repo.execute_all("DESCRIBE kline_etf_enriched")
         fields = len(cols)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     stats = _safe_aggregate(repo, "kline_etf_enriched")
     if not stats:
@@ -330,7 +332,7 @@ def _safe_aggregate_etf_daily(repo) -> dict | None:
     for sql in queries:
         try:
             row = repo.execute_one(sql)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("aggregate etf daily fallback failed: %s", e)
             continue
         if row and row[0]:
@@ -371,7 +373,7 @@ def _safe_aggregate_adj_factor(repo) -> dict | None:
             "latest_date": str(d_max),
             "trading_days": int(row[2] or 0),
         }
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("aggregate adj_factor failed: %s", e)
         return None
 
@@ -447,10 +449,8 @@ def _scan_dir_stats(dirpath: Path) -> tuple[int, float]:
             count += c
             total += s
         elif entry.is_file(follow_symlinks=False):
-            try:
+            with contextlib.suppress(OSError):
                 total += entry.stat().st_size
-            except OSError:
-                pass
             count += 1
     return count, round(total / 1048576, 2)
 
@@ -466,10 +466,8 @@ def _scan_dir_recursive(entry: os.DirEntry) -> tuple[int, int]:
                 count += c
                 total += s
             elif sub.is_file(follow_symlinks=False):
-                try:
+                with contextlib.suppress(OSError):
                     total += sub.stat().st_size
-                except OSError:
-                    pass
                 count += 1
     except PermissionError:
         pass
@@ -527,10 +525,8 @@ def _compute_storage(data_dir: Path) -> dict:
     # 根目录散文件
     for entry in os.scandir(data_dir):
         if entry.is_file(follow_symlinks=False):
-            try:
+            with contextlib.suppress(OSError):
                 total_size += entry.stat().st_size / 1048576
-            except OSError:
-                pass
     stats["total_size_mb"] = round(total_size, 2)
     return stats
 
@@ -543,7 +539,7 @@ def _next_cron_run(scheduler, job_id: str) -> str | None:
         job = scheduler.get_job(job_id)
         if job and job.next_run_time:
             return job.next_run_time.isoformat(timespec="seconds")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return None
 
@@ -612,7 +608,7 @@ def status(request: Request) -> dict:
         "next_pipeline_run":    _next_cron_run(scheduler, "daily_pipeline"),
         "last_instruments_run": _last_finished("instruments"),
         "last_pipeline_run":    _last_finished("pipeline"),
-        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "checked_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         # 指标缓存就绪标志 (启动时 enriched 异步预热, 完成前为 false)
         "indicators_ready": getattr(request.app.state, "indicators_ready", True),
     }
@@ -809,7 +805,7 @@ def table_schema(request: Request, table: str) -> list[dict]:
                 "type": dtype,
                 "desc": desc_map.get(name, ""),
             })
-    except Exception:  # noqa: BLE001
+    except Exception:
         # 视图不存在(本地无数据)，用静态字段定义兜底
         if desc_map:
             for name, desc in desc_map.items():

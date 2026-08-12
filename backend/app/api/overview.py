@@ -12,7 +12,6 @@ import polars as pl
 from fastapi import APIRouter, Request
 
 from app.services.ext_data import ExtConfig, ExtConfigStore
-from app.services.screener import ScreenerService
 
 router = APIRouter(prefix="/api/overview", tags=["overview"])
 
@@ -76,9 +75,9 @@ def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[di
     except TypeError:
         try:
             df = pl.read_parquet(files)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
     if df.is_empty() or dimension_field not in df.columns:
         return []
@@ -269,7 +268,7 @@ def _index_quotes(request: Request, as_of: date | None = None) -> list[dict]:
                     """,
                     [*CORE_INDEX_SYMBOLS, as_of, as_of],
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 db_rows = []
             for symbol, dt, last_price, prev_close in db_rows:
                 change_amount = None
@@ -337,11 +336,7 @@ def _pct_band_rows(values: list[float]) -> list[dict]:
     for label, low, high in bands:
         count = 0
         for v in values:
-            if low is None and v < high:
-                count += 1
-            elif high is None and v >= low:
-                count += 1
-            elif low is not None and high is not None and low <= v < high:
+            if (low is None and v < high) or (high is None and v >= low) or (low is not None and high is not None and low <= v < high):
                 count += 1
         out.append({"label": label, "count": count, "pct": count / total * 100})
     return out

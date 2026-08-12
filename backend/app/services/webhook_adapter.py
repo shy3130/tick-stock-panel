@@ -133,7 +133,7 @@ def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
             if resp.status_code < 500:
                 logger.warning("飞书推送失败(不重试, 客户端错误): %s", last_err)
                 return False
-        except Exception as e:  # noqa: BLE001 — 网络/超时, 可重试
+        except Exception as e:
             last_err = str(e)
 
         if attempt < _FEISHU_MAX_ATTEMPTS:
@@ -283,7 +283,7 @@ def _post_wecom(webhook_url: str, payload: dict) -> bool:
                 return True
         logger.warning("企业微信推送 HTTP %s: %s", resp.status_code, resp.text[:200])
         return False
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("企业微信 Webhook 推送失败: %s", e)
         return False
 

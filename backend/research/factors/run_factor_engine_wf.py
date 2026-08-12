@@ -171,7 +171,7 @@ def main():
     symbols = select_universe()
     print(f"[engine-wf] universe = {len(symbols)} 只 (seed={SEED})", flush=True)
     folds = fold_dates()
-    print(f"[engine-wf] 折叠: " + ", ".join(
+    print("[engine-wf] 折叠: " + ", ".join(
         f"{fid}:{te0}~{te1}" for fid, _, _, te0, te1 in folds), flush=True)
 
     fold_records = []

@@ -130,7 +130,7 @@ def _clone(node: _Node) -> _Node:
 def _paths(node: _Node, prefix: tuple[int, ...] = ()) -> list[tuple[int, ...]]:
     paths = [prefix]
     for index, child in enumerate(node.children):
-        paths.extend(_paths(child, prefix + (index,)))
+        paths.extend(_paths(child, (*prefix, index)))
     return paths
 
 

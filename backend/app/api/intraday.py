@@ -60,7 +60,7 @@ def _fallback_index_quotes_from_daily(request: Request, symbols: list[str] | Non
             """,
             params,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
     out: list[dict] = []

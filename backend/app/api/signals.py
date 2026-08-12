@@ -104,7 +104,7 @@ def save_signal(req: SignalModel, request: Request):
     try:
         custom_signals.validate(sig)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     custom_signals.save_one(_data_dir(request), sig)
     _invalidate()
     return {"ok": True, "signal": sig}

@@ -17,22 +17,19 @@ P7 已证明：随机 DSL 搜索被多重检验运气主导（DSR≈0.29，最�
 """
 
 import json
-import math
 import random
 import time
 from datetime import date
 
 import numpy as np
 
-from research.common.factor_dsl import StackVM, formula_to_str
+from research.common.factor_dsl import formula_to_str
 from research.common.universe import universe_manifest
 from research.factors.run_factor_oos import (
     eval_formulas,
     load_subset,
-    norm_cdf,
     select_symbols,
 )
-from research.factors.run_factor_search import build_features, cross_sectional_score
 from research.paths import FACTOR_ARTIFACTS_DIR
 
 OUT = FACTOR_ARTIFACTS_DIR / "strategy_factor_semantic.json"
@@ -100,8 +97,8 @@ def main():
     for i in range(N_RANDOM):
         formulas.append((f"rand_{i}", _gen_rand(rng)))
 
-    res_train, T_train = eval_formulas(feats_train, formulas)
-    res_test, T_test = eval_formulas(feats_test, formulas)
+    res_train, _T_train = eval_formulas(feats_train, formulas)
+    res_test, _T_test = eval_formulas(feats_test, formulas)
     print(f"[factor-semantic] 训练段评 {len(res_train)} / 测试段评 {len(res_test)} 公式", flush=True)
 
     by_name_tr = {r[0]: r for r in res_train}

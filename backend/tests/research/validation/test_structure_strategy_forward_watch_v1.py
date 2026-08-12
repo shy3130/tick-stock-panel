@@ -45,7 +45,7 @@ def _source():
 
 
 def test_registration_boundary_starts_after_registration_day():
-    assert OBSERVATION_START == date(2026, 7, 30)
+    assert date(2026, 7, 30) == OBSERVATION_START
 
 
 def test_protocol_freezes_source_universe_and_candidates():

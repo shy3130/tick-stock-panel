@@ -14,7 +14,6 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-
 STRUCTURAL_BULL = "structural_bull"
 STRUCTURAL_BEAR = "structural_bear"
 WARMUP = "warmup"
@@ -243,7 +242,6 @@ def classify_market_structure(
     candidate_days = 0
 
     for index, current in enumerate(rows):
-        current_date = current["date"]
         if index == 0:
             output.append(
                 {

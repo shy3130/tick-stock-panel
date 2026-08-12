@@ -7,9 +7,9 @@ into historical selection.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable
-
+from collections.abc import Iterable
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 REQUIRED_FIELDS = frozenset({"published_at", "ts_code", "source", "event_type", "score"})
 
@@ -23,7 +23,7 @@ def _parse_timestamp(value: Any) -> datetime:
         raise ValueError("published_at must be an ISO-8601 string or datetime")
     if parsed.tzinfo is None:
         raise ValueError("published_at must include a timezone")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def validate_news_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -62,7 +62,7 @@ def news_scores_as_of(
         raise ValueError("as_of must include a timezone")
     if lookback_days <= 0:
         raise ValueError("lookback_days must be positive")
-    cutoff = as_of.astimezone(timezone.utc)
+    cutoff = as_of.astimezone(UTC)
     lower = cutoff - timedelta(days=int(lookback_days))
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     seen: set[tuple[str, str, str, datetime]] = set()
@@ -94,4 +94,4 @@ def news_scores_as_of(
 
 def trading_day_as_of(day: date) -> datetime:
     """Conservative daily cut-off: previous UTC day end (08:00 China time)."""
-    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    return datetime(day.year, day.month, day.day, tzinfo=UTC)

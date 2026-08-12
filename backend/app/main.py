@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
     try:
         from app.services import auth as auth_service
         auth_service.bootstrap_from_env()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("auth bootstrap failed: %s", e)
 
     # 数据层
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
         repo.get_matrix_data_generation("stock")
     # 指标异步预热标志: enriched 缓存在后台线程构建, 完成后置 True
     app.state.indicators_ready = False
-    repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)  # noqa: SLF001
+    repo._on_warmup_done = lambda: setattr(app.state, "indicators_ready", True)
 
     # Polars 缓存预热 — enriched 的重计算 (107万行 compute_indicators) 推后台,
     # instruments/index/ETF 仍同步 (毫秒级)。应用立即 ready, 指标算完后自动替换。
@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
         from app.data_providers import custom as custom_sources
         custom_sources.load_all()
         logger.info("custom data sources loaded: %d", len(custom_sources.list_sources()))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("custom data sources init failed: %s", e)
 
     # 全局行情服务
@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI):
         daily_pipeline.set_app_state(app.state)  # 供 depth_finalize job 访问 depth_service
         scheduler = daily_pipeline.start_scheduler(repo, capset)
         app.state.scheduler = scheduler
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("scheduler not started: %s", e)
         app.state.scheduler = None
 
@@ -137,7 +137,7 @@ async def lifespan(app: FastAPI):
     try:
         depth_service.boot_check()
         depth_service.start_polling()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("depth_service init failed: %s", e)
 
     # 企业微信智能机器人长连接(可选通道, 失败不阻断启动)
@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
         wecom_bot_service.set_app_state(app.state)
         app.state.wecom_bot_service = wecom_bot_service
         wecom_bot_service.boot_check()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("wecom_bot_service init failed: %s", e)
 
     # 内置扩展表 (概念/行业): 先创建 config (含拉取配置), 默认开启定时拉取。
@@ -156,7 +156,7 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.ext_presets import ensure_builtin_presets
         await ensure_builtin_presets(store.data_dir)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("内置扩展表初始化失败 (不影响启动): %s", e)
 
     # 扩展数据定时拉取: 在预设配置就绪后启动, 自动调度 enabled 的预设。
@@ -220,7 +220,7 @@ async def lifespan(app: FastAPI):
                     years=settings.backtest_matrix_cache_prewarm_years,
                 )
                 logger.info("matrix cache prewarm done: %s", result)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("matrix cache prewarm failed")
             finally:
                 with matrix_prewarm_lock:
@@ -232,7 +232,7 @@ async def lifespan(app: FastAPI):
             daemon=True,
         ).start()
 
-    repo._on_refresh_done = _schedule_matrix_cache_prewarm  # noqa: SLF001
+    repo._on_refresh_done = _schedule_matrix_cache_prewarm
     if repo.enriched_ready:
         _schedule_matrix_cache_prewarm()
 
@@ -260,14 +260,14 @@ async def lifespan(app: FastAPI):
                 names = {s["id"]: s["name"] for s in strategy_engine.list_strategies()}
                 mr_store.migrate_strategy_monitors(store.data_dir, ids, names)
                 logger.info("strategy monitor migrated: %d strategies", len(ids))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("strategy monitor migration failed: %s", e)
 
     try:
         rules = mr_store.load_all(store.data_dir)
         monitor_engine.set_rules(rules)
         logger.info("monitor engine loaded: %d rules", monitor_engine.rule_count)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service

@@ -6,7 +6,6 @@ from typing import Any
 
 import polars as pl
 
-
 VIRTUAL_SCORING_DEPENDENCIES: dict[str, frozenset[str]] = {
     "ma20_bias": frozenset({"close", "ma20"}),
 }

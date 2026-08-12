@@ -13,9 +13,10 @@ import argparse
 import hashlib
 import json
 import random
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 import polars as pl
