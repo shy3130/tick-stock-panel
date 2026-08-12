@@ -248,7 +248,7 @@ git pull
 - **盘后状态驱动归因（L0/L1/L2）**:`POST /api/trading/review/auto-run` 或开启 `tradingAutoReview` 后每交易日 16:45 自动跑——无新红旗/新平仓时 L0 零 AI 调用，有候选时 L1 只对涉及单笔归因且按事件数去重，L2 为用户手动全量；AI 未配置按 `blocked_by_dependency` 降级
 - **统一失败语义**:`AppError` + 7 个标准错误码(`data_incomplete / stale_input / blocked_by_dependency / no_change / kernel_not_ready / ai_output_invalid / ai_provider_error`),API 返回 HTTP 422 + `{"code","detail"}`,前端可据此区分数据前置条件、模型输出无效、provider 故障、需介入与无变化
 - **Webhook / PushPlus**:监控规则命中按已配置渠道推送；纪律红旗按环境变量推送；每日复盘可选飞书、钉钉、企微、MeoW 或 PushPlus。PushPlus Token 只保存在 `secrets.json` 并通过设置页掩码展示。所有外部推送失败均只记日志，不阻断报告、告警、事件或审计落盘
-- 前端 `/trading` 提供持仓、单笔生命周期、计划台、账户与桥接规划五个页签，并展示后端组合风险透视；计划台可显式开启结构化检查并选择 AI profile；`/review` 增加纪律红旗；设置页提供策略提案、策略体检、复盘通知和单 profile 连接测试
+- 前端 `/trading` 提供持仓、单笔生命周期、计划台和账户四个可用页签，并展示后端组合风险透视；计划台可显式开启结构化检查并选择 AI profile；`/review` 增加纪律红旗；设置页提供策略提案、策略体检、复盘通知和单 profile 连接测试
 
 > 完整机制设计与移植计划见 [`backend/docs/YMOS_PORTING_PLAN.md`](./backend/docs/YMOS_PORTING_PLAN.md)(来源:`fm/YMOS` 投资操作系统 V4)。
 
@@ -262,8 +262,8 @@ git pull
 
 - **本地/远端多源 provider**:`fquant_local` 默认,`fquant` 可选;日 K / ETF / 指数 / 分钟 / 财务 / 实时行情按 capability 降级
 - **🔌 第三方接入(重点)**:Tushare 等 HTTP 定时拉取 · CSV / Excel 上传 · JSON 写入,自动 schema 发现 + 符号归一,页面可视化配置,**可与自有量化项目数据并入 DuckDB 同台分析**
-- **盘后定时管道**:APScheduler 15:30 CST 自动拉日 K + 重算 enriched + 跑监控
-- **本地 enriched 管道**:本地模式下 raw mirror 禁写,以 enriched 分区作为查询和选股主表;ETF 独立日线分区可用于追涨/组合优化
+- **盘后定时管道**:APScheduler 15:30 CST 自动拉日 K + 重算 enriched + 跑监控；本地 enriched 仅在 freshness/覆盖率校验后发布 canonical 可见水位
+- **本地 enriched 管道**:本地模式下 raw mirror 禁写,以 enriched 分区作为查询和选股主表；ETF 独立日线分区可用于追涨/组合优化；看板、回测与复盘依赖的关键指数会自动补齐 canonical 长历史
 
 ---
 
@@ -278,7 +278,6 @@ DATA_PROVIDER=fquant_local     # 默认:fquant_local; 可选:fquant
 FQUANT_FSTORE_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore.duckdb
 FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-markets.duckdb
 FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-klines.duckdb
-FQUANT_FSTORE_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-minutes.duckdb
 FQUANT_FSTORE_EXTENDED_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-extended.duckdb
 FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx.duckdb
 FQUANT_SNAPSHOT_ROOT_CATALOG=/Volumes/WD1/duckdb/snapshots/catalog
@@ -289,6 +288,8 @@ FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engi
 FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive
 FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED=/Volumes/WD1/duckdb/snapshots/fstore-extended
 FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE=/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute
+FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION=/Volumes/WD1/duckdb/snapshots/engine-a-callauction
+TICKFLOW_CANONICAL_HISTORY_ROOT=/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history
 FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hk.duckdb
 FQUANT_TDX_HK_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hkminutes.duckdb
 FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hktrans.duckdb
@@ -299,7 +300,11 @@ FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hktrans.duckdb
 - 日 K / ETF / 指数:TDX DuckDB + 本地 Parquet/enriched
 - 标的 / 财务 / ETF 备份:fstore DuckDB
 - 实时行情:fstore markets DuckDB `daily_markets` 最新快照
-- 5 档盘口 depth:当前仍是缺口,相关功能会能力门控降级
+- A 股分钟 K / 逐笔：按交易日经 staged catalog 读取 TDX DuckDB 分片
+- 筹码、日/分钟资金流、集合竞价：研究页“市场数据”仅读已发布 snapshot；不可用与无数据分开展示
+- A 股全历史：数据页手动回填到专用 external generation，成功后原子发布并与本地近期 enriched 合并；不修改用户 `data/`
+- 港股：日 K / minutes / trans 可用；本地无港股复权事件与财务报表，能力状态明确降级
+- 5 档盘口 depth：当前仍是缺口，相关功能会能力门控降级
 
 `DATA_PROVIDER` 环境变量优先级最高;未设置时读取设置页偏好,未知值会回落到 `fquant_local`。
 
@@ -406,7 +411,6 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 | **fstore DuckDB** | DuckDB read-only | 标的列表 / 财务报表 / 复权事件 / universes / 小表 | `FQUANT_FSTORE_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore.duckdb`，解析为 `snapshots/fstore/<gen>/` 快照） |
 | **fstore markets DuckDB** | DuckDB read-only | realtime 快照 / 每日行情 | `FQUANT_FSTORE_MARKETS_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-markets.duckdb`，解析为 generation 快照） |
 | **fstore klines DuckDB** | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-klines.duckdb`，解析为 generation 快照） |
-| **fstore minutes DuckDB** | DuckDB read-only | fstore 分钟 K 线 | `FQUANT_FSTORE_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-minutes.duckdb`；fstore generation 未发布 minutes 时回退 raw） |
 | **fstore extended DuckDB** | DuckDB read-only | 财务三表 / 复权事件 | `FQUANT_FSTORE_EXTENDED_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-extended.duckdb`，解析为独立 `snapshots/fstore-extended/<gen>/` 快照） |
 | **TDX DuckDB** | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx.duckdb`） |
 | **TDX minutes/trans catalog** | DuckDB read-only snapshots | 按交易日解析分钟 K 与逐笔成交分片（staged：preliminary→final，刻意不降级 raw） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_MINUTES_ARCHIVE,_TRANS_ARCHIVE}`（默认根 `/Volumes/WD1/duckdb`） |

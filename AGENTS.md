@@ -37,7 +37,6 @@
 | fstore DuckDB | DuckDB read-only | 标的列表 / 财务报表 / 复权事件 / universes / 小表 | `FQUANT_FSTORE_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore.duckdb`，解析为 `snapshots/fstore/<gen>/` 快照） |
 | fstore markets DuckDB | DuckDB read-only | realtime 快照 / 每日行情 | `FQUANT_FSTORE_MARKETS_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-markets.duckdb`，解析为 generation 快照） |
 | fstore klines DuckDB | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-klines.duckdb`，解析为 generation 快照） |
-| fstore minutes DuckDB | DuckDB read-only | fstore 分钟 K 线 | `FQUANT_FSTORE_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-minutes.duckdb`；fstore generation 未发布 minutes 时回退 raw） |
 | fstore extended DuckDB | DuckDB read-only | 财务三表 / 复权事件 | `FQUANT_FSTORE_EXTENDED_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-extended.duckdb`，解析为独立 `snapshots/fstore-extended/<gen>/` 快照） |
 | TDX DuckDB | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx.duckdb`） |
 | TDX A 股 minutes 路由 | 发布 catalog + DuckDB read-only | 按交易日定位 2023 年前归档或当前 minutes 快照（staged，preliminary→final） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_MINUTES_ARCHIVE}` |
@@ -49,7 +48,7 @@
 **已知缺口**：
 
 - **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级；可通过「受控外部 fallback」（默认关闭，见第 4 节契约）补公共免费源五档，未开启时维持降级返回空
-- **realtime 已接入**：只读本地 `fstore-markets.duckdb.daily_markets` 的 generation 快照（最新）；不再调用 `tdx-api` / sina / tencent / `../fquant` HTTP
+- **realtime 已接入**：只读本地 `fstore-markets.duckdb.daily_markets` 的 generation 快照（最新）；先取全局 `MAX(trade_date)`，再按该交易日与 `asset_type` 点查；使用独立 DuckDB 客户端/连接锁，避免被财务或 K 线查询阻塞；不再调用 `tdx-api` / sina / tencent / `../fquant` HTTP
 - **universes 已接入**：阶段 3.2 走 provider `get_by_universes()`；fquant 接 fstore `chengfen_gu` + `base_infos`
 
 ---
@@ -73,7 +72,7 @@
 |------|--------|------|
 | `services/kline_sync.py` | +105 / -92 | **解耦试点**，其他 service 照抄它的 `_get_data_provider()` 模式 |
 | `services/instrument_sync.py` | +35 / -40 | 标准解耦 |
-| `services/quote_service.py` | +46 / -17 | realtime 走 provider；fquant 走 `fstore-markets.duckdb.daily_markets` generation 快照 |
+| `services/quote_service.py` | +46 / -17 | realtime 走 provider；状态 `ready` 必须同时满足最近轮询成功、非空、在 freshness 窗口内且源日期为当日；fquant 走 `fstore-markets.duckdb.daily_markets` generation 快照 |
 | `services/financial_sync.py` | +87 / -34 | 财务报表走 fstore |
 | `services/index_sync.py` | +28 / -31 | universes 走 provider，FQuant 走 fstore |
 | `services/watchlist.py` | +20 / -5 | realtime 走 provider；fquant 走本地源 fallback |
@@ -183,7 +182,6 @@ export DATA_PROVIDER=fquant_local   # 或 fquant
 export FQUANT_FSTORE_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore.duckdb
 export FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-markets.duckdb
 export FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-klines.duckdb
-export FQUANT_FSTORE_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-minutes.duckdb
 export FQUANT_FSTORE_EXTENDED_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-extended.duckdb
 export FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx.duckdb
 export FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hk.duckdb
@@ -200,6 +198,8 @@ export FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE=/Volumes/WD1/duckdb/snapsho
 export FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive
 export FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED=/Volumes/WD1/duckdb/snapshots/fstore-extended
 export FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE=/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute
+export FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION=/Volumes/WD1/duckdb/snapshots/engine-a-callauction
+export TICKFLOW_CANONICAL_HISTORY_ROOT=/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history
 
 # 可选：AI
 export AI_PROVIDER=openai_compat
@@ -253,7 +253,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 | 现象 | 排查 |
 |------|------|
 | fquant/fquant_local 模式下接口返回空 | 检查 DuckDB 文件是否挂载、路径 env 是否正确、对应表是否有数据；客户端 fail-soft 返回空 df + warning |
-| fquant/fquant_local 模式下 realtime 接口返回空 | 检查 `fstore-markets.duckdb` generation 快照的 `daily_markets` 覆盖（确认 `snapshots/fstore/current.json` 已发布且非陈旧日期） |
+| fquant/fquant_local 模式下 realtime 接口返回空或状态 `stale` | 检查 `fstore-markets.duckdb` generation 快照的 `daily_markets` 覆盖（确认 `snapshots/fstore/current.json` 已发布、`MAX(trade_date)` 为当前交易日）；若 API 有当日数据但 enriched 未更新，检查 `quote_service` 的 `enriched 计算失败` 日志 |
 | fquant 模式下 depth 接口返回空 | 正常降级（当前 provider 不暴露 depth capability） |
 | fquant_local 盘后管道不生成 `kline_daily` | 正常：stock raw mirror 被 repository 层禁写；只生成/更新 `kline_daily_enriched` |
 | A 股 minutes/trans 返回空并出现 catalog warning | **staged catalog 是前置条件**：`require_current` 路由必须 `stage=preliminary`/`final`，旧 `stage=NULL` 行会被 fail-closed 拒绝并带可行动迁移指引（不降级 raw）。排查：catalog `current.json`、目标 root generation、路由是否为 staged；详见下方「catalog/engine 发布顺序」 |
@@ -274,6 +274,8 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 | engine-a-trans-archive | `/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE` | pinned_immutable 历史归档 |
 | fstore-extended | `/Volumes/WD1/duckdb/snapshots/fstore-extended` | `FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED` | extended 整库（财务三表）独立快照，与 fstore generation 隔离 |
 | engine-a-moneyflow-minute | `/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE` | tdx_moneyflow_minute 整库独立快照，与 engine-a generation 隔离 |
+| engine-a-callauction | `/Volumes/WD1/duckdb/snapshots/engine-a-callauction` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION` | tdx_callauction 整库独立只读快照 |
+| tickflow-canonical-history | `/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history` | `TICKFLOW_CANONICAL_HISTORY_ROOT` | 面板生成的 A 股 canonical enriched 全历史；独立 generation，不写用户 `data/` |
 
 **无中断发布顺序**（先数据后路由，避免读到未发布的物理文件）：
 
@@ -310,6 +312,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-10（交易生命周期补齐“建仓中/已作废”、分批 fill、计划 add/trim 与幂等 settlement；新增 canonical 日 K 后端组合风险透视；Agent 异常断流 fail-closed，分析日期与 `NaN/±Inf` JSON 边界加固；AI profile 测试连接精确探测目标 profile 且禁止 fallback。沪深市场两融总余额与财经日历因缺少本地契约/消费入口继续暂缓；M21 继续暂缓。）
+**最后更新**：2026-08-11（新增 A 股 canonical enriched 全历史外部 generation 回填与 repository 本地优先合并；研究页接入已发布快照的筹码、日/分钟个股与板块资金流、集合竞价和逐笔查询；港股复权/财务缺口显式 fail-closed。上一变更：实时行情修复与自选只读快照接入。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）
