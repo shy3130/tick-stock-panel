@@ -312,7 +312,7 @@ def _scan_enriched_fallback(repo, start: date, end: date) -> pl.DataFrame | None
     return pl.concat(parts, how="vertical_relaxed")
 
 
-def _load_index_pct(repo, start: date, end: date, symbol: str = "000001.SH") -> dict:
+def _load_index_pct(repo, start: date, end: date, symbol: str = "000001.INDEX") -> dict:
     """读取主力指数日K, 算每日涨幅 → {date: pct}。指数数量少, 单次读取可接受。"""
     try:
         df = repo.get_index_daily(symbol, start, end, columns=["date", "change_pct"])

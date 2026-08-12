@@ -35,6 +35,28 @@ def _data_dir(request: Request) -> Any:
     return request.app.state.repo.store.data_dir
 
 
+def _canonical_date(request: Request) -> date | None:
+    """读取当前 provider 已确认、业务层可见的 enriched 最晚日期。"""
+    try:
+        _, value = request.app.state.repo.get_enriched_latest()
+        return value
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _visible_history(request: Request) -> pl.DataFrame:
+    """隔离晚于 canonical 水位的派生 regime 行，不修改历史文件。"""
+    df = regime_builder.load_regime_history(_data_dir(request))
+    ceiling = _canonical_date(request)
+    if (
+        not df.is_empty()
+        and ceiling is not None
+        and "date" in df.columns
+    ):
+        df = df.filter(pl.col("date") <= ceiling)
+    return df
+
+
 def _df_to_records(df: pl.DataFrame) -> list[dict]:
     """polars DataFrame → JSON 安全的 list[dict](date 转 ISO 字符串)。"""
     if df is None or df.is_empty():
@@ -60,7 +82,7 @@ def regime_history(
     - 传了 start/end: 返回完整区间, 不被 limit 截断(供「全部」/自定义范围)。
     """
     global _cache, _cache_ts
-    cache_key = f"hist|{start}|{end}|{limit}"
+    cache_key = f"hist|{start}|{end}|{limit}|{_canonical_date(request)}"
     with _cache_lock:
         if (
             _cache is not None
@@ -69,7 +91,7 @@ def regime_history(
         ):
             return _cache["data"]
 
-    df = regime_builder.load_regime_history(_data_dir(request))
+    df = _visible_history(request)
     if df.is_empty():
         result: dict = {"rows": [], "total": 0}
     else:
@@ -92,7 +114,7 @@ def regime_history(
 @router.get("/latest")
 def regime_latest(request: Request):
     """最新一日环境(轻量)。"""
-    df = regime_builder.load_regime_history(_data_dir(request))
+    df = _visible_history(request)
     if df.is_empty():
         return {"row": None}
     latest = df.sort("date", descending=True).head(1)
@@ -106,7 +128,7 @@ def regime_states(
     days: int = Query(60, ge=1, le=1000),
 ):
     """状态分布统计(各状态天数/占比)。"""
-    df = regime_builder.load_regime_history(_data_dir(request))
+    df = _visible_history(request)
     if df.is_empty():
         return {"distribution": [], "days": 0}
     df = df.sort("date", descending=True).head(days)
@@ -127,7 +149,14 @@ def regime_states(
 @router.get("/coverage")
 def regime_coverage(request: Request):
     """regime 数据覆盖元信息(供数据画像/前端判断空状态)。"""
-    return regime_builder.get_regime_coverage(_data_dir(request))
+    df = _visible_history(request)
+    if df.is_empty():
+        return {"rows": 0, "earliest_date": None, "latest_date": None}
+    return {
+        "rows": df.height,
+        "earliest_date": str(df["date"].min()),
+        "latest_date": str(df["date"].max()),
+    }
 
 
 @router.post("/recompute")
@@ -140,12 +169,22 @@ def regime_recompute(request: Request, start: date | None = None, end: date | No
     repo = request.app.state.repo
     data_dir = _data_dir(request)
     end = end or date.today()
+    canonical_date = _canonical_date(request)
+    if canonical_date is not None and end > canonical_date:
+        end = canonical_date
     if start is None:
         earliest = regime_builder.earliest_enriched_date(repo)
         if earliest is None:
             invalidate_regime_cache()
             return {"ok": True, "computed": 0}
         start = earliest
+    if start > end:
+        invalidate_regime_cache()
+        return {
+            "ok": True,
+            "computed": 0,
+            "canonical_as_of": str(canonical_date) if canonical_date else None,
+        }
     new_rows = regime_builder.run_regime_batch(repo, start=start, end=end)
     if not new_rows.is_empty():
         regime_builder.upsert_regime_history(data_dir, new_rows)
