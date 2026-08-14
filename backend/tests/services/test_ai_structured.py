@@ -133,3 +133,63 @@ def test_analysis_artifact_serializes_without_prompt_content():
     assert "\"messages\"" not in dumped
     assert "\"content\"" not in dumped
     assert "secret" not in dumped.lower()
+
+
+# ── Parser 增强测试（移植自 PA_Agent） ─────────────────────────────────────
+
+
+def test_parser_smart_quotes_normalized():
+    """智能引号 \u201c\u201d\u2018\u2019 和 en/em-dash 被归一化为 ASCII。"""
+    v, i = parse_json('{"key": \u201cvalue\u201d, "dash": \u201c\u2013\u201d}')
+    assert i == []
+    assert v == {"key": "value", "dash": "-"}
+
+
+
+def test_parser_unescaped_quotes_in_string_repaired():
+    """字符串值内的未转义引号被 peek-ahead 修复。"""
+    v, i = parse_json('{"reason": "he said "hi"", "count": 1}')
+    assert i == []
+    assert v == {"reason": 'he said "hi"', "count": 1}
+
+
+def test_parser_semicolon_separator_repaired():
+    """字段间的分号被替换为逗号。"""
+    v, i = parse_json('{"a": 1; "b": 2}')
+    assert i == []
+    assert v == {"a": 1, "b": 2}
+
+
+def test_parser_brace_depth_extracts_first_complete_object():
+    """花括号深度跟踪提取首个完整对象，忽略后续含 } 的 prose。"""
+    v, i = parse_json('{"x": 1} trailing prose } end')
+    assert i == []
+    assert v == {"x": 1}
+
+
+def test_parser_embedded_fence_after_prose():
+    """prose 后跟随嵌入式 ```json``` 围栏。"""
+    v, i = parse_json('Here is the result:\n```json\n{"score": 42}\n```\nDone.')
+    assert i == []
+    assert v == {"score": 42}
+
+
+def test_parser_control_char_in_string_escaped():
+    """字符串内的原始换行被转义而非删除。"""
+    v, i = parse_json('{"text": "line1\nline2"}')
+    assert i == []
+    assert v == {"text": "line1\nline2"}
+
+
+def test_parser_array_with_smart_quotes_and_trailing_comma():
+    """数组也受益于 Unicode 归一化和尾逗号清理。"""
+    v, i = parse_json('[{"name": \u201cABC\u201d}, {"name": \u201cXYZ\u201d},]')
+    assert i == []
+    assert v == [{"name": "ABC"}, {"name": "XYZ"}]
+
+
+def test_parser_plain_text_still_returns_plaintaintext_error():
+    """非 JSON 自然语言仍正确分类为 plaintext。"""
+    v, i = parse_json("I think the stock is overvalued.")
+    assert v is None
+    assert i[0].category == "plaintext"
