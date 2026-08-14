@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.config import settings
 from app.services.trading import autopsy as autopsy_svc
-from app.services.trading import proposals as proposals_svc
+from app.services.trading import cycle_audit as cycle_audit_svc
 from app.services.trading import store
 from app.services.trading.proposals import ProposalError
 from app.services.trading.red_flags import scan_all, scan_trade
@@ -31,6 +31,16 @@ def list_red_flags():
 def get_trade_red_flags(trade_id: str):
     """单笔红旗。trade 不存在时返回空列表(红旗可审计已删除数据)。"""
     return {"tradeId": trade_id, "flags": scan_trade(settings.data_dir, trade_id)}
+
+
+# ── 周期审计（跨笔聚合） ─────────────────────────────────
+@router.get("/cycle-audit")
+def get_cycle_audit():
+    """执行周期审计：跨所有已平仓 trades 聚合红旗频率、归因分类分布、策略族统计。
+
+    纯代码，不调用 AI。按 YMOS SOP 样本门槛返回 auditLevel。
+    """
+    return cycle_audit_svc.run_cycle_audit(settings.data_dir)
 
 
 # ── AI 归因 ──────────────────────────────────────────────
