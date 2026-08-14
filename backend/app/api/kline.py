@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Annotated, Literal, Optional
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -86,11 +86,22 @@ def search_instruments(
     request: Request,
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
+    asset_type: Annotated[list[Literal["stock", "index", "etf", "hk"]] | None, Query()] = None,
 ):
     """模糊搜索标的 (本地 instruments 优先, Eastmoney suggest 只补足缺口)。"""
     from app.services.symbol_search import search_symbols
 
-    return {"results": search_symbols(request.app.state.repo, q, limit)}
+    selected_asset_types = asset_type or []
+    index_only = set(selected_asset_types) == {"index"}
+    return {
+        "results": search_symbols(
+            request.app.state.repo,
+            q,
+            limit,
+            asset_types=selected_asset_types,
+            use_suggest=not index_only,
+        ),
+    }
 
 
 @router.post("/instruments/names")

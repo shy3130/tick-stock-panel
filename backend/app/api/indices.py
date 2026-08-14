@@ -56,18 +56,25 @@ def search_indices(
         rows = df.head(limit).to_dicts()
         return {"results": rows}
 
-    keyword = q.strip().upper()
-    masks = []
-    if "code" in df.columns:
-        masks.append(pl.col("code").cast(pl.Utf8).str.contains(keyword, literal=True))
-    masks.append(pl.col("symbol").cast(pl.Utf8).str.to_uppercase().str.contains(keyword, literal=True))
-    if "name" in df.columns:
-        masks.append(pl.col("name").cast(pl.Utf8).str.contains(q.strip(), literal=True))
+    from app.services.symbol_search import search_symbols
 
-    mask = masks[0]
-    for m in masks[1:]:
-        mask = mask | m
-    rows = df.filter(mask).head(limit).to_dicts()
+    matched = search_symbols(
+        repo,
+        q,
+        limit,
+        asset_type="index",
+        use_suggest=False,
+        max_limit=100,
+    )
+    original_by_symbol = {
+        str(row.get("symbol")): row
+        for row in df.to_dicts()
+        if row.get("symbol") is not None
+    }
+    rows = [
+        {**original_by_symbol.get(str(row.get("symbol")), {}), **row}
+        for row in matched
+    ]
     return {"results": rows}
 
 
