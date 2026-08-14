@@ -105,6 +105,10 @@ export const QK = {
   marketDataTransactions: (symbol: string, date: string, limit: number) =>
                             ['market-data-transactions', symbol, date, limit] as const,
 
+  // Research analysis（canonical enriched 日 K；用户显式触发）
+  researchSymbolAnalysis: (symbol: string, start: string, end: string) =>
+                            ['research-symbol-analysis', symbol, start, end] as const,
+
   // Research (假设注册 + 定时研究)
   researchHypothesesRoot: ['research-hypotheses'] as const,
   researchHypotheses: (status?: string, query?: string) =>

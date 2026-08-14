@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   AlertCircle,
+  BarChart3,
   CheckCircle2,
   ChevronDown,
   CircleDashed,
@@ -20,6 +21,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
+import { AnalysisPanel } from '@/components/research/AnalysisPanel'
 import { MarketDataPanel } from '@/components/research/MarketDataPanel'
 import { PageHeader } from '@/components/PageHeader'
 import { toast } from '@/components/Toast'
@@ -61,7 +63,7 @@ const SCHEDULE_TEMPLATES: { value: ResearchScheduleTemplate; label: string; hint
   { value: 'strategy_pool_weekly', label: '策略池周报', hint: '统计策略池与既有 Run Card' },
 ]
 
-type ResearchTab = 'hypotheses' | 'schedules' | 'market-data'
+type ResearchTab = 'hypotheses' | 'schedules' | 'market-data' | 'analysis'
 
 type HypothesisDraft = {
   title: string
@@ -162,10 +164,13 @@ export function Research() {
         <TabButton active={tab === 'market-data'} icon={Database} onClick={() => setTab('market-data')}>
           市场数据
         </TabButton>
+        <TabButton active={tab === 'analysis'} icon={BarChart3} onClick={() => setTab('analysis')}>
+          分析计算
+        </TabButton>
       </div>
       <main className="workspace-content min-h-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-6xl">
-          {tab === 'hypotheses' ? <HypothesesPanel /> : tab === 'schedules' ? <SchedulesPanel /> : <MarketDataPanel />}
+          {tab === 'hypotheses' ? <HypothesesPanel /> : tab === 'schedules' ? <SchedulesPanel /> : tab === 'market-data' ? <MarketDataPanel /> : <AnalysisPanel />}
         </div>
       </main>
     </div>

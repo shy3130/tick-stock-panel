@@ -7,7 +7,7 @@ import { toast } from '@/components/Toast'
 
 const BASE = ''
 
-async function request<T>(path: string, init?: RequestInit, opts?: { silent404?: boolean }): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, opts?: { silent404?: boolean; acceptUnavailable?: boolean }): Promise<T> {
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
@@ -15,6 +15,7 @@ async function request<T>(path: string, init?: RequestInit, opts?: { silent404?:
   if (!res.ok) {
     // 404 对调用方是"无数据"语义(如尚未生成 AI 归因)时静默返回 null,不弹 toast
     if (opts?.silent404 && res.status === 404) return null as T
+    if (opts?.acceptUnavailable && res.status === 503) return res.json() as Promise<T>
     let detail = ''
     try {
       const j = JSON.parse(await res.text())
@@ -1781,6 +1782,96 @@ export interface MarketDataTransactionsRequest {
   limit?: number
 }
 
+// ===== Research analysis（canonical enriched 日 K，只读） =====
+
+export interface ResearchAnalysisRiskResult {
+  status: string
+  observations: number
+  minSamples: number
+  descriptive: {
+    mean: number | null
+    std: number | null
+    annualizedVolatility: number | null
+    skewness: number | null
+    excessKurtosis: number | null
+    min: number | null
+    max: number | null
+  }
+  historicalVar: number | null
+  historicalCvar: number | null
+  parametricVar: number | null
+}
+
+export interface ResearchAnalysisPerformanceResult {
+  status: string
+  sortino?: number | null
+  omega?: number | null
+  max_drawdown?: number | null
+  calmar?: number | null
+  ulcer_index?: number | null
+}
+
+export interface ResearchAnalysisAdfResult {
+  status: string
+  adf_statistic?: number | null
+  p_value?: number | null
+  lags_used?: number | null
+  is_stationary?: boolean | null
+  observations?: number | null
+}
+
+export interface ResearchAnalysisGarchResult {
+  status: string
+  current_volatility?: number | null
+  long_run_volatility?: number | null
+  persistence?: number | null
+  observations?: number | null
+}
+
+export interface ResearchSymbolAnalysisResult {
+  risk: ResearchAnalysisRiskResult
+  performance: ResearchAnalysisPerformanceResult
+  statistics: {
+    adf: ResearchAnalysisAdfResult
+    garch: ResearchAnalysisGarchResult
+  }
+}
+
+export interface ResearchSymbolAnalysisAvailableResponse {
+  available: true
+  source: string
+  symbol: string
+  start: string
+  end: string
+  data_as_of: string | null
+  observations: number
+  result: ResearchSymbolAnalysisResult
+  warnings: string[]
+  reason: null
+}
+
+export interface ResearchSymbolAnalysisUnavailableResponse {
+  available: false
+  source: null
+  symbol: string
+  start: null
+  end: null
+  data_as_of: null
+  observations: 0
+  result: null
+  warnings: string[]
+  reason: string
+}
+
+export type ResearchSymbolAnalysisResponse =
+  | ResearchSymbolAnalysisAvailableResponse
+  | ResearchSymbolAnalysisUnavailableResponse
+
+export interface ResearchSymbolAnalysisRequest {
+  start?: string
+  end?: string
+}
+
 // ===== Research (假设注册 + 定时研究) =====
 // 后端: api/research.py + services/research_registry.py + scheduled_research.py
 // 假设状态机与证据 kind 以后端 STATUSES / EVIDENCE_KINDS 为准。
@@ -3174,6 +3265,19 @@ export const api = {
     if (params.limit != null) qs.set('limit', String(params.limit))
     return request<MarketDataTransactionsResponse>(
       `/api/market-data/transactions/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  // ===== Research analysis（canonical enriched 日 K，只读） =====
+  researchSymbolAnalysis: (symbol: string, params: ResearchSymbolAnalysisRequest = {}) => {
+    const qs = new URLSearchParams()
+    if (params.start) qs.set('start', params.start)
+    if (params.end) qs.set('end', params.end)
+    const query = qs.toString()
+    return request<ResearchSymbolAnalysisResponse>(
+      `/api/research/analysis/symbol/${encodeURIComponent(symbol)}${query ? `?${query}` : ''}`,
+      undefined,
+      { acceptUnavailable: true },
     )
   },
 
