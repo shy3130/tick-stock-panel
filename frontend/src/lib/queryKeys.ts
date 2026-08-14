@@ -28,7 +28,12 @@ export const QK = {
   // 前缀 watchlist- 以便 SSE quotes_updated 经 SSE_INVALIDATE_PREFIXES 命中
   watchlistSnapshot:    (symbols: string) => ['watchlist-snapshot', symbols] as const,
 
-  instrumentSearch:     (q: string) => ['instrument-search', q] as const,
+  instrumentSearch: (q: string, assetTypes?: readonly string[], limit = 20) => {
+    const normalizedAssetTypes = assetTypes?.length
+      ? [...new Set(assetTypes)].sort().join(',')
+      : 'all'
+    return ['instrument-search', q, normalizedAssetTypes, limit] as const
+  },
 
   // Screener
   screener:             ['screener'] as const,

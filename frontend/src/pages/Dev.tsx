@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Search, AlertTriangle, CheckCircle2, XCircle, FlaskConical, Activity } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { InstrumentSearchInput } from '@/components/instruments/InstrumentSearchInput'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { resetBadge } from '@/lib/monitorBadge'
@@ -56,6 +57,11 @@ function MinuteProbePanel() {
     }
   }
 
+  const handleProbeSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    void runProbe()
+  }
+
   const total = results.length
   const hasData = results.filter((r) => r.ok).length
   const missing = results.filter((r) => !r.ok)
@@ -70,16 +76,19 @@ function MinuteProbePanel() {
         </p>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3 rounded-btn bg-elevated p-4">
+      <form onSubmit={handleProbeSubmit} className="flex flex-wrap items-end gap-3 rounded-btn bg-elevated p-4">
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted">股票代码</label>
-          <input
+          <InstrumentSearchInput
             value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            placeholder="603261.SH"
-            className="w-44 rounded-btn border border-border bg-base px-3 py-1.5 text-sm text-foreground outline-none focus:border-accent"
-            onKeyDown={(e) => e.key === 'Enter' && !loading && runProbe()}
+            onChange={setSymbol}
+            assetTypes={['stock']}
+            placeholder="输入代码、名称、全拼或简拼"
+            ariaLabel="股票代码"
+            className="w-44"
+            inputClassName="w-full rounded-btn border border-border bg-base px-3 py-1.5 text-sm text-foreground outline-none focus:border-accent"
           />
+          <span className="text-[10px] text-muted">可按代码、名称、全拼或简拼搜索</span>
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted">回溯天数</label>
@@ -93,14 +102,14 @@ function MinuteProbePanel() {
           />
         </div>
         <button
-          onClick={runProbe}
+          type="submit"
           disabled={loading || !symbol.trim()}
           className="flex items-center gap-1.5 rounded-btn bg-accent px-4 py-1.5 text-sm font-medium text-base hover:bg-accent/90 disabled:opacity-50 cursor-pointer"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
           {loading ? '探测中…' : '开始探测'}
         </button>
-      </div>
+      </form>
 
       {error && (
         <div className="flex items-center gap-2 rounded-btn border border-danger/40 bg-danger/10 p-3 text-sm text-danger">

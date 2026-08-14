@@ -6,6 +6,7 @@ import { api, type FactorColumn, type FactorBacktestResult, type GroupStat } fro
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
+import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
 import { FactorICChart } from './charts/FactorICChart'
 import { FactorGroupNavChart } from './charts/FactorGroupNavChart'
 
@@ -19,6 +20,12 @@ const TODAY = formatDate(new Date())
 const THREE_MONTHS_AGO = monthsAgo(3)
 
 const INPUT_CLS = 'control w-full text-xs'
+const appendUniqueSymbol = (symbolsText: string, symbol: string) => {
+  const key = symbol.trim().toUpperCase()
+  const symbols = symbolsText.split(',').map(value => value.trim()).filter(Boolean)
+  return symbols.some(s => s.toUpperCase() === key) ? symbolsText : symbolsText ? `${symbolsText},${symbol}` : symbol
+}
+
 
 function StatCard({ label, value, highlight }: {
   label: string
@@ -204,6 +211,13 @@ export function FactorBacktest() {
               onChange={e => setSymbols(e.target.value)}
               placeholder="留空则使用全市场，建议最近3个月"
               className={`${INPUT_CLS} font-mono`}
+            />
+            <InstrumentSearchAdder
+              onAdd={result => setSymbols(previous => appendUniqueSymbol(previous, result.symbol))}
+              assetTypes={['stock']}
+              placeholder="搜索名称或拼音后添加"
+              ariaLabel="添加因子回测标的"
+              className="mt-2"
             />
           </div>
 

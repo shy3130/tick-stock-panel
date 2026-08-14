@@ -42,11 +42,13 @@ export interface CapabilitiesResponse {
   capabilities: Record<string, CapabilityLimits>
 }
 
+export type InstrumentAssetType = 'stock' | 'index' | 'etf' | 'hk'
+
 export interface InstrumentSearchResult {
   symbol: string
   name: string
   code: string
-  asset_type?: 'stock' | 'index' | 'etf' | 'hk' | 'unknown' | string
+  asset_type?: InstrumentAssetType | 'unknown'
   source?: 'local' | 'eastmoney_suggest' | string
   matched_by?: 'code' | 'symbol' | 'name' | 'pinyin' | 'initials' | 'suggest' | string
 }
@@ -2339,10 +2341,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, days }),
     }),
-  instrumentSearch: (q: string, limit = 20) =>
-    request<{ results: InstrumentSearchResult[] }>(
-      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}`,
-    ),
+  instrumentSearch: (q: string, limit = 20, assetTypes?: readonly InstrumentAssetType[]) => {
+    const params = new URLSearchParams({ q, limit: String(limit) })
+    assetTypes?.forEach((assetType) => params.append('asset_type', assetType))
+    return request<{ results: InstrumentSearchResult[] }>(
+      `/api/kline/instruments/search?${params.toString()}`,
+    )
+  },
 
   /** 批量查股票名称 (传入 symbol 列表, 返回 {symbol: name}) */
   instrumentNames: (symbols: string[]) =>

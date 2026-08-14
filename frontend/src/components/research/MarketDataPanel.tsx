@@ -13,6 +13,7 @@ import {
   Search,
 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
+import { InstrumentSearchInput } from '@/components/instruments/InstrumentSearchInput'
 import {
   api,
   type MarketDataCallAuctionResponse,
@@ -376,8 +377,15 @@ export function MarketDataPanel() {
         <div className="panel-body grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="grid gap-1 text-xs text-secondary">
             证券代码
-            <input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} onBlur={() => setSymbol((value) => value.trim().toUpperCase())} className={cn(INPUT, 'font-mono')} inputMode="text" placeholder="600519.SH" aria-describedby="market-symbol-hint" />
-            <span id="market-symbol-hint" className="text-[10px] text-muted">仅接受 000001.SZ / 600519.SH / 430047.BJ</span>
+            <InstrumentSearchInput
+              value={symbol}
+              onChange={setSymbol}
+              assetTypes={['stock']}
+              placeholder="输入代码、名称、全拼或简拼"
+              ariaLabel="证券代码"
+              inputClassName={cn(INPUT, 'font-mono')}
+            />
+            <span id="market-symbol-hint" className="text-[10px] text-muted">可按代码、名称、全拼或简拼搜索；提交时仅接受 000001.SZ / 600519.SH / 430047.BJ</span>
           </label>
           <label className="grid gap-1 text-xs text-secondary">起始日期<input type="date" value={range.start} max={range.end || TODAY} onChange={(event) => setRange((value) => ({ ...value, start: event.target.value }))} className={INPUT} /></label>
           <label className="grid gap-1 text-xs text-secondary">结束日期<input type="date" value={range.end} min={range.start || undefined} max={TODAY} onChange={(event) => setRange((value) => ({ ...value, end: event.target.value }))} className={INPUT} /></label>

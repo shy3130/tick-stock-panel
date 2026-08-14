@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
+import { InstrumentSearchInput } from '@/components/instruments/InstrumentSearchInput'
 import { PageHeader } from '@/components/PageHeader'
 import { toast } from '@/components/Toast'
 import { api, type CrossCorrelationResponse, type CrossPeerResponse, type CrossRelativeStrengthResponse, type CrossReverseScreenResponse } from '@/lib/api'
@@ -32,6 +33,7 @@ const BTN_GHOST = 'btn-secondary text-xs'
 const CARD = 'panel'
 const TABLE_HEAD = ''
 const NUM_CELL = 'text-right font-mono tabular-nums text-secondary'
+const A_SHARE_SYMBOL_PATTERN = /^[0-9]{6}\.(SH|SZ|BJ)$/
 
 type Tab = 'correlation' | 'relativeStrength' | 'peers' | 'reverse'
 type PeerMode = 'industry' | 'amount' | 'board' | 'concept'
@@ -134,6 +136,10 @@ export function CrossSection() {
       toast('请输入标的代码后再查询。', 'error')
       return
     }
+    if (!A_SHARE_SYMBOL_PATTERN.test(symbol)) {
+      toast('请从搜索候选中选择标的，或输入完整代码（如 600519.SH）。', 'error')
+      return
+    }
     setSubmittedSymbol(symbol)
     setRequestVersion(value => value + 1)
   }
@@ -163,14 +169,16 @@ export function CrossSection() {
             <div className="panel-body flex flex-col gap-3 sm:flex-row sm:items-end !py-3">
               <label className="min-w-0 flex-1">
                 <span className="mb-1.5 block text-xs font-medium text-secondary">标的代码</span>
-                <input
-                  className={INPUT}
+                <InstrumentSearchInput
                   value={symbolInput}
-                  onChange={event => setSymbolInput(event.target.value)}
-                  placeholder="例如 000001.SZ"
-                  aria-label="标的代码"
-                  autoCapitalize="characters"
+                  onChange={setSymbolInput}
+                  assetTypes={['stock']}
+                  placeholder="输入代码、名称、全拼或简拼"
+                  ariaLabel="标的代码"
+                  className="w-full"
+                  inputClassName={INPUT}
                 />
+                <span className="mt-1 block text-[10px] text-muted">可按代码、名称、全拼或简拼搜索</span>
               </label>
               <button type="submit" className={BTN_PRIMARY} disabled={!symbolInput.trim()}>
                 <Search className="h-3.5 w-3.5" />明确查询

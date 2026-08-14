@@ -19,6 +19,7 @@ import {
   ShieldAlert, ShieldCheck, Square, Trash2, Wallet, type LucideIcon,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { InstrumentSearchInput } from '@/components/instruments/InstrumentSearchInput'
 import { EmptyState } from '@/components/EmptyState'
 import { toast } from '@/components/Toast'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
@@ -675,7 +676,15 @@ function NewTradeForm({ onOpened }: { onOpened: (id: string) => void }) {
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <label className="block">
             <span className="mb-1 block text-[10px] text-muted">标的代码 *</span>
-            <input value={symbol} onChange={e => setSymbol(e.target.value)} placeholder="600519" className={cn(INPUT, 'w-full font-mono')} />
+            <InstrumentSearchInput
+              value={symbol}
+              onChange={setSymbol}
+              onSelect={result => setName(result.name)}
+              assetTypes={['stock']}
+              placeholder="600519"
+              ariaLabel="标的代码"
+              inputClassName={cn(INPUT, 'w-full font-mono')}
+            />
           </label>
           <label className="block">
             <span className="mb-1 block text-[10px] text-muted">名称 *</span>
@@ -1512,11 +1521,14 @@ function PlanPanel({ onSelectTrade }: { onSelectTrade: (id: string) => void }) {
                 {draftEntries.map((e, i) => (
                   <div key={e.id} className="space-y-2 rounded-lg border border-border/70 bg-base/40 p-2.5">
                     <div className="grid grid-cols-[7rem_7rem_1fr_6rem_1fr_2rem] items-center gap-2">
-                      <input
+                      <InstrumentSearchInput
                         value={e.symbol}
-                        onChange={ev => updateEntry(i, { symbol: ev.target.value })}
+                        onChange={symbol => updateEntry(i, { symbol })}
+                        assetTypes={['stock']}
                         placeholder="600519.SH"
-                        className={cn(INPUT, 'font-mono')}
+                        ariaLabel="计划标的"
+                        inputClassName={cn(INPUT, 'font-mono')}
+                        portal
                       />
                       <select
                         value={e.action}

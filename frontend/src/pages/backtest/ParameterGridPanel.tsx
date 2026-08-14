@@ -12,8 +12,16 @@ import { toast } from '@/components/Toast'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
 import { REGIME_STATE_LABELS, type RegimeState } from '@/lib/regime'
+import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
+
 
 const INPUT_CLS = 'control w-full text-xs'
+const appendUniqueSymbol = (symbolsText: string, symbol: string) => {
+  const key = symbol.trim().toUpperCase()
+  const symbols = symbolsText.split(',').map(value => value.trim()).filter(Boolean)
+  return symbols.some(s => s.toUpperCase() === key) ? symbolsText : symbolsText ? `${symbolsText},${symbol}` : symbol
+}
+
 
 
 const TODAY = new Date().toISOString().slice(0, 10)
@@ -361,6 +369,13 @@ export function ParameterGridPanel() {
         <div>
           <label htmlFor="parameter-grid-symbols" className="mb-1.5 block text-xs font-medium text-secondary">标的（可选）</label>
           <input id="parameter-grid-symbols" value={symbols} onChange={event => setSymbols(event.target.value)} placeholder="逗号分隔；留空=全市场" className={`${INPUT_CLS} font-mono`} />
+          <InstrumentSearchAdder
+            onAdd={result => setSymbols(previous => appendUniqueSymbol(previous, result.symbol))}
+            assetTypes={['stock']}
+            placeholder="搜索名称或拼音后添加"
+            ariaLabel="添加参数网格标的"
+            className="mt-2"
+          />
         </div>
 
         <div className="rounded-btn border border-border bg-elevated/40 p-2.5">
