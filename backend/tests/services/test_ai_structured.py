@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from app.services.ai_structured.immutable import detect_retry_immutable_drift
 from app.services.ai_structured import (
     AIUsage,
     AnalysisArtifact,
@@ -259,3 +260,17 @@ async def test_valid_json_not_misclassified_as_quota():
     )
     assert result.status == "ok"
     assert result.data == {"symbol": "600519.SH", "score": 80}
+
+
+def test_retry_immutable_drift_rejects_silent_change_but_allows_correction():
+    """重试期间不可变事实只能回到程序期望值，不能改成第三个值。"""
+    before = {"symbol": "600519.SH", "score": 60}
+    changed = {"symbol": "000001.SZ", "score": 80}
+    corrected = {"symbol": "600519.SH", "score": 80}
+    expected = {"symbol": "600519.SH"}
+
+    violations = detect_retry_immutable_drift(before, changed, expected)
+    assert len(violations) == 1
+    assert violations[0].path == "symbol"
+    assert violations[0].detail["reason"] == "retry_cheat"
+    assert detect_retry_immutable_drift(before, corrected, expected) == []

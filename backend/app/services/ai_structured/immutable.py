@@ -36,6 +36,44 @@ def validate_immutable(
     return issues
 
 
+def detect_retry_immutable_drift(
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    expected: dict[str, object] | None,
+    *,
+    previously_mentioned: set[str] | None = None,
+) -> list[AIValidationIssue]:
+    """Detect immutable context changes introduced during a corrective retry.
+
+    A retry may legitimately repair a value that was previously reported as an
+    issue, or move a value back to the program-provided expectation. Any other
+    change to a program-owned field is treated as a retry-cheat violation.
+    """
+    if not isinstance(before, dict) or not isinstance(after, dict) or not expected:
+        return []
+    mentioned = previously_mentioned or set()
+    issues: list[AIValidationIssue] = []
+    for path, want in expected.items():
+        if path in mentioned:
+            continue
+        old = _get_path(before, path)
+        new = _get_path(after, path)
+        if old is _MISSING or new is _MISSING or old == new:
+            continue
+        # A correction back to the injected fact is explicitly legitimate.
+        if new == want:
+            continue
+        issues.append(
+            AIValidationIssue(
+                category="invalid",
+                path=path,
+                message="重试期间修改了不可变程序事实",
+                detail={"before": old, "after": new, "expected": want, "reason": "retry_cheat"},
+            )
+        )
+    return issues
+
+
 # Public aliases used by callers/tests.
 check_immutable = validate_immutable
 check_immutable_fields = validate_immutable

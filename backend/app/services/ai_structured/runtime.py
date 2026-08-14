@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from app.services.ai_structured.immutable import validate_immutable
+from app.services.ai_structured.immutable import detect_retry_immutable_drift, validate_immutable
 from app.services.ai_structured.models import (
     AIErrorDetails, AIUsage, AIValidationIssue, AttemptRecord, CancellationToken,
     DEFAULT_RETRY_POLICY, GenerateResponse, Invariant, RetryPolicy, StructuredAIResult,
@@ -159,6 +159,7 @@ async def run_structured_ai(
     format_retries = semantic_retries = 0
     provider = model_name = ""
     last_raw = ""
+    previous_value: dict[str, Any] | None = None
     last_error: AIErrorDetails | None = None
 
     # P3: primary always the requested; actual may differ after fallback inside generate (only on first provider attempt)
@@ -265,6 +266,14 @@ async def run_structured_ai(
                 if parsed_model is not None and isinstance(value, dict):
                     issues.extend(validate_immutable(value, immutable_context))
                     issues.extend(_invariant_issues(value, invariants))
+            if isinstance(value, dict) and previous_value is not None:
+                issues.extend(
+                    detect_retry_immutable_drift(
+                        previous_value,
+                        value,
+                        immutable_context,
+                    )
+                )
             category = str(issues[0].category) if issues else ""
             record = AttemptRecord(index=index, raw_text=last_raw, usage=unpacked.usage, issues=issues, error_category=category or None, elapsed_ms=int((time.monotonic() - attempt_started) * 1000))
             records.append(record)
@@ -290,6 +299,8 @@ async def run_structured_ai(
                     },
                 )
                 return await result("ok", data=data, parsed=parsed_model)
+            if isinstance(value, dict) and issues:
+                previous_value = value
             await _emit(on_event, "validation_failed", {"request_id": request_id, "attempt_id": attempt_id, "attempt_index": index, "issues": [i.model_dump() for i in issues]})
             if not should_retry(category, format_retries=format_retries, semantic_retries=semantic_retries, policy=retry_policy):
                 last_error = AIErrorDetails(
