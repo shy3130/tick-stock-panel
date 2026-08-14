@@ -11,6 +11,7 @@ import json
 from datetime import date, timedelta
 
 import polars as pl
+import pytest
 
 from app.storage.repository import DataStore, KlineRepository
 
@@ -462,6 +463,31 @@ def test_get_daily_returns_empty_when_no_local_or_external_history(
     )
 
     assert out.is_empty()
+    r.store.close()
+
+
+def test_get_daily_asset_strictly_propagates_canonical_scan_failure(tmp_path, monkeypatch):
+    r = repo(tmp_path)
+
+    def _raise_scan(**_kwargs):
+        raise RuntimeError("canonical catalog unavailable")
+
+    monkeypatch.setattr(r, "_scan_merged_enriched", _raise_scan)
+
+    assert r.get_daily_asset(
+        "stock",
+        "000001.SZ",
+        date(2026, 1, 1),
+        date(2026, 1, 5),
+    ).is_empty()
+    with pytest.raises(RuntimeError, match="canonical catalog unavailable"):
+        r.get_daily_asset(
+            "stock",
+            "000001.SZ",
+            date(2026, 1, 1),
+            date(2026, 1, 5),
+            raise_on_error=True,
+        )
     r.store.close()
 
 

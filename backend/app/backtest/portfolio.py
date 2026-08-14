@@ -6,16 +6,38 @@ import numpy as np
 import polars as pl
 
 
-def load_price_panel(repo, symbols: list[str], start: date, end: date) -> tuple[pl.DataFrame, list[str]]:
-    """Load canonical closes into a date-aligned frame: ``date`` + symbol columns."""
+def load_price_panel(
+    repo,
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    raise_on_error: bool = False,
+) -> tuple[pl.DataFrame, list[str]]:
+    """Load canonical closes into a date-aligned frame: ``date`` + symbol columns.
+
+    ``raise_on_error`` is reserved for callers that must distinguish an
+    unavailable repository from a valid query with no canonical rows.  The
+    default remains fail-soft for portfolio consumers.
+    """
     from app.api.kline import _asset_type_for_symbol
 
     frames = []
     for symbol in symbols:
         asset_type = _asset_type_for_symbol(symbol)
         try:
-            df = repo.get_daily_asset(asset_type, symbol, start, end, ["symbol", "date", "close"])
-        except Exception:  # noqa: BLE001
+            kwargs = {"raise_on_error": True} if raise_on_error else {}
+            df = repo.get_daily_asset(
+                asset_type,
+                symbol,
+                start,
+                end,
+                ["symbol", "date", "close"],
+                **kwargs,
+            )
+        except Exception:
+            if raise_on_error:
+                raise
             df = None
         if df is not None and not df.is_empty():
             frames.append(df.select(["symbol", "date", "close"]))

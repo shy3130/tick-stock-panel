@@ -1212,6 +1212,8 @@ class KlineRepository:
         start: date,
         end: date,
         columns: list[str] | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> pl.DataFrame:
         """单股日K查询 — 从14列parquet读取后即时计算指标。"""
         from datetime import timedelta
@@ -1230,6 +1232,8 @@ class KlineRepository:
                 symbols=[symbol],
             )
         except Exception as exc:
+            if raise_on_error:
+                raise
             logger.warning("单股日K查询失败: %s", exc)
             df = pl.DataFrame()
         if not df.is_empty():
@@ -1343,9 +1347,17 @@ class KlineRepository:
         start: date,
         end: date,
         columns: list[str] | None = None,
+        *,
+        raise_on_error: bool = False,
     ) -> pl.DataFrame:
         if asset_type == "stock":
-            return self.get_daily(symbol, start, end, columns)
+            return self.get_daily(
+                symbol,
+                start,
+                end,
+                columns,
+                raise_on_error=raise_on_error,
+            )
         if asset_type == "index":
             return self.get_index_daily(symbol, start, end, columns)
         if asset_type == "etf":
