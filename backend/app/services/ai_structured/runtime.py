@@ -63,6 +63,37 @@ def _category_from_exception(exc: BaseException) -> str:
         return "provider"
     return "provider"
 
+# ── HTTP 200 body quota/billing detection ─────────────────────────────────
+# Third-party gateways (e.g. alysc.top) sometimes return HTTP 200 with a
+# plaintext body like "积分不足" / "402 Payment Required" instead of raising
+# an exception. Without this check the runtime wastes retry attempts on
+# what it thinks is a "plaintext" parsing failure.
+_QUOTA_BODY_MARKERS = (
+    "402",
+    "积分已用完",
+    "积分不足",
+    "错误码: 402",
+    "错误码:402",
+    "insufficient quota",
+    "quota exceeded",
+    "payment required",
+    "out of credits",
+)
+
+
+def _is_quota_body(text: str | None) -> bool:
+    """True when *text* looks like a gateway 200-with-quota-error response."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    # 快速排除：正常 JSON 输出不会是 quota 错误
+    if raw[0] in "{[":
+        return False
+    lower = raw.lower()
+    if "402" in raw and ("积分" in raw or "quota" in lower or "credit" in lower):
+        return True
+    return any(marker.lower() in lower for marker in _QUOTA_BODY_MARKERS)
+
 
 async def _call_generate(generate: GenerateCallable, messages: list[dict[str, str]], *, profile_id: str | None, temperature: float, max_tokens: int, timeout: float, allow_fallback: bool = True) -> str | GenerateResponse:
     """允许完整 keyword 签名，也兼容旧式 generate(messages)。P3: 透传 allow_fallback 控制是否执行 profile fallback。"""
@@ -209,6 +240,15 @@ async def run_structured_ai(
                 return await result("failed", error=detail)
             unpacked = _unpack(response)
             last_raw, provider, model_name = unpacked.text, unpacked.provider, unpacked.model
+            # 第三方 gateway 可能返回 HTTP 200 + 纯文本配额错误（如 "积分不足"）。
+            # 在解析前短路，避免把 quota 错误误判为 plaintext 触发无意义重试。
+            if _is_quota_body(last_raw):
+                category = "quota"
+                detail = AIErrorDetails(category="quota", message=last_raw[:200])
+                records.append(AttemptRecord(index=index, raw_text=last_raw, usage=unpacked.usage, error_category=category, elapsed_ms=int((time.monotonic() - attempt_started) * 1000)))
+                last_error = detail
+                await _emit(on_event, "attempt_failed", {"request_id": request_id, "attempt_id": attempt_id, "category": category, "attempt_index": index})
+                return await result("failed", error=detail)
             if index == 0:
                 # capture from the (possibly fallback) response
                 primary_profile_id = getattr(unpacked, "primary_profile_id", None) or profile_id

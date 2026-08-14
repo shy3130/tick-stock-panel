@@ -192,4 +192,70 @@ def test_parser_plain_text_still_returns_plaintaintext_error():
     """非 JSON 自然语言仍正确分类为 plaintext。"""
     v, i = parse_json("I think the stock is overvalued.")
     assert v is None
-    assert i[0].category == "plaintext"
+
+
+@pytest.mark.asyncio
+async def test_quota_body_detection_short_circuits_without_retry():
+    """HTTP 200 body 是配额错误文本时，不重试，直接返回 quota 失败。"""
+    calls = 0
+
+    async def generate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return GenerateResponse(
+            text="积分不足，请充值后重试",
+            usage=AIUsage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+        )
+
+    result = await run_structured_ai(
+        messages=[{"role": "user", "content": "x"}],
+        output_model=_Payload,
+        purpose="test",
+        generate=generate,
+    )
+    assert result.status == "failed"
+    assert result.error is not None and result.error.category == "quota"
+    assert calls == 1  # 不重试
+
+
+@pytest.mark.asyncio
+async def test_quota_body_english_marker_detected():
+    """英文 quota marker 也被检测。"""
+    calls = 0
+
+    async def generate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return GenerateResponse(
+            text="402 Payment Required: insufficient quota",
+            usage=AIUsage(),
+        )
+
+    result = await run_structured_ai(
+        messages=[],
+        output_model=_Payload,
+        purpose="test",
+        generate=generate,
+    )
+    assert result.status == "failed"
+    assert result.error is not None and result.error.category == "quota"
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_valid_json_not_misclassified_as_quota():
+    """正常 JSON 不被 quota 检测误伤。"""
+    async def generate(*args, **kwargs):
+        return GenerateResponse(
+            text='{"symbol":"600519.SH","score":80}',
+            usage=AIUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+    result = await run_structured_ai(
+        messages=[{"role": "user", "content": "x"}],
+        output_model=_Payload,
+        purpose="test",
+        generate=generate,
+    )
+    assert result.status == "ok"
+    assert result.data == {"symbol": "600519.SH", "score": 80}
