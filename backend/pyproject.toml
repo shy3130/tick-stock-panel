@@ -2,7 +2,7 @@
 name = "tickflow-stock-panel-backend"
 version = "0.1.88"
 description = "A 股选股 + 监控 + 回测面板 — TickFlow 适配"
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
