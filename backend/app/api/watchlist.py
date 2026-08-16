@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
 from app.services import watchlist
+from app.services.watchlist_csv import import_watchlist_csv
 from app.services.watchlist_ocr import import_watchlist_image
 from app.services.watchlist_ocr.provider import get_ocr_provider
 
@@ -28,6 +29,13 @@ _IMPORT_IMAGE_TYPES = {
     "image/webp",
     "image/bmp",
     "image/gif",
+}
+# CSV/TXT 导入：文本远小于截图，上限 5MB 足够
+_MAX_IMPORT_CSV_BYTES = 5 * 1024 * 1024
+_IMPORT_CSV_TYPES = {
+    "text/csv",
+    "text/plain",
+    "application/csv",
 }
 # OCR 独立并发上限：避免多张大图同时解码 + 多 Tesseract 子进程
 _OCR_LIMITER = anyio.CapacityLimiter(2)
@@ -87,22 +95,36 @@ def ocr_status():
     return {"provider": provider.name, "available": provider.available()}
 
 
-@router.post("/import-image")
-async def import_from_image(request: Request, file: UploadFile = File(...)):
-    """从自选截图识别股票代码，返回候选列表（不自动写入自选）。"""
+async def _read_upload(
+    file: UploadFile,
+    allowed_types: set[str],
+    allowed_exts: tuple[str, ...],
+    max_bytes: int,
+    reject_msg: str,
+) -> bytes:
+    """校验白名单（类型/扩展名）并读取上传字节，超限抛 400。"""
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     filename = (file.filename or "").lower()
-    # 严格白名单：不接受任意 image/*（如 image/svg+xml）
-    ok_type = content_type in _IMPORT_IMAGE_TYPES
-    ok_ext = filename.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"))
-    if not ok_type and not ok_ext:
-        raise HTTPException(400, "仅支持 JPG / PNG / WebP / BMP / GIF 图片")
-
+    if content_type not in allowed_types and not filename.endswith(allowed_exts):
+        raise HTTPException(400, reject_msg)
     data = await file.read()
     if not data:
         raise HTTPException(400, "空文件")
-    if len(data) > _MAX_IMPORT_IMAGE_BYTES:
-        raise HTTPException(400, "图片过大（上限 12MB）")
+    if len(data) > max_bytes:
+        raise HTTPException(400, f"文件过大（上限 {max_bytes // (1024 * 1024)}MB）")
+    return data
+
+
+@router.post("/import-image")
+async def import_from_image(request: Request, file: UploadFile = File(...)):
+    """从自选截图识别股票代码，返回候选列表（不自动写入自选）。"""
+    data = await _read_upload(
+        file,
+        _IMPORT_IMAGE_TYPES,
+        (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"),
+        _MAX_IMPORT_IMAGE_BYTES,
+        "仅支持 JPG / PNG / WebP / BMP / GIF 图片",
+    )
 
     existing = {r["symbol"] for r in watchlist.list_symbols()}
     data_dir = request.app.state.repo.store.data_dir
@@ -121,6 +143,40 @@ async def import_from_image(request: Request, file: UploadFile = File(...)):
         raise HTTPException(500, f"识别失败: {e}") from e
 
     # 响应不回传整段 raw_text（可能很长）；调试时可开 query，这里默认省略
+    result.pop("raw_text", None)
+    return result
+
+
+@router.post("/import-csv")
+async def import_from_csv(request: Request, file: UploadFile = File(...)):
+    """从 CSV / TXT 导入自选候选列表（不自动写入自选）。
+
+    兼容同花顺/东财/通达信导出（逗号或 Tab 分隔、UTF-8 或 GBK 编码）。
+    """
+    data = await _read_upload(
+        file,
+        _IMPORT_CSV_TYPES,
+        (".csv", ".txt"),
+        _MAX_IMPORT_CSV_BYTES,
+        "仅支持 CSV / TXT 文件",
+    )
+
+    existing = {r["symbol"] for r in watchlist.list_symbols()}
+    data_dir = request.app.state.repo.store.data_dir
+    try:
+        # CSV 解析 + instruments parquet 读取为同步 CPU 操作，挪线程池避免卡事件循环（行情 SSE 等）
+        result = await anyio.to_thread.run_sync(
+            lambda: import_watchlist_csv(data, data_dir, existing_symbols=existing),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("watchlist import-csv failed")
+        raise HTTPException(500, f"解析失败: {e}") from e
+
+    if not result["candidates"]:
+        raise HTTPException(400, "文件中未识别到股票代码或名称")
+    # 与 import-image 一致：不回传整段文本
     result.pop("raw_text", None)
     return result
 
