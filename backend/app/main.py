@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, regime, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
+from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, regime, research_agent, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -349,6 +349,7 @@ app.include_router(data.router)
 app.include_router(ext_data.router)
 app.include_router(financials.router)
 app.include_router(stock_analysis.router)
+app.include_router(research_agent.router)
 app.include_router(market_recap.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)

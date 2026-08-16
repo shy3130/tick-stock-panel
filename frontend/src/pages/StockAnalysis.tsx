@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell, AlertTriangle } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
@@ -13,8 +14,7 @@ import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
 import {
-  startAnalysis, findTodayReport, useHistoryReports,
-  deleteReport, openHistoryReport, loadHistory,
+  useHistoryReports, deleteReport, openHistoryReport, loadHistory,
 } from '@/lib/stockAnalysisStore'
 
 /**
@@ -26,10 +26,9 @@ import {
  *  - 报告胶囊用蓝色系,与财务分析(紫色)并存
  */
 export function StockAnalysis() {
+  const navigate = useNavigate()
   const [symbol, setSymbol] = useState<string>('')
   const [name, setName] = useState<string>('')
-  const [checking, setChecking] = useState(false)
-  const [confirmReport, setConfirmReport] = useState<{ id: string; created_at: string; focus: string } | null>(null)
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [showPriceAlerts, setShowPriceAlerts] = useState(false)
   const { last: lastStock, remember: rememberStock } = useLastStock('stock-analysis')
@@ -49,32 +48,15 @@ export function StockAnalysis() {
   const onSelect = (sym: string, nm: string) => {
     setSymbol(sym)
     setName(nm)
-    setConfirmReport(null)
     setShowPriceAlerts(false)
     rememberStock(sym, nm)
   }
 
-  const handleAnalyze = async () => {
-    if (!symbol || checking) return
-    setChecking(true)
-    try {
-      // 当日已分析过 → 二次确认(查看今日报告 / 重新分析)
-      const today = await findTodayReport(symbol)
-      if (today) {
-        setConfirmReport({ id: today.id, created_at: today.created_at, focus: today.focus })
-      } else {
-        await doAnalysis()
-      }
-    } catch {
-      await doAnalysis()
-    } finally {
-      setChecking(false)
-    }
-  }
-
-  const doAnalysis = async () => {
-    const r = await startAnalysis(symbol, name)
-    if (r.error) toast(r.error, 'error')
+  const handleAnalyze = () => {
+    if (!symbol) return
+    const params = new URLSearchParams({ symbol })
+    if (name) params.set('name', name)
+    navigate(`/quant-lab?${params.toString()}`)
   }
 
   return (
@@ -108,11 +90,10 @@ export function StockAnalysis() {
               </button>
               <button
                 onClick={handleAnalyze}
-                disabled={checking}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-sky-500/25 to-blue-500/15 border border-sky-400/30 text-sky-300 text-xs font-medium hover:from-sky-500/35 hover:to-blue-500/25 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-sky-500/25 to-blue-500/15 border border-sky-400/30 text-sky-300 text-xs font-medium hover:from-sky-500/35 hover:to-blue-500/25 transition-all"
               >
-                {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                AI 个股分析
+                <Sparkles className="h-3.5 w-3.5" />
+                Quant Lab 研究
               </button>
               <button
                 onClick={() => setShowPriceAlerts(true)}
@@ -142,16 +123,6 @@ export function StockAnalysis() {
           <HistorySidebar />
         </div>
       </div>
-
-      {/* 二次确认:已有历史报告 */}
-      {confirmReport && (
-        <ConfirmModal
-          report={confirmReport}
-          onView={() => { openHistoryReport(confirmReport.id); setConfirmReport(null) }}
-          onRedo={async () => { setConfirmReport(null); await doAnalysis() }}
-          onClose={() => setConfirmReport(null)}
-        />
-      )}
 
       {/* 个股日 K 详情对话框(点击名称/代码打开) */}
       <StockPreviewDialog
@@ -311,43 +282,6 @@ function HistorySidebar() {
         )}
       </div>
     </aside>
-  )
-}
-
-// ===== 二次确认弹窗 =====
-function ConfirmModal({ report, onView, onRedo, onClose }: {
-  report: { id: string; created_at: string; focus: string }
-  onView: () => void
-  onRedo: () => void
-  onClose: () => void
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
-      <div
-        className="w-full max-w-sm bg-surface border border-border rounded-2xl p-5 shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 mb-2">
-          <HistoryIcon className="h-4 w-4 text-sky-400" />
-          <span className="text-sm font-medium text-foreground">该个股已有分析报告</span>
-        </div>
-        <p className="text-xs text-secondary leading-relaxed mb-1">
-          最近一次报告生成于 <span className="text-foreground">{fmtRelative(report.created_at)}</span>。
-        </p>
-        {report.focus && <p className="text-xs text-muted mb-1">关注点: {report.focus}</p>}
-        <p className="text-xs text-muted mb-4">可直接查看历史,或重新生成一份新报告。</p>
-        <div className="flex gap-2">
-          <button onClick={onView}
-            className="flex-1 h-8 rounded-lg bg-elevated border border-border text-xs text-secondary hover:text-foreground transition-colors">
-            查看历史
-          </button>
-          <button onClick={onRedo}
-            className="flex-1 h-8 rounded-lg bg-gradient-to-r from-sky-500/20 to-blue-500/15 border border-sky-400/30 text-xs text-sky-300 hover:from-sky-500/30 transition-all">
-            重新分析
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }
 

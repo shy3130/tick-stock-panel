@@ -189,6 +189,47 @@ export interface AiStockReport {
   created_at: string
 }
 
+// ===== Quant Lab / Research Agent =====
+export type ResearchAgentRunStatus = 'queued' | 'planning' | 'collecting' | 'analyzing' | 'succeeded' | 'failed'
+
+export interface ResearchAgentEvidence {
+  citation: string
+  source: string
+  title: string
+  status: 'available' | 'partial' | 'unavailable' | string
+  summary: string
+  data: Record<string, any>
+  as_of?: string | null
+  retrieved_at: string
+  url?: string
+  error_type?: string
+}
+
+export interface ResearchAgentPlanItem {
+  tool: string
+  status: string
+}
+
+export interface ResearchAgentRun {
+  id: string
+  symbol: string
+  name: string
+  question: string
+  include_web_news: boolean
+  status: ResearchAgentRunStatus
+  stage: string
+  progress: number
+  created_at: string
+  updated_at: string
+  started_at?: string
+  completed_at?: string
+  plan: ResearchAgentPlanItem[]
+  evidence: ResearchAgentEvidence[]
+  answer: string
+  error: string
+  runtime: Record<string, any>
+}
+
 // ===== Kline =====
 export interface MinuteKlineRow {
   datetime: string
@@ -1981,6 +2022,21 @@ export const api = {
 
   stockAnalysisReportDelete: (reportId: string) =>
     request<{ ok: boolean }>(`/api/stock-analysis/reports/${encodeURIComponent(reportId)}`, { method: 'DELETE' }),
+
+  researchAgentCreate: (body: {
+    symbol: string
+    name?: string
+    question?: string
+    include_web_news?: boolean
+  }) => request<{ run: ResearchAgentRun }>('/api/research-agent/runs', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+
+  researchAgentRuns: (limit = 20) =>
+    request<{ runs: ResearchAgentRun[] }>(`/api/research-agent/runs?limit=${limit}`),
+
+  researchAgentRun: (runId: string) =>
+    request<{ run: ResearchAgentRun }>(`/api/research-agent/runs/${encodeURIComponent(runId)}`),
 
   /**
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。

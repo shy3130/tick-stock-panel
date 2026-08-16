@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
+import polars as pl
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -12,7 +14,7 @@ from app.research_agent.harness import ResearchAgentHarness
 from app.research_agent.models import evidence
 from app.research_agent.skill import evidence_prompt, parse_plan
 from app.research_agent.store import ResearchRunCapacityError, ResearchRunStore
-from app.research_agent.tools import _relevant_rss_items, _rss_items
+from app.research_agent.tools import _relevant_rss_items, _rss_items, collect_evidence
 
 
 def test_evidence_redacts_credential_values_and_urls():
@@ -157,6 +159,57 @@ def test_full_scope_plan_is_stable_and_honors_web_toggle():
         "web_news",
     ]
     assert no_web == plan[:-1]
+
+
+def test_collect_evidence_degrades_when_optional_integrations_are_absent(tmp_path, monkeypatch):
+    """The upstream install must remain useful without local vendor extensions."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    for module_name in (
+        "app.services.hithink_finance",
+        "app.services.special_data",
+        "app.services.research_reports",
+        "app.services.eastmoney_data",
+        "app.data_providers.hibor_research",
+    ):
+        monkeypatch.setitem(sys.modules, module_name, None)
+
+    class EmptyRepo:
+        store = SimpleNamespace(data_dir=tmp_path)
+
+        @staticmethod
+        def resolve_asset_type(_symbol: str) -> str:
+            return "stock"
+
+        @staticmethod
+        def get_daily_asset(*_args, **_kwargs) -> pl.DataFrame:
+            return pl.DataFrame()
+
+    app = SimpleNamespace(state=SimpleNamespace(repo=EmptyRepo()))
+    records = collect_evidence(
+        app,
+        symbol="600664.SH",
+        name="哈药股份",
+        tools=[
+            "market_snapshot",
+            "realtime_snapshot",
+            "financials",
+            "market_intelligence",
+            "strategy_signals",
+            "research_reports",
+            "announcements",
+        ],
+    )
+
+    assert len(records) == 10
+    assert [record["citation"] for record in records] == [f"[S{index:02d}]" for index in range(1, 11)]
+    assert all(record["status"] in {"available", "partial", "unavailable"} for record in records)
+    assert {record["title"] for record in records} >= {
+        "同花顺快照、估值与财务报表",
+        "同花顺热度与龙虎榜",
+        "个股机构研报",
+        "慧博公司与深度研报",
+        "公司公告与披露",
+    }
 
 
 def test_rss_parser_keeps_only_linked_items():

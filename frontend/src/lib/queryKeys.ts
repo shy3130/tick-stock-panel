@@ -30,6 +30,7 @@ export const QK = {
   // 导致每次都拉 TickFlow 触限流。分时图用固定 refetchInterval 刷新即可。
   minuteBatch:          (symbols: string) => ['minute-batch', symbols] as const,
   instrumentSearch:     (q: string, assetTypes?: string) => ['instrument-search', q, assetTypes ?? 'stock'] as const,
+  instrumentNames:      (symbols: string[]) => ['instrument-names', [...symbols].sort().join(',')] as const,
 
   // Screener
   screener:             ['screener'] as const,
@@ -59,6 +60,8 @@ export const QK = {
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
   stockLevels:          (symbol: string, days?: number) => ['stock-levels', symbol, days ?? 120] as const,
+  researchAgentRuns:    ['research-agent', 'runs'] as const,
+  researchAgentRun:     (id: string) => ['research-agent', 'run', id] as const,
   klineMinute:          (symbol: string, date: string) =>
                              ['kline-minute', symbol, date] as const,
   indexDaily:           (symbol: string, start: string, end: string) =>
