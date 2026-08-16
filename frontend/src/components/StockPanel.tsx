@@ -57,7 +57,11 @@ export function StockPanel({
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const [dailyResult, setDailyResult] = useState<StockDailyKChartResult | null>(null)
+  // 按 symbol 记录日K结果: 切股时用 symbol 门控显示, 旧股结果不误显示, 也不被父 effect 清掉而卡在加载态
+  const [dailyResult, setDailyResult] = useState<{ symbol: string; result: StockDailyKChartResult | null }>({ symbol, result: null })
+  const handleDataChange = useCallback((result: StockDailyKChartResult) => {
+    setDailyResult({ symbol, result })
+  }, [symbol])
   // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 StockDailyKChart 请求 ext 数据
   const [fields, setFields] = useState<ColumnConfig[]>(loadInfoFields)
   const extColumns = useMemo(() => buildInfoExtColumnsParam(fields), [fields])
@@ -85,21 +89,23 @@ export function StockPanel({
     onSelectDate?.(date)
   }, [onSelectDate])
 
-  const rows = dailyResult?.rows ?? []
-  const stockInfo = dailyResult?.stockInfo
-  const rawRows: KlineRow[] = dailyResult?.rawRows ?? []
+  // 仅当结果属于当前 symbol 时才用于显示 (切股瞬间旧股结果不会误显示)
+  const daily = dailyResult.symbol === symbol ? dailyResult.result : null
+  const rows = daily?.rows ?? []
+  const stockInfo = daily?.stockInfo
+  const rawRows: KlineRow[] = daily?.rawRows ?? []
+  const name = daily?.name
 
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
-  // 注意：必须跳过首次挂载——重开弹窗时 kline 命中 react-query 缓存，
-  // 子组件 onDataChange effect（先于父 effect 执行）会把 dailyResult 置为有效数据，
-  // 若此处再无条件清空，会把刚加载的数据抹掉，导致信息条整行消失。
+  // 注意：不再清空 dailyResult —— 预取后新 symbol 数据与切股同 commit 到达,
+  // 若父 effect 在此无条件清空 (子 effect 先执行, 父 effect 后执行), 会把刚到的数据抹掉,
+  // 且没有下一次 onDataChange 触发, 导致信息条永久卡在加载态。改由 symbol 门控显示。
   const prevSymbol = useRef<string | null>(symbol)
   useEffect(() => {
     if (prevSymbol.current === symbol) return
     prevSymbol.current = symbol
     setSelectedDate(null)
     setLinkedPrice(null)
-    setDailyResult(null)
   }, [symbol])
 
   // 当分时开启、无选中日期时，自动选中最新日期
@@ -124,7 +130,7 @@ export function StockPanel({
     <div className={className}>
       <StockInfoBar
         symbol={symbol}
-        name={dailyResult?.name}
+        name={name}
         stockInfo={stockInfo}
         rows={rawRows}
         fields={fields}
@@ -148,7 +154,7 @@ export function StockPanel({
           showMarkerToggle={showMarkerToggle}
           linkedPrice={linkedPrice}
           onDateClick={handleDateClick}
-          onDataChange={setDailyResult}
+          onDataChange={handleDataChange}
           visibleBars={showIntraday ? 40 : 60}
           extColumns={extColumns}
         />

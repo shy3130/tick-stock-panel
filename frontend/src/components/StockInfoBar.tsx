@@ -106,7 +106,21 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
     })
   }
 
-  if (rows.length === 0) return null
+  // 无数据时保持信息条挂载 (切股/首次加载): 只留 symbol+名称+小 spinner 作为加载态,
+  // 不渲染假占位值; 数据到位后价格/市值等原位填充, 避免整行消失造成布局跳动。
+  if (rows.length === 0) {
+    return (
+      <div className="px-2 pb-3 font-mono text-[12px] select-none">
+        <div className="flex items-baseline gap-x-3 flex-wrap">
+          <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>
+          {name && <span className="text-secondary font-medium">{name}</span>}
+          <span className="ml-auto self-center text-muted">
+            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
+          </span>
+        </div>
+      </div>
+    )
+  }
 
   const latest = rows[rows.length - 1]
   const prev = rows.length >= 2 ? rows[rows.length - 2] : null

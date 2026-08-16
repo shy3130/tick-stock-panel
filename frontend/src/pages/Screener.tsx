@@ -13,7 +13,7 @@ import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
-import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { StockPreviewDialog, toNavItems } from '@/components/StockPreviewDialog'
 import { useStrategyPool } from '@/lib/useStrategyPool'
 import { StrategyCard, CardSize, loadCardSize, cardWrapCls } from '@/components/screener/StrategyCard'
 import { ScreenerTable } from '@/components/screener/ScreenerTable'
@@ -372,6 +372,12 @@ export function Screener() {
   const candleDays = useMemo(() => resolveCandleConfig(candleColumn?.candleConfig).days, [candleColumn])
   // 真正请求/渲染蜡烛图：列可见 且 眼睛开关开启
   const dailyKVisible = candleColumnEnabled && dailyKChartVisible
+
+  // 切股导航列表: 按当前展示顺序 (含灰色失效行)
+  const previewNavItems = useMemo(
+    () => toNavItems(displayRows),
+    [displayRows],
+  )
 
   // 批量日k数据 (仅当蜡烛图可见时加载，省请求)
   const dailyKSymbols = useMemo(
@@ -894,6 +900,7 @@ export function Screener() {
                     symbolStrategyMap={symbolStrategyMap}
                     activeStrategy={activeStrategy}
                     watchlistSet={watchlistSet}
+                    activeSymbol={previewSymbol}
                     onPreview={(symbol, name) => { setPreviewSymbol(symbol); setPreviewName(name) }}
                     onToggleWatchlist={(symbol, inList) => toggleWatchlist.mutate({ symbol, inList })}
                     watchlistPending={toggleWatchlist.isPending}
@@ -943,6 +950,8 @@ export function Screener() {
         symbol={previewSymbol}
         name={previewName}
         onClose={closePreview}
+        navList={previewNavItems}
+        onNavigate={(sym, n) => { setPreviewSymbol(sym); setPreviewName(n ?? '') }}
       />
 
       <StrategySettingsDialog

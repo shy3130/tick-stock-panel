@@ -15,7 +15,7 @@ import {
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { AnalysisConfigDialog, PresetFetchState, type AnalysisFieldConfig } from '@/components/analysis-shared'
-import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { StockPreviewDialog, toNavItems, type NavItem } from '@/components/StockPreviewDialog'
 import { RpsRotationDialog } from '@/components/RpsRotationDialog'
 import { api, type MarketSnapshotRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -241,6 +241,7 @@ export function ConceptAnalysis() {
   const [sortMode, setSortMode] = useState<SortMode>('heat')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
+  const [previewNavList, setPreviewNavList] = useState<NavItem[]>([])
   const [showRps, setShowRps] = useState(false)
 
   const configsQuery = useQuery({ queryKey: QK.extData, queryFn: api.extDataList })
@@ -298,6 +299,7 @@ export function ConceptAnalysis() {
   }, [stats, search, sortMode])
 
   const selected = filteredStats.find(s => s.key === selectedKey) ?? filteredStats[0] ?? null
+
   const leading = useMemo(() => [...stats].sort(statSort('heat')).slice(0, 10), [stats])
   const falling = useMemo(() => [...stats].sort(statSort('down')).slice(0, 10), [stats])
   const activeConcept = useMemo(() => [...stats].sort(statSort('amount'))[0] ?? null, [stats])
@@ -393,7 +395,8 @@ export function ConceptAnalysis() {
             falling={falling}
             selectedKey={selected?.key ?? null}
             onSelect={setSelectedKey}
-            onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }}
+            activeSymbol={previewSymbol}
+            onStockClick={(sym, name, navList) => { setPreviewSymbol(sym); setPreviewName(name ?? ''); setPreviewNavList(navList ?? []) }}
           />
 
           {stats.length > 0 ? (
@@ -407,7 +410,7 @@ export function ConceptAnalysis() {
                 onSort={setSortMode}
                 onSelect={setSelectedKey}
               />
-              <ConceptFocus stat={selected} onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }} />
+              <ConceptFocus stat={selected} activeSymbol={previewSymbol} onStockClick={(sym, name, navList) => { setPreviewSymbol(sym); setPreviewName(name ?? ''); setPreviewNavList(navList ?? []) }} />
             </div>
           ) : rowsQuery.isLoading ? (
             <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算概念强度...</div>
@@ -433,7 +436,9 @@ export function ConceptAnalysis() {
         <StockPreviewDialog
           symbol={previewSymbol}
           name={previewName}
-          onClose={() => { setPreviewSymbol(null); setPreviewName('') }}
+          onClose={() => { setPreviewSymbol(null); setPreviewName(''); setPreviewNavList([]) }}
+          navList={previewNavList}
+          onNavigate={(sym, n) => { setPreviewSymbol(sym); setPreviewName(n ?? '') }}
         />
       )}
 
@@ -509,17 +514,19 @@ function MarketPulse({
   selectedKey,
   onSelect,
   onStockClick,
+  activeSymbol,
 }: {
   leading: ConceptStat[]
   falling: ConceptStat[]
   selectedKey: string | null
   onSelect: (key: string) => void
-  onStockClick: (symbol: string, name?: string) => void
+  onStockClick: (symbol: string, name?: string, navList?: NavItem[]) => void
+  activeSymbol: string | null
 }) {
   return (
     <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-      <PulseList title="领涨主线" items={leading} mode="up" selectedKey={selectedKey} onSelect={onSelect} onStockClick={onStockClick} />
-      <PulseList title="领跌方向" items={falling} mode="down" selectedKey={selectedKey} onSelect={onSelect} onStockClick={onStockClick} />
+      <PulseList title="领涨主线" items={leading} mode="up" selectedKey={selectedKey} onSelect={onSelect} onStockClick={onStockClick} activeSymbol={activeSymbol} />
+      <PulseList title="领跌方向" items={falling} mode="down" selectedKey={selectedKey} onSelect={onSelect} onStockClick={onStockClick} activeSymbol={activeSymbol} />
     </div>
   )
 }
@@ -531,13 +538,15 @@ function PulseList({
   selectedKey,
   onSelect,
   onStockClick,
+  activeSymbol,
 }: {
   title: string
   items: ConceptStat[]
   mode: 'up' | 'down'
   selectedKey: string | null
   onSelect: (key: string) => void
-  onStockClick: (symbol: string, name?: string) => void
+  onStockClick: (symbol: string, name?: string, navList?: NavItem[]) => void
+  activeSymbol: string | null
 }) {
   const toneText = mode === 'up' ? 'text-bull' : 'text-bear'
   const toneBorder = mode === 'up' ? 'border-bull/20' : 'border-bear/20'
@@ -556,7 +565,8 @@ function PulseList({
       <div className="space-y-1">
         {items.map((item, idx) => {
           const active = selectedKey === item.key
-          const leaders = [...item.stocks].sort((a, b) => b.leaderScore - a.leaderScore).slice(0, 3)
+          const sortedStocks = [...item.stocks].sort((a, b) => b.leaderScore - a.leaderScore)
+          const leaders = sortedStocks.slice(0, 3)
           const upPct = item.count > 0 ? (item.upCount / item.count) * 100 : 0
           const downPct = item.count > 0 ? (item.downCount / item.count) * 100 : 0
           const flatPct = Math.max(0, 100 - upPct - downPct)
@@ -597,7 +607,7 @@ function PulseList({
                   {Array.from({ length: 3 }).map((_, i) => {
                     const stock = leaders[i]
                     return stock ? (
-                      <span key={stock.symbol} title={stock.name || stock.symbol} onClick={e => { e.stopPropagation(); onStockClick(stock.symbol, stock.name || undefined) }} className={cn('flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] cursor-pointer hover:brightness-125', i === 0 ? 'bg-amber-300/10 text-foreground' : 'bg-elevated/60 text-secondary')}>
+                      <span key={stock.symbol} title={stock.name || stock.symbol} onClick={e => { e.stopPropagation(); onStockClick(stock.symbol, stock.name || undefined, toNavItems(sortedStocks.slice(0, MAX_RENDERED_STOCKS))) }} className={cn('flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] cursor-pointer hover:brightness-125', i === 0 ? 'bg-amber-300/10 text-foreground' : 'bg-elevated/60 text-secondary', stock.symbol === activeSymbol && 'ring-1 ring-accent/60')}>
                         <span className="flex min-w-0 items-center gap-1">
                           <span className="min-w-0 truncate font-medium">{stock.name || stock.symbol}</span>
                         </span>
@@ -674,10 +684,11 @@ function ConceptRail({
   )
 }
 
-function ConceptFocus({ stat, onStockClick }: { stat: ConceptStat | null; onStockClick: (symbol: string, name?: string) => void }) {
+function ConceptFocus({ stat, onStockClick, activeSymbol }: { stat: ConceptStat | null; onStockClick: (symbol: string, name?: string, navList?: NavItem[]) => void; activeSymbol: string | null }) {
   if (!stat) return null
   const stocks = [...stat.stocks].sort((a, b) => b.leaderScore - a.leaderScore).slice(0, MAX_RENDERED_STOCKS)
   const topLeaders = stocks.slice(0, 3)
+  const focusNav: NavItem[] = toNavItems(stocks)
   return (
     <section className="flex max-h-[720px] flex-col overflow-hidden rounded-2xl border border-border bg-surface">
       <div className="shrink-0 border-b border-border px-5 py-4">
@@ -706,7 +717,7 @@ function ConceptFocus({ stat, onStockClick }: { stat: ConceptStat | null; onStoc
       </div>
 
       <div className="grid shrink-0 gap-3 border-b border-border bg-base/25 p-4 lg:grid-cols-[1fr_1.15fr]">
-        <LeaderStage stocks={topLeaders} onStockClick={onStockClick} />
+        <LeaderStage stocks={topLeaders} activeSymbol={activeSymbol} onStockClick={(sym, name) => onStockClick(sym, name, focusNav)} />
         <ScoreExplain stock={topLeaders[0]} />
       </div>
 
@@ -726,7 +737,7 @@ function ConceptFocus({ stat, onStockClick }: { stat: ConceptStat | null; onStoc
           </thead>
           <tbody className="divide-y divide-border/70">
             {stocks.map((s, idx) => (
-              <tr key={`${s.symbol}-${idx}`} className="hover:bg-elevated/30 cursor-pointer" onClick={() => onStockClick(s.symbol, s.name || undefined)}>
+              <tr key={`${s.symbol}-${idx}`} className={cn('cursor-pointer', s.symbol === activeSymbol ? 'bg-accent/10 hover:bg-accent/15' : 'hover:bg-elevated/30')} onClick={() => onStockClick(s.symbol, s.name || undefined, focusNav)}>
                 <td className="px-4 py-2 font-mono text-muted">{idx + 1}</td>
                 <td className="px-4 py-2">
                   <div className="font-medium text-foreground">{s.name || '—'}</div>
@@ -757,7 +768,7 @@ function MiniStat({ label, value, cls }: { label: string; value: string; cls: st
   return <div className="rounded-lg border border-border/60 bg-base/35 px-2 py-1.5"><div className="text-[10px] text-muted">{label}</div><div className={cn('mt-0.5 truncate text-sm font-semibold', cls)}>{value}</div></div>
 }
 
-function LeaderStage({ stocks, onStockClick }: { stocks: EnrichedStock[]; onStockClick: (symbol: string, name?: string) => void }) {
+function LeaderStage({ stocks, onStockClick, activeSymbol }: { stocks: EnrichedStock[]; onStockClick: (symbol: string, name?: string) => void; activeSymbol: string | null }) {
   if (!stocks.length) return <div className="rounded-xl border border-border/60 bg-surface p-4 text-sm text-muted">暂无龙头候选</div>
   return (
     <div className="rounded-xl border border-border/60 bg-surface p-3">
@@ -767,7 +778,7 @@ function LeaderStage({ stocks, onStockClick }: { stocks: EnrichedStock[]; onStoc
       </div>
       <div className="grid gap-2 md:grid-cols-3">
         {stocks.map((stock, idx) => (
-          <div key={stock.symbol} onClick={() => onStockClick(stock.symbol, stock.name || undefined)} className={cn('rounded-lg border p-3 cursor-pointer hover:brightness-110 transition-all', idx === 0 ? 'border-amber-400/25 bg-amber-400/[0.06]' : 'border-border/60 bg-base/35')}>
+          <div key={stock.symbol} onClick={() => onStockClick(stock.symbol, stock.name || undefined)} className={cn('rounded-lg border p-3 cursor-pointer hover:brightness-110 transition-all', idx === 0 ? 'border-amber-400/25 bg-amber-400/[0.06]' : 'border-border/60 bg-base/35', stock.symbol === activeSymbol && 'ring-1 ring-accent/60')}>
             <div className="flex items-center justify-between gap-2">
               <span className={cn('text-[10px] font-medium', idx === 0 ? 'text-amber-300' : 'text-muted')}>{idx === 0 ? '主龙头' : `辅龙 ${idx}`}</span>
               <span className="font-mono text-[11px] text-amber-300">{stock.leaderScore.toFixed(0)}</span>

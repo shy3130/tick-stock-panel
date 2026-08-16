@@ -148,7 +148,12 @@ export function StockDailyKChart({
     queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns),
     queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns),
     enabled: !!symbol,
-    placeholderData: (prev) => prev,
+    // 仅同 symbol 的占位数据可用于 refetch (改日期范围/扩展字段时图表不闪), 跨 symbol 时不透传旧数据,
+    // 避免切股瞬间信息条/图表短暂显示上一只股票的价格。queryKey 恒为 ['kline', symbol, ...], 只需比 symbol。
+    placeholderData: (prev, prevQuery) => {
+      const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
+      return prevKey?.[1] === symbol ? prev : undefined
+    },
   })
 
   const rows = useMemo(() => toOHLC(kline.data?.rows ?? []), [kline.data?.rows])
@@ -260,7 +265,6 @@ export function StockDailyKChart({
           )}
         </div>
       )}
-      {kline.isLoading && <div className="text-sm text-muted py-4">加载中…</div>}
       {kline.isError && <div className="text-sm text-danger py-2">日K加载失败</div>}
       {!kline.isLoading && !kline.isError && (kline.data?.rows?.length ?? 0) > 0 && rows.length === 0 && (
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>

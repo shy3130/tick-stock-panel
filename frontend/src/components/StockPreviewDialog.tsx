@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, RefreshCw, Clock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Clock, RefreshCw, X } from 'lucide-react'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cnSignal } from '@/lib/signals'
@@ -11,6 +11,7 @@ import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
+import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
   symbol: string | null
@@ -24,9 +25,19 @@ interface Props {
     signals?: string[]
     message?: string
   } | null
+  /** 有序候选列表: 提供后支持左右键/顶栏按钮切股, 标题栏显示 n/N */
+  navList?: NavItem[]
+  /** 切股回调: 收到目标 symbol/name, 由调用方更新预览状态 */
+  onNavigate?: (symbol: string, name?: string) => void
 }
 
-// ===== 板块标识（与 Screener 列表一致）=====
+/** 切股导航列表项 */
+export interface NavItem { symbol: string; name?: string }
+
+/** 把 symbol+name 的列表转成切股导航列表项 (统一 name 归一化为 undefined, 免去各处重复 map + as 断言) */
+export function toNavItems<T extends { symbol: string; name?: string | null }>(xs: T[]): NavItem[] {
+  return xs.map(x => ({ symbol: x.symbol, name: x.name ?? undefined }))
+}
 
 // 预设快捷范围（只保留半年和1年）
 const PRESETS: { label: string; months: number }[] = [
@@ -34,14 +45,7 @@ const PRESETS: { label: string; months: number }[] = [
   { label: '1年', months: 12 },
 ]
 
-function boardTag(symbol: string): { label: string; color: string } | null {
-  if (/^(300|301)/.test(symbol)) return { label: '创', color: 'text-[#f97316] bg-[#f97316]/12 border-[#f97316]/25' }
-  if (/^688/.test(symbol))       return { label: '科', color: 'text-purple-400 bg-purple-400/12 border-purple-400/25' }
-  if (/^[48]/.test(symbol))      return { label: '北', color: 'text-cyan-400 bg-cyan-400/12 border-cyan-400/25' }
-  return null
-}
-
-export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props) {
+export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList, onNavigate }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
@@ -63,15 +67,57 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
     },
   })
 
-  // ESC 关闭
+  // ===== 切股导航 =====
+  // 当前 symbol 在 navList 中的位置 (不在列表则为 -1, 此时不显示计数/按钮)
+  const navIdx = navList ? navList.findIndex(n => n.symbol === symbol) : -1
+  const navTotal = navList?.length ?? 0
+  const navEnabled = navTotal >= 2 && navIdx >= 0
+
+  // 首↔尾循环的弱提示 (自显 ~1.5s, 不引全局 Toast)
+  const [wrapMsg, setWrapMsg] = useState<string | null>(null)
+  const wrapTimer = useRef<number | null>(null)
+  useEffect(() => {
+    return () => { if (wrapTimer.current) window.clearTimeout(wrapTimer.current) }
+  }, [])
+
+  // 父级 onNavigate/onClose 多为内联 lambda, 用最新值 ref 承接, 避免每次父渲染重建 go/键盘监听
+  const onNavigateRef = useRef(onNavigate)
+  onNavigateRef.current = onNavigate
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  // 前后切股: 返回是否真正导航 (供键盘判断是否要 preventDefault)
+  const go = useCallback((delta: 1 | -1): boolean => {
+    if (!navList || navIdx < 0 || navTotal < 2) return false
+    const nextIdx = (navIdx + delta + navTotal) % navTotal
+    const wrapped = nextIdx === (delta === 1 ? 0 : navTotal - 1)
+    if (wrapped) {
+      // 提示词描述切股后的落点 (而非起点)
+      setWrapMsg(delta === 1 ? '已到榜首' : '已到末尾')
+      if (wrapTimer.current) window.clearTimeout(wrapTimer.current)
+      wrapTimer.current = window.setTimeout(() => setWrapMsg(null), 1500)
+    }
+    const next = navList[nextIdx]
+    onNavigateRef.current?.(next.symbol, next.name)
+    return true
+  }, [navList, navIdx, navTotal])
+
+  // ESC 关闭 + 左右键切股
   useEffect(() => {
     if (!symbol) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') { onCloseRef.current(); return }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        // 焦点在输入框/编辑器时方向键让位给光标/输入, 不切股
+        const t = e.target as HTMLElement | null
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+        if (showMonitorEditor) return
+        if (go(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault()
+      }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [symbol, onClose])
+  }, [symbol, go, showMonitorEditor])
 
   // 焦点股票注册: SSE quotes_updated 推送时精准 invalidate 当前股票日K,
   // 让对话框日K最后一根蜡烛随实时价变化 (后端只读内存, 不调 TickFlow)。
@@ -135,6 +181,30 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                 })()}
                 <span className="font-mono text-sm font-medium text-foreground">{symbol}</span>
                 {name && <span className="text-xs text-muted">{name}</span>}
+
+                {/* 切股导航: 上一只 / n·N / 下一只 */}
+                {navEnabled && (
+                  <>
+                    <span className="text-muted/20 mx-0.5">|</span>
+                    <button
+                      onClick={() => go(-1)}
+                      title="上一只 (←)"
+                      className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors cursor-pointer"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="font-mono text-[11px] text-secondary tabular-nums whitespace-nowrap">
+                      {navIdx + 1} / {navTotal}
+                    </span>
+                    <button
+                      onClick={() => go(1)}
+                      title="下一只 (→)"
+                      className="p-1 rounded-btn text-secondary hover:text-foreground hover:bg-elevated transition-colors cursor-pointer"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center gap-1.5">
@@ -292,6 +362,21 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo }: Props
                       onSaved={() => setShowMonitorEditor(false)}
                     />
                   </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* 首↔尾循环弱提示 */}
+            <AnimatePresence>
+              {wrapMsg && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  transition={{ duration: 0.2 }}
+                  className="pointer-events-none absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-full border border-border bg-surface/95 px-3 py-1.5 text-[11px] text-secondary shadow-lg backdrop-blur"
+                >
+                  {wrapMsg}
                 </motion.div>
               )}
             </AnimatePresence>
