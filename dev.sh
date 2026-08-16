@@ -86,8 +86,10 @@ free_port backend  "$BACKEND_PORT"
 free_port frontend "$FRONTEND_PORT"
 
 # ===== 3. 依赖安装 =====
-if [ ! -d "$BACKEND_DIR/.venv" ] || [ "${#BACKEND_EXTRA_ARGS[@]}" -gt 0 ]; then
-  if [ "${#BACKEND_EXTRA_ARGS[@]}" -gt 0 ]; then
+# 在 set -u 下,空数组 ${#ARR[@]} 仍会触发 unbound。
+# 用 ${#BACKEND_EXTRA_ARGS[@]:-0} 兜底,兼容 bash 3.2/4.x。
+if [ ! -d "$BACKEND_DIR/.venv" ] || [ "${#BACKEND_EXTRA_ARGS[@]:-0}" -gt 0 ]; then
+  if [ "${#BACKEND_EXTRA_ARGS[@]:-0}" -gt 0 ]; then
     info "同步后端 Python 依赖，extras: $BACKEND_EXTRAS"
   else
     info "后端首次启动 — 安装 Python 依赖(约 1-2 分钟)..."
