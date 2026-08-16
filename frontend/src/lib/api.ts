@@ -1281,6 +1281,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url }),
     }),
+  sendTestWebhook: (channel: 'feishu' | 'wecom') =>
+    request<{ ok: boolean; detail: string }>('/api/settings/preferences/webhook-test', {
+      method: 'POST',
+      body: JSON.stringify({ channel }),
+    }),
   updateWecomBot: (botId: string, secret: string, enabled: boolean = true) =>
     request<{
       wecom_bot_id: string
