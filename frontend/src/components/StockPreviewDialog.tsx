@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronLeft, ChevronRight, Clock, RefreshCw, X } from 'lucide-react'
@@ -39,6 +39,11 @@ export function toNavItems<T extends { symbol: string; name?: string | null }>(x
   return xs.map(x => ({ symbol: x.symbol, name: x.name ?? undefined }))
 }
 
+/** 首↔尾循环的索引换算: go(delta) 与 邻近预取 共用, 保证换行规则单源 */
+function wrapNavIndex(navIdx: number, delta: number, navTotal: number): number {
+  return (navIdx + delta + navTotal) % navTotal
+}
+
 // 预设快捷范围（只保留半年和1年）
 const PRESETS: { label: string; months: number }[] = [
   { label: '半年', months: 6 },
@@ -73,6 +78,15 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   const navTotal = navList?.length ?? 0
   const navEnabled = navTotal >= 2 && navIdx >= 0
 
+  // 邻近预取目标: 当前股左右相邻两只 (首↔尾循环), 交由 StockPanel 提前拉取日K/财务指标缓存
+  const prefetchSymbols = useMemo(() => {
+    if (!navEnabled) return []
+    return [
+      navList![wrapNavIndex(navIdx, -1, navTotal)].symbol,
+      navList![wrapNavIndex(navIdx, 1, navTotal)].symbol,
+    ]
+  }, [navEnabled, navIdx, navTotal, navList])
+
   // 首↔尾循环的弱提示 (自显 ~1.5s, 不引全局 Toast)
   const [wrapMsg, setWrapMsg] = useState<string | null>(null)
   const wrapTimer = useRef<number | null>(null)
@@ -88,8 +102,8 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
 
   // 前后切股: 返回是否真正导航 (供键盘判断是否要 preventDefault)
   const go = useCallback((delta: 1 | -1): boolean => {
-    if (!navList || navIdx < 0 || navTotal < 2) return false
-    const nextIdx = (navIdx + delta + navTotal) % navTotal
+    if (!navList || !navEnabled) return false
+    const nextIdx = wrapNavIndex(navIdx, delta, navTotal)
     const wrapped = nextIdx === (delta === 1 ? 0 : navTotal - 1)
     if (wrapped) {
       // 提示词描述切股后的落点 (而非起点)
@@ -335,6 +349,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                 inWatchlist={inWatchlist}
                 onToggleWatchlist={() => toggleWatchlist.mutate()}
                 refetchIntervalMs={intradayRefetchMs}
+                prefetchSymbols={prefetchSymbols}
               />
             </div>
 

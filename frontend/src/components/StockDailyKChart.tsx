@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api, type KlineRow } from '@/lib/api'
-import { QK } from '@/lib/queryKeys'
+import { type KlineRow } from '@/lib/api'
+import { klineDailyQueryOptions } from '@/lib/kline'
 import { storage } from '@/lib/storage'
 import {
   EChartsCandlestick,
@@ -11,13 +11,11 @@ import {
   type ChartPriceLine,
   type ChartRange,
   type OHLC,
-  type StockInfo,
   type VolumeCompareConfig,
 } from '@/components/EChartsCandlestick'
 
 const SUB_INFO_H = 16
 const SUB_GAP = 4
-const MAX_DAYS = 2000
 const DEFAULT_VOLUME_COMPARE: VolumeCompareConfig = { enabled: true, days: 1 }
 
 function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfig {
@@ -25,13 +23,6 @@ function normalizeVolumeCompare(config: VolumeCompareConfig): VolumeCompareConfi
     enabled: config.enabled !== false,
     days: Math.max(1, Math.min(20, Math.round(Number(config.days) || 1))),
   }
-}
-
-export interface StockDailyKChartResult {
-  rows: OHLC[]
-  rawRows: KlineRow[]
-  stockInfo?: StockInfo
-  name?: string
 }
 
 interface Props {
@@ -50,7 +41,6 @@ interface Props {
   visibleBars?: number
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
-  onDataChange?: (result: StockDailyKChartResult) => void
   /** 扩展数据列参数（逗号分隔 config_id.field_name），透传给 klineDaily 接口 */
   extColumns?: string
 }
@@ -59,7 +49,7 @@ function isValidRow(r: any): boolean {
   return r && r.date != null && r.open != null && r.close != null
 }
 
-export function toOHLC(rows: KlineRow[]): OHLC[] {
+function toOHLC(rows: KlineRow[]): OHLC[] {
   return rows
     .filter(isValidRow)
     .map(r => ({
@@ -110,12 +100,6 @@ export function getDefaultRange(): { start: string; end: string } {
   return { start, end }
 }
 
-function rangeDays(range: { start: string; end: string }): number {
-  const start = new Date(range.start)
-  const end = new Date(range.end)
-  return Math.min(Math.ceil((end.getTime() - start.getTime()) / 86400000) + 30, MAX_DAYS)
-}
-
 export function StockDailyKChart({
   symbol,
   height = 520,
@@ -132,7 +116,6 @@ export function StockDailyKChart({
   visibleBars = 60,
   linkedPrice,
   onDateClick,
-  onDataChange,
   extColumns,
 }: Props) {
   const [activeIndicators, setActiveIndicators] = useState<string[]>(['vol'])
@@ -141,20 +124,9 @@ export function StockDailyKChart({
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
   )
   const dateRange = externalDateRange ?? getDefaultRange()
-  const days = useMemo(() => rangeDays(dateRange), [dateRange])
 
-  // extColumns 纳入 query key：勾选/取消扩展字段时需重新请求（带 ext_columns 参数）
-  const kline = useQuery({
-    queryKey: QK.kline(symbol, dateRange.start, dateRange.end, extColumns),
-    queryFn: () => api.klineDaily(symbol, days, dateRange, extColumns),
-    enabled: !!symbol,
-    // 仅同 symbol 的占位数据可用于 refetch (改日期范围/扩展字段时图表不闪), 跨 symbol 时不透传旧数据,
-    // 避免切股瞬间信息条/图表短暂显示上一只股票的价格。queryKey 恒为 ['kline', symbol, ...], 只需比 symbol。
-    placeholderData: (prev, prevQuery) => {
-      const prevKey = prevQuery?.queryKey as readonly unknown[] | undefined
-      return prevKey?.[1] === symbol ? prev : undefined
-    },
-  })
+  // 查询配置 (key/fn/placeholderData) 统一来自 klineDailyQueryOptions, 与 StockPanel 信息条共享同一 cache
+  const kline = useQuery({ ...klineDailyQueryOptions(symbol, dateRange, extColumns), enabled: !!symbol })
 
   const rows = useMemo(() => toOHLC(kline.data?.rows ?? []), [kline.data?.rows])
   const stockInfo = kline.data?.stock_info
@@ -183,10 +155,6 @@ export function StockDailyKChart({
   activeSubDefs.forEach(def => { subExtraH += SUB_INFO_H + def.height })
   if (activeSubDefs.length > 0) subExtraH += activeSubDefs.length * SUB_GAP + 14
   const chartHeight = height + subExtraH
-
-  useEffect(() => {
-    onDataChange?.({ rows, rawRows: kline.data?.rows ?? [], stockInfo, name: kline.data?.name })
-  }, [kline.data?.name, kline.data?.rows, onDataChange, rows, stockInfo])
 
   if (!symbol) return null
 
