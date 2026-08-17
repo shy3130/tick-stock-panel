@@ -5,7 +5,7 @@ import { ArrowUpRight, CalendarClock, Pencil, Plus, Search, Trash2 } from 'lucid
 import { api, type Lot } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
-import { fmtPct, priceColorClass } from '@/lib/format'
+import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { Modal } from '@/components/Modal'
 import { DatePicker } from '@/components/DatePicker'
@@ -137,6 +137,7 @@ export function Lots() {
                       <th className="px-4 py-2 font-medium">标的</th>
                       <th className="px-2 py-2 font-medium text-right">数量</th>
                       <th className="px-2 py-2 font-medium text-right">成本</th>
+                      <th className="px-2 py-2 font-medium text-right">现价</th>
                       <th className="px-2 py-2 font-medium text-right">盈亏%</th>
                       <th className="px-2 py-2 font-medium text-right">止盈%</th>
                       <th className="px-2 py-2 font-medium text-right">止损%</th>
@@ -162,9 +163,10 @@ export function Lots() {
                         </td>
                         <td className="px-2 py-2.5 text-right font-mono text-secondary">{lot.qty}</td>
                         <td className="px-2 py-2.5 text-right font-mono text-foreground">{lot.cost_price}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-secondary">{lastPrices[lot.symbol] != null ? fmtPrice(lastPrices[lot.symbol]) : '—'}</td>
                         <td className="px-2 py-2.5 text-right"><CostPnL close={lastPrices[lot.symbol]} cost={lot.cost_price} /></td>
-                        <td className="px-2 py-2.5 text-right font-mono text-emerald-500">{lot.target_pct > 0 ? lot.target_pct : '—'}</td>
-                        <td className="px-2 py-2.5 text-right font-mono text-danger">{lot.stop_pct > 0 ? lot.stop_pct : '—'}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-bull">{lot.target_pct > 0 ? `${lot.target_pct}%` : '—'}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-bear">{lot.stop_pct > 0 ? `${lot.stop_pct}%` : '—'}</td>
                         <td className="px-2 py-2.5 text-muted">{lot.buy_date || '—'}</td>
                         <td className="px-2 py-2.5 text-right"><RemainingDays remind={lot.remind_date} /></td>
                         <td className="px-2 py-2.5">
