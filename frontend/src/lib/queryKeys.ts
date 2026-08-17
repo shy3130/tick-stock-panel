@@ -77,6 +77,8 @@ export const QK = {
   // Monitor (监控规则 + 触发记录)
   monitorRules:         ['monitor-rules'] as const,
   monitorRuleOptions:   ['monitor-rule-options'] as const,
+  lots:                 ['lots'] as const,
+  lotsKline:            (symbols: string) => ['lots-kline', symbols] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
   // AI 大盘复盘

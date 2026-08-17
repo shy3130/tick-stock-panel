@@ -93,6 +93,9 @@ class RuleModel(BaseModel):
     conditions: list[ConditionModel] = []
     logic: str = "and"        # and | or
     cooldown_seconds: int = 3600
+    # date 类型 (日期提醒): 纯日历窗口, 无 conditions
+    remind_date: str | None = None   # YYYY-MM-DD
+    lead_days: int = 1               # 提前 N 天进入提醒窗口
     severity: str = "info"    # info | warn | critical
     webhook_url: str = ""     # Webhook 推送地址 (推送到 QMT 等外部软件, 待定)
     webhook_enabled: bool = False  # 兼容老规则 (已由 webhook_channels 取代, 仅做向后兼容读)
@@ -153,6 +156,7 @@ def get_options(request: Request):
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
             {"key": "sector", "label": "板块监控"},
+            {"key": "date", "label": "日期提醒"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定标的"},

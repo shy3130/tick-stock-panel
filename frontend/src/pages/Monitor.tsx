@@ -21,7 +21,7 @@ import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget
 import { usePreferences } from '@/lib/useSharedQueries'
 
 const TYPE_LABEL: Record<string, string> = {
-  signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控', sector: '板块监控',
+  signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控', sector: '板块监控', date: '日期提醒',
 }
 
 /** 严重级别 → 左侧色条 + 图标 */
@@ -36,6 +36,7 @@ const SOURCE_BADGE_STYLE: Record<string, string> = {
   price:    'bg-emerald-400/10 text-emerald-400 border-emerald-400/20',
   market:   'bg-purple-500/10 text-purple-400 border-purple-500/20',
   sector:   'bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-300',
+  date:     'bg-rose-500/10 text-rose-400 border-rose-500/20',
 }
 
 /**
@@ -116,7 +117,7 @@ export function Monitor() {
   const [editingRule, setEditingRule] = useState<MonitorRule | null>(null)
 
   // 触发记录: 过滤 + 统计 (提升到主组件, 供 header 行使用)
-  const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market' | 'sector'>('all')
+  const [filter, setFilter] = useState<'all' | 'strategy' | 'signal' | 'price' | 'market' | 'sector' | 'date'>('all')
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmClearRules, setConfirmClearRules] = useState(false)
 
@@ -177,7 +178,7 @@ export function Monitor() {
               <SectionHeader icon={BellRing} title="触发记录" />
               {/* 过滤标签 */}
               <div className="flex flex-wrap items-center gap-0.5">
-                {(['all', 'strategy', 'signal', 'price', 'market', 'sector'] as const).map(f => (
+                {(['all', 'strategy', 'signal', 'price', 'market', 'sector', 'date'] as const).map(f => (
                   <button
                     key={f}
                     onClick={() => setFilter(f)}
@@ -733,6 +734,9 @@ function RulesList({ rulesQuery, onEdit }: {
                   {r.asset_type === 'index' && (
                     <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold bg-sky-500/10 text-sky-400">指数</span>
                   )}
+                  {r.lot_id && (
+                    <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold bg-emerald-400/10 text-emerald-500" title="由「持仓」页托管, 请在持仓页修改">批次</span>
+                  )}
                   {/* 个股类型: 直接显示可点击的代码+名称; 其他类型显示规则名 */}
                   {r.scope === 'symbols' && r.symbols.length > 0 ? (
                     <button
@@ -821,6 +825,12 @@ function RulesList({ rulesQuery, onEdit }: {
                       </span>
                     ) : null
                   })}
+                </div>
+              ) : r.type === 'date' ? (
+                <div className="mt-1 flex items-center gap-1 pl-0.5 text-[9px] text-secondary">
+                  <span>提醒 {r.remind_date ?? ''}</span>
+                  {(r.lead_days ?? 0) > 0 && <span>· 提前{r.lead_days}天</span>}
+                  {r.symbols.length > 0 && <span>· {r.symbols.length}只标的</span>}
                 </div>
               ) : r.conditions.length > 0 && (
                 <div className="mt-0.5 flex items-center gap-1 pl-0.5">

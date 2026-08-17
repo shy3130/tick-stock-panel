@@ -38,6 +38,7 @@ import {
   Gauge,
   Sparkles,
   Layers3,
+  Layers2,
   Landmark,
   RadioTower,
   CheckCircle2,
@@ -69,6 +70,7 @@ type CoreIndex = (typeof CORE_INDEXES)[number]
 
 const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
+  { to: '/lots',      label: '持仓',   icon: Layers2 },
   { to: '/watchlist',  label: '自选',   icon: Star },
   { to: '/screener',   label: '策略',   icon: ScanSearch },
   { to: '/backtest',   label: '回测',   icon: History },
