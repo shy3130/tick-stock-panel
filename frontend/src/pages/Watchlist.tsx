@@ -9,7 +9,7 @@ import { storage } from '@/lib/storage'
 import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { StockPreviewDialog, type NavItem } from '@/components/StockPreviewDialog'
 import {
   DimensionMembersDialog,
   dimensionKindForSourceField,
@@ -401,6 +401,7 @@ const StockCard = React.memo(function StockCard({
   onToggleExpand,
   onDimensionClick,
   isMonitored,
+  active,
 }: {
   r: any
   candleRows: KlineRow[]
@@ -415,6 +416,8 @@ const StockCard = React.memo(function StockCard({
   onToggleExpand: (key: string) => void
   onDimensionClick: (target: DimensionMembersTarget) => void
   isMonitored?: boolean
+  /** 正在 K 线弹窗预览中 → 高亮卡片 */
+  active?: boolean
 }) {
   const board = boardTag(r.symbol)
   const price = r.rt_price ?? r.close
@@ -437,7 +440,7 @@ const StockCard = React.memo(function StockCard({
 
   return (
     <div
-      className={`relative rounded-lg border border-border bg-surface hover:border-border/80 transition-all duration-200 group cursor-pointer overflow-hidden ${bgGlow}`}
+      className={`relative rounded-lg border border-border bg-surface hover:border-border/80 transition-all duration-200 group cursor-pointer overflow-hidden ${bgGlow} ${active ? 'ring-2 ring-accent/60' : ''}`}
       onClick={() => onPreview(r.symbol, name ?? '')}
     >
       {/* 左侧彩色指示条 */}
@@ -773,18 +776,13 @@ export function Watchlist() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
-  // 稳定的 per-symbol 回调 (供 memo 化的 StockCard 使用, 避免每次渲染都传新引用)
-  const handleCardPreview = useCallback((sym: string, name: string) => {
-    setPreviewSymbol(sym); setPreviewName(name)
-  }, [])
+  const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
+  const rows = enriched.data?.rows ?? []
   const handleCardConfirmRemove = useCallback((sym: string) => {
     remove.mutate(sym); setConfirmRemove(null)
   }, [remove])
   const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
   const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
-
-  const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
-  const rows = enriched.data?.rows ?? []
 
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
@@ -906,6 +904,17 @@ export function Watchlist() {
     [filteredRows, sortRows, columns],
   )
 
+  // 切股导航列表: 按列表当前展示顺序 (与 sortedRows 一致, 排序/筛选后行序随之变化)
+  const previewNavItems = useMemo(
+    () => sortedRows.map((r: any) => ({ symbol: r.symbol, name: r.rt_name ?? r.name }) as NavItem),
+    [sortedRows],
+  )
+
+  // 稳定的 per-symbol 回调 (供 memo 化的 StockCard 使用, 避免每次渲染都传新引用)
+  const handleCardPreview = useCallback((sym: string, name: string) => {
+    setPreviewSymbol(sym); setPreviewName(name)
+  }, [])
+
   const cardColumns = useCardColumnCount()
   const cardGridRef = useRef<HTMLDivElement>(null)
   const virtualizeCards = viewMode === 'card' && sortedRows.length > VIRTUAL_LIST_THRESHOLD
@@ -958,6 +967,7 @@ export function Watchlist() {
       onToggleExpand={handleToggleExpand}
       onDimensionClick={setDimensionTarget}
       isMonitored={monitoredSymbols.has(r.symbol)}
+      active={previewSymbol === r.symbol}
     />
   )
 
@@ -1167,7 +1177,7 @@ export function Watchlist() {
               sort={sort}
               onSortToggle={handleSortToggle}
               rowKey={(r: any) => r.symbol}
-              rowClassName={() => 'border-t border-border hover:bg-elevated/50 transition-colors duration-150 ease-smooth'}
+              rowClassName={(r: any) => `border-t border-border transition-colors duration-150 ease-smooth ${r.symbol === previewSymbol ? 'bg-accent/10 hover:bg-accent/15' : 'hover:bg-elevated/50'}`}
               // 日k列表头：标签 + 显示/隐藏眼睛按钮
               renderHeaderContent={(col) => {
                 if (col.source.type === 'builtin' && col.source.key === 'candle') {
@@ -1471,6 +1481,8 @@ export function Watchlist() {
         symbol={previewSymbol}
         name={previewName}
         onClose={closePreview}
+        navList={previewNavItems}
+        onNavigate={(sym, n) => { setPreviewSymbol(sym); setPreviewName(n ?? '') }}
       />
 
       <DimensionMembersDialog

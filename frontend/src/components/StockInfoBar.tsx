@@ -106,7 +106,32 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
     })
   }
 
-  if (rows.length === 0) return null
+  // 字段分组: 加载态预留高度与完整态渲染共用同一规则
+  const visibleFields = fields.filter(f => f.visible)
+  const inlineFields = visibleFields.filter(f => !f.standalone)
+  const standaloneFields = visibleFields.filter(f => f.standalone)
+
+  // 无数据时保持信息条挂载 (切股/首次加载): 只留 symbol+名称+小 spinner 作为加载态,
+  // 不渲染假占位值; 数据到位后价格/市值等原位填充, 避免整行消失造成布局跳动。
+  // 同时按字段配置预留与完整态相同的行数, 切股瞬间弹窗整体高度不塌陷 (不抖动)。
+  if (rows.length === 0) {
+    const reserveLines = (inlineFields.length > 0 ? 1 : 0) + standaloneFields.length
+    return (
+      <div className="px-2 pb-3 font-mono text-[12px] select-none space-y-1">
+        {/* 首行 min-h-7 对齐完整态的 text-lg 价格行高, 加载中不整体变矮 */}
+        <div className="flex min-h-7 items-baseline gap-x-3 flex-wrap">
+          <span className="text-foreground font-bold text-sm tracking-wide">{symbol}</span>
+          {name && <span className="text-secondary font-medium">{name}</span>}
+          <span className="ml-auto self-center text-muted">
+            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
+          </span>
+        </div>
+        {Array.from({ length: reserveLines }).map((_, i) => (
+          <div key={i} className="h-4" />
+        ))}
+      </div>
+    )
+  }
 
   const latest = rows[rows.length - 1]
   const prev = rows.length >= 2 ? rows[rows.length - 2] : null
@@ -166,11 +191,6 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
       default: return null
     }
   }
-
-  const visibleFields = fields.filter(f => f.visible)
-  // 按是否单独显示分组：普通列共一行，standalone 列各占一行
-  const inlineFields = visibleFields.filter(f => !f.standalone)
-  const standaloneFields = visibleFields.filter(f => f.standalone)
 
   // 渲染单个字段（builtin / ext 通用）
   const renderField = (f: ColumnConfig): ReactNode => {

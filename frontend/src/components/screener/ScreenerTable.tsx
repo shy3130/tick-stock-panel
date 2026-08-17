@@ -51,6 +51,8 @@ interface ScreenerTableProps {
   /** 表头排序（受控，由 Screener.tsx 传入） */
   sort?: SortState | null
   onSortToggle?: (colId: string) => void
+  /** 正在 K 线弹窗预览中的 symbol → 高亮该行 */
+  activeSymbol?: string | null
 }
 
 /** 渲染标签数组（含 maxTags 折叠/展开、横竖排列）。策略列与 ext 列共用。 */
@@ -151,7 +153,7 @@ export function ScreenerTable({
   dailyKChartVisible = true, onToggleDailyKChart,
   minuteData = {}, intradayChartVisible = true, onToggleIntradayChart,
   intradayAutoRefresh = false, onRefreshIntraday, intradayRefreshing = false,
-  sort, onSortToggle,
+  sort, onSortToggle, activeSymbol,
 }: ScreenerTableProps) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
@@ -361,7 +363,9 @@ export function ScreenerTable({
         rowKey={(r: any) => `${r.symbol}${r._expired ? '-expired' : ''}`}
         rowClassName={(r: any) => r._expired
           ? 'border-border/50 opacity-40'
-          : 'border-border hover:bg-elevated/50'
+          : r.symbol === activeSymbol
+            ? 'border-border bg-accent/10 hover:bg-accent/15'
+            : 'border-border hover:bg-elevated/50'
         }
         // 日k / 分时列表头：标签 + 显示/隐藏的眼睛按钮（与自选页一致）
         renderHeaderContent={(col) => {

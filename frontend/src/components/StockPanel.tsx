@@ -1,9 +1,11 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type KlineRow, type FinancialMetricRecord } from '@/lib/api'
+import { klineDailyQueryOptions } from '@/lib/kline'
 import { StockInfoBar } from '@/components/StockInfoBar'
-import { StockDailyKChart, getDefaultRange, type StockDailyKChartResult } from '@/components/StockDailyKChart'
+import { StockDailyKChart, getDefaultRange } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
-import { useFinancialMetrics } from '@/lib/useFinancials'
+import { financialMetricsQueryOptions, useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
 import type { ChartMarker, ChartPriceLine, ChartRange } from '@/components/EChartsCandlestick'
 import {
@@ -34,6 +36,8 @@ interface Props {
   onToggleWatchlist?: () => void
   /** 分时图自动刷新间隔(ms)。undefined = 不轮询。个股对话框盘中实时刷新时传入。 */
   refetchIntervalMs?: number
+  /** 邻近预取目标 (切股导航的左右邻股): 提前拉取其日K/财务指标缓存, 切换瞬间免 loading */
+  prefetchSymbols?: string[]
 }
 
 export { getDefaultRange }
@@ -54,10 +58,10 @@ export function StockPanel({
   inWatchlist,
   onToggleWatchlist,
   refetchIntervalMs,
+  prefetchSymbols,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const [dailyResult, setDailyResult] = useState<StockDailyKChartResult | null>(null)
   // 信息条指标配置提升到此层：同时供 StockInfoBar 渲染与 StockDailyKChart 请求 ext 数据
   const [fields, setFields] = useState<ColumnConfig[]>(loadInfoFields)
   const extColumns = useMemo(() => buildInfoExtColumnsParam(fields), [fields])
@@ -80,40 +84,57 @@ export function StockPanel({
 
   const dateRange = externalDateRange ?? getDefaultRange()
 
+  // 日K查询由本组件持有 (与 StockDailyKChart 共享同一 cache key/配置, 只发一次请求),
+  // 信息条直接读 query data, 切股到已预取邻股时首帧即有数据, 避免信息条塌陷导致弹窗高度抖动。
+  const kline = useQuery({ ...klineDailyQueryOptions(symbol, dateRange, extColumns), enabled: !!symbol })
+  const rawRows: KlineRow[] = kline.data?.rows ?? []
+  const stockInfo = kline.data?.stock_info
+  const name = kline.data?.name
+
+  // 邻近预取: 对切股导航的左右邻股提前拉取缓存, 切股瞬间免 loading。
+  // 日K预取 staleTime 30s 防来回切换重复请求; 成为当前股后 useQuery(staleTime=0) 会立即后台刷新,
+  // SSE 也只按焦点股精准失效, 实时性不受影响。财务指标与正式查询同 staleTime, 5min 内不重复拉取。
+  // prefetchKey 按内容 join: 自选页 navList 随行情 tick 重建但邻股集合通常不变, 避免 effect 每次 tick 重跑。
+  const qc = useQueryClient()
+  const prefetchKey = prefetchSymbols?.join(',') ?? ''
+  useEffect(() => {
+    if (!prefetchKey) return
+    for (const s of prefetchKey.split(',')) {
+      if (s === symbol) continue
+      qc.prefetchQuery({ ...klineDailyQueryOptions(s, dateRange, extColumns), staleTime: 30_000 })
+      if (hasFinanceField && hasFinancialCap) {
+        qc.prefetchQuery(financialMetricsQueryOptions(s))
+      }
+    }
+  }, [prefetchKey, symbol, dateRange, extColumns, hasFinanceField, hasFinancialCap, qc])
+
   const handleDateClick = useCallback((date: string) => {
     setSelectedDate(date)
     onSelectDate?.(date)
   }, [onSelectDate])
 
-  const rows = dailyResult?.rows ?? []
-  const stockInfo = dailyResult?.stockInfo
-  const rawRows: KlineRow[] = dailyResult?.rawRows ?? []
-
   // symbol 变化时重置分时相关状态，避免切股后残留旧日期。
-  // 注意：必须跳过首次挂载——重开弹窗时 kline 命中 react-query 缓存，
-  // 子组件 onDataChange effect（先于父 effect 执行）会把 dailyResult 置为有效数据，
-  // 若此处再无条件清空，会把刚加载的数据抹掉，导致信息条整行消失。
+  // 日K信息直接读 query data (切股到已预取邻股首帧即有), 无需清空或门控。
   const prevSymbol = useRef<string | null>(symbol)
   useEffect(() => {
     if (prevSymbol.current === symbol) return
     prevSymbol.current = symbol
     setSelectedDate(null)
     setLinkedPrice(null)
-    setDailyResult(null)
   }, [symbol])
 
   // 当分时开启、无选中日期时，自动选中最新日期
   useEffect(() => {
-    if (showIntraday && !selectedDate && rows.length > 0) {
-      setSelectedDate(rows[rows.length - 1].date)
+    if (showIntraday && !selectedDate && rawRows.length > 0) {
+      setSelectedDate(rawRows[rawRows.length - 1].date)
     }
-  }, [showIntraday, selectedDate, rows])
+  }, [showIntraday, selectedDate, rawRows])
 
-  const selectedIdx = selectedDate ? rows.findIndex(r => r.date === selectedDate) : -1
+  const selectedIdx = selectedDate ? rawRows.findIndex(r => r.date === selectedDate) : -1
   const prevClose = selectedIdx > 0
-    ? rows[selectedIdx - 1].close
-    : rows.length >= 2
-      ? rows[rows.length - 2].close
+    ? rawRows[selectedIdx - 1].close
+    : rawRows.length >= 2
+      ? rawRows[rawRows.length - 2].close
       : undefined
   if (!symbol) return null
 
@@ -124,7 +145,7 @@ export function StockPanel({
     <div className={className}>
       <StockInfoBar
         symbol={symbol}
-        name={dailyResult?.name}
+        name={name}
         stockInfo={stockInfo}
         rows={rawRows}
         fields={fields}
@@ -148,7 +169,6 @@ export function StockPanel({
           showMarkerToggle={showMarkerToggle}
           linkedPrice={linkedPrice}
           onDateClick={handleDateClick}
-          onDataChange={setDailyResult}
           visibleBars={showIntraday ? 40 : 60}
           extColumns={extColumns}
         />
