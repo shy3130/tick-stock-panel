@@ -17,6 +17,8 @@ import {
   type DimensionMembersTarget,
 } from '@/components/DimensionMembersDialog'
 import { WatchlistImportDialog } from '@/components/WatchlistImportDialog'
+import { TagInput } from '@/components/TagInput'
+import { splitTags } from '@/lib/tags'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { VIRTUAL_LIST_THRESHOLD, useParentScroll } from '@/components/virtual-list/useParentScroll'
@@ -63,10 +65,6 @@ function turnoverColor(rate: number | null | undefined): string {
 }
 
 // ===== 标签（多对多注解）=====
-
-function splitTags(s?: string | null): string[] {
-  return (s || '').split(',').map(t => t.trim()).filter(Boolean)
-}
 
 function TagChips({ tags, onEdit }: { tags: string[]; onEdit?: () => void }) {
   return (
@@ -657,23 +655,8 @@ function TagEditorDialog({
   onSave: (symbol: string, tags: string[]) => void
 }) {
   const titleId = 'tag-editor-title'
-  const inputRef = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState<string[]>(tags)
-  const [input, setInput] = useState('')
-  const suggestions = allTags.filter(t => !draft.includes(t))
-
-  function addTag(raw?: string) {
-    const clean = (raw ?? input).trim().replace(/[,，]/g, '')
-    setInput('')
-    inputRef.current?.focus()
-    if (!clean || draft.includes(clean)) return
-    const next = [...draft, clean]
-    setDraft(next)
-    onSave(symbol, next)
-  }
-
-  function removeTag(t: string) {
-    const next = draft.filter(x => x !== t)
+  const persist = (next: string[]) => {
     setDraft(next)
     onSave(symbol, next)
   }
@@ -689,54 +672,7 @@ function TagEditorDialog({
         {name && <span className="text-secondary ml-2">{name}</span>}
       </h3>
 
-      <div className="flex flex-wrap gap-1 mb-2 min-h-[24px]">
-        {draft.map(t => (
-          <span key={t} className="inline-flex items-center gap-1 px-1.5 py-px rounded text-[11px] font-medium leading-tight text-yellow-500 bg-yellow-500/10">
-            {t}
-            <button
-              onClick={() => removeTag(t)}
-              className="text-yellow-500/60 hover:text-yellow-500 transition-colors"
-              aria-label={`删除标签 ${t}`}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-        {draft.length === 0 && <span className="text-[11px] text-muted self-center">暂无标签</span>}
-      </div>
-
-      <div className="flex items-center gap-1.5">
-        <input
-          ref={inputRef}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') addTag() }}
-          placeholder="输入标签，回车添加"
-          maxLength={20}
-          autoFocus
-          className="flex-1 h-8 px-2 rounded-btn bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50"
-        />
-        <button
-          onClick={() => addTag()}
-          className="px-2.5 h-8 rounded-btn bg-accent/15 text-accent hover:bg-accent/25 text-xs font-medium transition-colors"
-        >
-          添加
-        </button>
-      </div>
-
-      {suggestions.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {suggestions.map(s => (
-            <button
-              key={s}
-              onClick={() => addTag(s)}
-              className="px-1.5 py-px rounded text-[10px] text-muted bg-elevated hover:text-accent hover:bg-accent/10 transition-colors"
-            >
-              + {s}
-            </button>
-          ))}
-        </div>
-      )}
+      <TagInput tags={draft} onChange={persist} allTags={allTags} autoFocus />
 
       <div className="mt-4 flex items-center justify-end">
         <button

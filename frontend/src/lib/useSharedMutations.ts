@@ -29,11 +29,12 @@ export function useUpdateQuoteInterval() {
   })
 }
 
-/** 批量添加自选 — Screener / Intraday / 截图导入 共用 */
+/** 批量添加自选 — Screener / 截图导入 共用; tags 只对新增标的生效 */
 export function useWatchlistBatchAdd() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (symbols: string[]) => api.watchlistBatchAdd(symbols),
+    mutationFn: ({ symbols, tags = [] }: { symbols: string[]; tags?: string[] }) =>
+      api.watchlistBatchAdd(symbols, tags),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK.watchlist })
       // 前缀匹配: 实际 key 为 ['watchlist-enriched', extColumnsParam],

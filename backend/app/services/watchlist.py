@@ -59,20 +59,48 @@ def list_symbols() -> list[dict]:
 def add(symbol: str, note: str = "") -> list[dict]:
     with _write_lock:
         df = _read()
-        existing_tags = ""
-        if symbol in df["symbol"].to_list():
-            existing_tags = df.filter(pl.col("symbol") == symbol)["tags"].first()
-            df = df.filter(pl.col("symbol") != symbol)
+        prev = df.filter(pl.col("symbol") == symbol)
+        df = df.filter(pl.col("symbol") != symbol)
+        new_tags = prev["tags"].first() if prev.height else ""
 
         new_row = pl.DataFrame({
             "symbol": [symbol],
             "added_at": [datetime.utcnow().isoformat(timespec="seconds")],
             "note": [note],
-            "tags": [existing_tags],
+            "tags": [new_tags],
         })
         out = pl.concat([new_row, df], how="diagonal_relaxed")
         _write(out)
         return out.to_dicts()
+
+
+def add_batch(symbols: list[str], note: str = "", tags: list[str] | None = None) -> tuple[list[dict], int]:
+    """批量添加自选, 返回 (全量 rows, 净新增数); 新增标的写入批量 tags, 已在自选保留原标签。"""
+    with _write_lock:
+        df = _read()
+        original_tags = {r["symbol"]: r["tags"] for r in df.select(["symbol", "tags"]).iter_rows(named=True)}
+        batch_tag_str = _tags_str(tags)
+        now = datetime.utcnow().isoformat(timespec="seconds")
+
+        rows: list[dict] = []
+        for sym in symbols:
+            # 与逐只 add 等价: 重复 symbol 以最后一次为准, 批次末项置顶
+            rows = [r for r in rows if r["symbol"] != sym]
+            rows.append({
+                "symbol": sym,
+                "added_at": now,
+                "note": note,
+                "tags": original_tags.get(sym, batch_tag_str),
+            })
+
+        added = sum(1 for r in rows if r["symbol"] not in original_tags)
+        rest = df.filter(~pl.col("symbol").is_in([r["symbol"] for r in rows])) if rows else df
+        if rows:
+            out = pl.concat([pl.DataFrame(list(reversed(rows)), schema=_SCHEMA), rest], how="diagonal_relaxed")
+        else:
+            out = rest
+        _write(out)
+        return out.to_dicts(), added
 
 
 def remove(symbol: str) -> list[dict]:
@@ -111,16 +139,19 @@ def _normalize_tags(tags: list[str]) -> list[str]:
     return list(dict.fromkeys(t for t in cleaned if t))
 
 
+def _tags_str(tags: list[str] | None) -> str:
+    return ",".join(_normalize_tags(tags or []))
+
+
 def set_tags(symbol: str, tags: list[str]) -> list[dict]:
     """整体替换某自选标的的标签。symbol 不在自选则原样返回(由 API 层决定 404)。"""
     with _write_lock:
         df = _read()
         if symbol not in df["symbol"].to_list():
             return df.to_dicts()
-        cleaned = _normalize_tags(tags)
         df = df.with_columns(
             pl.when(pl.col("symbol") == symbol)
-              .then(pl.lit(",".join(cleaned)))
+              .then(pl.lit(_tags_str(tags)))
               .otherwise(pl.col("tags"))
               .alias("tags")
         )

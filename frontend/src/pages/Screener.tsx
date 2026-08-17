@@ -576,7 +576,7 @@ export function Screener() {
   const handleBatchAdd = () => {
     if (!displayRows.length) return
     const symbols = displayRows.map((r: any) => r.symbol)
-    batchAdd.mutate(symbols, {
+    batchAdd.mutate({ symbols }, {
       onSuccess: (data) => {
         setBatchMsg(`已添加 ${data.added} 只到自选`)
         setTimeout(() => setBatchMsg(''), 3000)
