@@ -75,11 +75,12 @@ def add(symbol: str, note: str = "") -> list[dict]:
 
 
 def add_batch(symbols: list[str], note: str = "", tags: list[str] | None = None) -> tuple[list[dict], int]:
-    """批量添加自选, 返回 (全量 rows, 净新增数); 新增标的写入批量 tags, 已在自选保留原标签。"""
+    """批量添加自选, 返回 (全量 rows, 净新增数); 新增标的写入批量 tags, 已在自选合并批量 tags(保留原标签)。"""
     with _write_lock:
         df = _read()
         original_tags = {r["symbol"]: r["tags"] for r in df.select(["symbol", "tags"]).iter_rows(named=True)}
         batch_tag_str = _tags_str(tags)
+        batch_parts = batch_tag_str.split(",") if batch_tag_str else []
         now = datetime.utcnow().isoformat(timespec="seconds")
 
         rows: list[dict] = []
@@ -90,7 +91,7 @@ def add_batch(symbols: list[str], note: str = "", tags: list[str] | None = None)
                 "symbol": sym,
                 "added_at": now,
                 "note": note,
-                "tags": original_tags.get(sym, batch_tag_str),
+                "tags": _merge_tags(original_tags.get(sym, ""), batch_parts),
             })
 
         added = sum(1 for r in rows if r["symbol"] not in original_tags)
@@ -141,6 +142,13 @@ def _normalize_tags(tags: list[str]) -> list[str]:
 
 def _tags_str(tags: list[str] | None) -> str:
     return ",".join(_normalize_tags(tags or []))
+
+
+def _merge_tags(existing: str, batch_parts: list[str]) -> str:
+    """已有标签 + 批量标签合并去重; 无批量标签时原样保留已有。"""
+    if not batch_parts:
+        return existing
+    return _tags_str([*existing.split(","), *batch_parts])
 
 
 def set_tags(symbol: str, tags: list[str]) -> list[dict]:

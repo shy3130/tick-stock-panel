@@ -335,6 +335,10 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
   }
 
   const matched = candidates.filter(c => c.matched && c.symbol)
+  // 已有自选的重复标: 设置批量标签后自动并入合并标签, 无需勾选
+  const existingDups = matched.filter(c => c.already_in_watchlist)
+  const dupSymbols = batchTags.length > 0 ? existingDups.map(c => c.symbol!) : []
+  const affectedCount = selected.size + dupSymbols.length
   const selectable = matched.filter(c => !c.already_in_watchlist)
   const allSelected = selectable.length > 0 && selectable.every(c => selected.has(c.symbol!))
 
@@ -344,14 +348,16 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
   }
 
   const confirmAdd = async () => {
-    const symbols = [...selected]
+    const symbols = [...selected, ...dupSymbols]
     if (symbols.length === 0) {
       toast('请至少选择一只股票', 'error')
       return
     }
     try {
       const data = await batchAdd.mutateAsync({ symbols, tags: batchTags })
-      toast(`已添加 ${data.added} 只自选`, 'success')
+      const parts = [`已添加 ${data.added} 只自选`]
+      if (dupSymbols.length > 0) parts.push(`${dupSymbols.length} 只已有自选自动合并标签`)
+      toast(parts.join(' · '), 'success')
       onClose()
     } catch {
       /* toast in request */
@@ -486,6 +492,7 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
             <div className="flex items-center justify-between">
               <span className="text-xs text-secondary">
                 {mode === 'csv' ? '解析' : '识别'} {candidates.length} 个代码 · 匹配 {matched.length} · 已选 {selected.size}
+                {dupSymbols.length > 0 ? ` · 自动并入 ${dupSymbols.length}` : ''}
               </span>
               {selectable.length > 0 && (
                 <button
@@ -527,7 +534,9 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
                           </span>
                         </div>
                         {c.already_in_watchlist && (
-                          <span className="text-[10px] text-muted">已在自选</span>
+                          <span className="text-[10px] text-muted">
+                            已在自选{batchTags.length > 0 ? ' · 将自动合并标签' : ''}
+                          </span>
                         )}
                         {!c.matched && (
                           <span className="text-[10px] text-warning/90">主数据未找到，已跳过</span>
@@ -545,7 +554,7 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
       <div className="shrink-0 px-4 py-3 border-t border-border">
         <div className="flex items-center gap-1.5 text-[11px] text-secondary mb-2">
           <Tag className="h-3 w-3" />
-          {selected.size > 0 ? `为所选 ${selected.size} 只批量打标签` : '批量打标签（本次所选）'}
+          {affectedCount > 0 ? `为 ${affectedCount} 只批量打标签` : '批量打标签（本次所选）'}
         </div>
         <TagInput tags={batchTags} onChange={setBatchTags} allTags={existingTags} emptyLabel="未设置" compact />
       </div>
@@ -560,7 +569,7 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
         </button>
         <button
           type="button"
-          disabled={selected.size === 0 || batchAdd.isPending || busy}
+          disabled={affectedCount === 0 || batchAdd.isPending || busy}
           onClick={() => void confirmAdd()}
           className="h-8 px-3 rounded-btn text-xs inline-flex items-center gap-1.5 bg-accent text-white hover:bg-accent/90 disabled:opacity-40"
         >
@@ -569,7 +578,7 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
           ) : (
             <Upload className="h-3.5 w-3.5" />
           )}
-          添加所选 ({selected.size})
+          添加所选 ({affectedCount})
         </button>
       </div>
     </Modal>

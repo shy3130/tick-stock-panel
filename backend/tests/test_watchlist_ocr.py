@@ -274,8 +274,8 @@ def test_add_batch_reports_net_new(monkeypatch, tmp_path: Path):
     assert symbols == {"600036.SH", "515880.SH", "000001.SZ"}
 
 
-def test_add_batch_applies_tags_to_new_only(monkeypatch, tmp_path: Path):
-    """批量导入标签只作用于新增标的; 已在自选的重加保留原标签。"""
+def test_add_batch_merges_tags_into_existing(monkeypatch, tmp_path: Path):
+    """批量导入标签作用于新增标的, 已在自选的重加合并批量标签(不丢原标签)。"""
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     watchlist.add("600036.SH")
     watchlist.set_tags("600036.SH", ["原有"])
@@ -287,4 +287,4 @@ def test_add_batch_applies_tags_to_new_only(monkeypatch, tmp_path: Path):
     tags_by_symbol = {r["symbol"]: r["tags"] for r in result["symbols"]}
     assert tags_by_symbol["515880.SH"] == "导入,白酒"
     assert tags_by_symbol["000001.SZ"] == "导入,白酒"
-    assert tags_by_symbol["600036.SH"] == "原有"
+    assert tags_by_symbol["600036.SH"] == "原有,导入,白酒"
