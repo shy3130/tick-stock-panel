@@ -1071,6 +1071,13 @@ export interface StrategyAlertEvent {
 }
 
 // ===== API surface =====
+/** 上传单文件到 /api/watchlist/* 导入端点，返回候选结果。 */
+function uploadWatchlistFile(path: string, file: File, signal?: AbortSignal, quiet = false) {
+  const fd = new FormData()
+  fd.append('file', file)
+  return request<WatchlistImportResult>(path, { method: 'POST', body: fd, signal, quiet })
+}
+
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
@@ -1519,16 +1526,10 @@ export const api = {
     }),
   watchlistOcrStatus: () =>
     request<{ provider: string; available: boolean }>('/api/watchlist/ocr-status'),
-  watchlistImportImage: (file: File, signal?: AbortSignal, quiet = false) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    return request<WatchlistImportResult>('/api/watchlist/import-image', {
-      method: 'POST',
-      body: fd,
-      signal,
-      quiet,
-    })
-  },
+  watchlistImportImage: (file: File, signal?: AbortSignal, quiet = false) =>
+    uploadWatchlistFile('/api/watchlist/import-image', file, signal, quiet),
+  watchlistImportCsv: (file: File, signal?: AbortSignal, quiet = false) =>
+    uploadWatchlistFile('/api/watchlist/import-csv', file, signal, quiet),
   watchlistRemove: (symbol: string) =>
     request<{ symbols: WatchlistEntry[] }>(
       `/api/watchlist/${encodeURIComponent(symbol)}`,
