@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from app.strategy.custom_signals import ALLOWED_FIELDS
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-RULE_TYPES = {"strategy", "signal", "price", "market", "ladder", "sector"}
+RULE_TYPES = {"strategy", "signal", "price", "market", "ladder", "sector", "date"}
 SCOPES = {"symbols", "all", "sector"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
@@ -100,6 +100,21 @@ def _is_signal_field(field: str) -> bool:
     return any(field.startswith(p) for p in _SIGNAL_PREFIXES)
 
 
+def date_rule_in_window(remind_date: str, lead_days: int, today: str) -> bool:
+    """窗口 [remind_date - lead_days, remind_date] 是否包含 today (均 YYYY-MM-DD)。
+
+    只判日历窗口, 是否在交易时段由调用方决定。非法输入一律返回 False (fail-safe)。
+    """
+    try:
+        remind = date.fromisoformat(remind_date)
+        today_d = date.fromisoformat(today)
+        lead = max(0, int(lead_days or 0))
+    except (ValueError, TypeError):
+        return False
+    start = remind - timedelta(days=lead)
+    return start <= today_d <= remind
+
+
 def validate(rule: dict) -> None:
     """校验一条监控规则,非法则抛 ValueError (含中文信息)。"""
     rid = rule.get("id", "")
@@ -113,7 +128,7 @@ def validate(rule: dict) -> None:
     # 指数规则: 仅 signal/price + symbols 作用域 + 不含分时信号
     # (指数无涨跌停/策略/封单语义; 无本地分钟K, 分时信号会静默不触发)
     if rule.get("asset_type") == "index":
-        if rule.get("type") not in ("signal", "price"):
+        if rule.get("type") not in ("signal", "price", "date"):
             raise ValueError("指数监控仅支持 signal/price 类型 (无涨跌停/策略/封单语义)")
         if rule.get("scope") != "symbols":
             raise ValueError("指数监控仅支持指定标的 (scope=symbols)")
@@ -164,6 +179,20 @@ def validate(rule: dict) -> None:
             raise ValueError("板块监控阈值必须大于 0 且不超过 20%")
         if rule.get("sector_trigger") == "momentum" and rule.get("window_minutes") not in SECTOR_WINDOWS:
             raise ValueError(f"板块异动窗口必须是 {sorted(SECTOR_WINDOWS)} 分钟之一")
+    elif rule.get("type") == "date":
+        # 日期提醒: 纯日历窗口, 无行情 conditions
+        remind = rule.get("remind_date")
+        if not isinstance(remind, str) or not remind.strip():
+            raise ValueError("日期提醒规则必须指定 remind_date")
+        try:
+            date.fromisoformat(remind.strip())
+        except ValueError:
+            raise ValueError(f"remind_date 必须是 YYYY-MM-DD 日期: {remind!r}")
+        lead = rule.get("lead_days", 0)
+        if not isinstance(lead, int) or lead < 0:
+            raise ValueError("lead_days 必须是非负整数 (提前提醒天数)")
+        if rule.get("conditions"):
+            raise ValueError("日期提醒规则不支持行情 conditions")
     else:
         # 信号/价格/市场类型: 需要 conditions
         conds = rule.get("conditions")
@@ -194,7 +223,7 @@ def validate(rule: dict) -> None:
     # scope 校验
     if rule.get("scope", "symbols") not in SCOPES:
         raise ValueError(f"scope 必须是 {SCOPES} 之一")
-    if rule.get("scope") == "symbols":
+    if rule.get("scope") == "symbols" and rule.get("type") != "date":
         syms = rule.get("symbols")
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
@@ -245,6 +274,11 @@ def normalize(rule: dict) -> dict:
     if r.get("type") == "sector":
         r["scope"] = "all"
         r["symbols"] = []
+    r.setdefault("remind_date", None)
+    r.setdefault("lead_days", 1 if r.get("type") == "date" else 0)
+    if r.get("type") == "date":
+        r["conditions"] = []
+        r["cooldown_seconds"] = 86400  # 日期提醒每天最多一次
     r.setdefault("logic", "and")
     r.setdefault("cooldown_seconds", 3600)
     r.setdefault("severity", "info")

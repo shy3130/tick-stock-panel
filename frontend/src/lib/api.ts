@@ -616,7 +616,7 @@ export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder' | 'sector'
+  type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder' | 'sector' | 'date'
   asset_type?: 'stock' | 'etf' | 'index'
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
@@ -642,6 +642,24 @@ export interface MonitorRule {
   // ladder 专属: 封单监控
   metric?: 'sealed_vol' | 'sealed_amount'  // 量(手) / 额(元)
   threshold?: number                        // 封单 <= 此值时报警
+  // date 类型 (日期提醒): 纯日历窗口
+  remind_date?: string | null   // YYYY-MM-DD
+  lead_days?: number            // 提前 N 天进入提醒窗口
+  lot_id?: string               // 由「持仓」页生成的规则, 托管在批次页
+}
+
+// 批次登记 (薄批次页) — 只作监控规则生成的载体, 不做任何会计
+export interface Lot {
+  id: string
+  symbol: string
+  qty: number
+  cost_price: number
+  buy_date?: string | null
+  target_pct: number
+  stop_pct: number
+  remind_date?: string | null
+  lead_days: number
+  created_at?: string
 }
 
 export interface MonitorRuleOptions {
@@ -2219,6 +2237,19 @@ export const api = {
 
   monitorRuleDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/monitor-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ===== Lots (批次登记, 自动生成监控规则) =====
+  lotsList: () =>
+    request<{ lots: Lot[] }>('/api/lots'),
+
+  lotSave: (lot: Lot) =>
+    request<{ ok: boolean; lot: Lot }>('/api/lots', {
+      method: 'POST',
+      body: JSON.stringify(lot),
+    }),
+
+  lotDelete: (id: string) =>
+    request<{ ok: boolean }>(`/api/lots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** 模拟触发 ladder 封单监控 (Dev 调试, 不落盘不推送) */
   monitorRuleTestLadder: () =>

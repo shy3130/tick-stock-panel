@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Building2, ChartNoAxesCombined, Check, Layers3, Plus, RadioTower, Save, Search, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
+import { Activity, Building2, Calendar, ChartNoAxesCombined, Check, Layers3, Plus, RadioTower, Save, Search, Tags, TrendingUp, Waypoints, X } from 'lucide-react'
 import { api, genRuleId, type MonitorRule, type MonitorCondition, type SectorKind, type SectorMonitorTarget, type StrategyNotifyEvent } from '@/lib/api'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS, LEGACY_STRATEGY_NOTIFY_EVENTS, STRATEGY_NOTIFY_EVENT_OPTIONS } from '@/lib/strategyMonitorEvents'
 import { QK } from '@/lib/queryKeys'
 import { boardTag } from '@/components/stock-table/primitives'
+import { DateShortcuts } from '@/components/DateShortcuts'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { MONITOR_INTRADAY_SIGNAL_OPTIONS, SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
 import { usePreferences } from '@/lib/useSharedQueries'
@@ -22,7 +23,7 @@ interface Props {
 }
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
-  signal: '信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', sector: '板块监控',
+  signal: '信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控', sector: '板块监控', date: '日期提醒',
 }
 
 const TYPE_ICONS = {
@@ -31,6 +32,7 @@ const TYPE_ICONS = {
   market: RadioTower,
   strategy: Waypoints,
   sector: Layers3,
+  date: Calendar,
 }
 
 const SECTOR_KIND_OPTIONS: Array<{ key: SectorKind; label: string; icon: typeof ChartNoAxesCombined }> = [
@@ -67,6 +69,8 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   cooldown_seconds: 3600,
   severity: 'info',
   message: '',
+  remind_date: '',
+  lead_days: 1,
   ...preset,
 })
 
@@ -145,6 +149,10 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         delete d.notify_events
         if (!d.sector_targets?.length) throw new Error('请选择至少一个监控对象')
         if ((d.threshold_pct ?? 0) <= 0 || (d.threshold_pct ?? 0) > 20) throw new Error('阈值必须大于 0 且不超过 20%')
+      } else if (d.type === 'date') {
+        d.conditions = []
+        delete d.notify_events
+        if (!d.remind_date) throw new Error('请选择提醒日期')
       } else {
         delete d.notify_events
         if (d.conditions.length === 0) throw new Error('至少选择一个触发条件')
@@ -153,7 +161,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           if (c.op !== 'truth' && (c.value === null || c.value === undefined)) throw new Error('阈值条件需要数值')
         }
       }
-      if (d.type !== 'sector' && d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只标的')
+      if (d.type !== 'sector' && d.type !== 'date' && d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只标的')
       return api.monitorRuleSave(d)
     },
     onSuccess: () => {
@@ -380,7 +388,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       </div>
 
       {/* 资产类型: 股票 / ETF / 指数 (个股极简模式不显示) */}
-      {!simple && draft.type !== 'sector' && (
+      {!simple && draft.type !== 'sector' && draft.type !== 'date' && (
         <div className="space-y-1.5">
           <span className="text-[11px] text-muted">资产类型</span>
           <div className="inline-flex h-9 rounded-btn border border-border overflow-hidden">
@@ -436,6 +444,10 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                       ? 'all'
                       : type === 'strategy' && d.scope === 'symbols' && d.symbols.length === 0 ? 'all' : d.scope,
                     direction: type === 'sector' ? 'up' : d.type === 'sector' ? 'entry' : d.direction,
+                    // date 无行情条件: 清 conditions/固定 stock/每天一次
+                    conditions: type === 'date' ? [] : d.conditions,
+                    asset_type: type === 'date' ? 'stock' : d.asset_type,
+                    cooldown_seconds: type === 'date' ? 86400 : d.cooldown_seconds,
                   }
                 })}
                 className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-btn border px-2 text-xs font-medium transition-colors cursor-pointer ${
@@ -697,8 +709,26 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </div>
       </div>}
 
+      {/* 日期提醒: 无行情条件, 故独立于触发条件 */}
+      {draft.type === 'date' && (
+        <div className="space-y-3 border-t border-border/60 pt-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="space-y-1.5">
+              <span className="text-[11px] text-muted">提醒日期</span>
+              <DateShortcuts value={draft.remind_date ?? ''} onChange={v => setDraft(d => ({ ...d, remind_date: v }))} options={[{ label: '今天', days: 0 }, { label: '5天', days: 5 }, { label: '10天', days: 10 }, { label: '15天', days: 15 }]} />
+              <input type="date" value={draft.remind_date ?? ''} onChange={e => setDraft(d => ({ ...d, remind_date: e.target.value }))} className="h-9 rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-[11px] text-muted">提前天数</span>
+              <input type="number" min={0} value={draft.lead_days ?? 1} onChange={e => setDraft(d => ({ ...d, lead_days: Math.max(0, parseInt(e.target.value) || 0) }))} className="h-9 w-24 rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+            </label>
+          </div>
+          <p className="text-[10px] text-muted">提醒仅在交易时段评估; 到期日落在周末/节假日建议提前天数 ≥ 2。</p>
+        </div>
+      )}
+
       {/* 触发条件 (非 strategy) */}
-      {draft.type !== 'strategy' && draft.type !== 'sector' && (
+      {draft.type !== 'strategy' && draft.type !== 'sector' && draft.type !== 'date' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-muted">触发条件</span>
