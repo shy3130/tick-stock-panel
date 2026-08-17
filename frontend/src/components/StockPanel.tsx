@@ -38,6 +38,8 @@ interface Props {
   refetchIntervalMs?: number
   /** 邻近预取目标 (切股导航的左右邻股): 提前拉取其日K/财务指标缓存, 切换瞬间免 loading */
   prefetchSymbols?: string[]
+  /** 当前股自选标签 (无自选上下文则不传) */
+  tags?: string[]
 }
 
 export { getDefaultRange }
@@ -59,6 +61,7 @@ export function StockPanel({
   onToggleWatchlist,
   refetchIntervalMs,
   prefetchSymbols,
+  tags,
 }: Props) {
   const [linkedPrice, setLinkedPrice] = useState<number | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
@@ -154,6 +157,7 @@ export function StockPanel({
         onMonitor={onMonitor}
         inWatchlist={inWatchlist}
         onToggleWatchlist={onToggleWatchlist}
+        tags={tags}
       />
 
       <div className="flex gap-3 items-start">

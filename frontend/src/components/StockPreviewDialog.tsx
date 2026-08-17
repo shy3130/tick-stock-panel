@@ -11,6 +11,7 @@ import { RuleEditor } from '@/components/monitor/RuleEditor'
 import { usePreferences, useQuoteStatus } from '@/lib/useSharedQueries'
 import { setFocusSymbol, clearFocusSymbol } from '@/lib/useQuoteStream'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
+import { splitTags } from '@/lib/tags'
 import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
@@ -74,7 +75,9 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     queryFn: api.watchlistList,
     enabled: !!symbol,
   })
-  const inWatchlist = (watchlist.data?.symbols ?? []).some((s: any) => s.symbol === symbol)
+  const watchlistEntry = (watchlist.data?.symbols ?? []).find(s => s.symbol === symbol)
+  const inWatchlist = !!watchlistEntry
+  const tags = splitTags(watchlistEntry?.tags)
 
   const toggleWatchlist = useMutation({
     mutationFn: () => inWatchlist ? api.watchlistRemove(symbol!) : api.watchlistAdd(symbol!),
@@ -364,6 +367,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
                 onToggleWatchlist={() => toggleWatchlist.mutate()}
                 refetchIntervalMs={intradayRefetchMs}
                 prefetchSymbols={prefetchSymbols}
+                tags={tags}
               />
             </div>
 

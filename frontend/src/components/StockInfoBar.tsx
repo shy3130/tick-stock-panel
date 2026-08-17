@@ -17,6 +17,8 @@ interface Props {
   /** 信息条字段配置（由 StockPanel 提升，受控） */
   fields: ColumnConfig[]
   onFieldsChange: (fields: ColumnConfig[]) => void
+  /** 当前股自选标签（无自选上下文时不传） */
+  tags?: string[]
   /** 财务指标最新一期（来自 useFinancialMetrics，受 Cap.FINANCIAL 门控） */
   financialMetrics?: FinancialMetricRecord
   /** 加监控回调 (个股弹窗传入, 有值时渲染 RadioTower 图标) */
@@ -92,7 +94,7 @@ function renderExtInline(
   )
 }
 
-export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist }: Props) {
+export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsChange, financialMetrics, onMonitor, inWatchlist, onToggleWatchlist, tags }: Props) {
   // 弹窗开关：纯本地状态，与数据/配置无关，放早期 return 之前
   const [customizerOpen, setCustomizerOpen] = useState(false)
   // ext 标签展开状态：按 symbol::colId，切股/切字段时互不干扰
@@ -180,6 +182,7 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
       case 'debt_ratio':  return financialMetrics?.debt_to_asset_ratio != null ? `${financialMetrics.debt_to_asset_ratio.toFixed(2)}%` : null
       case 'revenue_yoy': return financialMetrics?.revenue_yoy != null ? `${financialMetrics.revenue_yoy.toFixed(2)}%` : null
       case 'net_income_yoy': return financialMetrics?.net_income_yoy != null ? `${financialMetrics.net_income_yoy.toFixed(2)}%` : null
+      case 'tags': return tags && tags.length > 0 ? tags.join(',') : null
       // PE/PB 后端无此字段，用现价现算（PE 基于最新一期 EPS，非严格 TTM）
       case 'pe_ttm': {
         const eps = financialMetrics?.eps_basic
@@ -195,11 +198,20 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
 
   // 渲染单个字段（builtin / ext 通用）
   const renderField = (f: ColumnConfig): ReactNode => {
+    // 取原始值: ext 来自 ext_data, builtin 来自 computeBuiltinValue
+    let val: unknown
     if (f.source.type === 'ext') {
       const { configId, fieldName } = f.source
-      const val = extData[`${configId}__${fieldName}`]
+      val = extData[`${configId}__${fieldName}`]
       // 无值的 ext 字段整体跳过（与 builtin 无数据行为一致）
       if (val == null || (typeof val === 'number' && Number.isNaN(val))) return null
+    } else {
+      const v = computeBuiltinValue(f.source.key)
+      if (v == null) return null
+      val = v
+    }
+    // 标签渲染模式 (ext 默认; builtin 配了 extDisplay 如 builtin:tags 也走): 统一复用通用 chip 渲染
+    if (f.source.type === 'ext' || f.extDisplay?.displayMode === 'tag') {
       const cellKey = `${symbol}::${f.id}`
       return (
         <span key={f.id} className="inline-flex items-center gap-1">
@@ -210,12 +222,10 @@ export function StockInfoBar({ symbol, name, stockInfo, rows, fields, onFieldsCh
         </span>
       )
     }
-    // builtin
-    const value = computeBuiltinValue(f.source.type === 'builtin' ? f.source.key : '')
-    if (value == null) return null
+    // 普通 builtin 纯文本
     return (
       <span key={f.id}>
-        {f.label} <span className="text-secondary">{value}</span>
+        {f.label} <span className="text-secondary">{val as string}</span>
       </span>
     )
   }
