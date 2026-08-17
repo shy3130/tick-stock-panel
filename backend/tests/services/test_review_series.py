@@ -81,6 +81,8 @@ def test_review_history_uses_projected_fast_path_and_preserves_streaks():
     )
 
     assert repo.columns == _REVIEW_HISTORY_COLUMNS
+    # 展示契约: instruments JOIN 后 name 必须可用(风险线索/题材龙头依赖)
+    assert df["name"].to_list() == ["测试股份", "测试股份"]
     assert df["consecutive_limit_ups"].to_list() == [0, 0]
     assert df["signal_limit_up"].to_list() == [False, False]
     assert df["signal_broken_limit_up"].to_list() == [None, True]

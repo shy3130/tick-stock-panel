@@ -176,6 +176,14 @@ def _load_review_history(repo, start: date, end: date) -> pl.DataFrame:
     from app.indicators.pipeline import compute_limit_signals
 
     df = compute_limit_signals(df.sort(["symbol", "date"]), instruments)
+    # 名称/行业等展示字段来自 instruments JOIN: 快速路径列集不含 name,
+    # 需显式补齐供 _brief / 题材龙头展示
+    if "name" not in df.columns and "name" in instruments.columns:
+        df = df.join(
+            instruments.select(["symbol", "name"]).unique(subset=["symbol"], keep="first"),
+            on="symbol",
+            how="left",
+        )
     df = df.drop([name for name in stored_names if name in df.columns]).rename(
         {f"_stored_{name}": name for name in stored_names}
     )
