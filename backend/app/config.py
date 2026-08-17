@@ -64,6 +64,9 @@ def _project_root() -> Path:
 _PROJECT_ROOT = _project_root()
 _RESOURCE_ROOT = _resource_root()
 
+# AI 生成默认的最大输出 token(当前消费方:复盘,设置页可调)
+AI_MAX_TOKENS_DEFAULT = 4500
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -80,6 +83,7 @@ class Settings(BaseSettings):
     ai_base_url: str = "https://api.zhaji.dev/v1"
     ai_api_key: str = ""
     ai_model: str = "gpt-5.5"
+    ai_max_tokens: int = AI_MAX_TOKENS_DEFAULT
     ai_codex_command: str = "codex"
     ai_codex_reasoning_effort: str = ""
     # 默认浏览器风格 UA,绕过 Cloudflare 等 CDN/WAF 的 Bot 拦截(Issue #8)。

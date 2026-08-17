@@ -201,6 +201,32 @@ def test_codex_config_adapts_local_access_provider_for_docker(monkeypatch, tmp_p
     assert provider["supports_websockets"] is False
 
 
+def test_clamp_ai_max_tokens_bounds(monkeypatch):
+    monkeypatch.setattr(ai_provider.settings, "ai_max_tokens", 4500)
+    assert ai_provider.clamp_ai_max_tokens(100) == 500
+    assert ai_provider.clamp_ai_max_tokens(99999) == 32000
+    assert ai_provider.clamp_ai_max_tokens(8000) == 8000
+    assert ai_provider.clamp_ai_max_tokens("abc") == 4500  # 坏值回退默认
+
+
+def test_current_ai_max_tokens_uses_config_default(monkeypatch):
+    monkeypatch.setattr(ai_provider.settings, "ai_max_tokens", 4500)
+    monkeypatch.setattr(ai_provider.secrets_store, "get_ai_config", lambda key, default: default)
+    assert ai_provider.current_ai_max_tokens() == 4500
+
+
+def test_current_ai_max_tokens_prefers_secrets_override(monkeypatch):
+    monkeypatch.setattr(ai_provider.settings, "ai_max_tokens", 4500)
+    monkeypatch.setattr(ai_provider.secrets_store, "get_ai_config", lambda key, default: "8000")
+    assert ai_provider.current_ai_max_tokens() == 8000
+
+
+def test_current_ai_max_tokens_clamps_override(monkeypatch):
+    monkeypatch.setattr(ai_provider.settings, "ai_max_tokens", 4500)
+    monkeypatch.setattr(ai_provider.secrets_store, "get_ai_config", lambda key, default: "99999")
+    assert ai_provider.current_ai_max_tokens() == 32000
+
+
 def test_codex_config_does_not_copy_provider_without_docker_opt_in(monkeypatch, tmp_path):
     monkeypatch.delenv("CODEX_DOCKER_HOST", raising=False)
     monkeypatch.setattr(ai_provider, "current_ai_model", lambda: "")
