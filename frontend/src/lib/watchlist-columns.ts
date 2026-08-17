@@ -25,6 +25,7 @@ export type { ColumnConfig, ColumnGroup, ColumnSource, ExtColumnDisplayConfig, C
 export const BUILTIN_COLUMNS: ColumnConfig[] = [
   // 固定列
   { id: 'builtin:symbol', source: { type: 'builtin', key: 'symbol' }, label: '代码/名称', visible: true, pinned: true, align: 'left' },
+  { id: 'builtin:tags', source: { type: 'builtin', key: 'tags' }, label: '标签', visible: true, align: 'left' },
   // 价格
   { id: 'builtin:price', source: { type: 'builtin', key: 'price' }, label: '现价', visible: true, align: 'center' },
   { id: 'builtin:pct', source: { type: 'builtin', key: 'pct' }, label: '涨跌幅', visible: true, align: 'center' },
@@ -94,6 +95,7 @@ export const COLUMN_GROUPS: ColumnGroup[] = [
   { id: 'momentum', label: '动量', icon: '🚀', keys: ['momentum_5d', 'momentum_10d', 'momentum_20d', 'momentum_30d', 'momentum_60d'] },
   { id: 'limit', label: '连板', icon: '🔥', keys: ['limit_ups', 'limit_downs'] },
   { id: 'signal', label: '信号', icon: '📡', keys: ['signals', 'candle', 'intraday'] },
+  { id: 'tags', label: '标签', icon: '🏷️', keys: ['tags'] },
   { id: 'finance', label: '财务', icon: '📋', keys: ['eps', 'bps', 'roe', 'pe_ttm', 'pb', 'gross_margin', 'net_margin', 'revenue_yoy', 'net_income_yoy', 'debt_ratio'] },
 ]
 

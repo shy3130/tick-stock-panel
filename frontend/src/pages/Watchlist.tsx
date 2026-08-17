@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, Import } from 'lucide-react'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Tag, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Clock, RotateCcw, Import } from 'lucide-react'
 import { api, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
@@ -10,6 +10,7 @@ import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { StockPreviewDialog, type NavItem } from '@/components/StockPreviewDialog'
+import { Modal } from '@/components/Modal'
 import {
   DimensionMembersDialog,
   dimensionKindForSourceField,
@@ -59,6 +60,69 @@ function turnoverColor(rate: number | null | undefined): string {
   if (rate < 20)  return 'text-[#f97316]'
   if (rate < 35)  return 'text-[#d94a3d]'
   return 'text-[#b84a8a]'
+}
+
+// ===== 标签（多对多注解）=====
+
+function splitTags(s?: string | null): string[] {
+  return (s || '').split(',').map(t => t.trim()).filter(Boolean)
+}
+
+function TagChips({ tags, onEdit }: { tags: string[]; onEdit?: () => void }) {
+  return (
+    <div className="flex items-center gap-1 flex-wrap min-w-0">
+      {tags.slice(0, 3).map(t => (
+        <span key={t} className="inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight text-yellow-500 bg-yellow-500/10">
+          {t}
+        </span>
+      ))}
+      {tags.length > 3 && <span className="text-[10px] text-muted">+{tags.length - 3}</span>}
+      {onEdit && (
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); onEdit() }}
+          className="p-0.5 text-muted hover:text-accent rounded transition-colors"
+          title="编辑标签"
+          aria-label="编辑标签"
+        >
+          <Tag className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+// 筛选栏单行标签筛选块 (板块/标签共用)
+function FilterChipRow({ label, chips, activeSet, onToggle }: {
+  label: string
+  chips: readonly string[]
+  activeSet: Set<string>
+  onToggle: (v: string) => void
+}) {
+  if (chips.length === 0) return null
+  return (
+    <div className="mb-2">
+      <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">{label}</div>
+      <div className="flex flex-wrap gap-1">
+        {chips.map(v => {
+          const active = activeSet.has(v)
+          return (
+            <button
+              key={v}
+              onClick={() => onToggle(v)}
+              className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+                active
+                  ? 'bg-accent/15 text-accent'
+                  : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
+              }`}
+            >
+              {v}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ===== 动态列渲染 =====
@@ -402,6 +466,7 @@ const StockCard = React.memo(function StockCard({
   onDimensionClick,
   isMonitored,
   active,
+  onEditTags,
 }: {
   r: any
   candleRows: KlineRow[]
@@ -418,11 +483,13 @@ const StockCard = React.memo(function StockCard({
   isMonitored?: boolean
   /** 正在 K 线弹窗预览中 → 高亮卡片 */
   active?: boolean
+  onEditTags: (symbol: string) => void
 }) {
   const board = boardTag(r.symbol)
   const price = r.rt_price ?? r.close
   const pct = r.rt_pct ?? r.change_pct
   const name = r.rt_name ?? r.name
+  const tags = splitTags(r.tags)
   const signals = getSignals(r)
   const isUp = (pct ?? 0) > 0
   const isDown = (pct ?? 0) < 0
@@ -542,6 +609,10 @@ const StockCard = React.memo(function StockCard({
         </div>
       </div>
 
+      <div className="pl-4 pr-2.5 pt-1.5 pb-0">
+        <TagChips tags={tags} onEdit={() => onEditTags(r.symbol)} />
+      </div>
+
       {/* 信号标签区 */}
       {signals.length > 0 && (
         <div className="pl-4 pr-2.5 pt-1.5 pb-2 flex flex-wrap gap-1">
@@ -567,6 +638,117 @@ const StockCard = React.memo(function StockCard({
     </div>
   )
 })
+
+// ===== 标签编辑弹窗 =====
+
+function TagEditorDialog({
+  symbol,
+  name,
+  tags,
+  allTags,
+  onClose,
+  onSave,
+}: {
+  symbol: string
+  name: string
+  tags: string[]
+  allTags: string[]
+  onClose: () => void
+  onSave: (symbol: string, tags: string[]) => void
+}) {
+  const titleId = 'tag-editor-title'
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [draft, setDraft] = useState<string[]>(tags)
+  const [input, setInput] = useState('')
+  const suggestions = allTags.filter(t => !draft.includes(t))
+
+  function addTag(raw?: string) {
+    const clean = (raw ?? input).trim().replace(/[,，]/g, '')
+    setInput('')
+    inputRef.current?.focus()
+    if (!clean || draft.includes(clean)) return
+    const next = [...draft, clean]
+    setDraft(next)
+    onSave(symbol, next)
+  }
+
+  function removeTag(t: string) {
+    const next = draft.filter(x => x !== t)
+    setDraft(next)
+    onSave(symbol, next)
+  }
+
+  return (
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      panelClassName="relative w-[90vw] max-w-[360px] rounded-card border border-border bg-base shadow-2xl p-5"
+    >
+      <h3 id={titleId} className="text-sm font-medium text-foreground mb-0.5">
+        <span className="font-mono">{symbol}</span>
+        {name && <span className="text-secondary ml-2">{name}</span>}
+      </h3>
+
+      <div className="flex flex-wrap gap-1 mb-2 min-h-[24px]">
+        {draft.map(t => (
+          <span key={t} className="inline-flex items-center gap-1 px-1.5 py-px rounded text-[11px] font-medium leading-tight text-yellow-500 bg-yellow-500/10">
+            {t}
+            <button
+              onClick={() => removeTag(t)}
+              className="text-yellow-500/60 hover:text-yellow-500 transition-colors"
+              aria-label={`删除标签 ${t}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        {draft.length === 0 && <span className="text-[11px] text-muted self-center">暂无标签</span>}
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') addTag() }}
+          placeholder="输入标签，回车添加"
+          maxLength={20}
+          autoFocus
+          className="flex-1 h-8 px-2 rounded-btn bg-elevated border border-border text-xs text-foreground placeholder:text-muted focus:outline-none focus:border-accent/50"
+        />
+        <button
+          onClick={() => addTag()}
+          className="px-2.5 h-8 rounded-btn bg-accent/15 text-accent hover:bg-accent/25 text-xs font-medium transition-colors"
+        >
+          添加
+        </button>
+      </div>
+
+      {suggestions.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {suggestions.map(s => (
+            <button
+              key={s}
+              onClick={() => addTag(s)}
+              className="px-1.5 py-px rounded text-[10px] text-muted bg-elevated hover:text-accent hover:bg-accent/10 transition-colors"
+            >
+              + {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-4 flex items-center justify-end">
+        <button
+          onClick={onClose}
+          className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors"
+        >
+          完成
+        </button>
+      </div>
+    </Modal>
+  )
+}
 
 // ===== 主页面 =====
 
@@ -772,18 +954,47 @@ export function Watchlist() {
     },
   })
 
+  const setTags = useMutation({
+    mutationFn: ({ symbol, tags }: { symbol: string; tags: string[] }) => api.watchlistSetTags(symbol, tags),
+    onSuccess: (data, variables) => {
+      qc.setQueryData(QK.watchlist, data)
+      // 标签只改自选行的 tags 字段, 就地 patch 该行即可, 不必整表重拉行情
+      qc.setQueryData(['watchlist-enriched', extColumnsParam], (old: any) => {
+        if (!old?.rows) return old
+        const tags = data.symbols.find(s => s.symbol === variables.symbol)?.tags ?? ''
+        return {
+          ...old,
+          rows: old.rows.map((r: any) => r.symbol === variables.symbol ? { ...r, tags } : r),
+        }
+      })
+    },
+  })
+
   // 二次确认状态
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
+  const [tagEditSymbol, setTagEditSymbol] = useState<string | null>(null)
+
   const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
   const rows = enriched.data?.rows ?? []
+
+  // 每行标签只 split 一次, 筛选/列渲染/编辑弹窗共用
+  const tagsBySymbol = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const r of rows) map.set(r.symbol, splitTags(r.tags))
+    return map
+  }, [rows])
+
   const handleCardConfirmRemove = useCallback((sym: string) => {
     remove.mutate(sym); setConfirmRemove(null)
   }, [remove])
   const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
   const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
-
+  const handleEditTags = useCallback((sym: string) => setTagEditSymbol(sym), [])
+  const handleSaveTags = useCallback((sym: string, tags: string[]) => {
+    setTags.mutate({ symbol: sym, tags })
+  }, [setTags])
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
   // 后端 Free 档实际只监控自选页前 N 个 (N = watchlist_symbol_count), 顺序与 allSymbols 一致。
@@ -820,6 +1031,29 @@ export function Watchlist() {
     })
   }, [persistBoardFilter])
 
+  const [tagFilter, setTagFilter] = useState<Set<string>>(() => new Set(storage.watchlistTagFilter.get([])))
+  const persistTagFilter = useCallback((next: Set<string>) => {
+    setTagFilter(next)
+    storage.watchlistTagFilter.set([...next])
+  }, [])
+
+  const toggleTag = useCallback((tag: string) => {
+    setTagFilter(prev => {
+      const next = new Set(prev)
+      if (next.has(tag)) next.delete(tag)
+      else next.add(tag)
+      persistTagFilter(next)
+      return next
+    })
+  }, [persistTagFilter])
+
+  // 全部现有标签 ∪ 已激活筛选(含已从行里消失的), 供筛选栏与编辑弹窗建议
+  const tagFilterChips = useMemo(() => {
+    const set = new Set(tagFilter)
+    for (const ts of tagsBySymbol.values()) for (const t of ts) set.add(t)
+    return [...set].sort()
+  }, [tagsBySymbol, tagFilter])
+
   const updateFilter = useCallback((colId: string, patch: { min?: string; max?: string; text?: string }) => {
     setFilters(prev => {
       const next = { ...prev }
@@ -837,7 +1071,8 @@ export function Watchlist() {
   const resetAllFilters = useCallback(() => {
     setFilters({})
     persistBoardFilter(new Set(BOARDS))
-  }, [persistBoardFilter])
+    persistTagFilter(new Set())
+  }, [persistBoardFilter, persistTagFilter])
 
   // 可筛选的内置列
   const filterableBuiltinCols = useMemo(
@@ -870,6 +1105,9 @@ export function Watchlist() {
         return board != null && boardFilter.has(board)
       })
     }
+    if (tagFilter.size > 0) {
+      result = result.filter(r => (tagsBySymbol.get(r.symbol) ?? []).some(t => tagFilter.has(t)))
+    }
     // 数值/文本筛选
     const activeFilters = Object.entries(filters).filter(([, v]) => v.min || v.max || v.text)
     if (activeFilters.length > 0) {
@@ -890,9 +1128,9 @@ export function Watchlist() {
       })
     }
     return result
-  }, [rows, filters, columns, boardFilter])
+  }, [rows, filters, columns, boardFilter, tagFilter, tagsBySymbol])
 
-  const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
+  const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length + tagFilter.size
   const hasBoardFilter = boardFilter.size > 0 && boardFilter.size < BOARDS.length
   const hasActiveFilters = activeFilterCount > 0 || hasBoardFilter
 
@@ -968,8 +1206,11 @@ export function Watchlist() {
       onDimensionClick={setDimensionTarget}
       isMonitored={monitoredSymbols.has(r.symbol)}
       active={previewSymbol === r.symbol}
+      onEditTags={handleEditTags}
     />
   )
+
+  const tagRow = tagEditSymbol ? rows.find(r => r.symbol === tagEditSymbol) : undefined
 
   return (
     <div className="flex flex-col h-full">
@@ -1087,28 +1328,8 @@ export function Watchlist() {
       {/* 筛选栏 */}
       {filterOpen && (
         <div className="px-5 py-2 border-b border-border bg-surface/50 max-h-[184px] overflow-y-auto">
-          {/* 板块筛选 */}
-          <div className="mb-2">
-            <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">板块</div>
-            <div className="flex flex-wrap gap-1">
-              {BOARDS.map(board => {
-                const active = boardFilter.has(board)
-                return (
-                  <button
-                    key={board}
-                    onClick={() => toggleBoard(board)}
-                    className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
-                      active
-                        ? 'bg-accent/15 text-accent'
-                        : 'bg-elevated text-secondary hover:text-foreground hover:bg-elevated/80'
-                    }`}
-                  >
-                    {board}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
+          <FilterChipRow label="板块" chips={BOARDS} activeSet={boardFilter} onToggle={toggleBoard} />
+          <FilterChipRow label="标签" chips={tagFilterChips} activeSet={tagFilter} onToggle={toggleTag} />
           {COLUMN_GROUPS.map(cat => {
             const items = colsByCategory[cat.label]?.filter(i => i.col)
             if (!items?.length) return null
@@ -1391,6 +1612,13 @@ export function Watchlist() {
                     </td>
                   )
                 }
+                if (key === 'tags') {
+                  return (
+                    <td className="px-2 py-1.5">
+                      <TagChips tags={tagsBySymbol.get(r.symbol) ?? []} onEdit={() => handleEditTags(r.symbol)} />
+                    </td>
+                  )
+                }
                 // 其余纯数据列 → 共享原语
                 return renderBuiltinDataCell(r, col)
               }}
@@ -1484,6 +1712,18 @@ export function Watchlist() {
         navList={previewNavItems}
         onNavigate={(sym, n) => { setPreviewSymbol(sym); setPreviewName(n ?? '') }}
       />
+
+      {tagEditSymbol && (
+        <TagEditorDialog
+          key={tagEditSymbol}
+          symbol={tagEditSymbol}
+          name={tagRow?.name ?? ''}
+          tags={tagsBySymbol.get(tagEditSymbol) ?? []}
+          allTags={tagFilterChips}
+          onClose={() => setTagEditSymbol(null)}
+          onSave={handleSaveTags}
+        />
+      )}
 
       <DimensionMembersDialog
         target={dimensionTarget}

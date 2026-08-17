@@ -51,6 +51,10 @@ class BatchAddRequest(BaseModel):
     note: str = ""
 
 
+class SetTagsRequest(BaseModel):
+    tags: list[str] = []
+
+
 def _with_names(rows: list[dict], request: Request) -> list[dict]:
     if not rows:
         return rows
@@ -86,6 +90,15 @@ def add_batch(req: BatchAddRequest, request: Request):
             existing.add(sym)
         watchlist.add(sym, req.note)
     return {"symbols": _with_names(watchlist.list_symbols(), request), "added": added}
+
+
+@router.post("/{symbol}/tags")
+def set_one_tags(symbol: str, req: SetTagsRequest, request: Request):
+    """整体替换某自选标的的标签(多对多, 逗号分隔存储)。"""
+    rows = watchlist.set_tags(symbol, req.tags)
+    if not any(r["symbol"] == symbol for r in rows):
+        raise HTTPException(404, f"自选里没有 {symbol}")
+    return {"symbols": _with_names(rows, request)}
 
 
 @router.get("/ocr-status")
@@ -237,7 +250,8 @@ def watchlist_enriched(
     t0 = time.perf_counter()
 
     repo = request.app.state.repo
-    symbols = [r["symbol"] for r in watchlist.list_symbols()]
+    wl_rows = watchlist.list_symbols()
+    symbols = [r["symbol"] for r in wl_rows]
     if not symbols:
         return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
@@ -302,6 +316,11 @@ def watchlist_enriched(
         pl.col("symbol").replace_strict(name_map, default=None, return_dtype=pl.Utf8).alias("name")
     )
 
+    tag_map = {r["symbol"]: r.get("tags", "") for r in wl_rows}
+    df = df.with_columns(
+        pl.col("symbol").replace_strict(tag_map, default="").alias("tags")
+    )
+
     # 标注资产类型: 前端据此渲染徽标/豁免板块筛选/分时列降级
     asset_map = {**{s: "etf" for s in etf_symbols}, **{s: "index" for s in index_symbols}}
     df = df.with_columns(
@@ -309,7 +328,7 @@ def watchlist_enriched(
     )
 
     # 选择内置需要的列
-    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type"] if c in df.columns]
+    keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type", "tags"] if c in df.columns]
     df = df.select(keep)
 
     # 动态 JOIN 扩展数据表
