@@ -1525,10 +1525,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbol, note }),
     }),
-  watchlistBatchAdd: (symbols: string[], note = '') =>
+  watchlistBatchAdd: (symbols: string[], tags: string[] = []) =>
     request<{ symbols: WatchlistEntry[]; added: number }>('/api/watchlist/batch', {
       method: 'POST',
-      body: JSON.stringify({ symbols, note }),
+      body: JSON.stringify({ symbols, tags }),
     }),
   watchlistSetTags: (symbol: string, tags: string[]) =>
     request<{ symbols: WatchlistEntry[] }>(`/api/watchlist/${symbol}/tags`, {

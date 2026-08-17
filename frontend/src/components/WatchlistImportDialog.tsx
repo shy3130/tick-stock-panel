@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
-import { FileText, ImagePlus, Loader2, Upload, X, type LucideIcon } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { FileText, ImagePlus, Loader2, Tag, Upload, X, type LucideIcon } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { TagInput } from '@/components/TagInput'
 import { toast } from '@/components/Toast'
 import { api, type WatchlistImportCandidate } from '@/lib/api'
+import { QK } from '@/lib/queryKeys'
+import { splitTags } from '@/lib/tags'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { getOcrInstallHint } from '@/lib/ocrInstallHint'
 
@@ -132,6 +136,7 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
   const [csvFileName, setCsvFileName] = useState('')
   const [ocrAvailable, setOcrAvailable] = useState<boolean | null>(null)
   const [installHint, setInstallHint] = useState('')
+  const [batchTags, setBatchTags] = useState<string[]>([])
   const batchAdd = useWatchlistBatchAdd()
 
   const abortInFlight = useCallback(() => {
@@ -155,6 +160,7 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
     setCsvFileName('')
     setOcrAvailable(null)
     setInstallHint('')
+    setBatchTags([])
     setPreviewUrls(prev => {
       revokePreviews(prev)
       return []
@@ -162,6 +168,16 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
     if (inputRef.current) inputRef.current.value = ''
     if (csvInputRef.current) csvInputRef.current.value = ''
   }, [abortInFlight, revokePreviews])
+
+  // 复用宿主页 QK.watchlist 缓存作标签建议, 避免额外请求
+  const watchlist = useQuery({ queryKey: QK.watchlist, queryFn: api.watchlistList })
+  const existingTags = useMemo(() => {
+    const tags = new Set<string>()
+    for (const e of watchlist.data?.symbols ?? []) {
+      for (const t of splitTags(e.tags)) tags.add(t)
+    }
+    return [...tags]
+  }, [watchlist.data])
 
   useEffect(() => {
     if (!open) {
@@ -334,7 +350,7 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
       return
     }
     try {
-      const data = await batchAdd.mutateAsync(symbols)
+      const data = await batchAdd.mutateAsync({ symbols, tags: batchTags })
       toast(`已添加 ${data.added} 只自选`, 'success')
       onClose()
     } catch {
@@ -524,6 +540,14 @@ export function WatchlistImportDialog({ open, onClose }: Props) {
             </ul>
           </div>
         )}
+      </div>
+
+      <div className="shrink-0 px-4 py-3 border-t border-border">
+        <div className="flex items-center gap-1.5 text-[11px] text-secondary mb-2">
+          <Tag className="h-3 w-3" />
+          {selected.size > 0 ? `为所选 ${selected.size} 只批量打标签` : '批量打标签（本次所选）'}
+        </div>
+        <TagInput tags={batchTags} onChange={setBatchTags} allTags={existingTags} emptyLabel="未设置" compact />
       </div>
 
       <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border shrink-0">
