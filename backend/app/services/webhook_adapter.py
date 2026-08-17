@@ -93,7 +93,7 @@ def _truncate_to_bytes(text: str, max_bytes: int, suffix: str = "…") -> str:
 _FEISHU_MAX_ATTEMPTS = 3
 
 
-def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
+def _post_feishu(webhook_url: str, payload: dict, secret: str, max_attempts: int = _FEISHU_MAX_ATTEMPTS) -> bool:
     """发送飞书 webhook 请求并判定成败 (供 text / card 共用)。
 
     成功响应: HTTP 200 且业务 code=0 (或非 JSON/非 dict 的 200)。
@@ -102,11 +102,14 @@ def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
     一次瞬时 5xx/timeout 若不重试, 该告警会被冷却窗口(默认 1h)压掉, 离屏用户彻底
     收不到推送。永久失败 (4xx / 业务 code≠0, 如签名错、URL 失效) 不重试。最终失败
     记 WARNING (而非之前的 debug), 保证「推送丢了」在日志里可见。
+
+    max_attempts: 尝试次数, 默认 3 (生产推送语义)。诊断用途(如手动测试配置)可传 1,
+    避免失败时等满退避重试。
     """
     import httpx
 
     last_err = ""
-    for attempt in range(1, _FEISHU_MAX_ATTEMPTS + 1):
+    for attempt in range(1, max_attempts + 1):
         try:
             # 启用签名校验时, 请求体须带 timestamp + sign (每次重试都重算, 防时间戳过期)
             if secret:
@@ -143,7 +146,7 @@ def _post_feishu(webhook_url: str, payload: dict, secret: str) -> bool:
     return False
 
 
-def send_feishu(webhook_url: str, title: str, body: str, secret: str = "") -> bool:
+def send_feishu(webhook_url: str, title: str, body: str, secret: str = "", max_attempts: int = _FEISHU_MAX_ATTEMPTS) -> bool:
     """推送一条文本消息到飞书群推送 Webhook。
 
     Args:
@@ -151,6 +154,7 @@ def send_feishu(webhook_url: str, title: str, body: str, secret: str = "") -> bo
         title:       消息标题 (与正文拼接为一条文本)
         body:        消息正文
         secret:      签名密钥 (机器人启用了「签名校验」时必填; 留空则不带签名)
+        max_attempts: 尝试次数 (诊断用途可传 1, 默认保持生产重试语义)
 
     Returns:
         True=成功送达, False=失败或 URL 非法。
@@ -164,7 +168,7 @@ def send_feishu(webhook_url: str, title: str, body: str, secret: str = "") -> bo
         return False
 
     payload: dict = {"msg_type": "text", "content": {"text": text}}
-    return _post_feishu(webhook_url, payload, secret)
+    return _post_feishu(webhook_url, payload, secret, max_attempts)
 
 
 def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, secret: str = "") -> bool:

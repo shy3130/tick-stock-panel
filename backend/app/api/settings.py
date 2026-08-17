@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -952,6 +953,46 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
         )
     saved_url = preferences.set_wecom_webhook_url(url)
     return {"wecom_webhook_url": saved_url}
+
+
+class WebhookTestIn(BaseModel):
+    channel: Literal["feishu", "wecom"]
+
+
+@router.post("/preferences/webhook-test")
+def test_webhook(req: WebhookTestIn) -> dict:
+    """向已保存的 Webhook 地址发送一条测试消息，验证配置是否正确。
+
+    只测试已保存的配置（与生产推送同源），不测试未保存草稿。
+    未配置 / 地址非法 / 发送失败均返回 HTTP 200 + {ok: False}，
+    前端统一读 detail 渲染绿/红，不抛 400。
+    """
+    from app.services import preferences
+    from app.services import webhook_adapter
+
+    title = "TickFlow Stock Panel 推送测试"
+    body = "如果你看到这条消息，说明推送配置正确 🎉"
+
+    if req.channel == "feishu":
+        url = preferences.get_feishu_webhook_url()
+        if not url:
+            return {"ok": False, "detail": "尚未配置飞书 Webhook，请先保存"}
+        if not webhook_adapter.is_valid_feishu_url(url):
+            return {"ok": False, "detail": "已保存的飞书 Webhook 地址非法，请重新保存"}
+        secret = preferences.get_feishu_webhook_secret()
+        # 诊断用途单次尝试: 失败即返回, 不等生产退避重试 (~17s)
+        ok = webhook_adapter.send_feishu(url, title, body, secret, max_attempts=1)
+    else:  # wecom
+        url = preferences.get_wecom_webhook_url()
+        if not url:
+            return {"ok": False, "detail": "尚未配置企业微信 Webhook，请先保存"}
+        if not webhook_adapter.is_valid_wecom_url(url):
+            return {"ok": False, "detail": "已保存的企业微信 Webhook 地址非法，请重新保存"}
+        ok = webhook_adapter.send_wecom(url, title, body)
+
+    if ok:
+        return {"ok": True, "detail": "测试消息已发送，请到群内查收"}
+    return {"ok": False, "detail": "推送失败：网络不可达或地址/密钥不正确，详情见后端日志"}
 
 
 class WecomBotPrefsIn(BaseModel):
