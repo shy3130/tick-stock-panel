@@ -39,6 +39,18 @@ export function toNavItems<T extends { symbol: string; name?: string | null }>(x
   return xs.map(x => ({ symbol: x.symbol, name: x.name ?? undefined }))
 }
 
+/** 榜单里同一标的可能多次出现 (多概念/行业 leader、监控重复触发), 去重以免切股/计数空跳; 保留首次出现。 */
+function uniqueNavItems(xs: NavItem[]): NavItem[] {
+  const seen = new Set<string>()
+  const out: NavItem[] = []
+  for (const n of xs) {
+    if (seen.has(n.symbol)) continue
+    seen.add(n.symbol)
+    out.push(n)
+  }
+  return out
+}
+
 /** 首↔尾循环的索引换算: go(delta) 与 邻近预取 共用, 保证换行规则单源 */
 function wrapNavIndex(navIdx: number, delta: number, navTotal: number): number {
   return (navIdx + delta + navTotal) % navTotal
@@ -50,7 +62,7 @@ const PRESETS: { label: string; months: number }[] = [
   { label: '1年', months: 12 },
 ]
 
-export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList, onNavigate }: Props) {
+export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList: navListSource, onNavigate }: Props) {
   const [showIntraday, setShowIntraday] = useState(false)
   const [dateRange, setDateRange] = useState(getDefaultRange)
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
@@ -73,17 +85,19 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
   })
 
   // ===== 切股导航 =====
+  const navList = useMemo(() => uniqueNavItems(navListSource ?? []), [navListSource])
+
   // 当前 symbol 在 navList 中的位置 (不在列表则为 -1, 此时不显示计数/按钮)
-  const navIdx = navList ? navList.findIndex(n => n.symbol === symbol) : -1
-  const navTotal = navList?.length ?? 0
+  const navIdx = navList.findIndex(n => n.symbol === symbol)
+  const navTotal = navList.length
   const navEnabled = navTotal >= 2 && navIdx >= 0
 
   // 邻近预取目标: 当前股左右相邻两只 (首↔尾循环), 交由 StockPanel 提前拉取日K/财务指标缓存
   const prefetchSymbols = useMemo(() => {
     if (!navEnabled) return []
     return [
-      navList![wrapNavIndex(navIdx, -1, navTotal)].symbol,
-      navList![wrapNavIndex(navIdx, 1, navTotal)].symbol,
+      navList[wrapNavIndex(navIdx, -1, navTotal)].symbol,
+      navList[wrapNavIndex(navIdx, 1, navTotal)].symbol,
     ]
   }, [navEnabled, navIdx, navTotal, navList])
 
@@ -102,7 +116,7 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
 
   // 前后切股: 返回是否真正导航 (供键盘判断是否要 preventDefault)
   const go = useCallback((delta: 1 | -1): boolean => {
-    if (!navList || !navEnabled) return false
+    if (!navEnabled) return false
     const nextIdx = wrapNavIndex(navIdx, delta, navTotal)
     const wrapped = nextIdx === (delta === 1 ? 0 : navTotal - 1)
     if (wrapped) {
