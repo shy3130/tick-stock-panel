@@ -122,6 +122,9 @@ export const storage = {
   /** 行业分析页面字段配置 */
   industryAnalysisConfig: kv<Record<string, any>>('industry-analysis-config'),
 
+  /** 个股详情外链 URL 模板 (语义见 stock-external-link) */
+  stockExternalTemplate: kv<string>('stock_external_template'),
+
   /** 数据页画像卡片显隐 (卡片key → 是否显示) */
   dataCardVisible: kv<Record<string, boolean>>('data-card-visible'),
   /** 数据页画像卡片顺序 (卡片key 数组, 长度=卡片总数) */
