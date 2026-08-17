@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileUp, Loader2, NotebookPen, Trash2 } from 'lucide-react'
+import { Database, FileUp, Loader2, NotebookPen, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
-import { api, type JournalLedger, type JournalPreview } from '@/lib/api'
+import {
+  api,
+  type JournalFholdPreview,
+  type JournalLedger,
+  type JournalPreview,
+} from '@/lib/api'
 
 const FIELD_LABELS: Record<string, string> = {
   date: '日期',
@@ -29,6 +34,7 @@ export function TradeJournal() {
   const [accountId, setAccountId] = useState('default')
   const [appendMode, setAppendMode] = useState(false)
   const [narrative, setNarrative] = useState(false)
+  const [fholdPreview, setFholdPreview] = useState<JournalFholdPreview | null>(null)
 
   const presets = useQuery({ queryKey: ['journal-presets'], queryFn: api.journalPresets })
   const ledger = useQuery<JournalLedger | null>({
@@ -53,6 +59,24 @@ export function TradeJournal() {
       qc.invalidateQueries({ queryKey: ['journal-ledger'] })
     },
   })
+  const previewFhold = useMutation({
+    mutationFn: api.journalFholdPreview,
+    onSuccess: (data) => {
+      setFile(null)
+      setPreview(null)
+      setFholdPreview(data)
+    },
+  })
+  const commitFhold = useMutation({
+    mutationFn: () => {
+      if (!fholdPreview?.snapshot_sha256) throw new Error("fhold 没有可导入的成交")
+      return api.journalFholdImport(fholdPreview.snapshot_sha256, benchmark, narrative)
+    },
+    onSuccess: () => {
+      setFholdPreview(null)
+      qc.invalidateQueries({ queryKey: ['journal-ledger'] })
+    },
+  })
   const deleteLedger = useMutation({
     mutationFn: api.journalDelete,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['journal-ledger'] }),
@@ -66,10 +90,11 @@ export function TradeJournal() {
 
   const current = ledger.data
   const previewColumns = useMemo(() => preview?.columns.slice(0, 8) ?? [], [preview])
+  const fholdError = previewFhold.error ?? commitFhold.error
 
   return (
     <div className="workspace-page">
-      <PageHeader title="交易复盘" subtitle="券商成交流水上传 · FIFO 台账 · 行为诊断" />
+      <PageHeader title="交易复盘" subtitle="券商成交流水导入 · FIFO 台账 · 行为诊断" />
       <div className="workspace-content overflow-auto">
         <div className="mx-auto flex w-full max-w-6xl min-w-0 flex-col gap-3">
           <section className="panel">
@@ -90,11 +115,28 @@ export function TradeJournal() {
                     className="hidden"
                     onChange={(e) => {
                       const f = e.target.files?.[0] ?? null
+                      previewFhold.reset()
+                      commitFhold.reset()
+                      setFholdPreview(null)
                       setFile(f)
                       if (f) previewUpload.mutate(f)
                     }}
                   />
                 </label>
+                <button
+                  type="button"
+                  className="btn-secondary !h-8"
+                  disabled={previewFhold.isPending}
+                  onClick={() => {
+                    previewFhold.reset()
+                    commitFhold.reset()
+                    previewFhold.mutate()
+                  }}
+                >
+                  <Database className="h-4 w-4" />
+                  从 fhold 读取
+                </button>
+                {previewFhold.isPending && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
                 {previewUpload.isPending && <Loader2 className="h-4 w-4 animate-spin text-muted" />}
                 {preview && (
                   <>
@@ -127,12 +169,43 @@ export function TradeJournal() {
                     </button>
                   </>
                 )}
+                {fholdPreview && (
+                  <>
+                    <span className="text-xs text-secondary">
+                      {fholdPreview.available
+                        ? `fhold：${fholdPreview.importable_count}/${fholdPreview.row_count} 条可导入`
+                        : 'fhold 流水暂不可用'}
+                    </span>
+                    {fholdPreview.available && fholdPreview.snapshot_sha256 && (
+                      <>
+                        <select className="control w-auto" value={benchmark} onChange={(e) => setBenchmark(e.target.value)}>
+                          {presets.data?.benchmarks.map((b) => <option key={b.symbol} value={b.symbol}>{b.name}</option>)}
+                        </select>
+                        <label className="inline-flex items-center gap-1.5 text-xs text-secondary">
+                          <input type="checkbox" checked={narrative} onChange={(e) => setNarrative(e.target.checked)} />
+                          聚合摘要
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          disabled={commitFhold.isPending}
+                          onClick={() => commitFhold.mutate()}
+                        >
+                          {commitFhold.isPending ? '导入中…' : '确认追加 fhold 流水'}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
                 {current && (
                   <button className="btn-ghost ml-auto text-danger hover:text-danger" onClick={() => deleteLedger.mutate()}>
                     <Trash2 className="h-4 w-4" />删除台账
                   </button>
                 )}
               </div>
+              {fholdError && (
+                <p className="mt-2 text-xs text-danger">读取或导入 fhold 流水失败，请确认 fhold-cli 可用后重试。</p>
+              )}
             </div>
           </section>
 
@@ -176,12 +249,66 @@ export function TradeJournal() {
             </section>
           )}
 
+          {fholdPreview && (
+            <section className="panel">
+              <div className="panel-header">
+                <div>
+                  <div className="section-kicker">fhold</div>
+                  <h2 className="section-title">成交预览</h2>
+                </div>
+              </div>
+              <div className="panel-body space-y-3">
+                <p className="text-xs text-secondary">
+                  仅通过 fhold-cli 读取；确认后始终追加，按 fhold 原始交易 ID 去重，不会写回 fhold 或交易事件流。
+                </p>
+                {fholdPreview.accounts.length > 0 && (
+                  <p className="text-xs text-secondary">
+                    账户：{fholdPreview.accounts.map((account) => (
+                      `${account.name || account.id}(${account.fills})`
+                    )).join('、')}
+                  </p>
+                )}
+                {fholdPreview.warnings.length > 0 && (
+                  <ul className="list-disc space-y-1 pl-4 text-xs text-warning">
+                    {fholdPreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                  </ul>
+                )}
+                {fholdPreview.preview_rows.length > 0 && (
+                  <div className="data-table-scroll">
+                    <table className="data-table min-w-full text-xs">
+                      <thead>
+                        <tr><th>账户</th><th>日期</th><th>代码</th><th>名称</th><th>方向</th><th>数量</th><th>价格</th><th>资金金额</th><th>费用</th></tr>
+                      </thead>
+                      <tbody>
+                        {fholdPreview.preview_rows.slice(0, 20).map((row) => (
+                          <tr key={`${row.account_id}-${row.date}-${row.time}-${row.symbol}`}>
+                            <td className="text-muted">{row.account_id}</td>
+                            <td className="num">{row.date} {row.time}</td>
+                            <td className="text-foreground">{row.symbol}</td>
+                            <td>{row.name}</td>
+                            <td className={row.side === 'buy' ? 'text-bear' : 'text-bull'}>
+                              {row.side === 'buy' ? '买入' : '卖出'}
+                            </td>
+                            <td className="num">{num(row.qty)}</td>
+                            <td className="num">{num(row.price)}</td>
+                            <td className="num">{num(row.amount)}</td>
+                            <td className="num">{num(row.fee)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {!ledger.isLoading && !ledger.isError && !current && (
             <section className="panel">
               <EmptyState
                 icon={NotebookPen}
                 title="尚未导入交易复盘台账"
-                hint="选择券商导出的 xlsx 或 csv，预览列映射并确认导入后，这里会显示 FIFO 台账与行为诊断。"
+                hint="选择券商导出的 xlsx/csv 或从 fhold 读取流水，预览后确认导入，这里会显示 FIFO 台账与行为诊断。"
               />
             </section>
           )}
@@ -210,6 +337,7 @@ function Report({
 }) {
   const s = ledger.summary
   const d = ledger.diagnosis
+  const importSource = ledger.import?.source === 'fhold' ? 'fhold' : '文件'
   return (
     <>
       <section className="grid gap-3 md:grid-cols-4">
@@ -224,7 +352,10 @@ function Report({
             <div>账户：{ledger.accounts.map(a => `${a.id}(${a.fills})`).join('、')}</div>
           ) : null}
           {ledger.import ? (
-            <div className="mt-1">最近导入：{ledger.import.mode === 'append' ? '追加' : '替换'} · {ledger.import.account_id} · 新成交 {ledger.import.new_fills} · 去重 {ledger.import.deduped_fills}</div>
+            <div className="mt-1">
+              最近导入：{importSource} · {ledger.import.mode === 'append' ? '追加' : '替换'} · {ledger.import.account_id} · 新成交 {ledger.import.new_fills} · 去重 {ledger.import.deduped_fills}
+              {ledger.import.conflicting_fills ? ` · 冲突保留旧记录 ${ledger.import.conflicting_fills}` : ''}
+            </div>
           ) : null}
           {ledger.narrative ? <div className="mt-2 text-foreground">{ledger.narrative}</div> : null}
         </section>

@@ -1,12 +1,15 @@
 import json
+import threading
+from copy import deepcopy
 from io import BytesIO
 from types import SimpleNamespace
 
 import polars as pl
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 
 from app.api import trade_journal
+from app.services.trading import fhold_client
 
 
 class FakeRepo:
@@ -35,6 +38,42 @@ CSV = """成交日期,成交时间,代码,名称,交易类别,成交数量,成�
 2024-02-05,14:53:08,601127,赛力斯,买入,200,56.1,-11221.23,1.23
 2024-02-06,14:54:53,601127,赛力斯,卖出,200,61.71,12334.48,7.52
 """
+
+
+FHOLD_TRANSACTIONS = {
+    "available": True,
+    "accounts": [{"id": 7, "name": "银河证券", "broker": "银河", "isDefault": True}],
+    "transactions": [
+        {
+            "id": 101,
+            "account_id": 7,
+            "trade_date": "2024-02-05",
+            "trade_time": "14:53:08",
+            "code": "601127",
+            "name": "赛力斯",
+            "trade_type": "buy",
+            "quantity": 200,
+            "price": 56.1,
+            "amount": -11221.23,
+            "trade_amount": 11220,
+            "fee": 1.23,
+        },
+        {
+            "id": 102,
+            "account_id": 7,
+            "trade_date": "2024-02-06",
+            "trade_time": "14:54:53",
+            "code": "601127",
+            "name": "赛力斯",
+            "trade_type": "卖出",
+            "quantity": 200,
+            "price": 61.71,
+            "amount": 12334.48,
+            "trade_amount": 12342,
+            "fee": 7.52,
+        },
+    ],
+}
 
 
 def test_get_ledger_returns_normal_empty_state(tmp_path, monkeypatch):
@@ -184,4 +223,248 @@ def test_feedback_records_value_signal(tmp_path, monkeypatch):
 
     assert resp == {"ok": True}
     assert trade_journal.store.read_feedback(tmp_path)[0]["rating"] == "helpful"
-    assert trade_journal.store.read_feedback(tmp_path)[0]["ledger_imported_at"] == "2026-07-03T00:00:00Z"
+    assert (
+        trade_journal.store.read_feedback(tmp_path)[0]["ledger_imported_at"]
+        == "2026-07-03T00:00:00Z"
+    )
+
+
+def test_fhold_preview_is_read_only_and_normalizes_cash_sign(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(fhold_client, "fetch_transactions", lambda: deepcopy(FHOLD_TRANSACTIONS))
+
+    preview = trade_journal.preview_fhold_journal()
+
+    assert preview["available"] is True
+    assert preview["row_count"] == 2
+    assert preview["importable_count"] == 2
+    assert preview["accounts"] == [{"id": "fhold:7", "name": "银河证券", "fills": 2}]
+    assert preview["preview_rows"][0]["amount"] == -11221.23
+    assert preview["preview_rows"][1]["amount"] == 12334.48
+    assert trade_journal.store.read_source(tmp_path) is None
+    assert trade_journal.store.read_ledger(tmp_path) is None
+
+
+def test_fhold_preview_skips_out_of_range_numeric_values(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    state = deepcopy(FHOLD_TRANSACTIONS)
+    state["transactions"][0]["price"] = 1e101
+    monkeypatch.setattr(fhold_client, "fetch_transactions", lambda: state)
+
+    preview = trade_journal.preview_fhold_journal()
+
+    assert preview["available"] is True
+    assert preview["row_count"] == 2
+    assert preview["importable_count"] == 1
+    assert preview["skipped_count"] == 1
+    assert any("成交数量或价格无效" in warning for warning in preview["warnings"])
+
+
+def test_fhold_numeric_parser_rejects_booleans():
+    assert trade_journal._finite_float(True) is None
+    assert trade_journal._finite_float(False) is None
+
+
+def test_concurrent_journal_appends_preserve_both_fills(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    first_fill, _ = trade_journal._fhold_transaction_to_fill(FHOLD_TRANSACTIONS["transactions"][0])
+    second_fill, _ = trade_journal._fhold_transaction_to_fill(FHOLD_TRANSACTIONS["transactions"][1])
+    assert first_fill is not None and second_fill is not None
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def append_fill(fill):
+        try:
+            barrier.wait(timeout=1)
+            trade_journal._commit_journal(
+                request(),
+                [fill],
+                [],
+                append=True,
+                import_meta={"source": "test", "account_id": fill.account_id},
+                benchmark="000300.INDEX",
+                narrative=False,
+                warnings=[],
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below from the caller thread
+            errors.append(exc)
+
+    first = threading.Thread(target=append_fill, args=(first_fill,))
+    second = threading.Thread(target=append_fill, args=(second_fill,))
+    first.start()
+    second.start()
+    first.join(timeout=3)
+    second.join(timeout=3)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    source = trade_journal.store.read_source(tmp_path)
+    assert {fill["source_ref"] for fill in source["fills"]} == {
+        "fhold:transaction:101",
+        "fhold:transaction:102",
+    }
+
+
+def test_fhold_import_appends_idempotently_without_trading_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(fhold_client, "fetch_transactions", lambda: deepcopy(FHOLD_TRANSACTIONS))
+    preview = trade_journal.preview_fhold_journal()
+    payload = trade_journal.FholdJournalImportRequest(snapshot_sha256=preview["snapshot_sha256"])
+
+    first = trade_journal.import_fhold_journal(request(), payload)
+    second = trade_journal.import_fhold_journal(request(), payload)
+
+    assert first["summary"]["total_trips"] == 1
+    assert first["import"]["source"] == "fhold"
+    assert first["import"]["mode"] == "append"
+    assert second["import"]["deduped_fills"] == 2
+    source = trade_journal.store.read_source(tmp_path)
+    assert len(source["fills"]) == 2
+    assert {fill["source_ref"] for fill in source["fills"]} == {
+        "fhold:transaction:101",
+        "fhold:transaction:102",
+    }
+    assert list(tmp_path.rglob("trade_events.jsonl")) == []
+
+
+def test_fhold_import_rejects_changed_snapshot_before_writing(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    state = deepcopy(FHOLD_TRANSACTIONS)
+    monkeypatch.setattr(fhold_client, "fetch_transactions", lambda: deepcopy(state))
+    preview = trade_journal.preview_fhold_journal()
+    state["transactions"][0]["price"] = 56.2
+
+    with pytest.raises(HTTPException) as exc_info:
+        trade_journal.import_fhold_journal(
+            request(),
+            trade_journal.FholdJournalImportRequest(snapshot_sha256=preview["snapshot_sha256"]),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert trade_journal.store.read_source(tmp_path) is None
+
+
+def test_fhold_import_keeps_existing_source_reference_on_correction(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    state = deepcopy(FHOLD_TRANSACTIONS)
+    monkeypatch.setattr(fhold_client, "fetch_transactions", lambda: deepcopy(state))
+    initial = trade_journal.preview_fhold_journal()
+    trade_journal.import_fhold_journal(
+        request(),
+        trade_journal.FholdJournalImportRequest(snapshot_sha256=initial["snapshot_sha256"]),
+    )
+    state["transactions"][0]["amount"] = -11300.0
+    changed = trade_journal.preview_fhold_journal()
+
+    result = trade_journal.import_fhold_journal(
+        request(),
+        trade_journal.FholdJournalImportRequest(snapshot_sha256=changed["snapshot_sha256"]),
+    )
+
+    source = trade_journal.store.read_source(tmp_path)
+    assert result["import"]["conflicting_fills"] == 1
+    assert len(source["fills"]) == 2
+    assert source["fills"][0]["amount"] == -11221.23
+    assert any("发生变更" in warning for warning in result["warnings"])
+
+
+FHOLD_XLSX_REALITY = {
+    "available": True,
+    "accounts": [{"id": 9, "name": "测试账户", "broker": "银河", "isDefault": True}],
+    "transactions": [
+        {
+            "id": 201,
+            "account_id": 9,
+            # 券商 xlsx 导入后 SQLite 原样保留 "YYYY-MM-DD HH:MM:SS" 完整串
+            "trade_date": "2026-08-14 15:32:05",
+            "trade_time": "15:32:05",
+            "code": "600519",
+            "name": "贵州茅台",
+            "trade_type": "买入",
+            "quantity": 100,
+            "price": 1292.43,
+            "amount": -129243.0,
+            "trade_amount": 129243.0,
+            "fee": 5.17,
+        },
+        {
+            "id": 202,
+            "account_id": 9,
+            "trade_date": "2026-08-14 09:41:12",
+            "trade_time": "09:41:12",
+            # 5 开头沪市 ETF: 前缀规则无法判定市场, 必须经本地 ETF universe 解析
+            "code": "510300",
+            "name": "沪深300ETF",
+            "trade_type": "卖出",
+            "quantity": 10000,
+            "price": 3.921,
+            "amount": 39210.0,
+            "trade_amount": 39210.0,
+            "fee": 1.96,
+        },
+        {
+            "id": 203,
+            "account_id": 9,
+            "trade_date": "2026-08-14 10:05:00",
+            "trade_time": "10:05:00",
+            # 融券购回是保证金语义, 不是普通买卖, 必须排除
+            "code": "600519",
+            "name": "贵州茅台",
+            "trade_type": "融券购回",
+            "quantity": 100,
+            "price": 1290.0,
+            "amount": -129000.0,
+            "trade_amount": 129000.0,
+            "fee": 5.0,
+        },
+        {
+            "id": 204,
+            "account_id": 9,
+            "trade_date": "2026-08-14 10:10:00",
+            "trade_time": "10:10:00",
+            # 11x 可转债不在股票/ETF universe, 正确跳过
+            "code": "113050",
+            "name": "南银转债",
+            "trade_type": "买入",
+            "quantity": 10,
+            "price": 130.5,
+            "amount": -1305.0,
+            "trade_amount": 1305.0,
+            "fee": 0.5,
+        },
+    ],
+}
+
+
+def test_fhold_preview_accepts_datetime_dates_and_etf_codes(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade_journal.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(fhold_client, "fetch_transactions", lambda: deepcopy(FHOLD_XLSX_REALITY))
+    monkeypatch.setattr(
+        fhold_client,
+        "_etf_code_map",
+        lambda: {"510300": "510300.SH", "159915": "159915.SZ"},
+    )
+
+    preview = trade_journal.preview_fhold_journal()
+
+    assert preview["row_count"] == 4
+    assert preview["importable_count"] == 2
+    assert preview["skipped_count"] == 2
+    reasons = {w for w in preview["warnings"]}
+    assert any("买卖方向不支持" in w for w in reasons)
+    assert any("证券代码无法映射" in w for w in reasons)
+    fills = {row["symbol"]: row for row in preview["preview_rows"]}
+    assert "600519.SH" in fills
+    assert "510300.SH" in fills
+    assert all(fill["date"] == "2026-08-14" for fill in fills.values())
+    assert trade_journal.store.read_source(tmp_path) is None
+
+
+def test_fhold_side_check_reports_semantic_exclusion_first():
+    # 融券/转账等公司行为流水即使代码可映射, 也应报告方向不支持而非代码无法映射
+    fill, reason = trade_journal._fhold_transaction_to_fill(
+        FHOLD_XLSX_REALITY["transactions"][2]
+    )
+    assert fill is None
+    assert reason == "买卖方向不支持"

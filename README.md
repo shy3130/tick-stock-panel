@@ -231,6 +231,7 @@ git pull
 ### 🧾 交易复盘(Trade Journal)
 
 - 上传券商成交流水 / 同花顺投资账本导出,解析 A 股与港股代码
+- 默认优先同级 `../fhold/fhold-cli`（开发工作区），可用 `FHOLD_CLI` 显式覆盖；从 `../fhold` 通过 `fhold-cli tx snapshot --format json`（仅本地模式）获得完整一致快照后只读预览并确认追加；无法证明一致性时拒绝导入；按原始交易 ID 去重，不直读数据库、不写回 fhold，也不写入交易事件流
 - FIFO 配对生成 position-cycle 台账,支持已清仓与持仓中交易
 - 行为诊断:处置效应 · 过度交易 · 追涨买入 · 浮亏加仓
 - 基准超额与追涨位置诊断;本地无日 K 或港股覆盖不足会在 warning 中明确提示

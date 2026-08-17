@@ -84,7 +84,7 @@
 |------|------|------|
 | `lifecycle.py` / `store.py` | 单笔状态机（计划中/建仓中/持仓中/已平仓/已作废）+ `trade_events.jsonl` / `decision_audit.jsonl` append-only 事实流；分批 fill、计划 add/trim、零成交 void | 历史事件和审计只能追加，禁止整份覆盖；`add/trim` 仅改变计划、不改变真实仓位，`add` 可从持仓中重开建仓，终态拒绝后续事件 |
 | `accounts.py` / `portfolio.py` | 账户资金基数、幂等平仓结转、NAV/敞口/健康度快照；canonical 日 K 驱动的只读组合风险透视 | 行情估值仍必须走 `data_providers`；前端不得重算风险，非有限数值必须以 `null` 输出 |
-| `fhold_client.py` | 只读调用 `fhold-cli --format json` 获取 `../fhold` 真实券商账户/持仓 | 仅持仓事实，不是行情 provider；禁止绕过 CLI 直读 `~/.fhold/fhold.db`；不可用时 fail-soft |
+| `fhold_client.py` | 只读调用 `fhold-cli --format json` 获取 `../fhold` 真实券商账户/持仓，以及供 Trade Journal 一致快照预览/追加的成交流水 | 仅只读事实，不是行情 provider；journal 导入只能通过 `tx snapshot`（仅本地模式）preview-then-apply、按 fhold 原始交易 ID 去重，无法证明一致性时 fail-closed，绝不写回 fhold 或 `trade_events`；禁止绕过 CLI 直读 `~/.fhold/fhold.db`；不可用时 fail-soft |
 | `gates.py` / `plans.py` | 五条后端结构红线、用户清单、盘前计划与计划/实际偏差 | 结构红线不可由前端或用户配置关闭 |
 | `plan_check.py` | 默认关闭的两阶段计划检查：Stage1 canonical K 线诊断 → 程序门禁 → Stage2 用户计划审查；输出 append-only artifact 与 trace | 只读已保存计划；程序门禁只可保持或降级；AI 不得输出订单/方向/建议价格/执行动作；不得写 `trade_events` 或进入 screener/backtest/monitor |
 | `red_flags.py` / `red_flag_webhook.py` | 放宽止损、亏损加仓、绕门、审计断链、期限超限、仓位超限、门禁膨胀（global 分组）检测；可选去重 Webhook | 红旗与盈亏无关；推送失败不得阻断事实落盘 |

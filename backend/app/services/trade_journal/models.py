@@ -1,4 +1,5 @@
 """Trade Journal 数据契约。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ class Fill:
     amount: float
     fee: float
     account_id: str = "default"
+    source_ref: str | None = None
 
 
 @dataclass(frozen=True)

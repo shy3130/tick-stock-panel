@@ -1464,6 +1464,30 @@ export interface JournalPreview {
   warnings: string[]
 }
 
+export interface JournalFholdPreviewRow {
+  account_id: string
+  date: string
+  time: string
+  symbol: string
+  name: string
+  side: 'buy' | 'sell'
+  qty: number
+  price: number
+  amount: number
+  fee: number
+}
+
+export interface JournalFholdPreview {
+  available: boolean
+  snapshot_sha256: string | null
+  row_count: number
+  importable_count: number
+  skipped_count: number
+  accounts: { id: string; name: string; fills: number }[]
+  preview_rows: JournalFholdPreviewRow[]
+  warnings: string[]
+}
+
 export interface JournalTrip {
   account_id?: string
   symbol: string
@@ -1487,11 +1511,13 @@ export interface JournalLedger {
   imported_at: string
   accounts?: { id: string; fills: number }[]
   import?: {
+    source?: string
     mode: 'replace' | 'append'
     account_id: string
     new_fills: number
     deduped_fills: number
     deduped_events: number
+    conflicting_fills?: number
   }
   trips: JournalTrip[]
   summary: {
@@ -1980,6 +2006,16 @@ export const api = {
     request<{ ok: boolean }>('/api/journal/feedback', {
       method: 'POST',
       body: JSON.stringify({ rating }),
+    }),
+  journalFholdPreview: () => request<JournalFholdPreview>('/api/journal/fhold-preview'),
+  journalFholdImport: (snapshotSha256: string, benchmark: string, narrative: boolean) =>
+    request<JournalLedger>('/api/journal/fhold-import', {
+      method: 'POST',
+      body: JSON.stringify({
+        snapshot_sha256: snapshotSha256,
+        benchmark,
+        narrative,
+      }),
     }),
   journalUpload: (
     file: File,
@@ -2595,22 +2631,16 @@ export const api = {
     }),
 
   parameterGridLaunch: (payload: ParameterGridRequest) =>
-    request<{
-      experiment_id: string
-      config_hash: string
-      scenario_count: number
-      requested_count?: number
-      truncated: boolean
-      objective?: string
-      status: 'started' | 'already_running'
-    }>('/api/backtest/parameter-grid', {
+    request<ParameterGridLaunchResponse>('/api/backtest/parameter-grid', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   parameterGridGet: (experimentId: string) =>
-    request<ParameterGridExperiment>(
+    request<ParameterGridExperiment | null>(
       `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}`,
+      undefined,
+      { silent404: true },
     ),
 
   parameterGridCancel: (experimentId: string) =>

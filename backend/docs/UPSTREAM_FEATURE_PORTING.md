@@ -27,7 +27,7 @@
 | `../go-stock` | 局部选股语义参考 | 本地可执行的选股预设语句 | 东财在线行情/选股 API；财经日历当前暂缓 |
 | `../fstore` | DuckDB schema / generation 生产契约 | tickflow 只读消费 fstore generation | 迁移数据库服务、写入上游数据库 |
 | `../engine` + `../duckdbsnap` | engine-a、catalog、manifest/current.json 生产契约 | staged catalog、immutable generation、freshness/pinning 校验 | 业务层直连 writer raw、catalog 失败回退 raw |
-| `../fhold` | 真实账户/持仓只读事实来源 | 仅通过 `fhold-cli --format json` fail-soft 读取 | 直读 `~/.fhold/fhold.db`、券商写入或下单 |
+| `../fhold` | 真实账户/持仓及 Trade Journal 成交事实来源 | 持仓只读快照；通过 `fhold-cli tx snapshot --format json`（仅本地模式）读取一致快照并确认追加成交流水到 journal；无法证明一致性时 fail-closed | 直读 `~/.fhold/fhold.db`、券商写入或下单、把 fhold 成交写入 trading 生命周期事件流 |
 | `../tdx-api` | 历史数据旁路 | 无运行时移植 | 永久不恢复为行情主链或 fallback |
 
 ## 3. 当前已落地能力账本
