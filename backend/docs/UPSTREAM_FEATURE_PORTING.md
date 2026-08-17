@@ -1,6 +1,6 @@
 # 上游功能移植与维护总账
 
-> 日期：2026-08-10
+> 日期：2026-08-10；最近增量审计：2026-08-17
 > 状态：当前实现账本；来源发现证据见 [`PORTING_SOURCE_REPOSITORY_INVENTORY_2026-08-09.md`](./PORTING_SOURCE_REPOSITORY_INVENTORY_2026-08-09.md)
 > 目标：记录“能力从哪里来、在本项目落在哪里、哪些明确不迁移”，防止把外部数据链、自动交易语义或第二套领域模型带回当前架构。
 
@@ -86,6 +86,18 @@
 | AI 后端健康测试 | ✅ 已落地 | 属于配置诊断而非交易建议；用户主动触发、目标 profile 精确、15 秒/8 token 上限、禁止 fallback、错误脱敏。 |
 
 暂缓不是待办欠账。只有同时具备“可靠来源与 provenance、明确消费入口、缺失/stale 语义、确定性测试”时，才重新评估两融市场总余额或财经日历。
+
+### 4.1 2026-08-17 增量源码审计
+
+审计范围为 2026-08-10 之后的本地可见 Git 提交，以及与已登记领域有关的未提交工作树变更。`origin/main` 在此区间没有新提交；它与当前分支之间仍存在更早、已在来源清单中明确不作隐式合并的历史差异。
+
+| 来源 | 新发现 | 裁决 |
+|---|---|---|
+| `../PA_Agent`、`../YMOS`、`../ymos-diagnosis`、`../go-stock`、`../daily_stock_analysis`、`../fstore`、`../fhold` | 无基线后的本地可见提交 | ♻️ 无新增能力，不重复迁移。 |
+| `../engine` | `ce3d2a0`、`f073199`、`5fa903a` 修复 callauction/migrate/fstore writer 和日级板块资金流的生产者死锁 | ♻️ 影响上游发布可靠性，但不改变 tickflow 已消费的表、generation、catalog 或 manifest 契约；应作为 engine 运维升级项，不移植到业务层。 |
+| `../fquant` | 未提交的 A 股逐笔按交易日解析 staged catalog 路由与连接缓存 | ♻️ 当前 `catalog_resolver.py` + `tdx_duckdb_client.py` 已按日期 pin staged trans generation，且上游改动尚未提交。 |
+| `../Vibe-Trading` | 未提交的 TDX CSV loader、TDX-first fallback 和 AkShare 成分股读取 | ❌ 与本地 DuckDB 主链、sealed 数据边界及“不新增公网主数据源”约束冲突。 |
+| `../duckdbsnap` | 未提交的 manifest `stage/coverage_date/quality/reconciled/artifacts` 元数据与发布锁增强 | ⏸ 暂不接入：当前已发布 manifest 仍是 legacy 结构；本地 `catalog_resolver.py` 已 fail-closed 校验对应 staged route 元数据。仅当上游提交、生产者实际发布版本化字段并给出端到端兼容性 fixture 后，再评估消费者完整性校验；不得在热查询路径全量 hash 大型 DuckDB 文件。 |
 
 ## 5. 永久边界
 
