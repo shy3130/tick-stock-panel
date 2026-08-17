@@ -39,17 +39,23 @@ def test_normalize_truncates_to_max_len(tmp_path):
         assert rows[0]["tags"] == "很" * 20
 
 
-def test_add_batch_tags_new_only_preserves_existing(tmp_path):
+def test_add_batch_merges_tags_preserving_existing(tmp_path):
     with _patch_path(tmp_path):
         watchlist.add("600519.SH")
         watchlist.set_tags("600519.SH", ["白酒"])
         rows, added = watchlist.add_batch(["600519.SH", "000858.SZ", "000858.SZ"], tags=["导入", "白酒", "导入"])
         tags = {r["symbol"]: r["tags"] for r in rows}
         assert added == 1
-        assert tags["600519.SH"] == "白酒"
+        # 已有标的: 原标签保留, 批量标签追加去重
+        assert tags["600519.SH"] == "白酒,导入"
         assert tags["000858.SZ"] == "导入,白酒"
 
-        # 向后兼容: 不传 tags 无标签
+        # 不传 tags 时已有标的标签原样保留
+        rows, added = watchlist.add_batch(["600519.SH"])
+        assert added == 0
+        assert {r["symbol"]: r["tags"] for r in rows}["600519.SH"] == "白酒,导入"
+
+        # 向后兼容: 不传 tags 新增标的无标签
         rows, added = watchlist.add_batch(["601318.SH"])
         assert added == 1
         assert {r["symbol"]: r["tags"] for r in rows}["601318.SH"] == ""

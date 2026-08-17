@@ -29,7 +29,7 @@ export function useUpdateQuoteInterval() {
   })
 }
 
-/** 批量添加自选 — Screener / 截图导入 共用; tags 只对新增标的生效 */
+/** 批量添加自选 — Screener / 截图导入 共用; tags 对新增标的生效, 已在自选合并 */
 export function useWatchlistBatchAdd() {
   const qc = useQueryClient()
   return useMutation({
