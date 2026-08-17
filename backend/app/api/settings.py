@@ -58,6 +58,7 @@ def get_settings() -> dict:
     from app.services.ai_provider import (
         ai_configured,
         current_ai_model,
+        current_ai_max_tokens,
         current_codex_command,
         current_codex_reasoning_effort,
     )
@@ -82,6 +83,7 @@ def get_settings() -> dict:
         "has_ai_key": bool(secrets_store.get_ai_key()),
         "ai_configured": ai_configured(ai_provider),
         "ai_model": current_ai_model(),
+        "ai_max_tokens": current_ai_max_tokens(),
         "ai_codex_command": current_codex_command(),
         "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
         "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
@@ -244,6 +246,7 @@ class AiSettingsIn(BaseModel):
     codex_command: str = ""
     codex_reasoning_effort: str = ""
     user_agent: str = ""
+    max_tokens: int | None = None
 
 
 @router.post("/ai")
@@ -252,6 +255,7 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
     from app.config import settings
     from app.services.ai_provider import (
         ai_configured,
+        clamp_ai_max_tokens,
         current_ai_model,
         current_ai_provider,
         current_codex_command,
@@ -280,6 +284,10 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
     elif req.model:
         updates["ai_model"] = req.model
         settings.ai_model = req.model
+    if req.max_tokens is not None:
+        clamped = clamp_ai_max_tokens(req.max_tokens)
+        updates["ai_max_tokens"] = clamped
+        settings.ai_max_tokens = clamped
     if req.provider == "codex_cli":
         try:
             codex_command = normalize_codex_command(req.codex_command)
@@ -302,6 +310,7 @@ def save_ai_settings(req: AiSettingsIn) -> dict:
         "ok": True,
         "ai_provider": provider,
         "ai_model": current_ai_model(),
+        "ai_max_tokens": current_ai_max_tokens(),
         "ai_codex_command": current_codex_command(),
         "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
         "ai_configured": ai_configured(provider),
@@ -314,9 +323,9 @@ def clear_ai_settings() -> dict:
 
     保留 ai_user_agent —— 自定义请求头与凭证解耦,清空凭证不影响绕过 CDN 拦截的设置。
     """
-    from app.config import settings
+    from app.config import AI_MAX_TOKENS_DEFAULT, settings
 
-    secrets_store.clear("ai_provider", "ai_base_url", "ai_api_key", "ai_model", "ai_codex_command", "ai_codex_reasoning_effort")
+    secrets_store.clear("ai_provider", "ai_base_url", "ai_api_key", "ai_model", "ai_codex_command", "ai_codex_reasoning_effort", "ai_max_tokens")
     # 同步重置运行时内存(provider 回默认值,其余置空)
     settings.ai_provider = "openai_compat"
     settings.ai_base_url = ""
@@ -324,6 +333,7 @@ def clear_ai_settings() -> dict:
     settings.ai_model = ""
     settings.ai_codex_command = "codex"
     settings.ai_codex_reasoning_effort = ""
+    settings.ai_max_tokens = AI_MAX_TOKENS_DEFAULT
 
     return {"ok": True}
 

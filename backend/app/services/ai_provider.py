@@ -110,6 +110,28 @@ def current_ai_model() -> str:
     return secrets_store.get_ai_config("ai_model", settings.ai_model)
 
 
+# AI 长文生成默认的最大输出 token(当前消费方:复盘,设置页可调)。
+# secrets.json 可覆盖(config 兜底),坏值/越界 clamp 到安全区间,
+# 避免一次生成直接被上限截断或参数非法被上游拒绝。
+_AI_MAX_TOKENS_MIN = 500
+_AI_MAX_TOKENS_MAX = 32000
+
+
+def clamp_ai_max_tokens(value) -> int:
+    """把用户填写的 max_tokens 归一化:非数字回退默认,越界 clamp。"""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = settings.ai_max_tokens
+    return max(_AI_MAX_TOKENS_MIN, min(_AI_MAX_TOKENS_MAX, v))
+
+
+def current_ai_max_tokens() -> int:
+    return clamp_ai_max_tokens(
+        secrets_store.get_ai_config("ai_max_tokens", settings.ai_max_tokens)
+    )
+
+
 def current_codex_command() -> str:
     return normalize_codex_command(
         secrets_store.get_ai_config("ai_codex_command", settings.ai_codex_command),
@@ -193,10 +215,12 @@ async def generate_ai_text(
     messages: Sequence[Message],
     *,
     temperature: float | None = 0.3,
-    max_tokens: int = 3000,
+    max_tokens: int | None = None,
     timeout: float = 180.0,
 ) -> str:
     """Return a complete AI response from the currently configured provider."""
+    if max_tokens is None:
+        max_tokens = current_ai_max_tokens()
     if is_codex_cli_provider():
         return await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
     return await _run_openai_once(
@@ -211,7 +235,7 @@ async def stream_ai_text(
     messages: Sequence[Message],
     *,
     temperature: float | None = 0.5,
-    max_tokens: int = 4000,
+    max_tokens: int | None = None,
     timeout: float = 180.0,
 ) -> AsyncIterator[str]:
     """Yield text deltas from the configured provider.
@@ -219,6 +243,8 @@ async def stream_ai_text(
     Codex CLI only exposes the final assistant message for this use case, so it
     yields one complete chunk after the command exits.
     """
+    if max_tokens is None:
+        max_tokens = current_ai_max_tokens()
     if is_codex_cli_provider():
         yield await _run_codex_cli(messages, max_tokens=max_tokens, timeout=max(timeout, 600.0))
         return

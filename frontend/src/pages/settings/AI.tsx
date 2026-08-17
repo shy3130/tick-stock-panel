@@ -16,6 +16,7 @@ const INPUT_CLS =
 const CODEX_PROVIDER = 'codex_cli'
 const OPENAI_PROVIDER = 'openai_compat'
 const CODEX_COMMAND = 'codex'
+const DEFAULT_MAX_TOKENS = 4500
 const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
 const DEFAULT_CODEX_REASONING_EFFORT = 'xhigh'
 const SAVED_CODEX_OPTION_VALUE = '__saved_codex_config__'
@@ -65,6 +66,7 @@ export function SettingsAIPanel() {
   const [codexCommand, setCodexCommand] = useState(CODEX_COMMAND)
   const [customUa, setCustomUa] = useState(false)
   const [userAgent, setUserAgent] = useState('')
+  const [maxTokens, setMaxTokens] = useState(String(DEFAULT_MAX_TOKENS))
   const [showKey, setShowKey] = useState(false)
   const [saved, setSaved] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -100,6 +102,7 @@ export function SettingsAIPanel() {
   ) ?? CODEX_MODEL_OPTIONS[0]
   const codexModelSelectValue = selectedCodexModelOption.value
   const canSave = isCodexProvider ? true : !!baseUrl.trim() && !!model.trim()
+  const maxTokensNum = Number(maxTokens) || DEFAULT_MAX_TOKENS
 
   useEffect(() => {
     if (!s) return
@@ -114,6 +117,7 @@ export function SettingsAIPanel() {
     const ua = s.ai_user_agent ?? ''
     setCustomUa(!!ua)
     setUserAgent(ua)
+    setMaxTokens(String(s.ai_max_tokens ?? DEFAULT_MAX_TOKENS))
   }, [s])
 
   const payload = () => ({
@@ -124,6 +128,7 @@ export function SettingsAIPanel() {
     codex_command: isCodexProvider ? CODEX_COMMAND : codexCommand,
     codex_reasoning_effort: isCodexProvider ? codexReasoningEffort : '',
     user_agent: customUa ? userAgent : '',
+    max_tokens: maxTokensNum,
   })
 
   const save = useMutation({
@@ -131,11 +136,13 @@ export function SettingsAIPanel() {
     onSuccess: (result) => {
       setSaved(true)
       setApiKey('')
+      setMaxTokens(String(result.ai_max_tokens ?? maxTokensNum))
       qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
         ...prev,
         ai_provider: result.ai_provider ?? provider,
         ai_base_url: baseUrl,
         ai_model: result.ai_model ?? model,
+        ai_max_tokens: result.ai_max_tokens ?? maxTokensNum,
         ai_codex_command: result.ai_codex_command ?? (isCodexProvider ? CODEX_COMMAND : codexCommand),
         ai_codex_reasoning_effort: result.ai_codex_reasoning_effort ?? (isCodexProvider ? codexReasoningEffort : ''),
         ai_configured: result.ai_configured ?? (isCodexProvider ? true : (apiKey ? true : prev.ai_configured)),
@@ -159,12 +166,14 @@ export function SettingsAIPanel() {
       setModel('')
       setCodexReasoningEffort('')
       setCodexCommand(CODEX_COMMAND)
+      setMaxTokens(String(DEFAULT_MAX_TOKENS))
       setTestResult(null)
       qc.setQueryData<SettingsState>(QK.settings, prev => prev ? {
         ...prev,
         ai_provider: OPENAI_PROVIDER,
         ai_base_url: '',
         ai_model: '',
+        ai_max_tokens: DEFAULT_MAX_TOKENS,
         ai_codex_command: CODEX_COMMAND,
         ai_codex_reasoning_effort: '',
         has_ai_key: false,
@@ -361,6 +370,10 @@ export function SettingsAIPanel() {
               </div>
             </>
           )}
+          <div className="border-t border-border/20" />
+          <Field label="复盘输出上限">
+            <input type="number" min={500} max={32000} value={maxTokens} onChange={e => setMaxTokens(e.target.value)} className={INPUT_CLS} />
+          </Field>
         </div>
       </Card>
 
