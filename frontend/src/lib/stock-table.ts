@@ -48,7 +48,7 @@ export function signalCls(type: SignalType): string {
 // ===== 排序 =====
 
 /** 不可参与数值/文本排序的内置列 key（渲染为标签/图表，无单一标量值） */
-export const UNSORTABLE_KEYS = new Set(['signals', 'candle', 'intraday', 'strategies'])
+export const UNSORTABLE_KEYS = new Set(['signals', 'candle', 'intraday', 'strategies', 'tags'])
 
 /**
  * 取一列在某行上的排序标量值。builtin 列按 key 映射到行字段；ext 列走

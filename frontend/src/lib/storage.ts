@@ -57,6 +57,9 @@ export const storage = {
   /** 自选列表板块筛选 */
   watchlistBoardFilter: kv<string[]>('watchlist_boardFilter'),
 
+  /** 自选列表标签筛选 */
+  watchlistTagFilter: kv<string[]>('watchlist_tagFilter'),
+
   /** Screener 卡片尺寸 */
   screenerCardSize:     kv<string>('screener-card-size'),
 

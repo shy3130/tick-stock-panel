@@ -233,6 +233,7 @@ export interface WatchlistEntry {
   added_at: string
   note?: string
   name?: string | null
+  tags?: string
 }
 
 export interface WatchlistImportCandidate {
@@ -1528,6 +1529,11 @@ export const api = {
     request<{ symbols: WatchlistEntry[]; added: number }>('/api/watchlist/batch', {
       method: 'POST',
       body: JSON.stringify({ symbols, note }),
+    }),
+  watchlistSetTags: (symbol: string, tags: string[]) =>
+    request<{ symbols: WatchlistEntry[] }>(`/api/watchlist/${symbol}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tags }),
     }),
   watchlistOcrStatus: () =>
     request<{ provider: string; available: boolean }>('/api/watchlist/ocr-status'),
