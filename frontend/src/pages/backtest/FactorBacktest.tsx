@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Play, BarChart3, Clock } from 'lucide-react'
-import { api, type FactorColumn, type FactorBacktestResult, type GroupStat } from '@/lib/api'
+import { api, type FactorColumn, type GroupStat } from '@/lib/api'
+import { startFactorBacktest, useFactorBacktestTask } from '@/lib/factorBacktestTask'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
@@ -86,14 +87,17 @@ function LoadingPanel({ symbolsText }: { symbolsText: string }) {
 }
 
 export function FactorBacktest() {
-  const [factorName, setFactorName] = useState('momentum_20d')
-  const [symbols, setSymbols] = useState('')
-  const [start, setStart] = useState(THREE_MONTHS_AGO)
-  const [end, setEnd] = useState(TODAY)
-  const [nGroups, setNGroups] = useState(5)
-  const [weight, setWeight] = useState<'equal' | 'factor_weight'>('equal')
-  const [fees, setFees] = useState('2')
-  const [result, setResult] = useState<FactorBacktestResult | null>(null)
+  const factorTask = useFactorBacktestTask()
+  const restoredPayload = factorTask?.payload
+  const [factorName, setFactorName] = useState(() => restoredPayload?.factor_name ?? 'momentum_20d')
+  const [symbols, setSymbols] = useState(() => restoredPayload?.symbols?.join(',') ?? '')
+  const [start, setStart] = useState(() => restoredPayload?.start ?? THREE_MONTHS_AGO)
+  const [end, setEnd] = useState(() => restoredPayload?.end ?? TODAY)
+  const [nGroups, setNGroups] = useState(() => restoredPayload?.n_groups ?? 5)
+  const [weight, setWeight] = useState<'equal' | 'factor_weight'>(() => restoredPayload?.weight ?? 'equal')
+  const [fees, setFees] = useState(() => String((restoredPayload?.fees_pct ?? 0.0002) * 10000))
+  const result = factorTask?.result ?? null
+  const isPending = factorTask?.isPending ?? false
 
   const columns = useQuery({
     queryKey: ['backtest-factor-columns'],
@@ -115,26 +119,18 @@ export function FactorBacktest() {
     return columns.data?.columns.find(c => c.id === factorName)?.desc ?? ''
   }, [columns.data, factorName])
 
-  const run = useMutation({
-    mutationFn: () =>
-      api.factorRun({
-        factor_name: factorName,
-        symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
-        start: start || null,
-        end: end || undefined,
-        n_groups: nGroups,
-        rebalance: 'daily',
-        weight,
-        fees_pct: Number(fees) / 10000,
-      }),
-    onSuccess: (data) => {
-      if (data.error) {
-        setResult(data)
-      } else {
-        setResult(data)
-      }
-    },
-  })
+  const handleRun = () => {
+    void startFactorBacktest({
+      factor_name: factorName,
+      symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
+      start: start || null,
+      end: end || undefined,
+      n_groups: nGroups,
+      rebalance: 'daily',
+      weight,
+      fees_pct: Number(fees) / 10000,
+    })
+  }
 
   const applyRange = (months: number) => {
     setStart(monthsAgo(months))
@@ -286,12 +282,12 @@ export function FactorBacktest() {
           </div>
 
           <button
-            onClick={() => run.mutate()}
-            disabled={run.isPending}
+            onClick={handleRun}
+            disabled={isPending}
             className="btn-primary w-full"
           >
             <Play className="h-3.5 w-3.5" />
-            {run.isPending ? '分析中…' : '开始因子分析'}
+            {isPending ? '分析中…' : '开始因子分析'}
           </button>
         </div>
       </section>
@@ -310,13 +306,13 @@ export function FactorBacktest() {
           </div>
         )}
 
-        {run.isError && (
+        {factorTask?.error && (
           <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-            {String((run.error as Error).message)}
+            {factorTask.error}
           </div>
         )}
 
-        {!result && !run.isPending && (
+        {!result && !isPending && (
           <EmptyState
             icon={BarChart3}
             title="选择因子并开始分析"
@@ -324,14 +320,14 @@ export function FactorBacktest() {
           />
         )}
 
-        {run.isPending && result && (
+        {isPending && result && (
           <div className="rounded-btn border border-border bg-elevated px-3 py-2 text-xs text-secondary">
             正在重新计算，当前暂时展示上一次因子分析结果，完成后会自动替换。
           </div>
         )}
 
-        {run.isPending && !result && (
-          <LoadingPanel symbolsText={symbols ? `${symbols.split(',').length} 只标的` : '全市场 · 当前区间'} />
+        {isPending && !result && (
+          <LoadingPanel symbolsText={factorTask?.payload.symbols?.length ? `${factorTask.payload.symbols.length} 只标的` : '全市场 · 当前区间'} />
         )}
 
         {result && result.ic_mean != null && (

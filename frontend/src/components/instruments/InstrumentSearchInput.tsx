@@ -214,7 +214,7 @@ export function InstrumentSearchInput({
         aria-label={ariaLabel}
         aria-autocomplete="list"
         aria-controls={open && query ? listId : undefined}
-        aria-expanded={open && query}
+        aria-expanded={open && Boolean(query)}
         aria-activedescendant={activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
         autoCapitalize="characters"
         disabled={disabled}

@@ -1142,6 +1142,16 @@ export interface ParameterGridRequest {
   regime_filter?: { states?: string[]; min_score?: number } | null
 }
 
+export interface ParameterGridLaunchResponse {
+  experiment_id: string
+  config_hash: string
+  scenario_count: number
+  requested_count?: number
+  truncated: boolean
+  objective?: string
+  status: 'started' | 'already_running'
+}
+
 export interface ParameterGridScenario {
   scenario_id: string
   params: Record<string, number>

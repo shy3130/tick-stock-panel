@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
@@ -6,7 +7,8 @@ import { CompositeStrategyBuilder } from './backtest/CompositeStrategyBuilder'
 import { ParameterGridPanel } from './backtest/ParameterGridPanel'
 import { BarChart3, FlaskConical, GitMerge, Grid3X3 } from 'lucide-react'
 
-type Tab = 'factor' | 'strategy' | 'composite' | 'grid'
+const TABS = ['factor', 'strategy', 'composite', 'grid'] as const
+type Tab = typeof TABS[number]
 
 const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   factor: {
@@ -32,12 +34,19 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
 }
 
 export function Backtest() {
-  const [activeTab, setActiveTab] = useState<Tab>('strategy')
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const savedTab = storage.backtestActiveTab.get('strategy')
+    return TABS.includes(savedTab) ? savedTab : 'strategy'
+  })
+  const selectTab = (tab: Tab) => {
+    setActiveTab(tab)
+    storage.backtestActiveTab.set(tab)
+  }
 
   const modeSwitch = (
     <div className="workspace-toolbar !border-0 !bg-transparent !px-0 !py-0 !mb-0" role="group" aria-label="回测模式">
       <div className="inline-flex rounded-btn border border-border bg-elevated p-0.5">
-        {(['factor', 'strategy', 'composite', 'grid'] as const).map(tab => {
+        {TABS.map(tab => {
           const Icon = tab === 'factor'
             ? BarChart3
             : tab === 'strategy'
@@ -51,7 +60,7 @@ export function Backtest() {
               key={tab}
               type="button"
               aria-pressed={active}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => selectTab(tab)}
               className={`inline-flex items-center gap-1.5 rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors duration-150 cursor-pointer ${
                 active
                   ? 'bg-accent text-white shadow-sm'

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, BarChart3, CheckCircle2, FlaskConical, Loader2, Play, Square, XCircle } from 'lucide-react'
 import {
@@ -13,6 +13,13 @@ import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
 import { REGIME_STATE_LABELS, type RegimeState } from '@/lib/regime'
 import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
+import {
+  clearParameterGridExperiment,
+  clearParameterGridExperimentIfCurrent,
+  getParameterGridTask,
+  startParameterGridExperiment,
+  useParameterGridTask,
+} from '@/lib/parameterGridTask'
 
 
 const INPUT_CLS = 'control w-full text-xs'
@@ -115,10 +122,15 @@ export function ParameterGridPanel() {
   const [regimeEnabled, setRegimeEnabled] = useState(false)
   const [regimeStates, setRegimeStates] = useState<RegimeState[]>(['strong', 'lean_strong'])
   const [regimeMinScore, setRegimeMinScore] = useState('')
-  const [experimentId, setExperimentId] = useState<string | null>(null)
-  const [experiment, setExperiment] = useState<ParameterGridExperiment | null>(null)
-  const [launching, setLaunching] = useState(false)
+  const parameterGridTask = useParameterGridTask()
+  const experimentId = parameterGridTask.experimentId
+  const taskRevision = parameterGridTask.revision
+  const [loadedExperiment, setExperiment] = useState<ParameterGridExperiment | null>(null)
+  const experiment = loadedExperiment?.experiment_id === experimentId ? loadedExperiment : null
+  const launching = parameterGridTask.isLaunching
   const [cancelling, setCancelling] = useState(false)
+  const pollingVersion = useRef(0)
+  const cancellingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
 
   const strategies = useQuery({
@@ -175,26 +187,63 @@ export function ParameterGridPanel() {
   )
 
   useEffect(() => {
-    if (!experimentId || !isActive) return
+    pollingVersion.current += 1
+    if (!experimentId) {
+      setExperiment(null)
+      return
+    }
+
+    setExperiment(null)
+    setError(null)
     let disposed = false
+    let inFlight = false
+    let timer: number | undefined
+    const stopPolling = () => {
+      if (timer != null) window.clearInterval(timer)
+    }
     const refresh = async () => {
+      if (inFlight || cancellingRef.current) return
+      inFlight = true
+      const version = ++pollingVersion.current
       try {
         const next = await api.parameterGridGet(experimentId)
-        if (!disposed) {
-          setExperiment(next)
-          setError(null)
+        if (
+          disposed
+          || version !== pollingVersion.current
+          || getParameterGridTask().revision !== taskRevision
+        ) return
+        if (next == null) {
+          if (clearParameterGridExperimentIfCurrent(experimentId, taskRevision)) {
+            setExperiment(null)
+            setError('上次参数网格实验已不可用，已清除恢复记录')
+          }
+          stopPolling()
+          return
         }
+        setExperiment(next)
+        setError(null)
+        if (next.status !== 'pending' && next.status !== 'running') stopPolling()
       } catch (cause) {
-        if (!disposed) setError(cause instanceof Error ? cause.message : '读取实验进度失败')
+        if (
+          !disposed
+          && version === pollingVersion.current
+          && getParameterGridTask().revision === taskRevision
+        ) {
+          setError(cause instanceof Error ? cause.message : '读取实验进度失败')
+        }
+      } finally {
+        inFlight = false
       }
     }
+
     void refresh()
-    const timer = window.setInterval(() => { void refresh() }, 1_500)
+    timer = window.setInterval(() => { void refresh() }, 1_500)
     return () => {
       disposed = true
-      window.clearInterval(timer)
+      pollingVersion.current += 1
+      stopPolling()
     }
-  }, [experimentId, isActive])
+  }, [experimentId, taskRevision])
 
   const launch = async () => {
     if (!strategyId || !detail.data) {
@@ -229,10 +278,9 @@ export function ParameterGridPanel() {
       return
     }
 
-    setLaunching(true)
     setError(null)
     try {
-      const launched = await api.parameterGridLaunch({
+      const { adopted, launched } = await startParameterGridExperiment({
         strategy_id: strategyId,
         symbols: symbols ? symbols.split(',').map(symbol => symbol.trim()).filter(Boolean) : null,
         start: start || null,
@@ -248,7 +296,7 @@ export function ParameterGridPanel() {
           min_score: score,
         } : null,
       })
-      setExperimentId(launched.experiment_id)
+      if (!adopted) return
       setExperiment(null)
       if (launched.truncated) toast(`请求 ${launched.requested_count ?? requestedScenarioCount} 个组合，已按 ${launched.scenario_count} 个上限截断`, 'success')
       else toast(`已启动 ${launched.scenario_count} 个本地历史场景`, 'success')
@@ -256,24 +304,35 @@ export function ParameterGridPanel() {
       const message = cause instanceof Error ? cause.message : '启动参数网格实验失败'
       setError(message)
       toast(message)
-    } finally {
-      setLaunching(false)
     }
   }
 
   const cancel = async () => {
     if (!experimentId || !isActive) return
+    cancellingRef.current = true
+    pollingVersion.current += 1
     setCancelling(true)
     try {
       await api.parameterGridCancel(experimentId)
       const updated = await api.parameterGridGet(experimentId)
+      if (getParameterGridTask().revision !== taskRevision) return
+      if (updated == null) {
+        if (clearParameterGridExperimentIfCurrent(experimentId, taskRevision)) {
+          setExperiment(null)
+          setError('参数网格实验已不可用，已清除恢复记录')
+        }
+        return
+      }
       setExperiment(updated)
+      setError(null)
       toast('已请求取消参数网格实验', 'success')
     } catch (cause) {
+      if (getParameterGridTask().revision !== taskRevision) return
       const message = cause instanceof Error ? cause.message : '取消实验失败'
       setError(message)
       toast(message)
     } finally {
+      cancellingRef.current = false
       setCancelling(false)
     }
   }
@@ -312,7 +371,7 @@ export function ParameterGridPanel() {
             value={strategyId}
             onChange={event => {
               setStrategyId(event.target.value)
-              setExperimentId(null)
+              clearParameterGridExperiment()
               setExperiment(null)
               setError(null)
             }}

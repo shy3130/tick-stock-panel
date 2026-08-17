@@ -1,3 +1,5 @@
+import type { FactorBacktestResult } from './api'
+
 /**
  * 集中管理所有 localStorage 持久化。
  *
@@ -80,6 +82,28 @@ export const storage = {
 
   /** 策略回测快捷区间按钮配置 */
   strategyBacktestQuickRanges: kv<unknown>('strategy-backtest-quick-ranges'),
+  /** 回测工作台上次打开的模式 */
+  backtestActiveTab: kv<'factor' | 'strategy' | 'composite' | 'grid'>('backtest-active-tab'),
+
+  /** 参数网格最近一次实验；路由重入后据此恢复服务端持久化结果 */
+  parameterGridLastExperimentId: kv<string | null>('parameter-grid-last-experiment-id'),
+
+  /** 因子回测最近一次请求与结果；路由重入后恢复已完成结果 */
+  factorBacktestLast: kv<{
+    payload: {
+      factor_name: string
+      symbols?: string[] | null
+      start?: string | null
+      end?: string | null
+      n_groups?: number
+      rebalance?: 'daily' | 'weekly' | 'monthly'
+      weight?: 'equal' | 'factor_weight'
+      fees_pct?: number
+      slippage_bps?: number
+    }
+    result: FactorBacktestResult | null
+  } | null>('factor-backtest-last'),
+
 
   /** 策略回测最后一次成功结果和参数 */
   strategyBacktestLast: kv<{
