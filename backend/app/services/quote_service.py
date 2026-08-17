@@ -122,17 +122,20 @@ class QuoteService:
         logger.info("行情服务已启动, 轮询间隔 %.1fs", self._interval)
 
     def stop(self) -> None:
-        """停止后台行情轮询线程。
+        """停止后台行情轮询线程 (机械停机, 不改写用户偏好)。
 
         如果当前处于 close_final 阶段且当日收盘最终同步尚未完成,
         在停止线程后执行一次 _run_final_sync。
+
+        注意: 不在此处持久化 realtime_quotes_enabled=false。应用关停
+        (main.py shutdown hook) 也走本方法; 用户显式关闭请用 disable(),
+        否则重启后 boot_check 无法按用户原意图自动恢复轮询。
         """
         self._running = False
         self._enabled = False
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
-        self._save_enabled(False)
         # 停机前: 收盘最终同步
         if self._market_phase() == "close_final":
             self._run_final_sync()
@@ -158,7 +161,8 @@ class QuoteService:
         logger.info("行情服务已启用, 轮询间隔 %.1fs", self._interval)
 
     def disable(self) -> None:
-        """关闭自动行情。"""
+        """关闭自动行情 (用户显式关闭, 持久化偏好)。"""
+        self._save_enabled(False)
         self.stop()
         logger.info("行情服务已关闭")
 

@@ -108,6 +108,28 @@ def test_stop_in_close_final_calls_run_final_sync_exactly_once(monkeypatch):
     assert call_count == 1, f"expected _run_final_sync called exactly once, got {call_count}"
 
 
+def test_stop_does_not_persist_disabled_preference(monkeypatch):
+    """回归: 应用关停走 stop(), 不得把 realtime_quotes_enabled 改写为 false。
+
+    旧实现 stop() 内调用 _save_enabled(False), 导致每次重启都覆盖用户
+    开启意图, boot_check 无法自动恢复轮询。用户显式关闭走 disable()。
+    """
+    service = quote_service.QuoteService()
+    saved: list[dict] = []
+    monkeypatch.setattr(
+        quote_service.QuoteService,
+        "_save_enabled",
+        staticmethod(lambda enabled: saved.append({"enabled": enabled})),
+    )
+    monkeypatch.setattr(service, "_market_phase", lambda: "open")
+
+    service.stop()
+    assert saved == [], "stop() must not touch realtime_quotes_enabled"
+
+    service.disable()
+    assert saved == [{"enabled": False}], "disable() must persist user intent once"
+
+
 def test_final_sync_skipped_by_reentrancy_remains_pending(monkeypatch):
     """慢拉取占用执行权时，收盘同步必须保留 pending，不能误记完成。"""
     service = quote_service.QuoteService()

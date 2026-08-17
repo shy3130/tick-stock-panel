@@ -259,6 +259,43 @@ class TestIntradayIndicesFallback:
         # each row carries tencent source
         assert body["rows"][0]["source"] == "tencent_quote"
 
+    def test_no_param_stale_core_indices_trigger_fallback(self, monkeypatch):
+        """回归: 无参调用 (核心指数默认视图) 本地缓存陈旧时也必须走 fallback。
+
+        旧实现 symbols 为空 → norm_symbols=[] → resolver 短路, 周五数据以
+        source=realtime 且不带 degraded 标记返回。
+        """
+        stale_index_df = pl.DataFrame([
+            {"symbol": "000001.INDEX", "last_price": 3100.0, "close": 3100.0,
+             "date": "2026-08-06", "timestamp": "2026-08-06T15:00:00+08:00"},
+        ])
+        qs = _mock_quote_service(index_df=stale_index_df)
+        http: list = []
+        _enable_fallback_multi(monkeypatch, enabled=True, http=http, cn_today="2026-08-07")
+        resp = _client_with_qs(qs).get("/api/intraday/indices")
+        body = resp.json()
+        assert body["source"] == "fallback_external"
+        assert body["degraded"] is True
+        assert body["sources"] == {"realtime": "tencent_quote"}
+        assert body["fallback_reason"] == FallbackReason.LOCAL_SNAPSHOT_STALE.value
+        assert len(http) == 1
+        assert body["rows"][0]["source"] == "tencent_quote"
+
+    def test_no_param_fresh_core_indices_zero_network(self, monkeypatch):
+        """无参调用本地缓存为当日数据时, 不触发外部网络且无 degraded 标记。"""
+        fresh_index_df = pl.DataFrame([
+            {"symbol": "000001.INDEX", "last_price": 3100.0, "close": 3100.0,
+             "date": "2026-08-07", "timestamp": "2026-08-07T10:30:00+08:00"},
+        ])
+        qs = _mock_quote_service(index_df=fresh_index_df)
+        http: list = []
+        _enable_fallback_multi(monkeypatch, enabled=True, http=http, cn_today="2026-08-07")
+        resp = _client_with_qs(qs).get("/api/intraday/indices")
+        body = resp.json()
+        assert body["source"] == "realtime"
+        assert "degraded" not in body
+        assert http == []
+
 
 class TestSnapshotEndpoint:
     def test_over_limit_rejected_normalized(self, monkeypatch):

@@ -88,6 +88,11 @@ _CORE_INDEX_SYMBOLS = frozenset({
     "000001.SH", "399001.SZ", "399006.SZ", "000680.SH",
 })
 
+# 默认核心指数 (canonical .INDEX): indices 无参调用与 provider 兜底共用。
+_DEFAULT_CANONICAL_INDEX_SYMBOLS = (
+    "000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX",
+)
+
 
 def _is_index_symbol(
     symbol: str, *, cached_index_symbols: set[str] | None = None
@@ -249,7 +254,7 @@ def _fallback_index_quotes_from_provider(symbols: list[str] | None = None) -> li
     if symbols:
         symbol_list = [canonical_index_symbol(s) for s in symbols]
     else:
-        symbol_list = ["000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX"]
+        symbol_list = list(_DEFAULT_CANONICAL_INDEX_SYMBOLS)
     try:
         from app.data_providers.registry import get_active_provider_name, get_provider
 
@@ -338,6 +343,14 @@ def index_quotes(
     # 本地优先 → 受控外部 fallback (仅展示, 绝不写 repository/enriched)
     raw_norm = _normalize_symbols(symbols, limit=60) if symbols else []
     norm_symbols = [canonical_index_symbol(s) for s in raw_norm]
+    if not norm_symbols:
+        # 无参调用 (核心指数默认视图): 对本地路径实际返回的指数行做新鲜度
+        # 检查; 全空时按默认核心指数集合请求。否则陈旧快照会绕过 fallback
+        # 且不带 degraded 标记直接以 source=realtime 返回。
+        norm_symbols = (
+            [str(r.get("symbol")) for r in rows if r.get("symbol")]
+            or list(_DEFAULT_CANONICAL_INDEX_SYMBOLS)
+        )
     final_rows, meta = _maybe_external_fallback(norm_symbols, rows)
     if meta:
         source = "fallback_external"
