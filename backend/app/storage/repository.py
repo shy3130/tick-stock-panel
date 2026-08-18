@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 import threading
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import duckdb
@@ -337,6 +337,12 @@ class KlineRepository:
         # 缓存失效代际: refresh_cache()/clear_cache() 改变可见缓存状态时自增,
         # 作为 service 层有界缓存的逻辑失效令牌 (同一日期更正不再陈旧 120s)。
         self._cache_generation: int = 0
+        # 外部 canonical-history generation 是 hive 布局 (date 仅在目录名)。
+        # 记忆已判定需要 hive_partitioning 的输入源, 避免同一历史窗口重复
+        # 支付 schema 采样成本。
+        self._hive_scan_sources: set[str | tuple[str, ...]] = set()
+        # generation 根目录只枚举一次 date= 分区；generation 变更时 key 自然失效。
+        self._external_partition_dates: tuple[str, tuple[date, ...]] | None = None
 
         # parquet glob 路径
         self._enriched_glob = str(store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
@@ -1027,10 +1033,13 @@ class KlineRepository:
         from datetime import timedelta
         from app.indicators.pipeline import (
             ENRICHED_STORAGE_COLS,
+            MOVING_AVERAGE_WINDOWS,
             PRICE_CHANGE_COLUMNS,
+            compute_moving_average_columns,
             compute_price_change_columns,
             compute_all,
         )
+        from app.indicators.engine_compat import ENGINE_COMPAT_COLUMNS
 
 
         if start > end:
@@ -1040,7 +1049,11 @@ class KlineRepository:
 
         storage_set = set(ENRICHED_STORAGE_COLS)
         fast_set = storage_set | PRICE_CHANGE_COLUMNS
+        ma_fast_set = fast_set | set(MOVING_AVERAGE_WINDOWS)
         requested = set(columns) if columns is not None else None
+        needs_engine_compat = requested is None or bool(
+            requested & set(ENGINE_COMPAT_COLUMNS)
+        )
 
         if requested is not None and requested.issubset(storage_set):
             try:
@@ -1073,6 +1086,32 @@ class KlineRepository:
                 logger.warning("enriched price-change range failed: %s", e)
                 return None
             df = df.filter((pl.col("date") >= start) & (pl.col("date") <= end))
+        elif requested is not None and requested.issubset(ma_fast_set):
+            try:
+                warmup_start = start - timedelta(days=ENGINE_COMPAT_WARMUP_CALENDAR_DAYS)
+            except OverflowError:
+                warmup_start = date.min
+            raw_cols = [
+                "symbol", "date", "open", "high", "low", "close", "volume", "amount",
+                "raw_close", "raw_high", "raw_low",
+            ]
+            for c in sorted(requested & storage_set):
+                if c not in raw_cols:
+                    raw_cols.append(c)
+            try:
+                df = self._scan_merged_enriched(
+                    start=warmup_start, end=end, columns=raw_cols, symbols=symbols,
+                )
+                if df.is_empty():
+                    return pl.DataFrame()
+                df = compute_moving_average_columns(
+                    df.sort(["symbol", "date"]),
+                    requested & set(MOVING_AVERAGE_WINDOWS),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("enriched moving-average range failed: %s", e)
+                return None
+            df = df.filter((pl.col("date") >= start) & (pl.col("date") <= end))
         else:
             try:
                 warmup_start = start - timedelta(days=ENGINE_COMPAT_WARMUP_CALENDAR_DAYS)
@@ -1089,7 +1128,11 @@ class KlineRepository:
                 if df.is_empty():
                     return pl.DataFrame()
                 instruments = self.get_instruments()
-                df = compute_all(df.sort(["symbol", "date"]), instruments=instruments)
+                df = compute_all(
+                    df.sort(["symbol", "date"]),
+                    instruments=instruments,
+                    include_engine_compat=needs_engine_compat,
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning("enriched derived range failed: %s", e)
                 return None
@@ -1380,8 +1423,13 @@ class KlineRepository:
         except Exception as e:  # noqa: BLE001
             logger.warning("分钟K查询失败: %s", e)
             return pl.DataFrame()
+
     def _external_enriched_latest_date(self) -> date | None:
-        """Return the validated external generation's actual latest data date."""
+        """Return the latest trusted data date in the external generation.
+
+        manifest end_date 可领先 enriched 读取水位 (盘中截断的残缺最新日);
+        与本地未信任分区一致, 最新日选择同样按水位夹逼。
+        """
         from app.services.canonical_history import resolve_published_history
 
         published = resolve_published_history(self._external_enriched_root)
@@ -1392,9 +1440,106 @@ class KlineRepository:
         if not value:
             return None
         try:
-            return date.fromisoformat(str(value))
+            latest = date.fromisoformat(str(value))
         except ValueError:
             return None
+        ceiling = self.enriched_read_ceiling
+        if ceiling is not None:
+            latest = min(latest, ceiling)
+        return latest
+
+
+    def _scan_parquet_adaptive(
+        self,
+        parquet_source: str | tuple[str, ...],
+        *,
+        layout_cache_key: str | tuple[str, ...] | None = None,
+    ) -> pl.LazyFrame:
+        """按分区布局自适应的惰性扫描。
+
+        本地分区的 parquet 文件内含 date 列; 外部 canonical-history generation
+        是 hive 布局 (date 仅在目录名, 文件内无 date 列), 而 glob 模式扫描默认
+        不解析 hive 分区。缺 date 列时显式启用 hive_partitioning, 让 date 来自
+        分区路径并保留日期谓词下推。外部 generation 的不同窗口共享布局判定，
+        避免重复 schema 采样。
+        """
+        cast_options = pl.ScanCastOptions(integer_cast="allow-float")
+        source = list(parquet_source) if isinstance(parquet_source, tuple) else parquet_source
+        cache_key = layout_cache_key or parquet_source
+        if cache_key in self._hive_scan_sources:
+            return pl.scan_parquet(
+                source, cast_options=cast_options, hive_partitioning=True,
+            )
+        lf = pl.scan_parquet(source, cast_options=cast_options)
+        if "date" in lf.collect_schema().names():
+            return lf
+        hive_lf = pl.scan_parquet(
+            source, cast_options=cast_options, hive_partitioning=True,
+        )
+        if "date" not in hive_lf.collect_schema().names():
+            return lf
+        self._hive_scan_sources.add(cache_key)
+        return hive_lf
+
+    def _external_partition_sources(
+        self,
+        generation_dir: Path,
+        *,
+        start: date,
+        end: date,
+    ) -> tuple[str, ...] | None:
+        """返回已发布 generation 中请求窗口的 hive 分区。
+
+        ``None`` 代表 generation 并非 date= 布局，调用方需沿用兼容的全局 glob；
+        空 tuple 则代表已验证为 hive 布局、但窗口内没有已发布分区。
+        """
+        generation_key = str(generation_dir)
+        cached = self._external_partition_dates
+        if cached is None or cached[0] != generation_key:
+            dates: list[date] = []
+            try:
+                for entry in generation_dir.iterdir():
+                    if not entry.is_dir() or not entry.name.startswith("date="):
+                        continue
+                    try:
+                        dates.append(date.fromisoformat(entry.name.removeprefix("date=")))
+                    except ValueError:
+                        continue
+            except OSError:
+                logger.warning(
+                    "external enriched partition listing failed: %s",
+                    generation_dir,
+                    exc_info=True,
+                )
+                return None
+            cached = (generation_key, tuple(sorted(dates)))
+            self._external_partition_dates = cached
+        if not cached[1]:
+            return None
+        return tuple(
+            str(generation_dir / f"date={value.isoformat()}" / "*.parquet")
+            for value in cached[1]
+            if start <= value <= end
+        )
+
+    @staticmethod
+    def _date_partition_sources(
+        root: Path, *, start: date, end: date,
+    ) -> tuple[str, ...]:
+        """返回存在的 ``date=YYYY-MM-DD`` 分区文件 glob。
+
+        直接扫描请求窗口内的分区，避免 Parquet 引擎在冷启动时先展开整代
+        canonical-history 的数十万文件，再让谓词下推丢弃绝大多数文件。
+        ``is_dir`` 也自然跳过周末、节假日和尚未落盘日期。
+        """
+        sources: list[str] = []
+        current = start
+        while current <= end:
+            partition = root / f"date={current.isoformat()}"
+            if partition.is_dir():
+                sources.append(str(partition / "*.parquet"))
+            current += timedelta(days=1)
+        return tuple(sources)
 
     def _scan_external_enriched(
         self,
@@ -1416,8 +1561,28 @@ class KlineRepository:
             latest = date.fromisoformat(str(manifest["end_date"]))
             effective_start = max(start, earliest)
             effective_end = min(end, latest)
+            ceiling = self.enriched_read_ceiling
+            if ceiling is not None:
+                # 外部 generation 可含盘中截断的残缺最新日 (manifest end_date
+                # 领先水位); 与本地未信任分区一致, 读取层按水位一并隔离。
+                effective_end = min(effective_end, ceiling)
             if effective_start > effective_end:
                 return pl.DataFrame()
+            sources = self._external_partition_sources(
+                generation_dir, start=effective_start, end=effective_end,
+            )
+            if sources is not None:
+                if not sources:
+                    return pl.DataFrame()
+                return self._scan_unique_enriched(
+                    sources,
+                    start=effective_start,
+                    end=effective_end,
+                    columns=columns,
+                    symbols=symbols,
+                    layout_cache_key=str(generation_dir),
+                )
+            # 非 hive 的旧 generation 沿用兼容扫描，避免将异常布局误判为空数据。
             return self._scan_unique_enriched(
                 str(generation_dir / "**" / "*.parquet"),
                 start=effective_start,
@@ -1448,20 +1613,36 @@ class KlineRepository:
         local_end = min(end, ceiling) if ceiling is not None else end
         local = pl.DataFrame()
         if start <= local_end:
-            try:
+            sources = self._date_partition_sources(
+                self.store.data_dir / "kline_daily_enriched",
+                start=start,
+                end=local_end,
+            )
+            if sources:
+                try:
+                    local = self._scan_unique_enriched(
+                        sources,
+                        start=start,
+                        end=local_end,
+                        columns=columns,
+                        symbols=symbols,
+                    )
+                except Exception:
+                    if external.is_empty():
+                        raise
+                    logger.warning(
+                        "local enriched scan failed; serving published history only",
+                        exc_info=True,
+                    )
+            elif external.is_empty():
+                # 保留“完全没有本地或外部数据”返回 None 的既有公开语义；
+                # 该罕见路径沿用旧的 glob 扫描，以复用原有的缺文件异常行为。
                 local = self._scan_unique_enriched(
                     self._enriched_glob,
                     start=start,
                     end=local_end,
                     columns=columns,
                     symbols=symbols,
-                )
-            except Exception:
-                if external.is_empty():
-                    raise
-                logger.warning(
-                    "local enriched scan failed; serving published history only",
-                    exc_info=True,
                 )
 
         if external.is_empty():
@@ -1474,29 +1655,27 @@ class KlineRepository:
             .sort(["symbol", "date"])
         )
 
-    # ================================================================
-    # Polars 查询内部方法
-    # ================================================================
-
     def _scan_unique_enriched(
         self,
-        parquet_glob: str,
+        parquet_source: str | tuple[str, ...],
         *,
         start: date,
         end: date,
         columns: list[str],
         symbols: list[str] | None = None,
+        layout_cache_key: str | tuple[str, ...] | None = None,
     ) -> pl.DataFrame:
         """统一的去重惰性扫描: 日期/符号下推 + unique(symbol,date, keep='last')。
 
         保证冲突的遗留重复行按 repository 既有的「最后物理行胜出」策略确定性地
-        去重。投影强制含 symbol/date; 用 ScanCastOptions(integer_cast="allow-float")
-        兼容旧分区。调用方 (get_enriched_range 等) 负责 warning/空帧兜底; 这里不做
-        第二次全量扫描来统计重复计数。
+        去重。投影强制含 symbol/date; 用 _scan_parquet_adaptive 兼容本地布局
+        (文件内含 date) 与外部 hive 布局 (date 仅在目录名)。调用方
+        (get_enriched_range 等) 负责 warning/空帧兜底; 这里不做第二次全量扫描
+        来统计重复计数。
         """
         try:
-            lf = pl.scan_parquet(
-                parquet_glob, cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+            lf = self._scan_parquet_adaptive(
+                parquet_source, layout_cache_key=layout_cache_key,
             )
             schema_names = lf.collect_schema().names()
             proj = [c for c in columns if c in schema_names]
@@ -1515,7 +1694,7 @@ class KlineRepository:
                 .sort(["symbol", "date"])
             )
         except Exception:
-            logger.debug("enriched 扫描失败 (%s)", parquet_glob, exc_info=True)
+            logger.debug("enriched 扫描失败 (%s)", parquet_source, exc_info=True)
             raise
 
     def _compute_enriched_range(self, df: pl.DataFrame) -> pl.DataFrame:

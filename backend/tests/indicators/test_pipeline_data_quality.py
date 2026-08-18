@@ -353,6 +353,10 @@ def test_compute_indicators_produces_engine_compat_columns():
     for col in ENGINE_COMPAT_COLUMNS:
         assert col in out.columns, f"compute_indicators missing engine compat column: {col}"
 
+    projected = compute_indicators(df, include_engine_compat=False)
+    assert "ma20" in projected.columns
+    assert all(column not in projected.columns for column in ENGINE_COMPAT_COLUMNS)
+
     # ENRICHED_STORAGE_COLS must still be exactly 14 (engine compat columns not persisted)
     from app.indicators.pipeline import ENRICHED_STORAGE_COLS
     assert len(ENRICHED_STORAGE_COLS) == 14

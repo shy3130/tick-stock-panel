@@ -579,11 +579,19 @@ class ScreenerService:
         d = self.repo.enriched_latest_date()
         if d:
             return d
-        # 回退 DuckDB
+        # 回退 DuckDB (按 enriched 读取水位夹逼: 原始 max(date) 可领先水位,
+        # 会把查询打到被隔离的未信任分区上)
         try:
-            res = self.repo.execute_one(
-                "SELECT max(date) FROM kline_enriched",
-            )
+            ceiling = self.repo.enriched_read_ceiling
+            if ceiling is not None:
+                res = self.repo.execute_one(
+                    "SELECT max(date) FROM kline_enriched WHERE date <= ?",
+                    [ceiling],
+                )
+            else:
+                res = self.repo.execute_one(
+                    "SELECT max(date) FROM kline_enriched",
+                )
             if res and res[0]:
                 d = res[0]
                 return d if isinstance(d, date) else date.fromisoformat(str(d))

@@ -350,16 +350,44 @@ def compute_price_change_columns(df: pl.DataFrame) -> pl.DataFrame:
           .alias("amplitude"),
     ])
 
+# 仅为历史条件选股 MA 条件准备的轻量计算路径。完整指标流水线继续自行计算
+# 所有均线，避免改变其既有输出与列顺序。
+MOVING_AVERAGE_WINDOWS: dict[str, int] = {
+    "ma5": 5,
+    "ma10": 10,
+    "ma20": 20,
+    "ma30": 30,
+    "ma60": 60,
+}
+
+
+def compute_moving_average_columns(
+    df: pl.DataFrame,
+    columns: set[str],
+) -> pl.DataFrame:
+    """在已经按 ``symbol/date`` 排序的帧上计算请求的 MA 与涨跌幅列。"""
+    df = compute_price_change_columns(df)
+    expressions = [
+        pl.col("close").rolling_mean(window).over("symbol").alias(name)
+        for name, window in MOVING_AVERAGE_WINDOWS.items()
+        if name in columns
+    ]
+    return df.with_columns(expressions) if expressions else df
+
 
 # ================================================================
 # 技术指标计算 (从 OHLCV 计算)
 # ================================================================
 
-def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
-    """从 OHLCV 数据计算全套技术指标。
+def compute_indicators(
+    df: pl.DataFrame,
+    *,
+    include_engine_compat: bool = True,
+) -> pl.DataFrame:
+    """从 OHLCV 数据计算技术指标。
 
-    输入必须包含: symbol, date, open, high, low, close, volume
-    返回添加了所有指标列的 DataFrame。
+    输入必须包含 symbol/date/OHLCV。``include_engine_compat`` 仅供按列投影的
+    历史读取关闭 41 个未请求的 engine 兼容指标；默认保持完整输出契约。
     """
     if df.is_empty():
         return df
@@ -485,8 +513,9 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
 
     # Pass 6: 换手率 (需要 float_shares, 后续在 compute_all 中 JOIN instruments 后补充)
 
-    # Pass 6b: engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化)
-    df = compute_engine_compat_indicators(df)
+    # Pass 6b: engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化)。
+    if include_engine_compat:
+        df = compute_engine_compat_indicators(df)
 
     # 清理临时列
     df = df.drop(["_boll_std", "_tr", "_ema12", "_ema26",
@@ -776,14 +805,11 @@ def _compute_all_unique(
     df: pl.DataFrame,
     instruments: pl.DataFrame | None = None,
     asset_type: str = "stock",
+    *,
+    include_engine_compat: bool = True,
 ) -> pl.DataFrame:
-    """从 OHLCV 计算全套指标 + 信号。一站式调用。
-
-    与 compute_all 的区别: 本函数假定 (symbol, date) 已经唯一 (调用方负责去重),
-    不再二次哈希。compute_enriched 在前复权前去重后直接调用本函数, 避免对调整后
-    数据再做一次 unique。
-    """
-    df = compute_indicators(df)
+    """从 OHLCV 计算指标和信号，假定输入自然键已唯一。"""
+    df = compute_indicators(df, include_engine_compat=include_engine_compat)
     df = compute_signals(df)
     if instruments is not None and not instruments.is_empty():
         if asset_type == "stock":
@@ -798,14 +824,20 @@ def compute_all(
     df: pl.DataFrame,
     instruments: pl.DataFrame | None = None,
     asset_type: str = "stock",
+    *,
+    include_engine_compat: bool = True,
 ) -> pl.DataFrame:
-    """从 OHLCV 计算全套指标 + 信号。一站式调用。
+    """从 OHLCV 计算指标和信号。
 
-    输入: symbol, date, open, high, low, close, volume, amount, raw_close
-    先按 (symbol, date) 去重 (keep='last') 再委托 _compute_all_unique, 保证自然键唯一。
+    默认计算全部 engine 兼容列；按列投影的调用可明确关闭这些未请求列。
     """
     df = _deduplicate_daily_rows(df, source="compute_all")
-    return _compute_all_unique(df, instruments, asset_type)
+    return _compute_all_unique(
+        df,
+        instruments,
+        asset_type,
+        include_engine_compat=include_engine_compat,
+    )
 
 
 def clean_nan_inf(df: pl.DataFrame) -> pl.DataFrame:

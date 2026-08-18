@@ -20,6 +20,7 @@ def repo(tmp_path) -> KlineRepository:
     return KlineRepository(DataStore(tmp_path))
 
 
+
 def _write_inst(tmp_path, symbol: str = "000001.SZ") -> None:
     inst_dir = tmp_path / "instruments"
     inst_dir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +208,23 @@ def test_get_enriched_range_price_change_fast_path(tmp_path, monkeypatch):
     diff = (joined["change_pct"] - joined["change_pct_full"]).abs().max()
     assert diff < 1e-9, f"fast change_pct != full: max diff {diff}"
 
+def test_get_enriched_range_moving_average_fast_path(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
+    r = repo(tmp_path)
+    r.append_enriched(_storage_rows("000001.SZ", 400, date(2025, 1, 1)))
+
+    from app.indicators import pipeline
+
+    monkeypatch.setattr(pipeline, "compute_all", _unexpected_compute_all)
+    out = r.get_enriched_range(
+        date(2026, 1, 1),
+        date(2026, 1, 10),
+        columns=["symbol", "date", "change_pct", "ma20"],
+    )
+
+    assert out is not None and not out.is_empty()
+    assert out.get_column("ma20").drop_nulls().len() == out.height
+
 
 # ── get_enriched_range: full-derived path (columns=None) ─────────────
 
@@ -374,13 +392,21 @@ def test_merge_and_flush_enriched_deduplicate_memory_and_disk(tmp_path):
         r.store.close()
 
 
-def _publish_external_history(root, frame: pl.DataFrame) -> None:
+def _publish_external_history(root, frame: pl.DataFrame, *, hive_layout: bool = False) -> None:
+    """发布外部 canonical-history generation。
+
+    hive_layout=True 模拟生产 engine 发布布局: 文件内无 date 列,
+    date 仅存在于 hive 分区目录名 (生产 generation 20260817T132338 即此布局)。
+    """
     generation = "20260812T000000-deadbeef"
     generation_dir = root / "generations" / generation
     for value in frame.get_column("date").unique().sort().to_list():
         partition = generation_dir / f"date={value.isoformat()}"
         partition.mkdir(parents=True, exist_ok=True)
-        frame.filter(pl.col("date") == value).write_parquet(partition / "part.parquet")
+        part = frame.filter(pl.col("date") == value)
+        if hive_layout:
+            part = part.drop("date")
+        part.write_parquet(partition / "part.parquet")
     manifest = {
         "schema_version": 1,
         "kind": "tickflow_canonical_enriched_history",
@@ -528,4 +554,113 @@ def test_trusted_local_overlay_wins_without_exposing_newer_untrusted_day(
         / "date=2026-01-04"
         / "part.parquet"
     ).exists()
+    r.store.close()
+
+
+def test_external_history_hive_layout_is_readable(tmp_path, monkeypatch):
+    """生产 engine 发布的 hive 布局 generation (文件内无 date 列) 必须可读。"""
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
+    external_root = tmp_path / "published-history"
+    _publish_external_history(
+        external_root,
+        _storage_rows("000001.SZ", 180, date(2025, 1, 1)),
+        hive_layout=True,
+    )
+    monkeypatch.setenv("TICKFLOW_CANONICAL_HISTORY_ROOT", str(external_root))
+    r = repo(tmp_path / "user-data")
+
+    storage = r.get_enriched_range(
+        date(2025, 5, 20),
+        date(2025, 5, 30),
+        columns=["symbol", "date", "close"],
+    )
+    assert storage is not None and storage.height == 11
+    assert storage.get_column("date").to_list() == [
+        date(2025, 5, 20) + timedelta(days=i) for i in range(11)
+    ]
+
+    derived = r.get_enriched_range(
+        date(2025, 5, 20),
+        date(2025, 5, 30),
+        columns=["symbol", "date", "change_pct", "ma5"],
+    )
+    assert derived is not None and derived.height == 11
+    assert derived.get_column("ma5").drop_nulls().len() > 0
+
+    r._refresh_enriched()
+    assert r.get_enriched_latest()[1] == date(2025, 6, 29)
+    r.store.close()
+
+
+def test_external_partial_day_above_ceiling_is_isolated(tmp_path, monkeypatch):
+    """manifest end_date 领先水位时 (盘中截断残缺日), 外部最新日选择与
+    范围读取都必须按水位夹逼; 水位推进后数据自然可见。"""
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
+    external_root = tmp_path / "published-history"
+    _publish_external_history(
+        external_root,
+        _storage_rows("000001.SZ", 4, date(2026, 1, 1)),
+        hive_layout=True,
+    )
+    monkeypatch.setenv("TICKFLOW_CANONICAL_HISTORY_ROOT", str(external_root))
+    r = repo(tmp_path / "user-data")
+    r.set_enriched_canonical_date(date(2026, 1, 3))
+
+    assert r.get_enriched_latest()[1] == date(2026, 1, 3)
+
+    out = r.get_enriched_range(
+        date(2026, 1, 1),
+        date(2026, 1, 4),
+        columns=["symbol", "date", "close"],
+    )
+    assert out is not None
+    assert out.get_column("date").to_list() == [
+        date(2026, 1, 1),
+        date(2026, 1, 2),
+        date(2026, 1, 3),
+    ]
+
+    # 水位推进到 01-04 后, 被隔离日自然可见
+    r.set_enriched_canonical_date(date(2026, 1, 4))
+    r._refresh_enriched()
+    assert r.get_enriched_latest()[1] == date(2026, 1, 4)
+    r.store.close()
+
+def test_external_history_scans_only_requested_hive_partitions(tmp_path, monkeypatch):
+    """外部历史扫描必须把文件发现限制在请求日期，而非展开整代文件。"""
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
+    external_root = tmp_path / "published-history"
+    _publish_external_history(
+        external_root,
+        _storage_rows("000001.SZ", 5, date(2026, 1, 1)),
+        hive_layout=True,
+    )
+    monkeypatch.setenv("TICKFLOW_CANONICAL_HISTORY_ROOT", str(external_root))
+    r = repo(tmp_path / "user-data")
+    original_scan = r._scan_unique_enriched
+    scanned_sources: list[tuple[str, ...]] = []
+    layout_cache_keys: list[str | tuple[str, ...] | None] = []
+
+    def record_scan(parquet_source, **kwargs):
+        if isinstance(parquet_source, tuple):
+            scanned_sources.append(parquet_source)
+        layout_cache_keys.append(kwargs.get("layout_cache_key"))
+        return original_scan(parquet_source, **kwargs)
+
+    monkeypatch.setattr(r, "_scan_unique_enriched", record_scan)
+    start = date(2026, 1, 2)
+    end = date(2026, 1, 4)
+    out = r.get_enriched_range(start, end, columns=["symbol", "date", "close"])
+
+    generation_dir = (
+        external_root / "generations" / "20260812T000000-deadbeef"
+    )
+    expected = tuple(
+        str(generation_dir / f"date={value.isoformat()}" / "*.parquet")
+        for value in (start, date(2026, 1, 3), end)
+    )
+    assert out is not None and out.height == 3
+    assert scanned_sources == [expected]
+    assert layout_cache_keys == [str(generation_dir)]
+    assert str(generation_dir) in r._hive_scan_sources
     r.store.close()
