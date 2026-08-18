@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 
 import pytest
 
@@ -179,8 +181,8 @@ async def test_agent_loop_parses_glm_dsml_tool_call():
     assert all("DSML" not in event.get("content", "") for event in events)
 
 @pytest.mark.asyncio
-async def test_agent_loop_allows_run_backtest_after_reopen(monkeypatch):
-    """原生 function calling 下 run_backtest 工具正常执行。"""
+async def test_agent_loop_allows_pool_backtest_workflow(monkeypatch):
+    """原生 function calling 下只暴露强类型股票池回测工具。"""
     from app.services import agent_loop as agent_loop_mod
 
     calls = {"n": 0}
@@ -188,8 +190,14 @@ async def test_agent_loop_allows_run_backtest_after_reopen(monkeypatch):
     async def fake_generate_tool(messages, tools, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            return None, [{"id": "c1", "name": "run_backtest",
-                           "arguments": '{"strategy_id":"x","symbols":["000001.SZ"]}'}]
+            return None, [{
+                "id": "c1",
+                "name": "start_pool_backtest",
+                "arguments": (
+                    '{"pool_id":"pool-0123456789abcdef","target":"strategy",'
+                    '"strategy_id":"x","start":"2026-08-17","end":"2026-08-18"}'
+                ),
+            }]
         return "普通回答", None
 
     async def fake_stream(messages, **kw):
@@ -198,12 +206,16 @@ async def test_agent_loop_allows_run_backtest_after_reopen(monkeypatch):
     monkeypatch.setattr(
         agent_loop_mod.agent_tools,
         "call_tool",
-        lambda name, app_state, args: {"sentinel": True} if name == "run_backtest" else {"error": "unexpected"},
+        lambda name, app_state, args: (
+            {"status": "pending", "job_id": "job-0123456789abcdef"}
+            if name == "start_pool_backtest"
+            else {"error": "unexpected"}
+        ),
     )
 
     events = await _collect(
         run_agent_stream(
-            [{"role": "user", "content": "跑个回测"}],
+            [{"role": "user", "content": "用已保存股票池跑个回测"}],
             _FakeState(),
             generate_tool=fake_generate_tool,
             stream=fake_stream,
@@ -211,4 +223,81 @@ async def test_agent_loop_allows_run_backtest_after_reopen(monkeypatch):
     )
     results = [e for e in events if e["type"] == "tool_result"]
     assert len(results) == 1
-    assert results[0]["result"] == {"sentinel": True}
+    assert results[0]["result"] == {
+        "status": "pending",
+        "job_id": "job-0123456789abcdef",
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_offloads_blocking_tools(monkeypatch):
+    """同步 DuckDB/等待工具必须在线程执行，不能冻结 HTTP/SSE 事件循环。"""
+    from app.services import agent_loop as agent_loop_mod
+
+    calls = {"n": 0}
+    order: list[str] = []
+
+    async def fake_generate_tool(messages, tools, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None, [{"id": "c1", "name": "list_strategies", "arguments": "{}"}]
+        return "完成", None
+
+    async def fake_stream(messages, **kw):
+        yield "好"
+
+    def blocking_tool(name, app_state, args):
+        time.sleep(0.05)
+        order.append("tool")
+        return {"strategies": []}
+
+    async def ticker():
+        await asyncio.sleep(0.01)
+        order.append("tick")
+
+    monkeypatch.setattr(agent_loop_mod.agent_tools, "call_tool", blocking_tool)
+    await asyncio.gather(
+        _collect(
+            run_agent_stream(
+                [{"role": "user", "content": "有哪些策略"}],
+                _FakeState(),
+                generate_tool=fake_generate_tool,
+                stream=fake_stream,
+            )
+        ),
+        ticker(),
+    )
+    assert order == ["tick", "tool"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_redacts_unexpected_tool_error_paths(monkeypatch):
+    """非 ValueError 也应成为已打码 tool_result，不能击穿 turn 或泄露服务器路径。"""
+    from app.services import agent_loop as agent_loop_mod
+
+    calls = {"n": 0}
+
+    async def fake_generate_tool(messages, tools, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None, [{"id": "c1", "name": "list_strategies", "arguments": "{}"}]
+        return "完成", None
+
+    async def fake_stream(messages, **kw):
+        yield "好"
+
+    def failing_tool(name, app_state, args):
+        raise OSError("/Users/private/secret.parquet unavailable")
+
+    monkeypatch.setattr(agent_loop_mod.agent_tools, "call_tool", failing_tool)
+    events = await _collect(
+        run_agent_stream(
+            [{"role": "user", "content": "有哪些策略"}],
+            _FakeState(),
+            generate_tool=fake_generate_tool,
+            stream=fake_stream,
+        )
+    )
+    result = next(event["result"] for event in events if event["type"] == "tool_result")
+    assert result == {"error": "<path> unavailable"}
+    assert events[-1]["type"] == "done"

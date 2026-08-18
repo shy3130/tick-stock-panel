@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from time import perf_counter
@@ -38,8 +39,12 @@ def _tools_system() -> str:
     ]
     return (
         "你是 TickFlow Stock Panel 的 AI 选股助手。你拥有本地 DuckDB A 股数据库，"
-        "可查询日线、技术指标、财务数据并运行选股和回测。数据问题必须调用下列工具，"
+        "可查询日线、技术指标、财务数据并运行选股和研究回测。数据问题必须调用下列工具，"
         "禁止以「无法接入数据」为由拒绝。\n"
+        "条件选股必须使用强类型工作流：不确定字段时先调用 list_screener_fields，"
+        "再调用 screen_stock_pool；严禁生成 SQL、文件路径或在上下文中复制大股票池。"
+        "股票池回测调用 start_pool_backtest，随后用 get_pool_backtest 查询结果。"
+        "回测只用于研究，绝不能调用或虚构下单、交易计划、成交写入工具。\n"
         "优先使用原生 function calling。若当前 Provider 没有返回原生工具调用，"
         "只能单独输出一个 JSON 对象，格式为 {\"tool\":\"工具名\",\"args\":{...}}。"
         "严禁输出 DSML、XML 或其他工具标记；只能使用下列工具，不能虚构工具名。\n"
@@ -95,8 +100,8 @@ def _execute_tool(name: str, app_state: Any, args: dict) -> dict:
         return {"error": f"tool not allowed: {name}"}
     try:
         return agent_tools.call_tool(name, app_state, args)
-    except ValueError as e:
-        return {"error": str(e)}
+    except Exception as exc:  # noqa: BLE001 — 工具失败应留在 tool_result，不能击穿整个 turn
+        return {"error": agent_tools.sanitize_tool_error(exc)}
 
 
 async def run_agent_stream(
@@ -143,7 +148,7 @@ async def run_agent_stream(
                         args = {}
                     yield json.dumps({"type": "tool_call", "name": name, "args": args}, ensure_ascii=False)
                     tool_started_at = perf_counter()
-                    result = _execute_tool(name, app_state, args)
+                    result = await asyncio.to_thread(_execute_tool, name, app_state, args)
                     yield json.dumps({
                         "type": "tool_result",
                         "name": name,
@@ -164,7 +169,7 @@ async def run_agent_stream(
                     name = tool_req["tool"]
                     yield json.dumps({"type": "tool_call", "name": name, "args": tool_req["args"]}, ensure_ascii=False)
                     tool_started_at = perf_counter()
-                    result = _execute_tool(name, app_state, tool_req["args"])
+                    result = await asyncio.to_thread(_execute_tool, name, app_state, tool_req["args"])
                     yield json.dumps({
                         "type": "tool_result",
                         "name": name,

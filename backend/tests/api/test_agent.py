@@ -10,7 +10,18 @@ from app.services.agent_tools import TOOLS, _truncate, call_tool
 def test_agent_tools_endpoint_lists_builtin_tools():
     names = {tool["name"] for tool in list_tools()["tools"]}
 
-    assert {"get_capabilities", "list_strategies", "get_kline", "run_screener", "run_backtest", "get_market_overview", "list_ext_data"} <= names
+    assert {
+        "get_capabilities",
+        "list_strategies",
+        "get_kline",
+        "list_screener_fields",
+        "screen_stock_pool",
+        "start_pool_backtest",
+        "get_pool_backtest",
+        "get_market_overview",
+        "list_ext_data",
+    } <= names
+    assert {"run_screener", "run_backtest"}.isdisjoint(names)
 
 
 def test_all_tools_have_schema_and_are_read_only():
@@ -59,41 +70,6 @@ def test_get_kline_rejects_bad_symbol():
         call_tool("get_kline", SimpleNamespace(repo=object()), {"symbol": "../data"})
 
 
-def test_run_backtest_requires_symbols():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="symbols"):
-        call_tool("run_backtest", state, {"strategy_id": "x"})
-
-
-def test_run_backtest_rejects_too_many_symbols():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="symbols"):
-        call_tool(
-            "run_backtest",
-            state,
-            {"strategy_id": "x", "symbols": [f"{i:06d}.SZ" for i in range(21)]},
-        )
-
-
-def test_run_backtest_rejects_non_list_symbols():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="symbols"):
-        call_tool("run_backtest", state, {"strategy_id": "x", "symbols": "000001.SZ"})
-
-
-def test_run_backtest_rejects_wide_date_range():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="date range"):
-        call_tool(
-            "run_backtest",
-            state,
-            {
-                "strategy_id": "x",
-                "symbols": ["000001.SZ"],
-                "start": "2024-01-01",
-                "end": "2025-01-02",
-            },
-        )
 
 
 class _FakePortfolioRepo:

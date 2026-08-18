@@ -9,6 +9,7 @@ from typing import Any
 import polars as pl
 
 _SYMBOL_RE = re.compile(r"^[0-9A-Z]{1,8}\.(SH|SZ|BJ|HK|INDEX|ETF)$")
+_PATH_IN_ERROR_RE = re.compile(r"[/\\][^\s\"']*")
 
 TOOLS = [
     {
@@ -20,7 +21,7 @@ TOOLS = [
     },
     {
         "name": "list_strategies",
-        "description": "列出所有可选股策略（内置预设 + 自定义），返回 id/名称/标签。配合 run_backtest 使用。",
+        "description": "列出所有可选股策略（内置预设 + 自定义），返回 id/名称/标签。配合 start_pool_backtest 使用。",
         "input_schema": {"type": "object", "properties": {}},
         "parameters": {"type": "object", "properties": {}},
         "read_only": True,
@@ -33,31 +34,166 @@ TOOLS = [
         "read_only": True,
     },
     {
-        "name": "run_screener",
+        "name": "list_screener_fields",
         "description": (
-            "运行条件选股，在全市场 enriched 数据上执行 DuckDB SQL WHERE 过滤，返回匹配标的。"
-            "数据来自本地 DuckDB，覆盖 5800+ 只 A 股，含当日涨跌/量能/技术指标。\n"
-            "conditions 是 DuckDB SQL 布尔表达式数组（AND 连接），可用字段（均为当日截面值）：\n"
-            "  change_pct   涨跌幅（小数，0.05 = 涨 5%，-0.03 = 跌 3%）\n"
-            "  vol_ratio_5d 5 日量比（1.5 = 今日量是 5 日均量 1.5 倍）\n"
-            "  turnover_rate 换手率（百分比，3.0 = 3%）\n"
-            "  close        收盘价（元）\n"
-            "  amount       成交额（元）\n"
-            "  momentum_20d / momentum_60d  动量\n"
-            "  rsi_14       RSI14（0-100）\n"
-            "  signal_limit_up  是否涨停（布尔）\n"
-            "  consecutive_limit_ups  连板天数\n"
-            "示例：连续放量且涨幅超 5% → [\"change_pct > 0.05\", \"vol_ratio_5d > 1.5\"]"
+            "列出强类型条件选股可用字段、类型、运算符和分组。"
+            "在不确定 field/op/value 时先调用本工具；不得自行构造 SQL。"
         ),
-        "input_schema": {"type": "object", "properties": {"conditions": {"type": "array", "items": {"type": "string"}, "description": "DuckDB SQL WHERE 表达式数组"}, "limit": {"type": "integer", "description": "返回上限，默认 50"}, "as_of": {"type": "string", "description": "指定日期 YYYY-MM-DD，默认最新交易日"}}},
-        "parameters": {"type": "object", "properties": {"conditions": {"type": "array", "items": {"type": "string"}, "description": "DuckDB SQL WHERE 表达式数组"}, "limit": {"type": "integer", "description": "返回上限，默认 50"}, "as_of": {"type": "string", "description": "指定日期 YYYY-MM-DD，默认最新交易日"}}, "required": ["conditions"]},
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         "read_only": True,
     },
     {
-        "name": "run_backtest",
-        "description": "对指定策略 + 标的池跑回测，返回净值/收益/回撤等。不保存策略定义。",
-        "input_schema": {"type": "object", "properties": {"strategy_id": {"type": "string"}, "symbols": {"type": "array"}}},
-        "parameters": {"type": "object", "properties": {"strategy_id": {"type": "string", "description": "策略 id，先调 list_strategies 获取"}, "symbols": {"type": "array", "items": {"type": "string"}, "description": "标的池"}}, "required": ["strategy_id", "symbols"]},
+        "name": "screen_stock_pool",
+        "description": (
+            "用强类型条件运行条件选股并保存服务端股票池。"
+            "conditions 每项必须是 {field,op,value}，field/op 应来自 list_screener_fields。"
+            "返回 pool_id、日期、数量和少量预览；完整股票列表不会进入模型上下文。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "conditions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string"},
+                            "op": {"type": "string"},
+                            "value": {},
+                        },
+                        "required": ["field", "op", "value"],
+                        "additionalProperties": False,
+                    },
+                    "minItems": 1,
+                    "maxItems": 20,
+                },
+                "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
+                "order_by": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "direction": {"type": "string", "enum": ["asc", "desc"]},
+                    },
+                    "required": ["field"],
+                    "additionalProperties": False,
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+            },
+            "required": ["conditions"],
+            "additionalProperties": False,
+        },
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "conditions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string"},
+                            "op": {"type": "string"},
+                            "value": {},
+                        },
+                        "required": ["field", "op", "value"],
+                        "additionalProperties": False,
+                    },
+                    "minItems": 1,
+                    "maxItems": 20,
+                },
+                "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
+                "order_by": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "direction": {"type": "string", "enum": ["asc", "desc"]},
+                    },
+                    "required": ["field"],
+                    "additionalProperties": False,
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+            },
+            "required": ["conditions"],
+            "additionalProperties": False,
+        },
+        "read_only": True,
+    },
+    {
+        "name": "start_pool_backtest",
+        "description": (
+            "对 screen_stock_pool 保存的股票池启动策略或因子回测。"
+            "回测开始日不得早于股票池 as_of，最长 186 天；返回 job_id，不返回大结果。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pool_id": {"type": "string"},
+                "target": {"type": "string", "enum": ["strategy", "factor"]},
+                "strategy_id": {"type": "string"},
+                "factor_name": {"type": "string"},
+                "start": {"type": "string", "description": "YYYY-MM-DD"},
+                "end": {"type": "string", "description": "YYYY-MM-DD"},
+                "matching": {"type": "string", "enum": ["close_t", "open_t+1"]},
+                "entry_fill": {"type": "string", "enum": ["close_t", "open_t+1"]},
+                "exit_fill": {"type": "string", "enum": ["close_t", "open_t+1"]},
+                "fees_pct": {"type": "number", "minimum": 0, "maximum": 0.1},
+                "slippage_bps": {"type": "number", "minimum": 0, "maximum": 1000},
+                "max_positions": {"type": "integer", "minimum": 1, "maximum": 500},
+                "n_groups": {"type": "integer", "minimum": 2, "maximum": 20},
+                "rebalance": {"type": "string", "enum": ["daily", "weekly", "monthly"]},
+                "weight": {"type": "string", "enum": ["equal", "factor_weight"]},
+            },
+            "required": ["pool_id", "target", "start", "end"],
+            "additionalProperties": False,
+        },
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pool_id": {"type": "string"},
+                "target": {"type": "string", "enum": ["strategy", "factor"]},
+                "strategy_id": {"type": "string"},
+                "factor_name": {"type": "string"},
+                "start": {"type": "string", "description": "YYYY-MM-DD"},
+                "end": {"type": "string", "description": "YYYY-MM-DD"},
+                "matching": {"type": "string", "enum": ["close_t", "open_t+1"]},
+                "entry_fill": {"type": "string", "enum": ["close_t", "open_t+1"]},
+                "exit_fill": {"type": "string", "enum": ["close_t", "open_t+1"]},
+                "fees_pct": {"type": "number", "minimum": 0, "maximum": 0.1},
+                "slippage_bps": {"type": "number", "minimum": 0, "maximum": 1000},
+                "max_positions": {"type": "integer", "minimum": 1, "maximum": 500},
+                "n_groups": {"type": "integer", "minimum": 2, "maximum": 20},
+                "rebalance": {"type": "string", "enum": ["daily", "weekly", "monthly"]},
+                "weight": {"type": "string", "enum": ["equal", "factor_weight"]},
+            },
+            "required": ["pool_id", "target", "start", "end"],
+            "additionalProperties": False,
+        },
+        "read_only": True,
+    },
+    {
+        "name": "get_pool_backtest",
+        "description": (
+            "查询 start_pool_backtest 的任务状态。"
+            "可等待最多 30 秒；完成后只返回研究摘要、run_id 和 RunCard 引用。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string"},
+                "wait_seconds": {"type": "number", "minimum": 0, "maximum": 30},
+            },
+            "required": ["job_id"],
+            "additionalProperties": False,
+        },
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string"},
+                "wait_seconds": {"type": "number", "minimum": 0, "maximum": 30},
+            },
+            "required": ["job_id"],
+            "additionalProperties": False,
+        },
         "read_only": True,
     },
     {
@@ -148,40 +284,29 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         start = end - timedelta(days=limit * 3)
         df = repo.get_daily(symbol, start, end, ["date", "open", "high", "low", "close", "volume"])
         return _truncate({"rows": _df_rows(df.tail(limit))})
-    if name == "run_screener":
-        repo = _require(app_state, "repo")
-        from app.services.screener import ScreenerService
+    if name == "list_screener_fields":
+        from app.services.screener_query import field_metadata
 
-        svc = ScreenerService(repo)
-        as_of = args.get("as_of") or svc.latest_date()
-        if not as_of:
-            raise ValueError("no enriched data available")
-        result = svc.run(
-            as_of=as_of,
-            conditions=list(args.get("conditions") or []),
-            order_by=args.get("order_by"),
-            limit=max(1, min(200, int(args.get("limit") or 50))),
-            pool=args.get("pool"),
-        )
-        return _truncate(_plain(result))
-    if name == "run_backtest":
-        repo = _require(app_state, "repo")
-        strategy_engine = _require(app_state, "strategy_engine")
-        from app.backtest.engine import BacktestEngine
-        from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
+        fields = field_metadata()
+        return {
+            "status": "success",
+            "summary": f"可用条件字段 {len(fields)} 个",
+            "fields": fields,
+            "next_actions": ["screen_stock_pool"],
+            "artifacts": [],
+        }
+    if name == "screen_stock_pool":
+        from app.services.agent_research_tools import screen_stock_pool
 
-        strategy_id = str(args.get("strategy_id") or "").strip()
-        if not strategy_id:
-            raise ValueError("strategy_id required")
-        symbols = _require_list(args, "symbols", 20)
-        start, end = _resolve_date_range(args, 180, 365)
-        result = StrategyBacktestService(BacktestEngine(repo), strategy_engine).run(StrategyBacktestConfig(
-            strategy_id=strategy_id,
-            symbols=symbols,
-            start=start,
-            end=end,
-        ))
-        return _truncate(_plain(result))
+        return screen_stock_pool(app_state, args)
+    if name == "start_pool_backtest":
+        from app.services.agent_research_tools import start_pool_backtest
+
+        return start_pool_backtest(app_state, args)
+    if name == "get_pool_backtest":
+        from app.services.agent_research_tools import get_pool_backtest
+
+        return get_pool_backtest(app_state, args)
     if name == "get_market_overview":
         repo = _require(app_state, "repo")
         from app.services.market_overview_builder import build_market_overview
@@ -392,6 +517,12 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
             meta["note"] = note
         return _truncate({"ranked": ranked, "meta": meta})
     raise ValueError(f"unknown agent tool: {name}")
+
+
+def sanitize_tool_error(exc: BaseException) -> str:
+    """Redact filesystem paths before a tool failure enters model/UI context."""
+    message = str(exc) or type(exc).__name__
+    return _PATH_IN_ERROR_RE.sub("<path>", message)
 
 
 def _require(app_state: Any, attr: str):

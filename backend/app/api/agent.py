@@ -123,7 +123,7 @@ async def chat(req: AgentChatIn, request: Request) -> dict:
                     args = json.loads(tc["arguments"]) if tc.get("arguments") else {}
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                result = _execute_tool(name, request.app.state, args)
+                result = await asyncio.to_thread(_execute_tool, name, request.app.state, args)
                 last_tool, last_result = name, result
                 tool_ctx.append({
                     "role": "tool", "tool_call_id": tc["id"],
@@ -133,7 +133,12 @@ async def chat(req: AgentChatIn, request: Request) -> dict:
         if content:
             tool_req = _parse_tool_request(content)
             if tool_req is not None:
-                result = _execute_tool(tool_req["tool"], request.app.state, tool_req["args"])
+                result = await asyncio.to_thread(
+                    _execute_tool,
+                    tool_req["tool"],
+                    request.app.state,
+                    tool_req["args"],
+                )
                 last_tool, last_result = tool_req["tool"], result
                 tool_ctx += [
                     {"role": "assistant", "content": content},

@@ -54,6 +54,10 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     items: [
       { title: '组合优化', prompt: '用风险平价方法给这几只股票算组合权重。' },
       { title: '策略回测', prompt: '帮我跑个回测验证这个策略最近表现。' },
+      {
+        title: '筛选池回测',
+        prompt: '筛选近 30 日龙虎榜上榜至少 2 次且换手率大于 3% 的股票，保存股票池后列出可用策略供我选择回测。',
+      },
     ],
   },
 ]
