@@ -301,3 +301,23 @@ async def test_agent_loop_redacts_unexpected_tool_error_paths(monkeypatch):
     result = next(event["result"] for event in events if event["type"] == "tool_result")
     assert result == {"error": "<path> unavailable"}
     assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_redacts_provider_error_before_streaming():
+    async def failing_generate(messages, tools, **kw):
+        raise RuntimeError(
+            "Authorization: Bearer sk-provider-secret at /Users/private/provider.log"
+        )
+
+    events = await _collect(
+        run_agent_stream(
+            [{"role": "user", "content": "hi"}],
+            _FakeState(),
+            generate_tool=failing_generate,
+        )
+    )
+    assert [event["type"] for event in events] == ["error"]
+    encoded = json.dumps(events, ensure_ascii=False)
+    assert "sk-provider-secret" not in encoded
+    assert "/Users/private" not in encoded

@@ -13,7 +13,7 @@
 - **前端**：React 18 + Vite + TypeScript + Tailwind + Tanstack Query + Lightweight Charts + ECharts（`frontend/`）
 - **后端**：FastAPI + Pydantic v2 + APScheduler + Polars（计算） + DuckDB（查询） + Parquet（存储）（`backend/`）
 - **回测**：vectorbt（项目内唯一的 pandas 边界）
-- **AI**：可选 OpenAI 兼容接口（DeepSeek / 通义 / Ollama 等），用于生成策略与个股四维分析
+- **AI**：可选 OpenAI 兼容接口（DeepSeek / 通义 / Ollama 等），用于生成策略与个股四维分析；自由 Agent 可在源码开发环境显式切到 Pi Agent Harness sidecar 试点，默认仍为 Python runtime
 
 **核心架构演进**：原本只接 TickFlow SDK（付费）；从 2026-07-08 起，`FQuantProvider v2` 已收敛为只读本地 DuckDB（`fstore*.duckdb` + `tdx*.duckdb`，含港股拆分库），业务层仍通过 `data_providers` 抽象层切换 provider 名称。
 
@@ -78,6 +78,15 @@
 | `services/watchlist.py` | +20 / -5 | realtime 走 provider；fquant 走本地源 fallback |
 | `services/depth_service.py` | +20 / -0 | 能力检查模式：fquant 直接降级返回空 |
 
+### AI Agent 运行时试点
+
+| 文件 | 作用 | 红线 |
+|------|------|------|
+| `services/agent_runtime.py` | `python` / `pi` 运行时 seam；Pi 子进程 NDJSON 协议、工具回调、取消和清理 | 只允许 `openai_compat` profile；每次 attempt 固定 runtime，禁止静默 fallback |
+| `services/agent_runner.py` | session/bus/attempt 生命周期；按 `AGENT_RUNTIME` 选择 runtime | 既有 SSE `delta/tool_call/tool_result/done/error` 契约不得改变 |
+| `pi-agent-worker/` | 独立 Node ≥22.19 sidecar，使用 `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` | 模型侧只注册 Python 桥接工具；sidecar 源码不得直接执行业务 I/O；source/dev 试点不宣称具备 OS sandbox |
+| `docs/PI_AGENT_PILOT_PLAN.md` | 试点边界、风险、验收矩阵和退出标准 | 当前仅 source/dev；Docker/PyInstaller 暂不接入 |
+
 ### Trading 纪律域（`backend/app/services/trading/`）
 
 | 文件 | 作用 | 红线 |
@@ -102,6 +111,7 @@
 | `backend/docs/YMOS_PORTING_PLAN.md` | YMOS 纪律层移植设计、契约与完成进度 |
 | `backend/docs/PA_AGENT_PORTING_PLAN.md` | PA_Agent 工程机制移植总账、决策门、已交付边界与明确暂缓项 |
 | `backend/docs/UPSTREAM_FEATURE_PORTING.md` | 上游项目、已移植能力、暂缓/排除项与维护流程总账 |
+| `backend/docs/PI_AGENT_PILOT_PLAN.md` | Pi Agent Harness 可选 sidecar 试点的架构、风险、验收与退出标准 |
 | `README.md` | 用户向快速开始；末尾有"本地开发与数据源"开发者附录 |
 
 ### 测试
@@ -299,6 +309,7 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 8. **❌ 不要直接 `git commit`** 本仓库的任何改动（除非用户明确授权）——所有改动由用户自行 review
 9. **❌ 不要跑 `git clean -fdx` / `git reset --hard`**——会删光 `data/` 下所有未跟踪数据
 10. **❌ 不要修改 `data/` 目录下的用户数据文件**——行情 / 财务 / 自选 / 回测 / 监控记录都是运行时生成的
+11. **❌ 不要向 Pi 模型注册文件、命令、任意网络或直接 DuckDB 工具**——模型只能经 NDJSON `tool_request` 请求 Python 的 13 个只读 allowlist 工具；Node 进程环境必须继续使用 allowlist，不能恢复父进程全量环境继承
 
 ---
 
@@ -312,6 +323,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-11（新增 A 股 canonical enriched 全历史外部 generation 回填与 repository 本地优先合并；研究页接入已发布快照的筹码、日/分钟个股与板块资金流、集合竞价和逐笔查询；港股复权/财务缺口显式 fail-closed。上一变更：实时行情修复与自选只读快照接入。）
+**最后更新**：2026-08-18（新增自由 Agent 的 Pi Agent Harness source/dev-only 可选 sidecar 试点；默认 Python runtime、数据源主链和 Docker/PyInstaller 均不变。上一变更：A 股 canonical enriched 全历史外部 generation 回填与研究页本地快照接入。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

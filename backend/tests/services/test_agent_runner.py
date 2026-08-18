@@ -3,8 +3,7 @@ import json
 
 import pytest
 
-from app.services import agent_runner
-from app.services import agent_sessions
+from app.services import agent_runner, agent_sessions
 from app.services.agent_bus import AgentBus
 
 
@@ -142,4 +141,37 @@ async def test_turn_records_error_status(tmp_path, monkeypatch):
 
     rows = agent_sessions.read_messages(tmp_path, sid)
     assert rows[0]["content"] == "[错误] boom"
+    assert agent_sessions.get_session(tmp_path, sid)["last_attempt_status"] == "error"
+
+
+async def test_turn_redacts_unexpected_error_before_bus_and_persistence(
+    tmp_path, monkeypatch
+):
+    async def failing_stream(messages, app_state, profile_id=None, **kw):
+        raise RuntimeError(
+            "password=runner-secret at /Users/private/session.json"
+        )
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(agent_runner, "run_agent_stream", failing_stream)
+    bus = AgentBus()
+    bus.begin("s")
+    sid = _make_session(tmp_path)
+
+    with pytest.raises(RuntimeError):
+        await agent_runner.run_agent_turn(
+            data_dir=tmp_path,
+            session_id=sid,
+            attempt_id="agent_attempt_x",
+            messages=[{"role": "user", "content": "hi"}],
+            app_state=object(),
+            profile_id=None,
+            bus=bus,
+        )
+
+    replay = [event async for event in bus.subscribe(sid)]
+    rows = agent_sessions.read_messages(tmp_path, sid)
+    encoded = json.dumps({"events": replay, "rows": rows}, ensure_ascii=False)
+    assert "runner-secret" not in encoded
+    assert "/Users/private" not in encoded
     assert agent_sessions.get_session(tmp_path, sid)["last_attempt_status"] == "error"

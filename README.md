@@ -93,7 +93,7 @@
 | 工具                               | 版本   | 安装                                               |
 | :--------------------------------- | :----- | :------------------------------------------------- |
 | Python                             | ≥ 3.11 | [python.org](https://www.python.org/)              |
-| Node                               | ≥ 20   | [nodejs.org](https://nodejs.org/)                  |
+| Node                               | ≥ 20   | [nodejs.org](https://nodejs.org/)；Pi Agent 试点需 ≥ 22.19 |
 | [`uv`](https://docs.astral.sh/uv/) | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | `pnpm`                             | 9      | `npm i -g pnpm`                                    |
 
@@ -137,6 +137,16 @@ cd frontend && pnpm install && pnpm dev   # http://localhost:3011
 ```
 
 **回测依赖**:vectorbt → numba 体积较大,作为可选 extras(`uv sync --extra backtest`)。macOS / Intel 无预构建 wheel 时需 `brew install cmake` 现场编译。
+
+**Pi Agent Harness 运行时试点（可选，仅自由 Agent）**：默认仍使用 Python Agent loop。源码开发环境可让 `/api/agent/*` 改走 Pi Agent Harness sidecar；其它 AI 入口、Docker 和 PyInstaller 不变。试点只支持 `openai_compat` profile，且每次 attempt 不做隐式 runtime fallback。
+
+```bash
+make start-pi
+```
+
+首次运行或 `pi-agent-worker/package*.json` 变化时，Make 会自动执行 `npm ci --ignore-scripts`；也可单独运行 `make pi-deps` 预装依赖。
+
+Node 版本须 ≥ 22.19。Python 进程继续执行 13 个只读业务工具和持有业务状态；Node sidecar 只负责模型会话循环。配置项及验收矩阵见 [`backend/docs/PI_AGENT_PILOT_PLAN.md`](./backend/docs/PI_AGENT_PILOT_PLAN.md)。
 
 </details>
 
@@ -321,7 +331,6 @@ AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=                            # 留空 = 关闭 AI
 AI_MODEL=deepseek-chat
 AI_CODEX_COMMAND=codex                 # codex_cli provider 使用
-AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
 ```
 
 页面设置支持新增多条 AI 配置、设默认 profile,并在部分功能入口选择本次使用的 profile。

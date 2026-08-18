@@ -51,6 +51,8 @@ flowchart LR
 
 2026-08-10 加固验证：Agent 流只有收到显式 `done/error` 终态才写完成/失败，异常断流不得伪装成功；`KlineAnalysisFrame` 与个股分析入口会剔除无有效日期或非有限 OHLC 的行，所有新增响应/回测 artifact 边界把 `NaN/±Inf` 转为 JSON `null`。AI profile 的“测试连接”只探测目标 profile，强制 `allow_fallback=false`，不会以备用 profile 成功掩盖目标故障。相关定向回归 `315 passed`，AI 路由/接口回归 `13 passed`；完整验证记录见本轮末尾变更日志。
 
+2026-08-18 运行时试点：自由 Agent 增加 `AGENT_RUNTIME=pi` 的 source/dev-only 可选 sidecar，默认仍为 Python Agent loop。试点只支持 `openai_compat`，复用现有 session/bus/attempt 与 13 个 Python 只读工具；Node 不持有业务状态，不进入 Report/Structured/trading AI，不改变 profile fallback、数据源或交易纪律边界。Node 契约 `15 passed`、Agent 测试族 `100 passed`、后端全量 `2482 passed, 3 skipped`，真实 Pi SDK 本地假 provider 工具往返、attempt 落盘和子进程取消回收通过。
+
 ## 2. 调研基线
 
 ### 2.1 PA_Agent 已有能力

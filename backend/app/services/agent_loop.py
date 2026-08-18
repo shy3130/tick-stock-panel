@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from time import perf_counter
 from collections.abc import AsyncIterator, Awaitable, Callable
+from time import perf_counter
 from typing import Any
 
 from app.services import agent_tools
@@ -188,13 +188,28 @@ async def run_agent_stream(
             *messages,
             *tool_ctx,
         ]
-        async for delta in stream(answer_msgs, profile_id=profile_id, temperature=0.4, max_tokens=1600):
+        async for delta in stream(
+            answer_msgs,
+            profile_id=profile_id,
+            temperature=0.4,
+            max_tokens=1600,
+        ):
             if delta:
                 yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
-        yield json.dumps({"type": "done", "elapsed_ms": round((perf_counter() - started_at) * 1000, 1)}, ensure_ascii=False)
-    except Exception as e:
-        yield json.dumps({
-            "type": "error",
-            "message": f"Agent 失败: {e}",
-            "elapsed_ms": round((perf_counter() - started_at) * 1000, 1),
-        }, ensure_ascii=False)
+        yield json.dumps(
+            {
+                "type": "done",
+                "elapsed_ms": round((perf_counter() - started_at) * 1000, 1),
+            },
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        message = agent_tools.sanitize_tool_error(exc)
+        yield json.dumps(
+            {
+                "type": "error",
+                "message": f"Agent 失败: {message}",
+                "elapsed_ms": round((perf_counter() - started_at) * 1000, 1),
+            },
+            ensure_ascii=False,
+        )

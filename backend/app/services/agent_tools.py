@@ -8,6 +8,8 @@ from typing import Any
 
 import polars as pl
 
+from app.log_redaction import redact_text
+
 _SYMBOL_RE = re.compile(r"^[0-9A-Z]{1,8}\.(SH|SZ|BJ|HK|INDEX|ETF)$")
 _PATH_IN_ERROR_RE = re.compile(r"[/\\][^\s\"']*")
 
@@ -323,7 +325,11 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         import numpy as np
 
         from app.backtest.optimizers import portfolio_weights
-        from app.backtest.portfolio import load_price_matrix, momentum_from_prices, returns_from_prices
+        from app.backtest.portfolio import (
+            load_price_matrix,
+            momentum_from_prices,
+            returns_from_prices,
+        )
 
         symbols = _require_list(args, "symbols", 50)
         method = str(args.get("method") or "risk_parity")
@@ -398,7 +404,12 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
         import numpy as np
 
         from app.backtest.engine import BacktestEngine
-        from app.backtest.factor import FACTOR_COLUMNS, FactorBacktestService, FactorConfig, _rank_average
+        from app.backtest.factor import (
+            FACTOR_COLUMNS,
+            FactorBacktestService,
+            FactorConfig,
+            _rank_average,
+        )
         from app.backtest.factor_zoo import ALPHAS
 
         pool = _require_list(args, "pool", 300)
@@ -520,8 +531,8 @@ def call_tool(name: str, app_state: Any, args: dict | None = None) -> dict:
 
 
 def sanitize_tool_error(exc: BaseException) -> str:
-    """Redact filesystem paths before a tool failure enters model/UI context."""
-    message = str(exc) or type(exc).__name__
+    """Redact secrets and filesystem paths before an error enters model/UI context."""
+    message = redact_text(str(exc) or type(exc).__name__)
     return _PATH_IN_ERROR_RE.sub("<path>", message)
 
 

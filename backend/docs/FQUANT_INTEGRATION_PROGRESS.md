@@ -17,6 +17,7 @@
 - 独立 snapshot root：`fstore-extended`、`tdx_moneyflow_minute`、`tdx_callauction` 分别由 `FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION` 配置；筹码与日级资金流跟随只读 `engine-a` generation。
 - 港股事实边界已显式化：日 K/minutes/trans 可用；本地发布快照中没有港股公司行动/复权事件，也没有港股财务报表。`hk_adjustment` / `hk_financial` 状态明确为 unavailable，provider 对港股复权、公司行动和财务查询 fail-closed 返回空，不借用同码 A 股数据。
 - 2026-08-11 真盘验证：筹码/个股日资金流/个股分钟资金流/板块日资金流/集合竞价/A 股逐笔分别返回 `1/1/254/3/6/6` 行；status 覆盖筹码 `2,501,804` 行、日级个股资金流 `5,629,184` 行、分钟个股资金流 `193,424,721` 行、集合竞价 `14,844,313` 行。
+- 自由 Agent 的 Pi Agent Harness sidecar 仅替换 `/api/agent/*` 的可选 LLM 会话循环；13 个工具仍由 Python 进程执行并继续只读现有 repository/provider 公开接口。试点未新增行情源、provider capability、DuckDB 写入或 canonical/enriched 消费路径，默认 Python runtime 不变。
 
 下文第 1～7 节记录 2026-07-02 前后的迁移过程。涉及 PG、HTTP、未提交状态或旧单文件 minutes/trans 的描述，以本节和仓库当前代码为准。
 
@@ -361,6 +362,8 @@ PG / HTTP
 | 2026-08-10 | realtime 可靠性 | `daily_markets` 改为全局最新交易日 + `asset_type`/code 点查，并使用独立 DuckDB 客户端/锁；engine compat 缺状态时只缺兼容指标、不删除基础 enriched 行；QuoteService 防重入且按源日期 fail-closed；自选页合并只读 snapshot，明确区分本地过期与外部降级 | 后端全量 `1475 passed`；前端 `tsc -b --force`；真盘 provider `5892` 行/`3.022s`/源日期 `2026-08-10`，snapshot API 两标的 `0.74s`；浏览器验证空 enriched、外部降级和本地过期三种展示 |
 | 2026-08-11 | 全链路数据审计 | 盘后 `run_now` 在 freshness/分区覆盖率验证后立即发布并刷新 enriched canonical 水位；7 个看板/回测/复盘关键指数缺早期 canonical 数据时按需补齐；无参 realtime snapshot 恢复默认指数快照兼容行为；数据页改用分区元数据展示大表覆盖，避免全表行数扫描阻塞 | 后端全量 `1578 passed`；关键指数真实回填 `17183` 行，`000300.INDEX` API 返回 2015-01-05～2026-08-10 共 `2819` 行；`/health`、`/api/data/status`、`/api/overview/market`、无参 snapshot 与浏览器数据页 smoke 通过，页面无错误 |
 | 2026-08-11 | 分钟 K 数据源校对 | 数据页在本地 `kline_minute` 缓存为空时改为展示 active provider 的 catalog 发布水位，不再把“未缓存”误报成“DuckDB 无数据”；移除已退役 `fstore-minutes.duckdb` 的客户端 ATTACH/兼容 view 与配置文档；修复指数分钟/逐笔查询未把 `asset_type=index` 传入 TDX 前缀映射而误读同代码深市股票的问题 | 后端全量 `1582 passed`；真实 catalog 返回 preliminary `2026-08-11`，`600519.SH` 与 `000001.INDEX` 当日分钟 API 均返回 240 行，指数首价 `3951.59`；前端 build 与数据页浏览器 smoke 通过 |
+| 2026-08-18 | 跨域校对 | 自由 Agent 新增默认关闭的 Pi Agent Harness source/dev-only sidecar；Node 仅负责 LLM loop，工具和业务状态仍归 Python，不新增或绕过数据源，不进入选股/回测/监控/交易 AI 主链 | Agent 测试族 `100 passed`；后端全量 `2482 passed, 3 skipped`；真实 Pi SDK 本地假 provider 工具往返、attempt 落盘与子进程取消回收通过 |
+| 2026-08-18 | 日 K 水位与日期一致性 | canonical 启动水位改为取 `get_daily` 完整本地链的最新日期，不再只看滞后的 TDX wide；有区间的日 K 按日期合并 engine 与 fstore，指数再用 `daily_markets(asset_type=10)` 补齐缺失交易日；大盘总览在本地指数 parquet 滞后时经 provider 补同一 `as_of`，避免把前一交易日指数拼到当前股票广度；复盘/看板日期 UI 隔离跨日 store 与分表水位 | 定向后端 `92 passed`；前端 TypeScript + Vite build；真实接口 canonical/overview/review 各 Tab 均为 `2026-08-17`，四个核心指数均带同日 `date`，浏览器验证复盘标题、历史报告、看板 DatePicker 与指数页 |
 
 ---
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -85,6 +86,14 @@ class Settings(BaseSettings):
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
     )
+
+    # Agent runtime pilot. Python remains the default and the only runtime
+    # shipped by Docker/PyInstaller; Pi requires an explicit source-mode opt-in.
+    agent_runtime: Literal["python", "pi"] = "python"
+    agent_pi_node_command: str = "node"
+    agent_pi_worker_path: str = ""
+    agent_pi_ready_timeout_s: float = Field(10.0, gt=0, le=60)
+    agent_pi_response_timeout_s: float = Field(90.0, ge=1.0, le=600.0)
 
     # Server
     host: str = "0.0.0.0"

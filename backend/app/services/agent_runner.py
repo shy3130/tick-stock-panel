@@ -6,9 +6,9 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from app.services import agent_sessions
+from app.services import agent_sessions, agent_tools
 from app.services.agent_bus import AgentBus
-from app.services.agent_loop import run_agent_stream
+from app.services.agent_runtime import run_agent_stream
 from app.services.ai_structured.models import CancellationToken
 
 
@@ -76,8 +76,10 @@ async def run_agent_turn(
             bus.publish(session_id, event)
         if not received_terminal:
             status = "error"
-            message = "Agent 流式响应在完成前中断，请重试"
-            assistant_chunks.append(f"\n[错误] {message}" if assistant_chunks else f"[错误] {message}")
+            message = "Agent 流式响应在完成前中断，请重试"  # noqa: RUF001
+            assistant_chunks.append(
+                f"\n[错误] {message}" if assistant_chunks else f"[错误] {message}"
+            )
             bus.publish(
                 session_id,
                 {"type": "error", "code": "ai_provider_error", "message": message},
@@ -90,13 +92,14 @@ async def run_agent_turn(
         bus.publish(session_id, {"type": "cancelled", "attempt_id": attempt_id})
         bus.publish(session_id, {"type": "attempt_cancelled", "attempt_id": attempt_id})
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         status = "error"
-        assistant_chunks.append(f"\n[错误] {exc}")
-        bus.publish(session_id, {"type": "error", "message": str(exc)})
+        message = agent_tools.sanitize_tool_error(exc)
+        assistant_chunks.append(f"\n[错误] {message}")
+        bus.publish(session_id, {"type": "error", "message": message})
         bus.publish(
             session_id,
-            {"type": "attempt_failed", "attempt_id": attempt_id, "message": str(exc)},
+            {"type": "attempt_failed", "attempt_id": attempt_id, "message": message},
         )
         raise
     finally:
