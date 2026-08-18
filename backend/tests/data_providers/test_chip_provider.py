@@ -191,6 +191,26 @@ def test_get_chip_covers_all_expected_fields():
     client.close()
 
 
+def test_get_chip_snapshot_uses_exact_date_and_a_share_rows_only():
+    sample = {
+        "code": "sh600519",
+        "trade_date": datetime.date(2026, 8, 14),
+        "profit_ratio": 0.207,
+        "avg_cost": 1398.83,
+        "concentration_90": 12.46,
+        "peak_count": 5,
+        "main_peak_price": 1424.0,
+    }
+    client, conn = _make_client_with_chip_rows([sample])
+
+    rows = client.get_chip_snapshot("2026-08-14")
+
+    assert rows == [sample]
+    assert "WHERE trade_date = ? AND asset_type = 1" in conn.last_sql
+    assert conn.last_params == ["2026-08-14"]
+    client.close()
+
+
 # --------------------------------------------------------------------------- #
 # get_chip_coverage — unavailable vs empty vs populated
 # --------------------------------------------------------------------------- #

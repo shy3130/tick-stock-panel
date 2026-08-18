@@ -193,6 +193,10 @@ class FQuantProvider:
         self._instruments_cache_ts: dict[str, datetime] = {}
         self._instruments_cache_ttl = 86400  # 秒
 
+        # 标的参考标记缓存（AH/沪深股通/上市日期, 24h TTL, 与 instruments 缓存同生命周期）
+        self._reference_flags_cache: pl.DataFrame | None = None
+        self._reference_flags_cache_ts: datetime | None = None
+
     def close(self) -> None:
         """关闭底层 FStore 与 TDX 连接（幂等）。供 lifespan 关闭链调用。"""
         try:
@@ -238,6 +242,8 @@ class FQuantProvider:
         # 时 get_instruments 仍返回旧 generation 的标的列表。
         self._instruments_cache.clear()
         self._instruments_cache_ts.clear()
+        self._reference_flags_cache = None
+        self._reference_flags_cache_ts = None
 
     # ------------------------------------------------------------------ #
     # get_instruments — §4.3 主源 fstore.base_infos
@@ -814,6 +820,186 @@ class FQuantProvider:
             (pl.col("code").cast(pl.Utf8) + pl.lit(".HK")).alias("symbol")
         )
 
+    def get_stock_reference_flags(self) -> pl.DataFrame:
+        """A 股标的参考标记 — AH 股 / AH 溢价率 / 沪深股通标的 / 上市日期。
+
+        源：fstore ``base_infos``(asset_type=1, hsgt/ssdate/symbol) 左连
+        ``ah_stock_compares`` 最新交易日的 acode → 溢价率。条件选股等
+        业务层经 registry 取本方法（provider 特有, 不在 base 契约）。
+
+        返回列：symbol / is_ah(bool) / ah_premium(float, %) /
+        hk_connect(bool, hsgt>0) / listing_date(date | null)。
+        缓存 24h TTL；fstore 不可用或查询失败 fail-soft 返回空 df。
+        """
+        if (
+            self._reference_flags_cache is not None
+            and self._reference_flags_cache_ts is not None
+            and (datetime.now() - self._reference_flags_cache_ts).total_seconds()
+            <= self._instruments_cache_ttl
+        ):
+            return self._reference_flags_cache
+
+        try:
+            rows = self._fstore.query(
+                """
+                WITH ah AS (
+                    SELECT acode, premium_rate FROM (
+                        SELECT acode, premium_rate,
+                               ROW_NUMBER() OVER (PARTITION BY acode ORDER BY trade_date DESC) AS rn
+                        FROM ah_stock_compares
+                    ) ranked WHERE rn = 1
+                )
+                SELECT b.symbol, b.code,
+                       (ah.acode IS NOT NULL) AS is_ah,
+                       ah.premium_rate AS ah_premium,
+                       (b.hsgt IS NOT NULL AND b.hsgt > 0) AS hk_connect,
+                       b.ssdate AS listing_date
+                FROM base_infos b
+                LEFT JOIN ah ON ah.acode = b.code
+                WHERE b.asset_type = 1 AND b.symbol IS NOT NULL AND b.symbol != ''
+                """
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 标的参考标记查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        df = pl.DataFrame(
+            rows,
+            schema_overrides={
+                "symbol": pl.Utf8,
+                "is_ah": pl.Boolean,
+                "ah_premium": pl.Float64,
+                "hk_connect": pl.Boolean,
+                "listing_date": pl.Date,
+            },
+        )
+        # base_infos.symbol 是 fstore 小写前缀格式(sh603501) → 规范化为对外符号(603501.SH)
+        from app.data_providers.fquant.symbols import code_to_symbol
+
+        df = df.with_columns(
+            pl.col("code").cast(pl.Utf8).map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+        # 同一 code 多行时保留 updated_at 最新一条已在 SQL 侧由 ah rn=1 保证;
+        # base_infos 理论唯一, 防御性去重保留首个非空溢价行。
+        df = df.unique(subset=["symbol"], keep="first")
+        self._reference_flags_cache = df
+        self._reference_flags_cache_ts = datetime.now()
+        return df
+
+    def get_lhb_records(self, start: date, end: date) -> pl.DataFrame:
+        """龙虎榜上榜记录 — ``[start, end]`` 区间内 (symbol, trade_date) 去重对。
+
+        源：fstore ``longhb_detail``(2013 年起, 每标的每日一行多榜单原因,
+        DISTINCT 按日去重)。业务层(条件选股等)经 registry 取本方法
+        (provider 特有, 不在 base 契约), 按 as_of 窗口自行聚合。
+        查询失败 fail-soft 返回空 df。
+        """
+        try:
+            rows = self._fstore.query(
+                """
+                SELECT DISTINCT code, CAST(t_date AS DATE) AS trade_date
+                FROM longhb_detail
+                WHERE t_date IS NOT NULL
+                  AND CAST(t_date AS DATE) BETWEEN ? AND ?
+                """,
+                [start.isoformat(), end.isoformat()],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 龙虎榜上榜记录查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        from app.data_providers.fquant.symbols import code_to_symbol
+
+        df = pl.DataFrame(rows, schema_overrides={"code": pl.Utf8, "trade_date": pl.Date})
+        return df.with_columns(
+            pl.col("code").map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+
+    def get_lhb_institution_records(self, start: date, end: date) -> pl.DataFrame:
+        """龙虎榜机构席位日记录，按标的/日期汇总净买入额。
+
+        该扩展方法仅供按 ``as_of`` 聚合的业务入口调用，不属于通用
+        ``MarketDataProvider`` 契约。fstore 不可读时 fail-soft 返回空帧。
+        """
+        try:
+            rows = self._fstore.query(
+                """
+                SELECT code, CAST(t_date AS DATE) AS trade_date,
+                       SUM(net_buy_amount) AS net_buy_amount
+                FROM longhb_jigou
+                WHERE t_date IS NOT NULL
+                  AND CAST(t_date AS DATE) BETWEEN ? AND ?
+                GROUP BY code, CAST(t_date AS DATE)
+                """,
+                [start.isoformat(), end.isoformat()],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 龙虎榜机构席位记录查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        df = pl.DataFrame(
+            rows,
+            schema_overrides={
+                "code": pl.Utf8,
+                "trade_date": pl.Date,
+                "net_buy_amount": pl.Float64,
+            },
+        )
+        return df.with_columns(
+            pl.col("code").map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+
+    def get_margin_records(self, start: date, end: date) -> pl.DataFrame:
+        """融资余额及融资净买入记录（金额口径：万元）。
+
+        ``buy_balance`` 是融资余额，``buy_net_amount`` 是当日融资买入额减
+        偿还额。业务层负责在 ``as_of`` 水位下选取最近交易日并计算窗口值。
+        """
+        try:
+            rows = self._fstore.query(
+                """
+                SELECT code, CAST(t_date AS DATE) AS trade_date,
+                       buy_balance AS financing_balance,
+                       buy_net_amount AS financing_net_buy
+                FROM stock_rzrj
+                WHERE t_date IS NOT NULL
+                  AND CAST(t_date AS DATE) BETWEEN ? AND ?
+                """,
+                [start.isoformat(), end.isoformat()],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 融资融券记录查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        df = pl.DataFrame(
+            rows,
+            schema_overrides={
+                "code": pl.Utf8,
+                "trade_date": pl.Date,
+                "financing_balance": pl.Float64,
+                "financing_net_buy": pl.Float64,
+            },
+        )
+        return df.with_columns(
+            pl.col("code").map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+
     @staticmethod
     def _pct_points_to_ratio(value) -> float | None:
         number = FQuantProvider._float_or_none(value)
@@ -1249,10 +1435,47 @@ class FQuantProvider:
         """四项资金流快照能力事实（独立于聚合 status，避免并发覆盖）。"""
         return self._engine.get_moneyflow_status()
 
+    def get_moneyflow_snapshot(self, trade_date: date) -> pl.DataFrame:
+        """读取一个交易日的全市场日级资金流横截面。
+
+        仅使用 ``tdx-moneyflow`` 已发布 generation；返回空帧代表快照不可用或
+        该交易日无数据，调用方不得以旧 raw 数据回退。
+        """
+        rows = self._engine.get_moneyflow_daily_snapshot(trade_date.isoformat())
+        if not rows:
+            return pl.DataFrame()
+
+        out: list[dict] = []
+        for row in rows:
+            symbol = self._tdx_a_share_symbol(row.get("code"))
+            if symbol is None:
+                continue
+            out.append({
+                "symbol": symbol,
+                "trade_date": row.get("trade_date"),
+                "moneyflow_total_amount": self._float_or_none(row.get("total_amount")),
+                "main_net_inflow": self._float_or_none(row.get("main_traditional_net")),
+                "super_large_net_inflow": self._float_or_none(row.get("super_large_net")),
+                "valid_count": row.get("valid_count"),
+                "invalid_count": row.get("invalid_count"),
+            })
+        return pl.DataFrame(out) if out else pl.DataFrame()
+
+
     # ------------------------------------------------------------------ #
     # get_chip_distribution — 筹码分布（stock_chip_peaks，strict snapshot）
     # ------------------------------------------------------------------ #
     _A_SHARE_SYMBOL_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+    @staticmethod
+    def _tdx_a_share_symbol(raw_code: object) -> str | None:
+        """Convert a prefixed TDX A-share code to the public symbol contract."""
+        code = str(raw_code or "").strip()
+        if re.fullmatch(r"(?:sh|sz|bj)\d{6}", code, flags=re.IGNORECASE):
+            code = code[2:]
+        if not re.fullmatch(r"\d{6}", code):
+            return None
+        return code_to_symbol(code, 1)
+
 
     def get_chip_distribution(
         self,
@@ -1341,6 +1564,33 @@ class FQuantProvider:
                 "source": source_tag,
             })
         return pl.DataFrame(out)
+
+    def get_chip_snapshot(self, trade_date: date) -> pl.DataFrame:
+        """读取一个交易日的全市场筹码统计横截面。
+
+        ``profit_ratio`` 的上游比例口径在这里归一为百分点，避免消费方各自
+        乘以 100。数据只来自 ``tdx-chip`` 已发布 generation。
+        """
+        rows = self._engine.get_chip_snapshot(trade_date.isoformat())
+        if not rows:
+            return pl.DataFrame()
+
+        out: list[dict] = []
+        for row in rows:
+            symbol = self._tdx_a_share_symbol(row.get("code"))
+            if symbol is None:
+                continue
+            profit_ratio = self._float_or_none(row.get("profit_ratio"))
+            out.append({
+                "symbol": symbol,
+                "trade_date": row.get("trade_date"),
+                "chip_profit_ratio": profit_ratio * 100 if profit_ratio is not None else None,
+                "chip_avg_cost": self._float_or_none(row.get("avg_cost")),
+                "chip_concentration_90": self._float_or_none(row.get("concentration_90")),
+                "chip_peak_count": row.get("peak_count"),
+                "chip_main_peak_price": self._float_or_none(row.get("main_peak_price")),
+            })
+        return pl.DataFrame(out) if out else pl.DataFrame()
 
     def get_chip_status(self) -> dict[str, dict]:
         """筹码快照能力事实（独立 key，供聚合 status 用 dict.update 合并）。

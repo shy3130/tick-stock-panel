@@ -61,3 +61,43 @@ def test_moneyflow_range_calls_engine_fund_range():
 
     assert engine.calls == [("600519", "2026-06-30", "2026-07-01")]
     assert df.to_dicts() == [{"date": "2026-07-01", "main_net_inflow": 300.0}]
+
+
+class FakeMoneyflowSnapshotEngine:
+    def __init__(self):
+        self.calls = []
+
+    def get_moneyflow_daily_snapshot(self, date_iso):
+        self.calls.append(date_iso)
+        return [
+            {
+                "code": "sh600519",
+                "trade_date": "2026-08-14",
+                "total_amount": 1_000.0,
+                "main_traditional_net": 120.0,
+                "super_large_net": 60.0,
+                "valid_count": 1,
+                "invalid_count": 0,
+            }
+        ]
+
+
+def test_moneyflow_snapshot_normalizes_code_and_preserves_quality_flags():
+    engine = FakeMoneyflowSnapshotEngine()
+    provider = object.__new__(FQuantProvider)
+    provider._engine = engine
+
+    df = provider.get_moneyflow_snapshot(datetime(2026, 8, 14).date())
+
+    assert engine.calls == ["2026-08-14"]
+    assert df.to_dicts() == [
+        {
+            "symbol": "600519.SH",
+            "trade_date": "2026-08-14",
+            "moneyflow_total_amount": 1_000.0,
+            "main_net_inflow": 120.0,
+            "super_large_net_inflow": 60.0,
+            "valid_count": 1,
+            "invalid_count": 0,
+        }
+    ]

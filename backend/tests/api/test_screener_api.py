@@ -17,7 +17,7 @@ class _Service:
     def latest_date(self):
         return date(2026, 7, 16)
 
-    def _load_enriched_for_date(self, as_of):
+    def _load_enriched_for_date(self, as_of, columns=None):
         return pl.DataFrame(
             {
                 "symbol": ["600001.SH", "000001.SZ"],
@@ -72,7 +72,7 @@ def test_screener_query_distinguishes_422_400_and_503(monkeypatch):
     assert semantic.json()["detail"]["code"] == "invalid_screener_semantics"
     unavailable = client.post(
         "/api/screener/query",
-        json={"conditions": [{"field": "main_net_inflow", "op": ">", "value": 0}]},
+        json={"conditions": [{"field": "northbound_net_inflow", "op": ">", "value": 0}]},
     )
     assert unavailable.status_code == 400
     assert unavailable.json()["detail"]["reason"] == "unavailable_field"
@@ -89,7 +89,7 @@ def test_nl_presets_shape_and_legacy_routes(monkeypatch):
 
 def test_query_missing_required_source_is_sanitized_503(monkeypatch):
     class BrokenService(_Service):
-        def _load_enriched_for_date(self, as_of):
+        def _load_enriched_for_date(self, as_of, columns=None):
             return pl.DataFrame({"symbol": ["600001.SH"], "date": [as_of]})
 
     monkeypatch.setattr(screener_module, "ScreenerService", BrokenService)

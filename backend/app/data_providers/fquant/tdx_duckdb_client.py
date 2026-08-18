@@ -652,6 +652,33 @@ class TdxDuckDBClient:
             return pl.DataFrame()
         return pl.DataFrame({"date": [r[0] for r in rows], "main_net_inflow": [r[1] for r in rows]})
 
+    def get_moneyflow_daily_snapshot(self, trade_date: str) -> list[dict]:
+        """Read all A-share daily moneyflow records for one published date.
+
+        This is the bulk counterpart of :meth:`get_moneyflow_stock` for
+        cross-sectional consumers.  It is deliberately backed by the strict
+        generation source: an unpublished snapshot returns no rows and never
+        falls back to the writer raw database.
+        """
+        from datetime import date as _date
+
+        try:
+            _date.fromisoformat(trade_date)
+        except ValueError:
+            return []
+        return self._moneyflow_strict.query_dicts(
+            """
+            SELECT code, trade_date, total_amount, super_large_net,
+                   main_traditional_net, valid_count, invalid_count
+            FROM moneyflow_daily_stock
+            WHERE trade_date = ?
+            ORDER BY code
+            """,
+            [trade_date],
+            "get_moneyflow_daily_snapshot",
+        )
+
+
     @staticmethod
     def _moneyflow_value(row: dict, *names: str):
         for name in names:
@@ -860,6 +887,31 @@ class TdxDuckDBClient:
             "get_chip",
         )
         return rows
+    def get_chip_snapshot(self, trade_date: str) -> list[dict]:
+        """Read all A-share chip statistics for one published trade date.
+
+        The production chip publisher writes one cross-sectional row per
+        stock/date.  This bulk path keeps a screener query to one strict
+        snapshot read instead of issuing one query per candidate symbol.
+        """
+        from datetime import date as _date
+
+        try:
+            _date.fromisoformat(trade_date)
+        except ValueError:
+            return []
+        return self._chip.query_dicts(
+            """
+            SELECT code, trade_date, profit_ratio, avg_cost, concentration_90,
+                   peak_count, main_peak_price
+            FROM stock_chip_peaks
+            WHERE trade_date = ? AND asset_type = 1
+            ORDER BY code
+            """,
+            [trade_date],
+            "get_chip_snapshot",
+        )
+
 
     def get_chip_coverage(self) -> dict:
         """查询 stock_chip_peaks 已发布 snapshot 的覆盖事实（min/max/count/symbols）。

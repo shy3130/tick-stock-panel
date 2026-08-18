@@ -66,6 +66,27 @@ def test_tdx_client_close_is_idempotent():
     client.close()
     # 子源 ConnectionSet 均为 None（未打开），不应抛错。
 
+
+
+def test_moneyflow_daily_snapshot_uses_strict_source_and_exact_date():
+    client = TdxDuckDBClient()
+    calls: list[tuple[str, list, str]] = []
+
+    def query_dicts(sql: str, params: list, caller: str) -> list[dict]:
+        calls.append((sql, params, caller))
+        return [{"code": "sh600001", "trade_date": datetime.date(2026, 8, 14)}]
+
+    client._moneyflow_strict.query_dicts = query_dicts
+    rows = client.get_moneyflow_daily_snapshot("2026-08-14")
+
+    assert rows == [{"code": "sh600001", "trade_date": datetime.date(2026, 8, 14)}]
+    sql, params, caller = calls[0]
+    assert "FROM moneyflow_daily_stock" in sql
+    assert "WHERE trade_date = ?" in sql
+    assert params == ["2026-08-14"]
+    assert caller == "get_moneyflow_daily_snapshot"
+    assert client._moneyflow_strict._strict_snapshot is True
+    client.close()
 class _FakeConnection:
     def __init__(self, path: str) -> None:
         self.path = path
