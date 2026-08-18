@@ -1,5 +1,10 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { storage } from '@/lib/storage'
+import {
+  clearScreenerBacktestHandoff,
+  peekScreenerBacktestHandoff,
+  type ScreenerBacktestHandoff,
+} from '@/lib/screenerBacktestHandoff'
 import { PageHeader } from '@/components/PageHeader'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest } from './backtest/StrategyBacktest'
@@ -34,14 +39,23 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
 }
 
 export function Backtest() {
+  const [screenerHandoff, setScreenerHandoff] = useState<ScreenerBacktestHandoff | null>(
+    () => peekScreenerBacktestHandoff(),
+  )
   const [activeTab, setActiveTab] = useState<Tab>(() => {
+    if (screenerHandoff) return screenerHandoff.target
     const savedTab = storage.backtestActiveTab.get('strategy')
     return TABS.includes(savedTab) ? savedTab : 'strategy'
   })
+
+  useEffect(() => {
+    if (screenerHandoff) clearScreenerBacktestHandoff()
+  }, [screenerHandoff])
   const selectTab = (tab: Tab) => {
     setActiveTab(tab)
     storage.backtestActiveTab.set(tab)
   }
+  const clearScreenerHandoff = useCallback(() => setScreenerHandoff(null), [])
 
   const modeSwitch = (
     <div className="workspace-toolbar !border-0 !bg-transparent !px-0 !py-0 !mb-0" role="group" aria-label="回测模式">
@@ -91,8 +105,18 @@ export function Backtest() {
 
       <div className="workspace-content !pt-0 min-h-0 flex-1 flex flex-col">
         <div className="flex-1 min-h-0 min-w-0">
-          {activeTab === 'factor' && <FactorBacktest />}
-          {activeTab === 'strategy' && <StrategyBacktest />}
+          {activeTab === 'factor' && (
+            <FactorBacktest
+              screenerHandoff={screenerHandoff?.target === 'factor' ? screenerHandoff : null}
+              onScreenerHandoffApplied={clearScreenerHandoff}
+            />
+          )}
+          {activeTab === 'strategy' && (
+            <StrategyBacktest
+              screenerHandoff={screenerHandoff?.target === 'strategy' ? screenerHandoff : null}
+              onScreenerHandoffApplied={clearScreenerHandoff}
+            />
+          )}
           {activeTab === 'composite' && <CompositeStrategyBuilder />}
           <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
             <ParameterGridPanel />

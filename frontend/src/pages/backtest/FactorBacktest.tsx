@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Play, BarChart3, Clock } from 'lucide-react'
@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
 import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
 import { FactorICChart } from './charts/FactorICChart'
+import type { ScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 import { FactorGroupNavChart } from './charts/FactorGroupNavChart'
 
 const formatDate = (date: Date) => date.toISOString().slice(0, 10)
@@ -86,18 +87,33 @@ function LoadingPanel({ symbolsText }: { symbolsText: string }) {
   )
 }
 
-export function FactorBacktest() {
+interface FactorBacktestProps {
+  screenerHandoff?: ScreenerBacktestHandoff | null
+  onScreenerHandoffApplied?: () => void
+}
+
+export function FactorBacktest({
+  screenerHandoff = null,
+  onScreenerHandoffApplied,
+}: FactorBacktestProps) {
   const factorTask = useFactorBacktestTask()
   const restoredPayload = factorTask?.payload
+  const [screenerPool] = useState(() => screenerHandoff
+    ? { count: screenerHandoff.symbols.length, asOf: screenerHandoff.asOf }
+    : null)
   const [factorName, setFactorName] = useState(() => restoredPayload?.factor_name ?? 'momentum_20d')
-  const [symbols, setSymbols] = useState(() => restoredPayload?.symbols?.join(',') ?? '')
-  const [start, setStart] = useState(() => restoredPayload?.start ?? THREE_MONTHS_AGO)
+  const [symbols, setSymbols] = useState(() => screenerHandoff?.symbols.join(',') ?? restoredPayload?.symbols?.join(',') ?? '')
+  const [start, setStart] = useState(() => screenerHandoff?.asOf ?? restoredPayload?.start ?? THREE_MONTHS_AGO)
   const [end, setEnd] = useState(() => restoredPayload?.end ?? TODAY)
   const [nGroups, setNGroups] = useState(() => restoredPayload?.n_groups ?? 5)
   const [weight, setWeight] = useState<'equal' | 'factor_weight'>(() => restoredPayload?.weight ?? 'equal')
   const [fees, setFees] = useState(() => String((restoredPayload?.fees_pct ?? 0.0002) * 10000))
   const result = factorTask?.result ?? null
   const isPending = factorTask?.isPending ?? false
+
+  useEffect(() => {
+    if (screenerHandoff) onScreenerHandoffApplied?.()
+  }, [onScreenerHandoffApplied, screenerHandoff])
 
   const columns = useQuery({
     queryKey: ['backtest-factor-columns'],
@@ -119,11 +135,16 @@ export function FactorBacktest() {
     return columns.data?.columns.find(c => c.id === factorName)?.desc ?? ''
   }, [columns.data, factorName])
 
+  const clampStartToScreenerPool = (value: string) => {
+    const asOf = screenerPool?.asOf
+    return asOf && (!value || value < asOf) ? asOf : value
+  }
+
   const handleRun = () => {
     void startFactorBacktest({
       factor_name: factorName,
       symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
-      start: start || null,
+      start: clampStartToScreenerPool(start) || null,
       end: end || undefined,
       n_groups: nGroups,
       rebalance: 'daily',
@@ -133,12 +154,12 @@ export function FactorBacktest() {
   }
 
   const applyRange = (months: number) => {
-    setStart(monthsAgo(months))
+    setStart(clampStartToScreenerPool(monthsAgo(months)))
     setEnd(formatDate(new Date()))
   }
 
   const applyAllRange = () => {
-    setStart('')
+    setStart(clampStartToScreenerPool(''))
     setEnd(formatDate(new Date()))
   }
 
@@ -176,6 +197,14 @@ export function FactorBacktest() {
         </div>
         <div className="panel-body space-y-3">
           <p className="text-[11px] leading-4 text-muted">选择因子、区间和分组方式。默认最近 3 个月。</p>
+          {screenerPool && (
+            <div className="rounded-input border border-accent/25 bg-accent/5 px-2.5 py-2 text-[11px] leading-4 text-secondary" role="status">
+              <span className="font-medium text-foreground">已载入条件选股股票池 · {screenerPool.count} 只</span>
+              {screenerPool.asOf && (
+                <span>。筛选截止日为 {screenerPool.asOf}，回测起点不会早于该日，以避免前视偏差。</span>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">因子</label>
@@ -230,7 +259,8 @@ export function FactorBacktest() {
                 <label className="text-[11px] text-secondary block mb-1">开始</label>
                 <DatePicker
                   value={start}
-                  onChange={setStart}
+                  onChange={value => setStart(clampStartToScreenerPool(value))}
+                  min={screenerPool?.asOf ?? undefined}
                   max={end || undefined}
                   placeholder="全部历史"
                   className="w-full"

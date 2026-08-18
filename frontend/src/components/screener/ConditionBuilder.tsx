@@ -1,17 +1,7 @@
 import { useMemo } from 'react'
+import { Plus } from 'lucide-react'
 import type { ScreenerCondition, ScreenerFieldSpec } from '@/lib/api'
-
-const DEFAULT_NUMERIC_OPS = ['>', '<', '>=', '<=', '=', '!=', 'between', 'in']
-const DEFAULT_ENUM_OPS = ['=', '!=', 'in']
-const DEFAULT_BOOLEAN_OPS = ['=']
-const GROUP_LABELS: Record<string, string> = {
-  market: '行情',
-  market_cap: '市值',
-  technical: '技术',
-  limit_up: '涨停',
-  financial: '基本面',
-  filter: '板块过滤',
-}
+import { ConditionValueEditor, GROUP_LABELS, defaultValue, listValue, numericValue, opsFor } from './ConditionValueEditor'
 
 interface ConditionBuilderProps {
   fields: ScreenerFieldSpec[]
@@ -19,30 +9,8 @@ interface ConditionBuilderProps {
   onChange: (conditions: ScreenerCondition[]) => void
 }
 
-function opsFor(spec: ScreenerFieldSpec | undefined): string[] {
-  if (spec?.ops?.length) return spec.ops
-  if (spec?.value_type === 'boolean') return DEFAULT_BOOLEAN_OPS
-  if (spec?.value_type === 'enum') return DEFAULT_ENUM_OPS
-  return DEFAULT_NUMERIC_OPS
-}
-
-function defaultValue(spec: ScreenerFieldSpec | undefined, op: string): ScreenerCondition['value'] {
-  if (spec?.value_type === 'boolean') return false
-  if (op === 'between' || op === 'in') return []
-  if (spec?.value_type === 'numeric') return null
-  return ''
-}
-
 function firstAvailable(fields: ScreenerFieldSpec[]) {
   return fields.find(field => field.availability === 'available')
-}
-
-function numericValue(value: ScreenerCondition['value']): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-function listValue(value: ScreenerCondition['value']): Array<number | string> {
-  return Array.isArray(value) ? value : []
 }
 
 export function isConditionValid(condition: ScreenerCondition, fields: ScreenerFieldSpec[]): boolean {
@@ -79,21 +47,6 @@ export function areConditionsValid(conditions: ScreenerCondition[], fields: Scre
   return conditions.length > 0 && conditions.length <= 20 && conditions.every(condition => isConditionValid(condition, fields))
 }
 
-function parseNumberList(text: string): Array<number | string> {
-  return text
-    .split(',')
-    .map(item => item.trim())
-    .filter(Boolean)
-    .map(item => {
-      const value = Number(item)
-      return Number.isFinite(value) ? value : item
-    })
-}
-
-function parseTextList(text: string): string[] {
-  return text.split(',').map(item => item.trim()).filter(Boolean)
-}
-
 export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderProps) {
   const groupedFields = useMemo(() => {
     const groups = new Map<string, ScreenerFieldSpec[]>()
@@ -125,138 +78,44 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
     update(index, { field, op, value: defaultValue(spec, op) })
   }
 
-  const renderValue = (condition: ScreenerCondition, index: number, spec: ScreenerFieldSpec | undefined) => {
-    if (!spec) return <span className="text-xs text-muted">字段元数据加载中…</span>
-    if (spec.value_type === 'boolean') {
-      return (
-        <select
-          aria-label="条件值"
-          value={String(condition.value === true)}
-          onChange={event => update(index, { value: event.target.value === 'true' })}
-          className="h-8 rounded-input border border-border bg-elevated px-2 text-xs text-foreground"
-        >
-          <option value="true">是</option>
-          <option value="false">否</option>
-        </select>
-      )
-    }
-
-    if (condition.op === 'between') {
-      const values = listValue(condition.value)
-      const first = typeof values[0] === 'number' ? String(values[0]) : ''
-      const second = typeof values[1] === 'number' ? String(values[1]) : ''
-      return (
-        <span className="inline-flex items-center gap-1">
-          <input
-            aria-label="条件下限"
-            type="number"
-            value={first}
-            onChange={event => update(index, { value: [event.target.value === '' ? '' : Number(event.target.value), values[1] ?? ''] })}
-            className="h-8 w-24 rounded-input border border-border bg-elevated px-2 text-xs num"
-          />
-          <span className="text-xs text-muted">至</span>
-          <input
-            aria-label="条件上限"
-            type="number"
-            value={second}
-            onChange={event => update(index, { value: [values[0] ?? '', event.target.value === '' ? '' : Number(event.target.value)] })}
-            className="h-8 w-24 rounded-input border border-border bg-elevated px-2 text-xs num"
-          />
-        </span>
-      )
-    }
-
-    if (condition.op === 'in') {
-      if (spec.value_type === 'numeric') {
-        return (
-          <input
-            aria-label="条件值列表"
-            type="text"
-            inputMode="decimal"
-            value={listValue(condition.value).join(',')}
-            placeholder="例如 1,2,3"
-            onChange={event => update(index, { value: parseNumberList(event.target.value) })}
-            className="h-8 w-40 rounded-input border border-border bg-elevated px-2 text-xs"
-          />
-        )
-      }
-      if (spec.options?.length) {
-        const selected = listValue(condition.value).filter((item): item is string => typeof item === 'string')
-        return (
-          <select
-            multiple
-            aria-label="条件选项列表"
-            value={selected}
-            onChange={event => update(index, { value: [...event.target.selectedOptions].map(option => option.value) })}
-            className="min-h-8 rounded-input border border-border bg-elevated px-2 text-xs text-foreground"
-          >
-            {spec.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        )
-      }
-      return (
-        <input
-          aria-label="条件值列表"
-          type="text"
-          value={listValue(condition.value).join(',')}
-          placeholder="多个值用逗号分隔"
-          onChange={event => update(index, { value: parseTextList(event.target.value) })}
-          className="h-8 w-40 rounded-input border border-border bg-elevated px-2 text-xs"
-        />
-      )
-    }
-
-    if (spec.value_type === 'numeric') {
-      return (
-        <input
-          aria-label="条件值"
-          type="number"
-          value={typeof condition.value === 'number' ? String(condition.value) : ''}
-          onChange={event => update(index, { value: event.target.value === '' ? null : Number(event.target.value) })}
-          className="h-8 w-28 rounded-input border border-border bg-elevated px-2 text-xs num"
-        />
-      )
-    }
-
-    if (spec.options?.length) {
-      return (
-        <select
-          aria-label="条件值"
-          value={typeof condition.value === 'string' ? condition.value : ''}
-          onChange={event => update(index, { value: event.target.value })}
-          className="h-8 min-w-32 rounded-input border border-border bg-elevated px-2 text-xs text-foreground"
-        >
-          <option value="">请选择</option>
-          {spec.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
-      )
-    }
-
-    return (
-      <input
-        aria-label="条件值"
-        type="text"
-        value={typeof condition.value === 'string' ? condition.value : ''}
-        onChange={event => update(index, { value: event.target.value })}
-        className="h-8 min-w-32 rounded-input border border-border bg-elevated px-2 text-xs"
-      />
-    )
-  }
 
   return (
     <div className="space-y-2" aria-label="结构化筛选条件">
+      {value.length === 0 && (
+        <div className="flex flex-col gap-1 rounded-input border border-dashed border-border/80 bg-elevated/35 px-3 py-3 text-xs sm:flex-row sm:items-center sm:justify-between">
+          <span className="text-secondary">从预设填入，或添加字段、运算符和值。所有条件按“且”组合。</span>
+          <span className="num text-[11px] text-muted">最多 20 条</span>
+        </div>
+      )}
       {value.map((condition, index) => {
         const spec = fields.find(field => field.field === condition.field)
         const ops = opsFor(spec)
+        const invalid = !isConditionValid(condition, fields)
         return (
-          <div key={`${condition.field}-${index}`} className="flex flex-wrap items-center gap-2 rounded-input border border-border/70 bg-surface/60 p-2">
+          <div
+            key={`${condition.field}-${index}`}
+            data-invalid={invalid || undefined}
+            className={`group grid min-w-0 grid-cols-1 gap-2 rounded-input border p-2 transition-colors sm:grid-cols-[auto_minmax(10rem,1.45fr)_minmax(4.75rem,0.5fr)_minmax(9rem,0.9fr)_auto_auto] sm:items-center ${
+              invalid
+                ? 'border-warning/45 bg-warning/5'
+                : 'border-border/70 bg-surface/60 hover:border-accent/45 hover:bg-elevated/40'
+            }`}
+          >
+            <span
+              aria-hidden="true"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-input border border-border bg-elevated font-mono text-[10px] text-muted sm:h-9 sm:w-9"
+            >
+              {String(index + 1).padStart(2, '0')}
+            </span>
+
             <label className="sr-only" htmlFor={`condition-field-${index}`}>字段</label>
             <select
               id={`condition-field-${index}`}
               aria-label="筛选字段"
+              aria-invalid={invalid || undefined}
               value={condition.field}
               onChange={event => changeField(index, event.target.value)}
-              className="h-8 min-w-40 rounded-input border border-border bg-elevated px-2 text-xs text-foreground"
+              className="control h-9 min-w-0 w-full px-2 text-xs"
             >
               {groupedFields.map(([group, groupFields]) => (
                 <optgroup key={group} label={GROUP_LABELS[group] ?? group}>
@@ -273,21 +132,30 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
             <select
               id={`condition-op-${index}`}
               aria-label="筛选运算符"
+              aria-invalid={invalid || undefined}
               value={ops.includes(condition.op) ? condition.op : ops[0] ?? '='}
               onChange={event => update(index, { op: event.target.value, value: defaultValue(spec, event.target.value) })}
-              className="h-8 min-w-20 rounded-input border border-border bg-elevated px-2 text-xs text-foreground"
+              className="control h-9 min-w-0 w-full px-2 text-xs"
             >
               {ops.map(op => <option key={op} value={op}>{op}</option>)}
             </select>
 
-            {renderValue(condition, index, spec)}
-            {spec?.unit && <span className="text-[11px] text-muted">{spec.unit}</span>}
-            {spec?.field === 'change_pct' && <span className="text-[11px] text-accent">0.05 = 5%</span>}
-            {spec?.availability === 'unavailable' && <span className="text-[11px] text-warning">{spec.null_policy || '当前数据源不可用'}</span>}
+            <ConditionValueEditor
+              spec={spec}
+              op={condition.op}
+              value={condition.value}
+              onChange={next => update(index, { value: next })}
+            />
+            <div className="flex min-h-5 min-w-0 items-center text-[11px] text-muted">
+              {spec?.unit && <span>{spec.unit}</span>}
+              {spec?.field === 'change_pct' && <span className="text-accent">0.05 = 5%</span>}
+              {spec?.availability === 'unavailable' && <span className="text-warning">{spec.null_policy || '当前数据源不可用'}</span>}
+            </div>
             <button
               type="button"
               onClick={() => onChange(value.filter((_, rowIndex) => rowIndex !== index))}
-              className="ml-auto h-8 rounded-btn px-2 text-xs text-muted hover:bg-danger/10 hover:text-danger"
+              aria-label={`删除第 ${index + 1} 条条件`}
+              className="btn-ghost h-9 justify-self-start px-2 text-xs text-muted hover:bg-danger/10 hover:text-danger sm:justify-self-end"
             >
               删除
             </button>
@@ -298,9 +166,10 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
         type="button"
         onClick={add}
         disabled={value.length >= 20 || fields.every(field => field.availability === 'unavailable')}
-        className="h-8 rounded-btn border border-border px-3 text-xs text-secondary hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+        className="btn-secondary h-9 px-3 text-xs"
       >
-        + 添加条件 {value.length >= 20 ? '（最多 20 条）' : ''}
+        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+        添加条件 {value.length >= 20 ? '（最多 20 条）' : ''}
       </button>
     </div>
   )

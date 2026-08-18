@@ -26,6 +26,7 @@ import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { TradeKlineModal } from './components/TradeKlineModal'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 
+import type { ScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 const formatDate = (date: Date) => date.toISOString().slice(0, 10)
 const monthsAgo = (months: number) => {
   const date = new Date()
@@ -651,13 +652,24 @@ function StockPoolPicker({ value, onChange }: { value: string; onChange: (value:
   )
 }
 
-export function StrategyBacktest() {
+interface StrategyBacktestProps {
+  screenerHandoff?: ScreenerBacktestHandoff | null
+  onScreenerHandoffApplied?: () => void
+}
+
+export function StrategyBacktest({
+  screenerHandoff = null,
+  onScreenerHandoffApplied,
+}: StrategyBacktestProps) {
   const [saved] = useState(() => storage.strategyBacktestLast.get(null))
+  const [screenerPool] = useState(() => screenerHandoff
+    ? { count: screenerHandoff.symbols.length, asOf: screenerHandoff.asOf }
+    : null)
   const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
   const [strategyGroup, setStrategyGroup] = useState<StrategyGroup>('all')
-  const [symbols, setSymbols] = useState(saved?.symbols ?? '')
-  const [start, setStart] = useState(saved?.start ?? THREE_MONTHS_AGO)
-  const [end, setEnd] = useState(saved?.end ?? TODAY)
+  const [symbols, setSymbols] = useState(screenerHandoff?.symbols.join(',') ?? saved?.symbols ?? '')
+  const [start, setStart] = useState(screenerHandoff?.asOf ?? saved?.start ?? THREE_MONTHS_AGO)
+  const [end, setEnd] = useState(screenerHandoff ? TODAY : saved?.end ?? TODAY)
   // 成交口径: 建仓/清仓可独立配置。向后兼容老 matching (派生为 entry=exit=matching)。
   const [matching] = useState<'close_t' | 'open_t+1'>(saved?.matching ?? 'open_t+1')
   const [entryFill, setEntryFill] = useState<'close_t' | 'open_t+1'>(saved?.entryFill ?? saved?.matching ?? 'open_t+1')
@@ -702,6 +714,10 @@ export function StrategyBacktest() {
   const filteredStrategyList = useMemo(() => (
     strategyGroup === 'all' ? strategyList : strategyList.filter(st => st.source === strategyGroup)
   ), [strategyGroup, strategyList])
+
+  useEffect(() => {
+    if (screenerHandoff) onScreenerHandoffApplied?.()
+  }, [onScreenerHandoffApplied, screenerHandoff])
 
   // 校验 localStorage 里保存的上次选中策略是否仍存在(本地开发残留的自定义策略
   // 拉新代码后会失效,导致 strategyGet 一直 404/加载中)。列表就绪后若失效,
@@ -786,12 +802,17 @@ export function StrategyBacktest() {
     }
   }, [backtestTask])
 
+  const clampStartToScreenerPool = (value: string) => {
+    const asOf = screenerPool?.asOf
+    return asOf && (!value || value < asOf) ? asOf : value
+  }
+
   const handleRun = () => {
     if (!selectedStrategy) return
     startBacktest({
       strategy_id: selectedStrategy,
       symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
-      start: start || null,
+      start: clampStartToScreenerPool(start) || null,
       end: end || undefined,
       matching,
       entry_fill: entryFill,
@@ -836,12 +857,12 @@ export function StrategyBacktest() {
     : null
 
   const applyRange = (months: number) => {
-    setStart(monthsAgo(months))
+    setStart(clampStartToScreenerPool(monthsAgo(months)))
     setEnd(formatDate(new Date()))
   }
 
   const applyAllRange = () => {
-    setStart(earliestDate ?? '')
+    setStart(clampStartToScreenerPool(earliestDate ?? ''))
     setEnd(formatDate(new Date()))
   }
 
@@ -1043,6 +1064,14 @@ export function StrategyBacktest() {
           </div>
         </div>
         <div className="panel-body space-y-3">
+        {screenerPool && (
+          <div className="rounded-input border border-accent/25 bg-accent/5 px-2.5 py-2 text-[11px] leading-4 text-secondary" role="status">
+            <span className="font-medium text-foreground">已载入条件选股股票池 · {screenerPool.count} 只</span>
+            {screenerPool.asOf && (
+              <span>。筛选截止日为 {screenerPool.asOf}，回测起点不会早于该日，以避免前视偏差。</span>
+            )}
+          </div>
+        )}
         <div>
           <div className="mb-1.5">
             <label className="text-xs font-medium text-secondary">选择策略</label>
@@ -1135,7 +1164,8 @@ export function StrategyBacktest() {
               <label className="text-[11px] text-secondary block mb-1">开始</label>
               <DatePicker
                 value={start}
-                onChange={setStart}
+                onChange={value => setStart(clampStartToScreenerPool(value))}
+                min={screenerPool?.asOf ?? undefined}
                 max={end || undefined}
                 placeholder="全部历史"
                 className="w-full"
