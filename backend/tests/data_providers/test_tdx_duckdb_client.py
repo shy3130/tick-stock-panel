@@ -67,6 +67,25 @@ def test_tdx_client_close_is_idempotent():
     # 子源 ConnectionSet 均为 None（未打开），不应抛错。
 
 
+def test_freshness_uses_wide_table_served_by_get_daily():
+    client = TdxDuckDBClient()
+    calls: list[tuple[str, list, str]] = []
+
+    def query(sql: str, params: list, caller: str):
+        calls.append((sql, params, caller))
+        return [(datetime.date(2026, 8, 17),)]
+
+    client._tdx.query = query
+
+    assert client.freshness() == datetime.date(2026, 8, 17)
+    sql, params, caller = calls[0]
+    assert "FROM market_wide_kline" in sql
+    assert "market_day_kline" not in sql
+    assert params == []
+    assert caller == "freshness"
+    client.close()
+
+
 
 def test_moneyflow_daily_snapshot_uses_strict_source_and_exact_date():
     client = TdxDuckDBClient()

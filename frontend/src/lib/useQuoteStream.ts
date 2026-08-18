@@ -120,6 +120,7 @@ export function useQuoteStream(
           // done(后端已归档) → 刷新历史列表, 让新报告出现并可查看
           if (evt.type === 'done') {
             qc.invalidateQueries({ queryKey: QK.reviewReports })
+            qc.invalidateQueries({ queryKey: QK.overviewMarket() })
           }
         } catch {
           // 忽略解析错误

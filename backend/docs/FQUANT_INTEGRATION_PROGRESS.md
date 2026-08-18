@@ -2,13 +2,13 @@
 
 > 主线任务：**让 tickflow-stock-panel 通过 `data_providers` 抽象层读取本地 DuckDB 发布快照，并保留可切换 provider 的业务契约。**
 >
-> 最后更新：2026-08-11
+> 最后更新：2026-08-18
 > 状态：本地 DuckDB provider 已落地；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
 ---
 
-## 0. 2026-08-11 当前状态
+## 0. 2026-08-18 当前状态
 
 - `FQuantProvider` 的行情主路径是只读本地 DuckDB；旧的 PG / engine-data HTTP 阶段说明保留在下文，仅作为迁移历史，不再代表当前运行架构。
 - A 股分钟线通过 `catalog_resolver.resolve_route("tdx_minutes", "a", trade_date)` 定位 2023 年前归档或当前快照；A 股逐笔通过 `catalog_resolver.resolve_route("tdx_trans", "a", trade_date)` 定位历史归档年片或活跃年的月度快照。route catalog 每次查询重新解析；校验失败 fail-closed，绝不降级 writer-owned raw。

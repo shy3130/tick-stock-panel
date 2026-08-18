@@ -19,6 +19,24 @@ def test_latest_enriched_date_uses_partition_names(tmp_path):
     assert _latest_enriched_date(repo) == date(2026, 7, 2)
 
 
+def test_provider_freshness_uses_full_daily_fallback_chain(monkeypatch):
+    provider = SimpleNamespace(
+        get_daily_freshness=lambda: date(2026, 8, 17),
+        _engine=SimpleNamespace(
+            freshness=lambda: (_ for _ in ()).throw(
+                AssertionError("must prefer provider freshness")
+            )
+        ),
+    )
+    monkeypatch.setattr("app.data_providers.get_provider", lambda _name: provider)
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda _capability=None: "fquant_local",
+    )
+
+    assert daily_pipeline._provider_freshness_date() == date(2026, 8, 17)
+
+
 def test_run_now_local_mode_skips_raw_sync_and_runs_local_pipeline(tmp_path, monkeypatch):
     calls = {"local": 0, "raw": 0}
     published: list[date] = []

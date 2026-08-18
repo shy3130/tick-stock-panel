@@ -377,6 +377,7 @@ export interface IndexInstrument {
 export interface IndexQuote {
   symbol: string
   name?: string | null
+  date?: string | null
   last_price?: number | null
   close?: number | null
   prev_close?: number | null

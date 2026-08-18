@@ -306,7 +306,29 @@ class FQuantProvider:
 
     # ------------------------------------------------------------------ #
     # get_daily — §4.4 双源融合（engine-data wide 主 + fstore day_klines 备）
-    # ------------------------------------------------------------------ #
+    def get_daily_freshness(self) -> date | None:
+        """返回 ``get_daily`` 主源与 fallback 合并后的最新可用交易日。"""
+        candidates: list[date] = []
+        engine_date = self._engine.freshness()
+        if isinstance(engine_date, date):
+            candidates.append(engine_date)
+        rows = self._fstore.query(
+            """
+            SELECT CAST(max(tdate) AS VARCHAR) AS latest_date
+            FROM t_1_day_klines
+            WHERE ktype = 101 AND fq = 0
+            """
+        )
+        if rows and rows[0].get("latest_date"):
+            try:
+                candidates.append(date.fromisoformat(str(rows[0]["latest_date"])[:10]))
+            except ValueError:
+                logger.warning(
+                    "FQuantProvider: 无法解析 fstore day_klines 水位 %r",
+                    rows[0]["latest_date"],
+                )
+        return max(candidates) if candidates else None
+
     def get_daily(
         self,
         symbols: list[str],
@@ -329,12 +351,53 @@ class FQuantProvider:
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
-            rows = self._get_daily_from_engine_wide(sym, code, start_time, end_time, asset_type)
+            rows = self._get_daily_from_engine_wide(
+                sym, code, start_time, end_time, asset_type
+            )
+            if asset_type == "index":
+                # engine wide 可能停在较早交易日；asset_type=10 的 daily_markets
+                # 与指数 code 无歧义，可补齐缺失日期，同日仍以 engine 为准。
+                market_rows = self._get_index_daily_from_markets(
+                    sym, code, start_time, end_time
+                )
+                by_date = {
+                    str(row.get("date")): row
+                    for row in market_rows
+                    if row.get("date") is not None
+                }
+                by_date.update(
+                    {
+                        str(row.get("date")): row
+                        for row in rows
+                        if row.get("date") is not None
+                    }
+                )
+                rows = [by_date[value] for value in sorted(by_date)]
+            else:
+                # 有明确区间时，两源按日期合并：engine 覆盖同日，fstore
+                # 补首尾缺口。只在无区间且 engine 已有数据时跳过额外查询。
+                fallback_rows = (
+                    self._get_daily_from_fstore_klines(
+                        sym, code, start_time, end_time, asset_type
+                    )
+                    if not rows or start_time is not None or end_time is not None
+                    else []
+                )
+                by_date = {
+                    str(row.get("date")): row
+                    for row in fallback_rows
+                    if row.get("date") is not None
+                }
+                by_date.update(
+                    {
+                        str(row.get("date")): row
+                        for row in rows
+                        if row.get("date") is not None
+                    }
+                )
+                rows = [by_date[value] for value in sorted(by_date)]
             if not rows:
-                # L2 降级：engine-data 不可用 → fstore day_klines
-                rows = self._get_daily_from_fstore_klines(sym, code, start_time, end_time, asset_type)
-            if not rows:
-                logger.debug("get_daily %s: 两源均无数据", sym)
+                logger.debug("get_daily %s: 本地日K链均无数据", sym)
                 continue
             normalized = normalize_daily(rows, default_symbol=sym, source=self.name)
             if not normalized.is_empty():
@@ -383,6 +446,49 @@ class FQuantProvider:
                 continue
             out.append(row)
         return out
+
+    def _get_index_daily_from_markets(
+        self,
+        symbol: str,
+        code: str,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> list[dict]:
+        """从 daily_markets 的指数口径（asset_type=10）补齐日 K 缺口。"""
+        conditions = ["asset_type = 10", "code = %s"]
+        params: list[object] = [code]
+        if start_time is not None:
+            conditions.append("trade_date >= %s")
+            params.append(start_time.date())
+        if end_time is not None:
+            conditions.append("trade_date <= %s")
+            params.append(end_time.date())
+        order_limit = "ORDER BY trade_date ASC"
+        if start_time is None and end_time is None:
+            order_limit = "ORDER BY trade_date DESC LIMIT 250"
+        rows = self._fstore_markets.query(
+            f"""
+            SELECT
+                trade_date::text AS date,
+                CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS open,
+                CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS high,
+                CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS low,
+                price::float8 AS close,
+                CAST(NULLIF(payload_json->>'Cjl', '') AS DOUBLE) AS volume,
+                CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS amount
+            FROM daily_markets
+            WHERE {' AND '.join(conditions)}
+            {order_limit}
+            """,
+            params,
+        )
+        if start_time is None and end_time is None:
+            rows.reverse()
+        return [
+            {"symbol": symbol, **row}
+            for row in rows
+            if row.get("date") is not None
+        ]
 
     def _get_raw_oracle_rows(self, code: str, rows: list[dict]) -> list[dict]:
         """Fetch fstore raw OHLCV oracle for the engine-row date span.

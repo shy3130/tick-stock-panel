@@ -817,6 +817,9 @@ def _provider_freshness_date() -> date_type | None:
         from app.data_providers.registry import get_active_provider_name
 
         provider = get_provider(get_active_provider_name("daily"))
+        provider_freshness = getattr(provider, "get_daily_freshness", None)
+        if callable(provider_freshness):
+            return provider_freshness()
         client = getattr(provider, "_engine", None)
         freshness = getattr(client, "freshness", None)
         return freshness() if callable(freshness) else None

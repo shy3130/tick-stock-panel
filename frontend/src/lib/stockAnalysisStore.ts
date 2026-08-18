@@ -155,8 +155,11 @@ export async function findLatestHistoryReport(symbol: string): Promise<HistoryRe
  */
 export async function findTodayReport(symbol: string): Promise<HistoryReport | null> {
   if (!historyLoaded) await loadHistory()
-  const today = new Date().toISOString().slice(0, 10)  // YYYY-MM-DD
-  return history.find(r => r.symbol === symbol && (r.created_at ?? '').slice(0, 10) === today) ?? null
+  const today = new Date().toLocaleDateString('sv-SE')
+  return history.find((report) => {
+    if (report.symbol !== symbol || !report.created_at) return false
+    return new Date(report.created_at).toLocaleDateString('sv-SE') === today
+  }) ?? null
 }
 
 export async function startAnalysis(symbol: string, name: string, focus = '', profileId?: string): Promise<{ id?: string; error?: string }> {

@@ -94,6 +94,47 @@ def test_fill_market_supplements_drops_implausible_supplement_change_pct(monkeyp
 
 
 
+def test_index_quotes_replace_stale_local_rows_with_same_day_provider(monkeypatch):
+    as_of = date(2026, 8, 17)
+
+    class Repo:
+        @staticmethod
+        def execute_all(_query, _params):
+            return [
+                (symbol, date(2026, 8, 14), 90.0, 89.0)
+                for symbol in builder.CORE_INDEX_SYMBOLS
+            ]
+
+    class Provider:
+        @staticmethod
+        def get_daily(symbols, _start, _end, asset_type):
+            assert symbols == list(builder.CORE_INDEX_SYMBOLS)
+            assert asset_type == "index"
+            return pl.DataFrame([
+                {"symbol": symbol, "date": day, "close": close}
+                for symbol in symbols
+                for day, close in (
+                    (date(2026, 8, 14), 100.0),
+                    (as_of, 110.0),
+                )
+            ])
+
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda capability=None: "fquant_local",
+    )
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_provider",
+        lambda _name: Provider(),
+    )
+
+    rows = builder._index_quotes(Repo(), quote_service=None, as_of=as_of)
+
+    assert {row["date"] for row in rows} == {"2026-08-17"}
+    assert {row["last_price"] for row in rows} == {110.0}
+    assert {row["change_pct"] for row in rows} == {10.0}
+
+
 # ================================================================
 # 行为等价: _market_aggregates (null/NaN/0/涨跌停/多板块/多 tier)
 # ================================================================

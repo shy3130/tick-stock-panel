@@ -250,31 +250,46 @@ export function Review() {
     }, resolvedProfileId || profileId)
   }, [aiProfiles.data, asOf, focus, onGenerationDone, profileId])
 
-  // 复制全文到剪贴板(viewing 优先,与主区域显示一致)
+  const isGenerating = phase === 'loading' || phase === 'streaming'
+  const data = marketQuery.data
+  const storedReviewMatchesCurrent = isGenerating
+    || !meta?.as_of
+    || !data?.as_of
+    || meta.as_of === data.as_of
+  // 历史报告必须显式点选；跨日残留的模块级 store 不应冒充当前复盘。
+  const displayContent = viewing?.content ?? (storedReviewMatchesCurrent ? content : '')
+  const displayDate = viewing?.as_of
+    ?? (isGenerating ? meta?.as_of : undefined)
+    ?? data?.as_of
+    ?? asOf
+    ?? '最新'
+  const displayEmotion = viewing?.emotion_label
+    || (isGenerating ? meta?.emotion_label : undefined)
+    || data?.emotion?.label
+
+
+  // 复制全文到剪贴板（与主区域显示一致）
   const copyContent = useCallback(async () => {
-    const text = viewing?.content ?? content
-    if (!text) return
+    if (!displayContent) return
     try {
-      await navigator.clipboard.writeText(text)
+      await navigator.clipboard.writeText(displayContent)
       toast('已复制到剪贴板', 'success')
     } catch {
       toast('复制失败,请手动选择文本', 'error')
     }
-  }, [content, viewing])
+  }, [displayContent])
 
-  // 下载为 .md 文件(viewing 优先)
+  // 下载为 .md 文件（与主区域显示的报告日期一致）
   const downloadContent = useCallback(() => {
-    const text = viewing?.content ?? content
-    if (!text) return
-    const reportDate = viewing?.as_of ?? meta?.as_of ?? asOf ?? new Date().toISOString().slice(0, 10)
-    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    if (!displayContent) return
+    const blob = new Blob([displayContent], { type: 'text/markdown;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `复盘_${reportDate}.md`
+    a.download = `复盘_${displayDate}.md`
     a.click()
     URL.revokeObjectURL(url)
-  }, [content, viewing, meta, asOf])
+  }, [displayContent, displayDate])
 
   // 查看历史报告(不中断后台生成:仅临时把 viewing 覆盖到主区域,
   // 生成中的流仍在 store 里继续跑,点"生成中"项即可切回)
@@ -282,12 +297,6 @@ export function Review() {
     setViewing(r)
   }, [])
 
-  const isGenerating = phase === 'loading' || phase === 'streaming'
-  const displayDate = viewing?.as_of ?? meta?.as_of ?? marketQuery.data?.as_of ?? asOf ?? '最新'
-  const data = marketQuery.data
-  // 主区域显示的内容:viewing(查看历史)优先于 store 的生成 content,
-  // 这样点历史报告不会覆盖后台生成中的流。
-  const displayContent = viewing?.content ?? content
 
   return (
     <div className="workspace-page">
@@ -297,7 +306,7 @@ export function Review() {
         subtitle={
           market === 'hk'
             ? '港股 · 无涨跌停制度'
-            : `${displayDate}${data?.emotion ? ` · 情绪 ${data.emotion.label}` : ''}`
+            : `${displayDate}${displayEmotion ? ` · 情绪 ${displayEmotion}` : ''}`
         }
         right={
           <div className="workspace-toolbar">
@@ -770,7 +779,7 @@ function ReportPanel({
     )
   }
 
-  if (phase === 'idle' && !content) {
+  if ((phase === 'idle' || phase === 'done') && !content) {
     return (
       <div className="flex min-h-[28rem] flex-col items-center justify-center gap-5 panel px-6 py-16">
         <div className="relative">

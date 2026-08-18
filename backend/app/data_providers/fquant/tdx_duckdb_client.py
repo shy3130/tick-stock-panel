@@ -826,20 +826,20 @@ class TdxDuckDBClient:
         return result
 
     def freshness(self):
-        """最新已发布交易日的探测值，供 local enriched bootstrap 判定新鲜度。
+        """返回 ``get_daily`` 实际读取的 wide 日 K 最新已发布交易日。
 
-        返回 market_day_kline(dataset='day') 的 max(trade_date)。文件不可达时
-        返回 None（调用方据此跳过 bootstrap，不会误判）。
+        canonical enriched 水位必须跟随业务读取路径 ``get_wide``，不能使用另一张
+        更新节奏可能不同的 ``market_day_kline``。文件不可达时返回 None，调用方据此
+        跳过 bootstrap，不会误发布本地分区。
         """
-        from datetime import date as _date
         rows = self._tdx.query(
-            "SELECT max(trade_date) FROM market_day_kline WHERE dataset = 'day'",
+            "SELECT max(trade_date) FROM market_wide_kline",
             [],
             "freshness",
         )
         if rows and rows[0][0]:
-            d = rows[0][0]
-            return d.date() if hasattr(d, "date") else d
+            value = rows[0][0]
+            return value.date() if hasattr(value, "date") else value
         return None
 
     # ------------------------------------------------------------------ #

@@ -17,7 +17,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import polars as pl
@@ -159,6 +159,54 @@ def _quote_status(quote_service) -> dict:
     return qs.status()
 
 
+def _provider_index_quotes(as_of: date) -> dict[str, dict]:
+    """补齐本地指数 parquet 尚未覆盖的指定交易日。"""
+    try:
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider = get_provider(get_active_provider_name("daily"))
+        frame = provider.get_daily(
+            list(CORE_INDEX_SYMBOLS),
+            datetime.combine(as_of - timedelta(days=10), datetime.min.time()),
+            datetime.combine(as_of, datetime.min.time()),
+            "index",
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    if frame is None or frame.is_empty():
+        return {}
+
+    result: dict[str, dict] = {}
+    for symbol in CORE_INDEX_SYMBOLS:
+        records = (
+            frame.filter(pl.col("symbol") == symbol)
+            .sort("date")
+            .to_dicts()
+        )
+        if not records or records[-1].get("date") != as_of:
+            continue
+        latest = records[-1]
+        previous = records[-2] if len(records) > 1 else {}
+        last_price = _finite(latest.get("close"))
+        prev_close = _finite(previous.get("close"))
+        change_amount = None
+        change_pct = None
+        if last_price is not None and prev_close not in (None, 0):
+            change_amount = last_price - prev_close
+            change_pct = change_amount / prev_close * 100
+        result[symbol] = {
+            "symbol": symbol,
+            "name": CORE_INDEX_NAMES[symbol],
+            "date": as_of.isoformat(),
+            "last_price": last_price,
+            "close": last_price,
+            "prev_close": prev_close,
+            "change_amount": change_amount,
+            "change_pct": change_pct,
+        }
+    return result
+
+
 def _index_quotes(repo, quote_service, as_of: date | None = None) -> list[dict]:
     rows: list[dict] = []
     if quote_service and as_of is None:
@@ -213,13 +261,25 @@ def _index_quotes(repo, quote_service, as_of: date | None = None) -> list[dict]:
             })
 
     by_symbol = {r.get("symbol"): r for r in rows}
+    if as_of is not None and any(
+        str(by_symbol.get(symbol, {}).get("date") or "")[:10] != as_of.isoformat()
+        for symbol in CORE_INDEX_SYMBOLS
+    ):
+        # overview 的股票广度与指数必须来自同一 as_of；本地指数 parquet
+        # 滞后时通过 provider 补齐，不能把前一交易日指数拼到当前看板。
+        by_symbol.update(_provider_index_quotes(as_of))
     out = []
     for symbol in CORE_INDEX_SYMBOLS:
         r = by_symbol.get(symbol, {"symbol": symbol})
         out.append({
             "symbol": symbol,
             "name": r.get("name") or CORE_INDEX_NAMES[symbol],
-            "last_price": _finite(r.get("last_price") if r.get("last_price") is not None else r.get("close")),
+            "date": r.get("date"),
+            "last_price": _finite(
+                r.get("last_price")
+                if r.get("last_price") is not None
+                else r.get("close")
+            ),
             "change_pct": _finite(r.get("change_pct")),
             "change_amount": _finite(r.get("change_amount")),
         })
