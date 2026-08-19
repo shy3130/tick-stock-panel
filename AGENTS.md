@@ -85,12 +85,14 @@
 | `app/backtest/run_store.py` | **BacktestRun 唯一持久化契约**（`data/research/backtest_runs/{run_id}.json`，不可变事实，仅 `favorite`/`label` 可 PATCH）；列表/比较/导出/旧 run_card 只读惰性迁移 | 旧 `research/run_cards/*.json` 对回测域只读（DELETE 403、PATCH 先固化再改）；20 MiB 上限、原子写、run_id 白名单；`save_run_card` 仅剩 AI 池研究与定时研究两个非回测域调用方 |
 | `app/backtest/metrics.py` | `MetricContext` 统一年化口径（频率唯一输入、`risk_free_rate` 显式、`ddof=1`）+ 全套绩效/风险/相对指标与 Bootstrap | 频率与年化系数冲突必须拒绝；`payoff_ratio` 与 `profit_factor` 是两个独立契约，不得混用 |
 | `app/backtest/provenance.py` | 数据快照元数据（canonical/adjustment generation、股票池定义、`snapshot_hash`）、engine/metric 版本 | 全市场股票池无法证明 point-in-time 时必须保留 `survivorship_bias` 告警 |
-| `app/backtest/engine.py` / `strategy.py` / `factor.py` / `robustness.py` | 主 Polars/NumPy 撮合与策略/因子/稳健性服务（T+1、涨跌停、整手、费用滑点、持仓期 MAE/MFE、参数扰动与严格 Walk-Forward） | 旧 vectorbt 入口 `POST /api/backtest/run` 仅 legacy（固定 `legacy_vectorbt_engine` 告警），停止新增消费者 |
+| `app/backtest/engine.py` / `strategy.py` / `factor.py` / `robustness.py` / `optimizer.py` | 主 Polars/NumPy 撮合与策略/因子/稳健性/寻优服务（T+1、涨跌停、整手、费用滑点、持仓期 MAE/MFE、参数扰动、严格 Walk-Forward、训练/留出笛卡尔搜索） | 旧 vectorbt 入口 `POST /api/backtest/run` 仅 legacy（固定 `legacy_vectorbt_engine` 告警），停止新增消费者；寻优不得宣称全局最优，不得自动写入策略池 |
 | `app/backtest/attribution_report.py` | 交易窗口 Brinson-Fachler 行业归因（当前行业映射、相对等权已执行交易样本） | 映射非 point-in-time；输入/行业不足必须 fail-closed；无冻结可审计本地因子序列时 Fama-French 必须显式 unavailable，禁止代理结果 |
 | `app/api/backtest.py` | 策略/因子/组合回测 + `/runs` 列表/读取/比较/复跑/导出/PATCH/DELETE | Run 落盘失败必须在响应带 `persisted=false` 与 `persistence_failed` 告警，不得伪装成功 |
-| `frontend/src/pages/backtest/` | 运行历史（RunHistoryPanel）、专业诊断、稳健性、参数网格（含回填策略表单）、交易明细筛选、行业归因与独立 HTML 报告下载 | 前端不得重算风险指标，非有限数值显示"—"；未持久化 Run 不得提供报告下载 |
+| `app/api/backtest_optimizer.py` | `GET /universes` + `POST/GET/SSE/cancel` 策略寻优实验 | 训练窗打分、留出窗确认；DSR/PBO 是诊断不是准入；全市场/板块/行业池必须带幸存者偏差告警 |
+| `frontend/src/pages/backtest/` | 运行历史（RunHistoryPanel）、专业诊断、稳健性、参数网格（含回填策略表单）、策略寻优、交易明细筛选、行业归因与独立 HTML 报告下载 | 前端不得重算风险指标，非有限数值显示"—"；未持久化 Run 不得提供报告下载 |
 
-权威口径与能力边界见 `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md`（§5.4 工程决策、§12 未实现清单——现有 `walk_forward` 为严格 IS/OOS：训练选参→冻结参数→独立 OOS；候选仅局部单参数邻域，非全局优化）。
+权威口径与能力边界见 `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md`（§5.4 工程决策、§12 未实现清单——现有 `walk_forward` 为严格 IS/OOS：训练选参→冻结参数→独立 OOS；候选仅局部单参数邻域。策略寻优 V1 是另一条独立搜索：策略×股票池×持仓周期笛卡尔展开 + 冻结训练/留出，不是 Optuna/全局参数优化）。
+设计见 `backend/docs/STRATEGY_SEARCH_DESIGN.md`。
 
 ### AI Agent 运行时试点
 
@@ -339,6 +341,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-19（完成回测成熟度改进：统一指标/成本/可追溯 Run、严格 IS/OOS Walk-Forward、持仓期 MAE/MFE、交易明细筛选、交易窗口 Brinson-Fachler 行业归因与自包含 HTML 研究报告；Fama-French 因无冻结本地因子序列显式不可用；默认数据源主链和 Docker/PyInstaller 均不变。上一变更：新增自由 Agent 的 Pi Agent Harness source/dev-only 可选 sidecar 试点。）
+**最后更新**：2026-08-19（新增 /backtest 策略寻优：最近 8 年冻结窗口、训练期打分 + 独立留出确认、DSR/PBO 诊断、等权组合仅报告；不宣称全局最优、不写入策略池。上一变更：完成回测成熟度改进——统一指标/成本/可追溯 Run、严格 IS/OOS Walk-Forward、持仓期 MAE/MFE、交易明细筛选、交易窗口 Brinson-Fachler 行业归因与自包含 HTML 研究报告。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）
