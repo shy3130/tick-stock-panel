@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, BarChart3, CheckCircle2, FlaskConical, Loader2, Play, Square, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BarChart3, CheckCircle2, FlaskConical, Loader2, Play, Square, XCircle } from 'lucide-react'
 import {
   api,
   type ParameterGridExperiment,
@@ -20,6 +20,7 @@ import {
   startParameterGridExperiment,
   useParameterGridTask,
 } from '@/lib/parameterGridTask'
+import { ParameterGridDiagnostics } from './components/ParameterGridDiagnostics'
 
 
 const INPUT_CLS = 'control w-full text-xs'
@@ -109,7 +110,11 @@ function ScenarioParams({ params }: { params: Record<string, number> }) {
   )
 }
 
-export function ParameterGridPanel() {
+interface ParameterGridPanelProps {
+  onUseScenario?: (strategyId: string, params: Record<string, number>) => void
+}
+
+export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
   const [strategyId, setStrategyId] = useState('')
   const [gridDrafts, setGridDrafts] = useState<GridDrafts>({})
   const [symbols, setSymbols] = useState('')
@@ -122,6 +127,7 @@ export function ParameterGridPanel() {
   const [regimeEnabled, setRegimeEnabled] = useState(false)
   const [regimeStates, setRegimeStates] = useState<RegimeState[]>(['strong', 'lean_strong'])
   const [regimeMinScore, setRegimeMinScore] = useState('')
+  const [riskFreeRate, setRiskFreeRate] = useState('0')
   const parameterGridTask = useParameterGridTask()
   const experimentId = parameterGridTask.experimentId
   const taskRevision = parameterGridTask.revision
@@ -277,6 +283,11 @@ export function ParameterGridPanel() {
       setError('最低综合分应在 0 到 100 之间')
       return
     }
+    const riskFree = Number(riskFreeRate)
+    if (!Number.isFinite(riskFree) || riskFree <= -100 || riskFree > 100) {
+      setError('无风险年化应大于 -100% 且不超过 100%')
+      return
+    }
 
     setError(null)
     try {
@@ -295,6 +306,7 @@ export function ParameterGridPanel() {
           states: regimeStates.length > 0 ? regimeStates : undefined,
           min_score: score,
         } : null,
+        risk_free_rate: riskFree / 100,
       })
       if (!adopted) return
       setExperiment(null)
@@ -351,6 +363,7 @@ export function ParameterGridPanel() {
   const robustness = experiment?.robustness
   const robustnessBootstrap = robustness?.bootstrap as Record<string, unknown> | undefined
   const robustnessPermutation = robustness?.mc_permutation as Record<string, unknown> | undefined
+  const candidateMetricsUnavailable = robustness?.time_series_metrics_unavailable === 'candidate_execution'
 
   return (
     <div className="h-full min-h-0 min-w-0 grid grid-cols-1 xl:grid-cols-[20rem_minmax(0,1fr)] gap-3">
@@ -480,6 +493,18 @@ export function ParameterGridPanel() {
             <span className="mb-1.5 block text-xs font-medium text-secondary">持有天数</span>
             <input type="number" min={1} step={1} value={holdingDays} onChange={event => setHoldingDays(event.target.value)} className={INPUT_CLS} />
           </label>
+          <label>
+            <span className="mb-1.5 block text-xs font-medium text-secondary">无风险年化(%)</span>
+            <input
+              type="number"
+              min={-99}
+              max={100}
+              step={0.1}
+              value={riskFreeRate}
+              onChange={event => setRiskFreeRate(event.target.value)}
+              className={INPUT_CLS}
+            />
+          </label>
         </div>
 
         <div className="rounded-btn border border-border bg-elevated/40 p-2.5">
@@ -594,6 +619,13 @@ export function ParameterGridPanel() {
               <div className="rounded-btn border border-border bg-elevated/30 p-3 text-xs text-secondary">实验已取消；下方仅保留已完成场景，未完成场景不应作为比较依据。</div>
             )}
 
+            {experiment && (
+              <div className="flex items-start gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] leading-5 text-secondary">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                <span><b className="font-medium text-warning">样本口径：</b>若股票池来自当前成分且无法证明历史时点成分，参数排名可能含幸存者偏差；只比较同一数据 generation、区间、成本和撮合口径的场景。</span>
+              </div>
+            )}
+
             {bestScenario && (
               <div className="rounded-btn border border-accent/30 bg-accent/5 p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -601,9 +633,25 @@ export function ParameterGridPanel() {
                     <div className="text-xs font-semibold text-foreground">当前最佳场景</div>
                     <ScenarioParams params={bestScenario.params} />
                   </div>
-                  <div className="text-right">
-                    <div className="text-[10px] text-muted">排名 / 得分</div>
-                    <div className="font-mono text-sm font-semibold text-accent num">#{bestScenario.rank} · {formatMetric(bestScenario.score)}</div>
+                  <div className="flex items-center gap-3">
+                    {onUseScenario && (
+                      <button
+                        type="button"
+                        onClick={() => onUseScenario(experiment?.strategy_id || strategyId, bestScenario.params)}
+                        className="inline-flex items-center gap-1 rounded-btn border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent/20"
+                      >
+                        回填策略 <ArrowRight className="h-3 w-3" />
+                      </button>
+                    )}
+                    <div className="text-right">
+                      <div className="text-[10px] text-muted">排名 / 得分</div>
+                      <div className="font-mono text-sm font-semibold text-accent num">#{bestScenario.rank} · {formatMetric(bestScenario.score)}</div>
+                      {bestScenario.pareto_front != null && (
+                        <div className={`mt-1 text-[10px] ${bestScenario.pareto_front === 1 ? 'text-emerald-300' : 'text-muted'}`}>
+                          Pareto {bestScenario.pareto_front === 1 ? '非支配层' : `第 ${bestScenario.pareto_front} 层`}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -625,6 +673,12 @@ export function ParameterGridPanel() {
                   {robustnessBootstrap && <Stat label="Bootstrap 夏普 95% 区间" value={`${formatMetric(robustnessBootstrap.ci_low)} ~ ${formatMetric(robustnessBootstrap.ci_high)}`} />}
                   {robustnessPermutation && <Stat label="置换检验 p 值" value={formatMetric(robustnessPermutation.p_value)} />}
                 </div>
+                {candidateMetricsUnavailable && (
+                  <div className="mt-2 rounded-input border border-warning/30 bg-warning/5 px-3 py-2 text-[10px] leading-4 text-secondary">
+                    <span className="font-medium text-warning">候选样本模式：</span>
+                    最佳场景曲线按退出事件日采样，日频 Bootstrap、置换 Sharpe 和年化/夏普类指标不适用；上方仅保留退出原因等交易级统计。
+                  </div>
+                )}
                 {Array.isArray(robustness.exit_breakdown) && robustness.exit_breakdown.length > 0 && (
                   <div className="mt-3 data-table-scroll">
                     <table className="data-table min-w-[28rem]">
@@ -637,6 +691,14 @@ export function ParameterGridPanel() {
               </div>
             )}
 
+            {experiment && rankedScenarios.length > 1 && (
+              <ParameterGridDiagnostics
+                scenarios={rankedScenarios}
+                objective={experiment.objective}
+                experimentId={experiment.experiment_id}
+              />
+            )}
+
             {rankedScenarios.length > 0 && (
               <div className="overflow-hidden rounded-btn border border-border">
                 <div className="flex items-baseline justify-between gap-2 border-b border-border px-3 py-2.5">
@@ -646,12 +708,19 @@ export function ParameterGridPanel() {
                 <div className="data-table-scroll">
                   <table className="data-table min-w-[48rem]">
                     <thead>
-                      <tr><th>排名</th><th>参数</th><th className="text-right">得分</th><th className="text-right">累计收益</th><th className="text-right">夏普</th><th className="text-right">最大回撤</th><th className="text-right">耗时</th><th>状态</th></tr>
+                      <tr><th>排名</th><th>Pareto</th><th>参数</th><th className="text-right">得分</th><th className="text-right">累计收益</th><th className="text-right">夏普</th><th className="text-right">最大回撤</th><th className="text-right">耗时</th><th>状态</th></tr>
                     </thead>
                     <tbody>
                       {rankedScenarios.map((scenario: ParameterGridScenario) => (
                         <tr key={scenario.scenario_id} className={scenario.scenario_id === experiment?.best_scenario_id ? 'bg-accent/5' : undefined}>
                           <td className="font-mono text-secondary num">{scenario.rank > 0 ? `#${scenario.rank}` : '—'}</td>
+                          <td>
+                            {scenario.pareto_front === 1
+                              ? <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300">P1</span>
+                              : scenario.pareto_front != null
+                                ? <span className="font-mono text-[10px] text-muted">P{scenario.pareto_front}</span>
+                                : <span className="text-muted">—</span>}
+                          </td>
                           <td><ScenarioParams params={scenario.params} /></td>
                           <td className="text-right font-mono text-foreground num">{formatMetric(scenario.score)}</td>
                           <td className={`text-right font-mono num ${Number(scenario.stats.total_return) >= 0 ? 'text-bull' : 'text-bear'}`}>{formatMetric(scenario.stats.total_return, 'total_return')}</td>

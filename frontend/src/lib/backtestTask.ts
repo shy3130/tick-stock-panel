@@ -137,6 +137,8 @@ export function startBacktest(params: {
   mode?: 'position' | 'full'
   holding_days?: number
   regime_filter?: { states?: string[]; min_score?: number } | null
+  benchmark_symbol?: string
+  risk_free_rate?: number
 }): void {
   // 取消之前的任务状态
   if (eventSource) {
@@ -167,6 +169,8 @@ export function startBacktest(params: {
     mode: params.mode,
     holding_days: params.holding_days,
     regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
+    benchmark_symbol: params.benchmark_symbol,
+    risk_free_rate: params.risk_free_rate,
   })
 
   // 存 reconnect 信息 (刷新后用)

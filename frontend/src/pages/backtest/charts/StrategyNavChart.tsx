@@ -1,15 +1,23 @@
 import { useMemo } from 'react'
 import { useECharts } from './useECharts'
 import type { StrategyBacktestResult } from '@/lib/api'
+import { getNavPresentation } from './navPresentation'
 
 interface Props {
   result: StrategyBacktestResult
 }
 
 export function StrategyNavChart({ result }: Props) {
+  const {
+    isCandidateExecution,
+    navLabel,
+    navAxisLabel,
+    allowsBenchmark,
+  } = getNavPresentation(result.stats?.full_kind)
+  const hasBenchmarkLegend = allowsBenchmark && (result.benchmark_curve ?? []).some(row => row.close != null || row.value != null)
+
   const option = useMemo(() => {
     if (!result.equity_curve.length) return null
-
     const moneyFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
     const valueFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     const axisMoneyFmt = (v: number) => {
@@ -21,7 +29,8 @@ export function StrategyNavChart({ result }: Props) {
     const navValues = result.equity_curve.map(r => r.value)
     const benchmarkByDate = new Map((result.benchmark_curve ?? []).map(r => [r.date.slice(0, 10), r.close ?? r.value]))
     const benchmarkValues = dates.map(d => benchmarkByDate.get(d) ?? null)
-    const hasBenchmark = benchmarkValues.some(v => v != null)
+    const hasBenchmark = allowsBenchmark && benchmarkValues.some(v => v != null)
+    const benchmarkName = result.benchmark_curve?.[0]?.name ?? '基准'
     const ddValues = result.drawdown_curve.map(r => r.value * 100)
 
     return {
@@ -53,12 +62,12 @@ export function StrategyNavChart({ result }: Props) {
         {
           type: 'value', gridIndex: 0,
           scale: true,
-          name: hasBenchmark ? '上证点位' : '策略资金',
+          name: hasBenchmark ? `${benchmarkName}点位` : navAxisLabel,
           nameTextStyle: { color: hasBenchmark ? 'rgba(148,163,184,0.55)' : '#64748b', fontSize: 10, padding: [0, 0, 4, 0] },
           axisLabel: {
             color: hasBenchmark ? 'rgba(148,163,184,0.55)' : '#64748b',
             fontSize: 10,
-            formatter: hasBenchmark ? ((v: number) => v.toFixed(0)) : axisMoneyFmt,
+            formatter: hasBenchmark ? ((v: number) => v.toFixed(0)) : (isCandidateExecution ? valueFmt.format : axisMoneyFmt),
           },
           splitLine: { lineStyle: { color: '#1e293b' } },
           axisLine: { show: false },
@@ -124,7 +133,8 @@ export function StrategyNavChart({ result }: Props) {
           for (const p of params) {
             if (p.value == null) continue
             const isDrawdown = p.seriesName === '回撤'
-            const isBenchmark = p.seriesName === '同期上证指数'
+            const isBenchmark = p.seriesName === `同期${benchmarkName}`
+            const isSampleCurve = isCandidateExecution && p.seriesName === navLabel
             html += `<div style="display:flex;justify-content:space-between;gap:16px">
               <span style="color:${p.color}">${p.seriesName}</span>
               <span style="font-family:monospace">${
@@ -132,7 +142,9 @@ export function StrategyNavChart({ result }: Props) {
                   ? `${(p.value as number).toFixed(2)}%`
                   : isBenchmark
                     ? `${valueFmt.format(p.value as number)} 点`
-                    : moneyFmt.format(p.value as number)
+                    : isSampleCurve
+                      ? valueFmt.format(p.value as number)
+                      : moneyFmt.format(p.value as number)
               }</span>
             </div>`
           }
@@ -141,7 +153,7 @@ export function StrategyNavChart({ result }: Props) {
       },
       series: [
         {
-          name: '净值',
+          name: navLabel,
           type: 'line',
           xAxisIndex: 0,
           yAxisIndex: hasBenchmark ? 1 : 0,
@@ -159,7 +171,7 @@ export function StrategyNavChart({ result }: Props) {
           },
         },
         ...(hasBenchmark ? [{
-          name: '同期上证指数',
+          name: `同期${benchmarkName}`,
           type: 'line',
           xAxisIndex: 0,
           yAxisIndex: 0,
@@ -180,7 +192,7 @@ export function StrategyNavChart({ result }: Props) {
         },
       ],
     } as any
-  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id])
+  }, [result.equity_curve, result.drawdown_curve, result.benchmark_curve, result.run_id, isCandidateExecution, navLabel, navAxisLabel, allowsBenchmark])
 
   const chartRef = useECharts(option, [result.run_id])
 
@@ -189,16 +201,16 @@ export function StrategyNavChart({ result }: Props) {
       <div className="flex flex-wrap items-center gap-4 px-4 pb-2">
         <span className="flex items-center gap-1.5 text-[10px] text-secondary">
           <span className="w-3 h-0.5 rounded bg-accent" />
-          策略净值
+          {navLabel}
         </span>
         <span className="flex items-center gap-1.5 text-[10px] text-secondary">
           <span className="w-3 h-0.5 rounded bg-red-400/60" />
           回撤
         </span>
-        {(result.benchmark_curve?.length ?? 0) > 0 && (
+        {hasBenchmarkLegend && (
           <span className="flex items-center gap-1.5 text-[10px] text-secondary">
             <span className="w-3 h-0.5 rounded border-t border-dashed border-slate-400/60" />
-            同期上证指数
+            同期{result.benchmark_curve?.[0]?.name ?? '基准'}
           </span>
         )}
         <span className="ml-auto text-[10px] text-muted">滚轮缩放 · 拖动平移</span>

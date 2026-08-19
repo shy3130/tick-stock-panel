@@ -1,14 +1,16 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
   type StrategyBacktestTrade,
   type StrategyDetail,
   type StrategyParamDef,
+  type StrategyBacktestRequest,
 } from '@/lib/api'
+import { downloadRunReportHtml } from '@/lib/backtestReportDownload'
 import { QK } from '@/lib/queryKeys'
 import { instrumentSearchMeta } from '@/lib/instrumentSearch'
 import { storage } from '@/lib/storage'
@@ -24,6 +26,10 @@ import { DatePicker } from '@/components/DatePicker'
 import { StrategyNavChart } from './charts/StrategyNavChart'
 import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { TradeKlineModal } from './components/TradeKlineModal'
+import { BacktestWarnings } from './components/BacktestWarnings'
+import { ProfessionalDiagnostics } from './components/ProfessionalDiagnostics'
+import { TradeAttributionPanel } from './components/TradeAttributionPanel'
+import { StrategyRobustnessPanel } from './components/StrategyRobustnessPanel'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 
 import type { ScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
@@ -35,6 +41,12 @@ const monthsAgo = (months: number) => {
 }
 const TODAY = formatDate(new Date())
 const THREE_MONTHS_AGO = monthsAgo(3)
+const BENCHMARK_OPTIONS = [
+  { symbol: '000001.INDEX', name: '上证指数' },
+  { symbol: '000300.INDEX', name: '沪深300' },
+  { symbol: '000905.INDEX', name: '中证500' },
+  { symbol: '000852.INDEX', name: '中证1000' },
+] as const
 
 type QuickRangeUnit = 'month' | 'year' | 'all'
 type QuickRangeConfig = { id: string; enabled: boolean; unit: QuickRangeUnit; value: number }
@@ -91,6 +103,14 @@ const INPUT_CLS = 'control w-full text-xs'
 
 const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
 const TRADE_PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100]
+type TradePnlFilter = 'all' | 'profit' | 'loss' | 'flat'
+const TRADE_PNL_FILTER_OPTIONS: { value: TradePnlFilter; label: string }[] = [
+  { value: 'all', label: '全部' },
+  { value: 'profit', label: '盈利' },
+  { value: 'loss', label: '亏损' },
+  { value: 'flat', label: '持平' },
+]
+
 const BADGE_CLS_MAP: Record<string, string> = {
   builtin: 'bg-secondary/10 text-muted border-border',
   ai: 'bg-elevated text-secondary border-border',
@@ -191,18 +211,23 @@ const statValueColor = (v: number | null | undefined) => {
   return v > 0 ? 'hsl(var(--bull))' : 'hsl(var(--bear))'
 }
 
+const EXIT_REASON_DISPLAY: Record<string, { label: string; cls: string }> = {
+  signal: { label: '信号', cls: 'bg-accent/10 text-accent border-accent/30' },
+  stop_loss: { label: '止损', cls: 'bg-danger/10 text-danger border-danger/30' },
+  take_profit: { label: '止盈', cls: 'bg-bull/10 text-bull border-bull/30' },
+  trailing_stop: { label: '移损', cls: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
+  trailing_take_profit: { label: '回撤止盈', cls: 'bg-bull/10 text-bull border-bull/30' },
+  max_hold: { label: '超期', cls: 'bg-warning/10 text-warning border-warning/30' },
+  pending_exit: { label: '待卖', cls: 'bg-warning/10 text-warning border-warning/30' },
+  end: { label: '期末', cls: 'bg-secondary/10 text-secondary border-border' },
+}
+
+function exitReasonLabel(reason: string): string {
+  return EXIT_REASON_DISPLAY[reason]?.label ?? reason
+}
+
 function ExitReasonBadge({ reason }: { reason: string }) {
-  const config: Record<string, { label: string; cls: string }> = {
-    signal: { label: '信号', cls: 'bg-accent/10 text-accent border-accent/30' },
-    stop_loss: { label: '止损', cls: 'bg-danger/10 text-danger border-danger/30' },
-    take_profit: { label: '止盈', cls: 'bg-bull/10 text-bull border-bull/30' },
-    trailing_stop: { label: '移损', cls: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
-    trailing_take_profit: { label: '回撤止盈', cls: 'bg-bull/10 text-bull border-bull/30' },
-    max_hold: { label: '超期', cls: 'bg-warning/10 text-warning border-warning/30' },
-    pending_exit: { label: '待卖', cls: 'bg-warning/10 text-warning border-warning/30' },
-    end: { label: '期末', cls: 'bg-secondary/10 text-secondary border-border' },
-  }
-  const c = config[reason] ?? { label: reason, cls: 'bg-elevated text-muted border-border' }
+  const c = EXIT_REASON_DISPLAY[reason] ?? { label: reason, cls: 'bg-elevated text-muted border-border' }
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${c.cls}`}>{c.label}</span>
   )
@@ -652,14 +677,24 @@ function StockPoolPicker({ value, onChange }: { value: string; onChange: (value:
   )
 }
 
+export interface StrategyParameterBackfill {
+  strategyId: string
+  params: Record<string, number>
+  revision: number
+}
+
 interface StrategyBacktestProps {
   screenerHandoff?: ScreenerBacktestHandoff | null
   onScreenerHandoffApplied?: () => void
+  parameterBackfill?: StrategyParameterBackfill | null
+  onParameterBackfillApplied?: () => void
 }
 
 export function StrategyBacktest({
   screenerHandoff = null,
   onScreenerHandoffApplied,
+  parameterBackfill = null,
+  onParameterBackfillApplied,
 }: StrategyBacktestProps) {
   const [saved] = useState(() => storage.strategyBacktestLast.get(null))
   const [screenerPool] = useState(() => screenerHandoff
@@ -686,6 +721,8 @@ export function StrategyBacktest({
   const [regimeEnabled, setRegimeEnabled] = useState<boolean>(saved?.regimeEnabled ?? false)
   const [regimeStates, setRegimeStates] = useState<string[]>(saved?.regimeStates ?? ['strong', 'lean_strong'])
   const [regimeMinScore, setRegimeMinScore] = useState<string>(saved?.regimeMinScore ?? '')
+  const [benchmarkSymbol, setBenchmarkSymbol] = useState(saved?.benchmarkSymbol ?? '000001.INDEX')
+  const [riskFreeRate, setRiskFreeRate] = useState(saved?.riskFreeRate ?? '0')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [rangeSettingsOpen, setRangeSettingsOpen] = useState(false)
   const [quickRanges, setQuickRanges] = useState(loadQuickRanges)
@@ -698,12 +735,18 @@ export function StrategyBacktest({
   // 跨会话/拉新代码后自动渲染一个可能对应已失效策略的旧结果会造成困惑
   // (切页不卸载组件,内存中的 result 仍保留,无需靠 localStorage 恢复)。
   const [result, setResult] = useState<StrategyBacktestResult | null>(null)
+  const [reportDownloading, setReportDownloading] = useState(false)
+  const [reportDownloadError, setReportDownloadError] = useState('')
   const [resultTab, setResultTab] = useState<'daily' | 'trades' | 'picks'>('daily')
   const [dailyPage, setDailyPage] = useState(0)
   const [tradePage, setTradePage] = useState(0)
   const [tradePageSize, setTradePageSize] = useState(10)
+  const [tradeSymbolQuery, setTradeSymbolQuery] = useState('')
+  const [tradePnlFilter, setTradePnlFilter] = useState<TradePnlFilter>('all')
+  const [tradeExitReasonFilter, setTradeExitReasonFilter] = useState('')
   const [selectedTrade, setSelectedTrade] = useState<StrategyBacktestTrade | null>(null)
   const loadedStrategyRef = useRef<string | null>(null)
+  const pendingParameterBackfillRef = useRef<StrategyParameterBackfill | null>(parameterBackfill)
 
   const strategies = useQuery({
     queryKey: QK.screenerStrategies,
@@ -719,12 +762,29 @@ export function StrategyBacktest({
     if (screenerHandoff) onScreenerHandoffApplied?.()
   }, [onScreenerHandoffApplied, screenerHandoff])
 
+  useEffect(() => {
+    if (!parameterBackfill) return
+    pendingParameterBackfillRef.current = parameterBackfill
+    loadedStrategyRef.current = null
+    setSelectedStrategy(parameterBackfill.strategyId)
+    setSettingsOpen(true)
+    setSettingsTab('params')
+    onParameterBackfillApplied?.()
+  }, [onParameterBackfillApplied, parameterBackfill])
+
   // 校验 localStorage 里保存的上次选中策略是否仍存在(本地开发残留的自定义策略
   // 拉新代码后会失效,导致 strategyGet 一直 404/加载中)。列表就绪后若失效,
   // 连带清除其专属的 params/overrides/result(这些是该策略的运行配置/产物,
   // 策略失效后留着会造成"孤儿"状态:界面显示旧回测结果却无对应策略)。
   useEffect(() => {
     if (strategies.isLoading || strategyList.length === 0) return
+    // 参数回填优先于旧 saved 清理: 挂载同批次里本 effect 闭包看到的
+    // selectedStrategy 仍是旧 saved 值, 若它已失效, 这里排队的
+    // setSelectedStrategy(null) 会覆盖回填 effect 选定的目标(策略列表缓存热时
+    // 静默丢回填)。回填目标在列表中时让位, 由回填 effect 的选择生效;
+    // 目标不在列表(本身失效)时按普通失效清理处理。
+    const pendingBackfill = pendingParameterBackfillRef.current
+    if (pendingBackfill && strategyList.some(st => st.id === pendingBackfill.strategyId)) return
     if (selectedStrategy && !strategyList.some(st => st.id === selectedStrategy)) {
       setSelectedStrategy(null)
       setStrategyParams({})
@@ -760,6 +820,16 @@ export function StrategyBacktest({
     const detail = strategyDetail.data
     if (!detail || loadedStrategyRef.current === detail.id) return
     loadedStrategyRef.current = detail.id
+    const pendingBackfill = pendingParameterBackfillRef.current
+    if (pendingBackfill?.strategyId === detail.id) {
+      setStrategyParams({
+        ...strategyDefaultParams(detail),
+        ...pendingBackfill.params,
+      })
+      setOverrides(buildDefaultOverrides(detail))
+      pendingParameterBackfillRef.current = null
+      return
+    }
     if (saved?.selectedStrategy === detail.id && (saved.params || saved.overrides)) {
       setStrategyParams(saved.params ?? strategyDefaultParams(detail))
       setOverrides(saved.overrides ?? buildDefaultOverrides(detail))
@@ -773,9 +843,13 @@ export function StrategyBacktest({
   useEffect(() => {
     if (backtestTask && !backtestTask.isPending && backtestTask.result) {
       setResult(backtestTask.result)
+      setReportDownloadError('')
       setResultTab('daily')
       setDailyPage(0)
       setTradePage(0)
+      setTradeSymbolQuery('')
+      setTradePnlFilter('all')
+      setTradeExitReasonFilter('')
       storage.strategyBacktestLast.set({
         selectedStrategy,
         symbols,
@@ -795,6 +869,8 @@ export function StrategyBacktest({
         regimeEnabled,
         regimeStates,
         regimeMinScore,
+        benchmarkSymbol,
+        riskFreeRate,
         params: strategyParams,
         overrides,
         result: backtestTask.result,
@@ -807,8 +883,18 @@ export function StrategyBacktest({
     return asOf && (!value || value < asOf) ? asOf : value
   }
 
+  const [validationError, setValidationError] = useState<string | null>(null)
+  // 相关输入变化后清除校验错误,避免误导性旧提示
+  useEffect(() => { setValidationError(null) }, [riskFreeRate])
+
   const handleRun = () => {
     if (!selectedStrategy) return
+    const rfr = Number(riskFreeRate)
+    if (!Number.isFinite(rfr) || rfr <= -100 || rfr > 100) {
+      setValidationError('无风险年化必须为有限数且在 (-100, 100] 范围内')
+      return
+    }
+    setValidationError(null)
     startBacktest({
       strategy_id: selectedStrategy,
       symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
@@ -831,11 +917,14 @@ export function StrategyBacktest({
         states: regimeStates.length > 0 ? regimeStates : undefined,
         min_score: regimeMinScore !== '' && !Number.isNaN(Number(regimeMinScore)) ? Number(regimeMinScore) : undefined,
       } : undefined,
+      benchmark_symbol: benchmarkSymbol,
+      risk_free_rate: rfr / 100,
     })
   }
 
   // 提取统计
   const s = result?.stats
+  const isCandidateExecution = s?.full_kind === 'candidate_execution'
   const pick = (...keys: string[]) => {
     for (const k of keys) {
       if (s && k in s && s[k] != null) return s[k]
@@ -850,11 +939,15 @@ export function StrategyBacktest({
     if (values.length < 2) return null
     return values[values.length - 1] / values[0] - 1
   }, [result?.benchmark_curve])
+  const benchmarkName = result?.benchmark_curve?.[0]?.name
+    ?? BENCHMARK_OPTIONS.find(option => option.symbol === benchmarkSymbol)?.name
+    ?? '基准'
 
   const strategyReturn = pick('total_return') as number | null
-  const excessReturn = strategyReturn != null && benchmarkReturn != null
+  const backendExcess = (s?.excess != null && Number.isFinite(Number(s.excess))) ? Number(s.excess) : null
+  const excessReturn = backendExcess ?? (strategyReturn != null && benchmarkReturn != null
     ? strategyReturn - benchmarkReturn
-    : null
+    : null)
 
   const applyRange = (months: number) => {
     setStart(clampStartToScreenerPool(monthsAgo(months)))
@@ -918,6 +1011,42 @@ export function StrategyBacktest({
     })
   }, [result?.trades])
 
+  const tradeExitReasons = useMemo(() => {
+    const reasons = new Set<string>()
+    for (const trade of sortedTrades) {
+      const reason = String(trade.exit_reason ?? '').trim()
+      if (reason) reasons.add(reason)
+    }
+    return [...reasons].sort((a, b) => a.localeCompare(b))
+  }, [sortedTrades])
+
+  const filteredTrades = useMemo(() => {
+    const keyword = tradeSymbolQuery.trim().toLowerCase()
+    return sortedTrades.filter(trade => {
+      if (keyword) {
+        const symbol = String(trade.symbol ?? '').toLowerCase()
+        const name = String(trade.name ?? '').toLowerCase()
+        if (!symbol.includes(keyword) && !name.includes(keyword)) return false
+      }
+      if (tradePnlFilter !== 'all') {
+        const pnl = Number(trade.pnl_pct)
+        if (!Number.isFinite(pnl)) return false
+        if (tradePnlFilter === 'profit' && !(pnl > 0)) return false
+        if (tradePnlFilter === 'loss' && !(pnl < 0)) return false
+        if (tradePnlFilter === 'flat' && pnl !== 0) return false
+      }
+      if (tradeExitReasonFilter && String(trade.exit_reason ?? '') !== tradeExitReasonFilter) {
+        return false
+      }
+      return true
+    })
+  }, [sortedTrades, tradeSymbolQuery, tradePnlFilter, tradeExitReasonFilter])
+
+  const hasTradeFilters = tradeSymbolQuery.trim() !== ''
+    || tradePnlFilter !== 'all'
+    || tradeExitReasonFilter !== ''
+
+
   const dailyTradeRows = useMemo<DailyTradeRow[]>(() => {
     const rows = new Map<string, Omit<DailyTradeRow, 'cumulativePnl'>>()
     const ensure = (date: string) => {
@@ -950,8 +1079,8 @@ export function StrategyBacktest({
       .reverse()
   }, [result?.trades])
 
-  const tradePageCount = sortedTrades.length
-    ? Math.ceil(sortedTrades.length / tradePageSize)
+  const tradePageCount = filteredTrades.length
+    ? Math.ceil(filteredTrades.length / tradePageSize)
     : 0
   const dailyPageSize = 10
   const dailyPageCount = dailyTradeRows.length
@@ -963,8 +1092,8 @@ export function StrategyBacktest({
   const dailyEnd = Math.min(dailyStart + visibleDailyRows.length, dailyTradeRows.length)
   const safeTradePage = Math.min(tradePage, Math.max(tradePageCount - 1, 0))
   const tradeStart = safeTradePage * tradePageSize
-  const visibleTrades = sortedTrades.slice(tradeStart, tradeStart + tradePageSize)
-  const tradeEnd = Math.min(tradeStart + visibleTrades.length, sortedTrades.length)
+  const visibleTrades = filteredTrades.slice(tradeStart, tradeStart + tradePageSize)
+  const tradeEnd = Math.min(tradeStart + visibleTrades.length, filteredTrades.length)
   const symbolNames = useMemo(() => {
     const names: Record<string, string> = {}
     result?.trades.forEach(t => {
@@ -1036,6 +1165,22 @@ export function StrategyBacktest({
   const selectedStrategySource = detail?.source ?? strategyList.find(st => st.id === selectedStrategy)?.source
   const stockPoolCount = symbols.split(',').map(s => s.trim()).filter(Boolean).length
   const stockPoolSummary = stockPoolCount > 0 ? `股票池 已限定 ${stockPoolCount} 只` : '股票池 全市场'
+  const resultPersisted = result?.persisted !== false
+    && !result?.warnings?.some(warning => warning.startsWith('persistence_failed:'))
+  const handleDownloadReport = async () => {
+    if (!result?.run_id || result.error || !resultPersisted || reportDownloading) return
+    setReportDownloadError('')
+    setReportDownloading(true)
+    try {
+      const full = await api.backtestRunGet(result.run_id)
+      downloadRunReportHtml(full)
+    } catch {
+      setReportDownloadError('完整运行记录暂不可读取，无法下载报告；可继续使用“打印 / PDF”。')
+    } finally {
+      setReportDownloading(false)
+    }
+  }
+
   const resultStartDate = result?.config?.start ?? result?.equity_curve?.[0]?.date ?? start
   const resultEndDate = result?.config?.end ?? result?.equity_curve?.[result.equity_curve.length - 1]?.date ?? end
   const resultTradeDays = result?.equity_curve?.length ?? 0
@@ -1052,11 +1197,39 @@ export function StrategyBacktest({
   ]
     .map(([key, label]) => ({ key, label, value: Number(executionStats[key] ?? 0) }))
     .filter(item => item.value > 0)
+  const robustnessRequest = useMemo<StrategyBacktestRequest | null>(() => {
+    if (!result || result.error || isCandidateExecution) return null
+    const config = result.config ?? {}
+    const sid = String(config.strategy_id ?? result.strategy_info?.id ?? '')
+    if (!sid) return null
+    return {
+      strategy_id: sid,
+      symbols: Array.isArray(config.symbols) ? config.symbols : null,
+      start: config.start == null ? null : String(config.start),
+      end: config.end == null ? null : String(config.end),
+      params: config.params ?? null,
+      overrides: config.overrides ?? null,
+      matching: config.matching,
+      entry_fill: config.entry_fill,
+      exit_fill: config.exit_fill,
+      fees_pct: config.fees_pct,
+      slippage_bps: config.slippage_bps,
+      max_positions: config.max_positions,
+      max_exposure_pct: config.max_exposure_pct,
+      initial_capital: config.initial_capital,
+      position_sizing: config.position_sizing,
+      mode: config.mode,
+      holding_days: config.holding_days,
+      regime_filter: config.regime_filter,
+      benchmark_symbol: config.benchmark_symbol,
+      risk_free_rate: config.risk_free_rate,
+    } as StrategyBacktestRequest
+  }, [result, isCandidateExecution])
 
   return (
     <div className="h-full min-h-0 min-w-0 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)] gap-3">
       {/* 配置面板 */}
-      <section className="panel flex flex-col min-h-0 xl:overflow-y-auto">
+      <section className="backtest-config-panel panel flex flex-col min-h-0 xl:overflow-y-auto">
         <div className="panel-header">
           <div>
             <div className="section-kicker">Parameters</div>
@@ -1261,6 +1434,29 @@ export function StrategyBacktest({
 
         <div className="grid grid-cols-2 gap-2">
           <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5">对比基准</label>
+            <select value={benchmarkSymbol} onChange={event => setBenchmarkSymbol(event.target.value)} className={INPUT_CLS}>
+              {BENCHMARK_OPTIONS.map(option => (
+                <option key={option.symbol} value={option.symbol}>{option.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5">无风险年化(%)</label>
+            <input
+              type="number"
+              min={-99}
+              max={100}
+              step={0.1}
+              value={riskFreeRate}
+              onChange={event => setRiskFreeRate(event.target.value)}
+              className={INPUT_CLS}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">建仓口径</label>
             <select value={entryFill} onChange={e => setEntryFill(e.target.value as any)} className={INPUT_CLS}>
               <option value="open_t+1">次日开盘成交（推荐）</option>
@@ -1344,22 +1540,52 @@ export function StrategyBacktest({
             运行回测
           </button>
         )}
+        {validationError && (
+          <p className="text-[11px] text-danger mt-1.5">{validationError}</p>
+        )}
         </div>
       </section>
 
       {/* 结果面板 */}
-      <section className="panel flex flex-col min-h-0 min-w-0 xl:overflow-y-auto">
+      <section className="backtest-report panel flex flex-col min-h-0 min-w-0 xl:overflow-y-auto">
         <div className="panel-header">
           <div>
             <div className="section-kicker">Results</div>
             <h2 className="section-title">回测结果</h2>
           </div>
-          {isPending && (
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-accent">
-              <span className="status-dot" data-state="live" />
-              运行中
-            </span>
-          )}
+          <div className="no-print flex items-center gap-2">
+            {result && !result.error && result.run_id && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1 rounded-btn border border-border bg-surface px-2 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
+                >
+                  <Printer className="h-3 w-3" />
+                  打印 / PDF
+                </button>
+                {resultPersisted && (
+                  <button
+                    type="button"
+                    onClick={() => { void handleDownloadReport() }}
+                    disabled={reportDownloading}
+                    aria-busy={reportDownloading}
+                    aria-label={reportDownloading ? '报告生成中' : '下载报告'}
+                    className="inline-flex items-center gap-1 rounded-btn border border-border bg-surface px-2 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-50"
+                  >
+                    {reportDownloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileDown className="h-3 w-3" />}
+                    {reportDownloading ? '生成中…' : '下载报告'}
+                  </button>
+                )}
+              </>
+            )}
+            {isPending && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] text-accent">
+                <span className="status-dot" data-state="live" />
+                运行中
+              </span>
+            )}
+          </div>
         </div>
         <div className="panel-body space-y-3">
         {/* 模式切换: 仓位模拟 / 全量模拟 */}
@@ -1420,6 +1646,11 @@ export function StrategyBacktest({
             {backtestTask.error}
           </div>
         )}
+        {reportDownloadError && (
+          <div className="text-sm text-warning bg-warning/10 border border-warning/30 rounded-btn px-3 py-2">
+            {reportDownloadError}
+          </div>
+        )}
 
         {!result && !isPending && (
           <EmptyState
@@ -1474,6 +1705,16 @@ export function StrategyBacktest({
           </motion.div>
         )}
 
+        {result && !result.error && (
+          <BacktestWarnings
+            warnings={[
+              ...(result.warnings ?? []),
+              ...(result.stats?.full_kind === 'candidate_execution' ? ['candidate_return_curve'] : []),
+            ]}
+            dataSnapshot={result.data_snapshot}
+          />
+        )}
+
         {/* 旧全量模拟结果: 固定前瞻收益统计 (兼容历史缓存结果) */}
         {result && !result.error && result.stats && result.stats.mode === 'full' && result.stats.full_kind !== 'candidate_execution' && (
           <motion.div
@@ -1496,11 +1737,12 @@ export function StrategyBacktest({
               <Stat label="平均收益" value={fmtPct(result.stats.avg_return)} color={statValueColor(result.stats.avg_return)} />
               <Stat label="中位数" value={fmtPct(result.stats.median_return)} color={statValueColor(result.stats.median_return)} />
               <Stat label="胜率" value={fmtPct(result.stats.win_rate)} color={statValueColor(result.stats.win_rate)} />
-              <Stat label="盈亏比" value={result.stats.profit_factor != null ? Number(result.stats.profit_factor).toFixed(2) : '—'} />
+              <Stat label="利润因子" value={result.stats.profit_factor != null ? Number(result.stats.profit_factor).toFixed(2) : '—'} />
+              <Stat label="盈亏比" value={result.stats.payoff_ratio != null ? Number(result.stats.payoff_ratio).toFixed(2) : '—'} />
               <Stat label="超额(vs基准)" value={fmtPct(result.stats.excess)} color={statValueColor(result.stats.excess)} />
               <Stat label="夏普" value={result.stats.sharpe != null ? Number(result.stats.sharpe).toFixed(2) : '—'} />
               <Stat label="最大回撤" value={fmtPct(result.stats.max_drawdown)} color={statValueColor(result.stats.max_drawdown)} />
-              <Stat label="累计收益" value={fmtPct(result.stats.total_return)} color={statValueColor(result.stats.total_return)} />
+              <Stat label="样本复利收益" value={fmtPct(result.stats.total_return)} color={statValueColor(result.stats.total_return)} />
             </div>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted">
@@ -1509,13 +1751,14 @@ export function StrategyBacktest({
               <span>日均候选 <b className="text-foreground num">{result.stats.avg_daily_candidates ?? 0}</b></span>
               <span>最佳 <b className="text-bull num">{fmtPct(result.stats.best)}</b></span>
               <span>最差 <b className="text-bear num">{fmtPct(result.stats.worst)}</b></span>
-              <span>基准(上证) <b className="text-foreground num">{fmtPct(result.stats.benchmark_return)}</b></span>
+              <span>基准({benchmarkName}) <b className="text-foreground num">{fmtPct(result.stats.benchmark_return)}</b></span>
             </div>
 
-            {/* 累计超额曲线 (复用 StrategyNavChart) */}
+            {/* 候选样本收益曲线（不是账户净值） */}
             {result.equity_curve.length > 1 && (
               <div className="rounded-btn border border-border p-3">
-                <div className="mb-2 text-xs font-medium text-secondary">累计收益曲线(日均复利)</div>
+                <div className="mb-1 text-xs font-medium text-secondary">候选样本收益曲线（按信号日等权复利）</div>
+                <div className="mb-2 text-[10px] text-warning">非账户净值：不含资金占用、持仓冲突与组合容量约束。</div>
                 <StrategyNavChart result={result} />
               </div>
             )}
@@ -1589,26 +1832,36 @@ export function StrategyBacktest({
 
             {/* 统计卡片 */}
             <div className="rounded-btn border border-border bg-elevated/30 p-3">
-              <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
-                <Stat label="总收益" value={strategyReturn != null ? fmtPct(strategyReturn) : '—'}
-                  color={statValueColor(strategyReturn)} />
-                <Stat label="年化" value={pick('annual_return') != null ? fmtPct(pick('annual_return') as number) : '—'}
-                  color={statValueColor(pick('annual_return') as number)} />
-                <Stat label="同期上证" value={benchmarkReturn != null ? fmtPct(benchmarkReturn) : '—'}
-                  color={statValueColor(benchmarkReturn)} />
-                <Stat label="超额收益" value={excessReturn != null ? fmtPct(excessReturn) : '—'}
-                  color={statValueColor(excessReturn)} />
-                <Stat label={<SharpeLabel />} value={pick('sharpe') != null ? Number(pick('sharpe')).toFixed(2) : '—'} />
-                <Stat label="最大回撤" value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
-                  color="hsl(var(--bear))" />
-                <Stat label="胜率" value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
-                <Stat label="交易数" value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
-                {result.stats.full_kind === 'candidate_execution' ? (
+              {isCandidateExecution ? (
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
+                  <Stat label="样本曲线累计" value={strategyReturn != null ? fmtPct(strategyReturn) : '—'}
+                    color={statValueColor(strategyReturn)} />
+                  <Stat label="样本曲线回撤" value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
+                    color="hsl(var(--bear))" />
+                  <Stat label="胜率" value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
+                  <Stat label="交易数" value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
                   <Stat label="平均持仓" value={pick('avg_duration') != null ? `${Number(pick('avg_duration')).toFixed(1)}天` : '—'} />
-                ) : (
+                  <Stat label="利润因子" value={pick('profit_factor') != null ? Number(pick('profit_factor')).toFixed(2) : '—'} />
+                  <Stat label="盈亏比" value={pick('payoff_ratio') != null ? Number(pick('payoff_ratio')).toFixed(2) : '—'} />
+                </div>
+              ) : (
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
+                  <Stat label="总收益" value={strategyReturn != null ? fmtPct(strategyReturn) : '—'}
+                    color={statValueColor(strategyReturn)} />
+                  <Stat label="年化" value={pick('annual_return') != null ? fmtPct(pick('annual_return') as number) : '—'}
+                    color={statValueColor(pick('annual_return') as number)} />
+                  <Stat label={`同期${benchmarkName}`} value={benchmarkReturn != null ? fmtPct(benchmarkReturn) : '—'}
+                    color={statValueColor(benchmarkReturn)} />
+                  <Stat label="超额收益" value={excessReturn != null ? fmtPct(excessReturn) : '—'}
+                    color={statValueColor(excessReturn)} />
+                  <Stat label={<SharpeLabel />} value={pick('sharpe') != null ? Number(pick('sharpe')).toFixed(2) : '—'} />
+                  <Stat label="最大回撤" value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
+                    color="hsl(var(--bear))" />
+                  <Stat label="胜率" value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
+                  <Stat label="交易数" value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
                   <Stat label="最终权益" value={pick('final_equity') != null ? fmtPrice(pick('final_equity') as number) : '—'} />
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
             {executionSummary.length > 0 && (
@@ -1622,11 +1875,31 @@ export function StrategyBacktest({
               </div>
             )}
 
-            {/* 净值曲线 */}
+            {/* 账户/候选样本曲线 */}
             {result.equity_curve.length > 0 && (
               <div className="rounded-btn border border-border overflow-hidden">
+                <div className="border-b border-border px-3 py-2">
+                  <div className="text-xs font-medium text-secondary">
+                    {result.stats.full_kind === 'candidate_execution' ? '候选样本收益曲线' : '账户净值曲线'}
+                  </div>
+                  {result.stats.full_kind === 'candidate_execution' && (
+                    <div className="mt-0.5 text-[10px] text-warning">按退出日等权复利，不代表可交易账户净值。</div>
+                  )}
+                </div>
                 <StrategyNavChart result={result} />
               </div>
+            )}
+
+            {!isCandidateExecution && <ProfessionalDiagnostics result={result} />}
+            <TradeAttributionPanel attribution={result.attribution} />
+
+            {isCandidateExecution ? (
+              <div className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] leading-5 text-secondary" role="status">
+                <span className="font-medium text-warning">稳健性时间序列分析不适用</span>
+                <span className="ml-2">候选样本曲线仅按退出事件日采样，不能生成分段 Sharpe、Bootstrap、置换或 Walk-Forward 指标；请切换至仓位模拟。</span>
+              </div>
+            ) : robustnessRequest && (
+              <StrategyRobustnessPanel key={result.run_id} request={robustnessRequest} />
             )}
 
             {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && (
@@ -1749,98 +2022,194 @@ export function StrategyBacktest({
                 )}
 
                 {resultTab === 'trades' && (
-                  <div className="data-table-scroll">
-                    <table className="data-table min-w-[960px]">
-                      <thead className="bg-elevated">
-                        <tr className="text-left text-secondary">
-                          <th className="px-4 py-2.5 font-medium">标的</th>
-                          <th className="px-4 py-2.5 font-medium">买入</th>
-                          <th className="px-4 py-2.5 font-medium">卖出</th>
-                          <th className="px-4 py-2.5 font-medium text-right">仓位 / 手数</th>
-                          <th className="px-4 py-2.5 font-medium text-right">单票盈亏</th>
-                          <th className="px-4 py-2.5 font-medium text-right">持仓</th>
-                          <th className="px-4 py-2.5 font-medium">原因</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleTrades.map((t: StrategyBacktestTrade, i: number) => (
-                          <tr key={`${t.symbol}-${t.entry_date}-${tradeStart + i}`} className="border-t border-border hover:bg-elevated/50 transition-colors group">
-                            <td className="px-4 py-2.5">
-                              <div className="font-medium text-foreground group-hover:text-accent transition-colors">
-                                {t.name || t.symbol}
-                              </div>
-                              <div className="mt-0.5 font-mono text-[11px] text-muted">{t.symbol}</div>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="buy" />
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <TradeLegCell trade={t} side="sell" />
-                            </td>
-                            <td className="px-4 py-2.5 text-right">
-                              <div className="num text-foreground">{fmtPct(t.position_pct, 2)}</div>
-                              <div className="mt-0.5 text-[11px] text-muted">
-                                <span className="num">{fmtLots(t.lots)}</span> 手
-                                <span className="ml-1 num">{fmtShares(t.shares)}</span> 股
-                              </div>
-                            </td>
-                            <td className={`px-4 py-2.5 text-right num ${priceColorClass(t.pnl_amount ?? t.pnl_pct)}`}>
-                              <div>{fmtSignedMoney(t.pnl_amount)}</div>
-                              <div className="mt-0.5 text-[11px]">{fmtPct(t.pnl_pct)}</div>
-                            </td>
-                            <td className="px-4 py-2.5 text-right num text-secondary">
-                              <div>{t.duration} 天</div>
-                              {!!t.blocked_exit_days && <div className="mt-0.5 text-[11px] text-warning">阻塞 {t.blocked_exit_days} 天</div>}
-                            </td>
-                            <td className="px-4 py-2.5"><ExitReasonBadge reason={t.exit_reason} /></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {sortedTrades.length > 0 && (
-                      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-muted">
-                        <span>
-                          显示 {tradeStart + 1}-{tradeEnd} 条 / 共 {sortedTrades.length} 条
-                        </span>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="flex items-center gap-1.5">
-                            <span>每页</span>
-                            <select
-                              value={tradePageSize}
-                              onChange={e => {
-                                setTradePageSize(Number(e.target.value))
-                                setTradePage(0)
-                              }}
-                              className="rounded-btn border border-border bg-surface px-2 py-1 text-xs text-secondary focus:outline-none focus:border-accent"
-                            >
-                              {TRADE_PAGE_SIZE_OPTIONS.map(size => (
-                                <option key={size} value={size}>{size}</option>
-                              ))}
-                            </select>
-                            <span>条</span>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setTradePage(p => Math.max(0, p - 1))}
-                            disabled={safeTradePage <= 0}
-                            className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
-                          >
-                            上一页
-                          </button>
-                          <span className="num text-secondary">
-                            {safeTradePage + 1} / {tradePageCount}
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+                      <div className="relative min-w-[11rem] flex-1 sm:max-w-xs">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden="true" />
+                        <input
+                          value={tradeSymbolQuery}
+                          onChange={e => {
+                            setTradeSymbolQuery(e.target.value)
+                            setTradePage(0)
+                          }}
+                          placeholder="代码 / 名称"
+                          aria-label="按标的代码或名称筛选交易"
+                          className="control w-full pl-7 text-xs"
+                        />
+                      </div>
+                      <label className="flex items-center gap-1.5 text-[11px] text-muted">
+                        <span>盈亏</span>
+                        <select
+                          value={tradePnlFilter}
+                          onChange={e => {
+                            const next = e.target.value
+                            if (next === 'all' || next === 'profit' || next === 'loss' || next === 'flat') {
+                              setTradePnlFilter(next)
+                              setTradePage(0)
+                            }
+                          }}
+                          aria-label="按盈亏方向筛选交易"
+                          className="rounded-btn border border-border bg-surface px-2 py-1 text-xs text-secondary focus:outline-none focus:border-accent"
+                        >
+                          {TRADE_PNL_FILTER_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-[11px] text-muted">
+                        <span>退出原因</span>
+                        <select
+                          value={tradeExitReasonFilter}
+                          onChange={e => {
+                            setTradeExitReasonFilter(e.target.value)
+                            setTradePage(0)
+                          }}
+                          aria-label="按退出原因筛选交易"
+                          className="rounded-btn border border-border bg-surface px-2 py-1 text-xs text-secondary focus:outline-none focus:border-accent"
+                        >
+                          <option value="">全部</option>
+                          {tradeExitReasons.map(reason => (
+                            <option key={reason} value={reason}>
+                              {exitReasonLabel(reason)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {hasTradeFilters && (
+                        <>
+                          <span className="text-[11px] text-muted" aria-live="polite">
+                            命中 <b className="font-mono text-secondary num">{filteredTrades.length}</b>
+                            {' / '}共 <b className="font-mono text-secondary num">{sortedTrades.length}</b>
                           </span>
                           <button
                             type="button"
-                            onClick={() => setTradePage(p => Math.min(tradePageCount - 1, p + 1))}
-                            disabled={safeTradePage >= tradePageCount - 1}
-                            className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+                            onClick={() => {
+                              setTradeSymbolQuery('')
+                              setTradePnlFilter('all')
+                              setTradeExitReasonFilter('')
+                              setTradePage(0)
+                            }}
+                            className="inline-flex items-center gap-1 rounded-btn border border-border bg-surface px-2 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
                           >
-                            下一页
+                            <X className="h-3 w-3" aria-hidden="true" />
+                            清除筛选
                           </button>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="data-table-scroll">
+                      <table className="data-table min-w-[960px]">
+                        <thead className="bg-elevated">
+                          <tr className="text-left text-secondary">
+                            <th className="px-4 py-2.5 font-medium">标的</th>
+                            <th className="px-4 py-2.5 font-medium">买入</th>
+                            <th className="px-4 py-2.5 font-medium">卖出</th>
+                            <th className="px-4 py-2.5 font-medium text-right">仓位 / 手数</th>
+                            <th className="px-4 py-2.5 font-medium text-right">单票盈亏</th>
+                            <th className="px-4 py-2.5 font-medium text-right">持仓</th>
+                            <th className="px-4 py-2.5 font-medium">原因</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visibleTrades.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="px-4 py-8 text-center text-xs text-muted">
+                                {hasTradeFilters
+                                  ? '没有符合筛选条件的交易，可调整条件或清除筛选。'
+                                  : '暂无交易明细'}
+                              </td>
+                            </tr>
+                          ) : visibleTrades.map((t: StrategyBacktestTrade, i: number) => (
+                            <tr
+                              key={`${t.symbol}-${t.entry_date}-${tradeStart + i}`}
+                              className="border-t border-border hover:bg-elevated/50 transition-colors group cursor-pointer"
+                              onClick={() => setSelectedTrade(t)}
+                            >
+                              <td className="px-4 py-2.5">
+                                <div className="font-medium text-foreground group-hover:text-accent transition-colors">
+                                  {t.name || t.symbol}
+                                </div>
+                                <div className="mt-0.5 font-mono text-[11px] text-muted">{t.symbol}</div>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <TradeLegCell trade={t} side="buy" />
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <TradeLegCell trade={t} side="sell" />
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <div className="num text-foreground">{fmtPct(t.position_pct, 2)}</div>
+                                <div className="mt-0.5 text-[11px] text-muted">
+                                  <span className="num">{fmtLots(t.lots)}</span> 手
+                                  <span className="ml-1 num">{fmtShares(t.shares)}</span> 股
+                                </div>
+                              </td>
+                              <td className={`px-4 py-2.5 text-right num ${priceColorClass(t.pnl_amount ?? t.pnl_pct)}`}>
+                                <div>{fmtSignedMoney(t.pnl_amount)}</div>
+                                <div className="mt-0.5 text-[11px]">{fmtPct(t.pnl_pct)}</div>
+                              </td>
+                              <td className="px-4 py-2.5 text-right num text-secondary">
+                                <div>{t.duration} 天</div>
+                                {!!t.blocked_exit_days && <div className="mt-0.5 text-[11px] text-warning">阻塞 {t.blocked_exit_days} 天</div>}
+                              </td>
+                              <td className="px-4 py-2.5"><ExitReasonBadge reason={t.exit_reason} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {sortedTrades.length > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 text-xs text-muted">
+                          <span aria-live="polite">
+                            {filteredTrades.length === 0
+                              ? (hasTradeFilters
+                                  ? `命中 0 条 / 共 ${sortedTrades.length} 条`
+                                  : '共 0 条')
+                              : hasTradeFilters
+                                ? `显示 ${tradeStart + 1}-${tradeEnd} 条 / 命中 ${filteredTrades.length} 条（共 ${sortedTrades.length} 条）`
+                                : `显示 ${tradeStart + 1}-${tradeEnd} 条 / 共 ${sortedTrades.length} 条`}
+                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="flex items-center gap-1.5">
+                              <span>每页</span>
+                              <select
+                                value={tradePageSize}
+                                onChange={e => {
+                                  setTradePageSize(Number(e.target.value))
+                                  setTradePage(0)
+                                }}
+                                aria-label="交易明细每页条数"
+                                className="rounded-btn border border-border bg-surface px-2 py-1 text-xs text-secondary focus:outline-none focus:border-accent"
+                              >
+                                {TRADE_PAGE_SIZE_OPTIONS.map(size => (
+                                  <option key={size} value={size}>{size}</option>
+                                ))}
+                              </select>
+                              <span>条</span>
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setTradePage(p => Math.max(0, p - 1))}
+                              disabled={safeTradePage <= 0}
+                              className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+                            >
+                              上一页
+                            </button>
+                            <span className="num text-secondary">
+                              {tradePageCount === 0 ? '0 / 0' : `${safeTradePage + 1} / ${tradePageCount}`}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setTradePage(p => Math.min(tradePageCount - 1, p + 1))}
+                              disabled={safeTradePage >= tradePageCount - 1 || tradePageCount === 0}
+                              className="rounded-btn border border-border bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+                            >
+                              下一页
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 )}
 

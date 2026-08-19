@@ -369,3 +369,42 @@ textarea:focus-visible {
     max-width: 100%;
   }
 }
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .backtest-report,
+  .backtest-report * {
+    visibility: visible;
+  }
+
+  .backtest-config-panel {
+    display: none !important;
+  }
+
+  .backtest-report {
+    position: static;
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .backtest-report .panel-body {
+    overflow: visible !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

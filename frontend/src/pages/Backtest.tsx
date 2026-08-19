@@ -7,13 +7,22 @@ import {
 } from '@/lib/screenerBacktestHandoff'
 import { PageHeader } from '@/components/PageHeader'
 import { FactorBacktest } from './backtest/FactorBacktest'
-import { StrategyBacktest } from './backtest/StrategyBacktest'
+import { StrategyBacktest, type StrategyParameterBackfill } from './backtest/StrategyBacktest'
 import { CompositeStrategyBuilder } from './backtest/CompositeStrategyBuilder'
 import { ParameterGridPanel } from './backtest/ParameterGridPanel'
-import { BarChart3, FlaskConical, GitMerge, Grid3X3 } from 'lucide-react'
+import { RunHistoryPanel } from './backtest/RunHistoryPanel'
+import { BarChart3, FlaskConical, GitMerge, Grid3X3, History, type LucideIcon } from 'lucide-react'
 
-const TABS = ['factor', 'strategy', 'composite', 'grid'] as const
+const TABS = ['factor', 'strategy', 'composite', 'grid', 'history'] as const
 type Tab = typeof TABS[number]
+
+const TAB_ICONS: Record<Tab, LucideIcon> = {
+  factor: BarChart3,
+  strategy: FlaskConical,
+  composite: GitMerge,
+  grid: Grid3X3,
+  history: History,
+}
 
 const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   factor: {
@@ -36,6 +45,11 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
     subtitle: '批量比较有限参数组合',
     hint: '运行本地历史场景，查看排序、稳健性和过拟合风险。',
   },
+  history: {
+    title: '运行历史',
+    subtitle: '持久化回测记录的检索与对比',
+    hint: '搜索、收藏、打标签，选择 2~4 次运行做指标与净值对比。',
+  },
 }
 
 export function Backtest() {
@@ -47,6 +61,7 @@ export function Backtest() {
     const savedTab = storage.backtestActiveTab.get('strategy')
     return TABS.includes(savedTab) ? savedTab : 'strategy'
   })
+  const [parameterBackfill, setParameterBackfill] = useState<StrategyParameterBackfill | null>(null)
 
   useEffect(() => {
     if (screenerHandoff) clearScreenerBacktestHandoff()
@@ -56,18 +71,18 @@ export function Backtest() {
     storage.backtestActiveTab.set(tab)
   }
   const clearScreenerHandoff = useCallback(() => setScreenerHandoff(null), [])
+  const useGridScenario = useCallback((strategyId: string, params: Record<string, number>) => {
+    setParameterBackfill({ strategyId, params, revision: Date.now() })
+    setActiveTab('strategy')
+    storage.backtestActiveTab.set('strategy')
+  }, [])
+  const clearParameterBackfill = useCallback(() => setParameterBackfill(null), [])
 
   const modeSwitch = (
     <div className="workspace-toolbar !border-0 !bg-transparent !px-0 !py-0 !mb-0" role="group" aria-label="回测模式">
       <div className="inline-flex rounded-btn border border-border bg-elevated p-0.5">
         {TABS.map(tab => {
-          const Icon = tab === 'factor'
-            ? BarChart3
-            : tab === 'strategy'
-              ? FlaskConical
-              : tab === 'composite'
-                ? GitMerge
-                : Grid3X3
+          const Icon = TAB_ICONS[tab]
           const active = activeTab === tab
           return (
             <button
@@ -115,12 +130,15 @@ export function Backtest() {
             <StrategyBacktest
               screenerHandoff={screenerHandoff?.target === 'strategy' ? screenerHandoff : null}
               onScreenerHandoffApplied={clearScreenerHandoff}
+              parameterBackfill={parameterBackfill}
+              onParameterBackfillApplied={clearParameterBackfill}
             />
           )}
           {activeTab === 'composite' && <CompositeStrategyBuilder />}
           <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
-            <ParameterGridPanel />
+            <ParameterGridPanel onUseScenario={useGridScenario} />
           </div>
+          {activeTab === 'history' && <RunHistoryPanel />}
         </div>
       </div>
     </div>

@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, BarChart3, Clock } from 'lucide-react'
+import { Play, BarChart3, Clock, Printer, FileDown, Loader2, Square } from 'lucide-react'
 import { api, type FactorColumn, type GroupStat } from '@/lib/api'
-import { startFactorBacktest, useFactorBacktestTask } from '@/lib/factorBacktestTask'
+import { downloadRunReportHtml } from '@/lib/backtestReportDownload'
+import {
+  startFactorBacktest,
+  stopFactorBacktest,
+  tryReconnectFactorBacktest,
+  useFactorBacktestTask,
+} from '@/lib/factorBacktestTask'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
@@ -11,6 +17,8 @@ import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearch
 import { FactorICChart } from './charts/FactorICChart'
 import type { ScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 import { FactorGroupNavChart } from './charts/FactorGroupNavChart'
+import { BacktestWarnings } from './components/BacktestWarnings'
+import { FactorDiagnostics } from './components/FactorDiagnostics'
 
 const formatDate = (date: Date) => date.toISOString().slice(0, 10)
 const monthsAgo = (months: number) => {
@@ -20,6 +28,12 @@ const monthsAgo = (months: number) => {
 }
 const TODAY = formatDate(new Date())
 const THREE_MONTHS_AGO = monthsAgo(3)
+
+/** 成本占比：无符号、4 位小数（费用量级通常在万分位） */
+const fmtCostPct = (v: number | null | undefined) => {
+  if (v == null || Number.isNaN(v)) return '—'
+  return `${(v * 100).toFixed(4)}%`
+}
 
 const INPUT_CLS = 'control w-full text-xs'
 const appendUniqueSymbol = (symbolsText: string, symbol: string) => {
@@ -46,42 +60,50 @@ function StatCard({ label, value, highlight }: {
   )
 }
 
-function LoadingPanel({ symbolsText }: { symbolsText: string }) {
+function LoadingPanel({
+  symbolsText,
+  progress,
+  onCancel,
+}: {
+  symbolsText: string
+  progress?: { label: string; completed: number; total: number } | null
+  onCancel: () => void
+}) {
+  const percent = progress?.total
+    ? Math.min(100, Math.max(0, Math.round(progress.completed / progress.total * 100)))
+    : 0
+  const stageLabels = ['加载因子面板', '整理有效样本', '计算调仓期收益', '计算截面 IC', '计算分层组合', '汇总多空与风险指标']
+  const currentStage = progress?.label ?? '正在连接计算任务'
+  const currentStageIndex = Math.max(0, stageLabels.indexOf(currentStage))
+
   return (
     <div className="space-y-3">
       <div className="panel">
         <div className="panel-body flex items-center justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <div className="section-title">正在计算因子分析</div>
-            <div className="mt-1 text-xs text-muted">{symbolsText} · 完成后会一次性刷新 IC、分层收益和净值曲线。</div>
-          </div>
-          <div className="h-7 w-7 rounded-full border-2 border-border border-t-accent animate-spin" />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        {['读取因子', '计算 IC', '分层回测', '汇总指标'].map(item => (
-          <div key={item} className="rounded-btn border border-border bg-elevated px-3 py-2">
-            <div className="h-2 w-10 rounded bg-border animate-pulse" />
-            <div className="mt-2 text-xs text-secondary">{item}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="panel">
-        <div className="panel-header">
-          <span className="section-title">分层净值预览</span>
-          <span className="text-[11px] text-muted">等待后端返回完整结果</span>
-        </div>
-        <div className="panel-body">
-          <div className="h-[220px] rounded-btn border border-border bg-elevated/60 p-4">
-            <div className="flex h-full items-end gap-2 opacity-60">
-              {[46, 38, 54, 50, 64, 58, 74, 68, 84, 78, 90, 86].map((h, i) => (
-                <div key={i} className="flex-1 rounded-t bg-border animate-pulse" style={{ height: `${h}%` }} />
-              ))}
+            <div className="mt-1 truncate text-xs text-muted">{symbolsText} · {currentStage}</div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-elevated" role="progressbar" aria-label="因子回测进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+              <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${percent}%` }} />
             </div>
           </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="num text-[11px] text-muted">{percent}%</span>
+            <button type="button" onClick={onCancel} className="btn-secondary !px-2 !py-1.5 text-[11px]" aria-label="取消因子分析">
+              <Square className="h-3 w-3 fill-current" />
+              取消
+            </button>
+          </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        {stageLabels.map((item, index) => (
+          <div key={item} className={`rounded-btn border px-3 py-2 ${index <= currentStageIndex ? 'border-accent/35 bg-accent/5' : 'border-border bg-elevated'}`}>
+            <div className={`h-2 w-10 rounded ${index <= currentStageIndex ? 'bg-accent/70' : 'bg-border'}`} />
+            <div className={`mt-2 text-xs ${index <= currentStageIndex ? 'text-secondary' : 'text-muted'}`}>{item}</div>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -108,12 +130,25 @@ export function FactorBacktest({
   const [nGroups, setNGroups] = useState(() => restoredPayload?.n_groups ?? 5)
   const [weight, setWeight] = useState<'equal' | 'factor_weight'>(() => restoredPayload?.weight ?? 'equal')
   const [fees, setFees] = useState(() => String((restoredPayload?.fees_pct ?? 0.0002) * 10000))
+  const [riskFreeRate, setRiskFreeRate] = useState(() => {
+    const v = (restoredPayload?.risk_free_rate ?? 0) * 100
+    return String(Math.round(v * 100) / 100)
+  })
+  const [validationError, setValidationError] = useState('')
+  const [reportDownloading, setReportDownloading] = useState(false)
+  const [reportDownloadError, setReportDownloadError] = useState('')
   const result = factorTask?.result ?? null
   const isPending = factorTask?.isPending ?? false
+  const resultPersisted = result?.persisted !== false
+    && !result?.warnings?.some(warning => warning.startsWith('persistence_failed:'))
 
   useEffect(() => {
     if (screenerHandoff) onScreenerHandoffApplied?.()
   }, [onScreenerHandoffApplied, screenerHandoff])
+
+  useEffect(() => {
+    tryReconnectFactorBacktest()
+  }, [])
 
   const columns = useQuery({
     queryKey: ['backtest-factor-columns'],
@@ -140,7 +175,32 @@ export function FactorBacktest({
     return asOf && (!value || value < asOf) ? asOf : value
   }
 
+  const handleDownloadReport = async () => {
+    if (!result?.run_id || result.error || !resultPersisted || reportDownloading) return
+    setReportDownloadError('')
+    setReportDownloading(true)
+    try {
+      const full = await api.backtestRunGet(result.run_id)
+      downloadRunReportHtml(full)
+    } catch {
+      setReportDownloadError('完整运行记录暂不可读取，无法下载报告；可继续使用“打印 / PDF”。')
+    } finally {
+      setReportDownloading(false)
+    }
+  }
+
+  const handleCancel = () => {
+    void stopFactorBacktest()
+  }
+
   const handleRun = () => {
+    const num = Number(riskFreeRate)
+    if (!Number.isFinite(num) || num <= -100 || num > 100) {
+      setValidationError('无风险利率需为 (-100, 100] 范围内的数值')
+      return
+    }
+    setValidationError('')
+    setReportDownloadError('')
     void startFactorBacktest({
       factor_name: factorName,
       symbols: symbols ? symbols.split(',').map(s => s.trim()).filter(Boolean) : null,
@@ -150,6 +210,7 @@ export function FactorBacktest({
       rebalance: 'daily',
       weight,
       fees_pct: Number(fees) / 10000,
+      risk_free_rate: num / 100,
     })
   }
 
@@ -188,7 +249,7 @@ export function FactorBacktest({
 
   return (
     <div className="h-full min-h-0 min-w-0 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)] gap-3">
-      <section className="panel flex flex-col min-h-0 xl:overflow-y-auto">
+      <section className="backtest-config-panel panel flex flex-col min-h-0 xl:overflow-y-auto">
         <div className="panel-header">
           <div>
             <div className="section-kicker">Parameters</div>
@@ -309,6 +370,18 @@ export function FactorBacktest({
               <input type="number" value={fees} onChange={e => setFees(e.target.value)}
                 className={INPUT_CLS} />
             </div>
+            <div>
+              <label className="text-xs font-medium text-secondary block mb-1.5">无风险年化(%)</label>
+              <input
+                type="number"
+                min={-99}
+                max={100}
+                step={0.1}
+                value={riskFreeRate}
+                onChange={event => { setRiskFreeRate(event.target.value); setValidationError('') }}
+                className={INPUT_CLS}
+              />
+            </div>
           </div>
 
           <button
@@ -322,12 +395,37 @@ export function FactorBacktest({
         </div>
       </section>
 
-      <section className="panel flex flex-col min-h-0 min-w-0 xl:overflow-y-auto">
+      <section className="backtest-report panel flex flex-col min-h-0 min-w-0 xl:overflow-y-auto">
         <div className="panel-header">
           <div>
             <div className="section-kicker">Results</div>
             <h2 className="section-title">分析结果</h2>
           </div>
+          {result && !result.error && result.run_id && (
+            <div className="no-print flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1 rounded-btn border border-border bg-surface px-2 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
+              >
+                <Printer className="h-3 w-3" />
+                打印 / PDF
+              </button>
+              {resultPersisted && (
+                <button
+                  type="button"
+                  onClick={() => { void handleDownloadReport() }}
+                  disabled={reportDownloading}
+                  aria-busy={reportDownloading}
+                  aria-label={reportDownloading ? '报告生成中' : '下载报告'}
+                  className="inline-flex items-center gap-1 rounded-btn border border-border bg-surface px-2 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-50"
+                >
+                  {reportDownloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileDown className="h-3 w-3" />}
+                  {reportDownloading ? '生成中…' : '下载报告'}
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div className="panel-body space-y-3">
         {result?.error && !result.ic_mean && (
@@ -341,6 +439,16 @@ export function FactorBacktest({
             {factorTask.error}
           </div>
         )}
+        {validationError && (
+          <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
+            {validationError}
+          </div>
+        )}
+        {reportDownloadError && (
+          <div className="text-sm text-warning bg-warning/10 border border-warning/30 rounded-btn px-3 py-2">
+            {reportDownloadError}
+          </div>
+        )}
 
         {!result && !isPending && (
           <EmptyState
@@ -351,13 +459,25 @@ export function FactorBacktest({
         )}
 
         {isPending && result && (
-          <div className="rounded-btn border border-border bg-elevated px-3 py-2 text-xs text-secondary">
-            正在重新计算，当前暂时展示上一次因子分析结果，完成后会自动替换。
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-btn border border-border bg-elevated px-3 py-2 text-xs text-secondary">
+            <span>正在重新计算，当前暂时展示上一次结果 · {factorTask?.progress?.label ?? '等待服务端任务'}</span>
+            <button type="button" onClick={handleCancel} className="btn-secondary !px-2 !py-1 text-[11px]" aria-label="取消因子分析">
+              <Square className="h-3 w-3 fill-current" />
+              取消
+            </button>
           </div>
         )}
 
         {isPending && !result && (
-          <LoadingPanel symbolsText={factorTask?.payload.symbols?.length ? `${factorTask.payload.symbols.length} 只标的` : '全市场 · 当前区间'} />
+          <LoadingPanel
+            symbolsText={factorTask?.payload.symbols?.length ? `${factorTask.payload.symbols.length} 只标的` : '全市场 · 当前区间'}
+            progress={factorTask?.progress}
+            onCancel={handleCancel}
+          />
+        )}
+
+        {result && !result.error && (
+          <BacktestWarnings warnings={result.warnings} dataSnapshot={result.data_snapshot} />
         )}
 
         {result && result.ic_mean != null && (
@@ -401,6 +521,7 @@ export function FactorBacktest({
                 <StatCard label="IC 胜率" value={result.ic_win_rate != null ? fmtPct(result.ic_win_rate) : null} />
               </div>
             </div>
+            <FactorDiagnostics result={result} />
 
             {result.ic_series.length > 0 && (
               <div className="rounded-btn border border-border overflow-hidden">
@@ -416,7 +537,8 @@ export function FactorBacktest({
             {result.group_nav.length > 0 && (
               <div className="rounded-btn border border-border overflow-hidden">
                 <div className="border-b border-border px-3 py-2">
-                  <span className="text-xs font-medium text-secondary">分层净值曲线</span>
+                  <span className="text-xs font-medium text-secondary">扣费后分层净值曲线</span>
+                  <span className="ml-2 text-[10px] text-muted">含手续费、滑点与调仓换手</span>
                 </div>
                 <div className="p-2">
                   <FactorGroupNavChart result={result} />
@@ -435,6 +557,8 @@ export function FactorBacktest({
                       <th className="text-right">最大回撤</th>
                       <th className="text-right">夏普</th>
                       <th className="text-right">胜率</th>
+                      <th className="text-right">平均换手</th>
+                      <th className="text-right">总成本</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -448,8 +572,10 @@ export function FactorBacktest({
                           {fmtPct(g.annual_return)}
                         </td>
                         <td className="text-right num text-bear">{fmtPct(g.max_drawdown)}</td>
-                        <td className="text-right num">{g.sharpe?.toFixed(2)}</td>
+                        <td className="text-right num">{g.sharpe != null ? g.sharpe.toFixed(2) : '—'}</td>
                         <td className="text-right num">{fmtPct(g.win_rate)}</td>
+                        <td className="text-right num">{fmtPct(g.avg_turnover)}</td>
+                        <td className="text-right num text-muted">{fmtCostPct(g.total_cost)}</td>
                       </tr>
                     ))}
                     {result.long_short_stats?.total_return != null && (
@@ -460,18 +586,25 @@ export function FactorBacktest({
                         <td className={`text-right num font-medium ${priceColorClass(result.long_short_stats.total_return)}`}>
                           {fmtPct(result.long_short_stats.total_return as number)}
                         </td>
-                        <td className="text-right num">—</td>
+                        <td className={`text-right num ${priceColorClass(result.long_short_stats.annual_return ?? null)}`}>
+                          {fmtPct(result.long_short_stats.annual_return)}
+                        </td>
                         <td className="text-right num text-bear">
                           {fmtPct(result.long_short_stats.max_drawdown as number)}
                         </td>
+                        <td className="text-right num">
+                          {result.long_short_stats.sharpe?.toFixed(2) ?? '—'}
+                        </td>
                         <td className="text-right num">—</td>
-                        <td className="text-right num">—</td>
+                        <td className="text-right num">{fmtPct(result.long_short_stats.avg_turnover)}</td>
+                        <td className="text-right num text-muted">{fmtCostPct(result.long_short_stats.total_cost)}</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
             )}
+
 
             <div className="flex flex-wrap items-center gap-4 text-[11px] text-muted">
               <span className="num">{result.n_symbols} 只标的</span>

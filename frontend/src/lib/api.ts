@@ -1027,14 +1027,73 @@ export interface FactorColumn {
   desc: string
 }
 
+export interface BacktestMetricContext {
+  version: string
+  return_frequency: 'daily' | 'weekly' | 'monthly' | 'custom'
+  periods_per_year: number
+  risk_free_rate?: number
+  risk_free_rate_per_period?: number
+  std_ddof: number
+}
+
+export interface BacktestDataSnapshot {
+  canonical_generation?: string | null
+  canonical_start_date?: string | null
+  canonical_end_date?: string | null
+  local_overlay_latest_date?: string | null
+  data_start: string
+  data_cutoff: string
+  adjustment_mode: string
+  adjustment_generation?: string | null
+  source_generations?: Record<string, string>
+  universe_definition?: Record<string, unknown>
+  universe_as_of?: string | null
+  snapshot_hash: string
+}
+
 export interface GroupStat {
   group: number
   label: string
   total_return: number
-  annual_return: number
+  annual_return: number | null
   max_drawdown: number
-  sharpe: number
+  sharpe: number | null
   win_rate: number
+  /** 平均单期换手（标准单边口径）。追加字段：旧持久化结果可能缺失 */
+  avg_turnover?: number
+  /** 总换手（标准单边口径）。追加字段：旧持久化结果可能缺失 */
+  total_turnover?: number
+  /** 全期间交易成本合计（占期初净值比例）。追加字段：旧持久化结果可能缺失 */
+  total_cost?: number
+}
+
+/** 多空组合统计。追加字段：旧持久化结果可能缺失 */
+export interface LongShortStats {
+  total_return?: number
+  max_drawdown?: number
+  top_group?: string
+  bottom_group?: string
+  avg_turnover?: number
+  total_turnover?: number
+  total_cost?: number
+  annual_return?: number | null
+  sharpe?: number | null
+  annual_volatility?: number | null
+  calmar?: number | null
+  metric_context?: BacktestMetricContext
+  sortino?: number | null
+  omega?: number | null
+  tail_ratio?: number | null
+  ulcer_index?: number | null
+  value_at_risk?: number | null
+  conditional_value_at_risk?: number | null
+  downside_deviation?: number | null
+}
+
+/** 分层单期换手序列数据点：date + 各分组单期换手（标准单边口径） */
+export interface GroupTurnoverPoint {
+  date: string
+  [group: string]: number | string
 }
 
 export interface FactorBacktestResult {
@@ -1047,7 +1106,9 @@ export interface FactorBacktestResult {
   ic_series: { date: string; ic: number }[]
   group_stats: GroupStat[]
   group_nav: Record<string, any>[]
-  long_short_stats: Record<string, any>
+  /** 分组单期换手序列。追加字段：旧持久化结果可能缺失 */
+  group_turnover?: GroupTurnoverPoint[]
+  long_short_stats: LongShortStats
   long_short_nav: { date: string; value: number }[]
   elapsed_ms: number
   n_symbols: number
@@ -1055,6 +1116,12 @@ export interface FactorBacktestResult {
   error: string | null
   methodology_context?: string
   warnings?: string[]
+  data_snapshot?: BacktestDataSnapshot
+  metric_context?: BacktestMetricContext
+  engine_version?: string
+  random_seed?: number | null
+  /** 后端是否已将完整结果保存为 BacktestRun；false 时不能下载 Run 报告。 */
+  persisted?: boolean
 }
 
 // ===== Strategy Backtest =====
@@ -1078,6 +1145,175 @@ export interface StrategyBacktestTrade {
   entry_signal_date?: string | null
   exit_signal_date?: string | null
   blocked_exit_days?: number
+  /** 可观测持仓窗口内日 K 最低价相对入场价的最大不利偏移；<=0；open_t+1 含入场日、close_t 自下一交易日起，退出日不计入；日内区间口径的诊断量，不代表可成交实现收益；旧结果/不可得为 null */
+  mae_pct?: number | null
+  /** 可观测持仓窗口内日 K 最高价相对入场价的最大有利偏移；>=0；观测窗口口径同 mae_pct */
+  mfe_pct?: number | null
+}
+
+export interface StrategyBacktestRequest {
+  strategy_id: string
+  symbols?: string[] | null
+  start?: string | null
+  end?: string | null
+  params?: Record<string, any> | null
+  overrides?: Record<string, any> | null
+  matching?: 'close_t' | 'open_t+1'
+  entry_fill?: 'close_t' | 'open_t+1' | null
+  exit_fill?: 'close_t' | 'open_t+1' | null
+  fees_pct?: number
+  slippage_bps?: number
+  max_positions?: number
+  max_exposure_pct?: number
+  initial_capital?: number
+  position_sizing?: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
+  mode?: 'position' | 'full'
+  holding_days?: number
+  regime_filter?: { states?: string[]; min_score?: number } | null
+  benchmark_symbol?: '000001.INDEX' | '000300.INDEX' | '000905.INDEX' | '000852.INDEX'
+  risk_free_rate?: number
+}
+
+export interface WalkForwardFold {
+  train_start: string
+  train_end: string
+  oos_start: string
+  oos_end: string
+  n_candidates: number
+  selected_label: string
+  selected_params: Record<string, any>
+  train_stats: Record<string, any>
+  oos_stats: Record<string, any>
+  degradation: number | null
+  oos_curve: Array<{ date: string; value: number }>
+  error?: string | null
+}
+
+export interface WalkForwardResult {
+  /** 未启用标记: false = 未运行 (结构化空块); 旧持久化响应缺省该字段 — undefined 视为已启用 */
+  enabled?: boolean
+  scheme: string
+  selection_metric: string
+  candidate_space: string
+  n_candidates: number
+  /** 执行预算元数据 (enabled 响应才有): 请求候选数 / 截断后实际候选数 / 额外回测执行上限 */
+  requested_candidates?: number
+  effective_candidates?: number
+  max_executions?: number
+  warning?: string | null
+  folds: WalkForwardFold[]
+  stitched_curve: Array<{ date: string; value: number }>
+  summary: {
+    metric: string
+    n_folds: number
+    positive_return_folds: number
+    positive_fold_ratio: number | null
+    worst_fold_return: number | null
+    mean_oos_return: number | null
+    mean_degradation: number | null
+    oos_total_return: number | null
+    oos_sharpe: number | null
+    oos_max_drawdown: number | null
+    metric_context?: Record<string, any>
+  }
+  param_drift: {
+    n_distinct_param_sets: number
+    distinct_labels: string[]
+    params: Record<string, Array<number | null>>
+  }
+}
+
+export interface StrategyRobustnessResult {
+  run_id: string
+  full_stats: Record<string, any>
+  random_seed: number
+  segment_stability: {
+    folds: Array<{ start: string; end: string; stats: Record<string, any>; error?: string | null }>
+    summary: { metric: string; n_folds: number; mean: number; std: number; worst: number; positive_folds: number }
+  }
+  walk_forward?: WalkForwardResult
+  bootstrap?: {
+    sharpe: number
+    ci_low: number
+    ci_high: number
+    ci: number
+    n_boot: number
+  }
+  mc_permutation?: {
+    p_value: number
+    n_perm: number
+    observed_sharpe: number
+  }
+  parameter_perturbation?: {
+    fraction: number
+    baseline: Record<string, number | null>
+    cases: Array<{
+      param: string
+      label: string
+      direction: 'down' | 'up'
+      base_value: number
+      value: number
+      stats: Record<string, number | null>
+      error?: string | null
+    }>
+    reason?: string | null
+  }
+  exit_breakdown: Array<{
+    exit_reason: string
+    n: number
+    win_rate: number
+    avg_pnl_pct: number
+    total_pnl_pct: number
+  }>
+  warnings?: string[]
+  data_snapshot?: BacktestDataSnapshot
+  methodology_context?: string
+}
+
+export interface BrinsonAttributionGroup {
+  group: string
+  portfolio_weight: number | null
+  benchmark_weight: number | null
+  portfolio_return: number | null
+  benchmark_return: number | null
+  allocation: number | null
+  selection: number | null
+  interaction: number | null
+  total_effect: number | null
+}
+
+export interface TradeIndustryAttribution {
+  status: string
+  reason?: string
+  scope: string
+  classification_note: string
+  input_trades: number
+  classified_trades: number
+  capital_coverage: number | null
+  warnings: string[]
+  brinson: {
+    status: string
+    normalized: boolean
+    portfolio_return: number | null
+    benchmark_return: number | null
+    excess_return: number | null
+    allocation: number | null
+    selection: number | null
+    interaction: number | null
+    total_effect: number | null
+    groups: BrinsonAttributionGroup[]
+  } | null
+  fama_french: {
+    status: string
+    reason: string
+    detail: string
+    alpha: number | null
+    betas: Record<string, number>
+    contributions: Record<string, number>
+    r_squared: number | null
+    residual_volatility: number | null
+    observations: number
+  }
 }
 
 export interface StrategyBacktestResult {
@@ -1112,10 +1348,170 @@ export interface StrategyBacktestResult {
     max_hold_days: number | null
     source: string
   }
+  attribution?: TradeIndustryAttribution | null
   elapsed_ms: number
   error: string | null
   methodology_context?: string
   warnings?: string[]
+  data_snapshot?: BacktestDataSnapshot
+  metric_context?: BacktestMetricContext
+  engine_version?: string
+  random_seed?: number | null
+  /** 后端是否已将完整结果保存为 BacktestRun；false 时不能下载 Run 报告。 */
+  persisted?: boolean
+}
+
+// ===== Backtest Run 持久化历史 (/api/backtest/runs) =====
+// 后端契约: backend/app/backtest/run_store.py (schema_version=1)。
+// Run 为不可变事实记录，仅 favorite/label 可经 PATCH 修改。
+
+export type BacktestRunKind = 'strategy' | 'factor' | 'composite'
+
+export interface BacktestRunSubject {
+  id: string
+  name: string
+  hash: string
+}
+
+/** 列表/比较用的轻量摘要 — 不携带曲线与交易明细 */
+export interface BacktestRunSummary {
+  run_id: string
+  kind: BacktestRunKind
+  status: string
+  created_at: string
+  subject: BacktestRunSubject
+  start: string | null
+  end: string | null
+  symbols_count: number | null
+  favorite: boolean
+  label: string
+  source_run_id: string | null
+  /** 头部指标子集(策略: total_return/sharpe 等; 因子: ic_mean/ir) */
+  stats: Record<string, number>
+  n_trades: number
+  n_points: number
+  has_factor_result: boolean
+  has_csv_export: boolean
+  warnings_count: number
+}
+
+export interface BacktestRunListResponse {
+  items: BacktestRunSummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/**
+ * 完整 Run — GET /api/backtest/runs/{run_id}。
+ * 曲线/交易明细可能很大; 旧引擎记录 equity 键, 新引擎为 value 键, 两者均需兼容读取。
+ */
+export interface BacktestRun {
+  schema_version: number
+  run_id: string
+  kind: BacktestRunKind
+  created_at: string
+  status: string
+  subject: BacktestRunSubject
+  config: Record<string, any>
+  data_snapshot: Record<string, any>
+  benchmark: { symbol?: string | null; name?: string | null } | null
+  cost_model: Record<string, any>
+  metric_context: Record<string, any>
+  random_seed: number | null
+  engine_version: string
+  stats: Record<string, any>
+  equity_curve: { date: string; value?: number; equity?: number; cash?: number; positions?: number; exposure?: number }[]
+  drawdown_curve: { date: string; value?: number }[]
+  benchmark_curve: { date: string; value?: number; close?: number; name?: string; symbol?: string }[]
+  trades: Record<string, any>[]
+  per_symbol_stats: Record<string, any>[]
+  factor_result: Record<string, any> | null
+  attribution?: TradeIndustryAttribution | null
+  warnings: string[]
+  favorite: boolean
+  label: string
+  source_run_id: string | null
+}
+
+/** 配置差异条目 — 相对 baseline 的单条差异；op: added(新增)/removed(移除)/changed(修改) */
+export interface BacktestRunConfigDiffEntry {
+  path: string
+  op: 'added' | 'removed' | 'changed'
+  before: unknown
+  after: unknown
+}
+
+/** 单个 candidate 相对 baseline 的配置差异（条目受限，total 完整） */
+export interface BacktestRunConfigDiffCandidate {
+  run_id: string
+  total: number
+  truncated: boolean
+  entries: BacktestRunConfigDiffEntry[]
+}
+
+export interface BacktestRunConfigDiff {
+  baseline_run_id: string
+  candidates: BacktestRunConfigDiffCandidate[]
+}
+
+/** 交易样本行（新增/消失） */
+export interface BacktestRunTradeSample {
+  symbol: string | null
+  entry_date: string | null
+  exit_date: string | null
+  shares: number | null
+  entry_value: number | null
+  exit_value: number | null
+  pnl_pct: number | null
+}
+
+/** 共同交易样本：份额/金额任一不同则 value_differs=true（仍属共同） */
+export interface BacktestRunTradeCommonSample {
+  symbol: string | null
+  entry_date: string | null
+  exit_date: string | null
+  value_differs: boolean
+  baseline: { shares: number | null; entry_value: number | null; exit_value: number | null; pnl_pct: number | null }
+  candidate: { shares: number | null; entry_value: number | null; exit_value: number | null; pnl_pct: number | null }
+}
+
+
+export interface BacktestRunTradeSummaryCandidate {
+  run_id: string
+  n_trades: number
+  common: number
+  common_value_diff: number
+  added: number
+  removed: number
+  samples: {
+    common: BacktestRunTradeCommonSample[]
+    added: BacktestRunTradeSample[]
+    removed: BacktestRunTradeSample[]
+  }
+}
+
+export interface BacktestRunTradeSummary {
+  baseline_run_id: string
+  baseline_n_trades: number
+  candidates: BacktestRunTradeSummaryCandidate[]
+}
+
+/** POST /api/backtest/runs/compare 响应 — 指标矩阵 + 原值曲线 + 可比性警告 + 配置/交易差异 */
+export interface BacktestRunComparison {
+  runs: BacktestRunSummary[]
+  metric_matrix: Record<string, Record<string, number | null>>
+  curves: {
+    run_id: string
+    kind: BacktestRunKind
+    equity_curve: BacktestRun['equity_curve']
+    benchmark_curve: BacktestRun['benchmark_curve']
+  }[]
+  warnings: string[]
+  /** 相对第一个 run (baseline) 的递归配置差异 — additive 字段，旧后端响应可能缺省 */
+  config_diff?: BacktestRunConfigDiff
+  /** 相对 baseline 的交易集合差异（共同/新增/消失）— additive 字段，旧后端响应可能缺省 */
+  trade_summary?: BacktestRunTradeSummary
 }
 
 // ===== Strategy experiments / cross-section / signal scorecard =====
@@ -1141,6 +1537,7 @@ export interface ParameterGridRequest {
   matching?: 'close_t' | 'open_t+1'
   holding_days?: number
   regime_filter?: { states?: string[]; min_score?: number } | null
+  risk_free_rate?: number
 }
 
 export interface ParameterGridLaunchResponse {
@@ -1161,6 +1558,8 @@ export interface ParameterGridScenario {
   rank: number
   error: string | null
   elapsed_ms: number
+  /** 严格三目标 Pareto 层：1 为非支配层；旧实验或不合格场景可能缺失。 */
+  pareto_front?: number | null
 }
 
 export interface ParameterGridExperiment {
@@ -2613,30 +3012,34 @@ export const api = {
     weight?: 'equal' | 'factor_weight'
     fees_pct?: number
     slippage_bps?: number
+    risk_free_rate?: number
   }) =>
     request<FactorBacktestResult>('/api/backtest/factor/run', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
-  strategyBacktestRun: (payload: {
-    strategy_id: string
-    symbols?: string[] | null
-    start?: string | null
-    end?: string | null
-    params?: Record<string, any> | null
-    overrides?: Record<string, any> | null
-    matching?: 'close_t' | 'open_t+1'
-    entry_fill?: 'close_t' | 'open_t+1' | null
-    exit_fill?: 'close_t' | 'open_t+1' | null
-    fees_pct?: number
-    slippage_bps?: number
-    max_positions?: number
-    initial_capital?: number
-    position_sizing?: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
-    regime_filter?: { states?: string[]; min_score?: number } | null
-  }) =>
+  strategyBacktestRun: (payload: StrategyBacktestRequest) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  strategyRobustness: (
+    payload: StrategyBacktestRequest & {
+      n_folds?: number
+      bootstrap?: boolean
+      mc_permutation?: boolean
+      n_boot?: number
+      n_perm?: number
+      seed?: number | null
+      parameter_perturbation?: boolean
+      perturbation_pct?: number
+      max_perturbed_params?: number
+      walk_forward_enabled?: boolean
+    },
+  ) =>
+    request<StrategyRobustnessResult>('/api/backtest/strategy/robustness', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -2659,6 +3062,46 @@ export const api = {
       `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}/cancel`,
       { method: 'POST' },
     ),
+
+  // ===== Backtest Run 持久化历史 =====
+  backtestRuns: (opts?: { kind?: BacktestRunKind; favorite?: boolean; query?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    if (opts?.kind) qs.set('kind', opts.kind)
+    if (opts?.favorite != null) qs.set('favorite', String(opts.favorite))
+    if (opts?.query) qs.set('query', opts.query)
+    if (opts?.limit != null) qs.set('limit', String(opts.limit))
+    if (opts?.offset != null) qs.set('offset', String(opts.offset))
+    const suffix = qs.toString()
+    return request<BacktestRunListResponse>(`/api/backtest/runs${suffix ? `?${suffix}` : ''}`)
+  },
+
+  backtestRunGet: (runId: string) =>
+    request<BacktestRun>(`/api/backtest/runs/${encodeURIComponent(runId)}`),
+
+  /** 仅 favorite/label 可变, 后端拒绝其他字段 */
+  backtestRunPatch: (runId: string, body: { favorite?: boolean; label?: string }) =>
+    request<BacktestRun>(`/api/backtest/runs/${encodeURIComponent(runId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  /** 旧 run_card 只读迁移项会被后端 403 拒绝 */
+  backtestRunDelete: (runId: string) =>
+    request<{ ok: boolean }>(`/api/backtest/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
+
+  backtestRunsCompare: (runIds: string[]) =>
+    request<BacktestRunComparison>('/api/backtest/runs/compare', {
+      method: 'POST',
+      body: JSON.stringify({ run_ids: runIds }),
+    }),
+
+  /** 按原 config 重新运行, 返回带 source_run_id 的新 Run */
+  backtestRunRerun: (runId: string) =>
+    request<BacktestRun>(`/api/backtest/runs/${encodeURIComponent(runId)}/rerun`, { method: 'POST' }),
+
+  /** 导出为浏览器直接下载 (Content-Disposition: attachment), 无需 request 封装 */
+  backtestRunExportUrl: (runId: string, fmt: 'json' | 'csv') =>
+    `/api/backtest/runs/${encodeURIComponent(runId)}/export?fmt=${fmt}`,
 
   pipelineRun: () => request<{ job_id: string; reused: boolean }>(
     '/api/pipeline/run', { method: 'POST' },

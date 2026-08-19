@@ -83,7 +83,7 @@ export const storage = {
   /** 策略回测快捷区间按钮配置 */
   strategyBacktestQuickRanges: kv<unknown>('strategy-backtest-quick-ranges'),
   /** 回测工作台上次打开的模式 */
-  backtestActiveTab: kv<'factor' | 'strategy' | 'composite' | 'grid'>('backtest-active-tab'),
+  backtestActiveTab: kv<'factor' | 'strategy' | 'composite' | 'grid' | 'history'>('backtest-active-tab'),
 
   /** 参数网格最近一次实验；路由重入后据此恢复服务端持久化结果 */
   parameterGridLastExperimentId: kv<string | null>('parameter-grid-last-experiment-id'),
@@ -100,6 +100,7 @@ export const storage = {
       weight?: 'equal' | 'factor_weight'
       fees_pct?: number
       slippage_bps?: number
+      risk_free_rate?: number
     }
     result: FactorBacktestResult | null
   } | null>('factor-backtest-last'),
@@ -125,6 +126,8 @@ export const storage = {
     regimeEnabled?: boolean
     regimeStates?: string[]
     regimeMinScore?: string
+    benchmarkSymbol?: string
+    riskFreeRate?: string
     params?: Record<string, any>
     overrides?: Record<string, any>
     result: any
