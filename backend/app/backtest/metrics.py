@@ -34,10 +34,15 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
 __all__ = [
+    "MetricContext",
+    "annualized_return",
+    "annualized_sharpe",
     "bootstrap_confidence_interval",
     "calmar_ratio",
     "conditional_value_at_risk",
@@ -49,6 +54,7 @@ __all__ = [
     "payoff_ratio",
     "performance_metrics",
     "profit_factor",
+    "relative_performance_metrics",
     "sortino_ratio",
     "tail_ratio",
     "trade_duration_stats",
@@ -56,6 +62,53 @@ __all__ = [
     "value_at_risk",
     "win_loss_streak",
 ]
+
+ReturnFrequency = Literal["daily", "weekly", "monthly"]
+_PERIODS_PER_YEAR: dict[ReturnFrequency, int] = {
+    "daily": 252,
+    "weekly": 52,
+    "monthly": 12,
+}
+
+
+@dataclass(frozen=True)
+class MetricContext:
+    """回测指标的唯一频率与年化口径。
+
+    ``risk_free_rate`` 是年化有效利率；计算周期超额收益时按复利折算为
+    当前频率。``periods_per_year`` 只由 ``return_frequency`` 派生，调用方
+    不得单独覆盖。
+    """
+
+    return_frequency: ReturnFrequency = "daily"
+    risk_free_rate: float = 0.0
+    std_ddof: int = 1
+    version: str = "1.0"
+
+    def __post_init__(self) -> None:
+        if self.return_frequency not in _PERIODS_PER_YEAR:
+            raise ValueError(f"unsupported return_frequency: {self.return_frequency}")
+        if not math.isfinite(float(self.risk_free_rate)) or self.risk_free_rate <= -1.0:
+            raise ValueError("risk_free_rate must be finite and greater than -1")
+        if self.std_ddof != 1:
+            raise ValueError("std_ddof must be 1")
+
+    @property
+    def periods_per_year(self) -> int:
+        return _PERIODS_PER_YEAR[self.return_frequency]
+
+    @property
+    def period_risk_free_rate(self) -> float:
+        return (1.0 + float(self.risk_free_rate)) ** (1.0 / self.periods_per_year) - 1.0
+
+    def to_dict(self) -> dict:
+        return {
+            "version": self.version,
+            "return_frequency": self.return_frequency,
+            "periods_per_year": self.periods_per_year,
+            "risk_free_rate": float(self.risk_free_rate),
+            "std_ddof": self.std_ddof,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +137,48 @@ def _clean_series(series) -> np.ndarray | None:
         return None
     arr = arr[np.isfinite(arr)]
     return arr if arr.size > 0 else None
+
+def annualized_return(returns, context: MetricContext) -> float | None:
+    """按 ``MetricContext`` 的真实收益频率复利年化。"""
+    arr = _clean_series(returns)
+    if arr is None:
+        return None
+    total_growth = float(np.prod(1.0 + arr))
+    if total_growth <= 0.0:
+        return -1.0
+    return total_growth ** (context.periods_per_year / arr.size) - 1.0
+
+
+def annualized_sharpe(returns, context: MetricContext) -> float | None:
+    """使用样本标准差(``ddof=1``)计算年化 Sharpe。"""
+    arr = _clean_series(returns)
+    if arr is None or arr.size <= context.std_ddof:
+        return None
+    excess = arr - context.period_risk_free_rate
+    std = float(np.std(excess, ddof=context.std_ddof))
+    if std <= 0.0:
+        return None
+    return float(np.mean(excess) / std * math.sqrt(context.periods_per_year))
+
+def _annualized_return_for_periods(returns: np.ndarray, periods_per_year: int) -> float | None:
+    total_growth = float(np.prod(1.0 + returns))
+    if total_growth <= 0.0:
+        return -1.0
+    return total_growth ** (float(periods_per_year) / returns.size) - 1.0
+
+
+def _annualized_sharpe_for_periods(
+    returns: np.ndarray,
+    periods_per_year: int,
+    period_risk_free: float,
+) -> float | None:
+    if returns.size <= 1:
+        return None
+    excess = returns - float(period_risk_free)
+    std = float(np.std(excess, ddof=1))
+    if std <= 0.0:
+        return None
+    return float(np.mean(excess) / std * math.sqrt(float(periods_per_year)))
 
 
 # ---------------------------------------------------------------------------
@@ -517,6 +612,10 @@ def bootstrap_confidence_interval(
         return insufficient
 
     rng = np.random.default_rng(seed)
+
+
+
+
     n = arr.size
     # 一次性生成重采样索引矩阵, 再逐行应用统计量 (统计量为任意可调用对象, 无法向量化)。
     idx = rng.integers(0, n, size=(int(n_bootstrap), n))
@@ -547,8 +646,77 @@ def bootstrap_confidence_interval(
         "n_bootstrap": int(valid.size),
         "n": int(n),
     }
+def relative_performance_metrics(
+    portfolio_returns,
+    benchmark_returns,
+    context: MetricContext,
+) -> dict[str, float | None]:
+    """同频、同日期组合/基准收益的相对绩效指标。
 
+    两个序列按调用方已对齐的顺序成对清洗；不在此处做日期连接。Alpha、
+    跟踪误差和信息比率使用 ``MetricContext`` 的频率与 ``ddof=1`` 年化，
+    避免与绝对收益指标出现第二套口径。
+    """
+    portfolio = np.asarray(portfolio_returns, dtype=float).ravel()
+    benchmark = np.asarray(benchmark_returns, dtype=float).ravel()
+    n = min(portfolio.size, benchmark.size)
+    if n < 2:
+        return {
+            "alpha": None,
+            "beta": None,
+            "tracking_error": None,
+            "information_ratio": None,
+            "benchmark_correlation": None,
+        }
+    portfolio = portfolio[:n]
+    benchmark = benchmark[:n]
+    valid = np.isfinite(portfolio) & np.isfinite(benchmark)
+    portfolio = portfolio[valid]
+    benchmark = benchmark[valid]
+    if portfolio.size < 2:
+        return {
+            "alpha": None,
+            "beta": None,
+            "tracking_error": None,
+            "information_ratio": None,
+            "benchmark_correlation": None,
+        }
 
+    excess_portfolio = portfolio - context.period_risk_free_rate
+    excess_benchmark = benchmark - context.period_risk_free_rate
+    benchmark_var = float(np.var(excess_benchmark, ddof=context.std_ddof))
+    beta = (
+        float(np.cov(excess_portfolio, excess_benchmark, ddof=context.std_ddof)[0, 1] / benchmark_var)
+        if benchmark_var > 0
+        else None
+    )
+    alpha = (
+        float(np.mean(excess_portfolio - beta * excess_benchmark) * context.periods_per_year)
+        if beta is not None
+        else None
+    )
+    active = portfolio - benchmark
+    active_std = float(np.std(active, ddof=context.std_ddof))
+    tracking_error = active_std * math.sqrt(context.periods_per_year)
+    information_ratio = (
+        float(np.mean(active) / active_std * math.sqrt(context.periods_per_year))
+        if active_std > 0
+        else None
+    )
+    portfolio_std = float(np.std(portfolio, ddof=context.std_ddof))
+    benchmark_std = float(np.std(benchmark, ddof=context.std_ddof))
+    correlation = (
+        float(np.corrcoef(portfolio, benchmark)[0, 1])
+        if portfolio_std > 0 and benchmark_std > 0
+        else None
+    )
+    return {
+        "alpha": _finite_or_none(alpha),
+        "beta": _finite_or_none(beta),
+        "tracking_error": _finite_or_none(tracking_error),
+        "information_ratio": _finite_or_none(information_ratio),
+        "benchmark_correlation": _finite_or_none(correlation),
+    }
 def _safe_statistic(statistic: Callable[[np.ndarray], float], arr: np.ndarray) -> float | None:
     """对原始样本应用统计量, 异常 / 非有限一律映射为 None。"""
     try:
@@ -567,49 +735,79 @@ def performance_metrics(
     pnls=None,
     durations=None,
     positions=None,
-    periods_per_year: int = 252,
-    risk_free: float = 0.0,
-    threshold: float = 0.0,
+    maes=None,
+    mfes=None,
+    periods_per_year: int | None = None,
+    risk_free: float | None = None,
+    threshold: float | None = None,
+    *,
+    context: MetricContext | None = None,
 ) -> dict:
     """一次性计算回测绩效 / 风险指标全集。
 
-    分两组:
+    新调用方必须传 ``MetricContext``；保留 ``periods_per_year`` /
+    ``risk_free`` 仅用于兼容既有独立工具调用。两套口径不得同时传入。
+    ``MetricContext.risk_free_rate`` 为年化有效利率，内部会换算为每期利率。
 
-    * **收益路径类** (来自 ``returns``, 周期收益率序列): Sortino、Omega、
-      tail ratio、最大回撤、Calmar、Ulcer、VaR、CVaR、下行偏差。
-    * **交易类** (来自 ``pnls`` / ``durations`` / ``positions``, 均可缺省):
-      盈亏因子、盈亏比、期望值、连胜/连亏、持仓时长、暴露度。
-
-    任何输入缺省时对应字段为 ``None``; 全部缺省返回 ``status="insufficient_data"``。
-
-    Args:
-        returns: 周期收益率序列 (路径类指标的输入)。
-        pnls: 逐笔盈亏序列 (交易类指标输入)。
-        durations: 逐笔持仓周期数。
-        positions: 逐周期/逐笔持仓标记 (0/1 或权重)。
-        periods_per_year: 年化系数 (路径类比率年化用)。
-        risk_free: 每周期无风险利率 (Sortino 分子)。
-        threshold: Sortino 的 MAR (``None`` 时取 ``risk_free``); Omega 的门槛。
-
-    Returns:
-        指标字典; 所有数值字段经 fail-soft 处理, 未定义时为 ``None``。
+    收益路径类指标来自 ``returns``；交易类指标来自 ``pnls`` /
+    ``durations`` / ``positions``。``maes`` / ``mfes`` 为逐笔可观测持仓窗口的
+    MAE/MFE (日 K 日内区间相对 entry_price 的偏移, 非成交可实现收益;
+    元素可为 None — 剔除后聚合, 全空不生成键)。输入缺省时对应字段不生成。
     """
-    out: dict = {"status": "insufficient_data"}
+    if context is not None and (periods_per_year is not None or risk_free is not None):
+        raise ValueError("MetricContext cannot be combined with legacy annualization arguments")
+
+    if context is not None:
+        annual_periods = context.periods_per_year
+        period_risk_free = context.period_risk_free_rate
+        metric_context = context.to_dict()
+    else:
+        annual_periods = int(periods_per_year or 252)
+        period_risk_free = float(risk_free or 0.0)
+        frequency = {252: "daily", 52: "weekly", 12: "monthly"}.get(annual_periods, "custom")
+        metric_context = {
+            "version": "legacy",
+            "return_frequency": frequency,
+            "periods_per_year": annual_periods,
+            "risk_free_rate_per_period": period_risk_free,
+            "std_ddof": 1,
+        }
+
+    mar = period_risk_free if threshold is None else float(threshold)
+    out: dict = {"status": "insufficient_data", "metric_context": metric_context}
     has_any = False
 
     rarr = _clean_series(returns)
     if rarr is not None and rarr.size > 0:
         has_any = True
+        annual_ret = (
+            annualized_return(rarr, context)
+            if context is not None
+            else _annualized_return_for_periods(rarr, annual_periods)
+        )
+        sharpe = (
+            annualized_sharpe(rarr, context)
+            if context is not None
+            else _annualized_sharpe_for_periods(rarr, annual_periods, period_risk_free)
+        )
         out.update(
             {
-                "downside_deviation": _finite_or_none(downside_deviation(rarr, threshold)),
-                "sortino": _finite_or_none(
-                    sortino_ratio(rarr, periods_per_year, risk_free, threshold)
+                "annual_return": _finite_or_none(annual_ret),
+                "sharpe": _finite_or_none(sharpe),
+                "annual_volatility": _finite_or_none(
+                    float(np.std(rarr, ddof=metric_context["std_ddof"]))
+                    * math.sqrt(annual_periods)
+                    if rarr.size > metric_context["std_ddof"]
+                    else None
                 ),
-                "omega": _finite_or_none(omega_ratio(rarr, threshold)),
+                "downside_deviation": _finite_or_none(downside_deviation(rarr, mar)),
+                "sortino": _finite_or_none(
+                    sortino_ratio(rarr, annual_periods, period_risk_free, mar)
+                ),
+                "omega": _finite_or_none(omega_ratio(rarr, mar)),
                 "tail_ratio": _finite_or_none(tail_ratio(rarr)),
                 "max_drawdown": _finite_or_none(max_drawdown(rarr)),
-                "calmar": _finite_or_none(calmar_ratio(rarr, periods_per_year)),
+                "calmar": _finite_or_none(calmar_ratio(rarr, annual_periods)),
                 "ulcer_index": _finite_or_none(ulcer_index(rarr)),
                 "value_at_risk": _finite_or_none(value_at_risk(rarr)),
                 "conditional_value_at_risk": _finite_or_none(conditional_value_at_risk(rarr)),
@@ -632,6 +830,18 @@ def performance_metrics(
     if darr is not None and darr.size > 0:
         has_any = True
         out["trade_duration"] = trade_duration_stats(darr)
+
+    mae_arr = _clean_series(maes)
+    if mae_arr is not None and mae_arr.size > 0:
+        has_any = True
+        out["avg_mae_pct"] = _finite_or_none(float(np.mean(mae_arr)))
+        out["worst_mae_pct"] = _finite_or_none(float(np.min(mae_arr)))
+
+    mfe_arr = _clean_series(mfes)
+    if mfe_arr is not None and mfe_arr.size > 0:
+        has_any = True
+        out["avg_mfe_pct"] = _finite_or_none(float(np.mean(mfe_arr)))
+        out["best_mfe_pct"] = _finite_or_none(float(np.max(mfe_arr)))
 
     exarr = _clean_series(positions)
     if exarr is not None and exarr.size > 0:

@@ -1,6 +1,25 @@
 """因子回测服务 — IC/IR 分析 + 分层回测 + 多空组合。
 
 纯 Polars 向量化实现，无 pandas 依赖。
+
+分层与多空的费用/换手口径（目标权重模型）:
+- 每个调仓日按组内目标权重计算持仓与当期毛收益 gross = Σ w_i × r_i;
+  equal 权重为 1/n, factor_weight 为 |因子值| 归一 (|f_i| / Σ|f_j|)。
+  factor_weight 既往版本未实现（恒按等权计算）; 本实现定义其语义为绝对值
+  归一，非有限因子值按 0 处理，组内因子值全为 0 / 非有限导致无法归一时
+  回退等权 1/n，避免 0/0 或 NaN 权重污染净值与换手。
+- 两向交易额 traded_notional = Σ|w_t − w_{t−1}|; 首次建仓按 Σ|w_t| 计入，
+  最后一期在当期调仓之外追加期末清仓 Σ|w_t|。
+- 标准单边换手 turnover = traded_notional / 2（初始建仓与期末清仓各贡献
+  0.5 换手，完全换仓一期贡献 1.0）。
+- 单边成本率 one_way_cost = fees_pct + slippage_bps / 10000,
+  成本率 cost = traded_notional × one_way_cost。
+- 分组净收益 net = (1 + gross) × (1 − cost) − 1，正费用下成本恒为净值的
+  负贡献；费用为 0 时净值与既有毛收益口径完全一致。
+- 多空组合以 50% 资金做多最高组、50% 做空最低组，直接由两组的单期毛收益
+  与成本合成: gross = 0.5×top − 0.5×bottom, cost = 0.5×(top_cost +
+  bottom_cost)。做空只对收益取负，两腿成本均按正成本扣减净值，绝不通过
+  对净值取反把空头成本变成正贡献。
 """
 from __future__ import annotations
 
@@ -9,13 +28,17 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 import numpy as np
 import polars as pl
 
+from app.backtest.metrics import MetricContext, annualized_return, annualized_sharpe, performance_metrics
 from app.backtest.engine import BacktestEngine
 from app.backtest.factor_zoo import list_alphas
+
+if TYPE_CHECKING:
+    import threading
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +115,7 @@ class FactorConfig:
     weight: Literal["equal", "factor_weight"] = "equal"
     fees_pct: float = 0.0002
     slippage_bps: float = 5.0
+    risk_free_rate: float = 0.0
 
 
 @dataclass
@@ -103,6 +127,28 @@ class GroupStats:
     max_drawdown: float
     sharpe: float
     win_rate: float
+    avg_turnover: float = 0.0
+    total_turnover: float = 0.0
+    total_cost: float = 0.0
+
+@dataclass
+class _GroupPeriod:
+    """单个分组在单个调仓期（目标权重口径）的收益与成本明细，未四舍五入。"""
+
+    gross_return: float
+    traded_notional: float
+    turnover: float
+    cost: float
+    net_return: float
+
+
+@dataclass
+class _GroupPeriods:
+    """全部 (调仓日, 分组) 的单期明细，供净值、换手序列与统计复用。"""
+
+    dates: list[str] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)
+    periods: dict[tuple[str, str], _GroupPeriod] = field(default_factory=dict)
 
 
 @dataclass
@@ -118,6 +164,7 @@ class FactorResult:
     # 分层
     group_stats: list[dict] = field(default_factory=list)
     group_nav: list[dict] = field(default_factory=list)
+    group_turnover: list[dict] = field(default_factory=list)
     # 多空
     long_short_stats: dict = field(default_factory=dict)
     long_short_nav: list[dict] = field(default_factory=list)
@@ -125,6 +172,7 @@ class FactorResult:
     elapsed_ms: float = 0.0
     n_symbols: int = 0
     n_dates: int = 0
+    metric_context: dict = field(default_factory=dict)
     error: str | None = None
 
 
@@ -132,9 +180,14 @@ class FactorBacktestService:
     def __init__(self, engine: BacktestEngine) -> None:
         self.engine = engine
 
-    def run(self, config: FactorConfig) -> FactorResult:
+    def run(
+        self,
+        config: FactorConfig,
+        progress_cb: "Callable[[dict], None] | None" = None,
+        cancel_event: "threading.Event | None" = None,
+    ) -> FactorResult:
         t0 = time.perf_counter()
-        run_id = uuid.uuid4().hex[:10]
+        run_id = uuid.uuid4().hex[:16]
 
         def _err(msg: str) -> FactorResult:
             return FactorResult(
@@ -143,6 +196,27 @@ class FactorBacktestService:
                 error=msg,
                 elapsed_ms=(time.perf_counter() - t0) * 1000,
             )
+
+        def _emit_progress(stage: str, label: str, completed: int) -> None:
+            if progress_cb is None:
+                return
+            try:
+                progress_cb({
+                    "stage": stage,
+                    "label": label,
+                    "completed": completed,
+                    "total": 100,
+                })
+            except Exception:  # noqa: BLE001
+                logger.debug("factor backtest progress callback failed", exc_info=True)
+
+        def _is_cancelled() -> bool:
+            return cancel_event is not None and cancel_event.is_set()
+
+        _emit_progress("loading", "加载因子面板", 5)
+        if _is_cancelled():
+            return _err("cancelled")
+
 
         # 加载基础面板: 当前 enriched parquet 只持久化基础列, 指标因子可能需要运行时计算。
         panel_columns = ["symbol", "date", "open", "high", "low", "close", "volume", "turnover_rate"]
@@ -158,12 +232,17 @@ class FactorBacktestService:
             config.end,
             columns=panel_columns,
         )
+        if _is_cancelled():
+            return _err("cancelled")
+
         if panel.is_empty():
             return _err("无数据，请检查日期范围或先运行盘后管道")
 
         factor_col = config.factor_name
         if factor_col not in panel.columns:
             panel = self._compute_missing_factor(panel, factor_col)
+        if _is_cancelled():
+            return _err("cancelled")
         if factor_col not in panel.columns:
             return _err(f"因子列 '{factor_col}' 不存在于 enriched 数据中, 且无法从基础行情计算")
         if "close" not in panel.columns:
@@ -179,6 +258,10 @@ class FactorBacktestService:
         )
         if panel.is_empty():
             return _err("过滤后无有效数据")
+        _emit_progress("preparing", "整理有效样本", 25)
+        if _is_cancelled():
+            return _err("cancelled")
+
 
         n_symbols = panel["symbol"].n_unique()
         n_dates = panel["date"].n_unique()
@@ -193,6 +276,10 @@ class FactorBacktestService:
         else:
             # weekly/monthly: 计算到下个调仓日的收益
             panel = self._calc_period_return(panel, config.rebalance)
+        _emit_progress("returns", "计算调仓期收益", 45)
+        if _is_cancelled():
+            return _err("cancelled")
+
 
         # ── 1. IC 分析 ──
         ic_df = self._calc_ic(panel, factor_col)
@@ -206,16 +293,32 @@ class FactorBacktestService:
         ic_std = float(np.std(ic_values)) if ic_values else None
         ir = (ic_mean / ic_std) if (ic_mean is not None and ic_std and ic_std > 1e-8) else None
         ic_win_rate = (sum(1 for v in ic_values if v > 0) / len(ic_values)) if ic_values else None
+        _emit_progress("ic", "计算截面 IC", 65)
+        if _is_cancelled():
+            return _err("cancelled")
+
 
         # ── 2. 分层回测 ──
         panel = self._add_groups(panel, factor_col, config.n_groups)
-        group_nav = self._calc_group_nav(panel, config)
-        group_stats = self._calc_group_stats(group_nav, config.start, config.end)
+        periods = self._calc_group_periods(panel, config)
+        group_nav, group_turnover = self._calc_group_nav(periods)
+        group_stats = self._calc_group_stats(group_nav, periods, config)
+        _emit_progress("groups", "计算分层组合", 85)
+        if _is_cancelled():
+            return _err("cancelled")
+
 
         # ── 3. 多空组合 ──
-        long_short_nav, long_short_stats = self._calc_long_short(group_nav, config)
+        long_short_nav, long_short_stats = self._calc_long_short(
+            periods, config.rebalance, config.risk_free_rate,
+        )
+        _emit_progress("summary", "汇总多空与风险指标", 95)
+        if _is_cancelled():
+            return _err("cancelled")
+
 
         elapsed = (time.perf_counter() - t0) * 1000
+        _emit_progress("complete", "因子分析完成", 100)
         return FactorResult(
             run_id=run_id,
             config=self._config_to_dict(config),
@@ -226,8 +329,12 @@ class FactorBacktestService:
             ic_series=ic_series,
             group_stats=group_stats,
             group_nav=group_nav,
+            group_turnover=group_turnover,
             long_short_stats=long_short_stats,
             long_short_nav=long_short_nav,
+            metric_context=MetricContext(
+                config.rebalance, risk_free_rate=config.risk_free_rate,
+            ).to_dict(),
             elapsed_ms=round(elapsed, 1),
             n_symbols=n_symbols,
             n_dates=n_dates,
@@ -441,60 +548,167 @@ class FactorBacktestService:
             .alias("_group")
         )
 
-    # ── 分组净值 ──
+    # ── 分组单期收益 / 换手 / 成本 ──
 
     @staticmethod
-    def _calc_group_nav(panel: pl.DataFrame, config: FactorConfig) -> list[dict]:
-        """计算分组净值曲线 — 只在调仓日更新净值。"""
-        # 只保留有下期收益的行 (= 调仓日)
-        group_ret = (
-            panel.filter(pl.col("_next_return").is_not_null() & pl.col("_group").is_not_null())
-            .group_by(["date", "_group"])
-            .agg(pl.col("_next_return").mean().alias("group_return"))
+    def _target_weights(factors: np.ndarray, weight: str) -> np.ndarray:
+        """组内目标权重。
+
+        - equal: 每个成员 1/n;
+        - factor_weight: |因子值| 归一 (|f_i| / Σ|f_j|)。非有限值按 0 处理不
+          参与归一; 组内因子值全为 0 / 非有限导致无法归一时回退等权 1/n，
+          避免 0/0 或 NaN 权重污染净值与换手。
+        """
+        n = len(factors)
+        if n == 0:
+            return np.empty(0)
+        if weight == "factor_weight":
+            magnitudes = np.abs(np.asarray(factors, dtype=float))
+            magnitudes = np.where(np.isfinite(magnitudes), magnitudes, 0.0)
+            total = float(magnitudes.sum())
+            if np.isfinite(total) and total > 0.0:
+                return magnitudes / total
+        return np.full(n, 1.0 / n)
+
+    @staticmethod
+    def _calc_group_periods(panel: pl.DataFrame, config: FactorConfig) -> _GroupPeriods:
+        """按 (调仓日, 分组) 计算单期毛收益、两向交易额、换手与成本。
+
+        只保留有下期收益的行 (= 调仓日)。每个调仓日按组内目标权重计算当期
+        毛收益 gross = Σ w_i × r_i; 两向交易额 traded_notional = Σ|w_t −
+        w_prev| (首次建仓 Σ|w_t|, 最后一期追加期末清仓 Σ|w_t|); 标准单边
+        换手 turnover = traded_notional / 2; 成本率 cost = traded_notional ×
+        one_way_cost; 净收益 net = (1 + gross) × (1 − cost) − 1。
+        """
+        one_way_cost = config.fees_pct + config.slippage_bps / 10000.0
+        out = _GroupPeriods()
+
+        rows = panel.filter(
+            pl.col("_next_return").is_not_null() & pl.col("_group").is_not_null()
+        ).select(["symbol", "date", "_group", "_next_return", config.factor_name])
+        if rows.is_empty():
+            return out
+
+        # 合并历史或调用方失误都可能留下同一 (symbol, date) 的重复行。若直接
+        # zip→dict，目标权重会被最后一行覆盖，而毛收益仍重复计入，导致权重、
+        # 换手和收益使用不同股票池。沿用合并层“后行覆盖前行”口径，先收敛为一行。
+        rows = rows.unique(
+            subset=["symbol", "date"],
+            keep="last",
+            maintain_order=True,
         )
 
-        # pivot: date × group
-        pivot = group_ret.pivot(index="date", columns="_group", values="group_return").sort("date")
+        # (date, group) → 组内 (目标权重, 毛收益)
+        targets: dict[tuple[str, str], tuple[dict[str, float], float]] = {}
+        for section in rows.partition_by(["date", "_group"]):
+            key = (str(section["date"][0])[:10], section["_group"][0])
+            rets = section["_next_return"].to_numpy().astype(float)
+            factors = section[config.factor_name].to_numpy().astype(float)
+            symbols = section["symbol"].to_list()
+            weights = FactorBacktestService._target_weights(factors, config.weight)
+            targets[key] = (
+                {s: float(w) for s, w in zip(symbols, weights)},
+                float(np.dot(weights, rets)),
+            )
 
-        if pivot.is_empty():
-            return []
+        out.dates = sorted({d for d, _ in targets})
+        out.groups = sorted({g for _, g in targets})
+        last_date = out.dates[-1]
 
-        group_cols = [c for c in pivot.columns if c != "date"]
+        prev_weights: dict[str, dict[str, float]] = {g: {} for g in out.groups}
+        for d in out.dates:
+            for g in out.groups:
+                target = targets.get((d, g))
+                if target is None:
+                    # 分组在本调仓日消失时，上一期仓位必须按零目标权重平仓。
+                    # 否则旧仓会被错误地跨越缺失期保留，漏记换手和成本。
+                    prev = prev_weights[g]
+                    if prev:
+                        traded_notional = sum(abs(w) for w in prev.values())
+                        cost = traded_notional * one_way_cost
+                        out.periods[(d, g)] = _GroupPeriod(
+                            gross_return=0.0,
+                            traded_notional=traded_notional,
+                            turnover=traded_notional / 2.0,
+                            cost=cost,
+                            net_return=(1.0 - cost) - 1.0,
+                        )
+                        prev_weights[g] = {}
+                    continue
+                weights, gross = target
+                prev = prev_weights[g]
+                traded_notional = sum(
+                    abs(weights.get(s, 0.0) - prev.get(s, 0.0))
+                    for s in weights.keys() | prev.keys()
+                )
+                if d == last_date:
+                    # 最后一期在当期调仓之外追加期末清仓
+                    traded_notional += sum(abs(w) for w in weights.values())
+                cost = traded_notional * one_way_cost
+                out.periods[(d, g)] = _GroupPeriod(
+                    gross_return=gross,
+                    traded_notional=traded_notional,
+                    turnover=traded_notional / 2.0,
+                    cost=cost,
+                    net_return=(1.0 + gross) * (1.0 - cost) - 1.0,
+                )
+                prev_weights[g] = weights
 
-        # 累乘净值曲线
-        result: list[dict] = []
-        nav_values: dict[str, float] = {c: 1.0 for c in group_cols}
+        return out
 
-        for row in pivot.iter_rows(named=True):
-            entry: dict = {"date": str(row["date"])[:10]}
-            for c in group_cols:
-                ret = float(row[c]) if row[c] is not None else 0.0
-                nav_values[c] *= (1 + ret)
-                entry[c] = round(nav_values[c], 4)
-            result.append(entry)
+    # ── 分组净值 / 换手 ──
 
-        return result
+    @staticmethod
+    def _calc_group_nav(periods: _GroupPeriods) -> tuple[list[dict], list[dict]]:
+        """扣费后的分组净值曲线 + 独立分组换手序列 — 只在调仓日更新。"""
+        if not periods.dates:
+            return [], []
+
+        nav_values: dict[str, float] = {g: 1.0 for g in periods.groups}
+        group_nav: list[dict] = []
+        group_turnover: list[dict] = []
+
+        for d in periods.dates:
+            nav_entry: dict = {"date": d}
+            turnover_entry: dict = {"date": d}
+            for g in periods.groups:
+                p = periods.periods.get((d, g))
+                if p is not None:
+                    nav_values[g] *= 1.0 + p.net_return
+                    turnover_entry[g] = round(p.turnover, 4)
+                else:
+                    turnover_entry[g] = 0.0
+                nav_entry[g] = round(nav_values[g], 4)
+            group_nav.append(nav_entry)
+            group_turnover.append(turnover_entry)
+
+        return group_nav, group_turnover
 
     # ── 分组统计 ──
 
     @staticmethod
     def _calc_group_stats(
-        group_nav: list[dict], start: date, end: date,
+        group_nav: list[dict],
+        periods: _GroupPeriods,
+        config: FactorConfig,
     ) -> list[dict]:
         if not group_nav:
             return []
 
-        group_cols = [k for k in group_nav[0] if k != "date"]
-        n_days = max((end - start).days, 1)
-        years = n_days / 365.25
+        context = MetricContext(config.rebalance, risk_free_rate=config.risk_free_rate)
+
+        per_group_turnover: dict[str, list[float]] = {g: [] for g in periods.groups}
+        per_group_cost: dict[str, list[float]] = {g: [] for g in periods.groups}
+        for (_, g), p in periods.periods.items():
+            per_group_turnover[g].append(p.turnover)
+            per_group_cost[g].append(p.cost)
 
         stats = []
-        for i, c in enumerate(sorted(group_cols)):
+        for i, c in enumerate(periods.groups):
             values = [r[c] for r in group_nav if r.get(c) is not None]
             if not values:
                 continue
             total_return = values[-1] - 1.0
-            annual_return = (values[-1]) ** (1 / max(years, 0.01)) - 1 if values[-1] > 0 else 0.0
 
             # 最大回撤
             peak = 1.0
@@ -504,30 +718,37 @@ class FactorBacktestService:
                 dd = (v - peak) / peak
                 max_dd = min(max_dd, dd)
 
-            # 日收益序列
-            daily_rets = []
-            for j in range(1, len(values)):
-                if values[j - 1] > 0:
-                    daily_rets.append(values[j] / values[j - 1] - 1)
+            period_returns = np.asarray(
+                [
+                    periods.periods[(d, c)].net_return
+                    for d in periods.dates
+                    if (d, c) in periods.periods
+                ],
+                dtype=float,
+            )
+            annual_return = annualized_return(period_returns, context)
+            sharpe = annualized_sharpe(period_returns, context)
+            win_rate = float(np.mean(period_returns > 0)) if period_returns.size else 0.0
 
-            # 夏普
-            if daily_rets:
-                arr = np.array(daily_rets)
-                sharpe = float(np.mean(arr) / np.std(arr)) * np.sqrt(252) if np.std(arr) > 0 else 0.0
-                win_rate = float(np.mean(arr > 0))
-            else:
-                sharpe = 0.0
-                win_rate = 0.0
-
-            stats.append({
+            turnovers = per_group_turnover[c]
+            costs = per_group_cost[c]
+            row = {
                 "group": i + 1,
                 "label": c,
                 "total_return": round(total_return, 4),
-                "annual_return": round(annual_return, 4),
+                "annual_return": round(float(annual_return), 4) if annual_return is not None else None,
                 "max_drawdown": round(max_dd, 4),
-                "sharpe": round(sharpe, 2),
+                "sharpe": round(float(sharpe), 2) if sharpe is not None else None,
                 "win_rate": round(win_rate, 4),
-            })
+                "avg_turnover": round(float(np.mean(turnovers)), 4) if turnovers else 0.0,
+                "total_turnover": round(float(np.sum(turnovers)), 4) if turnovers else 0.0,
+                "total_cost": round(float(np.sum(costs)), 6) if costs else 0.0,
+            }
+            advanced = performance_metrics(returns=period_returns, context=context)
+            for key, value in advanced.items():
+                if key not in row:
+                    row[key] = value
+            stats.append(row)
 
         return stats
 
@@ -535,55 +756,81 @@ class FactorBacktestService:
 
     @staticmethod
     def _calc_long_short(
-        group_nav: list[dict], config: FactorConfig,
+        periods: _GroupPeriods,
+        rebalance: Literal["daily", "weekly", "monthly"] = "daily",
+        risk_free_rate: float = 0.0,
     ) -> tuple[list[dict], dict]:
-        """多空组合: 做多最高组 + 做空最低组。"""
-        if not group_nav:
+        """多空组合: 50% 资金做多最高组 + 50% 资金做空最低组。
+
+        直接由最高/最低组的单期毛收益与成本合成 (不经分组净值中转):
+        - 毛收益 gross = 0.5 × top_gross − 0.5 × bottom_gross (做空只对
+          收益取负);
+        - 成本 cost = 0.5 × (top_cost + bottom_cost), 两腿都按正成本扣减
+          净值, 不通过对净值取反把空头成本变成正贡献;
+        - 净收益 net = (1 + gross) × (1 − cost) − 1;
+        - 换手 turnover = 0.5 × (top_turnover + bottom_turnover)。
+        """
+        if not periods.dates or len(periods.groups) < 2:
             return [], {}
 
-        group_cols = sorted([k for k in group_nav[0] if k != "date"])
-        if len(group_cols) < 2:
-            return [], {}
+        top_col = periods.groups[-1]  # 最高组
+        bottom_col = periods.groups[0]  # 最低组
 
-        top_col = group_cols[-1]  # Q5 (最高)
-        bottom_col = group_cols[0]  # Q1 (最低)
-
-        # 独立计算 top 和 bottom 的日收益，然后合成
         ls_value = 1.0
-        prev_top = 1.0
-        prev_bot = 1.0
         peak = 1.0
         max_dd = 0.0
         ls_nav: list[dict] = []
+        turnovers: list[float] = []
+        costs: list[float] = []
+        net_returns: list[float] = []
 
-        for row in group_nav:
-            top_nav = float(row.get(top_col, 1.0)) if row.get(top_col) is not None else 1.0
-            bot_nav = float(row.get(bottom_col, 1.0)) if row.get(bottom_col) is not None else 1.0
+        for d in periods.dates:
+            top = periods.periods.get((d, top_col))
+            bottom = periods.periods.get((d, bottom_col))
 
-            # top 组收益 (做多)
-            top_ret = (top_nav / prev_top - 1) if prev_top > 0 else 0.0
-            # bottom 组收益 (做空 = 取反)
-            bot_ret = -(bot_nav / prev_bot - 1) if prev_bot > 0 else 0.0
-            # 多空组合收益
-            ls_ret = (top_ret + bot_ret) / 2  # 各分配 50% 资金
-            ls_value *= (1 + ls_ret)
+            gross = 0.0
+            cost = 0.0
+            turnover = 0.0
+            if top is not None:
+                gross += 0.5 * top.gross_return
+                cost += 0.5 * top.cost
+                turnover += 0.5 * top.turnover
+            if bottom is not None:
+                gross -= 0.5 * bottom.gross_return
+                cost += 0.5 * bottom.cost
+                turnover += 0.5 * bottom.turnover
 
-            prev_top = top_nav
-            prev_bot = bot_nav
+            ls_value *= (1.0 + gross) * (1.0 - cost)
+            turnovers.append(turnover)
+            costs.append(cost)
+            net_returns.append((1.0 + gross) * (1.0 - cost) - 1.0)
 
             peak = max(peak, ls_value)
             dd = (ls_value - peak) / peak if peak > 0 else 0.0
             max_dd = min(max_dd, dd)
 
-            ls_nav.append({"date": row["date"], "value": round(ls_value, 4)})
+            ls_nav.append({"date": d, "value": round(ls_value, 4)})
 
         total_ret = ls_value - 1.0
+        context = MetricContext(rebalance, risk_free_rate=risk_free_rate)
+        annual_return = annualized_return(net_returns, context)
+        sharpe = annualized_sharpe(net_returns, context)
         ls_stats = {
             "total_return": round(total_ret, 4),
             "max_drawdown": round(max_dd, 4),
             "top_group": top_col,
             "bottom_group": bottom_col,
+            "avg_turnover": round(float(np.mean(turnovers)), 4),
+            "total_turnover": round(float(np.sum(turnovers)), 4),
+            "total_cost": round(float(np.sum(costs)), 6),
+            "annual_return": round(float(annual_return), 4) if annual_return is not None else None,
+            "sharpe": round(float(sharpe), 2) if sharpe is not None else None,
+            "metric_context": context.to_dict(),
         }
+        advanced = performance_metrics(returns=net_returns, context=context)
+        for key, value in advanced.items():
+            if key not in ls_stats:
+                ls_stats[key] = value
 
         return ls_nav, ls_stats
 
@@ -599,4 +846,5 @@ class FactorBacktestService:
             "weight": c.weight,
             "fees_pct": c.fees_pct,
             "slippage_bps": c.slippage_bps,
+            "risk_free_rate": c.risk_free_rate,
         }

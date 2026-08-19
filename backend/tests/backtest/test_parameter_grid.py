@@ -22,6 +22,7 @@ from app.backtest.parameter_grid import (
     NormalizedGrid,
     ParameterGridExperimentStore,
     compute_config_hash,
+    compute_pareto_fronts,
     expand_scenarios,
     normalize_grid,
     run_grid,
@@ -300,6 +301,99 @@ class TestScoreScenario:
     def test_deterministic(self):
         stats = {"sharpe": 2.0, "total_return": 0.5, "max_drawdown": -0.15}
         assert score_scenario(stats, "risk_adjusted") == score_scenario(stats, "risk_adjusted")
+
+
+# ================================================================
+# 严格 Pareto 分层
+# ================================================================
+
+class TestParetoFronts:
+
+    def _scenario(
+        self,
+        scenario_id: str,
+        total_return: float,
+        sharpe: float,
+        max_drawdown: float,
+    ) -> GridScenarioResult:
+        return GridScenarioResult(
+            scenario_id=scenario_id,
+            params={},
+            stats={
+                "total_return": total_return,
+                "sharpe": sharpe,
+                "max_drawdown": max_drawdown,
+            },
+        )
+
+    def test_strict_non_dominated_layers(self):
+        scenarios = [
+            # front 1: 收益/夏普最高但回撤最大；front 1 也要保留风险更平衡的另一解
+            self._scenario("s-high-return", 0.50, 2.0, -0.20),
+            self._scenario("s-balanced", 0.40, 1.8, -0.10),
+            # front 1 中的平衡解同时支配这两个场景
+            self._scenario("s-worse", 0.39, 1.7, -0.10),
+            self._scenario("s-worst", 0.39, 1.6, -0.12),
+        ]
+
+        fronts = compute_pareto_fronts(scenarios)
+
+        assert fronts["s-high-return"] == 1
+        assert fronts["s-balanced"] == 1
+        assert fronts["s-worse"] == 2
+        assert fronts["s-worst"] == 3
+
+    def test_equal_objectives_do_not_dominate_each_other(self):
+        scenarios = [
+            self._scenario("s-a", 0.20, 1.0, -0.05),
+            self._scenario("s-b", 0.20, 1.0, -0.05),
+        ]
+
+        fronts = compute_pareto_fronts(scenarios)
+
+        assert fronts == {"s-a": 1, "s-b": 1}
+
+    def test_invalid_or_errored_scenarios_are_excluded(self):
+        scenarios = [
+            self._scenario("s-good", 0.20, 1.0, -0.05),
+            GridScenarioResult(scenario_id="s-error", params={}, error="boom"),
+            GridScenarioResult(
+                scenario_id="s-nan",
+                params={},
+                stats={
+                    "total_return": float("nan"),
+                    "sharpe": 99.0,
+                    "max_drawdown": 0.0,
+                },
+            ),
+        ]
+
+        assert compute_pareto_fronts(scenarios) == {"s-good": 1}
+
+    def test_run_grid_assigns_and_persists_fronts(self, tmp_path):
+        stats_map = {
+            frozenset({"vol_ratio_min": 1.0}.items()): {"sharpe": 1.0, "total_return": 0.10, "max_drawdown": -0.10},
+            frozenset({"vol_ratio_min": 2.0}.items()): {"sharpe": 2.0, "total_return": 0.20, "max_drawdown": -0.10},
+            frozenset({"vol_ratio_min": 3.0}.items()): {"sharpe": 0.5, "total_return": 0.05, "max_drawdown": -0.12},
+        }
+        svc = _ScriptedService(stats_map)
+        store = ParameterGridExperimentStore(tmp_path)
+        ng = normalize_grid({"vol_ratio_min": [1.0, 2.0, 3.0]}, STRATEGY_PARAMS, "sharpe")
+        scenarios = expand_scenarios(BASE_CFG, ng)
+
+        exp = run_grid(svc, store, BASE_CFG, scenarios, ng, "pg-9aef01000001", "h")
+        by_param = {s.params["vol_ratio_min"]: s for s in exp.scenarios}
+
+        # 1.0 被 2.0 严格支配，目标排序最好的 2.0 才在 Pareto 第一层。
+        assert by_param[2.0].pareto_front == 1
+        assert by_param[1.0].pareto_front == 2
+        assert by_param[3.0].pareto_front == 3
+
+        loaded = store.load("pg-9aef01000001")
+        loaded_by_param = {s.params["vol_ratio_min"]: s for s in loaded.scenarios}
+        assert loaded_by_param[2.0].pareto_front == 1
+        assert loaded_by_param[1.0].pareto_front == 2
+        assert loaded_by_param[3.0].pareto_front == 3
 
 
 # ================================================================
@@ -594,6 +688,42 @@ class TestRunGrid:
         assert "ci_high" in exp.robustness["bootstrap"]
         assert "mc_permutation" in exp.robustness
         assert 0.0 <= exp.robustness["mc_permutation"]["p_value"] <= 1.0
+
+    def test_candidate_best_scenario_skips_daily_frequency_metrics(self, tmp_path):
+        """退出事件日采样曲线不是日频收益，候选网格不得生成 Bootstrap/置换 Sharpe。"""
+        stats_map = {
+            frozenset({"vol_ratio_min": 1.0}.items()): {
+                "mode": "full",
+                "full_kind": "candidate_execution",
+                "sharpe": None,
+                "total_return": 0.05,
+                "max_drawdown": -0.02,
+            },
+            frozenset({"vol_ratio_min": 2.0}.items()): {
+                "mode": "full",
+                "full_kind": "candidate_execution",
+                "sharpe": None,
+                "total_return": 0.4,
+                "max_drawdown": -0.08,
+            },
+        }
+        svc = _ScriptedService(stats_map)
+        store = ParameterGridExperimentStore(tmp_path)
+        ng = normalize_grid({"vol_ratio_min": [1.0, 2.0]}, STRATEGY_PARAMS, "total_return")
+        scenarios = expand_scenarios(BASE_CFG, ng)
+
+        exp = run_grid(svc, store, BASE_CFG, scenarios, ng, "pg-feed00000002", "h")
+
+        assert exp.robustness is not None
+        assert exp.robustness["time_series_metrics_unavailable"] == "candidate_execution"
+        assert "bootstrap" not in exp.robustness
+        assert "mc_permutation" not in exp.robustness
+        assert exp.robustness["exit_breakdown"] == []
+
+        loaded = store.load("pg-feed00000002")
+        assert loaded.robustness["time_series_metrics_unavailable"] == "candidate_execution"
+        assert "bootstrap" not in loaded.robustness
+        assert "mc_permutation" not in loaded.robustness
 
     def test_robustness_deterministic_across_runs(self, tmp_path):
         stats_map = {

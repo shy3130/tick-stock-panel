@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import threading
 
 import numpy as np
 import polars as pl
@@ -95,8 +96,40 @@ def test_run_keeps_tied_cross_section_in_one_group():
         end=date(2024, 1, 3),
         n_groups=5,
         rebalance="daily",
+        # 分层净值自费用口径上线后按净收益累乘; 零费用才能与毛收益 1.1/1.2 对拍
+        fees_pct=0.0,
+        slippage_bps=0.0,
     ))
 
     assert result.error is None
     assert {row["Q1"] for row in result.group_nav} == {1.1, 1.2}
     assert all("Q2" not in row for row in result.group_nav)
+
+
+def test_run_emits_staged_progress_and_honors_cancellation():
+    panel = _panel(["A", "B", "C"], 10, "test_factor")
+    svc = _service_with_panel(panel)
+    config = FactorConfig(
+        factor_name="test_factor",
+        symbols=["A", "B", "C"],
+        start=date(2024, 1, 1),
+        end=date(2024, 1, 10),
+        rebalance="daily",
+    )
+    events: list[dict] = []
+
+    result = svc.run(config, progress_cb=events.append)
+
+    assert result.error is None
+    assert [event["stage"] for event in events] == [
+        "loading", "preparing", "returns", "ic", "groups", "summary", "complete",
+    ]
+    assert events[-1]["completed"] == events[-1]["total"] == 100
+
+    cancelled = threading.Event()
+    cancelled.set()
+    cancelled_events: list[dict] = []
+    stopped = svc.run(config, progress_cb=cancelled_events.append, cancel_event=cancelled)
+
+    assert stopped.error == "cancelled"
+    assert [event["stage"] for event in cancelled_events] == ["loading"]

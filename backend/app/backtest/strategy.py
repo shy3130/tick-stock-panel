@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Callable, Literal
 import numpy as np
 import polars as pl
 
-from app.backtest.engine import BacktestEngine, MatcherConfig, SimResult
+from app.backtest.metrics import MetricContext, relative_performance_metrics
+from app.backtest.engine import BacktestEngine, MatcherConfig
 from app.strategy.engine import StrategyDef, StrategyEngine
 
 if TYPE_CHECKING:
@@ -23,6 +24,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 BENCHMARK_SYMBOL = "000001.INDEX"
+BENCHMARK_NAMES = {
+    "000001.INDEX": "上证指数",
+    "000300.INDEX": "沪深300",
+    "000905.INDEX": "中证500",
+    "000852.INDEX": "中证1000",
+}
+
 
 
 @dataclass
@@ -48,6 +56,8 @@ class StrategyBacktestConfig:
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
     regime_filter: dict | None = None  # {states: [...], min_score?: float}; None/空 → 不过滤
+    benchmark_symbol: str = BENCHMARK_SYMBOL
+    risk_free_rate: float = 0.0
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
@@ -87,6 +97,7 @@ class StrategyBacktestResult:
     benchmark_curve: list[dict] = field(default_factory=list)
     trades: list[dict] = field(default_factory=list)
     per_symbol_stats: list[dict] = field(default_factory=list)
+    attribution: dict | None = None
     strategy_info: dict = field(default_factory=dict)
     elapsed_ms: float = 0.0
     error: str | None = None
@@ -110,7 +121,7 @@ class StrategyBacktestService:
         panel: "pl.DataFrame | None" = None,
     ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
-        run_id = uuid.uuid4().hex[:10]
+        run_id = uuid.uuid4().hex[:16]
 
         def _err(msg: str) -> StrategyBacktestResult:
             return StrategyBacktestResult(
@@ -241,6 +252,7 @@ class StrategyBacktestService:
             score_max=score_max,
             initial_capital=config.initial_capital,
             position_sizing=config.position_sizing,
+            risk_free_rate=config.risk_free_rate,
         )
         # 撮合 — full 为全候选独立执行；position 为账户级仓位模拟。
         if config.mode == "full":
@@ -272,7 +284,42 @@ class StrategyBacktestService:
         result.stats["timing_ms"] = timing_ms
         result.stats["panel_rows"] = int(sim_panel.height)
 
-        benchmark_curve = self._build_benchmark_curve(config.start, config.end)
+        is_candidate_execution = result.stats.get("full_kind") == "candidate_execution"
+        if is_candidate_execution:
+            # 全量候选曲线只在退出事件日采样，既不是账户净值也不是连续日频收益。
+            # 禁止将其与基准对齐或生成 Alpha/Beta/IR 等时间序列相对指标。
+            result.stats["time_series_metrics_available"] = False
+            result.stats["curve_semantics"] = "candidate_exit_event_average"
+            benchmark_curve: list[dict] = []
+        else:
+            # benchmark 窗口与组合净值实际区间对齐: position 模式下实际数据覆盖可能窄于
+            # 请求区间 (equity 已被钳制在 [start, end] 内)，避免相对指标错位。
+            benchmark_start = config.start
+            benchmark_end = config.end
+            if result.equity_curve:
+                equity_dates = [
+                    date.fromisoformat(str(row["date"])[:10])
+                    for row in result.equity_curve
+                    if row.get("date")
+                ]
+                if equity_dates:
+                    benchmark_start = min(equity_dates)
+                    benchmark_end = max(equity_dates)
+            benchmark_curve = self._build_benchmark_curve(
+                benchmark_start,
+                benchmark_end,
+                config.benchmark_symbol,
+            )
+            closes = [row["close"] for row in benchmark_curve if row.get("close")]
+            if len(closes) >= 2 and closes[0] > 0:
+                benchmark_return = closes[-1] / closes[0] - 1
+                result.stats["benchmark_return"] = round(float(benchmark_return), 4)
+                total_return = result.stats.get("total_return")
+                if isinstance(total_return, (int, float)):
+                    result.stats["excess"] = round(float(total_return) - benchmark_return, 4)
+            result.stats.update(self._relative_stats(
+                result.equity_curve, benchmark_curve, config.risk_free_rate,
+            ))
 
         # 构建策略信息
         strategy_info = {
@@ -303,6 +350,9 @@ class StrategyBacktestService:
         }
 
         elapsed = (time.perf_counter() - t0) * 1000
+        trades = [self._trade_to_dict(t) for t in result.trades]
+        attribution = self._build_trade_attribution(trades, candidate_execution=is_candidate_execution)
+
 
         return StrategyBacktestResult(
             run_id=run_id,
@@ -311,8 +361,9 @@ class StrategyBacktestService:
             equity_curve=result.equity_curve,
             drawdown_curve=result.drawdown_curve,
             benchmark_curve=benchmark_curve,
-            trades=[self._trade_to_dict(t) for t in result.trades],
+            trades=trades,
             per_symbol_stats=result.per_symbol_stats,
+            attribution=attribution,
             strategy_info=strategy_info,
             elapsed_ms=round(elapsed, 1),
         )
@@ -549,122 +600,6 @@ class StrategyBacktestService:
         load_start, load_end, _ = self._compute_load_range(s, config, max_hold_days)
         return load_start, load_end
 
-    def _run_full_simulation(
-        self,
-        panel: pl.DataFrame,
-        entry_mask: pl.Series,
-        holding_days: int,
-    ) -> SimResult:
-        """对 entry_mask 命中的全部候选, 算持有 N 天后的前瞻收益统计。
-
-        不受 max_positions/资金约束, 反映策略选股能力本身。
-        equity_curve 复用为"累计日均超额收益曲线"(基准归零)。
-        """
-        n = holding_days if holding_days and holding_days > 0 else 5
-
-        df = panel.with_columns([
-            entry_mask.cast(pl.Boolean).alias("_is_candidate"),
-            (pl.col("close").shift(-n).over("symbol") / pl.col("close") - 1).alias("_fwd_return"),
-        ]).filter(
-            pl.col("_is_candidate")
-            & pl.col("_fwd_return").is_not_null()
-            & pl.col("_fwd_return").is_not_nan()
-        )
-
-        if df.is_empty():
-            return self.engine._empty_result()
-
-        fwd = df["_fwd_return"].to_numpy()
-        wins = fwd[fwd > 0]
-        losses = fwd[fwd <= 0]
-        avg_win = float(wins.mean()) if wins.size else 0.0
-        avg_loss = abs(float(losses.mean())) if losses.size else 0.0
-
-        # 按日聚合: 当日候选的平均前瞻收益
-        daily = (
-            df.group_by("date").agg(
-                pl.col("_fwd_return").mean().alias("avg_ret"),
-                pl.col("_fwd_return").count().alias("n_cand"),
-            ).sort("date")
-        )
-
-        # 累计超额曲线: 每日复利平均收益 (基准归零, 故 equity 即累计策略收益)
-        equity_curve: list[dict] = []
-        equity = 1.0
-        peak = 1.0
-        drawdown_curve: list[dict] = []
-        for row in daily.iter_rows(named=True):
-            ret = float(row["avg_ret"] or 0.0)
-            equity *= (1 + ret)
-            peak = max(peak, equity)
-            dd = (equity - peak) / peak if peak > 0 else 0.0
-            d_str = str(row["date"])[:10]
-            equity_curve.append({
-                "date": d_str,
-                "value": round(equity, 4),
-                "positions": int(row["n_cand"]),
-            })
-            drawdown_curve.append({"date": d_str, "value": round(dd, 4)})
-
-        # 同期上证收益 (用 benchmark close 算)
-        benchmark_curve = self._build_benchmark_curve(
-            daily["date"].min(), daily["date"].max()
-        )
-        benchmark_return = 0.0
-        if benchmark_curve:
-            closes = [b["close"] for b in benchmark_curve if b.get("close")]
-            if len(closes) >= 2 and closes[0] > 0:
-                benchmark_return = closes[-1] / closes[0] - 1
-
-        total_return = equity - 1.0
-        max_dd = min((d["value"] for d in drawdown_curve), default=0.0)
-
-        # 日收益序列算 Sharpe (年化)
-        daily_rets = daily["avg_ret"].to_numpy()
-        sharpe = (
-            float(daily_rets.mean() / daily_rets.std() * np.sqrt(252))
-            if daily_rets.size > 1 and daily_rets.std() > 0 else 0.0
-        )
-
-        # 收益分布直方图: 按 [-20%, +20%] 分 21 档 (每档 2%), 超出归入首尾档
-        lo, hi, nbins = -0.20, 0.20, 20
-        clipped = np.clip(fwd, lo, hi)
-        counts, edges = np.histogram(clipped, bins=nbins, range=(lo, hi))
-        dist = [
-            {
-                "range": f"{(edges[i]*100):+.0f}~{(edges[i+1]*100):+.0f}%",
-                "count": int(counts[i]),
-                "ratio": round(float(counts[i] / fwd.size), 4) if fwd.size else 0.0,
-            }
-            for i in range(nbins)
-        ]
-
-        stats = {
-            "mode": "full",
-            "n_candidates": int(fwd.size),
-            "n_days": int(daily.height),
-            "avg_daily_candidates": round(float(daily["n_cand"].mean()), 1),
-            "avg_return": round(float(fwd.mean()), 4),
-            "median_return": round(float(np.median(fwd)), 4),
-            "win_rate": round(float(wins.size / fwd.size), 4) if fwd.size else 0.0,
-            "profit_factor": round(avg_win / avg_loss, 2) if avg_loss > 0 else None,
-            "best": round(float(fwd.max()), 4),
-            "worst": round(float(fwd.min()), 4),
-            "total_return": round(float(total_return), 4),
-            "max_drawdown": round(float(max_dd), 4),
-            "sharpe": round(sharpe, 2),
-            "benchmark_return": round(float(benchmark_return), 4),
-            "excess": round(float(total_return - benchmark_return), 4),
-            "return_distribution": dist,
-        }
-
-        return SimResult(
-            equity_curve=equity_curve,
-            drawdown_curve=drawdown_curve,
-            trades=[],
-            per_symbol_stats=[],
-            stats=stats,
-        )
 
     # ── 向量化信号生成 ──
 
@@ -769,11 +704,22 @@ class StrategyBacktestService:
             combined = combined | m
         return combined
 
-    def _build_benchmark_curve(self, start: date, end: date) -> list[dict]:
+    def _build_benchmark_curve(
+        self,
+        start: date,
+        end: date,
+        symbol: str = BENCHMARK_SYMBOL,
+    ) -> list[dict]:
+        benchmark_symbol = symbol if symbol in BENCHMARK_NAMES else BENCHMARK_SYMBOL
         try:
-            df = self.engine.repo.get_index_daily(BENCHMARK_SYMBOL, start, end, columns=["date", "close"])
+            df = self.engine.repo.get_index_daily(
+                benchmark_symbol,
+                start,
+                end,
+                columns=["date", "close"],
+            )
         except Exception as e:
-            logger.warning("load benchmark %s failed: %s", BENCHMARK_SYMBOL, e)
+            logger.warning("load benchmark %s failed: %s", benchmark_symbol, e)
             return []
 
         if df.is_empty() or "close" not in df.columns:
@@ -788,12 +734,44 @@ class StrategyBacktestService:
                 "date": str(row["date"])[:10],
                 "value": round(float(row["close"]), 4),
                 "close": round(float(row["close"]), 4),
-                "name": "上证指数",
-                "symbol": BENCHMARK_SYMBOL,
+                "name": BENCHMARK_NAMES[benchmark_symbol],
+                "symbol": benchmark_symbol,
             }
             for row in df.iter_rows(named=True)
             if row["close"] is not None
         ]
+    @staticmethod
+    def _relative_stats(
+        equity_curve: list[dict],
+        benchmark_curve: list[dict],
+        risk_free_rate: float = 0.0,
+    ) -> dict[str, float | None]:
+        portfolio = {
+            str(row.get("date"))[:10]: float(row["value"])
+            for row in equity_curve
+            if row.get("date") and isinstance(row.get("value"), (int, float)) and float(row["value"]) > 0
+        }
+        benchmark = {
+            str(row.get("date"))[:10]: float(row.get("close", row.get("value")))
+            for row in benchmark_curve
+            if row.get("date")
+            and isinstance(row.get("close", row.get("value")), (int, float))
+            and float(row.get("close", row.get("value"))) > 0
+        }
+        dates = sorted(set(portfolio) & set(benchmark))
+        portfolio_returns = [
+            portfolio[current] / portfolio[previous] - 1.0
+            for previous, current in zip(dates, dates[1:])
+        ]
+        benchmark_returns = [
+            benchmark[current] / benchmark[previous] - 1.0
+            for previous, current in zip(dates, dates[1:])
+        ]
+        return relative_performance_metrics(
+            portfolio_returns,
+            benchmark_returns,
+            MetricContext("daily", risk_free_rate=risk_free_rate),
+        )
 
     # ── 工具 ──
 
@@ -902,7 +880,51 @@ class StrategyBacktestService:
             "exit_signal_date": str(t.exit_signal_date) if getattr(t, "exit_signal_date", None) is not None else None,
             "blocked_exit_days": getattr(t, "blocked_exit_days", 0),
             "cause_tag": getattr(t, "cause_tag", "strategy_outcome"),
+            "mae_pct": getattr(t, "mae_pct", None),
+            "mfe_pct": getattr(t, "mfe_pct", None),
         }
+
+    def _build_trade_attribution(
+        self,
+        trades: list[dict],
+        *,
+        candidate_execution: bool,
+    ) -> dict:
+        """生成可审计的交易窗口行业归因；分类不可用时安全降级。"""
+        from app.backtest.attribution_report import (
+            build_trade_industry_brinson_report,
+            fama_french_unavailable_report,
+        )
+
+        if candidate_execution:
+            return {
+                "status": "unavailable",
+                "reason": "candidate_execution_not_portfolio_attribution",
+                "scope": "候选独立执行不代表资金受约束的账户组合，不生成行业归因",
+                "classification_note": "候选样本曲线按退出事件日聚合，非账户净值",
+                "input_trades": len(trades),
+                "classified_trades": 0,
+                "capital_coverage": None,
+                "warnings": ["候选独立执行不是可交易账户组合；行业归因不可用"],
+                "brinson": None,
+                "fama_french": fama_french_unavailable_report(),
+            }
+
+        try:
+            from app.services.market_overview_builder import symbol_dimension_map
+
+            repo = self.engine.repo
+            if repo is None:
+                raise RuntimeError("backtest repository unavailable")
+            industry_map = symbol_dimension_map(repo, "industry", level=2)
+            if not isinstance(industry_map, dict):
+                raise TypeError("industry mapping must be a dict")
+            return build_trade_industry_brinson_report(trades, industry_map)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("trade-window industry attribution unavailable: %s", exc)
+            report = build_trade_industry_brinson_report(trades, {})
+            report["warnings"].append("行业分类映射不可用；行业归因未计算")
+            return report
 
     def _apply_regime_t1_mask(self, panel: pl.DataFrame, config: "StrategyBacktestConfig") -> pl.Series:
         """T-1 环境入场过滤: 缺数据 fail-open, 只 mask entry 不动 exit。
@@ -935,6 +957,8 @@ class StrategyBacktestService:
         return {
             "strategy_id": c.strategy_id,
             "symbols": c.symbols,
+            "entry_fill": c.entry_fill,
+            "exit_fill": c.exit_fill,
             "start": str(c.start),
             "end": str(c.end),
             "params": c.params,
@@ -951,6 +975,8 @@ class StrategyBacktestService:
             "max_exposure_pct": c.max_exposure_pct,
             "initial_capital": c.initial_capital,
             "position_sizing": c.position_sizing,
+            "benchmark_symbol": c.benchmark_symbol,
+            "risk_free_rate": c.risk_free_rate,
 
         }
 

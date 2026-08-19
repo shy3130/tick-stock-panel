@@ -67,6 +67,7 @@ class ParameterGridRequest(BaseModel):
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
     regime_filter: dict | None = None
+    risk_free_rate: float = Field(default=0.0, gt=-1.0, le=1.0)
     # ── 网格轴 ──
     grid: dict[str, list[float]] = Field(..., description="参数网格: {param_id: [候选值]}")
     objective: Literal["sharpe", "calmar", "total_return", "risk_adjusted"] = "risk_adjusted"
@@ -136,6 +137,7 @@ def _build_base_config(req: ParameterGridRequest, start: date, end: date) -> Str
         mode=req.mode,
         holding_days=req.holding_days,
         regime_filter=req.regime_filter,
+        risk_free_rate=req.risk_free_rate,
     )
 
 

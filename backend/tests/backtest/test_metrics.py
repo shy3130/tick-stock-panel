@@ -523,3 +523,101 @@ def test_nonfinite_inputs_dropped():
     arr = [0.1, float("nan"), -0.1, float("inf")]
     assert mt.profit_factor(arr) is not None  # 0.1 vs -0.1 → 1.0
     assert math.isclose(mt.profit_factor(arr), 1.0)
+
+
+def test_relative_performance_metrics_uses_shared_annualization_context():
+    benchmark = np.array([0.01, -0.02, 0.015, 0.005])
+    portfolio = 0.001 + 1.5 * benchmark
+    result = mt.relative_performance_metrics(
+        portfolio,
+        benchmark,
+        mt.MetricContext("daily"),
+    )
+
+    assert math.isclose(result["beta"], 1.5, rel_tol=1e-12)
+    assert math.isclose(result["alpha"], 0.252, rel_tol=1e-12)
+    assert math.isclose(result["benchmark_correlation"], 1.0, rel_tol=1e-12)
+    assert result["tracking_error"] is not None
+    assert result["information_ratio"] is not None
+
+
+def test_relative_performance_metrics_applies_annual_risk_free_to_alpha():
+    context = mt.MetricContext("daily", risk_free_rate=0.05)
+    benchmark = np.array([0.01, -0.02, 0.015, 0.005])
+    alpha_per_period = 0.001
+    portfolio = (
+        context.period_risk_free_rate
+        + alpha_per_period
+        + 1.5 * (benchmark - context.period_risk_free_rate)
+    )
+
+    result = mt.relative_performance_metrics(portfolio, benchmark, context)
+
+    assert math.isclose(result["beta"], 1.5, rel_tol=1e-12)
+    assert math.isclose(result["alpha"], alpha_per_period * 252, rel_tol=1e-12)
+
+
+def test_relative_performance_metrics_constant_benchmark_is_explicitly_unavailable():
+    result = mt.relative_performance_metrics(
+        [0.01, 0.02, -0.01],
+        [0.0, 0.0, 0.0],
+        mt.MetricContext("daily"),
+    )
+
+    assert result["alpha"] is None
+    assert result["beta"] is None
+    assert result["benchmark_correlation"] is None
+    assert result["tracking_error"] is not None
+
+
+# ---------------------------------------------------------------------------
+# MetricContext / 统一年化口径
+# ---------------------------------------------------------------------------
+
+
+def test_metric_context_derives_periods_from_frequency():
+    assert mt.MetricContext("daily").periods_per_year == 252
+    assert mt.MetricContext("weekly").periods_per_year == 52
+    assert mt.MetricContext("monthly").periods_per_year == 12
+
+
+def test_metric_context_rejects_nonstandard_ddof():
+    with np.testing.assert_raises(ValueError):
+        mt.MetricContext(std_ddof=0)
+
+
+def test_annualized_sharpe_uses_sample_std_and_true_frequency():
+    returns = np.array([0.01, -0.005, 0.02, 0.0])
+    daily = mt.MetricContext("daily")
+    weekly = mt.MetricContext("weekly")
+    expected = returns.mean() / returns.std(ddof=1) * math.sqrt(252)
+    assert math.isclose(mt.annualized_sharpe(returns, daily), expected)
+    assert mt.annualized_sharpe(returns, weekly) < mt.annualized_sharpe(returns, daily)
+
+
+def test_metric_context_converts_annual_risk_free_rate():
+    context = mt.MetricContext("monthly", risk_free_rate=0.12)
+    expected_period_rate = (1.12 ** (1 / 12)) - 1
+    assert math.isclose(context.period_risk_free_rate, expected_period_rate)
+
+
+def test_performance_metrics_exposes_context_and_unified_sharpe():
+    context = mt.MetricContext("weekly", risk_free_rate=0.02)
+    returns = [0.01, -0.005, 0.02, 0.0]
+    result = mt.performance_metrics(returns=returns, context=context)
+    assert result["metric_context"] == context.to_dict()
+    assert math.isclose(result["sharpe"], mt.annualized_sharpe(returns, context))
+    assert math.isclose(result["annual_return"], mt.annualized_return(returns, context))
+    assert math.isclose(
+        result["annual_volatility"],
+        float(np.std(returns, ddof=context.std_ddof)) * math.sqrt(context.periods_per_year),
+    )
+
+
+def test_performance_metrics_rejects_context_plus_legacy_frequency():
+    with np.testing.assert_raises(ValueError):
+        mt.performance_metrics(
+            returns=[0.01, -0.01],
+            context=mt.MetricContext("daily"),
+            periods_per_year=252,
+        )

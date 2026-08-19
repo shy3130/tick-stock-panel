@@ -12,6 +12,8 @@
   expand_scenarios    — 笛卡尔积展开为 list[StrategyBacktestConfig]
   compute_config_hash — 基础配置 + 网格 + objective 的确定性 md5
   score_scenario      — objective 打分 (sharpe / calmar / total_return / risk_adjusted)
+  compute_pareto_fronts — 严格三目标 (收益/夏普/回撤) 非支配分层
+  assign_pareto_fronts  — 为场景结果就地写入 Pareto 层
   run_grid            — 有界并发执行 + 评分排序 + 最优稳健性 + 原子持久化
   ParameterGridExperimentStore — 原子写 / 启动恢复
 """
@@ -26,7 +28,7 @@ import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from app.json_safe import json_safe
@@ -76,7 +78,10 @@ class NormalizedGrid:
 
 @dataclass
 class GridScenarioResult:
-    """单个 scenario 的结果。"""
+    """单个 scenario 的结果。
+
+    ``pareto_front`` 为严格三目标 Pareto 层：1 表示非支配层；不满足条件的场景为 None。
+    """
     scenario_id: str
     params: dict
     stats: dict = field(default_factory=dict)
@@ -84,6 +89,7 @@ class GridScenarioResult:
     rank: int = 0
     error: str | None = None
     elapsed_ms: float = 0.0
+    pareto_front: int | None = None
 
 
 @dataclass
@@ -116,7 +122,15 @@ class GridExperiment:
 
     @staticmethod
     def from_dict(d: dict) -> GridExperiment:
-        scenarios = [GridScenarioResult(**s) for s in d.pop("scenarios", [])]
+        d = dict(d)
+        # 旧实验文件可能缺新增字段，也可能来自更新版本带未知字段；两者都必须可读。
+        experiment_fields = {field.name for field in fields(GridExperiment)}
+        scenario_fields = {field.name for field in fields(GridScenarioResult)}
+        scenarios = [
+            GridScenarioResult(**{k: v for k, v in item.items() if k in scenario_fields})
+            for item in d.pop("scenarios", [])
+        ]
+        d = {k: v for k, v in d.items() if k in experiment_fields}
         return GridExperiment(**d, scenarios=scenarios)
 
 
@@ -289,6 +303,76 @@ def score_scenario(stats: dict, objective: Objective) -> float:
         return round(calmar, 4)
     # risk_adjusted (默认)
     return round(sharpe + calmar, 4)
+
+
+# ================================================================
+# 严格 Pareto 分层 (收益/夏普越高越好, 回撤绝对值越低越好)
+# ================================================================
+
+def compute_pareto_fronts(
+    scenarios: list[GridScenarioResult],
+    *,
+    epsilon: float = 1e-12,
+) -> dict[str, int]:
+    """返回 ``scenario_id -> Pareto 层``；第一层为严格非支配解。
+
+    三目标：``total_return`` / ``sharpe`` 越大越好，``abs(max_drawdown)`` 越小越好。
+    浮点比较使用固定 epsilon，目标向量相等不构成支配。
+    只有无错误且三个目标均为有限实数的场景才参与分层，其余不返回层号。
+    """
+    keyed: list[tuple[float, float, float, str]] = []
+    for scenario in scenarios:
+        if scenario.error:
+            continue
+        try:
+            total_return = float(scenario.stats.get("total_return"))
+            sharpe = float(scenario.stats.get("sharpe"))
+            max_drawdown = float(scenario.stats.get("max_drawdown"))
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) for v in (total_return, sharpe, max_drawdown)):
+            continue
+        # 统一成“越小越好”的目标向量，支配判断只有一个方向。
+        keyed.append((-total_return, -sharpe, abs(max_drawdown), scenario.scenario_id))
+    keyed.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
+
+    fronts: dict[str, int] = {}
+    remaining = keyed
+    layer = 1
+    while remaining:
+        next_remaining: list[tuple[float, float, float, str]] = []
+        for idx, candidate in enumerate(remaining):
+            dominated = False
+            for other_idx, other in enumerate(remaining):
+                if other_idx == idx:
+                    continue
+                no_worse = all(
+                    other[i] <= candidate[i] + epsilon for i in range(3)
+                )
+                strictly_better = any(
+                    other[i] < candidate[i] - epsilon for i in range(3)
+                )
+                if no_worse and strictly_better:
+                    dominated = True
+                    break
+            if dominated:
+                next_remaining.append(candidate)
+            else:
+                fronts[candidate[3]] = layer
+        remaining = next_remaining
+        layer += 1
+    return fronts
+
+
+def assign_pareto_fronts(
+    scenarios: list[GridScenarioResult],
+    *,
+    epsilon: float = 1e-12,
+) -> None:
+    """就地写入每个场景的 Pareto 层；不合格场景重置为 ``None``。"""
+    fronts = compute_pareto_fronts(scenarios, epsilon=epsilon)
+    for scenario in scenarios:
+        scenario.pareto_front = fronts.get(scenario.scenario_id)
 
 
 # ================================================================
@@ -493,6 +577,9 @@ def run_grid(
     for rank, sr in enumerate(valid, 1):
         sr.rank = rank
 
+    # ── 严格多目标 Pareto 分层 (独立于目标函数排序) ──
+    assign_pareto_fronts([sr for sr, _ in results])
+
     all_sorted = sorted(results, key=lambda x: x[0].scenario_id)
     experiment.scenarios = [sr for sr, _ in all_sorted]
     experiment.completed = len(results)
@@ -508,11 +595,15 @@ def run_grid(
                 best_result = res
                 break
         if best_result is not None and best_result.equity_curve:
-            rets = rb.returns_from_equity_curve(best_result.equity_curve)
             robustness: dict = {}
-            if len(rets) >= 2:
-                robustness["bootstrap"] = rb.bootstrap_sharpe_ci(rets, n_boot=1000, seed=42)
-                robustness["mc_permutation"] = rb.mc_permutation_pvalue(rets, n_perm=1000, seed=42)
+            if best_result.stats.get("full_kind") == "candidate_execution":
+                # 候选曲线按退出事件日采样，不能把它伪装成日频收益计算 Sharpe。
+                robustness["time_series_metrics_unavailable"] = "candidate_execution"
+            else:
+                rets = rb.returns_from_equity_curve(best_result.equity_curve)
+                if len(rets) >= 2:
+                    robustness["bootstrap"] = rb.bootstrap_sharpe_ci(rets, n_boot=1000, seed=42)
+                    robustness["mc_permutation"] = rb.mc_permutation_pvalue(rets, n_perm=1000, seed=42)
             robustness["exit_breakdown"] = rb.exit_reason_breakdown(best_result.trades)
             experiment.robustness = robustness
 

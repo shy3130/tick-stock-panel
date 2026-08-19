@@ -457,6 +457,10 @@ class KlineRepository:
         ]
         return max(dates) if dates else None
 
+    def local_enriched_latest_date(self) -> date | None:
+        """返回可信读取上限内的本地 enriched overlay 最新日期。"""
+        return self._latest_enriched_date_duckdb()
+
     def set_enriched_canonical_date(self, value: date) -> None:
         """发布 provider 已确认的盘后日期，并隔离更晚的未认证分区。"""
         if value == self._enriched_canonical_date:

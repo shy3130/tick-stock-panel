@@ -15,6 +15,14 @@ from typing import TYPE_CHECKING, Callable, Literal
 import numpy as np
 import polars as pl
 
+from app.backtest.metrics import (
+    MetricContext,
+    annualized_return,
+    annualized_sharpe,
+    payoff_ratio,
+    performance_metrics,
+    profit_factor,
+)
 from app.backtest.optimizers import portfolio_weights
 from app.storage.repository import KlineRepository
 
@@ -22,6 +30,7 @@ if TYPE_CHECKING:
     import threading
 
 logger = logging.getLogger(__name__)
+
 
 
 # ================================================================
@@ -51,6 +60,7 @@ class MatcherConfig:
     position_sizing: Literal[
         "equal", "score_weight", "equal_vol", "risk_parity", "mean_variance", "max_diversification",
     ] = "equal"
+    risk_free_rate: float = 0.0
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -83,6 +93,13 @@ class TradeRecord:
     exit_signal_date: date | str | None = None
     blocked_exit_days: int = 0
     cause_tag: str = "strategy_outcome"  # YMOS 归因: strategy_outcome(策略按设计执行) | driver_quality(数据/驱动异常)
+    # MAE/MFE: 持仓窗口内日 K raw low/high 相对 entry_price 的偏移。
+    # 可观测窗口按成交口径: entry_fill=open_t+1 含入场日, close_t 从下一交易日起
+    # (入场日区间发生在收盘成交前); 退出日保守不计入。
+    # mae_pct<=0 / mfe_pct>=0; 是日内区间口径的持仓质量诊断, 不代表可成交实现的收益。
+    # 整个可观测窗口无有效 high/low (如长期停牌) → None, 不伪造 0; 旧记录缺字段同 None。
+    mae_pct: float | None = None
+    mfe_pct: float | None = None
 
 
 @dataclass
@@ -105,6 +122,35 @@ _STRATEGY_OUTCOME_REASONS = frozenset({
 def cause_tag_for(exit_reason: str) -> str:
     """退出原因 → cause_tag。已知原因 = strategy_outcome, 未知 = driver_quality。"""
     return "strategy_outcome" if exit_reason in _STRATEGY_OUTCOME_REASONS else "driver_quality"
+
+
+def _pos_excursions(pos: dict) -> tuple[float | None, float | None]:
+    """持仓期 MAE/MFE → (mae_pct, mfe_pct)。
+
+    口径: 可观测持仓窗口内日 K raw low/high 相对 entry_price 的偏移。
+    可观测窗口由调用方按成交口径控制 (open_t+1 含入场日, close_t 自次日起;
+    退出日不计入), 与 Trailing Stop 的 max_high 窗口在 close_t 入场日不同。
+    未跌破/未涨超入场价时钳制为 0 (mae<=0, mfe>=0)。
+    整个可观测窗口无有效 high/low 或 entry 非法 → None, 不伪造 0。
+    """
+    try:
+        entry = float(pos["entry_price"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+    if not (entry > 0 and np.isfinite(entry)):
+        return None, None
+    low = pos.get("mae_low")
+    high = pos.get("mfe_high")
+    mae = min(0.0, float(low) / entry - 1.0) if low is not None else None
+    mfe = max(0.0, float(high) / entry - 1.0) if high is not None else None
+    if mae is not None and not np.isfinite(mae):
+        mae = None
+    if mfe is not None and not np.isfinite(mfe):
+        mfe = None
+    return (
+        round(mae, 6) if mae is not None else None,
+        round(mfe, 6) if mfe is not None else None,
+    )
 
 
 # ================================================================
@@ -645,6 +691,7 @@ class BacktestEngine:
             exit_value = shares * exit_price * (1 - sell_cost_pct)
             pnl_amount = exit_value - entry_value
             pnl_pct = pnl_amount / entry_value if entry_value > 0 else 0.0
+            mae_pct, mfe_pct = _pos_excursions(pos)
             trades.append(TradeRecord(
                 symbol=str(pos["symbol"]),
                 name=str(pos.get("name", "")),
@@ -666,6 +713,8 @@ class BacktestEngine:
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
                 exit_reason=reason,
                 cause_tag=cause_tag_for(reason),
+                mae_pct=mae_pct,
+                mfe_pct=mfe_pct,
             ))
             return True
 
@@ -715,13 +764,24 @@ class BacktestEngine:
                 "entry_score": score,
                 "hold_days": 0,
                 "max_high": entry_price,
+                "mae_low": None,
+                "mfe_high": None,
                 "pending_exit_reason": None,
                 "pending_exit_signal_date": None,
                 "blocked_exit_days": 0,
             }
+            # 可观测窗口按成交口径: open_t+1 当日开盘成交, 入场日区间可观测;
+            # close_t 收盘成交, 入场日区间发生在成交前 (前视) → 不可计入, 首个可观测日为次日。
+            # 仅约束 mae_low/mfe_high; max_high (trailing) 维持既有语义不变。
+            observable_from_entry = config.entry_fill == "open_t+1"
             hi = float(high_prices[entry_idx])
             if _valid_price(hi):
                 pos["max_high"] = max(float(pos["max_high"]), hi)
+                if observable_from_entry:
+                    pos["mfe_high"] = hi
+            lo = float(low_prices[entry_idx])
+            if _valid_price(lo) and observable_from_entry:
+                pos["mae_low"] = lo
 
             closed = False
             last_idx = entry_idx
@@ -754,8 +814,14 @@ class BacktestEngine:
                     break
 
                 hi = float(high_prices[idx])
+                lo = float(low_prices[idx])
                 if _valid_price(hi):
                     pos["max_high"] = max(float(pos.get("max_high", entry_price)), hi)
+                    prev = pos.get("mfe_high")
+                    pos["mfe_high"] = hi if prev is None or hi > prev else prev
+                if _valid_price(lo):
+                    prev = pos.get("mae_low")
+                    pos["mae_low"] = lo if prev is None or lo < prev else prev
 
             if not closed:
                 if last_idx == entry_idx:
@@ -983,6 +1049,7 @@ class BacktestEngine:
             cash += exit_value
             pnl_amount = exit_value - pos["entry_value"]
             pnl_pct = (exit_value - pos["entry_value"]) / pos["entry_value"] if pos["entry_value"] > 0 else 0.0
+            mae_pct, mfe_pct = _pos_excursions(pos)
             sold_today.add(sym)
             trades.append(TradeRecord(
                 symbol=sym,
@@ -1005,6 +1072,8 @@ class BacktestEngine:
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
                 exit_reason=reason,
                 cause_tag=cause_tag_for(reason),
+                mae_pct=mae_pct,
+                mfe_pct=mfe_pct,
             ))
 
         def _try_sell(
@@ -1205,6 +1274,8 @@ class BacktestEngine:
                     "position_pct": entry_value / account_equity_before_buy if account_equity_before_buy > 0 else 0.0,
                     "entry_score": _score,
                     "max_high": entry_price,
+                    "mae_low": None,
+                    "mfe_high": None,
                     "hold_days": 0,
                     "pending_exit_reason": None,
                     "pending_exit_signal_date": None,
@@ -1245,9 +1316,22 @@ class BacktestEngine:
             for sym, pos in positions.items():
                 idx = row_by_symbol.get(sym)
                 if idx is not None:
+                    # 可观测窗口按成交口径: close_t 入场日收盘成交, 当日区间发生在成交前
+                    # (前视) → 不计入 mae/mfe; open_t+1 当日开盘成交, 入场日可观测。
+                    # 退出日由卖出先 pop 天然排除。max_high (trailing) 维持既有语义。
+                    entry_bar_observable = (
+                        config.entry_fill == "open_t+1" or pos["entry_date"] != d_str
+                    )
                     hi = float(high_prices[idx])
+                    lo = float(low_prices[idx])
                     if _valid_price(hi):
                         pos["max_high"] = max(float(pos.get("max_high", pos["entry_price"])), hi)
+                        if entry_bar_observable:
+                            prev = pos.get("mfe_high")
+                            pos["mfe_high"] = hi if prev is None or hi > prev else prev
+                    if _valid_price(lo) and entry_bar_observable:
+                        prev = pos.get("mae_low")
+                        pos["mae_low"] = lo if prev is None or lo < prev else prev
 
             for i in idxs:
                 c = float(close_prices[i])
@@ -1268,7 +1352,14 @@ class BacktestEngine:
             })
             drawdown_curve.append({"date": d_str[:10], "value": round(float(dd), 4)})
 
-        stats = self._calc_portfolio_stats(equity_curve, trades, config.initial_capital)
+        stats = self._calc_portfolio_stats(
+            equity_curve,
+            trades,
+            config.initial_capital,
+            config.fees_pct,
+            config.slippage_bps,
+            config.risk_free_rate,
+        )
         stats["execution"] = execution_stats
         stats["pending_exit_positions"] = sum(1 for p in positions.values() if p.get("pending_exit_reason"))
         per_symbol = self._calc_per_symbol(trades)
@@ -1356,10 +1447,11 @@ class BacktestEngine:
         losses = pnls[pnls <= 0]
         win_rate = len(wins) / n_trades
 
-        # 盈亏比
+        # 交易统计：payoff ratio 与 Profit Factor 分别按均值比、损益总额比计算。
         avg_win = float(np.mean(wins)) if len(wins) > 0 else 0.0
         avg_loss = abs(float(np.mean(losses))) if len(losses) > 0 else 0.0
-        profit_factor = avg_win / avg_loss if avg_loss > 0 else (float("inf") if avg_win > 0 else 0.0)
+        payoff = payoff_ratio(pnls)
+        factor = profit_factor(pnls)
 
         # 最大回撤 — 用交易序列近似
         equity = initial_capital
@@ -1371,8 +1463,8 @@ class BacktestEngine:
             dd = (equity - peak) / peak
             max_dd = min(max_dd, dd)
 
-        # 夏普 — 用交易收益标准差近似
-        sharpe = float(np.mean(pnls) / np.std(pnls)) * np.sqrt(252) if np.std(pnls) > 0 else 0.0
+        # 简化模式只有不等间隔的逐笔收益，不能伪装成日频 Sharpe。
+        sharpe = None
 
         # Calmar
         calmar = annual_return / abs(max_dd) if abs(max_dd) > 0.001 else 0.0
@@ -1381,10 +1473,11 @@ class BacktestEngine:
             "total_return": round(float(total_return), 4),
             "annual_return": round(float(annual_return), 4),
             "max_drawdown": round(float(max_dd), 4),
-            "sharpe": round(float(sharpe), 2),
+            "sharpe": None,
             "calmar": round(float(calmar), 2),
             "win_rate": round(float(win_rate), 4),
-            "profit_factor": round(float(profit_factor), 2) if np.isfinite(profit_factor) else None,
+            "profit_factor": round(float(factor), 2) if factor is not None else None,
+            "payoff_ratio": round(float(payoff), 2) if payoff is not None else None,
             "n_trades": n_trades,
             "avg_pnl": round(float(np.mean(pnls)), 4),
             "avg_win": round(avg_win, 4),
@@ -1448,11 +1541,10 @@ class BacktestEngine:
         pnls = np.array([t.pnl_pct for t in trades], dtype=float)
         durations = np.array([t.duration for t in trades], dtype=float)
         wins = pnls[pnls > 0]
-        losses = pnls[pnls <= 0]
-        avg_win = float(np.mean(wins)) if len(wins) else 0.0
-        avg_loss = abs(float(np.mean(losses))) if len(losses) else 0.0
 
-        # 按退出日聚合已实现样本收益, 构造“样本收益曲线”。它不是账户净值。
+
+        # 按退出日聚合已实现样本收益，构造“样本收益曲线”。它不是账户净值，
+        # 且仅含有退出的事件日：不能把它伪装成等间隔日收益来年化或计算风险调整收益。
         daily_returns: dict[str, list[float]] = {}
         for t in trades:
             daily_returns.setdefault(str(t.exit_date)[:10], []).append(float(t.pnl_pct))
@@ -1481,8 +1573,8 @@ class BacktestEngine:
         peaks = np.maximum.accumulate(values) if len(values) else np.array([])
         drawdowns = values / peaks - 1 if len(values) else np.array([])
         max_drawdown = float(drawdowns.min()) if len(drawdowns) else 0.0
-        daily = np.array(daily_avg, dtype=float)
-        sharpe = float(np.mean(daily) / np.std(daily) * np.sqrt(252)) if len(daily) > 1 and np.std(daily) > 0 else 0.0
+        factor = profit_factor(pnls)
+        payoff = payoff_ratio(pnls)
 
         lo, hi, nbins = -0.20, 0.20, 20
         clipped = np.clip(pnls, lo, hi)
@@ -1506,16 +1598,31 @@ class BacktestEngine:
             "avg_return": round(float(np.mean(pnls)), 4),
             "median_return": round(float(np.median(pnls)), 4),
             "win_rate": round(float(len(wins) / len(pnls)), 4) if len(pnls) else 0.0,
-            "profit_factor": round(float(avg_win / avg_loss), 2) if avg_loss > 0 else None,
+            "profit_factor": round(float(factor), 2) if factor is not None else None,
+            "payoff_ratio": round(float(payoff), 2) if payoff is not None else None,
             "best": round(float(np.max(pnls)), 4),
             "worst": round(float(np.min(pnls)), 4),
             "avg_duration": round(float(np.mean(durations)), 1) if len(durations) else 0.0,
             "total_return": round(float(total_return), 4),
+            # 候选曲线按退出事件而非连续交易日采样，年化与 Sharpe 均不可得。
+            "annual_return": None,
             "max_drawdown": round(float(max_drawdown), 4),
-            "sharpe": round(float(sharpe), 2),
+            "sharpe": None,
             "return_distribution": dist,
             "execution": execution_stats,
         }
+        # 交易级统计（收益期数未知时不携带日频 MetricContext），仍可安全产出
+        # 盈亏、持仓期与 MAE/MFE；时间序列风险指标刻意不生成。
+        advanced = performance_metrics(
+            pnls=pnls,
+            durations=durations,
+            maes=[t.mae_pct for t in trades],
+            mfes=[t.mfe_pct for t in trades],
+        )
+        advanced.pop("metric_context", None)
+        for key, value in advanced.items():
+            if key not in stats:
+                stats[key] = value
 
         return SimResult(
             equity_curve=equity_curve,
@@ -1530,32 +1637,43 @@ class BacktestEngine:
         equity_curve: list[dict],
         trades: list[TradeRecord],
         initial_capital: float,
+        fees_pct: float = 0.0,
+        slippage_bps: float = 0.0,
+        risk_free_rate: float = 0.0,
     ) -> dict:
         if not equity_curve:
             return {"total_return": 0, "n_trades": 0}
+        context = MetricContext("daily", risk_free_rate=risk_free_rate)
         final_equity = float(equity_curve[-1]["value"])
         total_return = final_equity / initial_capital - 1 if initial_capital > 0 else 0.0
         values = np.array([float(r["value"]) for r in equity_curve], dtype=float)
         daily = values[1:] / values[:-1] - 1 if len(values) > 1 else np.array([])
-        annual_return = (1 + total_return) ** (252 / max(len(equity_curve), 1)) - 1 if total_return > -1 else total_return
+        annual_return = annualized_return(daily, context)
         peaks = np.maximum.accumulate(values)
         drawdowns = values / peaks - 1
         max_drawdown = float(drawdowns.min()) if len(drawdowns) else 0.0
-        sharpe = float(np.mean(daily) / np.std(daily) * np.sqrt(252)) if len(daily) and np.std(daily) > 0 else 0.0
+        sharpe = annualized_sharpe(daily, context)
         pnls = np.array([t.pnl_pct for t in trades], dtype=float) if trades else np.array([])
         exposures = np.array([float(r.get("exposure", 0.0)) for r in equity_curve], dtype=float)
         wins = pnls[pnls > 0]
         losses = pnls[pnls <= 0]
         avg_win = float(np.mean(wins)) if len(wins) else 0.0
         avg_loss = abs(float(np.mean(losses))) if len(losses) else 0.0
-        return {
+        factor = profit_factor(pnls)
+        payoff = payoff_ratio(pnls)
+        stats = {
             "total_return": round(float(total_return), 4),
-            "annual_return": round(float(annual_return), 4),
+            "annual_return": round(float(annual_return), 4) if annual_return is not None else None,
             "max_drawdown": round(float(max_drawdown), 4),
-            "sharpe": round(float(sharpe), 2),
-            "calmar": round(float(annual_return / abs(max_drawdown)), 2) if abs(max_drawdown) > 0.001 else 0.0,
+            "sharpe": round(float(sharpe), 2) if sharpe is not None else None,
+            "calmar": (
+                round(float(annual_return / abs(max_drawdown)), 2)
+                if annual_return is not None and abs(max_drawdown) > 0.001
+                else None
+            ),
             "win_rate": round(float(len(wins) / len(pnls)), 4) if len(pnls) else 0.0,
-            "profit_factor": round(float(avg_win / avg_loss), 2) if avg_loss > 0 else None,
+            "profit_factor": round(float(factor), 2) if factor is not None else None,
+            "payoff_ratio": round(float(payoff), 2) if payoff is not None else None,
             "n_trades": len(trades),
             "avg_pnl": round(float(np.mean(pnls)), 4) if len(pnls) else 0.0,
             "avg_win": round(avg_win, 4),
@@ -1565,6 +1683,36 @@ class BacktestEngine:
             "avg_exposure": round(float(np.mean(exposures)), 4) if len(exposures) else 0.0,
             "max_exposure": round(float(np.max(exposures)), 4) if len(exposures) else 0.0,
         }
+        gross_notional = sum(
+            max(float(trade.entry_value), 0.0) + max(float(trade.exit_value), 0.0)
+            for trade in trades
+        )
+        commission_cost = gross_notional * max(float(fees_pct), 0.0)
+        slippage_cost = gross_notional * max(float(slippage_bps), 0.0) / 10_000.0
+        stats["cost_breakdown"] = {
+            "gross_notional": round(gross_notional, 2),
+            "commission": round(commission_cost, 2),
+            "slippage": round(slippage_cost, 2),
+            "total": round(commission_cost + slippage_cost, 2),
+            "turnover": (
+                round(gross_notional / float(initial_capital), 4)
+                if initial_capital > 0
+                else None
+            ),
+        }
+        advanced = performance_metrics(
+            returns=daily,
+            pnls=pnls,
+            durations=[trade.duration for trade in trades],
+            positions=exposures,
+            maes=[trade.mae_pct for trade in trades],
+            mfes=[trade.mfe_pct for trade in trades],
+            context=context,
+        )
+        for key, value in advanced.items():
+            if key not in stats:
+                stats[key] = value
+        return stats
 
     @staticmethod
     def _date_str(value) -> str:
