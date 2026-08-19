@@ -20,6 +20,7 @@ import {
   startParameterGridExperiment,
   useParameterGridTask,
 } from '@/lib/parameterGridTask'
+import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
 import { ParameterGridDiagnostics } from './components/ParameterGridDiagnostics'
 
 
@@ -351,7 +352,6 @@ export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
 
   const status = statusMeta(experiment?.status ?? null)
   const StatusIcon = status.Icon
-  const progress = experiment?.total ? Math.min(100, Math.round((experiment.completed / experiment.total) * 100)) : 0
   const rankedScenarios = useMemo(() => [...(experiment?.scenarios ?? [])].sort((left, right) => {
     const leftRank = left.rank || Number.MAX_SAFE_INTEGER
     const rightRank = right.rank || Number.MAX_SAFE_INTEGER
@@ -575,42 +575,43 @@ export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
 
         {(launching || experiment) && (
           <div className="space-y-3">
-            <div className="rounded-btn border border-border bg-elevated/30 p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${status.cls}`}>
-                  <StatusIcon className={`h-3 w-3 ${experiment?.status === 'pending' || experiment?.status === 'running' ? 'animate-spin' : ''}`} />
-                  {launching && !experiment ? '正在创建实验' : status.label}
+            {(launching || isActive) ? (
+              <BacktestRunStatus
+                status={launching && !experiment ? 'pending' : (experiment?.status === 'pending' ? 'pending' : 'running')}
+                title={launching && !experiment ? '正在创建参数网格' : '参数网格运行中'}
+                runtime={experiment?.runtime}
+                completed={experiment?.completed}
+                total={experiment?.total}
+                startedAt={experiment?.created_at}
+                extras={experiment ? [
+                  { label: '请求', value: String(experiment.requested_count) },
+                  { label: '场景', value: String(experiment.scenario_count) },
+                  ...(experiment.truncated ? [{ label: '截断', value: '超限组合未执行' }] : []),
+                ] : []}
+                onCancel={() => { void cancel() }}
+                cancelling={cancelling}
+                cancelLabel="取消实验"
+              />
+            ) : (
+              <div className="rounded-btn border border-border bg-elevated/30 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${status.cls}`}>
+                    <StatusIcon className="h-3 w-3" />
+                    {status.label}
+                  </div>
+                  {experiment && <span className="text-[11px] text-muted">目标：{OBJECTIVES.find(item => item.value === experiment.objective)?.label ?? experiment.objective}</span>}
+                  {experiment?.truncated && <span className="rounded-btn border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">已截断</span>}
+                  {experiment && <span className="ml-auto font-mono text-[10px] text-muted">{experiment.experiment_id}</span>}
                 </div>
-                {experiment && <span className="text-[11px] text-muted">目标：{OBJECTIVES.find(item => item.value === experiment.objective)?.label ?? experiment.objective}</span>}
-                {experiment?.truncated && <span className="rounded-btn border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">已截断</span>}
-                {experiment && <span className="ml-auto font-mono text-[10px] text-muted">{experiment.experiment_id}</span>}
-              </div>
-
-              {experiment && (
-                <>
-                  <div className="mt-3 flex items-center justify-between gap-3 text-xs text-secondary">
-                    <span>已完成 <b className="font-mono text-foreground num">{experiment.completed}</b> / {experiment.total}</span>
-                    <span className="font-mono text-accent num">{progress}%</span>
-                  </div>
-                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-base">
-                    <div className="h-full rounded-full bg-accent transition-all duration-300 ease-out" style={{ width: `${progress}%` }} />
-                  </div>
+                {experiment && (
                   <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted">
+                    <span>已完成 {experiment.completed} / {experiment.total}</span>
                     <span>请求组合 {experiment.requested_count}</span>
                     <span>实际场景 {experiment.scenario_count}</span>
-                    <span>本次上限 {experiment.max_scenarios}</span>
-                    {experiment.truncated && <span className="text-warning">超限组合未执行</span>}
                   </div>
-                </>
-              )}
-
-              {isActive && (
-                <button type="button" onClick={() => { void cancel() }} disabled={cancelling} className="mt-3 inline-flex items-center gap-1.5 rounded-btn border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/20 disabled:opacity-50">
-                  {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3 fill-current" />}
-                  {cancelling ? '正在取消…' : '取消实验'}
-                </button>
-              )}
-            </div>
+                )}
+              </div>
+            )}
 
             {experiment?.status === 'failed' && (
               <div role="alert" className="rounded-btn border border-danger/30 bg-danger/10 p-3 text-xs text-danger">实验执行失败。请检查策略参数范围、日期覆盖和本地历史数据后重新发起。</div>

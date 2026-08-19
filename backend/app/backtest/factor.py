@@ -206,6 +206,7 @@ class FactorBacktestService:
                     "label": label,
                     "completed": completed,
                     "total": 100,
+                    "elapsed_ms": (time.perf_counter() - t0) * 1000,
                 })
             except Exception:  # noqa: BLE001
                 logger.debug("factor backtest progress callback failed", exc_info=True)

@@ -30,6 +30,7 @@ import { BacktestWarnings } from './components/BacktestWarnings'
 import { ProfessionalDiagnostics } from './components/ProfessionalDiagnostics'
 import { TradeAttributionPanel } from './components/TradeAttributionPanel'
 import { StrategyRobustnessPanel } from './components/StrategyRobustnessPanel'
+import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 
 import type { ScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
@@ -801,6 +802,11 @@ export function StrategyBacktest({
 
   const backtestTask = useBacktestTask()
   const isPending = backtestTask?.isPending ?? false
+  const [pendingStartedAt, setPendingStartedAt] = useState<string | null>(null)
+  useEffect(() => {
+    if (isPending) setPendingStartedAt(prev => prev ?? new Date().toISOString())
+    else setPendingStartedAt(null)
+  }, [isPending])
 
   const dataStatus = useDataStatus()
   const earliestDate = dataStatus.data?.daily?.earliest_date ?? null
@@ -1661,48 +1667,29 @@ export function StrategyBacktest({
         )}
 
         {isPending && (
-          <motion.div
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="rounded-btn border border-accent/30 bg-accent/5 px-3 py-2.5"
-          >
-            <div className="flex items-center gap-2.5">
-              <span className="relative flex h-4 w-4 shrink-0">
-                <Loader2 className="relative h-4 w-4 animate-spin text-accent" />
-              </span>
-              <div className="min-w-0">
-                <div className="text-xs font-medium text-accent">
-                  {backtestTask?.progress
-                    ? `回测中 · 第 ${backtestTask.progress.day}/${backtestTask.progress.total} 天 (${backtestTask.progress.date})`
-                    : '正在重新计算回测…'}
-                </div>
-                <div className="mt-0.5 text-[11px] text-secondary">
-                  {result ? '当前展示上次结果，完成后自动替换' : '正在加载回测数据…'}
-                </div>
-              </div>
-              {backtestTask?.progress && (
-                <span className="ml-auto shrink-0 font-mono text-sm font-semibold text-accent">
-                  {((backtestTask.progress.day / backtestTask.progress.total) * 100).toFixed(0)}%
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={stopBacktest}
-                className="inline-flex shrink-0 items-center gap-1 rounded-btn border border-danger/40 bg-danger/10 px-2 py-1 text-[11px] text-danger transition-colors hover:bg-danger/20"
-              >
-                <Square className="h-3 w-3 fill-current" />
-                停止
-              </button>
-            </div>
-            {backtestTask?.progress && (
-              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-base/60">
-                <div
-                  className="h-full rounded-full bg-accent transition-all duration-300 ease-out"
-                  style={{ width: `${(backtestTask.progress.day / backtestTask.progress.total) * 100}%` }}
-                />
-              </div>
-            )}
-          </motion.div>
+          <BacktestRunStatus
+            status="running"
+            title={backtestTask?.progress?.label || (result ? '正在重新计算回测' : '正在回测')}
+            runtime={backtestTask?.progress ? {
+              stage: backtestTask.progress.stage,
+              label: backtestTask.progress.label
+                || (backtestTask.progress.total
+                  ? `第 ${backtestTask.progress.day}/${backtestTask.progress.total} 天`
+                  : '准备中'),
+              current: backtestTask.progress.date
+                ? `${backtestTask.progress.date}${backtestTask.progress.total ? ` · ${backtestTask.progress.day}/${backtestTask.progress.total}` : ''}`
+                : (result ? '当前仍展示上次结果，完成后自动替换' : '正在加载回测数据'),
+              completed: backtestTask.progress.day,
+              total: backtestTask.progress.total,
+              elapsed_ms: backtestTask.progress.elapsed_ms,
+            } : {
+              label: result ? '当前仍展示上次结果，完成后自动替换' : '正在连接回测任务',
+              current: result ? '完成后自动替换' : '正在加载回测数据',
+            }}
+            startedAt={pendingStartedAt}
+            onCancel={stopBacktest}
+            cancelLabel="停止"
+          />
         )}
 
         {result && !result.error && (

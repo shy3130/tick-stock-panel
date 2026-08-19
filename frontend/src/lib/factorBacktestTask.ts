@@ -20,6 +20,7 @@ export interface FactorBacktestProgress {
   label: string
   completed: number
   total: number
+  elapsed_ms?: number
 }
 
 export interface FactorBacktestTask {

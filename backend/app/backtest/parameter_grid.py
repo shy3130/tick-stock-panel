@@ -35,6 +35,7 @@ from app.json_safe import json_safe
 from typing import Callable, Literal
 
 from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestResult, StrategyBacktestService
+from app.backtest.runtime import build_runtime, format_params
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,7 @@ class GridExperiment:
     updated_at: str = ""
     completed: int = 0
     total: int = 0
+    runtime: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -132,6 +134,32 @@ class GridExperiment:
         ]
         d = {k: v for k, v in d.items() if k in experiment_fields}
         return GridExperiment(**d, scenarios=scenarios)
+
+
+def _set_grid_runtime(
+    experiment: GridExperiment,
+    *,
+    stage: str,
+    label: str,
+    current: str = "",
+    completed: int | None = None,
+    total: int | None = None,
+    failed: int = 0,
+    ok: int = 0,
+    last_elapsed_ms: float = 0.0,
+) -> None:
+    experiment.runtime = build_runtime(
+        stage=stage,
+        label=label,
+        current=current,
+        completed=experiment.completed if completed is None else completed,
+        total=experiment.total if total is None else total,
+        failed=failed,
+        ok=ok,
+        started_at=experiment.created_at,
+        last_elapsed_ms=last_elapsed_ms,
+    )
+    experiment.updated_at = experiment.runtime["updated_at"]
 
 
 # ================================================================
@@ -485,18 +513,23 @@ def run_grid(
     store.save(experiment)
 
     # ── 预加载共享 panel ──────────────────────────────
+    _set_grid_runtime(experiment, stage="loading", label="加载共享行情面板", current="全场景共用一次加载")
+    if progress_cb:
+        progress_cb(dict(experiment.runtime))
+    store.save(experiment)
     shared_panel = None
     try:
         load_start, load_end = service.compute_load_range(base_config)
         shared_panel = service.engine.load_panel(base_config.symbols, load_start, load_end)
     except Exception as e:  # noqa: BLE001
         logger.warning("grid shared panel preload failed, falling back to per-scenario load: %s", e)
+    _set_grid_runtime(experiment, stage="grid", label="参数组合回测", current="正在排队参数组合")
+    store.save(experiment)
 
     keys = sorted(ng.grid.keys())
 
     def _run_one(idx: int, cfg: StrategyBacktestConfig) -> tuple[GridScenarioResult, StrategyBacktestResult | None]:
         combo_params = {k: (cfg.params or {}).get(k) for k in keys} if keys else dict(cfg.params or {})
-        # 排队期间已被取消 → 立即返回, 不启动回测
         if cancel_event is not None and cancel_event.is_set():
             return (
                 GridScenarioResult(
@@ -553,14 +586,19 @@ def run_grid(
                 completed_count += 1
                 experiment.completed = completed_count
                 experiment.scenarios = [sr for sr, _ in sorted(results, key=lambda x: x[0].scenario_id)]
-                experiment.updated_at = _now()
+                last = results[-1][0]
+                failed = sum(1 for sr, _ in results if sr.error)
+                _set_grid_runtime(
+                    experiment,
+                    stage="grid",
+                    label="参数组合回测",
+                    current=format_params(last.params) or last.scenario_id,
+                    failed=failed,
+                    ok=completed_count - failed,
+                    last_elapsed_ms=last.elapsed_ms,
+                )
                 if progress_cb:
-                    progress_cb({
-                        "type": "scenario_done",
-                        "completed": completed_count,
-                        "total": experiment.total,
-                        "scenario_id": results[-1][0].scenario_id,
-                    })
+                    progress_cb({**experiment.runtime, "type": "scenario_done", "scenario_id": last.scenario_id})
                 store.save(experiment)
         finally:
             # 取消未完成的 future (排队中的, _run_one 内部会检查 cancel_event)
@@ -584,11 +622,19 @@ def run_grid(
     experiment.scenarios = [sr for sr, _ in all_sorted]
     experiment.completed = len(results)
     experiment.status = "cancelled" if cancelled else "completed"
-
     # ── 最优 scenario 稳健性后处理 ──
     if valid:
         best_sr = valid[0]
         experiment.best_scenario_id = best_sr.scenario_id
+        _set_grid_runtime(
+            experiment,
+            stage="robustness",
+            label="最优稳健性检验",
+            current=format_params(best_sr.params) or best_sr.scenario_id,
+            failed=len(errored),
+            ok=len(valid),
+        )
+        store.save(experiment)
         best_result: StrategyBacktestResult | None = None
         for sr, res in all_sorted:
             if sr.scenario_id == best_sr.scenario_id:
@@ -597,7 +643,6 @@ def run_grid(
         if best_result is not None and best_result.equity_curve:
             robustness: dict = {}
             if best_result.stats.get("full_kind") == "candidate_execution":
-                # 候选曲线按退出事件日采样，不能把它伪装成日频收益计算 Sharpe。
                 robustness["time_series_metrics_unavailable"] = "candidate_execution"
             else:
                 rets = rb.returns_from_equity_curve(best_result.equity_curve)
@@ -607,6 +652,13 @@ def run_grid(
             robustness["exit_breakdown"] = rb.exit_reason_breakdown(best_result.trades)
             experiment.robustness = robustness
 
-    experiment.updated_at = _now()
+    _set_grid_runtime(
+        experiment,
+        stage="cancelled" if cancelled else "completed",
+        label="已取消" if cancelled else "已完成",
+        current=format_params(valid[0].params) if valid else "",
+        failed=len(errored),
+        ok=len(valid),
+    )
     store.save(experiment)
     return experiment

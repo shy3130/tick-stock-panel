@@ -762,9 +762,11 @@ class TestRunGrid:
             "pg-abcd00000001", "h",
             progress_cb=lambda evt: events.append(evt),
         )
-        assert len(events) == 2
-        assert all(e["type"] == "scenario_done" for e in events)
+        assert len(events) == 3
+        assert events[0]["stage"] == "loading"
+        assert all(e.get("type") == "scenario_done" for e in events[1:])
         assert events[-1]["completed"] == 2
+        assert events[-1]["label"] == "参数组合回测"
 
     def test_shared_panel_passed_to_all_scenarios(self, tmp_path):
         """验证 panel 复用: 所有 scenario 收到同一 panel 引用。"""

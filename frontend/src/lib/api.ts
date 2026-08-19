@@ -4,6 +4,7 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import type { ExperimentRuntime } from './runStatus'
 
 const BASE = ''
 

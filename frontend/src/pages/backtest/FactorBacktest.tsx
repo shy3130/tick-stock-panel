@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, BarChart3, Clock, Printer, FileDown, Loader2, Square } from 'lucide-react'
+import { Play, BarChart3, Clock, Printer, FileDown, Loader2 } from 'lucide-react'
 import { api, type FactorColumn, type GroupStat } from '@/lib/api'
 import { downloadRunReportHtml } from '@/lib/backtestReportDownload'
 import {
@@ -19,6 +19,7 @@ import type { ScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 import { FactorGroupNavChart } from './charts/FactorGroupNavChart'
 import { BacktestWarnings } from './components/BacktestWarnings'
 import { FactorDiagnostics } from './components/FactorDiagnostics'
+import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
 
 const formatDate = (date: Date) => date.toISOString().slice(0, 10)
 const monthsAgo = (months: number) => {
@@ -63,39 +64,38 @@ function StatCard({ label, value, highlight }: {
 function LoadingPanel({
   symbolsText,
   progress,
+  startedAt,
   onCancel,
 }: {
   symbolsText: string
-  progress?: { label: string; completed: number; total: number } | null
+  progress?: { stage?: string; label: string; completed: number; total: number; elapsed_ms?: number } | null
+  startedAt?: string | null
   onCancel: () => void
 }) {
-  const percent = progress?.total
-    ? Math.min(100, Math.max(0, Math.round(progress.completed / progress.total * 100)))
-    : 0
   const stageLabels = ['加载因子面板', '整理有效样本', '计算调仓期收益', '计算截面 IC', '计算分层组合', '汇总多空与风险指标']
   const currentStage = progress?.label ?? '正在连接计算任务'
   const currentStageIndex = Math.max(0, stageLabels.indexOf(currentStage))
 
   return (
     <div className="space-y-3">
-      <div className="panel">
-        <div className="panel-body flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="section-title">正在计算因子分析</div>
-            <div className="mt-1 truncate text-xs text-muted">{symbolsText} · {currentStage}</div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-elevated" role="progressbar" aria-label="因子回测进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-              <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${percent}%` }} />
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="num text-[11px] text-muted">{percent}%</span>
-            <button type="button" onClick={onCancel} className="btn-secondary !px-2 !py-1.5 text-[11px]" aria-label="取消因子分析">
-              <Square className="h-3 w-3 fill-current" />
-              取消
-            </button>
-          </div>
-        </div>
-      </div>
+      <BacktestRunStatus
+        status="running"
+        title="正在计算因子分析"
+        runtime={progress ? {
+          stage: progress.stage,
+          label: progress.label,
+          current: symbolsText,
+          completed: progress.completed,
+          total: progress.total,
+          elapsed_ms: progress.elapsed_ms,
+        } : {
+          label: '正在连接计算任务',
+          current: symbolsText,
+        }}
+        startedAt={startedAt}
+        extras={[{ label: '阶段', value: `${Math.max(1, currentStageIndex + 1)}/${stageLabels.length}` }]}
+        onCancel={onCancel}
+      />
 
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         {stageLabels.map((item, index) => (
@@ -139,6 +139,11 @@ export function FactorBacktest({
   const [reportDownloadError, setReportDownloadError] = useState('')
   const result = factorTask?.result ?? null
   const isPending = factorTask?.isPending ?? false
+  const [pendingStartedAt, setPendingStartedAt] = useState<string | null>(null)
+  useEffect(() => {
+    if (isPending) setPendingStartedAt(prev => prev ?? new Date().toISOString())
+    else setPendingStartedAt(null)
+  }, [isPending])
   const resultPersisted = result?.persisted !== false
     && !result?.warnings?.some(warning => warning.startsWith('persistence_failed:'))
 
@@ -459,19 +464,27 @@ export function FactorBacktest({
         )}
 
         {isPending && result && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-btn border border-border bg-elevated px-3 py-2 text-xs text-secondary">
-            <span>正在重新计算，当前暂时展示上一次结果 · {factorTask?.progress?.label ?? '等待服务端任务'}</span>
-            <button type="button" onClick={handleCancel} className="btn-secondary !px-2 !py-1 text-[11px]" aria-label="取消因子分析">
-              <Square className="h-3 w-3 fill-current" />
-              取消
-            </button>
-          </div>
+          <BacktestRunStatus
+            status="running"
+            title="正在重新计算因子分析"
+            runtime={factorTask?.progress ? {
+              stage: factorTask.progress.stage,
+              label: factorTask.progress.label,
+              current: '当前暂时展示上一次结果',
+              completed: factorTask.progress.completed,
+              total: factorTask.progress.total,
+              elapsed_ms: factorTask.progress.elapsed_ms,
+            } : { label: '等待服务端任务', current: '当前暂时展示上一次结果' }}
+            startedAt={pendingStartedAt}
+            onCancel={handleCancel}
+          />
         )}
 
         {isPending && !result && (
           <LoadingPanel
             symbolsText={factorTask?.payload.symbols?.length ? `${factorTask.payload.symbols.length} 只标的` : '全市场 · 当前区间'}
             progress={factorTask?.progress}
+            startedAt={pendingStartedAt}
             onCancel={handleCancel}
           />
         )}

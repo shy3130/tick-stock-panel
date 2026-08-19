@@ -173,11 +173,27 @@ class StrategyBacktestService:
 
         timing_ms: dict[str, float] = {}
 
+        def _emit_stage(stage: str, label: str, *, day: int = 0, total: int = 0, date: str = "") -> None:
+            if progress_cb is None:
+                return
+            try:
+                progress_cb({
+                    "stage": stage,
+                    "label": label,
+                    "day": day,
+                    "total": total,
+                    "date": date,
+                    "elapsed_ms": (time.perf_counter() - t0) * 1000,
+                })
+            except Exception:  # noqa: BLE001
+                logger.debug("strategy backtest stage callback failed", exc_info=True)
+
         # 加载面板 (含 warmup + 全量指标 + 信号)。warmup 只用于指标/形态计算, 不参与正式交易。
         # 全量模式: entries 只在正式区间触发, exits 需要 end 之后的尾部数据继续执行策略卖点。
         load_start, load_end, full_horizon_days = self._compute_load_range(s, config, max_hold_days)
 
         t_load = time.perf_counter()
+        _emit_stage("loading", "加载行情面板")
         if panel is None:
             panel = self.engine.load_panel(config.symbols, load_start, load_end)
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
@@ -189,7 +205,7 @@ class StrategyBacktestService:
             return _err("正式回测区间内无数据")
 
         t_signal = time.perf_counter()
-
+        _emit_stage("signals", "计算信号与评分")
         # basic_filter 只影响买入候选, 不能删除行情 panel, 否则持仓 mark / 卖出 / full forward return 都会失真。
         basic_mask = pl.Series("_basic", [True] * len(panel), dtype=pl.Boolean)
         if basic_filter and basic_filter.get("enabled", True):
@@ -255,17 +271,29 @@ class StrategyBacktestService:
             risk_free_rate=config.risk_free_rate,
         )
         # 撮合 — full 为全候选独立执行；position 为账户级仓位模拟。
+        def _sim_progress(evt: dict) -> None:
+            if progress_cb is None:
+                return
+            payload = dict(evt)
+            payload.setdefault("stage", "simulate")
+            payload.setdefault("label", "撮合模拟")
+            payload.setdefault("elapsed_ms", (time.perf_counter() - t0) * 1000)
+            progress_cb(payload)
+
+        _emit_stage("simulate", "撮合模拟")
         if config.mode == "full":
             result = self.engine.simulate_independent_candidates(
                 sim_panel,
                 sim_entry_mask,
                 sim_exit_mask,
                 matcher_config,
-                progress_cb,
+                _sim_progress,
                 cancel_event,
             )
         else:
-            result = self.engine.simulate_portfolio(sim_panel, sim_entry_mask, sim_exit_mask, matcher_config, progress_cb, cancel_event)
+            result = self.engine.simulate_portfolio(
+                sim_panel, sim_entry_mask, sim_exit_mask, matcher_config, _sim_progress, cancel_event,
+            )
         timing_ms["simulate"] = round((time.perf_counter() - t_sim) * 1000, 1)
 
         # 检查是否被取消

@@ -16,7 +16,10 @@ export interface BacktestProgress {
   day: number
   total: number
   date: string
-  equity: number
+  equity?: number
+  stage?: string
+  label?: string
+  elapsed_ms?: number
 }
 
 export interface BacktestTask {
