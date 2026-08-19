@@ -31,7 +31,7 @@ import { formatScheduleDatePart, formatScheduleTimePart, isToday } from '@/lib/f
 
 // 拆分出的子组件
 import { StatCard, type FieldTab } from '@/components/data/StatCard'
-import { ActiveJobCard } from '@/components/data/ActiveJobCard'
+import { ActiveJobCard, STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { SectionTitle, HistoryRow } from '@/components/data/SectionTitle'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { ScheduleEditor } from '@/components/data/ScheduleEditor'
@@ -235,6 +235,16 @@ export function Data() {
 
   const s = status.data
   const isLoading = status.isLoading
+  // 最近一次管道执行摘要(新契约): 成功才用完成态, degraded/failed 需在调度卡片可见
+  const lastPipeline = s?.last_pipeline ?? null
+  const lastPipelineAt = lastPipeline?.finished_at ?? s?.last_pipeline_run ?? null
+  const lastPipelineTone = !lastPipeline || lastPipeline.status === 'succeeded'
+    ? { glyph: '✓', cls: lastPipelineAt && isToday(lastPipelineAt) ? 'text-bear' : 'text-secondary/70' }
+    : lastPipeline.status === 'degraded'
+      ? { glyph: '⚠', cls: 'text-warning' }
+      : lastPipeline.status === 'failed'
+        ? { glyph: '✕', cls: 'text-danger' }
+        : { glyph: '…', cls: 'text-secondary' }
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
@@ -254,13 +264,22 @@ export function Data() {
     symbols_covered: s.etf_daily?.symbols_covered ?? s.etf_instruments?.rows ?? 0,
     trading_days: s.etf_daily?.trading_days ?? s.etf_enriched?.trading_days ?? 0,
   } : null
-  const financialOverviewStats = s?.financials ? {
-    rows: s.financials.rows,
-    symbols_covered: Math.max(
-      0,
-      ...Object.values(s.financials.tables).map(table => table.symbols),
-    ),
-  } : null
+  const fin = s?.financials
+  const financialOverviewStats = fin ? (() => {
+    const tables = Object.values(fin.tables)
+    // 各表(利润表/资负表/现金流/指标/业绩预告)合并出卡片可见的日期范围
+    const earliests = tables.map(t => t.earliest_date).filter((d): d is string => !!d).sort()
+    const latests = tables.map(t => t.latest_date).filter((d): d is string => !!d).sort()
+    return {
+      rows: fin.rows,
+      symbols_covered: Math.max(
+        0,
+        ...tables.map(table => table.symbols),
+      ),
+      earliest_date: earliests[0] ?? null,
+      latest_date: latests[latests.length - 1] ?? null,
+    }
+  })() : null
   const indexOverviewLabel = s ? '日 · 维表 · 日K · 指标' : undefined
   const indexEarliestDate = s?.index_daily?.earliest_date ?? s?.index_enriched?.earliest_date ?? null
   const indexOffsetDays = indexExtendUnit === 'month' ? indexExtendValue * 30 : indexExtendValue * 365
@@ -478,7 +497,7 @@ export function Data() {
         return (
           <StatCard
             title="A股财务数据"
-            hint="仅 A 股上市公司 · 利润表 / 资负表 / 现金流 / 指标"
+            hint="仅 A 股上市公司 · 利润表 / 资负表 / 现金流 / 指标 / 业绩预告"
             stats={financialOverviewStats}
             loading={isLoading}
             tierKey="financials"
@@ -695,10 +714,13 @@ export function Data() {
                     </button>
                   </div>
                   <div className="flex items-center gap-2 font-mono text-secondary">
-                    {s?.last_pipeline_run && (
-                      <span className={`inline-flex flex-col items-center leading-tight ${isToday(s.last_pipeline_run) ? 'text-bear' : 'text-secondary/70'}`}>
-                        <span>✓ {formatScheduleDatePart(s.last_pipeline_run)}</span>
-                        <span>{formatScheduleTimePart(s.last_pipeline_run)}</span>
+                    {lastPipelineAt && (
+                      <span
+                        className={`inline-flex flex-col items-center leading-tight ${lastPipelineTone.cls}`}
+                        title={lastPipeline?.error ?? lastPipeline?.failed_stages?.[0]?.error ?? undefined}
+                      >
+                        <span>{lastPipelineTone.glyph} {formatScheduleDatePart(lastPipelineAt)}</span>
+                        <span>{formatScheduleTimePart(lastPipelineAt)}</span>
                       </span>
                     )}
                     {s?.next_pipeline_run && (
@@ -727,6 +749,29 @@ export function Data() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+                {/* 上次管道 degraded/failed 摘要 — 失败阶段 + 错误, 成功时不渲染 */}
+                {lastPipeline && (lastPipeline.status === 'degraded' || lastPipeline.status === 'failed') && (
+                  <div className={`rounded-btn border px-2.5 py-1.5 text-[10px] leading-relaxed ${
+                    lastPipeline.status === 'failed'
+                      ? 'border-danger/40 bg-danger/5 text-danger'
+                      : 'border-warning/40 bg-warning/5 text-warning'
+                  }`}>
+                    <div className="flex items-center gap-1 font-medium">
+                      <AlertTriangle className="h-3 w-3 shrink-0" />
+                      {lastPipeline.status === 'failed' ? '上次管道失败' : '上次管道部分完成'}
+                    </div>
+                    {(lastPipeline.failed_stages ?? []).length > 0 && (
+                      <div className="mt-0.5">
+                        失败阶段:{(lastPipeline.failed_stages ?? []).map(f => STAGE_LABELS[f.stage] ?? f.stage).join('、')}
+                      </div>
+                    )}
+                    {(lastPipeline.error ?? lastPipeline.failed_stages?.[0]?.error) && (
+                      <div className="mt-0.5 truncate" title={lastPipeline.error ?? lastPipeline.failed_stages?.[0]?.error}>
+                        {lastPipeline.error ?? lastPipeline.failed_stages?.[0]?.error}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             </div>

@@ -127,7 +127,7 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
             <Pill label="标的池" value={job.result.universe_size ?? '—'} />
             <Pill label="日 K" value={cell('sync_daily', `${job.result.daily_days ?? 0} 天`)} />
             <Pill label="除权因子" value={cell('sync_adj', `${job.result.adj_factor_symbols ?? 0} 只`)} />
-            <Pill label="enriched" value={cell('compute_enriched', `${job.result.enriched_days ?? 0} 行`)} />
+            <Pill label="enriched" value={cell('compute_enriched', `${job.result.enriched_rows ?? job.result.enriched_days ?? 0} 行`)} />
             <Pill label="分钟K" value={cell('sync_minute', `${job.result.minute_rows ?? 0} 行`)} />
           </div>
         )

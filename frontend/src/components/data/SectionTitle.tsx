@@ -41,7 +41,12 @@ export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) 
           const r = job.result as Record<string, any>
           const parts: string[] = []
           if (r.daily_days != null) parts.push(`日K ${r.daily_days}日`)
-          if (r.enriched_days != null) parts.push(`enriched ${r.enriched_days}行`)
+          // daily_days 标识旧版日级管道，其 enriched_days 实际存的是写入行数；
+          // 其他旧任务的 enriched_days 才表示覆盖天数。
+          if (r.enriched_rows != null) parts.push(`enriched ${r.enriched_rows}行`)
+          else if (r.enriched_days != null) {
+            parts.push(`enriched ${r.enriched_days}${r.daily_days != null ? '行' : '天'}`)
+          }
           if (r.minute_rows != null) parts.push(`分钟K ${r.minute_rows}行`)
           if (r.earliest_after && r.earliest_before) {
             const a = String(r.earliest_after).slice(0, 10)

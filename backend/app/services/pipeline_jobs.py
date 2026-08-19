@@ -91,7 +91,7 @@ class JobStore:
 
     # ===== lifecycle =====
 
-    def create(self) -> str:
+    def create(self, *, kind: str | None = None) -> str:
         with self._lock:
             if self._active_id and self._active_jobs.get(self._active_id, {}).get("status") == "running":
                 return self._active_id
@@ -99,6 +99,7 @@ class JobStore:
             job_id = uuid.uuid4().hex[:10]
             self._active_jobs[job_id] = {
                 "id": job_id,
+                "kind": kind,
                 "status": "pending",
                 "stage": "init",
                 "progress": 0,
@@ -227,6 +228,7 @@ class JobStore:
 def _summary(j: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": j["id"],
+        "kind": j.get("kind"),
         "status": j["status"],
         "stage": j["stage"],
         "progress": j["progress"],

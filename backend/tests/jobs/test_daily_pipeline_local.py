@@ -79,7 +79,7 @@ def test_run_now_local_mode_skips_raw_sync_and_runs_local_pipeline(tmp_path, mon
     result = daily_pipeline.run_now(repo, CapabilitySet())
 
     assert calls == {"local": 1, "raw": 0}
-    assert result["enriched_days"] == 7
+    assert result["enriched_rows"] == 7
     assert published == [fresh]
     assert refreshed == [True]
 
@@ -442,3 +442,27 @@ def test_run_instruments_sync_refreshes_repo_cache(tmp_path, monkeypatch):
     assert result == {"instruments_rows": 42}
     assert refreshed == [True]
     assert invalidated == ["instruments"]
+
+
+def test_run_tracked_marks_kind_and_invalidates_terminal_status_cache(tmp_path, monkeypatch):
+    from app.services import pipeline_jobs
+    from app.services.pipeline_jobs import JobStore
+
+    store = JobStore(store_dir=tmp_path)
+    invalidated: list[bool] = []
+    monkeypatch.setattr(pipeline_jobs, "job_store", store)
+    monkeypatch.setattr(
+        "app.api.data.invalidate_job_status_cache",
+        lambda: invalidated.append(True),
+    )
+
+    def fail_before_progress(*, on_progress):
+        raise RuntimeError("instrument sync failed")
+
+    daily_pipeline._run_tracked(fail_before_progress, "daily_pipeline")
+
+    job = store.list_recent(limit=1)[0]
+    assert job["status"] == "failed"
+    assert job["kind"] == "daily_pipeline"
+    assert job["stage"] == "init"
+    assert invalidated == [True]

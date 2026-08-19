@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { Loader2, CheckCircle2, Settings, Table2 } from 'lucide-react'
+import { Loader2, CheckCircle2, Settings, Table2, AlertTriangle } from 'lucide-react'
 import { formatNumber } from '@/lib/format'
 import { fmtDate } from '@/lib/format'
 import { cn } from '@/lib/cn'
@@ -108,7 +108,16 @@ export function StatCard({
   // 提供时渲染多个图标按钮(每个对应一张表的字段说明); 否则回退到单个 onShowFields
   fieldTabs?: FieldTab[]
 }) {
-  const empty = loading || !stats || (stats.rows === 0 && !stats.trading_days && !stats.fields && !stats.available)
+  // 契约字段(/api/data/status TableStats):
+  // - storage_mode=provider_on_demand: Provider 按需读取、不单独落盘, 不是"暂无数据"
+  // - row_count_exact=false: rows 非精确统计; canonical_history.rows 为已发布下界
+  // - freshness/local_overlay/latest_partition_symbols: 新鲜度与合并展示(canonical 全历史 + 本地 overlay)
+  const providerOnDemand = stats?.storage_mode === 'provider_on_demand'
+  const inexact = !providerOnDemand && stats?.row_count_exact === false
+  const canonical = stats?.canonical_history ?? null
+  const freshness = stats?.freshness ?? null
+  const overlay = stats?.local_overlay ?? null
+  const empty = loading || !stats || (stats.rows === 0 && !stats.trading_days && !stats.fields && !stats.available && !providerOnDemand)
   const borderCls = active
     ? 'border-accent/50'
     : done
@@ -153,30 +162,35 @@ export function StatCard({
   )
 
   // subLabel 文本内容 (不含图标)
-  const subLabelText = subLabel
+  const subLabelText: string = subLabel
     ?? (isInstrument
       ? `标的 · ${((stats?.named ?? stats?.rows) ?? 0).toLocaleString()} 个含名称`
-      : stats?.fields
-        ? '字段 · 复权 · 技术指标'
-        : title === '日 K' && stats?.trading_days
-          ? '日 · A股标的 · 日线'
-          : stats?.trading_days && !stats?.rows
-            ? '日 · A股标的 · 分钟级'
-            : (() => {
-                const parts = [`行 · ${(stats?.symbols_covered ?? 0)} 只标的`]
-                if (stats?.trading_days) parts.push(`· ${stats.trading_days} 日`)
-                return parts.join(' ')
-              })())
+      : providerOnDemand
+        ? (stats?.status_message ?? 'Provider 按需读取 · 不单独落盘')
+        : stats?.fields
+          ? '字段 · 复权 · 技术指标'
+          : title === '日 K' && stats?.trading_days
+            ? '日 · A股标的 · 日线'
+            : stats?.trading_days && !stats?.rows
+              ? '日 · A股标的 · 分钟级'
+              : (() => {
+                  const parts = [`行 · ${(stats?.symbols_covered ?? 0)} 只标的`]
+                  if (stats?.trading_days) parts.push(`· ${stats.trading_days} 日`)
+                  return parts.join(' ')
+                })())
+
+  // 行数未精确统计时, 大数字是 canonical 已发布下界(≥N), 在 subLabel 后缀说明
+  const displaySubLabel = inexact && canonical?.rows ? `${subLabelText} · 未精确统计` : subLabelText
 
   // 有 fieldTabs 时: 把 subLabel 按分隔符拆开, 每个匹配词后面内联图标
   // 例如 "日 · 维表 · 日K · 指标" → 日 · 维表[icon] · 日K[icon] · 指标[icon]
   const renderSubLabelInline = () => {
     if (!fieldTabs || fieldTabs.length === 0) {
-      return <>{subLabelText}{renderFieldButtons()}</>
+      return <>{displaySubLabel}{renderFieldButtons()}</>
     }
     const labels = fieldTabs.map(t => t.label)
     // 按非字母数字汉字的分隔符拆分, 保留分隔符
-    const tokens = subLabelText.split(/(\s*·\s*|\s+)/).filter(t => t !== '')
+    const tokens = displaySubLabel.split(/(\s*·\s*|\s+)/).filter(t => t !== '')
     const used = new Set<string>()
     return (
       <>
@@ -265,13 +279,19 @@ export function StatCard({
         ) : (
           <>
             <div className="metric-value text-2xl">
-              {stats.fields
-                ? stats.fields
-                : stats.trading_days && !stats.rows
-                  ? stats.trading_days.toLocaleString()
-                  : stats.available && !stats.rows
-                    ? '可用'
-                    : formatNumber(stats.rows)}
+              {providerOnDemand
+                ? '按需'
+                : inexact
+                  ? canonical?.rows
+                    ? `≥ ${formatNumber(canonical.rows)}`
+                    : '未精确统计'
+                  : stats.fields
+                    ? stats.fields
+                    : stats.trading_days && !stats.rows
+                      ? stats.trading_days.toLocaleString()
+                      : stats.available && !stats.rows
+                        ? '可用'
+                        : formatNumber(stats.rows)}
             </div>
             <div className="mt-0.5 text-[11px] text-muted">
               {renderSubLabelInline()}
@@ -279,6 +299,21 @@ export function StatCard({
           </>
         )}
       </div>
+
+      {/* 新鲜度警告: 上游新交易日待发布 — 避免"截至昨日"被误读为同步滞后 */}
+      {!loading && freshness?.status === 'awaiting_publish' && (
+        <div className="mx-4 mb-2 flex items-start gap-1.5 rounded-btn border border-warning/40 bg-warning/8 px-2.5 py-1.5">
+          <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-warning" />
+          <div className="text-[10px] leading-relaxed text-warning/90">
+            {freshness.reason
+              ?? [
+                freshness.reference_date ? `数据截至 ${fmtDate(freshness.reference_date)}` : null,
+                '上游新交易日待发布',
+                (freshness.age_days ?? 0) > 0 ? `滞后 ${freshness.age_days} 天` : null,
+              ].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+      )}
 
       <div className="mt-auto space-y-0.5 border-t border-border px-4 pb-4 pt-2">
         {loading ? (
@@ -307,6 +342,26 @@ export function StatCard({
               <span className="text-muted">{isInstrument ? '标的数' : '止'}</span>
               <span className="font-mono text-secondary">{isInstrument ? String(stats.rows) : fmtDate(stats.latest_date)}</span>
             </div>
+            {/* 最新本地分区实际覆盖 / 总股票池(canonical 合并展示时提供) */}
+            {stats.latest_partition_symbols != null && (
+              <div className="flex justify-between text-[11px]">
+                <span className="text-muted">最新分区</span>
+                <span className="font-mono text-secondary">
+                  {stats.latest_partition_symbols.toLocaleString()}
+                  {stats.universe_symbols != null ? ` / ${stats.universe_symbols.toLocaleString()}` : ''}
+                  {' '}只
+                </span>
+              </div>
+            )}
+            {/* 本地增量 overlay 简明说明(canonical 发布点之后的本地产出) */}
+            {overlay && overlay.trading_days > 0 && (
+              <div className="flex justify-between text-[11px]">
+                <span className="text-muted">本地增量</span>
+                <span className="font-mono text-secondary">
+                  {overlay.trading_days} 日 · 至 {fmtDate(overlay.latest_date)}
+                </span>
+              </div>
+            )}
           </>
         )}
       </div>

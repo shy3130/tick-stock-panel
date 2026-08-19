@@ -653,7 +653,7 @@ def run_now(
         "universe_size": len(universe),
         "daily_days": new_daily_days,
         "adj_factor_symbols": len(affected_symbols),
-        "enriched_days": written_enriched,
+        "enriched_rows": written_enriched,
         "index_count": index_count,
         "index_daily_rows": written_index_daily,
         "etf_count": etf_count,
@@ -1130,7 +1130,7 @@ def _run_tracked(fn, job_label: str) -> None:
     """调度触发时包装 JobStore 跟踪，确保同步历史有记录。"""
     from app.services.pipeline_jobs import job_store
 
-    job_id = job_store.create()
+    job_id = job_store.create(kind=job_label)
     job_store.start(job_id)
 
     def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
@@ -1144,6 +1144,10 @@ def _run_tracked(fn, job_label: str) -> None:
     except Exception:
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
         job_store.fail(job_id, f"scheduled {job_label} failed")
+    finally:
+        from app.api.data import invalidate_job_status_cache
+
+        invalidate_job_status_cache()
 
 
 # ================================================================

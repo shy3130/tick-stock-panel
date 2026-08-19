@@ -3440,9 +3440,17 @@ export interface PipelineJob {
     universe_size: number
     daily_days: number
     adj_factor_symbols: number
-    enriched_days: number
+    /** enriched 写入行数(新契约字段) */
+    enriched_rows?: number
+    /** 旧记录 fallback：日级管道历史中实为写入行数；扩展/补算类任务中确实表示天数 */
+    enriched_days?: number
     index_count?: number
     index_daily_rows?: number
+    etf_count?: number
+    etf_daily_rows?: number
+    etf_adj_factor_symbols?: number
+    hk_count?: number
+    hk_daily_rows?: number
     minute_rows: number
     skipped_stages?: string[]
     failed_stages?: { stage: string; error: string }[]
@@ -3493,6 +3501,32 @@ export interface CanonicalHistoryBackfillResponse {
 }
 
 // ===== Data status =====
+
+/** 本地增量 overlay（canonical 发布点之后的本地产出分区） */
+export interface LocalOverlayStats {
+  earliest_date: string | null
+  latest_date: string | null
+  trading_days: number
+}
+
+/** canonical 全历史权威统计（已发布 manifest）；row_count_exact=false 时 rows 为已知下界 */
+export interface CanonicalHistoryStats {
+  generation: string
+  earliest_date: string | null
+  latest_date: string | null
+  rows: number
+  symbols: number
+  trading_days: number
+}
+
+/** 表级新鲜度 — awaiting_publish 表示上游新交易日待发布，latest_date 并非滞后 */
+export interface TableFreshness {
+  status: 'current' | 'awaiting_publish' | 'unknown'
+  age_days: number | null
+  reference_date: string | null
+  reason: string | null
+}
+
 interface TableStats {
   rows: number
   row_count_exact?: boolean
@@ -3505,6 +3539,19 @@ interface TableStats {
   stage?: 'preliminary' | 'final'
   generation?: string
   logical?: string
+  /** 股票池总标的数（来自维表） */
+  universe_symbols?: number
+  /** 最新本地单分区实际覆盖标的数（只读 symbol 列精确计算） */
+  latest_partition_symbols?: number
+  /** 本地增量 overlay；daily/enriched 的 earliest/latest/trading_days/symbols_covered 已合并 canonical 全历史 + overlay，代表可查询范围 */
+  local_overlay?: LocalOverlayStats | null
+  /** canonical 全历史权威统计 */
+  canonical_history?: CanonicalHistoryStats | null
+  freshness?: TableFreshness | null
+  /** persisted=本地落盘；provider_on_demand=Provider 按需读取、不单独落盘 */
+  storage_mode?: 'persisted' | 'provider_on_demand'
+  /** 后端给出的可读状态说明（如 provider 按需说明） */
+  status_message?: string | null
 }
 
 interface InstrumentsStats {
@@ -3523,10 +3570,21 @@ export interface DataStatus {
   etf_daily: TableStats | null
   etf_enriched: TableStats | null
   etf_instruments: InstrumentsStats | null
+  hk_daily: TableStats | null
+  hk_enriched: TableStats | null
+  hk_instruments: InstrumentsStats | null
   minute: TableStats | null
   adj_factor: TableStats | null
   instruments: InstrumentsStats | null
-  financials: { rows: number; tables: Record<string, { rows: number; symbols: number }> } | null
+  financials: {
+    rows: number
+    tables: Record<string, {
+      rows: number
+      symbols: number
+      earliest_date?: string | null
+      latest_date?: string | null
+    }>
+  } | null
   storage: {
     daily_files: number
     daily_size_mb: number
@@ -3561,8 +3619,18 @@ export interface DataStatus {
   next_pipeline_run: string | null
   next_instruments_run: string | null
   last_pipeline_run: string | null
+  /** 最近一次管道执行摘要（新契约）；旧后端可缺失，前端回退 last_pipeline_run 展示 */
+  last_pipeline?: LastPipelineSummary | null
   last_instruments_run: string | null
   checked_at: string
+}
+
+/** /api/data/status 的 last_pipeline — 最近一次管道执行结果摘要 */
+export interface LastPipelineSummary {
+  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed'
+  finished_at: string | null
+  error: string | null
+  failed_stages: { stage: string; error: string }[]
 }
 
 export interface EnrichedField {
