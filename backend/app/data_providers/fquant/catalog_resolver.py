@@ -436,6 +436,30 @@ def resolve_route(route_key: str, market: str, trade_date: date | datetime | str
             return _resolve_row(
                 preliminary_candidates[0], route_key, market, requested, historical=False
             )
+        preliminary_candidates = []
+        for row in rows_by_key.get(preliminary_key, []):
+            _validate_route_metadata(row)
+            if _route_stage(row) != "preliminary":
+                continue
+            coverage = _optional_date(row.get("coverage_date"), "coverage_date")
+            if coverage is None or coverage <= requested:
+                continue
+            if _matches_span(row, requested):
+                preliminary_candidates.append(row)
+        if preliminary_candidates:
+            preliminary_candidates.sort(
+                key=lambda item: (
+                    _optional_date(item.get("coverage_date"), "coverage_date"),
+                    -_priority(item),
+                    str(item.get("root", "")),
+                    str(item.get("generation", "")),
+                    str(item.get("logical", "")),
+                    str(item.get("file", "")),
+                )
+            )
+            return _resolve_row(
+                preliminary_candidates[0], route_key, market, requested, historical=True
+            )
 
     if not rows:
         raise RouteNotFoundError(f"no catalog route for {route_key}/{market} on {requested}")
