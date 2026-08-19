@@ -24,7 +24,7 @@ async def run_now(request: Request) -> dict:
     """异步触发盘后管道,立即返回 job_id。客户端轮询 /jobs/{id} 拿进度。
 
     若已有任务在跑,**返回该任务 id 而不是开新任务**(防止并发拉数据撞限流)。
-    但如果该任务已运行超过 10 分钟 (可能因 reload 卡死), 强制标记为失败后重新创建。
+    但如果该任务连续超过无进度阈值 (可能因 reload 卡死), 强制标记为失败。
     """
     repo = request.app.state.repo
     capset = request.app.state.capabilities
@@ -77,7 +77,7 @@ async def run_now(request: Request) -> dict:
 
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
-    # 每次轮询都检查卡死 job — 前端每秒轮询,STALE_JOB_TIMEOUT_S(10min)后必定自愈,
+    # 每次轮询都检查卡死 job — 连续超过任务自身的无进度阈值后自动回收,
     # 无需用户再次手动点「同步」。
     job_store.reap_stale()
     j = job_store.get(job_id)

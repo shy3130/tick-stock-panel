@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import polars as pl
 import pytest
 
@@ -45,6 +47,65 @@ def test_create_new_after_terminal(tmp_path):
     jid2, new2 = store.create()
     assert jid2 != jid1
     assert new2 is True
+
+
+def _utc_iso(delta: timedelta) -> str:
+    return (datetime.now(UTC) + delta).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def test_reap_stale_uses_last_progress_instead_of_total_runtime(tmp_path):
+    """任务总时长很长但仍在推进时,不得误判为卡死。"""
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid, _ = store.create(timeout_s=1200)
+    store.start(jid)
+    store._active_jobs[jid]["started_at"] = _utc_iso(-timedelta(hours=2))
+
+    store.progress(jid, "sync_adj", 53, "除权因子批次 50/139")
+    store.reap_stale()
+
+    assert store.get(jid)["status"] == "running"
+
+
+def test_reap_stale_fails_job_after_progress_timeout(tmp_path):
+    """只有连续无进度超过阈值时才回收任务。"""
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid, _ = store.create(timeout_s=1200)
+    store.start(jid)
+    store._active_jobs[jid]["last_progress_at"] = _utc_iso(-timedelta(seconds=1201))
+
+    store.reap_stale()
+
+    job = store.get(jid)
+    assert job["status"] == "failed"
+    assert "无进度, 疑似卡死" in job["error"]
+
+
+def test_reap_stale_falls_back_to_started_at_for_legacy_job(tmp_path):
+    """升级前没有 last_progress_at 的活跃任务仍可被回收。"""
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid, _ = store.create(timeout_s=1200)
+    store.start(jid)
+    del store._active_jobs[jid]["last_progress_at"]
+    store._active_jobs[jid]["started_at"] = _utc_iso(-timedelta(seconds=1201))
+
+    store.reap_stale()
+
+    assert store.get(jid)["status"] == "failed"
+
+
+def test_reap_stale_keeps_run_slot_until_worker_exits(tmp_path):
+    """标记超时不能放行新任务与仍存活的旧线程并发写数据。"""
+    store = JobStore(store_dir=tmp_path / "jobs")
+    jid, _ = store.create(timeout_s=1200)
+    store.start(jid)
+    store._active_jobs[jid]["last_progress_at"] = _utc_iso(-timedelta(seconds=1201))
+
+    assert pipeline_jobs.try_acquire_run_slot() is True
+    try:
+        store.reap_stale()
+        assert pipeline_jobs.try_acquire_run_slot() is False
+    finally:
+        pipeline_jobs.release_run_slot()
 
 
 def test_run_slot_is_exclusive():
