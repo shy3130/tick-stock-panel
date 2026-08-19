@@ -78,6 +78,20 @@
 | `services/watchlist.py` | +20 / -5 | realtime 走 provider；fquant 走本地源 fallback |
 | `services/depth_service.py` | +20 / -0 | 能力检查模式：fquant 直接降级返回空 |
 
+### 回测域（`backend/app/backtest/` + `backend/app/api/backtest*.py`）
+
+| 文件 | 作用 | 红线 |
+|------|------|------|
+| `app/backtest/run_store.py` | **BacktestRun 唯一持久化契约**（`data/research/backtest_runs/{run_id}.json`，不可变事实，仅 `favorite`/`label` 可 PATCH）；列表/比较/导出/旧 run_card 只读惰性迁移 | 旧 `research/run_cards/*.json` 对回测域只读（DELETE 403、PATCH 先固化再改）；20 MiB 上限、原子写、run_id 白名单；`save_run_card` 仅剩 AI 池研究与定时研究两个非回测域调用方 |
+| `app/backtest/metrics.py` | `MetricContext` 统一年化口径（频率唯一输入、`risk_free_rate` 显式、`ddof=1`）+ 全套绩效/风险/相对指标与 Bootstrap | 频率与年化系数冲突必须拒绝；`payoff_ratio` 与 `profit_factor` 是两个独立契约，不得混用 |
+| `app/backtest/provenance.py` | 数据快照元数据（canonical/adjustment generation、股票池定义、`snapshot_hash`）、engine/metric 版本 | 全市场股票池无法证明 point-in-time 时必须保留 `survivorship_bias` 告警 |
+| `app/backtest/engine.py` / `strategy.py` / `factor.py` / `robustness.py` | 主 Polars/NumPy 撮合与策略/因子/稳健性服务（T+1、涨跌停、整手、费用滑点、持仓期 MAE/MFE、参数扰动与严格 Walk-Forward） | 旧 vectorbt 入口 `POST /api/backtest/run` 仅 legacy（固定 `legacy_vectorbt_engine` 告警），停止新增消费者 |
+| `app/backtest/attribution_report.py` | 交易窗口 Brinson-Fachler 行业归因（当前行业映射、相对等权已执行交易样本） | 映射非 point-in-time；输入/行业不足必须 fail-closed；无冻结可审计本地因子序列时 Fama-French 必须显式 unavailable，禁止代理结果 |
+| `app/api/backtest.py` | 策略/因子/组合回测 + `/runs` 列表/读取/比较/复跑/导出/PATCH/DELETE | Run 落盘失败必须在响应带 `persisted=false` 与 `persistence_failed` 告警，不得伪装成功 |
+| `frontend/src/pages/backtest/` | 运行历史（RunHistoryPanel）、专业诊断、稳健性、参数网格（含回填策略表单）、交易明细筛选、行业归因与独立 HTML 报告下载 | 前端不得重算风险指标，非有限数值显示"—"；未持久化 Run 不得提供报告下载 |
+
+权威口径与能力边界见 `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md`（§5.4 工程决策、§12 未实现清单——现有 `walk_forward` 为严格 IS/OOS：训练选参→冻结参数→独立 OOS；候选仅局部单参数邻域，非全局优化）。
+
 ### AI Agent 运行时试点
 
 | 文件 | 作用 | 红线 |
@@ -109,6 +123,7 @@
 | `backend/docs/FQUANT_PROVIDER_DESIGN.md` | 846 行设计稿（三源实测 + 架构） |
 | `backend/docs/FQUANT_PROVIDER.md` | 旧 PoC 说明（已被 v2 覆盖，仅供回溯） |
 | `backend/docs/YMOS_PORTING_PLAN.md` | YMOS 纪律层移植设计、契约与完成进度 |
+| `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md` | 回测专业化审计与改进计划——P0 口径修复、BacktestRun 契约、工程决策与未实现边界（权威） |
 | `backend/docs/PA_AGENT_PORTING_PLAN.md` | PA_Agent 工程机制移植总账、决策门、已交付边界与明确暂缓项 |
 | `backend/docs/UPSTREAM_FEATURE_PORTING.md` | 上游项目、已移植能力、暂缓/排除项与维护流程总账 |
 | `backend/docs/PI_AGENT_PILOT_PLAN.md` | Pi Agent Harness 可选 sidecar 试点的架构、风险、验收与退出标准 |
@@ -120,6 +135,7 @@
 |------|------|
 | `backend/scripts/test_fquant_provider.py` | 16 项端到端冒烟，真实源不可达项单独列 skip |
 | `backend/scripts/test_trading_lifecycle.py` | Trading 全链路隔离数据 E2E 冒烟（不修改 `data/` 用户数据） |
+| `backend/tests/backtest/` + `backend/tests/api/test_run_store_api.py` | 回测域单元/API 测试：指标口径（`test_metrics.py`）、Run 持久化与比较（`test_run_store.py`）、因子成本（`test_factor_costs.py`）、数据快照（`test_provenance.py`）、撮合/MAE-MFE（`test_strategy_backtest_correctness.py`、`test_trade_excursions.py`）、严格 Walk-Forward（`test_walk_forward.py`）、稳健性（`test_robustness.py`） |
 
 ---
 
@@ -323,6 +339,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-18（新增自由 Agent 的 Pi Agent Harness source/dev-only 可选 sidecar 试点；默认 Python runtime、数据源主链和 Docker/PyInstaller 均不变。上一变更：A 股 canonical enriched 全历史外部 generation 回填与研究页本地快照接入。）
+**最后更新**：2026-08-19（完成回测成熟度改进：统一指标/成本/可追溯 Run、严格 IS/OOS Walk-Forward、持仓期 MAE/MFE、交易明细筛选、交易窗口 Brinson-Fachler 行业归因与自包含 HTML 研究报告；Fama-French 因无冻结本地因子序列显式不可用；默认数据源主链和 Docker/PyInstaller 均不变。上一变更：新增自由 Agent 的 Pi Agent Harness source/dev-only 可选 sidecar 试点。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）
