@@ -83,10 +83,12 @@ export const storage = {
   /** 策略回测快捷区间按钮配置 */
   strategyBacktestQuickRanges: kv<unknown>('strategy-backtest-quick-ranges'),
   /** 回测工作台上次打开的模式 */
-  backtestActiveTab: kv<'factor' | 'strategy' | 'composite' | 'grid' | 'history'>('backtest-active-tab'),
+  backtestActiveTab: kv<'factor' | 'strategy' | 'composite' | 'grid' | 'search' | 'history'>('backtest-active-tab'),
 
   /** 参数网格最近一次实验；路由重入后据此恢复服务端持久化结果 */
   parameterGridLastExperimentId: kv<string | null>('parameter-grid-last-experiment-id'),
+  /** 策略寻优最近一次实验 */
+  optimizerLastExperimentId: kv<string | null>('optimizer-last-experiment-id'),
 
   /** 因子回测最近一次请求与结果；路由重入后恢复已完成结果 */
   factorBacktestLast: kv<{

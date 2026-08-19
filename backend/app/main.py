@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import agent, analysis, auth as auth_api, backtest, backtest_parameter_grid, cross_section, data, documents, ext_data, financials, indices, intraday, kline, market_data, market_recap, monitor_rules, alerts, overview, patterns, pipeline, regime, research, research_analysis, review, rps, screener, settings as settings_api, signal_scorecard, signals, stock_analysis, strategy, strategy_profile, trade_journal, trading, trading_plans, trading_review, watchlist
+from app.api import agent, analysis, auth as auth_api, backtest, backtest_optimizer, backtest_parameter_grid, cross_section, data, documents, ext_data, financials, indices, intraday, kline, market_data, market_recap, monitor_rules, alerts, overview, patterns, pipeline, regime, research, research_analysis, review, rps, screener, settings as settings_api, signal_scorecard, signals, stock_analysis, strategy, strategy_profile, trade_journal, trading, trading_plans, trading_review, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
 from app.log_redaction import install_secret_redaction_filter
@@ -283,6 +283,7 @@ app.include_router(kline.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
+app.include_router(backtest_optimizer.router)
 app.include_router(backtest_parameter_grid.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)

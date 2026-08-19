@@ -120,3 +120,24 @@ def test_composite_ranked_score_single_candidate_neutral():
     entries = [pl.Series("e", [True])]
     cs = Svc._composite_ranked_score(panel, scores, entries, [1.0])
     assert abs(cs.to_list()[0] - 50.0) < 0.01
+
+
+def test_composite_ranked_score_multi_date_groups():
+    panel = pl.DataFrame(
+        {
+            "symbol": ["A", "B", "A", "B", "C"],
+            "date": [date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 2), date(2026, 1, 2)],
+            "close": [10.0, 11.0, 12.0, 13.0, 14.0],
+        }
+    )
+    scores = [
+        pl.Series("s", [80.0, 90.0, 70.0, 60.0, 50.0]),
+        pl.Series("s", [40.0, 30.0, 20.0, 10.0, 5.0]),
+    ]
+    entries = [
+        pl.Series("e", [True, True, True, False, True]),
+        pl.Series("e", [True, False, False, True, True]),
+    ]
+    cs = Svc._composite_ranked_score(panel, scores, entries, [1.0, 1.0])
+    assert len(cs) == 5
+    assert all(v == v for v in cs.to_list())

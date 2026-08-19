@@ -10,10 +10,11 @@ import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest, type StrategyParameterBackfill } from './backtest/StrategyBacktest'
 import { CompositeStrategyBuilder } from './backtest/CompositeStrategyBuilder'
 import { ParameterGridPanel } from './backtest/ParameterGridPanel'
+import { StrategySearchPanel } from './backtest/StrategySearchPanel'
 import { RunHistoryPanel } from './backtest/RunHistoryPanel'
-import { BarChart3, FlaskConical, GitMerge, Grid3X3, History, type LucideIcon } from 'lucide-react'
+import { BarChart3, FlaskConical, GitMerge, Grid3X3, History, Search, type LucideIcon } from 'lucide-react'
 
-const TABS = ['factor', 'strategy', 'composite', 'grid', 'history'] as const
+const TABS = ['factor', 'strategy', 'composite', 'grid', 'search', 'history'] as const
 type Tab = typeof TABS[number]
 
 const TAB_ICONS: Record<Tab, LucideIcon> = {
@@ -21,6 +22,7 @@ const TAB_ICONS: Record<Tab, LucideIcon> = {
   strategy: FlaskConical,
   composite: GitMerge,
   grid: Grid3X3,
+  search: Search,
   history: History,
 }
 
@@ -44,6 +46,11 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
     title: '参数网格',
     subtitle: '批量比较有限参数组合',
     hint: '运行本地历史场景，查看排序、稳健性和过拟合风险。',
+  },
+  search: {
+    title: '策略寻优',
+    subtitle: '跨策略、股票池与周期的训练/留出搜索',
+    hint: '最近 8 年冻结窗口，只按训练期打分，留出期确认；输出 DSR/PBO，不宣称全局最优。',
   },
   history: {
     title: '运行历史',
@@ -73,6 +80,11 @@ export function Backtest() {
   const clearScreenerHandoff = useCallback(() => setScreenerHandoff(null), [])
   const useGridScenario = useCallback((strategyId: string, params: Record<string, number>) => {
     setParameterBackfill({ strategyId, params, revision: Date.now() })
+    setActiveTab('strategy')
+    storage.backtestActiveTab.set('strategy')
+  }, [])
+  const useSearchStrategy = useCallback((strategyId: string) => {
+    setParameterBackfill({ strategyId, params: {}, revision: Date.now() })
     setActiveTab('strategy')
     storage.backtestActiveTab.set('strategy')
   }, [])
@@ -137,6 +149,9 @@ export function Backtest() {
           {activeTab === 'composite' && <CompositeStrategyBuilder />}
           <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
             <ParameterGridPanel onUseScenario={useGridScenario} />
+          </div>
+          <div className={activeTab === 'search' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'search'}>
+            <StrategySearchPanel onUseScenario={useSearchStrategy} />
           </div>
           {activeTab === 'history' && <RunHistoryPanel />}
         </div>

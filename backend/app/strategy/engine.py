@@ -114,6 +114,7 @@ class StrategyDef:
     file_path: Path | None = None
     execution_backend: str = "polars_expr"
     composite: CompositeSpec | None = None  # 仅 backend=="composite" 时非空
+    ephemeral: bool = False  # 寻优临时组合, 不写盘、不进 list_strategies
 
 
 @dataclass
@@ -339,6 +340,8 @@ class StrategyEngine:
         """返回所有策略的元信息"""
         result = []
         for s in self._strategies.values():
+            if getattr(s, "ephemeral", False):
+                continue
             result.append({**s.meta, "source": s.source})
         return result
 
@@ -350,6 +353,24 @@ class StrategyEngine:
 
     def has(self, strategy_id: str) -> bool:
         return strategy_id in self._strategies
+
+    def put_ephemeral(self, strategy_id: str, strategy: StrategyDef) -> None:
+        """注册不落盘的临时组合策略, 仅供寻优回测 get()。"""
+        if not strategy_id.startswith("combo:"):
+            raise ValueError("ephemeral id must start with combo:")
+        if not getattr(strategy, "ephemeral", False):
+            raise ValueError("strategy.ephemeral must be True")
+        if strategy.file_path is not None:
+            raise ValueError("ephemeral strategy must not have file_path")
+        existing = self._strategies.get(strategy_id)
+        if existing is not None and not getattr(existing, "ephemeral", False):
+            raise ValueError("cannot overwrite persistent strategy")
+        if strategy.execution_backend != "composite" or strategy.composite is None:
+            raise ValueError("ephemeral optimizer entries must be composites")
+        error = self._validate_composite_references(strategy_id, strategy, self._strategies)
+        if error is not None:
+            raise ValueError(error)
+        self._strategies[strategy_id] = strategy
 
     def find_dependents(self, strategy_id: str) -> list[str]:
         """返回引用了 strategy_id 作为子策略的所有 composite 策略 id。

@@ -1582,6 +1582,122 @@ export interface ParameterGridExperiment {
   updated_at: string
   completed: number
   total: number
+  runtime?: ExperimentRuntime
+}
+
+export interface OptimizerUniverseOption {
+  id: string
+  label: string
+  count: number
+}
+
+export interface OptimizerUniverses {
+  start: string
+  end: string
+  earliest: string | null
+  latest: string | null
+  years: number
+  boards: OptimizerUniverseOption[]
+  industries: OptimizerUniverseOption[]
+  warnings: string[]
+  limits: { max_scenarios: number; default_max_scenarios: number; per_symbol_max: number }
+}
+
+export interface OptimizerRequest {
+  strategy_ids: string[]
+  symbols?: string[] | null
+  include_all_a?: boolean
+  boards?: string[]
+  industries?: string[]
+  industry_top_n?: number
+  per_symbol?: boolean
+  holding_days?: number[]
+  matchings?: Array<'close_t' | 'open_t+1'>
+  years?: number
+  end?: string | null
+  train_ratio?: number
+  objective?: 'sharpe' | 'calmar' | 'total_return' | 'risk_adjusted'
+  min_trades?: number
+  max_drawdown?: number | null
+  top_k?: number
+  max_scenarios?: number
+  fees_pct?: number
+  slippage_bps?: number
+  max_positions?: number
+  initial_capital?: number
+  risk_free_rate?: number
+  include_combos?: boolean
+}
+
+export interface OptimizerLaunchResponse {
+  experiment_id: string
+  config_hash: string
+  scenario_count: number
+  requested_count: number
+  truncated: boolean
+  objective: string
+  start: string
+  end: string
+  train_end: string
+  holdout_start: string
+  status: 'started' | 'already_running'
+}
+
+export interface OptimizerScenario {
+  scenario_id: string
+  strategy_id: string
+  strategy_label?: string
+  universe_id: string
+  universe_label: string
+  universe_kind: string
+  holding_days: number
+  matching: string
+  train_stats: Record<string, number>
+  holdout_stats: Record<string, number> | null
+  score: number | null
+  rank: number
+  admitted: boolean
+  error: string | null
+  elapsed_ms: number
+  phases: Array<{ id: string; label: string; total_return: number | null }>
+}
+
+export interface OptimizerExperiment {
+  experiment_id: string
+  config_hash: string
+  objective: string
+  start: string
+  end: string
+  train_end: string
+  holdout_start: string
+  requested_count: number
+  scenario_count: number
+  max_scenarios: number
+  truncated: boolean
+  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
+  scenarios: OptimizerScenario[]
+  recommended_ids: string[]
+  diagnostics: {
+    dsr?: number | null
+    best_daily_sharpe?: number | null
+    n_trials?: number
+    expected_max_sharpe?: number
+    pbo?: { pbo: number | null; n_combinations: number; n_trials: number; n_blocks: number; reason?: string | null }
+  }
+  ensemble: {
+    kind: string
+    members: string[]
+    n_obs: number
+    daily_sharpe: number | null
+    total_return: number | null
+    note: string
+  } | null
+  warnings: string[]
+  created_at: string
+  updated_at: string
+  completed: number
+  total: number
+  runtime?: ExperimentRuntime
 }
 
 export interface SignalScorecardTrackedItem {
@@ -3061,6 +3177,24 @@ export const api = {
   parameterGridCancel: (experimentId: string) =>
     request<{ ok: boolean; experiment_id?: string; message?: string }>(
       `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}/cancel`,
+      { method: 'POST' },
+    ),
+
+  optimizerUniverses: () => request<OptimizerUniverses>('/api/backtest/optimizer/universes'),
+  optimizerLaunch: (payload: OptimizerRequest) =>
+    request<OptimizerLaunchResponse>('/api/backtest/optimizer', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  optimizerGet: (experimentId: string) =>
+    request<OptimizerExperiment | null>(
+      `/api/backtest/optimizer/${encodeURIComponent(experimentId)}`,
+      undefined,
+      { silent404: true },
+    ),
+  optimizerCancel: (experimentId: string) =>
+    request<{ ok: boolean; experiment_id?: string; message?: string }>(
+      `/api/backtest/optimizer/${encodeURIComponent(experimentId)}/cancel`,
       { method: 'POST' },
     ),
 

@@ -566,34 +566,36 @@ class StrategyBacktestService:
         """各子内部按 score 降序排名归一到 [0,1](跨子策略可比), 命中子策略间按权重加权。
 
         单候选/无 score 用中性分 0.5。结果 *100 对齐 _apply_score 的 0~100 量纲。
+        rank/over 必须作用在 DataFrame 列上, 不能对游离 Series 做窗口, 否则多日分组会长度错位。
         """
-        n = len(panel)
-        neutral = 0.5
-        # 命中权重和 与 加权排名分
-        weight_sum_parts: list[pl.Expr] = []
-        blended_parts: list[pl.Expr] = []
+        if not child_scores:
+            return pl.Series("score", [0.0] * len(panel), dtype=pl.Float64)
+        work = panel.select(pl.col("date"))
+        weight_sum: pl.Expr = pl.lit(0.0)
+        blended: pl.Expr = pl.lit(0.0)
         for idx, (score_col, entry_m) in enumerate(zip(child_scores, entry_masks, strict=True)):
             w = float(child_weights[idx]) if idx < len(child_weights) else 1.0
-            hit_score = pl.when(entry_m).then(score_col).otherwise(None)
-            hit_count = hit_score.is_not_null().sum().over("date")
-            rk = hit_score.rank(method="ordinal", descending=True).over("date")
-            norm = pl.when(entry_m).then(
-                pl.when(hit_count > 1).then(
-                    1.0 - (rk.cast(pl.Float64) - 1.0) / (hit_count.cast(pl.Float64) - 1.0)
-                ).otherwise(pl.lit(neutral))
+            s_name, e_name, h_name, r_name, c_name = (
+                f"_s{idx}", f"_e{idx}", f"_hs{idx}", f"_rk{idx}", f"_hc{idx}",
+            )
+            work = work.with_columns(
+                score_col.alias(s_name),
+                entry_m.cast(pl.Boolean).alias(e_name),
+            ).with_columns(
+                pl.when(pl.col(e_name)).then(pl.col(s_name)).otherwise(None).alias(h_name),
+            ).with_columns(
+                pl.col(h_name).rank(method="ordinal", descending=True).over("date").alias(r_name),
+                pl.col(h_name).is_not_null().sum().over("date").alias(c_name),
+            )
+            norm = pl.when(pl.col(e_name)).then(
+                pl.when(pl.col(c_name) > 1).then(
+                    1.0 - (pl.col(r_name).cast(pl.Float64) - 1.0) / (pl.col(c_name).cast(pl.Float64) - 1.0)
+                ).otherwise(pl.lit(0.5))
             ).otherwise(0.0)
-            weight_sum_parts.append(pl.when(entry_m).then(pl.lit(w)).otherwise(pl.lit(0.0)))
-            blended_parts.append(pl.when(entry_m).then(norm * pl.lit(w)).otherwise(pl.lit(0.0)))
-
-        weight_sum = weight_sum_parts[0]
-        for part in weight_sum_parts[1:]:
-            weight_sum = weight_sum + part
-        blended = blended_parts[0]
-        for part in blended_parts[1:]:
-            blended = blended + part
+            weight_sum = weight_sum + pl.when(pl.col(e_name)).then(pl.lit(w)).otherwise(0.0)
+            blended = blended + pl.when(pl.col(e_name)).then(norm * w).otherwise(0.0)
         safe = pl.when(weight_sum > 0).then(weight_sum).otherwise(pl.lit(1.0))
-        score_expr = (blended / safe * 100.0).fill_null(0.0).fill_nan(0.0)
-        return panel.select(score_expr.alias("score"))["score"]
+        return work.select((blended / safe * 100.0).fill_null(0.0).fill_nan(0.0).alias("score"))["score"]
 
     # ── 全量模拟 (选股能力统计, 不建组合不算净值) ──
 
