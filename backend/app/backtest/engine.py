@@ -270,7 +270,7 @@ _TAIL_WINDOW_END_HM = 1500
 
 
 def _minute_float(value) -> float:
-    """分钟字段 → 有限 float; 非法 (None/NaN/负价) 归 0 由调用方按无效处理。"""
+    """分钟字段 → 有限 float; None/NaN/非数值归 0 由调用方按无效处理 (负价原样保留, 下游按 price<=0 过滤)。"""
     try:
         v = float(value)
     except (TypeError, ValueError):
@@ -281,7 +281,7 @@ def _minute_float(value) -> float:
 class MinuteExecutionData:
     """F14 分钟执行数据: 按 (symbol, YYYY-MM-DD) 组织的当日分钟 bar 序列。
 
-    bar 五元组: (hhmm, open, high, low, close, volume), 时间升序。
+    bar 六元组: (hhmm, open, high, low, close, volume), 时间升序。
     由 build_minute_execution 从 provider 分钟面板构建; 引擎撮合时只读。
     """
 

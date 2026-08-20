@@ -93,7 +93,7 @@ def test_cost_breakdown_stamp_tax_and_total():
 
 
 def test_zero_stamp_tax_matches_legacy_behavior():
-    """stamp=0 时 cost_breakdown 与旧口径一致: 无 stamp_tax 键值, total = commission+slippage。"""
+    """stamp=0 时 cost_breakdown 与旧口径数值一致: stamp_tax 键存在但为 0, total = commission+slippage。"""
     r = _run_portfolio(stamp_tax_pct=0.0)
     bd = r.stats["cost_breakdown"]
     assert bd["stamp_tax"] == 0.0

@@ -478,7 +478,7 @@ function MonteCarloShuffleSection({ result }: { result: StrategyRobustnessResult
             ] as const).map(([label, value]) => (
               <div key={label} className="bg-surface px-2 py-2 text-center">
                 <div className="text-[10px] text-muted">{label}</div>
-                <div className={`mt-0.5 font-mono text-sm font-semibold num ${priceColorClass(value - 1)}`}>{fmtPct(value - 1, 1)}</div>
+                <div className={`mt-0.5 font-mono text-sm font-semibold num ${priceColorClass(value)}`}>{fmtPct(value, 1)}</div>
               </div>
             ))}
             {([

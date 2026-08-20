@@ -2351,7 +2351,7 @@ export function StrategyBacktest({
 
             {!isCandidateExecution && renderResultSection('professional', <ProfessionalDiagnostics result={result} />)}
             {!isCandidateExecution && renderResultSection('trust', <TrustDiagnostics result={result} request={robustnessRequest} />)}
-            {renderResultSection('attribution', <TradeAttributionPanel attribution={result.attribution} />)}
+            {result.attribution != null && renderResultSection('attribution', <TradeAttributionPanel attribution={result.attribution} />)}
 
             {isCandidateExecution ? (
               <div className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] leading-5 text-secondary" role="status">

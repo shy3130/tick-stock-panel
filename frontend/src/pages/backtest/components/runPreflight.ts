@@ -40,7 +40,7 @@ export interface PreflightInput {
   slippage: number
   /** 建仓口径 */
   entryFill: 'close_t' | 'open_t+1'
-  /** 上市天数门控；前端当前无法设置，恒为 0 */
+  /** 上市天数门控（专业模式可设置；简单模式恒为 0） */
   minListedDays?: number
   /** 预热天数（指标预热消耗的交易日数）；缺省按 120 估算 */
   warmupDays?: number

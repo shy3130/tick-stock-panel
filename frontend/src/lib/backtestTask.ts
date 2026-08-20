@@ -201,6 +201,7 @@ export function startBacktest(params: {
     max_exposure_pct: params.max_exposure_pct,
     initial_capital: params.initial_capital,
     position_sizing: params.position_sizing,
+    params: params.params ? JSON.stringify(params.params) : undefined,
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     mode: params.mode,
     holding_days: params.holding_days,

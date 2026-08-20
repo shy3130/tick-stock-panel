@@ -67,7 +67,7 @@ function CostSensitivityChart({ rows }: { rows: CostSensitivityRow[] }) {
         scale: true,
         name: '总收益',
         nameTextStyle: { color: '#64748b', fontSize: 10 },
-        axisLabel: { color: '#64748b', fontSize: 10, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+        axisLabel: { color: '#64748b', fontSize: 10, formatter: (v: number) => `${v.toFixed(0)}%` },
         splitLine: { lineStyle: { color: '#1e293b' } },
         axisLine: { show: false },
       },

@@ -435,6 +435,34 @@ def test_style_attribution_null_when_factors_insufficient(
     assert engine.load_calls == [(["600000.SH"], date(2024, 9, 18), date(2026, 6, 30))]
 
 
+# ── F14 分钟资源预检 (API 层, 加载前拒绝) ─────────────────
+
+
+def test_minute_resource_precheck_rejects_before_panel_load(
+    client: TestClient, capturing_service, monkeypatch
+):
+    """超限请求必须在分钟面板加载前 422: 标的数精确 >100; 日历日上界 >168 (≈120 交易日)。"""
+    def _boom(*a, **kw):
+        raise AssertionError("分钟面板加载不应被调用")
+
+    monkeypatch.setattr(backtest_api, "_strategy_minute_data", _boom)
+
+    many_symbols = [f"{600000 + i}.SH" for i in range(101)]
+    resp = client.post("/api/backtest/strategy/run", json=_base_body(
+        symbols=many_symbols, bar_precision="minute",
+    ))
+    assert resp.status_code == 422
+    assert "标的数" in resp.json()["detail"]
+    assert len(capturing_service.calls) == 0  # 加载与计算都未发生
+
+    resp = client.post("/api/backtest/strategy/run", json=_base_body(
+        start="2025-01-01", end="2026-06-30", bar_precision="minute",
+    ))
+    assert resp.status_code == 422
+    assert "日历日" in resp.json()["detail"]
+    assert len(capturing_service.calls) == 0
+
+
 # ── /runs/{run_id}/fill-reachability ──────────────────────
 
 

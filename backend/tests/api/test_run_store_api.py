@@ -168,7 +168,7 @@ def test_compare_two_runs_with_warnings(client: TestClient, tmp_path: Path):
 
 def test_compare_count_bounds_422(client: TestClient):
     assert client.post("/api/backtest/runs/compare", json={"run_ids": ["a"]}).status_code == 422
-    assert client.post("/api/backtest/runs/compare", json={"run_ids": [f"r{i}" for i in range(5)]}).status_code == 422
+    assert client.post("/api/backtest/runs/compare", json={"run_ids": [f"r{i}" for i in range(9)]}).status_code == 422
 
 
 def test_compare_returns_config_diff_and_trade_summary(client: TestClient, tmp_path: Path):
@@ -272,6 +272,32 @@ def test_rerun_legacy_card_without_strategy_id_400(client: TestClient, tmp_path:
     assert client.post("/api/backtest/runs/legacynoid/rerun").status_code == 400
 
 
+def test_rerun_preserves_asymmetric_fill_prices(client: TestClient, tmp_path: Path, monkeypatch):
+    """非对称成交口径 (entry=open_t+1 / exit=close_t) 的 Run 复跑不得被 matching 回填静默改语义。"""
+    captured: list = []
+
+    class _CaptureService:
+        def __init__(self, *a, **kw):
+            pass
+
+        def run(self, cfg, progress_cb=None, cancel_event=None, **kw):
+            captured.append(cfg)
+            return _StubResult()
+
+    monkeypatch.setattr("app.backtest.strategy.StrategyBacktestService", _CaptureService)
+    store = BacktestRunStore(tmp_path)
+    store.save(_make_run("asymfill01", config={
+        "strategy_id": "macd", "symbols": ["600000.SH"],
+        "start": "2026-01-01", "end": "2026-06-30",
+        "matching": "open_t+1", "entry_fill": "open_t+1", "exit_fill": "close_t",
+    }))
+    resp = client.post("/api/backtest/runs/asymfill01/rerun")
+    assert resp.status_code == 200, resp.text
+    assert len(captured) == 1
+    assert captured[0].entry_fill == "open_t+1"
+    assert captured[0].exit_fill == "close_t"  # 不得回填成 open_t+1
+
+
 # ── SSE 取消 job_key / 非法参数 ──────────────────────────
 
 
@@ -307,6 +333,19 @@ def test_strategy_cancel_matches_running_job_with_nonzero_risk_free_rate(client:
             "qs": "strategy_id=macd&start=2026-01-01&end=2026-06-30",
         })
         assert miss.json() == {"ok": False, "message": "任务不存在或已完成"}
+    finally:
+        backtest_api._running_jobs.pop(key, None)
+
+
+def test_strategy_cancel_normalizes_benchmark_symbol(client: TestClient):
+    """run 侧对 benchmark_symbol 做 strip().upper(), cancel 侧必须同口径, 否则小写输入永远取消不到。"""
+    key, job = _register_stream_job(benchmark_symbol="600519.SH")
+    try:
+        ok = client.post("/api/backtest/strategy/cancel", json={
+            "qs": "strategy_id=macd&start=2026-01-01&end=2026-06-30&benchmark_symbol=600519.sh&risk_free_rate=0.03",
+        })
+        assert ok.status_code == 200 and ok.json() == {"ok": True}
+        assert job.cancel_event.is_set()
     finally:
         backtest_api._running_jobs.pop(key, None)
 

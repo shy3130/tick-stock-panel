@@ -242,6 +242,10 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
         matching: row.matching,
         holding_days: row.holding_days,
         mode: 'position',
+        // F16 参数候选必须随场景固化, 否则静默按策略默认值回测
+        params: row.params ?? undefined,
+        // F7 溯源: 计入实验的固化 Run 数
+        source_experiment_id: experiment.experiment_id,
       }
       const result = await api.strategyBacktestRun(request)
       if (result?.error) {

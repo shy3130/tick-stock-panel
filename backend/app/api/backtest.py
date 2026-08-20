@@ -778,6 +778,31 @@ def _strategy_listing_dates():
         return None
     return df.select("symbol", "listing_date")
 
+def _minute_resource_precheck(symbols: list[str] | None, start: date, end: date) -> str | None:
+    """F14 分钟撮合 API 层预检: 在昂贵的分钟面板逐日加载前拒绝明显超限请求。
+
+    标的数精确计数; 交易日用日历日上界估计 (cal_days*5/7 ≥ 实际交易日数,
+    边界日子宁可早拒并提示改日 K)。svc.run 内仍有按正式面板的精确 guard 兜底。
+    返回 None 表示通过, 否则返回中文报错文案。
+    """
+    from app.backtest.strategy import _MINUTE_MAX_SYMBOLS, _MINUTE_MAX_TRADE_DAYS
+
+    if symbols:
+        n = len(set(symbols))
+        if n > _MINUTE_MAX_SYMBOLS:
+            return (
+                f"分钟级撮合超出资源上限（标的数 {n} > {_MINUTE_MAX_SYMBOLS}），"
+                "请缩小股票池，或改用日 K 成交精度"
+            )
+    cal_days = (end - start).days
+    if cal_days > _MINUTE_MAX_TRADE_DAYS * 7 // 5:
+        return (
+            f"分钟级撮合超出资源上限（区间 {cal_days} 日历日，交易日上界超过 "
+            f"{_MINUTE_MAX_TRADE_DAYS}），请缩短回测区间，或改用日 K 成交精度"
+        )
+    return None
+
+
 def _strategy_minute_data(symbols: list[str] | None, start: date, end: date):
     """F14 分钟级撮合: 经 provider 公开分钟接口构建 MinuteExecutionData。
 
@@ -802,10 +827,25 @@ def _strategy_minute_data(symbols: list[str] | None, start: date, end: date):
         logger.warning("分钟撮合: 当前 provider 不提供 get_minute 接口")
         return None
     try:
+        # catalog 路由对超出覆盖的日期 fail-closed 抛错; 先读覆盖把 end 钳到 latest,
+        # 未覆盖的尾部交易日由逐日回退机制显式计数 (minute_fallback_daily), 不整单失败。
+        cov_fn = getattr(provider, "get_minute_coverage", None)
+        eff_end = end
+        if callable(cov_fn):
+            cov = cov_fn() or {}
+            latest = cov.get("latest_date")
+            if latest:
+                latest_d = date.fromisoformat(str(latest)[:10])
+                if start > latest_d:
+                    logger.warning("分钟撮合: 请求区间 %s 起晚于分钟覆盖 %s, 无分钟数据", start, latest_d)
+                    return None
+                if eff_end > latest_d:
+                    logger.info("分钟撮合: end %s 超出覆盖 %s, 钳制到覆盖日 (超出部分逐日回退日 K)", eff_end, latest_d)
+                    eff_end = latest_d
         minute_panel = get_minute(
             list(dict.fromkeys(symbols)),
             datetime(start.year, start.month, start.day, 9, 30),
-            datetime(end.year, end.month, end.day, 15, 0),
+            datetime(eff_end.year, eff_end.month, eff_end.day, 15, 0),
             "stock",
             "1m",
         )
@@ -1033,6 +1073,10 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     # service 侧显式告警并跳过门控 (不伪造)。
     # F14 分钟级撮合: minute 时经 provider 分钟接口构建执行数据; 解析失败 →
     # None → service guard 中文报错 (fail-closed, 不静默降级日 K)。
+    if req.bar_precision == "minute":
+        precheck_error = _minute_resource_precheck(req.symbols, start, end)
+        if precheck_error:
+            raise HTTPException(status_code=422, detail=precheck_error)
     minute_data = (
         _strategy_minute_data(req.symbols, start, end)
         if req.bar_precision == "minute"
@@ -1711,6 +1755,14 @@ async def strategy_stream(
                     listing_dates = (
                         _strategy_listing_dates() if min_listed_days > 0 else None
                     )
+                    if bar_precision == "minute":
+                        precheck_error = _minute_resource_precheck(
+                            [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
+                            start_date,
+                            end_date,
+                        )
+                        if precheck_error:
+                            raise ValueError(precheck_error)
                     minute_data = (
                         _strategy_minute_data(
                             [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
@@ -1933,7 +1985,8 @@ async def strategy_cancel(request: Request):
         _get("mode", "position"),
         int(_get("holding_days", "5")),
         _get("regime_filter") or None,
-        _get("benchmark_symbol", "000001.INDEX"),
+        # 与 run 侧 field_validator 同口径归一化, 否则小写输入永远取消不到
+        _get("benchmark_symbol", "000001.INDEX").strip().upper(),
         float(_get("risk_free_rate", "0")),
         # 关键字传参: 位置错位会让 bar_precision 落进 max_participation_pct 槽位导致永不匹配
         max_participation_pct=float(_get("max_participation_pct")) if _get("max_participation_pct") else None,
@@ -2020,7 +2073,7 @@ class RunPatchRequest(BaseModel):
 
 
 class RunCompareRequest(BaseModel):
-    run_ids: list[str] = Field(..., min_length=2, max_length=4)
+    run_ids: list[str] = Field(..., min_length=2, max_length=8)
 
 
 def _get_run_or_404(store: BacktestRunStore, run_id: str) -> BacktestRun:
@@ -2051,7 +2104,7 @@ def list_runs(
 
 @router.post("/runs/compare")
 def runs_compare(req: RunCompareRequest, request: Request):
-    """2~4 个 run 的指标矩阵 + 曲线 + 可比性警告。"""
+    """2~8 个 run 的指标矩阵 + 曲线 + 可比性警告。"""
     store = _run_store(request)
     runs = [_get_run_or_404(store, run_id) for run_id in dict.fromkeys(req.run_ids)]
     if len(runs) < 2:
@@ -2272,6 +2325,11 @@ def _rerun_execute(request: Request, run: BacktestRun) -> tuple[dict, str]:
         if rerun_benchmark_run_id
         else None
     )
+    # F14 复跑与直跑同口径: 分钟面板加载前先做资源预检, 超限 422。
+    if cfg.get("bar_precision") == "minute" and cfg.get("symbols"):
+        rerun_precheck_error = _minute_resource_precheck(cfg.get("symbols"), start, end)
+        if rerun_precheck_error:
+            raise HTTPException(status_code=422, detail=rerun_precheck_error)
     result = svc.run(StrategyBacktestConfig(
         strategy_id=cfg["strategy_id"],
         symbols=cfg.get("symbols"),
@@ -2280,6 +2338,8 @@ def _rerun_execute(request: Request, run: BacktestRun) -> tuple[dict, str]:
         params=cfg.get("params"),
         overrides=cfg.get("overrides"),
         matching=cfg.get("matching", "open_t+1"),
+        entry_fill=cfg.get("entry_fill"),
+        exit_fill=cfg.get("exit_fill"),
         fees_pct=cfg.get("fees_pct", 0.0002),
         stamp_tax_pct=cfg.get("stamp_tax_pct", 0.0005),
         slippage_bps=cfg.get("slippage_bps", 5.0),

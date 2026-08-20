@@ -208,7 +208,7 @@ class StrategyBacktestService:
             if config.mode == "full":
                 return _err("分钟级撮合暂不支持全量候选模式 (mode=full)，请使用仓位模拟 (mode=position)")
             if minute_data is None:
-                return _err("bar_precision=minute 需要分钟执行数据，但当前调用路径未提供（provider 分钟接口不可用或未接入）")
+                return _err("bar_precision=minute 需要分钟执行数据，但当前调用路径未提供（未指定标的清单、分钟数据 provider 不可用或查询失败）")
 
         # 获取策略定义
         try:

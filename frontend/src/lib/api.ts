@@ -3476,6 +3476,7 @@ export const api = {
   backtestFillReachability: (runId: string, sample = 20, seed = 0) =>
     request<FillReachabilityResponse>(
       `/api/backtest/runs/${encodeURIComponent(runId)}/fill-reachability?sample=${sample}&seed=${seed}`,
+      { method: 'POST' },
     ),
 
   parameterGridLaunch: (payload: ParameterGridRequest) =>
