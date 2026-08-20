@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import logging
+import math
 import threading
 import time
 from dataclasses import asdict
@@ -13,7 +15,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.backtest.metrics import MetricContext
 from app.backtest.provenance import build_run_provenance
@@ -220,11 +222,16 @@ def _run_from_strategy_payload(
         config=cfg,
         data_snapshot=payload.get("data_snapshot") or {},
         benchmark={
-            "symbol": cfg.get("benchmark_symbol", "000001.INDEX"),
+            # F9: run 基准时 symbol 记 run_id; kind 来自 stats.benchmark_source。
+            "symbol": cfg.get("benchmark_run_id") or cfg.get("benchmark_symbol", "000001.INDEX"),
             "name": (
                 (payload.get("benchmark_curve") or [{}])[0].get("name")
                 if payload.get("benchmark_curve")
                 else None
+            ),
+            "kind": (
+                ((payload.get("stats") or {}).get("benchmark_source") or {}).get("kind")
+                or ("run" if cfg.get("benchmark_run_id") else None)
             ),
         },
         cost_model={
@@ -770,6 +777,58 @@ def _strategy_listing_dates():
         return None
     return df.select("symbol", "listing_date")
 
+def _resolve_benchmark_run(
+    request: Request,
+    run_id: str,
+    start: date,
+    end: date,
+) -> dict:
+    """F9 历史 Run 净值基准的读侧校验 (fail-closed, 不伪造):
+
+    - run 不存在 → 422;
+    - 无日频净值 (候选执行模式 / 因子 run / 旧 run_card 迁移) → 422;
+    - 与回测请求区间重叠交易日 < 20 → 422 (对齐必然失败, 提前拒绝)。
+    通过后返回 {"run_id", "label", "equity_curve"} 供 service 对齐计算。
+    """
+    try:
+        run = _run_store(request).get(run_id)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=422, detail=f"基准 run 不存在: {run_id}",
+        ) from e
+    stats = run.stats or {}
+    is_candidate = (
+        stats.get("full_kind") == "candidate_execution"
+        or stats.get("curve_semantics") == "candidate_exit_event_average"
+    )
+    equity = list(run.equity_curve or [])
+    if is_candidate:
+        raise HTTPException(
+            status_code=422,
+            detail=f"基准 run {run_id} 为候选执行模式，净值按退出事件日采样，不具备日频语义，无法作为基准",
+        )
+    if not equity:
+        raise HTTPException(
+            status_code=422,
+            detail=f"基准 run {run_id} 无日频净值曲线（因子 run 或旧记录迁移），无法作为基准",
+        )
+    dates = {
+        str(row.get("date"))[:10]
+        for row in equity
+        if row.get("date") and len(str(row.get("date"))) >= 10
+    }
+    overlap = [d for d in dates if start.isoformat() <= d <= end.isoformat()]
+    if len(overlap) < 20:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"基准 run {run_id} 与回测区间 {start}~{end} 重叠交易日仅 "
+                f"{len(overlap)} 天 (< 20)，无法对齐计算相对指标"
+            ),
+        )
+    label = run.label or run.subject.name or run_id
+    return {"run_id": run.run_id, "label": label, "equity_curve": equity}
+
 
 def _strategy_backtest_config(
     req: StrategyBacktestRequest,
@@ -806,6 +865,7 @@ def _strategy_backtest_config(
         holding_days=req.holding_days,
         regime_filter=req.regime_filter,
         benchmark_symbol=req.benchmark_symbol,
+        benchmark_run_id=req.benchmark_run_id,
         risk_free_rate=req.risk_free_rate,
         max_participation_pct=req.max_participation_pct,
         participation_volume_window=req.participation_volume_window,
@@ -861,9 +921,12 @@ class StrategyBacktestRequest(BaseModel):
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
     regime_filter: dict | None = None  # {states: [...], min_score?: float}
-    benchmark_symbol: Literal[
-        "000001.INDEX", "000300.INDEX", "000905.INDEX", "000852.INDEX",
-    ] = "000001.INDEX"
+    # F9 自定义基准: 4 指数白名单外的任意标的代码 (6 位裸码 / 带后缀)。
+    # 裸码按 000/399/880 前缀推断指数, 其余按个股加载 (asset_type 推断见
+    # strategy._infer_benchmark_asset_type)。
+    benchmark_symbol: str = "000001.INDEX"
+    # F9 历史 Run 净值基准: 与 benchmark_symbol 互斥 (同时显式传入 → 422)。
+    benchmark_run_id: str | None = Field(default=None, max_length=64)
     risk_free_rate: float = Field(default=0.0, gt=-1.0, le=1.0)
     # A1 量能参与率 + B6 上市天数门控透传: max_participation_pct=None 关闭
     # 量能约束; min_listed_days=0 关闭门控 (启用时经 provider 取上市日期,
@@ -871,6 +934,27 @@ class StrategyBacktestRequest(BaseModel):
     max_participation_pct: float | None = Field(default=None, gt=0.0, le=1.0)
     participation_volume_window: int = Field(default=5, ge=1, le=60)
     min_listed_days: int = Field(default=0, ge=0, le=3650)
+    # F7 实验资产溯源: 从寻优/参数网格场景固化为 Run 时由前端携带,
+    # 随 config 持久化, 供 GET /experiments 统计各实验已固化 Run 数; 其余调用方缺省。
+    source_experiment_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("benchmark_symbol")
+    @classmethod
+    def _validate_benchmark_symbol(cls, value: str) -> str:
+        """基准代码格式校验: 6 位裸码或带 .SH/.SZ/.BJ/.INDEX 后缀。"""
+        v = value.strip().upper()
+        if not re.fullmatch(r"\d{6}(\.(SH|SZ|BJ|INDEX))?", v):
+            raise ValueError(
+                f"benchmark_symbol 需为 6 位代码或带 .SH/.SZ/.BJ/.INDEX 后缀: {value}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _benchmark_params_mutually_exclusive(self):
+        """benchmark_symbol 与 benchmark_run_id 互斥; 未显式传 symbol 时允许仅给 run_id。"""
+        if self.benchmark_run_id and "benchmark_symbol" in self.model_fields_set:
+            raise ValueError("benchmark_symbol 与 benchmark_run_id 互斥，只能二选一")
+        return self
 
 @router.post("/strategy/run")
 def strategy_run(req: StrategyBacktestRequest, request: Request):
@@ -886,11 +970,18 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     _guard_server_backtest_range(start, end)
 
     cfg = _strategy_backtest_config(req, start, end)
+    # F9 run 基准: 开跑前读侧校验 (不存在/无日频净值/重叠<20 → 422)。
+    benchmark_run = (
+        _resolve_benchmark_run(request, req.benchmark_run_id, start, end)
+        if req.benchmark_run_id
+        else None
+    )
     # B6 上市天数门控: 仅在启用时取上市日期表; provider 不可用时传 None,
     # service 侧显式告警并跳过门控 (不伪造)。
     result = svc.run(
         cfg,
         listing_dates=_strategy_listing_dates() if req.min_listed_days > 0 else None,
+        benchmark_run=benchmark_run,
     )
     payload = _attach_run_provenance(
         json_safe(asdict(result)),
@@ -899,6 +990,9 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         end=end,
         symbols=req.symbols if req.symbols else None,
     )
+    # F7 实验溯源: 场景固化为 Run 时把来源实验写入 config, 供实验列表统计固化数
+    if req.source_experiment_id:
+        payload.setdefault("config", {})["source_experiment_id"] = req.source_experiment_id
     if not payload.get("error"):
         payload["persisted"] = _persist_backtest_run(
             request,
@@ -925,7 +1019,11 @@ class RobustnessRequest(StrategyBacktestRequest):
 
 
 @router.post("/strategy/robustness")
-def strategy_robustness(req: RobustnessRequest, request: Request):
+def strategy_robustness(
+    req: RobustnessRequest,
+    request: Request,
+    mc_sims: int = Query(default=1000, ge=100, le=5000),
+):
     if req.mode == "full":
         raise HTTPException(
             status_code=422,
@@ -1075,6 +1173,18 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
         )
     else:
         robustness["trade_equity_band"] = None
+    # F8 蒙特卡洛交易顺序重排: 交易级、顺序无关的“顺序运气”诊断 (不模拟
+    # 资金占用/并发持仓, 不是账户级 MC, 见 monte_carlo_trade_shuffle 口径
+    # 警示); 成交 < 30 笔时 fail-closed 置 None, 不调用。n_sims 由 Query
+    # 参数 mc_sims 控制 (100-5000, 默认 1000), 不进请求体 → 派生 seed 不受影响。
+    if len(full.trades or []) >= rb.MONTE_CARLO_MIN_TRADES:
+        robustness["monte_carlo"] = rb.monte_carlo_trade_shuffle(
+            [t.get("pnl_pct") for t in full.trades if isinstance(t, dict)],
+            n_sims=mc_sims,
+            seed=seed,
+        )
+    else:
+        robustness["monte_carlo"] = None
     robustness["random_seed"] = seed
 
     # 短区间等 Walk-Forward 边界进入响应 warnings, 与块内 warning 一致可见
@@ -1342,9 +1452,9 @@ def _make_job_key(
     mode: str = "position", holding_days: int = 5, regime_filter: str | None = None,
     benchmark_symbol: str = "000001.INDEX", risk_free_rate: float = 0.0,
     max_participation_pct: float | None = None, participation_volume_window: int = 5,
-    min_listed_days: int = 0,
+    min_listed_days: int = 0, benchmark_run_id: str | None = None,
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{stamp_tax_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}|{max_participation_pct}|{participation_volume_window}|{min_listed_days}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{stamp_tax_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}|{max_participation_pct}|{participation_volume_window}|{min_listed_days}|{benchmark_run_id}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 def _make_factor_job_key(
@@ -1391,9 +1501,10 @@ async def strategy_stream(
     mode: Literal["position", "full"] = "position",
     holding_days: int = 5,
     regime_filter: str | None = None,
-    benchmark_symbol: Literal[
-        "000001.INDEX", "000300.INDEX", "000905.INDEX", "000852.INDEX",
-    ] = "000001.INDEX",
+    # F9 自定义基准: 任意标的代码 (6 位裸码/带后缀), 裸码按 000/399/880 推断指数。
+    benchmark_symbol: str = "000001.INDEX",
+    # F9 历史 Run 净值基准: 与 benchmark_symbol 互斥 (同给 → 422)。
+    benchmark_run_id: str | None = Query(default=None, max_length=64),
     risk_free_rate: float = Query(default=0.0, gt=-1.0, le=1.0),
     max_participation_pct: float | None = Query(default=None, gt=0.0, le=1.0),
     participation_volume_window: int = Query(default=5, ge=1, le=60),
@@ -1414,6 +1525,20 @@ async def strategy_stream(
 
     # 参数在开流前解析/校验 (引擎创建/任务注册之前): 非法输入得到结构化 4xx,
     # 而不是 500 或 SSE 开始后断流。
+    # F9 基准参数校验 (开流前, 任何 repo 访问之前): 格式/互斥结构化 422。
+    benchmark_symbol_norm = benchmark_symbol.strip().upper()
+    if not re.fullmatch(r"\d{6}(\.(SH|SZ|BJ|INDEX))?", benchmark_symbol_norm):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "benchmark_symbol 需为 6 位代码或带 .SH/.SZ/.BJ/.INDEX 后缀: "
+                f"{benchmark_symbol}"
+            ),
+        )
+    if benchmark_run_id and benchmark_symbol_norm != "000001.INDEX":
+        raise HTTPException(
+            status_code=422, detail="benchmark_symbol 与 benchmark_run_id 互斥，只能二选一",
+        )
     try:
         end_date = date.fromisoformat(end) if end else date.today()
         start_date = date.fromisoformat(start) if start else None
@@ -1426,7 +1551,6 @@ async def strategy_stream(
     params_obj = _parse_json_object_param(params, "params")
     overrides_obj = _parse_json_object_param(overrides, "overrides")
     regime_filter_obj = _parse_json_object_param(regime_filter, "regime_filter")
-
     # 范围保护必须在注册 job 前返回，否则被拒绝的首次请求会留下永不完成的
     # 任务，使相同 query 的后续订阅者永久等待。
     if settings.backtest_range_guard and (
@@ -1440,6 +1564,13 @@ async def strategy_stream(
 
         return StreamingResponse(_guard_error(), media_type="text/event-stream")
 
+    # F9 run 基准读侧校验: 同样必须在注册 job 前返回 (422), 避免僵尸任务。
+    benchmark_run = (
+        _resolve_benchmark_run(request, benchmark_run_id, start_date, end_date)
+        if benchmark_run_id
+        else None
+    )
+
     engine = _get_engine(request)
     strategy_engine = request.app.state.strategy_engine
     svc = StrategyBacktestService(engine, strategy_engine)
@@ -1449,8 +1580,9 @@ async def strategy_stream(
         matching, entry_fill, exit_fill,
         fees_pct, stamp_tax_pct if stamp_tax_pct is not None else 0.0005, slippage_bps, max_positions, max_exposure_pct, initial_capital, position_sizing,
         params, overrides,
-        mode, holding_days, regime_filter, benchmark_symbol, risk_free_rate,
+        mode, holding_days, regime_filter, benchmark_symbol_norm, risk_free_rate,
         max_participation_pct, participation_volume_window, min_listed_days,
+        benchmark_run_id,
     )
 
     _cleanup_stale_jobs()
@@ -1489,7 +1621,8 @@ async def strategy_stream(
                 mode=mode,
                 holding_days=int(holding_days),
                 regime_filter=regime_filter_obj,
-                benchmark_symbol=benchmark_symbol,
+                benchmark_symbol=benchmark_symbol_norm,
+                benchmark_run_id=benchmark_run_id,
                 risk_free_rate=risk_free_rate,
                 max_participation_pct=max_participation_pct,
                 participation_volume_window=participation_volume_window,
@@ -1506,6 +1639,7 @@ async def strategy_stream(
                     result = svc.run(
                         cfg, lambda d: job.progress.append(d), job.cancel_event,
                         listing_dates=listing_dates,
+                        benchmark_run=benchmark_run,
                     )
                     job.result = result
                     job.done = True
@@ -2039,6 +2173,14 @@ def _rerun_execute(request: Request, run: BacktestRun) -> tuple[dict, str]:
     end = date.fromisoformat(str(cfg["end"])) if cfg.get("end") else date.today()
     start = date.fromisoformat(str(cfg["start"])) if cfg.get("start") else end - timedelta(days=FACTOR_DEFAULT_DAYS)
     _guard_server_backtest_range(start, end)
+    # F9: 原 config 带 benchmark_run_id 时重新解析 run 净值 (run 仍存在且
+    # 区间重叠 ≥20 才能复跑; 否则 422, 不静默退回默认指数)。
+    rerun_benchmark_run_id = cfg.get("benchmark_run_id")
+    rerun_benchmark_run = (
+        _resolve_benchmark_run(request, rerun_benchmark_run_id, start, end)
+        if rerun_benchmark_run_id
+        else None
+    )
     result = svc.run(StrategyBacktestConfig(
         strategy_id=cfg["strategy_id"],
         symbols=cfg.get("symbols"),
@@ -2058,8 +2200,9 @@ def _rerun_execute(request: Request, run: BacktestRun) -> tuple[dict, str]:
         holding_days=cfg.get("holding_days", 5),
         regime_filter=cfg.get("regime_filter"),
         benchmark_symbol=cfg.get("benchmark_symbol", "000001.INDEX"),
+        benchmark_run_id=rerun_benchmark_run_id,
         risk_free_rate=cfg.get("risk_free_rate", 0.0),
-    ))
+    ), benchmark_run=rerun_benchmark_run)
     if result.error:
         raise HTTPException(status_code=400, detail=result.error)
     payload = _attach_run_provenance(
@@ -2070,3 +2213,169 @@ def _rerun_execute(request: Request, run: BacktestRun) -> tuple[dict, str]:
         symbols=cfg.get("symbols"),
     )
     return payload, _strategy_run_kind(payload.get("strategy_info") or {})
+
+# ================================================================
+# F7 实验资产统一 — 寻优 / 参数网格实验汇总
+# ================================================================
+
+# 两类实验均已落盘 (research/{optimizer,parameter_grid}_experiments/*.json),
+# 进程内 job 表仅服务 SSE 进度, 不作为列表数据源。
+_OBJECTIVE_LABELS = {
+    "sharpe": "夏普",
+    "calmar": "卡玛",
+    "total_return": "累计收益",
+    "risk_adjusted": "风险调整收益",
+}
+
+
+def _experiment_number(value) -> float | None:
+    """实验摘要数值清洗: 非有限值统一 None, 不伪造 0。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _optimizer_experiment_rows(data_dir) -> tuple[list[dict], list[str]]:
+    """扫描寻优实验持久化目录 → (统一摘要行, 警告); 单文件损坏跳过不整体失败。"""
+    from app.backtest.optimizer import OptimizerExperimentStore
+
+    store = OptimizerExperimentStore(data_dir)
+    rows: list[dict] = []
+    warnings: list[str] = []
+    if not store.dir.exists():
+        return rows, warnings
+    broken = 0
+    for path in sorted(store.dir.glob("*.json")):
+        try:
+            exp = store.load(path.stem)
+        except Exception:  # noqa: BLE001
+            broken += 1
+            continue
+        best_row = None
+        scored = sorted(
+            (s for s in exp.scenarios if s.score is not None),
+            key=lambda s: (-(s.score or 0.0), s.scenario_id),
+        )
+        if scored:
+            top = scored[0]
+            # 优先留出期 (样本外) 指标, 未跑留出的场景回退训练期口径
+            stats = top.holdout_stats or top.train_stats or {}
+            best_row = {
+                "label": (
+                    f"{top.strategy_label or top.strategy_id} · {top.universe_label}"
+                    f" · {top.holding_days}日 · {top.matching}"
+                ),
+                "score": _experiment_number(top.score),
+                "total_return": _experiment_number(stats.get("total_return")),
+                "sharpe": _experiment_number(stats.get("sharpe")),
+            }
+        rows.append({
+            "id": exp.experiment_id,
+            "kind": "optimizer",
+            "title": (
+                f"策略寻优 · {_OBJECTIVE_LABELS.get(exp.objective, exp.objective)}"
+                f" · {exp.start}→{exp.end}"
+            ),
+            "created_at": exp.created_at,
+            "status": exp.status,
+            "scenario_count": exp.scenario_count,
+            "best": best_row,
+            "persisted": True,
+        })
+    if broken:
+        warnings.append(f"寻优实验有 {broken} 个文件损坏已跳过")
+    return rows, warnings
+
+
+def _grid_experiment_rows(data_dir) -> tuple[list[dict], list[str]]:
+    """扫描参数网格实验持久化目录 → (统一摘要行, 警告); 单文件损坏跳过不整体失败。"""
+    from app.backtest.parameter_grid import ParameterGridExperimentStore
+    from app.backtest.runtime import format_params
+
+    store = ParameterGridExperimentStore(data_dir)
+    rows: list[dict] = []
+    warnings: list[str] = []
+    if not store.dir.exists():
+        return rows, warnings
+    broken = 0
+    for path in sorted(store.dir.glob("*.json")):
+        try:
+            exp = store.load(path.stem)
+        except Exception:  # noqa: BLE001
+            broken += 1
+            continue
+        best = next(
+            (s for s in exp.scenarios if s.scenario_id == exp.best_scenario_id), None,
+        )
+        if best is None:
+            # 兼容无 best_scenario_id 的旧文件: 按得分回退取最优
+            scored = sorted(
+                (s for s in exp.scenarios if s.score is not None and s.error is None),
+                key=lambda s: (-(s.score or 0.0), s.scenario_id),
+            )
+            best = scored[0] if scored else None
+        best_row = None
+        if best is not None:
+            best_row = {
+                "label": format_params(best.params) or best.scenario_id,
+                "score": _experiment_number(best.score),
+                "total_return": _experiment_number(best.stats.get("total_return")),
+                "sharpe": _experiment_number(best.stats.get("sharpe")),
+            }
+        base = exp.base_config or {}
+        rows.append({
+            "id": exp.experiment_id,
+            "kind": "grid",
+            "title": (
+                f"参数网格 · {exp.strategy_id}"
+                f" · {_OBJECTIVE_LABELS.get(exp.objective, exp.objective)}"
+                f" · {base.get('start', '')}→{base.get('end', '')}"
+            ),
+            "created_at": exp.created_at,
+            "status": exp.status,
+            "scenario_count": exp.scenario_count,
+            "best": best_row,
+            "persisted": True,
+        })
+    if broken:
+        warnings.append(f"参数网格实验有 {broken} 个文件损坏已跳过")
+    return rows, warnings
+
+
+@router.get("/experiments")
+def list_experiments(request: Request, limit: int = Query(default=50, ge=1, le=200)):
+    """F7: 寻优 + 参数网格实验统一摘要列表, 按 created_at 倒序。
+
+    两源独立读取, 单源异常时降级返回另一源并附 warnings, 不整体失败。
+    run_count 为以 source_experiment_id 显式溯源的固化 Run 数 (未标记不归因)。
+    """
+    data_dir = request.app.state.repo.store.data_dir
+    items: list[dict] = []
+    warnings: list[str] = []
+    for source_name, loader in (
+        ("寻优", _optimizer_experiment_rows),
+        ("参数网格", _grid_experiment_rows),
+    ):
+        try:
+            rows, source_warnings = loader(data_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("experiments source %s failed: %s", source_name, exc)
+            warnings.append(f"{source_name}实验读取失败: {exc}")
+            continue
+        items.extend(rows)
+        warnings.extend(source_warnings)
+    # created_at 倒序; 缺时间戳的旧行排最后, 同刻以内 id 保证稳定次序
+    items.sort(key=lambda row: (row["created_at"] or "", row["id"]), reverse=True)
+    total = len(items)
+    try:
+        run_counts = _run_store(request).count_runs_by_source_experiment()
+    except Exception as exc:  # noqa: BLE001
+        run_counts = {}
+        warnings.append(f"固化 Run 计数读取失败: {exc}")
+    for row in items:
+        row["run_count"] = run_counts.get(row["id"], 0)
+    return {"items": items[:limit], "total": total, "warnings": warnings}

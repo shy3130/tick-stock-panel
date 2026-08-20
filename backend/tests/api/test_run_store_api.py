@@ -280,7 +280,7 @@ def _register_stream_job(**overrides) -> tuple[str, object]:
     args = dict(
         strategy_id="macd", symbols=None, start="2026-01-01", end="2026-06-30",
         matching="open_t+1", entry_fill=None, exit_fill=None,
-        fees_pct=0.0002, slippage_bps=5.0, max_positions=10, max_exposure_pct=1.0,
+        fees_pct=0.0002, stamp_tax_pct=0.0005, slippage_bps=5.0, max_positions=10, max_exposure_pct=1.0,
         initial_capital=1_000_000.0, position_sizing="equal",
         params=None, overrides=None, mode="position", holding_days=5,
         regime_filter=None, benchmark_symbol="000001.INDEX", risk_free_rate=0.03,
@@ -312,8 +312,15 @@ def test_strategy_cancel_matches_running_job_with_nonzero_risk_free_rate(client:
 
 
 def test_strategy_stream_rejects_illegal_benchmark_and_risk_free(client: TestClient):
+    # F9 后 benchmark_symbol 接受任意 6 位码/合法后缀; 非法格式仍开流前 422
     assert client.get("/api/backtest/strategy/stream", params={
-        "strategy_id": "macd", "benchmark_symbol": "399001.INDEX",
+        "strategy_id": "macd", "benchmark_symbol": "not-a-code",
+    }).status_code == 422
+    # benchmark_symbol 与 benchmark_run_id 同给 (非默认 symbol) → 互斥 422
+    assert client.get("/api/backtest/strategy/stream", params={
+        "strategy_id": "macd",
+        "benchmark_symbol": "000300.INDEX",
+        "benchmark_run_id": "run00001",
     }).status_code == 422
     assert client.get("/api/backtest/strategy/stream", params={
         "strategy_id": "macd", "risk_free_rate": -1.5,
@@ -347,7 +354,7 @@ def test_strategy_stream_valid_params_still_stream(client: TestClient, monkeypat
     client.app.state.backtest_engine = object()  # 跳过真实引擎构建
     key = backtest_api._make_job_key(
         "macd", None, "2026-01-01", "2026-06-30",
-        "open_t+1", None, None, 0.0002, 5.0, 10, 1.0, 1_000_000.0, "equal",
+        "open_t+1", None, None, 0.0002, 0.0005, 5.0, 10, 1.0, 1_000_000.0, "equal",
         '{"lookback": 20}', None, "position", 5, None, "000001.INDEX", 0.0,
     )
     try:

@@ -131,6 +131,134 @@ def trade_bootstrap_equity_band(
     }
 
 
+# ================================================================
+# F8 蒙特卡洛交易顺序重排 — 与 trade_bootstrap_equity_band 同族的交易级诊断
+# ================================================================
+
+MONTE_CARLO_MIN_TRADES = 30
+MONTE_CARLO_DD_BINS = 20
+
+# 样本不足约定 (fail-closed): 有效交易笔数 < MONTE_CARLO_MIN_TRADES 时
+# monte_carlo_trade_shuffle 置 None, 不输出任何分位/概率 — 与 regime 桶
+# < 15 天仅保留 days/days_pct 的约定同风格: 小样本下的重排分位毫无统计
+# 意义, 宁可缺失也不伪造。
+
+
+def _compound_max_drawdown(returns: np.ndarray) -> float:
+    """单仓位逐笔复利净值路径 (含起点 1.0) 的最大回撤; 峰值含初始资金。"""
+    equity = np.cumprod(np.concatenate(([1.0], 1.0 + returns)))
+    peak = np.maximum.accumulate(equity)
+    return float(np.max((peak - equity) / peak))
+
+
+def _dd_histogram(max_dds: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """重排回撤直方图 (20 桶); 退化数据的显式兜底。
+
+    全部模拟的 max_drawdown 仅差浮点级 (如收益全负: 重排不改收益集合,
+    连乘末值因浮点结合序只有 ~1e-16 差异) 时, 数据 range≈0 但非 0,
+    ``np.histogram`` 无法构建有限宽度的 20 个等宽桶 → 以退化值为中心
+    对称展开 5% 邻域, 计数全部落入正中桶, 不抛异常也不伪造形态。
+    """
+    lo, hi = float(max_dds.min()), float(max_dds.max())
+    if lo < hi:
+        edges = np.linspace(lo, hi, MONTE_CARLO_DD_BINS + 1)
+        if np.all(np.diff(edges) > 0.0):
+            return np.histogram(max_dds, bins=MONTE_CARLO_DD_BINS)
+    # 退化兜底: 以退化值为中心对称展开 5% 邻域, 计数全部落入正中桶,
+    # 不抛异常也不伪造形态。
+    width = 0.05 if lo == 0.0 else abs(lo) * 0.05
+    edges = np.linspace(lo - width, lo + width, MONTE_CARLO_DD_BINS + 1)
+    counts = np.zeros(MONTE_CARLO_DD_BINS, dtype=int)
+    counts[MONTE_CARLO_DD_BINS // 2] = int(max_dds.size)
+    return counts, edges
+
+
+def monte_carlo_trade_shuffle(
+    trade_returns: list[float] | np.ndarray,
+    n_sims: int = 1000,
+    seed: int = 42,
+) -> dict | None:
+    """蒙特卡洛交易顺序重排 — 交易级、顺序无关的“顺序运气”诊断。
+
+    对逐笔收益率做 ``n_sims`` 次随机重排 (每次模拟由
+    ``np.random.default_rng`` 从同一 ``SeedSequence(seed)`` 派生独立子流,
+    给定 seed 确定性可复现), 单仓位逐笔等权复利累计净值路径, 统计
+    final_return (期末收益) 与 max_drawdown (路径最大回撤) 的跨模拟分布、
+    终值为负的概率、以及重排回撤比原始顺序更差的概率 (actual 的
+    max_drawdown 从**原始顺序**同口径计算)。
+
+    ⚠️ 口径警示: 与 trade_bootstrap_equity_band 同族 — 回答“同样的逐笔
+    收益换个成交顺序, 回撤/终值会差多少”的**顺序运气**问题; 重排不改变
+    收益集合本身 (final_return 的 mean 收敛于全排列复合收益), **不模拟
+    资金占用、仓位权重与并发持仓, 不是账户级蒙特卡洛**, 不得与账户净值
+    曲线 / 账户级回测指标直接比较。
+
+    Args:
+        trade_returns: 逐笔收益率序列 (非有限值剔除, 与 metrics 的 dropna
+            语义一致)。
+        n_sims: 重排模拟次数。
+        seed: ``np.random.default_rng`` 种子, 给定即确定性可复现。
+
+    Returns:
+        ``{"n_sims", "seed", "n_trades", "final_return"/"max_drawdown":
+        {p05/p50/p95/mean}, "prob_final_negative",
+        "prob_max_dd_worse_than_actual" (actual 不可计算时 None),
+        "dd_histogram": {bin_edges(长度 21), counts(长度 20, 前端画图用)}}``;
+        有效交易数 < 30 → ``None`` (fail-closed, 见上方样本不足约定)。
+    """
+    try:
+        arr = np.asarray(trade_returns, dtype=float).ravel()
+    except (TypeError, ValueError):
+        return None
+    arr = arr[np.isfinite(arr)]
+    n = int(arr.size)
+    if n < MONTE_CARLO_MIN_TRADES:
+        return None
+
+    n_sims = int(n_sims)
+    # 每次模拟派生独立子流: 单次模拟可独立复现, 且增减 n_sims 不改变
+    # 已有模拟的抽样结果。
+    children = np.random.SeedSequence(seed).spawn(n_sims)
+    finals = np.empty(n_sims)
+    max_dds = np.empty(n_sims)
+    for i, child in enumerate(children):
+        shuffled = np.random.default_rng(child).permutation(arr)
+        equity = np.cumprod(np.concatenate(([1.0], 1.0 + shuffled)))
+        finals[i] = equity[-1] - 1.0
+        peak = np.maximum.accumulate(equity)
+        max_dds[i] = np.max((peak - equity) / peak)
+
+    actual_dd = _compound_max_drawdown(arr)
+
+    def _quantile_summary(values: np.ndarray) -> dict:
+        p05, p50, p95 = np.percentile(values, (5.0, 50.0, 95.0))
+        return {
+            "p05": round(float(p05), 6),
+            "p50": round(float(p50), 6),
+            "p95": round(float(p95), 6),
+            "mean": round(float(values.mean()), 6),
+        }
+
+    counts, edges = _dd_histogram(max_dds)
+    return {
+        "n_sims": n_sims,
+        "seed": int(seed),
+        "n_trades": n,
+        "final_return": _quantile_summary(finals),
+        "max_drawdown": _quantile_summary(max_dds),
+        "prob_final_negative": round(float(np.mean(finals < 0.0)), 4),
+        "prob_max_dd_worse_than_actual": (
+            round(float(np.mean(max_dds > actual_dd)), 4)
+            if np.isfinite(actual_dd)
+            else None
+        ),
+        "dd_histogram": {
+            "bin_edges": [round(float(e), 6) for e in edges],
+            "counts": [int(c) for c in counts],
+        },
+    }
+
+
 def exit_reason_breakdown(trades: list[dict]) -> list[dict]:
     groups: dict[str, list[float]] = {}
     for trade in trades:

@@ -32,6 +32,29 @@ BENCHMARK_NAMES = {
     "000852.INDEX": "中证1000",
 }
 
+# 裸码指数前缀: 000 (上证系列) / 399 (深证系列) / 880 (板块指数) 与
+# tencent_quote 等既有口径一致。
+_INDEX_CODE_PREFIXES = ("000", "399", "880")
+
+
+def _infer_benchmark_asset_type(symbol: str) -> str:
+    """基准代码的 asset_type 推断 (fail-soft):
+
+    - 显式 ``.INDEX`` 后缀 → index;
+    - 显式股票后缀 (.SH/.SZ/.BJ) → stock;
+    - 裸码按指数前缀规则 (000/399/880 开头) → index (000001 上证指数口径);
+    - 其余/无法识别 → stock (查询落空时降级无基准, 不伪造)。
+    """
+    from app.data_providers.fquant.symbols import split_symbol
+
+    code, suffix = split_symbol(str(symbol).strip().upper())
+    if suffix == "INDEX":
+        return "index"
+    if suffix in ("SH", "SZ", "BJ"):
+        return "stock"
+    if code.startswith(_INDEX_CODE_PREFIXES):
+        return "index"
+    return "stock"
 
 
 @dataclass
@@ -59,7 +82,13 @@ class StrategyBacktestConfig:
     mode: Literal["position", "full"] = "position"
     holding_days: int = 5
     regime_filter: dict | None = None  # {states: [...], min_score?: float}; None/空 → 不过滤
+    # F9 自定义基准: 与 benchmark_run_id 互斥 (API 层校验)。benchmark_symbol
+    # 除 4 指数白名单外接受任意标的代码 (6 位裸码/带后缀), 非 index 白名单
+    # 走单标的日K加载。
     benchmark_symbol: str = BENCHMARK_SYMBOL
+    # 历史 Run 净值基准: run_id。净值由 API 层从 run_store 解析后经
+    # run(benchmark_run=...) 传入, config 只持久化 id 本身。
+    benchmark_run_id: str | None = None
     risk_free_rate: float = 0.0
     # A1 量能参与率约束: None=关闭; 启用时如 0.10 表示单笔买入不超过
     # min(当日量, participation_volume_window 日均量) 的 10%。透传给 MatcherConfig。
@@ -111,6 +140,8 @@ class StrategyBacktestResult:
     per_symbol_stats: list[dict] = field(default_factory=list)
     attribution: dict | None = None
     strategy_info: dict = field(default_factory=dict)
+    # 执行过程告警 (如基准降级), API 层并入 payload warnings。
+    warnings: list[str] = field(default_factory=list)
     elapsed_ms: float = 0.0
     error: str | None = None
 
@@ -132,9 +163,14 @@ class StrategyBacktestService:
         *,
         panel: "pl.DataFrame | None" = None,
         listing_dates: "pl.DataFrame | None" = None,
+        # F9 历史 Run 净值基准: {"run_id": str, "label": str, "equity_curve": [...]}
+        # 由 API 层从 run_store 解析传入; None = 走 benchmark_symbol 路径。
+        benchmark_run: "dict | None" = None,
     ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:16]
+        # 执行过程告警 (基准降级等), 随结果返回由 API 层并入 payload warnings。
+        benchmark_warnings: list[str] = []
 
         def _err(msg: str) -> StrategyBacktestResult:
             return StrategyBacktestResult(
@@ -142,6 +178,13 @@ class StrategyBacktestService:
                 config=self._config_to_dict(config),
                 error=msg,
                 elapsed_ms=(time.perf_counter() - t0) * 1000,
+            )
+        # fail-closed: benchmark_run_id 必须伴随已解析的 benchmark_run 净值;
+        # 缺失说明调用路径 (诊断端点等) 未接 run 基准解析, 不能静默退回默认指数。
+        if config.benchmark_run_id and benchmark_run is None:
+            return _err(
+                f"benchmark_run_id={config.benchmark_run_id} 未提供解析后的 Run 净值，"
+                "该调用路径暂不支持历史 Run 基准"
             )
 
         # 获取策略定义
@@ -345,6 +388,7 @@ class StrategyBacktestService:
         result.stats["panel_rows"] = int(sim_panel.height)
 
         is_candidate_execution = result.stats.get("full_kind") == "candidate_execution"
+        benchmark_source: dict = {"kind": "none", "label": ""}
         if is_candidate_execution:
             # 全量候选曲线只在退出事件日采样，既不是账户净值也不是连续日频收益。
             # 禁止将其与基准对齐或生成 Alpha/Beta/IR 等时间序列相对指标。
@@ -365,11 +409,22 @@ class StrategyBacktestService:
                 if equity_dates:
                     benchmark_start = min(equity_dates)
                     benchmark_end = max(equity_dates)
-            benchmark_curve = self._build_benchmark_curve(
+            # F9: 基准解析统一入口 (指数白名单 / 自定义标的 / 历史 Run 净值),
+            # 失败降级空曲线 + warning (fail-closed, 不伪造基准序列)。
+            benchmark_curve, benchmark_source = self._resolve_benchmark(
                 benchmark_start,
                 benchmark_end,
-                config.benchmark_symbol,
+                symbol=config.benchmark_symbol,
+                benchmark_run=benchmark_run,
+                warnings_out=benchmark_warnings,
             )
+        # 基准来源标注: 前端据 kind 显示 "指数/自定义标的/历史 Run/不可用"。
+        result.stats["benchmark_source"] = benchmark_source if not is_candidate_execution else {
+            "kind": "none",
+            "label": str(config.benchmark_symbol),
+        }
+        if not is_candidate_execution:
+            # 候选执行模式不产出任何基准/相对指标键 (含 None 值)——键存在性即契约。
             closes = [row["close"] for row in benchmark_curve if row.get("close")]
             if len(closes) >= 2 and closes[0] > 0:
                 benchmark_return = closes[-1] / closes[0] - 1
@@ -435,6 +490,7 @@ class StrategyBacktestService:
             per_symbol_stats=result.per_symbol_stats,
             attribution=attribution,
             strategy_info=strategy_info,
+            warnings=benchmark_warnings,
             elapsed_ms=round(elapsed, 1),
         )
 
@@ -812,6 +868,133 @@ class StrategyBacktestService:
             for row in df.iter_rows(named=True)
             if row["close"] is not None
         ]
+
+    def _resolve_benchmark(
+        self,
+        start: date,
+        end: date,
+        *,
+        symbol: str,
+        benchmark_run: dict | None,
+        warnings_out: list[str],
+    ) -> tuple[list[dict], dict]:
+        """基准解析统一入口 (F9)。
+
+        优先级: benchmark_run (历史 Run 净值) > 指数白名单 > 自定义标的。
+        任一路径加载失败/无数据 → 降级空曲线 + warning 注明基准代码
+        (与既有缺失行为一致, 不伪造基准序列)。
+        返回 (benchmark_curve, benchmark_source); source = {kind, label},
+        kind ∈ {"index", "symbol", "run", "none"}。
+        """
+        if benchmark_run is not None:
+            run_id = str(benchmark_run.get("run_id") or "")
+            label = str(benchmark_run.get("label") or run_id)
+            curve = self._build_run_benchmark_curve(start, end, benchmark_run)
+            if not curve:
+                warnings_out.append(
+                    f"benchmark_unavailable: 基准 Run {run_id} 净值在回测区间内无可用数据，已降级为无基准对比"
+                )
+                return [], {"kind": "none", "label": label}
+            return curve, {"kind": "run", "label": label}
+
+        if symbol in BENCHMARK_NAMES:
+            curve = self._build_benchmark_curve(start, end, symbol)
+            if not curve:
+                warnings_out.append(
+                    f"benchmark_unavailable: 基准 {symbol} 数据缺失或加载失败，已降级为无基准对比"
+                )
+                return [], {"kind": "none", "label": symbol}
+            return curve, {"kind": "index", "label": BENCHMARK_NAMES[symbol]}
+
+        curve = self._build_custom_symbol_benchmark_curve(start, end, symbol)
+        if not curve:
+            warnings_out.append(
+                f"benchmark_unavailable: 基准 {symbol} 无数据或加载失败，已降级为无基准对比"
+            )
+            return [], {"kind": "none", "label": symbol}
+        return curve, {"kind": "symbol", "label": symbol}
+
+    def _build_custom_symbol_benchmark_curve(
+        self,
+        start: date,
+        end: date,
+        symbol: str,
+    ) -> list[dict]:
+        """非白名单标的基准: asset_type 推断 (指数规则→index, 否则 stock) 后单标的日K加载。
+
+        裸码按 exchange_of 补交易所后缀; 推断失败的 code 原样查询 (查不到则由
+        调用方降级)。名称无法本地解析, 以代码本身作为展示 label。
+        """
+        from app.data_providers.fquant.symbols import canonical_index_symbol, exchange_of, split_symbol
+
+        raw = str(symbol).strip().upper()
+        asset_type = _infer_benchmark_asset_type(raw)
+        query_symbol = raw
+        code, suffix = split_symbol(raw)
+        if asset_type == "index":
+            query_symbol = canonical_index_symbol(raw)
+        elif not suffix and code:
+            # 裸码补后缀; 无法推断交易所时原样查询 (get_daily 按 symbol 精确匹配)。
+            market = exchange_of(code)
+            query_symbol = f"{code}.{market}" if market else raw
+
+        try:
+            if asset_type == "index":
+                df = self.engine.repo.get_index_daily(
+                    query_symbol, start, end, columns=["date", "close"],
+                )
+            else:
+                df = self.engine.repo.get_daily(
+                    query_symbol, start, end, columns=["date", "close"],
+                )
+        except Exception as e:
+            logger.warning("load benchmark %s (%s) failed: %s", query_symbol, asset_type, e)
+            return []
+
+        if df.is_empty() or "close" not in df.columns:
+            return []
+        df = df.filter(pl.col("close").is_not_null() & (pl.col("close") > 0)).sort("date")
+        if df.is_empty():
+            return []
+        return [
+            {
+                "date": str(row["date"])[:10],
+                "value": round(float(row["close"]), 4),
+                "close": round(float(row["close"]), 4),
+                "name": raw,
+                "symbol": query_symbol,
+            }
+            for row in df.iter_rows(named=True)
+            if row["close"] is not None
+        ]
+
+    @staticmethod
+    def _build_run_benchmark_curve(start: date, end: date, benchmark_run: dict) -> list[dict]:
+        """历史 Run 净值基准: equity_curve 采样到 [start, end] 窗口。
+
+        曲线形状与其他基准一致 (date/value/close/name/symbol); 收益与相对指标
+        均为比值口径, 资金量纲不参与计算, 不做额外归一。
+        """
+        run_id = str(benchmark_run.get("run_id") or "")
+        label = str(benchmark_run.get("label") or run_id)
+        points: dict[str, float] = {}
+        for row in benchmark_run.get("equity_curve") or []:
+            d = str(row.get("date") or "")[:10]
+            v = row.get("value", row.get("close"))
+            if len(d) == 10 and isinstance(v, (int, float)) and float(v) > 0:
+                points[d] = float(v)
+        start_iso, end_iso = start.isoformat(), end.isoformat()
+        return [
+            {
+                "date": d,
+                "value": round(points[d], 4),
+                "close": round(points[d], 4),
+                "name": label,
+                "symbol": run_id,
+            }
+            for d in sorted(points)
+            if start_iso <= d <= end_iso
+        ]
     @staticmethod
     def _relative_stats(
         equity_curve: list[dict],
@@ -1050,6 +1233,7 @@ class StrategyBacktestService:
             "position_sizing": c.position_sizing,
             "risk_free_rate": c.risk_free_rate,
             "benchmark_symbol": c.benchmark_symbol,
+            "benchmark_run_id": c.benchmark_run_id,
             "max_participation_pct": c.max_participation_pct,
             "participation_volume_window": c.participation_volume_window,
             "min_listed_days": c.min_listed_days,

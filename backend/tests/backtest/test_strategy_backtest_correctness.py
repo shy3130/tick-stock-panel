@@ -165,6 +165,7 @@ def test_full_mode_executes_every_candidate_with_strategy_rules():
         matching="open_t+1",
         fees_pct=0,
         slippage_bps=0,
+        stamp_tax_pct=0,  # 本测试断言执行语义, 费用数学由 test_stamp_tax.py 覆盖
         holding_days=1,
     ))
 

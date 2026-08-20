@@ -666,6 +666,18 @@ class BacktestRunStore:
             "offset": offset,
         }
 
+    def count_runs_by_source_experiment(self) -> dict[str, int]:
+        """按 config.source_experiment_id 统计各实验已固化的 Run 数 (F7 实验列表)。
+
+        仅统计显式携带溯源字段的 Run; 未标记的 Run 不做任何猜测性归因。
+        """
+        counts: dict[str, int] = {}
+        for run in self._all_runs():
+            source = (run.config or {}).get("source_experiment_id")
+            if isinstance(source, str) and source:
+                counts[source] = counts.get(source, 0) + 1
+        return counts
+
     def _all_runs(self) -> list[BacktestRun]:
         cache_key = self._list_cache_key()
         signature_before = self._list_cache_signature()
