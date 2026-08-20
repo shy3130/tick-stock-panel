@@ -92,6 +92,11 @@ export function Backtest() {
     setActiveTab('history')
     storage.backtestActiveTab.set('history')
   }, [])
+
+  /** F7: 实验区「打开」→ 写恢复键已由 task 模块完成, 这里切换到对应实验 tab */
+  const openExperimentTab = useCallback((kind: 'optimizer' | 'grid') => {
+    selectTab(kind === 'optimizer' ? 'search' : 'grid')
+  }, [])
   const clearParameterBackfill = useCallback(() => setParameterBackfill(null), [])
 
   const modeSwitch = (
@@ -151,13 +156,11 @@ export function Backtest() {
             />
           )}
           {activeTab === 'composite' && <CompositeStrategyBuilder />}
-          <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
-            <ParameterGridPanel onUseScenario={useGridScenario} />
+            <ParameterGridPanel onUseScenario={useGridScenario} onScenarioRunComplete={scenarioRunComplete} />
           </div>
           <div className={activeTab === 'search' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'search'}>
             <StrategySearchPanel onUseScenario={useSearchStrategy} onScenarioRunComplete={scenarioRunComplete} />
-          </div>
-          {activeTab === 'history' && <RunHistoryPanel />}
+          {activeTab === 'history' && <RunHistoryPanel onOpenExperiment={openExperimentTab} />}
         </div>
       </div>
     </div>

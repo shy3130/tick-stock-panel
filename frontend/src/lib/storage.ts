@@ -133,6 +133,8 @@ export const storage = {
     regimeStates?: string[]
     regimeMinScore?: string
     benchmarkSymbol?: string
+    /** F9 历史 Run 净值基准 run_id (空串 = 未使用) */
+    benchmarkRunId?: string
     riskFreeRate?: string
 
     /** A1 量能约束: 最大参与率百分数输入 (空串 = 关闭) */

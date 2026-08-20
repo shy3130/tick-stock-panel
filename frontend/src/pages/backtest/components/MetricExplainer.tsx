@@ -260,6 +260,13 @@ export const METRIC_TERM_LIST: MetricTerm[] = [
     direction: '视研究目的而定：过滤次新股可剔除上市初期高波动、无涨跌幅限制阶段。',
     caveat: '上市日期缺失的行按 fail-open 保留；门控改变样本构成，与未开启的结果不可直接对比。',
   },
+  {
+    term: 'monte_carlo_trade_shuffle',
+    name: '蒙特卡洛重排 (Monte Carlo Trade Shuffle)',
+    definition: '把同一批逐笔收益随机打乱成交顺序重排多次，看终值与最大回撤对“顺序运气”的敏感度。',
+    direction: '重排回撤比实际更差的概率越低，说明实际回撤不依赖特定成交顺序，越稳健。',
+    caveat: '只重排顺序、不改变收益集合（终值均值收敛于全排列复合收益）；不模拟资金占用与并发持仓，是交易级诊断而非账户级蒙特卡洛，不能与账户净值曲线直接比较。',
+  },
 ]
 
 /** term → 词条 查询表（由列表构建，天然无重复 key） */

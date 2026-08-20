@@ -1173,14 +1173,26 @@ export interface StrategyBacktestRequest {
   mode?: 'position' | 'full'
   holding_days?: number
   regime_filter?: { states?: string[]; min_score?: number } | null
-  benchmark_symbol?: '000001.INDEX' | '000300.INDEX' | '000905.INDEX' | '000852.INDEX'
+  /** F9 对比基准: 4 指数白名单或任意标的代码 (6 位裸码/带后缀; 裸码按 000/399/880 前缀推断指数) */
+  benchmark_symbol?: string
+  /** F9 历史 Run 净值基准 (run_id); 与 benchmark_symbol 互斥, 同给 → 422 */
+  benchmark_run_id?: string | null
   risk_free_rate?: number
+
   /** A1 量能约束: 单笔最大参与率 (0-1 小数, 如 0.10 = 10%); null/缺省 = 关闭。约束 = min(当日量, 均量窗口日均量) × 参与率 */
   max_participation_pct?: number | null
   /** 参与率均量窗口 (交易日数, 默认 5) */
   participation_volume_window?: number
   /** B6 上市天数门控 (天, 0 = 关闭): 上市不足 N 天的标的整段不入面板 */
   min_listed_days?: number
+  /** F7 实验溯源: 从寻优/参数网格场景固化为 Run 时携带, 随 config 持久化 */
+  source_experiment_id?: string | null
+}
+
+/** F9 基准来源标注 — 策略回测 stats.benchmark_source; kind=none 表示基准缺失降级 */
+export interface BenchmarkSource {
+  kind: 'index' | 'symbol' | 'run' | 'none'
+  label: string
 }
 
 /** 策略容量诊断块 — strategy run stats.capacity。未启用时仅 enabled/capped_entry_count 有效; 样本不足时分位输出 null, 不伪造 0 */
@@ -1306,6 +1318,8 @@ export interface StrategyRobustnessResult {
   }>
   /** 逐笔收益 bootstrap 净值带 (交易分布诊断, 非账户净值); 有效交易 < 10 或 n_boot < 100 时为 null */
   trade_equity_band?: TradeEquityBand | null
+  /** 蒙特卡洛交易顺序重排 (交易级顺序诊断, 非账户级 MC); 有效交易 < 30 时为 null */
+  monte_carlo?: MonteCarloTradeShuffle | null
   warnings?: string[]
   data_snapshot?: BacktestDataSnapshot
   methodology_context?: string
@@ -1421,6 +1435,21 @@ export interface TradeEquityBand {
   percentiles: { p05: number[]; p25: number[]; p50: number[]; p75: number[]; p95: number[] }
   /** 各路径最终净值的分位 */
   final_value_percentiles: { p05: number; p25: number; p50: number; p75: number; p95: number }
+}
+
+/** 蒙特卡洛交易顺序重排 — 同一批逐笔收益随机换成交顺序后的终值/回撤分布 */
+export interface MonteCarloTradeShuffle {
+  n_sims: number
+  seed: number
+  n_trades: number
+  final_return: { p05: number; p50: number; p95: number; mean: number }
+  max_drawdown: { p05: number; p50: number; p95: number; mean: number }
+  /** 重排后终值为负的模拟占比 */
+  prob_final_negative: number
+  /** 重排回撤比原始顺序更深的模拟占比; 原始顺序回撤不可计算时为 null */
+  prob_max_dd_worse_than_actual: number | null
+  /** 重排最大回撤分布直方图 (20 桶, 前端画图用) */
+  dd_histogram: { bin_edges: number[]; counts: number[] }
 }
 
 // ===== 回测可信度增强 (/api/backtest/strategy/*) =====
@@ -1864,6 +1893,37 @@ export interface OptimizerExperiment {
   completed: number
   total: number
   runtime?: ExperimentRuntime
+}
+
+// ===== F7 实验资产统一 (/api/backtest/experiments) =====
+
+/** 实验最佳场景摘要 — score 为实验目标得分; 寻优 total_return/sharpe 优先留出期口径 */
+export interface BacktestExperimentBest {
+  label: string
+  score: number | null
+  total_return: number | null
+  sharpe: number | null
+}
+
+/** 寻优/参数网格实验统一摘要行 */
+export interface BacktestExperimentSummary {
+  id: string
+  kind: 'optimizer' | 'grid'
+  title: string
+  created_at: string
+  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
+  scenario_count: number
+  best: BacktestExperimentBest | null
+  /** 详情已落盘 (research/{optimizer,parameter_grid}_experiments), 重启后仍可打开 */
+  persisted: boolean
+  /** 以 source_experiment_id 显式溯源固化为 Run 的数量; 未标记的 Run 不计入 */
+  run_count: number
+}
+
+export interface BacktestExperimentListResponse {
+  items: BacktestExperimentSummary[]
+  total: number
+  warnings: string[]
 }
 
 export interface SignalScorecardTrackedItem {
@@ -3390,6 +3450,10 @@ export const api = {
       `/api/backtest/optimizer/${encodeURIComponent(experimentId)}/cancel`,
       { method: 'POST' },
     ),
+
+  /** F7: 寻优 + 参数网格实验统一列表 (按 created_at 倒序); 单源故障时降级返回另一源 + warnings */
+  backtestExperiments: (limit = 50) =>
+    request<BacktestExperimentListResponse>(`/api/backtest/experiments?limit=${limit}`),
 
   // ===== Backtest Run 持久化历史 =====
   backtestRuns: (opts?: { kind?: BacktestRunKind; favorite?: boolean; query?: string; limit?: number; offset?: number }) => {

@@ -1,10 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { EChartsOption } from 'echarts'
-import { FlaskConical, Loader2, Waypoints } from 'lucide-react'
-import { api, type StrategyBacktestRequest, type StrategyRobustnessResult, type TradeEquityBand, type WalkForwardResult } from '@/lib/api'
+import { FlaskConical, Loader2, Shuffle, Waypoints } from 'lucide-react'
+import { api, type StrategyBacktestRequest, type StrategyRobustnessResult, type MonteCarloTradeShuffle, type TradeEquityBand, type WalkForwardResult } from '@/lib/api'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { useECharts } from '../charts/useECharts'
+import { MetricExplainer } from './MetricExplainer'
 import { validateTradeEquityBand } from './trustDiagnosticsCore'
 
 interface Props {
@@ -407,6 +408,115 @@ function TradeEquityBandSection({ result }: { result: StrategyRobustnessResult }
   )
 }
 
+/** 蒙特卡洛重排响应校验 — 字段缺失/非有限值按 null 处理 (fail-closed, 不伪造展示) */
+function validateMonteCarloShuffle(mc: unknown): MonteCarloTradeShuffle | null {
+  if (mc == null || typeof mc !== 'object') return null
+  const raw = mc as Record<string, unknown>
+  if (finiteNumber(raw.n_sims) == null || finiteNumber(raw.seed) == null || finiteNumber(raw.n_trades) == null) return null
+  const final = raw.final_return
+  const dd = raw.max_drawdown
+  if (final == null || dd == null || typeof final !== 'object' || typeof dd !== 'object') return null
+  for (const block of [final, dd]) {
+    for (const key of ['p05', 'p50', 'p95', 'mean'] as const) {
+      if (finiteNumber((block as Record<string, unknown>)[key]) == null) return null
+    }
+  }
+  if (finiteNumber(raw.prob_final_negative) == null) return null
+  const hist = raw.dd_histogram
+  if (hist == null || typeof hist !== 'object') return null
+  const h = hist as Record<string, unknown>
+  if (!Array.isArray(h.counts) || !Array.isArray(h.bin_edges) || h.bin_edges.length !== h.counts.length + 1) return null
+  if (h.counts.some(c => finiteNumber(c) == null)) return null
+  return mc as MonteCarloTradeShuffle
+}
+
+/** 重排最大回撤分布直方图 — 20 桶纯 div 横条, 不引图表库 */
+function DdHistogram({ histogram }: { histogram: MonteCarloTradeShuffle['dd_histogram'] }) {
+  const maxCount = Math.max(...histogram.counts, 1)
+  return (
+    <div className="space-y-0.5">
+      {histogram.counts.map((count, index) => {
+        const lo = histogram.bin_edges[index]
+        const hi = histogram.bin_edges[index + 1]
+        // 非零计数至少给 2% 可见宽度, 零计数不画条
+        const width = count > 0 ? Math.max((count / maxCount) * 100, 2) : 0
+        return (
+          <div key={index} className="flex items-center gap-2">
+            <span className="w-9 shrink-0 text-right font-mono text-[9px] text-muted">{(hi * 100).toFixed(0)}%</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-sm bg-base/60" title={`重排最大回撤 ∈ [${fmtPct(lo, 1)}, ${fmtPct(hi, 1)}): ${count} 次`}>
+              <div className="h-full rounded-sm bg-accent/70" style={{ width: `${width}%` }} />
+            </div>
+            <span className="w-9 shrink-0 font-mono text-[9px] text-muted">{count > 0 ? count : ''}</span>
+          </div>
+        )
+      })}
+      <div className="pt-0.5 text-[9px] leading-3 text-muted">横轴: 重排最大回撤桶上边界；条长: 落桶模拟次数。</div>
+    </div>
+  )
+}
+
+/** 蒙特卡洛交易顺序重排 — 交易级顺序运气诊断; 样本 < 30 时显示不足提示 */
+function MonteCarloShuffleSection({ result }: { result: StrategyRobustnessResult }) {
+  const mc = validateMonteCarloShuffle(result.monte_carlo)
+  return (
+    <div className="overflow-hidden rounded-btn border border-border">
+      <div className="border-b border-border px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary">
+          <Shuffle className="h-3.5 w-3.5 text-accent" />蒙特卡洛重排<MetricExplainer term="monte_carlo_trade_shuffle" />
+        </div>
+        <div className="mt-0.5 text-[10px] leading-4 text-muted">
+          同一批逐笔收益随机换成交顺序重排后的终值与回撤分布 — 回答<b>「顺序运气」</b>问题；交易级诊断，不模拟资金占用与并发持仓，<b>非账户级蒙特卡洛</b>。
+        </div>
+      </div>
+      {mc ? (
+        <div className="space-y-2 p-3">
+          <div className="grid grid-cols-5 gap-px overflow-hidden rounded-input border border-border bg-border">
+            {([
+              ['终值 p05', mc.final_return.p05],
+              ['终值 p50', mc.final_return.p50],
+              ['终值 p95', mc.final_return.p95],
+            ] as const).map(([label, value]) => (
+              <div key={label} className="bg-surface px-2 py-2 text-center">
+                <div className="text-[10px] text-muted">{label}</div>
+                <div className={`mt-0.5 font-mono text-sm font-semibold num ${priceColorClass(value - 1)}`}>{fmtPct(value - 1, 1)}</div>
+              </div>
+            ))}
+            {([
+              ['重排回撤 p50', mc.max_drawdown.p50],
+              ['重排回撤 p95', mc.max_drawdown.p95],
+            ] as const).map(([label, value]) => (
+              <div key={label} className="bg-surface px-2 py-2 text-center">
+                <div className="text-[10px] text-muted">{label}</div>
+                <div className="mt-0.5 font-mono text-sm font-semibold text-bear num">{fmtPct(value, 1)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-input border border-border bg-border">
+            <div className="bg-surface px-2 py-2 text-center">
+              <div className="text-[10px] text-muted">终值为负概率</div>
+              <div className={`mt-0.5 font-mono text-sm font-semibold num ${priceColorClass(-mc.prob_final_negative)}`}>{fmtPct(mc.prob_final_negative, 1)}</div>
+            </div>
+            <div className="bg-surface px-2 py-2 text-center">
+              <div className="text-[10px] text-muted">重排回撤比实际更深</div>
+              <div className="mt-0.5 font-mono text-sm font-semibold text-foreground num">
+                {mc.prob_max_dd_worse_than_actual == null ? '—' : fmtPct(mc.prob_max_dd_worse_than_actual, 1)}
+              </div>
+            </div>
+          </div>
+          <DdHistogram histogram={mc.dd_histogram} />
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted">
+            <span className="font-mono">n_trades: {mc.n_trades}</span>
+            <span className="font-mono">n_sims: {mc.n_sims.toLocaleString('zh-CN')}</span>
+            <span className="font-mono">seed: {mc.seed}</span>
+          </div>
+        </div>
+      ) : (
+        <div className="px-3 py-3 text-[11px] leading-5 text-muted">交易样本不足(&lt;30)，无法做顺序重排诊断 — 系 fail-closed 缺省，不输出任何分位。</div>
+      )}
+    </div>
+  )
+}
+
 export function StrategyRobustnessPanel({ request }: Props) {
   const [nFolds, setNFolds] = useState(4)
   const [runPermutation, setRunPermutation] = useState(false)
@@ -457,6 +567,7 @@ export function StrategyRobustnessPanel({ request }: Props) {
           <Perturbation result={mutation.data} />
           <ExitBreakdown result={mutation.data} />
           <TradeEquityBandSection result={mutation.data} />
+          <MonteCarloShuffleSection result={mutation.data} />
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted">
             <span className="font-mono">run_id: {mutation.data.run_id}</span>
             <span className="font-mono">seed: {mutation.data.random_seed}</span>

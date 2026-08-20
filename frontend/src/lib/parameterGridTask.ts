@@ -98,6 +98,12 @@ export function clearParameterGridExperimentIfCurrent(
   return true
 }
 
+/** F7: 从实验列表恢复指定实验 — 写恢复键并更新模块状态, 面板据此重新拉取详情。 */
+export function openParameterGridExperiment(experimentId: string): void {
+  launchSeq += 1
+  update({ experimentId, isLaunching: false }, true)
+}
+
 export function getParameterGridTask(): ParameterGridTask {
   return current
 }

@@ -164,6 +164,8 @@ export function startBacktest(params: {
   holding_days?: number
   regime_filter?: { states?: string[]; min_score?: number } | null
   benchmark_symbol?: string
+  /** F9 历史 Run 净值基准 (run_id); 设置时后端忽略 benchmark_symbol (互斥) */
+  benchmark_run_id?: string | null
   risk_free_rate?: number
   /** A1 量能约束: 单笔最大参与率 (0-1 小数); null/缺省 = 关闭 (不进 query) */
   max_participation_pct?: number | null
@@ -201,7 +203,9 @@ export function startBacktest(params: {
     mode: params.mode,
     holding_days: params.holding_days,
     regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
-    benchmark_symbol: params.benchmark_symbol,
+    benchmark_symbol: params.benchmark_run_id ? undefined : params.benchmark_symbol,
+    // F9: run 基准与 symbol 基准互斥 — 设置 run_id 时不发送 symbol
+    benchmark_run_id: params.benchmark_run_id ?? undefined,
     risk_free_rate: params.risk_free_rate,
     // A1/B6 撮合约束: 仅非默认时附加, 保持与旧行为的 job_key 稳定
     max_participation_pct: params.max_participation_pct ?? undefined,

@@ -59,6 +59,12 @@ export function clearOptimizerExperimentIfCurrent(experimentId: string, expected
   return true
 }
 
+/** F7: 从实验列表恢复指定实验 — 写恢复键并更新模块状态, 面板据此重新拉取详情。 */
+export function openOptimizerExperiment(experimentId: string): void {
+  launchSeq += 1
+  update({ experimentId, isLaunching: false }, true)
+}
+
 export function getOptimizerTask(): OptimizerTask {
   return current
 }

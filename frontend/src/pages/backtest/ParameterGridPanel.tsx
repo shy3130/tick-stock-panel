@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, BarChart3, CheckCircle2, FlaskConical, Loader2, Play, Square, XCircle } from 'lucide-react'
 import {
   api,
+  type StrategyBacktestRequest,
   type ParameterGridExperiment,
   type ParameterGridScenario,
   type StrategyDetail,
@@ -21,6 +22,7 @@ import {
   useParameterGridTask,
 } from '@/lib/parameterGridTask'
 import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
+import { RUNS_KEY } from './RunHistoryPanel'
 import { ParameterGridDiagnostics } from './components/ParameterGridDiagnostics'
 
 
@@ -111,11 +113,61 @@ function ScenarioParams({ params }: { params: Record<string, number> }) {
   )
 }
 
-interface ParameterGridPanelProps {
-  onUseScenario?: (strategyId: string, params: Record<string, number>) => void
+/** 网格场景 → StrategyBacktestRequest — 与「回填策略」同口径: base_config 提供非网格字段, 场景参数覆盖网格轴。缺关键字段返回 null (fail-closed)。 */
+function gridScenarioRunRequest(
+  experiment: ParameterGridExperiment,
+  scenario: ParameterGridScenario,
+): StrategyBacktestRequest | null {
+  const base = experiment.base_config ?? {}
+  const strategyId = typeof base.strategy_id === 'string' && base.strategy_id
+    ? base.strategy_id
+    : experiment.strategy_id
+  const start = typeof base.start === 'string' ? base.start : null
+  const end = typeof base.end === 'string' ? base.end : null
+  if (!strategyId || !start || !end) return null
+  const baseParams = base.params && typeof base.params === 'object'
+    ? base.params as Record<string, unknown>
+    : {}
+  const finite = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  const sizing = ['equal', 'score_weight', 'equal_vol', 'risk_parity', 'mean_variance', 'max_diversification']
+  const request: StrategyBacktestRequest = {
+    strategy_id: strategyId,
+    symbols: Array.isArray(base.symbols) ? base.symbols.filter((s): s is string => typeof s === 'string') : null,
+    start,
+    end,
+    params: { ...baseParams, ...scenario.params },
+    matching: base.matching === 'close_t' ? 'close_t' : 'open_t+1',
+    entry_fill: base.entry_fill === 'close_t' || base.entry_fill === 'open_t+1' ? base.entry_fill : null,
+    exit_fill: base.exit_fill === 'close_t' || base.exit_fill === 'open_t+1' ? base.exit_fill : null,
+    mode: base.mode === 'full' ? 'full' : 'position',
+    holding_days: finite(base.holding_days) ?? 5,
+    fees_pct: finite(base.fees_pct),
+    stamp_tax_pct: finite(base.stamp_tax_pct),
+    slippage_bps: finite(base.slippage_bps),
+    max_positions: finite(base.max_positions),
+    max_exposure_pct: finite(base.max_exposure_pct),
+    initial_capital: finite(base.initial_capital),
+    position_sizing: sizing.includes(base.position_sizing as never)
+      ? base.position_sizing as StrategyBacktestRequest['position_sizing']
+      : undefined,
+    risk_free_rate: finite(base.risk_free_rate),
+    regime_filter: base.regime_filter && typeof base.regime_filter === 'object'
+      ? base.regime_filter as StrategyBacktestRequest['regime_filter']
+      : null,
+    source_experiment_id: experiment.experiment_id,
+  }
+  return request
 }
 
-export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
+interface ParameterGridPanelProps {
+  onUseScenario?: (strategyId: string, params: Record<string, number>) => void
+  /** 场景已成功固化为 Run 后回调（用于切换到运行历史 tab） */
+  onScenarioRunComplete?: () => void
+}
+
+export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: ParameterGridPanelProps) {
+
   const [strategyId, setStrategyId] = useState('')
   const [gridDrafts, setGridDrafts] = useState<GridDrafts>({})
   const [symbols, setSymbols] = useState('')
@@ -139,6 +191,8 @@ export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
   const pollingVersion = useRef(0)
   const cancellingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
+  const [runningScenarioId, setRunningScenarioId] = useState<string | null>(null)
+  const queryClient = useQueryClient()
 
   const strategies = useQuery({
     queryKey: ['parameter-grid-strategies'],
@@ -347,6 +401,32 @@ export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
     } finally {
       cancellingRef.current = false
       setCancelling(false)
+    }
+  }
+
+  /** 把网格场景固化为一次持久化 Run：POST /strategy/run 写运行历史并带实验溯源，不写策略池 */
+  const runScenario = async (scenario: ParameterGridScenario) => {
+    if (runningScenarioId || !experiment || scenario.error) return
+    const request = gridScenarioRunRequest(experiment, scenario)
+    if (!request) {
+      toast('场景参数不完整（缺少策略或实验区间），无法构造运行请求')
+      return
+    }
+    setRunningScenarioId(scenario.scenario_id)
+    try {
+      const result = await api.strategyBacktestRun(request)
+      if (result?.error) {
+        toast(`场景运行失败：${result.error}`)
+        return
+      }
+      const paramLabel = Object.entries(scenario.params).map(([key, value]) => `${key}=${value}`).join(' · ') || '基线参数'
+      toast(`已固化为 Run：${experiment.strategy_id}（${paramLabel}）`, 'success')
+      void queryClient.invalidateQueries({ queryKey: RUNS_KEY })
+      onScenarioRunComplete?.()
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : '场景运行失败')
+    } finally {
+      setRunningScenarioId(null)
     }
   }
 
@@ -709,7 +789,7 @@ export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
                 <div className="data-table-scroll">
                   <table className="data-table min-w-[48rem]">
                     <thead>
-                      <tr><th>排名</th><th>Pareto</th><th>参数</th><th className="text-right">得分</th><th className="text-right">累计收益</th><th className="text-right">夏普</th><th className="text-right">最大回撤</th><th className="text-right">耗时</th><th>状态</th></tr>
+                      <tr><th>排名</th><th>Pareto</th><th>参数</th><th className="text-right">得分</th><th className="text-right">累计收益</th><th className="text-right">夏普</th><th className="text-right">最大回撤</th><th className="text-right">耗时</th><th>状态</th><th></th></tr>
                     </thead>
                     <tbody>
                       {rankedScenarios.map((scenario: ParameterGridScenario) => (
@@ -729,6 +809,20 @@ export function ParameterGridPanel({ onUseScenario }: ParameterGridPanelProps) {
                           <td className="text-right font-mono text-bear num">{formatMetric(scenario.stats.max_drawdown, 'max_drawdown')}</td>
                           <td className="text-right font-mono text-secondary num">{scenario.elapsed_ms ? `${Math.round(scenario.elapsed_ms)} ms` : '—'}</td>
                           <td>{scenario.error ? <span className="text-danger">{scenario.error}</span> : <span className="text-bull">完成</span>}</td>
+                          <td>
+                            {!scenario.error && (
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-0.5 whitespace-nowrap text-[10px] text-accent disabled:cursor-not-allowed disabled:text-muted"
+                                disabled={runningScenarioId !== null}
+                                title={`按实验区间与该场景参数运行并持久化为 Run（费用/仓位等沿用实验基础配置）`}
+                                onClick={() => { void runScenario(scenario) }}
+                              >
+                                {runningScenarioId === scenario.scenario_id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                固化为Run
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

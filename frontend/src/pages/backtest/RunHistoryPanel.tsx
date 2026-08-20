@@ -13,6 +13,8 @@ import {
   FileDown,
   History,
   Loader2,
+  FlaskConical,
+  Grid3X3,
   Pencil,
   RotateCcw,
   Search,
@@ -26,6 +28,7 @@ import {
   type BacktestRunComparison,
   type BacktestRunKind,
   type BacktestRunListResponse,
+  type BacktestExperimentSummary,
   type BacktestRunSummary,
   type BacktestRunTradeSample,
 } from '@/lib/api'
@@ -48,6 +51,8 @@ import {
 import { toast } from '@/components/Toast'
 import { EmptyState } from '@/components/EmptyState'
 import { fmtPct, priceColorClass } from '@/lib/format'
+import { openOptimizerExperiment } from '@/lib/optimizerTask'
+import { openParameterGridExperiment } from '@/lib/parameterGridTask'
 import { BacktestWarnings } from './components/BacktestWarnings'
 import { useECharts } from './charts/useECharts'
 
@@ -61,6 +66,27 @@ const KIND_BADGE_CLS: Record<BacktestRunKind, string> = {
   strategy: 'border-accent/30 bg-accent/10 text-accent',
   factor: 'border-warning/30 bg-warning/10 text-warning',
   composite: 'border-bull/30 bg-bull/10 text-bull',
+}
+
+/** F7 实验区 — 类型徽标与状态文案 (寻优/网格两类实验统一摘要) */
+const EXPERIMENT_KIND_META: Record<BacktestExperimentSummary['kind'], { label: string; cls: string; Icon: typeof Grid3X3 }> = {
+  optimizer: { label: '寻优', cls: 'border-accent/30 bg-accent/10 text-accent', Icon: FlaskConical },
+  grid: { label: '网格', cls: 'border-warning/30 bg-warning/10 text-warning', Icon: Grid3X3 },
+}
+
+const EXPERIMENT_STATUS_LABELS: Record<BacktestExperimentSummary['status'], string> = {
+  pending: '等待执行',
+  running: '运行中',
+  completed: '已完成',
+  cancelled: '已取消',
+  failed: '失败',
+}
+
+function experimentBestLine(row: BacktestExperimentSummary): string {
+  if (!row.best) return '暂无最佳场景'
+  const returns = row.best.total_return == null ? '' : ` · 收益 ${fmtPct(row.best.total_return)}`
+  const sharpe = row.best.sharpe == null ? '' : ` · 夏普 ${row.best.sharpe.toFixed(2)}`
+  return `${row.best.label} · 得分 ${row.best.score == null ? '—' : row.best.score.toFixed(3)}${returns}${sharpe}`
 }
 
 /** 列表行头部最多展示的指标数 */
@@ -853,7 +879,7 @@ function RunDetailDrawer({ runId, onClose, onToggleFavorite, onRerun, rerunning,
 
 // ===== 主面板 =====
 
-export function RunHistoryPanel() {
+export function RunHistoryPanel({ onOpenExperiment }: { onOpenExperiment?: (kind: BacktestExperimentSummary['kind']) => void }) {
   const queryClient = useQueryClient()
   const [searchInput, setSearchInput] = useState('')
   const [query, setQuery] = useState('')
@@ -867,7 +893,7 @@ export function RunHistoryPanel() {
   const [labelDraft, setLabelDraft] = useState('')
   const [reportDownloadingId, setReportDownloadingId] = useState<string | null>(null)
 
-  // 搜索防抖，避免逐字符请求
+  const [experimentsOpen, setExperimentsOpen] = useState(false)
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(searchInput.trim()), 300)
     return () => window.clearTimeout(timer)
@@ -899,6 +925,22 @@ export function RunHistoryPanel() {
   })
   const comparison = comparingIds != null ? compareQuery.data ?? null : null
 
+
+  // F7 实验区: 默认折叠, 展开时才拉取 (寻优/参数网格统一摘要)
+  const experimentsQuery = useQuery({
+    queryKey: ['backtest-experiments'],
+    queryFn: () => api.backtestExperiments(),
+    enabled: experimentsOpen,
+    staleTime: 30_000,
+  })
+  const experiments = experimentsQuery.data?.items ?? []
+
+  /** 打开实验: 写对应恢复键 + 通知父级切换到对应 tab; 详情已落盘, 服务重启后仍可恢复 */
+  const openExperiment = (row: BacktestExperimentSummary) => {
+    if (row.kind === 'optimizer') openOptimizerExperiment(row.id)
+    else openParameterGridExperiment(row.id)
+    onOpenExperiment?.(row.kind)
+  }
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: RUNS_KEY })
 
   /** 乐观更新列表缓存中的 favorite/label，refetch 后以后端为准 */
@@ -1010,6 +1052,86 @@ export function RunHistoryPanel() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
+      <section className="panel shrink-0" aria-label="研究实验">
+        <div className="panel-header !py-2">
+          <div>
+            <div className="section-kicker">Experiments</div>
+            <h2 className="section-title">实验</h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => setExperimentsOpen(prev => !prev)}
+            aria-expanded={experimentsOpen}
+            className="btn-secondary !h-7 inline-flex items-center gap-1 px-2.5 text-[11px]"
+          >
+            {experimentsOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {experimentsOpen ? '收起' : `展开 (${experimentsQuery.data?.total ?? 0})`}
+          </button>
+        </div>
+        {experimentsOpen && (
+          <div className="panel-body space-y-2 border-t border-border">
+            {experimentsQuery.isPending && (
+              <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted">
+                <Loader2 className="h-4 w-4 animate-spin" />正在载入实验列表…
+              </div>
+            )}
+            {experimentsQuery.isError && (
+              <div role="alert" className="rounded-btn border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+                {experimentsQuery.error instanceof Error ? experimentsQuery.error.message : '实验列表载入失败'}
+              </div>
+            )}
+            {experimentsQuery.data?.warnings.map(warning => (
+              <div key={warning} className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-1.5 text-[11px] text-secondary">
+                {warning}
+              </div>
+            ))}
+            {!experimentsQuery.isPending && experiments.length === 0 && (
+              <p className="py-4 text-center text-xs text-muted">还没有寻优或参数网格实验记录</p>
+            )}
+            {experiments.length > 0 && (
+              <div className="max-h-64 overflow-y-auto">
+                <table className="data-table min-w-[48rem]">
+                  <thead>
+                    <tr><th>类型</th><th>标题</th><th>时间</th><th className="text-right">场景</th><th className="text-right">固化 Run</th><th>状态</th><th>最佳摘要</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    {experiments.map(row => {
+                      const meta = EXPERIMENT_KIND_META[row.kind]
+                      const KindIcon = meta.Icon
+                      return (
+                        <tr key={`${row.kind}-${row.id}`}>
+                          <td>
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}>
+                              <KindIcon className="h-3 w-3" />
+                              {meta.label}
+                            </span>
+                          </td>
+                          <td className="max-w-[18rem] truncate" title={row.title}>{row.title}</td>
+                          <td className="whitespace-nowrap font-mono text-[10px] text-muted">{fmtDateTime(row.created_at)}</td>
+                          <td className="text-right font-mono num">{row.scenario_count}</td>
+                          <td className={`text-right font-mono num ${row.run_count > 0 ? 'text-accent' : 'text-muted'}`}>{row.run_count > 0 ? row.run_count : '—'}</td>
+                          <td className="whitespace-nowrap text-[11px] text-secondary">{EXPERIMENT_STATUS_LABELS[row.status]}</td>
+                          <td className="max-w-[22rem] truncate text-[11px] text-secondary" title={experimentBestLine(row)}>{experimentBestLine(row)}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-[10px] text-accent"
+                              title={row.persisted ? '写入恢复键并切换到对应实验面板' : '实验详情可能已过期'}
+                              onClick={() => openExperiment(row)}
+                            >
+                              打开
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
       {comparingIds != null && (
         <section className="panel flex max-h-[75vh] min-h-0 shrink-0 flex-col">
           <div className="panel-header">

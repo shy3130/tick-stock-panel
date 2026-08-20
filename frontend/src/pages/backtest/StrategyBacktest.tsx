@@ -4,12 +4,16 @@ import { motion } from 'framer-motion'
 import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown, AlertTriangle, Info, CheckCircle2, ChevronDown } from 'lucide-react'
 import {
   api,
-  type StrategyBacktestResult,
-  type StrategyBacktestTrade,
   type StrategyDetail,
   type StrategyParamDef,
   type StrategyBacktestRequest,
+  type StrategyBacktestResult,
+  type StrategyBacktestTrade,
+  type BacktestRunListResponse,
+  type BacktestRunSummary,
+  type BenchmarkSource,
 } from '@/lib/api'
+import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
 import { downloadRunReportHtml } from '@/lib/backtestReportDownload'
 import { QK } from '@/lib/queryKeys'
 import { instrumentSearchMeta } from '@/lib/instrumentSearch'
@@ -774,6 +778,10 @@ export function StrategyBacktest({
   const [regimeStates, setRegimeStates] = useState<string[]>(saved?.regimeStates ?? ['strong', 'lean_strong'])
   const [regimeMinScore, setRegimeMinScore] = useState<string>(saved?.regimeMinScore ?? '')
   const [benchmarkSymbol, setBenchmarkSymbol] = useState(saved?.benchmarkSymbol ?? '000001.INDEX')
+  // F9 历史 Run 净值基准: 选中后与指数/自定义 symbol 互斥 (后端 422 兜底)
+  const [benchmarkRunId, setBenchmarkRunId] = useState(saved?.benchmarkRunId ?? '')
+  const [customBenchmarkOpen, setCustomBenchmarkOpen] = useState(false)
+  const [customBenchmarkName, setCustomBenchmarkName] = useState('')
   const [riskFreeRate, setRiskFreeRate] = useState(saved?.riskFreeRate ?? '0')
   // A1 量能约束 + B6 上市天数门控: 均为可选撮合约束 (百分数输入, 空 = 关闭)
   const [maxParticipationPct, setMaxParticipationPct] = useState(saved?.maxParticipationPct ?? '')
@@ -975,6 +983,7 @@ export function StrategyBacktest({
         regimeStates,
         regimeMinScore,
         benchmarkSymbol,
+        benchmarkRunId,
         riskFreeRate,
         maxParticipationPct,
         participationWindow,
@@ -1031,7 +1040,8 @@ export function StrategyBacktest({
         states: regimeStates.length > 0 ? regimeStates : undefined,
         min_score: regimeMinScore !== '' && !Number.isNaN(Number(regimeMinScore)) ? Number(regimeMinScore) : undefined,
       } : undefined,
-      benchmark_symbol: benchmarkSymbol,
+      benchmark_symbol: benchmarkRunId ? undefined : benchmarkSymbol,
+      benchmark_run_id: benchmarkRunId || undefined,
       risk_free_rate: rfr / 100,
       max_participation_pct: participation.value,
       participation_volume_window: Math.max(1, Math.round(Number(participationWindow) || 5)),
@@ -1081,6 +1091,14 @@ export function StrategyBacktest({
     return null
   }
 
+  // F9 历史 Run 基准下拉: 策略/复合 Run (有日频净值), 取前 50 条
+  const benchmarkRunList = useQuery({
+    queryKey: ['benchmark-run-options'],
+    queryFn: () => api.backtestRuns({ limit: 50 }),
+    enabled: !simpleMode,
+    select: (data: BacktestRunListResponse) => data.items.filter(item => item.kind !== 'factor'),
+  })
+  const benchmarkRunOptions = benchmarkRunList.data ?? []
   const benchmarkReturn = useMemo(() => {
     const values = (result?.benchmark_curve ?? [])
       .map(r => Number(r.close ?? r.value))
@@ -1088,7 +1106,10 @@ export function StrategyBacktest({
     if (values.length < 2) return null
     return values[values.length - 1] / values[0] - 1
   }, [result?.benchmark_curve])
-  const benchmarkName = result?.benchmark_curve?.[0]?.name
+  // F9 基准名: 优先后端 benchmark_source 标注, 再回退本地选择
+  const benchmarkSource = (s?.benchmark_source ?? null) as BenchmarkSource | null
+  const benchmarkName = benchmarkSource?.label
+    ?? result?.benchmark_curve?.[0]?.name
     ?? BENCHMARK_OPTIONS.find(option => option.symbol === benchmarkSymbol)?.name
     ?? '基准'
 
@@ -1656,14 +1677,81 @@ export function StrategyBacktest({
         </div>
 
         {!simpleMode && (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-2">
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">对比基准</label>
-            <select value={benchmarkSymbol} onChange={event => setBenchmarkSymbol(event.target.value)} className={INPUT_CLS}>
-              {BENCHMARK_OPTIONS.map(option => (
-                <option key={option.symbol} value={option.symbol}>{option.name}</option>
+            <div className="flex flex-wrap items-center gap-1">
+              {BENCHMARK_OPTIONS.map(option => {
+                const active = !benchmarkRunId && benchmarkSymbol === option.symbol
+                return (
+                  <button
+                    key={option.symbol}
+                    type="button"
+                    onClick={() => { setBenchmarkSymbol(option.symbol); setBenchmarkRunId(''); setCustomBenchmarkOpen(false) }}
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${active
+                      ? 'border-accent/50 bg-accent/10 text-accent'
+                      : 'border-border bg-base text-secondary hover:border-accent/30 hover:text-accent'
+                    }`}
+                  >
+                    {option.name}
+                  </button>
+                )
+              })}
+              {!benchmarkRunId && !BENCHMARK_OPTIONS.some(option => option.symbol === benchmarkSymbol) && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
+                  <span className="max-w-[9rem] truncate">{customBenchmarkName || benchmarkSymbol}</span>
+                  <button
+                    type="button"
+                    aria-label="清除自定义基准"
+                    onClick={() => { setBenchmarkSymbol('000001.INDEX'); setCustomBenchmarkName('') }}
+                    className="shrink-0 hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setCustomBenchmarkOpen(v => !v)}
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${customBenchmarkOpen
+                  ? 'border-accent/40 bg-accent/10 text-accent'
+                  : 'border-border bg-base text-secondary hover:border-accent/30 hover:text-accent'
+                }`}
+              >
+                <Plus className="mr-0.5 inline h-3 w-3" />自定义标的
+              </button>
+            </div>
+            {customBenchmarkOpen && (
+              <div className="mt-1.5">
+                <InstrumentSearchAdder
+                  onAdd={result => {
+                    setBenchmarkSymbol(result.symbol)
+                    setCustomBenchmarkName(result.name || result.symbol)
+                    setBenchmarkRunId('')
+                  }}
+                  assetTypes={['stock', 'index', 'etf']}
+                  placeholder="搜索代码、名称或拼音选基准"
+                />
+              </div>
+            )}
+            <select
+              value={benchmarkRunId}
+              onChange={event => {
+                setBenchmarkRunId(event.target.value)
+                if (event.target.value) setCustomBenchmarkOpen(false)
+              }}
+              className={`${INPUT_CLS} mt-1.5`}
+            >
+              <option value="">历史 Run 基准（可选）</option>
+              {benchmarkRunOptions.map((run: BacktestRunSummary) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {`${run.subject.name || run.run_id} · ${run.start ?? '?'}~${run.end ?? '?'}`}
+                </option>
               ))}
             </select>
+            {benchmarkRunId && benchmarkRunOptions.length === 0 && (
+              <div className="mt-1 text-[10px] text-muted">已选历史 Run {benchmarkRunId}（不在最近列表中）</div>
+            )}
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">无风险年化(%)</label>
