@@ -18,7 +18,8 @@ DEFAULT_COST_MULTIPLIERS: tuple[float, ...] = (0.0, 0.5, 1.0, 2.0, 5.0)
 BASELINE_MULTIPLIER = 1.0
 
 COST_SENSITIVITY_NOTE = (
-    "成本倍数作用于双边费用与滑点；信号与选股不受成本影响，仓位模拟下资金约束可能传导"
+    "成本倍数只作用于佣金与滑点（双边口径）；印花税为法定固定税率，不随倍数放大；"
+    "信号与选股不受成本影响，仓位模拟下资金约束可能传导"
 )
 
 
@@ -113,9 +114,13 @@ def run_cost_sensitivity(
 ) -> dict:
     """成本敏感性分析: 对 fees_pct/slippage_bps 同乘倍数后逐档回测。
 
+    口径: 倍数只作用于佣金 (fees_pct) 与滑点 (slippage_bps) — 二者是双边
+    可变成本, 随券商/冲击程度变化; 印花税 (stamp_tax_pct) 是法定固定税率,
+    不随倍数放大, 各档保持原值不变。
+
     - cfg 必须是带 fees_pct/slippage_bps 的回测配置 (StrategyBacktestConfig);
       每档用 dataclasses.replace 复制后修改, 原 cfg 不被改动。
-    - multiplier=0.0 表示零成本 (费用与滑点均归零)。
+    - multiplier=0.0 表示零成本 (费用与滑点均归零, 印花税不受影响)。
     - run_fn(modified_cfg) 返回带 stats 的结果 (dataclass 或 dict 均可);
       任一档抛异常则整体透传, 不静默丢行。
     """

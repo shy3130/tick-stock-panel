@@ -796,6 +796,7 @@ def _strategy_backtest_config(
         entry_fill=req.entry_fill,
         exit_fill=req.exit_fill,
         fees_pct=req.fees_pct,
+        stamp_tax_pct=(req.stamp_tax_pct if req.stamp_tax_pct is not None else 0.0005),
         slippage_bps=req.slippage_bps,
         max_positions=req.max_positions,
         max_exposure_pct=req.max_exposure_pct,
@@ -847,6 +848,9 @@ class StrategyBacktestRequest(BaseModel):
     entry_fill: Literal["close_t", "open_t+1"] | None = None
     exit_fill: Literal["close_t", "open_t+1"] | None = None
     fees_pct: float = 0.0002
+    # A 股印花税 (仅卖出单边): 默认 0.0005 = 万分之五 (2023-08-28 起);
+    # None 时由后端 StrategyBacktestConfig 默认值兜底。
+    stamp_tax_pct: float | None = Field(default=None, ge=0.0, le=0.01)
     slippage_bps: float = 5.0
     max_positions: int = 10
     max_exposure_pct: float = 1.0
@@ -1332,7 +1336,7 @@ def _parse_json_object_param(raw: str | None, name: str) -> dict | None:
 def _make_job_key(
     strategy_id: str, symbols: str | None, start: str | None, end: str | None,
     matching: str, entry_fill: str | None, exit_fill: str | None,
-    fees_pct: float, slippage_bps: float,
+    fees_pct: float, stamp_tax_pct: float, slippage_bps: float,
     max_positions: int, max_exposure_pct: float, initial_capital: float, position_sizing: str,
     params: str | None, overrides: str | None,
     mode: str = "position", holding_days: int = 5, regime_filter: str | None = None,
@@ -1340,7 +1344,7 @@ def _make_job_key(
     max_participation_pct: float | None = None, participation_volume_window: int = 5,
     min_listed_days: int = 0,
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}|{max_participation_pct}|{participation_volume_window}|{min_listed_days}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{stamp_tax_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}|{max_participation_pct}|{participation_volume_window}|{min_listed_days}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 def _make_factor_job_key(
@@ -1375,6 +1379,8 @@ async def strategy_stream(
     entry_fill: str | None = None,
     exit_fill: str | None = None,
     fees_pct: float = 0.0002,
+    # A 股印花税 (仅卖出单边): None = 用 StrategyBacktestConfig 默认 (0.0005)。
+    stamp_tax_pct: float | None = Query(default=None, ge=0.0, le=0.01),
     slippage_bps: float = 5.0,
     max_positions: int = 10,
     max_exposure_pct: float = 1.0,
@@ -1441,7 +1447,7 @@ async def strategy_stream(
     job_key = _make_job_key(
         strategy_id, symbols, start, end,
         matching, entry_fill, exit_fill,
-        fees_pct, slippage_bps, max_positions, max_exposure_pct, initial_capital, position_sizing,
+        fees_pct, stamp_tax_pct if stamp_tax_pct is not None else 0.0005, slippage_bps, max_positions, max_exposure_pct, initial_capital, position_sizing,
         params, overrides,
         mode, holding_days, regime_filter, benchmark_symbol, risk_free_rate,
         max_participation_pct, participation_volume_window, min_listed_days,
@@ -1474,6 +1480,7 @@ async def strategy_stream(
                 entry_fill=entry_fill,
                 exit_fill=exit_fill,
                 fees_pct=fees_pct,
+                stamp_tax_pct=stamp_tax_pct if stamp_tax_pct is not None else 0.0005,
                 slippage_bps=slippage_bps,
                 max_positions=int(max_positions),
                 max_exposure_pct=float(max_exposure_pct),
@@ -1696,6 +1703,7 @@ async def strategy_cancel(request: Request):
         _get("entry_fill") or None,
         _get("exit_fill") or None,
         float(_get("fees_pct", "0.0002")),
+        float(_get("stamp_tax_pct", "0.0005")),
         float(_get("slippage_bps", "5")),
         int(_get("max_positions", "10")),
         float(_get("max_exposure_pct", "1")),
@@ -2039,9 +2047,8 @@ def _rerun_execute(request: Request, run: BacktestRun) -> tuple[dict, str]:
         params=cfg.get("params"),
         overrides=cfg.get("overrides"),
         matching=cfg.get("matching", "open_t+1"),
-        entry_fill=cfg.get("entry_fill"),
-        exit_fill=cfg.get("exit_fill"),
         fees_pct=cfg.get("fees_pct", 0.0002),
+        stamp_tax_pct=cfg.get("stamp_tax_pct", 0.0005),
         slippage_bps=cfg.get("slippage_bps", 5.0),
         max_positions=cfg.get("max_positions", 10),
         max_exposure_pct=cfg.get("max_exposure_pct", 1.0),

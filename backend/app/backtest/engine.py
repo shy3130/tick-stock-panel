@@ -46,6 +46,9 @@ class MatcherConfig:
     exit_fill: Literal["close_t", "open_t+1"] | None = None
     fees_pct: float = 0.0002
     slippage_bps: float = 5.0
+    # A 股印花税: 仅卖出单边收取 (2023-08-28 起税率 0.0005 = 万分之五)。
+    # 买入成本 = fees + slippage; 卖出成本 = fees + slippage + stamp_tax。
+    stamp_tax_pct: float = 0.0005
     stop_loss_pct: float | None = None
     take_profit_pct: float | None = None
     trailing_stop_pct: float | None = None
@@ -447,6 +450,8 @@ class BacktestEngine:
                         exit_price = float(sym_exit_prices[i])
                         pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
                         fee_cost = config.fees_pct * 2 + config.slippage_bps / 10000.0 * 2
+                        # 印花税仅卖出单边收取: 在双边 fees+slippage 之上多扣一次。
+                        fee_cost += max(float(config.stamp_tax_pct), 0.0)
                         pnl_pct -= fee_cost
 
                         e_date = sym_dates[entry_idx]
@@ -671,7 +676,8 @@ class BacktestEngine:
             rows.append(i)
 
         buy_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
-        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
+        # 印花税仅卖出单边: 卖出成本额外含 stamp_tax_pct。
+        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0 + max(float(config.stamp_tax_pct), 0.0)
         score_min = getattr(config, "score_min", None)
         score_max = getattr(config, "score_max", None)
         trades: list[TradeRecord] = []
@@ -1071,7 +1077,8 @@ class BacktestEngine:
             return self._empty_result()
 
         buy_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
-        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
+        # 印花税仅卖出单边: 卖出成本额外含 stamp_tax_pct。
+        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0 + max(float(config.stamp_tax_pct), 0.0)
         cash = float(config.initial_capital)
         peak = cash
         max_positions = max(int(config.max_positions), 0)
@@ -1531,6 +1538,7 @@ class BacktestEngine:
             config.initial_capital,
             config.fees_pct,
             config.slippage_bps,
+            config.stamp_tax_pct,
             config.risk_free_rate,
         )
         stats["execution"] = execution_stats
@@ -1818,6 +1826,7 @@ class BacktestEngine:
         initial_capital: float,
         fees_pct: float = 0.0,
         slippage_bps: float = 0.0,
+        stamp_tax_pct: float = 0.0,
         risk_free_rate: float = 0.0,
     ) -> dict:
         if not equity_curve:
@@ -1866,13 +1875,18 @@ class BacktestEngine:
             max(float(trade.entry_value), 0.0) + max(float(trade.exit_value), 0.0)
             for trade in trades
         )
+        # 印花税口径: 仅对卖出侧名义额征收 (exit_value 已是含卖出成本后的净额,
+        # 近似值; 与撮合时 sell_cost_pct 的扣费口径一致), 不对总 gross_notional 乘。
+        sell_notional = sum(max(float(trade.exit_value), 0.0) for trade in trades)
         commission_cost = gross_notional * max(float(fees_pct), 0.0)
         slippage_cost = gross_notional * max(float(slippage_bps), 0.0) / 10_000.0
+        stamp_tax_cost = sell_notional * max(float(stamp_tax_pct), 0.0)
         stats["cost_breakdown"] = {
             "gross_notional": round(gross_notional, 2),
             "commission": round(commission_cost, 2),
             "slippage": round(slippage_cost, 2),
-            "total": round(commission_cost + slippage_cost, 2),
+            "stamp_tax": round(stamp_tax_cost, 2),
+            "total": round(commission_cost + slippage_cost + stamp_tax_cost, 2),
             "turnover": (
                 round(gross_notional / float(initial_capital), 4)
                 if initial_capital > 0

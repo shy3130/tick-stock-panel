@@ -48,6 +48,8 @@ class StrategyBacktestConfig:
     exit_fill: Literal["close_t", "open_t+1"] | None = None
     fees_pct: float = 0.0002
     slippage_bps: float = 5.0
+    # A 股印花税: 仅卖出单边收取, 2023-08 起默认 0.0005 (万分之五)。
+    stamp_tax_pct: float = 0.0005
     max_positions: int = 10
     max_exposure_pct: float = 1.0
     initial_capital: float = 1_000_000.0
@@ -282,6 +284,7 @@ class StrategyBacktestService:
             entry_fill=config.entry_fill,
             exit_fill=config.exit_fill,
             fees_pct=config.fees_pct,
+            stamp_tax_pct=config.stamp_tax_pct,
             slippage_bps=config.slippage_bps,
             stop_loss_pct=stop_loss,
             take_profit_pct=take_profit,
@@ -1039,6 +1042,7 @@ class StrategyBacktestService:
             "holding_days": c.holding_days,
             "regime_filter": c.regime_filter,
             "fees_pct": c.fees_pct,
+            "stamp_tax_pct": c.stamp_tax_pct,
             "slippage_bps": c.slippage_bps,
             "max_positions": c.max_positions,
             "max_exposure_pct": c.max_exposure_pct,
