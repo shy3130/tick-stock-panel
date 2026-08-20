@@ -87,6 +87,7 @@
 | `app/backtest/provenance.py` | 数据快照元数据（canonical/adjustment generation、股票池定义、`snapshot_hash`）、engine/metric 版本 | 全市场股票池无法证明 point-in-time 时必须保留 `survivorship_bias` 告警 |
 | `app/backtest/engine.py` / `strategy.py` / `factor.py` / `robustness.py` / `optimizer.py` | 主 Polars/NumPy 撮合与策略/因子/稳健性/寻优服务（T+1、涨跌停、整手、费用滑点、持仓期 MAE/MFE、参数扰动、严格 Walk-Forward、训练/留出笛卡尔搜索） | 旧 vectorbt 入口 `POST /api/backtest/run` 仅 legacy（固定 `legacy_vectorbt_engine` 告警），停止新增消费者；寻优不得宣称全局最优，不得自动写入策略池 |
 | `app/backtest/attribution_report.py` | 交易窗口 Brinson-Fachler 行业归因（当前行业映射、相对等权已执行交易样本） | 映射非 point-in-time；输入/行业不足必须 fail-closed；无冻结可审计本地因子序列时 Fama-French 必须显式 unavailable，禁止代理结果 |
+| `app/backtest/universe_gating.py` / `style_factors.py` / `regime_breakdown.py` / `cost_sensitivity.py` / `fill_reachability.py` | V4 可信度增强：上市天数门控（provider `get_stock_reference_flags` 的 ssdate，删行实现 + 统计）、本地 SMB/UMD/LMV 三因子构建与 OLS 归因、市场状态四桶、成本倍数敏感性、分钟级成交可达性抽查 | 无 HML（无账面市值历史，不伪造代理）；regime 波动阈值为事后全样本口径（仅分组解释）；fill-reachability 是诊断不是撮合能力；上市日期不可用时 fail-open 但必须显式计数/告警 |
 | `app/api/backtest.py` | 策略/因子/组合回测 + `/runs` 列表/读取/比较/复跑/导出/PATCH/DELETE | Run 落盘失败必须在响应带 `persisted=false` 与 `persistence_failed` 告警，不得伪装成功 |
 | `app/api/backtest_optimizer.py` | `GET /universes` + `POST/GET/SSE/cancel` 策略寻优实验 | 训练窗打分、留出窗确认；DSR/PBO 是诊断不是准入；全市场/板块/行业池必须带幸存者偏差告警 |
 | `frontend/src/pages/backtest/` | 运行历史（RunHistoryPanel）、专业诊断、稳健性、参数网格（含回填策略表单）、策略寻优、交易明细筛选、行业归因与独立 HTML 报告下载 | 前端不得重算风险指标，非有限数值显示"—"；未持久化 Run 不得提供报告下载 |
@@ -126,6 +127,7 @@
 | `backend/docs/FQUANT_PROVIDER.md` | 旧 PoC 说明（已被 v2 覆盖，仅供回溯） |
 | `backend/docs/YMOS_PORTING_PLAN.md` | YMOS 纪律层移植设计、契约与完成进度 |
 | `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md` | 回测专业化审计与改进计划——P0 口径修复、BacktestRun 契约、工程决策与未实现边界（权威） |
+| `backend/docs/BACKTEST_PRODUCT_REVIEW_2026-08-20.md` | 回测模块产品评审与路线图（2026-08-20）——能力盘点、易用性/专业性缺口、P0-P2 功能清单与分期 |
 | `backend/docs/PA_AGENT_PORTING_PLAN.md` | PA_Agent 工程机制移植总账、决策门、已交付边界与明确暂缓项 |
 | `backend/docs/UPSTREAM_FEATURE_PORTING.md` | 上游项目、已移植能力、暂缓/排除项与维护流程总账 |
 | `backend/docs/PI_AGENT_PILOT_PLAN.md` | Pi Agent Harness 可选 sidecar 试点的架构、风险、验收与退出标准 |

@@ -404,7 +404,8 @@ DELETE  /api/backtest/runs/{run_id}
 | V1 可信度修复 | ✅ 已完成 | `tests/backtest/test_factor_costs.py`、`test_metrics.py`、`test_provenance.py`、`test_strategy_backtest_correctness.py`（因子成本、MetricContext、Profit/Payoff、seed、快照元数据、方法论告警、legacy 隔离） |
 | V2 实验闭环 | ✅ 已完成 | `app/backtest/run_store.py`、`tests/backtest/test_run_store.py`（27 用例）、`tests/api/test_run_store_api.py`（21 用例）、前端 `RunHistoryPanel.tsx` |
 | V3 专业报告 | ◐ 部分完成 | 专业诊断/滚动/月度热图/参数热力图/严格收益–夏普–回撤 Pareto 分层/MAE-MFE/交易筛选/交易窗口 Brinson-Fachler 行业归因/独立 HTML 报告/页内打印/严格 Walk-Forward/因子 SSE 任务（进度回放、取消、刷新重连、Run 持久化）已落地；对应 `tests/backtest/test_attribution_report.py`、`test_trade_excursions.py`、`test_walk_forward.py`、`test_parameter_grid.py`、`tests/api/test_backtest_factors.py`、`frontend/src/lib/backtestReport.test.ts`、`factorBacktestTask.test.ts`。参数前沿仍只覆盖受限候选空间，见 §12 |
-| 完整回归与浏览器验收 | ✅ 已完成（回测相关集合） | 回测相关 526 项通过（`tests/backtest` + `test_run_store_api.py` + `test_backtest_factors.py` + `test_strategy_robustness_api.py`）；前端四个 Bun 自执行断言文件通过（18/18、4/4、13/13、2/2）；tsc 5.9.3 与 Vite 5.4.21（2715 modules）通过。浏览器已验证策略运行→Run 持久化→交易代码/名称与盈亏筛选→双 Run 指标/交易/归一净值对比；另以行业数据快照验证 Brinson-Fachler 行业归因可用（89.9% 资金覆盖）且 Fama-French 维持显式不可用；参数网格已验证 Pareto 非支配层标识与表格 PARETO 列展示。未运行全仓 pytest。 |
+| V4 可信度增强（2026-08-20） | ✅ 已完成 | 量能参与率约束与容量统计（`test_volume_participation.py` 17）、成本敏感性（`test_cost_sensitivity.py` 14）、PSR+交易级 bootstrap 带（`test_psr_and_band.py` 12）、上市天数门控与偏差拆分（`test_universe_gating.py` 8）、市场状态分桶（`test_regime_breakdown.py` 10）、本地风格因子 SMB/UMD/LMV（`test_style_factors.py` 13）、成交可达性诊断（`test_fill_reachability.py` 9）；API 接线与 SSE 透传（`test_backtest_enhancements_api.py` 21）；前端 TrustDiagnostics/Regime/CostSensitivity/StyleAttribution 面板、简单模式、预检、指标解释（`trustDiagnosticsCore.test.ts` 7、`MetricExplainer.test.ts`、`runPreflight.test.ts`）；寻优场景一键固化为 Run。真实数据验证：PSR=0.058（-65.6% 策略）、容量 99.7x、门控滤 55 只次新股、成本敏感性单调、regime 四桶（熊市动荡 Sharpe -1.63）、风格归因 UMD β=-1.43（t=-2.35）、fill-reachability headroom p50=2.5 |
+| 完整回归与浏览器验收（2026-08-20 复验） | ✅ 已完成（回测相关集合） | 后端 `tests/backtest` 594 项 + 回测 API 域 66 项全部通过；前端 tsc exit=0、Vite build 通过、Bun 断言（trustDiagnosticsCore 7/7、MetricExplainer、runPreflight、既有 18/18 等）通过。浏览器已验证：带参与率/上市天数门控的 SSE 回测全链路（TrustDiagnostics 渲染容量 ≈103x、PSR 25.4%、门控统计）、市场状态面板 3 个月区间的 fail-closed 样本不足提示、简单/专业模式切换、预检 3 项警告。未运行全仓 pytest。 |
 
 每完成一个阶段，必须更新本节及对应验收证据；不得以 scaffold、占位接口或仅有 UI 的假实现标记完成。
 
@@ -414,11 +415,12 @@ DELETE  /api/backtest/runs/{run_id}
 
 1. **Walk-Forward 的优化边界**：严格 IS/OOS（训练选参→冻结→OOS、拼接净值、退化与参数漂移）已实现；但候选空间仅为 baseline + 单参数 ± 扰动局部邻域（≤ `1 + 2 × max_perturbed_params` 个），不是网格/全局优化，训练期选参只在该局部邻域内进行。
 2. **参数前沿的样本边界**：收益–夏普–回撤 Pareto 分层是严格非支配判定，但只覆盖当前受限候选网格；不得把它宣传成全局最优参数证明。
-3. **成交量冲击与部分成交**：撮合仍为固定 bps 滑点 + 整手约束，不模拟盘口深度。
-4. **历史时点股票池**：全市场池无法证明 point-in-time，幸存者偏差告警必须保留，不得静默移除。
-5. **撮合引擎仍无 intraday 数据**：`close_t` / `open_t+1` 两档口径，不支持盘中触发。
-
+3. **成交量约束已落地参与率上限，仍非盘口冲击模型**：撮合支持 `max_participation_pct`（单笔买入 ≤ min(当日量, N 日均量) × p%），截断计入 `buy_volume_cap` 阻塞原因并输出容量统计（利用率分位、`est_capacity_multiple` 线性外推近似，非精确容量解）；仍不模拟盘口深度、部分成交与价格冲击。
+4. **历史时点股票池**：全市场池无法证明 point-in-time。上市天数门控（`min_listed_days`，provider `get_stock_reference_flags` 的 `ssdate`）已可显式过滤次新股，provenance 侧幸存者偏差拆分为 `delisting_bias`（退市标的历史缺失，本地源无法回补，实测 164 只退市标的仅 3 只有 tdx 日 K 历史）与 `listing_age_bias` 两条独立警告；退市偏差无法由面板层修复，告警必须保留。
+5. **撮合引擎仍无 intraday 数据**：`close_t` / `open_t+1` 两档口径，不支持盘中触发。新增的成交可达性诊断（`/runs/{run_id}/fill-reachability`，分钟级价格带成交额 vs 交易名义额的 headroom 抽查）只是事后诊断口径，不构成盘中撮合能力。
 6. **全量独立候选模式**：它评估每笔候选的独立交易质量，候选样本收益曲线按退出事件日等权复利；不是资金受约束的账户净值，故年化、风险调整、基准与相对绩效指标刻意不可用。
 7. **策略寻优 V1 不是全局最优**：`/backtest` 策略寻优 tab 对策略 × 股票池 × 持仓周期 × 撮合做笛卡尔展开（默认上限 120，超出确定性抽样），在最近 N 年冻结窗口上训练期打分、留出期确认，并报告 DSR/PBO。它不搜索策略参数、不调用 Optuna、不写入策略池；推荐仅表示留出收益为正且成交数达标。设计见 `STRATEGY_SEARCH_DESIGN.md`。
+8. **风格归因无 HML 价值因子**：本地风格因子为面板内自建 SMB/UMD/LMV 三因子（三分位、截面 ≥100，`factor_version` 为构造规格指纹，数据版本由快照补充），不含价值因子——本地面板无账面市值/ROE 历史序列，待财务数据接入，绝不伪造代理；OLS 标准误未做 Newey-West 修正。Fama-French 正式接口维持不可用。
+9. **市场状态分桶与 PSR 的口径边界**：regime 分桶的波动阈值用基准全样本中位数（事后口径，含轻度前视，仅作分组解释不作交易信号）；PSR 只校正收益分布形态与样本量，不校正数据窥探/多重试验（后者由寻优的 DSR 承担）；交易级 bootstrap 净值带是顺序无关的单仓位复利诊断，不是账户净值。
 
 **定位声明**：本系统输出为历史研究与分析，不构成荐股、投资建议或下单指令；所有结果须结合方法论告警（幸存者偏差、数据快照、口径差异）解读。
