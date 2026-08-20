@@ -173,6 +173,8 @@ export function startBacktest(params: {
   participation_volume_window?: number
   /** 上市天数门控 (天, 0 = 关闭) */
   min_listed_days?: number
+  /** F14 成交精度: daily = 日 K 收盘/开盘口径; minute = 分钟 VWAP 撮合 + 盘中风控 */
+  bar_precision?: 'daily' | 'minute'
 }): void {
   // 取消之前的任务状态
   if (eventSource) {
@@ -215,8 +217,9 @@ export function startBacktest(params: {
     min_listed_days: params.min_listed_days != null && params.min_listed_days > 0
       ? params.min_listed_days
       : undefined,
+    // F14 成交精度: 仅 minute 时附加, 保持 daily 的 job_key 与旧行为稳定
+    bar_precision: params.bar_precision === 'minute' ? 'minute' : undefined,
   })
-
   // 存 reconnect 信息 (刷新后用)
   localStorage.setItem(RECONNECT_KEY, qs)
 

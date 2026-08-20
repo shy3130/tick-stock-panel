@@ -1187,6 +1187,8 @@ export interface StrategyBacktestRequest {
   participation_volume_window?: number
   /** B6 上市天数门控 (天, 0 = 关闭): 上市不足 N 天的标的整段不入面板 */
   min_listed_days?: number
+  /** F14 成交精度: daily = 日 K 收盘/开盘口径 (默认); minute = 分钟 VWAP 撮合 + 盘中风控 (仅 position 模式, ≤100 标的 / ≤120 交易日) */
+  bar_precision?: 'daily' | 'minute'
   /** F7 实验溯源: 从寻优/参数网格场景固化为 Run 时携带, 随 config 持久化 */
   source_experiment_id?: string | null
 }
@@ -1719,6 +1721,44 @@ export interface ToMonitorRuleResponse {
   created: boolean
 }
 
+// ===== F15 组合级回测 — 已固化 Run 日频净值的事后加权合成 (/api/backtest/portfolio-combine) =====
+// 口径: 独立回测净值事后加权合成, 非共享资金池撮合; 纯诊断, 不落盘不生成新 Run。
+
+export type PortfolioRebalanceMode = 'daily' | 'monthly' | 'none'
+
+export interface PortfolioCombineItemInput {
+  run_id: string
+  /** 原始权重 (正数); 后端统一归一化为和 1 */
+  weight: number
+}
+
+export interface PortfolioCombineResultItem {
+  run_id: string
+  label: string
+  /** 归一化后的权重 (和为 1) */
+  weight: number
+  /** 请求原始权重 */
+  weight_raw?: number
+  /** 共同窗口内该成分的首末净值比收益 */
+  total_return: number | null
+  sharpe: number | null
+  /** 对组合总增量的贡献占比 (组合总收益为 0 时为 null) */
+  contribution: number | null
+}
+
+/** POST /api/backtest/portfolio-combine 响应 — 合成净值 + MetricContext 全套指标 + 成分/相关性 */
+export interface PortfolioCombineResponse {
+  equity_curve: { date: string; value: number }[]
+  stats: Record<string, any>
+  items: PortfolioCombineResultItem[]
+  correlation_matrix: { run_ids: string[]; values: (number | null)[][] }
+  overlap_days: number
+  rebalance: PortfolioRebalanceMode
+  /** 含口径提示与权重归一化说明 */
+  warnings: string[]
+  date_range?: { start: string; end: string }
+}
+
 // ===== Strategy experiments / cross-section / signal scorecard =====
 export interface CompositeStrategyInput {
   strategy_id: string
@@ -1831,6 +1871,7 @@ export interface OptimizerRequest {
   initial_capital?: number
   risk_free_rate?: number
   include_combos?: boolean
+  param_grid?: Record<string, Record<string, any[]>> | null
 }
 
 export interface OptimizerLaunchResponse {
@@ -1864,6 +1905,7 @@ export interface OptimizerScenario {
   error: string | null
   elapsed_ms: number
   phases: Array<{ id: string; label: string; total_return: number | null }>
+  params?: Record<string, any> | null
 }
 
 export interface OptimizerExperiment {
@@ -1902,9 +1944,11 @@ export interface OptimizerExperiment {
   completed: number
   total: number
   runtime?: ExperimentRuntime
+  param_grid?: Record<string, Record<string, any[]>> | null
 }
 
 // ===== F7 实验资产统一 (/api/backtest/experiments) =====
+
 
 /** 实验最佳场景摘要 — score 为实验目标得分; 寻优 total_return/sharpe 优先留出期口径 */
 export interface BacktestExperimentBest {
@@ -3505,6 +3549,13 @@ export const api = {
     request<BacktestRunComparison>('/api/backtest/runs/compare', {
       method: 'POST',
       body: JSON.stringify({ run_ids: runIds }),
+    }),
+
+  /** F15 组合级回测: 已固化 Run 日频净值事后加权合成 (纯诊断, 不落盘) */
+  portfolioCombine: (payload: { items: PortfolioCombineItemInput[]; rebalance?: PortfolioRebalanceMode }) =>
+    request<PortfolioCombineResponse>('/api/backtest/portfolio-combine', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 
   /** F10 回测转监控规则 (幂等): 同 run 重复调用返回已有规则 created=false */

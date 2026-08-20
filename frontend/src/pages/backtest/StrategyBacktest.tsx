@@ -765,6 +765,8 @@ export function StrategyBacktest({
   const [matching] = useState<'close_t' | 'open_t+1'>(saved?.matching ?? 'open_t+1')
   const [entryFill, setEntryFill] = useState<'close_t' | 'open_t+1'>(saved?.entryFill ?? saved?.matching ?? 'open_t+1')
   const [exitFill, setExitFill] = useState<'close_t' | 'open_t+1'>(saved?.exitFill ?? saved?.matching ?? 'close_t')
+  // F14 成交精度: daily = 日 K 收盘/开盘口径; minute = 分钟 VWAP 撮合 + 盘中风控 (仅仓位模拟)
+  const [barPrecision, setBarPrecision] = useState<'daily' | 'minute'>('daily')
   const [fees, setFees] = useState(saved?.fees ?? '2')
   const [slippage, setSlippage] = useState(saved?.slippage ?? '5')
   const [stampTax, setStampTax] = useState(saved?.stampTax ?? '5')
@@ -1044,9 +1046,8 @@ export function StrategyBacktest({
       benchmark_symbol: benchmarkRunId ? undefined : benchmarkSymbol,
       benchmark_run_id: benchmarkRunId || undefined,
       risk_free_rate: rfr / 100,
-      max_participation_pct: participation.value,
-      participation_volume_window: Math.max(1, Math.round(Number(participationWindow) || 5)),
       min_listed_days: Math.max(0, Math.round(Number(minListedDays) || 0)),
+      bar_precision: simMode === 'position' ? barPrecision : 'daily',
     })
   }
 
@@ -1807,6 +1808,16 @@ export function StrategyBacktest({
           </div>
         </div>
         <div className="mt-1 text-[10px] leading-4 text-muted">建仓默认次日开盘（避免未来函数），清仓默认当日收盘（持仓中可盘中/收盘卖）；买卖点由策略触发器决定，这里只决定成交价。</div>
+        {simMode === 'position' && !simpleMode && (
+        <div>
+          <label className="text-xs font-medium text-secondary block mb-1.5" title="分钟口径下建仓/清仓价替换为当日分钟窗口 VWAP，止损/止盈等风控在分钟级触发">成交精度</label>
+          <select value={barPrecision} onChange={e => setBarPrecision(e.target.value as 'daily' | 'minute')} className={INPUT_CLS}>
+            <option value="daily">日 K 收盘/开盘口径（默认）</option>
+            <option value="minute">分钟 VWAP 口径（风控盘中触发）</option>
+          </select>
+          <div className="mt-1 text-[10px] leading-4 text-muted">分钟模式限 ≤100 标的、≤120 交易日；风控盘中触发（分钟价触及止损/止盈线即按线价成交）；缺分钟数据的标的-交易日自动回退日 K 价并在结果中计数。</div>
+        </div>
+        )}
         </>
         )}
 
@@ -2301,6 +2312,16 @@ export function StrategyBacktest({
               )}
             </div>
             ))}
+
+            {result?.stats?.bar_precision === 'minute' && (
+              <div className="flex items-center gap-2 text-[11px] text-secondary" role="status">
+                <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-medium text-accent">分钟 VWAP 撮合</span>
+                <span>建仓/清仓按当日分钟窗口 VWAP 成交，风控盘中触发</span>
+                {typeof result.stats.minute_fallback_daily === 'number' && result.stats.minute_fallback_daily > 0 && (
+                  <span className="text-warning">缺分钟数据回退日 K 价 {result.stats.minute_fallback_daily} 笔</span>
+                )}
+              </div>
+            )}
 
             {executionSummary.length > 0 && (
               <div className="rounded-btn border border-warning/25 bg-warning/5 px-3 py-2 text-[11px] leading-5 text-secondary">

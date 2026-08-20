@@ -69,6 +69,7 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
   const [objective, setObjective] = useState<(typeof OBJECTIVES)[number]['value']>('risk_adjusted')
   const [minTrades, setMinTrades] = useState(10)
   const [maxScenarios, setMaxScenarios] = useState(120)
+  const [paramGrid, setParamGrid] = useState<Record<string, Record<string, any[]>>>({})
   const task = useOptimizerTask()
   const experimentId = task.experimentId
   const taskRevision = task.revision
@@ -121,6 +122,31 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
     }
   }, [experimentId, taskRevision])
 
+  // 从已加载实验恢复 param_grid 与策略选择（experiment id 打开场景）
+  useEffect(() => {
+    if (!experiment) return
+    if (experiment.param_grid && Object.keys(experiment.param_grid).length > 0) {
+      setParamGrid(experiment.param_grid)
+    }
+    const used = Array.from(new Set(
+      (experiment.scenarios ?? [])
+        .map(r => r.strategy_id)
+        .filter((id: string) => !id.startsWith('combo:'))
+    ))
+    if (used.length > 0 && selected.length === 0) {
+      setSelected(used.slice(0, 8))
+    }
+  }, [experiment?.experiment_id])
+
+  // 清理不再选中的策略的参数网格
+  useEffect(() => {
+    setParamGrid(prev => {
+      const next: Record<string, Record<string, any[]>> = {}
+      for (const sid of selected) if (prev[sid]) next[sid] = prev[sid]
+      return next
+    })
+  }, [selected])
+
   const symbols = useMemo(
     () => symbolsText.split(',').map(item => item.trim()).filter(Boolean),
     [symbolsText],
@@ -163,6 +189,7 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
         min_trades: minTrades,
         max_scenarios: maxScenarios,
         include_combos: includeCombos,
+        param_grid: Object.keys(paramGrid).length ? paramGrid : undefined,
       })
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : '启动寻优失败'
@@ -271,6 +298,86 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
               包含两两并集叠加（最多 8 组，不写入策略池）
             </label>
           </div>
+
+          {/* F16: 参数候选编辑器（每个已选策略独立 ≤2 参数、≤5 值、积≤8） */}
+          {selected.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium text-secondary">参数候选（可选，展开编辑）</div>
+              {selected.map(sid => {
+                const def = strategyItems.find(s => s.id === sid)
+                const pdefs = (def?.params ?? []).filter(p => p && p.id)
+                if (pdefs.length === 0) return null
+                const cur = paramGrid[sid] || {}
+                const entries = Object.entries(cur)
+                const toLen = (v: unknown): number => (Array.isArray(v) ? v.length : 0)
+                const prod = entries.reduce((acc, [, v]) => acc * toLen(v), 1) || 1
+                const over = entries.length > 2 || entries.some(([, v]) => toLen(v) > 5) || prod > 8
+
+                return (
+                  <div key={sid} className="rounded border border-border p-2 text-[11px] bg-elevated/30">
+                    <div className="font-medium mb-1 truncate">{def?.name || sid}</div>
+                    {entries.map(([pname, vals], idx) => (
+                      <div key={idx} className="flex items-center gap-1.5 mb-1">
+                        <select
+                          className="control text-xs w-28"
+                          value={pname}
+                          onChange={e => {
+                            const nextName = e.target.value
+                            setParamGrid(prev => {
+                              const s = { ...(prev[sid] || {}) }
+                              const v = s[pname]; delete s[pname]
+                              if (nextName) s[nextName] = v || []
+                              return { ...prev, [sid]: s }
+                            })
+                          }}
+                        >
+                          {pdefs.map(pd => (
+                            <option key={pd.id} value={pd.id}>{pd.label || pd.id}</option>
+                          ))}
+                        </select>
+                        <input
+                          className="control flex-1 text-xs"
+                          value={Array.isArray(vals) ? (vals as unknown as (string | number | boolean)[]).join(',') : ''}
+                          onChange={e => {
+                            const arr = e.target.value.split(',').map(x => x.trim()).filter(Boolean)
+                            setParamGrid(prev => ({
+                              ...prev,
+                              [sid]: { ...(prev[sid] || {}), [pname]: arr },
+                            }))
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="text-danger"
+                          onClick={() => setParamGrid(prev => {
+                            const s = { ...(prev[sid] || {}) }
+                            delete s[pname]
+                            return { ...prev, [sid]: s }
+                          })}
+                        >×</button>
+                      </div>
+                    ))}
+                    {entries.length < 2 && (
+                      <button
+                        type="button"
+                        className="text-[10px] text-accent"
+                        onClick={() => {
+                          const used = new Set(entries.map(([k]) => k))
+                          const avail = pdefs.find(pd => !used.has(pd.id))
+                          if (!avail) return
+                          setParamGrid(prev => ({
+                            ...prev,
+                            [sid]: { ...(prev[sid] || {}), [avail.id]: [] },
+                          }))
+                        }}
+                      >+ 添加参数</button>
+                    )}
+                    {over && <div className="text-[10px] text-danger mt-0.5">参数/取值/组合超出限制（≤2参、≤5值、积≤8）</div>}
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
           <div>
             <div className="mb-1.5 text-xs font-medium text-secondary">股票池</div>
@@ -440,6 +547,7 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
                     <tr>
                       <th>排名</th>
                       <th>策略</th>
+                      <th>参数</th>
                       <th>股票池</th>
                       <th>周期</th>
                       <th>训练收益</th>
@@ -454,6 +562,11 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
                       <tr key={row.scenario_id} className={recommended.has(row.scenario_id) ? 'bg-bull/5' : undefined}>
                         <td className="font-mono num">{row.rank}</td>
                         <td>{row.strategy_label || row.strategy_id}</td>
+                        <td className="font-mono text-[10px] text-secondary">
+                          {row.params && Object.keys(row.params).length
+                            ? Object.entries(row.params).map(([k, v]) => `${k}=${v}`).join(' ')
+                            : '—'}
+                        </td>
                         <td>{row.universe_label}</td>
                         <td className="font-mono">{row.holding_days}d</td>
                         <td className="font-mono num">{formatMetric(row.train_stats.total_return, 'total_return')}</td>

@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { FactorBacktest } from './backtest/FactorBacktest'
 import { StrategyBacktest, type StrategyParameterBackfill } from './backtest/StrategyBacktest'
 import { CompositeStrategyBuilder } from './backtest/CompositeStrategyBuilder'
+import { PortfolioCombinePanel } from './backtest/PortfolioCombinePanel'
 import { ParameterGridPanel } from './backtest/ParameterGridPanel'
 import { StrategySearchPanel } from './backtest/StrategySearchPanel'
 import { RunHistoryPanel } from './backtest/RunHistoryPanel'
@@ -155,8 +156,17 @@ export function Backtest() {
               onParameterBackfillApplied={clearParameterBackfill}
             />
           )}
-          {activeTab === 'composite' && <CompositeStrategyBuilder />}
+          {activeTab === 'composite' && (
+            <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto">
+              <div className="min-h-[34rem] shrink-0">
+                <CompositeStrategyBuilder />
+              </div>
+              <PortfolioCombinePanel />
+            </div>
+          )}
+          <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
             <ParameterGridPanel onUseScenario={useGridScenario} onScenarioRunComplete={scenarioRunComplete} />
+        </div>
           </div>
           <div className={activeTab === 'search' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'search'}>
             <StrategySearchPanel onUseScenario={useSearchStrategy} onScenarioRunComplete={scenarioRunComplete} />
