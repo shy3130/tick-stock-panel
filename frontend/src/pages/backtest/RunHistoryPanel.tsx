@@ -1150,7 +1150,7 @@ export function RunHistoryPanel({ onOpenExperiment }: { onOpenExperiment?: (kind
             className="btn-secondary !h-7 inline-flex items-center gap-1 px-2.5 text-[11px]"
           >
             {experimentsOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            {experimentsOpen ? '收起' : `展开 (${experimentsQuery.data?.total ?? 0})`}
+            {experimentsOpen ? '收起' : '展开'}
           </button>
         </div>
         {experimentsOpen && (

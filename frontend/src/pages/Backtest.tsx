@@ -56,7 +56,7 @@ const MODES: Record<Tab, { title: string; subtitle: string; hint: string }> = {
   history: {
     title: '运行历史',
     subtitle: '持久化回测记录的检索与对比',
-    hint: '搜索、收藏、打标签，选择 2~4 次运行做指标与净值对比。',
+    hint: '搜索、收藏、打标签，选择 2~8 次运行做指标与净值对比，可导出自包含对比报告。',
   },
 }
 
@@ -166,10 +166,10 @@ export function Backtest() {
           )}
           <div className={activeTab === 'grid' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'grid'}>
             <ParameterGridPanel onUseScenario={useGridScenario} onScenarioRunComplete={scenarioRunComplete} />
-        </div>
           </div>
           <div className={activeTab === 'search' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'search'}>
             <StrategySearchPanel onUseScenario={useSearchStrategy} onScenarioRunComplete={scenarioRunComplete} />
+          </div>
           {activeTab === 'history' && <RunHistoryPanel onOpenExperiment={openExperimentTab} />}
         </div>
       </div>

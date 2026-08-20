@@ -406,10 +406,11 @@ DELETE  /api/backtest/runs/{run_id}
 | V3 专业报告 | ◐ 部分完成 | 专业诊断/滚动/月度热图/参数热力图/严格收益–夏普–回撤 Pareto 分层/MAE-MFE/交易筛选/交易窗口 Brinson-Fachler 行业归因/独立 HTML 报告/页内打印/严格 Walk-Forward/因子 SSE 任务（进度回放、取消、刷新重连、Run 持久化）已落地；对应 `tests/backtest/test_attribution_report.py`、`test_trade_excursions.py`、`test_walk_forward.py`、`test_parameter_grid.py`、`tests/api/test_backtest_factors.py`、`frontend/src/lib/backtestReport.test.ts`、`factorBacktestTask.test.ts`。参数前沿仍只覆盖受限候选空间，见 §12 |
 | V4 可信度增强（2026-08-20） | ✅ 已完成 | 量能参与率约束与容量统计（`test_volume_participation.py` 17）、成本敏感性（`test_cost_sensitivity.py` 14）、PSR+交易级 bootstrap 带（`test_psr_and_band.py` 12）、上市天数门控与偏差拆分（`test_universe_gating.py` 8）、市场状态分桶（`test_regime_breakdown.py` 10）、本地风格因子 SMB/UMD/LMV（`test_style_factors.py` 13）、成交可达性诊断（`test_fill_reachability.py` 9）；API 接线与 SSE 透传（`test_backtest_enhancements_api.py` 21）；前端 TrustDiagnostics/Regime/CostSensitivity/StyleAttribution 面板、简单模式、预检、指标解释（`trustDiagnosticsCore.test.ts` 7、`MetricExplainer.test.ts`、`runPreflight.test.ts`）；寻优场景一键固化为 Run。真实数据验证：PSR=0.058（-65.6% 策略）、容量 99.7x、门控滤 55 只次新股、成本敏感性单调、regime 四桶（熊市动荡 Sharpe -1.63）、风格归因 UMD β=-1.43（t=-2.35）、fill-reachability headroom p50=2.5 |
 | 完整回归与浏览器验收（2026-08-20 复验） | ✅ 已完成（回测相关集合） | 后端 `tests/backtest` 594 项 + 回测 API 域 66 项全部通过；前端 tsc exit=0、Vite build 通过、Bun 断言（trustDiagnosticsCore 7/7、MetricExplainer、runPreflight、既有 18/18 等）通过。浏览器已验证：带参与率/上市天数门控的 SSE 回测全链路（TrustDiagnostics 渲染容量 ≈103x、PSR 25.4%、门控统计）、市场状态面板 3 个月区间的 fail-closed 样本不足提示、简单/专业模式切换、预检 3 项警告。未运行全仓 pytest。 |
+| 产品评审路线图一至四期（2026-08-20，见 BACKTEST_PRODUCT_REVIEW_2026-08-20） | ✅ 已完成（F17 论证暂缓） | 一期：印花税显式化 `stamp_tax_pct`（卖出单边，cost_breakdown 分列，敏感性不放大）、结果区锚点导航+折叠（`resultSections.ts`）、SSE connectionState 断线指示、MetricExplainer 全量接线（+12 词条）、默认策略+未选提示、预检一键修复（fix patch）、对比上限 8+自包含对比报告（`compareReport.ts`）。二期：蒙特卡洛交易重排（`monte_carlo_trade_shuffle`，n<30 fail-closed）、自定义基准（任意标的 + 历史 Run 净值互斥 `benchmark_run_id`，stats 标注 benchmark_source）、实验资产统一（GET /experiments 直扫落盘目录、网格场景固化为 Run、source_experiment_id 溯源）。三期：回测转监控规则（POST /runs/{id}/to-monitor-rule 幂等）、盘后定时复跑（jobs/backtest_favorite_rerun.py，偏好默认关，滚动窗，label=定时复跑）、策略版本感知（StrategyDef.def_hash + run stats.strategy_def_hash + 变更横幅）。四期：分钟级撮合（bar_precision=minute，VWAP 窗口 09:30-09:45/14:45-15:00，风控盘中触发，回退计数 minute_fallback_daily，资源 guard ≤100 标的 ≤120 交易日，candidate 互斥）、组合级净值合成（portfolio_combine.py，daily/monthly/none 再平衡，贡献求和=1，口径声明非共享资金池）、寻优参数维（param_grid ≤2 参/≤5 值/积 ≤8）。修复：strategy_cancel 位置传参错位、Backtest.tsx tab 嵌套错位（history 曾嵌进 search wrapper）。测试：全仓 pytest 2928 passed；浏览器 E2E：分钟 VWAP 成交价与日 K 开盘差异 -0.7%~+3.7%、组合合成端点 120 重叠日、MC 非空（负期望全押复利饱和 -1.0 为口径正确）、实验列表/转监控/复跑开关/折叠持久化均实测 |
 
 每完成一个阶段，必须更新本节及对应验收证据；不得以 scaffold、占位接口或仅有 UI 的假实现标记完成。
 
-## 12. 当前边界与未实现清单（2026-08-19）
+## 12. 当前边界与未实现清单（2026-08-20）
 
 以下为当前实现的真实边界与尚未实现的能力，任何文档、UI 文案或对外说明不得夸大：
 
@@ -417,10 +418,12 @@ DELETE  /api/backtest/runs/{run_id}
 2. **参数前沿的样本边界**：收益–夏普–回撤 Pareto 分层是严格非支配判定，但只覆盖当前受限候选网格；不得把它宣传成全局最优参数证明。
 3. **成交量约束已落地参与率上限，仍非盘口冲击模型**：撮合支持 `max_participation_pct`（单笔买入 ≤ min(当日量, N 日均量) × p%），截断计入 `buy_volume_cap` 阻塞原因并输出容量统计（利用率分位、`est_capacity_multiple` 线性外推近似，非精确容量解）；仍不模拟盘口深度、部分成交与价格冲击。
 4. **历史时点股票池**：全市场池无法证明 point-in-time。上市天数门控（`min_listed_days`，provider `get_stock_reference_flags` 的 `ssdate`）已可显式过滤次新股，provenance 侧幸存者偏差拆分为 `delisting_bias`（退市标的历史缺失，本地源无法回补，实测 164 只退市标的仅 3 只有 tdx 日 K 历史）与 `listing_age_bias` 两条独立警告；退市偏差无法由面板层修复，告警必须保留。
-5. **撮合引擎仍无 intraday 数据**：`close_t` / `open_t+1` 两档口径，不支持盘中触发。新增的成交可达性诊断（`/runs/{run_id}/fill-reachability`，分钟级价格带成交额 vs 交易名义额的 headroom 抽查）只是事后诊断口径，不构成盘中撮合能力。
+5. **撮合引擎分钟级精度已落地（V1 有边界）**：`bar_precision='minute'` 时信号仍由日 K T-1 计算，成交价换分钟窗口 VWAP（开盘 09:30-09:45 / 尾盘 14:45-15:00），止损/止盈/移损盘中触发（分钟 low/high 触线按线价成交，跳空取分钟 open，同分钟双触保守取不利方向）。边界：仅 position 模式（candidate 互斥 422）；资源 guard 标的 ≤100 且区间 ≤120 交易日；缺分钟数据的标的-交易日回退日 K 价并显式计数（`minute_fallback_daily`）；请求区间超出 catalog 覆盖时 end 钳制到 latest_date（超出部分逐日回退计数）；不模拟盘口深度与冲击；分钟面板加载曾观察到一次 DuckDB 在外接卷上的 SIGSEGV（单次、未复现，运维风险记录）。交易级 bootstrap 与蒙特卡洛重排均为**单仓位全押复利**口径：终值在纯乘法下顺序无关（各分位相同属预期数学性质），对深负期望策略会饱和到 -100%——读 MC 时以 max_drawdown 分布为主，终值分布仅作参考。
 6. **全量独立候选模式**：它评估每笔候选的独立交易质量，候选样本收益曲线按退出事件日等权复利；不是资金受约束的账户净值，故年化、风险调整、基准与相对绩效指标刻意不可用。
 7. **策略寻优 V1 不是全局最优**：`/backtest` 策略寻优 tab 对策略 × 股票池 × 持仓周期 × 撮合做笛卡尔展开（默认上限 120，超出确定性抽样），在最近 N 年冻结窗口上训练期打分、留出期确认，并报告 DSR/PBO。它不搜索策略参数、不调用 Optuna、不写入策略池；推荐仅表示留出收益为正且成交数达标。设计见 `STRATEGY_SEARCH_DESIGN.md`。
 8. **风格归因无 HML 价值因子**：本地风格因子为面板内自建 SMB/UMD/LMV 三因子（三分位、截面 ≥100，`factor_version` 为构造规格指纹，数据版本由快照补充），不含价值因子——本地面板无账面市值/ROE 历史序列，待财务数据接入，绝不伪造代理；OLS 标准误未做 Newey-West 修正。Fama-French 正式接口维持不可用。**F17 可行性实测（2026-08-20，结论：暂缓）**：`fstore-extended.duckdb.financial_report_balance_sheet` 虽有 `total_equity`，但 ① `notice_date` 字段 0/25945 全覆盖（NULL），无法做 point-in-time 公告日纪律；② 数据仅 2025-03 起约 1 年（5 个报告期），无法支撑多年回测窗口的因子序列。接入前置条件：上游财务归档留存 `notice_date` 且回溯 ≥3 年。在此之前 HML/四因子维持显式 unavailable。
 9. **市场状态分桶与 PSR 的口径边界**：regime 分桶的波动阈值用基准全样本中位数（事后口径，含轻度前视，仅作分组解释不作交易信号）；PSR 只校正收益分布形态与样本量，不校正数据窥探/多重试验（后者由寻优的 DSR 承担）；交易级 bootstrap 净值带是顺序无关的单仓位复利诊断，不是账户净值。
+10. **组合级回测是净值合成而非共享资金池撮合**：`POST /strategy/portfolio-combine` 把各成分 Run 的日频净值事后加权合成（daily/monthly/none 再平衡，再平衡假设无摩擦），不模拟策略间资金竞争与同时满仓冲突；合成指标按日频 MetricContext（risk_free=0）计算，不继承成分 run 的无风险利率；端点不落盘、不生成新 Run。
+11. **寻优参数维仍为受限网格**：`param_grid` 展开受 ≤2 参数/≤5 值/积 ≤8 与总场景 120 上限约束，超出确定性抽样；仍不是全局参数优化，DSR/PBO 是诊断不是准入。
 
 **定位声明**：本系统输出为历史研究与分析，不构成荐股、投资建议或下单指令；所有结果须结合方法论告警（幸存者偏差、数据快照、口径差异）解读。
