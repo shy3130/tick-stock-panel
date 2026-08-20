@@ -44,6 +44,7 @@ from app.backtest.optimizer import (
     resolve_window,
     run_search,
     split_train_holdout,
+    _validate_and_expand_param_grid,
 )
 from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
 from app.services.market_overview_builder import symbol_dimension_map
@@ -77,6 +78,8 @@ class OptimizerRequest(BaseModel):
     initial_capital: float = 1_000_000.0
     risk_free_rate: float = 0.0
     include_combos: bool = True
+    param_grid: dict[str, dict[str, list]] | None = None
+
 
 
 class _OptJob:
@@ -240,6 +243,13 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
                 search_ids.append(combo_id)
                 strategy_labels[combo_id] = label
     try:
+        pg_expanded = _validate_and_expand_param_grid(
+            strategy_engine, req.param_grid, strategy_ids=search_ids
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
         scenarios, requested, truncated = expand_search_scenarios(
             strategy_ids=search_ids,
             universes=universes,
@@ -248,9 +258,11 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
             base=base,
             max_scenarios=req.max_scenarios,
             strategy_labels=strategy_labels,
+            param_grid_expanded=pg_expanded,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 
     config_hash = compute_config_hash({
         "strategy_ids": search_ids,
@@ -265,6 +277,7 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
         "min_trades": req.min_trades,
         "max_drawdown": req.max_drawdown,
         "max_scenarios": req.max_scenarios,
+        "param_grid": req.param_grid or {},
     })
     experiment_id = f"so-{uuid.uuid4().hex[:12]}"
     _cleanup_stale_jobs()
@@ -319,6 +332,7 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
                 extra_warnings=window_warnings,
                 progress_cb=_progress_cb,
                 cancel_event=job.cancel_event,
+                param_grid=req.param_grid,
             )
             job.snapshot = exp.to_dict()
         except Exception as exc:  # noqa: BLE001

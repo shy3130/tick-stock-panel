@@ -273,6 +273,7 @@ class SearchScenarioResult:
     train_n_obs: int = 0
     phases: list[dict] = field(default_factory=list)
     strategy_label: str = ""
+    params: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -299,6 +300,8 @@ class SearchExperiment:
     completed: int = 0
     total: int = 0
     runtime: dict = field(default_factory=dict)
+    param_grid: dict | None = None
+
 
     def to_dict(self) -> dict:
         return {
@@ -350,9 +353,12 @@ def _set_search_runtime(
     experiment.updated_at = experiment.runtime["updated_at"]
 
 
-def _scenario_id(strategy_id: str, universe_id: str, holding_days: int, matching: str) -> str:
+def _scenario_id(strategy_id: str, universe_id: str, holding_days: int, matching: str, params: dict | None = None) -> str:
     raw = f"{strategy_id}|{universe_id}|{holding_days}|{matching}"
+    if params:
+        raw += "|" + json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
     return "sc-" + hashlib.md5(raw.encode()).hexdigest()[:12]
+
 
 
 def leaf_strategy_ids(strategy_engine, strategy_ids: list[str]) -> list[str]:
@@ -441,6 +447,108 @@ def install_combo_strategies(strategy_engine, specs: list[tuple[str, tuple[str, 
         put(combo_id, make_combo_strategy(combo_id, children, merge_mode=merge_mode, label=label))
         installed.append(combo_id)
     return installed
+def _get_param_defs(strategy_engine: Any, strategy_id: str) -> list[dict]:
+    """从策略定义中取 params 列表（[{id, type, default, ...}]）。失败返回空。"""
+    try:
+        spec = strategy_engine.get(strategy_id)
+    except Exception:  # noqa: BLE001
+        return []
+    meta = getattr(spec, "meta", {}) or {}
+    return list(meta.get("params", []) or [])
+
+
+def _validate_and_expand_param_grid(
+    strategy_engine: Any,
+    raw_grid: dict[str, dict[str, list[Any]]] | None,
+    *,
+    strategy_ids: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """校验 param_grid 并返回 {sid: [ {param: value, ...}, ... ]}。
+
+    规则:
+    - 每策略最多 2 个参数
+    - 每参数最多 5 个值
+    - 单策略参数笛卡尔积 ≤8
+    - 参数名必须存在于该策略的 meta.params 定义
+    - 值必须可按定义类型解析（int/float 支持字符串解析；bool 只接受 true/false 字面）
+    未提供网格的策略返回 [{}]（单实例）。
+    非法直接抛 ValueError（中文原因，供上层转 422）。
+    """
+    if not raw_grid:
+        return {sid: [{}] for sid in strategy_ids}
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for sid in strategy_ids:
+        grid = (raw_grid or {}).get(sid) or {}
+        defs_list = _get_param_defs(strategy_engine, sid)
+        defs = {d.get("id"): d for d in defs_list if d.get("id")}
+        if not grid:
+            out[sid] = [{}]
+            continue
+        if len(grid) > 2:
+            raise ValueError(f"策略 {sid} 参数个数超过上限 2")
+        param_lists: list[list[tuple[str, Any]]] = []
+        for pname, values in grid.items():
+            if pname not in defs:
+                raise ValueError(f"策略 {sid} 不存在参数 {pname}")
+            pdef = defs[pname]
+            ptype: str = str(pdef.get("type", "float"))
+            if len(values) > 5:
+                raise ValueError(f"策略 {sid} 参数 {pname} 取值个数超过上限 5")
+            coerced: list[Any] = []
+            for v in values:
+                try:
+                    if ptype == "int":
+                        if isinstance(v, bool):
+                            coerced.append(int(v))
+                        else:
+                            coerced.append(int(str(v).strip()))
+                    elif ptype == "float":
+                        if isinstance(v, bool):
+                            coerced.append(float(v))
+                        else:
+                            coerced.append(float(str(v).strip()))
+                    elif ptype == "bool":
+                        if isinstance(v, bool):
+                            coerced.append(bool(v))
+                        elif isinstance(v, str):
+                            lv = v.strip().lower()
+                            if lv == "true":
+                                coerced.append(True)
+                            elif lv == "false":
+                                coerced.append(False)
+                            else:
+                                raise ValueError("bool")
+                        elif v in (0, 1):
+                            coerced.append(bool(v))
+                        else:
+                            raise ValueError("bool")
+                    else:
+                        # select 或其他：保留原值（字符串化由调用方处理）
+                        coerced.append(v)
+                except Exception:
+                    raise ValueError(f"策略 {sid} 参数 {pname} 值 {v!r} 无法转为定义类型 {ptype}")
+            # 去重保序
+            seen: set[tuple] = set()
+            uniq: list[Any] = []
+            for c in coerced:
+                key = (type(c).__name__, c)
+                if key not in seen:
+                    seen.add(key)
+                    uniq.append(c)
+            param_lists.append([(pname, c) for c in uniq])
+        # 笛卡尔
+        combos: list[dict[str, Any]] = []
+        for prod in itertools.product(*param_lists):
+            combos.append({k: v for k, v in prod})
+        if len(combos) > 8:
+            raise ValueError(f"策略 {sid} 参数组合数超过上限 8")
+        out[sid] = combos or [{}]
+    # 其余策略补默认单实例
+    for sid in strategy_ids:
+        if sid not in out:
+            out[sid] = [{}]
+    return out
 
 
 def expand_search_scenarios(
@@ -453,8 +561,14 @@ def expand_search_scenarios(
     max_scenarios: int = DEFAULT_MAX_SCENARIOS,
     seed: int = 0,
     strategy_labels: dict[str, str] | None = None,
+    param_grid_expanded: dict[str, list[dict[str, Any]]] | None = None,
 ) -> tuple[list[SearchScenario], int, bool]:
-    """笛卡尔展开; 超预算时按稳定哈希抽样。"""
+    """笛卡尔展开；超预算时按稳定哈希抽样。
+
+    新增 param_grid_expanded: {strategy_id: [ {param:val, ...}, ... ] }
+    每个策略的实例数 = len(其 param 组合)，无网格则为 1。
+    场景 id 包含 params 指纹；config.params 回填具体取值。
+    """
     if not strategy_ids:
         raise ValueError("至少选择一个策略")
     holdings = sorted({int(v) for v in holding_days if int(v) >= 1})
@@ -465,26 +579,37 @@ def expand_search_scenarios(
         raise ValueError("成交口径必须是 close_t 或 open_t+1")
     cap = min(HARD_MAX_SCENARIOS, max(1, int(max_scenarios)))
     labels = strategy_labels or {}
+    pg = param_grid_expanded or {sid: [{}] for sid in strategy_ids}
 
-    combos = list(itertools.product(strategy_ids, universes, holdings, matches))
+    # 构建带参数维的笛卡尔积
+    combos: list[tuple] = []
+    for sid in strategy_ids:
+        pcombos = pg.get(sid) or [{}]
+        for pcombo in pcombos:
+            combos.extend(itertools.product([sid], [pcombo], universes, holdings, matches))
+
     requested = len(combos)
     if requested > cap:
         ranked = sorted(
             combos,
             key=lambda item: hashlib.md5(
-                f"{seed}|{item[0]}|{item[1].universe_id}|{item[2]}|{item[3]}".encode()
+                f"{seed}|{item[0]}|{json.dumps(item[1], sort_keys=True, ensure_ascii=False, default=str)}|{item[2].universe_id}|{item[3]}|{item[4]}".encode()
             ).hexdigest(),
         )
         combos = ranked[:cap]
+
     scenarios: list[SearchScenario] = []
-    for strategy_id, universe, holding, matching in combos:
-        sid = _scenario_id(strategy_id, universe.universe_id, holding, matching)
+    for strategy_id, pcombo, universe, holding, matching in combos:
+        sid = _scenario_id(strategy_id, universe.universe_id, holding, matching, pcombo or None)
+        cfg_params = dict(base.params or {})
+        if pcombo:
+            cfg_params.update(pcombo)
         cfg = StrategyBacktestConfig(
             strategy_id=strategy_id,
             symbols=list(universe.symbols) if universe.symbols is not None else None,
             start=base.start,
             end=base.end,
-            params=dict(base.params or {}),
+            params=cfg_params or None,
             overrides=base.overrides,
             matching=matching,  # type: ignore[arg-type]
             fees_pct=base.fees_pct,
@@ -508,6 +633,7 @@ def expand_search_scenarios(
             config=cfg,
         ))
     return scenarios, requested, requested > cap
+
 
 
 def compute_config_hash(payload: dict) -> str:
@@ -782,6 +908,7 @@ def run_search(
     max_workers: int = OPTIMIZER_MAX_WORKERS,
     progress_cb: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
+    param_grid: dict | None = None,
 ) -> SearchExperiment:
     """训练期全量评估 → DSR/PBO → 留出期只重跑 Top-K。"""
     warnings = list(extra_warnings or [])
@@ -806,8 +933,11 @@ def run_search(
         completed=0,
         total=len(scenarios),
     )
+    if param_grid is not None:
+        experiment.param_grid = param_grid
     _set_search_runtime(experiment, stage="train", label="训练评估", current="正在排队训练场景")
     store.save(experiment)
+
 
     train_curves: dict[str, list[dict]] = {}
     train_returns: dict[str, np.ndarray] = {}
@@ -845,6 +975,7 @@ def run_search(
                 train_stats=dict(raw.stats or {}),
                 error=raw.error,
                 elapsed_ms=raw.elapsed_ms,
+                params=dict(sc.config.params or {}),
             )
             if not raw.error:
                 result.score = score_scenario(result.train_stats, objective)

@@ -778,6 +778,45 @@ def _strategy_listing_dates():
         return None
     return df.select("symbol", "listing_date")
 
+def _strategy_minute_data(symbols: list[str] | None, start: date, end: date):
+    """F14 分钟级撮合: 经 provider 公开分钟接口构建 MinuteExecutionData。
+
+    只读调用 provider.get_minute(symbols, start_time, end_time, asset_type='stock',
+    freq='1m') (fquant 多日 A 股走 catalog route 逐日合并; 归一面板列
+    symbol/datetime/open/high/low/close/volume)。provider 不可用 / 查询失败 /
+    空面板 → None, service guard 对 bar_precision=minute fail-closed 报错,
+    不静默降级日 K。symbols 为空 (全市场) → None (资源 guard 也不允许)。
+    """
+    from app.backtest.engine import build_minute_execution
+
+    if not symbols:
+        logger.warning("分钟撮合: 未指定标的清单, 分钟数据不加载 (全市场超出资源上限)")
+        return None
+    try:
+        provider = _get_data_provider("minute")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("分钟撮合: 分钟数据 provider 不可用 (%s)", e)
+        return None
+    get_minute = getattr(provider, "get_minute", None)
+    if not callable(get_minute):
+        logger.warning("分钟撮合: 当前 provider 不提供 get_minute 接口")
+        return None
+    try:
+        minute_panel = get_minute(
+            list(dict.fromkeys(symbols)),
+            datetime(start.year, start.month, start.day, 9, 30),
+            datetime(end.year, end.month, end.day, 15, 0),
+            "stock",
+            "1m",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("分钟撮合: 分钟面板查询失败 (%s)", e)
+        return None
+    if minute_panel is None or minute_panel.is_empty():
+        logger.warning("分钟撮合: 分钟面板为空 (缺数据的标的-交易日将回退日 K 价并计数)")
+        return None
+    return build_minute_execution(minute_panel)
+
 def _resolve_benchmark_run(
     request: Request,
     run_id: str,
@@ -871,6 +910,9 @@ def _strategy_backtest_config(
         max_participation_pct=req.max_participation_pct,
         participation_volume_window=req.participation_volume_window,
         min_listed_days=req.min_listed_days,
+        # F14 成交精度: minute 仅在 strategy_run / SSE / rerun 主链路提供分钟数据;
+        # robustness / 诊断等共用入口未提供 → service guard fail-closed 报错。
+        bar_precision=req.bar_precision,
     )
 
 
@@ -935,6 +977,9 @@ class StrategyBacktestRequest(BaseModel):
     max_participation_pct: float | None = Field(default=None, gt=0.0, le=1.0)
     participation_volume_window: int = Field(default=5, ge=1, le=60)
     min_listed_days: int = Field(default=0, ge=0, le=3650)
+    # F14 成交精度: daily = 日 K 收盘/开盘口径 (默认); minute = 分钟 VWAP 撮合
+    # + 盘中风控 (仅 position 模式, 标的 ≤100 / 交易日 ≤120, 422 校验)。
+    bar_precision: Literal["daily", "minute"] = "daily"
     # F7 实验资产溯源: 从寻优/参数网格场景固化为 Run 时由前端携带,
     # 随 config 持久化, 供 GET /experiments 统计各实验已固化 Run 数; 其余调用方缺省。
     source_experiment_id: str | None = Field(default=None, max_length=64)
@@ -955,6 +1000,13 @@ class StrategyBacktestRequest(BaseModel):
         """benchmark_symbol 与 benchmark_run_id 互斥; 未显式传 symbol 时允许仅给 run_id。"""
         if self.benchmark_run_id and "benchmark_symbol" in self.model_fields_set:
             raise ValueError("benchmark_symbol 与 benchmark_run_id 互斥，只能二选一")
+        return self
+
+    @model_validator(mode="after")
+    def _minute_precision_requires_position_mode(self):
+        """F14: 分钟级撮合仅支持仓位模拟 — 候选执行为独立信号路径, 不支持分钟口径。"""
+        if self.bar_precision == "minute" and self.mode == "full":
+            raise ValueError("bar_precision=minute 仅支持仓位模拟 (mode=position)，全量候选模式不支持分钟级撮合")
         return self
 
 @router.post("/strategy/run")
@@ -979,10 +1031,18 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     )
     # B6 上市天数门控: 仅在启用时取上市日期表; provider 不可用时传 None,
     # service 侧显式告警并跳过门控 (不伪造)。
+    # F14 分钟级撮合: minute 时经 provider 分钟接口构建执行数据; 解析失败 →
+    # None → service guard 中文报错 (fail-closed, 不静默降级日 K)。
+    minute_data = (
+        _strategy_minute_data(req.symbols, start, end)
+        if req.bar_precision == "minute"
+        else None
+    )
     result = svc.run(
         cfg,
         listing_dates=_strategy_listing_dates() if req.min_listed_days > 0 else None,
         benchmark_run=benchmark_run,
+        minute_data=minute_data,
     )
     payload = _attach_run_provenance(
         json_safe(asdict(result)),
@@ -1454,8 +1514,9 @@ def _make_job_key(
     benchmark_symbol: str = "000001.INDEX", risk_free_rate: float = 0.0,
     max_participation_pct: float | None = None, participation_volume_window: int = 5,
     min_listed_days: int = 0, benchmark_run_id: str | None = None,
+    bar_precision: str = "daily",
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{stamp_tax_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}|{max_participation_pct}|{participation_volume_window}|{min_listed_days}|{benchmark_run_id}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{stamp_tax_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}|{max_participation_pct}|{participation_volume_window}|{min_listed_days}|{benchmark_run_id}|{bar_precision}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 def _make_factor_job_key(
@@ -1510,6 +1571,9 @@ async def strategy_stream(
     max_participation_pct: float | None = Query(default=None, gt=0.0, le=1.0),
     participation_volume_window: int = Query(default=5, ge=1, le=60),
     min_listed_days: int = Query(default=0, ge=0, le=3650),
+    # F14 成交精度: minute = 分钟 VWAP 撮合 (仅 position 模式; 标的 ≤100/交易日 ≤120
+    # 由 service 资源 guard 中文报错)。开流前校验避免僵尸任务。
+    bar_precision: Literal["daily", "minute"] = "daily",
 ):
     """SSE 流式策略回测: 实时推送进度, 完成后推送结果, 支持重连 (刷新/切页后恢复)。
 
@@ -1523,6 +1587,14 @@ async def strategy_stream(
       - error: {message}
     """
     from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
+
+    # F14: minute+full 在开流前拒绝 (与 POST /strategy/run 的 422 同口径),
+    # 避免注册永不完成的任务。
+    if bar_precision == "minute" and mode == "full":
+        raise HTTPException(
+            status_code=422,
+            detail="bar_precision=minute 仅支持仓位模拟 (mode=position)，全量候选模式不支持分钟级撮合",
+        )
 
     # 参数在开流前解析/校验 (引擎创建/任务注册之前): 非法输入得到结构化 4xx,
     # 而不是 500 或 SSE 开始后断流。
@@ -1584,6 +1656,7 @@ async def strategy_stream(
         mode, holding_days, regime_filter, benchmark_symbol_norm, risk_free_rate,
         max_participation_pct, participation_volume_window, min_listed_days,
         benchmark_run_id,
+        bar_precision,
     )
 
     _cleanup_stale_jobs()
@@ -1628,19 +1701,30 @@ async def strategy_stream(
                 max_participation_pct=max_participation_pct,
                 participation_volume_window=participation_volume_window,
                 min_listed_days=min_listed_days,
+                bar_precision=bar_precision,
             )
 
             # 上市日期表在工作线程内取 (DuckDB 查询不阻塞事件循环);
-            # min_listed_days=0 时跳过。
+            # min_listed_days=0 时跳过。F14 分钟执行数据同理在工作线程内解析。
             def _run_backtest():
                 try:
                     listing_dates = (
                         _strategy_listing_dates() if min_listed_days > 0 else None
                     )
+                    minute_data = (
+                        _strategy_minute_data(
+                            [s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
+                            start_date,
+                            end_date,
+                        )
+                        if bar_precision == "minute"
+                        else None
+                    )
                     result = svc.run(
                         cfg, lambda d: job.progress.append(d), job.cancel_event,
                         listing_dates=listing_dates,
                         benchmark_run=benchmark_run,
+                        minute_data=minute_data,
                     )
                     job.result = result
                     job.done = True
@@ -1851,6 +1935,12 @@ async def strategy_cancel(request: Request):
         _get("regime_filter") or None,
         _get("benchmark_symbol", "000001.INDEX"),
         float(_get("risk_free_rate", "0")),
+        # 关键字传参: 位置错位会让 bar_precision 落进 max_participation_pct 槽位导致永不匹配
+        max_participation_pct=float(_get("max_participation_pct")) if _get("max_participation_pct") else None,
+        participation_volume_window=int(_get("participation_volume_window", "5")),
+        min_listed_days=int(_get("min_listed_days", "0")),
+        benchmark_run_id=_get("benchmark_run_id") or None,
+        bar_precision=_get("bar_precision", "daily"),
     )
     job = _running_jobs.get(job_key)
     if job and not job.done:
@@ -2203,7 +2293,14 @@ def _rerun_execute(request: Request, run: BacktestRun) -> tuple[dict, str]:
         benchmark_symbol=cfg.get("benchmark_symbol", "000001.INDEX"),
         benchmark_run_id=rerun_benchmark_run_id,
         risk_free_rate=cfg.get("risk_free_rate", 0.0),
-    ), benchmark_run=rerun_benchmark_run)
+        bar_precision=cfg.get("bar_precision", "daily"),
+    ), benchmark_run=rerun_benchmark_run, minute_data=(
+        # F14: 原 Run 为分钟精度时按原 config 重建分钟执行数据; 解析失败 →
+        # None → service guard 报错 (复跑不静默降级日 K 口径)。
+        _strategy_minute_data(cfg.get("symbols"), start, end)
+        if cfg.get("bar_precision") == "minute" and cfg.get("symbols")
+        else None
+    ))
     if result.error:
         raise HTTPException(status_code=400, detail=result.error)
     payload = _attach_run_provenance(
@@ -2243,6 +2340,8 @@ def _experiment_number(value) -> float | None:
 def _optimizer_experiment_rows(data_dir) -> tuple[list[dict], list[str]]:
     """扫描寻优实验持久化目录 → (统一摘要行, 警告); 单文件损坏跳过不整体失败。"""
     from app.backtest.optimizer import OptimizerExperimentStore
+    from app.backtest.runtime import format_params
+
 
     store = OptimizerExperimentStore(data_dir)
     rows: list[dict] = []
@@ -2265,11 +2364,15 @@ def _optimizer_experiment_rows(data_dir) -> tuple[list[dict], list[str]]:
             top = scored[0]
             # 优先留出期 (样本外) 指标, 未跑留出的场景回退训练期口径
             stats = top.holdout_stats or top.train_stats or {}
+            base_label = (
+                f"{top.strategy_label or top.strategy_id} · {top.universe_label}"
+                f" · {top.holding_days}日 · {top.matching}"
+            )
+            pstr = format_params(getattr(top, "params", None))
+            if pstr:
+                base_label = f"{base_label} · {pstr}"
             best_row = {
-                "label": (
-                    f"{top.strategy_label or top.strategy_id} · {top.universe_label}"
-                    f" · {top.holding_days}日 · {top.matching}"
-                ),
+                "label": base_label,
                 "score": _experiment_number(top.score),
                 "total_return": _experiment_number(stats.get("total_return")),
                 "sharpe": _experiment_number(stats.get("sharpe")),
@@ -2438,3 +2541,66 @@ def run_to_monitor_rule(run_id: str, request: Request):
     if engine is not None:
         engine.set_rules(monitor_rules.load_all(data_dir))
     return {"rule": rule, "created": True}
+
+# ================================================================
+# F15 组合级回测 — 已固化 Run 日频净值的事后加权合成 (纯诊断, 不落盘)
+# ================================================================
+
+class PortfolioCombineItemIn(BaseModel):
+    """单个组合成分: run_id + 原始权重 (正数; 服务端统一归一化)。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(..., min_length=1, max_length=64)
+    weight: float = Field(..., gt=0.0)
+
+
+class PortfolioCombineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PortfolioCombineItemIn] = Field(..., min_length=2, max_length=8)
+    rebalance: Literal["daily", "monthly", "none"] = "daily"
+
+
+@router.post("/portfolio-combine")
+def portfolio_combine(req: PortfolioCombineRequest, request: Request):
+    """F15 组合级回测: 2~8 个已固化策略 Run 的日频净值加权合成。
+
+    口径 = 独立回测净值事后加权合成, 非共享资金池撮合 (详见
+    app.backtest.portfolio_combine 模块 docstring); 响应 warnings 携带
+    口径提示与归一化说明。纯诊断, 结果不落盘、不生成新 Run。
+    语义类拒绝 (候选执行/因子 run/共同交易日不足) → 422 中文原因;
+    run 不存在 → 404 指出 id。
+    """
+    # 局部导入: 与同文件其他端点一致, 避免模块级 import 区并发编辑冲突。
+    from app.backtest.portfolio_combine import (
+        PortfolioCombineError,
+        combine_run_equities,
+    )
+
+    run_ids = [item.run_id for item in req.items]
+    duplicates = sorted({rid for rid in run_ids if run_ids.count(rid) > 1})
+    if duplicates:
+        raise HTTPException(
+            status_code=422,
+            detail=f"run_id 重复: {', '.join(duplicates)}；同一 run 不可作为多个成分",
+        )
+
+    store = _run_store(request)
+    loaded: list[tuple[BacktestRun, float]] = []
+    for item in req.items:
+        try:
+            run = store.get(item.run_id)
+        except RunIdError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except KeyError as e:
+            raise HTTPException(
+                status_code=404, detail=f"run 不存在: {item.run_id}"
+            ) from e
+        loaded.append((run, item.weight))
+
+    try:
+        result = combine_run_equities(loaded, req.rebalance)
+    except PortfolioCombineError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return json_safe(result)

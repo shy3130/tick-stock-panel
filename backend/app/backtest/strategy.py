@@ -16,7 +16,7 @@ import polars as pl
 from app.backtest.metrics import MetricContext, probabilistic_sharpe_ratio, relative_performance_metrics
 from app.backtest.robustness import returns_from_equity_curve
 from app.backtest.universe_gating import apply_listing_age_gate
-from app.backtest.engine import BacktestEngine, MatcherConfig
+from app.backtest.engine import BacktestEngine, MatcherConfig, MinuteExecutionData
 from app.strategy.engine import StrategyDef, StrategyEngine
 
 if TYPE_CHECKING:
@@ -35,6 +35,10 @@ BENCHMARK_NAMES = {
 # 裸码指数前缀: 000 (上证系列) / 399 (深证系列) / 880 (板块指数) 与
 # tencent_quote 等既有口径一致。
 _INDEX_CODE_PREFIXES = ("000", "399", "880")
+
+# F14 分钟撮合资源 guard 上限: 标的数 ≤100 且正式区间交易日 ≤120。
+_MINUTE_MAX_SYMBOLS = 100
+_MINUTE_MAX_TRADE_DAYS = 120
 
 
 def _infer_benchmark_asset_type(symbol: str) -> str:
@@ -97,6 +101,9 @@ class StrategyBacktestConfig:
     # B6 上市天数门控: 上市未满 N 天的标的不进入回测面板 (买入候选与持仓
     # 均不可能出现)。0=关闭。门控由 run(listing_dates=...) 提供。
     min_listed_days: int = 0
+    # F14 成交精度: 'daily' = 日 K 收盘/开盘口径 (默认, 行为不变);
+    # 'minute' = 分钟 VWAP 撮合 + 盘中风控 (仅 position 模式, 由 run() guard)。
+    bar_precision: str = "daily"
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
@@ -166,6 +173,10 @@ class StrategyBacktestService:
         # F9 历史 Run 净值基准: {"run_id": str, "label": str, "equity_curve": [...]}
         # 由 API 层从 run_store 解析传入; None = 走 benchmark_symbol 路径。
         benchmark_run: "dict | None" = None,
+        # F14 分钟执行数据: 由 API 层经 provider 分钟接口解析后传入 (与
+        # benchmark_run/listing_dates 同为依赖注入, service 不直接碰 provider);
+        # None = 日 K 路径。minute 时缺失 → 错误 (fail-closed, 不静默降级)。
+        minute_data: "MinuteExecutionData | None" = None,
     ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:16]
@@ -186,6 +197,18 @@ class StrategyBacktestService:
                 f"benchmark_run_id={config.benchmark_run_id} 未提供解析后的 Run 净值，"
                 "该调用路径暂不支持历史 Run 基准"
             )
+
+        # F14 成交精度 guard (fail-closed, 面板加载前拒绝):
+        # - 枚举外值直接报错;
+        # - minute + 全量候选模式: 候选执行为独立信号路径, 不支持分钟撮合 (文档化边界);
+        # - minute 但调用路径未提供分钟执行数据 (provider 不可用等): 不静默降级日 K。
+        if config.bar_precision not in ("daily", "minute"):
+            return _err(f"bar_precision 仅支持 daily/minute，收到 {config.bar_precision!r}")
+        if config.bar_precision == "minute":
+            if config.mode == "full":
+                return _err("分钟级撮合暂不支持全量候选模式 (mode=full)，请使用仓位模拟 (mode=position)")
+            if minute_data is None:
+                return _err("bar_precision=minute 需要分钟执行数据，但当前调用路径未提供（provider 分钟接口不可用或未接入）")
 
         # 获取策略定义
         try:
@@ -275,6 +298,23 @@ class StrategyBacktestService:
         formal_range = self._date_range_mask(panel, config.start, config.end)
         if not formal_range.any():
             return _err("正式回测区间内无数据")
+
+        # F14 分钟撮合资源 guard: 正式区间实际标的数 ≤100 且交易日 ≤120,
+        # 超出不启动计算 (分钟面板加载与逐日逐分钟检查代价过高), 中文报错。
+        if config.bar_precision == "minute":
+            formal_panel = panel.filter(formal_range)
+            n_symbols = formal_panel["symbol"].n_unique()
+            n_days = formal_panel["date"].n_unique()
+            if n_symbols > _MINUTE_MAX_SYMBOLS or n_days > _MINUTE_MAX_TRADE_DAYS:
+                reasons: list[str] = []
+                if n_symbols > _MINUTE_MAX_SYMBOLS:
+                    reasons.append(f"标的数 {n_symbols} > {_MINUTE_MAX_SYMBOLS}")
+                if n_days > _MINUTE_MAX_TRADE_DAYS:
+                    reasons.append(f"交易日 {n_days} > {_MINUTE_MAX_TRADE_DAYS}")
+                return _err(
+                    "分钟级撮合超出资源上限（" + "；".join(reasons) + "），"
+                    "请缩小股票池或回测区间，或改用日 K 成交精度"
+                )
 
         t_signal = time.perf_counter()
         _emit_stage("signals", "计算信号与评分")
@@ -366,9 +406,17 @@ class StrategyBacktestService:
                 cancel_event,
             )
         else:
-            result = self.engine.simulate_portfolio(
-                sim_panel, sim_entry_mask, sim_exit_mask, matcher_config, _sim_progress, cancel_event,
-            )
+            # F14: 仅分钟模式追加 minute_data 关键字 — 日级路径的调用形状与
+            # 既有 stub/测试完全一致 (不引入新参数耦合)。
+            if config.bar_precision == "minute" and minute_data is not None:
+                result = self.engine.simulate_portfolio(
+                    sim_panel, sim_entry_mask, sim_exit_mask, matcher_config,
+                    _sim_progress, cancel_event, minute_data=minute_data,
+                )
+            else:
+                result = self.engine.simulate_portfolio(
+                    sim_panel, sim_entry_mask, sim_exit_mask, matcher_config, _sim_progress, cancel_event,
+                )
         timing_ms["simulate"] = round((time.perf_counter() - t_sim) * 1000, 1)
 
         # 检查是否被取消
@@ -390,6 +438,9 @@ class StrategyBacktestService:
         # 前端与当前策略列表 def_hash 比对提示「策略定义已变更」。候选执行模式
         # 同样写入 —— 它是定义指纹, 不是时序指标; composite/寻优临时组合亦覆盖。
         result.stats["strategy_def_hash"] = s.def_hash
+        # F14 成交精度随 stats 持久化 (minute 时引擎另附 minute_fallback_daily
+        # 回退计数; daily 无该键)。
+        result.stats["bar_precision"] = config.bar_precision
 
         is_candidate_execution = result.stats.get("full_kind") == "candidate_execution"
         benchmark_source: dict = {"kind": "none", "label": ""}
@@ -1241,6 +1292,7 @@ class StrategyBacktestService:
             "max_participation_pct": c.max_participation_pct,
             "participation_volume_window": c.participation_volume_window,
             "min_listed_days": c.min_listed_days,
+            "bar_precision": c.bar_precision,
         }
 
     @staticmethod

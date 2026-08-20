@@ -257,6 +257,210 @@ class PanelCache:
 
 
 # ================================================================
+# F14 分钟级执行数据 — (symbol, date) → 分钟 bar 序列 + VWAP 窗口价
+# ================================================================
+
+# A 股分钟时间戳由 provider 侧 generated_minute_time 重建 (上午 09:31..11:30,
+# 下午 13:01..15:00)。窗口口径按时钟区间取分钟:
+#   开盘窗口 09:30-09:45 (open_t+1 成交) / 尾盘窗口 14:45-15:00 (close_t 成交)。
+_OPEN_WINDOW_START_HM = 930
+_OPEN_WINDOW_END_HM = 945
+_TAIL_WINDOW_START_HM = 1445
+_TAIL_WINDOW_END_HM = 1500
+
+
+def _minute_float(value) -> float:
+    """分钟字段 → 有限 float; 非法 (None/NaN/负价) 归 0 由调用方按无效处理。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if np.isfinite(v) else 0.0
+
+
+class MinuteExecutionData:
+    """F14 分钟执行数据: 按 (symbol, YYYY-MM-DD) 组织的当日分钟 bar 序列。
+
+    bar 五元组: (hhmm, open, high, low, close, volume), 时间升序。
+    由 build_minute_execution 从 provider 分钟面板构建; 引擎撮合时只读。
+    """
+
+    def __init__(self, bars: dict[tuple[str, str], list[tuple[int, float, float, float, float, float]]]) -> None:
+        self._bars = bars
+        self._vwap_cache: dict[tuple[str, str, str], float | None] = {}
+
+    # -- 查询 ------------------------------------------------------- #
+    def has_bars(self, symbol: str, date_str: str) -> bool:
+        return (symbol, str(date_str)[:10]) in self._bars
+
+    def window_vwap(self, symbol: str, date_str: str, window: str) -> float | None:
+        """窗口 VWAP: ``open``=09:30-09:45, ``tail``=14:45-15:00。
+
+        窗口内分钟量全 0 → open 窗口向当日后续分钟顺延 / tail 窗口向更早分钟
+        回溯 (15:00 后无分钟, 尾盘只能向前找流动性), 直至累计量 > 0;
+        整日无分钟量 → None (调用方回退日 K 价并计 minute_fallback_daily)。
+        VWAP 用 bar close × volume (provider 分钟桶 open=high=low=close=price)。
+        """
+        key = (symbol, str(date_str)[:10], window)
+        if key in self._vwap_cache:
+            return self._vwap_cache[key]
+        bars = self._bars.get((symbol, str(date_str)[:10]))
+        value = self._window_vwap_uncached(bars, window) if bars else None
+        self._vwap_cache[key] = value
+        return value
+
+    @staticmethod
+    def _window_vwap_uncached(bars: list[tuple[int, float, float, float, float, float]], window: str) -> float | None:
+        n = len(bars)
+        if n == 0:
+            return None
+        lo, hi = (
+            (_OPEN_WINDOW_START_HM, _OPEN_WINDOW_END_HM)
+            if window == "open"
+            else (_TAIL_WINDOW_START_HM, _TAIL_WINDOW_END_HM)
+        )
+        in_win = [i for i, b in enumerate(bars) if lo <= b[0] <= hi]
+        if in_win:
+            i0, i1 = in_win[0], in_win[-1]
+        elif window == "open":
+            # 窗口内无分钟 (时段异常): 从窗口之后的第一根分钟起顺延; 全日在窗口前 → 第 0 根。
+            later = [i for i, b in enumerate(bars) if b[0] > hi]
+            i0 = i1 = later[0] if later else 0
+        else:
+            earlier = [i for i, b in enumerate(bars) if b[0] < lo]
+            i0 = i1 = earlier[-1] if earlier else n - 1
+
+        def _vol(i: int) -> float:
+            return max(float(bars[i][5] or 0.0), 0.0)
+
+        vol_sum = sum(_vol(i) for i in range(i0, i1 + 1))
+        # 顺延: 窗口量全 0 → open 向后 / tail 向前逐根扩展窗口, 直至累计量 > 0。
+        while vol_sum <= 0 and (i1 + 1 < n if window == "open" else i0 - 1 >= 0):
+            if window == "open":
+                i1 += 1
+                vol_sum += _vol(i1)
+            else:
+                i0 -= 1
+                vol_sum += _vol(i0)
+        if vol_sum <= 0:
+            return None
+        num = den = 0.0
+        for i in range(i0, i1 + 1):
+            v = _vol(i)
+            price = float(bars[i][4])
+            if v > 0 and price > 0 and np.isfinite(price):
+                num += price * v
+                den += v
+        return num / den if den > 0 else None
+
+    # -- 撮合辅助 --------------------------------------------------- #
+#
+    def apply_fill_prices(
+        self,
+        panel_symbols: np.ndarray,
+        panel_dates: np.ndarray,
+        base_prices: np.ndarray,
+        window: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """用窗口 VWAP 覆盖日级成交价数组, 返回 (新价格数组, 回退标记数组)。
+
+        缺分钟数据 / 整日零量 / VWAP 非法 → 保留日 K 原价并置回退标记
+        (True 的行在实际成交时由引擎计 minute_fallback_daily)。
+        """
+        out = np.array(base_prices, dtype=float, copy=True)
+        flags = np.zeros(len(out), dtype=bool)
+        for i in range(len(out)):
+            vwap = self.window_vwap(str(panel_symbols[i]), str(panel_dates[i])[:10], window)
+            if vwap is not None and np.isfinite(vwap) and vwap > 0:
+                out[i] = float(vwap)
+            else:
+                flags[i] = True
+        return out, flags
+
+    def intraday_risk_exit(self, symbol: str, date_str: str, pos: dict, config: MatcherConfig) -> tuple[float, str] | None:
+        """盘中风控: 逐分钟检查止损/止盈/移动止损/回撤止盈, 返回 (成交价, 原因) 或 None。
+
+        规则 (与日级 _process_risk_exits 同构, 粒度细化到分钟):
+        - 分钟 low ≤ 下行风控线 (止损/移动止损/回撤止盈取最高线) → 以风控线成交;
+          分钟 open 已低于风控线 (跳空) → 以该分钟 open 成交 (保守);
+        - 分钟 high ≥ 止盈线 → 以止盈线成交; open 已高于止盈线 → 以 open 成交;
+        - 同一分钟双触 (low 触风控线且 high 触止盈线) → 保守取不利方向:
+          按下行风控离场 (假定先发生了不利变动), 成交价取风控线;
+        - 移动止损/回撤止盈的峰值 (max_high) 随分钟 high 盘中演进 (线盘中上移);
+          当前分钟的 high 先参与触发判断、后更新峰值, 避免同根自触发。
+        """
+        bars = self._bars.get((symbol, str(date_str)[:10]))
+        if not bars:
+            return None
+        try:
+            entry_price = float(pos["entry_price"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if entry_price <= 0:
+            return None
+        peak = float(pos.get("max_high") or entry_price)
+        for _hhmm, o, h, l, c, _v in bars:
+            lines: list[tuple[float, str]] = []
+            if config.stop_loss_pct is not None:
+                lines.append((entry_price * (1 - abs(config.stop_loss_pct)), "stop_loss"))
+            if config.trailing_stop_pct is not None and peak > 0:
+                lines.append((peak * (1 - abs(config.trailing_stop_pct)), "trailing_stop"))
+            activate_pct = getattr(config, "trailing_take_profit_activate_pct", None)
+            drawdown_pct = getattr(config, "trailing_take_profit_drawdown_pct", None)
+            if activate_pct is not None and drawdown_pct is not None and peak > entry_price:
+                peak_profit = peak / entry_price - 1
+                if peak_profit >= abs(float(activate_pct)):
+                    lines.append((entry_price * (1 + peak_profit - abs(float(drawdown_pct))), "trailing_take_profit"))
+            lines = [(line, reason) for line, reason in lines if line > 0 and np.isfinite(line)]
+            if lines:
+                stop_price, reason = max(lines, key=lambda item: item[0])
+                low_k, open_k = float(l), float(o)
+                if low_k > 0 and np.isfinite(low_k) and low_k <= stop_price:
+                    price = open_k if (open_k > 0 and np.isfinite(open_k) and open_k < stop_price) else stop_price
+                    return price, reason
+            tp_pct = getattr(config, "take_profit_pct", None)
+            if tp_pct is not None:
+                tp_line = entry_price * (1 + abs(float(tp_pct)))
+                if tp_line > 0 and np.isfinite(tp_line):
+                    high_k, open_k = float(h), float(o)
+                    if high_k > 0 and np.isfinite(high_k) and high_k >= tp_line:
+                        price = open_k if (open_k > 0 and np.isfinite(open_k) and open_k > tp_line) else tp_line
+                        return price, "take_profit"
+            high_k = float(h)
+            if high_k > 0 and np.isfinite(high_k):
+                peak = max(peak, high_k)
+        return None
+
+
+def build_minute_execution(minute_panel: "pl.DataFrame | None") -> MinuteExecutionData:
+    """分钟面板 → MinuteExecutionData。
+
+    期望列: symbol/datetime/open/high/low/close/volume (provider
+    get_minute → minutes_rows_to_minute_df 口径, datetime 为
+    'YYYY-MM-DD HH:MM[:SS]')。空面板/缺列 → 空数据对象 (全部成交回退
+    日 K 价, 由引擎计数, 不静默)。
+    """
+    if minute_panel is None or minute_panel.is_empty():
+        return MinuteExecutionData({})
+    needed = {"symbol", "datetime", "open", "high", "low", "close", "volume"}
+    missing = needed - set(minute_panel.columns)
+    if missing:
+        logger.warning("分钟面板缺少列 %s, 分钟撮合全部回退日 K 价", sorted(missing))
+        return MinuteExecutionData({})
+    df = minute_panel.select(
+        ["symbol", "datetime", "open", "high", "low", "close", "volume"]
+    ).sort(["symbol", "datetime"])
+    bars: dict[tuple[str, str], list[tuple[int, float, float, float, float, float]]] = {}
+    for sym, dt, o, h, l, c, v in df.iter_rows():
+        dt_str = str(dt)
+        date_part = dt_str[:10]
+        hhmm = int(dt_str[11:13]) * 100 + int(dt_str[14:16])
+        bars.setdefault((str(sym), date_part), []).append(
+            (hhmm, _minute_float(o), _minute_float(h), _minute_float(l), _minute_float(c), _minute_float(v))
+        )
+    return MinuteExecutionData(bars)
+
+# ================================================================
 # BacktestEngine
 # ================================================================
 
@@ -979,6 +1183,9 @@ class BacktestEngine:
         config: MatcherConfig,
         progress_cb: "Callable[[dict], None] | None" = None,
         cancel_event: "threading.Event | None" = None,
+        # F14 分钟级执行: None = 日 K 路径 (默认行为不变); 提供时建仓/清仓
+        # 成交价替换为分钟窗口 VWAP, 风控改为盘中触发。
+        minute_data: "MinuteExecutionData | None" = None,
     ) -> SimResult:
         """账户级组合回测：日线信号 → 成交约束 → 仓位/现金撮合。"""
         if panel.is_empty():
@@ -1030,8 +1237,22 @@ class BacktestEngine:
         low_prices = panel["low"].to_numpy()
         close_prices = panel["close"].to_numpy()
         # 撮合价: 建仓/清仓各自独立选列。
+        # F14 分钟级执行: 建仓 → 次日 09:30-09:45 VWAP (open_t+1 口径) 或信号日
+        # 14:45-15:00 VWAP (close_t 口径); 清仓对称。缺分钟数据的行保留日 K
+        # 原价 (fallback 标记在成交时计数)。参与率上限仍用日级 volume 面板口径。
         entry_prices = open_prices if config.entry_fill == "open_t+1" else close_prices
         exit_prices = open_prices if config.exit_fill == "open_t+1" else close_prices
+        entry_fallback_flags = np.zeros(n, dtype=bool)
+        exit_fallback_flags = np.zeros(n, dtype=bool)
+        if minute_data is not None:
+            entry_prices, entry_fallback_flags = minute_data.apply_fill_prices(
+                panel_symbols, panel_dates, entry_prices,
+                "open" if config.entry_fill == "open_t+1" else "tail",
+            )
+            exit_prices, exit_fallback_flags = minute_data.apply_fill_prices(
+                panel_symbols, panel_dates, exit_prices,
+                "open" if config.exit_fill == "open_t+1" else "tail",
+            )
         has_volume = "volume" in panel.columns
         volumes = panel["volume"].fill_null(0).to_numpy() if has_volume else np.ones(n, dtype=float)
         names = (
@@ -1105,6 +1326,11 @@ class BacktestEngine:
             "sell_suspended": 0,
             "sell_limit_down": 0,
             "pending_exit": 0,
+            # F14 分钟级执行: 缺分钟数据回退日 K 价的成交次数 (买入/卖出合计,
+            # 分桶见 buy_minute_fallback / sell_minute_fallback)。
+            "buy_minute_fallback": 0,
+            "sell_minute_fallback": 0,
+            "minute_fallback_daily": 0,
         }
         # A1 容量诊断样本: 每笔成交的量能上限名义金额与实际利用率。
         cap_samples: list[float] = []
@@ -1206,6 +1432,16 @@ class BacktestEngine:
             nonlocal cash
             pos = positions.pop(sym)
             exit_price = float(exit_price_override) if exit_price_override is not None else float(exit_prices[idx])
+            # F14: 分钟模式下无 override 的正常到期/信号卖出走了尾盘 VWAP 替换价;
+            # 标记为回退 → 该笔实际用的是日 K 价。风控 override 价 (止损价等)
+            # 本身是分钟路径产物, 不计回退。
+            if (
+                minute_data is not None
+                and exit_price_override is None
+                and exit_fallback_flags[idx]
+            ):
+                _count("sell_minute_fallback")
+                _count("minute_fallback_daily")
             exit_value = pos["shares"] * exit_price * (1 - sell_cost_pct)
             cash += exit_value
             pnl_amount = exit_value - pos["entry_value"]
@@ -1293,6 +1529,16 @@ class BacktestEngine:
                     continue
                 idx = row_by_symbol.get(sym)
                 if idx is None or pos["entry_price"] <= 0:
+                    continue
+                # F14 分钟级执行: 风控盘中逐分钟检查。有当日分钟 bar 时完全以
+                # 分钟路径结果为准 (触发价=风控线/分钟开盘跳空价; 同分钟双触
+                # 保守取不利方向, 详见 MinuteExecutionData.intraday_risk_exit);
+                # 无当日分钟数据 → 回退日 K 日内口径 (不计数 — 成交价未必是
+                # 日 K 价, 只是触发检测降精度; 成交价口径的回退计费在 _sell)。
+                if minute_data is not None and minute_data.has_bars(sym, d_str):
+                    hit = minute_data.intraday_risk_exit(sym, d_str, pos, config)
+                    if hit is not None:
+                        _try_sell(sym, idx, hit[1], d_str, sold_today, hit[0])
                     continue
                 open_price = float(open_prices[idx])
                 low_price = float(low_prices[idx])
@@ -1435,6 +1681,10 @@ class BacktestEngine:
                 if entry_value > current_exposure_capacity + 1e-6:
                     _count("buy_exposure")
                     continue
+                # F14: 分钟模式下该笔买入实际用日 K 价 (缺分钟数据回退), 显式计数。
+                if minute_data is not None and entry_fallback_flags[idx]:
+                    _count("buy_minute_fallback")
+                    _count("minute_fallback_daily")
                 cash -= entry_value
                 positions[sym] = {
                     "symbol": sym,
@@ -1542,6 +1792,10 @@ class BacktestEngine:
             config.risk_free_rate,
         )
         stats["execution"] = execution_stats
+        # F14 成交精度标注: minute = 分钟 VWAP 撮合 + 盘中风控; 回退计数
+        # 同步放顶层 (前端摘要条直接读)。
+        stats["bar_precision"] = "minute" if minute_data is not None else "daily"
+        stats["minute_fallback_daily"] = int(execution_stats.get("minute_fallback_daily", 0))
         stats["capacity"] = self._capacity_stats(cap_enabled, capped_entry_count, cap_samples, util_samples)
         stats["pending_exit_positions"] = sum(1 for p in positions.values() if p.get("pending_exit_reason"))
         per_symbol = self._calc_per_symbol(trades)

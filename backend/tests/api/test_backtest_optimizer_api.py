@@ -25,12 +25,16 @@ class _FakeStrategyEngine:
     def get(self, strategy_id: str):
         if strategy_id == "missing":
             raise ValueError("unknown strategy: missing")
+        # 为寻优参数网格测试提供最小 params 定义
+        params = []
+        if strategy_id in ("macd", "boll_breakout"):
+            params = [{"id": "vol_ratio_min", "type": "float", "default": 1.5}]
         return SimpleNamespace(
             id=strategy_id,
             execution_backend="polars_expr",
             source="builtin",
             ephemeral=False,
-            meta={"asset_types": ["stock"]},
+            meta={"asset_types": ["stock"], "params": params},
         )
 
     def put_ephemeral(self, strategy_id: str, strategy) -> None:
