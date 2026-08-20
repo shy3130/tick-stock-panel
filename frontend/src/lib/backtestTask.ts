@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { StrategyBacktestResult } from './api'
+import type { RunConnectionState } from './runStatus'
 
 /**
  * 全局回测任务管理 (SSE 模式 + 任务缓存 + 重连支持)。
@@ -28,12 +29,17 @@ export interface BacktestTask {
   result: StrategyBacktestResult | null
   progress: BacktestProgress | null
   error: string | null
+  /** SSE 连接状态, 供运行状态条显示断线提示 */
+  connectionState: RunConnectionState
 }
 
 let current: BacktestTask | null = null
 const listeners = new Set<() => void>()
 let taskSeq = 0
 let eventSource: EventSource | null = null
+// EventSource.readyState 常量 (0=CONNECTING, 2=CLOSED); 用字面量避免 mock 环境缺静态属性
+const ES_CONNECTING = 0
+const ES_CLOSED = 2
 
 const RECONNECT_KEY = 'backtest_reconnect'
 
@@ -76,6 +82,13 @@ function connectSSE(url: string): void {
   const es = new EventSource(url)
   eventSource = es
 
+  // SSE 连接状态跟踪: onopen 置 open; 断线错误按 readyState 区分自动重连/彻底断开
+  es.onopen = () => {
+    if (current?.id !== id || current.connectionState === 'open') return
+    current = { ...current, connectionState: 'open' }
+    emit()
+  }
+
   es.addEventListener('progress', (e: MessageEvent) => {
     if (current?.id !== id) return
     try {
@@ -89,10 +102,10 @@ function connectSSE(url: string): void {
     if (current?.id !== id) return
     try {
       const result = JSON.parse(e.data) as StrategyBacktestResult
-      current = { ...current, isPending: false, result, error: null }
+      current = { ...current, isPending: false, result, error: null, connectionState: 'closed' }
       emit()
     } catch {
-      current = { ...current, isPending: false, error: '结果解析失败' }
+      current = { ...current, isPending: false, error: '结果解析失败', connectionState: 'closed' }
       emit()
     }
     es.close()
@@ -106,17 +119,25 @@ function connectSSE(url: string): void {
     if (e.data) {
       try {
         const msg = JSON.parse(e.data)?.message ?? '回测出错'
-        current = { ...current, isPending: false, error: msg }
+        current = { ...current, isPending: false, error: msg, connectionState: 'closed' }
         emit()
       } catch {
-        current = { ...current, isPending: false, error: '回测出错' }
+        current = { ...current, isPending: false, error: '回测出错', connectionState: 'closed' }
         emit()
       }
       es.close()
       eventSource = null
       localStorage.removeItem(RECONNECT_KEY)
+      return
     }
-    // 无 data: 连接异常断开, EventSource 会自动重连, 不改变状态
+    // 无 data: 连接异常断开; CONNECTING=浏览器自动重连中, CLOSED=彻底断开
+    const connection = es.readyState === ES_CONNECTING
+      ? 'reconnecting'
+      : es.readyState === ES_CLOSED ? 'closed' : null
+    if (connection && current.connectionState !== connection) {
+      current = { ...current, connectionState: connection }
+      emit()
+    }
   })
 }
 
@@ -131,6 +152,8 @@ export function startBacktest(params: {
   exit_fill?: string
   fees_pct?: number
   slippage_bps?: number
+  /** 印花税率 (仅卖出单边, 0.0005 = 万分之五); 缺省由后端默认 */
+  stamp_tax_pct?: number
   max_positions?: number
   max_exposure_pct?: number
   initial_capital?: number
@@ -156,7 +179,7 @@ export function startBacktest(params: {
   }
 
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null }
+  current = { id, isPending: true, result: null, progress: null, error: null, connectionState: 'connecting' }
   emit()
 
   const qs = buildQuery({
@@ -168,12 +191,12 @@ export function startBacktest(params: {
     entry_fill: params.entry_fill,
     exit_fill: params.exit_fill,
     fees_pct: params.fees_pct,
+    stamp_tax_pct: params.stamp_tax_pct,
     slippage_bps: params.slippage_bps,
     max_positions: params.max_positions,
     max_exposure_pct: params.max_exposure_pct,
     initial_capital: params.initial_capital,
     position_sizing: params.position_sizing,
-    params: params.params ? JSON.stringify(params.params) : undefined,
     overrides: params.overrides ? JSON.stringify(params.overrides) : undefined,
     mode: params.mode,
     holding_days: params.holding_days,
@@ -220,7 +243,7 @@ export async function stopBacktest(): Promise<void> {
     eventSource = null
   }
   if (current?.isPending) {
-    current = { ...current, isPending: false, error: '已取消' }
+    current = { ...current, isPending: false, error: '已取消', connectionState: 'closed' }
     emit()
   }
   localStorage.removeItem(RECONNECT_KEY)
@@ -238,7 +261,7 @@ export function tryReconnect(): boolean {
   if (!qs) return false
   // 有未完成的任务, 重连
   const id = ++taskSeq
-  current = { id, isPending: true, result: null, progress: null, error: null }
+  current = { id, isPending: true, result: null, progress: null, error: null, connectionState: 'connecting' }
   emit()
   connectSSE(`/api/backtest/strategy/stream?${qs}`)
   return true

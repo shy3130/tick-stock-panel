@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown, AlertTriangle, Info } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown, AlertTriangle, Info, CheckCircle2, ChevronDown } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
@@ -28,7 +28,8 @@ import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { TradeKlineModal } from './components/TradeKlineModal'
 import { BacktestWarnings } from './components/BacktestWarnings'
 import { ProfessionalDiagnostics } from './components/ProfessionalDiagnostics'
-import { buildPreflightFindings } from './components/runPreflight'
+import { applyPreflightPatch, buildPreflightFindings, type PreflightFinding } from './components/runPreflight'
+import { MetricExplainer } from './components/MetricExplainer'
 import { TradeAttributionPanel } from './components/TradeAttributionPanel'
 import { StrategyRobustnessPanel } from './components/StrategyRobustnessPanel'
 import { TrustDiagnostics } from './components/TrustDiagnostics'
@@ -38,6 +39,16 @@ import { StyleAttributionPanel } from './components/StyleAttributionPanel'
 import { parseParticipationPctInput } from './components/trustDiagnosticsCore'
 import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
+import {
+  getResultSection,
+  normalizeCollapsed,
+  sectionAnchorId,
+  toggleSection,
+  visibleResultSections,
+  type ResultSectionContext,
+  type ResultSectionDef,
+  type ResultSectionVariant,
+} from '@/lib/resultSections'
 
 import type { ScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 const formatDate = (date: Date) => date.toISOString().slice(0, 10)
@@ -369,43 +380,15 @@ function fmtDuration(ms: number): string {
   return `${m}分${rest}秒`
 }
 
-function SharpeLabel() {
-  const [open, setOpen] = useState(false)
-  const [alignRight, setAlignRight] = useState(false)
-  const ref = useRef<HTMLSpanElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [open])
-  const toggle = () => {
-    if (!open && ref.current) {
-      const rect = ref.current.getBoundingClientRect()
-      setAlignRight(rect.left + 240 > window.innerWidth)
-    }
-    setOpen(o => !o)
-  }
+/**
+ * 统计卡 label + 术语气泡：沿用原 SharpeLabel 的位置模式（气泡嵌在 11px 标签行内，
+ * 不改动数值渲染）；词条统一走 MetricExplainer 字典，term 不存在时不渲染气泡。
+ */
+function StatLabel({ term, children }: { term: string; children: ReactNode }) {
   return (
-    <span className="relative inline-flex items-center gap-1" ref={ref}>
-      夏普
-      <button
-        type="button"
-        onClick={toggle}
-        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border bg-base text-[10px] text-muted transition-colors hover:border-accent/50 hover:text-accent"
-      >
-        ?
-      </button>
-      {open && (
-        <span className={`absolute top-full z-50 mt-1.5 w-60 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border bg-elevated px-3 py-2.5 text-[11px] leading-relaxed text-secondary shadow-xl ${alignRight ? 'right-0' : 'left-0'}`}>
-          <span className="block font-medium text-foreground">夏普比率 (Sharpe Ratio)</span>
-          <span className="mt-1 block">衡量<b className="text-foreground">单位波动风险</b>换来的超额收益。</span>
-          <span className="mt-0.5 block">数值越高，收益相对波动越优秀；</span>
-          <span className="mt-0.5 block text-warning">短周期或交易次数少时容易偏高，仅供参考。</span>
-        </span>
-      )}
+    <span className="inline-flex items-center gap-1">
+      {children}
+      <MetricExplainer term={term} />
     </span>
   )
 }
@@ -684,6 +667,67 @@ function StockPoolPicker({ value, onChange }: { value: string; onChange: (value:
   )
 }
 
+/** F1 结果区锚点导航条: 只列出当前实际渲染的区块, 横向滚动不换行 */
+function ResultSectionNav({ sections }: { sections: ResultSectionDef[] }) {
+  return (
+    <nav
+      aria-label="结果区块导航"
+      className="no-print sticky top-0 z-[5] flex gap-1 overflow-x-auto rounded-btn bg-surface/95 px-1 py-1.5 backdrop-blur-sm"
+    >
+      {sections.map(section => {
+        const Icon = section.icon
+        return (
+          <button
+            key={section.key}
+            type="button"
+            onClick={() => document.getElementById(sectionAnchorId(section.key))?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            className="shrink-0 whitespace-nowrap rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
+          >
+            {Icon && <Icon className="mr-1 inline h-3 w-3 align-[-2px]" />}
+            {section.title}
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+/** F1 结果区块壳: 锚点 id + 标题行 + 折叠 chevron; 只包壳不改内部组件 */
+function ResultSection({
+  def,
+  collapsed,
+  printExpanded,
+  onToggle,
+  children,
+}: {
+  def: ResultSectionDef
+  collapsed: boolean
+  printExpanded: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  const isCollapsed = printExpanded ? false : collapsed
+  const Icon = def.icon
+  return (
+    <section id={sectionAnchorId(def.key)} aria-label={def.title} className="scroll-mt-14 space-y-2">
+      <div className="flex items-center gap-1.5">
+        {Icon && <Icon className="h-3.5 w-3.5 text-accent" />}
+        <span className="text-xs font-medium text-secondary">{def.title}</span>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!isCollapsed}
+          aria-label={isCollapsed ? `展开${def.title}区块` : `折叠${def.title}区块`}
+          className="no-print ml-auto rounded-btn p-1 text-muted transition-colors hover:text-accent"
+        >
+          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isCollapsed ? '-rotate-90' : ''}`} />
+        </button>
+      </div>
+      {!isCollapsed && children}
+    </section>
+  )
+}
+
 export interface StrategyParameterBackfill {
   strategyId: string
   params: Record<string, number>
@@ -718,6 +762,7 @@ export function StrategyBacktest({
   const [exitFill, setExitFill] = useState<'close_t' | 'open_t+1'>(saved?.exitFill ?? saved?.matching ?? 'close_t')
   const [fees, setFees] = useState(saved?.fees ?? '2')
   const [slippage, setSlippage] = useState(saved?.slippage ?? '5')
+  const [stampTax, setStampTax] = useState(saved?.stampTax ?? '5')
   const [maxPositions, setMaxPositions] = useState(saved?.maxPositions ?? '10')
   const [maxExposure, setMaxExposure] = useState(saved?.maxExposure ?? '100')
   const [initialCapital, setInitialCapital] = useState(saved?.initialCapital ?? '1000000')
@@ -821,6 +866,31 @@ export function StrategyBacktest({
     else setPendingStartedAt(null)
   }, [isPending])
 
+  // F1 结果区折叠/导航: 折叠记录持久化; 打印前强制全部展开
+  const [collapsedSections, setCollapsedSections] = useState<string[]>(() =>
+    normalizeCollapsed(storage.backtestResultSections.get([])))
+  const [printExpanded, setPrintExpanded] = useState(false)
+  const toggleResultSection = (key: string) => {
+    const next = toggleSection(collapsedSections, key)
+    setCollapsedSections(next)
+    storage.backtestResultSections.set(next)
+  }
+  useEffect(() => {
+    const expandForPrint = () => setPrintExpanded(true)
+    const restoreAfterPrint = () => setPrintExpanded(false)
+    window.addEventListener('beforeprint', expandForPrint)
+    window.addEventListener('afterprint', restoreAfterPrint)
+    return () => {
+      window.removeEventListener('beforeprint', expandForPrint)
+      window.removeEventListener('afterprint', restoreAfterPrint)
+    }
+  }, [])
+  // 打印按钮: 先强制展开再等一帧, 让重渲染与图表布局完成后再进打印
+  const handlePrintResult = () => {
+    setPrintExpanded(true)
+    requestAnimationFrame(() => window.print())
+  }
+
   const dataStatus = useDataStatus()
   const earliestDate = dataStatus.data?.daily?.earliest_date ?? null
 
@@ -834,6 +904,22 @@ export function StrategyBacktest({
     tryReconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // F4 默认策略: saved 无有效选中时, 列表就绪后一次性默认选中第一个内置策略
+  // (无内置则取第一个)。ref 只消费一次, 用户此后切换/清空不会被覆盖;
+  // 孤儿清理把失效 saved 清成 null 后也走这里恢复默认, 而非停在空选择。
+  const defaultStrategyPickedRef = useRef(false)
+  useEffect(() => {
+    if (strategies.isLoading || defaultStrategyPickedRef.current || strategyList.length === 0) return
+    if (selectedStrategy && strategyList.some(st => st.id === selectedStrategy)) {
+      defaultStrategyPickedRef.current = true
+      return
+    }
+    const fallback = strategyList.find(st => st.source === 'builtin') ?? strategyList[0]
+    if (!fallback) return
+    defaultStrategyPickedRef.current = true
+    setSelectedStrategy(fallback.id)
+  }, [strategies.isLoading, strategyList, selectedStrategy])
 
   useEffect(() => {
     const detail = strategyDetail.data
@@ -858,7 +944,6 @@ export function StrategyBacktest({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyDetail.data])
 
-  // 当全局回测任务完成时, 把结果写入组件 (切页回来也能恢复)
   useEffect(() => {
     if (backtestTask && !backtestTask.isPending && backtestTask.result) {
       setResult(backtestTask.result)
@@ -879,6 +964,7 @@ export function StrategyBacktest({
         exitFill,
         fees,
         slippage,
+        stampTax,
         maxPositions,
         maxExposure,
         initialCapital,
@@ -931,6 +1017,7 @@ export function StrategyBacktest({
       entry_fill: entryFill,
       exit_fill: exitFill,
       fees_pct: Number(fees) / 10000,
+      stamp_tax_pct: Number(stampTax) / 10000,
       slippage_bps: Number(slippage),
       max_positions: Number(maxPositions),
       max_exposure_pct: Number(maxExposure) / 100,
@@ -964,10 +1051,25 @@ export function StrategyBacktest({
     symbols: symbols.split(',').map(item => item.trim()).filter(Boolean),
     fees: Number(fees),
     slippage: Number(slippage),
+    stampTax: Number(stampTax),
     entryFill,
     minListedDays: Number(minListedDays) || 0,
-  }), [start, end, symbols, fees, slippage, entryFill, minListedDays, screenerPool])
+  }), [start, end, symbols, fees, slippage, stampTax, entryFill, minListedDays, screenerPool])
   const preflightWarnCount = preflightFindings.filter(finding => finding.level === 'warn').length
+
+  // F5 预检一键修复: 把 fix.patch 应用到表单 state; patch 键为表单字段名,
+  // 数值口径见 runPreflight.ts (fees_pct/stamp_tax_pct 小数 → 万分数, slippage_bps 原值)。
+  // findings 是 useMemo 随 state 派生, 应用后预检自动重跑、红点计数随之减少。
+  const applyPreflightFix = (finding: PreflightFinding) => {
+    if (!finding.fix) return
+    applyPreflightPatch(finding.fix.patch, {
+      start: value => setStart(String(value)),
+      end: value => setEnd(String(value)),
+      fees_pct: value => setFees(String(Number(value) * 10000)),
+      slippage_bps: value => setSlippage(String(value)),
+      stamp_tax_pct: value => setStampTax(String(Number(value) * 10000)),
+    })
+  }
 
   // 提取统计
   const s = result?.stats
@@ -1275,6 +1377,38 @@ export function StrategyBacktest({
       min_listed_days: config.min_listed_days,
     } as StrategyBacktestRequest
   }, [result, isCandidateExecution])
+
+  // F1 结果区锚点导航: 从 result 派生当前实际渲染的区块列表
+  const isLegacyFullResult = !!result && !result.error && !!result.stats
+    && result.stats.mode === 'full' && result.stats.full_kind !== 'candidate_execution'
+  const hasMainResultBlocks = !!result && !result.error && !!result.stats && !result.stats.error
+    && (result.stats.mode !== 'full' || result.stats.full_kind === 'candidate_execution')
+  const sectionContext = useMemo<ResultSectionContext | null>(() => {
+    if (!isLegacyFullResult && !hasMainResultBlocks) return null
+    const variant: ResultSectionVariant = isLegacyFullResult
+      ? 'legacy-full'
+      : result?.stats?.full_kind === 'candidate_execution' ? 'candidate' : 'position'
+    return {
+      variant,
+      hasEquityCurve: (result?.equity_curve.length ?? 0) > (variant === 'legacy-full' ? 1 : 0),
+      hasReturnDistribution: Array.isArray(result?.stats?.return_distribution)
+        && result.stats.return_distribution.length > 0,
+      hasTrades: (result?.trades.length ?? 0) > 0 || (result?.per_symbol_stats.length ?? 0) > 0,
+      hasAttribution: result?.attribution != null,
+      hasRobustness: robustnessRequest != null,
+    }
+  }, [result, isLegacyFullResult, hasMainResultBlocks, robustnessRequest])
+  const navSections = useMemo(() => (sectionContext ? visibleResultSections(sectionContext) : []), [sectionContext])
+  const renderResultSection = (key: string, children: ReactNode) => (
+    <ResultSection
+      def={getResultSection(key)}
+      collapsed={collapsedSections.includes(key)}
+      printExpanded={printExpanded}
+      onToggle={() => toggleResultSection(key)}
+    >
+      {children}
+    </ResultSection>
+  )
 
   return (
     <div className="h-full min-h-0 min-w-0 grid grid-cols-1 xl:grid-cols-[18rem_minmax(0,1fr)] gap-3">
@@ -1612,6 +1746,12 @@ export function StrategyBacktest({
           </div>
           {!simpleMode && (
           <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5" title="A 股印花税，仅卖出单边收取；2023-08-28 起为万分之五">印花税(万分之·卖出)</label>
+            <input type="number" min={0} max={100} value={stampTax} onChange={e => setStampTax(e.target.value)} className={INPUT_CLS} />
+          </div>
+          )}
+          {!simpleMode && (
+          <div>
             <label className="text-xs font-medium text-secondary block mb-1.5" title="单笔买入金额不超过 min(当日成交量, 均量窗口日均量) × 参与率；留空 = 关闭">最大参与率(%)</label>
             <input type="number" min={0} max={100} step={0.5} placeholder="关闭" value={maxParticipationPct}
               onChange={e => setMaxParticipationPct(e.target.value)} className={INPUT_CLS} />
@@ -1631,6 +1771,11 @@ export function StrategyBacktest({
               onChange={e => setMinListedDays(e.target.value)} className={INPUT_CLS} />
           </div>
           )}
+        </div>
+        )}
+        {!simpleMode && (
+        <div className="text-[10px] leading-4 text-muted">
+          佣金与滑点为双边口径；印花税仅卖出单边收取。
         </div>
         )}
         {simMode === 'position' && !simpleMode && (
@@ -1663,6 +1808,9 @@ export function StrategyBacktest({
               运行回测
             </button>
           )}
+          {!isPending && !selectedStrategy && (
+            <span className="self-center shrink-0 text-[11px] text-muted">请先选择策略</span>
+          )}
           <button
             type="button"
             onClick={() => setPreflightOpen(v => !v)}
@@ -1685,8 +1833,13 @@ export function StrategyBacktest({
         </div>
         {preflightOpen && (
           <div className="rounded-btn border border-border bg-surface p-2.5">
-            <div className="text-[11px] font-medium text-secondary">
-              运行前预检{preflightFindings.length === 0 ? '：当前配置未触发提醒' : ''}
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary">
+              运行前预检
+              {preflightFindings.length === 0 && (
+                <span className="inline-flex items-center gap-1 text-bull">
+                  <CheckCircle2 className="h-3 w-3" />预检通过
+                </span>
+              )}
             </div>
             {preflightFindings.length > 0 && (
               <div className="mt-1.5 space-y-1.5">
@@ -1695,7 +1848,17 @@ export function StrategyBacktest({
                     {finding.level === 'warn'
                       ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
                       : <Info className="mt-0.5 h-3 w-3 shrink-0 text-accent" />}
-                    <span className="min-w-0 text-secondary">{finding.message}</span>
+                    <span className="min-w-0 flex-1 text-secondary">{finding.message}</span>
+                    {finding.fix && (
+                      <button
+                        type="button"
+                        onClick={() => applyPreflightFix(finding)}
+                        title={finding.fix.label}
+                        className="shrink-0 self-start rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent transition-colors hover:border-accent/60 hover:bg-accent/20 cursor-pointer"
+                      >
+                        一键修复
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1720,7 +1883,7 @@ export function StrategyBacktest({
               <>
                 <button
                   type="button"
-                  onClick={() => window.print()}
+                  onClick={handlePrintResult}
                   className="inline-flex items-center gap-1 rounded-btn border border-border bg-surface px-2 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent"
                 >
                   <Printer className="h-3 w-3" />
@@ -1842,6 +2005,7 @@ export function StrategyBacktest({
               label: result ? '当前仍展示上次结果，完成后自动替换' : '正在连接回测任务',
               current: result ? '完成后自动替换' : '正在加载回测数据',
             }}
+            connectionState={backtestTask?.connectionState}
             startedAt={pendingStartedAt}
             onCancel={stopBacktest}
             cancelLabel="停止"
@@ -1856,6 +2020,11 @@ export function StrategyBacktest({
             ]}
             dataSnapshot={result.data_snapshot}
           />
+        )}
+
+        {/* F1 结果区锚点导航条: 只列出当前实际渲染的区块 */}
+        {navSections.length > 0 && (
+          <ResultSectionNav sections={navSections} />
         )}
 
         {/* 旧全量模拟结果: 固定前瞻收益统计 (兼容历史缓存结果) */}
@@ -1876,6 +2045,7 @@ export function StrategyBacktest({
             </div>
 
             {/* 统计卡片 */}
+            {renderResultSection('stats', <>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <Stat label="平均收益" value={fmtPct(result.stats.avg_return)} color={statValueColor(result.stats.avg_return)} />
               <Stat label="中位数" value={fmtPct(result.stats.median_return)} color={statValueColor(result.stats.median_return)} />
@@ -1896,18 +2066,19 @@ export function StrategyBacktest({
               <span>最差 <b className="text-bear num">{fmtPct(result.stats.worst)}</b></span>
               <span>基准({benchmarkName}) <b className="text-foreground num">{fmtPct(result.stats.benchmark_return)}</b></span>
             </div>
+            </>)}
 
             {/* 候选样本收益曲线（不是账户净值） */}
-            {result.equity_curve.length > 1 && (
+            {result.equity_curve.length > 1 && renderResultSection('nav_chart', (
               <div className="rounded-btn border border-border p-3">
                 <div className="mb-1 text-xs font-medium text-secondary">候选样本收益曲线（按信号日等权复利）</div>
                 <div className="mb-2 text-[10px] text-warning">非账户净值：不含资金占用、持仓冲突与组合容量约束。</div>
                 <StrategyNavChart result={result} />
               </div>
-            )}
+            ))}
 
             {/* 收益分布直方图 */}
-            {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && (
+            {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && renderResultSection('return_distribution', (
               <div className="rounded-btn border border-border p-3">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-xs font-medium text-secondary">候选标的收益分布(持有 {result.config?.holding_days ?? 5} 天)</span>
@@ -1915,7 +2086,7 @@ export function StrategyBacktest({
                 </div>
                 <ReturnDistributionChart distribution={result.stats.return_distribution} />
               </div>
-            )}
+            ))}
 
             <div className="text-[11px] text-muted">run_id: {result.run_id}</div>
           </motion.div>
@@ -1974,38 +2145,40 @@ export function StrategyBacktest({
             )}
 
             {/* 统计卡片 */}
+            {renderResultSection('stats', (
             <div className="rounded-btn border border-border bg-elevated/30 p-3">
               {isCandidateExecution ? (
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
                   <Stat label="样本曲线累计" value={strategyReturn != null ? fmtPct(strategyReturn) : '—'}
                     color={statValueColor(strategyReturn)} />
-                  <Stat label="样本曲线回撤" value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
+                  <Stat label={<StatLabel term="max_drawdown">样本曲线回撤</StatLabel>} value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
                     color="hsl(var(--bear))" />
-                  <Stat label="胜率" value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
-                  <Stat label="交易数" value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
+                  <Stat label={<StatLabel term="win_rate">胜率</StatLabel>} value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
+                  <Stat label={<StatLabel term="trade_count">交易数</StatLabel>} value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
                   <Stat label="平均持仓" value={pick('avg_duration') != null ? `${Number(pick('avg_duration')).toFixed(1)}天` : '—'} />
-                  <Stat label="利润因子" value={pick('profit_factor') != null ? Number(pick('profit_factor')).toFixed(2) : '—'} />
-                  <Stat label="盈亏比" value={pick('payoff_ratio') != null ? Number(pick('payoff_ratio')).toFixed(2) : '—'} />
+                  <Stat label={<StatLabel term="profit_factor">利润因子</StatLabel>} value={pick('profit_factor') != null ? Number(pick('profit_factor')).toFixed(2) : '—'} />
+                  <Stat label={<StatLabel term="payoff_ratio">盈亏比</StatLabel>} value={pick('payoff_ratio') != null ? Number(pick('payoff_ratio')).toFixed(2) : '—'} />
                 </div>
               ) : (
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
-                  <Stat label="总收益" value={strategyReturn != null ? fmtPct(strategyReturn) : '—'}
+                  <Stat label={<StatLabel term="total_return">总收益</StatLabel>} value={strategyReturn != null ? fmtPct(strategyReturn) : '—'}
                     color={statValueColor(strategyReturn)} />
-                  <Stat label="年化" value={pick('annual_return') != null ? fmtPct(pick('annual_return') as number) : '—'}
+                  <Stat label={<StatLabel term="annual_return">年化</StatLabel>} value={pick('annual_return') != null ? fmtPct(pick('annual_return') as number) : '—'}
                     color={statValueColor(pick('annual_return') as number)} />
-                  <Stat label={`同期${benchmarkName}`} value={benchmarkReturn != null ? fmtPct(benchmarkReturn) : '—'}
+                  <Stat label={<StatLabel term="benchmark_return">{`同期${benchmarkName}`}</StatLabel>} value={benchmarkReturn != null ? fmtPct(benchmarkReturn) : '—'}
                     color={statValueColor(benchmarkReturn)} />
-                  <Stat label="超额收益" value={excessReturn != null ? fmtPct(excessReturn) : '—'}
+                  <Stat label={<StatLabel term="excess_return">超额收益</StatLabel>} value={excessReturn != null ? fmtPct(excessReturn) : '—'}
                     color={statValueColor(excessReturn)} />
-                  <Stat label={<SharpeLabel />} value={pick('sharpe') != null ? Number(pick('sharpe')).toFixed(2) : '—'} />
-                  <Stat label="最大回撤" value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
+                  <Stat label={<StatLabel term="sharpe">夏普</StatLabel>} value={pick('sharpe') != null ? Number(pick('sharpe')).toFixed(2) : '—'} />
+                  <Stat label={<StatLabel term="max_drawdown">最大回撤</StatLabel>} value={pick('max_drawdown') != null ? fmtPct(pick('max_drawdown') as number) : '—'}
                     color="hsl(var(--bear))" />
-                  <Stat label="胜率" value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
-                  <Stat label="交易数" value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
-                  <Stat label="最终权益" value={pick('final_equity') != null ? fmtPrice(pick('final_equity') as number) : '—'} />
+                  <Stat label={<StatLabel term="win_rate">胜率</StatLabel>} value={pick('win_rate') != null ? fmtPct(pick('win_rate') as number) : '—'} />
+                  <Stat label={<StatLabel term="trade_count">交易数</StatLabel>} value={pick('n_trades') != null ? String(pick('n_trades')) : '—'} />
+                  <Stat label={<StatLabel term="final_equity">最终权益</StatLabel>} value={pick('final_equity') != null ? fmtPrice(pick('final_equity') as number) : '—'} />
                 </div>
               )}
             </div>
+            ))}
 
             {executionSummary.length > 0 && (
               <div className="rounded-btn border border-warning/25 bg-warning/5 px-3 py-2 text-[11px] leading-5 text-secondary">
@@ -2019,7 +2192,7 @@ export function StrategyBacktest({
             )}
 
             {/* 账户/候选样本曲线 */}
-            {result.equity_curve.length > 0 && (
+            {result.equity_curve.length > 0 && renderResultSection('nav_chart', (
               <div className="rounded-btn border border-border overflow-hidden">
                 <div className="border-b border-border px-3 py-2">
                   <div className="text-xs font-medium text-secondary">
@@ -2031,11 +2204,11 @@ export function StrategyBacktest({
                 </div>
                 <StrategyNavChart result={result} />
               </div>
-            )}
+            ))}
 
-            {!isCandidateExecution && <ProfessionalDiagnostics result={result} />}
-            {!isCandidateExecution && <TrustDiagnostics result={result} request={robustnessRequest} />}
-            <TradeAttributionPanel attribution={result.attribution} />
+            {!isCandidateExecution && renderResultSection('professional', <ProfessionalDiagnostics result={result} />)}
+            {!isCandidateExecution && renderResultSection('trust', <TrustDiagnostics result={result} request={robustnessRequest} />)}
+            {renderResultSection('attribution', <TradeAttributionPanel attribution={result.attribution} />)}
 
             {isCandidateExecution ? (
               <div className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-[11px] leading-5 text-secondary" role="status">
@@ -2043,17 +2216,17 @@ export function StrategyBacktest({
                 <span className="ml-2">候选样本曲线仅按退出事件日采样，不能生成分段 Sharpe、Bootstrap、置换或 Walk-Forward 指标；请切换至仓位模拟。</span>
               </div>
             ) : robustnessRequest && (
-              <StrategyRobustnessPanel key={result.run_id} request={robustnessRequest} />
+              renderResultSection('robustness', <StrategyRobustnessPanel key={result.run_id} request={robustnessRequest} />)
             )}
             {!isCandidateExecution && robustnessRequest && (
               <>
-                <RegimeBreakdownPanel key={`regime-${result.run_id}`} request={robustnessRequest} />
-                <CostSensitivityPanel key={`cost-${result.run_id}`} request={robustnessRequest} />
-                <StyleAttributionPanel key={`style-${result.run_id}`} request={robustnessRequest} />
+                {renderResultSection('regime', <RegimeBreakdownPanel key={`regime-${result.run_id}`} request={robustnessRequest} />)}
+                {renderResultSection('cost_sensitivity', <CostSensitivityPanel key={`cost-${result.run_id}`} request={robustnessRequest} />)}
+                {renderResultSection('style', <StyleAttributionPanel key={`style-${result.run_id}`} request={robustnessRequest} />)}
               </>
             )}
 
-            {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && (
+            {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && renderResultSection('return_distribution', (
               <div className="rounded-btn border border-border p-3">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-xs font-medium text-secondary">独立候选交易收益分布</span>
@@ -2061,10 +2234,10 @@ export function StrategyBacktest({
                 </div>
                 <ReturnDistributionChart distribution={result.stats.return_distribution} />
               </div>
-            )}
+            ))}
 
             {/* Tab: 按日期 / 交易明细 / 选股分析 */}
-            {(result.trades.length > 0 || result.per_symbol_stats.length > 0) && (
+            {(result.trades.length > 0 || result.per_symbol_stats.length > 0) && renderResultSection('trades', (
               <div className="rounded-btn border border-border overflow-hidden">
                 <div className="flex items-center gap-1 border-b border-border px-4 pt-2">
                   {(['daily', 'trades', 'picks'] as const).map(t => (
@@ -2400,7 +2573,7 @@ export function StrategyBacktest({
                   </div>
                 )}
               </div>
-            )}
+            ))}
 
             <div className="text-[11px] text-muted">
               run_id: {result.run_id}

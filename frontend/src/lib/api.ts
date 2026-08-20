@@ -1163,6 +1163,8 @@ export interface StrategyBacktestRequest {
   entry_fill?: 'close_t' | 'open_t+1' | null
   exit_fill?: 'close_t' | 'open_t+1' | null
   fees_pct?: number
+  /** A 股印花税 (仅卖出单边, 0-0.01 小数, 默认 0.0005 = 万分之五); 缺省由后端默认 */
+  stamp_tax_pct?: number
   slippage_bps?: number
   max_positions?: number
   max_exposure_pct?: number
@@ -1356,9 +1358,8 @@ export interface TradeIndustryAttribution {
 }
 
 export interface StrategyBacktestResult {
-  run_id: string
+  stats: Record<string, any> & { cost_breakdown?: CostBreakdown }
   config: Record<string, any>
-  stats: Record<string, any>
   equity_curve: { date: string; value: number; cash?: number; positions?: number; exposure?: number }[]
   drawdown_curve: { date: string; value: number }[]
   benchmark_curve?: { date: string; value: number; close?: number; name?: string; symbol?: string }[]
@@ -1389,6 +1390,7 @@ export interface StrategyBacktestResult {
   }
   attribution?: TradeIndustryAttribution | null
   elapsed_ms: number
+  run_id: string
   error: string | null
   methodology_context?: string
   warnings?: string[]
@@ -1398,6 +1400,17 @@ export interface StrategyBacktestResult {
   random_seed?: number | null
   /** 后端是否已将完整结果保存为 BacktestRun；false 时不能下载 Run 报告。 */
   persisted?: boolean
+}
+
+/** stats.cost_breakdown — 交易成本拆分 (stamp_tax 为追加字段, 旧持久化结果可能缺失) */
+export interface CostBreakdown {
+  gross_notional?: number
+  commission?: number
+  slippage?: number
+  /** 印花税 (仅卖出侧名义额 × 税率); 旧结果无此键 */
+  stamp_tax?: number
+  total?: number
+  turnover?: number | null
 }
 
 /** 逐笔收益 bootstrap 净值带 — percentiles 各数组长度 = n_trades, 每 trade index 处的跨路径分位 */

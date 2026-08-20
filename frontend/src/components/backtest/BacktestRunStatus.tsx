@@ -6,6 +6,7 @@ import {
   formatClock,
   formatRate,
   type ExperimentRuntime,
+  type RunConnectionState,
 } from '@/lib/runStatus'
 
 export type RunStatusKind = 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
@@ -19,6 +20,7 @@ export function BacktestRunStatus({
   startedAt,
   failed,
   extras,
+  connectionState,
   onCancel,
   cancelling = false,
   cancelLabel = '取消',
@@ -31,6 +33,8 @@ export function BacktestRunStatus({
   startedAt?: string | null
   failed?: number
   extras?: Array<{ label: string; value: string }>
+  /** SSE 任务连接状态; 轮询型任务 (网格/寻优) 不传则不显示断线提示 */
+  connectionState?: RunConnectionState
   onCancel?: () => void
   cancelling?: boolean
   cancelLabel?: string
@@ -65,6 +69,18 @@ export function BacktestRunStatus({
             <div className="text-[11px] text-secondary">{stage}</div>
             {all > 0 && (
               <span className="ml-auto font-mono text-sm font-semibold text-accent">{percent}%</span>
+            )}
+            {connectionState === 'reconnecting' && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-warning" role="status">
+                <span className="status-dot" data-state="warn" />
+                连接中断，自动重连中…
+              </span>
+            )}
+            {connectionState === 'closed' && active && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-danger" role="status">
+                <span className="status-dot" data-state="danger" />
+                连接已断开
+              </span>
             )}
           </div>
           {current && (

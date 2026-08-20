@@ -13,6 +13,9 @@ export interface ExperimentRuntime {
   last_elapsed_ms?: number
 }
 
+/** SSE 任务连接状态: connecting=首次连接, open=已连上, reconnecting=断线自动重连中, closed=已断开 */
+export type RunConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed'
+
 export function formatClock(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '—'
   if (ms < 1000) return `${Math.round(ms)}ms`

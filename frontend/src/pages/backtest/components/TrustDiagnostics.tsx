@@ -10,6 +10,7 @@ import {
   type StrategyCapacityStats,
 } from '@/lib/api'
 import { fmtBigNum, fmtPct } from '@/lib/format'
+import { MetricExplainer } from './MetricExplainer'
 
 interface Props {
   result: StrategyBacktestResult
@@ -59,7 +60,7 @@ function CapacitySection({ result, request }: Props) {
             <div className={`mt-1 font-mono text-sm font-semibold num ${capacity.capped_entry_count > 0 ? 'text-warning' : 'text-foreground'}`}>{capacity.capped_entry_count} 笔</div>
           </div>
           <div className="bg-surface px-3 py-2.5" title="量能利用率 = 实际成交名义金额 / 单笔量能上限">
-            <div className="text-[10px] text-muted">利用率 p50 / p90</div>
+            <div className="flex items-center gap-1 text-[10px] text-muted">利用率 p50 / p90<MetricExplainer term="capacity_utilization" /></div>
             <div className="mt-1 font-mono text-sm font-semibold text-foreground num">{fmtPct(capacity.utilization_p50, 1)} / {fmtPct(capacity.utilization_p90, 1)}</div>
           </div>
           <div className="bg-surface px-3 py-2.5" title="单笔量能上限名义金额 (元) 的分位；p10 代表最紧张的一档">
@@ -67,7 +68,7 @@ function CapacitySection({ result, request }: Props) {
             <div className="mt-1 font-mono text-sm font-semibold text-foreground num">{fmtBigNum(capacity.cap_value_p50)} / {fmtBigNum(capacity.cap_value_p10)}</div>
           </div>
           <div className="bg-surface px-3 py-2.5" title="线性外推近似：假设成交价与滚动量能不随资金规模变化，且未计多笔同日抢同一上限的挤占">
-            <div className="text-[10px] text-muted">容量倍数估计</div>
+            <div className="flex items-center gap-1 text-[10px] text-muted">容量倍数估计<MetricExplainer term="capacity_multiple" /></div>
             <div className="mt-1 font-mono text-sm font-semibold text-foreground num">
               {capacity.est_capacity_multiple != null ? `≈ ${capacity.est_capacity_multiple.toFixed(2)}x` : '—'}
             </div>
@@ -105,7 +106,7 @@ function PsrSection({ result }: { result: StrategyBacktestResult }) {
   return (
     <section className="rounded-btn border border-border bg-surface px-3 py-2.5">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[10px] text-muted">PSR 概率</span>
+        <span className="flex items-center gap-1 text-[10px] text-muted">PSR 概率<MetricExplainer term="psr" /></span>
         <span className={`font-mono text-sm font-semibold num ${psr >= 0.95 ? 'text-bull' : psr < 0.5 ? 'text-bear' : 'text-foreground'}`}>
           {(psr * 100).toFixed(1)}%
         </span>
@@ -137,7 +138,7 @@ function ListingAgeGateSection({ result }: { result: StrategyBacktestResult }) {
   return (
     <section className="overflow-hidden rounded-btn border border-border">
       <div className="border-b border-border px-3 py-2">
-        <div className="text-xs font-medium text-foreground">上市天数门控</div>
+        <div className="flex items-center gap-1 text-xs font-medium text-foreground">上市天数门控<MetricExplainer term="listing_age_gate" /></div>
         <div className="mt-0.5 text-[10px] text-muted">上市不足 {gate.min_listed_days} 天的标的整段不入面板（删行口径，非入场过滤）</div>
       </div>
       <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">

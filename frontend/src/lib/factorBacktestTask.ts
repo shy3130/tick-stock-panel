@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { FactorBacktestResult } from './api'
 import { storage } from './storage'
+import type { RunConnectionState } from './runStatus'
 
 export interface FactorBacktestPayload {
   factor_name: string
@@ -30,6 +31,8 @@ export interface FactorBacktestTask {
   result: FactorBacktestResult | null
   progress: FactorBacktestProgress | null
   error: string | null
+  /** SSE 连接状态, 供运行状态条显示断线提示 */
+  connectionState: RunConnectionState
 }
 
 const RECONNECT_KEY = 'factor-backtest-reconnect'
@@ -128,6 +131,7 @@ function restoreCompletedTask(): FactorBacktestTask | null {
     result: saved.result,
     progress: null,
     error: null,
+    connectionState: 'closed',
   }
 }
 
@@ -156,7 +160,7 @@ function closeEventSource(): void {
 
 function completeWithError(id: number, message: string, source: EventSource): void {
   if (current?.id !== id) return
-  current = { ...current, isPending: false, error: message }
+  current = { ...current, isPending: false, error: message, connectionState: 'closed' }
   emit()
   source.close()
   if (eventSource === source) eventSource = null
@@ -167,6 +171,13 @@ function connectSSE(query: string, id: number): void {
   closeEventSource()
   const source = new EventSource(`/api/backtest/factor/stream?${query}`)
   eventSource = source
+
+  // SSE 连接状态跟踪: onopen 置 open; 断线错误按 readyState 区分自动重连/彻底断开
+  source.onopen = () => {
+    if (current?.id !== id || current.connectionState === 'open') return
+    current = { ...current, connectionState: 'open' }
+    emit()
+  }
 
   source.addEventListener('progress', event => {
     if (current?.id !== id) return
@@ -183,7 +194,7 @@ function connectSSE(query: string, id: number): void {
     if (current?.id !== id) return
     try {
       const result = JSON.parse((event as MessageEvent).data) as FactorBacktestResult
-      current = { ...current, isPending: false, result, progress: null, error: null }
+      current = { ...current, isPending: false, result, progress: null, error: null, connectionState: 'closed' }
       storage.factorBacktestLast.set({ payload: current.payload, result })
       emit()
     } catch {
@@ -199,7 +210,17 @@ function connectSSE(query: string, id: number): void {
     if (current?.id !== id) return
     // 无 data 是浏览器网络层断线，EventSource 会自动重连；不可把仍运行的任务误报失败。
     const data = (event as MessageEvent).data
-    if (!data) return
+    if (!data) {
+      // CONNECTING=浏览器自动重连中, CLOSED=彻底断开 (字面量避免 mock 缺静态属性)
+      const connection = source.readyState === 0
+        ? 'reconnecting'
+        : source.readyState === 2 ? 'closed' : null
+      if (connection && current.connectionState !== connection) {
+        current = { ...current, connectionState: connection }
+        emit()
+      }
+      return
+    }
     try {
       completeWithError(id, JSON.parse(data)?.message ?? '因子回测失败', source)
     } catch {
@@ -221,6 +242,7 @@ export function startFactorBacktest(payload: FactorBacktestPayload): void {
     result: previousResult,
     progress: null,
     error: null,
+    connectionState: 'connecting',
   }
   emit()
   localStorage.setItem(RECONNECT_KEY, query)
@@ -243,7 +265,7 @@ export async function stopFactorBacktest(): Promise<void> {
   }
   closeEventSource()
   if (current?.isPending) {
-    current = { ...current, isPending: false, error: '已取消', progress: null }
+    current = { ...current, isPending: false, error: '已取消', progress: null, connectionState: 'closed' }
     emit()
   }
   localStorage.removeItem(RECONNECT_KEY)
@@ -267,6 +289,7 @@ export function tryReconnectFactorBacktest(): boolean {
     result: current?.result ?? storage.factorBacktestLast.get(null)?.result ?? null,
     progress: null,
     error: null,
+    connectionState: 'connecting',
   }
   emit()
   connectSSE(query, id)

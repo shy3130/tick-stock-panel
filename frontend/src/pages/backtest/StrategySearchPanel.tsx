@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Loader2, Play, Search, Square, XCircle } from 'lucide-react'
 import {
@@ -18,6 +18,7 @@ import {
   useOptimizerTask,
 } from '@/lib/optimizerTask'
 import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
+import { MetricExplainer } from './components/MetricExplainer'
 import { RUNS_KEY } from './RunHistoryPanel'
 
 const OBJECTIVES = [
@@ -420,9 +421,8 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
               </div>
 
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <Stat label="Deflated Sharpe" value={formatMetric(dsr)} hint="多重检验后仍为正的概率" />
-                <Stat label="PBO" value={pbo == null ? '—' : formatMetric(pbo)} hint="过拟合概率，越低越好" />
-                <Stat label="试验次数" value={String(experiment.diagnostics.n_trials ?? experiment.scenario_count)} />
+                <Stat label={<span className="inline-flex items-center gap-1">Deflated Sharpe<MetricExplainer term="dsr" /></span>} value={formatMetric(dsr)} hint="多重检验后仍为正的概率" />
+                <Stat label={<span className="inline-flex items-center gap-1">PBO<MetricExplainer term="pbo" /></span>} value={pbo == null ? '—' : formatMetric(pbo)} hint="过拟合概率，越低越好" />
                 <Stat label="留出通过" value={String(experiment.recommended_ids.length)} />
               </div>
 
@@ -500,7 +500,7 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
   )
 }
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Stat({ label, value, hint }: { label: ReactNode; value: string; hint?: string }) {
   return (
     <div className="rounded-btn border border-border bg-elevated/40 px-3 py-2">
       <div className="text-[10px] text-muted">{label}</div>

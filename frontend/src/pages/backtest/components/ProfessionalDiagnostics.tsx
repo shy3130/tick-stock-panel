@@ -106,7 +106,7 @@ const heatClass = (value: number | undefined) => {
   return 'bg-bear/5 text-bear'
 }
 
-function RollingChart({ curve, runId, riskFreeRate }: { curve: CurvePoint[]; runId: string; riskFreeRate: number }) {
+function RollingChart({ curve, runId, riskFreeRate }: { curve: CurvePoint[]; runId?: string; riskFreeRate: number }) {
   const [window, setWindow] = useState<(typeof WINDOWS)[number]>(60)
   const rows = useMemo(() => rollingRows(curve, window, riskFreeRate), [curve, riskFreeRate, window])
   const option = useMemo(() => rows.length === 0 ? null : ({
@@ -272,20 +272,20 @@ export function ProfessionalDiagnostics({ result }: Props) {
   const advanced: Array<{ label: string; value: string; term?: string }> = [
     { label: 'Sortino', value: fmtRatio(stats.sortino), term: 'sortino' },
     { label: 'Calmar', value: fmtRatio(stats.calmar), term: 'calmar' },
-    { label: 'Omega', value: fmtRatio(stats.omega) },
+    { label: 'Omega', value: fmtRatio(stats.omega), term: 'omega' },
     { label: '利润因子', value: fmtRatio(stats.profit_factor), term: 'profit_factor' },
     { label: '盈亏比', value: fmtRatio(stats.payoff_ratio), term: 'payoff_ratio' },
-    { label: '尾部比率', value: fmtRatio(stats.tail_ratio) },
-    { label: '恢复因子', value: fmtRatio(stats.recovery_factor) },
-    { label: '年化波动', value: fmtPct(stats.annual_volatility) },
-    { label: '下行波动', value: fmtPct(stats.downside_deviation) },
-    { label: 'Ulcer Index', value: fmtPct(stats.ulcer_index) },
+    { label: '尾部比率', value: fmtRatio(stats.tail_ratio), term: 'tail_ratio' },
+    { label: '恢复因子', value: fmtRatio(stats.recovery_factor), term: 'recovery_factor' },
+    { label: '年化波动', value: fmtPct(stats.annual_volatility), term: 'annual_volatility' },
+    { label: '下行波动', value: fmtPct(stats.downside_deviation), term: 'downside_volatility' },
+    { label: 'Ulcer Index', value: fmtPct(stats.ulcer_index), term: 'ulcer_index' },
     { label: 'VaR (5%)', value: fmtPct(stats.value_at_risk), term: 'var' },
     { label: 'CVaR (5%)', value: fmtPct(stats.conditional_value_at_risk), term: 'cvar' },
     { label: 'Alpha', value: fmtPct(stats.alpha), term: 'alpha' },
     { label: 'Beta', value: fmtRatio(stats.beta), term: 'beta' },
-    { label: '信息比率', value: fmtRatio(stats.information_ratio) },
-    { label: '跟踪误差', value: fmtPct(stats.tracking_error) },
+    { label: '信息比率', value: fmtRatio(stats.information_ratio), term: 'information_ratio' },
+    { label: '跟踪误差', value: fmtPct(stats.tracking_error), term: 'tracking_error' },
   ]
   const sourceGenerations = snapshot?.source_generations
     ? Object.entries(snapshot.source_generations)
@@ -480,7 +480,7 @@ export function ProfessionalDiagnostics({ result }: Props) {
           </div>
         )}
         <div className="border-t border-border px-3 py-2 text-[10px] text-muted">
-          成本拆分：佣金 {finite(cost.commission)?.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) ?? '—'} · 滑点 {finite(cost.slippage)?.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) ?? '—'}；按实际成交名义金额估算。
+          成本拆分：佣金 {finite(cost.commission)?.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) ?? '—'} · 滑点 {finite(cost.slippage)?.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) ?? '—'} · 印花税(卖出单边) {finite(cost.stamp_tax)?.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) ?? '—'}；佣金与滑点按双边名义金额估算，印花税仅计卖出侧。
           {estimatedCostTotal != null && (
             <span>
               {` 时间线累计估算 ${estimatedCostTotal.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} 元`}
@@ -488,7 +488,7 @@ export function ProfessionalDiagnostics({ result }: Props) {
                 ? '（旧结果无 cost_breakdown 可校验）。'
                 : Math.abs(estimatedCostTotal - costTotal) < 0.01
                   ? '，与 cost_breakdown 总额一致。'
-                  : `，与 cost_breakdown 总额差异 ${Math.abs(costTotal) > 1e-9 ? `${(((estimatedCostTotal - costTotal) / costTotal) * 100).toFixed(2)}%` : `${(estimatedCostTotal - costTotal).toFixed(2)} 元`}（源于四舍五入或缺字段交易）。`}
+                  : `，与 cost_breakdown 总额差异 ${Math.abs(costTotal) > 1e-9 ? `${(((estimatedCostTotal - costTotal) / costTotal) * 100).toFixed(2)}%` : `${(estimatedCostTotal - costTotal).toFixed(2)} 元`}（时间线估算仅含佣金+滑点，不含印花税）。`}
             </span>
           )}
           {execution != null && execution.skippedTrades > 0 && ` ${execution.skippedTrades} 笔交易缺少名义金额字段，未计入换手与成本时间线。`}

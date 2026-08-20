@@ -399,6 +399,11 @@ textarea:focus-visible {
     overflow: visible !important;
   }
 
+  /* 打印时无 sticky 导航条 (组件带 no-print), 锚点偏移随之复位 */
+  .backtest-report .result-section {
+    scroll-margin-top: 0;
+  }
+
   .no-print {
     display: none !important;
   }

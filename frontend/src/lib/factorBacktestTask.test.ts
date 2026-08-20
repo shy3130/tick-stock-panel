@@ -32,6 +32,8 @@ class FakeEventSource {
   static instances: FakeEventSource[] = []
   readonly url: string
   closed = false
+  readyState = 0
+  onopen: (() => void) | null = null
   private readonly listeners = new Map<string, Array<(event: Event) => void>>()
 
   constructor(url: string) {
@@ -51,6 +53,12 @@ class FakeEventSource {
 
   close(): void {
     this.closed = true
+    this.readyState = 2
+  }
+
+  simulateOpen(): void {
+    this.readyState = 1
+    this.onopen?.()
   }
 
   emit(type: string, data?: string): void {
@@ -107,6 +115,18 @@ try {
   const pending = getFactorBacktestTask()
   assert(pending?.isPending, '发起因子回测后应保留模块级进行中状态')
   assert(pending?.payload.factor_name === 'momentum_20d', '进行中状态应保留请求参数')
+  assert(getFactorBacktestTask()?.connectionState === 'connecting', '发起任务后 SSE 连接状态应为 connecting')
+  firstSource.simulateOpen()
+  assert(getFactorBacktestTask()?.connectionState === 'open', 'onopen 后 SSE 连接状态应为 open')
+  firstSource.readyState = 0
+  firstSource.emit('error')
+  assert(getFactorBacktestTask()?.connectionState === 'reconnecting', '断线自动重连时 SSE 连接状态应为 reconnecting')
+  firstSource.readyState = 2
+  firstSource.emit('error')
+  assert(getFactorBacktestTask()?.connectionState === 'closed', '连接彻底断开时 SSE 连接状态应为 closed')
+  firstSource.readyState = 0
+  firstSource.simulateOpen()
+  assert(getFactorBacktestTask()?.connectionState === 'open', '重连成功后应回到 open')
   assert(firstSource.url.includes('/api/backtest/factor/stream?'), '因子任务必须订阅 SSE 端点')
   assert(firstSource.url.includes('start=2026-01-01'), 'SSE query 必须冻结开始日期')
 
@@ -170,4 +190,4 @@ try {
   else Reflect.deleteProperty(globalThis, 'fetch')
 }
 
-console.log('18/18 factor backtest SSE task tests passed')
+console.log('23/23 factor backtest SSE task tests passed')

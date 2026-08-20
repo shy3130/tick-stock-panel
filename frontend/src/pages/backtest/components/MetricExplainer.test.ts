@@ -16,8 +16,12 @@ for (const item of METRIC_TERM_LIST) {
   }
 }
 
-for (const term of ['sharpe', 'sortino', 'max_drawdown', 'profit_factor', 'payoff_ratio', 'calmar', 'information_ratio', 'tracking_error', 'alpha', 'beta', 'var', 'cvar', 'expectancy', 'mae', 'mfe', 'dsr', 'pbo', 'capacity_utilization']) {
-  assert(METRIC_TERMS[term] != null, `core term ${term} present`)
+for (const term of [
+  'psr', 'omega', 'win_rate', 'annual_volatility',
+  'total_return', 'annual_return', 'benchmark_return', 'excess_return', 'trade_count', 'final_equity',
+  'tail_ratio', 'recovery_factor', 'downside_volatility', 'ulcer_index', 'capacity_multiple', 'listing_age_gate',
+]) {
+  assert(METRIC_TERMS[term] != null, `wired term ${term} present`)
 }
 
 assert(METRIC_TERMS.sharpe === METRIC_TERM_LIST.find(item => item.term === 'sharpe'), 'map lookup consistent with list')

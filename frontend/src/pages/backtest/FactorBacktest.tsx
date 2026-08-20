@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Play, BarChart3, Clock, Printer, FileDown, Loader2 } from 'lucide-react'
 import { api, type FactorColumn, type GroupStat } from '@/lib/api'
 import { downloadRunReportHtml } from '@/lib/backtestReportDownload'
+import type { RunConnectionState } from '@/lib/runStatus'
 import {
   startFactorBacktest,
   stopFactorBacktest,
@@ -65,11 +66,13 @@ function LoadingPanel({
   symbolsText,
   progress,
   startedAt,
+  connectionState,
   onCancel,
 }: {
   symbolsText: string
   progress?: { stage?: string; label: string; completed: number; total: number; elapsed_ms?: number } | null
   startedAt?: string | null
+  connectionState?: RunConnectionState
   onCancel: () => void
 }) {
   const stageLabels = ['加载因子面板', '整理有效样本', '计算调仓期收益', '计算截面 IC', '计算分层组合', '汇总多空与风险指标']
@@ -92,6 +95,7 @@ function LoadingPanel({
           label: '正在连接计算任务',
           current: symbolsText,
         }}
+        connectionState={connectionState}
         startedAt={startedAt}
         extras={[{ label: '阶段', value: `${Math.max(1, currentStageIndex + 1)}/${stageLabels.length}` }]}
         onCancel={onCancel}
@@ -475,6 +479,7 @@ export function FactorBacktest({
               total: factorTask.progress.total,
               elapsed_ms: factorTask.progress.elapsed_ms,
             } : { label: '等待服务端任务', current: '当前暂时展示上一次结果' }}
+            connectionState={factorTask?.connectionState}
             startedAt={pendingStartedAt}
             onCancel={handleCancel}
           />
@@ -484,6 +489,7 @@ export function FactorBacktest({
           <LoadingPanel
             symbolsText={factorTask?.payload.symbols?.length ? `${factorTask.payload.symbols.length} 只标的` : '全市场 · 当前区间'}
             progress={factorTask?.progress}
+            connectionState={factorTask?.connectionState}
             startedAt={pendingStartedAt}
             onCancel={handleCancel}
           />

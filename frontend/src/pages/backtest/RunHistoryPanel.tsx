@@ -29,7 +29,22 @@ import {
   type BacktestRunSummary,
   type BacktestRunTradeSample,
 } from '@/lib/api'
-import { downloadRunReportHtml } from '@/lib/backtestReportDownload'
+import { downloadCompareReportHtml, downloadRunReportHtml } from '@/lib/backtestReportDownload'
+import {
+  COMPARE_COLORS,
+  CORE_METRIC_ORDER,
+  KIND_LABELS,
+  METRIC_META,
+  compareWarningLabel,
+  fmtDateTime,
+  fmtNumOrDash,
+  fmtPctOrDash,
+  formatDeltaValue,
+  formatDiffValue,
+  formatMetricValue,
+  metricLabel,
+  runDisplayName,
+} from '@/lib/compareReport'
 import { toast } from '@/components/Toast'
 import { EmptyState } from '@/components/EmptyState'
 import { fmtPct, priceColorClass } from '@/lib/format'
@@ -39,124 +54,22 @@ import { useECharts } from './charts/useECharts'
 /** 局部 query key 前缀；所有 run mutation 统一 invalidate 该前缀 */
 export const RUNS_KEY = ['backtest-runs'] as const
 const PAGE_SIZE = 50
-const MAX_COMPARE = 4
+/** 同时参与对比的最大 run 数；矩阵/曲线/导出报告按列数自适应，不再挤压 */
+const MAX_COMPARE = 8
 
-const KIND_LABELS: Record<BacktestRunKind, string> = {
-  strategy: '策略',
-  factor: '因子',
-  composite: '组合',
-}
 const KIND_BADGE_CLS: Record<BacktestRunKind, string> = {
   strategy: 'border-accent/30 bg-accent/10 text-accent',
   factor: 'border-warning/30 bg-warning/10 text-warning',
   composite: 'border-bull/30 bg-bull/10 text-bull',
 }
 
-/** 常见指标中文名与格式；pct 为小数比率(0.12=12%)，int 取整，number 自适应精度 */
-const METRIC_META: Record<string, { label: string; format: 'pct' | 'number' | 'int' }> = {
-  total_return: { label: '累计收益', format: 'pct' },
-  annual_return: { label: '年化收益', format: 'pct' },
-  benchmark_return: { label: '基准收益', format: 'pct' },
-  excess: { label: '超额收益', format: 'pct' },
-  max_drawdown: { label: '最大回撤', format: 'pct' },
-  win_rate: { label: '胜率', format: 'pct' },
-  median_return: { label: '收益中位数', format: 'pct' },
-  volatility: { label: '年化波动', format: 'pct' },
-  annual_volatility: { label: '年化波动', format: 'pct' },
-  sharpe: { label: '夏普比率', format: 'number' },
-  calmar: { label: '卡玛比率', format: 'number' },
-  profit_factor: { label: '利润因子', format: 'number' },
-  recovery_factor: { label: '恢复因子', format: 'number' },
-  payoff_ratio: { label: '盈亏比', format: 'number' },
-  ic_mean: { label: 'IC 均值', format: 'number' },
-  ic_std: { label: 'IC 标准差', format: 'number' },
-  ir: { label: 'IR', format: 'number' },
-  ic_win_rate: { label: 'IC 胜率', format: 'pct' },
-  n_trades: { label: '交易数', format: 'int' },
-  n_symbols: { label: '标的数', format: 'int' },
-  n_dates: { label: '交易日数', format: 'int' },
-  avg_duration: { label: '平均持仓天数', format: 'number' },
-  sortino: { label: 'Sortino', format: 'number' },
-  omega: { label: 'Omega', format: 'number' },
-  tail_ratio: { label: '尾部比率', format: 'number' },
-  ulcer_index: { label: 'Ulcer Index', format: 'pct' },
-  downside_deviation: { label: '下行偏差', format: 'pct' },
-  value_at_risk: { label: 'VaR (5%)', format: 'pct' },
-  conditional_value_at_risk: { label: 'CVaR (5%)', format: 'pct' },
-  alpha: { label: 'Alpha', format: 'pct' },
-  beta: { label: 'Beta', format: 'number' },
-  tracking_error: { label: '跟踪误差', format: 'pct' },
-  information_ratio: { label: '信息比率', format: 'number' },
-  benchmark_correlation: { label: '基准相关性', format: 'number' },
-  total_cost: { label: '总成本', format: 'pct' },
-  avg_turnover: { label: '平均换手', format: 'pct' },
-  max_exposure: { label: '最大敞口', format: 'pct' },
-  total_turnover: { label: '累计换手', format: 'pct' },
-}
-
-/** 矩阵/详情中优先展示的核心指标顺序（与后端 HEADLINE_METRICS + 因子头部对齐） */
-const CORE_METRIC_ORDER = [
-  'total_return',
-  'annual_return',
-  'benchmark_return',
-  'excess',
-  'sharpe',
-  'max_drawdown',
-  'win_rate',
-  'profit_factor',
-  'ic_mean',
-  'ir',
-  'sortino',
-  'calmar',
-  'annual_volatility',
-  'recovery_factor',
-]
-
 /** 列表行头部最多展示的指标数 */
 const HEADLINE_ORDER = ['total_return', 'annual_return', 'sharpe', 'max_drawdown', 'win_rate', 'ic_mean', 'ir']
-
-/** 对比曲线调色板 — 与既有图表一致的字面量约定（canvas 无法消费 CSS 变量） */
-const COMPARE_COLORS = ['#3b82f6', '#f59e0b', '#14b8a6', '#ef4444']
-
-function metricLabel(key: string): string {
-  return METRIC_META[key]?.label ?? key
-}
-
-function formatMetricValue(key: string, value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—'
-  const meta = METRIC_META[key]
-  if (meta?.format === 'pct') return fmtPct(value)
-  if (meta?.format === 'int') return String(Math.round(value))
-  // IC 等小数量级指标保留 4 位，其余 2 位
-  return Math.abs(value) < 0.1 && value !== 0 ? value.toFixed(4) : value.toFixed(2)
-}
-/** 格式化差值：百分比指标由 fmtPct 自带正号，数值指标手动加正号 */
-function formatDeltaValue(key: string, delta: number): string {
-  const meta = METRIC_META[key]
-  if (meta?.format === 'pct') {
-    // fmtPct 已自行添加 + 前缀，直接返回
-    return formatMetricValue(key, delta)
-  }
-  const formatted = formatMetricValue(key, delta)
-  return delta > 0 ? `+${formatted}` : formatted
-}
 
 function metricValueClass(key: string, value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return 'text-muted'
   if (METRIC_META[key]?.format === 'pct') return priceColorClass(value)
   return 'text-foreground'
-}
-
-function fmtDateTime(iso: string): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso.slice(0, 10)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-function runDisplayName(run: Pick<BacktestRunSummary, 'label' | 'subject' | 'run_id'>): string {
-  return run.label || run.subject.name || run.run_id
 }
 
 function headlineStats(stats: Record<string, number>): [string, number][] {
@@ -167,13 +80,6 @@ function headlineStats(stats: Record<string, number>): [string, number][] {
     if (entries.length >= 4) break
   }
   return entries
-}
-
-/** compare.* 警告去掉机器前缀，直接展示后端中文说明 */
-function compareWarningLabel(warning: string): string {
-  if (!warning.startsWith('compare.')) return warning
-  const idx = warning.indexOf(':')
-  return idx >= 0 ? warning.slice(idx + 1).trim() : warning
 }
 
 const CONFIG_LABELS: Record<string, string> = {
@@ -278,7 +184,10 @@ function MetricMatrix({ comparison }: { comparison: BacktestRunComparison }) {
         <div className="text-[10px] text-muted">首列为对比基线；其余列同时显示相对基线的 Δ</div>
       </div>
       <div className="data-table-scroll">
-        <table className="data-table min-w-[26rem]">
+        <table
+          className="data-table"
+          style={{ minWidth: `${8 + comparison.runs.length * 10}rem` }}
+        >
           <thead>
             <tr>
               <th>指标</th>
@@ -476,30 +385,6 @@ const CONFIG_DIFF_OP_META: Record<string, { label: string; cls: string }> = {
   added: { label: '新增', cls: 'text-bull' },
   removed: { label: '移除', cls: 'text-danger' },
   changed: { label: '修改', cls: 'text-warning' },
-}
-
-/** diff 值的紧凑展示: 标量直出, 结构 JSON 化并截断 */
-function formatDiffValue(raw: unknown): string {
-  if (raw == null) return '—'
-  if (typeof raw === 'string') return raw === '' ? '""' : raw
-  if (typeof raw === 'number') return Number.isFinite(raw) ? String(raw) : '—'
-  if (typeof raw === 'boolean') return raw ? 'true' : 'false'
-  try {
-    const text = JSON.stringify(raw)
-    return text.length > 96 ? `${text.slice(0, 96)}…` : text
-  } catch {
-    return String(raw)
-  }
-}
-
-/** 份额/金额展示: null/非有限 → '—' (旧 run 缺字段不伪装成 0) */
-function fmtNumOrDash(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—'
-  return Math.abs(value) >= 1000 ? value.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) : String(Math.round(value * 100) / 100)
-}
-
-function fmtPctOrDash(value: number | null | undefined): string {
-  return value == null || !Number.isFinite(value) ? '—' : fmtPct(value)
 }
 
 function ConfigDiffSection({ comparison }: { comparison: BacktestRunComparison }) {
@@ -1077,6 +962,11 @@ export function RunHistoryPanel() {
     }
   }
 
+  const downloadCompareReport = () => {
+    if (!comparison) return
+    downloadCompareReportHtml(comparison)
+  }
+
   const toggleFavorite = (run: Pick<BacktestRunSummary, 'run_id' | 'favorite'>) => {
     patchSummaryCaches(run.run_id, { favorite: !run.favorite })
     patchRun.mutate({ runId: run.run_id, body: { favorite: !run.favorite } })
@@ -1129,14 +1019,27 @@ export function RunHistoryPanel() {
                 运行对比 <span className="text-[11px] font-normal text-muted">{comparingIds.length} 个运行</span>
               </h2>
             </div>
-            <button
-              type="button"
-              onClick={() => setComparingIds(null)}
-              aria-label="关闭对比"
-              className="rounded-btn p-1 text-secondary transition-colors hover:bg-elevated hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={downloadCompareReport}
+                disabled={!comparison}
+                title={comparison ? '导出自包含 HTML 对比报告（元信息/指标矩阵/配置差异/交易变化/净值曲线）' : '对比数据载入完成后可导出报告'}
+                aria-disabled={!comparison}
+                className="btn-secondary !h-7 inline-flex items-center gap-1 px-2.5 text-[11px]"
+              >
+                <FileDown className="h-3.5 w-3.5" />
+                导出对比报告
+              </button>
+              <button
+                type="button"
+                onClick={() => setComparingIds(null)}
+                aria-label="关闭对比"
+                className="rounded-btn p-1 text-secondary transition-colors hover:bg-elevated hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
           <div className="panel-body space-y-3 overflow-y-auto">
             {compareQuery.isPending && (

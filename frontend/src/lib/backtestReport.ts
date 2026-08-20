@@ -252,7 +252,7 @@ function extractCurve(points: unknown, keys: string[]): CurvePoint[] {
 }
 
 /** 均匀降采样到恰好 maxCount 个点（含首尾），不足则原样拷贝 */
-function downsample<T>(items: T[], maxCount: number): T[] {
+export function downsample<T>(items: T[], maxCount: number): T[] {
   const total = items.length
   if (total <= maxCount) return items.slice()
   const out: T[] = []
@@ -264,7 +264,7 @@ function downsample<T>(items: T[], maxCount: number): T[] {
 
 // ===== SVG 图表 =====
 
-function buildLineChartSvg(chartTitle: string, series: ChartSeriesDef[], height: number): string {
+export function buildLineChartSvg(chartTitle: string, series: ChartSeriesDef[], height: number): string {
   const active = series.filter(item => item.points.length >= 2)
   if (active.length === 0) return ''
   const padLeft = 64

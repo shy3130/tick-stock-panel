@@ -121,6 +121,8 @@ export const storage = {
     exitFill: 'close_t' | 'open_t+1'
     fees: string
     slippage: string
+    /** 印花税万分数字符串 (仅卖出单边, '5' = 万分之五) */
+    stampTax?: string
     maxPositions: string
     maxExposure: string
     initialCapital: string
@@ -153,4 +155,7 @@ export const storage = {
   dataCardVisible: kv<Record<string, boolean>>('data-card-visible'),
   /** 数据页画像卡片顺序 (卡片key 数组, 长度=卡片总数) */
   dataCardOrder: kv<string[]>('data-card-order'),
+
+  /** 策略回测结果区折叠的区块 key 列表 (见 lib/resultSections.ts) */
+  backtestResultSections: kv<string[]>('backtest-result-sections'),
 } as const
