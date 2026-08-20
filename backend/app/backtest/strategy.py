@@ -386,6 +386,10 @@ class StrategyBacktestService:
         timing_ms["total"] = round((time.perf_counter() - t0) * 1000, 1)
         result.stats["timing_ms"] = timing_ms
         result.stats["panel_rows"] = int(sim_panel.height)
+        # F13 定义指纹: 回测时所用策略定义的指纹随 Run 持久化 (stats 整体落盘),
+        # 前端与当前策略列表 def_hash 比对提示「策略定义已变更」。候选执行模式
+        # 同样写入 —— 它是定义指纹, 不是时序指标; composite/寻优临时组合亦覆盖。
+        result.stats["strategy_def_hash"] = s.def_hash
 
         is_candidate_execution = result.stats.get("full_kind") == "candidate_execution"
         benchmark_source: dict = {"kind": "none", "label": ""}

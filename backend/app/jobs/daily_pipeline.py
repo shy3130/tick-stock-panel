@@ -28,6 +28,10 @@ from app.services.data_mode import is_local_daily_mode
 from app.capabilities import Cap, CapabilitySet
 from app.data_providers.fquant.catalog_resolver import CatalogError
 from app.storage.repository import KlineRepository
+from app.jobs.backtest_favorite_rerun import (
+    BACKTEST_RERUN_JOB_ID,
+    get_backtest_auto_rerun,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1423,6 +1427,16 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
     # job 固定注册, 运行时读 tradingAutoReview 开关 (默认 false=零开销直接返回)。
     _register_trading_auto_review_job(scheduler, repo)
 
+    # F11 回测定时复跑: 工作日到点用滚动窗口复跑收藏的策略 Run (默认关闭,
+    # 仅当用户开启时注册 job; job 运行时还会再读开关, 关=零开销直接返回)。
+    rerun_pref = get_backtest_auto_rerun()
+    if rerun_pref["enabled"]:
+        _register_backtest_favorite_rerun_job(
+            scheduler, repo, rerun_pref["hour"], rerun_pref["minute"]
+        )
+        logger.info("backtest_favorite_rerun enabled @%02d:%02d mon-fri",
+                    rerun_pref["hour"], rerun_pref["minute"])
+
     scheduler.start()
     logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",
                 inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
@@ -1464,6 +1478,29 @@ def _register_trading_auto_review_job(scheduler, repo) -> None:
         replace_existing=True,
     )
 
+
+def _register_backtest_favorite_rerun_job(scheduler, repo, hour: int, minute: int) -> None:
+    """注册/更新回测定时复跑 job (F11, 工作日 mon-fri, Asia/Shanghai)。
+
+    供 start_scheduler(启动时) 和 settings API(改偏好时) 共用,
+    replace_existing=True, 重复注册只更新 trigger。
+    任务体为同步函数 — AsyncIOScheduler 把同步 job 放线程池执行,
+    回测计算不阻塞事件循环; 运行时还会再读一次偏好开关 (关=零开销)。
+    """
+    from app.jobs.backtest_favorite_rerun import run_backtest_favorite_rerun_job
+
+    def _rerun_task(on_progress=None):
+        return run_backtest_favorite_rerun_job(repo, on_progress=on_progress)
+
+    scheduler.add_job(
+        lambda: _run_tracked(_rerun_task, BACKTEST_RERUN_JOB_ID),
+        trigger=CronTrigger(day_of_week="mon-fri",
+                            hour=hour, minute=minute,
+                            timezone="Asia/Shanghai"),
+        id=BACKTEST_RERUN_JOB_ID,
+        misfire_grace_time=7200,  # 盘后复跑非关键, 允许 2 小时内补跑
+        replace_existing=True,
+    )
 
 
 # app_state 延迟引用(start_scheduler 在 lifespan 早期调用, app.state 可能还没就绪)

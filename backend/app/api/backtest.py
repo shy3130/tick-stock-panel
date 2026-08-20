@@ -30,6 +30,7 @@ from app.backtest.run_store import (
     export_csv,
 )
 from app.backtest.run_store import RunSubject as BacktestRunSubject
+from app.strategy import monitor_rules
 from app.config import settings
 from app.json_safe import json_safe
 
@@ -2379,3 +2380,61 @@ def list_experiments(request: Request, limit: int = Query(default=50, ge=1, le=2
     for row in items:
         row["run_count"] = run_counts.get(row["id"], 0)
     return {"items": items[:limit], "total": total, "warnings": warnings}
+
+
+# ================================================================
+# F10 回测 → 监控规则
+# ================================================================
+
+# 回测生成的监控规则 id 前缀 (拼 run_id 前 8 位, 同一 run 幂等)
+BACKTEST_RULE_PREFIX = "mr_bt_"
+
+
+@router.post("/runs/{run_id}/to-monitor-rule")
+def run_to_monitor_rule(run_id: str, request: Request):
+    """把已固化的策略回测 Run 转为 type=strategy 监控规则。
+
+    幂等: 规则 id 固定为 mr_bt_{run_id 前 8 位}, 同 run 重复调用返回已有规则
+    (created=False), 不重复落盘。scope 由 config.symbols 决定: 空池 → 全市场,
+    非空 → 指定股票。保存后复用 monitor_rules 路由的引擎内存态同步模式。
+    """
+    run = _get_run_or_404(_run_store(request), run_id)
+    cfg = run.config or {}
+    if run.kind != "strategy" or not cfg.get("strategy_id"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"仅策略回测 Run 可转为监控规则 (当前 kind={run.kind!r}, "
+                   f"strategy_id={'缺失' if not cfg.get('strategy_id') else '存在'})",
+        )
+
+    data_dir = request.app.state.repo.store.data_dir
+    rule_id = f"{BACKTEST_RULE_PREFIX}{run_id[:8]}"
+    existing = monitor_rules.load_one(data_dir, rule_id)
+    if existing is not None:
+        return {"rule": existing, "created": False}
+
+    symbols = [str(s) for s in (cfg.get("symbols") or [])]
+    rule = monitor_rules.normalize({
+        "id": rule_id,
+        "name": f"回测:{run.subject.name or cfg['strategy_id']}",
+        "enabled": True,
+        "type": "strategy",
+        "scope": "symbols" if symbols else "all",
+        "symbols": symbols,
+        "strategy_id": str(cfg["strategy_id"]),
+        "direction": "entry",
+        "cooldown_seconds": 3600,
+        "severity": "info",
+        "message": f"由回测运行 {run_id[:8]} 创建",
+    })
+    try:
+        monitor_rules.validate(rule)
+    except ValueError as exc:
+        # 映射产物非法属于契约冲突, fail-closed 返回 400 而非落盘脏规则
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    monitor_rules.save_one(data_dir, rule)
+    # 同步引擎内存态 (同 monitor_rules 路由的 _sync_engine 模式)
+    engine = getattr(request.app.state, "monitor_engine", None)
+    if engine is not None:
+        engine.set_rules(monitor_rules.load_all(data_dir))
+    return {"rule": rule, "created": True}

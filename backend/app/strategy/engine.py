@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -37,6 +39,29 @@ DEFAULT_BASIC_FILTER: dict = {
 
 # 叠加策略硬上限：子策略数量。控制信号计算成本与字段并集膨胀，避免 OOM。
 MAX_COMPOSITE_CHILDREN = 8
+
+
+def canonical_def_hash(payload: Any) -> str:
+    """规范化 JSON（sorted keys、紧凑分隔符）→ sha256 前 12 位。
+
+    composite 策略与 csg_ 自定义信号的定义指纹共用此口径：同一份定义
+    无论键序/子项声明顺序如何书写，指纹一致；定义内容变化则指纹变化。
+    """
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _file_content_hash(path: Path) -> str:
+    """文件型策略（builtin/custom/ai 目录 .py）→ 文件内容 sha256 前 12 位。
+
+    读取失败（文件被移走/权限）返回空串：指纹未知时不参与版本比对，
+    不伪造一个"看起来有效"的值（fail-closed）。
+    """
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError as e:
+        logger.warning("strategy def hash: cannot read %s: %s", path, e)
+        return ""
 
 
 def _parse_composite_children(raw: Any) -> "CompositeSpec":
@@ -115,6 +140,24 @@ class StrategyDef:
     execution_backend: str = "polars_expr"
     composite: CompositeSpec | None = None  # 仅 backend=="composite" 时非空
     ephemeral: bool = False  # 寻优临时组合, 不写盘、不进 list_strategies
+    # F13 定义指纹 (sha256 前 12 位): 文件型策略取文件内容; composite (含寻优
+    # 临时组合) 取规范化 JSON。回测 Run 持久化该值, 前端与当前列表比对提示
+    # 「策略定义已变更」。空串 = 指纹未知 (无文件也无 composite 声明)。
+    def_hash: str = ""
+
+    def __post_init__(self) -> None:
+        # 调用方显式传入的非空 def_hash 优先; 未传时按定义来源推导。
+        if self.def_hash:
+            return
+        if self.execution_backend == "composite" and self.composite is not None:
+            self.def_hash = canonical_def_hash({
+                "children": [
+                    {"strategy_id": child.strategy_id, "weight": child.weight}
+                    for child in sorted(self.composite.children, key=lambda c: c.strategy_id)
+                ],
+            })
+        elif self.file_path is not None:
+            self.def_hash = _file_content_hash(self.file_path)
 
 
 @dataclass

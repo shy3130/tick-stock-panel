@@ -10,7 +10,7 @@ import os
 import time
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import secrets_store
 from app.data_providers.capability_gate import (
@@ -381,6 +381,7 @@ def get_preferences() -> dict:
         "structured_plan_check_enabled": preferences.get_structured_plan_check_enabled(),
         "external_fallback_enabled": preferences.get_external_fallback_enabled(),
         "external_fallback_scopes": preferences.get_external_fallback_scopes(),
+        "backtest_auto_rerun": _get_backtest_auto_rerun_pref(),
     }
 
 
@@ -931,6 +932,62 @@ def update_review_schedule(req: ReviewScheduleIn, request: Request) -> dict:
                 pass  # job 本就不存在(从未开过), 无需处理
 
     return sched
+
+
+def _get_backtest_auto_rerun_pref() -> dict:
+    """读取回测定时复跑偏好 (F11)。聚合响应与本模块端点共用同一规范化入口。"""
+    from app.jobs.backtest_favorite_rerun import get_backtest_auto_rerun
+    return get_backtest_auto_rerun()
+
+
+class BacktestAutoRerunIn(BaseModel):
+    enabled: bool
+    hour: int = Field(ge=0, le=23)
+    minute: int = Field(ge=0, le=59)
+    window_days: int = Field(ge=30, le=365)
+
+
+@router.get("/preferences/backtest-auto-rerun")
+def get_backtest_auto_rerun_prefs() -> dict:
+    """返回回测定时复跑偏好 {enabled, hour, minute, window_days}。"""
+    return _get_backtest_auto_rerun_pref()
+
+
+@router.post("/preferences/backtest-auto-rerun")
+def update_backtest_auto_rerun(req: BacktestAutoRerunIn, request: Request) -> dict:
+    """保存回测定时复跑偏好并立即 reschedule/移除 APScheduler job (F11)。
+
+    - enabled=True: 注册/更新 job (工作日到点用滚动窗口复跑收藏的策略 Run)
+    - enabled=False: 移除 job; job 已在线程池中运行时靠运行时开关兜底 (零开销返回)
+    - 校验: hour 0-23 / minute 0-59 / window_days 30-365, 由 Pydantic 422 强制。
+    """
+    from app.jobs.backtest_favorite_rerun import set_backtest_auto_rerun
+
+    saved = set_backtest_auto_rerun(
+        req.enabled, req.hour, req.minute, req.window_days
+    )
+
+    # 动态操作 APScheduler job (跟随 update_review_schedule 先例)
+    from app.jobs.daily_pipeline import (
+        BACKTEST_RERUN_JOB_ID,
+        _register_backtest_favorite_rerun_job,
+    )
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler:
+        if saved["enabled"]:
+            _register_backtest_favorite_rerun_job(
+                scheduler, request.app.state.repo, saved["hour"], saved["minute"]
+            )
+            logger.info("backtest_favorite_rerun enabled @%02d:%02d mon-fri",
+                        saved["hour"], saved["minute"])
+        else:
+            try:
+                scheduler.remove_job(BACKTEST_RERUN_JOB_ID)
+                logger.info("backtest_favorite_rerun disabled (job removed)")
+            except Exception:
+                pass  # job 本就不存在(从未开过), 无需处理
+
+    return saved
 
 
 class ReviewPushIn(BaseModel):

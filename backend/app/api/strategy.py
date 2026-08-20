@@ -107,6 +107,9 @@ def _strategy_detail(
         "description": description or s.meta.get("description", ""),
         "tags": s.meta.get("tags", []),
         "source": s.source,
+        # F13 定义指纹: 前端与回测 Run 持久化的 strategy_def_hash 比对,
+        # 不一致时提示「策略定义已变更」。指纹未知时为 None。
+        "def_hash": s.def_hash or None,
         "execution_backend": getattr(s, "execution_backend", "polars_expr"),
         "asset_types": s.meta.get("asset_types", ["stock"]),
         "version": s.meta.get("version", "1.0.0"),
