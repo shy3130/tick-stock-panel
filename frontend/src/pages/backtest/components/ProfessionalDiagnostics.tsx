@@ -12,6 +12,7 @@ import {
   buildExecutionModel,
   buildUnderwaterRows,
 } from './ExecutionDiagnosticsCharts'
+import { MetricExplainer } from './MetricExplainer'
 
 interface Props {
   result: StrategyBacktestResult
@@ -268,23 +269,23 @@ export function ProfessionalDiagnostics({ result }: Props) {
       severity: 'warning' as const,
     }] : []),
   ]
-  const advanced = [
-    ['Sortino', fmtRatio(stats.sortino)],
-    ['Calmar', fmtRatio(stats.calmar)],
-    ['Omega', fmtRatio(stats.omega)],
-    ['利润因子', fmtRatio(stats.profit_factor)],
-    ['盈亏比', fmtRatio(stats.payoff_ratio)],
-    ['尾部比率', fmtRatio(stats.tail_ratio)],
-    ['恢复因子', fmtRatio(stats.recovery_factor)],
-    ['年化波动', fmtPct(stats.annual_volatility)],
-    ['下行波动', fmtPct(stats.downside_deviation)],
-    ['Ulcer Index', fmtPct(stats.ulcer_index)],
-    ['VaR (5%)', fmtPct(stats.value_at_risk)],
-    ['CVaR (5%)', fmtPct(stats.conditional_value_at_risk)],
-    ['Alpha', fmtPct(stats.alpha)],
-    ['Beta', fmtRatio(stats.beta)],
-    ['信息比率', fmtRatio(stats.information_ratio)],
-    ['跟踪误差', fmtPct(stats.tracking_error)],
+  const advanced: Array<{ label: string; value: string; term?: string }> = [
+    { label: 'Sortino', value: fmtRatio(stats.sortino), term: 'sortino' },
+    { label: 'Calmar', value: fmtRatio(stats.calmar), term: 'calmar' },
+    { label: 'Omega', value: fmtRatio(stats.omega) },
+    { label: '利润因子', value: fmtRatio(stats.profit_factor), term: 'profit_factor' },
+    { label: '盈亏比', value: fmtRatio(stats.payoff_ratio), term: 'payoff_ratio' },
+    { label: '尾部比率', value: fmtRatio(stats.tail_ratio) },
+    { label: '恢复因子', value: fmtRatio(stats.recovery_factor) },
+    { label: '年化波动', value: fmtPct(stats.annual_volatility) },
+    { label: '下行波动', value: fmtPct(stats.downside_deviation) },
+    { label: 'Ulcer Index', value: fmtPct(stats.ulcer_index) },
+    { label: 'VaR (5%)', value: fmtPct(stats.value_at_risk), term: 'var' },
+    { label: 'CVaR (5%)', value: fmtPct(stats.conditional_value_at_risk), term: 'cvar' },
+    { label: 'Alpha', value: fmtPct(stats.alpha), term: 'alpha' },
+    { label: 'Beta', value: fmtRatio(stats.beta), term: 'beta' },
+    { label: '信息比率', value: fmtRatio(stats.information_ratio) },
+    { label: '跟踪误差', value: fmtPct(stats.tracking_error) },
   ]
   const sourceGenerations = snapshot?.source_generations
     ? Object.entries(snapshot.source_generations)
@@ -372,10 +373,13 @@ export function ProfessionalDiagnostics({ result }: Props) {
           <div className="mt-0.5 text-[10px] text-muted">不可计算时显示“—”；优先结合滚动窗口、月度分布和样本外结果解释</div>
         </div>
         <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
-          {advanced.map(([label, value]) => (
-            <div key={label} className="bg-surface px-3 py-2.5">
-              <div className="text-[10px] text-muted">{label}</div>
-              <div className="mt-1 font-mono text-sm font-semibold text-foreground num">{value}</div>
+          {advanced.map(item => (
+            <div key={item.label} className="bg-surface px-3 py-2.5">
+              <div className="flex items-center gap-1 text-[10px] text-muted">
+                {item.label}
+                {item.term && <MetricExplainer term={item.term} />}
+              </div>
+              <div className="mt-1 font-mono text-sm font-semibold text-foreground num">{item.value}</div>
             </div>
           ))}
         </div>

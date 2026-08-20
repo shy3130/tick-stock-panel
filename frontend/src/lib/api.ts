@@ -1173,6 +1173,42 @@ export interface StrategyBacktestRequest {
   regime_filter?: { states?: string[]; min_score?: number } | null
   benchmark_symbol?: '000001.INDEX' | '000300.INDEX' | '000905.INDEX' | '000852.INDEX'
   risk_free_rate?: number
+  /** A1 量能约束: 单笔最大参与率 (0-1 小数, 如 0.10 = 10%); null/缺省 = 关闭。约束 = min(当日量, 均量窗口日均量) × 参与率 */
+  max_participation_pct?: number | null
+  /** 参与率均量窗口 (交易日数, 默认 5) */
+  participation_volume_window?: number
+  /** B6 上市天数门控 (天, 0 = 关闭): 上市不足 N 天的标的整段不入面板 */
+  min_listed_days?: number
+}
+
+/** 策略容量诊断块 — strategy run stats.capacity。未启用时仅 enabled/capped_entry_count 有效; 样本不足时分位输出 null, 不伪造 0 */
+export interface StrategyCapacityStats {
+  enabled: boolean
+  capped_entry_count: number
+  /** 单笔量能上限名义金额 (上限股数 × 成交价) 的分位, 元 */
+  cap_value_p50: number | null
+  cap_value_p10: number | null
+  /** 实际成交名义金额 / cap_value 的分位 (cap_value<=0 的笔不进样本) */
+  utilization_p50: number | null
+  utilization_p90: number | null
+  /** 无一笔被量能截断 且 utilization_p90 < 0.8 → 量能远未构成约束; 样本不足为 null */
+  unconstrained: boolean | null
+  /** 线性外推估计: 当前资金规模再乘该倍数前, p90 笔不触碰量能上限; 近似口径, 非精确容量解 */
+  est_capacity_multiple: number | null
+}
+
+/** 上市天数门控统计 — strategy run stats.listing_age_gate。requested=true 表示请求了门控但数据缺失未生效 */
+export interface ListingAgeGateStats {
+  enabled: boolean
+  requested?: boolean
+  reason?: string
+  min_listed_days?: number
+  rows_before?: number
+  rows_after?: number
+  rows_dropped?: number
+  symbols_dropped?: number
+  /** 上市日期缺失但被保留 (fail-open) 的行数 */
+  unknown_listing_date?: number
 }
 
 export interface WalkForwardFold {
@@ -1266,6 +1302,8 @@ export interface StrategyRobustnessResult {
     avg_pnl_pct: number
     total_pnl_pct: number
   }>
+  /** 逐笔收益 bootstrap 净值带 (交易分布诊断, 非账户净值); 有效交易 < 10 或 n_boot < 100 时为 null */
+  trade_equity_band?: TradeEquityBand | null
   warnings?: string[]
   data_snapshot?: BacktestDataSnapshot
   methodology_context?: string
@@ -1360,6 +1398,121 @@ export interface StrategyBacktestResult {
   random_seed?: number | null
   /** 后端是否已将完整结果保存为 BacktestRun；false 时不能下载 Run 报告。 */
   persisted?: boolean
+}
+
+/** 逐笔收益 bootstrap 净值带 — percentiles 各数组长度 = n_trades, 每 trade index 处的跨路径分位 */
+export interface TradeEquityBand {
+  n_trades: number
+  n_boot: number
+  seed: number
+  percentiles: { p05: number[]; p25: number[]; p50: number[]; p75: number[]; p95: number[] }
+  /** 各路径最终净值的分位 */
+  final_value_percentiles: { p05: number; p25: number; p50: number; p75: number; p95: number }
+}
+
+// ===== 回测可信度增强 (/api/backtest/strategy/*) =====
+
+export type RegimeBucketKey = 'bull_turbulent' | 'bull_calm' | 'bear_turbulent' | 'bear_calm'
+
+/** 市场状态单桶统计; 天数不足时仅 days/days_pct 有效, 指标为 null 不伪造 */
+export interface RegimeBucketStats {
+  days: number
+  days_pct: number
+  strategy_total_return: number | null
+  strategy_annualized_return: number | null
+  strategy_sharpe: number | null
+  strategy_max_drawdown: number | null
+  benchmark_total_return: number | null
+  excess_total_return: number | null
+}
+
+/** POST /api/backtest/strategy/regime-breakdown 响应; 对齐交易日 < 120 时 regime 为 null */
+export interface RegimeBreakdownResponse {
+  regime: {
+    n_days: number
+    warmup_days: number
+    buckets: Record<RegimeBucketKey, RegimeBucketStats>
+    definitions: Record<string, string>
+  } | null
+  run_id: string
+  note?: string
+}
+
+/** 成本敏感性单行 — 成本倍数重跑后的完整口径指标 */
+export interface CostSensitivityRow {
+  multiplier: number
+  fees_pct: number
+  slippage_bps: number
+  is_baseline: boolean
+  total_return: number | null
+  annualized_return: number | null
+  sharpe: number | null
+  max_drawdown: number | null
+  final_equity: number | null
+  total_cost: number | null
+  n_trades: number | null
+}
+
+/** POST /api/backtest/strategy/cost-sensitivity 响应 */
+export interface CostSensitivityResponse {
+  cost_sensitivity: {
+    multipliers: number[]
+    rows: CostSensitivityRow[]
+    note: string
+  }
+  run_id_baseline: string
+  elapsed_ms: number
+}
+
+/** POST /api/backtest/strategy/style-attribution 响应; 有效日不足时 style_attribution 为 null, meta 仍返回 */
+export interface StyleAttributionResponse {
+  style_attribution: {
+    n_obs: number
+    alpha_per_period: number | null
+    alpha_annualized: number | null
+    betas: { smb: number | null; umd: number | null; lmv: number | null }
+    t_stats: { alpha: number | null; smb: number | null; umd: number | null; lmv: number | null }
+    r_squared: number | null
+    factor_version: string
+  } | null
+  style_factor_meta: {
+    valid_days: number
+    skipped_days: number
+    median_cross_section: number | null
+    min_cross_section: number
+    factor_version: string
+  }
+  run_id: string
+}
+
+/** 成交可达性 worst 行 — headroom = 价格带内分钟成交额 / 交易名义金额, 越小越难成交 */
+export interface FillReachabilityWorstRow {
+  symbol: string
+  date: string
+  side: string
+  headroom: number | null
+  band_notional: number | null
+  trade_notional: number | null
+}
+
+/** GET /api/backtest/runs/{run_id}/fill-reachability 响应 */
+export interface FillReachabilityResponse {
+  fill_reachability: {
+    n_trades: number
+    n_sampled: number
+    sample_seed: number
+    price_band_pct: number
+    sides_checked: number
+    n_no_data: number
+    no_data_pct: number
+    n_reachable: number
+    reachable_pct: number
+    headroom_p10: number | null
+    headroom_p50: number | null
+    worst: FillReachabilityWorstRow[]
+    note: string
+  }
+  run_id: string
 }
 
 // ===== Backtest Run 持久化历史 (/api/backtest/runs) =====
@@ -3160,6 +3313,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  /** 市场状态分桶表现 (bull/bear × turbulent/calm); 对齐交易日 < 120 时 regime=null */
+  strategyRegimeBreakdown: (payload: StrategyBacktestRequest) =>
+    request<RegimeBreakdownResponse>('/api/backtest/strategy/regime-breakdown', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 成本敏感性: 佣金+滑点按倍数整体缩放重跑; multipliers 缺省用后端默认档位 */
+  strategyCostSensitivity: (payload: StrategyBacktestRequest & { multipliers?: number[] }) =>
+    request<CostSensitivityResponse>('/api/backtest/strategy/cost-sensitivity', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 风格归因: 逐日截面对 smb/umd/lmv 三因子回归 */
+  strategyStyleAttribution: (payload: StrategyBacktestRequest) =>
+    request<StyleAttributionResponse>('/api/backtest/strategy/style-attribution', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 成交可达性诊断: 对已持久化 Run 的成交抽样, 检查成交价价格带内分钟成交额是否覆盖交易名义金额 */
+  backtestFillReachability: (runId: string, sample = 20, seed = 0) =>
+    request<FillReachabilityResponse>(
+      `/api/backtest/runs/${encodeURIComponent(runId)}/fill-reachability?sample=${sample}&seed=${seed}`,
+    ),
 
   parameterGridLaunch: (payload: ParameterGridRequest) =>
     request<ParameterGridLaunchResponse>('/api/backtest/parameter-grid', {

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Loader2, Play, Search, Square, XCircle } from 'lucide-react'
 import {
   api,
   type OptimizerExperiment,
   type OptimizerScenario,
+  type StrategyBacktestRequest,
   type StrategyDetail,
 } from '@/lib/api'
 import { toast } from '@/components/Toast'
@@ -17,6 +18,7 @@ import {
   useOptimizerTask,
 } from '@/lib/optimizerTask'
 import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
+import { RUNS_KEY } from './RunHistoryPanel'
 
 const OBJECTIVES = [
   { value: 'risk_adjusted', label: '风险调整收益' },
@@ -47,9 +49,11 @@ function statusMeta(status: OptimizerExperiment['status'] | null) {
 
 interface StrategySearchPanelProps {
   onUseScenario?: (strategyId: string) => void
+  /** 场景已成功固化为 Run 后回调（用于切换到运行历史 tab） */
+  onScenarioRunComplete?: () => void
 }
 
-export function StrategySearchPanel({ onUseScenario }: StrategySearchPanelProps) {
+export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: StrategySearchPanelProps) {
   const [selected, setSelected] = useState<string[]>([])
   const [includeAllA, setIncludeAllA] = useState(true)
   const [boards, setBoards] = useState<string[]>(['main', 'gem', 'star', 'bj'])
@@ -72,6 +76,8 @@ export function StrategySearchPanel({ onUseScenario }: StrategySearchPanelProps)
   const [error, setError] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const pollingVersion = useRef(0)
+  const queryClient = useQueryClient()
+  const [runningScenario, setRunningScenario] = useState<string | null>(null)
 
   const strategies = useQuery({ queryKey: ['optimizer-strategies'], queryFn: api.strategyList, staleTime: 30_000 })
   const universes = useQuery({ queryKey: ['optimizer-universes'], queryFn: api.optimizerUniverses, staleTime: 60_000 })
@@ -175,6 +181,52 @@ export function StrategySearchPanel({ onUseScenario }: StrategySearchPanelProps)
       setError(message)
     } finally {
       setCancelling(false)
+    }
+  }
+
+  const experimentRangeReady = Boolean(experiment?.start && experiment?.end)
+
+  const scenarioRunState = (row: OptimizerScenario): { disabled: boolean; title: string } => {
+    if (!experimentRangeReady) {
+      return { disabled: true, title: '寻优实验区间不可得，无法构造运行请求' }
+    }
+    if (!(row.holding_days >= 1) || (row.matching !== 'close_t' && row.matching !== 'open_t+1')) {
+      return { disabled: true, title: '场景参数不完整（持仓周期或成交口径无效），无法构造运行请求' }
+    }
+    return {
+      disabled: runningScenario !== null,
+      title: `按寻优区间 ${experiment?.start} → ${experiment?.end}、${row.holding_days} 日持仓、${row.matching} 口径运行并持久化为 Run（股票池按回测默认全市场，费用/仓位等用默认值）`,
+    }
+  }
+
+  /** 把寻优场景固化为一次持久化 Run：POST /strategy/run 本身会写运行历史，不写策略池 */
+  const runScenario = async (row: OptimizerScenario) => {
+    if (runningScenario || row.strategy_id.startsWith('combo:')) return
+    if (!experiment?.start || !experiment.end) return
+    if (!(row.holding_days >= 1) || (row.matching !== 'close_t' && row.matching !== 'open_t+1')) return
+    setRunningScenario(row.scenario_id)
+    try {
+      const request: StrategyBacktestRequest = {
+        strategy_id: row.strategy_id,
+        symbols: null,
+        start: experiment.start,
+        end: experiment.end,
+        matching: row.matching,
+        holding_days: row.holding_days,
+        mode: 'position',
+      }
+      const result = await api.strategyBacktestRun(request)
+      if (result?.error) {
+        toast(`场景运行失败：${result.error}`)
+        return
+      }
+      void queryClient.invalidateQueries({ queryKey: RUNS_KEY })
+      toast(`已固化为 Run：${row.strategy_label || row.strategy_id}（${row.holding_days}日 · ${row.matching}）`, 'success')
+      onScenarioRunComplete?.()
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : '场景运行失败')
+    } finally {
+      setRunningScenario(null)
     }
   }
 
@@ -415,6 +467,21 @@ export function StrategySearchPanel({ onUseScenario }: StrategySearchPanelProps)
                               回填
                             </button>
                           )}
+                          {!row.strategy_id.startsWith('combo:') && (() => {
+                            const runState = scenarioRunState(row)
+                            return (
+                              <button
+                                type="button"
+                                className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-accent disabled:cursor-not-allowed disabled:text-muted"
+                                disabled={runState.disabled}
+                                title={runState.title}
+                                onClick={() => { void runScenario(row) }}
+                              >
+                                {runningScenario === row.scenario_id && <Loader2 className="h-3 w-3 animate-spin" />}
+                                运行为Run
+                              </button>
+                            )
+                          })()}
                         </td>
                       </tr>
                     ))}

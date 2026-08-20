@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown, AlertTriangle, Info } from 'lucide-react'
 import {
   api,
   type StrategyBacktestResult,
@@ -28,8 +28,14 @@ import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { TradeKlineModal } from './components/TradeKlineModal'
 import { BacktestWarnings } from './components/BacktestWarnings'
 import { ProfessionalDiagnostics } from './components/ProfessionalDiagnostics'
+import { buildPreflightFindings } from './components/runPreflight'
 import { TradeAttributionPanel } from './components/TradeAttributionPanel'
 import { StrategyRobustnessPanel } from './components/StrategyRobustnessPanel'
+import { TrustDiagnostics } from './components/TrustDiagnostics'
+import { RegimeBreakdownPanel } from './components/RegimeBreakdownPanel'
+import { CostSensitivityPanel } from './components/CostSensitivityPanel'
+import { StyleAttributionPanel } from './components/StyleAttributionPanel'
+import { parseParticipationPctInput } from './components/trustDiagnosticsCore'
 import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 
@@ -724,9 +730,16 @@ export function StrategyBacktest({
   const [regimeMinScore, setRegimeMinScore] = useState<string>(saved?.regimeMinScore ?? '')
   const [benchmarkSymbol, setBenchmarkSymbol] = useState(saved?.benchmarkSymbol ?? '000001.INDEX')
   const [riskFreeRate, setRiskFreeRate] = useState(saved?.riskFreeRate ?? '0')
+  // A1 量能约束 + B6 上市天数门控: 均为可选撮合约束 (百分数输入, 空 = 关闭)
+  const [maxParticipationPct, setMaxParticipationPct] = useState(saved?.maxParticipationPct ?? '')
+  const [participationWindow, setParticipationWindow] = useState(saved?.participationWindow ?? '5')
+  const [minListedDays, setMinListedDays] = useState(saved?.minListedDays ?? '0')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [rangeSettingsOpen, setRangeSettingsOpen] = useState(false)
   const [quickRanges, setQuickRanges] = useState(loadQuickRanges)
+  // 简单/专业模式: 默认专业(现状); 简单模式只保留常用配置, 其余条件渲染隐藏
+  const [simpleMode, setSimpleMode] = useState(() => storage.backtestSimpleMode.get(false))
+  const [preflightOpen, setPreflightOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<AdvancedSettingsTab>('params')
   const [editingScoring, setEditingScoring] = useState(false)
   const [scoringDraft, setScoringDraft] = useState<Record<string, number>>({})
@@ -877,6 +890,9 @@ export function StrategyBacktest({
         regimeMinScore,
         benchmarkSymbol,
         riskFreeRate,
+        maxParticipationPct,
+        participationWindow,
+        minListedDays,
         params: strategyParams,
         overrides,
         result: backtestTask.result,
@@ -891,13 +907,18 @@ export function StrategyBacktest({
 
   const [validationError, setValidationError] = useState<string | null>(null)
   // 相关输入变化后清除校验错误,避免误导性旧提示
-  useEffect(() => { setValidationError(null) }, [riskFreeRate])
+  useEffect(() => { setValidationError(null) }, [riskFreeRate, maxParticipationPct, participationWindow, minListedDays])
 
   const handleRun = () => {
     if (!selectedStrategy) return
     const rfr = Number(riskFreeRate)
     if (!Number.isFinite(rfr) || rfr <= -100 || rfr > 100) {
       setValidationError('无风险年化必须为有限数且在 (-100, 100] 范围内')
+      return
+    }
+    const participation = parseParticipationPctInput(maxParticipationPct)
+    if (!participation.ok) {
+      setValidationError(participation.error ?? '最大参与率输入不合法')
       return
     }
     setValidationError(null)
@@ -925,8 +946,28 @@ export function StrategyBacktest({
       } : undefined,
       benchmark_symbol: benchmarkSymbol,
       risk_free_rate: rfr / 100,
+      max_participation_pct: participation.value,
+      participation_volume_window: Math.max(1, Math.round(Number(participationWindow) || 5)),
+      min_listed_days: Math.max(0, Math.round(Number(minListedDays) || 0)),
     })
   }
+
+  const applySimpleMode = (next: boolean) => {
+    setSimpleMode(next)
+    storage.backtestSimpleMode.set(next)
+  }
+
+  // 运行前预检: 纯前端启发式, 覆盖区间长度/股票池/成本假设/成交口径/次新股
+  const preflightFindings = useMemo(() => buildPreflightFindings({
+    start: clampStartToScreenerPool(start),
+    end,
+    symbols: symbols.split(',').map(item => item.trim()).filter(Boolean),
+    fees: Number(fees),
+    slippage: Number(slippage),
+    entryFill,
+    minListedDays: Number(minListedDays) || 0,
+  }), [start, end, symbols, fees, slippage, entryFill, minListedDays, screenerPool])
+  const preflightWarnCount = preflightFindings.filter(finding => finding.level === 'warn').length
 
   // 提取统计
   const s = result?.stats
@@ -1229,6 +1270,9 @@ export function StrategyBacktest({
       regime_filter: config.regime_filter,
       benchmark_symbol: config.benchmark_symbol,
       risk_free_rate: config.risk_free_rate,
+      max_participation_pct: config.max_participation_pct,
+      participation_volume_window: config.participation_volume_window,
+      min_listed_days: config.min_listed_days,
     } as StrategyBacktestRequest
   }, [result, isCandidateExecution])
 
@@ -1241,6 +1285,26 @@ export function StrategyBacktest({
             <div className="section-kicker">Parameters</div>
             <h2 className="section-title">策略配置</h2>
           </div>
+          <div className="inline-flex rounded-btn border border-border bg-elevated p-0.5" role="group" aria-label="配置模式">
+            {([['pro', '专业'], ['simple', '简单']] as const).map(([mode, label]) => {
+              const active = (mode === 'simple') === simpleMode
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => applySimpleMode(mode === 'simple')}
+                  title={mode === 'simple' ? '仅保留常用配置，其余沿用现有值' : '显示全部配置项（默认）'}
+                  className={`inline-flex items-center rounded-[6px] px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${active
+                    ? 'bg-accent text-white shadow-sm'
+                    : 'text-secondary hover:bg-surface hover:text-foreground'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
         </div>
         <div className="panel-body space-y-3">
         {screenerPool && (
@@ -1249,6 +1313,11 @@ export function StrategyBacktest({
             {screenerPool.asOf && (
               <span>。筛选截止日为 {screenerPool.asOf}，回测起点不会早于该日，以避免前视偏差。</span>
             )}
+          </div>
+        )}
+        {simpleMode && (
+          <div className="rounded-input border border-border bg-elevated/40 px-3 py-2 text-[11px] leading-4 text-muted" role="status">
+            简单模式：已隐藏高级配置（保持现有值不变），切换到专业模式可调整成交口径、仓位权重、基准等全部参数。
           </div>
         )}
         <div>
@@ -1304,6 +1373,7 @@ export function StrategyBacktest({
           <div className="rounded-btn border border-border bg-surface px-2.5 py-2 text-xs text-muted">加载策略配置…</div>
         )}
 
+        {!simpleMode && (
         <button
           type="button"
           onClick={() => detail && setSettingsOpen(true)}
@@ -1326,6 +1396,17 @@ export function StrategyBacktest({
           <span className="mt-1 block text-[10px] font-medium text-secondary">{stockPoolSummary}</span>
           <span className="mt-1 block text-[10px] leading-4 text-muted">{advancedSummary}</span>
         </button>
+        )}
+
+        {simpleMode && (
+          <div className="rounded-btn border border-border bg-surface p-2.5">
+            <div className="text-xs font-medium text-foreground">股票池</div>
+            <div className="mt-0.5 text-[10px] text-muted">{stockPoolSummary}</div>
+            <div className="mt-1.5">
+              <StockPoolPicker value={symbols} onChange={setSymbols} />
+            </div>
+          </div>
+        )}
 
         <div className="rounded-btn border border-border bg-surface p-2.5">
           <div className="flex items-center justify-between gap-2">
@@ -1377,6 +1458,7 @@ export function StrategyBacktest({
                 </button>
               ))}
             </div>
+            {!simpleMode && (
             <button
               type="button"
               onClick={() => setRangeSettingsOpen(v => !v)}
@@ -1389,9 +1471,10 @@ export function StrategyBacktest({
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
             </button>
+            )}
           </div>
 
-          {rangeSettingsOpen && (
+          {!simpleMode && rangeSettingsOpen && (
             <div className="mt-2 rounded-input border border-border/60 bg-base/50 p-2">
               <div className="mb-1.5 flex items-center justify-between gap-2 text-[10px] text-muted">
                 <span>快捷区间</span>
@@ -1438,6 +1521,7 @@ export function StrategyBacktest({
           )}
         </div>
 
+        {!simpleMode && (
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">对比基准</label>
@@ -1460,24 +1544,29 @@ export function StrategyBacktest({
             />
           </div>
         </div>
+        )}
 
+        {!simpleMode && (
+        <>
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">建仓口径</label>
-            <select value={entryFill} onChange={e => setEntryFill(e.target.value as any)} className={INPUT_CLS}>
+            <select value={entryFill} onChange={e => setEntryFill(e.target.value as 'close_t' | 'open_t+1')} className={INPUT_CLS}>
               <option value="open_t+1">次日开盘成交（推荐）</option>
               <option value="close_t">信号日收盘成交</option>
             </select>
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">清仓口径</label>
-            <select value={exitFill} onChange={e => setExitFill(e.target.value as any)} className={INPUT_CLS}>
+            <select value={exitFill} onChange={e => setExitFill(e.target.value as 'close_t' | 'open_t+1')} className={INPUT_CLS}>
               <option value="close_t">到期/信号日收盘成交（推荐）</option>
               <option value="open_t+1">次日开盘成交</option>
             </select>
           </div>
         </div>
         <div className="mt-1 text-[10px] leading-4 text-muted">建仓默认次日开盘（避免未来函数），清仓默认当日收盘（持仓中可盘中/收盘卖）；买卖点由策略触发器决定，这里只决定成交价。</div>
+        </>
+        )}
 
         {simMode === 'position' && (
         <div className="grid grid-cols-2 gap-2">
@@ -1486,9 +1575,10 @@ export function StrategyBacktest({
             <input type="number" value={initialCapital} onChange={e => setInitialCapital(e.target.value)}
               className={INPUT_CLS} />
           </div>
+          {!simpleMode && (
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">买入权重</label>
-            <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} className={INPUT_CLS}>
+            <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification')} className={INPUT_CLS}>
               <option value="equal">等权买入</option>
               <option value="score_weight">评分加权</option>
               <option value="equal_vol">等波动率</option>
@@ -1497,16 +1587,21 @@ export function StrategyBacktest({
               <option value="max_diversification">最大分散化</option>
             </select>
           </div>
+          )}
+          {!simpleMode && (
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">最大持仓数</label>
             <input type="number" value={maxPositions} onChange={e => setMaxPositions(e.target.value)}
               className={INPUT_CLS} />
           </div>
+          )}
+          {!simpleMode && (
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">最大总仓位(%)</label>
             <input type="number" min={0} max={100} value={maxExposure} onChange={e => setMaxExposure(e.target.value)}
               className={INPUT_CLS} />
           </div>
+          )}
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">佣金(万分之)</label>
             <input type="number" value={fees} onChange={e => setFees(e.target.value)} className={INPUT_CLS} />
@@ -1515,9 +1610,30 @@ export function StrategyBacktest({
             <label className="text-xs font-medium text-secondary block mb-1.5">滑点(万分之)</label>
             <input type="number" min={0} value={slippage} onChange={e => setSlippage(e.target.value)} className={INPUT_CLS} />
           </div>
+          {!simpleMode && (
+          <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5" title="单笔买入金额不超过 min(当日成交量, 均量窗口日均量) × 参与率；留空 = 关闭">最大参与率(%)</label>
+            <input type="number" min={0} max={100} step={0.5} placeholder="关闭" value={maxParticipationPct}
+              onChange={e => setMaxParticipationPct(e.target.value)} className={INPUT_CLS} />
+          </div>
+          )}
+          {!simpleMode && (
+          <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5" title="参与率所对照的日均成交量窗口（交易日）">参与率均量窗口(天)</label>
+            <input type="number" min={1} max={60} value={participationWindow}
+              onChange={e => setParticipationWindow(e.target.value)} className={INPUT_CLS} />
+          </div>
+          )}
+          {!simpleMode && (
+          <div>
+            <label className="text-xs font-medium text-secondary block mb-1.5" title="上市不足 N 天的标的整段不入回测面板，规避次新股；0 = 关闭">上市天数门控(天)</label>
+            <input type="number" min={0} max={3650} value={minListedDays}
+              onChange={e => setMinListedDays(e.target.value)} className={INPUT_CLS} />
+          </div>
+          )}
         </div>
         )}
-        {simMode === 'position' && (
+        {simMode === 'position' && !simpleMode && (
         <div className="text-[10px] leading-4 text-muted">
           单票目标约 {Number.isFinite(targetPositionPct) ? targetPositionPct.toFixed(1) : '—'}%。最大总仓位控制资金投入；剩余现金不是新增持仓名额，只有实际卖出成功才释放持仓数。
         </div>
@@ -1528,23 +1644,63 @@ export function StrategyBacktest({
         </div>
         )}
 
-        {isPending ? (
+        <div className="flex items-stretch gap-2">
+          {isPending ? (
+            <button
+              onClick={stopBacktest}
+              className="btn-secondary w-full !border-danger/40 !bg-danger/10 !text-danger hover:!bg-danger/20"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              停止回测
+            </button>
+          ) : (
+            <button
+              onClick={handleRun}
+              disabled={!selectedStrategy || strategyDetail.isLoading}
+              className="btn-primary flex-1"
+            >
+              <Play className="h-3.5 w-3.5" />
+              运行回测
+            </button>
+          )}
           <button
-            onClick={stopBacktest}
-            className="btn-secondary w-full !border-danger/40 !bg-danger/10 !text-danger hover:!bg-danger/20"
+            type="button"
+            onClick={() => setPreflightOpen(v => !v)}
+            aria-expanded={preflightOpen}
+            title="运行前检查区间样本、股票池、成本与口径配置"
+            className={`relative shrink-0 rounded-btn border px-2.5 text-[11px] font-medium transition-colors cursor-pointer ${preflightOpen
+              ? 'border-accent/40 bg-accent/10 text-accent'
+              : 'border-border bg-surface text-secondary hover:border-accent/40 hover:text-accent'
+            }`}
           >
-            <Square className="h-3.5 w-3.5 fill-current" />
-            停止回测
+            预检
+            {preflightWarnCount > 0 && (
+              <span
+                className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-danger"
+                role="status"
+                aria-label={`${preflightWarnCount} 项警告`}
+              />
+            )}
           </button>
-        ) : (
-          <button
-            onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading}
-            className="btn-primary w-full"
-          >
-            <Play className="h-3.5 w-3.5" />
-            运行回测
-          </button>
+        </div>
+        {preflightOpen && (
+          <div className="rounded-btn border border-border bg-surface p-2.5">
+            <div className="text-[11px] font-medium text-secondary">
+              运行前预检{preflightFindings.length === 0 ? '：当前配置未触发提醒' : ''}
+            </div>
+            {preflightFindings.length > 0 && (
+              <div className="mt-1.5 space-y-1.5">
+                {preflightFindings.map(finding => (
+                  <div key={finding.key} className="flex items-start gap-1.5 text-[11px] leading-4">
+                    {finding.level === 'warn'
+                      ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
+                      : <Info className="mt-0.5 h-3 w-3 shrink-0 text-accent" />}
+                    <span className="min-w-0 text-secondary">{finding.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         {validationError && (
           <p className="text-[11px] text-danger mt-1.5">{validationError}</p>
@@ -1878,6 +2034,7 @@ export function StrategyBacktest({
             )}
 
             {!isCandidateExecution && <ProfessionalDiagnostics result={result} />}
+            {!isCandidateExecution && <TrustDiagnostics result={result} request={robustnessRequest} />}
             <TradeAttributionPanel attribution={result.attribution} />
 
             {isCandidateExecution ? (
@@ -1887,6 +2044,13 @@ export function StrategyBacktest({
               </div>
             ) : robustnessRequest && (
               <StrategyRobustnessPanel key={result.run_id} request={robustnessRequest} />
+            )}
+            {!isCandidateExecution && robustnessRequest && (
+              <>
+                <RegimeBreakdownPanel key={`regime-${result.run_id}`} request={robustnessRequest} />
+                <CostSensitivityPanel key={`cost-${result.run_id}`} request={robustnessRequest} />
+                <StyleAttributionPanel key={`style-${result.run_id}`} request={robustnessRequest} />
+              </>
             )}
 
             {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && (

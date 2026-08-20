@@ -37,7 +37,7 @@ import { BacktestWarnings } from './components/BacktestWarnings'
 import { useECharts } from './charts/useECharts'
 
 /** 局部 query key 前缀；所有 run mutation 统一 invalidate 该前缀 */
-const RUNS_KEY = ['backtest-runs'] as const
+export const RUNS_KEY = ['backtest-runs'] as const
 const PAGE_SIZE = 50
 const MAX_COMPARE = 4
 

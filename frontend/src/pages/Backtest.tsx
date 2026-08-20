@@ -88,6 +88,10 @@ export function Backtest() {
     setActiveTab('strategy')
     storage.backtestActiveTab.set('strategy')
   }, [])
+  const scenarioRunComplete = useCallback(() => {
+    setActiveTab('history')
+    storage.backtestActiveTab.set('history')
+  }, [])
   const clearParameterBackfill = useCallback(() => setParameterBackfill(null), [])
 
   const modeSwitch = (
@@ -151,7 +155,7 @@ export function Backtest() {
             <ParameterGridPanel onUseScenario={useGridScenario} />
           </div>
           <div className={activeTab === 'search' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'search'}>
-            <StrategySearchPanel onUseScenario={useSearchStrategy} />
+            <StrategySearchPanel onUseScenario={useSearchStrategy} onScenarioRunComplete={scenarioRunComplete} />
           </div>
           {activeTab === 'history' && <RunHistoryPanel />}
         </div>

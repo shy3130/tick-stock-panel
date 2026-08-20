@@ -84,6 +84,8 @@ export const storage = {
   strategyBacktestQuickRanges: kv<unknown>('strategy-backtest-quick-ranges'),
   /** 回测工作台上次打开的模式 */
   backtestActiveTab: kv<'factor' | 'strategy' | 'composite' | 'grid' | 'search' | 'history'>('backtest-active-tab'),
+  /** 策略回测配置面板简单模式（true=仅保留常用配置） */
+  backtestSimpleMode: kv<boolean>('backtestSimpleMode'),
 
   /** 参数网格最近一次实验；路由重入后据此恢复服务端持久化结果 */
   parameterGridLastExperimentId: kv<string | null>('parameter-grid-last-experiment-id'),
@@ -130,6 +132,12 @@ export const storage = {
     regimeMinScore?: string
     benchmarkSymbol?: string
     riskFreeRate?: string
+
+    /** A1 量能约束: 最大参与率百分数输入 (空串 = 关闭) */
+    maxParticipationPct?: string
+    participationWindow?: string
+    /** B6 上市天数门控 (天, '0' = 关闭) */
+    minListedDays?: string
     params?: Record<string, any>
     overrides?: Record<string, any>
     result: any

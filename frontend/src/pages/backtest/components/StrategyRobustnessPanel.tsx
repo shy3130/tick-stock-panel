@@ -1,10 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import type { EChartsOption } from 'echarts'
-import { FlaskConical, Loader2 } from 'lucide-react'
-import { api, type StrategyBacktestRequest, type StrategyRobustnessResult, type WalkForwardResult } from '@/lib/api'
+import { FlaskConical, Loader2, Waypoints } from 'lucide-react'
+import { api, type StrategyBacktestRequest, type StrategyRobustnessResult, type TradeEquityBand, type WalkForwardResult } from '@/lib/api'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { useECharts } from '../charts/useECharts'
+import { validateTradeEquityBand } from './trustDiagnosticsCore'
 
 interface Props {
   request: StrategyBacktestRequest
@@ -292,6 +293,120 @@ function ExitBreakdown({ result }: { result: StrategyRobustnessResult }) {
   )
 }
 
+/** 逐笔收益 bootstrap 净值带图 — x = trade index, p05–p95 面积带 + p25/p50/p75 参考线 */
+function TradeEquityBandChart({ band }: { band: TradeEquityBand }) {
+  const option = useMemo<EChartsOption>(() => {
+    const { p05, p25, p50, p75, p95 } = band.percentiles
+    // 带高度 = p95 - p05, 与 p05 底座堆叠出 p05–p95 区间带
+    const bandSpan = p95.map((value, index) => +(value - p05[index]).toFixed(6))
+    return {
+      animation: false,
+      grid: { left: 44, right: 12, top: 24, bottom: 26 },
+      legend: { top: 0, textStyle: { color: '#94a3b8', fontSize: 10 } },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(15,23,42,0.95)',
+        borderColor: 'rgba(148,163,184,0.2)',
+        textStyle: { color: '#e2e8f0', fontSize: 12 },
+        formatter: (params: unknown) => {
+          const first = Array.isArray(params) ? params[0] as { dataIndex?: number } : params as { dataIndex?: number }
+          const index = Number(first?.dataIndex ?? -1)
+          if (index < 0 || index >= band.n_trades) return ''
+          const rows = (['p95', 'p75', 'p50', 'p25', 'p05'] as const)
+            .map(key => `<div style="display:flex;justify-content:space-between;gap:16px"><span>${key}</span><span style="font-family:monospace">${band.percentiles[key][index].toFixed(3)}</span></div>`)
+          return [`<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">第 ${index + 1} 笔后</div>`, ...rows].join('')
+        },
+      },
+      xAxis: {
+        type: 'value',
+        min: 0,
+        name: '交易序号',
+        nameTextStyle: { color: '#64748b', fontSize: 10 },
+        axisLabel: { color: '#64748b', fontSize: 10, formatter: (v: number) => `#${Math.round(v)}` },
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: '#334155' } },
+      },
+      yAxis: {
+        type: 'value',
+        scale: true,
+        name: '净值(起点=1)',
+        nameTextStyle: { color: '#64748b', fontSize: 10 },
+        axisLabel: { color: '#64748b', fontSize: 10, formatter: (v: number) => v.toFixed(2) },
+        splitLine: { lineStyle: { color: '#1e293b' } },
+        axisLine: { show: false },
+      },
+      series: [
+        {
+          name: '_p05_base',
+          type: 'line',
+          stack: 'band',
+          data: p05,
+          symbol: 'none',
+          lineStyle: { width: 0, opacity: 0 },
+          silent: true,
+          legendHoverLink: false,
+        },
+        {
+          name: 'p05–p95 带',
+          type: 'line',
+          stack: 'band',
+          data: bandSpan,
+          symbol: 'none',
+          lineStyle: { width: 0, opacity: 0 },
+          areaStyle: { color: 'rgba(59,130,246,0.12)' },
+          emphasis: { disabled: true },
+        },
+        { name: 'p25', type: 'line', data: p25, symbol: 'none', lineStyle: { width: 1, color: 'rgba(148,163,184,0.55)', type: 'dashed' } },
+        { name: 'p50', type: 'line', data: p50, symbol: 'none', lineStyle: { width: 1.8, color: '#3b82f6' } },
+        { name: 'p75', type: 'line', data: p75, symbol: 'none', lineStyle: { width: 1, color: 'rgba(148,163,184,0.55)', type: 'dashed' } },
+      ],
+    }
+  }, [band])
+  const chartRef = useECharts(option, [band])
+  return <div ref={chartRef} className="h-[240px]" />
+}
+
+/** 逐笔收益 bootstrap 净值带 — 交易分布诊断, 非账户净值 */
+function TradeEquityBandSection({ result }: { result: StrategyRobustnessResult }) {
+  const band = validateTradeEquityBand(result.trade_equity_band)
+  if (!band) return null
+  const finals = band.final_value_percentiles
+  const finalCards: Array<[string, number]> = [
+    ['p05', finals.p05],
+    ['p25', finals.p25],
+    ['p50', finals.p50],
+    ['p75', finals.p75],
+    ['p95', finals.p95],
+  ]
+  return (
+    <div className="overflow-hidden rounded-btn border border-border">
+      <div className="border-b border-border px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary"><Waypoints className="h-3.5 w-3.5 text-accent" />逐笔收益 bootstrap 净值带</div>
+        <div className="mt-0.5 text-[10px] leading-4 text-muted">
+          对逐笔收益率做 {band.n_boot.toLocaleString('zh-CN')} 次有放回重抽样，复利合成路径后取跨路径分位；这是<b>交易分布诊断，非账户净值</b> — 不含仓位权重、资金约束与持仓重叠，不能与账户净值曲线直接比较。
+        </div>
+      </div>
+      <div className="space-y-2 p-3">
+        <TradeEquityBandChart band={band} />
+        <div className="grid grid-cols-5 gap-px overflow-hidden rounded-input border border-border bg-border">
+          {finalCards.map(([label, value]) => (
+            <div key={label} className="bg-surface px-2 py-2 text-center">
+              <div className="text-[10px] text-muted">终值 {label}</div>
+              <div className={`mt-0.5 font-mono text-sm font-semibold num ${priceColorClass(value - 1)}`}>{value.toFixed(3)}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted">
+          <span className="font-mono">n_trades: {band.n_trades}</span>
+          <span className="font-mono">n_boot: {band.n_boot.toLocaleString('zh-CN')}</span>
+          <span className="font-mono">seed: {band.seed}</span>
+          <span>终值相对区间 {fmtPct(finals.p05 - 1, 1)} ~ {fmtPct(finals.p95 - 1, 1)}（p05–p95）。</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function StrategyRobustnessPanel({ request }: Props) {
   const [nFolds, setNFolds] = useState(4)
   const [runPermutation, setRunPermutation] = useState(false)
@@ -341,6 +456,7 @@ export function StrategyRobustnessPanel({ request }: Props) {
           <WalkForwardOOS result={mutation.data} />
           <Perturbation result={mutation.data} />
           <ExitBreakdown result={mutation.data} />
+          <TradeEquityBandSection result={mutation.data} />
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted">
             <span className="font-mono">run_id: {mutation.data.run_id}</span>
             <span className="font-mono">seed: {mutation.data.random_seed}</span>

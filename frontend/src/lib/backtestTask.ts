@@ -142,6 +142,12 @@ export function startBacktest(params: {
   regime_filter?: { states?: string[]; min_score?: number } | null
   benchmark_symbol?: string
   risk_free_rate?: number
+  /** A1 量能约束: 单笔最大参与率 (0-1 小数); null/缺省 = 关闭 (不进 query) */
+  max_participation_pct?: number | null
+  /** 参与率均量窗口 (交易日数) */
+  participation_volume_window?: number
+  /** 上市天数门控 (天, 0 = 关闭) */
+  min_listed_days?: number
 }): void {
   // 取消之前的任务状态
   if (eventSource) {
@@ -174,6 +180,14 @@ export function startBacktest(params: {
     regime_filter: params.regime_filter ? JSON.stringify(params.regime_filter) : undefined,
     benchmark_symbol: params.benchmark_symbol,
     risk_free_rate: params.risk_free_rate,
+    // A1/B6 撮合约束: 仅非默认时附加, 保持与旧行为的 job_key 稳定
+    max_participation_pct: params.max_participation_pct ?? undefined,
+    participation_volume_window: params.participation_volume_window != null && params.participation_volume_window !== 5
+      ? params.participation_volume_window
+      : undefined,
+    min_listed_days: params.min_listed_days != null && params.min_listed_days > 0
+      ? params.min_listed_days
+      : undefined,
   })
 
   // 存 reconnect 信息 (刷新后用)
