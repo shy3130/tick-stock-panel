@@ -53,6 +53,7 @@ __all__ = [
     "omega_ratio",
     "payoff_ratio",
     "performance_metrics",
+    "probabilistic_sharpe_ratio",
     "profit_factor",
     "relative_performance_metrics",
     "sortino_ratio",
@@ -179,6 +180,62 @@ def _annualized_sharpe_for_periods(
     if std <= 0.0:
         return None
     return float(np.mean(excess) / std * math.sqrt(float(periods_per_year)))
+
+
+def probabilistic_sharpe_ratio(
+    returns,
+    context: MetricContext,
+    benchmark_sr: float = 0.0,
+) -> float | None:
+    """概率 Sharpe 比率 (PSR) — Bailey & López de Prado (2012) 闭式解。
+
+    定义::
+
+        PSR(SR*) = Φ( ((SR − SR*) · √(n−1)) / √(1 − γ3·SR + (γ4−1)/4 · SR²) )
+
+    其中 SR 为 **每期 (非年化)** Sharpe (超额收益均值 / 样本标准差, ``ddof=1``,
+    与 :func:`annualized_sharpe` 同口径); γ3 为偏度, γ4 为超额峰度 (Fisher,
+    即峰度 − 3); Φ 为标准正态 CDF; n 为样本量。
+
+    口径约定:
+    * ``benchmark_sr`` 按 **年化** 输入, 内部除以 ``√(periods_per_year)``
+      转为每期基准 SR*, 与年化 Sharpe 直接可比; 默认 0 (即 SR > 0 的概率)。
+    * ``context.periods_per_year`` 仅用于该年化 → 每期的换算, 本函数自身
+      的 SR 不做年化。
+
+    fail-closed: n < 20、样本标准差退化 (≤ 0)、PSR 分母非正、输出非有限
+    → 一律返回 ``None``, 不伪造 0 或代理值。
+    """
+    arr = _clean_series(returns)
+    n = int(arr.size) if arr is not None else 0
+    if arr is None or n < 20:
+        return None
+    excess = arr - context.period_risk_free_rate
+    std = float(np.std(excess, ddof=context.std_ddof))
+    if not math.isfinite(std) or std <= 0.0:
+        return None
+    sr = float(np.mean(excess)) / std
+    try:
+        benchmark_period = float(benchmark_sr) / math.sqrt(context.periods_per_year)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(benchmark_period):
+        return None
+
+    # 中心矩计算偏度 γ3 与超额峰度 γ4 (位置平移不变, 超额/原始收益等价)。
+    centered = excess - float(np.mean(excess))
+    m2 = float(np.mean(centered ** 2))
+    if m2 <= 0.0:
+        return None
+    gamma3 = float(np.mean(centered ** 3)) / m2 ** 1.5
+    gamma4 = float(np.mean(centered ** 4)) / m2 ** 2 - 3.0
+
+    denom_sq = 1.0 - gamma3 * sr + (gamma4 - 1.0) / 4.0 * sr * sr
+    if not math.isfinite(denom_sq) or denom_sq <= 0.0:
+        return None
+    z = (sr - benchmark_period) * math.sqrt(n - 1) / math.sqrt(denom_sq)
+    psr = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    return _finite_or_none(psr)
 
 
 # ---------------------------------------------------------------------------

@@ -79,6 +79,57 @@ def mc_permutation_pvalue(
         "metric_context": context.to_dict(),
     }
 
+def trade_bootstrap_equity_band(
+    trade_returns: list[float] | np.ndarray,
+    n_boot: int = 1000,
+    seed: int = 0,
+) -> dict | None:
+    """交易级 Bootstrap 净值带 — 逐笔收益有放回重采样的诊断口径。
+
+    对逐笔收益率做 ``n_boot`` 次有放回重采样 (每次长度 = n_trades), 单仓位
+    逐笔等权复利得到每条 bootstrap 净值路径, 沿路径逐点输出 5/25/50/75/95
+    分位带及末值分位。
+
+    ⚠️ 口径警示: 这是 **交易收益分布** 的诊断量 — 重采样后顺序无关、且按
+    单仓位逐笔等权复利, **不是账户净值**, 不得与账户净值曲线 / 账户级回测
+    指标直接比较 (账户曲线含仓位权重、资金约束与持仓重叠)。
+
+    Args:
+        trade_returns: 逐笔收益率序列 (非有限值剔除, 与 metrics 的 dropna
+            语义一致)。
+        n_boot: bootstrap 次数 (≥ 100 才有分位意义)。
+        seed: ``np.random.default_rng`` 种子, 给定即确定性可复现。
+
+    Returns:
+        ``{"n_trades", "n_boot", "seed", "percentiles": {p05/p25/p50/p75/p95
+        (长度 = n_trades, 每 trade index 处的跨路径分位)},
+        "final_value_percentiles": {p05/p25/p50/p75/p95}}``;
+        有效交易数 < 10 或 ``n_boot`` < 100 → ``None`` (fail-closed, 不伪造)。
+    """
+    try:
+        arr = np.asarray(trade_returns, dtype=float).ravel()
+    except (TypeError, ValueError):
+        return None
+    arr = arr[np.isfinite(arr)]
+    n = int(arr.size)
+    if n < 10 or int(n_boot) < 100:
+        return None
+
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(int(n_boot), n))
+    equity = np.cumprod(1.0 + arr[idx], axis=1)
+    qs = (5.0, 25.0, 50.0, 75.0, 95.0)
+    bands = np.percentile(equity, qs, axis=0)
+    final_qs = np.percentile(equity[:, -1], qs)
+    keys = ("p05", "p25", "p50", "p75", "p95")
+    return {
+        "n_trades": n,
+        "n_boot": int(n_boot),
+        "seed": int(seed),
+        "percentiles": {k: [float(v) for v in bands[i]] for i, k in enumerate(keys)},
+        "final_value_percentiles": {k: float(final_qs[i]) for i, k in enumerate(keys)},
+    }
+
 
 def exit_reason_breakdown(trades: list[dict]) -> list[dict]:
     groups: dict[str, list[float]] = {}

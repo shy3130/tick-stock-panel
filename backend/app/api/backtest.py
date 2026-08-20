@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
@@ -722,6 +722,119 @@ def _segment_windows(start: date, end: date, n_segments: int) -> list[tuple[date
 # 策略回测
 # ================================================================
 
+# provider 解析惯例同 services/kline_sync._get_data_provider: 进程内按名缓存,
+# 避免每次请求新建 FQuantProvider 反复建立 fstore 长连接。
+_PROVIDER_CACHE: dict[str, Any] = {}
+_PROVIDER_CACHE_LOCK = threading.Lock()
+
+
+def _get_data_provider(capability: str):
+    """按 capability 解析当前配置的 provider (进程内按名缓存单例)。"""
+    from app.data_providers.registry import get_active_provider_name, get_provider
+
+    name = get_active_provider_name(capability)
+    with _PROVIDER_CACHE_LOCK:
+        provider = _PROVIDER_CACHE.get(name)
+        if provider is None:
+            provider = get_provider(name)
+            _PROVIDER_CACHE[name] = provider
+        return provider
+
+
+def _strategy_listing_dates():
+    """上市天数门控 (B6) 的 symbol/listing_date 两列表。
+
+    get_stock_reference_flags 是 provider 特有方法 (不在 base 契约), 用
+    getattr 防御; provider 不可用 / 查询失败 / 空 df / 缺列一律返回 None —
+    service 侧已有显式告警分支, 这里不伪造门控数据。
+    """
+    try:
+        provider = _get_data_provider("daily")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("上市天数门控: 数据 provider 不可用, 门控不生效 (%s)", e)
+        return None
+    flags_fn = getattr(provider, "get_stock_reference_flags", None)
+    if not callable(flags_fn):
+        logger.warning("上市天数门控: 当前 provider 不提供上市日期, 门控不生效")
+        return None
+    try:
+        df = flags_fn()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("上市天数门控: 上市日期查询失败, 门控不生效 (%s)", e)
+        return None
+    if df is None or df.is_empty():
+        logger.warning("上市天数门控: 上市日期表为空, 门控不生效")
+        return None
+    if not {"symbol", "listing_date"}.issubset(df.columns):
+        logger.warning("上市天数门控: 上市日期表缺少 symbol/listing_date 列, 门控不生效")
+        return None
+    return df.select("symbol", "listing_date")
+
+
+def _strategy_backtest_config(
+    req: StrategyBacktestRequest,
+    start: date,
+    end: date,
+    *,
+    params: dict | None = None,
+):
+    """StrategyBacktestRequest → StrategyBacktestConfig 的唯一透传点。
+
+    strategy_run / robustness / 诊断端点共用; 新增字段只在这里接一次,
+    避免多处构造口径漂移。params 提供时覆盖 req.params (robustness 扰动用)。
+    """
+    from app.backtest.strategy import StrategyBacktestConfig
+
+    return StrategyBacktestConfig(
+        strategy_id=req.strategy_id,
+        symbols=req.symbols if req.symbols else None,
+        start=start,
+        end=end,
+        params=req.params if params is None else params,
+        overrides=req.overrides,
+        matching=req.matching,
+        entry_fill=req.entry_fill,
+        exit_fill=req.exit_fill,
+        fees_pct=req.fees_pct,
+        slippage_bps=req.slippage_bps,
+        max_positions=req.max_positions,
+        max_exposure_pct=req.max_exposure_pct,
+        initial_capital=req.initial_capital,
+        position_sizing=req.position_sizing,
+        mode=req.mode,
+        holding_days=req.holding_days,
+        regime_filter=req.regime_filter,
+        benchmark_symbol=req.benchmark_symbol,
+        risk_free_rate=req.risk_free_rate,
+        max_participation_pct=req.max_participation_pct,
+        participation_volume_window=req.participation_volume_window,
+        min_listed_days=req.min_listed_days,
+    )
+
+
+def _curve_date_iso(raw) -> str | None:
+    """曲线日期统一为 ISO 字符串 (date/datetime/str); 无法识别返回 None。"""
+    if isinstance(raw, datetime):
+        return raw.date().isoformat()
+    if isinstance(raw, date):
+        return raw.isoformat()
+    if isinstance(raw, str) and raw:
+        return raw
+    return None
+
+
+def _reject_full_mode(analysis: str) -> None:
+    """全量独立候选执行的曲线按退出事件日采样, 无日频语义的分析一律 422。"""
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "全量独立候选执行的曲线按退出事件日采样，不支持以日频收益为前提的"
+            f"{analysis}；请使用仓位模拟。"
+        ),
+    )
+
+
+
 class StrategyBacktestRequest(BaseModel):
     strategy_id: str
     symbols: list[str] | None = None
@@ -748,11 +861,17 @@ class StrategyBacktestRequest(BaseModel):
         "000001.INDEX", "000300.INDEX", "000905.INDEX", "000852.INDEX",
     ] = "000001.INDEX"
     risk_free_rate: float = Field(default=0.0, gt=-1.0, le=1.0)
+    # A1 量能参与率 + B6 上市天数门控透传: max_participation_pct=None 关闭
+    # 量能约束; min_listed_days=0 关闭门控 (启用时经 provider 取上市日期,
+    # 不可用则告警并跳过门控, 不伪造)。
+    max_participation_pct: float | None = Field(default=None, gt=0.0, le=1.0)
+    participation_volume_window: int = Field(default=5, ge=1, le=60)
+    min_listed_days: int = Field(default=0, ge=0, le=3650)
 
 @router.post("/strategy/run")
 def strategy_run(req: StrategyBacktestRequest, request: Request):
     """策略回测 — 复用 StrategyDef 体系做全周期回测。"""
-    from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
+    from app.backtest.strategy import StrategyBacktestService
 
     engine = _get_engine(request)
     strategy_engine = request.app.state.strategy_engine
@@ -762,29 +881,13 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
     start = _resolve_start(req, end, FACTOR_DEFAULT_DAYS)
     _guard_server_backtest_range(start, end)
 
-    cfg = StrategyBacktestConfig(
-        strategy_id=req.strategy_id,
-        symbols=req.symbols if req.symbols else None,
-        start=start,
-        end=end,
-        params=req.params,
-        overrides=req.overrides,
-        matching=req.matching,
-        entry_fill=req.entry_fill,
-        exit_fill=req.exit_fill,
-        fees_pct=req.fees_pct,
-        slippage_bps=req.slippage_bps,
-        max_positions=req.max_positions,
-        max_exposure_pct=req.max_exposure_pct,
-        initial_capital=req.initial_capital,
-        position_sizing=req.position_sizing,
-        mode=req.mode,
-        holding_days=req.holding_days,
-        regime_filter=req.regime_filter,
-        benchmark_symbol=req.benchmark_symbol,
-        risk_free_rate=req.risk_free_rate,
+    cfg = _strategy_backtest_config(req, start, end)
+    # B6 上市天数门控: 仅在启用时取上市日期表; provider 不可用时传 None,
+    # service 侧显式告警并跳过门控 (不伪造)。
+    result = svc.run(
+        cfg,
+        listing_dates=_strategy_listing_dates() if req.min_listed_days > 0 else None,
     )
-    result = svc.run(cfg)
     payload = _attach_run_provenance(
         json_safe(asdict(result)),
         request,
@@ -828,7 +931,7 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
             ),
         )
     from app.backtest import robustness as rb
-    from app.backtest.strategy import StrategyBacktestConfig, StrategyBacktestService
+    from app.backtest.strategy import StrategyBacktestService
 
     engine = _get_engine(request)
     svc = StrategyBacktestService(engine, request.app.state.strategy_engine)
@@ -840,29 +943,17 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    # B6 门控与 strategy_run 同口径: 折窗口/扰动场景共享同一份上市日期表。
+    listing_dates = _strategy_listing_dates() if req.min_listed_days > 0 else None
+
     def run_one(s: date, e: date, *, params: dict | None = None):
-        return svc.run(StrategyBacktestConfig(
-            strategy_id=req.strategy_id,
-            symbols=req.symbols if req.symbols else None,
-            start=s,
-            end=e,
-            params=req.params if params is None else params,
-            overrides=req.overrides,
-            matching=req.matching,
-            entry_fill=req.entry_fill,
-            exit_fill=req.exit_fill,
-            fees_pct=req.fees_pct,
-            slippage_bps=req.slippage_bps,
-            max_positions=req.max_positions,
-            max_exposure_pct=req.max_exposure_pct,
-            initial_capital=req.initial_capital,
-            position_sizing=req.position_sizing,
-            mode=req.mode,
-            holding_days=req.holding_days,
-            regime_filter=req.regime_filter,
-            benchmark_symbol=req.benchmark_symbol,
-            risk_free_rate=req.risk_free_rate,
-        ))
+        return svc.run(
+            _strategy_backtest_config(
+                req, s, e,
+                params=req.params if params is None else params,
+            ),
+            listing_dates=listing_dates,
+        )
 
     full = run_one(start, end)
     if full.error:
@@ -969,6 +1060,17 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
             seed=seed,
             context=robustness_context,
         )
+    # A3 交易级 Bootstrap 净值带: 逐笔收益分布的诊断口径 (顺序无关的单仓位
+    # 逐笔等权复利, 不是账户净值, 见模块口径警示); 成交 < 10 笔时 fail-closed
+    # 置 None, 不调用。
+    if len(full.trades or []) >= 10:
+        robustness["trade_equity_band"] = rb.trade_bootstrap_equity_band(
+            [t.get("pnl_pct") for t in full.trades if isinstance(t, dict)],
+            n_boot=req.n_boot,
+            seed=seed,
+        )
+    else:
+        robustness["trade_equity_band"] = None
     robustness["random_seed"] = seed
 
     # 短区间等 Walk-Forward 边界进入响应 warnings, 与块内 warning 一致可见
@@ -1015,6 +1117,174 @@ def strategy_robustness(req: RobustnessRequest, request: Request):
         payload,
     )
     return _attach_methodology(payload, "backtest")
+
+
+# ================================================================
+# 策略诊断端点 (regime 分桶 / 成本敏感性 / 风格归因): 不持久化 Run
+# ================================================================
+
+@router.post("/strategy/regime-breakdown")
+def strategy_regime_breakdown(req: StrategyBacktestRequest, request: Request):
+    """市场状态条件表现 — 按基准牛/熊 × 高/低波动四桶统计策略表现。
+
+    先完整执行一次仓位模拟回测, 再对策略净值与基准净值做事后分组
+    (vol 阈值取基准全样本中位数, 含轻度前视, 仅用于分组解释)。请求即
+    StrategyBacktestRequest, 无额外字段。诊断端点, 结果不持久化为 Run。
+    """
+    if req.mode == "full":
+        _reject_full_mode("市场状态分桶分析")
+    from app.backtest.regime_breakdown import regime_breakdown
+    from app.backtest.strategy import StrategyBacktestService
+
+    engine = _get_engine(request)
+    svc = StrategyBacktestService(engine, request.app.state.strategy_engine)
+    end = req.end or date.today()
+    start = _resolve_start(req, end, FACTOR_DEFAULT_DAYS)
+    _guard_server_backtest_range(start, end)
+
+    cfg = _strategy_backtest_config(req, start, end)
+    result = svc.run(
+        cfg,
+        listing_dates=_strategy_listing_dates() if req.min_listed_days > 0 else None,
+    )
+    if result.error:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    # benchmark_curve 为 {date, close}; regime_breakdown 统一消费 {date, value},
+    # 日期统一转 ISO 字符串与策略净值侧对齐。
+    strategy_curve = [
+        {"date": _curve_date_iso(p.get("date")), "value": p.get("value")}
+        for p in (result.equity_curve or [])
+        if isinstance(p, dict)
+    ]
+    benchmark_curve = [
+        {"date": _curve_date_iso(p.get("date")), "value": p.get("close")}
+        for p in (result.benchmark_curve or [])
+        if isinstance(p, dict)
+    ]
+    regime = regime_breakdown(
+        strategy_curve,
+        benchmark_curve,
+        MetricContext("daily", risk_free_rate=req.risk_free_rate),
+    )
+    return json_safe({
+        "regime": regime,
+        "run_id": result.run_id,
+        "note": (
+            "按基准 60 日均值分牛熊、20 日滚动波动中位数分高低波动的事后分组；"
+            "vol 阈值含轻度前视，仅用于分组解释，不构成交易信号。"
+        ),
+    })
+
+
+class CostSensitivityRequest(StrategyBacktestRequest):
+    # 负数倍数会翻转成本方向且无业务含义, 逐项 >= 0 校验; 去重/补基线
+    # (1.0) 由 cost_sensitivity 模块归一化, rows 与归一化后档位对齐。
+    multipliers: list[Annotated[float, Field(ge=0.0)]] = Field(
+        default=[0.0, 0.5, 1.0, 2.0, 5.0], min_length=2, max_length=6,
+    )
+
+
+@router.post("/strategy/cost-sensitivity")
+def strategy_cost_sensitivity(req: CostSensitivityRequest, request: Request):
+    """成本敏感性 — 同一策略在不同交易成本倍数下逐档完整重跑的对比。
+
+    ⚠️ 服务端耗时与档数成正比 (默认 5 档 = 5 次完整回测), 显著慢于
+    /strategy/run。mode=full 允许: 成本对独立候选执行同样有意义, 候选口径
+    下不可用的时序指标由模块置 null。诊断端点, 结果不持久化。
+    """
+    from app.backtest.cost_sensitivity import run_cost_sensitivity
+    from app.backtest.strategy import StrategyBacktestService
+
+    engine = _get_engine(request)
+    svc = StrategyBacktestService(engine, request.app.state.strategy_engine)
+    end = req.end or date.today()
+    start = _resolve_start(req, end, FACTOR_DEFAULT_DAYS)
+    _guard_server_backtest_range(start, end)
+
+    cfg = _strategy_backtest_config(req, start, end)
+    listing_dates = _strategy_listing_dates() if req.min_listed_days > 0 else None
+    results_in_order: list = []
+
+    def run_fn(scenario):
+        r = svc.run(scenario, listing_dates=listing_dates)
+        results_in_order.append(r)
+        return r
+
+    t0 = time.perf_counter()
+    sensitivity = run_cost_sensitivity(run_fn, cfg, req.multipliers)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 3)
+    # 基线 run_id: run_cost_sensitivity 按升序倍数逐档恰好调用一次 run_fn,
+    # 归一化后的 multipliers 与 results_in_order 按序一一对应 (1.0 必在档中)。
+    run_id_baseline = None
+    for m, r in zip(sensitivity["multipliers"], results_in_order):
+        if m == 1.0:
+            if getattr(r, "error", None):
+                raise HTTPException(status_code=400, detail=str(r.error))
+            run_id_baseline = getattr(r, "run_id", None)
+            break
+    return json_safe({
+        "cost_sensitivity": sensitivity,
+        "run_id_baseline": run_id_baseline,
+        "elapsed_ms": elapsed_ms,
+    })
+
+
+@router.post("/strategy/style-attribution")
+def strategy_style_attribution(req: StrategyBacktestRequest, request: Request):
+    """风格归因 — 策略日收益对面板内自建 SMB/UMD/LMV 因子的 OLS 回归。
+
+    面板用 engine.load_panel(该次回测 symbols, 请求区间) 重建 (复用引擎
+    缓存); 因子有效日 < 120 或对齐样本不足时 style_attribution 为 null,
+    style_factor_meta 说明原因 (fail-closed, 不伪造归因)。诊断端点,
+    结果不持久化。
+    """
+    if req.mode == "full":
+        _reject_full_mode("风格因子归因")
+    from app.backtest.robustness import returns_from_equity_curve
+    from app.backtest.style_factors import build_style_factor_returns, style_attribution
+    from app.backtest.strategy import StrategyBacktestService
+
+    engine = _get_engine(request)
+    svc = StrategyBacktestService(engine, request.app.state.strategy_engine)
+    end = req.end or date.today()
+    start = _resolve_start(req, end, FACTOR_DEFAULT_DAYS)
+    _guard_server_backtest_range(start, end)
+
+    cfg = _strategy_backtest_config(req, start, end)
+    result = svc.run(
+        cfg,
+        listing_dates=_strategy_listing_dates() if req.min_listed_days > 0 else None,
+    )
+    if result.error:
+        raise HTTPException(status_code=400, detail=result.error)
+
+    # 面板向前扩 warmup: mom_252_21 需 253 观测、vol_60 需 60, 不足时
+    # UMD 结构性全 null (短窗口归因静默失效的根因)。因子序列仍按
+    # 日期与策略收益对齐, 扩展窗口不改变对齐样本。
+    panel_start = start - timedelta(days=470)
+    panel = engine.load_panel(cfg.symbols, panel_start, end)
+    factor_df, meta = build_style_factor_returns(panel)
+    attribution = None
+    if factor_df is not None:
+        # 收益序列第 i 个对应 equity_curve 第 i+1 天: 传真实发生日,
+        # 与因子日按日期键对齐 (位置错位会引入一天滞后偏差)。
+        strategy_dates = [
+            str(row.get("date"))[:10]
+            for row in result.equity_curve[1:]
+            if row.get("date")
+        ]
+        attribution = style_attribution(
+            returns_from_equity_curve(result.equity_curve),
+            strategy_dates,
+            factor_df,
+            MetricContext("daily", risk_free_rate=req.risk_free_rate),
+        )
+    return json_safe({
+        "style_attribution": attribution,
+        "style_factor_meta": meta,
+        "run_id": result.run_id,
+    })
 
 
 class _BacktestJob:
@@ -1067,8 +1337,10 @@ def _make_job_key(
     params: str | None, overrides: str | None,
     mode: str = "position", holding_days: int = 5, regime_filter: str | None = None,
     benchmark_symbol: str = "000001.INDEX", risk_free_rate: float = 0.0,
+    max_participation_pct: float | None = None, participation_volume_window: int = 5,
+    min_listed_days: int = 0,
 ) -> str:
-    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}"
+    raw = f"{strategy_id}|{symbols}|{start}|{end}|{matching}|{entry_fill}|{exit_fill}|{fees_pct}|{slippage_bps}|{max_positions}|{max_exposure_pct}|{initial_capital}|{position_sizing}|{params}|{overrides}|{mode}|{holding_days}|{regime_filter}|{benchmark_symbol}|{risk_free_rate}|{max_participation_pct}|{participation_volume_window}|{min_listed_days}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 def _make_factor_job_key(
@@ -1117,6 +1389,9 @@ async def strategy_stream(
         "000001.INDEX", "000300.INDEX", "000905.INDEX", "000852.INDEX",
     ] = "000001.INDEX",
     risk_free_rate: float = Query(default=0.0, gt=-1.0, le=1.0),
+    max_participation_pct: float | None = Query(default=None, gt=0.0, le=1.0),
+    participation_volume_window: int = Query(default=5, ge=1, le=60),
+    min_listed_days: int = Query(default=0, ge=0, le=3650),
 ):
     """SSE 流式策略回测: 实时推送进度, 完成后推送结果, 支持重连 (刷新/切页后恢复)。
 
@@ -1169,6 +1444,7 @@ async def strategy_stream(
         fees_pct, slippage_bps, max_positions, max_exposure_pct, initial_capital, position_sizing,
         params, overrides,
         mode, holding_days, regime_filter, benchmark_symbol, risk_free_rate,
+        max_participation_pct, participation_volume_window, min_listed_days,
     )
 
     _cleanup_stale_jobs()
@@ -1208,11 +1484,22 @@ async def strategy_stream(
                 regime_filter=regime_filter_obj,
                 benchmark_symbol=benchmark_symbol,
                 risk_free_rate=risk_free_rate,
+                max_participation_pct=max_participation_pct,
+                participation_volume_window=participation_volume_window,
+                min_listed_days=min_listed_days,
             )
 
+            # 上市日期表在工作线程内取 (DuckDB 查询不阻塞事件循环);
+            # min_listed_days=0 时跳过。
             def _run_backtest():
                 try:
-                    result = svc.run(cfg, lambda d: job.progress.append(d), job.cancel_event)
+                    listing_dates = (
+                        _strategy_listing_dates() if min_listed_days > 0 else None
+                    )
+                    result = svc.run(
+                        cfg, lambda d: job.progress.append(d), job.cancel_event,
+                        listing_dates=listing_dates,
+                    )
                     job.result = result
                     job.done = True
                     job.finish_ts = time.time()
@@ -1602,6 +1889,64 @@ def export_run(run_id: str, request: Request, fmt: str = "json"):
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{run.run_id}.json"'},
     )
+
+
+@router.post("/runs/{run_id}/fill-reachability")
+def run_fill_reachability(
+    run_id: str,
+    request: Request,
+    sample: int = Query(default=20, ge=1, le=100),
+    seed: int = Query(default=0),
+):
+    """成交可达性诊断 (B7) — 对已持久化 Run 的成交抽样做分钟级价格带抽查。
+
+    逐笔读取成交日分钟线 (单标的单日 09:00-15:30), 计算成交价 ±0.5% 价格
+    带内分钟成交额相对交易名义金额的 headroom; 分钟数据读取失败 fail-soft
+    计入 no_data, 不中断诊断。仅支持有成交明细的 strategy/composite Run。
+    """
+    run = _get_run_or_404(_run_store(request), run_id)
+    if run.kind not in ("strategy", "composite"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"kind={run.kind} 的 Run 无成交明细，不支持成交可达性诊断",
+        )
+    trades = run.trades or []
+    if not trades:
+        raise HTTPException(status_code=422, detail="该 Run 无成交记录，无法做成交可达性诊断")
+
+    import polars as pl
+    from app.backtest.fill_reachability import diagnose_fill_reachability
+
+    provider = None
+    try:
+        provider = _get_data_provider("minute")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("成交可达性诊断: 分钟数据 provider 不可用 (%s)", e)
+
+    minute_warn_budget = 5  # 分钟读取失败告警上限, 防止逐笔刷屏
+
+    def get_minutes_fn(symbol: str, day: date) -> pl.DataFrame:
+        """(symbol, day) → 当日分钟线; 失败返回空 df 并限频告警。"""
+        nonlocal minute_warn_budget
+        if provider is None:
+            return pl.DataFrame()
+        try:
+            return provider.get_minute(
+                [symbol],
+                start_time=datetime(day.year, day.month, day.day, 9, 0),
+                end_time=datetime(day.year, day.month, day.day, 15, 30),
+                asset_type="stock",
+            )
+        except Exception as e:  # noqa: BLE001
+            if minute_warn_budget > 0:
+                minute_warn_budget -= 1
+                logger.warning(
+                    "成交可达性诊断: %s %s 分钟数据读取失败 (%s)", symbol, day, e
+                )
+            return pl.DataFrame()
+
+    fill = diagnose_fill_reachability(trades, get_minutes_fn, sample=sample, seed=seed)
+    return json_safe({"fill_reachability": fill, "run_id": run_id})
 
 
 @router.post("/runs/{run_id}/rerun")

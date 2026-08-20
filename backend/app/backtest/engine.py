@@ -61,6 +61,10 @@ class MatcherConfig:
         "equal", "score_weight", "equal_vol", "risk_parity", "mean_variance", "max_diversification",
     ] = "equal"
     risk_free_rate: float = 0.0
+    # A1 量能参与率约束: None=关闭; 启用时如 0.10 表示单笔买入股数不超过
+    # min(当日成交量, participation_volume_window 日均量) 的 10% (volume 面板口径为「股」)。
+    max_participation_pct: float | None = None
+    participation_volume_window: int = 5
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -68,6 +72,17 @@ class MatcherConfig:
             self.entry_fill = self.matching
         if self.exit_fill is None:
             self.exit_fill = self.matching
+        # A1 量能参与率约束参数 fail-fast 校验: 非法值直接抛错, 不静默降级。
+        if self.max_participation_pct is not None:
+            if not (0 < float(self.max_participation_pct) <= 1):
+                raise ValueError(
+                    f"max_participation_pct 需在 (0, 1] 区间 (如 0.10 表示 10%), "
+                    f"收到 {self.max_participation_pct!r}"
+                )
+        if int(self.participation_volume_window) < 1:
+            raise ValueError(
+                f"participation_volume_window 需 >= 1, 收到 {self.participation_volume_window!r}"
+            )
 
 
 @dataclass
@@ -469,6 +484,92 @@ class BacktestEngine:
             stats=stats,
         )
 
+    # ── A1 量能参与率约束 (两条撮合路径共用) ──────────────
+
+    @staticmethod
+    def _with_volume_cap(panel: pl.DataFrame, config: MatcherConfig) -> pl.DataFrame:
+        """面板预处理: 附加 _vol_cap_shares 列 (单笔买入股数上限, 单位: 股)。
+
+        口径: cap = pct × min(当日 volume, volume 含当日的 window 日简单滚动均值)。
+        - 滚动均值为「含当日」口径 (实现简单, 相比不含当日略偏宽松, 已知近似);
+          窗口不足 window 行时按可得行数平均 (min_samples=1, 首行均值即自身);
+        - volume 列缺失 / 整列全为 0 或 null → 整列置 null: cap 失效, 撮合回退
+          无约束的现有行为, 不 crash 不阻断 (fail-closed, 不伪造 0 上限);
+        - 单行 volume 缺失/非有限/负值 → 该行 null; 单行 volume=0 → cap=0
+          (当日无成交量的行, 买入按约束阻塞)。
+        仅返回新 DataFrame, 不改动传入面板 (PanelCache 共享只读)。
+        """
+        pct = getattr(config, "max_participation_pct", None)
+        if pct is None:
+            return panel
+        null_cap = pl.lit(None, dtype=pl.Float64).alias("_vol_cap_shares")
+        if "volume" not in panel.columns:
+            logger.warning("量能参与率约束已启用, 但面板缺少 volume 列: 本轮回退为无约束撮合")
+            return panel.with_columns(null_cap)
+        volume = pl.col("volume").cast(pl.Float64)
+        total_volume = panel.select(volume.fill_null(0).sum()).item()
+        if total_volume is None or float(total_volume) <= 0:
+            logger.warning("量能参与率约束已启用, 但面板 volume 全为 0/缺失: 本轮回退为无约束撮合")
+            return panel.with_columns(null_cap)
+        window = max(int(getattr(config, "participation_volume_window", 5) or 1), 1)
+        # 面板已按 symbol, date 排序 (撮合路径既有不变量), over("symbol") 滚动窗口不跨品种。
+        rolling_avg = volume.rolling_mean(window_size=window, min_samples=1).over("symbol")
+        return panel.with_columns(
+            pl.when(volume.is_null() | ~volume.is_finite() | (volume < 0))
+            .then(pl.lit(None, dtype=pl.Float64))
+            .otherwise(pl.lit(float(pct)) * pl.min_horizontal(volume, rolling_avg))
+            .cast(pl.Float64)
+            .alias("_vol_cap_shares")
+        )
+
+    @staticmethod
+    def _capacity_stats(
+        enabled: bool,
+        capped_entry_count: int,
+        cap_values: list[float],
+        utilizations: list[float],
+    ) -> dict:
+        """A1 量能约束的策略容量诊断块。
+
+        - cap_value = 单笔量能上限股数 × 成交价 (该笔在参与率约束下允许买入的最大名义金额);
+        - utilization = 实际成交 entry_value / cap_value (cap_value<=0 的笔不进入样本);
+        - unconstrained: 无一笔被量能截断 且 utilization_p90 < 0.8 (宽松判定「量能远未构成约束」);
+        - est_capacity_multiple = round(1/utilization_p90, 2): 粗略估计当前资金规模再乘该倍数
+          之前, 第 90 百分位笔不会触碰量能上限。这是线性外推的近似口径 (假设成交价与滚动
+          量能不随资金规模变化, 且未计入多笔同日抢同一上限的挤占), 非精确容量解。
+        样本不足 (无有效成交样本) 时分位数/unconstrained 输出 null, 不伪造 0。
+        """
+        stats: dict = {
+            "enabled": bool(enabled),
+            "capped_entry_count": int(capped_entry_count),
+            "cap_value_p50": None,
+            "cap_value_p10": None,
+            "utilization_p50": None,
+            "utilization_p90": None,
+            "unconstrained": None,
+            "est_capacity_multiple": None,
+        }
+        if not enabled:
+            return stats
+        cvs = np.array(
+            [v for v in cap_values if v is not None and np.isfinite(v) and v > 0], dtype=float
+        )
+        uts = np.array(
+            [u for u in utilizations if u is not None and np.isfinite(u) and u > 0], dtype=float
+        )
+        if cvs.size:
+            stats["cap_value_p50"] = round(float(np.percentile(cvs, 50)), 2)
+            stats["cap_value_p10"] = round(float(np.percentile(cvs, 10)), 2)
+        if uts.size:
+            u_p50 = float(np.percentile(uts, 50))
+            u_p90 = float(np.percentile(uts, 90))
+            stats["utilization_p50"] = round(u_p50, 4)
+            stats["utilization_p90"] = round(u_p90, 4)
+            stats["unconstrained"] = bool(int(capped_entry_count) == 0 and u_p90 < 0.8)
+            if u_p90 > 0:
+                stats["est_capacity_multiple"] = round(1.0 / u_p90, 2)
+        return stats
+
     def simulate_independent_candidates(
         self,
         panel: pl.DataFrame,
@@ -481,6 +582,8 @@ class BacktestEngine:
         """全量候选独立执行：每个买入信号都是独立样本, 不受资金/仓位限制。"""
         if panel.is_empty():
             return self._empty_result()
+        # A1 量能参与率约束: 两条撮合路径共用同一面板预处理 (只加列, 不改行序, mask 对齐不变)。
+        panel = self._with_volume_cap(panel, config)
 
         n = len(panel)
         panel_dates = panel["date"].to_numpy()
@@ -546,6 +649,19 @@ class BacktestEngine:
             if "signal_limit_down" in panel.columns else np.zeros(n, dtype=bool)
         )
 
+        # A1 量能参与率: 上限列 null → NaN, 任一有效行才视为启用; 全 null (缺 volume/全 0) → 不约束。
+        vol_cap_col = (
+            panel["_vol_cap_shares"].cast(pl.Float64).to_numpy()
+            if "_vol_cap_shares" in panel.columns else None
+        )
+        cap_enabled = vol_cap_col is not None and bool(np.isfinite(vol_cap_col).any())
+
+        def _entry_cap(idx: int) -> float | None:
+            if not cap_enabled:
+                return None
+            cap = float(vol_cap_col[idx])
+            return cap if np.isfinite(cap) and cap >= 0 else None
+
         symbol_rows: dict[str, list[int]] = {}
         row_pos_in_symbol = np.zeros(n, dtype=int)
         for i, sym_value in enumerate(panel_symbols):
@@ -565,12 +681,17 @@ class BacktestEngine:
             "buy_limit_up": 0,
             "buy_score_filter": 0,
             "buy_no_next_bar": max(n_candidates - int(ent.sum()), 0),
+            "buy_volume_cap": 0,
             "sell_invalid_price": 0,
             "sell_suspended": 0,
             "sell_limit_down": 0,
             "sell_no_future": 0,
             "pending_exit": 0,
         }
+        # A1 容量诊断样本: 每笔成交的量能上限名义金额与实际利用率。
+        cap_samples: list[float] = []
+        util_samples: list[float] = []
+        capped_entry_count = 0
 
         def _count(key: str) -> None:
             execution_stats[key] = execution_stats.get(key, 0) + 1
@@ -745,6 +866,13 @@ class BacktestEngine:
             if score_max is not None and score > score_max:
                 _count("buy_score_filter")
                 continue
+            # A1 量能参与率约束: 独立候选每笔固定 1 手 (100 股) 样本,
+            # 上限取整后不足 1 手 → 该候选买入阻塞 (buy_volume_cap)。
+            cap_shares = _entry_cap(entry_idx)
+            if cap_shares is not None:
+                if np.floor(min(100.0, cap_shares) / 100) * 100 < 100:
+                    _count("buy_volume_cap")
+                    continue
 
             sym = str(panel_symbols[entry_idx])
             rows = symbol_rows.get(sym, [])
@@ -754,6 +882,11 @@ class BacktestEngine:
                 continue
 
             entry_price = float(entry_prices[entry_idx])
+            if cap_shares is not None:
+                cap_value = cap_shares * entry_price
+                if cap_value > 0:
+                    cap_samples.append(cap_value)
+                    util_samples.append(100.0 * entry_price * (1 + buy_cost_pct) / cap_value)
             pos = {
                 "symbol": sym,
                 "name": str(names[entry_idx] or ""),
@@ -829,7 +962,8 @@ class BacktestEngine:
                 elif not pos.get("pending_exit_reason"):
                     _try_close(pos, last_idx, "end", self._date_str(panel_dates[last_idx]))
 
-        return self._calc_independent_candidate_result(trades, n_candidates, execution_stats)
+        capacity = self._capacity_stats(cap_enabled, capped_entry_count, cap_samples, util_samples)
+        return self._calc_independent_candidate_result(trades, n_candidates, execution_stats, capacity)
 
     def simulate_portfolio(
         self,
@@ -843,6 +977,8 @@ class BacktestEngine:
         """账户级组合回测：日线信号 → 成交约束 → 仓位/现金撮合。"""
         if panel.is_empty():
             return self._empty_result()
+        # A1 量能参与率约束: 与独立候选路径共用同一面板预处理 (只加列, 不改行序)。
+        panel = self._with_volume_cap(panel, config)
 
         n = len(panel)
         panel_dates = panel["date"].to_numpy()
@@ -913,6 +1049,19 @@ class BacktestEngine:
             if "signal_limit_down" in panel.columns else np.zeros(n, dtype=bool)
         )
 
+        # A1 量能参与率: 上限列 null → NaN, 任一有效行才视为启用; 全 null (缺 volume/全 0) → 不约束。
+        vol_cap_col = (
+            panel["_vol_cap_shares"].cast(pl.Float64).to_numpy()
+            if "_vol_cap_shares" in panel.columns else None
+        )
+        cap_enabled = vol_cap_col is not None and bool(np.isfinite(vol_cap_col).any())
+
+        def _entry_cap(idx: int) -> float | None:
+            if not cap_enabled:
+                return None
+            cap = float(vol_cap_col[idx])
+            return cap if np.isfinite(cap) and cap >= 0 else None
+
         date_to_indices: dict[str, list[int]] = {}
         for i, d in enumerate(panel_dates):
             d_str = self._date_str(d)
@@ -944,11 +1093,16 @@ class BacktestEngine:
             "buy_same_day_reentry": 0,
             "buy_exposure": 0,
             "buy_score_filter": 0,
+            "buy_volume_cap": 0,
             "sell_invalid_price": 0,
             "sell_suspended": 0,
             "sell_limit_down": 0,
             "pending_exit": 0,
         }
+        # A1 容量诊断样本: 每笔成交的量能上限名义金额与实际利用率。
+        cap_samples: list[float] = []
+        util_samples: list[float] = []
+        capped_entry_count = 0
 
         def _count(key: str) -> None:
             execution_stats[key] = execution_stats.get(key, 0) + 1
@@ -1182,7 +1336,7 @@ class BacktestEngine:
             idxs: list[int],
             sold_today: set[str],
         ) -> None:
-            nonlocal cash
+            nonlocal cash, capped_entry_count
             if max_positions <= 0:
                 return
             candidates: list[tuple[int, str, float]] = []
@@ -1250,11 +1404,24 @@ class BacktestEngine:
                     _count("buy_exposure")
                     continue
                 entry_price = float(entry_prices[idx])
-                shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / 100) * 100
-                entry_value = shares * entry_price * (1 + buy_cost_pct)
+                raw_target_shares = allocation / (entry_price * (1 + buy_cost_pct))
+                shares = np.floor(raw_target_shares / 100) * 100
                 if shares <= 0:
                     _count("buy_lot_size")
                     continue
+                # A1 量能参与率约束: 目标股数与单笔量能上限取小, 再按 100 股整手向下取整;
+                # 取整后不足 1 手 → 该笔买入阻塞 (buy_volume_cap)。
+                # 整手取整本身的少量截断不算被量能约束 (capped 仅在取整前目标>上限且取整后<目标时计)。
+                cap_shares = _entry_cap(idx)
+                if cap_shares is not None:
+                    capped_shares = np.floor(min(raw_target_shares, cap_shares) / 100) * 100
+                    if capped_shares < 100:
+                        _count("buy_volume_cap")
+                        continue
+                    if cap_shares < raw_target_shares and capped_shares < raw_target_shares:
+                        capped_entry_count += 1
+                    shares = capped_shares
+                entry_value = shares * entry_price * (1 + buy_cost_pct)
                 if entry_value > cash + 1e-6:
                     _count("buy_cash")
                     continue
@@ -1281,6 +1448,12 @@ class BacktestEngine:
                     "pending_exit_signal_date": None,
                     "blocked_exit_days": 0,
                 }
+                # A1 容量诊断: 记录该笔的量能上限名义金额与实际利用率 (cap_value<=0 不进样本)。
+                if cap_shares is not None:
+                    cap_value = cap_shares * entry_price
+                    if cap_value > 0:
+                        cap_samples.append(cap_value)
+                        util_samples.append(entry_value / cap_value)
 
         for d_idx, d_str in enumerate(all_dates):
             if d_idx % 20 == 0:
@@ -1361,6 +1534,7 @@ class BacktestEngine:
             config.risk_free_rate,
         )
         stats["execution"] = execution_stats
+        stats["capacity"] = self._capacity_stats(cap_enabled, capped_entry_count, cap_samples, util_samples)
         stats["pending_exit_positions"] = sum(1 for p in positions.values() if p.get("pending_exit_reason"))
         per_symbol = self._calc_per_symbol(trades)
         return SimResult(
@@ -1520,8 +1694,11 @@ class BacktestEngine:
         trades: list[TradeRecord],
         n_candidates: int,
         execution_stats: dict[str, int],
+        capacity: dict | None = None,
     ) -> SimResult:
         """全量独立候选统计：按每个候选样本的实际执行收益聚合。"""
+        if capacity is None:
+            capacity = BacktestEngine._capacity_stats(False, 0, [], [])
         if not trades:
             return SimResult(
                 equity_curve=[],
@@ -1535,6 +1712,7 @@ class BacktestEngine:
                     "n_candidates": int(n_candidates),
                     "n_trades": 0,
                     "execution": execution_stats,
+                    "capacity": capacity,
                 },
             )
 
@@ -1610,6 +1788,7 @@ class BacktestEngine:
             "sharpe": None,
             "return_distribution": dist,
             "execution": execution_stats,
+            "capacity": capacity,
         }
         # 交易级统计（收益期数未知时不携带日频 MetricContext），仍可安全产出
         # 盈亏、持仓期与 MAE/MFE；时间序列风险指标刻意不生成。

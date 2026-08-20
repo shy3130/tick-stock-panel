@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING, Callable, Literal
 
 import numpy as np
 import polars as pl
-
-from app.backtest.metrics import MetricContext, relative_performance_metrics
+from app.backtest.metrics import MetricContext, probabilistic_sharpe_ratio, relative_performance_metrics
+from app.backtest.robustness import returns_from_equity_curve
+from app.backtest.universe_gating import apply_listing_age_gate
 from app.backtest.engine import BacktestEngine, MatcherConfig
 from app.strategy.engine import StrategyDef, StrategyEngine
 
@@ -58,12 +59,21 @@ class StrategyBacktestConfig:
     regime_filter: dict | None = None  # {states: [...], min_score?: float}; None/空 → 不过滤
     benchmark_symbol: str = BENCHMARK_SYMBOL
     risk_free_rate: float = 0.0
+    # A1 量能参与率约束: None=关闭; 启用时如 0.10 表示单笔买入不超过
+    # min(当日量, participation_volume_window 日均量) 的 10%。透传给 MatcherConfig。
+    max_participation_pct: float | None = None
+    participation_volume_window: int = 5
+    # B6 上市天数门控: 上市未满 N 天的标的不进入回测面板 (买入候选与持仓
+    # 均不可能出现)。0=关闭。门控由 run(listing_dates=...) 提供。
+    min_listed_days: int = 0
 
     def __post_init__(self) -> None:
         if self.entry_fill is None:
             self.entry_fill = self.matching
         if self.exit_fill is None:
             self.exit_fill = self.matching
+        if self.min_listed_days < 0:
+            raise ValueError("min_listed_days 必须为非负整数")
 
     @staticmethod
     def _regime_filter_allowed_states(rf: dict | None) -> set[str] | None:
@@ -119,6 +129,7 @@ class StrategyBacktestService:
         cancel_event: "threading.Event | None" = None,
         *,
         panel: "pl.DataFrame | None" = None,
+        listing_dates: "pl.DataFrame | None" = None,
     ) -> StrategyBacktestResult:
         t0 = time.perf_counter()
         run_id = uuid.uuid4().hex[:16]
@@ -199,7 +210,23 @@ class StrategyBacktestService:
         timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
         if panel.is_empty():
             return _err("无数据，请检查日期范围或先运行盘后管道")
-
+        # B6 上市天数门控: 删行实现 (次新股整段不入面板)。空仓起点下无持仓
+        # 持续性问题; 门控统计进 stats, 后续 provenance 告警由 API 层按需附加。
+        listing_gate_stats: dict = {"enabled": False}
+        if config.min_listed_days > 0 and listing_dates is not None and not listing_dates.is_empty():
+            try:
+                panel, listing_gate_stats = apply_listing_age_gate(
+                    panel, listing_dates, config.min_listed_days,
+                )
+            except ValueError as e:
+                return _err(f"上市天数门控失败: {e}")
+        elif config.min_listed_days > 0:
+            # 请求了门控但没有上市日期数据 → 显式告警, 不静默忽略。
+            listing_gate_stats = {
+                "enabled": False, "requested": True,
+                "reason": "上市日期数据不可用, 门控未生效",
+            }
+        listing_gate_payload = {"listing_age_gate": listing_gate_stats}
         formal_range = self._date_range_mask(panel, config.start, config.end)
         if not formal_range.any():
             return _err("正式回测区间内无数据")
@@ -269,6 +296,8 @@ class StrategyBacktestService:
             initial_capital=config.initial_capital,
             position_sizing=config.position_sizing,
             risk_free_rate=config.risk_free_rate,
+            max_participation_pct=config.max_participation_pct,
+            participation_volume_window=config.participation_volume_window,
         )
         # 撮合 — full 为全候选独立执行；position 为账户级仓位模拟。
         def _sim_progress(evt: dict) -> None:
@@ -376,6 +405,16 @@ class StrategyBacktestService:
                 else None
             ),
         }
+
+        # B6 门控统计进 stats (对齐 capacity 等执行诊断口径)。
+        result.stats.update(listing_gate_payload)
+
+        # A3 PSR: 仅仓位模拟 (连续日频净值) 才有账户级口径; 候选执行曲线
+        # 按退出事件日采样, 不适用。
+        if not is_candidate_execution and result.equity_curve:
+            mc = MetricContext("daily", risk_free_rate=config.risk_free_rate)
+            rets = returns_from_equity_curve(result.equity_curve)
+            result.stats["psr"] = probabilistic_sharpe_ratio(rets, mc)
 
         elapsed = (time.perf_counter() - t0) * 1000
         trades = [self._trade_to_dict(t) for t in result.trades]
@@ -1005,9 +1044,11 @@ class StrategyBacktestService:
             "max_exposure_pct": c.max_exposure_pct,
             "initial_capital": c.initial_capital,
             "position_sizing": c.position_sizing,
-            "benchmark_symbol": c.benchmark_symbol,
             "risk_free_rate": c.risk_free_rate,
-
+            "benchmark_symbol": c.benchmark_symbol,
+            "max_participation_pct": c.max_participation_pct,
+            "participation_volume_window": c.participation_volume_window,
+            "min_listed_days": c.min_listed_days,
         }
 
     @staticmethod
