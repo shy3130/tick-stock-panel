@@ -850,6 +850,8 @@ export interface StrategyDetail {
     description?: string
     weight: number
   }> | null
+  /** F13 定义指纹 (sha256 前 12 位): 文件型=文件内容, composite=规范化 JSON; 旧后端可能缺失 */
+  def_hash?: string | null
 }
 
 // ===== Custom Signals (自定义信号) =====
@@ -1710,6 +1712,13 @@ export interface BacktestRunComparison {
   trade_summary?: BacktestRunTradeSummary
 }
 
+/** POST /api/backtest/runs/{run_id}/to-monitor-rule 响应 — 回测转监控规则 (幂等) */
+export interface ToMonitorRuleResponse {
+  rule: MonitorRule
+  /** false = 该 run 之前已转过, 返回的是已有规则 */
+  created: boolean
+}
+
 // ===== Strategy experiments / cross-section / signal scorecard =====
 export interface CompositeStrategyInput {
   strategy_id: string
@@ -2174,6 +2183,7 @@ export interface Preferences {
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
   review_schedule: { enabled: boolean; hour: number; minute: number }
+  backtest_auto_rerun: { enabled: boolean; hour: number; minute: number; window_days: number }
   review_push_channels: string[]
   sse_refresh_pages: Record<string, boolean>
   strategy_monitor_enabled: boolean
@@ -3028,6 +3038,16 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ enabled, hour, minute }),
     }),
+  /** F11 回测定时复跑偏好 — 开关/时间/滚动窗口天数 (job: backtest_favorite_rerun) */
+  getBacktestAutoRerun: () =>
+    request<{ enabled: boolean; hour: number; minute: number; window_days: number }>(
+      '/api/settings/preferences/backtest-auto-rerun',
+    ),
+  updateBacktestAutoRerun: (enabled: boolean, hour: number, minute: number, windowDays: number) =>
+    request<{ enabled: boolean; hour: number; minute: number; window_days: number }>(
+      '/api/settings/preferences/backtest-auto-rerun',
+      { method: 'POST', body: JSON.stringify({ enabled, hour, minute, window_days: windowDays }) },
+    ),
   updateReviewPush: (channels: string[]) =>
     request<{ review_push_channels: string[] }>('/api/settings/preferences/review-push', {
       method: 'PUT',
@@ -3485,6 +3505,12 @@ export const api = {
     request<BacktestRunComparison>('/api/backtest/runs/compare', {
       method: 'POST',
       body: JSON.stringify({ run_ids: runIds }),
+    }),
+
+  /** F10 回测转监控规则 (幂等): 同 run 重复调用返回已有规则 created=false */
+  toMonitorRule: (runId: string) =>
+    request<ToMonitorRuleResponse>(`/api/backtest/runs/${encodeURIComponent(runId)}/to-monitor-rule`, {
+      method: 'POST',
     }),
 
   /** 按原 config 重新运行, 返回带 source_run_id 的新 Run */

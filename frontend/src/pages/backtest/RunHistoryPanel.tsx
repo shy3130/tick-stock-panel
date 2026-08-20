@@ -16,6 +16,7 @@ import {
   FlaskConical,
   Grid3X3,
   Pencil,
+  RadioTower,
   RotateCcw,
   Search,
   Star,
@@ -31,6 +32,8 @@ import {
   type BacktestExperimentSummary,
   type BacktestRunSummary,
   type BacktestRunTradeSample,
+  type BacktestRun,
+  type StrategyDetail,
 } from '@/lib/api'
 import { downloadCompareReportHtml, downloadRunReportHtml } from '@/lib/backtestReportDownload'
 import {
@@ -106,6 +109,31 @@ function headlineStats(stats: Record<string, number>): [string, number][] {
     if (entries.length >= 4) break
   }
   return entries
+}
+
+/** F13: 定义指纹截断展示 (完整 12 位过长, 取前 8 位 + 省略号) */
+function shortDefHash(hash: string): string {
+  return hash.length > 8 ? `${hash.slice(0, 8)}…` : hash
+}
+
+/** F13 版本感知横幅: changed=定义已变更(黄) / removed=策略已不存在(红) / null=一致或无法比对 */
+type DefHashBanner =
+  | { kind: 'changed'; from: string; to: string }
+  | { kind: 'removed' }
+
+function defHashBannerOf(run: BacktestRun | undefined, strategies: StrategyDetail[] | undefined): DefHashBanner | null {
+  if (!run || !strategies) return null
+  // Run 未持久化指纹 (旧 Run / 因子 Run) 或列表未加载完成时不比对
+  const hash = run.stats?.strategy_def_hash
+  if (typeof hash !== 'string' || !hash) return null
+  const strategyId = typeof run.config?.strategy_id === 'string' ? run.config.strategy_id : ''
+  if (!strategyId) return null
+  const current = strategies.find(st => st.id === strategyId)
+  if (!current) return { kind: 'removed' }
+  // 当前列表无指纹 (旧后端) → 无法比对, 不提示
+  if (!current.def_hash) return null
+  if (current.def_hash === hash) return null
+  return { kind: 'changed', from: hash, to: current.def_hash }
 }
 
 const CONFIG_LABELS: Record<string, string> = {
@@ -643,6 +671,25 @@ function RunDetailDrawer({ runId, onClose, onToggleFavorite, onRerun, rerunning,
     queryFn: () => api.backtestRunGet(runId),
   })
   const run = detailQuery.data
+  const [converting, setConverting] = useState(false)
+
+  /** F10 转监控规则: HTTP 错误已由 api.request 统一 toast, 此处只补网络层失败反馈 */
+  const handleToMonitorRule = async () => {
+    if (!run || converting) return
+    setConverting(true)
+    try {
+      const { rule, created } = await api.toMonitorRule(run.run_id)
+      toast(
+        created ? `已创建监控规则「${rule.name}」` : `已存在同名规则「${rule.name}」`,
+        'success',
+        { label: '去监控中心', href: '/monitor' },
+      )
+    } catch (error) {
+      if (error instanceof TypeError) toast('转监控失败：网络异常，请稍后重试', 'error')
+    } finally {
+      setConverting(false)
+    }
+  }
 
   const handleDownloadReport = async () => {
     if (!run || reportDownloading) return
@@ -655,6 +702,14 @@ function RunDetailDrawer({ runId, onClose, onToggleFavorite, onRerun, rerunning,
       setReportDownloading(false)
     }
   }
+
+  // F13 策略版本感知: 拉取当前策略列表, 与 Run 持久化的定义指纹比对
+  const strategiesQuery = useQuery({
+    queryKey: ['run-detail-strategies'],
+    queryFn: api.strategyList,
+    staleTime: 30_000,
+  })
+  const defHashBanner = defHashBannerOf(run, strategiesQuery.data?.strategies)
 
   return (
     <div className="fixed inset-0 z-[70] flex justify-end" role="dialog" aria-label="运行详情">
@@ -752,6 +807,20 @@ function RunDetailDrawer({ runId, onClose, onToggleFavorite, onRerun, rerunning,
                   {rerunning ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
                   {rerunning ? '复跑中…' : '复跑'}
                 </button>
+                {run.kind === 'strategy' && (
+                  <button
+                    type="button"
+                    onClick={() => { void handleToMonitorRule() }}
+                    disabled={converting}
+                    aria-busy={converting}
+                    aria-label={converting ? '正在转为监控规则' : '转为监控规则'}
+                    title="把该次回测的策略与股票池配置存为一条策略监控规则"
+                    className="btn-secondary !h-7 px-2.5 text-[11px]"
+                  >
+                    {converting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RadioTower className="h-3 w-3" />}
+                    {converting ? '转换中…' : '转为监控规则'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => onDelete(run.run_id, runDisplayName(run))}
@@ -762,6 +831,22 @@ function RunDetailDrawer({ runId, onClose, onToggleFavorite, onRerun, rerunning,
                   删除
                 </button>
               </div>
+
+              {defHashBanner?.kind === 'changed' && (
+                <div role="status" className="flex items-start gap-2 rounded-btn border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    策略定义已变更（回测时 <b className="font-mono">{shortDefHash(defHashBanner.from)}</b> → 当前{' '}
+                    <b className="font-mono">{shortDefHash(defHashBanner.to)}</b>），复跑将使用当前定义
+                  </span>
+                </div>
+              )}
+              {defHashBanner?.kind === 'removed' && (
+                <div role="alert" className="flex items-start gap-2 rounded-btn border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>策略已不存在，复跑将无法按原定义执行</span>
+                </div>
+              )}
 
               {run.status !== 'completed' && (
                 <div role="alert" className="rounded-btn border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">

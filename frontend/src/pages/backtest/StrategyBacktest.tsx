@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown, AlertTriangle, Info, CheckCircle2, ChevronDown } from 'lucide-react'
+import { Play, FlaskConical, Clock, Loader2, Square, Search, Plus, X, SlidersHorizontal, BarChart3, ListPlus, Printer, FileDown, AlertTriangle, Info, CheckCircle2, ChevronDown, RadioTower } from 'lucide-react'
 import {
   api,
   type StrategyDetail,
@@ -15,6 +15,7 @@ import {
 } from '@/lib/api'
 import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
 import { downloadRunReportHtml } from '@/lib/backtestReportDownload'
+import { toast } from '@/components/Toast'
 import { QK } from '@/lib/queryKeys'
 import { instrumentSearchMeta } from '@/lib/instrumentSearch'
 import { storage } from '@/lib/storage'
@@ -1351,6 +1352,25 @@ export function StrategyBacktest({
     }
   }
 
+  const [converting, setConverting] = useState(false)
+  /** F10 转监控规则: HTTP 错误已由 api.request 统一 toast, 此处只补网络层失败反馈 */
+  const handleToMonitorRule = async () => {
+    if (!result?.run_id || result.error || !resultPersisted || converting) return
+    setConverting(true)
+    try {
+      const { rule, created } = await api.toMonitorRule(result.run_id)
+      toast(
+        created ? `已创建监控规则「${rule.name}」` : `已存在同名规则「${rule.name}」`,
+        'success',
+        { label: '去监控中心', href: '/monitor' },
+      )
+    } catch (error) {
+      if (error instanceof TypeError) toast('转监控失败：网络异常，请稍后重试', 'error')
+    } finally {
+      setConverting(false)
+    }
+  }
+
   const resultStartDate = result?.config?.start ?? result?.equity_curve?.[0]?.date ?? start
   const resultEndDate = result?.config?.end ?? result?.equity_curve?.[result.equity_curve.length - 1]?.date ?? end
   const resultTradeDays = result?.equity_curve?.length ?? 0
@@ -1988,6 +2008,20 @@ export function StrategyBacktest({
                   >
                     {reportDownloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileDown className="h-3 w-3" />}
                     {reportDownloading ? '生成中…' : '下载报告'}
+                  </button>
+                )}
+                {resultPersisted && (
+                  <button
+                    type="button"
+                    onClick={() => { void handleToMonitorRule() }}
+                    disabled={converting}
+                    aria-busy={converting}
+                    aria-label={converting ? '正在转为监控规则' : '转为监控规则'}
+                    title="把本次回测的策略与股票池配置存为一条策略监控规则"
+                    className="inline-flex items-center gap-1 rounded-btn border border-border bg-surface px-2 py-1 text-[11px] text-secondary transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-50"
+                  >
+                    {converting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RadioTower className="h-3 w-3" />}
+                    {converting ? '转换中…' : '转为监控规则'}
                   </button>
                 )}
               </>

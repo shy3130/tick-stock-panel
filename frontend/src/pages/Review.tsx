@@ -191,6 +191,27 @@ export function Review() {
     },
     onError: () => { /* request() 已 toast */ },
   })
+
+  // ===== 回测定时复跑 (F11) =====
+  // 与定时复盘同页管理: 到点用滚动窗口自动复跑「回测历史」中收藏的策略 Run,
+  // 新 Run 以 label='定时复跑' 进入运行历史; 单个失败跳过, 不影响其余。
+  const [showRerun, setShowRerun] = useState(false)
+  const rerunPref = prefs.data?.backtest_auto_rerun ?? { enabled: false, hour: 16, minute: 40, window_days: 90 }
+  const [rerunDraft, setRerunDraft] = useState(rerunPref)
+  const openRerun = useCallback(() => {
+    setRerunDraft(rerunPref)  // 每次打开同步最新服务端值
+    setShowRerun(true)
+  }, [rerunPref])
+  const rerunMut = useMutation({
+    mutationFn: (v: { enabled: boolean; hour: number; minute: number; window_days: number }) =>
+      api.updateBacktestAutoRerun(v.enabled, v.hour, v.minute, v.window_days),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      setShowRerun(false)
+      toast(vars.enabled ? '已开启回测定时复跑' : '已关闭回测定时复跑', 'success')
+    },
+    onError: () => { /* request() 已 toast */ },
+  })
   // 推送渠道(多选): 独立常驻, 即时生效(勾选渠道即开关, 改了立刻提交)
   const pushMut = useMutation({
     mutationFn: (channels: string[]) => api.updateReviewPush(channels),
@@ -332,6 +353,18 @@ export function Review() {
               title={reviewSched.enabled ? `定时复盘已开启 · 每日 ${String(reviewSched.hour).padStart(2,'0')}:${String(reviewSched.minute).padStart(2,'0')}` : '定时复盘'}
             >
               <Clock className="h-3 w-3" />定时
+            </button>
+            <button
+              onClick={openRerun}
+              className={cn(
+                'btn-secondary !h-7 text-[11px]',
+                rerunPref.enabled && 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15',
+              )}
+              title={rerunPref.enabled
+                ? `回测定时复跑已开启 · 每日 ${String(rerunPref.hour).padStart(2, '0')}:${String(rerunPref.minute).padStart(2, '0')} · 滚动窗口 ${rerunPref.window_days} 天`
+                : '回测定时复跑'}
+            >
+              <History className="h-3 w-3" />复跑
             </button>
             <button
               onClick={generate}
@@ -642,6 +675,112 @@ export function Review() {
                   className="btn-primary"
                 >
                   {reviewMut.isPending ? '保存中…' : '保存'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== 回测定时复跑设置弹窗 (F11) ===== */}
+      <AnimatePresence>
+        {showRerun && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setShowRerun(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="panel w-full max-w-md p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <History className="h-4 w-4 text-accent" />
+                  <h3 className="text-sm font-medium text-foreground">回测定时复跑</h3>
+                </div>
+                <button
+                  onClick={() => setShowRerun(false)}
+                  className="rounded p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <p className="mb-4 text-[11px] leading-relaxed text-muted">
+                开启后,每个交易日到点自动复跑「回测」运行历史中收藏的策略(最多 10 个):
+                原参数不变,区间换成 [今天-窗口天数, 今天] 滚动窗口重新计算,
+                结果以「定时复跑」标签写入运行历史;单个失败自动跳过,不影响其余。
+              </p>
+
+              {/* 开关(只改本地草稿, 不提交) */}
+              <label className="flex items-center justify-between rounded-btn bg-elevated/40 px-3 py-2.5">
+                <span className="text-xs text-foreground">启用回测定时复跑</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={rerunDraft.enabled}
+                  onClick={() => setRerunDraft(d => ({ ...d, enabled: !d.enabled }))}
+                  className={cn(
+                    'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors',
+                    rerunDraft.enabled ? 'bg-accent' : 'bg-border',
+                  )}
+                >
+                  <span className={cn('inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform', rerunDraft.enabled ? 'translate-x-[18px]' : 'translate-x-1')} />
+                </button>
+              </label>
+
+              {/* 时间 + 滚动窗口(仅开启时可编辑, 本地草稿) */}
+              {rerunDraft.enabled && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-btn bg-elevated/40 px-3 py-2.5">
+                  <span className="text-[11px] text-muted">每日</span>
+                  <input
+                    type="number" min={0} max={23} value={rerunDraft.hour}
+                    onChange={e => setRerunDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, Number(e.target.value))) }))}
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
+                  />
+                  <span className="text-xs text-muted">:</span>
+                  <input
+                    type="number" min={0} max={59} value={rerunDraft.minute}
+                    onChange={e => setRerunDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, Number(e.target.value))) }))}
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
+                  />
+                  <span className="text-[11px] text-muted">· 窗口</span>
+                  <input
+                    type="number" min={30} max={365} value={rerunDraft.window_days}
+                    onChange={e => setRerunDraft(d => ({ ...d, window_days: Math.max(30, Math.min(365, Number(e.target.value))) }))}
+                    className="control w-16 !h-7 px-1.5 text-center text-xs font-mono"
+                  />
+                  <span className="text-[11px] text-muted">天</span>
+                  <span className="text-[10px] text-muted/70">30~365 · 工作日执行</span>
+                </div>
+              )}
+
+              {!rerunDraft.enabled && (
+                <p className="mt-3 text-[10px] text-muted/70">
+                  当前: 已关闭。开启后将按设定时间自动复跑收藏策略。
+                </p>
+              )}
+
+              {/* 操作区: 取消 + 保存(统一提交开关+时间+窗口) */}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  onClick={() => setShowRerun(false)}
+                  className="btn-secondary"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => rerunMut.mutate(rerunDraft)}
+                  disabled={rerunMut.isPending}
+                  className="btn-primary"
+                >
+                  {rerunMut.isPending ? '保存中…' : '保存'}
                 </button>
               </div>
             </motion.div>
