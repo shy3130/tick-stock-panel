@@ -14,7 +14,6 @@ from app.services.agent_bus import get_bus
 from app.services.agent_runner import run_agent_turn
 from app.services.ai_attempts import get_registry, new_attempt_id
 from app.services.ai_structured import CancellationToken
-from app.services.ai_provider import generate_ai_text, generate_ai_with_tools
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -40,6 +39,18 @@ class AgentSessionRenameIn(BaseModel):
 @router.get("/tools")
 def list_tools() -> dict:
     return {"tools": agent_tools.TOOLS}
+
+
+@router.get("/runtime")
+def agent_runtime() -> dict:
+    """只读展示当前 Agent 运行时。正式发行不提供切换开关。"""
+    from app.config import settings
+
+    runtime = str(settings.agent_runtime or "python").strip().lower()
+    if runtime not in {"python", "pi"}:
+        runtime = "python"
+    return {"runtime": runtime, "switchable": False}
+
 
 
 def _data_dir(request: Request) -> Path:
@@ -90,69 +101,14 @@ async def cancel_attempt(attempt_id: str) -> dict:
 
 
 @router.post("/chat")
-async def chat(req: AgentChatIn, request: Request) -> dict:
-    message = req.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="message empty")
-
-    from app.services.agent_loop import _OPENAI_TOOLS, _execute_tool, _tools_system, _final_system
-
-    tool_ctx: list[dict] = []
-    last_tool: str | None = None
-    last_result: dict | None = None
-    for _ in range(5):
-        convo = [{"role": "system", "content": _tools_system()},
-                 {"role": "user", "content": message},
-                 *tool_ctx]
-        content, tool_calls = await generate_ai_with_tools(
-            convo, _OPENAI_TOOLS,
-            profile_id=req.profile_id, temperature=0.2, max_tokens=1200,
-        )
-        if tool_calls:
-            assistant_msg: dict = {"role": "assistant"}
-            if content:
-                assistant_msg["content"] = content
-            assistant_msg["tool_calls"] = [
-                {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
-                for tc in tool_calls
-            ]
-            tool_ctx.append(assistant_msg)
-            for tc in tool_calls:
-                name = tc["name"]
-                try:
-                    args = json.loads(tc["arguments"]) if tc.get("arguments") else {}
-                except (json.JSONDecodeError, TypeError):
-                    args = {}
-                result = await asyncio.to_thread(_execute_tool, name, request.app.state, args)
-                last_tool, last_result = name, result
-                tool_ctx.append({
-                    "role": "tool", "tool_call_id": tc["id"],
-                    "content": json.dumps(result, ensure_ascii=False, default=str),
-                })
-            continue
-        if content:
-            tool_req = _parse_tool_request(content)
-            if tool_req is not None:
-                result = await asyncio.to_thread(
-                    _execute_tool,
-                    tool_req["tool"],
-                    request.app.state,
-                    tool_req["args"],
-                )
-                last_tool, last_result = tool_req["tool"], result
-                tool_ctx += [
-                    {"role": "assistant", "content": content},
-                    {"role": "user", "content": "Tool result:\n" + json.dumps(result, ensure_ascii=False, default=str)},
-                ]
-                continue
-        return {"answer": content or "", "tool": last_tool, "tool_result": last_result}
-
-    answer = await generate_ai_text([
-        {"role": "system", "content": _final_system()},
-        {"role": "user", "content": message},
-        *tool_ctx,
-    ], profile_id=req.profile_id, temperature=0.2, max_tokens=1600)
-    return {"answer": answer, "tool": last_tool, "tool_result": last_result}
+async def chat(_req: AgentChatIn) -> dict:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "agent_chat_removed",
+            "message": "同步 /chat 已关闭，请使用 POST /api/agent/sessions 创建会话后走 /messages 与 /stream",
+        },
+    )
 
 
 @router.post("/sessions/{session_id}/messages")

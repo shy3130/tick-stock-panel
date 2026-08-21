@@ -1,7 +1,8 @@
-"""结构化 AI 入口的中央预算注册表 (P3/M9)。
+"""AI 入口的中央预算注册表。
 
-四个受控入口 (nl_screener / strategy_profile_deep_review / trading_autopsy /
-stock_analysis) 的生成参数集中在此，作为单一事实源与上限护栏。
+受控入口 (nl_screener / strategy_profile_deep_review / trading_autopsy /
+stock_analysis / financials / market_recap / agent / strategy_generate /
+trading_plan_check_stage1/2) 的生成参数集中在此，作为单一事实源与上限护栏。
 
 - 上限即各入口现状值，不得被调用方放大 (``resolve_budget`` 仅向下 clamp)；
 - ``max_tokens`` 为 completion 预算，``context_max_tokens`` 为 prompt 上下文预算
@@ -34,12 +35,15 @@ _BUDGETS: dict[str, EntryBudget] = {
         "strategy_profile_deep_review", 0.2, 2000, 60.0
     ),
     "trading_autopsy": EntryBudget("trading_autopsy", 0.2, 2000, 60.0),
-    # P4: 计划检查两阶段入口 (M11)；Stage1 诊断更宽, Stage2 计划审查更紧。
     "trading_plan_check_stage1": EntryBudget("trading_plan_check_stage1", 0.3, 2500, 90.0),
     "trading_plan_check_stage2": EntryBudget("trading_plan_check_stage2", 0.2, 2000, 90.0),
     "stock_analysis": EntryBudget(
         "stock_analysis", 0.5, 4500, 180.0, context_max_tokens=12000
     ),
+    "financials": EntryBudget("financials", 0.4, 4000, 180.0),
+    "market_recap": EntryBudget("market_recap", 0.5, 4500, 180.0),
+    "agent": EntryBudget("agent", 0.2, 1600, 90.0),
+    "strategy_generate": EntryBudget("strategy_generate", 0.3, 3000, 120.0),
 }
 
 

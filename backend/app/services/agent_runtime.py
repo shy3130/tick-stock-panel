@@ -8,7 +8,7 @@ import shutil
 import sys
 from collections import deque
 from collections.abc import AsyncIterator
-from contextlib import suppress
+from contextlib import aclosing, suppress
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -19,6 +19,9 @@ from app.services import agent_tools, ai_profiles
 from app.services.agent_loop import (
     ALLOWED_AGENT_TOOLS,
     MAX_TOOL_ROUNDS,
+    occupancy_error_line,
+    release_agent_slot,
+    try_acquire_agent_slot,
     _final_system,
     _tools_system,
 )
@@ -66,8 +69,9 @@ async def run_agent_stream(
     if runtime == "python":
         from app.services.agent_loop import run_agent_stream as run_legacy_stream
 
-        async for line in run_legacy_stream(messages, app_state, profile_id):
-            yield line
+        async with aclosing(run_legacy_stream(messages, app_state, profile_id)) as stream:
+            async for line in stream:
+                yield line
         return
 
     if runtime != "pi":
@@ -75,12 +79,16 @@ async def run_agent_stream(
         return
 
     started_at = perf_counter()
+    if not try_acquire_agent_slot():
+        yield occupancy_error_line(started_at)
+        return
     logger.info("Pi Agent runtime attempt started")
     secret = ""
     try:
         profile, secret = _resolve_pi_profile(profile_id)
-        async for line in _run_pi_worker(messages, app_state, profile, secret):
-            yield line
+        async with aclosing(_run_pi_worker(messages, app_state, profile, secret)) as stream:
+            async for line in stream:
+                yield line
     except asyncio.CancelledError:
         logger.info("Pi Agent runtime attempt cancelled")
         raise
@@ -94,6 +102,8 @@ async def run_agent_stream(
             "Pi Agent runtime attempt completed in %.1fms",
             (perf_counter() - started_at) * 1000,
         )
+    finally:
+        release_agent_slot()
 
 
 def _resolve_pi_profile(profile_id: str | None) -> tuple[dict[str, Any], str]:

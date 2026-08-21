@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from time import perf_counter
 from typing import Any
@@ -11,6 +12,27 @@ from app.services import agent_tools
 from app.services.ai_provider import generate_ai_text, generate_ai_with_tools, stream_ai_text
 
 MAX_TOOL_ROUNDS = 5
+
+# F16 进程内并发上限：同一时刻最多 N 路研究对话；超出立即报错，不排队。
+MAX_CONCURRENT_AGENT_RUNS = 2
+_agent_run_slots = threading.Semaphore(MAX_CONCURRENT_AGENT_RUNS)
+_OCCUPANCY_MESSAGE = "已有研究对话在运行，请等待结束后再试"
+
+
+def try_acquire_agent_slot() -> bool:
+    return _agent_run_slots.acquire(blocking=False)
+
+
+def release_agent_slot() -> None:
+    _agent_run_slots.release()
+
+
+def occupancy_error_line(started_at: float | None = None) -> str:
+    elapsed = 0.0 if started_at is None else round((perf_counter() - started_at) * 1000, 1)
+    return json.dumps(
+        {"type": "error", "message": _OCCUPANCY_MESSAGE, "elapsed_ms": elapsed},
+        ensure_ascii=False,
+    )
 
 _EXCLUDED_TOOLS: set[str] = set()
 ALLOWED_AGENT_TOOLS = [t for t in agent_tools.TOOLS if t["name"] not in _EXCLUDED_TOOLS]
@@ -38,13 +60,14 @@ def _tools_system() -> str:
         for tool in ALLOWED_AGENT_TOOLS
     ]
     return (
-        "你是 TickFlow Stock Panel 的 AI 选股助手。你拥有本地 DuckDB A 股数据库，"
+        "你是 TickFlow Stock Panel 的只读研究助手。你拥有本地 DuckDB A 股数据库，"
         "可查询日线、技术指标、财务数据并运行选股和研究回测。数据问题必须调用下列工具，"
         "禁止以「无法接入数据」为由拒绝。\n"
         "条件选股必须使用强类型工作流：不确定字段时先调用 list_screener_fields，"
         "再调用 screen_stock_pool；严禁生成 SQL、文件路径或在上下文中复制大股票池。"
         "股票池回测调用 start_pool_backtest，随后用 get_pool_backtest 查询结果。"
-        "回测只用于研究，绝不能调用或虚构下单、交易计划、成交写入工具。\n"
+        "回测只用于研究，绝不能调用或虚构下单、交易计划、成交写入工具。"
+        "不要给出买入、卖出、加仓、目标价或仓位指令；用数据解释结构与风险。\n"
         "优先使用原生 function calling。若当前 Provider 没有返回原生工具调用，"
         "只能单独输出一个 JSON 对象，格式为 {\"tool\":\"工具名\",\"args\":{...}}。"
         "严禁输出 DSML、XML 或其他工具标记；只能使用下列工具，不能虚构工具名。\n"
@@ -57,6 +80,7 @@ def _tools_system() -> str:
 def _final_system() -> str:
     return (
         "根据上方工具返回的数据，用中文简洁回答用户的问题，列出具体结论和数据依据。"
+        "不要给出买入、卖出、加仓、目标价或仓位指令。"
         "只输出最终自然语言答案；严禁输出 JSON、DSML、XML 或任何工具调用标记。"
     )
 
@@ -121,12 +145,19 @@ async def run_agent_stream(
     """
     tool_ctx: list[dict] = []
     started_at = perf_counter()
+    if not try_acquire_agent_slot():
+        yield occupancy_error_line(started_at)
+        return
+    from app.services.ai_budgets import resolve_budget
+
+    budget = resolve_budget("agent", max_tokens=1200)
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             convo = [{"role": "system", "content": _tools_system()}, *messages, *tool_ctx]
             content, tool_calls = await generate_tool(
                 convo, _OPENAI_TOOLS,
-                profile_id=profile_id, temperature=0.2, max_tokens=1200,
+                profile_id=profile_id, temperature=budget.temperature, max_tokens=budget.max_tokens,
+                timeout=budget.timeout,
             )
 
             if tool_calls:
@@ -188,11 +219,13 @@ async def run_agent_stream(
             *messages,
             *tool_ctx,
         ]
+        final_budget = resolve_budget("agent", temperature=0.4)
         async for delta in stream(
             answer_msgs,
             profile_id=profile_id,
-            temperature=0.4,
-            max_tokens=1600,
+            temperature=final_budget.temperature,
+            max_tokens=final_budget.max_tokens,
+            timeout=final_budget.timeout,
         ):
             if delta:
                 yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
@@ -213,3 +246,5 @@ async def run_agent_stream(
             },
             ensure_ascii=False,
         )
+    finally:
+        release_agent_slot()

@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 
@@ -18,6 +19,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services import market_recap_reports
+from app.services.ai_attempts import get_registry
+from app.services.ai_structured import CancellationToken, new_attempt_id
 from app.services.market_recap import recap_market_stream
 
 logger = logging.getLogger(__name__)
@@ -88,14 +91,32 @@ async def analyze_market(request: Request, req: AnalyzeRequest):
             },
         )
 
+    attempt_id = new_attempt_id()
+    token = CancellationToken()
+
     async def stream_gen():
-        async for chunk in recap_market_stream(repo, quote_service, depth_service, as_of, req.focus, document_text=req.document_text, profile_id=req.profile_id):
-            yield chunk + "\n"
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("market recap stream task unavailable")
+        get_registry().register(attempt_id=attempt_id, task=task, token=token)
+        try:
+            async for chunk in recap_market_stream(
+                repo, quote_service, depth_service, as_of, req.focus,
+                document_text=req.document_text, profile_id=req.profile_id,
+                cancel_token=token,
+            ):
+                yield chunk + "\n"
+        finally:
+            get_registry().unregister(attempt_id)
 
     return StreamingResponse(
         stream_gen(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-AI-Attempt-ID": attempt_id,
+        },
     )
 
 

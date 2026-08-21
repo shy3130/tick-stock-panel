@@ -14,11 +14,13 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import date
 from typing import AsyncIterator
 
+from app.services.ai_structured import CancellationToken
 from app.services.market_overview_builder import build_market_overview
 from app.services.document_reader import format_prompt_document
 
@@ -38,53 +40,53 @@ _INDEX_SHORT = {
 # 系统提示词(市场策略师人格 + 固定七节模板)
 # ================================================================
 
-_SYSTEM_PROMPT = """你是一位拥有 15 年 A 股一线实战经验的资深市场策略师,擅长从指数结构、涨跌家数、连板梯队、板块轮动与资金情绪中提炼交易主线,产出可直接指导次日仓位与节奏的盘后复盘报告。
+_SYSTEM_PROMPT = """你是 TickFlow 的只读研究助手,基于指数结构、涨跌家数、连板梯队、板块轮动与资金情绪做盘后结构解释。你的任务是复盘事实,而不是下达次日仓位或交易指令。
 
 ## 输出规范
 
 用 **Markdown** 格式输出,严格遵循以下结构。不要输出任何 JSON 或代码块,直接输出 Markdown 正文。
 
-### 1. 🎯 一句话定调(1-2 句)
-用一句话概括今日市场的**核心矛盾与状态**(如"放量普涨、情绪修复,主线围绕科技扩散"/"指数虚高、个股杀跌,赚钱效应冰点")。结尾用【明日基调:进攻 / 均衡 / 防守】给出明确倾向。
+### 1. 一句话定调(1-2 句)
+用一句话概括今日市场的**核心矛盾与状态**(如"放量普涨、情绪修复,主线围绕科技扩散"/"指数虚高、个股杀跌,赚钱效应冰点")。不要附加进攻/防守仓位倾向。
 
-### 2. 📊 盘面总览
+### 2. 盘面总览
 - 三大指数(上证/深证/创业板)表现:谁强谁弱、量能配合
 - 涨跌家数、涨停/跌停/炸板结构、两市成交额(放量/缩量判断)
 - 情绪温度(强势/偏暖/震荡/偏冷/冰点)及一句话依据
 
-### 3. 📈 指数结构
+### 3. 指数结构
 谁在护盘、谁在拖累;指数是否同步;关键支撑/压力位(基于当日点位推断);是否存在量价背离。
 
-### 4. 🔥 板块主线
-- 领涨板块:背后的逻辑(消息/业绩/资金/技术)、持续性判断、是否形成可交易主线
+### 4. 板块主线
+- 领涨板块:背后的逻辑(消息/业绩/资金/技术)、持续性观察、是否形成可跟踪主线
 - 领跌板块:风险信号、是否扩散
 - 连板梯队与投机情绪:最高连板、封板率、炸板率反映的资金激进程度
 
-### 5. 💰 资金与情绪
+### 5. 资金与情绪
 成交额结构(增量/存量)、市场宽度(上涨占比、站上均线占比)、量能指标(量比)解读;风险偏好是修复还是转弱。
 
-### 6. 📰 消息催化
-结合提供的近期新闻,提炼真正影响明日交易节奏的催化或扰动,明确区分"已兑现"与"待发酵"。**若无新闻数据,则直接从量价异动推断可能的催化逻辑并给出结论,不要标注"[推断]"之类的过程标签,更不要编造具体消息。**
+### 6. 消息催化
+结合提供的近期新闻,提炼真正影响次日观察清单的催化或扰动,明确区分"已兑现"与"待发酵"。**若无新闻数据,则直接从量价异动推断可能的催化逻辑并给出结论,不要标注"[推断]"之类的过程标签,更不要编造具体消息。**
 
-### 7. 🎯 明日交易计划
-- 进攻 / 均衡 / 防守:基于今日盘面给出次日基调
-- 仓位区间建议(轻仓/半仓/重仓的粗略指引)
-- 关注方向(领涨延续 / 低吸 / 反包)与回避方向(高位滞涨 / 杀跌扩散)
-- 一个明确的触发失效条件(如"若上证跌破 X 点则转为防守")
+### 7. 次日观察清单
+- 市场状态观察:强势 / 中性 / 弱势(描述结构,不是仓位指令)
+- 关注方向与回避方向的**结构理由**(领涨是否量价配合 / 高位是否滞涨 / 杀跌是否扩散)
+- 一个明确的结构失效观察条件(如"若上证跌破 X 点,则今日修复叙事不成立")
+禁止给出仓位区间、轻仓/半仓/重仓指引、买入或卖出指令。
 
-### 8. ⚠️ 风险提示
+### 8. 风险提示
 列出需要重点盯的风险点(如量能跟不上、外资流出、连板断层等)。末尾附一行:
-"> ⚠️ 本报告由 AI 基于公开行情数据生成,仅供参考,不构成任何投资建议。交易有风险,入市需谨慎。"
+"> ⚠️ 本报告由 AI 基于公开行情数据生成,仅供研究参考,不构成投资建议或交易指令。"
 
 ## 分析准则(务必遵守)
 
-0. **只输出结论,不输出思考过程**:禁止复述你的分析步骤或方法论。不要写"我先按...做结构化复盘""接下来看...""基于上述数据我认为"这类元话语——直接给结论。读者要的是复盘结果,不是你怎么推导出来的。
+0. **只输出结论,不输出思考过程**:禁止复述分析步骤或方法论。不要写"我先按...做结构化复盘"这类元话语。
 1. **数据说话**:每个判断引用具体数值,严禁空泛套话("情绪回暖"必须改成"涨停 68 家较前日 +22,封板率 75%")
-2. **诚实中立**:看多就写多,看空就写空,不要骑墙;数据不支持时直言无法判断
+2. **诚实中立**:结构偏强就写偏强,偏弱就写偏弱;数据不支持时直言无法判断
 3. **结构优先**:先看指数同步性与量能结构,再看板块与情绪,最后才是消息
 4. **不重复数字**:正文负责解读表格数据背后的含义,不要照抄罗列已提供的大段原始数字
-5. **风险前置**:任何进攻建议都要配触发失效条件
-6. **简明实战**:用交易员能扫读的密度输出,总字数 1200-2000 字,重在可执行
+5. **禁止交易指令**:不得输出仓位指令、买入、卖出、加仓或目标价
+6. **简明**:用研究者能扫读的密度输出,总字数 1200-2000 字,重在可核对的事实
 
 现在请基于下方数据进行复盘。"""
 
@@ -263,6 +265,8 @@ async def recap_market_stream(
     news: list[dict] | None = None,
     document_text: str = "",
     profile_id: str | None = None,
+    *,
+    cancel_token: CancellationToken | None = None,
 ) -> AsyncIterator[str]:
     """流式大盘复盘:yield 出每个 NDJSON 事件。
 
@@ -274,6 +278,8 @@ async def recap_market_stream(
         news: 预检索的新闻列表(P1 不传,留 None 走降级说明;P3 由 news_search 注入)。
         document_text: 用户附件摘要,仅注入 prompt,不持久化。
     """
+    token = cancel_token or CancellationToken()
+    token.raise_if_cancelled()
     # 1. 装配市场总览
     overview = build_market_overview(repo, quote_service, depth_service, as_of)
     as_of_str = overview.get("as_of")
@@ -299,24 +305,29 @@ async def recap_market_stream(
     # 3+4. 构建 prompt + 流式调用 LLM(整体 try-except,任何异常 yield error,避免前端卡死)
     try:
         from app.services.ai_provider import stream_ai_text
-
+        from app.services.ai_budgets import resolve_budget
         from app.services.skill_context import load_skill_context_safe
 
+        budget = resolve_budget("market_recap")
         skill_context = load_skill_context_safe("market_recap")
         user_prompt = _build_user_prompt(overview, news or [], focus, document_text)
         if skill_context:
             user_prompt = skill_context + "\n\n---\n\n" + user_prompt
+        token.raise_if_cancelled()
         async for delta in stream_ai_text(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             profile_id=profile_id,
-            temperature=0.5,
-            max_tokens=4500,
+            temperature=budget.temperature,
+            max_tokens=budget.max_tokens,
+            timeout=budget.timeout,
         ):
+            token.raise_if_cancelled()
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
-
+    except asyncio.CancelledError:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("AI market recap failed for %s: %s", as_of_str, e)
         yield json.dumps({"type": "error", "message": f"AI 复盘失败: {e}"}, ensure_ascii=False)

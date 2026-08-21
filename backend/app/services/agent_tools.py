@@ -124,6 +124,7 @@ TOOLS = [
         "name": "start_pool_backtest",
         "description": (
             "对 screen_stock_pool 保存的股票池启动策略或因子回测。"
+            "会创建回测计算任务与研究 artifact，不改交易事实、不下单。"
             "回测开始日不得早于股票池 as_of，最长 186 天；返回 job_id，不返回大结果。"
         ),
         "input_schema": {
@@ -171,6 +172,7 @@ TOOLS = [
             "additionalProperties": False,
         },
         "read_only": True,
+        "resource_kind": "job",
     },
     {
         "name": "get_pool_backtest",

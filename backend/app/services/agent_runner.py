@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from time import perf_counter
@@ -40,40 +41,41 @@ async def run_agent_turn(
     )
     try:
         token.raise_if_cancelled()
-        async for line in run_agent_stream(messages, app_state, profile_id):
-            token.raise_if_cancelled()
-            try:
-                event = json.loads(line)
-            except Exception:
-                event = {}
-            event_type = event.get("type")
-            if event_type == "tool_call" and isinstance(event.get("name"), str):
-                tool_traces.append({"name": event["name"], "args": event.get("args", {})})
-            elif event_type == "tool_result" and isinstance(event.get("name"), str):
-                trace = next(
-                    (
-                        item
-                        for item in reversed(tool_traces)
-                        if item["name"] == event["name"] and "result" not in item
-                    ),
-                    None,
-                )
-                if trace is None:
-                    trace = {"name": event["name"]}
-                    tool_traces.append(trace)
-                trace["result"] = event.get("result")
-                if isinstance(event.get("elapsed_ms"), (int, float)):
-                    trace["elapsed_ms"] = event["elapsed_ms"]
-            if event_type in {"done", "error"}:
-                received_terminal = True
-                if isinstance(event.get("elapsed_ms"), (int, float)):
-                    elapsed_ms = event["elapsed_ms"]
-            if event_type == "delta" and isinstance(event.get("content"), str):
-                assistant_chunks.append(event["content"])
-            elif event_type == "error" and isinstance(event.get("message"), str):
-                assistant_chunks.append(f"[错误] {event['message']}")
-                status = "error"
-            bus.publish(session_id, event)
+        async with contextlib.aclosing(run_agent_stream(messages, app_state, profile_id)) as stream:
+            async for line in stream:
+                token.raise_if_cancelled()
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    event = {}
+                event_type = event.get("type")
+                if event_type == "tool_call" and isinstance(event.get("name"), str):
+                    tool_traces.append({"name": event["name"], "args": event.get("args", {})})
+                elif event_type == "tool_result" and isinstance(event.get("name"), str):
+                    trace = next(
+                        (
+                            item
+                            for item in reversed(tool_traces)
+                            if item["name"] == event["name"] and "result" not in item
+                        ),
+                        None,
+                    )
+                    if trace is None:
+                        trace = {"name": event["name"]}
+                        tool_traces.append(trace)
+                    trace["result"] = event.get("result")
+                    if isinstance(event.get("elapsed_ms"), (int, float)):
+                        trace["elapsed_ms"] = event["elapsed_ms"]
+                if event_type in {"done", "error"}:
+                    received_terminal = True
+                    if isinstance(event.get("elapsed_ms"), (int, float)):
+                        elapsed_ms = event["elapsed_ms"]
+                if event_type == "delta" and isinstance(event.get("content"), str):
+                    assistant_chunks.append(event["content"])
+                elif event_type == "error" and isinstance(event.get("message"), str):
+                    assistant_chunks.append(f"[错误] {event['message']}")
+                    status = "error"
+                bus.publish(session_id, event)
         if not received_terminal:
             status = "error"
             message = "Agent 流式响应在完成前中断，请重试"  # noqa: RUF001

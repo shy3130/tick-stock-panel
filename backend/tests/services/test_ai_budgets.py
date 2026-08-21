@@ -37,6 +37,17 @@ def test_plan_check_purposes_registered():
     assert resolve_budget("trading_plan_check_stage2", max_tokens=999_999).max_tokens == b2.max_tokens
 
 
+def test_report_and_agent_purposes_registered():
+    purposes = set(entry_purposes())
+    assert {"financials", "market_recap", "agent", "strategy_generate"} <= purposes
+    assert resolve_budget("financials", max_tokens=999_999).max_tokens == 4000
+    assert resolve_budget("market_recap", max_tokens=999_999).max_tokens == 4500
+    assert resolve_budget("agent", max_tokens=999_999).max_tokens == 1600
+    assert resolve_budget("agent", max_tokens=1200).max_tokens == 1200
+    assert resolve_budget("strategy_generate", max_tokens=999_999).max_tokens == 3000
+
+
+
 def test_get_entry_budget_returns_current_caps():
     b = get_entry_budget("nl_screener")
     assert isinstance(b, EntryBudget)

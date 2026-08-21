@@ -2,10 +2,11 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from app.api.agent import _parse_tool_request, list_tools
+from app.api.agent import _parse_tool_request, list_tools, router as agent_router
 from app.services.agent_tools import TOOLS, _truncate, call_tool
-
 
 def test_agent_tools_endpoint_lists_builtin_tools():
     names = {tool["name"] for tool in list_tools()["tools"]}
@@ -49,6 +50,28 @@ def test_parse_tool_request_accepts_json_and_dsml():
         '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="quote_pool"><｜｜DSML｜｜parameter name="pool" string="false">all</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>'
     ) == {"tool": "quote_pool", "args": {"pool": "all"}}
     assert _parse_tool_request("hello") is None
+
+
+def test_chat_endpoint_gone():
+    app = FastAPI()
+    app.include_router(agent_router)
+    response = TestClient(app).post("/api/agent/chat", json={"message": "hi"})
+    assert response.status_code == 410
+    detail = response.json()["detail"]
+    assert detail["code"] == "agent_chat_removed"
+    assert "/messages" in detail["message"]
+
+
+def test_agent_runtime_is_readonly():
+    app = FastAPI()
+    app.include_router(agent_router)
+    response = TestClient(app).get("/api/agent/runtime")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime"] in {"python", "pi"}
+    assert body["switchable"] is False
+
+
 
 def test_list_strategies_tool_limits_shape():
     strategies = [
