@@ -98,6 +98,27 @@ function connectSSE(url: string): void {
     } catch { /* ignore */ }
   })
 
+  // 服务重启后后端自动整单重跑：提示即可，勿当 error，勿清 reconnect key
+  es.addEventListener('resumed', (e: MessageEvent) => {
+    if (current?.id !== id) return
+    let message = '服务已重启，策略回测无法从中途续跑，正在整单重跑'
+    if (e.data) {
+      try {
+        const parsed = JSON.parse(e.data) as { message?: string }
+        if (parsed?.message) message = parsed.message
+      } catch { /* 用默认文案 */ }
+    }
+    const prev = current.progress
+    current = {
+      ...current,
+      progress: prev
+        ? { ...prev, label: message, stage: prev.stage ?? 'resumed' }
+        : { day: 0, total: 0, date: '', label: message, stage: 'resumed' },
+      error: null,
+    }
+    emit()
+  })
+
   es.addEventListener('done', (e: MessageEvent) => {
     if (current?.id !== id) return
     try {

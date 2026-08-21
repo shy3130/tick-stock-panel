@@ -87,6 +87,7 @@ function statusMeta(status: ParameterGridExperiment['status'] | null) {
   switch (status) {
     case 'pending': return { label: '等待执行', cls: 'border-warning/30 bg-warning/10 text-warning', Icon: Loader2, state: 'warn' as const }
     case 'running': return { label: '运行中', cls: 'border-accent/30 bg-accent/10 text-accent', Icon: Loader2, state: 'live' as const }
+    case 'interrupted': return { label: '已中断', cls: 'border-warning/30 bg-warning/10 text-warning', Icon: AlertTriangle, state: 'warn' as const }
     case 'completed': return { label: '已完成', cls: 'border-bull/30 bg-bull/10 text-bull', Icon: CheckCircle2, state: 'ok' as const }
     case 'cancelled': return { label: '已取消', cls: 'border-border bg-elevated text-secondary', Icon: Square, state: 'idle' as const }
     case 'failed': return { label: '失败', cls: 'border-danger/30 bg-danger/10 text-danger', Icon: XCircle, state: 'error' as const }
@@ -188,7 +189,11 @@ export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: Par
   const experiment = loadedExperiment?.experiment_id === experimentId ? loadedExperiment : null
   const launching = parameterGridTask.isLaunching
   const [cancelling, setCancelling] = useState(false)
+  const [resuming, setResuming] = useState(false)
+  const [resumeKey, setResumeKey] = useState(0)
   const pollingVersion = useRef(0)
+  /** resume 成功后至服务端快照追上前，GET 仍可能是 interrupted，按 running 续轮询；failed 是真失败 */
+  const expectRunningRef = useRef(false)
   const cancellingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [runningScenarioId, setRunningScenarioId] = useState<string | null>(null)
@@ -250,11 +255,13 @@ export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: Par
   useEffect(() => {
     pollingVersion.current += 1
     if (!experimentId) {
+      expectRunningRef.current = false
       setExperiment(null)
       return
     }
 
-    setExperiment(null)
+    // 同实验 resumeKey 重开轮询时保留乐观 running；切换实验 id 才清空
+    setExperiment(prev => (prev?.experiment_id === experimentId ? prev : null))
     setError(null)
     let disposed = false
     let inFlight = false
@@ -274,6 +281,7 @@ export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: Par
           || getParameterGridTask().revision !== taskRevision
         ) return
         if (next == null) {
+          expectRunningRef.current = false
           if (clearParameterGridExperimentIfCurrent(experimentId, taskRevision)) {
             setExperiment(null)
             setError('上次参数网格实验已不可用，已清除恢复记录')
@@ -281,9 +289,14 @@ export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: Par
           stopPolling()
           return
         }
-        setExperiment(next)
+        // resume 窗口只兜 interrupted；failed 是工作线程终态，必须停
+        const holdRunning = expectRunningRef.current && next.status === 'interrupted'
+        const status = holdRunning ? 'running' as const : next.status
+        if (!holdRunning) expectRunningRef.current = false
+        setExperiment(holdRunning ? { ...next, status: 'running' } : next)
         setError(null)
-        if (next.status !== 'pending' && next.status !== 'running') stopPolling()
+        // interrupted / 终态停轮询（holdRunning 时 status 已是 running）
+        if (status !== 'pending' && status !== 'running') stopPolling()
       } catch (cause) {
         if (
           !disposed
@@ -304,7 +317,7 @@ export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: Par
       pollingVersion.current += 1
       stopPolling()
     }
-  }, [experimentId, taskRevision])
+  }, [experimentId, taskRevision, resumeKey])
 
   const launch = async () => {
     if (!strategyId || !detail.data) {
@@ -401,6 +414,52 @@ export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: Par
     } finally {
       cancellingRef.current = false
       setCancelling(false)
+    }
+  }
+
+  /** 服务重启后从检查点续跑；保持同一 experimentId，bump resumeKey 重启轮询 */
+  const resume = async () => {
+    if (!experimentId || experiment?.status !== 'interrupted' || resuming) return
+    setResuming(true)
+    setError(null)
+    try {
+      await api.parameterGridResume(experimentId)
+      if (getParameterGridTask().revision !== taskRevision) return
+      // 乐观标 running 并立刻开轮询，避免 POST 返回到磁盘快照追上之间的空窗
+      expectRunningRef.current = true
+      setExperiment(prev => (
+        prev && prev.experiment_id === experimentId
+          ? { ...prev, status: 'running' }
+          : prev
+      ))
+      setResumeKey(key => key + 1)
+      const updated = await api.parameterGridGet(experimentId)
+      if (getParameterGridTask().revision !== taskRevision) return
+      if (updated == null) {
+        expectRunningRef.current = false
+        if (clearParameterGridExperimentIfCurrent(experimentId, taskRevision)) {
+          setExperiment(null)
+          setError('参数网格实验已不可用，已清除恢复记录')
+        }
+        return
+      }
+      // 仅 interrupted 视为尚未追上；failed 展示失败
+      if (updated.status === 'interrupted') {
+        setExperiment({ ...updated, status: 'running' })
+      } else {
+        expectRunningRef.current = false
+        setExperiment(updated)
+     
+      }
+      toast('已从检查点恢复参数网格', 'success')
+    } catch (cause) {
+      expectRunningRef.current = false
+      if (getParameterGridTask().revision !== taskRevision) return
+      const message = cause instanceof Error ? cause.message : '恢复参数网格失败'
+      setError(message)
+      toast(message)
+    } finally {
+      setResuming(false)
     }
   }
 
@@ -672,6 +731,43 @@ export function ParameterGridPanel({ onUseScenario, onScenarioRunComplete }: Par
                 cancelling={cancelling}
                 cancelLabel="取消实验"
               />
+            ) : experiment?.status === 'interrupted' ? (
+              <div className="space-y-2">
+                <div className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-2.5 text-[11px] leading-5 text-secondary">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 font-medium text-warning">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      服务重启，任务已中断
+                    </span>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-btn border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
+                      disabled={resuming}
+                      onClick={() => { void resume() }}
+                    >
+                      {resuming ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                      {resuming ? '正在恢复…' : '从检查点恢复'}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-muted">已完成场景会跳过；将从中断处继续网格搜索，无需重新配置。</p>
+                </div>
+                <BacktestRunStatus
+                  status="interrupted"
+                  title="服务重启，任务已中断"
+                  runtime={experiment.runtime}
+                  completed={experiment.completed}
+                  total={experiment.total}
+                  startedAt={experiment.created_at}
+                  extras={[
+                    { label: '请求', value: String(experiment.requested_count) },
+                    { label: '场景', value: String(experiment.scenario_count) },
+                    ...(experiment.truncated ? [{ label: '截断', value: '超限组合未执行' }] : []),
+                  ]}
+                  onResume={() => { void resume() }}
+                  resuming={resuming}
+                  resumeLabel="从检查点恢复"
+                />
+              </div>
             ) : (
               <div className="rounded-btn border border-border bg-elevated/30 p-3">
                 <div className="flex flex-wrap items-center gap-2">

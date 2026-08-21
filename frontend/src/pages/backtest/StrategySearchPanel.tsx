@@ -41,6 +41,7 @@ function statusMeta(status: OptimizerExperiment['status'] | null) {
   switch (status) {
     case 'pending':
     case 'running': return { label: status === 'pending' ? '等待执行' : '运行中', cls: 'text-accent', Icon: Loader2 }
+    case 'interrupted': return { label: '已中断', cls: 'text-warning', Icon: AlertTriangle }
     case 'completed': return { label: '已完成', cls: 'text-bull', Icon: CheckCircle2 }
     case 'cancelled': return { label: '已取消', cls: 'text-secondary', Icon: Square }
     case 'failed': return { label: '失败', cls: 'text-danger', Icon: XCircle }
@@ -77,7 +78,11 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
   const experiment = loaded?.experiment_id === experimentId ? loaded : null
   const [error, setError] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  const [resuming, setResuming] = useState(false)
+  const [resumeKey, setResumeKey] = useState(0)
   const pollingVersion = useRef(0)
+  /** resume 成功后至服务端快照追上前，GET 仍可能是 interrupted，按 running 续轮询；failed 是真失败，不停装成 running */
+  const expectRunningRef = useRef(false)
   const queryClient = useQueryClient()
   const [runningScenario, setRunningScenario] = useState<string | null>(null)
 
@@ -99,15 +104,21 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
         const next = await api.optimizerGet(experimentId)
         if (getOptimizerTask().revision !== taskRevision) return
         if (next == null) {
+          expectRunningRef.current = false
           if (clearOptimizerExperimentIfCurrent(experimentId, taskRevision)) {
             setLoaded(null)
             setError('上次寻优实验已不可用，已清除恢复记录')
           }
           return
         }
-        setLoaded(next)
+        // resume 窗口只兜 interrupted（claim 尚未可见）；failed 是工作线程终态，必须停
+        const holdRunning = expectRunningRef.current && next.status === 'interrupted'
+        const status = holdRunning ? 'running' as const : next.status
+        if (!holdRunning) expectRunningRef.current = false
+        setLoaded(holdRunning ? { ...next, status: 'running' } : next)
         setError(null)
-        if (next.status === 'running' || next.status === 'pending') {
+        // interrupted / 终态停轮询（holdRunning 时 status 已是 running）
+        if (status === 'running' || status === 'pending') {
           timer = window.setTimeout(poll, 1500)
         }
       } catch (cause) {
@@ -120,7 +131,7 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
       pollingVersion.current += 1
       if (timer) window.clearTimeout(timer)
     }
-  }, [experimentId, taskRevision])
+  }, [experimentId, taskRevision, resumeKey])
 
   // 从已加载实验恢复 param_grid 与策略选择（experiment id 打开场景）
   useEffect(() => {
@@ -209,6 +220,52 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
       setError(message)
     } finally {
       setCancelling(false)
+    }
+  }
+
+  /** 服务重启后从检查点续跑；保持同一 experimentId，bump resumeKey 重启轮询 */
+  const resume = async () => {
+    if (!experimentId || experiment?.status !== 'interrupted' || resuming) return
+    setResuming(true)
+    setError(null)
+    try {
+      await api.optimizerResume(experimentId)
+      if (getOptimizerTask().revision !== taskRevision) return
+      // 乐观标 running 并立刻开轮询，避免 POST 返回到磁盘快照追上之间的空窗
+      expectRunningRef.current = true
+      setLoaded(prev => (
+        prev && prev.experiment_id === experimentId
+          ? { ...prev, status: 'running' }
+          : prev
+      ))
+      setResumeKey(key => key + 1)
+      const next = await api.optimizerGet(experimentId)
+      if (getOptimizerTask().revision !== taskRevision) return
+      if (next == null) {
+        expectRunningRef.current = false
+        if (clearOptimizerExperimentIfCurrent(experimentId, taskRevision)) {
+          setLoaded(null)
+          setError('寻优实验已不可用，已清除恢复记录')
+        }
+        return
+      }
+      // 仅 interrupted 视为尚未追上；failed 展示失败
+      if (next.status === 'interrupted') {
+        setLoaded({ ...next, status: 'running' })
+      } else {
+        expectRunningRef.current = false
+        setLoaded(next)
+     
+      }
+      toast('已从检查点恢复寻优', 'success')
+    } catch (cause) {
+      expectRunningRef.current = false
+      if (getOptimizerTask().revision !== taskRevision) return
+      const message = cause instanceof Error ? cause.message : '恢复寻优失败'
+      setError(message)
+      toast(message)
+    } finally {
+      setResuming(false)
     }
   }
 
@@ -495,7 +552,7 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
             <h2 className="section-title">训练 / 留出对照</h2>
           </div>
           <div className={`inline-flex items-center gap-1.5 text-[11px] ${status.cls}`}>
-            <StatusIcon className={`h-3.5 w-3.5 ${experiment?.status === 'running' ? 'animate-spin' : ''}`} />
+            <StatusIcon className={`h-3.5 w-3.5 ${experiment?.status === 'running' || experiment?.status === 'pending' ? 'animate-spin' : ''}`} />
             {status.label}
             {experiment && <span className="text-muted">{experiment.completed}/{experiment.total}</span>}
           </div>
@@ -517,6 +574,43 @@ export function StrategySearchPanel({ onUseScenario, onScenarioRunComplete }: St
               onCancel={() => { void cancel() }}
               cancelling={cancelling}
             />
+          )}
+          {experiment?.status === 'interrupted' && (
+            <div className="space-y-2">
+              <div className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-2.5 text-[11px] leading-5 text-secondary">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-medium text-warning">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    服务重启，任务已中断
+                  </span>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-btn border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
+                    disabled={resuming}
+                    onClick={() => { void resume() }}
+                  >
+                    {resuming ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                    {resuming ? '正在恢复…' : '从检查点恢复'}
+                  </button>
+                </div>
+                <p className="mt-1 text-muted">已完成场景会跳过；将从中断处继续寻优，无需重新配置。</p>
+              </div>
+              <BacktestRunStatus
+                status="interrupted"
+                title="服务重启，任务已中断"
+                runtime={experiment.runtime}
+                completed={experiment.completed}
+                total={experiment.total}
+                startedAt={experiment.created_at}
+                extras={[
+                  { label: '请求', value: String(experiment.requested_count) },
+                  { label: '场景', value: String(experiment.scenario_count) },
+                ]}
+                onResume={() => { void resume() }}
+                resuming={resuming}
+                resumeLabel="从检查点恢复"
+              />
+            </div>
           )}
           {!experiment && !task.isLaunching && (
             <EmptyState title="尚未运行寻优" hint="选择策略、股票池和持仓周期后，系统会在冻结的训练窗打分，再把 Top 候选拿到留出窗确认。" />

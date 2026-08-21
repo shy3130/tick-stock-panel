@@ -190,6 +190,28 @@ function connectSSE(query: string, id: number): void {
     }
   })
 
+  // 服务重启后后端自动整单重跑：提示即可，勿当 error，勿清 reconnect key
+  source.addEventListener('resumed', event => {
+    if (current?.id !== id) return
+    let message = '服务已重启，因子回测无法从中途续跑，正在整单重跑'
+    const data = (event as MessageEvent).data
+    if (data) {
+      try {
+        const parsed = JSON.parse(data) as { message?: string }
+        if (parsed?.message) message = parsed.message
+      } catch { /* 用默认文案 */ }
+    }
+    const prev = current.progress
+    current = {
+      ...current,
+      progress: prev
+        ? { ...prev, label: message, stage: prev.stage || 'resumed' }
+        : { stage: 'resumed', label: message, completed: 0, total: 0 },
+      error: null,
+    }
+    emit()
+  })
+
   source.addEventListener('done', event => {
     if (current?.id !== id) return
     try {

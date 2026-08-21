@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Square } from 'lucide-react'
+import { Loader2, Play, Square } from 'lucide-react'
 import {
   elapsedSince,
   estimateEtaMs,
@@ -9,7 +9,7 @@ import {
   type RunConnectionState,
 } from '@/lib/runStatus'
 
-export type RunStatusKind = 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
+export type RunStatusKind = 'pending' | 'running' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 
 export function BacktestRunStatus({
   status,
@@ -24,6 +24,9 @@ export function BacktestRunStatus({
   onCancel,
   cancelling = false,
   cancelLabel = '取消',
+  onResume,
+  resuming = false,
+  resumeLabel = '从检查点恢复',
 }: {
   status: RunStatusKind
   title: string
@@ -38,8 +41,14 @@ export function BacktestRunStatus({
   onCancel?: () => void
   cancelling?: boolean
   cancelLabel?: string
+  /** interrupted 时展示恢复按钮 */
+  onResume?: () => void
+  resuming?: boolean
+  resumeLabel?: string
 }) {
+  // interrupted 非 active：停表、不转圈、不显示取消
   const active = status === 'pending' || status === 'running'
+  const interrupted = status === 'interrupted'
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!active) return
@@ -55,20 +64,29 @@ export function BacktestRunStatus({
   const eta = runtime?.eta_ms ?? estimateEtaMs(elapsed, done, all)
   const rate = formatRate(done, elapsed)
   const percent = all > 0 ? Math.min(100, Math.max(0, Math.round((done / all) * 100))) : 0
-  const stage = runtime?.label || (status === 'pending' ? '正在启动' : '运行中')
+  const stage = runtime?.label || (
+    status === 'pending' ? '正在启动'
+      : interrupted ? '可从检查点继续'
+        : '运行中'
+  )
   const current = runtime?.current?.trim() || ''
   const indeterminate = active && all <= 0
+  const shellCls = interrupted
+    ? 'border-warning/30 bg-warning/5'
+    : 'border-accent/30 bg-accent/5'
+  const titleCls = interrupted ? 'text-warning' : 'text-accent'
+  const barCls = interrupted ? 'bg-warning' : 'bg-accent'
 
   return (
-    <div className="rounded-btn border border-accent/30 bg-accent/5 px-3 py-2.5">
+    <div className={`rounded-btn border ${shellCls} px-3 py-2.5`}>
       <div className="flex items-start gap-2.5">
-        <Loader2 className={`mt-0.5 h-4 w-4 shrink-0 text-accent ${active ? 'animate-spin' : ''}`} />
+        <Loader2 className={`mt-0.5 h-4 w-4 shrink-0 ${titleCls} ${active ? 'animate-spin' : ''}`} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <div className="text-xs font-medium text-accent">{title}</div>
+            <div className={`text-xs font-medium ${titleCls}`}>{title}</div>
             <div className="text-[11px] text-secondary">{stage}</div>
             {all > 0 && (
-              <span className="ml-auto font-mono text-sm font-semibold text-accent">{percent}%</span>
+              <span className={`ml-auto font-mono text-sm font-semibold ${titleCls}`}>{percent}%</span>
             )}
             {connectionState === 'reconnecting' && (
               <span className="inline-flex items-center gap-1 text-[11px] text-warning" role="status">
@@ -97,7 +115,7 @@ export function BacktestRunStatus({
             aria-valuenow={indeterminate ? undefined : percent}
           >
             <div
-              className={`h-full rounded-full bg-accent ${indeterminate ? 'w-1/3 animate-pulse' : 'transition-[width] duration-300 ease-out'}`}
+              className={`h-full rounded-full ${barCls} ${indeterminate ? 'w-1/3 animate-pulse' : 'transition-[width] duration-300 ease-out'}`}
               style={indeterminate ? undefined : { width: `${percent}%` }}
             />
           </div>
@@ -126,6 +144,17 @@ export function BacktestRunStatus({
             ))}
           </div>
         </div>
+        {onResume && interrupted && (
+          <button
+            type="button"
+            onClick={onResume}
+            disabled={resuming}
+            className="inline-flex shrink-0 items-center gap-1 rounded-btn border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
+          >
+            {resuming ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3 fill-current" />}
+            {resuming ? '正在恢复…' : resumeLabel}
+          </button>
+        )}
         {onCancel && active && (
           <button
             type="button"
