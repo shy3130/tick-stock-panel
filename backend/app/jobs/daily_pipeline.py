@@ -705,6 +705,10 @@ def _refresh_strategy_cache(repo: KlineRepository, emit: ProgressCb) -> None:
             enriched_history_loader=svc._load_enriched_history,
             strategy_dirs=strategy_dirs,
         )
+        # F16: 方案注册为 screen:<hex> 策略 (本进程不 reload, 构造后同步一次)。
+        from app.strategy.screen_bridge import sync_screen_strategies
+
+        sync_screen_strategies(engine, data_dir)
         all_overrides = strategy_config.list_overrides(data_dir)
         results: dict[str, dict] = {}
         for sid, r in engine.run_all(as_of, overrides_map=all_overrides).items():

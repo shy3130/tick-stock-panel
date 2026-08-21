@@ -35,10 +35,39 @@ class _Repo:
         return pl.DataFrame({"symbol": ["600001.SH", "000001.SZ"], "name": ["甲", "乙"]})
 
 
+class _StubEngine:
+    """strategy_engine 替身 — F1 单一执行路径: /strategies /run_preset /run_all 全走它。"""
+
+    def __init__(self, strategies=None, error_ids=()):
+        self.strategies = strategies or [
+            {"id": "stub", "name": "示例", "description": "说明", "source": "builtin"},
+        ]
+        self.error_ids = set(error_ids)
+        self._strategies = {}  # run_all 扫描 filter_history 策略用
+        self.run_calls: list = []
+
+    def list_strategies(self):
+        return list(self.strategies)
+
+    def run(self, strategy_id, as_of, **kwargs):
+        self.run_calls.append((strategy_id, as_of, kwargs))
+        if strategy_id not in {m["id"] for m in self.strategies}:
+            raise ValueError(f"unknown strategy: {strategy_id}")
+        if strategy_id in self.error_ids:
+            raise RuntimeError(f"boom: {strategy_id}")
+        return screener_module.ScreenerResult(
+            as_of=as_of,
+            strategy=strategy_id,
+            rows=[{"symbol": "600001.SH"}],
+            total=1,
+        )
+
+
 def _client(monkeypatch):
     monkeypatch.setattr(screener_module, "ScreenerService", _Service)
     app = FastAPI()
     app.state.repo = _Repo()
+    app.state.strategy_engine = _StubEngine()
     app.include_router(screener.router)
     return TestClient(app)
 
@@ -59,6 +88,73 @@ def test_screener_query_fields_and_nested_order(monkeypatch):
     assert response.status_code == 200
     assert set(response.json()) == {"rows", "total", "applied", "as_of", "elapsed_ms"}
     assert response.json()["rows"][0]["symbol"] == "600001.SH"
+
+
+
+def test_fields_supports_groups_and_sequence_metadata(monkeypatch):
+    client = _client(monkeypatch)
+    payload = client.get("/api/screener/fields").json()
+    assert payload["supports_groups"] is True
+    seq = [item for item in payload["fields"] if item["group"] == "多日形态"]
+    assert {item["field"] for item in seq} >= {
+        "seq_consecutive_up_3", "seq_cum_change_5d", "seq_days_since_limit_up",
+    }
+    assert all(item["source"] == "sequence" for item in seq)
+
+
+def test_query_facets_and_group_logic_roundtrip(monkeypatch, tmp_path):
+    client = _client(monkeypatch)
+    client.app.state.repo.store = SimpleNamespace(data_dir=tmp_path)
+    # OR 分组: A=close>15 (乙), B=change_pct>=0.2 (乙) → 1 行; facets 缺快照 fail-soft
+    response = client.post(
+        "/api/screener/query",
+        json={
+            "conditions": [
+                {"field": "close", "op": ">", "value": 15, "group": "A"},
+                {"field": "change_pct", "op": ">=", "value": 0.2, "group": "B"},
+            ],
+            "group_logic": "or",
+            "facets": ["industry"],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["applied"][0]["group"] == "A"
+    assert payload["facets"]["industry"] == []
+    assert payload["facet_warnings"] == ["industry_unavailable"]
+
+
+def test_screens_persist_group_logic_and_condition_groups(monkeypatch, tmp_path):
+    client = _client(monkeypatch)
+    client.app.state.repo.store = SimpleNamespace(data_dir=tmp_path)
+    created = client.post(
+        "/api/screener/screens",
+        json={
+            "name": "OR方案",
+            "conditions": [
+                {"field": "close", "op": ">", "value": 15, "group": "A"},
+                {"field": "vol_ratio_5d", "op": ">=", "value": 3, "group": "B"},
+            ],
+            "group_logic": "or",
+        },
+    )
+    assert created.status_code == 201
+    record = created.json()
+    assert record["group_logic"] == "or"
+    assert record["conditions"][0]["group"] == "A"
+    # 读取 round-trip 完整还原
+    listed = client.get("/api/screener/screens").json()["screens"]
+    assert listed[0]["group_logic"] == "or"
+    assert listed[0]["conditions"][1]["group"] == "B"
+
+def test_run_sql_removed_returns_410(monkeypatch):
+    client = _client(monkeypatch)
+    response = client.post("/api/screener/run", json={"conditions": ["close > 10"]})
+    assert response.status_code == 410
+    detail = response.json()["detail"]
+    assert detail["code"] == "screener_run_sql_removed"
+    assert "/api/screener/query" in detail["message"]
 
 
 def test_screener_query_distinguishes_422_400_and_503(monkeypatch):
@@ -137,22 +233,16 @@ def test_cached_results_beyond_canonical_date_are_isolated(monkeypatch):
 
 
 def test_run_all_uses_request_repository(monkeypatch):
-    class RunAllService(_Service):
-        def run_preset(self, strategy_id, as_of, **_kwargs):
-            return screener_module.ScreenerResult(
-                as_of=as_of,
-                strategy=strategy_id,
-                rows=[{"symbol": "600001.SH"}],
-                total=1,
-            )
-
-    monkeypatch.setattr(screener, "ScreenerService", RunAllService)
-    monkeypatch.setattr(screener, "PRESET_STRATEGIES", {"stub": {}})
+    engine = _StubEngine(
+        strategies=[{"id": "stub", "name": "示例", "description": "", "source": "builtin"}],
+    )
+    monkeypatch.setattr(screener, "ScreenerService", _Service)
     monkeypatch.setattr(screener.strategy_config, "list_overrides", lambda _data_dir: {})
     monkeypatch.setattr(screener.strategy_cache, "write_cache", lambda *_args: None)
     monkeypatch.setattr(screener, "_load_ext_value_maps", lambda *_args: {})
     app = FastAPI()
     app.state.repo = _Repo()
+    app.state.strategy_engine = engine
     app.include_router(screener.router)
 
     response = TestClient(app).post(
@@ -161,8 +251,90 @@ def test_run_all_uses_request_repository(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["results"]["stub"]["total"] == 1
+    body = response.json()
+    assert body["results"]["stub"]["total"] == 1
+    assert body["failed"] == []
+    # 单一执行路径: 必须经由 app.state.strategy_engine
+    assert [c[0] for c in engine.run_calls] == ["stub"]
 
+
+def test_strategies_503_when_engine_missing(monkeypatch):
+    monkeypatch.setattr(screener_module, "ScreenerService", _Service)
+    app = FastAPI()
+    app.state.repo = _Repo()
+    app.include_router(screener.router)
+
+    response = TestClient(app).get("/api/screener/strategies")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "strategy_engine_unavailable"
+
+
+def test_run_all_503_when_engine_missing(monkeypatch):
+    monkeypatch.setattr(screener_module, "ScreenerService", _Service)
+    app = FastAPI()
+    app.state.repo = _Repo()
+    app.include_router(screener.router)
+
+    response = TestClient(app).post("/api/screener/run_all", json={})
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "strategy_engine_unavailable"
+
+
+def test_run_preset_builtin_goes_through_engine_and_404s_unknown(monkeypatch):
+    engine = _StubEngine()
+    monkeypatch.setattr(screener, "ScreenerService", _Service)
+    monkeypatch.setattr(screener.strategy_config, "load_override", lambda *_args: None)
+    monkeypatch.setattr(screener, "_update_cache_strategy", lambda *_args: None)
+    monkeypatch.setattr(screener, "_load_ext_value_maps", lambda *_args: {})
+    app = FastAPI()
+    app.state.repo = _Repo()
+    app.state.strategy_engine = engine
+    app.include_router(screener.router)
+    client = TestClient(app)
+
+    ok = client.post(
+        "/api/screener/run_preset",
+        json={"strategy_id": "stub", "as_of": "2026-07-16"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["total"] == 1
+    assert [c[0] for c in engine.run_calls] == ["stub"]
+
+    missing = client.post("/api/screener/run_preset", json={"strategy_id": "nope"})
+    assert missing.status_code == 404
+
+
+def test_run_all_records_failed_strategies(monkeypatch):
+    engine = _StubEngine(
+        strategies=[
+            {"id": "ok", "name": "正常", "description": "", "source": "builtin"},
+            {"id": "boom", "name": "爆炸", "description": "", "source": "builtin"},
+        ],
+        error_ids={"boom"},
+    )
+    monkeypatch.setattr(screener, "ScreenerService", _Service)
+    monkeypatch.setattr(screener.strategy_config, "list_overrides", lambda _data_dir: {})
+    monkeypatch.setattr(screener.strategy_cache, "write_cache", lambda *_args: None)
+    monkeypatch.setattr(screener, "_load_ext_value_maps", lambda *_args: {})
+    app = FastAPI()
+    app.state.repo = _Repo()
+    app.state.strategy_engine = engine
+    app.include_router(screener.router)
+
+    response = TestClient(app).post(
+        "/api/screener/run_all",
+        json={"as_of": "2026-07-16", "strategy_ids": ["ok", "boom"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # 成功策略照常产出
+    assert body["results"]["ok"]["total"] == 1
+    assert "boom" not in body["results"]
+    # 失败策略显式记入 failed, 不再静默缺席
+    assert body["failed"] == [{"strategy_id": "boom", "error": "boom: boom"}]
 
 # ===========================================================================
 # limit-ladder: 外部降级展示 map 接入(provenance 隔离)

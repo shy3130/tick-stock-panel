@@ -46,7 +46,10 @@ class QueryCondition(BaseModel):
     field: str
     op: str
     value: Any
-
+    # F14: 可选条件分组 (组内 AND, 组间按 group_logic 合并); None = 隐式默认组。
+    group: str | None = Field(
+        default=None, min_length=1, max_length=16, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
 class QueryOrder(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -62,6 +65,10 @@ class ScreenerQueryRequest(BaseModel):
     as_of: date | None = None
     order_by: QueryOrder | None = None
     limit: StrictInt = Field(default=100, ge=1, le=500)
+    # F14: 组间合并逻辑; "and" 时 group 无意义 (等价于 flat AND)。
+    group_logic: Literal["and", "or"] = "and"
+    # F15: 请求的聚合 facet (limit 截断前对全部命中行聚合)。
+    facets: list[Literal["industry"]] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode="after")
     def validate_value_shapes(self) -> ScreenerQueryRequest:
@@ -177,7 +184,7 @@ FIELD_REGISTRY: dict[str, FieldSpec] = {
     "roe": _spec("roe", "ROE", "financial", "financials", "decimal", unit="%", deps=("weight_avg_roe",)),
     "basic_eps": _spec("basic_eps", "基本每股收益", "financial", "financials", "decimal", unit="元", deps=("basic_eps",)),
     "gross_margin": _spec("gross_margin", "毛利率", "financial", "financials", "decimal", unit="%", deps=("gross_margin",)),
-    "pe_approx": _spec("pe_approx", "PE (年化近似)", "financial", "derived", "decimal", unit="倍", deps=("close", "eps_annualized")),
+    "pe_approx": _spec("pe_approx", "市盈率TTM(近似)", "financial", "derived", "decimal", unit="倍", deps=("close", "eps_ttm")),
     "pb_approx": _spec("pb_approx", "PB (近似)", "financial", "derived", "decimal", unit="倍", deps=("close", "bps")),
     "board": _spec("board", "板块", "filter", "derived", "enum", ops=ENUM_OPS, options=_BOARD_OPTIONS, deps=("symbol",)),
     "price_position_60d": _spec("price_position_60d", "60日价格位置", "technical", "derived", "decimal", unit="%", deps=("close", "high_60d", "low_60d")),
@@ -215,13 +222,59 @@ FIELD_REGISTRY: dict[str, FieldSpec] = {
     "realtime_concept": FieldSpec("realtime_concept", "实时概念", "filter", "unavailable", None, "enum", "no_match", "unavailable", ENUM_OPS, False),
 }
 
+# --------------------------------------------------------------------------- #
+# F13 多日序列字段: 第二谓词面 (与 FIELD_REGISTRY 分离)。列由 _load_enriched_history
+# 历史窗口计算后按 symbol join 回单日主表, 不进单日 panel 列。
+# --------------------------------------------------------------------------- #
+
+_SEQ_GROUP = "多日形态"
+
+# 字段 → 所需完整窗口的交易日行数 (窗口数据不足 → NULL, 绝不伪造)。
+_SEQUENCE_WINDOWS: dict[str, int] = {
+    "seq_consecutive_up_3": 4,
+    "seq_consecutive_up_5": 6,
+    "seq_consecutive_volume_up_3": 4,
+    "seq_limit_up_within_5d": 5,
+    "seq_limit_up_within_10d": 10,
+    "seq_cum_change_5d": 5,
+    "seq_cum_change_10d": 10,
+    "seq_cum_change_20d": 20,
+    "seq_days_since_limit_up": 60,
+}
+_DAYS_SINCE_LIMIT_UP_LOOKBACK = _SEQUENCE_WINDOWS["seq_days_since_limit_up"]
+
+SEQUENCE_FIELDS: dict[str, FieldSpec] = {
+    "seq_consecutive_up_3": _spec("seq_consecutive_up_3", "连续上涨3日", _SEQ_GROUP, "sequence", "bool", ops=BOOL_OPS, sortable=False),
+    "seq_consecutive_up_5": _spec("seq_consecutive_up_5", "连续上涨5日", _SEQ_GROUP, "sequence", "bool", ops=BOOL_OPS, sortable=False),
+    "seq_consecutive_volume_up_3": _spec("seq_consecutive_volume_up_3", "连续放量3日", _SEQ_GROUP, "sequence", "bool", ops=BOOL_OPS, sortable=False),
+    "seq_limit_up_within_5d": _spec("seq_limit_up_within_5d", "近5日涨停", _SEQ_GROUP, "sequence", "bool", ops=BOOL_OPS, sortable=False),
+    "seq_limit_up_within_10d": _spec("seq_limit_up_within_10d", "近10日涨停", _SEQ_GROUP, "sequence", "bool", ops=BOOL_OPS, sortable=False),
+    "seq_cum_change_5d": _spec("seq_cum_change_5d", "近5日累计涨跌幅", _SEQ_GROUP, "sequence", "decimal", unit="%"),
+    "seq_cum_change_10d": _spec("seq_cum_change_10d", "近10日累计涨跌幅", _SEQ_GROUP, "sequence", "decimal", unit="%"),
+    "seq_cum_change_20d": _spec("seq_cum_change_20d", "近20日累计涨跌幅", _SEQ_GROUP, "sequence", "decimal", unit="%"),
+    "seq_days_since_limit_up": _spec("seq_days_since_limit_up", "距最近涨停天数", _SEQ_GROUP, "sequence", "decimal", unit="天", sortable=False),
+}
+
+
+def get_field_spec(field: str) -> FieldSpec | None:
+    """单日 registry + 多日序列 registry 的统一 spec 查找 (无命中返回 None)。"""
+    return FIELD_REGISTRY.get(field) or SEQUENCE_FIELDS.get(field)
+
+
+def iter_field_specs() -> Any:
+    """按注册顺序迭代 (field, spec): 单日字段在前, 多日形态字段在后。"""
+    yield from FIELD_REGISTRY.items()
+    yield from SEQUENCE_FIELDS.items()
+
 
 _DEPRECATED = {"pb", "main_fund_flow", "ttm", "main_net_flow"}
-_CURRENT_INSTRUMENT_FIELDS = {"float_market_cap", "total_market_cap", "exclude_st"}
 _FINANCIAL_DERIVED_FIELDS = {"pe_approx", "pb_approx", "roe"}
-# 沪深股通/AH/上市天数来自 fstore 快照的当前参考数据, 仅最新交易日可查。
+# 沪深股通/AH 来自 fstore 快照的当前参考数据, 仅最新交易日可查;
+# listing_days 由 listing_date 按 as_of 推导, 支持历史查询, 不进 latest-only 集合。
 _REFERENCE_FIELDS = {"is_ah", "ah_premium", "hk_connect", "listing_days"}
-_CURRENT_INSTRUMENT_FIELDS |= _REFERENCE_FIELDS
+_CURRENT_INSTRUMENT_FIELDS = {"float_market_cap", "total_market_cap", "exclude_st"} | (
+    _REFERENCE_FIELDS - {"listing_days"}
+)
 
 _BOARD_RE = (
     (re.compile(r"^(600|601|603|605)\d{3}\.SH$"), "sh_main"),
@@ -277,7 +330,13 @@ _MARGIN_WINDOW_DAYS = 5
 
 
 def field_metadata() -> list[dict[str, Any]]:
-    return [s.metadata() for s in FIELD_REGISTRY.values()]
+    metadata = [s.metadata() for _, s in iter_field_specs()]
+    # 仅最新交易日可查的当前标的字段对外标记 latest_only (前端徽标用);
+    # 注册表内保持 available, 最新日查询照常放行。
+    for item in metadata:
+        if item["field"] in _CURRENT_INSTRUMENT_FIELDS:
+            item["availability"] = "latest_only"
+    return metadata
 
 
 def _finite_number(value: Any) -> bool:
@@ -323,20 +382,32 @@ def validate_query(req: ScreenerQueryRequest) -> tuple[list[dict[str, Any]], Que
     applied: list[dict[str, Any]] = []
     for i, cond in enumerate(req.conditions):
         location = f"conditions[{i}]"
-        if cond.field not in FIELD_REGISTRY or cond.field in _DEPRECATED:
+        spec = get_field_spec(cond.field)
+        if spec is None or cond.field in _DEPRECATED:
             raise ScreenerSemanticError(f"{location}.field", "unknown_field")
-        spec = FIELD_REGISTRY[cond.field]
         value = _validate_value(spec, cond.op, cond.value, f"{location}.value")
-        applied.append({"field": cond.field, "op": cond.op, "value": value})
+        # F14: 追加 group 键仅在显式分组时 (旧响应逐字节等价)。
+        entry = {"field": cond.field, "op": cond.op, "value": value}
+        if cond.group is not None:
+            entry["group"] = cond.group
+        applied.append(entry)
     order = req.order_by or QueryOrder()
-    if order.field not in FIELD_REGISTRY or order.field in _DEPRECATED:
+    order_spec = get_field_spec(order.field)
+    if order_spec is None or order.field in _DEPRECATED:
         raise ScreenerSemanticError("order_by.field", "invalid_order_field")
-    spec = FIELD_REGISTRY[order.field]
-    if not spec.sortable:
+    if not order_spec.sortable:
         raise ScreenerSemanticError("order_by.field", "unsortable_field")
     if order.direction not in {"asc", "desc"}:
         raise ScreenerSemanticError("order_by.direction", "invalid_direction")
+    # F14: 非默认组数量上限 (隐式默认组不计)。
+    named_groups = {c.group for c in req.conditions if c.group is not None}
+    if len(named_groups) > _MAX_NAMED_GROUPS:
+        raise ScreenerSemanticError("group_logic", "too_many_groups")
     return applied, order
+
+
+# F14: 非默认组上限 (隐式默认组不计入)。
+_MAX_NAMED_GROUPS = 5
 
 
 def _board_expr() -> pl.Expr:
@@ -382,7 +453,7 @@ def _materialize(df: pl.DataFrame, required: set[str]) -> pl.DataFrame:
         elif name == "roe":
             expressions.append(pl.col("weight_avg_roe").alias(name))
         elif name == "pe_approx":
-            expressions.append(pl.when(pl.col("eps_annualized") > 0).then(pl.col("close") / pl.col("eps_annualized")).otherwise(None).alias(name))
+            expressions.append(pl.when(pl.col("eps_ttm") > 0).then(pl.col("close") / pl.col("eps_ttm")).otherwise(None).alias(name))
         elif name == "pb_approx":
             expressions.append(pl.when(pl.col("bps") > 0).then(pl.col("close") / pl.col("bps")).otherwise(None).alias(name))
         elif name == "board":
@@ -824,7 +895,8 @@ def _literal_filter(condition: dict[str, Any]) -> pl.Expr:
         expr = col <= pl.lit(value)
     else:  # validate_query makes this unreachable
         raise ScreenerSemanticError("conditions", "invalid_operator")
-    if FIELD_REGISTRY[field].value_type == "numeric":
+    spec = get_field_spec(field)
+    if spec is not None and spec.value_type == "numeric":
         expr = col.is_not_null() & col.is_finite() & expr
     return expr.fill_null(False)
 
@@ -832,14 +904,39 @@ def _literal_filter(condition: dict[str, Any]) -> pl.Expr:
 def compile_predicate(
     conditions: list[QueryCondition] | list[dict[str, Any]],
     order_by: QueryOrder | dict[str, Any] | None = None,
+    *,
+    group_logic: Literal["and", "or"] = "and",
 ) -> tuple[pl.Expr, list[dict[str, Any]], QueryOrder]:
-    """Validate public literals and compile a closed Polars predicate."""
-    req = ScreenerQueryRequest(conditions=conditions, order_by=order_by)
+    """Validate public literals and compile a closed Polars predicate.
+
+    F14: 条件按 group 分桶 (None → 隐式默认组), 桶内 AND,
+    桶间按 ``group_logic`` 合并 ("and" 等价旧的 flat AND 语义)。
+    """
+    req = ScreenerQueryRequest(conditions=conditions, order_by=order_by, group_logic=group_logic)
     applied, order = validate_query(req)
-    expression = pl.lit(True)
+    buckets: dict[str, pl.Expr] = {}
     for condition in applied:
-        expression &= _literal_filter(condition)
+        expr = _literal_filter(condition)
+        key = condition.get("group") or ""
+        buckets[key] = expr if key not in buckets else buckets[key] & expr
+    combine = _or_combine if group_logic == "or" else _and_combine
+    expression = combine(buckets)
     return expression, applied, order
+
+def _and_combine(buckets: dict[str, pl.Expr]) -> pl.Expr:
+    """桶间 AND (与旧的 flat AND 完全一致)。"""
+    expression = pl.lit(True)
+    for bucket in buckets.values():
+        expression &= bucket
+    return expression
+
+
+def _or_combine(buckets: dict[str, pl.Expr]) -> pl.Expr:
+    """桶间 OR: 任一分组整体命中即命中。"""
+    expression = pl.lit(False)
+    for bucket in buckets.values():
+        expression |= bucket
+    return expression
 
 
 def _json_value(value: Any) -> Any:
@@ -855,22 +952,113 @@ def _enriched_columns_for(public_fields: set[str]) -> list[str]:
 
     外部快照、财务和当前标的字段在后续专用 join 中补齐，不能把它们的字段名
     传给 repository；否则会错误触发完整指标计算。保留 `close`/`change_pct`
-    作为公共行形状基线。
+    作为公共行形状基线。多日序列字段来自历史窗口路径, 不占单日 panel 列。
     """
     from app.indicators.pipeline import ENRICHED_COLUMNS
 
     required = {"close", "change_pct"}
     for name in public_fields:
-        spec = FIELD_REGISTRY[name]
+        spec = FIELD_REGISTRY.get(name)
+        if spec is None:
+            continue
         for candidate in (name, *spec.deps):
             if candidate in ENRICHED_COLUMNS:
                 required.add(candidate)
     return sorted(required)
 
 
+def _sequence_lookback_days(requested: set[str]) -> int:
+    """序列字段所需的历史回看自然日数。
+
+    ``_load_enriched_history`` 的 lookback_days 是自然日 (start = as_of - days),
+    交易日窗口按 7/5 换算并留假期缓冲, 保证窗口行数充足。
+    """
+    window = max(_SEQUENCE_WINDOWS[f] for f in requested)
+    return math.ceil(window * 7 / 5) + 15
+
+
+
+
+def _join_sequence_columns(
+    df: pl.DataFrame,
+    history: pl.DataFrame,
+    as_of: date,
+    requested: set[str],
+) -> pl.DataFrame:
+    """按 symbol 计算多日序列列并 left join 回单日主表 (只保留 date == as_of 行)。
+
+    独立计算路径, 不复用也不污染单日 _materialize; 主表 symbol 在历史窗口
+    无 as_of 行时为 null → 数值条件不匹配, 布尔条件视为 False (null_policy)。
+    """
+    frame = history.filter(pl.col("date") <= as_of).sort(["symbol", "date"])
+    base = [
+        (c if c in frame.columns else pl.lit(None).alias(c))
+        for c in ("close", "volume", "signal_limit_up")
+    ]
+    frame = frame.select(["symbol", "date", *base])
+    up = pl.col("close") > pl.col("close").shift(1).over("symbol")
+    vup = pl.col("volume") > pl.col("volume").shift(1).over("symbol")
+    frame = frame.with_columns(
+        pl.int_range(pl.len()).over("symbol").alias("_i"),
+        up.alias("_up"),
+        vup.alias("_vup"),
+        pl.col("signal_limit_up").fill_null(False).cast(pl.UInt32).cum_sum().over("symbol").alias("_lim_cnt"),
+        pl.when(pl.col("signal_limit_up").fill_null(False)).then(pl.int_range(pl.len()).over("symbol")).otherwise(None).alias("_lim_i"),
+    )
+
+    def _chain(col: str, n: int) -> pl.Expr:
+        expr = pl.col(col)
+        for k in range(1, n):
+            expr = expr & pl.col(col).shift(k).over("symbol")
+        return expr
+
+    exprs: list[pl.Expr] = []
+    for field, window in _SEQUENCE_WINDOWS.items():
+        if field not in requested:
+            continue
+        if field == "seq_consecutive_up_3":
+            exprs.append(_chain("_up", 3).alias(field))
+        elif field == "seq_consecutive_up_5":
+            exprs.append(_chain("_up", 5).alias(field))
+        elif field == "seq_consecutive_volume_up_3":
+            exprs.append(_chain("_vup", 3).alias(field))
+        elif field in {"seq_limit_up_within_5d", "seq_limit_up_within_10d"}:
+            span = 5 if field.endswith("5d") else 10
+            # 近 N 日 = 含当日的最近 N 个交易日, 即行 [t-N+1, t]。
+            # cum 差分须减 shift(N) (窗口前一行的累计值); 恰好 N 行时
+            # shift 为 null → 按窗口前累计 0 处理, 否则会把 t-N+1 行
+            # 本身的涨停误减掉 (off-by-one)。
+            exprs.append(
+                pl.when(pl.col("_i") >= span - 1)
+                .then(
+                    (
+                        pl.col("_lim_cnt")
+                        - pl.col("_lim_cnt").shift(span).over("symbol").fill_null(0)
+                    )
+                    > 0
+                )
+                .otherwise(None)
+                .alias(field)
+            )
+        elif field in {"seq_cum_change_5d", "seq_cum_change_10d", "seq_cum_change_20d"}:
+            span = int(field.removeprefix("seq_cum_change_").removesuffix("d"))
+            exprs.append(
+                (((pl.col("close") / pl.col("close").shift(span - 1).over("symbol")) - 1) * 100).alias(field)
+            )
+    frame = frame.with_columns(*exprs)
+    if "seq_days_since_limit_up" in requested:
+        frame = frame.with_columns(
+            (pl.col("_i") - pl.col("_lim_i").forward_fill().over("symbol")).alias("seq_days_since_limit_up")
+        )
+    latest = frame.filter(pl.col("date") == as_of).select(["symbol", *sorted(requested)])
+    return df.join(latest, on="symbol", how="left")
+
+
 def execute_query(repo: Any, req: ScreenerQueryRequest) -> dict[str, Any]:
     """Validate, load, materialize, filter, sort, and project a screener query."""
-    mask, applied, order = compile_predicate(req.conditions, req.order_by)
+    mask, applied, order = compile_predicate(
+        req.conditions, req.order_by, group_logic=req.group_logic
+    )
     t0 = time.perf_counter()
     requested_fields = {condition["field"] for condition in applied} | {order.field}
     # Public rows always expose close/change_pct, independent of user conditions.
@@ -908,8 +1096,21 @@ def execute_query(repo: Any, req: ScreenerQueryRequest) -> dict[str, Any]:
     df = _join_chip_snapshot(df, join_required, as_of)
     df = _join_moneyflow_snapshot(df, join_required, as_of)
     df = _join_margin_stats(df, join_required, as_of)
+    sequence_requested = requested_fields & set(SEQUENCE_FIELDS)
+    if sequence_requested:
+        try:
+            history = svc._load_enriched_history(as_of, _sequence_lookback_days(sequence_requested))
+        except ScreenerDataUnavailableError:
+            raise
+        except Exception as exc:
+            raise ScreenerDataUnavailableError(sorted(sequence_requested)) from exc
+        if history is None or history.is_empty():
+            raise ScreenerDataUnavailableError(sorted(sequence_requested))
+        df = _join_sequence_columns(df, history, as_of, sequence_requested)
     source_required: set[str] = {"symbol", "close", "change_pct"}
     for name in public_required:
+        if name in SEQUENCE_FIELDS:
+            continue  # 序列列已由历史窗口 join 补齐
         spec = FIELD_REGISTRY[name]
         if spec.source == "financials" or name in _FINANCIAL_DERIVED_FIELDS:
             source_required.update(spec.deps)
@@ -920,13 +1121,14 @@ def execute_query(repo: Any, req: ScreenerQueryRequest) -> dict[str, Any]:
                 spec.deps
                 or ((name,) if spec.source in {"persist", "persist/runtime", "runtime"} else ())
             )
-    unavailable = [name for name in public_required if FIELD_REGISTRY[name].availability != "available"]
+    unavailable = [
+        name for name in public_required if get_field_spec(name).availability != "available"
+    ]
     if unavailable:
         raise ScreenerDataUnavailableError(unavailable)
-
     financial = {
         name for name in public_required
-        if FIELD_REGISTRY[name].source == "financials"
+        if get_field_spec(name).source == "financials"
         or name in _FINANCIAL_DERIVED_FIELDS
     }
     if financial:
@@ -952,7 +1154,7 @@ def execute_query(repo: Any, req: ScreenerQueryRequest) -> dict[str, Any]:
     # malformed/partial enriched frame a sanitized 503, not an empty result.
     missing = [name for name in source_required if name not in df.columns]
     if missing:
-        missing_public = [name for name in public_required if name in missing or any(d in missing for d in FIELD_REGISTRY[name].deps)]
+        missing_public = [name for name in public_required if name in missing or any(d in missing for d in get_field_spec(name).deps)]
         raise ScreenerDataUnavailableError(sorted(set(missing_public or missing)))
     try:
         df = _materialize(df, public_required)
@@ -966,7 +1168,9 @@ def execute_query(repo: Any, req: ScreenerQueryRequest) -> dict[str, Any]:
 
         filtered = df.filter(mask)
         total = filtered.height
-        if FIELD_REGISTRY[order.field].value_type == "numeric":
+        # F15: facet 在 limit 截断前对全部命中行聚合。
+        facet_hits = filtered.select("symbol") if "industry" in req.facets else None
+        if get_field_spec(order.field).value_type == "numeric":
             filtered = filtered.with_columns(
                 pl.when(pl.col(order.field).is_finite())
                 .then(pl.col(order.field))
@@ -983,7 +1187,6 @@ def execute_query(repo: Any, req: ScreenerQueryRequest) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise ScreenerDataUnavailableError(sorted(public_required)) from exc
-
     # Public projection: identifiers plus requested condition/order fields. It
     # avoids pulling financial parquet for a technical-only query.
     projection: list[str] = [c for c in ("symbol", "name", "date", "close", "change_pct") if c in filtered.columns]
@@ -994,13 +1197,64 @@ def execute_query(repo: Any, req: ScreenerQueryRequest) -> dict[str, Any]:
         {k: _json_value(v) for k, v in row.items()}
         for row in filtered.select(projection).to_dicts()
     ]
-    return {
+    result = {
         "rows": rows,
         "total": total,
         "applied": applied,
         "as_of": as_of.isoformat(),
         "elapsed_ms": (time.perf_counter() - t0) * 1000,
     }
+    # F15: 仅在请求 facets 时新增键 (旧响应逐字节等价)。
+    if req.facets:
+        facets: dict[str, list[dict[str, Any]]] = {}
+        warnings: list[str] = []
+        if facet_hits is not None:
+            # 命中行如已带 industry 列 (本次查询 join 过财务快照) 直接复用,
+            # 否则按 as_of 单独加载 PIT 快照 — 不重复读已加载的数据。
+            # 注意: 必须用 limit 截断前的 facet_hits, 而非 head 后的 filtered。
+            hits = (
+                df.filter(mask).select("symbol", "industry")
+                if "industry" in df.columns
+                else facet_hits
+            )
+            facets["industry"], industry_warnings = _industry_facet(hits, repo, as_of)
+            warnings.extend(industry_warnings)
+        result["facets"] = facets
+        if warnings:
+            result["facet_warnings"] = warnings
+    return result
+
+
+def _industry_facet(
+    hits: pl.DataFrame,
+    repo: Any,
+    as_of: date,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """全部命中行的 PIT 行业分布 (fail-soft: 快照缺失只给 warning 不阻断)。"""
+    if hits.is_empty():
+        return [], []
+    if "industry" not in hits.columns:
+        try:
+            from app.services.screener_financials import load_financial_snapshot
+
+            snap = load_financial_snapshot(Path(repo.store.data_dir), as_of)
+        except Exception:
+            return [], ["industry_unavailable"]
+        if snap is None or snap.is_empty() or "industry" not in snap.columns:
+            return [], ["industry_unavailable"]
+        hits = hits.select("symbol").join(
+            snap.select("symbol", "industry").unique(subset=["symbol"], keep="last"),
+            on="symbol",
+            how="left",
+        )
+    counts = (
+        hits.filter(pl.col("industry").is_not_null())
+        .group_by("industry")
+        .agg(pl.len().alias("count"))
+        .sort(["count", "industry"], descending=[True, False])
+        .head(20)
+    )
+    return [{"value": row["industry"], "count": row["count"]} for row in counts.to_dicts()], []
 
 
 class QueryService:
@@ -1023,8 +1277,10 @@ __all__ = [
     "ScreenerDataUnavailableError",
     "ScreenerQueryRequest",
     "ScreenerSemanticError",
+    "SEQUENCE_FIELDS",
     "compile_predicate",
     "execute_query",
     "field_metadata",
+    "get_field_spec",
     "validate_query",
 ]

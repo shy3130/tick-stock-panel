@@ -822,10 +822,10 @@ def compute_peer_comparison(
     if "amount" in df.columns:
         df = df.with_columns((pl.col("amount") / 1e8).alias("amount_yi"))
     if "close" in df.columns:
-        if "eps_annualized" in df.columns:
+        if "eps_ttm" in df.columns:
             df = df.with_columns(
-                pl.when(pl.col("eps_annualized").is_not_null() & (pl.col("eps_annualized") > 0))
-                .then(pl.col("close") / pl.col("eps_annualized"))
+                pl.when(pl.col("eps_ttm").is_not_null() & (pl.col("eps_ttm") > 0))
+                .then(pl.col("close") / pl.col("eps_ttm"))
                 .otherwise(None)
                 .alias("pe"),
             )
@@ -1055,11 +1055,11 @@ def _extract_features(repo: Any, symbol: str, latest: date) -> dict[str, Any] | 
             f = fin_row.row(0, named=True)
             features["industry"] = f.get("industry")
             features["roe"] = _safe_float(f.get("weight_avg_roe"))
-            eps_ann = _safe_float(f.get("eps_annualized"))
+            eps_ttm = _safe_float(f.get("eps_ttm"))
             bps = _safe_float(f.get("bps"))
             close = features.get("close")
-            if close and eps_ann and eps_ann > 0:
-                features["pe_approx"] = close / eps_ann
+            if close and eps_ttm and eps_ttm > 0:
+                features["pe_approx"] = close / eps_ttm
             if close and bps and bps > 0:
                 features["pb_approx"] = close / bps
 

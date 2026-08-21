@@ -178,18 +178,7 @@ def test_clear_history_cache_drops_all():
     assert len(screener._history_cache) == 0
 
 
-def test_close_screener_sql_connection_is_idempotent(monkeypatch):
-    class Connection:
-        close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-
-    conn = Connection()
-    monkeypatch.setattr(screener, "_screener_sql_conn", conn)
-
+def test_close_screener_sql_connection_is_noop():
+    # F10: SQL 选股下线后 close 保留为可导入 no-op, lifespan 可安全重复调用
     screener.close_screener_sql_connection()
     screener.close_screener_sql_connection()
-
-    assert conn.close_calls == 1
-    assert screener._screener_sql_conn is None

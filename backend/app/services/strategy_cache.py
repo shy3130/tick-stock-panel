@@ -96,6 +96,8 @@ def write_cache(
 
     - 日期变更时重置 today_ever_matched 和 today_ever_rows
     - 同一天内合并 (并集) 之前曾命中的 symbol，并用最新行数据更新
+    - 同一天写入时 results 也按策略 id 合并: 本次写入的策略覆盖同 id 旧结果,
+      未参与本次运行的其他策略保留旧结果 — 子集 run_all 不会清掉它们的当日命中
     """
     path = _cache_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,11 +132,20 @@ def write_cache(
 
     # enriched_mtime: 盘后缓存写入时记录 (向后兼容旧字段)。read_cache 已不再用它
     # 做过期校验, 实时新鲜度改由 /cached 端点叠加监控引擎内存结果保证。
+    if old_as_of and old_as_of == as_of:
+        # 同一天: results 按策略 id 合并 — 本次写入覆盖同 id 旧结果,
+        # 其他策略保留旧结果 (子集运行不清当日命中)
+        old_results = old.get("results", {}) if old else {}
+        merged_results = {**old_results, **results}
+    else:
+        # 新的一天或首次写入: results 只保留本次写入 (today_ever_* 已重置)
+        merged_results = results
+
     enriched_mtime = _get_enriched_mtime(data_dir, as_of)
 
     payload = {
         "as_of": as_of,
-        "results": results,
+        "results": merged_results,
         "today_ever_matched": today_ever_matched,
         "today_ever_rows": today_ever_rows,
         "enriched_mtime": enriched_mtime,
@@ -142,8 +153,8 @@ def write_cache(
     }
     try:
         path.write_text(json.dumps(payload, ensure_ascii=False, default=_json_default), encoding="utf-8")
-        total_rows = sum(len(r.get("rows", [])) for r in results.values())
+        total_rows = sum(len(r.get("rows", [])) for r in merged_results.values())
         total_ever = sum(len(v) for v in today_ever_matched.values())
-        logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(results), total_rows, total_ever)
+        logger.info("策略缓存已写入: %s, %d 策略, %d 命中, %d 曾命中", as_of, len(merged_results), total_rows, total_ever)
     except Exception as e:  # noqa: BLE001
         logger.warning("写入策略缓存失败: %s", e)

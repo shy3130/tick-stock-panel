@@ -41,6 +41,10 @@ def build_state():
                 store.data_dir / "strategies" / "ai",
             ],
         )
+        # F16: 方案注册为 screen:<hex> 策略 (本进程不 reload, 构造后同步一次)。
+        from app.strategy.screen_bridge import sync_screen_strategies
+
+        sync_screen_strategies(strategy_engine, store.data_dir)
         return SimpleNamespace(
             repo=repo,
             datastore=store,

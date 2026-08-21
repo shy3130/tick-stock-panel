@@ -27,7 +27,7 @@ _OUTPUT_COLUMNS = [
     "basic_eps",
     "gross_margin",
     "bps",
-    "eps_annualized",
+    "eps_ttm",
     "report_year",
     "quarter_num",
 ]
@@ -39,7 +39,7 @@ _OUTPUT_SCHEMA = {
     "basic_eps": pl.Float64,
     "gross_margin": pl.Float64,
     "bps": pl.Float64,
-    "eps_annualized": pl.Float64,
+    "eps_ttm": pl.Float64,
     "report_year": pl.Int64,
     "quarter_num": pl.Int64,
 }
@@ -85,7 +85,7 @@ def load_financial_snapshot(data_dir: Path, as_of: date) -> pl.DataFrame:
 
     try:
         quarter = pl.col("quarter").cast(pl.String)
-        frame = (
+        eligible = (
             frame.with_columns(
                 _notice_date_expr(frame.schema["notice_date"]).alias("_notice_date"),
                 quarter.str.extract(r"^(\d{4})Q([1-4])$", 1)
@@ -116,13 +116,69 @@ def load_financial_snapshot(data_dir: Path, as_of: date) -> pl.DataFrame:
                 pl.col("gross_margin").cast(pl.Float64, strict=False).alias("gross_margin"),
                 pl.col("bps").cast(pl.Float64, strict=False).alias("bps"),
             )
-            .sort(
+        )
+        # 每只股票取最新报告期（同期多次披露时取最新公告）。
+        latest = (
+            eligible.sort(
                 ["symbol", "report_year", "quarter_num", "_notice_date"],
                 descending=[False, True, True, True],
             )
             .unique(subset=["symbol"], keep="first", maintain_order=True)
+        )
+        # eps_ttm 为近十二个月滚动 EPS（累计财报口径）:
+        #   最新报告期为 Q4 → TTM = 本期全年累计EPS；
+        #   最新报告期为 Q1/Q2/Q3 → TTM = 本期累计EPS + 上年Q4全年累计EPS − 上年同期累计EPS。
+        # 三个输入任一缺失（历史不足、未披露或公告晚于 as_of）或为空 → NULL，绝不外推。
+        prior_periods = (
+            eligible.sort(
+                ["symbol", "report_year", "quarter_num", "_notice_date"],
+                descending=[False, True, True, True],
+            )
+            .unique(subset=["symbol", "report_year", "quarter_num"], keep="first", maintain_order=True)
+        )
+        # 上年同期累计 EPS (报告期年份对齐: report_year+1 的同期)。
+        prior_same = prior_periods.select(
+            "symbol",
+            (pl.col("report_year") + 1).alias("_ttm_match_year"),
+            "quarter_num",
+            pl.col("basic_eps").alias("_prior_same_eps"),
+        )
+        # 上年 Q4 全年累计 EPS (仅年份对齐)。
+        prior_full = prior_periods.filter(pl.col("quarter_num") == 4).select(
+            "symbol",
+            (pl.col("report_year") + 1).alias("_ttm_match_year"),
+            pl.col("basic_eps").alias("_prior_full_eps"),
+        )
+        frame = (
+            latest.join(
+                prior_same,
+                left_on=["symbol", "report_year", "quarter_num"],
+                right_on=["symbol", "_ttm_match_year", "quarter_num"],
+                how="left",
+            )
+            .join(
+                prior_full,
+                left_on=["symbol", "report_year"],
+                right_on=["symbol", "_ttm_match_year"],
+                how="left",
+            )
             .with_columns(
-                (pl.col("basic_eps") / pl.col("quarter_num") * 4).alias("eps_annualized")
+                pl.when(pl.col("quarter_num") == 4)
+                .then(pl.col("basic_eps"))
+                .otherwise(
+                    pl.when(
+                        pl.col("basic_eps").is_not_null()
+                        & pl.col("_prior_same_eps").is_not_null()
+                        & pl.col("_prior_full_eps").is_not_null()
+                    )
+                    .then(
+                        pl.col("basic_eps")
+                        + pl.col("_prior_full_eps")
+                        - pl.col("_prior_same_eps")
+                    )
+                    .otherwise(None)
+                )
+                .alias("eps_ttm")
             )
         )
     except Exception as exc:

@@ -360,16 +360,17 @@ def test_financial_point_in_time_raw_eps_and_approximate_ratios(monkeypatch, tmp
     metrics.mkdir(parents=True)
     pl.DataFrame(
         {
-            "symbol": ["600001.SH", "600002.SH", "600003.SH", "600001.SH"],
-            "report_year": [2025, 2025, 2025, 2025],
-            "quarter": ["2025Q4", "2025Q4", "2025Q4", "2025Q3"],
-            "notice_date": ["2026-01-01", "2026-01-01", "2026-08-01", "2025-11-01"],
-            "basic_eps": [2.0, -1.0, 9.0, 1.5],
-            "bps": [10.0, 0.0, 10.0, 8.0],
-            "weight_avg_roe": [0.1, 0.2, 0.3, 0.08],
-            "gross_margin": [0.2, 0.3, 0.4, 0.18],
-            "industry": ["A", "B", "C", "A"],
-            "yo_y_profit": [0.4, 0.5, 0.6, 0.2],
+            "symbol": ["600001.SH", "600001.SH", "600001.SH", "600002.SH", "600003.SH"],
+            "report_year": [2024, 2024, 2025, 2025, 2025],
+            "quarter": ["2024Q3", "2024Q4", "2025Q3", "2025Q4", "2025Q4"],
+            "notice_date": ["2024-10-31", "2025-01-01", "2025-11-01", "2026-01-01", "2026-08-01"],
+            # 600001 最新 2025Q3: TTM = 1.5 + 1.0(上年Q4全年) − 0.5(上年同期) = 2.0 → pe 10.0
+            "basic_eps": [0.5, 1.0, 1.5, -1.0, 9.0],
+            "bps": [7.0, 8.0, 10.0, 0.0, 10.0],
+            "weight_avg_roe": [0.05, 0.08, 0.1, 0.2, 0.3],
+            "gross_margin": [0.15, 0.18, 0.2, 0.3, 0.4],
+            "industry": ["A", "A", "A", "B", "C"],
+            "yo_y_profit": [0.1, 0.2, 0.4, 0.5, 0.6],
         }
     ).write_parquet(metrics / "part.parquet")
     frame = pl.DataFrame(
@@ -592,13 +593,39 @@ def test_reference_fields_rejected_for_historical_as_of(monkeypatch):
     assert exc.value.fields == ["ah_premium"]
 
 
+def test_listing_days_supported_for_historical_as_of(monkeypatch):
+    monkeypatch.setattr(screener_module, "ScreenerService", _Service)
+    monkeypatch.setattr(screener_query_module, "_get_reference_flags", _fake_flags_df)
+    result = execute_query(
+        _Repo(),
+        ScreenerQueryRequest(
+            conditions=[{"field": "listing_days", "op": "<", "value": 10000}],
+            as_of=date(2026, 7, 15),
+        ),
+    )
+    # 历史 as_of 不再因 listing_days 单字段 503:
+    # 600001 上市约 5.5 年命中; 000001 上市超限; 600002 无参考数据(null 不匹配)
+    assert result["as_of"] == "2026-07-15"
+    assert result["total"] == 1
+    row = result["rows"][0]
+    assert row["symbol"] == "600001.SH"
+    assert row["listing_days"] == (date(2026, 7, 15) - date(2020, 1, 1)).days
+
+
 def test_new_fields_registry_metadata():
     by_name = {item["field"]: item for item in field_metadata()}
     reference = ["is_ah", "ah_premium", "hk_connect", "listing_days"]
     for field in reference:
         spec = by_name[field]
         assert spec["group"] == "reference"
-        assert spec["availability"] == "available"
+    # F8: listing_days 由 listing_date 按 as_of 推导, 支持历史查询;
+    # 其余参考字段与市值/排除ST 仅最新交易日可查 → latest_only
+    assert by_name["listing_days"]["availability"] == "available"
+    for field in (
+        "is_ah", "ah_premium", "hk_connect",
+        "float_market_cap", "total_market_cap", "exclude_st",
+    ):
+        assert by_name[field]["availability"] == "latest_only"
     assert by_name["is_ah"]["ops"] == ["=", "!="]
     assert by_name["ah_premium"]["unit"] == "%"
     assert by_name["price_position_60d"]["group"] == "technical"
@@ -947,3 +974,240 @@ def test_margin_stats_rejects_more_than_one_trading_day_staleness(monkeypatch):
             ),
         )
     assert exc.value.fields == ["financing_balance"]
+
+
+# --------------------------------------------------------------------------- #
+# F14 条件分组 (组内 AND, 组间 OR) + F13 多日序列 + F15 行业 facet
+# --------------------------------------------------------------------------- #
+
+
+def test_group_or_hits_when_either_group_matches(monkeypatch):
+    monkeypatch.setattr(screener_module, "ScreenerService", _Service)
+    result = execute_query(
+        _Repo(),
+        ScreenerQueryRequest(
+            conditions=[
+                {"field": "close", "op": ">", "value": 15, "group": "A"},
+                {"field": "vol_ratio_5d", "op": ">=", "value": 3, "group": "B"},
+            ],
+            group_logic="or",
+        ),
+    )
+    assert {row["symbol"] for row in result["rows"]} == {"000001.SZ", "600002.SH"}
+    # applied 透出 group
+    assert all("group" in c for c in result["applied"])
+
+
+def test_group_and_keeps_legacy_flat_semantics(monkeypatch):
+    monkeypatch.setattr(screener_module, "ScreenerService", _Service)
+    conditions = [
+        {"field": "close", "op": ">", "value": 15, "group": "A"},
+        {"field": "vol_ratio_5d", "op": ">=", "value": 3, "group": "B"},
+    ]
+    grouped = execute_query(_Repo(), ScreenerQueryRequest(conditions=conditions))
+    flat = execute_query(
+        _Repo(),
+        ScreenerQueryRequest(conditions=[{k: v for k, v in c.items() if k != "group"} for c in conditions]),
+    )
+    # group_logic=and 时分组与旧 flat AND 完全等价 (本例: 无命中)
+    assert grouped["total"] == flat["total"] == 0
+    # 单组条件命中 → 组内 AND 收窄
+    only_a = execute_query(_Repo(), ScreenerQueryRequest(conditions=conditions[:1]))
+    assert [row["symbol"] for row in only_a["rows"]] == ["000001.SZ"]
+
+
+def test_group_name_and_count_validation():
+    with pytest.raises(ValidationError):
+        ScreenerQueryRequest(
+            conditions=[{"field": "close", "op": ">", "value": 1, "group": "非法 组名!"}]
+        )
+    with pytest.raises(ScreenerSemanticError) as exc:
+        validate_query(
+            ScreenerQueryRequest(
+                conditions=[
+                    {"field": "close", "op": ">", "value": i, "group": g}
+ for i, g in enumerate(["A", "B", "C", "D", "E", "F"])
+                ]
+            )
+        )
+    assert exc.value.reason == "too_many_groups"
+
+
+_SEQ_DATES = [
+    date(2026, 7, 9), date(2026, 7, 10), date(2026, 7, 13),
+    date(2026, 7, 14), date(2026, 7, 15), date(2026, 7, 16),
+]
+_SEQ_DATES10 = [
+    date(2026, 7, 3), date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8),
+    date(2026, 7, 9), date(2026, 7, 10), date(2026, 7, 13),
+    date(2026, 7, 14), date(2026, 7, 15), date(2026, 7, 16),
+]
+
+
+def _seq_history() -> pl.DataFrame:
+    # UP: 6 日连涨 + 量能递增; LIM: 平盘, 07-13 (i=2) 涨停; NEW: 仅 3 行 (窗口不足)
+    # EDGE: 涨停恰在 t-4 (i=1) — 近5日窗口最远一行; EDGE10: 10 行, 涨停在 t-9 (i=0)
+    return pl.DataFrame(
+        {
+            "symbol": ["UP.SH"] * 6 + ["LIM.SH"] * 6 + ["NEW.SH"] * 3
+            + ["EDGE.SH"] * 6 + ["EDGE10.SH"] * 10,
+            "date": _SEQ_DATES + _SEQ_DATES + _SEQ_DATES[-3:]
+            + _SEQ_DATES + _SEQ_DATES10,
+            "close": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0] + [10.0] * 6
+            + [5.0, 6.0, 7.0] + [10.0] * 6 + [10.0] * 10,
+            "volume": [100.0, 110.0, 120.0, 130.0, 140.0, 150.0] + [50.0] * 6
+            + [7.0, 8.0, 9.0] + [50.0] * 6 + [50.0] * 10,
+            "signal_limit_up": [False] * 6
+            + [False, False, True, False, False, False]
+            + [False, False, False]
+            + [False, True, False, False, False, False]
+            + [True] + [False] * 9,
+        }
+    )
+
+
+class _SeqService(_Service):
+    def _load_enriched_for_date(self, as_of, columns=None):
+        return pl.DataFrame(
+            {
+                "symbol": ["UP.SH", "LIM.SH", "NEW.SH", "EDGE.SH", "EDGE10.SH"],
+                "date": [as_of] * 5,
+                "close": [15.0, 10.0, 7.0, 10.0, 10.0],
+                "change_pct": [0.1, 0.0, 0.1, 0.0, 0.0],
+            }
+        )
+
+    def _load_enriched_history(self, as_of, lookback_days):
+        return _seq_history()
+
+
+def test_sequence_fields_values_and_null_semantics(monkeypatch):
+    monkeypatch.setattr(screener_module, "ScreenerService", _SeqService)
+    assert execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_consecutive_up_3", "op": "=", "value": True}]
+    ))["rows"][0]["symbol"] == "UP.SH"
+    assert execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_consecutive_up_5", "op": "=", "value": True}]
+    ))["total"] == 1
+    assert execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_consecutive_volume_up_3", "op": "=", "value": True}]
+    ))["rows"][0]["symbol"] == "UP.SH"
+    # 近 5 日涨停: LIM (t-3) 与 EDGE (涨停恰在 t-4, 窗口最远一行) 都必须命中
+    within5 = execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_limit_up_within_5d", "op": "=", "value": True}]
+    ))
+    assert {r["symbol"] for r in within5["rows"]} == {"LIM.SH", "EDGE.SH"}
+    # 边界对照: EDGE10 的涨停在 t-9 → 不在近 5 日窗口 → 不命中
+    assert "EDGE10.SH" not in {r["symbol"] for r in within5["rows"]}
+    # 近 10 日涨停: EDGE10 (涨停恰在 t-9, 窗口最远一行) 命中;
+    # 其余 6 行历史不足 10 行 → NULL 不伪造 → 不命中 (红线)
+    within10 = execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_limit_up_within_10d", "op": "=", "value": True}]
+    ))
+    assert [r["symbol"] for r in within10["rows"]] == ["EDGE10.SH"]
+    # 累计涨跌幅: UP = (15/11-1)*100; LIM = 0; NEW 窗口不足 → NULL 不伪造
+    up_row = execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_cum_change_5d", "op": ">", "value": 36.0}]
+    ))["rows"][0]
+    assert up_row["symbol"] == "UP.SH"
+    assert abs(up_row["seq_cum_change_5d"] - (15.0 / 11.0 - 1) * 100) < 1e-9
+    assert execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_cum_change_5d", "op": ">=", "value": -100}]
+    ))["total"] == 4  # UP/LIM/EDGE/EDGE10; NEW (NULL) 不命中
+    # 距最近涨停天数: LIM=3; UP/NEW 回看无涨停 → NULL
+    lim_row = execute_query(_Repo(), ScreenerQueryRequest(
+        conditions=[{"field": "seq_days_since_limit_up", "op": "<=", "value": 3}]
+    ))["rows"][0]
+    assert lim_row["symbol"] == "LIM.SH"
+    assert lim_row["seq_days_since_limit_up"] == 3
+
+
+def test_sequence_mixed_with_single_day_field(monkeypatch):
+    monkeypatch.setattr(screener_module, "ScreenerService", _SeqService)
+    result = execute_query(
+        _Repo(),
+        ScreenerQueryRequest(
+            conditions=[
+                {"field": "seq_consecutive_up_3", "op": "=", "value": True},
+                {"field": "change_pct", "op": ">", "value": 0},
+            ],
+            order_by={"field": "seq_cum_change_5d", "direction": "desc"},
+        ),
+    )
+    assert result["total"] == 1
+    assert result["rows"][0]["symbol"] == "UP.SH"
+    assert result["rows"][0]["seq_cum_change_5d"] > 36.0
+
+
+def test_sequence_fields_registry_metadata():
+    by_name = {item["field"]: item for item in field_metadata()}
+    seq = by_name["seq_cum_change_5d"]
+    assert (seq["group"], seq["source"], seq["availability"]) == ("多日形态", "sequence", "available")
+    assert by_name["seq_consecutive_up_3"]["ops"] == ["=", "!="]
+    assert by_name["seq_days_since_limit_up"]["sortable"] is False
+    assert by_name["seq_cum_change_20d"]["sortable"] is True
+
+
+def test_industry_facet_point_in_time_and_fail_soft(monkeypatch, tmp_path):
+    metrics = tmp_path / "financials" / "metrics"
+    metrics.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["600001.SH", "000001.SZ", "600002.SH"],
+            "report_year": [2025, 2025, 2025],
+            "quarter": ["2025Q4", "2025Q4", "2025Q4"],
+            "notice_date": ["2026-01-01", "2026-01-01", "2026-01-01"],
+            "basic_eps": [1.0, 1.0, 1.0],
+            "bps": [5.0, 5.0, 5.0],
+            "weight_avg_roe": [0.1, 0.1, 0.1],
+            "gross_margin": [0.2, 0.2, 0.2],
+            "industry": ["白酒", "银行", "白酒"],
+            "yo_y_profit": [0.1, 0.1, 0.1],
+        }
+    ).write_parquet(metrics / "part.parquet")
+
+    class Repo(_Repo):
+        def __init__(self):
+            self.store = SimpleNamespace(data_dir=tmp_path)
+
+    monkeypatch.setattr(screener_module, "ScreenerService", _Service)
+    result = execute_query(
+        Repo(),
+        ScreenerQueryRequest(
+            conditions=[{"field": "change_pct", "op": ">", "value": 0}],
+            facets=["industry"],
+            limit=2,  # 3 命中行截断为 2 → facet 仍须统计全部 3 行
+        ),
+    )
+    # PIT 快照按 as_of join: 全部命中行 (limit 前) 聚合, count desc
+    assert result["facets"]["industry"] == [
+        {"value": "白酒", "count": 2},
+        {"value": "银行", "count": 1},
+    ]
+    assert "facet_warnings" not in result
+
+    # 快照缺失: 主查询不阻断, 空 facet + warning
+    empty = tmp_path / "empty_data"
+    empty.mkdir()
+
+    class NoSnapRepo(Repo):
+        def __init__(self):
+            self.store = SimpleNamespace(data_dir=empty)
+
+    degraded = execute_query(
+        NoSnapRepo(),
+        ScreenerQueryRequest(
+            conditions=[{"field": "change_pct", "op": ">", "value": 0}],
+            facets=["industry"],
+        ),
+    )
+    assert degraded["total"] == 3
+    assert degraded["facets"]["industry"] == []
+    assert degraded["facet_warnings"] == ["industry_unavailable"]
+
+    # 不请求 facets: 响应不含 facets 键 (旧响应逐字节等价)
+    legacy = execute_query(
+        NoSnapRepo(),
+        ScreenerQueryRequest(conditions=[{"field": "change_pct", "op": ">", "value": 0}]),
+    )
+    assert "facets" not in legacy and "facet_warnings" not in legacy

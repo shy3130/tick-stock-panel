@@ -6,15 +6,19 @@ import math
 import time
 from dataclasses import asdict
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
-from app.services import strategy_cache
-from app.services.nl_screener import NLParseRequest, NLScreenerError, parse_nl
-from app.services.screener import PRESET_STRATEGIES, ScreenerService
+from app.services import screener_screens, strategy_cache
+from app.strategy.screen_bridge import (
+    ScreenPanelUnsupportedError,
+    classify_screen,
+    sync_screen_strategies,
+)
+from app.services.screener import ScreenerService
 from app.services.screener_query import (
     QueryService,
     ScreenerDataUnavailableError,
@@ -22,6 +26,7 @@ from app.services.screener_query import (
     ScreenerSemanticError,
     field_metadata,
 )
+from app.services.nl_screener import NLParseRequest, NLScreenerError, parse_nl
 from app.strategy import config as strategy_config
 from app.strategy.gostock_presets import list_gostock_presets
 
@@ -33,7 +38,8 @@ router = APIRouter(prefix="/api/screener", tags=["screener"])
 @router.get("/fields")
 def query_fields() -> dict[str, Any]:
     """Authoritative metadata for the literal screener query registry."""
-    return {"fields": field_metadata()}
+    # F14: 声明支持条件分组 (组内 AND, 组间按 group_logic 合并)。
+    return {"fields": field_metadata(), "supports_groups": True}
 
 
 @router.post("/query")
@@ -65,13 +71,80 @@ def nl_presets() -> dict[str, Any]:
     return {"presets": list_gostock_presets()}
 
 
-class CustomRequest(BaseModel):
-    conditions: list[str]
-    order_by: Optional[str] = None
-    limit: int = 30
-    pool: Optional[list[str]] = None
-    as_of: Optional[date] = None
-    ext_columns: Optional[str] = None
+class ScreenRequest(BaseModel):
+    name: str
+    conditions: list[dict[str, Any]]
+    order_by: Optional[dict[str, Any]] = None
+    limit: Optional[int] = None
+    group_logic: Optional[Literal["and", "or"]] = None
+
+
+@router.get("/screens")
+def list_screens(request: Request) -> dict[str, Any]:
+    """用户保存的选股方案列表 (附回测/监控可注册性, 纯 registry 判断无 IO)。"""
+    screens = screener_screens.list_screens(request.app.state.repo.store.data_dir)
+    items = []
+    for screen in screens:
+        supported, unsupported = classify_screen(screen)
+        items.append({**screen, "strategy_supported": supported, "unsupported_fields": unsupported})
+    return {"screens": items}
+
+
+def _sync_screen_strategies(request: Request) -> None:
+    """方案变更后把 screen 策略同步进引擎; 引擎缺失 (未注入) 时跳过。"""
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if engine is None:
+        return
+    try:
+        sync_screen_strategies(engine, request.app.state.repo.store.data_dir)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("screen strategy sync failed: %s", e)
+
+
+@router.post("/screens", status_code=201)
+def create_screen(req: ScreenRequest, request: Request) -> dict[str, Any]:
+    try:
+        record = screener_screens.create_screen(
+            request.app.state.repo.store.data_dir,
+            name=req.name,
+            conditions=req.conditions,
+            order_by=req.order_by,
+            limit=req.limit,
+            group_logic=req.group_logic,
+        )
+    except screener_screens.ScreenStoreError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": exc.message}) from None
+    _sync_screen_strategies(request)
+    return record
+
+
+@router.put("/screens/{screen_id}")
+def update_screen(screen_id: str, req: ScreenRequest, request: Request) -> dict[str, Any]:
+    try:
+        record = screener_screens.update_screen(
+            request.app.state.repo.store.data_dir,
+            screen_id,
+            name=req.name,
+            conditions=req.conditions,
+            order_by=req.order_by,
+            limit=req.limit,
+            group_logic=req.group_logic,
+        )
+    except screener_screens.ScreenStoreError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": exc.message}) from None
+    except screener_screens.ScreenNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "screen_not_found", "message": "选股方案不存在"}) from exc
+    _sync_screen_strategies(request)
+    return record
+
+
+@router.delete("/screens/{screen_id}", status_code=204)
+def delete_screen(screen_id: str, request: Request) -> None:
+    try:
+        screener_screens.delete_screen(request.app.state.repo.store.data_dir, screen_id)
+    except screener_screens.ScreenNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "screen_not_found", "message": "选股方案不存在"}) from exc
+    _sync_screen_strategies(request)
 
 
 class PresetRequest(BaseModel):
@@ -213,52 +286,33 @@ def _update_cache_strategy(data_dir, as_of: str, strategy_id: str, safe_data: di
 
 @router.get("/strategies")
 def strategies(request: Request):
-    """策略清单（内置 + 自定义 + AI）。"""
+    """策略清单（内置 + 自定义 + AI, 统一来自 StrategyEngine）。"""
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail={"code": "strategy_engine_unavailable"})
+
     data_dir = request.app.state.repo.store.data_dir
     presets = []
-    seen_ids: set[str] = set()
-
-    # 内置策略
-    for k, v in PRESET_STRATEGIES.items():
-        overrides = strategy_config.load_override(data_dir, k)
-        name = (overrides.get("name") or v["name"]) if overrides else v["name"]
-        desc = (overrides.get("description") or v["description"]) if overrides else v["description"]
-        presets.append({"id": k, "name": name, "description": desc, "source": "builtin"})
-        seen_ids.add(k)
-
-    # 自定义/AI 策略（不在 PRESET_STRATEGIES 中的）
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in seen_ids:
-                overrides = strategy_config.load_override(data_dir, sid)
-                name = (overrides.get("name") or meta["name"]) if overrides else meta["name"]
-                desc = (overrides.get("description") or meta.get("description", "")) if overrides else meta.get("description", "")
-                presets.append({"id": sid, "name": name, "description": desc, "source": meta.get("source", "custom")})
-                seen_ids.add(sid)
+    for meta in engine.list_strategies():
+        sid = meta["id"]
+        overrides = strategy_config.load_override(data_dir, sid)
+        name = (overrides.get("name") or meta["name"]) if overrides else meta["name"]
+        desc = (overrides.get("description") or meta.get("description", "")) if overrides else meta.get("description", "")
+        presets.append({"id": sid, "name": name, "description": desc, "source": meta.get("source", "custom")})
 
     return {"presets": presets}
 
 
 @router.post("/run")
-def run_custom(req: CustomRequest, request: Request):
-    repo = request.app.state.repo
-    svc = ScreenerService(repo)
-    as_of = req.as_of or svc.latest_date()
-    if not as_of:
-        raise HTTPException(status_code=400,
-                            detail="无可用数据日期 — enriched 表为空,请先运行盘后管道")
-    result = svc.run(
-        as_of=as_of,
-        conditions=req.conditions,
-        order_by=req.order_by,
-        limit=req.limit,
-        pool=req.pool,
+def run_custom():
+    """自定义 SQL 选股已下线, 引导使用结构化查询接口。"""
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "screener_run_sql_removed",
+            "message": "自定义 SQL 选股已关闭，请使用 POST /api/screener/query",
+        },
     )
-    safe_data = _safe(asdict(result))
-    ext_values = _load_ext_value_maps(repo, req.ext_columns)
-    return _result_with_ext(safe_data, ext_values)
 
 
 @router.post("/run_preset")
@@ -269,34 +323,30 @@ def run_preset(req: PresetRequest, request: Request):
     if not as_of:
         raise HTTPException(status_code=400, detail="无可用数据日期")
 
+    # 内置/自定义/AI 策略统一经 StrategyEngine 执行 (单一路径)
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail={"code": "strategy_engine_unavailable"})
+
     # 加载用户保存的策略配置
-    data_dir = request.app.state.repo.store.data_dir
+    data_dir = repo.store.data_dir
     ext_values = _load_ext_value_maps(repo, req.ext_columns)
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
-    bf = overrides.get("basic_filter") if overrides else None
     dl = overrides.get("display_limit") if overrides else None
     if dl is None and overrides and "display_limit" in overrides:
         dl = 0
-
-    # 内置策略
-    if req.strategy_id in PRESET_STRATEGIES:
-        try:
-            result = svc.run_preset(req.strategy_id, as_of=as_of, pool=req.pool, basic_filter=bf, display_limit=dl)
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        safe_data = _safe(asdict(result))
-        _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
-        return _result_with_ext(safe_data, ext_values)
-
-    # 自定义/AI 策略 — 通过 StrategyEngine 执行
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if not engine:
-        raise HTTPException(status_code=404, detail=f"策略引擎未初始化或策略 {req.strategy_id} 不存在")
 
     try:
         result = engine.run(req.strategy_id, as_of, pool=req.pool, overrides=overrides or None)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ScreenPanelUnsupportedError as e:
+        # screen 方案面板缺列: 同步失败 (引擎重启后未 sync) 或面板列集变化,
+        # 显式 400 引导用户检查方案字段, 不静默 500。
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "screen_panel_unsupported", "message": str(e)},
+        ) from e
 
     data = asdict(result)
 
@@ -417,18 +467,20 @@ def market_snapshot(request: Request):
 def run_all(request: Request, body: Optional[dict] = None):
     """批量运行指定策略,只返回每个策略的命中数。
 
-    优化: 从 enriched 读取一次目标日期数据, 所有策略共享。
-    body.strategy_ids: 只跑指定的策略 ID 列表, 为空则跑全部。
+    所有策略 (内置/自定义/AI/叠加) 统一经 StrategyEngine 执行。
+    body.strategy_ids: 只跑指定的策略 ID 列表, 为空则跑全部 (临时组合除外)。
     """
     from datetime import date as date_type
 
     t_total = time.perf_counter()
 
     body = body or {}
-    collect_diag = bool(body.get("diagnostics", False))
     repo = request.app.state.repo
-    include_consensus = bool(body.get("include_consensus", False))
     svc = ScreenerService(repo)
+
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail={"code": "strategy_engine_unavailable"})
 
     # 解析日期
     raw_date = body.get("as_of")
@@ -437,7 +489,7 @@ def run_all(request: Request, body: Optional[dict] = None):
     else:
         as_of = svc.latest_date()
     if not as_of:
-        return {"as_of": None, "results": {}}
+        return {"as_of": None, "results": {}, "failed": []}
 
     # 一次读取目标日期的全部数据
     t0 = time.perf_counter()
@@ -445,72 +497,62 @@ def run_all(request: Request, body: Optional[dict] = None):
     logger.info("run_all: _load_enriched_for_date took %.1fms", (time.perf_counter() - t0) * 1000)
 
     results: dict[str, dict] = {}
+    failed: list[dict] = []
     data_dir = request.app.state.repo.store.data_dir
 
-    # 收集需要运行的策略 ID (如果指定了 strategy_ids 则只跑这些)
+    # 收集需要运行的策略 ID (engine 清单, list_strategies 已剔除临时组合)
+    all_ids = [meta["id"] for meta in engine.list_strategies()]
     requested_ids = body.get("strategy_ids")
-    all_ids = list(PRESET_STRATEGIES.keys())
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in PRESET_STRATEGIES:
-                all_ids.append(sid)
-
     if requested_ids and isinstance(requested_ids, list):
         id_set = set(requested_ids)
         all_ids = [sid for sid in all_ids if sid in id_set]
 
     if not all_ids:
-        return {"as_of": str(as_of), "results": {}}
+        return {"as_of": str(as_of), "results": {}, "failed": []}
 
     # 批量预加载所有 override 配置
     t0 = time.perf_counter()
     all_overrides = strategy_config.list_overrides(data_dir)
     logger.info("run_all: list_overrides took %.1fms (%d overrides)", (time.perf_counter() - t0) * 1000, len(all_overrides))
 
-    # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)
+    # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)。
+    # 共享历史窗口取参与策略的最大 lookback_days, 不截断到 30 — 与单跑口径一致。
     t0 = time.perf_counter()
     shared_history = None
     id_set = set(all_ids)
-    if engine:
-        history_strats = [
-            (sid, s) for sid, s in engine._strategies.items()
-            if s.filter_history_fn and sid in id_set
-        ]
-        if history_strats:
-            max_lb = min(max(s.lookback_days for _, s in history_strats), 30)
-            shared_history = svc._load_enriched_history(as_of, max(1, max_lb))
-    else:
-        history_strats = []
+    history_strats = [
+        (sid, s) for sid, s in engine._strategies.items()
+        if s.filter_history_fn and sid in id_set
+    ]
+    if history_strats:
+        max_lb = max(s.lookback_days for _, s in history_strats)
+        shared_history = svc._load_enriched_history(as_of, max(1, max_lb))
     logger.info("run_all: _load_enriched_history took %.1fms (history_strats=%d)", (time.perf_counter() - t0) * 1000, len(history_strats))
 
     for sid in all_ids:
         try:
             overrides = all_overrides.get(sid, {})
-            bf = overrides.get("basic_filter") if overrides else None
             dl = overrides.get("display_limit") if overrides else None
             if dl is None and overrides and "display_limit" in overrides:
                 dl = 0
 
-            if sid in PRESET_STRATEGIES:
-                r = svc.run_preset(sid, as_of=as_of, precomputed=precomputed, basic_filter=bf, display_limit=dl)
-            else:
-                r = engine.run(
-                    sid, as_of, overrides=overrides or None,
-                    precomputed=precomputed, precomputed_history=shared_history,
-                )
-                if dl is not None and dl > 0:
-                    r.rows = r.rows[:dl]
-                    r.total = min(r.total, dl)
+            r = engine.run(
+                sid, as_of, overrides=overrides or None,
+                precomputed=precomputed, precomputed_history=shared_history,
+            )
+            if dl is not None and dl > 0:
+                r.rows = r.rows[:dl]
+                r.total = min(r.total, dl)
 
             safe_rows = _safe(asdict(r)).get("rows", [])
             results[sid] = {"total": r.total, "as_of": str(as_of), "rows": safe_rows}
-        except (ValueError, Exception):
-            continue
+        except Exception as e:  # noqa: BLE001
+            # 单策略失败不中断整批: 记入 failed 返回前端, 成功结果照常产出。
+            logger.warning("run_all: strategy %s failed: %s", sid, e)
+            failed.append({"strategy_id": sid, "error": str(e)})
 
     elapsed = (time.perf_counter() - t_total) * 1000
-    logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))
+    logger.info("run_all: total took %.1fms (%d strategies, %d failed)", elapsed, len(all_ids), len(failed))
 
     # 写入策略缓存 (供页面秒加载)
     if results:
@@ -520,7 +562,7 @@ def run_all(request: Request, body: Optional[dict] = None):
             pass
 
     ext_values = _load_ext_value_maps(repo, body.get("ext_columns"))
-    return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values)}
+    return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values), "failed": failed}
 
 
 @router.get("/limit-ladder")

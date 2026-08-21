@@ -191,8 +191,9 @@ class StrategyEngine:
         self._history_loader = enriched_history_loader
         self._strategies: dict[str, StrategyDef] = {}
         self._strategy_dirs = strategy_dirs or []
-        self._load_errors: list[dict] = []  # 加载失败的策略 [{file, error}]
         self._override_loader = override_loader
+        # reload() 之后逐个回调 (如 screen 策略重注册); 单个失败仅 warning。
+        self.post_reload_hooks: list[Callable[[], None]] = []
         self._load_all()
 
     # ================================================================
@@ -374,6 +375,11 @@ class StrategyEngine:
     def reload(self) -> None:
         """热重载所有策略"""
         self._load_all()
+        for hook in self.post_reload_hooks:
+            try:
+                hook()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("post-reload hook failed: %s", e)
 
     # ================================================================
     # 查询

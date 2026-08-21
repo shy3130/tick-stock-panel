@@ -111,34 +111,72 @@ def test_invalid_date_quarter_and_inconsistent_year_rows_are_dropped(tmp_path):
     assert result.get_column("symbol").to_list() == ["valid"]
 
 
-def test_eps_annualization_keeps_cumulative_eps_for_each_quarter(tmp_path):
+def test_eps_ttm_composes_trailing_twelve_month_eps(tmp_path):
+    """TTM: Q4 直接取全年累计；Q1–Q3 = 本期累计 + 上年Q4全年 − 上年同期累计。"""
     _write_metrics(
         tmp_path,
         [
-            _row("Q1", quarter="2025Q1", basic_eps=1.0),
-            _row("Q2", quarter="2025Q2", basic_eps=3.0),
-            _row("Q3", quarter="2025Q3", basic_eps=6.0),
-            _row("Q4", quarter="2025Q4", basic_eps=10.0),
+            # 最新期为 Q3: 2025Q3 累计 3.0 + 2024Q4 全年 4.0 − 2024Q3 累计 2.0 → 5.0
+            _row("Q3LATEST", report_year=2024, quarter="2024Q3", basic_eps=2.0, notice_date="2024-10-31"),
+            _row("Q3LATEST", report_year=2024, quarter="2024Q4", basic_eps=4.0, notice_date="2025-04-30"),
+            _row("Q3LATEST", report_year=2025, quarter="2025Q3", basic_eps=3.0, notice_date="2025-10-31"),
+            # 最新期为 Q2: 2025Q2 累计 2.0 + 2024Q4 全年 4.0 − 2024Q2 累计 1.0 → 5.0
+            _row("Q2LATEST", report_year=2024, quarter="2024Q2", basic_eps=1.0, notice_date="2024-08-31"),
+            _row("Q2LATEST", report_year=2024, quarter="2024Q4", basic_eps=4.0, notice_date="2025-04-30"),
+            _row("Q2LATEST", report_year=2025, quarter="2025Q2", basic_eps=2.0, notice_date="2025-08-31"),
+            # 最新期为 Q4: 2025Q4 全年累计 6.0 即 TTM，无需上年数据
+            _row("Q4ONLY", report_year=2025, quarter="2025Q4", basic_eps=6.0, notice_date="2026-04-30"),
         ],
     )
 
     result = load_financial_snapshot(tmp_path, date(2026, 7, 16)).sort("symbol")
 
-    assert result.select(["basic_eps", "eps_annualized"]).to_dicts() == [
-        {"basic_eps": 1.0, "eps_annualized": 4.0},
-        {"basic_eps": 3.0, "eps_annualized": 6.0},
-        {"basic_eps": 6.0, "eps_annualized": 8.0},
-        {"basic_eps": 10.0, "eps_annualized": 10.0},
+    assert result.select(["symbol", "quarter_num", "eps_ttm"]).to_dicts() == [
+        {"symbol": "Q2LATEST", "quarter_num": 2, "eps_ttm": 5.0},
+        {"symbol": "Q3LATEST", "quarter_num": 3, "eps_ttm": 5.0},
+        {"symbol": "Q4ONLY", "quarter_num": 4, "eps_ttm": 6.0},
     ]
 
 
-def test_null_eps_propagates_to_annualized_eps(tmp_path):
+def test_eps_ttm_is_null_when_prior_inputs_missing(tmp_path):
+    """Q1–Q3 缺上年 Q4 全年、缺上年同期或任一输入为空 → NULL，绝不外推。"""
+    _write_metrics(
+        tmp_path,
+        [
+            # 上市当年仅 3 期: 上年同期与上年 Q4 均缺 → NULL
+            _row("THREE", report_year=2025, quarter="2025Q1", basic_eps=1.0),
+            _row("THREE", report_year=2025, quarter="2025Q2", basic_eps=3.0),
+            _row("THREE", report_year=2025, quarter="2025Q3", basic_eps=6.0),
+            # 有上年同期但缺上年 Q4 全年 → NULL
+            _row("NOQ4PRIOR", report_year=2024, quarter="2024Q3", basic_eps=2.0, notice_date="2024-10-31"),
+            _row("NOQ4PRIOR", report_year=2025, quarter="2025Q3", basic_eps=3.0, notice_date="2025-10-31"),
+            # 有上年 Q4 全年但缺上年同期 → NULL
+            _row("NOSAME", report_year=2024, quarter="2024Q4", basic_eps=4.0, notice_date="2025-04-30"),
+            _row("NOSAME", report_year=2025, quarter="2025Q3", basic_eps=3.0, notice_date="2025-10-31"),
+            # 上年 Q4 报告存在但 EPS 为空 → NULL
+            _row("NULLQ4", report_year=2024, quarter="2024Q3", basic_eps=2.0, notice_date="2024-10-31"),
+            _row("NULLQ4", report_year=2024, quarter="2024Q4", basic_eps=None, notice_date="2025-04-30"),
+            _row("NULLQ4", report_year=2025, quarter="2025Q3", basic_eps=3.0, notice_date="2025-10-31"),
+        ],
+    )
+
+    result = load_financial_snapshot(tmp_path, date(2026, 7, 16)).sort("symbol")
+
+    assert result.select(["symbol", "eps_ttm"]).to_dicts() == [
+        {"symbol": "NOQ4PRIOR", "eps_ttm": None},
+        {"symbol": "NOSAME", "eps_ttm": None},
+        {"symbol": "NULLQ4", "eps_ttm": None},
+        {"symbol": "THREE", "eps_ttm": None},
+    ]
+
+
+def test_null_eps_propagates_to_eps_ttm(tmp_path):
     _write_metrics(tmp_path, [_row(basic_eps=None)])
 
     result = load_financial_snapshot(tmp_path, date(2026, 7, 16))
 
     assert result["basic_eps"].to_list() == [None]
-    assert result["eps_annualized"].to_list() == [None]
+    assert result["eps_ttm"].to_list() == [None]
 
 
 def test_empty_eligible_result_is_typed(tmp_path):
@@ -155,7 +193,7 @@ def test_empty_eligible_result_is_typed(tmp_path):
         "basic_eps",
         "gross_margin",
         "bps",
-        "eps_annualized",
+        "eps_ttm",
         "report_year",
         "quarter_num",
     }

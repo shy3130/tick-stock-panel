@@ -150,6 +150,15 @@ async def lifespan(app: FastAPI):
         ),
     )
     app.state.strategy_engine = strategy_engine
+    # F16: 方案注册为 screen:<hex> 策略 (监控/回测复用); reload 后由 hook 重注册。
+    from app.strategy.screen_bridge import sync_screen_strategies
+    try:
+        logger.info("screen strategies synced: %d", sync_screen_strategies(strategy_engine, store.data_dir))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("screen strategy sync failed (不影响启动): %s", e)
+    strategy_engine.post_reload_hooks.append(
+        lambda: sync_screen_strategies(strategy_engine, store.data_dir)
+    )
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
 
     # 回测任务恢复: 服务重启后把磁盘上遗留的 running/pending (外来 lease)

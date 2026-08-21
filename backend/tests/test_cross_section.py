@@ -305,7 +305,7 @@ def test_peer_comparison_industry_filter(monkeypatch):
         "basic_eps": [1.2, 3.5, 0.6, 5.0],
         "gross_margin": [40.0, 45.0, 38.0, 20.0],
         "bps": [10.0, 30.0, 6.0, 40.0],
-        "eps_annualized": [1.2, 3.5, 0.6, 5.0],
+        "eps_ttm": [1.2, 3.5, 0.6, 5.0],
         "report_year": [2025] * 4,
         "quarter_num": [2] * 4,
     })
@@ -435,7 +435,7 @@ def test_correlation_matrix_integration(monkeypatch):
         "basic_eps": [1.0] * len(symbols),
         "gross_margin": [40.0] * len(symbols),
         "bps": [10.0] * len(symbols),
-        "eps_annualized": [1.0] * len(symbols),
+        "eps_ttm": [1.0] * len(symbols),
         "report_year": [2025] * len(symbols),
         "quarter_num": [2] * len(symbols),
     })
