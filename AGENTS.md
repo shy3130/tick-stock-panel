@@ -83,6 +83,7 @@
 | 文件 | 作用 | 红线 |
 |------|------|------|
 | `app/backtest/run_store.py` | **BacktestRun 唯一持久化契约**（`data/research/backtest_runs/{run_id}.json`，不可变事实，仅 `favorite`/`label` 可 PATCH）；列表/比较/导出/旧 run_card 只读惰性迁移 | 旧 `research/run_cards/*.json` 对回测域只读（DELETE 403、PATCH 先固化再改）；20 MiB 上限、原子写、run_id 白名单；`save_run_card` 仅剩 AI 池研究与定时研究两个非回测域调用方 |
+| `app/backtest/job_store.py` / `job_recovery.py` | SSE 任务 DurableJob（`data/research/backtest_jobs/`）+ 启动时回收外来 lease 的 running/pending 为 `interrupted` | 取消必须落盘 `cancelled`，禁止当 interrupted 续跑；策略/因子无引擎 checkpoint，重连同一 query 只整单重跑；lifespan 只标记不自动开跑 |
 | `app/backtest/metrics.py` | `MetricContext` 统一年化口径（频率唯一输入、`risk_free_rate` 显式、`ddof=1`）+ 全套绩效/风险/相对指标与 Bootstrap | 频率与年化系数冲突必须拒绝；`payoff_ratio` 与 `profit_factor` 是两个独立契约，不得混用 |
 | `app/backtest/provenance.py` | 数据快照元数据（canonical/adjustment generation、股票池定义、`snapshot_hash`）、engine/metric 版本 | 全市场股票池无法证明 point-in-time 时必须保留 `survivorship_bias` 告警 |
 | `app/backtest/engine.py` / `strategy.py` / `factor.py` / `robustness.py` / `optimizer.py` | 主 Polars/NumPy 撮合与策略/因子/稳健性/寻优服务（T+1、涨跌停、整手、费用滑点、持仓期 MAE/MFE、参数扰动、严格 Walk-Forward、训练/留出笛卡尔搜索） | 旧 vectorbt 入口 `POST /api/backtest/run` 仅 legacy（固定 `legacy_vectorbt_engine` 告警），停止新增消费者；寻优不得宣称全局最优，不得自动写入策略池 |
@@ -91,7 +92,7 @@
 | `app/backtest/portfolio_combine.py`、`app/jobs/backtest_favorite_rerun.py` | 路线图三期/四期：组合净值合成（账户追踪法，daily/monthly/none 再平衡）、盘后定时复跑收藏策略（偏好 `backtest_auto_rerun` 默认关，滚动窗，label=定时复跑） | 组合合成是事后加权非共享资金池撮合，不落盘不生成新 Run；定时复跑单失败不阻塞，开关关闭零开销 |
 | engine.py 分钟撮合路径（`build_minute_execution` / `MinuteExecutionData`） | `bar_precision='minute'`：VWAP 窗口（09:30-09:45 / 14:45-15:00）+ 风控盘中触发（触线按线价、跳空取分钟 open、双触取不利方向） | 仅 position 模式；标的 ≤100 且区间 ≤120 交易日；缺数据回退日 K 必须计 `minute_fallback_daily`；strategy_cancel 的 job_key 重建必须关键字传参（位置传参已出过一次错位 bug） |
 | `app/api/backtest.py` | 策略/因子/组合回测 + `/runs` 列表/读取/比较/复跑/导出/PATCH/DELETE | Run 落盘失败必须在响应带 `persisted=false` 与 `persistence_failed` 告警，不得伪装成功 |
-| `app/api/backtest_optimizer.py` | `GET /universes` + `POST/GET/SSE/cancel` 策略寻优实验 | 训练窗打分、留出窗确认；DSR/PBO 是诊断不是准入；全市场/板块/行业池必须带幸存者偏差告警 |
+| `app/api/backtest_optimizer.py` | `GET /universes` + `POST/GET/SSE/cancel/resume` 策略寻优实验 | 训练窗打分、留出窗确认；DSR/PBO 是诊断不是准入；全市场/板块/行业池必须带幸存者偏差告警；resume 必须用磁盘冻结窗口，禁止 `resolve_window`；缺训练曲线时 DSR/PBO 置空并标 `resumed_partial_diagnostics` |
 | `frontend/src/pages/backtest/` | 运行历史（RunHistoryPanel）、专业诊断、稳健性、参数网格（含回填策略表单）、策略寻优、交易明细筛选、行业归因与独立 HTML 报告下载 | 前端不得重算风险指标，非有限数值显示"—"；未持久化 Run 不得提供报告下载 |
 
 权威口径与能力边界见 `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md`（§5.4 工程决策、§12 未实现清单——现有 `walk_forward` 为严格 IS/OOS：训练选参→冻结参数→独立 OOS；候选仅局部单参数邻域。策略寻优 V1 是另一条独立搜索：策略×股票池×持仓周期笛卡尔展开 + 冻结训练/留出，不是 Optuna/全局参数优化）。
@@ -130,6 +131,7 @@
 | `backend/docs/YMOS_PORTING_PLAN.md` | YMOS 纪律层移植设计、契约与完成进度 |
 | `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md` | 回测专业化审计与改进计划——P0 口径修复、BacktestRun 契约、工程决策与未实现边界（权威） |
 | `backend/docs/BACKTEST_PRODUCT_REVIEW_2026-08-20.md` | 回测模块产品评审与路线图（2026-08-20）——能力盘点、易用性/专业性缺口、P0-P2 功能清单与分期 |
+| `backend/docs/SCREENER_PRODUCT_REVIEW_2026-08-20.md` | 股票筛选模块产品评审与路线图（2026-08-20）——策略选股/条件选股双入口盘点、双宇宙与名实不符等 P0、P0-P2 功能清单与分期 |
 | `backend/docs/PA_AGENT_PORTING_PLAN.md` | PA_Agent 工程机制移植总账、决策门、已交付边界与明确暂缓项 |
 | `backend/docs/UPSTREAM_FEATURE_PORTING.md` | 上游项目、已移植能力、暂缓/排除项与维护流程总账 |
 | `backend/docs/PI_AGENT_PILOT_PLAN.md` | Pi Agent Harness 可选 sidecar 试点的架构、风险、验收与退出标准 |
@@ -345,6 +347,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-19（新增 /backtest 策略寻优：最近 8 年冻结窗口、训练期打分 + 独立留出确认、DSR/PBO 诊断、等权组合仅报告；不宣称全局最优、不写入策略池。上一变更：完成回测成熟度改进——统一指标/成本/可追溯 Run、严格 IS/OOS Walk-Forward、持仓期 MAE/MFE、交易明细筛选、交易窗口 Brinson-Fachler 行业归因与自包含 HTML 研究报告。）
+**最后更新**：2026-08-20（回测任务重启续跑 V1：DurableJob + 寻优/网格场景级 resume；策略/因子整单重跑；cancelled 禁止误续跑。上一变更：/backtest 策略寻优最近 8 年冻结窗口、训练期打分 + 独立留出确认、DSR/PBO 诊断。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）
