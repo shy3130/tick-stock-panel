@@ -132,6 +132,7 @@
 | `backend/docs/BACKTEST_MATURITY_IMPROVEMENT_PLAN.md` | 回测专业化审计与改进计划——P0 口径修复、BacktestRun 契约、工程决策与未实现边界（权威） |
 | `backend/docs/BACKTEST_PRODUCT_REVIEW_2026-08-20.md` | 回测模块产品评审与路线图（2026-08-20）——能力盘点、易用性/专业性缺口、P0-P2 功能清单与分期 |
 | `backend/docs/SCREENER_PRODUCT_REVIEW_2026-08-20.md` | 股票筛选模块产品评审与路线图（2026-08-20）——策略选股/条件选股双入口盘点、双宇宙与名实不符等 P0、P0-P2 功能清单与分期 |
+| `backend/docs/AI_PRODUCT_REVIEW_2026-08-21.md` | AI 模块产品评审与路线图（2026-08-21）——Report/Structured/Agent 三类运行时盘点、荐股红线、P0-P2 功能清单与分期 |
 | `backend/docs/PA_AGENT_PORTING_PLAN.md` | PA_Agent 工程机制移植总账、决策门、已交付边界与明确暂缓项 |
 | `backend/docs/UPSTREAM_FEATURE_PORTING.md` | 上游项目、已移植能力、暂缓/排除项与维护流程总账 |
 | `backend/docs/PI_AGENT_PILOT_PLAN.md` | Pi Agent Harness 可选 sidecar 试点的架构、风险、验收与退出标准 |
@@ -347,6 +348,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-20（回测任务重启续跑 V1：DurableJob + 寻优/网格场景级 resume；策略/因子整单重跑；cancelled 禁止误续跑。上一变更：/backtest 策略寻优最近 8 年冻结窗口、训练期打分 + 独立留出确认、DSR/PBO 诊断。）
+**最后更新**：2026-08-21（AI 模块评审 S1：Report/Agent 去指令化、`/chat` 410、策略生成确认落盘、预算补齐、个股分析可取消。上一变更：2026-08-20 回测任务重启续跑 V1。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）
