@@ -1,6 +1,6 @@
 # 上游功能移植与维护总账
 
-> 日期：2026-08-10；最近增量审计：2026-08-17
+> 日期：2026-08-10；最近增量审计：2026-08-21
 > 状态：当前实现账本；来源发现证据见 [`PORTING_SOURCE_REPOSITORY_INVENTORY_2026-08-09.md`](./PORTING_SOURCE_REPOSITORY_INVENTORY_2026-08-09.md)
 > 目标：记录“能力从哪里来、在本项目落在哪里、哪些明确不迁移”，防止把外部数据链、自动交易语义或第二套领域模型带回当前架构。
 
@@ -98,6 +98,24 @@
 | `../fquant` | 未提交的 A 股逐笔按交易日解析 staged catalog 路由与连接缓存 | ♻️ 当前 `catalog_resolver.py` + `tdx_duckdb_client.py` 已按日期 pin staged trans generation，且上游改动尚未提交。 |
 | `../Vibe-Trading` | 未提交的 TDX CSV loader、TDX-first fallback 和 AkShare 成分股读取 | ❌ 与本地 DuckDB 主链、sealed 数据边界及“不新增公网主数据源”约束冲突。 |
 | `../duckdbsnap` | 未提交的 manifest `stage/coverage_date/quality/reconciled/artifacts` 元数据与发布锁增强 | ⏸ 暂不接入：当前已发布 manifest 仍是 legacy 结构；本地 `catalog_resolver.py` 已 fail-closed 校验对应 staged route 元数据。仅当上游提交、生产者实际发布版本化字段并给出端到端兼容性 fixture 后，再评估消费者完整性校验；不得在热查询路径全量 hash 大型 DuckDB 文件。 |
+
+### 4.2 2026-08-21 增量源码审计
+
+审计范围为 2026-08-17 之后各来源仓库的本地可见提交与未提交工作树变更，并对照实际挂载的 DuckDB 快照做运行态验证（`DATA_PROVIDER=fquant_local` 下 provider 端到端冒烟 16 项通过、2 项合理 skip）。
+
+| 来源 | 新发现 | 裁决 |
+|---|---|---|
+| `../fquant` | 未提交：A 股逐笔 trans 改为 `engsnap.ResolvePublishedRouteAt` 按交易日解析 staged catalog（带 root env 覆盖）；其余为 web 库路径从 `/Volumes/WD1` 迁到 `/Volumes/WD1/duckdb` 的默认值重组 | ♻️ 已覆盖：tickflow `catalog_resolver.py` 先行实现同语义（按日期 pin staged final/preliminary generation、root env 覆盖、fail-closed），路径重组对 tickflow 默认路径无影响。 |
+| `../fstore` | 未提交 writer 变更：day_kline/minute_kline 从 `fd_*` payload_json 长表分区改为直表列（`tdate/cjl/cje/zf/zdf/zde/hsl` + `asset_type BIGINT` + `source_table`）；`daily_markets` 追加 `z50/z52/z53/tags` 列。**实际挂载的 `fstore-klines.duckdb.day_klines` 已是新 schema 且数据到 2026-08-20** | ✅ 兼容实证：`mapping.py:klines_rows_to_daily`、`snapshot_resolver.py` 宽松解析（`.get()`），provider 冒烟全绿；新列对现有查询前向兼容，无需改动。 |
+| `../duckdbsnap` | manifest `stage/coverage_date/quality/reconciled/artifacts` 增强仍未提交；但生产者已开始在 engine-a published manifest 的 entries 上发布 `quality: "verified"` 字段 | ⏸ 维持暂缓：代码未提交、无端到端兼容性 fixture；tickflow 解析对该字段前向兼容（宽松 `.get()`）。发布侧字段落地是重评信号之一，待上游提交后再评估消费者完整性校验。 |
+| `../engine` | 新提交 `cf752fe` 为 pi-rewind 会话元数据（非产品代码）；`pkg/snapshot`（catalog_build/catalog_lookup/resolve/verify_manifest）约 800 行在途未提交变更 | ♻️ 无可移植对象：在途变更无稳定基线；当前发布 catalog generation（`20260821T021106`）已被冒烟正常消费，观察待提交。 |
+| `../fhold` | `93a2e3a`（2026-08-17）：`tx snapshot` 只读一致性快照（`NewReadOnlySnapshot`，SQLite mode=ro、不 mkdir/不 migrate）；CLI 显式 `--mode local\|http`，mode 为空或 `local` 走本地，未知模式硬失败 | ✅ 兼容：tickflow `fhold_client.py` 调用 `tx snapshot` 不传 `--mode` → 默认 local 只读路径；失败仍 fail-soft（`available=False`），契约不变。 |
+| `../Vibe-Trading` | 未提交：`agent/backtest/loaders/tdx_local_loader.py` 直读 `/Volumes/vol3/tdx` 通达信导出 CSV 目录 + registry/runner 接线 | ❌ 维持排除：绕过本地 DuckDB 主链与 sealed 数据边界，另建 CSV 文件数据面。 |
+| `../PA_Agent`、`../YMOS`、`../ymos-diagnosis`、`../go-stock`、`../daily_stock_analysis` | 无新提交，工作树干净（仅 `.mini-wiki/` 类未跟踪目录） | ♻️ 无新增能力。 |
+| `origin/main` | 2026-08-17 后无新提交 | ♻️ 无增量。 |
+
+本轮唯一代码改动是 tickflow 自身脚本缺陷修复：`backend/scripts/test_fquant_provider.py` 的 `get_minute` 冒烟窗口此前未按 catalog 发布水位钳制（引擎层 `engine.py` 已有 `get_minute_coverage` 钳制先例），在数据发布滞后于自然日时误触 fail-closed。现按 `get_minute_coverage()` 的 `latest_date` 钳制窗口末端；水位不可知时保持原窗口，让 fail-closed 原样暴露。reviewer 补充修复（P2）：水位完全落后于查询窗口起点时钳制会产生倒置窗口，`get_minute` 退到单日旧日期路径读取窗口外数据并误判通过——此场景现显式 SKIP 并带水位/起点日期。正常路径（4800 行）与倒置路径（mock 水位早于起点 → SKIP）均已运行验证。
+
 
 ## 5. 永久边界
 
