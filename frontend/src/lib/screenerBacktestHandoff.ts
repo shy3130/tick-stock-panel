@@ -59,12 +59,10 @@ export function stageScreenerBacktestHandoff(
   const storage = session()
   const symbols = normalizeSymbols(handoff.symbols)
   const strategyId = normalizeStrategyId(handoff.strategyId)
-  // S3 方案桥: 带 strategyId 且无股票池 (symbols 为空) 的纯策略交接仍需持久化 —
-  // 策略自身在回测区间内逐日选股, 不依赖当日筛选结果池。收紧不变式:
-  // 纯策略交接仅允许 screen: 前缀 (方案桥), 普通 strategyId 不许配空池,
-  // 避免调用方漏过滤期行时静默把用户切到「全市场 + 策略」。
-  const isScreenHandoff = strategyId?.startsWith('screen:') ?? false
-  if (!storage || (symbols.length === 0 && !isScreenHandoff)) return 0
+  // 纯策略交接: 空 symbols + 任意非空 strategyId (含 AI 生成 id) 仍持久化 —
+  // 策略自身在回测区间内逐日选股, 不依赖当日筛选结果池。
+  // 收紧不变式: 空 symbols 且无 strategyId 依旧拒绝, 避免把用户静默切到「全市场 + 默认策略」。
+  if (!storage || (symbols.length === 0 && !strategyId)) return 0
 
   storage.setItem(STORAGE_KEY, JSON.stringify({
     target: handoff.target,
@@ -93,7 +91,7 @@ export function peekScreenerBacktestHandoff(): ScreenerBacktestHandoff | null {
 
     const symbols = normalizeSymbols(candidate.symbols)
     const strategyId = normalizeStrategyId(candidate.strategyId)
-    // S3: 纯策略交接 (screen:<id>) 无股票池 — 有 strategyId 时允许空 symbols
+    // 纯策略交接无股票池 — 有任意非空 strategyId 时允许空 symbols
     if (symbols.length === 0 && !strategyId) return null
     return {
       target: candidate.target,

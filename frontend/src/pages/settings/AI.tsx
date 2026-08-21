@@ -56,6 +56,8 @@ export function SettingsAIPanel() {
   const profilesQuery = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
   const profiles = profilesQuery.data?.profiles ?? []
   const defaultId = profilesQuery.data?.default_id ?? ''
+  const runtimeQuery = useQuery({ queryKey: ['agentRuntime'], queryFn: api.agentRuntime, retry: false })
+
   const routePolicy = profilesQuery.data?.route_policy ?? { allow_profile_fallback: false, fallback_profile_ids: [] }
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<AiProfileInput>(EMPTY_FORM)
@@ -213,6 +215,7 @@ export function SettingsAIPanel() {
             <div className="text-sm font-medium text-foreground">{configured ? `${profiles.length} 个 AI 配置` : 'AI 未配置'}</div>
             <div className="text-xs text-muted mt-0.5 truncate">
               {configured ? `默认: ${profiles.find(p => p.id === defaultId)?.name ?? '未设置'}` : '新增第一条 AI 配置后即可使用分析功能。'}
+              {runtimeQuery.data?.runtime ? ` · 自由 Agent 运行时 ${runtimeQuery.data.runtime}（只读，不在此切换）` : ''}
             </div>
           </div>
         </div>

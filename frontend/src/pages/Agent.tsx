@@ -1,18 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { Bot, ChevronRight, Clock3, Download, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Square, Trash2, X, Wrench } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Bot, ChevronRight, Clock3, Download, Filter, LineChart, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Square, Trash2, X, Wrench } from 'lucide-react'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { PageHeader } from '@/components/PageHeader'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
-import { api, type AgentEvent, type AgentMsg, type AgentSession, type AgentToolTrace, type DocumentEnvelope } from '@/lib/api'
+import { api, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
 import { clearAgentChat, loadAgentChat, saveAgentChat } from '@/lib/agentChatStore'
-
-type ToolTrace = AgentToolTrace
-
-interface ChatMsg extends AgentMsg {
-  tools?: ToolTrace[]
-  elapsed_ms?: number
-}
+import { applyAgentEvent, type ChatMsg, type ToolTrace } from '@/lib/agentEvents'
+import { extractPoolCard } from '@/lib/agentPoolCard'
+import { stageScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
+import { toast } from '@/components/Toast'
 
 interface ExampleItem {
   title: string
@@ -88,6 +85,7 @@ function ToolPayload({ label, value, pending = false }: { label: string; value?:
 }
 
 function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: number }) {
+  const navigate = useNavigate()
   if (!tools?.length) return null
   const totalElapsed = formatElapsed(elapsedMs)
   return (
@@ -123,6 +121,44 @@ function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: 
                 <ToolPayload label="输入" value={tool.args} />
                 <ToolPayload label="输出" value={tool.result} pending={pending} />
               </div>
+              {tool.name === 'screen_stock_pool' && !pending && (() => {
+                const card = extractPoolCard(tool.result)
+                if (!card) return null
+                const handlePoolBacktest = () => {
+                  if (!card.previewSymbols.length) {
+                    toast('预览为空，无法送回测', 'error')
+                    return
+                  }
+                  const staged = stageScreenerBacktestHandoff({ target: 'strategy', symbols: card.previewSymbols, asOf: card.as_of })
+                  if (!staged) {
+                    toast('无法送入回测', 'error')
+                    return
+                  }
+                  navigate('/backtest')
+                }
+                return (
+                  <div className="mt-2 rounded-input border border-border bg-elevated/60 px-2.5 py-2">
+                    <div className="flex items-center gap-2 text-[10px] text-muted">
+                      <Filter className="h-3 w-3 shrink-0 text-accent" />
+                      <span>服务端股票池 {card.total} 只 · as_of {card.as_of}</span>
+                      <span className="ml-auto shrink-0 font-mono">{card.pool_id}</span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <button type="button" onClick={() => navigate('/screener')}
+                        className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                        <Filter className="h-3 w-3" />打开条件选股
+                      </button>
+                      <button type="button" onClick={handlePoolBacktest}
+                        className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                        <LineChart className="h-3 w-3" />送回测
+                      </button>
+                    </div>
+                    <p className="mt-1 text-[10px] leading-relaxed text-muted/70">
+                      完整股票池不在模型上下文，按钮仅用预览（前 {card.previewSymbols.length} 只）。
+                    </p>
+                  </div>
+                )
+              })()}
             </section>
           )
         })}
@@ -187,7 +223,7 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
       </div>
       <div>
         <div className="text-sm font-semibold text-foreground">AI 助手</div>
-        <div className="mt-1 text-xs text-muted">询问策略、行情、因子、组合，必要时会调用面板只读工具。</div>
+        <div className="mt-1 text-xs text-muted">只读研究：询问策略、行情、因子、组合，必要时调用面板工具。不荐股、不下单。</div>
       </div>
       <div className="flex flex-wrap justify-center gap-1.5">
         {CAPABILITY_CHIPS.map(label => (
@@ -221,42 +257,6 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
   )
 }
 
-function applyAgentEvent(prev: ChatMsg[], evt: AgentEvent, attemptIdRef: { current: string | null }): ChatMsg[] {
-  const lastIdx = prev.length - 1
-  const last = prev[lastIdx]
-  if (last?.role !== 'assistant') return prev
-
-  const nextLast: ChatMsg = { ...last, tools: last.tools ? [...last.tools] : [] }
-  if (evt.type === 'attempt_start') {
-    attemptIdRef.current = evt.attempt_id
-  } else if (evt.type === 'delta') {
-    nextLast.content += evt.content
-  } else if (evt.type === 'tool_call') {
-    nextLast.tools = [...(nextLast.tools ?? []), { name: evt.name, args: evt.args }]
-  } else if (evt.type === 'tool_result') {
-    const tools = [...(nextLast.tools ?? [])]
-    let idx = -1
-    for (let k = tools.length - 1; k >= 0; k--) {
-      if (tools[k].name === evt.name && tools[k].result === undefined) { idx = k; break }
-    }
-    if (idx >= 0) {
-      tools[idx] = { ...tools[idx], result: evt.result, elapsed_ms: evt.elapsed_ms }
-    } else {
-      tools.push({ name: evt.name, result: evt.result, elapsed_ms: evt.elapsed_ms })
-    }
-    nextLast.tools = tools
-  } else if (evt.type === 'done') {
-    nextLast.elapsed_ms = evt.elapsed_ms
-  } else if (evt.type === 'error') {
-    nextLast.content += `\n[错误] ${evt.message}`
-    nextLast.elapsed_ms = evt.elapsed_ms
-  } else if (evt.type === 'cancelled') {
-    nextLast.content += nextLast.content ? '\n[已停止]' : '[已停止]'
-  }
-  const next = [...prev]
-  next[lastIdx] = nextLast
-  return next
-}
 
 export function Agent() {
   const [msgs, setMsgs] = useState<ChatMsg[]>(() => loadAgentChat())
@@ -266,7 +266,9 @@ export function Agent() {
   const [profileId, setProfileId] = useState<string>()
   const [streaming, setStreaming] = useState(false)
   const [attachment, setAttachment] = useState<DocumentEnvelope | null>(null)
+
   const [readingFile, setReadingFile] = useState(false)
+  const [agentRuntime, setAgentRuntime] = useState<'python' | 'pi' | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -275,6 +277,11 @@ export function Agent() {
   const attemptIdRef = useRef<string | null>(null)
   const watchSessionRef = useRef<string | null>(null)
   const urlSessionId = searchParams.get('session') || undefined
+
+
+  useEffect(() => {
+    void api.agentRuntime().then(r => setAgentRuntime(r.runtime)).catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     if (streaming || sessionId) return
@@ -556,7 +563,7 @@ export function Agent() {
     <div className="workspace-page h-[calc(100vh-3rem)]">
       <PageHeader
         title="AI 助手"
-        subtitle="多轮对话 · 可调用面板数据工具"
+        subtitle={agentRuntime ? `多轮对话 · 可调用面板数据工具 · 运行时 ${agentRuntime}` : '多轮对话 · 可调用面板数据工具'}
         right={
           <div className="workspace-toolbar">
             <select

@@ -2966,6 +2966,9 @@ export const api = {
     request<{ messages: AgentStoredMessage[] }>(`/api/agent/sessions/${encodeURIComponent(sessionId)}/messages`),
   cancelAgentAttempt: (attemptId: string) =>
     request<{ cancelled: boolean }>(`/api/agent/attempts/${encodeURIComponent(attemptId)}/cancel`, { method: 'POST' }),
+  agentRuntime: () =>
+    request<{ runtime: 'python' | 'pi'; switchable: boolean }>('/api/agent/runtime'),
+
   readDocument: (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -3865,18 +3868,20 @@ export const api = {
    *
    * 用 ReadableStream 解析(而非 SSE EventSource),支持 POST body 且更简单。
    */
-  async *financialAnalyzeStream(symbol: string, focus?: string, profileId?: string): AsyncGenerator<{
-    type: 'meta' | 'delta' | 'error' | 'done'
+  async *financialAnalyzeStream(symbol: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done' | 'attempt'
     symbol?: string
     summary?: string
     periods?: number
     content?: string
     message?: string
+    attempt_id?: string
   }> {
     const res = await fetch('/api/financials/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      signal,
     })
     if (!res.ok) {
       let detail = ''
@@ -3885,6 +3890,8 @@ export const api = {
       toast(msg, 'error')
       throw new Error(msg)
     }
+    const attemptId = res.headers.get('X-AI-Attempt-ID')
+    if (attemptId) yield { type: 'attempt', attempt_id: attemptId }
     if (!res.body) throw new Error('响应无 body')
 
     const reader = res.body.getReader()
@@ -3936,14 +3943,23 @@ export const api = {
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
    */
-  async *stockAnalyzeStream(symbol: string, focus?: string, profileId?: string): AsyncGenerator<{
-    type: 'meta' | 'delta' | 'error' | 'done'
+  async *stockAnalyzeStream(symbol: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done' | 'attempt' | 'summary'
     symbol?: string
     summary?: string
     levels?: Record<LevelType, PriceLevel[]>
     close?: number | null
     content?: string
     message?: string
+    attempt_id?: string
+    /** F14: 数据口径(后端 frame; 旧后端可缺失) */
+    data_as_of?: string
+    source?: string
+    adjustment?: string
+    degraded?: boolean
+    warnings?: string[]
+    /** F13: 程序化结构化摘要(无方向字段) */
+    struct_summary?: { trend: string; key_levels: string[]; data_gaps: string[] }
     /** P3: meta chunk 可带执行元信息;流式 provider 不上报 usage 时缺失,不得展示伪数据 */
     ai_meta?: AiExecutionMeta | null
   }> {
@@ -3951,6 +3967,7 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      signal,
     })
     if (!res.ok) {
       let detail = ''
@@ -3959,6 +3976,8 @@ export const api = {
       toast(msg, 'error')
       throw new Error(msg)
     }
+    const attemptId = res.headers.get('X-AI-Attempt-ID')
+    if (attemptId) yield { type: 'attempt', attempt_id: attemptId }
     if (!res.body) throw new Error('响应无 body')
 
     const reader = res.body.getReader()
@@ -4023,19 +4042,21 @@ export const api = {
    * AI 大盘复盘 — 流式调用(NDJSON,与个股/财务分析同协议)。
    * meta 里带 as_of / emotion_score / emotion_label / summary,供前端先渲染信号灯。
    */
-  async *reviewStream(asOf?: string, focus?: string, profileId?: string): AsyncGenerator<{
-    type: 'meta' | 'delta' | 'error' | 'done'
+  async *reviewStream(asOf?: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done' | 'attempt'
     as_of?: string
     emotion_score?: number
     emotion_label?: string
     summary?: string
     content?: string
     message?: string
+    attempt_id?: string
   }> {
     const res = await fetch('/api/market-recap/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      signal,
     })
     if (!res.ok) {
       let detail = ''
@@ -4044,6 +4065,8 @@ export const api = {
       toast(msg, 'error')
       throw new Error(msg)
     }
+    const attemptId = res.headers.get('X-AI-Attempt-ID')
+    if (attemptId) yield { type: 'attempt', attempt_id: attemptId }
     if (!res.body) throw new Error('响应无 body')
 
     const reader = res.body.getReader()

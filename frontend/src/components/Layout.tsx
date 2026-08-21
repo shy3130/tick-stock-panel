@@ -117,7 +117,7 @@ const NAV_DOMAIN: Record<string, NavDomain> = {
   '/trading': 'trading',
   '/review': 'trading',
   '/journal': 'trading',
-  '/agent': 'trading',
+  '/agent': 'research',
   '/data': 'system',
 }
 

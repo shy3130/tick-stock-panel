@@ -1,12 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Sparkles, Save, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Settings2, FileText, Copy, Check, Terminal } from 'lucide-react'
+import { X, Sparkles, Save, Loader2, ChevronLeft, ChevronRight, AlertTriangle, Settings2, FileText, Copy, Check, Terminal, Play } from 'lucide-react'
 import { api } from '@/lib/api'
 import { storage } from '@/lib/storage'
 import { cn } from '@/lib/cn'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { resolveEntryProfile } from '@/lib/aiProfile'
+import { stageScreenerBacktestHandoff, peekScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
+import { toast } from '@/components/Toast'
 
 // ===== 工具函数 =====
 
@@ -126,8 +129,10 @@ interface Props { open: boolean; onClose: () => void; onSavedId?: (id: string) =
 export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create' }: Props) {
   // 根据 mode 选择存储 key
   const draftStore = mode === 'modify' ? storage.strategyModify : storage.strategyDraft
+  const navigate = useNavigate()
   const [step, setStep] = useState(1)
   const [tab, setTab] = useState<'ai' | 'custom'>('ai')
+  const [previewTab, setPreviewTab] = useState<'params' | 'code'>('params')
   const [customCopied, setCustomCopied] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -135,10 +140,10 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
   const [rules, setRules] = useState('')
   const [code, setCode] = useState('')
   const [instruction, setInstruction] = useState('')
-  const [previewTab, setPreviewTab] = useState<'params' | 'code'>('params')
+  const [error, setError] = useState('')
+  const [savedId, setSavedId] = useState<string | null>(null)
   const [strategyId, setStrategyId] = useState('')
 
-  const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [aiStatus, setAiStatus] = useState<{ configured: boolean } | null>(null)
@@ -152,7 +157,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
 
   // 打开时恢复草稿
   useEffect(() => {
-    if (!open) { setLoaded(false); return }
+    if (!open) { setLoaded(false); setSavedId(null); return }
     const d = draftStore.get(null)
     if (d) {
       setStep(d.step ?? 1); setName(d.name ?? ''); setDescription(d.description ?? '')
@@ -186,7 +191,6 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
 
   const handleClose = () => { if (name || rules || code) persist(); onClose() }
 
-  // Step 1: 生成
   const handleGenerate = async () => {
     if (!name.trim() || !rules.trim()) return
     if (!aiStatus?.configured) { setError('AI 未配置，请在设置页面配置 API Key'); return }
@@ -201,15 +205,12 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
       const genRules = parseRules(res.code)
       if (genDesc) setDescription(genDesc)
       if (genRules) setRules(genRules)
-      await api.strategySaveCode(id, res.code)
-      if (genRules) { const sr = storage.strategyRules.get({}); sr[id] = genRules; storage.strategyRules.set(sr) }
     } catch (e: any) {
       const msg = String(e?.message ?? '')
       setError(msg.includes('API Key') || msg.includes('api_key') ? 'AI API Key 未配置或无效' : (msg || '生成失败'))
     } finally { setLoading(false) }
   }
 
-  // Step 2: AI 修改
   const handleModify = async () => {
     if (!instruction.trim() || !code) return
     setLoading(true); setError('')
@@ -221,11 +222,6 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
       const updatedRules = parseRules(res.code)
       if (genDesc) setDescription(genDesc)
       if (updatedRules) setRules(updatedRules)
-      const idMatch = res.code.match(/"id"\s*:\s*"([^"]+)"/)
-      if (idMatch) {
-        await api.strategySaveCode(idMatch[1], res.code)
-        const sr = storage.strategyRules.get({}); sr[idMatch[1]] = updatedRules; storage.strategyRules.set(sr)
-      }
     } catch (e: any) { setError(String(e?.message ?? '修改失败')) }
     finally { setLoading(false) }
   }
@@ -243,9 +239,22 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
       if (finalRules) { const saved = storage.strategyRules.get({}); saved[id] = finalRules; storage.strategyRules.set(saved) }
       await onSavedId?.(id)
       clearDraft()
-      setTimeout(() => onClose(), 1000)
-    } catch (e: any) { setError(String(e?.message ?? '保存失败')) }
+      // F12: 保存成功后停留在弹窗内展示成功态, 不再 1s 自动关闭
+      setSavedId(id)
+    } catch (e) { setError(e instanceof Error ? e.message : '保存失败') }
     setSaving(false)
+  }
+
+  // F12: 保存成功后「回测此策略」— 纯策略交接 (空池 + strategyId)
+  const sendToBacktest = () => {
+    if (!savedId) return
+    stageScreenerBacktestHandoff({ target: 'strategy', symbols: [], asOf: null, strategyId: savedId })
+    // 纯策略交接 stage 返回 0 (标的数), 不能当失败信号; 用 peek 复核是否真正写入
+    if (peekScreenerBacktestHandoff()?.strategyId !== savedId) {
+      toast('暂存交接失败，请重试', 'error')
+      return
+    }
+    navigate('/backtest')
   }
 
   if (!open) return null
@@ -316,7 +325,31 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
 
           {/* 内容 */}
           <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
-            {tab === 'ai' ? (<>
+            {savedId ? (
+              <div className="flex flex-col items-center justify-center py-14 gap-4 text-center">
+                <div className="h-12 w-12 rounded-full bg-emerald-400/10 border border-emerald-400/30 flex items-center justify-center">
+                  <Check className="h-6 w-6 text-emerald-400" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-foreground">策略已保存</div>
+                  <div className="mt-1 font-mono text-xs text-muted">{savedId}</div>
+                </div>
+                <p className="text-[11px] text-secondary leading-relaxed max-w-sm">
+                  已写入策略池，可在选股 / 回测 / 监控中使用。可立即送入回测，或关闭后继续创建下一个策略。
+                </p>
+                <div className="flex items-center gap-2">
+                  <button onClick={sendToBacktest}
+                    className="h-9 px-4 rounded-lg bg-accent text-white text-xs font-medium flex items-center gap-1.5 hover:bg-accent/90 transition-all">
+                    <Play className="h-3.5 w-3.5" />
+                    回测此策略
+                  </button>
+                  <button onClick={handleClose}
+                    className="h-9 px-4 rounded-lg border border-border text-xs text-secondary hover:text-foreground flex items-center gap-1.5 transition-all">
+                    关闭
+                  </button>
+                </div>
+              </div>
+            ) : tab === 'ai' ? (<>
             {aiStatus && !aiStatus.configured && (
               <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 px-4 py-3 flex items-center gap-3">
                 <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
@@ -450,7 +483,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
                     AI 修改
                   </button>
                 </div>
-                <p className="text-[10px] text-muted/40">修改指令可调整参数、信号、告警、评分等任意内容。确认无误后点击「保存策略」。</p>
+                <p className="text-[10px] text-muted/40">预览尚未写入策略池。修改指令可调整参数、信号、告警、评分。确认无误后点击「保存策略」，才会出现在选股 / 回测 / 监控。</p>
               </>
             )}
             </>
@@ -493,7 +526,7 @@ export function StrategyBuilderDialog({ open, onClose, onSavedId, mode = 'create
           </div>
 
           {/* 底部 */}
-          {tab === 'ai' && (
+          {tab === 'ai' && !savedId && (
           <div className="flex items-center justify-between px-5 py-3 border-t border-border/50 bg-surface/50">
             <button onClick={clearDraft} className="text-[10px] text-muted/40 hover:text-danger transition-colors">重新创建</button>
             <div className="flex items-center gap-2">

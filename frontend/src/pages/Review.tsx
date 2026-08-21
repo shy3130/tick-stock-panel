@@ -31,9 +31,10 @@ import { toast } from '@/components/Toast'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { useReviewState } from '@/lib/useReviewStore'
 import {
-  startReviewGeneration, resetReview, isReviewGenerating,
+  startReviewGeneration, resetReview, isReviewGenerating, cancelReviewGeneration,
   type ReviewPhase,
 } from '@/lib/reviewStore'
+import { aiStreamStatus, type AiConnection } from '@/lib/aiStreamStatus'
 import { resolveEntryProfile } from '@/lib/aiProfile'
 import { EmotionCyclePanel } from '@/components/review/EmotionCyclePanel'
 import { LadderPromotionPanel } from '@/components/review/LadderPromotionPanel'
@@ -133,7 +134,7 @@ export function Review() {
 
   const tabs = market === 'a' ? A_TABS : HK_TABS
   // 生成状态走全局 store:切走页面流不中断,回来可恢复
-  const { phase, content, error, meta } = useReviewState()
+  const { phase, connection, content, error, meta } = useReviewState()
   const [viewing, setViewing] = useState<AiReviewReport | null>(null)  // 查看历史报告
   const reportEndRef = useRef<HTMLDivElement>(null)
 
@@ -366,19 +367,21 @@ export function Review() {
             >
               <History className="h-3 w-3" />复跑
             </button>
-            <button
-              onClick={generate}
-              disabled={isGenerating}
-              className={cn(
-                isGenerating ? 'btn-secondary !h-8 border-accent/40 text-accent' : 'btn-primary !h-8',
-              )}
-            >
-              {isGenerating ? (
-                <><RefreshCw className="h-3.5 w-3.5 animate-spin" />生成中…</>
-              ) : (
-                <><Sparkles className="h-3.5 w-3.5" />生成复盘</>
-              )}
-            </button>
+            {isGenerating ? (
+              <button
+                onClick={() => { void cancelReviewGeneration() }}
+                className="btn-secondary !h-8 border-danger/40 text-danger"
+              >
+                <X className="h-3.5 w-3.5" />取消
+              </button>
+            ) : (
+              <button
+                onClick={generate}
+                className="btn-primary !h-8"
+              >
+                <Sparkles className="h-3.5 w-3.5" />生成复盘
+              </button>
+            )}
               </>
             )}
           </div>
@@ -504,6 +507,7 @@ export function Review() {
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_18rem]">
                     <ReportPanel
                       phase={phase}
+                      connection={connection}
                       content={displayContent}
                       error={error}
                       isGenerating={isGenerating}
@@ -888,9 +892,10 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
 // 报告面板(流式 + 错误 + 历史/完成态)
 // ================================================================
 function ReportPanel({
-  phase, content, error, isGenerating, viewing, onCopy, onDownload, onRegenerate, reportEndRef,
+  phase, connection, content, error, isGenerating, viewing, onCopy, onDownload, onRegenerate, reportEndRef,
 }: {
   phase: ReviewPhase
+  connection: AiConnection
   content: string
   error: string
   isGenerating: boolean
@@ -900,14 +905,16 @@ function ReportPanel({
   onRegenerate: () => void
   reportEndRef: React.RefObject<HTMLDivElement>
 }) {
-  if (phase === 'error') {
+  if (phase === 'error' || phase === 'cancelled') {
     return (
       <div className="flex flex-col items-center justify-center gap-3 panel px-6 py-14">
         <div className="grid h-12 w-12 place-items-center rounded-full bg-danger/10">
           <AlertTriangle className="h-5 w-5 text-danger" />
         </div>
-        <div className="text-sm font-medium text-foreground">复盘失败</div>
-        <div className="max-w-md text-center text-xs text-secondary">{error || '请检查 AI 配置后重试'}</div>
+        <div className="text-sm font-medium text-foreground">{phase === 'cancelled' ? '已取消' : '已断开'}</div>
+        <div className="max-w-md text-center text-xs text-secondary">
+          {error || (phase === 'cancelled' ? '本次复盘已停止,不会写入历史报告' : '连接已断开,请检查 AI 配置后重试')}
+        </div>
         <button
           onClick={onRegenerate}
           className="btn-secondary mt-1 text-xs text-accent"
@@ -930,11 +937,11 @@ function ReportPanel({
         <div className="text-center">
           <div className="text-base font-semibold text-foreground">AI 大盘复盘</div>
           <p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-secondary">
-            一键生成今日盘后复盘报告 —— 从一句话定调到明日交易计划,
-            结构化输出可直接指导次日仓位与节奏。
+            一键生成今日盘后结构复盘 —— 从一句话定调到次日观察清单,
+            解释盘面事实,不给仓位或交易指令。
           </p>
         </div>
-        {/* 报告七节预览 —— 空状态也有内容感,暗示报告结构 */}
+        {/* 报告结构预览 —— 空状态也有内容感 */}
         <div className="mt-2 grid w-full max-w-md grid-cols-2 gap-2 sm:grid-cols-4">
           {[
             { icon: '🎯', label: '一句话定调' },
@@ -942,7 +949,7 @@ function ReportPanel({
             { icon: '🔥', label: '板块主线' },
             { icon: '💰', label: '资金情绪' },
             { icon: '📰', label: '消息催化' },
-            { icon: '🎯', label: '明日计划' },
+            { icon: '🎯', label: '观察清单' },
             { icon: '⚠️', label: '风险提示' },
           ].map((s) => (
             <div key={s.label} className="flex flex-col items-center gap-1 rounded-btn bg-elevated/40 px-2 py-2">
@@ -965,6 +972,8 @@ function ReportPanel({
   const showActions = !!content && (!isGenerating || !!viewing)
   const showViewingTag = !!viewing
   const isLoading = phase === 'loading' && !content
+  // F9: 连接状态(仅生成流视角;查看历史时不显示;cancelled 已在上方提前 return)
+  const status = isGenerating ? aiStreamStatus({ phase, connection }) : null
 
   return (
     <motion.div
@@ -978,6 +987,19 @@ function ReportPanel({
           <span className="text-xs font-medium text-foreground">
             {showViewingTag ? `历史复盘 · ${viewing!.as_of}` : isGenerating ? 'AI 正在复盘…' : '复盘报告'}
           </span>
+          {status && (
+            <span className={cn(
+              'ml-1 inline-flex items-center gap-1 text-[10px]',
+              status.tone === 'error' ? 'text-danger' : status.tone === 'active' ? 'text-accent' : 'text-muted',
+            )}>
+              <span className={cn('h-1.5 w-1.5 rounded-full',
+                status.tone === 'active' && 'bg-accent animate-pulse',
+                status.tone === 'error' && 'bg-danger',
+                status.tone === 'muted' && 'bg-muted',
+              )} />
+              {status.label}
+            </span>
+          )}
         </div>
         {showActions && (
           <div className="flex items-center gap-1">

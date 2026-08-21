@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { api } from './api'
+import { nextConnection, type AiConnection } from './aiStreamStatus'
 
 /**
  * AI 财务分析 —— 全局任务/报告 store(与 UI 解耦)。
@@ -13,21 +14,25 @@ import { api } from './api'
  * 5. 任务完成(收到 done 或 content 非空且流结束)→ 自动存后端 + 移入历史 + 弹窗可恢复为"历史模式"。
  */
 
-export type Phase = 'loading' | 'streaming' | 'done' | 'error'
+export type Phase = 'loading' | 'streaming' | 'done' | 'error' | 'cancelled'
 
 export interface ActiveTask {
   id: string                  // 任务 id(前端生成,与最终 report id 解耦)
   symbol: string
   name: string
   focus: string
+  profileId?: string
   phase: Phase
   content: string             // 累积的 Markdown
   error: string
   meta: { summary?: string; periods?: number } | null
+  /** F9: 流连接态; start→connecting, 首个 delta→open, 终态→closed */
+  connection: AiConnection
   createdAt: number           // ms 时间戳
   savedReportId?: string      // 完成后存到后端的报告 id
   doneAt?: number             // 进入 done/error 态的时间戳(用于气泡过期清理)
   dismissed?: boolean         // 用户已从气泡点击查看过 → 不再在气泡显示
+  attemptId?: string
 }
 
 export interface HistoryReport {
@@ -42,6 +47,7 @@ export interface HistoryReport {
 }
 
 const MAX_ACTIVE = 3
+const abortByTask = new Map<string, AbortController>()
 
 // ===== 全局状态 =====
 let activeTasks: ActiveTask[] = []
@@ -84,14 +90,24 @@ function rebuildSnap() {
 
 function getActiveSnapshot() { return _activeSnap }
 function getHistorySnapshot() { return _historySnap }
+
+/** 只读取当前活跃任务(测试/调试用;与 reviewStore.getReviewState 对称) */
+export function getActiveTasks(): ActiveTask[] {
+  return activeTasks
+}
 function getDialogSnapshot() { return _dialogSnap }
 
 function patchTask(id: string, patch: Partial<ActiveTask>) {
   activeTasks = activeTasks.map(t => {
     if (t.id !== id) return t
+    if (t.phase === 'cancelled') {
+      if (patch.dismissed === undefined) return t
+      return { ...t, dismissed: patch.dismissed }
+    }
     const next = { ...t, ...patch }
-    // 首次进入 done/error 态时记录 doneAt
-    if ((patch.phase === 'done' || patch.phase === 'error') && t.phase !== patch.phase && !next.doneAt) {
+    // F9: 连接态随 phase 派生;cancelled 终态已在上方拦截
+    if (patch.phase) next.connection = nextConnection(patch.phase, next.connection)
+    if ((patch.phase === 'done' || patch.phase === 'error' || patch.phase === 'cancelled') && t.phase !== patch.phase && !next.doneAt) {
       next.doneAt = Date.now()
     }
     return next
@@ -195,9 +211,9 @@ export async function startAnalysis(symbol: string, name: string, focus = '', pr
 
   const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
   const task: ActiveTask = {
-    id, symbol, name, focus,
+    id, symbol, name, focus, profileId,
     phase: 'loading', content: '', error: '',
-    meta: null, createdAt: Date.now(),
+    meta: null, connection: 'connecting', createdAt: Date.now(),
   }
   activeTasks = [...activeTasks, task]
   activeDialogTaskId = id
@@ -205,19 +221,22 @@ export async function startAnalysis(symbol: string, name: string, focus = '', pr
   rebuildSnap()
   emit()
 
-  // 启动流式接收(后台运行,不阻塞)
   runStream(id, symbol, focus, profileId)
   return { id }
 }
 
 async function runStream(id: string, symbol: string, focus: string, profileId?: string) {
+  const ac = new AbortController()
+  abortByTask.set(id, ac)
   try {
     let firstDelta = true
-    for await (const chunk of api.financialAnalyzeStream(symbol, focus, profileId)) {
-      // 任务可能已被取消(不在列表里了)→ 终止
+    for await (const chunk of api.financialAnalyzeStream(symbol, focus, profileId, ac.signal)) {
       const cur = activeTasks.find(t => t.id === id)
-      if (!cur) return
+      if (!cur || cur.phase === 'cancelled' || ac.signal.aborted) return
       switch (chunk.type) {
+        case 'attempt':
+          if (chunk.attempt_id) patchTask(id, { attemptId: chunk.attempt_id })
+          break
         case 'meta':
           patchTask(id, { meta: { summary: chunk.summary, periods: chunk.periods } })
           break
@@ -229,14 +248,12 @@ async function runStream(id: string, symbol: string, focus: string, profileId?: 
           patchTask(id, { phase: 'error', error: chunk.message ?? '分析失败' })
           return
         case 'done':
-          // 标记完成,稍后持久化(content 可能还在最后几个 delta 里,以 done 时为准)
           patchTask(id, { phase: 'done' })
           break
       }
     }
-    // 流正常结束 → 持久化报告
     const final = activeTasks.find(t => t.id === id)
-    if (final && final.phase !== 'error' && final.content) {
+    if (final && final.phase !== 'error' && final.phase !== 'cancelled' && !ac.signal.aborted && final.content) {
       try {
         const res = await api.financialReportSave({
           symbol: final.symbol,
@@ -248,26 +265,41 @@ async function runStream(id: string, symbol: string, focus: string, profileId?: 
         })
         if (res.report) {
           patchTask(id, { savedReportId: res.report.id })
-          // 加到历史列表头部
           history = [res.report, ...history.filter(r => r.id !== res.report.id)]
           historyLoaded = true
           rebuildSnap()
           emit()
-          // 任务完成:不自动弹出对话框,只在胶囊显示"已完成"态,用户想看再点。
-          // (若对话框正打开看此任务,内容已实时更新;最小化/在别处则胶囊亮起完成态)
         }
       } catch {
         // 持久化失败不影响前端已展示的内容
       }
     }
   } catch (e: any) {
+    const cur = activeTasks.find(t => t.id === id)
+    if (cur?.phase === 'cancelled' || ac.signal.aborted) {
+      if (cur && cur.phase !== 'cancelled') patchTask(id, { phase: 'cancelled', error: '已取消' })
+      return
+    }
     const msg = String(e?.message ?? '分析失败')
     patchTask(id, {
       phase: 'error',
       error: normalizeAiError(msg),
     })
+  } finally {
+    abortByTask.delete(id)
   }
 }
+
+export async function cancelAnalysis(id: string): Promise<void> {
+  const t = activeTasks.find(x => x.id === id)
+  if (!t || (t.phase !== 'loading' && t.phase !== 'streaming')) return
+  abortByTask.get(id)?.abort()
+  if (t.attemptId) {
+    try { await api.cancelAgentAttempt(t.attemptId) } catch { /* 取消失败仍以本地中止为准 */ }
+  }
+  patchTask(id, { phase: 'cancelled', error: '已取消' })
+}
+
 
 /** 打开对话框(活跃任务或历史报告)。 */
 export function openDialog(taskId: string) {
@@ -284,9 +316,7 @@ export function minimizeDialog() {
   emit()
 }
 
-/** 关闭对话框(活跃任务继续在后台跑,仅移除对话框视图)。
- *  对历史报告:仅关闭视图。
- */
+/** 关闭对话框。 */
 export function closeDialog() {
   activeDialogTaskId = null
   dialogMinimized = false
@@ -294,13 +324,9 @@ export function closeDialog() {
   emit()
 }
 
-/** 从气泡恢复对话框。
- *  仅对已完成/失败的任务标记 dismissed(看过结果就不必再弹);
- *  生成中的任务不标记 —— 用户再次最小化时气泡应重新出现。
- */
 export function restoreDialog(taskId: string) {
   const t = activeTasks.find(x => x.id === taskId)
-  if (t && (t.phase === 'done' || t.phase === 'error')) {
+  if (t && (t.phase === 'done' || t.phase === 'error' || t.phase === 'cancelled')) {
     patchTask(taskId, { dismissed: true })
   }
   activeDialogTaskId = taskId
@@ -310,9 +336,10 @@ export function restoreDialog(taskId: string) {
 }
 
 /** 重试一个失败/已完成的任务(以新任务方式重新分析)。 */
-export async function retryAnalysis(task: { symbol: string; name: string; focus: string }): Promise<{ error?: string }> {
-  return startAnalysis(task.symbol, task.name, task.focus)
+export async function retryAnalysis(task: { symbol: string; name: string; focus: string; profileId?: string }): Promise<{ error?: string }> {
+  return startAnalysis(task.symbol, task.name, task.focus, task.profileId)
 }
+
 
 /** 删除历史报告。 */
 export async function deleteReport(reportId: string): Promise<void> {

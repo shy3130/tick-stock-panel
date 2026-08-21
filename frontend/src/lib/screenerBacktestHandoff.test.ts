@@ -62,7 +62,7 @@ try {
   assert(handoff?.target === 'factor' && handoff.symbols[0] === 'SZ000001', '无有效 strategyId 的交接仍应正常写入/读取')
   assert(handoff?.strategyId == null, '空 strategyId 不应持久化')
 
-  // S3 纯策略交接: 空 symbols + 非空 strategyId 仍持久化 (screen 方案回测, 无当日池)
+  // 纯策略交接: 空 symbols + 任意非空 strategyId 仍持久化 (策略在回测区间内逐日选股, 无当日池)
   clearScreenerBacktestHandoff()
   const screenCount = stageScreenerBacktestHandoff({
     target: 'strategy',
@@ -72,8 +72,13 @@ try {
   })
   assert(screenCount === 0, '空 symbols 应返回 0 只')
   handoff = peekScreenerBacktestHandoff()
-  assert(handoff?.target === 'strategy' && handoff.strategyId === 'screen:abc123', '带 strategyId 的空池交接应可 peek')
+  assert(handoff?.target === 'strategy' && handoff?.strategyId === 'screen:abc123', '带 strategyId 的空池交接应可 peek')
   assert(Array.isArray(handoff?.symbols) && handoff.symbols.length === 0, '纯策略交接 symbols 应为空数组')
+  // F12: AI 生成策略 id (无 screen: 前缀) 同样可纯策略交接, 前缀限制已放宽
+  const aiCount = stageScreenerBacktestHandoff({ target: 'strategy', symbols: [], asOf: null, strategyId: 'ai_l8zz123' })
+  assert(aiCount === 0, '空 symbols 的纯策略交接返回 0 只 (0 是标的数, 不代表失败)')
+  handoff = peekScreenerBacktestHandoff()
+  assert(handoff?.strategyId === 'ai_l8zz123', '任意非空 strategyId (无前缀) 的空池交接应可 peek')
   clearScreenerBacktestHandoff()
   // 空 symbols 且无 strategyId: 不持久化 (旧行为不变)
   assert(
@@ -107,4 +112,4 @@ try {
   else Reflect.deleteProperty(globalThis, 'window')
 }
 
-console.log('15/15 screener backtest handoff tests passed')
+console.log('17/17 screener backtest handoff tests passed')

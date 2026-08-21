@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Sparkles, Loader2, AlertTriangle, Copy, Check, RefreshCw,
-  Database, Settings2, Send, Wand2, Minimize2, History,
+  Database, Settings2, Send, Wand2, Minimize2, History, Star, LineChart,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import {
   type ActiveTask, type HistoryReport,
-  minimizeDialog, closeDialog, startAnalysis,
+  minimizeDialog, closeDialog, startAnalysis, cancelAnalysis,
 } from '@/lib/aiReportStore'
+import { aiStreamStatus } from '@/lib/aiStreamStatus'
+import { api } from '@/lib/api'
+import { toast } from '@/components/Toast'
+import { stageScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 
 interface Props {
   /** 当前展示的任务;活跃任务或历史报告 */
@@ -19,13 +24,12 @@ interface Props {
   minimized: boolean
 }
 
-type Phase = 'loading' | 'streaming' | 'done' | 'error'
+type Phase = 'loading' | 'streaming' | 'done' | 'error' | 'cancelled'
 
-// 统一字段读取:活跃任务有 phase/createdAt,历史报告没有(按 done 处理)
 function getPhase(task: ActiveTask | HistoryReport | null): Phase {
   if (!task) return 'loading'
   if ('phase' in task) return task.phase
-  return 'done'  // 历史报告视为已完成
+  return 'done'
 }
 function getContent(task: ActiveTask | HistoryReport | null): string {
   return task?.content ?? ''
@@ -38,6 +42,7 @@ function getMeta(task: ActiveTask | HistoryReport | null) {
 }
 
 export function AiAnalysisDialog({ task, mode, minimized }: Props) {
+  const navigate = useNavigate()
   const scrollRef = useRef<HTMLDivElement>(null)
   const focusInputRef = useRef<HTMLInputElement>(null)
   const [focus, setFocus] = useState('')
@@ -49,6 +54,8 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
   const meta = getMeta(task)
   const isHistory = mode === 'history'
   const isWorking = phase === 'loading' || phase === 'streaming'
+  // F9: 连接状态条(仅活跃任务;历史报告无连接态)
+  const status = task && 'connection' in task ? aiStreamStatus({ phase, connection: task.connection }) : null
   const open = !!task && !minimized
 
   // 流式时自动滚动到底部
@@ -76,6 +83,26 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch { /* ignore */ }
+  }
+
+  const canTakeaway = !!task?.symbol && (phase === 'done' || isHistory)
+  const handleWatchlist = async () => {
+    if (!task?.symbol) return
+    try {
+      await api.watchlistAdd(task.symbol)
+      toast('已加入自选', 'success')
+    } catch (e: unknown) {
+      toast(e instanceof Error && e.message ? e.message : '加入自选失败', 'error')
+    }
+  }
+  const handleToBacktest = () => {
+    if (!task?.symbol) return
+    const staged = stageScreenerBacktestHandoff({ target: 'strategy', symbols: [task.symbol], asOf: null })
+    if (!staged) {
+      toast('无法送入回测', 'error')
+      return
+    }
+    navigate('/backtest')
   }
 
   if (!open) return null
@@ -111,13 +138,26 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
                   {task && <span className="text-[10px] font-mono text-muted shrink-0">{task.symbol}</span>}
                 </div>
                 <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted">
+                  {status && (
+                    <span className={cn(
+                      'flex items-center gap-1 shrink-0',
+                      status.tone === 'error' ? 'text-danger' : status.tone === 'active' ? 'text-purple-300' : 'text-muted',
+                    )}>
+                      <span className={cn('h-1.5 w-1.5 rounded-full',
+                        status.tone === 'active' && 'bg-purple-400 animate-pulse',
+                        status.tone === 'error' && 'bg-danger',
+                        status.tone === 'muted' && 'bg-muted',
+                      )} />
+                      {status.label}
+                    </span>
+                  )}
                   {meta?.summary ? (
                     <span className="flex items-center gap-1 truncate">
                       <Database className="h-2.5 w-2.5 shrink-0" />
                       <span className="truncate">{meta.summary}</span>
                     </span>
                   ) : isWorking ? <span>正在准备数据…</span> : null}
-                  {phase === 'streaming' && (
+                  {phase === 'streaming' && !status && (
                     <span className="flex items-center gap-1 text-purple-300 shrink-0">
                       <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />生成中
                     </span>
@@ -138,10 +178,19 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
                 )}
                 {/* 生成中:仅最小化(后台继续生成),无关闭按钮 */}
                 {!isHistory && isWorking && (
-                  <button onClick={minimizeDialog} title="最小化为气泡,后台继续生成"
-                    className="p-1.5 rounded-lg hover:bg-elevated text-muted hover:text-foreground transition-colors">
-                    <Minimize2 className="h-4 w-4" />
-                  </button>
+                  <>
+                    <button
+                      onClick={() => { if (task && 'id' in task) void cancelAnalysis(task.id) }}
+                      title="取消本次分析"
+                      className="p-1.5 rounded-lg hover:bg-elevated text-muted hover:text-danger transition-colors"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                    <button onClick={minimizeDialog} title="最小化为气泡,后台继续生成"
+                      className="p-1.5 rounded-lg hover:bg-elevated text-muted hover:text-foreground transition-colors">
+                      <Minimize2 className="h-4 w-4" />
+                    </button>
+                  </>
                 )}
                 {/* 完成态/历史报告:显示关闭按钮 */}
                 {(!isWorking || isHistory) && (
@@ -171,13 +220,13 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
             )}
 
             {/* 错误态 */}
-            {phase === 'error' && (
+            {(phase === 'error' || phase === 'cancelled') && (
               <div className="flex flex-col items-center justify-center py-14 gap-3">
                 <div className="h-11 w-11 rounded-full bg-danger/10 flex items-center justify-center">
                   <AlertTriangle className="h-5 w-5 text-danger" />
                 </div>
-                <div className="text-sm font-medium text-foreground">分析失败</div>
-                <div className="text-xs text-secondary text-center max-w-md px-4">{error}</div>
+                <div className="text-sm font-medium text-foreground">{phase === 'cancelled' ? '已取消' : '分析失败'}</div>
+                <div className="text-xs text-secondary text-center max-w-md px-4">{error || (phase === 'cancelled' ? '本次分析已停止,不会写入历史报告' : '')}</div>
                 {error.includes('AI') && (
                   <button onClick={() => { window.location.href = '/settings?tab=ai' }}
                     className="mt-1 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-elevated border border-border text-xs text-secondary hover:text-foreground transition-colors">
@@ -243,6 +292,18 @@ export function AiAnalysisDialog({ task, mode, minimized }: Props) {
                 </button>
               )}
             </div>
+            {canTakeaway && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <button type="button" onClick={() => { void handleWatchlist() }}
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                  <Star className="h-3 w-3" />加自选
+                </button>
+                <button type="button" onClick={handleToBacktest}
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                  <LineChart className="h-3 w-3" />送回测
+                </button>
+              </div>
+            )}
             <p className="mt-1.5 text-[10px] text-muted/50 leading-relaxed">
               {isHistory
                 ? '历史报告为静态记录;修改关注重点后将作为新任务重新生成。报告仅供参考,不构成投资建议。'
