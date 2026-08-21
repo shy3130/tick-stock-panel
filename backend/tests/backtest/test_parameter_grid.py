@@ -885,3 +885,174 @@ class TestBackwardCompatibility:
         assert params[1].name == "config"
         assert params[4].name == "panel"
         assert params[4].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+# ================================================================
+# run_grid 续跑 (existing=) — 服务重启后从检查点恢复
+# ================================================================
+
+def _three_stats():
+    return {
+        frozenset({"vol_ratio_min": 1.0}.items()): {"sharpe": 1.0, "total_return": 0.1, "max_drawdown": -0.05},
+        frozenset({"vol_ratio_min": 2.0}.items()): {"sharpe": 2.0, "total_return": 0.2, "max_drawdown": -0.05},
+        frozenset({"vol_ratio_min": 3.0}.items()): {"sharpe": 0.5, "total_return": 0.05, "max_drawdown": -0.05},
+    }
+
+
+def _make_interrupted(store, stats_map, keep_ids, *, robustness=None, status="interrupted"):
+    """构造中断现场: 先完整跑一遍, 再保留部分 scenario 模拟服务重启前已落盘的检查点。"""
+    svc = _ScriptedService(stats_map)
+    ng = normalize_grid({"vol_ratio_min": [1.0, 2.0, 3.0]}, STRATEGY_PARAMS, "sharpe")
+    scenarios = expand_scenarios(BASE_CFG, ng)
+    eid = "pg-500d00000001"
+    exp = run_grid(svc, store, BASE_CFG, scenarios, ng, eid, "h")
+    exp.scenarios = [s for s in exp.scenarios if s.scenario_id in keep_ids]
+    exp.status = status
+    exp.robustness = robustness
+    exp.completed = len(exp.scenarios)
+    store.save(exp)
+    return exp, ng, scenarios
+
+
+class TestRunGridResume:
+
+    def test_resume_skips_completed_scenarios(self, tmp_path):
+        """已完成 idx 不重跑: 只补跑缺失 scenario + 为非本进程 best 补一次稳健性。"""
+        store = ParameterGridExperimentStore(tmp_path)
+        exp, ng, scenarios = _make_interrupted(store, _three_stats(), keep_ids={"s0000", "s0001"})
+
+        svc2 = _ScriptedService(_three_stats())
+        resumed = run_grid(svc2, store, BASE_CFG, scenarios, ng, exp.experiment_id, "h", existing=exp)
+
+        # s0002 补跑 1 次; best=s0001 是已落盘场景 (本进程无净值) → 稳健性补跑 1 次
+        assert svc2.run_count == 2
+        assert resumed.status == "completed"
+        assert resumed.completed == 3
+        assert len(resumed.scenarios) == 3
+        by_id = {s.scenario_id: s for s in resumed.scenarios}
+        # rank / pareto 收尾对已有+新增统一重算
+        assert by_id["s0001"].rank == 1
+        assert by_id["s0000"].rank == 2
+        assert by_id["s0002"].rank == 3
+        assert resumed.best_scenario_id == "s0001"
+        assert resumed.robustness is not None
+        assert "bootstrap" in resumed.robustness
+        # 持久化可读
+        assert store.load(exp.experiment_id).status == "completed"
+
+    def test_resume_does_not_retry_errored_scenarios(self, tmp_path):
+        """中断前已 error 的场景确定性不重试, 原样保留。"""
+        store = ParameterGridExperimentStore(tmp_path)
+        exp, ng, scenarios = _make_interrupted(
+            store, _three_stats(), keep_ids={"s0000", "s0001"},
+            robustness={"exit_breakdown": []},
+        )
+        for s in exp.scenarios:
+            if s.scenario_id == "s0001":
+                s.error = "boom"
+                s.stats = {}
+                s.score = None
+                s.rank = 0
+        store.save(exp)
+
+        svc2 = _ScriptedService(_three_stats())
+        resumed = run_grid(svc2, store, BASE_CFG, scenarios, ng, exp.experiment_id, "h", existing=exp)
+
+        # 只补跑 s0002; robustness 已有 → 不再重跑 best
+        assert svc2.run_count == 1
+        by_id = {s.scenario_id: s for s in resumed.scenarios}
+        assert by_id["s0001"].error == "boom"
+        assert by_id["s0001"].rank == 0
+        assert by_id["s0000"].rank == 1
+        assert by_id["s0002"].rank == 2
+        assert resumed.status == "completed"
+
+    def test_resume_all_done_runs_nothing(self, tmp_path):
+        """全部 scenario 已落盘且稳健性已有 → 零重跑, 直接收尾。"""
+        store = ParameterGridExperimentStore(tmp_path)
+        exp, ng, scenarios = _make_interrupted(
+            store, _three_stats(), keep_ids={"s0000", "s0001", "s0002"},
+            robustness={"exit_breakdown": []},
+        )
+
+        svc2 = _ScriptedService(_three_stats())
+        resumed = run_grid(svc2, store, BASE_CFG, scenarios, ng, exp.experiment_id, "h", existing=exp)
+
+        assert svc2.run_count == 0
+        assert resumed.status == "completed"
+        assert resumed.completed == 3
+        assert len(resumed.scenarios) == 3
+
+    def test_resume_preserves_created_at_and_labels_resume(self, tmp_path):
+        """续跑保留 created_at, 且 runtime label 能看出是续跑。"""
+        store = ParameterGridExperimentStore(tmp_path)
+        exp, ng, scenarios = _make_interrupted(store, _three_stats(), keep_ids={"s0000"})
+
+        events = []
+        svc2 = _ScriptedService(_three_stats())
+        resumed = run_grid(
+            svc2, store, BASE_CFG, scenarios, ng, exp.experiment_id, "h",
+            progress_cb=events.append, existing=exp,
+        )
+
+        assert resumed.created_at == exp.created_at
+        assert any("续跑" in e["label"] for e in events)
+        assert resumed.status == "completed"
+
+    def test_resume_best_rerun_failure_is_soft(self, tmp_path):
+        """补跑 best 失败时不阻塞实验完成, 稳健性保持缺失。"""
+        store = ParameterGridExperimentStore(tmp_path)
+        exp, ng, scenarios = _make_interrupted(store, _three_stats(), keep_ids={"s0000", "s0001"})
+
+        class _FlakyService(_ScriptedService):
+            def run(self, config, progress_cb=None, cancel_event=None, panel=None):
+                if (config.params or {}).get("vol_ratio_min") == 2.0:
+                    raise RuntimeError("flaky rerun")
+                return super().run(config, progress_cb=progress_cb, cancel_event=cancel_event, panel=panel)
+
+        svc2 = _FlakyService(_three_stats())
+        resumed = run_grid(svc2, store, BASE_CFG, scenarios, ng, exp.experiment_id, "h", existing=exp)
+
+        # 只成功补跑了 s0002; best=s0001 补跑抛错被吞掉
+        assert svc2.run_count == 1
+        assert resumed.status == "completed"
+        assert resumed.robustness is None
+        assert resumed.best_scenario_id == "s0001"
+
+    def test_resume_cancel_writes_cancelled(self, tmp_path):
+        """续跑中再次取消仍落盘 cancelled。"""
+        store = ParameterGridExperimentStore(tmp_path)
+        exp, ng, scenarios = _make_interrupted(store, _three_stats(), keep_ids={"s0000"})
+
+        svc2 = _ScriptedService(_three_stats())
+        cancel_event = threading.Event()
+        cancel_event.set()
+        resumed = run_grid(
+            svc2, store, BASE_CFG, scenarios, ng, exp.experiment_id, "h",
+            cancel_event=cancel_event, existing=exp,
+        )
+
+        assert resumed.status == "cancelled"
+        # 已完成的 s0000 原样保留, 未完成的标记 cancelled
+        by_id = {s.scenario_id: s for s in resumed.scenarios}
+        assert by_id["s0000"].error is None
+        assert by_id["s0001"].error == "cancelled"
+        assert by_id["s0002"].error == "cancelled"
+
+    def test_resume_completed_count_starts_from_existing(self, tmp_path):
+        """进度事件与 runtime 的 completed 从已有条数起算。"""
+        store = ParameterGridExperimentStore(tmp_path)
+        exp, ng, scenarios = _make_interrupted(store, _three_stats(), keep_ids={"s0000", "s0001"})
+
+        events = []
+        svc2 = _ScriptedService(_three_stats())
+        run_grid(
+            svc2, store, BASE_CFG, scenarios, ng, exp.experiment_id, "h",
+            progress_cb=events.append, existing=exp,
+        )
+
+        scenario_events = [e for e in events if e.get("type") == "scenario_done"]
+        # loading 事件也携带已有进度
+        assert events[0]["completed"] == 2
+        assert [e["completed"] for e in scenario_events] == [3]
+        assert events[0]["total"] == 3

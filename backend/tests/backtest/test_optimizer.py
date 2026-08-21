@@ -1,6 +1,7 @@
 """策略寻优纯逻辑测试 — 不依赖真实行情。"""
 from __future__ import annotations
 
+import threading
 from datetime import date
 
 import numpy as np
@@ -11,6 +12,8 @@ from app.backtest.optimizer import (
     MAX_COMBO_STRATEGIES,
     PER_SYMBOL_MAX,
     UniverseSpec,
+    SearchExperiment,
+    SearchScenarioResult,
     build_universes,
     calendar_phases,
     classify_board,
@@ -460,6 +463,7 @@ def test_negative_train_still_runs_holdout(tmp_path):
     assert exp.scenarios[0].admitted is True
     assert exp.recommended_ids == [exp.scenarios[0].scenario_id]
 
+
 def test_equity_to_returns():
     rets = equity_to_returns([
         {"date": "a", "value": 100},
@@ -468,3 +472,250 @@ def test_equity_to_returns():
     ])
     assert rets[0] == pytest.approx(0.1)
     assert rets[1] == pytest.approx(99 / 110 - 1)
+
+
+def test_from_dict_old_file_without_request_defaults_none():
+    exp = SearchExperiment.from_dict({
+        "experiment_id": "so-old00000001",
+        "config_hash": "h",
+        "objective": "sharpe",
+        "start": "2020-01-01",
+        "end": "2026-08-14",
+        "train_end": "2024-12-31",
+        "holdout_start": "2025-01-01",
+        "requested_count": 1,
+        "scenario_count": 1,
+        "max_scenarios": 1,
+        "truncated": False,
+        "status": "interrupted",
+        "unknown_future_field": {"x": 1},
+    })
+    assert exp.request is None
+    assert exp.status == "interrupted"
+
+
+def _resume_setup(strategy_ids: list[str]):
+    train_start, train_end = date(2020, 1, 1), date(2024, 12, 31)
+    holdout_start, holdout_end = date(2025, 1, 1), date(2026, 8, 14)
+    universes = [UniverseSpec("all_a", "全A", "all_a", None)]
+    base = StrategyBacktestConfig(strategy_id=strategy_ids[0], symbols=None, start=train_start, end=holdout_end)
+    scenarios, requested, truncated = expand_search_scenarios(
+        strategy_ids=strategy_ids,
+        universes=universes,
+        holding_days=[5],
+        matchings=["open_t+1"],
+        base=base,
+    )
+    return scenarios, requested, truncated, train_start, train_end, holdout_start, holdout_end
+
+
+def test_run_search_resume_skips_completed_train_and_holdout(tmp_path):
+    scenarios, requested, truncated, train_start, train_end, holdout_start, holdout_end = _resume_setup(["keep", "todo"])
+    sid_keep = next(s.scenario_id for s in scenarios if s.strategy_id == "keep")
+    done = SearchScenarioResult(
+        scenario_id=sid_keep,
+        strategy_id="keep",
+        universe_id="all_a",
+        universe_label="全A",
+        universe_kind="all_a",
+        holding_days=5,
+        matching="open_t+1",
+        train_stats={"sharpe": 1.2, "total_return": 0.4, "max_drawdown": -0.1, "n_trades": 40, "pending_exit_positions": 0},
+        holdout_stats={"sharpe": 0.8, "total_return": 0.12, "max_drawdown": -0.08, "n_trades": 12, "pending_exit_positions": 0},
+        score=1.2,
+        admitted=True,
+    )
+    existing = SearchExperiment(
+        experiment_id="so-0aaa00000001",
+        config_hash="h1",
+        objective="sharpe",
+        start=train_start.isoformat(),
+        end=holdout_end.isoformat(),
+        train_end=train_end.isoformat(),
+        holdout_start=holdout_start.isoformat(),
+        requested_count=requested,
+        scenario_count=len(scenarios),
+        max_scenarios=len(scenarios),
+        truncated=truncated,
+        status="interrupted",
+        scenarios=[done],
+        created_at="2026-01-01T00:00:00+00:00",
+        request={"strategy_ids": ["keep", "todo"]},
+    )
+    table = {
+        ("todo", train_start, train_end, 5): {
+            "sharpe": 0.5, "total_return": 0.1, "max_drawdown": -0.1, "n_trades": 20, "pending_exit_positions": 0,
+        },
+    }
+    svc = _ScriptedService(table)
+    store = OptimizerExperimentStore(tmp_path)
+    exp = run_search(
+        svc,
+        store,
+        experiment_id="so-0aaa00000001",
+        config_hash="h1",
+        objective="sharpe",
+        scenarios=scenarios,
+        requested_count=requested,
+        truncated=truncated,
+        train_start=train_start,
+        train_end=train_end,
+        holdout_start=holdout_start,
+        holdout_end=holdout_end,
+        min_trades=10,
+        top_k=1,
+        existing=existing,
+    )
+    # 只补跑缺失训练的 todo；keep 的训练与留出都不重跑
+    assert svc.calls == [("todo", train_start, train_end, 5)]
+    assert exp.status == "completed"
+    assert "resumed_after_interrupt" in exp.warnings
+    # 缺本进程训练曲线：DSR/PBO 置空并标记，不伪造
+    assert "resumed_partial_diagnostics" in exp.warnings
+    assert exp.diagnostics["dsr"] is None
+    assert exp.diagnostics["pbo"] is None
+    # created_at 与 request 快照保留
+    assert exp.created_at == "2026-01-01T00:00:00+00:00"
+    assert exp.request == {"strategy_ids": ["keep", "todo"]}
+    kept = next(s for s in exp.scenarios if s.strategy_id == "keep")
+    assert kept.holdout_stats["total_return"] == 0.12
+    assert exp.recommended_ids == [sid_keep]
+
+
+def test_run_search_resume_reruns_missing_holdout(tmp_path):
+    scenarios, requested, truncated, train_start, train_end, holdout_start, holdout_end = _resume_setup(["keep"])
+    sid_keep = next(s.scenario_id for s in scenarios if s.strategy_id == "keep")
+    done = SearchScenarioResult(
+        scenario_id=sid_keep,
+        strategy_id="keep",
+        universe_id="all_a",
+        universe_label="全A",
+        universe_kind="all_a",
+        holding_days=5,
+        matching="open_t+1",
+        train_stats={"sharpe": 1.2, "total_return": 0.4, "max_drawdown": -0.1, "n_trades": 40, "pending_exit_positions": 0},
+        score=1.2,
+        holdout_stats=None,
+    )
+    existing = SearchExperiment(
+        experiment_id="so-0aaa00000002",
+        config_hash="h2",
+        objective="sharpe",
+        start=train_start.isoformat(),
+        end=holdout_end.isoformat(),
+        train_end=train_end.isoformat(),
+        holdout_start=holdout_start.isoformat(),
+        requested_count=requested,
+        scenario_count=len(scenarios),
+        max_scenarios=len(scenarios),
+        truncated=truncated,
+        status="interrupted",
+        scenarios=[done],
+        request={"strategy_ids": ["keep"]},
+    )
+    table = {
+        ("keep", holdout_start, holdout_end, 5): {
+            "sharpe": 0.9, "total_return": 0.15, "max_drawdown": -0.08, "n_trades": 12, "pending_exit_positions": 0,
+        },
+    }
+    svc = _ScriptedService(table)
+    exp = run_search(
+        svc,
+        OptimizerExperimentStore(tmp_path),
+        experiment_id="so-0aaa00000002",
+        config_hash="h2",
+        objective="sharpe",
+        scenarios=scenarios,
+        requested_count=requested,
+        truncated=truncated,
+        train_start=train_start,
+        train_end=train_end,
+        holdout_start=holdout_start,
+        holdout_end=holdout_end,
+        min_trades=10,
+        top_k=1,
+        existing=existing,
+    )
+    # 训练不重跑，只补缺失的留出
+    assert svc.calls == [("keep", holdout_start, holdout_end, 5)]
+    assert exp.status == "completed"
+    kept = exp.scenarios[0]
+    assert kept.holdout_stats is not None
+    assert kept.admitted is True
+    assert "resumed_after_interrupt" in exp.warnings
+    assert exp.diagnostics["dsr"] is None
+    assert "resumed_partial_diagnostics" in exp.warnings
+
+
+def test_run_search_cancel_during_resume_writes_cancelled(tmp_path):
+    scenarios, requested, truncated, train_start, train_end, holdout_start, holdout_end = _resume_setup(["keep"])
+    cancel_event = threading.Event()
+    svc = _ScriptedService({})
+    existing = SearchExperiment(
+        experiment_id="so-0aaa00000003",
+        config_hash="h3",
+        objective="sharpe",
+        start=train_start.isoformat(),
+        end=holdout_end.isoformat(),
+        train_end=train_end.isoformat(),
+        holdout_start=holdout_start.isoformat(),
+        requested_count=requested,
+        scenario_count=len(scenarios),
+        max_scenarios=len(scenarios),
+        truncated=truncated,
+        status="interrupted",
+        request={"strategy_ids": ["keep"]},
+    )
+    cancel_event.set()
+    exp = run_search(
+        svc,
+        OptimizerExperimentStore(tmp_path),
+        experiment_id="so-0aaa00000003",
+        config_hash="h3",
+        objective="sharpe",
+        scenarios=scenarios,
+        requested_count=requested,
+        truncated=truncated,
+        train_start=train_start,
+        train_end=train_end,
+        holdout_start=holdout_start,
+        holdout_end=holdout_end,
+        cancel_event=cancel_event,
+        existing=existing,
+    )
+    assert exp.status == "cancelled"
+    assert svc.calls == []
+
+
+def test_run_search_fresh_persists_request_snapshot(tmp_path):
+    scenarios, requested, truncated, train_start, train_end, holdout_start, holdout_end = _resume_setup(["keep"])
+    table = {
+        ("keep", train_start, train_end, 5): {
+            "sharpe": 1.2, "total_return": 0.4, "max_drawdown": -0.1, "n_trades": 40, "pending_exit_positions": 0,
+        },
+        ("keep", holdout_start, holdout_end, 5): {
+            "sharpe": 0.8, "total_return": 0.12, "max_drawdown": -0.08, "n_trades": 12, "pending_exit_positions": 0,
+        },
+    }
+    store = OptimizerExperimentStore(tmp_path)
+    exp = run_search(
+        _ScriptedService(table),
+        store,
+        experiment_id="so-0aaa00000004",
+        config_hash="h4",
+        objective="sharpe",
+        scenarios=scenarios,
+        requested_count=requested,
+        truncated=truncated,
+        train_start=train_start,
+        train_end=train_end,
+        holdout_start=holdout_start,
+        holdout_end=holdout_end,
+        min_trades=10,
+        top_k=1,
+        request_snapshot={"strategy_ids": ["keep"], "years": 8},
+    )
+    assert exp.status == "completed"
+    assert exp.request == {"strategy_ids": ["keep"], "years": 8}
+    loaded = store.load("so-0aaa00000004")
+    assert loaded.request == {"strategy_ids": ["keep"], "years": 8}

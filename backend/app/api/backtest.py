@@ -17,6 +17,12 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.backtest.job_store import (
+    BacktestJobStore,
+    DurableJob,
+    LEASE_OWNER,
+    new_job,
+)
 from app.backtest.metrics import MetricContext
 from app.backtest.provenance import build_run_provenance
 from app.backtest.run_store import (
@@ -1583,6 +1589,173 @@ def _make_factor_job_key(
     )
     return f"factor:{hashlib.md5(raw.encode()).hexdigest()[:12]}"
 
+# ================================================================
+# DurableJob: SSE 任务磁盘生命周期 (重启续跑契约模块 D)
+# ================================================================
+
+# progress 心跳节流间隔: 间隔内的进度只进内存回放, 不落盘
+_DURABLE_HEARTBEAT_SECONDS = 5.0
+
+
+def _job_store(request: Request) -> BacktestJobStore | None:
+    """DurableJob 存取入口 (与 run_store 同一 data_dir 根)。
+
+    app.state 缺 repo 时返回 None 降级: durable 功能整体禁用 (仅出现在
+    无完整 app 装配的单测桩里), SSE 行为回到现状, 不因此 500。
+    """
+    try:
+        return BacktestJobStore(request.app.state.repo.store.data_dir)
+    except AttributeError:
+        logger.debug("app.state.repo 不可用, 回测任务磁盘持久化降级关闭")
+        return None
+
+
+def _cancelled_stream_response(message: str = "回测已取消") -> StreamingResponse:
+    """磁盘已 cancelled 的任务: 只回取消错误, 不重启 (cancelled 不可 resume)。"""
+    async def _gen():
+        yield f"event: error\ndata: {json.dumps({'message': message}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+def _admit_durable_stream(
+    store: BacktestJobStore | None, job_key: str
+) -> tuple[bool, DurableJob | None]:
+    """无内存任务时的磁盘准入, 返回 (拒绝重启, interrupted 记录)。
+
+    - cancelled → 拒绝重启 (前端只能看到取消错误)
+    - interrupted → 返回记录, 调用方整单重跑 (attempt+1, resumed_from_interrupt)
+    - 其余 (无记录/终态/store 降级) → 现行为: 当新任务处理
+    """
+    if store is None:
+        return False, None
+    durable = store.get_by_key(job_key)
+    if durable is None:
+        return False, None
+    if durable.status == "cancelled":
+        return True, None
+    if durable.status == "interrupted":
+        return False, durable
+    return False, None
+
+
+def _start_durable_job(
+    store: BacktestJobStore | None,
+    job_key: str,
+    kind: str,
+    request_snapshot: dict,
+    interrupted: DurableJob | None,
+) -> str | None:
+    """开跑前落盘 running: 新建记录或把 interrupted 转为续跑; 失败仅告警不阻塞回测。"""
+    if store is None:
+        return None
+    try:
+        if interrupted is not None:
+            interrupted.status = "running"
+            interrupted.attempt += 1
+            interrupted.resumed_from_interrupt = True
+            interrupted.error = None
+            interrupted.progress = None
+            interrupted.run_id = None
+            if request_snapshot:
+                interrupted.request = request_snapshot
+            interrupted.lease_owner = LEASE_OWNER
+            interrupted.heartbeat_at = interrupted.updated_at = _utc_now_iso()
+            store.save(interrupted)
+            return interrupted.job_id
+        durable = new_job(job_key=job_key, kind=kind, request=request_snapshot)
+        store.save(durable)
+        return durable.job_id
+    except Exception:
+        logger.warning("回测任务落盘失败 job_key=%s", job_key, exc_info=True)
+        return None
+
+
+def _make_progress_recorder(store: BacktestJobStore | None, job_id: str | None):
+    """进度回调的落盘侧: ≥5s 节流写 heartbeat + 最近一条 progress。
+
+    仅在磁盘状态仍为 running 时写, 避免把 cancel 已落盘的 cancelled 改回去;
+    落盘失败只告警, 不影响回测本身。
+    """
+    last = [0.0]
+
+    def record(progress: dict) -> None:
+        if store is None or job_id is None:
+            return
+        now = time.monotonic()
+        if now - last[0] < _DURABLE_HEARTBEAT_SECONDS:
+            return
+        last[0] = now
+        try:
+            durable = store.get(job_id)
+            if durable is None or durable.status != "running":
+                return
+            durable.progress = json_safe(progress) if isinstance(progress, dict) else None
+            durable.heartbeat_at = durable.updated_at = _utc_now_iso()
+            store.save(durable)
+        except Exception:
+            logger.warning("回测任务心跳落盘失败 job_id=%s", job_id, exc_info=True)
+
+    return record
+
+
+def _finalize_durable_job(
+    store: BacktestJobStore | None, job_id: str | None, job: "_BacktestJob"
+) -> None:
+    """工作线程结束时收敛磁盘终态 (cancelled/failed/completed)。
+
+    必须在 job.done 置位前调用, 保证 SSE 观察到 done 时磁盘已是终态。
+    Run 本体的持久化仍在 SSE done 事件 (现契约), 这里只记 run_id;
+    cancel 端点已落盘的 cancelled 不得被完成态覆盖。
+    """
+    if store is None or job_id is None:
+        return
+    result_error = getattr(job.result, "error", None)
+    cancelled = result_error == "cancelled" or (
+        job.cancel_event.is_set() and job.result is None
+    )
+    try:
+        durable = store.get(job_id)
+        if durable is None:
+            return
+        now = _utc_now_iso()
+        if durable.status != "cancelled":
+            if cancelled:
+                durable.status = "cancelled"
+                durable.error = None
+            elif job.error or result_error:
+                durable.status = "failed"
+                durable.error = str(job.error or result_error)[:2000]
+            else:
+                durable.status = "completed"
+                durable.run_id = getattr(job.result, "run_id", None) or durable.run_id
+        durable.updated_at = durable.heartbeat_at = now
+        store.save(durable)
+    except Exception:
+        logger.warning("回测任务终态落盘失败 job_id=%s", job_id, exc_info=True)
+
+
+def _cancel_durable_job(request: Request, job_key: str) -> bool:
+    """取消的磁盘侧: 非终态 (queued/running/interrupted) → cancelled。
+
+    重启后内存任务不存在时也必须落盘, 否则恢复流程会把用户取消的
+    任务误当 interrupted 续跑。
+    """
+    try:
+        store = _job_store(request)
+        if store is None:
+            return False
+        durable = store.get_by_key(job_key)
+        if durable is None or durable.status not in ("queued", "running", "interrupted"):
+            return False
+        durable.status = "cancelled"
+        durable.updated_at = durable.heartbeat_at = _utc_now_iso()
+        store.save(durable)
+        return True
+    except Exception:
+        logger.warning("回测任务取消落盘失败 job_key=%s", job_key, exc_info=True)
+        return False
+
 
 @router.get("/strategy/stream")
 async def strategy_stream(
@@ -1703,12 +1876,48 @@ async def strategy_stream(
         bar_precision,
     )
 
+    # 重启续跑契约 (模块 D): 存足以重建本 query 的原始请求字段。
+    request_snapshot = {
+        "strategy_id": strategy_id,
+        "symbols": symbols,
+        "start": start,
+        "end": end,
+        "matching": matching,
+        "entry_fill": entry_fill,
+        "exit_fill": exit_fill,
+        "fees_pct": fees_pct,
+        "stamp_tax_pct": stamp_tax_pct,
+        "slippage_bps": slippage_bps,
+        "max_positions": max_positions,
+        "max_exposure_pct": max_exposure_pct,
+        "initial_capital": initial_capital,
+        "position_sizing": position_sizing,
+        "params": params,
+        "overrides": overrides,
+        "mode": mode,
+        "holding_days": holding_days,
+        "regime_filter": regime_filter,
+        "benchmark_symbol": benchmark_symbol_norm,
+        "benchmark_run_id": benchmark_run_id,
+        "risk_free_rate": risk_free_rate,
+        "max_participation_pct": max_participation_pct,
+        "participation_volume_window": participation_volume_window,
+        "min_listed_days": min_listed_days,
+        "bar_precision": bar_precision,
+    }
+
     _cleanup_stale_jobs()
 
-    # 获取或创建任务
+    # 获取或创建任务; 无内存任务时按磁盘 DurableJob 准入:
+    # cancelled 只回取消错误不重启, interrupted 整单重跑 (SSE 先推 event: resumed)。
+    durable_store = _job_store(request)
+    interrupted_job: DurableJob | None = None
     with _jobs_lock:
         job = _running_jobs.get(job_key)
         if job is None:
+            refuse_cancelled, interrupted_job = _admit_durable_stream(durable_store, job_key)
+            if refuse_cancelled:
+                return _cancelled_stream_response()
             job = _BacktestJob(job_key)
             _running_jobs[job_key] = job
             is_new = True
@@ -1719,6 +1928,25 @@ async def strategy_stream(
 
         # 如果是新任务, 启动回测线程
         if is_new and not job.done:
+            durable_id = _start_durable_job(
+                durable_store, job_key, "strategy", request_snapshot, interrupted_job,
+            )
+            if interrupted_job is not None:
+                # 契约模块 D: resumed 必须是该连接的第一个 SSE 事件
+                yield (
+                    "event: resumed\ndata: "
+                    + json.dumps(
+                        {"message": "服务已重启，策略回测无法从中途续跑，正在整单重跑"},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+            record_heartbeat = _make_progress_recorder(durable_store, durable_id)
+
+            def _on_progress(detail: dict) -> None:
+                job.progress.append(detail)
+                record_heartbeat(detail)
+
             cfg = StrategyBacktestConfig(
                 strategy_id=strategy_id,
                 symbols=[s.strip() for s in symbols.split(",") if s.strip()] if symbols else None,
@@ -1773,16 +2001,17 @@ async def strategy_stream(
                         else None
                     )
                     result = svc.run(
-                        cfg, lambda d: job.progress.append(d), job.cancel_event,
+                        cfg, _on_progress, job.cancel_event,
                         listing_dates=listing_dates,
                         benchmark_run=benchmark_run,
                         minute_data=minute_data,
                     )
                     job.result = result
-                    job.done = True
-                    job.finish_ts = time.time()
                 except Exception as e:
                     job.error = str(e)
+                finally:
+                    # 先落盘终态再置 done: SSE 观察到 done 时磁盘已是终态
+                    _finalize_durable_job(durable_store, durable_id, job)
                     job.done = True
                     job.finish_ts = time.time()
 
@@ -1892,10 +2121,33 @@ async def factor_stream(
         cfg.slippage_bps,
         cfg.risk_free_rate,
     )
+
+    # 重启续跑契约 (模块 D): 存足以重建本 query 的原始请求字段。
+    factor_request_snapshot = {
+        "factor_name": factor_name,
+        "symbols": symbols,
+        "start": start,
+        "end": end,
+        "all_history": start_is_all_history,
+        "n_groups": n_groups,
+        "rebalance": rebalance,
+        "weight": weight,
+        "fees_pct": fees_pct,
+        "slippage_bps": slippage_bps,
+        "risk_free_rate": risk_free_rate,
+    }
+
     _cleanup_stale_jobs()
+    # 无内存任务时按磁盘 DurableJob 准入: cancelled 只回取消错误不重启,
+    # interrupted 整单重跑 (SSE 先推 event: resumed)。
+    durable_store = _job_store(request)
+    interrupted_job: DurableJob | None = None
     with _jobs_lock:
         job = _running_jobs.get(job_key)
         if job is None:
+            refuse_cancelled, interrupted_job = _admit_durable_stream(durable_store, job_key)
+            if refuse_cancelled:
+                return _cancelled_stream_response("因子回测已取消")
             job = _BacktestJob(job_key)
             _running_jobs[job_key] = job
             is_new = True
@@ -1905,11 +2157,30 @@ async def factor_stream(
     async def event_generator():
 
         if is_new and not job.done:
+            durable_id = _start_durable_job(
+                durable_store, job_key, "factor", factor_request_snapshot, interrupted_job,
+            )
+            if interrupted_job is not None:
+                # 契约模块 D: resumed 必须是该连接的第一个 SSE 事件
+                yield (
+                    "event: resumed\ndata: "
+                    + json.dumps(
+                        {"message": "服务已重启，因子回测无法从中途续跑，正在整单重跑"},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+            record_heartbeat = _make_progress_recorder(durable_store, durable_id)
+
+            def _on_progress(detail: dict) -> None:
+                job.progress.append(detail)
+                record_heartbeat(detail)
+
             def _run_factor():
                 try:
                     result = svc.run(
                         cfg,
-                        lambda detail: job.progress.append(detail),
+                        _on_progress,
                         job.cancel_event,
                     )
                     job.result = result
@@ -1917,6 +2188,8 @@ async def factor_stream(
                     logger.exception("因子回测任务异常")
                     job.error = str(e)
                 finally:
+                    # 先落盘终态再置 done: SSE 观察到 done 时磁盘已是终态
+                    _finalize_durable_job(durable_store, durable_id, job)
                     job.done = True
                     job.finish_ts = time.time()
 
@@ -1996,8 +2269,13 @@ async def strategy_cancel(request: Request):
         bar_precision=_get("bar_precision", "daily"),
     )
     job = _running_jobs.get(job_key)
-    if job and not job.done:
+    memory_cancelled = bool(job and not job.done)
+    if memory_cancelled:
         job.cancel_event.set()
+    # 内存任务已结束则不改写磁盘终态; 运行中或仅磁盘存在 (重启后) 必须落盘
+    # cancelled, 否则恢复流程会把用户取消的任务误当 interrupted 续跑。
+    disk_cancelled = _cancel_durable_job(request, job_key) if (job is None or not job.done) else False
+    if memory_cancelled or disk_cancelled:
         return {"ok": True}
     return {"ok": False, "message": "任务不存在或已完成"}
 
@@ -2054,8 +2332,12 @@ async def factor_cancel(request: Request):
         cfg.risk_free_rate,
     )
     job = _running_jobs.get(job_key)
-    if job and not job.done:
+    memory_cancelled = bool(job and not job.done)
+    if memory_cancelled:
         job.cancel_event.set()
+    # 同策略取消: 磁盘非终态必须落盘 cancelled, 重启后不得当 interrupted 续跑。
+    disk_cancelled = _cancel_durable_job(request, job_key) if (job is None or not job.done) else False
+    if memory_cancelled or disk_cancelled:
         return {"ok": True}
     return {"ok": False, "message": "任务不存在或已完成"}
 

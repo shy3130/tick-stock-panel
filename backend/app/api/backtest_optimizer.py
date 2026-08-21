@@ -6,6 +6,7 @@
   GET    /api/backtest/optimizer/{id}
   GET    /api/backtest/optimizer/{id}/stream
   POST   /api/backtest/optimizer/{id}/cancel
+  POST   /api/backtest/optimizer/{id}/resume
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.api.backtest import _get_engine, _guard_server_backtest_range
 from app.backtest.optimizer import (
@@ -34,6 +35,7 @@ from app.backtest.optimizer import (
     DEFAULT_YEARS,
     HARD_MAX_SCENARIOS,
     OptimizerExperimentStore,
+    SearchExperiment,
     build_universes,
     classify_board,
     compute_config_hash,
@@ -177,30 +179,25 @@ def optimizer_universes(request: Request):
     }
 
 
-@router.post("/optimizer")
-async def optimizer_launch(req: OptimizerRequest, request: Request):
-    engine = _get_engine(request)
+def _expand_optimizer_scenarios(
+    req: OptimizerRequest,
+    request: Request,
+    *,
+    start: date,
+    end: date,
+    train_end: date,
+) -> tuple:
+    """按请求展开股票池/组合/场景并计算 config_hash；launch 与 resume 共用同一展开路径。
+
+    resume 传入磁盘冻结窗口, 保证 scenario_id 与原实验一致。
+    """
     strategy_engine = request.app.state.strategy_engine
     for sid in req.strategy_ids:
         try:
             strategy_engine.get(sid)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     repo = request.app.state.repo
-    latest = getattr(repo, "local_enriched_latest_date", lambda: None)()
-    earliest = getattr(repo, "earliest_daily_date", lambda: None)()
-    try:
-        start, end, window_warnings = resolve_window(
-            end=req.end, years=req.years, earliest=earliest, latest=latest,
-        )
-        train_start, train_end, holdout_start, holdout_end = split_train_holdout(
-            start, end, train_ratio=req.train_ratio,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _guard_server_backtest_range(start, end)
-
     try:
         industry_map = symbol_dimension_map(repo, "industry", level=2) if (req.industries or req.industry_top_n) else {}
     except Exception:  # noqa: BLE001
@@ -263,7 +260,6 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-
     config_hash = compute_config_hash({
         "strategy_ids": search_ids,
         "include_combos": req.include_combos,
@@ -279,30 +275,75 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
         "max_scenarios": req.max_scenarios,
         "param_grid": req.param_grid or {},
     })
-    experiment_id = f"so-{uuid.uuid4().hex[:12]}"
-    _cleanup_stale_jobs()
-    with _jobs_lock:
-        existing = _find_running(config_hash)
-        if existing is not None:
-            return {
-                "experiment_id": existing.experiment_id,
-                "config_hash": config_hash,
-                "scenario_count": len(scenarios),
-                "requested_count": requested,
-                "truncated": truncated,
-                "objective": req.objective,
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                "train_end": train_end.isoformat(),
-                "holdout_start": holdout_start.isoformat(),
-                "status": "already_running",
-            }
+    return scenarios, requested, truncated, config_hash
 
+
+def _persist_search_failure(
+    store: OptimizerExperimentStore, experiment_id: str, exc: Exception
+) -> None:
+    """工作线程异常时把实验落盘为 failed；磁盘已 cancelled 的不覆盖。"""
+    try:
+        exp = store.load(experiment_id)
+        if exp.status == "cancelled":
+            return
+        exp.status = "failed"
+        exp.error = str(exc)[:2000]
+        store.save(exp)
+    except Exception:  # noqa: BLE001
+        logger.warning("寻优实验 %s 异常退出且无法落盘 failed", experiment_id, exc_info=True)
+
+
+def _launch_search_job(
+    request: Request,
+    store: OptimizerExperimentStore,
+    *,
+    experiment_id: str,
+    config_hash: str,
+    req: OptimizerRequest,
+    scenarios: list,
+    requested: int,
+    truncated: bool,
+    train_start: date,
+    train_end: date,
+    holdout_start: date,
+    holdout_end: date,
+    extra_warnings: list[str] | None = None,
+    existing: SearchExperiment | None = None,
+) -> str:
+    """起后台线程执行寻优；existing 提供时为续跑, 否则为新实验并写入 request 快照。
+
+    返回 "started" 或 "already_running"。claim（内存查重 → 锁内重载磁盘校验 →
+    插入内存任务 → 磁盘标 running）在同一把 _jobs_lock 内完成：续跑返回前磁盘
+    必是 running，并发 resume 不会双开；新实验 (existing=None) 不提前写盘。
+    """
+    engine = _get_engine(request)
+    strategy_engine = request.app.state.strategy_engine
     svc = StrategyBacktestService(engine, strategy_engine)
-    store = _get_store(request)
+    claimed = existing
     with _jobs_lock:
+        mem = _jobs.get(experiment_id)
+        if mem is not None and not mem.done:
+            return "already_running"
+        if existing is not None:
+            # 锁内重载磁盘：handler 校验之后状态可能已被并发请求修改
+            try:
+                claimed = store.load(experiment_id)
+            except KeyError:
+                raise HTTPException(status_code=404, detail=f"实验不存在: {experiment_id}") from None
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if claimed.status not in {"interrupted", "failed"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"实验状态为 {claimed.status}, 仅 interrupted/failed 支持续跑",
+                )
         job = _OptJob(experiment_id, config_hash)
         _jobs[experiment_id] = job
+        if existing is not None:
+            # resume 返回前先把磁盘标 running，GET 不会读到旧的 interrupted/failed
+            claimed.status = "running"
+            claimed.error = None
+            store.save(claimed)
 
     def _progress_cb(evt: dict) -> None:
         job.progress.append(evt)
@@ -329,20 +370,80 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
                 min_trades=req.min_trades,
                 max_drawdown=req.max_drawdown,
                 top_k=req.top_k,
-                extra_warnings=window_warnings,
+                extra_warnings=extra_warnings,
                 progress_cb=_progress_cb,
                 cancel_event=job.cancel_event,
                 param_grid=req.param_grid,
+                existing=claimed,
+                request_snapshot=req.model_dump(mode="json"),
             )
             job.snapshot = exp.to_dict()
         except Exception as exc:  # noqa: BLE001
             logger.exception("optimizer experiment failed")
             job.error = str(exc)
+            _persist_search_failure(store, experiment_id, exc)
         finally:
             job.done = True
             job.finish_ts = time.time()
 
+    # 线程在锁外启动，持锁期间不执行用户回调
     threading.Thread(target=_run, daemon=True).start()
+    return "started"
+
+
+@router.post("/optimizer")
+async def optimizer_launch(req: OptimizerRequest, request: Request):
+    repo = request.app.state.repo
+    latest = getattr(repo, "local_enriched_latest_date", lambda: None)()
+    earliest = getattr(repo, "earliest_daily_date", lambda: None)()
+    try:
+        start, end, window_warnings = resolve_window(
+            end=req.end, years=req.years, earliest=earliest, latest=latest,
+        )
+        train_start, train_end, holdout_start, holdout_end = split_train_holdout(
+            start, end, train_ratio=req.train_ratio,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _guard_server_backtest_range(start, end)
+
+    scenarios, requested, truncated, config_hash = _expand_optimizer_scenarios(
+        req, request, start=start, end=end, train_end=train_end,
+    )
+    experiment_id = f"so-{uuid.uuid4().hex[:12]}"
+    _cleanup_stale_jobs()
+    with _jobs_lock:
+        existing = _find_running(config_hash)
+        if existing is not None:
+            return {
+                "experiment_id": existing.experiment_id,
+                "config_hash": config_hash,
+                "scenario_count": len(scenarios),
+                "requested_count": requested,
+                "truncated": truncated,
+                "objective": req.objective,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "train_end": train_end.isoformat(),
+                "holdout_start": holdout_start.isoformat(),
+                "status": "already_running",
+            }
+
+    launch_status = _launch_search_job(
+        request,
+        _get_store(request),
+        experiment_id=experiment_id,
+        config_hash=config_hash,
+        req=req,
+        scenarios=scenarios,
+        requested=requested,
+        truncated=truncated,
+        train_start=train_start,
+        train_end=train_end,
+        holdout_start=holdout_start,
+        holdout_end=holdout_end,
+        extra_warnings=window_warnings,
+    )
     return {
         "experiment_id": experiment_id,
         "config_hash": config_hash,
@@ -354,7 +455,7 @@ async def optimizer_launch(req: OptimizerRequest, request: Request):
         "end": end.isoformat(),
         "train_end": train_end.isoformat(),
         "holdout_start": holdout_start.isoformat(),
-        "status": "started",
+        "status": launch_status,
     }
 
 
@@ -408,9 +509,99 @@ async def optimizer_stream(experiment_id: str, request: Request):
 
 
 @router.post("/optimizer/{experiment_id}/cancel")
-async def optimizer_cancel(experiment_id: str):
+async def optimizer_cancel(experiment_id: str, request: Request):
+    """取消运行中的寻优。立即落盘 cancelled, 避免重启后被当成 interrupted 续跑。"""
     job = _jobs.get(experiment_id)
+    memory_ok = False
     if job is not None and not job.done:
         job.cancel_event.set()
+        memory_ok = True
+    persisted = False
+    try:
+        exp = _get_store(request).load(experiment_id)
+        if exp.status in {"pending", "running", "interrupted"}:
+            exp.status = "cancelled"
+            _get_store(request).save(exp)
+            persisted = True
+    except (KeyError, ValueError):
+        pass
+    if memory_ok or persisted:
         return {"ok": True, "experiment_id": experiment_id}
     return {"ok": False, "message": "实验不存在或已完成"}
+
+
+@router.post("/optimizer/{experiment_id}/resume")
+async def optimizer_resume(experiment_id: str, request: Request):
+    """从磁盘检查点续跑 interrupted/failed 的寻优实验, 窗口用磁盘冻结值。"""
+    store = _get_store(request)
+    try:
+        exp = store.load(experiment_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"实验不存在: {experiment_id}") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _cleanup_stale_jobs()
+    with _jobs_lock:
+        job = _jobs.get(experiment_id)
+    # 双击恢复：磁盘已 running 且内存任务未结束时直接认已在跑，不报 409
+    if exp.status == "running" and job is not None and not job.done:
+        return {
+            "experiment_id": experiment_id,
+            "config_hash": exp.config_hash,
+            "status": "already_running",
+        }
+    if exp.status not in {"interrupted", "failed"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"实验状态为 {exp.status}, 仅 interrupted/failed 支持续跑",
+        )
+    if not exp.request:
+        raise HTTPException(
+            status_code=409,
+            detail="缺少原始请求快照，无法续跑，请重新发起寻优",
+        )
+
+    # 窗口必须用磁盘冻结值, 禁止 resolve_window (end=None 会漂)
+    try:
+        train_start = date.fromisoformat(exp.start)
+        train_end = date.fromisoformat(exp.train_end)
+        holdout_start = date.fromisoformat(exp.holdout_start)
+        holdout_end = date.fromisoformat(exp.end)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"实验窗口字段损坏, 无法续跑: {exc}") from exc
+    try:
+        req = OptimizerRequest.model_validate(exp.request)
+    except ValidationError as exc:
+        raise HTTPException(status_code=409, detail=f"原始请求快照无法解析, 无法续跑: {exc}") from exc
+
+    scenarios, requested, truncated, _config_hash = _expand_optimizer_scenarios(
+        req, request, start=train_start, end=holdout_end, train_end=train_end,
+    )
+    launch_status = _launch_search_job(
+        request,
+        store,
+        experiment_id=experiment_id,
+        config_hash=exp.config_hash,
+        req=req,
+        scenarios=scenarios,
+        requested=requested,
+        truncated=truncated,
+        train_start=train_start,
+        train_end=train_end,
+        holdout_start=holdout_start,
+        holdout_end=holdout_end,
+        existing=exp,
+    )
+    return {
+        "experiment_id": experiment_id,
+        "config_hash": exp.config_hash,
+        "scenario_count": len(scenarios),
+        "requested_count": requested,
+        "truncated": truncated,
+        "objective": req.objective,
+        "start": exp.start,
+        "end": exp.end,
+        "train_end": exp.train_end,
+        "holdout_start": exp.holdout_start,
+        "status": "resumed" if launch_status == "started" else launch_status,
+    }

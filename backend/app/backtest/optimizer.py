@@ -301,6 +301,9 @@ class SearchExperiment:
     total: int = 0
     runtime: dict = field(default_factory=dict)
     param_grid: dict | None = None
+    request: dict | None = None
+    # 实验级失败原因（status=failed 时由 API 工作线程落盘）；cancelled/运行中为 None
+    error: str | None = None
 
 
     def to_dict(self) -> dict:
@@ -853,8 +856,16 @@ class OptimizerExperimentStore:
         return self.dir / f"{experiment_id}.json"
 
     def save(self, experiment: SearchExperiment) -> None:
+        """原子写。磁盘已是 cancelled 时拒绝被 running 快照复活。"""
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self._path(experiment.experiment_id)
+        if path.exists() and experiment.status != "cancelled":
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                current = None
+            if isinstance(current, dict) and current.get("status") == "cancelled":
+                return
         payload = json.dumps(
             json_safe(experiment.to_dict()),
             ensure_ascii=False,
@@ -909,32 +920,49 @@ def run_search(
     progress_cb: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
     param_grid: dict | None = None,
+    existing: SearchExperiment | None = None,
+    request_snapshot: dict | None = None,
 ) -> SearchExperiment:
-    """训练期全量评估 → DSR/PBO → 留出期只重跑 Top-K。"""
+    """训练期全量评估 → DSR/PBO → 留出期只重跑 Top-K。
+
+    existing 提供时为续跑：保留 created_at 与已完成场景；训练期已有 error 或
+    train_stats 的场景、留出期已有 holdout_stats 的候选均不重跑；缺本进程
+    训练曲线时 DSR/PBO 置空并标记 resumed_partial_diagnostics，禁止伪造。
+    """
     warnings = list(extra_warnings or [])
     warnings.append("survivorship_bias")
     warnings.append("search_is_not_global_optimum")
-    experiment = SearchExperiment(
-        experiment_id=experiment_id,
-        config_hash=config_hash,
-        objective=objective,
-        start=train_start.isoformat(),
-        end=holdout_end.isoformat(),
-        train_end=train_end.isoformat(),
-        holdout_start=holdout_start.isoformat(),
-        requested_count=requested_count,
-        scenario_count=len(scenarios),
-        max_scenarios=len(scenarios),
-        truncated=truncated,
-        status="running",
-        warnings=warnings,
-        created_at=_now(),
-        updated_at=_now(),
-        completed=0,
-        total=len(scenarios),
-    )
-    if param_grid is not None:
-        experiment.param_grid = param_grid
+    if existing is not None:
+        # 续跑：沿用磁盘实验对象，保留 created_at / 已完成场景 / request 快照
+        warnings = list(existing.warnings) + warnings
+        warnings.append("resumed_after_interrupt")
+        experiment = existing
+        experiment.status = "running"
+        experiment.total = len(scenarios)
+        experiment.updated_at = _now()
+    else:
+        experiment = SearchExperiment(
+            experiment_id=experiment_id,
+            config_hash=config_hash,
+            objective=objective,
+            start=train_start.isoformat(),
+            end=holdout_end.isoformat(),
+            train_end=train_end.isoformat(),
+            holdout_start=holdout_start.isoformat(),
+            requested_count=requested_count,
+            scenario_count=len(scenarios),
+            max_scenarios=len(scenarios),
+            truncated=truncated,
+            status="running",
+            warnings=warnings,
+            created_at=_now(),
+            updated_at=_now(),
+            completed=0,
+            total=len(scenarios),
+            request=request_snapshot,
+        )
+        if param_grid is not None:
+            experiment.param_grid = param_grid
     _set_search_runtime(experiment, stage="train", label="训练评估", current="正在排队训练场景")
     store.save(experiment)
 
@@ -942,6 +970,10 @@ def run_search(
     train_curves: dict[str, list[dict]] = {}
     train_returns: dict[str, np.ndarray] = {}
     results: dict[str, SearchScenarioResult] = {}
+    reused_train: set[str] = set()
+    if existing is not None:
+        for item in existing.scenarios:
+            results[item.scenario_id] = item
 
     def _cancelled() -> bool:
         return cancel_event is not None and cancel_event.is_set()
@@ -952,11 +984,16 @@ def run_search(
         for sc in scenarios:
             if _cancelled():
                 break
+            prev = results.get(sc.scenario_id)
+            if prev is not None and (prev.error is not None or prev.train_stats):
+                # 续跑：训练期已有结果（含失败）的场景不重跑
+                reused_train.add(sc.scenario_id)
+                continue
             cfg = sc.config
             cfg.start = train_start
             cfg.end = train_end
             future_map[pool.submit(_run_one, service, cfg, cancel_event)] = sc
-        completed = 0
+        completed = len(reused_train)
         for fut in as_completed(future_map):
             sc = future_map[fut]
             try:
@@ -1027,28 +1064,33 @@ def run_search(
         item.rank = idx
 
     best = next((r for r in ranked if r.score is not None), None)
-    best_returns = train_returns.get(best.scenario_id) if best else None
-    daily_sr = _daily_sharpe(best_returns) if best_returns is not None else None
-    skew = float(best_returns.mean() and ((best_returns - best_returns.mean()) ** 3).mean() / (best_returns.std(ddof=1) ** 3)) if best_returns is not None and best_returns.size >= 4 and best_returns.std(ddof=1) > 1e-12 else 0.0
-    kurt = float(((best_returns - best_returns.mean()) ** 4).mean() / (best_returns.std(ddof=1) ** 4)) if best_returns is not None and best_returns.size >= 4 and best_returns.std(ddof=1) > 1e-12 else 3.0
-    dsr = deflated_sharpe_ratio(
-        daily_sr if daily_sr is not None else float("nan"),
-        n_trials=max(1, len(train_returns)),
-        n_obs=int(best_returns.size) if best_returns is not None else 0,
-        skew=skew,
-        kurtosis=kurt,
-    ) if daily_sr is not None else None
-    pbo = cscv_pbo(list(train_returns.values()))
-    if len(train_returns) > 70:
-        warnings.append("high_trial_count")
+    if reused_train:
+        # 续跑复用了旧场景，本进程训练曲线不全：DSR/PBO 无法完整重算，置空并标记，禁止伪造
+        warnings.append("resumed_partial_diagnostics")
+        experiment.diagnostics = {"dsr": None, "pbo": None}
+    else:
+        best_returns = train_returns.get(best.scenario_id) if best else None
+        daily_sr = _daily_sharpe(best_returns) if best_returns is not None else None
+        skew = float(best_returns.mean() and ((best_returns - best_returns.mean()) ** 3).mean() / (best_returns.std(ddof=1) ** 3)) if best_returns is not None and best_returns.size >= 4 and best_returns.std(ddof=1) > 1e-12 else 0.0
+        kurt = float(((best_returns - best_returns.mean()) ** 4).mean() / (best_returns.std(ddof=1) ** 4)) if best_returns is not None and best_returns.size >= 4 and best_returns.std(ddof=1) > 1e-12 else 3.0
+        dsr = deflated_sharpe_ratio(
+            daily_sr if daily_sr is not None else float("nan"),
+            n_trials=max(1, len(train_returns)),
+            n_obs=int(best_returns.size) if best_returns is not None else 0,
+            skew=skew,
+            kurtosis=kurt,
+        ) if daily_sr is not None else None
+        pbo = cscv_pbo(list(train_returns.values()))
+        if len(train_returns) > 70:
+            warnings.append("high_trial_count")
 
-    experiment.diagnostics = {
-        "dsr": dsr,
-        "best_daily_sharpe": None if daily_sr is None else round(daily_sr, 6),
-        "n_trials": len(train_returns),
-        "expected_max_sharpe": round(expected_max_sharpe(max(1, len(train_returns))), 6),
-        "pbo": pbo,
-    }
+        experiment.diagnostics = {
+            "dsr": dsr,
+            "best_daily_sharpe": None if daily_sr is None else round(daily_sr, 6),
+            "n_trials": len(train_returns),
+            "expected_max_sharpe": round(expected_max_sharpe(max(1, len(train_returns))), 6),
+            "pbo": pbo,
+        }
 
     candidates = [
         r for r in ranked
@@ -1072,6 +1114,10 @@ def run_search(
     for item in candidates:
         if _cancelled():
             break
+        if item.holdout_stats is not None:
+            # 续跑：已有留出结果的候选不重跑
+            holdout_done += 1
+            continue
         sc = by_id[item.scenario_id]
         cfg = sc.config
         cfg.start = holdout_start
@@ -1125,13 +1171,14 @@ def run_search(
 
     admitted = [r for r in ranked if r.admitted]
     experiment.recommended_ids = [r.scenario_id for r in admitted]
-    if admitted:
-        combo_curve = combine_equal_weight([holdout_curves[r.scenario_id] for r in admitted if r.scenario_id in holdout_curves])
+    members = [r for r in admitted if r.scenario_id in holdout_curves]
+    if members:
+        combo_curve = combine_equal_weight([holdout_curves[r.scenario_id] for r in members])
         combo_rets = equity_to_returns(combo_curve)
         combo_sr = _daily_sharpe(combo_rets)
         experiment.ensemble = {
             "kind": "equal_weight_holdout",
-            "members": [r.scenario_id for r in admitted],
+            "members": [r.scenario_id for r in members],
             "n_obs": int(combo_rets.size),
             "daily_sharpe": None if combo_sr is None else round(combo_sr, 6),
             "total_return": None if len(combo_curve) < 2 else round(combo_curve[-1]["value"] / combo_curve[0]["value"] - 1.0, 6),
@@ -1139,7 +1186,8 @@ def run_search(
         }
     else:
         experiment.ensemble = None
-        warnings.append("no_holdout_admitted")
+        if not admitted:
+            warnings.append("no_holdout_admitted")
 
     experiment.warnings = list(dict.fromkeys(warnings))
     experiment.scenarios = ranked

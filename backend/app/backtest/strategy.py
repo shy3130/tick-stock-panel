@@ -18,6 +18,12 @@ from app.backtest.robustness import returns_from_equity_curve
 from app.backtest.universe_gating import apply_listing_age_gate
 from app.backtest.engine import BacktestEngine, MatcherConfig, MinuteExecutionData
 from app.strategy.engine import StrategyDef, StrategyEngine
+from app.strategy.screen_bridge import (
+    SCREEN_SOURCE,
+    ScreenPanelUnsupportedError,
+    classify_screen,
+    screen_record_of,
+)
 
 if TYPE_CHECKING:
     import threading
@@ -215,6 +221,18 @@ class StrategyBacktestService:
             s = self.strategy_engine.get(config.strategy_id)
         except ValueError as e:
             return _err(str(e))
+        # F16 screen 策略 fail-closed 预检: 含回测面板不可算的外部字段 →
+        # 加载面板前显式拒绝, 不静默给出空结果。
+        if s.source == SCREEN_SOURCE:
+            record = screen_record_of(s)
+            if record is not None:
+                supported, unsupported_fields = classify_screen(record)
+                if not supported:
+                    return _err(
+                        "方案包含回测不支持的字段（仅当日面板可算）: "
+                        + "、".join(unsupported_fields)
+                        + "，请移除后重试"
+                    )
 
         params = self._normalize_params(config.params or {}, s)
         overrides = config.overrides or {}
@@ -338,7 +356,11 @@ class StrategyBacktestService:
             )
         else:
             # 策略候选层用于评分归一化；entry_signals 只是买点层, 不参与 score universe。
-            candidate_filter_mask = self._build_candidate_filter_mask(panel, s, params)
+            try:
+                candidate_filter_mask = self._build_candidate_filter_mask(panel, s, params)
+            except ValueError as e:
+                # screen 策略字段在面板不可求值 (fail-closed) → 错误结果, 不空跑。
+                return _err(str(e))
             candidate_mask = basic_mask & candidate_filter_mask
             panel = self._apply_score(panel, s, overrides, universe_mask=candidate_mask)
 
@@ -834,6 +856,10 @@ class StrategyBacktestService:
                     if not result.is_empty():
                         return result["_candidate_filter"].fill_null(False).cast(pl.Boolean)
             except Exception as e:
+                # screen 策略 fail-closed: 面板缺列时显式上抛 (由 run() 转错误结果),
+                # 其余策略维持 fail-open (warning + 空 mask) 现状。
+                if isinstance(e, ScreenPanelUnsupportedError) or s.source == SCREEN_SOURCE:
+                    raise ValueError(str(e)) from e
                 logger.warning("strategy filter_fn failed: %s", e)
                 return false_mask
 

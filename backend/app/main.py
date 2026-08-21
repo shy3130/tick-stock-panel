@@ -152,6 +152,16 @@ async def lifespan(app: FastAPI):
     app.state.strategy_engine = strategy_engine
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
 
+    # 回测任务恢复: 服务重启后把磁盘上遗留的 running/pending (外来 lease)
+    # 标为 interrupted, 并做过期清理; 只标记不自动开跑。
+    try:
+        from app.backtest.job_recovery import recover_stale_backtest_jobs
+        recovered = recover_stale_backtest_jobs(store.data_dir)
+        if any(recovered.values()):
+            logger.info("backtest job recovery: %s", recovered)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("backtest job recovery failed (不影响启动): %s", e)
+
     try:
         from app.services.scheduled_research import ScheduledResearchStore, register_jobs
         register_jobs(app.state.scheduler, ScheduledResearchStore(store.data_dir), app.state)

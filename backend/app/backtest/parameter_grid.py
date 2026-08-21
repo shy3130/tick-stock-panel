@@ -106,7 +106,8 @@ class GridExperiment:
     scenario_count: int
     max_scenarios: int
     truncated: bool
-    status: str = "pending"  # pending | running | completed | cancelled | failed
+    status: str = "pending"  # pending | running | interrupted | completed | cancelled | failed
+    error: str | None = None  # 工作线程异常信息 (failed 时落盘, 重新续跑时清空)
     scenarios: list[GridScenarioResult] = field(default_factory=list)
     best_scenario_id: str | None = None
     robustness: dict | None = None
@@ -147,6 +148,7 @@ def _set_grid_runtime(
     failed: int = 0,
     ok: int = 0,
     last_elapsed_ms: float = 0.0,
+    started_at: str | None = None,
 ) -> None:
     experiment.runtime = build_runtime(
         stage=stage,
@@ -156,11 +158,10 @@ def _set_grid_runtime(
         total=experiment.total if total is None else total,
         failed=failed,
         ok=ok,
-        started_at=experiment.created_at,
+        started_at=started_at or experiment.created_at,
         last_elapsed_ms=last_elapsed_ms,
     )
     experiment.updated_at = experiment.runtime["updated_at"]
-
 
 # ================================================================
 # 纯逻辑: 校验 / 展开 / 哈希 / 打分
@@ -423,9 +424,16 @@ class ParameterGridExperimentStore:
         return self.dir / f"{experiment_id}.json"
 
     def save(self, experiment: GridExperiment) -> None:
-        """原子写: tmp 文件 + os.replace。"""
+        """原子写。磁盘已是 cancelled 时拒绝被 running 快照复活。"""
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self._path(experiment.experiment_id)
+        if path.exists() and experiment.status != "cancelled":
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                current = None
+            if isinstance(current, dict) and current.get("status") == "cancelled":
+                return
         payload = json.dumps(
             json_safe(experiment.to_dict()),
             ensure_ascii=False,
@@ -480,6 +488,7 @@ def run_grid(
     max_workers: int = GRID_MAX_WORKERS,
     progress_cb: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
+    existing: GridExperiment | None = None,
 ) -> GridExperiment:
     """有界并发执行参数网格实验。
 
@@ -489,31 +498,63 @@ def run_grid(
     4. 最优 scenario 复用 robustness.py 后处理
     5. 每完成一个 scenario 原子持久化进度
 
+    传入 ``existing`` (磁盘上 interrupted/failed 的实验) 时进入续跑:
+    已落盘的 ``s{idx:04d}`` 场景 (含 error 场景) 原样保留、确定性不重试,
+    只补跑缺失的 scenario; 收尾对全部场景统一重算 rank / pareto;
+    若稳健性缺失且本进程没有 best 的内存净值曲线, 只重跑 best 单个
+    scenario 再计算稳健性。
+
     返回最终 GridExperiment。
     """
     from app.backtest import robustness as rb
 
     now = _now()
-    experiment = GridExperiment(
-        experiment_id=experiment_id,
-        config_hash=config_hash,
-        strategy_id=base_config.strategy_id,
-        objective=ng.objective,
-        base_config=StrategyBacktestService._config_to_dict(base_config),
-        grid={k: ng.grid[k] for k in sorted(ng.grid)},
-        requested_count=ng.requested_count,
-        scenario_count=ng.scenario_count,
-        max_scenarios=ng.max_scenarios,
-        truncated=ng.truncated,
-        status="running",
-        created_at=now,
-        updated_at=now,
-        total=len(scenarios),
-    )
+    resumed = existing is not None
+    if existing is None:
+        experiment = GridExperiment(
+            experiment_id=experiment_id,
+            config_hash=config_hash,
+            strategy_id=base_config.strategy_id,
+            objective=ng.objective,
+            base_config=StrategyBacktestService._config_to_dict(base_config),
+            grid={k: ng.grid[k] for k in sorted(ng.grid)},
+            requested_count=ng.requested_count,
+            scenario_count=ng.scenario_count,
+            max_scenarios=ng.max_scenarios,
+            truncated=ng.truncated,
+            status="running",
+            created_at=now,
+            updated_at=now,
+            total=len(scenarios),
+        )
+        results: list[tuple[GridScenarioResult, StrategyBacktestResult | None]] = []
+    else:
+        # 续跑: 保留 created_at / 网格定义 / 已完成场景, completed 从已有条数起算。
+        # 已有场景没有本进程的 StrategyBacktestResult, 对应元组第二项为 None。
+        experiment = replace(
+            existing,
+            status="running",
+            updated_at=now,
+            completed=len(existing.scenarios),
+            total=len(scenarios),
+            runtime={},
+            error=None,  # 上一轮失败的错误在重新续跑时清空
+        )
+        results = [(sr, None) for sr in sorted(existing.scenarios, key=lambda s: s.scenario_id)]
     store.save(experiment)
 
+    # 续跑时 ETA 从本次恢复时刻起算 (原 created_at 含停机时间会严重虚高)
+    runtime_started_at = now if resumed else experiment.created_at
+    label_suffix = "（续跑）" if resumed else ""
+
     # ── 预加载共享 panel ──────────────────────────────
-    _set_grid_runtime(experiment, stage="loading", label="加载共享行情面板", current="全场景共用一次加载")
+    _set_grid_runtime(
+        experiment,
+        stage="loading",
+        label=f"加载共享行情面板{label_suffix}",
+        current="全场景共用一次加载",
+        started_at=runtime_started_at,
+    )
     if progress_cb:
         progress_cb(dict(experiment.runtime))
     store.save(experiment)
@@ -523,7 +564,13 @@ def run_grid(
         shared_panel = service.engine.load_panel(base_config.symbols, load_start, load_end)
     except Exception as e:  # noqa: BLE001
         logger.warning("grid shared panel preload failed, falling back to per-scenario load: %s", e)
-    _set_grid_runtime(experiment, stage="grid", label="参数组合回测", current="正在排队参数组合")
+    _set_grid_runtime(
+        experiment,
+        stage="grid",
+        label=f"参数组合回测{label_suffix}",
+        current="正在排队参数组合",
+        started_at=runtime_started_at,
+    )
     store.save(experiment)
 
     keys = sorted(ng.grid.keys())
@@ -560,13 +607,15 @@ def run_grid(
             )
         return sr, result
 
-    results: list[tuple[GridScenarioResult, StrategyBacktestResult | None]] = []
-    completed_count = 0
+    # ── 续跑: 已落盘 scenario_id (含 error) 直接跳过 ──
+    done_ids = {sr.scenario_id for sr, _ in results}
+    remaining = [(i, cfg) for i, cfg in enumerate(scenarios) if f"s{i:04d}" not in done_ids]
+    completed_count = len(results)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_map = {
             pool.submit(_run_one, i, cfg): i
-            for i, cfg in enumerate(scenarios)
+            for i, cfg in remaining
         }
         try:
             for fut in as_completed(future_map):
@@ -591,11 +640,12 @@ def run_grid(
                 _set_grid_runtime(
                     experiment,
                     stage="grid",
-                    label="参数组合回测",
+                    label=f"参数组合回测{label_suffix}",
                     current=format_params(last.params) or last.scenario_id,
                     failed=failed,
                     ok=completed_count - failed,
                     last_elapsed_ms=last.elapsed_ms,
+                    started_at=runtime_started_at,
                 )
                 if progress_cb:
                     progress_cb({**experiment.runtime, "type": "scenario_done", "scenario_id": last.scenario_id})
@@ -608,7 +658,7 @@ def run_grid(
 
     cancelled = cancel_event is not None and cancel_event.is_set()
 
-    # ── 排序 + rank (确定性: score desc → scenario_id asc) ──
+    # ── 排序 + rank (确定性: score desc → scenario_id asc, 覆盖已有+新增) ──
     valid = [sr for sr, _ in results if sr.error is None and sr.score is not None]
     errored = [sr for sr, _ in results if sr.error is not None]
     valid.sort(key=lambda sr: (-(sr.score or 0.0), sr.scenario_id))
@@ -617,6 +667,18 @@ def run_grid(
 
     # ── 严格多目标 Pareto 分层 (独立于目标函数排序) ──
     assign_pareto_fronts([sr for sr, _ in results])
+
+    def _robustness_from(result: StrategyBacktestResult) -> dict:
+        robustness: dict = {}
+        if result.stats.get("full_kind") == "candidate_execution":
+            robustness["time_series_metrics_unavailable"] = "candidate_execution"
+        else:
+            rets = rb.returns_from_equity_curve(result.equity_curve)
+            if len(rets) >= 2:
+                robustness["bootstrap"] = rb.bootstrap_sharpe_ci(rets, n_boot=1000, seed=42)
+                robustness["mc_permutation"] = rb.mc_permutation_pvalue(rets, n_perm=1000, seed=42)
+        robustness["exit_breakdown"] = rb.exit_reason_breakdown(result.trades)
+        return robustness
 
     all_sorted = sorted(results, key=lambda x: x[0].scenario_id)
     experiment.scenarios = [sr for sr, _ in all_sorted]
@@ -629,10 +691,11 @@ def run_grid(
         _set_grid_runtime(
             experiment,
             stage="robustness",
-            label="最优稳健性检验",
+            label=f"最优稳健性检验{label_suffix}",
             current=format_params(best_sr.params) or best_sr.scenario_id,
             failed=len(errored),
             ok=len(valid),
+            started_at=runtime_started_at,
         )
         store.save(experiment)
         best_result: StrategyBacktestResult | None = None
@@ -641,16 +704,18 @@ def run_grid(
                 best_result = res
                 break
         if best_result is not None and best_result.equity_curve:
-            robustness: dict = {}
-            if best_result.stats.get("full_kind") == "candidate_execution":
-                robustness["time_series_metrics_unavailable"] = "candidate_execution"
-            else:
-                rets = rb.returns_from_equity_curve(best_result.equity_curve)
-                if len(rets) >= 2:
-                    robustness["bootstrap"] = rb.bootstrap_sharpe_ci(rets, n_boot=1000, seed=42)
-                    robustness["mc_permutation"] = rb.mc_permutation_pvalue(rets, n_perm=1000, seed=42)
-            robustness["exit_breakdown"] = rb.exit_reason_breakdown(best_result.trades)
-            experiment.robustness = robustness
+            experiment.robustness = _robustness_from(best_result)
+        elif best_result is None and experiment.robustness is None and not cancelled:
+            # 续跑收尾: best 是已落盘场景, 本进程没有它的净值曲线 →
+            # 只重跑这一个 scenario 补算稳健性 (失败不阻塞实验完成)
+            try:
+                best_idx = int(best_sr.scenario_id[1:])
+                rerun = service.run(scenarios[best_idx], cancel_event=cancel_event, panel=shared_panel)
+            except Exception as e:  # noqa: BLE001
+                rerun = None
+                logger.warning("grid resume best-scenario rerun failed: %s", e)
+            if rerun is not None and not rerun.error and rerun.equity_curve:
+                experiment.robustness = _robustness_from(rerun)
 
     _set_grid_runtime(
         experiment,
@@ -659,6 +724,7 @@ def run_grid(
         current=format_params(valid[0].params) if valid else "",
         failed=len(errored),
         ok=len(valid),
+        started_at=runtime_started_at,
     )
     store.save(experiment)
     return experiment

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.api import backtest as backtest_api
 from app.backtest.run_store import BacktestRun, BacktestRunStore, RunSubject
+from app.backtest.job_store import BacktestJobStore, new_job
 from app.services.research_registry import ResearchStore
 
 
@@ -493,3 +494,190 @@ def test_save_backtest_run_replay_after_patch_keeps_patched_metadata(tmp_path: P
     assert saved is not None
     assert saved.favorite is True
     assert saved.label == "对照组"
+
+
+# ── DurableJob: SSE 任务磁盘生命周期 (重启续跑契约模块 D) ─────
+
+
+def _counting_strategy_service(counter: list):
+    """统计 run 次数的服务桩: cancelled 磁盘任务不得触发新计算。"""
+    class _Counting:
+        def __init__(self, *a, **kw):
+            pass
+
+        def run(self, cfg, progress_cb=None, cancel_event=None, **kw):
+            counter[0] += 1
+            return _StubResult()
+
+    return _Counting
+
+
+def _stream_key() -> str:
+    """与 GET /strategy/stream?strategy_id=macd&start=..&end=.. (全默认参数) 同口径。"""
+    return backtest_api._make_job_key(
+        "macd", None, "2026-01-01", "2026-06-30",
+        "open_t+1", None, None, 0.0002, 0.0005, 5.0, 10, 1.0, 1_000_000.0, "equal",
+        None, None, "position", 5, None, "000001.INDEX", 0.0,
+    )
+
+
+def test_strategy_cancel_persists_cancelled_to_disk(client: TestClient, tmp_path: Path):
+    """取消必须同步落盘 cancelled: 重启后不得被当 interrupted 续跑。"""
+    key, _job = _register_stream_job()
+    store = BacktestJobStore(tmp_path)
+    # 真实不变量: 运行中的内存任务开跑时已落盘 running 记录
+    store.save(new_job(job_key=key, kind="strategy", request={"strategy_id": "macd"}))
+    try:
+        resp = client.post("/api/backtest/strategy/cancel", json={
+            "qs": "strategy_id=macd&start=2026-01-01&end=2026-06-30&risk_free_rate=0.03",
+        })
+        assert resp.status_code == 200 and resp.json() == {"ok": True}
+        durable = store.get_by_key(key)
+        assert durable is not None
+        assert durable.status == "cancelled"
+        assert durable.job_key == key
+    finally:
+        backtest_api._running_jobs.pop(key, None)
+
+
+def test_cancelled_disk_job_without_memory_does_not_restart(
+    client: TestClient, tmp_path: Path, monkeypatch
+):
+    """重启后 (无内存 job) 磁盘 cancelled: 只回取消错误, 不启动新计算。"""
+    counter = [0]
+    monkeypatch.setattr(
+        "app.backtest.strategy.StrategyBacktestService", _counting_strategy_service(counter)
+    )
+    client.app.state.backtest_engine = object()  # 跳过真实引擎构建
+    key = _stream_key()
+    store = BacktestJobStore(tmp_path)
+    store.save(new_job(
+        job_key=key, kind="strategy",
+        request={"strategy_id": "macd"}, status="cancelled",
+    ))
+    with client.stream("GET", "/api/backtest/strategy/stream", params={
+        "strategy_id": "macd", "start": "2026-01-01", "end": "2026-06-30",
+    }) as resp:
+        assert resp.status_code == 200
+        text = resp.read().decode()
+    assert "event: error" in text and "回测已取消" in text
+    assert "event: done" not in text
+    assert counter[0] == 0                          # 未启动任何新计算
+    assert key not in backtest_api._running_jobs    # 也不注册幽灵内存任务
+    assert store.get_by_key(key).status == "cancelled"  # 磁盘状态未被改写
+
+
+def test_interrupted_disk_job_auto_reruns_with_resumed_event(
+    client: TestClient, tmp_path: Path, monkeypatch
+):
+    """磁盘 interrupted 重连: SSE 先推 resumed, 整单重跑一次并收敛 completed。"""
+    counter = [0]
+    monkeypatch.setattr(
+        "app.backtest.strategy.StrategyBacktestService", _counting_strategy_service(counter)
+    )
+    client.app.state.backtest_engine = object()
+    key = _stream_key()
+    store = BacktestJobStore(tmp_path)
+    interrupted = new_job(job_key=key, kind="strategy", request={"strategy_id": "macd"})
+    interrupted.status = "interrupted"
+    store.save(interrupted)
+    try:
+        with client.stream("GET", "/api/backtest/strategy/stream", params={
+            "strategy_id": "macd", "start": "2026-01-01", "end": "2026-06-30",
+        }) as resp:
+            assert resp.status_code == 200
+            text = resp.read().decode()
+        assert text.startswith("event: resumed\n")  # resumed 必须是第一个事件
+        assert "正在整单重跑" in text
+        assert "event: done" in text
+        assert counter[0] == 1
+        durable = store.get_by_key(key)
+        assert durable.status == "completed"
+        assert durable.attempt == 1
+        assert durable.resumed_from_interrupt is True
+        assert durable.run_id == "stubrun001"
+        assert durable.request["strategy_id"] == "macd"  # 快照可重建 query
+    finally:
+        backtest_api._running_jobs.pop(key, None)
+
+
+def test_new_stream_job_persists_durable_lifecycle(
+    client: TestClient, tmp_path: Path, monkeypatch
+):
+    """新任务落盘 running→completed 并记 run_id; Run 持久化仍在 SSE done (契约不挪动)。"""
+    monkeypatch.setattr("app.backtest.strategy.StrategyBacktestService", _StubStrategyService)
+    client.app.state.backtest_engine = object()
+    key = _stream_key()
+    try:
+        with client.stream("GET", "/api/backtest/strategy/stream", params={
+            "strategy_id": "macd", "start": "2026-01-01", "end": "2026-06-30",
+        }) as resp:
+            text = resp.read().decode()
+        assert "event: done" in text
+        durable = BacktestJobStore(tmp_path).get_by_key(key)
+        assert durable is not None and durable.kind == "strategy"
+        assert durable.status == "completed"
+        assert durable.run_id == "stubrun001"
+        assert durable.request.get("strategy_id") == "macd"
+        assert durable.request.get("start") == "2026-01-01"
+        # Run 本体的持久化仍在 SSE done 事件里完成
+        assert BacktestRunStore(tmp_path).get("stubrun001") is not None
+    finally:
+        backtest_api._running_jobs.pop(key, None)
+
+
+def test_factor_cancelled_disk_job_does_not_restart(
+    client: TestClient, tmp_path: Path, monkeypatch
+):
+    """因子 stream 同口径: 磁盘 cancelled 只回取消错误, 不重启。"""
+    counter = [0]
+    monkeypatch.setattr(
+        "app.backtest.factor.FactorBacktestService", _counting_strategy_service(counter)
+    )
+    client.app.state.backtest_engine = object()
+    monkeypatch.setattr(backtest_api, "_make_factor_job_key", lambda *a, **kw: "factor:deadbeef12")
+    store = BacktestJobStore(tmp_path)
+    store.save(new_job(job_key="factor:deadbeef12", kind="factor", request={}, status="cancelled"))
+    with client.stream("GET", "/api/backtest/factor/stream", params={
+        "factor_name": "momentum",
+    }) as resp:
+        assert resp.status_code == 200
+        text = resp.read().decode()
+    assert "event: error" in text and "因子回测已取消" in text
+    assert "event: done" not in text
+    assert counter[0] == 0
+    assert "factor:deadbeef12" not in backtest_api._running_jobs
+    # factor:md5 → factor-md5 的文件名映射
+    assert (tmp_path / "research" / "backtest_jobs" / "factor-deadbeef12.json").exists()
+
+
+def test_factor_interrupted_disk_job_auto_reruns(
+    client: TestClient, tmp_path: Path, monkeypatch
+):
+    """因子 stream 的 interrupted 重连: 先 resumed 再整单重跑, attempt+1 收敛 completed。"""
+    counter = [0]
+    monkeypatch.setattr(
+        "app.backtest.factor.FactorBacktestService", _counting_strategy_service(counter)
+    )
+    client.app.state.backtest_engine = object()
+    monkeypatch.setattr(backtest_api, "_make_factor_job_key", lambda *a, **kw: "factor:cafe1234")
+    store = BacktestJobStore(tmp_path)
+    interrupted = new_job(
+        job_key="factor:cafe1234", kind="factor", request={"factor_name": "momentum"}
+    )
+    interrupted.status = "interrupted"
+    store.save(interrupted)
+    try:
+        with client.stream("GET", "/api/backtest/factor/stream", params={
+            "factor_name": "momentum",
+        }) as resp:
+            assert resp.status_code == 200
+            text = resp.read().decode()
+        assert text.startswith("event: resumed\n")
+        assert counter[0] == 1
+        durable = store.get_by_key("factor:cafe1234")
+        assert durable.status == "completed"
+        assert durable.attempt == 1 and durable.resumed_from_interrupt is True
+        assert durable.request["factor_name"] == "momentum"
+    finally:
+        backtest_api._running_jobs.pop("factor:cafe1234", None)
