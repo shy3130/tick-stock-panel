@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2 } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, FlaskConical, BarChart3, AlertTriangle } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { useDataStatus, usePreferences } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
+import { filterActiveScreenerRows, stageScreenerBacktestHandoff, type ScreenerBacktestTarget } from '@/lib/screenerBacktestHandoff'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
@@ -31,6 +33,7 @@ import {
 } from '@/lib/screener-columns'
 
 export function Screener() {
+  const navigate = useNavigate()
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
@@ -302,6 +305,14 @@ export function Screener() {
     return mainRows
   }, [showAll, allRows, filteredRows, filter, activeStrategy, strategyLimits, expiredRowsMap, sort, sortRows, columns])
 
+  // 批量加自选 / 送回测只用未失效的行：_expired 是"今日曾命中、当前已失效"的灰色行
+  const activeDisplayRows = useMemo(() => filterActiveScreenerRows(displayRows), [displayRows])
+
+  // 送回测的 as_of：单策略模式取当前结果日期；全部模式取实际数据源日期（缓存或 runAll）
+  const handoffAsOf = showAll
+    ? (cachedQuery.data?.as_of ?? runAll.data?.as_of ?? null)
+    : (result?.as_of ?? null)
+
   // 日k列是否启用 → 决定是否加载批量 kline 数据
   const candleColumn = useMemo(() =>
     columns.find(c => c.source.type === 'builtin' && c.source.key === 'candle' && c.visible),
@@ -325,7 +336,10 @@ export function Screener() {
 
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
   // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
+  // 必须等 cachedQuery.isFetched（非 isLoading）: 否则缓存未读到时 cacheCoversPool 恒为
+  // false, 会与缓存加载竞态触发多余的 runAll
   useEffect(() => {
+    if (!cachedQuery.isFetched) return
     if (!asOf || !strategies.data?.presets?.length || runAll.isPending || visiblePool.length === 0) return
     const runKey = `${asOf}|${visiblePool.join(',')}|${extColumnsParam}`
     if (runAllDateRef.current === runKey) return
@@ -342,7 +356,7 @@ export function Screener() {
         if (activeStrategy) applyRunAllResult(activeStrategy, asOf, data)
       },
     })
-  }, [asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult])
+  }, [cachedQuery.isFetched, asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult])
 
   const qc = useQueryClient()
 
@@ -471,9 +485,10 @@ export function Screener() {
     }
   }
 
+  // 失效行 (_expired) 不进自选、不进回测
   const handleBatchAdd = () => {
-    if (!displayRows.length) return
-    const symbols = displayRows.map((r: any) => r.symbol)
+    if (!activeDisplayRows.length) return
+    const symbols = activeDisplayRows.map(r => r.symbol)
     batchAdd.mutate(symbols, {
       onSuccess: (data) => {
         setBatchMsg(`已添加 ${data.added} 只到自选`)
@@ -486,12 +501,34 @@ export function Screener() {
     })
   }
 
+  const sendToBacktest = useCallback((target: ScreenerBacktestTarget) => {
+    const symbols = activeDisplayRows.map(r => r.symbol)
+    if (symbols.length === 0) {
+      // S3 review: 全部行失效 (或无命中) 时不写交接 — 空池 + strategyId 会
+      // 让回测页静默切到「全市场 + 该策略」, 用户丢掉原股票池。
+      setBatchMsg('当前结果没有可带入回测的标的代码。')
+      setTimeout(() => setBatchMsg(''), 3000)
+      return
+    }
+    if (stageScreenerBacktestHandoff({
+      target,
+      symbols,
+      asOf: handoffAsOf,
+      // 仅单策略视图下携带当前策略，让回测页直接选中它；全部模式是合并池，不指定
+      strategyId: target === 'strategy' && !showAll && activeStrategy ? activeStrategy : null,
+    }) === 0) {
+      setBatchMsg('当前结果没有可带入回测的标的代码。')
+      setTimeout(() => setBatchMsg(''), 3000)
+      return
+    }
+    navigate('/backtest')
+  }, [activeDisplayRows, handoffAsOf, showAll, activeStrategy, navigate])
 
   return (
     <div className="workspace-page">
       <PageHeader
         title="策略选股"
-        subtitle="基于本地 enriched 表 · 毫秒级 SQL"
+        subtitle="基于本地 enriched 表 · 与监控/回测同一套策略过滤"
         right={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -608,6 +645,22 @@ export function Screener() {
         </section>
         )}
 
+        {runAll.isError && (
+          <div className="flex items-center gap-2 rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger" role="alert">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>策略批量运行失败：{runAll.error instanceof Error ? runAll.error.message : String(runAll.error)}</span>
+          </div>
+        )}
+        {runAll.data?.failed?.length ? (
+          <div className="flex items-start gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning" role="status">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              {runAll.data.failed.length} 个策略运行失败：{runAll.data.failed.map(item => item.strategy_id).join('、')}
+              ，其余策略结果正常显示。
+            </span>
+          </div>
+        ) : null}
+
         <section className="panel">
           <div className="panel-header">
             <div>
@@ -668,6 +721,24 @@ export function Screener() {
                   >
                     <Star className="h-3 w-3" />
                     {batchAdd.isPending ? '添加中…' : '批量加自选'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sendToBacktest('strategy')}
+                    className="btn-secondary h-8 px-2.5 text-xs"
+                    title="以当前选股结果作为股票池进入策略回测"
+                  >
+                    <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
+                    策略回测
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sendToBacktest('factor')}
+                    className="btn-secondary h-8 px-2.5 text-xs"
+                    title="以当前选股结果作为股票池进入因子回测"
+                  >
+                    <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
+                    因子回测
                   </button>
                 </>
               )}

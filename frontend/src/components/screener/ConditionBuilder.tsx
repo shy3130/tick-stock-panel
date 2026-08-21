@@ -1,12 +1,15 @@
 import { useMemo } from 'react'
 import { Plus } from 'lucide-react'
-import type { ScreenerCondition, ScreenerFieldSpec } from '@/lib/api'
+import { SCREENER_CONDITION_GROUPS, type ScreenerCondition, type ScreenerFieldSpec } from '@/lib/api'
+import { latestOnlyBadgeLabel, normalizeConditionGroup } from '@/lib/screenerResult'
 import { ConditionValueEditor, GROUP_LABELS, defaultValue, listValue, numericValue, opsFor } from './ConditionValueEditor'
 
 interface ConditionBuilderProps {
   fields: ScreenerFieldSpec[]
   value: ScreenerCondition[]
   onChange: (conditions: ScreenerCondition[]) => void
+  /** F8: 历史日期下禁用「仅最新日」字段（最新日查询时传 undefined） */
+  isFieldDisabled?: (spec: ScreenerFieldSpec) => boolean
 }
 
 function firstAvailable(fields: ScreenerFieldSpec[]) {
@@ -15,7 +18,8 @@ function firstAvailable(fields: ScreenerFieldSpec[]) {
 
 export function isConditionValid(condition: ScreenerCondition, fields: ScreenerFieldSpec[]): boolean {
   const spec = fields.find(field => field.field === condition.field)
-  if (!spec || spec.availability !== 'available' || !opsFor(spec).includes(condition.op)) return false
+  // latest_only 字段结构上合法（最新日查询可用）；历史日查询由页面在提交前剔除
+  if (!spec || (spec.availability !== 'available' && spec.availability !== 'latest_only') || !opsFor(spec).includes(condition.op)) return false
 
   if (spec.value_type === 'boolean') return typeof condition.value === 'boolean'
   if (spec.value_type === 'numeric') {
@@ -47,7 +51,7 @@ export function areConditionsValid(conditions: ScreenerCondition[], fields: Scre
   return conditions.length > 0 && conditions.length <= 20 && conditions.every(condition => isConditionValid(condition, fields))
 }
 
-export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderProps) {
+export function ConditionBuilder({ fields, value, onChange, isFieldDisabled }: ConditionBuilderProps) {
   const groupedFields = useMemo(() => {
     const groups = new Map<string, ScreenerFieldSpec[]>()
     for (const field of fields) {
@@ -69,7 +73,7 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
     const spec = firstAvailable(fields)
     if (!spec) return
     const op = opsFor(spec)[0] ?? '='
-    onChange([...value, { field: spec.field, op, value: defaultValue(spec, op) }])
+    onChange([...value, { field: spec.field, op, value: defaultValue(spec, op), group: 'A' }])
   }
 
   const changeField = (index: number, field: string) => {
@@ -83,7 +87,7 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
     <div className="space-y-2" aria-label="结构化筛选条件">
       {value.length === 0 && (
         <div className="flex flex-col gap-1 rounded-input border border-dashed border-border/80 bg-elevated/35 px-3 py-3 text-xs sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-secondary">从预设填入，或添加字段、运算符和值。所有条件按“且”组合。</span>
+          <span className="text-secondary">从预设填入，或添加字段、运算符和值。同一组内按“且”组合；多组时可由页面选择组间逻辑。</span>
           <span className="num text-[11px] text-muted">最多 20 条</span>
         </div>
       )}
@@ -95,7 +99,7 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
           <div
             key={`${condition.field}-${index}`}
             data-invalid={invalid || undefined}
-            className={`group grid min-w-0 grid-cols-1 gap-2 rounded-input border p-2 transition-colors sm:grid-cols-[auto_minmax(10rem,1.45fr)_minmax(4.75rem,0.5fr)_minmax(9rem,0.9fr)_auto_auto] sm:items-center ${
+            className={`group grid min-w-0 grid-cols-1 gap-2 rounded-input border p-2 transition-colors sm:grid-cols-[auto_auto_minmax(9rem,1.35fr)_minmax(4.5rem,0.45fr)_minmax(8rem,0.85fr)_auto_auto] sm:items-center ${
               invalid
                 ? 'border-warning/45 bg-warning/5'
                 : 'border-border/70 bg-surface/60 hover:border-accent/45 hover:bg-elevated/40'
@@ -107,6 +111,20 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
             >
               {String(index + 1).padStart(2, '0')}
             </span>
+
+            <label className="sr-only" htmlFor={`condition-group-${index}`}>条件分组</label>
+            <select
+              id={`condition-group-${index}`}
+              aria-label={`第 ${index + 1} 条条件分组`}
+              value={normalizeConditionGroup(condition.group)}
+              onChange={event => update(index, { group: event.target.value })}
+              title="条件分组：同组内全部满足；多组时由顶部逻辑开关决定组间关系"
+              className="control h-9 w-full min-w-[3.25rem] px-1.5 text-center font-mono text-xs font-semibold sm:w-12"
+            >
+              {SCREENER_CONDITION_GROUPS.map(group => (
+                <option key={group} value={group}>{group}</option>
+              ))}
+            </select>
 
             <label className="sr-only" htmlFor={`condition-field-${index}`}>字段</label>
             <select
@@ -120,8 +138,14 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
               {groupedFields.map(([group, groupFields]) => (
                 <optgroup key={group} label={GROUP_LABELS[group] ?? group}>
                   {groupFields.map(field => (
-                    <option key={field.field} value={field.field} disabled={field.availability === 'unavailable'}>
-                      {field.label}{field.availability === 'unavailable' ? `（${field.null_policy || '暂不可用'}）` : ''}
+                    <option
+                      key={field.field}
+                      value={field.field}
+                      disabled={field.availability === 'unavailable' || isFieldDisabled?.(field)}
+                    >
+                      {field.label}
+                      {field.availability === 'unavailable' ? `（${field.null_policy || '暂不可用'}）` : ''}
+                      {latestOnlyBadgeLabel(field) ? `（${latestOnlyBadgeLabel(field)}）` : ''}
                     </option>
                   ))}
                 </optgroup>
@@ -146,10 +170,15 @@ export function ConditionBuilder({ fields, value, onChange }: ConditionBuilderPr
               value={condition.value}
               onChange={next => update(index, { value: next })}
             />
-            <div className="flex min-h-5 min-w-0 items-center text-[11px] text-muted">
-              {spec?.unit && <span>{spec.unit}</span>}
-              {spec?.field === 'change_pct' && <span className="text-accent">0.05 = 5%</span>}
-              {spec?.availability === 'unavailable' && <span className="text-warning">{spec.null_policy || '当前数据源不可用'}</span>}
+            <div className="flex min-h-5 min-w-0 flex-col items-start gap-0.5 text-[11px] text-muted">
+              <div className="flex min-w-0 items-center gap-1.5">
+                {spec?.unit && <span>{spec.unit}</span>}
+                {spec?.field === 'change_pct' && <span className="text-accent">0.05 = 5%</span>}
+                {spec?.availability === 'unavailable' && <span className="text-warning">{spec.null_policy || '当前数据源不可用'}</span>}
+              </div>
+              {spec && isFieldDisabled?.(spec) && latestOnlyBadgeLabel(spec) && (
+                <span className="text-warning">仅最新日字段，历史日期下不可用，提交时将忽略该条件</span>
+              )}
             </div>
             <button
               type="button"

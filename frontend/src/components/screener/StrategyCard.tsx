@@ -65,11 +65,12 @@ export function cardWrapCls(size: CardSize): string {
 
 // ===== 来源标签 — 静态 semantic token，无 purple/amber =====
 
-const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
+const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI', screen: '方案' }
 const BADGE_CLS_MAP: Record<string, string> = {
   builtin: BADGE_TONE.neutral,
   ai: BADGE_TONE.accent,
   custom: BADGE_TONE.info,
+  screen: BADGE_TONE.accent,
 }
 
 // ===== 策略卡片 =====

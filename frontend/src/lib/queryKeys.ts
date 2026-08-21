@@ -40,6 +40,7 @@ export const QK = {
   screenerStrategies:   ['screener-strategies'] as const,
   screenerCached:       (ext?: string) => ['screener-cached', ext] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
+  screenerScreens:     ['screener-screens'] as const,
   marketSnapshot:       ['market-snapshot'] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
 

@@ -28,6 +28,8 @@ async function request<T>(path: string, init?: RequestInit, opts?: { silent404?:
     if (res.status !== 401) toast(msg, 'error')
     throw new Error(msg)
   }
+  // 204 无响应体（如 screener screens DELETE），直接返回 undefined
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
 
@@ -499,10 +501,19 @@ export interface ScreenerResult {
   elapsed_ms: number
 }
 
+export type ScreenerGroupLogic = 'and' | 'or'
+export type ScreenerFacetKey = 'industry'
+
+/** F14: 条件分组标签 A-E（与后端 group 1-16 字符规则兼容） */
+export const SCREENER_CONDITION_GROUPS = ['A', 'B', 'C', 'D', 'E'] as const
+export type ScreenerConditionGroup = (typeof SCREENER_CONDITION_GROUPS)[number]
+
 export interface ScreenerCondition {
   field: string
   op: string
   value?: number | string | boolean | Array<number | string> | null
+  /** F14: 可选分组；缺省/空视为默认组 A（旧 payload 兼容） */
+  group?: string | null
 }
 
 export interface ScreenerOrderBy {
@@ -518,10 +529,19 @@ export interface ScreenerFieldSpec {
   unit?: string | null
   value_type: 'numeric' | 'enum' | 'boolean'
   null_policy: string
-  availability: 'available' | 'unavailable'
+  availability: 'available' | 'unavailable' | 'latest_only'
   ops: string[]
   sortable: boolean
   options?: { value: string; label: string }[] | null
+}
+
+export interface ScreenerIndustryFacetItem {
+  value: string
+  count: number
+}
+
+export interface ScreenerQueryFacets {
+  industry?: ScreenerIndustryFacetItem[]
 }
 
 export interface ScreenerQueryRequest {
@@ -529,6 +549,10 @@ export interface ScreenerQueryRequest {
   as_of?: string
   order_by?: ScreenerOrderBy
   limit: number
+  /** F14: 组间逻辑；默认 and（组内始终 AND） */
+  group_logic?: ScreenerGroupLogic
+  /** F15: 请求 facet 聚合；条件页固定传 ['industry'] */
+  facets?: ScreenerFacetKey[]
 }
 
 export interface ScreenerQueryResponse {
@@ -537,6 +561,10 @@ export interface ScreenerQueryResponse {
   applied: ScreenerCondition[]
   as_of: string | null
   elapsed_ms: number
+  /** F15: limit 前全量命中行的 facet；未请求或空时可能缺失 */
+  facets?: ScreenerQueryFacets | null
+  /** F15: 如 industry_unavailable；不阻断主查询 */
+  facet_warnings?: string[] | null
 }
 
 export interface ScreenerNlUnrecognized {
@@ -560,6 +588,32 @@ export interface ScreenerPreset {
     order_by: ScreenerOrderBy | null
   }
   executable_level: 'full' | 'needs_fundamental' | 'unsupported'
+}
+
+/** F6: 服务端保存的条件选股方案（/api/screener/screens） */
+export interface ScreenerScreenRecord {
+  id: string
+  name: string
+  conditions: ScreenerCondition[]
+  order_by?: ScreenerOrderBy | null
+  limit?: number | null
+  /** F14: 组间逻辑；旧方案缺省按 and */
+  group_logic?: ScreenerGroupLogic | null
+  created_at?: string
+  updated_at?: string
+  /** S3 方案桥: 方案字段是否全部可在回测/监控面板上计算（后端按字段来源白名单判定） */
+  strategy_supported?: boolean
+  /** strategy_supported=false 时不支持的字段中文名列表 */
+  unsupported_fields?: string[]
+}
+
+export interface ScreenerScreenSaveRequest {
+  name: string
+  conditions: ScreenerCondition[]
+  order_by?: ScreenerOrderBy | null
+  limit?: number | null
+  /** F14: 与查询同形，保存/载入保真 */
+  group_logic?: ScreenerGroupLogic | null
 }
 
 export interface MarketSnapshotRow {
@@ -1792,7 +1846,7 @@ export interface ParameterGridLaunchResponse {
   requested_count?: number
   truncated: boolean
   objective?: string
-  status: 'started' | 'already_running'
+  status: 'started' | 'already_running' | 'resumed'
 }
 
 export interface ParameterGridScenario {
@@ -1818,7 +1872,7 @@ export interface ParameterGridExperiment {
   scenario_count: number
   max_scenarios: number
   truncated: boolean
-  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
+  status: 'pending' | 'running' | 'interrupted' | 'completed' | 'cancelled' | 'failed'
   scenarios: ParameterGridScenario[]
   best_scenario_id: string | null
   robustness: Record<string, unknown> | null
@@ -1885,7 +1939,7 @@ export interface OptimizerLaunchResponse {
   end: string
   train_end: string
   holdout_start: string
-  status: 'started' | 'already_running'
+  status: 'started' | 'already_running' | 'resumed'
 }
 
 export interface OptimizerScenario {
@@ -1920,7 +1974,7 @@ export interface OptimizerExperiment {
   scenario_count: number
   max_scenarios: number
   truncated: boolean
-  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
+  status: 'pending' | 'running' | 'interrupted' | 'completed' | 'cancelled' | 'failed'
   scenarios: OptimizerScenario[]
   recommended_ids: string[]
   diagnostics: {
@@ -3346,8 +3400,28 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null }),
     }),
+  screenerScreensList: () =>
+    request<{ screens: ScreenerScreenRecord[] }>('/api/screener/screens'),
+  screenerScreensCreate: (payload: ScreenerScreenSaveRequest) =>
+    request<ScreenerScreenRecord>('/api/screener/screens', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  screenerScreensUpdate: (id: string, payload: ScreenerScreenSaveRequest) =>
+    request<ScreenerScreenRecord>(`/api/screener/screens/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  screenerScreensDelete: (id: string) =>
+    request<void>(`/api/screener/screens/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string) =>
-    request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
+    request<{
+      as_of: string | null
+      results: Record<string, Pick<ScreenerResult, 'total' | 'as_of' | 'rows'>>
+      failed?: { strategy_id: string; error: string }[]
+    }>(
       '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null }) },
     ),
   screenerCached: (extColumns?: string) =>
@@ -3498,6 +3572,12 @@ export const api = {
       { method: 'POST' },
     ),
 
+  parameterGridResume: (experimentId: string) =>
+    request<{ ok?: boolean; experiment_id?: string; status?: string; message?: string }>(
+      `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}/resume`,
+      { method: 'POST' },
+    ),
+
   optimizerUniverses: () => request<OptimizerUniverses>('/api/backtest/optimizer/universes'),
   optimizerLaunch: (payload: OptimizerRequest) =>
     request<OptimizerLaunchResponse>('/api/backtest/optimizer', {
@@ -3513,6 +3593,12 @@ export const api = {
   optimizerCancel: (experimentId: string) =>
     request<{ ok: boolean; experiment_id?: string; message?: string }>(
       `/api/backtest/optimizer/${encodeURIComponent(experimentId)}/cancel`,
+      { method: 'POST' },
+    ),
+
+  optimizerResume: (experimentId: string) =>
+    request<{ ok?: boolean; experiment_id?: string; status?: string; message?: string }>(
+      `/api/backtest/optimizer/${encodeURIComponent(experimentId)}/resume`,
       { method: 'POST' },
     ),
 

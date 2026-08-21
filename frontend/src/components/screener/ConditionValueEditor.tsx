@@ -16,6 +16,9 @@ export const GROUP_LABELS: Record<string, string> = {
   chip: '筹码',
   moneyflow: '资金流',
   margin: '融资融券',
+  // 后端 sequence metadata 已用中文 group「多日形态」；此处仅作同义键兜底
+  sequence: '多日形态',
+  '多日形态': '多日形态',
 }
 
 export function opsFor(spec: ScreenerFieldSpec | undefined): string[] {

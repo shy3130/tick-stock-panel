@@ -124,7 +124,7 @@ const quickRangeTitle = (range: QuickRangeConfig) => range.unit === 'all'
 
 const INPUT_CLS = 'control w-full text-xs'
 
-const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI' }
+const SRC_MAP: Record<string, string> = { builtin: '内置', custom: '自定义', ai: 'AI', screen: '我的方案' }
 const TRADE_PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100]
 type TradePnlFilter = 'all' | 'profit' | 'loss' | 'flat'
 const TRADE_PNL_FILTER_OPTIONS: { value: TradePnlFilter; label: string }[] = [
@@ -138,6 +138,7 @@ const BADGE_CLS_MAP: Record<string, string> = {
   builtin: 'bg-secondary/10 text-muted border-border',
   ai: 'bg-elevated text-secondary border-border',
   custom: 'bg-warning/10 text-warning border-warning/30',
+  screen: 'bg-accent/10 text-accent border-accent/30',
 }
 const FIELD_LABEL: Record<string, string> = {}
 for (const c of BUILTIN_COLUMNS) {
@@ -161,12 +162,13 @@ const BASIC_FILTER_FIELDS = [
   { key: 'turnover_max', label: '最高换手率', unit: '%' },
 ]
 type AdvancedSettingsTab = 'params' | 'filter' | 'entry' | 'exit' | 'scoring' | 'risk' | 'range' | 'regime'
-type StrategyGroup = 'all' | 'custom' | 'ai' | 'builtin'
+type StrategyGroup = 'all' | 'custom' | 'ai' | 'builtin' | 'screen'
 const STRATEGY_GROUPS: { id: StrategyGroup; label: string }[] = [
   { id: 'all', label: '全部' },
   { id: 'custom', label: '自定义' },
   { id: 'ai', label: 'AI' },
   { id: 'builtin', label: '内置' },
+  { id: 'screen', label: '我的方案' },
 ]
 const ADVANCED_TABS: { id: AdvancedSettingsTab; label: string }[] = [
   { id: 'params', label: '策略参数' },
@@ -753,11 +755,18 @@ export function StrategyBacktest({
   onParameterBackfillApplied,
 }: StrategyBacktestProps) {
   const [saved] = useState(() => storage.strategyBacktestLast.get(null))
-  const [screenerPool] = useState(() => screenerHandoff
+  // S3: 方案 handoff (strategyId=screen:*, symbols 为空) 不携带股票池 — 策略自身在区间内逐日选股, 不显示池提示也不钳制起点
+  const [screenerPool] = useState(() => screenerHandoff && screenerHandoff.symbols.length > 0
     ? { count: screenerHandoff.symbols.length, asOf: screenerHandoff.asOf }
     : null)
-  const [selectedStrategy, setSelectedStrategy] = useState<string | null>(saved?.selectedStrategy ?? null)
-  const [strategyGroup, setStrategyGroup] = useState<StrategyGroup>('all')
+  // 选股页策略回测交接显式指定策略时优先于本地上次保存的选中项
+  const [selectedStrategy, setSelectedStrategy] = useState<string | null>(
+    screenerHandoff?.strategyId ?? saved?.selectedStrategy ?? null,
+  )
+  // S3: 方案 handoff (strategyId=screen:*) 直接落在「我的方案」分组, 保证选中的策略可见 (同步 initializer, 避免 handoff 被清除后丢失)
+  const [strategyGroup, setStrategyGroup] = useState<StrategyGroup>(
+    screenerHandoff?.strategyId?.startsWith('screen:') ? 'screen' : 'all',
+  )
   const [symbols, setSymbols] = useState(screenerHandoff?.symbols.join(',') ?? saved?.symbols ?? '')
   const [start, setStart] = useState(screenerHandoff?.asOf ?? saved?.start ?? THREE_MONTHS_AGO)
   const [end, setEnd] = useState(screenerHandoff ? TODAY : saved?.end ?? TODAY)
@@ -817,6 +826,10 @@ export function StrategyBacktest({
   const [selectedTrade, setSelectedTrade] = useState<StrategyBacktestTrade | null>(null)
   const loadedStrategyRef = useRef<string | null>(null)
   const pendingParameterBackfillRef = useRef<StrategyParameterBackfill | null>(parameterBackfill)
+  // S3 review: 方案 handoff 的目标策略对列表缓存是「粘性」的 — 列表
+  // query 可能命中 5min 热缓存而不含刚保存的 screen:<id>, 在缓存刷新
+  // (含新策略) 前不允许孤儿清理/默认策略选择把它替换掉。
+  const pendingScreenHandoffRef = useRef<string | null>(screenerHandoff?.strategyId?.startsWith('screen:') ? screenerHandoff.strategyId : null)
 
   const strategies = useQuery({
     queryKey: QK.screenerStrategies,
@@ -855,6 +868,10 @@ export function StrategyBacktest({
     // 目标不在列表(本身失效)时按普通失效清理处理。
     const pendingBackfill = pendingParameterBackfillRef.current
     if (pendingBackfill && strategyList.some(st => st.id === pendingBackfill.strategyId)) return
+    // S3 review: 方案 handoff 同理让位 — 目标策略来自刚保存的 screen:<id>,
+    // 列表缓存未刷新时不在列表里, 不能当孤儿清掉; 缓存刷新后自然命中。
+    const pendingScreen = pendingScreenHandoffRef.current
+    if (pendingScreen && selectedStrategy === pendingScreen) return
     if (selectedStrategy && !strategyList.some(st => st.id === selectedStrategy)) {
       setSelectedStrategy(null)
       setStrategyParams({})
@@ -922,6 +939,10 @@ export function StrategyBacktest({
   const defaultStrategyPickedRef = useRef(false)
   useEffect(() => {
     if (strategies.isLoading || defaultStrategyPickedRef.current || strategyList.length === 0) return
+    // S3 review: 方案 handoff 目标 (screen:<id>) 可能暂不在热缓存列表里,
+    // 此时不能 picked 也不能替换成内置兜底 — 等 invalidate 后列表刷新命中。
+    const pendingScreen = pendingScreenHandoffRef.current
+    if (pendingScreen && selectedStrategy === pendingScreen) return
     if (selectedStrategy && strategyList.some(st => st.id === selectedStrategy)) {
       defaultStrategyPickedRef.current = true
       return

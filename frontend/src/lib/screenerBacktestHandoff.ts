@@ -5,6 +5,19 @@ export interface ScreenerBacktestHandoff {
   symbols: string[]
   /** 筛选数据的有效交易日；回测仅可从该日开始。 */
   asOf: string | null
+  /** 目标为策略回测时可选携带的策略 ID；缺省/空表示不指定策略。 */
+  strategyId?: string | null
+}
+
+/** 筛选结果行的最小形状：带 `_expired` 标记的行是"今日已失效"的灰色行。 */
+export type ActiveScreenerRow = { _expired?: boolean }
+
+/**
+ * 过滤掉今日已失效 (`_expired`) 的行。批量加自选 / 送回测只应使用仍有效的标的，
+ * 失效行仅供页面内展示参考。
+ */
+export function filterActiveScreenerRows<T extends ActiveScreenerRow>(rows: readonly T[]): T[] {
+  return rows.filter(row => !row._expired)
 }
 
 const STORAGE_KEY = 'condition-screener-backtest-handoff'
@@ -33,6 +46,10 @@ function normalizeAsOf(value: unknown): string | null {
   return typeof value === 'string' && DATE_RE.test(value) ? value : null
 }
 
+function normalizeStrategyId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 /**
  * 暂存一次性跨页交接。使用 sessionStorage，避免将瞬态筛选结果混入用户的长期回测偏好。
  */
@@ -41,12 +58,20 @@ export function stageScreenerBacktestHandoff(
 ): number {
   const storage = session()
   const symbols = normalizeSymbols(handoff.symbols)
-  if (!storage || symbols.length === 0) return 0
+  const strategyId = normalizeStrategyId(handoff.strategyId)
+  // S3 方案桥: 带 strategyId 且无股票池 (symbols 为空) 的纯策略交接仍需持久化 —
+  // 策略自身在回测区间内逐日选股, 不依赖当日筛选结果池。收紧不变式:
+  // 纯策略交接仅允许 screen: 前缀 (方案桥), 普通 strategyId 不许配空池,
+  // 避免调用方漏过滤期行时静默把用户切到「全市场 + 策略」。
+  const isScreenHandoff = strategyId?.startsWith('screen:') ?? false
+  if (!storage || (symbols.length === 0 && !isScreenHandoff)) return 0
 
   storage.setItem(STORAGE_KEY, JSON.stringify({
     target: handoff.target,
     symbols,
     asOf: normalizeAsOf(handoff.asOf),
+    // 仅在显式给出非空策略 ID 时写入，旧 payload（无该字段）保持原样可读
+    ...(strategyId ? { strategyId } : {}),
   } satisfies ScreenerBacktestHandoff))
   return symbols.length
 }
@@ -67,8 +92,15 @@ export function peekScreenerBacktestHandoff(): ScreenerBacktestHandoff | null {
     if (!Array.isArray(candidate.symbols)) return null
 
     const symbols = normalizeSymbols(candidate.symbols)
-    if (symbols.length === 0) return null
-    return { target: candidate.target, symbols, asOf: normalizeAsOf(candidate.asOf) }
+    const strategyId = normalizeStrategyId(candidate.strategyId)
+    // S3: 纯策略交接 (screen:<id>) 无股票池 — 有 strategyId 时允许空 symbols
+    if (symbols.length === 0 && !strategyId) return null
+    return {
+      target: candidate.target,
+      symbols,
+      asOf: normalizeAsOf(candidate.asOf),
+      strategyId,
+    }
   } catch {
     return null
   }

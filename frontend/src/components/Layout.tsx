@@ -70,8 +70,8 @@ type CoreIndex = (typeof CORE_INDEXES)[number]
 const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
   { to: '/watchlist',  label: '自选',   icon: Star },
-  { to: '/screener',   label: '策略',   icon: ScanSearch },
-  { to: '/condition-screener', label: '条件选股', icon: ListFilter },
+  { to: '/screener',   label: '策略',   icon: ScanSearch, title: '策略选股：跑内置/自定义策略' },
+  { to: '/condition-screener', label: '条件选股', icon: ListFilter, title: '自己拼条件筛选' },
   { to: '/backtest',   label: '回测',   icon: History },
   { to: '/optimizer', label: '组合优化', icon: PieChart },
   { to: '/stock-analysis',    label: '个股分析', icon: TrendingUp },
@@ -507,10 +507,12 @@ export function Layout() {
     dataStatusState = 'warn'
   }
 
-  const renderNavItem = ({ to, label, icon: Icon }: (typeof visibleNavItems)[number]) => (
+  const renderNavItem = ({ to, label, icon: Icon, ...rest }: (typeof visibleNavItems)[number]) => (
     <NavLink
       key={to}
       to={to}
+      title={'title' in rest ? rest.title : undefined}
+      aria-label={'title' in rest ? rest.title : undefined}
       className={({ isActive }) =>
         cn(
           'flex items-center gap-2 rounded-btn px-2 py-1.5 text-[13px] transition-colors duration-fast ease-smooth',

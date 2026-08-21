@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Search, Trash2 } from 'lucide-react'
-import type { ScreenerCondition, ScreenerFieldSpec } from '@/lib/api'
+import { SCREENER_CONDITION_GROUPS, type ScreenerCondition, type ScreenerFieldSpec } from '@/lib/api'
+import { latestOnlyBadgeLabel, normalizeConditionGroup } from '@/lib/screenerResult'
 import { isConditionValid } from './ConditionBuilder'
 import { ConditionValueEditor, GROUP_LABELS, defaultValue, opsFor } from './ConditionValueEditor'
 
@@ -10,13 +11,14 @@ interface AdvancedFilterPanelProps {
   fields: ScreenerFieldSpec[]
   value: ScreenerCondition[]
   onChange: (conditions: ScreenerCondition[]) => void
+  /** F8: 历史日期下禁用「仅最新日」字段（最新日查询时传 undefined） */
+  isFieldDisabled?: (spec: ScreenerFieldSpec) => boolean
 }
-
 /**
  * 高级筛选面板：按分组平铺全部字段，勾选即启用该条件，未勾选的字段不参与筛选。
  * 与逐条添加模式共享同一份 conditions 状态。
  */
-export function AdvancedFilterPanel({ fields, value, onChange }: AdvancedFilterPanelProps) {
+export function AdvancedFilterPanel({ fields, value, onChange, isFieldDisabled }: AdvancedFilterPanelProps) {
   const [search, setSearch] = useState('')
   const [selectedOnly, setSelectedOnly] = useState(false)
 
@@ -55,7 +57,7 @@ export function AdvancedFilterPanel({ fields, value, onChange }: AdvancedFilterP
       if (value.length >= MAX_CONDITIONS) return
       const op = opsFor(spec)[0] ?? '='
       const initial = spec.value_type === 'boolean' ? true : defaultValue(spec, op)
-      onChange([...value, { field: spec.field, op, value: initial }])
+      onChange([...value, { field: spec.field, op, value: initial, group: 'A' }])
       return
     }
     onChange(value.filter(condition => condition.field !== spec.field))
@@ -111,7 +113,7 @@ export function AdvancedFilterPanel({ fields, value, onChange }: AdvancedFilterP
           </button>
         )}
       </div>
-      <p className="text-[11px] text-muted">勾选即启用该条件，未勾选的字段不参与筛选；所有勾选条件按“且”组合。</p>
+      <p className="text-[11px] text-muted">勾选即启用该条件；同一组内按“且”组合。多组时由上方逻辑开关决定组间关系。</p>
 
       {grouped.map(([group, groupFields]) => {
         const selectedInGroup = groupFields.filter(field => firstIndexByField.has(field.field)).length
@@ -135,13 +137,13 @@ export function AdvancedFilterPanel({ fields, value, onChange }: AdvancedFilterP
                   <div
                     key={spec.field}
                     data-invalid={invalid || undefined}
-                    className={`flex flex-col gap-2 px-2.5 py-2 sm:grid sm:grid-cols-[minmax(9rem,1fr)_minmax(4.5rem,auto)_minmax(12rem,1.3fr)] sm:items-center ${rowIndex > 0 ? 'border-t border-border/50' : ''} ${invalid ? 'bg-warning/5' : checked ? 'bg-elevated/40' : ''}`}
+                    className={`flex flex-col gap-2 px-2.5 py-2 sm:grid sm:grid-cols-[minmax(9rem,1fr)_auto_minmax(4.5rem,auto)_minmax(11rem,1.25fr)] sm:items-center ${rowIndex > 0 ? 'border-t border-border/50' : ''} ${invalid ? 'bg-warning/5' : checked ? 'bg-elevated/40' : ''}`}
                   >
                     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={unavailable || (!checked && atCapacity)}
+                        disabled={unavailable || (!checked && (isFieldDisabled?.(spec) || atCapacity))}
                         onChange={event => toggleField(spec, event.target.checked)}
                         aria-label={`启用条件 ${spec.label}`}
                         className="h-3.5 w-3.5 shrink-0 rounded border-border accent-accent"
@@ -152,6 +154,14 @@ export function AdvancedFilterPanel({ fields, value, onChange }: AdvancedFilterP
                       >
                         {spec.label}
                         {spec.unit ? <span className="ml-1 text-[10px] font-normal text-muted">({spec.unit})</span> : null}
+                        {latestOnlyBadgeLabel(spec) && (
+                          <span
+                            className="ml-1.5 rounded-full border border-border bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-secondary"
+                            title="该字段仅有最新交易日数据，历史日期查询不可用"
+                          >
+                            {latestOnlyBadgeLabel(spec)}
+                          </span>
+                        )}
                       </span>
                       {duplicates > 0 && (
                         <span
@@ -166,6 +176,19 @@ export function AdvancedFilterPanel({ fields, value, onChange }: AdvancedFilterP
                     </div>
                     {checked && condition ? (
                       <>
+                        <label className="sr-only" htmlFor={`advanced-group-${spec.field}`}>{spec.label} 分组</label>
+                        <select
+                          id={`advanced-group-${spec.field}`}
+                          aria-label={`${spec.label} 条件分组`}
+                          value={normalizeConditionGroup(condition.group)}
+                          onChange={event => updateFirst(spec.field, { group: event.target.value })}
+                          title="条件分组 A-E"
+                          className="control h-9 w-full min-w-[3.25rem] px-1.5 text-center font-mono text-xs font-semibold sm:w-12"
+                        >
+                          {SCREENER_CONDITION_GROUPS.map(group => (
+                            <option key={group} value={group}>{group}</option>
+                          ))}
+                        </select>
                         <label className="sr-only" htmlFor={`advanced-op-${spec.field}`}>{spec.label} 运算符</label>
                         <select
                           id={`advanced-op-${spec.field}`}
@@ -185,7 +208,7 @@ export function AdvancedFilterPanel({ fields, value, onChange }: AdvancedFilterP
                         />
                       </>
                     ) : (
-                      <span className="text-[11px] text-muted sm:col-span-2">未选择</span>
+                      <span className="text-[11px] text-muted sm:col-span-3">未选择</span>
                     )}
                   </div>
                 )
