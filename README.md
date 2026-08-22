@@ -211,7 +211,7 @@ PORT=3018                      # 服务端口
 | **数据**     | Polars(计算)· DuckDB(查询)· Parquet(存储)                                                         |
 | **回测**     | vectorbt(全项目唯一 pandas 边界)                                                                  |
 | **数据源**   | [TickFlow](https://tickflow.org/auth/register?ref=V3KDKGXPEA) 官方 SDK · 其他数据源后续迭代实装   |
-| **AI**(可选) | OpenAI 兼容接口(DeepSeek / 通义 / Ollama 等)                                                      |
+| **AI**(可选) | OpenAI 兼容接口(DeepSeek / 通义 / OrcaRouter / Ollama 等)                                        |
 | **前端**     | React 18 · Vite · TypeScript · Tailwind · Tanstack Query · Lightweight Charts · ECharts · dnd-kit |
 | **部署**     | Docker 两阶段构建,前端 dist 拷进后端镜像,**单容器**                                               |
 

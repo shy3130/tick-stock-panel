@@ -50,6 +50,7 @@ const PRESETS: { label: string; provider?: string; url: string; model: string; c
   { label: 'Kimi', url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.7-code', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口，支持超长上下文。' },
   { label: 'Codex CLI', provider: CODEX_PROVIDER, url: '', model: DEFAULT_CODEX_MODEL, codexCommand: CODEX_COMMAND, website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec', description: '调用本机 Codex CLI 的 codex exec, 适合已登录 ChatGPT/Codex 的本地环境。' },
   { label: '炸鸡中转站', url: 'https://api.zhaji.dev/v1', model: 'gpt-5.5', website: 'https://api.zhaji.dev', websiteLabel: 'api.zhaji.dev', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。' },
+  { label: 'OrcaRouter', url: 'https://api.orcarouter.ai/v1', model: 'orcarouter/auto', website: 'https://www.orcarouter.ai', websiteLabel: 'orcarouter.ai', description: 'OrcaRouter 官方 OpenAI 兼容网关，聚合前沿模型并在同一端点提供网关级零信任安全防护。' },
 ]
 
 export function SettingsAIPanel() {

@@ -51,6 +51,13 @@ AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
 | `AI_MODEL` | 模型名,如 `deepseek-chat` |
 | `AI_DAILY_TOKEN_BUDGET` | 每日 token 预算,超限后当日不再调用 |
 
+**OrcaRouter**:也可以通过 OpenAI 兼容接口接入 [OrcaRouter](https://www.orcarouter.ai) 网关(聚合前沿模型,并在同一端点提供网关级零信任安全防护)。设置页「快速预设」已内置 OrcaRouter 一键配置,或手动填写:
+
+```ini
+AI_BASE_URL=https://api.orcarouter.ai/v1
+AI_MODEL=orcarouter/auto
+```
+
 接入示例见 [strategy.md](./strategy.md) 的「AI 生成策略」章节。
 
 ---

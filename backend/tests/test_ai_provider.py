@@ -44,6 +44,19 @@ def test_normalize_openai_base_url_strips_trailing_slash():
     assert normalize_openai_base_url("https://open.bigmodel.cn/api/paas/v4/") == "https://open.bigmodel.cn/api/paas/v4"
 
 
+def test_normalize_openai_base_url_orcarouter():
+    """OrcaRouter 官方网关 base_url 已是 /v1, 不应被重复补 /v1。"""
+    assert normalize_openai_base_url("https://api.orcarouter.ai/v1") == "https://api.orcarouter.ai/v1"
+    assert normalize_openai_base_url("https://api.orcarouter.ai") == "https://api.orcarouter.ai/v1"
+    assert normalize_openai_base_url("https://api.orcarouter.ai/v1/chat/completions") == "https://api.orcarouter.ai/v1"
+
+
+def test_orcarouter_matches_openai_compat_provider():
+    """OrcaRouter 走 openai_compat 通道(base_url 可配), 不触发 codex_cli 分支。"""
+    assert not ai_provider.is_codex_cli_provider("openai_compat")
+    assert ai_provider.is_codex_cli_provider("codex_cli")
+
+
 def test_format_openai_error_hides_html_gateway_body():
     response = httpx.Response(
         504,
