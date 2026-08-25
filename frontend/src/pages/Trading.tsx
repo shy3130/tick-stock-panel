@@ -2047,7 +2047,6 @@ function AccountsPanel() {
   const doc = accountsQuery.data
   const first: TradingAccount | undefined = doc?.accounts[0]
 
-  const [capital, setCapital] = useState('')
   const [months, setMonths] = useState('')
   const [ratioPct, setRatioPct] = useState('')
   const [changeAmount, setChangeAmount] = useState('')
@@ -2055,10 +2054,10 @@ function AccountsPanel() {
   const [loaded, setLoaded] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
-  // 首次拿到数据时回填表单(保存成功后 loaded 复位, 重新回填服务端事实)
+  // 首次拿到数据时回填可编辑字段(保存成功后 loaded 复位, 重新回填服务端事实)
+  // capital 由 first.capital + 本次合法 changeAmount 派生；未填写变更时保持不变；不接受任意 capital 输入
   useEffect(() => {
     if (first && !loaded) {
-      setCapital(String(first.capital))
       setMonths(String(first.horizonFundMonths))
       setRatioPct(String(Math.round(first.maxSingleRatio * 10000) / 100))
       setLoaded(true)
@@ -2081,19 +2080,24 @@ function AccountsPanel() {
   const handleSave = () => {
     setErr(null)
     if (!first || !doc) return
-    const cap = Number(capital)
     const m = Number(months)
     const ratio = Number(ratioPct) / 100
-    if (!Number.isFinite(cap) || cap <= 0) { setErr('本金必须是正数。'); return }
     if (!Number.isInteger(m) || m <= 0) { setErr('资金期限必须是正整数(月)。'); return }
     if (!Number.isFinite(ratio) || ratio <= 0 || ratio > 1) { setErr('单标的比例必须在 0–100% 之间。'); return }
 
-    // 追加资金变更: 只追加, 不删不改历史 changes
+    // 变更仅 append-only：仅当合法非零金额 + 非空原因时追加
+    // capital 派生：first.capital + delta ，避免前端任意 capital；round 2dp 防 JS 浮点噪声
+    let cap = first.capital
     const changes: AccountChange[] = [...first.changes]
     if (changeAmount.trim() !== '') {
-      const amt = Number(changeAmount)
-      if (!Number.isFinite(amt) || amt === 0) { setErr('资金变更金额必须是非零数字。'); return }
+      let amt = Number(changeAmount)
+      if (!Number.isFinite(amt)) { setErr('资金变更金额必须是非零数字。'); return }
+      amt = Math.round(amt * 100) / 100
+      if (amt === 0) { setErr('资金变更金额必须是非零数字，且至少精确到分。'); return }
       if (changeReason.trim() === '') { setErr('资金变更必须填写原因。'); return }
+      const nextCap = first.capital + amt
+      if (nextCap <= 0) { setErr('变更后本金不得 ≤0。'); return }
+      cap = nextCap
       changes.push({ ts: nowStr(), amount: amt, reason: changeReason.trim() })
     }
 
@@ -2112,6 +2116,34 @@ function AccountsPanel() {
 
   const changes = [...first.changes].sort((a, b) => (a.ts < b.ts ? 1 : -1))
 
+  // 预览：当前基数 + 输入变更后的派生 capital（仅用于展示，不进入 state）
+  // 未输入有效变更时 capital 保持 first.capital；展示使用 2 位舍入
+  const baseCapital = first.capital
+  const chgTrim = changeAmount.trim()
+  const rsnTrim = changeReason.trim()
+  let prospective: number | null = null
+  let previewNote: string | null = null
+  if (chgTrim !== '') {
+    const raw = Number(chgTrim)
+    if (!Number.isFinite(raw)) {
+      previewNote = '变更金额必须是非零数字'
+    } else {
+      const amt = Math.round(raw * 100) / 100
+      if (amt === 0) {
+        previewNote = '变更金额至少精确到分，舍入后不得为 0'
+      } else if (rsnTrim === '') {
+        previewNote = '填写原因后可预览保存后本金'
+      } else {
+        const next = baseCapital + amt
+        if (next <= 0) {
+          previewNote = '变更后本金 ≤0（不允许）'
+        } else {
+          prospective = next
+        }
+      }
+    }
+  }
+
   return (
     <div className="space-y-4">
       <SectionCard
@@ -2121,8 +2153,13 @@ function AccountsPanel() {
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <label className="block">
-              <span className="mb-1 block text-[10px] text-muted">本金 capital</span>
-              <input value={capital} onChange={e => setCapital(e.target.value)} inputMode="decimal" className={cn(INPUT, 'w-full font-mono')} />
+              <span className="mb-1 block text-[10px] text-muted">本金 capital（当前基数，由 first.capital + 合法变更派生）</span>
+              <div className={cn(INPUT, 'w-full font-mono bg-base/60 text-foreground cursor-default')} title="不可直接编辑；保存时由基数+本次 change 自动计算">
+                {fmtMoney(baseCapital)}
+              </div>
+              {prospective != null && (
+                <div className="mt-0.5 text-[10px] text-accent font-mono">保存后 ≈ {fmtMoney(prospective)}</div>
+              )}
             </label>
             <label className="block">
               <span className="mb-1 block text-[10px] text-muted">资金期限(月) horizonFundMonths</span>
@@ -2151,6 +2188,13 @@ function AccountsPanel() {
                 className={INPUT}
               />
             </div>
+            {previewNote ? (
+              <div className="mt-1.5 text-[10px] text-muted">{previewNote}</div>
+            ) : prospective != null ? (
+              <div className="mt-1.5 text-[10px] text-muted">本次变更将使本金 {fmtMoney(baseCapital)} → {fmtMoney(prospective)}</div>
+            ) : (
+              <div className="mt-1.5 text-[10px] text-muted">未填写变更金额时 capital 保持不变</div>
+            )}
           </div>
 
           <InlineError msg={err} />
