@@ -52,6 +52,21 @@ export interface ChartPriceLine {
   end?: string
 }
 
+export interface ChartPolyline {
+  name: string
+  points: { date: string; value: number }[]
+  color?: string
+}
+
+export interface ChartBox {
+  start: string
+  end: string
+  upper: number
+  lower: number
+  label?: string
+  color?: string
+}
+
 export interface StockInfo {
   name?: string
   total_shares?: number
@@ -323,6 +338,8 @@ interface Props {
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
+  polylines?: ChartPolyline[]
+  boxes?: ChartBox[]
   height?: number
   showMA?: boolean
   showInfoBar?: boolean
@@ -466,6 +483,8 @@ function buildOption(
   markers: ChartMarker[] | undefined,
   ranges: ChartRange[] | undefined,
   priceLines: ChartPriceLine[] | undefined,
+  polylines: ChartPolyline[] | undefined,
+  boxes: ChartBox[] | undefined,
   showMA: boolean,
   compact: boolean,
   activeIndicators: string[],
@@ -592,7 +611,7 @@ function buildOption(
   })
   xAxisIndices.push(0)
 
-  const markAreaData = (ranges ?? [])
+  const markAreaData: any[] = (ranges ?? [])
     .filter(r => dateIndexMap.has(r.start) && dateIndexMap.has(r.end))
     .map(r => ([
       {
@@ -615,6 +634,26 @@ function buildOption(
       },
       { xAxis: r.end },
     ]))
+
+  for (const box of boxes ?? []) {
+    if (!dateIndexMap.has(box.start) || !dateIndexMap.has(box.end)) continue
+    markAreaData.push([
+      {
+        name: box.label ?? '',
+        xAxis: box.start,
+        yAxis: box.upper,
+        itemStyle: { color: box.color ?? 'rgba(250,204,21,0.12)' },
+        label: {
+          show: !!box.label,
+          position: 'insideTop',
+          color: '#FACC15',
+          fontSize: 10,
+          fontFamily: 'JetBrains Mono, monospace',
+        },
+      },
+      { xAxis: box.end, yAxis: box.lower },
+    ])
+  }
 
   const markLineData: any[] = (priceLines ?? [])
     .filter(line => Number.isFinite(line.value))
@@ -678,6 +717,23 @@ function buildOption(
     markArea: markAreaData.length > 0 ? { silent: true, data: markAreaData } : undefined,
     markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
   })
+
+  for (const line of polylines ?? []) {
+    series.push({
+      name: line.name,
+      type: 'line',
+      data: line.points
+        .filter(point => dateIndexMap.has(point.date))
+        .map(point => [point.date, point.value]),
+      symbol: 'circle',
+      symbolSize: 5,
+      animation: false,
+      silent: true,
+      lineStyle: { width: 2, color: line.color ?? '#FACC15' },
+      itemStyle: { color: line.color ?? '#FACC15' },
+      z: 20,
+    })
+  }
 
   if (hasMA) {
     const maLine = (key: keyof OHLC, color: string, name: string) => ({
@@ -803,6 +859,8 @@ export function EChartsCandlestick({
   markers,
   ranges,
   priceLines,
+  polylines,
+  boxes,
   height = 480,
   showMA = true,
   showInfoBar = true,
@@ -1128,6 +1186,8 @@ export function EChartsCandlestick({
       showMarkersProp ? markers : undefined,
       ranges,
       priceLines,
+      polylines,
+      boxes,
       showMA, compactRef.current,
       activeIndicators, chartHeight,
       infoIdxRef.current,
@@ -1150,7 +1210,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, ranges, priceLines, polylines, boxes, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Annotated
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
-from app.services import index_sync, kline_sync
+from app.market_time import cn_now
+from app.services import chan_analysis, index_sync, kline_sync
 from app.tickflow.capabilities import Cap
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,8 @@ def get_index_daily(
     request: Request,
     symbol: str = Query(..., description="指数代码, 如 000001.SH"),
     days: int = Query(120, ge=10, le=2000),
-    start_date: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD, 优先于 days"),
-    end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
+    start_date: str | None = Query(None, description="起始日期 YYYY-MM-DD, 优先于 days"),
+    end_date: str | None = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
 ):
     """读取指数日 K。指数数据使用独立 kline_index_* parquet。"""
     repo = request.app.state.repo
@@ -93,7 +94,7 @@ def get_index_daily(
 
     try:
         raw = kline_sync.sync_daily_batch([symbol], count=days + 150)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise HTTPException(status_code=502, detail=f"TickFlow fetch failed: {e}") from e
     if raw.is_empty():
         return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": [], "source": "none"}
@@ -103,11 +104,29 @@ def get_index_daily(
     return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": rows, "source": "live"}
 
 
+@router.get("/chan")
+def get_index_chan(
+    request: Request,
+    symbol: Annotated[str, Query(description="指数代码, 如 000001.SH")],
+    start_date: Annotated[date, Query(description="起始日期 YYYY-MM-DD")],
+    end_date: Annotated[date, Query(description="截止日期 YYYY-MM-DD")],
+):
+    """基于本地指数日 K 返回日、周、月多级别缠论结构。"""
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date 不能晚于 end_date")
+    df = request.app.state.repo.get_index_daily(symbol, start_date, end_date)
+    if df.is_empty():
+        return {"symbol": symbol, "engine": "none", "alignment": "mixed", "levels": []}
+    return chan_analysis.analyze_levels(df, symbol)
+
+
 @router.get("/minute")
 def get_index_minute(
     request: Request,
     symbol: str = Query(..., description="指数代码, 如 000001.SH"),
-    trade_date: date | None = Query(None, alias="date", description="交易日期, 默认今天"),
+    trade_date: Annotated[
+        date | None, Query(alias="date", description="交易日期, 默认今天")
+    ] = None,
 ):
     """实时读取指数分钟 K。不写入股票分钟 parquet。"""
     repo = request.app.state.repo
@@ -122,6 +141,30 @@ def get_index_minute(
         "rows": df.to_dicts(),
         "source": "live" if not df.is_empty() else "none",
     }
+
+
+@router.get("/chan/minute")
+def get_index_chan_minute(
+    request: Request,
+    symbol: Annotated[str, Query(description="指数代码, 如 000001.SH")],
+    days: Annotated[int, Query(ge=5, le=120)] = 45,
+):
+    """返回 1F~120F 缠论;直取失败时从最近可整除的较小周期合成。"""
+    end = cn_now()
+    start = end - timedelta(days=days)
+    frames: dict[int, tuple[pl.DataFrame, str, str]] = {}
+    for period in (1, 5, 10, 15, 30, 60, 120):
+        direct = kline_sync.fetch_minute_period(symbol, start, end, period, "index")
+        if not direct.is_empty():
+            frames[period] = (direct, "direct", f"{period}F")
+            continue
+        candidates = [source for source, (df, _, _) in frames.items() if not df.is_empty() and period % source == 0]
+        if not candidates:
+            frames[period] = (pl.DataFrame(), "none", "--")
+            continue
+        source = max(candidates)
+        frames[period] = (chan_analysis.resample_minute(frames[source][0], period), "synthetic", f"{source}F")
+    return chan_analysis.analyze_minute_levels(frames, symbol)
 
 
 @router.post("/sync_instruments")

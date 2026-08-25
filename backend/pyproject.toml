@@ -55,6 +55,11 @@ backtest = [
     "vectorbt>=0.26",
 ]
 
+# 缠论核心是可选能力；未安装时指数页使用内置轻量回退，不影响主流程。
+chan = [
+    "czsc==1.0.1",
+]
+
 # 桌面客户端依赖: pywebview 桌面窗口。打包用 (PyInstaller), 生产/Docker 不需要。
 # 启用:`uv sync --extra desktop`
 desktop = [

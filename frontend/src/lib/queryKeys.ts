@@ -83,6 +83,10 @@ export const QK = {
                              ['kline-minute-range', symbol, days] as const,
   indexDaily:           (symbol: string, start: string, end: string) =>
                            ['index-daily', symbol, start, end] as const,
+  indexChan:            (symbol: string, start: string, end: string) =>
+                           ['index-chan', symbol, start, end] as const,
+  indexChanMinute:      (symbol: string, days: number) =>
+                           ['index-chan-minute', symbol, days] as const,
   indexMinute:          (symbol: string, date: string) =>
                            ['index-minute', symbol, date] as const,
 

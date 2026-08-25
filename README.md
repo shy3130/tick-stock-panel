@@ -60,6 +60,7 @@
 | 🚨 **异动监控**   | 交易所异动规则口径(3/10/30 日偏离值),盘中实时接近度,系统告警与推送接入 | — |
 | 📡 **监控中心**   | 四类监控(策略/个股信号/价格/异动),多条件 AND/OR + 语音播报 + 飞书推送  | [features.md](./docs/features.md) |
 | 📈 **个股分析**   | 9 类关键价位 + AI 四维分析(技术/基本面/财务/消息面)                    | [features.md](./docs/features.md) |
+| 🧭 **指数缠论**   | 日/周/月及 1F~120F 多级别联动,在 K 线上绘制笔与中枢                    | — |
 | 🏆 **连板梯队**   | 连板层级统计 + 概念涨幅轮动 + 盘后 AI 复盘 + 炸板/翘板预警             | [features.md](./docs/features.md) |
 | 🧰 **数据扩展**   | 数据源插件化(stock-sdk 示例 + YAML 自定义源),扩展字段配成一级页面同台分析 | [custom-data-source.md](./docs/custom-data-source.md) |
 
@@ -73,7 +74,7 @@
 **📊 行情总览**
 - **看板** Dashboard — 市场情绪评分 + 涨跌/成交额榜单 + 概念领涨领跌 + 大盘异动事件流,一日全貌
 - **自选** Watchlist — 自选股池,多分组管理(M:N),表格/卡片双视图,换手/量比/RSI 等实时指标
-- **指数** Indices — 沪深指数浏览与同步
+- **指数** Indices — 沪深指数浏览与同步,日/周/月及 1F~120F 缠论笔与中枢联动
 
 **🔍 选股与回测**
 - **策略** Screener — Polars 毫秒级扫描全 A 股,18 个内置策略卡片 + 自定义条件
@@ -164,6 +165,8 @@
 cp .env.example .env       # 按需填 TICKFLOW_API_KEY(留空 = None 模式)
 ./dev.sh                   # Windows: .\dev.ps1
 ```
+
+指数缠论默认使用轻量内置引擎；需要完整 `czsc` 笔识别时，在 `.env` 设置 `BACKEND_EXTRAS=chan` 后启动。
 
 自动检查 / 下载依赖、释放端口、同时起前后端。后端 → <http://localhost:3018> · 前端 → <http://localhost:3011>。
 
