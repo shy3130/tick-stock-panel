@@ -148,7 +148,9 @@ export function Indices() {
     enabled: !!selectedSymbol && showChan && isMinuteChan && hasMinuteCap,
   })
 
-  const isDailyView = !showChan || chanLevel === 'daily'
+  const activeAnalysis = isMinuteChan ? minuteChan.data : chan.data
+  const activeChan = activeAnalysis?.levels.find(level => level.key === chanLevel)
+  const isDailyView = !showChan || chanLevel === 'daily' || !activeChan
 
   const minute = useQuery({
     queryKey: QK.indexMinute(selectedSymbol, selectedDate ?? ''),
@@ -185,8 +187,6 @@ export function Indices() {
   const selectedQuotePct = selectedQuote?.change_pct ?? selectedQuote?.pct
 
   const chartRows = useMemo(() => toOHLC(daily.data?.rows ?? []), [daily.data?.rows])
-  const activeAnalysis = isMinuteChan ? minuteChan.data : chan.data
-  const activeChan = activeAnalysis?.levels.find(level => level.key === chanLevel)
   const visibleRows = useMemo(
     () => showChan && activeChan && chanLevel !== 'daily' ? toOHLC(activeChan.bars) : chartRows,
     [activeChan, chanLevel, chartRows, showChan],
