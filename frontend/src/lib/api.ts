@@ -313,6 +313,37 @@ export interface IndexQuote {
   [key: string]: any
 }
 
+export interface ChanPen {
+  start: string
+  start_value: number
+  end: string
+  end_value: number
+  direction: 'up' | 'down'
+}
+
+export interface ChanCenter {
+  start: string
+  end: string
+  upper: number
+  lower: number
+}
+
+export interface ChanLevel {
+  key: 'daily' | 'weekly' | 'monthly'
+  label: string
+  bars: KlineRow[]
+  pens: ChanPen[]
+  centers: ChanCenter[]
+  direction: 'up' | 'down' | 'flat'
+}
+
+export interface IndexChanAnalysis {
+  symbol: string
+  engine: string
+  alignment: 'up' | 'down' | 'mixed'
+  levels: ChanLevel[]
+}
+
 // ===== Screener =====
 export interface ScreenerStrategy {
   id: string
@@ -1952,6 +1983,10 @@ export const api = {
       dateRange
         ? `/api/index/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
         : `/api/index/daily?symbol=${encodeURIComponent(symbol)}&days=${days}`,
+    ),
+  indexChan: (symbol: string, dateRange: { start: string; end: string }) =>
+    request<IndexChanAnalysis>(
+      `/api/index/chan?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`,
     ),
   indexMinute: (symbol: string, date?: string) =>
     request<{
