@@ -1,6 +1,7 @@
 import {
   BarChart2,
   Calculator,
+  ClipboardCheck,
   CloudSun,
   Coins,
   FlaskConical,
@@ -74,6 +75,12 @@ export const RESULT_SECTIONS: readonly ResultSectionDef[] = [
     title: '行业归因',
     icon: PieChart,
     when: ctx => ctx.variant !== 'legacy-full' && ctx.hasAttribution,
+  },
+  {
+    key: 'strategy_check',
+    title: '策略体检',
+    icon: ClipboardCheck,
+    when: ctx => ctx.variant === 'position' && ctx.hasRobustness,
   },
   {
     key: 'robustness',

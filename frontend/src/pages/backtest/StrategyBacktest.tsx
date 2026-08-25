@@ -41,6 +41,8 @@ import { TrustDiagnostics } from './components/TrustDiagnostics'
 import { RegimeBreakdownPanel } from './components/RegimeBreakdownPanel'
 import { CostSensitivityPanel } from './components/CostSensitivityPanel'
 import { StyleAttributionPanel } from './components/StyleAttributionPanel'
+import { StrategyCheckPanel, StrategyCheckProvider } from './components/StrategyCheckPanel'
+import type { StrategyCheckItemId } from './components/strategyCheck'
 import { parseParticipationPctInput } from './components/trustDiagnosticsCore'
 import { BacktestRunStatus } from '@/components/backtest/BacktestRunStatus'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
@@ -913,6 +915,19 @@ export function StrategyBacktest({
       window.removeEventListener('afterprint', restoreAfterPrint)
     }
   }, [])
+  const scrollToCheckSection = (sectionKey: StrategyCheckItemId) => {
+    const scroll = () => {
+      document.getElementById(sectionAnchorId(sectionKey))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+    if (!collapsedSections.includes(sectionKey)) {
+      scroll()
+      return
+    }
+    const next = toggleSection(collapsedSections, sectionKey)
+    setCollapsedSections(next)
+    storage.backtestResultSections.set(next)
+    requestAnimationFrame(scroll)
+  }
   // 打印按钮: 先强制展开再等一帧, 让重渲染与图表布局完成后再进打印
   const handlePrintResult = () => {
     setPrintExpanded(true)
@@ -2380,14 +2395,15 @@ export function StrategyBacktest({
                 <span className="ml-2">候选样本曲线仅按退出事件日采样，不能生成分段 Sharpe、Bootstrap、置换或 Walk-Forward 指标；请切换至仓位模拟。</span>
               </div>
             ) : robustnessRequest && (
-              renderResultSection('robustness', <StrategyRobustnessPanel key={result.run_id} request={robustnessRequest} />)
-            )}
-            {!isCandidateExecution && robustnessRequest && (
-              <>
-                {renderResultSection('regime', <RegimeBreakdownPanel key={`regime-${result.run_id}`} request={robustnessRequest} />)}
-                {renderResultSection('cost_sensitivity', <CostSensitivityPanel key={`cost-${result.run_id}`} request={robustnessRequest} />)}
-                {renderResultSection('style', <StyleAttributionPanel key={`style-${result.run_id}`} request={robustnessRequest} />)}
-              </>
+              <StrategyCheckProvider key={result.run_id} runId={result.run_id}>
+                {renderResultSection('strategy_check', (
+                  <StrategyCheckPanel persisted={resultPersisted} onSelectItem={scrollToCheckSection} />
+                ))}
+                {renderResultSection('robustness', <StrategyRobustnessPanel request={robustnessRequest} />)}
+                {renderResultSection('regime', <RegimeBreakdownPanel request={robustnessRequest} />)}
+                {renderResultSection('cost_sensitivity', <CostSensitivityPanel request={robustnessRequest} />)}
+                {renderResultSection('style', <StyleAttributionPanel request={robustnessRequest} />)}
+              </StrategyCheckProvider>
             )}
 
             {Array.isArray(result.stats.return_distribution) && result.stats.return_distribution.length > 0 && renderResultSection('return_distribution', (

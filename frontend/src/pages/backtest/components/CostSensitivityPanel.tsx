@@ -6,6 +6,7 @@ import { api, type CostSensitivityRow, type StrategyBacktestRequest } from '@/li
 import { fmtBigNum, fmtPct, priceColorClass } from '@/lib/format'
 import { useECharts } from '../charts/useECharts'
 import { sortCostRows } from './trustDiagnosticsCore'
+import { useStrategyCheckStatus } from './StrategyCheckPanel'
 
 interface Props {
   request: StrategyBacktestRequest
@@ -113,8 +114,14 @@ function CostSensitivityChart({ rows }: { rows: CostSensitivityRow[] }) {
 
 /** 成本敏感性面板 — 按钮触发; 佣金+滑点按倍数整体缩放重跑, 检验策略对交易成本的耐受度 */
 export function CostSensitivityPanel({ request }: Props) {
+  const onStatusChange = useStrategyCheckStatus('cost_sensitivity')
   const mutation = useMutation({
     mutationFn: () => api.strategyCostSensitivity(request),
+    onMutate: () => { onStatusChange?.('running') },
+    onSuccess: () => { onStatusChange?.('completed') },
+    onError: (error) => {
+      onStatusChange?.('failed', error instanceof Error ? error.message : '成本敏感性分析失败')
+    },
   })
   const cs = mutation.data?.cost_sensitivity
   const rows = useMemo(() => (cs ? sortCostRows(cs.rows) : []), [cs])

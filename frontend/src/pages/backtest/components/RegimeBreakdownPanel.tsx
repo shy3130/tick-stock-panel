@@ -4,6 +4,7 @@ import { ChevronDown, CloudSun, Loader2 } from 'lucide-react'
 import { api, type StrategyBacktestRequest } from '@/lib/api'
 import { fmtPct, priceColorClass } from '@/lib/format'
 import { buildRegimeGrid } from './trustDiagnosticsCore'
+import { useStrategyCheckStatus } from './StrategyCheckPanel'
 
 interface Props {
   request: StrategyBacktestRequest
@@ -16,9 +17,15 @@ const fmt = (value: unknown, digits = 2) => {
 
 /** 市场状态分桶面板 — 按钮触发(避免每次回测都打端点); 四桶 2x2 网格 + definitions 折叠 */
 export function RegimeBreakdownPanel({ request }: Props) {
+  const onStatusChange = useStrategyCheckStatus('regime')
   const [definitionsOpen, setDefinitionsOpen] = useState(false)
   const mutation = useMutation({
     mutationFn: () => api.strategyRegimeBreakdown(request),
+    onMutate: () => { onStatusChange?.('running') },
+    onSuccess: () => { onStatusChange?.('completed') },
+    onError: (error) => {
+      onStatusChange?.('failed', error instanceof Error ? error.message : '市场状态分桶统计失败')
+    },
   })
   const regime = mutation.data?.regime
   const definitions = regime ? Object.entries(regime.definitions) : []

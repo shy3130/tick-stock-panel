@@ -7,6 +7,7 @@ import { fmtPct, priceColorClass } from '@/lib/format'
 import { useECharts } from '../charts/useECharts'
 import { MetricExplainer } from './MetricExplainer'
 import { validateTradeEquityBand } from './trustDiagnosticsCore'
+import { useStrategyCheckStatus } from './StrategyCheckPanel'
 
 interface Props {
   request: StrategyBacktestRequest
@@ -518,6 +519,7 @@ function MonteCarloShuffleSection({ result }: { result: StrategyRobustnessResult
 }
 
 export function StrategyRobustnessPanel({ request }: Props) {
+  const onStatusChange = useStrategyCheckStatus('robustness')
   const [nFolds, setNFolds] = useState(4)
   const [runPermutation, setRunPermutation] = useState(false)
   const [runPerturbation, setRunPerturbation] = useState(true)
@@ -532,6 +534,11 @@ export function StrategyRobustnessPanel({ request }: Props) {
       max_perturbed_params: 6,
       ...(runWalkForward ? { walk_forward_enabled: true } : {}),
     }),
+    onMutate: () => { onStatusChange?.('running') },
+    onSuccess: () => { onStatusChange?.('completed') },
+    onError: (error) => {
+      onStatusChange?.('failed', error instanceof Error ? error.message : '稳健性检验失败')
+    },
   })
 
   return (

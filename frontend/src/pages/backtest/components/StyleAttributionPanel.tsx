@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { Loader2, Shapes } from 'lucide-react'
 import { api, type StrategyBacktestRequest } from '@/lib/api'
 import { fmtPct, priceColorClass } from '@/lib/format'
+import { useStrategyCheckStatus } from './StrategyCheckPanel'
 
 interface Props {
   request: StrategyBacktestRequest
@@ -26,8 +27,14 @@ const FACTOR_LABELS: Array<{ key: 'smb' | 'umd' | 'lmv'; label: string; note: st
 
 /** 风格归因面板 — 按钮触发; 逐日截面构造 smb/umd/lmv 三因子, 对策略日收益做 OLS 回归 */
 export function StyleAttributionPanel({ request }: Props) {
+  const onStatusChange = useStrategyCheckStatus('style')
   const mutation = useMutation({
     mutationFn: () => api.strategyStyleAttribution(request),
+    onMutate: () => { onStatusChange?.('running') },
+    onSuccess: () => { onStatusChange?.('completed') },
+    onError: (error) => {
+      onStatusChange?.('failed', error instanceof Error ? error.message : '风格归因失败')
+    },
   })
   const attribution = mutation.data?.style_attribution
   const meta = mutation.data?.style_factor_meta

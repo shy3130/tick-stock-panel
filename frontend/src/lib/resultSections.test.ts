@@ -48,6 +48,7 @@ assert(!candidateKeys.includes('robustness'), '候选执行不渲染稳健性')
 assert(!candidateKeys.includes('regime'), '候选执行不渲染市场状态')
 assert(!candidateKeys.includes('cost_sensitivity'), '候选执行不渲染成本敏感性')
 assert(!candidateKeys.includes('style'), '候选执行不渲染风格归因')
+assert(!candidateKeys.includes('strategy_check'), '候选执行不渲染策略体检')
 assert(candidateKeys.includes('stats') && candidateKeys.includes('trades'), '候选执行仍保留统计与交易明细')
 
 // 旧全量模拟(历史缓存): 只保留统计/曲线/分布
