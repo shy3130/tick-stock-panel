@@ -20,7 +20,9 @@ function toOHLC(rows: KlineRow[]): OHLC[] {
   return rows
     .filter(r => r?.date != null && r.open != null && r.close != null)
     .map(r => ({
-      date: typeof r.date === 'string' ? r.date.slice(0, 10) : String(r.date),
+      date: typeof r.date === 'string' && r.date.length > 10
+        ? r.date.replace('T', ' ').slice(0, 16)
+        : String(r.date).slice(0, 10),
       open: Number(r.open),
       high: Number(r.high),
       low: Number(r.low),
@@ -59,6 +61,12 @@ const PINNED_INDEXES = [
   { symbol: '399001.SZ', name: '深证成指' },
   { symbol: '399006.SZ', name: '创业板指' },
   { symbol: '000680.SH', name: '科创综指' },
+]
+
+const MINUTE_CHAN_LEVELS: Pick<ChanLevel, 'key' | 'label'>[] = [
+  { key: '1f', label: '1F' }, { key: '5f', label: '5F' }, { key: '10f', label: '10F' },
+  { key: '15f', label: '15F' }, { key: '30f', label: '30F' }, { key: '60f', label: '60F' },
+  { key: '120f', label: '120F' },
 ]
 
 function pinnedRank(item: IndexInstrument) {
@@ -133,6 +141,13 @@ export function Indices() {
     enabled: !!selectedSymbol && showChan,
   })
 
+  const isMinuteChan = chanLevel.endsWith('f')
+  const minuteChan = useQuery({
+    queryKey: QK.indexChanMinute(selectedSymbol, 45),
+    queryFn: () => api.indexChanMinute(selectedSymbol, 45),
+    enabled: !!selectedSymbol && showChan && isMinuteChan && hasMinuteCap,
+  })
+
   const isDailyView = !showChan || chanLevel === 'daily'
 
   const minute = useQuery({
@@ -170,7 +185,8 @@ export function Indices() {
   const selectedQuotePct = selectedQuote?.change_pct ?? selectedQuote?.pct
 
   const chartRows = useMemo(() => toOHLC(daily.data?.rows ?? []), [daily.data?.rows])
-  const activeChan = chan.data?.levels.find(level => level.key === chanLevel)
+  const activeAnalysis = isMinuteChan ? minuteChan.data : chan.data
+  const activeChan = activeAnalysis?.levels.find(level => level.key === chanLevel)
   const visibleRows = useMemo(
     () => showChan && activeChan && chanLevel !== 'daily' ? toOHLC(activeChan.bars) : chartRows,
     [activeChan, chanLevel, chartRows, showChan],
@@ -331,7 +347,8 @@ export function Indices() {
               缠论 {showChan ? '开启' : '关闭'}
             </button>
             {showChan && chan.isLoading && <span className="text-muted">多级别结构计算中…</span>}
-            {showChan && chan.isError && <span className="text-danger">缠论分析失败</span>}
+            {showChan && isMinuteChan && minuteChan.isLoading && <span className="text-muted">分钟结构计算中…</span>}
+            {showChan && (chan.isError || (isMinuteChan && minuteChan.isError)) && <span className="text-danger">缠论分析失败</span>}
             {showChan && (chan.data?.levels ?? []).map(level => (
               <button
                 key={level.key}
@@ -341,10 +358,23 @@ export function Indices() {
                 {level.label} · {level.direction === 'up' ? '向上' : level.direction === 'down' ? '向下' : '待确认'}
               </button>
             ))}
-            {showChan && chan.data && (
+            {showChan && MINUTE_CHAN_LEVELS.map(item => {
+              const level = minuteChan.data?.levels.find(value => value.key === item.key)
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => setChanLevel(item.key)}
+                  disabled={!hasMinuteCap}
+                  className={`rounded-btn border px-2.5 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${chanLevel === item.key ? 'border-accent bg-accent/10 text-foreground' : 'border-border text-secondary hover:text-foreground'}`}
+                >
+                  {item.label}{level ? ` · ${level.direction === 'up' ? '向上' : level.direction === 'down' ? '向下' : '待确认'}` : ''}
+                </button>
+              )
+            })}
+            {showChan && activeAnalysis && (
               <span className="xl:ml-auto text-muted">
-                {chan.data.alignment === 'up' ? '多级别共振向上' : chan.data.alignment === 'down' ? '多级别共振向下' : '多级别方向分化'}
-                {' · '}{chan.data.engine.startsWith('czsc-') ? chan.data.engine : '内置引擎'}
+                {activeAnalysis.alignment === 'up' ? '多级别共振向上' : activeAnalysis.alignment === 'down' ? '多级别共振向下' : '多级别方向分化'}
+                {' · '}{activeAnalysis.engine.startsWith('czsc-') ? activeAnalysis.engine : '内置引擎'}
               </span>
             )}
           </div>
@@ -368,7 +398,7 @@ export function Indices() {
                   symbol={selectedSymbol}
                   linkedPrice={linkedPrice}
                   onDateClick={isDailyView ? setSelectedDate : undefined}
-                  visibleBars={chanLevel === 'monthly' ? 36 : chanLevel === 'weekly' ? 52 : 48}
+                  visibleBars={isMinuteChan ? 120 : chanLevel === 'monthly' ? 36 : chanLevel === 'weekly' ? 52 : 48}
                   activeIndicators={isDailyView ? ['vol', 'macd'] : ['vol']}
                   polylines={chanLines}
                   boxes={chanBoxes}
@@ -392,6 +422,9 @@ export function Indices() {
                       <div className="text-xs text-muted">
                         最新中枢 {fmtNum(activeChan.centers.at(-1)?.lower)} — {fmtNum(activeChan.centers.at(-1)?.upper)}
                       </div>
+                    )}
+                    {activeChan?.source === 'synthetic' && (
+                      <div className="text-[10px] text-muted">由 {activeChan.source_period} K线合成</div>
                     )}
                     <div className="text-[10px] text-muted">切回日线可联动查看所选交易日分时</div>
                   </div>

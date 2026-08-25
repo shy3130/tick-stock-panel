@@ -466,7 +466,11 @@ def _normalize_minute(df_in, default_symbol: str | None = None) -> pl.DataFrame:
     # datetime 列:优先用 timestamp(毫秒精度),其次 trade_time
     if "timestamp" in df.columns:
         df = df.with_columns(
-            pl.from_epoch("timestamp", time_unit="ms").alias("datetime"),
+            pl.from_epoch("timestamp", time_unit="ms")
+            .dt.replace_time_zone("UTC")
+            .dt.convert_time_zone("Asia/Shanghai")
+            .dt.replace_time_zone(None)
+            .alias("datetime"),
         ).drop("timestamp")
         for drop_col in ("trade_time", "trade_date"):
             if drop_col in df.columns:
@@ -828,32 +832,32 @@ def fetch_intraday_monitor_batch(
     return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
 
-def fetch_minute_single(
+_TICKFLOW_MINUTE_PERIODS = {1, 5, 10, 15, 30, 60}
+
+
+def fetch_minute_period(
     symbol: str,
-    trade_date: date,
+    start_time: datetime,
+    end_time: datetime,
+    period: int,
     asset_type: AssetType = "stock",
 ) -> pl.DataFrame:
-    """实时拉取单股单日分钟 K(不写入本地)。优先自定义分钟源, 回退 TickFlow。"""
-    from datetime import datetime
-    # 北京时间窗口必须带时区: naive datetime 会被 .timestamp() 按服务器本地时区解释,
-    # UTC 容器上窗口整体偏移 8 小时, 分时补拉必然为空。
-    start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0, tzinfo=CN_TZ)
-    end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0, tzinfo=CN_TZ)
+    """实时拉取一个分钟周期。优先自定义源,回退 TickFlow 已知支持的周期。"""
+    if period <= 0:
+        raise ValueError("period 必须大于 0")
 
-    # 自定义数据源分流: 与 sync_minute_batch 一致, 配了自定义分钟源时走 custom provider,
-    # 避免无 TickFlow Pro+ 权限的用户分时图首次打开(本地无数据)时补拉失败返回空。
     df, fallback = _try_custom_minute(
         [symbol], start_time=start_time, end_time=end_time,
-        asset_type=asset_type, freq="1m",
+        asset_type=asset_type, freq=f"{period}m",
     )
     if not fallback:
-        # 见 sync_minute_batch 同分支注释: df 在此必非 None。
         return df if df is not None else pl.DataFrame()
+    if period not in _TICKFLOW_MINUTE_PERIODS:
+        return pl.DataFrame()
 
-    tf = get_client()
     try:
-        raw = tf.klines.batch(
-            [symbol], period="1m",
+        raw = get_client().klines.batch(
+            [symbol], period=f"{period}m",
             start_time=_datetime_to_ms(start_time),
             end_time=_datetime_to_ms(end_time),
             count=10000,
@@ -861,15 +865,26 @@ def fetch_minute_single(
             as_dataframe=True, show_progress=False,
         )
     except Exception as e:
-        logger.warning("fetch_minute_single(%s, %s) failed: %s", symbol, trade_date, e)
+        logger.warning("fetch_minute_period(%s, %dm) failed: %s", symbol, period, e)
         return pl.DataFrame()
 
     if isinstance(raw, dict):
-        sub = raw.get(symbol)
-        return _normalize_minute(sub) if sub is not None and len(sub) > 0 else pl.DataFrame()
-    if raw is not None and len(raw) > 0:
-        return _normalize_minute(raw)
-    return pl.DataFrame()
+        raw = raw.get(symbol)
+    return _normalize_minute(raw, symbol)
+
+
+def fetch_minute_single(
+    symbol: str,
+    trade_date: date,
+    asset_type: AssetType = "stock",
+) -> pl.DataFrame:
+    """实时拉取单股单日分钟 K(不写入本地)。优先自定义分钟源, 回退 TickFlow。"""
+    # 北京时间窗口必须带时区: naive datetime 会被 .timestamp() 按服务器本地时区解释,
+    # UTC 容器上窗口整体偏移 8 小时, 分时补拉必然为空。
+    start_time = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0, tzinfo=CN_TZ)
+    end_time = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0, tzinfo=CN_TZ)
+
+    return fetch_minute_period(symbol, start_time, end_time, 1, asset_type)
 
 
 def fetch_adj_factor_single(symbol: str) -> pl.DataFrame:

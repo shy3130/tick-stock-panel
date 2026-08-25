@@ -329,12 +329,14 @@ export interface ChanCenter {
 }
 
 export interface ChanLevel {
-  key: 'daily' | 'weekly' | 'monthly'
+  key: 'daily' | 'weekly' | 'monthly' | '1f' | '5f' | '10f' | '15f' | '30f' | '60f' | '120f'
   label: string
   bars: KlineRow[]
   pens: ChanPen[]
   centers: ChanCenter[]
   direction: 'up' | 'down' | 'flat'
+  source?: 'direct' | 'synthetic' | 'none'
+  source_period?: string
 }
 
 export interface IndexChanAnalysis {
@@ -1987,6 +1989,10 @@ export const api = {
   indexChan: (symbol: string, dateRange: { start: string; end: string }) =>
     request<IndexChanAnalysis>(
       `/api/index/chan?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`,
+    ),
+  indexChanMinute: (symbol: string, days = 45) =>
+    request<IndexChanAnalysis>(
+      `/api/index/chan/minute?symbol=${encodeURIComponent(symbol)}&days=${days}`,
     ),
   indexMinute: (symbol: string, date?: string) =>
     request<{

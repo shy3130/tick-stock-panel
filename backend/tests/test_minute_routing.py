@@ -11,7 +11,7 @@ mock 范式沿用 test_stocksdk_provider.py (monkeypatch 模块属性)。
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from threading import Lock
 from unittest.mock import MagicMock
 
@@ -37,6 +37,18 @@ def _mock_minute_df(symbol: str = "600519.SH") -> pl.DataFrame:
         "volume": [1000.0],
         "amount": [100500.0],
     })
+
+
+def test_normalize_tickflow_timestamp_to_beijing_time():
+    utc = datetime(2026, 8, 24, 1, 30, tzinfo=UTC)
+    raw = pl.DataFrame({
+        "timestamp": [int(utc.timestamp() * 1000)],
+        "open": [1], "high": [1], "low": [1], "close": [1],
+    })
+
+    result = kline_sync._normalize_minute(raw, "000001.SH")
+
+    assert result["datetime"][0] == datetime(2026, 8, 24, 9, 30)
 
 
 def _setup_custom_provider(monkeypatch, provider: object, has_dataset: bool = True) -> None:

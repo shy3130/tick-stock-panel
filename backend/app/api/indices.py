@@ -9,6 +9,7 @@ import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.indicators.pipeline import compute_enriched
+from app.market_time import cn_now
 from app.services import chan_analysis, index_sync, kline_sync
 from app.tickflow.capabilities import Cap
 
@@ -140,6 +141,30 @@ def get_index_minute(
         "rows": df.to_dicts(),
         "source": "live" if not df.is_empty() else "none",
     }
+
+
+@router.get("/chan/minute")
+def get_index_chan_minute(
+    request: Request,
+    symbol: Annotated[str, Query(description="指数代码, 如 000001.SH")],
+    days: Annotated[int, Query(ge=5, le=120)] = 45,
+):
+    """返回 1F~120F 缠论;直取失败时从最近可整除的较小周期合成。"""
+    end = cn_now()
+    start = end - timedelta(days=days)
+    frames: dict[int, tuple[pl.DataFrame, str, str]] = {}
+    for period in (1, 5, 10, 15, 30, 60, 120):
+        direct = kline_sync.fetch_minute_period(symbol, start, end, period, "index")
+        if not direct.is_empty():
+            frames[period] = (direct, "direct", f"{period}F")
+            continue
+        candidates = [source for source, (df, _, _) in frames.items() if not df.is_empty() and period % source == 0]
+        if not candidates:
+            frames[period] = (pl.DataFrame(), "none", "--")
+            continue
+        source = max(candidates)
+        frames[period] = (chan_analysis.resample_minute(frames[source][0], period), "synthetic", f"{source}F")
+    return chan_analysis.analyze_minute_levels(frames, symbol)
 
 
 @router.post("/sync_instruments")
