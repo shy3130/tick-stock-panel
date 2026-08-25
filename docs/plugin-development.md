@@ -131,6 +131,16 @@ class MyConfig:
   - `bridge.mjs` — Node 端(并发池、重试、SDK 解析)
   - `provider.py` — Provider 实现(归一化、分批、错误降级)
 
+- **`backend/app/plugins/eltdx/`** — Python 型插件, 通达信 7709 协议(eltdx SDK, Rust Runtime 驱动进程内 TCP 长连接池)
+  - `bridge.py` — TdxClient 单例生命周期管理 + 数据获取薄封装, 统一转 list[dict] 供 provider 消费
+  - `provider.py` — Provider 实现(代码转换、单位换算、逐日 qfq 因子→事件式 ex_factor 换算、区间裁剪、错误降级)
+  - 增量拉取: 传 `since` 时用 `bars.get` 按最新在前分页、覆盖到起点即提前终止, 避免全量分页(精确裁剪由 provider 完成)
+  - 批量拉取: 日K/除权因子/分钟线按单标的并发 8 路(对齐 TdxClient 默认 8 连接池), 单个标的失败聚合为一条 WARNING, 不拖垮整批
+  - asset_type 分流: 代码前缀白名单区分 stock/etf(指数协议不支持, 直接拒绝); 全市场同步时按资产类型路由
+  - ⚠️ 已知边界: 股票日K/分钟/实时走自定义 provider 路由, 但 **ETF 日K批量同步** `index_sync.sync_and_persist_etf_daily` 目前仍直连 TickFlow, 未走 `provider.get_daily(asset_type="etf")`; 故 eltdx 的 ETF 日K分支仅在分钟 intraday 补拉等显式调用路径生效
+  - 与 stock-sdk 的 subprocess 桥接不同: 整个后端进程复用同一个 TdxClient, `close()` 统一释放; 探活 `availability()` 用独立临时 client, 不关闭共享单例
+  - 合规提示: eltdx 为 Research-Only License(仅限个人学习/协议研究, 禁止商业/生产使用), Docker 默认不打包
+
 ## 路由机制(无需关心, 仅参考)
 
 后端启动时, `loader.py` 的 `_load_builtin_plugins()` 扫描 `plugins/` 目录:
