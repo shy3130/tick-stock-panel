@@ -7,6 +7,7 @@ import { QK } from '@/lib/queryKeys'
 import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { usePreferences } from '@/lib/useSharedQueries'
+import { directionAfterTypeChange } from './ruleTypeDirection'
 
 interface Props {
   /** 编辑现有规则;null=新建 */
@@ -21,6 +22,7 @@ interface Props {
 
 const TYPE_DEFAULT_NAME: Record<string, string> = {
   signal: '个股信号监控', price: '价格监控', market: '市场异动监控', strategy: '策略监控',
+  abnormal: '交易所异动监控',
 }
 
 const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
@@ -33,12 +35,14 @@ const emptyRule = (preset?: Partial<MonitorRule>): MonitorRule => ({
   sector: null,
   strategy_id: null,
   direction: 'entry',
+  abnormal_window: 'any',
+  threshold_pct: 100,
   conditions: [],
   logic: 'or',
   cooldown_seconds: 3600,
   severity: 'info',
-  message: '',
   ...preset,
+  message: preset?.message ?? '',
 })
 
 export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
@@ -65,22 +69,38 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     mutationFn: () => {
       const d = { ...draft }
       // name 为空时用默认名
+      const selectedGroup = d.scope === 'watchlist_group'
+        ? (options.data?.watchlist_groups ?? []).find(g => g.id === d.group_id)
+        : undefined
       if (!d.name.trim()) {
         const base = TYPE_DEFAULT_NAME[d.type] ?? '监控规则'
         d.name = d.scope === 'symbols' && d.symbols.length > 0
           ? `${base} · ${d.symbols[0]}${d.symbols.length > 1 ? ` 等${d.symbols.length}只` : ''}`
-          : base
+          : d.scope === 'watchlist_group' && selectedGroup
+            ? `${base} · 分组「${selectedGroup.name}」`
+            : base
+      }
+      // 作用域互斥清理 (与后端 normalize 对齐): 分组作用域不存 symbols, 其他作用域清 group_id
+      if (d.scope === 'watchlist_group') {
+        d.symbols = []
+      } else {
+        d.group_id = null
       }
       if (d.type === 'strategy') {
         if (!d.strategy_id) throw new Error('策略监控必须选择一个策略')
+      } else if (d.type === 'abnormal') {
+        const tp = Number(d.threshold_pct ?? 100)
+        if (!Number.isFinite(tp) || tp < 50 || tp > 150) throw new Error('阈值倍率必须在 50~150 之间 (100=交易所阈值)')
       } else {
         if (d.conditions.length === 0) throw new Error('至少选择一个触发条件')
         for (const c of d.conditions) {
-          if (!c.field || !c.op) throw new Error('条件填写不完整')
+          if (c.op === 'truth' && !c.field) throw new Error('信号条件不能为空')
           if (c.op !== 'truth' && (c.value === null || c.value === undefined)) throw new Error('阈值条件需要数值')
         }
       }
-      if (d.scope === 'sector') throw new Error('板块(scope=sector)当前不可用,请改选「指定股票」或「全市场」')
+      if (d.scope === 'sector') throw new Error('板块(scope=sector)当前不可用,请改选「指定股票」「自选分组」或「全市场」')
+      if (d.scope === 'watchlist_group' && !d.group_id) throw new Error('请选择一个自选分组')
+      if (d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只标的')
       return api.monitorRuleSave(d)
     },
     onSuccess: () => {
@@ -164,7 +184,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                     <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} className="flex-1 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
                       {thresholdFields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
                     </select>
-                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
+                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value as MonitorCondition['op'] })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
                     </select>
                     <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
@@ -216,7 +236,18 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </label>
         <label className="space-y-1.5">
           <span className="text-[11px] text-muted">监控类型</span>
-          <select value={draft.type} onChange={e => setDraft(d => ({ ...d, type: e.target.value as MonitorRule['type'] }))} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+          <select
+            value={draft.type}
+            onChange={e => {
+              const type = e.target.value as MonitorRule['type']
+              setDraft(d => ({
+                ...d,
+                type,
+                direction: directionAfterTypeChange(d.type, type, d.direction),
+              }))
+            }}
+            className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground"
+          >
             {(options.data?.types ?? []).map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
         </label>
@@ -251,15 +282,32 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
               />
             </div>
           )}
+          {draft.scope === 'watchlist_group' && (
+            <div className="min-w-0 flex-1 flex items-center gap-2">
+              <select
+                value={draft.group_id ?? ''}
+                onChange={e => setDraft(d => ({ ...d, group_id: e.target.value || null }))}
+                className="h-8 max-w-56 rounded-btn border border-border bg-base px-2 text-xs text-foreground"
+              >
+                <option value="">选择自选分组…</option>
+                {(options.data?.watchlist_groups ?? []).map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+              <span className="text-[10px] text-muted" title="规则只绑定分组; 分组内增删标的后自动生效, 无需修改规则">
+                动态绑定: 分组内增删标的后自动生效
+              </span>
+            </div>
+          )}
           {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有股票生效</span>}
           {draft.scope === 'sector' && (
-            <span className="text-[11px] text-warning">板块(scope=sector)当前不可用且不会触发; 请改选「指定股票」或「全市场」后再保存。</span>
+            <span className="text-[11px] text-warning">板块(scope=sector)当前不可用且不会触发; 请改选「指定股票」「自选分组」或「全市场」后再保存。</span>
           )}
         </div>
       </div>
 
-      {/* 触发条件 (非 strategy) */}
-      {draft.type !== 'strategy' && (
+      {/* 触发条件 (非 strategy/abnormal) */}
+      {draft.type !== 'strategy' && draft.type !== 'abnormal' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-muted">触发条件</span>
@@ -293,7 +341,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                     <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
                       {thresholdFields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
                     </select>
-                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
+                    <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value as MonitorCondition['op'] })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
                     </select>
                     <input type="number" value={c.value ?? 0} onChange={e => updateCond(realIdx, { value: parseFloat(e.target.value) })} step="any" className="w-24 h-7 px-1.5 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50" />
@@ -345,6 +393,49 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           </div>
           <p className="text-[10px] leading-4 text-muted/70">
             策略监控自动评估策略的买卖信号。entry=买入信号,exit=卖出信号,both=两者都报。作用范围建议用「全市场」。
+          </p>
+        </div>
+      )}
+
+      {/* abnormal 类型: 方向 / 窗口 / 阈值倍率 */}
+      {draft.type === 'abnormal' && (
+        <div className="space-y-2">
+          <span className="text-[11px] text-muted">异动方向 / 窗口 / 阈值倍率</span>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <label className="space-y-1.5">
+              <span className="text-[10px] text-muted/70">方向</span>
+              <select
+                value={draft.direction === 'up' || draft.direction === 'down' ? draft.direction : 'both'}
+                onChange={e => setDraft(d => ({ ...d, direction: e.target.value as MonitorRule['direction'] }))}
+                className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground"
+              >
+                {(options.data?.abnormal_directions ?? [{ key: 'up', label: '上涨异动' }, { key: 'down', label: '下跌异动' }, { key: 'both', label: '涨跌都报' }]).map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-[10px] text-muted/70">窗口</span>
+              <select
+                value={draft.abnormal_window ?? 'any'}
+                onChange={e => setDraft(d => ({ ...d, abnormal_window: e.target.value as NonNullable<MonitorRule['abnormal_window']> }))}
+                className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground"
+              >
+                {(options.data?.abnormal_windows ?? [{ key: 'any', label: '全部窗口' }, { key: '3d', label: '3日' }, { key: '10d', label: '10日' }, { key: '30d', label: '30日' }]).map(w => <option key={w.key} value={w.key}>{w.label}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-[10px] text-muted/70">阈值倍率 (100=交易所阈值)</span>
+              <input
+                type="number" min={50} max={150} step={5}
+                value={draft.threshold_pct ?? 100}
+                onChange={e => setDraft(d => ({ ...d, threshold_pct: Number(e.target.value) }))}
+                className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs font-mono text-foreground"
+              />
+            </label>
+          </div>
+          <p className="text-[10px] leading-4 text-muted/70">
+            偏离值 = 个股日涨跌幅 − 基准指数日涨跌幅 的逐日累计 (3/10/30 日窗口)。
+            阈值: 3日 主板±20%/创业·科创±30%/北交±40%; 10日 +100%/−50%; 30日 +200%/−70%。
+            首次观测只记录不告警, 越线后才在再次越线时提醒 (边缘触发)。交易所规则近似监测, 非交易所公告。
           </p>
         </div>
       )}

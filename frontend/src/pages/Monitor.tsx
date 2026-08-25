@@ -12,10 +12,12 @@ import { cnSignal } from '@/lib/signals'
 import { boardTag } from '@/components/stock-table/primitives'
 import { markSeen, resetBadge, leaveMonitorPage } from '@/lib/monitorBadge'
 import { RuleEditor } from '@/components/monitor/RuleEditor'
+import { resolveWatchlistGroupColor } from '@/lib/watchlist-group-colors'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 
 const TYPE_LABEL: Record<string, string> = {
   signal: '信号', price: '价格/涨跌', market: '市场异动', strategy: '策略监控',
+  abnormal: '交易所异动',
 }
 
 /** 严重级别 → 左侧色条 + 图标 */
@@ -29,8 +31,8 @@ const SOURCE_BADGE_STYLE: Record<string, string> = {
   signal:   'bg-accent/10 text-accent border-accent/20',
   price:    'bg-emerald-400/10 text-emerald-400 border-emerald-400/20',
   market:   'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  abnormal: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
 }
-
 /**
  * 渲染策略类消息 — 策略名黄色、新入选绿、移出红、其余白色。
  */
@@ -486,6 +488,23 @@ function RulesList({ rulesQuery, onEdit }: {
     staleTime: 300000,
   })
   const symbolNames = namesQuery.data?.names ?? {}
+  // 分组作用域规则: 拉取分组定义显示组名/颜色
+  const hasGroupRules = rules.some(r => r.scope === 'watchlist_group')
+  const groupsQ = useQuery({
+    queryKey: QK.watchlistGroups,
+    queryFn: api.watchlistGroups,
+    enabled: hasGroupRules,
+  })
+  const groupsById = useMemo(() => {
+    const map: Record<string, { id: string; name: string; color: string }> = {}
+    for (const g of groupsQ.data?.groups ?? []) map[g.id] = g
+    return map
+  }, [groupsQ.data])
+  const groupNamesById = useMemo(() => {
+    const names: Record<string, string> = {}
+    for (const g of groupsQ.data?.groups ?? []) names[g.id] = g.name
+    return names
+  }, [groupsQ.data])
 
   const del = useMutation({
     mutationFn: api.monitorRuleDelete,
@@ -558,8 +577,24 @@ function RulesList({ rulesQuery, onEdit }: {
                       <span className="font-mono text-xs font-medium text-foreground hover:text-accent">{r.symbols[0]}</span>
                       {symbolNames[r.symbols[0]] && <span className="text-xs text-secondary truncate">{symbolNames[r.symbols[0]]}</span>}
                     </button>
+                  ) : r.scope === 'watchlist_group' ? (
+                    <span className="inline-flex min-w-0 items-center gap-1" title={`分组作用域 · ${r.group_id ? groupNamesById[r.group_id] ?? r.group_id : '未选择分组'}`}>
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${resolveWatchlistGroupColor(groupsById[r.group_id ?? '']?.color).dot}`} />
+                      <span className="truncate text-xs font-medium text-foreground">
+                        {r.group_id ? groupNamesById[r.group_id] ?? '分组已删除' : '未选择分组'}
+                      </span>
+                      <span className="shrink-0 text-[9px] text-muted/60">· 分组作用域</span>
+                    </span>
                   ) : (
                     <h3 className={cn('text-xs font-medium truncate', r.enabled ? 'text-foreground' : 'text-muted')}>{displayName}</h3>
+                  )}
+                  {r.runtime_warning && (
+                    <span
+                      className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium bg-warning/12 text-warning border border-warning/25"
+                      title={r.runtime_warning}
+                    >
+                      {r.runtime_warning}
+                    </span>
                   )}
                   {!r.enabled && <span className="shrink-0 text-[9px] text-secondary">· 停用</span>}
                 </div>
@@ -602,8 +637,18 @@ function RulesList({ rulesQuery, onEdit }: {
                 </div>
               </div>
 
-              {/* 第二行: 策略类型显示选股池变更监控 */}
-              {r.type === 'strategy' && r.strategy_id ? (
+              {/* 第二行: abnormal 显示方向/窗口/倍率摘要 */}
+              {r.type === 'abnormal' ? (
+                <div className="mt-0.5 flex items-center gap-1.5 pl-0.5 text-[9px] text-secondary">
+                  <span>{r.direction === 'up' ? '上涨异动' : r.direction === 'down' ? '下跌异动' : '涨跌都报'}</span>
+                  <span className="text-muted">·</span>
+                  <span>{r.abnormal_window === 'any' ? '全部窗口' : `${r.abnormal_window}窗口`}</span>
+                  <span className="text-muted">·</span>
+                  <span className="font-mono">{r.threshold_pct ?? 100}%阈值</span>
+                  <span className="text-muted">·</span>
+                  <span className="text-muted/80">交易所规则近似</span>
+                </div>
+              ) : r.type === 'strategy' && r.strategy_id ? (
                 <div className="mt-0.5 flex items-center gap-2 pl-0.5">
                   <span className="text-[9px] text-secondary">选股池变更监控</span>
                 </div>

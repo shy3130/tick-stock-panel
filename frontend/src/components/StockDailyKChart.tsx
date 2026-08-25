@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Info } from 'lucide-react'
-import { api, type KlineRow } from '@/lib/api'
+import { Globe, Info } from 'lucide-react'
+import { api, chartLiveDegraded, type KlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import {
   EChartsCandlestick,
@@ -138,13 +138,23 @@ function buildLimitUpMarkers(rows: KlineRow[]): ChartMarker[] {
   return markers
 }
 
+function shanghaiDateString(value: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value)
+  const fields = Object.fromEntries(parts.map(({ type, value: part }) => [type, part]))
+  return `${fields.year}-${fields.month}-${fields.day}`
+}
+
 export function getDefaultRange(): { start: string; end: string } {
   const now = new Date()
-  const end = now.toISOString().slice(0, 10)
-  const s = new Date(now)
-  s.setMonth(s.getMonth() - 6)
-  const start = s.toISOString().slice(0, 10)
-  return { start, end }
+  const end = shanghaiDateString(now)
+  const start = new Date(`${end}T12:00:00+08:00`)
+  start.setMonth(start.getMonth() - 6)
+  return { start: shanghaiDateString(start), end }
 }
 
 function rangeDays(range: { start: string; end: string }): number {
@@ -188,6 +198,8 @@ export function StockDailyKChart({
   const rows = useMemo(() => toOHLC(kline.data?.rows ?? []), [kline.data?.rows])
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitUpMarkers(kline.data?.rows ?? []), [kline.data?.rows])
+  const liveDegraded = chartLiveDegraded(kline.data)
+
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
     ...(showLimitMarkers ? limitMarkers : []),
@@ -230,6 +242,18 @@ export function StockDailyKChart({
 
   return (
     <div className={className} style={{ minHeight: chartHeight }}>
+      {liveDegraded && (
+        <div className="px-1 pb-1">
+          <span
+            className="inline-flex cursor-help items-center gap-1 rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] leading-none text-warning/80"
+            title="当日K线来自腾讯分时派生的临时 bar，为盘中临时数据，仅供展示；不会写入本地行情库，也不参与选股、监控、回测。"
+          >
+            <Globe className="h-2.5 w-2.5" aria-hidden />
+            外部源·盘中临时数据
+          </span>
+        </div>
+      )}
+
       {showIndicatorControls && rows.length > 0 && (
         <div className="flex items-center gap-1.5 px-1 pb-0.5">
           {SUB_CHARTS.map(renderIndicatorButton)}

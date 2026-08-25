@@ -7,6 +7,7 @@
 3. scope=all / scope=symbols 保持原有行为不变。
 4. /api/monitor-rules/options 不再向新规则提供 sector。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -41,12 +42,14 @@ def _valid_rule(**overrides) -> dict:
 
 
 def _df() -> pl.DataFrame:
-    return pl.DataFrame({
-        "symbol": ["600519.SH", "000001.SZ", "600000.SH"],
-        "name": ["贵州茅台", "平安银行", "浦发银行"],
-        "close": [1700.0, 12.0, 10.0],
-        "change_pct": [3.5, -1.0, 2.0],
-    })
+    return pl.DataFrame(
+        {
+            "symbol": ["600519.SH", "000001.SZ", "600000.SH"],
+            "name": ["贵州茅台", "平安银行", "浦发银行"],
+            "close": [1700.0, 12.0, 10.0],
+            "change_pct": [3.5, -1.0, 2.0],
+        }
+    )
 
 
 # ── validate: 拒绝 sector / 未知 scope ─────────────────
@@ -74,23 +77,23 @@ def test_validate_accepts_all_and_symbols():
     monitor_rules.validate(_valid_rule(scope="symbols"))
 
 
-# ── engine _apply_scope: fail-closed ───────────────────
+# ── engine _apply_scope: fail-closed (实例方法: watchlist_group 需引擎 data_dir) ──
 def test_apply_scope_sector_returns_empty():
     rule = {"id": "r_sector", "scope": "sector"}
-    out = MonitorRuleEngine._apply_scope(_df(), rule)
+    out = MonitorRuleEngine()._apply_scope(_df(), rule)
     assert out.is_empty()
     assert out.height == 0
 
 
 def test_apply_scope_unknown_scope_returns_empty():
     rule = {"id": "r_x", "scope": "galaxy"}
-    out = MonitorRuleEngine._apply_scope(_df(), rule)
+    out = MonitorRuleEngine()._apply_scope(_df(), rule)
     assert out.is_empty()
 
 
 def test_apply_scope_all_returns_full_market():
     df = _df()
-    out = MonitorRuleEngine._apply_scope(df, {"id": "r_all", "scope": "all"})
+    out = MonitorRuleEngine()._apply_scope(df, {"id": "r_all", "scope": "all"})
     assert out.height == df.height
     assert sorted(out["symbol"].to_list()) == sorted(df["symbol"].to_list())
 
@@ -98,13 +101,13 @@ def test_apply_scope_all_returns_full_market():
 def test_apply_scope_symbols_filters_to_selection():
     df = _df()
     rule = {"id": "r_sym", "scope": "symbols", "symbols": ["600519.SH", "000001.SZ"]}
-    out = MonitorRuleEngine._apply_scope(df, rule)
+    out = MonitorRuleEngine()._apply_scope(df, rule)
     assert sorted(out["symbol"].to_list()) == ["000001.SZ", "600519.SH"]
 
 
 def test_apply_scope_symbols_empty_returns_empty():
     rule = {"id": "r_sym", "scope": "symbols", "symbols": []}
-    out = MonitorRuleEngine._apply_scope(_df(), rule)
+    out = MonitorRuleEngine()._apply_scope(_df(), rule)
     assert out.is_empty()
 
 
@@ -121,13 +124,15 @@ def test_engine_sector_rule_never_fires_as_full_market():
         "cooldown_seconds": 0,
     }
     engine.set_rules([rule])
-    df = pl.DataFrame({
-        "symbol": ["600519.SH"],
-        "name": ["贵州茅台"],
-        "close": [1700.0],
-        "change_pct": [3.5],
-        "signal_golden": [True],  # 条件本会命中
-    })
+    df = pl.DataFrame(
+        {
+            "symbol": ["600519.SH"],
+            "name": ["贵州茅台"],
+            "close": [1700.0],
+            "change_pct": [3.5],
+            "signal_golden": [True],  # 条件本会命中
+        }
+    )
     # sector 规则 fail-closed → 0 事件, 绝不当作全市场对 600519 触发
     assert engine.evaluate(df) == []
 
@@ -146,13 +151,15 @@ def test_engine_symbols_rule_still_fires():
         "cooldown_seconds": 0,
     }
     engine.set_rules([rule])
-    df = pl.DataFrame({
-        "symbol": ["600519.SH", "000001.SZ"],
-        "name": ["贵州茅台", "平安银行"],
-        "close": [1700.0, 12.0],
-        "change_pct": [3.5, -1.0],
-        "signal_golden": [True, True],
-    })
+    df = pl.DataFrame(
+        {
+            "symbol": ["600519.SH", "000001.SZ"],
+            "name": ["贵州茅台", "平安银行"],
+            "close": [1700.0, 12.0],
+            "change_pct": [3.5, -1.0],
+            "signal_golden": [True, True],
+        }
+    )
     events = engine.evaluate(df)
     assert len(events) == 1
     assert events[0]["symbol"] == "600519.SH"
@@ -169,4 +176,5 @@ def test_options_does_not_offer_sector(tmp_path: Path):
     assert resp.status_code == 200
     scopes = [s["key"] for s in resp.json()["scopes"]]
     assert "sector" not in scopes
-    assert set(scopes) == {"symbols", "all"}
+    # watchlist_group 为新增可选 scope (分组动态作用域)
+    assert set(scopes) == {"symbols", "all", "watchlist_group"}

@@ -464,3 +464,71 @@ def test_parse_enriched_range_repair_rejects_invalid_ranges(body, detail):
         kline._parse_enriched_range_repair(body, today=date(2026, 8, 2))
 
     assert exc.value.status_code == 400
+
+
+def test_daily_chart_live_bar_is_response_only_and_skips_historical_range(monkeypatch):
+    today = date(2026, 8, 24)
+
+    class ChartAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        def resolve_chart_live(self, symbol, trade_date, *, local_rows_empty):
+            self.calls += 1
+            assert (symbol, trade_date, local_rows_empty) == ("600519.SH", today, True)
+            return SimpleNamespace(
+                used_fallback=True,
+                source="tencent_chart",
+                reason=SimpleNamespace(value="local_chart_missing"),
+                minutes=[],
+                daily={
+                    "date": today.isoformat(),
+                    "open": 10.0,
+                    "high": 11.0,
+                    "low": 9.5,
+                    "close": 10.5,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                    "source": "tencent_chart",
+                    "provisional": True,
+                    "is_live": True,
+                },
+            )
+
+    adapter = ChartAdapter()
+    monkeypatch.setattr(
+        "app.services.external_fallback.get_adapter", lambda: adapter
+    )
+    monkeypatch.setattr(
+        "app.services.external_fallback.adapter._cn_today", lambda: today
+    )
+
+    rows, meta = kline._attach_chart_fallback_daily(
+        request(), "600519.SH", [], end=today
+    )
+
+    assert rows == [{
+        "date": "2026-08-24",
+        "open": 10.0,
+        "high": 11.0,
+        "low": 9.5,
+        "close": 10.5,
+        "volume": 100.0,
+        "amount": 1000.0,
+        "source": "tencent_chart",
+        "provisional": True,
+        "is_live": True,
+        "symbol": "600519.SH",
+    }]
+    assert meta == {
+        "degraded": True,
+        "sources": {"chart_live": "tencent_chart"},
+        "fallback_reason": "local_chart_missing",
+    }
+
+    rows, meta = kline._attach_chart_fallback_daily(
+        request(), "600519.SH", [], end=date(2026, 8, 21)
+    )
+    assert rows == []
+    assert meta == {}
+    assert adapter.calls == 1

@@ -3,6 +3,7 @@ import { type KlineRow, type FinancialMetricRecord } from '@/lib/api'
 import { StockInfoBar } from '@/components/StockInfoBar'
 import { StockDailyKChart, getDefaultRange, type StockDailyKChartResult } from '@/components/StockDailyKChart'
 import { StockIntradayChart } from '@/components/StockIntradayChart'
+import { StockFlowBehaviorPanel } from '@/components/StockFlowBehaviorPanel'
 import { DatePicker } from '@/components/DatePicker'
 import { useFinancialMetrics } from '@/lib/useFinancials'
 import { useCapabilities } from '@/lib/useSharedQueries'
@@ -181,7 +182,9 @@ export function StockPanel({
             )}
           </div>
         )}
+
       </div>
+      <StockFlowBehaviorPanel symbol={symbol} date={selectedDate} />
     </div>
   )
 }

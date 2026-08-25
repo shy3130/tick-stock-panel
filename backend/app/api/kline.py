@@ -1,4 +1,5 @@
 """K 线 / 同步 API。"""
+
 from __future__ import annotations
 
 import logging
@@ -114,6 +115,7 @@ def instruments_names(request: Request, symbols: list[str]):
     if df.is_empty():
         return {"names": {}}
     import polars as pl
+
     matched = df.filter(pl.col("symbol").is_in(symbols)).select(["symbol", "name"])
     names = {row["symbol"]: row["name"] for row in matched.iter_rows(named=True)}
     return {"names": names}
@@ -184,6 +186,69 @@ def _map_catalog_to_http(exc: Exception) -> None:
     raise
 
 
+# ---- 受控外部 chart_live fallback (仅当前 CN 交易日 A 股单标的纯展示兜底) ----
+# 契约: 默认关闭; 需 external_fallback_enabled=true + scope="chart_live";
+# 仅本地目标交易日数据为空时触发; catalog 503 fail-closed 路径绝不降级。
+
+
+def _chart_live_fallback(
+    request: Request, symbol: str, trade_date: date, *, local_rows_empty: bool
+) -> dict:
+    """调用 chart_live resolver; 未命中返回空 dict (响应不加任何字段)。"""
+    from app.services.external_fallback import get_adapter
+
+    try:
+        result = get_adapter().resolve_chart_live(
+            symbol, trade_date, local_rows_empty=local_rows_empty
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("chart_live fallback resolver raised %s", symbol)
+        return {}
+    if not result.used_fallback:
+        return {}
+    meta = {
+        "degraded": True,
+        "sources": {"chart_live": result.source or "tencent_chart"},
+        "fallback_reason": result.reason.value if result.reason else "local_chart_missing",
+    }
+    return {"meta": meta, "minutes": result.minutes, "daily": result.daily}
+
+
+def _chart_live_meta(payload: dict | None) -> dict:
+    """命中 fallback 时展开 degraded/sources/fallback_reason, 否则空。"""
+    if not payload:
+        return {}
+    return dict(payload.get("meta") or {})
+
+
+def _attach_chart_fallback_daily(
+    request: Request, symbol: str, rows: list[dict], end: date | None = None
+) -> tuple[list[dict], dict]:
+    """今日无本地/实时行时, 用 fallback 临时日K bar 追加/覆盖响应行。
+
+    仅纯展示: 绝不与本地 adjusted history 写回或混成 canonical。
+    end < 今日 (历史范围请求) 绝不触发 (契约: 历史日期绝不触发)。
+    """
+    from app.services.external_fallback.adapter import _cn_today
+
+    today = _cn_today()
+    if end is not None and end < today:
+        return rows, {}
+    today_str = today.isoformat()
+    # 本地已有今日行 (enriched/live candle 均算) → 完全不走 fallback
+    if any(str(r.get("date")) == today_str for r in rows):
+        return rows, {}
+
+    payload = _chart_live_fallback(request, symbol, today, local_rows_empty=True)
+    meta = _chart_live_meta(payload)
+    if not meta or not payload.get("daily"):
+        return rows, {}
+    daily = dict(payload["daily"])
+    daily["symbol"] = symbol
+    rows.append(daily)
+    return rows, meta
+
+
 @router.get("/minute")
 def get_minute(
     request: Request,
@@ -208,6 +273,7 @@ def get_minute(
 
     asset_type = _asset_type_for_symbol(symbol)
     from app.data_providers.registry import get_active_provider_name, get_provider
+
     provider_name = get_active_provider_name("minute")
     provider = get_provider(provider_name)
 
@@ -221,14 +287,25 @@ def get_minute(
         logger.exception("minute provider failed %s %s", symbol, trade_date)
         raise HTTPException(status_code=502, detail=str(e)) from e
 
-    return {
+    rows = _minute_rows(df, trade_date)
+    resp: dict = {
         "symbol": symbol,
         "name": stock_name,
         "stock_info": stock_info,
         "date": str(trade_date),
-        "rows": _minute_rows(df, trade_date),
+        "rows": rows,
         "source": provider_name,
     }
+    # provider 成功但 rows 为空 → 尝试 chart_live fallback (仅当前 CN 交易日
+    # A 股单标的; 命中才加 degraded/sources/fallback_reason 与行级 provenance)。
+    if not rows:
+        payload = _chart_live_fallback(request, symbol, trade_date, local_rows_empty=True)
+        if payload:
+            resp["rows"] = payload["minutes"]
+            resp["source"] = payload["meta"]["sources"]["chart_live"]
+            resp.update(_chart_live_meta(payload))
+    return resp
+
 
 @router.get("/daily")
 def get_daily(
@@ -261,6 +338,7 @@ def get_daily(
     stock_name = stock_info.get("name")
 
     from app.services.data_mode import is_local_daily_mode
+
     if is_local_daily_mode():
         from app.data_providers.registry import get_active_provider_name, get_provider
 
@@ -275,12 +353,14 @@ def get_daily(
             logger.debug("本地模式单股 instruments 拉取失败 %s: %s", symbol, e)
         raw = provider.get_daily([symbol], start_dt, end_dt, asset_type)
         if raw.is_empty():
+            rows, fb_meta = _attach_chart_fallback_daily(request, symbol, [], end=end)
             return {
                 "symbol": symbol,
                 "name": stock_name,
                 "stock_info": stock_info,
-                "rows": [],
+                "rows": rows,
                 "adjustment": _adjustment_label(symbol),
+                **fb_meta,
             }
         factors = pl.DataFrame()
         if asset_type == "stock":
@@ -288,7 +368,9 @@ def get_daily(
                 factors = provider.get_adj_factors([symbol], start_dt, end_dt, asset_type)
             except Exception as e:  # noqa: BLE001
                 logger.debug("本地模式单股除权因子拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors, instruments=instruments, asset_type=asset_type)
+        enriched = compute_enriched(
+            raw, factors=factors, instruments=instruments, asset_type=asset_type
+        )
         if asset_type == "stock":
             try:
                 moneyflow = provider.get_moneyflow_range(symbol, start_dt, end_dt)
@@ -297,8 +379,7 @@ def get_daily(
                 moneyflow = pl.DataFrame()
             if not moneyflow.is_empty():
                 enriched = (
-                    enriched
-                    .with_columns(
+                    enriched.with_columns(
                         pl.col("date").cast(pl.Date, strict=False).cast(pl.Utf8).alias("_date_key")
                     )
                     .join(
@@ -309,10 +390,14 @@ def get_daily(
                     .drop("_date_key")
                 )
             else:
-                enriched = enriched.with_columns(pl.lit(None).cast(pl.Float64).alias("main_net_inflow"))
+                enriched = enriched.with_columns(
+                    pl.lit(None).cast(pl.Float64).alias("main_net_inflow")
+                )
         else:
             enriched = enriched.with_columns(pl.lit(None).cast(pl.Float64).alias("main_net_inflow"))
         rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
+        # 今日无本地/实时行 → chart_live fallback 临时 bar (仅 A 股当日纯展示)
+        rows, fb_meta = _attach_chart_fallback_daily(request, symbol, rows, end=end)
         resp = {
             "symbol": symbol,
             "name": stock_name,
@@ -320,6 +405,7 @@ def get_daily(
             "rows": rows,
             "source": "local_disk",
             "adjustment": _adjustment_label(symbol),
+            **fb_meta,
         }
         return _attach_ext(resp, repo, symbol, ext_columns)
 
@@ -332,18 +418,21 @@ def get_daily(
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"数据源拉取失败: {e}") from e
         if raw.is_empty():
+            rows, fb_meta = _attach_chart_fallback_daily(request, symbol, [], end=end)
             return {
                 "symbol": symbol,
                 "name": stock_name,
                 "stock_info": stock_info,
-                "rows": [],
+                "rows": rows,
                 "adjustment": _adjustment_label(symbol),
+                **fb_meta,
             }
         # 拉除权因子做前复权；无能力时空 df → compute_enriched 退回未复权
         factors = pl.DataFrame()
         capset = getattr(request.app.state, "capabilities", None)
         try:
             from app.capabilities import Cap
+
             if capset and capset.has(Cap.ADJ_FACTOR):
                 factors = kline_sync.fetch_adj_factor_single(symbol)
         except Exception as e:  # noqa: BLE001
@@ -356,10 +445,13 @@ def get_daily(
             stock_name = stock_info.get("name")
         except Exception as e:  # noqa: BLE001
             logger.debug("单股 instruments 拉取失败 %s: %s", symbol, e)
-        enriched = compute_enriched(raw, factors=factors, instruments=instruments, asset_type=asset_type)
+        enriched = compute_enriched(
+            raw, factors=factors, instruments=instruments, asset_type=asset_type
+        )
         rows = enriched.tail(days).to_dicts()
         # 即使 live 模式也尝试追加实时蜡烛
         rows = _maybe_inject_live_candle(request, symbol, rows)
+        rows, fb_meta = _attach_chart_fallback_daily(request, symbol, rows, end=end)
         resp = {
             "symbol": symbol,
             "name": stock_name,
@@ -367,6 +459,7 @@ def get_daily(
             "rows": rows,
             "source": "live",
             "adjustment": _adjustment_label(symbol),
+            **fb_meta,
         }
         return _attach_ext(resp, repo, symbol, ext_columns)
 
@@ -374,6 +467,8 @@ def get_daily(
 
     # 追加/覆盖今日实时蜡烛
     rows = _maybe_inject_live_candle(request, symbol, rows)
+    # 今日无本地/实时行 → chart_live fallback 临时 bar (仅 A 股当日纯展示)
+    rows, fb_meta = _attach_chart_fallback_daily(request, symbol, rows, end=end)
 
     resp = {
         "symbol": symbol,
@@ -382,6 +477,7 @@ def get_daily(
         "rows": rows,
         "source": "enriched",
         "adjustment": _adjustment_label(symbol),
+        **fb_meta,
     }
     return _attach_ext(resp, repo, symbol, ext_columns)
 
@@ -408,10 +504,12 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
         return resp
 
     import polars as pl
+
     data_dir = repo.store.data_dir
     try:
         from app.services.ext_data import ExtConfigStore
         from app.api.ext_data import _read_ext_dataframe
+
         ext_store = ExtConfigStore(data_dir)
         configs = {c.id: c for c in ext_store.load_all()}
     except Exception:  # noqa: BLE001
@@ -431,11 +529,14 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
                         f"SELECT symbol, {quote_ident(field_name)} FROM ext_{config_id}"
                     ).arrow()
                 )
-            if not ext_df.is_empty() and "symbol" in ext_df.columns and field_name in ext_df.columns:
+            if (
+                not ext_df.is_empty()
+                and "symbol" in ext_df.columns
+                and field_name in ext_df.columns
+            ):
                 # 时序表取最新分区，避免一个 symbol 多行
                 row = (
-                    ext_df
-                    .select(["symbol", field_name])
+                    ext_df.select(["symbol", field_name])
                     .unique(subset=["symbol"], keep="last")
                     .filter(pl.col("symbol") == symbol)
                 )
@@ -467,6 +568,7 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -
 
     # 查找该 symbol 的实时 enriched 行
     import polars as pl
+
     try:
         q = df_today.filter(pl.col("symbol") == symbol).to_dicts()
         if not q:
@@ -503,12 +605,26 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -
         # main_net_inflow: 实时行情不提供资金流，保留覆盖前行的值（见下方 update 逻辑）
     }
     # 补上 enriched 的技术指标字段
-    for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
-                "macd_dif", "macd_dea", "macd_hist",
-                "kdj_k", "kdj_d", "kdj_j",
-                "boll_upper", "boll_lower",
-                "rsi_6", "rsi_14", "rsi_24",
-                "atr_14", "vol_ratio_5d"):
+    for key in (
+        "ma5",
+        "ma10",
+        "ma20",
+        "ma30",
+        "ma60",
+        "macd_dif",
+        "macd_dea",
+        "macd_hist",
+        "kdj_k",
+        "kdj_d",
+        "kdj_j",
+        "boll_upper",
+        "boll_lower",
+        "rsi_6",
+        "rsi_14",
+        "rsi_24",
+        "atr_14",
+        "vol_ratio_5d",
+    ):
         if key in q and q[key] is not None:
             live_row[key] = q[key]
 
@@ -528,6 +644,7 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -
 
 class DailyBatchRequest:
     """批量日K请求。"""
+
     symbols: list[str]
     days: int = 12
 
@@ -555,6 +672,7 @@ def get_daily_batch(request: Request, body: dict):
 
     cols = ["symbol", "date", "open", "high", "low", "close", "volume"]
     from app.services.data_mode import is_local_daily_mode
+
     if is_local_daily_mode():
         from app.data_providers.registry import get_active_provider_name, get_provider
 
@@ -587,6 +705,7 @@ def get_daily_batch(request: Request, body: dict):
             result[sym] = sub.to_dicts()
 
     return {"data": result}
+
 
 def _minute_rows(df, trade_date: date) -> list[dict]:
     """Serialize minute rows and repair missing timestamps from row order."""
@@ -634,6 +753,7 @@ def sync_batch(
 def refresh_views(request: Request):
     """刷新所有 DuckDB 视图(解决视图状态不一致问题)。"""
     from app.jobs.daily_pipeline import _refresh_views
+
     repo = request.app.state.repo
     _refresh_views(repo)
     return {"status": "ok"}
@@ -644,20 +764,22 @@ async def sync_minute(request: Request):
     """手动触发分钟 K 同步(全市场)。返回 pipeline job_id 可轮询进度。"""
     import asyncio
 
-    from app.services.pipeline_jobs import job_store
+    from app.services.pipeline_jobs import JobCancelledError, job_store
     from app.api.data import invalidate_storage_cache
     from app.services.preferences import get_minute_sync_days
 
     repo = request.app.state.repo
     capset = request.app.state.capabilities
 
-    job_id = job_store.create()
-    existing = job_store.get(job_id)
-    if existing and existing["status"] == "running":
+    job_store.reap_stale()
+    job_id, is_new = job_store.create(long_running=True)  # 全市场分钟长任务
+    if not is_new:
         return {"status": "reused", "job_id": job_id}
 
     async def task() -> None:
-        job_store.start(job_id)
+        owner = job_store.start(job_id)
+        if owner is None:
+            return  # create 与执行之间被取消
         loop = asyncio.get_event_loop()
 
         def progress(stage: str, pct: int, msg: str) -> None:
@@ -669,12 +791,16 @@ async def sync_minute(request: Request):
             try:
                 from app.data_providers.registry import get_active_provider_name, get_provider
                 from app.data_providers.fquant.catalog_resolver import (
-                    CatalogError, RouteNotFoundError, StaleCatalogError,
+                    CatalogError,
+                    RouteNotFoundError,
+                    StaleCatalogError,
                 )
+
                 provider_name = get_active_provider_name("minute")
                 provider = get_provider(provider_name)
                 if getattr(provider, "capabilities", None) and provider.capabilities.instruments:
                     import polars as pl
+
                     inst = provider.get_instruments("stock")
                     if not inst.is_empty() and "symbol" in inst.columns:
                         universe = sorted(inst["symbol"].cast(pl.Utf8).to_list())
@@ -686,6 +812,7 @@ async def sync_minute(request: Request):
             if inst_path.exists():
                 try:
                     import polars as pl
+
                     inst = pl.read_parquet(inst_path, columns=["symbol"])
                     universe = sorted(set(universe) | set(inst["symbol"].to_list()))
                 except Exception:  # noqa: BLE001
@@ -701,14 +828,19 @@ async def sync_minute(request: Request):
 
             # 刷新视图
             from app.jobs.daily_pipeline import _refresh_single_view
-            _refresh_single_view(repo, "kline_minute")
 
             progress("done", 100, f"分钟 K 同步完成,{written} 行")
-            job_store.succeed(job_id, {"minute_rows": written, "universe_size": len(universe)})
+            job_store.succeed(
+                job_id, {"minute_rows": written, "universe_size": len(universe)}, owner=owner
+            )
             invalidate_storage_cache()
+        except JobCancelledError:
+            logger.info("sync_minute cancelled: job_id=%s", job_id)
         except Exception as e:  # noqa: BLE001
-            job_store.fail(job_id, str(e))
+            job_store.fail(job_id, str(e), owner=owner)
             invalidate_storage_cache()
+        finally:
+            job_store.release(job_id, owner)
 
     asyncio.create_task(task())
     return {"status": "started", "job_id": job_id}
@@ -723,6 +855,7 @@ async def extend_history(request: Request):
     """
     import asyncio
     import traceback as _tb
+
     try:
         body = await request.json()
         value = body.get("value")
@@ -736,26 +869,29 @@ async def extend_history(request: Request):
         capset = request.app.state.capabilities
 
         from app.capabilities import Cap
+
         if not capset.has(Cap.KLINE_DAILY_BATCH):
             raise HTTPException(status_code=403, detail="当前数据源不支持批量日K")
 
         from app.services.extend_history import run_extend_history
-        from app.services.pipeline_jobs import job_store
+        from app.services.pipeline_jobs import JobCancelledError, job_store
         from app.api.data import invalidate_storage_cache
 
-        job_id = job_store.create()
-        existing = job_store.get(job_id)
-        if existing and existing["status"] == "running":
+        job_store.reap_stale()
+        job_id, is_new = job_store.create()
+        if not is_new:
             return {"status": "reused", "job_id": job_id}
 
         async def task() -> None:
-            job_store.start(job_id)
+            owner = job_store.start(job_id)
+            if owner is None:
+                return  # create 与执行之间被取消
             loop = asyncio.get_event_loop()
 
-            def progress(stage: str, pct: int, msg: str,
-                         stage_pct: int | None = None, skip_log: bool = False) -> None:
-                job_store.progress(job_id, stage, pct, msg,
-                                   stage_pct=stage_pct, skip_log=skip_log)
+            def progress(
+                stage: str, pct: int, msg: str, stage_pct: int | None = None, skip_log: bool = False
+            ) -> None:
+                job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
             try:
                 result = await loop.run_in_executor(
@@ -763,14 +899,17 @@ async def extend_history(request: Request):
                     lambda: run_extend_history(repo, capset, value, unit, on_progress=progress),
                 )
                 if "error" in result:
-                    job_store.fail(job_id, result["error"])
+                    job_store.fail(job_id, result["error"], owner=owner)
                 else:
-                    job_store.succeed(job_id, result)
+                    job_store.succeed(job_id, result, owner=owner)
                 invalidate_storage_cache()
+            except JobCancelledError:
+                logger.info("extend_history cancelled: job_id=%s", job_id)
             except Exception as e:
                 logger.exception("extend_history failed: job_id=%s", job_id)
-                job_store.fail(job_id, str(e))
-                invalidate_storage_cache()
+                job_store.fail(job_id, str(e), owner=owner)
+            finally:
+                job_store.release(job_id, owner)
 
         asyncio.create_task(task())
         return {"status": "started", "job_id": job_id}
@@ -803,27 +942,31 @@ async def repair_enriched_range(request: Request):
         repo = request.app.state.repo
         capset = request.app.state.capabilities
         from app.capabilities import Cap
+
         if not capset.has(Cap.KLINE_DAILY_BATCH):
             raise HTTPException(status_code=403, detail="当前数据源不支持批量日K")
 
         from app.api.data import invalidate_storage_cache
-        from app.services.pipeline_jobs import job_store
+        from app.services.pipeline_jobs import JobCancelledError, job_store
 
-        job_id = job_store.create()
-        existing = job_store.get(job_id)
-        if existing and existing["status"] == "running":
+        job_store.reap_stale()
+        job_id, is_new = job_store.create()
+        if not is_new:
             return {"status": "reused", "job_id": job_id}
 
         async def task() -> None:
-            job_store.start(job_id)
+            owner = job_store.start(job_id)
+            if owner is None:
+                return  # create 与执行之间被取消
             loop = asyncio.get_event_loop()
 
-            def progress(stage: str, pct: int, msg: str,
-                         stage_pct: int | None = None, skip_log: bool = False) -> None:
-                job_store.progress(job_id, stage, pct, msg,
-                                   stage_pct=stage_pct, skip_log=skip_log)
+            def progress(
+                stage: str, pct: int, msg: str, stage_pct: int | None = None, skip_log: bool = False
+            ) -> None:
+                job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
             try:
+
                 def repair() -> dict[str, int | str]:
                     from app.data_providers.registry import get_active_provider_name, get_provider
                     from app.indicators.pipeline import run_pipeline_local_incremental
@@ -874,12 +1017,17 @@ async def repair_enriched_range(request: Request):
                     }
 
                 result = await loop.run_in_executor(_long_task_executor, repair)
-                progress("repair_enriched_range", 100, f"补算完成，写入 {result['enriched_rows']} 行")
-                job_store.succeed(job_id, result)
+                progress(
+                    "repair_enriched_range", 100, f"补算完成，写入 {result['enriched_rows']} 行"
+                )
+                job_store.succeed(job_id, result, owner=owner)
+            except JobCancelledError:
+                logger.info("repair_enriched_range cancelled: job_id=%s", job_id)
             except Exception as e:  # noqa: BLE001
                 logger.exception("repair_enriched_range failed: job_id=%s", job_id)
-                job_store.fail(job_id, str(e))
+                job_store.fail(job_id, str(e), owner=owner)
             finally:
+                job_store.release(job_id, owner)
                 invalidate_storage_cache()
 
         asyncio.create_task(task())
@@ -898,25 +1046,28 @@ async def rebuild_enriched(request: Request):
     返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
     """
     import asyncio
+
     try:
         repo = request.app.state.repo
 
-        from app.services.pipeline_jobs import job_store
+        from app.services.pipeline_jobs import JobCancelledError, job_store
         from app.api.data import invalidate_storage_cache
 
-        job_id = job_store.create()
-        existing = job_store.get(job_id)
-        if existing and existing["status"] == "running":
+        job_store.reap_stale()
+        job_id, is_new = job_store.create()
+        if not is_new:
             return {"status": "reused", "job_id": job_id}
 
         async def task() -> None:
-            job_store.start(job_id)
+            owner = job_store.start(job_id)
+            if owner is None:
+                return  # create 与执行之间被取消
             loop = asyncio.get_event_loop()
 
-            def progress(stage: str, pct: int, msg: str,
-                         stage_pct: int | None = None, skip_log: bool = False) -> None:
-                job_store.progress(job_id, stage, pct, msg,
-                                   stage_pct=stage_pct, skip_log=skip_log)
+            def progress(
+                stage: str, pct: int, msg: str, stage_pct: int | None = None, skip_log: bool = False
+            ) -> None:
+                job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
             try:
                 progress("rebuild_enriched", 10, "全量计算 enriched…")
@@ -924,9 +1075,13 @@ async def rebuild_enriched(request: Request):
 
                 def _batch_progress(cur: int, tot: int) -> None:
                     pct = 10 + int(85 * cur / tot)
-                    progress("rebuild_enriched", pct,
-                             f"计算指标 批次 {cur}/{tot}",
-                             stage_pct=int(100 * cur / tot), skip_log=True)
+                    progress(
+                        "rebuild_enriched",
+                        pct,
+                        f"计算指标 批次 {cur}/{tot}",
+                        stage_pct=int(100 * cur / tot),
+                        skip_log=True,
+                    )
 
                 written = await loop.run_in_executor(
                     _long_task_executor,
@@ -934,7 +1089,9 @@ async def rebuild_enriched(request: Request):
                 )
 
                 enriched_dir = repo.store.data_dir / "kline_daily_enriched"
-                enriched_days = len(list(enriched_dir.glob("date=*"))) if enriched_dir.exists() else 0
+                enriched_days = (
+                    len(list(enriched_dir.glob("date=*"))) if enriched_dir.exists() else 0
+                )
 
                 # 刷新视图
                 d = repo.store.data_dir.as_posix()
@@ -949,27 +1106,36 @@ async def rebuild_enriched(request: Request):
                     except Exception:
                         pass
 
-                progress("rebuild_enriched", 100, f"完成,覆盖 {enriched_days} 天")
-                job_store.succeed(job_id, {
-                    "enriched_days": enriched_days,
-                    "enriched_rows": written,
-                })
+                job_store.succeed(
+                    job_id,
+                    {
+                        "enriched_days": enriched_days,
+                        "enriched_rows": written,
+                    },
+                    owner=owner,
+                )
                 invalidate_storage_cache()
+            except JobCancelledError:
+                logger.info("rebuild_enriched cancelled: job_id=%s", job_id)
             except Exception as e:
                 logger.exception("rebuild_enriched failed: job_id=%s", job_id)
-                job_store.fail(job_id, str(e))
+                job_store.fail(job_id, str(e), owner=owner)
                 invalidate_storage_cache()
+            finally:
+                job_store.release(job_id, owner)
 
         asyncio.create_task(task())
         return {"status": "started", "job_id": job_id}
     except Exception as e:
         import traceback as _tb
+
         logger.error("rebuild_enriched error: %s\n%s", e, _tb.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # 长时间任务专用线程池（隔离于 FastAPI 默认线程池，防止阻塞请求处理）
 import concurrent.futures as _cf
+
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
 
 
@@ -983,6 +1149,7 @@ async def extend_minute_history(request: Request):
     """
     import asyncio
     import traceback as _tb
+
     try:
         body = await request.json()
         value = body.get("value")
@@ -997,6 +1164,7 @@ async def extend_minute_history(request: Request):
 
         # 计算天数上限:day 最多 15 天;month 最多 6 月(180 天)
         from datetime import timedelta
+
         if unit == "month":
             total_days = min(value * 30, 180)
         else:
@@ -1005,35 +1173,38 @@ async def extend_minute_history(request: Request):
         if total_days <= 0:
             raise HTTPException(status_code=400, detail="扩展范围无效")
 
-        from app.services.pipeline_jobs import job_store
+        from app.services.pipeline_jobs import JobCancelledError, job_store
         from app.api.data import invalidate_storage_cache
 
-        job_id = job_store.create()
-        existing = job_store.get(job_id)
-        if existing and existing["status"] == "running":
+        job_store.reap_stale()
+        job_id, is_new = job_store.create(long_running=True)  # 全市场分钟长任务
+        if not is_new:
             return {"status": "reused", "job_id": job_id}
 
         async def task() -> None:
-            job_store.start(job_id)
+            owner = job_store.start(job_id)
+            if owner is None:
+                return  # create 与执行之间被取消
             loop = asyncio.get_event_loop()
 
-            def progress(stage: str, pct: int, msg: str,
-                         stage_pct: int | None = None, skip_log: bool = False) -> None:
-                job_store.progress(job_id, stage, pct, msg,
-                                   stage_pct=stage_pct, skip_log=skip_log)
+            def progress(
+                stage: str, pct: int, msg: str, stage_pct: int | None = None, skip_log: bool = False
+            ) -> None:
+                job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
             try:
                 # 获取当前最早日期
                 earliest = repo.earliest_minute_date()
                 if not earliest:
                     from datetime import date as _date
+
                     latest = _date.today()
                 else:
                     latest = earliest
 
                 new_start = latest - timedelta(days=total_days)
                 if new_start >= latest:
-                    job_store.fail(job_id, "扩展范围无效")
+                    job_store.fail(job_id, "扩展范围无效", owner=owner)
                     invalidate_storage_cache()
                     return
 
@@ -1053,14 +1224,20 @@ async def extend_minute_history(request: Request):
                     from datetime import datetime as _dt
 
                     def _chunk(cur: int, tot: int) -> None:
-                        progress("extend_minute", 8 + int(85 * cur / tot),
-                                 f"分钟K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+                        progress(
+                            "extend_minute",
+                            8 + int(85 * cur / tot),
+                            f"分钟K 批次 {cur}/{tot}",
+                            stage_pct=int(100 * cur / tot),
+                            skip_log=True,
+                        )
 
                     df = sync_minute_batch(
                         universe,
                         start_time=_dt.combine(new_start, _dt.min.time()),
                         end_time=_dt.combine(latest, _dt.min.time()),
-                        batch_size=batch_size, rpm=rpm,
+                        batch_size=batch_size,
+                        rpm=rpm,
                         on_chunk_done=_chunk,
                     )
 
@@ -1068,17 +1245,28 @@ async def extend_minute_history(request: Request):
                     day_count = 0
                     if not df.is_empty():
                         import polars as pl
+
                         df = df.with_columns(pl.col("datetime").dt.date().alias("_trade_date"))
                         for day_df in df.partition_by("_trade_date"):
                             trade_date = day_df["_trade_date"][0]
-                            out = repo.store.data_dir / "kline_minute" / f"date={trade_date}" / "part.parquet"
+                            out = (
+                                repo.store.data_dir
+                                / "kline_minute"
+                                / f"date={trade_date}"
+                                / "part.parquet"
+                            )
                             out.parent.mkdir(parents=True, exist_ok=True)
                             if out.exists():
                                 existing_df = pl.read_parquet(out)
                                 if "datetime" in existing_df.columns:
-                                    existing_df = existing_df.filter(pl.col("datetime").is_not_null())
-                                day_df = pl.concat([existing_df, day_df.drop("_trade_date")]).unique(
-                                    subset=["symbol", "datetime"], keep="last",
+                                    existing_df = existing_df.filter(
+                                        pl.col("datetime").is_not_null()
+                                    )
+                                day_df = pl.concat(
+                                    [existing_df, day_df.drop("_trade_date")]
+                                ).unique(
+                                    subset=["symbol", "datetime"],
+                                    keep="last",
                                 )
                             else:
                                 day_df = day_df.drop("_trade_date")
@@ -1100,19 +1288,25 @@ async def extend_minute_history(request: Request):
 
                 progress("extend_minute", 10, f"获取分钟K [{start_str} ~ {end_str}]…")
                 written, day_count = await loop.run_in_executor(_long_task_executor, _run)
-
-                progress("extend_minute", 95, f"分钟K 完成,{day_count} 天")
-                job_store.succeed(job_id, {
-                    "minute_days": day_count,
-                    "universe_size": len(universe),
-                    "earliest_before": (earliest or latest).isoformat(),
-                    "earliest_after": new_start.isoformat(),
-                })
+                job_store.succeed(
+                    job_id,
+                    {
+                        "minute_days": day_count,
+                        "universe_size": len(universe),
+                        "earliest_before": (earliest or latest).isoformat(),
+                        "earliest_after": new_start.isoformat(),
+                    },
+                    owner=owner,
+                )
                 invalidate_storage_cache()
+            except JobCancelledError:
+                logger.info("extend_minute_history cancelled: job_id=%s", job_id)
             except Exception as e:
                 logger.exception("extend_minute_history failed: job_id=%s", job_id)
-                job_store.fail(job_id, str(e))
+                job_store.fail(job_id, str(e), owner=owner)
                 invalidate_storage_cache()
+            finally:
+                job_store.release(job_id, owner)
 
         asyncio.create_task(task())
         return {"status": "started", "job_id": job_id}
@@ -1128,12 +1322,16 @@ def _resolve_minute_universe(repo) -> list[str]:
     try:
         from app.data_providers.registry import get_active_provider_name, get_provider
         from app.data_providers.fquant.catalog_resolver import (
-            CatalogError, RouteNotFoundError, StaleCatalogError,
+            CatalogError,
+            RouteNotFoundError,
+            StaleCatalogError,
         )
+
         provider_name = get_active_provider_name("minute")
         provider = get_provider(provider_name)
         if getattr(provider, "capabilities", None) and provider.capabilities.instruments:
             import polars as pl
+
             inst = provider.get_instruments("stock")
             if not inst.is_empty() and "symbol" in inst.columns:
                 return sorted(inst["symbol"].cast(pl.Utf8).to_list())

@@ -1,4 +1,5 @@
 """数据画像 API —— 让前端知道"我们本地有什么数据"。"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -177,7 +178,9 @@ def _partition_date_stats(
         "row_count_exact": False,
         "earliest_date": dates[0],
         "latest_date": dates[-1],
-        "symbols_covered": _count_instruments_symbols(repo, instruments_table) if instruments_table else 0,
+        "symbols_covered": _count_instruments_symbols(repo, instruments_table)
+        if instruments_table
+        else 0,
         "trading_days": len(dates),
     }
     if schema_view is not None:
@@ -359,8 +362,7 @@ def _daily_freshness(
         "age_days": age,
         "reference_date": reference.isoformat(),
         "reason": (
-            f"落后最近收盘交易日 {age} 天"
-            f"（provider 水位不可读，按日历推断，法定节假日可能偏严）"
+            f"落后最近收盘交易日 {age} 天（provider 水位不可读，按日历推断，法定节假日可能偏严）"
         ),
     }
 
@@ -404,9 +406,7 @@ def _merge_canonical_daily_stats(repo, local: dict | None) -> dict | None:
         # 可查询范围与读取层一致地按水位夹逼。
         canonical_latest = min(canonical_latest, ceiling)
 
-    local_dates = _iso_partition_dates(
-        repo.store.data_dir / "kline_daily_enriched", ceiling
-    )
+    local_dates = _iso_partition_dates(repo.store.data_dir / "kline_daily_enriched", ceiling)
     local_earliest = local_dates[0] if local_dates else None
     local_latest = local_dates[-1] if local_dates else None
 
@@ -436,9 +436,7 @@ def _merge_canonical_daily_stats(repo, local: dict | None) -> dict | None:
             "trading_days": canonical["trading_days"] + extra_days,
             "universe_symbols": universe,
             "canonical_history": dict(canonical),
-            "freshness": _daily_freshness(
-                _parse_iso_date(latest_iso), _daily_watermark(repo)
-            ),
+            "freshness": _daily_freshness(_parse_iso_date(latest_iso), _daily_watermark(repo)),
             "storage_mode": "persisted",
         }
     )
@@ -540,11 +538,7 @@ def _instrument_stats(repo, table: str) -> dict | None:
     if frame is None or frame.is_empty() or "symbol" not in frame.columns:
         return None
     names = frame.get_column("name").to_list() if "name" in frame.columns else []
-    latest_as_of = (
-        frame.get_column("as_of").max()
-        if "as_of" in frame.columns
-        else None
-    )
+    latest_as_of = frame.get_column("as_of").max() if "as_of" in frame.columns else None
     return {
         "rows": frame.height,
         "symbols_covered": frame.get_column("symbol").n_unique(),
@@ -569,8 +563,6 @@ def _safe_aggregate_index_enriched(repo) -> dict | None:
         "instruments_index",
         schema_view="kline_index_enriched",
     )
-
-
 
 
 def _safe_aggregate_index_instruments(repo) -> dict | None:
@@ -642,8 +634,6 @@ def _safe_aggregate_hk_enriched(repo) -> dict | None:
 
 def _safe_aggregate_hk_daily(repo) -> dict | None:
     return _partition_date_stats(repo, "kline_hk_daily", "instruments_hk")
-
-
 
 
 def _single_parquet_stats(
@@ -794,9 +784,7 @@ def _financial_table_stats(path: Path) -> dict:
     try:
         frame = pl.scan_parquet(path)
         names = frame.collect_schema().names()
-        date_column = next(
-            (column for column in _FINANCIAL_DATE_COLUMNS if column in names), None
-        )
+        date_column = next((column for column in _FINANCIAL_DATE_COLUMNS if column in names), None)
         expressions = [
             pl.len().alias("rows"),
             pl.col("symbol").n_unique().alias("symbols"),
@@ -979,7 +967,7 @@ def _scan_recent_terminal_jobs() -> None:
     labels: dict[str, str | None] = {}
     pipeline: dict | None = None
     for j in job_store.list_recent(limit=50):
-        if j["status"] not in ("succeeded", "degraded", "failed"):
+        if j["status"] not in ("succeeded", "degraded", "failed", "cancelled"):
             continue
         if "instruments_rows" in (j.get("result") or {}) and "instruments" not in labels:
             labels["instruments"] = j["finished_at"]
@@ -1099,6 +1087,7 @@ def canonical_history_backfill(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"job_id": str(result["job_id"]), "status": str(result["status"])}
 
+
 @router.get("/status")
 def status(request: Request) -> dict:
     repo = request.app.state.repo
@@ -1106,32 +1095,42 @@ def status(request: Request) -> dict:
     data_dir = repo.store.data_dir
 
     return {
-        "daily":       _get_table_stats("daily",       lambda: _safe_aggregate_daily(repo)),
-        "enriched":    _get_table_stats("enriched",    lambda: _safe_aggregate_enriched(repo)),
-    "index_daily":       _get_table_stats("index_daily",       lambda: _safe_aggregate_index_daily(repo)),
-    "index_enriched":    _get_table_stats("index_enriched",    lambda: _safe_aggregate_index_enriched(repo)),
-    "index_instruments": _get_table_stats("index_instruments", lambda: _safe_aggregate_index_instruments(repo)),
-    "etf_daily":         _get_table_stats("etf_daily",         lambda: _safe_aggregate_etf_daily(repo)),
-    "etf_enriched":      _get_table_stats("etf_enriched",      lambda: _safe_aggregate_etf_enriched(repo)),
-    "etf_instruments":   _get_table_stats("etf_instruments",   lambda: _safe_aggregate_etf_instruments(repo)),
-    "hk_daily":          _get_table_stats("hk_daily",          lambda: _safe_aggregate_hk_daily(repo)),
-    "hk_enriched":       _get_table_stats("hk_enriched",       lambda: _safe_aggregate_hk_enriched(repo)),
-    "hk_instruments":    _get_table_stats("hk_instruments",    lambda: _safe_aggregate_hk_instruments(repo)),
-    "minute":      _get_table_stats("minute",      lambda: _safe_aggregate_minute(repo)),
-        "adj_factor":  _get_table_stats("adj_factor",  lambda: _safe_aggregate_adj_factor(repo)),
+        "daily": _get_table_stats("daily", lambda: _safe_aggregate_daily(repo)),
+        "enriched": _get_table_stats("enriched", lambda: _safe_aggregate_enriched(repo)),
+        "index_daily": _get_table_stats("index_daily", lambda: _safe_aggregate_index_daily(repo)),
+        "index_enriched": _get_table_stats(
+            "index_enriched", lambda: _safe_aggregate_index_enriched(repo)
+        ),
+        "index_instruments": _get_table_stats(
+            "index_instruments", lambda: _safe_aggregate_index_instruments(repo)
+        ),
+        "etf_daily": _get_table_stats("etf_daily", lambda: _safe_aggregate_etf_daily(repo)),
+        "etf_enriched": _get_table_stats(
+            "etf_enriched", lambda: _safe_aggregate_etf_enriched(repo)
+        ),
+        "etf_instruments": _get_table_stats(
+            "etf_instruments", lambda: _safe_aggregate_etf_instruments(repo)
+        ),
+        "hk_daily": _get_table_stats("hk_daily", lambda: _safe_aggregate_hk_daily(repo)),
+        "hk_enriched": _get_table_stats("hk_enriched", lambda: _safe_aggregate_hk_enriched(repo)),
+        "hk_instruments": _get_table_stats(
+            "hk_instruments", lambda: _safe_aggregate_hk_instruments(repo)
+        ),
+        "minute": _get_table_stats("minute", lambda: _safe_aggregate_minute(repo)),
+        "adj_factor": _get_table_stats("adj_factor", lambda: _safe_aggregate_adj_factor(repo)),
         "instruments": _get_table_stats("instruments", lambda: _safe_aggregate_instruments(repo)),
-        "financials":  _get_table_stats("financials",  lambda: _safe_aggregate_financials(repo)),
-
+        "financials": _get_table_stats("financials", lambda: _safe_aggregate_financials(repo)),
         # 文件层面信息(缓存)
         "storage": _get_storage(data_dir),
-
         # 调度
         "next_instruments_run": _next_cron_run(scheduler, "pre_market_instruments"),
-        "next_pipeline_run":    _next_cron_run(scheduler, "daily_pipeline"),
+        "next_pipeline_run": _next_cron_run(scheduler, "daily_pipeline"),
         "last_instruments_run": _last_finished("instruments"),
-        "last_pipeline_run":    _last_finished("pipeline"),
-        "last_pipeline":        _last_pipeline(),
-        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "last_pipeline_run": _last_finished("pipeline"),
+        "last_pipeline": _last_pipeline(),
+        "checked_at": datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
     }
 
 
@@ -1145,10 +1144,24 @@ def clear_data(request: Request):
     deleted = 0
 
     for sub in (
-        "kline_daily", "kline_daily_enriched", "kline_index_daily", "kline_index_enriched",
-        "kline_etf_daily", "kline_etf_enriched", "kline_etf_minute", "kline_minute",
-        "adj_factor", "adj_factor_etf", "instruments", "instruments_index", "instruments_etf", "pools", "financials",
-        "backtest_results", "screener_results", "ai_cache",
+        "kline_daily",
+        "kline_daily_enriched",
+        "kline_index_daily",
+        "kline_index_enriched",
+        "kline_etf_daily",
+        "kline_etf_enriched",
+        "kline_etf_minute",
+        "kline_minute",
+        "adj_factor",
+        "adj_factor_etf",
+        "instruments",
+        "instruments_index",
+        "instruments_etf",
+        "pools",
+        "financials",
+        "backtest_results",
+        "screener_results",
+        "ai_cache",
     ):
         d = data_dir / sub
         if d.exists():
@@ -1163,6 +1176,7 @@ def clear_data(request: Request):
 
     # 清除同步历史（内存 + 磁盘 job_store/ 文件夹）
     from app.services.pipeline_jobs import job_store
+
     job_store.clear()
 
     # 清除财务数据
@@ -1176,6 +1190,7 @@ def clear_data(request: Request):
     # 清除监控运行数据 (user_data 下仅清运行产物, 不动 monitor_rules/preferences/secrets 等用户配置)
     # - 触发记录 alerts.jsonl
     from app.services import alert_store
+
     alert_store.clear(data_dir)
     # - 待推送的实时通知队列 (进程内存)
     qs = getattr(request.app.state, "quote_service", None)
@@ -1192,14 +1207,17 @@ def clear_data(request: Request):
 
     # 清除 Screener 进程级 _history_cache (TTL 缓存)
     from app.services.screener import ScreenerService
+
     ScreenerService.clear_history_cache()
 
     # 清除 Overview 总览聚合结果缓存 (5s TTL)
     from app.api.overview import invalidate_overview_cache
+
     invalidate_overview_cache()
 
     # 清除复盘分区聚合缓存 (5min TTL) —— 否则清数据后复盘页仍显示旧的情绪/天梯序列
     from app.services.review_series import invalidate_review_cache
+
     invalidate_review_cache()
 
     # 刷新 DuckDB 视图（空 parquet 目录也需要重新挂载）
@@ -1347,11 +1365,13 @@ def table_schema(request: Request, table: str) -> list[dict]:
         for col in cols:
             name = col[0]
             dtype = col[1]
-            fields.append({
-                "name": name,
-                "type": dtype,
-                "desc": desc_map.get(name, ""),
-            })
+            fields.append(
+                {
+                    "name": name,
+                    "type": dtype,
+                    "desc": desc_map.get(name, ""),
+                }
+            )
     except Exception:  # noqa: BLE001
         # 视图不存在(本地无数据)，用静态字段定义兜底
         if desc_map:
@@ -1376,6 +1396,7 @@ def get_version(request: Request) -> dict:
 
     # 2. 回退到项目根 VERSION 文件
     from app.config import settings
+
     project_root = Path(settings.data_dir).parent
     version_file = project_root / "VERSION"
     if version_file.exists():

@@ -20,6 +20,10 @@ from datetime import date
 
 from app.services.external_fallback.calibration import filter_valid_depth, filter_valid_rows
 from app.services.external_fallback.circuit import CircuitBreaker
+from app.services.external_fallback.sources.tencent_chart import (
+    TencentChartSource,
+    is_a_share_supported as _is_a_share,
+)
 from app.services.external_fallback.sources.tencent_quote import (
     TencentQuoteSource,
     is_supported,
@@ -36,10 +40,13 @@ MAX_SYMBOLS = 60
 class Scope(str, enum.Enum):
     REALTIME = "realtime"
     DEPTH = "depth"
+    CHART_LIVE = "chart_live"
 
 
-# 首批 scope 白名单 (契约: 仅 realtime/depth 子集)。
-ALLOWED_SCOPES = frozenset({Scope.REALTIME.value, Scope.DEPTH.value})
+# scope 白名单 (契约: realtime/depth/chart_live 子集)。
+ALLOWED_SCOPES = frozenset(
+    {Scope.REALTIME.value, Scope.DEPTH.value, Scope.CHART_LIVE.value}
+)
 
 
 class FallbackReason(str, enum.Enum):
@@ -48,6 +55,7 @@ class FallbackReason(str, enum.Enum):
     LOCAL_SNAPSHOT_MISSING = "local_snapshot_missing"
     LOCAL_SNAPSHOT_STALE = "local_snapshot_stale"
     PROVIDER_NO_DEPTH = "provider_no_depth"
+    LOCAL_CHART_MISSING = "local_chart_missing"
 
 
 @dataclass
@@ -79,6 +87,24 @@ class FallbackResult:
     reason: FallbackReason | None = None
 
 
+@dataclass
+class ChartFallbackResult:
+    """resolve_chart_live 的返回值。
+
+    minutes: 当前交易日每分钟增量行 (source="tencent_chart",
+             provisional=True); daily: 同源派生的当日临时 bar
+             (source/provisional/is_live)。两者均为纯展示, 绝不进入
+             provider/repository/enriched 持久化链路。
+    used_fallback=True 时才应在 API 响应中追加 degraded/sources/fallback_reason。
+    """
+
+    minutes: list[dict] = field(default_factory=list)
+    daily: dict | None = None
+    used_fallback: bool = False
+    source: str | None = None
+    reason: FallbackReason | None = None
+
+
 class ExternalFallbackAdapter:
     """单例适配器 (线程安全)。
 
@@ -89,9 +115,11 @@ class ExternalFallbackAdapter:
         self,
         *,
         tencent_source: TencentQuoteSource | None = None,
+        chart_source: TencentChartSource | None = None,
         clock_ns: typing.Callable[[], int] | None = None,
     ) -> None:
         self._tencent = tencent_source or TencentQuoteSource()
+        self._chart = chart_source or TencentChartSource()
         self._lock = threading.Lock()
         # 连续口径校准失败计数 (契约 §4.6: 连续 3 次口径校验失败 → 熔断)。
         # 独立于网络层 record_failure, 因 _guarded_fetch 会在 HTTP 成功时重置网络失败计数。
@@ -274,6 +302,61 @@ class ExternalFallbackAdapter:
             used_fallback=True,
             source="tencent_quote",
             reason=FallbackReason.PROVIDER_NO_DEPTH,
+        )
+
+
+    def resolve_chart_live(
+        self,
+        symbol: str,
+        trade_date: date,
+        *,
+        local_rows_empty: bool,
+    ) -> ChartFallbackResult:
+        """当前交易日 A 股单标的图表临时兜底 resolver (chart_live scope)。
+
+        门控序 (任一不过 → 零网络返回未命中):
+          1. preferences: external_fallback_enabled & "chart_live" ∈ scopes
+          2. 交易日: trade_date == 当前 CN 交易日 且为工作日
+          3. 标的: A 股个股 (SH/SZ/BJ; 不含指数/港股)
+          4. 本地: local_rows_empty=True (调用方确认本地目标日数据为空)
+        本地非空、非当日、历史日期绝不触发。外部失败 → 未命中 (不抛出)。
+        结果仅纯展示, 绝不写入 provider/repository/enriched。
+        """
+        # 1. 门控: 关闭 / 无 chart_live scope → 零网络
+        if not self._is_enabled_for_scope(Scope.CHART_LIVE.value):
+            return ChartFallbackResult()
+        # 2. 交易日门控: 仅当前 CN 交易日 (历史日期绝不触发)
+        today = _cn_today()
+        if not self._is_cn_trading_day(today) or trade_date != today:
+            return ChartFallbackResult()
+        # 3. 本地优先: 本地目标日数据非空 → 零网络
+        if not local_rows_empty:
+            return ChartFallbackResult()
+        # 4. A 股单标的门控
+        if not _is_a_share(symbol):
+            return ChartFallbackResult()
+
+        try:
+            fetch = self._chart.get_minute_chart(symbol, trade_date)
+        except Exception:
+            logger.warning("external_fallback chart source raised")
+            return ChartFallbackResult()
+        if not fetch.transport_succeeded or not fetch.minutes or not fetch.daily:
+            logger.info(
+                "external_fallback chart_live fallback unavailable (%s)", symbol
+            )
+            return ChartFallbackResult()
+
+        logger.info(
+            "external_fallback chart_live fallback: %d minute rows (%s)",
+            len(fetch.minutes), symbol,
+        )
+        return ChartFallbackResult(
+            minutes=fetch.minutes,
+            daily=fetch.daily,
+            used_fallback=True,
+            source="tencent_chart",
+            reason=FallbackReason.LOCAL_CHART_MISSING,
         )
 
     def _record_calibration_failure(self, source: str) -> None:

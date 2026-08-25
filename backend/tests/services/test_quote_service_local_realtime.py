@@ -3,6 +3,7 @@ import threading
 from datetime import date
 from types import SimpleNamespace
 
+import polars as pl
 import app.services.quote_service as quote_service
 
 
@@ -15,7 +16,9 @@ def _fake_provider(name: str, realtime: bool = True):
 
 def test_local_realtime_provider_uses_full_market_mode(monkeypatch):
     quote_service._provider_instance = None
-    monkeypatch.setattr(quote_service, "get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(
+        quote_service, "get_active_provider_name", lambda capability=None: "fquant_local"
+    )
     monkeypatch.setattr(quote_service, "get_provider", lambda name: _fake_provider(name))
 
     service = quote_service.QuoteService()
@@ -27,20 +30,26 @@ def test_local_realtime_provider_uses_full_market_mode(monkeypatch):
 
 def test_provider_without_realtime_blocks_realtime(monkeypatch):
     quote_service._provider_instance = None
-    monkeypatch.setattr(quote_service, "get_active_provider_name", lambda capability=None: "fquant_local")
-    monkeypatch.setattr(quote_service, "get_provider", lambda name: _fake_provider(name, realtime=False))
+    monkeypatch.setattr(
+        quote_service, "get_active_provider_name", lambda capability=None: "fquant_local"
+    )
+    monkeypatch.setattr(
+        quote_service, "get_provider", lambda name: _fake_provider(name, realtime=False)
+    )
 
     assert quote_service.QuoteService.realtime_mode() == "none"
     assert not quote_service.QuoteService.is_realtime_allowed()
 
 
 def test_record_from_quote_converts_realtime_points_to_ratio():
-    record = quote_service.QuoteService._record_from_quote({
-        "symbol": "600519.SH",
-        "last_price": 101,
-        "prev_close": 100,
-        "ext": {"change_pct": 1.23, "amplitude": 4.56, "turnover_rate": 7.89},
-    })
+    record = quote_service.QuoteService._record_from_quote(
+        {
+            "symbol": "600519.SH",
+            "last_price": 101,
+            "prev_close": 100,
+            "ext": {"change_pct": 1.23, "amplitude": 4.56, "turnover_rate": 7.89},
+        }
+    )
 
     assert abs(record["change_pct"] - 0.0123) < 1e-12
     assert abs(record["amplitude"] - 0.0456) < 1e-12
@@ -48,14 +57,16 @@ def test_record_from_quote_converts_realtime_points_to_ratio():
 
 
 def test_record_from_quote_converts_non_finite_numbers_to_null():
-    record = quote_service.QuoteService._record_from_quote({
-        "symbol": "600519.SH",
-        "last_price": float("nan"),
-        "prev_close": float("inf"),
-        "open": -float("inf"),
-        "volume": float("nan"),
-        "ext": {"change_amount": float("inf"), "turnover_rate": float("nan")},
-    })
+    record = quote_service.QuoteService._record_from_quote(
+        {
+            "symbol": "600519.SH",
+            "last_price": float("nan"),
+            "prev_close": float("inf"),
+            "open": -float("inf"),
+            "volume": float("nan"),
+            "ext": {"change_amount": float("inf"), "turnover_rate": float("nan")},
+        }
+    )
     assert record["last_price"] is None
     assert record["prev_close"] is None
     assert record["open"] is None
@@ -66,12 +77,14 @@ def test_record_from_quote_converts_non_finite_numbers_to_null():
 
 
 def test_index_quote_cache_outputs_percentage_points():
-    record = quote_service.QuoteService._record_from_quote({
-        "symbol": "000001.INDEX",
-        "last_price": 101,
-        "prev_close": 100,
-        "ext": {"change_pct": 1.23, "amplitude": 4.56},
-    })
+    record = quote_service.QuoteService._record_from_quote(
+        {
+            "symbol": "000001.INDEX",
+            "last_price": 101,
+            "prev_close": 100,
+            "ext": {"change_pct": 1.23, "amplitude": 4.56},
+        }
+    )
 
     row = quote_service.QuoteService._build_index_quotes([record]).to_dicts()[0]
 
@@ -79,16 +92,19 @@ def test_index_quote_cache_outputs_percentage_points():
     assert row["amplitude"] == 4.56
 
 
-
 def test_stop_in_close_final_calls_run_final_sync_exactly_once(monkeypatch):
     """stop() 在 close_final 阶段必须恰好调用 _run_final_sync 一次。"""
     quote_service._provider_instance = None
-    monkeypatch.setattr(quote_service, "get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(
+        quote_service, "get_active_provider_name", lambda capability=None: "fquant_local"
+    )
     monkeypatch.setattr(quote_service, "get_provider", lambda name: _fake_provider(name))
 
     service = quote_service.QuoteService()
     # 强制 close_final 阶段
-    monkeypatch.setattr(quote_service.QuoteService, "_market_phase", staticmethod(lambda: "close_final"))
+    monkeypatch.setattr(
+        quote_service.QuoteService, "_market_phase", staticmethod(lambda: "close_final")
+    )
     # _fetch_quotes 不应实际执行 (无 repo / 无 provider 连接)
     monkeypatch.setattr(service, "_fetch_quotes", lambda: True)
 
@@ -171,9 +187,7 @@ def test_fetch_quotes_reentrancy_guard_skips_overlapping_pull(monkeypatch):
         started.set()
         release.wait(timeout=2.0)  # 模拟一次慢的全市场拉取 (> interval)
 
-    monkeypatch.setattr(
-        quote_service.QuoteService, "_fetch_full_market_quotes", slow_full_market
-    )
+    monkeypatch.setattr(quote_service.QuoteService, "_fetch_full_market_quotes", slow_full_market)
 
     t1 = threading.Thread(target=service._fetch_quotes)
     t2 = threading.Thread(target=service._fetch_quotes)
@@ -186,3 +200,79 @@ def test_fetch_quotes_reentrancy_guard_skips_overlapping_pull(monkeypatch):
     release.set()
     t1.join(timeout=2.0)
     assert calls["n"] == 1
+
+
+def test_watchlist_mode_syncs_local_abnormal_benchmarks(monkeypatch):
+    from app.services import preferences
+
+    calls: list[list[str]] = []
+    today = date.today().isoformat()
+
+    class Provider:
+        def get_realtime(self, *, symbols):
+            symbols = list(symbols)
+            calls.append(symbols)
+            return pl.DataFrame(
+                [
+                    {
+                        "symbol": symbol,
+                        "last_price": 101.0,
+                        "prev_close": 100.0,
+                        "timestamp": today,
+                        "ext": {"change_pct": 1.0},
+                    }
+                    for symbol in symbols
+                ]
+            )
+
+    monkeypatch.setattr(
+        preferences,
+        "get_realtime_watchlist_symbols",
+        lambda: ["600519.SH"],
+    )
+    monkeypatch.setattr(quote_service, "_get_data_provider", lambda: Provider())
+
+    service = quote_service.QuoteService()
+    service._app_state = SimpleNamespace(
+        monitor_engine=SimpleNamespace(has_abnormal_rules=True),
+    )
+    monkeypatch.setattr(service, "_evaluate_monitors", lambda *_args: None)
+
+    service._fetch_watchlist_quotes()
+
+    assert calls == [["600519.SH"], list(service.CORE_INDEX_SYMBOLS)]
+    assert set(service.get_index_quotes()["symbol"].to_list()) == set(service.CORE_INDEX_SYMBOLS)
+
+
+def test_global_webhook_resolves_rules_from_engine(monkeypatch):
+    from app.services import preferences, webhook_adapter
+
+    pushed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        preferences,
+        "get_configured_webhook_channels",
+        lambda: [{"type": "test"}],
+    )
+    monkeypatch.setattr(
+        webhook_adapter,
+        "send_configured_channels",
+        lambda title, body: pushed.append((title, body)) or 1,
+    )
+    engine = SimpleNamespace(
+        rules={"r1": {"id": "r1", "webhook_enabled": True}},
+    )
+
+    quote_service.QuoteService()._maybe_send_webhook(
+        [
+            {
+                "rule_id": "r1",
+                "source": "abnormal",
+                "symbol": "600000.SH",
+                "name": "浦发银行",
+                "message": "3日偏离触发",
+            }
+        ],
+        engine,
+    )
+
+    assert pushed == [("TickFlow · 交易所异动", "600000.SH 浦发银行 3日偏离触发")]

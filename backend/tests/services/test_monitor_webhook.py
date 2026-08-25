@@ -4,6 +4,7 @@
 1. _push_rule_webhook (纯函数级): 启用/未启用/异常不抛。
 2. MonitorRuleEngine._evaluate_rule (集成): 规则命中时触发推送且不影响返回的 events。
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -88,13 +89,15 @@ def test_push_webhook_exception_does_not_raise(monkeypatch):
 
 # ── 集成: 规则命中时触发推送且不影响 events 返回 ──────────
 def _hit_df():
-    return pl.DataFrame({
-        "symbol": ["600519.SH"],
-        "name": ["贵州茅台"],
-        "close": [1700.0],
-        "change_pct": [3.5],
-        "signal_golden": [True],
-    })
+    return pl.DataFrame(
+        {
+            "symbol": ["600519.SH"],
+            "name": ["贵州茅台"],
+            "close": [1700.0],
+            "change_pct": [3.5],
+            "signal_golden": [True],
+        }
+    )
 
 
 def _signal_rule():

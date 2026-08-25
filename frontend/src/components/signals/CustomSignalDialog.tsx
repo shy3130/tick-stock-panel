@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Plus, Save, X } from 'lucide-react'
-import { api, type CustomSignal, type CustomSignalCondition } from '@/lib/api'
+import { ArrowRight, Bot, Loader2, Plus, Save, X } from 'lucide-react'
+import { AiExecutionMetaBadge } from '@/components/AiExecutionMetaBadge'
+import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { api, type CustomSignal, type CustomSignalCondition, type AiExecutionMeta } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
 interface Props {
@@ -22,6 +24,10 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
   const qc = useQueryClient()
   const options = useQuery({ queryKey: QK.customSignalsOptions, queryFn: api.customSignalsOptions, enabled: open })
 
+  const [aiText, setAiText] = useState('')
+  const [aiProfileId, setAiProfileId] = useState<string>()
+  const [aiMeta, setAiMeta] = useState<AiExecutionMeta | null>(null)
+  const [aiError, setAiError] = useState('')
   const [draft, setDraft] = useState<CustomSignal>(() => emptySignal(defaultKind))
   const [error, setError] = useState('')
 
@@ -32,6 +38,9 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
   useEffect(() => {
     if (!open) return
     setDraft(signal ? { ...signal, conditions: signal.conditions.map(c => ({ ...c })) } : emptySignal(defaultKind))
+    setAiText('')
+    setAiMeta(null)
+    setAiError('')
     setError('')
   }, [open, signal, defaultKind])
 
@@ -52,8 +61,22 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
       onSaved?.(res.signal)
       onClose()
     },
-    onError: err => setError(String((err as any)?.message ?? err)),
+    onError: err => setError(err instanceof Error ? err.message : String(err)),
   })
+  const aiDraft = useMutation({
+    mutationFn: () => {
+      const text = aiText.trim()
+      if (!text || text.length > 500) throw new Error('请输入 1-500 字的自然语言描述')
+      return api.customSignalAiDraft(text, aiProfileId)
+    },
+    onSuccess: res => {
+      setDraft(d => ({ ...d, ...res.draft, conditions: res.draft.conditions.map(c => ({ ...c })) }))
+      setAiMeta(res.ai_meta ?? null)
+      setAiError('')
+    },
+    onError: err => setAiError(err instanceof Error ? err.message : String(err)),
+  })
+
 
   const updateCond = (idx: number, patch: Partial<CustomSignalCondition>) => {
     setDraft(d => ({ ...d, conditions: d.conditions.map((c, i) => i === idx ? { ...c, ...patch } : c) }))
@@ -92,6 +115,37 @@ export function CustomSignalDialog({ open, signal, defaultKind = 'exit', onClose
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+              {!editing && (
+                <section className="rounded-card border border-accent/30 bg-accent/5 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-medium text-foreground">AI 辅助生成草稿</div>
+                      <div className="text-[11px] text-accent font-medium">AI 仅生成草稿，核对后点击保存才会写入</div>
+                    </div>
+                    <AiProviderSelector entry="custom_signal_draft" value={aiProfileId} onChange={setAiProfileId} compact />
+                  </div>
+                  <textarea
+                    value={aiText}
+                    maxLength={500}
+                    onChange={e => setAiText(e.target.value)}
+                    placeholder="例如：收盘价低于 MA20 时作为卖出信号"
+                    className="min-h-16 w-full rounded-btn border border-border bg-base px-3 py-2 text-xs text-foreground"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-muted">{aiText.length}/500</span>
+                    <button
+                      onClick={() => aiDraft.mutate()}
+                      disabled={aiDraft.isPending || !aiText.trim()}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50"
+                    >
+                      {aiDraft.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
+                      生成草稿
+                    </button>
+                  </div>
+                  {aiError && <div className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{aiError}</div>}
+                  {aiMeta && <AiExecutionMetaBadge meta={aiMeta} />}
+                </section>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <label className="space-y-1.5">
                   <span className="text-[11px] text-muted">信号标识</span>

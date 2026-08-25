@@ -1,8 +1,8 @@
 """fstore DuckDB 直连客户端 —— FStoreClient 的只读替代实现。
 
-背景：fstore 已经把分析结果表迁移到本机
-``/Volumes/WD1/duckdb/fstore-web.duckdb``，并为每张迁移过的 PostgreSQL 表提供了
-同名无前缀兼容 view（物理镜像表带 pg_/fd_ 前缀，兼容 view 不带）。
+背景：fstore 的生产读取路径会将已知 raw root 解析到已发布 immutable
+snapshot；快照内为每张迁移过的 PostgreSQL 表提供了同名无前缀兼容 view
+（物理镜像表带 pg_/fd_ 前缀，兼容 view 不带）。
 
 本客户端对外暴露和 ``FStoreClient`` 完全相同的
 ``query(sql, params) -> list[dict]`` 接口 —— 调用方（fquant_provider.py）

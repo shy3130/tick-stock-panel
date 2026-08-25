@@ -27,6 +27,7 @@ export const QK = {
   watchlistKlineBatch:  (symbols: string) => ['watchlist-kline-batch', symbols] as const,
   // 前缀 watchlist- 以便 SSE quotes_updated 经 SSE_INVALIDATE_PREFIXES 命中
   watchlistSnapshot:    (symbols: string) => ['watchlist-snapshot', symbols] as const,
+  watchlistGroups:     ['watchlist-groups'] as const,
 
   instrumentSearch: (q: string, assetTypes?: readonly string[], limit = 20) => {
     const normalizedAssetTypes = assetTypes?.length
@@ -79,6 +80,7 @@ export const QK = {
   // Monitor (监控规则 + 触发记录)
   monitorRules:         ['monitor-rules'] as const,
   monitorRuleOptions:   ['monitor-rule-options'] as const,
+  abnormalOverview:    (filter?: string) => ['abnormal-overview', filter ?? ''] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
 

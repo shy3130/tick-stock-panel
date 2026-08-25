@@ -73,7 +73,7 @@ export function Data() {
     enabled: !!activeJobId,
     refetchInterval: (q: any) => {
       const j = q.state.data
-      return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed') ? false : 1_000
+      return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed' || j.status === 'cancelled') ? false : 1_000
     },
   })
 
@@ -82,6 +82,12 @@ export function Data() {
     onSuccess: ({ job_id }) => {
       setActiveJobId(job_id)
       startTime.current = Date.now()
+    },
+  })
+  const cancelJob = useMutation({
+    mutationFn: api.pipelineCancel,
+    onSuccess: () => {
+      void job.refetch()
     },
   })
 
@@ -213,7 +219,7 @@ export function Data() {
   void cardVisibleTick
 
   useEffect(() => {
-    if (job.data && (job.data.status === 'succeeded' || job.data.status === 'degraded' || job.data.status === 'failed')) {
+    if (job.data && (job.data.status === 'succeeded' || job.data.status === 'degraded' || job.data.status === 'failed' || job.data.status === 'cancelled')) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
       const t = setTimeout(() => setActiveJobId(null), 5_000)
@@ -244,7 +250,9 @@ export function Data() {
       ? { glyph: '⚠', cls: 'text-warning' }
       : lastPipeline.status === 'failed'
         ? { glyph: '✕', cls: 'text-danger' }
-        : { glyph: '…', cls: 'text-secondary' }
+        : lastPipeline.status === 'cancelled'
+          ? { glyph: '⊘', cls: 'text-muted' }
+          : { glyph: '…', cls: 'text-secondary' }
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
@@ -596,7 +604,11 @@ export function Data() {
               transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
               className="overflow-hidden"
             >
-              <ActiveJobCard job={job.data} />
+              <ActiveJobCard
+                job={job.data}
+                onCancel={() => cancelJob.mutate(job.data.id)}
+                cancelling={cancelJob.isPending}
+              />
             </motion.div>
           )}
         </AnimatePresence>
@@ -749,16 +761,22 @@ export function Data() {
                     </motion.div>
                   )}
                 </AnimatePresence>
-                {/* 上次管道 degraded/failed 摘要 — 失败阶段 + 错误, 成功时不渲染 */}
-                {lastPipeline && (lastPipeline.status === 'degraded' || lastPipeline.status === 'failed') && (
+                {/* 上次管道异常终态摘要；成功时不渲染 */}
+                {lastPipeline && (lastPipeline.status === 'degraded' || lastPipeline.status === 'failed' || lastPipeline.status === 'cancelled') && (
                   <div className={`rounded-btn border px-2.5 py-1.5 text-[10px] leading-relaxed ${
                     lastPipeline.status === 'failed'
                       ? 'border-danger/40 bg-danger/5 text-danger'
-                      : 'border-warning/40 bg-warning/5 text-warning'
+                      : lastPipeline.status === 'degraded'
+                        ? 'border-warning/40 bg-warning/5 text-warning'
+                        : 'border-border bg-surface text-muted'
                   }`}>
                     <div className="flex items-center gap-1 font-medium">
                       <AlertTriangle className="h-3 w-3 shrink-0" />
-                      {lastPipeline.status === 'failed' ? '上次管道失败' : '上次管道部分完成'}
+                      {lastPipeline.status === 'failed'
+                        ? '上次管道失败'
+                        : lastPipeline.status === 'degraded'
+                          ? '上次管道部分完成'
+                          : '上次管道已取消'}
                     </div>
                     {(lastPipeline.failed_stages ?? []).length > 0 && (
                       <div className="mt-0.5">

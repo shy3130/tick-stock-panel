@@ -1,6 +1,6 @@
 import { useRef, useMemo, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
+import { Loader2, CheckCircle2, XCircle, AlertTriangle, Ban } from 'lucide-react'
 import { formatDuration, formatLogTime } from '@/lib/format'
 import { Pill } from './StatCard'
 import type { PipelineJob } from '@/lib/api'
@@ -59,17 +59,26 @@ function LogViewer({ log }: { log: PipelineJob['log'] }) {
   )
 }
 
-export function ActiveJobCard({ job }: { job: PipelineJob }) {
+export function ActiveJobCard({
+  job,
+  onCancel,
+  cancelling = false,
+}: {
+  job: PipelineJob
+  onCancel?: () => void
+  cancelling?: boolean
+}) {
   const statusMap = {
     running:   { icon: Loader2,     color: 'text-accent',   label: '运行中', spinning: true,  border: 'border-accent/40', bg: 'bg-accent/5' },
     pending:   { icon: Loader2,     color: 'text-muted',    label: '排队中', spinning: true,  border: 'border-border',    bg: 'bg-surface' },
     succeeded: { icon: CheckCircle2, color: 'text-bear',     label: '完成',   spinning: false, border: 'border-bear/30',   bg: 'bg-bear/5' },
     degraded:  { icon: AlertTriangle, color: 'text-warning', label: '部分完成', spinning: false, border: 'border-warning/40', bg: 'bg-warning/5' },
     failed:    { icon: XCircle,     color: 'text-danger',   label: '失败',   spinning: false, border: 'border-danger/40', bg: 'bg-danger/5' },
+    cancelled: { icon: Ban,         color: 'text-muted',    label: '已取消', spinning: false, border: 'border-border',    bg: 'bg-surface' },
   } as const
   const meta = statusMap[job.status]
   const Icon = meta.icon
-  const isDone = job.status === 'succeeded' || job.status === 'degraded' || job.status === 'failed'
+  const isDone = job.status === 'succeeded' || job.status === 'degraded' || job.status === 'failed' || job.status === 'cancelled'
   const stageLabel = isDone ? meta.label : (STAGE_LABELS[job.stage] ?? job.stage)
 
   return (
@@ -87,8 +96,21 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
           </div>
         </div>
         {!isDone && (
-          <div className="font-mono text-2xl font-bold tracking-tight">
-            {job.progress}<span className="text-base text-muted">%</span>
+          <div className="flex items-center gap-3">
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={cancelling}
+                className="btn-secondary h-8 px-2.5 text-xs disabled:opacity-50"
+              >
+                <Ban className="h-3.5 w-3.5" />
+                {cancelling ? '取消中…' : '取消任务'}
+              </button>
+            )}
+            <div className="font-mono text-2xl font-bold tracking-tight">
+              {job.progress}<span className="text-base text-muted">%</span>
+            </div>
           </div>
         )}
       </div>
@@ -140,6 +162,11 @@ export function ActiveJobCard({ job }: { job: PipelineJob }) {
       {job.status === 'failed' && job.error && (
         <div className="mt-3 rounded-btn border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
           {job.error}
+        </div>
+      )}
+      {job.status === 'cancelled' && (
+        <div className="mt-3 rounded-btn border border-border bg-surface px-3 py-2 text-xs text-muted">
+          {job.error ?? '任务已被手动取消'}
         </div>
       )}
     </div>

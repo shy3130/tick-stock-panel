@@ -1,4 +1,5 @@
 """自选股 API。"""
+
 from __future__ import annotations
 
 import logging
@@ -7,7 +8,8 @@ import time
 from datetime import date
 
 import polars as pl
-from fastapi import APIRouter, Query, Request
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.db_safe import is_valid_ext_ident, quote_ident
@@ -21,11 +23,30 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 class AddRequest(BaseModel):
     symbol: str
     note: str = ""
+    group_id: str | None = None
 
 
 class BatchAddRequest(BaseModel):
     symbols: list[str]
     note: str = ""
+    group_id: str | None = None
+
+
+class GroupNameRequest(BaseModel):
+    name: str
+    color: str | None = None
+
+
+class GroupReorderRequest(BaseModel):
+    ordered_ids: list[str]
+
+
+class GroupAssignRequest(BaseModel):
+    group_id: str | None = None
+
+
+def _data_dir(request: Request) -> Path:
+    return request.app.state.repo.store.data_dir
 
 
 def _with_names(rows: list[dict], request: Request) -> list[dict]:
@@ -44,62 +65,193 @@ def _with_names(rows: list[dict], request: Request) -> list[dict]:
 
 @router.get("")
 def list_all(request: Request):
-    return {"symbols": _with_names(watchlist.list_symbols(), request)}
+    return {"symbols": _with_names(watchlist.list_symbols(_data_dir(request)), request)}
 
 
 @router.post("")
 def add_one(req: AddRequest, request: Request):
-    rows = watchlist.add(req.symbol, req.note)
+    try:
+        rows = watchlist.add(req.symbol, req.note, req.group_id, data_dir=_data_dir(request))
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
     return {"symbols": _with_names(rows, request)}
 
 
 @router.post("/batch")
 def add_batch(req: BatchAddRequest, request: Request):
-    for sym in req.symbols:
-        watchlist.add(sym, req.note)
-    return {"symbols": _with_names(watchlist.list_symbols(), request), "added": len(req.symbols)}
+    try:
+        rows, added = watchlist.add_batch(
+            req.symbols, req.note, req.group_id, data_dir=_data_dir(request)
+        )
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"symbols": _with_names(rows, request), "added": added}
+
+
+@router.get("/groups")
+def list_groups(request: Request):
+    return {"groups": watchlist.list_groups(_data_dir(request))}
+
+
+@router.post("/groups")
+def create_group(req: GroupNameRequest, request: Request):
+    try:
+        groups, group = watchlist.create_group(req.name, req.color, data_dir=_data_dir(request))
+    except watchlist.DuplicateGroupNameError as e:
+        raise HTTPException(409, str(e)) from e
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"groups": groups, "group": group}
+
+
+@router.put("/groups/reorder")
+def reorder_groups(req: GroupReorderRequest, request: Request):
+    """重排分组前后顺序 (json 数组顺序即定义顺序, 标签栏共用)。"""
+    try:
+        groups = watchlist.reorder_groups(req.ordered_ids, data_dir=_data_dir(request))
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"groups": groups}
+
+
+@router.put("/groups/{group_id}")
+def rename_group(group_id: str, req: GroupNameRequest, request: Request):
+    try:
+        groups = watchlist.rename_group(group_id, req.name, req.color, data_dir=_data_dir(request))
+    except KeyError as e:
+        raise HTTPException(404, "自选分组不存在") from e
+    except watchlist.DuplicateGroupNameError as e:
+        raise HTTPException(409, str(e)) from e
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"groups": groups}
+
+
+@router.delete("/groups/{group_id}")
+def delete_group(group_id: str, request: Request):
+    try:
+        groups, rows = watchlist.delete_group(group_id, data_dir=_data_dir(request))
+    except KeyError as e:
+        raise HTTPException(404, "自选分组不存在") from e
+    return {"groups": groups, "symbols": _with_names(rows, request)}
+
+
+@router.post("/groups/{group_id}/clear")
+def clear_group(group_id: str, request: Request):
+    """清空分组成员: 把该分组内所有股票转为未分组, 保留分组定义。"""
+    try:
+        rows = watchlist.clear_group(group_id, data_dir=_data_dir(request))
+    except KeyError as e:
+        raise HTTPException(404, "自选分组不存在") from e
+    return {"symbols": _with_names(rows, request)}
+
+
+@router.post("/groups/{group_id}/members/{symbol}")
+def add_member(group_id: str, symbol: str, request: Request):
+    """把标的加入分组 (多组成员关系: 不影响其他分组; 幂等)。"""
+    try:
+        rows = watchlist.add_to_group(symbol, group_id, data_dir=_data_dir(request))
+    except KeyError as e:
+        raise HTTPException(404, "自选标的不存在") from e
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"symbols": _with_names(rows, request)}
+
+
+@router.delete("/groups/{group_id}/members/{symbol}")
+def remove_member(group_id: str, symbol: str, request: Request):
+    """把标的移出分组 (仅摘本组标签; 标的仍在自选; 幂等)。"""
+    try:
+        rows = watchlist.remove_from_group(symbol, group_id, data_dir=_data_dir(request))
+    except KeyError as e:
+        raise HTTPException(404, "自选标的不存在") from e
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"symbols": _with_names(rows, request)}
 
 
 @router.post("/{symbol}/top")
 def move_one_to_top(symbol: str, request: Request):
-    rows = watchlist.move_to_top(symbol)
+    rows = watchlist.move_to_top(symbol, data_dir=_data_dir(request))
+    return {"symbols": _with_names(rows, request)}
+
+
+@router.put("/{symbol}/group")
+def assign_group(symbol: str, req: GroupAssignRequest, request: Request):
+    """互斥设定分组 (仅保留此组; None=移出全部分组)。多组操作用 members 端点。"""
+    try:
+        rows = watchlist.set_group(symbol, req.group_id, data_dir=_data_dir(request))
+    except KeyError as e:
+        raise HTTPException(404, "自选标的不存在") from e
+    except watchlist.WatchlistGroupError as e:
+        raise HTTPException(400, str(e)) from e
     return {"symbols": _with_names(rows, request)}
 
 
 @router.delete("/{symbol}")
 def remove_one(symbol: str, request: Request):
-    rows = watchlist.remove(symbol)
+    rows = watchlist.remove(symbol, data_dir=_data_dir(request))
     return {"symbols": _with_names(rows, request)}
 
 
 @router.delete("")
-def clear_all():
+def clear_all(request: Request):
     """清空自选列表。"""
-    count = watchlist.clear()
+    count = watchlist.clear(_data_dir(request))
     return {"removed": count}
 
 
 # 自选页需要的列
 _WATCHLIST_COLS = [
-    "symbol", "close", "change_pct", "change_amount", "amount",
+    "symbol",
+    "close",
+    "change_pct",
+    "change_amount",
+    "amount",
     "turnover_rate",
-    "amplitude", "annual_vol_20d",
+    "amplitude",
+    "annual_vol_20d",
     "vol_ratio_5d",
-    "ma5", "ma10", "ma20", "ma60",
-    "vol_ma5", "vol_ma10",
-    "high_60d", "low_60d",
-    "rsi_6", "rsi_14", "rsi_24",
-    "macd_dif", "macd_dea", "macd_hist",
-    "kdj_k", "kdj_d", "kdj_j",
-    "boll_upper", "boll_lower",
+    "ma5",
+    "ma10",
+    "ma20",
+    "ma60",
+    "vol_ma5",
+    "vol_ma10",
+    "high_60d",
+    "low_60d",
+    "rsi_6",
+    "rsi_14",
+    "rsi_24",
+    "macd_dif",
+    "macd_dea",
+    "macd_hist",
+    "kdj_k",
+    "kdj_d",
+    "kdj_j",
+    "boll_upper",
+    "boll_lower",
     "atr_14",
-    "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
-    "consecutive_limit_ups", "consecutive_limit_downs",
-    "signal_limit_up", "signal_limit_down", "signal_volume_surge",
-    "signal_ma_golden_5_20", "signal_macd_golden", "signal_n_day_high",
-    "signal_boll_breakout_upper", "signal_ma20_breakout",
-    "signal_ma_dead_5_20", "signal_macd_dead", "signal_n_day_low",
-    "signal_boll_breakdown_lower", "signal_ma20_breakdown",
+    "momentum_5d",
+    "momentum_10d",
+    "momentum_20d",
+    "momentum_30d",
+    "momentum_60d",
+    "consecutive_limit_ups",
+    "consecutive_limit_downs",
+    "signal_limit_up",
+    "signal_limit_down",
+    "signal_volume_surge",
+    "signal_ma_golden_5_20",
+    "signal_macd_golden",
+    "signal_n_day_high",
+    "signal_boll_breakout_upper",
+    "signal_ma20_breakout",
+    "signal_ma_dead_5_20",
+    "signal_macd_dead",
+    "signal_n_day_low",
+    "signal_boll_breakdown_lower",
+    "signal_ma20_breakdown",
 ]
 
 
@@ -116,7 +268,7 @@ def watchlist_enriched(
     t0 = time.perf_counter()
 
     repo = request.app.state.repo
-    symbols = [r["symbol"] for r in watchlist.list_symbols()]
+    symbols = [r["symbol"] for r in watchlist.list_symbols(_data_dir(request))]
     if not symbols:
         return {"rows": [], "as_of": None, "elapsed_ms": 0}
 
@@ -159,13 +311,14 @@ def watchlist_enriched(
                 if cfg:
                     ext_df, _ = _read_ext_dataframe(cfg, data_dir)
                 else:
-                    ext_df = pl.from_arrow(db.query(
-                        f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
-                    ).arrow())
+                    ext_df = pl.from_arrow(
+                        db.query(
+                            f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
+                        ).arrow()
+                    )
                 if not ext_df.is_empty() and "symbol" in ext_df.columns:
                     ext_df = (
-                        ext_df
-                        .select(["symbol", field_name])
+                        ext_df.select(["symbol", field_name])
                         .unique(subset=["symbol"], keep="last")
                         .rename({field_name: ext_col_name})
                     )
@@ -176,31 +329,42 @@ def watchlist_enriched(
                 if cfg:
                     try:
                         ext_df, _ = _read_ext_dataframe(cfg, data_dir)
-                        if not ext_df.is_empty() and "symbol" in ext_df.columns and field_name in ext_df.columns:
+                        if (
+                            not ext_df.is_empty()
+                            and "symbol" in ext_df.columns
+                            and field_name in ext_df.columns
+                        ):
                             ext_df = (
-                                ext_df
-                                .select(["symbol", field_name])
+                                ext_df.select(["symbol", field_name])
                                 .unique(subset=["symbol"], keep="last")
                                 .rename({field_name: ext_col_name})
                             )
                             df = df.join(ext_df, on="symbol", how="left")
                     except Exception as e2:
-                        logger.debug("ext join fallback failed for %s.%s: %s", config_id, field_name, e2)
+                        logger.debug(
+                            "ext join fallback failed for %s.%s: %s", config_id, field_name, e2
+                        )
 
     # sanitize NaN / Inf
     float_cols = [c for c in df.columns if df[c].dtype.is_float()]
     if float_cols:
-        df = df.with_columns([
-            pl.when(pl.col(c).is_nan() | pl.col(c).is_infinite())
-              .then(None)
-              .otherwise(pl.col(c))
-              .alias(c)
-            for c in float_cols
-        ])
+        df = df.with_columns(
+            [
+                pl.when(pl.col(c).is_nan() | pl.col(c).is_infinite())
+                .then(None)
+                .otherwise(pl.col(c))
+                .alias(c)
+                for c in float_cols
+            ]
+        )
 
     # 按自选添加顺序（新加的在前）重排行
     order_map = {s: i for i, s in enumerate(symbols)}
-    df = df.with_columns(pl.col("symbol").map_elements(lambda s: order_map.get(s, len(symbols)), return_dtype=pl.Int32).alias("_sort_order"))
+    df = df.with_columns(
+        pl.col("symbol")
+        .map_elements(lambda s: order_map.get(s, len(symbols)), return_dtype=pl.Int32)
+        .alias("_sort_order")
+    )
     df = df.sort("_sort_order").drop("_sort_order")
 
     rows = df.to_dicts()

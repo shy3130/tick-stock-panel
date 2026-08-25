@@ -1,6 +1,6 @@
 # 上游功能移植与维护总账
 
-> 日期：2026-08-10；最近增量审计：2026-08-21
+> 日期：2026-08-10；最近增量审计：2026-08-25
 > 状态：当前实现账本；来源发现证据见 [`PORTING_SOURCE_REPOSITORY_INVENTORY_2026-08-09.md`](./PORTING_SOURCE_REPOSITORY_INVENTORY_2026-08-09.md)
 > 目标：记录“能力从哪里来、在本项目落在哪里、哪些明确不迁移”，防止把外部数据链、自动交易语义或第二套领域模型带回当前架构。
 
@@ -116,6 +116,38 @@
 
 本轮唯一代码改动是 tickflow 自身脚本缺陷修复：`backend/scripts/test_fquant_provider.py` 的 `get_minute` 冒烟窗口此前未按 catalog 发布水位钳制（引擎层 `engine.py` 已有 `get_minute_coverage` 钳制先例），在数据发布滞后于自然日时误触 fail-closed。现按 `get_minute_coverage()` 的 `latest_date` 钳制窗口末端；水位不可知时保持原窗口，让 fail-closed 原样暴露。reviewer 补充修复（P2）：水位完全落后于查询窗口起点时钳制会产生倒置窗口，`get_minute` 退到单日旧日期路径读取窗口外数据并误判通过——此场景现显式 SKIP 并带水位/起点日期。正常路径（4800 行）与倒置路径（mock 水位早于起点 → SKIP）均已运行验证。
 
+
+### 4.3 2026-08-25 增量源码审计（origin 已改名 tick-stock-panel）
+
+上游 origin（`shy3130/tickflow-stock-panel`）已被 GitHub 侧改名为 `shy3130/tick-stock-panel`（对应上游提交 d0f91fae）；两个名字解析到同一仓库（node_id `R_kgDOS-CukQ`，旧名重定向），无需新增 remote，fetch origin 即覆盖。本次 `git fetch origin main` 将本地 `origin/main` 从 `c278dd3` 推进到 `196af2f`，区间 **83 个提交**（78 个非 merge），提交日期跨度 2026-08-02 ~ 2026-08-25。4.1/4.2 两轮「origin/main 无新提交」的记录自此过期；该结论为何未反映这批提交，本地证据无法判定，不做归因。
+
+83 个提交中 67 个触及本地分支同样修改过的路径（26 个的全部文件与本地改动重叠），维持「不 cherry-pick、不整分支合并，一律能力级重写」的既有口径。下表保留审计时裁决；审计完成后的首批落地见 4.4：
+
+| 候选 | 裁决 | 关键证据 / 约束 |
+|---|---|---|
+| 盘后任务协作式取消 + 进度停滞判定 + 执行槽所有权（a6a4bcd） | P0 移植候选 | 本仓 `pipeline_jobs.py` 取消后 `progress()` 静默返回、工作线程无取消信号（运行时复现）；须区分 cancelled/failed 终态，僵尸线程不得释放新任务的执行槽，慢任务按进度心跳而非总时长判活 |
+| 自选 M:N 分组 + `scope=watchlist_group` 动态监控（2a2d3b7/83b96e2/254e1962） | P0 移植候选 | 本仓 watchlist 无分组模型；分组成员变化下一轮评估自动生效；分组删除/空组必须 fail-closed，禁止退化为全市场 |
+| 多日分时（2a2d3b7） | P1 移植候选 | provider 跨日/跨 catalog route 合并已具备（`test_provider_minute_freq` 全模块 4 passed），缺 minute-range 聚合 API 与前端；历史日期禁 chart_live |
+| AI 生成自定义信号（8519a2b） | P1 移植候选 | 复用本仓 `run_structured_ai` + `custom_signals` 白名单校验，不搬上游自研 JSON 修复器；AI 只产条件草稿，用户显式确认后走既有保存 API |
+| 情绪周期 phase 体系 + 主线识别（697c27b/7c30f5b/6f0786a/65f46a1） | P1 移植候选 | 数据面须改读本仓 canonical/enriched；概念成分为当前快照非 PIT 必须显式告警；不引入仓位/操作提示；与既有 5 档 state 并存不替换消费方 |
+| 交易所口径异动监控（68ce2337/21260f1/0b57c33） | P1 移植候选 | 基准动量只允许本地 canonical 指数 + 本地 realtime；外部 fallback 数据不得进入监控判定；建议与自选分组落地后接 `watchlist_group` scope |
+| 因子/策略挖掘（697c27b/a0cb8991） | P2 移植候选（独立立项） | 只吸收嵌套样本外验证/因子相关去重算法并接入本仓 run_store/DurableJob/metrics 契约；不引入第二套 store、job 与指标口径 |
+| 数据源插件化 UI、fuyao 同花顺插件（ea746b9） | ❌ 排除 | 需密钥的外部实时链与本地只读主链、受控 fallback 边界冲突 |
+| 停机缺口 raw/enriched 删写自愈（e15acdd）、僵死 publishing 标记恢复（ff4274a） | ❌ 排除 | 前者建立在 raw mirror 可写假设上（本仓 stock raw mirror 禁写）；后者针对上游 EnrichedPublication 模型（本仓无此模型） |
+| TickFlow 档位卡片 / Codex CLI / 品牌与截图类更新 | ❌ 排除 | 与本仓 provider 中立、AI profile 路由与 FM 品牌演进冲突 |
+
+### 4.4 2026-08-25 首批能力级落地
+
+本轮按 P0 → P1 顺序完成四个切片，均按当前领域契约重写，没有 cherry-pick 上游提交，也没有恢复 TickFlow SDK、外部行情主链或 stock raw mirror 写入。
+
+| 能力 | 状态 | 当前落点 / 边界 |
+|---|---|---|
+| 盘后任务协作取消、进度停滞与全局执行槽 | ✅ 已落地 | `pipeline_jobs.py` 统一终态与执行权；取消信号进入工作线程，僵尸任务不能释放新任务槽；API/页面统一展示 `cancelled`。 |
+| 自选 M:N 分组与分组监控 | ✅ 已落地 | 分组元数据独立存储，单标的可属于多组；旧 schema 原子备份后迁移；`scope=watchlist_group` 每轮动态解析，分组缺失、空组或损坏时 fail-closed。 |
+| AI 生成自定义信号草稿 | ✅ 已落地 | `run_structured_ai` 只返回字面量草稿；字段、运算符、条件数、有限数和 ID 均经本地校验；不写盘、不执行，用户必须在既有编辑器显式保存。 |
+| 交易所口径异动监控 | ✅ 已落地 | 3/10/30 个市场交易日逐日偏离和；本地 canonical 指数与本地 realtime 修正；ST 仅标记/展示过滤；异常规则独立约 30 秒边缘触发，可绑定全市场、指定标的或自选分组；基准缺失不以 0 代替。 |
+
+验证覆盖本轮 178 项聚焦后端回归、3 项规则类型切换前端回归、前端 TypeScript + Vite production build，以及自选分组、AI 草稿、异动监测、规则方向归一和交易路由的运行态 UI smoke。未进入本轮的多日分时、情绪周期/主线识别与因子挖掘仍保持 4.3 的候选状态。
 
 ## 5. 永久边界
 

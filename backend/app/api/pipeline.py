@@ -1,4 +1,5 @@
 """盘后管道 API — 异步触发 + 进度跟踪。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +9,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 
 from app.jobs import daily_pipeline
-from app.services.pipeline_jobs import job_store
+from app.services.pipeline_jobs import JobCancelledError, job_store
 from app.api.data import invalidate_storage_cache
 
 # 长时间任务专用线程池（隔离于 FastAPI 默认线程池，防止阻塞请求处理）
@@ -23,44 +24,29 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 async def run_now(request: Request) -> dict:
     """异步触发盘后管道,立即返回 job_id。客户端轮询 /jobs/{id} 拿进度。
 
-    若已有任务在跑,**返回该任务 id 而不是开新任务**(防止并发拉数据撞限流)。
-    但如果该任务已运行超过 10 分钟 (可能因 reload 卡死), 强制标记为失败后重新创建。
+    单飞: 已有 pending/running 任务时返回该任务 id(reused=True),不重启;
+    停滞/超时任务由 reap_stale 回收为 failed 后再走新建分支。
     """
     repo = request.app.state.repo
     capset = request.app.state.capabilities
 
-    # 检测卡死的 running job (如 reload 后孤儿 task)
-    existing_id = job_store.active_id()
-    if existing_id:
-        existing = job_store.get(existing_id)
-        if existing and existing["status"] == "running":
-            from datetime import datetime, timezone
-            started = existing.get("started_at")
-            if started:
-                try:
-                    start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
-                    elapsed = (datetime.now(timezone.utc) - start_dt).total_seconds()
-                    if elapsed > 600:  # 超过 10 分钟视为卡死
-                        logger.warning("强制取消卡死 job %s (已运行 %.0fs)", existing_id, elapsed)
-                        job_store.fail(existing_id, "超时自动取消 (疑似 reload 后孤儿 task)")
-                        invalidate_storage_cache()
-                except Exception:
-                    pass
+    job_store.reap_stale()
 
-    job_id = job_store.create(kind="daily_pipeline")
+    job_id, is_new = job_store.create(kind="daily_pipeline")
 
-    # 如果是复用的 active job,直接返回(不重启)
-    existing = job_store.get(job_id)
-    if existing and existing["status"] == "running":
+    if not is_new:
         return {"job_id": job_id, "reused": True}
 
     # 在 executor 里跑同步任务(pipeline 内部都是阻塞 IO + CPU)
     async def task() -> None:
-        job_store.start(job_id)
+        owner = job_store.start(job_id)
+        if owner is None:
+            return  # create 与执行之间被取消,放弃执行
         loop = asyncio.get_event_loop()
 
-        def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
-                     skip_log: bool = False) -> None:
+        def progress(
+            stage: str, pct: int, msg: str, stage_pct: int | None = None, skip_log: bool = False
+        ) -> None:
             job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
         try:
@@ -68,13 +54,18 @@ async def run_now(request: Request) -> dict:
                 _long_task_executor,
                 lambda: daily_pipeline.run_now(repo, capset, on_progress=progress),
             )
-            job_store.succeed(job_id, result)
+            job_store.succeed(job_id, result, owner=owner)
             invalidate_storage_cache()
             repo.refresh_cache()  # 刷新 Polars 缓存
+        except JobCancelledError:
+            logger.info("pipeline cancelled: job_id=%s", job_id)
+            invalidate_storage_cache()
         except Exception as e:  # noqa: BLE001
             logger.exception("pipeline failed")
-            job_store.fail(job_id, str(e))
+            job_store.fail(job_id, str(e), owner=owner)
             invalidate_storage_cache()
+        finally:
+            job_store.release(job_id, owner)
 
     asyncio.create_task(task())
     return {"job_id": job_id, "reused": False}
@@ -82,6 +73,7 @@ async def run_now(request: Request) -> dict:
 
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
+    job_store.reap_stale()
     j = job_store.get(job_id)
     if not j:
         raise HTTPException(status_code=404, detail="job not found")
@@ -90,13 +82,18 @@ def get_job(job_id: str) -> dict:
 
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str) -> dict:
-    """手动取消一个 running 的 job。"""
+    """手动取消一个 pending/running 的 job → cancelled 终态。
+
+    执行中的 worker 在下一次 progress() 收到 JobCancelledError 协作退出;
+    未认领的 pending job 直接落盘 cancelled。
+    """
     j = job_store.get(job_id)
     if not j:
         raise HTTPException(status_code=404, detail="job not found")
     if j["status"] not in ("running", "pending"):
         raise HTTPException(status_code=400, detail=f"job status is {j['status']}, cannot cancel")
-    job_store.fail(job_id, "用户手动取消")
+    if not job_store.cancel(job_id):
+        raise HTTPException(status_code=409, detail="job already finished")
     invalidate_storage_cache()
     return {"cancelled": job_id}
 

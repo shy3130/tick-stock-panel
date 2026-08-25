@@ -278,6 +278,10 @@ export interface MinuteKlineRow {
   close: number
   volume: number
   amount: number
+  // 受控外部 chart_live 行级 provenance — 仅外部命中时出现
+  source?: string
+  provisional?: boolean
+
 }
 
 export interface KlineRow {
@@ -338,6 +342,11 @@ export interface KlineRow {
   cr_26?: number | null
   mass_9_25?: number | null
   asi?: number | null
+  // 受控外部 chart_live 行级 provenance — 仅当日 provisional 行出现
+  source?: string
+  provisional?: boolean
+  is_live?: boolean
+
   [key: string]: any
 }
 
@@ -347,6 +356,18 @@ export interface WatchlistEntry {
   added_at: string
   note?: string
   name?: string | null
+  /** 所属自选分组 id 列表 (M:N; 旧数据后端只读映射为空数组) */
+  group_ids?: string[]
+}
+
+export type WatchlistGroupColor =
+  | 'sky' | 'blue' | 'indigo' | 'violet' | 'fuchsia' | 'rose'
+  | 'orange' | 'amber' | 'lime' | 'emerald' | 'teal' | 'cyan'
+
+export interface WatchlistGroup {
+  id: string
+  name: string
+  color: WatchlistGroupColor
 }
 
 export interface WatchlistImportCandidate {
@@ -404,6 +425,20 @@ export interface IndexQuote {
 
 /** 外部降级行情来源标记 — 行级 source 命中即视为降级 */
 export const EXTERNAL_QUOTE_SOURCE = 'tencent_quote'
+
+/** 个股日K/分时受控外部 fallback 来源 — 仅 chart_live 命中 */
+export const EXTERNAL_CHART_SOURCE = 'tencent_chart'
+
+export type ChartLiveFallbackReason = 'local_chart_missing'
+
+/** 个股图表是否走腾讯分时临时兜底 — 必须 degraded 且 sources.chart_live=tencent_chart; 缺字段一律否 */
+export function chartLiveDegraded(
+  resp: { degraded?: boolean; sources?: { chart_live?: string } } | null | undefined,
+): boolean {
+  return resp?.degraded === true && resp.sources?.chart_live === EXTERNAL_CHART_SOURCE
+}
+
+
 
 /** 响应级 source 中表示外部 fallback 的 legacy 值(其余 realtime/provider_realtime/index_daily 均为本地数据, 不可误标) */
 export const EXTERNAL_FALLBACK_RESPONSE_SOURCE = 'fallback_external'
@@ -929,32 +964,57 @@ export interface CustomSignalOptions {
   kinds: { key: string; label: string }[]
 }
 
+export interface CustomSignalDraft {
+  id: string
+  name: string
+  kind: 'entry' | 'exit' | 'both'
+  conditions: CustomSignalCondition[]
+}
+
+export interface CustomSignalAiDraftRequest {
+  text: string
+  profile_id?: string
+}
+
+export interface CustomSignalAiDraftResponse {
+  draft: CustomSignalDraft
+  rationale?: string
+  ai_meta?: AiExecutionMeta
+}
+
 // ===== Monitor (监控规则 + 触发记录) =====
 export interface MonitorCondition {
   field: string
-  op: string              // truth | > >= < <= == !=
-  value?: number | null   // op 非 truth 时必填
+  op: 'truth' | '>' | '>=' | '<' | '<=' | '==' | '!='
+  value?: number | null
 }
 
 export interface MonitorRule {
   id: string
   name: string
   enabled: boolean
-  type: 'strategy' | 'signal' | 'price' | 'market'
-  scope: 'symbols' | 'all' | 'sector'
+  type: 'signal' | 'price' | 'market' | 'strategy' | 'abnormal'
+  scope: 'symbols' | 'all' | 'watchlist_group' | 'sector'
+  asset_type?: 'stock' | 'index'
   symbols: string[]
+  group_id?: string | null
   sector?: string | null
-  asset_type?: 'stock' | 'etf' | 'index'
   strategy_id?: string | null
-  direction: 'entry' | 'exit' | 'both'
+  /** strategy: entry/exit/both; abnormal: up/down/both */
+  direction: 'entry' | 'exit' | 'both' | 'up' | 'down'
   conditions: MonitorCondition[]
   logic: 'and' | 'or'
+  /** type=abnormal 专属: any/3d/10d/30d + 交易所阈值倍率百分数 (50~150, 100=交易所阈值) */
+  abnormal_window?: 'any' | '3d' | '10d' | '30d'
+  threshold_pct?: number
   cooldown_seconds: number
   severity: 'info' | 'warn' | 'critical'
   message: string
   webhook_url?: string
   webhook_enabled?: boolean
   created_at?: string
+  /** 列表接口动态标注的运行时警告 (分组已删除/为空); 不回写持久化 */
+  runtime_warning?: string | null
 }
 
 export interface MonitorRuleOptions {
@@ -964,9 +1024,49 @@ export interface MonitorRuleOptions {
   operators: string[]
   types: { key: string; label: string }[]
   scopes: { key: string; label: string }[]
+  /** 当前自选分组 (scope=watchlist_group 的选择项) */
+  watchlist_groups?: WatchlistGroup[]
   logics: { key: string; label: string }[]
   severities: { key: string; label: string }[]
   directions: { key: string; label: string }[]
+  /** type=abnormal 专属枚举 */
+  abnormal_directions: { key: string; label: string }[]
+  abnormal_windows: { key: string; label: string }[]
+}
+
+// ===== Abnormal Moves (交易所口径近似异动监测) =====
+export interface AbnormalRow {
+  symbol: string
+  name: string
+  board: string
+  is_st: boolean
+  window: string
+  direction: 'up' | 'down'
+  deviation_pct: number
+  threshold_pct: number
+  ratio: number
+  status: 'triggered' | 'edge' | 'watch' | 'normal'
+  benchmark_symbol: string
+  benchmark_available: boolean
+}
+
+export interface AbnormalOverview {
+  rows: AbnormalRow[]
+  total: number
+  warnings: string[]
+  provenance: Record<string, unknown>
+  disclaimer?: string
+}
+
+/** ST 过滤纯函数: 页面默认隐藏 ST, 用户可切换 (供静态审查/单测) */
+export function filterAbnormalRows(
+  rows: AbnormalRow[],
+  hideSt: boolean,
+  status?: string,
+): AbnormalRow[] {
+  return rows.filter(r =>
+    (!hideSt || !r.is_st) && (!status || r.status === status),
+  )
 }
 
 export interface AlertEvent {
@@ -2297,9 +2397,10 @@ export interface Preferences {
   screener_auto_run: boolean
   tradingAutoReview: boolean
   structured_plan_check_enabled?: boolean
-  /** 受控外部行情降级(默认关闭); scopes 仅 realtime/depth 白名单, 首批仅 realtime */
+  /** 受控外部行情降级(默认关闭); scopes 为 realtime/depth/chart_live 白名单子集, 默认空 */
   external_fallback_enabled?: boolean
   external_fallback_scopes?: string[]
+
 }
 
 // ===== Strategy Alert =====
@@ -3061,7 +3162,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ indices_nav_pinned: pinned }),
     }),
-  /** 受控外部行情降级开关 — 开启时 scopes 固定 ["realtime"], 关闭置空; 返回清洗后的两字段(非法 scope 400) */
+  /** 受控外部行情降级开关 — 关闭置空 scopes; 开启可传 realtime/depth/chart_live 子集, 非法 scope 400 */
   updateExternalFallback: (enabled: boolean, scopes: string[]) =>
     request<{ external_fallback_enabled: boolean; external_fallback_scopes: string[] }>(
       '/api/settings/preferences/external-fallback',
@@ -3240,6 +3341,10 @@ export const api = {
       rows: KlineRow[]
       source?: string
       adjustment?: string
+      // 仅真正外部命中时出现; 未命中则整组缺失
+      degraded?: boolean
+      sources?: { chart_live?: string }
+      fallback_reason?: ChartLiveFallbackReason
     }>(
       (dateRange
         ? `/api/kline/daily?symbol=${encodeURIComponent(symbol)}&start_date=${dateRange.start}&end_date=${dateRange.end}`
@@ -3273,7 +3378,11 @@ export const api = {
       asset_type?: 'stock' | 'etf' | 'index'
       date: string | null
       rows: MinuteKlineRow[]
-      source?: 'local' | 'local_disk' | 'tdx_api' | 'live' | 'none'
+      source?: 'local' | 'local_disk' | 'tdx_api' | 'live' | 'none' | 'tencent_chart'
+      // 仅真正外部命中时出现; 未命中则整组缺失, 不影响既有 source 判别
+      degraded?: boolean
+      sources?: { chart_live?: string }
+      fallback_reason?: ChartLiveFallbackReason
     }>(
       `/api/kline/minute?symbol=${encodeURIComponent(symbol)}${date ? `&date=${date}` : ''}`,
     ),
@@ -3340,15 +3449,15 @@ export const api = {
     }),
 
   watchlistList: () => request<{ symbols: WatchlistEntry[] }>('/api/watchlist'),
-  watchlistAdd: (symbol: string, note = '') =>
+  watchlistAdd: (symbol: string, note = '', groupId?: string | null) =>
     request<{ symbols: WatchlistEntry[] }>('/api/watchlist', {
       method: 'POST',
-      body: JSON.stringify({ symbol, note }),
+      body: JSON.stringify({ symbol, note, group_id: groupId ?? null }),
     }),
-  watchlistBatchAdd: (symbols: string[], note = '') =>
+  watchlistBatchAdd: (symbols: string[], note = '', groupId?: string | null) =>
     request<{ symbols: WatchlistEntry[]; added: number }>('/api/watchlist/batch', {
       method: 'POST',
-      body: JSON.stringify({ symbols, note }),
+      body: JSON.stringify({ symbols, note, group_id: groupId ?? null }),
     }),
   watchlistRemove: (symbol: string) =>
     request<{ symbols: WatchlistEntry[] }>(
@@ -3378,6 +3487,45 @@ export const api = {
       extColumns
         ? `/api/watchlist/enriched?ext_columns=${encodeURIComponent(extColumns)}`
         : '/api/watchlist/enriched',
+    ),
+
+  // ===== Watchlist Groups (自选分组, M:N) =====
+  watchlistGroups: () =>
+    request<{ groups: WatchlistGroup[] }>('/api/watchlist/groups'),
+  watchlistGroupCreate: (name: string, color: WatchlistGroupColor) =>
+    request<{ groups: WatchlistGroup[]; group: WatchlistGroup }>('/api/watchlist/groups', {
+      method: 'POST',
+      body: JSON.stringify({ name, color }),
+    }),
+  watchlistGroupRename: (groupId: string, name: string, color?: WatchlistGroupColor) =>
+    request<{ groups: WatchlistGroup[] }>(
+      `/api/watchlist/groups/${encodeURIComponent(groupId)}`,
+      { method: 'PUT', body: JSON.stringify({ name, color: color ?? null }) },
+    ),
+  watchlistGroupReorder: (orderedIds: string[]) =>
+    request<{ groups: WatchlistGroup[] }>('/api/watchlist/groups/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ ordered_ids: orderedIds }),
+    }),
+  watchlistGroupDelete: (groupId: string) =>
+    request<{ groups: WatchlistGroup[]; symbols: WatchlistEntry[] }>(
+      `/api/watchlist/groups/${encodeURIComponent(groupId)}`,
+      { method: 'DELETE' },
+    ),
+  watchlistGroupClear: (groupId: string) =>
+    request<{ symbols: WatchlistEntry[] }>(
+      `/api/watchlist/groups/${encodeURIComponent(groupId)}/clear`,
+      { method: 'POST' },
+    ),
+  watchlistGroupAddMember: (groupId: string, symbol: string) =>
+    request<{ symbols: WatchlistEntry[] }>(
+      `/api/watchlist/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(symbol)}`,
+      { method: 'POST' },
+    ),
+  watchlistGroupRemoveMember: (groupId: string, symbol: string) =>
+    request<{ symbols: WatchlistEntry[] }>(
+      `/api/watchlist/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(symbol)}`,
+      { method: 'DELETE' },
     ),
 
   screenerStrategies: () => request<{ presets: ScreenerStrategy[] }>('/api/screener/strategies'),
@@ -3666,6 +3814,9 @@ export const api = {
     '/api/pipeline/run', { method: 'POST' },
   ),
   pipelineJob: (id: string) => request<PipelineJob>(`/api/pipeline/jobs/${id}`),
+  pipelineCancel: (id: string) => request<{ cancelled: string }>(
+    `/api/pipeline/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' },
+  ),
   pipelineJobs: (limit = 20) =>
     request<{ active_id: string | null; jobs: PipelineJobSummary[] }>(
       `/api/pipeline/jobs?limit=${limit}`,
@@ -4222,6 +4373,11 @@ export const api = {
 
   customSignalDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/custom-signals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  customSignalAiDraft: (text: string, profileId?: string) =>
+    request<CustomSignalAiDraftResponse>('/api/custom-signals/ai-draft', {
+      method: 'POST',
+      body: JSON.stringify({ text, ...(profileId ? { profile_id: profileId } : {}) }),
+    }),
 
   // ===== Monitor Rules (监控规则) =====
   monitorRulesList: () =>
@@ -4229,6 +4385,23 @@ export const api = {
 
   monitorRuleOptions: () =>
     request<MonitorRuleOptions>('/api/monitor-rules/options'),
+
+  /** GET /api/abnormal/overview — 交易所口径近似异动总览 (只读) */
+  abnormalOverview: (params?: {
+    status?: 'triggered' | 'edge' | 'watch' | 'normal'
+    board?: string
+    direction?: 'up' | 'down'
+    hide_st?: boolean
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.status) q.set('status', params.status)
+    if (params?.board) q.set('board', params.board)
+    if (params?.direction) q.set('direction', params.direction)
+    if (params?.hide_st) q.set('hide_st', 'true')
+    const qs = q.toString()
+    return request<AbnormalOverview>(`/api/abnormal/overview${qs ? `?${qs}` : ''}`)
+  },
+
 
   monitorRuleSave: (rule: MonitorRule) =>
     request<{ ok: boolean; rule: MonitorRule }>('/api/monitor-rules', {
@@ -4450,7 +4623,7 @@ export const api = {
 // ===== Pipeline =====
 export interface PipelineJob {
   id: string
-  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed'
+  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed' | 'cancelled'
   stage: string
   progress: number          // 0-100 整体进度
   stage_pct: number         // 0-100 当前阶段内进度
@@ -4649,7 +4822,7 @@ export interface DataStatus {
 
 /** /api/data/status 的 last_pipeline — 最近一次管道执行结果摘要 */
 export interface LastPipelineSummary {
-  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed'
+  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed' | 'cancelled'
   finished_at: string | null
   error: string | null
   failed_stages: { stage: string; error: string }[]
