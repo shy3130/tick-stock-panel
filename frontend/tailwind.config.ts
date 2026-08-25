@@ -1,7 +1,7 @@
 import type { Config } from 'tailwindcss'
 import animate from 'tailwindcss-animate'
 
-// 设计语言 §6.0:暗色为主 + 电光蓝强调 + 等宽数字
+// Quant Research Workbench: dark-first, blue accent, system fonts, tabular nums
 export default {
   darkMode: ['class'],
   content: ['./index.html', './src/**/*.{ts,tsx}'],
@@ -9,7 +9,7 @@ export default {
     container: { center: true, padding: '1rem' },
     extend: {
       colors: {
-        // §6.0.1 色板 — CSS variables 见 src/index.css
+        // Semantic palette — CSS variables in src/index.css
         base:      'hsl(var(--base) / <alpha-value>)',
         surface:   'hsl(var(--surface) / <alpha-value>)',
         elevated:  'hsl(var(--elevated) / <alpha-value>)',
@@ -18,24 +18,58 @@ export default {
         secondary:  'hsl(var(--fg-secondary) / <alpha-value>)',
         muted:      'hsl(var(--fg-muted) / <alpha-value>)',
         accent:     'hsl(var(--accent) / <alpha-value>)',
-        // A 股语义色:仅用于价格 / K 线,不用于 UI 状态
+        // A-share semantics: price / candles only — not UI chrome
         bull:       'hsl(var(--bull) / <alpha-value>)',
         bear:       'hsl(var(--bear) / <alpha-value>)',
         warning:    'hsl(var(--warning) / <alpha-value>)',
         danger:     'hsl(var(--danger) / <alpha-value>)',
+        success:    'hsl(var(--success) / <alpha-value>)',
+        info:       'hsl(var(--info) / <alpha-value>)',
       },
       fontFamily: {
-        sans: ['Inter', '"HarmonyOS Sans SC"', '"PingFang SC"', 'system-ui', 'sans-serif'],
-        mono: ['"JetBrains Mono"', '"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+        // Reliable system stack — no remote font dependency
+        sans: [
+          'ui-sans-serif',
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"Segoe UI"',
+          '"PingFang SC"',
+          '"Hiragino Sans GB"',
+          '"Microsoft YaHei"',
+          '"Noto Sans SC"',
+          '"Helvetica Neue"',
+          'Arial',
+          'sans-serif',
+        ],
+        mono: [
+          'ui-monospace',
+          'SFMono-Regular',
+          'Menlo',
+          'Monaco',
+          'Consolas',
+          '"Liberation Mono"',
+          '"Courier New"',
+          'monospace',
+        ],
       },
       borderRadius: {
         card: '8px',
         btn: '6px',
         input: '4px',
         dialog: '12px',
+        panel: '8px',
+      },
+      spacing: {
+        // 4px grid anchors used by workbench chrome
+        control: '32px',
+      },
+      transitionDuration: {
+        fast: '150ms',
+        base: '180ms',
+        slow: '220ms',
       },
       transitionTimingFunction: {
-        // §6.0.4 Linear/Vercel 同款缓动
         smooth: 'cubic-bezier(0.16, 1, 0.3, 1)',
       },
     },

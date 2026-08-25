@@ -4,12 +4,17 @@ from __future__ import annotations
 import logging
 import os
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Annotated, Literal, Optional
 
-import httpx
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.data_providers.fquant.catalog_resolver import (
+    CatalogError,
+    RouteNotFoundError,
+    StaleCatalogError,
+)
+from app.db_safe import is_valid_ext_ident, quote_ident
 from app.indicators.pipeline import compute_enriched
 from app.services import kline_sync
 from app.storage.atomic_write import atomic_write_parquet
@@ -17,6 +22,44 @@ from app.storage.atomic_write import atomic_write_parquet
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/kline", tags=["kline"])
+
+_MAX_ENRICHED_RANGE_REPAIR_DAYS = 31
+
+
+def _parse_enriched_range_repair(
+    body: object,
+    *,
+    today: date | None = None,
+) -> tuple[date, date]:
+    """Validate the explicit, bounded history-repair request body."""
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="请求体必须包含 start_date 和 end_date")
+
+    parsed: dict[str, date] = {}
+    for field in ("start_date", "end_date"):
+        raw = body.get(field)
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail=f"{field} 必须为 YYYY-MM-DD")
+        try:
+            value = date.fromisoformat(raw)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"{field} 必须为 YYYY-MM-DD") from e
+        if value.isoformat() != raw:
+            raise HTTPException(status_code=400, detail=f"{field} 必须为 YYYY-MM-DD")
+        parsed[field] = value
+
+    start_date = parsed["start_date"]
+    end_date = parsed["end_date"]
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date 不能晚于 end_date")
+    if end_date > (today or date.today()):
+        raise HTTPException(status_code=400, detail="不能补算未来日期")
+    if (end_date - start_date).days + 1 > _MAX_ENRICHED_RANGE_REPAIR_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"单次补算范围最多 {_MAX_ENRICHED_RANGE_REPAIR_DAYS} 个自然日",
+        )
+    return start_date, end_date
 
 
 def _asset_type_for_symbol(symbol: str) -> str:
@@ -43,11 +86,22 @@ def search_instruments(
     request: Request,
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
+    asset_type: Annotated[list[Literal["stock", "index", "etf", "hk"]] | None, Query()] = None,
 ):
     """模糊搜索标的 (本地 instruments 优先, Eastmoney suggest 只补足缺口)。"""
     from app.services.symbol_search import search_symbols
 
-    return {"results": search_symbols(request.app.state.repo, q, limit)}
+    selected_asset_types = asset_type or []
+    index_only = set(selected_asset_types) == {"index"}
+    return {
+        "results": search_symbols(
+            request.app.state.repo,
+            q,
+            limit,
+            asset_types=selected_asset_types,
+            use_suggest=not index_only,
+        ),
+    }
 
 
 @router.post("/instruments/names")
@@ -69,7 +123,9 @@ def _get_stock_info(repo, symbol: str) -> dict:
     """从 instruments 视图查标的名称 + 股本。"""
     try:
         row = repo.execute_one(
-            "SELECT name, total_shares, float_shares FROM instruments WHERE symbol = ? LIMIT 1",
+            "SELECT name, total_shares, float_shares FROM instruments WHERE symbol = ? "
+            "ORDER BY symbol ASC, name ASC NULLS LAST, total_shares ASC NULLS LAST, "
+            "float_shares ASC NULLS LAST LIMIT 1",
             [symbol],
         )
     except Exception:  # noqa: BLE001
@@ -115,88 +171,64 @@ def _repo_instrument_for_symbol(repo, symbol: str, asset_type: str) -> pl.DataFr
     return _instrument_for_symbol(inst, symbol)
 
 
-def _latest_daily_date(repo) -> date | None:
+def _map_catalog_to_http(exc: Exception) -> None:
+    """Catalog 相关异常映射：任何缺路由/stale 在 A 股请求范围内均上抛为 503+Retry-After。
+    符合 fail-closed 契约, 禁止伪装为空或降级外部 fallback。
+    """
+    if isinstance(exc, (CatalogError, RouteNotFoundError, StaleCatalogError)):
+        raise HTTPException(
+            status_code=503,
+            detail=f"分钟数据 catalog 未就绪 (缺路由或 stale): {exc}. A股 staged catalog 按日 fail-closed。",
+            headers={"Retry-After": "3600"},
+        ) from exc
+    raise
+
+
+@router.get("/minute")
+def get_minute(
+    request: Request,
+    symbol: str = Query(..., description="标的代码"),
+    trade_date: date | None = Query(None, alias="date", description="交易日期, 默认最新"),
+) -> dict:
+    """读取某只股票某天的分钟 K 线。
+
+    - 使用 active registry provider
+    - 所有调用显式传入 asset_type
+    - Catalog/RouteNotFound/StaleCatalog 异常映射为 503 + Retry-After (fail-closed, 无 fallback)
+    - 保留现有 DuckDB 分段和进度语义
+    """
+    repo = request.app.state.repo
+    stock_info = _get_stock_info(repo, symbol)
+    stock_name = stock_info.get("name") or symbol
+
+    if trade_date is None:
+        trade_date = repo.latest_minute_date(symbol)
+    if trade_date is None:
+        trade_date = date.today()
+
+    asset_type = _asset_type_for_symbol(symbol)
+    from app.data_providers.registry import get_active_provider_name, get_provider
+    provider_name = get_active_provider_name("minute")
+    provider = get_provider(provider_name)
+
+    start = datetime.combine(trade_date, datetime.min.time().replace(hour=9, minute=25))
+    end = datetime.combine(trade_date, datetime.min.time().replace(hour=15, minute=5))
+
     try:
-        return repo.latest_daily_date()
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _is_intraday_live_date(
-    trade_date: date,
-    latest_date: date | None = None,
-    now: datetime | None = None,
-) -> bool:
-    now = now or datetime.now()
-    if trade_date != now.date():
-        return False
-    if latest_date is not None and trade_date < latest_date:
-        return False
-    h, m = now.hour, now.minute
-    return (h == 9 and m >= 30) or (10 <= h < 12) or (13 <= h < 15)
-
-
-def _fetch_tdx_api_minute(symbol: str, trade_date: date) -> pl.DataFrame:
-    base = (
-        os.getenv("FQUANT_TDX_API_BASE")
-        or os.getenv("DSA_TDX_API_BASE_URL")
-        or os.getenv("TDX_API_BASE_URL")
-        or ""
-    ).strip().rstrip("/")
-    if not base:
-        return pl.DataFrame()
-
-    from app.data_providers.fquant.symbols import symbol_to_code
-
-    date_str = trade_date.strftime("%Y%m%d")
-    try:
-        resp = httpx.get(
-            f"{base}/api/minute",
-            params={"code": symbol_to_code(symbol), "date": date_str},
-            timeout=3,
-            trust_env=False,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
+        df = provider.get_minute([symbol], start, end, asset_type, freq="1m")
     except Exception as e:  # noqa: BLE001
-        logger.warning("tdx-api minute failed %s %s: %s", symbol, trade_date, e)
-        return pl.DataFrame()
+        _map_catalog_to_http(e)
+        logger.exception("minute provider failed %s %s", symbol, trade_date)
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
-    if int(payload.get("code", -1)) != 0:
-        return pl.DataFrame()
-    data = payload.get("data") or {}
-    if str(data.get("date") or "") != date_str:
-        return pl.DataFrame()
-    rows = data.get("List") or []
-    out = []
-    for row in rows:
-        price_raw = row.get("Price")
-        volume_raw = row.get("Number")
-        if price_raw is None or volume_raw is None:
-            continue
-        price = float(price_raw) / 1000
-        volume = float(volume_raw) * 100
-        out.append({
-            "symbol": symbol,
-            "datetime": f"{trade_date.isoformat()} {row.get('Time')}:00",
-            "open": price,
-            "high": price,
-            "low": price,
-            "close": price,
-            "volume": volume,
-            "amount": price * volume,
-        })
-    return pl.DataFrame(out)
-
-
-def _fetch_local_disk_minute(symbol: str, trade_date: date) -> pl.DataFrame:
-    from app.data_providers.registry import get_provider
-
-    start = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25)
-    end = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5)
-    provider = get_provider("fquant_local")
-    return provider.get_minute([symbol], start, end, _asset_type_for_symbol(symbol), freq="1m")
-
+    return {
+        "symbol": symbol,
+        "name": stock_name,
+        "stock_info": stock_info,
+        "date": str(trade_date),
+        "rows": _minute_rows(df, trade_date),
+        "source": provider_name,
+    }
 
 @router.get("/daily")
 def get_daily(
@@ -370,7 +402,7 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
             continue
         config_id, field_name = part.split(".", 1)
         config_id, field_name = config_id.strip(), field_name.strip()
-        if config_id and field_name:
+        if config_id and field_name and is_valid_ext_ident(config_id) and "\x00" not in field_name:
             specs.append((config_id, field_name))
     if not specs:
         return resp
@@ -396,7 +428,7 @@ def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> di
             else:
                 ext_df = pl.from_arrow(
                     repo.store.db.query(
-                        f'SELECT symbol, "{field_name}" FROM ext_{config_id}'
+                        f"SELECT symbol, {quote_ident(field_name)} FROM ext_{config_id}"
                     ).arrow()
                 )
             if not ext_df.is_empty() and "symbol" in ext_df.columns and field_name in ext_df.columns:
@@ -468,7 +500,7 @@ def _maybe_inject_live_candle(request: Request, symbol: str, rows: list[dict]) -
         "amplitude": q.get("amplitude"),
         "turnover_rate": q.get("turnover_rate"),
         "is_live": True,
-        "main_net_inflow": None,
+        # main_net_inflow: 实时行情不提供资金流，保留覆盖前行的值（见下方 update 逻辑）
     }
     # 补上 enriched 的技术指标字段
     for key in ("ma5", "ma10", "ma20", "ma30", "ma60",
@@ -556,73 +588,6 @@ def get_daily_batch(request: Request, body: dict):
 
     return {"data": result}
 
-
-@router.get("/minute")
-def get_minute(
-    request: Request,
-    symbol: str = Query(..., description="标的代码"),
-    trade_date: date | None = Query(None, alias="date", description="交易日期, 默认最新"),
-):
-    """读取某只股票某天的分钟 K 线。
-
-    - 本地 parquet 有完整数据 → 直接返回
-    - 最新交易日盘中 → tdx-api 即时分时优先
-    - 其它日期 → fquant_local/TDX 磁盘分钟文件
-    """
-    repo = request.app.state.repo
-    stock_info = _get_stock_info(repo, symbol)
-    stock_name = stock_info.get("name")
-
-    if trade_date is None:
-        trade_date = repo.latest_minute_date(symbol)
-    if trade_date is None:
-        trade_date = date.today()
-
-    df = repo.get_minute(symbol, trade_date)
-
-    # 完整交易日应有 240 条分钟K；如果是今天(盘中)，期望条数按已交易分钟估算
-    expected = 240
-    today = date.today()
-    if trade_date == today:
-        from datetime import datetime as _dt
-        now = _dt.now()
-        h, m = now.hour, now.minute
-        if h < 9 or (h == 9 and m < 30):
-            expected = 0  # 还没开盘
-        elif h < 12 or (h == 12 and m == 0):
-            expected = (h - 9) * 60 + m - 30  # 9:30 起
-        elif h < 13:
-            expected = 120  # 午休
-        elif h < 15:
-            expected = 120 + (h - 13) * 60 + m
-        else:
-            expected = 240
-
-    is_complete = not df.is_empty() and len(df) >= expected * 0.9  # 允许 10% 容差
-
-    if is_complete:
-        return {
-            "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-            "date": str(trade_date), "rows": _minute_rows(df, trade_date), "source": "local",
-        }
-
-    if _is_intraday_live_date(trade_date, _latest_daily_date(repo)):
-        live_df = _fetch_tdx_api_minute(symbol, trade_date)
-        if not live_df.is_empty():
-            return {
-                "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-                "date": str(trade_date), "rows": _minute_rows(live_df, trade_date),
-                "source": "tdx_api",
-            }
-
-    local_df = _fetch_local_disk_minute(symbol, trade_date)
-    return {
-        "symbol": symbol, "name": stock_name, "stock_info": stock_info,
-        "date": str(trade_date), "rows": _minute_rows(local_df, trade_date),
-        "source": "local_disk" if not local_df.is_empty() else "none",
-    }
-
-
 def _minute_rows(df, trade_date: date) -> list[dict]:
     """Serialize minute rows and repair missing timestamps from row order."""
     if df is None or df.is_empty():
@@ -630,10 +595,13 @@ def _minute_rows(df, trade_date: date) -> list[dict]:
     from app.data_providers.fquant.mapping import generated_minute_time
 
     rows = df.to_dicts()
-    date_str = trade_date.strftime("%Y%m%d")
-    for i, row in enumerate(rows):
-        if row.get("datetime") is None:
-            row["datetime"] = generated_minute_time(i, date_str)
+    for i, r in enumerate(rows):
+        if "datetime" not in r or not r["datetime"]:
+            # repair using mapping helper (handles minute_index or time, lunch break etc)
+            ts = r.get("minute_index")
+            if ts is None:
+                ts = r.get("time")
+            r["datetime"] = generated_minute_time(i if ts is None else ts, str(trade_date))
     return rows
 
 
@@ -679,13 +647,9 @@ async def sync_minute(request: Request):
     from app.services.pipeline_jobs import job_store
     from app.api.data import invalidate_storage_cache
     from app.services.preferences import get_minute_sync_days
-    from app.capabilities import Cap
 
     repo = request.app.state.repo
     capset = request.app.state.capabilities
-
-    if not capset.has(Cap.KLINE_MINUTE_BATCH):
-        raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
 
     job_id = job_store.create()
     existing = job_store.get(job_id)
@@ -703,15 +667,21 @@ async def sync_minute(request: Request):
             progress("sync_minute", 5, "解析标的池…")
             universe: list[str] = []
             try:
-                provider = kline_sync._get_data_provider()
-                if provider.capabilities.instruments:
+                from app.data_providers.registry import get_active_provider_name, get_provider
+                from app.data_providers.fquant.catalog_resolver import (
+                    CatalogError, RouteNotFoundError, StaleCatalogError,
+                )
+                provider_name = get_active_provider_name("minute")
+                provider = get_provider(provider_name)
+                if getattr(provider, "capabilities", None) and provider.capabilities.instruments:
                     import polars as pl
                     inst = provider.get_instruments("stock")
                     if not inst.is_empty() and "symbol" in inst.columns:
                         universe = sorted(inst["symbol"].cast(pl.Utf8).to_list())
+            except (CatalogError, RouteNotFoundError, StaleCatalogError):
+                raise  # catalog 错误不吞，fail-closed
             except Exception:  # noqa: BLE001
                 universe = []
-            # 补充 instruments 全量标的，覆盖北交所、新股等
             inst_path = repo.store.data_dir / "instruments" / "instruments.parquet"
             if inst_path.exists():
                 try:
@@ -811,6 +781,116 @@ async def extend_history(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.post("/repair_enriched_range")
+async def repair_enriched_range(request: Request):
+    """从当前 provider 补算指定日期范围的 A 股 enriched 分区。
+
+    body: ``{"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"}``
+
+    该入口只写 ``kline_daily_enriched``，不恢复 fquant_local 的 stock raw
+    mirror。计算会加载范围前的已存历史作为指标暖机，并在发布前验证每个
+    staging 分区的标的覆盖率，避免残缺源数据覆盖现有分区。
+    """
+    import asyncio
+
+    try:
+        try:
+            body = await request.json()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON") from e
+        start_date, end_date = _parse_enriched_range_repair(body)
+
+        repo = request.app.state.repo
+        capset = request.app.state.capabilities
+        from app.capabilities import Cap
+        if not capset.has(Cap.KLINE_DAILY_BATCH):
+            raise HTTPException(status_code=403, detail="当前数据源不支持批量日K")
+
+        from app.api.data import invalidate_storage_cache
+        from app.services.pipeline_jobs import job_store
+
+        job_id = job_store.create()
+        existing = job_store.get(job_id)
+        if existing and existing["status"] == "running":
+            return {"status": "reused", "job_id": job_id}
+
+        async def task() -> None:
+            job_store.start(job_id)
+            loop = asyncio.get_event_loop()
+
+            def progress(stage: str, pct: int, msg: str,
+                         stage_pct: int | None = None, skip_log: bool = False) -> None:
+                job_store.progress(job_id, stage, pct, msg,
+                                   stage_pct=stage_pct, skip_log=skip_log)
+
+            try:
+                def repair() -> dict[str, int | str]:
+                    from app.data_providers.registry import get_active_provider_name, get_provider
+                    from app.indicators.pipeline import run_pipeline_local_incremental
+                    from app.jobs.daily_pipeline import _refresh_single_view, _resolve_universe
+
+                    progress("repair_enriched_range", 5, "解析 A 股标的池…")
+                    universe = _resolve_universe(capset)
+                    if not universe:
+                        raise RuntimeError("A 股标的池为空，无法补算")
+
+                    provider_name = get_active_provider_name("daily")
+                    provider = get_provider(provider_name)
+                    progress(
+                        "repair_enriched_range",
+                        10,
+                        f"从 {provider_name} 读取日K [{start_date} ~ {end_date}]…",
+                    )
+
+                    def on_batch_done(current: int, total: int) -> None:
+                        progress(
+                            "repair_enriched_range",
+                            10 + int(82 * current / total),
+                            f"补算指标 批次 {current}/{total}",
+                            stage_pct=int(100 * current / total),
+                            skip_log=True,
+                        )
+
+                    written = run_pipeline_local_incremental(
+                        provider,
+                        data_dir=repo.store.data_dir,
+                        symbols=universe,
+                        start_time=datetime.combine(start_date, datetime.min.time()),
+                        end_time=datetime.combine(end_date, datetime.min.time()),
+                        min_partition_coverage=0.9,
+                        on_batch_done=on_batch_done,
+                    )
+                    if written == 0:
+                        raise RuntimeError("当前数据源在指定范围没有返回可补算的 A 股日K")
+
+                    _refresh_single_view(repo, "kline_enriched")
+                    repo.refresh_cache()
+                    progress("repair_enriched_range", 98, "已刷新 enriched 视图与缓存")
+                    return {
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
+                        "universe_size": len(universe),
+                        "enriched_rows": written,
+                    }
+
+                result = await loop.run_in_executor(_long_task_executor, repair)
+                progress("repair_enriched_range", 100, f"补算完成，写入 {result['enriched_rows']} 行")
+                job_store.succeed(job_id, result)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("repair_enriched_range failed: job_id=%s", job_id)
+                job_store.fail(job_id, str(e))
+            finally:
+                invalidate_storage_cache()
+
+        asyncio.create_task(task())
+        return {"status": "started", "job_id": job_id}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.exception("repair_enriched_range error")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/rebuild_enriched")
 async def rebuild_enriched(request: Request):
     """全量重算 enriched 表 — 不获取任何数据,仅基于已有 kline_daily + adj_factor 重算复权+指标。
@@ -893,23 +973,13 @@ import concurrent.futures as _cf
 _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="long-task")
 
 
-def _ensure_minute_capable(capset, unit: str) -> None:
-    from app.capabilities import Cap
-
-    if not capset.has(Cap.KLINE_MINUTE_BATCH):
-        raise HTTPException(status_code=403, detail="当前数据源不支持批量分钟K")
-    if unit == "month" and not capset.has(Cap.KLINE_MINUTE_MONTH):
-        raise HTTPException(status_code=403, detail="当前数据源不支持按月扩展分钟K历史")
-
-
 @router.post("/extend_minute_history")
 async def extend_minute_history(request: Request):
     """向前扩展分钟K历史数据 — 仅拉数据,不做任何后续处理。
 
     body: { "value": int, "unit": "day"|"month" }
-    - day 单位:1~15 天(所有有分钟K能力的数据源可用)
-    - month 单位:1~6 月(每月按 30 天计,即最多 180 天)—— 需数据源声明支持
     返回 job_id,可轮询 /api/pipeline/jobs 查看进度。
+    catalog stale/route-not-found 将由 provider 映射为 503+Retry-After (fail-closed)。
     """
     import asyncio
     import traceback as _tb
@@ -923,8 +993,7 @@ async def extend_minute_history(request: Request):
             raise HTTPException(status_code=400, detail="unit 只支持 day/month")
 
         repo = request.app.state.repo
-        capset = request.app.state.capabilities
-        _ensure_minute_capable(capset, unit)
+        # 无门控；catalog 相关错误由 provider 统一 fail-closed 为 503+Retry-After
 
         # 计算天数上限:day 最多 15 天;month 最多 6 月(180 天)
         from datetime import timedelta
@@ -957,7 +1026,6 @@ async def extend_minute_history(request: Request):
                 # 获取当前最早日期
                 earliest = repo.earliest_minute_date()
                 if not earliest:
-                    # 本地无分钟K数据 → 以今天为基准往前获取
                     from datetime import date as _date
                     latest = _date.today()
                 else:
@@ -973,14 +1041,11 @@ async def extend_minute_history(request: Request):
                 end_str = latest.strftime("%Y-%m-%d")
 
                 progress("extend_minute", 5, "解析标的池…")
-                universe = _resolve_minute_universe(capset, repo)
+                universe = _resolve_minute_universe(repo)
                 progress("extend_minute", 8, f"标的池: {len(universe)} 只")
 
-                from app.capabilities import Cap
-
-                lim = capset.limits(Cap.KLINE_MINUTE_BATCH)
-                batch_size = lim.batch if lim and lim.batch else 100
-                rpm = lim.rpm if lim else 30
+                batch_size = 100
+                rpm = 30
 
                 def _run():
                     """全部在 executor 线程里完成,避免阻塞事件循环。"""
@@ -1058,17 +1123,22 @@ async def extend_minute_history(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def _resolve_minute_universe(capset, repo) -> list[str]:
-    """分钟K标的池解析。"""
-    from app.capabilities import Cap
-    if capset.has(Cap.KLINE_MINUTE_BATCH):
-        try:
-            provider = kline_sync._get_data_provider()
-            if provider.capabilities.instruments:
-                import polars as pl
-                inst = provider.get_instruments("stock")
-                if not inst.is_empty() and "symbol" in inst.columns:
-                    return sorted(inst["symbol"].cast(pl.Utf8).to_list())
-        except Exception:
-            pass
+def _resolve_minute_universe(repo) -> list[str]:
+    """分钟K标的池解析 — 使用 active registry provider("minute")，catalog 错误不吞（fail-closed）。"""
+    try:
+        from app.data_providers.registry import get_active_provider_name, get_provider
+        from app.data_providers.fquant.catalog_resolver import (
+            CatalogError, RouteNotFoundError, StaleCatalogError,
+        )
+        provider_name = get_active_provider_name("minute")
+        provider = get_provider(provider_name)
+        if getattr(provider, "capabilities", None) and provider.capabilities.instruments:
+            import polars as pl
+            inst = provider.get_instruments("stock")
+            if not inst.is_empty() and "symbol" in inst.columns:
+                return sorted(inst["symbol"].cast(pl.Utf8).to_list())
+    except (CatalogError, RouteNotFoundError, StaleCatalogError):
+        raise  # 让 catalog 错误继续抛出，不吞
+    except Exception:
+        logger.debug("resolve_minute_universe failed, fallback to empty universe")
     return []

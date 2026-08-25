@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check, Eye, EyeOff, Loader2, Plug, Plus, Save, Settings2,
@@ -31,6 +31,8 @@ const PRESETS: Array<AiProfileInput & { label: string; website?: string; website
   { label: '通义千问', name: '通义千问', provider: OPENAI_PROVIDER, base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-3.6plus', description: '阿里云 DashScope 兼容模式接口。', website: 'https://tongyi.aliyun.com/', websiteLabel: 'tongyi.aliyun.com' },
   { label: '智谱 GLM', name: '智谱 GLM', provider: OPENAI_PROVIDER, base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2', description: '智谱 AI 官方 OpenAI 兼容接口。', website: 'https://open.bigmodel.cn/', websiteLabel: 'open.bigmodel.cn' },
   { label: 'Kimi', name: 'Kimi', provider: OPENAI_PROVIDER, base_url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.6', description: '月之暗面 Moonshot 官方 OpenAI 兼容接口。', website: 'https://platform.moonshot.cn/', websiteLabel: 'platform.moonshot.cn' },
+  { label: 'OpenCode Go', name: 'OpenCode Go', provider: OPENAI_PROVIDER, base_url: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4-flash', description: 'OpenCode Go 订阅制的 OpenAI 兼容接口，含 glm/deepseek/kimi/grok 等编码模型。', website: 'https://opencode.ai/', websiteLabel: 'opencode.ai' },
+  { label: 'OpenCode Zen', name: 'OpenCode Zen', provider: OPENAI_PROVIDER, base_url: 'https://opencode.ai/zen/v1', model: 'deepseek-v4-flash', description: 'OpenCode Zen 按量付费的 OpenAI 兼容接口。', website: 'https://opencode.ai/', websiteLabel: 'opencode.ai' },
   { label: 'Hermes (ACP)', name: 'Hermes ACP', provider: ACP_PROVIDER, launch_command: 'hermes acp', model: '', description: '通过本机 Hermes ACP 作为纯文本生成器。' },
   { label: 'Codex CLI', name: 'Codex CLI', provider: CODEX_PROVIDER, codex_command: CODEX_COMMAND, model: '', description: '调用本机 Codex CLI 的 codex exec。', website: 'https://developers.openai.com/codex/noninteractive', websiteLabel: 'codex exec' },
   { label: '炸鸡中转站', name: '炸鸡中转站', provider: OPENAI_PROVIDER, base_url: 'https://code.alysc.top/v1', model: 'gpt-5.5', description: 'OpenAI 兼容中转服务，适合直接使用国际模型。', website: 'https://code.alysc.top/sign-up?aff=1afk', websiteLabel: 'code.alysc.top', partner: true, promo: '通过链接邀请注册赠送免费额度 · 国际模型最低0.01倍率' },
@@ -54,11 +56,16 @@ export function SettingsAIPanel() {
   const profilesQuery = useQuery({ queryKey: ['aiProfiles'], queryFn: api.aiProfiles, retry: false })
   const profiles = profilesQuery.data?.profiles ?? []
   const defaultId = profilesQuery.data?.default_id ?? ''
+  const runtimeQuery = useQuery({ queryKey: ['agentRuntime'], queryFn: api.agentRuntime, retry: false })
+
+  const routePolicy = profilesQuery.data?.route_policy ?? { allow_profile_fallback: false, fallback_profile_ids: [] }
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<AiProfileInput>(EMPTY_FORM)
   const [showKey, setShowKey] = useState(false)
   const [saved, setSaved] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [policySaved, setPolicySaved] = useState(false)
+  const didAutoSelect = useRef(false)
 
   const editing = useMemo(
     () => profiles.find(profile => profile.id === editingId) ?? null,
@@ -70,10 +77,22 @@ export function SettingsAIPanel() {
   const canSave = form.name.trim() && (isOpenAI ? !!form.model?.trim() : true)
   const configured = profiles.length > 0
 
+  const allowFallback = routePolicy.allow_profile_fallback
+  const fallbackIds = routePolicy.fallback_profile_ids
+  const fallbackProfiles = fallbackIds
+    .map(id => profiles.find(p => p.id === id))
+    .filter((p): p is AiProfileMasked => !!p)
+  const fallbackCandidates = profiles.filter(
+    p => p.id !== defaultId && !fallbackIds.includes(p.id),
+  )
+
   useEffect(() => {
-    if (!editingId && profiles[0]) {
-      setEditingId(profiles[0].id)
-      setForm(formFromProfile(profiles[0]))
+    if (!didAutoSelect.current && profiles[0]) {
+      didAutoSelect.current = true
+      if (!editingId) {
+        setEditingId(profiles[0].id)
+        setForm(formFromProfile(profiles[0]))
+      }
     }
   }, [editingId, profiles])
 
@@ -121,12 +140,41 @@ export function SettingsAIPanel() {
       return api.testAiProfile(editingId)
     },
     onSuccess: result => {
-      setTestResult({ ok: result.ok, msg: result.ok ? `连通成功 · ${result.model ?? form.name}` : (result.error ?? '测试失败') })
+      const latency = result.latency_ms != null ? ` · ${Math.round(result.latency_ms)}ms` : ''
+      setTestResult({ ok: result.ok, msg: result.ok ? `连通成功 · ${result.model ?? form.name}${latency}` : (result.error ?? '测试失败') })
     },
     onError: error => {
       setTestResult({ ok: false, msg: error instanceof Error ? error.message : '测试失败' })
     },
   })
+
+  const updatePolicy = useMutation({
+    mutationFn: (policy: { allow_profile_fallback: boolean; fallback_profile_ids: string[] }) =>
+      api.updateAiRoutePolicy(policy),
+    onSuccess: () => {
+      setPolicySaved(true)
+      qc.invalidateQueries({ queryKey: ['aiProfiles'] })
+      setTimeout(() => setPolicySaved(false), 1500)
+    },
+  })
+
+  const toggleFallback = (enabled: boolean) => {
+    updatePolicy.mutate({ allow_profile_fallback: enabled, fallback_profile_ids: fallbackIds })
+  }
+  const addFallback = (id: string) => {
+    updatePolicy.mutate({ allow_profile_fallback: allowFallback, fallback_profile_ids: [...fallbackIds, id] })
+  }
+  const removeFallback = (id: string) => {
+    updatePolicy.mutate({ allow_profile_fallback: allowFallback, fallback_profile_ids: fallbackIds.filter(x => x !== id) })
+  }
+  const moveFallback = (id: string, dir: -1 | 1) => {
+    const idx = fallbackIds.indexOf(id)
+    const target = idx + dir
+    if (idx < 0 || target < 0 || target >= fallbackIds.length) return
+    const next = [...fallbackIds]
+    ;[next[idx], next[target]] = [next[target], next[idx]]
+    updatePolicy.mutate({ allow_profile_fallback: allowFallback, fallback_profile_ids: next })
+  }
 
   const applyPreset = (preset: typeof PRESETS[number]) => {
     setEditingId(null)
@@ -167,6 +215,7 @@ export function SettingsAIPanel() {
             <div className="text-sm font-medium text-foreground">{configured ? `${profiles.length} 个 AI 配置` : 'AI 未配置'}</div>
             <div className="text-xs text-muted mt-0.5 truncate">
               {configured ? `默认: ${profiles.find(p => p.id === defaultId)?.name ?? '未设置'}` : '新增第一条 AI 配置后即可使用分析功能。'}
+              {runtimeQuery.data?.runtime ? ` · 自由 Agent 运行时 ${runtimeQuery.data.runtime}（只读，不在此切换）` : ''}
             </div>
           </div>
         </div>
@@ -191,6 +240,56 @@ export function SettingsAIPanel() {
             </button>
           ))}
         </div>
+      </Card>
+
+      <Card icon={Shield} title="备用配置" right={
+        <button onClick={() => toggleFallback(!allowFallback)} disabled={updatePolicy.isPending}
+          className={`relative h-5 w-9 rounded-full transition-colors ${allowFallback ? 'bg-accent' : 'bg-elevated'}`}
+          role="switch" aria-checked={allowFallback} aria-label="启用备用配置">
+          <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${allowFallback ? 'translate-x-4' : 'translate-x-0.5'}`} />
+        </button>
+      }>
+        <p className="text-[11px] leading-relaxed text-muted">
+          默认关闭。仅在连接、额度、认证或超时等 provider 故障时按顺序切换备用配置；
+          模型输出内容错误不会触发切换，取消请求也不会切换。token 用量跨尝试累计。
+          {policySaved && <span className="ml-1 text-emerald-400">已保存</span>}
+        </p>
+        {allowFallback && (
+          <div className="mt-3 space-y-2">
+            {fallbackProfiles.length === 0 && (
+              <div className="text-xs text-muted">尚未配置备用顺序。</div>
+            )}
+            {fallbackProfiles.map((profile, idx) => (
+              <div key={profile.id}
+                className="flex items-center gap-2 rounded-lg border border-border bg-base px-3 py-2">
+                <span className="text-[10px] text-muted/60 w-4">{idx + 1}.</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-medium text-foreground">{profile.name}</div>
+                  <div className="truncate text-[10px] text-muted">{providerLabel(profile.provider)} · {profile.model || '默认'}</div>
+                </div>
+                <button onClick={() => moveFallback(profile.id, -1)} disabled={idx === 0 || updatePolicy.isPending}
+                  className="rounded px-1 text-muted hover:text-accent disabled:opacity-30" aria-label="上移">↑</button>
+                <button onClick={() => moveFallback(profile.id, 1)} disabled={idx === fallbackProfiles.length - 1 || updatePolicy.isPending}
+                  className="rounded px-1 text-muted hover:text-accent disabled:opacity-30" aria-label="下移">↓</button>
+                <button onClick={() => removeFallback(profile.id)} disabled={updatePolicy.isPending}
+                  className="rounded px-1 text-danger/70 hover:text-danger" aria-label="移除">×</button>
+              </div>
+            ))}
+            {fallbackCandidates.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {fallbackCandidates.map(profile => (
+                  <button key={profile.id} onClick={() => addFallback(profile.id)} disabled={updatePolicy.isPending}
+                    className="rounded-full border border-dashed border-border px-2.5 py-1 text-[11px] text-secondary hover:border-accent/40 hover:text-accent">
+                    + {profile.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {profiles.length <= 1 && (
+              <div className="text-[11px] text-muted/70">再新增一条 AI 配置后才可选择备用。</div>
+            )}
+          </div>
+        )}
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-[260px,1fr]">
@@ -296,7 +395,7 @@ export function SettingsAIPanel() {
               <input value={form.user_agent ?? ''} onChange={e => setForm({ ...form, user_agent: e.target.value })} placeholder="默认留空" className={INPUT_CLS} />
             </Field>
 
-            <div className="rounded-card border border-amber-400/20 bg-amber-400/[0.04] px-4 py-3 flex items-start gap-3">
+            <div className="panel flex items-start gap-3 border-warning/30 bg-warning/5 px-3 py-2.5">
               <Shield className="h-4 w-4 text-amber-400/70 mt-0.5 shrink-0" />
               <div className="text-[11px] text-amber-400/70 leading-relaxed">
                 API Key 仅保存在本机项目文件中。ACP/Codex 命令在后端宿主机执行，panel 只把它们作为文本生成器使用。
@@ -330,7 +429,7 @@ interface CardProps {
 
 function Card({ icon: Icon, title, right, children }: CardProps) {
   return (
-    <section className="rounded-card border border-border bg-surface p-5">
+    <section className="panel">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
           <Icon className="h-4 w-4 text-secondary" />

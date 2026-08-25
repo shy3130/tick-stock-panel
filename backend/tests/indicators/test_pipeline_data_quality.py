@@ -72,7 +72,7 @@ def test_daily_change_uses_raw_prices_to_avoid_ex_rights_spikes():
     assert abs(row["amplitude"] - ((8.49 - 8.02) / 8.13)) < 1e-12
 
 
-def test_enriched_today_recomputes_quote_change_after_adjustment():
+def test_enriched_today_recomputes_quote_change_after_adjustment(monkeypatch):
     live_agg = pl.DataFrame({
         "symbol": ["600988.SH"],
         "ema5": [20.0],
@@ -144,6 +144,41 @@ def test_enriched_today_recomputes_quote_change_after_adjustment():
     assert row["change_amount"] == 1.0
     assert row["amplitude"] == 0.3
     assert row["turnover_rate"] == 10.0
+
+    # engine compat 只返回已 warmup 标的时，主 enriched 必须左连保留历史不足标的。
+    live_with_engine = live_agg.with_columns([
+        pl.lit(None).alias(c)
+        for c in pipeline_mod.ENGINE_COMPAT_LIVE_STATE_COLUMNS
+    ])
+    live_two = pl.concat([
+        live_with_engine,
+        live_with_engine.with_columns(pl.lit("999999.SZ").alias("symbol")),
+    ])
+    today_two = pl.concat([
+        today_ohlcv,
+        today_ohlcv.with_columns(pl.lit("999999.SZ").alias("symbol")),
+    ])
+    instruments_two = pl.concat([
+        instruments,
+        instruments.with_columns(pl.lit("999999.SZ").alias("symbol")),
+    ])
+    partial_compat = pl.DataFrame({
+        "symbol": ["600988.SH"],
+        **{column: [None] for column in pipeline_mod.ENGINE_COMPAT_COLUMNS},
+    })
+    monkeypatch.setattr(
+        pipeline_mod,
+        "compute_engine_compat_today",
+        lambda _live, _today: partial_compat,
+    )
+
+    out_two = compute_enriched_today(
+        live_two,
+        pl.DataFrame(),
+        today_two,
+        instruments=instruments_two,
+    )
+    assert set(out_two["symbol"].to_list()) == {"600988.SH", "999999.SZ"}
 
 
 def test_market_snapshot_lot_volume_maps_to_shares():
@@ -220,6 +255,75 @@ def test_run_pipeline_forward_incremental_uses_wide_warmup_window(tmp_path, monk
 
     assert captured.get("days") == 300
 
+def test_recompute_historical_turnover_repair_rebuild_uses_point_in_time_capital(tmp_path, monkeypatch):
+    """Minimal test for the wiring: pre-written enriched with turnover_rate, direct call with monkeypatch, correct capital dates for asof, raw snapshot."""
+    from app.share_capital import recompute_historical_turnover, recompute_historical_turnover_test_only
+    from app.storage.repository import KlineRepository, DataStore
+    from datetime import date
+    from pathlib import Path
+    import polars as pl
+
+    data_dir = Path(tmp_path)
+    enriched_dir = data_dir / "kline_daily_enriched"
+    enriched_dir.mkdir(parents=True)
+    for d in ("2026-07-01", "2026-07-02"):
+        (enriched_dir / f"date={d}").mkdir(parents=True, exist_ok=True)
+
+    df_enriched = pl.DataFrame({
+        "symbol": ["600519.SH"] * 2,
+        "date": [date(2026, 7, 1), date(2026, 7, 2)],
+        "volume": [50000] * 2,
+        "turnover_rate": [0.05, 0.05],
+        "open": [100.0, 10.0],
+        "high": [101.0, 10.1],
+        "low": [99.0, 9.9],
+        "close": [100.0, 10.0],
+        "amount": [5000000.0] * 2,
+        "raw_close": [100.0, 10.0],
+        "raw_high": [101.0, 10.1],
+        "raw_low": [99.0, 9.9],
+        "consecutive_limit_ups": [0] * 2,
+        "consecutive_limit_downs": [0] * 2,
+    })
+    for dstr in ("2026-07-01", "2026-07-02"):
+        df_enriched.write_parquet(enriched_dir / f"date={dstr}" / "part.parquet")
+
+    capital_df = pl.DataFrame({
+        "symbol": ["600519.SH"] * 2,
+        "date": [date(2026, 6, 30), date(2026, 7, 2)],
+        "float_shares": [1000000.0, 10000000.0],
+    })
+
+    store = DataStore(data_dir)
+    repo = KlineRepository(store=store)
+
+    monkeypatch.setattr(
+        "app.share_capital.load_historical_float_shares",
+        lambda *args, **kwargs: capital_df
+    )
+
+    raw_before = len(list((data_dir / "kline_daily").rglob("**/*.parquet"))) if (data_dir / "kline_daily").exists() else 0
+
+    updated = recompute_historical_turnover(repo, target_dates=[date(2026, 7, 1), date(2026, 7, 2)])
+    assert updated > 0
+
+    for dstr, expected in [("2026-07-01", 0.05), ("2026-07-02", 0.005)]:
+        df = pl.read_parquet(enriched_dir / f"date={dstr}" / "part.parquet")
+        row = df.filter(pl.col("symbol") == "600519.SH").to_dicts()[0]
+        assert abs(row["turnover_rate"] - expected) < 1e-5
+
+    raw_after = len(list((data_dir / "kline_daily").rglob("**/*.parquet"))) if (data_dir / "kline_daily").exists() else 0
+    assert raw_after == raw_before, "raw mirror untouched"
+
+    test_out = recompute_historical_turnover_test_only(
+        pl.DataFrame({"symbol": ["600519.SH"], "date": [date(2026, 7, 1)], "volume": [50000]}),
+        capital_df
+    )
+    assert "_hist_turnover_rate" in test_out.columns
+
+    print("Repair/rebuild turnover test PASSED with point-in-time capital verification")
+
+    print("Repair/rebuild integration test PASSED via run_pipeline entry with real loader contract, merge-upsert, and point-in-time verification")
 
 def test_compute_indicators_produces_engine_compat_columns():
     """compute_indicators 必须产出 ENGINE_COMPAT_COLUMNS 的全部 41 列。"""
@@ -248,6 +352,10 @@ def test_compute_indicators_produces_engine_compat_columns():
 
     for col in ENGINE_COMPAT_COLUMNS:
         assert col in out.columns, f"compute_indicators missing engine compat column: {col}"
+
+    projected = compute_indicators(df, include_engine_compat=False)
+    assert "ma20" in projected.columns
+    assert all(column not in projected.columns for column in ENGINE_COMPAT_COLUMNS)
 
     # ENRICHED_STORAGE_COLS must still be exactly 14 (engine compat columns not persisted)
     from app.indicators.pipeline import ENRICHED_STORAGE_COLS

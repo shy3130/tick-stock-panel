@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
@@ -113,6 +113,100 @@ class FakeIndexEngine:
         raise AssertionError("index daily must not use stock xdxr/raw oracle")
 
 
+class FakeIndexMarkets:
+    def query(self, sql, params=None):
+        assert "asset_type = 10" in sql
+        assert params[0] == "000001"
+        return [
+            {
+                "date": "2026-07-01",
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 1.0,
+                "amount": 1.0,
+            },
+            {
+                "date": "2026-07-02",
+                "open": 4110.0,
+                "high": 4125.0,
+                "low": 4105.0,
+                "close": 4120.0,
+                "volume": 700_000_000,
+                "amount": 1_800_000_000_000,
+            },
+        ]
+
+
+def test_daily_freshness_uses_newest_source_in_get_daily_chain():
+    provider = object.__new__(FQuantProvider)
+    provider._engine = type(
+        "Engine",
+        (),
+        {"freshness": lambda _self: date(2026, 8, 14)},
+    )()
+
+    class FStore:
+        @staticmethod
+        def query(sql, params=None):  # noqa: ARG004
+            assert "FROM t_1_day_klines" in sql
+            return [{"latest_date": "2026-08-17"}]
+
+    provider._fstore = FStore()
+
+    assert provider.get_daily_freshness() == date(2026, 8, 17)
+
+
+def test_ranged_stock_daily_fills_newer_fstore_date_without_overwriting_engine():
+    provider = object.__new__(FQuantProvider)
+    provider.name = "fquant"
+    provider._get_daily_from_engine_wide = lambda *_args: [
+        {
+            "symbol": "600519.SH",
+            "date": "2026-08-14",
+            "open": 100,
+            "high": 101,
+            "low": 99,
+            "close": 100,
+            "volume": 10,
+            "amount": 1000,
+        },
+    ]
+    provider._get_daily_from_fstore_klines = lambda *_args: [
+        {
+            "symbol": "600519.SH",
+            "date": "2026-08-14",
+            "open": 99,
+            "high": 100,
+            "low": 98,
+            "close": 99,
+            "volume": 9,
+            "amount": 900,
+        },
+        {
+            "symbol": "600519.SH",
+            "date": "2026-08-17",
+            "open": 109,
+            "high": 111,
+            "low": 108,
+            "close": 110,
+            "volume": 11,
+            "amount": 1210,
+        },
+    ]
+
+    result = provider.get_daily(
+        ["600519.SH"],
+        datetime(2026, 8, 14),
+        datetime(2026, 8, 17),
+        "stock",
+    )
+
+    assert result["date"].to_list() == [date(2026, 8, 14), date(2026, 8, 17)]
+    assert result["close"].to_list() == [100.0, 110.0]
+
+
 def test_engine_wide_uses_raw_oracle_before_daily_mapping():
     provider = object.__new__(FQuantProvider)
     provider._engine = FakeEngine()
@@ -138,7 +232,7 @@ def test_daily_close_map_uses_raw_close():
     assert closes["2012-10-26"] == 241.0
 
 
-def test_raw_oracle_prefers_daily_markets_over_day_klines():
+def test_raw_oracle_prefers_day_klines_over_daily_markets():
     provider = object.__new__(FQuantProvider)
     provider._fstore = FakeFStoreWithDailyMarkets()
 
@@ -146,12 +240,10 @@ def test_raw_oracle_prefers_daily_markets_over_day_klines():
 
     assert rows == [{
         "date": "2026-07-01",
-        "oracle_open": 34.25,
-        "oracle_high": 39.74,
-        "oracle_low": 33.80,
-        "oracle_close": 37.85,
-        "oracle_volume": 12_300,
-        "oracle_amount": 456,
+        "oracle_open": 50.0,
+        "oracle_high": 55.0,
+        "oracle_low": 47.0,
+        "oracle_close": 53.09,
     }]
 
 
@@ -205,6 +297,24 @@ def test_index_daily_does_not_use_stock_raw_oracle_for_same_code():
     rows = provider._get_daily_from_engine_wide("000001.SH", "000001", None, None, "index")
 
     assert rows[0]["close"] == 4112.45
+
+
+def test_index_daily_fills_newer_dates_from_daily_markets():
+    provider = object.__new__(FQuantProvider)
+    provider._engine = FakeIndexEngine()
+    provider._fstore = FakeFStore()
+    provider._fstore_markets = FakeIndexMarkets()
+    provider.name = "fquant"
+
+    result = provider.get_daily(
+        ["000001.INDEX"],
+        datetime(2026, 7, 1),
+        datetime(2026, 7, 2),
+        "index",
+    )
+
+    assert result["date"].to_list() == [date(2026, 7, 1), date(2026, 7, 2)]
+    assert result["close"].to_list() == [4112.45, 4120.0]
 
 
 def test_etf_fstore_daily_uses_asset_type_20_table():
@@ -281,3 +391,27 @@ def test_hk_fstore_daily_uses_asset_type_3_table_and_correct_volume_multiplier()
 
     implied_shares = rows[0]["amount"] / rows[0]["close"]
     assert rows[0]["volume"] == pytest.approx(implied_shares, rel=0.01)
+
+
+def test_hk_adjustment_and_financial_boundaries_fail_closed():
+    provider = object.__new__(FQuantProvider)
+
+    assert provider.get_adj_factors(
+        ["00700.HK"],
+        datetime(2024, 1, 1),
+        datetime(2024, 1, 31),
+        "hk",
+    ).is_empty()
+    assert provider.get_financial("00700.HK", "income").is_empty()
+    assert provider.get_corp_action("00700.HK").is_empty()
+
+
+def test_market_data_status_exposes_hk_unavailable_reasons():
+    provider = object.__new__(FQuantProvider)
+
+    status = provider.get_market_data_status()
+
+    assert status["hk_adjustment"]["available"] is False
+    assert "no HK corporate-action" in status["hk_adjustment"]["reason"]
+    assert status["hk_financial"]["available"] is False
+    assert "no HK symbols" in status["hk_financial"]["reason"]

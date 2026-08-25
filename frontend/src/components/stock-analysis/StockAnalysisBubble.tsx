@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Loader2, Check, AlertCircle } from 'lucide-react'
-import { useBubbleTasks, restoreDialog } from '@/lib/stockAnalysisStore'
+import { Loader2, Check, AlertCircle, X } from 'lucide-react'
+import { useBubbleTasks, restoreDialog, cancelAnalysis } from '@/lib/stockAnalysisStore'
 import type { ActiveTask } from '@/lib/stockAnalysisStore'
 
 /**
@@ -133,13 +133,16 @@ function BubbleItem({ task, isLast, onPointerDown }: {
 }) {
   const isWorking = task.phase === 'loading' || task.phase === 'streaming'
   const isError = task.phase === 'error'
+  const isCancelled = task.phase === 'cancelled'
 
   // 蓝色系(区别于财务分析的紫色)
   const accent = isWorking
     ? 'from-sky-500/25 to-blue-500/20 text-sky-300 border-sky-300/40 shadow-[0_6px_24px_-10px_rgba(14,165,233,0.5)]'
     : isError
       ? 'from-red-500/20 to-red-500/10 text-red-300 border-red-300/40 shadow-[0_6px_20px_-10px_rgba(239,68,68,0.4)]'
-      : 'from-emerald-500/20 to-emerald-500/10 text-emerald-300 border-emerald-300/40 shadow-[0_6px_20px_-10px_rgba(16,185,129,0.35)]'
+      : isCancelled
+        ? 'from-muted/20 to-muted/10 text-secondary border-border/40'
+        : 'from-emerald-500/20 to-emerald-500/10 text-emerald-300 border-emerald-300/40 shadow-[0_6px_20px_-10px_rgba(16,185,129,0.35)]'
 
   return (
     <motion.div
@@ -153,7 +156,7 @@ function BubbleItem({ task, isLast, onPointerDown }: {
         onPointerDown={onPointerDown}
         role="button"
         tabIndex={0}
-        title={isWorking ? '个股分析中,点击恢复' : isError ? '分析失败,点击重试' : '点击查看个股分析报告'}
+        title={isWorking ? '个股分析中,点击恢复;点 × 取消' : isError ? '分析失败,点击重试' : isCancelled ? '已取消,点击查看' : '点击查看个股分析报告'}
         className={`group relative flex w-full cursor-pointer items-center gap-1.5 overflow-hidden rounded-lg border bg-gradient-to-br px-2 py-1.5 backdrop-blur-xl transition-all duration-200 hover:scale-[1.02] active:scale-[0.99] ${accent}`}
       >
         {isWorking && (
@@ -164,6 +167,7 @@ function BubbleItem({ task, isLast, onPointerDown }: {
         <span className="flex h-4 w-4 items-center justify-center shrink-0">
           {isWorking ? <Loader2 className="h-3 w-3 animate-spin" />
             : isError ? <AlertCircle className="h-3 w-3" />
+            : isCancelled ? <X className="h-3 w-3" />
             : <Check className="h-3 w-3" />}
         </span>
         <span className="flex-1 min-w-0 text-[11px] font-medium text-foreground leading-none truncate">
@@ -172,8 +176,20 @@ function BubbleItem({ task, isLast, onPointerDown }: {
         <span className="shrink-0 text-[9px] leading-none">
           {isWorking ? <span className="text-sky-300/80">个股分析</span>
             : isError ? <span className="text-red-300/80">失败</span>
+            : isCancelled ? <span className="text-secondary/80">已取消</span>
             : <span className="text-emerald-300/80">点击查看</span>}
         </span>
+        {isWorking && (
+          <button
+            type="button"
+            aria-label="取消分析"
+            className="shrink-0 grid h-4 w-4 place-items-center rounded text-sky-200/80 hover:bg-sky-400/20 hover:text-sky-100"
+            onPointerDown={(e) => { e.stopPropagation(); e.preventDefault() }}
+            onClick={(e) => { e.stopPropagation(); void cancelAnalysis(task.id) }}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
       </div>
       <style>{`
         @keyframes sa-bubble-progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }

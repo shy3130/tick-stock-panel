@@ -14,6 +14,7 @@ import polars as pl
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
+from app.db_safe import is_valid_ext_ident
 from app.services.ext_data import (
     ExtConfig,
     ExtConfigStore,
@@ -827,7 +828,10 @@ def _refresh_views(request: Request) -> None:
                 continue
             try:
                 raw = json.loads(cp.read_text(encoding="utf-8"))
-                cfg_id = raw["id"]
+                cfg_id = raw.get("id")
+                if cfg_id != cfg_dir.name or not is_valid_ext_ident(cfg_id):
+                    logger.warning("跳过不安全的扩展表配置: %s", cp)
+                    continue
                 # 检查是否有数据文件（snapshot: part.parquet, timeseries: timeseries/ 目录）
                 has_data = (cfg_dir / "part.parquet").exists() or (cfg_dir / "timeseries").exists()
                 if has_data:

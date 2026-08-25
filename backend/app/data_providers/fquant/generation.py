@@ -1,7 +1,12 @@
 """Logical-name -> snapshot-root resolution for the fquant DuckDB clients
-(Task 16). Roots are configurable via the
-FQUANT_SNAPSHOT_ROOT_{FSTORE,ENGINE_A,ENGINE_HK} environment variables so the
-panel can be pointed at a staging mirror without code changes.
+(Task 16).
+``extended`` and ``tdx_moneyflow_minute`` are published to their own dedicated
+roots and are overridable via ``FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED`` and
+``FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE`` so a republish of the shared
+fstore / engine-a generation cannot swap the file they resolve to. The shared
+roots are configurable via the ``FQUANT_SNAPSHOT_ROOT_{FSTORE,ENGINE_A,ENGINE_HK}``
+environment variables so the panel can be pointed at a staging mirror without
+code changes.
 
 ``current_path(logical)`` returns the current generation's immutable file for a
 logical database, or ``None`` when no snapshot is available (caller falls back
@@ -16,7 +21,16 @@ from app.data_providers.fquant import snapshot_resolver as sr
 # owner group -> (env var, default root)
 _ROOT_ENV = {
     "fstore": ("FQUANT_SNAPSHOT_ROOT_FSTORE", sr.ROOT_FSTORE),
+    "fstore_extended": ("FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED", sr.ROOT_FSTORE_EXTENDED),
     "engine_a": ("FQUANT_SNAPSHOT_ROOT_ENGINE_A", sr.ROOT_ENGINE_A),
+    "engine_a_moneyflow_minute": (
+        "FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE",
+        sr.ROOT_ENGINE_A_MONEYFLOW_MINUTE,
+    ),
+    "engine_a_callauction": (
+        "FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION",
+        sr.ROOT_ENGINE_A_CALLAUCTION,
+    ),
     "engine_hk": ("FQUANT_SNAPSHOT_ROOT_ENGINE_HK", sr.ROOT_ENGINE_HK),
 }
 
@@ -26,10 +40,12 @@ LOGICAL_OWNERS = {
     "markets": "fstore",
     "klines": "fstore",
     "minutes": "fstore",
+    "extended": "fstore_extended",
     "tdx": "engine_a",
-    "tdx_minutes": "engine_a",
     "tdx_chip": "engine_a",
-    "tdx_moneyflow_minute": "engine_a",
+    "tdx_moneyflow": "engine_a",
+    "tdx_moneyflow_minute": "engine_a_moneyflow_minute",
+    "tdx_callauction": "engine_a_callauction",
     "tdx_hk": "engine_hk",
     "tdx_hk_minutes": "engine_hk",
     "tdx_hk_trans": "engine_hk",
@@ -37,8 +53,10 @@ LOGICAL_OWNERS = {
 
 
 def root_for(logical: str) -> str | None:
-    """Snapshot root for a logical database, honouring env overrides at call time."""
+    """Snapshot root for a logical database, honouring env overrides."""
     owner = LOGICAL_OWNERS.get(logical)
+    if owner is None and logical.startswith("tdx_callauction_"):
+        owner = "engine_a_callauction"
     if owner is None:
         return None
     env_key, default = _ROOT_ENV[owner]

@@ -1,7 +1,10 @@
+import functools
+import re
 from datetime import date, datetime
 from types import SimpleNamespace
 
 import polars as pl
+import pytest
 
 from app.api import kline
 
@@ -10,6 +13,7 @@ class FakeRepo:
     def __init__(self):
         self.daily_calls = 0
         self.batch_calls = 0
+        self.last_execute_one_sql = None
 
     def get_daily(self, symbol, start, end):
         self.daily_calls += 1
@@ -20,6 +24,7 @@ class FakeRepo:
         return pl.DataFrame()
 
     def execute_one(self, sql, params=None):
+        self.last_execute_one_sql = sql
         return None
 
 
@@ -97,6 +102,85 @@ class CachedRepo(FakeRepo):
 
 def request(repo=None):
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo or FakeRepo(), quote_service=None)))
+
+
+class _OrderedExecuteRepo:
+    """execute_one 模拟：按 SQL 中 ORDER BY 的列/方向对候选行排序后返回首行。
+
+    把 _get_stock_info 的 deterministic ORDER BY 当作可观察契约验证——当排序
+    列或方向写错、或 ORDER BY 缺失时，返回的行不同，测试失败。
+    """
+
+    def __init__(self, candidate_rows):
+        # candidate_rows: list[tuple(name, total_shares, float_shares)]
+        self._rows = candidate_rows
+        self.last_execute_one_sql = None
+
+    def execute_one(self, sql, params=None):
+        self.last_execute_one_sql = sql
+        ordered = _order_by_rows(sql, self._rows)
+        return ordered[0] if ordered else None
+
+
+def _order_by_rows(sql, rows):
+    """根据 SQL 的 ``ORDER BY col [ASC|DESC] [NULLS LAST|FIRST] ...`` 对 rows 排序。"""
+    m = re.search(r"ORDER BY (.+?)\s+LIMIT", sql, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return list(rows)
+    col_idx = {"name": 0, "total_shares": 1, "float_shares": 2}
+    keys = []
+    for part in m.group(1).split(","):
+        toks = part.strip().split()
+        if not toks or toks[0].lower() not in col_idx:
+            continue
+        idx = col_idx[toks[0].lower()]
+        rest = " ".join(toks[1:]).upper()
+        direction = "DESC" if "DESC" in rest else "ASC"
+        if "NULLS FIRST" in rest:
+            nulls_last = False
+        elif "NULLS LAST" in rest:
+            nulls_last = True
+        else:
+            nulls_last = direction == "ASC"  # DuckDB default
+        keys.append((idx, direction, nulls_last))
+    if not keys:
+        return list(rows)
+
+    def _cmp(a, b):
+        for idx, direction, nulls_last in keys:
+            av, bv = a[idx], b[idx]
+            if av is None and bv is None:
+                continue
+            if av is None:
+                return 1 if nulls_last else -1
+            if bv is None:
+                return -1 if nulls_last else 1
+            if av < bv:
+                return -1 if direction == "ASC" else 1
+            if av > bv:
+                return 1 if direction == "ASC" else -1
+        return 0
+
+    return sorted(rows, key=functools.cmp_to_key(_cmp))
+
+
+def test_stock_info_uses_deterministic_order_for_limit():
+    # 同一 symbol 多行，deterministic ORDER BY (name ASC NULLS LAST, ...) 必须选出
+    # name 最小且非空的那行。若排序列/方向错误、或 ORDER BY 缺失，选出的行会不同。
+    candidates = [
+        ("C-Name", 1000, 800),
+        ("A-Name", 2000, 1500),   # name ASC 最小，应被选中
+        ("B-Name", 500, 300),
+        (None, 999, 999),          # NULLS LAST，排末尾
+    ]
+    repo = _OrderedExecuteRepo(candidates)
+    info = kline._get_stock_info(repo, "600519.SH")
+    assert info["name"] == "A-Name"
+    assert info["total_shares"] == 2000
+    assert info["float_shares"] == 1500
+    # 仍保留 SQL 断言，确保 ORDER BY 子句确实存在（删除/拼写错误会失败）。
+    assert "ORDER BY" in repo.last_execute_one_sql
+    assert "LIMIT 1" in repo.last_execute_one_sql
 
 
 def test_daily_local_fallback_passes_datetime_to_provider(monkeypatch):
@@ -353,3 +437,30 @@ def test_daily_batch_local_mode_ignores_cached_raw(monkeypatch):
 
     assert repo.batch_calls == 0
     assert resp["data"]["600519.SH"][0]["close"] == 1.0
+
+
+def test_parse_enriched_range_repair_accepts_bounded_range():
+    start, end = kline._parse_enriched_range_repair(
+        {"start_date": "2026-07-03", "end_date": "2026-08-02"},
+        today=date(2026, 8, 2),
+    )
+
+    assert (start, end) == (date(2026, 7, 3), date(2026, 8, 2))
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        ({"start_date": "2026-07-08", "end_date": "2026-07-03"}, "不能晚于"),
+        ({"start_date": "2026-07-01", "end_date": "2026-08-02"}, "最多"),
+        ({"start_date": "2026-07-03", "end_date": "2026-08-03"}, "未来"),
+        ({"start_date": "20260703", "end_date": "2026-07-08"}, "YYYY-MM-DD"),
+    ],
+)
+def test_parse_enriched_range_repair_rejects_invalid_ranges(body, detail):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException, match=detail) as exc:
+        kline._parse_enriched_range_repair(body, today=date(2026, 8, 2))
+
+    assert exc.value.status_code == 400

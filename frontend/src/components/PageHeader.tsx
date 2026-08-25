@@ -9,20 +9,34 @@ interface Props {
   className?: string
 }
 
+/**
+ * Workspace page title bar.
+ * Props API is stable — callers need not change.
+ */
 export function PageHeader({ title, subtitle, titleExtra, right, className }: Props) {
   return (
     <header
       className={cn(
-        'px-5 pt-3 pb-2 border-b border-border flex items-center justify-between gap-4',
+        'flex min-w-0 flex-col gap-2 border-b border-border bg-surface/80 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4',
         className,
       )}
     >
-      <div className="flex items-center gap-2">
-        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-        {titleExtra}
-        {subtitle && <span className="text-xs text-muted">{subtitle}</span>}
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="truncate text-base font-semibold tracking-tight text-foreground sm:text-lg">
+            {title}
+          </h1>
+          {titleExtra}
+        </div>
+        {subtitle ? (
+          <span className="truncate text-xs text-muted sm:text-[13px]">{subtitle}</span>
+        ) : null}
       </div>
-      {right}
+      {right ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+          {right}
+        </div>
+      ) : null}
     </header>
   )
 }

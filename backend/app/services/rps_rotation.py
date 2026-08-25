@@ -5,7 +5,7 @@
 
 数据来源全部复用现有资产, 不引入新数据源:
   - 个股历史涨跌幅: repo.get_enriched_range(..., columns=["symbol","date","change_pct"])
-    命中启动时构建的 _enriched_history_cache (0ms, 含 change_pct 小数列)
+    走仓库唯一公开历史入口 get_enriched_range (PRICE_CHANGE 快速路径, 含 change_pct 小数列)
   - 概念成分股映射: 复用 market_overview_builder 的 _dimension_field / _read_ext_rows /
     _symbol_keys / _dimension_values, 与看板/复盘的概念聚合口径完全一致
 
@@ -44,11 +44,8 @@ def invalidate_cache() -> None:
 
 
 def _latest_enriched_date(repo) -> date | None:
-    """取 enriched 缓存里的最新交易日(矩阵的右端=最新日期)。"""
-    cache = repo._enriched_history_cache  # noqa: SLF001 —— 缓存字段无公开 getter
-    if cache is None or cache.is_empty() or "date" not in cache.columns:
-        return None
-    return cache["date"].max()
+    """取 enriched 最新交易日(矩阵的右端=最新日期)。走公开 getter enriched_latest_date()。"""
+    return repo.enriched_latest_date()
 
 
 def _load_concept_map_df(repo) -> tuple[pl.DataFrame, int]:
@@ -118,7 +115,7 @@ def build_rps_rotation(repo, days: int = 12) -> dict:
     """构建概念涨幅轮动矩阵。
 
     Args:
-        repo: KlineRepository(含 _enriched_history_cache 内存历史)。
+        repo: KlineRepository(历史经 get_enriched_range 按需读取)。
         days: 取最近 N 个交易日, 范围 [7, 30], 默认 12。
 
     Returns:
@@ -149,7 +146,7 @@ def build_rps_rotation(repo, days: int = 12) -> dict:
         logger.info("rps_rotation: no concept data (ext_gn_ths not fetched yet)")
         return {"dates": [], "columns": {}, "concept_count": 0}
 
-    # 2. 取最近 N 交易日的个股 change_pct(命中内存缓存)
+    # 2. 取最近 N 交易日的个股 change_pct(仓库 get_enriched_range 快速路径)
     start = latest - timedelta(days=days * 2 + 10)  # 日历天 ≈ 2/3 交易日, 多取余量
     df = repo.get_enriched_range(
         start, latest, columns=["symbol", "date", "change_pct"]

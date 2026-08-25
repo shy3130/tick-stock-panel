@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -24,7 +25,6 @@ from pathlib import Path
 import polars as pl
 
 from app.config import settings
-from app.storage.atomic_write import atomic_write_parquet
 from app.indicators.engine_compat import (
     ENGINE_COMPAT_COLUMNS,
     ENGINE_COMPAT_COLUMNS_BY_CATEGORY,
@@ -33,6 +33,7 @@ from app.indicators.engine_compat import (
     compute_engine_compat_indicators,
     compute_engine_compat_today,
 )
+from app.storage.atomic_write import atomic_write_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,13 @@ ENRICHED_STORAGE_COLS = [
     "consecutive_limit_downs",
 ]
 
+# price-change 派生列 (prev_close/change_pct/change_amount/amplitude)。
+# 与 ENRICHED_STORAGE_COLS 一起构成 get_enriched_range() 的「storage ∪ price-change」
+# 快速路径列集; repository 用 compute_price_change_columns() 仅算这四列而非全套指标。
+PRICE_CHANGE_COLUMNS: frozenset[str] = frozenset(
+    {"prev_close", "change_pct", "change_amount", "amplitude"}
+)
+
 
 # ================================================================
 # enriched 完整列清单 (存储 + 运行时计算)
@@ -93,7 +101,10 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "raw_close":               "原始收盘价(未复权)",
     "raw_high":                "原始最高价(未复权)",
     "raw_low":                 "原始最低价(未复权)",
-    "turnover_rate":           "换手率",
+    "turnover_rate": (
+        "换手率(%) = 成交量 / 流通股本;流通股本取自 instruments 维表的最新值,"
+        "历史时点流通股本尚无本地数据源,故历史日期非严格点位口径"
+    ),
     "consecutive_limit_ups":   "连板数",
     "consecutive_limit_downs": "连跌数",
     # ── 基础指标 ─────────────────────────────────────────
@@ -163,6 +174,8 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "signal_limit_down_recovery": "跌停翘板(跌停后回升)",
     "signal_broken_limit_up":  "炸板(最高触及涨停但收盘未封住)",
     # ── JOIN 列 (由 repository 从 instruments 表补充) ───
+    # ── engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化) ─
+    **ENGINE_COMPAT_COLUMNS,
     "name":                    "股票名称 (来自 instruments)",
     "total_shares":            "总股本 (来自 instruments)",
     "float_shares":            "流通股本 (来自 instruments)",
@@ -176,14 +189,13 @@ ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
     "ema":      ["ema5", "ema10", "ema20", "ema30", "ema60"],
     "macd":     ["macd_dif", "macd_dea", "macd_hist"],
     "boll":     ["boll_upper", "boll_lower"],
-    # ── engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化) ─
-    **ENGINE_COMPAT_COLUMNS,
     "kdj":      ["kdj_k", "kdj_d", "kdj_j"],
     "atr":      ["atr_14"],
     "volume":   ["vol_ma5", "vol_ma10", "vol_ratio_5d"],
     "extremes": ["high_60d", "low_60d"],
     "momentum": ["momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d"],
     "volatility": ["annual_vol_20d"],
+    **ENGINE_COMPAT_COLUMNS_BY_CATEGORY,
     "rsi":      ["rsi_6", "rsi_14", "rsi_24"],
     "signals":  [k for k in ENRICHED_COLUMNS if k.startswith("signal_")],
     "join":     ["name", "total_shares", "float_shares"],
@@ -197,7 +209,6 @@ def _ema_alpha(span: int) -> float:
 def _math_half_up(expr: pl.Expr, decimals: int = 2) -> pl.Expr:
     """交易所四舍五入 (round half up)，替代 Python round()（银行家舍入）。
 
-    **ENGINE_COMPAT_COLUMNS_BY_CATEGORY,
     round(2.625, 2) = 2.62  ← Python 银行家舍入
     exchange_round(2.625) = 2.63  ← 交易所四舍五入
     """
@@ -294,25 +305,22 @@ def _apply_adj_factor(raw: pl.DataFrame, factors: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-# ================================================================
-# 技术指标计算 (从 OHLCV 计算)
-# ================================================================
+def compute_price_change_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """计算 prev_close / change_pct / change_amount / amplitude 四列 (price-change)。
 
-def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
-    """从 OHLCV 数据计算全套技术指标。
+    独立可调用: repository 用本函数为窄历史请求只算这四列, 而不必跑完整
+    compute_indicators; compute_indicators 内部也复用它, 保证两处口径完全一致。
 
-    输入必须包含: symbol, date, open, high, low, close, volume
-    返回添加了所有指标列的 DataFrame。
+    语义 (与 compute_indicators 原内联实现逐字一致):
+      - prev_close    = 前复权昨收 (close.shift(1) over symbol)
+      - change_pct    = raw_close / 前一日 raw_close - 1   (原始价口径)
+      - change_amount = raw_close - 前一日 raw_close
+      - amplitude     = (raw_high - raw_low) / 前一日 raw_close, 昨收<=0 时为 null
+    raw_close/raw_high/raw_low 缺失或 <=0 时回退到对应复权列。输入须按 symbol/date
+    排序 (shift 依赖行序); compute_indicators 在调用前已排序。
     """
     if df.is_empty():
         return df
-
-    import time as _time
-    _t0 = _time.perf_counter()
-
-    df = df.sort(["symbol", "date"])
-
-    # Pass 1: 均线 + EMA + MACD 基础 + BOLL 基础 + KDJ 基础 + ATR 基础 + 量价 + 极值
     raw_close = (
         pl.when((pl.col("raw_close").is_not_null()) & (pl.col("raw_close") > 0))
         .then(pl.col("raw_close"))
@@ -332,10 +340,77 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
         if "raw_low" in df.columns else pl.col("low")
     )
     prev_raw_close = raw_close.shift(1).over("symbol")
+    return df.with_columns([
+        pl.col("close").shift(1).over("symbol").alias("prev_close"),
+        (raw_close / prev_raw_close - 1).alias("change_pct"),
+        (raw_close - prev_raw_close).alias("change_amount"),
+        pl.when(prev_raw_close > 0)
+          .then((raw_high - raw_low) / prev_raw_close)
+          .otherwise(None)
+          .alias("amplitude"),
+    ])
+
+# 仅为历史条件选股 MA 条件准备的轻量计算路径。完整指标流水线继续自行计算
+# 所有均线，避免改变其既有输出与列顺序。
+MOVING_AVERAGE_WINDOWS: dict[str, int] = {
+    "ma5": 5,
+    "ma10": 10,
+    "ma20": 20,
+    "ma30": 30,
+    "ma60": 60,
+}
+
+
+def compute_moving_average_columns(
+    df: pl.DataFrame,
+    columns: set[str],
+) -> pl.DataFrame:
+    """在已经按 ``symbol/date`` 排序的帧上计算请求的 MA 与涨跌幅列。"""
+    df = compute_price_change_columns(df)
+    expressions = [
+        pl.col("close").rolling_mean(window).over("symbol").alias(name)
+        for name, window in MOVING_AVERAGE_WINDOWS.items()
+        if name in columns
+    ]
+    return df.with_columns(expressions) if expressions else df
+
+
+# ================================================================
+# 技术指标计算 (从 OHLCV 计算)
+# ================================================================
+
+def compute_indicators(
+    df: pl.DataFrame,
+    *,
+    include_engine_compat: bool = True,
+) -> pl.DataFrame:
+    """从 OHLCV 数据计算技术指标。
+
+    输入必须包含 symbol/date/OHLCV。``include_engine_compat`` 仅供按列投影的
+    历史读取关闭 41 个未请求的 engine 兼容指标；默认保持完整输出契约。
+    """
+    if df.is_empty():
+        return df
+
+    import time as _time
+    _t0 = _time.perf_counter()
+
+    df = df.sort(["symbol", "date"])
+
+    # price-change 列 (prev_close/change_pct/change_amount/amplitude) 抽到独立 helper
+    # compute_price_change_columns, repository 窄历史请求复用同一份实现; 此处排序后
+    # 调用, shift 口径与原内联实现完全一致。
+    df = compute_price_change_columns(df)
+
+    # Pass 1: 均线 + EMA + MACD 基础 + BOLL 基础 + KDJ 基础 + ATR 基础 + 量价 + 极值
+    raw_close = (
+        pl.when((pl.col("raw_close").is_not_null()) & (pl.col("raw_close") > 0))
+        .then(pl.col("raw_close"))
+        .otherwise(pl.col("close"))
+        if "raw_close" in df.columns else pl.col("close")
+    )
     prev_close = pl.col("close").shift(1).over("symbol")
     df = df.with_columns([
-        # 前收盘价
-        prev_close.alias("prev_close"),
         # MA (最大 MA60)
         pl.col("close").rolling_mean(5).over("symbol").alias("ma5"),
         pl.col("close").rolling_mean(10).over("symbol").alias("ma10"),
@@ -395,9 +470,7 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
         (3 * pl.col("kdj_k") - 2 * pl.col("kdj_d")).alias("kdj_j"),
     ])
 
-    prev_close = pl.col("close").shift(1).over("symbol")
-
-    # Pass 4: ATR + 量比 + 动量 + 波动 + 涨跌幅 + 涨跌额 + 振幅
+    # Pass 4: ATR + 量比 + 动量 + 波动 (涨跌幅/涨跌额/振幅由 compute_price_change_columns 算)
     df = df.with_columns(
         pl.col("_tr").ewm_mean(alpha=1.0 / 14, adjust=False).over("symbol").alias("atr_14"),
     ).with_columns(
@@ -409,18 +482,7 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col("close") / pl.col("close").shift(20).over("symbol") - 1).alias("momentum_20d"),
         (pl.col("close") / pl.col("close").shift(30).over("symbol") - 1).alias("momentum_30d"),
         (pl.col("close") / pl.col("close").shift(60).over("symbol") - 1).alias("momentum_60d"),
-        # 日涨跌幅: 用原始价格口径，避免前复权因子异常污染单日涨跌幅。
-        (raw_close / prev_raw_close - 1).alias("change_pct"),
     ]).with_columns(
-        # 涨跌额
-        (raw_close - prev_raw_close).alias("change_amount"),
-    ).with_columns(
-        # 振幅 = (high - low) / prev_close
-        pl.when(prev_raw_close > 0)
-          .then((raw_high - raw_low) / prev_raw_close)
-          .otherwise(None)
-          .alias("amplitude"),
-    ).with_columns(
         # 日涨跌幅 (用于波动率)
         raw_close.pct_change().over("symbol").alias("_daily_pct"),
     ).with_columns(
@@ -450,6 +512,10 @@ def compute_indicators(df: pl.DataFrame) -> pl.DataFrame:
         )
 
     # Pass 6: 换手率 (需要 float_shares, 后续在 compute_all 中 JOIN instruments 后补充)
+
+    # Pass 6b: engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化)。
+    if include_engine_compat:
+        df = compute_engine_compat_indicators(df)
 
     # 清理临时列
     df = df.drop(["_boll_std", "_tr", "_ema12", "_ema26",
@@ -487,9 +553,6 @@ def compute_signals(df: pl.DataFrame) -> pl.DataFrame:
         ((pl.col("macd_dif") > pl.col("macd_dea")) &
          (pl.col("macd_dif").shift(1).over("symbol") <= pl.col("macd_dea").shift(1).over("symbol")))
             .alias("signal_macd_golden"),
-    # Pass 6b: engine/technicals 兼容指标 (41 列, 运行时计算, 不持久化)
-    df = compute_engine_compat_indicators(df)
-
         ((pl.col("macd_dif") < pl.col("macd_dea")) &
          (pl.col("macd_dif").shift(1).over("symbol") >= pl.col("macd_dea").shift(1).over("symbol")))
             .alias("signal_macd_dead"),
@@ -718,16 +781,35 @@ def compute_limit_signals(df: pl.DataFrame, instruments: pl.DataFrame) -> pl.Dat
     return df
 
 
-def compute_all(
+def _deduplicate_daily_rows(df: pl.DataFrame, *, source: str) -> pl.DataFrame:
+    """强制 (symbol, date) 自然键唯一, keep='last'。
+
+    空 frame 或缺 key 列时原样返回; 仅在确实移除行时打一条 warning
+    (含 source 标签 + before/after 行数)。这是内存膨胀根因 (重复行) 的统一防线,
+    在 compute 前与每个写盘路径前调用。
+    """
+    if df.is_empty() or "symbol" not in df.columns or "date" not in df.columns:
+        return df
+    before = df.height
+    df = df.unique(subset=["symbol", "date"], keep="last", maintain_order=True)
+    after = df.height
+    if after < before:
+        logger.warning(
+            "removed %d duplicate (symbol,date) rows from %s (%d -> %d)",
+            before - after, source, before, after,
+        )
+    return df
+
+
+def _compute_all_unique(
     df: pl.DataFrame,
     instruments: pl.DataFrame | None = None,
     asset_type: str = "stock",
+    *,
+    include_engine_compat: bool = True,
 ) -> pl.DataFrame:
-    """从 OHLCV 计算全套指标 + 信号。一站式调用。
-
-    输入: symbol, date, open, high, low, close, volume, amount, raw_close
-    """
-    df = compute_indicators(df)
+    """从 OHLCV 计算指标和信号，假定输入自然键已唯一。"""
+    df = compute_indicators(df, include_engine_compat=include_engine_compat)
     df = compute_signals(df)
     if instruments is not None and not instruments.is_empty():
         if asset_type == "stock":
@@ -736,6 +818,26 @@ def compute_all(
             df = _attach_turnover_rate(df, instruments)
 
     return clean_nan_inf(df)
+
+
+def compute_all(
+    df: pl.DataFrame,
+    instruments: pl.DataFrame | None = None,
+    asset_type: str = "stock",
+    *,
+    include_engine_compat: bool = True,
+) -> pl.DataFrame:
+    """从 OHLCV 计算指标和信号。
+
+    默认计算全部 engine 兼容列；按列投影的调用可明确关闭这些未请求列。
+    """
+    df = _deduplicate_daily_rows(df, source="compute_all")
+    return _compute_all_unique(
+        df,
+        instruments,
+        asset_type,
+        include_engine_compat=include_engine_compat,
+    )
 
 
 def clean_nan_inf(df: pl.DataFrame) -> pl.DataFrame:
@@ -838,6 +940,12 @@ def compute_enriched(
     if raw.is_empty():
         return raw
 
+    # 前复权前去重 (自然键不变, keep='last'): 这样调整后数据不再二次哈希,
+    # 也阻止数据源/上游写入的重复行进入指标计算。
+    raw = _deduplicate_daily_rows(raw, source="compute_enriched")
+    if raw.is_empty():
+        return raw
+
     # 保留不复权原始价格（涨停/炸板/跌停判断需用不复权价格）
     raw = raw.with_columns(
         pl.col("close").alias("raw_close"),
@@ -849,20 +957,23 @@ def compute_enriched(
     if factors is not None and not factors.is_empty():
         raw = _apply_adj_factor(raw, factors)
 
-    # 排序
+    # 排序后直接计算 (此处键已唯一, 不走 compute_all 的二次去重)
     df = raw.sort(["symbol", "date"])
-
-    # 全量计算指标 + 信号
-    df = compute_all(df, instruments=instruments, asset_type=asset_type)
+    df = _compute_all_unique(df, instruments=instruments, asset_type=asset_type)
 
     return df
 
 
 def _select_storage_cols(df: pl.DataFrame) -> pl.DataFrame:
-    """写入 parquet 前裁剪到存储列 (14 列)。"""
-    cols = [c for c in ENRICHED_STORAGE_COLS if c in df.columns]
-    return df.select(cols)
+    """写入 parquet 前裁剪到存储列 (14 列), 并强制 (symbol, date) 唯一。
 
+    自然键防线: 覆盖所有 staging / full / partial 写入路径
+    (_write_enriched_partitions、run_pipeline 全量/增量/局部、repository 落盘前),
+    阻止确认过的指数级重复行 (同 symbol/date 逐列一致) 再次写入磁盘。
+    """
+    cols = [c for c in ENRICHED_STORAGE_COLS if c in df.columns]
+    df = df.select(cols)
+    return _deduplicate_daily_rows(df, source="_select_storage_cols")
 
 def _write_enriched_partitions(
     enriched_base: Path,
@@ -885,9 +996,38 @@ def _write_enriched_partitions(
             if sym_set and "symbol" in existing.columns:
                 existing = existing.filter(~pl.col("symbol").is_in(list(sym_set)))
             date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
+        date_df_storage = _select_storage_cols(date_df_storage)
         atomic_write_parquet(date_df_storage.sort(["symbol"]), out)
         written += date_df.height
     return written
+
+
+def _validate_staged_partition_coverage(
+    staging_base: Path,
+    expected_symbols: int,
+    minimum_coverage: float,
+) -> None:
+    """拒绝发布明显不完整的指定范围补算分区。
+
+    ``run_pipeline_local_incremental`` 最终会用 staging 分区原子替换目标日期。
+    手动补算不能因上游瞬时漏数而把已有完整分区替换为残缺结果，因此在发布前
+    按标的池校验每个待发布交易日的覆盖率。
+    """
+    if not 0 < minimum_coverage <= 1:
+        raise ValueError("minimum_coverage must be in (0, 1]")
+
+    minimum_symbols = math.ceil(expected_symbols * minimum_coverage)
+    for staged in sorted(staging_base.glob("date=*")):
+        part = staged / "part.parquet"
+        if not part.exists():
+            raise RuntimeError(f"补算 staging 分区缺少数据文件: {staged.name}")
+        df = pl.read_parquet(part, columns=["symbol"])
+        covered = df["symbol"].cast(pl.Utf8).unique().len() if "symbol" in df.columns else 0
+        if covered < minimum_symbols:
+            raise RuntimeError(
+                f"补算覆盖率不足: {staged.name} 仅 {covered}/{expected_symbols} 只标的，"
+                f"低于 {minimum_coverage:.0%} 安全阈值；未发布任何变更"
+            )
 
 
 def _promote_staging_partitions(enriched_base: Path, staging_base: Path) -> None:
@@ -1006,12 +1146,15 @@ def run_pipeline_local_incremental(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     history_days: int = 260,
+    min_partition_coverage: float | None = None,
     on_batch_done: Callable[[int, int], None] | None = None,
 ) -> int:
-    """本地磁盘模式缺失新日期补齐。
+    """本地磁盘模式缺失日期补齐。
 
-    已有 enriched 分区是历史预热源；新日期从 provider 读取。这样启动补齐
-    不需要重建全市场复权因子，也不会只用一两天窗口计算 MA/MACD 等指标。
+    已有 enriched 分区是历史预热源；指定范围的新日期从 provider 读取。这样
+    补齐历史空洞不需要重建全市场复权因子，也不会只用一两天窗口计算
+    MA/MACD 等指标。``min_partition_coverage`` 指定时，发布前会校验每个
+    staging 分区的标的覆盖率，避免不完整上游结果覆盖已有数据。
     """
     import gc
     import time as _t
@@ -1102,6 +1245,17 @@ def run_pipeline_local_incremental(
         if on_batch_done:
             on_batch_done(batch_no, total_batches)
 
+    if min_partition_coverage is not None:
+        try:
+            _validate_staged_partition_coverage(
+                staging_base,
+                expected_symbols=len(symbols),
+                minimum_coverage=min_partition_coverage,
+            )
+        except Exception:
+            shutil.rmtree(staging_base, ignore_errors=True)
+            raise
+
     _promote_staging_partitions(enriched_base, staging_base)
     logger.info("local incremental pipeline done: %.2fs, %d rows", _t.perf_counter() - t0, written)
     return written
@@ -1180,8 +1334,8 @@ def run_pipeline(data_dir: Path | None = None,
             raw_new = raw_new.sort(["symbol", "date"]).collect(streaming=True)
 
             # 增量模式: 只算新日期, 但指标需要历史窗口
-            # 读已有 enriched 最近 300 天作为历史前缀(与 repository.py 的
-            # _enriched_history_cache 同口径)。EMA/RSI 是纯递归公式(ewm_mean
+            # 读已有 enriched 最近 300 天作为历史前缀 (与 repository.py 的
+            # _scan_unique_enriched 计算窗口同口径)。EMA/RSI 是纯递归公式 (ewm_mean
             # adjust=False),热身窗口太短会让起点权重残留过高、产生系统性偏差
             # 而非随机噪声——例如 EMA60(alpha≈0.0328)只给 60 天(~40 交易日)
             # 热身时,起点残留权重仍有 ~26%;300 天(~210 交易日)可把 EMA60/
@@ -1247,6 +1401,7 @@ def run_pipeline(data_dir: Path | None = None,
                         existing = pl.read_parquet(out)
                         existing = existing.filter(~pl.col("symbol").is_in(list(sym_set)))
                         date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
+                    date_df_storage = _select_storage_cols(date_df_storage)
                     date_df_storage = date_df_storage.sort(["symbol"])
                     atomic_write_parquet(date_df_storage, out)
                     written += date_df.height
@@ -1340,6 +1495,7 @@ def run_pipeline(data_dir: Path | None = None,
                         existing = pl.read_parquet(out)
                         existing = existing.filter(~pl.col("symbol").is_in(batch_syms))
                         date_df_storage = pl.concat([existing, date_df_storage], how="diagonal_relaxed")
+                    date_df_storage = _select_storage_cols(date_df_storage)
                     date_df_storage = date_df_storage.sort(["symbol"])
                     atomic_write_parquet(date_df_storage, out)
                     written += date_df_storage.height
@@ -1373,7 +1529,9 @@ def run_pipeline(data_dir: Path | None = None,
         for ds, dfs in date_buffers.items():
             out = base / f"date={ds}" / "part.parquet"
             out.parent.mkdir(parents=True, exist_ok=True)
-            merged = pl.concat(dfs, how="diagonal_relaxed").sort(["symbol"])
+            merged = _select_storage_cols(
+                pl.concat(dfs, how="diagonal_relaxed"),
+            ).sort(["symbol"])
             atomic_write_parquet(merged, out)
 
         date_buffers.clear()
@@ -1383,6 +1541,24 @@ def run_pipeline(data_dir: Path | None = None,
     adj_label = "含复权" if not factors.is_empty() else "无复权"
     logger.info("enriched 完成 [%s]: %.2fs, 共 %d 行, %s",
                 mode, t_done - t0, written, adj_label)
+
+    # 全量 rebuild/repair 路径接线历史股本 point-in-time turnover_rate (decimal)
+    # 使用现有 repository 抽象加载财务股本数据，不直接 connect DuckDB，不写 raw stock
+    if not symbols and not new_dates_only:
+        store = None
+        try:
+            from app.storage.repository import DataStore, KlineRepository
+            store = DataStore(d)
+            repo = KlineRepository(store=store)
+            from app.share_capital import recompute_historical_turnover
+            recompute_historical_turnover(repo)
+            logger.info("share_capital recompute completed for full rebuild")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("historical turnover recompute non-fatal: %s", e)
+        finally:
+            if store is not None:
+                store.close()
+
     return written
 
 
@@ -1721,7 +1897,7 @@ def compute_enriched_today(
         if not ec_today.is_empty():
             ec_cols = [c for c in ENGINE_COMPAT_COLUMNS if c not in df.columns]
             if ec_cols:
-                df = df.join(ec_today.select("symbol", *ec_cols), on="symbol", how="inner")
+                df = df.join(ec_today.select("symbol", *ec_cols), on="symbol", how="left")
 
     # 自定义信号（日级实时路径同样注入）
     from app.strategy import custom_signals

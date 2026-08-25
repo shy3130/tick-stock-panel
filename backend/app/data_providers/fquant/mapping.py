@@ -20,8 +20,8 @@ import polars as pl
 from app.data_providers.fquant.symbols import (
     code_to_symbol,
     exchange_of,
-    num_to_asset_type_str,
 )
+from app.json_safe import finite_float_or_none
 
 # A 股交易时段：上午 09:30–11:30 / 下午 13:00–15:00（§4.6 / engine_stock_data.go:201）
 # index 0..119 → 09:31..11:30，index 120..239 → 13:01..15:00
@@ -36,14 +36,6 @@ _HK_MORNING_LEN = 150
 _HK_AFTERNOON_START = datetime(2000, 1, 1, 13, 1)
 
 
-def _to_float(val) -> float | None:
-    """安全转 float，None/异常返回 None。"""
-    if val is None:
-        return None
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return None
 
 
 def _serialize_row(row: dict) -> dict:
@@ -51,7 +43,7 @@ def _serialize_row(row: dict) -> dict:
     out = {}
     for k, v in row.items():
         if isinstance(v, Decimal):
-            out[k] = float(v)
+            out[k] = finite_float_or_none(v)
         elif hasattr(v, "isoformat"):
             out[k] = v.isoformat()
         else:
@@ -74,14 +66,14 @@ def wide_rows_to_daily(rows: list[dict], symbol: str, source: str = "fquant") ->
         out.append({
             "symbol": symbol,
             "date": str(date_val) if date_val else None,
-            "open": _to_float(r.get("open")),
-            "high": _to_float(r.get("high")),
-            "low": _to_float(r.get("low")),
-            "close": _to_float(r.get("close")),
-            "volume": _to_float(r.get("volume")),
-            "amount": _to_float(r.get("amount")),
-            "pre_close": _to_float(r.get("last_close")),
-            "change_pct": _to_float(r.get("change_rate")),
+            "open": finite_float_or_none(r.get("open")),
+            "high": finite_float_or_none(r.get("high")),
+            "low": finite_float_or_none(r.get("low")),
+            "close": finite_float_or_none(r.get("close")),
+            "volume": finite_float_or_none(r.get("volume")),
+            "amount": finite_float_or_none(r.get("amount")),
+            "pre_close": finite_float_or_none(r.get("last_close")),
+            "change_pct": finite_float_or_none(r.get("change_rate")),
         })
     return out
 
@@ -97,12 +89,12 @@ def day_rows_to_daily(rows: list[dict], symbol: str, source: str = "fquant") -> 
         out.append({
             "symbol": symbol,
             "date": str(date_val) if date_val else None,
-            "open": _to_float(r.get("open")),
-            "high": _to_float(r.get("high")),
-            "low": _to_float(r.get("low")),
-            "close": _to_float(r.get("close")),
-            "volume": _to_float(r.get("volume")),
-            "amount": _to_float(r.get("amount")),
+            "open": finite_float_or_none(r.get("open")),
+            "high": finite_float_or_none(r.get("high")),
+            "low": finite_float_or_none(r.get("low")),
+            "close": finite_float_or_none(r.get("close")),
+            "volume": finite_float_or_none(r.get("volume")),
+            "amount": finite_float_or_none(r.get("amount")),
             "pre_close": None,
             "change_pct": None,
         })
@@ -138,14 +130,14 @@ def klines_rows_to_daily(
         out.append({
             "symbol": symbol,
             "date": str(r.get("tdate", "")),
-            "open": _to_float(r.get("open")),
-            "high": _to_float(r.get("high")),
-            "low": _to_float(r.get("low")),
-            "close": _to_float(r.get("close")),
-            "volume": (vol * multiplier if (vol := _to_float(r.get("cjl"))) is not None else None),
-            "amount": _to_float(r.get("cje")),
+            "open": finite_float_or_none(r.get("open")),
+            "high": finite_float_or_none(r.get("high")),
+            "low": finite_float_or_none(r.get("low")),
+            "close": finite_float_or_none(r.get("close")),
+            "volume": (vol * multiplier if (vol := finite_float_or_none(r.get("cjl"))) is not None else None),
+            "amount": finite_float_or_none(r.get("cje")),
             "pre_close": None,
-            "change_pct": _to_float(r.get("zf")),
+            "change_pct": finite_float_or_none(r.get("zf")),
         })
     return out
 
@@ -166,13 +158,13 @@ def xdxr_rows_to_events(rows: list[dict], symbol: str) -> list[dict]:
             "symbol": symbol,
             "trade_date": str(date_val) if date_val else None,
             "category": r.get("category"),
-            "fenhong": _to_float(r.get("fenhong")) or 0.0,        # 每10股派现
-            "fenshu": _to_float(r.get("fenshu")) or 0.0,          # 每10股送股
-            "songzhuangu": _to_float(r.get("songzhuangu")) or 0.0,  # 送转股
-            "peigu": _to_float(r.get("peigu")) or 0.0,            # 配股
-            "peigujia": _to_float(r.get("peigujia")) or 0.0,
-            "qianzongguben": _to_float(r.get("qianzongguben")),
-            "houzongguben": _to_float(r.get("houzongguben")),
+            "fenhong": finite_float_or_none(r.get("fenhong")) or 0.0,        # 每10股派现
+            "fenshu": finite_float_or_none(r.get("fenshu")) or 0.0,          # 每10股送股
+            "songzhuangu": finite_float_or_none(r.get("songzhuangu")) or 0.0,  # 送转股
+            "peigu": finite_float_or_none(r.get("peigu")) or 0.0,            # 配股
+            "peigujia": finite_float_or_none(r.get("peigujia")) or 0.0,
+            "qianzongguben": finite_float_or_none(r.get("qianzongguben")),
+            "houzongguben": finite_float_or_none(r.get("houzongguben")),
             "name": r.get("name"),
         })
     return out
@@ -190,11 +182,11 @@ def chuquan_rows_to_events(rows: list[dict], symbol: str) -> list[dict]:
             "symbol": symbol,
             "trade_date": str(t_date) if t_date else None,
             "category": r.get("cqcxtype"),    # 1=除权除息 / 5=股本变化
-            "fenhong": _to_float(r.get("pxbl")) or 0.0,    # 派息比（每10股）
-            "fenshu": _to_float(r.get("sgbl")) or 0.0,     # 送股比
+            "fenhong": finite_float_or_none(r.get("pxbl")) or 0.0,    # 派息比（每10股）
+            "fenshu": finite_float_or_none(r.get("sgbl")) or 0.0,     # 送股比
             "songzhuangu": 0.0,
-            "peigu": _to_float(r.get("pgbl")) or 0.0,
-            "peigujia": _to_float(r.get("pgjg")) or 0.0,
+            "peigu": finite_float_or_none(r.get("pgbl")) or 0.0,
+            "peigujia": finite_float_or_none(r.get("pgjg")) or 0.0,
             "qianzongguben": None,
             "houzongguben": None,
             "name": None,
@@ -254,8 +246,8 @@ def minutes_rows_to_minute_df(
 
     out_rows: list[dict] = []
     for i, r in enumerate(rows):
-        price = _to_float(r.get("price"))
-        vol = _to_float(r.get("volume"))
+        price = finite_float_or_none(r.get("price"))
+        vol = finite_float_or_none(r.get("volume"))
         out_rows.append({
             "symbol": symbol,
             "asset_type": asset_type,
@@ -298,8 +290,8 @@ def base_infos_rows_to_instruments(
             "exchange": exchange_of(str(code)),
             "asset_type": asset_type,  # 契约字符串，不输出 num
             "source": source,
-            "total_shares": _to_float(item.get("zgb")),
-            "float_shares": _to_float(item.get("ltgb")),
+            "total_shares": finite_float_or_none(item.get("zgb")),
+            "float_shares": finite_float_or_none(item.get("ltgb")),
         })
     return out
 
@@ -394,23 +386,23 @@ def moneyflow_daily_to_df(
             "symbol": sym,
             "date": date_iso,
             "source": f"{source}:moneyflow:daily",
-            "main_net": _to_float(total.get("main_net")),
-            "total_net": _to_float(total.get("total_net")),
-            "main_inflow": _to_float(total.get("main_inflow")),
-            "main_outflow": _to_float(total.get("main_outflow")),
-            "total_inflow": _to_float(total.get("total_inflow")),
-            "total_outflow": _to_float(total.get("total_outflow")),
-            "volume": _to_float(total.get("volume")),
-            "amount": _to_float(total.get("amount")),
-            "super_large_net": _to_float(total.get("super_large_net")),
-            "large_net": _to_float(total.get("large_net")),
-            "medium_net": _to_float(total.get("medium_net")),
-            "small_net": _to_float(total.get("small_net")),
-            "main_ratio": _to_float(total.get("main_ratio")),
-            "super_large_ratio": _to_float(total.get("super_large_ratio")),
-            "large_ratio": _to_float(total.get("large_ratio")),
-            "medium_ratio": _to_float(total.get("medium_ratio")),
-            "small_ratio": _to_float(total.get("small_ratio")),
+            "main_net": finite_float_or_none(total.get("main_net")),
+            "total_net": finite_float_or_none(total.get("total_net")),
+            "main_inflow": finite_float_or_none(total.get("main_inflow")),
+            "main_outflow": finite_float_or_none(total.get("main_outflow")),
+            "total_inflow": finite_float_or_none(total.get("total_inflow")),
+            "total_outflow": finite_float_or_none(total.get("total_outflow")),
+            "volume": finite_float_or_none(total.get("volume")),
+            "amount": finite_float_or_none(total.get("amount")),
+            "super_large_net": finite_float_or_none(total.get("super_large_net")),
+            "large_net": finite_float_or_none(total.get("large_net")),
+            "medium_net": finite_float_or_none(total.get("medium_net")),
+            "small_net": finite_float_or_none(total.get("small_net")),
+            "main_ratio": finite_float_or_none(total.get("main_ratio")),
+            "super_large_ratio": finite_float_or_none(total.get("super_large_ratio")),
+            "large_ratio": finite_float_or_none(total.get("large_ratio")),
+            "medium_ratio": finite_float_or_none(total.get("medium_ratio")),
+            "small_ratio": finite_float_or_none(total.get("small_ratio")),
         })
     return pl.DataFrame(out) if out else pl.DataFrame()
 
@@ -432,16 +424,16 @@ def moneyflow_minute_to_df(
             "symbol": symbol,
             "trade_date": rec.get("TradeDate") or date_iso,
             "bucket_time": rec.get("BucketTime"),
-            "total_amount": _to_float(rec.get("TotalAmount")),
-            "net_amount": _to_float(rec.get("NetAmount")),
-            "main_traditional_net": _to_float(rec.get("MainTraditionalNet")),
-            "main_broad_net": _to_float(rec.get("MainBroadNet")),
-            "large_net": _to_float(rec.get("LargeNet")),
-            "super_large_net": _to_float(rec.get("SuperLargeNet")),
-            "medium_net": _to_float(rec.get("MediumNet")),
-            "small_net": _to_float(rec.get("SmallNet")),
-            "neutral_amount": _to_float(rec.get("NeutralAmount")),
-            "valid_count": _to_float(rec.get("ValidCount")),
+            "total_amount": finite_float_or_none(rec.get("TotalAmount")),
+            "net_amount": finite_float_or_none(rec.get("NetAmount")),
+            "main_traditional_net": finite_float_or_none(rec.get("MainTraditionalNet")),
+            "main_broad_net": finite_float_or_none(rec.get("MainBroadNet")),
+            "large_net": finite_float_or_none(rec.get("LargeNet")),
+            "super_large_net": finite_float_or_none(rec.get("SuperLargeNet")),
+            "medium_net": finite_float_or_none(rec.get("MediumNet")),
+            "small_net": finite_float_or_none(rec.get("SmallNet")),
+            "neutral_amount": finite_float_or_none(rec.get("NeutralAmount")),
+            "valid_count": finite_float_or_none(rec.get("ValidCount")),
             "source": f"{source}:moneyflow:minute",
         })
     return pl.DataFrame(out) if out else pl.DataFrame()
@@ -470,11 +462,13 @@ def trans_rows_to_df(
         out.append({
             "symbol": symbol,
             "datetime": f"{date_iso} {r.get('time', '')}",
-            "price": _to_float(r.get("price")),
-            "volume": _to_float(r.get("volume")),
-            "amount": _to_float(r.get("amount")),
-            "order_count": r.get("order_count"),
-            "direction": r.get("direction"),   # 0=中性 / 1=买 / 2=卖
+            "price": finite_float_or_none(r.get("price")),
+            "volume": finite_float_or_none(r.get("volume")),
+            "amount": finite_float_or_none(r.get("amount")),
+            "order_count": r.get("order_count", r.get("num")),
+            "direction": r.get("direction"),
+            "venue": r.get("venue"),
             "source": f"{source}:engine-data:trans",
         })
+
     return pl.DataFrame(out) if out else pl.DataFrame()

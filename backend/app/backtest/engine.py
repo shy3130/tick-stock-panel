@@ -10,18 +10,27 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable
-
-logger = logging.getLogger(__name__)
-from typing import Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 import numpy as np
 import polars as pl
 
+from app.backtest.metrics import (
+    MetricContext,
+    annualized_return,
+    annualized_sharpe,
+    payoff_ratio,
+    performance_metrics,
+    profit_factor,
+)
 from app.backtest.optimizers import portfolio_weights
 from app.storage.repository import KlineRepository
 
+if TYPE_CHECKING:
+    import threading
+
 logger = logging.getLogger(__name__)
+
 
 
 # ================================================================
@@ -37,6 +46,9 @@ class MatcherConfig:
     exit_fill: Literal["close_t", "open_t+1"] | None = None
     fees_pct: float = 0.0002
     slippage_bps: float = 5.0
+    # A 股印花税: 仅卖出单边收取 (2023-08-28 起税率 0.0005 = 万分之五)。
+    # 买入成本 = fees + slippage; 卖出成本 = fees + slippage + stamp_tax。
+    stamp_tax_pct: float = 0.0005
     stop_loss_pct: float | None = None
     take_profit_pct: float | None = None
     trailing_stop_pct: float | None = None
@@ -51,6 +63,11 @@ class MatcherConfig:
     position_sizing: Literal[
         "equal", "score_weight", "equal_vol", "risk_parity", "mean_variance", "max_diversification",
     ] = "equal"
+    risk_free_rate: float = 0.0
+    # A1 量能参与率约束: None=关闭; 启用时如 0.10 表示单笔买入股数不超过
+    # min(当日成交量, participation_volume_window 日均量) 的 10% (volume 面板口径为「股」)。
+    max_participation_pct: float | None = None
+    participation_volume_window: int = 5
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -58,6 +75,17 @@ class MatcherConfig:
             self.entry_fill = self.matching
         if self.exit_fill is None:
             self.exit_fill = self.matching
+        # A1 量能参与率约束参数 fail-fast 校验: 非法值直接抛错, 不静默降级。
+        if self.max_participation_pct is not None:
+            if not (0 < float(self.max_participation_pct) <= 1):
+                raise ValueError(
+                    f"max_participation_pct 需在 (0, 1] 区间 (如 0.10 表示 10%), "
+                    f"收到 {self.max_participation_pct!r}"
+                )
+        if int(self.participation_volume_window) < 1:
+            raise ValueError(
+                f"participation_volume_window 需 >= 1, 收到 {self.participation_volume_window!r}"
+            )
 
 
 @dataclass
@@ -82,6 +110,14 @@ class TradeRecord:
     entry_signal_date: date | str | None = None
     exit_signal_date: date | str | None = None
     blocked_exit_days: int = 0
+    cause_tag: str = "strategy_outcome"  # YMOS 归因: strategy_outcome(策略按设计执行) | driver_quality(数据/驱动异常)
+    # MAE/MFE: 持仓窗口内日 K raw low/high 相对 entry_price 的偏移。
+    # 可观测窗口按成交口径: entry_fill=open_t+1 含入场日, close_t 从下一交易日起
+    # (入场日区间发生在收盘成交前); 退出日保守不计入。
+    # mae_pct<=0 / mfe_pct>=0; 是日内区间口径的持仓质量诊断, 不代表可成交实现的收益。
+    # 整个可观测窗口无有效 high/low (如长期停牌) → None, 不伪造 0; 旧记录缺字段同 None。
+    mae_pct: float | None = None
+    mfe_pct: float | None = None
 
 
 @dataclass
@@ -93,25 +129,83 @@ class SimResult:
     stats: dict
 
 
+# ── YMOS cause_tag 归因 ─────────────────────────────────
+# 现有全部退出原因 (见上方 TradeRecord.exit_reason 注释) → strategy_outcome;
+# 未知原因 → driver_quality (异常退出, 如数据缺失/驱动层 bug, 防止"因一笔输赢改内核")。
+_STRATEGY_OUTCOME_REASONS = frozenset({
+    "signal", "stop_loss", "take_profit", "trailing_stop", "trailing_take_profit", "max_hold", "end",
+})
+
+
+def cause_tag_for(exit_reason: str) -> str:
+    """退出原因 → cause_tag。已知原因 = strategy_outcome, 未知 = driver_quality。"""
+    return "strategy_outcome" if exit_reason in _STRATEGY_OUTCOME_REASONS else "driver_quality"
+
+
+def _pos_excursions(pos: dict) -> tuple[float | None, float | None]:
+    """持仓期 MAE/MFE → (mae_pct, mfe_pct)。
+
+    口径: 可观测持仓窗口内日 K raw low/high 相对 entry_price 的偏移。
+    可观测窗口由调用方按成交口径控制 (open_t+1 含入场日, close_t 自次日起;
+    退出日不计入), 与 Trailing Stop 的 max_high 窗口在 close_t 入场日不同。
+    未跌破/未涨超入场价时钳制为 0 (mae<=0, mfe>=0)。
+    整个可观测窗口无有效 high/low 或 entry 非法 → None, 不伪造 0。
+    """
+    try:
+        entry = float(pos["entry_price"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+    if not (entry > 0 and np.isfinite(entry)):
+        return None, None
+    low = pos.get("mae_low")
+    high = pos.get("mfe_high")
+    mae = min(0.0, float(low) / entry - 1.0) if low is not None else None
+    mfe = max(0.0, float(high) / entry - 1.0) if high is not None else None
+    if mae is not None and not np.isfinite(mae):
+        mae = None
+    if mfe is not None and not np.isfinite(mfe):
+        mfe = None
+    return (
+        round(mae, 6) if mae is not None else None,
+        round(mfe, 6) if mfe is not None else None,
+    )
+
+
 # ================================================================
 # PanelCache — 避免重复 scan_parquet + compute_all
 # ================================================================
 
-class _CacheEntry:
-    __slots__ = ("df", "ts")
 
-    def __init__(self, df: pl.DataFrame, ts: float):
+def _estimate_panel_bytes(df: pl.DataFrame) -> int:
+    """估算 DataFrame 常驻字节数(用于面板缓存字节预算)。"""
+    try:
+        return int(df.estimated_size())
+    except Exception:  # noqa: BLE001
+        return 2**63 - 1
+
+
+class _CacheEntry:
+    __slots__ = ("df", "ts", "size")
+
+    def __init__(self, df: pl.DataFrame, ts: float, size: int):
         self.df = df
         self.ts = ts
+        self.size = size
 
 
 class PanelCache:
-    """LRU + TTL 数据面板缓存。"""
+    """LRU + TTL + 字节上限的数据面板缓存。
 
-    def __init__(self, max_size: int = 2, ttl_seconds: int = 180):
+    超过单帧字节预算的面板正常返回但不缓存(超大绕过),避免两个超大回测面板
+    重现「全市场历史长期常驻」的原留存模式。
+    """
+
+    def __init__(self, max_size: int = 2, ttl_seconds: int = 180,
+                 max_bytes: int = 512 * 1024 * 1024):
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._ttl = ttl_seconds
+        self._max_bytes = max_bytes
 
     def get_or_compute(
         self,
@@ -132,13 +226,25 @@ class PanelCache:
             del self._cache[key]
 
         df = compute_fn(symbols, start, end, columns)
-        self._cache[key] = _CacheEntry(df=df, ts=now)
-        if len(self._cache) > self._max_size:
-            self._cache.popitem(last=False)
+        # 单帧超过字节预算: 正常返回但不缓存(超大绕过)
+        if not df.is_empty():
+            size = _estimate_panel_bytes(df)
+            if size <= self._max_bytes:
+                self._cache[key] = _CacheEntry(df=df, ts=now, size=size)
+                self._evict()
         return df
 
     def invalidate(self) -> None:
         self._cache.clear()
+
+    def _evict(self) -> None:
+        while (
+            len(self._cache) > self._max_size
+            or sum(e.size for e in self._cache.values()) > self._max_bytes
+        ):
+            if not self._cache:
+                break
+            self._cache.popitem(last=False)
 
     @staticmethod
     def _make_key(symbols: list[str] | None, start: date, end: date, columns: list[str] | None) -> str:
@@ -149,6 +255,210 @@ class PanelCache:
         cols = "all" if columns is None else hashlib.md5(",".join(sorted(columns)).encode()).hexdigest()[:8]
         return f"{h}:{start}:{end}:{cols}"
 
+
+# ================================================================
+# F14 分钟级执行数据 — (symbol, date) → 分钟 bar 序列 + VWAP 窗口价
+# ================================================================
+
+# A 股分钟时间戳由 provider 侧 generated_minute_time 重建 (上午 09:31..11:30,
+# 下午 13:01..15:00)。窗口口径按时钟区间取分钟:
+#   开盘窗口 09:30-09:45 (open_t+1 成交) / 尾盘窗口 14:45-15:00 (close_t 成交)。
+_OPEN_WINDOW_START_HM = 930
+_OPEN_WINDOW_END_HM = 945
+_TAIL_WINDOW_START_HM = 1445
+_TAIL_WINDOW_END_HM = 1500
+
+
+def _minute_float(value) -> float:
+    """分钟字段 → 有限 float; None/NaN/非数值归 0 由调用方按无效处理 (负价原样保留, 下游按 price<=0 过滤)。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if np.isfinite(v) else 0.0
+
+
+class MinuteExecutionData:
+    """F14 分钟执行数据: 按 (symbol, YYYY-MM-DD) 组织的当日分钟 bar 序列。
+
+    bar 六元组: (hhmm, open, high, low, close, volume), 时间升序。
+    由 build_minute_execution 从 provider 分钟面板构建; 引擎撮合时只读。
+    """
+
+    def __init__(self, bars: dict[tuple[str, str], list[tuple[int, float, float, float, float, float]]]) -> None:
+        self._bars = bars
+        self._vwap_cache: dict[tuple[str, str, str], float | None] = {}
+
+    # -- 查询 ------------------------------------------------------- #
+    def has_bars(self, symbol: str, date_str: str) -> bool:
+        return (symbol, str(date_str)[:10]) in self._bars
+
+    def window_vwap(self, symbol: str, date_str: str, window: str) -> float | None:
+        """窗口 VWAP: ``open``=09:30-09:45, ``tail``=14:45-15:00。
+
+        窗口内分钟量全 0 → open 窗口向当日后续分钟顺延 / tail 窗口向更早分钟
+        回溯 (15:00 后无分钟, 尾盘只能向前找流动性), 直至累计量 > 0;
+        整日无分钟量 → None (调用方回退日 K 价并计 minute_fallback_daily)。
+        VWAP 用 bar close × volume (provider 分钟桶 open=high=low=close=price)。
+        """
+        key = (symbol, str(date_str)[:10], window)
+        if key in self._vwap_cache:
+            return self._vwap_cache[key]
+        bars = self._bars.get((symbol, str(date_str)[:10]))
+        value = self._window_vwap_uncached(bars, window) if bars else None
+        self._vwap_cache[key] = value
+        return value
+
+    @staticmethod
+    def _window_vwap_uncached(bars: list[tuple[int, float, float, float, float, float]], window: str) -> float | None:
+        n = len(bars)
+        if n == 0:
+            return None
+        lo, hi = (
+            (_OPEN_WINDOW_START_HM, _OPEN_WINDOW_END_HM)
+            if window == "open"
+            else (_TAIL_WINDOW_START_HM, _TAIL_WINDOW_END_HM)
+        )
+        in_win = [i for i, b in enumerate(bars) if lo <= b[0] <= hi]
+        if in_win:
+            i0, i1 = in_win[0], in_win[-1]
+        elif window == "open":
+            # 窗口内无分钟 (时段异常): 从窗口之后的第一根分钟起顺延; 全日在窗口前 → 第 0 根。
+            later = [i for i, b in enumerate(bars) if b[0] > hi]
+            i0 = i1 = later[0] if later else 0
+        else:
+            earlier = [i for i, b in enumerate(bars) if b[0] < lo]
+            i0 = i1 = earlier[-1] if earlier else n - 1
+
+        def _vol(i: int) -> float:
+            return max(float(bars[i][5] or 0.0), 0.0)
+
+        vol_sum = sum(_vol(i) for i in range(i0, i1 + 1))
+        # 顺延: 窗口量全 0 → open 向后 / tail 向前逐根扩展窗口, 直至累计量 > 0。
+        while vol_sum <= 0 and (i1 + 1 < n if window == "open" else i0 - 1 >= 0):
+            if window == "open":
+                i1 += 1
+                vol_sum += _vol(i1)
+            else:
+                i0 -= 1
+                vol_sum += _vol(i0)
+        if vol_sum <= 0:
+            return None
+        num = den = 0.0
+        for i in range(i0, i1 + 1):
+            v = _vol(i)
+            price = float(bars[i][4])
+            if v > 0 and price > 0 and np.isfinite(price):
+                num += price * v
+                den += v
+        return num / den if den > 0 else None
+
+    # -- 撮合辅助 --------------------------------------------------- #
+#
+    def apply_fill_prices(
+        self,
+        panel_symbols: np.ndarray,
+        panel_dates: np.ndarray,
+        base_prices: np.ndarray,
+        window: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """用窗口 VWAP 覆盖日级成交价数组, 返回 (新价格数组, 回退标记数组)。
+
+        缺分钟数据 / 整日零量 / VWAP 非法 → 保留日 K 原价并置回退标记
+        (True 的行在实际成交时由引擎计 minute_fallback_daily)。
+        """
+        out = np.array(base_prices, dtype=float, copy=True)
+        flags = np.zeros(len(out), dtype=bool)
+        for i in range(len(out)):
+            vwap = self.window_vwap(str(panel_symbols[i]), str(panel_dates[i])[:10], window)
+            if vwap is not None and np.isfinite(vwap) and vwap > 0:
+                out[i] = float(vwap)
+            else:
+                flags[i] = True
+        return out, flags
+
+    def intraday_risk_exit(self, symbol: str, date_str: str, pos: dict, config: MatcherConfig) -> tuple[float, str] | None:
+        """盘中风控: 逐分钟检查止损/止盈/移动止损/回撤止盈, 返回 (成交价, 原因) 或 None。
+
+        规则 (与日级 _process_risk_exits 同构, 粒度细化到分钟):
+        - 分钟 low ≤ 下行风控线 (止损/移动止损/回撤止盈取最高线) → 以风控线成交;
+          分钟 open 已低于风控线 (跳空) → 以该分钟 open 成交 (保守);
+        - 分钟 high ≥ 止盈线 → 以止盈线成交; open 已高于止盈线 → 以 open 成交;
+        - 同一分钟双触 (low 触风控线且 high 触止盈线) → 保守取不利方向:
+          按下行风控离场 (假定先发生了不利变动), 成交价取风控线;
+        - 移动止损/回撤止盈的峰值 (max_high) 随分钟 high 盘中演进 (线盘中上移);
+          当前分钟的 high 先参与触发判断、后更新峰值, 避免同根自触发。
+        """
+        bars = self._bars.get((symbol, str(date_str)[:10]))
+        if not bars:
+            return None
+        try:
+            entry_price = float(pos["entry_price"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if entry_price <= 0:
+            return None
+        peak = float(pos.get("max_high") or entry_price)
+        for _hhmm, o, h, l, c, _v in bars:
+            lines: list[tuple[float, str]] = []
+            if config.stop_loss_pct is not None:
+                lines.append((entry_price * (1 - abs(config.stop_loss_pct)), "stop_loss"))
+            if config.trailing_stop_pct is not None and peak > 0:
+                lines.append((peak * (1 - abs(config.trailing_stop_pct)), "trailing_stop"))
+            activate_pct = getattr(config, "trailing_take_profit_activate_pct", None)
+            drawdown_pct = getattr(config, "trailing_take_profit_drawdown_pct", None)
+            if activate_pct is not None and drawdown_pct is not None and peak > entry_price:
+                peak_profit = peak / entry_price - 1
+                if peak_profit >= abs(float(activate_pct)):
+                    lines.append((entry_price * (1 + peak_profit - abs(float(drawdown_pct))), "trailing_take_profit"))
+            lines = [(line, reason) for line, reason in lines if line > 0 and np.isfinite(line)]
+            if lines:
+                stop_price, reason = max(lines, key=lambda item: item[0])
+                low_k, open_k = float(l), float(o)
+                if low_k > 0 and np.isfinite(low_k) and low_k <= stop_price:
+                    price = open_k if (open_k > 0 and np.isfinite(open_k) and open_k < stop_price) else stop_price
+                    return price, reason
+            tp_pct = getattr(config, "take_profit_pct", None)
+            if tp_pct is not None:
+                tp_line = entry_price * (1 + abs(float(tp_pct)))
+                if tp_line > 0 and np.isfinite(tp_line):
+                    high_k, open_k = float(h), float(o)
+                    if high_k > 0 and np.isfinite(high_k) and high_k >= tp_line:
+                        price = open_k if (open_k > 0 and np.isfinite(open_k) and open_k > tp_line) else tp_line
+                        return price, "take_profit"
+            high_k = float(h)
+            if high_k > 0 and np.isfinite(high_k):
+                peak = max(peak, high_k)
+        return None
+
+
+def build_minute_execution(minute_panel: "pl.DataFrame | None") -> MinuteExecutionData:
+    """分钟面板 → MinuteExecutionData。
+
+    期望列: symbol/datetime/open/high/low/close/volume (provider
+    get_minute → minutes_rows_to_minute_df 口径, datetime 为
+    'YYYY-MM-DD HH:MM[:SS]')。空面板/缺列 → 空数据对象 (全部成交回退
+    日 K 价, 由引擎计数, 不静默)。
+    """
+    if minute_panel is None or minute_panel.is_empty():
+        return MinuteExecutionData({})
+    needed = {"symbol", "datetime", "open", "high", "low", "close", "volume"}
+    missing = needed - set(minute_panel.columns)
+    if missing:
+        logger.warning("分钟面板缺少列 %s, 分钟撮合全部回退日 K 价", sorted(missing))
+        return MinuteExecutionData({})
+    df = minute_panel.select(
+        ["symbol", "datetime", "open", "high", "low", "close", "volume"]
+    ).sort(["symbol", "datetime"])
+    bars: dict[tuple[str, str], list[tuple[int, float, float, float, float, float]]] = {}
+    for sym, dt, o, h, l, c, v in df.iter_rows():
+        dt_str = str(dt)
+        date_part = dt_str[:10]
+        hhmm = int(dt_str[11:13]) * 100 + int(dt_str[14:16])
+        bars.setdefault((str(sym), date_part), []).append(
+            (hhmm, _minute_float(o), _minute_float(h), _minute_float(l), _minute_float(c), _minute_float(v))
+        )
+    return MinuteExecutionData(bars)
 
 # ================================================================
 # BacktestEngine
@@ -344,6 +654,8 @@ class BacktestEngine:
                         exit_price = float(sym_exit_prices[i])
                         pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
                         fee_cost = config.fees_pct * 2 + config.slippage_bps / 10000.0 * 2
+                        # 印花税仅卖出单边收取: 在双边 fees+slippage 之上多扣一次。
+                        fee_cost += max(float(config.stamp_tax_pct), 0.0)
                         pnl_pct -= fee_cost
 
                         e_date = sym_dates[entry_idx]
@@ -357,6 +669,7 @@ class BacktestEngine:
                             pnl_pct=round(pnl_pct, 6),
                             duration=int(hold_days),
                             exit_reason=exit_reason,
+                            cause_tag=cause_tag_for(exit_reason),
                         ))
                         holding = False
 
@@ -380,6 +693,92 @@ class BacktestEngine:
             stats=stats,
         )
 
+    # ── A1 量能参与率约束 (两条撮合路径共用) ──────────────
+
+    @staticmethod
+    def _with_volume_cap(panel: pl.DataFrame, config: MatcherConfig) -> pl.DataFrame:
+        """面板预处理: 附加 _vol_cap_shares 列 (单笔买入股数上限, 单位: 股)。
+
+        口径: cap = pct × min(当日 volume, volume 含当日的 window 日简单滚动均值)。
+        - 滚动均值为「含当日」口径 (实现简单, 相比不含当日略偏宽松, 已知近似);
+          窗口不足 window 行时按可得行数平均 (min_samples=1, 首行均值即自身);
+        - volume 列缺失 / 整列全为 0 或 null → 整列置 null: cap 失效, 撮合回退
+          无约束的现有行为, 不 crash 不阻断 (fail-closed, 不伪造 0 上限);
+        - 单行 volume 缺失/非有限/负值 → 该行 null; 单行 volume=0 → cap=0
+          (当日无成交量的行, 买入按约束阻塞)。
+        仅返回新 DataFrame, 不改动传入面板 (PanelCache 共享只读)。
+        """
+        pct = getattr(config, "max_participation_pct", None)
+        if pct is None:
+            return panel
+        null_cap = pl.lit(None, dtype=pl.Float64).alias("_vol_cap_shares")
+        if "volume" not in panel.columns:
+            logger.warning("量能参与率约束已启用, 但面板缺少 volume 列: 本轮回退为无约束撮合")
+            return panel.with_columns(null_cap)
+        volume = pl.col("volume").cast(pl.Float64)
+        total_volume = panel.select(volume.fill_null(0).sum()).item()
+        if total_volume is None or float(total_volume) <= 0:
+            logger.warning("量能参与率约束已启用, 但面板 volume 全为 0/缺失: 本轮回退为无约束撮合")
+            return panel.with_columns(null_cap)
+        window = max(int(getattr(config, "participation_volume_window", 5) or 1), 1)
+        # 面板已按 symbol, date 排序 (撮合路径既有不变量), over("symbol") 滚动窗口不跨品种。
+        rolling_avg = volume.rolling_mean(window_size=window, min_samples=1).over("symbol")
+        return panel.with_columns(
+            pl.when(volume.is_null() | ~volume.is_finite() | (volume < 0))
+            .then(pl.lit(None, dtype=pl.Float64))
+            .otherwise(pl.lit(float(pct)) * pl.min_horizontal(volume, rolling_avg))
+            .cast(pl.Float64)
+            .alias("_vol_cap_shares")
+        )
+
+    @staticmethod
+    def _capacity_stats(
+        enabled: bool,
+        capped_entry_count: int,
+        cap_values: list[float],
+        utilizations: list[float],
+    ) -> dict:
+        """A1 量能约束的策略容量诊断块。
+
+        - cap_value = 单笔量能上限股数 × 成交价 (该笔在参与率约束下允许买入的最大名义金额);
+        - utilization = 实际成交 entry_value / cap_value (cap_value<=0 的笔不进入样本);
+        - unconstrained: 无一笔被量能截断 且 utilization_p90 < 0.8 (宽松判定「量能远未构成约束」);
+        - est_capacity_multiple = round(1/utilization_p90, 2): 粗略估计当前资金规模再乘该倍数
+          之前, 第 90 百分位笔不会触碰量能上限。这是线性外推的近似口径 (假设成交价与滚动
+          量能不随资金规模变化, 且未计入多笔同日抢同一上限的挤占), 非精确容量解。
+        样本不足 (无有效成交样本) 时分位数/unconstrained 输出 null, 不伪造 0。
+        """
+        stats: dict = {
+            "enabled": bool(enabled),
+            "capped_entry_count": int(capped_entry_count),
+            "cap_value_p50": None,
+            "cap_value_p10": None,
+            "utilization_p50": None,
+            "utilization_p90": None,
+            "unconstrained": None,
+            "est_capacity_multiple": None,
+        }
+        if not enabled:
+            return stats
+        cvs = np.array(
+            [v for v in cap_values if v is not None and np.isfinite(v) and v > 0], dtype=float
+        )
+        uts = np.array(
+            [u for u in utilizations if u is not None and np.isfinite(u) and u > 0], dtype=float
+        )
+        if cvs.size:
+            stats["cap_value_p50"] = round(float(np.percentile(cvs, 50)), 2)
+            stats["cap_value_p10"] = round(float(np.percentile(cvs, 10)), 2)
+        if uts.size:
+            u_p50 = float(np.percentile(uts, 50))
+            u_p90 = float(np.percentile(uts, 90))
+            stats["utilization_p50"] = round(u_p50, 4)
+            stats["utilization_p90"] = round(u_p90, 4)
+            stats["unconstrained"] = bool(int(capped_entry_count) == 0 and u_p90 < 0.8)
+            if u_p90 > 0:
+                stats["est_capacity_multiple"] = round(1.0 / u_p90, 2)
+        return stats
+
     def simulate_independent_candidates(
         self,
         panel: pl.DataFrame,
@@ -392,6 +791,8 @@ class BacktestEngine:
         """全量候选独立执行：每个买入信号都是独立样本, 不受资金/仓位限制。"""
         if panel.is_empty():
             return self._empty_result()
+        # A1 量能参与率约束: 两条撮合路径共用同一面板预处理 (只加列, 不改行序, mask 对齐不变)。
+        panel = self._with_volume_cap(panel, config)
 
         n = len(panel)
         panel_dates = panel["date"].to_numpy()
@@ -457,6 +858,19 @@ class BacktestEngine:
             if "signal_limit_down" in panel.columns else np.zeros(n, dtype=bool)
         )
 
+        # A1 量能参与率: 上限列 null → NaN, 任一有效行才视为启用; 全 null (缺 volume/全 0) → 不约束。
+        vol_cap_col = (
+            panel["_vol_cap_shares"].cast(pl.Float64).to_numpy()
+            if "_vol_cap_shares" in panel.columns else None
+        )
+        cap_enabled = vol_cap_col is not None and bool(np.isfinite(vol_cap_col).any())
+
+        def _entry_cap(idx: int) -> float | None:
+            if not cap_enabled:
+                return None
+            cap = float(vol_cap_col[idx])
+            return cap if np.isfinite(cap) and cap >= 0 else None
+
         symbol_rows: dict[str, list[int]] = {}
         row_pos_in_symbol = np.zeros(n, dtype=int)
         for i, sym_value in enumerate(panel_symbols):
@@ -466,7 +880,8 @@ class BacktestEngine:
             rows.append(i)
 
         buy_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
-        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
+        # 印花税仅卖出单边: 卖出成本额外含 stamp_tax_pct。
+        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0 + max(float(config.stamp_tax_pct), 0.0)
         score_min = getattr(config, "score_min", None)
         score_max = getattr(config, "score_max", None)
         trades: list[TradeRecord] = []
@@ -476,12 +891,17 @@ class BacktestEngine:
             "buy_limit_up": 0,
             "buy_score_filter": 0,
             "buy_no_next_bar": max(n_candidates - int(ent.sum()), 0),
+            "buy_volume_cap": 0,
             "sell_invalid_price": 0,
             "sell_suspended": 0,
             "sell_limit_down": 0,
             "sell_no_future": 0,
             "pending_exit": 0,
         }
+        # A1 容量诊断样本: 每笔成交的量能上限名义金额与实际利用率。
+        cap_samples: list[float] = []
+        util_samples: list[float] = []
+        capped_entry_count = 0
 
         def _count(key: str) -> None:
             execution_stats[key] = execution_stats.get(key, 0) + 1
@@ -602,6 +1022,7 @@ class BacktestEngine:
             exit_value = shares * exit_price * (1 - sell_cost_pct)
             pnl_amount = exit_value - entry_value
             pnl_pct = pnl_amount / entry_value if entry_value > 0 else 0.0
+            mae_pct, mfe_pct = _pos_excursions(pos)
             trades.append(TradeRecord(
                 symbol=str(pos["symbol"]),
                 name=str(pos.get("name", "")),
@@ -611,7 +1032,6 @@ class BacktestEngine:
                 exit_price=round(exit_price, 4),
                 pnl_pct=round(float(pnl_pct), 6),
                 duration=int(pos["hold_days"]),
-                exit_reason=reason,
                 shares=shares,
                 lots=1.0,
                 position_pct=0.0,
@@ -622,6 +1042,10 @@ class BacktestEngine:
                 entry_signal_date=pos.get("entry_signal_date"),
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
+                exit_reason=reason,
+                cause_tag=cause_tag_for(reason),
+                mae_pct=mae_pct,
+                mfe_pct=mfe_pct,
             ))
             return True
 
@@ -652,6 +1076,13 @@ class BacktestEngine:
             if score_max is not None and score > score_max:
                 _count("buy_score_filter")
                 continue
+            # A1 量能参与率约束: 独立候选每笔固定 1 手 (100 股) 样本,
+            # 上限取整后不足 1 手 → 该候选买入阻塞 (buy_volume_cap)。
+            cap_shares = _entry_cap(entry_idx)
+            if cap_shares is not None:
+                if np.floor(min(100.0, cap_shares) / 100) * 100 < 100:
+                    _count("buy_volume_cap")
+                    continue
 
             sym = str(panel_symbols[entry_idx])
             rows = symbol_rows.get(sym, [])
@@ -661,6 +1092,11 @@ class BacktestEngine:
                 continue
 
             entry_price = float(entry_prices[entry_idx])
+            if cap_shares is not None:
+                cap_value = cap_shares * entry_price
+                if cap_value > 0:
+                    cap_samples.append(cap_value)
+                    util_samples.append(100.0 * entry_price * (1 + buy_cost_pct) / cap_value)
             pos = {
                 "symbol": sym,
                 "name": str(names[entry_idx] or ""),
@@ -671,13 +1107,24 @@ class BacktestEngine:
                 "entry_score": score,
                 "hold_days": 0,
                 "max_high": entry_price,
+                "mae_low": None,
+                "mfe_high": None,
                 "pending_exit_reason": None,
                 "pending_exit_signal_date": None,
                 "blocked_exit_days": 0,
             }
+            # 可观测窗口按成交口径: open_t+1 当日开盘成交, 入场日区间可观测;
+            # close_t 收盘成交, 入场日区间发生在成交前 (前视) → 不可计入, 首个可观测日为次日。
+            # 仅约束 mae_low/mfe_high; max_high (trailing) 维持既有语义不变。
+            observable_from_entry = config.entry_fill == "open_t+1"
             hi = float(high_prices[entry_idx])
             if _valid_price(hi):
                 pos["max_high"] = max(float(pos["max_high"]), hi)
+                if observable_from_entry:
+                    pos["mfe_high"] = hi
+            lo = float(low_prices[entry_idx])
+            if _valid_price(lo) and observable_from_entry:
+                pos["mae_low"] = lo
 
             closed = False
             last_idx = entry_idx
@@ -710,8 +1157,14 @@ class BacktestEngine:
                     break
 
                 hi = float(high_prices[idx])
+                lo = float(low_prices[idx])
                 if _valid_price(hi):
                     pos["max_high"] = max(float(pos.get("max_high", entry_price)), hi)
+                    prev = pos.get("mfe_high")
+                    pos["mfe_high"] = hi if prev is None or hi > prev else prev
+                if _valid_price(lo):
+                    prev = pos.get("mae_low")
+                    pos["mae_low"] = lo if prev is None or lo < prev else prev
 
             if not closed:
                 if last_idx == entry_idx:
@@ -719,7 +1172,8 @@ class BacktestEngine:
                 elif not pos.get("pending_exit_reason"):
                     _try_close(pos, last_idx, "end", self._date_str(panel_dates[last_idx]))
 
-        return self._calc_independent_candidate_result(trades, n_candidates, execution_stats)
+        capacity = self._capacity_stats(cap_enabled, capped_entry_count, cap_samples, util_samples)
+        return self._calc_independent_candidate_result(trades, n_candidates, execution_stats, capacity)
 
     def simulate_portfolio(
         self,
@@ -729,10 +1183,15 @@ class BacktestEngine:
         config: MatcherConfig,
         progress_cb: "Callable[[dict], None] | None" = None,
         cancel_event: "threading.Event | None" = None,
+        # F14 分钟级执行: None = 日 K 路径 (默认行为不变); 提供时建仓/清仓
+        # 成交价替换为分钟窗口 VWAP, 风控改为盘中触发。
+        minute_data: "MinuteExecutionData | None" = None,
     ) -> SimResult:
         """账户级组合回测：日线信号 → 成交约束 → 仓位/现金撮合。"""
         if panel.is_empty():
             return self._empty_result()
+        # A1 量能参与率约束: 与独立候选路径共用同一面板预处理 (只加列, 不改行序)。
+        panel = self._with_volume_cap(panel, config)
 
         n = len(panel)
         panel_dates = panel["date"].to_numpy()
@@ -778,8 +1237,22 @@ class BacktestEngine:
         low_prices = panel["low"].to_numpy()
         close_prices = panel["close"].to_numpy()
         # 撮合价: 建仓/清仓各自独立选列。
+        # F14 分钟级执行: 建仓 → 次日 09:30-09:45 VWAP (open_t+1 口径) 或信号日
+        # 14:45-15:00 VWAP (close_t 口径); 清仓对称。缺分钟数据的行保留日 K
+        # 原价 (fallback 标记在成交时计数)。参与率上限仍用日级 volume 面板口径。
         entry_prices = open_prices if config.entry_fill == "open_t+1" else close_prices
         exit_prices = open_prices if config.exit_fill == "open_t+1" else close_prices
+        entry_fallback_flags = np.zeros(n, dtype=bool)
+        exit_fallback_flags = np.zeros(n, dtype=bool)
+        if minute_data is not None:
+            entry_prices, entry_fallback_flags = minute_data.apply_fill_prices(
+                panel_symbols, panel_dates, entry_prices,
+                "open" if config.entry_fill == "open_t+1" else "tail",
+            )
+            exit_prices, exit_fallback_flags = minute_data.apply_fill_prices(
+                panel_symbols, panel_dates, exit_prices,
+                "open" if config.exit_fill == "open_t+1" else "tail",
+            )
         has_volume = "volume" in panel.columns
         volumes = panel["volume"].fill_null(0).to_numpy() if has_volume else np.ones(n, dtype=float)
         names = (
@@ -803,6 +1276,19 @@ class BacktestEngine:
             if "signal_limit_down" in panel.columns else np.zeros(n, dtype=bool)
         )
 
+        # A1 量能参与率: 上限列 null → NaN, 任一有效行才视为启用; 全 null (缺 volume/全 0) → 不约束。
+        vol_cap_col = (
+            panel["_vol_cap_shares"].cast(pl.Float64).to_numpy()
+            if "_vol_cap_shares" in panel.columns else None
+        )
+        cap_enabled = vol_cap_col is not None and bool(np.isfinite(vol_cap_col).any())
+
+        def _entry_cap(idx: int) -> float | None:
+            if not cap_enabled:
+                return None
+            cap = float(vol_cap_col[idx])
+            return cap if np.isfinite(cap) and cap >= 0 else None
+
         date_to_indices: dict[str, list[int]] = {}
         for i, d in enumerate(panel_dates):
             d_str = self._date_str(d)
@@ -812,7 +1298,8 @@ class BacktestEngine:
             return self._empty_result()
 
         buy_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
-        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0
+        # 印花税仅卖出单边: 卖出成本额外含 stamp_tax_pct。
+        sell_cost_pct = config.fees_pct + config.slippage_bps / 10000.0 + max(float(config.stamp_tax_pct), 0.0)
         cash = float(config.initial_capital)
         peak = cash
         max_positions = max(int(config.max_positions), 0)
@@ -834,11 +1321,21 @@ class BacktestEngine:
             "buy_same_day_reentry": 0,
             "buy_exposure": 0,
             "buy_score_filter": 0,
+            "buy_volume_cap": 0,
             "sell_invalid_price": 0,
             "sell_suspended": 0,
             "sell_limit_down": 0,
             "pending_exit": 0,
+            # F14 分钟级执行: 缺分钟数据回退日 K 价的成交次数 (买入/卖出合计,
+            # 分桶见 buy_minute_fallback / sell_minute_fallback)。
+            "buy_minute_fallback": 0,
+            "sell_minute_fallback": 0,
+            "minute_fallback_daily": 0,
         }
+        # A1 容量诊断样本: 每笔成交的量能上限名义金额与实际利用率。
+        cap_samples: list[float] = []
+        util_samples: list[float] = []
+        capped_entry_count = 0
 
         def _count(key: str) -> None:
             execution_stats[key] = execution_stats.get(key, 0) + 1
@@ -935,10 +1432,21 @@ class BacktestEngine:
             nonlocal cash
             pos = positions.pop(sym)
             exit_price = float(exit_price_override) if exit_price_override is not None else float(exit_prices[idx])
+            # F14: 分钟模式下无 override 的正常到期/信号卖出走了尾盘 VWAP 替换价;
+            # 标记为回退 → 该笔实际用的是日 K 价。风控 override 价 (止损价等)
+            # 本身是分钟路径产物, 不计回退。
+            if (
+                minute_data is not None
+                and exit_price_override is None
+                and exit_fallback_flags[idx]
+            ):
+                _count("sell_minute_fallback")
+                _count("minute_fallback_daily")
             exit_value = pos["shares"] * exit_price * (1 - sell_cost_pct)
             cash += exit_value
             pnl_amount = exit_value - pos["entry_value"]
             pnl_pct = (exit_value - pos["entry_value"]) / pos["entry_value"] if pos["entry_value"] > 0 else 0.0
+            mae_pct, mfe_pct = _pos_excursions(pos)
             sold_today.add(sym)
             trades.append(TradeRecord(
                 symbol=sym,
@@ -949,7 +1457,6 @@ class BacktestEngine:
                 exit_price=round(exit_price, 4),
                 pnl_pct=round(float(pnl_pct), 6),
                 duration=int(pos["hold_days"]),
-                exit_reason=reason,
                 shares=round(float(pos["shares"]), 4),
                 lots=round(float(pos["lots"]), 2),
                 position_pct=round(float(pos.get("position_pct", 0.0)), 6),
@@ -960,6 +1467,10 @@ class BacktestEngine:
                 entry_signal_date=pos.get("entry_signal_date"),
                 exit_signal_date=signal_date,
                 blocked_exit_days=int(pos.get("blocked_exit_days", 0)),
+                exit_reason=reason,
+                cause_tag=cause_tag_for(reason),
+                mae_pct=mae_pct,
+                mfe_pct=mfe_pct,
             ))
 
         def _try_sell(
@@ -1019,6 +1530,16 @@ class BacktestEngine:
                 idx = row_by_symbol.get(sym)
                 if idx is None or pos["entry_price"] <= 0:
                     continue
+                # F14 分钟级执行: 风控盘中逐分钟检查。有当日分钟 bar 时完全以
+                # 分钟路径结果为准 (触发价=风控线/分钟开盘跳空价; 同分钟双触
+                # 保守取不利方向, 详见 MinuteExecutionData.intraday_risk_exit);
+                # 无当日分钟数据 → 回退日 K 日内口径 (不计数 — 成交价未必是
+                # 日 K 价, 只是触发检测降精度; 成交价口径的回退计费在 _sell)。
+                if minute_data is not None and minute_data.has_bars(sym, d_str):
+                    hit = minute_data.intraday_risk_exit(sym, d_str, pos, config)
+                    if hit is not None:
+                        _try_sell(sym, idx, hit[1], d_str, sold_today, hit[0])
+                    continue
                 open_price = float(open_prices[idx])
                 low_price = float(low_prices[idx])
                 high_price = float(high_prices[idx])
@@ -1068,7 +1589,7 @@ class BacktestEngine:
             idxs: list[int],
             sold_today: set[str],
         ) -> None:
-            nonlocal cash
+            nonlocal cash, capped_entry_count
             if max_positions <= 0:
                 return
             candidates: list[tuple[int, str, float]] = []
@@ -1136,17 +1657,34 @@ class BacktestEngine:
                     _count("buy_exposure")
                     continue
                 entry_price = float(entry_prices[idx])
-                shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / 100) * 100
-                entry_value = shares * entry_price * (1 + buy_cost_pct)
+                raw_target_shares = allocation / (entry_price * (1 + buy_cost_pct))
+                shares = np.floor(raw_target_shares / 100) * 100
                 if shares <= 0:
                     _count("buy_lot_size")
                     continue
+                # A1 量能参与率约束: 目标股数与单笔量能上限取小, 再按 100 股整手向下取整;
+                # 取整后不足 1 手 → 该笔买入阻塞 (buy_volume_cap)。
+                # 整手取整本身的少量截断不算被量能约束 (capped 仅在取整前目标>上限且取整后<目标时计)。
+                cap_shares = _entry_cap(idx)
+                if cap_shares is not None:
+                    capped_shares = np.floor(min(raw_target_shares, cap_shares) / 100) * 100
+                    if capped_shares < 100:
+                        _count("buy_volume_cap")
+                        continue
+                    if cap_shares < raw_target_shares and capped_shares < raw_target_shares:
+                        capped_entry_count += 1
+                    shares = capped_shares
+                entry_value = shares * entry_price * (1 + buy_cost_pct)
                 if entry_value > cash + 1e-6:
                     _count("buy_cash")
                     continue
                 if entry_value > current_exposure_capacity + 1e-6:
                     _count("buy_exposure")
                     continue
+                # F14: 分钟模式下该笔买入实际用日 K 价 (缺分钟数据回退), 显式计数。
+                if minute_data is not None and entry_fallback_flags[idx]:
+                    _count("buy_minute_fallback")
+                    _count("minute_fallback_daily")
                 cash -= entry_value
                 positions[sym] = {
                     "symbol": sym,
@@ -1160,11 +1698,19 @@ class BacktestEngine:
                     "position_pct": entry_value / account_equity_before_buy if account_equity_before_buy > 0 else 0.0,
                     "entry_score": _score,
                     "max_high": entry_price,
+                    "mae_low": None,
+                    "mfe_high": None,
                     "hold_days": 0,
                     "pending_exit_reason": None,
                     "pending_exit_signal_date": None,
                     "blocked_exit_days": 0,
                 }
+                # A1 容量诊断: 记录该笔的量能上限名义金额与实际利用率 (cap_value<=0 不进样本)。
+                if cap_shares is not None:
+                    cap_value = cap_shares * entry_price
+                    if cap_value > 0:
+                        cap_samples.append(cap_value)
+                        util_samples.append(entry_value / cap_value)
 
         for d_idx, d_str in enumerate(all_dates):
             if d_idx % 20 == 0:
@@ -1200,9 +1746,22 @@ class BacktestEngine:
             for sym, pos in positions.items():
                 idx = row_by_symbol.get(sym)
                 if idx is not None:
+                    # 可观测窗口按成交口径: close_t 入场日收盘成交, 当日区间发生在成交前
+                    # (前视) → 不计入 mae/mfe; open_t+1 当日开盘成交, 入场日可观测。
+                    # 退出日由卖出先 pop 天然排除。max_high (trailing) 维持既有语义。
+                    entry_bar_observable = (
+                        config.entry_fill == "open_t+1" or pos["entry_date"] != d_str
+                    )
                     hi = float(high_prices[idx])
+                    lo = float(low_prices[idx])
                     if _valid_price(hi):
                         pos["max_high"] = max(float(pos.get("max_high", pos["entry_price"])), hi)
+                        if entry_bar_observable:
+                            prev = pos.get("mfe_high")
+                            pos["mfe_high"] = hi if prev is None or hi > prev else prev
+                    if _valid_price(lo) and entry_bar_observable:
+                        prev = pos.get("mae_low")
+                        pos["mae_low"] = lo if prev is None or lo < prev else prev
 
             for i in idxs:
                 c = float(close_prices[i])
@@ -1223,8 +1782,21 @@ class BacktestEngine:
             })
             drawdown_curve.append({"date": d_str[:10], "value": round(float(dd), 4)})
 
-        stats = self._calc_portfolio_stats(equity_curve, trades, config.initial_capital)
+        stats = self._calc_portfolio_stats(
+            equity_curve,
+            trades,
+            config.initial_capital,
+            config.fees_pct,
+            config.slippage_bps,
+            config.stamp_tax_pct,
+            config.risk_free_rate,
+        )
         stats["execution"] = execution_stats
+        # F14 成交精度标注: minute = 分钟 VWAP 撮合 + 盘中风控; 回退计数
+        # 同步放顶层 (前端摘要条直接读)。
+        stats["bar_precision"] = "minute" if minute_data is not None else "daily"
+        stats["minute_fallback_daily"] = int(execution_stats.get("minute_fallback_daily", 0))
+        stats["capacity"] = self._capacity_stats(cap_enabled, capped_entry_count, cap_samples, util_samples)
         stats["pending_exit_positions"] = sum(1 for p in positions.values() if p.get("pending_exit_reason"))
         per_symbol = self._calc_per_symbol(trades)
         return SimResult(
@@ -1311,10 +1883,11 @@ class BacktestEngine:
         losses = pnls[pnls <= 0]
         win_rate = len(wins) / n_trades
 
-        # 盈亏比
+        # 交易统计：payoff ratio 与 Profit Factor 分别按均值比、损益总额比计算。
         avg_win = float(np.mean(wins)) if len(wins) > 0 else 0.0
         avg_loss = abs(float(np.mean(losses))) if len(losses) > 0 else 0.0
-        profit_factor = avg_win / avg_loss if avg_loss > 0 else (float("inf") if avg_win > 0 else 0.0)
+        payoff = payoff_ratio(pnls)
+        factor = profit_factor(pnls)
 
         # 最大回撤 — 用交易序列近似
         equity = initial_capital
@@ -1326,8 +1899,8 @@ class BacktestEngine:
             dd = (equity - peak) / peak
             max_dd = min(max_dd, dd)
 
-        # 夏普 — 用交易收益标准差近似
-        sharpe = float(np.mean(pnls) / np.std(pnls)) * np.sqrt(252) if np.std(pnls) > 0 else 0.0
+        # 简化模式只有不等间隔的逐笔收益，不能伪装成日频 Sharpe。
+        sharpe = None
 
         # Calmar
         calmar = annual_return / abs(max_dd) if abs(max_dd) > 0.001 else 0.0
@@ -1336,10 +1909,11 @@ class BacktestEngine:
             "total_return": round(float(total_return), 4),
             "annual_return": round(float(annual_return), 4),
             "max_drawdown": round(float(max_dd), 4),
-            "sharpe": round(float(sharpe), 2),
+            "sharpe": None,
             "calmar": round(float(calmar), 2),
             "win_rate": round(float(win_rate), 4),
-            "profit_factor": round(float(profit_factor), 2) if np.isfinite(profit_factor) else None,
+            "profit_factor": round(float(factor), 2) if factor is not None else None,
+            "payoff_ratio": round(float(payoff), 2) if payoff is not None else None,
             "n_trades": n_trades,
             "avg_pnl": round(float(np.mean(pnls)), 4),
             "avg_win": round(avg_win, 4),
@@ -1382,8 +1956,11 @@ class BacktestEngine:
         trades: list[TradeRecord],
         n_candidates: int,
         execution_stats: dict[str, int],
+        capacity: dict | None = None,
     ) -> SimResult:
         """全量独立候选统计：按每个候选样本的实际执行收益聚合。"""
+        if capacity is None:
+            capacity = BacktestEngine._capacity_stats(False, 0, [], [])
         if not trades:
             return SimResult(
                 equity_curve=[],
@@ -1397,17 +1974,17 @@ class BacktestEngine:
                     "n_candidates": int(n_candidates),
                     "n_trades": 0,
                     "execution": execution_stats,
+                    "capacity": capacity,
                 },
             )
 
         pnls = np.array([t.pnl_pct for t in trades], dtype=float)
         durations = np.array([t.duration for t in trades], dtype=float)
         wins = pnls[pnls > 0]
-        losses = pnls[pnls <= 0]
-        avg_win = float(np.mean(wins)) if len(wins) else 0.0
-        avg_loss = abs(float(np.mean(losses))) if len(losses) else 0.0
 
-        # 按退出日聚合已实现样本收益, 构造“样本收益曲线”。它不是账户净值。
+
+        # 按退出日聚合已实现样本收益，构造“样本收益曲线”。它不是账户净值，
+        # 且仅含有退出的事件日：不能把它伪装成等间隔日收益来年化或计算风险调整收益。
         daily_returns: dict[str, list[float]] = {}
         for t in trades:
             daily_returns.setdefault(str(t.exit_date)[:10], []).append(float(t.pnl_pct))
@@ -1436,8 +2013,8 @@ class BacktestEngine:
         peaks = np.maximum.accumulate(values) if len(values) else np.array([])
         drawdowns = values / peaks - 1 if len(values) else np.array([])
         max_drawdown = float(drawdowns.min()) if len(drawdowns) else 0.0
-        daily = np.array(daily_avg, dtype=float)
-        sharpe = float(np.mean(daily) / np.std(daily) * np.sqrt(252)) if len(daily) > 1 and np.std(daily) > 0 else 0.0
+        factor = profit_factor(pnls)
+        payoff = payoff_ratio(pnls)
 
         lo, hi, nbins = -0.20, 0.20, 20
         clipped = np.clip(pnls, lo, hi)
@@ -1461,16 +2038,32 @@ class BacktestEngine:
             "avg_return": round(float(np.mean(pnls)), 4),
             "median_return": round(float(np.median(pnls)), 4),
             "win_rate": round(float(len(wins) / len(pnls)), 4) if len(pnls) else 0.0,
-            "profit_factor": round(float(avg_win / avg_loss), 2) if avg_loss > 0 else None,
+            "profit_factor": round(float(factor), 2) if factor is not None else None,
+            "payoff_ratio": round(float(payoff), 2) if payoff is not None else None,
             "best": round(float(np.max(pnls)), 4),
             "worst": round(float(np.min(pnls)), 4),
             "avg_duration": round(float(np.mean(durations)), 1) if len(durations) else 0.0,
             "total_return": round(float(total_return), 4),
+            # 候选曲线按退出事件而非连续交易日采样，年化与 Sharpe 均不可得。
+            "annual_return": None,
             "max_drawdown": round(float(max_drawdown), 4),
-            "sharpe": round(float(sharpe), 2),
+            "sharpe": None,
             "return_distribution": dist,
             "execution": execution_stats,
+            "capacity": capacity,
         }
+        # 交易级统计（收益期数未知时不携带日频 MetricContext），仍可安全产出
+        # 盈亏、持仓期与 MAE/MFE；时间序列风险指标刻意不生成。
+        advanced = performance_metrics(
+            pnls=pnls,
+            durations=durations,
+            maes=[t.mae_pct for t in trades],
+            mfes=[t.mfe_pct for t in trades],
+        )
+        advanced.pop("metric_context", None)
+        for key, value in advanced.items():
+            if key not in stats:
+                stats[key] = value
 
         return SimResult(
             equity_curve=equity_curve,
@@ -1485,32 +2078,44 @@ class BacktestEngine:
         equity_curve: list[dict],
         trades: list[TradeRecord],
         initial_capital: float,
+        fees_pct: float = 0.0,
+        slippage_bps: float = 0.0,
+        stamp_tax_pct: float = 0.0,
+        risk_free_rate: float = 0.0,
     ) -> dict:
         if not equity_curve:
             return {"total_return": 0, "n_trades": 0}
+        context = MetricContext("daily", risk_free_rate=risk_free_rate)
         final_equity = float(equity_curve[-1]["value"])
         total_return = final_equity / initial_capital - 1 if initial_capital > 0 else 0.0
         values = np.array([float(r["value"]) for r in equity_curve], dtype=float)
         daily = values[1:] / values[:-1] - 1 if len(values) > 1 else np.array([])
-        annual_return = (1 + total_return) ** (252 / max(len(equity_curve), 1)) - 1 if total_return > -1 else total_return
+        annual_return = annualized_return(daily, context)
         peaks = np.maximum.accumulate(values)
         drawdowns = values / peaks - 1
         max_drawdown = float(drawdowns.min()) if len(drawdowns) else 0.0
-        sharpe = float(np.mean(daily) / np.std(daily) * np.sqrt(252)) if len(daily) and np.std(daily) > 0 else 0.0
+        sharpe = annualized_sharpe(daily, context)
         pnls = np.array([t.pnl_pct for t in trades], dtype=float) if trades else np.array([])
         exposures = np.array([float(r.get("exposure", 0.0)) for r in equity_curve], dtype=float)
         wins = pnls[pnls > 0]
         losses = pnls[pnls <= 0]
         avg_win = float(np.mean(wins)) if len(wins) else 0.0
         avg_loss = abs(float(np.mean(losses))) if len(losses) else 0.0
-        return {
+        factor = profit_factor(pnls)
+        payoff = payoff_ratio(pnls)
+        stats = {
             "total_return": round(float(total_return), 4),
-            "annual_return": round(float(annual_return), 4),
+            "annual_return": round(float(annual_return), 4) if annual_return is not None else None,
             "max_drawdown": round(float(max_drawdown), 4),
-            "sharpe": round(float(sharpe), 2),
-            "calmar": round(float(annual_return / abs(max_drawdown)), 2) if abs(max_drawdown) > 0.001 else 0.0,
+            "sharpe": round(float(sharpe), 2) if sharpe is not None else None,
+            "calmar": (
+                round(float(annual_return / abs(max_drawdown)), 2)
+                if annual_return is not None and abs(max_drawdown) > 0.001
+                else None
+            ),
             "win_rate": round(float(len(wins) / len(pnls)), 4) if len(pnls) else 0.0,
-            "profit_factor": round(float(avg_win / avg_loss), 2) if avg_loss > 0 else None,
+            "profit_factor": round(float(factor), 2) if factor is not None else None,
+            "payoff_ratio": round(float(payoff), 2) if payoff is not None else None,
             "n_trades": len(trades),
             "avg_pnl": round(float(np.mean(pnls)), 4) if len(pnls) else 0.0,
             "avg_win": round(avg_win, 4),
@@ -1520,6 +2125,41 @@ class BacktestEngine:
             "avg_exposure": round(float(np.mean(exposures)), 4) if len(exposures) else 0.0,
             "max_exposure": round(float(np.max(exposures)), 4) if len(exposures) else 0.0,
         }
+        gross_notional = sum(
+            max(float(trade.entry_value), 0.0) + max(float(trade.exit_value), 0.0)
+            for trade in trades
+        )
+        # 印花税口径: 仅对卖出侧名义额征收 (exit_value 已是含卖出成本后的净额,
+        # 近似值; 与撮合时 sell_cost_pct 的扣费口径一致), 不对总 gross_notional 乘。
+        sell_notional = sum(max(float(trade.exit_value), 0.0) for trade in trades)
+        commission_cost = gross_notional * max(float(fees_pct), 0.0)
+        slippage_cost = gross_notional * max(float(slippage_bps), 0.0) / 10_000.0
+        stamp_tax_cost = sell_notional * max(float(stamp_tax_pct), 0.0)
+        stats["cost_breakdown"] = {
+            "gross_notional": round(gross_notional, 2),
+            "commission": round(commission_cost, 2),
+            "slippage": round(slippage_cost, 2),
+            "stamp_tax": round(stamp_tax_cost, 2),
+            "total": round(commission_cost + slippage_cost + stamp_tax_cost, 2),
+            "turnover": (
+                round(gross_notional / float(initial_capital), 4)
+                if initial_capital > 0
+                else None
+            ),
+        }
+        advanced = performance_metrics(
+            returns=daily,
+            pnls=pnls,
+            durations=[trade.duration for trade in trades],
+            positions=exposures,
+            maes=[trade.mae_pct for trade in trades],
+            mfes=[trade.mfe_pct for trade in trades],
+            context=context,
+        )
+        for key, value in advanced.items():
+            if key not in stats:
+                stats[key] = value
+        return stats
 
     @staticmethod
     def _date_str(value) -> str:

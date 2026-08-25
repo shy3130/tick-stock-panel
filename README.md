@@ -17,17 +17,17 @@
 
 <div align="center">
 
-**[快速开始](#-快速开始)** · **[核心功能](#-核心功能)** · **[配置](#️-配置)** · **[路线图](#-路线图)**
+**[快速开始](#-快速开始)** · **[功能指南](./docs/FEATURE_GUIDE.md)** · **[核心功能](#-核心功能)** · **[配置](#️-配置)** · **[路线图](#-路线图)**
 
 </div>
 
 - 🏠 **本地数据优先** — 默认 `DATA_PROVIDER=fquant_local`,走本地 DuckDB (`fstore*.duckdb` + `tdx*.duckdb`,含港股拆分库)
 - 🏠 **自托管零运维** — Docker 单容器部署,数据完全掌握在自己手里
 - 🔍 **多工具工作台** — 选股(20 内置策略)+ 实时监控 + 向量化回测 + 组合优化 + 交易复盘
-- 🤖 **多 AI 配置** — 支持 OpenAI 兼容接口 / ACP / Codex CLI profile,可按功能选择
+- 🤖 **多 AI 配置** — 支持 OpenAI 兼容接口 / ACP / Codex CLI profile，可按功能选择；已保存 profile 可做不经过 fallback 的最小连通性测试
 - 🔌 **自由扩展** — 自有量化项目数据,与内置数据同台分析
 - 🇨🇳 **A 股为主,港股 P1 已接入** — A 股全功能;港股支持单股行情/K线/分析的第一阶段能力
-- 📣 **多通道推送** — 飞书 / 钉钉 / 企微 / MeoW webhook,用于监控告警与复盘推送
+- 📣 **多通道推送** — 飞书 / 钉钉 / 企微 / MeoW webhook + PushPlus,用于监控告警与复盘推送
 
 
 
@@ -93,7 +93,7 @@
 | 工具                               | 版本   | 安装                                               |
 | :--------------------------------- | :----- | :------------------------------------------------- |
 | Python                             | ≥ 3.11 | [python.org](https://www.python.org/)              |
-| Node                               | ≥ 20   | [nodejs.org](https://nodejs.org/)                  |
+| Node                               | ≥ 20   | [nodejs.org](https://nodejs.org/)；Pi Agent 试点需 ≥ 22.19 |
 | [`uv`](https://docs.astral.sh/uv/) | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | `pnpm`                             | 9      | `npm i -g pnpm`                                    |
 
@@ -137,6 +137,16 @@ cd frontend && pnpm install && pnpm dev   # http://localhost:3011
 ```
 
 **回测依赖**:vectorbt → numba 体积较大,作为可选 extras(`uv sync --extra backtest`)。macOS / Intel 无预构建 wheel 时需 `brew install cmake` 现场编译。
+
+**Pi Agent Harness 运行时试点（可选，仅自由 Agent）**：默认仍使用 Python Agent loop。源码开发环境可让 `/api/agent/*` 改走 Pi Agent Harness sidecar；其它 AI 入口、Docker 和 PyInstaller 不变。试点只支持 `openai_compat` profile，且每次 attempt 不做隐式 runtime fallback。
+
+```bash
+make start-pi
+```
+
+首次运行或 `pi-agent-worker/package*.json` 变化时，Make 会自动执行 `npm ci --ignore-scripts`；也可单独运行 `make pi-deps` 预装依赖。
+
+Node 版本须 ≥ 22.19。Python 进程继续执行 13 个只读业务工具和持有业务状态；Node sidecar 只负责模型会话循环。配置项及验收矩阵见 [`backend/docs/PI_AGENT_PILOT_PLAN.md`](./backend/docs/PI_AGENT_PILOT_PLAN.md)。
 
 </details>
 
@@ -231,10 +241,27 @@ git pull
 ### 🧾 交易复盘(Trade Journal)
 
 - 上传券商成交流水 / 同花顺投资账本导出,解析 A 股与港股代码
+- 默认优先同级 `../fhold/fhold-cli`（开发工作区），可用 `FHOLD_CLI` 显式覆盖；从 `../fhold` 通过 `fhold-cli tx snapshot --format json`（仅本地模式）获得完整一致快照后只读预览并确认追加；无法证明一致性时拒绝导入；按原始交易 ID 去重，不直读数据库、不写回 fhold，也不写入交易事件流
 - FIFO 配对生成 position-cycle 台账,支持已清仓与持仓中交易
 - 行为诊断:处置效应 · 过度交易 · 追涨买入 · 浮亏加仓
 - 基准超额与追涨位置诊断;本地无日 K 或港股覆盖不足会在 warning 中明确提示
 - 原始 fills 与报告分离存储,AI 方法论上下文只作为响应展示,不污染 ledger
+
+### 🧭 交易与复盘(Trading & Review)
+
+- **单笔交易生命周期**：事件流驱动 `计划中 → 建仓中 → 持仓中 → 已平仓`，零成交计划可进入 `已作废`。`fill` 支持分批成交和显式收口；`trim` 只在建仓中缩减未成交计划，`add` 可调大计划并从持仓中重开建仓，但都不伪造仓位；事件 append-only 持久化（`trade_events.jsonl`），服务端重算成本均价与已实现盈亏，平仓资金按 `tradeId` 幂等结转
+- **组合风险透视**：`GET /api/trading/portfolio/risk` 只读 `建仓中/持仓中` 的真实敞口与 canonical 日 K，在后端计算组合波动、最大回撤、相关性集中、有效持仓数和风险贡献；缺持仓/共同样本不足时返回明确状态与 warning，前端不重算
+- **真实券商持仓**：`GET /api/trading/portfolio` 只读调用 `fhold-cli --format json` 聚合 `../fhold` 的账户与持仓；CLI/服务不可用时 `fhold.available=false`，不阻断生命周期快照
+- **决策审计**：任何买卖动作（含门禁未通过仍确认的绕行）都写入 append-only 审计流（`decision_audit.jsonl`），永不清理；审计断链即告警
+- **机械红旗**:在事件流+审计流上实时检出放宽止损、亏损加仓、绕过门禁、审计断链、期限超限（对照策略声明 horizon）、仓位超限（对照账户/策略上限）与门禁膨胀（规则清单>15 条全局提示）；赚钱的违规也照记。设置 `TRADING_RED_FLAG_WEBHOOK_URL` 后每条新红旗去重推送一次
+- **策略内核治理**:策略 profile 声明失效信号/风险/期限，可选策略坐标卡 family（价值/成长/趋势/事件/短周期/套利/混合，混合需声明裁判归属）与 playbook（scope/entry/exit）；机械体检 7 项检查（完整性/节奏/期限漂移/剧本声明/混合冲突/自称与行为冲突/提案治理），`validate?ai=true` 追加 AI 深度体检（对照 7 项结构不变量）；回测交易带 `cause_tag`，变更提案必须有反证条件并走人工审批状态机，疑似亏损后放宽规则的提案自动打 `relaxationAfterLoss` 警示
+- **结构化计划检查（默认关闭）**:计划台可对“已保存的单条计划”运行 Stage1 市场诊断 → 程序门禁 → Stage2 计划审查。程序门禁只可保持或降级，AI 不生成订单、方向、建议价格或执行动作；结果含可审计决策链并支持 JSON/Markdown 导出。页面中的“输入完整，可进入审查”仅表示数据与前置条件充分，不代表建议交易
+- **盘后状态驱动归因（L0/L1/L2）**:`POST /api/trading/review/auto-run` 或开启 `tradingAutoReview` 后每交易日 16:45 自动跑——无新红旗/新平仓时 L0 零 AI 调用，有候选时 L1 只对涉及单笔归因且按事件数去重，L2 为用户手动全量；AI 未配置按 `blocked_by_dependency` 降级
+- **统一失败语义**:`AppError` + 7 个标准错误码(`data_incomplete / stale_input / blocked_by_dependency / no_change / kernel_not_ready / ai_output_invalid / ai_provider_error`),API 返回 HTTP 422 + `{"code","detail"}`,前端可据此区分数据前置条件、模型输出无效、provider 故障、需介入与无变化
+- **Webhook / PushPlus**:监控规则命中按已配置渠道推送；纪律红旗按环境变量推送；每日复盘可选飞书、钉钉、企微、MeoW 或 PushPlus。PushPlus Token 只保存在 `secrets.json` 并通过设置页掩码展示。所有外部推送失败均只记日志，不阻断报告、告警、事件或审计落盘
+- 前端 `/trading` 提供持仓、单笔生命周期、计划台和账户四个可用页签，并展示后端组合风险透视；计划台可显式开启结构化检查并选择 AI profile；`/review` 增加纪律红旗；设置页提供策略提案、策略体检、复盘通知和单 profile 连接测试
+
+> 完整机制设计与移植计划见 [`backend/docs/YMOS_PORTING_PLAN.md`](./backend/docs/YMOS_PORTING_PLAN.md)(来源:`fm/YMOS` 投资操作系统 V4)。
 
 ### 💰 财务与 AI 分析
 
@@ -246,8 +273,8 @@ git pull
 
 - **本地/远端多源 provider**:`fquant_local` 默认,`fquant` 可选;日 K / ETF / 指数 / 分钟 / 财务 / 实时行情按 capability 降级
 - **🔌 第三方接入(重点)**:Tushare 等 HTTP 定时拉取 · CSV / Excel 上传 · JSON 写入,自动 schema 发现 + 符号归一,页面可视化配置,**可与自有量化项目数据并入 DuckDB 同台分析**
-- **盘后定时管道**:APScheduler 15:30 CST 自动拉日 K + 重算 enriched + 跑监控
-- **本地 enriched 管道**:本地模式下 raw mirror 禁写,以 enriched 分区作为查询和选股主表;ETF 独立日线分区可用于追涨/组合优化
+- **盘后定时管道**:APScheduler 15:30 CST 自动拉日 K + 重算 enriched + 跑监控；本地 enriched 仅在 freshness/覆盖率校验后发布 canonical 可见水位
+- **本地 enriched 管道**:本地模式下 raw mirror 禁写,以 enriched 分区作为查询和选股主表；ETF 独立日线分区可用于追涨/组合优化；看板、回测与复盘依赖的关键指数会自动补齐 canonical 长历史
 
 ---
 
@@ -259,16 +286,24 @@ git pull
 
 ```ini
 DATA_PROVIDER=fquant_local     # 默认:fquant_local; 可选:fquant
-FQUANT_FSTORE_DUCKDB_PATH=/Volumes/WD1/fstore-web.duckdb
-FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/fstore-markets-web.duckdb
-FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/fstore-klines-web.duckdb
-FQUANT_FSTORE_MINUTES_DUCKDB_PATH=/Volumes/WD1/fstore-minutes-web.duckdb
-FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/tdx.duckdb
-FQUANT_TDX_MINUTES_DUCKDB_PATH=/Volumes/WD1/tdx-minutes.duckdb
-FQUANT_TDX_TRANS_DUCKDB_PATH=/Volumes/WD1/tdx-trans.duckdb
-FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/tdx-hk-web.duckdb
-FQUANT_TDX_HK_MINUTES_DUCKDB_PATH=/Volumes/WD1/tdx-hkminutes-web.duckdb
-FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/tdx-hktrans-web.duckdb
+FQUANT_FSTORE_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore.duckdb
+FQUANT_FSTORE_MARKETS_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-markets.duckdb
+FQUANT_FSTORE_KLINES_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-klines.duckdb
+FQUANT_FSTORE_EXTENDED_DUCKDB_PATH=/Volumes/WD1/duckdb/fstore-extended.duckdb
+FQUANT_TDX_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx.duckdb
+FQUANT_SNAPSHOT_ROOT_CATALOG=/Volumes/WD1/duckdb/snapshots/catalog
+# A 股 minutes/trans 按交易日从 staged catalog 解析;所有 root 默认根 /Volumes/WD1/duckdb
+FQUANT_SNAPSHOT_ROOT_ENGINE_A=/Volumes/WD1/duckdb/snapshots/engine-a
+FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY=/Volumes/WD1/duckdb/snapshots/engine-a-preliminary
+FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-minutes-archive
+FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE=/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive
+FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED=/Volumes/WD1/duckdb/snapshots/fstore-extended
+FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE=/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute
+FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION=/Volumes/WD1/duckdb/snapshots/engine-a-callauction
+TICKFLOW_CANONICAL_HISTORY_ROOT=/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history
+FQUANT_TDX_HK_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hk.duckdb
+FQUANT_TDX_HK_MINUTES_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hkminutes.duckdb
+FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/duckdb/tdx-hktrans.duckdb
 ```
 
 当前项目以 provider capability 判断功能可用性,不再以 TickFlow 订阅档位作为默认门槛。`fquant_local` 主路径:
@@ -276,13 +311,19 @@ FQUANT_TDX_HK_TRANS_DUCKDB_PATH=/Volumes/WD1/tdx-hktrans-web.duckdb
 - 日 K / ETF / 指数:TDX DuckDB + 本地 Parquet/enriched
 - 标的 / 财务 / ETF 备份:fstore DuckDB
 - 实时行情:fstore markets DuckDB `daily_markets` 最新快照
-- 5 档盘口 depth:当前仍是缺口,相关功能会能力门控降级
+- A 股分钟 K / 逐笔：按交易日经 staged catalog 读取 TDX DuckDB 分片
+- 筹码、日/分钟资金流、集合竞价：研究页“市场数据”仅读已发布 snapshot；不可用与无数据分开展示
+- A 股全历史：数据页手动回填到专用 external generation，成功后原子发布并与本地近期 enriched 合并；不修改用户 `data/`
+- 港股：日 K / minutes / trans 可用；本地无港股复权事件与财务报表，能力状态明确降级
+- 5 档盘口 depth：当前仍是缺口，相关功能会能力门控降级
 
 `DATA_PROVIDER` 环境变量优先级最高;未设置时读取设置页偏好,未知值会回落到 `fquant_local`。
 
+> **A 股 minutes/trans 读路径**:staged catalog 是前置条件——`require_current` 路由必须为 `stage=preliminary`/`final`，旧 `stage=NULL` 行会被 fail-closed 拒绝（带可行动迁移指引，**不降级 raw**）。发布顺序（先物理 snapshot root 再 catalog 路由）与安全回滚条件见 `AGENTS.md`「catalog/engine 发布顺序」。
+
 ### AI(可选)
 
-用于自然语言生成策略、个股/财务/市场复盘。**所有配置留空即跳过**,不影响核心功能。支持多 profile:
+用于自然语言生成策略、个股/财务/市场复盘，以及用户显式触发的结构化交易计划检查。**所有配置留空即跳过**,不影响核心功能。支持多 profile:
 
 ```ini
 AI_PROVIDER=openai_compat              # openai_compat | acp | codex_cli
@@ -290,7 +331,6 @@ AI_BASE_URL=https://api.deepseek.com/v1
 AI_API_KEY=                            # 留空 = 关闭 AI
 AI_MODEL=deepseek-chat
 AI_CODEX_COMMAND=codex                 # codex_cli provider 使用
-AI_DAILY_TOKEN_BUDGET=500000           # 每日 token 预算上限
 ```
 
 页面设置支持新增多条 AI 配置、设默认 profile,并在部分功能入口选择本次使用的 profile。
@@ -378,16 +418,15 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 
 | 上游源 | 协议 | 用途 | 配置 |
 |--------|------|------|------|
-| **fstore DuckDB** | DuckDB read-only | 标的列表 / 财务报表 / 复权事件 / universes / 小表 | `FQUANT_FSTORE_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-web.duckdb`） |
-| **fstore markets DuckDB** | DuckDB read-only | realtime 快照 / 每日行情 | `FQUANT_FSTORE_MARKETS_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-markets-web.duckdb`） |
-| **fstore klines DuckDB** | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-klines-web.duckdb`） |
-| **fstore minutes DuckDB** | DuckDB read-only | fstore 分钟 K 线 | `FQUANT_FSTORE_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/fstore-minutes-web.duckdb`） |
-| **TDX DuckDB** | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx.duckdb`） |
-| **TDX minutes DuckDB** | DuckDB read-only | 分钟 K | `FQUANT_TDX_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-minutes.duckdb`） |
-| **TDX trans DuckDB** | DuckDB read-only | 逐笔成交 | `FQUANT_TDX_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-trans.duckdb`） |
-| **TDX HK DuckDB** | DuckDB read-only | 港股日 K / 多周期 K | `FQUANT_TDX_HK_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hk-web.duckdb`） |
-| **TDX HK minutes DuckDB** | DuckDB read-only | 港股分钟 K | `FQUANT_TDX_HK_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hkminutes-web.duckdb`） |
-| **TDX HK trans DuckDB** | DuckDB read-only | 港股逐笔成交 | `FQUANT_TDX_HK_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/tdx-hktrans-web.duckdb`） |
+| **fstore DuckDB** | DuckDB read-only | 标的列表 / 财务报表 / 复权事件 / universes / 小表 | `FQUANT_FSTORE_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore.duckdb`，解析为 `snapshots/fstore/<gen>/` 快照） |
+| **fstore markets DuckDB** | DuckDB read-only | realtime 快照 / 每日行情 | `FQUANT_FSTORE_MARKETS_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-markets.duckdb`，解析为 generation 快照） |
+| **fstore klines DuckDB** | DuckDB read-only | fstore K 线兼容表 | `FQUANT_FSTORE_KLINES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-klines.duckdb`，解析为 generation 快照） |
+| **fstore extended DuckDB** | DuckDB read-only | 财务三表 / 复权事件 | `FQUANT_FSTORE_EXTENDED_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/fstore-extended.duckdb`，解析为独立 `snapshots/fstore-extended/<gen>/` 快照） |
+| **TDX DuckDB** | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx.duckdb`） |
+| **TDX minutes/trans catalog** | DuckDB read-only snapshots | 按交易日解析分钟 K 与逐笔成交分片（staged：preliminary→final，刻意不降级 raw） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_MINUTES_ARCHIVE,_TRANS_ARCHIVE}`（默认根 `/Volumes/WD1/duckdb`） |
+| **TDX HK DuckDB** | DuckDB read-only | 港股日 K / 多周期 K | `FQUANT_TDX_HK_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx-hk.duckdb`，解析为 engine-hk generation 快照） |
+| **TDX HK minutes DuckDB** | DuckDB read-only | 港股分钟 K | `FQUANT_TDX_HK_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx-hkminutes.duckdb`，解析为 engine-hk generation 快照） |
+| **TDX HK trans DuckDB** | DuckDB read-only | 港股逐笔成交 | `FQUANT_TDX_HK_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx-hktrans.duckdb`，解析为 engine-hk generation 快照） |
 
 ### 🔁 Provider 切换
 
@@ -406,7 +445,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 |---------|------|------|
 | `kline_sync.py` | 试点文件 | 250 行日 K ✅ |
 | `instrument_sync.py` | 标准解耦 | 5857 条标的 ✅ |
-| `quote_service.py` | realtime 走 provider；fquant_local 走 `fstore-markets-web.duckdb.daily_markets` 快照 | ✅ |
+| `quote_service.py` | realtime 走 provider；fquant_local 走 `fstore-markets.duckdb.daily_markets` generation 快照 | ✅ |
 | `financial_sync.py` | 财务报表走 fstore | 22101 行利润表 ✅ |
 | `index_sync.py` | universes 走 provider `get_by_universes()` | fquant live 验证 ✅ |
 | `watchlist.py` | realtime 走 provider；fquant 走本地源 fallback | ✅ |
@@ -415,7 +454,7 @@ DATA_DIR=./data       # Parquet / DuckDB 数据存储目录
 ### ⚠️ 已知缺口
 
 - **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级，本地/fquant 模式下返回空列表
-- **realtime 已接入**：不调用 `../fquant` HTTP API / tdx-api / sina / tencent；只读 `fstore-markets-web.duckdb.daily_markets` 最新快照
+- **realtime 已接入**：不调用 `../fquant` HTTP API / tdx-api / sina / tencent；只读 `fstore-markets.duckdb.daily_markets` generation 快照（最新）
 - **universes 已接入**：provider 协议已新增 `get_by_universes()`；fquant/fquant_local 走 fstore `chengfen_gu` + `base_infos`
 - **港股 P1 限制**：单股路径可用;批量 enrich、回测/筛选全链路和复权口径仍按后续计划推进
 
@@ -453,6 +492,7 @@ ipconfig getifaddr en1   # 有线/USB 网卡
 完整的 FQuant 接入进度、架构设计、风险与注意事项请阅：
 
 - **`backend/docs/FQUANT_INTEGRATION_PROGRESS.md`** — 团队状态文档（**权威进度源**）
+- **`backend/docs/UPSTREAM_FEATURE_PORTING.md`** — 上游项目、已移植能力、暂缓/排除项与维护流程总账
 - `backend/docs/FQUANT_PROVIDER_DESIGN.md` — 846 行设计稿（三源实测 + 架构）
 - `backend/docs/FQUANT_PROVIDER.md` — 旧 PoC 说明（已被 v2 覆盖，仅供回溯）
 - `docs/hk-us-stock-expansion-assessment.md` — 港股/美股扩展可行性与实测矩阵

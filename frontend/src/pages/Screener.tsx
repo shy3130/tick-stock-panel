@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, FlaskConical, BarChart3, AlertTriangle } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { useDataStatus, usePreferences } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
+import { filterActiveScreenerRows, stageScreenerBacktestHandoff, type ScreenerBacktestTarget } from '@/lib/screenerBacktestHandoff'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { DatePicker } from '@/components/DatePicker'
@@ -18,7 +20,6 @@ import { ScreenerFilter as ScreenerFilterType, defaultFilter, filterActive, coun
 import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDialog'
 import { StrategyPoolDialog } from '@/components/screener/StrategyPoolDialog'
 import { StrategyBuilderDialog } from '@/components/screener/StrategyBuilderDialog'
-import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
 import { ListColumnCustomizer } from '@/components/ListColumnCustomizer'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { resolveCandleConfig } from '@/lib/list-columns'
@@ -32,6 +33,7 @@ import {
 } from '@/lib/screener-columns'
 
 export function Screener() {
+  const navigate = useNavigate()
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
@@ -43,7 +45,6 @@ export function Screener() {
   const [showPoolDialog, setShowPoolDialog] = useState(false)
   const [showBuilder, setShowBuilder] = useState(false)
   const [builderMode, setBuilderMode] = useState<'create' | 'modify'>('create')
-  const [showStore, setShowStore] = useState(false)
   const { pool, addToPool, removeFromPool, reorderPool, prune } = useStrategyPool()
   const [cardSize, setCardSize] = useState<CardSize>(loadCardSize)
   // 日k蜡烛图显示开关（仅当 candle 列可见时才有意义；持久化）
@@ -304,6 +305,14 @@ export function Screener() {
     return mainRows
   }, [showAll, allRows, filteredRows, filter, activeStrategy, strategyLimits, expiredRowsMap, sort, sortRows, columns])
 
+  // 批量加自选 / 送回测只用未失效的行：_expired 是"今日曾命中、当前已失效"的灰色行
+  const activeDisplayRows = useMemo(() => filterActiveScreenerRows(displayRows), [displayRows])
+
+  // 送回测的 as_of：单策略模式取当前结果日期；全部模式取实际数据源日期（缓存或 runAll）
+  const handoffAsOf = showAll
+    ? (cachedQuery.data?.as_of ?? runAll.data?.as_of ?? null)
+    : (result?.as_of ?? null)
+
   // 日k列是否启用 → 决定是否加载批量 kline 数据
   const candleColumn = useMemo(() =>
     columns.find(c => c.source.type === 'builtin' && c.source.key === 'candle' && c.visible),
@@ -327,7 +336,10 @@ export function Screener() {
 
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
   // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
+  // 必须等 cachedQuery.isFetched（非 isLoading）: 否则缓存未读到时 cacheCoversPool 恒为
+  // false, 会与缓存加载竞态触发多余的 runAll
   useEffect(() => {
+    if (!cachedQuery.isFetched) return
     if (!asOf || !strategies.data?.presets?.length || runAll.isPending || visiblePool.length === 0) return
     const runKey = `${asOf}|${visiblePool.join(',')}|${extColumnsParam}`
     if (runAllDateRef.current === runKey) return
@@ -344,7 +356,7 @@ export function Screener() {
         if (activeStrategy) applyRunAllResult(activeStrategy, asOf, data)
       },
     })
-  }, [asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult])
+  }, [cachedQuery.isFetched, asOf, strategies.data, visiblePool, extColumnsParam, cacheCoversPool, screenerAutoRun, activeStrategy, applyRunAllResult])
 
   const qc = useQueryClient()
 
@@ -473,9 +485,10 @@ export function Screener() {
     }
   }
 
+  // 失效行 (_expired) 不进自选、不进回测
   const handleBatchAdd = () => {
-    if (!displayRows.length) return
-    const symbols = displayRows.map((r: any) => r.symbol)
+    if (!activeDisplayRows.length) return
+    const symbols = activeDisplayRows.map(r => r.symbol)
     batchAdd.mutate(symbols, {
       onSuccess: (data) => {
         setBatchMsg(`已添加 ${data.added} 只到自选`)
@@ -488,23 +501,41 @@ export function Screener() {
     })
   }
 
+  const sendToBacktest = useCallback((target: ScreenerBacktestTarget) => {
+    const symbols = activeDisplayRows.map(r => r.symbol)
+    if (symbols.length === 0) {
+      // S3 review: 全部行失效 (或无命中) 时不写交接 — 空池 + strategyId 会
+      // 让回测页静默切到「全市场 + 该策略」, 用户丢掉原股票池。
+      setBatchMsg('当前结果没有可带入回测的标的代码。')
+      setTimeout(() => setBatchMsg(''), 3000)
+      return
+    }
+    if (stageScreenerBacktestHandoff({
+      target,
+      symbols,
+      asOf: handoffAsOf,
+      // 仅单策略视图下携带当前策略，让回测页直接选中它；全部模式是合并池，不指定
+      strategyId: target === 'strategy' && !showAll && activeStrategy ? activeStrategy : null,
+    }) === 0) {
+      setBatchMsg('当前结果没有可带入回测的标的代码。')
+      setTimeout(() => setBatchMsg(''), 3000)
+      return
+    }
+    navigate('/backtest')
+  }, [activeDisplayRows, handoffAsOf, showAll, activeStrategy, navigate])
 
   return (
-    <>
+    <div className="workspace-page">
       <PageHeader
-        title="策略"
-        subtitle="基于本地 enriched 表 · 毫秒级 SQL"
+        title="策略选股"
+        subtitle="基于本地 enriched 表 · 与监控/回测同一套策略过滤"
         right={
-          <div className="flex items-center gap-2">
-            {/* 重新运行策略：重载策略文件并重跑全部策略，更新命中个股 */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => reloadStrategies.mutate()}
               disabled={reloadStrategies.isPending}
               title="重新加载策略并运行全部策略，刷新当前符合条件的个股"
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-btn
-                border border-border bg-surface text-xs font-medium text-muted
-                hover:text-accent hover:border-accent/50 transition-colors cursor-pointer
-                disabled:opacity-50 disabled:cursor-wait"
+              className="btn-secondary disabled:opacity-50 disabled:cursor-wait"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${reloadStrategies.isPending ? 'animate-spin' : ''}`} />
               重载
@@ -517,20 +548,14 @@ export function Screener() {
                 max={maxDate}
               />
             )}
-            {/* 全部切换 */}
             <button
               onClick={() => setShowAll(v => { if (!v) setActiveStrategy(null); return !v })}
               title="显示全部策略个股"
-              className={`inline-flex items-center justify-center h-7 w-7 rounded-btn border transition-colors cursor-pointer
-                ${showAll
-                  ? 'border-accent/50 bg-accent/10 text-accent'
-                  : 'border-border bg-surface text-muted hover:text-secondary hover:border-accent/40'
-                }`}
+              className={`btn-ghost !px-2 ${showAll ? '!border-accent/50 !bg-accent/10 !text-accent' : ''}`}
             >
               <Network className="h-3.5 w-3.5" />
             </button>
-            {/* 卡片尺寸切换 */}
-            <div className="flex items-center h-7 rounded-btn border border-border overflow-hidden">
+            <div className="flex items-center h-8 rounded-btn border border-border overflow-hidden">
               {(['hidden', 'mini', 'normal', 'large'] as const).map(sz => (
                 <button
                   key={sz}
@@ -545,47 +570,47 @@ export function Screener() {
                 </button>
               ))}
             </div>
-            {/* 策略池按钮 */}
             <button
               onClick={() => setShowPoolDialog(true)}
-              className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn
-                border border-border bg-surface text-xs font-medium text-secondary
-                hover:text-accent hover:border-accent/50 transition-colors cursor-pointer"
+              className="btn-secondary"
             >
               <Layers className="h-3.5 w-3.5" />
               策略池
-              <span className="ml-0.5 min-w-[28px] h-4 flex items-center justify-center rounded-full bg-accent/15 text-accent text-[10px] font-bold">
+              <span className="ml-0.5 min-w-[28px] h-4 flex items-center justify-center rounded-full bg-accent/15 text-accent text-[10px] font-bold num">
                 {visiblePool.length}/{strategies.data?.presets?.length ?? 0}
               </span>
             </button>
-            {/* 创建策略 */}
             <button
               onClick={() => { setBuilderMode('create'); setShowBuilder(true) }}
-              className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn
-                text-xs font-medium text-amber-400 border border-amber-400/20 bg-amber-400/5
-                hover:bg-amber-400/15 transition-colors cursor-pointer"
+              className="btn-secondary"
             >
               <Sparkles className="h-3.5 w-3.5" />
               创建策略 · AI
-            </button>
-            {/* 获取策略（占位，敬请期待） */}
-            <button
-              onClick={() => setShowStore(true)}
-              className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn
-                border border-border bg-surface text-xs font-medium text-secondary
-                hover:text-accent hover:border-accent/50 transition-colors cursor-pointer"
-            >
-              <Store className="h-3.5 w-3.5" />
-              获取策略
             </button>
           </div>
         }
       />
 
-      <div className="px-8 py-4 space-y-3">
-        {/* 策略卡片 */}
+      <div className="workspace-content space-y-3">
+        {cachedQuery.data?.discarded_as_of && (
+          <div className="flex items-center gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+            <Clock className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              已隔离未获数据源确认的 {cachedQuery.data.discarded_as_of} 选股缓存；
+              当前 canonical 日期为 {cachedQuery.data.canonical_as_of ?? '未知'}，请按当前日期重新运行。
+            </span>
+          </div>
+        )}
         {cardSize !== 'hidden' && (
-        <section>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <div className="section-kicker">Strategies</div>
+              <h2 className="section-title">策略池卡片</h2>
+            </div>
+            <span className="text-[11px] text-muted num">{visiblePool.length} 策略</span>
+          </div>
+          <div className="panel-body">
           {strategies.isLoading && <div className="text-sm text-muted">加载中…</div>}
           {!strategies.isLoading && visiblePool.length === 0 && (
             <div className="text-sm text-muted py-4 text-center border border-dashed border-border rounded-btn">
@@ -616,14 +641,129 @@ export function Screener() {
               )
             })}
           </div>
+          </div>
         </section>
         )}
 
-        {/* 结果 */}
-        <section>
+        {runAll.isError && (
+          <div className="flex items-center gap-2 rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger" role="alert">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>策略批量运行失败：{runAll.error instanceof Error ? runAll.error.message : String(runAll.error)}</span>
+          </div>
+        )}
+        {runAll.data?.failed?.length ? (
+          <div className="flex items-start gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning" role="status">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              {runAll.data.failed.length} 个策略运行失败：{runAll.data.failed.map(item => item.strategy_id).join('、')}
+              ，其余策略结果正常显示。
+            </span>
+          </div>
+        ) : null}
+
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <div className="section-kicker">Results</div>
+              <h2 className="section-title flex flex-wrap items-center gap-2">
+                {!showAll && activeStrategy && (
+                  <span className="text-secondary font-normal">{strategyIdToName[activeStrategy] ?? ''}</span>
+                )}
+                <TrendingUp className="h-3.5 w-3.5 text-accent" />
+                {showAll ? '全部' : ''}命中{' '}
+                <span className="text-accent num">
+                  {(showAll ? allRows.length > 0 : !!result) ? displayRows.length : '—'}
+                </span>
+                {(showAll ? allRows.length > 0 : !!result) && filterActive(filter) && displayRows.length !== (showAll ? allRows.length : result!.total) && (
+                  <span className="text-muted text-xs font-normal">/ {showAll ? allRows.length : result!.total}</span>
+                )}
+                <span className="text-[11px] text-muted font-normal">
+                  · {visiblePool.length} 策略
+                  {!showAll && visiblePool.length > 0 && (
+                    <> · 共 {visiblePool.reduce((sum, id) => sum + (hitCounts[id] ?? 0), 0)} 只</>
+                  )}
+                </span>
+                {runAll.isPending && (
+                  <span className="text-[11px] text-muted animate-pulse font-normal">扫描中…</span>
+                )}
+              </h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {(showAll ? allRows.length > 0 : !!result) && displayRows.length > 0 && (
+                <>
+                  <button
+                    onClick={() => setShowFilter(v => !v)}
+                    className={`btn-secondary ${filterActive(filter) ? '!border-accent/50 !bg-accent/10 !text-accent' : ''}`}
+                  >
+                    <Filter className="h-3 w-3" />
+                    筛选
+                    {filterActive(filter) && (
+                      <span className="bg-accent text-base rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">
+                        {countActiveFilters(filter)}
+                      </span>
+                    )}
+                  </button>
+                  {filterActive(filter) && (
+                    <button
+                      onClick={() => {
+                        setFilter(defaultFilter)
+                        if (activeStrategy) filterMap.current.delete(activeStrategy)
+                      }}
+                      className="btn-ghost text-muted hover:text-danger"
+                    >
+                      重置
+                    </button>
+                  )}
+                  <button
+                    onClick={handleBatchAdd}
+                    disabled={batchAdd.isPending}
+                    className="btn-secondary !border-accent/40 !bg-accent/10 !text-accent disabled:opacity-50"
+                  >
+                    <Star className="h-3 w-3" />
+                    {batchAdd.isPending ? '添加中…' : '批量加自选'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sendToBacktest('strategy')}
+                    className="btn-secondary h-8 px-2.5 text-xs"
+                    title="以当前选股结果作为股票池进入策略回测"
+                  >
+                    <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
+                    策略回测
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sendToBacktest('factor')}
+                    className="btn-secondary h-8 px-2.5 text-xs"
+                    title="以当前选股结果作为股票池进入因子回测"
+                  >
+                    <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
+                    因子回测
+                  </button>
+                </>
+              )}
+              <button
+                onClick={() => setCustomizerOpen(true)}
+                title="列表配置"
+                className={`btn-ghost !px-2 ${customizerOpen ? '!border-accent/50 !bg-accent/10 !text-accent' : ''}`}
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+              {batchMsg && (
+                <span className="text-xs text-accent animate-pulse">{batchMsg}</span>
+              )}
+              {!showAll && result && result.elapsed_ms > 0 && (
+                <div className="flex items-center gap-2 text-xs text-muted">
+                  <Clock className="h-3 w-3" />
+                  <span className="num">{result.elapsed_ms.toFixed(1)} ms</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="panel-body space-y-3">
           {run.isError && (
             <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
-              {String((run.error as any).message)}
+              {String((run.error as Error).message)}
             </div>
           )}
 
@@ -632,97 +772,9 @@ export function Screener() {
               key={showAll ? `all-${asOf}` : `${result!.as_of}-${result!.strategy}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
               className="space-y-3"
             >
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium text-foreground flex items-center gap-2">
-                  {!showAll && activeStrategy && (
-                    <span className="text-secondary">{strategyIdToName[activeStrategy] ?? ''}</span>
-                  )}
-                  <TrendingUp className="h-4 w-4 text-accent" />
-                  {showAll ? '全部' : ''}命中 <span className="text-accent num">{displayRows.length}</span> 只
-                  {filterActive(filter) && displayRows.length !== (showAll ? allRows.length : result!.total) && (
-                    <span className="text-muted text-xs">/ {showAll ? allRows.length : result!.total}</span>
-                  )}
-                  <span className="text-[11px] text-muted font-normal">
-                    · {visiblePool.length} 策略
-                    {!showAll && visiblePool.length > 0 && (
-                      <> · 共 {visiblePool.reduce((sum, id) => sum + (hitCounts[id] ?? 0), 0)} 只</>
-                    )}
-                  </span>
-                  {runAll.isPending && (
-                    <span className="text-[11px] text-muted animate-pulse">扫描中…</span>
-                  )}
-                </h2>
-                <div className="flex items-center gap-3">
-                  {displayRows.length > 0 && (
-                    <>
-                      <button
-                        onClick={() => setShowFilter(v => !v)}
-                        className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-btn
-                          border text-xs font-medium transition-colors duration-150 cursor-pointer
-                          ${filterActive(filter)
-                            ? 'border-accent/50 bg-accent/10 text-accent'
-                            : 'border-border bg-surface text-secondary hover:border-accent/50'
-                          }`}
-                      >
-                        <Filter className="h-3 w-3" />
-                        筛选
-                        {filterActive(filter) && (
-                          <span className="bg-accent text-base rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">
-                            {countActiveFilters(filter)}
-                          </span>
-                        )}
-                      </button>
-                      {filterActive(filter) && (
-                        <button
-                          onClick={() => {
-                            setFilter(defaultFilter)
-                            if (activeStrategy) filterMap.current.delete(activeStrategy)
-                          }}
-                          className="text-xs text-muted hover:text-danger transition-colors"
-                        >
-                          重置
-                        </button>
-                      )}
-                    </>
-                  )}
-                  {displayRows.length > 0 && (
-                    <button
-                      onClick={handleBatchAdd}
-                      disabled={batchAdd.isPending}
-                      className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-btn
-                        border border-accent/40 bg-accent/10 text-accent text-xs font-medium
-                        hover:bg-accent/20 disabled:opacity-50 transition-colors duration-150 cursor-pointer"
-                    >
-                      <Star className="h-3 w-3" />
-                      {batchAdd.isPending ? '添加中…' : '批量加自选'}
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setCustomizerOpen(true)}
-                    title="列表配置"
-                    className={`inline-flex items-center justify-center h-7 w-7 rounded-btn border text-xs font-medium transition-colors cursor-pointer
-                      ${customizerOpen
-                        ? 'border-accent/50 bg-accent/10 text-accent'
-                        : 'border-border bg-surface text-secondary hover:text-accent hover:border-accent/50'
-                      }`}
-                  >
-                    <Settings2 className="h-3 w-3" />
-                  </button>
-                  {batchMsg && (
-                    <span className="text-xs text-accent animate-pulse">{batchMsg}</span>
-                  )}
-                  {!showAll && result && result.elapsed_ms > 0 && (
-                    <div className="flex items-center gap-2 text-xs text-muted">
-                      <Clock className="h-3 w-3" />
-                      <span className="num">{result.elapsed_ms.toFixed(1)} ms</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
               {displayRows.length === 0 ? (
                 <EmptyState
                   icon={ScanSearch}
@@ -743,31 +795,33 @@ export function Screener() {
                     />
                   )}
 
-                  <ScreenerTable
-                    rows={displayRows}
-                    columns={columns}
-                    strategyIdToName={strategyIdToName}
-                    symbolStrategyMap={symbolStrategyMap}
-                    activeStrategy={activeStrategy}
-                    watchlistSet={watchlistSet}
-                    onPreview={(symbol, name) => { setPreviewSymbol(symbol); setPreviewName(name) }}
-                    onToggleWatchlist={(symbol, inList) => toggleWatchlist.mutate({ symbol, inList })}
-                    watchlistPending={toggleWatchlist.isPending}
-                    klineData={klineData}
-                    dailyKChartVisible={dailyKChartVisible}
-                    onToggleDailyKChart={toggleDailyKChart}
-                    sort={sort}
-                    onSortToggle={toggle}
-                  />
+                  <div className="min-w-0 overflow-x-auto">
+                    <ScreenerTable
+                      rows={displayRows}
+                      columns={columns}
+                      strategyIdToName={strategyIdToName}
+                      symbolStrategyMap={symbolStrategyMap}
+                      activeStrategy={activeStrategy}
+                      watchlistSet={watchlistSet}
+                      onPreview={(symbol, name) => { setPreviewSymbol(symbol); setPreviewName(name) }}
+                      onToggleWatchlist={(symbol, inList) => toggleWatchlist.mutate({ symbol, inList })}
+                      watchlistPending={toggleWatchlist.isPending}
+                      klineData={klineData}
+                      dailyKChartVisible={dailyKChartVisible}
+                      onToggleDailyKChart={toggleDailyKChart}
+                      sort={sort}
+                      onSortToggle={toggle}
+                    />
+                  </div>
                 </>
               )}
             </motion.div>
           )}
 
           {!showAll && !result && !run.isPending && (
-            <div className="flex flex-col items-center justify-center py-16 gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-accent/5 border border-border flex items-center justify-center">
-                <ScanSearch className="h-7 w-7 text-accent/40" />
+            <div className="flex flex-col items-center justify-center py-12 gap-3">
+              <div className="w-12 h-12 rounded-btn bg-elevated border border-border flex items-center justify-center">
+                <ScanSearch className="h-6 w-6 text-muted" />
               </div>
               <div className="flex flex-col items-center gap-1.5">
                 <span className="text-sm text-secondary">可先在右上角切换日期，再点击策略卡片查看选股结果</span>
@@ -775,6 +829,7 @@ export function Screener() {
               </div>
             </div>
           )}
+          </div>
         </section>
       </div>
 
@@ -859,11 +914,6 @@ export function Screener() {
           addToPool(id)
         }}
       />
-
-      <StrategyStoreDialog
-        open={showStore}
-        onClose={() => setShowStore(false)}
-      />
-    </>
+    </div>
   )
 }

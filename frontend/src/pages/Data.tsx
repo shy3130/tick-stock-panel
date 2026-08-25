@@ -31,7 +31,7 @@ import { formatScheduleDatePart, formatScheduleTimePart, isToday } from '@/lib/f
 
 // 拆分出的子组件
 import { StatCard, type FieldTab } from '@/components/data/StatCard'
-import { ActiveJobCard } from '@/components/data/ActiveJobCard'
+import { ActiveJobCard, STAGE_LABELS } from '@/components/data/ActiveJobCard'
 import { SectionTitle, HistoryRow } from '@/components/data/SectionTitle'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { ScheduleEditor } from '@/components/data/ScheduleEditor'
@@ -41,6 +41,8 @@ import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
+import { ExternalFallbackCard } from '@/components/data/ExternalFallbackCard'
+import { CanonicalHistoryCard } from '@/components/data/CanonicalHistoryCard'
 import { EnrichedSchemaModal } from '@/components/data/SchemaModal'
 import { Skeleton } from '@/components/data/Skeleton'
 import { ExtDataStatCard } from '@/components/ext-data/ExtDataStatCard'
@@ -71,7 +73,7 @@ export function Data() {
     enabled: !!activeJobId,
     refetchInterval: (q: any) => {
       const j = q.state.data
-      return j && (j.status === 'succeeded' || j.status === 'failed') ? false : 1_000
+      return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed') ? false : 1_000
     },
   })
 
@@ -196,7 +198,7 @@ export function Data() {
     ...(indexAuto ? ['指数'] : []),
     ...(etfAuto ? ['ETF'] : []),
     ...(hkAuto ? ['港股'] : []),
-    ...((hasMinuteCap && minuteAuto) ? ['分钟K'] : []),
+    ...((hasMinuteCap && minuteAuto) ? ['A股分钟K'] : []),
   ]
 
   // 数据画像卡片显隐(由页面设置弹窗控制,存 localStorage)
@@ -211,7 +213,7 @@ export function Data() {
   void cardVisibleTick
 
   useEffect(() => {
-    if (job.data && (job.data.status === 'succeeded' || job.data.status === 'failed')) {
+    if (job.data && (job.data.status === 'succeeded' || job.data.status === 'degraded' || job.data.status === 'failed')) {
       qc.invalidateQueries({ queryKey: QK.dataStatus })
       qc.invalidateQueries({ queryKey: QK.pipelineJobs })
       const t = setTimeout(() => setActiveJobId(null), 5_000)
@@ -233,6 +235,16 @@ export function Data() {
 
   const s = status.data
   const isLoading = status.isLoading
+  // 最近一次管道执行摘要(新契约): 成功才用完成态, degraded/failed 需在调度卡片可见
+  const lastPipeline = s?.last_pipeline ?? null
+  const lastPipelineAt = lastPipeline?.finished_at ?? s?.last_pipeline_run ?? null
+  const lastPipelineTone = !lastPipeline || lastPipeline.status === 'succeeded'
+    ? { glyph: '✓', cls: lastPipelineAt && isToday(lastPipelineAt) ? 'text-bear' : 'text-secondary/70' }
+    : lastPipeline.status === 'degraded'
+      ? { glyph: '⚠', cls: 'text-warning' }
+      : lastPipeline.status === 'failed'
+        ? { glyph: '✕', cls: 'text-danger' }
+        : { glyph: '…', cls: 'text-secondary' }
   const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
   const isStarting = startSync.isPending
   const hasData = !!(s?.instruments?.rows || s?.daily?.rows)
@@ -252,6 +264,22 @@ export function Data() {
     symbols_covered: s.etf_daily?.symbols_covered ?? s.etf_instruments?.rows ?? 0,
     trading_days: s.etf_daily?.trading_days ?? s.etf_enriched?.trading_days ?? 0,
   } : null
+  const fin = s?.financials
+  const financialOverviewStats = fin ? (() => {
+    const tables = Object.values(fin.tables)
+    // 各表(利润表/资负表/现金流/指标/业绩预告)合并出卡片可见的日期范围
+    const earliests = tables.map(t => t.earliest_date).filter((d): d is string => !!d).sort()
+    const latests = tables.map(t => t.latest_date).filter((d): d is string => !!d).sort()
+    return {
+      rows: fin.rows,
+      symbols_covered: Math.max(
+        0,
+        ...tables.map(table => table.symbols),
+      ),
+      earliest_date: earliests[0] ?? null,
+      latest_date: latests[latests.length - 1] ?? null,
+    }
+  })() : null
   const indexOverviewLabel = s ? '日 · 维表 · 日K · 指标' : undefined
   const indexEarliestDate = s?.index_daily?.earliest_date ?? s?.index_enriched?.earliest_date ?? null
   const indexOffsetDays = indexExtendUnit === 'month' ? indexExtendValue * 30 : indexExtendValue * 365
@@ -273,6 +301,7 @@ export function Data() {
     sync_adj: 'adj_factor',
     compute_enriched: 'enriched',
     rebuild_enriched: 'enriched',
+    repair_enriched_range: 'enriched',
     sync_index: 'index_daily',
     sync_minute: 'minute',
     extend_minute: 'minute',
@@ -425,7 +454,7 @@ export function Data() {
         return (
           <StatCard
             title="ETF"
-            hint="场内基金 · 独立存储"
+            hint="场内基金 · 复权因子仅覆盖极少数标的"
             stats={etfOverviewStats}
             loading={isLoading}
             tierKey="etf"
@@ -444,8 +473,8 @@ export function Data() {
       case 'minute':
         return (
           <StatCard
-            title="分钟 K"
-            hint="全市场同步"
+            title="A股分钟 K"
+            hint="DuckDB 按需查询 · 本地缓存可选"
             stats={s?.minute}
             loading={isLoading}
             active={activeCard === 'minute'}
@@ -456,6 +485,9 @@ export function Data() {
             capLimits={caps.data?.capabilities}
             tierLabel={caps.data?.label}
             auto={minuteAuto}
+            subLabel={s?.minute?.source === 'catalog_tdx_minutes'
+              ? 'DuckDB catalog · 按需查询'
+              : undefined}
             onShowFields={() => setSchemaTable('minute')}
             onSettings={hasData ? () => setOpenSettings(v => v === 'minute' ? null : 'minute') : undefined}
             settingsOpen={openSettings === 'minute'}
@@ -464,9 +496,9 @@ export function Data() {
       case 'financials':
         return (
           <StatCard
-            title="财务数据"
-            hint="利润表 / 资负表 / 现金流 / 指标"
-            stats={s?.financials ? { rows: s.financials.rows } : null}
+            title="A股财务数据"
+            hint="仅 A 股上市公司 · 利润表 / 资负表 / 现金流 / 指标 / 业绩预告"
+            stats={financialOverviewStats}
             loading={isLoading}
             tierKey="financials"
             capLimits={caps.data?.capabilities}
@@ -479,20 +511,20 @@ export function Data() {
   }
 
   return (
-    <>
+    <div className="workspace-page">
       <div ref={topRef} />
       <PageHeader
         title="数据"
         subtitle="本地数据画像 · 同步状态 · 历史记录"
         right={
-          <div className="flex items-center gap-3">
+          <div className="workspace-toolbar">
             {!hasData && !isLoading && (
               <span className="text-xs text-accent animate-pulse">首次使用请点击右侧按钮同步数据</span>
             )}
             <button
               onClick={() => startSync.mutate()}
               disabled={isStarting}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn bg-gradient-to-r from-accent/25 to-accent/10 border border-accent/30 text-accent text-xs font-medium hover:from-accent/35 hover:to-accent/20 disabled:opacity-40 transition-all duration-150"
+              className="btn-primary"
             >
               {(isRunning || isStarting) ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -503,23 +535,23 @@ export function Data() {
             </button>
             <button
               onClick={() => setOpenSettings('pipeline-scope')}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+              className="btn-ghost !h-8 text-xs"
             >
               <CheckSquare className="h-3.5 w-3.5" />
               数据范围
             </button>
-            <div className="w-px h-4 bg-border" />
+            <div className="h-4 w-px bg-border" />
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setShowCreateExt(true)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+                className="btn-ghost !h-8 text-xs"
               >
                 <Plus className="h-3.5 w-3.5" />
                 扩展数据
               </button>
               <button
                 onClick={() => setOpenSettings('page-settings')}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150"
+                className="btn-ghost !h-8 text-xs"
               >
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 页面设置
@@ -527,7 +559,7 @@ export function Data() {
               <button
                 onClick={() => setShowClearConfirm(true)}
                 disabled={isRunning}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-muted hover:text-danger hover:bg-danger/8 text-xs transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none"
+                className="btn-ghost !h-8 text-xs text-muted hover:text-danger"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 清除数据
@@ -537,10 +569,11 @@ export function Data() {
         }
       />
 
-      <div className="px-8 py-6 space-y-6 max-w-6xl">
+      <div className="workspace-content overflow-auto">
+      <div className="mx-auto w-full max-w-6xl min-w-0 space-y-4">
         {/* None 档提示 —— 非阻断: 无需 Key 也可获取历史日K, 仅实时行情等扩展能力受限 */}
         {isNoKey && (
-          <div className="flex items-center gap-2 rounded-card border border-border bg-elevated/40 px-3 py-2 text-xs">
+          <div className="flex items-center gap-2 panel bg-elevated/40 px-3 py-2 text-xs">
             <Info className="h-4 w-4 shrink-0 text-muted" />
             <span className="text-secondary leading-relaxed">
               当前为 None 档,将使用免费数据源获取历史日K(无需注册)。
@@ -587,11 +620,14 @@ export function Data() {
           />
 
           {/* 自动调度 */}
-          <div className="rounded-card border border-border bg-surface p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Calendar className="h-4 w-4 text-secondary" />
-              <h3 className="text-sm font-medium text-foreground">自动调度</h3>
+          <div className="panel">
+            <div className="panel-header">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-secondary" />
+                <h3 className="section-title">自动调度</h3>
+              </div>
             </div>
+            <div className="panel-body">
             {isLoading ? (
               <div className="space-y-2">
                 <div className="flex items-center justify-between"><Skeleton w="w-16" /><Skeleton w="w-28" /></div>
@@ -678,10 +714,13 @@ export function Data() {
                     </button>
                   </div>
                   <div className="flex items-center gap-2 font-mono text-secondary">
-                    {s?.last_pipeline_run && (
-                      <span className={`inline-flex flex-col items-center leading-tight ${isToday(s.last_pipeline_run) ? 'text-bear' : 'text-secondary/70'}`}>
-                        <span>✓ {formatScheduleDatePart(s.last_pipeline_run)}</span>
-                        <span>{formatScheduleTimePart(s.last_pipeline_run)}</span>
+                    {lastPipelineAt && (
+                      <span
+                        className={`inline-flex flex-col items-center leading-tight ${lastPipelineTone.cls}`}
+                        title={lastPipeline?.error ?? lastPipeline?.failed_stages?.[0]?.error ?? undefined}
+                      >
+                        <span>{lastPipelineTone.glyph} {formatScheduleDatePart(lastPipelineAt)}</span>
+                        <span>{formatScheduleTimePart(lastPipelineAt)}</span>
                       </span>
                     )}
                     {s?.next_pipeline_run && (
@@ -710,23 +749,48 @@ export function Data() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+                {/* 上次管道 degraded/failed 摘要 — 失败阶段 + 错误, 成功时不渲染 */}
+                {lastPipeline && (lastPipeline.status === 'degraded' || lastPipeline.status === 'failed') && (
+                  <div className={`rounded-btn border px-2.5 py-1.5 text-[10px] leading-relaxed ${
+                    lastPipeline.status === 'failed'
+                      ? 'border-danger/40 bg-danger/5 text-danger'
+                      : 'border-warning/40 bg-warning/5 text-warning'
+                  }`}>
+                    <div className="flex items-center gap-1 font-medium">
+                      <AlertTriangle className="h-3 w-3 shrink-0" />
+                      {lastPipeline.status === 'failed' ? '上次管道失败' : '上次管道部分完成'}
+                    </div>
+                    {(lastPipeline.failed_stages ?? []).length > 0 && (
+                      <div className="mt-0.5">
+                        失败阶段:{(lastPipeline.failed_stages ?? []).map(f => STAGE_LABELS[f.stage] ?? f.stage).join('、')}
+                      </div>
+                    )}
+                    {(lastPipeline.error ?? lastPipeline.failed_stages?.[0]?.error) && (
+                      <div className="mt-0.5 truncate" title={lastPipeline.error ?? lastPipeline.failed_stages?.[0]?.error}>
+                        {lastPipeline.error ?? lastPipeline.failed_stages?.[0]?.error}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
+            </div>
           </div>
 
           {/* 存储 */}
-          <div className="rounded-card border border-border bg-surface p-4">
-            <div className="flex items-center justify-between mb-3">
+          <div className="panel">
+            <div className="panel-header">
               <div className="flex items-center gap-2">
                 <HardDrive className="h-4 w-4 text-secondary" />
-                <h3 className="text-sm font-medium text-foreground">存储</h3>
+                <h3 className="section-title">存储</h3>
               </div>
               {isLoading ? (
                 <Skeleton w="w-12" />
               ) : (
-                <span className="font-mono text-xs text-muted">{s ? `${s.storage.total_size_mb} MB` : '—'}</span>
+                <span className="font-mono text-xs text-muted num">{s ? `${s.storage.total_size_mb} MB` : '—'}</span>
               )}
             </div>
+            <div className="panel-body">
             <div className="space-y-2">
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
@@ -743,8 +807,8 @@ export function Data() {
                 { label: '日 K',     files: s?.storage.daily_files,       size: s?.storage.daily_size_mb },
                 { label: '除权因子', files: s?.storage.adj_factor_files,  size: s?.storage.adj_factor_size_mb },
                 { label: 'Enriched', files: s?.storage.enriched_files,    size: s?.storage.enriched_size_mb },
-                { label: '分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
-                { label: '财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
+                { label: 'A股分钟 K',   files: s?.storage.minute_files,      size: s?.storage.minute_size_mb },
+                { label: 'A股财务数据', files: s?.storage.financials_files,   size: s?.storage.financials_size_mb },
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between text-[11px]">
                   <span className="text-muted">{item.label}</span>
@@ -767,12 +831,19 @@ export function Data() {
                 </div>
               )}
             </div>
+            </div>
           </div>
+
+          {/* 受控外部行情降级(默认关闭) — 紧邻实时行情配置 */}
+          <ExternalFallbackCard />
         </div>
 
         {/* 数据画像 */}
         <div>
           <SectionTitle icon={Database}>数据画像</SectionTitle>
+          <div className="mt-3">
+            <CanonicalHistoryCard />
+          </div>
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 items-stretch">
             {getCardOrder().filter(k => cardVisible[k]).map((k: CardKey) => (
               <Fragment key={k}>{renderStatCard(k)}</Fragment>
@@ -792,7 +863,7 @@ export function Data() {
         {/* 同步历史 */}
         <div>
           <SectionTitle icon={Clock}>同步历史</SectionTitle>
-          <div className="mt-3 rounded-card border border-border overflow-hidden">
+          <div className="mt-3 panel overflow-hidden">
             {history.isLoading ? (
               <div className="px-5 py-6 space-y-3">
                 {Array.from({ length: 3 }).map((_, i) => (
@@ -860,7 +931,11 @@ export function Data() {
       <AnimatePresence>
         {openSettings === 'enriched' && (
           <SettingsModal title="Enriched · 计算设置" onClose={() => setOpenSettings(null)}>
-            <EnrichedRebuildPanel isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
+            <EnrichedRebuildPanel
+              isRunning={!!activeJobId}
+              earliestDate={s?.enriched?.earliest_date ?? null}
+              onStart={() => setOpenSettings(null)}
+            />
           </SettingsModal>
         )}
       </AnimatePresence>
@@ -885,7 +960,7 @@ export function Data() {
         {openSettings === 'index' && (
           <SettingsModal title="指数 · 手动获取" onClose={() => setOpenSettings(null)}>
             <div className="space-y-4">
-              <div className="rounded-card border border-border bg-base/30 p-4 space-y-3">
+              <div className="panel bg-base/30 p-4 space-y-3">
                 <div>
                   <div className="text-sm font-medium text-foreground">指数日 K</div>
                   <div className="text-[11px] text-muted mt-1">获取数据时会先刷新 CN_Index 维表，再向前扩展指数历史；指数不需要复权。</div>
@@ -986,7 +1061,7 @@ export function Data() {
 
       <AnimatePresence>
         {openSettings === 'minute' && (
-          <SettingsModal title="分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
+          <SettingsModal title="A股分钟 K · 同步设置" onClose={() => setOpenSettings(null)}>
             <MinuteSyncConfig caps={caps.data} isRunning={!!activeJobId} onStart={() => setOpenSettings(null)} />
           </SettingsModal>
         )}
@@ -1001,7 +1076,7 @@ export function Data() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/60"
               onClick={() => !clearData.isPending && setShowClearConfirm(false)}
             />
             <motion.div
@@ -1009,7 +1084,7 @@ export function Data() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: 8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              className="relative w-[90vw] max-w-[420px] rounded-card border border-border bg-base shadow-2xl p-6"
+              className="panel relative w-[90vw] max-w-[420px] bg-base p-6"
             >
               <div className="flex items-start gap-3">
                 <div className="shrink-0 h-10 w-10 rounded-full bg-danger/12 flex items-center justify-center">
@@ -1022,8 +1097,8 @@ export function Data() {
                   </p>
                   <ul className="mt-2 text-[11px] text-muted leading-relaxed space-y-0.5">
                     <li>· 个股维表、日 K、除权因子</li>
-                    <li>· Enriched 指标数据、分钟 K</li>
-                    <li>· 财务数据、指数、ETF</li>
+                    <li>· Enriched 指标数据、A股分钟 K</li>
+                    <li>· A股财务数据、指数、ETF</li>
                   </ul>
                   <p className="mt-2 text-[11px] text-danger/90">
                     操作不可恢复，需重新执行同步才能恢复数据。
@@ -1038,14 +1113,14 @@ export function Data() {
                 <button
                   onClick={() => setShowClearConfirm(false)}
                   disabled={clearData.isPending}
-                  className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors disabled:opacity-50"
+                  className="btn-secondary"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => clearData.mutate()}
                   disabled={clearData.isPending}
-                  className="px-3 py-1.5 rounded-btn bg-danger/90 text-base text-sm font-medium hover:bg-danger disabled:opacity-50 transition-colors"
+                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-btn bg-danger px-3 text-sm font-medium text-white hover:bg-danger/90 disabled:opacity-50"
                 >
                   {clearData.isPending ? '清除中…' : '清除数据'}
                 </button>
@@ -1054,6 +1129,7 @@ export function Data() {
           </div>
         )}
       </AnimatePresence>
-    </>
+      </div>
+    </div>
   )
 }

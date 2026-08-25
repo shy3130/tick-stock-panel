@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Repeat, Sparkles, ArrowDownUp, Search } from 'lucide-react'
+import { X, Repeat, ArrowDownUp, Search } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -196,19 +196,6 @@ export function RpsRotationDialog({ onClose }: Props) {
             </button>
           </div>
 
-          {/* 上半区: AI 分析占位 */}
-          <div className="shrink-0 border-b border-border">
-            <div className="flex items-center gap-1.5 px-4 py-1.5 bg-elevated/30">
-              <Sparkles className="h-3.5 w-3.5 text-accent/60" />
-              <span className="text-[11px] text-muted">AI 轮动分析</span>
-            </div>
-            <div className="px-4 py-3 text-center">
-              <div className="inline-flex items-center gap-1.5 text-[11px] text-muted/60">
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>AI 轮动分析功能开发中,敬请期待</span>
-              </div>
-            </div>
-          </div>
 
           {/* 工具栏 */}
           <div className="flex items-center gap-3 px-4 py-2 border-b border-border shrink-0">

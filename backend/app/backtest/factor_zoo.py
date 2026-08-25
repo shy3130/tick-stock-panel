@@ -127,6 +127,138 @@ def alpha101_012(panel: pl.DataFrame) -> pl.DataFrame:
 
     return _with_raw_alpha(panel, "alpha101_012", calc)
 
+# ---------------------------------------------------------------------------
+# Alpha101 #005–#020 — ported from Vibe-Trading agent/src/factors/zoo/alpha101.
+# Source: Kakushadze (2015), "101 Formulaic Alphas", arXiv:1601.00991.
+#
+# Per-symbol adaptation (consistent with alpha101_001–012 above):
+#   * Cross-sectional ``rank(x)`` from the paper is a no-op within a single
+#     symbol; only an outermost ``rank(...)`` is realised as a panel-level
+#     cross-sectional rank via ``_with_ranked_alpha`` (cf. #001/#008/#010).
+#   * ``vwap`` is absent from the tickflow OHLCV panel, so it is approximated
+#     by the typical price ``(open+high+low+close)/4`` (Vibe-Trading equity_us
+#     fallback in factors/base.py::vwap).
+#   * ``adv20`` = rolling mean of volume over 20 bars.
+# ---------------------------------------------------------------------------
+
+
+def _typical_price(g: pl.DataFrame) -> np.ndarray:
+    return (_col(g, "open") + _col(g, "high") + _col(g, "low") + _col(g, "close")) / 4.0
+
+
+def alpha101_005(panel: pl.DataFrame) -> pl.DataFrame:
+    # rank(open - sum(vwap,10)/10) * (-1 * abs(rank(close - vwap)))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        open_ = _col(g, "open")
+        close = _col(g, "close")
+        vwap = _typical_price(g)
+        term1 = open_ - _rolling_sum(vwap, 10) / 10.0
+        term2 = -np.abs(close - vwap)
+        return term1 * term2
+
+    return _with_raw_alpha(panel, "alpha101_005", calc)
+
+
+def alpha101_011(panel: pl.DataFrame) -> pl.DataFrame:
+    # (rank(ts_max(vwap-close,3))+rank(ts_min(vwap-close,3)))*rank(delta(volume,3))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        close = _col(g, "close")
+        volume = _col(g, "volume")
+        diff = _typical_price(g) - close
+        return (_rolling_max(diff, 3) + _rolling_min(diff, 3)) * _delta(volume, 3)
+
+    return _with_raw_alpha(panel, "alpha101_011", calc)
+
+
+def alpha101_013(panel: pl.DataFrame) -> pl.DataFrame:
+    # -1 * rank(covariance(rank(close), rank(volume), 5))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        close = _col(g, "close")
+        volume = _col(g, "volume")
+        return -_rolling_cov(close, volume, 5)
+
+    return _with_ranked_alpha(panel, "alpha101_013", calc)
+
+
+def alpha101_014(panel: pl.DataFrame) -> pl.DataFrame:
+    # (-1*rank(delta(returns,3))) * correlation(open, volume, 10)
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        open_ = _col(g, "open")
+        close = _col(g, "close")
+        volume = _col(g, "volume")
+        returns = _returns(close)
+        return (-_delta(returns, 3)) * _rolling_corr(open_, volume, 10)
+
+    return _with_raw_alpha(panel, "alpha101_014", calc)
+
+
+def alpha101_015(panel: pl.DataFrame) -> pl.DataFrame:
+    # -1 * sum(rank(correlation(rank(high), rank(volume), 3)), 3)
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        high = _col(g, "high")
+        volume = _col(g, "volume")
+        corr = _rolling_corr(high, volume, 3)
+        return -_rolling_sum(corr, 3)
+
+    return _with_raw_alpha(panel, "alpha101_015", calc)
+
+
+def alpha101_016(panel: pl.DataFrame) -> pl.DataFrame:
+    # -1 * rank(covariance(rank(high), rank(volume), 5))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        high = _col(g, "high")
+        volume = _col(g, "volume")
+        return -_rolling_cov(high, volume, 5)
+
+    return _with_ranked_alpha(panel, "alpha101_016", calc)
+
+
+def alpha101_017(panel: pl.DataFrame) -> pl.DataFrame:
+    # ((-1*rank(ts_rank(close,10)))*rank(delta(delta(close,1),1)))*rank(ts_rank(volume/adv20,5))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        close = _col(g, "close")
+        volume = _col(g, "volume")
+        adv20 = _rolling_mean(volume, 20)
+        vol_ratio = np.where(adv20 > 0, volume / adv20, np.nan)
+        return (-_ts_rank(close, 10)) * _delta(_delta(close, 1), 1) * _ts_rank(vol_ratio, 5)
+
+    return _with_raw_alpha(panel, "alpha101_017", calc)
+
+
+def alpha101_018(panel: pl.DataFrame) -> pl.DataFrame:
+    # -1 * rank(stddev(abs(close-open),5) + (close-open) + correlation(close,open,10))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        open_ = _col(g, "open")
+        close = _col(g, "close")
+        diff = close - open_
+        return -(_rolling_std(np.abs(diff), 5) + diff + _rolling_corr(close, open_, 10))
+
+    return _with_ranked_alpha(panel, "alpha101_018", calc)
+
+
+def alpha101_019(panel: pl.DataFrame) -> pl.DataFrame:
+    # (-1*sign((close-delay(close,7))+delta(close,7))) * (1+rank(1+sum(returns,250)))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        close = _col(g, "close")
+        returns = _returns(close)
+        inner_sign = (close - _delay(close, 7)) + _delta(close, 7)
+        return (-np.sign(inner_sign)) * (1.0 + (1.0 + _rolling_sum(returns, 250)))
+
+    return _with_raw_alpha(panel, "alpha101_019", calc)
+
+
+def alpha101_020(panel: pl.DataFrame) -> pl.DataFrame:
+    # (((-1*rank(open-delay(high,1)))*rank(open-delay(close,1)))*rank(open-delay(low,1)))
+    def calc(g: pl.DataFrame) -> np.ndarray:
+        open_ = _col(g, "open")
+        high = _col(g, "high")
+        low = _col(g, "low")
+        close = _col(g, "close")
+        return ((-1.0 * (open_ - _delay(high, 1))) * (open_ - _delay(close, 1))) * (open_ - _delay(low, 1))
+
+    return _with_raw_alpha(panel, "alpha101_020", calc)
+
+
 
 def _with_ranked_alpha(panel: pl.DataFrame, name: str, calc: Callable[[pl.DataFrame], np.ndarray]) -> pl.DataFrame:
     raw = _alpha_frame(panel, "_alpha_raw", calc)
@@ -154,7 +286,8 @@ def _alpha_frame(panel: pl.DataFrame, name: str, calc: Callable[[pl.DataFrame], 
             {"symbol": group["symbol"][0], "date": d, name: None if not np.isfinite(v) else float(v)}
             for d, v in zip(group["date"].to_list(), values, strict=False)
         )
-    return pl.DataFrame(rows) if rows else pl.DataFrame(schema={"symbol": pl.Utf8, "date": pl.Date, name: pl.Float64})
+    schema = {"symbol": pl.Utf8, "date": pl.Date, name: pl.Float64}
+    return pl.DataFrame(rows, schema=schema) if rows else pl.DataFrame(schema=schema)
 
 
 def _col(df: pl.DataFrame, name: str) -> np.ndarray:
@@ -212,6 +345,15 @@ def _rolling_corr(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
             out[i] = float(np.corrcoef(x, y)[0, 1])
     return out
 
+def _rolling_cov(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
+    out = np.full(len(a), np.nan)
+    for i in range(window - 1, len(a)):
+        x = a[i - window + 1:i + 1]
+        y = b[i - window + 1:i + 1]
+        if np.isfinite(x).all() and np.isfinite(y).all():
+            out[i] = float(np.cov(x, y)[0, 1])
+    return out
+
 
 def _ts_rank(values: np.ndarray, window: int) -> np.ndarray:
     def rank_last(x: np.ndarray) -> float:
@@ -247,4 +389,14 @@ ALPHAS: dict[str, tuple[AlphaMeta, AlphaFunc]] = {
     "alpha101_009": (AlphaMeta("alpha101_009", "Alpha101 #009", "Alpha101", "signed close delta trend", ("close",), 6), alpha101_009),
     "alpha101_010": (AlphaMeta("alpha101_010", "Alpha101 #010", "Alpha101", "rank(signed close delta trend)", ("close",), 6), alpha101_010),
     "alpha101_012": (AlphaMeta("alpha101_012", "Alpha101 #012", "Alpha101", "sign(delta(volume))*-delta(close)", ("close", "volume"), 2), alpha101_012),
+    "alpha101_005": (AlphaMeta("alpha101_005", "Alpha101 #005", "Alpha101", "rank(open - sum(vwap,10)/10) * (-1 * abs(rank(close - vwap)))", ("open", "high", "low", "close"), 10, "Ported from Vibe-Trading alpha101/alpha_005.py; vwap~(O+H+L+C)/4"), alpha101_005),
+    "alpha101_011": (AlphaMeta("alpha101_011", "Alpha101 #011", "Alpha101", "(rank(ts_max(vwap-close,3))+rank(ts_min(vwap-close,3)))*rank(delta(volume,3))", ("open", "high", "low", "close", "volume"), 5, "Ported from Vibe-Trading alpha101/alpha_011.py; vwap~(O+H+L+C)/4"), alpha101_011),
+    "alpha101_013": (AlphaMeta("alpha101_013", "Alpha101 #013", "Alpha101", "-1 * rank(covariance(rank(close), rank(volume), 5))", ("close", "volume"), 5, "Ported from Vibe-Trading alpha101/alpha_013.py"), alpha101_013),
+    "alpha101_014": (AlphaMeta("alpha101_014", "Alpha101 #014", "Alpha101", "(-1*rank(delta(returns,3))) * correlation(open, volume, 10)", ("open", "close", "volume"), 10, "Ported from Vibe-Trading alpha101/alpha_014.py"), alpha101_014),
+    "alpha101_015": (AlphaMeta("alpha101_015", "Alpha101 #015", "Alpha101", "-1 * sum(rank(correlation(rank(high), rank(volume), 3)), 3)", ("high", "volume"), 6, "Ported from Vibe-Trading alpha101/alpha_015.py"), alpha101_015),
+    "alpha101_016": (AlphaMeta("alpha101_016", "Alpha101 #016", "Alpha101", "-1 * rank(covariance(rank(high), rank(volume), 5))", ("high", "volume"), 5, "Ported from Vibe-Trading alpha101/alpha_016.py"), alpha101_016),
+    "alpha101_017": (AlphaMeta("alpha101_017", "Alpha101 #017", "Alpha101", "((-1*rank(ts_rank(close,10)))*rank(delta(delta(close,1),1)))*rank(ts_rank(volume/adv20,5))", ("close", "volume"), 25, "Ported from Vibe-Trading alpha101/alpha_017.py"), alpha101_017),
+    "alpha101_018": (AlphaMeta("alpha101_018", "Alpha101 #018", "Alpha101", "-1 * rank(stddev(abs(close-open),5) + (close-open) + correlation(close,open,10))", ("open", "close"), 10, "Ported from Vibe-Trading alpha101/alpha_018.py"), alpha101_018),
+    "alpha101_019": (AlphaMeta("alpha101_019", "Alpha101 #019", "Alpha101", "(-1*sign((close-delay(close,7))+delta(close,7))) * (1+rank(1+sum(returns,250)))", ("close",), 250, "Ported from Vibe-Trading alpha101/alpha_019.py; long 250-bar lookback"), alpha101_019),
+    "alpha101_020": (AlphaMeta("alpha101_020", "Alpha101 #020", "Alpha101", "(((-1*rank(open-delay(high,1)))*rank(open-delay(close,1)))*rank(open-delay(low,1)))", ("open", "high", "low", "close"), 2, "Ported from Vibe-Trading alpha101/alpha_020.py"), alpha101_020),
 }

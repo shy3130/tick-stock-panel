@@ -4,22 +4,32 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import type { ExperimentRuntime } from './runStatus'
 
 const BASE = ''
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, opts?: { silent404?: boolean; acceptUnavailable?: boolean }): Promise<T> {
   const isFormData = init?.body instanceof FormData
   const headers: Record<string, string> = {}
   if (!isFormData) headers['Content-Type'] = 'application/json'
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
+    // 404 对调用方是"无数据"语义(如尚未生成 AI 归因)时静默返回 null,不弹 toast
+    if (opts?.silent404 && res.status === 404) return null as T
+    if (opts?.acceptUnavailable && res.status === 503) return res.json() as Promise<T>
     let detail = ''
-    try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
+    try {
+      const j = JSON.parse(await res.text())
+      const rawDetail = j.detail ?? j.message ?? ''
+      detail = typeof rawDetail === 'string' ? rawDetail : JSON.stringify(rawDetail)
+    } catch { /* ignore */ }
     const msg = detail || `${res.status} ${res.statusText}`
     // 401 (未登录/会话过期) 不弹 toast — 由全局认证拦截器统一跳登录页, 避免刷屏
     if (res.status !== 401) toast(msg, 'error')
     throw new Error(msg)
   }
+  // 204 无响应体（如 screener screens DELETE），直接返回 undefined
+  if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
 
@@ -35,11 +45,13 @@ export interface CapabilitiesResponse {
   capabilities: Record<string, CapabilityLimits>
 }
 
+export type InstrumentAssetType = 'stock' | 'index' | 'etf' | 'hk'
+
 export interface InstrumentSearchResult {
   symbol: string
   name: string
   code: string
-  asset_type?: 'stock' | 'index' | 'etf' | 'hk' | 'unknown' | string
+  asset_type?: InstrumentAssetType | 'unknown'
   source?: 'local' | 'eastmoney_suggest' | string
   matched_by?: 'code' | 'symbol' | 'name' | 'pinyin' | 'initials' | 'suggest' | string
 }
@@ -48,6 +60,13 @@ export interface AgentMsg {
   role: 'user' | 'assistant'
   content: string
   display_content?: string
+}
+
+export interface AgentToolTrace {
+  name: string
+  args?: Record<string, unknown>
+  result?: unknown
+  elapsed_ms?: number
 }
 
 export interface AgentTool {
@@ -59,11 +78,11 @@ export interface AgentTool {
 export type AgentEvent =
   | { type: 'attempt_start'; attempt_id: string; session_id?: string }
   | { type: 'tool_call'; name: string; args: Record<string, unknown> }
-  | { type: 'tool_result'; name: string; result: unknown }
+  | { type: 'tool_result'; name: string; result: unknown; elapsed_ms?: number }
   | { type: 'delta'; content: string }
   | { type: 'cancelled'; attempt_id: string }
-  | { type: 'done' }
-  | { type: 'error'; message: string }
+  | { type: 'done'; elapsed_ms?: number }
+  | { type: 'error'; message: string; elapsed_ms?: number }
 
 export interface AgentSession {
   session_id: string
@@ -78,6 +97,8 @@ export interface AgentSession {
 export interface AgentStoredMessage extends AgentMsg {
   message_id: string
   created_at: string
+  tool_traces?: AgentToolTrace[]
+  elapsed_ms?: number
 }
 
 export interface DocumentEnvelope {
@@ -101,8 +122,16 @@ export interface FinancialStatus {
 
 export interface FinancialMetricRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   eps_basic?: number | null
   eps_diluted?: number | null
   bps?: number | null
@@ -117,13 +146,21 @@ export interface FinancialMetricRecord {
   net_income_yoy?: number | null
   operating_cash_to_revenue?: number | null
   inventory_turnover?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface FinancialIncomeRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   revenue?: number | null
   operating_cost?: number | null
   operating_profit?: number | null
@@ -132,32 +169,48 @@ export interface FinancialIncomeRecord {
   net_income_attributable?: number | null
   basic_eps?: number | null
   diluted_eps?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface FinancialBalanceSheetRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   total_assets?: number | null
   total_current_assets?: number | null
   cash_and_equivalents?: number | null
   total_liabilities?: number | null
   total_equity?: number | null
   equity_attributable?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface FinancialCashFlowRecord {
   symbol?: string
+  /** 报告期 (canonical; raw 列 t_date 回填) */
   period_end: string
+  /** 公告日期 (canonical; raw 列 notice_date 回填, 0001-01-01 哨兵置空) */
   announce_date?: string | null
+  /** raw 报告期 (fstore t_date, 透传保留) */
+  t_date?: string | null
+  /** raw 公告日 (fstore notice_date, 透传保留) */
+  notice_date?: string | null
+  /** 数据来源 provenance (provider:channel:table) */
+  source?: string | null
   net_operating_cash_flow?: number | null
   net_investing_cash_flow?: number | null
   net_financing_cash_flow?: number | null
   capex?: number | null
   net_cash_change?: number | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
 /** AI 财务分析历史报告 */
@@ -244,10 +297,6 @@ export interface KlineRow {
   macd_hist?: number | null
   rsi_14?: number | null
   vol_ratio_5d?: number | null
-  [key: string]: any
-}
-
-// ===== Watchlist =====
   expma_12?: number | null
   expma_50?: number | null
   trix?: number | null
@@ -289,11 +338,26 @@ export interface KlineRow {
   cr_26?: number | null
   mass_9_25?: number | null
   asi?: number | null
+  [key: string]: any
+}
+
+// ===== Watchlist =====
 export interface WatchlistEntry {
   symbol: string
   added_at: string
   note?: string
   name?: string | null
+}
+
+export interface WatchlistImportCandidate {
+  symbol: string
+  source_text: string | null
+}
+
+export interface WatchlistImportResult {
+  available: boolean
+  candidates: WatchlistImportCandidate[]
+  error?: string
 }
 
 export interface Quote {
@@ -316,6 +380,7 @@ export interface IndexInstrument {
 export interface IndexQuote {
   symbol: string
   name?: string | null
+  date?: string | null
   last_price?: number | null
   close?: number | null
   prev_close?: number | null
@@ -327,8 +392,98 @@ export interface IndexQuote {
   volume?: number | null
   amount?: number | null
   timestamp?: number | null
+  // 受控外部 fallback provenance — 仅外部降级数据出现; 本地/日线兜底不带
+  source?: string
+  degraded?: boolean
   [key: string]: any
 }
+
+// ===== 受控外部行情降级 (external fallback, 默认关闭) =====
+// 契约: backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md §4.3
+// 外部数据仅供展示, 绝不写入本地行情库, 不参与选股/监控/回测。
+
+/** 外部降级行情来源标记 — 行级 source 命中即视为降级 */
+export const EXTERNAL_QUOTE_SOURCE = 'tencent_quote'
+
+/** 响应级 source 中表示外部 fallback 的 legacy 值(其余 realtime/provider_realtime/index_daily 均为本地数据, 不可误标) */
+export const EXTERNAL_FALLBACK_RESPONSE_SOURCE = 'fallback_external'
+
+export type IndexFallbackReason = 'local_snapshot_missing' | 'local_snapshot_stale'
+
+/**
+ * GET /api/intraday/indices 响应。
+ * degraded / sources / fallback_reason 仅在实际外部 fallback 时出现;
+ * 旧后端可整体缺失, 前端按未降级处理(完全向后兼容)。
+ */
+export interface IndexQuotesResponse {
+  rows: IndexQuote[]
+  count: number
+  source?: string
+  degraded?: boolean
+  sources?: { realtime?: string }
+  fallback_reason?: IndexFallbackReason
+}
+
+/** 是否处于外部源降级 — 响应级 degraded/source 或任一行 source=tencent_quote; 本地与日线兜底均不命中 */
+export function indexQuotesDegraded(resp: IndexQuotesResponse | null | undefined): boolean {
+  if (!resp) return false
+  if (resp.degraded === true) return true
+  if (resp.source === EXTERNAL_FALLBACK_RESPONSE_SOURCE) return true
+  return (resp.rows ?? []).some(r => r?.source === EXTERNAL_QUOTE_SOURCE || r?.degraded === true)
+}
+
+export function indexFallbackReasonText(reason: IndexFallbackReason | string | null | undefined): string | null {
+  if (reason === 'local_snapshot_missing') return '本地快照缺失'
+  if (reason === 'local_snapshot_stale') return '本地快照已过期'
+  return null
+}
+
+// ===== 自选/通用实时快照 (GET /api/intraday/snapshot) =====
+// 与 indices 同形响应；只读展示，绝不写回 canonical/enriched/monitor/backtest。
+// 行 change_pct 为【百分点】(5.0 = 5%)；Watchlist 的 rt_pct/change_pct 为小数比率，合并时必须 /100。
+
+export interface IntradaySnapshotRow {
+  symbol: string
+  name?: string | null
+  last_price?: number | null
+  prev_close?: number | null
+  /** 百分点 (5.0 = 5%)，非小数比率 */
+  change_pct?: number | null
+  amount?: number | null
+  timestamp?: string | number | null
+  // 受控外部 fallback provenance — 仅外部降级出现; 本地 realtime 不带
+  source?: string
+  degraded?: boolean
+}
+
+/**
+ * GET /api/intraday/snapshot 响应。
+ * symbols 最多 60 个；degraded / sources / fallback_reason 仅实际外部 fallback 时出现。
+ * 本地当日快照不带降级标记。
+ */
+export interface IntradaySnapshotResponse {
+  rows: IntradaySnapshotRow[]
+  count: number
+  source?: string
+  degraded?: boolean
+  sources?: { realtime?: string }
+  fallback_reason?: IndexFallbackReason
+}
+
+/** 是否处于外部源降级 — 与 indexQuotesDegraded 同口径；本地 realtime/provider 不命中 */
+export function intradaySnapshotDegraded(resp: IntradaySnapshotResponse | null | undefined): boolean {
+  if (!resp) return false
+  if (resp.degraded === true) return true
+  if (resp.source === EXTERNAL_FALLBACK_RESPONSE_SOURCE) return true
+  return (resp.rows ?? []).some(r => r?.source === EXTERNAL_QUOTE_SOURCE || r?.degraded === true)
+}
+
+/** 百分点 → 小数比率；非有限数返回 null（调用方不覆盖原值） */
+export function snapshotPctToRatio(pctPoints: number | null | undefined): number | null {
+  if (pctPoints == null || !Number.isFinite(Number(pctPoints))) return null
+  return Number(pctPoints) / 100
+}
+
 
 // ===== Screener =====
 export interface ScreenerStrategy {
@@ -344,6 +499,121 @@ export interface ScreenerResult {
   rows: any[]
   total: number
   elapsed_ms: number
+}
+
+export type ScreenerGroupLogic = 'and' | 'or'
+export type ScreenerFacetKey = 'industry'
+
+/** F14: 条件分组标签 A-E（与后端 group 1-16 字符规则兼容） */
+export const SCREENER_CONDITION_GROUPS = ['A', 'B', 'C', 'D', 'E'] as const
+export type ScreenerConditionGroup = (typeof SCREENER_CONDITION_GROUPS)[number]
+
+export interface ScreenerCondition {
+  field: string
+  op: string
+  value?: number | string | boolean | Array<number | string> | null
+  /** F14: 可选分组；缺省/空视为默认组 A（旧 payload 兼容） */
+  group?: string | null
+}
+
+export interface ScreenerOrderBy {
+  field: string
+  direction: 'asc' | 'desc'
+}
+
+export interface ScreenerFieldSpec {
+  field: string
+  label: string
+  group: string
+  source: string
+  unit?: string | null
+  value_type: 'numeric' | 'enum' | 'boolean'
+  null_policy: string
+  availability: 'available' | 'unavailable' | 'latest_only'
+  ops: string[]
+  sortable: boolean
+  options?: { value: string; label: string }[] | null
+}
+
+export interface ScreenerIndustryFacetItem {
+  value: string
+  count: number
+}
+
+export interface ScreenerQueryFacets {
+  industry?: ScreenerIndustryFacetItem[]
+}
+
+export interface ScreenerQueryRequest {
+  conditions: ScreenerCondition[]
+  as_of?: string
+  order_by?: ScreenerOrderBy
+  limit: number
+  /** F14: 组间逻辑；默认 and（组内始终 AND） */
+  group_logic?: ScreenerGroupLogic
+  /** F15: 请求 facet 聚合；条件页固定传 ['industry'] */
+  facets?: ScreenerFacetKey[]
+}
+
+export interface ScreenerQueryResponse {
+  rows: Record<string, unknown>[]
+  total: number
+  applied: ScreenerCondition[]
+  as_of: string | null
+  elapsed_ms: number
+  /** F15: limit 前全量命中行的 facet；未请求或空时可能缺失 */
+  facets?: ScreenerQueryFacets | null
+  /** F15: 如 industry_unavailable；不阻断主查询 */
+  facet_warnings?: string[] | null
+}
+
+export interface ScreenerNlUnrecognized {
+  raw: string
+  reason: string
+}
+
+export interface ScreenerNlParseResponse {
+  recognized: ScreenerCondition[]
+  unrecognized: ScreenerNlUnrecognized[]
+  /** P3: 执行元信息(实际 profile/模型/fallback/usage),旧响应可缺失 */
+  ai_meta?: AiExecutionMeta | null
+}
+
+export interface ScreenerPreset {
+  id: string
+  name: string
+  description: string
+  predicate: {
+    conditions: ScreenerCondition[]
+    order_by: ScreenerOrderBy | null
+  }
+  executable_level: 'full' | 'needs_fundamental' | 'unsupported'
+}
+
+/** F6: 服务端保存的条件选股方案（/api/screener/screens） */
+export interface ScreenerScreenRecord {
+  id: string
+  name: string
+  conditions: ScreenerCondition[]
+  order_by?: ScreenerOrderBy | null
+  limit?: number | null
+  /** F14: 组间逻辑；旧方案缺省按 and */
+  group_logic?: ScreenerGroupLogic | null
+  created_at?: string
+  updated_at?: string
+  /** S3 方案桥: 方案字段是否全部可在回测/监控面板上计算（后端按字段来源白名单判定） */
+  strategy_supported?: boolean
+  /** strategy_supported=false 时不支持的字段中文名列表 */
+  unsupported_fields?: string[]
+}
+
+export interface ScreenerScreenSaveRequest {
+  name: string
+  conditions: ScreenerCondition[]
+  order_by?: ScreenerOrderBy | null
+  limit?: number | null
+  /** F14: 与查询同形，保存/载入保真 */
+  group_logic?: ScreenerGroupLogic | null
 }
 
 export interface MarketSnapshotRow {
@@ -608,7 +878,7 @@ export interface StrategyDetail {
   name: string
   description: string
   tags: string[]
-  source: 'builtin' | 'custom' | 'ai'
+  source: 'builtin' | 'custom' | 'ai' | 'composite'
   version: string
   basic_filter: Record<string, any>
   params: StrategyParamDef[]
@@ -627,6 +897,15 @@ export interface StrategyDetail {
   order_by: string
   descending: boolean
   limit: number
+  execution_backend?: 'polars_expr' | 'composite'
+  composite_children?: Array<{
+    id: string
+    name?: string
+    description?: string
+    weight: number
+  }> | null
+  /** F13 定义指纹 (sha256 前 12 位): 文件型=文件内容, composite=规范化 JSON; 旧后端可能缺失 */
+  def_hash?: string | null
 }
 
 // ===== Custom Signals (自定义信号) =====
@@ -665,6 +944,7 @@ export interface MonitorRule {
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
   sector?: string | null
+  asset_type?: 'stock' | 'etf' | 'index'
   strategy_id?: string | null
   direction: 'entry' | 'exit' | 'both'
   conditions: MonitorCondition[]
@@ -714,6 +994,7 @@ export function genRuleId(): string {
   return `mr_${ts}_${rand}`
 }
 
+
 // ===== Limit Ladder =====
 export interface LimitLadderStock {
   symbol: string
@@ -752,6 +1033,13 @@ export interface LimitLadderResult {
   sealed_counts_up?: { real: number; fake: number; pending: number }
   /** 跌停侧 sealed 明细 */
   sealed_counts_down?: { real: number; fake: number; pending: number }
+  /**
+   * 外部 depth 展示降级: 权威 sealed map 缺失且命中 get_display_depth_map 时为 true。
+   * 仅连板页当前展示; 不修正 counts/status, 不写入 sealed/历史, 不参与选股回测监控。
+   */
+  sealed_degraded?: boolean
+  /** 外部展示来源, 如 tencent_quote; 无外部 map 时为 null/缺省 */
+  sealed_source?: string | null
 }
 
 // ===== Backtest =====
@@ -796,14 +1084,73 @@ export interface FactorColumn {
   desc: string
 }
 
+export interface BacktestMetricContext {
+  version: string
+  return_frequency: 'daily' | 'weekly' | 'monthly' | 'custom'
+  periods_per_year: number
+  risk_free_rate?: number
+  risk_free_rate_per_period?: number
+  std_ddof: number
+}
+
+export interface BacktestDataSnapshot {
+  canonical_generation?: string | null
+  canonical_start_date?: string | null
+  canonical_end_date?: string | null
+  local_overlay_latest_date?: string | null
+  data_start: string
+  data_cutoff: string
+  adjustment_mode: string
+  adjustment_generation?: string | null
+  source_generations?: Record<string, string>
+  universe_definition?: Record<string, unknown>
+  universe_as_of?: string | null
+  snapshot_hash: string
+}
+
 export interface GroupStat {
   group: number
   label: string
   total_return: number
-  annual_return: number
+  annual_return: number | null
   max_drawdown: number
-  sharpe: number
+  sharpe: number | null
   win_rate: number
+  /** 平均单期换手（标准单边口径）。追加字段：旧持久化结果可能缺失 */
+  avg_turnover?: number
+  /** 总换手（标准单边口径）。追加字段：旧持久化结果可能缺失 */
+  total_turnover?: number
+  /** 全期间交易成本合计（占期初净值比例）。追加字段：旧持久化结果可能缺失 */
+  total_cost?: number
+}
+
+/** 多空组合统计。追加字段：旧持久化结果可能缺失 */
+export interface LongShortStats {
+  total_return?: number
+  max_drawdown?: number
+  top_group?: string
+  bottom_group?: string
+  avg_turnover?: number
+  total_turnover?: number
+  total_cost?: number
+  annual_return?: number | null
+  sharpe?: number | null
+  annual_volatility?: number | null
+  calmar?: number | null
+  metric_context?: BacktestMetricContext
+  sortino?: number | null
+  omega?: number | null
+  tail_ratio?: number | null
+  ulcer_index?: number | null
+  value_at_risk?: number | null
+  conditional_value_at_risk?: number | null
+  downside_deviation?: number | null
+}
+
+/** 分层单期换手序列数据点：date + 各分组单期换手（标准单边口径） */
+export interface GroupTurnoverPoint {
+  date: string
+  [group: string]: number | string
 }
 
 export interface FactorBacktestResult {
@@ -816,7 +1163,9 @@ export interface FactorBacktestResult {
   ic_series: { date: string; ic: number }[]
   group_stats: GroupStat[]
   group_nav: Record<string, any>[]
-  long_short_stats: Record<string, any>
+  /** 分组单期换手序列。追加字段：旧持久化结果可能缺失 */
+  group_turnover?: GroupTurnoverPoint[]
+  long_short_stats: LongShortStats
   long_short_nav: { date: string; value: number }[]
   elapsed_ms: number
   n_symbols: number
@@ -824,6 +1173,12 @@ export interface FactorBacktestResult {
   error: string | null
   methodology_context?: string
   warnings?: string[]
+  data_snapshot?: BacktestDataSnapshot
+  metric_context?: BacktestMetricContext
+  engine_version?: string
+  random_seed?: number | null
+  /** 后端是否已将完整结果保存为 BacktestRun；false 时不能下载 Run 报告。 */
+  persisted?: boolean
 }
 
 // ===== Strategy Backtest =====
@@ -847,12 +1202,236 @@ export interface StrategyBacktestTrade {
   entry_signal_date?: string | null
   exit_signal_date?: string | null
   blocked_exit_days?: number
+  /** 可观测持仓窗口内日 K 最低价相对入场价的最大不利偏移；<=0；open_t+1 含入场日、close_t 自下一交易日起，退出日不计入；日内区间口径的诊断量，不代表可成交实现收益；旧结果/不可得为 null */
+  mae_pct?: number | null
+  /** 可观测持仓窗口内日 K 最高价相对入场价的最大有利偏移；>=0；观测窗口口径同 mae_pct */
+  mfe_pct?: number | null
+}
+
+export interface StrategyBacktestRequest {
+  strategy_id: string
+  symbols?: string[] | null
+  start?: string | null
+  end?: string | null
+  params?: Record<string, any> | null
+  overrides?: Record<string, any> | null
+  matching?: 'close_t' | 'open_t+1'
+  entry_fill?: 'close_t' | 'open_t+1' | null
+  exit_fill?: 'close_t' | 'open_t+1' | null
+  fees_pct?: number
+  /** A 股印花税 (仅卖出单边, 0-0.01 小数, 默认 0.0005 = 万分之五); 缺省由后端默认 */
+  stamp_tax_pct?: number
+  slippage_bps?: number
+  max_positions?: number
+  max_exposure_pct?: number
+  initial_capital?: number
+  position_sizing?: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
+  mode?: 'position' | 'full'
+  holding_days?: number
+  regime_filter?: { states?: string[]; min_score?: number } | null
+  /** F9 对比基准: 4 指数白名单或任意标的代码 (6 位裸码/带后缀; 裸码按 000/399/880 前缀推断指数) */
+  benchmark_symbol?: string
+  /** F9 历史 Run 净值基准 (run_id); 与 benchmark_symbol 互斥, 同给 → 422 */
+  benchmark_run_id?: string | null
+  risk_free_rate?: number
+
+  /** A1 量能约束: 单笔最大参与率 (0-1 小数, 如 0.10 = 10%); null/缺省 = 关闭。约束 = min(当日量, 均量窗口日均量) × 参与率 */
+  max_participation_pct?: number | null
+  /** 参与率均量窗口 (交易日数, 默认 5) */
+  participation_volume_window?: number
+  /** B6 上市天数门控 (天, 0 = 关闭): 上市不足 N 天的标的整段不入面板 */
+  min_listed_days?: number
+  /** F14 成交精度: daily = 日 K 收盘/开盘口径 (默认); minute = 分钟 VWAP 撮合 + 盘中风控 (仅 position 模式, ≤100 标的 / ≤120 交易日) */
+  bar_precision?: 'daily' | 'minute'
+  /** F7 实验溯源: 从寻优/参数网格场景固化为 Run 时携带, 随 config 持久化 */
+  source_experiment_id?: string | null
+}
+
+/** F9 基准来源标注 — 策略回测 stats.benchmark_source; kind=none 表示基准缺失降级 */
+export interface BenchmarkSource {
+  kind: 'index' | 'symbol' | 'run' | 'none'
+  label: string
+}
+
+/** 策略容量诊断块 — strategy run stats.capacity。未启用时仅 enabled/capped_entry_count 有效; 样本不足时分位输出 null, 不伪造 0 */
+export interface StrategyCapacityStats {
+  enabled: boolean
+  capped_entry_count: number
+  /** 单笔量能上限名义金额 (上限股数 × 成交价) 的分位, 元 */
+  cap_value_p50: number | null
+  cap_value_p10: number | null
+  /** 实际成交名义金额 / cap_value 的分位 (cap_value<=0 的笔不进样本) */
+  utilization_p50: number | null
+  utilization_p90: number | null
+  /** 无一笔被量能截断 且 utilization_p90 < 0.8 → 量能远未构成约束; 样本不足为 null */
+  unconstrained: boolean | null
+  /** 线性外推估计: 当前资金规模再乘该倍数前, p90 笔不触碰量能上限; 近似口径, 非精确容量解 */
+  est_capacity_multiple: number | null
+}
+
+/** 上市天数门控统计 — strategy run stats.listing_age_gate。requested=true 表示请求了门控但数据缺失未生效 */
+export interface ListingAgeGateStats {
+  enabled: boolean
+  requested?: boolean
+  reason?: string
+  min_listed_days?: number
+  rows_before?: number
+  rows_after?: number
+  rows_dropped?: number
+  symbols_dropped?: number
+  /** 上市日期缺失但被保留 (fail-open) 的行数 */
+  unknown_listing_date?: number
+}
+
+export interface WalkForwardFold {
+  train_start: string
+  train_end: string
+  oos_start: string
+  oos_end: string
+  n_candidates: number
+  selected_label: string
+  selected_params: Record<string, any>
+  train_stats: Record<string, any>
+  oos_stats: Record<string, any>
+  degradation: number | null
+  oos_curve: Array<{ date: string; value: number }>
+  error?: string | null
+}
+
+export interface WalkForwardResult {
+  /** 未启用标记: false = 未运行 (结构化空块); 旧持久化响应缺省该字段 — undefined 视为已启用 */
+  enabled?: boolean
+  scheme: string
+  selection_metric: string
+  candidate_space: string
+  n_candidates: number
+  /** 执行预算元数据 (enabled 响应才有): 请求候选数 / 截断后实际候选数 / 额外回测执行上限 */
+  requested_candidates?: number
+  effective_candidates?: number
+  max_executions?: number
+  warning?: string | null
+  folds: WalkForwardFold[]
+  stitched_curve: Array<{ date: string; value: number }>
+  summary: {
+    metric: string
+    n_folds: number
+    positive_return_folds: number
+    positive_fold_ratio: number | null
+    worst_fold_return: number | null
+    mean_oos_return: number | null
+    mean_degradation: number | null
+    oos_total_return: number | null
+    oos_sharpe: number | null
+    oos_max_drawdown: number | null
+    metric_context?: Record<string, any>
+  }
+  param_drift: {
+    n_distinct_param_sets: number
+    distinct_labels: string[]
+    params: Record<string, Array<number | null>>
+  }
+}
+
+export interface StrategyRobustnessResult {
+  run_id: string
+  full_stats: Record<string, any>
+  random_seed: number
+  segment_stability: {
+    folds: Array<{ start: string; end: string; stats: Record<string, any>; error?: string | null }>
+    summary: { metric: string; n_folds: number; mean: number; std: number; worst: number; positive_folds: number }
+  }
+  walk_forward?: WalkForwardResult
+  bootstrap?: {
+    sharpe: number
+    ci_low: number
+    ci_high: number
+    ci: number
+    n_boot: number
+  }
+  mc_permutation?: {
+    p_value: number
+    n_perm: number
+    observed_sharpe: number
+  }
+  parameter_perturbation?: {
+    fraction: number
+    baseline: Record<string, number | null>
+    cases: Array<{
+      param: string
+      label: string
+      direction: 'down' | 'up'
+      base_value: number
+      value: number
+      stats: Record<string, number | null>
+      error?: string | null
+    }>
+    reason?: string | null
+  }
+  exit_breakdown: Array<{
+    exit_reason: string
+    n: number
+    win_rate: number
+    avg_pnl_pct: number
+    total_pnl_pct: number
+  }>
+  /** 逐笔收益 bootstrap 净值带 (交易分布诊断, 非账户净值); 有效交易 < 10 或 n_boot < 100 时为 null */
+  trade_equity_band?: TradeEquityBand | null
+  /** 蒙特卡洛交易顺序重排 (交易级顺序诊断, 非账户级 MC); 有效交易 < 30 时为 null */
+  monte_carlo?: MonteCarloTradeShuffle | null
+  warnings?: string[]
+  data_snapshot?: BacktestDataSnapshot
+  methodology_context?: string
+}
+
+export interface BrinsonAttributionGroup {
+  group: string
+  portfolio_weight: number | null
+  benchmark_weight: number | null
+  portfolio_return: number | null
+  benchmark_return: number | null
+  allocation: number | null
+  selection: number | null
+  interaction: number | null
+  total_effect: number | null
+}
+
+export interface TradeIndustryAttribution {
+  status: string
+  reason?: string
+  scope: string
+  classification_note: string
+  input_trades: number
+  classified_trades: number
+  capital_coverage: number | null
+  warnings: string[]
+  brinson: {
+    status: string
+    normalized: boolean
+    portfolio_return: number | null
+    benchmark_return: number | null
+    excess_return: number | null
+    allocation: number | null
+    selection: number | null
+    interaction: number | null
+    total_effect: number | null
+    groups: BrinsonAttributionGroup[]
+  } | null
+  fama_french: {
+    status: string
+    reason: string
+    detail: string
+    alpha: number | null
+    betas: Record<string, number>
+    contributions: Record<string, number>
+    r_squared: number | null
+    residual_volatility: number | null
+    observations: number
+  }
 }
 
 export interface StrategyBacktestResult {
-  run_id: string
+  stats: Record<string, any> & { cost_breakdown?: CostBreakdown }
   config: Record<string, any>
-  stats: Record<string, any>
   equity_curve: { date: string; value: number; cash?: number; positions?: number; exposure?: number }[]
   drawdown_curve: { date: string; value: number }[]
   benchmark_curve?: { date: string; value: number; close?: number; name?: string; symbol?: string }[]
@@ -881,10 +1460,706 @@ export interface StrategyBacktestResult {
     max_hold_days: number | null
     source: string
   }
+  attribution?: TradeIndustryAttribution | null
   elapsed_ms: number
+  run_id: string
   error: string | null
   methodology_context?: string
   warnings?: string[]
+  data_snapshot?: BacktestDataSnapshot
+  metric_context?: BacktestMetricContext
+  engine_version?: string
+  random_seed?: number | null
+  /** 后端是否已将完整结果保存为 BacktestRun；false 时不能下载 Run 报告。 */
+  persisted?: boolean
+}
+
+/** stats.cost_breakdown — 交易成本拆分 (stamp_tax 为追加字段, 旧持久化结果可能缺失) */
+export interface CostBreakdown {
+  gross_notional?: number
+  commission?: number
+  slippage?: number
+  /** 印花税 (仅卖出侧名义额 × 税率); 旧结果无此键 */
+  stamp_tax?: number
+  total?: number
+  turnover?: number | null
+}
+
+/** 逐笔收益 bootstrap 净值带 — percentiles 各数组长度 = n_trades, 每 trade index 处的跨路径分位 */
+export interface TradeEquityBand {
+  n_trades: number
+  n_boot: number
+  seed: number
+  percentiles: { p05: number[]; p25: number[]; p50: number[]; p75: number[]; p95: number[] }
+  /** 各路径最终净值的分位 */
+  final_value_percentiles: { p05: number; p25: number; p50: number; p75: number; p95: number }
+}
+
+/** 蒙特卡洛交易顺序重排 — 同一批逐笔收益随机换成交顺序后的终值/回撤分布 */
+export interface MonteCarloTradeShuffle {
+  n_sims: number
+  seed: number
+  n_trades: number
+  final_return: { p05: number; p50: number; p95: number; mean: number }
+  max_drawdown: { p05: number; p50: number; p95: number; mean: number }
+  /** 重排后终值为负的模拟占比 */
+  prob_final_negative: number
+  /** 重排回撤比原始顺序更深的模拟占比; 原始顺序回撤不可计算时为 null */
+  prob_max_dd_worse_than_actual: number | null
+  /** 重排最大回撤分布直方图 (20 桶, 前端画图用) */
+  dd_histogram: { bin_edges: number[]; counts: number[] }
+}
+
+// ===== 回测可信度增强 (/api/backtest/strategy/*) =====
+
+export type RegimeBucketKey = 'bull_turbulent' | 'bull_calm' | 'bear_turbulent' | 'bear_calm'
+
+/** 市场状态单桶统计; 天数不足时仅 days/days_pct 有效, 指标为 null 不伪造 */
+export interface RegimeBucketStats {
+  days: number
+  days_pct: number
+  strategy_total_return: number | null
+  strategy_annualized_return: number | null
+  strategy_sharpe: number | null
+  strategy_max_drawdown: number | null
+  benchmark_total_return: number | null
+  excess_total_return: number | null
+}
+
+/** POST /api/backtest/strategy/regime-breakdown 响应; 对齐交易日 < 120 时 regime 为 null */
+export interface RegimeBreakdownResponse {
+  regime: {
+    n_days: number
+    warmup_days: number
+    buckets: Record<RegimeBucketKey, RegimeBucketStats>
+    definitions: Record<string, string>
+  } | null
+  run_id: string
+  note?: string
+}
+
+/** 成本敏感性单行 — 成本倍数重跑后的完整口径指标 */
+export interface CostSensitivityRow {
+  multiplier: number
+  fees_pct: number
+  slippage_bps: number
+  is_baseline: boolean
+  total_return: number | null
+  annualized_return: number | null
+  sharpe: number | null
+  max_drawdown: number | null
+  final_equity: number | null
+  total_cost: number | null
+  n_trades: number | null
+}
+
+/** POST /api/backtest/strategy/cost-sensitivity 响应 */
+export interface CostSensitivityResponse {
+  cost_sensitivity: {
+    multipliers: number[]
+    rows: CostSensitivityRow[]
+    note: string
+  }
+  run_id_baseline: string
+  elapsed_ms: number
+}
+
+/** POST /api/backtest/strategy/style-attribution 响应; 有效日不足时 style_attribution 为 null, meta 仍返回 */
+export interface StyleAttributionResponse {
+  style_attribution: {
+    n_obs: number
+    alpha_per_period: number | null
+    alpha_annualized: number | null
+    betas: { smb: number | null; umd: number | null; lmv: number | null }
+    t_stats: { alpha: number | null; smb: number | null; umd: number | null; lmv: number | null }
+    r_squared: number | null
+    factor_version: string
+  } | null
+  style_factor_meta: {
+    valid_days: number
+    skipped_days: number
+    median_cross_section: number | null
+    min_cross_section: number
+    factor_version: string
+  }
+  run_id: string
+}
+
+/** 成交可达性 worst 行 — headroom = 价格带内分钟成交额 / 交易名义金额, 越小越难成交 */
+export interface FillReachabilityWorstRow {
+  symbol: string
+  date: string
+  side: string
+  headroom: number | null
+  band_notional: number | null
+  trade_notional: number | null
+}
+
+/** GET /api/backtest/runs/{run_id}/fill-reachability 响应 */
+export interface FillReachabilityResponse {
+  fill_reachability: {
+    n_trades: number
+    n_sampled: number
+    sample_seed: number
+    price_band_pct: number
+    sides_checked: number
+    n_no_data: number
+    no_data_pct: number
+    n_reachable: number
+    reachable_pct: number
+    headroom_p10: number | null
+    headroom_p50: number | null
+    worst: FillReachabilityWorstRow[]
+    note: string
+  }
+  run_id: string
+}
+
+// ===== Backtest Run 持久化历史 (/api/backtest/runs) =====
+// 后端契约: backend/app/backtest/run_store.py (schema_version=1)。
+// Run 为不可变事实记录，仅 favorite/label 可经 PATCH 修改。
+
+export type BacktestRunKind = 'strategy' | 'factor' | 'composite'
+
+export interface BacktestRunSubject {
+  id: string
+  name: string
+  hash: string
+}
+
+/** 列表/比较用的轻量摘要 — 不携带曲线与交易明细 */
+export interface BacktestRunSummary {
+  run_id: string
+  kind: BacktestRunKind
+  status: string
+  created_at: string
+  subject: BacktestRunSubject
+  start: string | null
+  end: string | null
+  symbols_count: number | null
+  favorite: boolean
+  label: string
+  source_run_id: string | null
+  /** 头部指标子集(策略: total_return/sharpe 等; 因子: ic_mean/ir) */
+  stats: Record<string, number>
+  n_trades: number
+  n_points: number
+  has_factor_result: boolean
+  has_csv_export: boolean
+  warnings_count: number
+}
+
+export interface BacktestRunListResponse {
+  items: BacktestRunSummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/**
+ * 完整 Run — GET /api/backtest/runs/{run_id}。
+ * 曲线/交易明细可能很大; 旧引擎记录 equity 键, 新引擎为 value 键, 两者均需兼容读取。
+ */
+export interface BacktestRun {
+  schema_version: number
+  run_id: string
+  kind: BacktestRunKind
+  created_at: string
+  status: string
+  subject: BacktestRunSubject
+  config: Record<string, any>
+  data_snapshot: Record<string, any>
+  benchmark: { symbol?: string | null; name?: string | null } | null
+  cost_model: Record<string, any>
+  metric_context: Record<string, any>
+  random_seed: number | null
+  engine_version: string
+  stats: Record<string, any>
+  equity_curve: { date: string; value?: number; equity?: number; cash?: number; positions?: number; exposure?: number }[]
+  drawdown_curve: { date: string; value?: number }[]
+  benchmark_curve: { date: string; value?: number; close?: number; name?: string; symbol?: string }[]
+  trades: Record<string, any>[]
+  per_symbol_stats: Record<string, any>[]
+  factor_result: Record<string, any> | null
+  attribution?: TradeIndustryAttribution | null
+  warnings: string[]
+  favorite: boolean
+  label: string
+  source_run_id: string | null
+}
+
+/** 配置差异条目 — 相对 baseline 的单条差异；op: added(新增)/removed(移除)/changed(修改) */
+export interface BacktestRunConfigDiffEntry {
+  path: string
+  op: 'added' | 'removed' | 'changed'
+  before: unknown
+  after: unknown
+}
+
+/** 单个 candidate 相对 baseline 的配置差异（条目受限，total 完整） */
+export interface BacktestRunConfigDiffCandidate {
+  run_id: string
+  total: number
+  truncated: boolean
+  entries: BacktestRunConfigDiffEntry[]
+}
+
+export interface BacktestRunConfigDiff {
+  baseline_run_id: string
+  candidates: BacktestRunConfigDiffCandidate[]
+}
+
+/** 交易样本行（新增/消失） */
+export interface BacktestRunTradeSample {
+  symbol: string | null
+  entry_date: string | null
+  exit_date: string | null
+  shares: number | null
+  entry_value: number | null
+  exit_value: number | null
+  pnl_pct: number | null
+}
+
+/** 共同交易样本：份额/金额任一不同则 value_differs=true（仍属共同） */
+export interface BacktestRunTradeCommonSample {
+  symbol: string | null
+  entry_date: string | null
+  exit_date: string | null
+  value_differs: boolean
+  baseline: { shares: number | null; entry_value: number | null; exit_value: number | null; pnl_pct: number | null }
+  candidate: { shares: number | null; entry_value: number | null; exit_value: number | null; pnl_pct: number | null }
+}
+
+
+export interface BacktestRunTradeSummaryCandidate {
+  run_id: string
+  n_trades: number
+  common: number
+  common_value_diff: number
+  added: number
+  removed: number
+  samples: {
+    common: BacktestRunTradeCommonSample[]
+    added: BacktestRunTradeSample[]
+    removed: BacktestRunTradeSample[]
+  }
+}
+
+export interface BacktestRunTradeSummary {
+  baseline_run_id: string
+  baseline_n_trades: number
+  candidates: BacktestRunTradeSummaryCandidate[]
+}
+
+/** POST /api/backtest/runs/compare 响应 — 指标矩阵 + 原值曲线 + 可比性警告 + 配置/交易差异 */
+export interface BacktestRunComparison {
+  runs: BacktestRunSummary[]
+  metric_matrix: Record<string, Record<string, number | null>>
+  curves: {
+    run_id: string
+    kind: BacktestRunKind
+    equity_curve: BacktestRun['equity_curve']
+    benchmark_curve: BacktestRun['benchmark_curve']
+  }[]
+  warnings: string[]
+  /** 相对第一个 run (baseline) 的递归配置差异 — additive 字段，旧后端响应可能缺省 */
+  config_diff?: BacktestRunConfigDiff
+  /** 相对 baseline 的交易集合差异（共同/新增/消失）— additive 字段，旧后端响应可能缺省 */
+  trade_summary?: BacktestRunTradeSummary
+}
+
+/** POST /api/backtest/runs/{run_id}/to-monitor-rule 响应 — 回测转监控规则 (幂等) */
+export interface ToMonitorRuleResponse {
+  rule: MonitorRule
+  /** false = 该 run 之前已转过, 返回的是已有规则 */
+  created: boolean
+}
+
+// ===== F15 组合级回测 — 已固化 Run 日频净值的事后加权合成 (/api/backtest/portfolio-combine) =====
+// 口径: 独立回测净值事后加权合成, 非共享资金池撮合; 纯诊断, 不落盘不生成新 Run。
+
+export type PortfolioRebalanceMode = 'daily' | 'monthly' | 'none'
+
+export interface PortfolioCombineItemInput {
+  run_id: string
+  /** 原始权重 (正数); 后端统一归一化为和 1 */
+  weight: number
+}
+
+export interface PortfolioCombineResultItem {
+  run_id: string
+  label: string
+  /** 归一化后的权重 (和为 1) */
+  weight: number
+  /** 请求原始权重 */
+  weight_raw?: number
+  /** 共同窗口内该成分的首末净值比收益 */
+  total_return: number | null
+  sharpe: number | null
+  /** 对组合总增量的贡献占比 (组合总收益为 0 时为 null) */
+  contribution: number | null
+}
+
+/** POST /api/backtest/portfolio-combine 响应 — 合成净值 + MetricContext 全套指标 + 成分/相关性 */
+export interface PortfolioCombineResponse {
+  equity_curve: { date: string; value: number }[]
+  stats: Record<string, any>
+  items: PortfolioCombineResultItem[]
+  correlation_matrix: { run_ids: string[]; values: (number | null)[][] }
+  overlap_days: number
+  rebalance: PortfolioRebalanceMode
+  /** 含口径提示与权重归一化说明 */
+  warnings: string[]
+  date_range?: { start: string; end: string }
+}
+
+// ===== Strategy experiments / cross-section / signal scorecard =====
+export interface CompositeStrategyInput {
+  strategy_id: string
+  name: string
+  description?: string
+  children: Array<{ strategy_id: string; weight: number }>
+  merge_mode: 'union' | 'intersect'
+  min_confirm: number
+  mode: 'create' | 'update'
+}
+
+export interface ParameterGridRequest {
+  strategy_id: string
+  symbols?: string[] | null
+  start?: string | null
+  end?: string | null
+  params?: Record<string, number> | null
+  grid: Record<string, number[]>
+  objective: 'sharpe' | 'calmar' | 'total_return' | 'risk_adjusted'
+  max_scenarios?: number
+  matching?: 'close_t' | 'open_t+1'
+  holding_days?: number
+  regime_filter?: { states?: string[]; min_score?: number } | null
+  risk_free_rate?: number
+}
+
+export interface ParameterGridLaunchResponse {
+  experiment_id: string
+  config_hash: string
+  scenario_count: number
+  requested_count?: number
+  truncated: boolean
+  objective?: string
+  status: 'started' | 'already_running' | 'resumed'
+}
+
+export interface ParameterGridScenario {
+  scenario_id: string
+  params: Record<string, number>
+  stats: Record<string, number>
+  score: number | null
+  rank: number
+  error: string | null
+  elapsed_ms: number
+  /** 严格三目标 Pareto 层：1 为非支配层；旧实验或不合格场景可能缺失。 */
+  pareto_front?: number | null
+}
+
+export interface ParameterGridExperiment {
+  experiment_id: string
+  config_hash: string
+  strategy_id: string
+  objective: string
+  base_config: Record<string, unknown>
+  grid: Record<string, number[]>
+  requested_count: number
+  scenario_count: number
+  max_scenarios: number
+  truncated: boolean
+  status: 'pending' | 'running' | 'interrupted' | 'completed' | 'cancelled' | 'failed'
+  scenarios: ParameterGridScenario[]
+  best_scenario_id: string | null
+  robustness: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+  completed: number
+  total: number
+  runtime?: ExperimentRuntime
+}
+
+export interface OptimizerUniverseOption {
+  id: string
+  label: string
+  count: number
+}
+
+export interface OptimizerUniverses {
+  start: string
+  end: string
+  earliest: string | null
+  latest: string | null
+  years: number
+  boards: OptimizerUniverseOption[]
+  industries: OptimizerUniverseOption[]
+  warnings: string[]
+  limits: { max_scenarios: number; default_max_scenarios: number; per_symbol_max: number }
+}
+
+export interface OptimizerRequest {
+  strategy_ids: string[]
+  symbols?: string[] | null
+  include_all_a?: boolean
+  boards?: string[]
+  industries?: string[]
+  industry_top_n?: number
+  per_symbol?: boolean
+  holding_days?: number[]
+  matchings?: Array<'close_t' | 'open_t+1'>
+  years?: number
+  end?: string | null
+  train_ratio?: number
+  objective?: 'sharpe' | 'calmar' | 'total_return' | 'risk_adjusted'
+  min_trades?: number
+  max_drawdown?: number | null
+  top_k?: number
+  max_scenarios?: number
+  fees_pct?: number
+  slippage_bps?: number
+  max_positions?: number
+  initial_capital?: number
+  risk_free_rate?: number
+  include_combos?: boolean
+  param_grid?: Record<string, Record<string, any[]>> | null
+}
+
+export interface OptimizerLaunchResponse {
+  experiment_id: string
+  config_hash: string
+  scenario_count: number
+  requested_count: number
+  truncated: boolean
+  objective: string
+  start: string
+  end: string
+  train_end: string
+  holdout_start: string
+  status: 'started' | 'already_running' | 'resumed'
+}
+
+export interface OptimizerScenario {
+  scenario_id: string
+  strategy_id: string
+  strategy_label?: string
+  universe_id: string
+  universe_label: string
+  universe_kind: string
+  holding_days: number
+  matching: string
+  train_stats: Record<string, number>
+  holdout_stats: Record<string, number> | null
+  score: number | null
+  rank: number
+  admitted: boolean
+  error: string | null
+  elapsed_ms: number
+  phases: Array<{ id: string; label: string; total_return: number | null }>
+  params?: Record<string, any> | null
+}
+
+export interface OptimizerExperiment {
+  experiment_id: string
+  config_hash: string
+  objective: string
+  start: string
+  end: string
+  train_end: string
+  holdout_start: string
+  requested_count: number
+  scenario_count: number
+  max_scenarios: number
+  truncated: boolean
+  status: 'pending' | 'running' | 'interrupted' | 'completed' | 'cancelled' | 'failed'
+  scenarios: OptimizerScenario[]
+  recommended_ids: string[]
+  diagnostics: {
+    dsr?: number | null
+    best_daily_sharpe?: number | null
+    n_trials?: number
+    expected_max_sharpe?: number
+    pbo?: { pbo: number | null; n_combinations: number; n_trials: number; n_blocks: number; reason?: string | null }
+  }
+  ensemble: {
+    kind: string
+    members: string[]
+    n_obs: number
+    daily_sharpe: number | null
+    total_return: number | null
+    note: string
+  } | null
+  warnings: string[]
+  created_at: string
+  updated_at: string
+  completed: number
+  total: number
+  runtime?: ExperimentRuntime
+  param_grid?: Record<string, Record<string, any[]>> | null
+}
+
+// ===== F7 实验资产统一 (/api/backtest/experiments) =====
+
+
+/** 实验最佳场景摘要 — score 为实验目标得分; 寻优 total_return/sharpe 优先留出期口径 */
+export interface BacktestExperimentBest {
+  label: string
+  score: number | null
+  total_return: number | null
+  sharpe: number | null
+}
+
+/** 寻优/参数网格实验统一摘要行 */
+export interface BacktestExperimentSummary {
+  id: string
+  kind: 'optimizer' | 'grid'
+  title: string
+  created_at: string
+  status: 'pending' | 'running' | 'completed' | 'cancelled' | 'failed'
+  scenario_count: number
+  best: BacktestExperimentBest | null
+  /** 详情已落盘 (research/{optimizer,parameter_grid}_experiments), 重启后仍可打开 */
+  persisted: boolean
+  /** 以 source_experiment_id 显式溯源固化为 Run 的数量; 未标记的 Run 不计入 */
+  run_count: number
+}
+
+export interface BacktestExperimentListResponse {
+  items: BacktestExperimentSummary[]
+  total: number
+  warnings: string[]
+}
+
+export interface SignalScorecardTrackedItem {
+  signal_key: string
+  signal_name: string
+  signal_kind: string
+  direction: 'up' | 'not_up'
+  enabled: boolean
+}
+
+export interface SignalScorecardEvent {
+  id: string
+  signal_key: string
+  signal_name: string
+  signal_kind: string
+  source: string
+  symbol: string
+  name?: string
+  date: string
+  anchor_price: number | null
+  direction_expected: 'up' | 'not_up'
+  created_ts: number
+  context: Record<string, unknown>
+}
+
+export interface SignalScorecardStat {
+  signal_key: string
+  horizon: number
+  total: number
+  completed: number
+  pending: number
+  hit_count: number
+  miss_count: number
+  neutral_count: number
+  hit_rate_pct: number | null
+  avg_return_pct: number | null
+  sample_size: number
+}
+
+export interface SignalScorecardOutcome {
+  horizon: number
+  eval_status: 'pending' | 'completed' | 'unable'
+  outcome: 'hit' | 'miss' | 'neutral' | null
+  direction_correct: boolean | null
+  stock_return_pct: number | null
+  end_close: number | null
+  unable_reason: string | null
+  evaluated_ts: number | null
+}
+
+export interface CrossCorrelationResponse {
+  selected: string
+  peers: string[]
+  industry: string | null
+  window: number
+  minSamples: number
+  alignedDays: number
+  pairRows: Array<{
+    peer: string
+    correlation: number | null
+    covariance: number | null
+    beta: number | null
+    samples: number | null
+    previousCorrelation: number | null
+    correlationDelta: number | null
+  }>
+  matrix: {
+    instruments: string[]
+    correlation: Array<Array<number | null>>
+    covariance: Array<Array<number | null>>
+    samples: Array<Array<number | null>>
+  }
+  averageCorrelation: number | null
+  boundaryNotes: string[]
+}
+
+export interface CrossRelativeStrengthResponse {
+  selected: string
+  summary: {
+    label: string
+    detail: string
+    tone: 'bull' | 'risk' | 'neutral'
+    latestDate: string | null
+    dataLimitations: string[]
+  }
+  benchmarks: Array<{
+    key: string
+    label: string
+    latestRelativePct: number | null
+    points: Array<{ date: string; stockNav: number; benchmarkNav: number; relativePct: number }>
+  }>
+  windows: Array<{
+    days: number
+    label: string
+    stockReturnPct: number | null
+    benchmarks: Array<{
+      key: string
+      label: string
+      returnPct: number | null
+      relativeReturnPct: number | null
+    }>
+  }>
+  boundaryNotes: string[]
+}
+
+export interface CrossPeerResponse {
+  selected: string
+  mode: string
+  sortKey: string
+  universe: string | null
+  rows: Array<Record<string, unknown> & { symbol?: string; name?: string; isCurrent?: boolean }>
+  allRows: Array<Record<string, unknown>>
+  summary: {
+    total: number
+    displayed: number
+    averages: Record<string, number | null>
+    currentRank: number | null
+    currentTotal: number
+  }
+  boundaryNotes: string[]
+}
+
+export interface CrossReverseScreenResponse {
+  selected: string
+  request: { conditions: Array<Record<string, unknown>>; order_by: Record<string, string>; limit: number } | null
+  result: { rows?: Array<Record<string, unknown>>; total?: number } | null
+  reasons: string[]
+  features: Record<string, unknown>
+  boundaryNotes: string[]
 }
 
 // ===== Settings =====
@@ -933,6 +2208,46 @@ export interface AiProfileInput {
   user_agent?: string
 }
 
+/** AI 路由策略 — 备用 profile 受控 fallback(默认关闭,仅 provider 故障时按序切换) */
+export interface AiRoutePolicy {
+  allow_profile_fallback: boolean
+  fallback_profile_ids: string[]
+}
+
+/**
+ * P3: token 用量 — 原生 prompt-cache 可观测。
+ * 全部 optional;provider 不上报时字段缺失,前端不得展示伪数据(尤其 cached_prompt_tokens)。
+ */
+export interface AiUsageMeta {
+  prompt_tokens?: number
+  cached_prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+}
+
+/**
+ * P3: AI 执行元信息 — 结构化入口(nl_screener / strategy_profile_deep_review / trading_autopsy)
+ * 与个股流 meta 统一携带的 `ai_meta` 对象。全部 optional,旧响应可缺失整个字段。
+ * fallback 默认关闭;开启时仅在 provider/quota/auth/timeout 类故障按序切换。
+ */
+export interface AiExecutionMeta {
+  /** 用户/入口最初选中的 profile */
+  primary_profile_id?: string | null
+  /** 实际执行的 profile(fallback 后与 primary 不同) */
+  profile_id?: string | null
+  fallback_used?: boolean
+  fallback_reason?: string | null
+  provider?: string
+  model?: string
+  usage?: AiUsageMeta | null
+}
+
+export interface AiProfilesResponse {
+  profiles: AiProfileMasked[]
+  default_id: string
+  route_policy: AiRoutePolicy
+}
+
 export interface Preferences {
   data_provider?: string
   effective_data_provider?: string
@@ -958,7 +2273,6 @@ export interface Preferences {
   pipeline_pull_etf: boolean
   pipeline_pull_index: boolean
   pipeline_pull_hk: boolean
-  pipeline_index_symbols: string
   pipeline_schedule: { hour: number; minute: number }
   instruments_schedule: { hour: number; minute: number }
   enriched_batch_size: number
@@ -967,6 +2281,7 @@ export interface Preferences {
   depth_polling_interval: number
   depth_finalize_time: { hour: number; minute: number }
   review_schedule: { enabled: boolean; hour: number; minute: number }
+  backtest_auto_rerun: { enabled: boolean; hour: number; minute: number; window_days: number }
   review_push_channels: string[]
   sse_refresh_pages: Record<string, boolean>
   strategy_monitor_enabled: boolean
@@ -974,12 +2289,17 @@ export interface Preferences {
   system_notify_enabled: boolean
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
-  webhook_channels?: Record<string, { url?: string; secret?: string; nickname?: string }>
+  webhook_channels?: Record<string, { url?: string; secret?: string; nickname?: string; token?: string; configured?: boolean; token_masked?: string }>
   webhook_enabled_default?: boolean
   sidebar_index_symbols: string[]
   nav_order: string[]
   nav_hidden: string[]
   screener_auto_run: boolean
+  tradingAutoReview: boolean
+  structured_plan_check_enabled?: boolean
+  /** 受控外部行情降级(默认关闭); scopes 仅 realtime/depth 白名单, 首批仅 realtime */
+  external_fallback_enabled?: boolean
+  external_fallback_scopes?: string[]
 }
 
 // ===== Strategy Alert =====
@@ -1002,6 +2322,30 @@ export interface JournalPreview {
   guessed_mapping: Record<string, string>
   preview_rows: Record<string, any>[]
   row_count: number
+  warnings: string[]
+}
+
+export interface JournalFholdPreviewRow {
+  account_id: string
+  date: string
+  time: string
+  symbol: string
+  name: string
+  side: 'buy' | 'sell'
+  qty: number
+  price: number
+  amount: number
+  fee: number
+}
+
+export interface JournalFholdPreview {
+  available: boolean
+  snapshot_sha256: string | null
+  row_count: number
+  importable_count: number
+  skipped_count: number
+  accounts: { id: string; name: string; fills: number }[]
+  preview_rows: JournalFholdPreviewRow[]
   warnings: string[]
 }
 
@@ -1028,11 +2372,13 @@ export interface JournalLedger {
   imported_at: string
   accounts?: { id: string; fills: number }[]
   import?: {
+    source?: string
     mode: 'replace' | 'append'
     account_id: string
     new_fills: number
     deduped_fills: number
     deduped_events: number
+    conflicting_fills?: number
   }
   trips: JournalTrip[]
   summary: {
@@ -1065,6 +2411,430 @@ export interface JournalPresets {
   benchmarks: { symbol: string; name: string }[]
 }
 
+// ===== 实时行情状态 (GET /api/intraday/status) =====
+
+/** 行情数据健康状态 — 与后端 /api/intraday/status 契约一致 */
+export type QuoteDataState = 'disabled' | 'warming_up' | 'ready' | 'empty' | 'error' | 'stale'
+
+export interface QuoteStatusResponse {
+  enabled: boolean
+  running: boolean
+  mode?: 'none' | 'watchlist' | 'full_market'
+  realtime_allowed?: boolean
+  interval_s: number
+  symbol_count: number
+  watchlist_symbol_count?: number
+  index_symbol_count?: number
+  etf_symbol_count?: number
+  quote_age_ms: number | null
+  is_trading_hours: boolean
+  last_fetch_ms: number | null
+  // 数据健康契约追加字段 — 旧后端可能缺失, 全部 optional; 经 resolveQuoteDataState 安全降级
+  data_state?: QuoteDataState
+  has_recent_data?: boolean
+  total_symbol_count?: number
+  last_error_code?: 'provider_empty' | 'provider_error' | null
+  source_as_of?: string | null
+}
+
+/** 数据新鲜度阈值 — 与后端一致: max(2 * interval_s, 30s) */
+export function quoteRecentThresholdMs(intervalS: number | null | undefined): number {
+  return Math.max(2 * (intervalS ?? 0), 30) * 1000
+}
+
+/**
+ * 解析行情数据状态。新后端直接采用 data_state;
+ * 旧后端缺该字段时从旧字段降级推断 — 绝不把轮询线程存活当作数据健康。
+ */
+export function resolveQuoteDataState(s: QuoteStatusResponse | null | undefined): QuoteDataState | null {
+  if (!s) return null
+  if (s.data_state) return s.data_state
+  if (!s.enabled) return 'disabled'
+  if (s.quote_age_ms != null && s.quote_age_ms <= quoteRecentThresholdMs(s.interval_s)) return 'ready'
+  if (s.last_fetch_ms == null && s.quote_age_ms == null) return 'warming_up'
+  return 'stale'
+}
+
+const QUOTE_DATA_STATE_TEXT: Record<QuoteDataState, string> = {
+  disabled: '未开启',
+  warming_up: '正在获取首批数据',
+  empty: '轮询中但数据源未返回行情',
+  error: '行情源暂不可用',
+  stale: '行情已过期',
+  ready: '行情已更新',
+}
+
+export function quoteDataStateText(state: QuoteDataState | null | undefined): string {
+  return state ? QUOTE_DATA_STATE_TEXT[state] : '状态未知'
+}
+
+/** source_as_of 非本日时返回 "本地快照截至 YYYY-MM-DD"; 本日/缺失/不可解析时返回 null。 */
+export function quoteSnapshotText(sourceAsOf: string | null | undefined, now: Date = new Date()): string | null {
+  if (!sourceAsOf) return null
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(sourceAsOf.trim())
+  if (!m) return null
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return m[1] === today ? null : `本地快照截至 ${m[1]}`
+}
+
+// ===== Market Data（上游已发布只读快照） =====
+// `/api/market-data` 的 rows 直接透传 provider DataFrame 字段；此处仅描述已发布字段，
+// 不对日期、金额、side/direction 等上游语义作二次归一化。
+
+export type MarketDataFrequency = 'daily' | 'minute'
+export type MarketDataCallAuctionSession = 'open' | 'close'
+
+export type MarketDataCapabilityKey =
+  | 'chip'
+  | 'moneyflow_daily_stock'
+  | 'moneyflow_daily_block'
+  | 'moneyflow_minute_stock'
+  | 'moneyflow_minute_block'
+  | 'call_auction'
+  | 'transactions'
+  | 'hk_adjustment'
+  | 'hk_financial'
+
+export interface MarketDataCapability {
+  available: boolean
+  source: string | null
+  earliest_date: string | null
+  latest_date: string | null
+  rows: number | null
+  symbols: number | null
+  reason: string | null
+}
+
+export type MarketDataCapabilities = Record<MarketDataCapabilityKey, MarketDataCapability>
+
+/** status 在旧服务或部署切换窗口可缺 capabilities；消费方须按 unavailable 防御展示。 */
+export interface MarketDataStatusResponse {
+  available?: boolean
+  source?: string | null
+  provider?: string | null
+  capabilities?: Partial<MarketDataCapabilities>
+}
+
+export interface MarketDataResponse<Row> {
+  available: boolean
+  source: string | null
+  rows: Row[]
+  reason?: string | null
+}
+
+export interface MarketDataChipRow {
+  symbol: string
+  trade_date: string
+  peak_price: number | null
+  peak_volume: number | null
+  peak_ratio: number | null
+  profit_ratio: number | null
+  avg_cost: number | null
+  concentration_90: number | null
+  range_90_low: number | null
+  range_90_high: number | null
+  concentration_70: number | null
+  range_70_low: number | null
+  range_70_high: number | null
+  cr10: number | null
+  cr30: number | null
+  gini: number | null
+  main_peak_price: number | null
+  main_peak_volume: number | null
+  main_peak_ratio: number | null
+  main_concentration: number | null
+  retail_peak_price: number | null
+  retail_peak_volume: number | null
+  retail_peak_ratio: number | null
+  retail_concentration: number | null
+  has_retail_peak: boolean | null
+  peak_count: number | null
+  window_days: number | null
+  price_step: number | null
+  asset_type: number | null
+  source: string
+}
+
+export interface MarketDataMoneyflowStockRow {
+  symbol?: string
+  trade_date?: string
+  bucket_time?: string | null
+  total_amount?: number | null
+  inflow_amount?: number | null
+  outflow_amount?: number | null
+  net_amount?: number | null
+  super_large_net?: number | null
+  large_net?: number | null
+  medium_net?: number | null
+  small_net?: number | null
+  main_traditional_net?: number | null
+  main_broad_net?: number | null
+  retail_net?: number | null
+  neutral_net?: number | null
+  unknown_net?: number | null
+  valid_count?: number | null
+  invalid_count?: number | null
+  unknown_count?: number | null
+  source?: string | null
+}
+
+export interface MarketDataMoneyflowBlockRow extends MarketDataMoneyflowStockRow {
+  block_type?: number | null
+  block_code?: string | null
+  block_name?: string | null
+}
+export interface MarketDataCallAuctionRow {
+  event_time: string
+  price: number | null
+  volume: number | null
+  amount: number | null
+  direction: number | null
+  session: MarketDataCallAuctionSession
+  venue: string | null
+  source: string
+}
+
+export interface MarketDataTransactionRow {
+  symbol: string
+  datetime: string
+  price: number | null
+  volume: number | null
+  amount: number | null
+  direction: number | null
+  order_count: number | null
+  venue: string | null
+  source: string
+}
+
+export interface MarketDataChipResponse extends MarketDataResponse<MarketDataChipRow> {
+  symbol: string
+  start: string
+  end: string
+  limit: number
+}
+
+export interface MarketDataMoneyflowStockResponse extends MarketDataResponse<MarketDataMoneyflowStockRow> {
+  symbol: string
+  freq: MarketDataFrequency
+  start: string
+  end: string
+}
+
+export interface MarketDataMoneyflowBlocksResponse extends MarketDataResponse<MarketDataMoneyflowBlockRow> {
+  freq: MarketDataFrequency
+  date: string
+  block_type: number | null
+  limit: number
+}
+
+export interface MarketDataCallAuctionResponse extends MarketDataResponse<MarketDataCallAuctionRow> {
+  symbol: string
+  date: string
+  session: MarketDataCallAuctionSession | null
+  limit: number
+}
+
+export interface MarketDataTransactionsResponse extends MarketDataResponse<MarketDataTransactionRow> {
+  symbol: string
+  date: string
+  limit: number
+}
+
+export interface MarketDataChipRequest {
+  start: string
+  end: string
+  limit?: number
+}
+
+export interface MarketDataMoneyflowStockRequest {
+  freq: MarketDataFrequency
+  start: string
+  end: string
+}
+
+export interface MarketDataMoneyflowBlocksRequest {
+  freq: MarketDataFrequency
+  date: string
+  blockType?: number
+  limit?: number
+}
+
+export interface MarketDataCallAuctionRequest {
+  date: string
+  session?: MarketDataCallAuctionSession
+  limit?: number
+}
+
+export interface MarketDataTransactionsRequest {
+  date: string
+  limit?: number
+}
+
+// ===== Research analysis（canonical enriched 日 K，只读） =====
+
+export interface ResearchAnalysisRiskResult {
+  status: string
+  observations: number
+  minSamples: number
+  descriptive: {
+    mean: number | null
+    std: number | null
+    annualizedVolatility: number | null
+    skewness: number | null
+    excessKurtosis: number | null
+    min: number | null
+    max: number | null
+  }
+  historicalVar: number | null
+  historicalCvar: number | null
+  parametricVar: number | null
+}
+
+export interface ResearchAnalysisPerformanceResult {
+  status: string
+  sortino?: number | null
+  omega?: number | null
+  max_drawdown?: number | null
+  calmar?: number | null
+  ulcer_index?: number | null
+}
+
+export interface ResearchAnalysisAdfResult {
+  status: string
+  adf_statistic?: number | null
+  p_value?: number | null
+  lags_used?: number | null
+  is_stationary?: boolean | null
+  observations?: number | null
+}
+
+export interface ResearchAnalysisGarchResult {
+  status: string
+  current_volatility?: number | null
+  long_run_volatility?: number | null
+  persistence?: number | null
+  observations?: number | null
+}
+
+export interface ResearchSymbolAnalysisResult {
+  risk: ResearchAnalysisRiskResult
+  performance: ResearchAnalysisPerformanceResult
+  statistics: {
+    adf: ResearchAnalysisAdfResult
+    garch: ResearchAnalysisGarchResult
+  }
+}
+
+export interface ResearchSymbolAnalysisAvailableResponse {
+  available: true
+  source: string
+  symbol: string
+  start: string
+  end: string
+  data_as_of: string | null
+  observations: number
+  result: ResearchSymbolAnalysisResult
+  warnings: string[]
+  reason: null
+}
+
+export interface ResearchSymbolAnalysisUnavailableResponse {
+  available: false
+  source: null
+  symbol: string
+  start: null
+  end: null
+  data_as_of: null
+  observations: 0
+  result: null
+  warnings: string[]
+  reason: string
+}
+
+export type ResearchSymbolAnalysisResponse =
+  | ResearchSymbolAnalysisAvailableResponse
+  | ResearchSymbolAnalysisUnavailableResponse
+
+export interface ResearchSymbolAnalysisRequest {
+  start?: string
+  end?: string
+}
+
+// ===== Research (假设注册 + 定时研究) =====
+// 后端: api/research.py + services/research_registry.py + scheduled_research.py
+// 假设状态机与证据 kind 以后端 STATUSES / EVIDENCE_KINDS 为准。
+
+export type ResearchHypothesisStatus =
+  | 'exploring'
+  | 'testing'
+  | 'validated'
+  | 'rejected'
+  | 'monitoring'
+
+export type ResearchEvidenceKind = 'backtest' | 'note' | 'observation'
+
+export type ResearchScheduleTemplate =
+  | 'market_recap_daily'
+  | 'watchlist_recap_daily'
+  | 'strategy_pool_weekly'
+
+export interface ResearchEvidence {
+  ts: string
+  kind: ResearchEvidenceKind | string
+  ref: string
+  summary: string
+}
+
+export interface ResearchHypothesis {
+  id: string
+  title: string
+  thesis: string
+  status: ResearchHypothesisStatus | string
+  tags: string[]
+  evidence: ResearchEvidence[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ResearchRunCard {
+  run_id: string
+  kind: string
+  config: Record<string, unknown>
+  config_hash: string
+  strategy_hash: string
+  stats: Record<string, unknown>
+  created_at: string
+}
+
+export interface ResearchSchedule {
+  id: string
+  name: string
+  template: ResearchScheduleTemplate | string
+  cron: string
+  enabled: boolean
+  params: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  last_run_at: string | null
+  last_status: string | null
+  last_error: string | null
+}
+
+export interface ResearchScheduleRunResult {
+  title?: string
+  summary?: string
+  artifacts?: unknown[]
+  warnings?: string[]
+  [key: string]: unknown
+}
+
+export interface ResearchScheduleRunNowResponse {
+  schedule: ResearchSchedule
+  result: ResearchScheduleRunResult
+}
+
+
 // ===== API surface =====
 export const api = {
   health: () => request<{ status: string; version: string; mode: string }>('/health'),
@@ -1091,12 +2861,22 @@ export const api = {
     }),
 
   journalPresets: () => request<JournalPresets>('/api/journal/presets'),
-  journalLedger: () => request<JournalLedger>('/api/journal/ledger'),
+  journalLedger: () => request<JournalLedger | null>('/api/journal/ledger'),
   journalDelete: () => request<{ deleted: boolean }>('/api/journal/ledger', { method: 'DELETE' }),
   journalFeedback: (rating: 'helpful' | 'not_helpful') =>
     request<{ ok: boolean }>('/api/journal/feedback', {
       method: 'POST',
       body: JSON.stringify({ rating }),
+    }),
+  journalFholdPreview: () => request<JournalFholdPreview>('/api/journal/fhold-preview'),
+  journalFholdImport: (snapshotSha256: string, benchmark: string, narrative: boolean) =>
+    request<JournalLedger>('/api/journal/fhold-import', {
+      method: 'POST',
+      body: JSON.stringify({
+        snapshot_sha256: snapshotSha256,
+        benchmark,
+        narrative,
+      }),
     }),
   journalUpload: (
     file: File,
@@ -1139,7 +2919,13 @@ export const api = {
     request<{ ok: boolean }>('/api/settings/ai', { method: 'DELETE' }),
 
   aiProfiles: () =>
-    request<{ profiles: AiProfileMasked[]; default_id: string }>('/api/settings/ai/profiles'),
+    request<AiProfilesResponse>('/api/settings/ai/profiles'),
+
+  updateAiRoutePolicy: (policy: AiRoutePolicy) =>
+    request<{ route_policy: AiRoutePolicy }>('/api/settings/ai/route-policy', {
+      method: 'PUT',
+      body: JSON.stringify(policy),
+    }),
 
   createAiProfile: (profile: AiProfileInput) =>
     request<{ id: string }>('/api/settings/ai/profiles', {
@@ -1160,7 +2946,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/settings/ai/profiles/${encodeURIComponent(id)}/default`, { method: 'POST' }),
 
   testAiProfile: (id: string) =>
-    request<{ ok: boolean; error?: string; model?: string; response?: string }>(
+    request<{ ok: boolean; error?: string; category?: string; model?: string; provider?: string; response?: string; latency_ms?: number }>(
       `/api/settings/ai/profiles/${encodeURIComponent(id)}/test`,
       { method: 'POST' },
     ),
@@ -1180,6 +2966,9 @@ export const api = {
     request<{ messages: AgentStoredMessage[] }>(`/api/agent/sessions/${encodeURIComponent(sessionId)}/messages`),
   cancelAgentAttempt: (attemptId: string) =>
     request<{ cancelled: boolean }>(`/api/agent/attempts/${encodeURIComponent(attemptId)}/cancel`, { method: 'POST' }),
+  agentRuntime: () =>
+    request<{ runtime: 'python' | 'pi'; switchable: boolean }>('/api/agent/runtime'),
+
   readDocument: (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -1257,11 +3046,6 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(cfg),
     }),
-  updatePipelineIndexSymbols: (symbols: string) =>
-    request<{ pipeline_index_symbols: string }>('/api/settings/preferences/pipeline-index-symbols', {
-      method: 'PUT',
-      body: JSON.stringify({ symbols }),
-    }),
   updateRealtimeQuotes: (enabled: boolean) =>
     request<{ realtime_quotes_enabled: boolean; realtime_allowed?: boolean; mode?: string; error?: string }>('/api/settings/preferences/realtime-quotes', {
       method: 'PUT',
@@ -1277,21 +3061,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ indices_nav_pinned: pinned }),
     }),
+  /** 受控外部行情降级开关 — 开启时 scopes 固定 ["realtime"], 关闭置空; 返回清洗后的两字段(非法 scope 400) */
+  updateExternalFallback: (enabled: boolean, scopes: string[]) =>
+    request<{ external_fallback_enabled: boolean; external_fallback_scopes: string[] }>(
+      '/api/settings/preferences/external-fallback',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ external_fallback_enabled: enabled, external_fallback_scopes: scopes }),
+      },
+    ),
   quoteStatus: () =>
-    request<{
-      enabled: boolean
-      running: boolean
-      mode?: 'none' | 'watchlist' | 'full_market'
-      realtime_allowed?: boolean
-      interval_s: number
-      symbol_count: number
-      watchlist_symbol_count?: number
-      index_symbol_count?: number
-      etf_symbol_count?: number
-      quote_age_ms: number | null
-      is_trading_hours: boolean
-      last_fetch_ms: number | null
-    }>('/api/intraday/status'),
+    request<QuoteStatusResponse>('/api/intraday/status'),
   quoteInterval: () =>
     request<{ interval: number; min_interval: number; max_interval: number }>(
       '/api/settings/preferences/quote-interval',
@@ -1303,9 +3083,15 @@ export const api = {
     ),
   intradayRefresh: () => request<{ status: string }>('/api/intraday/refresh', { method: 'POST' }),
   indexQuotes: (symbols?: string[]) =>
-    request<{ rows: IndexQuote[]; count: number }>(
+    request<IndexQuotesResponse>(
       `/api/intraday/indices${symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(','))}` : ''}`,
     ),
+  /** 只读实时快照（本地优先 / 受控外部 fallback），最多 60 个 symbol；仅供展示 */
+  intradaySnapshot: (symbols?: string[]) =>
+    request<IntradaySnapshotResponse>(
+      `/api/intraday/snapshot${symbols?.length ? `?symbols=${encodeURIComponent(symbols.slice(0, 60).join(','))}` : ''}`,
+    ),
+
   updateRealtimeMonitorConfig: (cfg: {
     sse_refresh_pages?: Record<string, boolean>
     strategy_monitor_enabled?: boolean
@@ -1333,7 +3119,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url, secret }),
     }),
-  updateWebhookChannel: (channel: string, config: { url?: string; secret?: string; nickname?: string }) =>
+  updateWebhookChannel: (channel: string, config: { url?: string; secret?: string; nickname?: string; token?: string; clear_token?: boolean }) =>
     request<{ webhook_channels: Preferences['webhook_channels'] }>('/api/settings/preferences/webhook-channel', {
       method: 'PUT',
       body: JSON.stringify({ channel, ...config }),
@@ -1353,10 +3139,30 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ enabled, hour, minute }),
     }),
+  /** F11 回测定时复跑偏好 — 开关/时间/滚动窗口天数 (job: backtest_favorite_rerun) */
+  getBacktestAutoRerun: () =>
+    request<{ enabled: boolean; hour: number; minute: number; window_days: number }>(
+      '/api/settings/preferences/backtest-auto-rerun',
+    ),
+  updateBacktestAutoRerun: (enabled: boolean, hour: number, minute: number, windowDays: number) =>
+    request<{ enabled: boolean; hour: number; minute: number; window_days: number }>(
+      '/api/settings/preferences/backtest-auto-rerun',
+      { method: 'POST', body: JSON.stringify({ enabled, hour, minute, window_days: windowDays }) },
+    ),
   updateReviewPush: (channels: string[]) =>
     request<{ review_push_channels: string[] }>('/api/settings/preferences/review-push', {
       method: 'PUT',
       body: JSON.stringify({ channels }),
+    }),
+  updateTradingAutoReview: (enabled: boolean) =>
+    request<{ tradingAutoReview: boolean }>('/api/settings/preferences/trading-auto-review', {
+      method: 'PUT',
+      body: JSON.stringify({ tradingAutoReview: enabled }),
+    }),
+  updateStructuredPlanCheck: (enabled: boolean) =>
+    request<{ structured_plan_check_enabled: boolean }>('/api/settings/preferences/structured-plan-check', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     }),
   updateDepthPollingInterval: (interval: number) =>
     request<{ depth_polling_interval: number }>('/api/settings/preferences/depth-polling-interval', {
@@ -1445,10 +3251,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbols, days }),
     }),
-  instrumentSearch: (q: string, limit = 20) =>
-    request<{ results: InstrumentSearchResult[] }>(
-      `/api/kline/instruments/search?q=${encodeURIComponent(q)}&limit=${limit}`,
-    ),
+  instrumentSearch: (q: string, limit = 20, assetTypes?: readonly InstrumentAssetType[]) => {
+    const params = new URLSearchParams({ q, limit: String(limit) })
+    assetTypes?.forEach((assetType) => params.append('asset_type', assetType))
+    return request<{ results: InstrumentSearchResult[] }>(
+      `/api/kline/instruments/search?${params.toString()}`,
+    )
+  },
 
   /** 批量查股票名称 (传入 symbol 列表, 返回 {symbol: name}) */
   instrumentNames: (symbols: string[]) =>
@@ -1461,6 +3270,7 @@ export const api = {
       symbol: string
       name?: string
       stock_info?: { name?: string; total_shares?: number; float_shares?: number }
+      asset_type?: 'stock' | 'etf' | 'index'
       date: string | null
       rows: MinuteKlineRow[]
       source?: 'local' | 'local_disk' | 'tdx_api' | 'live' | 'none'
@@ -1523,6 +3333,11 @@ export const api = {
     request<{ status: string; job_id: string }>('/api/kline/rebuild_enriched', {
       method: 'POST',
     }),
+  repairEnrichedRange: (startDate: string, endDate: string) =>
+    request<{ status: string; job_id: string }>('/api/kline/repair_enriched_range', {
+      method: 'POST',
+      body: JSON.stringify({ start_date: startDate, end_date: endDate }),
+    }),
 
   watchlistList: () => request<{ symbols: WatchlistEntry[] }>('/api/watchlist'),
   watchlistAdd: (symbol: string, note = '') =>
@@ -1540,6 +3355,16 @@ export const api = {
       `/api/watchlist/${encodeURIComponent(symbol)}`,
       { method: 'DELETE' },
     ),
+  watchlistOcrStatus: () =>
+    request<{ provider: string; available: boolean }>('/api/watchlist/ocr-status'),
+  watchlistImportImage: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<WatchlistImportResult>('/api/watchlist/import-image', {
+      method: 'POST',
+      body: fd,
+    })
+  },
   watchlistMoveToTop: (symbol: string) =>
     request<{ symbols: WatchlistEntry[] }>(
       `/api/watchlist/${encodeURIComponent(symbol)}/top`,
@@ -1556,6 +3381,18 @@ export const api = {
     ),
 
   screenerStrategies: () => request<{ presets: ScreenerStrategy[] }>('/api/screener/strategies'),
+  screenerFields: () => request<{ fields: ScreenerFieldSpec[] }>('/api/screener/fields'),
+  screenerConditionQuery: (payload: ScreenerQueryRequest) =>
+    request<ScreenerQueryResponse>('/api/screener/query', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  screenerNlParse: (text: string, profileId?: string) =>
+    request<ScreenerNlParseResponse>('/api/screener/nl_parse', {
+      method: 'POST',
+      body: JSON.stringify({ text, ...(profileId ? { profile_id: profileId } : {}) }),
+    }),
+  screenerNlPresets: () => request<{ presets: ScreenerPreset[] }>('/api/screener/nl_presets'),
   screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string) =>
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
@@ -1566,12 +3403,40 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null }),
     }),
+  screenerScreensList: () =>
+    request<{ screens: ScreenerScreenRecord[] }>('/api/screener/screens'),
+  screenerScreensCreate: (payload: ScreenerScreenSaveRequest) =>
+    request<ScreenerScreenRecord>('/api/screener/screens', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  screenerScreensUpdate: (id: string, payload: ScreenerScreenSaveRequest) =>
+    request<ScreenerScreenRecord>(`/api/screener/screens/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  screenerScreensDelete: (id: string) =>
+    request<void>(`/api/screener/screens/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string) =>
-    request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
+    request<{
+      as_of: string | null
+      results: Record<string, Pick<ScreenerResult, 'total' | 'as_of' | 'rows'>>
+      failed?: { strategy_id: string; error: string }[]
+    }>(
       '/api/screener/run_all', { method: 'POST', body: JSON.stringify({ as_of: asOf ?? null, strategy_ids: strategyIds ?? null, ext_columns: extColumns || null }) },
     ),
   screenerCached: (extColumns?: string) =>
-    request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }>; today_ever_matched: Record<string, string[]> | null; today_ever_rows: Record<string, Record<string, any>> | null; updated_at: number | null }>(
+    request<{
+      as_of: string | null
+      results: Record<string, Pick<ScreenerResult, 'total' | 'as_of' | 'rows'>>
+      today_ever_matched: Record<string, string[]> | null
+      today_ever_rows: Record<string, Record<string, ScreenerResult['rows'][number]>> | null
+      updated_at: number | null
+      canonical_as_of?: string | null
+      discarded_as_of?: string | null
+    }>(
       extColumns
         ? `/api/screener/cached?ext_columns=${encodeURIComponent(extColumns)}`
         : '/api/screener/cached',
@@ -1631,32 +3496,171 @@ export const api = {
     weight?: 'equal' | 'factor_weight'
     fees_pct?: number
     slippage_bps?: number
+    risk_free_rate?: number
   }) =>
     request<FactorBacktestResult>('/api/backtest/factor/run', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
-  strategyBacktestRun: (payload: {
-    strategy_id: string
-    symbols?: string[] | null
-    start?: string | null
-    end?: string | null
-    params?: Record<string, any> | null
-    overrides?: Record<string, any> | null
-    matching?: 'close_t' | 'open_t+1'
-    entry_fill?: 'close_t' | 'open_t+1' | null
-    exit_fill?: 'close_t' | 'open_t+1' | null
-    fees_pct?: number
-    slippage_bps?: number
-    max_positions?: number
-    initial_capital?: number
-    position_sizing?: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
-  }) =>
+  strategyBacktestRun: (payload: StrategyBacktestRequest) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  strategyRobustness: (
+    payload: StrategyBacktestRequest & {
+      n_folds?: number
+      bootstrap?: boolean
+      mc_permutation?: boolean
+      n_boot?: number
+      n_perm?: number
+      seed?: number | null
+      parameter_perturbation?: boolean
+      perturbation_pct?: number
+      max_perturbed_params?: number
+      walk_forward_enabled?: boolean
+    },
+  ) =>
+    request<StrategyRobustnessResult>('/api/backtest/strategy/robustness', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 市场状态分桶表现 (bull/bear × turbulent/calm); 对齐交易日 < 120 时 regime=null */
+  strategyRegimeBreakdown: (payload: StrategyBacktestRequest) =>
+    request<RegimeBreakdownResponse>('/api/backtest/strategy/regime-breakdown', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 成本敏感性: 佣金+滑点按倍数整体缩放重跑; multipliers 缺省用后端默认档位 */
+  strategyCostSensitivity: (payload: StrategyBacktestRequest & { multipliers?: number[] }) =>
+    request<CostSensitivityResponse>('/api/backtest/strategy/cost-sensitivity', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 风格归因: 逐日截面对 smb/umd/lmv 三因子回归 */
+  strategyStyleAttribution: (payload: StrategyBacktestRequest) =>
+    request<StyleAttributionResponse>('/api/backtest/strategy/style-attribution', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** 成交可达性诊断: 对已持久化 Run 的成交抽样, 检查成交价价格带内分钟成交额是否覆盖交易名义金额 */
+  backtestFillReachability: (runId: string, sample = 20, seed = 0) =>
+    request<FillReachabilityResponse>(
+      `/api/backtest/runs/${encodeURIComponent(runId)}/fill-reachability?sample=${sample}&seed=${seed}`,
+      { method: 'POST' },
+    ),
+
+  parameterGridLaunch: (payload: ParameterGridRequest) =>
+    request<ParameterGridLaunchResponse>('/api/backtest/parameter-grid', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  parameterGridGet: (experimentId: string) =>
+    request<ParameterGridExperiment | null>(
+      `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}`,
+      undefined,
+      { silent404: true },
+    ),
+
+  parameterGridCancel: (experimentId: string) =>
+    request<{ ok: boolean; experiment_id?: string; message?: string }>(
+      `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}/cancel`,
+      { method: 'POST' },
+    ),
+
+  parameterGridResume: (experimentId: string) =>
+    request<{ ok?: boolean; experiment_id?: string; status?: string; message?: string }>(
+      `/api/backtest/parameter-grid/${encodeURIComponent(experimentId)}/resume`,
+      { method: 'POST' },
+    ),
+
+  optimizerUniverses: () => request<OptimizerUniverses>('/api/backtest/optimizer/universes'),
+  optimizerLaunch: (payload: OptimizerRequest) =>
+    request<OptimizerLaunchResponse>('/api/backtest/optimizer', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  optimizerGet: (experimentId: string) =>
+    request<OptimizerExperiment | null>(
+      `/api/backtest/optimizer/${encodeURIComponent(experimentId)}`,
+      undefined,
+      { silent404: true },
+    ),
+  optimizerCancel: (experimentId: string) =>
+    request<{ ok: boolean; experiment_id?: string; message?: string }>(
+      `/api/backtest/optimizer/${encodeURIComponent(experimentId)}/cancel`,
+      { method: 'POST' },
+    ),
+
+  optimizerResume: (experimentId: string) =>
+    request<{ ok?: boolean; experiment_id?: string; status?: string; message?: string }>(
+      `/api/backtest/optimizer/${encodeURIComponent(experimentId)}/resume`,
+      { method: 'POST' },
+    ),
+
+  /** F7: 寻优 + 参数网格实验统一列表 (按 created_at 倒序); 单源故障时降级返回另一源 + warnings */
+  backtestExperiments: (limit = 50) =>
+    request<BacktestExperimentListResponse>(`/api/backtest/experiments?limit=${limit}`),
+
+  // ===== Backtest Run 持久化历史 =====
+  backtestRuns: (opts?: { kind?: BacktestRunKind; favorite?: boolean; query?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    if (opts?.kind) qs.set('kind', opts.kind)
+    if (opts?.favorite != null) qs.set('favorite', String(opts.favorite))
+    if (opts?.query) qs.set('query', opts.query)
+    if (opts?.limit != null) qs.set('limit', String(opts.limit))
+    if (opts?.offset != null) qs.set('offset', String(opts.offset))
+    const suffix = qs.toString()
+    return request<BacktestRunListResponse>(`/api/backtest/runs${suffix ? `?${suffix}` : ''}`)
+  },
+
+  backtestRunGet: (runId: string) =>
+    request<BacktestRun>(`/api/backtest/runs/${encodeURIComponent(runId)}`),
+
+  /** 仅 favorite/label 可变, 后端拒绝其他字段 */
+  backtestRunPatch: (runId: string, body: { favorite?: boolean; label?: string }) =>
+    request<BacktestRun>(`/api/backtest/runs/${encodeURIComponent(runId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  /** 旧 run_card 只读迁移项会被后端 403 拒绝 */
+  backtestRunDelete: (runId: string) =>
+    request<{ ok: boolean }>(`/api/backtest/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
+
+  backtestRunsCompare: (runIds: string[]) =>
+    request<BacktestRunComparison>('/api/backtest/runs/compare', {
+      method: 'POST',
+      body: JSON.stringify({ run_ids: runIds }),
+    }),
+
+  /** F15 组合级回测: 已固化 Run 日频净值事后加权合成 (纯诊断, 不落盘) */
+  portfolioCombine: (payload: { items: PortfolioCombineItemInput[]; rebalance?: PortfolioRebalanceMode }) =>
+    request<PortfolioCombineResponse>('/api/backtest/portfolio-combine', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /** F10 回测转监控规则 (幂等): 同 run 重复调用返回已有规则 created=false */
+  toMonitorRule: (runId: string) =>
+    request<ToMonitorRuleResponse>(`/api/backtest/runs/${encodeURIComponent(runId)}/to-monitor-rule`, {
+      method: 'POST',
+    }),
+
+  /** 按原 config 重新运行, 返回带 source_run_id 的新 Run */
+  backtestRunRerun: (runId: string) =>
+    request<BacktestRun>(`/api/backtest/runs/${encodeURIComponent(runId)}/rerun`, { method: 'POST' }),
+
+  /** 导出为浏览器直接下载 (Content-Disposition: attachment), 无需 request 封装 */
+  backtestRunExportUrl: (runId: string, fmt: 'json' | 'csv') =>
+    `/api/backtest/runs/${encodeURIComponent(runId)}/export?fmt=${fmt}`,
 
   pipelineRun: () => request<{ job_id: string; reused: boolean }>(
     '/api/pipeline/run', { method: 'POST' },
@@ -1668,6 +3672,13 @@ export const api = {
     ),
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
+  canonicalHistoryStatus: () =>
+    request<CanonicalHistoryStatus>('/api/data/canonical-history/status'),
+  canonicalHistoryBackfill: (body: CanonicalHistoryBackfillRequest = {}) =>
+    request<CanonicalHistoryBackfillResponse>('/api/data/canonical-history/backfill', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
 
@@ -1805,24 +3816,24 @@ export const api = {
   financialStatus: () =>
     request<FinancialStatus>('/api/financials/status'),
 
-  financialMetrics: (symbol?: string) =>
+  financialMetrics: (symbol: string) =>
     request<{ data: FinancialMetricRecord[] }>(
-      `/api/financials/metrics${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/metrics?symbol=${encodeURIComponent(symbol)}`,
     ),
 
-  financialIncome: (symbol?: string) =>
+  financialIncome: (symbol: string) =>
     request<{ data: FinancialIncomeRecord[] }>(
-      `/api/financials/income${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/income?symbol=${encodeURIComponent(symbol)}`,
     ),
 
-  financialBalanceSheet: (symbol?: string) =>
+  financialBalanceSheet: (symbol: string) =>
     request<{ data: FinancialBalanceSheetRecord[] }>(
-      `/api/financials/balance-sheet${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/balance-sheet?symbol=${encodeURIComponent(symbol)}`,
     ),
 
-  financialCashFlow: (symbol?: string) =>
+  financialCashFlow: (symbol: string) =>
     request<{ data: FinancialCashFlowRecord[] }>(
-      `/api/financials/cash-flow${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+      `/api/financials/cash-flow?symbol=${encodeURIComponent(symbol)}`,
     ),
 
   /** 触发财务数据同步(后台异步执行,接口立即返回 started 状态) */
@@ -1857,18 +3868,20 @@ export const api = {
    *
    * 用 ReadableStream 解析(而非 SSE EventSource),支持 POST body 且更简单。
    */
-  async *financialAnalyzeStream(symbol: string, focus?: string, profileId?: string): AsyncGenerator<{
-    type: 'meta' | 'delta' | 'error' | 'done'
+  async *financialAnalyzeStream(symbol: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done' | 'attempt'
     symbol?: string
     summary?: string
     periods?: number
     content?: string
     message?: string
+    attempt_id?: string
   }> {
     const res = await fetch('/api/financials/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      signal,
     })
     if (!res.ok) {
       let detail = ''
@@ -1877,6 +3890,8 @@ export const api = {
       toast(msg, 'error')
       throw new Error(msg)
     }
+    const attemptId = res.headers.get('X-AI-Attempt-ID')
+    if (attemptId) yield { type: 'attempt', attempt_id: attemptId }
     if (!res.body) throw new Error('响应无 body')
 
     const reader = res.body.getReader()
@@ -1928,19 +3943,31 @@ export const api = {
    * AI 个股四维分析 — 流式调用(NDJSON,与财务分析同协议)。
    * meta 里额外带 levels(关键价位)供图表回放。
    */
-  async *stockAnalyzeStream(symbol: string, focus?: string, profileId?: string): AsyncGenerator<{
-    type: 'meta' | 'delta' | 'error' | 'done'
+  async *stockAnalyzeStream(symbol: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done' | 'attempt' | 'summary'
     symbol?: string
     summary?: string
     levels?: Record<LevelType, PriceLevel[]>
     close?: number | null
     content?: string
     message?: string
+    attempt_id?: string
+    /** F14: 数据口径(后端 frame; 旧后端可缺失) */
+    data_as_of?: string
+    source?: string
+    adjustment?: string
+    degraded?: boolean
+    warnings?: string[]
+    /** F13: 程序化结构化摘要(无方向字段) */
+    struct_summary?: { trend: string; key_levels: string[]; data_gaps: string[] }
+    /** P3: meta chunk 可带执行元信息;流式 provider 不上报 usage 时缺失,不得展示伪数据 */
+    ai_meta?: AiExecutionMeta | null
   }> {
     const res = await fetch('/api/stock-analysis/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      signal,
     })
     if (!res.ok) {
       let detail = ''
@@ -1949,6 +3976,8 @@ export const api = {
       toast(msg, 'error')
       throw new Error(msg)
     }
+    const attemptId = res.headers.get('X-AI-Attempt-ID')
+    if (attemptId) yield { type: 'attempt', attempt_id: attemptId }
     if (!res.body) throw new Error('响应无 body')
 
     const reader = res.body.getReader()
@@ -1992,7 +4021,11 @@ export const api = {
 
   // ===== 大盘复盘 =====
   reviewReportsList: () =>
-    request<{ reports: AiReviewReport[] }>('/api/market-recap/reports'),
+    request<{
+      reports: AiReviewReport[]
+      canonical_as_of: string | null
+      discarded_reports: Array<{ id: string | null; as_of: string | null }>
+    }>('/api/market-recap/reports'),
 
   reviewReportSave: (r: {
     as_of: string; focus?: string; content: string
@@ -2009,19 +4042,21 @@ export const api = {
    * AI 大盘复盘 — 流式调用(NDJSON,与个股/财务分析同协议)。
    * meta 里带 as_of / emotion_score / emotion_label / summary,供前端先渲染信号灯。
    */
-  async *reviewStream(asOf?: string, focus?: string, profileId?: string): AsyncGenerator<{
-    type: 'meta' | 'delta' | 'error' | 'done'
+  async *reviewStream(asOf?: string, focus?: string, profileId?: string, signal?: AbortSignal): AsyncGenerator<{
+    type: 'meta' | 'delta' | 'error' | 'done' | 'attempt'
     as_of?: string
     emotion_score?: number
     emotion_label?: string
     summary?: string
     content?: string
     message?: string
+    attempt_id?: string
   }> {
     const res = await fetch('/api/market-recap/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ as_of: asOf ?? null, focus: focus ?? '', ...(profileId ? { profile_id: profileId } : {}) }),
+      signal,
     })
     if (!res.ok) {
       let detail = ''
@@ -2030,6 +4065,8 @@ export const api = {
       toast(msg, 'error')
       throw new Error(msg)
     }
+    const attemptId = res.headers.get('X-AI-Attempt-ID')
+    if (attemptId) yield { type: 'attempt', attempt_id: attemptId }
     if (!res.body) throw new Error('响应无 body')
 
     const reader = res.body.getReader()
@@ -2080,12 +4117,95 @@ export const api = {
   strategyResetConfig: (strategyId: string) =>
     request<{ ok: boolean }>(`/api/strategies/config/${strategyId}`, { method: 'DELETE' }),
 
+  strategySaveComposite: (payload: CompositeStrategyInput) =>
+    request<{ ok: boolean; strategy_id: string; source: 'composite'; path: string }>(
+      '/api/strategies/composite/save',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+
   /** 删除自定义策略（内置策略不可删除） */
   strategyDelete: (strategyId: string) =>
     request<{ ok: boolean }>(`/api/strategies/${strategyId}`, { method: 'DELETE' }),
 
   strategyReload: () =>
     request<{ ok: boolean; count: number }>('/api/strategies/reload', { method: 'POST' }),
+
+  // ===== Cross-section research =====
+  crossCorrelation: (symbol: string, window = 120) =>
+    request<CrossCorrelationResponse>(
+      `/api/cross-section/correlation?symbol=${encodeURIComponent(symbol)}&window=${window}`,
+    ),
+
+  crossRelativeStrength: (symbol: string, days = 120) =>
+    request<CrossRelativeStrengthResponse>(
+      `/api/cross-section/relative-strength?symbol=${encodeURIComponent(symbol)}&days=${days}`,
+    ),
+
+  crossPeerComparison: (symbol: string, mode = 'industry', sortKey = 'amount') =>
+    request<CrossPeerResponse>(
+      `/api/cross-section/peer-comparison?symbol=${encodeURIComponent(symbol)}&mode=${encodeURIComponent(mode)}&sort_key=${encodeURIComponent(sortKey)}`,
+    ),
+
+  crossReverseScreen: (symbol: string) =>
+    request<CrossReverseScreenResponse>(
+      `/api/cross-section/reverse-screen?symbol=${encodeURIComponent(symbol)}`,
+    ),
+
+  // ===== Signal scorecard =====
+  signalScorecardTracked: () =>
+    request<{ items: SignalScorecardTrackedItem[] }>('/api/signal-scorecard/tracked-signals'),
+
+  signalScorecardUpdateTracked: (items: SignalScorecardTrackedItem[]) =>
+    request<{ items: SignalScorecardTrackedItem[] }>('/api/signal-scorecard/tracked-signals', {
+      method: 'PUT',
+      body: JSON.stringify({ items }),
+    }),
+
+  signalScorecardStats: (signalKey?: string, horizon?: number) => {
+    const params = new URLSearchParams()
+    if (signalKey) params.set('signal_key', signalKey)
+    if (horizon) params.set('horizon', String(horizon))
+    const qs = params.toString()
+    return request<{ stats: SignalScorecardStat[]; neutral_band_pct: number; horizons: number[] }>(
+      `/api/signal-scorecard/stats${qs ? `?${qs}` : ''}`,
+    )
+  },
+
+  signalScorecardEvents: (filters?: {
+    signal_key?: string
+    symbol?: string
+    status?: 'pending' | 'mature'
+    limit?: number
+  }) => {
+    const params = new URLSearchParams()
+    if (filters?.signal_key) params.set('signal_key', filters.signal_key)
+    if (filters?.symbol) params.set('symbol', filters.symbol)
+    if (filters?.status) params.set('status', filters.status)
+    params.set('limit', String(filters?.limit ?? 200))
+    return request<{ events: SignalScorecardEvent[]; total: number }>(
+      `/api/signal-scorecard/events?${params}`,
+    )
+  },
+
+  signalScorecardEventDetail: (eventId: string) =>
+    request<{ event: SignalScorecardEvent; outcomes: SignalScorecardOutcome[]; status: 'pending' | 'mature' }>(
+      `/api/signal-scorecard/events/${encodeURIComponent(eventId)}/outcomes`,
+    ),
+
+  signalScorecardEvaluate: () =>
+    request<Record<string, number | boolean>>('/api/signal-scorecard/evaluate', { method: 'POST' }),
+
+  signalScorecardBackfill: (signalKeys: string[], dateFrom: string, dateTo: string) => {
+    const params = new URLSearchParams({
+      signal_keys: signalKeys.join(','),
+      date_from: dateFrom,
+      date_to: dateTo,
+    })
+    return request<Record<string, number | boolean>>(
+      `/api/signal-scorecard/backfill?${params}`,
+      { method: 'POST' },
+    )
+  },
 
   // ===== Custom Signals (自定义信号) =====
   customSignalsList: () =>
@@ -2170,12 +4290,167 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ strategy_id: strategyId, code }),
     }),
+
+  // ===== Market Data（上游发布快照，只读查询） =====
+  marketDataStatus: () =>
+    request<MarketDataStatusResponse>('/api/market-data/status'),
+
+  marketDataChip: (symbol: string, params: MarketDataChipRequest) => {
+    const qs = new URLSearchParams({ start: params.start, end: params.end })
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataChipResponse>(
+      `/api/market-data/chip/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  marketDataMoneyflowStock: (symbol: string, params: MarketDataMoneyflowStockRequest) => {
+    const qs = new URLSearchParams({ freq: params.freq, start: params.start, end: params.end })
+    return request<MarketDataMoneyflowStockResponse>(
+      `/api/market-data/moneyflow/stock/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  marketDataMoneyflowBlocks: (params: MarketDataMoneyflowBlocksRequest) => {
+    const qs = new URLSearchParams({ freq: params.freq, date: params.date })
+    if (params.blockType != null) qs.set('block_type', String(params.blockType))
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataMoneyflowBlocksResponse>(
+      `/api/market-data/moneyflow/blocks?${qs.toString()}`,
+    )
+  },
+
+  marketDataCallAuction: (symbol: string, params: MarketDataCallAuctionRequest) => {
+    const qs = new URLSearchParams({ date: params.date })
+    if (params.session) qs.set('session', params.session)
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataCallAuctionResponse>(
+      `/api/market-data/call-auction/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  marketDataTransactions: (symbol: string, params: MarketDataTransactionsRequest) => {
+    const qs = new URLSearchParams({ date: params.date })
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    return request<MarketDataTransactionsResponse>(
+      `/api/market-data/transactions/${encodeURIComponent(symbol)}?${qs.toString()}`,
+    )
+  },
+
+  // ===== Research analysis（canonical enriched 日 K，只读） =====
+  researchSymbolAnalysis: (symbol: string, params: ResearchSymbolAnalysisRequest = {}) => {
+    const qs = new URLSearchParams()
+    if (params.start) qs.set('start', params.start)
+    if (params.end) qs.set('end', params.end)
+    const query = qs.toString()
+    return request<ResearchSymbolAnalysisResponse>(
+      `/api/research/analysis/symbol/${encodeURIComponent(symbol)}${query ? `?${query}` : ''}`,
+      undefined,
+      { acceptUnavailable: true },
+    )
+  },
+
+  // ===== Research (假设注册 + 定时研究) =====
+  researchListHypotheses: (params?: { status?: string; query?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.set('status', params.status)
+    if (params?.query) qs.set('query', params.query)
+    const q = qs.toString()
+    return request<{ items: ResearchHypothesis[] }>(`/api/research/hypotheses${q ? `?${q}` : ''}`)
+  },
+
+  researchGetHypothesis: (id: string) =>
+    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}`),
+
+  researchCreateHypothesis: (body: {
+    title: string
+    thesis: string
+    status?: ResearchHypothesisStatus | string
+    tags?: string[]
+  }) =>
+    request<ResearchHypothesis>('/api/research/hypotheses', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  researchUpdateHypothesis: (
+    id: string,
+    body: {
+      title?: string
+      thesis?: string
+      status?: ResearchHypothesisStatus | string
+      tags?: string[]
+    },
+  ) =>
+    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  researchAddEvidence: (
+    id: string,
+    body: { kind: ResearchEvidenceKind | string; ref?: string; summary: string },
+  ) =>
+    request<ResearchHypothesis>(`/api/research/hypotheses/${encodeURIComponent(id)}/evidence`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** 404 → null(中性"未找到"语义,不弹 toast) */
+  researchGetRunCard: (runId: string) =>
+    request<ResearchRunCard | null>(
+      `/api/research/run-cards/${encodeURIComponent(runId)}`,
+      undefined,
+      { silent404: true },
+    ),
+
+  researchListSchedules: () =>
+    request<{ items: ResearchSchedule[] }>('/api/research/schedules'),
+
+  researchCreateSchedule: (body: {
+    name: string
+    template: ResearchScheduleTemplate | string
+    cron: string
+    enabled?: boolean
+    params?: Record<string, unknown>
+  }) =>
+    request<ResearchSchedule>('/api/research/schedules', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  researchUpdateSchedule: (
+    id: string,
+    body: {
+      name?: string
+      template?: ResearchScheduleTemplate | string
+      cron?: string
+      enabled?: boolean
+      params?: Record<string, unknown>
+    },
+  ) =>
+    request<ResearchSchedule>(`/api/research/schedules/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  researchDeleteSchedule: (id: string) =>
+    request<{ ok: boolean }>(`/api/research/schedules/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  researchRunScheduleNow: (id: string) =>
+    request<ResearchScheduleRunNowResponse>(
+      `/api/research/schedules/${encodeURIComponent(id)}/run-now`,
+      { method: 'POST' },
+    ),
+
+
 }
 
 // ===== Pipeline =====
 export interface PipelineJob {
   id: string
-  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed'
   stage: string
   progress: number          // 0-100 整体进度
   stage_pct: number         // 0-100 当前阶段内进度
@@ -2187,24 +4462,118 @@ export interface PipelineJob {
     universe_size: number
     daily_days: number
     adj_factor_symbols: number
-    enriched_days: number
+    /** enriched 写入行数(新契约字段) */
+    enriched_rows?: number
+    /** 旧记录 fallback：日级管道历史中实为写入行数；扩展/补算类任务中确实表示天数 */
+    enriched_days?: number
     index_count?: number
     index_daily_rows?: number
+    etf_count?: number
+    etf_daily_rows?: number
+    etf_adj_factor_symbols?: number
+    hk_count?: number
+    hk_daily_rows?: number
     minute_rows: number
     skipped_stages?: string[]
+    failed_stages?: { stage: string; error: string }[]
   } | null
   error: string | null
 }
 
 export type PipelineJobSummary = Omit<PipelineJob, 'log'>
 
+export interface CanonicalHistoryPublished {
+  generation: string
+  created_at: string
+  earliest_date: string | null
+  latest_date: string | null
+  row_count: number
+  symbols: number
+  trading_days: number
+}
+
+export interface CanonicalHistoryJob {
+  id: string
+  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  progress_pct: number
+  processed_symbols: number
+  total_symbols: number
+  written_rows: number
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+}
+
+export interface CanonicalHistoryStatus {
+  available: boolean
+  reason: string | null
+  published: CanonicalHistoryPublished | null
+  job: CanonicalHistoryJob | null
+}
+
+export interface CanonicalHistoryBackfillRequest {
+  start_date?: string
+  end_date?: string
+  batch_size?: number
+}
+
+export interface CanonicalHistoryBackfillResponse {
+  job_id: string
+  status: 'pending' | 'running'
+}
+
 // ===== Data status =====
+
+/** 本地增量 overlay（canonical 发布点之后的本地产出分区） */
+export interface LocalOverlayStats {
+  earliest_date: string | null
+  latest_date: string | null
+  trading_days: number
+}
+
+/** canonical 全历史权威统计（已发布 manifest）；row_count_exact=false 时 rows 为已知下界 */
+export interface CanonicalHistoryStats {
+  generation: string
+  earliest_date: string | null
+  latest_date: string | null
+  rows: number
+  symbols: number
+  trading_days: number
+}
+
+/** 表级新鲜度 — awaiting_publish 表示上游新交易日待发布，latest_date 并非滞后 */
+export interface TableFreshness {
+  status: 'current' | 'awaiting_publish' | 'unknown'
+  age_days: number | null
+  reference_date: string | null
+  reason: string | null
+}
+
 interface TableStats {
   rows: number
+  row_count_exact?: boolean
   earliest_date: string | null
   latest_date: string | null
   symbols_covered: number
   trading_days: number
+  available?: boolean
+  source?: 'local_cache' | 'catalog_tdx_minutes'
+  stage?: 'preliminary' | 'final'
+  generation?: string
+  logical?: string
+  /** 股票池总标的数（来自维表） */
+  universe_symbols?: number
+  /** 最新本地单分区实际覆盖标的数（只读 symbol 列精确计算） */
+  latest_partition_symbols?: number
+  /** 本地增量 overlay；daily/enriched 的 earliest/latest/trading_days/symbols_covered 已合并 canonical 全历史 + overlay，代表可查询范围 */
+  local_overlay?: LocalOverlayStats | null
+  /** canonical 全历史权威统计 */
+  canonical_history?: CanonicalHistoryStats | null
+  freshness?: TableFreshness | null
+  /** persisted=本地落盘；provider_on_demand=Provider 按需读取、不单独落盘 */
+  storage_mode?: 'persisted' | 'provider_on_demand'
+  /** 后端给出的可读状态说明（如 provider 按需说明） */
+  status_message?: string | null
 }
 
 interface InstrumentsStats {
@@ -2223,10 +4592,21 @@ export interface DataStatus {
   etf_daily: TableStats | null
   etf_enriched: TableStats | null
   etf_instruments: InstrumentsStats | null
+  hk_daily: TableStats | null
+  hk_enriched: TableStats | null
+  hk_instruments: InstrumentsStats | null
   minute: TableStats | null
   adj_factor: TableStats | null
   instruments: InstrumentsStats | null
-  financials: { rows: number; tables: Record<string, { rows: number; symbols: number }> } | null
+  financials: {
+    rows: number
+    tables: Record<string, {
+      rows: number
+      symbols: number
+      earliest_date?: string | null
+      latest_date?: string | null
+    }>
+  } | null
   storage: {
     daily_files: number
     daily_size_mb: number
@@ -2261,8 +4641,18 @@ export interface DataStatus {
   next_pipeline_run: string | null
   next_instruments_run: string | null
   last_pipeline_run: string | null
+  /** 最近一次管道执行摘要（新契约）；旧后端可缺失，前端回退 last_pipeline_run 展示 */
+  last_pipeline?: LastPipelineSummary | null
   last_instruments_run: string | null
   checked_at: string
+}
+
+/** /api/data/status 的 last_pipeline — 最近一次管道执行结果摘要 */
+export interface LastPipelineSummary {
+  status: 'pending' | 'running' | 'succeeded' | 'degraded' | 'failed'
+  finished_at: string | null
+  error: string | null
+  failed_stages: { stage: string; error: string }[]
 }
 
 export interface EnrichedField {
@@ -2347,4 +4737,812 @@ export interface AnalysisMenu {
   created_at?: string | null
   updated_at?: string | null
   builtin?: boolean
+}
+
+// ===== Trading (YMOS 交易域) =====
+// 后端: api/trading.py + api/trading_review.py + api/trading_plans.py + api/strategy_profile.py
+// 契约以 services/trading/*.py 源码为准: 事件流 append-only, 单笔文件是当前事实的缓存投影。
+
+export type TradeStatus = '计划中' | '建仓中' | '持仓中' | '已平仓' | '已作废'
+
+export type TradeEventKind =
+  | 'open' | 'prepare' | 'revise' | 'fill'
+  | 'add' | 'trim' | 'tp' | 'sl' | 'adjust' | 'close' | 'void'
+
+export interface TradeThesis {
+  text: string
+  invalidation: string
+  createdAt: string
+}
+
+export interface TradePlanLeg {
+  qty: number | null
+  price: number | null
+  total?: number | null
+  ts: string
+}
+
+/** 单笔交易当前事实 (data/user_data/trading/trades/{id}.json) */
+export interface Trade {
+  schemaVersion: number
+  tradeId: string
+  symbol: string
+  name: string
+  status: TradeStatus
+  strategy: string | null
+  thesis: TradeThesis
+  stopLoss: number | null
+  exitRule?: string
+  position: { qty: number; costPrice: number; invested: number }
+  realizedPnl: number
+  createdAt: string
+  closedAt: string | null
+  voidedAt?: string | null
+  accountId?: string
+  /** prepare 事件写入的建仓计划 */
+  plan?: TradePlanLeg
+  /** revise 事件累积的修订历史 */
+  planRevisions?: TradePlanLeg[]
+  /** 分批建仓累计事实；filledAmount 不因后续减仓回退 */
+  build?: {
+    filledQty: number
+    filledAmount: number
+    fillCount: number
+    completedAt: string | null
+  }
+}
+
+/** 生命周期事件 (trade_events.jsonl, 只追加) */
+export interface TradeEvent {
+  schemaVersion: number
+  tradeId: string
+  kind: TradeEventKind
+  ts: string
+  payload: Record<string, unknown>
+  note: string
+  /** 门禁未通过但用户确认执行 → 绕门留痕 */
+  gateBypassed?: boolean
+  /** 计划偏差接口补充的标的 */
+  symbol?: string
+}
+
+export interface GateCheckResult {
+  id: string
+  name: string
+  passed: boolean
+  detail: string
+}
+
+export interface GateEvaluation {
+  passed: boolean
+  gates: GateCheckResult[]
+  missing: string[]
+}
+
+/** 决策审计条目 (decision_audit.jsonl, 拦截/放行均留痕) */
+export interface AuditEntry {
+  schemaVersion: number
+  ts: string
+  mode: string
+  tradeId: string
+  symbol: string
+  passed: boolean
+  gates: GateCheckResult[]
+  missing: string[]
+  note: string
+}
+
+export interface AccountChange {
+  ts: string
+  amount: number
+  reason: string
+}
+
+export interface AccountSettlement {
+  id: string
+  ts: string
+  tradeId: string
+  symbol: string
+  accountId: string
+  realizedPnl: number
+  closeDate: string
+  capitalBefore: number
+  capitalAfter: number
+}
+
+export interface TradingAccount {
+  id: string
+  currency: string
+  capital: number
+  horizonFundMonths: number
+  maxSingleRatio: number
+  changes: AccountChange[]
+  settlements?: AccountSettlement[]
+}
+
+export interface AccountsDoc {
+  schemaVersion: number
+  accounts: TradingAccount[]
+}
+
+export type PortfolioHealth = 'normal' | 'attention' | 'critical'
+
+export interface PortfolioPosition {
+  tradeId: string
+  status?: TradeStatus
+  symbol: string
+  name: string
+  qty: number
+  costPrice: number
+  price: number | null
+  marketValue: number | null
+  unrealizedPnl: number | null
+  stopLoss: number | null
+  stopLossDistance: number | null
+  thesis: TradeThesis
+  stale: boolean
+  exposure?: number | null
+}
+
+export interface FholdAccount {
+  id: string
+  name: string
+  broker: string
+  isDefault: boolean
+}
+
+export interface FholdPosition {
+  symbol: string | null
+  code: string
+  name: string
+  accountId: string
+  qty: number
+  costPrice: number
+  currentPrice: number
+  marketValue: number
+  holdingPnl: number
+  holdingPnlRatio: number
+  sourceDate?: string
+  updatedAt?: string
+}
+
+export interface FholdHoldings {
+  available: boolean
+  accounts: FholdAccount[]
+  positions: FholdPosition[]
+}
+
+/** 组合快照 (GET /api/trading/portfolio, 实时计算派生值) */
+export interface PortfolioSnapshot {
+  nav: number
+  capital: number
+  realizedPnl: number
+  settledRealizedPnl?: number
+  unrealizedPnl: number
+  positionsValue: number
+  available: number
+  pendingPlansAmount: number
+  positions: PortfolioPosition[]
+  health: PortfolioHealth
+  stale: boolean
+  priceSource: string
+  maxSingleRatio: number
+  fhold: FholdHoldings
+}
+
+export interface PortfolioRiskPosition {
+  symbol: string
+  weight: number
+  annualizedVolatility: number | null
+  riskContribution: number | null
+}
+
+export interface PortfolioRiskSnapshot {
+  status: 'ok' | 'no_positions' | 'insufficient_data'
+  lookbackDays: number
+  source: 'canonical_kline_daily'
+  methodology: string
+  degraded: boolean
+  dataAsOf: string | null
+  observations: number
+  metrics: {
+    annualizedVolatility: number | null
+    maxDrawdown: number | null
+    maxPairCorrelation: number | null
+    effectivePositions: number | null
+    topWeight: number | null
+  }
+  positions: PortfolioRiskPosition[]
+  correlation: { symbols: string[]; matrix: Array<Array<number | null>> }
+  meta: { kept: string[]; dropped: string[]; warnings: string[] }
+}
+
+/** 机械红旗 (red_flags.py):放宽止损/亏损加仓/绕过门禁/审计断链 + P6 期限超限/仓位超限/门禁膨胀 */
+export interface RedFlag {
+  type:
+    | 'stop_loss_widened'
+    | 'loss_add'
+    | 'gate_bypassed'
+    | 'audit_missing'
+    | 'horizon_exceeded'   // 持仓超限(单笔级)
+    | 'size_over_limit'    // 仓位超限(单笔级)
+    | 'gate_proliferation' // 门禁膨胀(全局级)
+    | string
+  ts: string
+  kind?: string
+  old?: number
+  new?: number
+  price?: number
+  costPrice?: number
+  /** P6 新类型:后端预格式化文案,直接展示 */
+  detail?: string
+  // horizon_exceeded
+  holdingDays?: number
+  horizonMonths?: number
+  limitDays?: number
+  // size_over_limit
+  marketValue?: number
+  nav?: number
+  exposure?: number
+  breached?: string[]
+  maxSingleRatio?: number
+  positionLimitPct?: number
+  // gate_proliferation(全局级)
+  ruleCount?: number
+  threshold?: number
+}
+
+/** AI 归因结果 (autopsy.py: A 策略正常不利 / B 执行偏离 / C 规则歧义冲突 / D 数据问题) */
+export interface AutopsyResult {
+  schemaVersion: number
+  tradeId: string
+  classification: string
+  reasoning: string
+  fix: string
+  rawResponse: string
+  redFlags: RedFlag[]
+  ts: string
+  /** P3: 执行元信息(实际 profile/模型/fallback/usage),旧落盘记录可缺失 */
+  ai_meta?: AiExecutionMeta | null
+}
+
+/** 盘后状态驱动归因结果 (POST /api/trading/review/auto-run) */
+export interface AutoReviewResult {
+  level: 'L0' | 'L1'
+  candidates: number
+  autopsied: number
+  skipped: number
+  errors?: Array<{ tradeId: string; error: string }>
+  /** AI 未配置时为 'blocked_by_dependency' */
+  code?: string
+  detail?: string
+}
+
+export type ProposalStatus = 'draft' | 'approved' | 'rejected' | 'trial' | 'verified'
+
+export interface ProposalHistoryItem {
+  ts: string
+  from: string
+  to: string
+  note: string
+}
+
+export interface Proposal {
+  schemaVersion: number
+  id: string
+  title: string
+  target: string
+  evidence: unknown[]
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  falsifier: string
+  sampleSize: number
+  status: ProposalStatus
+  createdAt: string
+  updatedAt: string
+  history: ProposalHistoryItem[]
+  /** P6:属放宽 && 近30天有亏损平仓 → true,审批警示 */
+  relaxationAfterLoss?: boolean
+}
+
+export interface PlanCheckContinuityMeta {
+  mode: 'fresh' | 'incremental' | 'full_reanalysis'
+  parent_attempt_id: string | null
+  parent_artifact_id: string | null
+  reason: string
+  bars_delta: number
+  new_bar_dates: string[]
+  parent_data_as_of: string | null
+  self_data_as_of: string | null
+  compatibility: Record<string, boolean>
+}
+
+export type GateRuleMode = 'buy_new' | 'add' | 'tp' | 'sl' | 'close' | 'adjust'
+
+export interface GateRuleItem {
+  id: string
+  text: string
+}
+
+export interface GateRuleSection {
+  all: GateRuleItem[]
+  any: GateRuleItem[]
+  discipline: GateRuleItem[]
+}
+
+export type GateRulesMap = Record<GateRuleMode, GateRuleSection>
+
+export interface GateRulesDoc {
+  schemaVersion: number
+  rules: GateRulesMap
+}
+
+export type PlanAction = 'buy_new' | 'add' | 'tp' | 'sl' | 'close' | 'adjust' | 'watch'
+
+export interface PlanEntry {
+  id: string
+  symbol: string
+  tradeId: string | null
+  action: PlanAction
+  trigger: string
+  qty: number | null
+  reason: string
+  createdAt: string
+  /** P4 additive fields; old saved plans may omit them. */
+  strategyId?: string | null
+  plannedPrice?: number | null
+  stopLoss?: number | null
+  exitRule?: string
+  thesisHorizonMonths?: number | null
+  invalidation?: string
+}
+
+export interface TradePlanDoc {
+  schemaVersion: number
+  date: string
+  entries: PlanEntry[]
+  actualNotes: string
+}
+
+export interface PlanDeviationPlanned {
+  key: string[]
+  id: string
+  symbol: string
+  action: string
+  tradeId: string | null
+}
+
+export interface PlanDeviationDone {
+  key: string[]
+  symbol: string
+  kind: string
+  tradeId: string
+  ts: string
+}
+
+export interface PlanDeviation {
+  date: string
+  plannedCount: number
+  doneCount: number
+  planned_but_not_done: PlanDeviationPlanned[]
+  done_but_not_planned: PlanDeviationDone[]
+  matched: PlanDeviationPlanned[]
+}
+
+export interface AnalysisTraceNode {
+  id: string
+  kind: string
+  label: string
+  status: 'pass' | 'fail' | 'unknown' | 'skipped' | string
+  source_refs: string[]
+  reason?: string | null
+  locked: boolean
+  depends_on: string[]
+}
+
+export interface PlanCheckGate {
+  status: 'proceed' | 'wait' | 'unknown'
+  reasons: string[]
+  missing_inputs: string[]
+  data_as_of: string
+  source: string
+  program_rules_version: string
+}
+
+export interface PlanCheckStage1 {
+  trend: string
+  volatility: string
+  liquidity: string
+  readiness: 'sufficient' | 'insufficient'
+  conflicts: string[]
+  notes: string[]
+}
+
+export interface PlanCheckReview {
+  checks: Array<{ item: string; conclusion: '满足' | '部分满足' | '不满足'; reason: string }>
+  summary: string
+}
+
+export interface PlanCheckResult {
+  status: 'no_action' | 'review_ready'
+  gate: PlanCheckGate
+  stage1: PlanCheckStage1 | null
+  review: PlanCheckReview | null
+  disclaimer: string
+  ai_meta?: AiExecutionMeta | null
+  warnings: string[]
+  continuity?: PlanCheckContinuityMeta
+}
+
+export interface PlanCheckArtifact {
+  id?: string
+  attempt_id: string
+  request_id: string
+  purpose?: string
+  status: 'ok' | 'failed' | 'cancelled'
+  data_as_of?: string | null
+  symbol?: string | null
+  parent_attempt_id?: string | null
+  result: PlanCheckResult
+  trace: AnalysisTraceNode[]
+  usage: AiUsageMeta
+  warnings: string[]
+}
+
+export type PlanCheckStreamEvent =
+  | { type: 'meta'; attempt_id: string; request_id: string; date: string; entry_id: string }
+  | { type: 'progress'; kind: string; stage?: string; status?: string; [key: string]: unknown }
+  | ({ type: 'result' } & PlanCheckArtifact)
+  | { type: 'error'; code: string; message: string }
+  | { type: 'done'; attempt_id: string; request_id: string }
+
+export interface PlanCheckSummary {
+  id: string
+  attempt_id: string
+  request_id: string
+  status: string
+  symbol?: string | null
+  market?: string | null
+  profile_id?: string | null
+  parent_attempt_id?: string | null
+  continuity_mode?: PlanCheckContinuityMeta['mode'] | null
+  created_at?: string | null
+  result_status?: string | null
+}
+
+export interface StrategyProfileInvalidation {
+  name: string
+  observable: string
+  action: string
+}
+
+/** 策略坐标卡 family 合法值(P6.3) */
+export type StrategyFamily =
+  | 'value' | 'growth' | 'trend' | 'event'
+  | 'short_horizon' | 'relative_value' | 'mixed'
+
+/** family=mixed 时必填的四要素裁决 */
+export interface StrategyFamilyMix {
+  entryJudge: string
+  invalidationAuthority: string
+  sizingHorizon: string
+  conflictResolution: string
+}
+
+/** 策略剧本(P6.3,三文本均可缺省) */
+export interface StrategyPlaybook {
+  scope?: string
+  entry?: string
+  exit?: string
+}
+
+export interface StrategyProfile {
+  schemaVersion: number
+  strategyId: string
+  invalidation: StrategyProfileInvalidation[]
+  risk: { positionLimitPct: number; lossBudgetPct: number; thesisHorizonMonths: number }
+  cadence: { review: string }
+  /** 策略坐标卡(P6.3 可选) */
+  family?: StrategyFamily | string
+  /** family=mixed 时必填 */
+  familyMix?: StrategyFamilyMix
+  /** 策略剧本(P6.3 可选) */
+  playbook?: StrategyPlaybook
+}
+
+export interface StrategyProfileCheck {
+  id: string
+  name: string
+  status: 'pass' | 'partial' | 'fail' | 'insufficient_evidence' | string
+  detail: string
+}
+
+/** 策略体检响应(ai=true 时追加 AI 深度体检报告) */
+export interface StrategyValidateResult {
+  checks: StrategyProfileCheck[]
+  aiReport?: string | null
+  aiError?: string
+  /** P3: AI 深度体检的执行元信息(实际 profile/模型/fallback/usage),旧响应可缺失 */
+  ai_meta?: AiExecutionMeta | null
+}
+
+// ── 生命周期 (api/trading.py) ──
+
+export function tradingListTrades(status?: TradeStatus | string) {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request<{ trades: Trade[] }>(`/api/trading/trades${qs}`)
+}
+
+export function tradingGetTrade(id: string) {
+  return request<{ trade: Trade; events: TradeEvent[] }>(
+    `/api/trading/trades/${encodeURIComponent(id)}`,
+  )
+}
+
+export interface TradingOpenPayload {
+  symbol: string
+  name: string
+  thesis: { text: string; invalidation: string }
+  stopLoss?: number | null
+  strategy?: string
+  note?: string
+  gate?: { confirmed?: boolean }
+}
+
+export function tradingOpenTrade(payload: TradingOpenPayload) {
+  return request<Trade>('/api/trading/trades', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export interface TradingAppendEventPayload {
+  kind: Exclude<TradeEventKind, 'open'>
+  payload?: Record<string, unknown>
+  note?: string
+  /** 门禁预检未过时由用户确认后带上: {confirmed: true} → 绕门留痕 */
+  gate?: { confirmed?: boolean; gates?: GateCheckResult[]; missing?: string[] }
+}
+
+export function tradingAppendEvent(id: string, payload: TradingAppendEventPayload) {
+  return request<Trade>(`/api/trading/trades/${encodeURIComponent(id)}/events`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingListAudit(params?: { tradeId?: string; passed?: boolean; limit?: number }) {
+  const sp = new URLSearchParams()
+  if (params?.tradeId) sp.set('trade_id', params.tradeId)
+  if (params?.passed !== undefined) sp.set('passed', String(params.passed))
+  if (params?.limit) sp.set('limit', String(params.limit))
+  const qs = sp.toString()
+  return request<{ audit: AuditEntry[] }>(`/api/trading/audit${qs ? `?${qs}` : ''}`)
+}
+
+// ── 账户 / 组合快照 ──
+
+export function tradingGetAccounts() {
+  return request<AccountsDoc>('/api/trading/accounts')
+}
+
+export function tradingPutAccounts(payload: { accounts: TradingAccount[] }) {
+  return request<AccountsDoc>('/api/trading/accounts', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingGetPortfolio() {
+  return request<PortfolioSnapshot>('/api/trading/portfolio')
+}
+
+// ── 红旗 / AI 归因 (api/trading_review.py) ──
+
+export function tradingGetRedFlags() {
+  return request<{ flags: Record<string, RedFlag[]> }>('/api/trading/red-flags')
+}
+
+export function tradingGetTradeRedFlags(id: string) {
+  return request<{ tradeId: string; flags: RedFlag[] }>(
+    `/api/trading/trades/${encodeURIComponent(id)}/red-flags`,
+  )
+}
+
+export function tradingRunAutopsy(id: string, profileId?: string) {
+  const qs = profileId ? `?${new URLSearchParams({ profile_id: profileId })}` : ''
+  return request<AutopsyResult>(`/api/trading/trades/${encodeURIComponent(id)}/autopsy${qs}`, {
+    method: 'POST',
+  })
+}
+
+export function tradingGetAutopsy(id: string) {
+  // 404 = 尚未生成归因(正常状态), 静默返回 null 不弹 toast
+  return request<AutopsyResult | null>(
+    `/api/trading/trades/${encodeURIComponent(id)}/autopsy`,
+    undefined,
+    { silent404: true },
+  )
+}
+
+export function tradingGetPortfolioRisk(lookbackDays = 120) {
+  return request<PortfolioRiskSnapshot>(
+    `/api/trading/portfolio/risk?lookback_days=${encodeURIComponent(String(lookbackDays))}`,
+  )
+}
+
+/** 盘后状态驱动 AI 归因(L0/L1):POST /api/trading/review/auto-run */
+export function tradingRunAutoReview() {
+  return request<AutoReviewResult>('/api/trading/review/auto-run', { method: 'POST' })
+}
+
+// ── 策略变更提案 ──
+
+export function tradingListProposals(status?: ProposalStatus | string) {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request<{ proposals: Proposal[] }>(`/api/trading/proposals${qs}`)
+}
+
+export function tradingCreateProposal(payload: Partial<Proposal> & { falsifier: string }) {
+  return request<Proposal>('/api/trading/proposals', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export function tradingUpdateProposal(id: string, payload: Record<string, unknown>) {
+  return request<Proposal>(`/api/trading/proposals/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+// ── 门禁 (api/trading_plans.py) ──
+
+export function tradingGetGateRules() {
+  return request<GateRulesDoc>('/api/trading/gate-rules')
+}
+
+export function tradingPutGateRules(payload: { rules: Partial<GateRulesMap> }) {
+  return request<GateRulesDoc>('/api/trading/gate-rules', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingEvaluateGates(payload: {
+  mode: string
+  tradeId?: string
+  payload: Record<string, unknown>
+}) {
+  return request<GateEvaluation>('/api/trading/gates/evaluate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// ── 交易计划台 ──
+
+export function tradingGetPlan(date: string) {
+  return request<TradePlanDoc>(`/api/trading/plans/${date}`)
+}
+
+export function tradingPutPlan(
+  date: string,
+  payload: { entries: PlanEntry[]; actualNotes?: string; replace?: boolean; schemaVersion?: number },
+) {
+  return request<TradePlanDoc>(`/api/trading/plans/${date}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function tradingGetPlanDeviation(date: string) {
+  return request<PlanDeviation>(`/api/trading/plans/${date}/deviation`)
+}
+
+export async function* tradingCheckPlanStream(
+  date: string,
+  entryId: string,
+  profileId?: string,
+  signal?: AbortSignal,
+  continuity = false,
+): AsyncGenerator<PlanCheckStreamEvent> {
+  const params = new URLSearchParams()
+  if (profileId) params.set('profile_id', profileId)
+  if (continuity) params.set('continuity', 'true')
+  const qs = params.toString()
+  const res = await fetch(
+    `/api/trading/plans/${encodeURIComponent(date)}/entries/${encodeURIComponent(entryId)}/check${qs}`,
+    { method: 'POST', signal },
+  )
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const body = JSON.parse(await res.text()) as { detail?: string }
+      if (body.detail) detail = body.detail
+    } catch { /* retain status */ }
+    throw new Error(detail)
+  }
+  if (!res.body) throw new Error('计划检查响应无流数据')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      yield JSON.parse(line) as PlanCheckStreamEvent
+    }
+  }
+  if (buffer.trim()) yield JSON.parse(buffer) as PlanCheckStreamEvent
+}
+
+export function tradingListPlanChecks(symbol?: string, limit = 50) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (symbol) params.set('symbol', symbol)
+  return request<{ items: PlanCheckSummary[] }>(`/api/trading/plan-checks?${params}`)
+}
+
+export function tradingGetPlanCheck(attemptId: string) {
+  return request<PlanCheckArtifact>(`/api/trading/plan-checks/${encodeURIComponent(attemptId)}`)
+}
+
+export interface PlanCheckContinuityChainNode {
+  attempt_id: string
+  artifact_id: string
+  status: string
+  symbol: string | null
+  data_as_of: string | null
+  created_at: string | null
+  parent_attempt_id: string | null
+  continuity_mode: PlanCheckContinuityMeta['mode'] | 'unknown'
+  continuity_reason: string
+  bars_delta: number
+  usage: AiUsageMeta
+}
+
+export function tradingGetPlanCheckContinuity(attemptId: string) {
+  return request<{
+    chain: PlanCheckContinuityChainNode[]
+    depth: number
+    has_parent: boolean
+  }>(`/api/trading/plan-checks/${encodeURIComponent(attemptId)}/continuity`)
+}
+
+export function tradingPlanCheckExportUrl(attemptId: string, format: 'json' | 'markdown') {
+  return `/api/trading/plan-checks/${encodeURIComponent(attemptId)}/export?format=${format}`
+}
+
+// ── 策略风险声明 (api/strategy_profile.py, prefix=/api/strategies) ──
+
+export function strategyGetProfile(id: string) {
+  return request<{ profile: StrategyProfile }>(
+    `/api/strategies/${encodeURIComponent(id)}/profile`,
+  )
+}
+
+export function strategyPutProfile(
+  id: string,
+  payload: Omit<StrategyProfile, 'schemaVersion' | 'strategyId'> | Record<string, unknown>,
+) {
+  return request<{ ok: boolean; profile: StrategyProfile }>(
+    `/api/strategies/${encodeURIComponent(id)}/profile`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  )
+}
+
+export function strategyDeleteProfile(id: string) {
+  return request<{ ok: boolean }>(`/api/strategies/${encodeURIComponent(id)}/profile`, {
+    method: 'DELETE',
+  })
+}
+
+export function strategyValidateProfile(id: string, ai = false, profileId?: string) {
+  const params = new URLSearchParams()
+  if (ai) params.set('ai', 'true')
+  // P3: additive — 选中 profile 时传给后端路由;缺省走后端默认/路由策略
+  if (profileId) params.set('profile_id', profileId)
+  const qs = params.toString()
+  return request<StrategyValidateResult>(
+    `/api/strategies/${encodeURIComponent(id)}/profile/validate${qs ? `?${qs}` : ''}`,
+  )
 }

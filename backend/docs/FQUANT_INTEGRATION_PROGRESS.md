@@ -2,21 +2,22 @@
 
 > 主线任务：**让 tickflow-stock-panel 通过 `data_providers` 抽象层读取本地 DuckDB 发布快照，并保留可切换 provider 的业务契约。**
 >
-> 最后更新：2026-07-13
+> 最后更新：2026-08-18
 > 状态：本地 DuckDB provider 已落地；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
 ---
 
-## 0. 2026-07-13 当前状态
+## 0. 2026-08-18 当前状态
 
 - `FQuantProvider` 的行情主路径是只读本地 DuckDB；旧的 PG / engine-data HTTP 阶段说明保留在下文，仅作为迁移历史，不再代表当前运行架构。
-- A 股分钟线通过 `catalog_resolver.resolve_route("tdx_minutes", "a", trade_date)` 定位 2023 年前归档或当前快照；A 股逐笔通过 `catalog_resolver.resolve_route("tdx_trans", "a", trade_date)` 定位逐年快照。
-- route catalog 每次查询都重新解析，不缓存 catalog 结果。连接仍由 `ConnectionSet` 按最终物理路径复用并安全退役，因此同一个 catalog generation 内的 2019 / 2026 年路由不会串用连接。
-- `require_current` 必须与映射后数据 root 的 `current.json` generation 精确一致；`pinned_immutable` 直接解析固定 generation。任一路由、manifest、路径或 freshness 校验失败都返回空结果并记录 warning，**不会降级到 raw 文件**。
-- 港股 minutes/trans 和其它已知整库仍走现有 `_LeasedSource` / `snapshot_or_raw` 语义；它们不属于本次日期分片迁移。
-- 配置入口：`FQUANT_SNAPSHOT_ROOT_CATALOG`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_MINUTES_ARCHIVE`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE`。这些变量也用于 staging 与测试重定向。
-- 验证：catalog resolver 与客户端聚焦测试 `29 passed, 2 skipped`；`tests/data_providers/` 为 `101 passed, 2 skipped`，另有 1 个父提交同样失败的本机 snapshot 环境假设用例，不是本次路由回归；相关 source 的 mypy 与新增文件 ruff 检查通过。
+- A 股分钟线通过 `catalog_resolver.resolve_route("tdx_minutes", "a", trade_date)` 定位 2023 年前归档或当前快照；A 股逐笔通过 `catalog_resolver.resolve_route("tdx_trans", "a", trade_date)` 定位历史归档年片或活跃年的月度快照。route catalog 每次查询重新解析；校验失败 fail-closed，绝不降级 writer-owned raw。
+- 新增专用的 A 股 canonical enriched 全历史 generation：回填只读取任务启动时 pin 住的已发布 `tdx/fstore/markets/klines` 快照，输出到 `TICKFLOW_CANONICAL_HISTORY_ROOT`（默认 `/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history`），staging 完整成功后才原子切换 `current.json`；不写用户 `data/`。repository 查询把该全历史与受信任的本地近期分区合并，同日以本地为准。
+- 新增只读市场数据工作台（研究页“市场数据”）：`tdx_chip` 筹码、个股/板块日级及分钟资金流、集合竞价和 A 股逐笔成交均提供 capability/status、受限 API 与前端查询入口。所有路径只读已发布 snapshot/catalog，输入按 symbol/date/frequency/limit 限界，不进入选股、回测或监控输入。
+- 独立 snapshot root：`fstore-extended`、`tdx_moneyflow_minute`、`tdx_callauction` 分别由 `FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION` 配置；筹码与日级资金流跟随只读 `engine-a` generation。
+- 港股事实边界已显式化：日 K/minutes/trans 可用；本地发布快照中没有港股公司行动/复权事件，也没有港股财务报表。`hk_adjustment` / `hk_financial` 状态明确为 unavailable，provider 对港股复权、公司行动和财务查询 fail-closed 返回空，不借用同码 A 股数据。
+- 2026-08-11 真盘验证：筹码/个股日资金流/个股分钟资金流/板块日资金流/集合竞价/A 股逐笔分别返回 `1/1/254/3/6/6` 行；status 覆盖筹码 `2,501,804` 行、日级个股资金流 `5,629,184` 行、分钟个股资金流 `193,424,721` 行、集合竞价 `14,844,313` 行。
+- 自由 Agent 的 Pi Agent Harness sidecar 仅替换 `/api/agent/*` 的可选 LLM 会话循环；13 个工具仍由 Python 进程执行并继续只读现有 repository/provider 公开接口。试点未新增行情源、provider capability、DuckDB 写入或 canonical/enriched 消费路径，默认 Python runtime 不变。
 
 下文第 1～7 节记录 2026-07-02 前后的迁移过程。涉及 PG、HTTP、未提交状态或旧单文件 minutes/trans 的描述，以本节和仓库当前代码为准。
 
@@ -57,7 +58,7 @@ backend/app/data_providers/fquant/             ← 8 文件子模块
 ├── engine_data_client.py 120 行   engine-data HTTP 客户端
 ├── engine_data_disk.py  140+ 行   TDX 磁盘 CSV 客户端（fquant_local）
 ├── moneyflow_client.py  135  行   moneyflow HTTP 客户端
-├── sina_tencent_client.py      realtime fallback 客户端
+├── sina_tencent_client.py      受控 external fallback 的源客户端（由 service 适配层按 opt-in 调用，FQuantProvider 不实例化）
 ├── raw_reconstruct.py          TDX 前复权 raw 修复
 ├── mapping.py           385  行   上游字段 → 内部 schema
 ├── adj_factor.py        123  行   xdxr 事件 → 累积 ex_factor
@@ -85,7 +86,7 @@ capabilities = ProviderCapabilities(
 4. **adj_factor 主源选 engine-data `xdxr`**：fstore `chuquan_chuxi` 作为 fallback，`xdxr` 字段语义更直接（fenhong/fenshu 直接换算成 ex_factor）。
 5. **`chips` 端点不接入**：实测 8s 内未返回，引擎在 NAS 慢。本期不接。
 6. **财务报表不再缺口**：fstore 有完整 `financial_report_income_statement` / `balance_sheet` / `cash_flow` / `annual` / `quick` / `forecast` 六张表，**`get_financial` capability 升为 ✅**。
-7. **realtime 不走 fquant API**：优先可选相邻 `tdx-api` `/api/quote`，否则走 sina/tencent 受控适配器，再回退 fstore `daily_markets` 最新快照。
+7. **realtime 只读本地 DuckDB**：`FQuantProvider` 读取 `fstore-markets.duckdb.daily_markets` generation 快照；先探测全局 `MAX(trade_date)`，再按该交易日和 `asset_type` 点查。外部公共源仅允许由默认关闭的 service 侧受控 fallback 补真缺口。
 
 ### 2.4 验证结果（`scripts/test_fquant_provider.py`）
 
@@ -96,7 +97,7 @@ capabilities = ProviderCapabilities(
 | 3 | get_daily(['600519.SH']) | 250 行左右 | 250 行 ✅ |
 | 4 | get_adj_factors(['600519.SH']) | 非空 | 45 行 ✅ |
 | 5 | get_financial('600519.SH', 'income') | 4 行 | 4 行 27 列 ✅ |
-| 6 | get_realtime(['600519.SH']) | tdx-api / sina/tencent / fstore 快照 | 1 行 ✅ |
+| 6 | get_realtime(['600519.SH']) | fstore `daily_markets` 最新 generation 快照 | 1 行 ✅ |
 | 7 | get_minute | 0 行（上游暂时不可达） | 0 行 ✅ |
 | 8 | 符号归一（`split_symbol` / `code_and_market_to_symbol`） | 6 类全过 | ✅ |
 | 9 | 字段映射（`base_infos_rows_to_instruments`） | 必填列齐 | ✅ |
@@ -145,7 +146,7 @@ def sync_daily(...):
 | `quote_service.py` | +46 / -17 | 3 处 | tickflow 回归 + fquant 降级 | ✅ |
 | `financial_sync.py` | +87 / -34 | 6 处 | 财务报表走 fstore | 22101 行利润表 ✅ |
 | `index_sync.py` | +28 / -31 | 5 处 | universes 走 provider `get_by_universes()` | CN_Index/ETF/Sector live 验证 ✅ |
-| `watchlist.py` | +20 / -5 | 3 处 | realtime 走 provider | tdx-api / sina/tencent / fstore fallback ✅ |
+| `watchlist.py` | +20 / -5 | 3 处 | realtime 走 provider；本地快照缺失或过期时仅可由受控 external fallback 补展示数据 | 本地 fstore 快照 ✅ |
 | `depth_service.py` | +20 / -0 | 0 处 | 能力检查模式：fquant 直接降级返回空，tickflow 保留 SDK | 降级逻辑验证 ✅ |
 | **合计** | **+341 / -219** | **24 处** | — | — |
 
@@ -159,7 +160,7 @@ def sync_daily(...):
 | `get_daily(['600519.SH'])` | 250 行 | 0.2s |
 | `get_adj_factors` | 45 行 | 0.2s |
 | `get_financial('600519.SH', 'income')` | 4 行 27 列 | 0.0s |
-| `get_realtime` | 1 行（tdx-api / sina/tencent / fstore daily_markets fallback） | — |
+| `get_realtime` | 1 行（fstore `daily_markets` 最新 generation 快照） | — |
 | `get_minute` | 0 行（上游暂时不可达） | — |
 
 ### 3.5 TickFlow 回归（DATA_PROVIDER=tickflow）
@@ -169,7 +170,7 @@ def sync_daily(...):
 ### 3.6 已知保留点
 
 - `depth_service.py` 不解耦 5 档盘口：当前 FQuantProvider 未暴露 depth capability，保留 TickFlow。
-- `realtime` 已接本地源：禁止 `../fquant` HTTP API，优先 tdx-api，再走 sina/tencent，最后回退 fstore `daily_markets` 最新快照。
+- `realtime` 已接本地源：禁止 `../fquant` / `tdx-api` / sina / tencent 进入 provider；`FQuantProvider` 只读 fstore `daily_markets`，外部公共源只能由 service 侧受控 fallback 在用户 opt-in 后补展示缺口。
 
 ---
 
@@ -179,7 +180,7 @@ def sync_daily(...):
 
 | # | 缺口 | 方案 | 状态 |
 |---|------|------|------|
-| 3.1 | `get_realtime()` | 不允许调用 `../fquant` HTTP API；优先相邻 `tdx-api`，再走 sina/tencent，回退 fstore `daily_markets` 最新快照 | ✅ 已实现，live 验证通过 |
+| 3.1 | `get_realtime()` | 只读 fstore `daily_markets` generation 快照；全局最新交易日 + `asset_type` 点查；外部源不得进入 provider | ✅ 已实现，live 验证通过 |
 | 3.2 | `get_by_universes()`（指数/ETF/板块标的） | 接 fstore `chengfen_gu` + `base_infos`，TickFlowProvider 保留 SDK 兼容实现 | ✅ 已实现，live 验证：CN_Index=2256 / CN_ETF=1930 / CN_Sector=1021 |
 | 3.3 | `get_depth()` 5 档盘口 ❌ | 当前 FQuantProvider 未提供 depth capability，已在 `depth_service.py` 能力门控降级（阶段 2 已完成） | ✅ 标注完成 |
 
@@ -222,7 +223,7 @@ def sync_daily(...):
 - 本地模式禁写 stock raw mirror：repository 层门控收口在 7 个写方法（`append_daily` / `append_index_daily` / `append_etf_daily` / `append_daily_asset` / `merge_live_daily_asset` / `flush_live_daily` / `flush_live_daily_asset`）统一调用 `_skip_raw_daily_write()`，实际仅拦截其中 stock 范围的写（`append_daily`、`append_daily_asset("stock")`、`merge_live_daily_asset("stock")`、`flush_live_daily`、`flush_live_daily_asset("stock")`）；`kline_daily_enriched` 仍作为计算缓存保留。index/ETF raw 暂留给现有页面、统计和 fallback 路径。
 - pipeline 新入口：`run_pipeline_local(provider, ...)` 直接 provider→enriched，不依赖 `data/kline_daily`；增量起点使用 `kline_daily_enriched` 最新分区，干净环境不会每天回退一年重算。
 - 单股 K fallback：本地模式缓存空时 provider 直读并计算返回，不落 raw。
-- realtime：tdx-api 优先，sina/tencent 受控适配器 fallback，最后 fstore `daily_markets`；所有输出统一 `normalize_realtime()`，外部源连续失败 3 次冷却 60 秒。
+- realtime：fstore `daily_markets` 最新 generation 快照；所有输出统一 `normalize_realtime()`。受控外部 fallback 独立位于 service 层，默认关闭且仅供展示。
 - 数据状态：本地模式 stock raw mirror 缺失时，`/api/data/status` 的 daily 口径用 enriched 分区日期并标记 `raw_mirror_disabled=true`。
 
 ### 6B.2 验证证据（2026-07-02）
@@ -251,21 +252,21 @@ def sync_daily(...):
 - `fund/` 只覆盖日级净额分类；完整 minute moneyflow（inflow/outflow、有效/无效笔数等）仍走 moneyflow HTTP 或降级空。
 - `holding` / `fhold` 是个人持仓数据源，不属于公共行情 provider 契约；如接入应走独立用户数据入口。
 - `refresh_polluted_daily.py` 是一次性迁移脚本，只用于旧 `fquant` HTTP 模式污染分区重刷；`fquant_local` 日常路径不写 raw。
-- sina/tencent 是 provider 内 realtime fallback，不是"本地磁盘"来源；设置页/排障文案必须避免误导。
+- sina/tencent 客户端只供 service 侧受控 external fallback 使用，不是 `fquant_local` provider 来源；必须由用户显式开启对应 scope，且返回带 provenance/degraded 标记。
 - 当前变更仍在工作区，未 commit；提交前需用户 review。
 
 ---
 
 ## 7. 技术架构简述
 
-### 7.1 本地源
+### 7.1 数据依赖与可选受控外部源
 
 | 上游 | 协议 | 用途 | 配置文件 |
 |------|------|------|---------|
 | **fstore PostgreSQL** | psycopg v3 | 标的列表 / 财务报表 / 复权事件 / 分钟级备份 | `FSTORE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`（默认 `pve.wf:5432/fstore`） |
 | **engine-data** | HTTP GET | 日 K 主源（wide）/ 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
 | **moneyflow** | HTTP GET | 资金流日 / 资金流分钟 | `http://pve.wf:8090`（上次测试 502，已自动降级） |
-| **tdx-api（可选）** | HTTP GET | realtime quote 主源；未配置时回退 sina/tencent 与 fstore 快照 | `FQUANT_TDX_API_BASE` / `DSA_TDX_API_BASE_URL` / `TDX_API_BASE_URL` |
+| **Tencent 公共行情（可选）** | HTTPS GET | 仅补 realtime/depth 的真实本地缺口，展示用途 | 设置中的 `external_fallback_enabled` + 独立 scope，默认关闭 |
 
 ### 7.2 调用链
 
@@ -297,7 +298,7 @@ PG / HTTP
 |---|------|------|
 | D1 | 直连上游源，不走 fquant HTTP 中转 | +可控性 / -复杂度 |
 | D2 | daily 主源选 engine-data `wide` 而非 fstore `day_klines` | +数据全 / -多一跳 HTTP |
-| D3 | `realtime` 不接 fquant HTTP 代理，直连 tdx-api / sina/tencent / fstore fallback | +不绕聚合层 / -tdx-api 可选 |
+| D3 | `realtime` 不接 fquant/tdx-api/公网代理，provider 只读 fstore `daily_markets`；外部公共源走独立受控 fallback | +主链路可审计 / -本地快照发布前会明确 stale |
 | D4 | `financial` capability 升级 ✅（fstore 报表表完整） | 原 PoC 是 ❌，现在打通 |
 | D5 | `chips` 端点不接入（8s 超时） | 阶段 3 路线 3 再议 |
 | D6 | service 层默认 `tickflow`，`DATA_PROVIDER` 可覆盖 settings 偏好 | +安全 / -运行时切换需刷新 provider 单例与能力缓存 |
@@ -355,6 +356,18 @@ PG / HTTP
 | 2026-07-02 | 2 | 完成 service 层 7/7 解耦 | 端到端 + tickflow 回归 ✅ |
 | 2026-07-02 | 6 | 完成 `fquant_local` 本地磁盘模式工作区实现 | 71 tests + 真盘 smoke ✅ |
 | 2026-07-02 | — | 撰写本进度文档 | — |
+| 2026-08-06 | 跨域校对 | PA_Agent P4 结构化计划检查与 P5 PushPlus 完成；计划检查的行情输入只读既有 `data_providers`/canonical enriched 路径，PushPlus 仅分发用户已配置的监控告警/复盘报告，均未新增或绕过数据源 | 终审修复后后端全量 1075 tests + `import app.main` + 前端 build + 开发服务/UI smoke ✅ |
+| 2026-08-10 | 受控缺口与研究入口校对 | `FQuantProvider.depth` 仍为 false；数据页新增默认关闭的 `realtime`/`depth` 独立 fallback scope。外部 depth 已与 authoritative sealed cache 隔离，仅在连板当前展示响应中携带 `sealed_degraded`/`sealed_source`，不修正 counts/状态、不进入总览/研究/选股/回测/监控。研究中心、横截面、信号记分卡、组合策略、参数网格和 M25 连续性 UI 完成接线，均保持本地 DuckDB/append-only/provenance 与无自动执行边界 | 最终集成定向回归 `303 passed`；`import app.main`、前端 TypeScript/build、真实服务 `/health` 与浏览器多页面诊断通过 |
+| 2026-08-10 | 数值与风险边界校对 | provider mapping 将 `NaN/±Inf` 统一视为缺失，实时/分钟展示和 AI K 线上下文不得输出非标准 JSON 数值；交易组合风险只读既有 canonical 日 K，不新增 provider capability、外部源或写入路径 | 映射/行情/分析/交易定向回归通过；真实服务 `/health` 与 `/api/trading/portfolio/risk` smoke 通过 |
+| 2026-08-10 | realtime 可靠性 | `daily_markets` 改为全局最新交易日 + `asset_type`/code 点查，并使用独立 DuckDB 客户端/锁；engine compat 缺状态时只缺兼容指标、不删除基础 enriched 行；QuoteService 防重入且按源日期 fail-closed；自选页合并只读 snapshot，明确区分本地过期与外部降级 | 后端全量 `1475 passed`；前端 `tsc -b --force`；真盘 provider `5892` 行/`3.022s`/源日期 `2026-08-10`，snapshot API 两标的 `0.74s`；浏览器验证空 enriched、外部降级和本地过期三种展示 |
+| 2026-08-11 | 全链路数据审计 | 盘后 `run_now` 在 freshness/分区覆盖率验证后立即发布并刷新 enriched canonical 水位；7 个看板/回测/复盘关键指数缺早期 canonical 数据时按需补齐；无参 realtime snapshot 恢复默认指数快照兼容行为；数据页改用分区元数据展示大表覆盖，避免全表行数扫描阻塞 | 后端全量 `1578 passed`；关键指数真实回填 `17183` 行，`000300.INDEX` API 返回 2015-01-05～2026-08-10 共 `2819` 行；`/health`、`/api/data/status`、`/api/overview/market`、无参 snapshot 与浏览器数据页 smoke 通过，页面无错误 |
+| 2026-08-11 | 分钟 K 数据源校对 | 数据页在本地 `kline_minute` 缓存为空时改为展示 active provider 的 catalog 发布水位，不再把“未缓存”误报成“DuckDB 无数据”；移除已退役 `fstore-minutes.duckdb` 的客户端 ATTACH/兼容 view 与配置文档；修复指数分钟/逐笔查询未把 `asset_type=index` 传入 TDX 前缀映射而误读同代码深市股票的问题 | 后端全量 `1582 passed`；真实 catalog 返回 preliminary `2026-08-11`，`600519.SH` 与 `000001.INDEX` 当日分钟 API 均返回 240 行，指数首价 `3951.59`；前端 build 与数据页浏览器 smoke 通过 |
+| 2026-08-18 | 跨域校对 | 自由 Agent 新增默认关闭的 Pi Agent Harness source/dev-only sidecar；Node 仅负责 LLM loop，工具和业务状态仍归 Python，不新增或绕过数据源，不进入选股/回测/监控/交易 AI 主链 | Agent 测试族 `100 passed`；后端全量 `2482 passed, 3 skipped`；真实 Pi SDK 本地假 provider 工具往返、attempt 落盘与子进程取消回收通过 |
+| 2026-08-18 | 日 K 水位与日期一致性 | canonical 启动水位改为取 `get_daily` 完整本地链的最新日期，不再只看滞后的 TDX wide；有区间的日 K 按日期合并 engine 与 fstore，指数再用 `daily_markets(asset_type=10)` 补齐缺失交易日；大盘总览在本地指数 parquet 滞后时经 provider 补同一 `as_of`，避免把前一交易日指数拼到当前股票广度；复盘/看板日期 UI 隔离跨日 store 与分表水位 | 定向后端 `92 passed`；前端 TypeScript + Vite build；真实接口 canonical/overview/review 各 Tab 均为 `2026-08-17`，四个核心指数均带同日 `date`，浏览器验证复盘标题、历史报告、看板 DatePicker 与指数页 |
+| 2026-08-21 | 筛选模块 S1-S4（见 `SCREENER_PRODUCT_REVIEW_2026-08-20.md`） | S1 正确性：删 `PRESET_STRATEGIES`/`run_preset` 双执行路径（统一 StrategyEngine，缺失 503），断板反包改 filter_history 真名实，缓存同日合并；S2 工作台：方案持久化 `user_data/screener_screens.json` + CRUD API、批量自选/CSV/行详情、日期与 latest_only 徽标、裸 SQL `/run` 收口 410；S3 方案→生产：新 `strategy/screen_bridge.py` 把保存方案注册为 `screen:<hex>` 策略（监控 type=strategy 与回测同源），回测面板缺外部 join 字段时 fail-closed 显式拒绝；S4 选股语言：条件分组（组内 AND/组间 OR）、9 个多日序列字段（历史窗口独立求值路径）、行业分布 facet（PIT，limit 前全量聚合）、EPS 改标准 TTM 累计口径 | 后端全量 `3054 passed, 3 skipped`；前端 `tsc -b`+build+16 测试脚本全过；真机浏览器 E2E：方案保存→回测此方案（真实回测 45.9s 10 笔交易）→监控规则创建→清理；live API OR 分组+序列+facet 返回 1146 命中 |
+| 2026-08-21 | AI 模块评审与 S1/S2 局部落地（见 `AI_PRODUCT_REVIEW_2026-08-21.md`） | Report 三入口 + Agent 系统提示去指令化（禁词测试锁死）；`POST /api/agent/chat` 410；策略生成 Step1 仅预览、确认后落盘；财务/复盘/Agent/策略生成登记 `ai_budgets`；Agent 归研究域；个股分析前端接 attempt 取消（气泡/弹窗 ×）。财务/复盘取消、报告带走、runtime 角标仍待 S2/S3 | 定向 `test_ai_report_prompts`/`test_ai_budgets`/`test_agent` 等 99 passed；前端 `tsc -b` |
+| 2026-08-21 | AI 模块 F1–F17 全量落地 + 双 reviewer 独立复审 | F7 取消对称（财务/复盘注册 attempt + `X-AI-Attempt-ID`，取消不落盘）；F8 报告带走（个股/财务加自选/送回测、Agent pool 卡片）；F9 流连接态 connecting/open/closed 三入口；F12 策略保存后回测此策略；F13 程序化 `StockReportSummary`（extra=forbid，无二次 LLM）；F14 as_of/source/adjustment 上屏；F15 同标的报告两栏 diff；F16 进程内 Agent 并发上限 2（python/pi 共槽、非阻塞、取消 `aclosing` 归还）；F17 前端 bun 测试。复审修复：reviewStore catch/finally 加旧流所有权守卫（取消后立即重启不被旧流 abort 改写 cancelled，`reviewStoreOwnership.test.ts` 变异验证）；agent_loop 工具轮与终流补传 `budget.timeout`（90s，不再走 provider 默认 180s） | 后端 agent/loop/runtime/concurrency/budgets/cancel `25+42 passed`；前端 `tsc -b` + 守卫测试全绿 |
+
 
 ---
 

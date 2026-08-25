@@ -2,11 +2,11 @@ from datetime import date
 
 import pytest
 
-from app.api.backtest import _walk_forward_windows
+from app.api.backtest import _segment_windows
 
 
 def test_windows_cover_range_without_overlap():
-    windows = _walk_forward_windows(date(2024, 1, 1), date(2024, 12, 31), n_folds=4)
+    windows = _segment_windows(date(2024, 1, 1), date(2024, 12, 31), n_segments=4)
     assert len(windows) == 4
     assert windows[0][0] == date(2024, 1, 1)
     assert windows[-1][1] == date(2024, 12, 31)
@@ -16,4 +16,4 @@ def test_windows_cover_range_without_overlap():
 
 def test_windows_min_fold_length_guard():
     with pytest.raises(ValueError, match="窗口过短"):
-        _walk_forward_windows(date(2024, 1, 1), date(2024, 2, 1), n_folds=4)
+        _segment_windows(date(2024, 1, 1), date(2024, 2, 1), n_segments=4)

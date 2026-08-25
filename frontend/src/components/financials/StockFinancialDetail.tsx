@@ -33,75 +33,76 @@ const TABS: { key: TabKey; label: string; icon: typeof TrendingUp }[] = [
 // 字段定义:键 → (中文名, 格式化类型)
 // pct=百分点(存的是 12.3 表示 12.3%); amount=金额(元,转亿/万亿); perShare=每股; num=普通数值(保留2位)
 type FmtType = 'pct' | 'amount' | 'perShare' | 'num'
-type FieldDef = { label: string; fmt: FmtType; group?: string }
+type FieldDef = { label: string; fmt: FmtType; key: string; group?: string }
 
 const FIELD_DEFS: Record<TabKey, FieldDef[]> = {
   metrics: [
-    { label: '基本每股收益 EPS', fmt: 'perShare', key: 'eps_basic' } as any,
-    { label: '稀释每股收益 EPS', fmt: 'perShare', key: 'eps_diluted' } as any,
-    { label: '每股净资产 BPS', fmt: 'perShare', key: 'bps' } as any,
-    { label: '每股经营现金流', fmt: 'perShare', key: 'ocfps' } as any,
-    { label: '净资产收益率 ROE', fmt: 'pct', key: 'roe' } as any,
-    { label: '稀释 ROE', fmt: 'pct', key: 'roe_diluted' } as any,
-    { label: '总资产收益率 ROA', fmt: 'pct', key: 'roa' } as any,
-    { label: '销售毛利率', fmt: 'pct', key: 'gross_margin' } as any,
-    { label: '销售净利率', fmt: 'pct', key: 'net_margin' } as any,
-    { label: '资产负债率', fmt: 'pct', key: 'debt_to_asset_ratio' } as any,
-    { label: '营业收入同比增长', fmt: 'pct', key: 'revenue_yoy' } as any,
-    { label: '净利润同比增长', fmt: 'pct', key: 'net_income_yoy' } as any,
-    { label: '经营现金/营收', fmt: 'pct', key: 'operating_cash_to_revenue' } as any,
-    { label: '存货周转率', fmt: 'num', key: 'inventory_turnover' } as any,
+    { label: '基本每股收益 EPS', fmt: 'perShare', key: 'eps_basic' },
+    { label: '稀释每股收益 EPS', fmt: 'perShare', key: 'eps_diluted' },
+    { label: '每股净资产 BPS', fmt: 'perShare', key: 'bps' },
+    { label: '每股经营现金流', fmt: 'perShare', key: 'ocfps' },
+    { label: '净资产收益率 ROE', fmt: 'pct', key: 'roe' },
+    { label: '稀释 ROE', fmt: 'pct', key: 'roe_diluted' },
+    { label: '总资产收益率 ROA', fmt: 'pct', key: 'roa' },
+    { label: '销售毛利率', fmt: 'pct', key: 'gross_margin' },
+    { label: '销售净利率', fmt: 'pct', key: 'net_margin' },
+    { label: '资产负债率', fmt: 'pct', key: 'debt_to_asset_ratio' },
+    { label: '营业收入同比增长', fmt: 'pct', key: 'revenue_yoy' },
+    { label: '净利润同比增长', fmt: 'pct', key: 'net_income_yoy' },
+    { label: '经营现金/营收', fmt: 'pct', key: 'operating_cash_to_revenue' },
+    { label: '存货周转率', fmt: 'num', key: 'inventory_turnover' },
   ],
   income: [
-    { label: '营业收入', fmt: 'amount', key: 'revenue' } as any,
-    { label: '营业成本', fmt: 'amount', key: 'operating_cost' } as any,
-    { label: '营业利润', fmt: 'amount', key: 'operating_profit' } as any,
-    { label: '销售费用', fmt: 'amount', key: 'selling_expense' } as any,
-    { label: '管理费用', fmt: 'amount', key: 'admin_expense' } as any,
-    { label: '研发费用', fmt: 'amount', key: 'rd_expense' } as any,
-    { label: '财务费用', fmt: 'amount', key: 'financial_expense' } as any,
-    { label: '营业外收入', fmt: 'amount', key: 'non_operating_income' } as any,
-    { label: '营业外支出', fmt: 'amount', key: 'non_operating_expense' } as any,
-    { label: '利润总额', fmt: 'amount', key: 'total_profit' } as any,
-    { label: '所得税', fmt: 'amount', key: 'income_tax' } as any,
-    { label: '净利润', fmt: 'amount', key: 'net_income' } as any,
-    { label: '归母净利润', fmt: 'amount', key: 'net_income_attributable' } as any,
-    { label: '扣非净利润', fmt: 'amount', key: 'net_income_deducted' } as any,
-    { label: '基本每股收益', fmt: 'perShare', key: 'basic_eps' } as any,
-    { label: '稀释每股收益', fmt: 'perShare', key: 'diluted_eps' } as any,
+    { label: '营业收入', fmt: 'amount', key: 'revenue' },
+    { label: '营业成本', fmt: 'amount', key: 'operating_cost' },
+    { label: '营业利润', fmt: 'amount', key: 'operating_profit' },
+    { label: '销售费用', fmt: 'amount', key: 'selling_expense' },
+    { label: '管理费用', fmt: 'amount', key: 'admin_expense' },
+    { label: '研发费用', fmt: 'amount', key: 'rd_expense' },
+    { label: '财务费用', fmt: 'amount', key: 'financial_expense' },
+    { label: '营业外收入', fmt: 'amount', key: 'non_operating_income' },
+    { label: '营业外支出', fmt: 'amount', key: 'non_operating_expense' },
+    { label: '利润总额', fmt: 'amount', key: 'total_profit' },
+    { label: '所得税', fmt: 'amount', key: 'income_tax' },
+    { label: '净利润', fmt: 'amount', key: 'net_income' },
+    { label: '归母净利润', fmt: 'amount', key: 'net_income_attributable' },
+    { label: '扣非净利润', fmt: 'amount', key: 'net_income_deducted' },
+    { label: '基本每股收益', fmt: 'perShare', key: 'basic_eps' },
+    { label: '稀释每股收益', fmt: 'perShare', key: 'diluted_eps' },
   ],
   balance_sheet: [
-    { label: '资产总计', fmt: 'amount', key: 'total_assets' } as any,
-    { label: '流动资产合计', fmt: 'amount', key: 'total_current_assets' } as any,
-    { label: '非流动资产合计', fmt: 'amount', key: 'total_non_current_assets' } as any,
-    { label: '货币资金', fmt: 'amount', key: 'cash_and_equivalents' } as any,
-    { label: '应收账款', fmt: 'amount', key: 'accounts_receivable' } as any,
-    { label: '存货', fmt: 'amount', key: 'inventory' } as any,
-    { label: '固定资产', fmt: 'amount', key: 'fixed_assets' } as any,
-    { label: '无形资产', fmt: 'amount', key: 'intangible_assets' } as any,
-    { label: '商誉', fmt: 'amount', key: 'goodwill' } as any,
-    { label: '负债合计', fmt: 'amount', key: 'total_liabilities' } as any,
-    { label: '流动负债合计', fmt: 'amount', key: 'total_current_liabilities' } as any,
-    { label: '非流动负债合计', fmt: 'amount', key: 'total_non_current_liabilities' } as any,
-    { label: '短期借款', fmt: 'amount', key: 'short_term_borrowing' } as any,
-    { label: '长期借款', fmt: 'amount', key: 'long_term_borrowing' } as any,
-    { label: '应付账款', fmt: 'amount', key: 'accounts_payable' } as any,
-    { label: '所有者权益合计', fmt: 'amount', key: 'total_equity' } as any,
-    { label: '归母所有者权益', fmt: 'amount', key: 'equity_attributable' } as any,
-    { label: '未分配利润', fmt: 'amount', key: 'retained_earnings' } as any,
-    { label: '少数股东权益', fmt: 'amount', key: 'minority_interest' } as any,
+    { label: '资产总计', fmt: 'amount', key: 'total_assets' },
+    { label: '流动资产合计', fmt: 'amount', key: 'total_current_assets' },
+    { label: '非流动资产合计', fmt: 'amount', key: 'total_non_current_assets' },
+    { label: '货币资金', fmt: 'amount', key: 'cash_and_equivalents' },
+    { label: '应收账款', fmt: 'amount', key: 'accounts_receivable' },
+    { label: '存货', fmt: 'amount', key: 'inventory' },
+    { label: '固定资产', fmt: 'amount', key: 'fixed_assets' },
+    { label: '无形资产', fmt: 'amount', key: 'intangible_assets' },
+    { label: '商誉', fmt: 'amount', key: 'goodwill' },
+    { label: '负债合计', fmt: 'amount', key: 'total_liabilities' },
+    { label: '流动负债合计', fmt: 'amount', key: 'total_current_liabilities' },
+    { label: '非流动负债合计', fmt: 'amount', key: 'total_non_current_liabilities' },
+    { label: '短期借款', fmt: 'amount', key: 'short_term_borrowing' },
+    { label: '长期借款', fmt: 'amount', key: 'long_term_borrowing' },
+    { label: '应付账款', fmt: 'amount', key: 'accounts_payable' },
+    { label: '所有者权益合计', fmt: 'amount', key: 'total_equity' },
+    { label: '归母所有者权益', fmt: 'amount', key: 'equity_attributable' },
+    { label: '未分配利润', fmt: 'amount', key: 'retained_earnings' },
+    { label: '少数股东权益', fmt: 'amount', key: 'minority_interest' },
   ],
   cash_flow: [
-    { label: '经营活动现金流净额', fmt: 'amount', key: 'net_operating_cash_flow' } as any,
-    { label: '投资活动现金流净额', fmt: 'amount', key: 'net_investing_cash_flow' } as any,
-    { label: '筹资活动现金流净额', fmt: 'amount', key: 'net_financing_cash_flow' } as any,
-    { label: '固定资产/无形资产投资', fmt: 'amount', key: 'capex' } as any,
-    { label: '现金及等价物净增加额', fmt: 'amount', key: 'net_cash_change' } as any,
+    { label: '经营活动现金流净额', fmt: 'amount', key: 'net_operating_cash_flow' },
+    { label: '投资活动现金流净额', fmt: 'amount', key: 'net_investing_cash_flow' },
+    { label: '筹资活动现金流净额', fmt: 'amount', key: 'net_financing_cash_flow' },
+    { label: '固定资产/无形资产投资', fmt: 'amount', key: 'capex' },
+    { label: '现金及等价物净增加额', fmt: 'amount', key: 'net_cash_change' },
   ],
 }
 
-function formatValue(v: number | null | undefined, fmt: FmtType): string {
-  if (v == null || Number.isNaN(v)) return '—'
+function formatValue(v: unknown, fmt: FmtType): string {
+  // row[def.key] 经索引签名返回 unknown;只接受有限数值,其余一律 — 不伪造。
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '—'
   switch (fmt) {
     case 'pct':
       // 存储的是百分点(12.3 表示 12.3%),直接保留2位 + %
@@ -173,6 +174,8 @@ export function StockFinancialDetail({ symbol, name }: Props) {
   // 头部报告期信息取最新一期(优先用当前 tab,兜底用 metrics)
   const latestPeriod = rows[0]?.period_end ?? metrics.data?.data?.[0]?.period_end ?? null
   const latestAnnounce = rows[0]?.announce_date ?? metrics.data?.data?.[0]?.announce_date ?? null
+  // 数据来源 provenance(当前 tab 优先,兜底 metrics);用于头部显示真实数据出处。
+  const latestSource = rows[0]?.source ?? metrics.data?.data?.[0]?.source ?? null
 
   return (
     <div className="rounded-card border border-border bg-surface overflow-hidden">
@@ -199,6 +202,9 @@ export function StockFinancialDetail({ symbol, name }: Props) {
               <span>报告期 <span className="font-mono">{latestPeriod}</span></span>
               {latestAnnounce && (
                 <span className="text-muted">· 披露 {fmtDate(latestAnnounce)}</span>
+              )}
+              {latestSource && (
+                <span className="text-muted font-mono">· 来源 {latestSource}</span>
               )}
             </div>
           )}
@@ -254,7 +260,7 @@ export function StockFinancialDetail({ symbol, name }: Props) {
                   </div>
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-0">
-                  {fieldDefs.map((def: any) => {
+                  {fieldDefs.map((def) => {
                     const val = row[def.key]
                     return (
                       <div

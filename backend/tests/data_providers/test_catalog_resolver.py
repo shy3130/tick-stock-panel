@@ -50,11 +50,24 @@ def _publish_catalog(tmp_path: Path, routes: list[dict[str, object]]) -> Path:
             route_key TEXT, market TEXT, start_date DATE, end_date DATE,
             root TEXT, generation TEXT, logical TEXT, file TEXT,
             size_bytes BIGINT, freshness_mode TEXT, priority INT,
-            updated_at TIMESTAMP)"""
+            stage TEXT, coverage_date DATE, reconciled BOOLEAN, quality TEXT,
+            reconciliation_ref TEXT, supersedes TEXT, preliminary_root_id TEXT,
+            preliminary_generation TEXT, updated_at TIMESTAMP)"""
     )
     for route in routes:
+        staged = route.get("stage")
+        if staged is None and route["freshness_mode"] == cr.FRESHNESS_REQUIRE_CURRENT:
+            staged = "final"
+        coverage_date = route.get("coverage_date")
+        if staged == "final" and coverage_date is None:
+            coverage_date = "2026-07-13"
+        reconciled = route.get("reconciled", staged == "final")
+        quality = route.get("quality", "verified" if staged == "final" else "")
+        reconciliation_ref = route.get(
+            "reconciliation_ref", "test-reconcile" if staged == "final" else ""
+        )
         connection.execute(
-            "INSERT INTO catalog_routes VALUES (?,?,?,?,?,?,?,?,?,?,?,now())",
+            "INSERT INTO catalog_routes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,now())",
             [
                 route["route_key"],
                 route["market"],
@@ -67,6 +80,14 @@ def _publish_catalog(tmp_path: Path, routes: list[dict[str, object]]) -> Path:
                 route.get("size_bytes", 0),
                 route["freshness_mode"],
                 route.get("priority", 0),
+                staged,
+                coverage_date,
+                reconciled,
+                quality,
+                reconciliation_ref,
+                route.get("supersedes", ""),
+                route.get("preliminary_root_id", ""),
+                route.get("preliminary_generation", ""),
             ],
         )
     connection.close()
@@ -89,7 +110,7 @@ def _route(**overrides: object) -> dict[str, object]:
         "market": "a",
         "start_date": "2026-01-01",
         "end_date": "2026-12-31",
-        "root": "/Volumes/WD1/snapshots/engine-a",
+        "root": "/Volumes/WD1/duckdb/snapshots/engine-a",
         "generation": "20260713T090000",
         "logical": "tdx_trans_2026",
         "file": "t.duckdb",
@@ -125,8 +146,14 @@ def test_resolve_route_require_current_stale_raises(
     monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
     monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(data_root))
 
-    with pytest.raises(cr.StaleCatalogError):
+    with pytest.raises(cr.StaleCatalogError) as exc_info:
         cr.resolve_route("tdx_trans", "a", date(2026, 7, 13))
+    # A staged (final) stale route gets the accurate republishing guidance only;
+    # it must NOT carry the legacy stage=NULL migration guidance.
+    message = str(exc_info.value)
+    assert "pins" in message
+    assert "republish a catalog row that pins the root's current generation" in message
+    assert "publish this route as staged" not in message
 
 
 def test_resolve_route_pinned_immutable_ignores_newer_current(
@@ -144,7 +171,7 @@ def test_resolve_route_pinned_immutable_ignores_newer_current(
             _route(
                 start_date="2015-01-01",
                 end_date="2015-12-31",
-                root="/Volumes/WD1/snapshots/engine-a-trans-archive",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive",
                 generation="20260101T000000",
                 logical="tdx_trans_2015",
                 file="t15.duckdb",
@@ -174,7 +201,7 @@ def test_same_catalog_routes_different_years_to_different_files(
             _route(
                 start_date="2019-01-01",
                 end_date="2019-12-31",
-                root="/Volumes/WD1/snapshots/engine-a-trans-archive",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive",
                 generation="20200101T000000",
                 logical="tdx_trans_2019",
                 file="t19.duckdb",
@@ -236,3 +263,496 @@ def test_resolve_route_date_sharded_requires_date(
 
     with pytest.raises(cr.CatalogError, match="trade_date is required"):
         cr.resolve_route("tdx_trans", "a", None)
+
+
+def test_exact_final_wins_over_same_day_preliminary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final_root = tmp_path / "engine-a"
+    preliminary_root = tmp_path / "engine-a-preliminary"
+    final = _write_generation(final_root, "20260713T090000", "tdx_trans_2026", "final.duckdb")
+    _write_generation(preliminary_root, "20260713T080000", "tdx_trans_preliminary", "pre.duckdb")
+    (final_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T090000"}), encoding="utf-8"
+    )
+    (preliminary_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T080000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                stage="final",
+                coverage_date="2026-07-13",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="r",
+                generation="20260713T090000",
+                file="final.duckdb",
+            ),
+            _route(
+                route_key="tdx_trans_preliminary",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                stage="preliminary",
+                coverage_date="2026-07-13",
+                reconciled=False,
+                quality="preliminary",
+                generation="20260713T080000",
+                logical="tdx_trans_preliminary",
+                file="pre.duckdb",
+            ),
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(final_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY", str(preliminary_root))
+
+    assert cr.resolve_route("tdx_trans", "a", date(2026, 7, 13)) == str(final)
+
+
+def test_later_month_final_wins_over_exact_preliminary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final_root = tmp_path / "engine-a"
+    preliminary_root = tmp_path / "engine-a-preliminary"
+    final = _write_generation(
+        final_root,
+        "20260806T174226",
+        "tdx_trans_2026_08",
+        "final-month.duckdb",
+    )
+    _write_generation(
+        preliminary_root,
+        "20260805T174226",
+        "tdx_trans_preliminary",
+        "pre.duckdb",
+    )
+    (final_root / "current.json").write_text(
+        json.dumps({"generation": "20260806T174226"}), encoding="utf-8"
+    )
+    (preliminary_root / "current.json").write_text(
+        json.dumps({"generation": "20260805T174226"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                start_date="2026-08-01",
+                end_date="2026-08-31",
+                generation="20260806T174226",
+                logical="tdx_trans_2026_08",
+                file="final-month.duckdb",
+                stage="final",
+                coverage_date="2026-08-06",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="reconcile-20260806",
+            ),
+            _route(
+                route_key="tdx_trans_preliminary",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                generation="20260805T174226",
+                logical="tdx_trans_preliminary",
+                file="pre.duckdb",
+                stage="preliminary",
+                coverage_date="2026-08-05",
+                reconciled=False,
+                quality="preliminary",
+            ),
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(final_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY", str(preliminary_root))
+
+    assert cr.resolve_route("tdx_trans", "a", date(2026, 8, 5)) == str(final)
+
+def test_weekend_request_selects_closest_later_preliminary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A weekend request (2026-08-15) has no exact row at all; the preliminary
+    # published for the next trading day (coverage 2026-08-17) must serve it,
+    # and the closest coverage wins even against a farther higher-priority row.
+    final_root = tmp_path / "engine-a"
+    preliminary_root = tmp_path / "engine-a-preliminary"
+    expected = _write_generation(
+        preliminary_root, "20260817T080000", "tdx_trans_preliminary", "pre-0817.duckdb"
+    )
+    (preliminary_root / "current.json").write_text(
+        json.dumps({"generation": "20260817T080000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                start_date="2026-08-01",
+                end_date="2026-08-31",
+                generation="20260814T174226",
+                logical="tdx_trans_2026_08",
+                file="final.duckdb",
+                stage="final",
+                coverage_date="2026-08-14",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="reconcile-20260814",
+            ),
+            _route(
+                route_key="tdx_trans_preliminary",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                start_date="2026-08-01",
+                end_date="2026-08-31",
+                generation="20260817T080000",
+                logical="tdx_trans_preliminary",
+                file="pre-0817.duckdb",
+                stage="preliminary",
+                coverage_date="2026-08-17",
+                reconciled=False,
+                quality="preliminary",
+            ),
+            _route(
+                route_key="tdx_trans_preliminary",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                start_date="2026-08-01",
+                end_date="2026-08-31",
+                generation="20260818T080000",
+                logical="tdx_trans_preliminary",
+                file="pre-0818.duckdb",
+                stage="preliminary",
+                coverage_date="2026-08-18",
+                reconciled=False,
+                quality="preliminary",
+                priority=9,
+            ),
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(final_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY", str(preliminary_root))
+
+    assert cr.resolve_route("tdx_trans", "a", date(2026, 8, 15)) == str(expected)
+
+
+def test_later_final_wins_over_later_preliminary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Adding the later-preliminary tier must not demote a later final row.
+    final_root = tmp_path / "engine-a"
+    preliminary_root = tmp_path / "engine-a-preliminary"
+    final = _write_generation(
+        final_root, "20260817T174226", "tdx_trans_2026_08", "final-month.duckdb"
+    )
+    _write_generation(
+        preliminary_root, "20260817T080000", "tdx_trans_preliminary", "pre.duckdb"
+    )
+    (final_root / "current.json").write_text(
+        json.dumps({"generation": "20260817T174226"}), encoding="utf-8"
+    )
+    (preliminary_root / "current.json").write_text(
+        json.dumps({"generation": "20260817T080000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                start_date="2026-08-01",
+                end_date="2026-08-31",
+                generation="20260817T174226",
+                logical="tdx_trans_2026_08",
+                file="final-month.duckdb",
+                stage="final",
+                coverage_date="2026-08-17",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="reconcile-20260817",
+            ),
+            _route(
+                route_key="tdx_trans_preliminary",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                start_date="2026-08-01",
+                end_date="2026-08-31",
+                generation="20260817T080000",
+                logical="tdx_trans_preliminary",
+                file="pre.duckdb",
+                stage="preliminary",
+                coverage_date="2026-08-17",
+                reconciled=False,
+                quality="preliminary",
+            ),
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(final_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY", str(preliminary_root))
+
+    assert cr.resolve_route("tdx_trans", "a", date(2026, 8, 15)) == str(final)
+
+
+def test_route_resolution_pins_catalog_generation_once_per_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "engine-a"
+    _write_generation(data_root, "20260713T090000", "tdx_trans_2026", "final.duckdb")
+    (data_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T090000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                stage="final",
+                coverage_date="2026-07-13",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="r",
+                file="final.duckdb",
+            )
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(data_root))
+    original = cr._catalog_db_path
+    calls = 0
+
+    def pinned_catalog_path() -> str:
+        nonlocal calls
+        calls += 1
+        return original()
+
+    monkeypatch.setattr(cr, "_catalog_db_path", pinned_catalog_path)
+    cr.resolve_route("tdx_trans", "a", date(2026, 7, 13))
+    assert calls == 1
+
+
+def test_exact_preliminary_fallback_uses_preliminary_root_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    preliminary_root = tmp_path / "engine-a-preliminary"
+    expected = _write_generation(
+        preliminary_root, "20260713T080000", "tdx_trans_preliminary", "pre.duckdb"
+    )
+    (preliminary_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T080000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                route_key="tdx_trans_preliminary",
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-preliminary",
+                stage="preliminary",
+                coverage_date="2026-07-13",
+                reconciled=False,
+                quality="preliminary",
+                generation="20260713T080000",
+                logical="tdx_trans_preliminary",
+                file="pre.duckdb",
+            )
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_PRELIMINARY", str(preliminary_root))
+
+    assert cr.resolve_route("tdx_trans", "a", date(2026, 7, 13)) == str(expected)
+
+
+def test_missing_exact_route_does_not_read_stale_final_for_current_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "engine-a"
+    _write_generation(data_root, "20260713T090000", "tdx_trans_2026", "t.duckdb")
+    _write_generation(data_root, "20260714T090000", "tdx_trans_2026", "t.duckdb")
+    (data_root / "current.json").write_text(
+        json.dumps({"generation": "20260714T090000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                stage="final",
+                coverage_date="2026-07-13",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="r",
+            )
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(data_root))
+
+    with pytest.raises(cr.CatalogError):
+        cr.resolve_route("tdx_trans", "a", date(2026, 7, 14))
+
+
+def test_staged_current_route_is_historical_only_before_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "engine-a"
+    expected = _write_generation(data_root, "20260713T090000", "tdx_trans_2026", "t.duckdb")
+    (data_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T090000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                stage="final",
+                coverage_date="2026-07-13",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="r",
+            )
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(data_root))
+
+    assert cr.resolve_route("tdx_trans", "a", date(2026, 7, 12)) == str(expected)
+    with pytest.raises(cr.CatalogError):
+        cr.resolve_route("tdx_trans", "a", date(2026, 7, 14))
+
+
+def test_legacy_pinned_archive_allowed_but_legacy_current_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "trans-archive"
+    expected = _write_generation(archive, "20200101T000000", "tdx_trans_2019", "t.duckdb")
+    (archive / "current.json").write_text(
+        json.dumps({"generation": "20200101T000000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                root="/Volumes/WD1/duckdb/snapshots/engine-a-trans-archive",
+                generation="20200101T000000",
+                logical="tdx_trans_2019",
+                file="t.duckdb",
+                start_date="2019-01-01",
+                end_date="2019-12-31",
+                freshness_mode=cr.FRESHNESS_PINNED_IMMUTABLE,
+            )
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE", str(archive))
+    assert cr.resolve_route("tdx_trans", "a", date(2019, 7, 10)) == str(expected)
+
+    current_root = tmp_path / "engine-a"
+    _write_generation(current_root, "20260713T090000", "tdx_trans_2026", "t26.duckdb")
+    (current_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T090000"}), encoding="utf-8"
+    )
+    # stage="" forces a genuine legacy (stage=NULL) require_current row. The
+    # written file matches the route's file so the ONLY failure reason is the
+    # legacy-stage fail-closed rejection, not a manifest/file mismatch.
+    catalog_root = _publish_catalog(
+        tmp_path / "current-case",
+        [_route(start_date="2026-01-01", end_date="2026-12-31", file="t26.duckdb", stage="")],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(current_root))
+    with pytest.raises(cr.CatalogError) as exc_info:
+        cr.resolve_route("tdx_trans", "a", date(2026, 7, 12))
+    message = str(exc_info.value)
+    assert "legacy" in message
+    assert "publish this route as staged" in message
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"preliminary_root_id": "/tmp/preliminary"},
+        {"preliminary_generation": "20260712T090000"},
+        {"supersedes": "not-a-generation"},
+        {"supersedes": "20260713T090000"},
+    ],
+)
+def test_staged_provenance_metadata_is_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict[str, object]
+) -> None:
+    data_root = tmp_path / "engine-a"
+    _write_generation(data_root, "20260713T090000", "tdx_trans_2026", "t.duckdb")
+    (data_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T090000"}), encoding="utf-8"
+    )
+    route = _route(
+        stage="final",
+        coverage_date="2026-07-13",
+        reconciled=True,
+        quality="verified",
+        reconciliation_ref="r",
+        **overrides,
+    )
+    catalog_root = _publish_catalog(tmp_path, [route])
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(data_root))
+
+    with pytest.raises(cr.CatalogError):
+        cr.resolve_route("tdx_trans", "a", date(2026, 7, 13))
+
+
+def test_legacy_require_current_route_fails_with_actionable_migration_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A legacy (stage=NULL) require_current row cannot prove which generation a
+    # live read should pin, so it must stay fail-closed AND surface staged
+    # migration guidance instead of a bare historical-fallback rejection.
+    data_root = tmp_path / "engine-a"
+    _write_generation(data_root, "20260713T090000", "tdx_trans_2026", "t.duckdb")
+    (data_root / "current.json").write_text(
+        json.dumps({"generation": "20260713T090000"}), encoding="utf-8"
+    )
+    catalog_root = _publish_catalog(tmp_path, [_route(stage="")])
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(data_root))
+
+    with pytest.raises(cr.CatalogError) as exc_info:
+        cr.resolve_route("tdx_trans", "a", date(2026, 7, 13))
+    message = str(exc_info.value)
+    assert "legacy" in message
+    # Distinctive marker of the staged-migration guidance, shared with the
+    # legacy-current case in test_legacy_pinned_archive_allowed_but_legacy_current_rejected.
+    assert "publish this route as staged" in message
+    assert "republish a catalog row that pins" not in message
+
+
+
+def test_latest_route_coverage_returns_newest_readable_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_root = tmp_path / "engine-a"
+    _write_generation(
+        final_root, "20260810T120615", "tdx_minutes_from_2023", "minutes.duckdb",
+    )
+    (final_root / "current.json").write_text(
+        json.dumps({"generation": "20260810T120615"}), encoding="utf-8",
+    )
+    catalog_root = _publish_catalog(
+        tmp_path,
+        [
+            _route(
+                route_key="tdx_minutes",
+                start_date="2023-01-01",
+                end_date=None,
+                generation="20260810T120615",
+                logical="tdx_minutes_from_2023",
+                file="minutes.duckdb",
+                stage="final",
+                coverage_date="2026-08-10",
+                reconciled=True,
+                quality="verified",
+                reconciliation_ref="reconciliation/minutes.json",
+            )
+        ],
+    )
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_CATALOG", str(catalog_root))
+    monkeypatch.setenv("FQUANT_SNAPSHOT_ROOT_ENGINE_A", str(final_root))
+
+    status = cr.latest_route_coverage("tdx_minutes", "a")
+
+    assert status is not None
+    assert status["latest_date"] == "2026-08-10"
+    assert status["stage"] == "final"
+    assert status["generation"] == "20260810T120615"
+    assert status["logical"] == "tdx_minutes_from_2023"
+    assert status["path"].endswith("/minutes.duckdb")

@@ -134,7 +134,21 @@ def test_full_mode_executes_every_candidate_with_strategy_rules():
         {"symbol": "A", "name": "A", "date": start + timedelta(days=2), "open": 20.0, "high": 20.0, "low": 20.0, "close": 20.0, "volume": 1, "amount": 1000.0, "signal_limit_up": False, "signal_limit_down": False},
     ]).sort(["symbol", "date"])
 
-    engine = BacktestEngine(repo=None)  # type: ignore[arg-type]
+    class _CandidateRepo:
+        def __init__(self) -> None:
+            self.benchmark_reads = 0
+
+        def get_index_daily(self, *args, **kwargs) -> pl.DataFrame:
+            self.benchmark_reads += 1
+            return pl.DataFrame(
+                {
+                    "date": [start, start + timedelta(days=1)],
+                    "close": [100.0, 110.0],
+                }
+            )
+
+    repo = _CandidateRepo()
+    engine = BacktestEngine(repo=repo)  # type: ignore[arg-type]
     engine.load_panel = lambda symbols, s, e: panel  # type: ignore[method-assign]
     strategy = _strategy(
         filter_fn=lambda df, params: pl.col("date") == start,
@@ -151,6 +165,7 @@ def test_full_mode_executes_every_candidate_with_strategy_rules():
         matching="open_t+1",
         fees_pct=0,
         slippage_bps=0,
+        stamp_tax_pct=0,  # 本测试断言执行语义, 费用数学由 test_stamp_tax.py 覆盖
         holding_days=1,
     ))
 
@@ -161,3 +176,152 @@ def test_full_mode_executes_every_candidate_with_strategy_rules():
     assert result.trades[0]["entry_date"] == str(start + timedelta(days=1))
     assert result.trades[0]["exit_reason"] == "max_hold"
     assert result.stats["avg_return"] == round(20 / 11 - 1, 4)
+    # 候选曲线只含退出事件日，不是连续日频收益：严禁按 252 年化或伪造日频风险指标。
+    assert result.stats["annual_return"] is None
+    assert result.stats["sharpe"] is None
+    assert "annual_volatility" not in result.stats
+    assert "sortino" not in result.stats
+    assert "metric_context" not in result.stats
+    assert result.benchmark_curve == []
+    assert repo.benchmark_reads == 0
+    assert "benchmark_return" not in result.stats
+    assert "alpha" not in result.stats
+    assert result.stats["time_series_metrics_available"] is False
+    assert result.stats["curve_semantics"] == "candidate_exit_event_average"
+
+
+def test_portfolio_stats_include_advanced_risk_and_cost_breakdown():
+    stats = BacktestEngine._calc_portfolio_stats(
+        [
+            {"date": "2024-01-01", "value": 1_000_000.0, "exposure": 0.0},
+            {"date": "2024-01-02", "value": 1_010_000.0, "exposure": 0.5},
+            {"date": "2024-01-03", "value": 1_005_000.0, "exposure": 0.25},
+        ],
+        [],
+        1_000_000.0,
+        fees_pct=0.0002,
+        slippage_bps=5.0,
+    )
+
+    assert "sortino" in stats
+    assert "value_at_risk" in stats
+    assert stats["cost_breakdown"]["total"] == 0.0
+    assert stats["cost_breakdown"]["turnover"] == 0.0
+
+
+def test_position_mode_benchmark_window_matches_actual_equity_coverage():
+    """position 模式请求区间宽于实际 panel 覆盖时, benchmark 只按实际净值区间计算。"""
+    start = date(2024, 1, 1)
+    rows = []
+    for i in range(4):
+        rows.append({
+            "symbol": "A",
+            "name": "A",
+            "date": date(2024, 1, 2) + timedelta(days=i),
+            "open": 10.0,
+            "high": 10.0,
+            "low": 10.0,
+            "close": 10.0,
+            "volume": 100_000,
+            "amount": 1000.0,
+            "signal_limit_up": False,
+            "signal_limit_down": False,
+        })
+    panel = pl.DataFrame(rows).sort(["symbol", "date"])
+
+    class _WindowRepo:
+        def __init__(self) -> None:
+            self.requested: tuple[date, date] | None = None
+
+        def get_index_daily(self, symbol, start, end, columns) -> pl.DataFrame:
+            self.requested = (start, end)
+            days = []
+            d = start
+            while d <= end:
+                days.append({"date": d, "close": 100.0 + 2.0 * d.day})
+                d += timedelta(days=1)
+            return pl.DataFrame(days)
+
+    class _NarrowEngine:
+        def __init__(self) -> None:
+            self.repo = _WindowRepo()
+
+        def load_panel(self, symbols, start, end) -> pl.DataFrame:
+            return panel
+
+        def simulate_portfolio(self, panel, entries, exits, config, progress_cb=None, cancel_event=None) -> SimResult:
+            dates = panel["date"].to_list()
+            last = len(dates) - 1
+            return SimResult(
+                equity_curve=[
+                    {
+                        "date": str(d)[:10],
+                        "value": config.initial_capital * 1.1 if i == last else config.initial_capital,
+                    }
+                    for i, d in enumerate(dates)
+                ],
+                drawdown_curve=[],
+                trades=[],
+                per_symbol_stats=[],
+                stats={"total_return": 0.1, "n_trades": 1},
+            )
+
+    engine = _NarrowEngine()
+    service = StrategyBacktestService(engine=engine, strategy_engine=_StrategyEngineStub(_strategy()))
+
+    result = service.run(StrategyBacktestConfig(
+        strategy_id="test",
+        symbols=None,
+        start=start,
+        end=date(2024, 1, 31),
+        matching="close_t",
+        mode="position",
+    ))
+
+    assert result.error is None
+    # benchmark 窗口 = 组合净值实际覆盖 [01-02, 01-05], 而非请求区间 [01-01, 01-31]
+    assert engine.repo.requested == (date(2024, 1, 2), date(2024, 1, 5))
+    # index close: 01-02=104, 01-05=110 → 只按实际区间计算收益
+    assert result.stats["benchmark_return"] == round(110.0 / 104.0 - 1, 4)
+    assert result.stats["excess"] == round(0.1 - (110.0 / 104.0 - 1), 4)
+
+
+def test_benchmark_selection_and_execution_config_are_preserved():
+    class _BenchmarkRepo:
+        requested_symbol: str | None = None
+
+        def get_index_daily(self, symbol, start, end, columns):
+            self.requested_symbol = symbol
+            return pl.DataFrame({
+                "date": [start, end],
+                "close": [100.0, 105.0],
+            })
+
+    repo = _BenchmarkRepo()
+    service = StrategyBacktestService(
+        engine=SimpleNamespace(repo=repo),
+        strategy_engine=_StrategyEngineStub(_strategy()),
+    )
+    config = StrategyBacktestConfig(
+        strategy_id="test",
+        symbols=None,
+        start=date(2024, 1, 1),
+        end=date(2024, 1, 31),
+        matching="open_t+1",
+        entry_fill="open_t+1",
+        exit_fill="close_t",
+        benchmark_symbol="000300.INDEX",
+    )
+
+    curve = service._build_benchmark_curve(
+        config.start,
+        config.end,
+        config.benchmark_symbol,
+    )
+    encoded = service._config_to_dict(config)
+
+    assert repo.requested_symbol == "000300.INDEX"
+    assert curve[0]["name"] == "沪深300"
+    assert encoded["benchmark_symbol"] == "000300.INDEX"
+    assert encoded["entry_fill"] == "open_t+1"
+    assert encoded["exit_fill"] == "close_t"

@@ -18,6 +18,8 @@ router = APIRouter(prefix="/api/index", tags=["index"])
 
 
 def _index_info(repo, symbol: str) -> dict:
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+    symbol = canonical_index_symbol(symbol)
     df = repo.get_index_instruments()
     if df.is_empty() or "symbol" not in df.columns:
         return {}
@@ -54,34 +56,58 @@ def search_indices(
         rows = df.head(limit).to_dicts()
         return {"results": rows}
 
-    keyword = q.strip().upper()
-    masks = []
-    if "code" in df.columns:
-        masks.append(pl.col("code").cast(pl.Utf8).str.contains(keyword, literal=True))
-    masks.append(pl.col("symbol").cast(pl.Utf8).str.to_uppercase().str.contains(keyword, literal=True))
-    if "name" in df.columns:
-        masks.append(pl.col("name").cast(pl.Utf8).str.contains(q.strip(), literal=True))
+    from app.services.symbol_search import search_symbols
 
-    mask = masks[0]
-    for m in masks[1:]:
-        mask = mask | m
-    rows = df.filter(mask).head(limit).to_dicts()
+    matched = search_symbols(
+        repo,
+        q,
+        limit,
+        asset_type="index",
+        use_suggest=False,
+        max_limit=100,
+    )
+    original_by_symbol = {
+        str(row.get("symbol")): row
+        for row in df.to_dicts()
+        if row.get("symbol") is not None
+    }
+    rows = [
+        {**original_by_symbol.get(str(row.get("symbol")), {}), **row}
+        for row in matched
+    ]
     return {"results": rows}
 
 
 @router.get("/daily")
 def get_index_daily(
     request: Request,
-    symbol: str = Query(..., description="指数代码, 如 000001.SH"),
+    symbol: str = Query(..., description="指数代码, 如 000001.INDEX"),
     days: int = Query(120, ge=10, le=2000),
     start_date: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD, 优先于 days"),
     end_date: Optional[str] = Query(None, description="截止日期 YYYY-MM-DD, 默认今天"),
 ):
     """读取指数日 K。指数数据使用独立 kline_index_* parquet。"""
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+    symbol = canonical_index_symbol(symbol)
     repo = request.app.state.repo
     end = date.fromisoformat(end_date) if end_date else date.today()
     start = date.fromisoformat(start_date) if start_date else end - timedelta(days=days)
     info = _index_info(repo, symbol)
+
+    from app.services.data_mode import is_local_daily_mode
+    if is_local_daily_mode():
+        # 本地磁盘模式：provider 直查上游快照（最新），避免本地 parquet 滞后导致
+        # 返回陈旧数据（本地 index parquet 由盘后管道写，盘中/盘后早期会落后一天）。
+        from app.data_providers.registry import get_active_provider_name, get_provider
+
+        provider = get_provider(get_active_provider_name("daily"))
+        start_dt = datetime.combine(start, datetime.min.time())
+        end_dt = datetime.combine(end, datetime.min.time())
+        raw = provider.get_daily([symbol], start_dt, end_dt, "index")
+        if not raw.is_empty():
+            enriched = compute_enriched(raw, factors=None, instruments=None)
+            rows = enriched.filter((pl.col("date") >= start) & (pl.col("date") <= end)).to_dicts()
+            return {"symbol": symbol, "name": info.get("name"), "index_info": info, "rows": rows, "source": "local_disk"}
 
     df = repo.get_index_daily(symbol, start, end)
     if not df.is_empty():
@@ -106,10 +132,12 @@ def get_index_daily(
 @router.get("/minute")
 def get_index_minute(
     request: Request,
-    symbol: str = Query(..., description="指数代码, 如 000001.SH"),
+    symbol: str = Query(..., description="指数代码, 如 000001.INDEX"),
     trade_date: date | None = Query(None, alias="date", description="交易日期, 默认今天"),
 ):
     """实时读取指数分钟 K。不写入股票分钟 parquet。"""
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+    symbol = canonical_index_symbol(symbol)
     repo = request.app.state.repo
     info = _index_info(repo, symbol)
     day = trade_date or date.today()

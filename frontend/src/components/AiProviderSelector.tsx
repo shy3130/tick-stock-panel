@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Bot } from 'lucide-react'
 import { api } from '@/lib/api'
 import { rememberProfile, resolveEntryProfile } from '@/lib/aiProfile'
+import { cn } from '@/lib/cn'
 
 interface Props {
   entry: string
@@ -32,7 +33,7 @@ export function AiProviderSelector({ entry, value, onChange, compact = false }: 
           rememberProfile(entry, e.target.value)
           onChange(e.target.value)
         }}
-        className="h-8 min-w-[150px] rounded-lg border border-border/50 bg-base px-2 text-xs text-secondary outline-none transition-colors hover:border-accent/40 focus:border-accent/60"
+        className={cn('control h-8 min-w-[150px] px-2 text-xs text-secondary')}
       >
         {profiles.map(profile => (
           <option key={profile.id} value={profile.id} disabled={profile.available === false}>

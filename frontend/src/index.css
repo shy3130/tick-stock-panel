@@ -2,78 +2,414 @@
 @tailwind components;
 @tailwind utilities;
 
-/* === §6.0 设计语言 CSS variables ===
- * 暗色为默认(html.dark) / 亮色用 :root 反转
- * HSL 形式以兼容 Tailwind alpha-value 语法
+/* === Quant Research Workbench — design tokens ===
+ * Default: dark (html.dark). Light: :root without .dark
+ * HSL channels only — Tailwind alpha-value compatible
+ * No raw hex in page components; consume semantic tokens.
  */
+
 :root {
-  /* 亮色(可切换) */
-  --base: 0 0% 98%;          /* #FAFAFA */
-  --surface: 0 0% 100%;      /* #FFFFFF */
-  --elevated: 240 5% 96%;    /* #F4F4F5 */
-  --border: 240 6% 90%;      /* #E4E4E7 */
-  --fg-primary: 240 6% 10%;  /* #18181B */
-  --fg-secondary: 240 4% 35%;/* #52525B */
-  --fg-muted: 240 5% 65%;    /* #A1A1AA */
-  --accent: 217 91% 60%;     /* #3B82F6 电光蓝 */
-  --bull: 4 87% 60%;         /* #F04438 红涨 */
-  --bear: 152 67% 45%;       /* #12B76A 绿跌 */
-  --warning: 32 95% 50%;     /* #F79009 */
-  --danger: 4 87% 60%;       /* #F04438 */
+  /* Light — cool gray / white */
+  --base: 210 20% 98%;
+  --surface: 0 0% 100%;
+  --elevated: 210 16% 96%;
+  --border: 214 14% 88%;
+  --fg-primary: 222 28% 12%;
+  --fg-secondary: 215 14% 38%;
+  --fg-muted: 215 12% 54%;
+  --accent: 217 91% 52%;
+  --accent-fg: 0 0% 100%;    /* primary button / on-accent text — always white */
+  --bull: 4 78% 52%;         /* A-share up — price only */
+  --bear: 152 55% 36%;       /* A-share down — price only */
+  --warning: 32 92% 46%;
+  --danger: 4 78% 52%;
+  /* UI success — independent of A-share bear green */
+  --success: 142 64% 34%;
+  --info: 217 91% 52%;
+  --focus-ring: 217 91% 52%;
+  --selection-bg: 217 91% 52%;
+  --selection-fg: 0 0% 100%;
+  --scrollbar: 214 12% 72%;
+  --panel-radius: 8px;
+  --btn-radius: 6px;
+  --input-radius: 4px;
+  --control-h: 32px;
+  --motion-fast: 150ms;
+  --motion-base: 180ms;
+  --motion-slow: 220ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  color-scheme: light;
 }
 
 html.dark {
-  --base: 240 5% 5%;         /* #0A0A0B */
-  --surface: 240 7% 10%;     /* #18181B 略亮一点,与 base 对比清晰 */
-  --elevated: 240 9% 14%;    /* #212126 */
-  --border: 240 5% 22%;      /* #353539 边框加亮,易识别 */
-  --fg-primary: 0 0% 98%;    /* #FAFAFA */
-  --fg-secondary: 240 5% 78%;/* #C4C4CB 大幅提亮 — 子标题/导航非激活态 */
-  --fg-muted: 240 5% 58%;    /* #8E8E96 muted 提亮 — 辅助提示 */
+  /* Dark — graphite / navy surfaces, neutral borders, blue accent */
+  --base: 222 24% 7%;
+  --surface: 222 22% 10%;
+  --elevated: 222 20% 14%;
+  --border: 220 14% 20%;
+  --fg-primary: 210 20% 96%;
+  --fg-secondary: 215 12% 72%;
+  --fg-muted: 215 10% 52%;
   --accent: 217 91% 60%;
-  --bull: 4 87% 60%;
-  --bear: 152 67% 45%;
-  --warning: 32 95% 50%;
-  --danger: 4 87% 60%;
+  --accent-fg: 0 0% 100%;    /* primary button / on-accent text — always white */
+  --bull: 4 78% 58%;
+  --bear: 152 55% 42%;
+  --warning: 32 92% 52%;
+  --danger: 4 78% 58%;
+  /* UI success — independent of A-share bear green */
+  --success: 142 60% 48%;
+  --info: 217 91% 60%;
+  --focus-ring: 217 91% 60%;
+  --selection-bg: 217 91% 48%;
+  --selection-fg: 0 0% 100%;
+  --scrollbar: 220 12% 28%;
+  color-scheme: dark;
 }
 
-/* 价格 / 数字一律等宽 */
-.scrollbar-gutter-stable { scrollbar-gutter: stable; }
+/* ── Base ─────────────────────────────────────────── */
 
-/* 全局滚动条 */
 * {
+  border-color: hsl(var(--border));
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border)) transparent;
+  scrollbar-color: hsl(var(--scrollbar)) transparent;
 }
+
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
+
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+
 *::-webkit-scrollbar-thumb {
-  background: hsl(var(--border) / 0.72);
+  background: hsl(var(--scrollbar) / 0.72);
   border: 2px solid transparent;
   border-radius: 999px;
   background-clip: content-box;
 }
+
 *::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--accent) / 0.75);
+  background: hsl(var(--accent) / 0.55);
   background-clip: content-box;
 }
-.tabular { font-variant-numeric: tabular-nums; }
-.num { font-family: theme('fontFamily.mono'); font-variant-numeric: tabular-nums; }
 
-/* 默认 1px 细分隔线(暗色用边框区分层次,不用 shadow) */
-* { border-color: hsl(var(--border)); }
+::selection {
+  background: hsl(var(--selection-bg) / 0.28);
+  color: hsl(var(--fg-primary));
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 
 body {
+  margin: 0;
+  min-height: 100%;
   background: hsl(var(--base));
   color: hsl(var(--fg-primary));
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-  /* 暗色模式不用 antialiased — 让字形保持饱满,不发虚 */
+  font-family: theme('fontFamily.sans');
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'tnum';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+html.dark body {
   -webkit-font-smoothing: subpixel-antialiased;
   -moz-osx-font-smoothing: auto;
-  text-rendering: optimizeLegibility;
+}
+
+/* Focus — keyboard only, visible ring via tokens */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid hsl(var(--focus-ring));
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid hsl(var(--focus-ring));
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Utility helpers retained for existing call sites */
+.scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.num {
+  font-family: theme('fontFamily.mono');
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Contract semantic classes ────────────────────── */
+
+@layer components {
+  /* Page shell */
+  .workspace-page {
+    @apply flex min-h-0 min-w-0 flex-col;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .workspace-content {
+    @apply flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 sm:p-4;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .workspace-toolbar {
+    @apply flex min-w-0 flex-wrap items-center gap-2;
+    min-height: var(--control-h);
+  }
+
+  /* Panels */
+  .panel {
+    @apply border border-border bg-surface;
+    border-radius: var(--panel-radius);
+    min-width: 0;
+  }
+
+  .panel-header {
+    @apply flex min-w-0 items-center justify-between gap-2 border-b border-border px-3 py-2;
+  }
+
+  .panel-body {
+    @apply min-w-0 p-3;
+  }
+
+  /* Controls */
+  .control {
+    @apply inline-flex min-w-0 items-center gap-1.5 border border-border bg-elevated px-2.5 text-sm text-foreground;
+    height: var(--control-h);
+    border-radius: var(--input-radius);
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background-color var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out);
+  }
+
+  .control::placeholder {
+    color: hsl(var(--fg-muted));
+  }
+
+  .control:hover:not(:disabled) {
+    border-color: hsl(var(--border) / 0.9);
+    background: hsl(var(--elevated));
+  }
+
+  .control:focus-visible {
+    border-color: hsl(var(--accent));
+    outline: 2px solid hsl(var(--focus-ring) / 0.35);
+    outline-offset: 0;
+  }
+
+  .control:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+
+  select.control {
+    @apply appearance-none pr-7;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+  }
+
+  /* Buttons */
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost {
+    @apply inline-flex shrink-0 items-center justify-center gap-1.5 px-3 text-sm font-medium;
+    height: var(--control-h);
+    border-radius: var(--btn-radius);
+    transition:
+      background-color var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out),
+      opacity var(--motion-fast) var(--ease-out);
+  }
+
+  .btn-primary:disabled,
+  .btn-secondary:disabled,
+  .btn-ghost:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+
+  .btn-primary {
+    @apply border border-transparent;
+    background: hsl(var(--accent));
+    color: hsl(var(--accent-fg));
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.06);
+  }
+
+  .btn-primary:active:not(:disabled) {
+    filter: brightness(0.96);
+  }
+
+  .btn-secondary {
+    @apply border border-border bg-elevated text-foreground;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: hsl(var(--elevated));
+    border-color: hsl(var(--fg-muted) / 0.45);
+  }
+
+  .btn-ghost {
+    @apply border border-transparent bg-transparent text-secondary;
+  }
+
+  .btn-ghost:hover:not(:disabled) {
+    @apply bg-elevated text-foreground;
+  }
+
+  /* Typography sections */
+  .section-kicker {
+    @apply text-[10px] font-medium uppercase tracking-[0.16em] text-muted;
+  }
+
+  .section-title {
+    @apply text-sm font-semibold tracking-tight text-foreground;
+  }
+
+  .metric-value {
+    @apply font-mono text-lg font-semibold tabular-nums tracking-tight text-foreground;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Status */
+  .status-dot {
+    @apply inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-muted;
+  }
+
+  .status-dot[data-state='live'],
+  .status-dot[data-state='ready'],
+  .status-dot[data-state='ok'] {
+    background: hsl(var(--accent));
+  }
+
+  .status-dot[data-state='warn'],
+  .status-dot[data-state='degraded'] {
+    background: hsl(var(--warning));
+  }
+
+  .status-dot[data-state='error'],
+  .status-dot[data-state='danger'] {
+    background: hsl(var(--danger));
+  }
+
+  .status-dot[data-state='idle'],
+  .status-dot[data-state='off'] {
+    background: hsl(var(--fg-muted));
+  }
+
+  /* Data tables — horizontal scroll allowed on table shell only */
+  .data-table {
+    @apply w-full min-w-0 border-collapse text-left text-sm;
+  }
+
+  .data-table thead {
+    @apply sticky top-0 z-[1] bg-surface;
+  }
+
+  .data-table th {
+    @apply border-b border-border px-2.5 py-2 text-[11px] font-medium uppercase tracking-wide text-muted;
+    white-space: nowrap;
+  }
+
+  .data-table td {
+    @apply border-b border-border/70 px-2.5 py-1.5 text-sm text-foreground;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .data-table tbody tr {
+    transition: background-color var(--motion-fast) var(--ease-out);
+  }
+
+  .data-table tbody tr:hover {
+    background: hsl(var(--elevated) / 0.55);
+  }
+
+  .data-table .num,
+  .data-table .tabular {
+    @apply font-mono tabular-nums;
+  }
+
+  /* Scroll shell for wide tables — page itself must not overflow horizontally */
+  .data-table-scroll {
+    @apply min-w-0 overflow-x-auto;
+    max-width: 100%;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .backtest-report,
+  .backtest-report * {
+    visibility: visible;
+  }
+
+  .backtest-config-panel {
+    display: none !important;
+  }
+
+  .backtest-report {
+    position: static;
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .backtest-report .panel-body {
+    overflow: visible !important;
+  }
+
+  /* 打印时无 sticky 导航条 (组件带 no-print), 锚点偏移随之复位 */
+  .backtest-report .result-section {
+    scroll-margin-top: 0;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 }

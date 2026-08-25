@@ -3,7 +3,7 @@
 设计:
   - job_store/ 文件夹,每个 job 一个 {id}.json,最多保留 max_jobs 个文件
   - running/pending 状态的 job 仅存内存(高频读写)
-  - succeeded/failed 后写入独立文件并从内存释放
+  - succeeded/degraded/failed 后写入独立文件并从内存释放
   - 列表查询 = 内存中的活跃 job + 磁盘文件扫描,按时间排序
   - 单个查询 = 内存优先,没有则读磁盘
   - 创建新 job 前检查文件数量,>= max_jobs 时删除最老的文件
@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-JobStatus = Literal["pending", "running", "succeeded", "failed"]
+JobStatus = Literal["pending", "running", "succeeded", "degraded", "failed"]
 
 
 def _default_store_dir() -> Path:
@@ -91,7 +91,7 @@ class JobStore:
 
     # ===== lifecycle =====
 
-    def create(self) -> str:
+    def create(self, *, kind: str | None = None) -> str:
         with self._lock:
             if self._active_id and self._active_jobs.get(self._active_id, {}).get("status") == "running":
                 return self._active_id
@@ -99,6 +99,7 @@ class JobStore:
             job_id = uuid.uuid4().hex[:10]
             self._active_jobs[job_id] = {
                 "id": job_id,
+                "kind": kind,
                 "status": "pending",
                 "stage": "init",
                 "progress": 0,
@@ -126,7 +127,11 @@ class JobStore:
             j = self._active_jobs.pop(job_id, None)
             if not j:
                 return
-            j["status"] = "succeeded"
+            j["status"] = (
+                "degraded"
+                if isinstance(result, dict) and result.get("failed_stages")
+                else "succeeded"
+            )
             j["finished_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             j["progress"] = 100
             j["result"] = result
@@ -223,6 +228,7 @@ class JobStore:
 def _summary(j: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": j["id"],
+        "kind": j.get("kind"),
         "status": j["status"],
         "stage": j["stage"],
         "progress": j["progress"],

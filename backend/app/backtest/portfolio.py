@@ -6,22 +6,44 @@ import numpy as np
 import polars as pl
 
 
-def load_price_matrix(repo, symbols: list[str], start: date, end: date) -> tuple[np.ndarray, list[str]]:
-    """Load close prices into a date-aligned [T,N] matrix."""
+def load_price_panel(
+    repo,
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    raise_on_error: bool = False,
+) -> tuple[pl.DataFrame, list[str]]:
+    """Load canonical closes into a date-aligned frame: ``date`` + symbol columns.
+
+    ``raise_on_error`` is reserved for callers that must distinguish an
+    unavailable repository from a valid query with no canonical rows.  The
+    default remains fail-soft for portfolio consumers.
+    """
     from app.api.kline import _asset_type_for_symbol
 
     frames = []
     for symbol in symbols:
         asset_type = _asset_type_for_symbol(symbol)
         try:
-            df = repo.get_daily_asset(asset_type, symbol, start, end, ["symbol", "date", "close"])
-        except Exception:  # noqa: BLE001
+            kwargs = {"raise_on_error": True} if raise_on_error else {}
+            df = repo.get_daily_asset(
+                asset_type,
+                symbol,
+                start,
+                end,
+                ["symbol", "date", "close"],
+                **kwargs,
+            )
+        except Exception:
+            if raise_on_error:
+                raise
             df = None
         if df is not None and not df.is_empty():
             frames.append(df.select(["symbol", "date", "close"]))
 
     if not frames:
-        return np.empty((0, 0), dtype=float), []
+        return pl.DataFrame({"date": []}, schema={"date": pl.Date}), []
 
     wide = (
         pl.concat(frames, how="vertical_relaxed")
@@ -30,6 +52,12 @@ def load_price_matrix(repo, symbols: list[str], start: date, end: date) -> tuple
         .drop_nulls()
     )
     kept = [symbol for symbol in symbols if symbol in wide.columns]
+    return wide.select(["date", *kept]), kept
+
+
+def load_price_matrix(repo, symbols: list[str], start: date, end: date) -> tuple[np.ndarray, list[str]]:
+    """Load close prices into a date-aligned [T,N] matrix."""
+    wide, kept = load_price_panel(repo, symbols, start, end)
     if not kept or wide.height == 0:
         return np.empty((0, len(kept)), dtype=float), kept
     return wide.select(kept).to_numpy().astype(float), kept

@@ -3,31 +3,148 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 import time
 from dataclasses import asdict
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.services.screener import PRESET_STRATEGIES, ScreenerService
-from app.services import strategy_cache
+from app.db_safe import is_valid_ext_ident, quote_ident
+from app.services import screener_screens, strategy_cache
+from app.strategy.screen_bridge import (
+    ScreenPanelUnsupportedError,
+    classify_screen,
+    sync_screen_strategies,
+)
+from app.services.screener import ScreenerService
+from app.services.screener_query import (
+    QueryService,
+    ScreenerDataUnavailableError,
+    ScreenerQueryRequest,
+    ScreenerSemanticError,
+    field_metadata,
+)
+from app.services.nl_screener import NLParseRequest, NLScreenerError, parse_nl
 from app.strategy import config as strategy_config
+from app.strategy.gostock_presets import list_gostock_presets
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
 
 
-class CustomRequest(BaseModel):
-    conditions: list[str]
-    order_by: Optional[str] = None
-    limit: int = 30
-    pool: Optional[list[str]] = None
-    as_of: Optional[date] = None
-    ext_columns: Optional[str] = None
+@router.get("/fields")
+def query_fields() -> dict[str, Any]:
+    """Authoritative metadata for the literal screener query registry."""
+    # F14: 声明支持条件分组 (组内 AND, 组间按 group_logic 合并)。
+    return {"fields": field_metadata(), "supports_groups": True}
+
+
+@router.post("/query")
+def query(req: ScreenerQueryRequest, request: Request) -> dict[str, Any]:
+    try:
+        return QueryService(request.app.state.repo).query(req)
+    except ScreenerSemanticError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_screener_semantics", "location": exc.location, "reason": exc.reason},
+        ) from None
+    except ScreenerDataUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "screener_data_unavailable", "fields": exc.fields},
+        ) from None
+
+
+@router.post("/nl_parse")
+async def nl_parse(req: NLParseRequest) -> dict[str, Any]:
+    try:
+        return await parse_nl(req.text, req.profile_id)
+    except NLScreenerError:
+        raise HTTPException(status_code=503, detail={"code": "screener_nl_unavailable"}) from None
+
+
+@router.get("/nl_presets")
+def nl_presets() -> dict[str, Any]:
+    return {"presets": list_gostock_presets()}
+
+
+class ScreenRequest(BaseModel):
+    name: str
+    conditions: list[dict[str, Any]]
+    order_by: Optional[dict[str, Any]] = None
+    limit: Optional[int] = None
+    group_logic: Optional[Literal["and", "or"]] = None
+
+
+@router.get("/screens")
+def list_screens(request: Request) -> dict[str, Any]:
+    """用户保存的选股方案列表 (附回测/监控可注册性, 纯 registry 判断无 IO)。"""
+    screens = screener_screens.list_screens(request.app.state.repo.store.data_dir)
+    items = []
+    for screen in screens:
+        supported, unsupported = classify_screen(screen)
+        items.append({**screen, "strategy_supported": supported, "unsupported_fields": unsupported})
+    return {"screens": items}
+
+
+def _sync_screen_strategies(request: Request) -> None:
+    """方案变更后把 screen 策略同步进引擎; 引擎缺失 (未注入) 时跳过。"""
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if engine is None:
+        return
+    try:
+        sync_screen_strategies(engine, request.app.state.repo.store.data_dir)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("screen strategy sync failed: %s", e)
+
+
+@router.post("/screens", status_code=201)
+def create_screen(req: ScreenRequest, request: Request) -> dict[str, Any]:
+    try:
+        record = screener_screens.create_screen(
+            request.app.state.repo.store.data_dir,
+            name=req.name,
+            conditions=req.conditions,
+            order_by=req.order_by,
+            limit=req.limit,
+            group_logic=req.group_logic,
+        )
+    except screener_screens.ScreenStoreError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": exc.message}) from None
+    _sync_screen_strategies(request)
+    return record
+
+
+@router.put("/screens/{screen_id}")
+def update_screen(screen_id: str, req: ScreenRequest, request: Request) -> dict[str, Any]:
+    try:
+        record = screener_screens.update_screen(
+            request.app.state.repo.store.data_dir,
+            screen_id,
+            name=req.name,
+            conditions=req.conditions,
+            order_by=req.order_by,
+            limit=req.limit,
+            group_logic=req.group_logic,
+        )
+    except screener_screens.ScreenStoreError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.code, "message": exc.message}) from None
+    except screener_screens.ScreenNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "screen_not_found", "message": "选股方案不存在"}) from exc
+    _sync_screen_strategies(request)
+    return record
+
+
+@router.delete("/screens/{screen_id}", status_code=204)
+def delete_screen(screen_id: str, request: Request) -> None:
+    try:
+        screener_screens.delete_screen(request.app.state.repo.store.data_dir, screen_id)
+    except screener_screens.ScreenNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": "screen_not_found", "message": "选股方案不存在"}) from exc
+    _sync_screen_strategies(request)
 
 
 class PresetRequest(BaseModel):
@@ -47,19 +164,12 @@ def _safe(result_dict: dict) -> dict:
     return result_dict
 
 
-_EXT_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
-
-
 def _safe_ext_value(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return value
-
-
-def _quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
 
 
 def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str, Any]]:
@@ -73,6 +183,7 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
         return {}
 
     import polars as pl
+
     from app.api.ext_data import _read_ext_dataframe
     from app.services.ext_data import ExtConfigStore
 
@@ -92,7 +203,7 @@ def _load_ext_value_maps(repo, ext_columns: Optional[str]) -> dict[str, dict[str
             else:
                 view_name = f"ext_{config_id}"
                 ext_df = pl.from_arrow(db.query(
-                    f"SELECT symbol, {_quote_ident(field_name)} FROM {view_name}"
+                    f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                 ).arrow())
 
             if ext_df.is_empty() or "symbol" not in ext_df.columns or field_name not in ext_df.columns:
@@ -175,52 +286,33 @@ def _update_cache_strategy(data_dir, as_of: str, strategy_id: str, safe_data: di
 
 @router.get("/strategies")
 def strategies(request: Request):
-    """策略清单（内置 + 自定义 + AI）。"""
+    """策略清单（内置 + 自定义 + AI, 统一来自 StrategyEngine）。"""
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail={"code": "strategy_engine_unavailable"})
+
     data_dir = request.app.state.repo.store.data_dir
     presets = []
-    seen_ids: set[str] = set()
-
-    # 内置策略
-    for k, v in PRESET_STRATEGIES.items():
-        overrides = strategy_config.load_override(data_dir, k)
-        name = (overrides.get("name") or v["name"]) if overrides else v["name"]
-        desc = (overrides.get("description") or v["description"]) if overrides else v["description"]
-        presets.append({"id": k, "name": name, "description": desc, "source": "builtin"})
-        seen_ids.add(k)
-
-    # 自定义/AI 策略（不在 PRESET_STRATEGIES 中的）
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in seen_ids:
-                overrides = strategy_config.load_override(data_dir, sid)
-                name = (overrides.get("name") or meta["name"]) if overrides else meta["name"]
-                desc = (overrides.get("description") or meta.get("description", "")) if overrides else meta.get("description", "")
-                presets.append({"id": sid, "name": name, "description": desc, "source": meta.get("source", "custom")})
-                seen_ids.add(sid)
+    for meta in engine.list_strategies():
+        sid = meta["id"]
+        overrides = strategy_config.load_override(data_dir, sid)
+        name = (overrides.get("name") or meta["name"]) if overrides else meta["name"]
+        desc = (overrides.get("description") or meta.get("description", "")) if overrides else meta.get("description", "")
+        presets.append({"id": sid, "name": name, "description": desc, "source": meta.get("source", "custom")})
 
     return {"presets": presets}
 
 
 @router.post("/run")
-def run_custom(req: CustomRequest, request: Request):
-    repo = request.app.state.repo
-    svc = ScreenerService(repo)
-    as_of = req.as_of or svc.latest_date()
-    if not as_of:
-        raise HTTPException(status_code=400,
-                            detail="无可用数据日期 — enriched 表为空,请先运行盘后管道")
-    result = svc.run(
-        as_of=as_of,
-        conditions=req.conditions,
-        order_by=req.order_by,
-        limit=req.limit,
-        pool=req.pool,
+def run_custom():
+    """自定义 SQL 选股已下线, 引导使用结构化查询接口。"""
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "screener_run_sql_removed",
+            "message": "自定义 SQL 选股已关闭，请使用 POST /api/screener/query",
+        },
     )
-    safe_data = _safe(asdict(result))
-    ext_values = _load_ext_value_maps(repo, req.ext_columns)
-    return _result_with_ext(safe_data, ext_values)
 
 
 @router.post("/run_preset")
@@ -231,34 +323,30 @@ def run_preset(req: PresetRequest, request: Request):
     if not as_of:
         raise HTTPException(status_code=400, detail="无可用数据日期")
 
+    # 内置/自定义/AI 策略统一经 StrategyEngine 执行 (单一路径)
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail={"code": "strategy_engine_unavailable"})
+
     # 加载用户保存的策略配置
-    data_dir = request.app.state.repo.store.data_dir
+    data_dir = repo.store.data_dir
     ext_values = _load_ext_value_maps(repo, req.ext_columns)
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
-    bf = overrides.get("basic_filter") if overrides else None
     dl = overrides.get("display_limit") if overrides else None
     if dl is None and overrides and "display_limit" in overrides:
         dl = 0
-
-    # 内置策略
-    if req.strategy_id in PRESET_STRATEGIES:
-        try:
-            result = svc.run_preset(req.strategy_id, as_of=as_of, pool=req.pool, basic_filter=bf, display_limit=dl)
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        safe_data = _safe(asdict(result))
-        _update_cache_strategy(data_dir, str(as_of), req.strategy_id, safe_data)
-        return _result_with_ext(safe_data, ext_values)
-
-    # 自定义/AI 策略 — 通过 StrategyEngine 执行
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if not engine:
-        raise HTTPException(status_code=404, detail=f"策略引擎未初始化或策略 {req.strategy_id} 不存在")
 
     try:
         result = engine.run(req.strategy_id, as_of, pool=req.pool, overrides=overrides or None)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ScreenPanelUnsupportedError as e:
+        # screen 方案面板缺列: 同步失败 (引擎重启后未 sync) 或面板列集变化,
+        # 显式 400 引导用户检查方案字段, 不静默 500。
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "screen_panel_unsupported", "message": str(e)},
+        ) from e
 
     data = asdict(result)
 
@@ -285,11 +373,40 @@ def get_cached(
       不落盘 (避免与 read_cache 的 mtime 校验冲突), 在此直接叠加覆盖盘后结果。
       被监控的策略拿到新鲜数据, 非监控策略仍用盘后缓存。
     """
-    data_dir = request.app.state.repo.store.data_dir
+    repo = request.app.state.repo
+    data_dir = repo.store.data_dir
     cached = strategy_cache.read_cache(data_dir)
     if cached is None:
         cached = {"as_of": None, "results": {}, "updated_at": None}
 
+    try:
+        _, canonical_date = repo.get_enriched_latest()
+    except Exception:  # noqa: BLE001
+        canonical_date = None
+    cached_as_of_raw = cached.get("as_of")
+    invalid_cached_as_of: str | None = None
+    if cached_as_of_raw:
+        try:
+            cached_as_of = date.fromisoformat(str(cached_as_of_raw))
+        except ValueError:
+            invalid_cached_as_of = str(cached_as_of_raw)
+        else:
+            if canonical_date is not None and cached_as_of > canonical_date:
+                invalid_cached_as_of = str(cached_as_of_raw)
+    if invalid_cached_as_of is not None:
+        logger.warning(
+            "忽略超出 canonical 水位的选股缓存: cached=%s canonical=%s",
+            invalid_cached_as_of,
+            canonical_date,
+        )
+        cached = {
+            "as_of": None,
+            "results": {},
+            "updated_at": None,
+            "discarded_as_of": invalid_cached_as_of,
+        }
+    cached = dict(cached)
+    cached["canonical_as_of"] = str(canonical_date) if canonical_date else None
     # 叠加监控引擎内存里的实时结果 (若有), 用新鲜数据覆盖同策略的盘后结果
     monitor_engine = getattr(request.app.state, "monitor_engine", None)
     if monitor_engine is not None:
@@ -305,9 +422,9 @@ def get_cached(
 
     # 无任何数据 (盘后缓存空 + 无实时结果) → 返回空标记, 前端据此提示
     if not cached.get("results") and cached.get("as_of") is None:
-        return {"as_of": None, "results": {}, "updated_at": None}
+        return cached
 
-    ext_values = _load_ext_value_maps(request.app.state.repo, ext_columns)
+    ext_values = _load_ext_value_maps(repo, ext_columns)
     return _cache_payload_with_ext(cached, ext_values)
 
 
@@ -350,8 +467,8 @@ def market_snapshot(request: Request):
 def run_all(request: Request, body: Optional[dict] = None):
     """批量运行指定策略,只返回每个策略的命中数。
 
-    优化: 从 enriched 读取一次目标日期数据, 所有策略共享。
-    body.strategy_ids: 只跑指定的策略 ID 列表, 为空则跑全部。
+    所有策略 (内置/自定义/AI/叠加) 统一经 StrategyEngine 执行。
+    body.strategy_ids: 只跑指定的策略 ID 列表, 为空则跑全部 (临时组合除外)。
     """
     from datetime import date as date_type
 
@@ -361,6 +478,10 @@ def run_all(request: Request, body: Optional[dict] = None):
     repo = request.app.state.repo
     svc = ScreenerService(repo)
 
+    engine = getattr(request.app.state, "strategy_engine", None)
+    if not engine:
+        raise HTTPException(status_code=503, detail={"code": "strategy_engine_unavailable"})
+
     # 解析日期
     raw_date = body.get("as_of")
     if raw_date:
@@ -368,7 +489,7 @@ def run_all(request: Request, body: Optional[dict] = None):
     else:
         as_of = svc.latest_date()
     if not as_of:
-        return {"as_of": None, "results": {}}
+        return {"as_of": None, "results": {}, "failed": []}
 
     # 一次读取目标日期的全部数据
     t0 = time.perf_counter()
@@ -376,72 +497,62 @@ def run_all(request: Request, body: Optional[dict] = None):
     logger.info("run_all: _load_enriched_for_date took %.1fms", (time.perf_counter() - t0) * 1000)
 
     results: dict[str, dict] = {}
+    failed: list[dict] = []
     data_dir = request.app.state.repo.store.data_dir
 
-    # 收集需要运行的策略 ID (如果指定了 strategy_ids 则只跑这些)
+    # 收集需要运行的策略 ID (engine 清单, list_strategies 已剔除临时组合)
+    all_ids = [meta["id"] for meta in engine.list_strategies()]
     requested_ids = body.get("strategy_ids")
-    all_ids = list(PRESET_STRATEGIES.keys())
-    engine = getattr(request.app.state, "strategy_engine", None)
-    if engine:
-        for meta in engine.list_strategies():
-            sid = meta["id"]
-            if sid not in PRESET_STRATEGIES:
-                all_ids.append(sid)
-
     if requested_ids and isinstance(requested_ids, list):
         id_set = set(requested_ids)
         all_ids = [sid for sid in all_ids if sid in id_set]
 
     if not all_ids:
-        return {"as_of": str(as_of), "results": {}}
+        return {"as_of": str(as_of), "results": {}, "failed": []}
 
     # 批量预加载所有 override 配置
     t0 = time.perf_counter()
     all_overrides = strategy_config.list_overrides(data_dir)
     logger.info("run_all: list_overrides took %.1fms (%d overrides)", (time.perf_counter() - t0) * 1000, len(all_overrides))
 
-    # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)
+    # 历史策略: 只在需要时加载 (只加载 all_ids 中包含的 filter_history 策略)。
+    # 共享历史窗口取参与策略的最大 lookback_days, 不截断到 30 — 与单跑口径一致。
     t0 = time.perf_counter()
     shared_history = None
     id_set = set(all_ids)
-    if engine:
-        history_strats = [
-            (sid, s) for sid, s in engine._strategies.items()
-            if s.filter_history_fn and sid in id_set
-        ]
-        if history_strats:
-            max_lb = min(max(s.lookback_days for _, s in history_strats), 30)
-            shared_history = svc._load_enriched_history(as_of, max(1, max_lb))
-    else:
-        history_strats = []
+    history_strats = [
+        (sid, s) for sid, s in engine._strategies.items()
+        if s.filter_history_fn and sid in id_set
+    ]
+    if history_strats:
+        max_lb = max(s.lookback_days for _, s in history_strats)
+        shared_history = svc._load_enriched_history(as_of, max(1, max_lb))
     logger.info("run_all: _load_enriched_history took %.1fms (history_strats=%d)", (time.perf_counter() - t0) * 1000, len(history_strats))
 
     for sid in all_ids:
         try:
             overrides = all_overrides.get(sid, {})
-            bf = overrides.get("basic_filter") if overrides else None
             dl = overrides.get("display_limit") if overrides else None
             if dl is None and overrides and "display_limit" in overrides:
                 dl = 0
 
-            if sid in PRESET_STRATEGIES:
-                r = svc.run_preset(sid, as_of=as_of, precomputed=precomputed, basic_filter=bf, display_limit=dl)
-            else:
-                r = engine.run(
-                    sid, as_of, overrides=overrides or None,
-                    precomputed=precomputed, precomputed_history=shared_history,
-                )
-                if dl is not None and dl > 0:
-                    r.rows = r.rows[:dl]
-                    r.total = min(r.total, dl)
+            r = engine.run(
+                sid, as_of, overrides=overrides or None,
+                precomputed=precomputed, precomputed_history=shared_history,
+            )
+            if dl is not None and dl > 0:
+                r.rows = r.rows[:dl]
+                r.total = min(r.total, dl)
 
             safe_rows = _safe(asdict(r)).get("rows", [])
             results[sid] = {"total": r.total, "as_of": str(as_of), "rows": safe_rows}
-        except (ValueError, Exception):
-            continue
+        except Exception as e:  # noqa: BLE001
+            # 单策略失败不中断整批: 记入 failed 返回前端, 成功结果照常产出。
+            logger.warning("run_all: strategy %s failed: %s", sid, e)
+            failed.append({"strategy_id": sid, "error": str(e)})
 
     elapsed = (time.perf_counter() - t_total) * 1000
-    logger.info("run_all: total took %.1fms (%d strategies)", elapsed, len(all_ids))
+    logger.info("run_all: total took %.1fms (%d strategies, %d failed)", elapsed, len(all_ids), len(failed))
 
     # 写入策略缓存 (供页面秒加载)
     if results:
@@ -451,7 +562,7 @@ def run_all(request: Request, body: Optional[dict] = None):
             pass
 
     ext_values = _load_ext_value_maps(repo, body.get("ext_columns"))
-    return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values)}
+    return {"as_of": str(as_of), "results": _results_with_ext(results, ext_values), "failed": failed}
 
 
 @router.get("/limit-ladder")
@@ -509,6 +620,8 @@ def limit_ladder(
     fake_down = 0
     sealed_up_ready = False
     sealed_down_ready = False
+    up_map: dict = {}
+    down_map: dict = {}
     if depth_svc_global:
         up_map = depth_svc_global.get_sealed_map(as_of, is_down=False)
         down_map = depth_svc_global.get_sealed_map(as_of, is_down=True)
@@ -536,7 +649,7 @@ def limit_ladder(
     prev_consec: pl.DataFrame = pl.DataFrame()
     for delta in range(1, 10):
         candidate = as_of - timedelta(days=delta)
-        df_prev = svc._load_enriched_for_date(candidate)
+        df_prev = svc._load_enriched_for_date(candidate, columns=["symbol", consec_col])
         if not df_prev.is_empty() and consec_col in df_prev.columns:
             prev_consec = df_prev.select(
                 "symbol",
@@ -570,17 +683,23 @@ def limit_ladder(
     df = df.filter(pl.col("status").is_not_null() & (pl.col("boards") > 0))
 
     # ── 五档 sealed 叠加(独立旁路, 不改 signal_limit_up) ──
-    # 假涨停(收盘价=涨停价但卖一有量)从 limit 降级为 broken(归炸板视图)
-    # 真涨停保留 + 附封单量; sealed=null(待确认/降级)保持原状
+    # 权威 map(provider/parquet): 假涨停(收盘价=涨停价但卖一有量)从 limit 降级为 broken,
+    #   真涨停保留 + 附封单量, sealed=null(待确认)保持原状。
+    # 外部展示 map(degraded, 仅当权威 map 缺失时): 只填充 sealed_status/sealed_vol 供展示,
+    #   绝不修正 status/tiers/counts/sealed_ready —— 源无 provenance, 仅供当前页面只读展示。
     depth_svc = getattr(request.app.state, "depth_service", None)
     sealed_ready = False
     sealed_age: float | None = None
+    sealed_degraded = False          # 当前方向是否走外部降级展示 map
+    sealed_source: str | None = None  # 降级来源标识(仅 degraded 时非空)
+
     if depth_svc:
         sealed_map = depth_svc.get_sealed_map(as_of, is_down=is_down)
         sealed_ready = bool(sealed_map) and depth_svc.is_sealed_ready(as_of)
         sealed_age = depth_svc.get_sealed_age(as_of) if sealed_ready else None
 
         if sealed_map:
+            # —— 权威 map: 既有行为(可修正 status/counts 归类) ——
             # 构建 sealed 列(symbol → sealed bool, vol)
             sym_sealed = {s: v.get("sealed") for s, v in sealed_map.items()}
             sym_vol = {s: v.get("vol") for s, v in sealed_map.items()}
@@ -623,10 +742,53 @@ def limit_ladder(
                     pl.lit(None).alias("sealed_vol"),
                 )
         else:
-            df = df.with_columns(
-                pl.lit(None).alias("sealed_status"),
-                pl.lit(None).alias("sealed_vol"),
-            )
+            # —— 权威 map 缺失: 尝试外部展示 map(degraded, 只读展示, 不修正任何口径) ——
+            display_map = depth_svc.get_display_depth_map(as_of, is_down=is_down)
+            if display_map:
+                sealed_degraded = True
+                # 来源取首个条目的 source(统一 tencent_quote); 无条目则保持 None
+                sealed_source = next(
+                    (v.get("source") for v in display_map.values() if v.get("source")),
+                    None,
+                )
+                sym_sealed = {s: v.get("sealed") for s, v in display_map.items()}
+                sym_vol = {s: v.get("vol") for s, v in display_map.items()}
+                sealed_rows = pl.DataFrame({
+                    "symbol": list(sym_sealed.keys()),
+                    "_sealed": list(sym_sealed.values()),
+                    "_sealed_vol": list(sym_vol.values()),
+                }) if sym_sealed else pl.DataFrame()
+
+                if not sealed_rows.is_empty():
+                    df = df.join(sealed_rows, on="symbol", how="left")
+                    # ⚠️ 仅展示: 派生 sealed_status/sealed_vol, 但不改 status ——
+                    #    外部源无 provenance, 不得把 limit 降成 broken/recovery。
+                    df = df.with_columns(
+                        pl.when(
+                            (pl.col("status") == status_main)
+                            & (pl.col("_sealed") == True)  # noqa: E712
+                        ).then(pl.lit("real"))
+                        .when(
+                            (pl.col("status") == status_main)
+                            & (pl.col("_sealed") == False)  # noqa: E712
+                        ).then(pl.lit("fake"))
+                        .when(
+                            (pl.col("status") == status_main)
+                            & pl.col("_sealed").is_null()
+                        ).then(pl.lit("pending"))
+                        .otherwise(None).alias("sealed_status"),
+                        pl.col("_sealed_vol").alias("sealed_vol"),
+                    ).drop(["_sealed", "_sealed_vol"])
+                else:
+                    df = df.with_columns(
+                        pl.lit(None).alias("sealed_status"),
+                        pl.lit(None).alias("sealed_vol"),
+                    )
+            else:
+                df = df.with_columns(
+                    pl.lit(None).alias("sealed_status"),
+                    pl.lit(None).alias("sealed_vol"),
+                )
     else:
         df = df.with_columns(
             pl.lit(None).alias("sealed_status"),
@@ -649,7 +811,7 @@ def limit_ladder(
             ext_col_name = f"{config_id}__{field_name}"
             try:
                 ext_df = pl.from_arrow(db.query(
-                    f"SELECT symbol, \"{field_name}\" FROM {view_name}"
+                    f"SELECT symbol, {quote_ident(field_name)} FROM {view_name}"
                 ).arrow())
                 if not ext_df.is_empty() and "symbol" in ext_df.columns:
                     ext_df = ext_df.rename({field_name: ext_col_name})
@@ -709,6 +871,11 @@ def limit_ladder(
         },
         "sealed_counts_up": sealed_counts_up,
         "sealed_counts_down": sealed_counts_down,
+        # 外部降级展示标识(provenance): 仅当权威 sealed map 缺失、改用外部展示 map 时为 true。
+        # sealed_source 标明降级来源(如 tencent_quote); 权威 map 或无 depth 时分别为 null。
+        # 注意: degraded 时不影响 counts/status/tiers/sealed_ready, 仅填充展示字段。
+        "sealed_degraded": sealed_degraded,
+        "sealed_source": sealed_source,
     }
 
 
@@ -724,7 +891,7 @@ def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
         field_name = field_name.strip()
         if not config_id or not field_name:
             continue
-        if not _EXT_IDENT_RE.match(config_id) or "\x00" in field_name:
+        if not is_valid_ext_ident(config_id) or "\x00" in field_name:
             continue
         result.append((config_id, field_name))
     return result

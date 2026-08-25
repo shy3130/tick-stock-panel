@@ -42,6 +42,7 @@ def test_index_daily_fallback_fetches_index_asset_type(monkeypatch):
             "amount": [1.0],
         })
 
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
     monkeypatch.setattr(indices.kline_sync, "sync_daily_batch", fake_sync)
     monkeypatch.setattr(indices, "compute_enriched", lambda raw, **kwargs: raw)
 
@@ -54,8 +55,10 @@ def test_index_daily_fallback_fetches_index_asset_type(monkeypatch):
     )
 
     assert resp["source"] == "live"
+    assert resp["symbol"] == "000001.INDEX"  # 旧式 .SH 入参 → canonical .INDEX
     assert resp["rows"][0]["close"] == 4112.45
     assert calls[0][1]["asset_type"] == "index"
+    assert calls[0][0] == ["000001.INDEX"]  # sync 收到 canonical symbol
 
 
 def test_index_minute_fetches_index_asset_type(monkeypatch):
@@ -78,4 +81,26 @@ def test_index_minute_fetches_index_asset_type(monkeypatch):
     resp = indices.get_index_minute(request(), symbol="000001.SH", trade_date=date(2026, 7, 1))
 
     assert resp["source"] == "live"
-    assert calls == [("000001.SH", date(2026, 7, 1), "index")]
+    assert resp["symbol"] == "000001.INDEX"  # canonical
+    assert calls == [("000001.INDEX", date(2026, 7, 1), "index")]
+
+
+def test_index_daily_accepts_canonical_index_suffix(monkeypatch):
+    """纯 code 和 .INDEX 入参同样走指数路径，不猜普通股票上下文。"""
+    captured = []
+
+    def fake_sync(symbols, **kwargs):
+        captured.append(symbols)
+        return pl.DataFrame({"symbol": symbols, "date": [date(2026, 7, 1)],
+                             "open": [1.0], "high": [1.0], "low": [1.0],
+                             "close": [1.0], "volume": [1.0], "amount": [1.0]})
+
+    monkeypatch.setattr("app.services.data_mode.is_local_daily_mode", lambda: False)
+    monkeypatch.setattr(indices.kline_sync, "sync_daily_batch", fake_sync)
+    monkeypatch.setattr(indices, "compute_enriched", lambda raw, **kwargs: raw)
+
+    for inp in ("000001", "000001.INDEX", "000001.SH"):
+        resp = indices.get_index_daily(request(), symbol=inp, days=120,
+                                       start_date="2026-07-01", end_date="2026-07-01")
+        assert resp["symbol"] == "000001.INDEX"
+    assert all(s == ["000001.INDEX"] for s in captured)

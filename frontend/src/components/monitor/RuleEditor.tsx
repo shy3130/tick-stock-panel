@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Save, X, Plus, Search } from 'lucide-react'
+import { Save, X, Plus } from 'lucide-react'
 import { api, genRuleId, type MonitorRule, type MonitorCondition } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { instrumentSearchMeta } from '@/lib/instrumentSearch'
+import { InstrumentSearchAdder } from '@/components/instruments/InstrumentSearchInput'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { usePreferences } from '@/lib/useSharedQueries'
 
@@ -60,12 +60,6 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
       : { ...emptyRule(preset), webhook_enabled: preset?.webhook_enabled ?? !!(prefs?.webhook_enabled_default) },
   )
   const [error, setError] = useState('')
-  const [symbolQuery, setSymbolQuery] = useState('')
-  const symbolSearch = useQuery({
-    queryKey: QK.instrumentSearch(symbolQuery),
-    queryFn: () => api.instrumentSearch(symbolQuery, 20),
-    enabled: symbolQuery.length > 0,
-  })
 
   const save = useMutation({
     mutationFn: () => {
@@ -86,7 +80,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
           if (c.op !== 'truth' && (c.value === null || c.value === undefined)) throw new Error('阈值条件需要数值')
         }
       }
-      if (d.scope === 'symbols' && d.symbols.length === 0) throw new Error('请选择至少一只股票')
+      if (d.scope === 'sector') throw new Error('板块(scope=sector)当前不可用,请改选「指定股票」或「全市场」')
       return api.monitorRuleSave(d)
     },
     onSuccess: () => {
@@ -111,11 +105,10 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const removeCond = (idx: number) =>
     setDraft(d => ({ ...d, conditions: d.conditions.filter((_, i) => i !== idx) }))
 
-  const addSymbol = (sym: string) => {
-    if (!draft.symbols.includes(sym)) {
-      setDraft(d => ({ ...d, symbols: [...d.symbols, sym] }))
+  const addSymbol = (symbol: string) => {
+    if (!draft.symbols.includes(symbol)) {
+      setDraft(d => ({ ...d, symbols: [...d.symbols, symbol] }))
     }
-    setSymbolQuery('')
   }
 
   const thresholdFields = options.data?.threshold_fields ?? []
@@ -235,6 +228,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         <div className="flex items-center gap-2">
           <select value={draft.scope} onChange={e => setDraft(d => ({ ...d, scope: e.target.value as MonitorRule['scope'] }))} className="h-9 w-32 rounded-btn border border-border bg-base px-3 text-xs text-foreground">
             {(options.data?.scopes ?? []).map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+            {/* 仅历史 sector 规则可见的 disabled 选项: 不可新建, 必须显式改 scope */}
+            {draft.scope === 'sector' && <option value="sector" disabled>板块（当前不可用）</option>}
           </select>
           {draft.scope === 'symbols' && (
             <div className="flex-1 flex flex-wrap items-center gap-1.5">
@@ -246,30 +241,20 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                   </button>
                 </span>
               ))}
-              <div className="relative">
-                <input
-                  value={symbolQuery}
-                  onChange={e => setSymbolQuery(e.target.value)}
-                  placeholder="搜索股票..."
-                  className="h-7 w-32 rounded border border-border bg-base pl-6 pr-2 text-[11px] text-foreground focus:outline-none focus:border-accent/50"
-                />
-                <Search className="absolute left-1.5 top-1.5 h-3.5 w-3.5 text-muted" />
-                {symbolSearch.data && symbolSearch.data.results.length > 0 && (
-                  <div className="absolute z-10 mt-1 max-h-48 w-48 overflow-auto rounded border border-border bg-surface shadow-lg">
-                    {symbolSearch.data.results.map(r => (
-                      <button key={r.symbol} onClick={() => addSymbol(r.symbol)} className="block w-full px-2 py-1 text-left text-[11px] hover:bg-elevated cursor-pointer">
-                        <span className="font-mono text-foreground/80">{r.symbol}</span>
-                        <span className="ml-1 text-muted">{r.name}</span>
-                        <span className="ml-1 text-[10px] text-muted/70">{instrumentSearchMeta(r)}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <InstrumentSearchAdder
+                onAdd={result => addSymbol(result.symbol)}
+                assetTypes={['stock']}
+                placeholder="搜索代码、名称或拼音"
+                ariaLabel="添加监控标的"
+                className="w-48"
+                inputClassName="h-7 w-full rounded border border-border bg-base pr-2 text-[11px] text-foreground focus:border-accent/50 focus:outline-none"
+              />
             </div>
           )}
           {draft.scope === 'all' && <span className="text-[11px] text-muted">对全市场所有股票生效</span>}
-          {draft.scope === 'sector' && <span className="text-[11px] text-muted/60">板块精确过滤(开发中,当前等同全市场)</span>}
+          {draft.scope === 'sector' && (
+            <span className="text-[11px] text-warning">板块(scope=sector)当前不可用且不会触发; 请改选「指定股票」或「全市场」后再保存。</span>
+          )}
         </div>
       </div>
 

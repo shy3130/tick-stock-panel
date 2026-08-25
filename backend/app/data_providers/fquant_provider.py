@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta
 
 import polars as pl
@@ -37,7 +38,6 @@ from app.data_providers.fquant.adj_factor import (
     build_ex_factor_df,
     compute_ex_factor_from_xdxr,
 )
-from app.data_providers.fquant.tdx_duckdb_client import TdxDuckDBClient
 from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
 from app.data_providers.fquant.mapping import (
     base_infos_rows_to_instruments,
@@ -59,6 +59,7 @@ from app.data_providers.fquant.symbols import (
     split_symbol,
     symbol_to_code,
 )
+from app.data_providers.fquant.tdx_duckdb_client import TdxDuckDBClient
 from app.data_providers.normalizer import (
     normalize_adj_factors,
     normalize_daily,
@@ -133,6 +134,25 @@ def _aggregate_minute_df(df: pl.DataFrame, freq: str) -> pl.DataFrame:
 
     return pl.DataFrame(rows) if rows else pl.DataFrame()
 
+# daily_markets realtime 投影：universe 与 symbols 两条查询路径共用，
+# 保证输出形状完全一致（字段抽取由 _fstore_quote_to_row 消费）。
+_DAILY_MARKETS_REALTIME_COLS = """\
+    code,
+    COALESCE(payload_json->>'Name', '') AS name,
+    trade_date AS tdate,
+    price,
+    CAST(NULLIF(payload_json->>'Zdfd', '') AS DOUBLE) AS zdfd,
+    CAST(NULLIF(payload_json->>'Zded', '') AS DOUBLE) AS zded,
+    CAST(NULLIF(payload_json->>'Cjl', '') AS BIGINT) AS cjl,
+    CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS cje,
+    CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS jrkpj,
+    CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS zgj,
+    CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS zdj,
+    CAST(NULLIF(payload_json->>'Zrspj', '') AS DOUBLE) AS zrspj,
+    CAST(NULLIF(payload_json->>'Hslv', '') AS DOUBLE) AS hslv,
+    CAST(NULLIF(payload_json->>'Zhfu', '') AS DOUBLE) AS zhfu
+"""
+
 
 # =========================================================================== #
 # FQuantProvider（对外接口，本地源聚合）
@@ -164,11 +184,66 @@ class FQuantProvider:
     def __init__(self, name: str = "fquant") -> None:
         self.name = name
         self._fstore = FStoreDuckDBClient()
+        # 独立 markets 客户端：realtime/daily_markets 查询走自己的连接与锁，
+        # 不与 _fstore 上的财务/K线/管道查询共享客户端锁而互相阻塞。
+        self._fstore_markets = FStoreDuckDBClient()
         self._engine = TdxDuckDBClient()
         # instruments 缓存（§4.3 24h TTL）
         self._instruments_cache: dict[str, pl.DataFrame] = {}
         self._instruments_cache_ts: dict[str, datetime] = {}
         self._instruments_cache_ttl = 86400  # 秒
+
+        # 标的参考标记缓存（AH/沪深股通/上市日期, 24h TTL, 与 instruments 缓存同生命周期）
+        self._reference_flags_cache: pl.DataFrame | None = None
+        self._reference_flags_cache_ts: datetime | None = None
+
+    def close(self) -> None:
+        """关闭底层 FStore 与 TDX 连接（幂等）。供 lifespan 关闭链调用。"""
+        try:
+            self._fstore.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("FQuantProvider: 关闭 fstore 连接失败", exc_info=True)
+        try:
+            self._fstore_markets.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("FQuantProvider: 关闭 fstore markets 连接失败", exc_info=True)
+        try:
+            self._engine.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("FQuantProvider: 关闭 TDX 连接失败", exc_info=True)
+
+    def refresh_fstore_clients(self) -> None:
+        """刷新所有 fstore 客户端连接，下次查询重新解析 generation 快照。
+
+        同时刷新 ``_fstore``（财务/K线/元数据）与 ``_fstore_markets``（realtime/daily_markets），
+        避免 markets generation 切换后 realtime 仍读旧快照。两客户端可能是同一实例，
+        用 id() 去重避免重复关闭。盘后/盘前管道开始前调用本方法，强制重建连接到当前 generation。
+
+        同时清空 instruments 内存缓存（24h TTL），确保 get_instruments 从新 generation 重读。
+        """
+        seen: set[int] = set()
+        for attr in ("_fstore", "_fstore_markets"):
+            client = getattr(self, attr, None)
+            if client is None:
+                continue
+            cid = id(client)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            refresh = getattr(client, "refresh", None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:  # noqa: BLE001
+                    logger.warning("FQuantProvider: 刷新 %s 连接失败", attr, exc_info=True)
+
+        # 客户端重建到新 generation 后, 旧 generation 的 instruments 内存缓存
+        # （24h TTL）也必须失效, 否则 run_now 先 refresh 再 instrument_sync
+        # 时 get_instruments 仍返回旧 generation 的标的列表。
+        self._instruments_cache.clear()
+        self._instruments_cache_ts.clear()
+        self._reference_flags_cache = None
+        self._reference_flags_cache_ts = None
 
     # ------------------------------------------------------------------ #
     # get_instruments — §4.3 主源 fstore.base_infos
@@ -231,7 +306,29 @@ class FQuantProvider:
 
     # ------------------------------------------------------------------ #
     # get_daily — §4.4 双源融合（engine-data wide 主 + fstore day_klines 备）
-    # ------------------------------------------------------------------ #
+    def get_daily_freshness(self) -> date | None:
+        """返回 ``get_daily`` 主源与 fallback 合并后的最新可用交易日。"""
+        candidates: list[date] = []
+        engine_date = self._engine.freshness()
+        if isinstance(engine_date, date):
+            candidates.append(engine_date)
+        rows = self._fstore.query(
+            """
+            SELECT CAST(max(tdate) AS VARCHAR) AS latest_date
+            FROM t_1_day_klines
+            WHERE ktype = 101 AND fq = 0
+            """
+        )
+        if rows and rows[0].get("latest_date"):
+            try:
+                candidates.append(date.fromisoformat(str(rows[0]["latest_date"])[:10]))
+            except ValueError:
+                logger.warning(
+                    "FQuantProvider: 无法解析 fstore day_klines 水位 %r",
+                    rows[0]["latest_date"],
+                )
+        return max(candidates) if candidates else None
+
     def get_daily(
         self,
         symbols: list[str],
@@ -254,12 +351,53 @@ class FQuantProvider:
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
-            rows = self._get_daily_from_engine_wide(sym, code, start_time, end_time, asset_type)
+            rows = self._get_daily_from_engine_wide(
+                sym, code, start_time, end_time, asset_type
+            )
+            if asset_type == "index":
+                # engine wide 可能停在较早交易日；asset_type=10 的 daily_markets
+                # 与指数 code 无歧义，可补齐缺失日期，同日仍以 engine 为准。
+                market_rows = self._get_index_daily_from_markets(
+                    sym, code, start_time, end_time
+                )
+                by_date = {
+                    str(row.get("date")): row
+                    for row in market_rows
+                    if row.get("date") is not None
+                }
+                by_date.update(
+                    {
+                        str(row.get("date")): row
+                        for row in rows
+                        if row.get("date") is not None
+                    }
+                )
+                rows = [by_date[value] for value in sorted(by_date)]
+            else:
+                # 有明确区间时，两源按日期合并：engine 覆盖同日，fstore
+                # 补首尾缺口。只在无区间且 engine 已有数据时跳过额外查询。
+                fallback_rows = (
+                    self._get_daily_from_fstore_klines(
+                        sym, code, start_time, end_time, asset_type
+                    )
+                    if not rows or start_time is not None or end_time is not None
+                    else []
+                )
+                by_date = {
+                    str(row.get("date")): row
+                    for row in fallback_rows
+                    if row.get("date") is not None
+                }
+                by_date.update(
+                    {
+                        str(row.get("date")): row
+                        for row in rows
+                        if row.get("date") is not None
+                    }
+                )
+                rows = [by_date[value] for value in sorted(by_date)]
             if not rows:
-                # L2 降级：engine-data 不可用 → fstore day_klines
-                rows = self._get_daily_from_fstore_klines(sym, code, start_time, end_time, asset_type)
-            if not rows:
-                logger.debug("get_daily %s: 两源均无数据", sym)
+                logger.debug("get_daily %s: 本地日K链均无数据", sym)
                 continue
             normalized = normalize_daily(rows, default_symbol=sym, source=self.name)
             if not normalized.is_empty():
@@ -309,12 +447,55 @@ class FQuantProvider:
             out.append(row)
         return out
 
-    def _get_raw_oracle_rows(self, code: str, rows: list[dict]) -> list[dict]:
-        """Fetch fstore raw OHLC oracle for the date span of engine rows.
+    def _get_index_daily_from_markets(
+        self,
+        symbol: str,
+        code: str,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> list[dict]:
+        """从 daily_markets 的指数口径（asset_type=10）补齐日 K 缺口。"""
+        conditions = ["asset_type = 10", "code = %s"]
+        params: list[object] = [code]
+        if start_time is not None:
+            conditions.append("trade_date >= %s")
+            params.append(start_time.date())
+        if end_time is not None:
+            conditions.append("trade_date <= %s")
+            params.append(end_time.date())
+        order_limit = "ORDER BY trade_date ASC"
+        if start_time is None and end_time is None:
+            order_limit = "ORDER BY trade_date DESC LIMIT 250"
+        rows = self._fstore_markets.query(
+            f"""
+            SELECT
+                trade_date::text AS date,
+                CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS open,
+                CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS high,
+                CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS low,
+                price::float8 AS close,
+                CAST(NULLIF(payload_json->>'Cjl', '') AS DOUBLE) AS volume,
+                CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS amount
+            FROM daily_markets
+            WHERE {' AND '.join(conditions)}
+            {order_limit}
+            """,
+            params,
+        )
+        if start_time is None and end_time is None:
+            rows.reverse()
+        return [
+            {"symbol": symbol, **row}
+            for row in rows
+            if row.get("date") is not None
+        ]
 
-        t_1_daily_markets 不存在，改用无前缀的 daily_markets 长表，
-        字段从 payload_json 抽取。
-        t_1_day_klines 两种模式下均可用（DuckDB 原生支持 ::text/::float8 cast）。
+    def _get_raw_oracle_rows(self, code: str, rows: list[dict]) -> list[dict]:
+        """Fetch fstore raw OHLCV oracle for the engine-row date span.
+
+        ``t_1_day_klines`` 是完整、单位已校准的首选日 K oracle；仅当它缺少
+        engine 请求日期时，才查询 ``daily_markets`` 补洞。这样既避免后者的
+        陈旧 ``Cjl=0`` 覆盖正确成交量，也避免每次日 K 请求重复扫描 markets。
         """
         dates = sorted(str(r.get("date")) for r in rows if r.get("date"))
         if not dates:
@@ -335,24 +516,31 @@ class FQuantProvider:
             """,
             (code, dates[0], dates[-1]),
         )
-        market_rows = self._fstore.query(
-            """
-            SELECT
-                trade_date::text AS date,
-                CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS oracle_open,
-                CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS oracle_high,
-                CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS oracle_low,
-                price AS oracle_close,
-                CAST(NULLIF(payload_json->>'Cjl', '') AS DOUBLE) * 100 AS oracle_volume,
-                CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS oracle_amount
-            FROM daily_markets
-            WHERE asset_type = 1 AND code = %s AND trade_date BETWEEN %s AND %s
-            ORDER BY trade_date ASC
-            """,
-            (code, dates[0], dates[-1]),
-        )
         by_date = {str(r.get("date")): r for r in day_rows}
-        by_date.update({str(r.get("date")): r for r in market_rows})
+        missing_dates = [value for value in dates if value not in by_date]
+        if missing_dates:
+            market_rows = self._fstore.query(
+                """
+                SELECT
+                    trade_date::text AS date,
+                    CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS oracle_open,
+                    CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS oracle_high,
+                    CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS oracle_low,
+                    price AS oracle_close,
+                    CAST(NULLIF(payload_json->>'Cjl', '') AS DOUBLE) * 100 AS oracle_volume,
+                    CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS oracle_amount
+                FROM daily_markets
+                WHERE asset_type = 1 AND code = %s AND trade_date BETWEEN %s AND %s
+                ORDER BY trade_date ASC
+                """,
+                (code, missing_dates[0], missing_dates[-1]),
+            )
+            # t_1_day_klines 是专用日K oracle，优先级高于 daily_markets；
+            # daily_markets 只补 day_klines 缺失的日期，不覆盖同日行。
+            for row in market_rows:
+                row_date = str(row.get("date"))
+                if row_date not in by_date:
+                    by_date[row_date] = row
         return [by_date[k] for k in sorted(by_date)]
 
     def _get_daily_from_fstore_klines(
@@ -425,7 +613,7 @@ class FQuantProvider:
         symbols: list[str],
         start_time: datetime | None,
         end_time: datetime | None,
-        asset_type: AssetType,  # noqa: ARG002
+        asset_type: AssetType,
     ) -> pl.DataFrame:
         """复权除息因子（§4.5）。
 
@@ -437,6 +625,9 @@ class FQuantProvider:
         输出列（经 ``normalize_adj_factors``）：symbol/trade_date/ex_factor
         """
         if not symbols:
+            return pl.DataFrame()
+        if asset_type == "hk":
+            # No published HK corporate-action/adjustment dataset exists.
             return pl.DataFrame()
 
         frames: list[pl.DataFrame] = []
@@ -537,6 +728,12 @@ class FQuantProvider:
 
     # ------------------------------------------------------------------ #
     # get_minute — §4.6 主源 engine-data minutes
+    def get_minute_coverage(self) -> dict | None:
+        """返回 A 股分钟 catalog 最新可安全读取的发布水位。"""
+        from app.data_providers.fquant.catalog_resolver import latest_route_coverage
+
+        return latest_route_coverage("tdx_minutes", "a")
+
     # ------------------------------------------------------------------ #
     def get_minute(
         self,
@@ -548,19 +745,47 @@ class FQuantProvider:
     ) -> pl.DataFrame:
         """拉取分钟级数据并归一（§4.6）。
 
-        数据流：engine-data ``minutes``（price/volume，客户端重建时间戳）
-        降级：API 不响应 → 空 df
-
-        date 推断：优先 ``end_time``，其次 ``start_time``。
-        ``freq`` 支持 1m/5m/15m/30m/60m 等分钟聚合；底层取 1m 后在本地聚合。
-
-        输出列（MINUTE_COLUMNS）：symbol/asset_type/source/datetime/open/high/low/close/
-                                 volume/amount/freq
+        A股 (asset_type="stock") 多日 start/end：按交易日期逐日调用 catalog route (engine.get_minutes per date) 并合并。
+        缺任一中间日 route/stale now 原样上抛 (client updated + sync_batch no-swallow)。
+        ETF/HK 维持原有 DuckDB 路径逻辑。
+        所有调用显式 asset_type。
         """
         if not symbols:
             return pl.DataFrame()
 
-        # 确定查询日期（§4.6 date 推断）
+        if (
+            asset_type == "stock"
+            and start_time is not None
+            and end_time is not None
+            and (end_time.date() - start_time.date()).days > 0
+        ):
+            # 多日 A股：逐日 catalog route 合并
+            frames: list[pl.DataFrame] = []
+            current = start_time.date()
+            while current <= end_time.date():
+                date_str = current.strftime("%Y%m%d")
+                day_frames: list[pl.DataFrame] = []
+                for sym in symbols:
+                    code = symbol_to_code(sym)
+                    ticks = self._engine.get_minutes(
+                        code, date_str, asset_type=asset_type  # explicit
+                    )
+                    if ticks:
+                        minute_df = minutes_rows_to_minute_df(
+                            ticks, sym, asset_type, date_str,
+                            source=self.name, freq="1m",
+                        )
+                        if not minute_df.is_empty():
+                            day_frames.append(minute_df)
+                if day_frames:
+                    frames.append(pl.concat(day_frames, how="diagonal_relaxed"))
+                current += timedelta(days=1)
+            if not frames:
+                return pl.DataFrame()
+            df = pl.concat(frames, how="diagonal_relaxed")
+            return _aggregate_minute_df(df, freq)
+
+        # ETF/HK or single day: original DuckDB path
         ref_dt = end_time or start_time
         if ref_dt is None:
             return pl.DataFrame()
@@ -569,7 +794,7 @@ class FQuantProvider:
         frames: list[pl.DataFrame] = []
         for sym in symbols:
             code = symbol_to_code(sym)
-            ticks = self._engine.get_minutes(code, date_str, asset_type=asset_type)
+            ticks = self._engine.get_minutes(code, date_str, asset_type=asset_type)  # explicit
             if not ticks:
                 logger.debug("tdx minutes %s %s: 无数据", code, date_str)
                 continue
@@ -591,12 +816,32 @@ class FQuantProvider:
         universes: list[str] | None = None,
         symbols: list[str] | None = None,
     ) -> pl.DataFrame:
-        """从本地 DuckDB ``daily_markets`` 最新快照返回 realtime 形状。"""
-        target_symbols = self._resolve_realtime_symbols(universes, symbols)
-        if not target_symbols:
+        """从本地 DuckDB ``daily_markets`` 最新快照返回 realtime 形状。
+
+        先取 ``daily_markets`` 全局最新 trade_date（单次 MAX），再按该日期 +
+        asset_type（+ 可选 code IN）查询当前交易日全体行；不做历史全表窗口函数
+        （QUALIFY/ROW_NUMBER/DISTINCT ON），避免扫历史取每 code 最新导致的 stale。
+        所有查询走独立 ``_fstore_markets`` 客户端（独立连接/锁），不与财务/K线/管道
+        查询共享 ``_fstore`` 的客户端锁。
+        两条路径都经 ``_fstore_quote_to_row`` / ``normalize_realtime``，输出形状与
+        source 标记一致（``fquant:fstore:daily_markets``）。
+        """
+        if universes and symbols:
+            raise ValueError("FQuant realtime accepts either universes or symbols, not both")
+
+        if symbols:
+            target_symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
+            if not target_symbols:
+                return pl.DataFrame()
+            rows = self._get_fstore_realtime(list(dict.fromkeys(target_symbols)))
+        elif universes:
+            asset_types = self._realtime_universe_asset_types(universes)
+            if not asset_types:
+                return pl.DataFrame()
+            rows = self._get_fstore_realtime_by_asset_types(asset_types)
+        else:
             return pl.DataFrame()
 
-        rows = self._get_fstore_realtime(list(dict.fromkeys(target_symbols)))
         return normalize_realtime(rows, source=self.name) if rows else pl.DataFrame()
 
     def get_depth(self, symbols: list[str]) -> dict:
@@ -605,7 +850,21 @@ class FQuantProvider:
 
     def get_latest_market_supplements(self, symbols: list[str]) -> pl.DataFrame:
         """Latest fstore daily_markets fields that realtime sources may omit."""
-        rows = self._get_fstore_realtime(symbols)
+        targets = list(dict.fromkeys(str(s).strip().upper() for s in symbols if str(s).strip()))
+        if len(targets) >= 500:
+            target_set = set(targets)
+            asset_types = sorted({
+                asset_type
+                for symbol in targets
+                if (asset_type := self._asset_type_num_for_symbol(symbol)) is not None
+            })
+            rows = [
+                row
+                for row in self._get_fstore_realtime_by_asset_types(asset_types)
+                if row.get("symbol") in target_set
+            ]
+        else:
+            rows = self._get_fstore_realtime(targets)
         if not rows:
             return pl.DataFrame()
         out = []
@@ -667,43 +926,258 @@ class FQuantProvider:
             (pl.col("code").cast(pl.Utf8) + pl.lit(".HK")).alias("symbol")
         )
 
+    def get_stock_reference_flags(self) -> pl.DataFrame:
+        """A 股标的参考标记 — AH 股 / AH 溢价率 / 沪深股通标的 / 上市日期。
+
+        源：fstore ``base_infos``(asset_type=1, hsgt/ssdate/symbol) 左连
+        ``ah_stock_compares`` 最新交易日的 acode → 溢价率。条件选股等
+        业务层经 registry 取本方法（provider 特有, 不在 base 契约）。
+
+        返回列：symbol / is_ah(bool) / ah_premium(float, %) /
+        hk_connect(bool, hsgt>0) / listing_date(date | null)。
+        缓存 24h TTL；fstore 不可用或查询失败 fail-soft 返回空 df。
+        """
+        if (
+            self._reference_flags_cache is not None
+            and self._reference_flags_cache_ts is not None
+            and (datetime.now() - self._reference_flags_cache_ts).total_seconds()
+            <= self._instruments_cache_ttl
+        ):
+            return self._reference_flags_cache
+
+        try:
+            rows = self._fstore.query(
+                """
+                WITH ah AS (
+                    SELECT acode, premium_rate FROM (
+                        SELECT acode, premium_rate,
+                               ROW_NUMBER() OVER (PARTITION BY acode ORDER BY trade_date DESC) AS rn
+                        FROM ah_stock_compares
+                    ) ranked WHERE rn = 1
+                )
+                SELECT b.symbol, b.code,
+                       (ah.acode IS NOT NULL) AS is_ah,
+                       ah.premium_rate AS ah_premium,
+                       (b.hsgt IS NOT NULL AND b.hsgt > 0) AS hk_connect,
+                       b.ssdate AS listing_date
+                FROM base_infos b
+                LEFT JOIN ah ON ah.acode = b.code
+                WHERE b.asset_type = 1 AND b.symbol IS NOT NULL AND b.symbol != ''
+                """
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 标的参考标记查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        df = pl.DataFrame(
+            rows,
+            schema_overrides={
+                "symbol": pl.Utf8,
+                "is_ah": pl.Boolean,
+                "ah_premium": pl.Float64,
+                "hk_connect": pl.Boolean,
+                "listing_date": pl.Date,
+            },
+        )
+        # base_infos.symbol 是 fstore 小写前缀格式(sh603501) → 规范化为对外符号(603501.SH)
+        from app.data_providers.fquant.symbols import code_to_symbol
+
+        df = df.with_columns(
+            pl.col("code").cast(pl.Utf8).map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+        # 同一 code 多行时保留 updated_at 最新一条已在 SQL 侧由 ah rn=1 保证;
+        # base_infos 理论唯一, 防御性去重保留首个非空溢价行。
+        df = df.unique(subset=["symbol"], keep="first")
+        self._reference_flags_cache = df
+        self._reference_flags_cache_ts = datetime.now()
+        return df
+
+    def get_lhb_records(self, start: date, end: date) -> pl.DataFrame:
+        """龙虎榜上榜记录 — ``[start, end]`` 区间内 (symbol, trade_date) 去重对。
+
+        源：fstore ``longhb_detail``(2013 年起, 每标的每日一行多榜单原因,
+        DISTINCT 按日去重)。业务层(条件选股等)经 registry 取本方法
+        (provider 特有, 不在 base 契约), 按 as_of 窗口自行聚合。
+        查询失败 fail-soft 返回空 df。
+        """
+        try:
+            rows = self._fstore.query(
+                """
+                SELECT DISTINCT code, CAST(t_date AS DATE) AS trade_date
+                FROM longhb_detail
+                WHERE t_date IS NOT NULL
+                  AND CAST(t_date AS DATE) BETWEEN ? AND ?
+                """,
+                [start.isoformat(), end.isoformat()],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 龙虎榜上榜记录查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        from app.data_providers.fquant.symbols import code_to_symbol
+
+        df = pl.DataFrame(rows, schema_overrides={"code": pl.Utf8, "trade_date": pl.Date})
+        return df.with_columns(
+            pl.col("code").map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+
+    def get_lhb_institution_records(self, start: date, end: date) -> pl.DataFrame:
+        """龙虎榜机构席位日记录，按标的/日期汇总净买入额。
+
+        该扩展方法仅供按 ``as_of`` 聚合的业务入口调用，不属于通用
+        ``MarketDataProvider`` 契约。fstore 不可读时 fail-soft 返回空帧。
+        """
+        try:
+            rows = self._fstore.query(
+                """
+                SELECT code, CAST(t_date AS DATE) AS trade_date,
+                       SUM(net_buy_amount) AS net_buy_amount
+                FROM longhb_jigou
+                WHERE t_date IS NOT NULL
+                  AND CAST(t_date AS DATE) BETWEEN ? AND ?
+                GROUP BY code, CAST(t_date AS DATE)
+                """,
+                [start.isoformat(), end.isoformat()],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 龙虎榜机构席位记录查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        df = pl.DataFrame(
+            rows,
+            schema_overrides={
+                "code": pl.Utf8,
+                "trade_date": pl.Date,
+                "net_buy_amount": pl.Float64,
+            },
+        )
+        return df.with_columns(
+            pl.col("code").map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+
+    def get_margin_records(self, start: date, end: date) -> pl.DataFrame:
+        """融资余额及融资净买入记录（金额口径：万元）。
+
+        ``buy_balance`` 是融资余额，``buy_net_amount`` 是当日融资买入额减
+        偿还额。业务层负责在 ``as_of`` 水位下选取最近交易日并计算窗口值。
+        """
+        try:
+            rows = self._fstore.query(
+                """
+                SELECT code, CAST(t_date AS DATE) AS trade_date,
+                       buy_balance AS financing_balance,
+                       buy_net_amount AS financing_net_buy
+                FROM stock_rzrj
+                WHERE t_date IS NOT NULL
+                  AND CAST(t_date AS DATE) BETWEEN ? AND ?
+                """,
+                [start.isoformat(), end.isoformat()],
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("fstore 融资融券记录查询失败", exc_info=True)
+            return pl.DataFrame()
+        if not rows:
+            return pl.DataFrame()
+
+        df = pl.DataFrame(
+            rows,
+            schema_overrides={
+                "code": pl.Utf8,
+                "trade_date": pl.Date,
+                "financing_balance": pl.Float64,
+                "financing_net_buy": pl.Float64,
+            },
+        )
+        return df.with_columns(
+            pl.col("code").map_elements(
+                lambda c: code_to_symbol(str(c), 1), return_dtype=pl.Utf8
+            ).alias("symbol")
+        ).drop("code")
+
     @staticmethod
     def _pct_points_to_ratio(value) -> float | None:
         number = FQuantProvider._float_or_none(value)
         return number / 100 if number is not None else None
 
-    def _resolve_realtime_symbols(
-        self,
-        universes: list[str] | None,
-        symbols: list[str] | None,
-    ) -> list[str]:
-        if universes and symbols:
-            raise ValueError("FQuant realtime accepts either universes or symbols, not both")
-        if symbols:
-            return [str(s).strip().upper() for s in symbols if str(s).strip()]
-        if not universes:
-            return []
+    @staticmethod
+    def _realtime_universe_asset_types(universes: list[str]) -> list[int]:
+        """universe 前缀 → fstore daily_markets asset_type 数字（去重保序）。
 
-        frames: list[pl.DataFrame] = []
+        - ``CN_EQUITY*`` → 1（A 股）
+        - ``CN_ETF*``    → 20
+        - ``CN_INDEX*``  → 10
+        """
         upper = {u.upper() for u in universes}
+        nums: list[int] = []
         if any(u.startswith("CN_EQUITY") for u in upper):
-            frames.append(self.get_instruments("stock"))
+            nums.append(1)
         if any(u.startswith("CN_ETF") for u in upper):
-            frames.append(self.get_instruments("etf"))
+            nums.append(20)
         if any(u.startswith("CN_INDEX") for u in upper):
-            frames.append(self.get_instruments("index"))
+            nums.append(10)
+        return nums
 
-        if not frames:
+    def _fstore_latest_trade_date(self) -> str | None:
+        """daily_markets 全局最新 trade_date（单次 MAX，替代历史全表窗口函数）。
+
+        所有 CN 资产类型共用同一交易日历，全局 MAX(trade_date) 即当前交易日；
+        realtime 视图只关心当前交易日，停牌/退市等旧标的不应混入。
+        """
+        rows = self._fstore_markets.query(
+            "SELECT MAX(trade_date) AS latest FROM daily_markets"
+        )
+        if not rows:
+            return None
+        value = rows[0].get("latest")
+        return str(value) if value is not None else None
+
+    def _get_fstore_realtime_by_asset_types(self, asset_types: list[int]) -> list[dict]:
+        """全 universe 快路径：先取全局最新 trade_date，再按 asset_type 查该日全表。
+
+        不构造 code IN 列表，不做历史全表窗口函数（QUALIFY/ROW_NUMBER）；
+        只查当前交易日的全体行。输出经 ``_fstore_quote_to_row``，与精确 symbols
+        路径形状一致。
+        """
+        latest = self._fstore_latest_trade_date()
+        if latest is None:
             return []
-        non_empty = [f for f in frames if f is not None and not f.is_empty()]
-        if not non_empty:
-            return []
-        df = pl.concat(non_empty, how="diagonal_relaxed")
-        if df.is_empty() or "symbol" not in df.columns:
-            return []
-        return df["symbol"].cast(pl.Utf8).to_list()
+        out: list[dict] = []
+        for asset_type in asset_types:
+            rows = self._query_fstore_realtime_universe_rows(asset_type, latest)
+            out.extend(self._fstore_quote_to_row(r, asset_type) for r in rows)
+        return [r for r in out if r]
+
+    def _query_fstore_realtime_universe_rows(
+        self, asset_type: int, latest_trade_date: str
+    ) -> list[dict]:
+        """按 asset_type 取 daily_markets 指定 trade_date 的全体行（无 IN 列表）。
+
+        SQL 仅参数化 asset_type + trade_date；字段抽取与
+        ``_query_fstore_realtime_rows`` 共用同一投影，保证两条路径输出形状相同。
+        """
+        sql = f"""
+            SELECT {_DAILY_MARKETS_REALTIME_COLS}
+            FROM daily_markets
+            WHERE asset_type = %s AND trade_date = %s
+        """
+        return self._fstore_markets.query(sql, (asset_type, latest_trade_date))
 
     def _get_fstore_realtime(self, symbols: list[str]) -> list[dict]:
+        latest = self._fstore_latest_trade_date()
+        if latest is None:
+            return []
         grouped: dict[int, list[str]] = {}
         for symbol in symbols:
             asset_type = self._asset_type_num_for_symbol(symbol)
@@ -713,36 +1187,23 @@ class FQuantProvider:
 
         out: list[dict] = []
         for asset_type, codes in grouped.items():
-            rows = self._query_fstore_realtime_rows(asset_type, codes)
+            rows = self._query_fstore_realtime_rows(asset_type, codes, latest)
             out.extend(self._fstore_quote_to_row(r, asset_type) for r in rows)
         return [r for r in out if r]
 
-    def _query_fstore_realtime_rows(self, asset_type: int, codes: list[str]) -> list[dict]:
-        """从 daily_markets 长表中查询，其余字段打包在 payload_json（驼峰 key）里，用
-        ``->>`` 抽取后转型别名。
+    def _query_fstore_realtime_rows(
+        self, asset_type: int, codes: list[str], latest_trade_date: str
+    ) -> list[dict]:
+        """从 daily_markets 指定 trade_date 查询，其余字段打包在 payload_json
+        （驼峰 key）里，用 ``->>`` 抽取后转型别名。
         """
         placeholders = ",".join(["%s"] * len(codes))
         sql = f"""
-            SELECT DISTINCT ON (code)
-                code,
-                COALESCE(payload_json->>'Name', '') AS name,
-                trade_date AS tdate,
-                price,
-                CAST(NULLIF(payload_json->>'Zdfd', '') AS DOUBLE) AS zdfd,
-                CAST(NULLIF(payload_json->>'Zded', '') AS DOUBLE) AS zded,
-                CAST(NULLIF(payload_json->>'Cjl', '') AS BIGINT) AS cjl,
-                CAST(NULLIF(payload_json->>'Cje', '') AS DOUBLE) AS cje,
-                CAST(NULLIF(payload_json->>'Jrkpj', '') AS DOUBLE) AS jrkpj,
-                CAST(NULLIF(payload_json->>'Zgj', '') AS DOUBLE) AS zgj,
-                CAST(NULLIF(payload_json->>'Zdj', '') AS DOUBLE) AS zdj,
-                CAST(NULLIF(payload_json->>'Zrspj', '') AS DOUBLE) AS zrspj,
-                CAST(NULLIF(payload_json->>'Hslv', '') AS DOUBLE) AS hslv,
-                CAST(NULLIF(payload_json->>'Zhfu', '') AS DOUBLE) AS zhfu
+            SELECT {_DAILY_MARKETS_REALTIME_COLS}
             FROM daily_markets
-            WHERE asset_type = %s AND code IN ({placeholders})
-            ORDER BY code, trade_date DESC
+            WHERE asset_type = %s AND trade_date = %s AND code IN ({placeholders})
         """
-        return self._fstore.query(sql, (asset_type, *codes))
+        return self._fstore_markets.query(sql, (asset_type, latest_trade_date, *codes))
 
     @staticmethod
     def _asset_type_num_for_symbol(symbol: str) -> int | None:
@@ -754,6 +1215,13 @@ class FQuantProvider:
         if suffix == "INDEX":
             return 10
         if suffix in {"SH", "SZ", "BJ"}:
+            code = symbol_to_code(symbol)
+            # SH exchange: 000xxx 是指数（上证指数/上证50/沪深300/科创综指等）
+            if suffix == "SH" and code.startswith("000"):
+                return 10
+            # SZ exchange: 399xxx 是指数（深证成指/创业板指等）
+            if suffix == "SZ" and code.startswith("399"):
+                return 10
             return 1
         return None
 
@@ -993,6 +1461,10 @@ class FQuantProvider:
         :return: 归一 df，列含 ``symbol/t_date/...<source cols>.../notice_date``
         降级（§7.1）：DB 不可达 → 空 df，warning
         """
+        if symbol.upper().endswith(".HK"):
+            # fstore financial snapshots contain no HK symbols; fail closed
+            # rather than allowing a same-code row from another asset class.
+            return pl.DataFrame()
         fstore_table = _FINANCIAL_TABLE_MAP.get(table)
         if not fstore_table:
             logger.warning("get_financial: 不支持的 table=%s（支持: %s）",
@@ -1038,37 +1510,257 @@ class FQuantProvider:
 
         return moneyflow_daily_to_df(disk_data, code_to_sym, date_iso, source=self.name)
 
-    def get_moneyflow_range(self, symbol: str, start: datetime, end: datetime) -> pl.DataFrame:
-        """区间资金流查询（三锁指标资金锁专用）。"""
-        code = symbol_to_code(symbol)
+    def get_moneyflow_range(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+    ) -> pl.DataFrame:
+        """Return the existing daily money-flow range contract used by K-line APIs."""
         return self._engine.get_fund_range(
-            code,
+            symbol_to_code(symbol),
             start.strftime("%Y-%m-%d"),
             end.strftime("%Y-%m-%d"),
         )
 
+    def get_moneyflow_stock(self, symbol: str, start: datetime, end: datetime,
+                            freq: str = "daily") -> pl.DataFrame:
+        """查询已发布快照中的个股日/分钟资金流。"""
+        return self._engine.get_moneyflow_stock(
+            symbol, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), freq=freq,
+        )
+
+    def get_moneyflow_blocks(self, trade_date: datetime, freq: str = "daily",
+                             block_type: str | None = None, limit: int = 100) -> pl.DataFrame:
+        """查询已发布快照中的板块单日资金流排名。"""
+        return self._engine.get_moneyflow_blocks(
+            trade_date.strftime("%Y-%m-%d"), freq=freq, block_type=block_type, limit=limit,
+        )
+
+    def get_moneyflow_status(self) -> dict[str, dict]:
+        """四项资金流快照能力事实（独立于聚合 status，避免并发覆盖）。"""
+        return self._engine.get_moneyflow_status()
+
+    def get_moneyflow_snapshot(self, trade_date: date) -> pl.DataFrame:
+        """读取一个交易日的全市场日级资金流横截面。
+
+        仅使用 ``tdx-moneyflow`` 已发布 generation；返回空帧代表快照不可用或
+        该交易日无数据，调用方不得以旧 raw 数据回退。
+        """
+        rows = self._engine.get_moneyflow_daily_snapshot(trade_date.isoformat())
+        if not rows:
+            return pl.DataFrame()
+
+        out: list[dict] = []
+        for row in rows:
+            symbol = self._tdx_a_share_symbol(row.get("code"))
+            if symbol is None:
+                continue
+            out.append({
+                "symbol": symbol,
+                "trade_date": row.get("trade_date"),
+                "moneyflow_total_amount": self._float_or_none(row.get("total_amount")),
+                "main_net_inflow": self._float_or_none(row.get("main_traditional_net")),
+                "super_large_net_inflow": self._float_or_none(row.get("super_large_net")),
+                "valid_count": row.get("valid_count"),
+                "invalid_count": row.get("invalid_count"),
+            })
+        return pl.DataFrame(out) if out else pl.DataFrame()
+
+
+    # ------------------------------------------------------------------ #
+    # get_chip_distribution — 筹码分布（stock_chip_peaks，strict snapshot）
+    # ------------------------------------------------------------------ #
+    _A_SHARE_SYMBOL_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+    @staticmethod
+    def _tdx_a_share_symbol(raw_code: object) -> str | None:
+        """Convert a prefixed TDX A-share code to the public symbol contract."""
+        code = str(raw_code or "").strip()
+        if re.fullmatch(r"(?:sh|sz|bj)\d{6}", code, flags=re.IGNORECASE):
+            code = code[2:]
+        if not re.fullmatch(r"\d{6}", code):
+            return None
+        return code_to_symbol(code, 1)
+
+
+    def get_chip_distribution(
+        self,
+        symbol: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 500,
+    ) -> pl.DataFrame:
+        """查询已发布快照中的个股筹码分布（stock_chip_peaks）。
+
+        :param symbol: canonical A 股符号（``\\d{6}.(SH|SZ|BJ)``），仅接受单个 A 股
+        :param start: 起始日期（含）；None 不限下界
+        :param end: 结束日期（含）；None 不限上界
+        :param limit: 最大返回行数（默认 500）
+        :return: polars DataFrame，列含 ``symbol / trade_date / peak_price /
+                 peak_volume / peak_ratio / profit_ratio / avg_cost /
+                 concentration_90 / range_90_low / range_90_high /
+                 concentration_70 / range_70_low / range_70_high /
+                 cr10 / cr30 / gini /
+                 main_peak_price / main_peak_volume / main_peak_ratio /
+                 main_concentration /
+                 retail_peak_price / retail_peak_volume / retail_peak_ratio /
+                 retail_concentration / has_retail_peak /
+                 peak_count / window_days / price_step / asset_type /
+                 source``
+
+        不直接透传 ``result_json``——该列是上游筹码引擎的原始 JSON，体积大且
+        语义已被结构化字段覆盖，暴露它只会让 API 响应臃肿且引入版本耦合。
+
+        数据源 ``tdx_chip`` 走 strict snapshot：已发布 generation 不可达时返回空
+        DataFrame（``available`` 可由 :meth:`get_chip_status` 查询），绝不回退 raw。
+        """
+        if not self._A_SHARE_SYMBOL_RE.match(symbol or ""):
+            return pl.DataFrame()
+        if limit < 1:
+            return pl.DataFrame()
+
+        code = symbol_to_code(symbol)
+        from app.data_providers.fquant.tdx_duckdb_client import _prefixed_code
+
+        prefixed = _prefixed_code(code)
+        rows = self._engine.get_chip(
+            prefixed,
+            start.strftime("%Y-%m-%d") if start else None,
+            end.strftime("%Y-%m-%d") if end else None,
+            limit=limit,
+        )
+        if not rows:
+            return pl.DataFrame()
+
+        source_tag = f"{self.name}:tdx_chip"
+        out: list[dict] = []
+        for r in rows:
+            td = r.get("trade_date")
+            td_str = td.isoformat() if hasattr(td, "isoformat") else str(td) if td else None
+            out.append({
+                "symbol": symbol,
+                "trade_date": td_str,
+                "peak_price": r.get("peak_price"),
+                "peak_volume": r.get("peak_volume"),
+                "peak_ratio": r.get("peak_ratio"),
+                "profit_ratio": r.get("profit_ratio"),
+                "avg_cost": r.get("avg_cost"),
+                "concentration_90": r.get("concentration_90"),
+                "range_90_low": r.get("range_90_low"),
+                "range_90_high": r.get("range_90_high"),
+                "concentration_70": r.get("concentration_70"),
+                "range_70_low": r.get("range_70_low"),
+                "range_70_high": r.get("range_70_high"),
+                "cr10": r.get("cr10"),
+                "cr30": r.get("cr30"),
+                "gini": r.get("gini"),
+                "main_peak_price": r.get("main_peak_price"),
+                "main_peak_volume": r.get("main_peak_volume"),
+                "main_peak_ratio": r.get("main_peak_ratio"),
+                "main_concentration": r.get("main_concentration"),
+                "retail_peak_price": r.get("retail_peak_price"),
+                "retail_peak_volume": r.get("retail_peak_volume"),
+                "retail_peak_ratio": r.get("retail_peak_ratio"),
+                "retail_concentration": r.get("retail_concentration"),
+                "has_retail_peak": r.get("has_retail_peak"),
+                "peak_count": r.get("peak_count"),
+                "window_days": r.get("window_days"),
+                "price_step": r.get("price_step"),
+                "asset_type": r.get("asset_type"),
+                "source": source_tag,
+            })
+        return pl.DataFrame(out)
+
+    def get_chip_snapshot(self, trade_date: date) -> pl.DataFrame:
+        """读取一个交易日的全市场筹码统计横截面。
+
+        ``profit_ratio`` 的上游比例口径在这里归一为百分点，避免消费方各自
+        乘以 100。数据只来自 ``tdx-chip`` 已发布 generation。
+        """
+        rows = self._engine.get_chip_snapshot(trade_date.isoformat())
+        if not rows:
+            return pl.DataFrame()
+
+        out: list[dict] = []
+        for row in rows:
+            symbol = self._tdx_a_share_symbol(row.get("code"))
+            if symbol is None:
+                continue
+            profit_ratio = self._float_or_none(row.get("profit_ratio"))
+            out.append({
+                "symbol": symbol,
+                "trade_date": row.get("trade_date"),
+                "chip_profit_ratio": profit_ratio * 100 if profit_ratio is not None else None,
+                "chip_avg_cost": self._float_or_none(row.get("avg_cost")),
+                "chip_concentration_90": self._float_or_none(row.get("concentration_90")),
+                "chip_peak_count": row.get("peak_count"),
+                "chip_main_peak_price": self._float_or_none(row.get("main_peak_price")),
+            })
+        return pl.DataFrame(out) if out else pl.DataFrame()
+
+    def get_chip_status(self) -> dict[str, dict]:
+        """筹码快照能力事实（独立 key，供聚合 status 用 dict.update 合并）。
+
+        返回 ``{"chip": {available, source, earliest_date, latest_date, rows,
+        symbols, reason}}``。不可达与空表用 reason 区分。
+        """
+        fact = self._engine.get_chip_coverage()
+        return {"chip": fact}
+
     def get_moneyflow_minute(
         self, symbols: list[str], date: datetime | None = None,
     ) -> pl.DataFrame:
-        """分钟级资金流（已下线，恒返回空 DataFrame）。"""
-        return pl.DataFrame()
+        """分钟级资金流，兼容旧批量入口并切换到已发布快照。"""
+        if not symbols:
+            return pl.DataFrame()
+        day = date or datetime.now()
+        frames = [
+            self.get_moneyflow_stock(sym, day, day, freq="minute")
+            for sym in symbols
+        ]
+        frames = [frame for frame in frames if not frame.is_empty()]
+        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
-    def get_transactions(self, symbol: str, date: datetime) -> pl.DataFrame:
-        """逐笔成交（§3.4 扩展方法 / §2.2 trans）。
 
-        :param symbol: 带后缀符号
-        :param date: 查询日期
-        :return: df 列含 symbol/datetime/price/volume/amount/order_count/direction/source
-                 direction: 0=中性 / 1=买 / 2=卖（§2.2）
-        降级（§7.1）：engine-data 不响应 → 空 df
-        """
+    def get_transactions(self, symbol: str, date: datetime, limit: int = 5000) -> pl.DataFrame:
         code = symbol_to_code(symbol)
         date_str = date.strftime("%Y%m%d")
         _, suffix = split_symbol(symbol)
-        rows = self._engine.get_trans(code, date_str, asset_type="hk" if suffix == "HK" else None)
-        if not rows:
-            return pl.DataFrame()
-        return trans_rows_to_df(rows, symbol, date_str, source=self.name)
+        rows = self._engine.get_trans(code, date_str, limit=limit, asset_type="hk" if suffix == "HK" else None)
+        return trans_rows_to_df(rows, symbol, date_str, source=self.name) if rows else pl.DataFrame()
+
+    def get_call_auction(self, symbol: str, trade_date: datetime, session: str | None = None, limit: int = 5000) -> pl.DataFrame:
+        rows = self._engine.get_call_auction(symbol_to_code(symbol), trade_date.strftime("%Y%m%d"), session=session, limit=limit)
+        return pl.DataFrame([{**row, "symbol": symbol} for row in rows]) if rows else pl.DataFrame()
+
+    def get_microstructure_status(self) -> dict[str, dict]:
+        return self._engine.get_microstructure_status()
+
+    def get_market_data_status(self) -> dict[str, dict]:
+        """Expose explicit unsupported HK boundaries alongside local capabilities."""
+        return {
+            "hk_adjustment": {
+                "available": False,
+                "source": "engine-hk",
+                "earliest_date": None,
+                "latest_date": None,
+                "rows": 0,
+                "symbols": 0,
+                "reason": (
+                    "published engine-hk snapshot has no HK corporate-action "
+                    "or adjustment dataset"
+                ),
+            },
+            "hk_financial": {
+                "available": False,
+                "source": "fstore-extended",
+                "earliest_date": None,
+                "latest_date": None,
+                "rows": 0,
+                "symbols": 0,
+                "reason": "published fstore financial snapshots contain no HK symbols",
+            },
+        }
 
     # ------------------------------------------------------------------ #
     # get_corp_action — §3.4 扩展方法 fstore chuquan_chuxi + engine xdxr
@@ -1088,6 +1780,8 @@ class FQuantProvider:
         :return: df 列含 symbol/trade_date/category/fenhong/fenshu/peigu/...
         降级（§7.1）：两源均不可达 → 空 df
         """
+        if symbol.upper().endswith(".HK"):
+            return pl.DataFrame()
         code = symbol_to_code(symbol)
 
         # 主源 fstore chuquan_chuxi

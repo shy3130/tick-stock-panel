@@ -33,6 +33,7 @@ _CARD_MAX_LEN = 28000
 FEISHU_HOOK_PREFIX = "https://open.feishu.cn/open-apis/bot/v2/hook/"
 DINGTALK_HOOK_PREFIX = "https://oapi.dingtalk.com/robot/send"
 WECOM_HOOK_PREFIX = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+PUSHPLUS_SEND_URL = "https://www.pushplus.plus/send"
 
 
 def _truncate(text: str) -> str:
@@ -209,6 +210,50 @@ def send_meow(nickname: str, title: str, body: str) -> bool:
         return False
 
 
+def send_pushplus(token: str, title: str, body: str) -> bool:
+    """推送一条消息到 PushPlus — token 认证, 固定 host, 不接受用户自定义 URL。
+
+    PushPlus 是微信推送服务 (M18 复盘多 Agent 复评通过的可选通知通道)。
+    token 存于 secrets.json (0600), 由调用方从 secrets_store 注入, 本函数不做持久化。
+
+    Args:
+        token: PushPlus token (用户中心获取)
+        title: 消息标题 (已由调用方脱敏/截断)
+        body:  消息正文 (已由调用方脱敏/截断)
+
+    Returns:
+        True=成功, False=失败。失败静默, 不抛异常 (PushPlus 是最低优先级增量通道)。
+    """
+    token = (token or "").strip()
+    if not token:
+        return False
+    payload = {
+        "token": token,
+        "title": _truncate(title or "TickFlow"),
+        "content": _truncate(body),
+    }
+    try:
+        import httpx
+
+        resp = httpx.post(PUSHPLUS_SEND_URL, json=payload, timeout=5.0, trust_env=False)
+        # PushPlus 成功响应: {"code":200,"msg":"请求成功"}
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("code") == 200:
+                    return True
+                logger.debug("PushPlus 推送业务失败")
+                return False
+            except ValueError:
+                logger.debug("PushPlus 推送响应格式无效")
+                return False
+        logger.debug("PushPlus 推送 HTTP %s", resp.status_code)
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.debug("PushPlus 推送失败 (%s)", type(e).__name__)
+        return False
+
+
 def send_channel(channel: str, config: dict, title: str, body: str) -> bool:
     channel = str(channel or "").lower()
     if channel == "feishu":
@@ -219,6 +264,8 @@ def send_channel(channel: str, config: dict, title: str, body: str) -> bool:
         return send_wecom(config.get("url", ""), title, body)
     if channel == "meow":
         return send_meow(config.get("nickname", ""), title, body)
+    if channel == "pushplus":
+        return send_pushplus(config.get("token", ""), title, body)
     return False
 
 
@@ -277,4 +324,186 @@ def send_feishu_card(webhook_url: str, title: str, subtitle: str, body_md: str, 
             "elements": elements,
         },
     }
+    return _post_feishu(webhook_url, payload, secret)
+
+
+# ── M17: 结构化分析报告卡片 builder ───────────────────────
+#
+# 输入为已脱敏的研究 / 审计摘要 dict, 只承载分析与结论, 不含订单语义。
+# builder 是纯函数: 不发送、不读 IO, 输出稳定的 payload dict, 便于定向测试。
+# 发送复用现有 _post_feishu 签名 / HTTP 层, 不影响 send_feishu_card。
+
+# 卡片各段长度上限 (飞书 interactive 卡片上限 30KB, 保守控制单段)
+_CARD_TITLE_MAX = 100
+_CARD_FIELD_MAX = 400      # 单个文本字段 (失效条件等)
+_CARD_ITEM_MAX = 200       # 单条 evidence / warning
+_CARD_LIST_MAX = 8         # evidence / warning 最多保留条数
+
+# 输入允许读取的字段 (allowlist) — 其余字段一律不读取, 自然拒绝敏感数据
+_REPORT_FIELDS = frozenset({
+    "title", "symbol", "name", "data_as_of",
+    "risk", "gate", "evidence", "invalidation", "warnings",
+    "panel_url", "attempt_id", "request_id",
+})
+
+# 敏感字段黑名单 — 通知内容不得包含账户、持仓数量、完整交易流水。
+# 即使调用方误传也会被忽略 (allowlist 已保证不读取; 此集合用于显式告警与测试可观测)。
+_SENSITIVE_KEYS = frozenset({
+    "account", "account_id", "accounts", "账户",
+    "position", "positions", "shares", "quantity", "qty", "holdings",
+    "持仓", "持仓数量", "持股", "股数",
+    "trades", "transactions", "orders", "fills",
+    "流水", "交易流水", "成交记录", "委托",
+})
+
+# 风险等级 → 飞书卡片 header 配色
+_RISK_TEMPLATE = {
+    "高": "red", "high": "red",
+    "中": "orange", "medium": "orange",
+    "低": "green", "low": "green",
+}
+
+
+def _coerce_str_list(val) -> list[str]:
+    """把 evidence / warnings 等字段归一为非空字符串列表。"""
+    if not val:
+        return []
+    if isinstance(val, str):
+        v = val.strip()
+        return [v] if v else []
+    if isinstance(val, (list, tuple)):
+        return [str(x).strip() for x in val if x is not None and str(x).strip()]
+    return [str(val).strip()]
+
+
+def _cap(text: str, limit: int) -> str:
+    """截断单段文本到指定字符数。"""
+    text = (text or "").strip()
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def build_analysis_card_payload(report: dict) -> dict:
+    """构造结构化分析报告飞书 interactive 卡片 payload (纯函数, 不发送)。
+
+    输入为已脱敏的研究 / 审计摘要 dict。只读取 ``_REPORT_FIELDS`` 白名单字段;
+    其余键 (含账户、持仓数量、完整交易流水等敏感字段) 一律忽略并告警。
+
+    字段缺失时干净省略对应段落; 至少需要 title 或 symbol 才生成卡片,
+    否则返回空 dict。
+
+    Args:
+        report: 已脱敏摘要, 支持字段见 ``_REPORT_FIELDS``。
+
+    Returns:
+        飞书 interactive 卡片 payload dict; 无有效内容时返回 {}。
+    """
+    if not isinstance(report, dict):
+        return {}
+
+    # 检测敏感字段并告警 (不阻断, 仅丢弃)
+    leaked = _SENSITIVE_KEYS & report.keys()
+    if leaked:
+        logger.warning("分析卡片输入含敏感字段, 已忽略: %s", ", ".join(sorted(leaked)))
+
+    title = _cap(report.get("title") or "", _CARD_TITLE_MAX)
+    symbol = (report.get("symbol") or "").strip()
+
+    if not title and not symbol:
+        return {}
+
+    name = (report.get("name") or "").strip()
+    data_as_of = (report.get("data_as_of") or "").strip()
+    risk = (report.get("risk") or "").strip()
+    gate = (report.get("gate") or "").strip()
+
+    elements: list[dict] = []
+
+    # —— 副标题行: symbol · 名称 · 数据截止时间
+    head_parts: list[str] = []
+    if symbol:
+        head_parts.append(f"**{symbol}**")
+    if name:
+        head_parts.append(name)
+    if data_as_of:
+        head_parts.append(f"数据截止 {data_as_of}")
+    if head_parts:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": " · ".join(head_parts)}})
+        elements.append({"tag": "hr"})
+
+    # —— 风险 / gate
+    rg_parts: list[str] = []
+    if risk:
+        rg_parts.append(f"**风险**: {risk}")
+    if gate:
+        rg_parts.append(f"**Gate**: {gate}")
+    if rg_parts:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": " | ".join(rg_parts)}})
+
+    # —— 关键证据
+    evidence = _coerce_str_list(report.get("evidence"))
+    if evidence:
+        items = "\n".join(f"- {_cap(x, _CARD_ITEM_MAX)}" for x in evidence[:_CARD_LIST_MAX])
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**关键证据**\n{items}"}})
+
+    # —— 失效条件
+    invalidation = _cap(report.get("invalidation") or "", _CARD_FIELD_MAX)
+    if invalidation:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**失效条件**: {invalidation}"}})
+
+    # —— warnings
+    warns = _coerce_str_list(report.get("warnings"))
+    if warns:
+        items = "\n".join(f"- {_cap(x, _CARD_ITEM_MAX)}" for x in warns[:_CARD_LIST_MAX])
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**⚠ 注意**\n{items}"}})
+
+    # —— panel 详情链接
+    panel_url = (report.get("panel_url") or "").strip()
+    if panel_url:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"[查看详情 →]({panel_url})"}})
+
+    # —— attempt / request id (note 小字)
+    attempt_id = (report.get("attempt_id") or "").strip()
+    request_id = (report.get("request_id") or "").strip()
+    id_parts: list[str] = []
+    if attempt_id:
+        id_parts.append(f"attempt: {attempt_id}")
+    if request_id:
+        id_parts.append(f"request: {request_id}")
+    if id_parts:
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": " · ".join(id_parts)}]})
+
+    template = _RISK_TEMPLATE.get(risk.lower(), "blue") if risk else "blue"
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title or symbol},
+                "template": template,
+            },
+            "elements": elements,
+        },
+    }
+
+
+def send_feishu_analysis_card(webhook_url: str, report: dict, secret: str = "") -> bool:
+    """推送一条结构化分析报告卡片到飞书群机器人 (additive, 不影响 send_feishu_card)。
+
+    复用现有签名 / HTTP 发送层。失败静默返回 False, 不阻断主业务。
+
+    Args:
+        webhook_url: 飞书自定义机器人 Webhook 地址
+        report:      已脱敏研究 / 审计摘要 dict (见 build_analysis_card_payload)
+        secret:      签名密钥 (启用签名校验时必填)
+
+    Returns:
+        True=成功送达, False=失败 / URL 非法 / 无有效内容。
+    """
+    if not is_valid_feishu_url(webhook_url):
+        return False
+    payload = build_analysis_card_payload(report)
+    if not payload:
+        return False
     return _post_feishu(webhook_url, payload, secret)

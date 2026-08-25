@@ -1,21 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { Bot, Download, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Square, Trash2, X, Wrench } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Bot, ChevronRight, Clock3, Download, Filter, LineChart, Loader2, Paperclip, Pencil, Plus, RotateCcw, Send, Square, Trash2, X, Wrench } from 'lucide-react'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
 import { PageHeader } from '@/components/PageHeader'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
-import { api, type AgentEvent, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
+import { api, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
 import { clearAgentChat, loadAgentChat, saveAgentChat } from '@/lib/agentChatStore'
-
-interface ToolTrace {
-  name: string
-  args?: unknown
-  result?: unknown
-}
-
-interface ChatMsg extends AgentMsg {
-  tools?: ToolTrace[]
-}
+import { applyAgentEvent, type ChatMsg, type ToolTrace } from '@/lib/agentEvents'
+import { extractPoolCard } from '@/lib/agentPoolCard'
+import { stageScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
+import { toast } from '@/components/Toast'
 
 interface ExampleItem {
   title: string
@@ -57,6 +51,10 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     items: [
       { title: '组合优化', prompt: '用风险平价方法给这几只股票算组合权重。' },
       { title: '策略回测', prompt: '帮我跑个回测验证这个策略最近表现。' },
+      {
+        title: '筛选池回测',
+        prompt: '筛选近 30 日龙虎榜上榜至少 2 次且换手率大于 3% 的股票，保存股票池后列出可用策略供我选择回测。',
+      },
     ],
   },
 ]
@@ -69,22 +67,103 @@ function AgentAvatar() {
   )
 }
 
-function ToolTraceList({ tools }: { tools?: ToolTrace[] }) {
-  if (!tools?.length) return null
+function formatElapsed(ms?: number) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return null
+  if (ms < 1_000) return `${Math.round(ms)} ms`
+  return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)} 秒`
+}
+
+function ToolPayload({ label, value, pending = false }: { label: string; value?: unknown; pending?: boolean }) {
   return (
-    <div className="mb-2 space-y-1">
-      {tools.map((t, j) => (
-        <details key={`${t.name}-${j}`} className="rounded bg-elevated/60 px-2 py-1">
-          <summary className="flex cursor-pointer items-center gap-1 text-[11px] text-muted">
-            <Wrench className="h-3 w-3" />
-            {t.name}
-          </summary>
-          <pre className="mt-1 max-h-40 overflow-auto text-[10px] text-muted">
-            {JSON.stringify(t.result ?? t.args, null, 2)}
-          </pre>
-        </details>
-      ))}
+    <div className="min-w-0">
+      <div className="mb-1 text-[10px] font-medium tracking-wide text-muted">{label}</div>
+      <pre className="max-h-40 overflow-auto rounded-md bg-background/50 px-2.5 py-2 text-[10px] leading-relaxed text-muted whitespace-pre-wrap">
+        {pending ? '执行中…' : JSON.stringify(value ?? {}, null, 2)}
+      </pre>
     </div>
+  )
+}
+
+function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: number }) {
+  const navigate = useNavigate()
+  if (!tools?.length) return null
+  const totalElapsed = formatElapsed(elapsedMs)
+  return (
+    <details className="group mb-3 overflow-hidden rounded-input border border-border/80 bg-elevated/40">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-2 text-[11px] text-muted hover:bg-elevated">
+        <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
+        <Wrench className="h-3.5 w-3.5 text-accent" />
+        <span className="font-medium text-secondary">工具调用链路</span>
+        <span className="rounded-full bg-background/60 px-1.5 py-0.5 text-[10px]">{tools.length} 步</span>
+        {totalElapsed && (
+          <span className="ml-auto inline-flex items-center gap-1 tabular-nums">
+            <Clock3 className="h-3 w-3" />
+            总耗时 {totalElapsed}
+          </span>
+        )}
+      </summary>
+      <div className="divide-y divide-border/70 border-t border-border/70">
+        {tools.map((tool, index) => {
+          const toolElapsed = formatElapsed(tool.elapsed_ms)
+          const pending = tool.result === undefined
+          return (
+            <section key={`${tool.name}-${index}`} className="px-2.5 py-2.5">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-semibold text-accent">
+                  {index + 1}
+                </span>
+                <code className="min-w-0 truncate text-[11px] font-medium text-secondary">{tool.name}</code>
+                <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted">
+                  {toolElapsed ?? (pending ? '执行中…' : '—')}
+                </span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <ToolPayload label="输入" value={tool.args} />
+                <ToolPayload label="输出" value={tool.result} pending={pending} />
+              </div>
+              {tool.name === 'screen_stock_pool' && !pending && (() => {
+                const card = extractPoolCard(tool.result)
+                if (!card) return null
+                const handlePoolBacktest = () => {
+                  if (!card.previewSymbols.length) {
+                    toast('预览为空，无法送回测', 'error')
+                    return
+                  }
+                  const staged = stageScreenerBacktestHandoff({ target: 'strategy', symbols: card.previewSymbols, asOf: card.as_of })
+                  if (!staged) {
+                    toast('无法送入回测', 'error')
+                    return
+                  }
+                  navigate('/backtest')
+                }
+                return (
+                  <div className="mt-2 rounded-input border border-border bg-elevated/60 px-2.5 py-2">
+                    <div className="flex items-center gap-2 text-[10px] text-muted">
+                      <Filter className="h-3 w-3 shrink-0 text-accent" />
+                      <span>服务端股票池 {card.total} 只 · as_of {card.as_of}</span>
+                      <span className="ml-auto shrink-0 font-mono">{card.pool_id}</span>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <button type="button" onClick={() => navigate('/screener')}
+                        className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                        <Filter className="h-3 w-3" />打开条件选股
+                      </button>
+                      <button type="button" onClick={handlePoolBacktest}
+                        className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                        <LineChart className="h-3 w-3" />送回测
+                      </button>
+                    </div>
+                    <p className="mt-1 text-[10px] leading-relaxed text-muted/70">
+                      完整股票池不在模型上下文，按钮仅用预览（前 {card.previewSymbols.length} 只）。
+                    </p>
+                  </div>
+                )
+              })()}
+            </section>
+          )
+        })}
+      </div>
+    </details>
   )
 }
 
@@ -102,7 +181,7 @@ function MessageBubble({
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-card bg-accent/20 px-3 py-2 text-xs text-foreground whitespace-pre-wrap">
+        <div className="max-w-[80%] rounded-input bg-accent/15 px-3 py-2 text-xs text-foreground whitespace-pre-wrap">
           {msg.content}
         </div>
       </div>
@@ -113,8 +192,8 @@ function MessageBubble({
   return (
     <div className="flex justify-start gap-2">
       <AgentAvatar />
-      <div className="max-w-[80%] rounded-card border border-border bg-surface px-3 py-2 text-xs text-foreground">
-        <ToolTraceList tools={msg.tools} />
+      <div className="panel max-w-[80%] px-3 py-2 text-xs text-foreground">
+        <ToolTraceList tools={msg.tools} elapsedMs={msg.elapsed_ms} />
         {msg.content ? (
           <MarkdownRenderer content={msg.content} />
         ) : streaming && isLatest ? (
@@ -144,7 +223,7 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
       </div>
       <div>
         <div className="text-sm font-semibold text-foreground">AI 助手</div>
-        <div className="mt-1 text-xs text-muted">询问策略、行情、因子、组合，必要时会调用面板只读工具。</div>
+        <div className="mt-1 text-xs text-muted">只读研究：询问策略、行情、因子、组合，必要时调用面板工具。不荐股、不下单。</div>
       </div>
       <div className="flex flex-wrap justify-center gap-1.5">
         {CAPABILITY_CHIPS.map(label => (
@@ -165,7 +244,7 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
                 key={ex.title}
                 disabled={disabled}
                 onClick={() => onExample(ex.prompt)}
-                className="block w-full rounded-card border border-border bg-surface px-3 py-2 text-left hover:bg-elevated disabled:opacity-50"
+                className="panel block w-full px-3 py-2 text-left hover:bg-elevated disabled:opacity-50"
               >
                 <div className="text-xs font-medium text-foreground">{ex.title}</div>
                 <div className="mt-1 text-[11px] leading-relaxed text-muted">{ex.prompt}</div>
@@ -178,35 +257,6 @@ function WelcomeScreen({ disabled, onExample }: { disabled: boolean; onExample: 
   )
 }
 
-function applyAgentEvent(prev: ChatMsg[], evt: AgentEvent, attemptIdRef: { current: string | null }): ChatMsg[] {
-  const lastIdx = prev.length - 1
-  const last = prev[lastIdx]
-  if (last?.role !== 'assistant') return prev
-
-  const nextLast: ChatMsg = { ...last, tools: last.tools ? [...last.tools] : [] }
-  if (evt.type === 'attempt_start') {
-    attemptIdRef.current = evt.attempt_id
-  } else if (evt.type === 'delta') {
-    nextLast.content += evt.content
-  } else if (evt.type === 'tool_call') {
-    nextLast.tools = [...(nextLast.tools ?? []), { name: evt.name, args: evt.args }]
-  } else if (evt.type === 'tool_result') {
-    const tools = [...(nextLast.tools ?? [])]
-    let idx = -1
-    for (let k = tools.length - 1; k >= 0; k--) {
-      if (tools[k].name === evt.name && tools[k].result === undefined) { idx = k; break }
-    }
-    if (idx >= 0) tools[idx] = { ...tools[idx], result: evt.result }
-    nextLast.tools = tools
-  } else if (evt.type === 'error') {
-    nextLast.content += `\n[错误] ${evt.message}`
-  } else if (evt.type === 'cancelled') {
-    nextLast.content += nextLast.content ? '\n[已停止]' : '[已停止]'
-  }
-  const next = [...prev]
-  next[lastIdx] = nextLast
-  return next
-}
 
 export function Agent() {
   const [msgs, setMsgs] = useState<ChatMsg[]>(() => loadAgentChat())
@@ -216,7 +266,9 @@ export function Agent() {
   const [profileId, setProfileId] = useState<string>()
   const [streaming, setStreaming] = useState(false)
   const [attachment, setAttachment] = useState<DocumentEnvelope | null>(null)
+
   const [readingFile, setReadingFile] = useState(false)
+  const [agentRuntime, setAgentRuntime] = useState<'python' | 'pi' | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -225,6 +277,11 @@ export function Agent() {
   const attemptIdRef = useRef<string | null>(null)
   const watchSessionRef = useRef<string | null>(null)
   const urlSessionId = searchParams.get('session') || undefined
+
+
+  useEffect(() => {
+    void api.agentRuntime().then(r => setAgentRuntime(r.runtime)).catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     if (streaming || sessionId) return
@@ -286,7 +343,12 @@ export function Agent() {
     const { messages } = await api.agentSessionMessages(id)
     setSessionId(id)
     setSessionInUrl(id, replaceUrl)
-    setMsgs(messages.map(m => ({ role: m.role, content: m.content })))
+    setMsgs(messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      tools: m.tool_traces,
+      elapsed_ms: m.elapsed_ms,
+    })))
   }
 
   async function reconnect(id: string) {
@@ -294,7 +356,12 @@ export function Agent() {
     const { messages } = await api.agentSessionMessages(id)
     setSessionId(id)
     setSessionInUrl(id, true)
-    setMsgs(messages.map(m => ({ role: m.role, content: m.content })))
+    setMsgs(messages.map(m => ({
+      role: m.role,
+      content: m.content,
+      tools: m.tool_traces,
+      elapsed_ms: m.elapsed_ms,
+    })))
     setStreaming(true)
     const ctrl = new AbortController()
     abortRef.current = ctrl
@@ -351,7 +418,7 @@ export function Agent() {
   async function sendPrompt(prompt: string) {
     const text = prompt.trim()
     if (!text || streaming) return
-    const content = attachment
+    const content = attachment?.text.trim()
       ? `${text}\n\n## 用户附件（只读上下文）\n文件: ${attachment.title}\n类型: ${attachment.kind}\n\n${attachment.text}`
       : text
     let activeSessionId = sessionId
@@ -493,60 +560,60 @@ export function Agent() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col p-4">
-      <div className="flex items-center justify-between gap-3">
-        <PageHeader title="AI 助手" subtitle="多轮对话 · 可调用面板数据工具" />
-        <div className="flex items-center gap-2">
+    <div className="workspace-page h-[calc(100vh-3rem)]">
+      <PageHeader
+        title="AI 助手"
+        subtitle={agentRuntime ? `多轮对话 · 可调用面板数据工具 · 运行时 ${agentRuntime}` : '多轮对话 · 可调用面板数据工具'}
+        right={
+          <div className="workspace-toolbar">
             <select
               value={sessionId ?? ''}
               onChange={e => {
                 if (e.target.value) openSession(e.target.value)
                 else clear()
               }}
-            className="h-8 max-w-40 rounded-input border border-border bg-elevated px-2 text-xs text-foreground md:hidden"
-          >
-            <option value="">本地草稿</option>
-            {sessions.map(s => (
-              <option key={s.session_id} value={s.session_id}>{s.title || s.session_id}</option>
-            ))}
-          </select>
-          <button
-            onClick={() => void newSession()}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            新建
-          </button>
-          <button
-            onClick={() => void renameCurrentSession()}
-            disabled={!sessionId}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary disabled:opacity-40"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-            改名
-          </button>
-          <AiProviderSelector entry="agent" value={profileId} onChange={setProfileId} />
-          <button
-            onClick={exportMarkdown}
-            disabled={msgs.length === 0}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary disabled:opacity-40"
-          >
-            <Download className="h-3.5 w-3.5" />
-            导出
-          </button>
-          <button
-            onClick={sessionId ? () => void deleteCurrentSession() : clear}
-            disabled={!sessionId && msgs.length === 0}
-            className="flex h-8 items-center gap-1 rounded-btn bg-elevated px-2 text-xs text-muted hover:text-secondary"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {sessionId ? '删除' : '清空'}
-          </button>
-        </div>
-      </div>
+              className="control max-w-40 text-xs md:hidden"
+            >
+              <option value="">本地草稿</option>
+              {sessions.map(s => (
+                <option key={s.session_id} value={s.session_id}>{s.title || s.session_id}</option>
+              ))}
+            </select>
+            <button onClick={() => void newSession()} className="btn-secondary !h-8 text-xs">
+              <Plus className="h-3.5 w-3.5" />
+              新建
+            </button>
+            <button
+              onClick={() => void renameCurrentSession()}
+              disabled={!sessionId}
+              className="btn-ghost !h-8 text-xs"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              改名
+            </button>
+            <AiProviderSelector entry="agent" value={profileId} onChange={setProfileId} />
+            <button
+              onClick={exportMarkdown}
+              disabled={msgs.length === 0}
+              className="btn-ghost !h-8 text-xs"
+            >
+              <Download className="h-3.5 w-3.5" />
+              导出
+            </button>
+            <button
+              onClick={sessionId ? () => void deleteCurrentSession() : clear}
+              disabled={!sessionId && msgs.length === 0}
+              className="btn-ghost !h-8 text-xs"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {sessionId ? '删除' : '清空'}
+            </button>
+          </div>
+        }
+      />
 
-      <div className="mt-3 flex min-h-0 flex-1 overflow-hidden border-t border-border">
-        <aside className="hidden w-56 shrink-0 border-r border-border py-3 pr-3 md:block">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <aside className="hidden w-56 shrink-0 border-r border-border p-3 md:block">
           <button
             onClick={clear}
             className={`mb-2 flex w-full items-center justify-between rounded-btn px-2 py-2 text-left text-xs ${
@@ -554,13 +621,13 @@ export function Agent() {
             }`}
           >
             <span>本地草稿</span>
-            {!sessionId && msgs.length > 0 && <span className="text-[10px] text-muted">{msgs.length}</span>}
+            {!sessionId && msgs.length > 0 && <span className="text-[10px] text-muted num">{msgs.length}</span>}
           </button>
           <div className="space-y-1 overflow-auto">
             {sessions.map(s => (
-                <button
-                  key={s.session_id}
-                  onClick={() => openSession(s.session_id)}
+              <button
+                key={s.session_id}
+                onClick={() => openSession(s.session_id)}
                 className={`w-full rounded-btn px-2 py-2 text-left ${
                   s.session_id === sessionId
                     ? 'bg-accent/15 text-foreground'
@@ -570,83 +637,92 @@ export function Agent() {
                 <div className="truncate text-xs font-medium">{s.title || s.session_id}</div>
                 <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted">
                   <span className="truncate">{new Date(s.updated_at).toLocaleString()}</span>
-                  <span className="shrink-0">{s.message_count}</span>
+                  <span className="shrink-0 num">{s.message_count}</span>
                 </div>
               </button>
             ))}
           </div>
         </aside>
 
-        <div ref={scrollRef} className="min-w-0 flex-1 space-y-3 overflow-auto py-3 md:pl-3">
-          {msgs.length === 0 && (
-            <WelcomeScreen disabled={streaming} onExample={sendPrompt} />
-          )}
-          {msgs.map((m, i) => (
-            <MessageBubble
-              key={i}
-              msg={m}
-              streaming={streaming}
-              isLatest={i === msgs.length - 1}
-              onRetry={() => retryAt(i)}
-            />
-          ))}
-        </div>
-      </div>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+            {msgs.length === 0 && (
+              <WelcomeScreen disabled={streaming} onExample={sendPrompt} />
+            )}
+            {msgs.map((m, i) => (
+              <MessageBubble
+                key={i}
+                msg={m}
+                streaming={streaming}
+                isLatest={i === msgs.length - 1}
+                onRetry={() => retryAt(i)}
+              />
+            ))}
+          </div>
 
-      <div className="flex items-end gap-2 border-t border-border pt-3">
-        <div className="min-w-0 flex-1">
-          {attachment && (
-            <div className="mb-2 flex max-w-full items-center gap-2 rounded-btn border border-border bg-elevated px-2 py-1 text-xs text-muted">
-              <Paperclip className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{attachment.title}</span>
-              <span className="shrink-0 text-[10px]">{attachment.char_count} 字</span>
-              <button onClick={() => setAttachment(null)} className="ml-auto shrink-0 hover:text-secondary">
-                <X className="h-3.5 w-3.5" />
-              </button>
+          <div className="workspace-toolbar items-end border-t border-border p-3">
+            <div className="min-w-0 flex-1">
+              {attachment && (
+                <div className="mb-2 max-w-full rounded-input border border-border bg-elevated px-2 py-1.5 text-xs text-muted">
+                  <div className="flex items-center gap-2">
+                    <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{attachment.title}</span>
+                    <span className="shrink-0 text-[10px] num">{attachment.char_count} 字</span>
+                    <button onClick={() => setAttachment(null)} className="btn-ghost ml-auto !h-auto shrink-0 !p-0.5">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {attachment.warnings.length > 0 && (
+                    <div className="mt-1 text-[10px] text-warning">
+                      {attachment.text
+                        ? attachment.warnings.join('；')
+                        : '未提取到文本（可能是扫描件）；当前未启用 OCR。'}
+                    </div>
+                  )}
+                </div>
+              )}
+              <textarea
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    send()
+                  }
+                }}
+                rows={2}
+                placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
+                className="control min-h-16 w-full resize-none !h-auto py-2 text-xs"
+              />
             </div>
-          )}
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                send()
-              }
-            }}
-            rows={2}
-            placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
-            className="w-full resize-none rounded-input border border-border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-accent/60"
-          />
+            <input
+              ref={fileRef}
+              type="file"
+              className="hidden"
+              accept=".txt,.md,.csv,.xlsx,.xls,.pdf"
+              onChange={e => {
+                const file = e.target.files?.[0]
+                if (file) void attachFile(file)
+              }}
+            />
+            <button
+              disabled={streaming || readingFile}
+              onClick={() => fileRef.current?.click()}
+              className="btn-secondary"
+            >
+              {readingFile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+              附件
+            </button>
+            <button
+              disabled={!streaming && !input.trim()}
+              onClick={streaming ? cancelStream : send}
+              className={streaming ? 'btn-secondary border-danger/30 text-danger hover:bg-danger/10' : 'btn-primary'}
+            >
+              {streaming ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+              {streaming ? '停止' : '发送'}
+            </button>
+          </div>
         </div>
-        <input
-          ref={fileRef}
-          type="file"
-          className="hidden"
-          accept=".txt,.md,.csv,.xlsx,.xls,.pdf"
-          onChange={e => {
-            const file = e.target.files?.[0]
-            if (file) void attachFile(file)
-          }}
-        />
-        <button
-          disabled={streaming || readingFile}
-          onClick={() => fileRef.current?.click()}
-          className="flex h-9 items-center gap-1.5 rounded-btn bg-elevated px-3 text-xs text-muted hover:text-secondary disabled:opacity-40"
-        >
-          {readingFile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
-          附件
-        </button>
-        <button
-          disabled={!streaming && !input.trim()}
-          onClick={streaming ? cancelStream : send}
-          className={`flex h-9 items-center gap-1.5 rounded-btn px-4 text-xs font-medium disabled:opacity-40 ${
-            streaming ? 'bg-danger/15 text-danger hover:bg-danger/20' : 'bg-accent/90 text-base hover:bg-accent'
-          }`}
-        >
-          {streaming ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
-          {streaming ? '停止' : '发送'}
-        </button>
       </div>
     </div>
   )

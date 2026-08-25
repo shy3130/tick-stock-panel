@@ -270,9 +270,25 @@ def _fetch_research_for_symbol(symbol: str, limit: int = 10) -> list[dict]:
     from app.services import eastmoney_client
 
     code = symbol.split(".", 1)[0]
+    today = date.today()
     payload = eastmoney_client.get_json(
         _REPORT_LIST,
-        params={"code": code, "qType": "0", "pageSize": str(limit), "pageNo": "1"},
+        params={
+            # 线上实测完整参数: reportapi 缺 industryCode/industry/rating 等会直接 400
+            "industryCode": "*",
+            "industry": "*",
+            "rating": "*",
+            "ratingChange": "*",
+            "beginTime": f"{today.year}-01-01",
+            "endTime": today.isoformat(),
+            "fields": "",
+            "qType": "0",
+            "orgCode": "",
+            "code": code,
+            "rcode": "",
+            "pageSize": str(limit),
+            "pageNo": "1",
+        },
     )
     raw = payload.get("data") if isinstance(payload, dict) else []
     return _flatten_research(raw if isinstance(raw, list) else [], symbol)

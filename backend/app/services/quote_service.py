@@ -26,11 +26,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 import polars as pl
 
 from app.data_providers.registry import get_active_provider_name, get_provider
+from app.json_safe import finite_float_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def _get_data_provider():
 
     通过 registry 解析当前 provider。
 
-    FQuantProvider 走 tdx-api / sina/tencent / fstore daily_markets，本地源不可用时降级为空。
+    FQuantProvider 走 fstore daily_markets 本地只读快照, 本地源不可用时降级为空。
     """
     global _provider_instance
     if _provider_instance is None:
@@ -57,7 +58,7 @@ def _get_data_provider():
 class QuoteService:
     """全局实时行情服务 — 单例。"""
 
-    CORE_INDEX_SYMBOLS = ("000001.SH", "399001.SZ", "399006.SZ", "000680.SH")
+    CORE_INDEX_SYMBOLS = ("000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX")
 
     DEFAULT_INTERVAL = 10.0
     MAX_INTERVAL = 60.0
@@ -89,6 +90,17 @@ class QuoteService:
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
         self._index_quotes_cache: pl.DataFrame | None = None
+        # 午休/收盘最终同步状态: 到边界后必须成功拉取一版行情, 再进入休盘态。
+        self._final_sync_done: set[tuple[date, str]] = set()
+        self._final_sync_failed: dict[tuple[date, str], str] = {}
+        # 行情数据健康状态 (给 status() 用; 只保存非敏感摘要, 不保存原始异常/路径)
+        self._last_outcome: str | None = None      # None | "success" | "empty" | "error"
+        self._last_success_perf: float = 0.0       # 最近一次成功非空拉取的 perf_counter
+        self._last_success_total: int = 0          # 最近一次成功非空拉取的总标的数
+        self._consecutive_empty: int = 0           # 连续空结果计数
+        self._last_error_code: str | None = None   # None | "provider_empty" | "provider_error"
+        self._source_as_of: str | None = None      # 成功数据中最新的 source timestamp/date
+        self._fetch_in_progress: bool = False      # 拉取重入保护 (轮询/refresh/final_sync 并发)
 
     # ================================================================
     # 生命周期
@@ -110,13 +122,23 @@ class QuoteService:
         logger.info("行情服务已启动, 轮询间隔 %.1fs", self._interval)
 
     def stop(self) -> None:
-        """停止后台行情轮询线程。"""
+        """停止后台行情轮询线程 (机械停机, 不改写用户偏好)。
+
+        如果当前处于 close_final 阶段且当日收盘最终同步尚未完成,
+        在停止线程后执行一次 _run_final_sync。
+
+        注意: 不在此处持久化 realtime_quotes_enabled=false。应用关停
+        (main.py shutdown hook) 也走本方法; 用户显式关闭请用 disable(),
+        否则重启后 boot_check 无法按用户原意图自动恢复轮询。
+        """
         self._running = False
         self._enabled = False
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
-        self._save_enabled(False)
+        # 停机前: 收盘最终同步
+        if self._market_phase() == "close_final":
+            self._run_final_sync()
         logger.info("行情服务已停止")
 
     def enable(self) -> bool:
@@ -139,7 +161,8 @@ class QuoteService:
         logger.info("行情服务已启用, 轮询间隔 %.1fs", self._interval)
 
     def disable(self) -> None:
-        """关闭自动行情。"""
+        """关闭自动行情 (用户显式关闭, 持久化偏好)。"""
+        self._save_enabled(False)
         self.stop()
         logger.info("行情服务已关闭")
 
@@ -286,9 +309,10 @@ class QuoteService:
         if df.is_empty():
             return df
 
-        # 只取盘中选股需要的行情基础列
+        # 只取盘中选股需要的行情基础列; 额外保留 date/source 用于新鲜度判定与 provenance
+        # (snapshot 端点据此区分 realtime vs local_disk, 不再把昨日数据标 realtime)。
         keep = [c for c in [
-            "symbol", "close", "open", "high", "low", "volume", "amount",
+            "symbol", "date", "source", "close", "open", "high", "low", "volume", "amount",
             "prev_close", "change_pct", "change_amount", "amplitude", "turnover_rate",
         ] if c in df.columns]
         df = df.select(keep)
@@ -309,11 +333,18 @@ class QuoteService:
         return df
 
     def status(self) -> dict:
-        """返回行情服务状态。"""
+        """返回行情服务状态。
+
+        既有字段含义不变; 追加 data_state / has_recent_data /
+        total_symbol_count / last_error_code / source_as_of (向后兼容)。
+        data_state 只暴露有限枚举, 不包含原始异常/路径/凭据。
+        """
         from app.services import preferences
         age = (time.perf_counter() - self._fetch_time) * 1000 if self._fetch_time else -1
         mode = self.realtime_mode()
+        data_state, has_recent = self._data_health()
         return {
+            # ---- 既有字段 (含义不变) ----
             "enabled": self._enabled,
             "running": self._running,
             "mode": mode,
@@ -326,7 +357,126 @@ class QuoteService:
             "quote_age_ms": round(age, 0) if age >= 0 else None,
             "is_trading_hours": self._is_trading_hours(),
             "last_fetch_ms": round(self._fetched_at, 0) if self._fetched_at else None,
+            # ---- 追加: 数据健康 (向后兼容, 不暴露原始异常) ----
+            "data_state": data_state,
+            "has_recent_data": has_recent,
+            "total_symbol_count": self._symbol_count + self._index_symbol_count + self._etf_symbol_count,
+            "last_error_code": self._last_error_code,
+            "source_as_of": self._source_as_of,
         }
+
+    def _data_health(self) -> tuple[str, bool]:
+        """计算 data_state 与 has_recent_data (供 status 用, 不暴露原始异常)。
+
+        data_state 优先级 (与共享 Contract 一致):
+          disabled (未启用) → warming_up (启用且尚未完成任何成功/失败轮次)
+          → error (最近轮次异常) → empty (最近轮次为空)
+          → stale (有过成功数据但已不新鲜) → ready (新鲜、属于当前交易日且 total>0)。
+
+        ready 必须同时满足三件事: 最近一轮成功非空、落在轮询时间窗口内、
+        且 source_as_of 等于当前交易日。source_as_of 落后于当前交易日
+        (例如本地 daily_markets 快照停在昨天) 时, 即便本轮刚拉成功也判 stale —
+        历史快照不等于实时。
+        """
+        recent_window = max(2.0 * (self._interval or self.DEFAULT_INTERVAL), 30.0)
+        total = self._symbol_count + self._index_symbol_count + self._etf_symbol_count
+        has_recent = (
+            self._last_outcome == "success"
+            and self._last_success_perf > 0.0
+            and total > 0
+            and self._source_as_of_is_current()
+            and (time.perf_counter() - self._last_success_perf) <= recent_window
+        )
+        if not self._enabled:
+            state = "disabled"
+        elif self._last_outcome is None:
+            state = "warming_up"
+        elif self._last_outcome == "error":
+            state = "error"
+        elif self._last_outcome == "empty":
+            state = "empty"
+        elif has_recent:
+            state = "ready"
+        else:
+            state = "stale"
+        return state, has_recent
+
+    @staticmethod
+    def _market_today() -> date:
+        """当前 Asia/Shanghai 日期。
+
+        A 股无夏令时，固定 UTC+8；不要依赖部署主机的本地时区。
+        """
+        return datetime.now(timezone(timedelta(hours=8))).date()
+
+    def _source_as_of_is_current(self) -> bool:
+        """source_as_of 的日期部分是否等于当前交易日。
+
+        source_as_of 取自 provider realtime 的 timestamp（本地 fstore daily_markets
+        的 trade_date）。落后于当前交易日时返回 False——这会让 _data_health 把
+        「本轮刚成功但源仍停在昨天」的数据判为 stale，不假装 ready。
+        缺失或无法解析的日期同样无法证明新鲜度，必须 fail-closed 为 stale。
+        """
+        if not self._source_as_of:
+            return False
+        as_of = self._source_as_of.strip()[:10]  # YYYY-MM-DD
+        try:
+            as_of_date = date.fromisoformat(as_of)
+        except ValueError:
+            return False
+        return as_of_date == self._market_today()
+
+    def _trust_current_source_date(self) -> None:
+        """将已通过 source_as_of 门禁的盘中日期发布给 enriched 读取层。"""
+        setter = getattr(self._repo, "trust_live_enriched_date", None)
+        if callable(setter):
+            setter(self._market_today())
+
+    # ------------------------------------------------------------------
+    # 拉取健康状态记录 (只保存非敏感摘要; 调用方不在持锁状态下调用)
+    # ------------------------------------------------------------------
+    def _record_fetch_success(self, total: int, source_as_of: str | None) -> None:
+        """记录一次成功非空拉取。"""
+        self._last_outcome = "success"
+        self._last_success_perf = time.perf_counter()
+        self._last_success_total = max(total, 0)
+        self._consecutive_empty = 0
+        self._last_error_code = None
+        self._source_as_of = source_as_of
+
+    def _record_fetch_empty(self) -> None:
+        """记录一次空结果拉取 (provider 返回空)。"""
+        self._last_outcome = "empty"
+        self._consecutive_empty += 1
+        self._last_error_code = "provider_empty"
+
+    def _record_fetch_error(self) -> None:
+        """记录一次异常拉取 (不保存原始异常文本)。"""
+        self._last_outcome = "error"
+        self._last_error_code = "provider_error"
+
+    @staticmethod
+    def _extract_source_as_of(rows: list[dict]) -> str | None:
+        """从成功数据中取最新的 source timestamp/date (字符串, 不暴露内部信息)。"""
+        best: str | None = None
+        for r in rows:
+            ts = r.get("timestamp")
+            if isinstance(ts, str) and ts.strip():
+                value = ts.strip()
+                if best is None or value > best:
+                    best = value
+        return best
+
+    @staticmethod
+    def _is_index_record(record: dict, known_index_symbols: set[str]) -> bool:
+        """判断归一化行情记录是否为指数。
+
+        本地 FQuantProvider 把指数统一为 ``.INDEX`` 后缀，而用户偏好和历史
+        配置可能仍使用 ``.SH`` / ``.SZ``；两种表示均需进入指数缓存。
+        """
+        symbol = str(record.get("symbol") or "")
+        return symbol in known_index_symbols or symbol.endswith(".INDEX")
+
 
     def refresh(self) -> dict:
         """手动触发一次行情拉取。"""
@@ -346,33 +496,55 @@ class QuoteService:
                     logger.debug("非交易时段, 跳过行情轮询")
             except Exception as e:  # noqa: BLE001
                 logger.warning("行情轮询异常: %s", e)
+                self._record_fetch_error()
 
             waited = 0.0
             while self._running and self._enabled and waited < self._interval:
                 time.sleep(0.5)
                 waited += 0.5
 
-    def _fetch_quotes(self) -> None:
-        """按当前档位拉取行情。"""
-        if self.realtime_mode() == "watchlist":
-            self._fetch_watchlist_quotes()
-            return
-        self._fetch_full_market_quotes()
+    def _fetch_quotes(self) -> bool:
+        """按当前档位拉取行情。
+
+        单实例重入保护: 一次 full-market 拉取耗时可能超过轮询间隔 (默认 10s),
+        若后台轮询、手动 refresh、收盘 final_sync 并发触发, 上一轮尚未结束时
+        直接跳过本次, 避免并发重入重复写盘 / 重复算指标 / 状态互相覆盖。
+        返回值表示本次是否实际取得执行权；收盘 final sync 仅在 True 时记完成。
+        状态语义仍由 _data_health 准确反映 (绝不假装 ready)。
+        """
+        with self._lock:
+            if self._fetch_in_progress:
+                logger.debug("上一轮行情拉取尚未结束, 跳过本次重入")
+                return False
+            self._fetch_in_progress = True
+        try:
+            if self.realtime_mode() == "watchlist":
+                self._fetch_watchlist_quotes()
+            else:
+                self._fetch_full_market_quotes()
+        finally:
+            with self._lock:
+                self._fetch_in_progress = False
+        return True
 
     def _fetch_full_market_quotes(self) -> None:
         """拉取全市场行情 → 写 daily + 计算 enriched + 更新缓存。
 
         通过 data_providers 抽象层取数,支持 provider 切换。
-        FQuantProvider 走 tdx-api / sina/tencent / fstore daily_markets，本地源不可用时降级为空。
+        FQuantProvider 走 fstore daily_markets 本地快照, 本地源不可用时降级为空。
         """
         provider = _get_data_provider()
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
 
         try:
+            from app.data_providers.fquant.symbols import canonical_index_symbol
             from app.services import preferences
             all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
-            core_index_symbols = set(preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS)
+            core_index_symbols = {
+                canonical_index_symbol(s)
+                for s in (preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS)
+            }
             all_index_symbols.update(core_index_symbols)
             all_etf_symbols = set()
             if self._repo:
@@ -395,24 +567,31 @@ class QuoteService:
                 if df_uni is not None and not df_uni.is_empty():
                     resp.extend(df_uni.to_dicts())
             if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
+                # 指数走 provider realtime (本地 DuckDB 快照); 不再直连腾讯/新浪
                 df_idx = provider.get_realtime(symbols=sorted(core_index_symbols))
                 if df_idx is not None and not df_idx.is_empty():
                     resp.extend(df_idx.to_dicts())
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败: %s", e)
+            self._record_fetch_error()
             return
 
         if not resp:
             logger.warning("行情数据为空")
+            self._record_fetch_empty()
             return
 
         records = [self._record_from_quote(q) for q in resp]
 
-        index_records = [r for r in records if r.get("symbol") in all_index_symbols]
+        index_records = [
+            r for r in records if self._is_index_record(r, all_index_symbols)
+        ]
         etf_records = [r for r in records if r.get("symbol") in all_etf_symbols]
         stock_records = [
-            r for r in records
-            if r.get("symbol") not in all_index_symbols and r.get("symbol") not in all_etf_symbols
+            r
+            for r in records
+            if not self._is_index_record(r, all_index_symbols)
+            and r.get("symbol") not in all_etf_symbols
         ]
 
         fetch_ms = (time.perf_counter() - t0) * 1000
@@ -427,8 +606,20 @@ class QuoteService:
             self._index_symbol_count = len(index_records)
             self._etf_symbol_count = len(etf_records)
             self._index_quotes_cache = self._build_index_quotes(index_records)
+        self._record_fetch_success(
+            total=len(stock_records) + len(index_records) + len(etf_records),
+            source_as_of=self._extract_source_as_of(resp),
+        )
 
         logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
+        if not self._source_as_of_is_current():
+            logger.warning(
+                "行情源日期过期 (%s), 跳过 canonical/enriched 写入与监控评估",
+                self._source_as_of or "unknown",
+            )
+            self._update_event.set()
+            return
+        self._trust_current_source_date()
 
         # ---- 写 kline_daily (不复权原始价格, 只有 OHLCV) ----
         daily_df = self._build_daily(stock_records)
@@ -465,7 +656,7 @@ class QuoteService:
         """Free 档自选股实时: 只拉取最多 5 个 symbols。
 
         通过 data_providers 抽象层取数,支持 provider 切换。
-        FQuantProvider 走 tdx-api / fstore daily_markets，本地源不可用时降级为空。
+        FQuantProvider 走 fstore daily_markets 本地快照, 本地源不可用时降级为空。
         """
         from app.services import preferences
 
@@ -477,16 +668,18 @@ class QuoteService:
         provider = _get_data_provider()
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
+        resp: list[dict] = []
         try:
-            # 通过 provider 抽象层拉取 (替代 tf.quotes.get)
             df = provider.get_realtime(symbols=symbols)
-            resp: list[dict] = df.to_dicts() if df is not None and not df.is_empty() else []
+            resp = df.to_dicts() if df is not None and not df.is_empty() else []
         except Exception as e:  # noqa: BLE001
             logger.warning("自选实时拉取失败: %s", e)
+            self._record_fetch_error()
             return
 
         if not resp:
             logger.warning("自选实时行情数据为空")
+            self._record_fetch_empty()
             return
 
         records = [self._record_from_quote(q) for q in resp]
@@ -501,8 +694,20 @@ class QuoteService:
             self._index_symbol_count = 0
             self._etf_symbol_count = 0
             self._index_quotes_cache = None
+        self._record_fetch_success(
+            total=len(records),
+            source_as_of=self._extract_source_as_of(resp),
+        )
 
         logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
+        if not self._source_as_of_is_current():
+            logger.warning(
+                "自选行情源日期过期 (%s), 跳过 canonical/enriched 写入与监控评估",
+                self._source_as_of or "unknown",
+            )
+            self._update_event.set()
+            return
+        self._trust_current_source_date()
 
         daily_df = self._build_daily(records)
         quote_extra = self._build_quote_extra(records)
@@ -520,16 +725,10 @@ class QuoteService:
     # 工具
     # ================================================================
 
-    @staticmethod
-    def _to_float(value) -> float | None:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
 
     @classmethod
     def _ratio_from_points(cls, value) -> float | None:
-        number = cls._to_float(value)
+        number = finite_float_or_none(value)
         return number / 100.0 if number is not None else None
 
     @classmethod
@@ -539,31 +738,32 @@ class QuoteService:
         prev_close = q.get("prev_close")
         change_amount = ext.get("change_amount")
         if change_amount is None and last_price is not None and prev_close is not None:
-            lp = cls._to_float(last_price)
-            pc = cls._to_float(prev_close)
+            lp = finite_float_or_none(last_price)
+            pc = finite_float_or_none(prev_close)
             if lp is not None and pc is not None:
                 change_amount = lp - pc
 
         change_pct = cls._ratio_from_points(ext.get("change_pct"))
-        pc = cls._to_float(prev_close)
-        ca = cls._to_float(change_amount)
+        pc = finite_float_or_none(prev_close)
+        ca = finite_float_or_none(change_amount)
         if change_pct is None and ca is not None and pc not in (None, 0):
             change_pct = ca / pc
+        change_amount = ca
 
         return {
             "symbol": q.get("symbol"),
             "name": q.get("name") or ext.get("name"),
-            "last_price": last_price,
-            "prev_close": prev_close,
-            "open": q.get("open"),
-            "high": q.get("high"),
-            "low": q.get("low"),
-            "volume": q.get("volume"),
-            "amount": q.get("amount"),
+            "last_price": finite_float_or_none(last_price),
+            "prev_close": finite_float_or_none(prev_close),
+            "open": finite_float_or_none(q.get("open")),
+            "high": finite_float_or_none(q.get("high")),
+            "low": finite_float_or_none(q.get("low")),
+            "volume": finite_float_or_none(q.get("volume")),
+            "amount": finite_float_or_none(q.get("amount")),
             "change_pct": change_pct,
             "change_amount": change_amount,
             "amplitude": cls._ratio_from_points(ext.get("amplitude")),
-            "turnover_rate": ext.get("turnover_rate"),
+            "turnover_rate": finite_float_or_none(ext.get("turnover_rate")),
             "timestamp": q.get("timestamp"),
             "session": q.get("session"),
         }
@@ -653,6 +853,82 @@ class QuoteService:
 
         return any_market_open_at(datetime.now())
 
+    @staticmethod
+    def _market_phase() -> str:
+        """A 股行情轮询阶段(北京时间)。
+
+        final 阶段用于午休/收盘定版: 需要至少成功拉取一版边界后的行情,
+        才算进入休盘。
+        """
+        try:
+            from app.market_time import cn_now
+        except ImportError:
+            cn_now = None
+
+        if cn_now is None:
+            # fallback: 使用系统本地时间 (测试环境常用)
+            now = datetime.now()
+        else:
+            now = cn_now()
+
+        if now.weekday() >= 5:
+            return "closed"
+        t = now.time()
+        from datetime import time as dt_time
+        if dt_time(9, 15) <= t < dt_time(9, 30):
+            return "preopen"
+        if dt_time(9, 30) <= t < dt_time(11, 30):
+            return "morning"
+        if dt_time(11, 30) <= t < dt_time(12, 55):
+            return "morning_final"
+        if dt_time(12, 55) <= t < dt_time(13, 0):
+            return "pre_afternoon"
+        if dt_time(13, 0) <= t < dt_time(15, 0):
+            return "afternoon"
+        if t >= dt_time(15, 0):
+            return "close_final"
+        return "closed"
+
+    @staticmethod
+    def _final_sync_key(phase: str) -> tuple[date, str] | None:
+        try:
+            from app.market_time import cn_today
+        except ImportError:
+            cn_today = None
+
+        if cn_today is None:
+            today = date.today()
+        else:
+            today = cn_today()
+
+        if phase == "morning_final":
+            return (today, "morning")
+        if phase == "close_final":
+            return (today, "close")
+        return None
+
+    def _run_final_sync(self) -> bool:
+        """执行一次最终行情同步。
+
+        如果当日收盘 final sync 尚未完成, 调用 _fetch_quotes 并标记状态。
+        返回是否成功执行了同步。
+        """
+        phase = self._market_phase()
+        key = self._final_sync_key(phase)
+        if not key or key in self._final_sync_done:
+            return False
+        try:
+            if not self._fetch_quotes():
+                logger.debug("收盘最终行情同步等待上一轮拉取完成")
+                return False
+            self._final_sync_done.add(key)
+            self._final_sync_failed.pop(key, None)
+            logger.info("收盘最终行情同步完成")
+            return True
+        except Exception as e:  # noqa: BLE001
+            self._final_sync_failed[key] = "fetch_failed"
+            logger.warning("收盘最终行情同步失败: %s", e)
+            return False
     @staticmethod
     def _save_enabled(enabled: bool) -> None:
         from app.services import preferences
@@ -756,8 +1032,7 @@ class QuoteService:
         以便反查引擎规则判断是否启用推送。
         """
         try:
-            from app.services import preferences
-            from app.services import webhook_adapter
+            from app.services import preferences, webhook_adapter
 
             if not preferences.get_configured_webhook_channels():
                 return
@@ -795,8 +1070,7 @@ class QuoteService:
         - 批量策略事件 (symbol="") 聚合为一条通知, 避免刷屏
         """
         try:
-            from app.services import preferences
-            from app.services import notify_adapter
+            from app.services import notify_adapter, preferences
 
             if not preferences.get_system_notify_enabled():
                 return
@@ -879,6 +1153,7 @@ class QuoteService:
             # ---- 全量回退路径 ----
             if not use_incremental:
                 from datetime import timedelta
+
                 from app.indicators.pipeline import compute_enriched
 
                 logger.info("enriched 全量计算 (live_agg=%s, 上次日期=%s)",

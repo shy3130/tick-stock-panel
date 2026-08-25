@@ -389,6 +389,21 @@ def compute_engine_compat_today(
     if joined.is_empty():
         return pl.DataFrame()
 
+    # live_state 经 _build_live_agg 以 LEFT JOIN 注入 engine compat 状态:
+    # 未通过 warmup 的标的其 _ec_*_hist 列为 null。重建窗口前剔除这些行,
+    # 否则下方 len(row["_ec_open_hist"]) 会触发 TypeError: NoneType has no len(),
+    # 中断整批增量计算 (历史 enriched NoneType 异常根因)。这些标的仅缺 41 列
+    # engine/technicals 兼容指标 (运行时计算, 非持久化), 不影响主链路。
+    _hist_cols = (
+        "_ec_open_hist", "_ec_high_hist", "_ec_low_hist",
+        "_ec_close_hist", "_ec_volume_hist",
+    )
+    joined = joined.filter(
+        pl.all_horizontal([pl.col(c).is_not_null() for c in _hist_cols])
+    )
+    if joined.is_empty():
+        return pl.DataFrame()
+
     rows = joined.to_dicts()
     parts: list[pl.DataFrame] = []
     for row in rows:

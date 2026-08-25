@@ -1,4 +1,5 @@
 """Position-cycle FIFO 配对。"""
+
 from __future__ import annotations
 
 import bisect
@@ -49,7 +50,19 @@ def pair_roundtrips(
                 if pos <= _EPS:
                     continue
                 scale = pos / f.qty
-                f = Fill(f.date, f.time, f.symbol, f.name, f.side, pos, f.price, f.amount * scale, f.fee * scale, f.account_id)
+                f = Fill(
+                    f.date,
+                    f.time,
+                    f.symbol,
+                    f.name,
+                    f.side,
+                    pos,
+                    f.price,
+                    f.amount * scale,
+                    f.fee * scale,
+                    f.account_id,
+                    f.source_ref,
+                )
             cycle.append(f)
             pos += f.qty if f.side == "buy" else -f.qty
             if pos <= _EPS and cycle:
@@ -97,7 +110,9 @@ def _close_cycle(
     )
 
 
-def _apply_dividends(trips: list[Roundtrip], div_by_symbol: dict[tuple[str, str], list[CashEvent]]) -> None:
+def _apply_dividends(
+    trips: list[Roundtrip], div_by_symbol: dict[tuple[str, str], list[CashEvent]]
+) -> None:
     by_symbol: dict[tuple[str, str], list[Roundtrip]] = defaultdict(list)
     for trip in trips:
         by_symbol[(trip.account_id, trip.symbol)].append(trip)

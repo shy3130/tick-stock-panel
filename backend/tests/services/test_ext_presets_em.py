@@ -1,6 +1,11 @@
-from app.services import ext_presets_em
-from app.services.ext_presets import get_preset
+import asyncio
+from datetime import date
+
+import pytest
 import polars as pl
+
+from app.services import eastmoney_client, ext_presets_em
+from app.services.ext_presets import get_preset
 
 
 def test_em_presets_registered():
@@ -114,3 +119,84 @@ def test_watchlist_symbols_filters_a_shares(tmp_path):
     path.mkdir()
     pl.DataFrame({"symbol": ["600519.SH", "00700.HK", "000001.SZ"]}).write_parquet(path / "watchlist.parquet")
     assert ext_presets_em._watchlist_symbols(tmp_path) == ["600519.SH", "000001.SZ"]
+
+
+def test_fetch_research_for_symbol_sends_complete_params(monkeypatch):
+    """研报拉取必须带线上实测的完整参数 (缺 industryCode 等会被 reportapi 返回 400)。"""
+    calls: list[tuple[str, dict]] = []
+
+    def fake_get_json(url, params=None):
+        calls.append((url, dict(params or {})))
+        return {"data": [{
+            "infoCode": "AP2026080112345678",
+            "title": "茅台中报点评：业绩稳健",
+            "stockName": "贵州茅台",
+            "publishDate": "2026-08-01 09:30:00",
+            "orgSName": "中信证券",
+            "researcher": "张三",
+            "emRatingName": "买入",
+            "predictThisYearEps": "68.5",
+            "predictNextYearEps": "75.2",
+            "predictThisYearPe": "22.1",
+            "predictNextYearPe": "20.3",
+        }]}
+
+    monkeypatch.setattr(eastmoney_client, "get_json", fake_get_json)
+
+    rows = ext_presets_em._fetch_research_for_symbol("600519.SH", limit=5)
+
+    today = date.today()
+    assert len(calls) == 1
+    url, params = calls[0]
+    # URL 锁定 reportapi 白名单域名
+    assert url == ext_presets_em._REPORT_LIST
+    assert url == "https://reportapi.eastmoney.com/report/list"
+    # 完整参数逐项锁定: 通配过滤 + 当年窗口 + 个股六位码
+    assert params == {
+        "industryCode": "*",
+        "industry": "*",
+        "rating": "*",
+        "ratingChange": "*",
+        "beginTime": f"{today.year}-01-01",
+        "endTime": today.isoformat(),
+        "fields": "",
+        "qType": "0",
+        "orgCode": "",
+        "code": "600519",
+        "rcode": "",
+        "pageSize": "5",
+        "pageNo": "1",
+    }
+    # 返回行经过 flatten 映射
+    assert len(rows) == 1
+    assert rows[0]["uid"] == "research:600519:AP2026080112345678:2026-08-01"
+    assert rows[0]["stock_symbol"] == "600519.SH"
+    assert rows[0]["code"] == "600519"
+    assert rows[0]["name"] == "贵州茅台"
+    assert rows[0]["brokerage"] == "中信证券"
+    assert rows[0]["rating"] == "买入"
+    assert rows[0]["eps_this_year"] == 68.5
+    assert rows[0]["eps_next_year"] == 75.2
+    assert rows[0]["pe_this_year"] == 22.1
+    assert rows[0]["pe_next_year"] == 20.3
+
+
+def test_fetch_research_for_symbol_tolerates_non_list_data(monkeypatch):
+    """接口异常结构 (data 非数组) 不应崩溃, 返回空行由上层报错。"""
+    monkeypatch.setattr(
+        eastmoney_client, "get_json",
+        lambda url, params=None: {"data": None},
+    )
+    assert ext_presets_em._fetch_research_for_symbol("600519.SH") == []
+
+
+def test_seed_research_raises_when_all_symbols_empty(monkeypatch, tmp_path):
+    """全部个股 0 行必须抛错 (失败可见, 不吞错)。"""
+    monkeypatch.setattr(eastmoney_client, "get_json", lambda url, params=None: {})
+    monkeypatch.setattr(
+        ext_presets_em, "_watchlist_symbols", lambda data_dir, limit=50: ["600519.SH", "000001.SZ"]
+    )
+    config = get_preset("ext_research_em")
+
+    with pytest.raises(ValueError, match="研报返回 0 行"):
+        asyncio.run(ext_presets_em._seed_research(config, tmp_path))

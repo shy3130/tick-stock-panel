@@ -1,3 +1,5 @@
+import type { FactorBacktestResult } from './api'
+
 /**
  * 集中管理所有 localStorage 持久化。
  *
@@ -80,6 +82,33 @@ export const storage = {
 
   /** 策略回测快捷区间按钮配置 */
   strategyBacktestQuickRanges: kv<unknown>('strategy-backtest-quick-ranges'),
+  /** 回测工作台上次打开的模式 */
+  backtestActiveTab: kv<'factor' | 'strategy' | 'composite' | 'grid' | 'search' | 'history'>('backtest-active-tab'),
+  /** 策略回测配置面板简单模式（true=仅保留常用配置） */
+  backtestSimpleMode: kv<boolean>('backtestSimpleMode'),
+
+  /** 参数网格最近一次实验；路由重入后据此恢复服务端持久化结果 */
+  parameterGridLastExperimentId: kv<string | null>('parameter-grid-last-experiment-id'),
+  /** 策略寻优最近一次实验 */
+  optimizerLastExperimentId: kv<string | null>('optimizer-last-experiment-id'),
+
+  /** 因子回测最近一次请求与结果；路由重入后恢复已完成结果 */
+  factorBacktestLast: kv<{
+    payload: {
+      factor_name: string
+      symbols?: string[] | null
+      start?: string | null
+      end?: string | null
+      n_groups?: number
+      rebalance?: 'daily' | 'weekly' | 'monthly'
+      weight?: 'equal' | 'factor_weight'
+      fees_pct?: number
+      slippage_bps?: number
+      risk_free_rate?: number
+    }
+    result: FactorBacktestResult | null
+  } | null>('factor-backtest-last'),
+
 
   /** 策略回测最后一次成功结果和参数 */
   strategyBacktestLast: kv<{
@@ -92,12 +121,27 @@ export const storage = {
     exitFill: 'close_t' | 'open_t+1'
     fees: string
     slippage: string
+    /** 印花税万分数字符串 (仅卖出单边, '5' = 万分之五) */
+    stampTax?: string
     maxPositions: string
     maxExposure: string
     initialCapital: string
     positionSizing: 'equal' | 'score_weight' | 'equal_vol' | 'risk_parity' | 'mean_variance' | 'max_diversification'
     mode: 'position' | 'full'
     holdingDays: string
+    regimeEnabled?: boolean
+    regimeStates?: string[]
+    regimeMinScore?: string
+    benchmarkSymbol?: string
+    /** F9 历史 Run 净值基准 run_id (空串 = 未使用) */
+    benchmarkRunId?: string
+    riskFreeRate?: string
+
+    /** A1 量能约束: 最大参与率百分数输入 (空串 = 关闭) */
+    maxParticipationPct?: string
+    participationWindow?: string
+    /** B6 上市天数门控 (天, '0' = 关闭) */
+    minListedDays?: string
     params?: Record<string, any>
     overrides?: Record<string, any>
     result: any
@@ -113,4 +157,7 @@ export const storage = {
   dataCardVisible: kv<Record<string, boolean>>('data-card-visible'),
   /** 数据页画像卡片顺序 (卡片key 数组, 长度=卡片总数) */
   dataCardOrder: kv<string[]>('data-card-order'),
+
+  /** 策略回测结果区折叠的区块 key 列表 (见 lib/resultSections.ts) */
+  backtestResultSections: kv<string[]>('backtest-result-sections'),
 } as const

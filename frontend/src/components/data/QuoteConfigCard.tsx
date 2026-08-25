@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Activity, Settings } from 'lucide-react'
 import { Skeleton } from './Skeleton'
+import { useQuoteStatus } from '@/lib/useSharedQueries'
+import { resolveQuoteDataState, quoteDataStateText, quoteSnapshotText } from '@/lib/api'
 
 export function QuoteConfigCard({ enabled, running, isTrading, lastFetchMs, intervalS, intervalMin, intervalMax, loading, onToggle, toggling, showIntervalEdit, onShowIntervalEdit, onIntervalChange }: {
   enabled: boolean
@@ -18,19 +20,34 @@ export function QuoteConfigCard({ enabled, running, isTrading, lastFetchMs, inte
   onShowIntervalEdit: () => void
   onIntervalChange: (v: number) => void
 }) {
-  const statusColor = running && isTrading
+  // 共享缓存 (QK.quoteStatus), 不产生额外请求; 取数据健康状态而非线程存活
+  const { data: quoteStatus } = useQuoteStatus()
+  const dataState = resolveQuoteDataState(quoteStatus)
+  const snapshotText = quoteSnapshotText(quoteStatus?.source_as_of)
+  const isReady = enabled && dataState === 'ready'
+  const isLive = isReady && !snapshotText
+
+  const statusColor = isLive
     ? 'bg-accent shadow-[0_0_6px_rgba(61,214,140,0.5)]'
-    : enabled && running
-      ? 'bg-warning/60'
-      : 'bg-muted'
+    : enabled && dataState === 'error'
+      ? 'bg-danger/70'
+      : enabled && (running || (dataState !== null && dataState !== 'disabled'))
+        ? 'bg-warning/60'
+        : 'bg-muted'
 
   const statusText = !enabled
     ? '已关闭'
-    : !isTrading
-      ? '非交易时段'
-      : running
-        ? '行情运行中'
-        : '已停止'
+    : isLive
+      ? '行情运行中'
+      : isReady
+        ? '轮询中，本地快照可用'
+        : !isTrading
+          ? '非交易时段'
+          : dataState
+            ? quoteDataStateText(dataState)
+            : running
+              ? '轮询中'
+              : '已停止'
 
   const lastFetchTime = lastFetchMs
     ? new Date(lastFetchMs).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -70,7 +87,7 @@ export function QuoteConfigCard({ enabled, running, isTrading, lastFetchMs, inte
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-muted">状态</span>
             <div className="flex items-center gap-1.5">
-              <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusColor} ${running && isTrading ? 'animate-pulse' : ''}`} />
+              <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusColor} ${isLive ? 'animate-pulse' : ''}`} />
               <span className="font-mono text-secondary">{statusText}</span>
             </div>
           </div>
@@ -95,6 +112,12 @@ export function QuoteConfigCard({ enabled, running, isTrading, lastFetchMs, inte
             <span className="text-muted">最后获取</span>
             <span className="font-mono text-secondary">{lastFetchTime ?? '—'}</span>
           </div>
+          {snapshotText && (
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-muted">数据来源</span>
+              <span className="font-mono text-warning/80">{snapshotText}</span>
+            </div>
+          )}
         </div>
       )}
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── 运行环境检测 ──────────────────────────────────────────
@@ -86,6 +87,14 @@ class Settings(BaseSettings):
         "Chrome/131.0.0.0 Safari/537.36"
     )
 
+    # Agent runtime pilot. Python remains the default and the only runtime
+    # shipped by Docker/PyInstaller; Pi requires an explicit source-mode opt-in.
+    agent_runtime: Literal["python", "pi"] = "python"
+    agent_pi_node_command: str = "node"
+    agent_pi_worker_path: str = ""
+    agent_pi_ready_timeout_s: float = Field(10.0, gt=0, le=60)
+    agent_pi_response_timeout_s: float = Field(90.0, ge=1.0, le=600.0)
+
     # Server
     host: str = "0.0.0.0"
     port: int = 3018
@@ -102,6 +111,12 @@ class Settings(BaseSettings):
 
     # 静态文件(前端 dist) — frozen: 资源目录的 static/; 非 frozen: frontend/dist
     static_dir: Path = _RESOURCE_ROOT / "static" if _IS_FROZEN else (_PROJECT_ROOT / "frontend" / "dist")
+
+    # DuckDB — 全局运行预算（连接工厂 app.storage.duckdb_runtime.connect_duckdb 统一注入）。
+    # memory_limit 只约束 DuckDB Buffer Manager，不替代 Polars 缓存边界；
+    # 分别由 DUCKDB_MEMORY_LIMIT / DUCKDB_THREADS 覆盖。
+    duckdb_memory_limit: str = "2GB"
+    duckdb_threads: int = Field(4, ge=1)
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:

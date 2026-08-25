@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
+import { cn } from '@/lib/cn'
 
 interface DatePickerProps {
   value: string          // YYYY-MM-DD
@@ -112,14 +113,16 @@ export function DatePicker({
   const today = todayStr()
 
   return (
-    <div ref={ref} className={`relative inline-flex ${className}`}>
+    <div ref={ref} className={cn('relative inline-flex', className)}>
       {/* 触发按钮 */}
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1.5 h-7 px-2.5 rounded-input border border-border
-          bg-elevated hover:border-accent/50 text-xs text-foreground num
-          focus:outline-none focus:border-accent/60 transition-colors duration-150 cursor-pointer ${buttonClassName}`}
+        className={cn(
+          'control h-7 cursor-pointer px-2.5 text-xs num',
+          'hover:border-accent/50 focus:border-accent/60',
+          buttonClassName,
+        )}
       >
         <Calendar className="h-3.5 w-3.5 text-accent" />
         <span className={value ? undefined : 'text-muted'}>{displayLabel}</span>
@@ -133,22 +136,24 @@ export function DatePicker({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.97 }}
             transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className={`absolute ${align === 'left' ? 'left-0' : 'right-0'} top-full mt-1.5 z-50 w-[260px] rounded-card border border-border
-              bg-surface shadow-[0_8px_30px_rgba(0,0,0,0.4)] p-3`}
+            className={cn(
+              'panel absolute top-full z-50 mt-1.5 w-[260px] p-3 shadow-lg',
+              align === 'left' ? 'left-0' : 'right-0',
+            )}
           >
             {/* 月份导航 */}
-            <div className="flex items-center justify-between mb-2">
+            <div className="mb-2 flex items-center justify-between">
               <button
                 type="button"
                 onClick={showYearPicker ? () => setViewYear(viewYear - 12) : prevMonth}
-                className="p-1 rounded-btn hover:bg-elevated text-secondary hover:text-foreground transition-colors"
+                className="btn-ghost h-auto p-1 text-secondary hover:text-foreground"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <button
                 type="button"
                 onClick={() => setShowYearPicker(v => !v)}
-                className="text-sm font-medium text-foreground num hover:text-accent transition-colors cursor-pointer"
+                className="cursor-pointer text-sm font-medium text-foreground num transition-colors hover:text-accent"
               >
                 {showYearPicker
                   ? `${viewYear - 5} - ${viewYear + 6}`
@@ -158,7 +163,7 @@ export function DatePicker({
               <button
                 type="button"
                 onClick={showYearPicker ? () => setViewYear(viewYear + 12) : nextMonth}
-                className="p-1 rounded-btn hover:bg-elevated text-secondary hover:text-foreground transition-colors"
+                className="btn-ghost h-auto p-1 text-secondary hover:text-foreground"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
@@ -178,11 +183,12 @@ export function DatePicker({
                         setViewYear(y)
                         setShowYearPicker(false)
                       }}
-                      className={`h-8 text-xs rounded-btn transition-colors duration-100
-                        ${isSelected ? 'bg-accent text-white font-bold' : ''}
-                        ${isThisYear && !isSelected ? 'border border-accent/40' : ''}
-                        ${!isSelected ? 'hover:bg-elevated cursor-pointer text-foreground' : ''}
-                      `}
+                      className={cn(
+                        'h-8 rounded-btn text-xs transition-colors duration-100',
+                        isSelected && 'bg-accent font-bold text-white',
+                        isThisYear && !isSelected && 'border border-accent/40',
+                        !isSelected && 'cursor-pointer text-foreground hover:bg-elevated',
+                      )}
                     >
                       {y}
                     </button>
@@ -192,7 +198,7 @@ export function DatePicker({
             ) : (
               <>
                 {/* 星期头 */}
-                <div className="grid grid-cols-7 text-center text-[10px] text-muted mb-1">
+                <div className="mb-1 grid grid-cols-7 text-center text-[10px] text-muted">
                   {WEEKDAYS.map((w) => (
                     <div key={w}>{w}</div>
                   ))}
@@ -206,28 +212,28 @@ export function DatePicker({
                     return (
                       <button
                         key={i}
-                    type="button"
-                    disabled={c.disabled}
-                    onClick={() => {
-                      if (!c.disabled) {
-                        onChange(c.dateStr)
-                        setOpen(false)
-                      }
-                    }}
-                    className={`
-                      h-7 w-full text-xs rounded-btn transition-colors duration-100
-                      ${c.cur ? 'text-foreground' : 'text-muted/40'}
-                      ${isSelected ? 'bg-accent text-white font-bold' : ''}
-                      ${isToday && !isSelected ? 'border border-accent/40' : ''}
-                      ${!isSelected && !c.disabled ? 'hover:bg-elevated' : ''}
-                      ${c.disabled ? 'opacity-20 cursor-not-allowed' : 'cursor-pointer'}
-                    `}
-                  >
-                    {c.day}
-                  </button>
-                )
-              })}
-            </div>
+                        type="button"
+                        disabled={c.disabled}
+                        onClick={() => {
+                          if (!c.disabled) {
+                            onChange(c.dateStr)
+                            setOpen(false)
+                          }
+                        }}
+                        className={cn(
+                          'h-7 w-full rounded-btn text-xs transition-colors duration-100',
+                          c.cur ? 'text-foreground' : 'text-muted/40',
+                          isSelected && 'bg-accent font-bold text-white',
+                          isToday && !isSelected && 'border border-accent/40',
+                          !isSelected && !c.disabled && 'hover:bg-elevated',
+                          c.disabled ? 'cursor-not-allowed opacity-20' : 'cursor-pointer',
+                        )}
+                      >
+                        {c.day}
+                      </button>
+                    )
+                  })}
+                </div>
               </>
             )}
           </motion.div>

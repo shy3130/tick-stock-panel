@@ -2,15 +2,27 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from app.api.agent import _parse_tool_request, list_tools
+from app.api.agent import _parse_tool_request, list_tools, router as agent_router
 from app.services.agent_tools import TOOLS, _truncate, call_tool
-
 
 def test_agent_tools_endpoint_lists_builtin_tools():
     names = {tool["name"] for tool in list_tools()["tools"]}
 
-    assert {"get_capabilities", "list_strategies", "get_kline", "run_screener", "run_backtest", "get_market_overview", "list_ext_data"} <= names
+    assert {
+        "get_capabilities",
+        "list_strategies",
+        "get_kline",
+        "list_screener_fields",
+        "screen_stock_pool",
+        "start_pool_backtest",
+        "get_pool_backtest",
+        "get_market_overview",
+        "list_ext_data",
+    } <= names
+    assert {"run_screener", "run_backtest"}.isdisjoint(names)
 
 
 def test_all_tools_have_schema_and_are_read_only():
@@ -26,12 +38,39 @@ def test_tool_result_truncated():
     assert len(out["preview"]) == 20
 
 
-def test_parse_tool_request_accepts_json_only():
+def test_parse_tool_request_accepts_json_and_dsml():
     assert _parse_tool_request('{"tool":"list_strategies","args":{}}') == {
         "tool": "list_strategies",
         "args": {},
     }
+    assert _parse_tool_request(
+        '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="list_strategies"></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>'
+    ) == {"tool": "list_strategies", "args": {}}
+    assert _parse_tool_request(
+        '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="quote_pool"><｜｜DSML｜｜parameter name="pool" string="false">all</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>'
+    ) == {"tool": "quote_pool", "args": {"pool": "all"}}
     assert _parse_tool_request("hello") is None
+
+
+def test_chat_endpoint_gone():
+    app = FastAPI()
+    app.include_router(agent_router)
+    response = TestClient(app).post("/api/agent/chat", json={"message": "hi"})
+    assert response.status_code == 410
+    detail = response.json()["detail"]
+    assert detail["code"] == "agent_chat_removed"
+    assert "/messages" in detail["message"]
+
+
+def test_agent_runtime_is_readonly():
+    app = FastAPI()
+    app.include_router(agent_router)
+    response = TestClient(app).get("/api/agent/runtime")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runtime"] in {"python", "pi"}
+    assert body["switchable"] is False
+
 
 
 def test_list_strategies_tool_limits_shape():
@@ -54,41 +93,6 @@ def test_get_kline_rejects_bad_symbol():
         call_tool("get_kline", SimpleNamespace(repo=object()), {"symbol": "../data"})
 
 
-def test_run_backtest_requires_symbols():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="symbols"):
-        call_tool("run_backtest", state, {"strategy_id": "x"})
-
-
-def test_run_backtest_rejects_too_many_symbols():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="symbols"):
-        call_tool(
-            "run_backtest",
-            state,
-            {"strategy_id": "x", "symbols": [f"{i:06d}.SZ" for i in range(21)]},
-        )
-
-
-def test_run_backtest_rejects_non_list_symbols():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="symbols"):
-        call_tool("run_backtest", state, {"strategy_id": "x", "symbols": "000001.SZ"})
-
-
-def test_run_backtest_rejects_wide_date_range():
-    state = SimpleNamespace(repo=object(), strategy_engine=object())
-    with pytest.raises(ValueError, match="date range"):
-        call_tool(
-            "run_backtest",
-            state,
-            {
-                "strategy_id": "x",
-                "symbols": ["000001.SZ"],
-                "start": "2024-01-01",
-                "end": "2025-01-02",
-            },
-        )
 
 
 class _FakePortfolioRepo:
@@ -160,14 +164,61 @@ def _factor_panel(symbols, n_days, factor_name):
 
 
 class _FakeFactorRepo:
-    pass
+    def __init__(self, latest_enriched=None):
+        self._latest_enriched = latest_enriched
+
+    def enriched_latest_date(self):
+        return self._latest_enriched
 
 
-def test_analyze_factor_tool_requires_symbols():
-    state = SimpleNamespace(repo=_FakeFactorRepo())
-    with pytest.raises(ValueError, match="symbols"):
-        call_tool("analyze_factor", state, {"factor_name": "momentum_20d", "symbols": []})
+def test_analyze_factor_tool_allows_omitted_symbols(monkeypatch):
+    from app.backtest import engine as engine_mod
 
+    panel = _factor_panel(["A", "B", "C"], 10, "momentum_20d")
+    captured = {}
+
+    def load_panel(self, symbols, *args, **kwargs):
+        captured["symbols"] = symbols
+        return panel
+
+    monkeypatch.setattr(engine_mod.BacktestEngine, "load_panel", load_panel)
+    out = call_tool(
+        "analyze_factor",
+        SimpleNamespace(repo=_FakeFactorRepo()),
+        {
+            "factor_name": "momentum_20d",
+            "start": "2024-01-01",
+            "end": "2024-01-10",
+            "rebalance": "daily",
+        },
+    )
+
+    assert captured["symbols"] is None
+    assert out["error"] is None
+    analyze_factor = next(tool for tool in TOOLS if tool["name"] == "analyze_factor")
+    assert "symbols" not in analyze_factor["parameters"]["required"]
+
+def test_analyze_factor_defaults_to_latest_enriched_date(monkeypatch):
+    from datetime import date
+
+    from app.backtest import factor as factor_mod
+
+    captured = {}
+
+    def run(self, config):
+        captured["config"] = config
+        return factor_mod.FactorResult(run_id="test", config={})
+
+    monkeypatch.setattr(factor_mod.FactorBacktestService, "run", run)
+    out = call_tool(
+        "analyze_factor",
+        SimpleNamespace(repo=_FakeFactorRepo(date(2026, 7, 31))),
+        {"factor_name": "momentum_20d"},
+    )
+
+    assert out["error"] is None
+    assert captured["config"].start == date(2026, 2, 1)
+    assert captured["config"].end == date(2026, 7, 31)
 
 def test_analyze_factor_tool_rejects_wide_date_range():
     state = SimpleNamespace(repo=_FakeFactorRepo())

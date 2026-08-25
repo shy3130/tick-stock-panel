@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 
 import polars as pl
 
-from app.services import index_sync
 from app.capabilities import Cap, CapabilityLimits, CapabilitySet
+from app.services import index_sync
 
 
 class FakeProvider:
@@ -85,7 +85,65 @@ def test_index_daily_sync_passes_index_asset_type(monkeypatch):
     )
 
     assert rows == 1
-    assert provider.calls == [(("000001.SH",), "index")]
+    assert provider.calls == [(("000001.INDEX",), "index")]
+
+
+def test_ensure_required_index_history_backfills_only_missing(monkeypatch):
+    required = {
+        "000001.INDEX": date(2015, 1, 1),
+        "000300.INDEX": date(2015, 1, 1),
+    }
+    monkeypatch.setattr(index_sync, "REQUIRED_INDEX_HISTORY_STARTS", required)
+
+    class ProbeRepo:
+        def get_index_daily(self, symbol, start, end, columns=None):
+            if symbol == "000001.INDEX":
+                return pl.DataFrame({"date": [date(2015, 1, 5)]})
+            return pl.DataFrame()
+
+    captured = {}
+
+    def fake_sync(repo, capset_arg, **kwargs):
+        captured.update(kwargs)
+        return 2819
+
+    monkeypatch.setattr(index_sync, "sync_and_persist_index_daily", fake_sync)
+
+    rows = index_sync.ensure_required_index_history(
+        ProbeRepo(),
+        capset(),
+        end_date=datetime(2026, 8, 11),
+    )
+
+    assert rows == 2819
+    assert captured["symbols_override"] == ["000300.INDEX"]
+    assert captured["start_date"].date() == date(2015, 1, 1)
+
+
+def test_sync_index_instruments_persists_canonical_symbols(monkeypatch):
+    provider = FakeProvider(instruments=pl.DataFrame({
+        "symbol": ["000001.SH", "399001.SZ"],
+        "name": ["上证指数", "深证成指"],
+        "code": ["000001", "399001"],
+    }))
+    monkeypatch.setattr("app.services.index_sync._get_data_provider", lambda: provider)
+    saved: dict[str, pl.DataFrame] = {}
+
+    class SavingRepo:
+        def save_index_instruments(self, df):
+            saved["result"] = df
+
+        def refresh_index_views(self):
+            pass
+
+    count = index_sync.sync_index_instruments(
+        SavingRepo(), pull_index=True, pull_etf=False,
+    )
+
+    assert count == 2
+    assert saved["result"]["symbol"].to_list() == [
+        "000001.INDEX", "399001.INDEX",
+    ]
 
 
 def test_etf_daily_sync_passes_etf_asset_type(monkeypatch):
@@ -282,7 +340,7 @@ def test_index_daily_sync_survives_chunk_failure(monkeypatch):
     assert len(repo.index_daily) == 3
     # append_index_enriched 是空实现(FakeRepo 不记录),这里只能验证循环没有
     # 因为第 2 个 chunk 失败而提前中止 —— 第 3 个 chunk 必须仍被处理到。
-    assert provider.calls[-1][0] == ("399001.SZ",)
+    assert provider.calls[-1][0] == ("399001.INDEX",)
 
 
 def test_hk_daily_sync_computes_turnover_rate_when_instruments_present(monkeypatch):

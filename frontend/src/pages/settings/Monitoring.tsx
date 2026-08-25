@@ -9,6 +9,7 @@ import {
   Zap,
   Webhook,
   ChevronDown,
+  Sparkles,
 } from 'lucide-react'
 import {
   usePreferences,
@@ -17,7 +18,7 @@ import {
   useCapabilities,
 } from '@/lib/useSharedQueries'
 import { useUpdateQuoteInterval, useToggleRealtimeQuotes } from '@/lib/useSharedMutations'
-import { api } from '@/lib/api'
+import { api, resolveQuoteDataState, quoteDataStateText, quoteSnapshotText } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
@@ -30,16 +31,17 @@ const PAGE_LABELS: Record<string, string> = {
 }
 
 const SIDEBAR_INDEX_OPTIONS = [
-  { symbol: '000001.SH', name: '上证指数' },
-  { symbol: '399001.SZ', name: '深证成指' },
-  { symbol: '399006.SZ', name: '创业板指' },
-  { symbol: '000680.SH', name: '科创综指' },
+  { symbol: '000001.INDEX', name: '上证指数' },
+  { symbol: '399001.INDEX', name: '深证成指' },
+  { symbol: '399006.INDEX', name: '创业板指' },
+  { symbol: '000680.INDEX', name: '科创综指' },
 ]
 
 const EXTRA_WEBHOOK_CHANNELS = [
   { id: 'dingtalk', name: '钉钉', hint: '群机器人' },
   { id: 'wecom', name: '企微', hint: '群机器人' },
   { id: 'meow', name: 'MeoW', hint: '个人推送' },
+  { id: 'pushplus', name: 'PushPlus', hint: '监控告警与复盘报告微信推送' },
 ]
 
 // ===== 导出为 Panel 组件 (由 Settings.tsx 嵌入) =====
@@ -59,6 +61,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const realtimeEnabled = prefs?.realtime_quotes_enabled ?? false
   const refreshPages = prefs?.sse_refresh_pages ?? {}
   const limitLadderMonitor = prefs?.limit_ladder_monitor_enabled ?? false
+  const tradingAutoReview = prefs?.tradingAutoReview ?? false
   const hasDepth = !!caps?.capabilities?.['depth5.batch']
   // 新建监控规则时是否默认勾选飞书推送 (全局默认值, 单条规则可独立修改)
   const webhookDefault = prefs?.webhook_enabled_default ?? false
@@ -66,6 +69,24 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const indicesPinned = prefs?.indices_nav_pinned ?? true
   const isRunning = quoteStatus?.running ?? false
   const isTrading = quoteStatus?.is_trading_hours ?? false
+  // 数据健康: 仅 ready 代表行情真的在更新, 线程存活不算
+  const quoteDataState = resolveQuoteDataState(quoteStatus)
+  const isQuoteReady = quoteDataState === 'ready'
+  const quoteSnapshot = quoteSnapshotText(quoteStatus?.source_as_of)
+  const isQuoteLive = isQuoteReady && !quoteSnapshot
+  const quoteStateDesc = !realtimeEnabled
+    ? '已关闭'
+    : isQuoteLive
+      ? '运行中'
+      : isQuoteReady
+        ? '轮询中，本地快照可用'
+        : !isTrading
+          ? '非交易时段，将在交易时间自动开启'
+          : quoteDataState
+            ? quoteDataStateText(quoteDataState)
+            : isRunning
+              ? '轮询中'
+              : '已关闭'
   const interval = intervalData?.interval ?? 10
   const minInterval = intervalData?.min_interval ?? 5
   const maxInterval = intervalData?.max_interval ?? 60
@@ -76,7 +97,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [feishuSecretDraft, setFeishuSecretDraft] = useState(feishuWebhookSecret)
   const [feishuError, setFeishuError] = useState('')
   const [extraOpen, setExtraOpen] = useState('')
-  const [extraDrafts, setExtraDrafts] = useState<Record<string, { url: string; secret: string; nickname: string }>>({})
+  const [extraDrafts, setExtraDrafts] = useState<Record<string, { url: string; secret: string; nickname: string; token: string; clear_token: boolean }>>({})
   const [extraErrors, setExtraErrors] = useState<Record<string, string>>({})
   // 飞书渠道配置区展开态 (推送通知卡片内)
   const [channelOpen, setChannelOpen] = useState(false)
@@ -92,6 +113,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         url: cfg.url ?? '',
         secret: cfg.secret ?? '',
         nickname: cfg.nickname ?? '',
+        token: cfg.token ?? '',
+        clear_token: false,
       }]
     })))
   }, [prefs?.webhook_channels])
@@ -139,6 +162,11 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     qc.invalidateQueries({ queryKey: QK.preferences })
   }, [qc])
 
+  const toggleTradingAutoReview = useCallback(async (enabled: boolean) => {
+    await api.updateTradingAutoReview(enabled)
+    qc.invalidateQueries({ queryKey: QK.preferences })
+  }, [qc])
+
   const toggleWebhookDefault = useCallback(async (enabled: boolean) => {
     await api.updateWebhookDefault(enabled)
     qc.invalidateQueries({ queryKey: QK.preferences })
@@ -165,27 +193,32 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   }, [feishuDraft, feishuSecretDraft, saveFeishuWebhook])
 
   const saveWebhookChannel = useMutation({
-    mutationFn: ({ channel, config }: { channel: string; config: { url?: string; secret?: string; nickname?: string } }) =>
+    mutationFn: ({ channel, config }: { channel: string; config: { url?: string; secret?: string; nickname?: string; token?: string; clear_token?: boolean } }) =>
       api.updateWebhookChannel(channel, config),
     onSuccess: (_data, vars) => {
       setExtraErrors(e => ({ ...e, [vars.channel]: '' }))
       toast('Webhook 通道已保存', 'success')
       qc.invalidateQueries({ queryKey: QK.preferences })
     },
-    onError: (err: any, vars) => setExtraErrors(e => ({ ...e, [vars.channel]: String(err?.message ?? '保存失败') })),
+    onError: (err: unknown, vars) => setExtraErrors(e => ({ ...e, [vars.channel]: String((err as Error)?.message ?? '保存失败') })),
   })
 
-  const updateExtraDraft = useCallback((channel: string, patch: Partial<{ url: string; secret: string; nickname: string }>) => {
-    setExtraDrafts(d => ({ ...d, [channel]: { ...(d[channel] ?? { url: '', secret: '', nickname: '' }), ...patch } }))
+  const updateExtraDraft = useCallback((channel: string, patch: Partial<{ url: string; secret: string; nickname: string; token: string; clear_token: boolean }>) => {
+    setExtraDrafts(d => ({ ...d, [channel]: { ...(d[channel] ?? { url: '', secret: '', nickname: '', token: '', clear_token: false }), ...patch } }))
   }, [])
 
   const submitExtra = useCallback((channel: string) => {
-    const draft = extraDrafts[channel] ?? { url: '', secret: '', nickname: '' }
+    const draft = extraDrafts[channel] ?? { url: '', secret: '', nickname: '', token: '', clear_token: false }
     if (channel === 'meow' && !draft.nickname.trim()) {
       setExtraErrors(e => ({ ...e, [channel]: 'MeoW 需填写昵称' }))
       return
     }
-    if (channel !== 'meow' && draft.url.trim() && !draft.url.trim().startsWith('http')) {
+    if (channel === 'pushplus') {
+      // PushPlus: token 非空则保存, clear_token=true 则清除
+      saveWebhookChannel.mutate({ channel, config: { token: draft.token, clear_token: draft.clear_token } })
+      return
+    }
+    if (draft.url.trim() && !draft.url.trim().startsWith('http')) {
       setExtraErrors(e => ({ ...e, [channel]: 'Webhook 地址需以 http/https 开头' }))
       return
     }
@@ -232,9 +265,8 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   if (isNoneTier) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl
-                        bg-gradient-to-br from-purple-500/20 to-blue-500/20 mb-5">
-          <Activity className="h-7 w-7 text-purple-400" />
+        <div className="inline-flex items-center justify-center w-14 h-14 rounded-btn bg-accent/10">
+          <Activity className="h-7 w-7 text-accent" />
         </div>
         <h2 className="text-lg font-medium text-foreground mb-2">实时监控</h2>
         <p className="text-sm text-secondary max-w-md mb-6">
@@ -242,9 +274,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </p>
         <a
           href="/settings?tab=system"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn
-                     bg-accent text-white text-sm font-medium
-                     hover:bg-accent/90 transition-colors"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors"
         >
           切换数据源
         </a>
@@ -260,7 +290,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         <Card icon={Activity} title="行情轮询">
           <ToggleRow
             label="实时行情"
-            desc={isRunning && isTrading ? '运行中' : isRunning ? '运行中 (非交易时段)' : '已关闭'}
+            desc={quoteSnapshot ? `${quoteStateDesc} · ${quoteSnapshot}` : quoteStateDesc}
             checked={realtimeEnabled}
             onChange={handleToggleQuote}
           />
@@ -315,7 +345,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               })}
             </div>
           ) : (
-            <div className="rounded-btn border border-border bg-base/40 px-3 py-3 text-xs text-muted">
+            <div className="control /40 px-3 py-3 text-xs text-muted">
               自选列表为空，Free 实时行情开启前请先添加自选股。
             </div>
           )}
@@ -383,7 +413,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         {/* 连板梯队降级修正 (移至右列顶部) */}
         <div
           id="depth-fix"
-          className={`rounded-card transition-all duration-500 ${flash ? 'ring-2 ring-accent/60 ring-offset-2 ring-offset-base scale-[1.01]' : 'ring-0 ring-transparent'}`}
+          className={`panel transition-all duration-500 ${flash ? 'ring-2 ring-accent/60 ring-offset-2 ring-offset-base scale-[1.01]' : 'ring-0 ring-transparent'}`}
         >
         <Card
           icon={Flame}
@@ -393,9 +423,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             <button
               onClick={() => runFix.mutate()}
               disabled={runFix.isPending}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px]
-                         bg-accent/15 text-accent hover:bg-accent/25 transition-colors
-                         disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-accent/15 text-accent hover:bg-accent/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Zap className="h-3 w-3" />
               {runFix.isPending ? '修正中…' : '立即修正'}
@@ -427,9 +455,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </Card>
         </div>
 
-        {/* 推送通知 — 监控告警的外部推送渠道 (全局配置)。
-            飞书已实现; 微信开发中, QMT/ptrade 待定。
-            每个渠道合并成一行: 勾选=新建规则默认推送, 点行展开地址配置。 */}
+        {/* 推送通知：每个已接入渠道合并成一行，勾选默认并展开配置。 */}
         <Card icon={Webhook} title="推送通知">
           <p className="text-xs text-secondary mb-3">
             监控规则命中后,可把告警推送到外部。勾选渠道作为<b className="text-foreground/80">新建规则的默认推送</b>,
@@ -472,7 +498,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={feishuDraft}
                       onChange={e => setFeishuDraft(e.target.value)}
                       placeholder={FEISHU_PREFIX + 'xxxxxxxx'}
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                     />
                   </label>
 
@@ -483,7 +509,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                       value={feishuSecretDraft}
                       onChange={e => setFeishuSecretDraft(e.target.value)}
                       placeholder="机器人未启用签名校验则留空"
-                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                      className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                     />
                   </label>
 
@@ -525,8 +551,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             </div>
 
             {EXTRA_WEBHOOK_CHANNELS.map(ch => {
-              const draft = extraDrafts[ch.id] ?? { url: '', secret: '', nickname: '' }
-              const configured = ch.id === 'meow' ? !!draft.nickname : !!draft.url
+              const draft = extraDrafts[ch.id] ?? { url: '', secret: '', nickname: '', token: '', clear_token: false }
+              const ppCfg = prefs?.webhook_channels?.pushplus
+              const configured = ch.id === 'meow' ? !!draft.nickname
+                : ch.id === 'pushplus' ? !!(ppCfg?.configured ?? false)
+                : !!draft.url
+              const ppMasked = ch.id === 'pushplus' ? (ppCfg?.token_masked ?? '') : ''
               const opened = extraOpen === ch.id
               const extraError = extraErrors[ch.id] ?? ''
               return (
@@ -555,9 +585,34 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                           value={draft.nickname}
                           onChange={e => updateExtraDraft(ch.id, { nickname: e.target.value })}
                           placeholder="MeoW 昵称"
-                          className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground focus:outline-none focus:border-accent/50"
+                          className="control h-9 w-full px-3 text-xs text-foreground focus:outline-none focus:border-accent/50"
                         />
                       </label>
+                    ) : ch.id === 'pushplus' ? (
+                      <>
+                        <label className="block space-y-1.5">
+                          <span className="text-[11px] text-muted">Token</span>
+                          <input
+                            type="password"
+                            value={draft.token}
+                            onChange={e => updateExtraDraft(ch.id, { token: e.target.value, clear_token: false })}
+                            placeholder={ppMasked ? `当前 ${ppMasked}（留空保留，填写则覆盖）` : 'PushPlus Token'}
+                            className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                          />
+                        </label>
+                        <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+                          配置后可用于监控告警；是否接收每日复盘需在复盘页单独勾选。
+                        </p>
+                        {configured && (
+                          <button
+                            onClick={() => saveWebhookChannel.mutate({ channel: ch.id, config: { token: '', clear_token: true } })}
+                            disabled={saveWebhookChannel.isPending}
+                            className="mt-2 px-2.5 py-1 rounded-btn border border-border text-[11px] text-danger disabled:opacity-50 cursor-pointer hover:bg-danger/10 transition-colors"
+                          >
+                            清除 Token
+                          </button>
+                        )}
+                      </>
                     ) : (
                       <>
                         <label className="block space-y-1.5">
@@ -566,7 +621,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                             value={draft.url}
                             onChange={e => updateExtraDraft(ch.id, { url: e.target.value })}
                             placeholder="https://..."
-                            className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                            className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                           />
                         </label>
                         {ch.id === 'dingtalk' && (
@@ -577,7 +632,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                               value={draft.secret}
                               onChange={e => updateExtraDraft(ch.id, { secret: e.target.value })}
                               placeholder="未启用签名则留空"
-                              className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                              className="control h-9 w-full px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
                             />
                           </label>
                         )}
@@ -600,6 +655,15 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               </div>
             )})}
           </div>
+        </Card>
+
+        <Card icon={Sparkles} title="盘后自动归因">
+          <ToggleRow
+            label="盘后自动归因(L0/L1 状态驱动)"
+            desc="开启后每交易日 16:45 自动对当日新红旗/新平仓跑 AI 归因,无候选零 AI 调用"
+            checked={tradingAutoReview}
+            onChange={toggleTradingAutoReview}
+          />
         </Card>
       </div>
     </div>
@@ -660,7 +724,7 @@ interface CardProps {
 
 function Card({ icon: Icon, title, badge, right, children }: CardProps) {
   return (
-    <section className="rounded-card border border-border bg-surface p-5">
+    <section className="panel">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <Icon className="h-4 w-4 text-secondary" />

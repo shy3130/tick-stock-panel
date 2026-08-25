@@ -4,12 +4,16 @@
 锁的是**口径**:涨停判定、封板率分母、晋级率的跨日错位、百分数单位。
 """
 from __future__ import annotations
+from datetime import date
+
 
 import polars as pl
 
 from app.services.review_series import (
     NON_THEME_TAGS,
+    _REVIEW_HISTORY_COLUMNS,
     _daily_agg,
+    _load_review_history,
     _with_promotion,
 )
 
@@ -30,6 +34,58 @@ def _row(symbol, date, chg, *, lu=False, ld=False, broken=False, boards=0, amoun
         "consecutive_limit_ups": boards,
     }
 
+
+
+def test_review_history_uses_projected_fast_path_and_preserves_streaks():
+    class Repo:
+        def __init__(self):
+            self.columns = None
+
+        def get_enriched_range(self, start, end, columns=None):
+            self.columns = columns
+            return pl.DataFrame(
+                {
+                    "symbol": ["600001.SH", "600001.SH"],
+                    "date": [date(2026, 7, 2), date(2026, 7, 3)],
+                    "open": [10.0, 10.5],
+                    "high": [10.2, 11.0],
+                    "low": [9.9, 10.4],
+                    "close": [10.0, 10.5],
+                    "volume": [1000, 1200],
+                    "amount": [10_000.0, 12_600.0],
+                    "raw_close": [10.0, 10.5],
+                    "raw_high": [10.2, 11.0],
+                    "raw_low": [9.9, 10.4],
+                    "turnover_rate": [1.0, 1.2],
+                    "consecutive_limit_ups": [0, 0],
+                    "consecutive_limit_downs": [0, 0],
+                    "prev_close": [None, 10.0],
+                    "change_pct": [None, 0.05],
+                }
+            )
+
+        @staticmethod
+        def get_instruments():
+            return pl.DataFrame(
+                {
+                    "symbol": ["600001.SH"],
+                    "name": ["测试股份"],
+                }
+            )
+
+    repo = Repo()
+    df = _load_review_history(
+        repo,
+        date(2026, 7, 2),
+        date(2026, 7, 3),
+    )
+
+    assert repo.columns == _REVIEW_HISTORY_COLUMNS
+    # 展示契约: instruments JOIN 后 name 必须可用(风险线索/题材龙头依赖)
+    assert df["name"].to_list() == ["测试股份", "测试股份"]
+    assert df["consecutive_limit_ups"].to_list() == [0, 0]
+    assert df["signal_limit_up"].to_list() == [False, False]
+    assert df["signal_broken_limit_up"].to_list() == [None, True]
 
 def test_daily_agg_counts_and_seal_rate():
     df = _panel([

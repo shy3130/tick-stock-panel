@@ -11,8 +11,8 @@
  *  - 订阅者列表(notify 机制),Review mount 时订阅、unmount 时退订
  */
 import { api } from '@/lib/api'
-
-export type ReviewPhase = 'idle' | 'loading' | 'streaming' | 'done' | 'error'
+import type { AiConnection } from '@/lib/aiStreamStatus'
+export type ReviewPhase = 'idle' | 'loading' | 'streaming' | 'done' | 'error' | 'cancelled'
 
 export interface ReviewMeta {
   as_of?: string
@@ -27,9 +27,12 @@ export interface ReviewState {
   error: string
   meta: ReviewMeta | null
   focus: string
+  attemptId?: string
+  /** F9: 流连接态; start→connecting, 首个 delta→open, 终态→closed */
+  connection: AiConnection
 }
 
-const INITIAL: ReviewState = { phase: 'idle', content: '', error: '', meta: null, focus: '' }
+const INITIAL: ReviewState = { phase: 'idle', connection: 'closed', content: '', error: '', meta: null, focus: '' }
 
 // ===== 模块级单例状态(组件卸载不销毁)=====
 let state: ReviewState = { ...INITIAL }
@@ -82,60 +85,78 @@ export async function startReviewGeneration(
   if (isReviewGenerating()) return
 
   generatingSource = 'manual'
-  state = { phase: 'loading', content: '', error: '', meta: null, focus }
+  state = { phase: 'loading', content: '', error: '', meta: null, focus, connection: 'connecting' }
   notify()
 
   abortCtrl = new AbortController()
+  const ac = abortCtrl
   let buf = ''
   let failed = false
   let doneMeta: ReviewMeta | null = null
 
   try {
-    for await (const evt of api.reviewStream(asOf, focus, profileId)) {
-      if (abortCtrl.signal.aborted) break
-      if (evt.type === 'meta') {
+    for await (const evt of api.reviewStream(asOf, focus, profileId, ac.signal)) {
+      if (ac.signal.aborted || state.phase === 'cancelled') return
+      if (evt.type === 'attempt' && evt.attempt_id) {
+        state = { ...state, attemptId: evt.attempt_id }
+        notify()
+      } else if (evt.type === 'meta') {
         doneMeta = evt
         state = { ...state, meta: evt }
         notify()
       } else if (evt.type === 'delta' && evt.content) {
         buf += evt.content
-        state = { ...state, content: buf, phase: 'streaming' }
+        state = { ...state, content: buf, phase: 'streaming', connection: 'open' }
         notify()
       } else if (evt.type === 'error') {
         failed = true
-        state = { ...state, error: evt.message ?? '复盘失败', phase: 'error' }
+        state = { ...state, error: evt.message ?? '复盘失败', phase: 'error', connection: 'closed' }
         notify()
         return
       } else if (evt.type === 'done') {
-        state = { ...state, phase: 'done' }
+        state = { ...state, phase: 'done', connection: 'closed' }
         notify()
       }
     }
-    // 流正常结束但无 done 事件,按 done 处理
+    if (ac.signal.aborted || state.phase === 'cancelled') return
     if (buf && !failed) {
-      state = { ...state, phase: 'done' }
+      state = { ...state, phase: 'done', connection: 'closed' }
       notify()
-      // 自动归档(仅手动流: 定时流由后端归档, SSE done 不走这里)
-      if (buf && !failed) {
-        onDone?.(buf, doneMeta)
+      onDone?.(buf, doneMeta)
+    }
+  } catch (e: unknown) {
+    if (abortCtrl !== ac) return // 旧流残骸：新一轮已接管全局状态，不得改写
+    if (ac.signal.aborted || state.phase === 'cancelled') {
+      if (state.phase !== 'cancelled') {
+        state = { ...state, error: '已取消', phase: 'cancelled', connection: 'closed' }
+        notify()
       }
+      return
     }
-  } catch (e: any) {
-    if (!abortCtrl.signal.aborted) {
-      state = { ...state, error: e?.message ?? '复盘失败', phase: 'error' }
-      notify()
-    }
+    const message = e instanceof Error && e.message ? e.message : '复盘失败'
+    state = { ...state, error: message, phase: 'error', connection: 'closed' }
+    notify()
   } finally {
-    abortCtrl = null
-    generatingSource = null
+    if (abortCtrl === ac) {
+      abortCtrl = null
+      if (state.phase !== 'cancelled') generatingSource = null
+    }
   }
 }
 
-/** 中断当前生成(供"查看历史"等场景主动中断流)。 */
-export function abortReviewGeneration(): void {
+export async function cancelReviewGeneration(): Promise<void> {
+  const attemptId = state.attemptId
+  if (state.phase === 'loading' || state.phase === 'streaming') {
+    state = { ...state, phase: 'cancelled', error: '已取消', connection: 'closed' }
+    notify()
+  }
+  generatingSource = null
   abortCtrl?.abort()
-  abortCtrl = null
+  if (attemptId) {
+    try { await api.cancelAgentAttempt(attemptId) } catch { /* 取消失败仍以本地中止为准 */ }
+  }
 }
+
 
 /** 设置当前查看的历史报告(把 store 状态切到 done + 该报告内容)。 */
 export function setViewingReport(report: {
@@ -147,8 +168,10 @@ export function setViewingReport(report: {
 }): void {
   abortCtrl?.abort()
   abortCtrl = null
+  generatingSource = null
   state = {
     phase: 'done',
+    connection: 'closed',
     content: report.content,
     error: '',
     meta: {
@@ -187,35 +210,34 @@ export function feedReviewEvent(evt: any): void {
   if (!evt || typeof evt !== 'object') return
   const t = evt.type
 
+  // 取消是终态: 定时 SSE 不得把 cancelled 改回 streaming/done
+  if (state.phase === 'cancelled') return
+
   // 并发控制: 手动流进行中时, SSE 事件一律忽略(手动流优先, 避免两条流抢同一个 store)
   // 但若当前是 SSE 流自己在跑(generatingSource==='sse'), 则正常处理后续事件
   if (generatingSource === 'manual') return
 
   if (t === 'meta') {
-    // 定时流的第一个事件: 标记来源为 sse, 进入 streaming 态, 重置 content
     generatingSource = 'sse'
-    state = { phase: 'streaming', content: '', error: '', meta: evt, focus: '' }
+    state = { phase: 'streaming', connection: 'open', content: '', error: '', meta: evt, focus: '' }
     notify()
   } else if (t === 'delta' && evt.content) {
-    // 只有 sse 流进行中时才累积(防止 meta 丢失时的孤立 delta)
     if (generatingSource !== 'sse') return
-    state = { ...state, content: state.content + evt.content, phase: 'streaming' }
+    state = { ...state, content: state.content + evt.content, phase: 'streaming', connection: 'open' }
     notify()
   } else if (t === 'retry') {
     if (generatingSource !== 'sse') return
-    // 后端重试: 清空已累积内容, 等待新一轮 meta/delta
     state = { ...state, content: '', phase: 'streaming' }
     notify()
   } else if (t === 'error') {
     if (generatingSource !== 'sse') return
-    state = { ...state, error: evt.message ?? '复盘生成失败', phase: 'error' }
-    notify()
+    state = { ...state, error: evt.message ?? '复盘生成失败', phase: 'error', connection: 'closed' }
     generatingSource = null
+    notify()
   } else if (t === 'done') {
     if (generatingSource !== 'sse') return
-    // 定时场景 done 带 archived=true: 后端已归档, 前端只切 done 态, 不调归档接口。
-    state = { ...state, phase: 'done' }
-    notify()
+    state = { ...state, phase: 'done', connection: 'closed' }
     generatingSource = null
+    notify()
   }
 }

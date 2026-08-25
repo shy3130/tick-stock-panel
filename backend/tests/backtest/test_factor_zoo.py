@@ -10,6 +10,12 @@ from app.backtest.factor import FactorBacktestService, FactorConfig
 from app.backtest.factor_zoo import ALPHAS, compute_factor, export_manifest
 
 ALPHA_IDS = list(ALPHAS)
+# Alphas with a faithful pandas reference implementation (the original ten).
+_REFERENCE_ALPHAS = {
+    "alpha101_001", "alpha101_002", "alpha101_003", "alpha101_004",
+    "alpha101_006", "alpha101_007", "alpha101_008", "alpha101_009",
+    "alpha101_010", "alpha101_012",
+}
 
 
 def test_export_manifest_contains_registered_alphas():
@@ -38,7 +44,7 @@ def test_random_control_ic_returns_distribution():
     assert out["random_control_ic_std"] is not None
 
 
-@pytest.mark.parametrize("alpha_id", ALPHA_IDS)
+@pytest.mark.parametrize("alpha_id", [a for a in ALPHA_IDS if a in _REFERENCE_ALPHAS])
 def test_alpha_matches_pandas_reference(alpha_id):
     panel = _panel()
     actual = compute_factor(panel, alpha_id).select("symbol", "date", alpha_id).sort(["date", "symbol"])
@@ -49,11 +55,11 @@ def test_alpha_matches_pandas_reference(alpha_id):
     assert np.allclose(joined[alpha_id], joined["expected"], atol=1e-9, equal_nan=True)
 
 
-def _panel() -> pl.DataFrame:
+def _panel(n_days: int = 90) -> pl.DataFrame:
     start = date(2026, 1, 1)
     rows = []
     for s_idx, sym in enumerate(["A", "B", "C"]):
-        for i in range(90):
+        for i in range(n_days):
             trend = 10 + s_idx * 3 + i * (0.08 + s_idx * 0.02)
             wave = ((i % 7) - 3) * 0.03
             close = trend + wave
@@ -129,3 +135,17 @@ def _ts_rank(values: pd.Series, window: int) -> pd.Series:
         lambda a: pd.Series(a).rank(method="first").iloc[-1] / len(a),
         raw=False,
     )
+
+
+@pytest.mark.parametrize("alpha_id", ALPHA_IDS)
+def test_alpha101_smoke(alpha_id):
+    """Every alpha emits one value per input row with at least one non-null.
+
+    A 260-bar panel covers even the 250-bar lookback of alpha101_019.
+    """
+    panel = _panel(n_days=260)
+    out = compute_factor(panel, alpha_id)
+
+    col = out[alpha_id]
+    assert len(col) == panel.height
+    assert col.null_count() < panel.height

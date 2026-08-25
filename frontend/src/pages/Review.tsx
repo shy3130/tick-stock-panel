@@ -16,10 +16,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   BookOpenCheck, RefreshCw, Sparkles, Trash2, History, ChevronRight, AlertTriangle,
   Database, Wand2, Copy, Download, Clock, X, Check, Activity, Layers, Shuffle, TrendingUp,
+  Flag,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-import { api, type OverviewMarket, type AiReviewReport } from '@/lib/api'
+import { api, tradingGetRedFlags, tradingListTrades, tradingRunAutoReview, type OverviewMarket, type AiReviewReport, type RedFlag, type AutoReviewResult } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
 import { fmtBigNum } from '@/lib/format'
@@ -30,9 +31,10 @@ import { toast } from '@/components/Toast'
 import { usePreferences } from '@/lib/useSharedQueries'
 import { useReviewState } from '@/lib/useReviewStore'
 import {
-  startReviewGeneration, resetReview, isReviewGenerating,
+  startReviewGeneration, resetReview, isReviewGenerating, cancelReviewGeneration,
   type ReviewPhase,
 } from '@/lib/reviewStore'
+import { aiStreamStatus, type AiConnection } from '@/lib/aiStreamStatus'
 import { resolveEntryProfile } from '@/lib/aiProfile'
 import { EmotionCyclePanel } from '@/components/review/EmotionCyclePanel'
 import { LadderPromotionPanel } from '@/components/review/LadderPromotionPanel'
@@ -40,6 +42,8 @@ import { ThemeRotationPanel } from '@/components/review/ThemeRotationPanel'
 import { ReviewCluesPanel } from '@/components/review/ReviewCluesPanel'
 import { HkBreadthPanel } from '@/components/review/HkBreadthPanel'
 import { HkMoversPanel } from '@/components/review/HkMoversPanel'
+import { ReviewCard } from '@/components/review/shared'
+import { EmptyState } from '@/components/EmptyState'
 
 // ================================================================
 // 市场与分区 Tab
@@ -50,7 +54,7 @@ import { HkMoversPanel } from '@/components/review/HkMoversPanel'
 // 所以港股走自己更薄的两个分区。详见 backend services/review_hk 模块头。
 // ================================================================
 type Market = 'a' | 'hk'
-type ReviewTab = 'report' | 'emotion' | 'ladder' | 'rotation' | 'clues' | 'hk-breadth' | 'hk-movers'
+type ReviewTab = 'report' | 'emotion' | 'ladder' | 'rotation' | 'clues' | 'flags' | 'hk-breadth' | 'hk-movers'
 
 const A_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
   { key: 'report', label: 'AI 报告', icon: Sparkles },
@@ -58,6 +62,7 @@ const A_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
   { key: 'ladder', label: '连板天梯', icon: Layers },
   { key: 'rotation', label: '题材轮动', icon: Shuffle },
   { key: 'clues', label: '风险线索', icon: AlertTriangle },
+  { key: 'flags', label: '纪律红旗', icon: Flag },
 ]
 
 const HK_TABS: { key: ReviewTab; label: string; icon: LucideIcon }[] = [
@@ -129,7 +134,7 @@ export function Review() {
 
   const tabs = market === 'a' ? A_TABS : HK_TABS
   // 生成状态走全局 store:切走页面流不中断,回来可恢复
-  const { phase, content, error, meta } = useReviewState()
+  const { phase, connection, content, error, meta } = useReviewState()
   const [viewing, setViewing] = useState<AiReviewReport | null>(null)  // 查看历史报告
   const reportEndRef = useRef<HTMLDivElement>(null)
 
@@ -142,7 +147,7 @@ export function Review() {
   })
 
   // 历史报告
-  const historyQuery = useQuery<{ reports: AiReviewReport[] }>({
+  const historyQuery = useQuery({
     queryKey: QK.reviewReports,
     queryFn: () => api.reviewReportsList(),
   })
@@ -167,9 +172,9 @@ export function Review() {
     { id: 'dingtalk', name: '钉钉', hint: '群机器人', configured: !!webhookChannels.dingtalk?.url },
     { id: 'wecom', name: '企微', hint: '群机器人', configured: !!webhookChannels.wecom?.url },
     { id: 'meow', name: 'MeoW', hint: '个人推送', configured: !!webhookChannels.meow?.nickname },
+    { id: 'pushplus', name: 'PushPlus', hint: '复盘报告微信推送', configured: !!webhookChannels.pushplus?.configured },
   ]
-  // 推送渠道是独立的顶层偏好(多选), 与定时 / 实时行情无关, 常驻可单独设置
-  // []=不推送, ['feishu']=飞书(微信开发中, 仅占位)
+  // 复盘推送渠道为独立多选；空数组表示不推送，PushPlus 需先在实时监控设置中配置 Token。
   const reviewPushChannels = prefs.data?.review_push_channels ?? []
   // 弹窗内的本地草稿: 开关和时间都在本地改, 点「保存」才真正提交(避免开关一拨就关弹窗)
   const [draft, setDraft] = useState(reviewSched)
@@ -184,6 +189,27 @@ export function Review() {
       qc.invalidateQueries({ queryKey: QK.preferences })
       setShowSchedule(false)
       toast(vars.enabled ? '已开启定时复盘' : '已关闭定时复盘', 'success')
+    },
+    onError: () => { /* request() 已 toast */ },
+  })
+
+  // ===== 回测定时复跑 (F11) =====
+  // 与定时复盘同页管理: 到点用滚动窗口自动复跑「回测历史」中收藏的策略 Run,
+  // 新 Run 以 label='定时复跑' 进入运行历史; 单个失败跳过, 不影响其余。
+  const [showRerun, setShowRerun] = useState(false)
+  const rerunPref = prefs.data?.backtest_auto_rerun ?? { enabled: false, hour: 16, minute: 40, window_days: 90 }
+  const [rerunDraft, setRerunDraft] = useState(rerunPref)
+  const openRerun = useCallback(() => {
+    setRerunDraft(rerunPref)  // 每次打开同步最新服务端值
+    setShowRerun(true)
+  }, [rerunPref])
+  const rerunMut = useMutation({
+    mutationFn: (v: { enabled: boolean; hour: number; minute: number; window_days: number }) =>
+      api.updateBacktestAutoRerun(v.enabled, v.hour, v.minute, v.window_days),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: QK.preferences })
+      setShowRerun(false)
+      toast(vars.enabled ? '已开启回测定时复跑' : '已关闭回测定时复跑', 'success')
     },
     onError: () => { /* request() 已 toast */ },
   })
@@ -246,31 +272,46 @@ export function Review() {
     }, resolvedProfileId || profileId)
   }, [aiProfiles.data, asOf, focus, onGenerationDone, profileId])
 
-  // 复制全文到剪贴板(viewing 优先,与主区域显示一致)
+  const isGenerating = phase === 'loading' || phase === 'streaming'
+  const data = marketQuery.data
+  const storedReviewMatchesCurrent = isGenerating
+    || !meta?.as_of
+    || !data?.as_of
+    || meta.as_of === data.as_of
+  // 历史报告必须显式点选；跨日残留的模块级 store 不应冒充当前复盘。
+  const displayContent = viewing?.content ?? (storedReviewMatchesCurrent ? content : '')
+  const displayDate = viewing?.as_of
+    ?? (isGenerating ? meta?.as_of : undefined)
+    ?? data?.as_of
+    ?? asOf
+    ?? '最新'
+  const displayEmotion = viewing?.emotion_label
+    || (isGenerating ? meta?.emotion_label : undefined)
+    || data?.emotion?.label
+
+
+  // 复制全文到剪贴板（与主区域显示一致）
   const copyContent = useCallback(async () => {
-    const text = viewing?.content ?? content
-    if (!text) return
+    if (!displayContent) return
     try {
-      await navigator.clipboard.writeText(text)
+      await navigator.clipboard.writeText(displayContent)
       toast('已复制到剪贴板', 'success')
     } catch {
       toast('复制失败,请手动选择文本', 'error')
     }
-  }, [content, viewing])
+  }, [displayContent])
 
-  // 下载为 .md 文件(viewing 优先)
+  // 下载为 .md 文件（与主区域显示的报告日期一致）
   const downloadContent = useCallback(() => {
-    const text = viewing?.content ?? content
-    if (!text) return
-    const reportDate = viewing?.as_of ?? meta?.as_of ?? asOf ?? new Date().toISOString().slice(0, 10)
-    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    if (!displayContent) return
+    const blob = new Blob([displayContent], { type: 'text/markdown;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `复盘_${reportDate}.md`
+    a.download = `复盘_${displayDate}.md`
     a.click()
     URL.revokeObjectURL(url)
-  }, [content, viewing, meta, asOf])
+  }, [displayContent, displayDate])
 
   // 查看历史报告(不中断后台生成:仅临时把 viewing 覆盖到主区域,
   // 生成中的流仍在 store 里继续跑,点"生成中"项即可切回)
@@ -278,25 +319,19 @@ export function Review() {
     setViewing(r)
   }, [])
 
-  const isGenerating = phase === 'loading' || phase === 'streaming'
-  const displayDate = viewing?.as_of ?? meta?.as_of ?? marketQuery.data?.as_of ?? asOf ?? '最新'
-  const data = marketQuery.data
-  // 主区域显示的内容:viewing(查看历史)优先于 store 的生成 content,
-  // 这样点历史报告不会覆盖后台生成中的流。
-  const displayContent = viewing?.content ?? content
 
   return (
-    <>
+    <div className="workspace-page">
       <PageHeader
         title="大盘复盘"
         titleExtra={<BookOpenCheck className="h-4 w-4 text-accent" />}
         subtitle={
           market === 'hk'
             ? '港股 · 无涨跌停制度'
-            : `${displayDate}${data?.emotion ? ` · 情绪 ${data.emotion.label}` : ''}`
+            : `${displayDate}${displayEmotion ? ` · 情绪 ${displayEmotion}` : ''}`
         }
         right={
-          <div className="flex items-center gap-1">
+          <div className="workspace-toolbar">
             {/* AI 复盘只喂 A 股盘面(market_recap 走 A 股 overview)。港股模式下隐藏这组按钮,
                 否则会生成一份内容全是 A 股、标题却写着港股的报告。 */}
             {market === 'a' && (
@@ -305,7 +340,7 @@ export function Review() {
             <button
               onClick={() => { marketQuery.refetch() }}
               disabled={marketQuery.isFetching}
-              className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground disabled:opacity-50"
+              className="btn-secondary !h-7 text-[11px]"
               title="刷新市场数据"
             >
               <RefreshCw className={cn('h-3 w-3', marketQuery.isFetching && 'animate-spin')} />刷新
@@ -313,42 +348,51 @@ export function Review() {
             <button
               onClick={openSchedule}
               className={cn(
-                'inline-flex items-center gap-1 rounded-btn border px-2 py-1 text-[11px] transition-colors',
-                reviewSched.enabled
-                  ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/20'
-                  : 'border-border bg-elevated text-secondary hover:text-foreground',
+                'btn-secondary !h-7 text-[11px]',
+                reviewSched.enabled && 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15',
               )}
               title={reviewSched.enabled ? `定时复盘已开启 · 每日 ${String(reviewSched.hour).padStart(2,'0')}:${String(reviewSched.minute).padStart(2,'0')}` : '定时复盘'}
             >
               <Clock className="h-3 w-3" />定时
             </button>
             <button
-              onClick={generate}
-              disabled={isGenerating}
+              onClick={openRerun}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded-btn px-3.5 py-1.5 text-xs font-medium transition-all',
-                isGenerating
-                  ? 'border border-accent/40 bg-accent/10 text-accent cursor-not-allowed'
-                  : 'bg-accent text-white shadow-sm shadow-accent/25 hover:bg-accent/90 hover:shadow hover:shadow-accent/30',
+                'btn-secondary !h-7 text-[11px]',
+                rerunPref.enabled && 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15',
               )}
+              title={rerunPref.enabled
+                ? `回测定时复跑已开启 · 每日 ${String(rerunPref.hour).padStart(2, '0')}:${String(rerunPref.minute).padStart(2, '0')} · 滚动窗口 ${rerunPref.window_days} 天`
+                : '回测定时复跑'}
             >
-              {isGenerating ? (
-                <><RefreshCw className="h-3.5 w-3.5 animate-spin" />生成中…</>
-              ) : (
-                <><Sparkles className="h-3.5 w-3.5" />生成复盘</>
-              )}
+              <History className="h-3 w-3" />复跑
             </button>
+            {isGenerating ? (
+              <button
+                onClick={() => { void cancelReviewGeneration() }}
+                className="btn-secondary !h-8 border-danger/40 text-danger"
+              >
+                <X className="h-3.5 w-3.5" />取消
+              </button>
+            ) : (
+              <button
+                onClick={generate}
+                className="btn-primary !h-8"
+              >
+                <Sparkles className="h-3.5 w-3.5" />生成复盘
+              </button>
+            )}
               </>
             )}
           </div>
         }
       />
 
-      <div className="min-h-full bg-[radial-gradient(circle_at_15%_-5%,rgba(59,130,246,0.10),transparent_30%),radial-gradient(circle_at_85%_5%,rgba(139,92,246,0.08),transparent_30%)] px-4 py-4 sm:px-6">
-        <div className="mx-auto max-w-[1280px] space-y-3">
+      <div className="workspace-content overflow-auto">
+        <div className="mx-auto w-full max-w-[1280px] min-w-0 space-y-3">
 
           {/* ===== 市场 + 分区切换(常驻:A 股无数据时也要能切到港股)===== */}
-          <div className="flex flex-wrap items-center gap-1 rounded-card border border-border bg-surface/80 px-2 py-1.5">
+          <div className="workspace-toolbar panel !mb-0 px-2 py-1.5">
             {/* 市场段控件 */}
             <div className="flex items-center gap-0.5 rounded-btn bg-elevated/60 p-0.5">
               {MARKETS.map(m => (
@@ -399,16 +443,19 @@ export function Review() {
               : <HkBreadthPanel asOf={asOf} days={hkDays} onDaysChange={setHkDays} />
           )}
 
-          {market === 'a' && (marketQuery.isLoading && !data ? (
+          {/* ===== 纪律红旗(交易域数据,不依赖市场日 K,独立于下方数据守卫)===== */}
+          {market === 'a' && tab === 'flags' && <RedFlagsPanel />}
+
+          {market === 'a' && tab !== 'flags' && (marketQuery.isLoading && !data ? (
             <div className="flex h-40 items-center justify-center">
               <div className="flex items-center gap-2 text-sm text-muted">
                 <RefreshCw className="h-4 w-4 animate-spin" /> 加载市场数据…
               </div>
             </div>
           ) : !data || !data.as_of ? (
-            <div className="flex flex-col items-center justify-center gap-4 rounded-card border border-border bg-surface/80 px-6 py-16">
+            <div className="flex flex-col items-center justify-center gap-4 panel px-6 py-16">
               <div className="relative">
-                <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+                <div className="grid h-14 w-14 place-items-center rounded-btn border border-accent/30 bg-accent/10">
                   <Database className="h-6 w-6 text-accent" strokeWidth={1.8} />
                 </div>
               </div>
@@ -432,7 +479,7 @@ export function Review() {
               {tab === 'report' && (
                 <>
                   {/* ===== 关注点输入 ===== */}
-                  <div className="flex items-center gap-2 rounded-card border border-border bg-surface/80 px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
+                  <div className="flex items-center gap-2 panel px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
                     <Wand2 className="h-3.5 w-3.5 shrink-0 text-accent" />
                     <input
                       value={focus}
@@ -446,10 +493,21 @@ export function Review() {
                     )}
                   </div>
 
+                  {(historyQuery.data?.discarded_reports.length ?? 0) > 0 && (
+                    <div className="flex items-center gap-2 rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        已隔离 {historyQuery.data!.discarded_reports.length} 份晚于 canonical 日期
+                        {' '}{historyQuery.data!.canonical_as_of ?? '未知'} 的复盘报告，原文件未删除。
+                      </span>
+                    </div>
+                  )}
+
                   {/* ===== 报告 + 历史 双栏(报告为主体)===== */}
                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_18rem]">
                     <ReportPanel
                       phase={phase}
+                      connection={connection}
                       content={displayContent}
                       error={error}
                       isGenerating={isGenerating}
@@ -503,7 +561,7 @@ export function Review() {
               initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
-              className="w-full max-w-md rounded-card border border-border bg-surface p-5 shadow-2xl"
+              className="panel w-full max-w-md p-5"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-4 flex items-center justify-between">
@@ -548,13 +606,13 @@ export function Review() {
                   <input
                     type="number" min={0} max={23} value={draft.hour}
                     onChange={e => setDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, Number(e.target.value))) }))}
-                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
                   />
                   <span className="text-xs text-muted">:</span>
                   <input
                     type="number" min={0} max={59} value={draft.minute}
                     onChange={e => setDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, Number(e.target.value))) }))}
-                    className="w-12 px-1.5 py-1 rounded-btn bg-base border border-border text-xs font-mono text-foreground text-center focus:outline-none focus:border-accent/50"
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
                   />
                   <span className="text-[10px] text-muted/70">不早于 15:00 · 工作日执行</span>
                 </div>
@@ -585,7 +643,7 @@ export function Review() {
                       </span>
                       <span className="text-[11px] text-foreground">{ch.name}</span>
                       <span className="text-[9px] text-muted">{ch.hint}</span>
-                      <span className={cn('ml-auto text-[9px]', ch.configured ? 'text-emerald-500' : 'text-warning')}>
+                      <span className={cn('ml-auto text-[9px]', ch.configured ? 'text-accent' : 'text-warning')}>
                         {ch.configured ? '已配置' : '未配置'}
                       </span>
                     </button>
@@ -611,14 +669,14 @@ export function Review() {
               <div className="mt-5 flex justify-end gap-2">
                 <button
                   onClick={() => setShowSchedule(false)}
-                  className="rounded-btn bg-elevated px-4 py-1.5 text-xs text-secondary transition-colors hover:text-foreground"
+                  className="btn-secondary"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => reviewMut.mutate({ enabled: draft.enabled, hour: draft.hour, minute: draft.minute })}
                   disabled={reviewMut.isPending}
-                  className="inline-flex items-center gap-1.5 rounded-btn bg-accent px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 disabled:opacity-50"
+                  className="btn-primary"
                 >
                   {reviewMut.isPending ? '保存中…' : '保存'}
                 </button>
@@ -627,7 +685,113 @@ export function Review() {
           </motion.div>
         )}
       </AnimatePresence>
-    </>
+
+      {/* ===== 回测定时复跑设置弹窗 (F11) ===== */}
+      <AnimatePresence>
+        {showRerun && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setShowRerun(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="panel w-full max-w-md p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <History className="h-4 w-4 text-accent" />
+                  <h3 className="text-sm font-medium text-foreground">回测定时复跑</h3>
+                </div>
+                <button
+                  onClick={() => setShowRerun(false)}
+                  className="rounded p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <p className="mb-4 text-[11px] leading-relaxed text-muted">
+                开启后,每个交易日到点自动复跑「回测」运行历史中收藏的策略(最多 10 个):
+                原参数不变,区间换成 [今天-窗口天数, 今天] 滚动窗口重新计算,
+                结果以「定时复跑」标签写入运行历史;单个失败自动跳过,不影响其余。
+              </p>
+
+              {/* 开关(只改本地草稿, 不提交) */}
+              <label className="flex items-center justify-between rounded-btn bg-elevated/40 px-3 py-2.5">
+                <span className="text-xs text-foreground">启用回测定时复跑</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={rerunDraft.enabled}
+                  onClick={() => setRerunDraft(d => ({ ...d, enabled: !d.enabled }))}
+                  className={cn(
+                    'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors',
+                    rerunDraft.enabled ? 'bg-accent' : 'bg-border',
+                  )}
+                >
+                  <span className={cn('inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform', rerunDraft.enabled ? 'translate-x-[18px]' : 'translate-x-1')} />
+                </button>
+              </label>
+
+              {/* 时间 + 滚动窗口(仅开启时可编辑, 本地草稿) */}
+              {rerunDraft.enabled && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-btn bg-elevated/40 px-3 py-2.5">
+                  <span className="text-[11px] text-muted">每日</span>
+                  <input
+                    type="number" min={0} max={23} value={rerunDraft.hour}
+                    onChange={e => setRerunDraft(d => ({ ...d, hour: Math.max(0, Math.min(23, Number(e.target.value))) }))}
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
+                  />
+                  <span className="text-xs text-muted">:</span>
+                  <input
+                    type="number" min={0} max={59} value={rerunDraft.minute}
+                    onChange={e => setRerunDraft(d => ({ ...d, minute: Math.max(0, Math.min(59, Number(e.target.value))) }))}
+                    className="control w-12 !h-7 px-1.5 text-center text-xs font-mono"
+                  />
+                  <span className="text-[11px] text-muted">· 窗口</span>
+                  <input
+                    type="number" min={30} max={365} value={rerunDraft.window_days}
+                    onChange={e => setRerunDraft(d => ({ ...d, window_days: Math.max(30, Math.min(365, Number(e.target.value))) }))}
+                    className="control w-16 !h-7 px-1.5 text-center text-xs font-mono"
+                  />
+                  <span className="text-[11px] text-muted">天</span>
+                  <span className="text-[10px] text-muted/70">30~365 · 工作日执行</span>
+                </div>
+              )}
+
+              {!rerunDraft.enabled && (
+                <p className="mt-3 text-[10px] text-muted/70">
+                  当前: 已关闭。开启后将按设定时间自动复跑收藏策略。
+                </p>
+              )}
+
+              {/* 操作区: 取消 + 保存(统一提交开关+时间+窗口) */}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  onClick={() => setShowRerun(false)}
+                  className="btn-secondary"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => rerunMut.mutate(rerunDraft)}
+                  disabled={rerunMut.isPending}
+                  className="btn-primary"
+                >
+                  {rerunMut.isPending ? '保存中…' : '保存'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   )
 }
 
@@ -669,7 +833,7 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
   const indices = (data.indices ?? []).slice(0, 4)
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-card border border-border bg-surface/80 px-4 py-2.5">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 panel px-4 py-2.5">
       {/* 情绪分(带色徽章)—— 复盘的核心定调 */}
       <div className="flex items-center gap-2">
         <span
@@ -728,9 +892,10 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
 // 报告面板(流式 + 错误 + 历史/完成态)
 // ================================================================
 function ReportPanel({
-  phase, content, error, isGenerating, viewing, onCopy, onDownload, onRegenerate, reportEndRef,
+  phase, connection, content, error, isGenerating, viewing, onCopy, onDownload, onRegenerate, reportEndRef,
 }: {
   phase: ReviewPhase
+  connection: AiConnection
   content: string
   error: string
   isGenerating: boolean
@@ -740,17 +905,19 @@ function ReportPanel({
   onRegenerate: () => void
   reportEndRef: React.RefObject<HTMLDivElement>
 }) {
-  if (phase === 'error') {
+  if (phase === 'error' || phase === 'cancelled') {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 rounded-card border border-border bg-surface/80 px-6 py-14">
+      <div className="flex flex-col items-center justify-center gap-3 panel px-6 py-14">
         <div className="grid h-12 w-12 place-items-center rounded-full bg-danger/10">
           <AlertTriangle className="h-5 w-5 text-danger" />
         </div>
-        <div className="text-sm font-medium text-foreground">复盘失败</div>
-        <div className="max-w-md text-center text-xs text-secondary">{error || '请检查 AI 配置后重试'}</div>
+        <div className="text-sm font-medium text-foreground">{phase === 'cancelled' ? '已取消' : '已断开'}</div>
+        <div className="max-w-md text-center text-xs text-secondary">
+          {error || (phase === 'cancelled' ? '本次复盘已停止,不会写入历史报告' : '连接已断开,请检查 AI 配置后重试')}
+        </div>
         <button
           onClick={onRegenerate}
-          className="mt-1 inline-flex items-center gap-1.5 rounded-btn bg-accent/15 px-3 py-1.5 text-xs text-accent transition-colors hover:bg-accent/20"
+          className="btn-secondary mt-1 text-xs text-accent"
         >
           <RefreshCw className="h-3.5 w-3.5" />重新生成
         </button>
@@ -758,11 +925,11 @@ function ReportPanel({
     )
   }
 
-  if (phase === 'idle' && !content) {
+  if ((phase === 'idle' || phase === 'done') && !content) {
     return (
-      <div className="flex min-h-[28rem] flex-col items-center justify-center gap-5 rounded-card border border-border bg-surface/80 px-6 py-16">
+      <div className="flex min-h-[28rem] flex-col items-center justify-center gap-5 panel px-6 py-16">
         <div className="relative">
-          <div className="grid h-20 w-20 place-items-center rounded-2xl bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+          <div className="grid h-20 w-20 place-items-center rounded-btn border border-accent/30 bg-accent/10">
             <BookOpenCheck className="h-9 w-9 text-accent" strokeWidth={1.8} />
           </div>
           <Sparkles className="absolute -right-1 -top-1 h-5 w-5 text-accent" />
@@ -770,11 +937,11 @@ function ReportPanel({
         <div className="text-center">
           <div className="text-base font-semibold text-foreground">AI 大盘复盘</div>
           <p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-secondary">
-            一键生成今日盘后复盘报告 —— 从一句话定调到明日交易计划,
-            结构化输出可直接指导次日仓位与节奏。
+            一键生成今日盘后结构复盘 —— 从一句话定调到次日观察清单,
+            解释盘面事实,不给仓位或交易指令。
           </p>
         </div>
-        {/* 报告七节预览 —— 空状态也有内容感,暗示报告结构 */}
+        {/* 报告结构预览 —— 空状态也有内容感 */}
         <div className="mt-2 grid w-full max-w-md grid-cols-2 gap-2 sm:grid-cols-4">
           {[
             { icon: '🎯', label: '一句话定调' },
@@ -782,7 +949,7 @@ function ReportPanel({
             { icon: '🔥', label: '板块主线' },
             { icon: '💰', label: '资金情绪' },
             { icon: '📰', label: '消息催化' },
-            { icon: '🎯', label: '明日计划' },
+            { icon: '🎯', label: '观察清单' },
             { icon: '⚠️', label: '风险提示' },
           ].map((s) => (
             <div key={s.label} className="flex flex-col items-center gap-1 rounded-btn bg-elevated/40 px-2 py-2">
@@ -805,19 +972,34 @@ function ReportPanel({
   const showActions = !!content && (!isGenerating || !!viewing)
   const showViewingTag = !!viewing
   const isLoading = phase === 'loading' && !content
+  // F9: 连接状态(仅生成流视角;查看历史时不显示;cancelled 已在上方提前 return)
+  const status = isGenerating ? aiStreamStatus({ phase, connection }) : null
 
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="overflow-hidden rounded-card border border-border bg-surface/80"
+      className="overflow-hidden panel"
     >
-      <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-accent/5 to-transparent px-4 py-2.5">
+      <div className="panel-header">
         <div className="flex items-center gap-1.5">
           {isGenerating ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-accent" /> : <BookOpenCheck className="h-3.5 w-3.5 text-accent" />}
           <span className="text-xs font-medium text-foreground">
             {showViewingTag ? `历史复盘 · ${viewing!.as_of}` : isGenerating ? 'AI 正在复盘…' : '复盘报告'}
           </span>
+          {status && (
+            <span className={cn(
+              'ml-1 inline-flex items-center gap-1 text-[10px]',
+              status.tone === 'error' ? 'text-danger' : status.tone === 'active' ? 'text-accent' : 'text-muted',
+            )}>
+              <span className={cn('h-1.5 w-1.5 rounded-full',
+                status.tone === 'active' && 'bg-accent animate-pulse',
+                status.tone === 'error' && 'bg-danger',
+                status.tone === 'muted' && 'bg-muted',
+              )} />
+              {status.label}
+            </span>
+          )}
         </div>
         {showActions && (
           <div className="flex items-center gap-1">
@@ -834,7 +1016,7 @@ function ReportPanel({
         {isLoading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <div className="relative">
-              <div className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-accent/20 to-purple-500/15 border border-accent/30">
+              <div className="grid h-11 w-11 place-items-center rounded-btn border border-accent/30 bg-accent/10">
                 <Sparkles className="h-5 w-5 animate-pulse text-accent" />
               </div>
               <RefreshCw className="absolute -inset-1 h-13 w-13 animate-spin text-accent/30" style={{ animationDuration: '3s' }} />
@@ -872,8 +1054,8 @@ function HistoryPanel({
 }) {
   const empty = !generating && reports.length === 0
   return (
-    <div className="overflow-hidden rounded-card border border-border bg-surface/80">
-      <div className="flex items-center gap-1.5 border-b border-border bg-gradient-to-r from-accent/5 to-transparent px-3 py-2.5">
+    <div className="overflow-hidden panel">
+      <div className="panel-header gap-1.5">
         <History className="h-3.5 w-3.5 text-accent" />
         <span className="text-xs font-medium text-foreground">历史复盘</span>
         <span className="font-mono text-[10px] text-muted">({reports.length})</span>
@@ -963,5 +1145,262 @@ function HistoryPanel({
         )}
       </div>
     </div>
+  )
+}
+
+// ================================================================
+// 纪律红旗 —— 机械检测的交易违规记录(纯代码判定,无 LLM)
+//
+// 数据:GET /api/trading/red-flags(按 tradeId 分组,仅含有红旗的笔)
+//      + GET /api/trading/trades(补股票名称 / 状态)
+// 四类红旗(后端 services/trading/red_flags.py 定义,这里只展示):
+//   放宽止损 stop_loss_widened {old,new,costPrice} / 亏损加仓 loss_add {price,costPrice}
+//   绕过门禁 gate_bypassed {kind} / 审计断链 audit_missing {kind}
+// 红旗与盈亏无关 —— 赚钱的违规也照记。
+// ================================================================
+const FLAG_META: Record<string, { label: string; badge: string }> = {
+  stop_loss_widened: { label: '放宽止损', badge: 'bg-danger/10 text-danger' },
+  loss_add:          { label: '亏损加仓', badge: 'bg-warning/10 text-warning' },
+  gate_bypassed:     { label: '绕过门禁', badge: 'bg-accent/10 text-accent' },
+  audit_missing:     { label: '审计断链', badge: 'bg-muted/10 text-muted' },
+  // P6 新类型
+  horizon_exceeded:  { label: '期限超限', badge: 'bg-warning/10 text-warning' },
+  size_over_limit:   { label: '仓位超限', badge: 'bg-danger/10 text-danger' },
+  gate_proliferation:{ label: '门禁膨胀', badge: 'bg-muted/15 text-secondary' },
+}
+
+const EVENT_KIND_LABEL: Record<string, string> = {
+  open: '开仓', prepare: '建仓准备', revise: '修订', fill: '成交',
+  add: '调大计划', trim: '缩减计划', tp: '止盈', sl: '止损',
+  adjust: '调整', close: '平仓', void: '作废计划',
+}
+
+const TRADE_STATUS_BADGE: Record<string, string> = {
+  '计划中': 'bg-warning/10 text-warning',
+  '建仓中': 'bg-accent/10 text-accent',
+  '持仓中': 'bg-accent/10 text-accent',
+  '已平仓': 'bg-muted/10 text-muted',
+  '已作废': 'bg-muted/10 text-muted',
+}
+
+function fmtPrice(v: number | undefined): string {
+  return v == null || Number.isNaN(v) ? '—' : v.toFixed(2)
+}
+
+function flagDetail(f: RedFlag): string {
+  switch (f.type) {
+    case 'stop_loss_widened':
+      return `止损 ${fmtPrice(f.old)} → ${fmtPrice(f.new)} · 当时成本 ${fmtPrice(f.costPrice)}`
+    case 'loss_add':
+      return `加仓价 ${fmtPrice(f.price)} 低于当时成本 ${fmtPrice(f.costPrice)}`
+    case 'gate_bypassed':
+      return `${EVENT_KIND_LABEL[f.kind ?? ''] ?? f.kind ?? '未知'} 事件绕过门禁检查`
+    case 'audit_missing':
+      return `${EVENT_KIND_LABEL[f.kind ?? ''] ?? f.kind ?? '未知'} 事件缺审计留痕`
+    case 'horizon_exceeded':
+    case 'size_over_limit':
+    case 'gate_proliferation':
+      // P6 新类型:detail 为后端预格式化文案,直接展示
+      return typeof f.detail === 'string' && f.detail ? f.detail : f.type
+    default:
+      return f.type
+  }
+}
+
+// size_over_limit 的 breached[] chip 文案(与后端 _LABELS_LIMIT 对齐)
+const BREACH_LABEL: Record<string, string> = { account: '账户上限', strategy: '策略上限' }
+
+// 盘后状态驱动归因摘要(立即跑按钮触发)
+function AutoReviewSummary({ result }: { result: AutoReviewResult }) {
+  const errs = result.errors?.length ?? 0
+  const blocked = result.code === 'blocked_by_dependency'
+  const warn = blocked || errs > 0
+  return (
+    <div className={cn(
+      'mb-2 rounded-btn border px-3 py-2 text-[11px] leading-relaxed',
+      warn ? 'border-warning/30 bg-warning/5' : 'border-accent/30 bg-accent/5',
+    )}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-medium text-foreground">
+        <span>盘后归因 · {result.level}</span>
+        <span className="text-secondary">候选 {result.candidates}</span>
+        <span className="text-secondary">归因 {result.autopsied}</span>
+        <span className="text-secondary">跳过 {result.skipped}</span>
+        {errs > 0 && <span className="text-warning">{errs} 笔失败</span>}
+      </div>
+      {blocked && <p className="mt-1 text-warning">{result.detail ?? 'AI 未配置,无法执行归因分析'}</p>}
+      {!blocked && errs > 0 && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-warning/90">
+          {(result.errors ?? []).map((e, i) => <li key={i}>{e.tradeId}: {e.error}</li>)}
+        </ul>
+      )}
+      {!blocked && errs === 0 && result.level === 'L0' && (
+        <p className="mt-0.5 text-muted">无新红旗且无新平仓,零 AI 调用。</p>
+      )}
+    </div>
+  )
+}
+
+function RedFlagsPanel() {
+  const flagsQuery = useQuery({
+    queryKey: ['trading-red-flags'],
+    queryFn: () => tradingGetRedFlags(),
+    staleTime: 30_000,
+  })
+  const tradesQuery = useQuery({
+    queryKey: ['trading-trades'],
+    queryFn: () => tradingListTrades(),
+    staleTime: 30_000,
+  })
+
+  // 盘后状态驱动 AI 归因(L0/L1);结果内联摘要展示
+  const [autoResult, setAutoResult] = useState<AutoReviewResult | null>(null)
+  const qc = useQueryClient()
+  const runAutoMut = useMutation({
+    mutationFn: () => tradingRunAutoReview(),
+    onSuccess: (data) => {
+      setAutoResult(data)
+      // 归因可能改写了 autopsy,失效相关缓存
+      qc.invalidateQueries({ queryKey: ['trading-red-flags'] })
+      const errs = data.errors?.length ?? 0
+      if (data.level === 'L0') {
+        toast('盘后归因:无新候选,零 AI 调用', 'success')
+      } else if (errs > 0) {
+        toast(`盘后归因完成,但 ${errs} 笔归因失败`, 'error')
+      } else {
+        toast(`盘后归因完成:候选 ${data.candidates} · 归因 ${data.autopsied}`, 'success')
+      }
+    },
+    onError: () => { /* request() 已 toast */ },
+  })
+
+  if (flagsQuery.isLoading && !flagsQuery.data) {
+    return (
+      <div className="grid h-64 place-items-center panel">
+        <RefreshCw className="h-4 w-4 animate-spin text-muted" />
+      </div>
+    )
+  }
+
+  if (flagsQuery.isError) {
+    return (
+      <div className="panel">
+        <EmptyState icon={Flag} title="红旗数据加载失败" hint="请确认后端已启动,稍后点击刷新重试" />
+      </div>
+    )
+  }
+
+  const groups = flagsQuery.data?.flags ?? {}
+  const tradeById = new Map((tradesQuery.data?.trades ?? []).map(t => [t.tradeId, t]))
+  // 组按最新红旗时间倒序;组内保持事件先后(后端已按事件顺序输出)
+  const entries = Object.entries(groups)
+    .map(([tradeId, flags]) => ({
+      tradeId,
+      flags,
+      latest: flags.reduce((m, f) => (f.ts > m ? f.ts : m), ''),
+    }))
+    .sort((a, b) => b.latest.localeCompare(a.latest))
+  const total = entries.reduce((n, e) => n + e.flags.length, 0)
+
+  return (
+    <ReviewCard
+      title="纪律红旗"
+      icon={<Flag className="h-3.5 w-3.5 text-danger" />}
+      hint="赚钱的违规也会记录 · 红旗与盈亏无关"
+      right={
+        <div className="flex items-center gap-2">
+          {total > 0 && (
+            <span className="font-mono text-[10px] tabular-nums text-danger">{total} 条</span>
+          )}
+          <button
+            onClick={() => runAutoMut.mutate()}
+            disabled={runAutoMut.isPending}
+            className="btn-secondary !h-7 text-[11px]"
+            title="立即跑盘后状态驱动归因(L0/L1)"
+          >
+            {runAutoMut.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+            立即跑盘后归因
+          </button>
+          <button
+            onClick={() => { flagsQuery.refetch(); tradesQuery.refetch() }}
+            disabled={flagsQuery.isFetching}
+            className="btn-secondary !h-7 text-[11px]"
+            title="刷新红旗数据"
+          >
+            <RefreshCw className={cn('h-3 w-3', flagsQuery.isFetching && 'animate-spin')} />刷新
+          </button>
+        </div>
+      }
+    >
+      {/* 盘后归因摘要(最近一次) */}
+      {autoResult && <AutoReviewSummary result={autoResult} />}
+      {entries.length === 0 ? (
+        <EmptyState
+          icon={Flag}
+          title="无红旗记录"
+          hint="所有交易都守住了纪律:没放宽止损、没亏损加仓、没绕过门禁、审计链完整"
+        />
+      ) : (
+        <div className="divide-y divide-border">
+          {entries.map(({ tradeId, flags }) => {
+            const isGlobal = tradeId === 'global'
+            const trade = tradeById.get(tradeId)
+            return (
+              <div key={tradeId} className="px-3.5 py-2.5">
+                {/* 组头:全局组显示「全局」而非股票 */}
+                <div className="flex items-center gap-2">
+                  {isGlobal ? (
+                    <>
+                      <span className="text-xs font-medium text-foreground">全局</span>
+                      <span className="rounded px-1.5 py-0.5 text-[10px] bg-muted/15 text-secondary">全局级</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xs font-medium text-foreground">{trade?.name ?? tradeId}</span>
+                      {trade?.symbol && (
+                        <span className="font-mono text-[10px] text-muted">{trade.symbol}</span>
+                      )}
+                      {trade?.status && (
+                        <span className={cn('rounded px-1.5 py-0.5 text-[10px]', TRADE_STATUS_BADGE[trade.status] ?? 'bg-muted/10 text-muted')}>
+                          {trade.status}
+                        </span>
+                      )}
+                    </>
+                  )}
+                  <span className="ml-auto font-mono text-[10px] tabular-nums text-muted">
+                    {flags.length} 条
+                  </span>
+                </div>
+                <ul className="mt-1.5 space-y-1">
+                  {flags.map((f, i) => {
+                    const meta = FLAG_META[f.type] ?? { label: f.type, badge: 'bg-muted/10 text-muted' }
+                    return (
+                      <li key={`${f.ts}-${i}`} className="flex flex-wrap items-center gap-2 text-[11px]">
+                        <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', meta.badge)}>
+                          {meta.label}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted">
+                          {/* 交易域 ts 为 "%Y-%m-%d %H:%M"(backend now_str),零填充可直接比序;显示裁掉年份 */}
+                          {/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(f.ts) ? f.ts.slice(5) : f.ts}
+                        </span>
+                        <span className="text-secondary">{flagDetail(f)}</span>
+                        {Array.isArray(f.breached) && f.breached.length > 0 && (
+                          <span className="flex flex-wrap items-center gap-1">
+                            {f.breached.map(b => (
+                              <span key={b} className="rounded bg-danger/10 px-1 py-0.5 text-[9px] font-medium text-danger">
+                                {BREACH_LABEL[b] ?? b}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </ReviewCard>
   )
 }

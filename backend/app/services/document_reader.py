@@ -15,6 +15,7 @@ MAX_BYTES = 5 * 1024 * 1024
 MAX_CHARS = 20_000
 MAX_PROMPT_DOCUMENT_CHARS = 20_000
 TABLE_PREVIEW_ROWS = 50
+MAX_PDF_PAGES = 200
 
 
 @dataclass
@@ -32,11 +33,16 @@ class DocumentEnvelope:
 
 
 def read_document(filename: str, data: bytes) -> DocumentEnvelope:
-    warnings = []
+    warnings: list[str] = []
+    suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt"
+    input_truncated = False
     if len(data) > MAX_BYTES:
+        input_truncated = True
+        if suffix == "pdf":
+            warnings.append("pdf exceeds max bytes; extraction skipped")
+            return DocumentEnvelope(filename, "pdf", filename, "", 0, True, warnings)
         data = data[:MAX_BYTES]
         warnings.append("file truncated to max bytes")
-    suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else "txt"
     if suffix in {"txt", "md"}:
         text = data.decode("utf-8", errors="replace")
         kind = "markdown" if suffix == "md" else "text"
@@ -47,15 +53,26 @@ def read_document(filename: str, data: bytes) -> DocumentEnvelope:
         text = _xlsx_preview(data)
         kind = "xlsx"
     elif suffix == "pdf":
-        text = ""
         kind = "pdf"
-        warnings.append("pdf text extraction unsupported")
+        if not data.startswith(b"%PDF-"):
+            text = ""
+            warnings.append("declared .pdf but missing PDF magic header")
+        else:
+            text = _extract_pdf_text(data, warnings)
     else:
         text = data.decode("utf-8", errors="replace")
         kind = "text"
         warnings.append(f"unsupported extension treated as text: {suffix}")
-    text, truncated = _truncate(text, warnings)
-    return DocumentEnvelope(filename, kind, filename, text, len(text), truncated, warnings)
+    text, text_truncated = _truncate(text, warnings)
+    return DocumentEnvelope(
+        filename,
+        kind,
+        filename,
+        text,
+        len(text),
+        input_truncated or text_truncated,
+        warnings,
+    )
 
 
 def read_url(url: str) -> DocumentEnvelope:
@@ -98,6 +115,78 @@ def _truncate(text: str, warnings: list[str]) -> tuple[str, bool]:
         return text, False
     warnings.append("text truncated to max chars")
     return text[:MAX_CHARS], True
+
+
+def _import_pdfium():
+    import pypdfium2 as pdfium
+
+    return pdfium
+
+
+def _extract_pdf_text(data: bytes, warnings: list[str]) -> str:
+    """Extract a bounded PDF text layer entirely in memory.
+
+    Image-only pages are reported but never OCRed. The uploaded bytes are not
+    persisted, and extraction stops once the prompt text budget is exceeded.
+    """
+    try:
+        pdfium = _import_pdfium()
+    except ImportError:
+        warnings.append("pdf extraction unavailable: install pypdfium2")
+        return ""
+
+    chunks: list[str] = []
+    empty_pages: list[int] = []
+    try:
+        with pdfium.PdfDocument(data) as document:
+            total_pages = len(document)
+            page_count = min(total_pages, MAX_PDF_PAGES)
+            if total_pages > MAX_PDF_PAGES:
+                warnings.append(
+                    f"pdf page limit applied: read {MAX_PDF_PAGES} of {total_pages} pages"
+                )
+            if total_pages == 0:
+                warnings.append("pdf has no pages")
+                return ""
+
+            extracted_chars = 0
+            for page_index in range(page_count):
+                try:
+                    page = document[page_index]
+                    try:
+                        text_page = page.get_textpage()
+                        try:
+                            page_text = text_page.get_text_bounded().strip()
+                        finally:
+                            text_page.close()
+                    finally:
+                        page.close()
+                except Exception as exc:  # noqa: BLE001
+                    warnings.append(
+                        f"pdf page {page_index + 1} text extraction failed: "
+                        f"{type(exc).__name__}"
+                    )
+                    continue
+
+                if not page_text:
+                    empty_pages.append(page_index + 1)
+                    continue
+                chunk = f"--- Page {page_index + 1} ---\n{page_text}"
+                chunks.append(chunk)
+                extracted_chars += len(chunk) + 2
+                if extracted_chars > MAX_CHARS:
+                    break
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"pdf text extraction failed: {type(exc).__name__}")
+        return ""
+
+    if empty_pages:
+        preview = ",".join(str(page) for page in empty_pages[:20])
+        suffix = f" (+{len(empty_pages) - 20} more)" if len(empty_pages) > 20 else ""
+        warnings.append(
+            f"pdf pages with no extractable text (OCR disabled): {preview}{suffix}"
+        )
+    return "\n\n".join(chunks)
 
 
 def _csv_preview(data: bytes) -> str:

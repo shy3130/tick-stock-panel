@@ -4,12 +4,13 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import secrets_store
 from app.data_providers.capability_gate import (
@@ -99,7 +100,13 @@ class AiProfileIn(BaseModel):
 def save_ai_settings(req: AiSettingsIn) -> dict:
     """保存 AI 配置（全部持久化到 secrets.json）"""
     from app.config import settings
-    from app.services.ai_provider import ai_configured, current_ai_model, current_ai_provider, current_codex_command, normalize_codex_command
+    from app.services.ai_provider import (
+        ai_configured,
+        current_ai_model,
+        current_ai_provider,
+        current_codex_command,
+        normalize_codex_command,
+    )
 
     updates: dict = {}
     if req.provider:
@@ -166,8 +173,45 @@ def clear_ai_settings() -> dict:
 
 @router.get("/ai/profiles")
 def list_ai_profiles() -> dict:
-    from app.services import ai_profiles
-    return {"profiles": ai_profiles.list_profiles_masked(), "default_id": ai_profiles.get_default_profile_id()}
+    from app.services import ai_profiles, ai_routing
+    from app.services.ai_usage_snapshot import usage_snapshot
+
+    registry = ai_routing.get_health_registry()
+    profiles = ai_profiles.list_profiles_masked()
+    # M9: 只读 health snapshot, 无凭据/无 prompt; 每个 profile 附加 in-memory 健康态。
+    for p in profiles:
+        p["health"] = registry.get_health(p["id"])
+    return {
+        "profiles": profiles,
+        "default_id": ai_profiles.get_default_profile_id(),
+        "route_policy": ai_routing.load_route_policy().__dict__,
+        "usage_snapshot": usage_snapshot(),
+    }
+
+
+class AiRoutePolicyIn(BaseModel):
+    allow_profile_fallback: bool = False
+    fallback_profile_ids: list[str] = []
+
+
+@router.put("/ai/route-policy")
+def update_ai_route_policy(req: AiRoutePolicyIn) -> dict:
+    """保存 AI profile 受控 fallback 策略。
+
+    默认关闭；仅用户显式开启后才按 allowlist 顺序切换。
+    不存在/非法 profile id 直接 400，不做静默过滤。
+    """
+    from app.services import ai_profiles, ai_routing
+
+    available = set(ai_profiles.list_profile_ids())
+    try:
+        policy = ai_routing.validate_route_policy(
+            req.allow_profile_fallback, req.fallback_profile_ids, available
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    saved = ai_routing.save_route_policy(policy)
+    return {"route_policy": saved.__dict__}
 
 
 @router.post("/ai/profiles")
@@ -212,18 +256,49 @@ def set_default_ai_profile(profile_id: str) -> dict:
 
 @router.post("/ai/profiles/{profile_id}/test")
 async def test_ai_profile(profile_id: str) -> dict:
-    from app.services.ai_provider import generate_ai_text
+    """显式探测单个 AI profile；不走 fallback，避免把备用源成功误报为目标健康。"""
+    from app.log_redaction import redact_text
+    from app.services import ai_profiles, ai_routing
+    from app.services.ai_provider import generate_ai_text_with_meta
+
+    if ai_profiles.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="AI 配置不存在")
+
+    registry = ai_routing.get_health_registry()
+    started = time.monotonic()
     try:
-        text = await generate_ai_text(
+        response = await generate_ai_text_with_meta(
             [{"role": "user", "content": "Reply exactly: OK"}],
             profile_id=profile_id,
             temperature=0,
             max_tokens=8,
             timeout=15,
+            allow_fallback=False,
         )
-        return {"ok": True, "response": text[:80]}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": str(e)}
+        latency_ms = round((time.monotonic() - started) * 1000, 1)
+        registry.record_success(profile_id, latency_ms)
+        return {
+            "ok": True,
+            "response": response.text[:80],
+            "provider": response.provider,
+            "model": response.model,
+            "latency_ms": latency_ms,
+            "usage": response.usage.model_dump(mode="json"),
+            "health": registry.get_health(profile_id),
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        latency_ms = round((time.monotonic() - started) * 1000, 1)
+        category = ai_routing.classify_provider_error(exc)
+        registry.record_failure(profile_id, category)
+        return {
+            "ok": False,
+            "error": redact_text(exc),
+            "category": category,
+            "latency_ms": latency_ms,
+            "health": registry.get_health(profile_id),
+        }
 
 
 # ===== 偏好设置 =====
@@ -279,7 +354,6 @@ def get_preferences() -> dict:
         "pipeline_pull_etf": preferences.get_pipeline_pull_etf(),
         "pipeline_pull_index": preferences.get_pipeline_pull_index(),
         "pipeline_pull_hk": preferences.get_pipeline_pull_hk(),
-        "pipeline_index_symbols": preferences.get_pipeline_index_symbols(),
         "pipeline_schedule": preferences.get_pipeline_schedule(),
         "instruments_schedule": preferences.get_instruments_schedule(),
         "enriched_batch_size": preferences.get_enriched_batch_size(),
@@ -303,6 +377,11 @@ def get_preferences() -> dict:
         "depth_finalize_time": preferences.get_depth_finalize_time(),
         "review_schedule": preferences.get_review_schedule(),
         "review_push_channels": preferences.get_review_push_channels(),
+        "tradingAutoReview": preferences.get_trading_auto_review(),
+        "structured_plan_check_enabled": preferences.get_structured_plan_check_enabled(),
+        "external_fallback_enabled": preferences.get_external_fallback_enabled(),
+        "external_fallback_scopes": preferences.get_external_fallback_scopes(),
+        "backtest_auto_rerun": _get_backtest_auto_rerun_pref(),
     }
 
 
@@ -465,16 +544,6 @@ def update_realtime_quote_scope(req: RealtimeQuoteScopePrefs) -> dict:
     return preferences.set_realtime_quote_scope(cfg)
 
 
-class RealtimeWatchlistPrefs(BaseModel):
-    symbols: list[str] = []
-
-
-@router.put("/preferences/realtime-watchlist")
-def update_realtime_watchlist(req: RealtimeWatchlistPrefs) -> dict:
-    """兼容旧入口；Free 实时标的由自选页前 5 个决定。"""
-    from app.services import preferences
-    symbols = preferences.set_realtime_watchlist_symbols(req.symbols)
-    return {"realtime_watchlist_symbols": symbols}
 
 
 class IndicesNavPinnedPrefs(BaseModel):
@@ -545,17 +614,6 @@ def update_pipeline_pull_types(req: PipelinePullTypesIn) -> dict:
     return preferences.set_pipeline_pull_types(cfg)
 
 
-class PipelineIndexSymbolsIn(BaseModel):
-    """指数自定义拉取代码(逗号/换行/空格分隔,空串表示全量)。"""
-    symbols: str = ""
-
-
-@router.put("/preferences/pipeline-index-symbols")
-def update_pipeline_index_symbols(req: PipelineIndexSymbolsIn) -> dict:
-    """保存指数自定义拉取代码。"""
-    from app.services import preferences
-    symbols = preferences.set_pipeline_index_symbols(req.symbols)
-    return {"pipeline_index_symbols": symbols}
 
 
 class QuoteIntervalIn(BaseModel):
@@ -588,6 +646,8 @@ class WebhookChannelPrefsIn(BaseModel):
     url: str = ""
     secret: str = ""
     nickname: str = ""
+    token: str = ""
+    clear_token: bool = False
 
 
 @router.put("/preferences/feishu-webhook")
@@ -597,8 +657,7 @@ def update_feishu_webhook(req: FeishuWebhookPrefsIn) -> dict:
     - url: 传入空串表示清空配置; 非空则需为合法的飞书自定义机器人地址。
     - secret: 机器人启用了「签名校验」时填密钥, 留空表示不验签。
     """
-    from app.services import preferences
-    from app.services import webhook_adapter
+    from app.services import preferences, webhook_adapter
 
     url = (req.url or "").strip()
     if url and not webhook_adapter.is_valid_feishu_url(url):
@@ -615,8 +674,7 @@ def update_feishu_webhook(req: FeishuWebhookPrefsIn) -> dict:
 @router.put("/preferences/webhook-channel")
 def update_webhook_channel(req: WebhookChannelPrefsIn) -> dict:
     """保存一个 Webhook 通道配置。"""
-    from app.services import preferences
-    from app.services import webhook_adapter
+    from app.services import preferences, webhook_adapter
 
     channel = (req.channel or "").strip().lower()
     url = (req.url or "").strip()
@@ -641,9 +699,8 @@ class WebhookEnabledDefaultIn(BaseModel):
 
 @router.put("/preferences/webhook-enabled-default")
 def update_webhook_enabled_default(req: WebhookEnabledDefaultIn) -> dict:
-    """新建监控规则时是否默认勾选「飞书推送」。
+    """设置新建监控规则是否默认启用已配置的 Webhook 推送。
 
-    数据模型当前只有飞书一个可用渠道 (QMT/ptrade 待定),故此处仅一个布尔。
     单条规则仍可在规则编辑页独立修改此项。
     """
     from app.services import preferences
@@ -657,7 +714,7 @@ def update_quote_interval(req: QuoteIntervalIn, request: Request) -> dict:
     """更新行情轮询间隔。按档位自动 clamp。"""
     qs = getattr(request.app.state, "quote_service", None)
     if not qs:
-        return {"interval": req.interval, "min_interval": qs.get_min_interval(), "max_interval": 60.0}
+        return {"interval": req.interval, "min_interval": 5.0, "max_interval": 60.0}
     clamped = qs.set_interval(req.interval)
     return {
         "interval": clamped,
@@ -861,7 +918,7 @@ def update_review_schedule(req: ReviewScheduleIn, request: Request) -> dict:
     sched = preferences.set_review_schedule(req.enabled, req.hour, req.minute)
 
     # 动态操作 APScheduler job
-    from app.jobs.daily_pipeline import _register_review_job, REVIEW_JOB_ID
+    from app.jobs.daily_pipeline import REVIEW_JOB_ID, _register_review_job
     scheduler = getattr(request.app.state, "scheduler", None)
     if scheduler:
         if sched["enabled"]:
@@ -877,8 +934,64 @@ def update_review_schedule(req: ReviewScheduleIn, request: Request) -> dict:
     return sched
 
 
+def _get_backtest_auto_rerun_pref() -> dict:
+    """读取回测定时复跑偏好 (F11)。聚合响应与本模块端点共用同一规范化入口。"""
+    from app.jobs.backtest_favorite_rerun import get_backtest_auto_rerun
+    return get_backtest_auto_rerun()
+
+
+class BacktestAutoRerunIn(BaseModel):
+    enabled: bool
+    hour: int = Field(ge=0, le=23)
+    minute: int = Field(ge=0, le=59)
+    window_days: int = Field(ge=30, le=365)
+
+
+@router.get("/preferences/backtest-auto-rerun")
+def get_backtest_auto_rerun_prefs() -> dict:
+    """返回回测定时复跑偏好 {enabled, hour, minute, window_days}。"""
+    return _get_backtest_auto_rerun_pref()
+
+
+@router.post("/preferences/backtest-auto-rerun")
+def update_backtest_auto_rerun(req: BacktestAutoRerunIn, request: Request) -> dict:
+    """保存回测定时复跑偏好并立即 reschedule/移除 APScheduler job (F11)。
+
+    - enabled=True: 注册/更新 job (工作日到点用滚动窗口复跑收藏的策略 Run)
+    - enabled=False: 移除 job; job 已在线程池中运行时靠运行时开关兜底 (零开销返回)
+    - 校验: hour 0-23 / minute 0-59 / window_days 30-365, 由 Pydantic 422 强制。
+    """
+    from app.jobs.backtest_favorite_rerun import set_backtest_auto_rerun
+
+    saved = set_backtest_auto_rerun(
+        req.enabled, req.hour, req.minute, req.window_days
+    )
+
+    # 动态操作 APScheduler job (跟随 update_review_schedule 先例)
+    from app.jobs.daily_pipeline import (
+        BACKTEST_RERUN_JOB_ID,
+        _register_backtest_favorite_rerun_job,
+    )
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler:
+        if saved["enabled"]:
+            _register_backtest_favorite_rerun_job(
+                scheduler, request.app.state.repo, saved["hour"], saved["minute"]
+            )
+            logger.info("backtest_favorite_rerun enabled @%02d:%02d mon-fri",
+                        saved["hour"], saved["minute"])
+        else:
+            try:
+                scheduler.remove_job(BACKTEST_RERUN_JOB_ID)
+                logger.info("backtest_favorite_rerun disabled (job removed)")
+            except Exception:
+                pass  # job 本就不存在(从未开过), 无需处理
+
+    return saved
+
+
 class ReviewPushIn(BaseModel):
-    channels: list[str]  # 多选: ['feishu'] 等; 空数组=不推送。微信等开发中
+    channels: list[str]  # 多选；空数组表示不推送，写入时按支持渠道白名单过滤。
 
 
 @router.put("/preferences/review-push")
@@ -892,3 +1005,57 @@ def update_review_push(req: ReviewPushIn) -> dict:
     from app.services import preferences
     saved = preferences.set_review_push_channels(req.channels)
     return {"review_push_channels": saved}
+
+
+class TradingAutoReviewIn(BaseModel):
+    tradingAutoReview: bool
+
+
+@router.put("/preferences/trading-auto-review")
+def update_trading_auto_review(req: TradingAutoReviewIn) -> dict:
+    """保存交易自动复盘开关 (P6.4 盘后状态驱动 AI 归因)。
+
+    纯偏好写入; APScheduler job 在 start_scheduler 启动时注册, 到点读此开关决定
+    是否执行实质逻辑 (false=零开销直接返回)。手动触发走 POST /api/trading/review/auto-run。
+    """
+    from app.services import preferences
+    saved = preferences.set_trading_auto_review(req.tradingAutoReview)
+    return {"tradingAutoReview": saved}
+
+
+class StructuredPlanCheckIn(BaseModel):
+    enabled: bool
+
+
+@router.put("/preferences/structured-plan-check")
+def update_structured_plan_check(req: StructuredPlanCheckIn) -> dict:
+    """保存结构化计划检查开关 (P4 默认关闭)。
+
+    纯偏好写入。关闭时计划检查端点返回 HTTP 403、零 AI 调用。
+    """
+    from app.services import preferences
+    saved = preferences.set_structured_plan_check_enabled(req.enabled)
+    return {"structured_plan_check_enabled": saved}
+
+
+class ExternalFallbackPrefsIn(BaseModel):
+    external_fallback_enabled: bool = False
+    external_fallback_scopes: list[str] = []
+
+
+@router.put("/preferences/external-fallback")
+def update_external_fallback(req: ExternalFallbackPrefsIn) -> dict:
+    """保存受控外部 fallback 偏好 (P1 realtime, 默认关闭)。
+
+    仅 realtime/depth scope 白名单内合法; 非 scope 直接 400, 不做静默过滤。
+    返回清洗后的偏好 {external_fallback_enabled, external_fallback_scopes}。
+    启用不触发任何网络; fallback 仅在本地 realtime 快照缺失/陈旧且为交易日时触发。
+    """
+    from app.services import preferences
+    try:
+        enabled, scopes = preferences.set_external_fallback(
+            req.external_fallback_enabled, req.external_fallback_scopes
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"external_fallback_enabled": enabled, "external_fallback_scopes": scopes}

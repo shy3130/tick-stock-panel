@@ -36,6 +36,30 @@ OPS = {">", ">=", "<", "<=", "==", "!="}
 # 布尔信号列前缀 (op=truth 时 field 取这些)
 _SIGNAL_PREFIXES = ("signal_", "csg_")
 
+# 指数评估/校验时需隐藏的信号字段: 涨跌停/连板类 (指数无涨跌停) +
+# 分时穿越类 (指数无本地分钟K, 会静默不触发)。与前端 INDEX_HIDDEN_SIGNALS 对齐。
+INTRADAY_SIGNAL_FIELDS = frozenset({
+    "signal_intraday_avg_cross_up",
+    "signal_intraday_avg_cross_down",
+    "signal_intraday_zero_cross_up",
+    "signal_intraday_zero_cross_down",
+})
+
+
+def _is_index_hidden_field(field: str) -> bool:
+    """指数应隐藏的信号字段: 名字含 limit (涨跌停/炸板) 或属分时穿越信号。"""
+    return "limit" in field or field in INTRADAY_SIGNAL_FIELDS
+
+
+def uses_intraday_signals(rule: dict) -> bool:
+    """规则是否引用了分时穿越信号 (op=truth 且 field 属 INTRADAY_SIGNAL_FIELDS)。"""
+    return any(
+        isinstance(c, dict)
+        and c.get("op") == "truth"
+        and c.get("field") in INTRADAY_SIGNAL_FIELDS
+        for c in rule.get("conditions", [])
+    )
+
 
 # ── 持久化 (镜像 custom_signals.py) ─────────────────────
 def _dir(data_dir: Path) -> Path:
@@ -135,6 +159,13 @@ def validate(rule: dict) -> None:
                 raise ValueError(f"第 {i+1} 个条件: op {op!r} 非法 (应为 truth 或 {OPS})")
 
     # scope 校验
+    if rule.get("scope", "symbols") == "sector":
+        # sector 精确过滤尚未实现 (需 ext_data 板块 JOIN); 禁止保存,
+        # 避免历史/误建规则在引擎里被当作全市场执行 (fail-closed)。
+        raise ValueError(
+            "scope=sector 当前不可用: 尚未提供精确板块过滤,"
+            "为防止被当作全市场执行已禁止保存。请改用「指定股票」或「全市场」。"
+        )
     if rule.get("scope", "symbols") not in SCOPES:
         raise ValueError(f"scope 必须是 {SCOPES} 之一")
     if rule.get("scope") == "symbols":

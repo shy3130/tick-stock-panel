@@ -1,0 +1,19 @@
+{
+  "name": "pi-agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pi Agent Harness pilot worker: per-attempt Node process speaking line-delimited JSON IPC with the Python runtime.",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "start": "node src/worker.js",
+    "test": "node --test test/worker.test.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.84.2",
+    "@earendil-works/pi-ai": "0.84.2",
+    "typebox": "1.3.7"
+  }
+}

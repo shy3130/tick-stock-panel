@@ -72,6 +72,13 @@ class DepthService:
         self._sealed_fetched_ts: float = 0.0   # 上次拉取的 perf_counter
         self._sealed_fetched_at: float = 0.0   # 上次拉取的 wall-clock 时间戳
         self._persisted_date: date | None = None  # 已落盘的日期
+        self._sealed_source: str = "provider"  # 'provider' | 'tencent_quote' (纵深防御写守卫)
+        # 外部 fallback 展示缓存(独立于 _sealed_cache):
+        # provider 无 depth 能力且外部 fallback 命中时, 派生结果仅写此处 —
+        # 带 source/degraded 标记供"当前展示响应", 绝不进入 get_sealed_map 消费的 sealed cache。
+        self._external_display_cache: dict[str, dict] = {}
+        self._external_display_date: date | None = None
+        self._external_display_fetched_ts: float = 0.0
 
         # 系统接管状态(防通知刷屏)
         self._last_taken_over: bool | None = None
@@ -93,7 +100,7 @@ class DepthService:
 
     def boot_check(self) -> None:
         """启动补跑: 当天 depth5 文件不存在则 finalize 一次; 已存在则恢复内存缓存。"""
-        if not self._has_capability():
+        if not self._has_depth_source():
             logger.info("depth sealed: 无 DEPTH5_BATCH 能力, 跳过启动补跑")
             return
         today = date.today()
@@ -142,7 +149,7 @@ class DepthService:
         """启动盘中轮询线程(连板梯队监控开启 + 有能力 + 交易时段)。"""
         if self._running:
             return
-        if not self._has_capability():
+        if not self._has_depth_source():
             return
         from app.services import preferences
         if not preferences.get_limit_ladder_monitor_enabled():
@@ -173,7 +180,7 @@ class DepthService:
         不受监控开关限制 — 用户可随时手动修正一次。
         返回 {"ok": bool, "count": int, "msg": str}
         """
-        if not self._has_capability():
+        if not self._has_depth_source():
             return {"ok": False, "count": 0, "msg": "当前数据源无五档盘口能力"}
         try:
             self._fetch_and_seal(persist=True)  # 落盘, 刷新页面不丢
@@ -220,7 +227,7 @@ class DepthService:
             return
 
         # 拉 depth(涨跌停一次拉, 按 capset batch 切片)
-        depth_data = self._call_depth_batch(all_syms)
+        depth_data, source = self._call_depth_batch(all_syms)
         if not depth_data:
             logger.warning("depth sealed: depth.batch 返回空")
             return
@@ -251,12 +258,28 @@ class DepthService:
             }
             new_cache[sym] = entry
 
+        if source == "tencent_quote":
+            # 外部 fallback 派生结果: 仅写展示缓存(带 source/degraded 标记),
+            # 绝不进入 get_sealed_map 消费的本地 sealed cache
+            # (避免无 provenance 影响总览/研究)。不落盘, 不动 sealed cache。
+            with self._lock:
+                self._external_display_cache = new_cache
+                self._external_display_date = enriched_date
+                self._external_display_fetched_ts = now_perf
+            logger.info(
+                "depth external display(degraded): %d 只 (涨停%d/跌停%d) 日期=%s",
+                len(new_cache), len(syms_up), len(syms_down), enriched_date,
+            )
+            # 展示缓存已更新: 通知 SSE 推 depth_updated。
+            self._notify_depth_updated(len(new_cache))
+            return
+
         with self._lock:
             self._sealed_cache = new_cache
             self._sealed_ready = True
             self._sealed_date = enriched_date  # 记录数据对应的交易日(可能是昨天,如休市)
             self._sealed_fetched_ts = now_perf
-            self._sealed_fetched_at = now_wall
+            self._sealed_source = source
 
         logger.info("depth sealed: 拉取 %d 只 (涨停%d/跌停%d) 日期=%s%s",
                     len(new_cache), len(syms_up), len(syms_down),
@@ -268,8 +291,21 @@ class DepthService:
         if persist and enriched_date:
             self._persist(enriched_date)
 
-    def _call_depth_batch(self, symbols: list[str]) -> dict:
-        """调 provider.get_depth, 按 capset 的 batch 切片 + 节流。返回 {symbol: MarketDepth}。"""
+    def _call_depth_batch(self, symbols: list[str]) -> tuple[dict, str]:
+        """调数据源拉五档, 返回 (depth_map, source)。
+
+        source ∈ {'provider', 'tencent_quote'}: provider 有能力走本地 (可落盘);
+        无能力时走受控外部 fallback (默认关闭 → 返回空 map, source='tencent_quote',
+        depth_service 主守卫据此拒绝落盘)。
+        """
+        provider = _get_data_provider()
+        if getattr(provider.capabilities, "depth", False):
+            return self._call_provider_depth(symbols), "provider"
+        # provider 无 depth 能力 → 受控外部 fallback
+        return self._call_external_depth(symbols), "tencent_quote"
+
+    def _call_provider_depth(self, symbols: list[str]) -> dict:
+        """调 provider.get_depth, 按 capset 的 batch 切片 + 节流。返回 {symbol: depth}。"""
         provider = _get_data_provider()
         capset = self._get_capset()
         lim = capset.limits(__import__("app.capabilities", fromlist=["Cap"]).Cap.DEPTH5_BATCH)
@@ -292,9 +328,26 @@ class DepthService:
                 # 单批失败不影响其他批
         return result
 
+    def _call_external_depth(self, symbols: list[str]) -> dict:
+        """受控外部 fallback 五档 (provider 无能力时)。默认关闭 → 返回空。
+
+        resolve_depth 内部含 preferences 门控 + 交易日门控 + 熔断 + 限速,
+        关闭或非交易日时零网络。
+        """
+        from app.services.external_fallback import get_adapter
+
+        try:
+            result = get_adapter().resolve_depth(symbols, has_local_depth=False)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("depth external fallback resolve_depth failed: %s", e)
+            return {}
+        if not result.used_fallback:
+            return {}
+        return result.depth_map
+
     def finalize(self) -> None:
         """盘后定版: 拉一次 + 落盘。"""
-        if not self._has_capability():
+        if not self._has_depth_source():
             return
         self._fetch_and_seal(persist=True)
 
@@ -304,6 +357,12 @@ class DepthService:
 
     def _persist(self, today: date) -> None:
         """把内存缓存写 depth5/date=今天/part.parquet。"""
+        if self._sealed_source == "tencent_quote":
+            # 纵深防御: 外部源数据绝不落盘 depth5 parquet
+            # (主守卫在 _fetch_and_seal; 此处 fail-closed, 与 repository._assert_sealed_write_source 对齐)。
+            raise ValueError(
+                "depth sealed write rejected: external fallback source (tencent_quote)"
+            )
         with self._lock:
             cache = dict(self._sealed_cache)
         if not cache:
@@ -424,6 +483,37 @@ class DepthService:
         if self._sealed_date and target_date == self._sealed_date and self._sealed_ready and self._sealed_fetched_ts:
             return time.perf_counter() - self._sealed_fetched_ts
         return None
+
+    def get_display_depth_map(self, target_date: date, is_down: bool) -> dict:
+        """返回外部 fallback 展示数据 {symbol: {sealed, vol, ready, age, source, degraded}}。
+
+        仅当本地 provider 无 depth 能力且外部 fallback 命中时才有数据。带明确
+        source/degraded 标记, 供"当前展示响应"使用; 绝不进入 get_sealed_map /
+        sealed cache / 总览 / 研究。数据日期 != target_date 或无外部数据时返回 {}。
+        """
+        if not self._external_display_cache:
+            return {}
+        if not (self._external_display_date and target_date == self._external_display_date):
+            return {}
+        sealed_key = "sealed_down" if is_down else "sealed_up"
+        # 封单量: 涨停=买一量(涨停价买单堆积), 跌停=卖一量(跌停价卖单堆积)
+        vol_key = "ask1_vol" if is_down else "bid1_vol"
+        now = time.perf_counter()
+        with self._lock:
+            cache = dict(self._external_display_cache)
+            fetched_ts = self._external_display_fetched_ts
+        age = (now - fetched_ts) if fetched_ts else 0.0
+        return {
+            sym: {
+                "sealed": e.get(sealed_key),
+                "vol": e.get(vol_key),
+                "ready": False,  # degraded: 展示用, 非权威 sealed
+                "age": age,
+                "source": "tencent_quote",
+                "degraded": True,
+            }
+            for sym, e in cache.items()
+        }
 
     # ================================================================
     # 盘中轮询线程
@@ -569,10 +659,22 @@ class DepthService:
         # provider 能力检查: depth 字段缺失时视为 False(FQuantProvider 即如此)
         provider = _get_data_provider()
         if not getattr(provider.capabilities, "depth", False):
-            logger.info("depth_service: 当前 provider %s 不支持盘口, 降级返回空",
-                        provider.name)
+            logger.info("depth_service: 当前 provider %s 不支持盘口", provider.name)
             return False
         return True
+
+    def _has_depth_source(self) -> bool:
+        """是否有可用的 depth 数据源: provider 能力 或 外部 fallback 开启。
+
+        外部 fallback 默认关闭 → 关闭时等价于 _has_capability() (零回归)。
+        """
+        return self._has_capability() or self._is_external_depth_enabled()
+
+    @staticmethod
+    def _is_external_depth_enabled() -> bool:
+        """外部 depth fallback 是否开启 (preferences 门控, 零网络)。"""
+        from app.services.external_fallback.adapter import ExternalFallbackAdapter, Scope
+        return ExternalFallbackAdapter._is_enabled_for_scope(Scope.DEPTH.value)
 
     def _get_capset(self):
         """获取当前 capset(优先 app.state, 回退 detect)。"""

@@ -43,10 +43,11 @@ async def run_now(request: Request) -> dict:
                     if elapsed > 600:  # 超过 10 分钟视为卡死
                         logger.warning("强制取消卡死 job %s (已运行 %.0fs)", existing_id, elapsed)
                         job_store.fail(existing_id, "超时自动取消 (疑似 reload 后孤儿 task)")
+                        invalidate_storage_cache()
                 except Exception:
                     pass
 
-    job_id = job_store.create()
+    job_id = job_store.create(kind="daily_pipeline")
 
     # 如果是复用的 active job,直接返回(不重启)
     existing = job_store.get(job_id)
@@ -96,6 +97,7 @@ def cancel_job(job_id: str) -> dict:
     if j["status"] not in ("running", "pending"):
         raise HTTPException(status_code=400, detail=f"job status is {j['status']}, cannot cancel")
     job_store.fail(job_id, "用户手动取消")
+    invalidate_storage_cache()
     return {"cancelled": job_id}
 
 

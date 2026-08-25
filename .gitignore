@@ -43,8 +43,7 @@ backend/app/static/
 # ===== Project data (Parquet/DuckDB) =====
 backend/data/**
 !backend/data/.gitkeep
-data/**
-!data/.gitkeep
+/data
 # data/ 下所有内容(含 ext_data 概念/行业)均不入库:
 #   - 用户运行时数据 (K线/财务/自选/回测等) 本就不该进 git
 #   - 概念/行业改为「首次启动自动从远程接口拉取」(见 app/services/ext_presets.py)

@@ -25,13 +25,22 @@ export const QK = {
   watchlistQuotes:      ['watchlist-quotes'] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext] as const,
   watchlistKlineBatch:  (symbols: string) => ['watchlist-kline-batch', symbols] as const,
-  instrumentSearch:     (q: string) => ['instrument-search', q] as const,
+  // 前缀 watchlist- 以便 SSE quotes_updated 经 SSE_INVALIDATE_PREFIXES 命中
+  watchlistSnapshot:    (symbols: string) => ['watchlist-snapshot', symbols] as const,
+
+  instrumentSearch: (q: string, assetTypes?: readonly string[], limit = 20) => {
+    const normalizedAssetTypes = assetTypes?.length
+      ? [...new Set(assetTypes)].sort().join(',')
+      : 'all'
+    return ['instrument-search', q, normalizedAssetTypes, limit] as const
+  },
 
   // Screener
   screener:             ['screener'] as const,
   screenerStrategies:   ['screener-strategies'] as const,
   screenerCached:       (ext?: string) => ['screener-cached', ext] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
+  screenerScreens:     ['screener-screens'] as const,
   marketSnapshot:       ['market-snapshot'] as const,
   limitLadder:          (asOf?: string) => ['limit-ladder', asOf] as const,
 
@@ -40,6 +49,7 @@ export const QK = {
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
+  canonicalHistoryStatus: ['canonical-history-status'] as const,
   pipelineJobs:         ['pipeline-jobs'] as const,
   pipelineJob:          (id: string) => ['pipeline-job', id] as const,
   extData:              ['ext-data'] as const,
@@ -71,6 +81,7 @@ export const QK = {
   monitorRuleOptions:   ['monitor-rule-options'] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
+
   // AI 大盘复盘
   reviewReports:        ['review-reports'] as const,
 
@@ -86,6 +97,33 @@ export const QK = {
 
   // 概念涨幅轮动矩阵
   rpsRotation:          (days: number) => ['rps-rotation', days] as const,
+
+  // Market Data（只读上游发布快照；用户触发查询）
+  marketDataStatus:       ['market-data-status'] as const,
+  marketDataChip:         (symbol: string, start: string, end: string, limit: number) =>
+                            ['market-data-chip', symbol, start, end, limit] as const,
+  marketDataMoneyflowStock: (symbol: string, freq: 'daily' | 'minute', start: string, end: string) =>
+                            ['market-data-moneyflow-stock', symbol, freq, start, end] as const,
+  marketDataMoneyflowBlocks: (freq: 'daily' | 'minute', date: string, blockType: number | undefined, limit: number) =>
+                            ['market-data-moneyflow-blocks', freq, date, blockType ?? 'all', limit] as const,
+  marketDataCallAuction:  (symbol: string, date: string, session: string | undefined, limit: number) =>
+                            ['market-data-call-auction', symbol, date, session ?? 'all', limit] as const,
+  marketDataTransactions: (symbol: string, date: string, limit: number) =>
+                            ['market-data-transactions', symbol, date, limit] as const,
+
+  // Research analysis（canonical enriched 日 K；用户显式触发）
+  researchSymbolAnalysis: (symbol: string, start: string, end: string) =>
+                            ['research-symbol-analysis', symbol, start, end] as const,
+
+  // Research (假设注册 + 定时研究)
+  researchHypothesesRoot: ['research-hypotheses'] as const,
+  researchHypotheses: (status?: string, query?: string) =>
+    ['research-hypotheses', status ?? '', query ?? ''] as const,
+  researchHypothesis: (id: string) => ['research-hypothesis', id] as const,
+  researchRunCard:    (runId: string) => ['research-run-card', runId] as const,
+  researchSchedules:  ['research-schedules'] as const,
+  // Trading (结构化计划检查 · M25 连续性链)
+  planCheckContinuity: (attemptId: string) => ['plan-check-continuity', attemptId] as const,
 } as const
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====

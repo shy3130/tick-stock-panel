@@ -125,6 +125,18 @@ class ResearchStore:
             raise KeyError(run_id)
         return RunCard(**json.loads(path.read_text(encoding="utf-8")))
 
+    def list_run_cards(self) -> list[RunCard]:
+        """只读枚举全部 run_cards, 供 BacktestRunStore 迁移; 跳过损坏文件。"""
+        if not self.card_dir.exists():
+            return []
+        out: list[RunCard] = []
+        for path in sorted(self.card_dir.glob("*.json")):
+            try:
+                out.append(RunCard(**json.loads(path.read_text(encoding="utf-8"))))
+            except (OSError, json.JSONDecodeError, TypeError):
+                continue
+        return out
+
     def _write_hypothesis(self, h: Hypothesis) -> None:
         self.hyp_dir.mkdir(parents=True, exist_ok=True)
         (self.hyp_dir / f"{h.id}.json").write_text(json.dumps(asdict(h), ensure_ascii=False, indent=2), encoding="utf-8")

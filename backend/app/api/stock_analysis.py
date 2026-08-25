@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import date, timedelta
@@ -21,6 +22,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.indicators.levels import compute_levels, summarize_levels
+from app.services.ai_attempts import get_registry
+from app.services.ai_structured import CancellationToken, new_attempt_id
 from app.services import stock_reports
 from app.services.stock_analyzer import analyze_stock_stream
 
@@ -156,7 +159,7 @@ class AnalyzeRequest(BaseModel):
 async def analyze_stock(request: Request, req: AnalyzeRequest):
     """AI 个股四维分析 — NDJSON 流式返回。
 
-    组合 K 线(技术指标)+ 财务表 + 关键价位 → 实战派提示词 →
+    组合 K 线(技术指标)+ 财务表 + 关键价位 → 只读研究提示词 →
     流式调用 LLM → 逐 chunk 以 NDJSON 推给前端(每行一个 JSON)。
     """
     if not req.symbol:
@@ -164,15 +167,37 @@ async def analyze_stock(request: Request, req: AnalyzeRequest):
 
     repo = request.app.state.repo
     data_dir = repo.store.data_dir
+    attempt_id = new_attempt_id()
+    token = CancellationToken()
 
     async def stream_gen():
-        async for chunk in analyze_stock_stream(repo, data_dir, req.symbol, req.focus, req.document_text, req.profile_id):
-            yield chunk + "\n"
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("stock analysis stream task unavailable")
+        get_registry().register(attempt_id=attempt_id, task=task, token=token)
+        try:
+            async for chunk in analyze_stock_stream(
+                repo,
+                data_dir,
+                req.symbol,
+                req.focus,
+                req.document_text,
+                req.profile_id,
+                cancel_token=token,
+                attempt_id=attempt_id,
+            ):
+                yield chunk + "\n"
+        finally:
+            get_registry().unregister(attempt_id)
 
     return StreamingResponse(
         stream_gen(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-AI-Attempt-ID": attempt_id,
+        },
     )
 
 

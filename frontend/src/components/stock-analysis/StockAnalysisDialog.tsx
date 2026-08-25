@@ -1,16 +1,23 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, Sparkles, Loader2, AlertTriangle, Copy, Check, RefreshCw,
-  Settings2, Send, Wand2, Minimize2, History, LineChart,
+  Settings2, Send, Wand2, Minimize2, History, LineChart, Star,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { AiProviderSelector } from '@/components/AiProviderSelector'
+import { AiExecutionMetaBadge } from '@/components/AiExecutionMetaBadge'
+import { api, type AiExecutionMeta } from '@/lib/api'
+import { toast } from '@/components/Toast'
+import { stageScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 import {
   type ActiveTask, type HistoryReport,
-  minimizeDialog, closeDialog, startAnalysis,
+  minimizeDialog, closeDialog, startAnalysis, cancelAnalysis,
 } from '@/lib/stockAnalysisStore'
+import { aiStreamStatus } from '@/lib/aiStreamStatus'
+import type { StockDataMeta } from '@/lib/stockAnalysisStore'
 
 /**
  * AI 个股分析对话框 —— 蓝色主题,与财务分析对话框区分。
@@ -23,7 +30,7 @@ interface Props {
   minimized: boolean
 }
 
-type Phase = 'loading' | 'streaming' | 'done' | 'error'
+type Phase = 'loading' | 'streaming' | 'done' | 'error' | 'cancelled'
 
 function getPhase(task: ActiveTask | HistoryReport | null): Phase {
   if (!task) return 'loading'
@@ -39,7 +46,14 @@ function getMeta(task: ActiveTask | HistoryReport | null) {
   return { summary: task.summary, close: task.close, levels: task.levels }
 }
 
+/** F14: 头部数据口径条「数据截止 {date} · {source} · {adjustment}」 */
+function getDataMeta(task: ActiveTask | HistoryReport | null): StockDataMeta | null {
+  if (task && 'dataMeta' in task) return task.dataMeta
+  return null
+}
+
 export function StockAnalysisDialog({ task, mode, minimized }: Props) {
+  const navigate = useNavigate()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [focus, setFocus] = useState('')
   const [copied, setCopied] = useState(false)
@@ -48,7 +62,11 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
   const phase = getPhase(task)
   const content = getContent(task)
   const meta = getMeta(task)
+  const dataMeta = getDataMeta(task)
+  const aiMeta: AiExecutionMeta | null = task && 'meta' in task ? (task.meta?.ai_meta ?? null) : null
   const isHistory = mode === 'history'
+  // F9: 连接状态条(仅活跃任务有连接态;历史报告无)
+  const status = task && 'connection' in task ? aiStreamStatus({ phase, connection: task.connection }) : null
   const isWorking = phase === 'loading' || phase === 'streaming'
   const open = !!task && !minimized
 
@@ -76,6 +94,27 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
       setTimeout(() => setCopied(false), 2000)
     } catch { /* ignore */ }
   }
+
+  const canTakeaway = !!task?.symbol && (phase === 'done' || isHistory)
+  const handleWatchlist = async () => {
+    if (!task?.symbol) return
+    try {
+      await api.watchlistAdd(task.symbol)
+      toast('已加入自选', 'success')
+    } catch (e: any) {
+      toast(String(e?.message ?? '加入自选失败'), 'error')
+    }
+  }
+  const handleToBacktest = () => {
+    if (!task?.symbol) return
+    const n = stageScreenerBacktestHandoff({ target: 'strategy', symbols: [task.symbol], asOf: null })
+    if (!n) {
+      toast('无法送入回测', 'error')
+      return
+    }
+    navigate('/backtest')
+  }
+
 
   if (!open) return null
 
@@ -110,13 +149,33 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                   {task && <span className="text-[10px] font-mono text-muted shrink-0">{task.symbol}</span>}
                 </div>
                 <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted">
+                  {dataMeta?.data_as_of && (
+                    <span className="shrink-0 font-mono" title="报告生成时行情数据的截止日期">
+                      数据截止 {dataMeta.data_as_of}
+                    </span>
+                  )}
+                  {dataMeta?.source && <span className="shrink-0">· {dataMeta.source}</span>}
+                  {dataMeta?.adjustment && <span className="shrink-0">· {dataMeta.adjustment}</span>}
+                  {status && (
+                    <span className={cn(
+                      'flex items-center gap-1 shrink-0',
+                      status.tone === 'error' ? 'text-danger' : status.tone === 'active' ? 'text-sky-300' : 'text-muted',
+                    )}>
+                      <span className={cn('h-1.5 w-1.5 rounded-full',
+                        status.tone === 'active' && 'bg-sky-400 animate-pulse',
+                        status.tone === 'error' && 'bg-danger',
+                        status.tone === 'muted' && 'bg-muted',
+                      )} />
+                      {status.label}
+                    </span>
+                  )}
                   {meta?.summary ? (
                     <span className="flex items-center gap-1 truncate">
                       <Sparkles className="h-2.5 w-2.5 shrink-0" />
                       <span className="truncate">{meta.summary}</span>
                     </span>
                   ) : isWorking ? <span>正在读取行情与价位数据…</span> : null}
-                  {phase === 'streaming' && (
+                  {phase === 'streaming' && !status && (
                     <span className="flex items-center gap-1 text-sky-300 shrink-0">
                       <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" />生成中
                     </span>
@@ -125,6 +184,14 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                     <span className="shrink-0">{fmtRelative(task.created_at)}</span>
                   )}
                 </div>
+                {(dataMeta?.degraded || (dataMeta?.warnings?.length ?? 0) > 0) && (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted/70">
+                    {dataMeta?.degraded && <span className="shrink-0">数据维度降级</span>}
+                    {(dataMeta?.warnings ?? []).map((w, i) => (
+                      <span key={i} className="truncate" title={w}>{w}</span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {content && !isWorking && (
@@ -134,10 +201,19 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                   </button>
                 )}
                 {!isHistory && isWorking && (
-                  <button onClick={minimizeDialog} title="最小化为气泡,后台继续生成"
-                    className="p-1.5 rounded-lg hover:bg-elevated text-muted hover:text-foreground transition-colors">
-                    <Minimize2 className="h-4 w-4" />
-                  </button>
+                  <>
+                    <button
+                      onClick={() => { if (task && 'id' in task) void cancelAnalysis(task.id) }}
+                      title="取消本次分析"
+                      className="p-1.5 rounded-lg hover:bg-elevated text-muted hover:text-danger transition-colors"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                    <button onClick={minimizeDialog} title="最小化为气泡,后台继续生成"
+                      className="p-1.5 rounded-lg hover:bg-elevated text-muted hover:text-foreground transition-colors">
+                      <Minimize2 className="h-4 w-4" />
+                    </button>
+                  </>
                 )}
                 {(!isWorking || isHistory) && (
                   <button onClick={closeDialog} title="关闭"
@@ -164,26 +240,37 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
               </div>
             )}
 
-            {phase === 'error' && (
+            {(phase === 'error' || phase === 'cancelled') && (
               <div className="flex flex-col items-center justify-center py-14 gap-3">
                 <div className="h-11 w-11 rounded-full bg-danger/10 flex items-center justify-center">
                   <AlertTriangle className="h-5 w-5 text-danger" />
                 </div>
-                <div className="text-sm font-medium text-foreground">分析失败</div>
-                <div className="text-xs text-secondary text-center max-w-md px-4">{error}</div>
+                <div className="text-sm font-medium text-foreground">{phase === 'cancelled' ? '已取消' : '分析失败'}</div>
+                <div className="text-xs text-secondary text-center max-w-md px-4">{error || (phase === 'cancelled' ? '本次分析已停止,不会写入历史报告' : '')}</div>
                 {error.includes('AI') && (
                   <button onClick={() => { window.location.href = '/settings?tab=ai' }}
                     className="mt-1 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-elevated border border-border text-xs text-secondary hover:text-foreground transition-colors">
                     <Settings2 className="h-3.5 w-3.5" /> 去配置 AI
                   </button>
                 )}
-                <button onClick={handleStartNew}
-                  className="mt-1 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-sky-500/15 border border-sky-400/30 text-xs text-sky-300 hover:bg-sky-500/20 transition-colors">
-                  <RefreshCw className="h-3.5 w-3.5" /> 重试
-                </button>
               </div>
             )}
-
+            {meta?.struct_summary && (
+              <div className="mb-3 rounded-lg border border-sky-400/20 bg-sky-500/[0.04] px-3 py-2">
+                <div className="text-[10px] font-medium tracking-wide text-sky-300/80">结构摘要（观察，不含方向）</div>
+                <div className="mt-1 text-xs text-secondary">{meta.struct_summary.trend}</div>
+                {meta.struct_summary.key_levels.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {meta.struct_summary.key_levels.map((level) => (
+                      <span key={level} className="rounded bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-muted">{level}</span>
+                    ))}
+                  </div>
+                )}
+                {meta.struct_summary.data_gaps.length > 0 && (
+                  <div className="mt-1 text-[10px] text-muted/70">缺口：{meta.struct_summary.data_gaps.join('；')}</div>
+                )}
+              </div>
+            )}
             {(content || phase === 'streaming') && (
               <div className="relative">
                 <MarkdownRenderer content={content} />
@@ -206,7 +293,7 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                 type="text"
                 value={focus}
                 onChange={e => setFocus(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && (phase === 'done' || phase === 'error' || isHistory)) handleStartNew() }}
+                onKeyDown={e => { if (e.key === 'Enter' && (phase === 'done' || phase === 'error' || phase === 'cancelled' || isHistory)) handleStartNew() }}
                 disabled={isWorking}
                 placeholder={isHistory ? '修改关注重点,回车重新生成' : (phase === 'done' ? '如:重点看能否突破压力位…回车重新分析' : '可留空,留空则全面分析')}
                 className={cn(
@@ -234,6 +321,23 @@ export function StockAnalysisDialog({ task, mode, minimized }: Props) {
                 </button>
               )}
             </div>
+            {aiMeta && (
+              <div className="mt-1.5">
+                <AiExecutionMetaBadge meta={aiMeta} />
+              </div>
+            )}
+            {canTakeaway && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <button type="button" onClick={() => { void handleWatchlist() }}
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                  <Star className="h-3 w-3" />加自选
+                </button>
+                <button type="button" onClick={handleToBacktest}
+                  className="inline-flex items-center gap-1 h-7 px-2 rounded-lg bg-elevated border border-border text-[10px] text-secondary hover:text-foreground">
+                  <LineChart className="h-3 w-3" />送回测
+                </button>
+              </div>
+            )}
             <p className="mt-1.5 text-[10px] text-muted/50 leading-relaxed">
               {isHistory
                 ? '历史报告为静态记录;修改关注重点后将作为新任务重新生成。报告仅供参考,不构成投资建议。'

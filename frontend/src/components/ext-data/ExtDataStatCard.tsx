@@ -7,6 +7,20 @@ import { QK } from '@/lib/queryKeys'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { ExtDataPullPanel } from './ExtDataPullPanel'
 import { ExtDataApiPanel } from './ExtDataApiPanel'
+// 内置预设 ID (概念/行业/东财): 卡片上提供「立即同步」按钮, 走
+// POST /api/ext-data/presets/{id}/fetch 的结构化拉取; 自定义配置不在此列。
+const BUILTIN_PRESET_IDS: Record<string, true> = {
+  ext_gn_ths: true,
+  ext_hy_ths: true,
+  ext_lhb_em: true,
+  ext_lockup_em: true,
+  ext_holder_em: true,
+  ext_margin_em: true,
+  ext_block_em: true,
+  ext_research_em: true,
+  ext_news_em: true,
+}
+
 
 export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
   config: ExtDataConfig
@@ -51,6 +65,19 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
     },
     onSettled: () => setUploading(false),
   })
+
+  // 内置预设: 一键手动拉取 (结构化转换, 与概念/行业页同一条后端路径)。
+  // 失败时 request() 已 toast, 这里再在卡片上保留失败原因。
+  const isBuiltinPreset = !!BUILTIN_PRESET_IDS[config.id]
+  const syncPreset = useMutation({
+    mutationFn: (id: string) => api.extDataPresetFetch(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.extData })
+      qc.invalidateQueries({ queryKey: QK.dataStatus })
+    },
+  })
+  const pull = config.pull
+  const pullRan = !!pull && (!!pull.last_run || !!pull.last_status)
 
   const doUpload = (file: File) => upload.mutate({ id: config.id, file })
 
@@ -131,6 +158,33 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
         </div>
       </div>
 
+      {isBuiltinPreset && (
+        <div className="px-4 pb-3 pt-2 border-t border-border/50">
+          <button
+            onClick={() => syncPreset.mutate(config.id)}
+            disabled={syncPreset.isPending}
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-btn border border-accent/50 bg-accent/15 text-accent text-xs font-medium hover:bg-accent/25 transition-colors disabled:opacity-60"
+          >
+            {syncPreset.isPending
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <RefreshCw className="h-3.5 w-3.5" />}
+            {syncPreset.isPending ? '同步中…' : '立即同步'}
+          </button>
+          {syncPreset.isSuccess && (
+            <div className="mt-1.5 flex items-center justify-center gap-1 text-[10px] font-medium text-green-400">
+              <CheckCircle2 className="h-3 w-3 shrink-0" />
+              同步成功 · {(syncPreset.data?.rows ?? 0).toLocaleString()} 行
+            </div>
+          )}
+          {syncPreset.isError && (
+            <div className="mt-1.5 flex items-start justify-center gap-1 text-[10px] text-danger text-center">
+              <AlertTriangle className="h-3 w-3 shrink-0 mt-px" />
+              <span className="break-all line-clamp-2">{syncPreset.error.message || '同步失败'}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mt-auto px-4 pb-4 pt-2 border-t border-border/50">
         <div className="flex justify-between text-[11px]">
           <span className="text-muted">标识</span>
@@ -138,8 +192,33 @@ export function ExtDataStatCard({ config, onDelete, deleting, onEdit }: {
         </div>
         <div className="flex justify-between text-[11px] mt-1">
           <span className="text-muted">最新</span>
-          <span className="text-secondary">{config.latest_sync_date ?? '—'}</span>
+          <span className={config.latest_sync_date ? 'text-secondary' : 'text-muted'}>
+            {config.latest_sync_date ?? '尚未同步'}
+          </span>
         </div>
+        {pull && pullRan && (
+          <div className="mt-2 pt-2 border-t border-border/30 space-y-1">
+            <div className="flex items-center justify-between gap-2 text-[10px]">
+              <span className="text-muted shrink-0">上次拉取</span>
+              <span className={`inline-flex items-center gap-1 font-mono min-w-0 truncate ${
+                pull.last_status === 'error' ? 'text-danger' : pull.last_status === 'success' ? 'text-green-400' : 'text-secondary'
+              }`}>
+                {pull.last_status === 'error'
+                  ? <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
+                  : pull.last_status === 'success' ? <CheckCircle2 className="h-2.5 w-2.5 shrink-0" /> : null}
+                {pull.last_run
+                  ? new Date(pull.last_run).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  : '—'}
+                {pull.last_rows != null && ` · ${pull.last_rows.toLocaleString()} 行`}
+              </span>
+            </div>
+            {pull.last_message && (
+              <div className="text-[10px] text-muted break-all line-clamp-2" title={pull.last_message}>
+                {pull.last_message}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <AnimatePresence>

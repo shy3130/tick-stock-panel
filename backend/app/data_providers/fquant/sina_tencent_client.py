@@ -6,7 +6,11 @@ Units: price=CNY, volume=shares, amount=CNY, change_pct=percentage points.
 from __future__ import annotations
 
 import logging
+import random
+import threading
 import time
+import typing
+from urllib.parse import urlparse
 
 import httpx
 
@@ -16,6 +20,15 @@ TENCENT_URL = "https://qt.gtimg.cn/q="
 SINA_URL = "https://hq.sinajs.cn/list="
 TENCENT_BATCH = 60
 SINA_BATCH = 100
+
+# ---- M19 受控 HTTP 可靠性参数 -----------------------------------------------
+# Host allowlist: 仅允许腾讯/新浪两个已知行情域名, 拒绝任何其它 Host。
+_ALLOWED_HOSTS: frozenset[str] = frozenset({
+    urlparse(TENCENT_URL).hostname,
+    urlparse(SINA_URL).hostname,
+})
+# 可重试 HTTP status (瞬态过载/限流); 400/401/403/404 与 schema 失败不重试。
+_RETRYABLE_STATUS: frozenset[int] = frozenset({429, 502, 503, 504})
 
 _SUFFIX_TO_PREFIX = {"SH": "sh", "SZ": "sz", "BJ": "bj", "HK": "hk"}
 
@@ -144,41 +157,205 @@ def parse_sina(text: str, exch_codes: list[str] | None = None) -> list[dict]:  #
 
 
 class SinaTencentClient:
-    def __init__(self, timeout: float = 4.0) -> None:
+    """腾讯/新浪实时行情批量客户端。
+
+    受控 HTTP 可靠性 (M19):
+      - Host allowlist: 仅放行 ``qt.gtimg.cn`` / ``hq.sinajs.cn``。
+      - 每 Host 最小请求间隔 (限流)。
+      - 短 TTL 响应缓存。
+      - 同 URL single-flight (线程级去重, 防并发重复拉取)。
+      - 瞬态错误分类重试 (timeout / connect reset / 429 / 502-504),
+        非瞬态 (400/401/403/404 / schema 空) 不重试。
+      - 带 jitter 的有界指数退避。
+      - 连续失败熔断 + 恢复日志。
+      - clock/sleep/random/http_getter 可注入, 便于快速测试。
+    """
+
+    def __init__(
+        self,
+        timeout: float = 4.0,
+        *,
+        max_retries: int = 2,
+        min_interval: float = 0.2,
+        cache_ttl: float = 1.0,
+        circuit_threshold: int = 3,
+        circuit_cooldown: float = 60.0,
+        backoff_base: float = 0.3,
+        backoff_cap: float = 4.0,
+        clock: typing.Callable[[], float] | None = None,
+        sleeper: typing.Callable[[float], None] | None = None,
+        rng: typing.Callable[[], float] | None = None,
+        http_getter: typing.Callable[..., object] | None = None,
+    ) -> None:
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.min_interval = min_interval
+        self.cache_ttl = cache_ttl
+        self.circuit_threshold = circuit_threshold
+        self.circuit_cooldown = circuit_cooldown
+        self.backoff_base = backoff_base
+        self.backoff_cap = backoff_cap
+        self._clock = clock or time.monotonic
+        self._sleep = sleeper or time.sleep
+        self._rng = rng or random.random
+        self._http_getter = http_getter or httpx.get
+
+        # 熔断状态
         self._failures: dict[str, int] = {}
         self._cooldown_until: dict[str, float] = {}
+        # 每 Host 限流: source -> 上次请求时刻
+        self._last_request: dict[str, float] = {}
+        # 短 TTL 响应缓存: url -> (text, expires_at)
+        self._cache: dict[str, tuple[str, float]] = {}
+        # single-flight: url -> {"event", "result"}
+        self._inflight: dict[str, dict] = {}
+        self._inflight_lock = threading.Lock()
 
+    # ---- Host allowlist ---------------------------------------------------
+    def _is_allowed_host(self, url: str) -> bool:
+        host = urlparse(url).hostname
+        if host not in _ALLOWED_HOSTS:
+            logger.warning("rejected quote request to non-allowlisted host: %s", host)
+            return False
+        return True
+
+    # ---- 响应缓存 ---------------------------------------------------------
+    def _cache_get(self, url: str) -> str | None:
+        entry = self._cache.get(url)
+        if entry is None:
+            return None
+        text, expires = entry
+        if self._clock() >= expires:
+            self._cache.pop(url, None)
+            return None
+        return text
+
+    def _cache_put(self, url: str, text: str) -> None:
+        self._cache[url] = (text, self._clock() + self.cache_ttl)
+
+    # ---- 每 Host 限流 -----------------------------------------------------
+    def _enforce_rate_limit(self, source: str) -> None:
+        last = self._last_request.get(source)
+        now = self._clock()
+        if last is not None:
+            wait = self.min_interval - (now - last)
+            if wait > 0:
+                self._sleep(wait)
+        self._last_request[source] = self._clock()
+
+    # ---- 熔断 -------------------------------------------------------------
     def _source_available(self, source: str) -> bool:
         until = self._cooldown_until.get(source, 0)
-        if until > time.monotonic():
-            logger.debug("%s quote source cooling down for %.1fs", source, until - time.monotonic())
+        if until > self._clock():
+            logger.debug("%s quote source cooling down for %.1fs", source, until - self._clock())
             return False
         return True
 
     def _record_success(self, source: str) -> None:
+        was_open = source in self._cooldown_until
         self._failures[source] = 0
         self._cooldown_until.pop(source, None)
+        if was_open:
+            logger.info("%s quote source recovered, circuit closed", source)
 
     def _record_failure(self, source: str) -> None:
         failures = self._failures.get(source, 0) + 1
         self._failures[source] = failures
-        if failures >= 3:
-            self._cooldown_until[source] = time.monotonic() + 60
-            logger.warning("%s quote source disabled for 60s after %d failures", source, failures)
+        if failures >= self.circuit_threshold:
+            self._cooldown_until[source] = self._clock() + self.circuit_cooldown
+            logger.warning(
+                "%s quote source circuit opened for %.0fs after %d failures",
+                source, self.circuit_cooldown, failures,
+            )
 
-    def _http_get(self, url: str, source: str, headers: dict | None = None) -> str | None:
+    # ---- 错误分类 ---------------------------------------------------------
+    def _is_transient(self, exc: BaseException) -> bool:
+        if isinstance(exc, httpx.TimeoutException):
+            return True
+        # connect reset / 网络瞬断 -> 可重试
+        if isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.NetworkError, httpx.RemoteProtocolError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in _RETRYABLE_STATUS
+        return False
+
+    def _backoff_sleep(self, attempt: int) -> None:
+        delay = min(self.backoff_cap, self.backoff_base * (2 ** attempt))
+        jitter = self._rng() * delay  # full jitter
+        if jitter > 0:
+            self._sleep(jitter)
+
+    # ---- 带重试的拉取 -----------------------------------------------------
+    def _fetch_with_retry(self, url: str, source: str, headers: dict | None) -> str | None:
+        """执行真实 HTTP, 对瞬态错误有界重试。成功返回文本, 否则 None。"""
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = self._http_getter(url, headers=headers or {}, timeout=self.timeout, trust_env=False)
+                resp.raise_for_status()
+                text = resp.text
+                if not text or not text.strip():
+                    # schema 失败: 空响应, 不重试 (避免对空 body 反复打上游)
+                    logger.warning("%s quote empty response (schema), not retrying", source)
+                    return None
+                return text
+            except Exception as exc:  # noqa: BLE001
+                if attempt < self.max_retries and self._is_transient(exc):
+                    logger.debug("%s quote transient error (attempt %d), retrying: %s", source, attempt + 1, exc)
+                    self._backoff_sleep(attempt)
+                    continue
+                logger.warning("%s quote GET failed (attempt %d): %s", source, attempt + 1, exc)
+                return None
+        return None
+
+    def _guarded_fetch(self, url: str, source: str, headers: dict | None) -> str | None:
+        """熔断 -> 限流 -> 重试拉取, 成功写缓存, 失败计熔断。"""
         if not self._source_available(source):
             return None
-        try:
-            resp = httpx.get(url, headers=headers or {}, timeout=self.timeout, trust_env=False)
-            resp.raise_for_status()
-        except Exception as e:  # noqa: BLE001
+        self._enforce_rate_limit(source)
+        text = self._fetch_with_retry(url, source, headers)
+        if text is None:
             self._record_failure(source)
-            logger.warning("%s quote GET failed: %s", source, e)
             return None
         self._record_success(source)
-        return resp.text
+        self._cache_put(url, text)
+        return text
+
+    # ---- single-flight ----------------------------------------------------
+    def _register_inflight(self, url: str) -> dict | None:
+        """登记 inflight。返回 None 表示当前线程成为 leader; 返回 holder 表示需等待。"""
+        with self._inflight_lock:
+            existing = self._inflight.get(url)
+            if existing is not None:
+                return existing
+            self._inflight[url] = {"event": threading.Event(), "result": None}
+            return None
+
+    def _complete_inflight(self, url: str, result: str | None) -> None:
+        with self._inflight_lock:
+            holder = self._inflight.pop(url, None)
+        if holder is not None:
+            holder["result"] = result
+            holder["event"].set()
+
+    # ---- 公共入口 ---------------------------------------------------------
+    def _http_get(self, url: str, source: str, headers: dict | None = None) -> str | None:
+        """受控拉取入口: allowlist -> 缓存 -> single-flight -> 熔断 -> 限流 -> 重试。"""
+        # 1. Host allowlist — 任何场景不可绕过
+        if not self._is_allowed_host(url):
+            return None
+        # 2. 短 TTL 缓存命中
+        cached = self._cache_get(url)
+        if cached is not None:
+            return cached
+        # 3. 同 URL single-flight: 并发调用去重为一次真实拉取
+        holder = self._register_inflight(url)
+        if holder is None:
+            result = self._guarded_fetch(url, source, headers)
+            self._complete_inflight(url, result)
+            return result
+        # follower: 复用 leader 结果 (含缓存, provenance 不变)
+        holder["event"].wait()
+        return holder["result"]
 
     def get_quotes(self, symbols: list[str], prefer: str = "tencent") -> list[dict]:
         codes = [_to_exch_code(s) for s in symbols if str(s).strip()]

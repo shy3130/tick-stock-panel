@@ -484,7 +484,7 @@ function OverviewBar({ tiers, dateValue, onDateChange, filterKeys, bf, direction
   const failedLabel = direction === 'down' ? '止跌' : '断板'
 
   return (
-    <div className="flex items-center gap-4 px-5 py-2">
+    <div className="workspace-toolbar gap-4 border-b border-border px-3 py-2 sm:px-4">
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary">
         {tiers.map((t, idx) => {
           const luCount = limitUpCounts[idx]
@@ -1177,7 +1177,7 @@ export function LimitUpLadder() {
 
   if (!data || rawTiers.length === 0) {
     return (
-      <div className="flex flex-col h-full">
+      <div className="workspace-page h-full">
         <PageHeader title={direction === 'down' ? '连跌梯队' : '连板梯队'} />
         <EmptyState icon={Flame} title={direction === 'down' ? '暂无连跌数据' : '暂无连板数据'} hint={direction === 'down' ? '该日期无跌停股或 enriched 数据未就绪' : '该日期无涨停股或 enriched 数据未就绪'} />
       </div>
@@ -1185,7 +1185,7 @@ export function LimitUpLadder() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="workspace-page h-full">
       <PageHeader
         title={direction === 'down' ? '连跌梯队' : '连板梯队'}
         titleExtra={
@@ -1199,6 +1199,8 @@ export function LimitUpLadder() {
               sealedCountsDown={data?.sealed_counts_down}
               rawUp={data?.counts_raw?.up}
               rawDown={data?.counts_raw?.down}
+              sealedDegraded={data?.sealed_degraded === true}
+              sealedSource={data?.sealed_source}
             />
             {/* 涨跌停切换(胶囊式): 点击切换方向, 当前方向有背景 */}
             <div className="flex items-center rounded-full bg-elevated/60 p-0.5">
@@ -1228,7 +1230,7 @@ export function LimitUpLadder() {
           </div>
         }
         right={
-          <div className="flex items-center gap-1">
+          <div className="workspace-toolbar gap-1">
             {/* 封单模式: 成交量/金额(仅 sealed 就绪时显示) — 胶囊式 */}
             {data?.sealed_ready && (
               <>
@@ -1313,7 +1315,7 @@ export function LimitUpLadder() {
             <div className="w-px h-4 bg-border mx-1" />
             <button
               onClick={() => setShowExtConfig(true)}
-              className="p-1.5 hover:bg-surface text-muted hover:text-accent"
+              className="btn-ghost h-7 w-7 px-0"
               title="配置"
             >
               <Settings2 className="h-3.5 w-3.5" />
@@ -1321,7 +1323,7 @@ export function LimitUpLadder() {
             <button
               onClick={() => refetch()}
               disabled={isFetching}
-              className="p-1.5 hover:bg-surface text-muted disabled:opacity-50"
+              className="btn-ghost h-7 w-7 px-0 disabled:opacity-50"
             >
               <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
             </button>
@@ -1329,6 +1331,8 @@ export function LimitUpLadder() {
         }
       />
 
+      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* 总览条 + 日期 */}
       <OverviewBar tiers={tiers} dateValue={dateValue} onDateChange={setAsOf} filterKeys={filterKeys} bf={extFields.bf} direction={direction} />
 
@@ -1360,7 +1364,7 @@ export function LimitUpLadder() {
       )}
 
       {/* 梯队列表 */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2 sm:px-4">
         {tiers.map(t => (
           <TierGroup
             key={t.boards}
@@ -1376,6 +1380,8 @@ export function LimitUpLadder() {
             sealMode={sealMode}
           />
         ))}
+      </div>
+      </div>
       </div>
 
       {/* 个股K线弹窗 */}

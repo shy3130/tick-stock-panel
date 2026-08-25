@@ -1,8 +1,18 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp } from 'lucide-react'
-import { api, type InstrumentSearchResult, type KlineRow } from '@/lib/api'
+import { Trash2, RefreshCw, Star, X, Search, LayoutGrid, List, Settings2, Plus, Check, Filter, Eye, EyeOff, Minus, ChevronsUp, Globe } from 'lucide-react'
+import {
+  api,
+  type InstrumentSearchResult,
+  type KlineRow,
+  type IntradaySnapshotRow,
+  intradaySnapshotDegraded,
+  indexFallbackReasonText,
+  snapshotPctToRatio,
+  quoteSnapshotText,
+  resolveQuoteDataState,
+} from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { instrumentSearchMeta } from '@/lib/instrumentSearch'
 import { storage } from '@/lib/storage'
@@ -17,7 +27,7 @@ import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
 import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primitives'
 import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
 import { resolveCandleConfig } from '@/lib/list-columns'
-import { useQuoteStatus } from '@/lib/useSharedQueries'
+import { useQuoteStatus, usePreferences } from '@/lib/useSharedQueries'
 import {
   type ColumnConfig,
   BUILTIN_COLUMNS,
@@ -359,9 +369,9 @@ function StockCard({
 
   // 动态背景渐变: 涨=红底, 跌=绿底, 平=无色
   const bgGlow = isUp
-    ? 'bg-gradient-to-br from-bull/[0.06] via-transparent to-bull/[0.02]'
+    ? 'bg-bull/[0.04]'
     : isDown
-      ? 'bg-gradient-to-br from-bear/[0.06] via-transparent to-bear/[0.02]'
+      ? 'bg-bear/[0.04]'
       : ''
   // 左侧指示条颜色
   const barColor = isUp ? 'bg-bull/70' : isDown ? 'bg-bear/70' : 'bg-muted/30'
@@ -647,8 +657,70 @@ export function Watchlist() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
-  const allSymbols = list.data?.symbols?.map(s => s.symbol) ?? []
-  const rows = enriched.data?.rows ?? []
+  const listSymbols = list.data?.symbols
+  const allSymbols = useMemo(
+    () => listSymbols?.map(s => s.symbol) ?? [],
+    [listSymbols],
+  )
+  const enrichedRows = enriched.data?.rows ?? []
+
+  // 实时快照: 仅 realtime 开关开启且自选非空时请求前 60 个; SSE quotes_updated 经 watchlist- 前缀 invalidate
+  const prefs = usePreferences()
+  const realtimeQuotesEnabled = prefs.data?.realtime_quotes_enabled ?? false
+  const snapshotSymbols = useMemo(
+    () => allSymbols.slice(0, 60),
+    [allSymbols],
+  )
+  const snapshotSymbolsKey = snapshotSymbols.join(',')
+  const snapshot = useQuery({
+    queryKey: QK.watchlistSnapshot(snapshotSymbolsKey),
+    queryFn: () => api.intradaySnapshot(snapshotSymbols),
+    enabled: realtimeQuotesEnabled && snapshotSymbols.length > 0,
+    placeholderData: (prev) => prev,
+  })
+
+  // 内存合并: snapshot → rt_*；百分点转小数比率；缺字段不覆盖 enriched 原值；不写回后端/localStorage。
+  // realtime 开启时以自选列表为基表，确保刚加入或历史不足的标的即使没有 enriched 行，
+  // 只要 snapshot 有行情也能展示；关闭时保持原 enriched 行为。
+  const rows = useMemo(() => {
+    const enrichedBySymbol = new Map<string, Record<string, unknown>>(
+      enrichedRows.map((row: Record<string, unknown>) => [String(row.symbol ?? ''), row]),
+    )
+    const base: Record<string, unknown>[] = realtimeQuotesEnabled && allSymbols.length > 0
+      ? allSymbols.map(symbol => enrichedBySymbol.get(symbol) ?? { symbol })
+      : enrichedRows
+    if (!realtimeQuotesEnabled) return base
+    const snapRows = snapshot.data?.rows
+    if (!snapRows?.length) return base
+    const bySymbol = new Map<string, IntradaySnapshotRow>()
+    for (const q of snapRows) {
+      if (q?.symbol) bySymbol.set(q.symbol, q)
+    }
+    if (bySymbol.size === 0) return base
+    return base.map((r: Record<string, unknown>) => {
+      const q = bySymbol.get(String(r.symbol ?? ''))
+      if (!q) return r
+      const next: Record<string, unknown> = { ...r }
+      if (q.last_price != null && Number.isFinite(Number(q.last_price))) {
+        next.rt_price = Number(q.last_price)
+      }
+      const ratio = snapshotPctToRatio(q.change_pct)
+      if (ratio != null) next.rt_pct = ratio
+      if (q.amount != null && Number.isFinite(Number(q.amount))) {
+        next.rt_amount = Number(q.amount)
+      }
+      if (q.name != null && String(q.name).trim() !== '') {
+        next.rt_name = q.name
+      }
+      return next
+    })
+  }, [allSymbols, enrichedRows, snapshot.data?.rows, realtimeQuotesEnabled])
+
+  const snapshotDegraded = realtimeQuotesEnabled && intradaySnapshotDegraded(snapshot.data)
+  const snapshotReasonText = indexFallbackReasonText(snapshot.data?.fallback_reason)
+  const snapshotSourceHint =
+    snapshot.data?.sources?.realtime
+    ?? (snapshot.data?.source === 'fallback_external' ? 'tencent_quote' : snapshot.data?.source)
 
   // 实时监控圆点: 仅 Free/低档 "按自选股实时监控" 模式 (mode === 'watchlist') 下显示;
   // Starter+ 全市场模式 (mode === 'full_market') 全部标的都在监控, 标圆点无意义, 故不显示。
@@ -657,6 +729,11 @@ export function Watchlist() {
   const realtimeRunning = quoteStatus.data?.running ?? false
   const realtimeMode = quoteStatus.data?.mode
   const watchlistMonitoredCount = quoteStatus.data?.watchlist_symbol_count ?? 0
+  const quoteDataState = resolveQuoteDataState(quoteStatus.data)
+  const localSnapshotStaleText =
+    realtimeQuotesEnabled && !snapshotDegraded && quoteDataState === 'stale'
+      ? (quoteSnapshotText(quoteStatus.data?.source_as_of) ?? '实时行情已过期')
+      : null
   const showRealtimeDot = realtimeRunning && realtimeMode === 'watchlist'
   // 真正被监控的标的集合 (自选列表前 watchlistMonitoredCount 个)
   const monitoredSymbols = useMemo(
@@ -729,7 +806,7 @@ export function Watchlist() {
     let result = rows
     if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
-        const board = getBoardType(r.symbol)
+        const board = getBoardType(String(r.symbol ?? ''))
         return board != null && boardFilter.has(board)
       })
     }
@@ -775,7 +852,7 @@ export function Watchlist() {
   const hiddenCount = Math.max(0, allSymbols.length - sortedRows.length)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="workspace-page h-full">
       <PageHeader
         title="自选股"
         titleExtra={
@@ -797,17 +874,44 @@ export function Watchlist() {
                 已过滤 {hiddenCount}
               </span>
             )}
+            {enriched.data?.as_of && (
+              <span
+                className="inline-flex cursor-help items-center rounded border border-border bg-elevated/70 px-1.5 py-0.5 font-mono text-[9px] leading-none text-secondary whitespace-nowrap"
+                title="技术指标来自本地 canonical enriched 分区；若启用实时行情，现价与涨跌幅会由已标明来源的实时快照覆盖。"
+              >
+                指标 {enriched.data.as_of} · 本地 enriched
+              </span>
+            )}
+            {/* 外部源降级: 仅实际 degraded 时显示; 本地当日快照不标 */}
+            {snapshotDegraded && (
+              <span
+                className="inline-flex cursor-help items-center gap-1 rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] leading-none text-warning/80 whitespace-nowrap"
+                title={`自选实时行情来自外部源${snapshotSourceHint ? `（${snapshotSourceHint}）` : ''}${snapshotReasonText ? ` · ${snapshotReasonText}` : ''}，为降级数据，仅供展示；不会写入本地行情库，也不参与选股、监控、回测。`}
+              >
+                <Globe className="h-2.5 w-2.5" aria-hidden />
+                外部源·降级数据
+              </span>
+            )}
+            {localSnapshotStaleText && (
+              <span
+                className="inline-flex cursor-help items-center gap-1 rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] leading-none text-warning/80 whitespace-nowrap"
+                title="本地实时行情源尚未发布当日快照。可等待本地数据更新，或在“设置 → 数据源”显式开启 realtime 外部 fallback。"
+              >
+                <RefreshCw className="h-2.5 w-2.5" aria-hidden />
+                {localSnapshotStaleText}
+              </span>
+            )}
           </span>
         }
         right={
-          <div className="flex items-center gap-2">
+          <div className="workspace-toolbar">
             {/* 筛选 / 搜索 */}
             <button
               onClick={() => setFilterOpen(v => !v)}
-              className={`inline-flex items-center justify-center h-8 w-8 rounded-btn transition-colors duration-150 ease-smooth ${
+              className={`btn-ghost h-8 w-8 px-0 ${
                 filterOpen || activeFilterCount > 0
                   ? 'bg-accent/15 text-accent hover:bg-accent/25'
-                  : 'bg-elevated text-secondary hover:bg-elevated/80'
+                  : ''
               }`}
               title={`筛选${activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}`}
             >
@@ -822,7 +926,7 @@ export function Watchlist() {
             {/* 视图 */}
             <button
               onClick={toggleView}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
+              className="btn-ghost h-8 w-8 px-0"
               title={viewMode === 'table' ? '卡片视图' : '列表视图'}
             >
               {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
@@ -831,25 +935,30 @@ export function Watchlist() {
             {/* 自定义列 / 刷新 */}
             <button
               onClick={() => setCustomizerOpen(true)}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth"
+              className="btn-ghost h-8 w-8 px-0"
               title="自定义列"
             >
               <Settings2 className="h-4 w-4" />
             </button>
             <button
-              onClick={() => enriched.refetch()}
-              disabled={enriched.isFetching}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 ease-smooth disabled:opacity-50"
+              onClick={() => {
+                void enriched.refetch()
+                if (realtimeQuotesEnabled && snapshotSymbols.length > 0) {
+                  void snapshot.refetch()
+                }
+              }}
+              disabled={enriched.isFetching || snapshot.isFetching}
+              className="btn-ghost h-8 w-8 px-0 disabled:opacity-50"
               title="刷新"
             >
-              <RefreshCw className={`h-4 w-4 ${enriched.isFetching ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 ${enriched.isFetching || snapshot.isFetching ? 'animate-spin' : ''}`} />
             </button>
             {allSymbols.length > 0 && (
               <>
                 <div className="w-px h-5 bg-border" />
                 <button
                   onClick={() => setConfirmClear(true)}
-                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-danger/10 text-danger hover:bg-danger/20 transition-colors duration-150 ease-smooth"
+                  className="btn-ghost h-8 w-8 px-0 bg-danger/10 text-danger hover:bg-danger/20"
                   title="清空自选"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -862,10 +971,10 @@ export function Watchlist() {
 
       {/* 筛选栏 */}
       {filterOpen && (
-        <div className="px-5 py-2 border-b border-border bg-surface/50 max-h-[184px] overflow-y-auto">
+        <div className="max-h-[184px] overflow-y-auto border-b border-border bg-surface/50 px-3 py-2 sm:px-4">
           {/* 板块筛选 */}
           <div className="mb-2">
-            <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">板块</div>
+            <div className="section-kicker mb-0.5">板块</div>
             <div className="flex flex-wrap gap-1">
               {BOARDS.map(board => {
                 const active = boardFilter.has(board)
@@ -890,7 +999,7 @@ export function Watchlist() {
             if (!items?.length) return null
             return (
               <div key={cat.label} className="mb-1.5 last:mb-0">
-                <div className="text-[10px] text-muted uppercase tracking-wider mb-0.5">{cat.label}</div>
+                <div className="section-kicker mb-0.5">{cat.label}</div>
                 <div className="flex flex-wrap gap-x-2 gap-y-1">
                   {items.map(item => {
                     const f = filters[item.id] || {}
@@ -933,8 +1042,8 @@ export function Watchlist() {
       )}
 
       {/* 可滚动列表区 — 占满剩余高度，内部独立滚动，表头 sticky 固定 */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="px-5 py-3">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="workspace-content !gap-2 !p-2 sm:!p-3">
           {/* 列表 */}
           {list.isLoading && <div className="text-sm text-muted">加载中…</div>}
           {list.isError && <div className="text-sm text-danger">读取自选失败</div>}
@@ -1104,7 +1213,7 @@ export function Watchlist() {
                 // 其余纯数据列 → 共享原语
                 return renderBuiltinDataCell(r, col)
               }}
-              className="rounded-card overflow-x-auto"
+              className="panel data-table-scroll overflow-x-auto"
             />
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
@@ -1139,7 +1248,7 @@ export function Watchlist() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/60"
               onClick={() => setConfirmClear(false)}
             />
             <motion.div
@@ -1147,7 +1256,7 @@ export function Watchlist() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: 8 }}
               transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              className="relative w-[90vw] max-w-[380px] rounded-card border border-border bg-base shadow-2xl p-6"
+              className="panel relative w-[90vw] max-w-[380px] bg-base p-6"
             >
               <h3 className="text-sm font-medium text-foreground mb-2">确认清空自选</h3>
               <p className="text-xs text-secondary mb-5">
@@ -1156,14 +1265,14 @@ export function Watchlist() {
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setConfirmClear(false)}
-                  className="px-3 py-1.5 rounded-btn bg-elevated text-secondary hover:bg-elevated/80 text-sm transition-colors"
+                  className="btn-secondary text-sm"
                 >
                   取消
                 </button>
                 <button
                   onClick={() => clearAll.mutate()}
                   disabled={clearAll.isPending}
-                  className="px-3 py-1.5 rounded-btn bg-danger/15 text-danger hover:bg-danger/25 text-sm font-medium transition-colors disabled:opacity-50"
+                  className="btn-ghost bg-danger/15 text-sm font-medium text-danger hover:bg-danger/25"
                 >
                   {clearAll.isPending ? '清除中...' : '确认清空'}
                 </button>

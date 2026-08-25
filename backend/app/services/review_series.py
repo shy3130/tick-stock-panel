@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Callable
 
 import polars as pl
@@ -128,6 +128,75 @@ def _clamp_days(days: int) -> int:
     return max(2, min(int(days or 20), MAX_TRADING_DAYS))
 
 
+_REVIEW_HISTORY_COLUMNS = [
+    "symbol",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "raw_close",
+    "raw_high",
+    "raw_low",
+    "turnover_rate",
+    "consecutive_limit_ups",
+    "consecutive_limit_downs",
+    "prev_close",
+    "change_pct",
+]
+
+
+def _load_review_history(repo, start: date, end: date) -> pl.DataFrame:
+    """只计算复盘需要的价变与涨跌停列，避免构造整套技术指标。"""
+    df = repo.get_enriched_range(
+        start,
+        end,
+        columns=_REVIEW_HISTORY_COLUMNS,
+    )
+    if df is None or df.is_empty():
+        return pl.DataFrame()
+
+    stored_names = (
+        "consecutive_limit_ups",
+        "consecutive_limit_downs",
+    )
+    for name in stored_names:
+        stored = f"_stored_{name}"
+        if name in df.columns:
+            df = df.rename({name: stored})
+        else:
+            df = df.with_columns(pl.lit(0).cast(pl.UInt32).alias(stored))
+
+    instruments = repo.get_instruments()
+    if instruments is None or instruments.is_empty() or "symbol" not in instruments.columns:
+        instruments = pl.DataFrame(schema={"symbol": pl.Utf8})
+
+    from app.indicators.pipeline import compute_limit_signals
+
+    df = compute_limit_signals(df.sort(["symbol", "date"]), instruments)
+    # 名称/行业等展示字段来自 instruments JOIN: 快速路径列集不含 name,
+    # 需显式补齐供 _brief / 题材龙头展示
+    if "name" not in df.columns and "name" in instruments.columns:
+        df = df.join(
+            instruments.select(["symbol", "name"]).unique(subset=["symbol"], keep="first"),
+            on="symbol",
+            how="left",
+        )
+    df = df.drop([name for name in stored_names if name in df.columns]).rename(
+        {f"_stored_{name}": name for name in stored_names}
+    )
+    return df.with_columns(
+        (pl.col("consecutive_limit_ups").fill_null(0) > 0).alias(
+            "signal_limit_up"
+        ),
+        (pl.col("consecutive_limit_downs").fill_null(0) > 0).alias(
+            "signal_limit_down"
+        ),
+    )
+
+
 def _load_window(repo, as_of: date | None, trading_days: int) -> tuple[pl.DataFrame, list[date], date | None]:
     """加载最近 `trading_days` 个交易日的 enriched 面板。
 
@@ -141,8 +210,9 @@ def _load_window(repo, as_of: date | None, trading_days: int) -> tuple[pl.DataFr
 
     # 交易日 → 日历天(约 1 : 1.5),再留 10 天缓冲覆盖长假
     calendar_days = min(int(trading_days * 1.6) + 10, 200)
-    df = svc._load_enriched_history(as_of, calendar_days)
-    if df is None or df.is_empty() or "date" not in df.columns:
+    start = as_of - timedelta(days=calendar_days)
+    df = _load_review_history(repo, start, as_of)
+    if df.is_empty() or "date" not in df.columns:
         return pl.DataFrame(), [], as_of
 
     df = df.filter(pl.col("date") <= as_of)

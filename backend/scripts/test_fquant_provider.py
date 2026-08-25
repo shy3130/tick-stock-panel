@@ -191,10 +191,24 @@ def main() -> int:
 
     # ------------------------------------------------------------------ #
     print("=== 7. get_minute（走 DuckDB market_minutes，§8.2）===")
-    minute_df = p.get_minute(["600519.SH"], start, end, "stock")
-    if minute_df.is_empty():
-        _skip("get_minute 返回空 DF（DuckDB 可能不可达或非交易日）")
+    # 分钟 catalog 对超覆盖日期 fail-closed（刻意语义）：先把窗口末端钳到
+    # 已发布水位，水位不可知时保持原窗口让 fail-closed 原样暴露。
+    minute_end = end
+    coverage = p.get_minute_coverage()
+    if coverage and coverage.get("latest_date"):
+        from datetime import date as _date
+
+        covered = _date.fromisoformat(str(coverage["latest_date"]))
+        minute_end = min(end, datetime.combine(covered, datetime.max.time()))
+    inverted = minute_end.date() < start.date()
+    minute_df = None
+    if inverted:
+        # 水位完全落后于查询窗口：倒置窗口会走 get_minute 单日旧日期路径，
+        # 读取窗口外数据并误判通过。这是数据侧状态而非 provider 缺陷，显式跳过。
+        _skip(f"get_minute 发布水位 {minute_end.date()} 早于查询窗口起点 {start.date()}")
     else:
+        minute_df = p.get_minute(["600519.SH"], start, minute_end, "stock")
+    if minute_df is not None and not minute_df.is_empty():
         print(f"  ✓ get_minute 返回 {minute_df.height} 行, 列: {minute_df.columns}")
         # 验证 MINUTE_COLUMNS
         from app.data_providers.schemas import MINUTE_COLUMNS
@@ -202,6 +216,8 @@ def main() -> int:
             assert col in minute_df.columns, f"缺少列 {col}"
         print("  ✓ MINUTE_COLUMNS 完整")
         print(minute_df.head(3).to_pandas().to_string())
+    elif not inverted:
+        _skip("get_minute 返回空 DF（DuckDB 可能不可达或非交易日）")
 
     # ------------------------------------------------------------------ #
     print("=== 8. get_adj_factors（走 DuckDB market_xdxr，§8.2）===")

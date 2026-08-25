@@ -11,20 +11,31 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import agent, analysis, auth as auth_api, backtest, data, documents, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, patterns, pipeline, research, review, rps, screener, settings as settings_api, signals, stock_analysis, strategy, trade_journal, watchlist
+from app.api import agent, analysis, auth as auth_api, backtest, backtest_optimizer, backtest_parameter_grid, cross_section, data, documents, ext_data, financials, indices, intraday, kline, market_data, market_recap, monitor_rules, alerts, overview, patterns, pipeline, regime, research, research_analysis, review, rps, screener, settings as settings_api, signal_scorecard, signals, stock_analysis, strategy, strategy_profile, trade_journal, trading, trading_plans, trading_review, watchlist
 from app.api.routes import router as core_router
 from app.config import settings
+from app.log_redaction import install_secret_redaction_filter
 from app.data_providers.capability_gate import detect_capabilities
 from app.jobs import daily_pipeline
+from app.data_providers.registry import close_all_providers
 from app.services.data_mode import current_data_mode
 from app.services.quote_service import QuoteService
+from app.services.screener import close_screener_sql_connection
 from app.storage.repository import DataStore, KlineRepository
 
 logging.basicConfig(
     level=settings.log_level,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+install_secret_redaction_filter()
 logger = logging.getLogger(__name__)
+
+
+def _run_shutdown_step(name: str, callback) -> None:
+    try:
+        callback()
+    except Exception:  # noqa: BLE001
+        logger.exception("shutdown step failed: %s", name)
 
 
 @asynccontextmanager
@@ -47,6 +58,10 @@ async def lifespan(app: FastAPI):
     repo = KlineRepository(store)
     app.state.datastore = store
     app.state.repo = repo
+
+    # 先发布 provider 已确认水位，再预热缓存；否则后台 bootstrap 启动前的
+    # 短窗口可能把磁盘上未完成/未确认的更晚 enriched 分区暴露给业务 API。
+    daily_pipeline.initialize_local_enriched_ceiling(repo)
 
     # Polars 缓存预热
     repo.refresh_cache()
@@ -115,6 +130,7 @@ async def lifespan(app: FastAPI):
 
     # 策略引擎
     from app.strategy.engine import StrategyEngine
+    from app.strategy import config as strategy_config
     from app.strategy.monitor import StrategyMonitorService
     from app.services.screener import ScreenerService
 
@@ -123,14 +139,37 @@ async def lifespan(app: FastAPI):
         Path(__file__).resolve().parent / "strategy" / "builtin",
         store.data_dir / "strategies" / "custom",
         store.data_dir / "strategies" / "ai",
+        store.data_dir / "strategies" / "composite",
     ]
     strategy_engine = StrategyEngine(
         enriched_loader=_screener_svc._load_enriched_for_date,
         enriched_history_loader=_screener_svc._load_enriched_history,
         strategy_dirs=strategy_dirs,
+        override_loader=lambda strategy_id: strategy_config.load_override(
+            store.data_dir, strategy_id
+        ),
     )
     app.state.strategy_engine = strategy_engine
+    # F16: 方案注册为 screen:<hex> 策略 (监控/回测复用); reload 后由 hook 重注册。
+    from app.strategy.screen_bridge import sync_screen_strategies
+    try:
+        logger.info("screen strategies synced: %d", sync_screen_strategies(strategy_engine, store.data_dir))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("screen strategy sync failed (不影响启动): %s", e)
+    strategy_engine.post_reload_hooks.append(
+        lambda: sync_screen_strategies(strategy_engine, store.data_dir)
+    )
     logger.info("strategy engine loaded: %d strategies", len(strategy_engine.list_strategies()))
+
+    # 回测任务恢复: 服务重启后把磁盘上遗留的 running/pending (外来 lease)
+    # 标为 interrupted, 并做过期清理; 只标记不自动开跑。
+    try:
+        from app.backtest.job_recovery import recover_stale_backtest_jobs
+        recovered = recover_stale_backtest_jobs(store.data_dir)
+        if any(recovered.values()):
+            logger.info("backtest job recovery: %s", recovered)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("backtest job recovery failed (不影响启动): %s", e)
 
     try:
         from app.services.scheduled_research import ScheduledResearchStore, register_jobs
@@ -168,23 +207,28 @@ async def lifespan(app: FastAPI):
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
 
-    yield
-
-    if app.state.scheduler:
-        app.state.scheduler.shutdown(wait=False)
-    ps = getattr(app.state, "pull_scheduler", None)
-    if ps:
-        ps.stop()
-    fsc = getattr(app.state, "financial_scheduler", None)
-    if fsc:
-        fsc.stop()
-    qs = getattr(app.state, "quote_service", None)
-    if qs:
-        qs.stop()
-    dsvc = getattr(app.state, "depth_service", None)
-    if dsvc:
-        dsvc.stop_polling()
-    logger.info("shutdown")
+    try:
+        yield
+    finally:
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler:
+            _run_shutdown_step("scheduler", lambda: scheduler.shutdown(wait=False))
+        ps = getattr(app.state, "pull_scheduler", None)
+        if ps:
+            _run_shutdown_step("pull scheduler", ps.stop)
+        fsc = getattr(app.state, "financial_scheduler", None)
+        if fsc:
+            _run_shutdown_step("financial scheduler", fsc.stop)
+        quote_service = getattr(app.state, "quote_service", None)
+        if quote_service:
+            _run_shutdown_step("quote service", quote_service.stop)
+        depth = getattr(app.state, "depth_service", None)
+        if depth:
+            _run_shutdown_step("depth service", depth.stop_polling)
+        _run_shutdown_step("data providers", close_all_providers)
+        _run_shutdown_step("screener SQL connection", close_screener_sql_connection)
+        _run_shutdown_step("data store", store.close)
+        logger.info("shutdown")
 
 
 app = FastAPI(
@@ -258,6 +302,8 @@ app.include_router(kline.router)
 app.include_router(watchlist.router)
 app.include_router(screener.router)
 app.include_router(backtest.router)
+app.include_router(backtest_optimizer.router)
+app.include_router(backtest_parameter_grid.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
@@ -265,7 +311,10 @@ app.include_router(analysis.router)
 app.include_router(agent.router)
 app.include_router(pipeline.router)
 app.include_router(research.router)
+app.include_router(cross_section.router)
+app.include_router(research_analysis.router)
 app.include_router(data.router)
+app.include_router(market_data.router)
 app.include_router(documents.router)
 app.include_router(ext_data.router)
 app.include_router(financials.router)
@@ -274,12 +323,18 @@ app.include_router(market_recap.router)
 app.include_router(review.router)
 app.include_router(settings_api.router)
 app.include_router(strategy.router)
+app.include_router(regime.router)
 app.include_router(signals.router)
+app.include_router(signal_scorecard.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(patterns.router)
 app.include_router(trade_journal.router)
+app.include_router(trading.router)
+app.include_router(trading_plans.router)
+app.include_router(trading_review.router)
+app.include_router(strategy_profile.router)
 
 
 # 能力门控异常 → 403(而非默认 500)
@@ -289,6 +344,10 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from app.capabilities import CapabilityDenied
 from app.data_providers.fquant.catalog_resolver import CatalogError, StaleCatalogError
+from app.errors import AppError, app_error_handler
+
+# 统一失败语义 (data_incomplete/stale_input/kernel_not_ready 等) → 422 + {code, detail}
+app.add_exception_handler(AppError, app_error_handler)
 
 
 @app.exception_handler(CapabilityDenied)

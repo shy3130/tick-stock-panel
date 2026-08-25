@@ -77,15 +77,18 @@ class AIStrategyGenerator:
     async def _call_llm(self, user_prompt: str, guide: str, *, profile_id: str | None = None) -> str:
         """Call the configured AI provider and return generated strategy code."""
         from app.services.ai_provider import generate_ai_text
+        from app.services.ai_budgets import resolve_budget
 
+        budget = resolve_budget("strategy_generate")
         content = await generate_ai_text(
             [
                 {"role": "system", "content": _SYSTEM_PREFIX + guide},
                 {"role": "user", "content": user_prompt},
             ],
             profile_id=profile_id,
-            temperature=0.3,
-            max_tokens=3000,
+            temperature=budget.temperature,
+            max_tokens=budget.max_tokens,
+            timeout=budget.timeout,
         )
         # Extract fenced code if the model wrapped the answer in Markdown.
         if "```python" in content:

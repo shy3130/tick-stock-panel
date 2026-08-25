@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import AsyncIterator
 
 import polars as pl
 
+from app.services.ai_structured import CancellationToken
 from app.services.document_reader import format_prompt_document
 from app.services.financial_sync import get_financial_df
 
@@ -75,22 +77,22 @@ def _summarize(fins: dict[str, list[dict]]) -> str:
 # 系统提示词 —— CFA 分析师级,九维分析框架
 # ================================================================
 
-_SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务分析师(CFA + CPA),服务于专业机构投资者。你的任务是:基于提供的上市公司财务数据,产出一份**严谨、专业、可直接用于投资决策**的财务分析报告。
+_SYSTEM_PROMPT = """你是 TickFlow 的只读研究助手,基于提供的上市公司财务数据做财务质量诊断。你的任务是解释报表事实,而不是给出投资决策或交易指令。
 
 ## 输出规范
 
 用 **Markdown** 格式输出,严格遵循以下结构。不要输出任何 JSON 或代码块,直接输出 Markdown 正文。
 
-### 1. 📌 核心摘要(1-2 句)
-用一句话概括该公司的财务画像:盈利质量、成长动能、财务健康度的最关键判断。结尾用【综合评级:★★★☆☆】给出 1-5 星评级。
+### 1. 核心摘要(1-2 句)
+用一句话概括该公司的财务画像:盈利质量、成长动能、财务健康度的最关键判断。结尾用【综合评级:★★★☆☆】给出 1-5 星**财务质量**评级(不是买卖评级)。
 
-### 2. ✅ 亮点(2-3 条)
+### 2. 亮点(2-3 条)
 列出最值得关注的**积极信号**,每条用加粗短语领起,配数据支撑。例如盈利高增、ROE 持续提升、现金流充沛等。
 
-### 3. ⚠️ 风险提示(2-3 条)
+### 3. 风险提示(2-3 条)
 客观指出**潜在风险或值得警惕的信号**,例如应收激增、存货堆积、经营现金流与净利润背离、债务攀升等。宁可保守,不要回避。
 
-### 4. 📊 分项诊断
+### 4. 分项诊断
 用**表格**呈现各维度的诊断结论,列为「维度 / 关键指标 / 判断」。维度包括:
 - **盈利能力**:ROE / ROA / 毛利率 / 净利率
 - **成长性**:营收同比 / 净利润同比
@@ -100,8 +102,8 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务�
 
 每个判断给「优秀 / 良好 / 一般 / 偏弱 / 警惕」之一,并一句话说明依据。
 
-### 5. 🎯 综合评估与展望
-2-3 段总结:该公司当前的财务状态(优秀/稳健/承压/恶化)、核心驱动力、未来需重点跟踪的指标。**结尾给出"投资参考"**:从纯财务质量角度,该股属于(高质量蓝筹 / 稳健成长 / 周期波动 / 财务承压 / 高风险)中的哪一类。
+### 5. 综合评估与跟踪点
+2-3 段总结:该公司当前的财务状态(优秀/稳健/承压/恶化)、核心驱动力、未来需重点跟踪的指标。**结尾给出财务质量归类**:高质量 / 稳健成长 / 周期波动 / 财务承压 / 高风险(仅描述报表质量,不是投资建议)。
 
 ## 分析准则(务必遵守)
 
@@ -110,10 +112,11 @@ _SYSTEM_PROMPT = """你是一位拥有 15 年 A 股投研经验的资深财务�
 3. **交叉验证**:经营现金流 vs 净利润(是否造血)、毛利率 vs 费用率(盈利结构)、负债 vs 资产(杠杆)
 4. **行业常识**:对照 A 股常识判断水平(如 ROE>15% 优秀,资产负债率>70% 偏高,毛利率<20% 偏低)
 5. **诚实中立**:数据不支持时直言"数据不足,无法判断",绝不编造或过度演绎
-6. **简明有力**:避免冗长,用专业投资者能扫读的密度输出,总字数 800-1500 字
+6. **禁止交易指令**:不得输出买入、卖出、仓位、目标价或操作倾向
+7. **简明**:避免冗长,用专业投资者能扫读的密度输出,总字数 800-1500 字
 
 ## 重要免责
-报告末尾附一行:"> ⚠️ 本报告由 AI 基于公开财务数据生成,仅供参考,不构成任何投资建议。"
+报告末尾附一行:"> ⚠️ 本报告由 AI 基于公开财务数据生成,仅供研究参考,不构成投资建议或交易指令。"
 
 现在请基于下方数据进行分析。"""
 
@@ -147,6 +150,8 @@ async def analyze_financials_stream(
     focus: str = "",
     document_text: str = "",
     profile_id: str | None = None,
+    *,
+    cancel_token: CancellationToken | None = None,
 ) -> AsyncIterator[str]:
     """流式分析:yield 出每个文本 chunk。
 
@@ -155,6 +160,8 @@ async def analyze_financials_stream(
     - 出错时 yield {"type":"error","message":"..."}
     - 结束 yield {"type":"done"}
     """
+    token = cancel_token or CancellationToken()
+    token.raise_if_cancelled()
     # 1. 加载数据
     fins = _load_stock_financials(data_dir, symbol)
     total_rows = sum(len(v) for v in fins.values())
@@ -170,22 +177,28 @@ async def analyze_financials_stream(
         "periods": total_rows,
     }, ensure_ascii=False)
 
-    # 3. 调用 LLM 流式
     try:
         from app.services.ai_provider import stream_ai_text
+        from app.services.ai_budgets import resolve_budget
 
+        budget = resolve_budget("financials")
         user_prompt = _build_user_prompt(fins, symbol, focus, document_text)
+        token.raise_if_cancelled()
         async for delta in stream_ai_text(
             [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             profile_id=profile_id,
-            temperature=0.4,
-            max_tokens=4000,
+            temperature=budget.temperature,
+            max_tokens=budget.max_tokens,
+            timeout=budget.timeout,
         ):
+            token.raise_if_cancelled()
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("AI financial analysis failed for %s: %s", symbol, e)
         yield json.dumps({"type": "error", "message": f"AI 分析失败: {e}"}, ensure_ascii=False)

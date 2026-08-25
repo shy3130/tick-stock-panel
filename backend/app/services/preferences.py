@@ -71,9 +71,6 @@ def get_realtime_watchlist_symbols() -> list[str]:
     return out
 
 
-def set_realtime_watchlist_symbols(symbols: list[str]) -> list[str]:  # noqa: ARG001
-    """兼容旧接口: Free 实时标的现在由自选页前 5 个决定。"""
-    return get_realtime_watchlist_symbols()
 
 
 def set_realtime_quote_interval(interval: float) -> float:
@@ -197,15 +194,6 @@ def set_pipeline_pull_types(cfg: dict) -> dict:
     return get_pipeline_pull_types()
 
 
-def get_pipeline_index_symbols() -> str:
-    """指数自定义拉取代码(逗号/换行/空格分隔)。空串表示全量。"""
-    return str(load().get("pipeline_index_symbols", "") or "").strip()
-
-
-def set_pipeline_index_symbols(symbols: str) -> str:
-    """保存指数自定义代码,返回规范化后的字符串。"""
-    save({"pipeline_index_symbols": symbols})
-    return get_pipeline_index_symbols()
 
 
 def get_pipeline_schedule() -> dict:
@@ -304,7 +292,7 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
 
 # 复盘推送可选渠道白名单。
 # 多选: 不推送 = 空数组, 而非 'none'
-REVIEW_PUSH_CHANNELS = {"feishu", "dingtalk", "wecom", "meow"}
+REVIEW_PUSH_CHANNELS = {"feishu", "dingtalk", "wecom", "meow", "pushplus"}
 
 
 def get_review_schedule() -> dict:
@@ -369,6 +357,20 @@ def set_review_push_channels(channels: list[str]) -> list[str]:
     return cleaned
 
 
+# ===== 交易自动复盘 (P6.4 L0/L1/L2 状态驱动 AI 归因) =====
+
+def get_trading_auto_review() -> bool:
+    """交易自动复盘开关。默认 False —— 盘后状态驱动归因依赖 AI,
+    且会消耗 token, 由用户明确开启。"""
+    return bool(load().get("tradingAutoReview", False))
+
+
+def set_trading_auto_review(enabled: bool) -> bool:
+    """保存交易自动复盘开关。"""
+    save({"tradingAutoReview": bool(enabled)})
+    return bool(enabled)
+
+
 
 # ===== 实时监控 =====
 
@@ -379,7 +381,7 @@ SSE_REFRESH_PAGES_DEFAULT = {
     "limit-ladder": False,
 }
 
-SIDEBAR_INDEX_SYMBOLS_DEFAULT = ["000001.SH", "399001.SZ", "399006.SZ", "000680.SH"]
+SIDEBAR_INDEX_SYMBOLS_DEFAULT = ["000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX"]
 
 
 # ===== 盘中实时行情范围 (独立于盘后管道范围) =====
@@ -404,11 +406,13 @@ def get_realtime_index_mode() -> str:
 
 
 def get_realtime_index_symbols() -> list[str]:
+    from app.data_providers.fquant.symbols import canonical_index_symbol
     stored = load().get("realtime_index_symbols", SIDEBAR_INDEX_SYMBOLS_DEFAULT)
     if isinstance(stored, str):
         import re
         stored = [s.strip() for s in re.split(r"[,\s]+", stored) if s.strip()]
-    return [str(s) for s in stored if str(s).strip()]
+    # 兼容旧存量值: 内存规范化为 .INDEX (不回写磁盘)
+    return [canonical_index_symbol(str(s)) for s in stored if str(s).strip()]
 
 
 def set_realtime_quote_scope(cfg: dict) -> dict:
@@ -451,10 +455,23 @@ def set_sse_refresh_pages(pages: dict[str, bool]) -> dict[str, bool]:
 
 
 def get_sidebar_index_symbols() -> list[str]:
-    """返回左侧菜单显示的指数代码。"""
+    """返回左侧菜单显示的 canonical 指数代码。"""
+    import re
+
+    from app.data_providers.fquant.symbols import canonical_index_symbol
+
     stored = load().get("sidebar_index_symbols", SIDEBAR_INDEX_SYMBOLS_DEFAULT)
+    if isinstance(stored, str):
+        stored = [s for s in re.split(r"[,\s]+", stored) if s]
+    if not isinstance(stored, list):
+        stored = SIDEBAR_INDEX_SYMBOLS_DEFAULT
     allowed = set(SIDEBAR_INDEX_SYMBOLS_DEFAULT)
-    return [s for s in stored if s in allowed]
+    normalized = (
+        canonical_index_symbol(str(s))
+        for s in stored
+        if str(s).strip()
+    )
+    return list(dict.fromkeys(s for s in normalized if s in allowed))
 
 
 def get_strategy_monitor_enabled() -> bool:
@@ -494,33 +511,93 @@ def set_feishu_webhook_secret(secret: str) -> str:
     save({"feishu_webhook_secret": str(secret or "").strip()})
     return get_feishu_webhook_secret()
 
+# ── PushPlus (M18): token 存于 secrets.json (0600), 不入 preferences.json ──
+
+_PUSHPLUS_SECRET_KEY = "pushplus_token"
+
+
+def get_pushplus_token() -> str:
+    """PushPlus token — 从 secrets.json 读取 (0600), 绝不回退到 preferences.json。"""
+    from app import secrets_store
+    return str(secrets_store.load().get(_PUSHPLUS_SECRET_KEY, "") or "")
+
+
+def get_pushplus_status() -> dict:
+    """PushPlus 对外可见状态: configured + masked token (不含真实 token)。"""
+    from app import secrets_store
+    token = get_pushplus_token()
+    return {
+        "configured": bool(token),
+        "token_masked": secrets_store.mask(token) if token else "",
+    }
+
+
+def set_pushplus_token(token: str) -> None:
+    """保存 PushPlus token 到 secrets.json (0600)。"""
+    from app import secrets_store
+    secrets_store.save({_PUSHPLUS_SECRET_KEY: str(token or "").strip()})
+
+
+def clear_pushplus_token() -> None:
+    """从 secrets.json 删除 PushPlus token。"""
+    from app import secrets_store
+    secrets_store.clear(_PUSHPLUS_SECRET_KEY)
+
 
 def get_webhook_channels() -> dict:
-    """返回所有 webhook 通道配置；兼容旧 feishu 字段。"""
+    """返回所有 webhook 通道配置；兼容旧 feishu 字段。
+
+    PushPlus 例外: token 存于 secrets.json, 对外只暴露 configured/token_masked。
+    """
     channels = load().get("webhook_channels", {})
     if not isinstance(channels, dict):
         channels = {}
     out = {k: v for k, v in channels.items() if k in REVIEW_PUSH_CHANNELS and isinstance(v, dict)}
+    # PushPlus token 永远存于 secrets.json, 不从 preferences.json 读取 (防泄漏)
+    out.pop("pushplus", None)
     out["feishu"] = {
         "url": get_feishu_webhook_url(),
         "secret": get_feishu_webhook_secret(),
     }
+    out["pushplus"] = get_pushplus_status()
     return out
 
 
 def get_configured_webhook_channels() -> dict:
-    channels = get_webhook_channels()
-    return {
-        k: v for k, v in channels.items()
-        if (v.get("url") or v.get("nickname") or "").strip()
-    }
+    """返回已配置通道 (含真实凭据), 供 adapter 发送。
+
+    PushPlus: 从 secrets.json 注入真实 token; 其他通道复用 get_webhook_channels 的 url/nickname。
+    """
+    out = {}
+    for k, v in get_webhook_channels().items():
+        if k == "pushplus":
+            token = get_pushplus_token()
+            if token:
+                out[k] = {"token": token}
+        elif (v.get("url") or v.get("nickname") or "").strip():
+            out[k] = v
+    return out
 
 
 def set_webhook_channel(channel: str, config: dict) -> dict:
-    """保存单个 webhook 通道。feishu 仍写旧字段，其他写 webhook_channels。"""
+    """保存单个 webhook 通道。feishu 仍写旧字段，其他写 webhook_channels。
+
+    PushPlus 特殊处理: token 存于 secrets.json (0600), 不入 preferences.json。
+    - token 非空 → 保存到 secrets.json
+    - clear_token=True → 从 secrets.json 删除
+    - token 空 + clear_token=False → 保留旧 token (无操作)
+    """
     channel = str(channel or "").strip().lower()
     if channel not in REVIEW_PUSH_CHANNELS:
         raise ValueError(f"unsupported webhook channel: {channel}")
+    if channel == "pushplus":
+        token = str(config.get("token") or "").strip()
+        clear_token = bool(config.get("clear_token"))
+        if clear_token:
+            clear_pushplus_token()
+        elif token:
+            set_pushplus_token(token)
+        return get_pushplus_status()
     cleaned = {
         "url": str(config.get("url") or "").strip(),
         "secret": str(config.get("secret") or "").strip(),
@@ -663,3 +740,153 @@ def set_financial_sync_time(table: str, iso_ts: str) -> None:
     times = get_financial_sync_times()
     times[table] = iso_ts
     save({"financial_sync_times": times})
+
+
+
+# ===== AI profile 路由策略 (P3 显式受控 fallback，默认关闭) =====
+
+def get_ai_route_policy() -> dict:
+    """返回当前 route policy。默认关闭。存储于 preferences（非密钥数据）。"""
+    d = load().get("ai_route_policy") or {}
+    return {
+        "allow_profile_fallback": bool(d.get("allow_profile_fallback", False)),
+        "fallback_profile_ids": [str(x) for x in (d.get("fallback_profile_ids") or []) if str(x).strip()],
+    }
+
+
+def set_ai_route_policy(allow_profile_fallback: bool, fallback_profile_ids: list[str]) -> dict:
+    """保存策略（内部去重保序）。返回规范化值。"""
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for x in (fallback_profile_ids or []):
+        s = str(x).strip()
+        if s and s not in seen:
+            seen.add(s)
+            cleaned.append(s)
+    save({"ai_route_policy": {"allow_profile_fallback": bool(allow_profile_fallback), "fallback_profile_ids": cleaned}})
+    return get_ai_route_policy()
+
+
+# ===== 结构化计划检查 (P4 默认关闭) =====
+
+def get_structured_plan_check_enabled() -> bool:
+    """结构化计划检查开关。默认 False —— AI 双阶段检查会消耗 token,
+    且涉及交易决策辅助, 由用户明确开启。"""
+    return bool(load().get("structured_plan_check_enabled", False))
+
+
+def set_structured_plan_check_enabled(enabled: bool) -> bool:
+    """保存结构化计划检查开关。"""
+    save({"structured_plan_check_enabled": bool(enabled)})
+    return bool(enabled)
+
+
+# ===== 受控外部 fallback (默认关闭) =====
+# 完整契约见 backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md 与 AGENTS.md §4。
+# realtime/depth scope 均已接线；外部数据只用于只读展示，绝不写入
+# canonical/enriched/选股/监控/回测。
+
+# 合法 scope 白名单 (契约: 仅 realtime/depth 子集)。
+_EXTERNAL_FALLBACK_SCOPES_ALLOWED = ("realtime", "depth")
+
+
+def get_external_fallback_enabled() -> bool:
+    """受控外部 fallback 总开关。默认 False —— 用户显式开启后对应 scope 才激活。"""
+    return bool(load().get("external_fallback_enabled", False))
+
+
+def get_external_fallback_scopes() -> list[str]:
+    """已启用的 fallback scope 子集 (realtime/depth 白名单内), 去重保序。
+
+    默认空列表 (即便 enabled=True, 也需 scope 显式包含才触发)。
+    非白名单值被静默过滤 (读取侧防御; 写入侧 400 拒绝)。
+    """
+    stored = load().get("external_fallback_scopes", []) or []
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in stored:
+        key = str(s).strip().lower()
+        if key in _EXTERNAL_FALLBACK_SCOPES_ALLOWED and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def set_external_fallback(enabled: bool, scopes: list[str]) -> tuple[bool, list[str]]:
+    """保存受控外部 fallback 偏好。
+
+    enabled: 总开关。scopes: 启用 scope 子集 (白名单内, 去重保序)。
+    返回清洗后的 (enabled, scopes)。非法 scope 抛 ValueError (API 层转 400)。
+    """
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for s in scopes or []:
+        key = str(s).strip().lower()
+        if not key:
+            continue
+        if key not in _EXTERNAL_FALLBACK_SCOPES_ALLOWED:
+            raise ValueError(f"invalid external_fallback scope: {key}")
+        if key not in seen:
+            seen.add(key)
+            cleaned.append(key)
+    enabled_b = bool(enabled)
+    save({"external_fallback_enabled": enabled_b, "external_fallback_scopes": cleaned})
+    return enabled_b, cleaned
+
+# ===== 信号记分卡 (Signal Scorecard, opt-in 默认空) =====
+# 记分卡是回顾性分析工具: 把布尔技术信号实例化为不可变事件, 再用本地 enriched
+# 前向 N 个交易日收盘价计算 hit/miss/neutral。tracked_signals 白名单 + 默认空
+# 防止全市场信号洪泛。不接 provider、不生成荐股/买卖建议。
+
+_SIGNAL_DIRECTION_ALLOWED = ("up", "not_up")
+
+
+def get_tracked_signals() -> list[dict]:
+    """返回信号记分卡跟踪的信号列表。默认空 (opt-in)。
+
+    每项: {signal_key, signal_name, signal_kind, direction, enabled}
+      - signal_key: enriched 布尔列名 (signal_* 内置 / csg_* 自定义)
+      - signal_kind: entry | exit | builtin (决定默认方向推断)
+      - direction: "up"/"not_up" 覆盖推断, 或 None (按 kind 推断)
+      - enabled: 是否参与实例化/评估
+    """
+    stored = load().get("tracked_signals", []) or []
+    out: list[dict] = []
+    for t in stored:
+        if not isinstance(t, dict):
+            continue
+        sk = str(t.get("signal_key", "")).strip()
+        if not sk:
+            continue
+        d = t.get("direction")
+        out.append({
+            "signal_key": sk,
+            "signal_name": str(t.get("signal_name", sk)),
+            "signal_kind": str(t.get("signal_kind", "builtin")),
+            "direction": d if d in _SIGNAL_DIRECTION_ALLOWED else None,
+            "enabled": bool(t.get("enabled", True)),
+        })
+    return out
+
+
+def set_tracked_signals(items: list[dict]) -> list[dict]:
+    """保存跟踪信号列表 (去重保序, 过滤空 signal_key)。返回清洗后的列表。"""
+    cleaned: list[dict] = []
+    seen: set[str] = set()
+    for t in items or []:
+        if not isinstance(t, dict):
+            continue
+        sk = str(t.get("signal_key", "")).strip()
+        if not sk or sk in seen:
+            continue
+        seen.add(sk)
+        d = t.get("direction")
+        cleaned.append({
+            "signal_key": sk,
+            "signal_name": str(t.get("signal_name", sk)),
+            "signal_kind": str(t.get("signal_kind", "builtin")),
+            "direction": d if d in _SIGNAL_DIRECTION_ALLOWED else None,
+            "enabled": bool(t.get("enabled", True)),
+        })
+    save({"tracked_signals": cleaned})
+    return get_tracked_signals()

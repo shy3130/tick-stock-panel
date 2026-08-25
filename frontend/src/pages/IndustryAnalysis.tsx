@@ -377,12 +377,12 @@ export function IndustryAnalysis() {
   if (!activeConfig) {
     // 极端情况: 无任何行业配置。仍提供一键获取内置行业数据入口
     return (
-      <>
-        <div className="flex h-full flex-col">
+      <div className="workspace-page h-full">
+        <div className="flex h-full min-h-0 flex-col">
           <PageHeader
             title="行业分析"
             right={
-              <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
+              <button onClick={() => setShowConfig(true)} className="btn-ghost h-8 w-8 px-0" title="配置数据源">
                 <Settings2 className="h-4 w-4" />
               </button>
             }
@@ -398,36 +398,51 @@ export function IndustryAnalysis() {
         <AnimatePresence>
           {showConfig && <AnalysisConfigDialog currentConfig={fieldConfig} onSave={handleSaveConfig} onClose={() => setShowConfig(false)} showHierarchyLevel />}
         </AnimatePresence>
-      </>
+      </div>
     )
   }
 
   const industryLevelLabel = `${industryLevel}级行业`
+  const classificationAsOf =
+    activeConfig.latest_sync_date?.slice(0, 10) ??
+    rowsQuery.data?.date ??
+    null
+  const marketAsOf = marketQuery.data?.as_of ?? null
+  const classificationStale =
+    classificationAsOf !== null &&
+    marketAsOf !== null &&
+    classificationAsOf < marketAsOf
+
 
   return (
-    <>
+    <div className="workspace-page">
       <PageHeader
         title="行业分析"
-        subtitle={`${industryLevelLabel} · ${marketQuery.data?.as_of ?? rowsQuery.data?.date ?? '最新'} · ${stats.length} 个行业 · ${totalSymbols} 只标的`}
+        subtitle={`${industryLevelLabel} · 分类 ${classificationAsOf ?? '未知'} · 行情 ${marketAsOf ?? '未知'} · ${stats.length} 个行业 · ${totalSymbols} 只标的`}
         right={
-          <div className="flex items-center gap-1">
+          <div className="workspace-toolbar">
             <button
               onClick={() => { rowsQuery.refetch(); marketQuery.refetch() }}
               disabled={rowsQuery.isFetching || marketQuery.isFetching}
-              className="p-1.5 text-muted hover:bg-surface disabled:opacity-50"
+              className="btn-ghost h-8 w-8 px-0 disabled:opacity-50"
               title="刷新"
             >
               <RefreshCw className={cn('h-4 w-4', (rowsQuery.isFetching || marketQuery.isFetching) && 'animate-spin')} />
             </button>
-            <button onClick={() => setShowConfig(true)} className="p-1.5 text-muted hover:bg-surface hover:text-accent" title="配置数据源">
+            <button onClick={() => setShowConfig(true)} className="btn-ghost h-8 w-8 px-0" title="配置数据源">
               <Settings2 className="h-4 w-4" />
             </button>
           </div>
         }
       />
 
-      <div className="min-h-full bg-[radial-gradient(circle_at_12%_0%,rgba(245,158,11,0.12),transparent_28%),radial-gradient(circle_at_85%_8%,rgba(244,63,94,0.08),transparent_28%)] px-6 py-5">
-        <div className="mx-auto max-w-[1440px] space-y-5">
+      <div className="workspace-content">
+        <div className="mx-auto max-w-[1440px] space-y-3">
+          {classificationStale && (
+            <div className="rounded-btn border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+              行业分类快照停在 {classificationAsOf}，行情价格截至 {marketAsOf}；统计为旧分类与新行情的组合，请先刷新分类数据再用于当日判断。
+            </div>
+          )}
           <HeroPanel leading={leading[0]} falling={falling[0]} activeIndustry={activeIndustry} industryBreadth={industryBreadth} />
 
           <MarketPulse
@@ -463,7 +478,7 @@ export function IndustryAnalysis() {
               <IndustryFocus stat={selected} onStockClick={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name ?? '') }} />
             </div>
           ) : rowsQuery.isLoading ? (
-            <div className="rounded-2xl border border-border bg-surface px-6 py-16 text-center text-sm text-muted">正在计算行业强度...</div>
+            <div className="panel px-6 py-16 text-center text-sm text-muted">正在计算行业强度...</div>
           ) : needsIndustryFetch ? (
             <PresetFetchState
               title="未获取行业数据"
@@ -489,7 +504,7 @@ export function IndustryAnalysis() {
           onClose={() => { setPreviewSymbol(null); setPreviewName('') }}
         />
       )}
-    </>
+    </div>
   )
 }
 
@@ -543,7 +558,7 @@ function HeroMetric({ icon: Icon, label, value, hint, tone }: {
     blue: 'text-foreground',
   }[tone]
   return (
-    <div className="rounded-xl border border-border bg-surface px-3 py-2">
+    <div className="panel px-3 py-2">
       <div className="flex items-center justify-between text-[11px] text-muted">
         <span>{label}</span>
         <span className={cn('rounded-md p-1', toneClass)}><Icon className="h-3.5 w-3.5" /></span>
@@ -598,7 +613,7 @@ function PulseList({
   const toneHover = mode === 'up' ? 'hover:border-bull/35' : 'hover:border-bear/35'
 
   return (
-    <div className={cn('rounded-xl border bg-base/35 p-2', toneBorder)}>
+    <div className={cn('panel bg-base/35 p-2', toneBorder)}>
       <div className="mb-1.5 flex items-center justify-between px-1">
         <div className={cn('flex items-center gap-1.5 text-xs font-medium', toneText)}>
           {mode === 'up' ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
@@ -688,7 +703,7 @@ function IndustryRail({
   onSelect: (v: string) => void
 }) {
   return (
-    <section className="rounded-2xl border border-border bg-surface p-2.5">
+    <section className="panel p-2.5">
       <div className="px-1 pb-2.5">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-foreground">行业矩阵</h3>
@@ -736,7 +751,7 @@ function IndustryFocus({ stat, onStockClick }: { stat: IndustryStat | null; onSt
   const stocks = [...stat.stocks].sort((a, b) => b.leaderScore - a.leaderScore).slice(0, MAX_RENDERED_STOCKS)
   const topLeaders = stocks.slice(0, 3)
   return (
-    <section className="flex max-h-[720px] flex-col overflow-hidden rounded-2xl border border-border bg-surface">
+    <section className="panel flex max-h-[720px] flex-col overflow-hidden">
       <div className="shrink-0 border-b border-border px-5 py-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -815,9 +830,9 @@ function MiniStat({ label, value, cls }: { label: string; value: string; cls: st
 }
 
 function LeaderStage({ stocks, onStockClick }: { stocks: EnrichedStock[]; onStockClick: (symbol: string, name?: string) => void }) {
-  if (!stocks.length) return <div className="rounded-xl border border-border/60 bg-surface p-4 text-sm text-muted">暂无龙头候选</div>
+  if (!stocks.length) return <div className="panel p-4 text-sm text-muted">暂无龙头候选</div>
   return (
-    <div className="rounded-xl border border-border/60 bg-surface p-3">
+    <div className="panel p-3">
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-amber-300">
         <Crown className="h-3.5 w-3.5" />
         本行业三龙头
@@ -842,10 +857,10 @@ function LeaderStage({ stocks, onStockClick }: { stocks: EnrichedStock[]; onStoc
 }
 
 function ScoreExplain({ stock }: { stock?: EnrichedStock }) {
-  if (!stock) return <div className="rounded-xl border border-border/60 bg-surface p-4 text-sm text-muted">暂无评分拆解</div>
+  if (!stock) return <div className="panel p-4 text-sm text-muted">暂无评分拆解</div>
   const parts = stock.leaderParts
   return (
-    <div className="rounded-xl border border-border/60 bg-surface p-3">
+    <div className="panel p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-medium text-foreground">主龙头评分拆解</span>
         <span className="text-[11px] text-muted">涨幅 / 换手 / 成交 / 市值 / 量比 / 连板</span>

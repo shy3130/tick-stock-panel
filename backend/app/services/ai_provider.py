@@ -7,12 +7,18 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import tomllib
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app import secrets_store
 from app.config import settings
+from app.services import ai_routing
+
+if TYPE_CHECKING:
+    from app.services.ai_structured.models import GenerateResponse
 
 OPENAI_COMPAT_PROVIDER = "openai_compat"
 ACP_PROVIDER = "acp"
@@ -101,6 +107,25 @@ def ai_configured(provider: str | None = None) -> bool:
         return codex_cli_available()
     return bool(secrets_store.get_ai_key())
 
+def profile_configured(profile_id: str | None = None) -> bool:
+    """检查指定 profile (或默认 profile) 是否已配置可用。
+
+    与 ``ai_configured()`` 的区别: 当传入 ``profile_id`` 时检查该具体 profile,
+    而非始终检查默认 profile; 不传时等价于 ``ai_configured()`` (保持既有调用语义)。
+    """
+    if not profile_id:
+        return ai_configured()
+    from app.services import ai_profiles
+    profile = ai_profiles.resolve_profile(profile_id)
+    if not profile:
+        return False
+    provider = profile.get("provider") or OPENAI_COMPAT_PROVIDER
+    if provider == CODEX_CLI_PROVIDER:
+        return codex_cli_available()
+    if provider == ACP_PROVIDER:
+        return ai_profiles.is_available(profile)
+    return bool(profile.get("api_key"))
+
 
 async def generate_ai_text(
     messages: Sequence[Message],
@@ -124,6 +149,151 @@ async def generate_ai_text(
         max_tokens=max_tokens,
         timeout=timeout,
     )
+
+
+async def _generate_for_single_profile(
+    messages: Sequence[Message],
+    *,
+    profile_id: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 3000,
+    timeout: float = 180.0,
+) -> "GenerateResponse":
+    """Single profile generation core (extracted for P3 fallback orchestration).
+
+    Always returns GenerateResponse populated with primary=actual (no fb) for this attempt.
+    P3: ``profile_id`` 字段反映 *实际命中* profile (默认 profile 解析后回填其 id，
+    而非保留 None)，使 ai_meta 精确反映实际使用的 profile。
+    """
+    from app.services.ai_structured.models import AIUsage, GenerateResponse
+
+    profile = _resolve_ai_profile(profile_id)
+    actual_id = (profile or {}).get("id") or profile_id
+    provider = profile.get("provider") if profile else current_ai_provider()
+    model = (profile or {}).get("model") or current_ai_model()
+    if provider == CODEX_CLI_PROVIDER:
+        text = await _run_codex_cli(messages, profile=profile, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+        return GenerateResponse(
+            text=text, provider=provider, profile_id=actual_id, model=model,
+            primary_profile_id=profile_id, fallback_used=False, fallback_reason=None,
+        )
+    if provider == ACP_PROVIDER:
+        raise RuntimeError("ACP AI 配置尚未接入")
+
+    ai_key = (profile or {}).get("api_key") or secrets_store.get_ai_key()
+    if not ai_key:
+        raise RuntimeError("AI API Key 未配置, 请在设置页配置")
+    client = _openai_client(ai_key, timeout, profile=profile)
+    resp = await client.chat.completions.create(
+        model=model,
+        messages=list(messages),
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    usage_obj = getattr(resp, "usage", None)
+    prompt = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
+    completion = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+    details = getattr(usage_obj, "prompt_tokens_details", None)
+    cached = int(getattr(details, "cached_tokens", 0) or 0)
+    total = int(getattr(usage_obj, "total_tokens", prompt + completion) or (prompt + completion))
+    text = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+    return GenerateResponse(
+        text=text,
+        usage=AIUsage(prompt_tokens=prompt, cached_prompt_tokens=cached, completion_tokens=completion, total_tokens=total),
+        provider=provider,
+        profile_id=actual_id,
+        model=model,
+        primary_profile_id=profile_id,
+        fallback_used=False,
+        fallback_reason=None,
+    )
+
+
+async def generate_ai_text_with_meta(
+    messages: Sequence[Message],
+    *,
+    profile_id: str | None = None,
+    temperature: float = 0.3,
+    max_tokens: int = 3000,
+    timeout: float = 180.0,
+    allow_fallback: bool = True,
+):
+    """Generate text while preserving provider/model/token metadata.
+
+    ``generate_ai_text`` remains the compatibility entry point returning only
+    ``str``.  This additive API returns the structured runtime contract and
+    reports zero usage for providers that do not expose token counters.
+    P3: explicit controlled fallback wired here for non-stream path.
+    """
+    from app.services.ai_structured.models import AIUsage, GenerateResponse
+
+    if not allow_fallback:
+        return await _generate_for_single_profile(
+            messages, profile_id=profile_id, temperature=temperature, max_tokens=max_tokens, timeout=timeout
+        )
+
+    policy = ai_routing.load_route_policy()
+    if not policy.allow_profile_fallback:
+        return await _generate_for_single_profile(
+            messages, profile_id=profile_id, temperature=temperature, max_tokens=max_tokens, timeout=timeout
+        )
+
+    from app.services import ai_profiles
+    avail = set(ai_profiles.list_profile_ids())
+    # P3: primary 必须先解析为默认 profile id，否则 profile_id=None 时
+    # build_fallback_chain(None,...) 会把默认 profile 排除在链外。
+    resolved_primary = profile_id
+    if not resolved_primary:
+        resolved_primary = ai_profiles.get_default_profile_id() or None
+    chain = ai_routing.build_fallback_chain(resolved_primary, policy, avail)
+    if not chain:
+        return await _generate_for_single_profile(
+            messages, profile_id=profile_id, temperature=temperature, max_tokens=max_tokens, timeout=timeout
+        )
+
+    registry = ai_routing.get_health_registry()
+    running = AIUsage()
+    primary = resolved_primary
+    last_reason: str | None = None
+    last_exc: BaseException | None = None
+    for idx, pid in enumerate(chain):
+        if idx > 0 and registry.is_in_cooldown(pid):
+            continue
+        t0 = time.monotonic()
+        try:
+            resp = await _generate_for_single_profile(
+                messages, profile_id=pid, temperature=temperature, max_tokens=max_tokens, timeout=timeout
+            )
+            lat = (time.monotonic() - t0) * 1000.0
+            registry.record_success(pid, lat)
+            total_u = running.add(resp.usage)
+            return GenerateResponse(
+                text=resp.text,
+                usage=total_u,
+                provider=resp.provider,
+                profile_id=pid,  # actual used
+                model=resp.model,
+                primary_profile_id=primary,
+                fallback_used=(pid != primary),
+                fallback_reason=last_reason,
+            )
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                # cancelled must not fallback per contract
+                raise
+            lat = (time.monotonic() - t0) * 1000.0
+            cat = ai_routing.classify_provider_error(exc)
+            registry.record_failure(pid, cat, lat)
+            last_reason = cat
+            last_exc = exc
+            if not ai_routing.is_fallback_worthy(cat):
+                raise
+            continue
+
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("AI profile fallback exhausted without success")
+
 
 
 async def stream_ai_text(
@@ -156,6 +326,64 @@ async def stream_ai_text(
         timeout=timeout,
     ):
         yield chunk
+
+
+async def generate_ai_with_tools(
+    messages: Sequence[Message],
+    tools: list[dict],
+    *,
+    profile_id: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1200,
+    timeout: float = 60.0,
+) -> tuple[str | None, list[dict] | None]:
+    """Tool-aware generation for the agent loop.
+
+    For ``openai_compat`` providers: passes ``tools=`` to the chat completions
+    API (native OpenAI function calling). Returns ``(content, tool_calls)``.
+
+    For ``codex_cli`` / ``acp`` providers that don't support native tools:
+    falls back to ``generate_ai_text``, returning ``(text, None)`` so the
+    caller can parse the JSON tool request from the text via ``_parse_tool``.
+    """
+    profile = _resolve_ai_profile(profile_id)
+    provider = profile.get("provider") if profile else current_ai_provider()
+
+    # Codex CLI / ACP: 无原生 function calling，回退到 prompt 注入 JSON 模式
+    if provider == CODEX_CLI_PROVIDER:
+        text = await _run_codex_cli(messages, profile=profile, max_tokens=max_tokens, timeout=max(timeout, 600.0))
+        return text, None
+    if provider == ACP_PROVIDER:
+        raise RuntimeError("ACP AI 配置尚未接入")
+
+    ai_key = (profile or {}).get("api_key") or secrets_store.get_ai_key()
+    if not ai_key:
+        raise RuntimeError("AI API Key 未配置, 请在设置页配置")
+
+    client = _openai_client(ai_key, timeout, profile=profile)
+    resp = await client.chat.completions.create(
+        model=(profile or {}).get("model") or current_ai_model(),
+        messages=list(messages),
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        tool_choice="auto",
+    )
+    if not resp.choices:
+        return None, None
+    msg = resp.choices[0].message
+    content = msg.content or None
+    tool_calls = None
+    if msg.tool_calls:
+        tool_calls = [
+            {
+                "id": tc.id,
+                "name": tc.function.name,
+                "arguments": tc.function.arguments or "{}",
+            }
+            for tc in msg.tool_calls
+        ]
+    return content, tool_calls
 
 
 def _resolve_ai_profile(profile_id: str | None) -> dict | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 import polars as pl
@@ -10,17 +11,32 @@ from app.services.pinyin_index import add_pinyin_columns, pinyin_keys
 _SUGGEST_URL = "https://searchapi.eastmoney.com/api/suggest/get"
 
 
-def search_symbols(repo, query: str, limit: int = 20) -> list[dict]:
+def search_symbols(
+    repo,
+    query: str,
+    limit: int = 20,
+    asset_type: str | None = None,
+    use_suggest: bool = True,
+    asset_types: Collection[str] | None = None,
+    max_limit: int = 50,
+) -> list[dict]:
     q = query.strip()
     if not q:
         return []
-    limit = max(1, min(50, int(limit)))
-    local = _search_local(repo, q, limit)
-    if len(local) >= limit:
+    limit = max(1, min(int(max_limit), int(limit)))
+    requested_types = (
+        {asset_types}
+        if isinstance(asset_types, str)
+        else frozenset(asset_types) if asset_types else ({asset_type} if asset_type else None)
+    )
+    local = _search_local(repo, q, limit, asset_types=requested_types)
+    if len(local) >= limit or not use_suggest:
         return local
     seen = {r["symbol"] for r in local}
     out = list(local)
     for row in suggest_symbols(q, limit - len(local)):
+        if requested_types is not None and row.get("asset_type") not in requested_types:
+            continue
         if row["symbol"] not in seen:
             out.append(row)
             seen.add(row["symbol"])
@@ -43,10 +59,25 @@ def suggest_symbols(query: str, limit: int = 10) -> list[dict]:
     return rows[:limit]
 
 
-def _search_local(repo, query: str, limit: int) -> list[dict]:
+def _search_local(
+    repo,
+    query: str,
+    limit: int,
+    asset_types: Collection[str] | None = None,
+) -> list[dict]:
     frames = []
-    for asset_type, getter in (("stock", "get_instruments"), ("index", "get_index_instruments"), ("etf", "get_etf_instruments")):
-        df = getattr(repo, getter)()
+    for current_type, getter in (
+        ("stock", "get_instruments"),
+        ("index", "get_index_instruments"),
+        ("etf", "get_etf_instruments"),
+        ("hk", "get_hk_instruments"),
+    ):
+        if asset_types is not None and current_type not in asset_types:
+            continue
+        getter_fn = getattr(repo, getter, None)
+        if getter_fn is None:
+            continue
+        df = getter_fn()
         if df.is_empty():
             continue
         cols = [c for c in ("symbol", "code", "name", "name_pinyin", "name_initials") if c in df.columns]
@@ -57,7 +88,7 @@ def _search_local(repo, query: str, limit: int) -> list[dict]:
         df = add_pinyin_columns(df)
         frames.append(
             df.select("symbol", "code", "name", "name_pinyin", "name_initials").with_columns(
-                pl.lit(asset_type).alias("asset_type"),
+                pl.lit(current_type).alias("asset_type"),
             ),
         )
     if not frames:
