@@ -1,0 +1,13 @@
+# eltdx 内置可选数据源插件
+# ⚠️ 合规提示: eltdx 为 Research-Only License(仅限个人学习/协议研究, 禁止商业/生产使用),
+#    数据来自第三方通达信行情服务器, 使用需自行评估合规责任。
+#    Docker 默认不打包; 开发模式可在设置页一键安装依赖(uv pip install eltdx)。
+
+name: eltdx
+display_name: "eltdx（通达信协议）"
+runtime: python
+entry: app.plugins.eltdx.provider:EltdxProvider
+check: app.plugins.eltdx.bridge:availability
+datasets: [daily, adj_factor, minute, realtime, instruments]
+description: "通达信 7709 协议行情(日K/除权因子/分钟/实时/标的维表)。Research-Only 许可, 禁止商业使用。需 Python>=3.10。"
+install_hint: "pip install eltdx (Python>=3.10; 无预编译 wheel 的平台需 Rust 1.89 工具链)"
