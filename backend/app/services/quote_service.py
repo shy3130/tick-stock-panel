@@ -312,7 +312,7 @@ class QuoteService:
             self.resume()
 
     def boot_check(self) -> None:
-        """启动时检查 preferences，若 enabled 则自动启动。
+        """启动时检查 preferences: enabled 则自动启动, 关闭态但处于交易时段则自动开启。
 
         none 档无实时行情权限:即使 preferences 标记为 enabled,
         也不启动,并同步 preferences 为关闭(避免 UI 误显示已开启)。
@@ -325,6 +325,26 @@ class QuoteService:
             return
         if preferences.get_realtime_quotes_enabled():
             self.start()
+            return
+        if self._should_auto_enable_on_boot():
+            logger.info("启动时处于交易时段, 自动开启实时行情")
+            self.start()
+
+    def _should_auto_enable_on_boot(self) -> bool:
+        """开关处于关闭态时, 启动是否自动开启实时行情。
+
+        时段判据用 _is_continuous_trading (与 status 的 is_trading_hours 同口径):
+        _is_trading_hours 是轮询窗口, 含未完成的收盘定版, 工作日夜间也为真, 不可用于此处。
+        watchlist 模式未配置自选标的时不开 — 与手动开启的 watchlist_empty 门禁一致,
+        否则轮询每轮空跑刷日志。
+        """
+        if not self._is_continuous_trading():
+            return False
+        from app.services import preferences
+        if self.realtime_mode() == "watchlist" and not preferences.get_realtime_watchlist_symbols():
+            logger.info("启动时处于交易时段, 但未配置自选实时标的, 不自动开启实时行情")
+            return False
+        return True
 
     def set_repo(self, repo) -> None:
         """注入 KlineRepository, 用于实时落盘。"""
