@@ -18,6 +18,7 @@ from app.services.short_pool import (
     build_t_research_hypothesis,
     run_short_pool,
 )
+from app.services.macd_stages import macd_stages_availability
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -234,3 +235,8 @@ def run_schedule_now(schedule_id: str, request: Request):
         return {"schedule": item.__dict__, "result": result}
     except KeyError as e:
         raise HTTPException(status_code=404, detail="schedule not found") from e
+
+@router.get("/macd-stages")
+def get_macd_stages():
+    """返回 MACD 阶段研究能力声明；未实现时严格不可用。"""
+    return macd_stages_availability().as_dict()
