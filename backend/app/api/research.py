@@ -18,8 +18,38 @@ from app.services.short_pool import (
     build_t_research_hypothesis,
     run_short_pool,
 )
+from app.services.volume_breakout import VolumeBreakoutResponse
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+class VolumeBreakoutEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+    symbols: list[str] | None = Field(default=None, max_length=1000)
+
+
+@router.post("/factors/volume-breakout/evaluate", response_model=VolumeBreakoutResponse)
+def evaluate_volume_breakout_factor(body: VolumeBreakoutEvaluateIn, request: Request):
+    """量价序列突破研究契约；能力缺失/未实现时显式 unavailable。"""
+    from app.services.volume_breakout import (
+        evaluate_volume_breakout,
+        resolve_pinned_reader,
+        resolve_pit_universe,
+        resolve_versioned_calendar,
+    )
+
+    try:
+        return evaluate_volume_breakout(
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            pinned_reader=resolve_pinned_reader(request.app.state.repo),
+            pit_universe=resolve_pit_universe(request.app.state.repo),
+            calendar=resolve_versioned_calendar(request.app.state.repo),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class HypothesisIn(BaseModel):
