@@ -24,13 +24,19 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 async def run_now(request: Request) -> dict:
     """异步触发盘后管道,立即返回 job_id。客户端轮询 /jobs/{id} 拿进度。
 
-    单飞: 已有 pending/running 任务时返回该任务 id(reused=True),不重启;
-    停滞/超时任务由 reap_stale 回收为 failed 后再走新建分支。
+    单飞: 已有 pending/running 任务时返回该任务 id(reused=True),不重启。
+    已收敛终态但 worker 尚未 release 执行槽时返回 409，不伪装成已调度。
     """
     repo = request.app.state.repo
     capset = request.app.state.capabilities
 
     job_store.reap_stale()
+    execution_owner = job_store.execution_owner()
+    if execution_owner is not None and job_store.active_id() != execution_owner:
+        raise HTTPException(
+            status_code=409,
+            detail="上一数据任务已结束记录但执行线程仍在退出，请稍后重试",
+        )
 
     job_id, is_new = job_store.create(kind="daily_pipeline")
 

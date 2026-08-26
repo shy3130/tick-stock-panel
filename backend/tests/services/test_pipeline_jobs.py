@@ -13,7 +13,9 @@
 - kind 与 succeeded/degraded 旧契约保持
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 
@@ -106,6 +108,40 @@ def test_cancel_api_persists_cancelled_terminal(monkeypatch, tmp_path):
     with pytest.raises(HTTPException) as exc_info:
         pipeline_api.cancel_job(job_id)
     assert exc_info.value.status_code == 400
+
+
+def test_run_api_returns_busy_while_terminal_worker_retains_slot(monkeypatch, tmp_path):
+    store = JobStore(store_dir=tmp_path)
+    job_id, _ = store.create(kind="daily_pipeline")
+    owner = store.start(job_id)
+    store.cancel(job_id)
+    monkeypatch.setattr(pipeline_api, "job_store", store)
+    req = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(repo=object(), capabilities=object()))
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(pipeline_api.run_now(req))
+
+    assert exc_info.value.status_code == 409
+    assert "执行线程仍在退出" in exc_info.value.detail
+    assert [job["id"] for job in store.list_recent()] == [job_id]
+    assert store.execution_owner() == job_id
+    store.release(job_id, owner)
+
+
+def test_run_api_reuses_still_active_owner(monkeypatch, tmp_path):
+    store = JobStore(store_dir=tmp_path)
+    job_id, _ = store.create(kind="daily_pipeline")
+    owner = store.start(job_id)
+    monkeypatch.setattr(pipeline_api, "job_store", store)
+    req = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(repo=object(), capabilities=object()))
+    )
+
+    assert asyncio.run(pipeline_api.run_now(req)) == {"job_id": job_id, "reused": True}
+    store.fail(job_id, "cleanup", owner=owner)
+    store.release(job_id, owner)
 
 
 def test_cancel_running_job_cooperative_then_persisted(tmp_path):
