@@ -14,8 +14,8 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from datetime import date
+from pathlib import Path
 
 from app.services.ext_data import (
     ExtConfig,
@@ -221,7 +221,7 @@ async def _fetch_json(url: str) -> list[dict]:
     """请求 JSON 接口, 返回行数组。超时 30s, 失败抛异常由调用方兜底。"""
     import httpx
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         data = resp.json()

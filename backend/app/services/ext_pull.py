@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 from datetime import date, datetime, timezone
-from functools import reduce
 from typing import Any
 
 import httpx
@@ -14,7 +12,6 @@ import httpx
 from app.services.ext_data import (
     ExtConfig,
     ExtConfigStore,
-    PullConfig,
     rows_to_parquet,
 )
 
@@ -88,7 +85,7 @@ async def fetch_and_ingest(
     if not pull or not pull.url:
         raise ValueError("拉取未配置或 URL 为空")
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         headers = pull.headers or {}
         kwargs: dict[str, Any] = {"headers": headers}
 

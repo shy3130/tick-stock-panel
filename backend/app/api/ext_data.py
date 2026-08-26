@@ -23,9 +23,8 @@ from app.services.ext_data import (
     ensure_utf8_csv,
     fix_symbol_format,
     normalize_symbol,
-    parse_upload_file,
-    write_ext_parquet,
     rows_to_parquet,
+    write_ext_parquet,
 )
 from app.services.ext_pull import fetch_and_ingest, pull_scheduler
 
@@ -590,12 +589,13 @@ async def test_pull(request: Request, config_id: str):
         raise HTTPException(400, "拉取未配置或 URL 为空")
 
     # 临时构建一个带新配置的 config 用于测试
-    from app.services.ext_pull import _extract_rows, _apply_field_map
     import httpx
+
+    from app.services.ext_pull import _apply_field_map, _extract_rows
 
     pull = config.pull
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
             headers = pull.headers or {}
             kwargs: dict = {"headers": headers}
             if pull.method.upper() == "POST" and pull.body:
