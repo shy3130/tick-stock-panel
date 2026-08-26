@@ -7,7 +7,9 @@ import { MarkdownRenderer } from '@/components/financials/MarkdownRenderer'
 import { api, type AgentMsg, type AgentSession, type DocumentEnvelope } from '@/lib/api'
 import { clearAgentChat, loadAgentChat, saveAgentChat } from '@/lib/agentChatStore'
 import { applyAgentEvent, type ChatMsg, type ToolTrace } from '@/lib/agentEvents'
+import { ShortPoolPanel } from '@/components/agent/ShortPoolPanel'
 import { extractPoolCard } from '@/lib/agentPoolCard'
+import { extractShortPoolCard } from '@/lib/shortPoolCard'
 import { stageScreenerBacktestHandoff } from '@/lib/screenerBacktestHandoff'
 import { toast } from '@/components/Toast'
 
@@ -29,6 +31,10 @@ const EXAMPLE_CATEGORIES: ExampleCategory[] = [
     items: [
       { title: '内置策略', prompt: '有哪些内置策略？分别适合什么行情？' },
       { title: '选股筛选', prompt: '帮我筛选连续放量、涨幅超5%的股票。' },
+      {
+        title: 'AI短线池',
+        prompt: '请调用 screen_stock_pool 的固定 preset_id「short_momentum_quality_v1」运行确定性短线观察池，并逐股只按返回证据解释；不得生成、删除或重排标的，不给买卖方向、价格或仓位建议。',
+      },
     ],
   },
   {
@@ -87,8 +93,14 @@ function ToolPayload({ label, value, pending = false }: { label: string; value?:
 function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: number }) {
   const navigate = useNavigate()
   if (!tools?.length) return null
+  const shortPools = tools.flatMap((tool) => {
+    if (tool.name !== 'screen_stock_pool' || tool.result === undefined) return []
+    const card = extractShortPoolCard(tool.result)
+    return card ? [card] : []
+  })
   const totalElapsed = formatElapsed(elapsedMs)
   return (
+    <>
     <details className="group mb-3 overflow-hidden rounded-input border border-border/80 bg-elevated/40">
       <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-2 text-[11px] text-muted hover:bg-elevated">
         <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
@@ -122,6 +134,7 @@ function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: 
                 <ToolPayload label="输出" value={tool.result} pending={pending} />
               </div>
               {tool.name === 'screen_stock_pool' && !pending && (() => {
+                if (extractShortPoolCard(tool.result)) return null
                 const card = extractPoolCard(tool.result)
                 if (!card) return null
                 const handlePoolBacktest = () => {
@@ -164,6 +177,10 @@ function ToolTraceList({ tools, elapsedMs }: { tools?: ToolTrace[]; elapsedMs?: 
         })}
       </div>
     </details>
+      {shortPools.map((card, index) => (
+        <ShortPoolPanel key={`${card.pool_id}-${index}`} card={card} />
+      ))}
+    </>
   )
 }
 

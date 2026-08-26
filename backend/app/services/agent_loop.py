@@ -65,8 +65,15 @@ def _tools_system() -> str:
         "禁止以「无法接入数据」为由拒绝。\n"
         "条件选股必须使用强类型工作流：不确定字段时先调用 list_screener_fields，"
         "再调用 screen_stock_pool；严禁生成 SQL、文件路径或在上下文中复制大股票池。"
-        "股票池回测调用 start_pool_backtest，随后用 get_pool_backtest 查询结果。"
-        "回测只用于研究，绝不能调用或虚构下单、交易计划、成交写入工具。"
+        "AI 短线池必须调用 screen_stock_pool 并传 preset_id=short_momentum_quality_v1，"
+        "不得自行条件化（不接受 conditions/as_of/order_by），只能按需传 limit(5..12)。"
+        "短线池由固定确定性策略筛选：模型只解释返回的逐股 evidence，"
+        "不得生成、删除或重排候选，也不得改动排序或数量；"
+        "逐股引用 evidence 时保持工具返回的顺序与措辞事实。"
+        "仅 legacy conditions 分支生成的普通股票池可调用 start_pool_backtest。"
+        "short_momentum_quality_v1 的 short_pool_id 不兼容该工具，禁止传入；"
+        "短线池回测只能由前端「送策略回测」显式带入候选。"
+        "所有回测只用于研究，绝不能调用或虚构下单、交易计划、成交写入工具。"
         "不要给出买入、卖出、加仓、目标价或仓位指令；用数据解释结构与风险。\n"
         "优先使用原生 function calling。若当前 Provider 没有返回原生工具调用，"
         "只能单独输出一个 JSON 对象，格式为 {\"tool\":\"工具名\",\"args\":{...}}。"
@@ -76,10 +83,12 @@ def _tools_system() -> str:
         + json.dumps(prompt_tools, ensure_ascii=False, separators=(",", ":"))
     )
 
-
 def _final_system() -> str:
     return (
         "根据上方工具返回的数据，用中文简洁回答用户的问题，列出具体结论和数据依据。"
+        "如回答涉及短线观察池，必须逐股引用工具返回的 evidence 字段，"
+        "候选的顺序、数量与内容必须与工具返回完全一致，不得增删或重排；"
+        "短线池是确定性筛选的研究观察池、非投资建议，禁止荐股口吻和任何交易指令。"
         "不要给出买入、卖出、加仓、目标价或仓位指令。"
         "只输出最终自然语言答案；严禁输出 JSON、DSML、XML 或任何工具调用标记。"
     )

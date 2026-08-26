@@ -36,3 +36,16 @@ def test_agent_prompts_are_readonly_research():
     assert "AI 选股助手" not in tools
     assert "不要给出买入、卖出、加仓、目标价或仓位指令" in tools
     assert "不要给出买入、卖出、加仓、目标价或仓位指令" in final
+
+
+def test_agent_prompts_pin_short_pool_determinism():
+    """AI 短线池红线: 必须用 screen_stock_pool preset, 不得自行条件化/增删重排。"""
+    tools = _tools_system()
+    final = _final_system()
+    assert "preset_id=short_momentum_quality_v1" in tools
+    assert "不得自行条件化" in tools
+    assert "不得生成、删除或重排候选" in tools
+    assert "short_pool_id 不兼容该工具，禁止传入" in tools
+    assert "evidence" in final
+    assert "不得增删或重排" in final
+    assert "禁止荐股口吻和任何交易指令" in final

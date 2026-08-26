@@ -287,4 +287,30 @@ Pi 试点、M21/M25、把 Report 改成 Agent，维持既有 No-Go。
 
 > 本报告现状陈述（§2/§3/§5）是评审当时的代码事实。实施后以本节与代码为准。竞品对照用于判断「用户会不会觉得缺一块或越界」，不作为抄功能清单。
 
+## 9. 2026-08-26 增补：AI 短线池
+
+### 9.1 产品取舍
+
+- [TradingView AI Screener](https://www.tradingview.com/support/solutions/43000785770-how-to-use-the-ai-screener/) 的可取点是「自然语言映射到既有过滤器、列和排序，并解释映射结果」，而不是让模型直接生成标的；
+- [TrendSpider Market Scanner](https://help.trendspider.com/kb/scanner/market-scanner) 与 [Smart Watchlists](https://help.trendspider.com/kb/scanner/using-smart-watchlists) 证明了「固定条件扫描器 → 可重复运行观察池」的产品形态；
+- [同花顺问财服务协议](https://eq.10jqka.com.cn/activepage/wencaiAgreement.html) 明示生成式 AI 可能产生幻觉且不构成投资建议，因此本项目不复制不透明的 AI 荐股口径。
+
+据此采用「**确定性筛选产候选，AI 只解释证据**」：短线池不是新的推荐引擎，也不自动创建交易计划、监控规则或回测任务。
+
+### 9.2 已实现契约
+
+| 层 | 实现 | 红线 |
+|---|---|---|
+| Agent 工具 | 扩展既有 `screen_stock_pool`，增加 `preset_id=short_momentum_quality_v1` 的 `oneOf` 分支；只允许 `limit=5..12` | 工具总数仍为 13；不得传 `conditions/as_of/order_by`，不得新增第 14 个工具 |
+| 确定性服务 | `services/short_pool.py` 通过 `ScreenerQueryRequest` / `QueryService` 查询最新可信 canonical 日线；固定 12 条流动性、上市天数、趋势位置、动量、波动和涨停风险条件，按 `momentum_20d desc` 排序 | 不直连 DuckDB/HTTP，不使用外部 fallback；模型不得生成、删除或重排候选 |
+| 证据与持久化 | 每只候选返回 12 条 `{field,actual,op,target}` 证据；内容寻址 artifact 落 `user_data/short_pools/{pool_id}.json`，完整 checksum 覆盖 pool id、内容和 data watermark | 空池是成功结果；同内容幂等；内容、水位或文件被篡改均 fail-closed |
+| Agent 边界 | `_tools_system` / `_final_system` 锁定固定 preset、逐股 evidence 引用与非荐股措辞 | `short_pool_id` 与旧 `start_pool_backtest` 不兼容，禁止模型传入；回测仅由前端显式交接候选 |
+| 前端 | Agent 欢迎示例 + 常显结果卡；展示 preset/version/as_of/命中数、逐股条件证据，并复用个股详情、批量自选与策略回测 handoff | 前端重验固定 schema、日期、代码、排名、条件和 actual；展示值由已验证 actual 重算，不信任自由文本 |
+
+### 9.3 已知边界
+
+- 该 preset 只查询最新可信交易日，不允许模型指定历史 `as_of`；历史研究必须进入正式回测；
+- `short_pool` 是研究观察 artifact，不是 `agent_pool`，不向模型开放自动回测；
+- 固定条件是可审计的首个版本，不宣称预测次日收益；是否有效必须以带成本、严格样本外的回测结果为准；
+
 
