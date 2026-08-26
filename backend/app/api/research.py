@@ -20,6 +20,19 @@ from app.services.short_pool import (
 )
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+from app.services.mtf_direction_15m5m import (
+    MTFDirectionEvaluateIn,
+    evaluate_mtf_direction,
+    resolve_minute_reader,
+)
+
+
+@router.post("/factors/mtf-direction/evaluate")
+def evaluate_mtf_direction_factor(body: MTFDirectionEvaluateIn):
+    """运行分钟多周期能力验证；缺真实 reader 时显式 unavailable。"""
+    return evaluate_mtf_direction(body, reader=resolve_minute_reader())
+
+
 class NShapeEvaluateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
