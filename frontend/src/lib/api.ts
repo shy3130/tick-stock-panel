@@ -3821,7 +3821,9 @@ export const api = {
   pipelineRun: () => request<{ job_id: string; reused: boolean }>(
     '/api/pipeline/run', { method: 'POST' },
   ),
-  pipelineJob: (id: string) => request<PipelineJob>(`/api/pipeline/jobs/${id}`),
+  pipelineJob: (id: string) => request<PipelineJob | null>(
+    `/api/pipeline/jobs/${id}`, undefined, { silent404: true },
+  ),
   pipelineCancel: (id: string) => request<{ cancelled: string }>(
     `/api/pipeline/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' },
   ),

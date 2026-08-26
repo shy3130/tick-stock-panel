@@ -12,7 +12,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from app.config import settings
 from app.services.trading import autopsy as autopsy_svc
 from app.services.trading import cycle_audit as cycle_audit_svc
-from app.services.trading import store
+from app.services.trading import proposals as proposals_svc
 from app.services.trading.proposals import ProposalError
 from app.services.trading.red_flags import scan_all, scan_trade
 from app.services.trading.review_job import run_state_driven_autopsy
