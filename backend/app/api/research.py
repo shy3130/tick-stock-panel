@@ -18,6 +18,11 @@ from app.services.short_pool import (
     build_t_research_hypothesis,
     run_short_pool,
 )
+from app.services.weak_to_strong import (
+    WeakToStrongEvaluateRequest,
+    WeakToStrongEvaluateResponse,
+    evaluate_weak_to_strong_v1,
+)
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -230,7 +235,16 @@ def run_schedule_now(schedule_id: str, request: Request):
         store = _schedule_store(request)
         item = store.get(schedule_id)
         result = run_schedule(item, request.app.state)
+
         store.save(item)
         return {"schedule": item.__dict__, "result": result}
     except KeyError as e:
         raise HTTPException(status_code=404, detail="schedule not found") from e
+
+@router.post(
+    "/factors/weak-to-strong/evaluate",
+    response_model=WeakToStrongEvaluateResponse,
+)
+def evaluate_weak_to_strong(body: WeakToStrongEvaluateRequest):
+    """弱转强研究因子评估；当前生产能力不足时显式返回 unavailable。"""
+    return evaluate_weak_to_strong_v1(body)
