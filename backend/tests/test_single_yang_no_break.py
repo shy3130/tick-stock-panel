@@ -26,6 +26,20 @@ def test_single_yang_requires_raw_body_threshold_and_rejects_doji():
     assert not is_single_yang(Bar(100, 106, 99, 100))
 
 
+
+def test_exact_two_percent_body_preserves_decimal_boundary():
+    assert (5.10 - 5.00) / 5.00 < 0.02
+    assert is_single_yang(Bar(open=5.00, high=5.12, low=4.99, close=5.10))
+    assert is_single_yang(Bar(open=2.50, high=2.56, low=2.49, close=2.55))
+    assert not is_single_yang(Bar(open=5.00, high=5.09, low=4.99, close=5.09))
+
+
+def test_exact_boundary_anchor_confirms_after_complete_window():
+    anchor = Bar(open=5.00, high=5.12, low=4.99, close=5.10)
+    follow_up = [Bar(open=5.05, high=5.20, low=4.99, close=5.08) for _ in range(5)]
+
+    assert detect_single_yang([anchor, *follow_up]) == [0]
+
 def test_detect_requires_complete_window_and_equal_low_is_not_break():
     assert detect_single_yang(_bars(99, 99, 100, 99, 99, 99)) == [0]
     assert detect_single_yang(_bars(99, 99, 98, 99, 99, 99)) == []
@@ -62,5 +76,5 @@ def test_research_endpoint_returns_fail_closed_contract():
     assert body["status"] == "unavailable"
     assert body["definition"]["price_basis"] == "raw_unadjusted"
     assert body["definition"]["window"] == 5
-    assert "state_machine_not_implemented" in body["reasons"]
+    assert body["definition"]["signal_timing"] == "T_plus_5_close_confirmed; evaluation_starts_T_plus_6"
     assert not any(key in body for key in ("order", "position", "trade", "entry", "exit"))

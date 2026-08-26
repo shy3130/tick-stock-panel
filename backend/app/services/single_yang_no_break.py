@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Sequence
 
 RESEARCH_ID = "single_yang_no_break_v1"
@@ -52,8 +53,11 @@ class Bar:
 
 def is_single_yang(bar: Bar) -> bool:
     """判断单根 bar 是否满足固定阳线与实体阈值。"""
-
-    return bar.close > bar.open and bar.open > 0 and (bar.close - bar.open) / bar.open >= MIN_BODY_PCT_OF_OPEN
+    if not (bar.close > bar.open and bar.open > 0):
+        return False
+    open_price = Decimal(str(bar.open))
+    close_price = Decimal(str(bar.close))
+    return (close_price - open_price) / open_price >= Decimal(str(MIN_BODY_PCT_OF_OPEN))
 
 
 def detect_single_yang(bars: Sequence[Bar]) -> list[int]:
