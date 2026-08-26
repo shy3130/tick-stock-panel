@@ -86,9 +86,9 @@ D 日阶段只在 D 日收盘后成立，`available_from` 必须指向次一市�
   "params": {"fast": 10, "slow": 20, "signal": 7},
   "reasons": ["state_machine_not_implemented", "oos_not_implemented"],
   "missing_capabilities": {
-    "daily_state_machine": false,
-    "oos_evaluation": false,
-    "pit_reader": false
+    "daily_state_machine": true,
+    "oos_evaluation": true,
+    "pit_reader": true
   },
   "contract_preview": {
     "required_fields": ["raw", "pit", "generation", "available_from"],
