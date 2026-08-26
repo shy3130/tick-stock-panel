@@ -164,10 +164,20 @@ async def test_pi_runtime_rejects_unknown_explicit_profile(monkeypatch):
     assert [event["type"] for event in events] == ["error"]
     assert "profile 不存在" in events[0]["message"]
 
-def test_pi_tool_specs_use_the_legacy_parameter_contract():
+def test_pi_tool_specs_use_worker_compatible_parameter_contracts():
     specs = {item["name"]: item["input_schema"] for item in agent_runtime._tool_specs()}
     assert specs["optimize_portfolio"]["required"] == ["symbols"]
     assert specs["compare_factors"]["required"] == ["factor_ids", "symbols"]
+    screen_schema = specs["screen_stock_pool"]
+    assert "oneOf" not in screen_schema
+    assert screen_schema["additionalProperties"] is False
+    assert set(screen_schema["properties"]) == {
+        "preset_id",
+        "conditions",
+        "as_of",
+        "order_by",
+        "limit",
+    }
 
 
 @pytest.mark.asyncio

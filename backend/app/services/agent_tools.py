@@ -13,6 +13,46 @@ from app.log_redaction import redact_text
 _SYMBOL_RE = re.compile(r"^[0-9A-Z]{1,8}\.(SH|SZ|BJ|HK|INDEX|ETF)$")
 _PATH_IN_ERROR_RE = re.compile(r"[/\\][^\s\"']*")
 
+_SCREEN_STOCK_POOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "preset_id": {"type": "string", "enum": ["short_momentum_quality_v1"]},
+        "conditions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string"},
+                    "op": {"type": "string"},
+                    "value": {},
+                },
+                "required": ["field", "op", "value"],
+                "additionalProperties": False,
+            },
+            "minItems": 1,
+            "maxItems": 20,
+        },
+        "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
+        "order_by": {
+            "type": "object",
+            "properties": {
+                "field": {"type": "string"},
+                "direction": {"type": "string", "enum": ["asc", "desc"]},
+            },
+            "required": ["field"],
+            "additionalProperties": False,
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "legacy 分支允许 1..500；preset 分支由服务端收紧为 5..12，默认 8",
+        },
+    },
+    "additionalProperties": False,
+}
+
+
 TOOLS = [
     {
         "name": "get_capabilities",
@@ -57,96 +97,8 @@ TOOLS = [
             "list_screener_fields；返回 pool_id、日期、数量和少量预览，"
             "完整股票列表不会进入模型上下文。"
         ),
-        "input_schema": {
-            "type": "object",
-            "oneOf": [
-                {
-                    "properties": {
-                        "preset_id": {"type": "string", "enum": ["short_momentum_quality_v1"]},
-                        "limit": {"type": "integer", "minimum": 5, "maximum": 12, "default": 8},
-                    },
-                    "required": ["preset_id"],
-                    "additionalProperties": False,
-                },
-                {
-                    "properties": {
-                        "conditions": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "field": {"type": "string"},
-                                    "op": {"type": "string"},
-                                    "value": {},
-                                },
-                                "required": ["field", "op", "value"],
-                                "additionalProperties": False,
-                            },
-                            "minItems": 1,
-                            "maxItems": 20,
-                        },
-                        "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
-                        "order_by": {
-                            "type": "object",
-                            "properties": {
-                                "field": {"type": "string"},
-                                "direction": {"type": "string", "enum": ["asc", "desc"]},
-                            },
-                            "required": ["field"],
-                            "additionalProperties": False,
-                        },
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    },
-                    "required": ["conditions"],
-                    "additionalProperties": False,
-                },
-            ],
-        },
-        "parameters": {
-            "type": "object",
-            "oneOf": [
-                {
-                    "properties": {
-                        "preset_id": {"type": "string", "enum": ["short_momentum_quality_v1"]},
-                        "limit": {"type": "integer", "minimum": 5, "maximum": 12, "default": 8},
-                    },
-                    "required": ["preset_id"],
-                    "additionalProperties": False,
-                },
-                {
-                    "properties": {
-                        "conditions": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "field": {"type": "string"},
-                                    "op": {"type": "string"},
-                                    "value": {},
-                                },
-                                "required": ["field", "op", "value"],
-                                "additionalProperties": False,
-                            },
-                            "minItems": 1,
-                            "maxItems": 20,
-                        },
-                        "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
-                        "order_by": {
-                            "type": "object",
-                            "properties": {
-                                "field": {"type": "string"},
-                                "direction": {"type": "string", "enum": ["asc", "desc"]},
-                            },
-                            "required": ["field"],
-                            "additionalProperties": False,
-                        },
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    },
-                    "required": ["conditions"],
-                    "additionalProperties": False,
-                },
-            ],
-        },
+        "input_schema": _SCREEN_STOCK_POOL_SCHEMA,
+        "parameters": _SCREEN_STOCK_POOL_SCHEMA,
         "read_only": True,
     },
     {

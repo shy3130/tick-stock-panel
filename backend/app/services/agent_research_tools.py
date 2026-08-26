@@ -66,7 +66,7 @@ class _ScreenArgs(BaseModel):
     """screen_stock_pool 顶层参数; conditions/order_by 的强类型校验
     委托给 ScreenerQueryRequest(QueryCondition/QueryOrder 同样 forbid)。
 
-    oneOf 分支:
+    运行时互斥分支:
       - legacy: conditions(+as_of/order_by/limit) 逐字兼容;
       - preset: preset_id=short_momentum_quality_v1 + limit(5..12),
         只接受这两个字段, 委托 short_pool 固定确定性策略。"""

@@ -428,16 +428,18 @@ def test_tools_registry_stays_at_13_and_screen_pool_read_only():
     assert "run_short_pool_strategy" not in names
     tool = next(t for t in TOOLS if t["name"] == "screen_stock_pool")
     assert tool["read_only"] is True
-    # oneOf: preset 分支只允许 preset_id + limit(5..12)
+    # Pi worker 不支持 oneOf；公共 schema 只声明字段并关闭额外字段，
+    # 两分支互斥和 preset 的 5..12 限制由 _ScreenArgs 运行时校验。
     schema = tool["parameters"]
-    assert len(schema["oneOf"]) == 2
-    preset_branch, legacy_branch = schema["oneOf"]
-    assert preset_branch["required"] == ["preset_id"]
-    assert set(preset_branch["properties"]) == {"preset_id", "limit"}
-    assert preset_branch["properties"]["preset_id"]["enum"] == ["short_momentum_quality_v1"]
-    assert preset_branch["properties"]["limit"]["minimum"] == 5
-    assert preset_branch["properties"]["limit"]["maximum"] == 12
-    assert legacy_branch["required"] == ["conditions"]
+    assert schema == tool["input_schema"]
+    assert "oneOf" not in schema
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"preset_id", "conditions", "as_of", "order_by", "limit"}
+    assert schema["properties"]["preset_id"]["enum"] == ["short_momentum_quality_v1"]
+    assert schema["properties"]["conditions"]["minItems"] == 1
+    assert schema["properties"]["conditions"]["maxItems"] == 20
+    assert schema["properties"]["limit"]["minimum"] == 1
+    assert schema["properties"]["limit"]["maximum"] == 500
 
 
 def test_screen_tool_description_pins_determinism_and_ai_role():
