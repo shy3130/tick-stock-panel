@@ -104,7 +104,7 @@
 |------|------|------|
 | `services/agent_runtime.py` | `python` / `pi` 运行时 seam；Pi 子进程 NDJSON 协议、工具回调、取消和清理 | 只允许 `openai_compat` profile；每次 attempt 固定 runtime，禁止静默 fallback |
 | `services/agent_runner.py` | session/bus/attempt 生命周期；按 `AGENT_RUNTIME` 选择 runtime | 既有 SSE `delta/tool_call/tool_result/done/error` 契约不得改变 |
-| `services/short_pool.py` / `services/agent_research_tools.py` | `screen_stock_pool` 的固定 `short_momentum_quality_v1` 分支：canonical QueryService 筛选、逐股证据、内容寻址 artifact | 仍是现有 13 工具之一；条件/排序只在服务端定义，Agent 只能传 5–12 的 `limit`，不得增删重排候选；`short_pool_id` 不得传给旧 `start_pool_backtest` |
+| `services/short_pool.py` / `services/agent_research_tools.py` | `screen_stock_pool` 的固定 `short_momentum_quality_v1` 分支：canonical QueryService 筛选、逐股证据、request-local 内容寻址 `pool_id`、不写 user_data artifact | 仍是现有 13 工具之一；条件/排序只在服务端定义，Agent 只能传 `limit=5..12`，不得增删重排候选；该 `pool_id` 不得传给旧 `start_pool_backtest` |
 | `pi-agent-worker/` | 独立 Node ≥22.19 sidecar，使用 `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` | 模型侧只注册 Python 桥接工具；sidecar 源码不得直接执行业务 I/O；source/dev 试点不宣称具备 OS sandbox |
 | `docs/PI_AGENT_PILOT_PLAN.md` | 试点边界、风险、验收矩阵和退出标准 | 当前仅 source/dev；Docker/PyInstaller 暂不接入 |
 
@@ -349,6 +349,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-26（AI 短线池：固定确定性 preset、逐股证据、不可变 artifact 与前端详情/自选/回测交接；仍保持 13 个只读工具。上一变更：2026-08-21 AI 模块评审 F1–F17。）
+**最后更新**：2026-08-26（AI 短线池：固定确定性 preset、逐股证据、request-local 内容寻址 pool_id、不写 artifact；仍保持 13 个只读工具。上一变更：2026-08-21 AI 模块评审 F1–F17。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

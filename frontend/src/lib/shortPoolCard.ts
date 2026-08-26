@@ -1,8 +1,29 @@
+import { parseMarketStateSnapshot, type MarketStateSnapshot } from './marketState'
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const POOL_ID_RE = /^[a-f0-9]{16}$/
 const SYMBOL_RE = /^\d{6}\.(?:SH|SZ|BJ)$/
 const MAX_CANDIDATES = 12
 
+export const T_RESEARCH_PROTOCOL = {
+  protocol_id: 'bollinger_volatility_t_research_v1',
+  bar_precision: '5m',
+  lookback_sessions: 120,
+  min_events: 30,
+  signal_lag: 'T-1',
+  validation: 'strict_walk_forward',
+  baseline: 'all_eligible_days',
+  filtered: 'market_state=dispersed',
+  round_trip_cost_bps: 20,
+  cost_sensitivity_bps: [10, 20, 30],
+  automatic_run: false,
+} as const
+
+export type TResearchStatus = 'ready_for_confirmation' | 'blocked_by_market_state'
+
+export type TResearchDraft = typeof T_RESEARCH_PROTOCOL & {
+  status: TResearchStatus
+}
 
 export const SHORT_POOL_PRESET = {
   preset_id: 'short_momentum_quality_v1',
@@ -51,8 +72,11 @@ export interface ShortPoolCard {
   as_of: string
   count: number
   total: number
+  limit: number
   preset: typeof SHORT_POOL_PRESET
   candidates: ShortPoolCandidate[]
+  market_state: MarketStateSnapshot | null
+  t_research: TResearchDraft | null
 }
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -181,18 +205,31 @@ function validSelectionBasis(value: unknown): boolean {
   })
 }
 
-function validArtifact(value: unknown, poolId: string, asOf: string, count: number): boolean {
-  if (!Array.isArray(value) || value.length !== 1) return false
-  const artifact = record(value[0])
-  return artifact !== null
-    && exactKeys(artifact, ['kind', 'pool_id', 'as_of', 'count', 'location'])
-    && artifact.kind === 'short_pool'
-    && artifact.pool_id === poolId
-    && artifact.as_of === asOf
-    && artifact.count === count
-    && artifact.location === `user_data/short_pools/${poolId}.json`
-}
 
+function extractTResearch(value: unknown, marketState: MarketStateSnapshot | null, candidateCount: number): TResearchDraft | null {
+  const item = record(value)
+  if (!item || !exactKeys(item, ['protocol_id', 'bar_precision', 'lookback_sessions', 'min_events', 'signal_lag', 'validation', 'baseline', 'filtered', 'round_trip_cost_bps', 'cost_sensitivity_bps', 'automatic_run', 'status'])) return null
+  const expectedCosts = T_RESEARCH_PROTOCOL.cost_sensitivity_bps
+  if (
+    item.protocol_id !== T_RESEARCH_PROTOCOL.protocol_id
+    || item.bar_precision !== T_RESEARCH_PROTOCOL.bar_precision
+    || item.lookback_sessions !== T_RESEARCH_PROTOCOL.lookback_sessions
+    || item.min_events !== T_RESEARCH_PROTOCOL.min_events
+    || item.signal_lag !== T_RESEARCH_PROTOCOL.signal_lag
+    || item.validation !== T_RESEARCH_PROTOCOL.validation
+    || item.baseline !== T_RESEARCH_PROTOCOL.baseline
+    || item.filtered !== T_RESEARCH_PROTOCOL.filtered
+    || item.round_trip_cost_bps !== T_RESEARCH_PROTOCOL.round_trip_cost_bps
+    || item.automatic_run !== T_RESEARCH_PROTOCOL.automatic_run
+    || !Array.isArray(item.cost_sensitivity_bps)
+    || item.cost_sensitivity_bps.length !== expectedCosts.length
+    || !item.cost_sensitivity_bps.every((cost, index) => cost === expectedCosts[index])
+    || (item.status !== 'ready_for_confirmation' && item.status !== 'blocked_by_market_state')
+  ) return null
+  if (item.status === 'ready_for_confirmation' && (marketState?.state !== 'dispersed' || candidateCount === 0)) return null
+  if (item.status === 'blocked_by_market_state' && marketState?.state === 'dispersed' && candidateCount > 0) return null
+  return { ...T_RESEARCH_PROTOCOL, status: item.status }
+}
 
 /**
  * 从固定短线观察池结果中提取可呈现数据。所有边界字段与固定 preset 必须齐全；
@@ -200,13 +237,20 @@ function validArtifact(value: unknown, poolId: string, asOf: string, count: numb
  */
 export function extractShortPoolCard(result: unknown): ShortPoolCard | null {
   const payload = record(result)
-  if (!payload || !exactKeys(payload, ['status', 'summary', 'pool_id', 'as_of', 'count', 'total', 'preset', 'candidates', 'disclaimer', 'selection_basis', 'ai_role', 'next_actions', 'artifacts']) || payload.status !== 'success') return null
+  if (!payload || payload.status !== 'success') return null
+  const baseKeys = ['status', 'summary', 'pool_id', 'as_of', 'count', 'total', 'preset', 'candidates', 'disclaimer', 'selection_basis', 'ai_role', 'next_actions'] as const
+  const hasMarketState = Object.prototype.hasOwnProperty.call(payload, 'market_state')
+  const hasTResearch = Object.prototype.hasOwnProperty.call(payload, 't_research')
+  if (hasMarketState !== hasTResearch) return null
+  const expectedKeys = hasMarketState ? [...baseKeys, 'market_state', 't_research'] : baseKeys
+  if (!exactKeys(payload, expectedKeys)) return null
 
   const poolId = typeof payload.pool_id === 'string' ? payload.pool_id : ''
   const asOf = typeof payload.as_of === 'string' ? payload.as_of : ''
   const reportedCount = finiteInteger(payload.count, 0)
   const total = finiteInteger(payload.total, 0)
   const preset = record(payload.preset)
+  const selectionBasis = record(payload.selection_basis)
   const expectedActions = reportedCount === 0
     ? []
     : ['view_stock_detail', 'add_to_watchlist', 'stage_strategy_backtest']
@@ -218,7 +262,7 @@ export function extractShortPoolCard(result: unknown): ShortPoolCard | null {
     && payload.next_actions.length === expectedActions.length
     && payload.next_actions.every((action, index) => action === expectedActions[index])
 
-  if (!POOL_ID_RE.test(poolId) || !validDate(asOf) || reportedCount === null || reportedCount > MAX_CANDIDATES || total === null || total < reportedCount || !preset || !exactKeys(preset, ['preset_id', 'version', 'name', 'description']) || preset.preset_id !== SHORT_POOL_PRESET.preset_id || preset.version !== SHORT_POOL_PRESET.version || preset.name !== SHORT_POOL_PRESET.name || preset.description !== SHORT_POOL_PRESET.description || !hasBoundary || !validSelectionBasis(payload.selection_basis) || !Array.isArray(payload.candidates) || payload.candidates.length !== reportedCount || !validArtifact(payload.artifacts, poolId, asOf, reportedCount)) return null
+  if (!POOL_ID_RE.test(poolId) || !validDate(asOf) || reportedCount === null || reportedCount > MAX_CANDIDATES || total === null || total < reportedCount || !preset || !exactKeys(preset, ['preset_id', 'version', 'name', 'description']) || preset.preset_id !== SHORT_POOL_PRESET.preset_id || preset.version !== SHORT_POOL_PRESET.version || preset.name !== SHORT_POOL_PRESET.name || preset.description !== SHORT_POOL_PRESET.description || !hasBoundary || !validSelectionBasis(selectionBasis) || !Array.isArray(payload.candidates) || payload.candidates.length !== reportedCount) return null
 
   const candidates: ShortPoolCandidate[] = []
   for (const [index, candidateValue] of payload.candidates.entries()) {
@@ -226,13 +270,20 @@ export function extractShortPoolCard(result: unknown): ShortPoolCard | null {
     if (!candidate) return null
     candidates.push(candidate)
   }
+  const marketState = hasMarketState ? parseMarketStateSnapshot(payload.market_state) : null
+  const research = hasTResearch && marketState
+    ? extractTResearch(payload.t_research, marketState, candidates.length)
+    : null
 
   return {
     pool_id: poolId,
     as_of: asOf,
     count: candidates.length,
+    limit: selectionBasis?.limit as number,
     total,
     preset: SHORT_POOL_PRESET,
     candidates,
+    market_state: marketState,
+    t_research: research,
   }
 }

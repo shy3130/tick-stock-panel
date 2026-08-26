@@ -4553,6 +4553,16 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  researchConfirmTSuitabilityHypothesis: (body: {
+    pool_id: string
+    as_of: string
+    limit: number
+  }) =>
+    request<ResearchHypothesis>('/api/research/t-suitability/hypotheses', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   researchUpdateHypothesis: (
     id: string,
     body: {

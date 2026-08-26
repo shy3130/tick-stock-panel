@@ -15,9 +15,10 @@ const files = [
   'components/financials/AiAnalysisDialog.tsx',
   'components/screener/StrategyBuilderDialog.tsx',
   'components/agent/ShortPoolPanel.tsx',
+  'components/research/TSuitabilityPanel.tsx',
 ]
 
-const forbidden = ['买入区间', '操作建议', '可直接指导次日仓位']
+const forbidden = ['买入区间', '操作建议', '可直接指导次日仓位', '推荐买入']
 
 for (const rel of files) {
   const text = readFileSync(join(root, rel), 'utf8')
@@ -25,5 +26,9 @@ for (const rel of files) {
     assert(!text.includes(phrase), `${rel} 不得包含禁词「${phrase}」`)
   }
 }
+
+const shortPoolPanel = readFileSync(join(root, 'components/agent/ShortPoolPanel.tsx'), 'utf8')
+assert(shortPoolPanel.includes('researchConfirmTSuitabilityHypothesis'), '做T确认必须调用服务端重算门禁入口')
+assert(!shortPoolPanel.includes('researchCreateHypothesis'), '做T确认不得绕过专用服务端门禁')
 
 console.log('aiUiCopy.test.ts ok')

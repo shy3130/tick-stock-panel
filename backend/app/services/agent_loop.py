@@ -34,6 +34,7 @@ def occupancy_error_line(started_at: float | None = None) -> str:
         ensure_ascii=False,
     )
 
+
 _EXCLUDED_TOOLS: set[str] = set()
 ALLOWED_AGENT_TOOLS = [t for t in agent_tools.TOOLS if t["name"] not in _EXCLUDED_TOOLS]
 _ALLOWED_NAMES = {t["name"] for t in ALLOWED_AGENT_TOOLS}
@@ -71,17 +72,21 @@ def _tools_system() -> str:
         "不得生成、删除或重排候选，也不得改动排序或数量；"
         "逐股引用 evidence 时保持工具返回的顺序与措辞事实。"
         "仅 legacy conditions 分支生成的普通股票池可调用 start_pool_backtest。"
-        "short_momentum_quality_v1 的 short_pool_id 不兼容该工具，禁止传入；"
+        "short_momentum_quality_v1 的 pool_id 不兼容该工具，禁止传入；"
         "短线池回测只能由前端「送策略回测」显式带入候选。"
+        "工具返回的 market_state 是严格 T-1 的确定性市场状态，t_research 是固定研究协议草案；"
+        "不得改动状态、阈值、候选或协议，protocol_id 只是研究协议标识而非既有策略。"
+        "只有 market_state.state=dispersed 时才可说明前端能展示确认入口，"
+        "且必须由用户显式确认创建研究假设，绝不得自动运行回测。"
         "所有回测只用于研究，绝不能调用或虚构下单、交易计划、成交写入工具。"
         "不要给出买入、卖出、加仓、目标价或仓位指令；用数据解释结构与风险。\n"
         "优先使用原生 function calling。若当前 Provider 没有返回原生工具调用，"
-        "只能单独输出一个 JSON 对象，格式为 {\"tool\":\"工具名\",\"args\":{...}}。"
+        '只能单独输出一个 JSON 对象，格式为 {"tool":"工具名","args":{...}}。'
         "严禁输出 DSML、XML 或其他工具标记；只能使用下列工具，不能虚构工具名。\n"
         "全市场因子分析应直接调用 analyze_factor 并省略 symbols；不得调用 quote_pool。\n"
-        "可用工具及参数："
-        + json.dumps(prompt_tools, ensure_ascii=False, separators=(",", ":"))
+        "可用工具及参数：" + json.dumps(prompt_tools, ensure_ascii=False, separators=(",", ":"))
     )
+
 
 def _final_system() -> str:
     return (
@@ -89,6 +94,8 @@ def _final_system() -> str:
         "如回答涉及短线观察池，必须逐股引用工具返回的 evidence 字段，"
         "候选的顺序、数量与内容必须与工具返回完全一致，不得增删或重排；"
         "短线池是确定性筛选的研究观察池、非投资建议，禁止荐股口吻和任何交易指令。"
+        "market_state 与 t_research 必须按工具事实解释，不得改动状态、阈值或协议；"
+        "不得声称复刻任何未公开公式，也不得把市场状态解释成直接买卖点。"
         "不要给出买入、卖出、加仓、目标价或仓位指令。"
         "只输出最终自然语言答案；严禁输出 JSON、DSML、XML 或任何工具调用标记。"
     )
@@ -137,12 +144,64 @@ def _execute_tool(name: str, app_state: Any, args: dict) -> dict:
         return {"error": agent_tools.sanitize_tool_error(exc)}
 
 
+# ── AI 短线池输出边界：候选只能来自确定性工具结果 ─────────────────
+_SHORT_POOL_TOOL_NAME = "screen_stock_pool"
+_SHORT_POOL_PRESET_ID = "short_momentum_quality_v1"
+
+
+def _short_pool_outcome(name: str, result: Any) -> dict | None:
+    """识别成功的 short_momentum_quality_v1 工具结果，只保留确定性标量。
+
+    命中条件是封套 ``preset.preset_id``（run_short_pool 专有字段）且
+    ``status=success``；legacy 普通股票池与失败/出错的调用一律不命中。
+    候选列表绝不进入返回值，最终文本模板因此无法引用任何候选。
+    """
+    if name != _SHORT_POOL_TOOL_NAME or not isinstance(result, dict):
+        return None
+    if result.get("status") != "success":
+        return None
+    preset = result.get("preset")
+    if not isinstance(preset, dict) or preset.get("preset_id") != _SHORT_POOL_PRESET_ID:
+        return None
+
+    def _scalar(key: str) -> Any:
+        value = result.get(key)
+        return value if isinstance(value, (str, int, float)) else None
+
+    return {key: _scalar(key) for key in ("pool_id", "as_of", "total", "count")}
+
+
+def _short_pool_final_text(outcome: dict) -> str:
+    """服务端确定性最终摘要：只引用标量事实，绝不枚举候选名称/代码/顺序。"""
+    facts: list[str] = []
+    if isinstance(outcome.get("pool_id"), str):
+        facts.append(f"pool_id={outcome['pool_id']}")
+    if isinstance(outcome.get("as_of"), str):
+        facts.append(f"as_of={outcome['as_of']}")
+    if isinstance(outcome.get("total"), int):
+        facts.append(f"命中 {outcome['total']} 只")
+    if isinstance(outcome.get("count"), int):
+        facts.append(f"输出 {outcome['count']} 只")
+    joined = "，".join(facts)
+    lead = (
+        f"AI 短线池已由固定确定性策略生成（{joined}）。"
+        if joined
+        else "AI 短线池已由固定确定性策略生成。"
+    )
+    return (
+        lead + "候选的名称、代码与顺序以工具返回的结构化结果卡为准，本回答不枚举候选；"
+        "该池仅用于研究观察，非投资建议。"
+    )
+
+
 async def run_agent_stream(
     messages: list[dict],
     app_state: Any,
     profile_id: str | None = None,
     *,
-    generate_tool: Callable[..., Awaitable[tuple[str | None, list[dict] | None]]] = generate_ai_with_tools,
+    generate_tool: Callable[
+        ..., Awaitable[tuple[str | None, list[dict] | None]]
+    ] = generate_ai_with_tools,
     generate: Callable[..., Awaitable[str]] = generate_ai_text,
     stream: Callable[..., Any] = stream_ai_text,
 ) -> AsyncIterator[str]:
@@ -153,6 +212,7 @@ async def run_agent_stream(
     ``(text, None)``，此时降级到 prompt 注入 JSON 模式（``_parse_tool``）。
     """
     tool_ctx: list[dict] = []
+    short_pool_outcome: dict | None = None
     started_at = perf_counter()
     if not try_acquire_agent_slot():
         yield occupancy_error_line(started_at)
@@ -164,8 +224,11 @@ async def run_agent_stream(
         for _ in range(MAX_TOOL_ROUNDS):
             convo = [{"role": "system", "content": _tools_system()}, *messages, *tool_ctx]
             content, tool_calls = await generate_tool(
-                convo, _OPENAI_TOOLS,
-                profile_id=profile_id, temperature=budget.temperature, max_tokens=budget.max_tokens,
+                convo,
+                _OPENAI_TOOLS,
+                profile_id=profile_id,
+                temperature=budget.temperature,
+                max_tokens=budget.max_tokens,
                 timeout=budget.timeout,
             )
 
@@ -175,7 +238,11 @@ async def run_agent_stream(
                 if content:
                     assistant_msg["content"] = content
                 assistant_msg["tool_calls"] = [
-                    {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
                     for tc in tool_calls
                 ]
                 tool_ctx.append(assistant_msg)
@@ -186,20 +253,34 @@ async def run_agent_stream(
                         args = json.loads(tc["arguments"]) if tc.get("arguments") else {}
                     except (json.JSONDecodeError, TypeError):
                         args = {}
-                    yield json.dumps({"type": "tool_call", "name": name, "args": args}, ensure_ascii=False)
+                    yield json.dumps(
+                        {"type": "tool_call", "name": name, "args": args}, ensure_ascii=False
+                    )
                     tool_started_at = perf_counter()
                     result = await asyncio.to_thread(_execute_tool, name, app_state, args)
-                    yield json.dumps({
-                        "type": "tool_result",
-                        "name": name,
-                        "result": result,
-                        "elapsed_ms": round((perf_counter() - tool_started_at) * 1000, 1),
-                    }, ensure_ascii=False)
-                    tool_ctx.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": json.dumps(result, ensure_ascii=False, default=str),
-                    })
+                    yield json.dumps(
+                        {
+                            "type": "tool_result",
+                            "name": name,
+                            "result": result,
+                            "elapsed_ms": round((perf_counter() - tool_started_at) * 1000, 1),
+                        },
+                        ensure_ascii=False,
+                    )
+                    tool_ctx.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": json.dumps(result, ensure_ascii=False, default=str),
+                        }
+                    )
+                    if (outcome := _short_pool_outcome(name, result)) is not None:
+                        short_pool_outcome = outcome
+                        # 成功的固定短线池是终端工具结果：候选已由结构化卡片承载，
+                        # 不再执行同批或后续模型追加的工具调用，避免其失败/输出被摘要门控吞没。
+                        break
+                if short_pool_outcome is not None:
+                    break
                 continue
 
             # ── 无 tool_calls：降级解析或直接回答 ──
@@ -207,19 +288,34 @@ async def run_agent_stream(
                 tool_req = _parse_tool(content)
                 if tool_req is not None:
                     name = tool_req["tool"]
-                    yield json.dumps({"type": "tool_call", "name": name, "args": tool_req["args"]}, ensure_ascii=False)
+                    yield json.dumps(
+                        {"type": "tool_call", "name": name, "args": tool_req["args"]},
+                        ensure_ascii=False,
+                    )
                     tool_started_at = perf_counter()
-                    result = await asyncio.to_thread(_execute_tool, name, app_state, tool_req["args"])
-                    yield json.dumps({
-                        "type": "tool_result",
-                        "name": name,
-                        "result": result,
-                        "elapsed_ms": round((perf_counter() - tool_started_at) * 1000, 1),
-                    }, ensure_ascii=False)
+                    result = await asyncio.to_thread(
+                        _execute_tool, name, app_state, tool_req["args"]
+                    )
+                    yield json.dumps(
+                        {
+                            "type": "tool_result",
+                            "name": name,
+                            "result": result,
+                            "elapsed_ms": round((perf_counter() - tool_started_at) * 1000, 1),
+                        },
+                        ensure_ascii=False,
+                    )
                     tool_ctx += [
                         {"role": "assistant", "content": content},
-                        {"role": "user", "content": "Tool result:\n" + json.dumps(result, ensure_ascii=False, default=str)},
+                        {
+                            "role": "user",
+                            "content": "Tool result:\n"
+                            + json.dumps(result, ensure_ascii=False, default=str),
+                        },
                     ]
+                    if (outcome := _short_pool_outcome(name, result)) is not None:
+                        short_pool_outcome = outcome
+                        break
                     continue
             break
 
@@ -229,15 +325,23 @@ async def run_agent_stream(
             *tool_ctx,
         ]
         final_budget = resolve_budget("agent", temperature=0.4)
-        async for delta in stream(
-            answer_msgs,
-            profile_id=profile_id,
-            temperature=final_budget.temperature,
-            max_tokens=final_budget.max_tokens,
-            timeout=final_budget.timeout,
-        ):
-            if delta:
-                yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
+        if short_pool_outcome is not None:
+            # 输出边界强制：短线池候选只能经 tool_result/前端结构化卡片表达；
+            # 模型最终文本可能编造/删减/重排候选，一律不进入 delta 流。
+            yield json.dumps(
+                {"type": "delta", "content": _short_pool_final_text(short_pool_outcome)},
+                ensure_ascii=False,
+            )
+        else:
+            async for delta in stream(
+                answer_msgs,
+                profile_id=profile_id,
+                temperature=final_budget.temperature,
+                max_tokens=final_budget.max_tokens,
+                timeout=final_budget.timeout,
+            ):
+                if delta:
+                    yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
         yield json.dumps(
             {
                 "type": "done",

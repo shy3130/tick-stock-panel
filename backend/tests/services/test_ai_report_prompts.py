@@ -1,4 +1,5 @@
 """Report / Agent 系统提示词不得下达交易指令 (AI 评审 F1/F4)。"""
+
 from __future__ import annotations
 
 from app.services.agent_loop import _final_system, _tools_system
@@ -45,7 +46,16 @@ def test_agent_prompts_pin_short_pool_determinism():
     assert "preset_id=short_momentum_quality_v1" in tools
     assert "不得自行条件化" in tools
     assert "不得生成、删除或重排候选" in tools
-    assert "short_pool_id 不兼容该工具，禁止传入" in tools
+    assert "short_momentum_quality_v1 的 pool_id 不兼容该工具，禁止传入" in tools
+    # 封套实际字段是 pool_id，提示词不得再引用不存在的 short_pool_id 字段名
+    assert "short_pool_id" not in tools
+    assert "short_pool_id" not in final
     assert "evidence" in final
     assert "不得增删或重排" in final
     assert "禁止荐股口吻和任何交易指令" in final
+    assert "market_state 是严格 T-1 的确定性市场状态" in tools
+    assert "protocol_id 只是研究协议标识而非既有策略" in tools
+    assert "必须由用户显式确认创建研究假设" in tools
+    assert "绝不得自动运行回测" in tools
+    assert "不得声称复刻任何未公开公式" in final
+    assert "不得把市场状态解释成直接买卖点" in final

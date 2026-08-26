@@ -8,22 +8,20 @@
     生成/删除/重排候选, 不给买卖方向、价格或仓位。
   - 复用 canonical 数据链: 只通过 screener_query.QueryService /
     ScreenerQueryRequest 查询, 不直连 DuckDB、不发 HTTP、无外部 fallback。
-  - artifact 不可变且内容寻址: ``user_data/short_pools/{pool_id}.json``,
-    pool_id 为规范内容 sha256 前缀(16 hex), 完整 sha256 记入 ``checksum``。
-    相同内容幂等复用(不覆写); artifact 被篡改或 hash 碰撞 → fail-closed,
-    错误消息不含本地路径。空池同样成功并落盘。
+  - 结果只在请求内返回，``pool_id`` 是规范内容 sha256 前缀(16 hex)，
+    用于显式确认时由服务端重算比对；观察池本身不落盘。只有用户确认且
+    服务端重新验证 ``dispersed`` 状态后，才写入既有研究假设存储。
   - 所有进入模型上下文的值只来自 QueryService 返回值(rows)与
     validate_query 的 applied conditions, 不引入第二数据源。
 
 模块导入无副作用: app.* 依赖全部在函数体内延迟导入。
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
-import re
-import threading
-from pathlib import Path
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
@@ -44,6 +42,32 @@ DEFAULT_LIMIT = 8
 SHORT_POOL_DISCLAIMER = "研究观察池，非投资建议"
 SHORT_POOL_AI_ROLE = "AI 只解释证据；不得生成、删除或重排候选；不提供买卖方向、价格或仓位建议"
 
+# 做T研究固定协议: 研究协议标识, 不是既有策略, 也不代表任何可执行信号。
+T_RESEARCH_PROTOCOL_ID = "bollinger_volatility_t_research_v1"
+T_RESEARCH_PROTOCOL: dict[str, Any] = {
+    "protocol_id": T_RESEARCH_PROTOCOL_ID,
+    "bar_precision": "5m",
+    "lookback_sessions": 120,
+    "min_events": 30,
+    "signal_lag": "T-1",
+    "validation": "strict_walk_forward",
+    "baseline": "all_eligible_days",
+    "filtered": "market_state=dispersed",
+    "round_trip_cost_bps": 20,
+    "cost_sensitivity_bps": [10, 20, 30],
+    "automatic_run": False,
+}
+T_RESEARCH_AI_ROLE = (
+    "t_research 仅是研究协议草案：protocol_id 是研究协议标识而非既有策略；"
+    "仅当市场状态为 dispersed 时允许用户显式确认创建研究假设，"
+    "不得自动运行回测，不得给出买卖方向、价格或仓位"
+)
+
+T_RESEARCH_RESERVED_TAGS = (
+    "做T研究",
+    "AI短线研究池",
+    "market_concentration_v1",
+)
 
 # 条件顺序即 evidence 顺序, 与契约逐字一致。
 SHORT_POOL_CONDITIONS: tuple[dict[str, Any], ...] = (
@@ -61,12 +85,6 @@ SHORT_POOL_CONDITIONS: tuple[dict[str, Any], ...] = (
     {"field": "broken_limit_up", "op": "=", "value": False},
 )
 SHORT_POOL_ORDER_BY: dict[str, str] = {"field": "momentum_20d", "direction": "desc"}
-
-_EVIDENCE_KEYS = ("field", "label", "actual", "display", "op", "target", "criterion", "unit")
-_POOL_ID_RE = re.compile(r"^[0-9a-f]{16}$")
-_PATH_IN_MSG_RE = re.compile(r"[/\\][^\s\"']*")
-
-_SHORT_POOL_WRITE_LOCK = threading.Lock()
 
 
 class ShortPoolLimit(BaseModel):
@@ -152,68 +170,14 @@ def _pool_id_hex(content: dict[str, Any]) -> str:
     return _checksum_hex(content)[:16]
 
 
-def _short_pools_dir(data_dir: Path) -> Path:
-    return Path(data_dir) / "user_data" / "short_pools"
-
-
-def _sanitize_error(exc: BaseException) -> str:
-    message = str(exc) or type(exc).__name__
-    return _PATH_IN_MSG_RE.sub("<path>", message)
-
-
-def _validate_short_pool(pool: Any, pool_id: str) -> dict[str, Any]:
-    """防御性校验 artifact(文件可能被外部改动), 失败消息不含路径。"""
-    if not isinstance(pool, dict):
-        raise ValueError(f"unusable short pool: {pool_id}")
-    if pool.get("pool_id") != pool_id:
-        raise ValueError(f"short pool pool_id mismatch: {pool_id}")
-    if not isinstance(pool.get("data_watermark"), dict):
-        raise ValueError(f"unusable short pool watermark: {pool_id}")
-    content = {k: v for k, v in pool.items() if k not in ("pool_id", "data_watermark", "checksum")}
-    if _pool_id_hex(content) != pool_id:
-        raise ValueError(f"short pool checksum mismatch: {pool_id}")
-    checksum = pool.get("checksum")
-    integrity_payload = {k: v for k, v in pool.items() if k != "checksum"}
-    if not isinstance(checksum, str) or checksum != _checksum_hex(integrity_payload):
-        raise ValueError(f"short pool checksum mismatch: {pool_id}")
-    candidates = pool.get("candidates")
-    if not isinstance(candidates, list) or len(candidates) > MAX_LIMIT:
-        raise ValueError(f"unusable short pool candidates: {pool_id}")
-    if pool.get("count") != len(candidates):
-        raise ValueError(f"short pool count mismatch: {pool_id}")
-    for cand in candidates:
-        if not isinstance(cand, dict) or not isinstance(cand.get("evidence"), list):
-            raise ValueError(f"unusable short pool evidence: {pool_id}")
-        for entry in cand["evidence"]:
-            if not isinstance(entry, dict) or any(k not in entry for k in _EVIDENCE_KEYS):
-                raise ValueError(f"unusable short pool evidence: {pool_id}")
-    return pool
-
-
-def _load_short_pool(path: Path, pool_id: str) -> dict[str, Any]:
-    if not _POOL_ID_RE.fullmatch(pool_id):
-        raise ValueError("invalid short pool_id")
-    if not path.is_file():
-        raise ValueError(f"unknown short pool_id: {pool_id}")
-    try:
-        pool = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-        raise ValueError(f"unreadable short pool: {pool_id}") from exc
-    return _validate_short_pool(pool, pool_id)
-
-
 def run_short_pool(
     app_state: Any,
     limit: int = DEFAULT_LIMIT,
     *,
-    artifact_root: Path | None = None,
+    market_state_provider: Any = None,
 ) -> dict[str, Any]:
-    """运行固定 preset 的确定性短线观察池并落盘 artifact; 返回完整证据封套。"""
-    from app.services.agent_research_tools import (
-        _atomic_write_json,
-        _data_watermark,
-        _require_repo,
-    )
+    """运行固定 preset 的确定性短线观察池；不落盘，返回完整证据封套。"""
+    from app.services.agent_research_tools import _require_repo
     from app.services.screener_query import (
         QueryService,
         ScreenerDataUnavailableError,
@@ -247,6 +211,39 @@ def run_short_pool(
         for rank, row in enumerate(rows, start=1)
     ]
 
+    # 市场状态(严格 T-1)进入内容寻址输入与返回封套：快照变 → pool_id 变。
+    # 读取失败不吞错——观察池依赖它判定研究可用性；错误消息已脱敏无路径。
+    from app.services.market_concentration import (
+        MarketStateDataError,
+        MarketStateSnapshot,
+        market_state_for_date,
+    )
+
+    try:
+        target = date.fromisoformat(as_of)
+    except ValueError:
+        target = None
+    provider = market_state_provider or (
+        lambda: market_state_for_date(repo, target) if target else None
+    )
+    try:
+        snapshot = provider()
+    except MarketStateDataError as exc:
+        raise ValueError(f"市场状态数据不可用: {exc}") from exc
+    raw_snapshot = snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else snapshot
+    try:
+        snapshot_dict = MarketStateSnapshot.model_validate(raw_snapshot).model_dump(mode="json")
+    except Exception as exc:  # noqa: BLE001 — 对外固定脱敏契约
+        raise ValueError("市场状态快照无效") from exc
+    state_value = snapshot_dict["state"]
+    t_research = {
+        **T_RESEARCH_PROTOCOL,
+        "status": (
+            "ready_for_confirmation"
+            if count > 0 and snapshot_dict.get("available") and state_value == "dispersed"
+            else "blocked_by_market_state"
+        ),
+    }
 
     content = {
         "schema_version": SHORT_POOL_SCHEMA_VERSION,
@@ -263,26 +260,10 @@ def run_short_pool(
         "conditions": applied,
         "order_by": dict(SHORT_POOL_ORDER_BY),
         "candidates": candidates,
+        "market_state": snapshot_dict,
+        "t_research": t_research,
     }
     pool_id = _pool_id_hex(content)
-    storage_root = Path(repo.store.data_dir) if artifact_root is None else Path(artifact_root)
-    pool_path = _short_pools_dir(storage_root) / f"{pool_id}.json"
-    with _SHORT_POOL_WRITE_LOCK:
-        if pool_path.is_file():
-            existing = _load_short_pool(pool_path, pool_id)
-            if any(existing.get(key) != value for key, value in content.items()):
-                raise ValueError(f"short pool hash collision: {pool_id}")
-        else:
-            pool = {
-                "pool_id": pool_id,
-                **content,
-                "data_watermark": _data_watermark(repo),
-            }
-            pool["checksum"] = _checksum_hex(pool)
-            try:
-                _atomic_write_json(pool_path, pool)
-            except Exception as exc:  # noqa: BLE001 — 对外统一打码路径
-                raise ValueError(_sanitize_error(exc)) from exc
 
     return {
         "status": "success",
@@ -304,19 +285,52 @@ def run_short_pool(
             "deterministic": True,
         },
         "ai_role": SHORT_POOL_AI_ROLE,
+        "t_research": t_research,
+        "market_state": snapshot_dict,
         "next_actions": (
             ["view_stock_detail", "add_to_watchlist", "stage_strategy_backtest"]
             if candidates
             else []
         ),
-        "artifacts": [
-            {
-                "kind": "short_pool",
-                "pool_id": pool_id,
-                "as_of": as_of,
-                "count": count,
-                "location": f"user_data/short_pools/{pool_id}.json",
-            }
+    }
+
+
+def build_t_research_hypothesis(pool: dict[str, Any]) -> dict[str, Any]:
+    """从服务端重算的分散市场观察池构造唯一可写研究假设。"""
+    from app.services.market_concentration import MarketStateSnapshot
+
+    try:
+        snapshot = MarketStateSnapshot.model_validate(pool["market_state"])
+    except Exception as exc:  # noqa: BLE001 — 对外由 API 转为固定错误
+        raise ValueError("市场状态快照无效") from exc
+    if (
+        not snapshot.available
+        or snapshot.state != "dispersed"
+        or not snapshot.gates.automatic_research_allowed
+        or pool.get("t_research") != {**T_RESEARCH_PROTOCOL, "status": "ready_for_confirmation"}
+    ):
+        raise ValueError("当前市场状态不允许创建做T研究假设")
+
+    candidates = pool.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError("当前观察池没有可研究候选")
+    candidate_text = "、".join(
+        f"{candidate['name']}（{candidate['symbol']}）" for candidate in candidates
+    )
+    as_of = str(pool["as_of"])
+    return {
+        "title": f"做T研究 · AI短线研究池 · {as_of}",
+        "thesis": (
+            f"候选：{candidate_text}。"
+            f"市场状态：分散；严格 T-1：{snapshot.signal_date}。"
+            f"研究协议：{T_RESEARCH_PROTOCOL_ID}；"
+            "5m、120 个交易日、至少 30 个事件、严格 walk-forward。"
+            "仅创建研究假设，不自动运行回测，不输出买卖点。"
+        ),
+        "status": "exploring",
+        "tags": [
+            *T_RESEARCH_RESERVED_TAGS,
+            f"short_pool:{pool['pool_id']}",
         ],
     }
 
@@ -335,5 +349,10 @@ __all__ = [
     "SHORT_POOL_PRESET_VERSION",
     "ShortPoolLimit",
     "build_query_request",
+    "build_t_research_hypothesis",
     "run_short_pool",
+    "T_RESEARCH_AI_ROLE",
+    "T_RESEARCH_PROTOCOL",
+    "T_RESEARCH_PROTOCOL_ID",
+    "T_RESEARCH_RESERVED_TAGS",
 ]
