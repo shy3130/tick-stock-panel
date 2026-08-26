@@ -18,6 +18,7 @@ from app.services.short_pool import (
     build_t_research_hypothesis,
     run_short_pool,
 )
+from app.services.single_yang_no_break import run_single_yang_research
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -234,3 +235,10 @@ def run_schedule_now(schedule_id: str, request: Request):
         return {"schedule": item.__dict__, "result": result}
     except KeyError as e:
         raise HTTPException(status_code=404, detail="schedule not found") from e
+
+
+@router.get("/single-yang-no-break")
+def get_single_yang_no_break():
+    """返回单阳不破研究契约；状态机/OOS 未实现时 fail-closed。"""
+
+    return run_single_yang_research()
