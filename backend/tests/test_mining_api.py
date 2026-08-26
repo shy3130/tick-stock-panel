@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.api.mining import router
 from app.backtest.mining import compute_candidate_signature
+from app.enriched_generation import EnrichedGenerationUnavailableError
 from app.services.mining_jobs import MiningRunStore
 from app.strategy.engine import StrategyEngine
 
@@ -604,3 +605,33 @@ def test_config_patch_merges_current_values(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert saved == [(True, 4, "balanced")]
     assert client.patch("/api/backtest/mining/config", json={}).status_code == 400
+
+
+class _PublishingRepo(_Repo):
+    """模拟 enriched 发布进行中: 世代读取抛 EnrichedGenerationUnavailableError。"""
+
+    @staticmethod
+    def get_matrix_data_generation(asset_type="stock"):
+        raise EnrichedGenerationUnavailableError(
+            "enriched data is being published; retry after the update finishes"
+        )
+
+
+def test_start_returns_400_with_guidance_while_enriched_publication_active(
+    tmp_path,
+):
+    _write_enriched_dates(tmp_path, 219, first=date(2022, 8, 15))
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = _PublishingRepo(tmp_path)
+    app.state.mining_manager = _Manager(tmp_path)
+    app.state.strategy_engine = SimpleNamespace()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtest/mining/runs",
+        json={"factor_names": ["turnover_rate"], "budget_profile": "exploratory"},
+    )
+
+    assert response.status_code == 400
+    assert "数据更新" in response.json()["detail"]

@@ -480,3 +480,126 @@ def test_spawn_walkforward_skips_folds_before_available_matrix_data(tmp_path):
     assert result["skipped"][0]["reason"] == "训练区间无可用行情数据"
     assert result["n_folds"] == 3
     assert result["worker"]["worker_exitcode"] == 0
+
+
+def _mining_runtime_services(data_dir):
+    """按 worker._worker_entry 的方式在进程内构造挖掘运行时依赖 (便于 monkeypatch)。"""
+    from app.backtest.engine import BacktestEngine
+    from app.backtest.strategy import StrategyBacktestService
+    from app.strategy import config as strategy_config
+    from app.strategy.engine import StrategyEngine
+    from app.tickflow.repository import DataStore, KlineRepository
+
+    store = DataStore(data_dir)
+    repo = KlineRepository(store)
+    strategy_engine = StrategyEngine(
+        strategy_dirs=worker_module._strategy_dirs(data_dir),
+        override_loader=lambda sid: strategy_config.load_override(data_dir, sid),
+    )
+    service = StrategyBacktestService(BacktestEngine(repo), strategy_engine)
+    return service, strategy_engine
+
+
+def _queue_mining_run(data_dir, start: date, run_id: str) -> dict:
+    store = MiningRunStore(data_dir)
+    manifest = store.create(
+        {
+            "factor_names": ["turnover_rate"],
+            "strategy_ids": [],
+            "symbols": None,
+            "asset_type": "stock",
+            "start": (start - timedelta(days=7)).isoformat(),
+            "end": (start + timedelta(days=225)).isoformat(),
+            "budget_profile": "exploratory",
+            "forward_horizon": 1,
+            "commission_pct": 0.0,
+            "stamp_tax_pct": 0.0,
+            "slippage_bps": 0.0,
+            "correlation_threshold": 0.75,
+            "max_combination_factors": 1,
+            "beam_width": 2,
+            "max_finalists": 2,
+            "require_regime": False,
+        },
+        {"generation": get_enriched_generation(data_dir, "stock")},
+        run_id=run_id,
+    )
+    return {
+        "run_id": manifest["run_id"],
+        "request": manifest["request"],
+        "data_fingerprint": manifest["data_fingerprint"],
+        "source": "manual",
+    }
+
+
+def _patch_generation_drift(monkeypatch, data_dir, *, always: bool) -> dict:
+    """让世代校验第一次(或每次)调用前先 bump 再抛错, 模拟读取期间并发发布完成。"""
+    from app.backtest.engine import BacktestEngine
+    from app.enriched_generation import EnrichedGenerationUnavailableError
+
+    original = BacktestEngine.assert_data_generation
+    state = {"drifts": 0}
+
+    def drift(engine_self, asset_type, expected):
+        if expected is not None and (always or state["drifts"] == 0):
+            state["drifts"] += 1
+            bump_enriched_generation(data_dir, asset_type)
+            raise EnrichedGenerationUnavailableError(
+                "simulated concurrent publication"
+            )
+        return original(engine_self, asset_type, expected)
+
+    monkeypatch.setattr(BacktestEngine, "assert_data_generation", drift)
+    return state
+
+
+def test_mining_rereads_snapshot_when_generation_commits_mid_read(
+    monkeypatch, tmp_path
+):
+    start = date(2023, 1, 2)
+    data_dir = tmp_path / "data"
+    _write_mining_market_data(data_dir, start)
+    payload = _queue_mining_run(data_dir, start, "midread_drift_mining")
+    service, strategy_engine = _mining_runtime_services(data_dir)
+    state = _patch_generation_drift(monkeypatch, data_dir, always=False)
+
+    from app.backtest.mining_runtime import run_mining_runtime
+
+    events: list[dict] = []
+    result = run_mining_runtime(
+        payload,
+        data_dir=data_dir,
+        service=service,
+        strategy_engine=strategy_engine,
+        progress_cb=events.append,
+        cancel_check=None,
+    )
+
+    assert result["status"] in {"succeeded", "succeeded_with_budget_exhausted"}
+    assert state["drifts"] == 1
+    assert any(
+        event.get("label") == "数据已更新, 重新读取快照" for event in events
+    )
+
+
+def test_mining_fails_with_guidance_when_generation_keeps_drifting(
+    monkeypatch, tmp_path
+):
+    start = date(2023, 1, 2)
+    data_dir = tmp_path / "data"
+    _write_mining_market_data(data_dir, start)
+    payload = _queue_mining_run(data_dir, start, "endless_drift_mining")
+    service, strategy_engine = _mining_runtime_services(data_dir)
+    _patch_generation_drift(monkeypatch, data_dir, always=True)
+
+    from app.backtest.mining_runtime import run_mining_runtime
+
+    with pytest.raises(ValueError, match="稳定快照"):
+        run_mining_runtime(
+            payload,
+            data_dir=data_dir,
+            service=service,
+            strategy_engine=strategy_engine,
+            progress_cb=None,
+            cancel_check=None,
+        )

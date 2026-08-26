@@ -20,6 +20,7 @@ from app.backtest.mining import (
     MAX_FINALISTS,
     evaluate_candidate_gate,
 )
+from app.enriched_generation import EnrichedGenerationUnavailableError
 from app.services import preferences
 from app.services.mining_jobs import (
     RUN_STATUSES,
@@ -208,6 +209,13 @@ def start_run(payload: MiningStartRequest, request: Request) -> dict[str, Any]:
         return projected
     except (MiningRunValidationError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EnrichedGenerationUnavailableError as exc:
+        # build_data_fingerprint 读世代时撞上正在进行的 enriched 发布 (如盘后更新):
+        # 映射为 400 带指引, 而不是 500 英文堆栈。
+        raise HTTPException(
+            status_code=400,
+            detail="行情数据正在更新(enriched 发布中), 请等数据更新完成后再开始挖掘",
+        ) from exc
     except MiningRunStoreError as exc:
         raise HTTPException(status_code=500, detail="failed to persist mining run") from exc
 

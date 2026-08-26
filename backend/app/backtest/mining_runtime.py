@@ -53,6 +53,10 @@ from app.backtest.strategy import (
     _merge_resolved_feature_plans,
     build_matrix_cache_profile,
 )
+from app.enriched_generation import (
+    EnrichedGenerationUnavailableError,
+    enriched_publication_incomplete,
+)
 from app.services.mining_jobs import MiningRunStore
 from app.services.mining_preflight import enriched_partition_dates
 from app.services.mining_schedule import MINING_ALGORITHM_VERSION
@@ -79,6 +83,11 @@ _REGIME_FILTERS: dict[str, dict[str, list[str]]] = {
     "range": {"states": ["range"]},
     "weak": {"states": ["lean_weak", "weak"]},
 }
+
+# 面板/撮合矩阵读取期间 enriched 世代被并发发布打断时, 允许用新世代整体重读的次数
+# 与发布未完成时的等待秒数; 超过后以带指引的错误终止运行。
+_SNAPSHOT_MAX_ATTEMPTS = 3
+_SNAPSHOT_PUBLISH_WAIT_SECONDS = 5.0
 
 
 class MiningRuntimeCancelledError(RuntimeError):
@@ -462,7 +471,6 @@ def run_mining_runtime(
     emit({"phase": "panel", "label": "加载因子面板", "done": 0, "total": 1})
     start_phase()
     _raise_if_cancelled(cancel_check)
-    panel_started = time.perf_counter()
     factor_service = FactorBacktestService(service.engine)
     factor_config = FactorBatchConfig(
         factor_names=list(request.factor_names),
@@ -474,76 +482,106 @@ def run_mining_runtime(
         stamp_tax_pct=request.stamp_tax_pct,
         slippage_bps=request.slippage_bps,
     )
-    generation = factor_service._data_generation(request.asset_type)
-    if generation != expected_generation:
-        raise ValueError(
-            "mining data generation changed after the run was queued"
-        )
-    source_panel = _load_compact_factor_panel(
-        factor_service,
-        factor_config,
-        request.factor_names,
-        expected_generation=generation,
-        cancel_check=cancel_check,
-    )
-    if source_panel.is_empty():
-        raise ValueError("mining date range contains no enriched data")
-    service.engine.clear_panel_cache()
-    trading_dates = enriched_partition_dates(
-        data_dir,
-        request.asset_type,
-        request.start,
-        request.end,
-    )
-    factor_service._assert_data_generation(request.asset_type, generation)
-    panel = attach_single_forward_return(
-        source_panel,
-        start=request.start,
-        end=request.end,
-        horizon=request.forward_horizon,
-        trading_dates=trading_dates,
-        factor_names=request.factor_names,
-        target_column=request.mining_request.target_column,
-        assume_unique_symbol_date=True,
-    )
-    del source_panel
-    if panel.is_empty():
-        raise ValueError("mining panel contains no valid price rows")
-    phase_ms: dict[str, float] = {
-        "panel": round((time.perf_counter() - panel_started) * 1000.0, 3)
-    }
-    finish_phase("panel")
-    emit({
-        "phase": "panel",
-        "label": "因子面板已准备",
-        "done": 1,
-        "total": 1,
-        "rows": panel.height,
-        "factors": len(request.factor_names),
-    })
+    phase_ms: dict[str, float] = {}
+    panel: pl.DataFrame | None = None
+    base_market: np.ndarray | None = None
+    generation: str | None = None
+    for attempt in range(_SNAPSHOT_MAX_ATTEMPTS):
+        if attempt:
+            # 读取期间 enriched 发布了新世代, 面板可能新旧混合: 丢弃本轮,
+            # 用新世代整体重读。排队指纹只在首轮校验; 数据在运行中前进,
+            # 重试跟随新世代属于预期 (等价于"更新后立刻重跑")。
+            emit({"phase": "panel", "label": "数据已更新, 重新读取快照", "done": 0, "total": 1})
+            if enriched_publication_incomplete(data_dir):
+                time.sleep(_SNAPSHOT_PUBLISH_WAIT_SECONDS)
+            service.engine.clear_panel_cache()
+        panel_started = time.perf_counter()
+        try:
+            generation = factor_service._data_generation(request.asset_type)
+            if attempt == 0 and generation != expected_generation:
+                raise ValueError(
+                    "mining data generation changed after the run was queued"
+                )
+            source_panel = _load_compact_factor_panel(
+                factor_service,
+                factor_config,
+                request.factor_names,
+                expected_generation=generation,
+                cancel_check=cancel_check,
+            )
+            if source_panel.is_empty():
+                raise ValueError("mining date range contains no enriched data")
+            service.engine.clear_panel_cache()
+            trading_dates = enriched_partition_dates(
+                data_dir,
+                request.asset_type,
+                request.start,
+                request.end,
+            )
+            factor_service._assert_data_generation(request.asset_type, generation)
+            panel = attach_single_forward_return(
+                source_panel,
+                start=request.start,
+                end=request.end,
+                horizon=request.forward_horizon,
+                trading_dates=trading_dates,
+                factor_names=request.factor_names,
+                target_column=request.mining_request.target_column,
+                assume_unique_symbol_date=True,
+            )
+            del source_panel
+            if panel.is_empty():
+                raise ValueError("mining panel contains no valid price rows")
+            phase_ms["panel"] = round(
+                (time.perf_counter() - panel_started) * 1000.0, 3
+            )
+            finish_phase("panel")
+            emit({
+                "phase": "panel",
+                "label": "因子面板已准备",
+                "done": 1,
+                "total": 1,
+                "rows": panel.height,
+                "factors": len(request.factor_names),
+            })
 
-    _raise_if_cancelled(cancel_check)
-    start_phase()
-    matrix_started = time.perf_counter()
-    emit({"phase": "matrix", "label": "准备共享撮合矩阵", "done": 0, "total": 1})
-    base_market = _prepare_base_market(
-        service,
-        strategy_engine,
-        data_dir,
-        request,
-        expected_generation=generation,
-        cancel_check=cancel_check,
-    )
-    factor_service._assert_data_generation(request.asset_type, generation)
-    phase_ms["matrix"] = round((time.perf_counter() - matrix_started) * 1000.0, 3)
-    finish_phase("matrix")
-    emit({
-        "phase": "matrix",
-        "label": "共享撮合矩阵已准备",
-        "done": 1,
-        "total": 1,
-        "matrix_bytes": base_market.nbytes,
-    })
+            if request.require_regime:
+                emit({"phase": "panel", "label": "校验市场环境数据", "done": 0, "total": 1})
+                _validate_regime_availability(panel, request, data_dir)
+
+            _raise_if_cancelled(cancel_check)
+            start_phase()
+            matrix_started = time.perf_counter()
+            emit({"phase": "matrix", "label": "准备共享撮合矩阵", "done": 0, "total": 1})
+            base_market = _prepare_base_market(
+                service,
+                strategy_engine,
+                data_dir,
+                request,
+                expected_generation=generation,
+                cancel_check=cancel_check,
+            )
+            factor_service._assert_data_generation(request.asset_type, generation)
+            phase_ms["matrix"] = round(
+                (time.perf_counter() - matrix_started) * 1000.0, 3
+            )
+            finish_phase("matrix")
+            emit({
+                "phase": "matrix",
+                "label": "共享撮合矩阵已准备",
+                "done": 1,
+                "total": 1,
+                "matrix_bytes": base_market.nbytes,
+            })
+            break
+        except EnrichedGenerationUnavailableError as exc:
+            if attempt + 1 >= _SNAPSHOT_MAX_ATTEMPTS:
+                raise ValueError(
+                    "行情数据正在更新: 挖掘读取期间 enriched 数据世代反复变化, "
+                    "重试后仍拿不到稳定快照; 请等数据更新完成后再开始挖掘"
+                ) from exc
+    if panel is None or base_market is None or generation is None:
+        raise RuntimeError("mining data snapshot did not settle")
 
     metric_provider = TrainingMetricProvider(request.mining_request.target_column)
     evaluator = MatcherCandidateEvaluator(
@@ -1307,6 +1345,32 @@ def _fold_row(
         "skipped": evaluation is None or error is not None,
         "reason": error,
     }
+
+
+def _validate_regime_availability(
+    panel: pl.DataFrame,
+    request: RuntimeRequest,
+    data_dir: Path,
+) -> None:
+    """搜索开始前 fail-fast 校验市场环境数据。
+
+    环境分组评估 (strong/range/weak) 依赖 T-1 市场环境序列; 数据为空或覆盖不足时,
+    若拖到 artifacts 阶段才在 _regime_date_count 中抛错, 整轮嵌套搜索的计算全部浪费。
+    这里用与 artifacts 相同的 fold 口径 (panel 标签) 预先构建一次 mask:
+    required 区间取所有外层 fold 测试窗的并集, 覆盖后续每个 fold 单独调用的要求,
+    任何 ValueError (数据为空 / 覆盖不完整) 立即带指引消息终止运行。
+    """
+    labels = _date_labels(panel)
+    nested = generate_nested_folds(labels, request.mining_request.validation)
+    if not nested:
+        return
+    StrategyBacktestService._build_regime_mask(
+        labels,
+        _REGIME_FILTERS["strong"],
+        data_dir,
+        required_start=date.fromisoformat(nested[0].outer.test_start),
+        required_end=date.fromisoformat(nested[-1].outer.test_end),
+    )
 
 
 def _regime_date_count(

@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import polars as pl
 import pytest
 
-from app.backtest.mining import MiningCandidate
+from app.backtest.mining import (
+    MiningCandidate,
+    NestedValidationConfig,
+    generate_nested_folds,
+)
 from app.backtest.mining_runtime import (
     TrainingMetricProvider,
     _decode_runtime_request,
@@ -14,6 +18,7 @@ from app.backtest.mining_runtime import (
     _prepare_base_market,
     _rank_artifact_candidates,
     _regime_date_count,
+    _validate_regime_availability,
     attach_single_forward_return,
 )
 from app.services import regime_builder
@@ -312,3 +317,76 @@ def test_regime_date_count_uses_t_minus_one_market_labels(tmp_path) -> None:
 
     assert _regime_date_count(panel, fold, "strong", tmp_path) == 2
     assert _regime_date_count(panel, fold, "weak", tmp_path) == 1
+
+
+def _small_validation() -> NestedValidationConfig:
+    return NestedValidationConfig(
+        outer_train_bars=10,
+        outer_test_bars=3,
+        outer_step_bars=5,
+        inner_train_bars=5,
+        inner_test_bars=2,
+        inner_step_bars=3,
+        purge_bars=1,
+        embargo_bars=1,
+        min_train_bars=3,
+    )
+
+
+def _regime_panel(n: int = 20) -> tuple[list[date], pl.DataFrame]:
+    labels = [date(2024, 1, 2) + timedelta(days=offset) for offset in range(n)]
+    return labels, pl.DataFrame({"date": labels})
+
+
+def _upsert_regime(tmp_path, labels, states: list[str]) -> None:
+    regime_builder.upsert_regime_history(tmp_path, pl.DataFrame({
+        "date": labels,
+        "state": states,
+        "score": [50] * len(labels),
+    }))
+
+
+def test_validate_regime_availability_fails_fast_when_regime_data_missing(
+    tmp_path,
+) -> None:
+    labels, panel = _regime_panel()
+    request = SimpleNamespace(
+        mining_request=SimpleNamespace(validation=_small_validation()),
+    )
+
+    with pytest.raises(ValueError, match="市场环境数据为空"):
+        _validate_regime_availability(panel, request, tmp_path)
+
+
+def test_validate_regime_availability_passes_when_regime_covers_fold_windows(
+    tmp_path,
+) -> None:
+    labels, panel = _regime_panel()
+    _upsert_regime(
+        tmp_path,
+        labels[:-1],
+        ["range"] * (len(labels) - 1),
+    )
+    request = SimpleNamespace(
+        mining_request=SimpleNamespace(validation=_small_validation()),
+    )
+
+    _validate_regime_availability(panel, request, tmp_path)
+
+
+def test_validate_regime_availability_reports_coverage_gaps_in_fold_windows(
+    tmp_path,
+) -> None:
+    labels, panel = _regime_panel()
+    nested = generate_nested_folds(
+        [value.isoformat() for value in labels], _small_validation()
+    )
+    gap_date = date.fromisoformat(nested[0].outer.test_start) + timedelta(days=1)
+    covered = [value for value in labels if value != gap_date]
+    _upsert_regime(tmp_path, covered, ["range"] * len(covered))
+    request = SimpleNamespace(
+        mining_request=SimpleNamespace(validation=_small_validation()),
+    )
+
+    with pytest.raises(ValueError, match="市场环境数据覆盖不完整"):
+        _validate_regime_availability(panel, request, tmp_path)

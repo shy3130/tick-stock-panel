@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -303,6 +303,7 @@ export function MiningWorkbench() {
     enabled: validDateRange,
     staleTime: 30_000,
   })
+  const regimeLatestQuery = useQuery({ queryKey: QK.regimeLatest, queryFn: api.regimeLatest, staleTime: 60_000 })
   const configQuery = useQuery({ queryKey: QK.miningConfig, queryFn: api.miningConfig })
 
   useEffect(() => {
@@ -454,6 +455,18 @@ export function MiningWorkbench() {
       )
       return
     }
+    if (regimeLatestQuery.isPending || regimeLatestQuery.isFetching) {
+      toast('正在核验市场环境数据，请稍候', 'error')
+      return
+    }
+    if (regimeLatestQuery.isError || !regimeLatestQuery.data) {
+      toast('无法核验市场环境数据，请检查数据状态后重试', 'error')
+      return
+    }
+    if (!regimeLatestQuery.data.row) {
+      toast('尚未计算市场环境数据：挖掘含市场环境分组评估，请先在数据页完成市场环境计算', 'error')
+      return
+    }
     const commissionBps = parseBoundedNumber(draft.commissionBps, '佣金', 0, 500)
     const stampTaxBps = parseBoundedNumber(draft.stampTaxBps, '印花税', 0, 500)
     const slippageBps = parseBoundedNumber(draft.slippageBps, '滑点', 0, 1000)
@@ -566,6 +579,12 @@ export function MiningWorkbench() {
               </div>
             )}
           </section>
+
+          {regimeLatestQuery.data && !regimeLatestQuery.data.row && (
+            <Link to="/data" className="block rounded-btn border border-warning/40 bg-warning/5 px-2 py-1.5 text-[9px] leading-4 text-warning transition-colors hover:border-warning/70">
+              尚未计算市场环境数据 — 挖掘含市场环境分组评估，缺少时启动即校验失败。<span className="underline underline-offset-2">前往数据页完成市场环境计算 →</span>
+            </Link>
+          )}
 
           <section className="border-t border-border pt-3">
             <div className="mb-2 flex items-center justify-between">
