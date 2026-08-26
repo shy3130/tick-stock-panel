@@ -106,10 +106,11 @@ function SnapshotView({ snapshot }: { snapshot: MarketStateSnapshot }) {
           <p className="mb-1.5 text-[10px] font-medium text-secondary">覆盖与校准</p>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
             <dt className="text-muted">股票 / 行业</dt><dd className="text-right font-mono text-secondary">{coverageLabel(snapshot.coverage.stock_count)} / {coverageLabel(snapshot.coverage.industry_count)}</dd>
-            <dt className="text-muted">标的 / 成交额映射</dt><dd className="text-right font-mono text-secondary">{coverageLabel(snapshot.coverage.symbol_coverage, true)} / {coverageLabel(snapshot.coverage.turnover_coverage, true)}</dd>
+            <dt className="text-muted">行业映射 / 有效成交额标的</dt><dd className="text-right font-mono text-secondary">{coverageLabel(snapshot.coverage.symbol_coverage, true)} / {coverageLabel(snapshot.coverage.amount_symbol_coverage, true)}</dd>
+            <dt className="text-muted">成交额行业映射</dt><dd className="text-right font-mono text-secondary">{coverageLabel(snapshot.coverage.turnover_coverage, true)}</dd>
             <dt className="text-muted">有效校准日</dt><dd className="text-right font-mono text-secondary">{snapshot.coverage.calibration_days}</dd>
           </dl>
-          <p className="mt-1.5 text-[10px] leading-relaxed text-muted">最低：1,000 股票、20 行业、90% 标的映射、95% 成交额映射；严格此前最多 252 日，至少 120 日。</p>
+          <p className="mt-1.5 text-[10px] leading-relaxed text-muted">最低：1,000 股票、20 行业、90% 行业映射、90% 有效成交额标的、95% 成交额行业映射；严格此前最多 252 日，至少 120 日。</p>
         </div>
         <div className="rounded-input border border-border bg-base/30 px-2.5 py-2">
           <p className="mb-1.5 text-[10px] font-medium text-secondary">数据来源与方法边界</p>

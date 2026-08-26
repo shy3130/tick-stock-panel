@@ -47,6 +47,7 @@ def _snapshot(state: str = "transition") -> MarketStateSnapshot:
             stock_count=5000,
             industry_count=31,
             symbol_coverage=0.99,
+            amount_symbol_coverage=0.99,
             turnover_coverage=0.99,
             calibration_days=180,
         ),

@@ -24,6 +24,7 @@ export interface MarketStateSnapshot {
     stock_count: number | null
     industry_count: number | null
     symbol_coverage: number | null
+    amount_symbol_coverage: number | null
     turnover_coverage: number | null
     calibration_days: number
   }
@@ -115,7 +116,7 @@ export function parseMarketStateSnapshot(value: unknown): MarketStateSnapshot | 
   const coverage = record(snapshot.coverage)
   const gates = record(snapshot.gates)
   const source = record(snapshot.source)
-  if (!coverage || !exactKeys(coverage, ['stock_count', 'industry_count', 'symbol_coverage', 'turnover_coverage', 'calibration_days']) || !nullableNonNegativeInteger(coverage.stock_count) || !nullableNonNegativeInteger(coverage.industry_count) || !nullableRatio(coverage.symbol_coverage) || !nullableRatio(coverage.turnover_coverage) || typeof coverage.calibration_days !== 'number' || !Number.isSafeInteger(coverage.calibration_days) || coverage.calibration_days < 0) return null
+  if (!coverage || !exactKeys(coverage, ['stock_count', 'industry_count', 'symbol_coverage', 'amount_symbol_coverage', 'turnover_coverage', 'calibration_days']) || !nullableNonNegativeInteger(coverage.stock_count) || !nullableNonNegativeInteger(coverage.industry_count) || !nullableRatio(coverage.symbol_coverage) || !nullableRatio(coverage.amount_symbol_coverage) || !nullableRatio(coverage.turnover_coverage) || typeof coverage.calibration_days !== 'number' || !Number.isSafeInteger(coverage.calibration_days) || coverage.calibration_days < 0) return null
   if (!gates || !exactKeys(gates, ['automatic_research_allowed', 'reasons']) || typeof gates.automatic_research_allowed !== 'boolean' || !validStringArray(gates.reasons)) return null
   if (!source || !exactKeys(source, ['daily', 'industry', 'adjustment', 'external_fallback']) || source.daily !== 'canonical_enriched' || source.industry !== 'pit_financial_snapshot' || source.adjustment !== 'raw_close' || source.external_fallback !== false) return null
   if (snapshot.reason !== null && typeof snapshot.reason !== 'string') return null
@@ -131,6 +132,8 @@ export function parseMarketStateSnapshot(value: unknown): MarketStateSnapshot | 
       || coverage.industry_count < 20
       || coverage.symbol_coverage === null
       || coverage.symbol_coverage < 0.9
+      || coverage.amount_symbol_coverage === null
+      || coverage.amount_symbol_coverage < 0.9
       || coverage.turnover_coverage === null
       || coverage.turnover_coverage < 0.95
       || coverage.calibration_days < 120

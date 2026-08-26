@@ -62,7 +62,7 @@ function makeMarketState(): Record<string, unknown> {
       top5_contribution: 0.5,
     },
     percentiles: { return_std: 0.8, turnover_hhi: 0.2, positive_return_hhi: 0.3, top3_contribution: 0.4 },
-    coverage: { stock_count: 5000, industry_count: 31, symbol_coverage: 0.99, turnover_coverage: 0.98, calibration_days: 180 },
+    coverage: { stock_count: 5000, industry_count: 31, symbol_coverage: 0.99, amount_symbol_coverage: 0.99, turnover_coverage: 0.98, calibration_days: 180 },
     gates: { automatic_research_allowed: true, reasons: [] },
     reason: null,
     warnings: [],

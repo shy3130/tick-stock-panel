@@ -19,11 +19,13 @@ from app.services import agent_tools, ai_profiles
 from app.services.agent_loop import (
     ALLOWED_AGENT_TOOLS,
     MAX_TOOL_ROUNDS,
+    _final_system,
+    _short_pool_final_text,
+    _short_pool_outcome,
+    _tools_system,
     occupancy_error_line,
     release_agent_slot,
     try_acquire_agent_slot,
-    _final_system,
-    _tools_system,
 )
 
 _MAX_PROTOCOL_LINE_BYTES = 256 * 1024
@@ -250,6 +252,9 @@ async def _run_pi_worker(
         }
         seen_request_ids: set[str] = set()
         tool_request_count = 0
+        # 短线池输出边界：尝试期间缓冲模型 delta，命中固定池后全部丢弃，
+        # 只输出与 Python runtime 相同的确定性摘要；未命中则在 done 前按序转发。
+        delta_buffer: list[str] = []
         await _write_envelope(proc.stdin, start_message)
 
         allowed_names = {tool["name"] for tool in ALLOWED_AGENT_TOOLS}
@@ -267,7 +272,7 @@ async def _run_pi_worker(
                 content = envelope.get("content")
                 if not isinstance(content, str):
                     raise RuntimeError("Pi Agent worker 返回了无效 delta")
-                yield json.dumps({"type": "delta", "content": content}, ensure_ascii=False)
+                delta_buffer.append(content)
                 continue
 
             if event_type == "tool_request":
@@ -320,6 +325,24 @@ async def _run_pi_worker(
                     ensure_ascii=False,
                     default=str,
                 )
+                if (outcome := _short_pool_outcome(name, result)) is not None:
+                    # 成功固定短线池是终端工具结果：立即终止 worker，丢弃全部
+                    # 缓冲 delta，只输出与 Python runtime 相同的确定性摘要。
+                    terminal = True
+                    await _stop_process(proc)
+                    delta_buffer.clear()
+                    yield json.dumps(
+                        {"type": "delta", "content": _short_pool_final_text(outcome)},
+                        ensure_ascii=False,
+                    )
+                    yield json.dumps(
+                        {
+                            "type": "done",
+                            "elapsed_ms": round((perf_counter() - started_at) * 1000, 1),
+                        },
+                        ensure_ascii=False,
+                    )
+                    return
                 continue
 
             if event_type == "done":
@@ -327,6 +350,10 @@ async def _run_pi_worker(
                 if proc.returncode != 0:
                     raise RuntimeError(_stderr_summary(stderr_tail) or "Pi Agent worker 异常退出")
                 terminal = True
+                for buffered in delta_buffer:
+                    yield json.dumps(
+                        {"type": "delta", "content": buffered}, ensure_ascii=False
+                    )
                 elapsed = envelope.get("elapsed_ms")
                 elapsed_ms = (
                     float(elapsed)

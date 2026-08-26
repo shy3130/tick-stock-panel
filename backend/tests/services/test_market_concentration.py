@@ -13,6 +13,7 @@ def _relax_gates(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mc, "MIN_STOCK_COUNT", 4)
     monkeypatch.setattr(mc, "MIN_INDUSTRY_COUNT", 2)
     monkeypatch.setattr(mc, "MIN_SYMBOL_COVERAGE", 0.9)
+    monkeypatch.setattr(mc, "MIN_AMOUNT_SYMBOL_COVERAGE", 0.9)
     monkeypatch.setattr(mc, "MIN_TURNOVER_COVERAGE", 0.95)
 
 
@@ -46,6 +47,45 @@ def test_high_unmapped_amount_fails_turnover_coverage(monkeypatch: pytest.Monkey
     assert result.valid is False
     assert "turnover_coverage_below_minimum" in result.reasons
     assert "symbol_coverage_below_minimum" in result.reasons
+
+
+def test_low_amount_symbol_coverage_fails_closed_even_with_full_turnover_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """大量 eligible 股票缺 amount/amount=0 时必须 fail-closed。
+
+    剩余有成交额的股票全部有行业映射 → turnover_coverage=1.0,
+    但按标的计的覆盖率极低, 不得让小样本成交额子集自洽通过门禁。
+    """
+    _relax_gates(monkeypatch)
+    returns = {f"S{i}": 0.01 - 0.002 * (i % 5) for i in range(100)}
+    industries = {symbol: "IND" for symbol in returns}
+    # 仅 10 只股票有正成交额(全部映射到 IND), 其余缺 amount 或 amount=0
+    amounts = {f"S{i}": (100.0 if i < 10 else (0.0 if i % 2 else None)) for i in range(100)}
+
+    result = mc.compute_day_metrics(returns, amounts, industries)
+
+    assert result.amount_symbol_coverage == pytest.approx(10.0 / 100.0)
+    assert result.turnover_coverage == pytest.approx(1.0)  # 剩余子集自洽
+    assert result.symbol_coverage == pytest.approx(1.0)
+    assert result.valid is False
+    assert "amount_symbol_coverage_below_minimum" in result.reasons
+    # 旧行业映射与成交额映射语义保持不变
+    assert "symbol_coverage_below_minimum" not in result.reasons
+    assert "turnover_coverage_below_minimum" not in result.reasons
+
+
+def test_high_amount_symbol_coverage_stays_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """正常高覆盖样本继续 valid: 绝大多数股票都有有效正成交额。"""
+    _relax_gates(monkeypatch)
+    returns = {"A1": 0.02, "A2": 0.01, "B1": -0.01, "B2": -0.02}
+    amounts = {"A1": 10.0, "A2": 20.0, "B1": 30.0, "B2": 40.0}
+    industries = {"A1": "A", "A2": "A", "B1": "B", "B2": "B"}
+
+    result = mc.compute_day_metrics(returns, amounts, industries)
+
+    assert result.amount_symbol_coverage == pytest.approx(1.0)
+    assert result.valid is True
 
 
 def test_zero_positive_contribution_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,6 +171,7 @@ def test_compute_market_state_is_strict_t1_and_uses_smoothed_history(
     monkeypatch.setattr(mc, "MIN_STOCK_COUNT", 4)
     monkeypatch.setattr(mc, "MIN_INDUSTRY_COUNT", 2)
     monkeypatch.setattr(mc, "MIN_SYMBOL_COVERAGE", 1.0)
+    monkeypatch.setattr(mc, "MIN_AMOUNT_SYMBOL_COVERAGE", 1.0)
     monkeypatch.setattr(mc, "MIN_TURNOVER_COVERAGE", 1.0)
     monkeypatch.setattr(mc, "MIN_OBSERVATION_SESSIONS", 2)
     monkeypatch.setattr(mc, "MIN_CALIBRATION_DAYS", 20)
@@ -152,6 +193,7 @@ def test_compute_market_state_is_strict_t1_and_uses_smoothed_history(
     assert first.available is True
     assert first.target_date == target.isoformat()
     assert first.signal_date == days[-2].isoformat()
+    assert first.coverage.amount_symbol_coverage == pytest.approx(1.0)
     assert first.coverage.calibration_days == 40
     assert all(value is not None for value in first.metrics.model_dump().values())
 

@@ -38,6 +38,7 @@ function makeSnapshot(): Record<string, unknown> {
       stock_count: 5000,
       industry_count: 31,
       symbol_coverage: 0.99,
+      amount_symbol_coverage: 0.99,
       turnover_coverage: 0.98,
       calibration_days: 180,
     },
@@ -81,6 +82,10 @@ assert(parseMarketStateSnapshot(missingAvailableMetric) === null, '可用状态�
 
 const impossibleCoverage = makeSnapshot()
 ;(impossibleCoverage.coverage as Record<string, unknown>).turnover_coverage = 1.01
+
+const impossibleAmountCoverage = makeSnapshot()
+;(impossibleAmountCoverage.coverage as Record<string, unknown>).amount_symbol_coverage = 1.01
+assert(parseMarketStateSnapshot(impossibleAmountCoverage) === null, '成交额标的覆盖率必须在 0 到 1 之间')
 assert(parseMarketStateSnapshot(impossibleCoverage) === null, '覆盖率必须在 0 到 1 之间')
 
 for (const signalDate of [null, '2026-08-26', '2026-08-27']) {
@@ -93,6 +98,7 @@ for (const [field, value] of [
   ['stock_count', 999],
   ['industry_count', 19],
   ['symbol_coverage', 0.89],
+  ['amount_symbol_coverage', 0.89],
   ['turnover_coverage', 0.94],
   ['calibration_days', 119],
 ] as const) {

@@ -395,3 +395,188 @@ async def test_pi_runtime_redacts_worker_secret(monkeypatch, tmp_path):
     encoded = json.dumps(events, ensure_ascii=False)
     assert "sk-runtime-secret" not in encoded
     assert "/Users/test" not in encoded
+
+
+def _short_pool_success_result():
+    return {
+        "status": "success",
+        "preset": {"preset_id": "short_momentum_quality_v1"},
+        "pool_id": "pool_20260826",
+        "as_of": "2026-08-26",
+        "total": 42,
+        "count": 5,
+        "stocks": [{"symbol": "300750", "name": "宁德时代"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_pi_runtime_short_pool_hit_discards_buffered_deltas(monkeypatch, tmp_path):
+    _enable_pi(monkeypatch, tmp_path)
+    process = _FakeProcess()
+    original_write = process.stdin.write
+    state = {"tool_replied": False}
+
+    def write_and_script(payload):
+        original_write(payload)
+        message = json.loads(payload)
+        if message["type"] == "start":
+            process.stdout.feed_data(
+                json.dumps({"type": "delta", "content": "候选：宁德时代 300750"}, ensure_ascii=False).encode()
+                + b"\n"
+            )
+            process.stdout.feed_data(
+                json.dumps({"type": "delta", "content": "、贵州茅台 600519"}, ensure_ascii=False).encode()
+                + b"\n"
+            )
+            process.stdout.feed_data(
+                json.dumps(
+                    {
+                        "type": "tool_request",
+                        "request_id": "req_1",
+                        "tool_call_id": "call_1",
+                        "name": "screen_stock_pool",
+                        "args": {"preset_id": "short_momentum_quality_v1"},
+                    }
+                ).encode()
+                + b"\n"
+            )
+        elif message["type"] == "tool_result" and not state["tool_replied"]:
+            state["tool_replied"] = True
+            # worker 在收到短线池结果后继续生成候选文本并追加第二个工具请求
+            process.stdout.feed_data(
+                json.dumps({"type": "delta", "content": "模型又编了候选 XXX"}, ensure_ascii=False).encode()
+                + b"\n"
+            )
+            process.stdout.feed_data(
+                json.dumps(
+                    {
+                        "type": "tool_request",
+                        "request_id": "req_2",
+                        "tool_call_id": "call_2",
+                        "name": "list_strategies",
+                        "args": {},
+                    }
+                ).encode()
+                + b"\n"
+            )
+            process.stdout.feed_data(b'{"type":"done","elapsed_ms":99.0}\n')
+
+    process.stdin.write = write_and_script
+
+    async def fake_spawn(*args, **kwargs):
+        return process
+
+    calls = []
+
+    def fake_call_tool(name, state_obj, args):
+        calls.append(name)
+        return _short_pool_success_result() if name == "screen_stock_pool" else {}
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+    monkeypatch.setattr(agent_runtime.agent_tools, "call_tool", fake_call_tool)
+    events = await _collect(
+        agent_runtime.run_agent_stream(
+            [{"role": "user", "content": "生成短线池"}], SimpleNamespace(), "p_test"
+        )
+    )
+    assert [event["type"] for event in events] == ["tool_call", "tool_result", "delta", "done"]
+    expected = agent_loop._short_pool_final_text(
+        agent_loop._short_pool_outcome("screen_stock_pool", _short_pool_success_result())
+    )
+    assert events[2]["content"] == expected
+    deltas = [event["content"] for event in events if event["type"] == "delta"]
+    joined_deltas = "".join(deltas)
+    assert "300750" not in joined_deltas
+    assert "600519" not in joined_deltas
+    assert "模型又编了" not in joined_deltas
+    assert "宁德时代" not in joined_deltas
+    # 候选只能经 tool_result（前端结构化卡片）承载，不得进入 delta 流
+    assert events[1]["result"]["stocks"][0]["symbol"] == "300750"
+    assert calls == ["screen_stock_pool"]
+    replies = [m for m in process.stdin.messages if m["type"] == "tool_result"]
+    assert [r["request_id"] for r in replies] == ["req_1"]
+    assert process.terminated is True
+    assert process.returncode == -15
+
+
+@pytest.mark.asyncio
+async def test_pi_runtime_short_pool_miss_forwards_buffered_deltas(monkeypatch, tmp_path):
+    _enable_pi(monkeypatch, tmp_path)
+    process = _FakeProcess()
+    original_write = process.stdin.write
+    state = {"tool_replied": False}
+
+    def write_and_script(payload):
+        original_write(payload)
+        message = json.loads(payload)
+        if message["type"] == "start":
+            process.stdout.feed_data(b'{"type":"delta","content":"pre-text"}\n')
+            process.stdout.feed_data(
+                json.dumps(
+                    {
+                        "type": "tool_request",
+                        "request_id": "req_1",
+                        "tool_call_id": "call_1",
+                        "name": "screen_stock_pool",
+                        "args": {"preset_id": "legacy_pool"},
+                    }
+                ).encode()
+                + b"\n"
+            )
+        elif message["type"] == "tool_result" and not state["tool_replied"]:
+            state["tool_replied"] = True
+            process.stdout.feed_data(b'{"type":"delta","content":"post-text"}\n')
+            process.stdout.feed_data(
+                json.dumps(
+                    {
+                        "type": "tool_request",
+                        "request_id": "req_2",
+                        "tool_call_id": "call_2",
+                        "name": "list_strategies",
+                        "args": {},
+                    }
+                ).encode()
+                + b"\n"
+            )
+        elif message["type"] == "tool_result" and message["request_id"] == "req_2":
+            process.returncode = 0
+            process.stdout.feed_data(b'{"type":"done","elapsed_ms":7.5}\n')
+            process.stdout.feed_eof()
+
+    process.stdin.write = write_and_script
+
+    async def fake_spawn(*args, **kwargs):
+        return process
+
+    calls = []
+
+    def fake_call_tool(name, state_obj, args):
+        calls.append(name)
+        if name == "screen_stock_pool":
+            return {"status": "error", "message": "预设不存在"}
+        return {"strategies": []}
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_spawn)
+    monkeypatch.setattr(agent_runtime.agent_tools, "call_tool", fake_call_tool)
+    events = await _collect(
+        agent_runtime.run_agent_stream(
+            [{"role": "user", "content": "查询池"}], SimpleNamespace(), "p_test"
+        )
+    )
+    assert [event["type"] for event in events] == [
+        "tool_call",
+        "tool_result",
+        "tool_call",
+        "tool_result",
+        "delta",
+        "delta",
+        "done",
+    ]
+    assert [event["content"] for event in events if event["type"] == "delta"] == [
+        "pre-text",
+        "post-text",
+    ]
+    assert calls == ["screen_stock_pool", "list_strategies"]
+    replies = [m for m in process.stdin.messages if m["type"] == "tool_result"]
+    assert [r["request_id"] for r in replies] == ["req_1", "req_2"]
+    assert events[-1]["elapsed_ms"] == 7.5

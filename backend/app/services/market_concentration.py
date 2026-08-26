@@ -40,6 +40,10 @@ MIN_STOCK_COUNT = 1000
 MIN_INDUSTRY_COUNT = 20
 MIN_SYMBOL_COVERAGE = 0.9
 MIN_TURNOVER_COVERAGE = 0.95
+# 有效正成交额标的覆盖率: eligible clean-return 股票中 amount 有限且 >0 的占比。
+# 独立于 turnover_coverage(按成交额加权的行业映射覆盖): 防止大量股票缺
+# amount/amount=0 时, 剩余小样本成交额自洽通过门禁。
+MIN_AMOUNT_SYMBOL_COVERAGE = 0.9
 MIN_OBSERVATION_SESSIONS = 60
 
 # 分类阈值(作用于经验百分位, 非原始值)
@@ -56,6 +60,9 @@ HISTORY_CALENDAR_DAYS = 320
 FETCH_TRADING_DAYS = 200
 
 _FORMULAS: dict[str, str] = {
+    "amount_symbol_coverage": (
+        "share of eligible clean-return symbols with finite positive amount for the day"
+    ),
     "return": "close-to-close pct change on raw_close; daily cross-section vs prior trading day",
     "return_std": "cross-sectional population std (ddof=0) of daily returns",
     "return_q90_q10": "cross-sectional quantile spread Q90-Q10 of daily returns (linear interpolation)",
@@ -136,6 +143,7 @@ class MarketStateCoverage(_StrictModel):
     industry_count: int = Field(default=0, ge=0)
     symbol_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
     turnover_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    amount_symbol_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
     calibration_days: int = Field(default=0, ge=0)
 
 
@@ -193,18 +201,22 @@ class MarketStateSnapshot(_StrictModel):
             or self.coverage.symbol_coverage < MIN_SYMBOL_COVERAGE
             or self.coverage.turnover_coverage is None
             or self.coverage.turnover_coverage < MIN_TURNOVER_COVERAGE
+            or self.coverage.amount_symbol_coverage is None
+            or self.coverage.amount_symbol_coverage < MIN_AMOUNT_SYMBOL_COVERAGE
             or self.coverage.calibration_days < MIN_CALIBRATION_DAYS
         ):
             raise ValueError("available market state requires minimum coverage")
         for value in self.percentiles.model_dump().values():
             if value is not None and not 0.0 <= value <= 1.0:
                 raise ValueError("percentile outside [0,1]")
-        for value in (self.coverage.symbol_coverage, self.coverage.turnover_coverage):
+        for value in (
+            self.coverage.symbol_coverage,
+            self.coverage.turnover_coverage,
+            self.coverage.amount_symbol_coverage,
+        ):
             if value is not None and not 0.0 <= value <= 1.0:
                 raise ValueError("coverage outside [0,1]")
         return self
-
-
 # ── 纯计算函数(测试直接复算) ────────────────────────────────────
 def _finite(value: Any) -> float | None:
     try:
@@ -354,6 +366,7 @@ class DayMetrics:
     stock_count: int = 0
     industry_count: int = 0
     symbol_coverage: float | None = None
+    amount_symbol_coverage: float | None = None
     turnover_coverage: float | None = None
     return_std: float | None = None
     return_q90_q10: float | None = None
@@ -397,6 +410,7 @@ def compute_day_metrics(
         if (value := _finite(amounts.get(symbol))) is not None and value > 0
     }
     all_valid_amount = sum(positive_amounts.values())
+    metrics.amount_symbol_coverage = len(positive_amounts) / metrics.stock_count
     mapped_amounts = {
         symbol: amount for symbol, amount in positive_amounts.items() if symbol in mapped
     }
@@ -433,6 +447,11 @@ def compute_day_metrics(
         metrics.reasons.append("industry_count_below_minimum")
     if metrics.symbol_coverage < MIN_SYMBOL_COVERAGE:
         metrics.reasons.append("symbol_coverage_below_minimum")
+    if (
+        metrics.amount_symbol_coverage is None
+        or metrics.amount_symbol_coverage < MIN_AMOUNT_SYMBOL_COVERAGE
+    ):
+        metrics.reasons.append("amount_symbol_coverage_below_minimum")
     if metrics.turnover_coverage is None or metrics.turnover_coverage < MIN_TURNOVER_COVERAGE:
         metrics.reasons.append("turnover_coverage_below_minimum")
     for key in _METRIC_KEYS:
@@ -595,6 +614,7 @@ def compute_market_state(repo: Any, target_date: date | None = None) -> MarketSt
             industry_count=signal_day.industry_count,
             symbol_coverage=signal_day.symbol_coverage,
             turnover_coverage=signal_day.turnover_coverage,
+            amount_symbol_coverage=signal_day.amount_symbol_coverage,
             calibration_days=0,
         )
         return _unavailable_snapshot(target_date, signal_date, codes, warnings, coverage)
@@ -626,6 +646,7 @@ def compute_market_state(repo: Any, target_date: date | None = None) -> MarketSt
                 industry_count=window[-1].industry_count,
                 symbol_coverage=window[-1].symbol_coverage,
                 turnover_coverage=window[-1].turnover_coverage,
+                amount_symbol_coverage=window[-1].amount_symbol_coverage,
                 calibration_days=len(history),
             ),
         )
@@ -660,6 +681,7 @@ def compute_market_state(repo: Any, target_date: date | None = None) -> MarketSt
             industry_count=signal_day.industry_count,
             symbol_coverage=signal_day.symbol_coverage,
             turnover_coverage=signal_day.turnover_coverage,
+            amount_symbol_coverage=signal_day.amount_symbol_coverage,
             calibration_days=len(history),
         ),
         gates=MarketStateGates(automatic_research_allowed=allowed, reasons=reasons),
