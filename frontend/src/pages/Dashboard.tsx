@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Activity, ArrowDownRight, ArrowUpRight, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
+import { Activity, ArrowDownRight, ArrowUpRight, Ban, BarChart3, BellRing, Database, Flame, Gauge, Info, LineChart, Loader2, Play, RefreshCw, Sparkles, Target, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
 import { api, type MarketSnapshotRow, type OverviewDimensionRankItem, type OverviewMarket, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -504,17 +504,24 @@ export function Dashboard() {
     enabled: !!fetchJobId,
     refetchInterval: (q: any) => {
       const j = q.state.data
-      return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed') ? false : 1_000
+      return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed' || j.status === 'cancelled') ? false : 1_000
     },
   })
   const startFetch = useMutation({
     mutationFn: api.pipelineRun,
     onSuccess: ({ job_id }) => setFetchJobId(job_id),
   })
+  const cancelFetch = useMutation({
+    mutationFn: () => api.pipelineCancel(fetchJobId!),
+    onSuccess: () => {
+      void fetchStatus.refetch()
+    },
+  })
   const isFetching = startFetch.isPending
     || fetchStatus.data?.status === 'running'
     || fetchStatus.data?.status === 'pending'
   const fetchFailed = fetchStatus.data?.status === 'failed'
+  const fetchCancelled = fetchStatus.data?.status === 'cancelled'
   const fetchSucceeded = fetchStatus.data?.status === 'succeeded' || fetchStatus.data?.status === 'degraded'
 
   // 首次使用且无数据 → 自动弹一次引导弹窗(同会话只弹一次)
@@ -599,9 +606,12 @@ export function Dashboard() {
           isFetching={isFetching}
           isStarting={startFetch.isPending}
           fetchFailed={fetchFailed}
+          fetchCancelled={fetchCancelled}
           stage={fetchStatus.data?.stage}
           fetchPct={fetchStatus.data?.progress}
           onStart={() => startFetch.mutate()}
+          onCancel={() => cancelFetch.mutate()}
+          cancelling={cancelFetch.isPending}
           isNoKey={isNoKey}
         />
       )}
@@ -774,14 +784,18 @@ export function Dashboard() {
 
 // ===== 无数据常驻引导卡片: 一键触发盘后管道获取行情数据(无 Key 也可) =====
 function FetchDataCard({
-  isFetching, isStarting, fetchFailed, stage, fetchPct, onStart, isNoKey,
+  isFetching, isStarting, fetchFailed, fetchCancelled, stage, fetchPct,
+  onStart, onCancel, cancelling, isNoKey,
 }: {
   isFetching: boolean
   isStarting: boolean
   fetchFailed: boolean
+  fetchCancelled: boolean
   stage?: string
   fetchPct?: number
   onStart: () => void
+  onCancel: () => void
+  cancelling: boolean
   isNoKey: boolean
 }) {
   const stageText = stage ? (STAGE_LABELS[stage] ?? stage) : '正在同步行情数据…'
@@ -821,16 +835,29 @@ function FetchDataCard({
                   transition={{ duration: 0.4, ease: 'easeOut' }}
                 />
               </div>
+              {!isStarting && (
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={onCancel}
+                    disabled={cancelling}
+                    className="btn-secondary h-7 px-2 text-xs disabled:opacity-50"
+                  >
+                    <Ban className="h-3.5 w-3.5" />
+                    {cancelling ? '取消中…' : '取消任务'}
+                  </button>
+                </div>
+              )}
             </div>
           ) : fetchFailed ? (
             <div className="mt-3 flex items-center gap-2">
               <span className="text-xs text-danger">同步失败,请重试</span>
-              <button
-                onClick={onStart}
-                className="inline-flex items-center gap-1.5 px-3 h-8 rounded-btn bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors"
-              >
-                <Play className="h-3.5 w-3.5" />重新获取
-              </button>
+              <button onClick={onStart} className="btn-secondary text-xs">重试</button>
+            </div>
+          ) : fetchCancelled ? (
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-xs text-muted">同步已取消</span>
+              <button onClick={onStart} className="btn-secondary text-xs">重新开始</button>
             </div>
           ) : (
             <div className="mt-3 flex items-center gap-3">

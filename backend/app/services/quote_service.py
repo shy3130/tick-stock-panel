@@ -21,6 +21,7 @@
   - 运行中可通过 API 切换开关
   - 关闭时停止线程
 """
+
 from __future__ import annotations
 
 import logging
@@ -58,7 +59,13 @@ def _get_data_provider():
 class QuoteService:
     """全局实时行情服务 — 单例。"""
 
-    CORE_INDEX_SYMBOLS = ("000001.INDEX", "399001.INDEX", "399006.INDEX", "000680.INDEX")
+    CORE_INDEX_SYMBOLS = (
+        "000001.INDEX",
+        "399001.INDEX",
+        "399006.INDEX",
+        "000680.INDEX",
+        "899050.INDEX",
+    )
 
     DEFAULT_INTERVAL = 10.0
     MAX_INTERVAL = 60.0
@@ -66,26 +73,28 @@ class QuoteService:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._running = False
-        self._enabled = False      # 全局开关 (持久化到 preferences)
+        self._enabled = False  # 全局开关 (持久化到 preferences)
         self._interval = self.DEFAULT_INTERVAL
         self._thread: threading.Thread | None = None
-        self._repo = None          # 延迟注入, 避免循环导入
+        self._repo = None  # 延迟注入, 避免循环导入
         self._update_event = threading.Event()  # SSE 通知: 行情更新后 set
-        self._alert_event = threading.Event()   # SSE 通知: 有告警时 set
-        self._depth_update_event = threading.Event()  # SSE 通知: depth 五档修正后 set (刷新连板梯队)
-        self._pending_alerts: list[dict] = []    # 待推送的告警
-        self._max_pending_alerts: int = 1000     # 背压上限: 超出丢弃最旧
+        self._alert_event = threading.Event()  # SSE 通知: 有告警时 set
+        self._depth_update_event = (
+            threading.Event()
+        )  # SSE 通知: depth 五档修正后 set (刷新连板梯队)
+        self._pending_alerts: list[dict] = []  # 待推送的告警
+        self._max_pending_alerts: int = 1000  # 背压上限: 超出丢弃最旧
         # 复盘进度 SSE 通道: 定时复盘流式生成时, 把 meta/delta/done 事件推给开着页面的前端
-        self._review_event = threading.Event()        # SSE 通知: 有复盘进度事件时 set
-        self._pending_review: list[str] = []          # 待推送的复盘事件(JSON 字符串)
-        self._max_pending_review: int = 200           # 背压上限: 超出丢弃最旧
-        self._strategy_monitor = None            # 延迟注入
-        self._app_state = None                   # 延迟注入 (FastAPI app.state)
+        self._review_event = threading.Event()  # SSE 通知: 有复盘进度事件时 set
+        self._pending_review: list[str] = []  # 待推送的复盘事件(JSON 字符串)
+        self._max_pending_review: int = 200  # 背压上限: 超出丢弃最旧
+        self._strategy_monitor = None  # 延迟注入
+        self._app_state = None  # 延迟注入 (FastAPI app.state)
 
         # 拉取元信息 (给 SSE / status 用)
-        self._fetch_time: float = 0.0       # perf_counter (用于计算 quote_age_ms)
-        self._fetch_ms: float = 0.0         # 拉取耗时 (毫秒)
-        self._fetched_at: float = 0.0       # 拉取完成的 Unix 时间戳 (毫秒)
+        self._fetch_time: float = 0.0  # perf_counter (用于计算 quote_age_ms)
+        self._fetch_ms: float = 0.0  # 拉取耗时 (毫秒)
+        self._fetched_at: float = 0.0  # 拉取完成的 Unix 时间戳 (毫秒)
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
@@ -94,13 +103,17 @@ class QuoteService:
         self._final_sync_done: set[tuple[date, str]] = set()
         self._final_sync_failed: dict[tuple[date, str], str] = {}
         # 行情数据健康状态 (给 status() 用; 只保存非敏感摘要, 不保存原始异常/路径)
-        self._last_outcome: str | None = None      # None | "success" | "empty" | "error"
-        self._last_success_perf: float = 0.0       # 最近一次成功非空拉取的 perf_counter
-        self._last_success_total: int = 0          # 最近一次成功非空拉取的总标的数
-        self._consecutive_empty: int = 0           # 连续空结果计数
-        self._last_error_code: str | None = None   # None | "provider_empty" | "provider_error"
-        self._source_as_of: str | None = None      # 成功数据中最新的 source timestamp/date
-        self._fetch_in_progress: bool = False      # 拉取重入保护 (轮询/refresh/final_sync 并发)
+        self._last_outcome: str | None = None  # None | "success" | "empty" | "error"
+        self._last_success_perf: float = 0.0  # 最近一次成功非空拉取的 perf_counter
+        self._last_success_total: int = 0  # 最近一次成功非空拉取的总标的数
+        self._consecutive_empty: int = 0  # 连续空结果计数
+        self._last_error_code: str | None = None  # None | "provider_empty" | "provider_error"
+        self._source_as_of: str | None = None  # 成功数据中最新的 source timestamp/date
+        self._fetch_in_progress: bool = False  # 拉取重入保护 (轮询/refresh/final_sync 并发)
+        # 交易所异动规则独立评估节流: 只有存在 enabled type=abnormal 规则时,
+        # 才在轮询循环里约每 30s 评估一次 (复用本地指数缓存, 不直连外部)。
+        self._abnormal_last_eval: float = 0.0
+        self._abnormal_interval: float = 30.0
 
     # ================================================================
     # 生命周期
@@ -112,6 +125,7 @@ class QuoteService:
             return
         if interval <= 0:
             from app.services import preferences
+
             interval = preferences.get_realtime_quote_interval()
         self._interval = self._clamp_interval(interval)
         self._running = True
@@ -154,6 +168,7 @@ class QuoteService:
         self._save_enabled(True)
         if not self._running:
             from app.services import preferences
+
             self._interval = self._clamp_interval(preferences.get_realtime_quote_interval())
             self._running = True
             self._thread = threading.Thread(target=self._poll_loop, daemon=True)
@@ -173,6 +188,7 @@ class QuoteService:
         也不启动,并同步 preferences 为关闭(避免 UI 误显示已开启)。
         """
         from app.services import preferences
+
         if not self.is_realtime_allowed():
             if preferences.get_realtime_quotes_enabled():
                 self._save_enabled(False)
@@ -194,6 +210,7 @@ class QuoteService:
         clamped = self._clamp_interval(interval)
         self._interval = clamped
         from app.services import preferences
+
         preferences.set_realtime_quote_interval(clamped)
         logger.info("轮询间隔已更新为 %.1fs", clamped)
         return clamped
@@ -311,10 +328,26 @@ class QuoteService:
 
         # 只取盘中选股需要的行情基础列; 额外保留 date/source 用于新鲜度判定与 provenance
         # (snapshot 端点据此区分 realtime vs local_disk, 不再把昨日数据标 realtime)。
-        keep = [c for c in [
-            "symbol", "date", "source", "close", "open", "high", "low", "volume", "amount",
-            "prev_close", "change_pct", "change_amount", "amplitude", "turnover_rate",
-        ] if c in df.columns]
+        keep = [
+            c
+            for c in [
+                "symbol",
+                "date",
+                "source",
+                "close",
+                "open",
+                "high",
+                "low",
+                "volume",
+                "amount",
+                "prev_close",
+                "change_pct",
+                "change_amount",
+                "amplitude",
+                "turnover_rate",
+            ]
+            if c in df.columns
+        ]
         df = df.select(keep)
 
         # enriched 的 close 等价于 last_price
@@ -325,7 +358,11 @@ class QuoteService:
     def get_index_quotes(self, symbols: list[str] | None = None) -> pl.DataFrame:
         """返回实时指数行情缓存。"""
         with self._lock:
-            df = self._index_quotes_cache.clone() if self._index_quotes_cache is not None else pl.DataFrame()
+            df = (
+                self._index_quotes_cache.clone()
+                if self._index_quotes_cache is not None
+                else pl.DataFrame()
+            )
         if df.is_empty():
             return df
         if symbols:
@@ -340,6 +377,7 @@ class QuoteService:
         data_state 只暴露有限枚举, 不包含原始异常/路径/凭据。
         """
         from app.services import preferences
+
         age = (time.perf_counter() - self._fetch_time) * 1000 if self._fetch_time else -1
         mode = self.realtime_mode()
         data_state, has_recent = self._data_health()
@@ -360,7 +398,9 @@ class QuoteService:
             # ---- 追加: 数据健康 (向后兼容, 不暴露原始异常) ----
             "data_state": data_state,
             "has_recent_data": has_recent,
-            "total_symbol_count": self._symbol_count + self._index_symbol_count + self._etf_symbol_count,
+            "total_symbol_count": self._symbol_count
+            + self._index_symbol_count
+            + self._etf_symbol_count,
             "last_error_code": self._last_error_code,
             "source_as_of": self._source_as_of,
         }
@@ -477,7 +517,6 @@ class QuoteService:
         symbol = str(record.get("symbol") or "")
         return symbol in known_index_symbols or symbol.endswith(".INDEX")
 
-
     def refresh(self) -> dict:
         """手动触发一次行情拉取。"""
         self._fetch_quotes()
@@ -492,6 +531,7 @@ class QuoteService:
             try:
                 if self._is_trading_hours():
                     self._fetch_quotes()
+                    self._maybe_evaluate_abnormal_rules()
                 else:
                     logger.debug("非交易时段, 跳过行情轮询")
             except Exception as e:  # noqa: BLE001
@@ -502,6 +542,61 @@ class QuoteService:
             while self._running and self._enabled and waited < self._interval:
                 time.sleep(0.5)
                 waited += 0.5
+
+    def _maybe_evaluate_abnormal_rules(self) -> None:
+        """约每 30s 评估一次 enabled 的 type=abnormal 规则 (独立节流, 异常隔离)。
+
+        - 引擎无 abnormal 规则时零开销 (不读数据);
+        - 复用引擎 abnormal loader → 只读 repository + get_index_quotes() 本地缓存;
+        - 任何失败只记日志, 绝不影响普通 quote monitor 主流程。
+        """
+        now = time.perf_counter()
+        if now - self._abnormal_last_eval < self._abnormal_interval:
+            return
+        self._abnormal_last_eval = now
+        engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+        if engine is None or not getattr(engine, "has_abnormal_rules", False):
+            return
+        try:
+            rule_events = engine.evaluate_abnormal()
+            if rule_events:
+                all_alerts = [
+                    {
+                        "source": ev.get("source", "abnormal"),
+                        "type": ev.get("type", ""),
+                        "rule_id": ev.get("rule_id"),
+                        "strategy_id": None,
+                        "symbol": ev.get("symbol", ""),
+                        "name": ev.get("name", ""),
+                        "message": ev.get("message", ""),
+                        "price": ev.get("price"),
+                        "change_pct": ev.get("change_pct"),
+                        "signals": ev.get("signals") or [],
+                        "severity": ev.get("severity", "info"),
+                        "conditions": [],
+                        "logic": "and",
+                    }
+                    for ev in rule_events
+                ]
+                try:
+                    from app.services import alert_store
+
+                    alert_store.append_many(
+                        self._app_state.repo.store.data_dir,
+                        rule_events,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("异动告警落盘失败: %s", e)
+                with self._lock:
+                    self._pending_alerts.extend(all_alerts)
+                    if len(self._pending_alerts) > self._max_pending_alerts:
+                        overflow = len(self._pending_alerts) - self._max_pending_alerts
+                        self._pending_alerts = self._pending_alerts[overflow:]
+                self._alert_event.set()
+                self._maybe_send_system_notifications(all_alerts)
+                self._maybe_send_webhook(rule_events, engine)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("异动规则评估失败 (不影响普通监控): %s", e)
 
     def _fetch_quotes(self) -> bool:
         """按当前档位拉取行情。
@@ -540,11 +635,21 @@ class QuoteService:
         try:
             from app.data_providers.fquant.symbols import canonical_index_symbol
             from app.services import preferences
+
             all_index_symbols = set(self._repo.get_index_symbol_set()) if self._repo else set()
+            configured_index_symbols = (
+                preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS
+            )
             core_index_symbols = {
-                canonical_index_symbol(s)
-                for s in (preferences.get_realtime_index_symbols() or self.CORE_INDEX_SYMBOLS)
+                canonical_index_symbol(symbol) for symbol in configured_index_symbols
             }
+            monitor_engine = (
+                getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+            )
+            if monitor_engine is not None and getattr(monitor_engine, "has_abnormal_rules", False):
+                core_index_symbols.update(
+                    canonical_index_symbol(symbol) for symbol in self.CORE_INDEX_SYMBOLS
+                )
             all_index_symbols.update(core_index_symbols)
             all_etf_symbols = set()
             if self._repo:
@@ -557,7 +662,10 @@ class QuoteService:
                 universes.append("CN_Equity_A")
             if preferences.get_realtime_pull_etf() and all_etf_symbols:
                 universes.append("CN_ETF")
-            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "all":
+            if (
+                preferences.get_realtime_pull_index()
+                and preferences.get_realtime_index_mode() == "all"
+            ):
                 universes.append("CN_Index")
 
             # 通过 provider 抽象层拉取 (替代 tf.quotes.get_by_universes / tf.quotes.get)
@@ -566,7 +674,10 @@ class QuoteService:
                 df_uni = provider.get_realtime(universes=universes)
                 if df_uni is not None and not df_uni.is_empty():
                     resp.extend(df_uni.to_dicts())
-            if preferences.get_realtime_pull_index() and preferences.get_realtime_index_mode() == "core":
+            if (
+                preferences.get_realtime_pull_index()
+                and preferences.get_realtime_index_mode() == "core"
+            ):
                 # 指数走 provider realtime (本地 DuckDB 快照); 不再直连腾讯/新浪
                 df_idx = provider.get_realtime(symbols=sorted(core_index_symbols))
                 if df_idx is not None and not df_idx.is_empty():
@@ -583,9 +694,7 @@ class QuoteService:
 
         records = [self._record_from_quote(q) for q in resp]
 
-        index_records = [
-            r for r in records if self._is_index_record(r, all_index_symbols)
-        ]
+        index_records = [r for r in records if self._is_index_record(r, all_index_symbols)]
         etf_records = [r for r in records if r.get("symbol") in all_etf_symbols]
         stock_records = [
             r
@@ -611,7 +720,13 @@ class QuoteService:
             source_as_of=self._extract_source_as_of(resp),
         )
 
-        logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
+        logger.info(
+            "行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms",
+            len(stock_records),
+            len(etf_records),
+            len(index_records),
+            fetch_ms,
+        )
         if not self._source_as_of_is_current():
             logger.warning(
                 "行情源日期过期 (%s), 跳过 canonical/enriched 写入与监控评估",
@@ -669,6 +784,7 @@ class QuoteService:
         t0 = time.perf_counter()
         now_ts = time.perf_counter()
         resp: list[dict] = []
+        index_resp: list[dict] = []
         try:
             df = provider.get_realtime(symbols=symbols)
             resp = df.to_dicts() if df is not None and not df.is_empty() else []
@@ -677,12 +793,25 @@ class QuoteService:
             self._record_fetch_error()
             return
 
+        monitor_engine = (
+            getattr(self._app_state, "monitor_engine", None) if self._app_state else None
+        )
+        if monitor_engine is not None and getattr(monitor_engine, "has_abnormal_rules", False):
+            try:
+                # watchlist 模式也必须同步当日基准指数；仍只走本地 provider。
+                index_df = provider.get_realtime(symbols=list(self.CORE_INDEX_SYMBOLS))
+                if index_df is not None and not index_df.is_empty():
+                    index_resp = index_df.to_dicts()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("自选模式异动基准指数拉取失败: %s", e)
+
         if not resp:
             logger.warning("自选实时行情数据为空")
             self._record_fetch_empty()
             return
 
         records = [self._record_from_quote(q) for q in resp]
+        index_records = [self._record_from_quote(q) for q in index_resp]
 
         fetch_ms = (time.perf_counter() - t0) * 1000
         fetched_at = time.time() * 1000
@@ -691,12 +820,14 @@ class QuoteService:
             self._fetch_ms = fetch_ms
             self._fetched_at = fetched_at
             self._symbol_count = len(records)
-            self._index_symbol_count = 0
+            self._index_symbol_count = len(index_records)
             self._etf_symbol_count = 0
-            self._index_quotes_cache = None
+            self._index_quotes_cache = (
+                self._build_index_quotes(index_records) if index_records else None
+            )
         self._record_fetch_success(
-            total=len(records),
-            source_as_of=self._extract_source_as_of(resp),
+            total=len(records) + len(index_records),
+            source_as_of=self._extract_source_as_of(resp + index_resp),
         )
 
         logger.info("自选实时刷新: %d 只股票, 耗时 %.0fms", len(records), fetch_ms)
@@ -724,7 +855,6 @@ class QuoteService:
     # ================================================================
     # 工具
     # ================================================================
-
 
     @classmethod
     def _ratio_from_points(cls, value) -> float | None:
@@ -813,10 +943,18 @@ class QuoteService:
         if not records:
             return pl.DataFrame()
         df = pl.DataFrame(records)
-        keep = [c for c in [
-            "symbol", "prev_close", "change_pct", "change_amount",
-            "amplitude", "turnover_rate",
-        ] if c in df.columns]
+        keep = [
+            c
+            for c in [
+                "symbol",
+                "prev_close",
+                "change_pct",
+                "change_amount",
+                "amplitude",
+                "turnover_rate",
+            ]
+            if c in df.columns
+        ]
         if not keep or "symbol" not in keep:
             return pl.DataFrame()
         return df.select(keep)
@@ -832,10 +970,26 @@ class QuoteService:
         if not records:
             return pl.DataFrame()
         df = pl.DataFrame(records)
-        keep = [c for c in [
-            "symbol", "name", "last_price", "prev_close", "open", "high", "low",
-            "volume", "amount", "change_pct", "change_amount", "amplitude", "timestamp", "session",
-        ] if c in df.columns]
+        keep = [
+            c
+            for c in [
+                "symbol",
+                "name",
+                "last_price",
+                "prev_close",
+                "open",
+                "high",
+                "low",
+                "volume",
+                "amount",
+                "change_pct",
+                "change_amount",
+                "amplitude",
+                "timestamp",
+                "session",
+            ]
+            if c in df.columns
+        ]
         if not keep or "symbol" not in keep:
             return pl.DataFrame()
         df = df.select(keep)
@@ -875,6 +1029,7 @@ class QuoteService:
             return "closed"
         t = now.time()
         from datetime import time as dt_time
+
         if dt_time(9, 15) <= t < dt_time(9, 30):
             return "preopen"
         if dt_time(9, 30) <= t < dt_time(11, 30):
@@ -929,9 +1084,11 @@ class QuoteService:
             self._final_sync_failed[key] = "fetch_failed"
             logger.warning("收盘最终行情同步失败: %s", e)
             return False
+
     @staticmethod
     def _save_enabled(enabled: bool) -> None:
         from app.services import preferences
+
         preferences.save({"realtime_quotes_enabled": enabled})
 
     # ================================================================
@@ -957,12 +1114,20 @@ class QuoteService:
                     # 预构建 symbol → name 映射 (enriched 已 drop name 列, 引擎触发时回填用)
                     try:
                         inst_df = self._app_state.repo.get_instruments()
-                        if not inst_df.is_empty() and "symbol" in inst_df.columns and "name" in inst_df.columns:
-                            engine.set_name_map({
-                                row["symbol"]: row["name"]
-                                for row in inst_df.select(["symbol", "name"]).iter_rows(named=True)
-                                if row.get("name")
-                            })
+                        if (
+                            not inst_df.is_empty()
+                            and "symbol" in inst_df.columns
+                            and "name" in inst_df.columns
+                        ):
+                            engine.set_name_map(
+                                {
+                                    row["symbol"]: row["name"]
+                                    for row in inst_df.select(["symbol", "name"]).iter_rows(
+                                        named=True
+                                    )
+                                    if row.get("name")
+                                }
+                            )
                     except Exception as e:  # noqa: BLE001
                         logger.debug("name_map 构建失败 (不影响监控): %s", e)
                     rule_events = engine.evaluate(enriched_today)
@@ -970,28 +1135,34 @@ class QuoteService:
                         # 落盘到 alerts.jsonl
                         try:
                             from app.services import alert_store
+
                             alert_store.append_many(
-                                self._app_state.repo.store.data_dir, rule_events,
+                                self._app_state.repo.store.data_dir,
+                                rule_events,
                             )
                         except Exception as e:  # noqa: BLE001
                             logger.warning("告警落盘失败: %s", e)
                         # 转为 SSE 推送格式 (兼容旧 alert schema)
                         for ev in rule_events:
-                            all_alerts.append({
-                                "source": ev["source"],
-                                "type": ev["type"],
-                                "rule_id": ev.get("rule_id"),
-                                "strategy_id": ev.get("rule_id") if ev["source"] == "strategy" else None,
-                                "symbol": ev["symbol"],
-                                "name": ev["name"],
-                                "message": ev["message"],
-                                "price": ev["price"],
-                                "change_pct": ev["change_pct"],
-                                "signals": ev["signals"],
-                                "severity": ev.get("severity", "info"),
-                                "conditions": ev.get("conditions") or [],
-                                "logic": ev.get("logic") or "and",
-                            })
+                            all_alerts.append(
+                                {
+                                    "source": ev["source"],
+                                    "type": ev["type"],
+                                    "rule_id": ev.get("rule_id"),
+                                    "strategy_id": ev.get("rule_id")
+                                    if ev["source"] == "strategy"
+                                    else None,
+                                    "symbol": ev["symbol"],
+                                    "name": ev["name"],
+                                    "message": ev["message"],
+                                    "price": ev["price"],
+                                    "change_pct": ev["change_pct"],
+                                    "signals": ev["signals"],
+                                    "severity": ev.get("severity", "info"),
+                                    "conditions": ev.get("conditions") or [],
+                                    "logic": ev.get("logic") or "and",
+                                }
+                            )
 
             # 策略页实时回显: 不写文件 (实时行情每轮更新 enriched, 写文件会被 read_cache
             # 的 mtime 校验判过期, 反复读不到)。监控引擎本轮已算出的结果存在内存
@@ -1037,12 +1208,15 @@ class QuoteService:
             if not preferences.get_configured_webhook_channels():
                 return
 
+            rules = engine.rules if engine is not None else {}
             # 反查规则, 过滤出启用推送的事件
             source_labels = {
-                "strategy": "策略", "signal": "信号",
-                "price": "价格", "market": "异动",
+                "strategy": "策略",
+                "signal": "信号",
+                "price": "价格",
+                "market": "异动",
+                "abnormal": "交易所异动",
             }
-            rules = engine.rules if engine is not None else {}
             pushed = 0
             for ev in rule_events:
                 rule = rules.get(ev.get("rule_id"))
@@ -1079,10 +1253,12 @@ class QuoteService:
                 # 通知标题: 用 source 分类 (策略/信号/价格/异动)
                 source = ev.get("source", "")
                 source_label = {
-                    "strategy": "策略", "signal": "信号",
-                    "price": "价格", "market": "异动",
+                    "strategy": "策略",
+                    "signal": "信号",
+                    "price": "价格",
+                    "market": "异动",
+                    "abnormal": "交易所异动",
                 }.get(source, source or "通知")
-
                 name = ev.get("name") or ""
                 symbol = ev.get("symbol") or ""
                 message = ev.get("message") or ""
@@ -1107,7 +1283,13 @@ class QuoteService:
     # enriched 增量计算
     # ================================================================
 
-    def _flush_live_enriched(self, daily_df: pl.DataFrame, quote_extra: pl.DataFrame = None, asset_type: str = "stock", merge: bool = False) -> None:
+    def _flush_live_enriched(
+        self,
+        daily_df: pl.DataFrame,
+        quote_extra: pl.DataFrame = None,
+        asset_type: str = "stock",
+        merge: bool = False,
+    ) -> None:
         """增量计算今天的 enriched: 用昨天的递推状态 + 今天 OHLCV → 只算今天 5500 行。
 
         quote_extra: API 直接提供的补充字段 (prev_close, change_pct 等),
@@ -1134,6 +1316,7 @@ class QuoteService:
 
             if use_incremental:
                 from app.indicators.pipeline import compute_enriched_today
+
                 instruments = self._repo.get_instruments()
                 # 将 API 直接提供的补充字段 JOIN 到 daily_df
                 today_ohlcv = daily_df
@@ -1156,8 +1339,11 @@ class QuoteService:
 
                 from app.indicators.pipeline import compute_enriched
 
-                logger.info("enriched 全量计算 (live_agg=%s, 上次日期=%s)",
-                            "ok" if not live_agg.is_empty() else "空", prev_date)
+                logger.info(
+                    "enriched 全量计算 (live_agg=%s, 上次日期=%s)",
+                    "ok" if not live_agg.is_empty() else "空",
+                    prev_date,
+                )
 
                 cutoff = today - timedelta(days=90)
                 table = {
@@ -1203,9 +1389,19 @@ class QuoteService:
                         if getattr(provider.capabilities, "instruments", False):
                             instruments = provider.get_instruments(asset_type)
                     except Exception as e:  # noqa: BLE001
-                        logger.debug("live enriched instruments fallback failed asset_type=%s: %s", asset_type, e)
-                if not instruments.is_empty() and "symbol" in instruments.columns and "symbol" in full_df.columns:
-                    instruments = instruments.filter(pl.col("symbol").is_in(full_df["symbol"].unique()))
+                        logger.debug(
+                            "live enriched instruments fallback failed asset_type=%s: %s",
+                            asset_type,
+                            e,
+                        )
+                if (
+                    not instruments.is_empty()
+                    and "symbol" in instruments.columns
+                    and "symbol" in full_df.columns
+                ):
+                    instruments = instruments.filter(
+                        pl.col("symbol").is_in(full_df["symbol"].unique())
+                    )
 
                 enriched_full = compute_enriched(
                     full_df,
@@ -1226,7 +1422,12 @@ class QuoteService:
 
             elapsed = time.perf_counter() - t0
             mode_label = "增量" if use_incremental else "全量"
-            logger.info("enriched %s: %d 只, %s, 耗时 %.0fms",
-                        mode_label, len(enriched_today), today, elapsed * 1000)
+            logger.info(
+                "enriched %s: %d 只, %s, 耗时 %.0fms",
+                mode_label,
+                len(enriched_today),
+                today,
+                elapsed * 1000,
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("enriched 计算失败: %s", e)

@@ -39,7 +39,6 @@ import {
   Cable,
   RadioTower,
   CheckCircle2,
-  BookOpenCheck,
   BookOpen,
   NotebookPen,
   Bot,
@@ -53,6 +52,7 @@ import {
   LineChart,
   Crosshair,
   Cpu,
+  ShieldAlert,
 } from 'lucide-react'
 import { api, resolveQuoteDataState, quoteDataStateText, quoteSnapshotText, indexQuotesDegraded, indexFallbackReasonText, type IndexQuotesResponse } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -80,7 +80,7 @@ const nav = [
   { to: '/regime', label: '市场环境', icon: Activity },
   { to: '/financials', label: '财务分析', icon: FileText },
   { to: '/monitor', label: '监控中心', icon: RadioTower },
-  { to: '/review',      label: '复盘',   icon: BookOpenCheck },
+  { to: '/abnormal-moves', label: '异动监测', icon: ShieldAlert },
   { to: '/agent', label: 'AI 助手', icon: Bot },
   { to: '/journal', label: '交易复盘', icon: NotebookPen },
   { to: '/research', label: '研究中心', icon: FlaskConical },
@@ -101,7 +101,7 @@ const NAV_DOMAIN: Record<string, NavDomain> = {
   '/watchlist': 'market',
   '/limit-ladder': 'market',
   '/monitor': 'market',
-  '/indices': 'market',
+  '/abnormal-moves': 'market',
   '/stock-analysis': 'research',
   '/concept-analysis': 'research',
   '/industry-analysis': 'research',

@@ -266,7 +266,7 @@ def sync_daily(...):
 | **fstore PostgreSQL** | psycopg v3 | 标的列表 / 财务报表 / 复权事件 / 分钟级备份 | `FSTORE_DATABASE_HOST/PORT/USER/PASSWORD/NAME`（默认 `pve.wf:5432/fstore`） |
 | **engine-data** | HTTP GET | 日 K 主源（wide）/ 分钟 / xdxr / trans | `http://192.168.5.99:8099` |
 | **moneyflow** | HTTP GET | 资金流日 / 资金流分钟 | `http://pve.wf:8090`（上次测试 502，已自动降级） |
-| **Tencent 公共行情（可选）** | HTTPS GET | 仅补 realtime/depth 的真实本地缺口，展示用途 | 设置中的 `external_fallback_enabled` + 独立 scope，默认关闭 |
+| **Tencent 公共行情（可选）** | HTTPS GET | 仅补 realtime/depth 的真实本地缺口，以及 `chart_live` 当前交易日单标的日 K/分时临时展示 | 设置中的 `external_fallback_enabled` + 独立 scope，默认关闭 |
 
 ### 7.2 调用链
 
@@ -367,6 +367,7 @@ PG / HTTP
 | 2026-08-21 | 筛选模块 S1-S4（见 `SCREENER_PRODUCT_REVIEW_2026-08-20.md`） | S1 正确性：删 `PRESET_STRATEGIES`/`run_preset` 双执行路径（统一 StrategyEngine，缺失 503），断板反包改 filter_history 真名实，缓存同日合并；S2 工作台：方案持久化 `user_data/screener_screens.json` + CRUD API、批量自选/CSV/行详情、日期与 latest_only 徽标、裸 SQL `/run` 收口 410；S3 方案→生产：新 `strategy/screen_bridge.py` 把保存方案注册为 `screen:<hex>` 策略（监控 type=strategy 与回测同源），回测面板缺外部 join 字段时 fail-closed 显式拒绝；S4 选股语言：条件分组（组内 AND/组间 OR）、9 个多日序列字段（历史窗口独立求值路径）、行业分布 facet（PIT，limit 前全量聚合）、EPS 改标准 TTM 累计口径 | 后端全量 `3054 passed, 3 skipped`；前端 `tsc -b`+build+16 测试脚本全过；真机浏览器 E2E：方案保存→回测此方案（真实回测 45.9s 10 笔交易）→监控规则创建→清理；live API OR 分组+序列+facet 返回 1146 命中 |
 | 2026-08-21 | AI 模块评审与 S1/S2 局部落地（见 `AI_PRODUCT_REVIEW_2026-08-21.md`） | Report 三入口 + Agent 系统提示去指令化（禁词测试锁死）；`POST /api/agent/chat` 410；策略生成 Step1 仅预览、确认后落盘；财务/复盘/Agent/策略生成登记 `ai_budgets`；Agent 归研究域；个股分析前端接 attempt 取消（气泡/弹窗 ×）。财务/复盘取消、报告带走、runtime 角标仍待 S2/S3 | 定向 `test_ai_report_prompts`/`test_ai_budgets`/`test_agent` 等 99 passed；前端 `tsc -b` |
 | 2026-08-21 | AI 模块 F1–F17 全量落地 + 双 reviewer 独立复审 | F7 取消对称（财务/复盘注册 attempt + `X-AI-Attempt-ID`，取消不落盘）；F8 报告带走（个股/财务加自选/送回测、Agent pool 卡片）；F9 流连接态 connecting/open/closed 三入口；F12 策略保存后回测此策略；F13 程序化 `StockReportSummary`（extra=forbid，无二次 LLM）；F14 as_of/source/adjustment 上屏；F15 同标的报告两栏 diff；F16 进程内 Agent 并发上限 2（python/pi 共槽、非阻塞、取消 `aclosing` 归还）；F17 前端 bun 测试。复审修复：reviewStore catch/finally 加旧流所有权守卫（取消后立即重启不被旧流 abort 改写 cancelled，`reviewStoreOwnership.test.ts` 变异验证）；agent_loop 工具轮与终流补传 `budget.timeout`（90s，不再走 provider 默认 180s） | 后端 agent/loop/runtime/concurrency/budgets/cancel `25+42 passed`；前端 `tsc -b` + 守卫测试全绿 |
+| 2026-08-24 | 当前日个股图表兜底 | 新增默认关闭的 `chart_live` scope：provider 成功返回本地目标日空行时，单 A 股日 K/分钟 K 才可从腾讯当日分时生成响应内 `provisional` 数据；保留行级 `source=tencent_chart` 和响应级 `degraded/sources`，catalog 503 与历史 minutes/trans 均维持 fail-closed，绝不写入本地/选股/监控/回测 | 后端 chart_live/API 定向 `47 passed`；前端 TypeScript + Vite build 见本次验证 |
 
 
 ---

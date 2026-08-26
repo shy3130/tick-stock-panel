@@ -1,4 +1,5 @@
 """P3 中央预算注册表与 usage 快照行为测试。"""
+
 from __future__ import annotations
 
 import pytest
@@ -33,8 +34,12 @@ def test_plan_check_purposes_registered():
     b2 = get_entry_budget("trading_plan_check_stage2")
     assert b1.max_tokens > 0 and b1.timeout > 0
     assert b2.max_tokens > 0 and b2.timeout > 0
-    assert resolve_budget("trading_plan_check_stage1", max_tokens=999_999).max_tokens == b1.max_tokens
-    assert resolve_budget("trading_plan_check_stage2", max_tokens=999_999).max_tokens == b2.max_tokens
+    assert (
+        resolve_budget("trading_plan_check_stage1", max_tokens=999_999).max_tokens == b1.max_tokens
+    )
+    assert (
+        resolve_budget("trading_plan_check_stage2", max_tokens=999_999).max_tokens == b2.max_tokens
+    )
 
 
 def test_report_and_agent_purposes_registered():
@@ -45,7 +50,6 @@ def test_report_and_agent_purposes_registered():
     assert resolve_budget("agent", max_tokens=999_999).max_tokens == 1600
     assert resolve_budget("agent", max_tokens=1200).max_tokens == 1200
     assert resolve_budget("strategy_generate", max_tokens=999_999).max_tokens == 3000
-
 
 
 def test_get_entry_budget_returns_current_caps():
@@ -95,7 +99,9 @@ def _make_result(purpose: str = "nl_screener", status: str = "ok", **kw) -> Stru
         attempt_id="att_1",
         status=status,
         purpose=purpose,
-        usage=AIUsage(prompt_tokens=100, cached_prompt_tokens=30, completion_tokens=5, total_tokens=105),
+        usage=AIUsage(
+            prompt_tokens=100, cached_prompt_tokens=30, completion_tokens=5, total_tokens=105
+        ),
     )
     base.update(kw)
     return StructuredAIResult(**base)
@@ -104,7 +110,10 @@ def _make_result(purpose: str = "nl_screener", status: str = "ok", **kw) -> Stru
 def test_usage_registry_accumulates_by_purpose_and_day():
     reg = UsageRegistry()
     reg.record("nl_screener", AIUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12))
-    reg.record("nl_screener", AIUsage(prompt_tokens=5, cached_prompt_tokens=3, completion_tokens=1, total_tokens=6))
+    reg.record(
+        "nl_screener",
+        AIUsage(prompt_tokens=5, cached_prompt_tokens=3, completion_tokens=1, total_tokens=6),
+    )
     snap = reg.snapshot()
     p = snap["by_purpose"]["nl_screener"]
     assert p["prompt_tokens"] == 15
@@ -148,3 +157,19 @@ def test_build_ai_meta_reflects_actual_profile_and_cached_tokens():
     assert meta["fallback_reason"] == "quota"
     assert meta["usage"]["cached_prompt_tokens"] == 30
     assert meta["usage"]["total_tokens"] == 105
+
+
+def test_custom_signal_draft_budget_registered():
+    """聚焦预算测试：custom_signal_draft 必须注册，参数符合 contract (temp=0, max<=1800, timeout<=60)。"""
+    purposes = set(entry_purposes())
+    assert "custom_signal_draft" in purposes
+    b = get_entry_budget("custom_signal_draft")
+    assert isinstance(b, EntryBudget)
+    assert b.temperature == 0.0
+    assert b.max_tokens <= 1800
+    assert b.timeout <= 60.0
+    # clamp
+    clamped = resolve_budget("custom_signal_draft", max_tokens=999_999, timeout=999.0)
+    assert clamped.max_tokens == b.max_tokens
+    assert clamped.timeout == b.timeout
+    assert clamped.temperature == 0.0

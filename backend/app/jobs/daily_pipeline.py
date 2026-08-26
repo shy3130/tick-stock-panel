@@ -8,6 +8,7 @@
   日 K: QuoteService 交易时段已实时落盘 → 有数据时跳过 batch,首次拉 1 年区间
   除权因子: 从已有数据最新日期的下一天开始增量获取,避免重复拉取和计算
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,13 +39,29 @@ logger = logging.getLogger(__name__)
 ProgressCb = Callable[..., None]
 
 _DEMO_SYMBOLS = (
-    "600000.SH", "600036.SH", "600519.SH", "601318.SH", "601398.SH",
-    "000001.SZ", "000333.SZ", "000651.SZ", "000858.SZ", "002594.SZ",
+    "600000.SH",
+    "600036.SH",
+    "600519.SH",
+    "601318.SH",
+    "601398.SH",
+    "000001.SZ",
+    "000333.SZ",
+    "000651.SZ",
+    "000858.SZ",
+    "002594.SZ",
 )
 
 _BOOTSTRAP_SAMPLE_SYMBOLS = (
-    "600519.SH", "000001.SZ", "300750.SZ", "601318.SH", "000333.SZ",
-    "600036.SH", "002594.SZ", "600000.SH", "000651.SZ", "600030.SH",
+    "600519.SH",
+    "000001.SZ",
+    "300750.SZ",
+    "601318.SH",
+    "000333.SZ",
+    "600036.SH",
+    "002594.SZ",
+    "600000.SH",
+    "000651.SZ",
+    "600030.SH",
 )
 _BOOTSTRAP_MIN_SAMPLE_COVERAGE = 0.8
 _BOOTSTRAP_MIN_PARTITION_COVERAGE = 0.9
@@ -60,9 +77,11 @@ def _invalidate(table: str | None = None) -> None:
     同步失效总览聚合缓存,避免 QuoteService 未运行时 300s 静态窗口继续返回旧聚合。
     """
     from app.api.data import invalidate_data_cache
+
     invalidate_data_cache(table)
     try:
         from app.api.overview import invalidate_overview_cache
+
         invalidate_overview_cache()
     except Exception:  # noqa: BLE001
         logger.debug("overview cache invalidate failed", exc_info=True)
@@ -169,6 +188,7 @@ def run_now(
     #   有历史数据 → batch K-line API 补齐缺口
     #   无任何数据 → batch K-line API 拉首次 1 年
     from datetime import date as _date, timedelta as _td, datetime as _dt
+
     latest_daily = repo.latest_daily_date()
     today = _date.today()
     today_exists = latest_daily and latest_daily >= today
@@ -189,7 +209,9 @@ def run_now(
         daily_range_start = start_date
         new_daily_days = max(1, (today - start_date).days)
         emit("sync_daily", 45, f"本地磁盘日K模式,跳过 raw 写入 [{start_date} ~ {today}]")
-        logger.info("sync_daily: skipped raw mirror in local disk mode [%s ~ %s]", start_date, today)
+        logger.info(
+            "sync_daily: skipped raw mirror in local disk mode [%s ~ %s]", start_date, today
+        )
     elif today_exists and capset.has(Cap.QUOTE_POOL):
         # 付费档:今天有数据(QuoteService 已落盘)→ 实时行情覆写,确保最新。
         # free/none 档无 quote.pool 能力,即便今天已有数据(如从 expert 降级),
@@ -206,14 +228,26 @@ def run_now(
         start_date = latest_daily
         daily_range_start = start_date
         emit("sync_daily", 12, f"获取日K [{start_date} ~ {today}]…")
-        logger.info("sync_daily: [%s ~ %s] %s", start_date, today,
-                    "refresh today" if today_exists else "gap fill")
+        logger.info(
+            "sync_daily: [%s ~ %s] %s",
+            start_date,
+            today,
+            "refresh today" if today_exists else "gap fill",
+        )
 
         def _daily_chunk_progress(cur: int, tot: int) -> None:
-            emit("sync_daily", 12 + int(33 * cur / tot),
-                 f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+            emit(
+                "sync_daily",
+                12 + int(33 * cur / tot),
+                f"日K 批次 {cur}/{tot}",
+                stage_pct=int(100 * cur / tot),
+                skip_log=True,
+            )
+
         written_daily = kline_sync.sync_and_persist_daily_batch(
-            universe, repo, capset,
+            universe,
+            repo,
+            capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
             end_date=_dt.combine(today, _dt.min.time()),
             on_chunk_done=_daily_chunk_progress,
@@ -230,10 +264,18 @@ def run_now(
         logger.info("sync_daily: [%s ~ %s] initial fetch", start_date, today)
 
         def _daily_chunk_progress(cur: int, tot: int) -> None:
-            emit("sync_daily", 12 + int(33 * cur / tot),
-                 f"日K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+            emit(
+                "sync_daily",
+                12 + int(33 * cur / tot),
+                f"日K 批次 {cur}/{tot}",
+                stage_pct=int(100 * cur / tot),
+                skip_log=True,
+            )
+
         written_daily = kline_sync.sync_and_persist_daily_batch(
-            universe, repo, capset,
+            universe,
+            repo,
+            capset,
             start_date=_dt.combine(start_date, _dt.min.time()),
             end_date=_dt.combine(today, _dt.min.time()),
             on_chunk_done=_daily_chunk_progress,
@@ -252,6 +294,7 @@ def run_now(
     affected_symbols: list[str] = []
     if capset.has(Cap.ADJ_FACTOR) and not local_daily_mode:
         from datetime import datetime, timedelta
+
         adj_end = datetime.now()
         if daily_range_start is not None:
             adj_start = datetime.combine(daily_range_start, datetime.min.time())
@@ -265,24 +308,40 @@ def run_now(
         logger.info("sync_adj: [%s ~ %s] start", adj_start_str, adj_end_str)
 
         def _adj_chunk_progress(cur: int, tot: int) -> None:
-            emit("sync_adj", 50 + int(10 * cur / tot),
-                 f"除权因子批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+            emit(
+                "sync_adj",
+                50 + int(10 * cur / tot),
+                f"除权因子批次 {cur}/{tot}",
+                stage_pct=int(100 * cur / tot),
+                skip_log=True,
+            )
+
         written_adj, affected_symbols = kline_sync.sync_adj_factor(
-            universe, repo, capset,
-            start_time=adj_start, end_time=adj_end,
+            universe,
+            repo,
+            capset,
+            start_time=adj_start,
+            end_time=adj_end,
             on_chunk_done=_adj_chunk_progress,
         )
         if affected_symbols:
             _refresh_single_view(repo, "adj_factor")
             emit("sync_adj", 60, f"除权因子完成,新增 {len(affected_symbols)} 只个股")
-            logger.info("sync_adj: [%s ~ %s] done, %d symbols", adj_start_str, adj_end_str, len(affected_symbols))
+            logger.info(
+                "sync_adj: [%s ~ %s] done, %d symbols",
+                adj_start_str,
+                adj_end_str,
+                len(affected_symbols),
+            )
         else:
             emit("sync_adj", 60, "除权因子完成,无新增")
             logger.info("sync_adj: [%s ~ %s] no new factors", adj_start_str, adj_end_str)
         _invalidate("adj_factor")
     elif local_daily_mode:
         skipped.append("sync_adj")
-        logger.info("sync_adj skipped: local disk mode uses provider factors during enriched compute")
+        logger.info(
+            "sync_adj skipped: local disk mode uses provider factors during enriched compute"
+        )
     else:
         skipped.append("sync_adj")
         logger.info("sync_adj skipped: no ADJ_FACTOR capability")
@@ -321,8 +380,13 @@ def run_now(
                 forward_incremental = True
 
     def _enriched_batch_progress(cur: int, tot: int) -> None:
-        emit("compute_enriched", 65 + int(23 * cur / tot),
-             f"计算指标 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+        emit(
+            "compute_enriched",
+            65 + int(23 * cur / tot),
+            f"计算指标 批次 {cur}/{tot}",
+            stage_pct=int(100 * cur / tot),
+            skip_log=True,
+        )
 
     if local_daily_mode and pull_a_share:
         emit("compute_enriched", 65, "本地磁盘计算 enriched…")
@@ -345,13 +409,26 @@ def run_now(
             logger.exception("compute_enriched local disk failed")
             raise
         new_enriched_days = len(list(enriched_dir.glob("date=*"))) if enriched_dir.exists() else 0
-        emit("compute_enriched", 88, f"enriched 完成,写入 {written_enriched} 行/覆盖 {new_enriched_days} 天")
-        logger.info("compute_enriched: local disk done, rows=%d days=%d", written_enriched, new_enriched_days)
+        emit(
+            "compute_enriched",
+            88,
+            f"enriched 完成,写入 {written_enriched} 行/覆盖 {new_enriched_days} 天",
+        )
+        logger.info(
+            "compute_enriched: local disk done, rows=%d days=%d",
+            written_enriched,
+            new_enriched_days,
+        )
     elif not enriched_exists or backward_extension:
         # 首次 或 往前扩展 → 全量
         emit("compute_enriched", 65, "全量计算 enriched…")
-        logger.info("compute_enriched: full rebuild (first=%s, backward=%s, daily=%d, enriched=%d)",
-                    not enriched_exists, backward_extension, daily_days, prev_enriched_days)
+        logger.info(
+            "compute_enriched: full rebuild (first=%s, backward=%s, daily=%d, enriched=%d)",
+            not enriched_exists,
+            backward_extension,
+            daily_days,
+            prev_enriched_days,
+        )
         written_enriched = run_pipeline(on_batch_done=_enriched_batch_progress)
         new_enriched_days = len(list(enriched_dir.glob("date=*")))
         emit("compute_enriched", 88, f"enriched 完成,覆盖 {new_enriched_days} 天")
@@ -360,6 +437,7 @@ def run_now(
         # 生产接线：历史股本 point-in-time 换手率重算 (覆盖 enriched.turnover_rate 小数)
         # 仅 full rebuild/repair 路径调用；保留 staging rebuild 和 price limit 日期规则
         from app.share_capital import recompute_historical_turnover
+
         try:
             recompute_historical_turnover(repo)
             emit("compute_enriched", 90, "历史换手率 point-in-time 更新完成")
@@ -369,11 +447,17 @@ def run_now(
     elif forward_incremental:
         # 往后新增日期: 增量补新区块 + 受影响个股全日期重算
         symbols_to_recompute = list(set(affected_symbols)) if affected_symbols else []
-        emit("compute_enriched", 65,
-             f"增量计算 enriched (新日期 + {len(symbols_to_recompute)} 只个股重算)…"
-             if symbols_to_recompute else "增量计算 enriched (新日期)…")
-        logger.info("compute_enriched: forward incremental, %d symbols to recompute",
-                    len(symbols_to_recompute))
+        emit(
+            "compute_enriched",
+            65,
+            f"增量计算 enriched (新日期 + {len(symbols_to_recompute)} 只个股重算)…"
+            if symbols_to_recompute
+            else "增量计算 enriched (新日期)…",
+        )
+        logger.info(
+            "compute_enriched: forward incremental, %d symbols to recompute",
+            len(symbols_to_recompute),
+        )
         written_enriched = run_pipeline(
             new_dates_only=True,
             symbols=symbols_to_recompute or None,
@@ -386,7 +470,9 @@ def run_now(
         # 无新日期,仅除权因子变更 → 只重算受影响个股的全部日期
         emit("compute_enriched", 65, f"增量计算 enriched ({len(affected_symbols)} 只个股)…")
         logger.info("compute_enriched: adj_factor incremental, %d symbols", len(affected_symbols))
-        written_enriched = run_pipeline(symbols=affected_symbols, on_batch_done=_enriched_batch_progress)
+        written_enriched = run_pipeline(
+            symbols=affected_symbols, on_batch_done=_enriched_batch_progress
+        )
         emit("compute_enriched", 88, f"enriched 完成,{len(affected_symbols)} 只个股")
     else:
         written_enriched = 0
@@ -399,7 +485,12 @@ def run_now(
         # 仅在有实际 enriched 工作时调用，并传 symbols 过滤 (避免全库扫描退化)
         try:
             from app.share_capital import recompute_historical_turnover
-            recompute_symbols = symbols_to_recompute if "symbols_to_recompute" in locals() else (affected_symbols if "affected_symbols" in locals() else None)
+
+            recompute_symbols = (
+                symbols_to_recompute
+                if "symbols_to_recompute" in locals()
+                else (affected_symbols if "affected_symbols" in locals() else None)
+            )
             recompute_historical_turnover(repo, symbols=recompute_symbols)
         except Exception as e:  # noqa: BLE001
             logger.warning("historical turnover recompute non-fatal for incremental/repair: %s", e)
@@ -415,8 +506,10 @@ def run_now(
     # 非致命失败: 记录警告但不中断主 pipeline。
     try:
         from app.services import regime_builder
+
         regime_builder.compute_regime_incremental(repo, repo.store.data_dir)
         from app.api.regime import invalidate_regime_cache
+
         invalidate_regime_cache()
         emit("compute_enriched", 90, "环境时序(regime)增量计算完成")
     except Exception as e:  # noqa: BLE001
@@ -426,11 +519,10 @@ def run_now(
     # tracked_signals 默认空 (用户在设置页显式开启); 失败不得阻断主管道。
     try:
         from app.jobs import signal_scorecard_job
+
         _tracked = _prefs.get_tracked_signals()
         if _tracked:
-            signal_scorecard_job.generate_instances(
-                repo, repo.store.data_dir, _tracked, today
-            )
+            signal_scorecard_job.generate_instances(repo, repo.store.data_dir, _tracked, today)
             signal_scorecard_job.evaluate_pending(repo, repo.store.data_dir)
     except Exception as e:  # noqa: BLE001
         logger.warning("signal scorecard hook non-fatal: %s", e)
@@ -462,7 +554,9 @@ def run_now(
         try:
             if pull_index:
                 emit("sync_index", 88, "同步指数维表…")
-                index_count = index_sync.sync_index_instruments(repo, pull_index=True, pull_etf=False)
+                index_count = index_sync.sync_index_instruments(
+                    repo, pull_index=True, pull_etf=False
+                )
                 emit("sync_index", 88, f"指数维表完成,{index_count} 只")
                 backfilled_index_daily = index_sync.ensure_required_index_history(
                     repo,
@@ -477,15 +571,27 @@ def run_now(
                         f"关键指数长历史补齐,{backfilled_index_daily} 行",
                     )
                 index_dir = repo.store.data_dir / "kline_index_enriched"
-                index_dates = sorted(
-                    d.name[5:] for d in index_dir.glob("date=*")
-                    if d.is_dir() and d.name.startswith("date=")
-                ) if index_dir.exists() else []
-                index_start = _date.fromisoformat(index_dates[-1]) if index_dates else today - _td(days=365)
+                index_dates = (
+                    sorted(
+                        d.name[5:]
+                        for d in index_dir.glob("date=*")
+                        if d.is_dir() and d.name.startswith("date=")
+                    )
+                    if index_dir.exists()
+                    else []
+                )
+                index_start = (
+                    _date.fromisoformat(index_dates[-1]) if index_dates else today - _td(days=365)
+                )
 
                 def _index_chunk(cur: int, tot: int) -> None:
-                    emit("sync_index", 88, f"指数日K批次 {cur}/{tot}",
-                         stage_pct=int(100 * cur / tot) if tot else 100, skip_log=cur < tot)
+                    emit(
+                        "sync_index",
+                        88,
+                        f"指数日K批次 {cur}/{tot}",
+                        stage_pct=int(100 * cur / tot) if tot else 100,
+                        skip_log=cur < tot,
+                    )
 
                 written_index_daily += index_sync.sync_and_persist_index_daily(
                     repo,
@@ -511,17 +617,27 @@ def run_now(
                     try:
                         emit("sync_index", 88, "同步 ETF 除权因子…")
                         from datetime import datetime, timedelta
+
                         adj_end = datetime.now()
                         adj_path = repo.store.data_dir / "adj_factor_etf" / "all.parquet"
                         fallback_start = adj_end - timedelta(days=30)
                         adj_start = fallback_start
                         if adj_path.exists():
-                            max_date = pl.scan_parquet(adj_path).select(pl.col("trade_date").max()).collect().item()
+                            max_date = (
+                                pl.scan_parquet(adj_path)
+                                .select(pl.col("trade_date").max())
+                                .collect()
+                                .item()
+                            )
                             if max_date is not None:
                                 if isinstance(max_date, str):
-                                    adj_start = datetime.combine(_date.fromisoformat(max_date), datetime.min.time())
+                                    adj_start = datetime.combine(
+                                        _date.fromisoformat(max_date), datetime.min.time()
+                                    )
                                 elif isinstance(max_date, datetime):
-                                    adj_start = datetime.combine(max_date.date(), datetime.min.time())
+                                    adj_start = datetime.combine(
+                                        max_date.date(), datetime.min.time()
+                                    )
                                 else:
                                     adj_start = datetime.combine(max_date, datetime.min.time())
                         _, affected_etfs = index_sync.sync_etf_adj_factor(
@@ -536,15 +652,27 @@ def run_now(
                     except Exception as e:  # noqa: BLE001
                         logger.warning("ETF adj_factor skipped: %s", e)
                 etf_dir = repo.store.data_dir / "kline_etf_enriched"
-                etf_dates = sorted(
-                    d.name[5:] for d in etf_dir.glob("date=*")
-                    if d.is_dir() and d.name.startswith("date=")
-                ) if etf_dir.exists() else []
-                etf_start = _date.fromisoformat(etf_dates[-1]) if etf_dates else today - _td(days=365)
+                etf_dates = (
+                    sorted(
+                        d.name[5:]
+                        for d in etf_dir.glob("date=*")
+                        if d.is_dir() and d.name.startswith("date=")
+                    )
+                    if etf_dir.exists()
+                    else []
+                )
+                etf_start = (
+                    _date.fromisoformat(etf_dates[-1]) if etf_dates else today - _td(days=365)
+                )
 
                 def _etf_chunk(cur: int, tot: int) -> None:
-                    emit("sync_index", 88, f"ETF 日K批次 {cur}/{tot}",
-                         stage_pct=int(100 * cur / tot) if tot else 100, skip_log=cur < tot)
+                    emit(
+                        "sync_index",
+                        88,
+                        f"ETF 日K批次 {cur}/{tot}",
+                        stage_pct=int(100 * cur / tot) if tot else 100,
+                        skip_log=cur < tot,
+                    )
 
                 written_etf_daily = index_sync.sync_and_persist_etf_daily(
                     repo,
@@ -565,22 +693,35 @@ def run_now(
                     try:
                         _dbg_provider = kline_sync._get_data_provider()
                         _dbg_df = _dbg_provider.get_instruments("hk")
-                        logger.warning("HK instruments 0! provider.get_instruments('hk')=%d rows, fstore.available=%s",
-                                       _dbg_df.height, _dbg_provider._fstore.available)
+                        logger.warning(
+                            "HK instruments 0! provider.get_instruments('hk')=%d rows, fstore.available=%s",
+                            _dbg_df.height,
+                            _dbg_provider._fstore.available,
+                        )
                     except Exception as _e:  # noqa: BLE001
                         logger.warning("HK instruments debug failed: %s", _e)
                 emit("sync_index", 88, f"港股维表完成,{hk_count} 只")
                 hk_dir = repo.store.data_dir / "kline_hk_enriched"
-                hk_dates = sorted(
-                    d.name[5:] for d in hk_dir.glob("date=*")
-                    if d.is_dir() and d.name.startswith("date=")
-                ) if hk_dir.exists() else []
+                hk_dates = (
+                    sorted(
+                        d.name[5:]
+                        for d in hk_dir.glob("date=*")
+                        if d.is_dir() and d.name.startswith("date=")
+                    )
+                    if hk_dir.exists()
+                    else []
+                )
                 # 首次回补对齐 A 股 enriched 面板起点(2024-10-09),而非任意 365 天。
                 hk_start = _date.fromisoformat(hk_dates[-1]) if hk_dates else _date(2024, 10, 9)
 
                 def _hk_chunk(cur: int, tot: int) -> None:
-                    emit("sync_index", 88, f"港股日K批次 {cur}/{tot}",
-                         stage_pct=int(100 * cur / tot) if tot else 100, skip_log=cur < tot)
+                    emit(
+                        "sync_index",
+                        88,
+                        f"港股日K批次 {cur}/{tot}",
+                        stage_pct=int(100 * cur / tot) if tot else 100,
+                        skip_log=cur < tot,
+                    )
 
                 written_hk_daily = index_sync.sync_and_persist_hk_daily(
                     repo,
@@ -610,6 +751,7 @@ def run_now(
 
     # Step 2.5: 分钟 K 同步(可选) — 未启用或无 capability 时静默跳过(不 emit)
     from app.services import preferences
+
     minute_on = preferences.get_minute_sync_enabled()
     minute_days = preferences.get_minute_sync_days()
     written_minute = 0
@@ -618,18 +760,30 @@ def run_now(
         emit("sync_minute", 90, f"获取分钟K [{minute_start} ~ {today}]…")
         logger.info("sync_minute: [%s ~ %s] start", minute_start, today)
         minute_symbols = _resolve_minute_symbols(capset)
+
         def _minute_chunk_progress(cur: int, tot: int) -> None:
-            emit("sync_minute", 90 + int(3 * cur / tot),
-                 f"分钟K 批次 {cur}/{tot}", stage_pct=int(100 * cur / tot), skip_log=True)
+            emit(
+                "sync_minute",
+                90 + int(3 * cur / tot),
+                f"分钟K 批次 {cur}/{tot}",
+                stage_pct=int(100 * cur / tot),
+                skip_log=True,
+            )
+
         try:
             written_minute = kline_sync.sync_and_persist_minute(
-                minute_symbols, repo, capset, days=minute_days,
+                minute_symbols,
+                repo,
+                capset,
+                days=minute_days,
                 on_chunk_done=_minute_chunk_progress,
             )
             minute_dir = repo.store.data_dir / "kline_minute"
             minute_cover_days = len(list(minute_dir.glob("date=*"))) if minute_dir.exists() else 0
             emit("sync_minute", 93, f"分钟K完成,覆盖 {minute_cover_days} 天")
-            logger.info("sync_minute: [%s ~ %s] done, %d days", minute_start, today, minute_cover_days)
+            logger.info(
+                "sync_minute: [%s ~ %s] done, %d days", minute_start, today, minute_cover_days
+            )
             _invalidate("minute")
         except CatalogError as exc:
             failed_stages.append({"stage": "sync_minute", "error": str(exc)})
@@ -712,7 +866,11 @@ def _refresh_strategy_cache(repo: KlineRepository, emit: ProgressCb) -> None:
         all_overrides = strategy_config.list_overrides(data_dir)
         results: dict[str, dict] = {}
         for sid, r in engine.run_all(as_of, overrides_map=all_overrides).items():
-            results[sid] = {"total": r.total, "as_of": str(as_of), "rows": asdict(r).get("rows", [])}
+            results[sid] = {
+                "total": r.total,
+                "as_of": str(as_of),
+                "rows": asdict(r).get("rows", []),
+            }
         if results:
             strategy_cache.write_cache(data_dir, str(as_of), results)
         _invalidate("screener")
@@ -720,6 +878,7 @@ def _refresh_strategy_cache(repo: KlineRepository, emit: ProgressCb) -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning("refresh_strategy_cache failed: %s", e)
         emit("refresh_strategy_cache", 94, f"策略缓存刷新失败:{e}")
+
 
 def _refresh_views(repo: KlineRepository) -> None:
     """刷新所有 DuckDB 视图。"""
@@ -845,10 +1004,7 @@ def _latest_verified_enriched_date(
     只读目标与前一分区的 symbol 列（各一次 parquet 列裁剪读取），不做全量扫描。
     用于 ``initialize_local_enriched_ceiling`` 发布 canonical 水位前回退到安全分区。
     """
-    dates = [
-        d for d in _enriched_partition_dates(repo)
-        if ceiling is None or d <= ceiling
-    ]
+    dates = [d for d in _enriched_partition_dates(repo) if ceiling is None or d <= ceiling]
     if not dates:
         return None
     latest = dates[-1]
@@ -901,8 +1057,13 @@ def _local_daily_coverage_ok(
         covered = df["symbol"].cast(pl.Utf8).unique().len()
         coverage = covered / max(1, len(sample_symbols))
         if coverage < _BOOTSTRAP_MIN_SAMPLE_COVERAGE:
-            logger.warning("local daily completeness low for %s: %.0f%% (%d/%d)",
-                           target, coverage * 100, covered, len(sample_symbols))
+            logger.warning(
+                "local daily completeness low for %s: %.0f%% (%d/%d)",
+                target,
+                coverage * 100,
+                covered,
+                len(sample_symbols),
+            )
             return False
         return True
     except Exception as e:  # noqa: BLE001
@@ -913,7 +1074,9 @@ def _local_daily_coverage_ok(
 def _partition_symbol_count(repo: KlineRepository, target: date_type | None) -> int:
     if target is None:
         return 0
-    path = repo.store.data_dir / "kline_daily_enriched" / f"date={target.isoformat()}" / "part.parquet"
+    path = (
+        repo.store.data_dir / "kline_daily_enriched" / f"date={target.isoformat()}" / "part.parquet"
+    )
     if not path.exists():
         return 0
     try:
@@ -936,8 +1099,13 @@ def _local_partition_coverage_ok(
         return target_count > 0
     coverage = target_count / previous_count
     if coverage < _BOOTSTRAP_MIN_PARTITION_COVERAGE:
-        logger.warning("local enriched partition coverage low for %s: %.0f%% (%d/%d)",
-                       target, coverage * 100, target_count, previous_count)
+        logger.warning(
+            "local enriched partition coverage low for %s: %.0f%% (%d/%d)",
+            target,
+            coverage * 100,
+            target_count,
+            previous_count,
+        )
         return False
     return True
 
@@ -1050,9 +1218,11 @@ def start_local_enriched_bootstrap(repo: KlineRepository, capset: CapabilitySet)
 
     threading.Thread(target=_run, name="local-enriched-bootstrap", daemon=True).start()
 
+
 def _latest_asset_partition_date(repo: KlineRepository, table: str) -> date_type | None:
     """读某资产 enriched parquet 分区的最新日期。"""
     from datetime import date as _date
+
     base = repo.store.data_dir / table
     if not base.exists():
         return None
@@ -1095,8 +1265,14 @@ def _bootstrap_asset_daily_if_stale(repo: KlineRepository, capset: CapabilitySet
         ("hk", "kline_hk_enriched", "sync_hk_instruments", "sync_and_persist_hk_daily"),
     ]
     for label, table, inst_fn_name, daily_fn_name in assets:
-        if not _prefs.get_pipeline_pull_hk() if label == "hk" else (
-            not _prefs.get_pipeline_pull_index() if label == "index" else not _prefs.get_pipeline_pull_etf()
+        if (
+            not _prefs.get_pipeline_pull_hk()
+            if label == "hk"
+            else (
+                not _prefs.get_pipeline_pull_index()
+                if label == "index"
+                else not _prefs.get_pipeline_pull_etf()
+            )
         ):
             continue
         try:
@@ -1112,12 +1288,15 @@ def _bootstrap_asset_daily_if_stale(repo: KlineRepository, capset: CapabilitySet
 
             daily_fn = getattr(index_sync, daily_fn_name)
             written = daily_fn(
-                repo, capset,
+                repo,
+                capset,
                 start_date=_dt.combine(start_date, _dt.min.time()),
                 end_date=_dt.combine(fresh, _dt.min.time()),
             )
             repo.refresh_index_views()
-            logger.info("asset bootstrap %s: synced %d rows [%s ~ %s]", label, written, start_date, fresh)
+            logger.info(
+                "asset bootstrap %s: synced %d rows [%s ~ %s]", label, written, start_date, fresh
+            )
         except Exception:  # noqa: BLE001
             logger.warning("asset bootstrap %s failed", label, exc_info=True)
 
@@ -1136,23 +1315,36 @@ def _refresh_instruments_view(repo: KlineRepository) -> None:
 
 def _run_tracked(fn, job_label: str) -> None:
     """调度触发时包装 JobStore 跟踪，确保同步历史有记录。"""
-    from app.services.pipeline_jobs import job_store
+    from app.services.pipeline_jobs import JobCancelledError, job_store
 
-    job_id = job_store.create(kind=job_label)
-    job_store.start(job_id)
+    job_store.reap_stale()
 
-    def progress(stage: str, pct: int, msg: str, stage_pct: int | None = None,
-                 skip_log: bool = False) -> None:
+    job_id, is_new = job_store.create(kind=job_label)
+    if not is_new:
+        # 已有任务在跑: 调度不并发开第二个,也不标失败
+        logger.info("scheduled %s skipped: existing active job", job_label)
+        return
+
+    owner = job_store.start(job_id)
+    if owner is None:
+        return
+
+    def progress(
+        stage: str, pct: int, msg: str, stage_pct: int | None = None, skip_log: bool = False
+    ) -> None:
         job_store.progress(job_id, stage, pct, msg, stage_pct=stage_pct, skip_log=skip_log)
 
     try:
         result = fn(on_progress=progress)
-        job_store.succeed(job_id, result)
+        job_store.succeed(job_id, result, owner=owner)
         logger.info("scheduled %s completed: job_id=%s", job_label, job_id)
+    except JobCancelledError:
+        logger.info("scheduled %s cancelled: job_id=%s", job_label, job_id)
     except Exception:
         logger.exception("scheduled %s failed: job_id=%s", job_label, job_id)
-        job_store.fail(job_id, f"scheduled {job_label} failed")
+        job_store.fail(job_id, f"scheduled {job_label} failed", owner=owner)
     finally:
+        job_store.release(job_id, owner)
         from app.api.data import invalidate_job_status_cache
 
         invalidate_job_status_cache()
@@ -1194,26 +1386,32 @@ async def _run_scheduled_review(repo) -> None:
             logger.warning("scheduled review produced no content (meta=%s)", meta)
             # 通知前端进入 error 态(若有页面在听)
             if quote_service:
-                quote_service.push_review_event(json.dumps(
-                    {"type": "error", "message": "复盘生成失败,请稍后手动重试"},
-                    ensure_ascii=False))
+                quote_service.push_review_event(
+                    json.dumps(
+                        {"type": "error", "message": "复盘生成失败,请稍后手动重试"},
+                        ensure_ascii=False,
+                    )
+                )
             return
 
         # 落盘: 与手动生成完全相同的归档格式
-        market_recap_reports.save_report({
-            "as_of": meta.get("as_of"),
-            "focus": "",
-            "content": content,
-            "summary": meta.get("summary", ""),
-            "emotion_score": meta.get("emotion_score"),
-            "emotion_label": meta.get("emotion_label", ""),
-        })
+        market_recap_reports.save_report(
+            {
+                "as_of": meta.get("as_of"),
+                "focus": "",
+                "content": content,
+                "summary": meta.get("summary", ""),
+                "emotion_score": meta.get("emotion_score"),
+                "emotion_label": meta.get("emotion_label", ""),
+            }
+        )
         logger.info("scheduled review saved: as_of=%s", meta.get("as_of"))
 
         # 通知前端: 生成完成且已归档(archived=true 让前端只刷新列表, 不重复归档)
         if quote_service:
-            quote_service.push_review_event(json.dumps(
-                {"type": "done", "archived": True}, ensure_ascii=False))
+            quote_service.push_review_event(
+                json.dumps({"type": "done", "archived": True}, ensure_ascii=False)
+            )
 
         # 推送到飞书(可选): 运行时读取配置, 用户改设置下次触发即生效。
         # 失败静默降级, 不影响已归档的报告。
@@ -1226,9 +1424,13 @@ async def _run_scheduled_review(repo) -> None:
             qs = getattr(app_state, "quote_service", None) if app_state else None
             if qs:
                 import json as _json
-                qs.push_review_event(_json.dumps(
-                    {"type": "error", "message": "复盘生成异常,请稍后手动重试"},
-                    ensure_ascii=False))
+
+                qs.push_review_event(
+                    _json.dumps(
+                        {"type": "error", "message": "复盘生成异常,请稍后手动重试"},
+                        ensure_ascii=False,
+                    )
+                )
         except Exception:  # noqa: BLE001
             pass
 
@@ -1265,8 +1467,12 @@ async def _stream_review_with_retry(repo, quote_service, depth_service) -> tuple
                     content_parts.append(evt["content"])
                 elif t == "error":
                     failed = True
-                    logger.warning("scheduled review stream error (attempt %d/%d): %s",
-                                   attempt, max_attempts, evt.get("message"))
+                    logger.warning(
+                        "scheduled review stream error (attempt %d/%d): %s",
+                        attempt,
+                        max_attempts,
+                        evt.get("message"),
+                    )
                     break  # 触发重试
                 elif t == "done":
                     # 正常完成
@@ -1277,16 +1483,18 @@ async def _stream_review_with_retry(repo, quote_service, depth_service) -> tuple
         except Exception as e:  # noqa: BLE001
             # LLM 断流等异常(httpx.RemoteProtocolError)落到这里
             failed = True
-            logger.warning("scheduled review stream exception (attempt %d/%d): %s",
-                           attempt, max_attempts, e)
+            logger.warning(
+                "scheduled review stream exception (attempt %d/%d): %s", attempt, max_attempts, e
+            )
 
         # 失败: 决定是否重试
         if attempt < max_attempts:
             logger.info("scheduled review retrying in 3s (attempt %d → %d)", attempt, attempt + 1)
             # 通知前端: 即将重试, 清空已累积内容重新开始
             if quote_service:
-                quote_service.push_review_event(json.dumps(
-                    {"type": "retry", "attempt": attempt + 1}, ensure_ascii=False))
+                quote_service.push_review_event(
+                    json.dumps({"type": "retry", "attempt": attempt + 1}, ensure_ascii=False)
+                )
             await asyncio.sleep(3)
 
     # 耗尽重试, 返回已累积内容(可能为空)和最后 meta
@@ -1319,10 +1527,16 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                 continue
             if ch == "feishu":
                 ok = webhook_adapter.send_feishu_card(
-                    cfg.get("url", ""), "TickFlow · 每日复盘", subtitle, content, cfg.get("secret", "")
+                    cfg.get("url", ""),
+                    "TickFlow · 每日复盘",
+                    subtitle,
+                    content,
+                    cfg.get("secret", ""),
                 )
             else:
-                ok = webhook_adapter.send_channel(ch, cfg, "TickFlow · 每日复盘", f"{subtitle}\n\n{content}".strip())
+                ok = webhook_adapter.send_channel(
+                    ch, cfg, "TickFlow · 每日复盘", f"{subtitle}\n\n{content}".strip()
+                )
             logger.info("review push(%s) %s", ch, "sent" if ok else "failed")
     except Exception as e:  # noqa: BLE001
         logger.warning("review push error: %s", e)
@@ -1341,9 +1555,9 @@ def _register_review_job(scheduler, repo, hour: int, minute: int) -> None:
     scheduler.add_job(
         _run_scheduled_review,
         args=[repo],
-        trigger=CronTrigger(day_of_week="mon-fri",
-                            hour=hour, minute=minute,
-                            timezone="Asia/Shanghai"),
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=hour, minute=minute, timezone="Asia/Shanghai"
+        ),
         id=REVIEW_JOB_ID,
         misfire_grace_time=7200,  # 复盘非关键, 允许 2 小时内补跑
         replace_existing=True,
@@ -1357,6 +1571,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
     工作日 HH:MM — 盘后管道（时间由用户偏好决定，默认 15:30）
     """
     from app.services import preferences
+
     sched = preferences.get_pipeline_schedule()
     inst_sched = preferences.get_instruments_schedule()
 
@@ -1372,9 +1587,12 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
 
     scheduler.add_job(
         lambda: _run_tracked(_instruments_task, "instruments_sync"),
-        trigger=CronTrigger(day_of_week="mon-fri",
-                            hour=inst_sched["hour"], minute=inst_sched["minute"],
-                            timezone="Asia/Shanghai"),
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=inst_sched["hour"],
+            minute=inst_sched["minute"],
+            timezone="Asia/Shanghai",
+        ),
         id="pre_market_instruments",
         misfire_grace_time=1800,
         replace_existing=True,
@@ -1391,9 +1609,12 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
 
     scheduler.add_job(
         lambda: _run_tracked(_pipeline_then_refresh, "daily_pipeline"),
-        trigger=CronTrigger(day_of_week="mon-fri",
-                            hour=sched["hour"], minute=sched["minute"],
-                            timezone="Asia/Shanghai"),
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=sched["hour"],
+            minute=sched["minute"],
+            timezone="Asia/Shanghai",
+        ),
         id="daily_pipeline",
         misfire_grace_time=3600,
         replace_existing=True,
@@ -1409,9 +1630,12 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
 
     scheduler.add_job(
         _depth_finalize,
-        trigger=CronTrigger(day_of_week="mon-fri",
-                            hour=depth_sched["hour"], minute=depth_sched["minute"],
-                            timezone="Asia/Shanghai"),
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=depth_sched["hour"],
+            minute=depth_sched["minute"],
+            timezone="Asia/Shanghai",
+        ),
         id="depth_finalize",
         misfire_grace_time=3600,
         replace_existing=True,
@@ -1424,8 +1648,11 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
     review_sched = preferences.get_review_schedule()
     if review_sched["enabled"]:
         _register_review_job(scheduler, repo, review_sched["hour"], review_sched["minute"])
-        logger.info("scheduled_review enabled @%02d:%02d mon-fri",
-                    review_sched["hour"], review_sched["minute"])
+        logger.info(
+            "scheduled_review enabled @%02d:%02d mon-fri",
+            review_sched["hour"],
+            review_sched["minute"],
+        )
 
     # 交易自动复盘 (P6.4): 工作日 16:45 盘后状态驱动 AI 归因。
     # job 固定注册, 运行时读 tradingAutoReview 开关 (默认 false=零开销直接返回)。
@@ -1438,13 +1665,22 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         _register_backtest_favorite_rerun_job(
             scheduler, repo, rerun_pref["hour"], rerun_pref["minute"]
         )
-        logger.info("backtest_favorite_rerun enabled @%02d:%02d mon-fri",
-                    rerun_pref["hour"], rerun_pref["minute"])
+        logger.info(
+            "backtest_favorite_rerun enabled @%02d:%02d mon-fri",
+            rerun_pref["hour"],
+            rerun_pref["minute"],
+        )
 
     scheduler.start()
-    logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",
-                inst_sched["hour"], inst_sched["minute"], sched["hour"], sched["minute"],
-                depth_sched["hour"], depth_sched["minute"])
+    logger.info(
+        "scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",
+        inst_sched["hour"],
+        inst_sched["minute"],
+        sched["hour"],
+        sched["minute"],
+        depth_sched["hour"],
+        depth_sched["minute"],
+    )
     return scheduler
 
 
@@ -1458,9 +1694,11 @@ async def _run_trading_auto_review(repo) -> None:
     false(默认) → 直接返回, 零开销; true → 跑 run_state_driven_autopsy 并 logger.info 结果。
     """
     from app.services import preferences
+
     if not preferences.get_trading_auto_review():
         return  # 开关关闭, 零开销
     from app.services.trading.review_job import run_state_driven_autopsy
+
     result = await run_state_driven_autopsy(repo.store.data_dir)
     logger.info("trading_auto_review: %s", result)
 
@@ -1474,9 +1712,7 @@ def _register_trading_auto_review_job(scheduler, repo) -> None:
     scheduler.add_job(
         _run_trading_auto_review,
         args=[repo],
-        trigger=CronTrigger(day_of_week="mon-fri",
-                            hour=16, minute=45,
-                            timezone="Asia/Shanghai"),
+        trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=45, timezone="Asia/Shanghai"),
         id=TRADING_AUTO_REVIEW_JOB_ID,
         misfire_grace_time=7200,
         replace_existing=True,
@@ -1498,9 +1734,9 @@ def _register_backtest_favorite_rerun_job(scheduler, repo, hour: int, minute: in
 
     scheduler.add_job(
         lambda: _run_tracked(_rerun_task, BACKTEST_RERUN_JOB_ID),
-        trigger=CronTrigger(day_of_week="mon-fri",
-                            hour=hour, minute=minute,
-                            timezone="Asia/Shanghai"),
+        trigger=CronTrigger(
+            day_of_week="mon-fri", hour=hour, minute=minute, timezone="Asia/Shanghai"
+        ),
         id=BACKTEST_RERUN_JOB_ID,
         misfire_grace_time=7200,  # 盘后复跑非关键, 允许 2 小时内补跑
         replace_existing=True,

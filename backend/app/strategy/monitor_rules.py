@@ -12,6 +12,7 @@
   - 字段白名单复用 custom_signals.ALLOWED_FIELDS (阈值条件) + 信号列清单 (布尔条件)
   - id 正则与 custom_signals 一致,保证可纳入同一索引体系
 """
+
 from __future__ import annotations
 
 import json
@@ -26,8 +27,14 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
-RULE_TYPES = {"strategy", "signal", "price", "market"}
-SCOPES = {"symbols", "all", "sector"}
+RULE_TYPES = {"strategy", "signal", "price", "market", "abnormal"}
+
+# type=abnormal 专属枚举
+ABNORMAL_DIRECTIONS = {"up", "down", "both"}
+ABNORMAL_WINDOWS = {"any", "3d", "10d", "30d"}
+ABNORMAL_THRESHOLD_MIN = 50
+ABNORMAL_THRESHOLD_MAX = 150
+SCOPES = {"symbols", "all", "sector", "watchlist_group"}
 LOGICS = {"and", "or"}
 DIRECTIONS = {"entry", "exit", "both"}
 SEVERITIES = {"info", "warn", "critical"}
@@ -38,12 +45,14 @@ _SIGNAL_PREFIXES = ("signal_", "csg_")
 
 # 指数评估/校验时需隐藏的信号字段: 涨跌停/连板类 (指数无涨跌停) +
 # 分时穿越类 (指数无本地分钟K, 会静默不触发)。与前端 INDEX_HIDDEN_SIGNALS 对齐。
-INTRADAY_SIGNAL_FIELDS = frozenset({
-    "signal_intraday_avg_cross_up",
-    "signal_intraday_avg_cross_down",
-    "signal_intraday_zero_cross_up",
-    "signal_intraday_zero_cross_down",
-})
+INTRADAY_SIGNAL_FIELDS = frozenset(
+    {
+        "signal_intraday_avg_cross_up",
+        "signal_intraday_avg_cross_down",
+        "signal_intraday_zero_cross_up",
+        "signal_intraday_zero_cross_down",
+    }
+)
 
 
 def _is_index_hidden_field(field: str) -> bool:
@@ -54,9 +63,7 @@ def _is_index_hidden_field(field: str) -> bool:
 def uses_intraday_signals(rule: dict) -> bool:
     """规则是否引用了分时穿越信号 (op=truth 且 field 属 INTRADAY_SIGNAL_FIELDS)。"""
     return any(
-        isinstance(c, dict)
-        and c.get("op") == "truth"
-        and c.get("field") in INTRADAY_SIGNAL_FIELDS
+        isinstance(c, dict) and c.get("op") == "truth" and c.get("field") in INTRADAY_SIGNAL_FIELDS
         for c in rule.get("conditions", [])
     )
 
@@ -125,8 +132,22 @@ def validate(rule: dict) -> None:
     if rule.get("type") not in RULE_TYPES:
         raise ValueError(f"type 必须是 {RULE_TYPES} 之一")
 
-    # 策略类型: 需要 strategy_id + direction,conditions 可空
-    if rule.get("type") == "strategy":
+    # 异动类型: direction up/down/both + 窗口 + 阈值倍率, conditions 可空
+    if rule.get("type") == "abnormal":
+        if rule.get("direction", "both") not in ABNORMAL_DIRECTIONS:
+            raise ValueError(f"异动规则 direction 必须是 {ABNORMAL_DIRECTIONS} 之一")
+        if rule.get("abnormal_window", "any") not in ABNORMAL_WINDOWS:
+            raise ValueError(f"abnormal_window 必须是 {ABNORMAL_WINDOWS} 之一")
+        tp = rule.get("threshold_pct", 100)
+        if not isinstance(tp, (int, float)) or isinstance(tp, bool):
+            raise ValueError("threshold_pct 必须是数字")
+        if not (ABNORMAL_THRESHOLD_MIN <= float(tp) <= ABNORMAL_THRESHOLD_MAX):
+            raise ValueError(
+                f"threshold_pct 必须在 {ABNORMAL_THRESHOLD_MIN}~{ABNORMAL_THRESHOLD_MAX} 之间 "
+                "(100=交易所阈值)"
+            )
+    elif rule.get("type") == "strategy":
+        # 策略类型: 需要 strategy_id + direction,conditions 可空
         if not rule.get("strategy_id"):
             raise ValueError("策略类型规则必须指定 strategy_id")
         if rule.get("direction", "entry") not in DIRECTIONS:
@@ -142,21 +163,23 @@ def validate(rule: dict) -> None:
             raise ValueError(f"logic 必须是 {LOGICS} 之一")
         for i, c in enumerate(conds):
             if not isinstance(c, dict):
-                raise ValueError(f"第 {i+1} 个条件格式错误")
+                raise ValueError(f"第 {i + 1} 个条件格式错误")
             field = c.get("field", "")
             op = c.get("op", "")
             if op == "truth":
                 # 布尔信号: field 必须是 signal_/csg_ 前缀
                 if not _is_signal_field(field):
-                    raise ValueError(f"第 {i+1} 个条件: op=truth 时 field 必须是信号列 (signal_/csg_ 前缀): {field!r}")
+                    raise ValueError(
+                        f"第 {i + 1} 个条件: op=truth 时 field 必须是信号列 (signal_/csg_ 前缀): {field!r}"
+                    )
             elif op in OPS:
                 # 阈值比较: field 必须在白名单, 需要 value
                 if field not in ALLOWED_FIELDS:
-                    raise ValueError(f"第 {i+1} 个条件: 阈值字段 {field!r} 不在白名单")
+                    raise ValueError(f"第 {i + 1} 个条件: 阈值字段 {field!r} 不在白名单")
                 if not isinstance(c.get("value"), (int, float)):
-                    raise ValueError(f"第 {i+1} 个条件: value 必须是数字")
+                    raise ValueError(f"第 {i + 1} 个条件: value 必须是数字")
             else:
-                raise ValueError(f"第 {i+1} 个条件: op {op!r} 非法 (应为 truth 或 {OPS})")
+                raise ValueError(f"第 {i + 1} 个条件: op {op!r} 非法 (应为 truth 或 {OPS})")
 
     # scope 校验
     if rule.get("scope", "symbols") == "sector":
@@ -168,10 +191,16 @@ def validate(rule: dict) -> None:
         )
     if rule.get("scope", "symbols") not in SCOPES:
         raise ValueError(f"scope 必须是 {SCOPES} 之一")
-    if rule.get("scope") == "symbols":
+    if rule.get("scope", "symbols") == "symbols":
         syms = rule.get("symbols")
         if not isinstance(syms, list) or len(syms) == 0:
             raise ValueError("scope=symbols 时 symbols 不能为空")
+    if rule.get("scope") == "watchlist_group":
+        # 动态绑定自选分组: 评估时实时解析成员 (分组后续增删自动生效)。
+        # 分组存在性由 API 层在保存时校验 (strategy 层不依赖 services)。
+        gid = rule.get("group_id")
+        if not isinstance(gid, str) or not gid.strip():
+            raise ValueError("scope=watchlist_group 时必须选择自选分组")
 
     # 其余枚举
     if rule.get("severity", "info") not in SEVERITIES:
@@ -187,7 +216,20 @@ def normalize(rule: dict) -> dict:
     r.setdefault("enabled", True)
     r.setdefault("scope", "symbols")
     r.setdefault("symbols", [])
-    r.setdefault("sector", None)
+    r.setdefault("group_id", None)
+    # watchlist_group 作用域: 成员动态来自分组, symbols 不参与; 其他作用域清掉残留 group_id
+    if r.get("scope") == "watchlist_group":
+        r["symbols"] = []
+    else:
+        r["group_id"] = None
+    r.setdefault("abnormal_window", "any")
+    r.setdefault("threshold_pct", 100)
+    if r.get("type") == "abnormal":
+        # 仅缺失补默认; 非法值原样保留, 由 validate 拒绝 (不被 normalize 掩盖)
+        if "direction" not in r:
+            r["direction"] = "both"
+        r["strategy_id"] = None
+        r["conditions"] = []
     r.setdefault("strategy_id", None)
     r.setdefault("direction", "entry")
     r.setdefault("conditions", [])
@@ -210,7 +252,9 @@ def strategy_rule_id(strategy_id: str) -> str:
     return f"{STRATEGY_RULE_PREFIX}{strategy_id}"
 
 
-def migrate_strategy_monitors(data_dir: Path, strategy_ids: list[str], strategy_names: dict[str, str]) -> list[dict]:
+def migrate_strategy_monitors(
+    data_dir: Path, strategy_ids: list[str], strategy_names: dict[str, str]
+) -> list[dict]:
     """把 preferences.strategy_monitor_ids 里的策略,同步生成/更新 type=strategy 规则。
 
     幂等: 已存在的策略规则会被更新 (方向/名称),不会重复创建。
@@ -230,7 +274,7 @@ def migrate_strategy_monitors(data_dir: Path, strategy_ids: list[str], strategy_
     for r in existing:
         rid = r.get("id", "")
         if rid.startswith(STRATEGY_RULE_PREFIX):
-            sid = rid[len(STRATEGY_RULE_PREFIX):]
+            sid = rid[len(STRATEGY_RULE_PREFIX) :]
             if sid:
                 existing_strategy_rules[sid] = r
 
@@ -241,17 +285,19 @@ def migrate_strategy_monitors(data_dir: Path, strategy_ids: list[str], strategy_
         name = strategy_names.get(sid, sid)
         rule = existing_strategy_rules.get(sid)
         if rule is None:
-            rule = normalize({
-                "id": rule_id,
-                "name": f"策略监控 · {name}",
-                "type": "strategy",
-                "scope": "all",
-                "strategy_id": sid,
-                "direction": "entry",
-                "conditions": [],
-                "cooldown_seconds": 3600,
-                "enabled": True,
-            })
+            rule = normalize(
+                {
+                    "id": rule_id,
+                    "name": f"策略监控 · {name}",
+                    "type": "strategy",
+                    "scope": "all",
+                    "strategy_id": sid,
+                    "direction": "entry",
+                    "conditions": [],
+                    "cooldown_seconds": 3600,
+                    "enabled": True,
+                }
+            )
         else:
             rule = dict(rule)
             rule["enabled"] = True

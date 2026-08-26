@@ -737,6 +737,27 @@ def test_last_pipeline_carries_degraded_failed_stages(monkeypatch):
     assert payload["failed_stages"] == [{"stage": "sync_minute", "error": "broken catalog"}]
     assert payload["error"] is None
 
+def test_last_pipeline_carries_manual_cancelled_terminal(monkeypatch):
+    _stub_jobs(
+        monkeypatch,
+        [
+            _job(
+                "cancelled",
+                "cancelled",
+                kind="daily_pipeline",
+                error="用户手动取消",
+            )
+        ],
+    )
+
+    payload = _last_pipeline()
+
+    assert payload["status"] == "cancelled"
+    assert payload["error"] == "用户手动取消"
+    assert payload["failed_stages"] == []
+
+
+
 
 def test_last_pipeline_carries_scheduled_failure_error(monkeypatch):
     """失败的分钟同步 job 不得遮蔽更早的调度管道失败。"""

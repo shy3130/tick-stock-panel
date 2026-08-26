@@ -1,4 +1,5 @@
 """FastAPI 入口。"""
+
 from __future__ import annotations
 
 import logging
@@ -11,7 +12,47 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import agent, analysis, auth as auth_api, backtest, backtest_optimizer, backtest_parameter_grid, cross_section, data, documents, ext_data, financials, indices, intraday, kline, market_data, market_recap, monitor_rules, alerts, overview, patterns, pipeline, regime, research, research_analysis, review, rps, screener, settings as settings_api, signal_scorecard, signals, stock_analysis, strategy, strategy_profile, trade_journal, trading, trading_plans, trading_review, watchlist
+from app.api import (
+    agent,
+    abnormal,
+    analysis,
+    auth as auth_api,
+    backtest,
+    backtest_optimizer,
+    backtest_parameter_grid,
+    cross_section,
+    data,
+    documents,
+    ext_data,
+    financials,
+    indices,
+    intraday,
+    kline,
+    market_data,
+    market_recap,
+    monitor_rules,
+    alerts,
+    overview,
+    patterns,
+    pipeline,
+    regime,
+    research,
+    research_analysis,
+    review,
+    rps,
+    screener,
+    settings as settings_api,
+    signal_scorecard,
+    signals,
+    stock_analysis,
+    strategy,
+    strategy_profile,
+    trade_journal,
+    trading,
+    trading_plans,
+    trading_review,
+    watchlist,
+)
 from app.api.routes import router as core_router
 from app.config import settings
 from app.log_redaction import install_secret_redaction_filter
@@ -42,13 +83,15 @@ def _run_shutdown_step(name: str, callback) -> None:
 async def lifespan(app: FastAPI):
     logger.info(
         "TickFlow Stock Panel v%s starting (mode=%s)",
-        __version__, current_data_mode(),
+        __version__,
+        current_data_mode(),
     )
 
     # 首次启动: 若配置了 AUTH_PASSWORD 环境变量且未设过密码, 用它初始化。
     # 公网部署免 SSH 端口转发; 已设过密码则不覆盖 (改密码走 UI)。
     try:
         from app.services import auth as auth_service
+
         auth_service.bootstrap_from_env()
     except Exception as e:  # noqa: BLE001
         logger.warning("auth bootstrap failed: %s", e)
@@ -80,12 +123,14 @@ async def lifespan(app: FastAPI):
     # QuoteService 需要访问 strategy_monitor 等单例
     # 先创建 strategy_monitor，再注入 app.state
     from app.strategy.monitor import StrategyMonitorService
+
     strategy_monitor = StrategyMonitorService()
     app.state.strategy_monitor = strategy_monitor
     qs.set_app_state(app.state)
 
     # 五档盘口 sealed 服务(真假涨停/跌停, 独立旁路线)
     from app.services.depth_service import DepthService
+
     depth_service = DepthService()
     depth_service.set_repo(repo)
     depth_service.set_app_state(app.state)
@@ -110,6 +155,7 @@ async def lifespan(app: FastAPI):
 
     # 扩展数据定时拉取
     from app.services.ext_pull import pull_scheduler
+
     pull_scheduler.start(store.data_dir)
     pull_scheduler.refresh(store.data_dir)
     app.state.pull_scheduler = pull_scheduler
@@ -118,6 +164,7 @@ async def lifespan(app: FastAPI):
     # 数据获取由用户在概念/行业页点「获取数据」手动触发 (POST /api/ext-data/presets/{id}/fetch)
     try:
         from app.services.ext_presets import ensure_builtin_presets
+
         await ensure_builtin_presets(store.data_dir)
     except Exception as e:  # noqa: BLE001
         logger.warning("内置扩展表初始化失败 (不影响启动): %s", e)
@@ -125,6 +172,7 @@ async def lifespan(app: FastAPI):
     # 财务数据 (需 FINANCIAL capability): 仅初始化调度器供 /api/financials/sync/* 手动同步,
     # 不启动自动调度——用户在「财务分析」页点「同步」手动拉取。
     from app.services.financial_sync import financial_scheduler
+
     financial_scheduler.start(store.data_dir, capset)
     app.state.financial_scheduler = financial_scheduler
 
@@ -152,8 +200,11 @@ async def lifespan(app: FastAPI):
     app.state.strategy_engine = strategy_engine
     # F16: 方案注册为 screen:<hex> 策略 (监控/回测复用); reload 后由 hook 重注册。
     from app.strategy.screen_bridge import sync_screen_strategies
+
     try:
-        logger.info("screen strategies synced: %d", sync_screen_strategies(strategy_engine, store.data_dir))
+        logger.info(
+            "screen strategies synced: %d", sync_screen_strategies(strategy_engine, store.data_dir)
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("screen strategy sync failed (不影响启动): %s", e)
     strategy_engine.post_reload_hooks.append(
@@ -165,6 +216,7 @@ async def lifespan(app: FastAPI):
     # 标为 interrupted, 并做过期清理; 只标记不自动开跑。
     try:
         from app.backtest.job_recovery import recover_stale_backtest_jobs
+
         recovered = recover_stale_backtest_jobs(store.data_dir)
         if any(recovered.values()):
             logger.info("backtest job recovery: %s", recovered)
@@ -173,6 +225,7 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.scheduled_research import ScheduledResearchStore, register_jobs
+
         register_jobs(app.state.scheduler, ScheduledResearchStore(store.data_dir), app.state)
     except Exception as e:  # noqa: BLE001
         logger.warning("scheduled research registration failed: %s", e)
@@ -181,12 +234,16 @@ async def lifespan(app: FastAPI):
     from app.strategy.monitor import MonitorRuleEngine
     from app.strategy import monitor_rules as mr_store
     from app.services import preferences
+
     monitor_engine = MonitorRuleEngine()
     monitor_engine.set_strategy_engine(strategy_engine)
     monitor_engine.set_data_dir(store.data_dir)
     # 复用 ScreenerService 的历史窗口加载器 (三级缓存, 启动预计算命中 ~0ms),
-    # 让声明 filter_history 的策略 (如反包) 也能在实时监控里跑选股 → 盘中触发通知。
     monitor_engine.set_history_loader(_screener_svc._load_enriched_history)
+    # 交易所异动监测 loader: type=abnormal 规则评估时按需构建总览 (只读本地数据)
+    from app.services import abnormal_moves
+
+    monitor_engine.set_abnormal_loader(lambda: abnormal_moves.load_inputs(repo, qs, as_of=None))
 
     # 自动迁移: 把旧 strategy_monitor_ids 同步为 type=strategy 规则 (统一到监控页)
     try:
@@ -273,6 +330,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     from app.services import auth as auth_service
+
     # 情况 1+2: 未设密码
     if not auth_service.is_configured():
         # 本机/内网 → 放行(服务器主人可访问, 并去 /login 设密码)
@@ -335,6 +393,7 @@ app.include_router(trading.router)
 app.include_router(trading_plans.router)
 app.include_router(trading_review.router)
 app.include_router(strategy_profile.router)
+app.include_router(abnormal.router)
 
 
 # 能力门控异常 → 403(而非默认 500)
@@ -380,6 +439,7 @@ async def catalog_error_handler(request: Request, exc: CatalogError) -> JSONResp
         },
         headers={"Retry-After": "60"} if stale else None,
     )
+
 
 # 生产期静态文件(前端 dist)
 _static = Path(settings.static_dir)

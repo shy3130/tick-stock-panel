@@ -208,6 +208,23 @@ class TestSettingsPreferences:
         )
         assert out == {"external_fallback_enabled": True, "external_fallback_scopes": ["realtime"]}
 
+    def test_put_external_fallback_accepts_chart_live(self, monkeypatch):
+        from app.api.settings import update_external_fallback, ExternalFallbackPrefsIn
+        monkeypatch.setattr(
+            "app.services.preferences.set_external_fallback",
+            lambda enabled, scopes: (enabled, scopes),
+        )
+        out = update_external_fallback(
+            ExternalFallbackPrefsIn(
+                external_fallback_enabled=True,
+                external_fallback_scopes=["chart_live"],
+            )
+        )
+        assert out == {
+            "external_fallback_enabled": True,
+            "external_fallback_scopes": ["chart_live"],
+        }
+
 
 # ===========================================================================
 # intraday indices / snapshot

@@ -1,4 +1,4 @@
-import { CheckCircle2, XCircle, Loader2, AlertCircle } from 'lucide-react'
+import { Ban, CheckCircle2, XCircle, Loader2, AlertCircle } from 'lucide-react'
 import { formatDuration } from '@/lib/format'
 
 export function SectionTitle({ icon: Icon, children }: { icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
@@ -15,6 +15,7 @@ export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) 
     succeeded: { icon: CheckCircle2, color: 'text-bear' },
     degraded:  { icon: AlertCircle, color: 'text-warning' },
     failed:    { icon: XCircle, color: 'text-danger' },
+    cancelled: { icon: Ban, color: 'text-muted' },
     running:   { icon: Loader2, color: 'text-accent', spinning: true },
     pending:   { icon: Loader2, color: 'text-muted', spinning: true },
   }[job.status as 'succeeded'] ?? { icon: AlertCircle, color: 'text-muted' }
@@ -59,7 +60,7 @@ export function HistoryRow({ job, onClick }: { job: any; onClick: () => void }) 
           ) : null
         })()}
         {job.error && (
-          <div className="text-xs text-danger truncate max-w-xs">{job.error}</div>
+          <div className={`text-xs truncate max-w-xs ${job.status === 'cancelled' ? 'text-muted' : 'text-danger'}`}>{job.error}</div>
         )}
         {job.status === 'degraded' && job.result?.failed_stages?.[0] && (
           <div className="text-xs text-warning truncate max-w-xs">{job.result.failed_stages[0].error}</div>

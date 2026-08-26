@@ -13,9 +13,11 @@
   - 字段白名单 + 固定运算符集，杜绝任意表达式注入。
   - 第一版只支持 AND（多条件同时满足）。
 """
+
 from __future__ import annotations
 
 import json
+import math
 import logging
 import re
 from pathlib import Path
@@ -26,61 +28,98 @@ from app.indicators.engine_compat import ENGINE_COMPAT_COLUMNS
 logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────
-PREFIX = "csg_"                       # 自定义信号列名前缀
+PREFIX = "csg_"  # 自定义信号列名前缀
 ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 OPS = {">", ">=", "<", "<=", "==", "!="}
 
 # 字段白名单：只允许这些列出现在条件里（防注入）。均为数值型。
 # 与 ENRICHED_COLUMNS 的数值列保持一致，排除 symbol/date/name 等非数值列。
-ALLOWED_FIELDS: frozenset[str] = frozenset({
-    # 行情
-    "open", "high", "low", "close", "volume", "amount", "turnover_rate",
-    "consecutive_limit_ups", "consecutive_limit_downs",
-    # 基础
-    "prev_close", "change_pct", "change_amount", "amplitude",
-    # 均线 / 指数均线
-    "ma5", "ma10", "ma20", "ma30", "ma60",
-    "ema5", "ema10", "ema20", "ema30", "ema60",
-    # MACD / BOLL / KDJ / ATR
-    "macd_dif", "macd_dea", "macd_hist",
-    "boll_upper", "boll_lower",
-    "kdj_k", "kdj_d", "kdj_j",
-    "atr_14",
-    # 量价 / 极值 / 动量 / 波动率 / RSI
-    "vol_ma5", "vol_ma10", "vol_ratio_5d",
-    "high_60d", "low_60d",
-    "momentum_5d", "momentum_10d", "momentum_20d", "momentum_30d", "momentum_60d",
-    "annual_vol_20d",
-    "rsi_6", "rsi_14", "rsi_24",
-    # engine/technicals 兼容指标
-    *ENGINE_COMPAT_COLUMNS.keys(),
-})
+ALLOWED_FIELDS: frozenset[str] = frozenset(
+    {
+        # 行情
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "turnover_rate",
+        "consecutive_limit_ups",
+        "consecutive_limit_downs",
+        # 基础
+        "prev_close",
+        "change_pct",
+        "change_amount",
+        "amplitude",
+        # 均线 / 指数均线
+        "ma5",
+        "ma10",
+        "ma20",
+        "ma30",
+        "ma60",
+        "ema5",
+        "ema10",
+        "ema20",
+        "ema30",
+        "ema60",
+        # MACD / BOLL / KDJ / ATR
+        "macd_dif",
+        "macd_dea",
+        "macd_hist",
+        "boll_upper",
+        "boll_lower",
+        "kdj_k",
+        "kdj_d",
+        "kdj_j",
+        "atr_14",
+        # 量价 / 极值 / 动量 / 波动率 / RSI
+        "vol_ma5",
+        "vol_ma10",
+        "vol_ratio_5d",
+        "high_60d",
+        "low_60d",
+        "momentum_5d",
+        "momentum_10d",
+        "momentum_20d",
+        "momentum_30d",
+        "momentum_60d",
+        "annual_vol_20d",
+        "rsi_6",
+        "rsi_14",
+        "rsi_24",
+        # engine/technicals 兼容指标
+        *ENGINE_COMPAT_COLUMNS.keys(),
+    }
+)
 
 # 运算符 → Polars 表达式构造器（输入 col_expr, value）
 _OP_BUILDERS = {
-    ">":   lambda c, v: c > v,
-    ">=":  lambda c, v: c >= v,
-    "<":   lambda c, v: c < v,
-    "<=":  lambda c, v: c <= v,
-    "==":  lambda c, v: c == v,
-    "!=":  lambda c, v: c != v,
+    ">": lambda c, v: c > v,
+    ">=": lambda c, v: c >= v,
+    "<": lambda c, v: c < v,
+    "<=": lambda c, v: c <= v,
+    "==": lambda c, v: c == v,
+    "!=": lambda c, v: c != v,
 }
 
 
 # ── 持久化（镜像 strategy/config.py 的写法）──────────────
-def _dir(data_dir: Path) -> Path:
+def _dir(data_dir: Path, *, create: bool = False) -> Path:
     d = data_dir / "user_data" / "custom_signals"
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _path(data_dir: Path, signal_id: str) -> Path:
-    return _dir(data_dir) / f"{signal_id}.json"
+def _path(data_dir: Path, signal_id: str, *, create: bool = False) -> Path:
+    return _dir(data_dir, create=create) / f"{signal_id}.json"
 
 
 def load_all(data_dir: Path) -> list[dict]:
-    """读取全部自定义信号定义。损坏的文件被跳过。"""
+    """只读全部自定义信号定义；目录不存在时返回空，损坏文件跳过。"""
     d = _dir(data_dir)
+    if not d.exists():
+        return []
     out: list[dict] = []
     for f in sorted(d.glob("*.json")):
         try:
@@ -91,8 +130,7 @@ def load_all(data_dir: Path) -> list[dict]:
 
 
 def save_one(data_dir: Path, sig: dict) -> None:
-    p = _path(data_dir, sig["id"])
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = _path(data_dir, sig["id"], create=True)
     p.write_text(json.dumps(sig, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -106,21 +144,25 @@ def delete_one(data_dir: Path, signal_id: str) -> bool:
 
 # ── 校验 ────────────────────────────────────────────────
 def _parse_right(right: str) -> tuple[str, object]:
-    """解析右值。返回 ('field', colname) 或 ('const', float)。"""
+    """解析右值。返回 ('field', colname) 或 ('const', finite float)。"""
     if isinstance(right, (int, float)):
-        return ("const", float(right))
-    if not isinstance(right, str):
+        value = float(right)
+    elif not isinstance(right, str):
         raise ValueError(f"非法右值: {right!r}")
-    if right.startswith("field:"):
-        col = right[len("field:"):]
+    elif right.startswith("field:"):
+        col = right[len("field:") :]
         if col not in ALLOWED_FIELDS:
             raise ValueError(f"右值字段不在白名单: {col}")
         return ("field", col)
-    # 纯数字
-    try:
-        return ("const", float(right))
-    except ValueError:
-        raise ValueError(f"非法右值（应为 field:xxx 或数字）: {right!r}")
+    else:
+        try:
+            value = float(right)
+        except ValueError:
+            raise ValueError(f"非法右值（应为 field:xxx 或数字）: {right!r}") from None
+
+    if not math.isfinite(value):
+        raise ValueError(f"非法右值（必须为有限数字）: {right!r}")
+    return ("const", value)
 
 
 def validate(sig: dict) -> None:
@@ -139,13 +181,13 @@ def validate(sig: dict) -> None:
         raise ValueError("conditions 最多 8 条")
     for i, c in enumerate(conds):
         if not isinstance(c, dict):
-            raise ValueError(f"第 {i+1} 个条件格式错误")
+            raise ValueError(f"第 {i + 1} 个条件格式错误")
         left = c.get("left", "")
         if left not in ALLOWED_FIELDS:
-            raise ValueError(f"第 {i+1} 个条件: 字段 {left!r} 不在白名单")
+            raise ValueError(f"第 {i + 1} 个条件: 字段 {left!r} 不在白名单")
         if c.get("op") not in OPS:
-            raise ValueError(f"第 {i+1} 个条件: 运算符 {c.get('op')!r} 非法")
-        _parse_right(c.get("right"))   # 会校验右值字段/数字
+            raise ValueError(f"第 {i + 1} 个条件: 运算符 {c.get('op')!r} 非法")
+        _parse_right(c.get("right"))  # 会校验右值字段/数字
 
 
 # ── 编译为 Polars 表达式 ─────────────────────────────────

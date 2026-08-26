@@ -190,17 +190,17 @@ result = provider.get_realtime(symbols)
 外部公共免费行情不再一刀切禁止，但必须走**独立的 fallback 适配层**（`services/` 侧能力门控，不进 FQuantProvider），并同时满足：
 
 1. **默认关闭**：`preferences.external_fallback_enabled` 默认 false，用户显式开启后对应能力才激活；
-2. **仅补真缺口**：只覆盖本地源确实没有的能力（depth 五档、快照过期时的 realtime 快照级读取）；本地 DuckDB 有数据的路径一律不走外部；
+2. **仅补真缺口**：只覆盖本地源确实没有的能力（depth 五档、快照过期时的 realtime 快照级读取、当前交易日且本地目标日期为空的 `chart_live` 单标的图表展示）；本地 DuckDB 已有目标交易日数据时一律不走外部；
 3. **provenance 全程标记**：返回行带 `source` 字段，API/SSE 响应带 `degraded` 标志，UI 有角标；
 4. **绝不污染主链路**：不写 stock raw mirror、不写 enriched 分区、不进入回测 / 选股 / 监控评估输入（它们只读 sealed 分区）；
 5. **口径校准 pinning 测试**：每个源必须有锁死单位 / 复权 / 时区 / 符号映射的回归测试（照 `fquant/mapping.py` 校准注释先例）；
 6. **限速 + 熔断 + 缓存**：复用 `eastmoney_client` 模式（Host 白名单 + 最小间隔 + `trust_env=False`），连续失败自动熔断并通知。
 
-**永久豁免（不适用 fallback）**：catalog 路由的 A 股 minutes/trans（fail-closed 语义不变）；付费 / 需密钥源（TickFlow SaaS、Tushare Pro）；券商 SDK（Futu / Longbridge 等真实账户接口）。
+**永久豁免（不适用 fallback）**：A 股历史 minutes/trans、以及任意 catalog 路由异常（仍 fail-closed 返回 503）；付费 / 需密钥源（TickFlow SaaS、Tushare Pro）；券商 SDK（Futu / Longbridge 等真实账户接口）。
 
 **绝对不能**直接连接：
 
-- 外部 Tencent / 新浪 / 第三方行情接口——除上述受控 fallback 适配层外，FQuantProvider 保持只读本地 DuckDB，业务层不得自行直连
+- 外部 Tencent / 新浪 / 第三方行情接口——除上述受控 fallback 适配层（含默认关闭、仅当前交易日单标的的 `chart_live`）外，FQuantProvider 保持只读本地 DuckDB，业务层不得自行直连
 - 任何绕过 `data_providers` 抽象层（及受控 fallback 适配层）的 HTTP / DB 直连
 
 ---

@@ -28,6 +28,8 @@ import { boardTag, renderBuiltinDataCell } from '@/components/stock-table/primit
 import { getSignals, signalCls, getSortValue, UNSORTABLE_KEYS } from '@/lib/stock-table'
 import { resolveCandleConfig } from '@/lib/list-columns'
 import { useQuoteStatus, usePreferences } from '@/lib/useSharedQueries'
+import { WatchlistGroupBar, WatchlistGroupPicker, type WatchlistGroupFilter } from '@/components/WatchlistGroups'
+import type { WatchlistGroup, WatchlistGroupColor } from '@/lib/api'
 import {
   type ColumnConfig,
   BUILTIN_COLUMNS,
@@ -345,6 +347,9 @@ function StockCard({
   expandedCells,
   onToggleExpand,
   isMonitored,
+  groups,
+  groupIds,
+  onToggleMember,
 }: {
   r: any
   candleRows: KlineRow[]
@@ -358,6 +363,10 @@ function StockCard({
   expandedCells: Set<string>
   onToggleExpand: (key: string) => void
   isMonitored?: boolean
+  /** 分组 (M:N picker) */
+  groups?: WatchlistGroup[]
+  groupIds?: string[]
+  onToggleMember?: (symbol: string, groupId: string, member: boolean) => void
 }) {
   const board = boardTag(r.symbol)
   const price = r.rt_price ?? r.close
@@ -432,6 +441,16 @@ function StockCard({
             </span>
           )}
           {isMonitored && <span className="ml-auto"><RealtimeDot /></span>}
+          {onToggleMember && (
+            <span className={isMonitored ? '' : 'ml-auto'} onClick={e => e.stopPropagation()}>
+              <WatchlistGroupPicker
+                groups={groups ?? []}
+                groupIds={groupIds ?? []}
+                symbol={r.symbol}
+                onToggleMember={onToggleMember}
+              />
+            </span>
+          )}
         </div>
 
         {/* 第二行: 大价格 + 涨跌幅胶囊 */}
@@ -591,6 +610,88 @@ export function Watchlist() {
     enabled: (list.data?.symbols.length ?? 0) > 0,
   })
 
+  // ── 自选分组 (M:N): 定义/成员来自 list.data.symbols 的 group_ids ──
+  const groups = useQuery({
+    queryKey: QK.watchlistGroups,
+    queryFn: api.watchlistGroups,
+  })
+  const groupList: WatchlistGroup[] = groups.data?.groups ?? []
+  const [selectedGroup, setSelectedGroup] = useState<WatchlistGroupFilter>('all')
+
+  const invalidateGroupsAndList = () => {
+    qc.invalidateQueries({ queryKey: QK.watchlist })
+    qc.invalidateQueries({ queryKey: QK.watchlistGroups })
+    qc.invalidateQueries({ queryKey: QK.monitorRuleOptions })
+  }
+
+  const groupCreate = useMutation({
+    mutationFn: ({ name, color }: { name: string; color: WatchlistGroupColor }) =>
+      api.watchlistGroupCreate(name, color),
+    onSuccess: invalidateGroupsAndList,
+  })
+  const groupRename = useMutation({
+    mutationFn: ({ groupId, name, color }: { groupId: string; name: string; color: WatchlistGroupColor }) =>
+      api.watchlistGroupRename(groupId, name, color),
+    onSuccess: invalidateGroupsAndList,
+  })
+  const groupDelete = useMutation({
+    mutationFn: (groupId: string) => api.watchlistGroupDelete(groupId),
+    onSuccess: (_data, deletedId) => {
+      // 删除当前选中的组 → 回到全部
+      if (selectedGroup === deletedId) setSelectedGroup('all')
+      invalidateGroupsAndList()
+    },
+  })
+  const groupClear = useMutation({
+    mutationFn: (groupId: string) => api.watchlistGroupClear(groupId),
+    onSuccess: invalidateGroupsAndList,
+  })
+  const groupReorder = useMutation({
+    mutationFn: (orderedIds: string[]) => api.watchlistGroupReorder(orderedIds),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.watchlistGroups })
+      qc.invalidateQueries({ queryKey: QK.monitorRuleOptions })
+    },
+  })
+  const groupToggleMember = (symbol: string, groupId: string, member: boolean) => {
+    const req = member
+      ? api.watchlistGroupAddMember(groupId, symbol)
+      : api.watchlistGroupRemoveMember(groupId, symbol)
+    req.then(() => invalidateGroupsAndList()).catch(() => {
+      // 失败时强制刷新, 让 UI 回到服务端真实状态
+      invalidateGroupsAndList()
+    })
+  }
+
+  // 分组成员表 (symbol → group_ids); 列表数据是唯一真源
+  const groupIdsBySymbol = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const entry of list.data?.symbols ?? []) {
+      map.set(entry.symbol, entry.group_ids ?? [])
+    }
+    return map
+  }, [list.data?.symbols])
+
+  // 标签计数: 全部 / 未分组 / 每个自定义组 (M:N: 一只可计入多个组)
+  const groupCounts = useMemo(() => {
+    const counts: Record<string, number> = { ungrouped: 0 }
+    for (const group of groupList) counts[group.id] = 0
+    for (const gids of groupIdsBySymbol.values()) {
+      if (gids.length === 0) counts.ungrouped += 1
+      for (const gid of gids) {
+        if (gid in counts) counts[gid] += 1
+      }
+    }
+    return counts
+  }, [groupList, groupIdsBySymbol])
+
+  // 选中的组被删除 (另一端操作) → 回退全部
+  const effectiveSelectedGroup: WatchlistGroupFilter =
+    selectedGroup !== 'all' && selectedGroup !== 'ungrouped' &&
+    !groupList.some(g => g.id === selectedGroup)
+      ? 'all'
+      : selectedGroup
+
   const symbols = enriched.data?.rows?.map((r: any) => r.symbol) ?? []
   const symbolsKey = symbols.join(',')
 
@@ -605,10 +706,17 @@ export function Watchlist() {
   const klineData = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
 
   const addMutation = useMutation({
-    mutationFn: (sym: string) => api.watchlistAdd(sym),
+    mutationFn: (sym: string) => api.watchlistAdd(
+      sym,
+      '',
+      effectiveSelectedGroup !== 'all' && effectiveSelectedGroup !== 'ungrouped'
+        ? effectiveSelectedGroup
+        : undefined,
+    ),
     onSuccess: (data) => {
       qc.setQueryData(QK.watchlist, data)
       qc.invalidateQueries({ queryKey: QK.watchlist })
+      qc.invalidateQueries({ queryKey: QK.watchlistGroups })
       qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
       qc.invalidateQueries({ queryKey: ['watchlist-kline-batch'] })
     },
@@ -802,8 +910,16 @@ export function Watchlist() {
 
   // 筛选 + 排序
   const filteredRows = useMemo(() => {
-    // 板块筛选（全选时跳过）
+    // 组标签过滤 (仅展示层: 不动 rows 的 enriched/realtime 合并结果)
     let result = rows
+    if (effectiveSelectedGroup === 'ungrouped') {
+      result = result.filter((r: Record<string, unknown>) =>
+        (groupIdsBySymbol.get(String(r.symbol ?? '')) ?? []).length === 0)
+    } else if (effectiveSelectedGroup !== 'all') {
+      result = result.filter((r: Record<string, unknown>) =>
+        (groupIdsBySymbol.get(String(r.symbol ?? '')) ?? []).includes(effectiveSelectedGroup))
+    }
+    // 板块筛选（全选时跳过）
     if (boardFilter.size > 0 && boardFilter.size < BOARDS.length) {
       result = result.filter(r => {
         const board = getBoardType(String(r.symbol ?? ''))
@@ -830,7 +946,7 @@ export function Watchlist() {
       })
     }
     return result
-  }, [rows, filters, columns, boardFilter])
+  }, [rows, filters, columns, boardFilter, effectiveSelectedGroup, groupIdsBySymbol])
 
   const activeFilterCount = Object.values(filters).filter(v => v.min || v.max || v.text).length
 
@@ -932,7 +1048,6 @@ export function Watchlist() {
               {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
             </button>
             <div className="w-px h-5 bg-border" />
-            {/* 自定义列 / 刷新 */}
             <button
               onClick={() => setCustomizerOpen(true)}
               className="btn-ghost h-8 w-8 px-0"
@@ -967,6 +1082,20 @@ export function Watchlist() {
             )}
           </div>
         }
+      />
+
+      {/* 分组标签栏: 全部/未分组/自定义组 (仅过滤展示; 管理含破坏性二次确认) */}
+      <WatchlistGroupBar
+        groups={groupList}
+        counts={groupCounts}
+        selected={effectiveSelectedGroup}
+        total={allSymbols.length}
+        onSelect={setSelectedGroup}
+        onCreate={async (name, color) => { await groupCreate.mutateAsync({ name, color }) }}
+        onRename={async (groupId, name, color) => { await groupRename.mutateAsync({ groupId, name, color }) }}
+        onDelete={async groupId => { await groupDelete.mutateAsync(groupId) }}
+        onClearGroup={async groupId => { await groupClear.mutateAsync(groupId) }}
+        onReorder={async orderedIds => { await groupReorder.mutateAsync(orderedIds) }}
       />
 
       {/* 筛选栏 */}
@@ -1122,6 +1251,13 @@ export function Watchlist() {
                           ) : null}
                           {monitoredSymbols.has(r.symbol) && <span className="ml-2"><RealtimeDot /></span>}
                         </button>
+                        {/* 分组 picker (M:N 多选) */}
+                        <WatchlistGroupPicker
+                          groups={groupList}
+                          groupIds={groupIdsBySymbol.get(r.symbol) ?? []}
+                          symbol={r.symbol}
+                          onToggleMember={groupToggleMember}
+                        />
                         {/* 删除入口：默认减号图标，二次确认时替换为确定按钮 */}
                         <div className="ml-auto pl-1 shrink-0">
                           {confirmRemove === r.symbol ? (
@@ -1232,6 +1368,9 @@ export function Watchlist() {
                   expandedCells={expandedCells}
                   onToggleExpand={handleToggleExpand}
                   isMonitored={monitoredSymbols.has(r.symbol)}
+                  groups={groupList}
+                  groupIds={groupIdsBySymbol.get(r.symbol) ?? []}
+                  onToggleMember={groupToggleMember}
                 />
               ))}
             </div>

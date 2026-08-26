@@ -9,7 +9,7 @@ import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
 import { Data } from './pages/Data'
 import { Monitor } from './pages/Monitor'
-import { Trading } from './pages/Trading'
+import { AbnormalMoves } from './pages/AbnormalMoves'
 import { TradeJournal } from './pages/TradeJournal'
 import { Dashboard } from './pages/Dashboard'
 import { Review } from './pages/Review'
@@ -37,6 +37,7 @@ const FeatureGuide = lazy(() => import('./pages/FeatureGuide').then((m) => ({ de
 const Research = lazy(() => import('./pages/Research').then((m) => ({ default: m.Research })))
 const SignalScorecard = lazy(() => import('./pages/SignalScorecard').then((m) => ({ default: m.SignalScorecard })))
 const CrossSection = lazy(() => import('./pages/CrossSection').then((m) => ({ default: m.CrossSection })))
+const Trading = lazy(() => import('./pages/Trading').then((m) => ({ default: m.Trading })))
 
 
 // 懒加载页面占位：渲染在 Layout Outlet 内，不触碰 Layout/OnboardingGuard 结构。
@@ -146,7 +147,8 @@ export const router = createBrowserRouter([
       { path: 'financials', element: lazyPage(<Financials />) },
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
-      { path: 'trading', element: <Trading /> },
+      { path: 'abnormal-moves', element: <AbnormalMoves /> },
+      { path: 'trading', element: lazyPage(<Trading />) },
       { path: 'journal', element: <TradeJournal /> },
       { path: 'research', element: lazyPage(<Research />) },
       { path: 'signal-scorecard', element: lazyPage(<SignalScorecard />) },

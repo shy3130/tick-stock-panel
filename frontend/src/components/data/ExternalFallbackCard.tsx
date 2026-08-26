@@ -8,7 +8,8 @@ import { Skeleton } from './Skeleton'
 /** 受控外部 fallback 白名单 scope（与 preferences 契约一致）。 */
 const SCOPE_REALTIME = 'realtime'
 const SCOPE_DEPTH = 'depth'
-type FallbackScope = typeof SCOPE_REALTIME | typeof SCOPE_DEPTH
+const SCOPE_CHART_LIVE = 'chart_live'
+type FallbackScope = typeof SCOPE_REALTIME | typeof SCOPE_DEPTH | typeof SCOPE_CHART_LIVE
 
 const SCOPE_ITEMS: { key: FallbackScope; label: string; desc: string }[] = [
   {
@@ -21,14 +22,20 @@ const SCOPE_ITEMS: { key: FallbackScope; label: string; desc: string }[] = [
     label: '五档盘口实时展示·仅盘中',
     desc: '本地无五档能力时补读腾讯公共行情；仅进程内展示，不写 sealed / 选股 / 回测 / 监控',
   },
+  {
+    key: SCOPE_CHART_LIVE,
+    label: '当前交易日个股图表临时展示',
+    desc: '仅当前 CN 交易日、仅单标的日K/分时；本地当日尚未发布时用腾讯分时临时展示，不写入本地',
+  },
 ]
+
 
 function sanitizeScopes(raw: string[] | undefined | null): FallbackScope[] {
   const seen: Partial<Record<FallbackScope, true>> = {}
   const out: FallbackScope[] = []
   for (const s of raw ?? []) {
     const key = String(s).trim().toLowerCase()
-    if (key !== SCOPE_REALTIME && key !== SCOPE_DEPTH) continue
+    if (key !== SCOPE_REALTIME && key !== SCOPE_DEPTH && key !== SCOPE_CHART_LIVE) continue
     if (seen[key]) continue
     seen[key] = true
     out.push(key)
@@ -39,7 +46,7 @@ function sanitizeScopes(raw: string[] | undefined | null): FallbackScope[] {
 /**
  * 受控外部行情降级（默认关闭）。
  *
- * 总开关 + realtime / depth 两个显式 scope 复选。
+ * 总开关 + realtime / depth / chart_live 三个显式 scope 复选。
  * - 开启且 scopes 为空 → 默认 realtime
  * - 关闭 → scopes 清空
  * - 取消最后一个 scope → 保持总开关，显示「未选择」（enabled + 空 scopes = 零网络）
@@ -53,6 +60,7 @@ export function ExternalFallbackCard() {
   const scopes = sanitizeScopes(prefs.data?.external_fallback_scopes)
   const hasRealtime = scopes.includes(SCOPE_REALTIME)
   const hasDepth = scopes.includes(SCOPE_DEPTH)
+  const hasChartLive = scopes.includes(SCOPE_CHART_LIVE)
 
   const update = useMutation({
     mutationFn: ({ on, nextScopes }: { on: boolean; nextScopes: FallbackScope[] }) =>
@@ -102,6 +110,7 @@ export function ExternalFallbackCard() {
       : [
           hasRealtime ? '实时行情' : null,
           hasDepth ? '五档盘口' : null,
+          hasChartLive ? '个股图表' : null,
         ]
           .filter(Boolean)
           .join(' · ')
@@ -222,7 +231,8 @@ export function ExternalFallbackCard() {
 
           <p className="text-[10px] leading-snug text-muted pt-1 border-t border-border/50">
             默认关闭。外部数据仅只读展示并保留 provenance 标记；不写入 sealed / 本地行情库，
-            也不参与选股、监控与回测。depth 仅盘中补读五档，realtime 仅在本地快照缺失或陈旧时触发。
+            也不参与选股、监控与回测。depth 仅盘中补读五档，realtime 仅在本地快照缺失或陈旧时触发，
+            chart_live 仅当前交易日个股日K/分时临时展示。
           </p>
         </div>
       )}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2 } from 'lucide-react'
-import { api, type MinuteKlineRow } from '@/lib/api'
+import { Globe, Loader2 } from 'lucide-react'
+import { api, chartLiveDegraded, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
 
@@ -47,6 +47,9 @@ export function StockIntradayChart({
   const sourceIsNone = minute.data?.source === 'none'
   // 指数分钟K无本地存储且不支持落库获取 (后端 sync_minute_single 显式拒绝), 不显示获取按钮
   const isIndex = minute.data?.asset_type === 'index'
+  const liveDegraded = chartLiveDegraded(minute.data)
+  const chartHeight = liveDegraded ? Math.max(height - 22, 80) : height
+
 
   useEffect(() => {
     setMinuteDismissed(false)
@@ -57,6 +60,17 @@ export function StockIntradayChart({
 
   return (
     <div className={className} style={{ height, flexShrink: 0 }}>
+      {liveDegraded && (
+        <div className="px-1 pb-1">
+          <span
+            className="inline-flex cursor-help items-center gap-1 rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] leading-none text-warning/80"
+            title="分时来自腾讯公共行情，为盘中临时数据，仅供展示；不会写入本地行情库，也不参与选股、监控、回测。"
+          >
+            <Globe className="h-2.5 w-2.5" aria-hidden />
+            外部源·盘中临时数据
+          </span>
+        </div>
+      )}
       {minute.isLoading && <div className="text-xs text-muted py-2">分时加载中…</div>}
       {!minute.isLoading && minuteRows.length === 0 && (
         <>
@@ -113,7 +127,7 @@ export function StockIntradayChart({
       {minuteRows.length > 0 && (
         <EChartsIntraday
           data={minuteRows}
-          height={height}
+          height={chartHeight}
           prevClose={prevClose}
           date={date}
           symbol={symbol}

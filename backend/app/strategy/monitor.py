@@ -9,12 +9,15 @@
   2. MonitorRuleEngine — 通用规则引擎,覆盖 signal/price/market/strategy 四类,
      支持 scope (symbols/all/sector) + 多条件 AND/OR + cooldown 去重
 """
+
 from __future__ import annotations
 
 import datetime as _dt
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 import polars as pl
@@ -28,33 +31,68 @@ logger = logging.getLogger(__name__)
 # signal_* 为内置原子信号, 其余为技术指标/行情字段。
 _SIGNAL_CN: dict[str, str] = {
     # 内置信号
-    "signal_ma_golden_5_20": "MA5上穿MA20", "signal_ma_dead_5_20": "MA5下穿MA20",
-    "signal_ma_golden_20_60": "MA20上穿MA60", "signal_macd_golden": "MACD金叉",
-    "signal_macd_dead": "MACD死叉", "signal_ma20_breakout": "突破MA20",
-    "signal_ma20_breakdown": "跌破MA20", "signal_n_day_high": "60日新高",
-    "signal_n_day_low": "60日新低", "signal_boll_breakout_upper": "突破布林上轨",
-    "signal_boll_breakdown_lower": "跌破布林下轨", "signal_volume_surge": "放量",
-    "signal_limit_up": "涨停", "signal_limit_down": "跌停",
-    "signal_limit_down_recovery": "跌停翘板", "signal_broken_limit_up": "炸板",
+    "signal_ma_golden_5_20": "MA5上穿MA20",
+    "signal_ma_dead_5_20": "MA5下穿MA20",
+    "signal_ma_golden_20_60": "MA20上穿MA60",
+    "signal_macd_golden": "MACD金叉",
+    "signal_macd_dead": "MACD死叉",
+    "signal_ma20_breakout": "突破MA20",
+    "signal_ma20_breakdown": "跌破MA20",
+    "signal_n_day_high": "60日新高",
+    "signal_n_day_low": "60日新低",
+    "signal_boll_breakout_upper": "突破布林上轨",
+    "signal_boll_breakdown_lower": "跌破布林下轨",
+    "signal_volume_surge": "放量",
+    "signal_limit_up": "涨停",
+    "signal_limit_down": "跌停",
+    "signal_limit_down_recovery": "跌停翘板",
+    "signal_broken_limit_up": "炸板",
     # 行情字段
-    "close": "收盘价", "open": "开盘价", "high": "最高价", "low": "最低价",
-    "change_pct": "涨跌幅", "change_amount": "涨跌额", "amplitude": "振幅",
-    "turnover_rate": "换手率", "volume": "成交量", "amount": "成交额",
+    "close": "收盘价",
+    "open": "开盘价",
+    "high": "最高价",
+    "low": "最低价",
+    "change_pct": "涨跌幅",
+    "change_amount": "涨跌额",
+    "amplitude": "振幅",
+    "turnover_rate": "换手率",
+    "volume": "成交量",
+    "amount": "成交额",
     # 均线
-    "ma5": "MA5", "ma10": "MA10", "ma20": "MA20", "ma30": "MA30", "ma60": "MA60",
-    "ema5": "EMA5", "ema10": "EMA10", "ema20": "EMA20",
+    "ma5": "MA5",
+    "ma10": "MA10",
+    "ma20": "MA20",
+    "ma30": "MA30",
+    "ma60": "MA60",
+    "ema5": "EMA5",
+    "ema10": "EMA10",
+    "ema20": "EMA20",
     # MACD / BOLL / KDJ / RSI
-    "macd_dif": "MACD-DIF", "macd_dea": "MACD-DEA", "macd_hist": "MACD柱",
-    "boll_upper": "布林上轨", "boll_lower": "布林下轨",
-    "kdj_k": "KDJ-K", "kdj_d": "KDJ-D", "kdj_j": "KDJ-J",
-    "rsi_6": "RSI6", "rsi_14": "RSI14", "rsi_24": "RSI24",
+    "macd_dif": "MACD-DIF",
+    "macd_dea": "MACD-DEA",
+    "macd_hist": "MACD柱",
+    "boll_upper": "布林上轨",
+    "boll_lower": "布林下轨",
+    "kdj_k": "KDJ-K",
+    "kdj_d": "KDJ-D",
+    "kdj_j": "KDJ-J",
+    "rsi_6": "RSI6",
+    "rsi_14": "RSI14",
+    "rsi_24": "RSI24",
     # 量能 / 动量 / 波动
-    "vol_ratio_5d": "5日量比", "vol_ratio_20d": "20日量比",
-    "vol_ma5": "5日均量", "vol_ma10": "10日均量",
-    "high_60d": "60日最高", "low_60d": "60日最低",
-    "momentum_5d": "5日动量", "momentum_20d": "20日动量", "momentum_60d": "60日动量",
-    "atr_14": "ATR14", "annual_vol_20d": "20日年化波动",
-    "consecutive_limit_ups": "连板数", "consecutive_limit_downs": "跌停连板",
+    "vol_ratio_5d": "5日量比",
+    "vol_ratio_20d": "20日量比",
+    "vol_ma5": "5日均量",
+    "vol_ma10": "10日均量",
+    "high_60d": "60日最高",
+    "low_60d": "60日最低",
+    "momentum_5d": "5日动量",
+    "momentum_20d": "20日动量",
+    "momentum_60d": "60日动量",
+    "atr_14": "ATR14",
+    "annual_vol_20d": "20日年化波动",
+    "consecutive_limit_ups": "连板数",
+    "consecutive_limit_downs": "跌停连板",
 }
 
 
@@ -66,7 +104,8 @@ def _signal_cn_name(name: str) -> str:
 @dataclass
 class StrategyAlert:
     """策略告警"""
-    type: str              # "entry" | "exit" | "alert"
+
+    type: str  # "entry" | "exit" | "alert"
     strategy_id: str
     symbol: str
     name: str | None
@@ -243,12 +282,14 @@ class StrategyMonitorService:
         hit_df = df.filter(expr)
         results = []
         for row in hit_df.iter_rows(named=True):
-            results.append((
-                row.get("symbol", ""),
-                row.get("name"),
-                row.get("close"),
-                row.get("change_pct"),
-            ))
+            results.append(
+                (
+                    row.get("symbol", ""),
+                    row.get("name"),
+                    row.get("close"),
+                    row.get("change_pct"),
+                )
+            )
         return results
 
 
@@ -257,6 +298,60 @@ class StrategyMonitorService:
 # ================================================================
 
 _SIGNAL_PREFIXES = ("signal_", "csg_")
+
+# ── 自选分组作用域: group_id → 成员集合解析 (进程内缓存) ────
+# 缓存按 watchlist 数据版本号失效: 版本不变时零磁盘 IO; 自选页任何增删
+# 分组/成员的操作都会 bump 版本号, 下一轮评估立即拿到新成员 (无需等 TTL)。
+_group_cache_lock = threading.Lock()
+_group_cache: dict[str, Any] = {}
+# 已告警过的「分组已删除」(rule_id, group_id), 防止每轮评估刷日志
+_warned_missing_groups: set[tuple[str, str]] = set()
+
+
+def _watchlist_groups_snapshot(data_dir: Path | str | None) -> dict[str, frozenset[str]]:
+    """返回 {group_id: 成员symbol集}；未注入数据目录时严格失败关闭。"""
+    if data_dir is None:
+        return {}
+    from app.services import watchlist
+
+    rev_before = watchlist.revision(data_dir)
+    cache_key = str(data_dir) if data_dir is not None else ""
+    with _group_cache_lock:
+        cached = _group_cache.get(cache_key)
+        if cached is not None and cached.get("_rev") == rev_before:
+            return cached["groups"]
+    groups: dict[str, set[str]] = {g["id"]: set() for g in watchlist.list_groups(data_dir)}
+    for row in watchlist.list_symbols(data_dir):
+        for gid in row.get("group_ids") or []:
+            members = groups.get(gid)
+            if members is not None:
+                members.add(str(row["symbol"]))
+    frozen = {gid: frozenset(syms) for gid, syms in groups.items()}
+    if watchlist.revision(data_dir) == rev_before:
+        with _group_cache_lock:
+            _group_cache[cache_key] = {"_rev": rev_before, "groups": frozen}
+    return frozen
+
+
+def _group_members_or_none(data_dir: Path | str | None, rule: dict) -> frozenset[str] | None:
+    """解析规则绑定的分组成员; 分组已删除返回 None, 解析异常返回 None 并记日志。"""
+    group_id = str(rule.get("group_id") or "")
+    try:
+        groups = _watchlist_groups_snapshot(data_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("自选分组数据读取失败, 规则 %s 本轮跳过: %s", rule.get("id"), exc)
+        return None
+    members = groups.get(group_id)
+    if members is None:
+        key = (str(rule.get("id") or ""), group_id)
+        if key not in _warned_missing_groups:
+            _warned_missing_groups.add(key)
+            logger.warning(
+                "监控规则 %s 绑定的自选分组 %s 已删除, 本轮跳过 (fail-closed, 恢复分组后自动生效)",
+                rule.get("id"),
+                group_id,
+            )
+    return members
 
 
 def _is_signal_field(field: str) -> bool:
@@ -291,6 +386,7 @@ def _build_condition_mask(df: pl.DataFrame, conditions: list[dict], logic: str) 
         mask = pl.all_horizontal(parts)
     return df.filter(mask)
 
+
 def _push_rule_webhook(rule: dict, ev: dict) -> None:
     """规则命中时按需推送到外部 webhook (失败仅记日志,不阻塞告警落盘)。
     仅当 rule.webhook_enabled 且 webhook_url 非空时触发;POST 同步发,超时 3s,
@@ -312,6 +408,7 @@ def _push_rule_webhook(rule: dict, ev: dict) -> None:
     }
     try:
         import httpx
+
         httpx.post(url, json=payload, timeout=3.0, trust_env=False)
     except Exception as e:  # noqa: BLE001
         logger.warning("监控规则 %s webhook 推送失败: %s", rule.get("id"), e)
@@ -346,6 +443,25 @@ class MonitorRuleEngine:
         # 本轮 evaluate() 产出的策略选股结果: strategy_id → {rows, total, as_of}
         # 供策略页实时回显复用 (/api/screener/cached 端点直接读取此内存结果), 避免重跑
         self._latest_strategy_results: dict[str, dict] = {}
+        # 交易所异动监测 loader: () → (stock_returns, index_returns, names, provenance)。
+        # 由 main 装配 (只读 repository + quote_service 本地数据); 为 None 时
+        # type=abnormal 规则跳过 (保持旧行为, 不破坏无装配场景)。
+        self._abnormal_loader: Callable[..., Any] | None = None
+        # type=abnormal 边缘触发状态: (rule_id, symbol, window) → 是否越线。
+        # 方向变化也会把同一窗口重置为未越线，避免旧方向状态阻止后续 re-arm。
+        self._abnormal_state: dict[tuple[str, str, str], bool] = {}
+        # 本轮 evaluate() 共享的异动总览行 (多个 abnormal 规则只算一次)
+        self._abnormal_rows_cache: list[dict] | None = None
+
+    def set_abnormal_loader(self, fn) -> None:
+        """注入异动数据 loader: () → abnormal_moves.load_inputs(...) 四元组。"""
+        self._abnormal_loader = fn
+        self._abnormal_state.clear()
+
+    @property
+    def has_abnormal_rules(self) -> bool:
+        """是否存在启用的 type=abnormal 规则 (quote_service 据此决定是否定时评估)。"""
+        return any(r.get("type") == "abnormal" for r in self._rules.values())
 
     def set_strategy_engine(self, engine) -> None:
         """注入 StrategyEngine, type=strategy 规则据此跑选股。"""
@@ -374,11 +490,13 @@ class MonitorRuleEngine:
 
     # ── 规则管理 ───────────────────────────────────────
     def set_rules(self, rules: list[dict]) -> None:
-        """批量设置规则 (覆盖)。用于启动时 reload。"""
+        """批量设置规则（覆盖）；API 重载后异动状态必须重新 prime。"""
         self._rules = {}
-        for r in rules:
-            if r.get("enabled") is not False:
-                self._rules[r["id"]] = r
+        for rule in rules:
+            if rule.get("enabled") is not False:
+                self._rules[rule["id"]] = rule
+        self._abnormal_state.clear()
+        self._abnormal_rows_cache = None
         logger.info("MonitorRuleEngine: 装载 %d 条规则", len(self._rules))
 
     def add_rule(self, rule: dict) -> None:
@@ -386,15 +504,22 @@ class MonitorRuleEngine:
             self._rules[rule["id"]] = rule
         else:
             self._rules.pop(rule["id"], None)
+        self._clear_abnormal_state(rule["id"])
 
     def remove_rule(self, rule_id: str) -> None:
         self._rules.pop(rule_id, None)
         # 清理对应的 cooldown 记录
         self._last_fire = {k: v for k, v in self._last_fire.items() if k[0] != rule_id}
+        self._clear_abnormal_state(rule_id)
+
+    def _clear_abnormal_state(self, rule_id: str) -> None:
+        """规则更新/删除时清掉其全部异动边缘状态 (下次观测重新 prime)。"""
+        self._abnormal_state = {k: v for k, v in self._abnormal_state.items() if k[0] != rule_id}
 
     def clear(self) -> None:
         self._rules.clear()
         self._last_fire.clear()
+        self._abnormal_state.clear()
 
     @property
     def rules(self) -> dict[str, dict]:
@@ -414,31 +539,160 @@ class MonitorRuleEngine:
 
     # ── 评估 ───────────────────────────────────────────
     def evaluate(self, df: pl.DataFrame) -> list[dict]:
-        """行情更新后评估所有规则。
+        """评估依赖实时 enriched DataFrame 的普通规则。
 
-        Args:
-            df: 实时 enriched 数据 (~5500行, 含 signal_/csg_/指标列)
-        Returns:
-            触发的 AlertEvent dict 列表 (含 ts/rule_id/source/type/symbol/...)
+        异动规则由 :meth:`evaluate_abnormal` 独立节流执行，避免每轮行情评估重复
+        加载 90 日历史，也避免独立异动轮询重跑策略/普通规则。
         """
-        if not self._rules or df.is_empty():
+        regular_rules = [
+            rule for rule in self._rules.values() if rule.get("type", "signal") != "abnormal"
+        ]
+        if not regular_rules or df.is_empty():
             return []
 
         now = time.time()
         events: list[dict] = []
-        # 每轮重置: 只保留本次 evaluate 产出的策略结果
         self._latest_strategy_results = {}
-
-        for rule_id, rule in self._rules.items():
+        for rule in regular_rules:
             try:
                 events.extend(self._evaluate_rule(df, rule, now))
             except Exception as e:
-                logger.warning("规则评估失败 %s: %s", rule_id, e)
+                logger.warning("规则评估失败 %s: %s", rule.get("id"), e)
+        return events
 
+    def evaluate_abnormal(self) -> list[dict]:
+        """只评估交易所异动规则；由 QuoteService 约 30 秒调用一次。"""
+        abnormal_rules = [rule for rule in self._rules.values() if rule.get("type") == "abnormal"]
+        if not abnormal_rules:
+            return []
+
+        now = time.time()
+        events: list[dict] = []
+        self._abnormal_rows_cache = None
+        for rule in abnormal_rules:
+            try:
+                events.extend(self._evaluate_abnormal(rule, now))
+            except Exception as e:
+                logger.warning("异动规则评估失败 %s: %s", rule.get("id"), e)
+        return events
+
+    def _abnormal_overview_rows(self) -> list[dict] | None:
+        """本轮共享的异动检测行; loader 未装配或失败返回 None (规则整体跳过)。"""
+        if self._abnormal_rows_cache is not None:
+            return self._abnormal_rows_cache
+        if self._abnormal_loader is None:
+            return None
+        try:
+            from app.services.abnormal_moves import build_rows
+
+            stock_returns, index_returns, names, _prov = self._abnormal_loader()
+            rows = build_rows(stock_returns, index_returns, names)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("异动规则数据加载失败, 本轮跳过: %s", e)
+            rows = None
+        self._abnormal_rows_cache = rows
+        return rows
+
+    def _evaluate_abnormal(self, rule: dict, now: float) -> list[dict]:
+        """type=abnormal 规则评估: 总览行 → scope/方向/窗口/倍率过滤 → 边缘触发。
+
+        阈值倍率: rule.threshold_pct (50~150, 100=交易所阈值), 行 ratio 已按交易所
+        阈值归一, 故命中条件为 ratio * 100 >= threshold_pct。
+        """
+        all_rows = self._abnormal_overview_rows()
+        if all_rows is None:
+            return []
+
+        direction = rule.get("direction", "both")
+        window = rule.get("abnormal_window", "any")
+        threshold_pct = float(rule.get("threshold_pct", 100))
+
+        # scope 过滤: symbols/all/watchlist_group (与普通规则同口径, fail-closed)
+        scope = rule.get("scope", "symbols")
+        if scope == "symbols":
+            syms = set(rule.get("symbols", []))
+            rows = [r for r in all_rows if r["symbol"] in syms]
+        elif scope == "watchlist_group":
+            members = _group_members_or_none(self._data_dir, rule)
+            rows = [r for r in all_rows if r["symbol"] in (members or frozenset())]
+        elif scope == "all":
+            rows = list(all_rows)
+        else:
+            logger.warning(
+                "异动规则 %s scope=%r 不支持, fail-closed 跳过",
+                rule.get("id"),
+                scope,
+            )
+            return []
+
+        if window != "any":
+            rows = [r for r in rows if r["window"] == window]
+
+        # 不先丢弃反方向观测；反方向必须把同一 symbol/window 的边缘状态
+        # 重置为 False，之后重新进入目标方向才能产生 false→true 告警。
+        # 边缘触发状态机 (每轮对全部观测 key 记录 above 状态):
+        #   越线 = ratio*100 >= threshold_pct (含等号)
+        #   首次观测 (prev None) → prime, 不告警 (无论 above 与否)
+        #   prev False → above  → false→true 边缘, cooldown 后告警
+        #   prev True  → above  → 持续越线, 不重复告警
+        #   above → False      → re-arm, 下次越线可再告警
+        events: list[dict] = []
+        cooldown = rule.get("cooldown_seconds", 3600)
+        severity = rule.get("severity", "info")
+        for r in sorted(rows, key=lambda x: (x["symbol"], x["window"])):
+            key = (rule["id"], r["symbol"], r["window"])
+            direction_matches = direction == "both" or r["direction"] == direction
+            above = direction_matches and r["ratio"] * 100 >= threshold_pct
+            prev = self._abnormal_state.get(key)
+            self._abnormal_state[key] = above
+            if prev is None or prev is True or not above:
+                continue
+            # prev is False and above → false→true 边缘, 走 cooldown 后告警
+            sym = r["symbol"]
+            ck = (rule["id"], sym)
+            last = self._last_fire.get(ck)
+            if last is not None and (now - last) < cooldown:
+                continue
+            self._last_fire[ck] = now
+            sign = "+" if r["deviation_pct"] >= 0 else ""
+            name = r.get("name") or self._name_map.get(sym, "")
+            message = (
+                f"{name or sym} {r['window']}偏离{sign}{r['deviation_pct']:.1f}% "
+                f"(阈值{r['threshold_pct']:.0f}%, 基准{r['benchmark_symbol']}) · "
+                f"交易所规则近似监测"
+            )
+            ev = {
+                "ts": int(now * 1000),
+                "rule_id": rule["id"],
+                "rule_name": rule.get("name", ""),
+                "source": "abnormal",
+                "type": f"abnormal_{r['direction']}_{r['window']}",
+                "symbol": sym,
+                "name": name,
+                "message": rule.get("message", "") or message,
+                "price": None,
+                "change_pct": None,
+                "signals": [f"deviate_{r['window']}"],
+                "severity": severity,
+                "conditions": [],
+                "logic": "and",
+            }
+            events.append(ev)
+            _push_rule_webhook(rule, ev)
+            if self._alert_handler:
+                try:
+                    self._alert_handler(ev)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("alert handler failed: %s", e)
         return events
 
     def _evaluate_rule(self, df: pl.DataFrame, rule: dict, now: float) -> list[dict]:
         """评估单条规则,返回触发的 events。"""
+        rtype = rule.get("type", "signal")
+        # 交易所异动规则: 不依赖实时 DataFrame (历史偏离 + 指数实时修正), 走独立路径
+        if rtype == "abnormal":
+            return self._evaluate_abnormal(rule, now)
+
         # 1. 按 scope 过滤作用域
         scoped = self._apply_scope(df, rule)
         if scoped.is_empty():
@@ -448,7 +702,6 @@ class MonitorRuleEngine:
         #    元组格式: (event_type, symbol, name, price, pct, signals)
         hit_rows: list[tuple[str, str, Any, Any, Any, list[str]]] = []
 
-        rtype = rule.get("type", "signal")
         if rtype == "strategy":
             # 策略类型: 跑策略选股 → 对比上期选股池 → 产出 new_entry/dropped 事件
             hit_rows = self._match_strategy(scoped, rule)
@@ -485,9 +738,15 @@ class MonitorRuleEngine:
             else:
                 resolved_name = name if name else self._name_map.get(sym)
                 message = rule.get("message", "") or self._default_message(
-                    rule, ev_type=ev_type, sym=sym, name=resolved_name,
-                    pct=pct, price=price,
-                    conditions=list(rule.get("conditions", [])) if rule.get("type") != "strategy" else None,
+                    rule,
+                    ev_type=ev_type,
+                    sym=sym,
+                    name=resolved_name,
+                    pct=pct,
+                    price=price,
+                    conditions=list(rule.get("conditions", []))
+                    if rule.get("type") != "strategy"
+                    else None,
                 )
 
             ev = {
@@ -518,15 +777,17 @@ class MonitorRuleEngine:
 
         return events
 
-    @staticmethod
-    def _apply_scope(df: pl.DataFrame, rule: dict) -> pl.DataFrame:
+    def _apply_scope(self, df: pl.DataFrame, rule: dict) -> pl.DataFrame:
         """按 scope 过滤作用域 DataFrame (fail-closed)。
 
         安全策略 — 任何不支持的 scope 都返回空, 绝不退化为全市场:
-          - scope=all      → 全市场 (显式允许)
-          - scope=symbols  → 仅指定股票; symbols 为空则空
-          - scope=sector   → 未提供精确板块过滤, 返回空
-          - 未知 scope     → 返回空
+          - scope=all             → 全市场 (显式允许)
+          - scope=symbols         → 仅指定股票; symbols 为空则空
+          - scope=watchlist_group → 动态读取自选分组成员; 每轮评估从
+            self._data_dir 实时读取 (带版本号缓存); data_dir 缺失/组不存在/
+            已删除/为空/读取失败 → 返回空, 绝不退化为全市场
+          - scope=sector          → 未提供精确板块过滤, 返回空
+          - 未知 scope            → 返回空
         历史已保存的 sector 规则不允许保存(validate 拒绝), 但存量文件可能仍含
         sector; 此处保证它不会被当作全市场执行。
         """
@@ -538,16 +799,24 @@ class MonitorRuleEngine:
             if not syms:
                 return df.head(0)
             return df.filter(pl.col("symbol").is_in(syms))
+        if scope == "watchlist_group":
+            members = _group_members_or_none(self._data_dir, rule)
+            if not members:
+                return df.head(0)
+            return df.filter(pl.col("symbol").is_in(list(members)))
         # sector 或任何未知 scope: fail-closed, 返回空 (不当全市场执行)
         logger.warning(
             "MonitorRuleEngine._apply_scope: 规则 %s scope=%r 不支持精确过滤, "
             "fail-closed 返回空 (不退化为全市场)",
-            rule.get("id"), scope,
+            rule.get("id"),
+            scope,
         )
         return df.head(0)
 
     def _match_strategy(
-        self, df: pl.DataFrame, rule: dict,
+        self,
+        df: pl.DataFrame,
+        rule: dict,
     ) -> list[tuple[str, str, Any, Any, Any, list[str]]]:
         """策略类型评估: 跑策略选股 → 对比上期选股池 → 产出变更事件。
 
@@ -600,9 +869,7 @@ class MonitorRuleEngine:
                 if "date" in hist_df.columns:
                     hist_df = hist_df.filter(pl.col("date") != today)
                 # 拼接历史窗口 + 今日实时行情 (filter_history 用 .over("symbol") 窗口, 多日天然可用)
-                run_kwargs["precomputed_history"] = pl.concat(
-                    [hist_df, df], how="diagonal_relaxed"
-                )
+                run_kwargs["precomputed_history"] = pl.concat([hist_df, df], how="diagonal_relaxed")
             except Exception as e:
                 logger.warning("策略 %s 加载历史窗口失败, 跳过: %s", sid, e)
                 return []
@@ -620,12 +887,15 @@ class MonitorRuleEngine:
         # 与下面的 diff 事件无关 — 无论是否产生 new_entry/dropped, 结果都该可用于回显。
         try:
             import math
+
             self._latest_strategy_results[sid] = {
                 "total": result.total,
                 "as_of": str(_dt.date.today()),
                 "rows": [
-                    {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
-                     for k, v in row.items()}
+                    {
+                        k: (None if isinstance(v, float) and not math.isfinite(v) else v)
+                        for k, v in row.items()
+                    }
                     for row in result.rows
                 ],
             }
@@ -705,7 +975,8 @@ class MonitorRuleEngine:
 
     @staticmethod
     def _match_conditions(
-        df: pl.DataFrame, rule: dict,
+        df: pl.DataFrame,
+        rule: dict,
     ) -> list[tuple[str, Any, Any, Any, list[str]]]:
         """按 conditions + logic 匹配,返回命中行 [(symbol,name,price,pct,signals)]。"""
         conditions = rule.get("conditions", [])
@@ -721,15 +992,21 @@ class MonitorRuleEngine:
             pct = row.get("change_pct")
             # 收集命中的信号列名 (仅 op=truth 且为真的)
             hit_sigs = [
-                c["field"] for c in conditions
-                if c.get("op") == "truth" and row.get(c["field"])
+                c["field"] for c in conditions if c.get("op") == "truth" and row.get(c["field"])
             ]
             results.append((sym, name, price, pct, hit_sigs))
         return results
 
-    def _default_message(self, rule: dict, ev_type: str = "", sym: str = "",
-                          name: str = "", pct: Any = None, price: Any = None,
-                          conditions: list[dict] | None = None) -> str:
+    def _default_message(
+        self,
+        rule: dict,
+        ev_type: str = "",
+        sym: str = "",
+        name: str = "",
+        pct: Any = None,
+        price: Any = None,
+        conditions: list[dict] | None = None,
+    ) -> str:
         """生成默认 message。
 
         - strategy: 按变更方向生成 (进入/移出 + 涨跌幅)

@@ -2,6 +2,7 @@
 
 全部落 tmp_path, 不读行情不写真实 data/。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -81,9 +82,7 @@ def test_create_maps_all_fields(tmp_path: Path):
 
 def test_symbols_pool_maps_to_scope_symbols(tmp_path: Path):
     """symbols 池非空 → scope=symbols + 原样列表。"""
-    BacktestRunStore(tmp_path).save(
-        _make_run("btrun00002", symbols=["510300.SH"])
-    )
+    BacktestRunStore(tmp_path).save(_make_run("btrun00002", symbols=["510300.SH"]))
     client = TestClient(_build_app(tmp_path))
 
     body = client.post("/api/backtest/runs/btrun00002/to-monitor-rule").json()

@@ -783,11 +783,12 @@ def set_structured_plan_check_enabled(enabled: bool) -> bool:
 
 # ===== 受控外部 fallback (默认关闭) =====
 # 完整契约见 backend/docs/CONTROLLED_EXTERNAL_FALLBACK_DESIGN.md 与 AGENTS.md §4。
-# realtime/depth scope 均已接线；外部数据只用于只读展示，绝不写入
-# canonical/enriched/选股/监控/回测。
+# realtime/depth/chart_live scope 均已接线；外部数据只用于只读展示，绝不写入
+# canonical/enriched/选股/监控/回测。chart_live 仅限当前 CN 交易日 A 股
+# 单标的图表的临时分时兜底 (腾讯分时源)。
 
-# 合法 scope 白名单 (契约: 仅 realtime/depth 子集)。
-_EXTERNAL_FALLBACK_SCOPES_ALLOWED = ("realtime", "depth")
+# 合法 scope 白名单 (契约: realtime/depth/chart_live 子集)。
+_EXTERNAL_FALLBACK_SCOPES_ALLOWED = ("realtime", "depth", "chart_live")
 
 
 def get_external_fallback_enabled() -> bool:
@@ -796,10 +797,9 @@ def get_external_fallback_enabled() -> bool:
 
 
 def get_external_fallback_scopes() -> list[str]:
-    """已启用的 fallback scope 子集 (realtime/depth 白名单内), 去重保序。
+    """已启用的 fallback scope 子集 (realtime/depth/chart_live 白名单内), 去重保序。
 
     默认空列表 (即便 enabled=True, 也需 scope 显式包含才触发)。
-    非白名单值被静默过滤 (读取侧防御; 写入侧 400 拒绝)。
     """
     stored = load().get("external_fallback_scopes", []) or []
     seen: set[str] = set()

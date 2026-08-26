@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import polars as pl
@@ -60,9 +60,16 @@ def test_run_now_local_mode_skips_raw_sync_and_runs_local_pipeline(tmp_path, mon
     monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_hk", lambda: False)
     monkeypatch.setattr(preferences, "get_minute_sync_enabled", lambda: False)
     monkeypatch.setattr(preferences, "get_minute_sync_days", lambda: 5)
-    monkeypatch.setattr(daily_pipeline.kline_sync, "sync_and_persist_daily_batch", lambda *a, **k: calls.__setitem__("raw", calls["raw"] + 1))
+    monkeypatch.setattr(
+        daily_pipeline.kline_sync,
+        "sync_and_persist_daily_batch",
+        lambda *a, **k: calls.__setitem__("raw", calls["raw"] + 1),
+    )
     monkeypatch.setattr("app.data_providers.get_provider", lambda name: object())
-    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda capability=None: "fquant_local",
+    )
     fresh = date(2026, 7, 3)
     monkeypatch.setattr(
         daily_pipeline,
@@ -105,7 +112,10 @@ def test_run_now_marks_minute_catalog_failure_as_degraded(tmp_path, monkeypatch)
     monkeypatch.setattr(preferences, "get_minute_sync_enabled", lambda: True)
     monkeypatch.setattr(preferences, "get_minute_sync_days", lambda: 5)
     monkeypatch.setattr("app.data_providers.get_provider", lambda name: object())
-    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda capability=None: "fquant_local",
+    )
     monkeypatch.setattr(daily_pipeline, "run_pipeline_local", lambda *args, **kwargs: 7)
     monkeypatch.setattr(
         daily_pipeline.kline_sync,
@@ -211,13 +221,14 @@ def test_bootstrap_local_enriched_skips_incomplete_new_date(tmp_path, monkeypatc
     monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_a_share", lambda: True)
     monkeypatch.setattr(daily_pipeline, "_provider_freshness_date", lambda: date(2026, 7, 3))
     monkeypatch.setattr(daily_pipeline, "_local_daily_coverage_ok", lambda target: False)
-    monkeypatch.setattr(daily_pipeline, "run_now", lambda *a, **k: calls.__setitem__("run", calls["run"] + 1))
+    monkeypatch.setattr(
+        daily_pipeline, "run_now", lambda *a, **k: calls.__setitem__("run", calls["run"] + 1)
+    )
 
     result = daily_pipeline.bootstrap_local_enriched_if_stale(repo, CapabilitySet())
 
     assert result["reason"] == "incomplete"
     assert calls["run"] == 0
-
 
 
 def test_bootstrap_ignores_unconfirmed_future_partition_without_deleting_it(
@@ -258,11 +269,8 @@ def test_bootstrap_ignores_unconfirmed_future_partition_without_deleting_it(
         "enriched": "2026-07-03",
     }
     assert published == [date(2026, 7, 3)]
-    assert (
-        tmp_path
-        / "kline_daily_enriched"
-        / "date=2026-07-04"
-    ).exists()
+    assert (tmp_path / "kline_daily_enriched" / "date=2026-07-04").exists()
+
 
 def test_bootstrap_local_enriched_runs_when_fresh_complete(tmp_path, monkeypatch):
     refreshed = {"ok": False}
@@ -276,10 +284,15 @@ def test_bootstrap_local_enriched_runs_when_fresh_complete(tmp_path, monkeypatch
     monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_a_share", lambda: True)
     monkeypatch.setattr(daily_pipeline, "_provider_freshness_date", lambda: date(2026, 7, 3))
     monkeypatch.setattr(daily_pipeline, "_local_daily_coverage_ok", lambda target: True)
-    monkeypatch.setattr(daily_pipeline, "_local_partition_coverage_ok", lambda repo, previous, target: True)
+    monkeypatch.setattr(
+        daily_pipeline, "_local_partition_coverage_ok", lambda repo, previous, target: True
+    )
     monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: ["600519.SH"])
     monkeypatch.setattr("app.data_providers.get_provider", lambda name: object())
-    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda capability=None: "fquant_local",
+    )
     monkeypatch.setattr(daily_pipeline, "run_pipeline_local_incremental", lambda *a, **k: 5)
 
     result = daily_pipeline.bootstrap_local_enriched_if_stale(repo, CapabilitySet())
@@ -301,10 +314,15 @@ def test_bootstrap_local_enriched_rejects_partial_partition(tmp_path, monkeypatc
     monkeypatch.setattr(daily_pipeline._prefs, "get_pipeline_pull_a_share", lambda: True)
     monkeypatch.setattr(daily_pipeline, "_provider_freshness_date", lambda: date(2026, 7, 3))
     monkeypatch.setattr(daily_pipeline, "_local_daily_coverage_ok", lambda target: True)
-    monkeypatch.setattr(daily_pipeline, "_local_partition_coverage_ok", lambda repo, previous, target: False)
+    monkeypatch.setattr(
+        daily_pipeline, "_local_partition_coverage_ok", lambda repo, previous, target: False
+    )
     monkeypatch.setattr(daily_pipeline, "_resolve_universe", lambda capset: ["600519.SH"])
     monkeypatch.setattr("app.data_providers.get_provider", lambda name: object())
-    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda capability=None: "fquant_local",
+    )
     monkeypatch.setattr(daily_pipeline, "run_pipeline_local_incremental", lambda *a, **k: 1)
 
     result = daily_pipeline.bootstrap_local_enriched_if_stale(repo, CapabilitySet())
@@ -317,10 +335,15 @@ def test_bootstrap_local_enriched_rejects_partial_partition(tmp_path, monkeypatc
 def test_local_daily_coverage_gate_requires_most_sample_symbols(monkeypatch):
     class Provider:
         def get_daily(self, symbols, start, end, asset_type):
-            return pl.DataFrame({"symbol": ["A", "B"], "date": [date(2026, 7, 3), date(2026, 7, 3)]})
+            return pl.DataFrame(
+                {"symbol": ["A", "B"], "date": [date(2026, 7, 3), date(2026, 7, 3)]}
+            )
 
     monkeypatch.setattr("app.data_providers.get_provider", lambda name: Provider())
-    monkeypatch.setattr("app.data_providers.registry.get_active_provider_name", lambda capability=None: "fquant_local")
+    monkeypatch.setattr(
+        "app.data_providers.registry.get_active_provider_name",
+        lambda capability=None: "fquant_local",
+    )
 
     assert daily_pipeline._local_daily_coverage_ok(date(2026, 7, 3), ("A", "B", "C")) is False
     assert daily_pipeline._local_daily_coverage_ok(date(2026, 7, 3), ("A", "B")) is True
@@ -335,11 +358,16 @@ def test_local_partition_coverage_compares_previous_day(tmp_path):
     pl.DataFrame({"symbol": ["A", "B"]}).write_parquet(target / "part.parquet")
     repo = SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path))
 
-    assert daily_pipeline._local_partition_coverage_ok(repo, date(2026, 7, 2), date(2026, 7, 3)) is False
+    assert (
+        daily_pipeline._local_partition_coverage_ok(repo, date(2026, 7, 2), date(2026, 7, 3))
+        is False
+    )
 
     pl.DataFrame({"symbol": ["A", "B", "C", "D"]}).write_parquet(target / "part.parquet")
-    assert daily_pipeline._local_partition_coverage_ok(repo, date(2026, 7, 2), date(2026, 7, 3)) is True
-
+    assert (
+        daily_pipeline._local_partition_coverage_ok(repo, date(2026, 7, 2), date(2026, 7, 3))
+        is True
+    )
 
 
 def test_provider_refresh_fstore_clients_refreshes_both(monkeypatch):
@@ -466,3 +494,37 @@ def test_run_tracked_marks_kind_and_invalidates_terminal_status_cache(tmp_path, 
     assert job["kind"] == "daily_pipeline"
     assert job["stage"] == "init"
     assert invalidated == [True]
+
+
+def test_run_tracked_reaps_stalled_job_without_releasing_live_worker_slot(tmp_path, monkeypatch):
+    from app.services import pipeline_jobs
+    from app.services.pipeline_jobs import JobStore, STALL_TIMEOUT_S
+
+    store = JobStore(store_dir=tmp_path)
+    stale_id, _ = store.create(kind="daily_pipeline")
+    stale_owner = store.start(stale_id)
+    stale_at = (datetime.now(timezone.utc) - timedelta(seconds=STALL_TIMEOUT_S + 60)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    store._active_jobs[stale_id]["started_at"] = stale_at
+    store._active_jobs[stale_id]["last_progress_at"] = stale_at
+
+    monkeypatch.setattr(pipeline_jobs, "job_store", store)
+    monkeypatch.setattr("app.api.data.invalidate_job_status_cache", lambda: None)
+    called = []
+
+    daily_pipeline._run_tracked(
+        lambda *, on_progress: called.append(True) or {"instruments_rows": 1},
+        "daily_pipeline",
+    )
+
+    jobs_by_id = {job["id"]: job for job in store.list_recent(limit=2)}
+    assert called == []
+    stale_job = jobs_by_id[stale_id]
+    blocked_job = next(job for job_id, job in jobs_by_id.items() if job_id != stale_id)
+    assert blocked_job["status"] == "failed"
+    assert "占用执行槽" in blocked_job["error"]
+    assert stale_job["status"] == "failed"
+    assert "无进度" in stale_job["error"]
+    assert store.execution_owner() == stale_id
+    store.release(stale_id, stale_owner)

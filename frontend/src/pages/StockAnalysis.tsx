@@ -108,11 +108,13 @@ export function StockAnalysis() {
               <button
                 onClick={() => setPreviewSymbol(symbol)}
                 title="查看个股日 K 详情"
-                className="group flex items-center gap-2 text-sm rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-elevated transition-colors"
+                aria-label={`查看 ${name || symbol} ${symbol} 的日 K 详情`}
+                className="group flex items-center gap-2 text-sm rounded-md px-2 py-1 -mx-1.5 border border-sky-500/20 bg-sky-500/5 hover:bg-elevated hover:border-sky-500/35 transition-colors"
               >
                 <span className="text-foreground font-medium group-hover:text-sky-300 transition-colors">{name || symbol}</span>
                 <span className="text-[10px] font-mono text-muted">{symbol}</span>
-                <ExternalLink className="h-3 w-3 text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                <span className="text-[11px] text-sky-300/90 whitespace-nowrap">日 K 详情</span>
+                <ExternalLink className="h-3 w-3 text-sky-300/80" aria-hidden="true" />
               </button>
               <button
                 onClick={handleAnalyze}

@@ -23,7 +23,7 @@ async def test_month_extend_is_not_blocked_by_capability_gate(monkeypatch):
         scheduled.append(coro)
         coro.close()
 
-    monkeypatch.setattr(job_store, "create", lambda: "job-1")
+    monkeypatch.setattr(job_store, "create", lambda **_kw: ("job-1", True))
     monkeypatch.setattr(job_store, "get", lambda _job_id: None)
     monkeypatch.setattr(asyncio, "create_task", discard_task)
 
