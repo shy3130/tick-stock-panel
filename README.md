@@ -273,6 +273,7 @@ git pull
 - fstore 财务表 + 东方财富 forecast fallback,覆盖利润表 / 资产负债表 / 现金流 / 指标 / 业绩预告
 - 个股、财务、复盘、策略生成等入口支持 AI 辅助
 - AI 配置支持多 profile:OpenAI 兼容接口、ACP(Hermes 等)、Codex CLI;可设置全局默认并按功能选择
+- **AI 短线池**：在 `/agent` 选择「AI短线池」示例即可运行服务端固定的 `short_momentum_quality_v1`；只读取最新可信 canonical 日线，可请求 `limit=5..12`，实际返回 `0..limit` 只带完整条件证据的研究观察标的。候选、排序和证据由确定性结果卡展示，Agent 最终摘要不枚举候选；结果为 request-local，不写 user_data artifact；可查看个股、批量加自选或显式送策略回测，不自动启动研究/监控，也不构成投资建议。
 
 ### 🧰 数据与扩展
 

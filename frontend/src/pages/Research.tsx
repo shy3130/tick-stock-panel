@@ -12,6 +12,7 @@ import {
   FlaskConical,
   Loader2,
   Pencil,
+  ScanSearch,
   Play,
   Plus,
   RefreshCw,
@@ -24,6 +25,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { AnalysisPanel } from '@/components/research/AnalysisPanel'
 import { MarketDataPanel } from '@/components/research/MarketDataPanel'
 import { PageHeader } from '@/components/PageHeader'
+import { TSuitabilityPanel } from '@/components/research/TSuitabilityPanel'
 import { toast } from '@/components/Toast'
 import {
   api,
@@ -63,7 +65,7 @@ const SCHEDULE_TEMPLATES: { value: ResearchScheduleTemplate; label: string; hint
   { value: 'strategy_pool_weekly', label: '策略池周报', hint: '统计策略池与既有 Run Card' },
 ]
 
-type ResearchTab = 'hypotheses' | 'schedules' | 'market-data' | 'analysis'
+type ResearchTab = 'hypotheses' | 'schedules' | 'market-data' | 'analysis' | 't-suitability'
 
 type HypothesisDraft = {
   title: string
@@ -167,10 +169,21 @@ export function Research() {
         <TabButton active={tab === 'analysis'} icon={BarChart3} onClick={() => setTab('analysis')}>
           分析计算
         </TabButton>
+        <TabButton active={tab === 't-suitability'} icon={ScanSearch} onClick={() => setTab('t-suitability')}>
+          做T适用性
+        </TabButton>
       </div>
       <main className="workspace-content min-h-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-6xl">
-          {tab === 'hypotheses' ? <HypothesesPanel /> : tab === 'schedules' ? <SchedulesPanel /> : tab === 'market-data' ? <MarketDataPanel /> : <AnalysisPanel />}
+          {tab === 'hypotheses'
+            ? <HypothesesPanel />
+            : tab === 'schedules'
+              ? <SchedulesPanel />
+              : tab === 'market-data'
+                ? <MarketDataPanel />
+                : tab === 'analysis'
+                  ? <AnalysisPanel />
+                  : <TSuitabilityPanel />}
         </div>
       </main>
     </div>

@@ -30,6 +30,7 @@ from app.api import (
     kline,
     market_data,
     market_recap,
+    market_state,
     monitor_rules,
     alerts,
     overview,
@@ -371,8 +372,9 @@ app.include_router(pipeline.router)
 app.include_router(research.router)
 app.include_router(cross_section.router)
 app.include_router(research_analysis.router)
-app.include_router(data.router)
 app.include_router(market_data.router)
+app.include_router(market_state.router)
+app.include_router(data.router)
 app.include_router(documents.router)
 app.include_router(ext_data.router)
 app.include_router(financials.router)

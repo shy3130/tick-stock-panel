@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.services.research_registry import ResearchStore
-from app.services.scheduled_research import ScheduledResearchStore, register_jobs, run_schedule
+from app.services.scheduled_research import (
+    ScheduledResearchStore,
+    register_jobs,
+    run_schedule,
+)
+from app.services.short_pool import (
+    MAX_LIMIT,
+    MIN_LIMIT,
+    T_RESEARCH_RESERVED_TAGS,
+    build_t_research_hypothesis,
+    run_short_pool,
+)
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -14,6 +27,14 @@ class HypothesisIn(BaseModel):
     thesis: str
     status: str = "exploring"
     tags: list[str] = []
+
+
+class TResearchConfirmIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pool_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    as_of: date
+    limit: StrictInt = Field(ge=MIN_LIMIT, le=MAX_LIMIT)
 
 
 class HypothesisPatch(BaseModel):
@@ -50,12 +71,18 @@ def _store(request: Request) -> ResearchStore:
     return ResearchStore(data_dir)
 
 
+def _has_reserved_t_research_tag(tags: list[str]) -> bool:
+    return any(tag in T_RESEARCH_RESERVED_TAGS or tag.startswith("short_pool:") for tag in tags)
+
+
 def _schedule_store(request: Request) -> ScheduledResearchStore:
     return ScheduledResearchStore(request.app.state.repo.store.data_dir)
 
 
 def _refresh_scheduler(request: Request) -> None:
-    register_jobs(getattr(request.app.state, "scheduler", None), _schedule_store(request), request.app.state)
+    register_jobs(
+        getattr(request.app.state, "scheduler", None), _schedule_store(request), request.app.state
+    )
 
 
 @router.get("/hypotheses")
@@ -68,10 +95,45 @@ def list_hypotheses(request: Request, status: str | None = None, query: str | No
 
 @router.post("/hypotheses")
 def create_hypothesis(body: HypothesisIn, request: Request):
+    if _has_reserved_t_research_tag(body.tags):
+        raise HTTPException(
+            status_code=400,
+            detail="做T研究系统标签只能通过显式确认入口创建",
+        )
     try:
-        return _store(request).create_hypothesis(body.title, body.thesis, body.status, body.tags).__dict__
+        return (
+            _store(request)
+            .create_hypothesis(body.title, body.thesis, body.status, body.tags)
+            .__dict__
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/t-suitability/hypotheses")
+def confirm_t_research_hypothesis(body: TResearchConfirmIn, request: Request):
+    """重算观察池与 T-1 市场门禁后，唯一写入一条 exploring 研究假设。"""
+    try:
+        pool = run_short_pool(request.app.state, limit=body.limit)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="做T研究确认所需数据暂不可用",
+        ) from exc
+    if pool["pool_id"] != body.pool_id or pool["as_of"] != body.as_of.isoformat():
+        raise HTTPException(
+            status_code=409,
+            detail="短线观察池已变化，请刷新后重新确认",
+        )
+    try:
+        hypothesis = build_t_research_hypothesis(pool)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return (
+        _store(request)
+        .create_or_get_hypothesis_by_tag(f"short_pool:{pool['pool_id']}", **hypothesis)
+        .__dict__
+    )
 
 
 @router.get("/hypotheses/{hyp_id}")
@@ -84,8 +146,24 @@ def get_hypothesis(hyp_id: str, request: Request):
 
 @router.patch("/hypotheses/{hyp_id}")
 def update_hypothesis(hyp_id: str, body: HypothesisPatch, request: Request):
+    if body.tags is not None and _has_reserved_t_research_tag(body.tags):
+        raise HTTPException(
+            status_code=400,
+            detail="做T研究系统标签只能通过显式确认入口创建",
+        )
+    store = _store(request)
     try:
-        return _store(request).update_hypothesis(hyp_id, **body.model_dump(exclude_unset=True)).__dict__
+        existing = store.get_hypothesis(hyp_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="hypothesis not found") from e
+    patch = body.model_dump(exclude_unset=True)
+    if _has_reserved_t_research_tag(existing.tags) and set(patch) - {"status"}:
+        raise HTTPException(
+            status_code=400,
+            detail="做T研究系统假设的标题/论点/标签为固定协议，仅允许更新状态",
+        )
+    try:
+        return store.update_hypothesis(hyp_id, **patch).__dict__
     except KeyError as e:
         raise HTTPException(status_code=404, detail="hypothesis not found") from e
     except ValueError as e:
@@ -118,7 +196,9 @@ def list_schedules(request: Request):
 @router.post("/schedules")
 def create_schedule(body: ScheduleIn, request: Request):
     try:
-        item = _schedule_store(request).create(body.name, body.template, body.cron, body.enabled, body.params)
+        item = _schedule_store(request).create(
+            body.name, body.template, body.cron, body.enabled, body.params
+        )
         _refresh_scheduler(request)
         return item.__dict__
     except ValueError as e:
