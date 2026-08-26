@@ -107,14 +107,36 @@ EvidenceValue = Union[str, int, float, bool, None]
 
 # ── symbol 规范化 ──────────────────────────────────────────────
 # canonical 形式: 6 位数字。输入可选 sh/sz/bj 前缀(可带点)或 .SH/.SZ/.BJ
-# 后缀(大小写不敏感); 其余形式(含空白)一律拒绝, 不做静默清洗。
+# 后缀(大小写不敏感)。带 exchange 限定时必须通过一致性校验: 前缀与后缀
+# 同时出现要互相一致, 且与代码所属市场吻合; 600000.SZ / 000001.SH 这类
+# 错配直接拒绝, 绝不静默丢弃 exchange 后让后续 reader 评估到另一个标的。
+# 其余形式(含空白)一律拒绝, 不做静默清洗。
 _SYMBOL_RE = re.compile(
-    r"^(?:(?:SH|SZ|BJ)\.?)?(\d{6})(?:\.(?:SH|SZ|BJ))?$", re.IGNORECASE
+    r"^(?:(SH|SZ|BJ)\.?)?(\d{6})(?:\.(SH|SZ|BJ))?$", re.IGNORECASE
+)
+
+# 6 位代码前缀 → 所属市场(仅覆盖 A 股股票板块; 未覆盖前缀视为无法验证,
+# 带 exchange 限定时 fail-closed 拒绝)。
+_MARKET_BY_CODE_PREFIX: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("SH", ("60", "68", "90")),
+    ("SZ", ("00", "20", "30")),
+    ("BJ", ("43", "83", "87", "92")),
 )
 
 
+def _market_for_code(code: str) -> str | None:
+    for market, prefixes in _MARKET_BY_CODE_PREFIX:
+        if code.startswith(prefixes):
+            return market
+    return None
+
+
 def canonicalize_symbol(raw: str) -> str:
-    """把输入 symbol 规范化为 6 位数字 canonical 形式; 非法输入 fail-closed。"""
+    """把输入 symbol 规范化为 6 位数字 canonical 形式; 非法输入 fail-closed。
+
+    exchange 限定与代码所属市场不一致、前后缀互相矛盾、或代码市场无法
+    验证时直接拒绝, 不静默丢弃 exchange 信息。
+    """
     if not isinstance(raw, str):
         raise ValueError(f"symbol must be a string, got {type(raw).__name__}")
     match = _SYMBOL_RE.match(raw)
@@ -123,8 +145,26 @@ def canonicalize_symbol(raw: str) -> str:
             f"non-canonical symbol {raw!r}: expected 6-digit code, "
             "optionally prefixed sh/sz/bj or suffixed .SH/.SZ/.BJ"
         )
-    return match.group(1)
-
+    prefix, code, suffix = match.group(1), match.group(2), match.group(3)
+    if prefix and suffix and prefix.upper() != suffix.upper():
+        raise ValueError(
+            f"conflicting exchange qualifiers in symbol {raw!r}: "
+            f"{prefix.upper()} vs {suffix.upper()}"
+        )
+    qualifier = (prefix or suffix or "").upper() or None
+    if qualifier is not None:
+        market = _market_for_code(code)
+        if market is None:
+            raise ValueError(
+                f"symbol {raw!r}: cannot verify exchange qualifier {qualifier} "
+                f"against unknown market for code {code}"
+            )
+        if market != qualifier:
+            raise ValueError(
+                f"symbol {raw!r}: exchange qualifier {qualifier} conflicts with "
+                f"market {market} implied by code {code}"
+            )
+    return code
 
 def validate_evidence_keys(keys: Iterable[str]) -> None:
     """evidence key 禁止包含交易语义词; 违反即抛错(fail-closed)。"""
@@ -163,9 +203,16 @@ def register_reader_factory(factory: ReaderFactory) -> None:
 
 
 def resolve_weak_to_strong_reader() -> WeakToStrongReader | None:
-    """解析第一个具备完整能力的 reader；部分 reader 不遮蔽后续候选。"""
+    """解析第一个具备完整能力的 reader；部分 reader 不遮蔽后续候选。
+
+    单个工厂初始化失败按该 reader 不可用隔离处理，继续尝试后续候选；
+    全部失败时返回 None，由调用方输出 reader_missing 的结构化响应。
+    """
     for factory in tuple(_READER_FACTORIES):
-        reader = factory()
+        try:
+            reader = factory()
+        except Exception:
+            continue
         if reader is not None and set(REQUIRED_CAPABILITIES).issubset(reader.capabilities()):
             return reader
     return None
