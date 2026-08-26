@@ -7,13 +7,12 @@ import threading
 from datetime import date, datetime, timezone
 from typing import Any
 
-import httpx
-
 from app.services.ext_data import (
     ExtConfig,
     ExtConfigStore,
     rows_to_parquet,
 )
+from app.services.ext_http import ext_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +84,7 @@ async def fetch_and_ingest(
     if not pull or not pull.url:
         raise ValueError("拉取未配置或 URL 为空")
 
-    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+    async with ext_async_client() as client:
         headers = pull.headers or {}
         kwargs: dict[str, Any] = {"headers": headers}
 

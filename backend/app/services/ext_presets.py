@@ -24,6 +24,7 @@ from app.services.ext_data import (
     PullConfig,
     rows_to_parquet,
 )
+from app.services.ext_http import ext_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -214,14 +215,13 @@ def _flatten_dragon_tiger_rows(raw_rows: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# 拉取执行 (复用 httpx, 不依赖 fetch_and_ingest 的 PullConfig 路径)
+# 拉取执行 (复用 ext_http 共享客户端, 不依赖 fetch_and_ingest 的 PullConfig 路径)
 # ---------------------------------------------------------------------------
 
 async def _fetch_json(url: str) -> list[dict]:
     """请求 JSON 接口, 返回行数组。超时 30s, 失败抛异常由调用方兜底。"""
-    import httpx
 
-    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+    async with ext_async_client() as client:
         resp = await client.get(url)
         resp.raise_for_status()
         data = resp.json()

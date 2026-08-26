@@ -26,6 +26,7 @@ from app.services.ext_data import (
     rows_to_parquet,
     write_ext_parquet,
 )
+from app.services.ext_http import ext_async_client
 from app.services.ext_pull import fetch_and_ingest, pull_scheduler
 
 logger = logging.getLogger(__name__)
@@ -587,15 +588,11 @@ async def test_pull(request: Request, config_id: str):
         raise HTTPException(404, f"配置 '{config_id}' 不存在")
     if not config.pull or not config.pull.url:
         raise HTTPException(400, "拉取未配置或 URL 为空")
-
-    # 临时构建一个带新配置的 config 用于测试
-    import httpx
-
     from app.services.ext_pull import _apply_field_map, _extract_rows
 
     pull = config.pull
     try:
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+        async with ext_async_client() as client:
             headers = pull.headers or {}
             kwargs: dict = {"headers": headers}
             if pull.method.upper() == "POST" and pull.body:

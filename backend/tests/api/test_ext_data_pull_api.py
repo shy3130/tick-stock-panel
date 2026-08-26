@@ -1,9 +1,9 @@
 from types import SimpleNamespace
 
-import httpx
 import pytest
 
 from app.api import ext_data
+from app.services import ext_http
 from app.services.ext_data import ExtConfig, ExtField, PullConfig
 
 
@@ -43,7 +43,9 @@ async def test_pull_preview_does_not_inherit_environment_proxy(monkeypatch):
     )
     store = SimpleNamespace(get=lambda _config_id: config)
     monkeypatch.setattr(ext_data, "_store", lambda _request: store)
-    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setattr(ext_http.httpx, "AsyncClient", FakeClient)
 
     result = await ext_data.test_pull(SimpleNamespace(), config.id)
 

@@ -100,6 +100,8 @@ async def test_fetch_json_does_not_inherit_environment_proxy(monkeypatch):
         async def get(self, _url):
             return FakeResponse()
 
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
     rows = await _fetch_json("https://example.test/data.json")

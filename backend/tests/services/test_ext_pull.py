@@ -1,6 +1,6 @@
 import pytest
 
-from app.services import ext_pull
+from app.services import ext_http, ext_pull
 from app.services.ext_data import ExtConfig, ExtField, PullConfig
 
 
@@ -38,7 +38,9 @@ async def test_fetch_and_ingest_does_not_inherit_environment_proxy(monkeypatch, 
         fields=[ExtField("symbol")],
         pull=PullConfig(url="https://example.test/data.json"),
     )
-    monkeypatch.setattr(ext_pull.httpx, "AsyncClient", FakeClient)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setattr(ext_http.httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(ext_pull, "rows_to_parquet", lambda *_args, **_kwargs: 1)
 
     rows, snapshot_date = await ext_pull.fetch_and_ingest(config, tmp_path)
