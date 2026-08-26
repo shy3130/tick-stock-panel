@@ -14,6 +14,7 @@ payload 结构 (实测):
 必须换算为当前日期的每分钟增量行; 拒绝日期不匹配、午休/盘中时段外、解析失败
 或累计倒退。全部行 source="tencent_chart" + provisional=True, 绝不落盘。
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,6 +65,7 @@ def is_a_share_supported(symbol: str) -> bool:
     _, _, suffix = symbol.strip().upper().partition(".")
     return suffix in _A_SHARE_SUFFIXES
 
+
 def _in_a_share_session(minutes_of_day: int) -> bool:
     return (
         _MORNING_SESSION_START_MIN <= minutes_of_day <= _MORNING_SESSION_END_MIN
@@ -85,14 +87,14 @@ def to_exch_code(symbol: str) -> str | None:
 class ChartMinuteRow:
     """统一 1m 增量行 (纯展示, 绝不写入 provider/repository)。"""
 
-    datetime: str          # "YYYY-MM-DD HH:MM:00"
-    time: str              # "HH:MM"
+    datetime: str  # "YYYY-MM-DD HH:MM:00"
+    time: str  # "HH:MM"
     open: float
     high: float
     low: float
     close: float
-    volume: float          # 本分钟增量成交量 (股)
-    amount: float          # 本分钟增量成交额 (元)
+    volume: float  # 本分钟增量成交量 (股)
+    amount: float  # 本分钟增量成交额 (元)
     source: str = SOURCE_NAME
     provisional: bool = True
 
@@ -115,16 +117,17 @@ class ChartMinuteRow:
 class ChartDailyBar:
     """同源派生的当日临时日K bar (provisional, 绝不与本地 adjusted history 混写)。"""
 
-    date: str              # "YYYY-MM-DD"
+    date: str  # "YYYY-MM-DD"
     open: float
     high: float
     low: float
     close: float
-    volume: float          # 全天累计成交量 (股)
-    amount: float          # 全天累计成交额 (元)
+    volume: float  # 全天累计成交量 (股)
+    amount: float  # 全天累计成交额 (元)
     source: str = SOURCE_NAME
     provisional: bool = True
     is_live: bool = True
+    adjustment: str = "none"
 
     def as_dict(self) -> dict:
         return {
@@ -138,6 +141,7 @@ class ChartDailyBar:
             "source": self.source,
             "provisional": self.provisional,
             "is_live": self.is_live,
+            "adjustment": self.adjustment,
         }
 
 
@@ -312,9 +316,7 @@ class TencentChartSource:
     def _is_allowed(url: str) -> bool:
         host = urlparse(url).hostname
         if host not in _ALLOWED_HOSTS:
-            logger.warning(
-                "external_fallback chart rejected non-allowlisted host: %s", host
-            )
+            logger.warning("external_fallback chart rejected non-allowlisted host: %s", host)
             return False
         return True
 
@@ -343,14 +345,17 @@ class TencentChartSource:
     def _is_transient(exc: BaseException) -> bool:
         if isinstance(exc, httpx.TimeoutException):
             return True
-        if isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.NetworkError, httpx.RemoteProtocolError)):
+        if isinstance(
+            exc,
+            (httpx.ConnectError, httpx.ReadError, httpx.NetworkError, httpx.RemoteProtocolError),
+        ):
             return True
         if isinstance(exc, httpx.HTTPStatusError):
             return exc.response.status_code in _RETRYABLE_STATUS
         return False
 
     def _backoff_sleep(self, attempt: int) -> None:
-        delay = min(4.0, 0.3 * (2 ** attempt))
+        delay = min(4.0, 0.3 * (2**attempt))
         jitter = self._rng() * delay
         if jitter > 0:
             self._sleep(jitter)
@@ -430,15 +435,15 @@ class TencentChartSource:
         if text is None:
             return ChartFetchResult()
         try:
-            rows, daily = _parse_minute_payload(
-                text, exch_code=exch_code, trade_date=trade_date
-            )
+            rows, daily = _parse_minute_payload(text, exch_code=exch_code, trade_date=trade_date)
         except ValueError as exc:
             # 口径校准失败独立于网络失败；连续三次立即熔断。
             # 日志不含 URL 或原始响应。
             logger.warning(
                 "external_fallback chart payload rejected (%s %s): %s",
-                symbol, trade_date.isoformat(), exc,
+                symbol,
+                trade_date.isoformat(),
+                exc,
             )
             self._record_calibration_failure()
             return ChartFetchResult()

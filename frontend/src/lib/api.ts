@@ -350,6 +350,13 @@ export interface KlineRow {
   [key: string]: any
 }
 
+export interface ProvisionalDailyKline extends KlineRow {
+  adjustment: 'none'
+  source: 'tencent_chart'
+  provisional: true
+  is_live: true
+}
+
 // ===== Watchlist =====
 export interface WatchlistEntry {
   symbol: string
@@ -3341,6 +3348,7 @@ export const api = {
       rows: KlineRow[]
       source?: string
       adjustment?: string
+      provisional_daily?: ProvisionalDailyKline
       // 仅真正外部命中时出现; 未命中则整组缺失
       degraded?: boolean
       sources?: { chart_live?: string }

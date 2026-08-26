@@ -221,32 +221,30 @@ def _chart_live_meta(payload: dict | None) -> dict:
     return dict(payload.get("meta") or {})
 
 
-def _attach_chart_fallback_daily(
+def _chart_live_daily_response_fields(
     request: Request, symbol: str, rows: list[dict], end: date | None = None
-) -> tuple[list[dict], dict]:
-    """今日无本地/实时行时, 用 fallback 临时日K bar 追加/覆盖响应行。
+) -> dict:
+    """返回独立的未复权 provisional 日 K 字段，绝不混入 adjusted rows。
 
-    仅纯展示: 绝不与本地 adjusted history 写回或混成 canonical。
-    end < 今日 (历史范围请求) 绝不触发 (契约: 历史日期绝不触发)。
+    end < 今日的历史范围请求绝不触发；本地已有今日行时也不触发。
     """
     from app.services.external_fallback.adapter import _cn_today
 
     today = _cn_today()
     if end is not None and end < today:
-        return rows, {}
+        return {}
     today_str = today.isoformat()
-    # 本地已有今日行 (enriched/live candle 均算) → 完全不走 fallback
-    if any(str(r.get("date")) == today_str for r in rows):
-        return rows, {}
+    if any(str(row.get("date")) == today_str for row in rows):
+        return {}
 
     payload = _chart_live_fallback(request, symbol, today, local_rows_empty=True)
     meta = _chart_live_meta(payload)
     if not meta or not payload.get("daily"):
-        return rows, {}
+        return {}
     daily = dict(payload["daily"])
     daily["symbol"] = symbol
-    rows.append(daily)
-    return rows, meta
+    daily["adjustment"] = "none"
+    return {"provisional_daily": daily, **meta}
 
 
 @router.get("/minute")
@@ -353,14 +351,14 @@ def get_daily(
             logger.debug("本地模式单股 instruments 拉取失败 %s: %s", symbol, e)
         raw = provider.get_daily([symbol], start_dt, end_dt, asset_type)
         if raw.is_empty():
-            rows, fb_meta = _attach_chart_fallback_daily(request, symbol, [], end=end)
+            fb_fields = _chart_live_daily_response_fields(request, symbol, [], end=end)
             return {
                 "symbol": symbol,
                 "name": stock_name,
                 "stock_info": stock_info,
-                "rows": rows,
+                "rows": [],
                 "adjustment": _adjustment_label(symbol),
-                **fb_meta,
+                **fb_fields,
             }
         factors = pl.DataFrame()
         if asset_type == "stock":
@@ -396,8 +394,7 @@ def get_daily(
         else:
             enriched = enriched.with_columns(pl.lit(None).cast(pl.Float64).alias("main_net_inflow"))
         rows = _maybe_inject_live_candle(request, symbol, enriched.tail(days).to_dicts())
-        # 今日无本地/实时行 → chart_live fallback 临时 bar (仅 A 股当日纯展示)
-        rows, fb_meta = _attach_chart_fallback_daily(request, symbol, rows, end=end)
+        fb_fields = _chart_live_daily_response_fields(request, symbol, rows, end=end)
         resp = {
             "symbol": symbol,
             "name": stock_name,
@@ -405,7 +402,7 @@ def get_daily(
             "rows": rows,
             "source": "local_disk",
             "adjustment": _adjustment_label(symbol),
-            **fb_meta,
+            **fb_fields,
         }
         return _attach_ext(resp, repo, symbol, ext_columns)
 
@@ -418,14 +415,14 @@ def get_daily(
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"数据源拉取失败: {e}") from e
         if raw.is_empty():
-            rows, fb_meta = _attach_chart_fallback_daily(request, symbol, [], end=end)
+            fb_fields = _chart_live_daily_response_fields(request, symbol, [], end=end)
             return {
                 "symbol": symbol,
                 "name": stock_name,
                 "stock_info": stock_info,
-                "rows": rows,
+                "rows": [],
                 "adjustment": _adjustment_label(symbol),
-                **fb_meta,
+                **fb_fields,
             }
         # 拉除权因子做前复权；无能力时空 df → compute_enriched 退回未复权
         factors = pl.DataFrame()
@@ -449,9 +446,9 @@ def get_daily(
             raw, factors=factors, instruments=instruments, asset_type=asset_type
         )
         rows = enriched.tail(days).to_dicts()
-        # 即使 live 模式也尝试追加实时蜡烛
+        # 即使 live 模式也尝试追加本地同口径实时蜡烛。
         rows = _maybe_inject_live_candle(request, symbol, rows)
-        rows, fb_meta = _attach_chart_fallback_daily(request, symbol, rows, end=end)
+        fb_fields = _chart_live_daily_response_fields(request, symbol, rows, end=end)
         resp = {
             "symbol": symbol,
             "name": stock_name,
@@ -459,16 +456,15 @@ def get_daily(
             "rows": rows,
             "source": "live",
             "adjustment": _adjustment_label(symbol),
-            **fb_meta,
+            **fb_fields,
         }
         return _attach_ext(resp, repo, symbol, ext_columns)
 
     rows = df.to_dicts()
 
-    # 追加/覆盖今日实时蜡烛
+    # 追加/覆盖今日本地同口径实时蜡烛；外部未复权 bar 独立返回。
     rows = _maybe_inject_live_candle(request, symbol, rows)
-    # 今日无本地/实时行 → chart_live fallback 临时 bar (仅 A 股当日纯展示)
-    rows, fb_meta = _attach_chart_fallback_daily(request, symbol, rows, end=end)
+    fb_fields = _chart_live_daily_response_fields(request, symbol, rows, end=end)
 
     resp = {
         "symbol": symbol,
@@ -477,7 +473,7 @@ def get_daily(
         "rows": rows,
         "source": "enriched",
         "adjustment": _adjustment_label(symbol),
-        **fb_meta,
+        **fb_fields,
     }
     return _attach_ext(resp, repo, symbol, ext_columns)
 

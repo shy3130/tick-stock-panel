@@ -38,6 +38,7 @@ def test_store_creates_nested_persistence_directory(tmp_path):
     job_id, _ = store.create()
     owner = store.start(job_id)
     store.fail(job_id, "boom", owner=owner)
+    store.release(job_id, owner)
     assert (tmp_path / "nested" / "jobs" / f"{job_id}.json").exists()
 
 
@@ -61,6 +62,7 @@ def test_create_single_flight_covers_pending_and_running(tmp_path):
     # 终态后可新建
     store.progress(j1, "s", 10, "msg")
     store.succeed(j1, {"ok": True}, owner=owner)
+    store.release(j1, owner)
     j4, is_new4 = store.create()
     assert is_new4 is True
     assert j4 != j1
@@ -74,6 +76,7 @@ def test_start_cannot_reassign_running_execution_slot(tmp_path):
     assert store.start(job_id) is None
     assert store.execution_owner() == job_id
     store.fail(job_id, "done", owner=owner)
+    store.release(job_id, owner)
 
 
 def test_cancel_pending_job_lands_cancelled_terminal(tmp_path):
@@ -93,11 +96,13 @@ def test_cancel_pending_job_lands_cancelled_terminal(tmp_path):
 def test_cancel_api_persists_cancelled_terminal(monkeypatch, tmp_path):
     store = JobStore(store_dir=tmp_path)
     job_id, _ = store.create(kind="daily_pipeline")
-    store.start(job_id)
+    owner = store.start(job_id)
     monkeypatch.setattr(pipeline_api, "job_store", store)
 
     assert pipeline_api.cancel_job(job_id) == {"cancelled": job_id}
     assert store.get(job_id)["status"] == "cancelled"
+    assert store.execution_owner() == job_id
+    store.release(job_id, owner)
     with pytest.raises(HTTPException) as exc_info:
         pipeline_api.cancel_job(job_id)
     assert exc_info.value.status_code == 400
@@ -111,15 +116,23 @@ def test_cancel_running_job_cooperative_then_persisted(tmp_path):
 
     store.cancel(job_id)
 
-    # cancelled 落盘为终态, 与 failed 区分
+    # cancelled 立即落盘为终态, 但仍在运行的 worker 继续占用执行槽。
     job = store.get(job_id)
     assert job["status"] == "cancelled"
-    # 执行中的 worker 下一次 progress 感知取消
+    assert store.execution_owner() == job_id
+    # 执行中的 worker 下一次 progress 感知取消。
     with pytest.raises(JobCancelledError):
         store.progress(job_id, "sync_daily", 50, "不应到达")
-    # 旧线程的终态写被 owner guard 挡住, cancelled 不被覆盖
+    # 旧线程的终态写不能覆盖 cancelled。
     store.succeed(job_id, {"universe_size": 1}, owner=owner)
     assert store.get(job_id)["status"] == "cancelled"
+    # 旧 worker 未走 finally/release 前，新任务不得取得执行槽。
+    blocked_id, _ = store.create()
+    assert store.start(blocked_id) is None
+    assert store.get(blocked_id)["status"] == "failed"
+    assert store.execution_owner() == job_id
+    store.release(job_id, owner)
+    assert store.execution_owner() is None
 
 
 def test_job_cancelled_error_is_baseexception_not_exception(tmp_path):
@@ -265,49 +278,44 @@ def test_reap_pending_orphan_job(tmp_path):
     assert store.get(job_id)["status"] == "failed"
 
 
-def test_owner_guard_reaped_worker_cannot_overwrite_terminal(tmp_path):
-    """reap 后旧线程的 succeed/fail 不得复活或覆盖终态。"""
-    store = JobStore(store_dir=tmp_path)
-    job_id, _ = store.create()
-    owner = store.start(job_id)
-    _backdate(
-        store, job_id, started_ago_s=STALL_TIMEOUT_S + 60, progress_ago_s=STALL_TIMEOUT_S + 60
-    )
-    store.reap_stale(now=_NOW)
-    assert store.get(job_id)["status"] == "failed"
-
-    # 旧线程拿着失效 owner 试图写终态 → 全部忽略
-    store.succeed(job_id, {"universe_size": 5}, owner=owner)
-    store.fail(job_id, "late error", owner=owner)
-    store.release(job_id, owner)
-    assert store.get(job_id)["status"] == "failed"
-    assert store.get(job_id)["result"] is None
-
-
-def test_owner_guard_wrong_owner_cannot_release_new_owners_slot(tmp_path):
-    """旧 token 不能释放新任务的执行槽。"""
+def test_reaped_running_worker_retains_slot_until_release(tmp_path):
+    """reap 只收敛终态；仍可能运行的旧 worker 必须继续占用执行槽。"""
     store = JobStore(store_dir=tmp_path)
     job_id, _ = store.create()
     owner1 = store.start(job_id)
-
-    # reap 走 _finish_locked 清掉槽位; 新一轮 create/start 换新 owner
     _backdate(
         store, job_id, started_ago_s=STALL_TIMEOUT_S + 60, progress_ago_s=STALL_TIMEOUT_S + 60
     )
+
     store.reap_stale(now=_NOW)
+
+    assert store.get(job_id)["status"] == "failed"
+    assert store.execution_owner() == job_id
+    # 旧线程拿着 owner 也不能复活或覆盖磁盘终态。
+    store.succeed(job_id, {"universe_size": 5}, owner=owner1)
+    store.fail(job_id, "late error", owner=owner1)
+    assert store.get(job_id)["status"] == "failed"
+    assert store.get(job_id)["result"] is None
+    # 旧 worker 未 finally/release 前，新任务只能 fail-closed。
+    blocked_id, _ = store.create()
+    assert store.start(blocked_id) is None
+    assert store.get(blocked_id)["status"] == "failed"
+    assert store.execution_owner() == job_id
+
+    store.release(job_id, owner1)
+    assert store.execution_owner() is None
+
     job_id2, _ = store.create()
     owner2 = store.start(job_id2)
-    assert owner2 != owner1
-
-    # 旧线程 finally: 用旧 token 释放 → 不得影响新 job 的全局执行槽
+    assert owner2 is not None
+    # 错误 token 不能释放新 owner 的槽。
     store.release(job_id2, owner1)
-    store.release(job_id, owner1)
     assert store.execution_owner() == job_id2
-    # 新 owner 仍持有执行槽并正常收敛终态
-    store.progress(job_id2, "s", 10, "m")
     store.succeed(job_id2, {"minute_rows": 1}, owner=owner2)
-    assert store.execution_owner() is None
     assert store.get(job_id2)["status"] == "succeeded"
+    assert store.execution_owner() == job_id2
+    store.release(job_id2, owner2)
+    assert store.execution_owner() is None
 
 
 def test_start_returns_none_after_cancel(tmp_path):
@@ -328,6 +336,7 @@ def test_job_with_failed_stages_finishes_degraded(tmp_path):
         "failed_stages": [{"stage": "sync_minute", "error": "catalog stale"}],
     }
     store.succeed(job_id, result, owner=owner)
+    store.release(job_id, owner)
 
     job = store.get(job_id)
     assert job is not None
@@ -342,6 +351,7 @@ def test_job_kind_is_persisted_in_terminal_summary(tmp_path):
     job_id, _ = store.create(kind="daily_pipeline")
     owner = store.start(job_id)
     store.fail(job_id, "failed before first progress event", owner=owner)
+    store.release(job_id, owner)
 
     job = store.list_recent(limit=1)[0]
     assert job["kind"] == "daily_pipeline"

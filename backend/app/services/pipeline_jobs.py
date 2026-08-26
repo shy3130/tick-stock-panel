@@ -275,7 +275,7 @@ class JobStore:
     def _finish_locked(
         self, job_id: str, status: str, *, error: str | None = None, result: Any = None
     ) -> dict[str, Any]:
-        """(调用方须持锁)收敛终态: 弹出内存、清理槽位、落盘。返回终态 job。"""
+        """(调用方须持锁)收敛终态并落盘；执行槽仅由 owner 的 release() 释放。"""
         j = self._active_jobs.pop(job_id, None)
         if not j:
             return {}
@@ -289,9 +289,6 @@ class JobStore:
         j["duration_s"] = _duration_s(j)
         if self._active_id == job_id:
             self._active_id = None
-        if self._run_owner_job_id == job_id:
-            self._run_owner_job_id = None
-            self._run_owner_token = None
         self._delete_oldest()
         self._write_file(j)
         return j

@@ -496,13 +496,13 @@ def test_run_tracked_marks_kind_and_invalidates_terminal_status_cache(tmp_path, 
     assert invalidated == [True]
 
 
-def test_run_tracked_reaps_stalled_job_before_scheduling(tmp_path, monkeypatch):
+def test_run_tracked_reaps_stalled_job_without_releasing_live_worker_slot(tmp_path, monkeypatch):
     from app.services import pipeline_jobs
     from app.services.pipeline_jobs import JobStore, STALL_TIMEOUT_S
 
     store = JobStore(store_dir=tmp_path)
     stale_id, _ = store.create(kind="daily_pipeline")
-    store.start(stale_id)
+    stale_owner = store.start(stale_id)
     stale_at = (datetime.now(timezone.utc) - timedelta(seconds=STALL_TIMEOUT_S + 60)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
@@ -511,14 +511,20 @@ def test_run_tracked_reaps_stalled_job_before_scheduling(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipeline_jobs, "job_store", store)
     monkeypatch.setattr("app.api.data.invalidate_job_status_cache", lambda: None)
+    called = []
 
     daily_pipeline._run_tracked(
-        lambda *, on_progress: {"instruments_rows": 1},
+        lambda *, on_progress: called.append(True) or {"instruments_rows": 1},
         "daily_pipeline",
     )
 
-    jobs = store.list_recent(limit=2)
-    assert jobs[0]["status"] == "succeeded"
-    assert jobs[1]["id"] == stale_id
-    assert jobs[1]["status"] == "failed"
-    assert "无进度" in jobs[1]["error"]
+    jobs_by_id = {job["id"]: job for job in store.list_recent(limit=2)}
+    assert called == []
+    stale_job = jobs_by_id[stale_id]
+    blocked_job = next(job for job_id, job in jobs_by_id.items() if job_id != stale_id)
+    assert blocked_job["status"] == "failed"
+    assert "占用执行槽" in blocked_job["error"]
+    assert stale_job["status"] == "failed"
+    assert "无进度" in stale_job["error"]
+    assert store.execution_owner() == stale_id
+    store.release(stale_id, stale_owner)

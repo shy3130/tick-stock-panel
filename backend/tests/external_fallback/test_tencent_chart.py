@@ -2,6 +2,7 @@
 
 所有 HTTP 都由假响应提供：不得访问真实网络，也不得触及 repository / 持久化链路。
 """
+
 from __future__ import annotations
 
 import json
@@ -69,6 +70,7 @@ def test_parser_converts_hands_and_yuan_cumulative_values_to_incremental_rows():
     assert daily.volume == 30_000
     assert daily.amount == 38_130_498.0
     assert daily.is_live is True
+    assert daily.adjustment == "none"
 
 
 def test_parser_drops_lunch_and_postclose_rows_without_discarding_valid_market_data():
@@ -151,15 +153,14 @@ class _FakeChartSource:
                 "source": "tencent_chart",
                 "provisional": True,
                 "is_live": True,
+                "adjustment": "none",
             },
             transport_succeeded=True,
         )
 
 
 def test_adapter_only_fetches_current_a_share_when_local_target_day_is_empty(monkeypatch):
-    monkeypatch.setattr(
-        "app.services.preferences.get_external_fallback_enabled", lambda: True
-    )
+    monkeypatch.setattr("app.services.preferences.get_external_fallback_enabled", lambda: True)
     monkeypatch.setattr(
         "app.services.preferences.get_external_fallback_scopes", lambda: ["chart_live"]
     )
@@ -168,30 +169,31 @@ def test_adapter_only_fetches_current_a_share_when_local_target_day_is_empty(mon
     source = _FakeChartSource()
     adapter = ExternalFallbackAdapter(chart_source=source)
 
-    result = adapter.resolve_chart_live(
-        "600519.SH", TRADE_DATE, local_rows_empty=True
-    )
+    result = adapter.resolve_chart_live("600519.SH", TRADE_DATE, local_rows_empty=True)
     assert result.used_fallback is True
     assert result.source == "tencent_chart"
     assert result.reason is FallbackReason.LOCAL_CHART_MISSING
     assert source.calls == [("600519.SH", TRADE_DATE)]
 
-    assert adapter.resolve_chart_live(
-        "600519.SH", TRADE_DATE, local_rows_empty=False
-    ).used_fallback is False
-    assert adapter.resolve_chart_live(
-        "600519.SH", date(2026, 8, 21), local_rows_empty=True
-    ).used_fallback is False
-    assert adapter.resolve_chart_live(
-        "00700.HK", TRADE_DATE, local_rows_empty=True
-    ).used_fallback is False
+    assert (
+        adapter.resolve_chart_live("600519.SH", TRADE_DATE, local_rows_empty=False).used_fallback
+        is False
+    )
+    assert (
+        adapter.resolve_chart_live(
+            "600519.SH", date(2026, 8, 21), local_rows_empty=True
+        ).used_fallback
+        is False
+    )
+    assert (
+        adapter.resolve_chart_live("00700.HK", TRADE_DATE, local_rows_empty=True).used_fallback
+        is False
+    )
     assert source.calls == [("600519.SH", TRADE_DATE)]
 
 
 def test_adapter_chart_live_is_default_off_and_never_calls_source(monkeypatch):
-    monkeypatch.setattr(
-        "app.services.preferences.get_external_fallback_enabled", lambda: False
-    )
+    monkeypatch.setattr("app.services.preferences.get_external_fallback_enabled", lambda: False)
     monkeypatch.setattr(
         "app.services.preferences.get_external_fallback_scopes", lambda: ["chart_live"]
     )
@@ -200,9 +202,7 @@ def test_adapter_chart_live_is_default_off_and_never_calls_source(monkeypatch):
     source = _FakeChartSource()
     adapter = ExternalFallbackAdapter(chart_source=source)
 
-    result = adapter.resolve_chart_live(
-        "600519.SH", TRADE_DATE, local_rows_empty=True
-    )
+    result = adapter.resolve_chart_live("600519.SH", TRADE_DATE, local_rows_empty=True)
 
     assert result.used_fallback is False
     assert source.calls == []

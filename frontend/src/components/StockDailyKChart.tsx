@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Globe, Info } from 'lucide-react'
-import { api, chartLiveDegraded, type KlineRow } from '@/lib/api'
+import { api, chartLiveDegraded, type KlineRow, type ProvisionalDailyKline } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import {
   EChartsCandlestick,
@@ -24,6 +24,7 @@ export interface StockDailyKChartResult {
   stockInfo?: StockInfo
   name?: string
   adjustment?: string
+  provisionalDaily?: ProvisionalDailyKline
 }
 
 interface Props {
@@ -163,6 +164,37 @@ function rangeDays(range: { start: string; end: string }): number {
   return Math.min(Math.ceil((end.getTime() - start.getTime()) / 86400000) + 30, MAX_DAYS)
 }
 
+function formatProvisionalPrice(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(2) : '—'
+}
+
+const PROVISIONAL_VOLUME_FORMATTER = new Intl.NumberFormat('zh-CN', {
+  notation: 'compact',
+  maximumFractionDigits: 2,
+})
+
+function ProvisionalDailyCard({ row }: { row: ProvisionalDailyKline }) {
+  return (
+    <section
+      aria-label="当日未复权临时行情"
+      className="mb-2 rounded-lg border border-warning/25 bg-warning/5 px-3 py-2"
+    >
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-medium text-primary">当日临时 OHLC · {row.date.slice(0, 10)}</div>
+        <div className="text-xs text-warning">未复权 · 独立展示</div>
+      </div>
+      <dl className="grid grid-cols-3 gap-x-4 gap-y-2 text-xs sm:grid-cols-6">
+        <div><dt className="text-muted">开</dt><dd className="font-mono text-primary">{formatProvisionalPrice(row.open)}</dd></div>
+        <div><dt className="text-muted">高</dt><dd className="font-mono text-primary">{formatProvisionalPrice(row.high)}</dd></div>
+        <div><dt className="text-muted">低</dt><dd className="font-mono text-primary">{formatProvisionalPrice(row.low)}</dd></div>
+        <div><dt className="text-muted">收</dt><dd className="font-mono text-primary">{formatProvisionalPrice(row.close)}</dd></div>
+        <div><dt className="text-muted">量</dt><dd className="font-mono text-primary">{row.volume != null && Number.isFinite(row.volume) ? PROVISIONAL_VOLUME_FORMATTER.format(row.volume) : '—'}</dd></div>
+        <div><dt className="text-muted">来源</dt><dd className="font-mono text-primary">腾讯分时</dd></div>
+      </dl>
+    </section>
+  )
+}
+
 export function StockDailyKChart({
   symbol,
   height = 520,
@@ -199,6 +231,7 @@ export function StockDailyKChart({
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitUpMarkers(kline.data?.rows ?? []), [kline.data?.rows])
   const liveDegraded = chartLiveDegraded(kline.data)
+  const provisionalDaily = kline.data?.provisional_daily
 
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
@@ -235,8 +268,23 @@ export function StockDailyKChart({
   const chartHeight = height + subExtraH
 
   useEffect(() => {
-    onDataChange?.({ rows, rawRows: kline.data?.rows ?? [], stockInfo, name: kline.data?.name, adjustment: kline.data?.adjustment })
-  }, [kline.data?.adjustment, kline.data?.name, kline.data?.rows, onDataChange, rows, stockInfo])
+    onDataChange?.({
+      rows,
+      rawRows: kline.data?.rows ?? [],
+      stockInfo,
+      name: kline.data?.name,
+      adjustment: kline.data?.adjustment,
+      provisionalDaily,
+    })
+  }, [
+    kline.data?.adjustment,
+    kline.data?.name,
+    kline.data?.rows,
+    onDataChange,
+    provisionalDaily,
+    rows,
+    stockInfo,
+  ])
 
   if (!symbol) return null
 
@@ -246,13 +294,14 @@ export function StockDailyKChart({
         <div className="px-1 pb-1">
           <span
             className="inline-flex cursor-help items-center gap-1 rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] leading-none text-warning/80"
-            title="当日K线来自腾讯分时派生的临时 bar，为盘中临时数据，仅供展示；不会写入本地行情库，也不参与选股、监控、回测。"
+            title="当日行情来自腾讯分时派生的未复权临时 bar，仅在下方独立展示；不会混入复权历史，也不会写入本地行情库或参与选股、监控、回测。"
           >
             <Globe className="h-2.5 w-2.5" aria-hidden />
             外部源·盘中临时数据
           </span>
         </div>
       )}
+      {provisionalDaily && <ProvisionalDailyCard row={provisionalDaily} />}
 
       {showIndicatorControls && rows.length > 0 && (
         <div className="flex items-center gap-1.5 px-1 pb-0.5">
