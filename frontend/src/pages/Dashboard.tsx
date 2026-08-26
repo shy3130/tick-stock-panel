@@ -502,11 +502,15 @@ export function Dashboard() {
     queryKey: QK.pipelineJob(fetchJobId ?? ''),
     queryFn: () => api.pipelineJob(fetchJobId!),
     enabled: !!fetchJobId,
-    refetchInterval: (q: any) => {
+    refetchInterval: (q) => {
+      if (q.state.data === null || q.state.status === 'error') return false
       const j = q.state.data
       return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed' || j.status === 'cancelled') ? false : 1_000
     },
   })
+  useEffect(() => {
+    if (fetchJobId && fetchStatus.data === null) setFetchJobId(null)
+  }, [fetchJobId, fetchStatus.data])
   const startFetch = useMutation({
     mutationFn: api.pipelineRun,
     onSuccess: ({ job_id }) => setFetchJobId(job_id),
