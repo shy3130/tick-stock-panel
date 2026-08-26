@@ -1,5 +1,9 @@
+import httpx
+import pytest
+
 from app.services.ext_presets import (
     _a_symbol,
+    _fetch_json,
     _flatten_concept_rows,
     _flatten_dragon_tiger_rows,
     _flatten_industry_rows,
@@ -70,3 +74,37 @@ def test_flatten_industry_rows():
         "symbol": "600519.SH",
         "code": "600519",
     }]
+
+
+@pytest.mark.asyncio
+async def test_fetch_json_does_not_inherit_environment_proxy(monkeypatch):
+    client_kwargs = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [{"symbol": "000001.SZ"}]
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            client_kwargs.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url):
+            return FakeResponse()
+
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    rows = await _fetch_json("https://example.test/data.json")
+
+    assert rows == [{"symbol": "000001.SZ"}]
+    assert client_kwargs == {"timeout": 30, "trust_env": False}

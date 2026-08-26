@@ -33,6 +33,35 @@ def evaluate_mtf_direction_factor(body: MTFDirectionEvaluateIn):
     return evaluate_mtf_direction(body, reader=resolve_minute_reader())
 
 
+class NShapeEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+    symbols: list[str] | None = Field(default=None, max_length=1000)
+
+
+@router.post("/factors/n-shape/evaluate")
+def evaluate_n_shape_factor(body: NShapeEvaluateIn, request: Request):
+    """运行只读 N 字形态研究；缺少 sealed/PIT 能力时显式 unavailable。"""
+    from app.services.n_shape_golden_phoenix import (
+        evaluate_n_shape,
+        resolve_pinned_reader,
+        resolve_pit_provider,
+    )
+
+    try:
+        return evaluate_n_shape(
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            pinned_reader=resolve_pinned_reader(request.app.state.repo),
+            pit_provider=resolve_pit_provider(request.app.state.repo),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 class HypothesisIn(BaseModel):
     title: str
     thesis: str

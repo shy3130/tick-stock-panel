@@ -71,7 +71,8 @@ export function Data() {
     queryKey: QK.pipelineJob(activeJobId ?? ''),
     queryFn: () => api.pipelineJob(activeJobId!),
     enabled: !!activeJobId,
-    refetchInterval: (q: any) => {
+    refetchInterval: (q) => {
+      if (q.state.data === null) return false
       const j = q.state.data
       return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed' || j.status === 'cancelled') ? false : 1_000
     },
@@ -228,10 +229,8 @@ export function Data() {
   }, [job.data?.status])
 
   useEffect(() => {
-    if (job.isError && /404/.test(String((job.error as any)?.message ?? ''))) {
-      setActiveJobId(null)
-    }
-  }, [job.isError, job.error])
+    if (activeJobId && job.data === null) setActiveJobId(null)
+  }, [activeJobId, job.data])
 
   useEffect(() => {
     if (!activeJobId && history.data?.active_id) {
@@ -606,7 +605,10 @@ export function Data() {
             >
               <ActiveJobCard
                 job={job.data}
-                onCancel={() => cancelJob.mutate(job.data.id)}
+                onCancel={() => {
+                  const currentJob = job.data
+                  if (currentJob) cancelJob.mutate(currentJob.id)
+                }}
                 cancelling={cancelJob.isPending}
               />
             </motion.div>
