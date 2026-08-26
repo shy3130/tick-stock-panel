@@ -35,7 +35,7 @@ SINGLE_YANG_DEFINITION: dict[str, Any] = {
     "equal_low": "touch_is_not_break",
     "window": DEFAULT_WINDOW,
     "window_unit": "trading_days_after_T",
-    "signal_timing": "T_close_confirmed; evaluation_starts_T+1",
+    "signal_timing": "T_plus_5_close_confirmed; evaluation_starts_T_plus_6",
     "oos": "required_but_not_implemented",
 }
 
