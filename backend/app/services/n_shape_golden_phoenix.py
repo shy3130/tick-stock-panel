@@ -70,6 +70,8 @@ class GenerationPinnedDailyReader(Protocol):
 
     def generation(self) -> str: ...
 
+    def manifest_sha256(self) -> str: ...
+
     def market_days(self, start: date, end: date) -> list[date]: ...
 
     def daily_bars(self, symbol: str, start: date, end: date) -> pl.DataFrame: ...
@@ -92,7 +94,7 @@ REQUIRED_RAW_COLUMNS = ("raw_close", "raw_high", "raw_low", "volume", "close")
 def resolve_pinned_reader(repo: Any) -> GenerationPinnedDailyReader | None:
     """从 repository 解析完整 generation-pinned reader；缺能力即 None。"""
     reader = getattr(repo, PINNED_READER_ATTR, None)
-    required = ("generation", "market_days", "daily_bars")
+    required = ("generation", "manifest_sha256", "market_days", "daily_bars")
     return reader if all(callable(getattr(reader, name, None)) for name in required) else None
 
 
@@ -113,15 +115,20 @@ def assert_no_trading_tokens(name: str) -> None:
         if token in lowered:
             raise ValueError(f"trading semantics token {token!r} forbidden in field {name!r}")
 
+_EVIDENCE_SCHEMA_KEYS = frozenset({"field", "actual", "op", "target"})
+
 
 def _validate_keys_no_trading_tokens(payload: Any) -> None:
     if isinstance(payload, dict):
         for key, value in payload.items():
-            assert_no_trading_tokens(str(key))
+            if str(key) not in _EVIDENCE_SCHEMA_KEYS:
+                assert_no_trading_tokens(str(key))
             _validate_keys_no_trading_tokens(value)
     elif isinstance(payload, list):
         for item in payload:
             _validate_keys_no_trading_tokens(item)
+
+
 
 
 # ── 涨跌停判定（raw 价格 + PIT 制度） ─────────────────────────────────────
@@ -166,6 +173,33 @@ def _factor_meta() -> dict[str, Any]:
         "description": FACTOR_DESCRIPTION,
         "reachability": REACHABILITY,
     }
+
+def _params_provenance() -> dict[str, Any]:
+    """冻结参数 provenance：以模块常量为单一来源记录实际生效代码参数。"""
+    return {
+        "prior_clean_days": PRIOR_CLEAN_DAYS,
+        "price_range_rank_60d_max": LOW_POSITION_MAX,
+        "post_window_min": POST_WINDOW_MIN,
+        "post_window_max": POST_WINDOW_MAX,
+        "volume_shrink_ratio": VOLUME_SHRINK_RATIO,
+        "volume_pre20_ratio": VOLUME_PRE20_RATIO,
+        "volume_breakout_ratio": VOLUME_BREAKOUT_RATIO,
+        "ma_window": MA_WINDOW,
+        "limit_price_tol": LIMIT_PRICE_TOL,
+        "forward_horizons": list(FORWARD_HORIZONS),
+    }
+
+
+_SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _valid_manifest_sha256(value: Any) -> bool:
+    """manifest 字节哈希必须是 64 位十六进制；垃圾标识破坏可审计性 → fail-closed。"""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and set(value.lower()) <= _SHA256_HEX_DIGITS
+    )
 
 
 def unavailable_envelope(
@@ -333,7 +367,14 @@ def _scan_symbol(
             censored.append(_censor("volume_history_incomplete", event_date=str(t)))
             continue
 
-        window_days = calendar[t_pos + POST_WINDOW_MIN:t_pos + POST_WINDOW_MAX + 1]
+        days_after_event = len(calendar) - 1 - t_pos
+        if days_after_event < POST_WINDOW_MAX:
+            censored.append(_censor(
+                "post_window_truncated", event_date=str(t),
+                window_days_expected=POST_WINDOW_MAX,
+                window_days_available=days_after_event,
+            ))
+            continue
         suspended = [str(d) for d in calendar[t_pos + 1:t_pos + POST_WINDOW_MAX + 1]
                      if d not in bars_by_date]
         if suspended:
@@ -343,22 +384,25 @@ def _scan_symbol(
         structure_ok = True
         shrink_done_day: date | None = None
         confirmed: dict[str, dict[str, Any]] = {}
-        for d in window_days:
+        for offset in range(1, POST_WINDOW_MAX + 1):
+            d = calendar[t_pos + offset]
             bar = bars_by_date[d]
-            d_pos = cal_index[d]
-            if bars_by_date[calendar[d_pos - 1]]["raw_low"] < ref_low:
+            d_pos = t_pos + offset
+            if bar["raw_low"] < ref_low:
                 structure_ok = False
                 break
-            if shrink_done_day is None:
-                adjust_bars = [bars_by_date[x] for x in calendar[t_pos + 1:d_pos + 1]]
-                if adjust_bars:
-                    avg_volume = sum(x["volume"] for x in adjust_bars) / len(adjust_bars)
-                    if avg_volume / ref_vol <= VOLUME_SHRINK_RATIO and avg_volume / pre20_avg <= VOLUME_PRE20_RATIO:
-                        shrink_done_day = d
+            if offset < POST_WINDOW_MIN:
+                continue
+            adjust_bars = [bars_by_date[x] for x in calendar[t_pos + 1:d_pos]]
+            adjust_avg = (
+                sum(x["volume"] for x in adjust_bars) / len(adjust_bars)
+                if adjust_bars else None
+            )
+            if shrink_done_day is None and adjust_avg is not None:
+                if adjust_avg / ref_vol <= VOLUME_SHRINK_RATIO and adjust_avg / pre20_avg <= VOLUME_PRE20_RATIO:
+                    shrink_done_day = d
             if shrink_done_day is None:
                 continue
-            adjust_bars = [bars_by_date[x] for x in calendar[t_pos + 1:d_pos] if x in bars_by_date]
-            adjust_avg = sum(x["volume"] for x in adjust_bars) / len(adjust_bars) if adjust_bars else None
             if VARIANT_VOLUME_BREAKOUT not in confirmed and adjust_avg is not None:
                 ma5_days = calendar[max(0, d_pos - 4):d_pos + 1]
                 ma10_days = calendar[max(0, d_pos - 9):d_pos + 1]
@@ -366,19 +410,19 @@ def _scan_symbol(
                 ma10_bars = [bars_by_date[x] for x in ma10_days if x in bars_by_date]
                 ma5 = sum(x["raw_close"] for x in ma5_bars) / len(ma5_bars) if len(ma5_bars) == 5 else None
                 ma10 = sum(x["raw_close"] for x in ma10_bars) / len(ma10_bars) if len(ma10_bars) == 10 else None
+                ma5_ok = ma5 is not None and bar["raw_close"] >= ma5
+                ma10_ok = ma10 is not None and bar["raw_close"] >= ma10
                 if (
                     bar["raw_close"] > ref_high
                     and bar["volume"] >= adjust_avg * VOLUME_BREAKOUT_RATIO
-                    and (
-                        (ma5 is not None and bar["raw_close"] >= ma5)
-                        or (ma10 is not None and bar["raw_close"] >= ma10)
-                    )
+                    and (ma5_ok or ma10_ok)
                 ):
                     confirmed[VARIANT_VOLUME_BREAKOUT] = _build_event(
                         symbol=symbol, variant=VARIANT_VOLUME_BREAKOUT, event_date=t,
                         confirm_date=d, calendar=calendar, price_position=price_position,
                         high60=high60, anchor_close=anchor, ref_low=ref_low, ref_high=ref_high,
-                        ref_vol=ref_vol, bar=bar, ma5=ma5, adjust_avg=adjust_avg,
+                        ref_vol=ref_vol, bar=bar, ma5=ma5, ma10=ma10,
+                        ma_basis="ma5" if ma5_ok else "ma10", adjust_avg=adjust_avg,
                         pre20_avg=pre20_avg, bars_by_date=bars_by_date,
                     )
             if VARIANT_SECOND_LIMIT_UP not in confirmed and limit_flags.get(d) is True:
@@ -386,8 +430,8 @@ def _scan_symbol(
                     symbol=symbol, variant=VARIANT_SECOND_LIMIT_UP, event_date=t,
                     confirm_date=d, calendar=calendar, price_position=price_position,
                     high60=high60, anchor_close=anchor, ref_low=ref_low, ref_high=ref_high,
-                    ref_vol=ref_vol, bar=bar, ma5=None, adjust_avg=adjust_avg,
-                    pre20_avg=pre20_avg, bars_by_date=bars_by_date,
+                    ref_vol=ref_vol, bar=bar, ma5=None, ma10=None, ma_basis=None,
+                    adjust_avg=adjust_avg, pre20_avg=pre20_avg, bars_by_date=bars_by_date,
                 )
             if len(confirmed) == len(VARIANTS):
                 break
@@ -419,12 +463,14 @@ def _build_event(
     ref_vol: float,
     bar: dict[str, Any],
     ma5: float | None,
+    ma10: float | None,
+    ma_basis: str | None,
     adjust_avg: float | None,
     pre20_avg: float,
     bars_by_date: dict[date, dict[str, Any]],
 ) -> dict[str, Any]:
     evidence = [
-        _evidence("price_position_60d", round(price_position, 4), "<=", LOW_POSITION_MAX),
+        _evidence("price_range_rank_60d", round(price_position, 4), "<=", LOW_POSITION_MAX),
         _evidence("prior_clean_market_days", PRIOR_CLEAN_DAYS, ">=", PRIOR_CLEAN_DAYS),
         _evidence("first_board_date", str(event_date), "==", "limit_up"),
         _evidence("anchor_raw_close", anchor_close, "within", f"raw_high60={high60}"),
@@ -434,10 +480,12 @@ def _build_event(
         _evidence("confirm_date", str(confirm_date), "within", f"[event+{POST_WINDOW_MIN}, event+{POST_WINDOW_MAX}]"),
     ]
     if variant == VARIANT_VOLUME_BREAKOUT:
+        ma_value = ma5 if ma_basis == "ma5" else ma10
         evidence.extend([
             _evidence("confirm_volume_vs_adjustment", round(bar["volume"] / (adjust_avg or 1), 4), ">=", VOLUME_BREAKOUT_RATIO),
             _evidence("confirm_raw_close", bar["raw_close"], ">", ref_high),
-            _evidence("ma5_raw_close", round(ma5, 4), "<=", bar["raw_close"]),
+            _evidence("confirm_ma_basis", ma_basis, "in", ["ma5", "ma10"]),
+            _evidence(f"{ma_basis}_raw_close", round(ma_value, 4), "<=", bar["raw_close"]),
         ])
     else:
         evidence.append(_evidence("second_board_raw_close", bar["raw_close"], "==", "limit_up"))
@@ -475,6 +523,11 @@ def evaluate_n_shape(
         reasons.append("pit_regime_st_missing")
     if reasons:
         return unavailable_envelope(start=start, end=end, reasons=reasons)
+    manifest_sha256 = pinned_reader.manifest_sha256()
+    if not _valid_manifest_sha256(manifest_sha256):
+        return unavailable_envelope(
+            start=start, end=end, reasons=["reader_manifest_identity_invalid"])
+    manifest_sha256 = manifest_sha256.lower()
 
     lookup_start = start - timedelta(days=_CALENDAR_WARMUP_DAYS)
     calendar = sorted(pinned_reader.market_days(lookup_start, end))
@@ -519,8 +572,16 @@ def evaluate_n_shape(
         "unavailable_reasons": [],
         "request": {"start": start, "end": end},
         "provenance": {
-            "pinned_reader": {"generation": pinned_reader.generation()},
+            "pinned_reader": {
+                "generation": pinned_reader.generation(),
+                "manifest_sha256": manifest_sha256,
+            },
             "pit_provider": {"provider_id": pit_provider.provider_id()},
+            "factor_code": {
+                "factor_id": FACTOR_ID,
+                "version": FACTOR_VERSION,
+                "params": _params_provenance(),
+            },
             "price_scale": "raw",
         },
         "coverage": {
