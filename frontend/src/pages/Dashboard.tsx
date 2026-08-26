@@ -503,7 +503,7 @@ export function Dashboard() {
     queryFn: () => api.pipelineJob(fetchJobId!),
     enabled: !!fetchJobId,
     refetchInterval: (q) => {
-      if (q.state.data === null || q.state.status === 'error') return false
+      if (q.state.data === null) return false
       const j = q.state.data
       return j && (j.status === 'succeeded' || j.status === 'degraded' || j.status === 'failed' || j.status === 'cancelled') ? false : 1_000
     },
