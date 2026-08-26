@@ -48,82 +48,112 @@ TOOLS = [
     {
         "name": "screen_stock_pool",
         "description": (
-            "用强类型条件运行条件选股并保存服务端股票池。"
-            "conditions 每项必须是 {field,op,value}，field/op 应来自 list_screener_fields。"
-            "返回 pool_id、日期、数量和少量预览；完整股票列表不会进入模型上下文。"
+            "强类型条件选股并保存服务端股票池；或传 preset_id=short_momentum_quality_v1 "
+            "运行固定确定性短线观察池策略（AI 短线池）。"
+            "preset 分支策略完全固定、确定性筛选：条件与排序服务端锁定，"
+            "只允许再传 limit(5..12，默认 8)，不接受 conditions/as_of/order_by；"
+            "返回逐股结构化证据，AI 只解释证据，不得增删重排候选。"
+            "legacy 分支 conditions 每项必须是 {field,op,value}，field/op 应来自 "
+            "list_screener_fields；返回 pool_id、日期、数量和少量预览，"
+            "完整股票列表不会进入模型上下文。"
         ),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "conditions": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "field": {"type": "string"},
-                            "op": {"type": "string"},
-                            "value": {},
-                        },
-                        "required": ["field", "op", "value"],
-                        "additionalProperties": False,
-                    },
-                    "minItems": 1,
-                    "maxItems": 20,
-                },
-                "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
-                "order_by": {
-                    "type": "object",
+            "oneOf": [
+                {
                     "properties": {
-                        "field": {"type": "string"},
-                        "direction": {"type": "string", "enum": ["asc", "desc"]},
+                        "preset_id": {"type": "string", "enum": ["short_momentum_quality_v1"]},
+                        "limit": {"type": "integer", "minimum": 5, "maximum": 12, "default": 8},
                     },
-                    "required": ["field"],
+                    "required": ["preset_id"],
                     "additionalProperties": False,
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-            },
-            "required": ["conditions"],
-            "additionalProperties": False,
+                {
+                    "properties": {
+                        "conditions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "field": {"type": "string"},
+                                    "op": {"type": "string"},
+                                    "value": {},
+                                },
+                                "required": ["field", "op", "value"],
+                                "additionalProperties": False,
+                            },
+                            "minItems": 1,
+                            "maxItems": 20,
+                        },
+                        "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
+                        "order_by": {
+                            "type": "object",
+                            "properties": {
+                                "field": {"type": "string"},
+                                "direction": {"type": "string", "enum": ["asc", "desc"]},
+                            },
+                            "required": ["field"],
+                            "additionalProperties": False,
+                        },
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                    },
+                    "required": ["conditions"],
+                    "additionalProperties": False,
+                },
+            ],
         },
         "parameters": {
             "type": "object",
-            "properties": {
-                "conditions": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "field": {"type": "string"},
-                            "op": {"type": "string"},
-                            "value": {},
-                        },
-                        "required": ["field", "op", "value"],
-                        "additionalProperties": False,
-                    },
-                    "minItems": 1,
-                    "maxItems": 20,
-                },
-                "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
-                "order_by": {
-                    "type": "object",
+            "oneOf": [
+                {
                     "properties": {
-                        "field": {"type": "string"},
-                        "direction": {"type": "string", "enum": ["asc", "desc"]},
+                        "preset_id": {"type": "string", "enum": ["short_momentum_quality_v1"]},
+                        "limit": {"type": "integer", "minimum": 5, "maximum": 12, "default": 8},
                     },
-                    "required": ["field"],
+                    "required": ["preset_id"],
                     "additionalProperties": False,
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-            },
-            "required": ["conditions"],
-            "additionalProperties": False,
+                {
+                    "properties": {
+                        "conditions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "field": {"type": "string"},
+                                    "op": {"type": "string"},
+                                    "value": {},
+                                },
+                                "required": ["field", "op", "value"],
+                                "additionalProperties": False,
+                            },
+                            "minItems": 1,
+                            "maxItems": 20,
+                        },
+                        "as_of": {"type": "string", "description": "YYYY-MM-DD；省略时使用最新可信交易日"},
+                        "order_by": {
+                            "type": "object",
+                            "properties": {
+                                "field": {"type": "string"},
+                                "direction": {"type": "string", "enum": ["asc", "desc"]},
+                            },
+                            "required": ["field"],
+                            "additionalProperties": False,
+                        },
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                    },
+                    "required": ["conditions"],
+                    "additionalProperties": False,
+                },
+            ],
         },
         "read_only": True,
     },
     {
         "name": "start_pool_backtest",
         "description": (
-            "对 screen_stock_pool 保存的股票池启动策略或因子回测。"
+            "仅对 screen_stock_pool 的 legacy conditions 分支保存的普通股票池启动策略或因子回测；"
+            "不接受 short_momentum_quality_v1 返回的 short_pool_id。"
             "会创建回测计算任务与研究 artifact，不改交易事实、不下单。"
             "回测开始日不得早于股票池 as_of，最长 186 天；返回 job_id，不返回大结果。"
         ),

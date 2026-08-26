@@ -14,6 +14,7 @@ const files = [
   'components/stock-analysis/StockAnalysisDialog.tsx',
   'components/financials/AiAnalysisDialog.tsx',
   'components/screener/StrategyBuilderDialog.tsx',
+  'components/agent/ShortPoolPanel.tsx',
 ]
 
 const forbidden = ['买入区间', '操作建议', '可直接指导次日仓位']

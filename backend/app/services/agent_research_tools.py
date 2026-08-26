@@ -64,14 +64,35 @@ _LONG_SHORT_KEYS = ("total_return", "annual_return", "max_drawdown", "sharpe", "
 # ── 封闭输入模型(extra="forbid", 无自由文本表达式) ────────────────
 class _ScreenArgs(BaseModel):
     """screen_stock_pool 顶层参数; conditions/order_by 的强类型校验
-    委托给 ScreenerQueryRequest(QueryCondition/QueryOrder 同样 forbid)。"""
+    委托给 ScreenerQueryRequest(QueryCondition/QueryOrder 同样 forbid)。
+
+    oneOf 分支:
+      - legacy: conditions(+as_of/order_by/limit) 逐字兼容;
+      - preset: preset_id=short_momentum_quality_v1 + limit(5..12),
+        只接受这两个字段, 委托 short_pool 固定确定性策略。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    conditions: list[dict[str, Any]] = Field(min_length=1, max_length=20)
+    conditions: list[dict[str, Any]] | None = Field(default=None, min_length=1, max_length=20)
+    preset_id: Literal["short_momentum_quality_v1"] | None = None
     as_of: date | None = None
     order_by: dict[str, Any] | None = None
-    limit: StrictInt = Field(default=100, ge=1, le=500)
+    limit: StrictInt | None = Field(default=None, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def _check_branch(self) -> _ScreenArgs:
+        if self.preset_id is not None:
+            if self.conditions is not None:
+                raise ValueError("preset_id 分支不接受 conditions; preset 分支只允许 preset_id + limit")
+            if self.as_of is not None or self.order_by is not None:
+                raise ValueError("preset_id 分支不接受 as_of/order_by; 策略固定, 不得自行条件化")
+            effective = 8 if self.limit is None else self.limit
+            if not 5 <= effective <= 12:
+                raise ValueError("preset_id 分支 limit 只允许 5..12")
+            return self
+        if self.conditions is None:
+            raise ValueError("conditions 与 preset_id 必须二选一")
+        return self
 
 
 class _StartArgs(BaseModel):
@@ -248,7 +269,9 @@ def _sanitize_error(exc: BaseException) -> str:
 
 # ── 公开工具 1: 条件选股 → 不可变池 artifact ─────────────────────
 def screen_stock_pool(app_state: Any, args: dict) -> dict:
-    """强类型条件选股并保存服务端股票池; 返回 pool_id/计数/预览, 不返回全量 symbols。"""
+    """强类型条件选股并保存服务端股票池; 返回 pool_id/计数/预览, 不返回全量 symbols。
+
+    preset_id 分支: 委托 short_pool 固定确定性策略(AI 短线池), 返回完整证据封套。"""
     from app.services.screener_query import (
         QueryService,
         ScreenerDataUnavailableError,
@@ -258,13 +281,18 @@ def screen_stock_pool(app_state: Any, args: dict) -> dict:
     )
 
     parsed = _ScreenArgs.model_validate(args or {})
+    if parsed.preset_id is not None:
+        # preset 分支: 固定确定性短线观察池策略, 延迟委托 short_pool 服务。
+        from app.services.short_pool import run_short_pool
+
+        return run_short_pool(app_state, limit=8 if parsed.limit is None else parsed.limit)
     # 复用现有 typed {field,op,value} 封闭校验(每层 extra="forbid")。
     req = ScreenerQueryRequest.model_validate(
         {
             "conditions": parsed.conditions,
             "as_of": parsed.as_of,
             "order_by": parsed.order_by,
-            "limit": parsed.limit,
+            "limit": 100 if parsed.limit is None else parsed.limit,
         }
     )
     applied, order = validate_query(req)
