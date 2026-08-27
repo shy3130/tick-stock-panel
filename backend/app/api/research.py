@@ -19,8 +19,86 @@ from app.services.short_pool import (
     run_short_pool,
 )
 from app.services.single_yang_no_break import run_single_yang_research
+from app.services.macd_stages import macd_stages_availability
+from app.services.volume_breakout import VolumeBreakoutResponse
+from app.services.weak_to_strong import (
+    WeakToStrongEvaluateRequest,
+    WeakToStrongEvaluateResponse,
+    evaluate_weak_to_strong_v1,
+)
+from app.services.mtf_direction_15m5m import (
+    MTFDirectionEvaluateIn,
+    evaluate_mtf_direction,
+    resolve_minute_reader,
+)
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+
+
+class VolumeBreakoutEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+    symbols: list[str] | None = Field(default=None, max_length=1000)
+
+
+@router.post("/factors/volume-breakout/evaluate", response_model=VolumeBreakoutResponse)
+def evaluate_volume_breakout_factor(body: VolumeBreakoutEvaluateIn, request: Request):
+    """量价序列突破研究契约；能力缺失/未实现时显式 unavailable。"""
+    from app.services.volume_breakout import (
+        evaluate_volume_breakout,
+        resolve_pinned_reader,
+        resolve_pit_universe,
+        resolve_versioned_calendar,
+    )
+
+    try:
+        return evaluate_volume_breakout(
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            pinned_reader=resolve_pinned_reader(request.app.state.repo),
+            pit_universe=resolve_pit_universe(request.app.state.repo),
+            calendar=resolve_versioned_calendar(request.app.state.repo),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/factors/mtf-direction/evaluate")
+def evaluate_mtf_direction_factor(body: MTFDirectionEvaluateIn):
+    """运行分钟多周期能力验证；缺真实 reader 时显式 unavailable。"""
+    return evaluate_mtf_direction(body, reader=resolve_minute_reader())
+
+
+class NShapeEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+    symbols: list[str] | None = Field(default=None, max_length=1000)
+
+
+@router.post("/factors/n-shape/evaluate")
+def evaluate_n_shape_factor(body: NShapeEvaluateIn, request: Request):
+    """运行只读 N 字形态研究；缺少 sealed/PIT 能力时显式 unavailable。"""
+    from app.services.n_shape_golden_phoenix import (
+        evaluate_n_shape,
+        resolve_pinned_reader,
+        resolve_pit_provider,
+    )
+
+    try:
+        return evaluate_n_shape(
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            pinned_reader=resolve_pinned_reader(request.app.state.repo),
+            pit_provider=resolve_pit_provider(request.app.state.repo),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class HypothesisIn(BaseModel):
@@ -231,6 +309,7 @@ def run_schedule_now(schedule_id: str, request: Request):
         store = _schedule_store(request)
         item = store.get(schedule_id)
         result = run_schedule(item, request.app.state)
+
         store.save(item)
         return {"schedule": item.__dict__, "result": result}
     except KeyError as e:
@@ -242,3 +321,18 @@ def get_single_yang_no_break():
     """返回单阳不破研究契约；状态机/OOS 未实现时 fail-closed。"""
 
     return run_single_yang_research()
+
+
+@router.get("/macd-stages")
+def get_macd_stages():
+    """返回 MACD 阶段研究能力声明；未实现时严格不可用。"""
+    return macd_stages_availability().as_dict()
+
+
+@router.post(
+    "/factors/weak-to-strong/evaluate",
+    response_model=WeakToStrongEvaluateResponse,
+)
+def evaluate_weak_to_strong(body: WeakToStrongEvaluateRequest):
+    """弱转强研究因子评估；当前生产能力不足时显式返回 unavailable。"""
+    return evaluate_weak_to_strong_v1(body)
