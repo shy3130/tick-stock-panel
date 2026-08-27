@@ -818,6 +818,15 @@ def run_now(
     # 不再依赖用户手动点 run_all）
     _refresh_strategy_cache(repo, emit)
 
+    # Step 3.6: PIT eligible-universe SCD 发布（唯一盘后入口，失败不阻塞主管道）。
+    try:
+        from app.services.universe_scd import publish_universe_from_repository
+
+        outcome = publish_universe_from_repository(repo)
+        logger.info("universe SCD publish: %s", outcome)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("universe SCD publish failed (non-fatal; current unchanged): %s", exc)
+
     # Step 4: 刷新视图
     emit("refresh_views", 95, "刷新 DuckDB 视图…")
     _refresh_views(repo)

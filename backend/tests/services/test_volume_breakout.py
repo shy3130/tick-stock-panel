@@ -13,7 +13,7 @@ from app.services.volume_breakout import (
     VOLUME_PERCENTILE,
     assert_no_trading_tokens,
     evaluate_volume_breakout,
-    resolve_pinned_reader,
+    resolve_pit_universe,
 )
 
 
@@ -52,15 +52,36 @@ class _Calendar:
 
 
 class _Universe:
-    def as_of(self):
-        return date(2026, 3, 20)
+    def __init__(self, symbols=("600000.SH",), *, split=None, fault=False):
+        self._symbols = tuple(symbols)
+        self._split = split
+        self._fault = fault
 
-    def snapshot_hash(self):
-        return "universe-hash"
+    def source_manifest(self):
+        return {"artifact": "universe_scd", "generation": "universe-generation", "content_hash": "universe-hash"}
+
+    def _eligible(self, event_date):
+        return list(self._split(event_date) if self._split else self._symbols)
+
+    def snapshot_identity(self, event_date):
+        if self._fault:
+            from app.services.universe_scd import UniverseScdIntegrityError
+            raise UniverseScdIntegrityError("manifest/hash fault")
+        return {
+            "content_hash": "universe-hash",
+            "effective_from": date(2026, 1, 1),
+            "effective_to": None,
+            "available_at": "2026-01-01T00:00:00+00:00",
+        }
 
     def eligible_symbols(self, event_date):
-        return ["600000.SH"]
+        return self._eligible(event_date)
 
+    def prefetch_event_days(self, event_days):
+        if self._fault:
+            from app.services.universe_scd import UniverseScdIntegrityError
+            raise UniverseScdIntegrityError("manifest/hash fault")
+        return {day: (self.snapshot_identity(day), self._eligible(day)) for day in event_days}
 
 class _Reader:
     def __init__(self, calendar, *, break_direction="up"):
@@ -89,6 +110,31 @@ class _Reader:
     def daily_bars(self, symbol, start, end):
         return self.frame.filter((pl.col("date") >= start) & (pl.col("date") <= end))
 
+def test_universe_integrity_fault_makes_whole_run_unavailable():
+    calendar = _Calendar()
+    result = _evaluate(
+        pinned_reader=_Reader(calendar),
+        pit_universe=_Universe(fault=True),
+        calendar=calendar,
+    )
+    assert result["status"] == "unavailable"
+    assert result["unavailable_reasons"] == ["pit_eligible_universe_unavailable"]
+    assert result["events"] == []
+    assert "pit_universe_unreadable" not in str(result)
+
+
+def test_event_scan_is_limited_to_requested_event_dates():
+    calendar = _Calendar()
+    result = _evaluate(
+        start=date(2026, 2, 1),
+        end=date(2026, 3, 20),
+        pinned_reader=_Reader(calendar),
+        pit_universe=_Universe(),
+        calendar=calendar,
+    )
+    assert result["status"] == "ok"
+    assert result["events"] == []
+
 
 def test_full_capabilities_run_frozen_box_and_forward_oos_diagnostics():
     calendar = _Calendar()
@@ -107,6 +153,8 @@ def test_full_capabilities_run_frozen_box_and_forward_oos_diagnostics():
     )
     assert result["research"]["segments"]["is"]["events"] == 1
     assert result["research"]["verdict"] == "rejected"
+    assert event["universe_hash"] == "universe-hash"
+    assert result["provenance"]["universe_intervals"][0]["content_hash"] == "universe-hash"
 
 
 def test_down_variant_uses_strict_frozen_lower_boundary():
@@ -135,9 +183,9 @@ def test_empty_calendar_is_unavailable_instead_of_index_error():
 def test_implicit_symbol_scope_unions_pit_universe_across_request_dates():
     calendar = _Calendar()
 
-    class ChangingUniverse(_Universe):
-        def eligible_symbols(self, event_date):
-            return ["600000.SH"] if event_date < date(2026, 2, 1) else ["600001.SH"]
+    changing = _Universe(
+        split=lambda event_date: ["600000.SH"] if event_date < date(2026, 2, 1) else ["600001.SH"]
+    )
 
     class MultiSymbolReader(_Reader):
         def daily_bars(self, symbol, start, end):
@@ -150,7 +198,7 @@ def test_implicit_symbol_scope_unions_pit_universe_across_request_dates():
     result = _evaluate(
         symbols=None,
         pinned_reader=MultiSymbolReader(calendar),
-        pit_universe=ChangingUniverse(),
+        pit_universe=changing,
         calendar=calendar,
     )
 
@@ -158,13 +206,13 @@ def test_implicit_symbol_scope_unions_pit_universe_across_request_dates():
     assert result["coverage"]["symbols"] == 2
 
 
-def test_partial_reader_is_rejected_by_capability_gate():
+def test_partial_universe_reader_is_rejected_by_capability_gate():
     class PartialReader:
         def generation(self):
             return "generation-test"
 
-    assert resolve_pinned_reader(PartialReader()) is None
-    assert resolve_pinned_reader(object()) is None
+    assert resolve_pit_universe(PartialReader()) is None
+    assert resolve_pit_universe(object()) is None
 
 
 def test_frozen_parameter_contract_and_invalid_range():
