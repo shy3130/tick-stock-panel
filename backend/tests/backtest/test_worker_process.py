@@ -448,6 +448,62 @@ def test_worker_terminates_child_after_cancel_grace(monkeypatch, tmp_path):
     assert process.exitcode == -15
 
 
+def test_worker_accepts_delivered_result_when_child_exit_is_slow(monkeypatch, tmp_path):
+    """终态消息已送达但子进程退出收尾超时: 应强杀后采纳结果, 而非丢弃报错。"""
+
+    class FakeQueue:
+        def __init__(self):
+            self._messages = [{"type": "result", "payload": {"status": "ok"}}]
+
+        def get(self, timeout):
+            if self._messages:
+                return self._messages.pop(0)
+            raise queue.Empty
+
+        def close(self):
+            pass
+
+        def join_thread(self):
+            pass
+
+    class FakeEvent:
+        def set(self):
+            pass
+
+    class FakeProcess:
+        def __init__(self):
+            self.alive = True
+            self.exitcode = None
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            self.alive = False
+            self.exitcode = -15
+
+    process = FakeProcess()
+    context = SimpleNamespace(
+        Queue=FakeQueue,
+        Event=FakeEvent,
+        Process=lambda **_kwargs: process,
+    )
+    monkeypatch.setattr(worker_module.mp, "get_context", lambda _method: context)
+
+    result = run_worker_task({"kind": "mining", "data_dir": str(tmp_path), "config": {}})
+
+    assert result["status"] == "ok"
+    assert result["worker"]["worker_exit_forcibly"] is True
+    assert result["worker"]["worker_exitcode"] == -15
+    assert process.exitcode == -15
+
+
 def test_spawn_walkforward_skips_folds_before_available_matrix_data(tmp_path):
     configured_start = date(2024, 1, 1)
     market_start = configured_start + timedelta(days=4)
