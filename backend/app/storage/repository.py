@@ -377,6 +377,17 @@ class KlineRepository:
         self._hk_inst_glob = str(store.data_dir / "instruments_hk" / "**" / "*.parquet")
 
     @property
+    def n_shape_research_reader(self) -> object | None:
+        """Pin fresh canonical + markets generations for one research request."""
+        try:
+            from app.services.n_shape_research_data import PublishedNShapeResearchReader
+
+            return PublishedNShapeResearchReader.from_repository(self)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("N-shape research sources unavailable: %s", exc)
+            return None
+
+    @property
     def generation_pinned_daily_reader(self):
         """Return a reader pinned to the currently published canonical generation."""
         from app.services.research_sealed_data import PublishedCanonicalDailyReader
