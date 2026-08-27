@@ -19,8 +19,20 @@ from app.services.short_pool import (
     run_short_pool,
 )
 from app.services.volume_breakout import VolumeBreakoutResponse
+from app.services.weak_to_strong import (
+    WeakToStrongEvaluateRequest,
+    WeakToStrongEvaluateResponse,
+    evaluate_weak_to_strong_v1,
+)
+from app.services.mtf_direction_15m5m import (
+    MTFDirectionEvaluateIn,
+    evaluate_mtf_direction,
+    resolve_minute_reader,
+)
 
 router = APIRouter(prefix="/api/research", tags=["research"])
+
+
 class VolumeBreakoutEvaluateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +62,13 @@ def evaluate_volume_breakout_factor(body: VolumeBreakoutEvaluateIn, request: Req
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/factors/mtf-direction/evaluate")
+def evaluate_mtf_direction_factor(body: MTFDirectionEvaluateIn):
+    """运行分钟多周期能力验证；缺真实 reader 时显式 unavailable。"""
+    return evaluate_mtf_direction(body, reader=resolve_minute_reader())
+
 
 class NShapeEvaluateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -288,7 +307,16 @@ def run_schedule_now(schedule_id: str, request: Request):
         store = _schedule_store(request)
         item = store.get(schedule_id)
         result = run_schedule(item, request.app.state)
+
         store.save(item)
         return {"schedule": item.__dict__, "result": result}
     except KeyError as e:
         raise HTTPException(status_code=404, detail="schedule not found") from e
+
+@router.post(
+    "/factors/weak-to-strong/evaluate",
+    response_model=WeakToStrongEvaluateResponse,
+)
+def evaluate_weak_to_strong(body: WeakToStrongEvaluateRequest):
+    """弱转强研究因子评估；当前生产能力不足时显式返回 unavailable。"""
+    return evaluate_weak_to_strong_v1(body)
