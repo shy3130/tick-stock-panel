@@ -112,4 +112,8 @@ D 日阶段只在 D 日收盘后成立，`available_from` 必须指向次一市�
 
 ## 8. 演进边界
 
-后续实现必须先补齐 PIT 读取器，再实现纯状态机和 OOS 分层；每一步都保留本契约的 schema、固定参数和 fail-closed 语义。不得为获得部分结果而静默降级。
+实施保持本契约的 schema、固定参数和 fail-closed 语义；不得为获得部分结果而静默降级。
+
+## 实施状态更新（2026-08-27）
+
+§1–§5 已实现。`GET /api/research/macd-stages` 现在只报告真实 generation-pinned reader 能力，`POST /api/research/factors/macd-stages/evaluate` 运行固定 10/20/7 状态机并分开返回 IS/OOS。旧示例中的 `state_machine_not_implemented/oos_not_implemented` 已失效，不再是当前 API 契约；缺 reader 时唯一原因是 `generation_pinned_reader_missing`。

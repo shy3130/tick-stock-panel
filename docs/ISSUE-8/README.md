@@ -1,9 +1,8 @@
 # Issue #8 — N 字金凤凰首板回调研究因子
 
 - Issue: https://github.com/wf2311/fm-workbench/issues/8
-- 状态: `final-design-ready-for-implementation`
-- 分支: `issue-8-n-shape-golden-phoenix`
-- Worktree: `../tickflow-issue-8-n-shape`
+- 状态: `production-engine-ready; blocked-by-pit-st-history`
+- 集成分支: `issue-8-research-production`
 
 ## 工作流记录
 
@@ -13,7 +12,7 @@
 4. 方案 v2：`plan-v2.md`
 5. 二审：`review-v2.md`（两项修订已完成）
 6. 最终设计：`final-design.md`
-7. 编码与验证：待完成
+7. 编码与定向验证：已完成；真实事件仍由 PIT ST 历史缺口 fail-closed
 
 ## 范围
 

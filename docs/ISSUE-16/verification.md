@@ -57,6 +57,17 @@ git diff -- backend/app/api/research.py
 
 对本次新增内容扫描保留标识与操作性词汇，结果：零命中。
 
-## 结论
+## 初始波次结论（已由后续生产化波次替代）
 
-当前端点明确返回 `status="unavailable"`；逐日状态机、OOS 和 PIT 读取能力仍标记缺失，不生成阶段数值。
+初始 PR 只提供 unavailable 契约；下节为当前真实实现与验证结果。
+
+## 生产化波次（2026-08-27）
+
+- MACD(10/20/7) 递推、七状态、零轴侧、预热、缺 bar、T+1 `available_from` 与 IS/OOS 分层已实现；GET 仅报告真实 reader 缺口，POST 返回阶段序列。
+- schema v2 sealed generation `20260827T054651-63f500a4` 上运行 `600519.SH`（2025-01-01 至 2026-08-14）：`status=ok`、IS 243 行、OOS 149 行、0 删失。
+- 本波 focused/API 回归 `88 passed`；规范历史与指标管线回归 `90 passed`。
+
+## 最终集成回归
+
+- 六因子/API/provider/canonical/Agent/盘后管道累计：`351 passed, 7 warnings`。
+- 改动 Python 文件 `ruff --select F,E9` 通过；前端 `pnpm exec tsc -b --pretty false` 通过。

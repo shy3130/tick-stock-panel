@@ -31,7 +31,7 @@ def test_missing_reader_returns_structured_unavailable():
         "versioned_exchange_calendar": False,
     }
     assert body["events"] == []
-    assert "event_state_machine_not_implemented" in body["unavailable_reasons"]
+    assert not any("not_implemented" in reason for reason in body["unavailable_reasons"])
 
 
 def test_request_schema_forbids_unknown_fields():

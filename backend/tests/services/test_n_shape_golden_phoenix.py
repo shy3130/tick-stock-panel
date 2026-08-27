@@ -4,8 +4,10 @@ import polars as pl
 import pytest
 
 from app.services.n_shape_golden_phoenix import (
+    COST_BPS,
     FORWARD_HORIZONS,
     LOW_POSITION_MAX,
+    OOS_SPLIT_DATE,
     VOLUME_BREAKOUT_RATIO,
     evaluate_n_shape,
     limit_up_price,
@@ -224,3 +226,93 @@ def test_manifest_identity_is_required_and_validated():
     )
     assert invalid["status"] == "unavailable"
     assert invalid["unavailable_reasons"] == ["reader_manifest_identity_invalid"]
+
+
+class _MultiSymbolReader(_FakePinnedReader):
+    def __init__(self, bars_by_symbol: dict[str, list[dict]]):
+        self._bars_by_symbol = bars_by_symbol
+        super().__init__([])
+
+    def daily_bars(self, symbol: str, start: date, end: date) -> pl.DataFrame:
+        return pl.DataFrame([
+            row for row in self._bars_by_symbol[symbol] if start <= row["date"] <= end
+        ])
+
+
+def _event_bars(first_board: date, tail: int = 24, second_volume: float = 500.0) -> list[dict]:
+    bars = _base_bars(first_board)
+    bars.extend([
+        _bar(first_board + timedelta(days=1), 10.7, 10.8, 10.6, 800.0),
+        _bar(first_board + timedelta(days=2), 11.77, 11.77, 10.6, second_volume),
+    ])
+    bars.extend(
+        _bar(first_board + timedelta(days=i), 10.8, 11.0, 10.6, 900.0)
+        for i in range(3, tail + 1)
+    )
+    return bars
+
+
+def test_research_baseline_and_cost_diagnostics():
+    first_board = date(2026, 1, 1)
+    result = _evaluate(_event_bars(first_board), first_board, end_offset=24)
+    research = result["research"]
+    assert research["populations"]["baseline"]["count_raw"] == 1
+    assert result["status"] == "ok"
+
+
+def test_research_is_oos_boundary_and_rejection():
+    is_day = date(2025, 5, 5)
+    oos_day = OOS_SPLIT_DATE - timedelta(days=2)
+    reader = _MultiSymbolReader({"A": _event_bars(is_day), "B": _event_bars(oos_day)})
+    result = evaluate_n_shape(
+        start=date(2025, 5, 1), end=date(2025, 8, 15),
+        symbols=["A", "B"], pinned_reader=reader, pit_provider=_FakePitProvider(),
+    )
+    events = result["research"]["populations"]["events"]
+    assert events["is"]["count_raw"] == 1
+    assert events["oos"]["count_raw"] == 1
+    assert result["research"]["verdict"] == "rejected"
+
+
+def test_research_overlap_and_forward_censoring():
+    first_board = date(2026, 1, 1)
+    result = _evaluate(_event_bars(first_board, second_volume=1500.0), first_board, end_offset=24)
+    stats = result["research"]["populations"]["events"]["oos"]["stats_by_horizon"][1]
+    assert stats["n_sample_raw"] == 2
+    assert stats["clusters"] == 1
+    truncated = _evaluate(_event_bars(first_board, tail=12), first_board)
+    h20 = truncated["research"]["populations"]["events"]["oos"]["stats_by_horizon"][20]
+    assert h20["censored_forward"] == 1
+    assert h20["status"] == "insufficient_sample"
+
+
+def test_research_cost_and_determinism_with_sufficient_samples():
+    bars_by_symbol = {}
+    for i in range(31):
+        bars_by_symbol[f"I{i}"] = _event_bars(date(2025, 4, 1))
+        bars_by_symbol[f"O{i}"] = _event_bars(date(2025, 10, 1))
+    reader = _MultiSymbolReader(bars_by_symbol)
+    kwargs = dict(
+        start=date(2025, 3, 1), end=date(2026, 1, 31),
+        symbols=sorted(bars_by_symbol), pinned_reader=reader, pit_provider=_FakePitProvider(),
+    )
+    result = evaluate_n_shape(**kwargs)
+    research = result["research"]
+    assert research["verdict"] == "accepted"
+    stats = research["populations"]["events"]["oos"]["stats_by_horizon"][1]
+    assert stats["post_cost_mean"] == pytest.approx(stats["mean"] - COST_BPS / 10000.0)
+    assert stats["ci95_low"] <= stats["mean"] <= stats["ci95_high"]
+    assert evaluate_n_shape(**kwargs)["research"] == research
+
+
+def test_far_future_data_does_not_change_research_stats():
+    first_board = date(2026, 1, 1)
+    base = _event_bars(first_board, tail=24)
+    extended = base + [
+        _bar(first_board + timedelta(days=i), 20.0, 20.1, 19.9, 5000.0)
+        for i in range(25, 31)
+    ]
+    first = _evaluate(base, first_board, end_offset=24)
+    second = _evaluate(extended, first_board, end_offset=30)
+    assert second["events"] == first["events"]
+    assert second["research"] == first["research"]

@@ -420,11 +420,182 @@ def _validate_reader_contracts(
     )
     return evidence, None
 
+@dataclass(frozen=True, slots=True)
+class TimeframeBar:
+    ts: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    children: tuple["TimeframeBar", ...] = ()
+
+
+def _aggregate_complete(bars: Sequence[MinuteBar | TimeframeBar], size: int, max_gap: timedelta) -> list[TimeframeBar]:
+    """Aggregate only complete consecutive groups; gaps (including lunch) reset a group."""
+    output: list[TimeframeBar] = []
+    group: list[MinuteBar | TimeframeBar] = []
+    for bar in bars:
+        if group and bar.ts - group[-1].ts > max_gap:
+            group = []
+        group.append(bar)
+        if len(group) == size:
+            output.append(TimeframeBar(
+                ts=group[-1].ts,
+                open=float(group[0].open),
+                high=max(float(item.high) for item in group),
+                low=min(float(item.low) for item in group),
+                close=float(group[-1].close),
+                volume=sum(float(item.volume) for item in group),
+                children=tuple(item if isinstance(item, TimeframeBar) else TimeframeBar(
+                    item.ts, item.open, item.high, item.low, item.close, item.volume
+                ) for item in group),
+            ))
+            group = []
+    return output
+
+
+def _atr(bars: Sequence[TimeframeBar], index: int, period: int = 14) -> float | None:
+    if index < period:
+        return None
+    values: list[float] = []
+    for pos in range(index - period + 1, index + 1):
+        previous = bars[pos - 1].close
+        current = bars[pos]
+        values.append(max(current.high - current.low, abs(current.high - previous), abs(current.low - previous)))
+    value = sum(values) / len(values)
+    return value if value > 0 else None
+
+
+def _normalized_slope(bars: Sequence[TimeframeBar], index: int, atr: float, window: int = 5) -> float | None:
+    if index + 1 < window:
+        return None
+    closes = [bar.close for bar in bars[index - window + 1:index + 1]]
+    center = (window - 1) / 2
+    denominator = sum((x - center) ** 2 for x in range(window))
+    slope = sum((x - center) * value for x, value in enumerate(closes)) / denominator
+    return slope / atr
+
+
+def _confirmed_fractals(bars: Sequence[TimeframeBar], index: int) -> list[tuple[int, str]]:
+    """Five-bar strict fractals become visible two completed 15m bars later."""
+    result: list[tuple[int, str]] = []
+    for center in range(2, index - 1):
+        window = bars[center - 2:center + 3]
+        pivot = bars[center]
+        if pivot.high > max(bar.high for pos, bar in enumerate(window) if pos != 2):
+            result.append((center, "top"))
+        elif pivot.low < min(bar.low for pos, bar in enumerate(window) if pos != 2):
+            result.append((center, "bottom"))
+    return result
+
+
+def _label_symbol(reader: ImmutableMinuteReader, symbol: str, days: Sequence[date], oos_boundary: date) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    signals: list[dict[str, Any]] = []
+    censored: list[dict[str, Any]] = []
+    for day in days:
+        minute = list(reader.minute_bars(symbol, day))
+        five = _aggregate_complete(minute, 5, timedelta(minutes=2))
+        fifteen = _aggregate_complete(five, 3, timedelta(minutes=6))
+        if not fifteen:
+            censored.append({"symbol": symbol, "day": day.isoformat(), "reason": "complete_15m_bars_missing"})
+            continue
+        previous_slope: float | None = None
+        for index, bar in enumerate(fifteen):
+            atr = _atr(fifteen, index)
+            if atr is None:
+                continue
+            slope = _normalized_slope(fifteen, index, atr)
+            if slope is None:
+                continue
+            fractals = _confirmed_fractals(fifteen, index)
+            latest = fractals[-1][1] if fractals else None
+            direction = "up" if latest == "bottom" and slope > 0.05 else "down" if latest == "top" and slope < -0.05 else "flat"
+            magnitude = abs(slope)
+            if direction == "flat" or previous_slope is None:
+                quality = "healthy" if direction != "flat" else "flat"
+            elif magnitude >= abs(previous_slope) * 1.25:
+                quality = "accelerating"
+            elif magnitude <= abs(previous_slope) * 0.5:
+                quality = "slowing"
+            else:
+                quality = "healthy"
+            previous_slope = slope
+            children = bar.children
+            drift = children[-1].close - children[0].close
+            push = children[-1].close - children[-1].open
+            expected = 1 if direction == "up" else -1 if direction == "down" else 0
+            signs = ((drift > 0) - (drift < 0), (push > 0) - (push < 0))
+            confirmation = "same_direction" if expected and all(value == expected for value in signs) else "opposite_direction" if expected and all(value == -expected for value in signs) else "mixed"
+            range_value = bar.high - bar.low
+            upper_shadow = bar.high - max(bar.open, bar.close)
+            forward: dict[str, Any] = {}
+            for horizon in (1, 2):
+                future_index = index + horizon
+                if future_index >= len(fifteen):
+                    forward[str(horizon)] = None
+                    continue
+                future = fifteen[future_index]
+                raw_return = future.close / bar.close - 1.0
+                signed = raw_return * expected if expected else 0.0
+                if expected > 0:
+                    mfe, mae = future.high / bar.close - 1.0, future.low / bar.close - 1.0
+                elif expected < 0:
+                    mfe, mae = 1.0 - future.low / bar.close, 1.0 - future.high / bar.close
+                else:
+                    mfe = mae = None
+                forward[str(horizon)] = {
+                    "direction_hit": bool(expected and signed > 0),
+                    "raw_return": raw_return,
+                    "signed_return": signed,
+                    "post_cost_return": signed - 0.0005 if expected else None,
+                    "mfe": mfe,
+                    "mae": mae,
+                }
+            signals.append({
+                "symbol": symbol,
+                "day": day.isoformat(),
+                "confirmed_at": bar.ts.isoformat(),
+                "direction": direction,
+                "quality": quality,
+                "slope_atr": slope,
+                "latest_confirmed_fractal": latest,
+                "five_minute_confirmation": confirmation,
+                "long_upper_shadow": bool(range_value > 0 and upper_shadow / range_value >= 0.5),
+                "segment": "oos" if day >= oos_boundary else "is",
+                "forward": forward,
+            })
+    return signals, censored
+
+
+def _direction_summary(signals: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    segments: dict[str, Any] = {}
+    for segment in ("is", "oos"):
+        rows = [row for row in signals if row["segment"] == segment]
+        labelled = [row for row in rows if row["direction"] != "flat"]
+        h1 = [row["forward"]["1"] for row in labelled if row["forward"]["1"] is not None]
+        segments[segment] = {
+            "signals": len(rows),
+            "labelled": len(labelled),
+            "forward_1_available": len(h1),
+            "direction_hit_rate": sum(item["direction_hit"] for item in h1) / len(h1) if h1 else None,
+            "mean_post_cost_return": sum(item["post_cost_return"] for item in h1) / len(h1) if h1 else None,
+        }
+    directions = [row["direction"] for row in signals]
+    return {
+        "segments": segments,
+        "unconditional_direction_rates": {
+            value: directions.count(value) / len(directions) if directions else None
+            for value in ("up", "down", "flat")
+        },
+    }
+
+
 
 def evaluate_mtf_direction(
     params: MTFDirectionEvaluateIn, *, reader: ImmutableMinuteReader | None = None
 ) -> dict[str, Any]:
-    """只在方向标注器真实落地后运行；当前一律 fail-closed。"""
+    """Evaluate only after a real immutable OHLCV minute reader passes every gate."""
     resolved = reader if reader is not None else resolve_minute_reader()
     if resolved is None:
         return _unavailable(
@@ -439,11 +610,47 @@ def evaluate_mtf_direction(
             "minute_reader_protocol_incomplete",
             missing_capabilities=missing,
         )
-    return _unavailable(
-        params,
-        "direction_evaluator_pending",
-        missing_capabilities=["direction_evaluator"],
-    )
+    evidence, failure = _validate_reader_contracts(resolved, params)
+    if failure is not None:
+        return _unavailable(params, failure, evidence=evidence)
+    days = list(resolved.market_days(params.start, params.end))
+    boundary = days[len(days) // 2]
+    signals: list[dict[str, Any]] = []
+    censored: list[dict[str, Any]] = []
+    for symbol in params.symbols:
+        symbol_signals, symbol_censored = _label_symbol(resolved, symbol, days, boundary)
+        signals.extend(symbol_signals)
+        censored.extend(symbol_censored)
+    payload = {
+        "factor_id": MTF_DIRECTION_FACTOR_ID,
+        "schema_version": MTF_DIRECTION_SCHEMA_VERSION,
+        "name": MTF_DIRECTION_NAME,
+        "status": "ok",
+        "reason": None,
+        "missing_capabilities": [],
+        "evidence": evidence,
+        "symbols": list(params.symbols),
+        "window": {"start": params.start.isoformat(), "end": params.end.isoformat()},
+        "bar_precision": BAR_PRECISION,
+        "higher_timeframe": HIGHER_TIMEFRAME,
+        "direction": {
+            "oos_boundary": boundary.isoformat(),
+            "signals": signals,
+            "summary": _direction_summary(signals),
+            "censored": censored,
+            "cost_bps": 5.0,
+            "reachability": "minute_price_diagnostic",
+        },
+        "direction_labelling_pending": False,
+        "provenance": {
+            "generation": resolved.generation(),
+            "catalog_manifest": dict(resolved.catalog_manifest()),
+            "sealed_cutoff": resolved.sealed_cutoff().isoformat(),
+        },
+        "disclaimer": MTF_DIRECTION_DISCLAIMER,
+    }
+    _assert_no_trading_terms(payload)
+    return payload
 
 
 def _assert_no_trading_terms(payload: Mapping[str, Any]) -> None:
