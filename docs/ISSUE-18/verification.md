@@ -37,3 +37,10 @@
 - 独立 review 发现并修复 T+5 窗口缺交易日误判、worker snapshot pin 与 API workers 转发；二次 review 无阻塞 finding。
 - 六因子/API/provider/canonical/Agent/盘后管道累计：`351 passed, 7 warnings`。
 - 改动 Python 文件 `ruff --select F,E9` 通过；前端 `pnpm exec tsc -b --pretty false` 通过。
+
+## 增量发布复核修正
+
+- 修正提交 `d57bbf9` 已通过 PR #22 合并：incremental manifest 继承父 generation 的 `source_generations`，不会把发布时 current 指针误记为历史数据来源。
+- 交易日连续性校验只 pin 必需的 `tdx` 与 `markets` generation，并把两者记录为 `calendar_source_generations`；不再要求五个数据源同时可用。
+- `(parent_end, through_date]` 的预期交易日与本地 enriched 分区必须完全一致；缺失或多余日期均以 `calendar_partition_mismatch` fail-closed，并返回具体日期。
+- 修正后定向验证：`tests/services/test_canonical_history.py` 为 `10 passed`；相关文件 `ruff --select F,E9` 通过。
