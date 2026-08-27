@@ -38,6 +38,7 @@ _REQUIRED_SNAPSHOT_LOGICALS = (
     "klines",
     "extended",
 )
+_CALENDAR_SNAPSHOT_LOGICALS = ("tdx", "markets")
 _GENERATION_RE = re.compile(r"^\d{8}T\d{6}-[0-9a-f]{8}$")
 
 
@@ -120,10 +121,12 @@ def resolve_published_history(root: Path | None = None) -> tuple[dict[str, Any],
     return published
 
 
-def _snapshot_paths() -> dict[str, str]:
+def _snapshot_paths(
+    logicals: tuple[str, ...] = _REQUIRED_SNAPSHOT_LOGICALS,
+) -> dict[str, str]:
     paths: dict[str, str] = {}
     missing: list[str] = []
-    for logical in _REQUIRED_SNAPSHOT_LOGICALS:
+    for logical in logicals:
         path = current_path(logical)
         if path is None:
             missing.append(logical)
@@ -542,7 +545,7 @@ class CanonicalHistoryManager:
                     if parent_end < day <= through_date:
                         partitions.append((day, entry))
             partitions.sort()
-            calendar_snapshot_paths = _snapshot_paths()
+            calendar_snapshot_paths = _snapshot_paths(_CALENDAR_SNAPSHOT_LOGICALS)
             calendar_provider = get_provider(
                 str(parent_manifest.get("source") or "fquant_local"),
                 snapshot_paths=calendar_snapshot_paths,

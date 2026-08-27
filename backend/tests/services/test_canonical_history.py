@@ -226,6 +226,14 @@ def test_incremental_publish_clones_parent_and_copies_validated_local_partition(
     manifest, generation_dir = published
     assert manifest["parent_generation"] == parent
     assert manifest["update_type"] == "incremental_local_partitions"
+    assert set(manifest["source_generations"]) == {
+        "tdx",
+        "fstore",
+        "markets",
+        "klines",
+        "extended",
+    }
+    assert set(manifest["calendar_source_generations"]) == {"tdx", "markets"}
     assert manifest["end_date"] == "2024-01-04"
     assert manifest["incremental_partitions"]["2024-01-04"]["rows"] == 2
     assert list((generation_dir / "date=2024-01-02").glob("*.parquet"))
