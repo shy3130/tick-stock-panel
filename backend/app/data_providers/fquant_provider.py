@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 
 import polars as pl
@@ -181,13 +182,28 @@ class FQuantProvider:
         minute_month_extension=True,
     )
 
-    def __init__(self, name: str = "fquant") -> None:
+    def __init__(
+        self,
+        name: str = "fquant",
+        *,
+        snapshot_paths: Mapping[str, str] | None = None,
+    ) -> None:
         self.name = name
-        self._fstore = FStoreDuckDBClient()
+        pinned = dict(snapshot_paths or {})
+        fstore_kwargs = {
+            "path": pinned.get("fstore"),
+            "markets_path": pinned.get("markets"),
+            "klines_path": pinned.get("klines"),
+            "extended_path": pinned.get("extended"),
+        }
+        self._fstore = FStoreDuckDBClient(**fstore_kwargs)
         # 独立 markets 客户端：realtime/daily_markets 查询走自己的连接与锁，
         # 不与 _fstore 上的财务/K线/管道查询共享客户端锁而互相阻塞。
-        self._fstore_markets = FStoreDuckDBClient()
-        self._engine = TdxDuckDBClient()
+        self._fstore_markets = FStoreDuckDBClient(**fstore_kwargs)
+        self._engine = TdxDuckDBClient(
+            tdx_path=pinned.get("tdx"),
+            pin_paths=bool(snapshot_paths),
+        )
         # instruments 缓存（§4.3 24h TTL）
         self._instruments_cache: dict[str, pl.DataFrame] = {}
         self._instruments_cache_ts: dict[str, datetime] = {}

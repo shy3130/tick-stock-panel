@@ -134,14 +134,24 @@ class _LeasedSource:
     raw path when no snapshot is published) and runs under a refcounted lease, so
     a generation swap mid-query never closes the connection in use.
     """
-    def __init__(self, logical: str, raw_path: str, *, strict_snapshot: bool = False) -> None:
+    def __init__(
+        self,
+        logical: str,
+        raw_path: str,
+        *,
+        strict_snapshot: bool = False,
+        pinned_path: bool = False,
+    ) -> None:
         self._logical = logical
         self._raw_path = raw_path
         self._strict_snapshot = strict_snapshot
+        self._pinned_path = pinned_path
         self._set: ConnectionSet | None = None
         self._duckdb_missing = False
 
     def _resolve(self) -> str | None:
+        if self._pinned_path:
+            return self._raw_path if os.path.exists(self._raw_path) else None
         path = generation.current_path(self._logical)
         if path and os.path.exists(path):
             return path
@@ -281,8 +291,14 @@ class TdxDuckDBClient:
         hk_trans_path: str | None = None,
         moneyflow_path: str | None = None,
         chip_path: str | None = None,
+        *,
+        pin_paths: bool = False,
     ) -> None:
-        self._tdx = _LeasedSource("tdx", tdx_path or TDX_PATH)
+        self._tdx = _LeasedSource(
+            "tdx",
+            tdx_path or TDX_PATH,
+            pinned_path=pin_paths,
+        )
         self._a_catalog_minutes = _CatalogSource("tdx_minutes", "a")
         self._a_catalog_trans = _CatalogSource("tdx_trans", "a")
         self._moneyflow = _LeasedSource("tdx_moneyflow", moneyflow_path or TDX_MONEYFLOW_PATH)

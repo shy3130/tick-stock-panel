@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import weakref
+from collections.abc import Mapping
 
 from app.data_providers.fquant_provider import FQuantProvider
 
@@ -65,9 +66,16 @@ def get_active_provider_name(capability: str | None = None) -> str:
         return "fquant_local"
 
 
-def get_provider(name: str = "fquant_local"):
-    provider_factory = _PROVIDERS[normalize_provider_name(name)]
-    provider = provider_factory()
+def get_provider(
+    name: str = "fquant_local",
+    *,
+    snapshot_paths: Mapping[str, str] | None = None,
+):
+    provider_name = normalize_provider_name(name)
+    if snapshot_paths is not None:
+        provider = FQuantProvider(name=provider_name, snapshot_paths=snapshot_paths)
+    else:
+        provider = _PROVIDERS[provider_name]()
     # 跟踪返回的对象：模块级单例只要还被引用就留存；WeakSet 不阻碍回收，也不持有
     # 强引用，因此不会改变 get_provider() 的所有权语义。
     if hasattr(provider, "close"):

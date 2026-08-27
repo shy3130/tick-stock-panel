@@ -501,6 +501,24 @@ def run_now(
         canonical_date = initialize_local_enriched_ceiling(repo)
         if canonical_date is not None:
             repo.refresh_cache()
+            try:
+                from app.services.canonical_history import canonical_history_manager
+
+                publish_result = (
+                    canonical_history_manager().publish_incremental_from_local(
+                        repo,
+                        canonical_date,
+                    )
+                )
+                logger.info(
+                    "canonical incremental publish: %s",
+                    publish_result,
+                )
+            except Exception:
+                logger.warning(
+                    "canonical incremental publish failed; local canonical remains valid",
+                    exc_info=True,
+                )
 
     # Step 2.2: regime 增量计算 — enriched 完成后补算环境时序。
     # 非致命失败: 记录警告但不中断主 pipeline。

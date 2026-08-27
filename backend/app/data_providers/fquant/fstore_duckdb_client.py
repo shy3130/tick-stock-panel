@@ -46,8 +46,18 @@ RECONNECT_BACKOFF_SECONDS = float(os.getenv("FQUANT_FSTORE_RECONNECT_BACKOFF_S",
 class FStoreDuckDBClient:
     """fstore DuckDB 只读客户端，接口对齐 FStoreClient。"""
 
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(
+        self,
+        path: str | None = None,
+        *,
+        markets_path: str | None = None,
+        klines_path: str | None = None,
+        extended_path: str | None = None,
+    ) -> None:
         self._path = path or FSTORE_DUCKDB_PATH
+        self._markets_path = markets_path or FSTORE_MARKETS_DUCKDB_PATH
+        self._klines_path = klines_path or FSTORE_KLINES_DUCKDB_PATH
+        self._extended_path = extended_path or FSTORE_EXTENDED_DUCKDB_PATH
         self._conn: Any = None
         self._available: bool | None = None
         self._unavailable_until: float | None = None
@@ -112,9 +122,9 @@ class FStoreDuckDBClient:
         conn: Any = None
         try:
             conn = connect_duckdb(main_path, read_only=True)
-            self._attach(conn, "fstore_markets", FSTORE_MARKETS_DUCKDB_PATH, main_path)
-            self._attach(conn, "fstore_klines", FSTORE_KLINES_DUCKDB_PATH, main_path)
-            self._attach(conn, "fstore_extended", FSTORE_EXTENDED_DUCKDB_PATH, main_path)
+            self._attach(conn, "fstore_markets", self._markets_path, main_path)
+            self._attach(conn, "fstore_klines", self._klines_path, main_path)
+            self._attach(conn, "fstore_extended", self._extended_path, main_path)
             self._create_temp_views(conn)
         except Exception as e:  # noqa: BLE001
             # ATTACH/视图设置在 _conn 发布前失败时，必须关闭已打开的本地连接，

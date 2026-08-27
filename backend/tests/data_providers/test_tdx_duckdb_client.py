@@ -1,18 +1,18 @@
 """TdxDuckDBClient 完整契约测试。"""
 from __future__ import annotations
 
-import os
 import datetime
+import os
 
 import pytest
 
-from app.data_providers.fquant import catalog_resolver
+from app.data_providers.fquant import catalog_resolver, generation
 from app.data_providers.fquant.lease import ConnectionSet
 from app.data_providers.fquant.tdx_duckdb_client import (
     TdxDuckDBClient,
+    _a_share_wide_volume,
     _CatalogSource,
     _LeasedSource,
-    _a_share_wide_volume,
     _prefixed_code,
 )
 
@@ -57,6 +57,20 @@ def test_leased_and_catalog_sources_use_duckdb_factory(monkeypatch):
     monkeypatch.setattr(catalog_resolver, "resolve_route", lambda *_a: "/snap/x.duckdb")
     assert catalog.query("SELECT 1", [], "20260710") == [("/snap/x.duckdb",)]
     assert seen[-1] == ("/snap/x.duckdb", True)
+
+
+def test_pinned_leased_source_never_follows_current_pointer(tmp_path, monkeypatch):
+    pinned = tmp_path / "tdx.duckdb"
+    pinned.touch()
+    monkeypatch.setattr(
+        generation,
+        "current_path",
+        lambda _logical: "/snapshots/other/tdx.duckdb",
+    )
+
+    source = _LeasedSource("tdx", str(pinned), pinned_path=True)
+
+    assert source._resolve() == str(pinned)
 
 
 def test_tdx_client_close_is_idempotent():

@@ -6,6 +6,7 @@ made visible only by the final atomic ``current.json`` replacement.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ import re
 import shutil
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -29,7 +31,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_ROOT = Path("/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history")
 SAFE_EARLIEST = date(1990, 1, 1)
-_REQUIRED_SNAPSHOT_LOGICALS = ("tdx", "fstore", "markets", "klines")
+_REQUIRED_SNAPSHOT_LOGICALS = (
+    "tdx",
+    "fstore",
+    "markets",
+    "klines",
+    "extended",
+)
 _GENERATION_RE = re.compile(r"^\d{8}T\d{6}-[0-9a-f]{8}$")
 
 
@@ -138,6 +146,38 @@ def _sql_string(value: Path) -> str:
     return value.as_posix().replace("'", "''")
 
 
+def _compute_enriched_batch(
+    provider: Any,
+    symbols: list[str],
+    start: datetime,
+    end: datetime,
+    instruments: pl.DataFrame,
+) -> pl.DataFrame:
+    raw = provider.get_daily(symbols, start, end, "stock")
+    if raw is None or raw.is_empty():
+        return pl.DataFrame()
+    factors = provider.get_adj_factors(symbols, start, end, "stock")
+    return _select_storage_cols(
+        compute_enriched(raw, factors=factors, instruments=instruments)
+    )
+
+def _compute_enriched_batch_isolated(
+    provider_name: str,
+    snapshot_paths: dict[str, str],
+    symbols: list[str],
+    start: datetime,
+    end: datetime,
+    instruments: pl.DataFrame,
+) -> pl.DataFrame:
+    provider = get_provider(provider_name, snapshot_paths=snapshot_paths)
+    try:
+        return _compute_enriched_batch(provider, symbols, start, end, instruments)
+    finally:
+        close = getattr(provider, "close", None)
+        if callable(close):
+            close()
+
+
 class CanonicalHistoryManager:
     """Single-flight background builder for external canonical history."""
 
@@ -195,9 +235,12 @@ class CanonicalHistoryManager:
         start_date: date | None = None,
         end_date: date | None = None,
         batch_size: int = 100,
+        workers: int = 1,
     ) -> dict[str, Any]:
         if not 1 <= batch_size <= 1_000:
             raise ValueError("batch_size must be between 1 and 1000")
+        if not 1 <= workers <= 8:
+            raise ValueError("workers must be between 1 and 8")
         start = start_date or SAFE_EARLIEST
         end = end_date or date.today()
         if start > end:
@@ -224,6 +267,7 @@ class CanonicalHistoryManager:
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
                 "batch_size": batch_size,
+                "workers": workers,
                 "progress": 0.0,
                 "symbols_total": 0,
                 "symbols_done": 0,
@@ -254,7 +298,10 @@ class CanonicalHistoryManager:
 
         try:
             staging.mkdir(parents=True, exist_ok=False)
-            provider = get_provider(str(initial["provider"]))
+            provider = get_provider(
+                str(initial["provider"]),
+                snapshot_paths=dict(initial.get("snapshot_paths") or {}),
+            )
             instruments = provider.get_instruments("stock")
             if instruments is None or instruments.is_empty() or "symbol" not in instruments.columns:
                 raise RuntimeError("active provider returned no A-share instruments")
@@ -281,45 +328,85 @@ class CanonicalHistoryManager:
             start_dt = datetime.combine(start, datetime.min.time())
             end_dt = datetime.combine(end, datetime.max.time())
 
-            for offset in range(0, len(symbols), int(initial["batch_size"])):
-                _ensure_snapshot_paths_unchanged(dict(initial.get("snapshot_paths") or {}))
-                batch = symbols[offset : offset + int(initial["batch_size"])]
-                raw = provider.get_daily(batch, start_dt, end_dt, "stock")
-                if raw is not None and not raw.is_empty():
-                    factors = provider.get_adj_factors(batch, start_dt, end_dt, "stock")
-                    enriched = _select_storage_cols(
-                        compute_enriched(raw, factors=factors, instruments=instruments)
-                    )
-                    missing = [column for column in ENRICHED_STORAGE_COLS if column not in enriched.columns]
-                    if missing:
-                        raise RuntimeError(
-                            "canonical enriched schema is incomplete: " + ", ".join(missing)
-                        )
-                    if not enriched.is_empty():
-                        connection.register("batch_df", enriched)
-                        try:
-                            if not table_created:
-                                connection.execute(
-                                    "CREATE TABLE canonical_rows AS SELECT * FROM batch_df"
-                                )
-                                table_created = True
-                            else:
-                                connection.execute(
-                                    "INSERT INTO canonical_rows SELECT * FROM batch_df"
-                                )
-                        finally:
-                            connection.unregister("batch_df")
-                        total_rows += enriched.height
+            batches = [
+                symbols[offset : offset + int(initial["batch_size"])]
+                for offset in range(0, len(symbols), int(initial["batch_size"]))
+            ]
+            completed_symbols = 0
 
-                done = min(offset + len(batch), len(symbols))
+            def persist_batch(enriched: pl.DataFrame) -> None:
+                nonlocal table_created, total_rows
+                if enriched.is_empty():
+                    return
+                missing = [
+                    column
+                    for column in ENRICHED_STORAGE_COLS
+                    if column not in enriched.columns
+                ]
+                if missing:
+                    raise RuntimeError(
+                        "canonical enriched schema is incomplete: " + ", ".join(missing)
+                    )
+                connection.register("batch_df", enriched)
+                try:
+                    if not table_created:
+                        connection.execute(
+                            "CREATE TABLE canonical_rows AS SELECT * FROM batch_df"
+                        )
+                        table_created = True
+                    else:
+                        connection.execute(
+                            "INSERT INTO canonical_rows SELECT * FROM batch_df"
+                        )
+                finally:
+                    connection.unregister("batch_df")
+                total_rows += enriched.height
+
+            def record_progress(batch_count: int) -> None:
+                nonlocal completed_symbols
+                completed_symbols += batch_count
                 state.update(
                     {
-                        "symbols_done": done,
+                        "symbols_done": completed_symbols,
                         "rows": total_rows,
-                        "progress": done / len(symbols),
+                        "progress": completed_symbols / len(symbols),
                     }
                 )
                 self._save_state(state)
+
+            workers = int(initial.get("workers") or 1)
+            expected_snapshots = dict(initial.get("snapshot_paths") or {})
+            if workers == 1:
+                for batch in batches:
+                    _ensure_snapshot_paths_unchanged(expected_snapshots)
+                    persist_batch(
+                        _compute_enriched_batch(
+                            provider, batch, start_dt, end_dt, instruments
+                        )
+                    )
+                    record_progress(len(batch))
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=workers,
+                    thread_name_prefix="canonical-batch",
+                ) as executor:
+                    futures = {}
+                    for batch in batches:
+                        _ensure_snapshot_paths_unchanged(expected_snapshots)
+                        future = executor.submit(
+                            _compute_enriched_batch_isolated,
+                            str(initial["provider"]),
+                            expected_snapshots,
+                            batch,
+                            start_dt,
+                            end_dt,
+                            instruments,
+                        )
+                        futures[future] = len(batch)
+                    for future in as_completed(futures):
+                        _ensure_snapshot_paths_unchanged(expected_snapshots)
+                        persist_batch(future.result())
+                        record_progress(futures[future])
 
             _ensure_snapshot_paths_unchanged(dict(initial.get("snapshot_paths") or {}))
             if not table_created or total_rows == 0:
@@ -345,7 +432,7 @@ class CanonicalHistoryManager:
             connection = None
 
             manifest: dict[str, Any] = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "kind": "tickflow_canonical_enriched_history",
                 "generation": generation,
                 "path": f"generations/{generation}",
@@ -355,6 +442,7 @@ class CanonicalHistoryManager:
                 "symbols": int(stats[3]),
                 "trading_days": int(stats[2]),
                 "source": str(initial["provider"]),
+                "workers": int(initial.get("workers") or 1),
                 "source_generations": {
                     logical: Path(path).parent.name
                     for logical, path in dict(initial.get("snapshot_paths") or {}).items()
@@ -404,6 +492,219 @@ class CanonicalHistoryManager:
                 except Exception:
                     logger.warning("failed to close canonical history provider", exc_info=True)
             shutil.rmtree(staging, ignore_errors=True)
+
+
+    def publish_incremental_from_local(
+        self,
+        repo: Any,
+        through_date: date,
+    ) -> dict[str, Any]:
+        """Publish validated local enriched dates as a new immutable generation.
+
+        Existing generation files are hard-linked when the filesystem permits it;
+        new local partitions are copied so later overlay replacement cannot mutate
+        the published generation. The current pointer changes only after a complete
+        coverage scan and a parent-generation compare.
+        """
+        _ensure_root_outside_user_data(self.root)
+        with self._lock:
+            state = self._read_state() or {}
+            if state.get("status") == "running":
+                return {"status": "skipped", "reason": "backfill_running"}
+            published = resolve_published_history(self.root)
+            if published is None:
+                return {"status": "skipped", "reason": "not_published"}
+            parent_manifest, parent_dir = published
+            columns = parent_manifest.get("columns")
+            if (
+                int(parent_manifest.get("schema_version") or 0) < 2
+                or not isinstance(columns, list)
+                or "raw_open" not in columns
+            ):
+                return {"status": "skipped", "reason": "schema_upgrade_required"}
+            parent_end = date.fromisoformat(str(parent_manifest["end_date"]))
+            if through_date <= parent_end:
+                return {
+                    "status": "up_to_date",
+                    "generation": parent_manifest["generation"],
+                }
+
+            local_root = Path(repo.store.data_dir) / "kline_daily_enriched"
+            partitions: list[tuple[date, Path]] = []
+            if local_root.is_dir():
+                for entry in local_root.iterdir():
+                    if not entry.is_dir() or not entry.name.startswith("date="):
+                        continue
+                    try:
+                        day = date.fromisoformat(entry.name.removeprefix("date="))
+                    except ValueError:
+                        continue
+                    if parent_end < day <= through_date:
+                        partitions.append((day, entry))
+            partitions.sort()
+            calendar_snapshot_paths = _snapshot_paths()
+            calendar_provider = get_provider(
+                str(parent_manifest.get("source") or "fquant_local"),
+                snapshot_paths=calendar_snapshot_paths,
+            )
+            try:
+                calendar_frame = calendar_provider.get_daily(
+                    ["000001.INDEX"],
+                    datetime.combine(parent_end + date.resolution, datetime.min.time()),
+                    datetime.combine(through_date, datetime.max.time()),
+                    "index",
+                )
+            finally:
+                close = getattr(calendar_provider, "close", None)
+                if callable(close):
+                    close()
+            if (
+                calendar_frame is None
+                or calendar_frame.is_empty()
+                or "date" not in calendar_frame.columns
+            ):
+                return {"status": "skipped", "reason": "calendar_unavailable"}
+            expected_days = {
+                value
+                for value in calendar_frame.get_column("date").to_list()
+                if parent_end < value <= through_date
+            }
+            actual_days = {day for day, _partition in partitions}
+            missing_days = sorted(expected_days - actual_days)
+            unexpected_days = sorted(actual_days - expected_days)
+            if missing_days or unexpected_days:
+                return {
+                    "status": "skipped",
+                    "reason": "calendar_partition_mismatch",
+                    "missing_dates": [day.isoformat() for day in missing_days],
+                    "unexpected_dates": [
+                        day.isoformat() for day in unexpected_days
+                    ],
+                }
+            if not partitions:
+                return {"status": "skipped", "reason": "no_validated_partitions"}
+
+            partition_meta: dict[str, dict[str, Any]] = {}
+            for day, partition in partitions:
+                files = sorted(partition.glob("*.parquet"))
+                if not files:
+                    raise RuntimeError(f"canonical incremental partition empty: {day}")
+                frame = pl.read_parquet(files)
+                missing = [
+                    column
+                    for column in ENRICHED_STORAGE_COLS
+                    if column not in frame.columns
+                ]
+                if missing:
+                    raise RuntimeError(
+                        f"canonical incremental schema incomplete for {day}: "
+                        + ", ".join(missing)
+                    )
+                if frame.is_empty() or frame.get_column("date").unique().to_list() != [day]:
+                    raise RuntimeError(
+                        f"canonical incremental partition date mismatch: {day}"
+                    )
+                digest = hashlib.sha256()
+                for file in files:
+                    digest.update(file.name.encode("utf-8"))
+                    digest.update(file.read_bytes())
+                partition_meta[day.isoformat()] = {
+                    "rows": frame.height,
+                    "symbols": frame.get_column("symbol").n_unique(),
+                    "sha256": digest.hexdigest(),
+                }
+
+            job_id = uuid.uuid4().hex
+            generation = f"{datetime.now(UTC):%Y%m%dT%H%M%S}-{job_id[:8]}"
+            staging = self.root / ".staging" / f"incremental-{job_id}"
+            output = staging / "published"
+
+            def link_or_copy(source: str, destination: str) -> str:
+                try:
+                    os.link(source, destination)
+                    return destination
+                except OSError:
+                    return shutil.copy2(source, destination)
+
+            try:
+                staging.mkdir(parents=True, exist_ok=False)
+                shutil.copytree(
+                    parent_dir,
+                    output,
+                    copy_function=link_or_copy,
+                    ignore=shutil.ignore_patterns("manifest.json"),
+                )
+                for day, source in partitions:
+                    destination = output / f"date={day.isoformat()}"
+                    if destination.exists():
+                        shutil.rmtree(destination)
+                    shutil.copytree(source, destination, copy_function=shutil.copy2)
+
+                connection = duckdb.connect()
+                try:
+                    stats = connection.execute(
+                        f"""
+                        SELECT min(date), max(date), count(DISTINCT date),
+                               count(DISTINCT symbol), count(*)
+                        FROM read_parquet(
+                            '{_sql_string(output / "date=*" / "*.parquet")}',
+                            hive_partitioning = true,
+                            union_by_name = true
+                        )
+                        """
+                    ).fetchone()
+                finally:
+                    connection.close()
+                if stats is None or stats[0] is None or stats[1] is None:
+                    raise RuntimeError("canonical incremental coverage unavailable")
+
+                latest = resolve_published_history(self.root)
+                if (
+                    latest is None
+                    or latest[0].get("generation")
+                    != parent_manifest.get("generation")
+                ):
+                    raise RuntimeError(
+                        "canonical parent generation changed during incremental publish"
+                    )
+                manifest = {
+                    "schema_version": 2,
+                    "kind": "tickflow_canonical_enriched_history",
+                    "generation": generation,
+                    "path": f"generations/{generation}",
+                    "parent_generation": parent_manifest["generation"],
+                    "update_type": "incremental_local_partitions",
+                    "start_date": str(stats[0]),
+                    "end_date": str(stats[1]),
+                    "rows": int(stats[4]),
+                    "symbols": int(stats[3]),
+                    "trading_days": int(stats[2]),
+                    "source": str(parent_manifest.get("source") or "fquant_local"),
+                    "source_generations": dict(
+                        parent_manifest.get("source_generations") or {}
+                    ),
+                    "calendar_source_generations": {
+                        logical: Path(path).parent.name
+                        for logical, path in calendar_snapshot_paths.items()
+                    },
+                    "columns": list(ENRICHED_STORAGE_COLS),
+                    "incremental_partitions": partition_meta,
+                    "published_at": datetime.now(UTC).isoformat(),
+                }
+                generation_dir = self.root / "generations" / generation
+                generation_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(output), str(generation_dir))
+                _atomic_write_json(generation_dir / "manifest.json", manifest)
+                _atomic_write_json(self.root / "current.json", manifest)
+                return {
+                    "status": "succeeded",
+                    "generation": generation,
+                    "parent_generation": parent_manifest["generation"],
+                    "partitions": len(partitions),
+                    "rows": int(stats[4]),
+                }
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
 
 
 _manager_lock = threading.Lock()
