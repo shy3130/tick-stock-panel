@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
+from app.services.universe_scd import UniverseScdIntegrityError
 
 FACTOR_ID = "volume_breakout_v1"
 FACTOR_VERSION = 1
@@ -84,9 +85,10 @@ class GenerationPinnedDailyReader(Protocol):
 
 
 class PitEligibleUniverse(Protocol):
-    def as_of(self) -> date: ...
-    def snapshot_hash(self) -> str: ...
+    def source_manifest(self) -> dict[str, Any]: ...
+    def snapshot_identity(self, event_date: date) -> dict[str, Any]: ...
     def eligible_symbols(self, event_date: date) -> list[str]: ...
+    def prefetch_event_days(self, event_days: list[date]) -> dict[date, tuple[dict[str, Any], list[str]]]: ...
 
 
 class VersionedExchangeCalendar(Protocol):
@@ -111,7 +113,7 @@ def resolve_pinned_reader(repo: Any) -> GenerationPinnedDailyReader | None:
 
 
 def resolve_pit_universe(repo: Any) -> PitEligibleUniverse | None:
-    return _resolve_capability(repo, PIT_UNIVERSE_ATTR, ("as_of", "snapshot_hash", "eligible_symbols"))
+    return _resolve_capability(repo, PIT_UNIVERSE_ATTR, ("source_manifest", "snapshot_identity", "eligible_symbols", "prefetch_event_days"))
 
 
 def resolve_versioned_calendar(repo: Any) -> VersionedExchangeCalendar | None:
@@ -240,13 +242,17 @@ def _scan_symbol(
     symbol: str,
     bars: dict[date, dict[str, Any]],
     calendar: list[date],
-    pit_universe: PitEligibleUniverse,
+    request_days: frozenset[date],
+    prefetched: dict[date, tuple[dict[str, Any], list[str]]],
+    eligible_sets: dict[date, frozenset[str]],
     cost_bps: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     events: list[dict[str, Any]] = []
     censored: list[dict[str, Any]] = []
     for event_index in range(REFERENCE_WINDOW, len(calendar) - CONSOLIDATION_MIN_DAYS):
         event_day = calendar[event_index]
+        if event_day not in request_days:
+            continue
         event_bar = bars.get(event_day)
         if event_bar is None:
             continue
@@ -259,12 +265,8 @@ def _scan_symbol(
             continue
         if float(event_bar["amount"]) < _percentile([float(row["amount"]) for row in prior_rows], VOLUME_PERCENTILE):
             continue
-        try:
-            eligible = symbol in set(pit_universe.eligible_symbols(event_day))
-        except Exception:
-            censored.append({"symbol": symbol, "event_date": event_day, "code": "pit_universe_unreadable"})
-            continue
-        if not eligible:
+        identity = prefetched[event_day][0]
+        if symbol not in eligible_sets[event_day]:
             censored.append({"symbol": symbol, "event_date": event_day, "code": "pit_universe_ineligible"})
             continue
 
@@ -294,7 +296,7 @@ def _scan_symbol(
                         "box_low": freeze["box_low"],
                         "box_width": freeze["box_width"],
                         "event_low": min(float(item["raw_low"]) for item in consolidation),
-                        "universe_hash": pit_universe.snapshot_hash(),
+                        "universe_hash": identity["content_hash"],
                     }
                     event["forward"] = _forward(event, bars, calendar, cost_bps)
                     events.append(event)
@@ -403,14 +405,22 @@ def evaluate_volume_breakout(
             cost_bps=cost_bps,
             capabilities=capabilities,
         )
-    if symbols is None:
-        symbols = sorted(
-            {
-                symbol
-                for event_date in request_market_days
-                for symbol in pit_universe.eligible_symbols(event_date)
-            }
+    try:
+        prefetched = pit_universe.prefetch_event_days(request_market_days)
+    except UniverseScdIntegrityError:
+        return unavailable_envelope(
+            start=start,
+            end=end,
+            reasons=["pit_eligible_universe_unavailable"],
+            symbols=symbols,
+            oos_start=oos_start,
+            cost_bps=cost_bps,
+            capabilities=capabilities,
         )
+    request_days = frozenset(request_market_days)
+    eligible_sets = {day: frozenset(eligible) for day, (_, eligible) in prefetched.items()}
+    if symbols is None:
+        symbols = sorted(set().union(*(eligible_sets[day] for day in request_market_days)))
     all_events: list[dict[str, Any]] = []
     censored: list[dict[str, Any]] = []
     for symbol in sorted(set(symbols)):
@@ -418,7 +428,7 @@ def evaluate_volume_breakout(
         if error:
             censored.append(error)
             continue
-        events, symbol_censored = _scan_symbol(symbol, bars, market_days, pit_universe, cost_bps)
+        events, symbol_censored = _scan_symbol(symbol, bars, market_days, request_days, prefetched, eligible_sets, cost_bps)
         all_events.extend(events)
         censored.extend(symbol_censored)
     events, clusters = _clusters(all_events, market_days)
@@ -433,8 +443,8 @@ def evaluate_volume_breakout(
             "generation": pinned_reader.generation(),
             "manifest_sha256": pinned_reader.manifest_sha256(),
             "calendar_version": calendar.version(),
-            "universe_as_of": pit_universe.as_of(),
-            "universe_hash": pit_universe.snapshot_hash(),
+            "universe_source": pit_universe.source_manifest(),
+            "universe_intervals": _group_universe_intervals(request_market_days, prefetched),
         },
         "coverage": {"symbols": len(symbols), "market_days": len(market_days), "events_before_overlap_control": len(all_events), "events": len(events), "censored": len(censored)},
         "events": events,
@@ -447,6 +457,26 @@ def evaluate_volume_breakout(
     return VolumeBreakoutResponse.model_validate(payload).model_dump(mode="json")
 
 
+def _group_universe_intervals(
+    request_market_days: list[date],
+    prefetched: dict[date, tuple[dict[str, Any], list[str]]],
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    for event_day in request_market_days:
+        identity = prefetched[event_day][0]
+        key = (identity["content_hash"], identity["effective_from"], identity["effective_to"])
+        group = groups.get(key)
+        if group is None:
+            group = {
+                "content_hash": identity["content_hash"],
+                "effective_from": identity["effective_from"],
+                "effective_to": identity["effective_to"],
+                "available_at": identity["available_at"],
+                "event_days": 0,
+            }
+            groups[key] = group
+        group["event_days"] += 1
+    return sorted(groups.values(), key=lambda item: item["effective_from"])
 __all__ = [
     "FACTOR_ID", "FACTOR_VERSION", "FACTOR_NAME", "REACHABILITY",
     "REFERENCE_WINDOW", "VOLUME_PERCENTILE", "CONSOLIDATION_MIN_DAYS",

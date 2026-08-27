@@ -399,6 +399,18 @@ class KlineRepository:
         """Expose the same immutable generation as the research calendar."""
         return self.generation_pinned_daily_reader
 
+    @property
+    def pit_eligible_universe(self):
+        """Expose only a fully validated published PIT-universe generation."""
+        try:
+            from app.services.universe_scd import PublishedUniverseScdReader, universe_scd_root
+
+            root = universe_scd_root()
+            return PublishedUniverseScdReader(root, data_dir=self.store.data_dir)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("PIT eligible universe unavailable: %s", exc)
+            return None
+
     def execute_all(self, sql: str, params: list | None = None) -> list[tuple]:
         """线程安全的 SELECT → fetchall。DuckDB 单 connection 非线程安全，所有读路径须走此方法。"""
         with self._lock:
