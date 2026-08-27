@@ -47,6 +47,25 @@ def test_fquant_local_uses_duckdb_engine():
     assert provider._engine.__class__.__name__ == "TdxDuckDBClient"
 
 
+
+def test_snapshot_paths_create_pinned_fquant_provider(monkeypatch):
+    seen = {}
+
+    class PinnedProvider(_StubProvider):
+        def __init__(self, *, name, snapshot_paths):
+            super().__init__(name)
+            seen.update(snapshot_paths)
+
+    monkeypatch.setattr(registry, "FQuantProvider", PinnedProvider)
+
+    provider = registry.get_provider(
+        "fquant_local",
+        snapshot_paths={"tdx": "/snapshots/tdx.duckdb"},
+    )
+
+    assert provider.name == "fquant_local"
+    assert seen == {"tdx": "/snapshots/tdx.duckdb"}
+
 class _StubProvider:
     """轻量 stub：替代 FQuantProvider 验证 WeakSet 跟踪与 close 契约。"""
 
@@ -137,7 +156,7 @@ def test_close_all_providers_continues_after_one_close_raises(monkeypatch):
 
     monkeypatch.setitem(registry._PROVIDERS, "boom", lambda: Boom())
     monkeypatch.setitem(registry._PROVIDERS, "ok", lambda: Ok())
-    boom = registry.get_provider("boom")
+    registry.get_provider("boom")
     ok = registry.get_provider("ok")
     registry.close_all_providers()  # 不抛
     assert ok.closed == 1

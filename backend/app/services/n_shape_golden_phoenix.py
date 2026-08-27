@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import statistics
 from datetime import date, timedelta
 from typing import Any, Protocol
 
@@ -43,6 +44,11 @@ VOLUME_PRE20_RATIO = 0.90      # 调整期均量 / 首板前20日均量上限
 VOLUME_BREAKOUT_RATIO = 1.50   # 放量突破 / 调整期均量下限
 MA_WINDOW = 5                  # 均线窗口（raw_close 尺度）
 LIMIT_PRICE_TOL = 0.005        # 涨停价判定容差（与 indicators/pipeline 同口径）
+# 研究评估层冻结参数（纯计算；不改变能力门禁）
+OOS_SPLIT_DATE = date(2025, 7, 1)
+COST_BPS = 10.0
+MIN_SAMPLES_PER_HORIZON = 30
+CI_Z = 1.96
 FORWARD_HORIZONS = (1, 5, 10, 20)
 
 # warmup：为覆盖首板前 60 个市场日，向 start 之前多取的日历日缓冲。
@@ -187,6 +193,10 @@ def _params_provenance() -> dict[str, Any]:
         "ma_window": MA_WINDOW,
         "limit_price_tol": LIMIT_PRICE_TOL,
         "forward_horizons": list(FORWARD_HORIZONS),
+        "oos_split_date": OOS_SPLIT_DATE.isoformat(),
+        "cost_bps": COST_BPS,
+        "min_samples_per_horizon": MIN_SAMPLES_PER_HORIZON,
+        "ci_z": CI_Z,
     }
 
 
@@ -294,8 +304,8 @@ def _scan_symbol(
     calendar: list[date],
     event_window: tuple[date, date],
     pit_provider: PitLimitRegimeProvider,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """单 symbol 事件扫描；返回 (events, censored)。"""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """单 symbol 事件扫描；返回 (events, censored, baselines)。"""
     cal_index = {d: i for i, d in enumerate(calendar)}
     bars_by_date = {row["date"]: row for row in rows}
     off_calendar = [str(d) for d in bars_by_date if d not in cal_index]
@@ -318,6 +328,7 @@ def _scan_symbol(
 
     events: list[dict[str, Any]] = []
     censored: list[dict[str, Any]] = []
+    baselines: list[dict[str, Any]] = []
 
     for t in ordered:
         if not (event_window[0] <= t <= event_window[1]):
@@ -366,6 +377,11 @@ def _scan_symbol(
         if pre20_avg is None or ref_vol <= 0:
             censored.append(_censor("volume_history_incomplete", event_date=str(t)))
             continue
+        baselines.append({
+            "symbol": symbol,
+            "event_date": t,
+            "forward": _forward_stats(bars_by_date, calendar, t),
+        })
 
         days_after_event = len(calendar) - 1 - t_pos
         if days_after_event < POST_WINDOW_MAX:
@@ -445,7 +461,136 @@ def _scan_symbol(
                     "structural_break_raw_low", event_date=str(t),
                     variants_pending=[v for v in VARIANTS if v not in confirmed],
                 ))
-    return events, censored
+    return events, censored, baselines
+
+
+def _split_of(reference_date: date) -> str:
+    return "is" if reference_date < OOS_SPLIT_DATE else "oos"
+
+
+def _aggregate_population(
+    samples: list[dict[str, Any]],
+    *,
+    calendar_index: dict[date, int],
+    horizon: int,
+) -> dict[str, Any]:
+    key = f"forward_{horizon}d_raw_return"
+    valid = [s for s in samples if s.get("forward", {}).get(key) is not None]
+    kept: list[dict[str, Any]] = []
+    absorbed = 0
+    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for sample in valid:
+        by_symbol.setdefault(str(sample["symbol"]), []).append(sample)
+    for symbol in sorted(by_symbol):
+        last_end: int | None = None
+        group = sorted(by_symbol[symbol], key=lambda s: (calendar_index[s["anchor_date"]], str(s.get("variant", ""))))
+        for sample in group:
+            start_idx = calendar_index[sample["anchor_date"]]
+            if last_end is not None and start_idx < last_end:
+                absorbed += 1
+                continue
+            kept.append(sample)
+            last_end = start_idx + horizon
+    returns = [float(s["forward"][key]) for s in kept]
+    n = len(returns)
+    result: dict[str, Any] = {
+        "n_sample_raw": len(valid),
+        "clusters": n,
+        "n_sample": n,
+        "censored_forward": len(samples) - len(valid),
+        "absorbed_overlaps": absorbed,
+        "status": "ok" if n >= MIN_SAMPLES_PER_HORIZON else "insufficient_sample",
+        "mean": None, "median": None, "std": None, "win_rate": None,
+        "ci95_low": None, "ci95_high": None,
+        "post_cost_mean": None, "post_cost_ci95_low": None, "post_cost_ci95_high": None,
+    }
+    if n < MIN_SAMPLES_PER_HORIZON:
+        return result
+    mean = sum(returns) / n
+    variance = sum((value - mean) ** 2 for value in returns) / n
+    std = math.sqrt(variance)
+    half = CI_Z * std / math.sqrt(n)
+    cost = COST_BPS / 10000.0
+    post = [value - cost for value in returns]
+    post_mean = sum(post) / n
+    result.update({
+        "mean": mean,
+        "median": statistics.median(returns),
+        "std": std,
+        "win_rate": sum(value > 0 for value in returns) / n,
+        "ci95_low": mean - half,
+        "ci95_high": mean + half,
+        "post_cost_mean": post_mean,
+        "post_cost_ci95_low": post_mean - half,
+        "post_cost_ci95_high": post_mean + half,
+    })
+    return result
+
+
+def _population_stats(samples: list[dict[str, Any]], calendar_index: dict[date, int]) -> dict[str, Any]:
+    output: dict[str, Any] = {"count_raw": len(samples)}
+    for split in ("is", "oos"):
+        subset = [sample for sample in samples if _split_of(sample["anchor_date"]) == split]
+        output[split] = {
+            "count_raw": len(subset),
+            "stats_by_horizon": {
+                horizon: _aggregate_population(subset, calendar_index=calendar_index, horizon=horizon)
+                for horizon in FORWARD_HORIZONS
+            },
+        }
+    return output
+
+
+def _research_layer(
+    *,
+    events: list[dict[str, Any]],
+    baselines: list[dict[str, Any]],
+    calendar: list[date],
+) -> dict[str, Any]:
+    calendar_index = {day: idx for idx, day in enumerate(calendar)}
+
+    def normalize(item: dict[str, Any], anchor: str) -> dict[str, Any]:
+        return {
+            "symbol": item["symbol"],
+            "anchor_date": item[anchor],
+            "variant": item.get("variant", ""),
+            "forward": item["forward"],
+        }
+
+    populations = {
+        "baseline": [normalize(item, "event_date") for item in baselines],
+        "events": [normalize(item, "confirm_date") for item in events],
+        "events_volume_breakout": [
+            normalize(item, "confirm_date") for item in events if item["variant"] == VARIANT_VOLUME_BREAKOUT
+        ],
+        "events_second_limit_up": [
+            normalize(item, "confirm_date") for item in events if item["variant"] == VARIANT_SECOND_LIMIT_UP
+        ],
+    }
+    stats = {name: _population_stats(items, calendar_index) for name, items in populations.items()}
+    reasons: list[str] = []
+    event_stats = stats["events"]
+    for horizon in FORWARD_HORIZONS:
+        if event_stats["is"]["stats_by_horizon"][horizon]["n_sample"] < MIN_SAMPLES_PER_HORIZON:
+            reasons.append(f"is_sample_insufficient_{horizon}d")
+        if event_stats["oos"]["stats_by_horizon"][horizon]["n_sample"] < MIN_SAMPLES_PER_HORIZON:
+            reasons.append(f"oos_sample_insufficient_{horizon}d")
+    return {
+        "design": {
+            "oos_split_date": OOS_SPLIT_DATE,
+            "split_rule": "events use confirm_date; baseline uses first-board date; date >= split is oos",
+            "horizons": list(FORWARD_HORIZONS),
+            "cost_bps": COST_BPS,
+            "min_samples_per_horizon": MIN_SAMPLES_PER_HORIZON,
+            "ci_z": CI_Z,
+            "ci_method": "normal_approximation",
+            "overlap_rule": "same symbol and horizon windows are clustered; earliest anchor represents each cluster",
+            "cost_note": "fixed cost is a research diagnostic deducted from forward returns",
+        },
+        "populations": stats,
+        "verdict": "accepted" if not reasons else "rejected",
+        "verdict_reasons": reasons,
+    }
 
 
 def _build_event(
@@ -545,6 +690,7 @@ def evaluate_n_shape(
 
     events: list[dict[str, Any]] = []
     censored: list[dict[str, Any]] = []
+    baselines: list[dict[str, Any]] = []
     evaluated = 0
     for symbol in symbols:
         frame = pinned_reader.daily_bars(symbol, lookup_start, end)
@@ -553,14 +699,16 @@ def evaluate_n_shape(
             censored.append(censor)
             continue
         evaluated += 1
-        sym_events, sym_censored = _scan_symbol(
+        sym_events, sym_censored, sym_baselines = _scan_symbol(
             symbol=symbol, rows=rows, calendar=calendar,
             event_window=(start, end), pit_provider=pit_provider,
         )
         events.extend(sym_events)
         censored.extend(sym_censored)
+        baselines.extend(sym_baselines)
 
     events.sort(key=lambda e: (e["event_date"], e["symbol"], e["variant"]))
+    baselines.sort(key=lambda b: (b["event_date"], b["symbol"]))
     censored.sort(key=lambda c: (c["symbol"], c["code"]))
     by_reason: dict[str, int] = {}
     for c in censored:
@@ -586,11 +734,13 @@ def evaluate_n_shape(
         },
         "coverage": {
             "symbols_total": len(symbols),
+            "baselines": len(baselines),
             "evaluated": evaluated,
             "censored": len(censored),
             "events": len(events),
             "by_reason": by_reason,
         },
+        "research": _research_layer(events=events, baselines=baselines, calendar=calendar),
         "events": events,
         "censored": censored,
         "market_days_used": len(calendar),
@@ -610,6 +760,10 @@ __all__ = [
     "PINNED_READER_ATTR",
     "PIT_PROVIDER_ATTR",
     "GenerationPinnedDailyReader",
+    "OOS_SPLIT_DATE",
+    "COST_BPS",
+    "MIN_SAMPLES_PER_HORIZON",
+    "CI_Z",
     "PitLimitRegimeProvider",
     "resolve_pinned_reader",
     "resolve_pit_provider",

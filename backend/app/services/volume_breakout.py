@@ -1,70 +1,34 @@
-"""量价序列突破研究因子 — volume_breakout_v1（独立、只读、fail-closed）。
-
-设计定稿见 docs/ISSUE-14/final-design.md 与 docs/ISSUE-14/plan-v2.md。
-本次交付仅为显式 fail-closed 契约：生产 generation-pinned canonical reader、
-PIT eligible-universe 快照与版本化交易所 calendar 在当前仓库不存在，事件
-状态机与 OOS walk-forward 亦未实现；任何评估请求都返回结构化 unavailable，
-不产出事件、基线或 OOS 效果结论。
-
-边界：
-
-- 读取边界：只接受 generation-pinned sealed reader（构造注入）；禁止
-  ``get_enriched_range`` 合并 overlay、当前 universe 或日线近似替代。
-- 能力门禁（优先于一切输出）：pinned reader、PIT eligible-universe、
-  版本化 calendar 任一缺失 → 整份评估 ``unavailable`` + reasons，不降级、
-  不猜口径。
-- 诚实声明：即使三项能力齐备，事件状态机/OOS 未实现前状态保持
-  ``unavailable``（UNIMPLEMENTED_REASONS 恒定携带），绝不编造命中。
-- 输出边界：固定字段 envelope；证据/事件键禁止交易语义（buy/sell/
-  target/stop/action/entry/exit/position/order/long/short/hold/trade）。
-- 产品边界：不接 short_pool、不进 Agent 工具、不改交易事实流、
-  不给任何交易建议。
-"""
+"""Auditable volume-divergence/convergence breakout research factor."""
 from __future__ import annotations
 
-import logging
-from datetime import date
+import math
+from datetime import date, timedelta
+from statistics import mean
 from typing import Any, Literal, Protocol
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
-
-
-logger = logging.getLogger(__name__)
 
 FACTOR_ID = "volume_breakout_v1"
 FACTOR_VERSION = 1
 FACTOR_NAME = "量价序列突破（研究）"
 FACTOR_DESCRIPTION = (
     "放量（raw volume 与 amount 双 P90）后 3-15 市场日箱体整理冻结，"
-    "raw_close 越过冻结箱体上/下沿确认突破的日线事件研究因子契约；"
-    "当前仅交付 fail-closed 契约，仅输出能力状态与删失原因，无任何交易语义"
+    "raw_close 越过冻结箱体上/下沿确认的只读事件研究因子"
 )
 REACHABILITY = "daily_price_only"
-
-# ── 冻结契约参数（final-design 逐字锁定，实现 reader 前不得改动） ──────────
-REFERENCE_WINDOW = 20            # 放量事件日 E 前严格 20 个有效市场日（分位参考窗）
-VOLUME_PERCENTILE = 0.90         # raw volume 与 amount 各自 P90，须同时满足
-CONSOLIDATION_MIN_DAYS = 3       # 整理窗口下限（完整市场日，自 E+1 起）
-CONSOLIDATION_MAX_DAYS = 15      # 整理窗口上限，超过未冻结 → 事件失败不重开
-BOX_WIDTH_MAX = 0.12             # 整理日 raw_high-low 箱体宽度上限（12%）
-FORWARD_HORIZONS = (1, 5, 10, 20)  # 评价 horizon（自 T+1 下一可交易 bar 起）
-
-#: 事件变体（同一冻结箱体可各自独立成立）
+REFERENCE_WINDOW = 20
+VOLUME_PERCENTILE = 0.90
+CONSOLIDATION_MIN_DAYS = 3
+CONSOLIDATION_MAX_DAYS = 15
+BOX_WIDTH_MAX = 0.12
+FORWARD_HORIZONS = (1, 5, 10, 20)
 VARIANT_UP_BREAKOUT = "up_breakout"
 VARIANT_DOWN_BREAKOUT = "down_breakout"
 VARIANTS = (VARIANT_UP_BREAKOUT, VARIANT_DOWN_BREAKOUT)
-
-#: sealed 日线必须提供的 raw 字段；缺任一/非正值删失（不假设 raw_open）。
 REQUIRED_RAW_COLUMNS = ("raw_high", "raw_low", "raw_close", "volume", "amount")
-
-#: 恒定未实现声明：状态机与 OOS 未落地前，即使能力齐备也不产出事件。
-UNIMPLEMENTED_REASONS = (
-    "event_state_machine_not_implemented",
-    "oos_walkforward_not_implemented",
-)
-
-# 证据/事件字段禁用的交易语义词（子串匹配，小写）。
+DEFAULT_OOS_START = date(2025, 7, 1)
+DEFAULT_COST_BPS = 10.0
 _BANNED_TRADING_TOKENS = (
     "buy", "sell", "target", "stop", "action", "entry", "exit",
     "position", "order", "long", "short", "hold", "trade",
@@ -87,6 +51,8 @@ class VolumeBreakoutRequest(_StrictModel):
     start: date
     end: date
     symbols: list[str] | None = None
+    oos_start: date = DEFAULT_OOS_START
+    cost_bps: float = DEFAULT_COST_BPS
 
 
 class VolumeBreakoutCapabilities(_StrictModel):
@@ -97,65 +63,43 @@ class VolumeBreakoutCapabilities(_StrictModel):
 
 class VolumeBreakoutResponse(_StrictModel):
     factor: VolumeBreakoutFactor
-    status: Literal["unavailable"]
+    status: Literal["ok", "unavailable"]
     unavailable_reasons: list[str]
     request: VolumeBreakoutRequest
     capabilities: VolumeBreakoutCapabilities
     parameters: dict[str, Any]
     provenance: dict[str, Any]
-    coverage: None
+    coverage: dict[str, Any] | None
     events: list[Any]
     clusters: list[Any]
     censored: list[Any]
+    research: dict[str, Any] | None = None
     note: str
 
 
 class GenerationPinnedDailyReader(Protocol):
-    """generation-pinned sealed reader 契约（当前仓库尚无实现 → fail-closed）。
-
-    ``daily_bars`` 必须提供 ``date`` 与 ``REQUIRED_RAW_COLUMNS`` 全部 raw 字段；
-    ``generation`` 返回 manifest 字节哈希等代标识，进入 provenance。
-    """
-
     def generation(self) -> str: ...
-
+    def manifest_sha256(self) -> str: ...
     def daily_bars(self, symbol: str, start: date, end: date) -> pl.DataFrame: ...
 
 
 class PitEligibleUniverse(Protocol):
-    """PIT eligible-universe 快照契约（当前仓库尚无实现 → fail-closed）。
-
-    事件日 E 的口径：``effective_from <= E <= effective_to`` 且
-    ``available_at <= E`` 的最新快照；无唯一快照删失并记录逐事件 hash。
-    """
-
     def as_of(self) -> date: ...
-
     def snapshot_hash(self) -> str: ...
-
     def eligible_symbols(self, event_date: date) -> list[str]: ...
 
 
 class VersionedExchangeCalendar(Protocol):
-    """版本化交易所 calendar 契约（当前仓库尚无实现 → fail-closed）。
-
-    标的 status（停牌/未上市）另由 PIT listing/trading records 给出，
-    不能从 bars 推导；市场开市缺 bar 与停牌/未上市分别计数。
-    """
-
     def version(self) -> str: ...
-
     def market_days(self, start: date, end: date) -> list[date]: ...
 
 
-#: repository 上用于发现能力的 duck-type 属性名（均不存在 → unavailable）。
 PINNED_READER_ATTR = "generation_pinned_daily_reader"
 PIT_UNIVERSE_ATTR = "pit_eligible_universe"
 CALENDAR_ATTR = "versioned_exchange_calendar"
 
 
 def _resolve_capability(repo: Any, attr: str, required: tuple[str, ...]) -> Any | None:
-    """按属性名 + 方法形状解析能力；缺属性或方法不齐即 None。"""
     capability = getattr(repo, attr, None)
     if capability is None:
         return None
@@ -163,27 +107,18 @@ def _resolve_capability(repo: Any, attr: str, required: tuple[str, ...]) -> Any 
 
 
 def resolve_pinned_reader(repo: Any) -> GenerationPinnedDailyReader | None:
-    """从 repository 解析完整 generation-pinned reader；缺能力即 None。"""
-    return _resolve_capability(repo, PINNED_READER_ATTR, ("generation", "daily_bars"))
+    return _resolve_capability(repo, PINNED_READER_ATTR, ("generation", "manifest_sha256", "daily_bars"))
 
 
 def resolve_pit_universe(repo: Any) -> PitEligibleUniverse | None:
-    """从 repository 解析完整 PIT eligible-universe；缺能力即 None。"""
-    return _resolve_capability(
-        repo, PIT_UNIVERSE_ATTR, ("as_of", "snapshot_hash", "eligible_symbols")
-    )
+    return _resolve_capability(repo, PIT_UNIVERSE_ATTR, ("as_of", "snapshot_hash", "eligible_symbols"))
 
 
 def resolve_versioned_calendar(repo: Any) -> VersionedExchangeCalendar | None:
-    """从 repository 解析完整版本化 calendar；缺能力即 None。"""
     return _resolve_capability(repo, CALENDAR_ATTR, ("version", "market_days"))
 
 
-# ── 交易语义禁令 ──────────────────────────────────────────────────────────
-
-
 def assert_no_trading_tokens(name: str) -> None:
-    """字段/键名含交易语义词时 fail-closed（内部契约守卫）。"""
     lowered = name.lower()
     for token in _BANNED_TRADING_TOKENS:
         if token in lowered:
@@ -198,9 +133,6 @@ def _validate_keys_no_trading_tokens(payload: Any) -> None:
     elif isinstance(payload, list):
         for item in payload:
             _validate_keys_no_trading_tokens(item)
-
-
-# ── 能力门禁 envelope ─────────────────────────────────────────────────────
 
 
 def _factor_meta() -> dict[str, Any]:
@@ -227,18 +159,15 @@ def _locked_parameters() -> dict[str, Any]:
 
 
 def unavailable_envelope(
-    *,
-    start: date,
-    end: date,
-    reasons: list[str],
+    *, start: date, end: date, reasons: list[str], symbols: list[str] | None = None,
+    oos_start: date = DEFAULT_OOS_START, cost_bps: float = DEFAULT_COST_BPS,
     capabilities: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    """能力缺失/未实现的结构化 unavailable 载荷（研究状态，非 HTTP 错误）。"""
     payload = {
         "factor": _factor_meta(),
         "status": "unavailable",
         "unavailable_reasons": list(reasons),
-        "request": {"start": start, "end": end},
+        "request": {"start": start, "end": end, "symbols": symbols, "oos_start": oos_start, "cost_bps": cost_bps},
         "capabilities": {
             "generation_pinned_reader": False,
             "pit_eligible_universe": False,
@@ -251,32 +180,198 @@ def unavailable_envelope(
         "events": [],
         "clusters": [],
         "censored": [],
-        "note": (
-            "当前仓库没有生产 generation-pinned canonical reader、PIT eligible-universe"
-            " 快照与版本化交易所 calendar；事件状态机与 OOS walk-forward 亦未实现。"
-            "本契约显式返回 unavailable，不产出事件/基线/OOS 结论，不以合并 overlay"
-            " 或当前 universe 替代，也不构成任何交易建议"
-        ),
+        "research": None,
+        "note": "缺少可证明的 sealed/PIT 能力时不产生事件；输出仅用于研究诊断，不构成投资建议",
     }
+    _validate_keys_no_trading_tokens(payload)
     return VolumeBreakoutResponse.model_validate(payload).model_dump(mode="json")
 
 
-# ── 评估入口 ──────────────────────────────────────────────────────────────
+def _percentile(values: list[float], quantile: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * quantile
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _prepare_bars(frame: pl.DataFrame, symbol: str) -> tuple[dict[date, dict[str, Any]], dict[str, Any] | None]:
+    if frame is None or frame.is_empty():
+        return {}, {"symbol": symbol, "code": "no_data"}
+    missing = [column for column in ("date", *REQUIRED_RAW_COLUMNS) if column not in frame.columns]
+    if missing:
+        return {}, {"symbol": symbol, "code": "raw_field_missing", "fields": missing}
+    result: dict[date, dict[str, Any]] = {}
+    for row in frame.sort("date").to_dicts():
+        values = [row.get(column) for column in REQUIRED_RAW_COLUMNS]
+        if any(not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) <= 0 for value in values):
+            return {}, {"symbol": symbol, "code": "raw_field_invalid", "date": str(row.get("date"))}
+        result[row["date"]] = row
+    return result, None
+
+
+def _forward(event: dict[str, Any], bars: dict[date, dict[str, Any]], calendar: list[date], cost_bps: float) -> dict[int, Any]:
+    index = {day: i for i, day in enumerate(calendar)}
+    trigger = event["confirm_date"]
+    base = float(bars[trigger]["raw_close"])
+    trigger_index = index[trigger]
+    output: dict[int, Any] = {}
+    for horizon in FORWARD_HORIZONS:
+        target_index = trigger_index + horizon
+        later = bars.get(calendar[target_index]) if target_index < len(calendar) else None
+        if later is None:
+            output[horizon] = None
+        else:
+            gross = float(later["raw_close"]) / base - 1.0
+            output[horizon] = {
+                "gross_return": gross,
+                "post_cost_return": gross - cost_bps / 10000.0,
+                "cost_bps": cost_bps,
+            }
+    return output
+
+
+def _scan_symbol(
+    symbol: str,
+    bars: dict[date, dict[str, Any]],
+    calendar: list[date],
+    pit_universe: PitEligibleUniverse,
+    cost_bps: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    events: list[dict[str, Any]] = []
+    censored: list[dict[str, Any]] = []
+    for event_index in range(REFERENCE_WINDOW, len(calendar) - CONSOLIDATION_MIN_DAYS):
+        event_day = calendar[event_index]
+        event_bar = bars.get(event_day)
+        if event_bar is None:
+            continue
+        prior_days = calendar[event_index - REFERENCE_WINDOW:event_index]
+        prior = [bars.get(day) for day in prior_days]
+        if any(row is None for row in prior):
+            continue
+        prior_rows = [row for row in prior if row is not None]
+        if float(event_bar["volume"]) < _percentile([float(row["volume"]) for row in prior_rows], VOLUME_PERCENTILE):
+            continue
+        if float(event_bar["amount"]) < _percentile([float(row["amount"]) for row in prior_rows], VOLUME_PERCENTILE):
+            continue
+        try:
+            eligible = symbol in set(pit_universe.eligible_symbols(event_day))
+        except Exception:
+            censored.append({"symbol": symbol, "event_date": event_day, "code": "pit_universe_unreadable"})
+            continue
+        if not eligible:
+            censored.append({"symbol": symbol, "event_date": event_day, "code": "pit_universe_ineligible"})
+            continue
+
+        consolidation: list[dict[str, Any]] = []
+        freeze: dict[str, Any] | None = None
+        failed = False
+        for offset in range(1, CONSOLIDATION_MAX_DAYS + 1):
+            if event_index + offset >= len(calendar):
+                break
+            day = calendar[event_index + offset]
+            row = bars.get(day)
+            if row is None:
+                censored.append({"symbol": symbol, "event_date": event_day, "code": "market_day_bar_missing", "date": day})
+                failed = True
+                break
+            if freeze is not None:
+                close = float(row["raw_close"])
+                variant = VARIANT_UP_BREAKOUT if close > freeze["box_high"] else VARIANT_DOWN_BREAKOUT if close < freeze["box_low"] else None
+                if variant is not None:
+                    event = {
+                        "symbol": symbol,
+                        "variant": variant,
+                        "event_date": event_day,
+                        "freeze_date": freeze["freeze_date"],
+                        "confirm_date": day,
+                        "box_high": freeze["box_high"],
+                        "box_low": freeze["box_low"],
+                        "box_width": freeze["box_width"],
+                        "event_low": min(float(item["raw_low"]) for item in consolidation),
+                        "universe_hash": pit_universe.snapshot_hash(),
+                    }
+                    event["forward"] = _forward(event, bars, calendar, cost_bps)
+                    events.append(event)
+                    failed = True
+                    break
+                continue
+
+            if consolidation:
+                previous_high = max(float(item["raw_high"]) for item in consolidation)
+                previous_low = min(float(item["raw_low"]) for item in consolidation)
+                close = float(row["raw_close"])
+                if close > previous_high or close < previous_low:
+                    censored.append({"symbol": symbol, "event_date": event_day, "code": "consolidation_broke_before_freeze", "date": day})
+                    failed = True
+                    break
+            consolidation.append(row)
+            highs = [float(item["raw_high"]) for item in consolidation]
+            lows = [float(item["raw_low"]) for item in consolidation]
+            box_high, box_low = max(highs), min(lows)
+            width = (box_high - box_low) / float(event_bar["raw_close"])
+            per_bar_ok = all((float(item["raw_high"]) - float(item["raw_low"])) / float(item["raw_close"]) <= BOX_WIDTH_MAX for item in consolidation)
+            if len(consolidation) >= CONSOLIDATION_MIN_DAYS and width <= BOX_WIDTH_MAX and per_bar_ok:
+                freeze = {"freeze_date": day, "box_high": box_high, "box_low": box_low, "box_width": width}
+        if freeze is None and not failed:
+            censored.append({"symbol": symbol, "event_date": event_day, "code": "consolidation_timeout"})
+    return events, censored
+
+
+def _clusters(events: list[dict[str, Any]], calendar: list[date]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    positions = {day: index for index, day in enumerate(calendar)}
+    retained: list[dict[str, Any]] = []
+    clusters: list[dict[str, Any]] = []
+    for symbol in sorted({event["symbol"] for event in events}):
+        rows = sorted((event for event in events if event["symbol"] == symbol), key=lambda event: event["confirm_date"])
+        current: list[dict[str, Any]] = []
+        end_index = -1
+        for event in rows:
+            start_index = positions[event["confirm_date"]] + 1
+            event_end = positions[event["confirm_date"]] + max(FORWARD_HORIZONS)
+            if current and start_index > end_index:
+                retained.append(current[0])
+                clusters.append({"symbol": symbol, "members": len(current), "retained_confirm_date": current[0]["confirm_date"]})
+                current = []
+            current.append(event)
+            end_index = max(end_index, event_end)
+        if current:
+            retained.append(current[0])
+            clusters.append({"symbol": symbol, "members": len(current), "retained_confirm_date": current[0]["confirm_date"]})
+    return retained, clusters
+
+
+def _research(events: list[dict[str, Any]], oos_start: date) -> dict[str, Any]:
+    segments: dict[str, Any] = {}
+    for segment in ("is", "oos"):
+        rows = [event for event in events if (event["confirm_date"] >= oos_start) == (segment == "oos")]
+        by_horizon: dict[int, Any] = {}
+        for horizon in FORWARD_HORIZONS:
+            values = [event["forward"][horizon]["post_cost_return"] for event in rows if event["forward"][horizon] is not None]
+            by_horizon[horizon] = {"n": len(values), "mean_post_cost_return": mean(values) if values else None, "censored": len(rows) - len(values)}
+        segments[segment] = {"events": len(rows), "by_horizon": by_horizon}
+    oos_h1 = segments["oos"]["by_horizon"][1]
+    verdict = "accepted" if oos_h1["n"] >= 30 and (oos_h1["mean_post_cost_return"] or 0) > 0 else "rejected"
+    return {"oos_start": oos_start, "segments": segments, "verdict": verdict}
 
 
 def evaluate_volume_breakout(
-    *,
-    start: date,
-    end: date,
-    symbols: list[str] | None,
+    *, start: date, end: date, symbols: list[str] | None,
     pinned_reader: GenerationPinnedDailyReader | None,
     pit_universe: PitEligibleUniverse | None,
     calendar: VersionedExchangeCalendar | None,
+    oos_start: date = DEFAULT_OOS_START,
+    cost_bps: float = DEFAULT_COST_BPS,
 ) -> dict[str, Any]:
-    """评估 volume_breakout_v1；能力门禁与未实现声明优先于一切输出。"""
     if start > end:
         raise ValueError("start must be <= end")
-
+    if not math.isfinite(cost_bps) or cost_bps < 0:
+        raise ValueError("cost_bps must be finite and >= 0")
     reasons: list[str] = []
     if pinned_reader is None:
         reasons.append("generation_pinned_reader_missing")
@@ -284,53 +379,83 @@ def evaluate_volume_breakout(
         reasons.append("pit_eligible_universe_missing")
     if calendar is None:
         reasons.append("versioned_exchange_calendar_missing")
-    reasons.extend(UNIMPLEMENTED_REASONS)
-
-    payload = unavailable_envelope(
-        start=start,
-        end=end,
-        reasons=reasons,
-        capabilities={
-            "generation_pinned_reader": pinned_reader is not None,
-            "pit_eligible_universe": pit_universe is not None,
-            "versioned_exchange_calendar": calendar is not None,
-        },
+    capabilities = {
+        "generation_pinned_reader": pinned_reader is not None,
+        "pit_eligible_universe": pit_universe is not None,
+        "versioned_exchange_calendar": calendar is not None,
+    }
+    if reasons:
+        return unavailable_envelope(start=start, end=end, reasons=reasons, symbols=symbols, oos_start=oos_start, cost_bps=cost_bps, capabilities=capabilities)
+    if not start <= oos_start <= end:
+        raise ValueError("oos_start must be within [start, end]")
+    assert pinned_reader is not None and pit_universe is not None and calendar is not None
+    market_days = sorted(
+        set(calendar.market_days(start - timedelta(days=60), end + timedelta(days=40)))
     )
-    payload["request"]["symbols"] = list(symbols) if symbols is not None else None
+    request_market_days = [day for day in market_days if start <= day <= end]
+    if not request_market_days:
+        return unavailable_envelope(
+            start=start,
+            end=end,
+            reasons=["versioned_exchange_calendar_empty"],
+            symbols=symbols,
+            oos_start=oos_start,
+            cost_bps=cost_bps,
+            capabilities=capabilities,
+        )
+    if symbols is None:
+        symbols = sorted(
+            {
+                symbol
+                for event_date in request_market_days
+                for symbol in pit_universe.eligible_symbols(event_date)
+            }
+        )
+    all_events: list[dict[str, Any]] = []
+    censored: list[dict[str, Any]] = []
+    for symbol in sorted(set(symbols)):
+        bars, error = _prepare_bars(pinned_reader.daily_bars(symbol, market_days[0], market_days[-1]), symbol)
+        if error:
+            censored.append(error)
+            continue
+        events, symbol_censored = _scan_symbol(symbol, bars, market_days, pit_universe, cost_bps)
+        all_events.extend(events)
+        censored.extend(symbol_censored)
+    events, clusters = _clusters(all_events, market_days)
+    payload = {
+        "factor": _factor_meta(),
+        "status": "ok",
+        "unavailable_reasons": [],
+        "request": {"start": start, "end": end, "symbols": symbols, "oos_start": oos_start, "cost_bps": cost_bps},
+        "capabilities": capabilities,
+        "parameters": _locked_parameters(),
+        "provenance": {
+            "generation": pinned_reader.generation(),
+            "manifest_sha256": pinned_reader.manifest_sha256(),
+            "calendar_version": calendar.version(),
+            "universe_as_of": pit_universe.as_of(),
+            "universe_hash": pit_universe.snapshot_hash(),
+        },
+        "coverage": {"symbols": len(symbols), "market_days": len(market_days), "events_before_overlap_control": len(all_events), "events": len(events), "censored": len(censored)},
+        "events": events,
+        "clusters": clusters,
+        "censored": censored,
+        "research": _research(events, oos_start),
+        "note": "日线价格可达性与成本仅为研究诊断，不构成投资建议",
+    }
     _validate_keys_no_trading_tokens(payload)
-    return payload
+    return VolumeBreakoutResponse.model_validate(payload).model_dump(mode="json")
 
 
 __all__ = [
-    "FACTOR_ID",
-    "FACTOR_VERSION",
-    "FACTOR_NAME",
-    "REACHABILITY",
-    "REFERENCE_WINDOW",
-    "VOLUME_PERCENTILE",
-    "CONSOLIDATION_MIN_DAYS",
-    "CONSOLIDATION_MAX_DAYS",
-    "BOX_WIDTH_MAX",
-    "FORWARD_HORIZONS",
-    "VARIANT_UP_BREAKOUT",
-    "VARIANT_DOWN_BREAKOUT",
-    "VARIANTS",
-    "REQUIRED_RAW_COLUMNS",
-    "UNIMPLEMENTED_REASONS",
-    "PINNED_READER_ATTR",
-    "PIT_UNIVERSE_ATTR",
-    "CALENDAR_ATTR",
-    "GenerationPinnedDailyReader",
-    "VolumeBreakoutFactor",
-    "VolumeBreakoutRequest",
-    "VolumeBreakoutCapabilities",
-    "VolumeBreakoutResponse",
-    "PitEligibleUniverse",
-    "VersionedExchangeCalendar",
-    "resolve_pinned_reader",
-    "resolve_pit_universe",
-    "resolve_versioned_calendar",
-    "assert_no_trading_tokens",
-    "unavailable_envelope",
-    "evaluate_volume_breakout",
+    "FACTOR_ID", "FACTOR_VERSION", "FACTOR_NAME", "REACHABILITY",
+    "REFERENCE_WINDOW", "VOLUME_PERCENTILE", "CONSOLIDATION_MIN_DAYS",
+    "CONSOLIDATION_MAX_DAYS", "BOX_WIDTH_MAX", "FORWARD_HORIZONS",
+    "VARIANT_UP_BREAKOUT", "VARIANT_DOWN_BREAKOUT", "VARIANTS",
+    "REQUIRED_RAW_COLUMNS", "DEFAULT_OOS_START", "DEFAULT_COST_BPS",
+    "VolumeBreakoutRequest", "VolumeBreakoutCapabilities", "VolumeBreakoutResponse",
+    "GenerationPinnedDailyReader", "PitEligibleUniverse", "VersionedExchangeCalendar",
+    "PINNED_READER_ATTR", "PIT_UNIVERSE_ATTR", "CALENDAR_ATTR",
+    "resolve_pinned_reader", "resolve_pit_universe", "resolve_versioned_calendar",
+    "assert_no_trading_tokens", "unavailable_envelope", "evaluate_volume_breakout",
 ]

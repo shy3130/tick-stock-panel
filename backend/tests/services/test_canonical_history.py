@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -30,7 +31,7 @@ class FakeProvider:
         )
 
     def get_daily(self, symbols, start, end, asset_type):
-        assert asset_type == "stock"
+        assert asset_type in {"stock", "index"}
         self.entered.set()
         if self.gate is not None:
             assert self.gate.wait(timeout=5)
@@ -64,7 +65,11 @@ class FakeProvider:
 
 def _install_provider(monkeypatch, provider: FakeProvider) -> None:
     monkeypatch.setattr(canonical_history, "get_active_provider_name", lambda _cap: "fquant_local")
-    monkeypatch.setattr(canonical_history, "get_provider", lambda _name: provider)
+    monkeypatch.setattr(
+        canonical_history,
+        "get_provider",
+        lambda _name, **_kwargs: provider,
+    )
     monkeypatch.setattr(
         canonical_history,
         "current_path",
@@ -103,6 +108,13 @@ def test_backfill_rejects_root_inside_user_data(tmp_path, monkeypatch):
     assert not user_data.exists()
 
 
+def test_backfill_rejects_invalid_worker_count(tmp_path):
+    manager = canonical_history.CanonicalHistoryManager(tmp_path / "external-history")
+
+    with pytest.raises(ValueError, match="workers must be between 1 and 8"):
+        manager.start(workers=9)
+
+
 def test_status_marks_orphaned_running_job_failed(tmp_path):
     root = tmp_path / "external-history"
     root.mkdir()
@@ -138,6 +150,7 @@ def test_backfill_publishes_actual_coverage_outside_user_data(tmp_path, monkeypa
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 4),
         batch_size=1,
+        workers=2,
     )
     _join(manager)
 
@@ -150,9 +163,11 @@ def test_backfill_publishes_actual_coverage_outside_user_data(tmp_path, monkeypa
     assert status["manifest"]["trading_days"] == 3
     assert status["manifest"]["symbols"] == 2
     assert status["manifest"]["rows"] == 6
+    assert status["manifest"]["workers"] == 2
     assert status["manifest"]["source_generations"] == {
         "tdx": "20260812T000000",
         "fstore": "20260812T000000",
+        "extended": "20260812T000000",
         "markets": "20260812T000000",
         "klines": "20260812T000000",
     }
@@ -162,6 +177,78 @@ def test_backfill_publishes_actual_coverage_outside_user_data(tmp_path, monkeypa
     assert sentinel.read_text(encoding="utf-8") == "untouched"
     assert provider.closed is True
 
+
+def test_incremental_publish_clones_parent_and_copies_validated_local_partition(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "external-history"
+    provider = FakeProvider()
+    _install_provider(monkeypatch, provider)
+    manager = canonical_history.CanonicalHistoryManager(root)
+    manager.start(
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        batch_size=2,
+    )
+    _join(manager)
+    parent = manager.status()["generation"]
+
+    data_dir = tmp_path / "data"
+    local_partition = data_dir / "kline_daily_enriched" / "date=2024-01-04"
+    local_partition.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "symbol": ["000001.SZ", "600519.SH"],
+            "date": [date(2024, 1, 4), date(2024, 1, 4)],
+            "open": [12.0, 12.0],
+            "high": [12.5, 12.5],
+            "low": [11.5, 11.5],
+            "close": [12.0, 12.0],
+            "volume": [1_000.0, 1_000.0],
+            "amount": [12_000.0, 12_000.0],
+            "raw_open": [12.0, 12.0],
+            "raw_close": [12.0, 12.0],
+            "raw_high": [12.5, 12.5],
+            "raw_low": [11.5, 11.5],
+            "turnover_rate": [0.1, 0.1],
+            "consecutive_limit_ups": [0, 0],
+            "consecutive_limit_downs": [0, 0],
+        }
+    ).write_parquet(local_partition / "part.parquet")
+    repo = SimpleNamespace(store=SimpleNamespace(data_dir=data_dir))
+
+    result = manager.publish_incremental_from_local(repo, date(2024, 1, 4))
+
+    assert result["status"] == "succeeded"
+    published = canonical_history.resolve_published_history(root)
+    assert published is not None
+    manifest, generation_dir = published
+    assert manifest["parent_generation"] == parent
+    assert manifest["update_type"] == "incremental_local_partitions"
+    assert manifest["end_date"] == "2024-01-04"
+    assert manifest["incremental_partitions"]["2024-01-04"]["rows"] == 2
+    assert list((generation_dir / "date=2024-01-02").glob("*.parquet"))
+    assert list((generation_dir / "date=2024-01-04").glob("*.parquet"))
+    assert (root / "generations" / parent).is_dir()
+
+
+    gap_partition = data_dir / "kline_daily_enriched" / "date=2024-01-06"
+    gap_partition.mkdir()
+    (
+        pl.read_parquet(local_partition / "part.parquet")
+        .with_columns(pl.lit(date(2024, 1, 6)).alias("date"))
+        .write_parquet(gap_partition / "part.parquet")
+    )
+
+    gap_result = manager.publish_incremental_from_local(repo, date(2024, 1, 6))
+
+    assert gap_result == {
+        "status": "skipped",
+        "reason": "calendar_partition_mismatch",
+        "missing_dates": ["2024-01-05"],
+        "unexpected_dates": [],
+    }
 
 def test_failed_rebuild_keeps_previous_current_generation(tmp_path, monkeypatch):
     root = tmp_path / "external-history"
@@ -174,7 +261,12 @@ def test_failed_rebuild_keeps_previous_current_generation(tmp_path, monkeypatch)
 
     failing = FakeProvider(fail=True)
     _install_provider(monkeypatch, failing)
-    manager.start(start_date=date(2024, 1, 2), end_date=date(2024, 1, 3), batch_size=2)
+    manager.start(
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        batch_size=1,
+        workers=2,
+    )
     _join(manager)
 
     status = manager.status()
@@ -220,6 +312,8 @@ def test_invalid_generation_pointer_is_not_readable(tmp_path):
 
 
 def test_api_status_shape_allows_first_backfill(monkeypatch):
+    received = {}
+
     class Manager:
         def status(self):
             return {
@@ -228,7 +322,8 @@ def test_api_status_shape_allows_first_backfill(monkeypatch):
                 "reason": "not_published",
             }
 
-        def start(self, **_kwargs):
+        def start(self, **kwargs):
+            received.update(kwargs)
             return {"job_id": "job-1", "status": "running"}
 
     manager = Manager()
@@ -236,7 +331,7 @@ def test_api_status_shape_allows_first_backfill(monkeypatch):
 
     status = data_api.canonical_history_status()
     started = data_api.canonical_history_backfill(
-        data_api.CanonicalHistoryBackfillRequest(batch_size=10)
+        data_api.CanonicalHistoryBackfillRequest(batch_size=10, workers=4)
     )
 
     assert status == {
@@ -246,3 +341,4 @@ def test_api_status_shape_allows_first_backfill(monkeypatch):
         "job": None,
     }
     assert started == {"job_id": "job-1", "status": "running"}
+    assert received["workers"] == 4

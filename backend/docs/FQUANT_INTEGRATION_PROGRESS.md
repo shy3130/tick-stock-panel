@@ -2,7 +2,7 @@
 
 > 主线任务：**让 tickflow-stock-panel 通过 `data_providers` 抽象层读取本地 DuckDB 发布快照，并保留可切换 provider 的业务契约。**
 >
-> 最后更新：2026-08-26
+> 最后更新：2026-08-27
 > 状态：本地 DuckDB provider 已落地；A 股 minutes/trans 已改为按 `(route_key, market, trade_date)` 读取 engine 发布 catalog，严格校验 freshness，解析失败不降级到 writer-owned raw 文件。
 > 范围：本文是**给团队看的项目状态文档**，不是技术设计文档。设计稿见 [`FQUANT_PROVIDER_DESIGN.md`](./FQUANT_PROVIDER_DESIGN.md)（846 行，全实测字段），旧 PoC 现状见 [`FQUANT_PROVIDER.md`](./FQUANT_PROVIDER.md)。
 
@@ -12,7 +12,7 @@
 
 - `FQuantProvider` 的行情主路径是只读本地 DuckDB；旧的 PG / engine-data HTTP 阶段说明保留在下文，仅作为迁移历史，不再代表当前运行架构。
 - A 股分钟线通过 `catalog_resolver.resolve_route("tdx_minutes", "a", trade_date)` 定位 2023 年前归档或当前快照；A 股逐笔通过 `catalog_resolver.resolve_route("tdx_trans", "a", trade_date)` 定位历史归档年片或活跃年的月度快照。route catalog 每次查询重新解析；校验失败 fail-closed，绝不降级 writer-owned raw。
-- 新增专用的 A 股 canonical enriched 全历史 generation：回填只读取任务启动时 pin 住的已发布 `tdx/fstore/markets/klines` 快照，输出到 `TICKFLOW_CANONICAL_HISTORY_ROOT`（默认 `/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history`），staging 完整成功后才原子切换 `current.json`；不写用户 `data/`。repository 查询把该全历史与受信任的本地近期分区合并，同日以本地为准。
+- A 股 canonical enriched 全历史使用独立 generation：回填在启动时固定已发布 `tdx/fstore/markets/klines/extended` 的具体文件路径，worker 不再跟随 `current.json`；可配置 1–8 个独立只读 provider worker，主线程串行写 staging，完整成功后才原子切换 `current.json`。schema v2 为 15 列，在复权前原生保存 `raw_open/raw_high/raw_low/raw_close`，禁止从复权价反推；输出位于 `TICKFLOW_CANONICAL_HISTORY_ROOT`，不写用户 `data/`。研究 reader 构造时再次 pin generation 与 manifest 字节哈希，且不合并近期 overlay。
 - 新增只读市场数据工作台（研究页“市场数据”）：`tdx_chip` 筹码、个股/板块日级及分钟资金流、集合竞价和 A 股逐笔成交均提供 capability/status、受限 API 与前端查询入口。所有路径只读已发布 snapshot/catalog，输入按 symbol/date/frequency/limit 限界，不进入选股、回测或监控输入。
 - 独立 snapshot root：`fstore-extended`、`tdx_moneyflow_minute`、`tdx_callauction` 分别由 `FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE`、`FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION` 配置；筹码与日级资金流跟随只读 `engine-a` generation。
 - 港股事实边界已显式化：日 K/minutes/trans 可用；本地发布快照中没有港股公司行动/复权事件，也没有港股财务报表。`hk_adjustment` / `hk_financial` 状态明确为 unavailable，provider 对港股复权、公司行动和财务查询 fail-closed 返回空，不借用同码 A 股数据。
@@ -369,6 +369,7 @@ PG / HTTP
 | 2026-08-21 | AI 模块 F1–F17 全量落地 + 双 reviewer 独立复审 | F7 取消对称（财务/复盘注册 attempt + `X-AI-Attempt-ID`，取消不落盘）；F8 报告带走（个股/财务加自选/送回测、Agent pool 卡片）；F9 流连接态 connecting/open/closed 三入口；F12 策略保存后回测此策略；F13 程序化 `StockReportSummary`（extra=forbid，无二次 LLM）；F14 as_of/source/adjustment 上屏；F15 同标的报告两栏 diff；F16 进程内 Agent 并发上限 2（python/pi 共槽、非阻塞、取消 `aclosing` 归还）；F17 前端 bun 测试。复审修复：reviewStore catch/finally 加旧流所有权守卫（取消后立即重启不被旧流 abort 改写 cancelled，`reviewStoreOwnership.test.ts` 变异验证）；agent_loop 工具轮与终流补传 `budget.timeout`（90s，不再走 provider 默认 180s） | 后端 agent/loop/runtime/concurrency/budgets/cancel `25+42 passed`；前端 `tsc -b` + 守卫测试全绿 |
 | 2026-08-24 | 当前日个股图表兜底 | 新增默认关闭的 `chart_live` scope：provider 成功返回本地目标日空行时，单 A 股日 K/分钟 K 才可从腾讯当日分时生成响应内 `provisional` 数据；保留行级 `source=tencent_chart` 和响应级 `degraded/sources`，catalog 503 与历史 minutes/trans 均维持 fail-closed，绝不写入本地/选股/监控/回测 | 后端 chart_live/API 定向 `47 passed`；前端 TypeScript + Vite build 见本次验证 |
 | 2026-08-26 | AI 短线池（见 `AI_PRODUCT_REVIEW_2026-08-21.md` §9） | 扩展既有 `screen_stock_pool` 的固定 `short_momentum_quality_v1` 分支，仍保持 13 个只读 Agent 工具；候选只经 canonical `QueryService` 生成，结构化结果卡展示逐股证据，最终自然语言使用服务端确定性摘要且不枚举候选；结果为 request-local、内容寻址 `pool_id`，不写 user_data artifact，确认时服务端重算；不进入外部 fallback、监控或自动交易链 | 后端 Agent/短线池定向 `114 passed`；前端短线池与既有 Agent/handoff Bun 契约测试及 `pnpm build` 通过；真实 canonical 水位 `2026-08-25` 命中 38、输出 5 只且每只 12 条证据；真实后端封套通过前端 parser，浏览器验证结果卡常显与个股详情可打开 |
+| 2026-08-27 | canonical schema v2 与研究生产化 | canonical 全历史新增复权前原生 `raw_open`，全量构建固定 `tdx/fstore/markets/klines/extended` 具体 generation，并支持 1–8 个独立只读 worker；主线程单写 staging DuckDB，完整后 COPY 为 Parquet 并原子发布。盘后管道新增 immutable generation 增量发布：克隆父代旧分区、复制已验证新分区、按固定 generation 指数日历检查连续性、记录父代血统/分区哈希并做 coverage/父代 CAS；六个研究因子补齐状态机、OOS/成本或精确数据缺口 | schema v2 真盘 `17,220,261` 行/`5,679` 标的/`8,766` 日；真实 MACD `243 IS + 149 OOS`，单阳 `12` 事件/0 删失；后端累计 `351 passed, 7 warnings`，改动文件 ruff 硬错误检查与前端 TypeScript 通过 |
 
 
 ---

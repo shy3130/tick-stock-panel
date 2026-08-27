@@ -14,8 +14,9 @@
 
 ## 当前交付
 
-- `backend/app/services/macd_stages.py`：纯函数能力声明；
-- `GET /api/research/macd-stages`：HTTP 200 + `status="unavailable"`；
-- `backend/tests/test_macd_stages.py`：固定参数、原因集合、确定性和无伪造序列测试。
+- `backend/app/services/macd_stages.py`：固定 10/20/7 递推、七状态、零轴侧、T+1 与 IS/OOS 分层；
+- `GET /api/research/macd-stages`：真实 sealed reader 能力；
+- `POST /api/research/factors/macd-stages/evaluate`：generation-pinned 阶段序列；
+- `backend/tests/test_macd_stages.py`：数值、状态、预热、T+1、OOS 与 fail-closed tests。
 
-逐日状态机、OOS 执行器和 PIT 读取器尚未实现；因此即使基础行情能力恢复，端点也不会返回阶段序列。
+真实 published canonical generation 已完成单标的冒烟；本 Issue 的代码与数据验收已具备，待独立 coding review 后关闭。

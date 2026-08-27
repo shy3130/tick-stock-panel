@@ -376,6 +376,18 @@ class KlineRepository:
         self._etf_inst_glob = str(store.data_dir / "instruments_etf" / "**" / "*.parquet")
         self._hk_inst_glob = str(store.data_dir / "instruments_hk" / "**" / "*.parquet")
 
+    @property
+    def generation_pinned_daily_reader(self):
+        """Return a reader pinned to the currently published canonical generation."""
+        from app.services.research_sealed_data import PublishedCanonicalDailyReader
+
+        return PublishedCanonicalDailyReader.from_repository(self)
+
+    @property
+    def versioned_exchange_calendar(self):
+        """Expose the same immutable generation as the research calendar."""
+        return self.generation_pinned_daily_reader
+
     def execute_all(self, sql: str, params: list | None = None) -> list[tuple]:
         """线程安全的 SELECT → fetchall。DuckDB 单 connection 非线程安全，所有读路径须走此方法。"""
         with self._lock:

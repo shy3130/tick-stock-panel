@@ -135,6 +135,7 @@ def test_select_storage_cols_enforces_uniqueness():
         "open": [10.0] * 4, "high": [10.5] * 4, "low": [9.8] * 4,
         "close": [10.2, 10.2, 10.2, 5.0],
         "volume": [1000.0] * 4, "amount": [10000.0] * 4,
+        "raw_open": [10.0] * 4,
         "raw_close": [10.2, 10.2, 10.2, 5.0],
         "raw_high": [10.5] * 4, "raw_low": [9.8] * 4,
         "turnover_rate": [1.0] * 4,

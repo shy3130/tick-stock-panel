@@ -42,3 +42,15 @@ uv run --no-project python -m py_compile app/services/n_shape_golden_phoenix.py 
 ./.venv/bin/python -m py_compile app/services/n_shape_golden_phoenix.py
 # 通过（worktree 环境无 pytest，测试使用上方共享环境）
 ```
+
+## 生产化波次（2026-08-27）
+
+- 已新增 immutable canonical generation reader；真实 generation `20260817T132338-d20bb648` 冒烟读取 `600519.SH` 成功，manifest SHA-256 为 64 位。
+- 事件研究层已补齐全部合格首板 baseline、IS/OOS 分层、1/5/10/20 日 forward、重叠 cluster、成本诊断、置信区间和 `accepted/rejected`。
+- 当前仍无可证明的历史 PIT ST 名称/状态序列；`base_infos_history` 只有 2 个 snapshot day，`hsj_stock_type_change_records` 仅有 `MOVE_IN`，不能替代完整状态时间线。因此生产事件仍按设计 `unavailable`，Issue 不关闭。
+- 本波累计 focused/API/Agent 回归分别为 `88 passed`、`110 passed`；规范历史与指标管线回归 `90 passed`。
+
+## 最终集成回归
+
+- 六因子/API/provider/canonical/Agent/盘后管道累计：`351 passed, 7 warnings`。
+- 改动 Python 文件 `ruff --select F,E9` 通过；前端 `pnpm exec tsc -b --pretty false` 通过。

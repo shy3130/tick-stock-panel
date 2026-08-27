@@ -357,9 +357,10 @@ def test_compute_indicators_produces_engine_compat_columns():
     assert "ma20" in projected.columns
     assert all(column not in projected.columns for column in ENGINE_COMPAT_COLUMNS)
 
-    # ENRICHED_STORAGE_COLS must still be exactly 14 (engine compat columns not persisted)
+    # raw_open is now persisted natively; engine-compat derived columns remain excluded.
     from app.indicators.pipeline import ENRICHED_STORAGE_COLS
-    assert len(ENRICHED_STORAGE_COLS) == 14
+    assert len(ENRICHED_STORAGE_COLS) == 15
+    assert "raw_open" in ENRICHED_STORAGE_COLS
     for col in ENGINE_COMPAT_COLUMNS:
         assert col not in ENRICHED_STORAGE_COLS, f"{col} should not be in storage cols"
 

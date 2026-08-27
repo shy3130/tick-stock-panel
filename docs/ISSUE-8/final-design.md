@@ -15,3 +15,7 @@
 ## 交付与验证
 
 子代理在 `issue-8-n-shape-golden-phoenix` worktree 实现代码与夹具测试。主会话读取全部 diff，运行完整相关测试模块，再派 coding reviewer；修复 review 问题后重新运行完整模块。只有验证通过才提交、推送并创建 PR，Issue 评论和本目录 `verification.md` 记录真实输出。
+
+## 生产化状态更新（2026-08-27）
+
+generation-pinned canonical reader、manifest 字节哈希和事件评估层已实现。剩余唯一硬门禁是历史 PIT ST/制度证据：板块制度日期可编码，但本地 ST 变更数据不构成完整时点序列，禁止据当前名称或派生涨停信号回填。因此当前生产调用仍诚实返回 unavailable；注入完整 PIT provider 的夹具路径已可运行。

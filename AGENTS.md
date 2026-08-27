@@ -311,7 +311,7 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 | fstore-extended | `/Volumes/WD1/duckdb/snapshots/fstore-extended` | `FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED` | extended 整库（财务三表）独立快照，与 fstore generation 隔离 |
 | engine-a-moneyflow-minute | `/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE` | tdx_moneyflow_minute 整库独立快照，与 engine-a generation 隔离 |
 | engine-a-callauction | `/Volumes/WD1/duckdb/snapshots/engine-a-callauction` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION` | tdx_callauction 整库独立只读快照 |
-| tickflow-canonical-history | `/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history` | `TICKFLOW_CANONICAL_HISTORY_ROOT` | 面板生成的 A 股 canonical enriched 全历史；独立 generation，不写用户 `data/` |
+| tickflow-canonical-history | `/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history` | `TICKFLOW_CANONICAL_HISTORY_ROOT` | 面板生成的 A 股 canonical enriched 全历史；schema v2 原生保存复权前 `raw_open/raw_high/raw_low/raw_close`；首次全量任务固定 tdx/fstore/markets/klines/extended 具体 generation 路径，可用 1–8 个独立只读 worker，临时 staging DuckDB 只作聚合并在成功/失败后删除；盘后增量发布克隆 immutable 父代、复制已验证新日期分区并做 coverage/父代 CAS；完整成功后才原子切换 `current.json`，不写用户 `data/` |
 
 **无中断发布顺序**（先数据后路由，避免读到未发布的物理文件）：
 
@@ -349,6 +349,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-26（AI 短线池：固定确定性 preset、逐股证据、request-local 内容寻址 pool_id、不写 artifact；仍保持 13 个只读工具。上一变更：2026-08-21 AI 模块评审 F1–F17。）
+**最后更新**：2026-08-27（canonical history schema v2：原生 raw_open、固定全部源 generation 路径、并行只读全量构建、盘后 immutable 增量发布、原子 current 切换；研究生产链保持 fail-closed。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

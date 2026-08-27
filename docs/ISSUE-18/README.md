@@ -1,7 +1,7 @@
 # ISSUE-18 单阳不破研究（single-yang-no-break）
 
-> 状态：**unavailable（fail-closed）** —— 本期只交付诚实的不可用契约与固定定义，不产出任何可用信号。
-> 日期：2026-08-27 · 分支：`issue-18-single-yang` worktree
+> 状态：**production-ready；canonical schema v2 已发布并具备盘后增量发布链**。
+> 日期：2026-08-27 · 集成分支：`issue-8-research-production`
 
 ## 这是什么
 
@@ -11,8 +11,7 @@
 T+6 起评估与 OOS 约束），
 并交付对应的服务模块与 research API 端点。
 
-**当前结论：研究能力不可用（unavailable）**，原因见下。即使数据 reader 将来补齐，
-在研究状态机与 OOS 协议落地之前，服务仍必须返回 unavailable（双保险设计）。
+当前实现已具备 generation-pinned raw reader、T+5 确认/T+6 评估、证据、IS/OOS 与成本诊断。旧 canonical generation 缺原生 `raw_open` 时仍 unavailable；禁止从复权 `open` 反推。
 
 ## 文档索引
 
@@ -30,13 +29,12 @@ T+6 起评估与 OOS 约束），
 
 | 文件 | 作用 |
 |------|------|
-| `backend/app/services/single_yang_no_break.py` | 定义常量 + 纯函数检测 + fail-closed 研究入口（无 IO） |
-| `backend/app/api/research.py` | `GET /api/research/single-yang-no-break`（200 + unavailable 载荷） |
-| `backend/tests/test_single_yang_no_break.py` | focused tests：语义锁定 + fail-closed 契约 |
+| `backend/app/services/single_yang_no_break.py` | 固定定义、状态机、generation/raw 门禁与 OOS/成本诊断 |
+| `backend/app/api/research.py` | capability GET + `POST /api/research/factors/single-yang-no-break/evaluate` |
+| `backend/tests/test_single_yang_no_break.py` | 2% 边界、T+5/T+6、raw_open、generation、OOS tests |
 
-## 红线（本期明确不做）
+## 红线
 
 - 无交易语义：不下单、无持仓/仓位/止盈止损字段，payload 不含任何交易类键。
-- 无外部接口：不连任何 HTTP/DB，纯本地纯函数。
+- 无外部接口：只读取 published canonical generation。
 - 不触碰 `data/`、`short_pool`、Agent 运行时。
-- 不提交（无 git commit）。

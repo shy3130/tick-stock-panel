@@ -1017,6 +1017,7 @@ class CanonicalHistoryBackfillRequest(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     batch_size: int = Field(default=100, ge=1, le=1_000)
+    workers: int = Field(default=8, ge=1, le=8)
 
 
 def _canonical_history_view() -> dict[str, Any]:
@@ -1080,6 +1081,7 @@ def canonical_history_backfill(
             start_date=payload.start_date,
             end_date=payload.end_date,
             batch_size=payload.batch_size,
+            workers=payload.workers,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

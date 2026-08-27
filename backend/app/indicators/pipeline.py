@@ -64,12 +64,12 @@ def invalidate_custom_signals() -> None:
     _custom_signal_exprs = None
 
 
-# enriched parquet 仅存储的列 (14 列)
+# enriched parquet 仅存储的列 (15 列)
 ENRICHED_STORAGE_COLS = [
     "symbol", "date",
     "open", "high", "low", "close",          # 前复权
     "volume", "amount",
-    "raw_close", "raw_high", "raw_low",       # 不复权原始价
+    "raw_open", "raw_close", "raw_high", "raw_low",  # 不复权原始价
     "turnover_rate",                           # 依赖当时的 float_shares, 不可回推
     "consecutive_limit_ups",                   # 递推状态, 需从历史 cum_sum
     "consecutive_limit_downs",
@@ -98,6 +98,7 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "close":                   "前复权收盘价",
     "volume":                  "成交量",
     "amount":                  "成交额",
+    "raw_open":                "原始开盘价(未复权)",
     "raw_close":               "原始收盘价(未复权)",
     "raw_high":                "原始最高价(未复权)",
     "raw_low":                 "原始最低价(未复权)",
@@ -946,8 +947,9 @@ def compute_enriched(
     if raw.is_empty():
         return raw
 
-    # 保留不复权原始价格（涨停/炸板/跌停判断需用不复权价格）
+    # 保留不复权原始价格（必须在前复权前复制，禁止从复权价反推）
     raw = raw.with_columns(
+        pl.col("open").alias("raw_open"),
         pl.col("close").alias("raw_close"),
         pl.col("high").alias("raw_high"),
         pl.col("low").alias("raw_low"),
@@ -965,7 +967,7 @@ def compute_enriched(
 
 
 def _select_storage_cols(df: pl.DataFrame) -> pl.DataFrame:
-    """写入 parquet 前裁剪到存储列 (14 列), 并强制 (symbol, date) 唯一。
+    """写入 parquet 前裁剪到存储列 (15 列), 并强制 (symbol, date) 唯一。
 
     自然键防线: 覆盖所有 staging / full / partial 写入路径
     (_write_enriched_partitions、run_pipeline 全量/增量/局部、repository 落盘前),

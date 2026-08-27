@@ -2,8 +2,8 @@
 
 - Issue: https://github.com/wf2311/fm-workbench/issues/14
 - 分支: `issue-14-volume-breakout`
-- 状态: implemented-fail-closed-contract
+- 状态: `event-engine-ready; blocked-by-pit-universe-history`
 
-- 本次交付：独立 `volume_breakout_v1` service、研究 API 契约和 focused tests。
-- 当前仅返回结构化 `unavailable`：生产 generation-pinned reader、PIT universe、版本化 calendar、事件状态机与 OOS 尚未实现；禁止 fallback、事件结论和交易建议。
+- 已交付：独立 `volume_breakout_v1` 状态机、研究 API、forward/OOS/成本/重叠诊断和 focused tests。
+- generation-pinned reader 与版本化 canonical calendar 已具备；历史 PIT eligible-universe（含 available_at）仍无真实工件，生产调用继续 unavailable，禁止从 bars 或当前 universe 推导。
 文档：feasibility.md、plan-v1.md、review-v1.md、plan-v2.md、review-v2.md、final-design.md、verification.md。

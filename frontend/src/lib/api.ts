@@ -4708,6 +4708,7 @@ export interface CanonicalHistoryBackfillRequest {
   start_date?: string
   end_date?: string
   batch_size?: number
+  workers?: number
 }
 
 export interface CanonicalHistoryBackfillResponse {

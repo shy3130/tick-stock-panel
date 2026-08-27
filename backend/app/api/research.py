@@ -5,6 +5,19 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from app.services.macd_stages import (
+    MacdStagesRequest,
+    evaluate_macd_stages,
+    macd_stages_availability,
+)
+from app.services.macd_stages import (
+    resolve_pinned_reader as resolve_macd_reader,
+)
+from app.services.mtf_direction_15m5m import (
+    MTFDirectionEvaluateIn,
+    evaluate_mtf_direction,
+    resolve_minute_reader,
+)
 from app.services.research_registry import ResearchStore
 from app.services.scheduled_research import (
     ScheduledResearchStore,
@@ -18,18 +31,23 @@ from app.services.short_pool import (
     build_t_research_hypothesis,
     run_short_pool,
 )
-from app.services.single_yang_no_break import run_single_yang_research
-from app.services.macd_stages import macd_stages_availability
-from app.services.volume_breakout import VolumeBreakoutResponse
+from app.services.single_yang_no_break import (
+    SINGLE_YANG_DEFINITION,
+    evaluate_single_yang,
+    run_single_yang_research,
+)
+from app.services.single_yang_no_break import (
+    assess_capability as assess_single_yang_capability,
+)
+from app.services.volume_breakout import (
+    DEFAULT_COST_BPS,
+    DEFAULT_OOS_START,
+    VolumeBreakoutResponse,
+)
 from app.services.weak_to_strong import (
     WeakToStrongEvaluateRequest,
     WeakToStrongEvaluateResponse,
     evaluate_weak_to_strong_v1,
-)
-from app.services.mtf_direction_15m5m import (
-    MTFDirectionEvaluateIn,
-    evaluate_mtf_direction,
-    resolve_minute_reader,
 )
 
 router = APIRouter(prefix="/api/research", tags=["research"])
@@ -41,6 +59,8 @@ class VolumeBreakoutEvaluateIn(BaseModel):
     start: date
     end: date
     symbols: list[str] | None = Field(default=None, max_length=1000)
+    oos_start: date = DEFAULT_OOS_START
+    cost_bps: float = Field(default=DEFAULT_COST_BPS, ge=0)
 
 
 @router.post("/factors/volume-breakout/evaluate", response_model=VolumeBreakoutResponse)
@@ -54,13 +74,22 @@ def evaluate_volume_breakout_factor(body: VolumeBreakoutEvaluateIn, request: Req
     )
 
     try:
+        pinned_reader = resolve_pinned_reader(request.app.state.repo)
         return evaluate_volume_breakout(
             start=body.start,
             end=body.end,
             symbols=body.symbols,
-            pinned_reader=resolve_pinned_reader(request.app.state.repo),
+            pinned_reader=pinned_reader,
             pit_universe=resolve_pit_universe(request.app.state.repo),
-            calendar=resolve_versioned_calendar(request.app.state.repo),
+            calendar=(
+                pinned_reader
+                if pinned_reader is not None
+                and callable(getattr(pinned_reader, "version", None))
+                and callable(getattr(pinned_reader, "market_days", None))
+                else resolve_versioned_calendar(request.app.state.repo)
+            ),
+            oos_start=body.oos_start,
+            cost_bps=body.cost_bps,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -316,17 +345,62 @@ def run_schedule_now(schedule_id: str, request: Request):
         raise HTTPException(status_code=404, detail="schedule not found") from e
 
 
-@router.get("/single-yang-no-break")
-def get_single_yang_no_break():
-    """返回单阳不破研究契约；状态机/OOS 未实现时 fail-closed。"""
+class SingleYangEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    return run_single_yang_research()
+    start: date
+    end: date
+    symbols: list[str] = Field(min_length=1, max_length=1000)
+    oos_start: date
+    cost_bps: float = Field(default=10.0, ge=0)
+
+
+@router.get("/single-yang-no-break")
+def get_single_yang_no_break(request: Request):
+    """返回单阳不破真实 sealed/raw 能力，不运行研究。"""
+    repo = getattr(request.app.state, "repo", None)
+    reader = getattr(repo, "generation_pinned_daily_reader", None)
+    capability = assess_single_yang_capability(reader)
+    if not capability["available"]:
+        return run_single_yang_research()
+    return {"status": "available", "reasons": [], "definition": SINGLE_YANG_DEFINITION}
+
+
+@router.post("/factors/single-yang-no-break/evaluate")
+def evaluate_single_yang_factor(body: SingleYangEvaluateIn, request: Request):
+    try:
+        return evaluate_single_yang(
+            reader=getattr(getattr(request.app.state, "repo", None), "generation_pinned_daily_reader", None),
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            oos_start=body.oos_start,
+            cost_bps=body.cost_bps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/macd-stages")
-def get_macd_stages():
-    """返回 MACD 阶段研究能力声明；未实现时严格不可用。"""
-    return macd_stages_availability().as_dict()
+def get_macd_stages(request: Request):
+    """返回 MACD 阶段研究能力。"""
+    return macd_stages_availability(
+        resolve_macd_reader(getattr(request.app.state, "repo", None))
+    ).as_dict()
+
+
+@router.post("/factors/macd-stages/evaluate")
+def evaluate_macd_stages_factor(body: MacdStagesRequest, request: Request):
+    try:
+        return evaluate_macd_stages(
+            resolve_macd_reader(getattr(request.app.state, "repo", None)),
+            start=body.start,
+            end=body.end,
+            symbols=body.symbols,
+            oos_start=body.oos_start,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(
