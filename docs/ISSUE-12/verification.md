@@ -10,14 +10,17 @@ uv run --no-project python -m py_compile app/services/weak_to_strong.py app/api/
 
 初始 PR 已验证缺 reader 的结构化 unavailable、请求 schema、重复 symbol 与交易词禁令；生产化波次继续覆盖事件/OOS 主路径和真实数据能力探针。
 
-## 生产化波次（2026-08-27）
+## 生产化波次（2026-08-27，已验证）
 
-- 全能力 reader 已可产出 `one_word_limit/sealed_limit/broken_resealed/broken_not_resealed/gap_up_no_touch/no_gap_up/bar_touched` 等可审计分类，不再返回 `event_path_not_implemented`。
-- PIT、停牌、时间线、逐笔排序、竞价、盘口可达性、无盘口时 `bar_touched` 降级、前向删失、成本与 IS/OOS 摘要均有 focused tests。
-- 生产数据硬缺口仍存在：历史 PIT 盘口没有来源；`base_infos_history` 仅 2 个 snapshot day，无法支撑完整 ST/流通股本时间线。因此生产 registry 保持空，Issue 不关闭。
-- 本波累计 focused/API 回归 `88 passed`。
+- 已实现 production composite reader/API seam：minimum/full capabilities、component manifest/composite SHA-256、pinned canonical/markets/#10 sparse minute/signal-year callauction。
+- PIT 记录固定 markets generation `created_at` 为 `available_at`，`effective_at` 与 `available_at` 均按 09:25 Asia/Shanghai 双门禁；事件计算优先 exact `ztj`。
+- ticks/books/float 首版明确 unavailable；触板、封板和一字板分支在相关证据缺失时只返回 `bar_touched`/删失，不伪造 sealed 分类。production reader 成功/异常均由 API finally 精确级联关闭。
+- 定向合同/API 测试：`34 passed in 4.43s`。
+- 改动 Python 文件 `ruff check --select F,E9`：通过。
+- 真实 production reader smoke：reader 构造成功，capabilities 为 minimum + callauction，composite manifest 固定 `canonical/markets/ordered_trans/callauction` 四组件；`2026-08-26` 历史 PIT 与 `2026-08-27` 同日 PIT 均因当前 generation publication 晚于 09:25 正确返回 `None`，未产生 sealed/one-word/resealed 分类。
+- 独立二次 Review：最初发现裸 code 路由、09:25 时间校验与 signal-year logical pin 缺口；修复后复核无 blocker/major。
 
 ## 最终集成回归
 
-- 六因子/API/provider/canonical/Agent/盘后管道累计：`351 passed, 7 warnings`。
+- 当前分支后端全量：`3436 passed, 3 skipped, 8 warnings in 234.95s`。
 - 改动 Python 文件 `ruff --select F,E9` 通过；前端 `pnpm exec tsc -b --pretty false` 通过。

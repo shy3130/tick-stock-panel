@@ -5,18 +5,20 @@ import re
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Literal, Protocol, TypedDict, Union
+from typing import Any, Literal, Protocol, TypedDict, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from zoneinfo import ZoneInfo
 
 WEAK_TO_STRONG_PROTOCOL_ID = "weak_to_strong_v1"
-WEAK_TO_STRONG_SCHEMA_VERSION = 2
+WEAK_TO_STRONG_SCHEMA_VERSION = 3
 WEAK_TO_STRONG_DISCLAIMER = "研究评估输出：仅结构化证据、删失与能力状态；不含交易指令、买卖方向、价格目标或投资建议"
 MAX_SYMBOLS_PER_REQUEST = 100
 VOLUME_BASELINE_DAYS = 5
 VOLUME_SURGE_RATIO = 2.0
 DEFAULT_RESEARCH_COST_BPS = 20.0
-REQUIRED_CAPABILITIES: tuple[str, ...] = ("immutable_run_manifest", "canonical_daily_sealed_reader", "timestamped_minute_reader", "auction_evidence_reader", "sortable_tick_reader", "historical_order_book_reader", "pit_regime_records", "pit_st_records", "pit_float_shares_records")
+MINIMUM_CAPABILITIES: tuple[str, ...] = ("immutable_run_manifest", "canonical_daily_sealed_reader", "timestamped_minute_reader", "pit_regime_records", "pit_st_records")
+FULL_CAPABILITIES: tuple[str, ...] = ("immutable_run_manifest", "canonical_daily_sealed_reader", "timestamped_minute_reader", "auction_evidence_reader", "sortable_tick_reader", "historical_order_book_reader", "pit_regime_records", "pit_st_records", "pit_float_shares_records")
 _CENSORING_BY_CAPABILITY = {"immutable_run_manifest": "missing_run_manifest", "canonical_daily_sealed_reader": "missing_sealed_daily", "timestamped_minute_reader": "missing_timestamped_minute", "auction_evidence_reader": "censored_preopen", "sortable_tick_reader": "missing_sortable_tick", "historical_order_book_reader": "missing_order_book_evidence", "pit_regime_records": "missing_pit_regime", "pit_st_records": "missing_pit_st", "pit_float_shares_records": "missing_pit_float_shares"}
 BANNED_EVIDENCE_KEY_TERMS = ("buy", "sell", "go_long", "go_short", "long", "short", "entry", "exit", "position", "stop_loss", "stop_profit", "take_profit", "target_price", "trade_signal", "order_action", "买", "卖", "加仓", "减仓", "建仓", "开仓", "平仓", "清仓", "止损", "止盈", "目标价", "下单", "挂单")
 EvidenceValue = Union[str, int, float, bool, None]
@@ -45,10 +47,10 @@ def validate_evidence_keys(keys: Iterable[str]) -> None:
     for key in keys:
         for term in BANNED_EVIDENCE_KEY_TERMS:
             if term in key.lower(): raise ValueError(f"evidence key {key!r} contains banned term {term!r}")
-
 class RunManifest(TypedDict):
     generation: str
     sha256: str
+    components: dict[str, dict[str, Any]]
 class DailyBar(TypedDict):
     trade_date: date
     open: float
@@ -66,6 +68,8 @@ class MinuteBar(TypedDict):
 class AuctionEvidence(TypedDict):
     open_price: float
     matched_volume: float
+    tick_index: int | None
+    event_time: str | None
 class Tick(TypedDict):
     timestamp: datetime
     seq: int
@@ -76,7 +80,6 @@ class OrderBook(TypedDict):
     bid1_price: float | None
     bid1_volume: float
     ask1_price: float | None
-    ask1_volume: float
 class PITRecord(TypedDict):
     effective_at: datetime
     available_at: datetime
@@ -84,6 +87,7 @@ class PITRecord(TypedDict):
     limit_down_pct: float | None
     is_st: bool | None
     float_shares: float | None
+    limit_up_price: float | None
 
 class WeakToStrongReader(Protocol):
     def capabilities(self) -> frozenset[str]: ...
@@ -103,7 +107,7 @@ def resolve_weak_to_strong_reader() -> WeakToStrongReader | None:
     for factory in tuple(_READER_FACTORIES):
         try:
             reader = factory()
-            if reader is not None and set(REQUIRED_CAPABILITIES).issubset(reader.capabilities()): return reader
+            if reader is not None and set(MINIMUM_CAPABILITIES).issubset(reader.capabilities()): return reader
         except Exception: continue
     return None
 
@@ -131,6 +135,7 @@ class ManifestStatus(BaseModel):
     missing_capabilities: list[str]
     generation: str | None = None
     sha256: str | None = None
+    components: dict[str, dict[str, Any]] = Field(default_factory=dict)
 class TimelineEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     event: Literal["auction_open", "first_touch", "board_break", "reseal", "day_close"]
@@ -197,7 +202,19 @@ class WeakToStrongEvaluateResponse(BaseModel):
 def _price(value: float) -> float: return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 def _limit(prev: float, pct: float, up: bool = True) -> float: return _price(prev * (1 + pct if up else 1 - pct))
 def _partition(day: date, boundary: date | None) -> Partition: return "unspecified" if boundary is None else ("oos" if day >= boundary else "is")
-def _pit_ok(pit: PITRecord | None, cutoff: datetime) -> bool: return bool(pit and pit.get("limit_up_pct") is not None and pit.get("is_st") is not None and pit["effective_at"] <= cutoff and pit["available_at"] <= cutoff)
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+PIT_EVENT_START = time(9, 25)
+def _pit_cutoff(day: date) -> datetime: return datetime.combine(day, PIT_EVENT_START, tzinfo=SHANGHAI_TZ)
+def _aware(value: datetime) -> datetime: return value if value.tzinfo is not None else value.replace(tzinfo=SHANGHAI_TZ)
+def _pit_defects(pit: PITRecord | None, cutoff: datetime) -> list[str]:
+    if pit is None: return ["missing_pit_regime", "missing_pit_st"]
+    defects: list[str] = []
+    if pit.get("limit_up_pct") is None: defects.append("missing_pit_regime")
+    if pit.get("is_st") is None: defects.append("missing_pit_st")
+    if _aware(pit["effective_at"]) > cutoff: defects.append("pit_effective_after_cutoff")
+    if _aware(pit["available_at"]) > cutoff: defects.append("pit_available_after_cutoff")
+    return defects
+def _pit_ok(pit: PITRecord | None, cutoff: datetime) -> bool: return not _pit_defects(pit, cutoff)
 
 def _forward(bars: Sequence[DailyBar], signal_date: date, partition: Partition, cost: float, censoring: list[str]) -> ForwardDiagnostic:
     current = next((b for b in bars if b["trade_date"] == signal_date), None); nxt = next((b for b in bars if b["trade_date"] > signal_date), None)
@@ -223,16 +240,22 @@ def _evaluate_symbol(reader: WeakToStrongReader, symbol: str, signal_date: date,
         prior = [b for b in bars if b["trade_date"] < signal_date]
         if len(prior) < 2: return _empty(symbol, partition, cost, "insufficient_evidence", ["missing_prior_day_bars"])
         prior_bar, prior_prev = prior[-1], prior[-2]; pit = reader.pit_snapshot(symbol, signal_date); prior_pit = reader.pit_snapshot(symbol, prior_bar["trade_date"])
-        if not _pit_ok(pit, datetime.combine(signal_date, time(23, 59, 59))) or not _pit_ok(prior_pit, datetime.combine(prior_bar["trade_date"], time(23, 59, 59))): return _empty(symbol, partition, cost, "pit_incomplete", ["missing_pit_regime", "missing_pit_st"])
+        pit_defects = _pit_defects(pit, _pit_cutoff(signal_date)) + _pit_defects(prior_pit, _pit_cutoff(prior_bar["trade_date"]))
+        if pit_defects: return _empty(symbol, partition, cost, "pit_incomplete", sorted(set(pit_defects)))
         minutes = sorted((m for m in reader.minute_bars(symbol, signal_date) if m["timestamp"].date() == signal_date), key=lambda m: m["timestamp"])
         if not minutes: return _empty(symbol, partition, cost, "insufficient_evidence", ["missing_timestamped_minute"])
         auction = reader.auction_snapshot(symbol, signal_date); ticks = sorted((t for t in reader.ticks(symbol, signal_date) if t["timestamp"].date() == signal_date), key=lambda t: (t["timestamp"], t["seq"])); books = sorted((b for b in reader.order_book_snapshots(symbol, signal_date) if b["timestamp"].date() == signal_date), key=lambda b: b["timestamp"])
     except Exception: return _empty(symbol, partition, cost, "data_reader_error", ["data_reader_error"])
     censoring: list[str] = []
     if pit.get("float_shares") is None: censoring.append("missing_pit_float_shares")
-    prior_limit = _limit(prior_prev["close"], float(prior_pit["limit_up_pct"])); limit_up = _limit(prior_bar["close"], float(pit["limit_up_pct"])); limit_down = _limit(prior_bar["close"], float(pit.get("limit_down_pct") or pit["limit_up_pct"]), False)
+    prior_exact = prior_pit.get("limit_up_price"); exact = pit.get("limit_up_price")
+    prior_limit = float(prior_exact) if prior_exact is not None else _limit(prior_prev["close"], float(prior_pit["limit_up_pct"]))
+    limit_up = float(exact) if exact is not None else _limit(prior_bar["close"], float(pit["limit_up_pct"]))
+    limit_price_source = "pinned_ztj" if exact is not None else "regime_pct"
+    limit_down = _limit(prior_bar["close"], float(pit.get("limit_down_pct") or pit["limit_up_pct"]), False)
     baseline = prior[:-1][-VOLUME_BASELINE_DAYS:]; avg_volume = sum(b["volume"] for b in baseline) / len(baseline) if baseline else None; ratio = round(prior_bar["volume"] / avg_volume, 4) if avg_volume else None
     evidence: dict[str, EvidenceValue] = {"pit_is_st": bool(pit["is_st"]), "pit_float_shares": pit.get("float_shares"), "prior_trade_date": prior_bar["trade_date"].isoformat(), "prior_close": prior_bar["close"], "prior_limit_up_price": prior_limit, "prior_day_limit_up": prior_bar["close"] >= prior_limit - 1e-6, "prior_day_volume": prior_bar["volume"], "prior_day_volume_baseline_avg": avg_volume, "prior_day_volume_ratio": ratio, "prior_day_volume_surge": ratio >= VOLUME_SURGE_RATIO if ratio is not None else None, "open_price": event_bar["open"], "gap_bps": round((event_bar["open"] / prior_bar["close"] - 1) * 10000, 4), "limit_up_price": limit_up, "limit_down_price": limit_down, "minute_count": len(minutes), "auction_open_price": auction["open_price"] if auction else None, "auction_matched_volume": auction["matched_volume"] if auction else None}
+    evidence["limit_price_source"] = limit_price_source
     timeline: list[TimelineEvent] = []; day_close = datetime.combine(signal_date, time(15, 0))
     if auction is not None: timeline.append(TimelineEvent(event="auction_open", time=datetime.combine(signal_date, time(9, 25))))
     if not evidence["prior_day_limit_up"]: timeline.append(TimelineEvent(event="day_close", time=day_close)); return _finalize(symbol, partition, cost, "available", "evaluated", "bar_touched", "unavailable", "no_prior_day_limit_up", censoring, timeline, evidence, _forward(bars, signal_date, partition, cost, censoring))
@@ -240,7 +263,7 @@ def _evaluate_symbol(reader: WeakToStrongReader, symbol: str, signal_date: date,
     if event_bar["high"] < limit_up - 1e-6: timeline.append(TimelineEvent(event="day_close", time=day_close)); return _finalize(symbol, partition, cost, "available", "evaluated", "bar_touched", "unavailable", "gap_up_no_touch", censoring, timeline, evidence, _forward(bars, signal_date, partition, cost, censoring))
     first_idx = next((i for i, t in enumerate(ticks) if t["price"] >= limit_up - 1e-6), None)
     if first_idx is None:
-        censoring.append("missing_tick_data"); timeline.append(TimelineEvent(event="day_close", time=day_close)); return _finalize(symbol, partition, cost, "censored", "downgraded_bar_touched", "bar_touched", "unavailable", "bar_touched", censoring, timeline, evidence, _forward(bars, signal_date, partition, cost, censoring))
+        censoring.append("missing_sortable_tick"); timeline.append(TimelineEvent(event="day_close", time=day_close)); return _finalize(symbol, partition, cost, "censored", "downgraded_bar_touched", "bar_touched", "unavailable", "bar_touched", censoring, timeline, evidence, _forward(bars, signal_date, partition, cost, censoring))
     first = ticks[first_idx]; timeline.append(TimelineEvent(event="first_touch", time=first["timestamp"])); break_tick = next((t for t in ticks[first_idx + 1:] if t["price"] < limit_up - .005), None); reseal_tick = next((t for t in ticks[ticks.index(break_tick) + 1:] if t["price"] >= limit_up - 1e-6), None) if break_tick else None
     if break_tick: timeline.append(TimelineEvent(event="board_break", time=break_tick["timestamp"]))
     if reseal_tick: timeline.append(TimelineEvent(event="reseal", time=reseal_tick["timestamp"]))
@@ -264,15 +287,23 @@ def _summary(evals: Sequence[WeakToStrongSymbolEvaluation], cost: float, boundar
         statuses[e.status] = statuses.get(e.status, 0)+1; key = e.event_label or "none"; labels[key] = labels.get(key, 0)+1
         for c in e.censoring: cens[c] = cens.get(c, 0)+1
     return WeakToStrongRunSummary(total_symbols=len(evals), cost_bps=cost, oos_start=boundary, by_status=dict(sorted(statuses.items())), by_event_label=dict(sorted(labels.items())), censoring_counts=dict(sorted(cens.items())), is_forward=_partition_summary(evals, "is"), oos_forward=_partition_summary(evals, "oos"), unspecified_forward=_partition_summary(evals, "unspecified"))
-
-def evaluate_weak_to_strong_v1(request: WeakToStrongEvaluateRequest) -> WeakToStrongEvaluateResponse:
-    reader = resolve_weak_to_strong_reader(); part = _partition(request.signal_date, request.oos_start)
-    if reader is None:
-        missing = list(REQUIRED_CAPABILITIES); evaluations = [_empty(s, part, request.cost_bps, "reader_missing", [_CENSORING_BY_CAPABILITY[c] for c in missing]) for s in request.symbols]; manifest = ManifestStatus(status="unavailable", missing_capabilities=missing)
+def evaluate_weak_to_strong_v1(request: WeakToStrongEvaluateRequest, *, reader: WeakToStrongReader | None = None) -> WeakToStrongEvaluateResponse:
+    """Evaluate with an explicitly caller-owned reader or test registry reader."""
+    resolved = reader if reader is not None else resolve_weak_to_strong_reader()
+    part = _partition(request.signal_date, request.oos_start)
+    if resolved is None:
+        missing = list(FULL_CAPABILITIES)
+        evaluations = [_empty(s, part, request.cost_bps, "reader_missing", [_CENSORING_BY_CAPABILITY[c] for c in missing]) for s in request.symbols]
+        manifest = ManifestStatus(status="unavailable", missing_capabilities=missing)
     else:
         try:
-            info = reader.run_manifest(); manifest = ManifestStatus(status="available", missing_capabilities=[], generation=info["generation"], sha256=info["sha256"])
+            info = resolved.run_manifest()
+            declared = frozenset(resolved.capabilities())
+            missing = [c for c in FULL_CAPABILITIES if c not in declared]
+            manifest = ManifestStatus(status="available", missing_capabilities=missing, generation=info["generation"], sha256=info["sha256"], components=dict(info.get("components") or {}))
         except Exception:
-            evaluations = [_empty(s, part, request.cost_bps, "insufficient_evidence", ["missing_run_manifest"]) for s in request.symbols]; manifest = ManifestStatus(status="unavailable", missing_capabilities=["immutable_run_manifest"])
-        else: evaluations = [_evaluate_symbol(reader, s, request.signal_date, request.cost_bps, request.oos_start) for s in request.symbols]
+            evaluations = [_empty(s, part, request.cost_bps, "insufficient_evidence", ["missing_run_manifest"]) for s in request.symbols]
+            manifest = ManifestStatus(status="unavailable", missing_capabilities=["immutable_run_manifest"])
+        else:
+            evaluations = [_evaluate_symbol(resolved, s, request.signal_date, request.cost_bps, request.oos_start) for s in request.symbols]
     return WeakToStrongEvaluateResponse(protocol_id=WEAK_TO_STRONG_PROTOCOL_ID, schema_version=WEAK_TO_STRONG_SCHEMA_VERSION, signal_date=request.signal_date, observed_at=datetime.now(UTC), manifest=manifest, evaluations=evaluations, summary=_summary(evaluations, request.cost_bps, request.oos_start), disclaimer=WEAK_TO_STRONG_DISCLAIMER)

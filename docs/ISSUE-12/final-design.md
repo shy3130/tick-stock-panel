@@ -4,4 +4,6 @@
 
 ## 生产化状态更新（2026-08-27）
 
-事件主路径和能力分级已实现：完整证据可形成 sealed 分类，缺历史盘口只能降为 `bar_touched`，PIT 制度/ST/股本不完整则 unavailable/censored。由于本地历史 PIT 状态与盘口仍不可证明，生产 registry 不注册近似 reader，保持本设计的 fail-closed 边界。
+production composite reader/API seam 已实现：minimum/full capabilities 分级，canonical/markets/#10 sparse minute/signal-year pinned callauction 组件均固定 generation、manifest hash、coverage 并生成 composite SHA-256。markets PIT 使用 generation `created_at` 作为唯一 `available_at`，effective/available 均须通过 09:25 Asia/Shanghai 门禁，事件阈值优先 exact `ztj`。未声明的 sortable tick、历史盘口、float 返回空/None，触板/封板/一字板相关分支只产生明确删失，禁止伪造 sealed 分类。
+
+API 每请求拥有 production reader，成功和异常均 finally 精确级联关闭；registry reader 保持 caller-owned。历史 signal 若 publication 晚于 effective cutoff，预期 `pit_incomplete`，但仍可构造 composite manifest。定向 34 项合同/API 测试与 `ruff --select F,E9` 通过；真实 reader smoke 固定了 canonical、markets、ordered-trans、callauction 四组件，并确认当前历史/同日 PIT 均不会越过 09:25 publication boundary。独立二次 Review 无 blocker/major。

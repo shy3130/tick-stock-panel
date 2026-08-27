@@ -62,7 +62,7 @@ def isolated_reader_registry():
 
 class _FullCapabilityReader:
     def capabilities(self):
-        return frozenset(weak_to_strong.REQUIRED_CAPABILITIES)
+        return frozenset(weak_to_strong.FULL_CAPABILITIES)
 
 
 def _raising_reader_factory():
@@ -94,7 +94,7 @@ class _CompleteReader:
         self.signal = date(2026, 1, 9)
 
     def capabilities(self):
-        return frozenset(weak_to_strong.REQUIRED_CAPABILITIES)
+        return frozenset(weak_to_strong.FULL_CAPABILITIES)
 
     def run_manifest(self):
         return {"generation": "fake-generation", "sha256": "fake-sha"}
@@ -150,7 +150,8 @@ class _CompleteReader:
     def pit_snapshot(self, symbol, as_of):
         if not self.pit:
             return None
-        return {"effective_at": datetime(2020, 1, 1), "available_at": datetime(2020, 1, 1), "limit_up_pct": 0.1, "limit_down_pct": 0.1, "is_st": False, "float_shares": 1_000_000.0}
+        exact = 11.0 if as_of == date(2026, 1, 8) else 12.1
+        return {"effective_at": datetime(2020, 1, 1), "available_at": datetime(2020, 1, 1), "limit_up_pct": 0.1, "limit_down_pct": 0.1, "is_st": False, "float_shares": 1_000_000.0, "limit_up_price": exact}
 
 
 def test_complete_reader_produces_structured_event(isolated_reader_registry):

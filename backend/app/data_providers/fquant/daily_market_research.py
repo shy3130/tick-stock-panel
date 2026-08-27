@@ -23,6 +23,10 @@ class PublishedDailyMarketFactsReader:
         self._path = db_path
         self._generation = generation
         self._manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        try:
+            self._manifest = json.loads(manifest_bytes)
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("markets manifest is invalid") from exc
         self._lock = threading.Lock()
         self._closed = False
         self._conn = connect_duckdb(db_path, read_only=True)
@@ -90,6 +94,10 @@ class PublishedDailyMarketFactsReader:
 
     def provider_id(self) -> str:
         return "fquant.published_markets"
+
+    def created_at(self) -> str | None:
+        value = self._manifest.get("created_at")
+        return value if isinstance(value, str) else None
 
     def _value_expr(self, field: str) -> str:
         direct = f'TRY_CAST("{field}" AS DOUBLE)'
