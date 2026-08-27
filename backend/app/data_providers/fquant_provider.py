@@ -40,6 +40,8 @@ from app.data_providers.fquant.adj_factor import (
     compute_ex_factor_from_xdxr,
 )
 from app.data_providers.fquant.fstore_duckdb_client import FStoreDuckDBClient
+from app.data_providers.fquant import generation
+from app.data_providers.fquant.ordered_trans import PublishedOrderedTransMinuteReader
 from app.data_providers.fquant.mapping import (
     base_infos_rows_to_instruments,
     chengfen_gu_rows_to_universes,
@@ -180,6 +182,7 @@ class FQuantProvider:
         depth=False,
         universes=True,   # 阶段 3 #3.2：fstore chengfen_gu 提供指数/板块/行业
         minute_month_extension=True,
+        ordered_trans_research=True,
     )
 
     def __init__(
@@ -227,6 +230,21 @@ class FQuantProvider:
             self._engine.close()
         except Exception:  # noqa: BLE001
             logger.warning("FQuantProvider: 关闭 TDX 连接失败", exc_info=True)
+
+    def open_ordered_trans_reader(self) -> PublishedOrderedTransMinuteReader | None:
+        """Open the current immutable ordered-trans research generation."""
+        root = generation.root_for("tdx_ordered_trans")
+        if not root:
+            return None
+        try:
+            return PublishedOrderedTransMinuteReader(root)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "FQuantProvider: ordered-trans generation unavailable at %s",
+                root,
+                exc_info=True,
+            )
+            return None
 
     def refresh_fstore_clients(self) -> None:
         """刷新所有 fstore 客户端连接，下次查询重新解析 generation 快照。

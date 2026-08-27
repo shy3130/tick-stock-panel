@@ -16,3 +16,8 @@ MINUTE_COLUMNS = [
     "symbol", "asset_type", "source", "datetime", "open", "high", "low", "close",
     "volume", "amount", "freq",
 ]
+
+# Immutable ordered-trans artifact columns (fixed Parquet contract).
+ORDERED_TRANS_MINUTE_COLUMNS = [
+    "symbol", "ts", "open", "high", "low", "close", "volume",
+]
