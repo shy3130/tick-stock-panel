@@ -62,6 +62,7 @@
 | `base.py` | 70+ | `MarketDataProvider` 协议 + `ProviderCapabilities` | **接口契约**，新增 capability 必须先改这里 |
 | `fquant_provider.py` | 600+ | FQuantProvider（v2，本地 DuckDB 聚合） | 直连 fstore DuckDB / TDX DuckDB |
 | `fquant/` | 10+ 文件 | fquant 子模块（symbols / fstore_duckdb_client / engine_data_duckdb_client / mapping / adj_factor / raw_reconstruct / fallback） | 改 fquant 行为时从这里入手 |
+| `fquant/daily_market_research.py` | — | 固定 published markets generation，按 symbol/date 读取历史名称、ST/板块制度与 exact `ztj` | 只提供 PIT 事实；缺字段删失，禁止由当前名称或 K 线反推 |
 | `normalizer.py` | — | 字段规范化（Symbol / Instrument / KLine / Realtime 等） | 既有契约稳定；realtime 契约为追加 |
 | `registry.py` | 20+ | provider 注册中心（`get_provider(name)`） | 新增 provider 只需在这里 +1 行 |
 | `schemas.py` | — | Pydantic schema | **未修改** |
@@ -77,6 +78,7 @@
 | `services/index_sync.py` | +28 / -31 | universes 走 provider，FQuant 走 fstore |
 | `services/watchlist.py` | +20 / -5 | realtime 走 provider；fquant 走本地源 fallback |
 | `services/depth_service.py` | +20 / -0 | 能力检查模式：fquant 直接降级返回空 |
+| `services/n_shape_research_data.py` | — | N 字研究 composite reader：绑定 canonical raw OHLCV 与 markets PIT facts 两份 generation/manifest；任一来源缺失即 unavailable，构造后不跟随 `current` |
 
 ### 回测域（`backend/app/backtest/` + `backend/app/api/backtest*.py`）
 
@@ -343,12 +345,12 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 - **本文件**与 `FQUANT_INTEGRATION_PROGRESS.md` 同源，每次重大架构变更后两文件一并更新
 - 改动 service 层时，**先看 `kline_sync.py`**（试点文件）；新增 service 时复制它的 `_get_data_provider()` 模式
-- 改动 provider 时，**先看 `fquant/` 子模块**（8 文件，本地源分得很清楚）
+- 改动 provider 时，**先看 `fquant/` 子模块**；研究专用 PIT 事实读取参照 `daily_market_research.py`，不得下沉到业务 service 直连 DuckDB
 - commit 前**重新校对**「阶段 2：Service 层解耦」「阶段 3：补 FQuantProvider 缺口」两节的"已完成/待完成"标记
 - 用户面向说明改 `README.md`；开发者面向说明改 `AGENTS.md` + `backend/docs/`
 
 ---
 
-**最后更新**：2026-08-27（canonical history schema v2：原生 raw_open、固定全部源 generation 路径、并行只读全量构建、盘后 immutable 增量发布、原子 current 切换；研究生产链保持 fail-closed。）
+**最后更新**：2026-08-27（canonical history schema v2：原生 raw_open、固定全部源 generation 路径、并行只读全量构建、盘后 immutable 增量发布；Issue #8 N 字研究使用 canonical + markets 双 generation，历史名称/ST/板块制度/exact `ztj` 缺失即删失。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

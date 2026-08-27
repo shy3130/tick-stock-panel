@@ -1,8 +1,8 @@
 # Issue #8 — N 字金凤凰首板回调研究因子
 
 - Issue: https://github.com/wf2311/fm-workbench/issues/8
-- 状态: `production-engine-ready; blocked-by-pit-st-history`
-- 集成分支: `issue-8-research-production`
+- 状态: `production-data-reader-enabled; research-verdict-gated`
+- 集成分支: `issue-8-pit-daily-facts`
 
 ## 工作流记录
 
@@ -12,7 +12,7 @@
 4. 方案 v2：`plan-v2.md`
 5. 二审：`review-v2.md`（两项修订已完成）
 6. 最终设计：`final-design.md`
-7. 编码与定向验证：已完成；真实事件仍由 PIT ST 历史缺口 fail-closed
+7. 生产数据接入：双 generation composite reader 已接 canonical raw OHLCV 与 fstore markets 历史名称/exact `ztj`；缺失事实和一字板显式删失
 
 ## 范围
 
@@ -26,10 +26,10 @@
 
 ## 验收标准
 
-1. 每个事件状态仅使用信号日可见的 canonical 历史数据，含版本、generation 与 manifest 字节哈希证据。
-2. 数据不足、PIT 制度/ST 证据缺失、停复牌、一字板或无法证明成交时显式删失/不可用。
-3. 与同一日线价格定义下的全部首板基准比较 OOS 增量、成本、置信区间及失败分层；未达门槛即 `rejected`。
-4. 覆盖普通/低位首板、缩量失败、结构位跌破、一字板、二次放量、二次涨停回封、停复牌及缺数据夹具。
+1. 每个事件状态仅使用同次调用固定的 canonical 与 markets generation，载荷含两份 manifest 字节哈希证据。
+2. 数据不足、历史名称、日期有效制度或 exact `ztj` 缺失、停复牌、一字板或无法证明成交时显式删失/不可用。
+3. 与同一日线价格定义下的全部可研究首板基准比较 OOS 增量、成本、置信区间及失败分层；未达门槛即 `rejected`。
+4. 覆盖普通/低位首板、ST、创业板制度切换、缩量失败、结构位跌破、一字板、二次放量、二次涨停回封、停复牌及缺数据夹具。
 5. Agent 只能解释返回证据，不能增删或重排候选。
 
 ## 文档清单

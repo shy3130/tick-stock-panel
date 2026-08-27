@@ -111,23 +111,23 @@ class NShapeEvaluateIn(BaseModel):
 
 @router.post("/factors/n-shape/evaluate")
 def evaluate_n_shape_factor(body: NShapeEvaluateIn, request: Request):
-    """运行只读 N 字形态研究；缺少 sealed/PIT 能力时显式 unavailable。"""
-    from app.services.n_shape_golden_phoenix import (
-        evaluate_n_shape,
-        resolve_pinned_reader,
-        resolve_pit_provider,
-    )
+    """运行只读 N 字形态研究；缺少 immutable markets 复合 reader 时显式 unavailable。"""
+    from app.services.n_shape_golden_phoenix import evaluate_n_shape, resolve_n_shape_reader
 
+    reader = resolve_n_shape_reader(getattr(request.app.state, "repo", None))
     try:
         return evaluate_n_shape(
             start=body.start,
             end=body.end,
             symbols=body.symbols,
-            pinned_reader=resolve_pinned_reader(request.app.state.repo),
-            pit_provider=resolve_pit_provider(request.app.state.repo),
+            reader=reader,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        close = getattr(reader, "close", None)
+        if callable(close):
+            close()
 
 
 class HypothesisIn(BaseModel):
@@ -370,7 +370,9 @@ def get_single_yang_no_break(request: Request):
 def evaluate_single_yang_factor(body: SingleYangEvaluateIn, request: Request):
     try:
         return evaluate_single_yang(
-            reader=getattr(getattr(request.app.state, "repo", None), "generation_pinned_daily_reader", None),
+            reader=getattr(
+                getattr(request.app.state, "repo", None), "generation_pinned_daily_reader", None
+            ),
             start=body.start,
             end=body.end,
             symbols=body.symbols,
