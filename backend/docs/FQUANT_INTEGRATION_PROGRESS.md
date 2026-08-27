@@ -255,6 +255,14 @@ def sync_daily(...):
 - sina/tencent 客户端只供 service 侧受控 external fallback 使用，不是 `fquant_local` provider 来源；必须由用户显式开启对应 scope，且返回带 provenance/degraded 标记。
 - 当前变更仍在工作区，未 commit；提交前需用户 review。
 
+### 6B.4 ordered-trans 研究 generation（2026-08-27）
+
+- 新增 `ordered_trans_research` capability 与 request-owned `open_ordered_trans_reader()`；runtime FQuantProvider 只读 `/Volumes/WD1/duckdb/snapshots/engine-a-ordered-trans/<generation>/` 的 hash-pinned Parquet，不扫描 raw CSV。
+- 离线 publisher 对 raw trans 使用单 FD 完成 fstat/hash/header/parse；同 raw minute 保留物理 source sequence。正常收盘集合竞价的 `volume=0` 指示价不冒充成交，artifact 保存 sparse true-trade 1m；消费端按 timestamp bucket 强制 48×5m/16×15m anchors。
+- 首个 bounded generation `20260827T134357Z-f751ea5b08e3b4da` 覆盖 `600519.SH/000001.SZ/300750.SZ`、30 个完整交易日；manifest SHA-256 `cf5e2dc98fae3bd249f4a1c402b09ce6102cd2fe64a7ab490d03fbcc424ab475`。
+- `oos_start=2026-08-04` 在运行结果前冻结；真实 service/API smoke 均 `status=ok`，horizon 1 common OOS=88，最终 `rejected`（post-cost 非正、Wilson 下界未超过基线），不进入短线池/Agent/默认策略。
+- publisher/reader/provider/service/API 聚焦测试 25 passed；后端全量 `3428 passed, 3 skipped, 8 warnings`；独立 coding review 修复后复审无 blocker/major。完整命令、hash probe 与 purge 计数见 `../../docs/ISSUE-10/verification.md`。
+
 ---
 
 ## 7. 技术架构简述

@@ -31,6 +31,10 @@ _ROOT_ENV = {
         "FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION",
         sr.ROOT_ENGINE_A_CALLAUCTION,
     ),
+    "engine_a_ordered_trans": (
+        "FQUANT_SNAPSHOT_ROOT_ENGINE_A_ORDERED_TRANS",
+        sr.ROOT_ENGINE_A_ORDERED_TRANS,
+    ),
     "engine_hk": ("FQUANT_SNAPSHOT_ROOT_ENGINE_HK", sr.ROOT_ENGINE_HK),
 }
 
@@ -49,6 +53,7 @@ LOGICAL_OWNERS = {
     "tdx_hk": "engine_hk",
     "tdx_hk_minutes": "engine_hk",
     "tdx_hk_trans": "engine_hk",
+    "tdx_ordered_trans": "engine_a_ordered_trans",
 }
 
 

@@ -33,6 +33,7 @@ ROOT_ENGINE_HK = "/Volumes/WD1/duckdb/snapshots/engine-hk"
 ROOT_FSTORE_EXTENDED = "/Volumes/WD1/duckdb/snapshots/fstore-extended"
 ROOT_ENGINE_A_CALLAUCTION = "/Volumes/WD1/duckdb/snapshots/engine-a-callauction"
 ROOT_ENGINE_A_MONEYFLOW_MINUTE = "/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute"
+ROOT_ENGINE_A_ORDERED_TRANS = "/Volumes/WD1/duckdb/snapshots/engine-a-ordered-trans"
 # Date-sharded archive roots (engine-a-trans-archive / engine-a-minutes-archive)
 # are intentionally NOT exposed here: their logicals are date-sharded and must
 # resolve only through catalog_resolver.resolve_route, which pins an exact

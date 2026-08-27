@@ -41,6 +41,7 @@
 | TDX DuckDB | DuckDB read-only | 日 K wide/day / xdxr / 日级资金流 | `FQUANT_TDX_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx.duckdb`） |
 | TDX A 股 minutes 路由 | 发布 catalog + DuckDB read-only | 按交易日定位 2023 年前归档或当前 minutes 快照（staged，preliminary→final） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_MINUTES_ARCHIVE}` |
 | TDX A 股 trans 路由 | 发布 catalog + DuckDB read-only | 按交易日定位历史归档年片或活跃年的月度 trans 快照（staged，preliminary→final） | `FQUANT_SNAPSHOT_ROOT_CATALOG` + `FQUANT_SNAPSHOT_ROOT_ENGINE_A{,_PRELIMINARY,_TRANS_ARCHIVE}` |
+| ordered-trans 研究 generation | published immutable Parquet read-only | raw trans 离线保序 materialize 为 sparse true-trade 1m；runtime 仅经 provider factory 读取，强制 48×5m/16×15m 窗口 | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_ORDERED_TRANS`（默认 `/Volumes/WD1/duckdb/snapshots/engine-a-ordered-trans`） |
 | TDX HK DuckDB | DuckDB read-only | 港股日 K / 多周期 K | `FQUANT_TDX_HK_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx-hk.duckdb`，解析为 engine-hk generation 快照） |
 | TDX HK minutes DuckDB | DuckDB read-only | 港股分钟 K | `FQUANT_TDX_HK_MINUTES_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx-hkminutes.duckdb`，解析为 engine-hk generation 快照） |
 | TDX HK trans DuckDB | DuckDB read-only | 港股逐笔成交 | `FQUANT_TDX_HK_TRANS_DUCKDB_PATH`（默认 `/Volumes/WD1/duckdb/tdx-hktrans.duckdb`，解析为 engine-hk generation 快照） |
@@ -50,6 +51,7 @@
 - **depth（5 档盘口）当前缺口**：FQuantProvider 目前不暴露 depth capability，`depth_service.py` 已做能力门控降级；可通过「受控外部 fallback」（默认关闭，见第 4 节契约）补公共免费源五档，未开启时维持降级返回空
 - **realtime 已接入**：只读本地 `fstore-markets.duckdb.daily_markets` 的 generation 快照（最新）；先取全局 `MAX(trade_date)`，再按该交易日与 `asset_type` 点查；使用独立 DuckDB 客户端/连接锁，避免被财务或 K 线查询阻塞；不再调用 `tdx-api` / sina / tencent / `../fquant` HTTP
 - **universes 已接入**：阶段 3.2 走 provider `get_by_universes()`；fquant 接 fstore `chengfen_gu` + `base_infos`
+- **ordered-trans 研究链已接入**：`ordered_trans_research` capability 只打开独立 published generation；runtime 不读 raw CSV。artifact 不回填收盘集合竞价零成交分钟，按 sparse true-trade 1m 的 timestamp bucket 验证 48×5m；首个 bounded generation 仅覆盖 `600519.SH/000001.SZ/300750.SZ` 30 个完整日，真实因子 verdict 为 `rejected`，不进入短线池/Agent/默认策略
 
 ---
 
@@ -237,6 +239,7 @@ export FQUANT_SNAPSHOT_ROOT_ENGINE_A_TRANS_ARCHIVE=/Volumes/WD1/duckdb/snapshots
 export FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED=/Volumes/WD1/duckdb/snapshots/fstore-extended
 export FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE=/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute
 export FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION=/Volumes/WD1/duckdb/snapshots/engine-a-callauction
+export FQUANT_SNAPSHOT_ROOT_ENGINE_A_ORDERED_TRANS=/Volumes/WD1/duckdb/snapshots/engine-a-ordered-trans
 export TICKFLOW_CANONICAL_HISTORY_ROOT=/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history
 
 # 可选：AI
@@ -313,6 +316,7 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 | fstore-extended | `/Volumes/WD1/duckdb/snapshots/fstore-extended` | `FQUANT_SNAPSHOT_ROOT_FSTORE_EXTENDED` | extended 整库（财务三表）独立快照，与 fstore generation 隔离 |
 | engine-a-moneyflow-minute | `/Volumes/WD1/duckdb/snapshots/engine-a-moneyflow-minute` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_MONEYFLOW_MINUTE` | tdx_moneyflow_minute 整库独立快照，与 engine-a generation 隔离 |
 | engine-a-callauction | `/Volumes/WD1/duckdb/snapshots/engine-a-callauction` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_CALLAUCTION` | tdx_callauction 整库独立只读快照 |
+| engine-a-ordered-trans | `/Volumes/WD1/duckdb/snapshots/engine-a-ordered-trans` | `FQUANT_SNAPSHOT_ROOT_ENGINE_A_ORDERED_TRANS` | 离线 raw trans 保序 materialization 的 per-symbol/day sparse true-trade Parquet；runtime provider 只读 hash-pinned generation |
 | tickflow-canonical-history | `/Volumes/WD1/duckdb/snapshots/tickflow-canonical-history` | `TICKFLOW_CANONICAL_HISTORY_ROOT` | 面板生成的 A 股 canonical enriched 全历史；schema v2 原生保存复权前 `raw_open/raw_high/raw_low/raw_close`；首次全量任务固定 tdx/fstore/markets/klines/extended 具体 generation 路径，可用 1–8 个独立只读 worker，临时 staging DuckDB 只作聚合并在成功/失败后删除；盘后增量发布克隆 immutable 父代、复制已验证新日期分区并做 coverage/父代 CAS；完整成功后才原子切换 `current.json`，不写用户 `data/` |
 
 **无中断发布顺序**（先数据后路由，避免读到未发布的物理文件）：
@@ -351,6 +355,6 @@ A 股 minutes/trans 是**日期分片**数据，必须经 `catalog_resolver.reso
 
 ---
 
-**最后更新**：2026-08-27（canonical history schema v2：原生 raw_open、固定全部源 generation 路径、并行只读全量构建、盘后 immutable 增量发布；Issue #8 N 字研究使用 canonical + markets 双 generation，历史名称/ST/板块制度/exact `ztj` 缺失即删失。）
+**最后更新**：2026-08-27（canonical history schema v2 与 Issue #8 N 字 PIT 研究；Issue #10 新增 ordered-trans dedicated generation、sparse true-trade 1m→48×5m→16×15m 生产链，真实三标的 OOS verdict 为 rejected。）
 **维护者**：tickflow-stock-panel contributors
 **风格参考**：Hermes `~/.hermes/profiles/oc-hq/SOUL.md`（项目身份卡范式）

@@ -1,8 +1,4 @@
-# 最终设计（生产化定稿）
-
-二次独立评审已通过；本文件冻结可实施契约。bounded generation 只证明三个标的的真实链路与 verdict，不宣称全市场能力。
-
-真实尾盘数据探针后的口径修订见 [production-amendment.md](production-amendment.md)；下文已按修订后的 sparse 1m / exact 48×5m 契约更新。
+# 生产接入方案 v3（最终候选）
 
 ## 数据面边界
 
@@ -18,10 +14,10 @@ runtime **不读取 raw CSV**。离线 publisher 是 upstream materialization �
 
 - raw source 只由脚本显式传入；每个文件以 `O_NOFOLLOW` 单 descriptor 打开，`fstat` 普通文件/size 后一次读入 bytes；同一 bytes 完成 SHA-256、row count、header/parser 与解析。
 - 仅接受实际六列 header 或七列加 `venue`；header 决定 parser variant，年份不参与。
-- header 后物理行号为 0-based `source_seq`；重复 minute 不重排。仅保留正价格、正成交量真实成交，排除 `volume=0` 集合竞价指示价。
-- 连续 raw `09:30..11:29/13:00..14:59` 映射为 `+1m` close；边界真实成交 `11:30/15:00` 映射到同名 close，并按文件物理顺序与该 close 的既有 ticks 合并。
-- artifact timestamps 必须是 canonical 240 close 集合的严格递增子集，首尾为 09:31/15:00；不得回填空分钟。每 symbol/day 的 48 个 canonical 5m 窗口必须各至少含一笔正成交，只有全部 requested symbols 都满足 48-window 门禁的日期进入 generation。
-- 每个 symbol/day 写独立 Parquet，列固定 `symbol,ts,open,high,low,close,volume`。manifest entry 同时固定 source CSV relative path/header/parser/size/hash/rows 与 artifact relative path/size/hash/实际 sparse rows/`five_minute_windows=48`/missing close timestamps/first_close/last_close。
+- header 后物理行号为 0-based `source_seq`；重复 minute 不重排。仅保留正价格、正成交量连续竞价逐笔。
+- raw `09:30..11:29/13:00..14:59` 加一分钟规范化为 close `09:31..11:30/13:01..15:00`；按 `(raw_minute,source_seq)` 生成 first/max/min/last/sum。
+- 每 symbol/day 必须精确 240 根、timestamps 与两个 120 根 session 列表逐项相等；只有全部 requested symbols 都完整的日期进入 generation。
+- 每个 symbol/day 写独立 Parquet，列固定 `symbol,ts,open,high,low,close,volume`。manifest entry 同时固定 source CSV relative path/header/parser/size/hash/rows 与 artifact relative path/size/hash/rows/first_close/last_close。
 
 ## 跨进程发布协议
 
@@ -36,7 +32,7 @@ runtime **不读取 raw CSV**。离线 publisher 是 upstream materialization �
 
 - 运行时只打开 manifest 固定的 per-day Parquet artifact；拒绝 symlink/path escape，单 descriptor 读取 bytes，核验 artifact size/hash 后从同一 bytes buffer 解码 Parquet。
 - `catalog_manifest()` 返回 compact generation/parser/coverage/route identity；`manifest_sha256()` 单独进入 provenance；`market_days` 只返回 complete days；coverage 外 symbol/day unavailable。
-- reader 再次验证 sparse timestamps 是 canonical 240 close 集合的严格递增子集、首尾 09:31/15:00、OHLCV 和 48 个非空 5m 窗口；`sealed_cutoff=max_complete_day 15:00`；request-local cache；`close()` 清空。
+- reader 再次逐项验证精确 240 timestamps 和 OHLCV；`sealed_cutoff=max_complete_day 15:00`；request-local cache；`close()` 清空。
 - `ProviderCapabilities.ordered_trans_research`、schema 和 protocol factory `open_ordered_trans_reader()` 同步更新；仅 FQuantProvider true。
 - API 通过 effective provider name `get_provider()` 获取**owned provider**；capability false/reader None 即 unavailable。`finally` 先关闭 owned reader、再关闭 owned provider。显式 registered test reader 优先且视为 caller-owned，API 不关闭它。
 - service 不读 env/root，不持有全局 production reader；每请求重新固定 generation。
@@ -45,9 +41,9 @@ runtime **不读取 raw CSV**。离线 publisher 是 upstream materialization �
 
 `ImmutableMinuteReader` 增加 `manifest_sha256()`；validator 不信任 adapter 声明：
 
-- 每 symbol/day 的 `bar.ts` 必须是 naive Asia/Shanghai close 列表 `09:31..11:30,13:01..15:00` 的严格递增子集，首尾固定 09:31/15:00；不得有 09:30、重复或额外 bar。
-- OHLCV、symbol/day、strict monotonic、cutoff 均验证；按 timestamp 所属窗口聚合，48 个 canonical 5m 窗口必须全部非空，失败统一 source-integrity unavailable。
-- 5m anchors 必须为 `09:35...11:30,13:05...15:00`，15m anchors 必须为 `09:45...11:30,13:15...15:00`；15m 由每 3 根 5m 聚合，结果再次断言 16 个 anchors。
+- 每 symbol/day 要求恰好 240 根；每个 `bar.ts` 必须逐项等于 naive Asia/Shanghai close 列表 `09:31..11:30,13:01..15:00`；不得有 09:30、两分钟 gap、重复或额外 bar。
+- OHLCV、symbol/day、strict monotonic、cutoff 均验证；失败统一 source-integrity unavailable。
+- 5m anchors 必须为 `09:35...11:30,13:05...15:00`，15m anchors 必须为 `09:45...11:30,13:15...15:00`；聚合结果再次断言 anchors。
 
 ## 固定 split、标签、重叠与统计
 
@@ -72,4 +68,4 @@ runtime **不读取 raw CSV**。离线 publisher 是 upstream materialization �
 
 固定 `600519.SH/000001.SZ/300750.SZ`，扫描 2026-07-01..2026-08-26，仅发布三者都完整的日期；`oos_start` 在发布后依据 complete days **预先冻结进 run 请求与验证文档**，运行前不看结果。coverage 外 fail-closed。
 
-测试必须覆盖 publisher single-FD/header/source_seq/+1m/11:30与15:00边界/sparse/48-window/CAS，reader artifact hash/path/sparse/close，provider capability/所有权，service anchors/split/global purge/label formula/baselines/CI/verdict。真实发布后随机复核 source/artifact hash，运行 service/API 并记录 generation/hash/coverage/effective OOS/verdict；研究/provider/API 回归、ruff、独立 coding review 后交付。
+测试必须覆盖 publisher single-FD/header/source_seq/+1m/240/CAS，reader artifact hash/path/240/close，provider capability/所有权，service anchors/split/global purge/label formula/baselines/CI/verdict。真实发布后随机复核 source/artifact hash，运行 service/API 并记录 generation/hash/coverage/effective OOS/verdict；研究/provider/API 回归、ruff、独立 coding review 后交付。

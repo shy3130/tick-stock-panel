@@ -97,8 +97,37 @@ def evaluate_volume_breakout_factor(body: VolumeBreakoutEvaluateIn, request: Req
 
 @router.post("/factors/mtf-direction/evaluate")
 def evaluate_mtf_direction_factor(body: MTFDirectionEvaluateIn):
-    """运行分钟多周期能力验证；缺真实 reader 时显式 unavailable。"""
-    return evaluate_mtf_direction(body, reader=resolve_minute_reader())
+    """运行 ordered-trans 多周期研究；每请求 owned provider/reader，注册 reader caller-owned。"""
+    registered = resolve_minute_reader()
+    if registered is not None:
+        return evaluate_mtf_direction(body, reader=registered)
+    provider = None
+    reader = None
+    try:
+        try:
+            from app.data_providers.registry import get_active_provider_name, get_provider
+            provider = get_provider(get_active_provider_name(capability="ordered_trans_research"))
+        except Exception:
+            return evaluate_mtf_direction(body, reader=None)
+        capabilities = getattr(provider, "capabilities", None)
+        if not getattr(capabilities, "ordered_trans_research", False):
+            return evaluate_mtf_direction(body, reader=None)
+        opener = getattr(provider, "open_ordered_trans_reader", None)
+        if not callable(opener):
+            return evaluate_mtf_direction(body, reader=None)
+        reader = opener()
+        if reader is None:
+            return evaluate_mtf_direction(body, reader=None)
+        return evaluate_mtf_direction(body, reader=reader)
+    finally:
+        try:
+            close_reader = getattr(reader, "close", None)
+            if callable(close_reader):
+                close_reader()
+        finally:
+            close_provider = getattr(provider, "close", None)
+            if callable(close_provider):
+                close_provider()
 
 
 class NShapeEvaluateIn(BaseModel):

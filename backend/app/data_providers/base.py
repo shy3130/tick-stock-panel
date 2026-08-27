@@ -23,9 +23,18 @@ class ProviderCapabilities:
     universes: bool = False
     # Whether provider explicitly allows multi-month minute-history extension.
     minute_month_extension: bool = False
+    # Published ordered-trans research artifacts; raw CSV is never runtime input.
+    ordered_trans_research: bool = False
 
 
-class MarketDataProvider(Protocol):
+class OrderedTransReaderFactory(Protocol):
+    """Provider factory for a request-owned pinned ordered-trans reader."""
+
+    def open_ordered_trans_reader(self) -> object | None:
+        ...
+
+
+class MarketDataProvider(OrderedTransReaderFactory, Protocol):
     name: str
     capabilities: ProviderCapabilities
 
