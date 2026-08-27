@@ -55,4 +55,4 @@ raw reader、状态机与 OOS/成本诊断已经实现；canonical pipeline 已�
 
 ## 持续更新（2026-08-27）
 
-schema v2 首次全量发布后，盘后管道使用 `publish_incremental_from_local` 生成下一 immutable generation：父代文件优先硬链接（失败回退复制），新增日期从通过完整性门禁的本地 enriched 分区复制；使用固定源 generation 的 `000001.INDEX` 校验 `(parent_end, through_date]` 交易日连续性，记录父代 `source_generations` 血统、日历校验 generation 及新增分区行数/标的数/SHA-256。全量 coverage scan 与父代未变化校验通过后才原子切换。增量失败不影响本地 canonical，也不改变上一 published generation。
+schema v2 首次全量发布后，盘后管道使用 `publish_incremental_from_local` 生成下一 immutable generation：父代文件优先硬链接（失败回退复制），新增日期从通过完整性门禁的本地 enriched 分区复制；只 pin 日历校验必需的 `tdx` 与 `markets` generation，通过 `000001.INDEX` 校验 `(parent_end, through_date]` 交易日连续性。新 manifest 继承父代 `source_generations` 血统，单独记录日历校验 generation 及新增分区行数/标的数/SHA-256。全量 coverage scan 与父代未变化校验通过后才原子切换。增量失败不影响本地 canonical，也不改变上一 published generation。
