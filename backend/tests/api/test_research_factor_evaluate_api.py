@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -154,3 +155,30 @@ def test_n_shape_route_closes_request_scoped_reader():
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert reader.closed is True
+
+
+def test_weak_to_strong_route_owns_production_reader_scope(monkeypatch):
+    from app.services import weak_to_strong_research_data
+
+    events = []
+
+    @contextmanager
+    def fake_scope(repo, signal_year):
+        events.append(("enter", repo, signal_year))
+        try:
+            yield None
+        finally:
+            events.append(("exit", repo, signal_year))
+
+    monkeypatch.setattr(weak_to_strong_research_data, "production_reader_scope", fake_scope)
+    client = _client()
+    response = client.post(
+        "/api/research/factors/weak-to-strong/evaluate",
+        json={"signal_date": "2026-08-27", "symbols": ["600000.SH"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["manifest"]["status"] == "unavailable"
+    assert [event[0] for event in events] == ["enter", "exit"]
+    assert events[0][1] is client.app.state.repo
+    assert events[0][2] == 2026

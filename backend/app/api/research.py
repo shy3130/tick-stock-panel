@@ -438,6 +438,9 @@ def evaluate_macd_stages_factor(body: MacdStagesRequest, request: Request):
     "/factors/weak-to-strong/evaluate",
     response_model=WeakToStrongEvaluateResponse,
 )
-def evaluate_weak_to_strong(body: WeakToStrongEvaluateRequest):
-    """弱转强研究因子评估；当前生产能力不足时显式返回 unavailable。"""
-    return evaluate_weak_to_strong_v1(body)
+def evaluate_weak_to_strong(body: WeakToStrongEvaluateRequest, request: Request):
+    """弱转强研究因子评估；production reader 由请求拥有并在 finally 关闭。"""
+    from app.services.weak_to_strong_research_data import production_reader_scope
+
+    with production_reader_scope(getattr(request.app.state, "repo", None), body.signal_date.year) as reader:
+        return evaluate_weak_to_strong_v1(body, reader=reader)

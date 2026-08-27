@@ -1,9 +1,9 @@
 # Issue #12 — 弱转强涨停事件因子
 
 - Issue: https://github.com/wf2311/fm-workbench/issues/12
-- 集成分支: `issue-8-research-production`
-- 状态: `event-engine-ready; blocked-by-pit-and-orderbook-history`
+- 分支: `issue-12-price-event-production`
+- 状态: `production-seam-verified`
 
-文档：feasibility.md、plan-v1.md、review-v1.md、plan-v2.md、review-v2.md、final-design.md、verification.md。
+已落地 production composite reader/API seam：canonical、markets PIT、#10 sparse minute、signal-year pinned callauction 组件固定并生成 composite manifest；PIT 使用 effective/available 双 09:25 Asia/Shanghai 门禁与 exact `ztj`，缺 sortable tick/order book/float 只返回空/None 并按事件分支删失。production reader 由 API 请求拥有并在 finally 级联关闭；历史信号若 publication 晚于 effective cutoff，预期 `pit_incomplete`，不伪造封板分类。
 
-完整 reader 注入后的日线/PIT/竞价/分钟/逐笔/盘口事件路径、bar-touched 降级和 OOS/成本摘要已实现。生产仍缺完整 PIT ST/股本历史与历史盘口，保持精确 unavailable/censored。
+定向合同测试、静态错误检查、独立二次 Review 与真实 production reader smoke 均已完成；当前 generation 可构造四组件 composite manifest，历史/同日 PIT 因 09:25 publication boundary 正确返回 unavailable。
