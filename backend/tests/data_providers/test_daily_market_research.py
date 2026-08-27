@@ -30,6 +30,8 @@ def _publish(tmp_path, monkeypatch):
         "('000001',1,'2026-08-27',10,11,9,0,1,2,12,'平安银行',NULL), "
         "('000002',1,'2026-08-27',4.8,5,4.7,4.9,100,5000,5.15,'*ST测试',NULL), "
         "('000003',1,'2026-08-27',4.8,5,4.7,4.9,100,5000,5.39,NULL,NULL), "
+        "('920001',1,'2021-11-14',10,11,9,10,100,1000,10.5,'*ST北测',NULL), "
+        "('920001',1,'2021-11-15',10,11,9,10,100,1000,10.5,'*ST北测',NULL), "
         "('600519',3,'2026-08-27',1,1,1,1,1,1,1,'贵州茅台',NULL)"
     )
     conn.execute(
@@ -112,6 +114,18 @@ def test_reader_pins_generation_and_maps_fields(tmp_path, monkeypatch):
             "regime": "main_10",
         }
     }
+    assert reader.limit_regime_facts(
+        "920001.BJ",
+        date(2021, 11, 14),
+        date(2021, 11, 15),
+    ) == {
+        date(2021, 11, 15): {
+            "limit_up_price": 10.5,
+            "name": "*ST北测",
+            "is_st": True,
+            "regime": "st_5",
+        }
+    }
     monkeypatch.setattr(module, "current_path", lambda logical: str(db.parent / "other.duckdb"))
     assert reader.generation() == generation
     reader.close()
@@ -123,5 +137,7 @@ def test_board_regime_is_date_aware():
     regime = PublishedDailyMarketFactsReader._regime
     assert regime("300001.SZ", date(2020, 8, 23)) == "main_10"
     assert regime("300001.SZ", date(2020, 8, 24)) == "chinext_20"
-    assert regime("688001.SH", date(2020, 8, 24)) == "star_20"
-    assert regime("920001.BJ", date(2026, 8, 27)) == "beijing_30"
+    assert regime("688001.SH", date(2019, 7, 21)) is None
+    assert regime("688001.SH", date(2019, 7, 22)) == "star_20"
+    assert regime("920001.BJ", date(2021, 11, 14)) is None
+    assert regime("920001.BJ", date(2021, 11, 15)) == "beijing_30"

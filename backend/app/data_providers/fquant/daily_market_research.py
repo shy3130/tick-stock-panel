@@ -142,11 +142,11 @@ class PublishedDailyMarketFactsReader:
         if not code.isdigit() or len(code) != 6:
             return None
         if code.startswith(("688", "689")):
-            return "star_20"
+            return "star_20" if day >= date(2019, 7, 22) else None
         if code.startswith(("300", "301")):
             return "chinext_20" if day >= date(2020, 8, 24) else "main_10"
         if code_to_symbol(code, 1).endswith(".BJ"):
-            return "beijing_30"
+            return "beijing_30" if day >= date(2021, 11, 15) else None
         return "main_10"
 
     def limit_regime_facts(
@@ -164,15 +164,16 @@ class PublishedDailyMarketFactsReader:
             text = str(stock_name).strip() if stock_name else ""
             if not isinstance(day, date) or limit_price is None or not text:
                 continue
+            base_regime = self._regime(symbol, day)
+            if base_regime is None:
+                continue
             is_st = "ST" in text.upper()
-            regime = "st_5" if is_st else self._regime(symbol, day)
-            if regime is not None:
-                result[day] = {
-                    "limit_up_price": float(limit_price),
-                    "name": text,
-                    "is_st": is_st,
-                    "regime": regime,
-                }
+            result[day] = {
+                "limit_up_price": float(limit_price),
+                "name": text,
+                "is_st": is_st,
+                "regime": "st_5" if is_st else base_regime,
+            }
         return result
 
     def close(self) -> None:

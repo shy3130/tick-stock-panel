@@ -60,6 +60,7 @@ uv run --no-project python -m py_compile app/services/n_shape_golden_phoenix.py 
 - composite reader 同时固定 canonical OHLCV generation 与 fstore markets generation；成功载荷分别记录两份 manifest SHA-256。
 - markets facts 逐 symbol/date 提供历史 `name`、`is_st`、日期有效 `regime` 与 source exact `ztj`。缺任一字段时该日期进入 `limit_regime_unknown` 删失，不以当前名称或派生涨停信号替代。
 - canonical `raw_open` 已进入必需列；首板 `raw_open == raw_high` 返回 `one_price_board`，不进入 baseline 或事件。
+- 科创板在 2019-07-22、北交所在 2021-11-15 才启用对应 regime；启用日前即使历史名称含 `ST` 也 fail-closed，ST 不得绕过基础板块制度边界。创业板 2020-08-24 前后分别锁定 `main_10`/`chinext_20`。
 - 真实只读冒烟固定 canonical `20260827T054651-63f500a4` 与 markets `20260827T102014`，`600519.SH` 在 2022-03-04 至 2022-12-30 得到 201 个完整制度事实；评估返回 `status=ok`、`evaluated=1`、`censored=3`、`events=0`。这只证明生产数据链可运行，不宣称事件命中或因子准入。
 
 定向测试：
@@ -79,7 +80,7 @@ uv run --project /Users/wf2311/Projects/wf2311/fm/tickflow-stock-panel/backend \
 pytest daily_market_research + n_shape_research_data + n_shape_golden_phoenix \
   + research_sealed_data + research_registry + short_pool + agent_research_tools \
   + research_factor_evaluate_api + research_api + research_analysis -q
-# 155 passed, 1 warning in 7.23s
+# 155 passed, 1 warning in 14.59s
 
 ruff check --select F,E9 <本次 9 个 Python 文件>
 # All checks passed
@@ -91,3 +92,4 @@ ruff check --select F,E9 <本次 9 个 Python 文件>
 2. 首板后完整 10 日窗口任一 PIT fact 缺失时，两个事件变体均以 `limit_regime_unknown` 删失。
 
 二次 review 确认两项 finding 均关闭，未发现新增 blocker/major。
+最终边界复核又补充了科创/北交制度启用日前 fail-closed 及 ST 不得绕过基础制度的回归；修复后再次完成研究域回归。
