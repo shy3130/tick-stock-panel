@@ -141,3 +141,56 @@ def test_board_regime_is_date_aware():
     assert regime("688001.SH", date(2019, 7, 22)) == "star_20"
     assert regime("920001.BJ", date(2021, 11, 14)) is None
     assert regime("920001.BJ", date(2021, 11, 15)) == "beijing_30"
+
+def test_canonical_pinned_loader_reads_raw_preclose_and_closes(tmp_path, monkeypatch):
+    generation = "20260827T130000"
+    root = tmp_path / "snapshots"
+    gen = root / generation
+    gen.mkdir(parents=True)
+    db = gen / "markets.duckdb"
+    conn = duckdb.connect(str(db))
+    conn.execute(
+        "CREATE TABLE daily_markets (code VARCHAR, asset_type INTEGER, trade_date DATE, "
+        "jrkpj DOUBLE, zgj DOUBLE, zdj DOUBLE, zspj DOUBLE, zrspj DOUBLE, price DOUBLE, "
+        "ztj DOUBLE, name VARCHAR)"
+    )
+    conn.execute(
+        "INSERT INTO daily_markets VALUES "
+        "('600519',1,'2026-08-27',105,120,100,118,100,117.5,110,'贵州茅台')"
+    )
+    conn.close()
+    manifest = {"generation": generation, "entries": [{"logical": "markets", "file": "markets.duckdb"}]}
+    manifest_bytes = json.dumps(manifest).encode()
+    (gen / "manifest.json").write_bytes(manifest_bytes)
+    monkeypatch.setattr(module, "root_for", lambda logical: str(root))
+    canonical = {"source_generations": {"markets": {"generation": generation, "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest()}}}
+    bundle = module.load_pinned_market_facts(canonical, ["600519.SH"], [date(2026, 8, 27)])
+    fact = bundle.rows[("600519.SH", date(2026, 8, 27))]
+    assert fact.pre_close == 100.0
+    assert fact.raw_open == 105.0
+    assert fact.published_limit_up == 110.0
+    assert fact.raw_close == 117.5
+    assert fact.published_limit_down == 90.0
+    assert fact.regime == "main_10"
+
+
+def test_strict_canonical_pin_requires_manifest_hash(tmp_path, monkeypatch):
+    _db, generation, _manifest_hash = _publish(tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "root_for", lambda logical: str(_db.parent.parent))
+    with pytest.raises(ValueError, match="manifest_sha256"):
+        PublishedDailyMarketFactsReader.from_canonical_manifest(
+            {"source_generations": {"markets": {"generation": generation}}}
+        )
+
+
+def test_legacy_string_pin_is_unverified(tmp_path, monkeypatch):
+    _db, generation, _manifest_hash = _publish(tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "root_for", lambda logical: str(_db.parent.parent))
+    reader = PublishedDailyMarketFactsReader.from_canonical_manifest(
+        {"source_generations": {"markets": generation}}
+    )
+    try:
+        assert reader.pin_identity_verified() is False
+        assert reader.pin_verification_mode() == "missing_expected_hash"
+    finally:
+        reader.close()
