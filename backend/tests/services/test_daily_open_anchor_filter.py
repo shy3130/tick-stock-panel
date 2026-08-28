@@ -61,12 +61,19 @@ def _fake_canonical(days: list[date], rows: list[dict], *, manifest: dict | None
     )
 
 
-def _rows(days: list[date], *, bullish_index: int | None = None, raw_open_none_index: int | None = None) -> list[dict]:
+def _rows(
+    days: list[date],
+    *,
+    bullish_index: int | None = None,
+    raw_open_none_index: int | None = None,
+    raw_low_none_index: int | None = None,
+) -> list[dict]:
     rows = []
     for index, day in enumerate(days):
         close = 12.0 if index >= 23 else 10.0
         open_ = 9.5 if index == bullish_index else 10.0
         raw_open = None if index == raw_open_none_index else open_
+        raw_low = None if index == raw_low_none_index else min(open_, close) - 0.1
         rows.append(
             {
                 "symbol": SYM,
@@ -77,7 +84,7 @@ def _rows(days: list[date], *, bullish_index: int | None = None, raw_open_none_i
                 "close": close,
                 "raw_open": raw_open,
                 "raw_high": max(open_, close) + 0.1,
-                "raw_low": min(open_, close) - 0.1,
+                "raw_low": raw_low,
                 "raw_close": close,
             }
         )
@@ -168,7 +175,7 @@ def test_f1_band_raises_without_pre_close_even_when_canonical_has_prev_raw_close
     view = _FactsView(
         {
             (SYM, days[1]): SimpleNamespace(
-                pre_close=None, published_limit_up=11.0, regime="main_10"
+                pre_close=None, published_limit_up=11.0, regime="main_10", is_st=False
             )
         }
     )
@@ -183,11 +190,45 @@ def test_f1_band_rebuilds_from_markets_pre_close_and_cross_checks():
     view = _FactsView(
         {
             (SYM, days[1]): SimpleNamespace(
-                pre_close=10.0, published_limit_up=11.0, regime="main_10"
+                pre_close=10.0, published_limit_up=11.0, regime="main_10", is_st=False
             )
         }
     )
     assert view.band(SYM, days[1]) == (11.0, 9.0)
+
+
+def test_f1_band_applies_pit_st_override_before_rebuild():
+    day = _days(1)[0]
+    view = _FactsView(
+        {
+            (SYM, day): SimpleNamespace(
+                pre_close=10.0,
+                published_limit_up=10.5,
+                regime="main_10",
+                is_st=True,
+            )
+        }
+    )
+    assert view.band(SYM, day) == (10.5, 9.5)
+
+
+@pytest.mark.parametrize("is_st", [None, 0, 1, "false"])
+def test_f1_band_fails_closed_when_pit_st_fact_is_unknown(is_st):
+    day = _days(1)[0]
+    view = _FactsView(
+        {
+            (SYM, day): SimpleNamespace(
+                pre_close=10.0,
+                published_limit_up=11.0,
+                regime="main_10",
+                is_st=is_st,
+            )
+        }
+    )
+    with pytest.raises(UnavailableError) as excinfo:
+        view.band(SYM, day)
+    assert excinfo.value.reason == "limit_band_facts_incomplete"
+    assert excinfo.value.detail["field"] == "is_st"
 
 
 # --- F2: blocked-exit days recorded from single-candidate execution counters ---
@@ -384,6 +425,20 @@ def test_f8_invalid_raw_open_censors_candidate_keeps_signal_universe(monkeypatch
     assert calls == []
 
 
+def test_f8_invalid_raw_low_censors_candidate_before_limit_comparison(monkeypatch):
+    days = _days(40)
+    canonical = _fake_canonical(days, _rows(days, raw_low_none_index=24))
+    _patch_facts(monkeypatch, _facts_rows([day for day in days[24:]]))
+    calls: list = []
+    _patch_engine(monkeypatch, calls)
+    payload = evaluate_daily_open_anchor(canonical, days[23], days[23], days[23], [SYM])
+    assert payload["status"] == "ok"
+    assert payload["events"][0]["precheck"] == "censored:invalid_open"
+    none_rows = [row for row in payload["execution_ledger"] if row["arm"] == "none"]
+    assert none_rows[0]["terminal_reason"] == "invalid_open"
+    assert calls == []
+
+
 # --- F9: anchor-unavailable events keep the none baseline arm executable ---
 
 
@@ -410,6 +465,31 @@ def test_f9_anchor_unavailable_keeps_none_arm_and_marks_three_arms(monkeypatch):
     assert payload["arms"]["original"]["segments"]["oos"]["stats"]["censored_counts"] == {
         "anchor_unavailable": 1
     }
+
+
+def test_f9_anchor_unavailable_survives_blocked_buy_limit_ledger(monkeypatch):
+    days = _days(41)
+    rows = _rows(days)
+    rows[24]["raw_open"] = 11.0
+    rows[24]["raw_low"] = 11.0
+    canonical = _fake_canonical(days, rows)
+    _patch_facts(monkeypatch, _facts_rows([day for day in days[23:]]))
+    calls: list = []
+    _patch_engine(monkeypatch, calls)
+    payload = evaluate_daily_open_anchor(canonical, SIGNAL_DAY, SIGNAL_DAY, SIGNAL_DAY, [SYM])
+    ledger = payload["execution_ledger"]
+    none_row = next(row for row in ledger if row["arm"] == "none")
+    assert none_row["terminal_status"] == "blocked"
+    assert none_row["terminal_reason"] == "buy_limit_up"
+    for arm in ("original", "inverted", "random"):
+        row = next(item for item in ledger if item["arm"] == arm)
+        assert row["terminal_status"] == "censored"
+        assert row["terminal_reason"] == "anchor_unavailable"
+        assert row["filter_retained"] is None
+    assert payload["arms"]["original"]["segments"]["oos"]["stats"]["censored_counts"] == {
+        "anchor_unavailable": 1
+    }
+    assert calls == []
 
 
 # --- Issue #30 TODO（TODO.md tnt 对照）：PR #32 后遗漏修正 ---
@@ -562,6 +642,7 @@ def test_tnt_contrast_down_adverse_range_improved_is_conditional_by_trend():
     )
     contrast = build_tnt_open_anchor_contrast(arms)
     assert contrast["source"] == svc.TREND_CONTRAST_SOURCE
+    assert contrast["source"] == "docs/ISSUE-30/final-design.md"
     assert contrast["read_scope"] == "oos_only"
     down = contrast["regimes"]["single_side_down"]
     assert down["status"] == "adverse"

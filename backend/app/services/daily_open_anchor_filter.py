@@ -75,7 +75,7 @@ ARMS = ("none", "original", "inverted", "random")
 
 UPPER_MISMATCH_TOLERANCE = 0.005
 
-TREND_CONTRAST_SOURCE = "obsidian-note/clipper/2026-08-15-bollinger-volatility-t-strategy-research.md"
+TREND_CONTRAST_SOURCE = "docs/ISSUE-30/final-design.md"
 TREND_CONTRAST_READ_SCOPE = "oos_only"
 TREND_CONTRAST_PREREGISTERED = (
     "Obsidian 做T研究笔记（布林带+波动率，2026-08-15）已定结论：锚定开盘价的均值回归做T"
@@ -388,7 +388,12 @@ class _FactsView:
         if cached is not None:
             return cached
         row = self.fact(symbol, day)
-        regime = _fact_get(row, "regime")
+        is_st = _fact_get(row, "is_st")
+        if not isinstance(is_st, bool):
+            raise UnavailableError(
+                "limit_band_facts_incomplete", symbol=symbol, date=day.isoformat(), field="is_st"
+            )
+        regime = "st_5" if is_st else _fact_get(row, "regime")
         if regime not in REGIME_RATIOS:
             raise UnavailableError(
                 "limit_band_facts_incomplete", symbol=symbol, date=day.isoformat(), field="regime"
@@ -603,7 +608,7 @@ def _precheck_candidate(
         if day not in series.day_index:
             return "censored:horizon_data_gap", t1, horizon
         horizon.append(day)
-    if series.raw_open.get(t1) is None:
+    if series.raw_open.get(t1) is None or series.raw_low.get(t1) is None:
         return "censored:invalid_open", t1, []
     upper_t1, _ = facts.band(series.symbol, t1)
     raw_open = series.raw_open[t1]
@@ -800,6 +805,23 @@ def _ledger_for_candidate(
     for arm in ARMS:
         retained = candidate.retained.get(arm)
         if retained is None:
+            entries.append(
+                LedgerEntry(
+                    symbol=candidate.symbol,
+                    signal_date=candidate.signal_date,
+                    arm=arm,
+                    segment=candidate.segment,
+                    planned_execution_date=planned,
+                    filter_retained=None,
+                    precheck=candidate.precheck,
+                    terminal_status="censored",
+                    terminal_reason="anchor_unavailable",
+                    trend_bucket=candidate.trend_bucket,
+                    volatility_bucket=candidate.volatility_bucket,
+                    gap_bucket=candidate.gap_bucket,
+                    distance_bucket=candidate.distance_bucket,
+                )
+            )
             continue
         entries.append(
             LedgerEntry(
