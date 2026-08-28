@@ -1,6 +1,6 @@
 # ISSUE-30 日线开盘价锚定入场过滤研究（daily-open-anchor-filter）
 
-> 状态：**实现及依赖集成完成／待 PR（review-v3 approve；主会话定向、全量与 Ruff 已通过；最终 review Approve）**。
+> 状态：**实现及依赖集成完成／待 PR（review-v3 approve；含 2026-08-28 tnt 趋势对照修正：主会话 focused 45 passed、全量 3508 passed / 3 skipped / 8 warnings、Ruff F/E9 通过、独立最终 review Approve）**。
 > 日期：2026-08-28 · 基线：`7bf2982` · GitHub Issue：[wf2311/fm-workbench#30](https://github.com/wf2311/fm-workbench/issues/30)
 
 ## 这是什么
@@ -34,7 +34,7 @@ v1/v2/v3 均冻结为 A 股多头、日频收盘确认、下一可交易日开�
 
 | 文件 | 作用 |
 |------|------|
-| `backend/app/services/daily_open_anchor_filter.py` | sealed reader 装配、raw PIT bands、锚点、四臂、execution ledger、candidate stats、IS/OOS verdict |
+| `backend/app/services/daily_open_anchor_filter.py` | sealed reader 装配、raw PIT bands、锚点、四臂、execution ledger、candidate stats、IS/OOS verdict、scripts/tnt 趋势对照（tnt_open_anchor_contrast） |
 | `backend/app/api/research.py` | capability GET + factor evaluate POST（fail-closed 400/503 映射） |
 | `backend/tests/services/test_daily_open_anchor_filter.py` | raw/adjusted corporate-action、T+1、终态 ledger、虚拟结局与统计夹具 |
 | `backend/tests/api/test_daily_open_anchor_evaluate_api.py` | API、markets pin、fail-closed、reader 生命周期与边界校验 |
@@ -50,6 +50,18 @@ v1/v2/v3 均冻结为 A 股多头、日频收盘确认、下一可交易日开�
 - [x] 定向测试、后端全量回归与 Ruff F/E9 通过；独立 coding review 无 blocker/major。
 
 实现及依赖集成已完成；最终 review Approve（无 blocker/major/minor），证据见 [verification.md](verification.md)。
+
+## scripts/tnt 单边趋势日对照（PR #32 后遗漏修正，已完成待 PR）
+
+`docs/TODO.md`「日线开盘价锚定入场位置过滤器」要求与 `scripts/tnt/` 做T研究对照：其预注册结论为**单边趋势日（尤其单边下跌）按开盘价锚定入场为接飞刀**。PR #32 合并时遗漏该对照，本次补齐（2026-08-28）：
+
+- 评估响应顶层追加 `tnt_open_anchor_contrast`：只读 `arms[*].segments.oos.layers.trend_bucket`，不重扫交易、不改变过滤 mask、不读取 IS（`read_scope=oos_only`）。
+- 对 `single_side_down` 与 `range` 分别披露 none/original 的 `n_trades`、`stop_hit_rate`、`expectancy` 与比较状态 `improved|adverse|neutral|inconclusive`；任一臂 `n_trades < MIN_OOS_TRADES(30)` 或指标缺失即 `inconclusive`。
+- 冻结判定：`adverse` = original 止损触发率更高或期望更低；`improved` = 止损触发率更低且期望不低于 none；其余 `neutral`。
+- verdict 追加 `applicability` 与 `warnings`：`label=rejected` → `not_applicable_rejected`；`label=inconclusive` → `inconclusive_overall`；仅整体 `validated` 进入趋势状态机：任一桶 `inconclusive` → `inconclusive_by_trend`，双桶 `adverse` → `unsupported_in_preregistered_regimes`，单边下跌或震荡单桶 `adverse` → `conditional_by_trend` 并写对应 warning；仅两桶均为 `improved|neutral` → `all_regimes`。既有 `label` 规则不变。
+- 日频代理声明：对照使用信号日前可计算的个股 5 日趋势桶（±3% 阈值），**不声称复现** `scripts/tnt/` 的盘中做T研究。
+
+本节与对应代码、测试为 PR #32 之后的补充修正，已由主会话验证闭合：定向测试 **45 passed**、后端全量 **3508 passed / 3 skipped / 8 warnings / 131.21s**、Ruff（F/E9）通过、独立最终 review **Approve（无 blocker/major/minor）**，证据见 [verification.md](verification.md)。
 
 ## 红线
 

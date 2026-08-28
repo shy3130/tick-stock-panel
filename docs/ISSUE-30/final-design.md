@@ -91,6 +91,8 @@ none 臂 ledger 是虚拟结局唯一来源；过滤臂按 `(symbol, signal_date
 
 plan-v2 §4 的 `arms.*.segments.is/oos` 继续有效，按 signal_date 归段，verdict 只读取 OOS。plan-v2 §5 的 candidate-sample 白名单继续有效，但必须使用本 v3 终态 ledger 的分母：`n_signals/n_retained/n_filtered/n_candidates_executed/n_trades/stop_hit/avg_mae/avg_mfe/net_pnl_pct_mean/blocked_counts/censored_counts`；不得恢复组合 turnover、cost_total 或 portfolio MaxDD。provenance 新增 `markets_generation`、`source_generations_markets`、`execution_ledger_version=2`。
 
+PR #32 后补充（2026-08-28）：响应顶层追加只读 `tnt_open_anchor_contrast`（来源 `scripts/tnt/`、`read_scope=oos_only`、日频个股 5 日趋势桶代理，不复现盘中做T研究）：对 `single_side_down`/`range` 桶披露 none/original 的 `n_trades`、`stop_hit_rate`、`expectancy` 与 `improved|adverse|neutral|inconclusive` 状态（任一臂 `n_trades < MIN_OOS_TRADES` 即 inconclusive）；verdict 据此追加 `applicability`（rejected → `not_applicable_rejected`；inconclusive → `inconclusive_overall`；仅 validated 时任一桶 inconclusive → `inconclusive_by_trend`、双桶 adverse → `unsupported_in_preregistered_regimes`、单桶 adverse → `conditional_by_trend`、双桶均 improved/neutral → `all_regimes`）与 `warnings`，既有 `label` 规则不变；该诊断为纯只读投影，不得回灌过滤 mask。
+
 ## 5. 增量测试矩阵
 
 - raw/adjusted corporate-action fixture：raw bands 与 raw OHLC 正确，adjusted 直接比较被证明不采用。

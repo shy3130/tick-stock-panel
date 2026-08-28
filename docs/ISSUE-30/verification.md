@@ -35,6 +35,27 @@
 
 独立最终 review 结论：**Approve，无 blocker / major / minor**。终审已闭合，状态进入「实现及依赖集成完成／待 PR」。
 
+## scripts/tnt 趋势对照修正（2026-08-28，已验证）
+
+PR #32 遗漏 `docs/TODO.md` 要求的 `scripts/tnt/` 单边趋势日「接飞刀」对照；已在 worktree 补齐（`daily_open_anchor_filter.py` 与对应 service 测试），新增确定性用例（直接构造 arms/layers，不触发 engine）：
+
+- `test_trend_bucket_boundaries_are_inclusive_and_frozen`
+- `test_tnt_contrast_status_rules_are_frozen`
+- `test_tnt_contrast_down_adverse_range_improved_is_conditional_by_trend`
+- `test_tnt_contrast_reads_oos_only_and_ignores_is_layers`
+- `test_tnt_contrast_insufficient_sample_is_inconclusive_by_trend`
+- `test_evaluate_payload_appends_tnt_open_anchor_contrast`
+
+主会话最终验证证据（覆盖本修正及 P1 状态机、P2 非有限值参数化补充）：
+
+| 项 | 命令范围 | 结果 |
+|---|---|---|
+| 定向测试 | service/API 相关测试文件 | **45 passed** |
+| 后端全量回归 | backend 全量测试套件 | **3508 passed, 3 skipped, 8 warnings, 131.21s** |
+| Lint | Ruff（F/E9 规则组） | **passed** |
+
+独立最终 review 结论：**Approve，无 blocker / major / minor**。tnt 趋势对照修正至此验证闭合，状态为「修正完成待 PR」。
+
 ## 边界
 
 - 本文件只记录主会话证据与状态，不包含新的验证执行。

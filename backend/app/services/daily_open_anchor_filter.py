@@ -18,6 +18,9 @@ Contract highlights (docs/ISSUE-30/final-design.md):
   one-to-one onto a per-candidate terminal ledger.
 - ``sell_no_future`` is unreachable under the verified continuous horizon and is
   therefore not a terminal outcome (review-v3 P2).
+- tnt contrast (docs/TODO.md): ``tnt_open_anchor_contrast`` is an OOS-only,
+  read-only trend-bucket comparison against ``scripts/tnt/``; diagnosis only,
+  it never re-scans trades nor feeds back into the filter mask.
 """
 
 from __future__ import annotations
@@ -63,6 +66,18 @@ FAR_ANCHOR_PCT = 0.05
 ARMS = ("none", "original", "inverted", "random")
 
 UPPER_MISMATCH_TOLERANCE = 0.005
+
+TREND_CONTRAST_SOURCE = "scripts/tnt/"
+TREND_CONTRAST_READ_SCOPE = "oos_only"
+TREND_CONTRAST_PREREGISTERED = (
+    "scripts/tnt 盘中做T研究预注册结论：单边趋势日（尤其单边下跌）按开盘价锚定入场为接飞刀；"
+    "过滤器有效性必须按趋势状态分层核对，禁止用全样本平均掩盖趋势日亏损"
+)
+TREND_CONTRAST_PROXY_NOTE = (
+    "日频 v1 降档代理：对照使用信号日前可计算的个股 5 日趋势桶（TREND_WINDOW=5，±3% 阈值），"
+    "不是对 scripts/tnt 盘中做T研究的复现或等效替代"
+)
+TREND_CONTRAST_REGIMES = ("single_side_down", "range")
 
 REGIME_RATIOS: dict[str, Decimal] = {
     "main_10": Decimal("0.10"),
@@ -767,10 +782,12 @@ def _segment_layers(entries: Sequence[LedgerEntry]) -> dict[str, Any]:
             pnls = [entry.pnl_pct for entry in bucket_entries if entry.pnl_pct is not None]
             n_trades = len(pnls)
             stop_hit = sum(1 for entry in bucket_entries if entry.exit_reason == "stop_loss")
+            mean_pnl = _round6(sum(pnls) / n_trades) if n_trades else None
             buckets[bucket] = {
                 "n": len(bucket_entries),
                 "n_trades": n_trades,
-                "net_pnl_pct_mean": _round6(sum(pnls) / n_trades) if n_trades else None,
+                "net_pnl_pct_mean": mean_pnl,
+                "expectancy": mean_pnl,
                 "stop_hit_rate": _round6(stop_hit / n_trades) if n_trades else None,
                 "blocked": sum(1 for entry in bucket_entries if entry.terminal_status == "blocked"),
                 "censored": sum(1 for entry in bucket_entries if entry.terminal_status == "censored"),
@@ -779,7 +796,94 @@ def _segment_layers(entries: Sequence[LedgerEntry]) -> dict[str, Any]:
     return layers
 
 
-def _verdict(arms: dict[str, Any]) -> dict[str, Any]:
+def _finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _trend_bucket_stats(arms: dict[str, Any], arm: str, bucket: str) -> Mapping[str, Any] | None:
+    """Read-only OOS access to one arm's trend bucket."""
+    segments = arms.get(arm, {})
+    oos = segments.get("segments", {}).get("oos", {}) if isinstance(segments, Mapping) else {}
+    layers = oos.get("layers", {}) if isinstance(oos, Mapping) else {}
+    buckets = layers.get("trend_bucket", {}) if isinstance(layers, Mapping) else {}
+    stats = buckets.get(bucket) if isinstance(buckets, Mapping) else None
+    return stats if isinstance(stats, Mapping) else None
+
+
+def _contrast_arm_view(stats: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(stats, Mapping):
+        return {"n_trades": None, "stop_hit_rate": None, "expectancy": None}
+    return {
+        "n_trades": stats.get("n_trades"),
+        "stop_hit_rate": stats.get("stop_hit_rate"),
+        "expectancy": stats.get("expectancy"),
+    }
+
+
+def _contrast_bucket_status(
+    none_stats: Mapping[str, Any] | None, original_stats: Mapping[str, Any] | None
+) -> str:
+    """Apply the frozen OOS-only trend contrast decision rule."""
+    metrics: list[tuple[float, float]] = []
+    for stats in (none_stats, original_stats):
+        if not isinstance(stats, Mapping):
+            return "inconclusive"
+        n_trades = stats.get("n_trades")
+        stop_hit_rate = stats.get("stop_hit_rate")
+        expectancy = stats.get("expectancy")
+        if (
+            not _finite_number(n_trades)
+            or int(n_trades) < MIN_OOS_TRADES
+            or not _finite_number(stop_hit_rate)
+            or not _finite_number(expectancy)
+        ):
+            return "inconclusive"
+        metrics.append((float(stop_hit_rate), float(expectancy)))
+    none_stop, none_expectancy = metrics[0]
+    original_stop, original_expectancy = metrics[1]
+    if original_stop > none_stop or original_expectancy < none_expectancy:
+        return "adverse"
+    if original_stop < none_stop and original_expectancy >= none_expectancy:
+        return "improved"
+    return "neutral"
+
+
+def build_tnt_open_anchor_contrast(arms: dict[str, Any]) -> dict[str, Any]:
+    """Build the scripts/tnt trend contrast from existing OOS layers only.
+
+    This is read-only diagnosis: it does not rescan trades or feed back into
+    the filter mask.
+    """
+    regimes: dict[str, Any] = {}
+    for bucket in TREND_CONTRAST_REGIMES:
+        none_stats = _trend_bucket_stats(arms, "none", bucket)
+        original_stats = _trend_bucket_stats(arms, "original", bucket)
+        regimes[bucket] = {
+            "none": _contrast_arm_view(none_stats),
+            "original": _contrast_arm_view(original_stats),
+            "status": _contrast_bucket_status(none_stats, original_stats),
+        }
+    return {
+        "source": TREND_CONTRAST_SOURCE,
+        "read_scope": TREND_CONTRAST_READ_SCOPE,
+        "preregistered_conclusion": TREND_CONTRAST_PREREGISTERED,
+        "proxy_note": TREND_CONTRAST_PROXY_NOTE,
+        "decision_rule": {
+            "min_oos_trades_per_arm": MIN_OOS_TRADES,
+            "inconclusive": "任一臂 n_trades < min_oos_trades_per_arm 或指标缺失/非有限值",
+            "adverse": "original stop_hit_rate 高于 none，或 expectancy 低于 none",
+            "improved": "original stop_hit_rate 低于 none 且 expectancy 不低于 none",
+            "neutral": "其余情形",
+        },
+        "regimes": regimes,
+    }
+
+
+def _verdict(arms: dict[str, Any], contrast: dict[str, Any] | None = None) -> dict[str, Any]:
     oos_none = arms["none"]["segments"]["oos"]["stats"]
     oos_original = arms["original"]["segments"]["oos"]["stats"]
     enough = oos_none["n_trades"] >= MIN_OOS_TRADES and oos_original["n_trades"] >= MIN_OOS_TRADES
@@ -789,6 +893,42 @@ def _verdict(arms: dict[str, Any]) -> dict[str, Any]:
         stop_ok = oos_original["stop_hit_rate"] < oos_none["stop_hit_rate"]
         expectancy_ok = oos_original["expectancy"] >= oos_none["expectancy"]
         label = "validated" if stop_ok and expectancy_ok else "rejected"
+    if contrast is None:
+        contrast = build_tnt_open_anchor_contrast(arms)
+    down_status = contrast["regimes"]["single_side_down"]["status"]
+    range_status = contrast["regimes"]["range"]["status"]
+    warnings: list[str] = []
+    if label == "rejected":
+        applicability = "not_applicable_rejected"
+    elif label == "inconclusive":
+        applicability = "inconclusive_overall"
+    elif down_status == "inconclusive" or range_status == "inconclusive":
+        applicability = "inconclusive_by_trend"
+        warnings.append(
+            "单边下跌与/或震荡趋势对照因样本不足不可判定"
+            f"（任一臂 OOS n_trades < {MIN_OOS_TRADES}）：无法按趋势状态分层下结论"
+        )
+    elif down_status == "adverse" and range_status == "adverse":
+        applicability = "unsupported_in_preregistered_regimes"
+        warnings.append(
+            "单边下跌与震荡两个趋势桶均不利"
+            "（original 相对 none 止损触发率更高或期望更低），与 scripts/tnt 预注册的"
+            "单边趋势日接飞刀结论一致：validated 不适用于这两类趋势状态"
+        )
+    elif down_status == "adverse":
+        applicability = "conditional_by_trend"
+        warnings.append(
+            "单边下跌趋势桶中 original 相对 none 止损触发率更高或期望更低"
+            "（scripts/tnt 接飞刀特征在 OOS 日频代理中复现）：validated 结论仅适用于非单边下跌行情"
+        )
+    elif range_status == "adverse":
+        applicability = "conditional_by_trend"
+        warnings.append(
+            "震荡趋势桶中 original 相对 none 止损触发率更高或期望更低"
+            "：validated 结论不适用于震荡行情"
+        )
+    else:
+        applicability = "all_regimes"
     return {
         "label": label,
         "basis": "oos",
@@ -797,6 +937,9 @@ def _verdict(arms: dict[str, Any]) -> dict[str, Any]:
             "stop_hit_rate(original) < stop_hit_rate(none)",
             "expectancy(original) >= expectancy(none)",
         ],
+        "applicability": applicability,
+        "trend_contrast_statuses": {"single_side_down": down_status, "range": range_status},
+        "warnings": warnings,
     }
 
 
@@ -1211,6 +1354,7 @@ def evaluate_daily_open_anchor(
             }
         arms_payload[arm] = {"segments": segments_payload}
 
+    tnt_contrast = build_tnt_open_anchor_contrast(arms_payload)
     return {
         "factor_id": FACTOR_ID,
         "schema_version": SCHEMA_VERSION,
@@ -1232,7 +1376,8 @@ def evaluate_daily_open_anchor(
         "events": events,
         "arms": arms_payload,
         "execution_ledger": [_ledger_dict(entry) for entry in ledger],
-        "verdict": _verdict(arms_payload),
+        "verdict": _verdict(arms_payload, tnt_contrast),
+        "tnt_open_anchor_contrast": tnt_contrast,
         "censored": censored_symbols,
         "disclaimer": DISCLAIMER,
     }
