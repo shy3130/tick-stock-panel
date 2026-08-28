@@ -1,6 +1,6 @@
 # ISSUE-30 日线开盘价锚定入场过滤研究（daily-open-anchor-filter）
 
-> 状态：**实现完成／待依赖集成与 PR（review-v3 approve；主会话定向、全量与 Ruff 已通过）**。
+> 状态：**实现及依赖集成完成／待 PR（review-v3 approve；主会话定向、全量与 Ruff 已通过；最终 review Approve）**。
 > 日期：2026-08-28 · 基线：`7bf2982` · GitHub Issue：[wf2311/fm-workbench#30](https://github.com/wf2311/fm-workbench/issues/30)
 
 ## 这是什么
@@ -28,7 +28,7 @@ v1/v2/v3 均冻结为 A 股多头、日频收盘确认、下一可交易日开�
 | [review-v3.md](review-v3.md) | 最终门禁：Approve，附一项已处置 P2 |
 | [final-design.md](final-design.md) | plan-v3 权威副本（已批准） |
 | [coding-review.md](coding-review.md) | 独立 coding review 九项修复与 strict reader/依赖处置记录 |
-| [verification.md](verification.md) | 主会话定向、全量、Ruff 验证证据与终审状态 |
+| [verification.md](verification.md) | 主会话首验与集成后证据、最终 review 结论 |
 
 ## 代码落点（已实现，主会话验证已通过）
 
@@ -39,17 +39,17 @@ v1/v2/v3 均冻结为 A 股多头、日频收盘确认、下一可交易日开�
 | `backend/tests/services/test_daily_open_anchor_filter.py` | raw/adjusted corporate-action、T+1、终态 ledger、虚拟结局与统计夹具 |
 | `backend/tests/api/test_daily_open_anchor_evaluate_api.py` | API、markets pin、fail-closed、reader 生命周期与边界校验 |
 
-## 验收标准（照录 Issue #30，当前实现已完成，待依赖集成终审）
+## 验收标准（照录 Issue #30，当前实现及依赖集成已完成）
 
 - [x] `docs/ISSUE-30/` 完成可行性、两轮方案 review、最终设计与验证记录。
-- [ ] 锚点严格满足 `anchor_date < signal_date`，新锚切换时点唯一，可截断复算，无未来函数。
-- [ ] 四臂共享同一代理信号全集；保留/过滤样本与被过滤样本虚拟结局并列披露。
-- [ ] PIT 精确涨跌停事实缺失整单 fail-closed；T+1、停牌、跳空止损、费用滑点均生效。
-- [ ] 分层披露趋势/震荡、高开/低开、距锚距离，结论只由 OOS 决定。
-- [ ] 覆盖阳/阴线锚、高低平开、单边下跌、跳空穿越、新锚切换、无信号、停复牌、缺数据、随机确定性和涨跌停夹具。
+- [x] 锚点严格满足 `anchor_date < signal_date`，新锚切换时点唯一，可截断复算，无未来函数。
+- [x] 四臂共享同一代理信号全集；保留/过滤样本与被过滤样本虚拟结局并列披露。
+- [x] PIT 精确涨跌停事实缺失整单 fail-closed；T+1、停牌、跳空止损、费用滑点均生效。
+- [x] 分层披露趋势/震荡、高开/低开、距锚距离，结论只由 OOS 决定。
+- [x] 覆盖阳/阴线锚、高低平开、单边下跌、跳空穿越、新锚切换、无信号、停复牌、缺数据、随机确定性和涨跌停夹具。
 - [x] 定向测试、后端全量回归与 Ruff F/E9 通过；独立 coding review 无 blocker/major。
 
-实现已完成；最终验收以 #29 合并、base 集成后的终审为准。
+实现及依赖集成已完成；最终 review Approve（无 blocker/major/minor），证据见 [verification.md](verification.md)。
 
 ## 红线
 

@@ -19,13 +19,21 @@
 - 最后 2 项由两件事收口：
   1. **strict reader**：#29 严格 hash pin 版 `daily_market_research.py`（legacy string pin → `pin_identity_verified()` false；mapping pin 必须含 `generation` + `manifest_sha256`），#30 已逐字同步并强制 identity gate；
   2. **Issue #29 canonical publisher 依赖**：#30 不复制 `canonical_history` publisher，PR 明确依赖先合并 #29。
-- **终审（final review）待基线集成后进行**：先合并 #29，再把 #29 base 集成进 #30，之后由主会话组织最终评审。
+- **终审已完成**：独立最终 review 结论 **Approve，无 blocker / major / minor**（集成证据见下节）。#29/PR31 已合并，#29 base 已集成进 #30，仅剩创建 PR。
 
 ## 剩余工作
 
-1. 合并 #29（reader/publisher 单一来源）。
-2. 将 #29 base 集成进 #30 分支，重跑定向 + 全量 + Ruff。
-3. 终审通过后创建 PR（#30 → 集成分支）。
+1. 创建 PR（#30 → 集成分支）。
+
+## 依赖集成后证据（合并 PR31/#29 base 进 #30）
+
+| 项 | 命令范围 | 结果 |
+|---|---|---|
+| 定向测试（reader / service / API） | 同上 reader/service/API 测试文件 | **40 passed** |
+| 后端全量回归 | `backend` 全量测试套件 | **3483 passed, 3 skipped, 8 warnings，104.70s** |
+| Lint | Ruff（F/E9 规则组） | **passed** |
+
+独立最终 review 结论：**Approve，无 blocker / major / minor**。终审已闭合，状态进入「实现及依赖集成完成／待 PR」。
 
 ## 边界
 
