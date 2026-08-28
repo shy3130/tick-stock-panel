@@ -67,6 +67,20 @@ PR #32 遗漏 `docs/TODO.md` 要求的 `scripts/tnt/` 单边趋势日「接飞�
 
 本波至此验证闭合，状态为「完成待 PR」。
 
+## PR #32/#33 Review 评论收口（2026-08-28，已验证）
+
+本波核验并修复 4 条合并后到达的未解决行级评论：PIT `is_st` 覆盖、T+1 `raw_low`
+预检、涨停阻塞下的 `anchor_unavailable` ledger，以及 TNT 仓库内可审计来源。
+
+| 项 | 结果 |
+|---|---|
+| 定向测试（service/API） | **67 passed** |
+| Lint | Ruff（F/E9 规则组）**passed** |
+| 后端全量回归 | **3530 passed / 3 skipped / 8 warnings / 145.43s** |
+| 独立复核 | **Approved；四条评论均在实际执行路径闭环** |
+
+本波状态为「Review 评论修复完成，待 PR」。
+
 ## 边界
 
 - 本文件只记录主会话证据与状态，不包含新的验证执行。
