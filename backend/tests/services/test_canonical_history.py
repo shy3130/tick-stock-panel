@@ -63,18 +63,16 @@ class FakeProvider:
         self.closed = True
 
 
-def _install_provider(monkeypatch, provider: FakeProvider) -> None:
+def _install_provider(monkeypatch, provider: FakeProvider, base) -> None:
+    published = base / "published"
+    for logical in canonical_history._REQUIRED_SNAPSHOT_LOGICALS:
+        generation = published / logical / "20260812T000000"
+        generation.mkdir(parents=True, exist_ok=True)
+        (generation / f"{logical}.duckdb").write_bytes(b"snapshot")
+        (generation / "manifest.json").write_text(json.dumps({"generation": "20260812T000000", "entries": [{"logical": logical, "file": f"{logical}.duckdb"}]}))
     monkeypatch.setattr(canonical_history, "get_active_provider_name", lambda _cap: "fquant_local")
-    monkeypatch.setattr(
-        canonical_history,
-        "get_provider",
-        lambda _name, **_kwargs: provider,
-    )
-    monkeypatch.setattr(
-        canonical_history,
-        "current_path",
-        lambda logical: f"/published/{logical}/20260812T000000/{logical}.duckdb",
-    )
+    monkeypatch.setattr(canonical_history, "get_provider", lambda _name, **_kwargs: provider)
+    monkeypatch.setattr(canonical_history, "current_path", lambda logical: str(published / logical / "20260812T000000" / f"{logical}.duckdb"))
 
 
 def _join(manager: canonical_history.CanonicalHistoryManager) -> None:
@@ -143,7 +141,7 @@ def test_backfill_publishes_actual_coverage_outside_user_data(tmp_path, monkeypa
     sentinel = user_data / "keep.txt"
     sentinel.write_text("untouched", encoding="utf-8")
     provider = FakeProvider()
-    _install_provider(monkeypatch, provider)
+    _install_provider(monkeypatch, provider, tmp_path)
     manager = canonical_history.CanonicalHistoryManager(root)
 
     started = manager.start(
@@ -164,13 +162,10 @@ def test_backfill_publishes_actual_coverage_outside_user_data(tmp_path, monkeypa
     assert status["manifest"]["symbols"] == 2
     assert status["manifest"]["rows"] == 6
     assert status["manifest"]["workers"] == 2
-    assert status["manifest"]["source_generations"] == {
-        "tdx": "20260812T000000",
-        "fstore": "20260812T000000",
-        "extended": "20260812T000000",
-        "markets": "20260812T000000",
-        "klines": "20260812T000000",
-    }
+    identities = status["manifest"]["source_generations"]
+    assert set(identities) == {"tdx", "fstore", "extended", "markets", "klines"}
+    assert all(set(value) == {"generation", "manifest_sha256"} for value in identities.values())
+    assert all(value["generation"] == "20260812T000000" for value in identities.values())
     published = canonical_history.resolve_published_history(root)
     assert published is not None
     assert list(published[1].glob("date=*/*.parquet"))
@@ -184,7 +179,7 @@ def test_incremental_publish_clones_parent_and_copies_validated_local_partition(
 ):
     root = tmp_path / "external-history"
     provider = FakeProvider()
-    _install_provider(monkeypatch, provider)
+    _install_provider(monkeypatch, provider, tmp_path)
     manager = canonical_history.CanonicalHistoryManager(root)
     manager.start(
         start_date=date(2024, 1, 2),
@@ -261,14 +256,14 @@ def test_incremental_publish_clones_parent_and_copies_validated_local_partition(
 def test_failed_rebuild_keeps_previous_current_generation(tmp_path, monkeypatch):
     root = tmp_path / "external-history"
     good = FakeProvider()
-    _install_provider(monkeypatch, good)
+    _install_provider(monkeypatch, good, tmp_path)
     manager = canonical_history.CanonicalHistoryManager(root)
     manager.start(start_date=date(2024, 1, 2), end_date=date(2024, 1, 3), batch_size=2)
     _join(manager)
     previous = (root / "current.json").read_text(encoding="utf-8")
 
     failing = FakeProvider(fail=True)
-    _install_provider(monkeypatch, failing)
+    _install_provider(monkeypatch, failing, tmp_path)
     manager.start(
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 3),
@@ -287,7 +282,7 @@ def test_failed_rebuild_keeps_previous_current_generation(tmp_path, monkeypatch)
 def test_duplicate_start_reuses_active_job(tmp_path, monkeypatch):
     gate = threading.Event()
     provider = FakeProvider(gate=gate)
-    _install_provider(monkeypatch, provider)
+    _install_provider(monkeypatch, provider, tmp_path)
     manager = canonical_history.CanonicalHistoryManager(tmp_path / "external-history")
 
     first = manager.start(start_date=date(2024, 1, 2), end_date=date(2024, 1, 2))
@@ -350,3 +345,20 @@ def test_api_status_shape_allows_first_backfill(monkeypatch):
     }
     assert started == {"job_id": "job-1", "status": "running"}
     assert received["workers"] == 4
+def test_incremental_identity_failure_keeps_current(tmp_path, monkeypatch):
+    root = tmp_path / "external-history"
+    provider = FakeProvider()
+    _install_provider(monkeypatch, provider, tmp_path)
+    manager = canonical_history.CanonicalHistoryManager(root)
+    manager.start(start_date=date(2024, 1, 2), end_date=date(2024, 1, 3), batch_size=2)
+    _join(manager)
+    before = (root / "current.json").read_bytes()
+    broken = tmp_path / "published" / "markets" / "20260812T000000" / "manifest.json"
+    broken.write_text(json.dumps({"generation": "broken", "entries": []}))
+    data_dir = tmp_path / "data"
+    partition = data_dir / "kline_daily_enriched" / "date=2024-01-04"
+    partition.mkdir(parents=True)
+    pl.DataFrame({"symbol": ["000001.SZ"], "date": [date(2024, 1, 4)], "open": [12.0], "high": [12.5], "low": [11.5], "close": [12.0], "volume": [1000.0], "amount": [12000.0], "raw_open": [12.0], "raw_close": [12.0], "raw_high": [12.5], "raw_low": [11.5], "turnover_rate": [0.1], "consecutive_limit_ups": [0], "consecutive_limit_downs": [0]}).write_parquet(partition / "part.parquet")
+    with pytest.raises(RuntimeError, match="calendar snapshot identity unavailable"):
+        manager.publish_incremental_from_local(SimpleNamespace(store=SimpleNamespace(data_dir=data_dir)), date(2024, 1, 4))
+    assert (root / "current.json").read_bytes() == before

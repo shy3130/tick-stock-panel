@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+import re
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator, model_validator
 
 from app.services.macd_stages import (
     MacdStagesRequest,
@@ -38,6 +40,13 @@ from app.services.single_yang_no_break import (
 )
 from app.services.single_yang_no_break import (
     assess_capability as assess_single_yang_capability,
+)
+from app.services.zuoyi_defense import (
+    ARMS,
+    UNAVAILABLE_CODES,
+    ZUOYI_DEFINITION,
+    assess_capability as assess_zuoyi_capability,
+    evaluate_zuoyi_defense,
 )
 from app.services.volume_breakout import (
     DEFAULT_COST_BPS,
@@ -383,6 +392,98 @@ class SingleYangEvaluateIn(BaseModel):
     oos_start: date
     cost_bps: float = Field(default=10.0, ge=0)
 
+
+class ZuoyiDefenseEvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+    symbols: list[str] = Field(min_length=1, max_length=500)
+    oos_start: date
+    cost_bps: float = Field(default=10.0, ge=0, le=1000)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if not all(re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", value) for value in normalized):
+            raise ValueError("symbols must use canonical 6-digit exchange symbols")
+        return list(dict.fromkeys(normalized))
+
+
+class ZuoyiDefenseOkResponse(BaseModel):
+    status: Literal["ok"]
+    model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="after")
+    def validate_closed_contract(self):
+        arms = self.model_extra.get("arms") if self.model_extra else None
+        verdict = self.model_extra.get("verdict") if self.model_extra else None
+        names = [item.get("arm") for item in arms] if isinstance(arms, list) and all(isinstance(item, dict) for item in arms) else []
+        if names != list(ARMS):
+            raise ValueError("response arms must contain the six approved arms in order")
+        if not isinstance(verdict, dict) or verdict.get("value") not in {"accepted", "rejected"}:
+            raise ValueError("ok response verdict must be accepted or rejected")
+        return self
+
+
+class ZuoyiDefenseUnavailableResponse(BaseModel):
+    status: Literal["unavailable"]
+    model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="after")
+    def validate_closed_code(self):
+        code = self.model_extra.get("code") if self.model_extra else None
+        if code not in UNAVAILABLE_CODES:
+            raise ValueError("unapproved unavailable code")
+        return self
+ZuoyiDefenseResponse = ZuoyiDefenseOkResponse | ZuoyiDefenseUnavailableResponse
+
+
+@router.get("/zuoyi-defense")
+def get_zuoyi_defense(request: Request):
+    repo = getattr(request.app.state, "repo", None)
+    reader = getattr(repo, "generation_pinned_daily_reader", None)
+    markets = getattr(repo, "generation_pinned_market_facts_reader", None)
+    try:
+        capability = assess_zuoyi_capability(reader)
+        generation = getattr(markets, "generation", lambda: "")() if markets else ""
+        digest = getattr(markets, "pin_manifest_sha256", getattr(markets, "manifest_sha256", lambda: ""))() if markets else ""
+        identity_fn = getattr(markets, "pin_identity_verified", None) if markets else None
+        verified = identity_fn() if identity_fn is not None else bool(generation and digest)
+        market_available = bool(generation and digest and verified)
+        if not market_available:
+            capability["available"] = False
+            capability["status"] = "unavailable"
+            capability.setdefault("reasons", []).append("markets_pin_identity_unverified")
+        capability["markets"] = {"available": market_available, "generation": generation, "manifest_sha256": digest, "pin_verification_mode": getattr(markets, "pin_verification_mode", lambda: "legacy")() if markets else "missing"}
+        return {**capability, "definition": ZUOYI_DEFINITION}
+    finally:
+        close = getattr(markets, "close", None)
+        if close is not None:
+            close()
+
+
+@router.post("/factors/zuoyi-defense/evaluate", response_model=ZuoyiDefenseResponse)
+async def evaluate_zuoyi_defense_factor(request: Request):
+    try:
+        body = ZuoyiDefenseEvaluateIn.model_validate(await request.json())
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    repo = getattr(request.app.state, "repo", None)
+    reader = getattr(repo, "generation_pinned_daily_reader", None)
+    markets = getattr(repo, "generation_pinned_market_facts_reader", None)
+    try:
+        return evaluate_zuoyi_defense(
+            reader, start=body.start, end=body.end, symbols=body.symbols,
+            oos_start=body.oos_start, cost_bps=body.cost_bps, market_facts_reader=markets,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        close = getattr(markets, "close", None)
+        if close is not None:
+            close()
 
 @router.get("/single-yang-no-break")
 def get_single_yang_no_break(request: Request):

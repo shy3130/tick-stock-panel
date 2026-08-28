@@ -395,6 +395,18 @@ class KlineRepository:
         return PublishedCanonicalDailyReader.from_repository(self)
 
     @property
+    def generation_pinned_market_facts_reader(self):
+        """Return markets facts pinned by canonical source_generations."""
+        from app.data_providers.fquant.daily_market_research import PublishedDailyMarketFactsReader
+
+        canonical = self.generation_pinned_daily_reader
+        if canonical is None:
+            return None
+        try:
+            return PublishedDailyMarketFactsReader.from_canonical_manifest(canonical.manifest())
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+    @property
     def versioned_exchange_calendar(self):
         """Expose the same immutable generation as the research calendar."""
         return self.generation_pinned_daily_reader
